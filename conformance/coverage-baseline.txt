@@ -3,8 +3,6 @@
 # an item deletes its line. The plan's Task 22 deletes the file.
 
 # commands
-tree
-events.read
 workspace.new
 workspace.rename
 workspace.delete
@@ -72,7 +70,6 @@ font.inc
 font.dec
 font.reset
 window.new
-window.list
 window.select
 window.go
 window.close
@@ -112,12 +109,9 @@ zmx.screen
 session.overlay.job.run
 
 # fields
-field:result.id
 field:result.width
 field:result.height
-field:result.tree
 field:result.text
-field:result.windows
 field:result.exitCode
 field:result.count
 field:result.affected
@@ -129,13 +123,11 @@ field:result.pane
 field:result.sync
 field:result.light
 field:result.dark
-field:result.events
 field:result.keymap
 field:result.hooks
 field:result.pick
 field:result.ask
 field:result.cursor
-field:result.app
 field:result.restore
 field:result.zmx
 field:result.remote
@@ -143,16 +135,9 @@ field:result.liveReset
 field:result.pageID
 field:result.pageOutcome
 field:result.restart
-field:tree.workspaces
 field:tree.idleMs
 field:tree.autoFollowMs
-field:tree.sidebarVisible
-field:tree.sidebarMode
-field:tree.sidebarFlaggedLayout
-field:tree.linkOpenMode
 field:tree.sidebarWidth
-field:tree.workspaceFilter
-field:tree.quickVisible
 field:tree.zoomedSurface
 field:tree.dashboardMembers
 field:tree.dashboardHighlighted
@@ -160,22 +145,12 @@ field:tree.dashboardFontSize
 field:tree.dashboardFontMode
 field:tree.pickPending
 field:tree.askPending
-field:tree.app
 field:tree.liveReset
 field:tree.indexUnsaved
-field:tree.workspace.id
-field:tree.workspace.name
-field:tree.workspace.active
 field:tree.workspace.focused
 field:tree.workspace.collapsed
-field:tree.workspace.sessions
-field:tree.session.id
-field:tree.session.name
-field:tree.session.cwd
 field:tree.session.splitCwd
 field:tree.session.title
-field:tree.session.active
-field:tree.session.split
 field:tree.session.hasSplit
 field:tree.session.backedByZmx
 field:tree.session.liveAttribution
@@ -183,13 +158,10 @@ field:tree.session.splitLiveAttribution
 field:tree.session.splitAxis
 field:tree.session.splitRatio
 field:tree.session.splitFocused
-field:tree.session.overlay
 field:tree.session.overlaySizePercent
 field:tree.session.paneOverlays
 field:tree.session.hud
 field:tree.session.ask
-field:tree.session.scratch
-field:tree.session.flagged
 field:tree.session.context
 field:tree.session.commandWait
 field:tree.session.splitCommandWait
@@ -211,31 +183,17 @@ field:tree.session.unseen
 field:tree.session.fontSize
 field:tree.session.splitFontSize
 field:tree.session.scratchFontSize
-field:tree.session.surfaces
-field:tree.session.realized
 field:tree.session.remoteHost
 field:tree.session.presentation
 field:tree.session.presenters
 field:tree.session.remoteOverlays
 field:tree.session.htmlOverlays
-field:window.id
-field:window.name
-field:window.open
-field:window.active
 field:window.autoFollowMs
-field:window.sidebarVisible
 field:window.geometry
-field:window.fullscreen
-field:window.zoomed
-field:window.minimized
 
 # events
 event:status
 event:notify
-event:session.created
-event:session.closed
-event:session.selected
-event:tree.changed
 event:pane.split
 event:pane.scratch
 event:remote.opened

@@ -359,6 +359,8 @@ cli:
   version: {status: uncovered, wire: version}
 behaviors:
   zmx.tree.remote-host: {status: uncovered}
+  protocol.target-resolution: {status: uncovered}
+  protocol.malformed-request: {status: uncovered}
 exemptions:
   debug.appearance: refused outside UI-test mode; a UI-test-only hook with no CLI subcommand
   zmx.attach: a successful attach re-discovers the remote over ssh before creating anything, which the suite's no-network,

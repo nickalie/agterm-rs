@@ -345,16 +345,18 @@ events by kind, CLI by subcommand words (`cli` items carry their `wire`); exempt
 ### Task 10: Protocol foundation — version, tree, addressing, events
 
 **Files:**
-- Create: `conformance/tests/protocol/test_version.py`
+- Modify: `conformance/tests/protocol/test_version.py` (created in Task 6)
 - Create: `conformance/tests/protocol/test_tree.py`
 - Create: `conformance/tests/protocol/test_addressing.py`
 - Create: `conformance/tests/protocol/test_events.py`
+- ➕ Modify: `conformance/catalog.yaml` (behaviors `protocol.target-resolution`, `protocol.malformed-request`)
+- ➕ Modify: `conformance/coverage-baseline.txt`
 
-- [ ] `version`, `tree` shape (top level, window, workspace, session nodes), nil omission on a fresh instance
-- [ ] target resolution (explicit id, current, invalid target error text)
-- [ ] `events.read` cursor semantics, the failure anchor in `result`, core lifecycle events
-- [ ] unknown command and malformed request: `ok:false` only, divergence reason recorded
-- [ ] run on reference-linux — green before task 11 (reference-macos in Task 19)
+- [x] `version`, `tree` shape (top level, window, workspace, session nodes), nil omission on a fresh instance
+- [x] target resolution (explicit id, current, invalid target error text)
+- [x] `events.read` cursor semantics, the failure anchor in `result`, core lifecycle events
+- [x] unknown command and malformed request: `ok:false` only, divergence reason recorded
+- [x] run on reference-linux — green before task 11 (reference-macos in Task 19)
 
 ### Task 11: Protocol — workspace commands
 
