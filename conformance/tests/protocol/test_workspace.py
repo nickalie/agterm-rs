@@ -214,8 +214,9 @@ def test_rename_requires_a_name(ctl, name):
 @pytest.mark.covers("workspace.delete", "event:session.closed", "event:session.selected", "event:tree.changed")
 def test_delete_closes_the_workspace_sessions(ctl):
     window = _window(ctl)
-    wid, (first, last) = _new_workspace(ctl, sessions=2)
     cursor = ctl.events_baseline()
+    wid, (first, last) = _new_workspace(ctl, sessions=2)
+    cursor = _settled_baseline(ctl, cursor)
 
     assert assert_ok(ctl.request("workspace.delete", wid))["id"] == wid
     tree = ctl.tree()
