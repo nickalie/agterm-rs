@@ -49,6 +49,7 @@ def profile_from_version(result: Mapping[str, Any] | None) -> Profile:
 class RustAdapter(Adapter):
     name = "rust"
     needs_app_id = sys.platform.startswith("linux")
+    needs_runtime_dir = sys.platform.startswith("linux")
 
     def __init__(self, bin: Path | None, ctl: Path | None = None) -> None:
         super().__init__(bin, ctl)

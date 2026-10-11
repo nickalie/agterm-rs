@@ -22,6 +22,7 @@ from agterm_conformance.impls.base import (
     check_launch_env,
     find_leftovers,
     fnv1a64,
+    isolated_runtime_env,
     version_tuple,
     zmx_socket_directory,
 )
@@ -145,6 +146,59 @@ def test_build_env_drops_inherited_live_session_variables(tmp_path: Path, monkey
     check_launch_env(env, tmp_path, needs_app_id=True)
 
 
+@pytest.mark.parametrize(
+    ("parent", "expected"),
+    [
+        (
+            {"XDG_RUNTIME_DIR": "/run/user/7", "WAYLAND_DISPLAY": "wayland-1"},
+            {"WAYLAND_DISPLAY": "/run/user/7/wayland-1", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/7/bus"},
+        ),
+        (
+            {
+                "XDG_RUNTIME_DIR": "/run/user/7",
+                "WAYLAND_DISPLAY": "/srv/wl",
+                "DBUS_SESSION_BUS_ADDRESS": "unix:path=/b",
+            },
+            {"WAYLAND_DISPLAY": "/srv/wl", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/b"},
+        ),
+        ({"WAYLAND_DISPLAY": "wayland-1"}, {}),
+        (
+            {"XDG_RUNTIME_DIR": "/run/user/7", "DISPLAY": ":0"},
+            {"DISPLAY": ":0", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/7/bus"},
+        ),
+    ],
+)
+def test_runtime_dir_is_private_and_session_sockets_stay_reachable(
+    parent: dict[str, str], expected: dict[str, str]
+) -> None:
+    env = dict(parent)
+    isolated_runtime_env(env, "/tmp/agt-x/run", parent)
+    assert env == {"XDG_RUNTIME_DIR": "/tmp/agt-x/run", **expected}
+
+
+def test_runtime_dir_is_refused_outside_the_root_only_where_needed(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    check_launch_env(env_for(root, XDG_RUNTIME_DIR="/run/user/1000"), root, needs_app_id=True)
+    with pytest.raises(LaunchRefused, match="XDG_RUNTIME_DIR must be set"):
+        check_launch_env(env_for(root), root, needs_app_id=True, needs_runtime_dir=True)
+    with pytest.raises(LaunchRefused, match="XDG_RUNTIME_DIR"):
+        check_launch_env(
+            env_for(root, XDG_RUNTIME_DIR="/run/user/1000"), root, needs_app_id=True, needs_runtime_dir=True
+        )
+    check_launch_env(env_for(root, XDG_RUNTIME_DIR=str(root / "run")), root, needs_app_id=True, needs_runtime_dir=True)
+
+
+def test_linux_adapters_get_a_private_runtime_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/7")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    linux = SwiftLinuxAdapter(tmp_path / "agterm-linux").build_env(tmp_path)
+    assert linux["XDG_RUNTIME_DIR"] == str(tmp_path / "run")
+    assert linux["WAYLAND_DISPLAY"] == "/run/user/7/wayland-1"
+    check_launch_env(linux, tmp_path, needs_app_id=True, needs_runtime_dir=True)
+    assert SwiftMacosAdapter(tmp_path / "agterm.app").build_env(tmp_path)["XDG_RUNTIME_DIR"] == "/run/user/7"
+    assert RustAdapter.needs_runtime_dir is RustAdapter.needs_app_id
+
+
 def test_each_build_env_gets_a_fresh_app_id(tmp_path: Path) -> None:
     adapter = SwiftLinuxAdapter(tmp_path / "agterm-linux")
     assert adapter.build_env(tmp_path)["AGTERM_APP_ID"] != adapter.build_env(tmp_path)["AGTERM_APP_ID"]
@@ -176,6 +230,8 @@ def test_launch_isolates_and_stop_cleans_up(roots: list[Path], fake_bin: Path, m
         assert (instance.home / ".claude").is_dir() and (instance.home / ".codex").is_dir()
         assert (instance.state_dir / "windows").is_dir()
         assert (instance.state_dir / "config" / "ghostty.conf").read_text() == "command = /bin/sh\n"
+        assert seen["XDG_RUNTIME_DIR"] == str(instance.root / "run")
+        assert (instance.root / "run").stat().st_mode & 0o777 == 0o700
         assert instance.root.parent == Path(base.TEMP_PARENT)
     finally:
         adapter.stop(instance)

@@ -16,6 +16,7 @@ class SwiftLinuxAdapter(Adapter):
     name = "swift-linux"
     # Without a unique id GApplication forwards the launch to the user's running instance.
     needs_app_id = True
+    needs_runtime_dir = True
 
     def __init__(self, bin: Path | None, ctl: Path | None = None, resource_root: Path | None = None) -> None:
         super().__init__(bin, ctl)

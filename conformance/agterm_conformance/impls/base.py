@@ -49,6 +49,9 @@ SESSION_HOST_NOTE = (
 # With SHELL=/bin/sh this is belt and braces: either alone gives a reference-linux pane /bin/sh
 # (conformance/docs/spike-macos.md).
 GHOSTTY_SHELL_CONFIG = "command = /bin/sh\n"
+# The private `XDG_RUNTIME_DIR` under the root: the Linux fork writes its ghostty config layers there
+# (`GhosttyApp.writeTempConf`/`writeDefaultsConf`), which in the shared one are the live app's own files.
+RUNTIME_DIR_NAME = "run"
 LAUNCH_TIMEOUT = 30.0
 STOP_TIMEOUT = 10.0
 POLL_INTERVAL = 0.05
@@ -167,11 +170,32 @@ OWN_VARIABLES = frozenset(
 )
 
 
-def check_launch_env(env: Mapping[str, str], root: str | os.PathLike[str], needs_app_id: bool) -> None:
+def isolated_runtime_env(env: dict[str, str], runtime_dir: str, parent: Mapping[str, str]) -> None:
+    """Point `XDG_RUNTIME_DIR` at `runtime_dir`, keeping the session's sockets reachable by absolute path.
+
+    Wayland accepts an absolute `WAYLAND_DISPLAY`; D-Bus (and through it the AT-SPI bus) takes an explicit
+    address. X11 and an inherited `XAUTHORITY` are absolute already.
+    """
+    parent_runtime = parent.get("XDG_RUNTIME_DIR")
+    env["XDG_RUNTIME_DIR"] = runtime_dir
+    display = parent.get("WAYLAND_DISPLAY")
+    if display and not os.path.isabs(display):
+        if parent_runtime:
+            env["WAYLAND_DISPLAY"] = os.path.join(parent_runtime, display)
+        else:
+            env.pop("WAYLAND_DISPLAY", None)  # unresolvable without a runtime dir, as it was in the parent
+    if not parent.get("DBUS_SESSION_BUS_ADDRESS") and parent_runtime:
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={os.path.join(parent_runtime, 'bus')}"
+
+
+def check_launch_env(
+    env: Mapping[str, str], root: str | os.PathLike[str], needs_app_id: bool, needs_runtime_dir: bool = False
+) -> None:
     for name in sorted(env):
         if name.startswith(SCRUB_PREFIXES) and name not in OWN_VARIABLES:
             raise LaunchRefused(f"{name} would leak into the instance: only harness-set AGTERM_* are allowed")
-    for name in ("AGTERM_STATE_DIR", "AGTERM_CONTROL_SOCKET", "HOME"):
+    rooted = ["AGTERM_STATE_DIR", "AGTERM_CONTROL_SOCKET", "HOME"] + (["XDG_RUNTIME_DIR"] if needs_runtime_dir else [])
+    for name in rooted:
         if not env.get(name):
             raise LaunchRefused(f"{name} must be set")
         try:
@@ -222,6 +246,8 @@ class Adapter:
 
     name: ClassVar[str] = ""
     needs_app_id: ClassVar[bool] = False
+    # A Linux desktop app: its runtime dir is the live session's, so the instance gets a private one.
+    needs_runtime_dir: ClassVar[bool] = False
 
     def __init__(self, bin: Path | None, ctl: Path | None = None) -> None:
         # Absolute now: the child starts in the isolated HOME, where a relative path would not resolve.
@@ -289,6 +315,8 @@ class Adapter:
         )
         if self.needs_app_id:
             env["AGTERM_APP_ID"] = app_id or unique_app_id()
+        if self.needs_runtime_dir:
+            isolated_runtime_env(env, os.fspath(root / RUNTIME_DIR_NAME), os.environ)
         self.platform_env(env)
         return env
 
@@ -297,9 +325,11 @@ class Adapter:
         root = make_root()
         try:
             env = self.build_env(root, app_id)
-            check_launch_env(env, root, self.needs_app_id)
+            check_launch_env(env, root, self.needs_app_id, self.needs_runtime_dir)
             app_id = env.get("AGTERM_APP_ID")
             _prepare_tree(root, Path(env["HOME"]), Path(env["AGTERM_STATE_DIR"]), self.ghostty_config())
+            if self.needs_runtime_dir:
+                os.mkdir(env["XDG_RUNTIME_DIR"], 0o700)  # the XDG spec's mode
             if app_id is not None:
                 _claim_app_id(app_id)
         except BaseException:
