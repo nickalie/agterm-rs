@@ -45,6 +45,8 @@ SESSION_HOST_NOTE = (
     f"; {SESSION_HOST} is kept alive by the reference itself and the harness may not signal it,"
     " see docs/backlog/harness-stop-for-macos-session-host.md"
 )
+# With SHELL=/bin/sh this is belt and braces: either alone gives a reference-linux pane /bin/sh (docs/spike-macos.md).
+GHOSTTY_SHELL_CONFIG = "command = /bin/sh\n"
 LAUNCH_TIMEOUT = 30.0
 STOP_TIMEOUT = 10.0
 POLL_INTERVAL = 0.05
@@ -249,6 +251,10 @@ class Adapter:
     def platform_env(self, env: dict[str, str]) -> None:
         """Hook for adapter-specific variables; `env` is already isolated."""
 
+    def ghostty_config(self) -> str:
+        """The agterm-scoped `<state>/config/ghostty.conf` the instance starts with."""
+        return GHOSTTY_SHELL_CONFIG
+
     # -- launch
 
     def build_env(self, root: Path, app_id: str | None = None) -> dict[str, str]:
@@ -277,7 +283,7 @@ class Adapter:
             env = self.build_env(root, app_id)
             check_launch_env(env, root, self.needs_app_id)
             app_id = env.get("AGTERM_APP_ID")
-            _prepare_tree(root, Path(env["HOME"]), Path(env["AGTERM_STATE_DIR"]))
+            _prepare_tree(root, Path(env["HOME"]), Path(env["AGTERM_STATE_DIR"]), self.ghostty_config())
             if app_id is not None:
                 _claim_app_id(app_id)
         except BaseException:
@@ -349,12 +355,12 @@ def make_root() -> Path:
     return Path(tempfile.mkdtemp(prefix="agt-", dir=TEMP_PARENT))
 
 
-def _prepare_tree(root: Path, home: Path, state: Path) -> None:
+def _prepare_tree(root: Path, home: Path, state: Path, ghostty_config: str) -> None:
     for directory in (home / ".claude", home / ".codex", state / "config"):
         directory.mkdir(parents=True)
     # `FirstRunWelcome.hasPriorState` reads this directory: its presence skips the welcome dialog.
     (state / "windows").mkdir()
-    (state / "config" / "ghostty.conf").write_text("command = /bin/sh\n")
+    (state / "config" / "ghostty.conf").write_text(ghostty_config)
 
 
 def _claim_app_id(app_id: str) -> None:

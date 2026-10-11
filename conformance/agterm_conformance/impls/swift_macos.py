@@ -9,20 +9,20 @@ from agterm_conformance.impls.base import Adapter, LaunchError, Profile
 
 PARITY_LEVEL = "0.36.0"
 BASE_CAPABILITIES = frozenset({"posix-shell", "window-geometry"})
-LAUNCH_MODES = ("plain", "uitest")
+LAUNCH_MODES = ("uitest", "plain")
 
 
 class SwiftMacosAdapter(Adapter):
-    """`launch_mode` stays open until spike A (Task 5/19).
+    """Interim choice until Task 19 confirms it on a Mac (docs/spike-macos.md): `uitest` with zmx.
 
     `uitest` sets the XCUITest sentinel: window present (FB11763863), no welcome, no quit prompt, and zmx
-    off unless `enable_zmx`.
+    off unless `enable_zmx`. `plain` is a bare exec.
     """
 
     name = "swift-macos"
 
     def __init__(
-        self, bin: Path | None, ctl: Path | None = None, launch_mode: str = "plain", enable_zmx: bool = False
+        self, bin: Path | None, ctl: Path | None = None, launch_mode: str = "uitest", enable_zmx: bool = True
     ) -> None:
         if launch_mode not in LAUNCH_MODES:
             raise ValueError(f"launch_mode must be one of {LAUNCH_MODES}, got {launch_mode!r}")

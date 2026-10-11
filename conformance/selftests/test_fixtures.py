@@ -11,7 +11,7 @@ from agterm_conformance.impls.base import Instance
 from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
 from agterm_conformance.match import session_ids
 from agterm_conformance.plugin import Ctl
-from agterm_conformance.wait import Cursor, WaitTimeout, wait_event
+from agterm_conformance.wait import Cursor, WaitTimeout, wait_event, wait_text
 
 TWO_SESSIONS = {
     "workspaces": [
@@ -523,3 +523,46 @@ def test_wait_event_fails_fast_on_a_cursor_error(ctl: Ctl) -> None:
 def test_ctl_tree_returns_the_result(ctl: Ctl) -> None:
     assert isinstance(ctl.instance, Instance)
     assert session_ids(ctl.tree()) == ["s1"]
+
+
+class ScriptedText:
+    def __init__(self, *responses: Response) -> None:
+        self.responses = responses
+        self.calls: list[tuple[str, str | None, dict[str, object]]] = []
+
+    def request(self, cmd: str, target: str | None = None, **args: object) -> Response:
+        self.calls.append((cmd, target, args))
+        return self.responses[min(len(self.calls), len(self.responses)) - 1]
+
+
+def _text(text: object) -> Response:
+    return Response(ok=True, result={"text": text}, error=None, raw={"ok": True, "result": {"text": text}})
+
+
+def test_wait_text_polls_until_the_pattern_appears() -> None:
+    pane = ScriptedText(_text("$ printf 'x-%s' 1\n"), _text("$ printf 'x-%s' 1\nx-1\n$ "))
+    found = wait_text(pane, "s1", r"(?m)^x-(\d)$", timeout=5, pane="right")
+    assert found.group(1) == "1"
+    assert pane.calls == [("session.text", "s1", {"pane": "right"})] * 2
+
+
+def test_wait_text_timeout_shows_the_last_text() -> None:
+    with pytest.raises(WaitTimeout, match=r"session.text of s1 did not match 'marker' within 0.2s; last text: '\$ '"):
+        wait_text(ScriptedText(_text("$ ")), "s1", "marker", timeout=0.2)
+
+
+@pytest.mark.parametrize(
+    ("response", "message"),
+    [
+        (
+            Response(ok=False, result=None, error="no session nope", raw={}),
+            "session.text failed while waiting: 'no session nope'",
+        ),
+        (_text(None), "session.text returned no text"),
+    ],
+)
+def test_wait_text_fails_fast_on_a_broken_reply(response: Response, message: str) -> None:
+    pane = ScriptedText(response)
+    with pytest.raises(AssertionError, match=message) as caught:
+        wait_text(pane, "s1", "marker", timeout=5)
+    assert not isinstance(caught.value, WaitTimeout) and len(pane.calls) == 1

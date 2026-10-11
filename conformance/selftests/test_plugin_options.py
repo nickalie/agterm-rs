@@ -29,6 +29,14 @@ def test_options_default(pytester: pytest.Pytester) -> None:
     assert get_impl_options(config) == ImplOptions(impl=None, bin=None, ctl=None, coverage_gate=False)
 
 
+def test_macos_launch_mode_option(pytester: pytest.Pytester) -> None:
+    assert get_impl_options(pytester.parseconfigure()).macos_launch_mode == "uitest"
+    assert get_impl_options(pytester.parseconfigure("--macos-launch-mode", "plain")).macos_launch_mode == "plain"
+    result = pytester.runpytest("--macos-launch-mode", "open")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*--macos-launch-mode: invalid choice: 'open'*"])
+
+
 def test_options_reach_fixture(pytester: pytest.Pytester, bin_path: Path) -> None:
     pytester.makepyfile(
         f"""

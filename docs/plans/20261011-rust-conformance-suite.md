@@ -254,14 +254,16 @@ New items are `uncovered`, and vanished items are `removed-upstream`.
 - Create: `conformance/tools/fetch_reference.py`
 - Create: `.github/workflows/spike-macos.yml`
 - Create: `conformance/docs/spike-macos.md`
+- ➕ Create: `conformance/tools/spike_a.py` (the spike run itself, shared by Linux, the VM and the workflow)
 
-- [ ] `fetch_reference.py --tag vX.Y.Z`: download the signed upstream release, mount/extract, cache by tag, print bundle and CLI paths
-- [ ] spike workflow (written now, run in Task 19): fetch, launch via the adapter, `version` and `tree` over the socket, `session type` + `session.text` round-trip in `/bin/sh`
-- [ ] interim macOS adapter choice: the `AGTERM_UITEST_FORCE_SIDEBAR_VISIBLE` sentinel (window present, no welcome, no quit prompt), zmx via `AGTERM_UITEST_ENABLE_ZMX=1`, plain exec selectable by an adapter option; Task 19 confirms or flips it
-- [ ] confirm the `/bin/sh` shell mechanism on reference-linux (macOS in Task 19)
-- [ ] record the interim choice and the open macOS questions in `spike-macos.md`
-- [ ] write self-tests for `fetch_reference.py` asset selection and cache logic (offline, fixture release JSON)
-- [ ] run self-tests; Linux `/bin/sh` round-trip green — must pass before task 6
+- [x] `fetch_reference.py --tag vX.Y.Z`: download the signed upstream release, mount/extract, cache by tag, print bundle and CLI paths
+- [x] spike workflow (written now, run in Task 19): fetch, launch via the adapter, `version` and `tree` over the socket, `session type` + `session.text` round-trip in `/bin/sh`
+- [x] interim macOS adapter choice: the `AGTERM_UITEST_FORCE_SIDEBAR_VISIBLE` sentinel (window present, no welcome, no quit prompt), zmx via `AGTERM_UITEST_ENABLE_ZMX=1`, plain exec selectable by an adapter option; Task 19 confirms or flips it
+- [x] confirm the `/bin/sh` shell mechanism on reference-linux (macOS in Task 19)
+- [x] record the interim choice and the open macOS questions in `spike-macos.md`
+- [x] write self-tests for `fetch_reference.py` asset selection and cache logic (offline, fixture release JSON)
+- [x] run self-tests; Linux `/bin/sh` round-trip green — must pass before task 6
+- ⚠️ upstream v0.36.0 ships a thin arm64 dmg: the x86_64 VM cannot run it (Rosetta only goes x86_64→arm64); Task 19 needs an Apple-silicon host (GitHub `macos-15`) or a from-source x86_64 build — see `spike-macos.md`
 
 ### Task 6: CI workflows and the local reference-linux runner
 

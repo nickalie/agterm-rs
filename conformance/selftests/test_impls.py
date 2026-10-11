@@ -520,6 +520,20 @@ def test_swift_macos_launch_env(tmp_path: Path, mode: str, zmx: bool) -> None:
     check_launch_env(env, tmp_path, needs_app_id=False)
 
 
+def test_swift_macos_defaults_to_the_sentinel_with_zmx(tmp_path: Path) -> None:
+    adapter = SwiftMacosAdapter(tmp_path / "agterm.app")
+    env = adapter.build_env(tmp_path)
+    assert env["AGTERM_UITEST_FORCE_SIDEBAR_VISIBLE"] == "1" and env["AGTERM_UITEST_ENABLE_ZMX"] == "1"
+    assert "live-sessions" in adapter.capabilities
+
+
+@pytest.mark.parametrize("mode", ["uitest", "plain"])
+def test_make_adapter_passes_the_macos_launch_mode(mode: str) -> None:
+    options = ImplOptions(impl="swift-macos", bin=None, ctl=None, coverage_gate=False, macos_launch_mode=mode)
+    adapter = make_adapter(options)
+    assert isinstance(adapter, SwiftMacosAdapter) and adapter.launch_mode == mode and adapter.enable_zmx
+
+
 def test_swift_macos_rejects_an_unknown_launch_mode() -> None:
     with pytest.raises(ValueError, match="launch_mode"):
         SwiftMacosAdapter(None, launch_mode="open")

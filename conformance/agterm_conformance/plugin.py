@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from dataclasses import dataclass
@@ -55,6 +56,7 @@ class ImplOptions:
     bin: Path | None
     ctl: Path | None
     coverage_gate: bool
+    macos_launch_mode: str = "uitest"
 
 
 _OPTIONS_KEY = pytest.StashKey[ImplOptions]()
@@ -79,6 +81,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     group.addoption("--bin", type=Path, default=None, help="app binary or bundle to launch")
     group.addoption("--ctl", type=Path, default=None, help="agtermctl to drive the CLI layer (default: the adapter's)")
     group.addoption(
+        "--macos-launch-mode",
+        choices=("uitest", "plain"),
+        default="uitest",
+        help="swift-macos: XCUITest sentinel with zmx (default) or a bare exec",
+    )
+    group.addoption(
         "--coverage-gate", action="store_true", default=False, help="check catalog coverage without launching anything"
     )
 
@@ -91,6 +99,7 @@ def pytest_configure(config: pytest.Config) -> None:
         bin=config.getoption("bin"),
         ctl=config.getoption("ctl"),
         coverage_gate=config.getoption("coverage_gate"),
+        macos_launch_mode=config.getoption("macos_launch_mode"),
     )
     for flag, path in (("--bin", options.bin), ("--ctl", options.ctl)):
         if path is not None and not path.exists():
@@ -240,6 +249,11 @@ class Ctl:
         self, predicate: Callable[[dict[str, Any]], Any], timeout: float = wait.DEFAULT_TIMEOUT
     ) -> dict[str, Any]:
         return wait.wait_tree(self, predicate, timeout)
+
+    def wait_text(
+        self, target: str | None, pattern: str | re.Pattern[str], timeout: float = wait.DEFAULT_TIMEOUT, **args: Any
+    ) -> re.Match[str]:
+        return wait.wait_text(self, target, pattern, timeout, **args)
 
     def events_baseline(self) -> wait.Cursor:
         return wait.events_baseline(self)

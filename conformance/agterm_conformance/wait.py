@@ -8,6 +8,7 @@ emits before the wait starts is still in the window the wait scans.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -74,6 +75,36 @@ def wait_tree(
             raise WaitTimeout(
                 f"tree did not satisfy {_describe(predicate)} within {timeout}s{last_failure}; "
                 f"last tree: {_shown(last_result)}"
+            )
+        _pause(POLL_INTERVAL)
+
+
+def wait_text(
+    client: Requester,
+    target: str | None,
+    pattern: str | re.Pattern[str],
+    timeout: float = DEFAULT_TIMEOUT,
+    **args: Any,
+) -> re.Match[str]:
+    """Poll `session.text` for `target` until `pattern` matches the pane text, and return the match.
+
+    Fails fast on `ok:false`: a target that does not resolve cannot heal by polling.
+    """
+    regex = re.compile(pattern) if isinstance(pattern, str) else pattern
+    deadline = time.monotonic() + timeout
+    while True:
+        response = client.request("session.text", target, **args)
+        if not response.ok:
+            raise AssertionError(f"session.text failed while waiting: {response.error!r}")
+        text = (response.result or {}).get("text")
+        if not isinstance(text, str):
+            raise AssertionError(f"session.text returned no text: {response.raw}")
+        if found := regex.search(text):
+            return found
+        if time.monotonic() >= deadline:
+            raise WaitTimeout(
+                f"session.text of {target} did not match {regex.pattern!r} within {timeout}s; "
+                f"last text: {text[-_SHOWN_CHARS:]!r}"
             )
         _pause(POLL_INTERVAL)
 

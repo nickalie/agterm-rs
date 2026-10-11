@@ -1,0 +1,62 @@
+# Spike A on reference-macos: fetch the upstream release, launch it through the swift-macos adapter, read
+# version/tree, and round-trip a line through the pane's /bin/sh. Findings go to conformance/docs/spike-macos.md.
+name: spike-macos
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: upstream release tag
+        default: v0.36.0
+        required: true
+  pull_request:
+    paths:
+      - .github/workflows/spike-macos.yml
+      - conformance/tools/spike_a.py
+      - conformance/tools/fetch_reference.py
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    # Apple silicon: the upstream release is arm64-only.
+    runs-on: macos-15
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [uitest, plain]
+        mechanism: [both, config, env]
+    env:
+      TAG: ${{ inputs.tag || 'v0.36.0' }}
+      REPORT: spike-${{ matrix.mode }}-${{ matrix.mechanism }}.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install the suite
+        run: python -m pip install -e conformance
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/agterm-conformance/reference
+          key: agterm-reference-${{ env.TAG }}
+      - name: fetch the reference
+        id: reference
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python conformance/tools/fetch_reference.py --tag "$TAG" | tee -a "$GITHUB_OUTPUT"
+      - name: spike A
+        env:
+          BUNDLE: ${{ steps.reference.outputs.bundle }}
+        run: >
+          python conformance/tools/spike_a.py --impl swift-macos --bin "$BUNDLE"
+          --launch-mode "${{ matrix.mode }}" --mechanism "${{ matrix.mechanism }}" --out "$REPORT"
+      - name: upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spike-${{ matrix.mode }}-${{ matrix.mechanism }}
+          path: ${{ env.REPORT }}
+          if-no-files-found: warn

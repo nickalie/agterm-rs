@@ -18,4 +18,6 @@ ADAPTERS: dict[str, type[Adapter]] = {
 def make_adapter(options: ImplOptions) -> Adapter:
     if options.impl not in ADAPTERS:
         raise ValueError(f"unknown implementation {options.impl!r}")
+    if options.impl == SwiftMacosAdapter.name:
+        return SwiftMacosAdapter(options.bin, options.ctl, launch_mode=options.macos_launch_mode)
     return ADAPTERS[options.impl](options.bin, options.ctl)
