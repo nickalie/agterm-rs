@@ -99,17 +99,12 @@ def wait_event(
     while True:
         response = client.request("events.read", run=cursor.run, after=str(after), kinds=[kind], limit=PAGE_LIMIT)
         batch = _batch(response, f"waiting for {kind}")
+        next_after = _checked_page(batch, cursor.run, after, kind)
         for event in batch["items"]:
-            # The kinds filter and the cursor bound are behavior under test, not something to trust.
-            if not isinstance(event, Mapping) or event.get("kind") != kind:
-                raise AssertionError(f"events.read filtered to {kind!r} returned {_shown(event)}")
-            seq = event.get("seq")
-            if isinstance(seq, bool) or not isinstance(seq, int) or seq <= after:
-                raise AssertionError(f"events.read after seq {after} returned {_shown(event)}")
             if _accepts(match, event):
                 return event
             rejected.append(event)
-        after = int(batch["next"])
+        after = next_after
         if time.monotonic() >= deadline:
             seen = (
                 f"{len(rejected)} non-matching, last: {_shown(rejected[-_SHOWN_EVENTS:])}"
@@ -129,6 +124,27 @@ def _batch(response: Response, context: str) -> dict[str, Any]:
     if not isinstance(batch, Mapping) or not {"run", "next", "items"} <= batch.keys():
         raise AssertionError(f"events.read returned no event batch {context}: {response.raw}")
     return dict(batch)
+
+
+def _checked_page(batch: Mapping[str, Any], run: str, after: int, kind: str) -> int:
+    """The validated `next` of a whole `events.read` page, checked before any event of it is used.
+
+    The run, the kinds filter and the cursor bounds are behavior under test, not something to trust:
+    a `next` behind `after` would re-read events from before the baseline.
+    """
+    asked = f"events.read run {run} after seq {after} kinds [{kind!r}]"
+    if batch["run"] != run:
+        raise AssertionError(f"{asked} returned run {_shown(batch['run'])}")
+    next_seq = batch["next"]
+    if isinstance(next_seq, bool) or not isinstance(next_seq, int) or next_seq < after:
+        raise AssertionError(f"{asked} returned next {_shown(next_seq)}")
+    for event in batch["items"]:
+        if not isinstance(event, Mapping) or event.get("kind") != kind:
+            raise AssertionError(f"{asked} returned an event of another kind: {_shown(event)}")
+        seq = event.get("seq")
+        if isinstance(seq, bool) or not isinstance(seq, int) or not after < seq <= next_seq:
+            raise AssertionError(f"{asked} returned next {next_seq} with an event outside it: {_shown(event)}")
+    return next_seq
 
 
 def _accepts(match: Mapping[str, Any] | Callable[[dict[str, Any]], Any] | None, event: dict[str, Any]) -> bool:

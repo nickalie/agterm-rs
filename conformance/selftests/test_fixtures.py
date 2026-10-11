@@ -432,7 +432,10 @@ def test_wait_event_rejects_an_event_of_another_kind() -> None:
             batch = {"run": "r", "next": 1, "items": [{"seq": 1, "kind": "notify", "session": "s1"}]}
             return Response(ok=True, result={"events": batch}, error=None, raw={})
 
-    with pytest.raises(AssertionError, match="events.read filtered to 'session.created' returned .*notify") as caught:
+    with pytest.raises(
+        AssertionError,
+        match=r"events.read run r after seq 0 kinds \['session.created'\] returned an event of another kind: .*notify",
+    ) as caught:
         wait_event(IgnoresKinds(), Cursor("r", 0), "session.created", timeout=5)
     assert not isinstance(caught.value, WaitTimeout)
 
@@ -444,9 +447,69 @@ def test_wait_event_rejects_an_event_at_or_before_the_cursor(seq: object) -> Non
             batch = {"run": "r", "next": 11, "items": [{"seq": seq, "kind": "status", "session": "s1"}]}
             return Response(ok=True, result={"events": batch}, error=None, raw={})
 
-    with pytest.raises(AssertionError, match="events.read after seq 10 returned .*status") as caught:
+    with pytest.raises(
+        AssertionError, match="events.read run r after seq 10 .*returned next 11 with an event outside it: .*status"
+    ) as caught:
         wait_event(IgnoresCursor(), Cursor("r", 10), "status", timeout=5)
     assert not isinstance(caught.value, WaitTimeout)
+
+
+class ScriptedEvents:
+    def __init__(self, *pages: dict[str, object]) -> None:
+        self.pages = pages
+        self.afters: list[str] = []
+
+    def request(self, cmd: str, target: str | None = None, **args: object) -> Response:
+        self.afters.append(str(args["after"]))
+        page = self.pages[min(len(self.afters), len(self.pages)) - 1]
+        return Response(ok=True, result={"events": {"run": "r", **page}}, error=None, raw={})
+
+
+def _status(seq: object, kind: str = "status") -> dict[str, object]:
+    return {"seq": seq, "kind": kind, "session": "s1"}
+
+
+@pytest.mark.parametrize(
+    ("pages", "error", "requests"),
+    [
+        pytest.param([{"run": "other", "next": 10, "items": []}], "returned run .*other", 1, id="run-mismatch"),
+        pytest.param([{"next": True, "items": []}], "returned next true", 1, id="bool-next"),
+        pytest.param([{"next": "11", "items": []}], 'returned next "11"', 1, id="string-next"),
+        pytest.param(
+            [{"next": 0, "items": []}, {"next": 5, "items": [_status(5)]}],
+            "after seq 10 .*returned next 0",
+            1,
+            id="next-below-baseline",
+        ),
+        pytest.param(
+            [{"next": 12, "items": []}, {"next": 11, "items": []}], "after seq 12 .*returned next 11", 2, id="next-back"
+        ),
+        pytest.param(
+            [{"next": 11, "items": [_status(12)]}], "returned next 11 with an event outside it", 1, id="seq-ahead"
+        ),
+        pytest.param(
+            [{"next": 12, "items": [_status(11), _status(12, "notify")]}],
+            "another kind: .*notify",
+            1,
+            id="bad-later-kind",
+        ),
+        pytest.param(
+            [{"next": 12, "items": [_status(11), _status(9)]}], "event outside it: .*9", 1, id="bad-later-seq"
+        ),
+    ],
+)
+def test_wait_event_rejects_a_malformed_page(pages: list[dict[str, object]], error: str, requests: int) -> None:
+    requester = ScriptedEvents(*pages)
+    with pytest.raises(AssertionError, match=f"events.read run r .*{error}") as caught:
+        wait_event(requester, Cursor("r", 10), "status", timeout=1)
+    assert not isinstance(caught.value, WaitTimeout)
+    assert len(requester.afters) == requests
+
+
+def test_wait_event_accepts_an_unchanged_next_on_an_empty_poll() -> None:
+    requester = ScriptedEvents({"next": 10, "items": []}, {"next": 11, "items": [_status(11)]})
+    assert wait_event(requester, Cursor("r", 10), "status", timeout=5)["seq"] == 11
+    assert requester.afters == ["10", "10"]
 
 
 def test_wait_event_fails_fast_on_a_cursor_error(ctl: Ctl) -> None:
