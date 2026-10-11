@@ -95,8 +95,9 @@ def test_tree_window_argument(ctl):
         pytest.param(b"not json", id="not-json"),
         pytest.param(b'{"target":"active"}', id="no-cmd"),
         pytest.param(b"[]", id="not-an-object"),
-        pytest.param(b'{"cmd":"session.select","target":5}', id="target-type"),
-        pytest.param(b'{"cmd":"events.read","args":{"run":"x","after":0}}', id="arg-type"),
+        # The wrong type is the only defect: a coercing decoder would answer ok:true.
+        pytest.param(b'{"cmd":"version","target":5}', id="target-type"),
+        pytest.param(b'{"cmd":"events.read","args":{"limit":"5"}}', id="arg-type"),
     ],
 )
 def test_undecodable_request_is_refused(ctl, line):
