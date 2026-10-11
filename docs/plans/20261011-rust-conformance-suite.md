@@ -223,14 +223,14 @@ New items are `uncovered`, and vanished items are `removed-upstream`.
 - Create: `conformance/agterm_conformance/impls/rust.py`
 - Create: `conformance/selftests/test_impls.py`
 
-- [ ] base adapter: temp root, launch env per the Adapter contract, socket wait, SIGTERM own pid, leftover-process check
-- [ ] `swift_macos`: direct exec of `agterm.app/Contents/MacOS/agterm`; the sentinel choice stays open until spike A
-- [ ] `swift_linux`: launch env mirrored from `atspi_smoke.py` (`AGTERM_RESOURCE_ROOT`, unique `AGTERM_APP_ID`, isolated `HOME`, `PATH`)
-- [ ] `rust`: reads capabilities/parity level from `version`; with no binary it reports nothing and every test skips as not-yet-at-level
-- [ ] static capability sets and `parity_level` for both Swift references
-- [ ] write self-tests for the guards: socket outside the root, overlong path, missing/default/duplicate `AGTERM_APP_ID`, inherited `AGTERM_*` absent from the launch env
-- [ ] write self-tests for capability/level resolution
-- [ ] run self-tests — must pass before task 4
+- [x] base adapter: temp root, launch env per the Adapter contract, socket wait, SIGTERM own pid, leftover-process check
+- [x] `swift_macos`: direct exec of `agterm.app/Contents/MacOS/agterm`; the sentinel choice stays open until spike A
+- [x] `swift_linux`: launch env mirrored from `atspi_smoke.py` (`AGTERM_RESOURCE_ROOT`, unique `AGTERM_APP_ID`, isolated `HOME`, `PATH`)
+- [x] `rust`: reads capabilities/parity level from `version`; with no binary it reports nothing and every test skips as not-yet-at-level
+- [x] static capability sets and `parity_level` for both Swift references
+- [x] write self-tests for the guards: socket outside the root, overlong path, missing/default/duplicate `AGTERM_APP_ID`, inherited `AGTERM_*` absent from the launch env
+- [x] write self-tests for capability/level resolution
+- [x] run self-tests — must pass before task 4
 
 ### Task 4: Fixtures, waits and the report
 

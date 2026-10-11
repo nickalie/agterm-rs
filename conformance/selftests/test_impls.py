@@ -1,0 +1,467 @@
+import json
+import os
+import shutil
+import subprocess
+import sys
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+from agterm_conformance.impls import ADAPTERS, base, make_adapter
+from agterm_conformance.impls.base import (
+    CAPABILITIES,
+    DEFAULT_APP_ID,
+    NO_PROFILE,
+    SOCKET_PATH_CAP,
+    LaunchError,
+    LaunchRefused,
+    LeftoverProcesses,
+    Profile,
+    StopError,
+    check_app_id,
+    check_launch_env,
+    find_leftovers,
+    fnv1a64,
+    version_tuple,
+    zmx_socket_directory,
+)
+from agterm_conformance.impls.rust import ProfileError, RustAdapter, profile_from_version
+from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
+from agterm_conformance.impls.swift_macos import SwiftMacosAdapter
+from agterm_conformance.plugin import ImplOptions
+
+FAKE_APP = Path(__file__).with_name("fake_app.py")
+
+
+@pytest.fixture
+def roots(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[Path]]:
+    created: list[Path] = []
+    make_root = base.make_root
+
+    def recording() -> Path:
+        created.append(make_root())
+        return created[-1]
+
+    monkeypatch.setattr(base, "make_root", recording)
+    yield created
+    for root in created:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.fixture
+def fake_bin(tmp_path: Path) -> Path:
+    launcher = tmp_path / "install" / "bin" / "agterm-linux"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text(f"#!{sys.executable}\n" + FAKE_APP.read_text())
+    launcher.chmod(0o755)
+    return launcher
+
+
+@pytest.fixture
+def daemons(tmp_path: Path) -> Iterator[list[subprocess.Popen[bytes]]]:
+    spawned: list[subprocess.Popen[bytes]] = []
+    yield spawned
+    for process in spawned:
+        if process.stdin:
+            process.stdin.close()
+        process.wait(timeout=5)
+
+
+def spawn_daemon(tmp_path: Path, name: str, zmx_dir: str, spawned: list[subprocess.Popen[bytes]]) -> int:
+    """A copy of `cat` under `name`, blocked on a stdin pipe the test holds."""
+    program = tmp_path / "daemons" / name
+    program.parent.mkdir(exist_ok=True)
+    if not program.exists():
+        shutil.copy2(shutil.which("cat") or "/bin/cat", program)
+    process = subprocess.Popen([program], stdin=subprocess.PIPE, env={"ZMX_DIR": zmx_dir})
+    spawned.append(process)
+    return process.pid
+
+
+def env_for(root: Path, **overrides: str) -> dict[str, str]:
+    env = {
+        "HOME": str(root / "home"),
+        "AGTERM_STATE_DIR": str(root / "state"),
+        "AGTERM_CONTROL_SOCKET": str(root / "state" / "agterm.sock"),
+        "AGTERM_APP_ID": f"{DEFAULT_APP_ID}.conformance.test",
+    }
+    env.update(overrides)
+    return env
+
+
+# -- guards
+
+
+def test_launch_env_inside_root_is_accepted(tmp_path: Path) -> None:
+    check_launch_env(env_for(tmp_path), tmp_path, needs_app_id=True)
+
+
+@pytest.mark.parametrize("name", ["AGTERM_CONTROL_SOCKET", "AGTERM_STATE_DIR", "HOME"])
+def test_path_outside_root_is_refused(tmp_path: Path, name: str) -> None:
+    root = tmp_path / "root"
+    outside = tmp_path / "elsewhere" / "agterm.sock"
+    with pytest.raises(LaunchRefused, match=name):
+        check_launch_env(env_for(root, **{name: str(outside)}), root, needs_app_id=True)
+
+
+def test_socket_symlinked_out_of_root_is_refused(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    (root / "state").mkdir(parents=True)
+    (root / "state" / "agterm.sock").symlink_to(tmp_path / "live.sock")
+    with pytest.raises(LaunchRefused, match="AGTERM_CONTROL_SOCKET"):
+        check_launch_env(env_for(root), root, needs_app_id=True)
+
+
+def test_socket_path_at_cap_is_refused_and_one_under_is_accepted() -> None:
+    parent, tail = Path("/tmp"), "/state/agterm.sock"
+    padding = SOCKET_PATH_CAP - 1 - len(str(parent)) - 1 - len(tail)
+    under = parent / ("r" * padding)
+    assert len(f"{under}{tail}") == SOCKET_PATH_CAP - 1
+    check_launch_env(env_for(under), under, needs_app_id=True)
+    over = parent / ("r" * (padding + 1))
+    with pytest.raises(LaunchRefused, match="cap"):
+        check_launch_env(env_for(over), over, needs_app_id=True)
+
+
+@pytest.mark.parametrize(
+    ("app_id", "message"),
+    [
+        (None, "required"),
+        ("", "required"),
+        (DEFAULT_APP_ID, "installed app"),
+        ("agterm", "not a valid"),
+        ("io.github.1agterm", "not a valid"),
+        ("io..agterm", "not a valid"),
+        ("io.github.agterm test", "not a valid"),
+    ],
+)
+def test_bad_app_id_is_refused(app_id: str | None, message: str) -> None:
+    with pytest.raises(LaunchRefused, match=message):
+        check_app_id(app_id)
+
+
+def test_missing_app_id_is_refused_only_where_needed(tmp_path: Path) -> None:
+    env = env_for(tmp_path)
+    del env["AGTERM_APP_ID"]
+    check_launch_env(env, tmp_path, needs_app_id=False)
+    with pytest.raises(LaunchRefused, match="AGTERM_APP_ID is required"):
+        check_launch_env(env, tmp_path, needs_app_id=True)
+
+
+def test_inherited_agterm_variable_in_launch_env_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(LaunchRefused, match="AGTERM_SESSION_ID"):
+        check_launch_env(env_for(tmp_path, AGTERM_SESSION_ID="live"), tmp_path, needs_app_id=True)
+    with pytest.raises(LaunchRefused, match="ZMX_DIR"):
+        check_launch_env(env_for(tmp_path, ZMX_DIR="/tmp/live"), tmp_path, needs_app_id=True)
+
+
+def test_build_env_drops_inherited_live_session_variables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("AGTERM_SOCKET", "AGTERM_SESSION_ID", "AGTERM_STATE_DIR", "ZMX_DIR", "ZMX_SESSION"):
+        monkeypatch.setenv(name, "/live")
+    monkeypatch.setenv("CONFORMANCE_KEEP", "1")
+    env = SwiftLinuxAdapter(tmp_path / "agterm-linux").build_env(tmp_path)
+    assert not {"AGTERM_SOCKET", "AGTERM_SESSION_ID", "ZMX_DIR", "ZMX_SESSION"} & env.keys()
+    assert env["AGTERM_STATE_DIR"] == str(tmp_path / "state")
+    assert env["CONFORMANCE_KEEP"] == "1"
+    assert env["PATH"] == "/usr/bin:/bin"
+    assert env["SHELL"] == "/bin/sh"
+    assert env["AGTERM_APP_ID"].startswith(DEFAULT_APP_ID + ".")
+    check_launch_env(env, tmp_path, needs_app_id=True)
+
+
+def test_each_build_env_gets_a_fresh_app_id(tmp_path: Path) -> None:
+    adapter = SwiftLinuxAdapter(tmp_path / "agterm-linux")
+    assert adapter.build_env(tmp_path)["AGTERM_APP_ID"] != adapter.build_env(tmp_path)["AGTERM_APP_ID"]
+
+
+def test_refused_launch_spawns_nothing_and_removes_its_root(roots: list[Path], tmp_path: Path) -> None:
+    adapter = SwiftLinuxAdapter(tmp_path / "never-run")
+    with pytest.raises(LaunchRefused, match="installed app"):
+        adapter.launch(app_id=DEFAULT_APP_ID)
+    assert len(roots) == 1 and not roots[0].exists()
+
+
+# -- launch and stop against the fake app
+
+
+def test_launch_isolates_and_stop_cleans_up(roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGTERM_SOCKET", "/live/agterm.sock")
+    monkeypatch.setenv("ZMX_DIR", "/tmp/live-zmx")
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    try:
+        assert instance.version == {"app": {"version": "0.0.1"}}
+        assert instance.request("version").ok
+        seen = json.loads((instance.state_dir / "fake-env.json").read_text())
+        assert "AGTERM_SOCKET" not in seen and "ZMX_DIR" not in seen
+        assert seen["HOME"] == str(instance.home)
+        assert seen["AGTERM_CONTROL_SOCKET"] == str(instance.socket)
+        assert seen["AGTERM_APP_ID"] == instance.app_id
+        assert (instance.home / ".claude").is_dir() and (instance.home / ".codex").is_dir()
+        assert (instance.state_dir / "windows").is_dir()
+        assert (instance.state_dir / "config" / "ghostty.conf").read_text() == "command = /bin/sh\n"
+        assert instance.root.parent == Path(base.TEMP_PARENT)
+    finally:
+        adapter.stop(instance)
+    assert instance.process.returncode is not None
+    assert not instance.root.exists()
+
+
+def test_duplicate_app_id_is_refused_until_the_owner_stops(roots: list[Path], fake_bin: Path) -> None:
+    adapter = SwiftLinuxAdapter(fake_bin)
+    app_id = f"{DEFAULT_APP_ID}.conformance.dup"
+    first = adapter.launch(app_id=app_id)
+    try:
+        with pytest.raises(LaunchRefused, match="already used"):
+            adapter.launch(app_id=app_id)
+    finally:
+        adapter.stop(first)
+    adapter.stop(adapter.launch(app_id=app_id))
+
+
+def test_app_exiting_before_serving_fails_the_launch(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_APP_MODE", "exit")
+    with pytest.raises(LaunchError, match=r"exited with 3(.|\n)*refusing to start"):
+        SwiftLinuxAdapter(fake_bin).launch()
+
+
+def test_app_never_serving_times_out_and_is_stopped(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_APP_MODE", "silent")
+    spawned: list[subprocess.Popen[bytes]] = []
+    popen = subprocess.Popen
+
+    def recording(*args, **kwargs):  # type: ignore[no-untyped-def]
+        spawned.append(popen(*args, **kwargs))
+        return spawned[-1]
+
+    monkeypatch.setattr(base.subprocess, "Popen", recording)
+    with pytest.raises(LaunchError, match="not serving after"):
+        SwiftLinuxAdapter(fake_bin).launch(timeout=1.0)
+    assert spawned[0].returncode is not None
+
+
+def test_version_refused_during_launch_fails_the_launch(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_APP_MODE", "refuse")
+    with pytest.raises(LaunchError, match="not ready"):
+        SwiftLinuxAdapter(fake_bin).launch()
+
+
+def test_app_ignoring_sigterm_is_killed_and_reported(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_APP_MODE", "ignore-term")
+    monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    with pytest.raises(StopError, match="ignored SIGTERM"):
+        adapter.stop(instance)
+    assert instance.process.returncode == -9
+
+
+def test_stop_reaps_claimed_daemons_over_the_protocol(
+    roots: list[Path], fake_bin: Path, tmp_path: Path, daemons: list[subprocess.Popen[bytes]]
+) -> None:
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    pid = spawn_daemon(tmp_path, "zmx", instance.zmx_dir, daemons)
+    assert instance.request("fake.adopt", pid=pid).ok
+    assert find_leftovers(instance.zmx_dir) != []
+    adapter.stop(instance, cleanup=False)
+    requests = [json.loads(line) for line in (instance.state_dir / "fake-requests.jsonl").read_text().splitlines()]
+    assert {"cmd": "zmx.kill", "target": f"s{pid}", "args": {"pane": "left", "force": True, "window": "w1"}} in requests
+
+
+def test_stop_reports_daemons_left_under_the_instance_zmx_dir(
+    roots: list[Path], fake_bin: Path, tmp_path: Path, daemons: list[subprocess.Popen[bytes]]
+) -> None:
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    pid = spawn_daemon(tmp_path, "agterm-session-host", instance.zmx_dir, daemons)
+    with pytest.raises(LeftoverProcesses, match=str(pid)):
+        adapter.stop(instance)
+    assert instance.process.returncode is not None
+    assert instance.root.exists()
+
+
+def test_leftover_check_matches_name_and_zmx_dir(tmp_path: Path, daemons: list[subprocess.Popen[bytes]]) -> None:
+    mine, other = "/tmp/agterm-zmx-mine", "/tmp/agterm-zmx-other"
+    zmx = spawn_daemon(tmp_path, "zmx", mine, daemons)
+    spawn_daemon(tmp_path, "zmx", other, daemons)
+    spawn_daemon(tmp_path, "unrelated", mine, daemons)
+    assert [pid for pid, _ in find_leftovers(mine)] == [zmx]
+
+
+def test_zmx_dir_is_the_fnv1a_hash_of_the_canonical_state_dir(tmp_path: Path) -> None:
+    assert fnv1a64("") == "cbf29ce484222325"
+    assert fnv1a64("a") == "af63dc4c8601ec8c"
+    assert fnv1a64("foobar") == "85944171f73967e8"
+    real = tmp_path / "state"
+    real.mkdir()
+    (tmp_path / "link").symlink_to(real)
+    expected = f"/tmp/agterm-zmx-{fnv1a64(os.path.realpath(real))}"
+    assert zmx_socket_directory(real) == zmx_socket_directory(tmp_path / "link") == expected
+
+
+# -- capabilities and parity level
+
+
+@pytest.mark.parametrize(
+    ("since", "level", "at"),
+    [
+        ("0.36.0", "0.36.0", True),
+        ("0.36", "0.36.0", True),
+        ("v0.35.2", "0.36.0", True),
+        ("0.36.1", "0.36.0", False),
+        ("0.100.0", "0.36.0", False),
+        ("0.1.0", None, False),
+    ],
+)
+def test_profile_level_comparison(since: str, level: str | None, at: bool) -> None:
+    assert Profile(level, frozenset()).at_level(since) is at
+
+
+def test_version_tuple_rejects_garbage() -> None:
+    with pytest.raises(ValueError):
+        version_tuple("0.36.0-beta")
+
+
+def test_swift_linux_profile_is_static() -> None:
+    adapter = SwiftLinuxAdapter(None)
+    assert adapter.parity_level == "0.36.0"
+    assert adapter.capabilities == {"posix-shell", "live-sessions"}
+    assert "window-geometry" not in adapter.capabilities
+
+
+@pytest.mark.parametrize(
+    ("mode", "zmx", "live"), [("plain", False, True), ("uitest", False, False), ("uitest", True, True)]
+)
+def test_swift_macos_profile_follows_launch_mode(mode: str, zmx: bool, live: bool) -> None:
+    adapter = SwiftMacosAdapter(None, launch_mode=mode, enable_zmx=zmx)
+    assert adapter.parity_level == "0.36.0"
+    assert {"posix-shell", "window-geometry"} <= adapter.capabilities
+    assert ("live-sessions" in adapter.capabilities) is live
+
+
+def test_static_capabilities_come_from_the_vocabulary() -> None:
+    for adapter in (SwiftLinuxAdapter(None), SwiftMacosAdapter(None), SwiftMacosAdapter(None, launch_mode="uitest")):
+        assert adapter.capabilities <= CAPABILITIES.keys()
+
+
+def test_rust_without_a_binary_reports_nothing() -> None:
+    adapter = RustAdapter(None)
+    assert adapter.profile == NO_PROFILE
+    assert adapter.parity_level is None and adapter.capabilities == frozenset()
+    assert not adapter.available
+    assert not adapter.profile.at_level("0.1.0")
+    with pytest.raises(LaunchError, match="no binary"):
+        adapter.launch()
+
+
+@pytest.mark.parametrize(
+    ("result", "profile"),
+    [
+        (None, NO_PROFILE),
+        ({"app": {"version": "0.1.0"}}, NO_PROFILE),
+        ({"conformance": {}}, NO_PROFILE),
+        (
+            {"conformance": {"parityLevel": "0.36.0", "capabilities": ["posix-shell"]}},
+            Profile("0.36.0", frozenset({"posix-shell"})),
+        ),
+        ({"conformance": {"capabilities": ["live-sessions"]}}, Profile(None, frozenset({"live-sessions"}))),
+    ],
+)
+def test_rust_profile_from_version(result: dict | None, profile: Profile) -> None:
+    assert profile_from_version(result) == profile
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        "0.36.0",
+        {"parityLevel": 36},
+        {"parityLevel": "latest"},
+        {"capabilities": "posix-shell"},
+        {"capabilities": [1]},
+    ],
+)
+def test_rust_malformed_profile_is_an_error(block: object) -> None:
+    with pytest.raises(ProfileError):
+        profile_from_version({"conformance": block})
+
+
+def test_rust_profile_is_probed_once_from_version(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conformance = {"parityLevel": "0.12.0", "capabilities": ["posix-shell"]}
+    monkeypatch.setenv("FAKE_VERSION", json.dumps({"app": {"version": "0.1.0"}, "conformance": conformance}))
+    adapter = RustAdapter(fake_bin)
+    assert adapter.profile == Profile("0.12.0", frozenset({"posix-shell"}))
+    assert adapter.capabilities == {"posix-shell"}
+    assert len(roots) == 1 and not roots[0].exists()
+
+
+def test_rust_malformed_profile_fails_the_launch(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_VERSION", json.dumps({"conformance": {"parityLevel": 1}}))
+    with pytest.raises(ProfileError):
+        RustAdapter(fake_bin).launch()
+    assert not roots[0].exists()
+
+
+# -- per-implementation wiring
+
+
+def test_make_adapter_covers_every_impl(tmp_path: Path) -> None:
+    for name, cls in ADAPTERS.items():
+        adapter = make_adapter(ImplOptions(impl=name, bin=None, ctl=tmp_path / "ctl", coverage_gate=False))
+        assert type(adapter) is cls and adapter.name == name
+        assert adapter.ctl_path == tmp_path / "ctl"
+
+
+def test_swift_linux_wires_the_install_layout(fake_bin: Path) -> None:
+    install = fake_bin.parent.parent
+    (install / "share" / "agterm").mkdir(parents=True)
+    (fake_bin.parent / "agtermctl").touch()
+    adapter = SwiftLinuxAdapter(fake_bin)
+    assert adapter.ctl_path == fake_bin.parent / "agtermctl"
+    env = adapter.build_env(Path("/tmp/agt-x"))
+    assert env["AGTERM_RESOURCE_ROOT"] == str(install / "share" / "agterm")
+
+
+def test_swift_linux_without_share_sets_no_resource_root(fake_bin: Path, tmp_path: Path) -> None:
+    assert "AGTERM_RESOURCE_ROOT" not in SwiftLinuxAdapter(fake_bin).build_env(tmp_path)
+    explicit = tmp_path / "resources"
+    env = SwiftLinuxAdapter(fake_bin, resource_root=explicit).build_env(tmp_path)
+    assert env["AGTERM_RESOURCE_ROOT"] == str(explicit)
+
+
+def test_swift_macos_execs_inside_the_bundle(tmp_path: Path) -> None:
+    bundle = tmp_path / "agterm.app"
+    adapter = SwiftMacosAdapter(bundle)
+    assert adapter.executable() == [str(bundle / "Contents" / "MacOS" / "agterm")]
+    assert adapter.ctl_path == bundle / "Contents" / "MacOS" / "agtermctl"
+    direct = SwiftMacosAdapter(bundle / "Contents" / "MacOS" / "agterm")
+    assert direct.executable() == [str(bundle / "Contents" / "MacOS" / "agterm")]
+    assert direct.ctl_path == bundle / "Contents" / "MacOS" / "agtermctl"
+
+
+@pytest.mark.parametrize(("mode", "zmx"), [("plain", False), ("uitest", False), ("uitest", True)])
+def test_swift_macos_launch_env(tmp_path: Path, mode: str, zmx: bool) -> None:
+    env = SwiftMacosAdapter(tmp_path / "agterm.app", launch_mode=mode, enable_zmx=zmx).build_env(tmp_path)
+    assert env["CFFIXED_USER_HOME"] == env["HOME"]
+    assert "AGTERM_APP_ID" not in env
+    assert ("AGTERM_UITEST_FORCE_SIDEBAR_VISIBLE" in env) is (mode == "uitest")
+    assert ("AGTERM_UITEST_ENABLE_ZMX" in env) is zmx
+    check_launch_env(env, tmp_path, needs_app_id=False)
+
+
+def test_swift_macos_rejects_an_unknown_launch_mode() -> None:
+    with pytest.raises(ValueError, match="launch_mode"):
+        SwiftMacosAdapter(None, launch_mode="open")
