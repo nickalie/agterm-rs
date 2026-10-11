@@ -61,7 +61,9 @@ POLL_INTERVAL = 0.05
 CAPABILITIES: Mapping[str, str] = {
     "posix-shell": "panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic",
     "live-sessions": "restoreMode live keeps panes in zmx daemons that outlive the app",
-    "window-geometry": "window x/y position is settable and restored",
+    "window-geometry": "window x/y position is settable through `window.move`, read back as `geometry` and restored",
+    "window-minimize": "`window.minimize` and `window.new --minimized` take effect and read back as `minimized`",
+    "select-takes-frontmost": "`window.select`/`window.go` make their window `active` without waiting on window focus",
     "status-shape": "`session.status` validates `shape` and reads it back as `statusShape`",
     "type-rejects-nul": "`session.type` refuses text carrying a NUL rather than typing the run before it",
     "resize-echoes-ratio": "`session.resize` answers with the applied ratio in `result.ratio`",
@@ -69,6 +71,7 @@ CAPABILITIES: Mapping[str, str] = {
     "overlay-size-validated": "`session.overlay.open` refuses a `sizePercent` outside 1...100 rather than clamping it",
     "modal-blocks-covers": "a pending GUI ask refuses control-driven covers such as `session.search` with `ask pending`",
     "pick-names-pending-ask": "`pick.open` under a pending GUI ask answers `ask already pending`, naming the ask",
+    "quick-validates-input": "`quick.type` refuses a NUL, `quick.text` `--all` with `--lines` and a `--lines` below 1",
 }
 
 

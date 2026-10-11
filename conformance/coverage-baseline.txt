@@ -6,14 +6,10 @@
 session.restart
 session.lead
 surface.cursor
-dashboard
 session.copy
 session.paste
 session.selectall
 session.overlay.copy
-quick
-quick.type
-quick.text
 sidebar
 sidebar.mode
 sidebar.flagged-layout
@@ -24,17 +20,6 @@ notify
 font.inc
 font.dec
 font.reset
-window.new
-window.select
-window.go
-window.close
-window.rename
-window.delete
-window.resize
-window.move
-window.zoom
-window.fullscreen
-window.minimize
 keymap.reload
 keymap.list
 keymap.run
@@ -58,8 +43,6 @@ zmx.screen
 session.overlay.job.run
 
 # fields
-field:result.width
-field:result.height
 field:result.theme
 field:result.themes
 field:result.sidebarWidth
@@ -77,10 +60,6 @@ field:result.restart
 field:tree.idleMs
 field:tree.autoFollowMs
 field:tree.sidebarWidth
-field:tree.dashboardMembers
-field:tree.dashboardHighlighted
-field:tree.dashboardFontSize
-field:tree.dashboardFontMode
 field:tree.liveReset
 field:tree.indexUnsaved
 field:tree.session.title
@@ -102,7 +81,6 @@ field:tree.session.presentation
 field:tree.session.presenters
 field:tree.session.remoteOverlays
 field:window.autoFollowMs
-field:window.geometry
 
 # events
 event:notify

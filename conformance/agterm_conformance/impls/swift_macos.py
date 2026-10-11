@@ -12,6 +12,8 @@ BASE_CAPABILITIES = frozenset(
     {
         "posix-shell",
         "window-geometry",
+        "window-minimize",
+        "select-takes-frontmost",
         "status-shape",
         "type-rejects-nul",
         "resize-echoes-ratio",
@@ -19,6 +21,7 @@ BASE_CAPABILITIES = frozenset(
         "overlay-size-validated",
         "modal-blocks-covers",
         "pick-names-pending-ask",
+        "quick-validates-input",
     }
 )
 LAUNCH_MODES = ("uitest", "plain")

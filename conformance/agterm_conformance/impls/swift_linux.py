@@ -7,8 +7,9 @@ from pathlib import Path
 
 from agterm_conformance.impls.base import Adapter, Profile
 
-# GTK4 cannot place a window at x/y, so `window-geometry` is absent. The fork's own dispatcher and adapters
-# also lack upstream's `status-shape`, `type-rejects-nul`, `resize-echoes-ratio` and `drop-placement`.
+# GTK4 cannot place a window at x/y, so `window-geometry` is absent, and Wayland's xdg-shell reports no
+# minimized state (niri ignores the request too), so `window-minimize` is. The fork's own dispatcher and
+# adapters lack the rest of upstream's set in swift_macos.py.
 PROFILE = Profile(parity_level="0.36.0", capabilities=frozenset({"posix-shell", "live-sessions"}))
 
 

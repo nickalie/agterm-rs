@@ -416,10 +416,20 @@ events by kind, CLI by subcommand words (`cli` items carry their `wire`); exempt
 **Files:**
 - Create: `conformance/tests/protocol/test_window.py`
 - Create: `conformance/tests/protocol/test_dashboard_quick.py`
+- ➕ Modify: `conformance/agterm_conformance/impls/{base,swift_linux,rust}.py` and `conformance/selftests/test_impls.py`
+  (private `XDG_RUNTIME_DIR`)
+- ➕ Modify: `conformance/agterm_conformance/impls/{base,swift_macos,swift_linux}.py` (capabilities
+  `window-minimize`, `select-takes-frontmost`, `quick-validates-input`: upstream behavior the Linux fork lacks)
+- ➕ Modify: `conformance/coverage-baseline.txt`
 
-- [ ] window list/new/close/geometry/fullscreen/zoom/minimize with read-back; `window-geometry` capability with reason on Linux
-- [ ] dashboard and quick-terminal commands with read-back
-- [ ] run on reference-linux — green before task 15 (reference-macos in Task 19)
+- [x] ➕ isolate `XDG_RUNTIME_DIR` for Linux launches: a 0700 `<root>/run` per instance, `WAYLAND_DISPLAY` made
+  absolute, `DBUS_SESSION_BUS_ADDRESS` explicit, the dir under the launch-guard allowlist — the fork wrote
+  `agterm-ghostty-*.conf` (and WebKit its `.flatpak`/`webkitgtk` sandbox files) into the live app's runtime dir
+- [x] window list/new/close/geometry/fullscreen/zoom/minimize with read-back; `window-geometry` capability with reason on Linux
+- [x] dashboard and quick-terminal commands with read-back
+- [x] run on reference-linux — green before task 15 (reference-macos in Task 19)
+- ➕ also covered here: `--window` addressing a second window's store (`tree`, `workspace.new`, `session.new`), left
+  open by Task 11; left for later: `window.autoFollowMs`/`tree.autoFollowMs` (auto-follow has no control command)
 
 ### Task 15: Protocol — sidebar, notify, font, theme
 
