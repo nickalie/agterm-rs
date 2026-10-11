@@ -35,7 +35,8 @@ from agterm_conformance.plugin import SCRUB_PREFIXES
 # Both references refuse to bind at `path.utf8.count >= 104` (Darwin's sun_path, mirrored on Linux).
 SOCKET_PATH_CAP = 104
 # `/tmp`, not `$TMPDIR`: a macOS runner's `/var/folders/...` temp dir eats most of the socket cap.
-TEMP_PARENT = "/tmp"
+# `CONFORMANCE_TMP` (not `AGTERM_`-prefixed, which the plugin scrubs) gives run-reference-linux.sh its own parent.
+TEMP_PARENT = os.environ.get("CONFORMANCE_TMP") or "/tmp"
 MINIMAL_PATH = "/usr/bin:/bin"
 DEFAULT_APP_ID = "io.github.melonamin.agterm"
 SESSION_HOST = "agterm-session-host"

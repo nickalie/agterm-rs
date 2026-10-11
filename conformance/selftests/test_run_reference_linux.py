@@ -16,11 +16,16 @@ def test_reports_version(ctl):
     assert assert_ok(ctl.request("version"))["app"]["version"]
 """
 
+OTHER_TEST = """
+def test_other(ctl):
+    pass
+"""
+
 LEAKING_TEST = """
-import tempfile
+from agterm_conformance.impls.base import make_root
 
 def test_leaks_a_root(ctl):
-    tempfile.mkdtemp(prefix="agt-", dir="/tmp")
+    make_root()
 """
 
 
@@ -41,10 +46,10 @@ def install(fake_bin: Path) -> Path:
     return fake_bin
 
 
-def run(tmp_path: Path, *args: str, **env: str) -> tuple[subprocess.CompletedProcess[str], str]:
+def run(tmp_path: Path, *args: str, script: Path = SCRIPT, **env: str) -> tuple[subprocess.CompletedProcess[str], str]:
     out = tmp_path / "report"
     completed = subprocess.run(
-        [str(SCRIPT), "--out", str(out), *args],
+        [str(script), "--out", str(out), *args],
         env={**os.environ, "PYTHON": sys.executable, **env},
         capture_output=True,
         text=True,
@@ -56,6 +61,10 @@ def run(tmp_path: Path, *args: str, **env: str) -> tuple[subprocess.CompletedPro
 
 
 def test_a_green_run_writes_the_report(tmp_path: Path, install: Path, layers: Path) -> None:
+    (layers / "protocol" / "test_other.py").write_text(OTHER_TEST)
+    (tmp_path / "report").mkdir()
+    (tmp_path / "report" / "keep.txt").write_text("mine")
+    (tmp_path / "report" / "report.md").write_text("stale")
     completed, report = run(
         tmp_path, "--bin", str(install), "--tests", str(layers), "--", "-k", "version", AGTERM_SOCKET="/nowhere"
     )
@@ -67,6 +76,14 @@ def test_a_green_run_writes_the_report(tmp_path: Path, install: Path, layers: Pa
     assert "Left behind" not in report
     assert (tmp_path / "report" / "junit.xml").is_file()
     assert "scrubbed from env" not in (tmp_path / "report" / "pytest.log").read_text()
+    assert (tmp_path / "report" / "keep.txt").read_text() == "mine"
+
+
+def test_pytest_args_reach_pytest(tmp_path: Path, install: Path, layers: Path) -> None:
+    (layers / "protocol" / "test_other.py").write_text(OTHER_TEST)
+    completed, report = run(tmp_path, "--bin", str(install), "--tests", str(layers))
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "swift-linux: 2 pass, 0 fail" in report
 
 
 def test_a_failing_test_fails_the_run(tmp_path: Path, install: Path, layers: Path) -> None:
@@ -79,12 +96,33 @@ def test_a_failing_test_fails_the_run(tmp_path: Path, install: Path, layers: Pat
 def test_a_root_left_behind_fails_a_green_run(tmp_path: Path, install: Path, layers: Path) -> None:
     (layers / "protocol" / "test_probe.py").write_text(LEAKING_TEST)
     completed, report = run(tmp_path, "--bin", str(install), "--tests", str(layers))
-    left = re.findall(r"`(/tmp/agt-[^`]+)`", report)
-    for root in left:
+    left = [Path(root) for root in re.findall(r"`(/tmp/agt-[^`]+)`", report)]
+    ours = [root for root in left if root.parent.name.startswith("agt-run-")]
+    for root in ours:
         shutil.rmtree(root, ignore_errors=True)
+        root.parent.rmdir()
     assert completed.returncode == 1
     assert "swift-linux: 1 pass, 0 fail" in report
-    assert len(left) == 1
+    assert len(ours) == len(left) == 1
+
+
+@pytest.mark.parametrize("untracked", [False, True])
+def test_an_untracked_suite_file_marks_the_suite_dirty(
+    tmp_path: Path, install: Path, layers: Path, untracked: bool
+) -> None:
+    repo = tmp_path / "repo"
+    script = repo / "conformance" / "tools" / SCRIPT.name
+    script.parent.mkdir(parents=True)
+    shutil.copy2(SCRIPT, script)
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "add", "."], check=True)
+    subprocess.run([*git, "commit", "-qm", "suite"], check=True)
+    if untracked:
+        (repo / "conformance" / "test_new.py").write_text("")
+    completed, report = run(tmp_path, "--bin", str(install), "--tests", str(layers), script=script)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert ("(dirty)" in report) == untracked
 
 
 @pytest.mark.parametrize("case", ["missing bin", "no layer"])

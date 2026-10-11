@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Run the protocol and cli layers against the installed Swift/GTK fork and write a report to attach to a PR.
-# Every instance comes from the harness (unique AGTERM_APP_ID, fresh /tmp/agt-* root); nothing here talks to
-# the user's running agterm.
+# Every instance comes from the harness (unique AGTERM_APP_ID, fresh root under this run's own /tmp/agt-run-*
+# parent); nothing here talks to the user's running agterm.
 #
 #   conformance/tools/run-reference-linux.sh [--bin PATH] [--out DIR] [--tests DIR] [-- PYTEST_ARGS...]
 #
-# Exits with pytest's status, or 1 when a run left a /tmp/agt-* root behind.
+# Writes report.md, junit.xml and pytest.log into DIR, replacing only those.
+# Exits with pytest's status, or 1 when a run left an instance root behind.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,7 +22,7 @@ while (($#)); do
         --out) out="$2"; shift 2 ;;
         --tests) tests="$2"; shift 2 ;;
         --) shift; extra=("$@"); break ;;
-        -h|--help) sed -n '2,8s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,9s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -39,9 +40,12 @@ for layer in protocol cli; do
 done
 ((${#layers[@]})) || { echo "no protocol or cli layer under $tests" >&2; exit 2; }
 
-rm -rf "$out"
 mkdir -p "$out"
-before="$(compgen -G '/tmp/agt-*' | sort || true)"
+rm -f "$out/report.md" "$out/junit.xml" "$out/pytest.log"
+# A per-run parent, so a concurrent run's roots are neither blamed on this one nor listed for removal.
+parent="$(mktemp -d /tmp/agt-run-XXXXXX)"
+trap 'rmdir "$parent" 2>/dev/null || true' EXIT
+export CONFORMANCE_TMP="$parent"
 
 set +e
 "$python" -m pytest "${layers[@]}" --impl swift-linux --bin "$bin" -ra \
@@ -49,7 +53,7 @@ set +e
 status=${PIPESTATUS[0]}
 set -e
 
-left="$(comm -13 <(printf '%s\n' "$before") <(compgen -G '/tmp/agt-*' | sort || true) | sed '/^$/d')"
+left="$(find "$parent" -mindepth 1 -maxdepth 1 | sort)"
 if [[ -n "$left" && $status -eq 0 ]]; then
     status=1
 fi
@@ -58,7 +62,7 @@ share="$(dirname "$(readlink -f "$bin")")/../share/agterm"
 fork_version="$(cat "$share/VERSION" 2>/dev/null || echo unknown)"
 fork_commit="$(cat "$share/COMMIT" 2>/dev/null || echo unknown)"
 suite_commit="$(git -C "$repo" rev-parse --short HEAD)"
-git -C "$repo" diff --quiet HEAD -- conformance || suite_commit+=" (dirty)"
+if [[ -n "$(git -C "$repo" status --porcelain -- conformance)" ]]; then suite_commit+=" (dirty)"; fi
 
 {
     echo "## reference-linux conformance"
