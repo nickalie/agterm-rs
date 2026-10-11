@@ -297,6 +297,29 @@ def test_stop_reaps_claimed_daemons_over_the_protocol(
     assert {"cmd": "zmx.kill", "target": f"s{pid}", "args": {"pane": "left", "force": True, "window": "w1"}} in requests
 
 
+def test_stop_reaps_a_split_whose_survivor_is_promoted_by_the_first_kill(
+    roots: list[Path], fake_bin: Path, tmp_path: Path, daemons: list[subprocess.Popen[bytes]]
+) -> None:
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    for name, pane in (("a-left", "left"), ("b-right", "right")):
+        pid = spawn_daemon(tmp_path, "zmx", instance.zmx_dir, daemons)
+        assert instance.request("fake.adopt", pid=pid, session="s1", pane=pane, daemon=name).ok
+    adapter.stop(instance)
+    assert find_leftovers(instance.zmx_dir) == []
+
+
+def test_a_refused_kill_is_not_retried(roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    row = {"daemon": "d1", "state": "claimed", "sessionID": "s1", "pane": "left"}
+    monkeypatch.setenv("FAKE_ZMX_LIST", json.dumps({"zmx": {"entries": [row]}}))
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    base.reap_live_sessions(instance)
+    requests = [json.loads(line) for line in (instance.state_dir / "fake-requests.jsonl").read_text().splitlines()]
+    assert [request["cmd"] for request in requests].count("zmx.kill") == 1
+    adapter.stop(instance)
+
+
 @pytest.mark.parametrize("listing", ['{"zmx": {"entries": null}}', '{"zmx": {"entries": [null, 1]}}', '{"zmx": 1}'])
 def test_malformed_zmx_list_still_terminates_the_app(
     roots: list[Path],
@@ -321,7 +344,7 @@ def test_stop_reports_daemons_left_under_the_instance_zmx_dir(
     adapter = SwiftLinuxAdapter(fake_bin)
     instance = adapter.launch()
     pid = spawn_daemon(tmp_path, "agterm-session-host", instance.zmx_dir, daemons)
-    with pytest.raises(LeftoverProcesses, match=str(pid)):
+    with pytest.raises(LeftoverProcesses, match=rf"{pid} .*may not signal it"):
         adapter.stop(instance)
     assert instance.process.returncode is not None
     assert instance.root.exists()
@@ -332,7 +355,7 @@ def test_leftover_check_matches_name_and_zmx_dir(tmp_path: Path, daemons: list[s
     zmx = spawn_daemon(tmp_path, "zmx", mine, daemons)
     spawn_daemon(tmp_path, "zmx", other, daemons)
     spawn_daemon(tmp_path, "unrelated", mine, daemons)
-    assert [pid for pid, _ in find_leftovers(mine)] == [zmx]
+    assert [pid for pid, *_ in find_leftovers(mine)] == [zmx]
 
 
 def test_leftover_check_names_an_executable_whose_path_has_a_space(
@@ -340,7 +363,7 @@ def test_leftover_check_names_an_executable_whose_path_has_a_space(
 ) -> None:
     zmx_dir = "/tmp/agterm-zmx-spaced"
     pid = spawn_daemon(tmp_path, "zmx", zmx_dir, daemons, directory="Test Install")
-    assert [found for found, _ in find_leftovers(zmx_dir)] == [pid]
+    assert [found for found, *_ in find_leftovers(zmx_dir)] == [pid]
 
 
 def test_zmx_dir_is_the_fnv1a_hash_of_the_canonical_state_dir(tmp_path: Path) -> None:

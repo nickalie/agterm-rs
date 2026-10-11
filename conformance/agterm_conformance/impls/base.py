@@ -38,7 +38,13 @@ SOCKET_PATH_CAP = 104
 TEMP_PARENT = "/tmp"
 MINIMAL_PATH = "/usr/bin:/bin"
 DEFAULT_APP_ID = "io.github.melonamin.agterm"
-LEFTOVER_NAMES = frozenset({"zmx", "agterm-session-host"})
+SESSION_HOST = "agterm-session-host"
+LEFTOVER_NAMES = frozenset({"zmx", SESSION_HOST})
+# The macOS host outlives the app by design, takes no stop a harness can send, and is not ours to signal.
+SESSION_HOST_NOTE = (
+    f"; {SESSION_HOST} is kept alive by the reference itself and the harness may not signal it,"
+    " see docs/backlog/harness-stop-for-macos-session-host.md"
+)
 LAUNCH_TIMEOUT = 30.0
 STOP_TIMEOUT = 10.0
 POLL_INTERVAL = 0.05
@@ -325,8 +331,9 @@ class Adapter:
         finally:
             _release_app_id(instance.app_id)
         if leftovers:
-            described = ", ".join(f"{pid} {command}" for pid, command in leftovers)
-            raise LeftoverProcesses(f"processes left under ZMX_DIR {instance.zmx_dir}: {described}")
+            described = ", ".join(f"{pid} {command}" for pid, _, command in leftovers)
+            note = SESSION_HOST_NOTE if any(name == SESSION_HOST for _, name, _ in leftovers) else ""
+            raise LeftoverProcesses(f"processes left under ZMX_DIR {instance.zmx_dir}: {described}{note}")
         if killed:
             raise StopError(f"pid {instance.pid} ignored SIGTERM for {STOP_TIMEOUT}s and was killed")
         if cleanup:
@@ -389,22 +396,42 @@ def wait_for_socket(instance: Instance, timeout: float) -> dict[str, Any]:
 
 
 def reap_live_sessions(instance: Instance) -> None:
-    """Best effort over the protocol; whatever survives is reported by the leftover check."""
+    """Best effort over the protocol; whatever survives is reported by the leftover check.
+
+    Re-lists after every kill: killing a left pane promotes its split survivor into the left slot, so a
+    selector read before the kill no longer names that survivor.
+    """
     try:
-        listing = instance.request("zmx.list")
-        inventory = (listing.result or {}).get("zmx") if listing.ok else None
-        entries = inventory.get("entries") if isinstance(inventory, dict) else None
-        for entry in entries if isinstance(entries, list) else []:
-            if not isinstance(entry, dict):
-                continue
-            if entry.get("state") == "claimed" and entry.get("sessionID") and entry.get("pane"):
-                args: dict[str, Any] = {"pane": entry["pane"], "force": True}
-                if entry.get("windowID"):
-                    args["window"] = entry["windowID"]
-                instance.request("zmx.kill", entry["sessionID"], **args)
+        tried: set[str] = set()
+        while (entry := _next_claimed(instance, tried)) is not None:
+            tried.add(_daemon_key(entry))
+            args: dict[str, Any] = {"pane": entry["pane"], "force": True}
+            if entry.get("windowID"):
+                args["window"] = entry["windowID"]
+            instance.request("zmx.kill", entry["sessionID"], **args)
         instance.request("zmx.prune")
     except ClientError:
         pass
+
+
+def _next_claimed(instance: Instance, tried: set[str]) -> dict[str, Any] | None:
+    listing = instance.request("zmx.list")
+    inventory = (listing.result or {}).get("zmx") if listing.ok else None
+    entries = inventory.get("entries") if isinstance(inventory, dict) else None
+    for entry in entries if isinstance(entries, list) else []:
+        if (
+            isinstance(entry, dict)
+            and entry.get("state") == "claimed"
+            and entry.get("sessionID")
+            and entry.get("pane")
+            and _daemon_key(entry) not in tried
+        ):
+            return entry
+    return None
+
+
+def _daemon_key(entry: dict[str, Any]) -> str:
+    return str(entry.get("daemon") or (entry["sessionID"], entry["pane"], entry.get("windowID")))
 
 
 def _terminate(process: subprocess.Popen[bytes]) -> bool:
@@ -420,11 +447,13 @@ def _terminate(process: subprocess.Popen[bytes]) -> bool:
         return True
 
 
-def find_leftovers(zmx_dir: str) -> list[tuple[int, str]]:
-    """zmx / agterm-session-host processes carrying this instance's `ZMX_DIR`."""
+def find_leftovers(zmx_dir: str) -> list[tuple[int, str, str]]:
+    """(pid, name, command) of zmx / agterm-session-host processes carrying this instance's `ZMX_DIR`."""
     marker = f"ZMX_DIR={zmx_dir}"
     return [
-        (pid, command) for pid, name, command, environ in _processes() if marker in environ and name in LEFTOVER_NAMES
+        (pid, name, command)
+        for pid, name, command, environ in _processes()
+        if marker in environ and name in LEFTOVER_NAMES
     ]
 
 

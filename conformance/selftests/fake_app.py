@@ -3,7 +3,8 @@
 FAKE_APP_MODE: serve (default), exit (exit 3 before binding), silent (never binds), refuse (`version` fails),
 ignore-term (serve, ignoring SIGTERM). FAKE_VERSION: JSON for the `version` result. FAKE_ZMX_LIST: JSON
 replacing the `zmx.list` result.
-`fake.adopt {pid}` makes that pid a claimed zmx daemon which `zmx.kill` terminates.
+`fake.adopt {pid, session?, pane?, daemon?}` makes that pid a claimed zmx daemon which `zmx.kill` terminates;
+killing a left pane promotes the session's right pane into the left slot, as the references do.
 """
 
 import json
@@ -26,7 +27,7 @@ if mode == "silent":
 if mode == "ignore-term":
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
-daemons: list[int] = []
+daemons: list[dict] = []
 
 
 def handle(request: dict) -> dict:
@@ -38,20 +39,40 @@ def handle(request: dict) -> dict:
             return {"ok": False, "error": "not ready"}
         return {"ok": True, "result": json.loads(os.environ.get("FAKE_VERSION", '{"app": {"version": "0.0.1"}}'))}
     if cmd == "fake.adopt":
-        daemons.append(int(args["pid"]))
+        pid = int(args["pid"])
+        daemons.append(
+            {
+                "pid": pid,
+                "daemon": args.get("daemon", f"d{pid}"),
+                "sessionID": args.get("session", f"s{pid}"),
+                "pane": args.get("pane", "left"),
+            }
+        )
         return {"ok": True}
     if cmd == "zmx.list":
         if "FAKE_ZMX_LIST" in os.environ:
             return {"ok": True, "result": json.loads(os.environ["FAKE_ZMX_LIST"])}
         entries = [
-            {"daemon": f"d{pid}", "state": "claimed", "sessionID": f"s{pid}", "pane": "left", "windowID": "w1"}
-            for pid in daemons
+            {
+                "daemon": d["daemon"],
+                "state": "claimed",
+                "sessionID": d["sessionID"],
+                "pane": d["pane"],
+                "windowID": "w1",
+            }
+            for d in sorted(daemons, key=lambda d: d["daemon"])
         ]
         return {"ok": True, "result": {"zmx": {"entries": entries}}}
     if cmd == "zmx.kill":
-        pid = int(request["target"][1:])
-        os.kill(pid, signal.SIGTERM)
-        daemons.remove(pid)
+        session, pane = request.get("target"), args.get("pane")
+        match = next((d for d in daemons if d["sessionID"] == session and d["pane"] == pane), None)
+        if match is None:
+            return {"ok": False, "error": f"no {pane} pane daemon for session {session}"}
+        os.kill(match["pid"], signal.SIGTERM)
+        daemons.remove(match)
+        for survivor in daemons:
+            if pane == "left" and survivor["sessionID"] == session:
+                survivor["pane"] = "left"
         return {"ok": True}
     return {"ok": False, "error": f"unknown command: {cmd}"}
 
