@@ -13,6 +13,8 @@ TOOLS = Path(__file__).resolve().parent.parent / "tools"
 MINI = Path(__file__).with_name("fixtures") / "upstream-mini"
 PROTOCOL = Path("agtermCore/Sources/agtermCore/ControlProtocol.swift")
 PROJECTION = Path("agtermCore/Sources/agtermCore/ControlProjection.swift")
+ASK = Path("agterm/Views/AskDialogView.swift")
+WELCOME = Path("agterm/WelcomeAlert.swift")
 
 
 def _load(name: str) -> ModuleType:
@@ -317,15 +319,22 @@ def test_a_fresh_catalog_auto_exempts_and_seeds_behaviors(mini: Path, tmp_path: 
     assert data["exemptions"] == gc.AUTO_EXEMPTIONS
     assert data["behaviors"] == gc.AUTO_BEHAVIORS
     assert data["cli"]["clipboard set"] == {"status": "uncovered"}
+    ui = yaml.safe_load((tmp_path / "ui-ids.yaml").read_text())
+    assert ui == {
+        "upstream": "v0.36.0",
+        "ids": {k: {"status": "uncovered", **v} for k, v in UI_IDS.items()},
+        "manual": {},
+    }
 
 
 def test_regeneration_is_byte_stable_and_keeps_edits(mini: Path, tmp_path: Path) -> None:
     catalog = tmp_path / "catalog.yaml"
     args = ["--source", str(mini), "--tag", "v0.36.0", "--catalog", str(catalog)]
     assert gc.main(args) == 0
-    first = catalog.read_text()
+    first, first_ui = catalog.read_text(), (tmp_path / "ui-ids.yaml").read_text()
     assert gc.main(args) == 0
     assert catalog.read_text() == first
+    assert (tmp_path / "ui-ids.yaml").read_text() == first_ui
     catalog.write_text(first.replace("  tree: {status: uncovered}", "  tree: {status: covered}", 1))
     edit(mini, PROTOCOL, "    case quick\n", "")
     edit(mini, Path("site/commands.html"), "agtermctl quick [show|hide|toggle]", "agtermctl tree")
@@ -380,7 +389,9 @@ def test_reads_the_tag_with_git_archive_without_touching_the_checkout(
     assert gc.main(["--repo", str(repo), "--tag", "v0.36.0", "--catalog", str(catalog)]) == 0
     assert list(yaml.safe_load(catalog.read_text())["commands"]) == COMMANDS
     assert (git("rev-parse", "HEAD"), git("status", "--porcelain")) == (head, status)
-    assert "commands: 17 upstream, +17 new, -0 removed-upstream" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "commands: 17 upstream, +17 new, -0 removed-upstream" in out
+    assert "ids: 7 upstream, +7 new, -0 removed-upstream" in out
     assert gc.main(["--repo", str(repo), "--tag", "v9.9.9", "--catalog", str(catalog)]) == 1
     assert "git archive v9.9.9 failed" in capsys.readouterr().err
 
@@ -390,3 +401,170 @@ def test_the_committed_catalog_parses_and_names_its_tag() -> None:
     assert data["upstream"] == "v0.36.0"
     assert len(data["commands"]) == 110
     assert set(gc.GENERATED_SECTIONS) | {"upstream", "behaviors", "exemptions"} == set(data)
+
+
+UI_IDS = {
+    "ask-dialog": {"at": [f"{ASK}:11", f"{ASK}:22"]},
+    "ask-button-{choice}": {"at": [f"{ASK}:14"]},
+    "command-palette": {"at": [f"{ASK}:17"]},
+    "pick-palette": {"at": [f"{ASK}:17"]},
+    "welcome-install": {"at": [f"{WELCOME}:6"]},
+    "workspace-row": {"at": [f"{WELCOME}:12"]},
+    "session-row": {"at": [f"{WELCOME}:12"]},
+}
+
+
+def test_ui_ids_from_literals_templates_ternaries_and_appkit_setters() -> None:
+    gen = gc.generate(MINI)
+    assert gen.problems == []
+    assert gen.ui_ids == UI_IDS
+    assert gen.ui_variables == {}
+
+
+@pytest.mark.parametrize(
+    ("call", "expected"),
+    [
+        ('.accessibilityIdentifier(makeID("x"))', 'unparseable identifier argument: makeID("x")'),
+        ('.accessibilityIdentifier("row-" + suffix)', "unparseable identifier argument"),
+        ('.accessibilityIdentifier(#"raw"#)', "unparseable identifier argument"),
+        (".accessibilityIdentifier()", "unparseable identifier argument"),
+        ('.accessibilityIdentifier(flag ? "a" : other)', "unparseable identifier argument"),
+        ('.accessibilityIdentifier("a{b}")', 'unparseable identifier literal: "a{b}"'),
+        ('.accessibilityIdentifier("a b")', "unparseable identifier literal"),
+        ('.accessibilityIdentifier("row-\\(a + b)")', "unparseable identifier literal"),
+        ('.accessibilityIdentifier("q\\"x")', "unparseable identifier literal"),
+        ('view.setAccessibilityIdentifier(on ? "a-\\(f(x))" : "b")', "unparseable identifier literal"),
+        ('.accessibilityIdentifier("open"', "unbalanced identifier call"),
+    ],
+)
+def test_unparseable_identifiers_are_reported(mini: Path, call: str, expected: str) -> None:
+    (mini / "agterm/Extra.swift").write_text(f'let v = Text("x")\n    {call}\n')
+    found = problems(mini)
+    assert any(f"agterm/Extra.swift:2: {expected}" in p for p in found), found
+
+
+def test_no_ui_ids_is_reported(mini: Path) -> None:
+    shutil.rmtree(mini / "agterm")
+    assert "no ui ids found under agterm" in problems(mini)
+
+
+def _variable_site(mini: Path) -> None:
+    (mini / "agterm/Checkbox.swift").write_text(
+        "func checkbox(identifier: String) -> NSButton {\n"
+        "    let button = NSButton()\n"
+        "    button.setAccessibilityIdentifier(identifier)\n"
+        "    return button\n"
+        "}\n"
+    )
+
+
+def _paths(tmp_path: Path) -> tuple[Path, Path, list[str]]:
+    catalog, ui = tmp_path / "catalog.yaml", tmp_path / "ui-ids.yaml"
+    return catalog, ui, ["--tag", "v0.36.0", "--catalog", str(catalog)]
+
+
+def test_a_variable_identifier_needs_a_manual_entry(
+    mini: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _variable_site(mini)
+    catalog, ui, args = _paths(tmp_path)
+    assert gc.generate(mini).ui_variables == {"agterm/Checkbox.swift:identifier": ["agterm/Checkbox.swift:3"]}
+    assert gc.main(["--source", str(mini), *args]) == 1
+    assert not catalog.exists() and not ui.exists()
+    err = capsys.readouterr().err
+    assert "agterm/Checkbox.swift:3: identifier passed through `identifier`" in err
+    assert "site: agterm/Checkbox.swift:identifier" in err
+
+
+def test_manual_entries_follow_their_site(mini: Path, tmp_path: Path) -> None:
+    _variable_site(mini)
+    _, ui, args = _paths(tmp_path)
+    site = "agterm/Checkbox.swift:identifier"
+    ui.write_text(
+        yaml.safe_dump(
+            {
+                "manual": {
+                    "skill-checkbox": {"site": site, "from": "line 9", "status": "covered"},
+                    "hooks-checkbox": {"site": site},
+                }
+            },
+            sort_keys=False,
+        )
+    )
+    assert gc.main(["--source", str(mini), *args]) == 0
+    manual = yaml.safe_load(ui.read_text())["manual"]
+    assert manual == {
+        "skill-checkbox": {"status": "covered", "site": site, "from": "line 9"},
+        "hooks-checkbox": {"status": "uncovered", "site": site},
+    }
+    assert (
+        "  skill-checkbox: {status: covered, site: 'agterm/Checkbox.swift:identifier', from: line 9}\n"
+        in ui.read_text()
+    )
+    (mini / "agterm/Checkbox.swift").unlink()
+    assert gc.main(["--source", str(mini), *args]) == 0
+    assert {k: v["status"] for k, v in yaml.safe_load(ui.read_text())["manual"].items()} == {
+        "skill-checkbox": "removed-upstream",
+        "hooks-checkbox": "removed-upstream",
+    }
+    _variable_site(mini)
+    assert gc.main(["--source", str(mini), *args]) == 0
+    assert {v["status"] for v in yaml.safe_load(ui.read_text())["manual"].values()} == {"uncovered"}
+
+
+@pytest.mark.parametrize(
+    ("manual", "expected"),
+    [
+        ({"x": {"from": "line 1"}}, "manual id x: needs a site"),
+        ({"x": "agterm/Checkbox.swift:identifier"}, "manual id x: needs a site"),
+        ({"ask-dialog": {"site": "agterm/Checkbox.swift:identifier"}}, "manual id ask-dialog is also generated from"),
+        (["x"], "expected a mapping with a `manual` mapping"),
+    ],
+)
+def test_malformed_manual_entries_write_nothing(
+    mini: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str], manual: Any, expected: str
+) -> None:
+    catalog, ui, args = _paths(tmp_path)
+    ui.write_text(yaml.safe_dump({"manual": manual}))
+    before = ui.read_text()
+    assert gc.main(["--source", str(mini), *args]) == 1
+    assert ui.read_text() == before and not catalog.exists()
+    assert expected in capsys.readouterr().err
+
+
+def test_ui_ids_keep_status_and_mark_vanished_ids(mini: Path, tmp_path: Path) -> None:
+    _, ui, args = _paths(tmp_path)
+    ui.write_text(
+        yaml.safe_dump(
+            {
+                "ids": {
+                    "ask-dialog": {"status": "covered", "at": ["stale:1"], "note": "kept"},
+                    "gone-id": {"status": "covered", "at": ["agterm/Old.swift:3"]},
+                },
+                "manual": {},
+            }
+        )
+    )
+    assert gc.main(["--source", str(mini), *args]) == 0
+    ids = yaml.safe_load(ui.read_text())["ids"]
+    assert ids["ask-dialog"] == {"status": "covered", "at": [f"{ASK}:11", f"{ASK}:22"], "note": "kept"}
+    assert ids["gone-id"] == {"status": "removed-upstream", "at": ["agterm/Old.swift:3"]}
+    assert list(ids)[-1] == "gone-id"
+
+
+def test_ui_ids_path_can_be_given(mini: Path, tmp_path: Path) -> None:
+    catalog, _, args = _paths(tmp_path)
+    elsewhere = tmp_path / "out" / "ids.yaml"
+    elsewhere.parent.mkdir()
+    assert gc.main(["--source", str(mini), *args, "--ui-ids", str(elsewhere)]) == 0
+    assert catalog.exists() and not (tmp_path / "ui-ids.yaml").exists()
+    assert set(yaml.safe_load(elsewhere.read_text())["ids"]) == set(UI_IDS)
+
+
+def test_the_committed_ui_ids_parse_and_name_their_tag() -> None:
+    data = yaml.safe_load((TOOLS.parent / "ui-ids.yaml").read_text())
+    assert data["upstream"] == "v0.36.0"
+    assert len(data["ids"]) == 101
+    assert len(data["manual"]) == 13
+    assert all(entry["site"].startswith("agterm/") for entry in data["manual"].values())
+    assert not set(data["ids"]) & set(data["manual"])

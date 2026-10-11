@@ -308,11 +308,14 @@ events by kind, CLI by subcommand words (`cli` items carry their `wire`); exempt
 - Create: `conformance/ui-ids.yaml`
 - Modify: `conformance/selftests/test_gen_catalog.py`
 
-- [ ] scan all of upstream `agterm/**/*.swift` for `accessibilityIdentifier(...)` and `setAccessibilityIdentifier(...)`
-- [ ] interpolations become templates (`ask-button-{choice}`); two-literal ternaries expand to both ids; bare variables are reported for manual entry
-- [ ] generate `ui-ids.yaml`, add the manual entries, review by hand
-- [ ] write self-tests for literal, interpolated, ternary, AppKit-setter and unparseable identifiers
-- [ ] run self-tests — must pass before task 9
+- [x] scan all of upstream `agterm/**/*.swift` for `accessibilityIdentifier(...)` and `setAccessibilityIdentifier(...)`
+- [x] interpolations become templates (`ask-button-{choice}`); two-literal ternaries expand to both ids; bare variables are reported for manual entry
+  - decided: `ui-ids.yaml` has a generated `ids` section (status survives, `at` regenerated, vanished ids `removed-upstream`) and a
+    hand-kept `manual` section whose entries name the variable call they reach as `site: <file>:<expression>`; a variable call
+    no manual entry names, or any unparseable argument, writes neither file. Coverage keys stay `ui:<id>`; `{name}` marks a template.
+- [x] generate `ui-ids.yaml`, add the manual entries, review by hand
+- [x] write self-tests for literal, interpolated, ternary, AppKit-setter and unparseable identifiers
+- [x] run self-tests — must pass before task 9
 
 ### Task 9: Coverage gate
 
