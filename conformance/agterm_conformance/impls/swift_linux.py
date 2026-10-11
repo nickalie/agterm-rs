@@ -7,7 +7,8 @@ from pathlib import Path
 
 from agterm_conformance.impls.base import Adapter, Profile
 
-# GTK4 cannot place a window at x/y, so `window-geometry` is absent.
+# GTK4 cannot place a window at x/y, so `window-geometry` is absent. The fork's own dispatcher and adapters
+# also lack upstream's `status-shape`, `type-rejects-nul`, `resize-echoes-ratio` and `drop-placement`.
 PROFILE = Profile(parity_level="0.36.0", capabilities=frozenset({"posix-shell", "live-sessions"}))
 
 

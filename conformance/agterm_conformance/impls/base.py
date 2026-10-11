@@ -58,6 +58,10 @@ CAPABILITIES: Mapping[str, str] = {
     "posix-shell": "panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic",
     "live-sessions": "restoreMode live keeps panes in zmx daemons that outlive the app",
     "window-geometry": "window x/y position is settable and restored",
+    "status-shape": "`session.status` validates `shape` and reads it back as `statusShape`",
+    "type-rejects-nul": "`session.type` refuses text carrying a NUL rather than typing the run before it",
+    "resize-echoes-ratio": "`session.resize` answers with the applied ratio in `result.ratio`",
+    "drop-placement": "`session.move --after/--before` places like a sidebar drop, also above its own anchor",
 }
 
 

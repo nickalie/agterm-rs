@@ -3,37 +3,13 @@
 # an item deletes its line. The plan's Task 22 deletes the file.
 
 # commands
-session.new
-session.duplicate
-session.close
-session.select
-session.go
-session.rename
-session.reveal
-session.move
-session.type
-session.status
-session.flag
-session.context
-session.seen
-session.restore
 session.restart
-session.background
-session.split
-session.split.close
-session.swap
 session.lead
-session.scratch
-session.focus
-session.resize
-surface.zoom
 surface.cursor
 dashboard
 session.copy
 session.paste
 session.selectall
-session.text
-session.search
 session.overlay.open
 session.overlay.close
 session.overlay.resize
@@ -101,15 +77,10 @@ session.overlay.job.run
 # fields
 field:result.width
 field:result.height
-field:result.text
 field:result.exitCode
-field:result.count
-field:result.affected
 field:result.theme
 field:result.themes
-field:result.ratio
 field:result.sidebarWidth
-field:result.pane
 field:result.sync
 field:result.light
 field:result.dark
@@ -128,7 +99,6 @@ field:result.restart
 field:tree.idleMs
 field:tree.autoFollowMs
 field:tree.sidebarWidth
-field:tree.zoomedSurface
 field:tree.dashboardMembers
 field:tree.dashboardHighlighted
 field:tree.dashboardFontSize
@@ -137,37 +107,21 @@ field:tree.pickPending
 field:tree.askPending
 field:tree.liveReset
 field:tree.indexUnsaved
-field:tree.session.splitCwd
 field:tree.session.title
-field:tree.session.hasSplit
 field:tree.session.backedByZmx
 field:tree.session.liveAttribution
 field:tree.session.splitLiveAttribution
-field:tree.session.splitAxis
-field:tree.session.splitRatio
-field:tree.session.splitFocused
 field:tree.session.overlaySizePercent
 field:tree.session.paneOverlays
 field:tree.session.hud
 field:tree.session.ask
-field:tree.session.context
 field:tree.session.commandWait
 field:tree.session.splitCommandWait
 field:tree.session.foreground
 field:tree.session.splitForeground
 field:tree.session.foregroundShell
 field:tree.session.splitForegroundShell
-field:tree.session.restoreCommand
 field:tree.session.splitRestoreCommand
-field:tree.session.status
-field:tree.session.statusPane
-field:tree.session.statusBlink
-field:tree.session.statusColor
-field:tree.session.statusShape
-field:tree.session.statusChangedAt
-field:tree.session.background
-field:tree.session.paneBackgrounds
-field:tree.session.unseen
 field:tree.session.fontSize
 field:tree.session.splitFontSize
 field:tree.session.scratchFontSize
@@ -180,10 +134,7 @@ field:window.autoFollowMs
 field:window.geometry
 
 # events
-event:status
 event:notify
-event:pane.split
-event:pane.scratch
 event:remote.opened
 event:remote.closed
 

@@ -8,7 +8,9 @@ from pathlib import Path
 from agterm_conformance.impls.base import Adapter, LaunchError, Profile
 
 PARITY_LEVEL = "0.36.0"
-BASE_CAPABILITIES = frozenset({"posix-shell", "window-geometry"})
+BASE_CAPABILITIES = frozenset(
+    {"posix-shell", "window-geometry", "status-shape", "type-rejects-nul", "resize-echoes-ratio", "drop-placement"}
+)
 LAUNCH_MODES = ("uitest", "plain")
 
 

@@ -374,12 +374,18 @@ events by kind, CLI by subcommand words (`cli` items carry their `wire`); exempt
 - Create: `conformance/tests/protocol/test_session.py`
 - Create: `conformance/tests/protocol/test_split.py`
 - Create: `conformance/tests/protocol/test_session_text.py`
+- ➕ Modify: `conformance/coverage-baseline.txt`
+- ➕ Modify: `conformance/agterm_conformance/impls/{base,swift_macos,swift_linux}.py` (capabilities
+  `status-shape`, `type-rejects-nul`, `resize-echoes-ratio`, `drop-placement`: upstream behavior the Linux fork lacks)
 
-- [ ] session lifecycle, rename, select, reorder, status/flag/unseen, restore pins
-- [ ] split, focus, `session.resize` (`result.ratio`, `splitRatio`), zoom with read-back
-- [ ] `session type` / `session.text` round-trip with marker waits (`requires("posix-shell")`)
-- [ ] error cases with exact error text
-- [ ] run on reference-linux — green before task 13 (reference-macos in Task 19)
+- [x] session lifecycle, rename, select, reorder, status/flag/unseen, restore pins
+- [x] split, focus, `session.resize` (`result.ratio`, `splitRatio`), zoom with read-back
+- [x] `session type` / `session.text` round-trip with marker waits (`requires("posix-shell")`)
+- [x] error cases with exact error text
+- [x] run on reference-linux — green before task 13 (reference-macos in Task 19)
+- ➕ also covered here: `session.context`, `session.background`, `session.search`, `session.scratch`, `session.swap`,
+  `session.split.close`; left for later: `session.lead`/`session.restart` (need a Live pane, Task 17) and
+  `session.copy`/`.paste`/`.selectall` (select-all and paste reach the desktop's selection/clipboard)
 
 ### Task 13: Protocol — overlay, HUD, ask, pick
 
