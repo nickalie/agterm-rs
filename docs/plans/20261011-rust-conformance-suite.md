@@ -63,9 +63,11 @@
 - **coverage gate**: `pytest conformance --coverage-gate` — no app launch, every PR.
 - **reference-linux**: locally against the installed Swift/GTK fork; protocol and cli layers.
   It is the acceptance gate for every task up to Task 18.
-- **reference-macos**: CI only (a local run would share the live app's `com.umputun.agterm` defaults domain),
-  on a GitHub macOS runner against a released upstream build.
-  Verified last (Tasks 19–21): it needs the `agterm-rs` GitHub repo and a push, which the user decides on.
+- **reference-macos**: never on a Mac running the user's live agterm (it would share the `com.umputun.agterm`
+  defaults domain), always against a released upstream build. Two hosts:
+  - the dedicated macOS VM over ssh (`admin@172.16.176.129`, x86_64, macOS 26.7) — the primary path for Tasks 19–21;
+  - a GitHub macOS runner via `reference-macos.yml` on `nickalie/agterm-rs`.
+  Verified last (Tasks 19–21).
   Earlier tasks write the macOS tooling and workflows with offline self-tests but never wait on a macOS run.
 - Modules use the `shared_app` fixture unless a test needs a pristine instance, to keep macOS runner minutes down.
 - No `sleep` anywhere: waits go through `wait_tree` / `wait_event` with timeouts.
@@ -424,16 +426,19 @@ New items are `uncovered`, and vanished items are `removed-upstream`.
 
 ### Task 19: macOS verification — spike A and protocol/cli on reference-macos
 
-⚠️ Needs the `agterm-rs` GitHub repo and a push; the user decides when. Everything before this task is Linux-only.
+⚠️ Runs on the macOS VM over ssh (`ssh admin@172.16.176.129`; the password is kept out of the repo, the orchestrator passes it). It has no Command Line Tools, Homebrew
+or agterm yet, and is x86_64, so the upstream release must ship an x86_64 or universal build. The GitHub runner path needs
+a push to `nickalie/agterm-rs`. Everything before this task is Linux-only.
 
 **Files:**
 - Modify: `conformance/docs/spike-macos.md`
 - Modify: `conformance/agterm_conformance/impls/swift_macos.py`
 - Modify: `.github/workflows/spike-macos.yml`, `.github/workflows/reference-macos.yml`
 
-- [ ] run spike A on the hosted runner: fetch, launch, `version`/`tree`, `/bin/sh` round-trip
+- [ ] prepare the VM: Python 3 for the suite (Command Line Tools or a standalone build), the upstream release at `catalog.upstream` via `fetch_reference.py`, the suite copied over
+- [ ] run spike A on the VM: fetch, launch, `version`/`tree`, `/bin/sh` round-trip
 - [ ] confirm or flip the interim sentinel choice from Task 5; confirm the `/bin/sh` mechanism on macOS; record outcomes in `spike-macos.md`
-- [ ] both workflows green on a PR (`conformance-gate` on ubuntu, `reference-macos` on macOS)
+- [ ] both workflows green on a PR (`conformance-gate` on ubuntu, `reference-macos` on macOS); needs a push to `nickalie/agterm-rs`
 - [ ] protocol and cli layers (Tasks 10–18) green on reference-macos; a red test is fixed or becomes a capability with a reason
 - [ ] run self-tests — must pass before task 20
 
