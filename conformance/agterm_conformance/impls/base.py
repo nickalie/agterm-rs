@@ -53,7 +53,8 @@ LAUNCH_TIMEOUT = 30.0
 STOP_TIMEOUT = 10.0
 POLL_INTERVAL = 0.05
 
-# The capability vocabulary `requires(...)` may name. A reason for each absence lives on the test marker.
+# The capability vocabulary `requires(...)` and `Adapter.has(...)` may name. A reason for each absence lives on the
+# test marker, or beside the branch a test takes on `has`.
 CAPABILITIES: Mapping[str, str] = {
     "posix-shell": "panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic",
     "live-sessions": "restoreMode live keeps panes in zmx daemons that outlive the app",
@@ -233,6 +234,12 @@ class Adapter:
     @property
     def capabilities(self) -> frozenset[str]:
         return self.profile.capabilities
+
+    def has(self, capability: str) -> bool:
+        """For a test that branches on a capability; a name outside the vocabulary would pick a branch silently."""
+        if capability not in CAPABILITIES:
+            raise ValueError(f"unknown capability {capability!r} (known: {', '.join(sorted(CAPABILITIES))})")
+        return capability in self.capabilities
 
     @property
     def parity_level(self) -> str | None:

@@ -396,6 +396,13 @@ def test_static_capabilities_come_from_the_vocabulary() -> None:
         assert adapter.capabilities <= CAPABILITIES.keys()
 
 
+def test_has_refuses_a_name_outside_the_vocabulary() -> None:
+    adapter = SwiftLinuxAdapter(None)
+    assert adapter.has("posix-shell") and not adapter.has("drop-placement")
+    with pytest.raises(ValueError, match="unknown capability 'drop-placment'"):
+        adapter.has("drop-placment")
+
+
 def test_rust_without_a_binary_reports_nothing() -> None:
     adapter = RustAdapter(None)
     assert adapter.profile == NO_PROFILE

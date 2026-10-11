@@ -319,7 +319,7 @@ def test_move_next_to_an_anchor(ctl):
 def test_move_after_an_anchor_below_it(adapter, ctl):
     wid, (moving, anchor, last) = _new_workspace(ctl, sessions=3)
     assert assert_ok(ctl.request("session.move", moving, after=anchor))["id"] == moving
-    if "drop-placement" in adapter.capabilities:
+    if adapter.has("drop-placement"):
         assert session_ids(ctl.tree(), wid) == [anchor, moving, last]
     else:
         # The Linux fork inserts at the anchor's index before the move took the session out, one slot low.
@@ -515,7 +515,7 @@ def test_status_shape(adapter, ctl):
     assert_ok(ctl.request("session.status", sid, status="active", shape="star"))
     rejected = ctl.request("session.status", sid, status="blocked", shape="hexagon")
     node = _node(ctl, sid)
-    if "status-shape" in adapter.capabilities:
+    if adapter.has("status-shape"):
         assert_error(rejected, "invalid shape: hexagon (circle|square|triangle|diamond|capsule|star)")
         assert_subset(node, {"status": "active", "statusShape": "star"})
     else:

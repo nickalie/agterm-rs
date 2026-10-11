@@ -22,16 +22,23 @@ def _realized(ctl):
 def _split(ctl):
     sid = _realized(ctl)
     assert_ok(ctl.request("session.split", sid, mode="on"))
-    ctl.wait_tree(lambda tree: find_session(tree, sid).get("hasSplit"))
+    # `hasSplit` turns on before the pane mounts; its font size is reported only once its surface is up.
+    ctl.wait_tree(lambda tree: "splitFontSize" in find_session(tree, sid))
     return sid
 
 
+def _scratch_on(ctl, sid):
+    assert_ok(ctl.request("session.scratch", sid, mode="on"))
+    ctl.wait_tree(lambda tree: "scratchFontSize" in find_session(tree, sid))
+
+
 def _echo(ctl, sid, **args):
-    """Type a line printing a fresh marker and wait for its output, not for the echoed command line."""
+    """Type a line printing a fresh marker and wait for its output and the prompt after it, so a later read
+    sees a settled screen; the echoed command line carries the marker split in two and never matches."""
     marker = f"MARK{next(_markers)}"
     result = assert_ok(ctl.request("session.type", sid, text=f"printf '%s%s\\n' {marker[:4]} {marker[4:]}\n", **args))
     pane = {key: value for key, value in args.items() if key in ("pane", "paneID")}
-    ctl.wait_text(sid, rf"(?m)^{marker}$", **pane)
+    ctl.wait_text(sid, rf"(?m)^{marker}\n[^\n]*\S", **pane)
     return marker, result
 
 
@@ -124,7 +131,7 @@ def test_text_defaults_to_the_pane_on_screen(ctl):
     assert _text(ctl, sid)["pane"] == "left"
     assert_ok(ctl.request("session.focus", sid, pane="right"))
     assert _text(ctl, sid)["pane"] == "right"
-    assert_ok(ctl.request("session.scratch", sid, mode="on"))
+    _scratch_on(ctl, sid)
     marker, typed = _echo(ctl, sid, pane="scratch")
     assert typed["pane"] == "scratch"
     result = _text(ctl, sid)
@@ -172,7 +179,7 @@ def test_a_missing_pane_is_refused(ctl, cmd, pane, upstream):
 def test_type_text_carrying_a_nul(adapter, ctl):
     sid = _realized(ctl)
     response = ctl.request("session.type", sid, text="a\u0000b")
-    if "type-rejects-nul" in adapter.capabilities:
+    if adapter.has("type-rejects-nul"):
         assert_error(response, "text must not contain a NUL byte")
     else:
         # The Linux fork has no NUL guard and answers ok for the run libghostty types up to the NUL.

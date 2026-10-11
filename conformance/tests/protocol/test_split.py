@@ -134,7 +134,7 @@ def test_resize_sets_and_clamps_the_ratio(adapter, ctl):
     for ratio, stored in [(0.3, 0.3), (0.0, MIN_RATIO), (1.5, MAX_RATIO), (0.5, 0.5)]:
         result = assert_ok(ctl.request("session.resize", sid, ratio=ratio))
         assert result["id"] == sid, ratio
-        if "resize-echoes-ratio" in adapter.capabilities:
+        if adapter.has("resize-echoes-ratio"):
             assert_subset(result, {"ratio": stored})
         else:
             # The Linux fork answers with the id alone; `splitRatio` is its only read-back.
