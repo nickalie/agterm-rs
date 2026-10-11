@@ -148,22 +148,22 @@ def _string_end(src: str, i: int) -> int:
     return len(src)
 
 
-def _body_span(text: str, open_brace: int) -> int:
-    """Index of the brace closing the one at `open_brace`, skipping string literals."""
-    depth, j = 0, open_brace
+def _matching_close(text: str, open_index: int, opener: str = "{", closer: str = "}") -> int:
+    """Index of the `closer` matching the `opener` at `open_index`, skipping string literals."""
+    depth, j = 0, open_index
     while j < len(text):
         c = text[j]
         if c == '"':
             j = _string_end(text, j)
             continue
-        if c == "{":
+        if c == opener:
             depth += 1
-        elif c == "}":
+        elif c == closer:
             depth -= 1
             if depth == 0:
                 return j
         j += 1
-    raise CatalogError("unbalanced braces")
+    raise CatalogError(f"unbalanced {opener}{closer}")
 
 
 @dataclass
@@ -234,7 +234,7 @@ def find_type(sources: Mapping[Path, str], name: str) -> TypeBody:
 
 
 def _type_body(path: Path, text: str, brace: int) -> TypeBody:
-    end = _body_span(text, brace)
+    end = _matching_close(text, brace)
     first_line = text.count("\n", 0, brace + 1) + 1
     lines = _top_lines(path, text, brace + 1, end, first_line)
     nested: dict[str, TypeBody] = {}
@@ -247,7 +247,7 @@ def _type_body(path: Path, text: str, brace: int) -> TypeBody:
         # only direct children: a declaration whose brace sits at depth 1 of this body
         if _depth_between(text, brace + 1, match.start()) == 0:
             nested[match.group(1)] = _type_body(path, text, inner_brace)
-        offset = _body_span(text, inner_brace) + 1
+        offset = _matching_close(text, inner_brace) + 1
     return TypeBody(path, text, lines, nested)
 
 
@@ -375,7 +375,7 @@ def codable_keys(body: TypeBody, problems: list[str], extensions: Sequence[TypeB
             brace = lines[i + 1].brace  # accessor block opened on the next line
         decl = rest.rstrip("{").strip()
         if brace is not None and "=" not in decl:
-            block = body.text[brace + 1 : _body_span(body.text, brace)]
+            block = body.text[brace + 1 : _matching_close(body.text, brace)]
             if not _OBSERVER.match(block):
                 continue  # computed: get/set or a bare getter body
         if decl.endswith(","):
@@ -518,23 +518,6 @@ def _blank_strings(text: str) -> str:
     return "".join(out)
 
 
-def _close_paren(text: str, open_paren: int) -> int:
-    depth, j = 0, open_paren
-    while j < len(text):
-        c = text[j]
-        if c == '"':
-            j = _string_end(text, j)
-            continue
-        if c == "(":
-            depth += 1
-        elif c == ")":
-            depth -= 1
-            if depth == 0:
-                return j
-        j += 1
-    raise CatalogError("unbalanced parentheses")
-
-
 def _ui_literal(literal: str) -> str | None:
     """The id a string literal names, interpolations as `{name}` placeholders; None when it is not one."""
     body = literal[1:-1]
@@ -549,7 +532,7 @@ def ui_identifiers(path: Path, text: str, gen: Generated) -> None:
     for match in _UI_CALL.finditer(_blank_strings(text)):
         where = f"{path}:{text.count(chr(10), 0, match.start()) + 1}"
         try:
-            arg = text[match.end() : _close_paren(text, match.end() - 1)].strip()
+            arg = text[match.end() : _matching_close(text, match.end() - 1, "(", ")")].strip()
         except CatalogError:
             gen.problems.append(f"{where}: unbalanced identifier call")
             continue
@@ -748,7 +731,9 @@ def _load(path: Path) -> Any:
     return yaml.safe_load(path.read_text()) if path.exists() else None
 
 
-def run(source: Path, catalog_path: Path, ui_path: Path, tag: str) -> tuple[Changes, Changes, Generated]:
+def run(
+    source: Path, catalog_path: Path, ui_path: Path, tag: str
+) -> tuple[Changes, Changes, Generated, dict[str, Any]]:
     gen = generate(source)
     if gen.problems:
         raise CatalogError("unparseable upstream input:\n  " + "\n  ".join(gen.problems))
@@ -756,7 +741,7 @@ def run(source: Path, catalog_path: Path, ui_path: Path, tag: str) -> tuple[Chan
     ui, ui_changes = merge_ui(_load(ui_path), gen, tag)
     catalog_path.write_text(dump(catalog))
     ui_path.write_text(dump(ui, UI_HEADER, width=UI_WIDTH))
-    return changes, ui_changes, gen
+    return changes, ui_changes, gen, ui
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -771,25 +756,32 @@ def main(argv: list[str] | None = None) -> int:
     ui_path = args.ui_ids or args.catalog.with_name(UI_IDS_NAME)
     try:
         if args.source:
-            changes, ui_changes, gen = run(args.source, args.catalog, ui_path, args.tag)
+            changes, ui_changes, gen, ui = run(args.source, args.catalog, ui_path, args.tag)
         else:
             with tempfile.TemporaryDirectory(prefix="gen-catalog-") as tmp:
                 extract(args.repo, args.tag, Path(tmp))
-                changes, ui_changes, gen = run(Path(tmp), args.catalog, ui_path, args.tag)
+                changes, ui_changes, gen, ui = run(Path(tmp), args.catalog, ui_path, args.tag)
     except (CatalogError, OSError, yaml.YAMLError) as error:
         print(f"gen_catalog: {error}", file=sys.stderr)
         return 1
     counts = {section: len(getattr(gen, section)) for section in GENERATED_SECTIONS}
     counts["ids"] = len(gen.ui_ids)
-    counts["manual"] = len(gen.ui_variables)
     for section, count in counts.items():
         source = changes if section in GENERATED_SECTIONS else ui_changes
-        added, removed = source.added.get(section, []), source.removed.get(section, [])
-        unit = "variable sites" if section == "manual" else "upstream"
-        print(f"{section}: {count} {unit}, +{len(added)} new, -{len(removed)} removed-upstream")
-        for key in removed:
-            print(f"  removed-upstream: {key}")
+        added = source.added.get(section, [])
+        _print_section(f"{section}: {count} upstream, +{len(added)} new", source.removed.get(section, []))
+    # Manual entries are hand-added, so the line has no `+new`; every figure counts manual ids.
+    live = sum(entry["status"] != "removed-upstream" for entry in ui["manual"].values())
+    _print_section(
+        f"manual: {live} ids at {len(gen.ui_variables)} variable sites", ui_changes.removed.get("manual", [])
+    )
     return 0
+
+
+def _print_section(summary: str, removed: list[str]) -> None:
+    print(f"{summary}, -{len(removed)} removed-upstream")
+    for key in removed:
+        print(f"  removed-upstream: {key}")
 
 
 if __name__ == "__main__":

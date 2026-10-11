@@ -392,6 +392,7 @@ def test_reads_the_tag_with_git_archive_without_touching_the_checkout(
     out = capsys.readouterr().out
     assert "commands: 17 upstream, +17 new, -0 removed-upstream" in out
     assert "ids: 7 upstream, +7 new, -0 removed-upstream" in out
+    assert "manual: 0 ids at 0 variable sites, -0 removed-upstream" in out
     assert gc.main(["--repo", str(repo), "--tag", "v9.9.9", "--catalog", str(catalog)]) == 1
     assert "git archive v9.9.9 failed" in capsys.readouterr().err
 
@@ -476,7 +477,7 @@ def test_a_variable_identifier_needs_a_manual_entry(
     assert "site: agterm/Checkbox.swift:identifier" in err
 
 
-def test_manual_entries_follow_their_site(mini: Path, tmp_path: Path) -> None:
+def test_manual_entries_follow_their_site(mini: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _variable_site(mini)
     _, ui, args = _paths(tmp_path)
     site = "agterm/Checkbox.swift:identifier"
@@ -492,6 +493,7 @@ def test_manual_entries_follow_their_site(mini: Path, tmp_path: Path) -> None:
         )
     )
     assert gc.main(["--source", str(mini), *args]) == 0
+    assert "manual: 2 ids at 1 variable sites, -0 removed-upstream\n" in capsys.readouterr().out
     manual = yaml.safe_load(ui.read_text())["manual"]
     assert manual == {
         "skill-checkbox": {"status": "covered", "site": site, "from": "line 9"},
@@ -503,12 +505,15 @@ def test_manual_entries_follow_their_site(mini: Path, tmp_path: Path) -> None:
     )
     (mini / "agterm/Checkbox.swift").unlink()
     assert gc.main(["--source", str(mini), *args]) == 0
+    out = capsys.readouterr().out
+    assert "manual: 0 ids at 0 variable sites, -2 removed-upstream\n  removed-upstream: skill-checkbox\n" in out
     assert {k: v["status"] for k, v in yaml.safe_load(ui.read_text())["manual"].items()} == {
         "skill-checkbox": "removed-upstream",
         "hooks-checkbox": "removed-upstream",
     }
     _variable_site(mini)
     assert gc.main(["--source", str(mini), *args]) == 0
+    assert "manual: 2 ids at 1 variable sites, -0 removed-upstream\n" in capsys.readouterr().out
     assert {v["status"] for v in yaml.safe_load(ui.read_text())["manual"].values()} == {"uncovered"}
 
 
