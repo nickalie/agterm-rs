@@ -1,19 +1,33 @@
-"""pytest plugin: implementation options, markers and the live-session environment scrub."""
+"""pytest plugin: options, markers, the live-session env scrub, instance fixtures, skips and the summary."""
 
 from __future__ import annotations
 
+import json
 import os
-from collections.abc import MutableMapping
+import subprocess
+from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
+
+from agterm_conformance import wait
+from agterm_conformance.client import Response, check_under_root
+from agterm_conformance.match import assert_ok
+
+if TYPE_CHECKING:
+    from agterm_conformance.impls.base import Adapter, Instance
 
 IMPLS = ("swift-macos", "swift-linux", "rust")
 # A rust run without a binary is legal: the adapter reports nothing and every test skips.
 BIN_REQUIRED = frozenset({"swift-macos", "swift-linux"})
 SCRUB_PREFIXES = ("AGTERM_", "ZMX_")
 IMPL_FIXTURE = "impl_options"
+# Skip reasons start with these, so the summary can tell a divergence from a missing feature.
+UNSUPPORTED = "unsupported"
+NOT_YET_AT_LEVEL = "not-yet-at-level"
+CLI_TIMEOUT = 30.0
 
 MARKERS = (
     "since(version): upstream version that introduced the behavior; "
@@ -44,6 +58,8 @@ class ImplOptions:
 
 
 _OPTIONS_KEY = pytest.StashKey[ImplOptions]()
+_ADAPTER_KEY = pytest.StashKey["Adapter"]()
+_SUMMARY_KEY = pytest.StashKey[bool]()
 
 
 def get_impl_options(config: pytest.Config) -> ImplOptions:
@@ -84,12 +100,112 @@ def pytest_configure(config: pytest.Config) -> None:
 
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    for item in items:
+        check_markers(item)
     options = get_impl_options(config)
     if options.coverage_gate:
         return
     # trylast: -k/-m deselection has already run, so only tests that will execute demand --impl.
-    if any(IMPL_FIXTURE in getattr(item, "fixturenames", ()) for item in items):
+    if any(_uses_impl(item) for item in items):
         require_implementation(options)
+        config.stash[_SUMMARY_KEY] = True
+
+
+def _uses_impl(item: pytest.Item) -> bool:
+    return IMPL_FIXTURE in getattr(item, "fixturenames", ())
+
+
+def get_adapter(config: pytest.Config) -> Adapter:
+    """One adapter per run, so a Rust build's probed profile is resolved once."""
+    if _ADAPTER_KEY not in config.stash:
+        from agterm_conformance.impls import make_adapter  # impls imports this module
+
+        options = get_impl_options(config)
+        require_implementation(options)
+        config.stash[_ADAPTER_KEY] = make_adapter(options)
+    return config.stash[_ADAPTER_KEY]
+
+
+def check_markers(item: pytest.Item) -> None:
+    """A typo in a level or capability would silently skip or run a test on every implementation."""
+    from agterm_conformance.impls.base import CAPABILITIES, version_tuple
+
+    for since in item.iter_markers("since"):
+        if len(since.args) != 1 or not isinstance(since.args[0], str):
+            raise pytest.UsageError(f"{item.nodeid}: since takes one version string, got {since.args}")
+        try:
+            version_tuple(since.args[0])
+        except ValueError as error:
+            raise pytest.UsageError(f"{item.nodeid}: since: {error}") from None
+    for marker in item.iter_markers("requires"):
+        if not marker.args:
+            raise pytest.UsageError(f"{item.nodeid}: requires names no capability")
+        for capability in marker.args:
+            if capability not in CAPABILITIES:
+                raise pytest.UsageError(
+                    f"{item.nodeid}: unknown capability {capability!r} (known: {', '.join(sorted(CAPABILITIES))})"
+                )
+
+
+def skip_reason(item: pytest.Item, adapter: Adapter) -> str | None:
+    """Level first: a build below a test's level is not judged on that test's capabilities."""
+    since = item.get_closest_marker("since")
+    if not adapter.available:
+        return f"{NOT_YET_AT_LEVEL}: {adapter.name} has no binary"
+    profile = adapter.profile
+    if profile.parity_level is None:
+        return f"{NOT_YET_AT_LEVEL}: {adapter.name} reports no parity level"
+    if since is not None and not profile.at_level(since.args[0]):
+        return f"{NOT_YET_AT_LEVEL}: since {since.args[0]}, {adapter.name} is at {profile.parity_level}"
+    for marker in item.iter_markers("requires"):
+        for capability in marker.args:
+            if capability not in profile.capabilities:
+                why = marker.kwargs.get("reason")
+                return f"{UNSUPPORTED}: {adapter.name} lacks {capability}" + (f" ({why})" if why else "")
+    return None
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    # tryfirst: decided before fixture setup, so a skipped test launches nothing.
+    if get_impl_options(item.config).coverage_gate or not _uses_impl(item):
+        return
+    reason = skip_reason(item, get_adapter(item.config))
+    if reason is not None:
+        # What pytest's own skip marker raises, so `-rs` points at the test, not this hook.
+        raise pytest.skip.Exception(reason, _use_item_location=True)
+
+
+def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: pytest.Config) -> None:
+    if not config.stash.get(_SUMMARY_KEY, False):
+        return
+    terminalreporter.write_sep("-", "agterm conformance")
+    terminalreporter.write_line(summary_line(terminalreporter.stats, get_impl_options(config).impl))
+
+
+def summary_line(stats: Mapping[str, list[Any]], impl: str | None) -> str:
+    failed = {report.nodeid for key in ("failed", "error") for report in stats.get(key, [])}
+    passed = {report.nodeid for report in stats.get("passed", [])} - failed
+    skips = {UNSUPPORTED: 0, NOT_YET_AT_LEVEL: 0, "other": 0}
+    for report in stats.get("skipped", []):
+        skips[_skip_category(report)] += 1
+    counts = [
+        f"{len(passed)} pass",
+        f"{len(failed)} fail",
+        *(f"{count} skip({category})" for category, count in skips.items()),
+        f"{len(stats.get('rerun', []))} reruns",
+    ]
+    return f"{impl}: " + ", ".join(counts)
+
+
+def _skip_category(report: Any) -> str:
+    longrepr = report.longrepr
+    message = longrepr[2] if isinstance(longrepr, tuple) and len(longrepr) == 3 else str(longrepr)
+    message = message.removeprefix("Skipped: ")
+    for category in (UNSUPPORTED, NOT_YET_AT_LEVEL):
+        if message.startswith(f"{category}:"):
+            return category
+    return "other"
 
 
 def pytest_report_header(config: pytest.Config) -> list[str]:
@@ -103,3 +219,120 @@ def pytest_report_header(config: pytest.Config) -> list[str]:
 @pytest.fixture(scope="session")
 def impl_options(pytestconfig: pytest.Config) -> ImplOptions:
     return get_impl_options(pytestconfig)
+
+
+# -- instances
+
+
+class Ctl:
+    """The socket side of one instance, with the waits a test needs instead of sleeping."""
+
+    def __init__(self, instance: Instance) -> None:
+        self.instance = instance
+
+    def request(self, cmd: str, target: str | None = None, **args: Any) -> Response:
+        return self.instance.request(cmd, target, **args)
+
+    def tree(self) -> dict[str, Any]:
+        return assert_ok(self.request("tree"))
+
+    def wait_tree(
+        self, predicate: Callable[[dict[str, Any]], Any], timeout: float = wait.DEFAULT_TIMEOUT
+    ) -> dict[str, Any]:
+        return wait.wait_tree(self, predicate, timeout)
+
+    def events_baseline(self) -> wait.Cursor:
+        return wait.events_baseline(self)
+
+    def wait_event(
+        self,
+        cursor: wait.Cursor,
+        kind: str,
+        match: Mapping[str, Any] | Callable[[dict[str, Any]], Any] | None = None,
+        timeout: float = wait.DEFAULT_TIMEOUT,
+    ) -> dict[str, Any]:
+        return wait.wait_event(self, cursor, kind, match, timeout)
+
+
+@dataclass(frozen=True)
+class CliResult:
+    argv: list[str]
+    returncode: int
+    stdout: str
+    stderr: str
+
+    def json(self) -> Any:
+        return json.loads(self.stdout)
+
+
+class Cli:
+    """`agtermctl` run in the instance's env, always with that instance's `--socket`."""
+
+    def __init__(self, ctl_path: Path, instance: Instance) -> None:
+        check_under_root(instance.socket, instance.root)
+        self.ctl_path = ctl_path
+        self.instance = instance
+
+    def argv(self, *args: str) -> list[str]:
+        # Before a `--`, where everything after it is the payload, not an option.
+        args_list = list(args)
+        end = args_list.index("--") if "--" in args_list else len(args_list)
+        socket_option = ["--socket", os.fspath(self.instance.socket)]
+        return [os.fspath(self.ctl_path), *args_list[:end], *socket_option, *args_list[end:]]
+
+    def __call__(self, *args: str, input: str | None = None, timeout: float = CLI_TIMEOUT) -> CliResult:
+        argv = self.argv(*args)
+        completed = subprocess.run(
+            argv,
+            env=self.instance.env,
+            cwd=self.instance.home,
+            input=input,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        return CliResult(argv, completed.returncode, completed.stdout, completed.stderr)
+
+
+@pytest.fixture(scope="session")
+def adapter(pytestconfig: pytest.Config, impl_options: ImplOptions) -> Adapter:
+    return get_adapter(pytestconfig)
+
+
+def _launched(adapter: Adapter) -> Iterator[Instance]:
+    instance = adapter.launch()
+    try:
+        yield instance
+    finally:
+        adapter.stop(instance)
+
+
+@pytest.fixture
+def app(adapter: Adapter) -> Iterator[Instance]:
+    """A pristine instance for this test alone."""
+    yield from _launched(adapter)
+
+
+@pytest.fixture(scope="module")
+def shared_app(adapter: Adapter) -> Iterator[Instance]:
+    """One instance for the module; the default target of `ctl` and `cli`."""
+    yield from _launched(adapter)
+
+
+def _target_instance(request: pytest.FixtureRequest) -> Instance:
+    return request.getfixturevalue("app" if "app" in request.fixturenames else "shared_app")
+
+
+@pytest.fixture
+def ctl(request: pytest.FixtureRequest, adapter: Adapter) -> Ctl:
+    """Drives `app` when the test asks for it, else `shared_app`."""
+    return Ctl(_target_instance(request))
+
+
+@pytest.fixture
+def cli(request: pytest.FixtureRequest, adapter: Adapter) -> Cli:
+    """Drives `app` when the test asks for it, else `shared_app`."""
+    if adapter.ctl_path is None:
+        pytest.fail(f"{adapter.name} has no agtermctl: pass --ctl")
+    return Cli(adapter.ctl_path, _target_instance(request))

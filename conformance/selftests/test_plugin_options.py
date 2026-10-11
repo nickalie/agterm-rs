@@ -81,11 +81,17 @@ def test_rust_runs_without_bin(pytester: pytest.Pytester) -> None:
     pytester.makepyfile(
         """
         def test_no_bin(impl_options):
-            assert impl_options.impl == "rust"
-            assert impl_options.bin is None
+            pass
+
+        def test_options(pytestconfig):
+            from agterm_conformance.plugin import get_impl_options
+
+            options = get_impl_options(pytestconfig)
+            assert options.impl == "rust" and options.bin is None
         """
     )
-    pytester.runpytest("--impl", "rust").assert_outcomes(passed=1)
+    # Not a usage error: the conformance test skips as not-yet-at-level.
+    pytester.runpytest("--impl", "rust").assert_outcomes(passed=1, skipped=1)
 
 
 @pytest.mark.parametrize("flag", ["--bin", "--ctl"])

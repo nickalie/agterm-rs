@@ -2,7 +2,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -29,32 +28,6 @@ from agterm_conformance.impls.rust import ProfileError, RustAdapter, profile_fro
 from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
 from agterm_conformance.impls.swift_macos import SwiftMacosAdapter
 from agterm_conformance.plugin import ImplOptions
-
-FAKE_APP = Path(__file__).with_name("fake_app.py")
-
-
-@pytest.fixture
-def roots(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[Path]]:
-    created: list[Path] = []
-    make_root = base.make_root
-
-    def recording() -> Path:
-        created.append(make_root())
-        return created[-1]
-
-    monkeypatch.setattr(base, "make_root", recording)
-    yield created
-    for root in created:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-@pytest.fixture
-def fake_bin(tmp_path: Path) -> Path:
-    launcher = tmp_path / "install" / "bin" / "agterm-linux"
-    launcher.parent.mkdir(parents=True)
-    launcher.write_text(f"#!{sys.executable}\n" + FAKE_APP.read_text())
-    launcher.chmod(0o755)
-    return launcher
 
 
 @pytest.fixture
@@ -482,6 +455,15 @@ def test_rust_malformed_profile_fails_the_launch(
     with pytest.raises(ProfileError):
         RustAdapter(fake_bin).launch()
     assert not roots[0].exists()
+
+
+def test_rust_failed_probe_is_not_retried(roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAKE_APP_MODE", "exit")
+    adapter = RustAdapter(fake_bin)
+    for _ in range(2):
+        with pytest.raises(LaunchError, match="exited with 3"):
+            adapter.profile
+    assert len(roots) == 1
 
 
 # -- per-implementation wiring

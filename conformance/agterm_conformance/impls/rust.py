@@ -45,14 +45,22 @@ class RustAdapter(Adapter):
     def __init__(self, bin: Path | None, ctl: Path | None = None) -> None:
         super().__init__(bin, ctl)
         self._profile: Profile | None = None
+        self._probe_error: Exception | None = None
 
     @property
     def profile(self) -> Profile:
         """Resolved once: from the first launched instance, or by a probe launch when none ran yet."""
         if self.bin is None:
             return NO_PROFILE
+        if self._probe_error is not None:
+            raise self._probe_error
         if self._profile is None:
-            instance = self.launch()
+            # Remembered: a build that cannot launch must not cost every test another launch timeout.
+            try:
+                instance = self.launch()
+            except Exception as error:
+                self._probe_error = error
+                raise
             self.stop(instance)
         assert self._profile is not None
         return self._profile

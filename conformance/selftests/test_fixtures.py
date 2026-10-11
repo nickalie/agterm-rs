@@ -1,0 +1,416 @@
+import json
+import os
+import sys
+import time
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+from agterm_conformance.impls.base import Instance
+from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
+from agterm_conformance.match import session_ids
+from agterm_conformance.plugin import Ctl
+from agterm_conformance.wait import Cursor, WaitTimeout
+
+TWO_SESSIONS = {
+    "workspaces": [
+        {
+            "id": "w1",
+            "active": True,
+            "sessions": [{"id": "s1", "name": "one", "active": True}, {"id": "s2", "name": "two", "active": False}],
+        }
+    ]
+}
+
+
+def run_suite(pytester: pytest.Pytester, *args: str) -> pytest.RunResult:
+    return pytester.runpytest("-p", "no:cacheprovider", "-rs", *args)
+
+
+def swift_linux(fake_bin: Path, *extra: str) -> tuple[str, ...]:
+    return ("--impl", "swift-linux", "--bin", str(fake_bin), *extra)
+
+
+@pytest.fixture
+def ctl(roots: list[Path], fake_bin: Path) -> Iterator[Ctl]:
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    try:
+        yield Ctl(instance)
+    finally:
+        adapter.stop(instance)
+
+
+@pytest.fixture
+def fake_ctl(tmp_path: Path) -> Path:
+    script = tmp_path / "ctl" / "agtermctl"
+    script.parent.mkdir()
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "keys = ('HOME', 'AGTERM_STATE_DIR', 'PATH')\n"
+        "print(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd(), 'env': {k: os.environ.get(k) for k in keys},"
+        " 'stdin': sys.stdin.read()}))\n"
+    )
+    script.chmod(0o755)
+    return script
+
+
+# -- skips and the summary
+
+
+def test_skip_reasons_and_summary(pytester: pytest.Pytester, roots: list[Path], fake_bin: Path) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.since("0.36.0")
+        def test_at_level(ctl):
+            assert ctl.request("version").ok
+
+        @pytest.mark.since("0.37.0")
+        def test_above_level(ctl):
+            raise AssertionError("must not run")
+
+        @pytest.mark.requires("window-geometry", reason="GTK4 cannot restore x/y")
+        def test_unsupported(ctl):
+            raise AssertionError("must not run")
+
+        @pytest.mark.requires("posix-shell")
+        def test_supported(ctl):
+            pass
+
+        def test_fails(ctl):
+            assert False
+
+        @pytest.mark.skip(reason="plain")
+        def test_plain_skip(ctl):
+            pass
+
+        def test_needs_no_instance():
+            pass
+        """
+    )
+    result = run_suite(pytester, *swift_linux(fake_bin))
+    result.assert_outcomes(passed=3, failed=1, skipped=3)
+    result.stdout.fnmatch_lines_random(
+        [
+            "SKIPPED [[]1[]] test_skip_reasons_and_summary.py:7: not-yet-at-level: since 0.37.0, swift-linux is at 0.36.0",
+            "*unsupported: swift-linux lacks window-geometry (GTK4 cannot restore x/y)",
+            "swift-linux: 3 pass, 1 fail, 1 skip(unsupported), 1 skip(not-yet-at-level), 1 skip(other), 0 reruns",
+        ]
+    )
+    assert len(roots) == 1 and not roots[0].exists()
+
+
+def test_level_is_checked_before_capabilities(pytester: pytest.Pytester, roots: list[Path], fake_bin: Path) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.since("1.0")
+        @pytest.mark.requires("window-geometry", reason="GTK4")
+        def test_both(ctl):
+            pass
+        """
+    )
+    result = run_suite(pytester, *swift_linux(fake_bin))
+    result.stdout.fnmatch_lines(["*0 skip(unsupported), 1 skip(not-yet-at-level)*", "*not-yet-at-level: since 1.0*"])
+    assert roots == []
+
+
+def test_rust_without_a_binary_skips_everything_as_not_yet_at_level(
+    pytester: pytest.Pytester, roots: list[Path]
+) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.since("0.1.0")
+        def test_old(ctl):
+            pass
+
+        @pytest.mark.requires("posix-shell")
+        def test_shell(cli):
+            pass
+
+        def test_unmarked(app):
+            pass
+        """
+    )
+    result = run_suite(pytester, "--impl", "rust")
+    result.assert_outcomes(skipped=3)
+    result.stdout.fnmatch_lines(
+        [
+            "rust: 0 pass, 0 fail, 0 skip(unsupported), 3 skip(not-yet-at-level)*",
+            "*not-yet-at-level: rust has no binary",
+        ]
+    )
+    assert roots == []
+
+
+RUST_SUITE = """
+import pytest
+
+@pytest.mark.since("0.36.0")
+def test_at_level(ctl):
+    pass
+
+@pytest.mark.since("0.37.0")
+def test_above(ctl):
+    pass
+
+@pytest.mark.requires("window-geometry", reason="not yet")
+def test_geometry(ctl):
+    pass
+"""
+
+
+def test_rust_profile_comes_from_version(
+    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = {"parityLevel": "0.36.0", "capabilities": ["posix-shell"]}
+    monkeypatch.setenv("FAKE_VERSION", json.dumps({"conformance": profile}))
+    pytester.makepyfile(RUST_SUITE)
+    result = run_suite(pytester, "--impl", "rust", "--bin", str(fake_bin))
+    result.assert_outcomes(passed=1, skipped=2)
+    result.stdout.fnmatch_lines(["rust: 1 pass, 0 fail, 1 skip(unsupported), 1 skip(not-yet-at-level)*"])
+
+
+def test_rust_without_a_profile_is_below_every_level(
+    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path
+) -> None:
+    pytester.makepyfile(RUST_SUITE)
+    result = run_suite(pytester, "--impl", "rust", "--bin", str(fake_bin))
+    result.assert_outcomes(skipped=3)
+    result.stdout.fnmatch_lines(["*not-yet-at-level: rust reports no parity level"])
+    assert len(roots) == 1, "one probe launch, no test instance"
+
+
+@pytest.mark.parametrize(
+    ("marker", "message"),
+    [
+        ('requires("windo-geometry")', "*unknown capability 'windo-geometry'*"),
+        ("requires()", "*requires names no capability*"),
+        ('since("latest")', "*since: not a dotted version*"),
+        ('since("0.1", "0.2")', "*since takes one version string*"),
+    ],
+)
+def test_malformed_markers_are_usage_errors(pytester: pytest.Pytester, marker: str, message: str) -> None:
+    pytester.makepyfile(f"import pytest\n\n@pytest.mark.{marker}\ndef test_x():\n    pass\n")
+    result = run_suite(pytester, "--impl", "rust")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines([message])
+
+
+def test_reruns_are_counted(pytester: pytest.Pytester, roots: list[Path], fake_bin: Path) -> None:
+    pytester.makepyfile(
+        """
+        calls = []
+
+        def test_flaky(ctl):
+            calls.append(1)
+            assert len(calls) > 1
+        """
+    )
+    result = run_suite(pytester, *swift_linux(fake_bin, "--reruns", "1"))
+    assert result.parseoutcomes() == {"passed": 1, "rerun": 1}
+    result.stdout.fnmatch_lines(["swift-linux: 1 pass, 0 fail, * 1 reruns"])
+
+
+def test_summary_is_absent_without_conformance_tests(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile("def test_plain():\n    pass\n")
+    result = run_suite(pytester, "--impl", "rust")
+    result.assert_outcomes(passed=1)
+    assert "agterm conformance" not in result.stdout.str()
+
+
+# -- instance fixtures
+
+
+def test_app_is_per_test_and_shared_app_per_module(
+    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path, tmp_path: Path
+) -> None:
+    pids_file = tmp_path / "pids.txt"
+    body = f"""
+        import os
+        PIDS = {str(pids_file)!r}
+        seen = []
+
+        def record(instance):
+            with open(PIDS, "a") as sink:
+                sink.write(f"{{instance.pid}}\\n")
+
+        def test_shared(ctl, shared_app):
+            assert ctl.instance is shared_app
+            seen.append(shared_app.pid)
+            record(shared_app)
+
+        def test_shared_again(ctl):
+            assert ctl.instance.pid == seen[0]
+
+        def test_own(app, ctl):
+            assert ctl.instance is app and app.pid not in seen
+            seen.append(app.pid)
+            record(app)
+
+        def test_own_again(app):
+            assert app.pid not in seen
+            record(app)
+        """
+    pytester.makepyfile(test_one=body, test_two=body)
+    result = run_suite(pytester, *swift_linux(fake_bin))
+    result.assert_outcomes(passed=8)
+    pids = [int(line) for line in pids_file.read_text().split()]
+    assert len(pids) == len(set(pids)) == 6
+    assert len(roots) == 6 and not any(root.exists() for root in roots)
+    for pid in pids:
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+
+
+def test_ctl_waits_through_the_fixture(pytester: pytest.Pytester, roots: list[Path], fake_bin: Path) -> None:
+    pytester.makepyfile(
+        """
+        from agterm_conformance.match import session_ids
+
+        def test_waits(ctl):
+            cursor = ctl.events_baseline()
+            assert ctl.request("fake.emit", kind="session.created", session="s2").ok
+            assert ctl.wait_event(cursor, "session.created")["session"] == "s2"
+            assert session_ids(ctl.tree()) == ["s1"]
+            assert ctl.wait_tree(lambda tree: session_ids(tree) == ["s1"])
+        """
+    )
+    run_suite(pytester, *swift_linux(fake_bin)).assert_outcomes(passed=1)
+
+
+def test_cli_passes_the_instance_socket(
+    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path, fake_ctl: Path
+) -> None:
+    pytester.makepyfile(
+        """
+        import os
+
+        def test_cli(cli, shared_app):
+            out = cli("session", "type", "s1", "--", "echo", "--socket", input="x").json()
+            sock = os.fspath(shared_app.socket)
+            assert out["argv"] == ["session", "type", "s1", "--socket", sock, "--", "echo", "--socket"]
+            assert out["stdin"] == "x"
+            assert out["cwd"] == os.fspath(shared_app.home)
+            assert out["env"] == {
+                "HOME": os.fspath(shared_app.home),
+                "AGTERM_STATE_DIR": os.fspath(shared_app.state_dir),
+                "PATH": "/usr/bin:/bin",
+            }
+            plain = cli("tree")
+            assert plain.returncode == 0 and plain.json()["argv"] == ["tree", "--socket", sock]
+
+        def test_cli_follows_app(app, cli):
+            assert cli("tree").json()["argv"][-1] == os.fspath(app.socket)
+        """
+    )
+    run_suite(pytester, *swift_linux(fake_bin, "--ctl", str(fake_ctl))).assert_outcomes(passed=2)
+
+
+def test_cli_without_agtermctl_fails_clearly(pytester: pytest.Pytester, roots: list[Path], fake_bin: Path) -> None:
+    pytester.makepyfile("def test_cli(cli):\n    pass\n")
+    result = run_suite(pytester, *swift_linux(fake_bin))
+    result.assert_outcomes(errors=1)
+    result.stdout.fnmatch_lines(["*swift-linux has no agtermctl: pass --ctl*"])
+
+
+# -- waits
+
+
+def test_wait_tree_polls_until_the_predicate_holds(ctl: Ctl) -> None:
+    assert ctl.request("fake.set_tree", tree=TWO_SESSIONS, delay=0.3).ok
+    started = time.monotonic()
+    result = ctl.wait_tree(lambda tree: session_ids(tree) == ["s1", "s2"], timeout=5)
+    assert session_ids(result) == ["s1", "s2"]
+    assert time.monotonic() - started >= 0.25
+
+
+def test_wait_tree_timeout_names_the_predicate_and_the_last_tree(ctl: Ctl) -> None:
+    def has_s9(tree: dict) -> bool:
+        return "s9" in session_ids(tree)
+
+    with pytest.raises(WaitTimeout, match=r"tree did not satisfy .*has_s9 within 0.3s; last tree: .*\"s1\""):
+        ctl.wait_tree(has_s9, timeout=0.3)
+
+
+def test_wait_tree_reports_the_last_failed_assertion(ctl: Ctl) -> None:
+    def two_sessions(tree: dict) -> bool:
+        assert session_ids(tree) == ["s1", "s2"], f"sessions {session_ids(tree)}"
+        return True
+
+    with pytest.raises(WaitTimeout, match=r"last check: sessions \['s1'\]"):
+        ctl.wait_tree(two_sessions, timeout=0.3)
+
+
+def test_wait_tree_fails_fast_when_tree_fails(ctl: Ctl) -> None:
+    assert ctl.request("fake.set_tree", error="boom").ok
+    started = time.monotonic()
+    with pytest.raises(AssertionError, match="tree failed while waiting: 'boom'") as caught:
+        ctl.wait_tree(lambda tree: False, timeout=5)
+    assert not isinstance(caught.value, WaitTimeout)
+    assert time.monotonic() - started < 2
+
+
+def test_event_emitted_between_action_and_wait_is_observed(ctl: Ctl) -> None:
+    cursor = ctl.events_baseline()
+    assert ctl.request("fake.emit", kind="session.created", session="s2").ok
+    # A subscription made only when the wait starts sees nothing: the event is already history.
+    late = ctl.events_baseline()
+    assert ctl.request("events.read", run=late.run, after=str(late.after)).result["events"]["items"] == []
+    event = ctl.wait_event(cursor, "session.created", timeout=1)
+    assert event["session"] == "s2" and event["seq"] == cursor.after + 1
+
+
+def test_event_before_the_baseline_is_not_matched(ctl: Ctl) -> None:
+    assert ctl.request("fake.emit", kind="session.created", session="old").ok
+    cursor = ctl.events_baseline()
+    assert ctl.request("fake.emit", kind="session.created", session="new").ok
+    assert ctl.wait_event(cursor, "session.created", timeout=1)["session"] == "new"
+
+
+def test_wait_event_polls_for_a_late_event(ctl: Ctl) -> None:
+    cursor = ctl.events_baseline()
+    assert ctl.request("fake.emit", kind="pane.split", session="s1", delay=0.3).ok
+    assert ctl.wait_event(cursor, "pane.split", timeout=5)["session"] == "s1"
+
+
+def test_wait_event_filters_by_kind_and_match(ctl: Ctl) -> None:
+    cursor = ctl.events_baseline()
+    for kind, status in (("notify", "busy"), ("status", "idle"), ("status", "busy")):
+        assert ctl.request("fake.emit", kind=kind, session="s1", payload={"status": status}).ok
+    busy = ctl.wait_event(cursor, "status", {"session": "s1", "payload": {"status": "busy"}}, timeout=1)
+    assert busy["kind"] == "status" and busy["seq"] == cursor.after + 3
+    idle = ctl.wait_event(cursor, "status", lambda event: event["payload"]["status"] == "idle", timeout=1)
+    assert idle["seq"] == cursor.after + 2
+    after_idle = cursor.past(idle)
+    assert after_idle == Cursor(cursor.run, idle["seq"])
+    assert ctl.wait_event(after_idle, "status", timeout=1)["seq"] == busy["seq"]
+
+
+def test_wait_event_timeout_lists_what_it_saw(ctl: Ctl) -> None:
+    cursor = ctl.events_baseline()
+    for status in ("idle", "idle"):
+        assert ctl.request("fake.emit", kind="status", session="s1", payload={"status": status}).ok
+    with pytest.raises(WaitTimeout, match=r"no status event matching .*busy.* within 0.3s .*saw 2 non-matching.*idle"):
+        ctl.wait_event(cursor, "status", {"payload": {"status": "busy"}}, timeout=0.3)
+    with pytest.raises(WaitTimeout, match="no session.closed event within 0.3s .*saw none of that kind"):
+        ctl.wait_event(cursor, "session.closed", timeout=0.3)
+
+
+def test_wait_event_fails_fast_on_a_cursor_error(ctl: Ctl) -> None:
+    started = time.monotonic()
+    with pytest.raises(AssertionError, match="event run changed") as caught:
+        ctl.wait_event(Cursor(run="00000000-0000-0000-0000-000000000000", after=0), "status", timeout=5)
+    assert not isinstance(caught.value, WaitTimeout)
+    assert time.monotonic() - started < 2
+
+
+def test_ctl_tree_returns_the_result(ctl: Ctl) -> None:
+    assert isinstance(ctl.instance, Instance)
+    assert session_ids(ctl.tree()) == ["s1"]

@@ -239,12 +239,12 @@ New items are `uncovered`, and vanished items are `removed-upstream`.
 - Modify: `conformance/agterm_conformance/plugin.py`
 - Create: `conformance/selftests/test_fixtures.py`
 
-- [ ] fixtures `app` (per test), `shared_app` (per module), `ctl`, `cli` (always passes `--socket` of its instance)
-- [ ] `wait_tree(predicate, timeout)`; `events_baseline()` returning a cursor and `wait_event(cursor, kind, match, timeout)` so an event emitted before the wait starts is not missed
-- [ ] skip logic for `since` / `requires` with distinct reasons; terminal summary: pass, fail, skip(unsupported), skip(not-yet-at-level), reruns
-- [ ] write self-tests with pytester and a fake adapter (skip reasons, summary counts, wait timeout message)
-- [ ] write a self-test for the baseline race: event emitted between action and wait is still observed
-- [ ] run self-tests — must pass before task 5
+- [x] fixtures `app` (per test), `shared_app` (per module), `ctl`, `cli` (always passes `--socket` of its instance)
+- [x] `wait_tree(predicate, timeout)`; `events_baseline()` returning a cursor and `wait_event(cursor, kind, match, timeout)` so an event emitted before the wait starts is not missed
+- [x] skip logic for `since` / `requires` with distinct reasons; terminal summary: pass, fail, skip(unsupported), skip(not-yet-at-level), reruns
+- [x] write self-tests with pytester and a fake adapter (skip reasons, summary counts, wait timeout message)
+- [x] write a self-test for the baseline race: event emitted between action and wait is still observed
+- [x] run self-tests — must pass before task 5
 
 ### Task 5: Spike A tooling and the Linux launch confirmation
 

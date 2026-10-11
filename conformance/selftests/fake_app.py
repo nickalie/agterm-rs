@@ -5,6 +5,9 @@ ignore-term (serve, ignoring SIGTERM). FAKE_VERSION: JSON for the `version` resu
 replacing the `zmx.list` result.
 `fake.adopt {pid, session?, pane?, daemon?}` makes that pid a claimed zmx daemon which `zmx.kill` terminates;
 killing a left pane promotes the session's right pane into the left slot, as the references do.
+`tree` serves a settable tree (`fake.set_tree {tree?, error?, delay?}`); `events.read` serves a ring with the
+reference's cursor semantics, appended to by `fake.emit {kind, session?, payload?, delay?}`. A delay applies the
+change from a timer after the reply, as an app does work after acknowledging a command.
 """
 
 import json
@@ -13,6 +16,7 @@ import signal
 import socket
 import sys
 import threading
+import uuid
 
 mode = os.environ.get("FAKE_APP_MODE", "serve")
 state = os.environ["AGTERM_STATE_DIR"]
@@ -28,6 +32,59 @@ if mode == "ignore-term":
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
 daemons: list[dict] = []
+lock = threading.Lock()
+tree = {"workspaces": [{"id": "w1", "active": True, "sessions": [{"id": "s1", "name": "one", "active": True}]}]}
+tree_error = None
+run_id = str(uuid.uuid4()).upper()
+ring: list[dict] = []
+
+
+def later(args: dict, change) -> None:
+    delay = float(args.get("delay", 0))
+    if delay:
+        threading.Timer(delay, change).start()
+    else:
+        change()
+
+
+def set_tree(args: dict) -> None:
+    global tree, tree_error
+    with lock:
+        tree, tree_error = args.get("tree", tree), args.get("error")
+
+
+def emit(args: dict) -> None:
+    with lock:
+        ring.append(
+            {
+                "seq": len(ring) + 1,
+                "ts": 0,
+                "kind": args["kind"],
+                "session": args.get("session"),
+                "payload": args.get("payload", {}),
+            }
+        )
+
+
+def read_events(args: dict) -> dict:
+    with lock:
+        anchor = {"run": run_id, "next": len(ring), "items": []}
+        if "run" not in args and "after" not in args:
+            return {"ok": True, "result": {"events": anchor}}
+        if args.get("run") != run_id:
+            return {"ok": False, "error": "event run changed", "result": {"events": anchor}}
+        after = int(args["after"])
+        if after > len(ring):
+            return {"ok": False, "error": "event cursor is ahead of the current sequence", "result": {"events": anchor}}
+        kinds, limit = args.get("kinds"), int(args.get("limit", 100))
+        items = []
+        for event in ring[after:]:
+            if kinds and event["kind"] not in kinds:
+                continue
+            items.append(event)
+            if len(items) == limit:
+                return {"ok": True, "result": {"events": {"run": run_id, "next": event["seq"], "items": items}}}
+        return {"ok": True, "result": {"events": {"run": run_id, "next": len(ring), "items": items}}}
 
 
 def handle(request: dict) -> dict:
@@ -38,6 +95,17 @@ def handle(request: dict) -> dict:
         if mode == "refuse":
             return {"ok": False, "error": "not ready"}
         return {"ok": True, "result": json.loads(os.environ.get("FAKE_VERSION", '{"app": {"version": "0.0.1"}}'))}
+    if cmd == "tree":
+        with lock:
+            return {"ok": False, "error": tree_error} if tree_error else {"ok": True, "result": {"tree": tree}}
+    if cmd == "fake.set_tree":
+        later(args, lambda: set_tree(args))
+        return {"ok": True}
+    if cmd == "fake.emit":
+        later(args, lambda: emit(args))
+        return {"ok": True}
+    if cmd == "events.read":
+        return read_events(args)
     if cmd == "fake.adopt":
         pid = int(args["pid"])
         daemons.append(
