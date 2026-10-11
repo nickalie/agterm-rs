@@ -326,6 +326,7 @@ def test_gate_reads_declarations_before_deselection(pytester: pytest.Pytester, a
         (["tests/test_all.py::test_everything"], "*tests/test_all.py::test_everything selects one*"),
         (["--ignore", "tests/sub"], "*drop --ignore*"),
         (["--ignore-glob", "*sub*"], "*drop --ignore-glob*"),
+        (["--lf"], "*drop --lf*"),
     ],
 )
 def test_gate_refuses_a_partial_collection(pytester: pytest.Pytester, args: list[str], message: str) -> None:

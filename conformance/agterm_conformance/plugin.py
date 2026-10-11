@@ -136,11 +136,12 @@ def pytest_configure(config: pytest.Config) -> None:
 def gate_paths(config: pytest.Config, options: ImplOptions) -> tuple[Path, Path]:
     """The gate's catalog and ui-ids files; refuses a run that would not collect every conformance test.
 
-    Deselection (-k, -m, --deselect, --lf) needs no check: declarations are read before it runs.
+    Deselection (-k, -m, --deselect) needs no check: declarations are read before it runs.
+    --lf is refused with the ignores because it skips whole files during collection.
     """
-    for flag in ("ignore", "ignore_glob"):
+    for flag, spelling in (("ignore", "--ignore"), ("ignore_glob", "--ignore-glob"), ("lf", "--lf")):
         if config.getoption(flag, None):
-            raise pytest.UsageError(f"--coverage-gate reads every conformance test; drop --{flag.replace('_', '-')}")
+            raise pytest.UsageError(f"--coverage-gate reads every conformance test; drop {spelling}")
     catalog = (options.catalog or config.rootpath / "catalog.yaml").resolve()
     ui_ids = (options.ui_ids or catalog.parent / "ui-ids.yaml").resolve()
     for flag, path in (
