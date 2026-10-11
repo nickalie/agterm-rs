@@ -207,12 +207,12 @@ New items are `uncovered`, and vanished items are `removed-upstream`.
 - Create: `conformance/selftests/test_client.py`
 - Create: `conformance/selftests/test_match.py`
 
-- [ ] JSON-line client (`request(cmd, target=None, **args) -> Response`) with timeouts and the shared line cap; refuses sockets outside the session temp root
-- [ ] `assert_subset`, `assert_absent`, `assert_error(resp, text=None)` allowing `result` on `ok:false`, float tolerance, opt-in order-insensitive lists
-- [ ] id capture helpers pulling session/window/workspace ids out of `tree`
-- [ ] write self-tests against an in-process fake Unix-socket server (success, `ok:false` with result, oversized line, timeout, socket outside the root refused)
-- [ ] write self-tests for matchers (match, extra fields, missing field, present-but-should-be-absent, float edge)
-- [ ] run self-tests — must pass before task 3
+- [x] JSON-line client (`request(cmd, target=None, **args) -> Response`) with timeouts and the shared line cap; refuses sockets outside the session temp root
+- [x] `assert_subset`, `assert_absent`, `assert_error(resp, text=None)` allowing `result` on `ok:false`, float tolerance, opt-in order-insensitive lists
+- [x] id capture helpers pulling session/window/workspace ids out of `tree`
+- [x] write self-tests against an in-process fake Unix-socket server (success, `ok:false` with result, oversized line, timeout, socket outside the root refused)
+- [x] write self-tests for matchers (match, extra fields, missing field, present-but-should-be-absent, float edge)
+- [x] run self-tests — must pass before task 3
 
 ### Task 3: Implementation adapters and launch guards
 
