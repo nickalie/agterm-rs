@@ -65,6 +65,7 @@ CAPABILITIES: Mapping[str, str] = {
     "drop-placement": "`session.move --after/--before` places like a sidebar drop, also above its own anchor",
     "overlay-size-validated": "`session.overlay.open` refuses a `sizePercent` outside 1...100 rather than clamping it",
     "modal-blocks-covers": "a pending GUI ask refuses control-driven covers such as `session.search` with `ask pending`",
+    "pick-names-pending-ask": "`pick.open` under a pending GUI ask answers `ask already pending`, naming the ask",
 }
 
 

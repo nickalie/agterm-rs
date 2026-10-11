@@ -18,6 +18,7 @@ BASE_CAPABILITIES = frozenset(
         "drop-placement",
         "overlay-size-validated",
         "modal-blocks-covers",
+        "pick-names-pending-ask",
     }
 )
 LAUNCH_MODES = ("uitest", "plain")

@@ -124,10 +124,10 @@ def test_overlay_result_reports_the_exit_status(ctl):
     ctl.wait_tree(lambda tree: find_session(tree, sid)["overlay"] is False)
     assert assert_ok(ctl.request("session.overlay.result", sid)) == {"id": sid, "exitCode": 7}
 
-    # A new overlay clears the previous status.
-    _open(ctl, sid)
-    assert_error(ctl.request("session.overlay.result", sid), "overlay still running")
-    _closed(ctl, sid)
+    # A new overlay replaces the previous status.
+    _open(ctl, sid, "exit 3")
+    ctl.wait_tree(lambda tree: find_session(tree, sid)["overlay"] is False)
+    assert assert_ok(ctl.request("session.overlay.result", sid)) == {"id": sid, "exitCode": 3}
 
 
 @pytest.mark.covers("session.overlay.text")
