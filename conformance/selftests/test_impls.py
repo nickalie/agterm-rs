@@ -164,8 +164,13 @@ def test_build_env_drops_inherited_live_session_variables(tmp_path: Path, monkey
         ({"WAYLAND_DISPLAY": "wayland-1"}, {}),
         (
             {"XDG_RUNTIME_DIR": "/run/user/7", "DISPLAY": ":0"},
-            {"DISPLAY": ":0", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/7/bus"},
+            {
+                "DISPLAY": ":0",
+                "WAYLAND_DISPLAY": "/run/user/7/wayland-0",
+                "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/7/bus",
+            },
         ),
+        ({"DISPLAY": ":0"}, {"DISPLAY": ":0"}),
     ],
 )
 def test_runtime_dir_is_private_and_session_sockets_stay_reachable(

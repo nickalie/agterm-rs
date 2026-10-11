@@ -181,8 +181,8 @@ def isolated_runtime_env(env: dict[str, str], runtime_dir: str, parent: Mapping[
     """
     parent_runtime = parent.get("XDG_RUNTIME_DIR")
     env["XDG_RUNTIME_DIR"] = runtime_dir
-    display = parent.get("WAYLAND_DISPLAY")
-    if display and not os.path.isabs(display):
+    display = parent.get("WAYLAND_DISPLAY") or "wayland-0"  # libwayland's default, relative to the runtime dir
+    if not os.path.isabs(display):
         if parent_runtime:
             env["WAYLAND_DISPLAY"] = os.path.join(parent_runtime, display)
         else:

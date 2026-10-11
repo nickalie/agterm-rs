@@ -43,12 +43,21 @@ def _closed(ctl):
 # -- dashboard
 
 
+@pytest.fixture
+def no_dashboard(ctl):
+    """A failed dashboard test would otherwise leave the shared instance's dashboard or zoom up for the next."""
+    yield
+    ctl.request("dashboard", close=True)
+    ctl.request("surface.zoom", "active", mode="hide")
+
+
 @pytest.mark.covers(
     "dashboard",
     "field:tree.dashboardMembers",
     "field:tree.dashboardHighlighted",
     "field:tree.dashboardFontMode",
 )
+@pytest.mark.usefixtures("no_dashboard")
 def test_dashboard_shows_each_pane_of_the_given_sessions(ctl):
     single, split = _new(ctl), _split(ctl)
     assert "text" not in _open(ctl, targets=[single, split])
@@ -63,6 +72,7 @@ def test_dashboard_shows_each_pane_of_the_given_sessions(ctl):
 
 
 @pytest.mark.covers("dashboard", "field:tree.dashboardMembers")
+@pytest.mark.usefixtures("no_dashboard")
 def test_dashboard_pane_refs_pick_one_pane(ctl):
     single, split = _new(ctl), _split(ctl)
     _open(ctl, targets=[f"{split}:BOTTOM", f"{single}:primary", f"{split}:left", f"{single}:left"])
@@ -71,6 +81,7 @@ def test_dashboard_pane_refs_pick_one_pane(ctl):
 
 
 @pytest.mark.covers("dashboard", "field:tree.dashboardFontSize", "field:tree.dashboardFontMode")
+@pytest.mark.usefixtures("no_dashboard")
 def test_dashboard_font_modes(ctl):
     first, second = _new(ctl), _new(ctl)
     _open(ctl, targets=[first, second], fontSize=14)
@@ -90,6 +101,7 @@ def test_dashboard_font_modes(ctl):
 
 
 @pytest.mark.covers("dashboard", "field:result.text")
+@pytest.mark.usefixtures("no_dashboard")
 def test_dashboard_names_what_it_left_out(ctl):
     single = _new(ctl)
     result = _open(ctl, targets=[single, UNKNOWN, f"{single}:right"])
@@ -115,6 +127,7 @@ def test_dashboard_mru_takes_the_recent_sessions(app, ctl):
 
 
 @pytest.mark.covers("dashboard", "surface.zoom", "field:tree.zoomedSurface", "field:tree.dashboardMembers")
+@pytest.mark.usefixtures("no_dashboard")
 def test_dashboard_and_terminal_zoom_replace_each_other(ctl):
     sid = _new(ctl)
     assert_ok(ctl.request("surface.zoom", "active", mode="show"))
@@ -179,6 +192,7 @@ def test_dashboard_and_terminal_zoom_replace_each_other(ctl):
         pytest.param({"targets": ["T"], "window": UNKNOWN}, f"no such window: {UNKNOWN}", id="unknown-window"),
     ],
 )
+@pytest.mark.usefixtures("no_dashboard")
 def test_dashboard_refusals(ctl, args, error):
     sid = _new(ctl)
     if "targets" in args:
