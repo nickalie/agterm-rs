@@ -390,6 +390,9 @@ class Ctl:
     ) -> dict[str, Any]:
         return wait.wait_tree(self, predicate, timeout)
 
+    def wait_mounted(self, session_id: str, *panes: str, timeout: float = wait.DEFAULT_TIMEOUT) -> dict[str, Any]:
+        return wait.wait_mounted(self, session_id, *panes, timeout=timeout)
+
     def wait_text(
         self, target: str | None, pattern: str | re.Pattern[str], timeout: float = wait.DEFAULT_TIMEOUT, **args: Any
     ) -> re.Match[str]:

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from agterm_conformance.client import Response
-from agterm_conformance.match import assert_subset
+from agterm_conformance.match import assert_subset, find_session
 
 DEFAULT_TIMEOUT = 10.0
 POLL_INTERVAL = 0.05
@@ -77,6 +77,26 @@ def wait_tree(
                 f"last tree: {_shown(last_result)}"
             )
         _pause(POLL_INTERVAL)
+
+
+# Per pane, the session field that is reported only once the pane's terminal surface is up. A pane's slot (its
+# `surfaces` entry, `hasSplit`, `scratch`) precedes its mount, so a command acting on the pane, or a read of its
+# `paneID`, made before this field appears can answer `session not realized` or find no `paneID`.
+MOUNTED_FIELD = {"left": "realized", "right": "splitFontSize", "scratch": "scratchFontSize"}
+
+
+def wait_mounted(client: Requester, session_id: str, *panes: str, timeout: float = DEFAULT_TIMEOUT) -> dict[str, Any]:
+    """Poll `tree` until each of `panes` (left|right|scratch) of `session_id` has its surface up; return that tree."""
+    if unknown := [pane for pane in panes if pane not in MOUNTED_FIELD]:
+        raise ValueError(f"no mount field for pane {unknown[0]!r}: use one of {sorted(MOUNTED_FIELD)}")
+
+    def mounted(tree: dict[str, Any]) -> bool:
+        node = find_session(tree, session_id)
+        pending = [pane for pane in panes if not node.get(MOUNTED_FIELD[pane])]
+        assert not pending, f"not mounted: {pending}"
+        return True
+
+    return wait_tree(client, mounted, timeout)
 
 
 def wait_text(

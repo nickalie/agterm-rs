@@ -13,6 +13,12 @@ def _new(ctl):
     return assert_ok(ctl.request("session.new"))["id"]
 
 
+def _mounted(ctl):
+    sid = _new(ctl)
+    ctl.wait_mounted(sid, "left")
+    return sid
+
+
 def _node(ctl, sid):
     return find_session(ctl.tree(), sid)
 
@@ -22,9 +28,9 @@ def _surfaces(ctl, sid):
 
 
 def _split(ctl, **args):
-    sid = _new(ctl)
+    sid = _mounted(ctl)
     assert_ok(ctl.request("session.split", sid, mode="on", **args))
-    ctl.wait_tree(lambda tree: find_session(tree, sid).get("hasSplit"))
+    ctl.wait_mounted(sid, "right")
     return sid
 
 
@@ -39,11 +45,11 @@ def _split(ctl, **args):
     "event:pane.split",
 )
 def test_split_shows_hides_and_keeps_the_pane(ctl):
-    sid = _new(ctl)
+    sid = _mounted(ctl)
     cursor = ctl.events_baseline()
 
     assert assert_ok(ctl.request("session.split", sid, mode="on"))["id"] == sid
-    tree = ctl.wait_tree(lambda tree: find_session(tree, sid).get("hasSplit"))
+    tree = ctl.wait_mounted(sid, "right")
     node = find_session(tree, sid)
     assert_subset(node, {"split": True, "hasSplit": True, "splitAxis": "vertical", "splitFocused": True})
     assert isinstance(node["splitCwd"], str) and node["splitCwd"]

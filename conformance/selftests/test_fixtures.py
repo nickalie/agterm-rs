@@ -371,6 +371,31 @@ def test_wait_tree_reports_the_last_failed_assertion(ctl: Ctl) -> None:
         ctl.wait_tree(two_sessions, timeout=0.3)
 
 
+def _one_session(**fields: object) -> dict:
+    return {"workspaces": [{"id": "w1", "active": True, "sessions": [{"id": "s1", "active": True, **fields}]}]}
+
+
+def test_wait_mounted_polls_until_every_named_pane_is_up(ctl: Ctl) -> None:
+    assert ctl.request("fake.set_tree", tree=_one_session(realized=False, hasSplit=True)).ok
+    up = _one_session(realized=True, hasSplit=True, splitFontSize=13.0)
+    assert ctl.request("fake.set_tree", tree=up, delay=0.3).ok
+    started = time.monotonic()
+    tree = ctl.wait_mounted("s1", "left", "right", timeout=5)
+    assert tree["tree"]["workspaces"][0]["sessions"][0]["splitFontSize"] == 13.0
+    assert time.monotonic() - started >= 0.25
+
+
+def test_wait_mounted_timeout_names_the_pending_pane(ctl: Ctl) -> None:
+    assert ctl.request("fake.set_tree", tree=_one_session(realized=True, scratch=True)).ok
+    with pytest.raises(WaitTimeout, match=r"last check: not mounted: \['scratch'\]"):
+        ctl.wait_mounted("s1", "left", "scratch", timeout=0.3)
+
+
+def test_wait_mounted_refuses_an_unknown_pane(ctl: Ctl) -> None:
+    with pytest.raises(ValueError, match="no mount field for pane 'split'"):
+        ctl.wait_mounted("s1", "split")
+
+
 def test_wait_tree_fails_fast_when_tree_fails(ctl: Ctl) -> None:
     assert ctl.request("fake.set_tree", error="boom").ok
     started = time.monotonic()

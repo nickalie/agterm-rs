@@ -15,21 +15,20 @@ _markers = itertools.count(1)
 
 def _realized(ctl):
     sid = assert_ok(ctl.request("session.new"))["id"]
-    ctl.wait_tree(lambda tree: find_session(tree, sid)["realized"])
+    ctl.wait_mounted(sid, "left")
     return sid
 
 
 def _split(ctl):
     sid = _realized(ctl)
     assert_ok(ctl.request("session.split", sid, mode="on"))
-    # `hasSplit` turns on before the pane mounts; its font size is reported only once its surface is up.
-    ctl.wait_tree(lambda tree: "splitFontSize" in find_session(tree, sid))
+    ctl.wait_mounted(sid, "right")
     return sid
 
 
 def _scratch_on(ctl, sid):
     assert_ok(ctl.request("session.scratch", sid, mode="on"))
-    ctl.wait_tree(lambda tree: "scratchFontSize" in find_session(tree, sid))
+    ctl.wait_mounted(sid, "scratch")
 
 
 def _echo(ctl, sid, **args):
