@@ -1,4 +1,4 @@
-"""pytest plugin: options, markers, the live-session env scrub, instance fixtures, skips and the summary."""
+"""pytest plugin: options, markers, the live-session env scrub, instance fixtures, skips, the summary and the gate."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from agterm_conformance import wait
+from agterm_conformance import coverage, wait
 from agterm_conformance.client import Response, check_under_root
 from agterm_conformance.match import assert_ok
 
@@ -31,11 +31,17 @@ NOT_YET_AT_LEVEL = "not-yet-at-level"
 CLI_TIMEOUT = 30.0
 
 MARKERS = (
-    "since(version): upstream version that introduced the behavior; "
-    "skipped as not-yet-at-level above the adapter's parity_level",
+    (
+        "since(version): upstream version that introduced the behavior; "
+        "skipped as not-yet-at-level above the adapter's parity_level"
+    ),
     "requires(capability, reason=...): skipped as unsupported when the adapter lacks the capability",
-    "covers(*items): catalog items this test covers, read by the coverage gate",
+    (
+        "covers(*items, streams=()): catalog items this test covers, read by the coverage gate; a stream-mode "
+        "command counts only when also named in streams, by a test that drives the stream after the ok"
+    ),
 )
+COVERS_KWARGS = frozenset({"streams"})
 
 
 def scrub_environ(environ: MutableMapping[str, str]) -> list[str]:
@@ -57,11 +63,16 @@ class ImplOptions:
     ctl: Path | None
     coverage_gate: bool
     macos_launch_mode: str = "uitest"
+    catalog: Path | None = None
+    ui_ids: Path | None = None
+    coverage_baseline: Path | None = None
 
 
 _OPTIONS_KEY = pytest.StashKey[ImplOptions]()
 _ADAPTER_KEY = pytest.StashKey["Adapter"]()
 _SUMMARY_KEY = pytest.StashKey[bool]()
+_GATE_KEY = pytest.StashKey[coverage.Report]()
+_COLLECTED_KEY = pytest.StashKey[list[pytest.Item]]()
 
 
 def get_impl_options(config: pytest.Config) -> ImplOptions:
@@ -89,6 +100,16 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     group.addoption(
         "--coverage-gate", action="store_true", default=False, help="check catalog coverage without launching anything"
     )
+    group.addoption("--catalog", type=Path, default=None, help="coverage gate: catalog.yaml (default: <rootdir>/)")
+    group.addoption(
+        "--ui-ids", type=Path, default=None, help="coverage gate: ui-ids.yaml (default: next to the catalog)"
+    )
+    group.addoption(
+        "--coverage-baseline",
+        type=Path,
+        default=None,
+        help="coverage gate: file of uncovered items to accept, one covers key per line; it may only shrink",
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -100,20 +121,64 @@ def pytest_configure(config: pytest.Config) -> None:
         ctl=config.getoption("ctl"),
         coverage_gate=config.getoption("coverage_gate"),
         macos_launch_mode=config.getoption("macos_launch_mode"),
+        catalog=config.getoption("catalog"),
+        ui_ids=config.getoption("ui_ids"),
+        coverage_baseline=config.getoption("coverage_baseline"),
     )
     for flag, path in (("--bin", options.bin), ("--ctl", options.ctl)):
         if path is not None and not path.exists():
             raise pytest.UsageError(f"{flag} {path} does not exist")
     config.stash[_OPTIONS_KEY] = options
+    if options.coverage_gate:
+        config.pluginmanager.register(_GateCollector(), "agterm-coverage-gate-collector")
+
+
+def gate_paths(config: pytest.Config, options: ImplOptions) -> tuple[Path, Path]:
+    """The gate's catalog and ui-ids files; refuses a run that would not collect every conformance test.
+
+    Deselection (-k, -m, --deselect, --lf) needs no check: declarations are read before it runs.
+    """
+    for flag in ("ignore", "ignore_glob"):
+        if config.getoption(flag, None):
+            raise pytest.UsageError(f"--coverage-gate reads every conformance test; drop --{flag.replace('_', '-')}")
+    catalog = (options.catalog or config.rootpath / "catalog.yaml").resolve()
+    ui_ids = (options.ui_ids or catalog.parent / "ui-ids.yaml").resolve()
+    for flag, path in (
+        ("--catalog", catalog),
+        ("--ui-ids", ui_ids),
+        ("--coverage-baseline", options.coverage_baseline),
+    ):
+        if path is not None and not path.is_file():
+            raise pytest.UsageError(f"--coverage-gate: {flag} {path} is not a file")
+    tests = catalog.parent / "tests"
+    base = config.invocation_params.dir
+    for arg in config.args:
+        if "::" in arg:
+            raise pytest.UsageError(f"--coverage-gate reads every conformance test; {arg} selects one")
+    if not any(tests.is_relative_to((base / arg).resolve()) for arg in config.args):
+        raise pytest.UsageError(f"--coverage-gate reads every conformance test; collect {tests} or a parent of it")
+    return catalog, ui_ids
+
+
+class _GateCollector:
+    """A second plugin object: a module holds one implementation per hook, and the gate needs two."""
+
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_collection_modifyitems(self, config: pytest.Config, items: list[pytest.Item]) -> None:
+        config.stash[_COLLECTED_KEY] = list(items)
 
 
 @pytest.hookimpl(trylast=True)
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    for item in items:
-        check_markers(item)
+def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config, items: list[pytest.Item]) -> None:
     options = get_impl_options(config)
     if options.coverage_gate:
+        collected = config.stash[_COLLECTED_KEY]
+        for item in collected:
+            check_markers(item)
+        items[:] = [_coverage_gate_item(session, collected, options)]
         return
+    for item in items:
+        check_markers(item)
     # trylast: -k/-m deselection has already run, so only tests that will execute demand --impl.
     if any(_uses_impl(item) for item in items):
         require_implementation(options)
@@ -146,6 +211,8 @@ def check_markers(item: pytest.Item) -> None:
             version_tuple(since.args[0])
         except ValueError as error:
             raise pytest.UsageError(f"{item.nodeid}: since: {error}") from None
+    for covers in item.iter_markers("covers"):
+        check_covers(item.nodeid, covers)
     for marker in item.iter_markers("requires"):
         if not marker.args:
             raise pytest.UsageError(f"{item.nodeid}: requires names no capability")
@@ -154,6 +221,69 @@ def check_markers(item: pytest.Item) -> None:
                 raise pytest.UsageError(
                     f"{item.nodeid}: unknown capability {capability!r} (known: {', '.join(sorted(CAPABILITIES))})"
                 )
+
+
+def check_covers(nodeid: str, marker: pytest.Mark) -> None:
+    if not marker.args or not all(isinstance(arg, str) and arg for arg in marker.args):
+        raise pytest.UsageError(f"{nodeid}: covers takes one or more item strings, got {marker.args}")
+    unknown = set(marker.kwargs) - COVERS_KWARGS
+    if unknown:
+        raise pytest.UsageError(f"{nodeid}: covers takes no {', '.join(sorted(unknown))}")
+    streams = marker.kwargs.get("streams", ())
+    if not isinstance(streams, (tuple, list)) or not all(isinstance(s, str) for s in streams):
+        raise pytest.UsageError(f"{nodeid}: covers streams must be a tuple of command names, got {streams!r}")
+    if len(set(streams)) != len(streams):
+        raise pytest.UsageError(f"{nodeid}: covers streams lists a command twice: {streams!r}")
+    stray = [s for s in streams if s not in marker.args]
+    if stray:
+        raise pytest.UsageError(f"{nodeid}: covers streams names {', '.join(stray)} without covering it")
+
+
+# -- coverage gate
+
+
+class CoverageGateFailed(Exception):
+    pass
+
+
+class CoverageGate(pytest.Item):
+    """Stands in for every collected test under --coverage-gate, so nothing they need is set up."""
+
+    def __init__(self, *, report: coverage.Report, catalog: Path, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.report = report
+        self.catalog = catalog
+
+    def runtest(self) -> None:
+        if not self.report.ok:
+            raise CoverageGateFailed(self.report.failure_text())
+
+    def repr_failure(self, excinfo: pytest.ExceptionInfo[BaseException], style: Any = None) -> str:
+        if isinstance(excinfo.value, CoverageGateFailed):
+            return str(excinfo.value)
+        return str(super().repr_failure(excinfo, style))
+
+    def reportinfo(self) -> tuple[Path, int | None, str]:
+        return self.catalog, None, "coverage gate"
+
+
+def _coverage_gate_item(session: pytest.Session, items: list[pytest.Item], options: ImplOptions) -> CoverageGate:
+    catalog_path, ui_path = gate_paths(session.config, options)
+    tests = catalog_path.parent / "tests"
+    declarations = [
+        coverage.Declaration(item.nodeid, marker.args, tuple(marker.kwargs.get("streams", ())))
+        for item in items
+        if item.path.resolve().is_relative_to(tests)
+        for marker in item.iter_markers("covers")
+    ]
+    try:
+        catalog = coverage.load_catalog(catalog_path, ui_path)
+        baseline = None if options.coverage_baseline is None else coverage.load_baseline(options.coverage_baseline)
+    except coverage.CatalogError as error:
+        raise pytest.UsageError(f"--coverage-gate: {error}") from None
+    report = coverage.evaluate(catalog, declarations, baseline)
+    session.config.stash[_GATE_KEY] = report
+    return CoverageGate.from_parent(session, name="coverage-gate", report=report, catalog=catalog_path)
 
 
 def skip_reason(item: pytest.Item, adapter: Adapter) -> str | None:
@@ -186,6 +316,15 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
 
 
 def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: pytest.Config) -> None:
+    report = config.stash.get(_GATE_KEY, None)
+    if report is not None:
+        terminalreporter.write_sep("-", "agterm coverage")
+        for line in report.summary_lines():
+            terminalreporter.write_line(line)
+        if report.baselined:
+            terminalreporter.write_line(f"baselined, accepted for now ({len(report.baselined)}):")
+            for key in report.baselined:
+                terminalreporter.write_line(f"  {key}")
     if not config.stash.get(_SUMMARY_KEY, False):
         return
     terminalreporter.write_sep("-", "agterm conformance")

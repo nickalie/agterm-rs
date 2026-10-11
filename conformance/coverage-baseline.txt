@@ -1,0 +1,474 @@
+# Uncovered catalog items the CI coverage gate accepts for now, one covers key per line.
+# It only shrinks: the gate fails on an entry that is covered, exempted or gone, so the test that covers
+# an item deletes its line. The plan's Task 22 deletes the file.
+
+# commands
+tree
+events.read
+workspace.new
+workspace.rename
+workspace.delete
+workspace.select
+workspace.go
+session.new
+session.duplicate
+session.close
+session.select
+session.go
+session.rename
+session.reveal
+session.move
+workspace.move
+workspace.focus
+workspace.filter
+workspace.collapse
+workspace.expand
+session.type
+session.status
+session.flag
+session.context
+session.seen
+session.restore
+session.restart
+session.background
+session.split
+session.split.close
+session.swap
+session.lead
+session.scratch
+session.focus
+session.resize
+surface.zoom
+surface.cursor
+dashboard
+session.copy
+session.paste
+session.selectall
+session.text
+session.search
+session.overlay.open
+session.overlay.close
+session.overlay.resize
+session.overlay.reload
+session.overlay.navigate
+session.overlay.result
+session.overlay.submit
+session.overlay.copy
+session.overlay.text
+session.hud.open
+session.hud.update
+session.hud.close
+quick
+quick.type
+quick.text
+sidebar
+sidebar.mode
+sidebar.flagged-layout
+sidebar.expand
+sidebar.collapse
+sidebar.width
+notify
+font.inc
+font.dec
+font.reset
+window.new
+window.list
+window.select
+window.go
+window.close
+window.rename
+window.delete
+window.resize
+window.move
+window.zoom
+window.fullscreen
+window.minimize
+keymap.reload
+keymap.list
+keymap.run
+hooks.reload
+hooks.list
+browser.clear
+browser.links
+config.reload
+theme.set
+theme.list
+pick.open
+pick.result
+pick.cancel
+ask.open
+ask.result
+ask.cancel
+restore.clear
+restore.capture
+restore.mode
+zmx.list
+zmx.prune
+zmx.kill
+zmx.reset
+zmx.tree
+zmx.present
+zmx.screen
+session.overlay.job.run
+
+# fields
+field:result.id
+field:result.width
+field:result.height
+field:result.tree
+field:result.text
+field:result.windows
+field:result.exitCode
+field:result.count
+field:result.affected
+field:result.theme
+field:result.themes
+field:result.ratio
+field:result.sidebarWidth
+field:result.pane
+field:result.sync
+field:result.light
+field:result.dark
+field:result.events
+field:result.keymap
+field:result.hooks
+field:result.pick
+field:result.ask
+field:result.cursor
+field:result.app
+field:result.restore
+field:result.zmx
+field:result.remote
+field:result.liveReset
+field:result.pageID
+field:result.pageOutcome
+field:result.restart
+field:tree.workspaces
+field:tree.idleMs
+field:tree.autoFollowMs
+field:tree.sidebarVisible
+field:tree.sidebarMode
+field:tree.sidebarFlaggedLayout
+field:tree.linkOpenMode
+field:tree.sidebarWidth
+field:tree.workspaceFilter
+field:tree.quickVisible
+field:tree.zoomedSurface
+field:tree.dashboardMembers
+field:tree.dashboardHighlighted
+field:tree.dashboardFontSize
+field:tree.dashboardFontMode
+field:tree.pickPending
+field:tree.askPending
+field:tree.app
+field:tree.liveReset
+field:tree.indexUnsaved
+field:tree.workspace.id
+field:tree.workspace.name
+field:tree.workspace.active
+field:tree.workspace.focused
+field:tree.workspace.collapsed
+field:tree.workspace.sessions
+field:tree.session.id
+field:tree.session.name
+field:tree.session.cwd
+field:tree.session.splitCwd
+field:tree.session.title
+field:tree.session.active
+field:tree.session.split
+field:tree.session.hasSplit
+field:tree.session.backedByZmx
+field:tree.session.liveAttribution
+field:tree.session.splitLiveAttribution
+field:tree.session.splitAxis
+field:tree.session.splitRatio
+field:tree.session.splitFocused
+field:tree.session.overlay
+field:tree.session.overlaySizePercent
+field:tree.session.paneOverlays
+field:tree.session.hud
+field:tree.session.ask
+field:tree.session.scratch
+field:tree.session.flagged
+field:tree.session.context
+field:tree.session.commandWait
+field:tree.session.splitCommandWait
+field:tree.session.foreground
+field:tree.session.splitForeground
+field:tree.session.foregroundShell
+field:tree.session.splitForegroundShell
+field:tree.session.restoreCommand
+field:tree.session.splitRestoreCommand
+field:tree.session.status
+field:tree.session.statusPane
+field:tree.session.statusBlink
+field:tree.session.statusColor
+field:tree.session.statusShape
+field:tree.session.statusChangedAt
+field:tree.session.background
+field:tree.session.paneBackgrounds
+field:tree.session.unseen
+field:tree.session.fontSize
+field:tree.session.splitFontSize
+field:tree.session.scratchFontSize
+field:tree.session.surfaces
+field:tree.session.realized
+field:tree.session.remoteHost
+field:tree.session.presentation
+field:tree.session.presenters
+field:tree.session.remoteOverlays
+field:tree.session.htmlOverlays
+field:window.id
+field:window.name
+field:window.open
+field:window.active
+field:window.autoFollowMs
+field:window.sidebarVisible
+field:window.geometry
+field:window.fullscreen
+field:window.zoomed
+field:window.minimized
+
+# events
+event:status
+event:notify
+event:session.created
+event:session.closed
+event:session.selected
+event:tree.changed
+event:pane.split
+event:pane.scratch
+event:remote.opened
+event:remote.closed
+
+# cli
+cli:tree
+cli:events
+cli:workspace new
+cli:workspace rename
+cli:workspace delete
+cli:workspace select
+cli:workspace go
+cli:workspace move
+cli:workspace focus
+cli:workspace filter
+cli:workspace collapse
+cli:workspace expand
+cli:session new
+cli:session duplicate
+cli:session close
+cli:session select
+cli:session rename
+cli:session reveal
+cli:session move
+cli:session go
+cli:session type
+cli:session copy
+cli:session paste
+cli:session select-all
+cli:session text
+cli:session search
+cli:session split
+cli:session split close
+cli:session swap
+cli:session restart
+cli:session lead
+cli:session scratch
+cli:session focus
+cli:session resize
+cli:session status
+cli:session flag
+cli:session context
+cli:session seen
+cli:session background image
+cli:session background text
+cli:session background color
+cli:session background clear
+cli:session restore
+cli:session overlay open
+cli:session overlay resize
+cli:session overlay reload
+cli:session overlay navigate
+cli:session overlay submit
+cli:session overlay close
+cli:session overlay result
+cli:session overlay copy
+cli:session overlay text
+cli:session hud
+cli:session hud update
+cli:session hud close
+cli:window new
+cli:window list
+cli:window select
+cli:window go
+cli:window close
+cli:window rename
+cli:window delete
+cli:window resize
+cli:window move
+cli:window zoom
+cli:window fullscreen
+cli:window minimize
+cli:surface zoom
+cli:surface cursor
+cli:dashboard
+cli:pick
+cli:pick result
+cli:pick cancel
+cli:ask
+cli:ask result
+cli:ask cancel
+cli:quick
+cli:quick type
+cli:quick text
+cli:sidebar
+cli:sidebar mode
+cli:sidebar flagged-layout
+cli:sidebar expand
+cli:sidebar collapse
+cli:sidebar width
+cli:notify
+cli:font inc
+cli:font dec
+cli:font reset
+cli:theme list
+cli:theme set
+cli:keymap reload
+cli:keymap run
+cli:keymap list
+cli:hooks reload
+cli:hooks list
+cli:browser clear
+cli:browser links
+cli:config reload
+cli:restore capture
+cli:restore clear
+cli:restore mode
+cli:zmx list
+cli:zmx screen
+cli:zmx prune
+cli:zmx kill
+cli:zmx reset
+cli:zmx tree
+cli:zmx attach
+cli:zmx present
+cli:session overlay run-job
+cli:clipboard set
+cli:terminfo install
+cli:version
+
+# ui
+ui:ask-dialog
+ui:ask-title
+ui:ask-message
+ui:ask-button-{choice}
+ui:dashboard
+ui:dashboard-cell
+ui:dashboard-highlighted
+ui:dashboard-overlay-cover
+ui:dashboard-overlay-cover-source
+ui:dashboard-overlay-cover-title
+ui:htmlOverlay.page
+ui:htmlOverlay.identity
+ui:htmlOverlay.title
+ui:htmlOverlay.error
+ui:palette-scrim
+ui:pick-scrim
+ui:command-palette
+ui:pick-palette
+ui:palette-subtitle
+ui:palette-badge
+ui:palette-item-{item}
+ui:pane-lead-cover-{pane}
+ui:remote-reconnect-note-{pane}
+ui:quick-terminal
+ui:session-switcher
+ui:settings-scroll-speed
+ui:settings-right-click-paste
+ui:settings-link-open-mode
+ui:settings-workspace-row-click-expands
+ui:settings-new-session-directory
+ui:settings-new-session-custom-dir
+ui:settings-new-session-choose
+ui:settings-new-session-placement
+ui:settings-restore-mode
+ui:settings-restore-restart-hint
+ui:settings-confirm-close-session
+ui:settings-close-grace-undo
+ui:settings-flagged-view-layout
+ui:settings-inherit-global-ghostty
+ui:settings-font-family
+ui:settings-font-size
+ui:settings-cursor-style
+ui:settings-cursor-blink
+ui:settings-theme
+ui:settings-follow-appearance
+ui:settings-theme-dark
+ui:settings-toolbar-mode
+ui:settings-bg-opacity
+ui:settings-bg-blur
+ui:settings-sidebar-shift
+ui:settings-sidebar-font-size
+ui:settings-interface-font-size
+ui:settings-inactive-pane-mute
+ui:settings-auto-hide-inactive-sidebars
+ui:settings-quick-terminal-size
+ui:settings-interface-{element}
+ui:settings-notifications
+ui:settings-notification-badges
+ui:settings-dock-bounce
+ui:settings-notification-sound
+ui:settings-attention-button
+ui:settings-status-blocked-sound
+ui:settings-status-clear
+ui:settings-auto-follow
+ui:settings-auto-follow-stay-active
+ui:settings-status-reset
+ui:settings-status-{status}
+ui:settings-status-shape-{status}
+ui:settings-keymap-directory
+ui:settings-keymap-choose
+ui:settings-keymap-default
+ui:settings-keymap-diagnostics
+ui:settings-keymap-reload
+ui:settings-hooks-diagnostics
+ui:settings-hooks-reload
+ui:edit-field
+ui:workspace-row
+ui:session-row
+ui:notify-badge
+ui:agent-status
+ui:search-field
+ui:search-counter
+ui:custom-commands-button
+ui:dashboard-exit
+ui:dashboard-toggle-button
+ui:recent-sessions-button
+ui:attention-button
+ui:sidebar-toggle-button
+ui:split-toggle
+ui:scratch-toggle
+ui:quick-terminal-toggle
+ui:terminal-zoom-exit
+ui:terminal-zoom
+ui:add-session
+ui:focus-filter-toggle
+ui:flagged-view-toggle
+ui:workspace-icon
+ui:session-icon
+ui:workspace-add-session
+ui:welcome-install
+ui:welcome-later
+ui:htmlOverlay.back
+ui:htmlOverlay.forward
+ui:htmlOverlay.reload
+ui:htmlOverlay.browser
+ui:htmlOverlay.finder
+ui:htmlOverlay.copy
+ui:htmlOverlay.close
+ui:custom-command-top-row
+ui:custom-command-row
+ui:recent-session-row
+ui:attention-session-row
+ui:welcome-skill-checkbox
+ui:welcome-hooks-checkbox

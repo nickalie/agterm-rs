@@ -23,6 +23,5 @@ jobs:
       - name: self-tests
         run: python -m pytest conformance/selftests
       - name: coverage gate
-        # Advisory until the gate exists (plan Task 9), which drops this line.
-        continue-on-error: true
-        run: python -m pytest conformance --coverage-gate
+        # The baseline accepts today's uncovered items and may only shrink; plan Task 22 drops it.
+        run: python -m pytest conformance --coverage-gate --coverage-baseline conformance/coverage-baseline.txt

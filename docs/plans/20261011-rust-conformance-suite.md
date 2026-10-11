@@ -60,7 +60,8 @@
 ## Testing Strategy
 
 - **self-tests**: `pytest conformance/selftests` — host-free, every PR (ubuntu).
-- **coverage gate**: `pytest conformance --coverage-gate` — no app launch, every PR.
+- **coverage gate**: `pytest conformance --coverage-gate` — no app launch, every PR. Until Task 22 CI accepts the
+  uncovered items listed in `conformance/coverage-baseline.txt`; a task that covers an item deletes its line.
 - **reference-linux**: locally against the installed Swift/GTK fork; protocol and cli layers.
   It is the acceptance gate for every task up to Task 18.
 - **reference-macos**: never on a Mac running the user's live agterm (it would share the `com.umputun.agterm`
@@ -323,13 +324,23 @@ events by kind, CLI by subcommand words (`cli` items carry their `wire`); exempt
 - Create: `conformance/agterm_conformance/coverage.py`
 - Modify: `conformance/agterm_conformance/plugin.py`
 - Create: `conformance/selftests/test_coverage.py`
+- ➕ Create: `conformance/coverage-baseline.txt`
+- ➕ Modify: `.github/workflows/conformance-gate.yml`
 
-- [ ] collect `covers(...)` from all tests without launching anything; compare with commands, fields, events, CLI subcommands, behaviors and ui ids
-- [ ] fail listing uncovered items; flag `covers` naming items absent from the catalog; print coverage percentage per section
-- [ ] exemptions require a non-empty reason
-- [ ] ➕ `--coverage-gate` runs no conformance test (today one using `ctl` errors without `--impl`); drop `continue-on-error` from the coverage step in `conformance-gate.yml`
-- [ ] write self-tests (full coverage, uncovered item, unknown covers target, exemption without reason)
-- [ ] run self-tests — must pass before task 10
+- [x] collect `covers(...)` from all tests without launching anything; compare with commands, fields, events, CLI subcommands, behaviors and ui ids
+- [x] fail listing uncovered items; flag `covers` naming items absent from the catalog; print coverage percentage per section
+- [x] exemptions require a non-empty reason
+- [x] ➕ `--coverage-gate` runs no conformance test (today one using `ctl` errors without `--impl`); drop `continue-on-error` from the coverage step in `conformance-gate.yml`
+  - decided: markers are the only source of coverage; catalog `status` counts only as `removed-upstream` (retired;
+    a `covers`, exemption or baseline entry naming one fails), `covered`/`uncovered` is informational. Declarations
+    come from tests under the catalog's `tests/`, read before any deselection; the gate refuses `--ignore` or a
+    collection that misses `tests/`. A stream-mode command counts only from `covers(..., streams=("zmx.present",))`;
+    templates are covered by their exact spelling (`ui:ask-button-{choice}`).
+  - decided: strict by default (every uncovered item fails). CI passes `--coverage-baseline conformance/coverage-baseline.txt`,
+    one covers key per line, accepted as debt; it may only shrink — an entry that is covered, exempted, unknown,
+    removed or duplicated fails the gate, so the test that covers an item deletes its line.
+- [x] write self-tests (full coverage, uncovered item, unknown covers target, exemption without reason)
+- [x] run self-tests — must pass before task 10
 
 ### Task 10: Protocol foundation — version, tree, addressing, events
 
@@ -420,6 +431,7 @@ events by kind, CLI by subcommand words (`cli` items carry their `wire`); exempt
 - [ ] restore pins and live-session lifecycle; reap with `zmx.kill`/`zmx.reset` before stop
 - [ ] leftover-process check finds no `zmx` / `agterm-session-host` under the instance's `ZMX_DIR`
 - [ ] coverage gate reports no uncovered command, field or event
+- [ ] ➕ no command, field or event entry left in `conformance/coverage-baseline.txt`
 - [ ] run on reference-linux — green before task 18 (reference-macos in Task 19)
 
 ### Task 18: Behaviors and CLI tests
@@ -478,6 +490,7 @@ a push to `nickalie/agterm-rs`. Everything before this task is Linux-only.
 
 - [ ] UI tests addressed only by `ui-ids.yaml` ids: role, name, state; no tree structure assertions
 - [ ] cover the ids or exempt them with a reason; coverage gate clean for `ui:` items
+- [ ] ➕ no `ui:` entry left in `conformance/coverage-baseline.txt`
 - [ ] add the ui layer to the macOS workflow with `--reruns 1`
 - [ ] run the ui layer on reference-macos — green before task 22
 
@@ -488,6 +501,7 @@ a push to `nickalie/agterm-rs`. Everything before this task is Linux-only.
 - [ ] `--impl=rust` with no binary: everything skipped as not-yet-at-level, parity reported as 0%
 - [ ] no test uses `sleep`; no connection outside the temp root is possible; no leftover processes after a full run
 - [ ] run `pytest conformance/selftests` and `pytest conformance --coverage-gate`
+- [ ] ➕ delete `conformance/coverage-baseline.txt` and its `--coverage-baseline` in `conformance-gate.yml` and `test_coverage.py`
 
 ### Task 23: [Final] Update documentation
 

@@ -67,11 +67,6 @@ def test_missing_impl_ignored_without_impl_fixture(pytester: pytest.Pytester) ->
     pytester.runpytest().assert_outcomes(passed=1)
 
 
-def test_missing_impl_ignored_for_coverage_gate(pytester: pytest.Pytester) -> None:
-    pytester.makepyfile(USES_IMPL)
-    assert pytester.runpytest("--coverage-gate").ret == pytest.ExitCode.OK
-
-
 def test_missing_impl_ignored_when_deselected(pytester: pytest.Pytester) -> None:
     pytester.makepyfile(USES_IMPL + "\ndef test_plain(): pass\n")
     pytester.runpytest("-k", "plain").assert_outcomes(passed=1, deselected=1)
@@ -113,7 +108,7 @@ def test_nonexistent_path(pytester: pytest.Pytester, tmp_path: Path, flag: str) 
 def test_markers_registered(pytester: pytest.Pytester) -> None:
     result = pytester.runpytest("--markers")
     result.stdout.fnmatch_lines(["@pytest.mark.since(version):*", "@pytest.mark.requires(capability, reason=...):*"])
-    result.stdout.fnmatch_lines(["@pytest.mark.covers(*items):*"])
+    result.stdout.fnmatch_lines(["@pytest.mark.covers(*items, streams=()):*"])
 
 
 def test_markers_pass_strict(pytester: pytest.Pytester) -> None:
