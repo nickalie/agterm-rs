@@ -150,6 +150,20 @@ def test_comments_and_strings_do_not_shift_nesting() -> None:
             "custom encode(to:)",
         ),
         (PROJECTION, "public struct ControlTree:", "public struct ControlTreeNode:", "type ControlTree not found"),
+        (PROTOCOL, "    public var id: String?\n", "    public let c, id: String?\n", "unparseable property"),
+        (PROTOCOL, "    public var id: String?\n", "    public consuming var id: String?\n", "unparseable property"),
+        (
+            PROTOCOL,
+            "    public var id: String?\n",
+            "    public var id: String?,\n        extra: Int?\n",
+            "property declaration continues on the next line",
+        ),
+        (
+            PROJECTION,
+            "    public var hasHud: Bool { hud != nil }\n",
+            "    enum CodingKeys: String, CodingKey { case id }\n",
+            "CodingKeys declared in an extension",
+        ),
         (PROJECTION, "        case minimized\n", "        case minimized(Bool)\n", "unparseable enum case"),
         (
             Path("site/commands.html"),
@@ -176,6 +190,40 @@ def test_unparseable_input_is_reported(mini: Path, rel: Path, old: str, new: str
     edit(mini, rel, old, new)
     found = problems(mini)
     assert any(expected in p for p in found), found
+
+
+def test_an_encoder_in_another_files_extension_is_reported(mini: Path) -> None:
+    (mini / "agtermCore/Sources/agtermCore/Extra.swift").write_text(
+        "extension ControlWindowNode {\n    public func encode(to encoder: Encoder) throws {}\n}\n"
+    )
+    assert any("Extra.swift:2: custom encode(to:)" in p for p in problems(mini))
+
+
+def test_property_shapes_that_still_encode_or_do_not(mini: Path) -> None:
+    edit(
+        mini, PROTOCOL, "    public var id: String?\n", "    nonisolated(unsafe) public var id: String?, extra: Int?\n"
+    )
+    edit(
+        mini,
+        PROTOCOL,
+        "    public var tree: ControlTree?\n",
+        "    public var tree: ControlTree? {\n        didSet {}\n    }\n",
+    )
+    edit(
+        mini,
+        PROTOCOL,
+        "    public var isEmpty: Bool { id == nil }\n",
+        "    public var isEmpty: Bool\n    {\n        id == nil\n    }\n",
+    )
+    gen = gc.generate(mini)
+    assert gen.problems == []
+    assert [f for f in gen.fields if f.startswith("result.")] == [
+        "result.id",
+        "result.extra",
+        "result.ratio",
+        "result.tree",
+        "result.note",
+    ]
 
 
 def test_a_duplicate_type_is_reported(mini: Path) -> None:
