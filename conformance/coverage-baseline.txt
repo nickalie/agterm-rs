@@ -3,11 +3,6 @@
 # an item deletes its line. The plan's Task 22 deletes the file.
 
 # commands
-workspace.new
-workspace.rename
-workspace.delete
-workspace.select
-workspace.go
 session.new
 session.duplicate
 session.close
@@ -16,11 +11,6 @@ session.go
 session.rename
 session.reveal
 session.move
-workspace.move
-workspace.focus
-workspace.filter
-workspace.collapse
-workspace.expand
 session.type
 session.status
 session.flag
@@ -147,8 +137,6 @@ field:tree.pickPending
 field:tree.askPending
 field:tree.liveReset
 field:tree.indexUnsaved
-field:tree.workspace.focused
-field:tree.workspace.collapsed
 field:tree.session.splitCwd
 field:tree.session.title
 field:tree.session.hasSplit

@@ -362,10 +362,11 @@ events by kind, CLI by subcommand words (`cli` items carry their `wire`); exempt
 
 **Files:**
 - Create: `conformance/tests/protocol/test_workspace.py`
+- ➕ Modify: `conformance/coverage-baseline.txt`
 
-- [ ] one test per workspace command: effect, read-back in `tree`, emitted events
-- [ ] error cases with exact dispatcher error text (from the `agtermCore/Tests` dispatcher tests)
-- [ ] run on reference-linux — green before task 12 (reference-macos in Task 19)
+- [x] one test per workspace command: effect, read-back in `tree`, emitted events
+- [x] error cases with exact dispatcher error text (from the `agtermCore/Tests` dispatcher tests)
+- [x] run on reference-linux — green before task 12 (reference-macos in Task 19)
 
 ### Task 12: Protocol — session and pane commands
 
