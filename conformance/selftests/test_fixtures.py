@@ -437,6 +437,18 @@ def test_wait_event_rejects_an_event_of_another_kind() -> None:
     assert not isinstance(caught.value, WaitTimeout)
 
 
+@pytest.mark.parametrize("seq", [9, 10, "11", None])
+def test_wait_event_rejects_an_event_at_or_before_the_cursor(seq: object) -> None:
+    class IgnoresCursor:
+        def request(self, cmd: str, target: str | None = None, **args: object) -> Response:
+            batch = {"run": "r", "next": 11, "items": [{"seq": seq, "kind": "status", "session": "s1"}]}
+            return Response(ok=True, result={"events": batch}, error=None, raw={})
+
+    with pytest.raises(AssertionError, match="events.read after seq 10 returned .*status") as caught:
+        wait_event(IgnoresCursor(), Cursor("r", 10), "status", timeout=5)
+    assert not isinstance(caught.value, WaitTimeout)
+
+
 def test_wait_event_fails_fast_on_a_cursor_error(ctl: Ctl) -> None:
     started = time.monotonic()
     with pytest.raises(AssertionError, match="event run changed") as caught:
