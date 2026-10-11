@@ -10,18 +10,7 @@ dashboard
 session.copy
 session.paste
 session.selectall
-session.overlay.open
-session.overlay.close
-session.overlay.resize
-session.overlay.reload
-session.overlay.navigate
-session.overlay.result
-session.overlay.submit
 session.overlay.copy
-session.overlay.text
-session.hud.open
-session.hud.update
-session.hud.close
 quick
 quick.type
 quick.text
@@ -56,12 +45,6 @@ browser.links
 config.reload
 theme.set
 theme.list
-pick.open
-pick.result
-pick.cancel
-ask.open
-ask.result
-ask.cancel
 restore.clear
 restore.capture
 restore.mode
@@ -77,7 +60,6 @@ session.overlay.job.run
 # fields
 field:result.width
 field:result.height
-field:result.exitCode
 field:result.theme
 field:result.themes
 field:result.sidebarWidth
@@ -86,15 +68,11 @@ field:result.light
 field:result.dark
 field:result.keymap
 field:result.hooks
-field:result.pick
-field:result.ask
 field:result.cursor
 field:result.restore
 field:result.zmx
 field:result.remote
 field:result.liveReset
-field:result.pageID
-field:result.pageOutcome
 field:result.restart
 field:tree.idleMs
 field:tree.autoFollowMs
@@ -103,18 +81,12 @@ field:tree.dashboardMembers
 field:tree.dashboardHighlighted
 field:tree.dashboardFontSize
 field:tree.dashboardFontMode
-field:tree.pickPending
-field:tree.askPending
 field:tree.liveReset
 field:tree.indexUnsaved
 field:tree.session.title
 field:tree.session.backedByZmx
 field:tree.session.liveAttribution
 field:tree.session.splitLiveAttribution
-field:tree.session.overlaySizePercent
-field:tree.session.paneOverlays
-field:tree.session.hud
-field:tree.session.ask
 field:tree.session.commandWait
 field:tree.session.splitCommandWait
 field:tree.session.foreground
@@ -129,7 +101,6 @@ field:tree.session.remoteHost
 field:tree.session.presentation
 field:tree.session.presenters
 field:tree.session.remoteOverlays
-field:tree.session.htmlOverlays
 field:window.autoFollowMs
 field:window.geometry
 

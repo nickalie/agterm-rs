@@ -11,7 +11,7 @@ from agterm_conformance.impls.base import Instance
 from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
 from agterm_conformance.match import session_ids
 from agterm_conformance.plugin import Ctl
-from agterm_conformance.wait import Cursor, WaitTimeout, wait_event, wait_text
+from agterm_conformance.wait import Cursor, WaitTimeout, wait_event, wait_response, wait_text
 
 TWO_SESSIONS = {
     "workspaces": [
@@ -591,3 +591,46 @@ def test_wait_text_fails_fast_on_a_broken_reply(response: Response, message: str
     with pytest.raises(AssertionError, match=message) as caught:
         wait_text(pane, "s1", "marker", timeout=5)
     assert not isinstance(caught.value, WaitTimeout) and len(pane.calls) == 1
+
+
+def _overlay_text(ok: bool, text: str | None = None, error: str | None = None) -> Response:
+    result = None if text is None else {"text": text}
+    return Response(ok=ok, result=result, error=error, raw={"ok": ok, "result": result, "error": error})
+
+
+def _marked(response: Response) -> bool:
+    assert response.ok, response.error
+    return "MARK" in response.result["text"]
+
+
+def test_wait_response_repeats_the_request_until_accepted() -> None:
+    overlay = ScriptedText(
+        _overlay_text(False, error="overlay not realized"), _overlay_text(True, ""), _overlay_text(True, "MARK")
+    )
+    response = wait_response(overlay, "session.overlay.text", "s1", _marked, timeout=5, lines=2)
+    assert response.result == {"text": "MARK"}
+    assert overlay.calls == [("session.overlay.text", "s1", {"lines": 2})] * 3
+
+
+def test_wait_response_timeout_shows_the_last_check_and_reply() -> None:
+    overlay = ScriptedText(_overlay_text(False, error="overlay not realized"))
+    expected = (
+        r"(?s)did not satisfy _marked within 0.2s; last check: overlay not realized.*; last reply: .*not realized"
+    )
+    with pytest.raises(WaitTimeout, match=expected):
+        wait_response(overlay, "session.overlay.text", "s1", _marked, timeout=0.2)
+
+
+def test_wait_response_lets_other_errors_through() -> None:
+    def broken(response: Response) -> bool:
+        raise KeyError("text")
+
+    overlay = ScriptedText(_overlay_text(True, "x"))
+    with pytest.raises(KeyError):
+        wait_response(overlay, "session.overlay.text", "s1", broken, timeout=5)
+    assert len(overlay.calls) == 1
+
+
+def test_ctl_wait_response_drives_the_instance(ctl: Ctl) -> None:
+    response = ctl.wait_response("tree", None, lambda reply: reply.ok and session_ids(reply.result) == ["s1"])
+    assert response.ok

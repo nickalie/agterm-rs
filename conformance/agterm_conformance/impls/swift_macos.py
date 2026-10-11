@@ -9,7 +9,16 @@ from agterm_conformance.impls.base import Adapter, LaunchError, Profile
 
 PARITY_LEVEL = "0.36.0"
 BASE_CAPABILITIES = frozenset(
-    {"posix-shell", "window-geometry", "status-shape", "type-rejects-nul", "resize-echoes-ratio", "drop-placement"}
+    {
+        "posix-shell",
+        "window-geometry",
+        "status-shape",
+        "type-rejects-nul",
+        "resize-echoes-ratio",
+        "drop-placement",
+        "overlay-size-validated",
+        "modal-blocks-covers",
+    }
 )
 LAUNCH_MODES = ("uitest", "plain")
 

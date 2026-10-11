@@ -393,11 +393,23 @@ events by kind, CLI by subcommand words (`cli` items carry their `wire`); exempt
 - Create: `conformance/tests/protocol/test_overlay.py`
 - Create: `conformance/tests/protocol/test_hud.py`
 - Create: `conformance/tests/protocol/test_ask_pick.py`
+- ➕ Modify: `conformance/coverage-baseline.txt`
+- ➕ Modify: `conformance/agterm_conformance/{wait,plugin}.py` (`wait_response`: repeat one request until it settles)
+  and `conformance/selftests/test_fixtures.py`
+- ➕ Modify: `conformance/agterm_conformance/impls/{base,swift_macos}.py` (capabilities `overlay-size-validated`,
+  `modal-blocks-covers`: upstream behavior the Linux fork lacks)
 
-- [ ] overlay program/HTML/HUD occupancy and read-back (`overlayActive`, `coverOverlayActive`, `programOverlayActive`)
-- [ ] HUD sticky/frameless/size and self-clearing; ask and pick answered over the protocol
-- [ ] error cases with exact error text
-- [ ] run on reference-linux — green before task 14 (reference-macos in Task 19)
+- [x] overlay program/HTML/HUD occupancy and read-back (`overlayActive`, `coverOverlayActive`, `programOverlayActive`)
+- [x] HUD sticky/frameless/size and self-clearing; ask and pick answered over the protocol
+- [x] error cases with exact error text
+- [x] run on reference-linux — green before task 14 (reference-macos in Task 19)
+- ➕ the three predicates are read back through `overlay` (cover), `hud` beside `overlay: false` (slot taken by a
+  message) and the `overlay` surface node plus `overlay.result`'s running check (program); no protocol command
+  answers an ask or a pick, so over the protocol they reach `pending` and `cancelled` only — answers are the ui
+  layer's (Task 21)
+- ➕ left for later: `session.overlay.copy` (only refusals are reachable: no protocol command makes a selection
+  inside an overlay; Task 16/17 must cover or exempt it), `session.overlay.job.run` (job stream, Task 17),
+  `tree.session.remoteOverlays` (needs a presenting peer)
 
 ### Task 14: Protocol — window, dashboard, quick terminal
 

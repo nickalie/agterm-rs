@@ -63,6 +63,8 @@ CAPABILITIES: Mapping[str, str] = {
     "type-rejects-nul": "`session.type` refuses text carrying a NUL rather than typing the run before it",
     "resize-echoes-ratio": "`session.resize` answers with the applied ratio in `result.ratio`",
     "drop-placement": "`session.move --after/--before` places like a sidebar drop, also above its own anchor",
+    "overlay-size-validated": "`session.overlay.open` refuses a `sizePercent` outside 1...100 rather than clamping it",
+    "modal-blocks-covers": "a pending GUI ask refuses control-driven covers such as `session.search` with `ask pending`",
 }
 
 

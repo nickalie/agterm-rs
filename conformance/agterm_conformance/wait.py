@@ -99,6 +99,37 @@ def wait_mounted(client: Requester, session_id: str, *panes: str, timeout: float
     return wait_tree(client, mounted, timeout)
 
 
+def wait_response(
+    client: Requester,
+    cmd: str,
+    target: str | None,
+    accept: Callable[[Response], Any],
+    timeout: float = DEFAULT_TIMEOUT,
+    **args: Any,
+) -> Response:
+    """Repeat one request until `accept(response)` is truthy and return that response.
+
+    For a reply that settles after the command that set it up, such as an overlay surface coming up. `accept` may
+    also assert: an AssertionError means "not yet", and the last one is in the timeout message.
+    """
+    deadline = time.monotonic() + timeout
+    last_failure = ""
+    while True:
+        response = client.request(cmd, target, **args)
+        try:
+            if accept(response):
+                return response
+            last_failure = ""
+        except AssertionError as error:
+            last_failure = f"; last check: {error}"
+        if time.monotonic() >= deadline:
+            raise WaitTimeout(
+                f"{cmd} did not satisfy {_describe(accept)} within {timeout}s{last_failure}; "
+                f"last reply: {_shown(response.raw)}"
+            )
+        _pause(POLL_INTERVAL)
+
+
 def wait_text(
     client: Requester,
     target: str | None,

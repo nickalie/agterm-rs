@@ -398,6 +398,16 @@ class Ctl:
     ) -> re.Match[str]:
         return wait.wait_text(self, target, pattern, timeout, **args)
 
+    def wait_response(
+        self,
+        cmd: str,
+        target: str | None,
+        accept: Callable[[Response], Any],
+        timeout: float = wait.DEFAULT_TIMEOUT,
+        **args: Any,
+    ) -> Response:
+        return wait.wait_response(self, cmd, target, accept, timeout, **args)
+
     def events_baseline(self) -> wait.Cursor:
         return wait.events_baseline(self)
 
