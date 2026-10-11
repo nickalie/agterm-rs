@@ -206,8 +206,9 @@ class Adapter:
     needs_app_id: ClassVar[bool] = False
 
     def __init__(self, bin: Path | None, ctl: Path | None = None) -> None:
-        self.bin = bin
-        self._ctl = ctl
+        # Absolute now: the child starts in the isolated HOME, where a relative path would not resolve.
+        self.bin = _absolute(bin)
+        self._ctl = _absolute(ctl)
 
     # -- what the implementation claims
 
@@ -290,6 +291,7 @@ class Adapter:
                 )
         except BaseException:
             _release_app_id(app_id)
+            shutil.rmtree(root, ignore_errors=True)
             raise
         instance = Instance(
             process=process,
@@ -314,9 +316,11 @@ class Adapter:
     def stop(self, instance: Instance, cleanup: bool = True) -> None:
         """Reap daemons, SIGTERM the launched pid only, then require no zmx/session-host left behind."""
         try:
-            if instance.process.poll() is None and find_leftovers(instance.zmx_dir):
-                reap_live_sessions(instance)
-            killed = _terminate(instance.process)
+            try:
+                if instance.process.poll() is None and find_leftovers(instance.zmx_dir):
+                    reap_live_sessions(instance)
+            finally:
+                killed = _terminate(instance.process)
             leftovers = find_leftovers(instance.zmx_dir)
         finally:
             _release_app_id(instance.app_id)
@@ -328,6 +332,10 @@ class Adapter:
         if cleanup:
             shutil.rmtree(instance.root, ignore_errors=True)
             _remove_empty_dir(instance.zmx_dir)
+
+
+def _absolute(path: Path | None) -> Path | None:
+    return Path(os.path.abspath(path)) if path is not None else None
 
 
 def make_root() -> Path:
@@ -384,8 +392,11 @@ def reap_live_sessions(instance: Instance) -> None:
     """Best effort over the protocol; whatever survives is reported by the leftover check."""
     try:
         listing = instance.request("zmx.list")
-        entries = (listing.result or {}).get("entries", []) if listing.ok else []
-        for entry in entries:
+        inventory = (listing.result or {}).get("zmx") if listing.ok else None
+        entries = inventory.get("entries") if isinstance(inventory, dict) else None
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict):
+                continue
             if entry.get("state") == "claimed" and entry.get("sessionID") and entry.get("pane"):
                 args: dict[str, Any] = {"pane": entry["pane"], "force": True}
                 if entry.get("windowID"):
@@ -413,24 +424,19 @@ def find_leftovers(zmx_dir: str) -> list[tuple[int, str]]:
     """zmx / agterm-session-host processes carrying this instance's `ZMX_DIR`."""
     marker = f"ZMX_DIR={zmx_dir}"
     return [
-        (pid, command)
-        for pid, command, environ in _processes()
-        if marker in environ and _program_name(command) in LEFTOVER_NAMES
+        (pid, command) for pid, name, command, environ in _processes() if marker in environ and name in LEFTOVER_NAMES
     ]
 
 
-def _program_name(command: str) -> str:
-    return os.path.basename(command.split(" ", 1)[0]) if command else ""
-
-
-def _processes() -> Iterable[tuple[int, str, list[str]]]:
+def _processes() -> Iterable[tuple[int, str, str, list[str]]]:
+    """(pid, program name, command, environ) for every readable process."""
     if os.path.isdir("/proc/self"):
         yield from _proc_processes()
     else:
         yield from _ps_processes()
 
 
-def _proc_processes() -> Iterable[tuple[int, str, list[str]]]:
+def _proc_processes() -> Iterable[tuple[int, str, str, list[str]]]:
     for entry in os.scandir("/proc"):
         if not entry.name.isdigit():
             continue
@@ -440,10 +446,11 @@ def _proc_processes() -> Iterable[tuple[int, str, list[str]]]:
             executable = os.readlink(f"/proc/{entry.name}/exe")
         except OSError:
             continue  # gone, or another user's process
-        yield int(entry.name), executable.removesuffix(" (deleted)"), environ
+        executable = executable.removesuffix(" (deleted)")
+        yield int(entry.name), os.path.basename(executable), executable, environ
 
 
-def _ps_processes() -> Iterable[tuple[int, str, list[str]]]:
+def _ps_processes() -> Iterable[tuple[int, str, str, list[str]]]:
     # [Unverified until Task 19] macOS `ps -E` appends the environment to the command for own processes.
     output = subprocess.run(
         ["ps", "-E", "-ww", "-o", "pid=,command=", "-u", str(os.getuid())],
@@ -454,7 +461,8 @@ def _ps_processes() -> Iterable[tuple[int, str, list[str]]]:
     for line in output.splitlines():
         pid, _, command = line.strip().partition(" ")
         if pid.isdigit():
-            yield int(pid), command, command.split(" ")
+            # A command line cannot tell a space inside the executable path from an argument separator.
+            yield int(pid), os.path.basename(command.split(" ", 1)[0]), command, command.split(" ")
 
 
 def _remove_empty_dir(path: str) -> None:

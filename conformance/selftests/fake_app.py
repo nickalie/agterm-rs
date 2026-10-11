@@ -1,7 +1,8 @@
 """A stand-in app for adapter self-tests: serves the JSON-line protocol on `AGTERM_CONTROL_SOCKET`.
 
 FAKE_APP_MODE: serve (default), exit (exit 3 before binding), silent (never binds), refuse (`version` fails),
-ignore-term (serve, ignoring SIGTERM). FAKE_VERSION: JSON for the `version` result.
+ignore-term (serve, ignoring SIGTERM). FAKE_VERSION: JSON for the `version` result. FAKE_ZMX_LIST: JSON
+replacing the `zmx.list` result.
 `fake.adopt {pid}` makes that pid a claimed zmx daemon which `zmx.kill` terminates.
 """
 
@@ -40,11 +41,13 @@ def handle(request: dict) -> dict:
         daemons.append(int(args["pid"]))
         return {"ok": True}
     if cmd == "zmx.list":
+        if "FAKE_ZMX_LIST" in os.environ:
+            return {"ok": True, "result": json.loads(os.environ["FAKE_ZMX_LIST"])}
         entries = [
             {"daemon": f"d{pid}", "state": "claimed", "sessionID": f"s{pid}", "pane": "left", "windowID": "w1"}
             for pid in daemons
         ]
-        return {"ok": True, "result": {"entries": entries}}
+        return {"ok": True, "result": {"zmx": {"entries": entries}}}
     if cmd == "zmx.kill":
         pid = int(request["target"][1:])
         os.kill(pid, signal.SIGTERM)

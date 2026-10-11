@@ -67,9 +67,11 @@ def daemons(tmp_path: Path) -> Iterator[list[subprocess.Popen[bytes]]]:
         process.wait(timeout=5)
 
 
-def spawn_daemon(tmp_path: Path, name: str, zmx_dir: str, spawned: list[subprocess.Popen[bytes]]) -> int:
+def spawn_daemon(
+    tmp_path: Path, name: str, zmx_dir: str, spawned: list[subprocess.Popen[bytes]], directory: str = "daemons"
+) -> int:
     """A copy of `cat` under `name`, blocked on a stdin pipe the test holds."""
-    program = tmp_path / "daemons" / name
+    program = tmp_path / directory / name
     program.parent.mkdir(exist_ok=True)
     if not program.exists():
         shutil.copy2(shutil.which("cat") or "/bin/cat", program)
@@ -219,6 +221,24 @@ def test_duplicate_app_id_is_refused_until_the_owner_stops(roots: list[Path], fa
     adapter.stop(adapter.launch(app_id=app_id))
 
 
+def test_relative_bin_is_resolved_before_the_child_moves_to_its_home(
+    roots: list[Path], fake_bin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    adapter = SwiftLinuxAdapter(fake_bin.relative_to(tmp_path), ctl=Path("install/bin/agtermctl"))
+    assert adapter.bin == fake_bin and adapter.ctl_path == tmp_path / "install" / "bin" / "agtermctl"
+    adapter.stop(adapter.launch())
+
+
+def test_unexecutable_bin_fails_the_launch_and_removes_its_root(roots: list[Path], tmp_path: Path) -> None:
+    program = tmp_path / "agterm-linux"
+    program.write_text("not a program\n")
+    adapter = SwiftLinuxAdapter(program)
+    with pytest.raises(PermissionError):
+        adapter.launch()
+    assert len(roots) == 1 and not roots[0].exists()
+
+
 def test_app_exiting_before_serving_fails_the_launch(
     roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -277,6 +297,24 @@ def test_stop_reaps_claimed_daemons_over_the_protocol(
     assert {"cmd": "zmx.kill", "target": f"s{pid}", "args": {"pane": "left", "force": True, "window": "w1"}} in requests
 
 
+@pytest.mark.parametrize("listing", ['{"zmx": {"entries": null}}', '{"zmx": {"entries": [null, 1]}}', '{"zmx": 1}'])
+def test_malformed_zmx_list_still_terminates_the_app(
+    roots: list[Path],
+    fake_bin: Path,
+    tmp_path: Path,
+    daemons: list[subprocess.Popen[bytes]],
+    monkeypatch: pytest.MonkeyPatch,
+    listing: str,
+) -> None:
+    monkeypatch.setenv("FAKE_ZMX_LIST", listing)
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    spawn_daemon(tmp_path, "zmx", instance.zmx_dir, daemons)
+    with pytest.raises(LeftoverProcesses):
+        adapter.stop(instance)
+    assert instance.process.returncode is not None
+
+
 def test_stop_reports_daemons_left_under_the_instance_zmx_dir(
     roots: list[Path], fake_bin: Path, tmp_path: Path, daemons: list[subprocess.Popen[bytes]]
 ) -> None:
@@ -295,6 +333,14 @@ def test_leftover_check_matches_name_and_zmx_dir(tmp_path: Path, daemons: list[s
     spawn_daemon(tmp_path, "zmx", other, daemons)
     spawn_daemon(tmp_path, "unrelated", mine, daemons)
     assert [pid for pid, _ in find_leftovers(mine)] == [zmx]
+
+
+def test_leftover_check_names_an_executable_whose_path_has_a_space(
+    tmp_path: Path, daemons: list[subprocess.Popen[bytes]]
+) -> None:
+    zmx_dir = "/tmp/agterm-zmx-spaced"
+    pid = spawn_daemon(tmp_path, "zmx", zmx_dir, daemons, directory="Test Install")
+    assert [found for found, _ in find_leftovers(zmx_dir)] == [pid]
 
 
 def test_zmx_dir_is_the_fnv1a_hash_of_the_canonical_state_dir(tmp_path: Path) -> None:
