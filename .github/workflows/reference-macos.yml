@@ -1,0 +1,82 @@
+# The protocol and cli layers against the released upstream app at the catalog's tag. A fresh runner, never a Mac
+# running a live agterm: the reference would share its `com.umputun.agterm` defaults domain.
+name: reference-macos
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "upstream release tag (default: the `upstream` of conformance/catalog.yaml)"
+        required: false
+  pull_request:
+    paths:
+      - conformance/**
+      - .github/workflows/reference-macos.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reference-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reference:
+    # Apple silicon: the upstream release is arm64-only.
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install the suite
+        run: python -m pip install -e conformance
+      - name: resolve the upstream tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="$INPUT_TAG"
+          if [[ -z "$tag" && -f conformance/catalog.yaml ]]; then
+            tag="$(sed -nE "s/^upstream:[[:space:]]*[\"']?([^\"'[:space:]#]+).*/\1/p" conformance/catalog.yaml | head -n 1)"
+          fi
+          if [[ -z "$tag" ]]; then
+            echo "::error::no tag input and no upstream: in conformance/catalog.yaml"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/agterm-conformance/reference
+          key: agterm-reference-${{ steps.tag.outputs.tag }}
+      - name: fetch the reference
+        id: reference
+        # bash, not the default `bash -e`: pipefail keeps a fetch failure from passing as tee's 0.
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: python conformance/tools/fetch_reference.py --tag "$TAG" | tee -a "$GITHUB_OUTPUT"
+      - name: protocol and cli layers
+        shell: bash
+        env:
+          BUNDLE: ${{ steps.reference.outputs.bundle }}
+        run: |
+          layers=()
+          for layer in protocol cli; do
+            if [[ -d "conformance/tests/$layer" ]]; then layers+=("conformance/tests/$layer"); fi
+          done
+          mkdir -p report
+          python -m pytest "${layers[@]}" --impl swift-macos --bin "$BUNDLE" -ra \
+            --junitxml report/junit.xml 2>&1 | tee report/pytest.log
+      - name: upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reference-macos-${{ steps.tag.outputs.tag }}
+          # A failed launch keeps its /tmp/agt-* root; its app log is the diagnosis.
+          path: |
+            report/
+            /tmp/agt-*/app.log
+          if-no-files-found: warn

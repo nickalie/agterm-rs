@@ -271,12 +271,14 @@ New items are `uncovered`, and vanished items are `removed-upstream`.
 - Create: `.github/workflows/reference-macos.yml`
 - Create: `.github/workflows/conformance-gate.yml`
 - Create: `conformance/tools/run-reference-linux.sh`
+- ➕ Create: `conformance/tests/protocol/test_version.py` (the trivial `version` test; Task 10 extends it)
+- ➕ Create: `conformance/selftests/test_run_reference_linux.py`
 
-- [ ] macOS job when `conformance/**` changes: fetch the reference at `catalog.upstream`, run `tests/protocol` and `tests/cli`, upload the report
-- [ ] ubuntu job on every PR: self-tests plus coverage gate (gate starts enforcing after Task 9)
-- [ ] local `run-reference-linux.sh` for the installed fork, producing a report to attach to PRs
-- [ ] one trivial protocol test (`version`) green via `run-reference-linux.sh`; the workflows' first run on a PR happens in Task 19
-- [ ] run self-tests — must pass before task 7
+- [x] macOS job when `conformance/**` changes: fetch the reference at `catalog.upstream`, run `tests/protocol` and `tests/cli`, upload the report
+- [x] ubuntu job on every PR: self-tests plus coverage gate (gate starts enforcing after Task 9)
+- [x] local `run-reference-linux.sh` for the installed fork, producing a report to attach to PRs
+- [x] one trivial protocol test (`version`) green via `run-reference-linux.sh`; the workflows' first run on a PR happens in Task 19
+- [x] run self-tests — must pass before task 7
 
 ### Task 7: Catalog generator — commands, fields, events, CLI
 
@@ -316,6 +318,7 @@ New items are `uncovered`, and vanished items are `removed-upstream`.
 - [ ] collect `covers(...)` from all tests without launching anything; compare with commands, fields, events, CLI subcommands, behaviors and ui ids
 - [ ] fail listing uncovered items; flag `covers` naming items absent from the catalog; print coverage percentage per section
 - [ ] exemptions require a non-empty reason
+- [ ] ➕ `--coverage-gate` runs no conformance test (today one using `ctl` errors without `--impl`); drop `continue-on-error` from the coverage step in `conformance-gate.yml`
 - [ ] write self-tests (full coverage, uncovered item, unknown covers target, exemption without reason)
 - [ ] run self-tests — must pass before task 10
 
