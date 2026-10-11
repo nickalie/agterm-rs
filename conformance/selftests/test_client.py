@@ -13,6 +13,7 @@ from agterm_conformance.client import (
     BadResponse,
     Client,
     ClientTimeout,
+    ConnectFailed,
     NoResponse,
     RequestTooLarge,
     ResponseTooLarge,
@@ -23,11 +24,15 @@ Handler = Callable[[bytes], bytes | None]
 
 
 class FakeServer:
-    """Serves one connection at a time; `handler` maps the request line to raw reply bytes (None: close)."""
+    """Serves one connection at a time; `handler` maps the request line to raw reply bytes (None: close).
 
-    def __init__(self, path: Path, handler: Handler) -> None:
+    With `limit`, it stops reading once the line exceeds it and leaves the rest unread, as the references do.
+    """
+
+    def __init__(self, path: Path, handler: Handler, limit: int | None = None) -> None:
         self.path = path
         self.handler = handler
+        self.limit = limit
         self.lines: list[bytes] = []
         self.release = threading.Event()
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -45,7 +50,10 @@ class FakeServer:
             with conn:
                 line = bytearray()
                 while not line.endswith(b"\n"):
-                    chunk = conn.recv(65536)
+                    if self.limit is not None and len(line) > self.limit:
+                        break
+                    size = 65536 if self.limit is None else min(65536, self.limit + 1 - len(line))
+                    chunk = conn.recv(size)
                     if not chunk:
                         break
                     line += chunk
@@ -71,11 +79,11 @@ def root() -> Iterator[Path]:
 
 
 @pytest.fixture
-def serve(root: Path) -> Iterator[Callable[[Handler], FakeServer]]:
+def serve(root: Path) -> Iterator[Callable[..., FakeServer]]:
     servers: list[FakeServer] = []
 
-    def start(handler: Handler) -> FakeServer:
-        servers.append(FakeServer(root / "s.sock", handler))
+    def start(handler: Handler, limit: int | None = None) -> FakeServer:
+        servers.append(FakeServer(root / "s.sock", handler, limit))
         return servers[-1]
 
     yield start
@@ -134,10 +142,21 @@ def test_request_at_cap_is_sent(serve, root: Path) -> None:
 
 
 def test_cap_check_can_be_skipped(serve, root: Path) -> None:
-    server = serve(lambda _line: None)
+    server = serve(lambda _line: None, limit=MAX_REQUEST_LINE_BYTES)
     with pytest.raises(NoResponse):
         Client(server.path, root).send_line(b"x" * (MAX_REQUEST_LINE_BYTES + 1), check_cap=False)
-    assert len(server.lines[0]) == MAX_REQUEST_LINE_BYTES + 2
+    assert server.lines == [b"x" * (MAX_REQUEST_LINE_BYTES + 1)]
+
+
+def test_over_cap_reply_before_close_is_read(serve, root: Path) -> None:
+    server = serve(reply({"ok": False, "error": "request too large or read failed"}), limit=MAX_REQUEST_LINE_BYTES)
+    resp = Client(server.path, root).send_line(b"x" * (4 * MAX_REQUEST_LINE_BYTES), check_cap=False)
+    assert (resp.ok, resp.error) == (False, "request too large or read failed")
+
+
+def test_missing_socket(root: Path) -> None:
+    with pytest.raises(ConnectFailed):
+        Client(root / "s.sock", root).request("tree")
 
 
 def test_oversized_response(serve, root: Path) -> None:

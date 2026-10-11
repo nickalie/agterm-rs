@@ -41,6 +41,12 @@ def test_subset_match_ignores_extra_fields() -> None:
     assert_subset(TREE, {"tree": {"sidebarVisible": True, "workspaces": [{"id": "w1"}, {"name": "two"}]}})
 
 
+def test_subset_unwraps_response() -> None:
+    assert_subset(response({"ok": True, "result": TREE}), {"tree": {"sidebarVisible": True}})
+    with pytest.raises(AssertionError, match="'no such session'"):
+        assert_subset(response({"ok": False, "error": "no such session"}), {})
+
+
 def test_subset_missing_field() -> None:
     with pytest.raises(AssertionError, match=r"\$\.tree\.idleMs: missing"):
         assert_subset(TREE, {"tree": {"idleMs": 3}})

@@ -48,7 +48,7 @@ def assert_error(resp: Response, text: str | None = None) -> None:
 
 
 def assert_subset(actual: Any, expected: Any, *, tol: float = DEFAULT_TOLERANCE) -> None:
-    mismatch = _mismatch(actual, expected, "$", tol)
+    mismatch = _mismatch(_unwrap(actual), expected, "$", tol)
     assert mismatch is None, mismatch
 
 

@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-# ControlWire.maxRequestLineBytes, newline excluded: over it the server drops the line and closes.
+# ControlWire.maxRequestLineBytes, newline excluded: over it the server stops reading and closes
+# (macOS first replies ok:false "request too large or read failed"; Linux sends nothing).
 MAX_REQUEST_LINE_BYTES = 1 << 20
 # agtermctl's response cap; `session.text --all` can carry several MiB of scrollback.
 MAX_RESPONSE_LINE_BYTES = 64 << 20
@@ -35,6 +36,10 @@ class ResponseTooLarge(ClientError):
 
 class ClientTimeout(ClientError):
     pass
+
+
+class ConnectFailed(ClientError):
+    """The socket is missing or refuses connections: the instance is not (or no longer) serving."""
 
 
 class NoResponse(ClientError):
@@ -118,10 +123,22 @@ class Client:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             try:
                 sock.settimeout(timeout)
-                sock.connect(os.fspath(self.socket_path))
+                try:
+                    sock.connect(os.fspath(self.socket_path))
+                except TimeoutError:
+                    raise
+                except OSError as error:
+                    raise ConnectFailed(f"cannot connect to {self.socket_path}: {error}") from error
                 sock.settimeout(_remaining(deadline))
-                sock.sendall(data)
-                return self._read_line(sock, deadline)
+                try:
+                    sock.sendall(data)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # The server stopped reading at its line cap; a reply it sent first is still queued.
+                try:
+                    return self._read_line(sock, deadline)
+                except ConnectionResetError as error:
+                    # Linux resets the peer when the server closes with request bytes unread.
+                    raise NoResponse(f"connection reset before a response line from {self.socket_path}") from error
             except TimeoutError:
                 raise ClientTimeout(f"no response from {self.socket_path} within {timeout}s") from None
 
