@@ -165,7 +165,9 @@ Sources:
 Per-command wire args are not cataloged.
 Merge rules: generated sections are replaced. `behaviors` and `exemptions` are preserved.
 New items are `uncovered`, and vanished items are `removed-upstream`.
-`debug.appearance` is auto-exempted. Streaming, ssh and job-frame commands are decided in Task 7.
+`debug.appearance` is auto-exempted. Streaming, ssh and job-frame commands: see Task 7.
+Item keys: commands by wire name, fields as `result.*`, `tree.*`, `tree.workspace.*`, `tree.session.*`, `window.*`,
+events by kind, CLI by subcommand words (`cli` items carry their `wire`); exemption keys use the `covers` spelling.
 
 ### Comparison rules
 
@@ -288,12 +290,16 @@ New items are `uncovered`, and vanished items are `removed-upstream`.
 - Create: `conformance/selftests/test_gen_catalog.py`
 - Create: `conformance/selftests/fixtures/upstream-mini/`
 
-- [ ] commands from the enum (all 110, including implicit raw values); fields from the Codable properties of `ControlResult` and the tree/window/session nodes; events from `ControlEvents.swift`; CLI subcommands from `commands.html` synopses
-- [ ] auto-exempt `debug.appearance`; decide and record exemption vs a stream mode for `zmx.present`, `session.overlay.job.run`, `zmx.tree`, `zmx.attach`
-- [ ] merge into the existing catalog: replace generated sections, keep `behaviors` / `exemptions`, mark `uncovered` / `removed-upstream`
-- [ ] generate the initial catalog for the current upstream tag and review the diff by hand
-- [ ] write self-tests against a trimmed upstream fixture tree (parse, implicit raw values, merge preserving manual sections, removed items, auto-exemption, unparseable input reported instead of dropped)
-- [ ] run self-tests — must pass before task 8
+- [x] commands from the enum (all 110, including implicit raw values); fields from the Codable properties of `ControlResult` and the tree/window/session nodes; events from `ControlEvents.swift`; CLI subcommands from `commands.html` synopses
+- [x] auto-exempt `debug.appearance`; decide and record exemption vs a stream mode for `zmx.present`, `session.overlay.job.run`, `zmx.tree`, `zmx.attach`
+  - decided: `zmx.present` (`mode: presentation-stream`) and `session.overlay.job.run` (`mode: job-stream`) stay commands and count as
+    covered only by a test that drives the stream after the ok (Task 17 extends the client); `zmx.tree` is covered by its hostless
+    form, its ssh branch is the generated behavior `zmx.tree.remote-host`, exempted; `zmx.attach` is exempted whole (a successful
+    attach re-discovers over ssh), its refusals still tested. Generated exemptions and behaviors are inserted only when missing.
+- [x] merge into the existing catalog: replace generated sections, keep `behaviors` / `exemptions`, mark `uncovered` / `removed-upstream`
+- [x] generate the initial catalog for the current upstream tag and review the diff by hand
+- [x] write self-tests against a trimmed upstream fixture tree (parse, implicit raw values, merge preserving manual sections, removed items, auto-exemption, unparseable input reported instead of dropped)
+- [x] run self-tests — must pass before task 8
 
 ### Task 8: UI identifier extraction
 
