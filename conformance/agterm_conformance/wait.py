@@ -100,6 +100,9 @@ def wait_event(
         response = client.request("events.read", run=cursor.run, after=str(after), kinds=[kind], limit=PAGE_LIMIT)
         batch = _batch(response, f"waiting for {kind}")
         for event in batch["items"]:
+            # The kinds filter is behavior under test, not something to trust.
+            if not isinstance(event, Mapping) or event.get("kind") != kind:
+                raise AssertionError(f"events.read filtered to {kind!r} returned {_shown(event)}")
             if _accepts(match, event):
                 return event
             rejected.append(event)

@@ -6,11 +6,12 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from agterm_conformance.client import Response
 from agterm_conformance.impls.base import Instance
 from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
 from agterm_conformance.match import session_ids
 from agterm_conformance.plugin import Ctl
-from agterm_conformance.wait import Cursor, WaitTimeout
+from agterm_conformance.wait import Cursor, WaitTimeout, wait_event
 
 TWO_SESSIONS = {
     "workspaces": [
@@ -185,6 +186,28 @@ def test_rust_without_a_profile_is_below_every_level(
     result.assert_outcomes(skipped=3)
     result.stdout.fnmatch_lines(["*not-yet-at-level: rust reports no parity level"])
     assert len(roots) == 1, "one probe launch, no test instance"
+
+
+def test_explicit_skips_win_before_the_rust_probe(
+    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_APP_MODE", "exit")
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.skip(reason="plain")
+        def test_skip(ctl):
+            pass
+
+        @pytest.mark.skipif(True, reason="never here")
+        def test_skipif(cli):
+            pass
+        """
+    )
+    result = run_suite(pytester, "--impl", "rust", "--bin", str(fake_bin))
+    result.assert_outcomes(skipped=2)
+    assert roots == []
 
 
 @pytest.mark.parametrize(
@@ -401,6 +424,17 @@ def test_wait_event_timeout_lists_what_it_saw(ctl: Ctl) -> None:
         ctl.wait_event(cursor, "status", {"payload": {"status": "busy"}}, timeout=0.3)
     with pytest.raises(WaitTimeout, match="no session.closed event within 0.3s .*saw none of that kind"):
         ctl.wait_event(cursor, "session.closed", timeout=0.3)
+
+
+def test_wait_event_rejects_an_event_of_another_kind() -> None:
+    class IgnoresKinds:
+        def request(self, cmd: str, target: str | None = None, **args: object) -> Response:
+            batch = {"run": "r", "next": 1, "items": [{"seq": 1, "kind": "notify", "session": "s1"}]}
+            return Response(ok=True, result={"events": batch}, error=None, raw={})
+
+    with pytest.raises(AssertionError, match="events.read filtered to 'session.created' returned .*notify") as caught:
+        wait_event(IgnoresKinds(), Cursor("r", 0), "session.created", timeout=5)
+    assert not isinstance(caught.value, WaitTimeout)
 
 
 def test_wait_event_fails_fast_on_a_cursor_error(ctl: Ctl) -> None:

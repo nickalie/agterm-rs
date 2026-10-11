@@ -165,9 +165,9 @@ def skip_reason(item: pytest.Item, adapter: Adapter) -> str | None:
     return None
 
 
-@pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item: pytest.Item) -> None:
-    # tryfirst: decided before fixture setup, so a skipped test launches nothing.
+    # Not tryfirst: pytest's own skip markers run first, and registering after `_pytest.runner` still
+    # decides before fixture setup, so a skipped test launches nothing.
     if get_impl_options(item.config).coverage_gate or not _uses_impl(item):
         return
     reason = skip_reason(item, get_adapter(item.config))

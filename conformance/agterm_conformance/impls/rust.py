@@ -7,7 +7,15 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from agterm_conformance.impls.base import LAUNCH_TIMEOUT, NO_PROFILE, Adapter, Instance, Profile, version_tuple
+from agterm_conformance.impls.base import (
+    LAUNCH_TIMEOUT,
+    NO_PROFILE,
+    Adapter,
+    Instance,
+    LaunchError,
+    Profile,
+    version_tuple,
+)
 
 # `version` -> result.conformance = {"parityLevel": "0.36.0", "capabilities": ["posix-shell", ...]}.
 # Optional: a build without it, like a run without a binary, is below every level.
@@ -53,7 +61,8 @@ class RustAdapter(Adapter):
         if self.bin is None:
             return NO_PROFILE
         if self._probe_error is not None:
-            raise self._probe_error
+            # A fresh exception: re-raising the cached one would grow its traceback with every test.
+            raise LaunchError(f"{self.name}: probe launch failed: {self._probe_error}") from self._probe_error
         if self._profile is None:
             # Remembered: a build that cannot launch must not cost every test another launch timeout.
             try:

@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import subprocess
+import traceback
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -460,10 +461,16 @@ def test_rust_malformed_profile_fails_the_launch(
 def test_rust_failed_probe_is_not_retried(roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FAKE_APP_MODE", "exit")
     adapter = RustAdapter(fake_bin)
-    for _ in range(2):
-        with pytest.raises(LaunchError, match="exited with 3"):
+    errors = []
+    for _ in range(3):
+        with pytest.raises(LaunchError, match="exited with 3") as caught:
             adapter.profile
+        errors.append((caught.value, len(traceback.extract_tb(caught.value.__traceback__))))
     assert len(roots) == 1
+    (first, first_frames), (second, second_frames), (third, third_frames) = errors
+    assert second is not third and second.__cause__ is first and third.__cause__ is first
+    assert len(traceback.extract_tb(first.__traceback__)) == first_frames
+    assert second_frames == third_frames
 
 
 # -- per-implementation wiring
