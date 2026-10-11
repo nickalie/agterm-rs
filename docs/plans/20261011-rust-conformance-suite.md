@@ -191,13 +191,13 @@ New items are `uncovered`, and vanished items are `removed-upstream`.
 - Create: `conformance/agterm_conformance/plugin.py`
 - Create: `conformance/selftests/test_plugin_options.py`
 
-- [ ] in the existing local `agterm-rs` repo (no remote; a GitHub repo is the user's call), make `conformance/` a pip-installable package registering a pytest plugin entry point; declare `pytest-rerunfailures`
-- [ ] add options `--impl {swift-macos,swift-linux,rust}`, `--bin`, `--ctl`, `--coverage-gate`
-- [ ] register markers `since`, `requires`, `covers`
-- [ ] scrub `AGTERM_*` and `ZMX_*` from `os.environ` at plugin load so no subprocess inherits a live session
-- [ ] write self-tests for option parsing, marker registration and the env scrub (pytester)
-- [ ] write self-tests for missing/invalid `--impl` and missing `--bin`
-- [ ] run `pytest conformance/selftests` — must pass before task 2
+- [x] in the existing local `agterm-rs` repo (no remote; a GitHub repo is the user's call), make `conformance/` a pip-installable package registering a pytest plugin entry point; declare `pytest-rerunfailures`
+- [x] add options `--impl {swift-macos,swift-linux,rust}`, `--bin`, `--ctl`, `--coverage-gate`
+- [x] register markers `since`, `requires`, `covers`
+- [x] scrub `AGTERM_*` and `ZMX_*` from `os.environ` at plugin load so no subprocess inherits a live session
+- [x] write self-tests for option parsing, marker registration and the env scrub (pytester)
+- [x] write self-tests for missing/invalid `--impl` and missing `--bin`
+- [x] run `pytest conformance/selftests` — must pass before task 2
 
 ### Task 2: Socket client and matchers
 

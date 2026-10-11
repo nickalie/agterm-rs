@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agterm-conformance"
+version = "0.1.0"
+description = "Black-box conformance suite for agterm implementations"
+requires-python = ">=3.11"
+dependencies = [
+    "pytest>=8.0",
+    "pytest-rerunfailures>=14.0",
+]
+
+[project.entry-points.pytest11]
+agterm_conformance = "agterm_conformance.plugin"
+
+[tool.setuptools.packages.find]
+include = ["agterm_conformance*"]
+
+[tool.pytest.ini_options]
+addopts = ["-p", "pytester", "--strict-markers"]
+testpaths = ["selftests", "tests"]
