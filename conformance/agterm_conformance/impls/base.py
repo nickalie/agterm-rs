@@ -45,7 +45,8 @@ SESSION_HOST_NOTE = (
     f"; {SESSION_HOST} is kept alive by the reference itself and the harness may not signal it,"
     " see docs/backlog/harness-stop-for-macos-session-host.md"
 )
-# With SHELL=/bin/sh this is belt and braces: either alone gives a reference-linux pane /bin/sh (docs/spike-macos.md).
+# With SHELL=/bin/sh this is belt and braces: either alone gives a reference-linux pane /bin/sh
+# (conformance/docs/spike-macos.md).
 GHOSTTY_SHELL_CONFIG = "command = /bin/sh\n"
 LAUNCH_TIMEOUT = 30.0
 STOP_TIMEOUT = 10.0

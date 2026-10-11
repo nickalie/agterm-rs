@@ -31,7 +31,8 @@ MARKER = "reference.json"
 API = "https://api.github.com/repos/{repo}/releases/tags/{tag}"
 
 # Mach-O magic and CPU types (mach/machine.h); a fat header is always big-endian.
-_FAT_MAGICS = {0xCAFEBABE: ">2I", 0xCAFEBABF: ">2Q"}
+# Fat magic -> fat_arch entry width; nfat_arch is 32-bit under both.
+_FAT_MAGICS = {0xCAFEBABE: 20, 0xCAFEBABF: 32}
 _THIN_MAGICS = {b"\xcf\xfa\xed\xfe": "<", b"\xce\xfa\xed\xfe": "<", b"\xfe\xed\xfa\xcf": ">", b"\xfe\xed\xfa\xce": ">"}
 _CPU_TYPES = {0x01000007: "x86_64", 0x0100000C: "arm64", 7: "i386", 12: "arm"}
 
@@ -42,6 +43,7 @@ class FetchError(Exception):
 
 @dataclass(frozen=True)
 class Reference:
+    repo: str
     tag: str
     asset: str
     digest: str | None
@@ -94,7 +96,7 @@ def macho_archs(path: Path) -> list[str]:
         magic = struct.unpack(">I", head[:4])[0]
         if magic in _FAT_MAGICS:
             count = struct.unpack(">I", head[4:8])[0]
-            width = 32 if magic == 0xCAFEBABF else 20
+            width = _FAT_MAGICS[magic]
             entries = source.read(count * width)
             if count == 0 or len(entries) < count * width:
                 raise FetchError(f"{path} has a truncated universal header")
@@ -111,14 +113,18 @@ def host_arch() -> str:
     return {"aarch64": "arm64", "amd64": "x86_64"}.get(machine.lower(), machine)
 
 
-def read_cached(cache: Path, tag: str) -> Reference | None:
-    """A completed fetch of `tag`, or None when the cache has no usable copy."""
+def read_cached(cache: Path, tag: str, repo: str = DEFAULT_REPO) -> Reference | None:
+    """A completed fetch of `repo`'s `tag`, or None when the cache has no usable copy."""
     try:
         recorded = json.loads((cache / tag / MARKER).read_text())
         reference = Reference(**recorded)
     except (OSError, ValueError, TypeError):
         return None
-    if reference.tag != tag or not Path(reference.bundle, EXECUTABLE).is_file() or not Path(reference.ctl).is_file():
+    if (
+        (reference.repo, reference.tag) != (repo, tag)
+        or not Path(reference.bundle, EXECUTABLE).is_file()
+        or not Path(reference.ctl).is_file()
+    ):
         return None
     return reference
 
@@ -189,7 +195,9 @@ def fetch(
     verify: Callable[[Path], None] | None = None,
 ) -> Reference:
     """The cached reference for `tag`, fetching it first when absent (or when `refresh`)."""
-    if not refresh and (cached := read_cached(cache, tag)) is not None:
+    # Recorded paths are absolute, so the entry still resolves from another working directory.
+    cache = Path(os.path.abspath(cache))
+    if not refresh and (cached := read_cached(cache, tag, repo)) is not None:
         return cached
     get_file, unpack, verify = get_file or download, unpack or extract, verify or verify_signature
     release = release if release is not None else (get_release or fetch_release)(repo, tag)
@@ -217,6 +225,7 @@ def fetch(
         verify(unpacked / BUNDLE)
         final = cache / tag
         reference = Reference(
+            repo=repo,
             tag=tag,
             asset=name,
             digest=want,

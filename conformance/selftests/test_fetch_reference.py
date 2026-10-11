@@ -306,3 +306,20 @@ def test_main_refuses_a_build_the_mac_cannot_run(
     monkeypatch.setattr(fr.sys, "platform", "darwin")
     monkeypatch.setattr(fr, "host_arch", lambda: host)
     assert fr.main(["--tag", "v0.36.0", "--cache", str(tmp_path)]) == code
+
+
+def test_cached_tag_from_another_repository_is_fetched_again(tmp_path: Path) -> None:
+    Network().fetch(tmp_path, release())
+    network = Network()
+    assert network.fetch(tmp_path, release(), repo="someone/agterm").repo == "someone/agterm"
+    assert len(network.files) == 1
+    assert Network(offline=True).fetch(tmp_path, repo="someone/agterm").repo == "someone/agterm"
+
+
+def test_relative_cache_answers_from_another_working_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "sub").mkdir()
+    monkeypatch.chdir(tmp_path)
+    first = Network().fetch(Path("cache"), release())
+    assert Path(first.bundle).is_absolute()
+    monkeypatch.chdir(tmp_path / "sub")
+    assert Network(offline=True).fetch(Path("../cache")) == first

@@ -44,6 +44,8 @@ jobs:
           key: agterm-reference-${{ env.TAG }}
       - name: fetch the reference
         id: reference
+        # bash, not the default `bash -e`: pipefail keeps a fetch failure from passing as tee's 0.
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python conformance/tools/fetch_reference.py --tag "$TAG" | tee -a "$GITHUB_OUTPUT"

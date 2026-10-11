@@ -13,7 +13,7 @@ LAUNCH_MODES = ("uitest", "plain")
 
 
 class SwiftMacosAdapter(Adapter):
-    """Interim choice until Task 19 confirms it on a Mac (docs/spike-macos.md): `uitest` with zmx.
+    """Interim choice until Task 19 confirms it on a Mac (conformance/docs/spike-macos.md): `uitest` with zmx.
 
     `uitest` sets the XCUITest sentinel: window present (FB11763863), no welcome, no quit prompt, and zmx
     off unless `enable_zmx`. `plain` is a bare exec.

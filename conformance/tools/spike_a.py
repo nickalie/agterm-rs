@@ -5,7 +5,8 @@ the pane's shell with `session.type` + `session.text`.
 `--mechanism` decides how the instance is told to run /bin/sh, so one run per mechanism shows which one the
 reference honours: `both` is what the harness ships, `config` keeps only `command = /bin/sh` in the scoped
 ghostty.conf (SHELL points at a decoy), `env` keeps only SHELL=/bin/sh, `none` keeps neither.
-Prints a JSON report; exits 0 when the probe line came back from /bin/sh.
+Prints a JSON report, launch and stop failures included; exits 0 when the probe line came back from /bin/sh and
+the instance stopped cleanly.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agterm_conformance.impls.base import GHOSTTY_SHELL_CONFIG, Adapter, Instance
+from agterm_conformance.impls.base import GHOSTTY_SHELL_CONFIG, Adapter, Instance, LaunchError, StopError
 from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
 from agterm_conformance.impls.swift_macos import LAUNCH_MODES, SwiftMacosAdapter
 from agterm_conformance.match import active_session_id, assert_ok
@@ -80,7 +81,11 @@ def run(adapter: Adapter, mechanism: str, timeout: float) -> dict[str, Any]:
         "launchMode": getattr(adapter, "launch_mode", None),
     }
     adapter = with_mechanism(adapter, mechanism)
-    instance = adapter.launch()
+    try:
+        instance = adapter.launch()
+    except LaunchError as error:
+        report["launchError"] = str(error)
+        return report
     report.update(pid=instance.pid, version=instance.version, env={k: instance.env.get(k) for k in ("SHELL", "HOME")})
     try:
         report.update(probe(instance, timeout))
@@ -88,7 +93,10 @@ def run(adapter: Adapter, mechanism: str, timeout: float) -> dict[str, Any]:
         report["error"] = str(error)
     finally:
         report["logTail"] = instance.log_tail(40)
-        adapter.stop(instance)
+        try:
+            adapter.stop(instance)
+        except StopError as error:
+            report["stopError"] = str(error)
     return report
 
 
@@ -108,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
     print(text)
     if args.out is not None:
         args.out.write_text(text + "\n")
-    return 0 if report.get("isSh") else 1
+    return 0 if report.get("isSh") and "stopError" not in report else 1
 
 
 if __name__ == "__main__":
