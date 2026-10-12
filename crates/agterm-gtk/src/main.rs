@@ -1,26 +1,25 @@
-//! `agterm`, the GTK4/libadwaita frontend: one window hosting one libghostty terminal for now.
+//! `agterm`, the GTK4/libadwaita frontend: one window hosting one libghostty terminal for now, and the control socket.
 //!
 //! Startup order matters: the environment is settled while the process has one thread (GDK's GL switch before GTK
 //! starts, ghostty's resources dir), GTK reads its switch at display init, the switch is put back on activate, and
 //! only then is libghostty initialised, which snapshots the environment its shells inherit.
 
+mod app;
 mod clipboard;
 mod ghostty_app;
 mod input;
+mod main_loop;
+mod signals;
 mod surface;
 
 use std::cell::RefCell;
 use std::ffi::OsString;
 
 use adw::prelude::*;
+use agterm_core::paths::ProcessEnv;
 use gtk::glib;
 use tracing_subscriber::EnvFilter;
 
-use crate::surface::{SurfaceSpec, TerminalSurface};
-
-/// The application id the Linux fork registered, kept so this build can take over its state.
-const DEFAULT_APP_ID: &str = "io.github.melonamin.agterm";
-const APP_ID_ENV: &str = "AGTERM_APP_ID";
 const LOG_ENV: &str = "AGTERM_LOG";
 
 /// GDK's switch that keeps GL areas on desktop OpenGL, and the flag to add, for a GTK minor version: libghostty
@@ -85,52 +84,6 @@ fn init_tracing() {
         .init();
 }
 
-fn app_id() -> String {
-    std::env::var(APP_ID_ENV)
-        .ok()
-        .filter(|id| gtk::gio::Application::id_is_valid(id))
-        .unwrap_or_else(|| DEFAULT_APP_ID.to_owned())
-}
-
-fn activate(app: &adw::Application) {
-    if let Some(window) = app.active_window() {
-        window.present();
-        return;
-    }
-    let dark = adw::StyleManager::default().is_dark();
-    if let Err(err) = ghostty_app::start(dark) {
-        tracing::error!(%err, "libghostty did not start");
-        app.quit();
-        return;
-    }
-    let terminal = TerminalSurface::new(SurfaceSpec::default());
-    let header = adw::HeaderBar::new();
-    let content = adw::ToolbarView::new();
-    content.add_top_bar(&header);
-    content.set_content(Some(terminal.widget()));
-    let window = adw::ApplicationWindow::builder()
-        .application(app)
-        .title("agterm")
-        .default_width(960)
-        .default_height(640)
-        .content(&content)
-        .build();
-    let titled = window.downgrade();
-    terminal.connect_title(move |title| {
-        if let Some(window) = titled.upgrade() {
-            window.set_title(Some(title));
-        }
-    });
-    let closing = window.downgrade();
-    terminal.connect_exit(move || {
-        if let Some(window) = closing.upgrade() {
-            window.close();
-        }
-    });
-    window.present();
-    terminal.grab_focus();
-}
-
 fn main() -> glib::ExitCode {
     // SAFETY: first thing in main, while the process has one thread.
     let gl_env = unsafe { GlEnvRestore::prefer_desktop_gl() };
@@ -138,17 +91,22 @@ fn main() -> glib::ExitCode {
     unsafe { ghostty_app::export_resources_dir() };
     init_tracing();
 
-    let app = adw::Application::builder().application_id(app_id()).build();
+    let app = adw::Application::builder()
+        .application_id(app::app_id(&ProcessEnv))
+        .build();
+    // the primary instance only: a launch forwarded to a running agterm exits on its own
+    app.connect_startup(signals::quit_on_sigterm);
     let gl_env = RefCell::new(gl_env);
     app.connect_activate(move |app| {
         if let Some(restore) = gl_env.borrow_mut().take() {
             restore.restore();
         }
-        activate(app);
+        app::activate(app);
     });
     // agterm's arguments are its own, not GApplication's
     let argv0: Vec<String> = std::env::args().take(1).collect();
     let status = app.run_with_args(&argv0);
+    app::shutdown();
     ghostty_app::shutdown();
     status
 }

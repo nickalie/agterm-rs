@@ -100,9 +100,11 @@
      them;
   6. run the gate (below) and append newly green ids to `conformance/rust-passing.txt`.
 - **Gate of every task from Task 7 on**: a full protocol/cli/behaviors run of `run-rust-linux.sh` in the background
-  (an all-green reference run takes about 8 minutes; red tests hit launch and wait timeouts, so early Rust runs are
-  slower: measure in Task 7 and restate here), with the ratchet passing. The ratchet appends the green ids; tests of
-  the task's group that stay red because they use a later command are left to the runner's list of red ids.
+  (an all-green reference run takes about 8 minutes. Measured in Task 7: 48 s with the build cached, since a red
+  test fails on its first unsupported command within a second rather than waiting out a timeout; the run grows
+  toward the reference's 8 minutes as groups go green, so it stays a background run), with the ratchet passing.
+  The ratchet appends the green ids; tests of the task's group that stay red because they use a later command are
+  left to the runner's list of red ids.
 - Idiomatic Rust, not a line-by-line port: one state owner on the GUI main thread, no Observation/actor emulation.
   Port only behavior-significant Swift tests.
 - Complete each task fully before the next; small focused changes.
@@ -494,27 +496,49 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 - Create: `crates/agterm-gtk/src/{app,main_loop,signals}.rs`
 - Create: `crates/agterm-core/src/pane_env.rs`
 - Modify: `.github/workflows/rust-linux.yml`, `docs/plans/20261012-rust-linux-implementation.md` (measured gate duration)
+- ➕ Create: `conformance/tools/webkit_probe.py` (the WebKitGTK spike, runnable locally too)
+- ➕ Modify: `crates/agterm-gtk/{build.rs,src/main.rs,src/surface.rs}` (recorded commit, `teardown_all`),
+  `Cargo.toml` and the crates' manifests (`uuid`, `async-channel`, `glib-unix`), `conformance/README.md`,
+  `conformance/rust-passing.txt`
 
-- [ ] `AGTERM_APP_ID` or `io.github.melonamin.agterm`; `MainLoop` over the GLib main context; the control server on
-      the resolved socket
-- [ ] SIGTERM via `glib::unix_signal_add_local`: tear down the surfaces and quit without a prompt within 10 s
-- [ ] `version` with `parityLevel: "0.36.0"` and `posix-shell`, the first capability of the Rust target profile
+- [x] `AGTERM_APP_ID` or `io.github.melonamin.agterm`; `MainLoop` over the GLib main context; the control server on
+      the resolved socket (`GlibMainLoop` over an `async-channel` drained by a `spawn_local` future; ownership is
+      settled before the shell spawns, the server starts once the window exists, as upstream's `agtermApp`)
+- [x] SIGTERM via `glib::unix_signal_add_local`: tear down the surfaces and quit without a prompt within 10 s
+      (glib 0.22 keeps it in the `glib-unix` crate: `glib_unix::unix_signal_add_local_once`; the main loop closes,
+      the server stops and unlinks its socket, every surface is torn down, the shell exits; measured under headless
+      weston: exit 0, socket removed, shell gone)
+- [x] `version` with `parityLevel: "0.36.0"` and `posix-shell`, the first capability of the Rust target profile
       (Technical Details); one `AppIdentity` feeds `version`, `tree.app` and `TERM_PROGRAM_VERSION`
-      (`control-api.md` > Tree and window read-back)
-- [ ] the pure pane-environment builder per `SurfaceEnvironment.swift` (session and quick-terminal variants, full
+      (`control-api.md` > Tree and window read-back) (`CARGO_PKG_VERSION` plus the commit `build.rs` records from
+      git, or from `AGTERM_BUILD_COMMIT` when set)
+- [x] the pure pane-environment builder per `SurfaceEnvironment.swift` (session and quick-terminal variants, full
       variable set, `.unavailable` socket); the app's single surface gets the session variant. Wiring per surface
-      kind follows in Tasks 11 (primary), 16 (split, scratch) and 17 (quick)
-- [ ] CI: weston + dbus + mesa (`libgl1-mesa-dri`, `libegl-mesa0`); the first step is a spike:
+      kind follows in Tasks 11 (primary), 16 (split, scratch) and 17 (quick) (ids as Foundation's upper-case
+      `uuidString`; the interim surface gets a fresh session id, `AGTERM_PANE=left` and a pane token, no window or
+      workspace id until the model exists)
+- [x] CI: weston + dbus + mesa (`libgl1-mesa-dri`, `libegl-mesa0`); the first step is a spike:
       `run-rust-linux.sh -- -k test_version` on the runner. If headless weston's GL backend cannot host libghostty
       there, stop with ⚠️ and settle the display stack (xvfb + openbox, the fork's CI as the Linux hint) before
       going on. The spike also opens a WebKitGTK view, to learn early whether Ubuntu 24.04's AppArmor userns
-      restriction breaks WebKit's sandbox on the runner
-- [ ] CI: a full-suite job (`run-rust-linux.sh`, protocol/cli/behaviors) after the spike; the node-id report is
-      uploaded as an artifact and new green ids are printed in the job summary
-- [ ] write tests: the builder for every variant and optional field; socket path resolution in the app
-- [ ] measure the full-run duration and restate it in Development Approach
-- [ ] gate: full run in the background; `test_version.py` green except the `tree.app` test (⚠️ Task 10),
-      `cli/test_socket_resolution.py` tests that need only `version` green; ratchet updated
+      restriction breaks WebKit's sandbox on the runner (written, actionlint-clean, and emulated locally: the same
+      `run-rust-linux.sh -- -k test_version` under the private headless weston passes, and
+      `conformance/tools/webkit_probe.py` loads a page and runs its script in a WebKitGTK 2.54 view there; the
+      runner part is not automatable before a push: the first GitHub run decides both, the WebKit step is
+      `continue-on-error` and reports the host's userns sysctls in the job summary)
+- [x] CI: a full-suite job (`run-rust-linux.sh`, protocol/cli/behaviors) after the spike; the node-id report is
+      uploaded as an artifact and new green ids are printed in the job summary (job `conformance`, after the cargo
+      job; the spike steps come first and a failing libghostty spike stops it before the full run; its first
+      GitHub run happens after a push, not automatable here)
+- [x] write tests: the builder for every variant and optional field; socket path resolution in the app
+- [x] measure the full-run duration and restate it in Development Approach (48 s on this machine with the build
+      cached, 47 s of it pytest)
+- [x] gate: full run in the background; `test_version.py` green except the `tree.app` test (⚠️ Task 10),
+      `cli/test_socket_resolution.py` tests that need only `version` green; ratchet updated (14 green and listed:
+      `test_version_reports_the_app_version`, the four `test_socket_resolution.py` tests,
+      `cli/test_cli_output.py::test_version`, and ids that only needed the wire already in place: six
+      `test_undecodable_request_is_refused` cases, a bad-cursor `events` CLI refusal and `zmx.present` without a
+      session; `test_tree_app_is_the_version_identity` stays red until `tree`)
 
 ### Task 8: Model
 

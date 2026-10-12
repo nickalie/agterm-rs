@@ -15,6 +15,9 @@ agterm-ghostty = { path = "crates/agterm-ghostty" }
 agterm-host = { path = "crates/agterm-host" }
 agterm-core = { path = "crates/agterm-core" }
 agterm-server = { path = "crates/agterm-server" }
+async-channel = "2"
+# glib's Unix-only API (SIGTERM on the main loop), a crate of its own; it follows the glib that gtk4 0.11 uses.
+glib-unix = "0.22"
 bitflags = "2"
 clap = { version = "4.6", features = ["derive"] }
 libc = "0.2"
@@ -27,6 +30,7 @@ tempfile = "3"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
 # GTK 4.14 and libadwaita 1.5 are Ubuntu 24.04's, the oldest platform CI builds on.
 gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }

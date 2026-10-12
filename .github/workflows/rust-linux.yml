@@ -1,5 +1,5 @@
 # The Rust workspace on Linux: format, strict clippy, the lint report and cargo test over the vendored libghostty.
-# The conformance run against the staged build joins this job once the app launches (run-rust-linux.sh).
+# Then the staged build under the conformance suite, once the cargo job passes.
 name: rust-linux
 
 on:
@@ -60,3 +60,74 @@ jobs:
         run: scripts/lint-report.sh | tee -a "$GITHUB_STEP_SUMMARY"
       - name: test
         run: cargo test --workspace
+
+  # The staged build under the suite, each instance on its own headless weston and session bus (run-rust-linux.sh).
+  conformance:
+    needs: rust-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+      - name: system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
+            curl xz-utils patch ncurses-bin \
+            weston dbus-daemon libgl1-mesa-dri libegl-mesa0 \
+            python3-gi gir1.2-gtk-4.0 gir1.2-webkit-6.0
+      - name: rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # Saved by the rust-linux job; on a miss build-ghostty.sh fetches its pinned Zig itself.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/agterm-rs/vendor
+          key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
+      - name: libghostty prefix
+        run: scripts/build-ghostty.sh
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: install the suite
+        run: python -m pip install -e conformance
+      # Spike: does WebKit's sandbox start here (Ubuntu 24.04 restricts unprivileged user namespaces through
+      # AppArmor)? Informational until the HTML overlays need it; the view runs under the system python's PyGObject.
+      - name: spike, a WebKitGTK view
+        continue-on-error: true
+        shell: bash
+        run: |
+          status=0
+          python conformance/tools/webkit_probe.py > "$RUNNER_TEMP/webkit-probe.json" || status=$?
+          cat "$RUNNER_TEMP/webkit-probe.json"
+          {
+            echo '### WebKitGTK probe'
+            echo '```json'
+            cat "$RUNNER_TEMP/webkit-probe.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      # Spike: can headless weston's GL backend host libghostty here? A failure stops the job before the full run.
+      - name: spike, version under headless weston
+        run: conformance/tools/run-rust-linux.sh --out conformance/reports/rust-linux-spike -- -k test_version
+      # Exits with the ratchet's status; check_ratchet.py lists the newly green ids in the job summary.
+      - name: full suite (protocol, cli, behaviors)
+        run: conformance/tools/run-rust-linux.sh
+      - name: reports into the summary
+        if: always()
+        shell: bash
+        run: |
+          for report in conformance/reports/rust-linux-spike/report.md conformance/reports/rust-linux/report.md; do
+            if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+          done
+      - name: upload the reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-linux-conformance
+          path: |
+            conformance/reports/rust-linux/
+            conformance/reports/rust-linux-spike/
+          if-no-files-found: warn

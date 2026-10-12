@@ -93,6 +93,14 @@ pub fn lookup(key: SurfaceKey) -> Option<TerminalSurface> {
     TerminalSurface::upgrade(&weak).filter(|surface| !surface.inner.torn_down.get())
 }
 
+/// Tear down every live surface, ending their processes: the quit path, which leaves the widgets to the process exit.
+pub fn teardown_all() {
+    let live: Vec<Weak<Inner>> = SURFACES.with(|surfaces| surfaces.borrow().values().cloned().collect());
+    for surface in live.iter().filter_map(TerminalSurface::upgrade) {
+        surface.teardown();
+    }
+}
+
 /// How many surfaces the registry holds (each one's area is alive).
 #[cfg(test)]
 fn registered() -> usize {
@@ -710,5 +718,12 @@ mod tests {
         assert!(lookup(key).is_none());
         assert_eq!(registered(), 0, "destroy took the key out of the registry");
         assert!(state.upgrade().is_none(), "nothing holds the surface's state");
+
+        let placed = TerminalSurface::new(SurfaceSpec::default());
+        let key = placed.inner.key;
+        container.append(placed.widget());
+        teardown_all();
+        assert!(placed.inner.torn_down.get());
+        assert!(lookup(key).is_none(), "a torn-down surface is not live");
     }
 }

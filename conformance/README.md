@@ -29,6 +29,9 @@ conformance/tools/run-reference-linux.sh [--bin PATH] [-- PYTEST_ARGS...]
 # the Rust build of this checkout: build, stage, protocol, cli and behaviors, then the ratchet;
 # report in conformance/reports/rust-linux/
 conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
+
+# whether a WebKitGTK view's web process starts under the same headless isolation (a CI spike)
+.venv/bin/python conformance/tools/webkit_probe.py
 ```
 
 `--macos-launch-mode plain` replaces the default `uitest` launch (XCUITest sentinel with zmx on).
