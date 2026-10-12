@@ -22,6 +22,7 @@ dependencies = [
  "agterm-proto",
  "agterm-server",
  "clap",
+ "libc",
  "serde_json",
  "tempfile",
 ]

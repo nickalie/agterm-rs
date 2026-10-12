@@ -2,7 +2,8 @@
 //! write the request line, read the single response line, decode it.
 
 use std::fmt;
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, Read};
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -112,6 +113,29 @@ fn read_line(stream: &mut impl Read) -> Option<Vec<u8>> {
     }
 }
 
+/// Writes all of `data` to `stream` with `MSG_NOSIGNAL`, looping over short writes: a peer that hung up yields
+/// `EPIPE` rather than SIGPIPE, whatever the process's SIGPIPE disposition (upstream's `SO_NOSIGPIPE`).
+fn send_all(stream: &UnixStream, mut data: &[u8]) -> io::Result<()> {
+    let fd = stream.as_raw_fd();
+    while !data.is_empty() {
+        let (buf, len) = (data.as_ptr().cast::<libc::c_void>(), data.len());
+        // SAFETY: `fd` is the stream's open socket, borrowed for the call; `buf` and `len` describe the live slice
+        // `data`, which `send` only reads.
+        let sent = unsafe { libc::send(fd, buf, len, libc::MSG_NOSIGNAL) };
+        match usize::try_from(sent) {
+            Ok(0) => return Err(io::Error::from(ErrorKind::WriteZero)),
+            Ok(n) => data = &data[n..],
+            Err(_) => {
+                let error = io::Error::last_os_error();
+                if error.kind() != ErrorKind::Interrupted {
+                    return Err(error);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Sends `request` as one newline-terminated JSON line to `path` and decodes the one response line.
 pub fn send(path: &Path, request: &Request) -> Result<Reply, ClientError> {
     let mut data =
@@ -126,10 +150,9 @@ pub fn send(path: &Path, request: &Request) -> Result<Reply, ClientError> {
     }
     data.push(b'\n');
     let mut stream = connect(path)?;
-    // std ignores SIGPIPE, so a write to a hung-up peer is an EPIPE error here, not a silent death
-    stream
-        .write_all(&data)
-        .map_err(|error| ClientError(format!("write failed: {}", os_message(&error))))?;
+    // main restores SIGPIPE's default action for stdout, so the request goes out with MSG_NOSIGNAL: a write to a
+    // hung-up peer (one that rejected the line) is an EPIPE error here, not a silent death
+    send_all(&stream, &data).map_err(|error| ClientError(format!("write failed: {}", os_message(&error))))?;
     let raw = read_line(&mut stream).ok_or_else(|| ClientError(format!("no response from {}", path.display())))?;
     let response =
         serde_json::from_slice(&raw).map_err(|error| ClientError(format!("could not decode response: {error}")))?;
@@ -165,6 +188,37 @@ mod tests {
     fn read_line_caps_a_runaway_line() {
         let mut input = Cursor::new(vec![b'x'; MAX_LINE_BYTES + READ_CHUNK + 1]);
         assert_eq!(read_line(&mut input), None);
+    }
+
+    /// SIGPIPE in this thread's pending set. A blocked signal is queued even while its action is "ignore", so a
+    /// write that raised it shows up here.
+    fn sigpipe_pending() -> bool {
+        // SAFETY: an all-zero `sigset_t` is a valid (empty) set on Linux, which `sigpending` then overwrites.
+        let mut pending: libc::sigset_t = unsafe { std::mem::zeroed() };
+        // SAFETY: `pending` is a valid, writable `sigset_t`.
+        assert_eq!(unsafe { libc::sigpending(&raw mut pending) }, 0);
+        // SAFETY: `pending` was filled by `sigpending`.
+        (unsafe { libc::sigismember(&raw const pending, libc::SIGPIPE) }) == 1
+    }
+
+    #[test]
+    fn a_hung_up_peer_is_an_error_without_sigpipe() {
+        let (ours, theirs) = UnixStream::pair().unwrap();
+        drop(theirs);
+        // SAFETY: an all-zero `sigset_t` is a valid (empty) set on Linux.
+        let mut block: libc::sigset_t = unsafe { std::mem::zeroed() };
+        // SAFETY: `block` is a valid set and SIGPIPE a valid signal.
+        assert_eq!(unsafe { libc::sigaddset(&raw mut block, libc::SIGPIPE) }, 0);
+        // SAFETY: changes only this test thread's mask; a null old set is allowed.
+        let blocked = unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &raw const block, std::ptr::null_mut()) };
+        assert_eq!(blocked, 0);
+        let result = send_all(&ours, b"{\"cmd\":\"version\"}\n");
+        let raised = sigpipe_pending();
+        // SAFETY: as above; a SIGPIPE left pending is discarded on unblock, its action being "ignore" under libtest.
+        let unblocked = unsafe { libc::pthread_sigmask(libc::SIG_UNBLOCK, &raw const block, std::ptr::null_mut()) };
+        assert_eq!(unblocked, 0);
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::BrokenPipe);
+        assert!(!raised, "the write raised SIGPIPE");
     }
 
     #[test]

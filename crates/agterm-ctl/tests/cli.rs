@@ -6,6 +6,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::Arc;
@@ -286,6 +287,7 @@ fn usage_errors_exit_64_before_connecting() -> TestResult {
         &["version", "extra"],
         &["version", "--socket"],
         &["--socket", "/tmp/x.sock", "version"],
+        &["--json", "version"],
         &["bogus"],
     ] {
         let output = run(dir.path(), &[], args)?;
@@ -293,6 +295,36 @@ fn usage_errors_exit_64_before_connecting() -> TestResult {
         assert_eq!((code, stdout.as_str()), (Some(64), ""), "{args:?}: {stderr}");
         assert!(stderr.starts_with("Error: "), "{args:?}: {stderr}");
         assert!(stderr.contains("\nUsage: agtermctl "), "{args:?}: {stderr}");
+    }
+    Ok(())
+}
+
+/// Runs `agtermctl args` with stdout on a pipe whose reader is already gone, as `agtermctl tree | head -1` once
+/// `head` exits.
+fn run_into_closed_pipe(root: &Path, args: &[&OsStr]) -> TestResult<Output> {
+    let (reader, writer) = io::pipe()?;
+    drop(reader);
+    let mut command = Command::new(AGTERMCTL);
+    command.envs(isolated(root)).args(args).stdout(writer);
+    Ok(command.output()?)
+}
+
+#[test]
+fn a_closed_stdout_ends_the_run_by_sigpipe_not_a_panic() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("agterm.sock");
+    let _server = serve_core(&socket)?;
+    let version = [OsStr::new("version"), OsStr::new("--socket"), socket.as_os_str()];
+    let json = [&version[..], &[OsStr::new("--json")]].concat();
+    for args in [&[][..], &[OsStr::new("--help")], &version, &json] {
+        let output = run_into_closed_pipe(dir.path(), args)?;
+        assert_eq!(
+            output.status.signal(),
+            Some(libc::SIGPIPE),
+            "{args:?}: {}",
+            output.status
+        );
+        assert_eq!(text(&output.stderr), "", "{args:?}");
     }
     Ok(())
 }

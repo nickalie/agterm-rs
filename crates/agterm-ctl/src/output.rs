@@ -98,10 +98,18 @@ pub fn parse_exit(error: &clap::Error) -> ParseExit {
 }
 
 /// Rebuilds clap's `error: ...` report as `Error: <Message>\nUsage: ...\n  See '<command> --help' for more
-/// information.\n`.
+/// information.\n`. The message is every line before the usage line, so the missing arguments clap lists under
+/// `the following required arguments were not provided:` and an invalid value's `[possible values: ...]` stay;
+/// blank lines, clap's `tip:` lines and its `For more information, try '--help'.` (a report without a usage line ends
+/// with it) go.
 fn usage_report(rendered: &str) -> String {
-    let first = rendered.lines().next().unwrap_or_default();
-    let message = capitalized(first.strip_prefix("error: ").unwrap_or(first));
+    let message: Vec<&str> = rendered
+        .lines()
+        .take_while(|line| !line.starts_with("Usage: ") && !line.starts_with("For more information, try "))
+        .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with("tip:"))
+        .collect();
+    let message = message.join("\n");
+    let message = capitalized(message.strip_prefix("error: ").unwrap_or(&message));
     let usage = rendered
         .lines()
         .find(|line| line.starts_with("Usage: "))
@@ -181,6 +189,40 @@ mod tests {
             usage_report(rendered),
             "Error: Unexpected argument '--bogus' found\nUsage: agtermctl version [OPTIONS]\n  See 'agtermctl \
              version --help' for more information.\n"
+        );
+    }
+
+    /// A command with a required argument and an enumerated one, as later command groups have.
+    fn parse_error(args: &[&str]) -> ParseExit {
+        let command = clap::Command::new("agtermctl").subcommand(
+            clap::Command::new("pick")
+                .arg(clap::Arg::new("target").required(true))
+                .arg(clap::Arg::new("mode").long("mode").value_parser(["fast", "slow"])),
+        );
+        parse_exit(&command.try_get_matches_from(args).unwrap_err())
+    }
+
+    #[test]
+    fn a_missing_argument_is_named() {
+        let report = parse_error(&["agtermctl", "pick"]);
+        assert_eq!(report.code, USAGE_EXIT);
+        assert_eq!(
+            report.text,
+            "Error: The following required arguments were not provided:\n  <target>\nUsage: agtermctl pick \
+             <target>\n  See 'agtermctl pick --help' for more information.\n"
+        );
+    }
+
+    #[test]
+    fn an_invalid_value_keeps_its_choices() {
+        let report = parse_error(&["agtermctl", "pick", "x", "--mode", "warp"]);
+        let message = report.text.lines().take_while(|line| !line.starts_with("Usage: "));
+        assert_eq!(
+            message.collect::<Vec<_>>(),
+            [
+                "Error: Invalid value 'warp' for '--mode <mode>'",
+                "  [possible values: fast, slow]"
+            ]
         );
     }
 

@@ -105,7 +105,18 @@ trait RequestCommand {
     }
 }
 
+/// Puts SIGPIPE back to its default action; std sets it to ignored before `main`. A reader that closes stdout early
+/// (`agtermctl tree | head -1`) then ends the process quietly by the signal, as upstream's CLI, where `println!`
+/// would panic on `EPIPE` and exit 101. The socket write still gets `EPIPE` as an error: it sends with
+/// `MSG_NOSIGNAL`.
+fn restore_default_sigpipe() {
+    // SAFETY: `signal` with a valid signal number and `SIG_DFL` installs no handler code, and this runs first thing
+    // in `main`, before any other thread exists.
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+}
+
 fn main() -> ExitCode {
+    restore_default_sigpipe();
     let cli = match Agtermctl::try_parse() {
         Ok(cli) => cli,
         Err(error) => {
@@ -143,8 +154,8 @@ mod tests {
         assert_eq!(version.options().socket.as_deref(), Some(std::path::Path::new("/s")));
         assert!(version.options().json);
         for misplaced in [
-            ["agtermctl", "--socket", "/s", "version"],
-            ["agtermctl", "--json", "version", "x"],
+            &["agtermctl", "--socket", "/s", "version"][..],
+            &["agtermctl", "--json", "version"],
         ] {
             let error = Agtermctl::try_parse_from(misplaced).unwrap_err();
             assert_eq!(output::parse_exit(&error).code, output::USAGE_EXIT, "{misplaced:?}");
