@@ -1061,6 +1061,10 @@ def test_live_pane_commands(cli, live):
     assert f"\n{marker}\n" in f"\n{screen['text']}\n"
     _rendered(cli("zmx", "screen", daemon), assert_ok(live.request("zmx.screen", name=daemon)))
 
+    # Once the pane's zmx has reported its role: before that there is no lead to take.
+    live.wait_tree(
+        lambda tree: next(s for s in find_session(tree, sid)["surfaces"] if s["kind"] == "left").get("lead") == "leader"
+    )
     _ok(cli("session", "lead", "--target", sid), "ok\n")
     restarted = _json(cli("session", "restart", "--pane", "left", "--command", "cat", "--target", sid, "--json"))
     assert restarted["restart"]["newPid"] != restarted["restart"]["oldPid"]

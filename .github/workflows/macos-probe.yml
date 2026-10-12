@@ -44,8 +44,7 @@ jobs:
           BUNDLE: ${{ steps.reference.outputs.bundle }}
           PYTHONPATH: .github/probe
         run: |
-          python -m pytest -p probe_plugin conformance/tests/protocol/test_tree.py \
-            conformance/tests/protocol/test_dashboard_quick.py conformance/tests/protocol/test_zmx.py \
+          python -m pytest -p probe_plugin conformance/tests/protocol \
             --impl swift-macos --bin "$BUNDLE" -ra 2>&1 | tee pytest.log
       - name: upload
         if: always()

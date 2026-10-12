@@ -285,6 +285,7 @@ def test_screen_reads_the_daemon_grid(live):
 @pytest.mark.covers("session.lead")
 def test_lead_on_a_pane_that_already_leads(live):
     sid = _live_session(live)
+    _wait_leads(live, sid)
     assert assert_ok(live.request("session.lead", sid)) == {"id": sid}
     assert_ok(live.request("session.close", sid))
 
@@ -340,6 +341,17 @@ def _subscribed(live, sid, mode):
     assert hello["hello"]["mode"] == mode and hello["hello"]["version"] == PRESENTATION_VERSION
     wait_frame(stream.read, "snapshot", stream.send)
     return stream, hello["gen"]
+
+
+def _wait_leads(live, sid):
+    """Until the left pane's zmx has reported its role: before that `session.lead` has no lead to take."""
+
+    def leads(tree):
+        left = next(s for s in find_session(tree, sid)["surfaces"] if s["kind"] == "left")
+        assert left.get("lead") == "leader", f"lead {left.get('lead')!r}"
+        return True
+
+    live.wait_tree(leads)
 
 
 def _follows(tree, sid, viewer):

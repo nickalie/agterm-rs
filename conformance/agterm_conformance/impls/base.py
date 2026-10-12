@@ -69,7 +69,7 @@ NOOP_MIME_TYPES = (
 )
 LAUNCH_TIMEOUT = 30.0
 STOP_TIMEOUT = 10.0
-REAP_SETTLE = 5.0
+REAP_SETTLE = 8.0
 POLL_INTERVAL = 0.05
 
 # The capability vocabulary `requires(...)` and `Adapter.has(...)` may name. A reason for each absence lives on the
@@ -585,8 +585,8 @@ def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[
 
     Re-lists after every kill: killing a left pane promotes its split survivor into the left slot, so a
     selector read before the kill no longer names that survivor. A claimed daemon zmx does not list yet
-    (`observation: absent`, as right after it starts) refuses a kill as not running, so it is waited for until
-    `settle` runs out.
+    (`observation: absent`, as right after it starts) refuses a kill as not running, and a `pendingClose` one
+    refuses it outright, so both are waited for until `settle` runs out.
     """
     refusals: list[str] = []
     deadline = time.monotonic() + settle
@@ -613,12 +613,15 @@ def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[
 
 
 def _next_claimed(instance: Instance, tried: set[str], wait_absent: bool) -> tuple[dict[str, Any] | None, bool]:
-    """The next claimed daemon to kill, and whether one zmx does not list yet is still worth waiting for."""
+    """The next claimed daemon to kill, and whether one not yet killable is still worth waiting for."""
     listing = instance.request("zmx.list")
     inventory = (listing.result or {}).get("zmx") if listing.ok else None
     entries = inventory.get("entries") if isinstance(inventory, dict) else None
     waiting = False
     for entry in entries if isinstance(entries, list) else []:
+        # A closed session's daemon outlives it for the undo window (3s upstream), then the app kills it.
+        if wait_absent and isinstance(entry, dict) and entry.get("state") == "pendingClose":
+            waiting = True
         if (
             isinstance(entry, dict)
             and entry.get("state") == "claimed"

@@ -971,3 +971,19 @@ def test_reaping_waits_for_a_daemon_zmx_does_not_list_yet_and_reports_refusals(
         assert commands.count("zmx.list") > 2 and commands.count("zmx.kill") == 1
     finally:
         adapter.stop(instance)
+
+
+def test_reaping_waits_out_a_closed_session_daemon(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = {"daemon": "d1", "state": "pendingClose", "sessionID": "s1", "pane": "left", "observation": "running"}
+    monkeypatch.setenv("FAKE_ZMX_LIST", json.dumps({"zmx": {"entries": [row]}}))
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    try:
+        assert base.reap_live_sessions(instance, settle=0.2) == []
+        requests = [json.loads(line) for line in (instance.state_dir / "fake-requests.jsonl").read_text().splitlines()]
+        commands = [request["cmd"] for request in requests]
+        assert commands.count("zmx.list") > 2 and "zmx.kill" not in commands
+    finally:
+        adapter.stop(instance)
