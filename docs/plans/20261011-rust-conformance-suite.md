@@ -655,9 +655,10 @@ a push to `nickalie/agterm-rs`. Everything before this task is Linux-only.
 
 ### Task 23: [Final] Update documentation
 
-- [ ] `conformance/README.md`: running against each implementation, markers, catalog regeneration, the reference discipline, safety guards
-- [ ] record the capability vocabulary and the `version` response extension the Rust build must implement
-- [ ] move this plan's run copy from `agterm-rs/docs/plans/` to `docs/plans/completed/` in agterm-linux, replacing the original
+- [x] `conformance/README.md`: running against each implementation, markers, catalog regeneration, the reference discipline, safety guards
+- [x] record the capability vocabulary and the `version` response extension the Rust build must implement
+  (`conformance/docs/rust-build.md`, its table held to the source by `selftests/test_docs.py`)
+- [x] move this plan's run copy from `agterm-rs/docs/plans/` to `docs/plans/completed/` in agterm-linux, replacing the original (done by the orchestrator at completion)
 
 ## Post-Completion
 
