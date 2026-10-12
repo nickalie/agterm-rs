@@ -16,6 +16,7 @@ from agterm_conformance.match import (
     assert_absent,
     assert_ok,
     assert_subset,
+    assert_version_result,
     find_session,
     window_ids,
     workspaces,
@@ -106,11 +107,11 @@ def _workspace(ctl, wid):
 
 @pytest.mark.covers("cli:version")
 def test_version(cli, ctl):
-    app = assert_ok(ctl.request("version"))["app"]
-    assert _json(cli("version", "--json")) == {"app": app}
+    result = assert_version_result(ctl.request("version"))
+    assert _json(cli("version", "--json")) == result
     stdout = _ok(cli("version"))
     first, client = stdout.splitlines()
-    assert stdout == f"{first}\n{client}\n" and first == cli_format.human({"app": app})
+    assert stdout == f"{first}\n{client}\n" and first == cli_format.human({"app": result["app"]})
     # The CLI's own resolved executable, after the app's version: the kernel's answer, not argv[0].
     path = client.removeprefix("client: ")
     assert client.startswith("client: ") and os.path.isabs(path) and os.access(path, os.X_OK), client

@@ -3,7 +3,8 @@
 ## `version` extension
 
 `version` is the harness's readiness probe: it is polled until it answers, and an error reply fails the launch.
-Its result is the references' `app` block plus a `conformance` block only the Rust build reports:
+Its result is the references' `app` block plus a `conformance` block only the Rust build reports, and no other key
+(`assert_version_result` in `agterm_conformance/match.py`):
 
 ```json
 {"app": {"version": "0.1.0", "commit": "abc1234"},
@@ -36,8 +37,10 @@ The harness execs the binary with:
 - `<state>/windows` present, which skips the first-run welcome, and `<state>/settings.json` when a test seeds settings.
 
 SIGTERM must quit without a prompt within 10 seconds.
-Live sessions keep their zmx sockets in `/tmp/agterm-zmx-<FNV-1a 64 of the resolved state dir>`, and every zmx or
-session-host process carries `ZMX_DIR=<that dir>`: one left running after the stop fails it.
+Live sessions keep their zmx sockets in `/tmp/agterm-zmx-%016x` (lowercase hex) of the FNV-1a 64 hash over the UTF-8
+bytes of the state dir's realpath, with a leading `/private` dropped on macOS when the shorter path exists
+(`zmx_socket_directory` in `impls/base.py`).
+Every zmx or session-host process carries `ZMX_DIR=<that dir>`: one left running after the stop fails it.
 `agtermctl` is taken from `--ctl`, else from beside `--bin`.
 
 ## Capability vocabulary

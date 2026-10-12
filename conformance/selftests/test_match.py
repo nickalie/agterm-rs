@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from agterm_conformance.client import Response
@@ -10,6 +12,7 @@ from agterm_conformance.match import (
     assert_error,
     assert_ok,
     assert_subset,
+    assert_version_result,
     find_session,
     session_ids,
     window_ids,
@@ -185,3 +188,36 @@ def test_window_ids() -> None:
     assert window_ids(response({"ok": True, "result": result})) == ["a", "b"]
     with pytest.raises(AssertionError, match="not a window list"):
         window_ids(TREE)
+
+
+APP = {"app": {"version": "0.36.0", "commit": "abc1234"}}
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        APP,
+        {**APP, "conformance": {"parityLevel": "0.36.0", "capabilities": ["posix-shell"]}},
+        {**APP, "conformance": {}},
+    ],
+    ids=["reference", "rust-profile", "empty-profile"],
+)
+def test_version_result_accepts_app_and_an_optional_profile(result: dict) -> None:
+    assert assert_version_result(response({"ok": True, "result": result})) == result
+
+
+@pytest.mark.parametrize(
+    ("result", "text"),
+    [
+        ({**APP, "build": "x"}, "unexpected keys ['build']"),
+        ({**APP, "conformance": None}, "version.conformance"),
+        ({**APP, "conformance": {"parityLevel": "latest"}}, "version.conformance"),
+        ({**APP, "conformance": {"capabilities": "posix-shell"}}, "version.conformance"),
+        ({"conformance": {"parityLevel": "0.36.0"}}, "version.app"),
+        ({"app": {"version": ""}}, "version.app"),
+    ],
+    ids=["extra-key", "null-profile", "bad-level", "bad-capabilities", "no-app", "empty-version"],
+)
+def test_version_result_rejects(result: dict, text: str) -> None:
+    with pytest.raises(AssertionError, match=re.escape(text)):
+        assert_version_result(result)

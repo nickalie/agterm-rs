@@ -17,14 +17,14 @@ python -m venv .venv && .venv/bin/pip install -e "conformance[ax]"    # macOS: a
 
 ```sh
 # upstream macOS release (a bundle or its executable); fetch_reference.py downloads and caches it by tag
-bundle=$(python conformance/tools/fetch_reference.py --tag v0.36.0 | sed -n 's/^bundle=//p')
-python -m pytest conformance/tests --impl swift-macos --bin "$bundle"
+bundle=$(.venv/bin/python conformance/tools/fetch_reference.py --tag v0.36.0 | sed -n 's/^bundle=//p')
+.venv/bin/python -m pytest conformance/tests --impl swift-macos --bin "$bundle"
 
 # the installed Linux fork: protocol, cli and behaviors, with a report in conformance/reports/reference-linux/
 conformance/tools/run-reference-linux.sh [--bin PATH] [-- PYTEST_ARGS...]
 
 # the Rust build; without --bin every test skips and parity reads 0%
-python -m pytest conformance/tests --impl rust --bin <rust-binary>
+.venv/bin/python -m pytest conformance/tests --impl rust --bin <rust-binary>
 ```
 
 `--macos-launch-mode plain` replaces the default `uitest` launch (XCUITest sentinel with zmx on).
@@ -79,14 +79,14 @@ Error text that differs only in wording is asserted on its shared part.
 from an upstream tag:
 
 ```sh
-python conformance/tools/gen_catalog.py --tag v0.37.0 --repo ../agterm   # or --source <extracted tree>
+.venv/bin/python conformance/tools/gen_catalog.py --tag v0.37.0 --repo ../agterm   # or --source <extracted tree>
 ```
 
 Generated sections are replaced and statuses survive; `behaviors` and `exemptions` are hand-maintained.
 Retire an item with `status: removed-upstream`.
 
 ```sh
-python -m pytest conformance --coverage-gate
+.venv/bin/python -m pytest conformance --coverage-gate
 ```
 
 The gate launches nothing.

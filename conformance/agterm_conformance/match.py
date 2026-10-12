@@ -62,6 +62,26 @@ def assert_absent(node: Any, *paths: str) -> None:
         assert last not in parent, f"{path}: expected omitted, got {parent[last]!r}"
 
 
+def assert_version_result(result: Any) -> dict[str, Any]:
+    """`app`, plus the Rust build's optional `conformance` block (docs/rust-build.md), and nothing else."""
+    # Imported here: impls imports plugin, which imports this module.
+    from agterm_conformance.impls.rust import ProfileError, profile_from_version
+
+    result = _unwrap(result)
+    assert isinstance(result, Mapping), f"version: expected an object, got {result!r}"
+    extra = sorted(set(result) - {"app", "conformance"})
+    assert not extra, f"version: unexpected keys {extra}"
+    app = result.get("app")
+    assert isinstance(app, Mapping) and isinstance(app.get("version"), str) and app["version"], f"version.app: {app!r}"
+    if "conformance" in result:
+        assert isinstance(result["conformance"], Mapping), f"version.conformance: {result['conformance']!r}"
+        try:
+            profile_from_version(result)
+        except ProfileError as error:
+            raise AssertionError(f"version.conformance: {error}") from None
+    return dict(result)
+
+
 def _mismatch(actual: Any, expected: Any, path: str, tol: float) -> str | None:
     if expected is ANY:
         return None

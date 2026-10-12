@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 from agterm_conformance.client import check_under_root
-from agterm_conformance.match import assert_ok
+from agterm_conformance.match import assert_version_result
 
 SENTINEL = {"app": {"version": "0.0.0-resolution-probe"}}
 
@@ -44,18 +44,18 @@ def empty_state(cli):
 
 @pytest.mark.covers("cli:version", "behavior:cli.socket-resolution")
 def test_state_dir_names_the_socket(cli, ctl):
-    app = assert_ok(ctl.request("version"))["app"]
+    version = assert_version_result(ctl.request("version"))
     env = _env(cli, AGTERM_STATE_DIR=os.fspath(cli.instance.state_dir))
     result = cli.local("version", "--json", env=env)
-    assert (result.returncode, json.loads(result.stdout)) == (0, {"ok": True, "result": {"app": app}})
+    assert (result.returncode, json.loads(result.stdout)) == (0, {"ok": True, "result": version})
 
 
 @pytest.mark.covers("cli:version", "behavior:cli.socket-resolution")
 def test_socket_option_wins_over_the_state_dir(cli, ctl, empty_state):
-    app = assert_ok(ctl.request("version"))["app"]
+    version = assert_version_result(ctl.request("version"))
     env = _env(cli, AGTERM_STATE_DIR=os.fspath(empty_state))
     result = cli.local("version", "--json", "--socket", os.fspath(cli.instance.socket), env=env)
-    assert (result.returncode, json.loads(result.stdout)) == (0, {"ok": True, "result": {"app": app}})
+    assert (result.returncode, json.loads(result.stdout)) == (0, {"ok": True, "result": version})
     _unreachable(cli.local("version", env=env), empty_state / "agterm.sock")
 
 
