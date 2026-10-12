@@ -17,6 +17,8 @@ from agterm_conformance.impls.base import (
     Adapter,
     LaunchError,
     LaunchRefused,
+    NOOP_DESKTOP_ID,
+    NOOP_MIME_TYPES,
     LeftoverProcesses,
     Profile,
     StopError,
@@ -262,6 +264,42 @@ def test_launch_seeds_settings(roots: list[Path], fake_bin: Path, adapter_class:
     try:
         seeded = json.loads((instance.state_dir / "settings.json").read_text())
         assert seeded == {"restoreMode": "live", "autoFollowAttention": "s30"}
+    finally:
+        adapter.stop(instance)
+
+
+@pytest.mark.parametrize("adapter_class", [SwiftLinuxAdapter, RustAdapter])
+def test_linux_launch_sends_every_uri_to_a_noop(
+    roots: list[Path], fake_bin: Path, adapter_class: type[Adapter], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if not adapter_class.needs_runtime_dir:
+        pytest.skip("a Linux desktop launch only")
+    monkeypatch.setenv("GTK_USE_PORTAL", "1")
+    monkeypatch.setenv("GIO_USE_PORTALS", "1")
+    adapter = adapter_class(fake_bin)
+    instance = adapter.launch()
+    try:
+        seen = json.loads((instance.state_dir / "fake-env.json").read_text())
+        assert seen["BROWSER"] == "true" and seen["GIO_USE_PORTALS"] == "0" and "GTK_USE_PORTAL" not in seen
+        desktop = (instance.home / ".local/share/applications" / NOOP_DESKTOP_ID).read_text().splitlines()
+        noop = shutil.which("true", path="/usr/bin:/bin")
+        assert desktop == [
+            "[Desktop Entry]",
+            "Type=Application",
+            "Name=agterm conformance no-op",
+            f"Exec={noop} %u",
+            "NoDisplay=true",
+            f"MimeType={';'.join(NOOP_MIME_TYPES)};",
+        ]
+        mimeapps = (instance.home / ".config/mimeapps.list").read_text()
+        entries = [f"{mime}={NOOP_DESKTOP_ID};" for mime in NOOP_MIME_TYPES]
+        assert mimeapps.splitlines() == ["[Default Applications]", *entries, "", "[Added Associations]", *entries]
+        assert {"inode/directory", "x-scheme-handler/https", "x-scheme-handler/file"} <= set(NOOP_MIME_TYPES)
+        if gio := shutil.which("gio"):
+            env = {name: seen[name] for name in ("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "PATH")}
+            for mime in ("inode/directory", "x-scheme-handler/https"):
+                answer = subprocess.run([gio, "mime", mime], env=env, capture_output=True, text=True).stdout
+                assert answer.splitlines()[0].endswith(f"“{mime}”: {NOOP_DESKTOP_ID}")
     finally:
         adapter.stop(instance)
 

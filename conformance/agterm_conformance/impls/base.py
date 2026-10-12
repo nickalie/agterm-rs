@@ -58,6 +58,20 @@ GHOSTTY_ISOLATION_CONFIG = "copy-on-select = false\nclipboard-write = deny\n"
 # The private `XDG_RUNTIME_DIR` under the root: the Linux fork writes its ghostty config layers there
 # (`GhosttyApp.writeTempConf`/`writeDefaultsConf`), which in the shared one are the live app's own files.
 RUNTIME_DIR_NAME = "run"
+# Every URI or file the instance hands the desktop (`session.reveal`, a clicked link, a page's browser hand-off) goes to
+# `true`: the system defaults resolve through XDG_DATA_DIRS, which the isolated XDG_DATA_HOME does not replace, and
+# opened real windows on the user's desktop. GTK's Show in Files (`session.overlay.navigate` finder) asks the session
+# bus's FileManager1 instead, which no mimeapps entry reaches: no test may drive it.
+NOOP_DESKTOP_ID = "agterm-conformance-noop.desktop"
+NOOP_MIME_TYPES = (
+    "inode/directory",
+    "x-scheme-handler/http",
+    "x-scheme-handler/https",
+    "x-scheme-handler/file",
+    "text/html",
+    "text/plain",
+    "application/octet-stream",
+)
 LAUNCH_TIMEOUT = 30.0
 STOP_TIMEOUT = 10.0
 POLL_INTERVAL = 0.05
@@ -343,6 +357,7 @@ class Adapter:
             XDG_CACHE_HOME=os.fspath(home / ".cache"),
             PATH=MINIMAL_PATH,
             SHELL="/bin/sh",
+            BROWSER="true",
             AGTERM_STATE_DIR=os.fspath(state),
             AGTERM_CONTROL_SOCKET=os.fspath(state / "agterm.sock"),
         )
@@ -350,6 +365,9 @@ class Adapter:
             env["AGTERM_APP_ID"] = app_id or unique_app_id()
         if self.needs_runtime_dir:
             isolated_runtime_env(env, os.fspath(root / RUNTIME_DIR_NAME), os.environ)
+            # An inherited portal opt-in would route launches through the user's session, past the mimeapps no-op.
+            env["GIO_USE_PORTALS"] = "0"
+            env.pop("GTK_USE_PORTAL", None)
         self.platform_env(env)
         return env
 
@@ -366,6 +384,7 @@ class Adapter:
             _prepare_tree(root, Path(env["HOME"]), Path(env["AGTERM_STATE_DIR"]), self.ghostty_config(), settings)
             if self.needs_runtime_dir:
                 os.mkdir(env["XDG_RUNTIME_DIR"], 0o700)  # the XDG spec's mode
+                write_noop_launchers(Path(env["XDG_CONFIG_HOME"]), Path(env["XDG_DATA_HOME"]))
             if app_id is not None:
                 _claim_app_id(app_id)
         except BaseException:
@@ -499,6 +518,21 @@ def _prepare_tree(
     (state / "config" / "ghostty.conf").write_text(ghostty_config)
     if settings is not None:
         (state / "settings.json").write_text(json.dumps(settings))
+
+
+def write_noop_launchers(config_home: Path, data_home: Path) -> None:
+    types = ";".join(NOOP_MIME_TYPES)
+    # Absolute: xdg-utils resolves Exec's first word to a file and skips an entry naming a shell builtin.
+    noop = shutil.which("true", path=MINIMAL_PATH) or "true"
+    applications = data_home / "applications"
+    applications.mkdir(parents=True, exist_ok=True)
+    (applications / NOOP_DESKTOP_ID).write_text(
+        f"[Desktop Entry]\nType=Application\nName=agterm conformance no-op\nExec={noop} %u\nNoDisplay=true\n"
+        f"MimeType={types};\n"
+    )
+    entries = "".join(f"{mime}={NOOP_DESKTOP_ID};\n" for mime in NOOP_MIME_TYPES)
+    config_home.mkdir(parents=True, exist_ok=True)
+    (config_home / "mimeapps.list").write_text(f"[Default Applications]\n{entries}\n[Added Associations]\n{entries}")
 
 
 def _claim_app_id(app_id: str) -> None:
