@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Run the protocol, cli and behaviors layers against the installed Swift/GTK fork and write a report to attach to a PR.
 # Every instance comes from the harness (unique AGTERM_APP_ID, fresh root under this run's own /tmp/agt-run-*
-# parent); nothing here talks to the user's running agterm.
+# parent, its own headless weston); nothing here talks to the user's running agterm or reaches the desktop.
 #
 #   conformance/tools/run-reference-linux.sh [--bin PATH] [--out DIR] [--tests DIR] [-- PYTEST_ARGS...]
 #
 # Writes report.md, junit.xml and pytest.log into DIR, replacing only those.
 # Exits with pytest's status, or 1 when a run left an instance root behind.
+# CONFORMANCE_LINUX_DISPLAY=session draws the instances on this desktop instead, for debugging.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,7 +23,7 @@ while (($#)); do
         --out) out="$2"; shift 2 ;;
         --tests) tests="$2"; shift 2 ;;
         --) shift; extra=("$@"); break ;;
-        -h|--help) sed -n '2,9s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,10s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -30,6 +31,13 @@ done
 [[ -x "$bin" ]] || { echo "no executable fork at $bin (pass --bin)" >&2; exit 2; }
 python="${PYTHON:-$repo/.venv/bin/python}"
 [[ -x "$python" ]] || python="$(command -v python3)"
+# This checkout's harness, ahead of whichever checkout the venv's editable install points at.
+export PYTHONPATH="$repo/conformance${PYTHONPATH:+:$PYTHONPATH}"
+display="${CONFORMANCE_LINUX_DISPLAY:-headless}"
+if [[ "$display" == headless ]] && ! command -v weston >/dev/null; then
+    echo "no weston on PATH: install it, or set CONFORMANCE_LINUX_DISPLAY=session" >&2
+    exit 2
+fi
 
 # A shell inside a live agterm session exports its socket and session; the plugin scrubs these too.
 while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(AGTERM_|ZMX_)' || true)
@@ -71,6 +79,7 @@ if [[ -n "$(git -C "$repo" status --porcelain -- conformance)" ]]; then suite_co
     echo "- suite: $suite_commit"
     echo "- host: $(uname -sr), $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "- layers: ${layers[*]#"$tests/"}"
+    echo "- display: $display"
     if ((${#extra[@]})); then echo "- pytest args: ${extra[*]}"; fi
     echo "- exit status: $status"
     echo

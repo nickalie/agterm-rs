@@ -12,6 +12,7 @@ import pwd
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -70,6 +71,20 @@ NOOP_MIME_TYPES = (
     "text/plain",
     "application/octet-stream",
 )
+# Every Linux instance draws into a headless weston of its own inside its private runtime dir, so no window reaches
+# the user's desktop; `session` draws on the user's display instead, for debugging only.
+DISPLAY_MODE_VARIABLE = "CONFORMANCE_LINUX_DISPLAY"
+DISPLAY_MODES = ("headless", "session")
+WESTON_SOCKET = "wayland-0"
+# GL: under the no-op renderer the fork dies with SIGSEGV before serving.
+WESTON_RENDERER = "gl"
+# weston runs on glvnd's Mesa vendor where one is installed, and its clients follow it onto that device. Through
+# NVIDIA's EGL GDK settles on a GLES context while the fork's GtkGLArea allows desktop GL only, so no pane realizes.
+GLVND_VENDOR_DIRS = ("/usr/share/glvnd/egl_vendor.d", "/etc/glvnd/egl_vendor.d")
+EGL_VENDOR_VARIABLE = "__EGL_VENDOR_LIBRARY_FILENAMES"
+WESTON_SIZE = (1920, 1080)
+# No idle lock, no panel, and no `weston-keyboard` input-method client: the desktop shell's own helper is its only one.
+WESTON_CONFIG = "[core]\nidle-time=0\n\n[shell]\npanel-position=none\nlocking=false\n\n[input-method]\npath=\n"
 LAUNCH_TIMEOUT = 30.0
 STOP_TIMEOUT = 10.0
 REAP_SETTLE = 8.0
@@ -217,16 +232,30 @@ OWN_VARIABLES = frozenset(
 )
 
 
-def isolated_runtime_env(env: dict[str, str], runtime_dir: str, parent: Mapping[str, str]) -> None:
+def display_mode(environ: Mapping[str, str] | None = None) -> str:
+    mode = (os.environ if environ is None else environ).get(DISPLAY_MODE_VARIABLE) or DISPLAY_MODES[0]
+    if mode not in DISPLAY_MODES:
+        raise LaunchRefused(f"{DISPLAY_MODE_VARIABLE}={mode!r} is not one of {', '.join(DISPLAY_MODES)}")
+    return mode
+
+
+def isolated_runtime_env(
+    env: dict[str, str], runtime_dir: str, parent: Mapping[str, str], headless: bool = False
+) -> None:
     """Point `XDG_RUNTIME_DIR` at `runtime_dir`, keeping the session's sockets reachable by absolute path.
 
     Wayland accepts an absolute `WAYLAND_DISPLAY`; D-Bus (and through it the AT-SPI bus) takes an explicit
-    address. X11 and an inherited `XAUTHORITY` are absolute already.
+    address. X11 and an inherited `XAUTHORITY` are absolute already. `headless` points Wayland at the instance's own
+    weston instead and drops X11, so GTK cannot fall back to the user's Xwayland.
     """
     parent_runtime = parent.get("XDG_RUNTIME_DIR")
     env["XDG_RUNTIME_DIR"] = runtime_dir
     display = parent.get("WAYLAND_DISPLAY") or "wayland-0"  # libwayland's default, relative to the runtime dir
-    if not os.path.isabs(display):
+    if headless:
+        env["WAYLAND_DISPLAY"] = os.path.join(runtime_dir, WESTON_SOCKET)
+        env["GDK_BACKEND"] = "wayland"
+        env.pop("DISPLAY", None)
+    elif not os.path.isabs(display):
         if parent_runtime:
             env["WAYLAND_DISPLAY"] = os.path.join(parent_runtime, display)
         else:
@@ -236,12 +265,20 @@ def isolated_runtime_env(env: dict[str, str], runtime_dir: str, parent: Mapping[
 
 
 def check_launch_env(
-    env: Mapping[str, str], root: str | os.PathLike[str], needs_app_id: bool, needs_runtime_dir: bool = False
+    env: Mapping[str, str],
+    root: str | os.PathLike[str],
+    needs_app_id: bool,
+    needs_runtime_dir: bool = False,
+    headless: bool = False,
 ) -> None:
     for name in sorted(env):
         if name.startswith(SCRUB_PREFIXES) and name not in OWN_VARIABLES:
             raise LaunchRefused(f"{name} would leak into the instance: only harness-set AGTERM_* are allowed")
     rooted = ["AGTERM_STATE_DIR", "AGTERM_CONTROL_SOCKET", "HOME"] + (["XDG_RUNTIME_DIR"] if needs_runtime_dir else [])
+    if headless:
+        if "DISPLAY" in env:
+            raise LaunchRefused("DISPLAY is set: a headless instance would reach the user's X server")
+        rooted.append("WAYLAND_DISPLAY")
     for name in rooted:
         if not env.get(name):
             raise LaunchRefused(f"{name} must be set")
@@ -268,6 +305,8 @@ class Instance:
     app_id: str | None
     zmx_dir: str
     version: dict[str, Any] = field(default_factory=dict)
+    # The instance's own headless weston; a relaunch keeps it.
+    compositor: subprocess.Popen[bytes] | None = None
 
     @property
     def pid(self) -> int:
@@ -282,10 +321,7 @@ class Instance:
         return self.client().request(cmd, target, **args)
 
     def log_tail(self, lines: int = 20) -> str:
-        try:
-            return "\n".join(self.log.read_text(errors="replace").splitlines()[-lines:])
-        except OSError:
-            return ""
+        return _tail(self.log, lines)
 
 
 class Adapter:
@@ -341,6 +377,10 @@ class Adapter:
         """The command one instance runs, given its root; a relaunch on the same root gets the same one."""
         return self.executable()
 
+    @property
+    def headless(self) -> bool:
+        return self.needs_runtime_dir and display_mode() == "headless"
+
     def platform_env(self, env: dict[str, str]) -> None:
         """Hook for adapter-specific variables; `env` is already isolated."""
 
@@ -372,7 +412,7 @@ class Adapter:
         if self.needs_app_id:
             env["AGTERM_APP_ID"] = app_id or unique_app_id()
         if self.needs_runtime_dir:
-            isolated_runtime_env(env, os.fspath(root / RUNTIME_DIR_NAME), os.environ)
+            isolated_runtime_env(env, os.fspath(root / RUNTIME_DIR_NAME), os.environ, self.headless)
             # An inherited portal opt-in would route launches through the user's session, past the mimeapps no-op.
             env["GIO_USE_PORTALS"] = "0"
             env.pop("GTK_USE_PORTAL", None)
@@ -384,26 +424,32 @@ class Adapter:
     ) -> Instance:
         """`settings` seeds `<state>/settings.json`, which both references read at launch (`restoreMode`, ...)."""
         self.executable()  # refuses before anything exists
+        headless = self.headless
         root = make_root()
+        compositor: subprocess.Popen[bytes] | None = None
         try:
             env = self.build_env(root, app_id)
-            check_launch_env(env, root, self.needs_app_id, self.needs_runtime_dir)
+            check_launch_env(env, root, self.needs_app_id, self.needs_runtime_dir, headless)
             app_id = env.get("AGTERM_APP_ID")
             _prepare_tree(root, Path(env["HOME"]), Path(env["AGTERM_STATE_DIR"]), self.ghostty_config(), settings)
             command = self.instance_executable(root)
             if self.needs_runtime_dir:
                 os.mkdir(env["XDG_RUNTIME_DIR"], 0o700)  # the XDG spec's mode
                 write_noop_launchers(Path(env["XDG_CONFIG_HOME"]), Path(env["XDG_DATA_HOME"]))
+            if headless:
+                compositor = start_compositor(root, env, timeout)
             if app_id is not None:
                 _claim_app_id(app_id)
-        except BaseException:
+        except BaseException as error:
+            _note_compositor_stop(error, compositor, root)
             shutil.rmtree(root, ignore_errors=True)
             raise
         log = root / "app.log"
         try:
             process = _spawn(command, env, log, "wb")
-        except BaseException:
+        except BaseException as error:
             _release_app_id(app_id)
+            _note_compositor_stop(error, compositor, root)
             shutil.rmtree(root, ignore_errors=True)
             raise
         instance = Instance(
@@ -416,6 +462,7 @@ class Adapter:
             log=log,
             app_id=app_id,
             zmx_dir=zmx_socket_directory(env["AGTERM_STATE_DIR"]),
+            compositor=compositor,
         )
         return self._serving(instance, timeout)
 
@@ -432,7 +479,9 @@ class Adapter:
         try:
             if killed:
                 raise StopError(f"pid {instance.pid} ignored SIGTERM for {STOP_TIMEOUT}s and was killed")
-            check_launch_env(instance.env, instance.root, self.needs_app_id, self.needs_runtime_dir)
+            check_launch_env(
+                instance.env, instance.root, self.needs_app_id, self.needs_runtime_dir, instance.compositor is not None
+            )
             if instance.app_id is not None:
                 _claim_app_id(instance.app_id)
             try:
@@ -441,6 +490,7 @@ class Adapter:
                 _release_app_id(instance.app_id)
                 raise
         except BaseException as error:
+            _note_compositor_stop(error, instance.compositor, instance.root)
             if (leftovers := _leftovers_error(instance.zmx_dir)) is not None:
                 raise leftovers from error
             raise
@@ -454,6 +504,7 @@ class Adapter:
             log=instance.log,
             app_id=instance.app_id,
             zmx_dir=instance.zmx_dir,
+            compositor=instance.compositor,
         )
         return self._serving(relaunched, timeout)
 
@@ -468,7 +519,11 @@ class Adapter:
     # -- stop
 
     def stop(self, instance: Instance, cleanup: bool = True) -> None:
-        """Reap daemons, SIGTERM the launched pid only, then require no zmx/session-host left behind."""
+        """Reap daemons, SIGTERM the launched pid only, then require no zmx/session-host left behind.
+
+        The compositor goes last, once the app is gone, and must leave no process of its own.
+        """
+        compositor_problem: str | None = None
         try:
             steps: list[str] = []
             try:
@@ -485,12 +540,15 @@ class Adapter:
             leftovers = _leftovers_error(instance.zmx_dir, steps)
         finally:
             _release_app_id(instance.app_id)
+            compositor_problem = stop_compositor(instance.compositor, instance.root)
         if leftovers is not None:
             raise leftovers
         if killed:
             raise StopError(f"pid {instance.pid} ignored SIGTERM for {STOP_TIMEOUT}s and was killed")
         if helper_problem is not None:
             raise StopError(helper_problem)
+        if compositor_problem is not None:
+            raise StopError(compositor_problem)
         if cleanup:
             shutil.rmtree(instance.root, ignore_errors=True)
             _remove_empty_dir(instance.zmx_dir)
@@ -498,6 +556,111 @@ class Adapter:
     def stop_helpers(self, instance: Instance) -> str | None:
         """Hook: end a helper the implementation detaches on purpose once the app is gone; returns what went wrong."""
         return None
+
+
+def compositor_program() -> str:
+    if program := shutil.which("weston"):
+        return program
+    raise LaunchError(f"no weston on PATH: install it, or set {DISPLAY_MODE_VARIABLE}=session to draw on this desktop")
+
+
+def weston_argv(program: str, root: Path) -> list[str]:
+    width, height = WESTON_SIZE
+    return [
+        program,
+        "--backend=headless",
+        f"--renderer={WESTON_RENDERER}",
+        f"--socket={WESTON_SOCKET}",
+        f"--config={root / 'weston.ini'}",
+        f"--log={root / 'weston.log'}",
+        f"--width={width}",
+        f"--height={height}",
+    ]
+
+
+def start_compositor(root: Path, env: Mapping[str, str], timeout: float = LAUNCH_TIMEOUT) -> subprocess.Popen[bytes]:
+    """Start the instance's weston in its runtime dir and return once its socket accepts a connection."""
+    (root / "weston.ini").write_text(WESTON_CONFIG)
+    socket_path = os.path.join(env["XDG_RUNTIME_DIR"], WESTON_SOCKET)
+    check_under_root(socket_path, root)
+    # Its own env without a display: given a WAYLAND_DISPLAY or DISPLAY, weston would nest into that server.
+    weston_env = {name: value for name, value in env.items() if name not in ("WAYLAND_DISPLAY", "DISPLAY")}
+    if vendor := mesa_egl_vendor():
+        weston_env[EGL_VENDOR_VARIABLE] = vendor
+    process = _spawn(weston_argv(compositor_program(), root), weston_env, root / "weston.out", "wb")
+    try:
+        wait_for_unix_socket(socket_path, process, timeout, root / "weston.log")
+    except BaseException as error:
+        _note_compositor_stop(error, process, root)
+        raise
+    return process
+
+
+def mesa_egl_vendor() -> str | None:
+    for directory in GLVND_VENDOR_DIRS:
+        if found := sorted(Path(directory).glob("*mesa*.json")):
+            return os.fspath(found[0])
+    return None
+
+
+def wait_for_unix_socket(path: str, process: subprocess.Popen[bytes], timeout: float, log: Path) -> None:
+    deadline = time.monotonic() + timeout
+    while True:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            try:
+                probe.connect(path)
+                return
+            except OSError as error:
+                last = error
+        if time.monotonic() >= deadline:
+            raise LaunchError(f"weston socket {path} not accepting after {timeout}s ({last}):\n{_tail(log)}")
+        try:
+            code = process.wait(timeout=POLL_INTERVAL)
+        except subprocess.TimeoutExpired:
+            continue
+        raise LaunchError(f"weston exited with {code} before serving {path}:\n{_tail(log)}")
+
+
+def stop_compositor(process: subprocess.Popen[bytes] | None, root: Path) -> str | None:
+    """SIGTERM the compositor's own pid, then wait for its clients to follow; returns what went wrong."""
+    if process is None:
+        return None
+    problems: list[str] = []
+    if (code := process.poll()) is not None:
+        problems.append(f"weston pid {process.pid} had already exited with {code}:\n{_tail(root / 'weston.log')}")
+    elif _terminate(process):
+        problems.append(f"weston pid {process.pid} ignored SIGTERM for {STOP_TIMEOUT}s and was killed")
+    # Its desktop-shell helper exits on its own once the socket closes.
+    runtime_dir = os.fspath(root / RUNTIME_DIR_NAME)
+    deadline = time.monotonic() + STOP_TIMEOUT
+    while (left := find_compositor_leftovers(runtime_dir)) and time.monotonic() < deadline:
+        threading.Event().wait(POLL_INTERVAL)
+    if left:
+        described = ", ".join(f"{pid} {command}" for pid, _, command in left)
+        problems.append(f"compositor processes left under XDG_RUNTIME_DIR {runtime_dir}: {described}")
+    return "; ".join(problems) or None
+
+
+def _note_compositor_stop(error: BaseException, process: subprocess.Popen[bytes] | None, root: Path) -> None:
+    if (problem := stop_compositor(process, root)) is not None:
+        error.add_note(problem)
+
+
+def find_compositor_leftovers(runtime_dir: str) -> list[tuple[int, str, str]]:
+    """(pid, name, command) of weston and its clients carrying this instance's runtime dir."""
+    marker = f"XDG_RUNTIME_DIR={runtime_dir}"
+    return [
+        (pid, name, command)
+        for pid, name, command, words in _processes()
+        if name.startswith("weston") and marker in words
+    ]
+
+
+def _tail(log: Path, lines: int = 20) -> str:
+    try:
+        return "\n".join(log.read_text(errors="replace").splitlines()[-lines:])
+    except OSError:
+        return ""
 
 
 def _leftovers_error(zmx_dir: str, steps: Iterable[str] = ()) -> LeftoverProcesses | None:

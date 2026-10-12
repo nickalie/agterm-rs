@@ -40,13 +40,14 @@ def _settled(ctl, wid, timeout=10.0, **expected):
     return node
 
 
-def _toggle_fullscreen(ctl, wid, toggle, fullscreen):
-    """`toggle()` until `wid` reads `fullscreen`. macOS drops a toggle now and then, with nothing in `window.list` to
-    tell, so one that changed nothing in 5s is sent again; an accepted one settles within about a second."""
+def _toggle_until(ctl, wid, toggle, **expected):
+    """`toggle()` until `wid` reads `expected`, sending one that changed nothing in 5s again; an accepted one settles
+    within about a second. macOS drops a fullscreen toggle now and then, with nothing in `window.list` to tell, and
+    weston drops an unmaximize that arrives before the client has committed the maximize it just configured."""
     for attempt in range(3):
         toggle()
         try:
-            return _settled(ctl, wid, timeout=5.0, fullscreen=fullscreen)
+            return _settled(ctl, wid, timeout=5.0, **expected)
         except WaitTimeout:
             if attempt == 2:
                 raise
@@ -167,10 +168,11 @@ def test_move_places_the_window(ctl, adapter, second):
 
 @pytest.mark.covers("window.zoom", "field:window.zoomed")
 def test_zoom_toggles(ctl, second):
-    assert assert_ok(ctl.request("window.zoom", second))["id"] == second
-    _settled(ctl, second, zoomed=True)
-    assert_ok(ctl.request("window.zoom", second))
-    _settled(ctl, second, zoomed=False)
+    def toggle():
+        assert assert_ok(ctl.request("window.zoom", second))["id"] == second
+
+    for zoomed in (True, False):
+        _toggle_until(ctl, second, toggle, zoomed=zoomed)
 
 
 @pytest.mark.covers("window.fullscreen", "field:window.fullscreen")
@@ -179,7 +181,7 @@ def test_fullscreen_toggles(ctl, second):
         assert assert_ok(ctl.request("window.fullscreen", second))["id"] == second
 
     for fullscreen in (True, False):
-        _toggle_fullscreen(ctl, second, toggle, fullscreen)
+        _toggle_until(ctl, second, toggle, fullscreen=fullscreen)
 
 
 @pytest.mark.covers("window.minimize", "field:window.minimized")

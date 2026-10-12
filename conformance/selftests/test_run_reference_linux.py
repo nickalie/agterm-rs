@@ -46,6 +46,16 @@ def install(fake_bin: Path) -> Path:
     return fake_bin
 
 
+@pytest.fixture(autouse=True)
+def weston_on_path(tmp_path: Path, fake_compositor_bin: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The script's pytest is a subprocess the conftest patch cannot reach: it finds the fake weston on PATH."""
+    directory = tmp_path / "weston-bin"
+    directory.mkdir()
+    (directory / "weston").symlink_to(fake_compositor_bin)
+    monkeypatch.setenv("PATH", f"{directory}{os.pathsep}{os.environ['PATH']}")
+    return directory
+
+
 def run(tmp_path: Path, *args: str, script: Path = SCRIPT, **env: str) -> tuple[subprocess.CompletedProcess[str], str]:
     out = tmp_path / "report"
     completed = subprocess.run(
@@ -71,6 +81,7 @@ def test_a_green_run_writes_the_report(tmp_path: Path, install: Path, layers: Pa
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "fork: 9.9.9 (abc1234)" in report
     assert "layers: protocol" in report
+    assert "display: headless" in report
     assert "pytest args: -k version" in report
     assert "swift-linux: 1 pass, 0 fail" in report
     assert "Left behind" not in report
@@ -130,3 +141,26 @@ def test_bad_arguments_exit_2(tmp_path: Path, install: Path, case: str) -> None:
     args = ["--bin", str(tmp_path / "absent")] if case == "missing bin" else ["--bin", str(install), "--tests", "/"]
     completed, _ = run(tmp_path, *args)
     assert completed.returncode == 2
+
+
+def test_a_headless_run_without_weston_names_the_opt_out(
+    tmp_path: Path, install: Path, layers: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bare = tmp_path / "bare-bin"
+    bare.mkdir()
+    for tool in ("bash", "dirname", "readlink", "cat", "git", "grep", "mktemp", "rmdir", "rm", "mkdir", "env"):
+        if found := shutil.which(tool):
+            (bare / tool).symlink_to(found)
+    monkeypatch.setenv("PATH", str(bare))
+    completed, report = run(tmp_path, "--bin", str(install), "--tests", str(layers))
+    assert completed.returncode == 2 and "CONFORMANCE_LINUX_DISPLAY=session" in completed.stderr
+    assert report == ""
+
+
+def test_the_script_runs_its_own_checkouts_harness(tmp_path: Path, install: Path, layers: Path) -> None:
+    (layers / "protocol" / "test_where.py").write_text(
+        "import agterm_conformance\n\ndef test_where(ctl):\n"
+        f"    assert agterm_conformance.__file__.startswith({str(SCRIPT.parents[1])!r})\n"
+    )
+    completed, _ = run(tmp_path, "--bin", str(install), "--tests", str(layers), "--", "-k", "where", PYTHONPATH="")
+    assert completed.returncode == 0, completed.stdout + completed.stderr

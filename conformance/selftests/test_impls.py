@@ -4,11 +4,13 @@ import pwd
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import threading
 import traceback
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from agterm_conformance.impls import ADAPTERS, base, make_adapter, swift_macos
@@ -214,12 +216,69 @@ def test_runtime_dir_is_refused_outside_the_root_only_where_needed(tmp_path: Pat
 def test_linux_adapters_get_a_private_runtime_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/7")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv(base.DISPLAY_MODE_VARIABLE, "session")
     linux = SwiftLinuxAdapter(tmp_path / "agterm-linux").build_env(tmp_path)
     assert linux["XDG_RUNTIME_DIR"] == str(tmp_path / "run")
-    assert linux["WAYLAND_DISPLAY"] == "/run/user/7/wayland-1"
+    assert linux["WAYLAND_DISPLAY"] == "/run/user/7/wayland-1" and linux["DISPLAY"] == ":0"
     check_launch_env(linux, tmp_path, needs_app_id=True, needs_runtime_dir=True)
     assert SwiftMacosAdapter(tmp_path / "agterm.app").build_env(tmp_path)["XDG_RUNTIME_DIR"] == "/run/user/7"
     assert RustAdapter.needs_runtime_dir is RustAdapter.needs_app_id
+
+
+@pytest.mark.parametrize("adapter_class", [SwiftLinuxAdapter, RustAdapter])
+def test_linux_adapters_draw_headless_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, adapter_class: type[Adapter]
+) -> None:
+    if not adapter_class.needs_runtime_dir:
+        pytest.skip("a Linux desktop launch only")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/7")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("GDK_BACKEND", "x11")
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+    adapter = adapter_class(tmp_path / "agterm-linux")
+    assert adapter.headless
+    env = adapter.build_env(tmp_path)
+    assert env["WAYLAND_DISPLAY"] == str(tmp_path / "run" / "wayland-0")
+    assert "DISPLAY" not in env and env["GDK_BACKEND"] == "wayland"
+    assert env["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/run/user/7/bus"
+    check_launch_env(env, tmp_path, needs_app_id=True, needs_runtime_dir=True, headless=True)
+    assert not SwiftMacosAdapter(tmp_path / "agterm.app").headless
+
+
+@pytest.mark.parametrize(
+    ("overrides", "refusal"),
+    [
+        ({"DISPLAY": ":0"}, "DISPLAY is set"),
+        ({"WAYLAND_DISPLAY": "/run/user/7/wayland-1"}, "WAYLAND_DISPLAY"),
+        ({"WAYLAND_DISPLAY": ""}, "WAYLAND_DISPLAY must be set"),
+    ],
+)
+def test_headless_launch_env_refuses_the_users_display(tmp_path: Path, overrides: dict[str, str], refusal: str) -> None:
+    env = env_for(tmp_path, XDG_RUNTIME_DIR=str(tmp_path / "run"), WAYLAND_DISPLAY=str(tmp_path / "run" / "wayland-0"))
+    check_launch_env(env, tmp_path, needs_app_id=True, needs_runtime_dir=True, headless=True)
+    with pytest.raises(LaunchRefused, match=refusal):
+        check_launch_env({**env, **overrides}, tmp_path, needs_app_id=True, needs_runtime_dir=True, headless=True)
+
+
+def test_unknown_display_mode_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(base.DISPLAY_MODE_VARIABLE, "niri")
+    with pytest.raises(LaunchRefused, match="CONFORMANCE_LINUX_DISPLAY='niri'"):
+        SwiftLinuxAdapter(tmp_path / "agterm-linux").build_env(tmp_path)
+
+
+def test_weston_argv(tmp_path: Path) -> None:
+    assert base.weston_argv("/usr/bin/weston", tmp_path) == [
+        "/usr/bin/weston",
+        "--backend=headless",
+        "--renderer=gl",
+        "--socket=wayland-0",
+        f"--config={tmp_path / 'weston.ini'}",
+        f"--log={tmp_path / 'weston.log'}",
+        "--width=1920",
+        "--height=1080",
+    ]
 
 
 def test_each_build_env_gets_a_fresh_app_id(tmp_path: Path) -> None:
@@ -263,6 +322,183 @@ def test_launch_isolates_and_stop_cleans_up(roots: list[Path], fake_bin: Path, m
         adapter.stop(instance)
     assert instance.process.returncode is not None
     assert not instance.root.exists()
+
+
+# -- the headless compositor
+
+
+def compositor_record(instance: Instance) -> dict[str, Any]:
+    return json.loads((instance.root / "fake-compositor.json").read_text())
+
+
+def test_headless_launch_draws_into_its_own_compositor(
+    roots: list[Path], fake_bin: Path, fake_compositor: Path
+) -> None:
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    compositor = instance.compositor
+    assert compositor is not None
+    try:
+        seen = json.loads((instance.state_dir / "fake-env.json").read_text())
+        display = instance.root / "run" / "wayland-0"
+        assert seen["WAYLAND_DISPLAY"] == str(display) and "DISPLAY" not in seen
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.connect(str(display))
+        record = compositor_record(instance)
+        assert record["argv"] == base.weston_argv(str(fake_compositor), instance.root)[1:]
+        assert record["env"]["XDG_RUNTIME_DIR"] == str(instance.root / "run")
+        assert not {"WAYLAND_DISPLAY", "DISPLAY"} & record["env"].keys()
+        assert (instance.root / "weston.ini").read_text() == base.WESTON_CONFIG
+    finally:
+        adapter.stop(instance)
+    assert compositor.returncode is not None and not instance.root.exists()
+
+
+@pytest.mark.parametrize("installed", [True, False])
+def test_compositor_runs_on_mesa_where_installed(
+    roots: list[Path], fake_bin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, installed: bool
+) -> None:
+    vendors = tmp_path / "egl_vendor.d"
+    vendors.mkdir()
+    (vendors / "10_nvidia.json").write_text("{}")
+    if installed:
+        (vendors / "50_mesa.json").write_text("{}")
+    monkeypatch.setattr(base, "GLVND_VENDOR_DIRS", (str(tmp_path / "absent"), str(vendors)))
+    monkeypatch.delenv("__EGL_VENDOR_LIBRARY_FILENAMES", raising=False)
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    try:
+        compositor_env = compositor_record(instance)["env"]
+        expected = str(vendors / "50_mesa.json") if installed else None
+        assert compositor_env.get("__EGL_VENDOR_LIBRARY_FILENAMES") == expected
+        assert "__EGL_VENDOR_LIBRARY_FILENAMES" not in json.loads((instance.state_dir / "fake-env.json").read_text())
+    finally:
+        adapter.stop(instance)
+
+
+def test_session_display_starts_no_compositor(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(base.DISPLAY_MODE_VARIABLE, "session")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/7")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    try:
+        assert instance.compositor is None and not (instance.root / "fake-compositor.json").exists()
+        assert (
+            json.loads((instance.state_dir / "fake-env.json").read_text())["WAYLAND_DISPLAY"] == "/run/user/7/wayland-1"
+        )
+    finally:
+        adapter.stop(instance)
+
+
+@pytest.mark.parametrize(("mode", "failure"), [("exit", "weston exited with 4"), ("silent", "not accepting after")])
+def test_compositor_failing_to_serve_fails_the_launch_before_the_app(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch, mode: str, failure: str
+) -> None:
+    monkeypatch.setenv("FAKE_COMPOSITOR_MODE", mode)
+    spawned: list[list[str]] = []
+    spawn = base._spawn
+
+    def recording(command: list[str], *args: Any) -> subprocess.Popen[bytes]:
+        spawned.append(command)
+        return spawn(command, *args)
+
+    monkeypatch.setattr(base, "_spawn", recording)
+    adapter = SwiftLinuxAdapter(fake_bin)
+    with pytest.raises(LaunchError, match=failure):
+        adapter.launch(timeout=0.5)
+    assert [command[0] for command in spawned] == [str(base.compositor_program())]
+    assert len(roots) == 1 and not roots[0].exists()
+
+
+def test_missing_weston_names_the_opt_out(
+    real_compositor: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with pytest.raises(LaunchError, match="CONFORMANCE_LINUX_DISPLAY=session"):
+        base.compositor_program()
+
+
+def test_relaunch_keeps_the_compositor(roots: list[Path], fake_bin: Path) -> None:
+    adapter = SwiftLinuxAdapter(fake_bin)
+    first = adapter.launch()
+    second = adapter.relaunch(first)
+    try:
+        assert second.compositor is first.compositor and first.compositor is not None
+        assert first.compositor.poll() is None
+    finally:
+        adapter.stop(second)
+    assert first.compositor.returncode is not None
+
+
+def test_failed_relaunch_stops_the_compositor(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+
+    def unspawnable(*args: object) -> subprocess.Popen[bytes]:
+        raise OSError("no binary")
+
+    monkeypatch.setattr(base, "_spawn", unspawnable)
+    with pytest.raises(OSError, match="no binary"):
+        adapter.relaunch(instance)
+    assert instance.compositor is not None and instance.compositor.returncode is not None
+
+
+def test_stop_reports_a_compositor_client_left_behind(
+    roots: list[Path],
+    fake_bin: Path,
+    tmp_path: Path,
+    daemons: list[subprocess.Popen[bytes]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    program = tmp_path / "clients" / "weston-desktop-shell"
+    program.parent.mkdir()
+    shutil.copy2(shutil.which("cat") or "/bin/cat", program)
+    client = subprocess.Popen([program], stdin=subprocess.PIPE, env={"XDG_RUNTIME_DIR": str(instance.root / "run")})
+    daemons.append(client)
+    with pytest.raises(StopError, match=rf"compositor processes left .*{client.pid} "):
+        adapter.stop(instance)
+    assert instance.compositor is not None and instance.compositor.returncode is not None
+    assert instance.root.exists()
+
+
+def test_stop_reports_a_compositor_that_died_under_the_app(roots: list[Path], fake_bin: Path) -> None:
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    assert instance.compositor is not None
+    instance.compositor.send_signal(signal.SIGKILL)
+    instance.compositor.wait(timeout=5)
+    with pytest.raises(StopError, match="had already exited with -9"):
+        adapter.stop(instance)
+    assert instance.process.returncode is not None
+
+
+@pytest.mark.skipif(shutil.which("weston") is None, reason="weston is not installed")
+def test_real_weston_serves_and_leaves_nothing(roots: list[Path], fake_bin: Path, real_compositor: None) -> None:
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    compositor = instance.compositor
+    assert compositor is not None
+    runtime_dir = str(instance.root / "run")
+    try:
+        identity = process_identity(compositor.pid)
+        assert identity is not None and os.path.basename(identity.executable) == "weston"
+        arguments = base.weston_argv("", instance.root)[1:]
+        assert list(identity.words[1 : 1 + len(arguments)]) == arguments
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.connect(instance.env["WAYLAND_DISPLAY"])
+        assert base.find_compositor_leftovers(runtime_dir)
+    finally:
+        adapter.stop(instance)
+    assert compositor.returncode == 0 and process_identity(compositor.pid) is None
+    assert not base.find_compositor_leftovers(runtime_dir)
 
 
 @pytest.mark.parametrize("adapter_class", [SwiftLinuxAdapter, RustAdapter])

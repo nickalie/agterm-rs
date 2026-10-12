@@ -677,7 +677,7 @@ def test_window_commands(cli, ctl, adapter):
         _ok(cli("window", "zoom", wid), "ok\n")
         _window_reads(ctl, wid, zoomed=False)
         for fullscreen in (True, False):
-            # A dropped macOS toggle is sent again, as in protocol/test_window.py's _toggle_fullscreen.
+            # A dropped macOS toggle is sent again, as in protocol/test_window.py's _toggle_until.
             for attempt in range(3):
                 _ok(cli("window", "fullscreen", wid), "ok\n")
                 try:
