@@ -107,8 +107,8 @@ def test_skip_reasons_and_summary(pytester: pytest.Pytester, roots: list[Path], 
         [
             "SKIPPED [[]1[]] test_skip_reasons_and_summary.py:7: not-yet-at-level: since 0.37.0, swift-linux is at 0.36.0",
             "*unsupported: swift-linux lacks window-geometry (GTK4 cannot restore x/y)",
-            "swift-linux: 3 pass, 1 fail, 1 skip(unsupported), 1 skip(not-yet-at-level), 1 skip(other), 0 reruns, "
-            "parity 60.0%",
+            "swift-linux: 2 pass, 1 fail, 1 skip(unsupported), 1 skip(not-yet-at-level), 1 skip(other), 0 reruns, "
+            "parity 50.0%",
         ]
     )
     assert len(roots) == 1 and not roots[0].exists()
@@ -240,10 +240,13 @@ def test_rust_without_a_binary_skips_everything_as_not_yet_at_level(
 
         def test_unmarked(app):
             pass
+
+        def test_needs_no_instance():
+            pass
         """
     )
     result = run_suite(pytester, "--impl", "rust")
-    result.assert_outcomes(skipped=3)
+    result.assert_outcomes(passed=1, skipped=3)
     result.stdout.fnmatch_lines(
         [
             "rust: 0 pass, 0 fail, 0 skip(unsupported), 3 skip(not-yet-at-level), 0 skip(other), 0 reruns, parity 0.0%",

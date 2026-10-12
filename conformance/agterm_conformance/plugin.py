@@ -75,7 +75,7 @@ class ImplOptions:
 
 _OPTIONS_KEY = pytest.StashKey[ImplOptions]()
 _ADAPTER_KEY = pytest.StashKey["Adapter"]()
-_SUMMARY_KEY = pytest.StashKey[bool]()
+_SUMMARY_KEY = pytest.StashKey[frozenset[str]]()
 _GATE_KEY = pytest.StashKey[coverage.Report]()
 _COLLECTED_KEY = pytest.StashKey[list[pytest.Item]]()
 
@@ -250,9 +250,10 @@ def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config
     for item in items:
         check_markers(item)
     # trylast: -k/-m deselection has already run, so only tests that will execute demand --impl.
-    if any(_uses_impl(item) for item in items):
+    exercised = frozenset(item.nodeid for item in items if _uses_impl(item))
+    if exercised:
         require_implementation(options)
-        config.stash[_SUMMARY_KEY] = True
+        config.stash[_SUMMARY_KEY] = exercised
 
 
 def _uses_impl(item: pytest.Item) -> bool:
@@ -413,23 +414,29 @@ def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: pyte
             terminalreporter.write_line(f"baselined, accepted for now ({len(report.baselined)}):")
             for key in report.baselined:
                 terminalreporter.write_line(f"  {key}")
-    if not config.stash.get(_SUMMARY_KEY, False):
+    exercised = config.stash.get(_SUMMARY_KEY, frozenset())
+    if not exercised:
         return
     terminalreporter.write_sep("-", "agterm conformance")
-    terminalreporter.write_line(summary_line(terminalreporter.stats, get_impl_options(config).impl))
+    terminalreporter.write_line(summary_line(terminalreporter.stats, get_impl_options(config).impl, exercised))
 
 
-def summary_line(stats: Mapping[str, list[Any]], impl: str | None) -> str:
-    failed = {report.nodeid for key in ("failed", "error") for report in stats.get(key, [])}
-    passed = {report.nodeid for report in stats.get("passed", [])} - failed
+def summary_line(stats: Mapping[str, list[Any]], impl: str | None, exercised: frozenset[str]) -> str:
+    """Counts only `exercised` tests: a self-test passing next to an absent build must not lift its parity."""
+
+    def reports(key: str) -> list[Any]:
+        return [report for report in stats.get(key, []) if report.nodeid in exercised]
+
+    failed = {report.nodeid for key in ("failed", "error") for report in reports(key)}
+    passed = {report.nodeid for report in reports("passed")} - failed
     skips = {UNSUPPORTED: 0, NOT_YET_AT_LEVEL: 0, "other": 0}
-    for report in stats.get("skipped", []):
+    for report in reports("skipped"):
         skips[_skip_category(report)] += 1
     counts = [
         f"{len(passed)} pass",
         f"{len(failed)} fail",
         *(f"{count} skip({category})" for category, count in skips.items()),
-        f"{len(stats.get('rerun', []))} reruns",
+        f"{len(reports('rerun'))} reruns",
     ]
     # Parity is judged on the tests the build owes: an unsupported capability is a recorded divergence, not a gap.
     owed = len(passed) + len(failed) + skips[NOT_YET_AT_LEVEL]

@@ -352,14 +352,14 @@ def test_stop_removes_the_zmx_dir_holding_only_zmx_logs(tmp_path: Path) -> None:
     remove_zmx_dir(str(zmx_dir))
 
 
-@pytest.mark.parametrize("extra", ["sock", "logs/core"])
+@pytest.mark.parametrize("extra", ["sock", "logs/core", "logs/zmx.log.1"])
 def test_stop_keeps_a_zmx_dir_holding_anything_else(tmp_path: Path, extra: str) -> None:
     zmx_dir = tmp_path / "agterm-zmx-x"
     (zmx_dir / "logs").mkdir(parents=True)
     (zmx_dir / "logs" / "zmx.log").write_text("")
     (zmx_dir / extra).write_text("")
     remove_zmx_dir(str(zmx_dir))
-    assert (zmx_dir / extra).exists()
+    assert (zmx_dir / extra).exists() and (zmx_dir / "logs" / "zmx.log").exists()
 
 
 def test_first_run_launch_leaves_out_the_prior_state_marker(roots: list[Path], fake_bin: Path) -> None:

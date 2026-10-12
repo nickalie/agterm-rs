@@ -132,8 +132,6 @@ CAPABILITIES: Mapping[str, str] = {
     "config-reload-counts": "`config.reload` answers with the ghostty config's diagnostic count in `result.count`",
     "hidden-split-holds-focus": "`session.focus` on a hidden split reads back as `splitFocused`; upstream's shown "
     "left pane takes the focus back while its window is key",
-    "collapsed-create-stays-background": "`workspace.new --collapsed` leaves the current workspace and an applied "
-    "focus set as they were; the Linux fork makes the collapsed workspace current and joins it to the set",
     "capture-reads-command-panes": "`restore.capture` records a `--command` session's program; upstream reads only "
     "the foreground group's leader, there the setuid `login` wrapper whose argv a user cannot read",
 }
@@ -1081,9 +1079,11 @@ def remove_zmx_dir(path: str) -> None:
         if set(os.listdir(path)) - {"logs"} or os.path.islink(logs):
             return
         if os.path.isdir(logs):
-            for entry in os.scandir(logs):
-                if entry.name.endswith(".log") and entry.is_file(follow_symlinks=False):
-                    os.unlink(entry.path)
+            entries = list(os.scandir(logs))
+            if not all(entry.name.endswith(".log") and entry.is_file(follow_symlinks=False) for entry in entries):
+                return
+            for entry in entries:
+                os.unlink(entry.path)
             os.rmdir(logs)
         os.rmdir(path)
     except OSError:

@@ -635,14 +635,17 @@ a push to `nickalie/agterm-rs`. Everything before this task is Linux-only.
 - [x] run `pytest conformance/selftests` and `pytest conformance --coverage-gate`
 - [x] ➕ delete `conformance/coverage-baseline.txt` and its `--coverage-baseline` in `conformance-gate.yml` and `test_coverage.py`
 - ➕ `--impl rust` with no binary: 687 skipped, every one `not-yet-at-level`; the summary line now ends in
-  `parity N%`, passes over the tests the build owes (pass + fail + not-yet-at-level), so it reads `parity 0.0%`.
+  `parity N%`, passes over the tests the build owes (pass + fail + not-yet-at-level), so it reads `parity 0.0%`;
+  it counts only tests that use the implementation, so a self-test passing in the same run lifts nothing.
 - ➕ temp-root confinement is checked, not assumed: `check_launch_env` also roots the four `XDG_*_HOME`s, and
   `selftests/test_isolation.py` builds every adapter's launch env from a hostile parent env and asserts each
   location it names is under the root, that the only socket connects are the client's (root re-checked) and the
   helper-socket probe, and that conformance tests open no socket or process of their own. `agtermctl` always gets
   `--socket` through `Cli` (`test_fixtures.py`); zmx's directory is derived from the rooted state dir.
-- ➕ the weakened assertions from Tasks 10–11: `workspace.new --collapsed` is a state divergence, now the
-  `collapsed-create-stays-background` capability (upstream has it) with both branches asserted; the
+- ➕ the weakened assertions from Tasks 10–11: `workspace.new --collapsed` taking the current workspace is a fork
+  bug, not a capability (upstream documents that a background create never takes it): the test asserts upstream's
+  contract for it and for `session.new --create-workspace --no-select`, strict-xfail on swift-linux for the
+  collapsed case, listed in `conformance/docs/fork-bugs.md`; the
   `workspace.focus` and decode-error texts are text-only, asserting the shared part. `add-session` accepts the
   `menu-button` or `popup` role; its "Add Slide" name is explained in `spike-macos.md`.
 - ➕ the baseline file is gone; the `--coverage-baseline` option stays for a future catalog catch-up.

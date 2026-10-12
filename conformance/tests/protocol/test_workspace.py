@@ -102,20 +102,13 @@ def test_new_workspace_name(ctl, name):
 
 
 @pytest.mark.covers("workspace.new", "field:tree.workspace.collapsed", "field:tree.workspace.focused")
-def test_new_collapsed_workspace(ctl, adapter):
+def test_new_collapsed_workspace(ctl):
     _clear_focus(ctl)
     current, _ = _new_workspace(ctl, sessions=1)
     assert_ok(ctl.request("workspace.focus", current, mode="on"))
 
     collapsed = assert_ok(ctl.request("workspace.new", collapsed=True))["id"]
-    tree = ctl.tree()
-    assert_subset(_node(tree, collapsed), {"collapsed": True, "sessions": []})
-    if adapter.has("collapsed-create-stays-background"):
-        assert active_workspace_id(tree) == current
-        assert _focus_state(ctl) == ({current}, True)
-    else:
-        assert active_workspace_id(tree) == collapsed
-        assert _focus_state(ctl) == ({current, collapsed}, True)
+    assert_subset(_node(ctl.tree(), collapsed), {"collapsed": True, "sessions": []})
 
     plain = assert_ok(ctl.request("workspace.new", collapsed=False))["id"]
     tree = ctl.tree()
@@ -123,6 +116,52 @@ def test_new_collapsed_workspace(ctl, adapter):
     assert active_workspace_id(tree) == plain
     assert plain in _focus_state(ctl)[0]
     _clear_focus(ctl)
+
+
+def _create_collapsed(ctl):
+    return assert_ok(ctl.request("workspace.new", collapsed=True))["id"]
+
+
+def _create_by_background_session(ctl):
+    name = f"background {len(workspaces(ctl.tree()))}"
+    sid = assert_ok(ctl.request("session.new", workspaceName=name, createWorkspace=True, noSelect=True))["id"]
+    (node,) = [node for node in workspaces(ctl.tree()) if node["name"] == name]
+    assert session_ids(ctl.tree(), node["id"]) == [sid]
+    return node["id"]
+
+
+@pytest.mark.covers("workspace.new", "session.new", "field:tree.workspace.active", "field:tree.workspace.focused")
+@pytest.mark.parametrize(
+    "create",
+    [
+        pytest.param(
+            _create_collapsed,
+            id="collapsed",
+            marks=pytest.mark.xfail(
+                "config.getoption('impl') == 'swift-linux'",
+                reason="swift-linux bug: a collapsed create becomes current and joins the focus set "
+                "(upstream commands.html: a background create never takes the active workspace)",
+                raises=AssertionError,
+                strict=True,
+            ),
+        ),
+        pytest.param(_create_by_background_session, id="session-no-select"),
+    ],
+)
+def test_background_create_keeps_the_current_workspace(ctl, create):
+    _clear_focus(ctl)
+    current, (selected,) = _new_workspace(ctl, sessions=1)
+    assert_ok(ctl.request("workspace.focus", current, mode="on"))
+
+    try:
+        create(ctl)
+        tree = ctl.tree()
+        assert active_workspace_id(tree) == current
+        assert active_session_id(tree) == selected
+        assert _focus_state(ctl) == ({current}, True)
+        assert assert_ok(ctl.request("session.new"))["id"] in session_ids(ctl.tree(), current)
+    finally:
+        _clear_focus(ctl)
 
 
 @pytest.mark.covers("workspace.select", "field:tree.workspace.active", "event:session.selected")
