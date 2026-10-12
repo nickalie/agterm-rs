@@ -105,8 +105,9 @@ Spike B asks whether pyobjc's AX API can drive the reference the way the upstrea
 It launches the reference through `SwiftMacosAdapter` (sentinel mode) and drives it through `AxDriver`.
 
 - `add-session` is found by `AXIdentifier`.
-  It is a SwiftUI `Menu`, so it surfaces as `AXPopUpButton` with `AXDescription` "Add session" and one action,
-  `AXPress`.
+  It is a SwiftUI `Menu` with `AXDescription` "Add session" and one action, `AXPress`.
+  Its role follows the OS, not the reference: `AXPopUpButton` on macOS 15, `AXMenuButton` on macOS 26
+  (spike-macos run 38248492987), so `test_add_session_menu_opens_a_session` expects `menu-button`, the runner's.
 - `AXPress` returns success at once and opens the menu.
   Its "New Session" `AXMenuItem` is found by title outside the menu bar, since the menu bar keeps every closed
   menu's items in the tree; `AXPress` on it adds a session, and the socket confirms it.
