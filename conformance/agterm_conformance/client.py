@@ -6,9 +6,11 @@ import json
 import os
 import socket
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from types import TracebackType
+from typing import Any, Self
 
 # ControlWire.maxRequestLineBytes, newline excluded: over it the server stops reading and closes
 # (macOS first replies ok:false "request too large or read failed"; Linux sends nothing).
@@ -82,6 +84,64 @@ def decode_response(line: bytes) -> Response:
     return Response(ok=raw["ok"], result=result, error=error, raw=raw)
 
 
+class Stream:
+    """A connection the server keeps after its reply: `zmx.present` presentation frames, `session.overlay.job.run`
+    job frames. One JSON object per line in both directions; close it (or use it as a context manager) when done.
+    """
+
+    def __init__(self, sock: socket.socket, path: Path, reply: Response, max_line_bytes: int) -> None:
+        self.sock = sock
+        self.path = path
+        # Set by `Client.open_stream` from the first line, before any frame is read.
+        self.reply = reply
+        self._pending = bytearray()
+        self._max_line_bytes = max_line_bytes
+
+    def send(self, frame: Mapping[str, Any]) -> None:
+        self.sock.sendall(json.dumps(frame, separators=(",", ":"), ensure_ascii=False).encode() + b"\n")
+
+    def read(self, timeout: float = DEFAULT_TIMEOUT) -> dict[str, Any]:
+        """The next frame; `NoResponse` once the server closed the stream, `ClientTimeout` when none came in time."""
+        line = self.read_line(timeout)
+        try:
+            frame = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise BadResponse(f"stream frame is not JSON: {error}: {line[:200]!r}") from None
+        if not isinstance(frame, dict):
+            raise BadResponse(f"stream frame is not an object: {line[:200]!r}")
+        return frame
+
+    def read_line(self, timeout: float = DEFAULT_TIMEOUT) -> bytes:
+        deadline = time.monotonic() + timeout
+        while (newline := self._pending.find(b"\n")) < 0:
+            if len(self._pending) > self._max_line_bytes:
+                raise ResponseTooLarge(f"stream line exceeds {self._max_line_bytes} bytes")
+            try:
+                self.sock.settimeout(_remaining(deadline))
+                chunk = self.sock.recv(65536)
+            except TimeoutError:
+                raise ClientTimeout(f"no stream frame from {self.path} within {timeout}s") from None
+            except ConnectionResetError as error:
+                raise NoResponse(f"stream from {self.path} was reset") from error
+            if not chunk:
+                raise NoResponse(f"stream from {self.path} closed")
+            self._pending += chunk
+        line = bytes(self._pending[:newline])
+        del self._pending[: newline + 1]
+        return line
+
+    def close(self) -> None:
+        self.sock.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self, kind: type[BaseException] | None, error: BaseException | None, trace: TracebackType | None
+    ) -> None:
+        self.close()
+
+
 class Client:
     """One request per connection, as the server expects."""
 
@@ -109,6 +169,37 @@ class Client:
     def send(self, payload: dict[str, Any], timeout: float | None = None) -> Response:
         line = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
         return self.send_line(line, timeout=timeout)
+
+    def open_stream(self, cmd: str, target: str | None = None, **args: Any) -> Stream:
+        """Send one request and keep its connection: after an ok reply the server streams frames on it.
+
+        The stream is returned whatever the reply says; a refused one is already closed by the server.
+        """
+        payload: dict[str, Any] = {"cmd": cmd}
+        if target is not None:
+            payload["target"] = target
+        if args:
+            payload["args"] = args
+        line = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
+        if len(line) > MAX_REQUEST_LINE_BYTES:
+            raise RequestTooLarge(f"request too large ({len(line)} bytes, cap {MAX_REQUEST_LINE_BYTES})")
+        check_under_root(self.socket_path, self.root)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(self.timeout)
+            try:
+                sock.connect(os.fspath(self.socket_path))
+            except TimeoutError:
+                raise ClientTimeout(f"no response from {self.socket_path} within {self.timeout}s") from None
+            except OSError as error:
+                raise ConnectFailed(f"cannot connect to {self.socket_path}: {error}") from error
+            sock.sendall(line + b"\n")
+            stream = Stream(sock, self.socket_path, Response(False, None, None, {}), self.max_response_bytes)
+            stream.reply = decode_response(stream.read_line(self.timeout))
+            return stream
+        except BaseException:
+            sock.close()
+            raise
 
     def send_line(self, line: bytes, timeout: float | None = None, check_cap: bool = True) -> Response:
         """Write `line` plus a newline verbatim; `check_cap=False` lets a test probe the server's own cap."""

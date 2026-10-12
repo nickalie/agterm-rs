@@ -1,5 +1,6 @@
 import json
 import os
+import pwd
 import shutil
 import subprocess
 import traceback
@@ -234,6 +235,7 @@ def test_launch_isolates_and_stop_cleans_up(roots: list[Path], fake_bin: Path, m
         assert seen["AGTERM_APP_ID"] == instance.app_id
         assert (instance.home / ".claude").is_dir() and (instance.home / ".codex").is_dir()
         assert (instance.state_dir / "windows").is_dir()
+        assert not (instance.state_dir / "settings.json").exists()
         ghostty = (instance.state_dir / "config" / "ghostty.conf").read_text().splitlines()
         assert ghostty == ["command = /bin/sh", "copy-on-select = false"]
         assert seen["XDG_RUNTIME_DIR"] == str(instance.root / "run")
@@ -243,6 +245,16 @@ def test_launch_isolates_and_stop_cleans_up(roots: list[Path], fake_bin: Path, m
         adapter.stop(instance)
     assert instance.process.returncode is not None
     assert not instance.root.exists()
+
+
+def test_launch_seeds_settings(roots: list[Path], fake_bin: Path) -> None:
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch(settings={"restoreMode": "live", "autoFollowAttention": "s30"})
+    try:
+        seeded = json.loads((instance.state_dir / "settings.json").read_text())
+        assert seeded == {"restoreMode": "live", "autoFollowAttention": "s30"}
+    finally:
+        adapter.stop(instance)
 
 
 def test_duplicate_app_id_is_refused_until_the_owner_stops(roots: list[Path], fake_bin: Path) -> None:
@@ -436,17 +448,68 @@ def test_version_tuple_rejects_garbage() -> None:
         version_tuple("0.36.0-beta")
 
 
-def test_swift_linux_profile_is_static() -> None:
-    adapter = SwiftLinuxAdapter(None)
+@pytest.fixture
+def zsh_login(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """An executable `zsh` as this account's password-database shell."""
+    shell = tmp_path / "bin" / "zsh"
+    shell.parent.mkdir()
+    shell.write_text("#!/bin/sh\n")
+    shell.chmod(0o755)
+    _passwd_shell(monkeypatch, str(shell))
+    return shell
+
+
+def _passwd_shell(monkeypatch: pytest.MonkeyPatch, shell: str) -> None:
+    entry = pwd.getpwuid(os.getuid())
+    fake = pwd.struct_passwd((*entry[:6], shell))
+    monkeypatch.setattr(base.pwd, "getpwuid", lambda uid: fake)
+
+
+def _staged_zmx(launcher: Path) -> Path:
+    zmx = launcher.parent.parent / "libexec" / "zmx"
+    zmx.parent.mkdir()
+    zmx.write_text("#!/bin/sh\n")
+    zmx.chmod(0o755)
+    return zmx
+
+
+def test_swift_linux_profile(zsh_login: Path, fake_bin: Path) -> None:
+    _staged_zmx(fake_bin)
+    adapter = SwiftLinuxAdapter(fake_bin)
     assert adapter.parity_level == "0.36.0"
     assert adapter.capabilities == {"posix-shell", "live-sessions"}
     assert "window-geometry" not in adapter.capabilities
+    assert adapter.profile.absent == {}
+
+
+@pytest.mark.parametrize(
+    ("shell", "reason"),
+    [
+        ("/usr/bin/fish", "the password-database login shell is /usr/bin/fish, not zsh"),
+        ("", "the password-database login shell is unset, not zsh"),
+        ("/nonexistent/zsh", "the login shell /nonexistent/zsh is not executable"),
+    ],
+)
+def test_live_sessions_need_an_executable_zsh_login_shell(
+    monkeypatch: pytest.MonkeyPatch, fake_bin: Path, shell: str, reason: str
+) -> None:
+    _passwd_shell(monkeypatch, shell)
+    _staged_zmx(fake_bin)
+    for adapter in (SwiftLinuxAdapter(fake_bin), SwiftMacosAdapter(None, launch_mode="plain")):
+        assert "live-sessions" not in adapter.capabilities
+        assert adapter.profile.absent == {"live-sessions": reason}
+
+
+def test_swift_linux_live_sessions_need_the_staged_zmx(zsh_login: Path, fake_bin: Path) -> None:
+    adapter = SwiftLinuxAdapter(fake_bin)
+    assert "live-sessions" not in adapter.capabilities
+    assert adapter.profile.absent["live-sessions"].startswith("no executable zmx at ")
 
 
 @pytest.mark.parametrize(
     ("mode", "zmx", "live"), [("plain", False, True), ("uitest", False, False), ("uitest", True, True)]
 )
-def test_swift_macos_profile_follows_launch_mode(mode: str, zmx: bool, live: bool) -> None:
+def test_swift_macos_profile_follows_launch_mode(zsh_login: Path, mode: str, zmx: bool, live: bool) -> None:
     adapter = SwiftMacosAdapter(None, launch_mode=mode, enable_zmx=zmx)
     assert adapter.parity_level == "0.36.0"
     assert {"posix-shell", "window-geometry"} <= adapter.capabilities
@@ -589,7 +652,7 @@ def test_swift_macos_launch_env(tmp_path: Path, mode: str, zmx: bool) -> None:
     check_launch_env(env, tmp_path, needs_app_id=False)
 
 
-def test_swift_macos_defaults_to_the_sentinel_with_zmx(tmp_path: Path) -> None:
+def test_swift_macos_defaults_to_the_sentinel_with_zmx(zsh_login: Path, tmp_path: Path) -> None:
     adapter = SwiftMacosAdapter(tmp_path / "agterm.app")
     env = adapter.build_env(tmp_path)
     assert env["AGTERM_UITEST_FORCE_SIDEBAR_VISIBLE"] == "1" and env["AGTERM_UITEST_ENABLE_ZMX"] == "1"

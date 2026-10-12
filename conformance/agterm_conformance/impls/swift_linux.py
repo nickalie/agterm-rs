@@ -5,12 +5,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from agterm_conformance.impls.base import Adapter, Profile
+from agterm_conformance.impls.base import Adapter, Profile, login_shell_blocker
 
+PARITY_LEVEL = "0.36.0"
 # GTK4 cannot place a window at x/y, so `window-geometry` is absent, and Wayland's xdg-shell reports no
 # minimized state (niri ignores the request too), so `window-minimize` is. The fork's own dispatcher and
 # adapters lack the rest of upstream's set in swift_macos.py.
-PROFILE = Profile(parity_level="0.36.0", capabilities=frozenset({"posix-shell", "live-sessions"}))
+CAPABILITIES = frozenset({"posix-shell"})
 
 
 class SwiftLinuxAdapter(Adapter):
@@ -22,10 +23,26 @@ class SwiftLinuxAdapter(Adapter):
     def __init__(self, bin: Path | None, ctl: Path | None = None, resource_root: Path | None = None) -> None:
         super().__init__(bin, ctl)
         self._resource_root = resource_root
+        self._profile: Profile | None = None
 
     @property
     def profile(self) -> Profile:
-        return PROFILE
+        if self._profile is None:
+            blocker = self.live_sessions_blocker()
+            live = frozenset() if blocker else frozenset({"live-sessions"})
+            absent = {"live-sessions": blocker} if blocker else {}
+            self._profile = Profile(PARITY_LEVEL, CAPABILITIES | live, absent)
+        return self._profile
+
+    def live_sessions_blocker(self) -> str | None:
+        """The host prerequisites `LinuxZmxLaunch` checks: a zsh login shell and the staged zmx."""
+        if blocker := login_shell_blocker():
+            return blocker
+        install = self._install_root()
+        zmx = install / "libexec" / "zmx" if install is not None else None
+        if zmx is None or not os.access(zmx, os.X_OK):
+            return f"no executable zmx at {zmx}"
+        return None
 
     def _install_root(self) -> Path | None:
         # The installed wrapper lives in `<install>/bin/`; resolving links keeps a PATH symlink working.

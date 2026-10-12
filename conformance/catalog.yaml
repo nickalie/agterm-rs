@@ -370,3 +370,14 @@ exemptions:
     session and which no test may seed without overwriting the user's; its refusals are still tested
   session.overlay.copy: no protocol command makes a selection inside an overlay terminal (session.selectall acts on
     the panes underneath); its refusals are still tested
+  zmx.reset: a confirmed reset quits the app and relaunches it through `open -n` outside the harness
+    (LiveResetRelauncher), a process the harness may neither start nor stop; the Linux fork refuses it as unsupported.
+    Its --force refusal is still tested
+  field:result.liveReset: written only by a confirmed zmx.reset, exempted above
+  field:tree.liveReset: reports a reset zmx.reset armed or a launch consumed, exempted above
+  field:tree.session.remoteHost: set only on a session attached from another machine, which needs zmx.attach over ssh,
+    excluded by the suite's no-network constraints
+  field:tree.session.presentation: the viewer side of an attached session's presentation stream, which needs
+    zmx.attach over ssh; the origin side is tested through zmx.present
+  event:remote.opened: emitted when a session attached over ssh opens, excluded with zmx.attach
+  event:remote.closed: emitted when a session attached over ssh closes, excluded with zmx.attach

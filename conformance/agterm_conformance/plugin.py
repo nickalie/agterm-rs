@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from agterm_conformance import coverage, wait
-from agterm_conformance.client import Response, check_under_root
+from agterm_conformance.client import Response, Stream, check_under_root
 from agterm_conformance.match import assert_ok
 
 if TYPE_CHECKING:
@@ -301,7 +301,12 @@ def skip_reason(item: pytest.Item, adapter: Adapter) -> str | None:
         for capability in marker.args:
             if capability not in profile.capabilities:
                 why = marker.kwargs.get("reason")
-                return f"{UNSUPPORTED}: {adapter.name} lacks {capability}" + (f" ({why})" if why else "")
+                here = profile.absent.get(capability)
+                return (
+                    f"{UNSUPPORTED}: {adapter.name} lacks {capability}"
+                    + (f" on this host: {here}" if here else "")
+                    + (f" ({why})" if why else "")
+                )
     return None
 
 
@@ -384,6 +389,10 @@ class Ctl:
 
     def tree(self) -> dict[str, Any]:
         return assert_ok(self.request("tree"))
+
+    def stream(self, cmd: str, target: str | None = None, **args: Any) -> Stream:
+        """A stream-mode command (`zmx.present`, `session.overlay.job.run`): its reply, then its frames."""
+        return self.instance.client().open_stream(cmd, target, **args)
 
     def wait_tree(
         self, predicate: Callable[[dict[str, Any]], Any], timeout: float = wait.DEFAULT_TIMEOUT
@@ -485,6 +494,27 @@ def app(adapter: Adapter) -> Iterator[Instance]:
 def shared_app(adapter: Adapter) -> Iterator[Instance]:
     """One instance for the module; the default target of `ctl` and `cli`."""
     yield from _launched(adapter)
+
+
+@pytest.fixture
+def launch(adapter: Adapter) -> Iterator[Callable[..., Ctl]]:
+    """Start further instances, such as one with seeded settings (`launch(settings={...})`); stopped at teardown."""
+    launched: list[Instance] = []
+
+    def start(**kwargs: Any) -> Ctl:
+        instance = adapter.launch(**kwargs)
+        launched.append(instance)
+        return Ctl(instance)
+
+    yield start
+    failure: Exception | None = None
+    for instance in reversed(launched):
+        try:
+            adapter.stop(instance)
+        except Exception as error:  # noqa: BLE001 - stop every instance, then report the first failure
+            failure = failure or error
+    if failure is not None:
+        raise failure
 
 
 def _target_instance(request: pytest.FixtureRequest) -> Instance:

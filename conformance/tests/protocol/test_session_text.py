@@ -219,6 +219,22 @@ def test_search_counts_the_matches(ctl):
     assert assert_ok(ctl.request("session.search", sid, to="close"))["id"] == sid
 
 
+@POSIX_SHELL
+@pytest.mark.covers("session.type", "field:tree.session.title")
+def test_title_reads_the_terminal_title_a_program_set(ctl):
+    sid = _realized(ctl)
+    assert_absent(find_session(ctl.tree(), sid), "title")
+    title = f"agt-title-{next(_markers)}"
+    # OSC 0 sets the title; the command line carries the title split in two, so only the escape can set it.
+    assert_ok(ctl.request("session.type", sid, text=f"printf '\\033]0;%s%s\\007' {title[:4]} {title[4:]}\n"))
+
+    def titled(tree):
+        assert find_session(tree, sid).get("title") == title
+        return True
+
+    ctl.wait_tree(titled)
+
+
 @pytest.mark.covers("session.type", "session.text", "session.search")
 @pytest.mark.parametrize(
     ("cmd", "args"),

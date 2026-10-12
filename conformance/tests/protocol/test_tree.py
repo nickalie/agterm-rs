@@ -1,8 +1,19 @@
-"""The `tree` and `window.list` projections of a fresh instance. Every test here only reads, so the module's
-shared instance stays fresh for all of them."""
+"""The `tree` and `window.list` projections of a fresh instance. Tests on the module's shared instance only read,
+so it stays fresh for all of them; a test that changes state takes an instance of its own."""
+
+import shutil
 
 import pytest
-from agterm_conformance.match import assert_absent, assert_ok, assert_subset, find_session, sessions, workspaces
+from agterm_conformance.match import (
+    assert_absent,
+    assert_ok,
+    assert_subset,
+    find_session,
+    session_ids,
+    sessions,
+    workspaces,
+)
+from agterm_conformance.wait import wait_until
 
 
 @pytest.mark.covers(
@@ -164,3 +175,42 @@ def test_fresh_window_node(ctl):
     )
     assert isinstance(window["id"], str) and window["id"]
     assert_absent(window, "autoFollowMs")
+
+
+@pytest.mark.covers("field:tree.idleMs")
+def test_idle_ms_stays_off_for_control_input(app, ctl):
+    # Only user input starts the idle clock; both references keep scripted typing and navigation off it.
+    (first,) = session_ids(ctl.tree())
+    ctl.wait_mounted(first, "left")
+    second = assert_ok(ctl.request("session.new"))["id"]
+    ctl.wait_mounted(second, "left")
+    assert_ok(ctl.request("session.type", second, text="\n"))
+    assert_ok(ctl.request("session.select", first))
+    assert_ok(ctl.request("session.go", to="next"))
+    assert_ok(ctl.request("workspace.new"))
+    assert_ok(ctl.request("session.text", second))
+    assert_absent(ctl.tree()["tree"], "idleMs")
+
+
+@pytest.mark.covers("field:tree.autoFollowMs", "field:window.autoFollowMs")
+def test_auto_follow_timeout_reads_back_from_settings(launch):
+    seeded = launch(settings={"autoFollowAttention": "s30"})
+    assert seeded.tree()["tree"]["autoFollowMs"] == 30000
+    (window,) = assert_ok(seeded.request("window.list"))["windows"]
+    assert window["autoFollowMs"] == 30000
+
+
+@pytest.mark.covers("window.rename", "field:tree.indexUnsaved")
+def test_index_unsaved_while_windows_json_cannot_be_written(app, ctl):
+    (window,) = assert_ok(ctl.request("window.list"))["windows"]
+    index = app.state_dir / "windows.json"
+    index.unlink(missing_ok=True)
+    # A directory in its place makes the atomic replace fail until it is gone.
+    index.mkdir()
+    (index / "blocker").write_text("")
+    assert_ok(ctl.request("window.rename", window["id"], name="unsaved"))
+    assert ctl.tree()["tree"]["indexUnsaved"] is True
+    shutil.rmtree(index)
+    assert_ok(ctl.request("window.rename", window["id"], name="saved"))
+    assert_absent(ctl.tree()["tree"], "indexUnsaved")
+    wait_until(index.is_file)

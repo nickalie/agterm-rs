@@ -4,13 +4,14 @@ import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from agterm_conformance.client import Response
-from agterm_conformance.impls.base import Instance
+from agterm_conformance.impls.base import Instance, Profile
 from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
 from agterm_conformance.match import session_ids
-from agterm_conformance.plugin import Ctl
+from agterm_conformance.plugin import Ctl, skip_reason
 from agterm_conformance.wait import Cursor, WaitTimeout, wait_event, wait_response, wait_text, wait_until
 
 TWO_SESSIONS = {
@@ -102,6 +103,42 @@ def test_skip_reasons_and_summary(pytester: pytest.Pytester, roots: list[Path], 
         ]
     )
     assert len(roots) == 1 and not roots[0].exists()
+
+
+def test_launch_fixture_starts_seeded_instances_and_stops_them(
+    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path
+) -> None:
+    pytester.makepyfile(
+        """
+        import json
+
+        def test_extra(launch):
+            first, second = launch(settings={"restoreMode": "live"}), launch()
+            assert first.request("version").ok and second.request("version").ok
+            assert json.loads((first.instance.state_dir / "settings.json").read_text()) == {"restoreMode": "live"}
+            assert not (second.instance.state_dir / "settings.json").exists()
+        """
+    )
+    run_suite(pytester, *swift_linux(fake_bin)).assert_outcomes(passed=1)
+    assert len(roots) == 2 and not any(root.exists() for root in roots)
+
+
+def test_skip_reason_says_why_this_host_lacks_a_capability(pytester: pytest.Pytester) -> None:
+    item = pytester.getitem(
+        """
+        import pytest
+
+        @pytest.mark.requires("live-sessions", reason="needs zmx")
+        def test_live():
+            pass
+        """,
+        "test_live",
+    )
+    why = "the password-database login shell is /bin/fish, not zsh"
+    adapter = SimpleNamespace(
+        available=True, name="swift-linux", profile=Profile("0.36.0", frozenset(), {"live-sessions": why})
+    )
+    assert skip_reason(item, adapter) == f"unsupported: swift-linux lacks live-sessions on this host: {why} (needs zmx)"
 
 
 def test_level_is_checked_before_capabilities(pytester: pytest.Pytester, roots: list[Path], fake_bin: Path) -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from agterm_conformance.impls.base import Adapter, LaunchError, Profile
+from agterm_conformance.impls.base import Adapter, LaunchError, Profile, login_shell_blocker
 
 PARITY_LEVEL = "0.36.0"
 BASE_CAPABILITIES = frozenset(
@@ -51,8 +51,14 @@ class SwiftMacosAdapter(Adapter):
 
     @property
     def profile(self) -> Profile:
-        live = self.launch_mode == "plain" or self.enable_zmx
-        return Profile(PARITY_LEVEL, BASE_CAPABILITIES | ({"live-sessions"} if live else set()))
+        blocker = self.live_sessions_blocker()
+        live = frozenset() if blocker else frozenset({"live-sessions"})
+        return Profile(PARITY_LEVEL, BASE_CAPABILITIES | live, {"live-sessions": blocker} if blocker else {})
+
+    def live_sessions_blocker(self) -> str | None:
+        if self.launch_mode == "uitest" and not self.enable_zmx:
+            return "the XCUITest sentinel turns zmx off without AGTERM_UITEST_ENABLE_ZMX"
+        return login_shell_blocker()
 
     def _macos_dir(self) -> Path | None:
         if self.bin is None:

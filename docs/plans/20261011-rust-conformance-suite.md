@@ -474,13 +474,34 @@ events by kind, CLI by subcommand words (`cli` items carry their `wire`); exempt
 **Files:**
 - Create: `conformance/tests/protocol/test_restore.py`
 - Create: `conformance/tests/protocol/test_zmx.py`
+- ➕ Modify: `conformance/tests/protocol/test_tree.py` (`idleMs`, `autoFollowMs`, `indexUnsaved`) and
+  `conformance/tests/protocol/test_session_text.py` (`title`)
+- ➕ Modify: `conformance/agterm_conformance/impls/{base,swift_linux,swift_macos}.py` (`launch(settings=...)`,
+  host-detected `live-sessions` with its reason in `Profile.absent`), `client.py` (`Client.open_stream` / `Stream`),
+  `plugin.py` (`Ctl.stream`, the `launch` fixture, the host reason in skip messages) and their self-tests
+- ➕ Modify: `conformance/catalog.yaml` (exemptions) and `conformance/coverage-baseline.txt`
 
-- [ ] seed `restoreMode: live` in `settings.json` for `requires("live-sessions")` tests; on macOS via the interim zmx flag from Task 5
-- [ ] restore pins and live-session lifecycle; reap with `zmx.kill`/`zmx.reset` before stop
-- [ ] leftover-process check finds no `zmx` / `agterm-session-host` under the instance's `ZMX_DIR`
-- [ ] coverage gate reports no uncovered command, field or event
-- [ ] ➕ no command, field or event entry left in `conformance/coverage-baseline.txt`
-- [ ] run on reference-linux — green before task 18 (reference-macos in Task 19)
+- [x] seed `restoreMode: live` in `settings.json` for `requires("live-sessions")` tests; on macOS via the interim zmx flag from Task 5
+- [x] restore pins and live-session lifecycle; reap with `zmx.kill`/`zmx.reset` before stop
+- [x] leftover-process check finds no `zmx` / `agterm-session-host` under the instance's `ZMX_DIR`
+- [x] coverage gate reports no uncovered command, field or event
+- [x] ➕ no command, field or event entry left in `conformance/coverage-baseline.txt`
+- [x] run on reference-linux — green before task 18 (reference-macos in Task 19)
+- ➕ `live-sessions` is host-detected, not static: both references wrap a pane in zmx only when the account's
+  password-database login shell is zsh (`ZmxSupport.configuration`; the fork also needs its staged `libexec/zmx`).
+  This host's is fish and zsh is not installed, so seeded `restoreMode: live` falls back to plain shells here
+  (asserted in `test_seeded_live_mode_is_requested_at_launch`).
+- ⚠️ The Live tests (`requires("live-sessions")` in `test_zmx.py`: daemons and attribution, `zmx.screen`,
+  `session.lead`, `session.restart`, `zmx.kill`, `zmx.present` and `session.overlay.job.run` streams) were written
+  from the reference sources and have never run: they count as declared coverage but are not yet accepted. Task 19
+  must run them green.
+- ➕ reaping stays `zmx.kill` in `Adapter.stop`: a confirmed `zmx.reset` quits the app and relaunches it through
+  `open -n` outside the harness (and the fork refuses it as unsupported), so `zmx.reset`, `result.liveReset` and
+  `tree.liveReset` are exempted with only the `--force` refusal tested. ssh-only items (`tree.session.remoteHost`,
+  `tree.session.presentation`, `remote.opened`/`remote.closed`) are exempted with `zmx.attach`.
+- ➕ `tree.idleMs` counts only USER input, which both references keep scripted typing and navigation off, so the
+  protocol layer pins that control input leaves it omitted; its value after a GUI keystroke is Task 21's.
+  `autoFollowMs` reads back from a seeded `autoFollowAttention`, `indexUnsaved` from a `windows.json` made unwritable.
 
 ### Task 18: Behaviors and CLI tests
 
@@ -514,6 +535,9 @@ a push to `nickalie/agterm-rs`. Everything before this task is Linux-only.
 - [ ] confirm or flip the interim sentinel choice from Task 5; confirm the `/bin/sh` mechanism on macOS; record outcomes in `spike-macos.md`
 - [ ] both workflows green on a PR (`conformance-gate` on ubuntu, `reference-macos` on macOS); needs a push to `nickalie/agterm-rs`
 - [ ] protocol and cli layers (Tasks 10–18) green on reference-macos; a red test is fixed or becomes a capability with a reason
+- [ ] ➕ every `requires("live-sessions")` test runs and passes on reference-macos (Task 17 never ran them): check the
+  runner account's login shell is zsh first, and count a `live-sessions` skip, a missing or a deselected Live test as
+  a failure of this task, not a pass
 - [ ] run self-tests — must pass before task 20
 
 ### Task 20: Spike B and the macOS AX driver
@@ -539,6 +563,7 @@ a push to `nickalie/agterm-rs`. Everything before this task is Linux-only.
 - [ ] UI tests addressed only by `ui-ids.yaml` ids: role, name, state; no tree structure assertions
 - [ ] cover the ids or exempt them with a reason; coverage gate clean for `ui:` items
 - [ ] ➕ no `ui:` entry left in `conformance/coverage-baseline.txt`
+- [ ] ➕ read `tree.idleMs` after a GUI keystroke (Task 17's protocol test only pins that control input leaves it off)
 - [ ] add the ui layer to the macOS workflow with `--reruns 1`
 - [ ] run the ui layer on reference-macos — green before task 22
 

@@ -3,50 +3,10 @@
 # an item deletes its line. The plan's Task 22 deletes the file.
 
 # commands
-session.restart
-session.lead
-restore.clear
-restore.capture
-restore.mode
-zmx.list
-zmx.prune
-zmx.kill
-zmx.reset
-zmx.tree
-zmx.present
-zmx.screen
-session.overlay.job.run
 
 # fields
-field:result.restore
-field:result.zmx
-field:result.remote
-field:result.liveReset
-field:result.restart
-field:tree.idleMs
-field:tree.autoFollowMs
-field:tree.liveReset
-field:tree.indexUnsaved
-field:tree.session.title
-field:tree.session.backedByZmx
-field:tree.session.liveAttribution
-field:tree.session.splitLiveAttribution
-field:tree.session.commandWait
-field:tree.session.splitCommandWait
-field:tree.session.foreground
-field:tree.session.splitForeground
-field:tree.session.foregroundShell
-field:tree.session.splitForegroundShell
-field:tree.session.splitRestoreCommand
-field:tree.session.remoteHost
-field:tree.session.presentation
-field:tree.session.presenters
-field:tree.session.remoteOverlays
-field:window.autoFollowMs
 
 # events
-event:remote.opened
-event:remote.closed
 
 # cli
 cli:tree

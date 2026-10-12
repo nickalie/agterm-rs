@@ -6,7 +6,9 @@ guards refuse a launch env that points anywhere else before anything is spawned.
 
 from __future__ import annotations
 
+import json
 import os
+import pwd
 import re
 import shutil
 import signal
@@ -100,10 +102,14 @@ class LeftoverProcesses(StopError):
 
 @dataclass(frozen=True)
 class Profile:
-    """What an implementation claims: `parity_level` None means it is below every `since` version."""
+    """What an implementation claims: `parity_level` None means it is below every `since` version.
+
+    `absent` says why a capability the implementation has is missing on this host, for the skip reason.
+    """
 
     parity_level: str | None
     capabilities: frozenset[str]
+    absent: Mapping[str, str] = field(default_factory=dict, compare=False, hash=False)
 
     def at_level(self, since: str) -> bool:
         return self.parity_level is not None and version_tuple(since) <= version_tuple(self.parity_level)
@@ -139,6 +145,17 @@ def _foundation_resolved(path: str) -> str:
     if sys.platform == "darwin" and path.startswith("/private/") and os.path.exists(path[len("/private") :]):
         return path[len("/private") :]
     return path
+
+
+def login_shell_blocker(login_shell: str | None = None) -> str | None:
+    """Why Live sessions cannot run for this account, or None: both references wrap a pane in zmx only when
+    the password-database login shell is zsh (`ZmxSupport.configuration`), and the pane then execs it."""
+    shell = login_shell if login_shell is not None else pwd.getpwuid(os.getuid()).pw_shell
+    if os.path.basename(shell) != "zsh":
+        return f"the password-database login shell is {shell or 'unset'}, not zsh"
+    if not os.access(shell, os.X_OK):
+        return f"the login shell {shell} is not executable"
+    return None
 
 
 def scrubbed_environ(environ: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -330,14 +347,17 @@ class Adapter:
         self.platform_env(env)
         return env
 
-    def launch(self, timeout: float = LAUNCH_TIMEOUT, app_id: str | None = None) -> Instance:
+    def launch(
+        self, timeout: float = LAUNCH_TIMEOUT, app_id: str | None = None, settings: Mapping[str, Any] | None = None
+    ) -> Instance:
+        """`settings` seeds `<state>/settings.json`, which both references read at launch (`restoreMode`, ...)."""
         command = self.executable()
         root = make_root()
         try:
             env = self.build_env(root, app_id)
             check_launch_env(env, root, self.needs_app_id, self.needs_runtime_dir)
             app_id = env.get("AGTERM_APP_ID")
-            _prepare_tree(root, Path(env["HOME"]), Path(env["AGTERM_STATE_DIR"]), self.ghostty_config())
+            _prepare_tree(root, Path(env["HOME"]), Path(env["AGTERM_STATE_DIR"]), self.ghostty_config(), settings)
             if self.needs_runtime_dir:
                 os.mkdir(env["XDG_RUNTIME_DIR"], 0o700)  # the XDG spec's mode
             if app_id is not None:
@@ -411,12 +431,16 @@ def make_root() -> Path:
     return Path(tempfile.mkdtemp(prefix="agt-", dir=TEMP_PARENT))
 
 
-def _prepare_tree(root: Path, home: Path, state: Path, ghostty_config: str) -> None:
+def _prepare_tree(
+    root: Path, home: Path, state: Path, ghostty_config: str, settings: Mapping[str, Any] | None = None
+) -> None:
     for directory in (home / ".claude", home / ".codex", state / "config"):
         directory.mkdir(parents=True)
     # `FirstRunWelcome.hasPriorState` reads this directory: its presence skips the welcome dialog.
     (state / "windows").mkdir()
     (state / "config" / "ghostty.conf").write_text(ghostty_config)
+    if settings is not None:
+        (state / "settings.json").write_text(json.dumps(settings))
 
 
 def _claim_app_id(app_id: str) -> None:
