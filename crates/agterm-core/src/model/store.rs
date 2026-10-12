@@ -378,7 +378,9 @@ impl AppStore {
     }
 
     /// Emits `session.closed` for every session, tears their terminals down and drops the pending write: the store
-    /// is leaving the open set (a window close or delete) and its outbox is all that remains of it.
+    /// is leaving the open set and its outbox is all that remains of it. A deleted window's write must not re-create
+    /// its removed file (upstream's `removeWindow` cancels the pending save); a closing window's caller has already
+    /// written its snapshot (see [`WindowLibrary::close_window`](super::WindowLibrary::close_window)).
     pub(crate) fn retire(&mut self) {
         let closing: Vec<(Uuid, Uuid, EventPayload)> = self
             .workspaces

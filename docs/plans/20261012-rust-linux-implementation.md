@@ -546,7 +546,7 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 - Create: `crates/agterm-core/src/model/{mod,window_library,store,workspace,session,pane,naming}.rs`
 - ➕ Create: `crates/agterm-core/src/model/{focus,navigation,recency,outbox}.rs` (focus filter and visible sets,
   navigation and reselection, `RecencyStack`, the store's event/save outbox) and
-  `crates/agterm-core/src/model/tests/{mod,support,store,navigation,reselection,library}.rs`
+  `crates/agterm-core/src/model/tests/{mod,support,store,navigation,organization,reselection,library}.rs`
 - ➕ Modify: `crates/agterm-core/src/lib.rs`
 
 - [x] `WindowLibrary` → per-window `AppStore` → workspaces → sessions → panes, ported from upstream's
@@ -563,7 +563,8 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 - [x] write tests: tree mutations, naming and display names (basename pins), placement (ported from upstream's
       `AppStoreTests`, `AppStoreNameSanitizeTests`, `AppStoreNavigationTests`; also `AppStoreFocusTests`,
       `AppStoreOrganizationTests`, `AppStoreSidebarTests`, `AppStoreCurrentWorkspaceTests`, the store-level
-      `AppStoreEventTests` and the in-memory `WindowLibraryTests`: 345 tests in `model/tests/`)
+      `AppStoreEventTests` and the in-memory `WindowLibraryTests`: 329 ported tests in `model/tests/`, plus 2 for the
+      library's cross-window event drain order)
 - [x] write tests: reselection after close, recency order
 - [x] gate: full run; ratchet; must pass before Task 9 (ratchet holds, 14 green as before: the model is not
       wired into the app until Tasks 10–11)

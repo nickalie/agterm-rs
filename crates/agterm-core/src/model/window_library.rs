@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use super::naming::{default_window_name, is_auto_window_name, sanitized, trimmed_or_none};
 use super::navigation::{WorkspaceNavigation, wrapped};
-use super::outbox::{ModelEvent, SaveRequest};
+use super::outbox::{ModelEvent, SaveRequest, next_emission};
 use super::session::Session;
 use super::store::{AppStore, NewSession};
 
@@ -61,8 +61,9 @@ pub struct WindowLibrary {
     pub is_terminating: bool,
     /// The home directory a new window's first session starts in.
     home: String,
-    /// Events of windows whose store is gone, waiting for the next drain.
-    pending_events: Vec<WindowEvent>,
+    /// Library-level events (retired windows' outboxes, window renames and removals) waiting for the next drain,
+    /// each with its place in the app-wide emission order.
+    pending_events: Vec<(u64, WindowEvent)>,
     index_dirty: bool,
 }
 
@@ -281,6 +282,10 @@ impl WindowLibrary {
     /// Closes a window: tears its terminals down and drops its store, keeping its metadata. A no-op for an unknown
     /// or closed id, and while terminating. Closing the last open window pins it as frontmost, so the next launch
     /// reopens the window the user exited from.
+    ///
+    /// The store goes with any snapshot write it still has pending, so the caller writes the window's snapshot
+    /// first (drain the effects and perform its save, or save it outright), as upstream's window `willClose` calls
+    /// `store.save()` before `closeWindow`; the closed window's file is what its next open loads.
     pub fn close_window(&mut self, id: Uuid) {
         if self.is_terminating {
             return;
@@ -307,10 +312,7 @@ impl WindowLibrary {
             return;
         }
         info.name = name;
-        self.pending_events.push(WindowEvent {
-            window: id,
-            event: ModelEvent::bare(agterm_proto::EventKind::TreeChanged),
-        });
+        self.push_library_event(id, ModelEvent::bare(agterm_proto::EventKind::TreeChanged));
         self.index_dirty = true;
     }
 
@@ -326,10 +328,7 @@ impl WindowLibrary {
         if let Some(store) = self.stores.remove(&id) {
             self.retire_store(id, store);
         }
-        self.pending_events.push(WindowEvent {
-            window: id,
-            event: ModelEvent::bare(agterm_proto::EventKind::TreeChanged),
-        });
+        self.push_library_event(id, ModelEvent::bare(agterm_proto::EventKind::TreeChanged));
         self.windows.remove(index);
         if self.frontmost_window_id == Some(id) {
             self.frontmost_window_id = None;
@@ -341,8 +340,17 @@ impl WindowLibrary {
     fn retire_store(&mut self, id: Uuid, mut store: AppStore) {
         store.retire();
         let outbox = store.take_outbox();
+        self.pending_events.extend(
+            outbox
+                .into_stamped_events()
+                .map(|(emission, event)| (emission, WindowEvent { window: id, event })),
+        );
+    }
+
+    /// Records an event the library itself emits for a window.
+    fn push_library_event(&mut self, window: Uuid, event: ModelEvent) {
         self.pending_events
-            .extend(outbox.events.into_iter().map(|event| WindowEvent { window: id, event }));
+            .push((next_emission(), WindowEvent { window, event }));
     }
 
     /// Sets the frontmost window; recorded in the index.
@@ -372,26 +380,30 @@ impl WindowLibrary {
 
     // MARK: - Effects
 
-    /// Takes every side effect recorded since the last drain: the retired windows' events first, then each open
-    /// window's in window order.
+    /// Takes every side effect recorded since the last drain. The events of every store and of the library merge
+    /// back into the order they were emitted in; the saves come in window order.
     pub fn drain_effects(&mut self) -> LibraryEffects {
-        let mut effects = LibraryEffects {
-            events: std::mem::take(&mut self.pending_events),
-            window_saves: Vec::new(),
-            index_save: std::mem::take(&mut self.index_dirty),
-        };
+        let mut stamped = std::mem::take(&mut self.pending_events);
+        let mut window_saves = Vec::new();
         for id in self.windows.iter().map(|info| info.id) {
             let Some(store) = self.stores.get_mut(&id) else {
                 continue;
             };
             let outbox = store.take_outbox();
-            effects
-                .events
-                .extend(outbox.events.into_iter().map(|event| WindowEvent { window: id, event }));
             if outbox.save != SaveRequest::None {
-                effects.window_saves.push((id, outbox.save));
+                window_saves.push((id, outbox.save));
             }
+            stamped.extend(
+                outbox
+                    .into_stamped_events()
+                    .map(|(emission, event)| (emission, WindowEvent { window: id, event })),
+            );
         }
-        effects
+        stamped.sort_by_key(|(emission, _)| *emission);
+        LibraryEffects {
+            events: stamped.into_iter().map(|(_, event)| event).collect(),
+            window_saves,
+            index_save: std::mem::take(&mut self.index_dirty),
+        }
     }
 }

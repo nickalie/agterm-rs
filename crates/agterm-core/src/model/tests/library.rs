@@ -525,3 +525,60 @@ fn open_counts_excludes_closed_windows() {
     library.close_window(extra);
     assert_eq!(library.open_counts(), (1, 1));
 }
+
+// MARK: - Effects
+
+/// The windows of the drained events, in drain order.
+fn drained_windows(library: &mut WindowLibrary) -> Vec<Uuid> {
+    library
+        .drain_effects()
+        .events
+        .iter()
+        .map(|event| event.window)
+        .collect()
+}
+
+#[test]
+fn drain_effects_keeps_the_emission_order_across_windows() {
+    let mut library = library();
+    let first = first_window(&library);
+    let second = library.new_window(Some("second"));
+    library.drain_effects();
+
+    // the later window in window order emits first
+    add_to_first_workspace(&mut library, second);
+    add_to_first_workspace(&mut library, first);
+    let windows = drained_windows(&mut library);
+    let split = windows
+        .iter()
+        .position(|id| *id == first)
+        .expect("the first window emitted");
+    assert!(split > 0, "the second window's events come first: {windows:?}");
+    assert!(windows[..split].iter().all(|id| *id == second), "{windows:?}");
+    assert!(windows[split..].iter().all(|id| *id == first), "{windows:?}");
+}
+
+#[test]
+fn drain_effects_orders_library_events_among_store_events() {
+    let mut library = library();
+    let first = first_window(&library);
+    let second = library.new_window(Some("second"));
+    library.drain_effects();
+
+    // a store emits, then the library renames another window, then the store emits again
+    add_to_first_workspace(&mut library, first);
+    library.rename_window(second, "renamed");
+    add_to_first_workspace(&mut library, first);
+    let windows = drained_windows(&mut library);
+    let renamed = windows.iter().position(|id| *id == second).expect("the rename emitted");
+    assert!(renamed > 0 && renamed < windows.len() - 1, "{windows:?}");
+    assert_eq!(windows.iter().filter(|id| **id == second).count(), 1, "{windows:?}");
+
+    // a closed window's retirement events land after what was emitted before the close
+    add_to_first_workspace(&mut library, first);
+    library.close_window(second);
+    let windows = drained_windows(&mut library);
+    let closed = windows.iter().position(|id| *id == second).expect("the close emitted");
+    assert!(closed > 0, "{windows:?}");
+    assert!(windows[closed..].iter().all(|id| *id == second), "{windows:?}");
+}
