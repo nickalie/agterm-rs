@@ -206,10 +206,6 @@ class Driver(ABC):
         """A tab of a tabbed window, such as Settings, by its title."""
         return self._wait(lambda: self._tab(name), f"tab {name!r}", timeout)
 
-    def inventory(self) -> list[Element]:
-        """Every element carrying an identifier, for failure messages."""
-        return self._identified()
-
     def click(self, target: str | Element) -> None:
         self._press_element(self._resolve(target))
 

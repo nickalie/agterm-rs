@@ -20,6 +20,7 @@ INTERFACE_ELEMENTS = (
 @pytest.fixture(scope="module")
 def seeded(adapter):
     instance = adapter.launch()
+    relaunching = False
     try:
         config = instance.state_dir / "config"
         settings = {
@@ -35,13 +36,17 @@ def seeded(adapter):
             "attentionButtonEnabled": True,
         }
         (instance.state_dir / "settings.json").write_text(json.dumps(settings))
+        relaunching = True
         instance = adapter.relaunch(instance)
+        relaunching = False
         ctl = Ctl(instance)
         (sid,) = session_ids(ctl.tree())
         ctl.wait_mounted(sid, "left")
         yield ctl
     finally:
-        adapter.stop(instance)
+        # A failed relaunch has stopped what it started and keeps the root for its log.
+        if not relaunching:
+            adapter.stop(instance)
 
 
 def _open(ui, tab):
@@ -153,8 +158,11 @@ def test_interface_tab_toggles_title_bar_buttons(seeded, ui_for):
     split = ui.ui_ids.expand("settings-interface-{element}", element="split")
     ui.find("split-toggle")
     ui.click(ui.find(split, value=1))
-    ui.absent("split-toggle")
-    ui.click(ui.find(split, value=0))
+    try:
+        ui.absent("split-toggle")
+    finally:
+        # The module's instance outlives a failed attempt, and a rerun needs the button back.
+        ui.click(ui.find(split, value=0))
     ui.find("split-toggle")
 
 

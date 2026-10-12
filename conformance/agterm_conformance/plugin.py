@@ -704,7 +704,8 @@ def shared_app(adapter: Adapter) -> Iterator[Instance]:
 
 class Launcher:
     """`launch(settings={...})` starts a further instance; `launch.relaunch(ctl)` quits one and starts it again on
-    the same state directory. Every instance still running is stopped at teardown."""
+    the same state directory; `launch.serving(ctl)` waits for a `first_run` launch's socket. Every instance still
+    running is stopped at teardown."""
 
     def __init__(self, adapter: Adapter) -> None:
         self.adapter = adapter
@@ -720,6 +721,13 @@ class Launcher:
         # Out of the list first: a failed relaunch has stopped its process, reported its leftovers and keeps the root.
         old = self.launched.pop(index)
         self.launched.insert(index, self.adapter.relaunch(old))
+        return Ctl(self.launched[index])
+
+    def serving(self, ctl: Ctl) -> Ctl:
+        index = self.launched.index(ctl.instance)
+        # Out of the list first, as in `relaunch`: a failed wait has stopped the process and keeps the root.
+        waiting = self.launched.pop(index)
+        self.launched.insert(index, self.adapter.serving(waiting))
         return Ctl(self.launched[index])
 
     def stop_all(self) -> None:

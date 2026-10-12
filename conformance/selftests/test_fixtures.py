@@ -152,6 +152,42 @@ def test_launch_fixture_relaunches_on_the_same_state_dir(
     assert len(roots) == 1 and not roots[0].exists()
 
 
+def test_launch_fixture_waits_for_a_first_run_launch(
+    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path
+) -> None:
+    pytester.makepyfile(
+        """
+        def test_first_run(launch):
+            waiting = launch(first_run=True)
+            ctl = launch.serving(waiting)
+            assert ctl.instance is waiting.instance and ctl.request("version").ok
+            assert launch.launched == [ctl.instance]
+        """
+    )
+    run_suite(pytester, *swift_linux(fake_bin)).assert_outcomes(passed=1)
+    assert len(roots) == 1 and not roots[0].exists()
+
+
+def test_a_failed_first_run_wait_keeps_its_root_through_teardown(
+    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_APP_MODE", "exit")
+    pytester.makepyfile(
+        """
+        import pytest
+        from agterm_conformance.impls.base import LaunchError
+
+        def test_first_run(launch):
+            waiting = launch(first_run=True)
+            with pytest.raises(LaunchError, match="exited with 3"):
+                launch.serving(waiting)
+            assert launch.launched == []
+        """
+    )
+    run_suite(pytester, *swift_linux(fake_bin)).assert_outcomes(passed=1)
+    assert len(roots) == 1 and (roots[0] / "app.log").exists()
+
+
 def test_skip_reason_says_why_this_host_lacks_a_capability(pytester: pytest.Pytester) -> None:
     item = pytester.getitem(
         """

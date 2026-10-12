@@ -1,6 +1,7 @@
 """A Live pane another zmx client leads: its own window covers it until it takes the lead back."""
 
 import pytest
+from agterm_conformance.drivers.base import ElementNotFound
 from agterm_conformance.match import assert_ok, find_session
 from agterm_conformance.plugin import Ctl
 from agterm_conformance.zmx_client import leading_client
@@ -39,7 +40,10 @@ def test_a_pane_another_client_leads_is_covered(live, ui_for):
     (daemon,) = [row["daemon"] for row in rows if row.get("sessionID") == sid and row["pane"] == "left"]
     with leading_client(live.instance, endpoint, daemon) as viewer:
         live.wait_tree(lambda tree: _lead(tree, sid) == "follower", timeout=15)
-        assert ui.find(cover).ui_id == cover, viewer.output()[-300:]
+        try:
+            ui.find(cover)
+        except ElementNotFound as error:
+            pytest.fail(f"{error}\nleading client output: {viewer.output()[-300:]!r}")
         assert_ok(live.request("session.lead", sid))
         live.wait_tree(lambda tree: _lead(tree, sid) == "leader")
         ui.absent(cover)

@@ -307,7 +307,6 @@ def test_a_miss_lists_what_carries_an_identifier() -> None:
         match=r"identified now: add-session\(popup name='Add session'\), htmlOverlay.back\(button disabled\)$",
     ):
         driver.find("ask-button-Yes", timeout=0.1)
-    assert driver.inventory() == driver.elements
 
 
 def test_a_miss_says_when_the_inventory_could_not_be_read() -> None:

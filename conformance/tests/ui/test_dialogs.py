@@ -35,8 +35,19 @@ def test_ask_button_answers_the_ask(ctl, ui):
         ctl.request("session.close", sid)
 
 
+def _texts(ui, ui_id):
+    return [ui.text(element) for element in ui.all(ui_id)]
+
+
 def _row_texts(ui, item):
-    return [ui.text(element) for element in ui.all(ui.ui_ids.expand("palette-item-{item}", item=item))]
+    return _texts(ui, ui.ui_ids.expand("palette-item-{item}", item=item))
+
+
+def _rows_shown(ui):
+    alpha = _row_texts(ui, "alpha")
+    # The reference's row id overrides its texts' ids; an app may expose the subtitle as `palette-subtitle` instead.
+    subtitled = "first" in alpha or "first" in _texts(ui, "palette-subtitle")
+    return "Alpha" in alpha and subtitled and "Beta" in _row_texts(ui, "beta")
 
 
 @pytest.mark.covers("ui:pick-palette", "ui:pick-scrim", "ui:palette-item-{item}")
@@ -45,8 +56,7 @@ def test_pick_palette_returns_the_chosen_row(ctl, ui):
     try:
         ui.find("pick-palette")
         ui.find("pick-scrim")
-        # The row's id is also its texts': the subtitle reads under the row, never as `palette-subtitle`.
-        wait_until(lambda: {"Alpha", "first"} <= set(_row_texts(ui, "alpha")) and "Beta" in _row_texts(ui, "beta"))
+        wait_until(lambda: _rows_shown(ui))
         ui.press("down", "return")
         picked = wait_until(lambda: assert_ok(ctl.request("pick.result", pick))["pick"].get("id"))
         assert picked == "beta"
