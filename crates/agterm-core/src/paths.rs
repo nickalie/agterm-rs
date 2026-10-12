@@ -132,6 +132,36 @@ pub fn app_socket_path(env: &dyn Env) -> PathBuf {
     non_empty(env, CONTROL_SOCKET_ENV).map_or_else(|| socket_in(&state_dir(env)), PathBuf::from)
 }
 
+/// The directory of the user-editable config files (`keymap.conf`, `hooks.conf`, the agterm-scoped `ghostty.conf`),
+/// as upstream's `ConfigPaths.configDirectory`: a non-empty `setting` (`AppSettings.configDirectory`), else
+/// `<AGTERM_STATE_DIR>/config` when the state dir is overridden, else `<home>/.config/agterm`.
+#[must_use]
+pub fn config_dir(env: &dyn Env, setting: Option<&Path>) -> PathBuf {
+    if let Some(setting) = setting.filter(|path| !path.as_os_str().is_empty()) {
+        return setting.to_path_buf();
+    }
+    if let Some(state) = non_empty(env, STATE_DIR_ENV) {
+        return PathBuf::from(state).join("config");
+    }
+    home_dir(env).map_or_else(
+        || Path::new(FALLBACK_STATE_DIR).join("config"),
+        |home| home.join(".config").join(APP_DIR_NAME),
+    )
+}
+
+/// The agterm-scoped ghostty config inside a config directory: `<dir>/ghostty.conf`.
+#[must_use]
+pub fn ghostty_config_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("ghostty.conf")
+}
+
+/// The ghostty config the Settings window writes: `<state dir>/ghostty-settings.conf`
+/// (`GhosttyApp.settingsConfigURL`).
+#[must_use]
+pub fn ghostty_settings_config_path(env: &dyn Env) -> PathBuf {
+    state_dir(env).join("ghostty-settings.conf")
+}
+
 fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut raw = path.as_os_str().to_owned();
     raw.push(OsStr::new(suffix));
@@ -220,6 +250,41 @@ mod tests {
         assert_eq!(
             unavailable_socket_path(socket),
             Path::new("/tmp/s/agterm.sock.unavailable")
+        );
+    }
+
+    #[test]
+    fn config_dir_follows_upstream_precedence() {
+        let env = home("/home/u").with("XDG_DATA_HOME", "/data");
+        assert_eq!(config_dir(&env, None), Path::new("/home/u/.config/agterm"));
+        let isolated = env.clone().with(STATE_DIR_ENV, "/tmp/s");
+        assert_eq!(config_dir(&isolated, None), Path::new("/tmp/s/config"));
+        assert_eq!(config_dir(&isolated, Some(Path::new(""))), Path::new("/tmp/s/config"));
+        assert_eq!(
+            config_dir(&isolated, Some(Path::new("/etc/agt"))),
+            Path::new("/etc/agt")
+        );
+        assert_eq!(
+            config_dir(&env.with(STATE_DIR_ENV, ""), None),
+            Path::new("/home/u/.config/agterm")
+        );
+        assert_eq!(config_dir(&MapEnv::new(), None), Path::new("/tmp/agterm/config"));
+    }
+
+    #[test]
+    fn ghostty_config_files_sit_in_the_config_and_state_dirs() {
+        assert_eq!(
+            ghostty_config_path(Path::new("/tmp/s/config")),
+            Path::new("/tmp/s/config/ghostty.conf")
+        );
+        let env = home("/home/u").with(STATE_DIR_ENV, "/tmp/s");
+        assert_eq!(
+            ghostty_settings_config_path(&env),
+            Path::new("/tmp/s/ghostty-settings.conf")
+        );
+        assert_eq!(
+            ghostty_settings_config_path(&home("/home/u")),
+            Path::new("/home/u/.local/share/agterm/ghostty-settings.conf")
         );
     }
 

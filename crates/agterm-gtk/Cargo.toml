@@ -1,0 +1,28 @@
+[package]
+name = "agterm-gtk"
+description = "agterm's GTK4/libadwaita frontend: the agterm binary"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "agterm"
+path = "src/main.rs"
+
+[dependencies]
+adw.workspace = true
+agterm-core.workspace = true
+agterm-ghostty.workspace = true
+# Not used in code: a links crate's metadata (DEP_GHOSTTY_ROOT, for the rpaths in build.rs) reaches only the build
+# scripts of its direct dependents.
+agterm-ghostty-sys.workspace = true
+gtk.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

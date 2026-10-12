@@ -131,6 +131,29 @@ pub mod keys {
     /// Optional in ghostty: unset reads as `None`.
     pub const CURSOR_STYLE_BLINK: ConfigKey<bool> = ConfigKey::new("cursor-style-blink");
     pub const MOUSE_HIDE_WHILE_TYPING: ConfigKey<bool> = ConfigKey::new("mouse-hide-while-typing");
+    /// A packed struct, read as its bits: `cursor`, `sudo`, `title`, `ssh-env`, `ssh-terminfo`, `path` from bit 0.
+    pub const SHELL_INTEGRATION_FEATURES: ConfigKey<u32> = ConfigKey::new("shell-integration-features");
+    /// The static window title; unset reads as `None`.
+    pub const TITLE: super::StringKey = super::StringKey::new("title");
+}
+
+/// A key whose value libghostty hands out as a NUL-terminated string. Its own type, with only the predefined
+/// [`keys`], because reading one dereferences what libghostty wrote: a key of another type would make that pointer up.
+#[derive(Debug, Clone, Copy)]
+pub struct StringKey {
+    name: &'static str,
+}
+
+impl StringKey {
+    const fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+
+    /// The key as it appears in a config file.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
 }
 
 /// An owned `ghostty_config_t`. Not `Send`: it lives on the thread that owns the libghostty app.
@@ -181,6 +204,23 @@ impl Config {
         unsafe { sys::ghostty_config_load_file(self.raw.as_ptr(), c_path.as_ptr()) };
     }
 
+    /// Load config lines from memory. libghostty only reads files, so the text goes through a private temp file that
+    /// is removed once loaded; a failure to write it is recorded as a [`Diagnostic`].
+    pub fn load_text(&mut self, text: &str) {
+        let written = tempfile::Builder::new()
+            .prefix("agterm-ghostty-")
+            .suffix(".conf")
+            .tempfile()
+            .and_then(|mut file| {
+                std::io::Write::write_all(&mut file, text.as_bytes())?;
+                Ok(file)
+            });
+        match written {
+            Ok(file) => self.load_file(file.path()),
+            Err(err) => self.note(format!("config text: {err}")),
+        }
+    }
+
     /// Load ghostty's own default files (`$XDG_CONFIG_HOME/ghostty/config` and friends).
     pub fn load_default_files(&mut self) {
         // SAFETY: raw is a live config owned by self.
@@ -216,6 +256,45 @@ impl Config {
             )
         };
         found.then(|| <T as sealed::Sealed>::decode(&slot))
+    }
+
+    /// Read a string key's current value. `None` when it is unset.
+    #[must_use]
+    pub fn get_string(&self, key: StringKey) -> Option<String> {
+        let mut value: *const std::ffi::c_char = std::ptr::null();
+        let name = key.name();
+        // SAFETY: raw is a live config; every StringKey names a `?[:0]const u8` key, which libghostty writes as one
+        // `const char *`, so `value` is the right size and alignment; name is valid for name.len() bytes.
+        let found = unsafe {
+            sys::ghostty_config_get(
+                self.raw.as_ptr(),
+                std::ptr::from_mut(&mut value).cast(),
+                name.as_ptr().cast(),
+                name.len(),
+            )
+        };
+        if !found {
+            return None;
+        }
+        // SAFETY: a written value is null or a NUL-terminated string owned by the config, which outlives this copy.
+        unsafe { crate::action::owned(value) }
+    }
+
+    /// Take a copy of a config libghostty owns (one an action carries).
+    ///
+    /// # Safety
+    ///
+    /// `raw` is null or a live config for the duration of the call.
+    pub(crate) unsafe fn clone_raw(raw: sys::ghostty_config_t) -> Option<Self> {
+        if raw.is_null() {
+            return None;
+        }
+        // SAFETY: a live config per the caller's contract.
+        let copy = unsafe { sys::ghostty_config_clone(raw) };
+        NonNull::new(copy).map(|raw| Self {
+            raw,
+            load_errors: Vec::new(),
+        })
     }
 
     /// Every problem met so far: files that could not be read, then libghostty's own diagnostics.

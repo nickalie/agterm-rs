@@ -1,5 +1,6 @@
 # Complexity thresholds: lowered, never raised, after the code settles. `excessive-nesting-threshold` counts item
-# nesting and closure bodies too; it is calibrated on the GTK code in Task 6, then frozen.
+# nesting and closure bodies too. Frozen at 5 after calibrating on the first GTK code (Task 6): a signal handler's
+# closure inside a method reaches 4, and a handler that hands a callback on (an async read) reaches 5.
 cognitive-complexity-threshold = 15
 too-many-lines-threshold = 80
 too-many-arguments-threshold = 6
