@@ -32,6 +32,10 @@ conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
 
 # whether a WebKitGTK view's web process starts under the same headless isolation (a CI spike)
 .venv/bin/python conformance/tools/webkit_probe.py
+
+# whether the staged Rust build's libghostty surface is created and draws a frame under the same isolation (a CI
+# spike; `version` alone answers without a GL context); defaults to run-rust-linux.sh's stage
+.venv/bin/python conformance/tools/ghostty_probe.py [--bin PATH]
 ```
 
 `--macos-launch-mode plain` replaces the default `uitest` launch (XCUITest sentinel with zmx on).

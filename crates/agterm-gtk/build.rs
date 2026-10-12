@@ -33,10 +33,16 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
     (output.status.success() && !text.is_empty()).then(|| text.to_owned())
 }
 
+/// `git rev-parse --git-path <name>`, absolute.
+fn git_path(dir: &Path, name: &str) -> Option<PathBuf> {
+    git(dir, &["rev-parse", "--git-path", name]).map(|path| dir.join(path))
+}
+
 /// The commit `version` reports (upstream's `GitCommit` bundle key): `AGTERM_BUILD_COMMIT` when the build environment
 /// sets it (a source tarball has no git), else the checkout's short HEAD; none when neither answers. The build reruns
-/// when HEAD, its branch or `packed-refs` changes; only existing files are watched, as cargo reruns on a missing one
-/// every time.
+/// when HEAD, its branch or `packed-refs` changes. Only existing paths are watched, as cargo reruns on a missing one
+/// every time: a branch whose ref lives only in `packed-refs` watches the nearest existing directory above its loose
+/// ref instead, which cargo scans, so the loose ref the next commit writes reruns the build.
 fn record_commit() {
     println!("cargo::rerun-if-env-changed={COMMIT_ENV}");
     if let Some(commit) = std::env::var(COMMIT_ENV).ok().filter(|commit| !commit.is_empty()) {
@@ -49,14 +55,16 @@ fn record_commit() {
     let Some(commit) = git(&dir, &["rev-parse", "--short", "HEAD"]) else {
         return;
     };
-    let mut refs = vec!["HEAD".to_owned(), "packed-refs".to_owned()];
-    refs.extend(git(&dir, &["symbolic-ref", "-q", "HEAD"]));
-    for name in refs {
-        if let Some(path) = git(&dir, &["rev-parse", "--git-path", &name]).map(|path| dir.join(path))
-            && path.exists()
-        {
+    for name in ["HEAD", "packed-refs"] {
+        if let Some(path) = git_path(&dir, name).filter(|path| path.exists()) {
             println!("cargo::rerun-if-changed={}", path.display());
         }
+    }
+    if let Some(branch) = git(&dir, &["symbolic-ref", "-q", "HEAD"])
+        && let Some(path) = git_path(&dir, &branch)
+        && let Some(watched) = path.ancestors().find(|path| path.exists())
+    {
+        println!("cargo::rerun-if-changed={}", watched.display());
     }
     println!("cargo::rustc-env={COMMIT_ENV}={commit}");
 }

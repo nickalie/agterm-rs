@@ -247,6 +247,8 @@ OWN_VARIABLES = frozenset(
         "AGTERM_UITEST_FORCE_SIDEBAR_VISIBLE",
         "AGTERM_UITEST_ENABLE_ZMX",
         "AGTERM_UITEST_SHOW_WELCOME",
+        # The Rust build's log filter, set only by tools/ghostty_probe.py; an inherited one is still scrubbed.
+        "AGTERM_LOG",
     }
 )
 

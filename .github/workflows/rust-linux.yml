@@ -110,8 +110,22 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
       # Spike: can headless weston's GL backend host libghostty here? A failure stops the job before the full run.
+      # `version` answers without a GL context, so the probe then requires a created surface and its first frame.
       - name: spike, version under headless weston
         run: conformance/tools/run-rust-linux.sh --out conformance/reports/rust-linux-spike -- -k test_version
+      - name: spike, a libghostty surface draws under headless weston
+        shell: bash
+        run: |
+          status=0
+          python conformance/tools/ghostty_probe.py > "$RUNNER_TEMP/ghostty-probe.json" || status=$?
+          cat "$RUNNER_TEMP/ghostty-probe.json"
+          {
+            echo '### libghostty probe'
+            echo '```json'
+            cat "$RUNNER_TEMP/ghostty-probe.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
       # Exits with the ratchet's status; check_ratchet.py lists the newly green ids in the job summary.
       - name: full suite (protocol, cli, behaviors)
         run: conformance/tools/run-rust-linux.sh
