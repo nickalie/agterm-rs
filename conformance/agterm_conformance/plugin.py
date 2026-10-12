@@ -20,6 +20,7 @@ from agterm_conformance.client import Response, SocketOutsideRoot, Stream, check
 from agterm_conformance.match import assert_ok
 
 if TYPE_CHECKING:
+    from agterm_conformance.drivers.base import Driver
     from agterm_conformance.impls.base import Adapter, Instance
 
 IMPLS = ("swift-macos", "swift-linux", "rust")
@@ -27,6 +28,7 @@ IMPLS = ("swift-macos", "swift-linux", "rust")
 BIN_REQUIRED = frozenset({"swift-macos", "swift-linux"})
 SCRUB_PREFIXES = ("AGTERM_", "ZMX_")
 IMPL_FIXTURE = "impl_options"
+UI_FIXTURE = "ui"
 # Skip reasons start with these, so the summary can tell a divergence from a missing feature.
 UNSUPPORTED = "unsupported"
 NOT_YET_AT_LEVEL = "not-yet-at-level"
@@ -112,7 +114,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
     group.addoption("--catalog", type=Path, default=None, help="coverage gate: catalog.yaml (default: <rootdir>/)")
     group.addoption(
-        "--ui-ids", type=Path, default=None, help="coverage gate: ui-ids.yaml (default: next to the catalog)"
+        "--ui-ids",
+        type=Path,
+        default=None,
+        help="ui-ids.yaml for the coverage gate and the ui driver (default: next to the catalog)",
     )
     group.addoption(
         "--coverage-baseline",
@@ -368,12 +373,25 @@ def skip_reason(item: pytest.Item, adapter: Adapter) -> str | None:
     return None
 
 
+def ui_skip_reason(adapter: Adapter) -> str | None:
+    from agterm_conformance.drivers.base import NoDriver, driver_class
+
+    try:
+        driver_class(adapter.name)
+    except NoDriver as error:
+        return f"{UNSUPPORTED}: {error}"
+    return None
+
+
 def pytest_runtest_setup(item: pytest.Item) -> None:
     # Not tryfirst: pytest's own skip markers run first, and registering after `_pytest.runner` still
     # decides before fixture setup, so a skipped test launches nothing.
     if get_impl_options(item.config).coverage_gate or not _uses_impl(item):
         return
-    reason = skip_reason(item, get_adapter(item.config))
+    adapter = get_adapter(item.config)
+    reason = skip_reason(item, adapter)
+    if reason is None and UI_FIXTURE in getattr(item, "fixturenames", ()):
+        reason = ui_skip_reason(adapter)
     if reason is not None:
         # What pytest's own skip marker raises, so `-rs` points at the test, not this hook.
         raise pytest.skip.Exception(reason, _use_item_location=True)
@@ -733,3 +751,12 @@ def cli(request: pytest.FixtureRequest, adapter: Adapter) -> Cli:
     if adapter.ctl_path is None:
         pytest.fail(f"{adapter.name} has no agtermctl: pass --ctl")
     return Cli(adapter.ctl_path, _target_instance(request))
+
+
+@pytest.fixture
+def ui(request: pytest.FixtureRequest, adapter: Adapter, impl_options: ImplOptions) -> Driver:
+    """The ui driver for the instance `ctl` drives (`pytest_runtest_setup` skips where none is written yet)."""
+    from agterm_conformance.drivers.base import DEFAULT_UI_IDS, UiIds, make_driver
+
+    ui_ids = UiIds.load(impl_options.ui_ids or DEFAULT_UI_IDS)
+    return make_driver(adapter.name, _target_instance(request).pid, ui_ids)

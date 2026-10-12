@@ -1,5 +1,6 @@
-# Spike A on reference-macos: fetch the upstream release, launch it through the swift-macos adapter, read
-# version/tree, and round-trip a line through the pane's /bin/sh. Findings go to conformance/docs/spike-macos.md.
+# Spikes on reference-macos; findings go to conformance/docs/spike-macos.md.
+# A: fetch the upstream release, launch it through the swift-macos adapter, read version/tree, and round-trip a
+# line through the pane's /bin/sh. B: drive it through the ax driver (AXIdentifier, AXPress, CGEvent keystrokes).
 name: spike-macos
 
 on:
@@ -13,7 +14,9 @@ on:
     paths:
       - .github/workflows/spike-macos.yml
       - conformance/tools/spike_a.py
+      - conformance/tools/spike_b.py
       - conformance/tools/fetch_reference.py
+      - conformance/agterm_conformance/drivers/**
 
 permissions:
   contents: read
@@ -62,4 +65,47 @@ jobs:
         with:
           name: spike-${{ matrix.mode }}-${{ matrix.mechanism }}
           path: ${{ env.REPORT }}
+          if-no-files-found: warn
+
+  spike-b:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      TAG: ${{ inputs.tag || 'v0.36.0' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install the suite and the ax driver's bindings
+        run: python -m pip install -e conformance pyobjc-framework-ApplicationServices pyobjc-framework-Quartz
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/agterm-conformance/reference
+          key: agterm-reference-${{ env.TAG }}
+      - name: fetch the reference
+        id: reference
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python conformance/tools/fetch_reference.py --tag "$TAG" | tee -a "$GITHUB_OUTPUT"
+      - name: accessibility grants
+        shell: bash
+        run: |
+          python -c 'from agterm_conformance.drivers.ax import trust; print(trust())'
+          for db in "/Library/Application Support/com.apple.TCC/TCC.db" "$HOME/Library/Application Support/com.apple.TCC/TCC.db"; do
+            echo "== $db"
+            sudo sqlite3 "$db" "SELECT service, client, client_type, auth_value FROM access
+              WHERE service IN ('kTCCServiceAccessibility', 'kTCCServicePostEvent', 'kTCCServiceListenEvent')" || true
+          done
+      - name: spike B
+        env:
+          BUNDLE: ${{ steps.reference.outputs.bundle }}
+        run: python conformance/tools/spike_b.py --bin "$BUNDLE" --out spike-b.json
+      - name: upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spike-b
+          path: spike-b.json
           if-no-files-found: warn
