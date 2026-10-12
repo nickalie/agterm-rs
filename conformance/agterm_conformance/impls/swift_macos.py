@@ -104,6 +104,11 @@ class SwiftMacosAdapter(Adapter):
             if self.enable_zmx:
                 env["AGTERM_UITEST_ENABLE_ZMX"] = "1"
 
+    def first_run_env(self, env: dict[str, str]) -> None:
+        # The sentinel suppresses the welcome; this opts back in (upstream WelcomeUITests).
+        if self.launch_mode == "uitest":
+            env["AGTERM_UITEST_SHOW_WELCOME"] = "1"
+
     def bundle(self) -> Path | None:
         if self.bin is None:
             return None

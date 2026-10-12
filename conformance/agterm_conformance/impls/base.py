@@ -415,6 +415,9 @@ class Adapter:
     def platform_env(self, env: dict[str, str]) -> None:
         """Hook for adapter-specific variables; `env` is already isolated."""
 
+    def first_run_env(self, env: dict[str, str]) -> None:
+        """Hook for what a first-run launch needs beyond a state dir with no prior state."""
+
     def ghostty_config(self) -> str:
         """The agterm-scoped `<state>/config/ghostty.conf` the instance starts with."""
         return GHOSTTY_SHELL_CONFIG + GHOSTTY_ISOLATION_CONFIG
@@ -451,9 +454,14 @@ class Adapter:
         return env
 
     def launch(
-        self, timeout: float = LAUNCH_TIMEOUT, app_id: str | None = None, settings: Mapping[str, Any] | None = None
+        self,
+        timeout: float = LAUNCH_TIMEOUT,
+        app_id: str | None = None,
+        settings: Mapping[str, Any] | None = None,
+        first_run: bool = False,
     ) -> Instance:
-        """`settings` seeds `<state>/settings.json`, which both references read at launch (`restoreMode`, ...)."""
+        """`settings` seeds `<state>/settings.json`, which both references read at launch (`restoreMode`, ...).
+        `first_run` leaves out the prior-state marker and asks for the welcome dialog an isolated launch suppresses."""
         self.executable()  # refuses before anything exists
         headless = self.headless
         root = make_root()
@@ -461,9 +469,13 @@ class Adapter:
         session_bus: subprocess.Popen[bytes] | None = None
         try:
             env = self.build_env(root, app_id)
+            if first_run:
+                self.first_run_env(env)
             check_launch_env(env, root, self.needs_app_id, self.needs_runtime_dir, headless)
             app_id = env.get("AGTERM_APP_ID")
-            _prepare_tree(root, Path(env["HOME"]), Path(env["AGTERM_STATE_DIR"]), self.ghostty_config(), settings)
+            _prepare_tree(
+                root, Path(env["HOME"]), Path(env["AGTERM_STATE_DIR"]), self.ghostty_config(), settings, first_run
+            )
             command = self.instance_executable(root)
             if self.needs_runtime_dir:
                 os.mkdir(env["XDG_RUNTIME_DIR"], 0o700)  # the XDG spec's mode
@@ -781,12 +793,18 @@ def _spawn(command: list[str], env: dict[str, str], log: Path, mode: str) -> sub
 
 
 def _prepare_tree(
-    root: Path, home: Path, state: Path, ghostty_config: str, settings: Mapping[str, Any] | None = None
+    root: Path,
+    home: Path,
+    state: Path,
+    ghostty_config: str,
+    settings: Mapping[str, Any] | None = None,
+    first_run: bool = False,
 ) -> None:
     for directory in (home / ".claude", home / ".codex", state / "config"):
         directory.mkdir(parents=True)
     # `FirstRunWelcome.hasPriorState` reads this directory: its presence skips the welcome dialog.
-    (state / "windows").mkdir()
+    if not first_run:
+        (state / "windows").mkdir()
     (state / "config" / "ghostty.conf").write_text(ghostty_config)
     (home / ".profile").write_text(SHELL_PROFILE)
     if settings is not None:

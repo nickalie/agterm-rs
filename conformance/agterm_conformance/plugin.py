@@ -28,7 +28,7 @@ IMPLS = ("swift-macos", "swift-linux", "rust")
 BIN_REQUIRED = frozenset({"swift-macos", "swift-linux"})
 SCRUB_PREFIXES = ("AGTERM_", "ZMX_")
 IMPL_FIXTURE = "impl_options"
-UI_FIXTURE = "ui"
+UI_FIXTURES = frozenset({"ui", "ui_for"})
 # Skip reasons start with these, so the summary can tell a divergence from a missing feature.
 UNSUPPORTED = "unsupported"
 NOT_YET_AT_LEVEL = "not-yet-at-level"
@@ -396,7 +396,7 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
         return
     adapter = get_adapter(item.config)
     reason = skip_reason(item, adapter)
-    if reason is None and UI_FIXTURE in getattr(item, "fixturenames", ()):
+    if reason is None and UI_FIXTURES.intersection(getattr(item, "fixturenames", ())):
         reason = ui_skip_reason(adapter)
     if reason is not None:
         # What pytest's own skip marker raises, so `-rs` points at the test, not this hook.
@@ -760,9 +760,21 @@ def cli(request: pytest.FixtureRequest, adapter: Adapter) -> Cli:
 
 
 @pytest.fixture
-def ui(request: pytest.FixtureRequest, adapter: Adapter, impl_options: ImplOptions) -> Driver:
-    """The ui driver for the instance `ctl` drives (`pytest_runtest_setup` skips where none is written yet)."""
+def ui_for(request: pytest.FixtureRequest, adapter: Adapter, impl_options: ImplOptions) -> Callable[[Any], Driver]:
+    """`ui_for(ctl)` is a ui driver for that instance, such as one `launch` started (`pytest_runtest_setup` skips
+    where none is written yet)."""
     from agterm_conformance.drivers.base import UiIds, make_driver
 
     ui_ids = UiIds.load(ui_ids_path(request.config, impl_options))
-    return make_driver(adapter.name, _target_instance(request).pid, ui_ids)
+
+    def driver(target: Ctl | Instance) -> Driver:
+        instance = target.instance if isinstance(target, Ctl) else target
+        return make_driver(adapter.name, instance.pid, ui_ids)
+
+    return driver
+
+
+@pytest.fixture
+def ui(request: pytest.FixtureRequest, ui_for: Callable[[Any], Driver]) -> Driver:
+    """The ui driver for the instance `ctl` drives."""
+    return ui_for(_target_instance(request))

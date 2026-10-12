@@ -1,4 +1,4 @@
-# The protocol, cli and behaviors layers against the released upstream app at the catalog's tag. A fresh runner,
+# The protocol, cli, behaviors and ui layers against the released upstream app at the catalog's tag. A fresh runner,
 # never a Mac running a live agterm: the reference would share its `com.umputun.agterm` defaults domain.
 name: reference-macos
 
@@ -30,8 +30,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: install the suite
-        run: python -m pip install -e conformance
+      - name: install the suite and the ax driver's bindings
+        run: python -m pip install -e "conformance[ax]"
       - name: resolve the upstream tag
         id: tag
         env:
@@ -78,6 +78,16 @@ jobs:
           # --must-pass: a skipped, failed or deselected Live test fails the job, as does finding none.
           python -m pytest "${layers[@]}" --impl swift-macos --bin "$BUNDLE" -ra --must-pass live-sessions \
             --junitxml report/junit.xml 2>&1 | tee report/pytest.log
+      - name: ui layer
+        # The image already grants accessibility to the runner's processes (conformance/docs/spike-macos.md, spike B).
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          BUNDLE: ${{ steps.reference.outputs.bundle }}
+        run: |
+          mkdir -p report
+          python -m pytest conformance/tests/ui --impl swift-macos --bin "$BUNDLE" -ra --reruns 1 \
+            --junitxml report/junit-ui.xml 2>&1 | tee report/pytest-ui.log
       - name: defaults the reference left in the runner account's domain
         # CFFIXED_USER_HOME moves NSHomeDirectory but not cfprefsd: every instance shares the account's
         # `com.umputun.agterm` domain, which is why reference-macos never runs on a Mac with a live agterm.

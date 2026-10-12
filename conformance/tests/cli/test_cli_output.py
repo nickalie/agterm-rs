@@ -1052,6 +1052,10 @@ def _live_session(ctl):
 def test_live_pane_commands(cli, live):
     cli = cli.on(live.instance)
     sid = _live_session(live)
+    # Upstream's count drops to 0 for a moment while a pane's client attaches: render a settled list.
+    live.wait_response(
+        "zmx.list", None, lambda r: all(row.get("clients", 0) >= 1 for row in assert_ok(r)["zmx"]["entries"])
+    )
     _rendered(cli("zmx", "list"), assert_ok(live.request("zmx.list")))
     daemon = _live_rows(live, sid)["left"]["daemon"]
     marker = f"LIVE{uuid.uuid4().hex[:8].upper()}"

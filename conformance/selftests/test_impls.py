@@ -340,6 +340,16 @@ def test_launch_isolates_and_stop_cleans_up(roots: list[Path], fake_bin: Path, m
     assert not instance.root.exists()
 
 
+def test_first_run_launch_leaves_out_the_prior_state_marker(roots: list[Path], fake_bin: Path) -> None:
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch(first_run=True)
+    try:
+        assert not (instance.state_dir / "windows").exists()
+        assert (instance.state_dir / "config" / "ghostty.conf").is_file()
+    finally:
+        adapter.stop(instance)
+
+
 # -- the headless compositor
 
 
@@ -1276,6 +1286,17 @@ def test_swift_macos_launch_env(tmp_path: Path, mode: str, zmx: bool) -> None:
     assert ("AGTERM_UITEST_FORCE_SIDEBAR_VISIBLE" in env) is (mode == "uitest")
     assert ("AGTERM_UITEST_ENABLE_ZMX" in env) is zmx
     check_launch_env(env, tmp_path, needs_app_id=False)
+
+
+@pytest.mark.parametrize(("mode", "welcome"), [("uitest", True), ("plain", False)])
+def test_swift_macos_first_run_asks_for_the_welcome_under_the_sentinel(
+    tmp_path: Path, mode: str, welcome: bool
+) -> None:
+    adapter = SwiftMacosAdapter(tmp_path / "agterm.app", launch_mode=mode)
+    env = adapter.build_env(tmp_path)
+    assert "AGTERM_UITEST_SHOW_WELCOME" not in env
+    adapter.first_run_env(env)
+    assert ("AGTERM_UITEST_SHOW_WELCOME" in env) is welcome
 
 
 def test_swift_macos_defaults_to_the_sentinel_with_zmx(zsh_login: Path, tmp_path: Path) -> None:

@@ -76,9 +76,13 @@ class RustAdapter(Adapter):
         return self._profile
 
     def launch(
-        self, timeout: float = LAUNCH_TIMEOUT, app_id: str | None = None, settings: Mapping[str, Any] | None = None
+        self,
+        timeout: float = LAUNCH_TIMEOUT,
+        app_id: str | None = None,
+        settings: Mapping[str, Any] | None = None,
+        first_run: bool = False,
     ) -> Instance:
-        instance = super().launch(timeout, app_id, settings)
+        instance = super().launch(timeout, app_id, settings, first_run)
         if self._profile is None:
             try:
                 self._profile = profile_from_version(instance.version)

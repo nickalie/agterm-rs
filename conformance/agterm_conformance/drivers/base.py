@@ -40,6 +40,7 @@ NAMED_KEYS = frozenset({
 })  # fmt: skip
 PRINTABLE_KEYS = frozenset(string.ascii_lowercase + string.digits + "`-=[]\\;',./")
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
+INVENTORY_LIMIT = 120
 
 
 class NoDriver(Exception):
@@ -124,6 +125,17 @@ class UiIds:
         raise UnknownUiId(f"{ui_id!r} is neither an id nor an expansion of a template in ui-ids.yaml")
 
 
+def _describe(element: Element) -> str:
+    parts = [element.role]
+    if element.name is not None:
+        parts.append(f"name={element.name!r}")
+    if element.value is not None:
+        parts.append(f"value={element.value!r}"[:80])
+    if element.enabled is False:
+        parts.append("disabled")
+    return f"{element.ui_id}({' '.join(parts)})"
+
+
 def _template_pattern(template: str) -> str:
     parts = _PLACEHOLDER.split(template)
     # split() alternates literal text and placeholder names.
@@ -142,7 +154,8 @@ def parse_chord(spec: str) -> Chord:
 
 
 class Driver(ABC):
-    """`find` / `click` / `press` / `text` over one app process."""
+    """`find` / `click` / `press` / `text` over one app process; `menu`, `menu_item` and `tab` reach the platform's
+    own chrome, which carries no identifiers."""
 
     name: ClassVar[str] = ""
 
@@ -165,6 +178,11 @@ class Driver(ABC):
 
         return self._wait(check, wanted, timeout)
 
+    def all(self, ui_id: str) -> list[Element]:
+        """Every element carrying `ui_id` now, unwaited: for counts and for picking one by its text."""
+        self.ui_ids.key_for(ui_id)
+        return self._elements(ui_id)
+
     def absent(self, ui_id: str, timeout: float | None = None) -> None:
         """Wait until no element carries `ui_id`."""
         self.ui_ids.key_for(ui_id)
@@ -176,6 +194,21 @@ class Driver(ABC):
     def menu_item(self, name: str, timeout: float | None = None) -> Element:
         """An item of the open menu by title: system menus carry no identifiers."""
         return self._wait(lambda: self._menu_item(name), f"menu item {name!r}", timeout)
+
+    def menu(self, *path: str, timeout: float | None = None) -> None:
+        """Run a main-menu command by its titles, top level first (`"View", "Find…"`)."""
+        if not path:
+            raise ValueError("menu needs a path")
+        item = self._wait(lambda: self._menu_command(path), f"menu command {' > '.join(path)!r}", timeout)
+        self._press_element(item)
+
+    def tab(self, name: str, timeout: float | None = None) -> Element:
+        """A tab of a tabbed window, such as Settings, by its title."""
+        return self._wait(lambda: self._tab(name), f"tab {name!r}", timeout)
+
+    def inventory(self) -> list[Element]:
+        """Every element carrying an identifier, for failure messages."""
+        return self._identified()
 
     def click(self, target: str | Element) -> None:
         self._press_element(self._resolve(target))
@@ -196,14 +229,33 @@ class Driver(ABC):
         try:
             return wait_until(check, self.timeout if timeout is None else timeout)
         except WaitTimeout as error:
-            raise ElementNotFound(f"{self.name}: no {wanted} in pid {self.pid}: {error}") from None
+            raise ElementNotFound(f"{self.name}: no {wanted} in pid {self.pid}: {error}; {self._present()}") from None
+
+    def _present(self) -> str:
+        try:
+            elements = self._identified()
+        except ReadFailed as error:
+            return f"inventory unread: {error}"
+        shown = ", ".join(_describe(element) for element in elements[:INVENTORY_LIMIT])
+        more = f" and {len(elements) - INVENTORY_LIMIT} more" if len(elements) > INVENTORY_LIMIT else ""
+        return f"identified now: {shown or 'none'}{more}"
 
     @abstractmethod
     def _elements(self, ui_id: str) -> list[Element]:
         """Every element carrying `ui_id`; raises ReadFailed rather than answer from a partial read."""
 
     @abstractmethod
+    def _identified(self) -> list[Element]:
+        """Every element carrying an identifier."""
+
+    @abstractmethod
     def _menu_item(self, name: str) -> Element | None: ...
+
+    @abstractmethod
+    def _menu_command(self, path: tuple[str, ...]) -> Element | None: ...
+
+    @abstractmethod
+    def _tab(self, name: str) -> Element | None: ...
 
     @abstractmethod
     def _press_element(self, element: Element) -> None: ...

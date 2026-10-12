@@ -50,6 +50,8 @@ AX_ATTRIBUTE_UNSUPPORTED = -25205
 AX_NO_VALUE = -25212
 # The menu bar keeps every menu's items in the tree, closed or not; an open menu is found outside it.
 MENU_BAR_ROLE = "AXMenuBar"
+# A Settings window's tabs are toolbar buttons.
+TAB_ROLES = frozenset({"AXButton", "AXRadioButton", "AXToolbarButton"})
 MAX_DEPTH = 64
 MESSAGING_TIMEOUT = 2.0
 
@@ -139,9 +141,33 @@ class AxDriver(Driver):
     def _elements(self, ui_id: str) -> list[Element]:
         return [self.snapshot(handle) for handle in self.walk() if self.attribute(handle, "AXIdentifier") == ui_id]
 
+    def _identified(self) -> list[Element]:
+        return [self.snapshot(handle) for handle in self.walk() if self.attribute(handle, "AXIdentifier")]
+
     def _menu_item(self, name: str) -> Element | None:
         for handle in self.walk():
             if self.attribute(handle, "AXRole") == "AXMenuItem" and self.attribute(handle, "AXTitle") == name:
+                return self.snapshot(handle)
+        return None
+
+    def _menu_command(self, path: tuple[str, ...]) -> Element | None:
+        """Down the menu bar by title; each level's items sit under its one AXMenu child."""
+        level = self.attribute(self.app, "AXMenuBar")
+        for depth, title in enumerate(path):
+            if level is None:
+                return None
+            children = self.attribute(level, "AXChildren") or ()
+            found = next((child for child in children if self.attribute(child, "AXTitle") == title), None)
+            if found is None:
+                return None
+            if depth == len(path) - 1:
+                return self.snapshot(found)
+            level = next(iter(self.attribute(found, "AXChildren") or ()), None)
+        return None
+
+    def _tab(self, name: str) -> Element | None:
+        for handle in self.walk():
+            if self.attribute(handle, "AXRole") in TAB_ROLES and self.attribute(handle, "AXTitle") == name:
                 return self.snapshot(handle)
         return None
 

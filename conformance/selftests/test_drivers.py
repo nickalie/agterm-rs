@@ -49,7 +49,9 @@ class FakeDriver(Driver):
     def __init__(self, elements: list[Element], **kwargs: Any) -> None:
         super().__init__(4242, IDS, timeout=0.2, **kwargs)
         self.elements = elements
-        self.menu: list[Element] = []
+        self.menu_items: list[Element] = []
+        self.menu_bar: dict[tuple[str, ...], Element] = {}
+        self.tabs: list[Element] = []
         self.pressed: list[Element] = []
         self.posted: list[Chord] = []
         self.polls = 0
@@ -58,8 +60,17 @@ class FakeDriver(Driver):
         self.polls += 1
         return [element for element in self.elements if element.ui_id == ui_id]
 
+    def _identified(self) -> list[Element]:
+        return [element for element in self.elements if element.ui_id]
+
     def _menu_item(self, name: str) -> Element | None:
-        return next((item for item in self.menu if item.name == name), None)
+        return next((item for item in self.menu_items if item.name == name), None)
+
+    def _menu_command(self, path: tuple[str, ...]) -> Element | None:
+        return self.menu_bar.get(path)
+
+    def _tab(self, name: str) -> Element | None:
+        return next((tab for tab in self.tabs if tab.name == name), None)
 
     def _press_element(self, element: Element) -> None:
         self.pressed.append(element)
@@ -230,10 +241,63 @@ def test_press_validates_every_chord_before_posting_any() -> None:
 def test_menu_item_waits_by_title() -> None:
     driver = FakeDriver([])
     item = Element(None, "menu-item", "New Session")
-    driver.menu = [item]
+    driver.menu_items = [item]
     assert driver.menu_item("New Session") is item
     with pytest.raises(ElementNotFound, match="menu item 'Open'"):
         driver.menu_item("Open", timeout=0.1)
+
+
+def test_menu_presses_the_command_at_the_end_of_its_path() -> None:
+    driver = FakeDriver([])
+    find = Element(None, "menu-item", "Find…")
+    driver.menu_bar = {("View", "Find…"): find}
+    driver.menu("View", "Find…")
+    assert driver.pressed == [find]
+    with pytest.raises(ElementNotFound, match="menu command 'Edit > Find…'"):
+        driver.menu("Edit", "Find…", timeout=0.1)
+    with pytest.raises(ValueError, match="needs a path"):
+        driver.menu()
+
+
+def test_tab_waits_by_title() -> None:
+    driver = FakeDriver([])
+    general = Element(None, "button", "General")
+    driver.tabs = [general]
+    assert driver.tab("General") is general
+    with pytest.raises(ElementNotFound, match="tab 'Interface'"):
+        driver.tab("Interface", timeout=0.1)
+
+
+def test_all_lists_every_element_of_an_id_without_waiting() -> None:
+    rows = [Element("add-session", "button", value=str(n)) for n in range(3)]
+    driver = FakeDriver([*rows, Element("htmlOverlay.back", "button")])
+    assert driver.all("add-session") == rows
+    assert driver.all("ask-button-No") == []
+    with pytest.raises(UnknownUiId):
+        driver.all("session-row")
+
+
+def test_a_miss_lists_what_carries_an_identifier() -> None:
+    driver = FakeDriver(
+        [Element("add-session", "popup", "Add session"), Element("htmlOverlay.back", "button", enabled=False)]
+    )
+    with pytest.raises(
+        ElementNotFound,
+        match=r"identified now: add-session\(popup name='Add session'\), htmlOverlay.back\(button disabled\)$",
+    ):
+        driver.find("ask-button-Yes", timeout=0.1)
+    assert driver.inventory() == driver.elements
+
+
+def test_a_miss_says_when_the_inventory_could_not_be_read() -> None:
+    driver = FakeDriver([])
+
+    def unread() -> list[Element]:
+        raise ReadFailed("AXError -25204")
+
+    driver._identified = unread  # type: ignore[method-assign]
+    with pytest.raises(ElementNotFound, match="inventory unread: AXError -25204"):
+        driver.find("add-session", timeout=0.1)
 
 
 def test_absent_waits_until_no_element_carries_the_id() -> None:
@@ -469,4 +533,40 @@ def test_ui_fixture_drives_the_ctl_instance(
     )
     (pytester.path / "spec").mkdir()
     (pytester.path / "spec" / "ui-ids.yaml").write_text("ids:\n  next-to-the-catalog: {}\n")
+    run_ui_suite(pytester, fake_bin, "--catalog", "spec/catalog.yaml").assert_outcomes(passed=1)
+
+
+def test_ui_for_skips_as_unsupported_before_anything_launches(
+    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path
+) -> None:
+    pytester.makepyfile(
+        """
+        def test_ui_for(launch, ui_for):
+            raise AssertionError("must not run")
+        """
+    )
+    result = run_ui_suite(pytester, fake_bin)
+    result.assert_outcomes(skipped=1)
+    result.stdout.fnmatch_lines(["*unsupported: the atspi ui driver is not written yet*"])
+    assert roots == []
+
+
+def test_ui_for_drives_the_instance_it_is_given(
+    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Recording:
+        def __init__(self, pid: int, ui_ids: UiIds | None) -> None:
+            self.pid = pid
+
+    monkeypatch.setattr(drivers, "driver_class", lambda impl, platform=sys.platform: Recording)
+    pytester.makepyfile(
+        """
+        def test_ui_for(launch, ui_for):
+            first, second = launch(), launch()
+            assert ui_for(second).pid == second.instance.pid != first.instance.pid
+            assert ui_for(first.instance).pid == first.instance.pid
+        """
+    )
+    (pytester.path / "spec").mkdir()
+    (pytester.path / "spec" / "ui-ids.yaml").write_text("ids: {}\n")
     run_ui_suite(pytester, fake_bin, "--catalog", "spec/catalog.yaml").assert_outcomes(passed=1)
