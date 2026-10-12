@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Run the protocol, cli and behaviors layers against the installed Swift/GTK fork and write a report to attach to a PR.
 # Every instance comes from the harness (unique AGTERM_APP_ID, fresh root under this run's own /tmp/agt-run-*
-# parent, its own headless weston); nothing here talks to the user's running agterm or reaches the desktop.
+# parent, its own headless weston and session bus); no window, notification or a11y object reaches the desktop.
 #
 #   conformance/tools/run-reference-linux.sh [--bin PATH] [--out DIR] [--tests DIR] [-- PYTEST_ARGS...]
 #
 # Writes report.md, junit.xml and pytest.log into DIR, replacing only those.
 # Exits with pytest's status, or 1 when a run left an instance root behind.
-# CONFORMANCE_LINUX_DISPLAY=session draws the instances on this desktop instead, for debugging.
+# CONFORMANCE_LINUX_DISPLAY=session uses this desktop's display and bus instead, for debugging.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,9 +34,13 @@ python="${PYTHON:-$repo/.venv/bin/python}"
 # This checkout's harness, ahead of whichever checkout the venv's editable install points at.
 export PYTHONPATH="$repo/conformance${PYTHONPATH:+:$PYTHONPATH}"
 display="${CONFORMANCE_LINUX_DISPLAY:-headless}"
-if [[ "$display" == headless ]] && ! command -v weston >/dev/null; then
-    echo "no weston on PATH: install it, or set CONFORMANCE_LINUX_DISPLAY=session" >&2
-    exit 2
+if [[ "$display" == headless ]]; then
+    for tool in weston dbus-daemon; do
+        if ! command -v "$tool" >/dev/null; then
+            echo "no $tool on PATH: install it, or set CONFORMANCE_LINUX_DISPLAY=session" >&2
+            exit 2
+        fi
+    done
 fi
 
 # A shell inside a live agterm session exports its socket and session; the plugin scrubs these too.

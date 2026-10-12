@@ -200,6 +200,14 @@ def test_must_pass_with_no_required_test_fails(pytester: pytest.Pytester) -> Non
     result.stdout.fnmatch_lines(["*no collected test requires live-sessions*"])
 
 
+def test_must_pass_needs_a_collected_test_for_each_capability(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile(MUST_PASS_TESTS.format(body="pass"))
+    result = pytester.runpytest("--must-pass", "live-sessions", "--must-pass", "posix-shell")
+    assert result.ret == pytest.ExitCode.TESTS_FAILED
+    result.stdout.fnmatch_lines(["*no collected test requires posix-shell*"])
+    result.stdout.no_fnmatch_line("*no collected test requires live-sessions*")
+
+
 def test_must_pass_refuses_an_unknown_capability(pytester: pytest.Pytester) -> None:
     result = pytester.runpytest("--must-pass", "live-session")
     assert result.ret == pytest.ExitCode.USAGE_ERROR

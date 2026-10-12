@@ -1,6 +1,6 @@
-"""`notify`: the unseen badge on the session (`unseen`) and the `notify` event. Each post also reaches the desktop
-over the real session bus, so the module posts as few as it can and selects the notified session afterwards,
-which withdraws its banners."""
+"""`notify`: the unseen badge on the session (`unseen`) and the `notify` event. A headless Linux instance posts to its
+own session bus, where nothing shows it; under CONFORMANCE_LINUX_DISPLAY=session (and on macOS) each post reaches the
+desktop, so the module posts as few as it can and selects the notified session afterwards, which withdraws them."""
 
 import pytest
 from agterm_conformance.match import assert_absent, assert_error, assert_ok, find_session

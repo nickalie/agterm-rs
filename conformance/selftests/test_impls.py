@@ -7,6 +7,7 @@ import signal
 import socket
 import subprocess
 import threading
+import time
 import traceback
 from collections.abc import Iterator
 from pathlib import Path
@@ -65,6 +66,10 @@ def spawn_daemon(
         shutil.copy2(shutil.which("cat") or "/bin/cat", program)
     process = subprocess.Popen([program], stdin=subprocess.PIPE, env={"ZMX_DIR": zmx_dir})
     spawned.append(process)
+    # Popen returns once exec passed its point of no return; the new image's argv pages may still be empty.
+    cmdline, deadline = Path(f"/proc/{process.pid}/cmdline"), time.monotonic() + 5
+    while os.path.isdir("/proc/self") and not cmdline.read_bytes() and time.monotonic() < deadline:
+        threading.Event().wait(0.01)
     return process.pid
 
 
@@ -236,13 +241,15 @@ def test_linux_adapters_draw_headless_by_default(
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setenv("GDK_BACKEND", "x11")
-    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/7/bus")
+    monkeypatch.setenv("AT_SPI_BUS_ADDRESS", "unix:path=/run/user/7/at-spi/bus")
     adapter = adapter_class(tmp_path / "agterm-linux")
     assert adapter.headless
     env = adapter.build_env(tmp_path)
     assert env["WAYLAND_DISPLAY"] == str(tmp_path / "run" / "wayland-0")
     assert "DISPLAY" not in env and env["GDK_BACKEND"] == "wayland"
-    assert env["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/run/user/7/bus"
+    assert env["DBUS_SESSION_BUS_ADDRESS"] == f"unix:path={tmp_path / 'run' / 'bus'}"
+    assert "AT_SPI_BUS_ADDRESS" not in env
     check_launch_env(env, tmp_path, needs_app_id=True, needs_runtime_dir=True, headless=True)
     assert not SwiftMacosAdapter(tmp_path / "agterm.app").headless
 
@@ -253,10 +260,19 @@ def test_linux_adapters_draw_headless_by_default(
         ({"DISPLAY": ":0"}, "DISPLAY is set"),
         ({"WAYLAND_DISPLAY": "/run/user/7/wayland-1"}, "WAYLAND_DISPLAY"),
         ({"WAYLAND_DISPLAY": ""}, "WAYLAND_DISPLAY must be set"),
+        ({"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/7/bus"}, "DBUS_SESSION_BUS_ADDRESS: "),
+        ({"DBUS_SESSION_BUS_ADDRESS": "unix:abstract=x"}, "not the instance's own"),
+        ({"DBUS_SESSION_BUS_ADDRESS": ""}, "not the instance's own"),
+        ({"AT_SPI_BUS_ADDRESS": "unix:path=/run/user/7/at-spi/bus"}, "AT_SPI_BUS_ADDRESS is set"),
     ],
 )
 def test_headless_launch_env_refuses_the_users_display(tmp_path: Path, overrides: dict[str, str], refusal: str) -> None:
-    env = env_for(tmp_path, XDG_RUNTIME_DIR=str(tmp_path / "run"), WAYLAND_DISPLAY=str(tmp_path / "run" / "wayland-0"))
+    env = env_for(
+        tmp_path,
+        XDG_RUNTIME_DIR=str(tmp_path / "run"),
+        WAYLAND_DISPLAY=str(tmp_path / "run" / "wayland-0"),
+        DBUS_SESSION_BUS_ADDRESS=f"unix:path={tmp_path / 'run' / 'bus'}",
+    )
     check_launch_env(env, tmp_path, needs_app_id=True, needs_runtime_dir=True, headless=True)
     with pytest.raises(LaunchRefused, match=refusal):
         check_launch_env({**env, **overrides}, tmp_path, needs_app_id=True, needs_runtime_dir=True, headless=True)
@@ -354,6 +370,28 @@ def test_headless_launch_draws_into_its_own_compositor(
     assert compositor.returncode is not None and not instance.root.exists()
 
 
+def test_headless_launch_talks_to_its_own_session_bus(roots: list[Path], fake_bin: Path) -> None:
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    bus = instance.session_bus
+    assert bus is not None
+    try:
+        address = instance.root / "run" / "bus"
+        seen = json.loads((instance.state_dir / "fake-env.json").read_text())
+        assert seen["DBUS_SESSION_BUS_ADDRESS"] == f"unix:path={address}"
+        assert compositor_record(instance)["env"]["DBUS_SESSION_BUS_ADDRESS"] == f"unix:path={address}"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.connect(str(address))
+        config = (instance.root / "dbus.conf").read_text()
+        assert f"<listen>unix:path={address}</listen>" in config and "servicedir" not in config
+        record = json.loads((instance.root / "fake-session-bus.json").read_text())
+        assert record["argv"] == base.session_bus_argv("", instance.root)[1:]
+        assert not {"WAYLAND_DISPLAY", "DISPLAY"} & record["env"].keys()
+    finally:
+        adapter.stop(instance)
+    assert bus.returncode is not None and not instance.root.exists()
+
+
 @pytest.mark.parametrize("installed", [True, False])
 def test_compositor_runs_on_mesa_where_installed(
     roots: list[Path], fake_bin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, installed: bool
@@ -386,6 +424,7 @@ def test_session_display_starts_no_compositor(
     instance = adapter.launch()
     try:
         assert instance.compositor is None and not (instance.root / "fake-compositor.json").exists()
+        assert instance.session_bus is None and not (instance.root / "fake-session-bus.json").exists()
         assert (
             json.loads((instance.state_dir / "fake-env.json").read_text())["WAYLAND_DISPLAY"] == "/run/user/7/wayland-1"
         )
@@ -409,7 +448,26 @@ def test_compositor_failing_to_serve_fails_the_launch_before_the_app(
     adapter = SwiftLinuxAdapter(fake_bin)
     with pytest.raises(LaunchError, match=failure):
         adapter.launch(timeout=0.5)
-    assert [command[0] for command in spawned] == [str(base.compositor_program())]
+    assert [command[0] for command in spawned] == [str(base.session_bus_program()), str(base.compositor_program())]
+    assert len(roots) == 1 and not roots[0].exists()
+    assert not base.find_headless_leftovers(str(roots[0] / "run"))
+
+
+def test_session_bus_failing_to_start_fails_the_launch_before_weston(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_SESSION_BUS_MODE", "exit")
+    spawned: list[list[str]] = []
+    spawn = base._spawn
+
+    def recording(command: list[str], *args: Any) -> subprocess.Popen[bytes]:
+        spawned.append(command)
+        return spawn(command, *args)
+
+    monkeypatch.setattr(base, "_spawn", recording)
+    with pytest.raises(LaunchError, match="dbus-daemon exited with 3"):
+        SwiftLinuxAdapter(fake_bin).launch(timeout=0.5)
+    assert [command[0] for command in spawned] == [str(base.session_bus_program())]
     assert len(roots) == 1 and not roots[0].exists()
 
 
@@ -419,6 +477,8 @@ def test_missing_weston_names_the_opt_out(
     monkeypatch.setenv("PATH", str(tmp_path))
     with pytest.raises(LaunchError, match="CONFORMANCE_LINUX_DISPLAY=session"):
         base.compositor_program()
+    with pytest.raises(LaunchError, match="no dbus-daemon on PATH.*CONFORMANCE_LINUX_DISPLAY=session"):
+        base.session_bus_program()
 
 
 def test_relaunch_keeps_the_compositor(roots: list[Path], fake_bin: Path) -> None:
@@ -427,10 +487,11 @@ def test_relaunch_keeps_the_compositor(roots: list[Path], fake_bin: Path) -> Non
     second = adapter.relaunch(first)
     try:
         assert second.compositor is first.compositor and first.compositor is not None
-        assert first.compositor.poll() is None
+        assert second.session_bus is first.session_bus and first.session_bus is not None
+        assert first.compositor.poll() is None and first.session_bus.poll() is None
     finally:
         adapter.stop(second)
-    assert first.compositor.returncode is not None
+    assert first.compositor.returncode is not None and first.session_bus.returncode is not None
 
 
 def test_failed_relaunch_stops_the_compositor(
@@ -446,6 +507,7 @@ def test_failed_relaunch_stops_the_compositor(
     with pytest.raises(OSError, match="no binary"):
         adapter.relaunch(instance)
     assert instance.compositor is not None and instance.compositor.returncode is not None
+    assert instance.session_bus is not None and instance.session_bus.returncode is not None
 
 
 def test_stop_reports_a_compositor_client_left_behind(
@@ -463,7 +525,7 @@ def test_stop_reports_a_compositor_client_left_behind(
     shutil.copy2(shutil.which("cat") or "/bin/cat", program)
     client = subprocess.Popen([program], stdin=subprocess.PIPE, env={"XDG_RUNTIME_DIR": str(instance.root / "run")})
     daemons.append(client)
-    with pytest.raises(StopError, match=rf"compositor processes left .*{client.pid} "):
+    with pytest.raises(StopError, match=rf"compositor or bus processes left .*{client.pid} "):
         adapter.stop(instance)
     assert instance.compositor is not None and instance.compositor.returncode is not None
     assert instance.root.exists()
@@ -475,12 +537,23 @@ def test_stop_reports_a_compositor_that_died_under_the_app(roots: list[Path], fa
     assert instance.compositor is not None
     instance.compositor.send_signal(signal.SIGKILL)
     instance.compositor.wait(timeout=5)
-    with pytest.raises(StopError, match="had already exited with -9"):
+    with pytest.raises(StopError, match="weston pid .* had already exited with -9"):
         adapter.stop(instance)
     assert instance.process.returncode is not None
 
 
-@pytest.mark.skipif(shutil.which("weston") is None, reason="weston is not installed")
+def test_stop_reports_a_session_bus_that_died_under_the_app(roots: list[Path], fake_bin: Path) -> None:
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    assert instance.session_bus is not None and instance.compositor is not None
+    instance.session_bus.send_signal(signal.SIGKILL)
+    instance.session_bus.wait(timeout=5)
+    with pytest.raises(StopError, match="dbus-daemon pid .* had already exited with -9"):
+        adapter.stop(instance)
+    assert instance.compositor.returncode is not None
+
+
+@pytest.mark.skipif(not (shutil.which("weston") and shutil.which("dbus-daemon")), reason="weston or dbus is missing")
 def test_real_weston_serves_and_leaves_nothing(roots: list[Path], fake_bin: Path, real_compositor: None) -> None:
     adapter = SwiftLinuxAdapter(fake_bin)
     instance = adapter.launch()
@@ -494,11 +567,20 @@ def test_real_weston_serves_and_leaves_nothing(roots: list[Path], fake_bin: Path
         assert list(identity.words[1 : 1 + len(arguments)]) == arguments
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
             probe.connect(instance.env["WAYLAND_DISPLAY"])
-        assert base.find_compositor_leftovers(runtime_dir)
+        assert {name for _, name, _ in base.find_headless_leftovers(runtime_dir)} >= {"weston", "dbus-daemon"}
+        if gdbus := shutil.which("gdbus"):
+            names = subprocess.run(
+                [gdbus, "call", "--session", "-d", "org.freedesktop.DBus", "-o", "/org/freedesktop/DBus",
+                 "-m", "org.freedesktop.DBus.ListActivatableNames"],
+                env={"DBUS_SESSION_BUS_ADDRESS": instance.env["DBUS_SESSION_BUS_ADDRESS"]},
+                capture_output=True, text=True, timeout=10, check=True,
+            ).stdout  # fmt: skip
+            assert names.strip() == "(['org.freedesktop.DBus'],)"
     finally:
         adapter.stop(instance)
     assert compositor.returncode == 0 and process_identity(compositor.pid) is None
-    assert not base.find_compositor_leftovers(runtime_dir)
+    assert instance.session_bus is not None and instance.session_bus.returncode == 0
+    assert not base.find_headless_leftovers(runtime_dir)
 
 
 @pytest.mark.parametrize("adapter_class", [SwiftLinuxAdapter, RustAdapter])

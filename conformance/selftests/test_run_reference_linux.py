@@ -47,11 +47,14 @@ def install(fake_bin: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def weston_on_path(tmp_path: Path, fake_compositor_bin: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The script's pytest is a subprocess the conftest patch cannot reach: it finds the fake weston on PATH."""
+def weston_on_path(
+    tmp_path: Path, fake_compositor_bin: Path, fake_session_bus_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """The script's pytest is a subprocess the conftest patch cannot reach: it finds the fake weston and bus on PATH."""
     directory = tmp_path / "weston-bin"
     directory.mkdir()
     (directory / "weston").symlink_to(fake_compositor_bin)
+    (directory / "dbus-daemon").symlink_to(fake_session_bus_bin)
     monkeypatch.setenv("PATH", f"{directory}{os.pathsep}{os.environ['PATH']}")
     return directory
 
@@ -143,17 +146,21 @@ def test_bad_arguments_exit_2(tmp_path: Path, install: Path, case: str) -> None:
     assert completed.returncode == 2
 
 
-def test_a_headless_run_without_weston_names_the_opt_out(
-    tmp_path: Path, install: Path, layers: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("missing", ["weston", "dbus-daemon"])
+def test_a_headless_run_without_weston_or_a_bus_names_the_opt_out(
+    tmp_path: Path, install: Path, layers: Path, weston_on_path: Path, monkeypatch: pytest.MonkeyPatch, missing: str
 ) -> None:
     bare = tmp_path / "bare-bin"
     bare.mkdir()
     for tool in ("bash", "dirname", "readlink", "cat", "git", "grep", "mktemp", "rmdir", "rm", "mkdir", "env"):
         if found := shutil.which(tool):
             (bare / tool).symlink_to(found)
+    for helper in {"weston", "dbus-daemon"} - {missing}:
+        (bare / helper).symlink_to(weston_on_path / helper)
     monkeypatch.setenv("PATH", str(bare))
     completed, report = run(tmp_path, "--bin", str(install), "--tests", str(layers))
-    assert completed.returncode == 2 and "CONFORMANCE_LINUX_DISPLAY=session" in completed.stderr
+    assert completed.returncode == 2
+    assert f"no {missing} on PATH" in completed.stderr and "CONFORMANCE_LINUX_DISPLAY=session" in completed.stderr
     assert report == ""
 
 

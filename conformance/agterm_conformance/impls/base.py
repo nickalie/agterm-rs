@@ -60,7 +60,7 @@ RUNTIME_DIR_NAME = "run"
 # Every URI or file the instance hands the desktop (`session.reveal`, a clicked link, a page's browser hand-off) goes to
 # `true`: the system defaults resolve through XDG_DATA_DIRS, which the isolated XDG_DATA_HOME does not replace, and
 # opened real windows on the user's desktop. GTK's Show in Files (`session.overlay.navigate` finder) asks the session
-# bus's FileManager1 instead, which no mimeapps entry reaches: no test may drive it.
+# bus's FileManager1 instead, which no mimeapps entry reaches: no test may drive it under the `session` display.
 NOOP_DESKTOP_ID = "agterm-conformance-noop.desktop"
 NOOP_MIME_TYPES = (
     "inode/directory",
@@ -71,8 +71,9 @@ NOOP_MIME_TYPES = (
     "text/plain",
     "application/octet-stream",
 )
-# Every Linux instance draws into a headless weston of its own inside its private runtime dir, so no window reaches
-# the user's desktop; `session` draws on the user's display instead, for debugging only.
+# Every Linux instance draws into a headless weston of its own inside its private runtime dir and talks to a session
+# bus of its own there, so no window or notification reaches the user's desktop; `session` uses the user's display and
+# bus instead, for debugging only.
 DISPLAY_MODE_VARIABLE = "CONFORMANCE_LINUX_DISPLAY"
 DISPLAY_MODES = ("headless", "session")
 WESTON_SOCKET = "wayland-0"
@@ -85,6 +86,23 @@ EGL_VENDOR_VARIABLE = "__EGL_VENDOR_LIBRARY_FILENAMES"
 WESTON_SIZE = (1920, 1080)
 # No idle lock, no panel, and no `weston-keyboard` input-method client: the desktop shell's own helper is its only one.
 WESTON_CONFIG = "[core]\nidle-time=0\n\n[shell]\npanel-position=none\nlocking=false\n\n[input-method]\npath=\n"
+DBUS_SOCKET = "bus"
+# No service directories: nothing is activated, so a notification, Show in Files or the AT-SPI bus lookup finds no
+# owner instead of starting a desktop service. The fork's GApplication still registers its unique id here.
+DBUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:path={path}</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+"""
+HEADLESS_HELPERS = ("weston", "dbus-daemon")
 LAUNCH_TIMEOUT = 30.0
 STOP_TIMEOUT = 10.0
 REAP_SETTLE = 8.0
@@ -245,8 +263,8 @@ def isolated_runtime_env(
     """Point `XDG_RUNTIME_DIR` at `runtime_dir`, keeping the session's sockets reachable by absolute path.
 
     Wayland accepts an absolute `WAYLAND_DISPLAY`; D-Bus (and through it the AT-SPI bus) takes an explicit
-    address. X11 and an inherited `XAUTHORITY` are absolute already. `headless` points Wayland at the instance's own
-    weston instead and drops X11, so GTK cannot fall back to the user's Xwayland.
+    address. X11 and an inherited `XAUTHORITY` are absolute already. `headless` points Wayland and D-Bus at the
+    instance's own weston and bus instead and drops X11, so GTK cannot fall back to the user's Xwayland.
     """
     parent_runtime = parent.get("XDG_RUNTIME_DIR")
     env["XDG_RUNTIME_DIR"] = runtime_dir
@@ -255,7 +273,10 @@ def isolated_runtime_env(
         env["WAYLAND_DISPLAY"] = os.path.join(runtime_dir, WESTON_SOCKET)
         env["GDK_BACKEND"] = "wayland"
         env.pop("DISPLAY", None)
-    elif not os.path.isabs(display):
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={os.path.join(runtime_dir, DBUS_SOCKET)}"
+        env.pop("AT_SPI_BUS_ADDRESS", None)  # GTK would reach the user's accessibility bus directly
+        return
+    if not os.path.isabs(display):
         if parent_runtime:
             env["WAYLAND_DISPLAY"] = os.path.join(parent_runtime, display)
         else:
@@ -278,7 +299,16 @@ def check_launch_env(
     if headless:
         if "DISPLAY" in env:
             raise LaunchRefused("DISPLAY is set: a headless instance would reach the user's X server")
+        if "AT_SPI_BUS_ADDRESS" in env:
+            raise LaunchRefused("AT_SPI_BUS_ADDRESS is set: a headless instance would reach the user's a11y bus")
         rooted.append("WAYLAND_DISPLAY")
+        address = env.get("DBUS_SESSION_BUS_ADDRESS", "")
+        if not address.startswith("unix:path=") or "," in address or ";" in address:
+            raise LaunchRefused(f"DBUS_SESSION_BUS_ADDRESS {address!r} is not the instance's own unix:path= bus")
+        try:
+            check_under_root(address.removeprefix("unix:path="), root)
+        except ClientError as error:
+            raise LaunchRefused(f"DBUS_SESSION_BUS_ADDRESS: {error}") from None
     for name in rooted:
         if not env.get(name):
             raise LaunchRefused(f"{name} must be set")
@@ -305,8 +335,9 @@ class Instance:
     app_id: str | None
     zmx_dir: str
     version: dict[str, Any] = field(default_factory=dict)
-    # The instance's own headless weston; a relaunch keeps it.
+    # The instance's own headless weston and session bus; a relaunch keeps both.
     compositor: subprocess.Popen[bytes] | None = None
+    session_bus: subprocess.Popen[bytes] | None = None
 
     @property
     def pid(self) -> int:
@@ -427,6 +458,7 @@ class Adapter:
         headless = self.headless
         root = make_root()
         compositor: subprocess.Popen[bytes] | None = None
+        session_bus: subprocess.Popen[bytes] | None = None
         try:
             env = self.build_env(root, app_id)
             check_launch_env(env, root, self.needs_app_id, self.needs_runtime_dir, headless)
@@ -437,11 +469,12 @@ class Adapter:
                 os.mkdir(env["XDG_RUNTIME_DIR"], 0o700)  # the XDG spec's mode
                 write_noop_launchers(Path(env["XDG_CONFIG_HOME"]), Path(env["XDG_DATA_HOME"]))
             if headless:
+                session_bus = start_session_bus(root, env, timeout)
                 compositor = start_compositor(root, env, timeout)
             if app_id is not None:
                 _claim_app_id(app_id)
         except BaseException as error:
-            _note_compositor_stop(error, compositor, root)
+            _note_headless_stop(error, compositor, session_bus, root)
             shutil.rmtree(root, ignore_errors=True)
             raise
         log = root / "app.log"
@@ -449,7 +482,7 @@ class Adapter:
             process = _spawn(command, env, log, "wb")
         except BaseException as error:
             _release_app_id(app_id)
-            _note_compositor_stop(error, compositor, root)
+            _note_headless_stop(error, compositor, session_bus, root)
             shutil.rmtree(root, ignore_errors=True)
             raise
         instance = Instance(
@@ -463,6 +496,7 @@ class Adapter:
             app_id=app_id,
             zmx_dir=zmx_socket_directory(env["AGTERM_STATE_DIR"]),
             compositor=compositor,
+            session_bus=session_bus,
         )
         return self._serving(instance, timeout)
 
@@ -490,7 +524,7 @@ class Adapter:
                 _release_app_id(instance.app_id)
                 raise
         except BaseException as error:
-            _note_compositor_stop(error, instance.compositor, instance.root)
+            _note_headless_stop(error, instance.compositor, instance.session_bus, instance.root)
             if (leftovers := _leftovers_error(instance.zmx_dir)) is not None:
                 raise leftovers from error
             raise
@@ -505,6 +539,7 @@ class Adapter:
             app_id=instance.app_id,
             zmx_dir=instance.zmx_dir,
             compositor=instance.compositor,
+            session_bus=instance.session_bus,
         )
         return self._serving(relaunched, timeout)
 
@@ -519,11 +554,11 @@ class Adapter:
     # -- stop
 
     def stop(self, instance: Instance, cleanup: bool = True) -> None:
-        """Reap daemons, SIGTERM the launched pid only, then require no zmx/session-host left behind.
+        """Reap daemons, SIGTERM the launched pid, end what `stop_helpers` owns, then require no zmx/session-host left.
 
-        The compositor goes last, once the app is gone, and must leave no process of its own.
+        The compositor and session bus go last, once the app is gone, and must leave no process of their own.
         """
-        compositor_problem: str | None = None
+        headless_problem: str | None = None
         try:
             steps: list[str] = []
             try:
@@ -540,15 +575,15 @@ class Adapter:
             leftovers = _leftovers_error(instance.zmx_dir, steps)
         finally:
             _release_app_id(instance.app_id)
-            compositor_problem = stop_compositor(instance.compositor, instance.root)
+            headless_problem = stop_headless(instance.compositor, instance.session_bus, instance.root)
         if leftovers is not None:
             raise leftovers
         if killed:
             raise StopError(f"pid {instance.pid} ignored SIGTERM for {STOP_TIMEOUT}s and was killed")
         if helper_problem is not None:
             raise StopError(helper_problem)
-        if compositor_problem is not None:
-            raise StopError(compositor_problem)
+        if headless_problem is not None:
+            raise StopError(headless_problem)
         if cleanup:
             shutil.rmtree(instance.root, ignore_errors=True)
             _remove_empty_dir(instance.zmx_dir)
@@ -588,12 +623,40 @@ def start_compositor(root: Path, env: Mapping[str, str], timeout: float = LAUNCH
     if vendor := mesa_egl_vendor():
         weston_env[EGL_VENDOR_VARIABLE] = vendor
     process = _spawn(weston_argv(compositor_program(), root), weston_env, root / "weston.out", "wb")
-    try:
-        wait_for_unix_socket(socket_path, process, timeout, root / "weston.log")
-    except BaseException as error:
-        _note_compositor_stop(error, process, root)
-        raise
+    _wait_serving(socket_path, process, timeout, "weston", root / "weston.log")
     return process
+
+
+def session_bus_program() -> str:
+    if program := shutil.which("dbus-daemon"):
+        return program
+    raise LaunchError(
+        f"no dbus-daemon on PATH: install it, or set {DISPLAY_MODE_VARIABLE}=session to use this desktop's bus"
+    )
+
+
+def session_bus_argv(program: str, root: Path) -> list[str]:
+    return [program, "--nofork", "--nopidfile", "--nosyslog", f"--config-file={root / 'dbus.conf'}"]
+
+
+def start_session_bus(root: Path, env: Mapping[str, str], timeout: float = LAUNCH_TIMEOUT) -> subprocess.Popen[bytes]:
+    """Start the instance's private session bus in its runtime dir and return once it accepts a connection."""
+    socket_path = os.path.join(env["XDG_RUNTIME_DIR"], DBUS_SOCKET)
+    check_under_root(socket_path, root)
+    (root / "dbus.conf").write_text(DBUS_CONFIG.format(path=socket_path))
+    bus_env = {name: value for name, value in env.items() if name not in ("WAYLAND_DISPLAY", "DISPLAY")}
+    process = _spawn(session_bus_argv(session_bus_program(), root), bus_env, root / "dbus.log", "wb")
+    _wait_serving(socket_path, process, timeout, "dbus-daemon", root / "dbus.log")
+    return process
+
+
+def _wait_serving(path: str, process: subprocess.Popen[bytes], timeout: float, label: str, log: Path) -> None:
+    try:
+        wait_for_unix_socket(path, process, timeout, log, label)
+    except BaseException as error:
+        if problem := _stop_helper(process, label, log):
+            error.add_note(problem)
+        raise
 
 
 def mesa_egl_vendor() -> str | None:
@@ -603,7 +666,9 @@ def mesa_egl_vendor() -> str | None:
     return None
 
 
-def wait_for_unix_socket(path: str, process: subprocess.Popen[bytes], timeout: float, log: Path) -> None:
+def wait_for_unix_socket(
+    path: str, process: subprocess.Popen[bytes], timeout: float, log: Path, label: str = "weston"
+) -> None:
     deadline = time.monotonic() + timeout
     while True:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
@@ -613,46 +678,64 @@ def wait_for_unix_socket(path: str, process: subprocess.Popen[bytes], timeout: f
             except OSError as error:
                 last = error
         if time.monotonic() >= deadline:
-            raise LaunchError(f"weston socket {path} not accepting after {timeout}s ({last}):\n{_tail(log)}")
+            raise LaunchError(f"{label} socket {path} not accepting after {timeout}s ({last}):\n{_tail(log)}")
         try:
             code = process.wait(timeout=POLL_INTERVAL)
         except subprocess.TimeoutExpired:
             continue
-        raise LaunchError(f"weston exited with {code} before serving {path}:\n{_tail(log)}")
+        raise LaunchError(f"{label} exited with {code} before serving {path}:\n{_tail(log)}")
 
 
-def stop_compositor(process: subprocess.Popen[bytes] | None, root: Path) -> str | None:
-    """SIGTERM the compositor's own pid, then wait for its clients to follow; returns what went wrong."""
-    if process is None:
+def stop_headless(
+    compositor: subprocess.Popen[bytes] | None, session_bus: subprocess.Popen[bytes] | None, root: Path
+) -> str | None:
+    """SIGTERM the compositor's and the bus's own pids, then wait for their clients to follow; returns what went wrong."""
+    if compositor is None and session_bus is None:
         return None
-    problems: list[str] = []
-    if (code := process.poll()) is not None:
-        problems.append(f"weston pid {process.pid} had already exited with {code}:\n{_tail(root / 'weston.log')}")
-    elif _terminate(process):
-        problems.append(f"weston pid {process.pid} ignored SIGTERM for {STOP_TIMEOUT}s and was killed")
-    # Its desktop-shell helper exits on its own once the socket closes.
+    problems = [
+        problem
+        for process, label, log in (
+            (compositor, "weston", root / "weston.log"),
+            (session_bus, "dbus-daemon", root / "dbus.log"),
+        )
+        if process is not None and (problem := _stop_helper(process, label, log))
+    ]
+    # Weston's desktop-shell helper exits on its own once the socket closes.
     runtime_dir = os.fspath(root / RUNTIME_DIR_NAME)
     deadline = time.monotonic() + STOP_TIMEOUT
-    while (left := find_compositor_leftovers(runtime_dir)) and time.monotonic() < deadline:
+    while (left := find_headless_leftovers(runtime_dir)) and time.monotonic() < deadline:
         threading.Event().wait(POLL_INTERVAL)
     if left:
         described = ", ".join(f"{pid} {command}" for pid, _, command in left)
-        problems.append(f"compositor processes left under XDG_RUNTIME_DIR {runtime_dir}: {described}")
+        problems.append(f"compositor or bus processes left under XDG_RUNTIME_DIR {runtime_dir}: {described}")
     return "; ".join(problems) or None
 
 
-def _note_compositor_stop(error: BaseException, process: subprocess.Popen[bytes] | None, root: Path) -> None:
-    if (problem := stop_compositor(process, root)) is not None:
+def _stop_helper(process: subprocess.Popen[bytes], label: str, log: Path) -> str | None:
+    if (code := process.poll()) is not None:
+        return f"{label} pid {process.pid} had already exited with {code}:\n{_tail(log)}"
+    if _terminate(process):
+        return f"{label} pid {process.pid} ignored SIGTERM for {STOP_TIMEOUT}s and was killed"
+    return None
+
+
+def _note_headless_stop(
+    error: BaseException,
+    compositor: subprocess.Popen[bytes] | None,
+    session_bus: subprocess.Popen[bytes] | None,
+    root: Path,
+) -> None:
+    if (problem := stop_headless(compositor, session_bus, root)) is not None:
         error.add_note(problem)
 
 
-def find_compositor_leftovers(runtime_dir: str) -> list[tuple[int, str, str]]:
-    """(pid, name, command) of weston and its clients carrying this instance's runtime dir."""
+def find_headless_leftovers(runtime_dir: str) -> list[tuple[int, str, str]]:
+    """(pid, name, command) of weston, its clients and dbus-daemon carrying this instance's runtime dir."""
     marker = f"XDG_RUNTIME_DIR={runtime_dir}"
     return [
         (pid, name, command)
         for pid, name, command, words in _processes()
-        if name.startswith("weston") and marker in words
+        if name.startswith(HEADLESS_HELPERS) and marker in words
     ]
 
 

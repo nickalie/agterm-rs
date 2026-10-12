@@ -183,6 +183,7 @@ class MustPass:
     def __init__(self, capabilities: frozenset[str]) -> None:
         self.capabilities = capabilities
         self.required: list[str] = []
+        self.uncollected: set[str] = set(capabilities)
         self.passed: set[str] = set()
         self.spoiled: set[str] = set()
         self.problems: list[str] = []
@@ -190,11 +191,13 @@ class MustPass:
     @pytest.hookimpl(tryfirst=True)
     def pytest_collection_modifyitems(self, items: list[pytest.Item]) -> None:
         # tryfirst: before -k/-m deselection, so a deselected test still counts as required.
-        self.required = [
-            item.nodeid
-            for item in items
-            if any(set(marker.args) & self.capabilities for marker in item.iter_markers("requires"))
-        ]
+        self.required = []
+        self.uncollected = set(self.capabilities)
+        for item in items:
+            wanted = {name for marker in item.iter_markers("requires") for name in marker.args} & self.capabilities
+            if wanted:
+                self.required.append(item.nodeid)
+                self.uncollected -= wanted
 
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
         if report.when == "call" and report.passed:
@@ -204,11 +207,8 @@ class MustPass:
 
     @pytest.hookimpl(tryfirst=True)
     def pytest_sessionfinish(self, session: pytest.Session) -> None:
-        wanted = ", ".join(sorted(self.capabilities))
-        if not self.required:
-            self.problems = [f"no collected test requires {wanted}"]
-        else:
-            self.problems = [nodeid for nodeid in self.required if nodeid not in self.passed - self.spoiled]
+        self.problems = [f"no collected test requires {capability}" for capability in sorted(self.uncollected)]
+        self.problems += [nodeid for nodeid in self.required if nodeid not in self.passed - self.spoiled]
         if self.problems and session.exitstatus == pytest.ExitCode.OK:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
