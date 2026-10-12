@@ -44,11 +44,13 @@ fn core_handler() -> impl Fn(&mut Core, Request) -> Reply + Send + Sync + 'stati
 }
 
 /// A running server over a fake main loop owning `state`.
+/// Fields drop top to bottom: the server stops (waking and joining its accept thread through the socket) before
+/// the temp dir holding that socket is deleted.
 struct Fixture<S: Send + 'static> {
-    dir: TempDir,
-    socket: PathBuf,
-    main_loop: Arc<FakeMainLoop<S>>,
     server: ControlServer,
+    main_loop: Arc<FakeMainLoop<S>>,
+    socket: PathBuf,
+    dir: TempDir,
 }
 
 fn start<S, H>(state: S, handler: H) -> TestResult<Fixture<S>>
@@ -62,10 +64,10 @@ where
     let mut server = ControlServer::new(&socket);
     server.start(Arc::clone(&main_loop) as Arc<dyn MainLoop<S>>, handler)?;
     Ok(Fixture {
-        dir,
-        socket,
-        main_loop,
         server,
+        main_loop,
+        socket,
+        dir,
     })
 }
 
