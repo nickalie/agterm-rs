@@ -126,6 +126,8 @@ class Stream:
             if not chunk:
                 raise NoResponse(f"stream from {self.path} closed")
             self._pending += chunk
+        if newline > self._max_line_bytes:
+            raise ResponseTooLarge(f"stream line exceeds {self._max_line_bytes} bytes")
         line = bytes(self._pending[:newline])
         del self._pending[: newline + 1]
         return line

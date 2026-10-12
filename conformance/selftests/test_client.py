@@ -342,3 +342,18 @@ def test_stream_symlink_out_of_root_refused(live_server: FakeServer, root: Path)
     with pytest.raises(SocketOutsideRoot):
         client.open_stream("zmx.present", "s1")
     assert live_server.lines == []
+
+
+def test_stream_reply_over_the_cap_is_refused_even_when_it_arrives_whole(stream_server, root: Path) -> None:
+    server = stream_server(lambda conn, _line: conn.sendall(b'{"ok":true,"result":{"id":"s1-and-padding"}}\n'))
+    with pytest.raises(ResponseTooLarge, match="exceeds 32 bytes"):
+        Client(server.path, root, max_response_bytes=32).open_stream("zmx.present", "s1")
+
+
+def test_stream_frame_over_the_cap_is_refused_even_when_it_arrives_whole(stream_server, root: Path) -> None:
+    long_frame = b'{"kind":"' + b"x" * 64 + b'"}\n'
+    server = stream_server(lambda conn, _line: conn.sendall(b'{"ok":true}\n{"kind":"hello","gen":1}\n' + long_frame))
+    with Client(server.path, root, max_response_bytes=32).open_stream("zmx.present", "s1") as stream:
+        assert stream.read() == {"kind": "hello", "gen": 1}
+        with pytest.raises(ResponseTooLarge, match="exceeds 32 bytes"):
+            stream.read()

@@ -10,10 +10,13 @@ process left under the instance's `ZMX_DIR`.
 harness (see the catalog exemption)."""
 
 import itertools
+import time
 
 import pytest
+from agterm_conformance.client import ClientTimeout
 from agterm_conformance.match import assert_absent, assert_error, assert_ok, assert_subset, find_session, session_ids
 from agterm_conformance.plugin import Ctl
+from agterm_conformance.zmx_client import leading_client
 
 UNKNOWN = "zzz"
 LIVE = pytest.mark.requires(
@@ -24,10 +27,14 @@ PRESENTATION_VERSION = 1
 _markers = itertools.count(1)
 
 
-def _entries(ctl, sid):
+def _rows(response, sid):
     """This session's `zmx.list` rows by pane."""
-    rows = assert_ok(ctl.request("zmx.list"))["zmx"]["entries"]
+    rows = assert_ok(response)["zmx"]["entries"]
     return {row["pane"]: row for row in rows if row.get("sessionID") == sid}
+
+
+def _entries(ctl, sid):
+    return _rows(ctl.request("zmx.list"), sid)
 
 
 def _initial_session(ctl):
@@ -231,11 +238,6 @@ def _live_session(live, split=False):
     return sid
 
 
-def _rows(response, sid):
-    rows = assert_ok(response)["zmx"]["entries"]
-    return {row["pane"]: row for row in rows if row.get("sessionID") == sid}
-
-
 def _gone(live, daemon):
     live.wait_response(
         "zmx.list", None, lambda response: all(row["daemon"] != daemon for row in assert_ok(response)["zmx"]["entries"])
@@ -331,9 +333,15 @@ def _hello(mode):
 
 
 def _frame(stream, kind, timeout=10.0):
-    """The next frame of `kind`; pings are answered on the way, other frames skipped."""
+    """The next frame of `kind` within `timeout`; pings are answered on the way, other frames skipped.
+
+    One deadline for the whole wait: the references ping every 10s, so a per-read timeout never expires."""
+    deadline = time.monotonic() + timeout
     while True:
-        frame = stream.read(timeout)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ClientTimeout(f"no {kind} frame within {timeout}s")
+        frame = stream.read(remaining)
         if frame.get("kind") == "ping":
             stream.send({"kind": "ack", "gen": frame["gen"], "rev": 0})
         if frame.get("kind") == kind:
@@ -349,6 +357,12 @@ def _subscribed(live, sid, mode):
     assert hello["hello"]["mode"] == mode and hello["hello"]["version"] == PRESENTATION_VERSION
     _frame(stream, "snapshot")
     return stream, hello["gen"]
+
+
+def _follows(tree, sid, viewer):
+    left = next(s for s in find_session(tree, sid)["surfaces"] if s["kind"] == "left")
+    assert left.get("lead") == "follower", f"lead {left.get('lead')!r}; viewer's zmx: {viewer.output()[-500:]!r}"
+    return True
 
 
 def _presenters(live, sid, expected):
@@ -382,25 +396,30 @@ def test_present_mirrors_a_live_session(live):
 )
 def test_job_run_serves_an_overlay_a_presenter_shows(live):
     sid = _live_session(live)
-    presenter, gen = _subscribed(live, sid, "presenter")
-    with presenter:
-        presenter.send({"kind": "presenter.acquire", "gen": gen, "rev": 1})
-        _frame(presenter, "presenter.granted")
-        _presenters(live, sid, {"mirrors": 0, "presenter": True})
-        # With a presenter, an overlay opened here is handed to it to show, run by a helper that claims the job.
-        assert assert_ok(live.request("session.overlay.open", sid, command="true"))["id"] == sid
-        job = _frame(presenter, "overlay.request")["overlay"]["job"]
-        live.wait_tree(lambda tree: find_session(tree, sid).get("remoteOverlays") == [{}])
-        assert find_session(live.tree(), sid)["overlay"] is False
-        with live.stream("session.overlay.job.run", job) as helper:
-            assert helper.reply.ok and helper.reply.result == {"id": job}
-            context = helper.read()
-            assert context["kind"] == "context" and context["context"]["command"] == "true"
-            helper.send({"kind": "started"})
-            helper.send({"kind": "exited", "code": 0})
-            live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
-        # A job is claimable once.
-        with live.stream("session.overlay.job.run", job) as again:
-            assert_error(again.reply, "job not claimable")
+    endpoint = assert_ok(live.request("zmx.tree"))["remote"]["endpoint"]
+    # Both references hand an overlay to the presenter only while the pane's own client follows, and open it
+    # locally otherwise; a viewer's zmx client claiming the lead makes it follow.
+    with leading_client(live.instance, endpoint, _entries(live, sid)["left"]["daemon"]) as viewer:
+        live.wait_tree(lambda tree: _follows(tree, sid, viewer))
+        presenter, gen = _subscribed(live, sid, "presenter")
+        with presenter:
+            presenter.send({"kind": "presenter.acquire", "gen": gen, "rev": 1})
+            _frame(presenter, "presenter.granted")
+            _presenters(live, sid, {"mirrors": 0, "presenter": True})
+            # Handed to the presenter to show, and run by a helper that claims the job.
+            assert assert_ok(live.request("session.overlay.open", sid, command="true"))["id"] == sid
+            job = _frame(presenter, "overlay.request")["overlay"]["job"]
+            live.wait_tree(lambda tree: find_session(tree, sid).get("remoteOverlays") == [{}])
+            assert find_session(live.tree(), sid)["overlay"] is False
+            with live.stream("session.overlay.job.run", job) as helper:
+                assert helper.reply.ok and helper.reply.result == {"id": job}
+                context = helper.read()
+                assert context["kind"] == "context" and context["context"]["command"] == "true"
+                helper.send({"kind": "started"})
+                helper.send({"kind": "exited", "code": 0})
+                live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
+            # A job is claimable once.
+            with live.stream("session.overlay.job.run", job) as again:
+                assert_error(again.reply, "job not claimable")
     _presenters(live, sid, None)
     assert_ok(live.request("session.close", sid))

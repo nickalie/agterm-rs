@@ -40,6 +40,7 @@ SOCKET_PATH_CAP = 104
 # `CONFORMANCE_TMP` (not `AGTERM_`-prefixed, which the plugin scrubs) gives run-reference-linux.sh its own parent.
 TEMP_PARENT = os.environ.get("CONFORMANCE_TMP") or "/tmp"
 MINIMAL_PATH = "/usr/bin:/bin"
+ZSH_STARTUP_VARIABLES = ("ZDOTDIR", "GHOSTTY_ZSH_ZDOTDIR")
 DEFAULT_APP_ID = "io.github.melonamin.agterm"
 SESSION_HOST = "agterm-session-host"
 LEFTOVER_NAMES = frozenset({"zmx", SESSION_HOST})
@@ -147,10 +148,10 @@ def _foundation_resolved(path: str) -> str:
     return path
 
 
-def login_shell_blocker(login_shell: str | None = None) -> str | None:
+def login_shell_blocker() -> str | None:
     """Why Live sessions cannot run for this account, or None: both references wrap a pane in zmx only when
     the password-database login shell is zsh (`ZmxSupport.configuration`), and the pane then execs it."""
-    shell = login_shell if login_shell is not None else pwd.getpwuid(os.getuid()).pw_shell
+    shell = pwd.getpwuid(os.getuid()).pw_shell
     if os.path.basename(shell) != "zsh":
         return f"the password-database login shell is {shell or 'unset'}, not zsh"
     if not os.access(shell, os.X_OK):
@@ -329,6 +330,10 @@ class Adapter:
     def build_env(self, root: Path, app_id: str | None = None) -> dict[str, str]:
         home, state = root / "home", root / "state"
         env = scrubbed_environ()
+        # A Live pane's zsh restores an inherited ZDOTDIR (as GHOSTTY_ZSH_ZDOTDIR) and sources the user's startup
+        # files from it; without one it reads the isolated HOME.
+        for name in ZSH_STARTUP_VARIABLES:
+            env.pop(name, None)
         env.update(
             HOME=os.fspath(home),
             XDG_CONFIG_HOME=os.fspath(home / ".config"),

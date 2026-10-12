@@ -480,6 +480,8 @@ events by kind, CLI by subcommand words (`cli` items carry their `wire`); exempt
   host-detected `live-sessions` with its reason in `Profile.absent`), `client.py` (`Client.open_stream` / `Stream`),
   `plugin.py` (`Ctl.stream`, the `launch` fixture, the host reason in skip messages) and their self-tests
 - ➕ Modify: `conformance/catalog.yaml` (exemptions) and `conformance/coverage-baseline.txt`
+- ➕ Create: `conformance/agterm_conformance/zmx_client.py` (+ self-tests): a lead-claiming `zmx attach` on a pty,
+  the local stand-in for an ssh viewer; both references hand an overlay to a presenter only while the pane follows
 
 - [x] seed `restoreMode: live` in `settings.json` for `requires("live-sessions")` tests; on macOS via the interim zmx flag from Task 5
 - [x] restore pins and live-session lifecycle; reap with `zmx.kill`/`zmx.reset` before stop

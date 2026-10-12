@@ -147,6 +147,13 @@ def test_build_env_drops_inherited_live_session_variables(tmp_path: Path, monkey
     check_launch_env(env, tmp_path, needs_app_id=True)
 
 
+def test_build_env_drops_the_callers_zsh_startup_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ZDOTDIR", "/home/user/.config/zsh")
+    monkeypatch.setenv("GHOSTTY_ZSH_ZDOTDIR", "/home/user/.config/zsh")
+    for adapter in (SwiftLinuxAdapter(tmp_path / "agterm-linux"), SwiftMacosAdapter(tmp_path / "agterm.app")):
+        assert not {"ZDOTDIR", "GHOSTTY_ZSH_ZDOTDIR"} & adapter.build_env(tmp_path).keys()
+
+
 @pytest.mark.parametrize(
     ("parent", "expected"),
     [
