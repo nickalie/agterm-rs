@@ -58,6 +58,13 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: python conformance/tools/fetch_reference.py --tag "$TAG" | tee -a "$GITHUB_OUTPUT"
+      - name: zsh login shell
+        # Both references wrap a pane in zmx only for a zsh login shell; the runner account starts with bash.
+        run: |
+          if [[ "$(dscl . -read "/Users/$USER" UserShell)" != "UserShell: /bin/zsh" ]]; then
+            sudo dscl . -create "/Users/$USER" UserShell /bin/zsh
+          fi
+          python -c 'import os, pwd; shell = pwd.getpwuid(os.getuid()).pw_shell; print(shell); assert shell == "/bin/zsh"'
       - name: protocol, cli and behaviors layers
         shell: bash
         env:
@@ -68,7 +75,8 @@ jobs:
             if [[ -d "conformance/tests/$layer" ]]; then layers+=("conformance/tests/$layer"); fi
           done
           mkdir -p report
-          python -m pytest "${layers[@]}" --impl swift-macos --bin "$BUNDLE" -ra \
+          # --must-pass: a skipped, failed or deselected Live test fails the job, as does finding none.
+          python -m pytest "${layers[@]}" --impl swift-macos --bin "$BUNDLE" -ra --must-pass live-sessions \
             --junitxml report/junit.xml 2>&1 | tee report/pytest.log
       - name: upload the report
         if: always()

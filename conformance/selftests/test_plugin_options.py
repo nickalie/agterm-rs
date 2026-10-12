@@ -156,3 +156,51 @@ def test_env_scrubbed_at_plugin_load(pytester: pytest.Pytester, monkeypatch: pyt
     result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=1)
     result.stdout.fnmatch_lines(["scrubbed from env: AGTERM_SESSION_ID, AGTERM_SOCKET, ZMX_DIR"])
+
+
+MUST_PASS_TESTS = """
+import pytest
+
+@pytest.mark.requires("live-sessions")
+def test_live_one():
+    pass
+
+@pytest.mark.requires("live-sessions")
+def test_live_two():
+    {body}
+
+def test_plain():
+    pass
+"""
+
+
+@pytest.mark.parametrize(
+    ("body", "args", "ret"),
+    [
+        ("pass", (), pytest.ExitCode.OK),
+        ("pytest.skip('unsupported: no zsh')", (), pytest.ExitCode.TESTS_FAILED),
+        ("assert False", (), pytest.ExitCode.TESTS_FAILED),
+        ("pass", ("-k", "not two"), pytest.ExitCode.TESTS_FAILED),
+    ],
+)
+def test_must_pass_needs_every_required_test_to_pass(
+    pytester: pytest.Pytester, body: str, args: tuple[str, ...], ret: pytest.ExitCode
+) -> None:
+    pytester.makepyfile(MUST_PASS_TESTS.format(body=body))
+    result = pytester.runpytest("--must-pass", "live-sessions", *args)
+    assert result.ret == ret
+    if ret != pytest.ExitCode.OK:
+        result.stdout.fnmatch_lines(["*--must-pass live-sessions: not passed*", "*test_live_two*"])
+
+
+def test_must_pass_with_no_required_test_fails(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile("def test_plain():\n    pass\n")
+    result = pytester.runpytest("--must-pass", "live-sessions")
+    assert result.ret == pytest.ExitCode.TESTS_FAILED
+    result.stdout.fnmatch_lines(["*no collected test requires live-sessions*"])
+
+
+def test_must_pass_refuses_an_unknown_capability(pytester: pytest.Pytester) -> None:
+    result = pytester.runpytest("--must-pass", "live-session")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*--must-pass: unknown capability live-session*"])

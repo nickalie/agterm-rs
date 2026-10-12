@@ -56,10 +56,12 @@ def test_relaunch_keeps_workspaces_sessions_and_their_metadata(launch):
     ctl.wait_mounted(second, "right")
     assert_ok(ctl.request("session.split", second, mode="off"))
     assert_ok(ctl.request("session.restore", second, mode="none"))
-    folded = assert_ok(ctl.request("workspace.new", name="folded", collapsed=True))["id"]
-    assert folded in {node["id"] for node in workspaces(ctl.tree())}
+    # Before a structural change: upstream saves a selection 0.3s later, and SIGTERM ends it with no final save.
     assert_ok(ctl.request("session.select", first))
+    folded = assert_ok(ctl.request("workspace.new", name="folded", collapsed=True))["id"]
     before = ctl.tree()
+    assert folded in {node["id"] for node in workspaces(before)}
+    assert find_session(before, first)["active"] is True
 
     ctl = launch.relaunch(ctl)
     after = ctl.wait_tree(lambda tree: find_session(tree, first)["realized"] is True)
@@ -123,8 +125,9 @@ def test_fresh_shells_do_not_run_the_pin(launch):
 def test_rerun_replays_the_captured_foreground_program(launch):
     ctl = launch(settings={"restoreMode": "rerun"})
     sid = _new(ctl)
-    # `sleep` in the foreground is what a capture records; the pane's hangup ends it when the app quits.
-    assert_ok(ctl.request("session.type", sid, text="exec sleep 600\n"))
+    # A job of its own: upstream captures the foreground group's leader, and an exec'd program would share the
+    # shell's group, led by macOS's setuid `login`. The shell passes the pane's hangup on to it at the quit.
+    assert_ok(ctl.request("session.type", sid, text="sleep 600\n"))
     ctl.wait_tree(lambda tree: find_session(tree, sid).get("foreground") == ["sleep", "600"])
     assert assert_ok(ctl.request("restore.capture"))["count"] >= 1
     ctl = launch.relaunch(ctl)

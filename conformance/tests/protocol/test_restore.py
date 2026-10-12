@@ -101,16 +101,21 @@ def test_capture_needs_rerun_mode(ctl):
     assert_error(ctl.request("restore.capture"), "restore.capture requires rerun mode; configured restore mode is none")
 
 
+@POSIX_SHELL
 @pytest.mark.covers("restore.capture", "restore.clear", "field:result.count", "field:result.text")
-def test_capture_counts_the_panes_running_a_program_and_clear_drops_them(ctl, mode_none):
-    running = [_new(ctl, command="cat") for _ in range(2)]
-    for sid in running:
+def test_capture_counts_the_panes_running_a_program_and_clear_drops_them(ctl, adapter, mode_none):
+    typed = [_new(ctl) for _ in range(2)]
+    for sid in typed:
+        assert_ok(ctl.request("session.type", sid, text="cat\n"))
+    command = _new(ctl, command="cat")
+    for sid in (*typed, command):
         _node_when(ctl, sid, foreground=["cat"])
     _status(ctl, mode="rerun")
     # Every other pane sits at its shell prompt, which is not a command to restore.
-    assert assert_ok(ctl.request("restore.capture")) == {"count": 2, "text": "captured 2 panes"}
+    count = 3 if adapter.has("capture-reads-command-panes") else 2
+    assert assert_ok(ctl.request("restore.capture")) == {"count": count, "text": f"captured {count} panes"}
     assert assert_ok(ctl.request("restore.clear")) == {}
-    for sid in running:
+    for sid in (*typed, command):
         assert_ok(ctl.request("session.close", sid))
     assert assert_ok(ctl.request("restore.capture")) == {"count": 0, "text": "captured 0 panes"}
 

@@ -27,7 +27,8 @@ jobs:
       fail-fast: false
       matrix:
         mode: [uitest, plain]
-        mechanism: [both, config, env]
+        # `env` alone gives the account's login shell on macOS (conformance/docs/spike-macos.md).
+        mechanism: [both, config]
     env:
       TAG: ${{ inputs.tag || 'v0.36.0' }}
       REPORT: spike-${{ matrix.mode }}-${{ matrix.mechanism }}.json

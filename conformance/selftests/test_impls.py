@@ -2,31 +2,36 @@ import json
 import os
 import pwd
 import shutil
+import signal
 import subprocess
 import traceback
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from agterm_conformance.impls import ADAPTERS, base, make_adapter
+from agterm_conformance.impls import ADAPTERS, base, make_adapter, swift_macos
 from agterm_conformance.impls.base import (
     CAPABILITIES,
     DEFAULT_APP_ID,
     NO_PROFILE,
-    SOCKET_PATH_CAP,
-    Adapter,
-    LaunchError,
-    LaunchRefused,
     NOOP_DESKTOP_ID,
     NOOP_MIME_TYPES,
+    SOCKET_PATH_CAP,
+    Adapter,
+    Instance,
+    LaunchError,
+    LaunchRefused,
     LeftoverProcesses,
+    ProcessIdentity,
     Profile,
     StopError,
     check_app_id,
     check_launch_env,
     find_leftovers,
     fnv1a64,
+    hosts_zmx_dir,
     isolated_runtime_env,
+    process_identity,
     version_tuple,
     zmx_socket_directory,
 )
@@ -515,7 +520,7 @@ def test_stop_reports_daemons_left_under_the_instance_zmx_dir(
     adapter = SwiftLinuxAdapter(fake_bin)
     instance = adapter.launch()
     pid = spawn_daemon(tmp_path, "agterm-session-host", instance.zmx_dir, daemons)
-    with pytest.raises(LeftoverProcesses, match=rf"{pid} .*may not signal it"):
+    with pytest.raises(LeftoverProcesses, match=rf"{pid} .*agterm-session-host"):
         adapter.stop(instance)
     assert instance.process.returncode is not None
     assert instance.root.exists()
@@ -535,6 +540,161 @@ def test_leftover_check_names_an_executable_whose_path_has_a_space(
     zmx_dir = "/tmp/agterm-zmx-spaced"
     pid = spawn_daemon(tmp_path, "zmx", zmx_dir, daemons, directory="Test Install")
     assert [found for found, *_ in find_leftovers(zmx_dir)] == [pid]
+
+
+def test_leftover_check_finds_a_session_host_by_its_host_argv(monkeypatch: pytest.MonkeyPatch) -> None:
+    mine, other = "/tmp/agterm-zmx-mine", "/tmp/agterm-zmx-other"
+    rows = [
+        (1, "agterm-session-host", "a", ["/x/agterm-session-host", "host", mine, "HOME=/h"]),
+        (2, "agterm-session-host", "b", ["/x/agterm-session-host", "host", other]),
+        (3, "agterm-session-host", "c", ["/x/agterm-session-host", "client", mine]),
+    ]
+    monkeypatch.setattr(base, "_processes", lambda: iter(rows))
+    assert [pid for pid, *_ in find_leftovers(mine)] == [1]
+    assert hosts_zmx_dir(["/a b/agterm-session-host", "host", mine], mine)
+    assert not hosts_zmx_dir(["/x/agterm-session-host", "host"], mine)
+
+
+def test_process_identity_reads_the_image_argv_and_environment(
+    tmp_path: Path, daemons: list[subprocess.Popen[bytes]]
+) -> None:
+    pid = spawn_daemon(tmp_path, "agterm-session-host", "/tmp/agterm-zmx-ident", daemons)
+    identity = process_identity(pid)
+    assert identity is not None
+    assert identity.executable == os.path.realpath(tmp_path / "daemons" / "agterm-session-host")
+    assert "ZMX_DIR=/tmp/agterm-zmx-ident" in identity.words
+    assert identity.words[0].endswith("agterm-session-host")
+
+
+# -- the macOS session host the harness may end (docs: Adapter.stop_helpers)
+
+
+class FakeHosts:
+    """`process_identity` answers per pid from a queue (the last answer repeats); `signals` records what was sent."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, instance: Instance) -> None:
+        self.answers: dict[int, list[ProcessIdentity | None]] = {}
+        self.signals: list[tuple[int, int]] = []
+        self.ignores_sigterm = False
+        monkeypatch.setattr(swift_macos, "process_identity", self.identity)
+        monkeypatch.setattr(swift_macos, "_send_signal", self.send)
+        monkeypatch.setattr(
+            swift_macos,
+            "find_leftovers",
+            lambda zmx_dir: [(pid, "agterm-session-host", "") for pid in self.answers] if zmx_dir else [],
+        )
+        self.instance = instance
+
+    def identity(self, pid: int) -> ProcessIdentity | None:
+        queue = self.answers.get(pid, [None])
+        return queue.pop(0) if len(queue) > 1 else queue[0]
+
+    def send(self, pid: int, signum: int) -> None:
+        self.signals.append((pid, signum))
+        if signum == signal.SIGKILL or not self.ignores_sigterm:
+            self.answers[pid] = [None]
+
+
+def host_identity(bundle: Path, zmx_dir: str) -> ProcessIdentity:
+    executable = bundle / "Contents" / "MacOS" / "agterm-session-host"
+    return ProcessIdentity(os.path.realpath(executable), (str(executable), "host", zmx_dir, f"ZMX_DIR={zmx_dir}"))
+
+
+@pytest.fixture
+def mac_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[SwiftMacosAdapter, Instance, FakeHosts]:
+    bundle = tmp_path / "ref" / "agterm.app"
+    (bundle / "Contents" / "MacOS").mkdir(parents=True)
+    root = tmp_path / "root"
+    state = root / "state"
+    state.mkdir(parents=True)
+    instance = Instance(
+        process=None,  # type: ignore[arg-type]
+        root=root,
+        state_dir=state,
+        home=root / "home",
+        socket=state / "agterm.sock",
+        env={},
+        log=root / "app.log",
+        app_id=None,
+        zmx_dir=zmx_socket_directory(state),
+    )
+    adapter = SwiftMacosAdapter(bundle)
+    adapter.session_host_timeout = 0.2
+    return adapter, instance, FakeHosts(monkeypatch, instance)
+
+
+def test_owned_session_host_gets_sigterm(mac_host: tuple[SwiftMacosAdapter, Instance, FakeHosts]) -> None:
+    adapter, instance, hosts = mac_host
+    hosts.answers[41] = [host_identity(adapter.bundle(), instance.zmx_dir)]
+    assert adapter.stop_helpers(instance) is None
+    assert hosts.signals == [(41, signal.SIGTERM)]
+
+
+def test_session_host_from_another_bundle_is_not_signalled(
+    mac_host: tuple[SwiftMacosAdapter, Instance, FakeHosts], tmp_path: Path
+) -> None:
+    adapter, instance, hosts = mac_host
+    hosts.answers[41] = [host_identity(tmp_path / "other" / "agterm.app", instance.zmx_dir)]
+    assert adapter.stop_helpers(instance) is None
+    assert hosts.signals == []
+
+
+def test_session_host_for_another_zmx_dir_is_not_signalled(
+    mac_host: tuple[SwiftMacosAdapter, Instance, FakeHosts],
+) -> None:
+    adapter, instance, hosts = mac_host
+    hosts.answers[41] = [host_identity(adapter.bundle(), "/tmp/agterm-zmx-0000000000000000")]
+    assert adapter.stop_helpers(instance) is None
+    assert hosts.signals == []
+
+
+def test_zmx_dir_not_derived_from_the_instance_state_dir_signals_nothing(
+    mac_host: tuple[SwiftMacosAdapter, Instance, FakeHosts], tmp_path: Path
+) -> None:
+    adapter, instance, hosts = mac_host
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    instance.state_dir = outside
+    instance.zmx_dir = zmx_socket_directory(outside)
+    hosts.answers[41] = [host_identity(adapter.bundle(), instance.zmx_dir)]
+    assert adapter.stop_helpers(instance) is None
+    assert hosts.signals == []
+
+
+def test_pid_reused_before_the_signal_is_not_signalled(
+    mac_host: tuple[SwiftMacosAdapter, Instance, FakeHosts], tmp_path: Path
+) -> None:
+    adapter, instance, hosts = mac_host
+    stranger = ProcessIdentity("/usr/bin/vim", ("vim",))
+    hosts.answers[41] = [host_identity(adapter.bundle(), instance.zmx_dir), stranger]
+    assert adapter.stop_helpers(instance) is None
+    assert hosts.signals == []
+
+
+def test_session_host_ignoring_sigterm_is_killed_after_reverifying(
+    mac_host: tuple[SwiftMacosAdapter, Instance, FakeHosts],
+) -> None:
+    adapter, instance, hosts = mac_host
+    hosts.ignores_sigterm = True
+    hosts.answers[41] = [host_identity(adapter.bundle(), instance.zmx_dir)]
+    assert "41 ignored SIGTERM" in (adapter.stop_helpers(instance) or "")
+    assert hosts.signals == [(41, signal.SIGTERM), (41, signal.SIGKILL)]
+
+
+def test_pid_reused_while_waiting_for_sigterm_gets_no_sigkill(
+    mac_host: tuple[SwiftMacosAdapter, Instance, FakeHosts], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, instance, hosts = mac_host
+    hosts.ignores_sigterm = True
+
+    def timed_out(check: object, timeout: float) -> None:
+        raise swift_macos.WaitTimeout("still running")
+
+    monkeypatch.setattr(swift_macos, "wait_until", timed_out)
+    owned = host_identity(adapter.bundle(), instance.zmx_dir)
+    hosts.answers[41] = [owned, owned, ProcessIdentity("/usr/bin/vim", ("vim",))]
+    adapter.stop_helpers(instance)
+    assert hosts.signals == [(41, signal.SIGTERM)]
 
 
 def test_zmx_dir_is_the_fnv1a_hash_of_the_canonical_state_dir(tmp_path: Path) -> None:
@@ -600,7 +760,7 @@ def test_swift_linux_profile(zsh_login: Path, fake_bin: Path) -> None:
     _staged_zmx(fake_bin)
     adapter = SwiftLinuxAdapter(fake_bin)
     assert adapter.parity_level == "0.36.0"
-    assert adapter.capabilities == {"posix-shell", "live-sessions"}
+    assert adapter.capabilities == {"posix-shell", "capture-reads-command-panes", "live-sessions"}
     assert "window-geometry" not in adapter.capabilities
     assert adapter.profile.absent == {}
 

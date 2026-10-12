@@ -46,6 +46,16 @@ def _closed(ctl, sid, **args):
     assert assert_ok(ctl.request("session.overlay.close", sid, **args))["id"] == sid
 
 
+def _result(ctl, sid, code, **args):
+    """The status lands at the surface's teardown, which upstream runs after the slot reads closed."""
+
+    def accept(response):
+        return response.ok and response.result == {"id": sid, "exitCode": code}
+
+    accept.__qualname__ = f"exit status {code}"
+    ctl.wait_response("session.overlay.result", sid, accept, **args)
+
+
 def _showing(needle):
     def accept(response):
         # `overlay not realized` is the moment between the open and the overlay's terminal coming up.
@@ -122,12 +132,12 @@ def test_overlay_result_reports_the_exit_status(ctl):
     assert_error(ctl.request("session.overlay.result", sid), "no overlay result")
     _open(ctl, sid, "exit 7")
     ctl.wait_tree(lambda tree: find_session(tree, sid)["overlay"] is False)
-    assert assert_ok(ctl.request("session.overlay.result", sid)) == {"id": sid, "exitCode": 7}
+    _result(ctl, sid, 7)
 
     # A new overlay replaces the previous status.
     _open(ctl, sid, "exit 3")
     ctl.wait_tree(lambda tree: find_session(tree, sid)["overlay"] is False)
-    assert assert_ok(ctl.request("session.overlay.result", sid)) == {"id": sid, "exitCode": 3}
+    _result(ctl, sid, 3)
 
 
 @pytest.mark.covers("session.overlay.text")
@@ -246,7 +256,7 @@ def test_pane_overlays_cover_one_pane_each(ctl):
 
     _open(ctl, sid, "exit 5", pane="right")
     ctl.wait_tree(lambda tree: "paneOverlays" not in find_session(tree, sid))
-    assert assert_ok(ctl.request("session.overlay.result", sid, pane="right")) == {"id": sid, "exitCode": 5}
+    _result(ctl, sid, 5, pane="right")
 
 
 @pytest.mark.covers("session.overlay.open", "field:tree.session.paneOverlays")

@@ -103,6 +103,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     group.addoption(
         "--coverage-gate", action="store_true", default=False, help="check catalog coverage without launching anything"
     )
+    group.addoption(
+        "--must-pass",
+        action="append",
+        default=[],
+        metavar="CAPABILITY",
+        help="fail the run unless every collected test requiring CAPABILITY ran and passed (none collected fails too)",
+    )
     group.addoption("--catalog", type=Path, default=None, help="coverage gate: catalog.yaml (default: <rootdir>/)")
     group.addoption(
         "--ui-ids", type=Path, default=None, help="coverage gate: ui-ids.yaml (default: next to the catalog)"
@@ -134,6 +141,12 @@ def pytest_configure(config: pytest.Config) -> None:
     config.stash[_OPTIONS_KEY] = options
     if options.coverage_gate:
         config.pluginmanager.register(_GateCollector(), "agterm-coverage-gate-collector")
+    elif must_pass := config.getoption("must_pass"):
+        from agterm_conformance.impls.base import CAPABILITIES
+
+        if unknown := sorted(set(must_pass) - set(CAPABILITIES)):
+            raise pytest.UsageError(f"--must-pass: unknown capability {', '.join(unknown)}")
+        config.pluginmanager.register(MustPass(frozenset(must_pass)), "agterm-must-pass")
 
 
 def gate_paths(config: pytest.Config, options: ImplOptions) -> tuple[Path, Path]:
@@ -162,6 +175,48 @@ def gate_paths(config: pytest.Config, options: ImplOptions) -> tuple[Path, Path]
     if not any(tests.is_relative_to((base / arg).resolve()) for arg in config.args):
         raise pytest.UsageError(f"--coverage-gate reads every conformance test; collect {tests} or a parent of it")
     return catalog, ui_ids
+
+
+class MustPass:
+    """`--must-pass`: a skip, a failure or a deselection of a test requiring one of `capabilities` fails the run."""
+
+    def __init__(self, capabilities: frozenset[str]) -> None:
+        self.capabilities = capabilities
+        self.required: list[str] = []
+        self.passed: set[str] = set()
+        self.spoiled: set[str] = set()
+        self.problems: list[str] = []
+
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_collection_modifyitems(self, items: list[pytest.Item]) -> None:
+        # tryfirst: before -k/-m deselection, so a deselected test still counts as required.
+        self.required = [
+            item.nodeid
+            for item in items
+            if any(set(marker.args) & self.capabilities for marker in item.iter_markers("requires"))
+        ]
+
+    def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
+        if report.when == "call" and report.passed:
+            self.passed.add(report.nodeid)
+        elif not report.passed:
+            self.spoiled.add(report.nodeid)
+
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_sessionfinish(self, session: pytest.Session) -> None:
+        wanted = ", ".join(sorted(self.capabilities))
+        if not self.required:
+            self.problems = [f"no collected test requires {wanted}"]
+        else:
+            self.problems = [nodeid for nodeid in self.required if nodeid not in self.passed - self.spoiled]
+        if self.problems and session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+    def pytest_terminal_summary(self, terminalreporter: Any) -> None:
+        if self.problems:
+            terminalreporter.write_sep("-", f"--must-pass {', '.join(sorted(self.capabilities))}: not passed")
+            for problem in self.problems:
+                terminalreporter.write_line(problem)
 
 
 class _GateCollector:

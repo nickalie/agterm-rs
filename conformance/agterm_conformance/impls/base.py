@@ -44,11 +44,6 @@ ZSH_STARTUP_VARIABLES = ("ZDOTDIR", "GHOSTTY_ZSH_ZDOTDIR")
 DEFAULT_APP_ID = "io.github.melonamin.agterm"
 SESSION_HOST = "agterm-session-host"
 LEFTOVER_NAMES = frozenset({"zmx", SESSION_HOST})
-# The macOS host outlives the app by design, takes no stop a harness can send, and is not ours to signal.
-SESSION_HOST_NOTE = (
-    f"; {SESSION_HOST} is kept alive by the reference itself and the harness may not signal it,"
-    " see docs/backlog/harness-stop-for-macos-session-host.md"
-)
 # With SHELL=/bin/sh this is belt and braces: either alone gives a reference-linux pane /bin/sh
 # (conformance/docs/spike-macos.md).
 GHOSTTY_SHELL_CONFIG = "command = /bin/sh\n"
@@ -97,6 +92,8 @@ CAPABILITIES: Mapping[str, str] = {
     "`light`/`dark` only while following",
     "keymap-menu": "`keymap.list` reports the menu bar's live key equivalents in `menu`",
     "config-reload-counts": "`config.reload` answers with the ghostty config's diagnostic count in `result.count`",
+    "capture-reads-command-panes": "`restore.capture` records a `--command` session's program; upstream reads only "
+    "the foreground group's leader, there the setuid `login` wrapper whose argv a user cannot read",
 }
 
 
@@ -466,6 +463,7 @@ class Adapter:
                     reap_live_sessions(instance)
             finally:
                 killed = _terminate(instance.process)
+            helper_problem = self.stop_helpers(instance)
             leftovers = _leftovers_error(instance.zmx_dir)
         finally:
             _release_app_id(instance.app_id)
@@ -473,9 +471,15 @@ class Adapter:
             raise leftovers
         if killed:
             raise StopError(f"pid {instance.pid} ignored SIGTERM for {STOP_TIMEOUT}s and was killed")
+        if helper_problem is not None:
+            raise StopError(helper_problem)
         if cleanup:
             shutil.rmtree(instance.root, ignore_errors=True)
             _remove_empty_dir(instance.zmx_dir)
+
+    def stop_helpers(self, instance: Instance) -> str | None:
+        """Hook: end a helper the implementation detaches on purpose once the app is gone; returns what went wrong."""
+        return None
 
 
 def _leftovers_error(zmx_dir: str) -> LeftoverProcesses | None:
@@ -483,8 +487,7 @@ def _leftovers_error(zmx_dir: str) -> LeftoverProcesses | None:
     if not leftovers:
         return None
     described = ", ".join(f"{pid} {command}" for pid, _, command in leftovers)
-    note = SESSION_HOST_NOTE if any(name == SESSION_HOST for _, name, _ in leftovers) else ""
-    return LeftoverProcesses(f"processes left under ZMX_DIR {zmx_dir}: {described}{note}")
+    return LeftoverProcesses(f"processes left under ZMX_DIR {zmx_dir}: {described}")
 
 
 def _absolute(path: Path | None) -> Path | None:
@@ -630,13 +633,57 @@ def find_leftovers(zmx_dir: str) -> list[tuple[int, str, str]]:
     marker = f"ZMX_DIR={zmx_dir}"
     return [
         (pid, name, command)
-        for pid, name, command, environ in _processes()
-        if marker in environ and name in LEFTOVER_NAMES
+        for pid, name, command, words in _processes()
+        if name in LEFTOVER_NAMES and (marker in words or hosts_zmx_dir(words, zmx_dir))
     ]
 
 
+def hosts_zmx_dir(words: Iterable[str], zmx_dir: str) -> bool:
+    """`agterm-session-host host <zmx_dir>`, the argv `ClientConnector.startHost` spawns the macOS host with."""
+    words = list(words)
+    return any(
+        os.path.basename(word) == SESSION_HOST and words[index + 1 : index + 3] == ["host", zmx_dir]
+        for index, word in enumerate(words)
+    )
+
+
+@dataclass(frozen=True)
+class ProcessIdentity:
+    """The running image's resolved path, and argv followed by the environment (one `ps -E` line split on macOS)."""
+
+    executable: str
+    words: tuple[str, ...]
+
+
+def process_identity(pid: int) -> ProcessIdentity | None:
+    """None when the process is gone or unreadable."""
+    if os.path.isdir("/proc/self"):
+        try:
+            executable = os.readlink(f"/proc/{pid}/exe").removesuffix(" (deleted)")
+            words = _proc_words(pid)
+        except OSError:
+            return None
+    else:
+        executable = _darwin_pidpath(pid)
+        line = subprocess.run(
+            ["ps", "-E", "-ww", "-o", "command=", "-p", str(pid)], capture_output=True, text=True, check=False
+        ).stdout.strip()
+        if executable is None or not line:
+            return None
+        words = tuple(line.split(" "))
+    return ProcessIdentity(os.path.realpath(executable), words)
+
+
+def _darwin_pidpath(pid: int) -> str | None:
+    import ctypes
+
+    buffer = ctypes.create_string_buffer(4096)  # PROC_PIDPATHINFO_MAXSIZE
+    length = ctypes.CDLL(None).proc_pidpath(ctypes.c_int(pid), buffer, ctypes.c_uint32(len(buffer)))
+    return buffer.value.decode(errors="replace") if length > 0 else None
+
+
 def _processes() -> Iterable[tuple[int, str, str, list[str]]]:
-    """(pid, program name, command, environ) for every readable process."""
+    """(pid, program name, command, argv and environ words) for every readable process."""
     if os.path.isdir("/proc/self"):
         yield from _proc_processes()
     else:
@@ -648,17 +695,24 @@ def _proc_processes() -> Iterable[tuple[int, str, str, list[str]]]:
         if not entry.name.isdigit():
             continue
         try:
-            with open(f"/proc/{entry.name}/environ", "rb") as source:
-                environ = [item.decode(errors="replace") for item in source.read().split(b"\0") if item]
+            words = _proc_words(int(entry.name))
             executable = os.readlink(f"/proc/{entry.name}/exe")
         except OSError:
             continue  # gone, or another user's process
         executable = executable.removesuffix(" (deleted)")
-        yield int(entry.name), os.path.basename(executable), executable, environ
+        yield int(entry.name), os.path.basename(executable), executable, list(words)
+
+
+def _proc_words(pid: int) -> tuple[str, ...]:
+    words: list[str] = []
+    for part in ("cmdline", "environ"):
+        with open(f"/proc/{pid}/{part}", "rb") as source:
+            words.extend(item.decode(errors="replace") for item in source.read().split(b"\0") if item)
+    return tuple(words)
 
 
 def _ps_processes() -> Iterable[tuple[int, str, str, list[str]]]:
-    # [Unverified until Task 19] macOS `ps -E` appends the environment to the command for own processes.
+    # macOS `ps -E` appends the environment to the command line for the user's own processes.
     output = subprocess.run(
         ["ps", "-E", "-ww", "-o", "pid=,command=", "-u", str(os.getuid())],
         capture_output=True,
@@ -669,7 +723,7 @@ def _ps_processes() -> Iterable[tuple[int, str, str, list[str]]]:
         pid, _, command = line.strip().partition(" ")
         if pid.isdigit():
             # A command line cannot tell a space inside the executable path from an argument separator.
-            yield int(pid), os.path.basename(command.split(" ", 1)[0]), command, command.split(" ")
+            yield (int(pid), os.path.basename(command.split(" ", 1)[0]), command, command.split(" "))
 
 
 def _remove_empty_dir(path: str) -> None:

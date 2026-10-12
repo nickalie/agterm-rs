@@ -10,8 +10,8 @@ from agterm_conformance.impls.base import Adapter, Profile, login_shell_blocker
 PARITY_LEVEL = "0.36.0"
 # GTK4 cannot place a window at x/y, so `window-geometry` is absent, and Wayland's xdg-shell reports no
 # minimized state (niri ignores the request too), so `window-minimize` is. The fork's own dispatcher and
-# adapters lack the rest of upstream's set in swift_macos.py.
-CAPABILITIES = frozenset({"posix-shell"})
+# adapters lack the rest of upstream's set in swift_macos.py; its capture reads a `--command` pane's program.
+CAPABILITIES = frozenset({"posix-shell", "capture-reads-command-panes"})
 
 
 class SwiftLinuxAdapter(Adapter):
