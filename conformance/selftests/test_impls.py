@@ -250,6 +250,7 @@ def test_launch_isolates_and_stop_cleans_up(roots: list[Path], fake_bin: Path, m
         assert seen["AGTERM_CONTROL_SOCKET"] == str(instance.socket)
         assert seen["AGTERM_APP_ID"] == instance.app_id
         assert (instance.home / ".claude").is_dir() and (instance.home / ".codex").is_dir()
+        assert (instance.home / ".profile").read_text() == "PS1='$ '\n"
         assert (instance.state_dir / "windows").is_dir()
         assert not (instance.state_dir / "settings.json").exists()
         ghostty = (instance.state_dir / "config" / "ghostty.conf").read_text().splitlines()
@@ -1014,3 +1015,17 @@ def test_reaping_waits_out_a_closed_session_daemon(
         assert commands.count("zmx.list") > 2 and "zmx.kill" not in commands
     finally:
         adapter.stop(instance)
+
+
+def test_stop_reaps_a_listed_daemon_that_has_no_process_yet(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = {"daemon": "d1", "state": "claimed", "sessionID": "s1", "pane": "left", "observation": "running"}
+    monkeypatch.setenv("FAKE_ZMX_LIST", json.dumps({"zmx": {"entries": [row]}}))
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    requests_file = instance.state_dir / "fake-requests.jsonl"
+    adapter.stop(instance, cleanup=False)
+    commands = [json.loads(line)["cmd"] for line in requests_file.read_text().splitlines()]
+    assert "zmx.kill" in commands
+    shutil.rmtree(instance.root)

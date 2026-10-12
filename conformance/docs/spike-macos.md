@@ -48,14 +48,48 @@ It ran through `SwiftLinuxAdapter` with a unique `AGTERM_APP_ID` and an isolated
   A zmx-wrapped pane also runs the login zsh rather than `/bin/sh`.
   Both points come from static reading and are unverified at runtime.
 
-## reference-macos: the interim choice
+## reference-macos (confirmed 2026-10-12)
 
-- `SwiftMacosAdapter` defaults to `launch_mode="uitest"` with `enable_zmx=True`.
-  That sets `AGTERM_UITEST_FORCE_SIDEBAR_VISIBLE=1` and `AGTERM_UITEST_ENABLE_ZMX=1`.
-  The sentinel gives a present window (the FB11763863 workaround), no welcome, and no quit prompt.
-  The zmx flag keeps Live sessions possible.
-- A bare exec is selectable: `--macos-launch-mode plain` (pytest) or `--launch-mode plain` (spike).
-- Task 19 confirms the choice or flips it.
+Upstream v0.36.0 (commit `6cef448a`) on the GitHub `macos-15` arm64 runner, not the x86_64 VM (see below).
+
+| mode | mechanism | `$0` | comm | parent | result |
+|---|---|---|---|---|---|
+| uitest, plain | both | `-/bin/sh` | `-/bin/sh` | `/usr/bin/login` | sh |
+| uitest, plain | config (SHELL=/bin/zsh) | `-/bin/sh` | `-/bin/sh` | `/usr/bin/login` | sh |
+| uitest, plain | env | `-/bin/bash` | `-/bin/bash` | `/usr/bin/login` | the account's shell |
+
+- Only `command = /bin/sh` in the scoped ghostty.conf holds on macOS.
+  `SHELL` alone gives the password-database shell, because the pane runs
+  `login -flp <user> /bin/bash --noprofile --norc -c "exec -l <command>"`.
+  `/bin/sh` there is bash 3.2.57 in POSIX mode.
+- The sentinel (`uitest`) stays the default; `plain` also renders a window and binds the socket for a lone instance.
+  The full suite ran only under the sentinel, and only once each instance ran **its own copy of the bundle**.
+  The sentinel's FB11763863 workaround reopens `Bundle.main.bundleURL` through Launch Services, and with one
+  bundle path shared by several running instances that reopen reached another instance: every launch next to
+  a long-running one then sat in its run loop with no window and no socket.
+  `SwiftMacosAdapter` clones the bundle into `<root>/app/` (APFS `cp -c`, no data copied) and execs the clone.
+- The macOS Local Network prompt for the test process ("Allow Python to find devices on local networks") is a
+  system alert that, while it stays up, keeps every later launch from presenting a window.
+  Python's `HTTPServer` raised it by resolving its host with `getfqdn`; pages are now served by
+  `agterm_conformance.loopback`, which skips that lookup.
+- `CFFIXED_USER_HOME` holds: the reference writes `Library/Caches` and `Library/Application Support` under the
+  isolated home, and the runner's own `~/Library/Preferences` gains no agterm domain (checked by the workflow).
+- SIGTERM ends the app at once in both modes, with no quit prompt and no final save:
+  a selection saved on upstream's 0.3s debounce is lost if the quit comes first.
+- A downloaded and `ditto`-copied bundle starts, and so does its `cp -c` clone.
+- The account's login shell is bash on the runner; the workflow switches it to zsh with `dscl` before the run,
+  so `live-sessions` holds and `--must-pass live-sessions` fails the job on any Live skip.
+- Live sessions: each pane runs
+  `login … agterm-session-host client <daemon> -- zmx attach <daemon>`, the first one starts a detached
+  `agterm-session-host host <ZMX_DIR>`, and the zmx daemons run detached as well.
+  `ps -E` shows the environment of the user's own processes, so the leftover check finds daemons by `ZMX_DIR`
+  and the host by that argv.
+  The host outlives the app and takes a stop request only from a peer inside its bundle, so
+  `SwiftMacosAdapter.stop_helpers` SIGTERMs it, by pid, only after re-checking that the pid runs the instance's
+  own bundle copy's `agterm-session-host` with `host <ZMX_DIR>` for that instance's state dir
+  (`docs/backlog/harness-stop-for-macos-session-host.md`, resolved).
+- Reaping waits for a claimed daemon zmx does not list yet (`observation: absent` refuses a kill) and for a closed
+  session's daemon to leave its 3s undo window.
 
 ## The upstream release (v0.36.0)
 
@@ -70,18 +104,3 @@ It ran through `SwiftLinuxAdapter` with a unique `AGTERM_APP_ID` and an isolated
   - an x86_64 build from source on the VM (Xcode 26 and zig, a heavy setup).
 - The dmg needs `hdiutil`, so extraction works only on macOS.
   On Linux the tool stops after the download and the digest check, and caches nothing.
-
-## Open questions for Task 19
-
-1. Does a direct exec under the sentinel render a window and bind the socket without XCUITest?
-   The socket binds from the window scene's task.
-   Plain mode may need the app activated before a window renders.
-2. Which `/bin/sh` channel holds on macOS?
-   Ghostty on macOS wraps the shell in `/usr/bin/login`, so check `$0`, comm and parent per mechanism.
-3. Does `CFFIXED_USER_HOME` move the `com.umputun.agterm` defaults and `NSHomeDirectory()` into the isolated home?
-4. Does SIGTERM end the app promptly in both modes, with no quit confirmation?
-5. Does the leftover check (`ps -E`) find zmx daemons by `ZMX_DIR`?
-   Is `agterm-session-host` left behind?
-   See `docs/backlog/harness-stop-for-macos-session-host.md`.
-6. Can a binary copied out of a downloaded dmg by `ditto` start?
-   It carries `com.apple.provenance` xattrs, and Gatekeeper may stop it.

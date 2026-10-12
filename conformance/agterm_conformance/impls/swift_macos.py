@@ -51,7 +51,7 @@ BUNDLE_DIR = "app"
 
 
 class SwiftMacosAdapter(Adapter):
-    """Interim choice until Task 19 confirms it on a Mac (conformance/docs/spike-macos.md): `uitest` with zmx.
+    """`uitest` with zmx by default (conformance/docs/spike-macos.md).
 
     `uitest` sets the XCUITest sentinel: window present (FB11763863), no welcome, no quit prompt, and zmx
     off unless `enable_zmx`. `plain` is a bare exec.
@@ -97,7 +97,7 @@ class SwiftMacosAdapter(Adapter):
         return directory / "agtermctl" if directory is not None else None
 
     def platform_env(self, env: dict[str, str]) -> None:
-        # Points NSHomeDirectory (and with it the defaults lookup) at the isolated home; confirmed in Task 19.
+        # Points NSHomeDirectory, and with it the defaults lookup, at the isolated home.
         env["CFFIXED_USER_HOME"] = env["HOME"]
         if self.launch_mode == "uitest":
             env["AGTERM_UITEST_FORCE_SIDEBAR_VISIBLE"] = "1"

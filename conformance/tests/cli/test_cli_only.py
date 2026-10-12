@@ -76,8 +76,14 @@ def test_clipboard_set_reaches_every_terminal_attached_to_the_pane(cli, launch):
     local = cli.on(ctl.instance)
     sid = assert_ok(ctl.request("session.new"))["id"]
     ctl.wait_tree(lambda tree: find_session(tree, sid).get("backedByZmx") is True)
-    rows = assert_ok(ctl.request("zmx.list"))["zmx"]["entries"]
-    (daemon,) = [row["daemon"] for row in rows if row.get("sessionID") == sid and row["pane"] == "left"]
+
+    def left_row(response):
+        rows = [row for row in assert_ok(response)["zmx"]["entries"] if row.get("sessionID") == sid]
+        # Running first: a viewer attaching to a daemon not up yet would start one under that name.
+        return [row for row in rows if row["pane"] == "left" and row.get("observation") == "running"]
+
+    (row,) = left_row(ctl.wait_response("zmx.list", None, left_row))
+    daemon = row["daemon"]
     endpoint = assert_ok(ctl.request("zmx.tree"))["remote"]["endpoint"]
     text = f"clip-{uuid.uuid4().hex[:8]}"
     sequence = f"\x1b]52;c;{base64.b64encode(text.encode()).decode()}\x07"

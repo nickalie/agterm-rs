@@ -47,6 +47,9 @@ LEFTOVER_NAMES = frozenset({"zmx", SESSION_HOST})
 # With SHELL=/bin/sh this is belt and braces: either alone gives a reference-linux pane /bin/sh
 # (conformance/docs/spike-macos.md).
 GHOSTTY_SHELL_CONFIG = "command = /bin/sh\n"
+# A macOS pane runs a login /bin/sh, which reads this after /etc/profile: that prompt carries the host name, long
+# enough on a CI runner that a split pane wraps the typed line and the redraw mangles it.
+SHELL_PROFILE = "PS1='$ '\n"
 # A selection (`session.selectall`) would otherwise land in the desktop's own primary selection, and an OSC 52 write
 # (`agtermctl clipboard set` in a Live pane) in the desktop clipboard the user's session shares.
 GHOSTTY_ISOLATION_CONFIG = "copy-on-select = false\nclipboard-write = deny\n"
@@ -470,7 +473,8 @@ class Adapter:
             try:
                 if (code := instance.process.poll()) is not None:
                     refusals = [f"the app had already exited with {code}"]
-                elif find_leftovers(instance.zmx_dir):
+                elif find_leftovers(instance.zmx_dir) or _lists_daemons(instance):
+                    # Listed too: a daemon still starting has no process yet and would outlive the quit.
                     refusals = reap_live_sessions(instance)
             finally:
                 killed = _terminate(instance.process)
@@ -532,6 +536,7 @@ def _prepare_tree(
     # `FirstRunWelcome.hasPriorState` reads this directory: its presence skips the welcome dialog.
     (state / "windows").mkdir()
     (state / "config" / "ghostty.conf").write_text(ghostty_config)
+    (home / ".profile").write_text(SHELL_PROFILE)
     if settings is not None:
         (state / "settings.json").write_text(json.dumps(settings))
 
@@ -626,6 +631,15 @@ def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[
     except ClientError as error:
         refusals.append(f"reaping: {error}")
     return refusals
+
+
+def _lists_daemons(instance: Instance) -> bool:
+    try:
+        listing = instance.request("zmx.list")
+    except ClientError:
+        return False
+    inventory = (listing.result or {}).get("zmx") if listing.ok else None
+    return bool(isinstance(inventory, dict) and inventory.get("entries"))
 
 
 def _next_claimed(instance: Instance, tried: set[str], wait_absent: bool) -> tuple[dict[str, Any] | None, bool]:
