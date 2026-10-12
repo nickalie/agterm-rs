@@ -614,7 +614,7 @@ class Adapter:
             raise StopError(headless_problem)
         if cleanup:
             shutil.rmtree(instance.root, ignore_errors=True)
-            _remove_empty_dir(instance.zmx_dir)
+            remove_zmx_dir(instance.zmx_dir)
 
     def stop_helpers(self, instance: Instance) -> str | None:
         """Hook: end a helper the implementation detaches on purpose once the app is gone; returns what went wrong."""
@@ -1073,8 +1073,18 @@ def _ps_processes() -> Iterable[tuple[int, str, str, list[str]]]:
             yield (int(pid), os.path.basename(command.split(" ", 1)[0]), command, command.split(" "))
 
 
-def _remove_empty_dir(path: str) -> None:
+def remove_zmx_dir(path: str) -> None:
+    """The instance's zmx directory, outside its root, once nothing runs there: zmx's own `logs/*.log` go with
+    it; anything else keeps the directory for diagnosis."""
+    logs = os.path.join(path, "logs")
     try:
+        if set(os.listdir(path)) - {"logs"} or os.path.islink(logs):
+            return
+        if os.path.isdir(logs):
+            for entry in os.scandir(logs):
+                if entry.name.endswith(".log") and entry.is_file(follow_symlinks=False):
+                    os.unlink(entry.path)
+            os.rmdir(logs)
         os.rmdir(path)
     except OSError:
         pass

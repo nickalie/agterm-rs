@@ -646,6 +646,9 @@ a push to `nickalie/agterm-rs`. Everything before this task is Linux-only.
   `workspace.focus` and decode-error texts are text-only, asserting the shared part. `add-session` accepts the
   `menu-button` or `popup` role; its "Add Slide" name is explained in `spike-macos.md`.
 - ➕ the baseline file is gone; the `--coverage-baseline` option stays for a future catalog catch-up.
+- ➕ a full reference-linux run left no process and no `/tmp/agt-*` root, but one `/tmp/agterm-zmx-<hash>` per
+  instance: zmx writes `logs/zmx.log` there, so the old empty-only `rmdir` never fired. `stop` now removes that
+  directory when it holds nothing but zmx's logs.
 
 ### Task 23: [Final] Update documentation
 

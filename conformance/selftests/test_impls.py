@@ -38,6 +38,7 @@ from agterm_conformance.impls.base import (
     hosts_zmx_dir,
     isolated_runtime_env,
     process_identity,
+    remove_zmx_dir,
     version_tuple,
     zmx_socket_directory,
 )
@@ -340,6 +341,25 @@ def test_launch_isolates_and_stop_cleans_up(roots: list[Path], fake_bin: Path, m
         adapter.stop(instance)
     assert instance.process.returncode is not None
     assert not instance.root.exists()
+
+
+def test_stop_removes_the_zmx_dir_holding_only_zmx_logs(tmp_path: Path) -> None:
+    zmx_dir = tmp_path / "agterm-zmx-x"
+    (zmx_dir / "logs").mkdir(parents=True)
+    (zmx_dir / "logs" / "zmx.log").write_text("")
+    remove_zmx_dir(str(zmx_dir))
+    assert not zmx_dir.exists()
+    remove_zmx_dir(str(zmx_dir))
+
+
+@pytest.mark.parametrize("extra", ["sock", "logs/core"])
+def test_stop_keeps_a_zmx_dir_holding_anything_else(tmp_path: Path, extra: str) -> None:
+    zmx_dir = tmp_path / "agterm-zmx-x"
+    (zmx_dir / "logs").mkdir(parents=True)
+    (zmx_dir / "logs" / "zmx.log").write_text("")
+    (zmx_dir / extra).write_text("")
+    remove_zmx_dir(str(zmx_dir))
+    assert (zmx_dir / extra).exists()
 
 
 def test_first_run_launch_leaves_out_the_prior_state_marker(roots: list[Path], fake_bin: Path) -> None:
