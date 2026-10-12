@@ -3,7 +3,7 @@
 use std::ffi::{CStr, CString, c_void};
 use std::marker::PhantomData;
 use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 
 use agterm_ghostty_sys as sys;
@@ -169,15 +169,7 @@ impl Config {
     /// absolute here first.
     pub fn load_file(&mut self, path: impl AsRef<Path>) {
         let path = path.as_ref();
-        let readable = std::path::absolute(path).and_then(|absolute| {
-            // libghostty skips anything but a regular file with only a log line
-            if std::fs::File::open(&absolute)?.metadata()?.is_file() {
-                Ok(absolute)
-            } else {
-                Err(std::io::Error::other("not a regular file"))
-            }
-        });
-        let absolute = match readable {
+        let absolute = match loadable_path(path) {
             Ok(absolute) => absolute,
             Err(err) => return self.note(format!("{}: {err}", path.display())),
         };
@@ -273,5 +265,35 @@ impl Drop for Config {
         // SAFETY: raw was returned by ghostty_config_new or ghostty_config_clone, is owned by self alone and is
         // freed exactly once, here.
         unsafe { sys::ghostty_config_free(self.raw.as_ptr()) };
+    }
+}
+
+/// The absolute form of `path` when it names a readable regular file. libghostty asserts on a relative path (UB in
+/// its `ReleaseFast` build, so nothing traps) and skips anything but a regular file with only a log line.
+fn loadable_path(path: &Path) -> std::io::Result<PathBuf> {
+    let absolute = std::path::absolute(path)?;
+    // the type is checked before the open, which would block on a FIFO without a writer; the open then only proves
+    // the file is readable
+    if !std::fs::metadata(&absolute)?.is_file() {
+        return Err(std::io::Error::other("not a regular file"));
+    }
+    std::fs::File::open(&absolute)?;
+    Ok(absolute)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::loadable_path;
+
+    #[test]
+    fn a_relative_path_is_made_absolute() -> std::io::Result<()> {
+        // unit tests run with the package root as the working directory
+        let relative = Path::new("tests/relative.conf");
+        let loadable = loadable_path(relative)?;
+        assert!(loadable.is_absolute(), "{}", loadable.display());
+        assert_eq!(loadable, std::env::current_dir()?.join(relative));
+        Ok(())
     }
 }

@@ -117,6 +117,39 @@ fn a_directory_in_place_of_a_file_reports_a_diagnostic() -> TestResult {
 }
 
 #[test]
+fn a_relative_path_is_loaded() -> TestResult {
+    // integration tests run with the package root as the working directory. libghostty asserts on a relative path,
+    // but its ReleaseFast build does not trap, so the make-absolute step itself is pinned by a unit test in config.rs
+    let relative = Path::new("tests/relative.conf");
+    assert!(relative.is_relative() && relative.is_file());
+    let mut config = Config::new()?;
+    config.load_file(relative);
+    config.finalize();
+    assert_eq!(config.diagnostics(), []);
+    assert_eq!(config.get(keys::FONT_SIZE), Some(19.0));
+    Ok(())
+}
+
+#[test]
+fn a_fifo_in_place_of_a_file_reports_a_diagnostic_without_blocking() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let fifo = dir.path().join("config.fifo");
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status()?.success());
+    // opening a FIFO without a writer blocks, so the load runs on its own thread under a deadline
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let diagnostics = Config::new().map(|mut config| {
+            config.load_file(&fifo);
+            config.diagnostics().len()
+        });
+        sender.send(diagnostics.map_err(|err| err.to_string())).ok();
+    });
+    let diagnostics = receiver.recv_timeout(std::time::Duration::from_secs(10))?;
+    assert_eq!(diagnostics?, 1);
+    Ok(())
+}
+
+#[test]
 fn an_invalid_line_reports_libghostty_diagnostics() -> TestResult {
     let dir = tempfile::tempdir()?;
     let path = write_config(dir.path(), "no-such-key = 1\nfont-size = 13\n")?;

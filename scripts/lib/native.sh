@@ -2,11 +2,13 @@
 #
 # Each native dependency lives in its own vendored prefix, ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/<name>-<key>/,
 # where <key> hashes that dependency's pins and patches only. Cargo never runs zig: agterm-ghostty-sys asks
-# `build-ghostty.sh --print-prefix` where the prefix is and fails when it is missing.
+# `build-ghostty.sh --print-prefix` where the prefix is and fails when it is missing. A relative AGTERM_VENDOR is
+# taken against the repository root, so every caller (and cargo, which runs from a crate directory) sees one path.
 
 NATIVE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PINS="$NATIVE_ROOT/build/pins.env"
 VENDOR_ROOT="${AGTERM_VENDOR:-$HOME/.cache/agterm-rs/vendor}"
+[[ "$VENDOR_ROOT" == /* ]] || VENDOR_ROOT="$NATIVE_ROOT/$VENDOR_ROOT"
 # shellcheck source=../../build/pins.env
 source "$PINS"
 
@@ -57,6 +59,9 @@ host_zig_arch() {
 
 # Print a zig of exactly VERSION: $OVERRIDE_VAR, a matching zig on PATH, mise's, or the pinned ziglang.org
 # tarball (sha256 SHA) unpacked once into the vendor root.
+#
+# Callers run this as ZIG="$(find_zig ...)", where bash clears errexit, so every step checks its own failure: a
+# failed fetch or unpack must never leave a partial tree in the final directory, which later runs would reuse.
 find_zig() {
   local version="$1" sha="$2" override="$3" candidate arch dir tarball
   for candidate in "$override" "$(command -v zig 2>/dev/null || true)" \
@@ -67,20 +72,21 @@ find_zig() {
     fi
   done
   [[ -z "$override" ]] || die "$override is not zig $version"
-  arch="$(host_zig_arch)"
+  arch="$(host_zig_arch)" || exit
   dir="$VENDOR_ROOT/zig-$arch-linux-$version"
   if [[ ! -x "$dir/zig" ]]; then
     command -v curl >/dev/null || die "curl is required to fetch zig $version"
-    tarball="$(mktemp "$VENDOR_ROOT/.zig-$version.XXXXXX")"
+    command -v xz >/dev/null || die "xz is required to unpack zig $version"
+    tarball="$(mktemp "$VENDOR_ROOT/.zig-$version.XXXXXX")" || die "cannot create a download file in $VENDOR_ROOT"
     echo "fetching zig $version..." >&2
-    curl -fsSLo "$tarball" "https://ziglang.org/download/$version/zig-$arch-linux-$version.tar.xz"
+    curl -fsSLo "$tarball" "https://ziglang.org/download/$version/zig-$arch-linux-$version.tar.xz" \
+      || { rm -f "$tarball"; die "cannot download zig $version"; }
     echo "$sha  $tarball" | sha256sum --check --quiet >&2 || { rm -f "$tarball"; die "zig $version sha256 mismatch"; }
-    rm -rf "$dir.partial"
-    mkdir -p "$dir.partial"
-    tar -xJf "$tarball" -C "$dir.partial" --strip-components=1
+    { rm -rf "$dir.partial" && mkdir -p "$dir.partial"; } || { rm -f "$tarball"; die "cannot create $dir.partial"; }
+    tar -xJf "$tarball" -C "$dir.partial" --strip-components=1 \
+      || { rm -rf "$dir.partial" "$tarball"; die "cannot unpack zig $version"; }
     rm -f "$tarball"
-    rm -rf "$dir"
-    mv "$dir.partial" "$dir"
+    { rm -rf "$dir" && mv "$dir.partial" "$dir"; } || { rm -rf "$dir.partial"; die "cannot move zig into $dir"; }
   fi
   [[ "$("$dir/zig" version)" == "$version" ]] || die "$dir/zig is not zig $version"
   echo "$dir/zig"
