@@ -87,13 +87,15 @@ def test_cursor_without_a_target_reads_the_active_surface(ctl, fresh):
 @pytest.mark.covers("surface.cursor", "field:tree.session.surfaces")
 def test_cursor_reads_each_pane_by_surface_id_or_pane_id(ctl, fresh):
     assert_ok(ctl.request("session.split", fresh, mode="on"))
-    assert_ok(ctl.request("session.scratch", fresh, mode="on"))
-    ctl.wait_mounted(fresh, "right", "scratch")
+    ctl.wait_mounted(fresh, "right")
     _parked(ctl, fresh, pane="right")
     right = _surface(fresh, "right")
     _cursor(ctl, right, 5)
     assert _cursor(ctl, fresh, 5, paneID=_pane_id(ctl, fresh, "right"))["id"] == right
 
+    # After the right pane is parked: a scratch coming up while it lays out can leave it a few cells wide.
+    assert_ok(ctl.request("session.scratch", fresh, mode="on"))
+    ctl.wait_mounted(fresh, "scratch")
     _parked(ctl, fresh, pane="scratch")
     scratch = _surface(fresh, "scratch")
     _cursor(ctl, scratch, 5)

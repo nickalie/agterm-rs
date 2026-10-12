@@ -230,7 +230,10 @@ def _live_session(live, split=False):
 
     def running(response):
         rows = _rows(response, sid)
-        assert all(rows.get(pane, {}).get("observation") == "running" for pane in panes), rows
+        # The pane's attach client registers with the daemon after the daemon itself lists as running.
+        assert all(
+            rows.get(pane, {}).get("observation") == "running" and rows[pane].get("clients", 0) >= 1 for pane in panes
+        ), rows
         return True
 
     live.wait_response("zmx.list", None, running)

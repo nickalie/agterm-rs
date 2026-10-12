@@ -469,17 +469,19 @@ class Adapter:
     def stop(self, instance: Instance, cleanup: bool = True) -> None:
         """Reap daemons, SIGTERM the launched pid only, then require no zmx/session-host left behind."""
         try:
-            refusals: list[str] = []
+            steps: list[str] = []
             try:
                 if (code := instance.process.poll()) is not None:
-                    refusals = [f"the app had already exited with {code}"]
+                    steps = [f"the app had already exited with {code}"]
                 elif find_leftovers(instance.zmx_dir) or _lists_daemons(instance):
                     # Listed too: a daemon still starting has no process yet and would outlive the quit.
-                    refusals = reap_live_sessions(instance)
+                    steps = reap_live_sessions(instance)
+                else:
+                    steps = ["nothing listed or running to reap before the quit"]
             finally:
                 killed = _terminate(instance.process)
             helper_problem = self.stop_helpers(instance)
-            leftovers = _leftovers_error(instance.zmx_dir, refusals)
+            leftovers = _leftovers_error(instance.zmx_dir, steps)
         finally:
             _release_app_id(instance.app_id)
         if leftovers is not None:
@@ -497,13 +499,13 @@ class Adapter:
         return None
 
 
-def _leftovers_error(zmx_dir: str, refusals: Iterable[str] = ()) -> LeftoverProcesses | None:
+def _leftovers_error(zmx_dir: str, steps: Iterable[str] = ()) -> LeftoverProcesses | None:
     leftovers = find_leftovers(zmx_dir)
     if not leftovers:
         return None
     # Cut: on macOS the command carries the whole `ps -E` environment.
     described = ", ".join(f"{pid} {command[:300]}" for pid, _, command in leftovers)
-    reaping = f"; reaping: {'; '.join(refusals)}" if refusals else ""
+    reaping = f"; reaping: {'; '.join(steps)}" if steps else ""
     return LeftoverProcesses(f"processes left under ZMX_DIR {zmx_dir}: {described}{reaping}")
 
 
@@ -595,16 +597,17 @@ def wait_for_socket(instance: Instance, timeout: float) -> dict[str, Any]:
 
 
 def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[str]:
-    """Best effort over the protocol; returns the refusals, and whatever survives is reported by the leftover check.
+    """Best effort over the protocol; returns what it did, for the leftover check to report with what survived.
 
     Re-lists after every kill: killing a left pane promotes its split survivor into the left slot, so a
     selector read before the kill no longer names that survivor. A claimed daemon zmx does not list yet
     (`observation: absent`, as right after it starts) refuses a kill as not running, and a `pendingClose` one
     refuses it outright, so both are waited for until `settle` runs out.
     """
-    refusals: list[str] = []
+    steps: list[str] = []
     deadline = time.monotonic() + settle
     try:
+        steps.append(f"listed: {_listed(instance)}")
         tried: set[str] = set()
         while True:
             entry, waiting = _next_claimed(instance, tried, time.monotonic() < deadline)
@@ -618,19 +621,24 @@ def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[
             if entry.get("windowID"):
                 args["window"] = entry["windowID"]
             response = instance.request("zmx.kill", entry["sessionID"], **args)
-            if not response.ok:
-                refusals.append(f"zmx.kill {_daemon_key(entry)}: {response.error}")
+            steps.append(f"zmx.kill {_daemon_key(entry)}: {'ok' if response.ok else response.error}")
         prune = instance.request("zmx.prune")
         if not prune.ok:
-            refusals.append(f"zmx.prune: {prune.error}")
-        listing = instance.request("zmx.list")
-        inventory = (listing.result or {}).get("zmx") if listing.ok else None
-        for entry in inventory.get("entries") or [] if isinstance(inventory, dict) else []:
-            if isinstance(entry, dict):
-                refusals.append(f"still listed: {entry.get('daemon')} {entry.get('state')}/{entry.get('observation')}")
+            steps.append(f"zmx.prune: {prune.error}")
+        steps.append(f"left listed: {_listed(instance)}")
     except ClientError as error:
-        refusals.append(f"reaping: {error}")
-    return refusals
+        steps.append(f"reaping: {error}")
+    return steps
+
+
+def _listed(instance: Instance) -> str:
+    listing = instance.request("zmx.list")
+    inventory = (listing.result or {}).get("zmx") if listing.ok else None
+    entries = inventory.get("entries") if isinstance(inventory, dict) else None
+    if not isinstance(entries, list):
+        return f"no inventory ({listing.error})"
+    rows = [f"{e.get('daemon')} {e.get('state')}/{e.get('observation')}" for e in entries if isinstance(e, dict)]
+    return ", ".join(rows) or "nothing"
 
 
 def _lists_daemons(instance: Instance) -> bool:

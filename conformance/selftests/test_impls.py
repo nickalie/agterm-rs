@@ -987,9 +987,10 @@ def test_reaping_waits_for_a_daemon_zmx_does_not_list_yet_and_reports_refusals(
     instance = adapter.launch()
     try:
         assert base.reap_live_sessions(instance, settle=0.2) == [
+            "listed: d1 claimed/absent",
             "zmx.kill d1: no left pane daemon for session s1",
             "zmx.prune: unknown command: zmx.prune",
-            "still listed: d1 claimed/absent",
+            "left listed: d1 claimed/absent",
         ]
         requests = [json.loads(line) for line in (instance.state_dir / "fake-requests.jsonl").read_text().splitlines()]
         commands = [request["cmd"] for request in requests]
@@ -1007,8 +1008,9 @@ def test_reaping_waits_out_a_closed_session_daemon(
     instance = adapter.launch()
     try:
         assert base.reap_live_sessions(instance, settle=0.2) == [
+            "listed: d1 pendingClose/running",
             "zmx.prune: unknown command: zmx.prune",
-            "still listed: d1 pendingClose/running",
+            "left listed: d1 pendingClose/running",
         ]
         requests = [json.loads(line) for line in (instance.state_dir / "fake-requests.jsonl").read_text().splitlines()]
         commands = [request["cmd"] for request in requests]
