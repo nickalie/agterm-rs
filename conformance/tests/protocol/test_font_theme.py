@@ -141,7 +141,7 @@ def theme_restored(ctl):
     if found.get("sync"):
         ctl.request("theme.set", light=found["light"], dark=found["dark"])
     elif found.get("theme"):
-        ctl.request("theme.set", name=found["theme"])
+        ctl.request("theme.set", name=found["theme"], dark="none")
     else:
         ctl.request("theme.set")
 

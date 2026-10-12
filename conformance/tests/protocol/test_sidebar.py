@@ -3,7 +3,7 @@ flagged layout (`sidebar.flagged-layout`), workspace expansion (`sidebar.expand`
 (`sidebar.width`). The module shares one instance; every test puts back the sidebar state it found."""
 
 import pytest
-from agterm_conformance.match import assert_absent, assert_error, assert_ok, window_ids, workspaces
+from agterm_conformance.match import active_workspace_id, assert_absent, assert_error, assert_ok, window_ids, workspaces
 
 UNKNOWN = "zzz"
 WIDTH_MIN, WIDTH_MAX = 160, 560
@@ -15,11 +15,6 @@ def _top(ctl, **args):
 
 def _collapsed(ctl, **args):
     return {node["id"]: node.get("collapsed", False) for node in workspaces(_top(ctl, **args))}
-
-
-def _current_workspace(ctl):
-    (current,) = [node["id"] for node in workspaces(_top(ctl)) if node.get("active") is True]
-    return current
 
 
 @pytest.fixture(autouse=True)
@@ -116,13 +111,21 @@ def test_width_is_clamped_and_read_back(ctl, asked, stored):
 
 @pytest.mark.covers("sidebar.width", "field:result.sidebarWidth", "field:tree.sidebarWidth")
 def test_width_below_the_floor_is_clamped(ctl, adapter):
+    start = 400
+    assert_ok(ctl.request("sidebar.width", sidebarWidth=start))
+    _settled_width(ctl, start)
     assert assert_ok(ctl.request("sidebar.width", sidebarWidth=5)) == {"sidebarWidth": WIDTH_MIN}
     if adapter.has("sidebar-min-width"):
         _settled_width(ctl, WIDTH_MIN)
-    else:
-        # The Linux fork's GTK paned stops at the sidebar's own minimum width (240 points here) and stores that
-        # position after the reply.
-        assert WIDTH_MIN <= _top(ctl)["sidebarWidth"] <= WIDTH_MAX
+        return
+    # The Linux fork's GTK paned stops at the sidebar's own minimum width (240 points here) and stores that
+    # position after the reply.
+
+    def narrowed(response):
+        assert WIDTH_MIN <= assert_ok(response)["tree"]["sidebarWidth"] < start
+        return True
+
+    ctl.wait_response("tree", None, narrowed)
 
 
 @pytest.mark.covers("sidebar.width", "field:tree.sidebarWidth", "behavior:protocol.target-resolution")
@@ -154,7 +157,7 @@ def test_unknown_window_is_refused(ctl, cmd, args):
 def test_collapse_keeps_the_current_workspace_open_and_expand_opens_all(ctl):
     for _ in range(2):
         assert_ok(ctl.request("workspace.new"))
-    current = _current_workspace(ctl)
+    current = active_workspace_id(_top(ctl))
 
     for _ in range(2):
         assert assert_ok(ctl.request("sidebar.collapse")) == {}
