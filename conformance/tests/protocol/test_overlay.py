@@ -5,11 +5,11 @@ outside the instance. Every page is a static file written into the instance's ow
 process on 127.0.0.1: no page loads anything from the network."""
 
 import itertools
-import threading
 import uuid
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 
 import pytest
+from agterm_conformance.loopback import serve
 from agterm_conformance.match import ANY, assert_absent, assert_error, assert_ok, assert_subset, find_session
 
 UNKNOWN = "zzz"
@@ -446,14 +446,8 @@ class _Page(BaseHTTPRequestHandler):
 @pytest.fixture
 def served_page():
     """A page on 127.0.0.1, served by this process for the one test that loads a URL."""
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _Page)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_address[1]}/page.html"
-    finally:
-        server.shutdown()
-        server.server_close()
+    with serve(_Page) as server:
+        yield f"http://127.0.0.1:{server.server_port}/page.html"
 
 
 @pytest.mark.covers("session.overlay.open", "field:tree.session.htmlOverlays")

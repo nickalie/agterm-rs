@@ -78,6 +78,13 @@ jobs:
           # --must-pass: a skipped, failed or deselected Live test fails the job, as does finding none.
           python -m pytest "${layers[@]}" --impl swift-macos --bin "$BUNDLE" -ra --must-pass live-sessions \
             --junitxml report/junit.xml 2>&1 | tee report/pytest.log
+      - name: the reference kept its defaults in the isolated homes
+        if: always()
+        run: |
+          if ls "$HOME/Library/Preferences" | grep -i agterm; then
+            echo "::error::the reference wrote defaults into the runner's own home"
+            exit 1
+          fi
       - name: upload the report
         if: always()
         uses: actions/upload-artifact@v4

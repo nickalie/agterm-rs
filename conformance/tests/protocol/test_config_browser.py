@@ -5,10 +5,10 @@ Config and browser-store tests each take a pristine instance: a reload re-applie
 surface (on the Linux fork that path stops answering once about seven sessions are mounted), and the saved
 store must start out never created. Every page is served by this process on 127.0.0.1."""
 
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 
 import pytest
+from agterm_conformance.loopback import serve
 from agterm_conformance.match import assert_absent, assert_error, assert_ok, find_session, session_ids
 
 UNKNOWN = "zzz"
@@ -123,15 +123,9 @@ class _Jar(BaseHTTPRequestHandler):
 @pytest.fixture
 def jar():
     """A page on 127.0.0.1 that sets a cookie, and the list of cookies its requests carried."""
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _Jar)
-    server.cookies = []
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_address[1]}/jar.html", server.cookies
-    finally:
-        server.shutdown()
-        server.server_close()
+    with serve(_Jar) as server:
+        server.cookies = []
+        yield f"http://127.0.0.1:{server.server_port}/jar.html", server.cookies
 
 
 def _open(ctl, sid, url, cookies, **args):
