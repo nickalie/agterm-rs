@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import subprocess
+import threading
 from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 import pytest
 
 from agterm_conformance import coverage, wait
-from agterm_conformance.client import Response, Stream, check_under_root
+from agterm_conformance.client import Response, SocketOutsideRoot, Stream, check_under_root
 from agterm_conformance.match import assert_ok
 
 if TYPE_CHECKING:
@@ -29,6 +31,7 @@ IMPL_FIXTURE = "impl_options"
 UNSUPPORTED = "unsupported"
 NOT_YET_AT_LEVEL = "not-yet-at-level"
 CLI_TIMEOUT = 30.0
+STOP_GRACE = 5.0
 
 MARKERS = (
     (
@@ -456,11 +459,45 @@ class Cli:
         socket_option = ["--socket", os.fspath(self.instance.socket)]
         return [os.fspath(self.ctl_path), *args_list[:end], *socket_option, *args_list[end:]]
 
+    def on(self, instance: Instance) -> Cli:
+        return Cli(self.ctl_path, instance)
+
     def __call__(self, *args: str, input: str | None = None, timeout: float = CLI_TIMEOUT) -> CliResult:
-        argv = self.argv(*args)
+        return self._run(self.argv(*args), self.instance.env, input, timeout)
+
+    def local(
+        self,
+        *args: str,
+        env: Mapping[str, str] | None = None,
+        input: str | None = None,
+        timeout: float = CLI_TIMEOUT,
+        default_socket: Path | None = None,
+    ) -> CliResult:
+        """Without `--socket`: for the local-only subcommands, which refuse it, and for socket resolution itself.
+
+        `env` (default: the instance's) must point `AGTERM_STATE_DIR` under the instance root, so even a command
+        that did open a socket would resolve one there, never the user's. Without it the caller names the platform
+        default that `env` resolves to as `default_socket`, which must lie under the root too.
+        """
+        env = dict(self.instance.env if env is None else env)
+        if state_dir := env.get("AGTERM_STATE_DIR"):
+            check_under_root(state_dir, self.instance.root)
+        elif default_socket is not None:
+            check_under_root(default_socket, self.instance.root)
+        else:
+            raise SocketOutsideRoot("refusing agtermctl without --socket: no AGTERM_STATE_DIR and no checked default")
+        return self._run([os.fspath(self.ctl_path), *args], env, input, timeout)
+
+    def spawn(self, *args: str, input: str | None = None, interactive: bool = False) -> CliProcess:
+        """A command that keeps running (`events`, a blocking `pick`/`ask`/`--block`); read it as it goes.
+
+        `input` is written and stdin closed; `interactive` keeps stdin open for `send` (a stream bridge)."""
+        return CliProcess(self.argv(*args), self.instance.env, self.instance.home, input, interactive)
+
+    def _run(self, argv: list[str], env: Mapping[str, str], input: str | None, timeout: float) -> CliResult:
         completed = subprocess.run(
             argv,
-            env=self.instance.env,
+            env=env,
             cwd=self.instance.home,
             input=input,
             capture_output=True,
@@ -469,6 +506,96 @@ class Cli:
             check=False,
         )
         return CliResult(argv, completed.returncode, completed.stdout, completed.stderr)
+
+
+class CliProcess:
+    """One running `agtermctl`: stdout read line by line on a thread, stopped (own pid only) by `close`."""
+
+    def __init__(
+        self, argv: list[str], env: Mapping[str, str], cwd: Path, input: str | None, interactive: bool = False
+    ) -> None:
+        self.argv = argv
+        self.process = subprocess.Popen(
+            argv,
+            env=dict(env),
+            cwd=cwd,
+            stdin=subprocess.PIPE if input is not None or interactive else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if input is not None:
+            self.send(input)
+            if not interactive:
+                assert self.process.stdin is not None
+                self.process.stdin.close()
+        self._lines: queue.Queue[str | None] = queue.Queue()
+        self._stderr: str | None = None
+        self._reader = threading.Thread(target=self._read, daemon=True)
+        self._reader.start()
+
+    def _read(self) -> None:
+        assert self.process.stdout is not None
+        for line in self.process.stdout:
+            self._lines.put(line.rstrip("\n"))
+        self._lines.put(None)
+
+    def send(self, text: str) -> None:
+        assert self.process.stdin is not None
+        self.process.stdin.write(text)
+        self.process.stdin.flush()
+
+    def line(self, timeout: float = wait.DEFAULT_TIMEOUT) -> str:
+        """The next stdout line; fails when none arrives in time or the process ended without one."""
+        try:
+            line = self._lines.get(timeout=timeout)
+        except queue.Empty:
+            raise AssertionError(f"no output line from {self.argv[1:]} within {timeout}s") from None
+        if line is None:
+            self._lines.put(None)
+            raise AssertionError(f"{self.argv[1:]} ended (exit {self.process.wait()}): {self.stderr()}")
+        return line
+
+    def finish(self, timeout: float = CLI_TIMEOUT) -> CliResult:
+        """Wait for the process to exit by itself; the stdout lines not yet read come back as `stdout`."""
+        returncode = self.process.wait(timeout=timeout)
+        self._reader.join(timeout)
+        lines: list[str] = []
+        while (line := self._lines.get(timeout=timeout)) is not None:
+            lines.append(line)
+        self._lines.put(None)
+        stdout = "".join(f"{line}\n" for line in lines)
+        return CliResult(self.argv, returncode, stdout, self.stderr())
+
+    def stderr(self) -> str:
+        """Everything the process wrote to stderr, once it has exited; empty while it runs."""
+        if self._stderr is None and self.process.poll() is not None:
+            assert self.process.stderr is not None
+            self._stderr = self.process.stderr.read()
+        return self._stderr or ""
+
+    def close(self) -> None:
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=STOP_GRACE)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
+        self._reader.join(STOP_GRACE)
+        self.stderr()
+        for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except BrokenPipeError:
+                    pass  # stdin's unflushed bytes had no reader left
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
 
 @pytest.fixture(scope="session")
@@ -496,25 +623,43 @@ def shared_app(adapter: Adapter) -> Iterator[Instance]:
     yield from _launched(adapter)
 
 
-@pytest.fixture
-def launch(adapter: Adapter) -> Iterator[Callable[..., Ctl]]:
-    """Start further instances, such as one with seeded settings (`launch(settings={...})`); stopped at teardown."""
-    launched: list[Instance] = []
+class Launcher:
+    """`launch(settings={...})` starts a further instance; `launch.relaunch(ctl)` quits one and starts it again on
+    the same state directory. Every instance still running is stopped at teardown."""
 
-    def start(**kwargs: Any) -> Ctl:
-        instance = adapter.launch(**kwargs)
-        launched.append(instance)
+    def __init__(self, adapter: Adapter) -> None:
+        self.adapter = adapter
+        self.launched: list[Instance] = []
+
+    def __call__(self, **kwargs: Any) -> Ctl:
+        instance = self.adapter.launch(**kwargs)
+        self.launched.append(instance)
         return Ctl(instance)
 
-    yield start
-    failure: Exception | None = None
-    for instance in reversed(launched):
-        try:
-            adapter.stop(instance)
-        except Exception as error:  # noqa: BLE001 - stop every instance, then report the first failure
-            failure = failure or error
-    if failure is not None:
-        raise failure
+    def relaunch(self, ctl: Ctl) -> Ctl:
+        index = self.launched.index(ctl.instance)
+        # Out of the list first: a relaunch that fails has stopped its process and keeps the root for diagnosis.
+        old = self.launched.pop(index)
+        self.launched.insert(index, self.adapter.relaunch(old))
+        return Ctl(self.launched[index])
+
+    def stop_all(self) -> None:
+        failure: Exception | None = None
+        for instance in reversed(self.launched):
+            try:
+                self.adapter.stop(instance)
+            except Exception as error:  # noqa: BLE001 - stop every instance, then report the first failure
+                failure = failure or error
+        if failure is not None:
+            raise failure
+
+
+@pytest.fixture
+def launch(adapter: Adapter) -> Iterator[Launcher]:
+    """Start further instances, such as one with seeded settings (`launch(settings={...})`); stopped at teardown."""
+    launcher = Launcher(adapter)
+    yield launcher
+    launcher.stop_all()
 
 
 def _target_instance(request: pytest.FixtureRequest) -> Instance:

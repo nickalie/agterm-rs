@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the protocol and cli layers against the installed Swift/GTK fork and write a report to attach to a PR.
+# Run the protocol, cli and behaviors layers against the installed Swift/GTK fork and write a report to attach to a PR.
 # Every instance comes from the harness (unique AGTERM_APP_ID, fresh root under this run's own /tmp/agt-run-*
 # parent); nothing here talks to the user's running agterm.
 #
@@ -35,10 +35,10 @@ python="${PYTHON:-$repo/.venv/bin/python}"
 while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(AGTERM_|ZMX_)' || true)
 
 layers=()
-for layer in protocol cli; do
+for layer in protocol cli behaviors; do
     if [[ -d "$tests/$layer" ]]; then layers+=("$tests/$layer"); fi
 done
-((${#layers[@]})) || { echo "no protocol or cli layer under $tests" >&2; exit 2; }
+((${#layers[@]})) || { echo "no protocol, cli or behaviors layer under $tests" >&2; exit 2; }
 
 mkdir -p "$out"
 rm -f "$out/report.md" "$out/junit.xml" "$out/pytest.log"

@@ -1,5 +1,5 @@
-# The protocol and cli layers against the released upstream app at the catalog's tag. A fresh runner, never a Mac
-# running a live agterm: the reference would share its `com.umputun.agterm` defaults domain.
+# The protocol, cli and behaviors layers against the released upstream app at the catalog's tag. A fresh runner,
+# never a Mac running a live agterm: the reference would share its `com.umputun.agterm` defaults domain.
 name: reference-macos
 
 on:
@@ -58,13 +58,13 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: python conformance/tools/fetch_reference.py --tag "$TAG" | tee -a "$GITHUB_OUTPUT"
-      - name: protocol and cli layers
+      - name: protocol, cli and behaviors layers
         shell: bash
         env:
           BUNDLE: ${{ steps.reference.outputs.bundle }}
         run: |
           layers=()
-          for layer in protocol cli; do
+          for layer in protocol cli behaviors; do
             if [[ -d "conformance/tests/$layer" ]]; then layers+=("conformance/tests/$layer"); fi
           done
           mkdir -p report

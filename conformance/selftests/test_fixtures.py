@@ -7,11 +7,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from agterm_conformance.client import Response
+from agterm_conformance.client import Response, SocketOutsideRoot
 from agterm_conformance.impls.base import Instance, Profile
 from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
 from agterm_conformance.match import session_ids
-from agterm_conformance.plugin import Ctl, skip_reason
+from agterm_conformance.plugin import Cli, Ctl, skip_reason
 from agterm_conformance.wait import Cursor, WaitTimeout, wait_event, wait_response, wait_text, wait_until
 
 TWO_SESSIONS = {
@@ -121,6 +121,27 @@ def test_launch_fixture_starts_seeded_instances_and_stops_them(
     )
     run_suite(pytester, *swift_linux(fake_bin)).assert_outcomes(passed=1)
     assert len(roots) == 2 and not any(root.exists() for root in roots)
+
+
+def test_launch_fixture_relaunches_on_the_same_state_dir(
+    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path
+) -> None:
+    pytester.makepyfile(
+        """
+        def test_relaunch(launch):
+            first = launch(settings={"restoreMode": "rerun"})
+            (first.instance.state_dir / "kept").write_text("state")
+            second = launch.relaunch(first)
+            assert second.instance.pid != first.instance.pid
+            assert first.instance.process.returncode is not None
+            assert second.instance.state_dir == first.instance.state_dir
+            assert (second.instance.state_dir / "kept").read_text() == "state"
+            assert second.request("version").ok
+            assert launch.launched == [second.instance]
+        """
+    )
+    run_suite(pytester, *swift_linux(fake_bin)).assert_outcomes(passed=1)
+    assert len(roots) == 1 and not roots[0].exists()
 
 
 def test_skip_reason_says_why_this_host_lacks_a_capability(pytester: pytest.Pytester) -> None:
@@ -371,6 +392,73 @@ def test_cli_passes_the_instance_socket(
         """
     )
     run_suite(pytester, *swift_linux(fake_bin, "--ctl", str(fake_ctl))).assert_outcomes(passed=2)
+
+
+def test_cli_local_runs_without_a_socket_in_the_instance_env(ctl: Ctl, fake_ctl: Path) -> None:
+    cli = Cli(fake_ctl, ctl.instance)
+    out = cli.local("clipboard", "set", "x", input="in").json()
+    assert out["argv"] == ["clipboard", "set", "x"] and out["stdin"] == "in"
+    assert out["env"]["AGTERM_STATE_DIR"] == os.fspath(ctl.instance.state_dir)
+    assert out["cwd"] == os.fspath(ctl.instance.home)
+
+
+def test_cli_local_refuses_a_default_it_cannot_place_under_the_root(ctl: Ctl, fake_ctl: Path, tmp_path: Path) -> None:
+    cli = Cli(fake_ctl, ctl.instance)
+    env = dict(ctl.instance.env)
+    with pytest.raises(SocketOutsideRoot):
+        cli.local("version", env={**env, "AGTERM_STATE_DIR": os.fspath(tmp_path)})
+    without = {name: value for name, value in env.items() if name != "AGTERM_STATE_DIR"}
+    with pytest.raises(SocketOutsideRoot, match="no AGTERM_STATE_DIR"):
+        cli.local("version", env=without)
+    with pytest.raises(SocketOutsideRoot):
+        cli.local("version", env=without, default_socket=tmp_path / "agterm.sock")
+    default = ctl.instance.home / ".local/share/agterm/agterm.sock"
+    assert cli.local("version", env=without, default_socket=default).json()["env"]["AGTERM_STATE_DIR"] is None
+
+
+@pytest.fixture
+def stream_ctl(tmp_path: Path) -> Path:
+    """Prints `ready`, echoes each stdin line back as `got:<line>`, then `bye` at end of input, exiting 3; with
+    `hold` as its argument it waits forever once its input ends."""
+    script = tmp_path / "stream" / "agtermctl"
+    script.parent.mkdir()
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import sys, time\n"
+        "print('ready', flush=True)\n"
+        "for line in sys.stdin:\n"
+        "    print('got:' + line.rstrip(), flush=True)\n"
+        "if 'hold' in sys.argv:\n"
+        "    time.sleep(600)\n"
+        "print('bye', flush=True)\n"
+        "sys.exit(3)\n"
+    )
+    script.chmod(0o755)
+    return script
+
+
+def test_cli_spawn_reads_lines_as_they_come_and_finishes(ctl: Ctl, stream_ctl: Path) -> None:
+    cli = Cli(stream_ctl, ctl.instance)
+    with cli.spawn("events", interactive=True) as running:
+        assert running.argv[-2:] == ["--socket", os.fspath(ctl.instance.socket)]
+        assert running.line() == "ready"
+        running.send("one\n")
+        assert running.line() == "got:one"
+        assert running.process.stdin is not None
+        running.process.stdin.close()
+        finished = running.finish()
+    assert (finished.returncode, finished.stdout, finished.stderr) == (3, "bye\n", "")
+    with pytest.raises(AssertionError, match="ended"):
+        running.line(timeout=1)
+
+
+def test_cli_spawn_close_stops_a_command_that_keeps_running(ctl: Ctl, stream_ctl: Path) -> None:
+    cli = Cli(stream_ctl, ctl.instance)
+    with cli.spawn("events", "hold", input="x\n") as running:
+        assert [running.line(), running.line()] == ["ready", "got:x"]
+        with pytest.raises(AssertionError, match="no output line"):
+            running.line(timeout=0.2)
+    assert running.process.returncode == -15
 
 
 def test_cli_without_agtermctl_fails_clearly(pytester: pytest.Pytester, roots: list[Path], fake_bin: Path) -> None:

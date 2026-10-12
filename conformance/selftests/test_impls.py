@@ -245,7 +245,7 @@ def test_launch_isolates_and_stop_cleans_up(roots: list[Path], fake_bin: Path, m
         assert (instance.state_dir / "windows").is_dir()
         assert not (instance.state_dir / "settings.json").exists()
         ghostty = (instance.state_dir / "config" / "ghostty.conf").read_text().splitlines()
-        assert ghostty == ["command = /bin/sh", "copy-on-select = false"]
+        assert ghostty == ["command = /bin/sh", "copy-on-select = false", "clipboard-write = deny"]
         assert seen["XDG_RUNTIME_DIR"] == str(instance.root / "run")
         assert (instance.root / "run").stat().st_mode & 0o777 == 0o700
         assert instance.root.parent == Path(base.TEMP_PARENT)
@@ -264,6 +264,41 @@ def test_launch_seeds_settings(roots: list[Path], fake_bin: Path, adapter_class:
         assert seeded == {"restoreMode": "live", "autoFollowAttention": "s30"}
     finally:
         adapter.stop(instance)
+
+
+@pytest.mark.parametrize("adapter_class", [SwiftLinuxAdapter, RustAdapter])
+def test_relaunch_starts_the_binary_again_on_the_same_root(
+    roots: list[Path], fake_bin: Path, adapter_class: type[Adapter]
+) -> None:
+    adapter = adapter_class(fake_bin)
+    first = adapter.launch(settings={"restoreMode": "rerun"})
+    (first.state_dir / "kept").write_text("state")
+    second = adapter.relaunch(first)
+    try:
+        assert first.process.returncode is not None and second.pid != first.pid
+        same = ("root", "state_dir", "home", "socket", "env", "log", "app_id", "zmx_dir")
+        assert all(getattr(second, name) == getattr(first, name) for name in same)
+        assert (second.state_dir / "kept").read_text() == "state"
+        assert second.version == {"app": {"version": "0.0.1"}} and second.request("version").ok
+        assert json.loads((second.state_dir / "settings.json").read_text()) == {"restoreMode": "rerun"}
+    finally:
+        adapter.stop(second)
+    assert len(roots) == 1 and not roots[0].exists()
+
+
+def test_relaunch_of_an_app_ignoring_sigterm_fails_and_frees_its_app_id(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_APP_MODE", "ignore-term")
+    monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
+    adapter = SwiftLinuxAdapter(fake_bin)
+    app_id = f"{DEFAULT_APP_ID}.conformance.relaunch"
+    instance = adapter.launch(app_id=app_id)
+    with pytest.raises(StopError, match="ignored SIGTERM"):
+        adapter.relaunch(instance)
+    assert instance.process.returncode == -9
+    monkeypatch.delenv("FAKE_APP_MODE")
+    adapter.stop(adapter.launch(app_id=app_id))
 
 
 def test_duplicate_app_id_is_refused_until_the_owner_stops(roots: list[Path], fake_bin: Path) -> None:

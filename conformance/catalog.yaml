@@ -361,6 +361,17 @@ behaviors:
   zmx.tree.remote-host: {status: uncovered}
   protocol.target-resolution: {status: uncovered}
   protocol.malformed-request: {status: uncovered}
+  cli.socket-resolution: {status: uncovered}
+  restore.relaunch-keeps-layout: {status: uncovered}
+  restore.rerun-types-pinned-command: {status: uncovered, requires: [posix-shell]}
+  restore.fresh-shells-ignore-pins: {status: uncovered, requires: [posix-shell]}
+  restore.rerun-replays-captured-command: {status: uncovered, requires: [posix-shell]}
+  restore.live-session-survives-relaunch: {status: uncovered, requires: [live-sessions]}
+  keymap.loaded-at-launch: {status: uncovered}
+  keymap.edit-needs-reload: {status: uncovered}
+  hooks.loaded-at-launch: {status: uncovered}
+  hooks.edit-needs-reload: {status: uncovered}
+  hooks.once-per-event-in-order: {status: uncovered}
 exemptions:
   debug.appearance: refused outside UI-test mode; a UI-test-only hook with no CLI subcommand
   zmx.attach: a successful attach re-discovers the remote over ssh before creating anything, which the suite's no-network,
@@ -368,16 +379,22 @@ exemptions:
   behavior:zmx.tree.remote-host: remote discovery runs ssh, excluded by the suite's no-network constraints
   session.paste: a successful paste reads the desktop's own clipboard, which an isolated GUI instance shares with the user's
     session and which no test may seed without overwriting the user's; its refusals are still tested
-  session.overlay.copy: no protocol command makes a selection inside an overlay terminal (session.selectall acts on
-    the panes underneath); its refusals are still tested
-  zmx.reset: a confirmed reset quits the app and relaunches it through `open -n` outside the harness
-    (LiveResetRelauncher), a process the harness may neither start nor stop; the Linux fork refuses it as unsupported.
-    Its --force refusal is still tested
+  session.overlay.copy: no protocol command makes a selection inside an overlay terminal (session.selectall acts on the panes
+    underneath); its refusals are still tested
+  zmx.reset: a confirmed reset quits the app and relaunches it through `open -n` outside the harness (LiveResetRelauncher),
+    a process the harness may neither start nor stop; the Linux fork refuses it as unsupported. Its --force refusal is still
+    tested
   field:result.liveReset: written only by a confirmed zmx.reset, exempted above
   field:tree.liveReset: reports a reset zmx.reset armed or a launch consumed, exempted above
-  field:tree.session.remoteHost: set only on a session attached from another machine, which needs zmx.attach over ssh,
-    excluded by the suite's no-network constraints
-  field:tree.session.presentation: the viewer side of an attached session's presentation stream, which needs
-    zmx.attach over ssh; the origin side is tested through zmx.present
+  field:tree.session.remoteHost: set only on a session attached from another machine, which needs zmx.attach over ssh, excluded
+    by the suite's no-network constraints
+  field:tree.session.presentation: the viewer side of an attached session's presentation stream, which needs zmx.attach over
+    ssh; the origin side is tested through zmx.present
   event:remote.opened: emitted when a session attached over ssh opens, excluded with zmx.attach
   event:remote.closed: emitted when a session attached over ssh closes, excluded with zmx.attach
+  cli:session paste: a successful paste reads the desktop clipboard, exempted with session.paste; its refusals are still tested
+  cli:session overlay copy: no command makes a selection inside an overlay terminal, exempted with session.overlay.copy; its
+    refusals are still tested
+  cli:zmx reset: a confirmed reset quits the app and relaunches it outside the harness, exempted with zmx.reset; its --force
+    refusal is still tested
+  cli:zmx attach: a successful attach runs ssh, exempted with zmx.attach; its refusals are still tested

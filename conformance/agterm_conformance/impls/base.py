@@ -52,8 +52,9 @@ SESSION_HOST_NOTE = (
 # With SHELL=/bin/sh this is belt and braces: either alone gives a reference-linux pane /bin/sh
 # (conformance/docs/spike-macos.md).
 GHOSTTY_SHELL_CONFIG = "command = /bin/sh\n"
-# A selection (`session.selectall`) would otherwise land in the desktop's own primary selection.
-GHOSTTY_ISOLATION_CONFIG = "copy-on-select = false\n"
+# A selection (`session.selectall`) would otherwise land in the desktop's own primary selection, and an OSC 52 write
+# (`agtermctl clipboard set` in a Live pane) in the desktop clipboard the user's session shares.
+GHOSTTY_ISOLATION_CONFIG = "copy-on-select = false\nclipboard-write = deny\n"
 # The private `XDG_RUNTIME_DIR` under the root: the Linux fork writes its ghostty config layers there
 # (`GhosttyApp.writeTempConf`/`writeDefaultsConf`), which in the shared one are the live app's own files.
 RUNTIME_DIR_NAME = "run"
@@ -372,16 +373,7 @@ class Adapter:
             raise
         log = root / "app.log"
         try:
-            with open(log, "wb") as sink:
-                process = subprocess.Popen(
-                    command,
-                    env=env,
-                    cwd=env["HOME"],
-                    stdin=subprocess.DEVNULL,
-                    stdout=sink,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                )
+            process = _spawn(command, env, log, "wb")
         except BaseException:
             _release_app_id(app_id)
             shutil.rmtree(root, ignore_errors=True)
@@ -397,6 +389,41 @@ class Adapter:
             app_id=app_id,
             zmx_dir=zmx_socket_directory(env["AGTERM_STATE_DIR"]),
         )
+        return self._serving(instance, timeout)
+
+    def relaunch(self, instance: Instance, timeout: float = LAUNCH_TIMEOUT) -> Instance:
+        """Quit `instance` with SIGTERM, then start the binary again on the same root, env and state directory.
+
+        Nothing is reaped and no leftover is checked in between: a Live daemon outliving the quit is what the next
+        launch adopts. The returned instance replaces `instance`; stop that one, never the old.
+        """
+        command = self.executable()
+        if _terminate(instance.process):
+            _release_app_id(instance.app_id)
+            raise StopError(f"pid {instance.pid} ignored SIGTERM for {STOP_TIMEOUT}s and was killed")
+        _release_app_id(instance.app_id)
+        check_launch_env(instance.env, instance.root, self.needs_app_id, self.needs_runtime_dir)
+        if instance.app_id is not None:
+            _claim_app_id(instance.app_id)
+        try:
+            process = _spawn(command, instance.env, instance.log, "ab")
+        except BaseException:
+            _release_app_id(instance.app_id)
+            raise
+        relaunched = Instance(
+            process=process,
+            root=instance.root,
+            state_dir=instance.state_dir,
+            home=instance.home,
+            socket=instance.socket,
+            env=instance.env,
+            log=instance.log,
+            app_id=instance.app_id,
+            zmx_dir=instance.zmx_dir,
+        )
+        return self._serving(relaunched, timeout)
+
+    def _serving(self, instance: Instance, timeout: float) -> Instance:
         try:
             instance.version = wait_for_socket(instance, timeout)
         except BaseException:
@@ -434,6 +461,19 @@ def _absolute(path: Path | None) -> Path | None:
 
 def make_root() -> Path:
     return Path(tempfile.mkdtemp(prefix="agt-", dir=TEMP_PARENT))
+
+
+def _spawn(command: list[str], env: dict[str, str], log: Path, mode: str) -> subprocess.Popen[bytes]:
+    with open(log, mode) as sink:
+        return subprocess.Popen(
+            command,
+            env=env,
+            cwd=env["HOME"],
+            stdin=subprocess.DEVNULL,
+            stdout=sink,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
 
 
 def _prepare_tree(

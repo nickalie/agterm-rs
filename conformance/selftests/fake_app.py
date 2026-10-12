@@ -146,6 +146,11 @@ def handle(request: dict) -> dict:
 
 
 listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+# A previous run on the same state dir (a relaunch) leaves its socket file behind, as a quit app may.
+try:
+    os.unlink(os.environ["AGTERM_CONTROL_SOCKET"])
+except FileNotFoundError:
+    pass
 listener.bind(os.environ["AGTERM_CONTROL_SOCKET"])
 listener.listen()
 while True:

@@ -515,11 +515,29 @@ events by kind, CLI by subcommand words (`cli` items carry their `wire`); exempt
 - Create: `conformance/tests/cli/test_socket_resolution.py`
 - Create: `conformance/tests/cli/test_cli_only.py`
 
-- [ ] seed `behaviors` with what has no own command (relaunch restore, keymap reload semantics, hook firing) and cover each
-- [ ] CLI: exit codes, `--json` shape, exact human output after id/path normalization, event arguments visible in human output
-- [ ] CLI-only `clipboard set` and `terminfo install` inside the isolated `HOME`
-- [ ] socket resolution: `--socket` and `AGTERM_STATE_DIR` on temp dirs; the default branch only with `HOME`/XDG (`CFFIXED_USER_HOME` on macOS) overridden and after asserting the resolved default lies under the temp root, otherwise skip
-- [ ] run on reference-linux — green before task 19 (reference-macos in Task 19)
+- ➕ Create: `conformance/tests/behaviors/test_hooks.py`, `conformance/agterm_conformance/cli_format.py` (+ self-tests)
+- ➕ Modify: `impls/base.py` (`Adapter.relaunch`, `clipboard-write = deny` in the instance's ghostty config),
+  `plugin.py` (`Launcher` with `launch.relaunch`, `Cli.on`/`Cli.local`/`Cli.spawn`), `selftests/fake_app.py`,
+  `conformance/coverage-baseline.txt`, and the behaviors layer in `run-reference-linux.sh` and `reference-macos.yml`
+
+- [x] seed `behaviors` with what has no own command (relaunch restore, keymap reload semantics, hook firing) and cover each
+- [x] CLI: exit codes, `--json` shape, exact human output after id/path normalization, event arguments visible in human output
+- [x] CLI-only `clipboard set` and `terminfo install` inside the isolated `HOME`
+- [x] socket resolution: `--socket` and `AGTERM_STATE_DIR` on temp dirs; the default branch only with `HOME`/XDG (`CFFIXED_USER_HOME` on macOS) overridden and after asserting the resolved default lies under the temp root, otherwise skip
+- [x] run on reference-linux — green before task 19 (reference-macos in Task 19)
+- ➕ Human output is compared exactly against `cli_format`, a port of the reference CLI's `formatResponse`,
+  `EventFormatter.human` and their helpers, rendered from the same command's `--json` or the protocol read-back;
+  ids are compared as captured, so no normalization is needed beyond `cli_format.normalize` for free text.
+- ➕ `terminfo install` is ssh to a remote account, not a local install: the test puts a stand-in `ssh` on PATH that
+  runs the remote line under `env -i HOME=<isolated HOME>`, so `tic` writes `<isolated HOME>/.terminfo` and nothing
+  inherits the payload's `TERMINFO`; the account's `~/.terminfo` and `~/.local/share/terminfo` are compared before
+  and after. `clipboard set` prints OSC 52 into the caller's Live pane through `zmx print` and never touches a
+  clipboard itself: outside Live only its refusals run; the Live test reads the sequence from an attached zmx viewer,
+  and every instance now starts with `clipboard-write = deny` so its own terminals drop the write.
+- ➕ `cli:session paste`, `cli:session overlay copy`, `cli:zmx reset` and `cli:zmx attach` are exempted with their
+  protocol commands, refusals still tested. ⚠️ The Live CLI and behavior tests (`zmx list/screen/kill`, `session
+  lead/restart`, `zmx present`, `session overlay run-job`, `clipboard set`, live session surviving a relaunch) skip on
+  this host like Task 17's and must run green in Task 19.
 
 ### Task 19: macOS verification — spike A and protocol/cli on reference-macos
 
