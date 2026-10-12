@@ -50,6 +50,10 @@ class DriverError(Exception):
     """The platform's driver exists but cannot run here (missing bindings, accessibility not granted)."""
 
 
+class ReadFailed(AssertionError):
+    """The accessibility API did not answer a read; a wait retries it and an empty tree is never inferred."""
+
+
 class UnknownUiId(ValueError):
     pass
 
@@ -164,7 +168,10 @@ class Driver(ABC):
     def absent(self, ui_id: str, timeout: float | None = None) -> None:
         """Wait until no element carries `ui_id`."""
         self.ui_ids.key_for(ui_id)
-        wait_until(lambda: not self._elements(ui_id), self.timeout if timeout is None else timeout)
+        try:
+            wait_until(lambda: not self._elements(ui_id), self.timeout if timeout is None else timeout)
+        except WaitTimeout as error:
+            raise WaitTimeout(f"{self.name}: {ui_id} still present in pid {self.pid}: {error}") from None
 
     def menu_item(self, name: str, timeout: float | None = None) -> Element:
         """An item of the open menu by title: system menus carry no identifiers."""
@@ -192,7 +199,8 @@ class Driver(ABC):
             raise ElementNotFound(f"{self.name}: no {wanted} in pid {self.pid}: {error}") from None
 
     @abstractmethod
-    def _elements(self, ui_id: str) -> list[Element]: ...
+    def _elements(self, ui_id: str) -> list[Element]:
+        """Every element carrying `ui_id`; raises ReadFailed rather than answer from a partial read."""
 
     @abstractmethod
     def _menu_item(self, name: str) -> Element | None: ...

@@ -154,6 +154,12 @@ def pytest_configure(config: pytest.Config) -> None:
         config.pluginmanager.register(MustPass(frozenset(must_pass)), "agterm-must-pass")
 
 
+def ui_ids_path(config: pytest.Config, options: ImplOptions) -> Path:
+    """`--ui-ids`, else the ui-ids.yaml next to the catalog: one file for the gate and the ui driver."""
+    catalog = options.catalog or config.rootpath / "catalog.yaml"
+    return (options.ui_ids or catalog.parent / "ui-ids.yaml").resolve()
+
+
 def gate_paths(config: pytest.Config, options: ImplOptions) -> tuple[Path, Path]:
     """The gate's catalog and ui-ids files; refuses a run that would not collect every conformance test.
 
@@ -164,7 +170,7 @@ def gate_paths(config: pytest.Config, options: ImplOptions) -> tuple[Path, Path]
         if config.getoption(flag, None):
             raise pytest.UsageError(f"--coverage-gate reads every conformance test; drop {spelling}")
     catalog = (options.catalog or config.rootpath / "catalog.yaml").resolve()
-    ui_ids = (options.ui_ids or catalog.parent / "ui-ids.yaml").resolve()
+    ui_ids = ui_ids_path(config, options)
     for flag, path in (
         ("--catalog", catalog),
         ("--ui-ids", ui_ids),
@@ -756,7 +762,7 @@ def cli(request: pytest.FixtureRequest, adapter: Adapter) -> Cli:
 @pytest.fixture
 def ui(request: pytest.FixtureRequest, adapter: Adapter, impl_options: ImplOptions) -> Driver:
     """The ui driver for the instance `ctl` drives (`pytest_runtest_setup` skips where none is written yet)."""
-    from agterm_conformance.drivers.base import DEFAULT_UI_IDS, UiIds, make_driver
+    from agterm_conformance.drivers.base import UiIds, make_driver
 
-    ui_ids = UiIds.load(impl_options.ui_ids or DEFAULT_UI_IDS)
+    ui_ids = UiIds.load(ui_ids_path(request.config, impl_options))
     return make_driver(adapter.name, _target_instance(request).pid, ui_ids)

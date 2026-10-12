@@ -13,6 +13,7 @@ from agterm_conformance.drivers.base import (
     Element,
     ElementNotFound,
     NoDriver,
+    ReadFailed,
     UiIds,
     UnknownUiId,
     driver_class,
@@ -238,8 +239,65 @@ def test_menu_item_waits_by_title() -> None:
 def test_absent_waits_until_no_element_carries_the_id() -> None:
     driver = FakeDriver([Element("add-session", "button")])
     driver.absent("htmlOverlay.back")
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="fake: add-session still present in pid 4242"):
         driver.absent("add-session", timeout=0.1)
+
+
+class FakeAx:
+    """ApplicationServices for one app whose AXChildren answers each read with the next queued AXError."""
+
+    def __init__(self, children_errors: list[int], child_error: int = ax.AX_SUCCESS) -> None:
+        self.app, self.dialog = object(), object()
+        self.children_errors = children_errors
+        self.child_error = child_error
+
+    def AXIsProcessTrusted(self) -> bool:
+        return True
+
+    def AXUIElementCreateApplication(self, pid: int) -> object:
+        return self.app
+
+    def AXUIElementSetMessagingTimeout(self, handle: object, seconds: float) -> int:
+        return ax.AX_SUCCESS
+
+    def AXUIElementCopyAttributeValue(self, handle: object, name: str, out: None) -> tuple[int, Any]:
+        if handle is self.app:
+            if name != "AXChildren":
+                return ax.AX_ATTRIBUTE_UNSUPPORTED, None
+            error = self.children_errors.pop(0) if self.children_errors else ax.AX_SUCCESS
+            return error, [self.dialog] if error == ax.AX_SUCCESS else None
+        if self.child_error != ax.AX_SUCCESS:
+            return self.child_error, None
+        return {"AXIdentifier": (ax.AX_SUCCESS, "add-session"), "AXRole": (ax.AX_SUCCESS, "AXButton")}.get(
+            name, (ax.AX_NO_VALUE, None)
+        )
+
+
+def fake_ax_driver(monkeypatch: pytest.MonkeyPatch, bindings: FakeAx) -> ax.AxDriver:
+    monkeypatch.setattr(ax, "_bindings", lambda: (bindings, None))
+    return ax.AxDriver(4242, IDS, timeout=0.2)
+
+
+def test_ax_absent_never_accepts_a_read_the_app_did_not_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    driver = fake_ax_driver(monkeypatch, FakeAx([ax.AX_CANNOT_COMPLETE] * 1000))
+    with pytest.raises(AssertionError, match="still present.*AXChildren in pid 4242 failed: AXError -25204"):
+        driver.absent("add-session", timeout=0.1)
+    with pytest.raises(ReadFailed):
+        driver.attribute(driver.app, "AXChildren")
+
+
+def test_ax_retries_a_failed_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    bindings = FakeAx([ax.AX_CANNOT_COMPLETE, ax.AX_CANNOT_COMPLETE])
+    element = fake_ax_driver(monkeypatch, bindings).find("add-session")
+    assert (element.ui_id, element.role, element.name) == ("add-session", "button", None)
+    assert bindings.children_errors == []
+
+
+def test_ax_treats_a_vanished_child_as_absent_but_not_a_vanished_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_ax_driver(monkeypatch, FakeAx([], child_error=ax.AX_INVALID_ELEMENT)).absent("add-session")
+    driver = fake_ax_driver(monkeypatch, FakeAx([ax.AX_INVALID_ELEMENT]))
+    with pytest.raises(ReadFailed, match="AXError -25202"):
+        driver.attribute(driver.app, "AXChildren")
 
 
 # -- selection
@@ -333,6 +391,33 @@ def test_spike_b_passes_only_when_every_step_held(change: dict[str, Any], ok: bo
     assert spike.passed({**GOOD, **change}) is ok
 
 
+def test_spike_b_reports_a_socket_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Instance:
+        pid, version = 7, "0"
+
+        def request(self, cmd: str) -> Any:
+            raise spike.ClientError("connect failed: no such file")
+
+        def log_tail(self, lines: int) -> str:
+            return "app exited"
+
+    stopped: list[Any] = []
+
+    class Adapter:
+        def launch(self) -> Instance:
+            return Instance()
+
+        def stop(self, instance: Instance) -> None:
+            stopped.append(instance)
+
+    monkeypatch.setattr(spike, "trust", lambda: {"accessibility": True, "postEvent": True})
+    monkeypatch.setattr(spike, "AxDriver", lambda pid, timeout: None)
+    report = spike.run(Adapter(), 0.1)
+    assert report["error"] == "ClientError: connect failed: no such file"
+    assert report["logTail"] == "app exited" and len(stopped) == 1
+    assert not spike.passed(report)
+
+
 def test_spike_b_ancestry_starts_at_this_process() -> None:
     chain = spike.ancestry()
     assert chain and chain[0].startswith(f"{spike.os.getpid()} ")
@@ -341,8 +426,10 @@ def test_spike_b_ancestry_starts_at_this_process() -> None:
 # -- the `ui` fixture
 
 
-def run_ui_suite(pytester: pytest.Pytester, fake_bin: Path) -> pytest.RunResult:
-    return pytester.runpytest("-p", "no:cacheprovider", "-rs", "--impl", "swift-linux", "--bin", str(fake_bin))
+def run_ui_suite(pytester: pytest.Pytester, fake_bin: Path, *args: str) -> pytest.RunResult:
+    return pytester.runpytest(
+        "-p", "no:cacheprovider", "-rs", "--impl", "swift-linux", "--bin", str(fake_bin), *args
+    )  # fmt: skip
 
 
 def test_ui_fixture_skips_as_unsupported_before_anything_launches(
@@ -377,7 +464,9 @@ def test_ui_fixture_drives_the_ctl_instance(
         """
         def test_ui(ctl, ui):
             assert ui.pid == ctl.instance.pid
-            assert "add-session" in ui.ui_ids.keys
+            assert ui.ui_ids.keys == {"next-to-the-catalog"}
         """
     )
-    run_ui_suite(pytester, fake_bin).assert_outcomes(passed=1)
+    (pytester.path / "spec").mkdir()
+    (pytester.path / "spec" / "ui-ids.yaml").write_text("ids:\n  next-to-the-catalog: {}\n")
+    run_ui_suite(pytester, fake_bin, "--catalog", "spec/catalog.yaml").assert_outcomes(passed=1)

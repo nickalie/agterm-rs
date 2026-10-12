@@ -10,7 +10,7 @@ from collections import deque
 from collections.abc import Iterator, Mapping
 from typing import Any
 
-from agterm_conformance.drivers.base import Chord, Driver, DriverError, Element, UiIds
+from agterm_conformance.drivers.base import Chord, Driver, DriverError, Element, ReadFailed, UiIds
 from agterm_conformance.wait import DEFAULT_TIMEOUT
 
 ROLES: Mapping[str, str] = {
@@ -44,7 +44,10 @@ KEY_CODES: Mapping[str, int] = {
 FLAGS: Mapping[str, int] = {"shift": 1 << 17, "ctrl": 1 << 18, "alt": 1 << 19, "cmd": 1 << 20}
 POST_MODES = ("pid", "hid")
 AX_SUCCESS = 0
+AX_INVALID_ELEMENT = -25202
 AX_CANNOT_COMPLETE = -25204
+AX_ATTRIBUTE_UNSUPPORTED = -25205
+AX_NO_VALUE = -25212
 # The menu bar keeps every menu's items in the tree, closed or not; an open menu is found outside it.
 MENU_BAR_ROLE = "AXMenuBar"
 MAX_DEPTH = 64
@@ -90,8 +93,13 @@ class AxDriver(Driver):
         self.ax.AXUIElementSetMessagingTimeout(self.app, MESSAGING_TIMEOUT)
 
     def attribute(self, handle: Any, name: str) -> Any:
+        """None when the element has no such value or has gone; ReadFailed when the app did not answer."""
         error, value = self.ax.AXUIElementCopyAttributeValue(handle, name, None)
-        return value if error == AX_SUCCESS else None
+        if error == AX_SUCCESS:
+            return value
+        if error in (AX_ATTRIBUTE_UNSUPPORTED, AX_NO_VALUE) or (error == AX_INVALID_ELEMENT and handle is not self.app):
+            return None
+        raise ReadFailed(f"{self.name}: reading {name} in pid {self.pid} failed: AXError {error}")
 
     def actions(self, element: Element) -> list[str]:
         error, names = self.ax.AXUIElementCopyActionNames(element.handle, None)

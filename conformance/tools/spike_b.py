@@ -18,8 +18,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from agterm_conformance.client import ClientError
 from agterm_conformance.drivers.ax import AX_SUCCESS, AxDriver, trust
-from agterm_conformance.drivers.base import DriverError, ElementNotFound
+from agterm_conformance.drivers.base import DriverError
 from agterm_conformance.impls.base import Instance, LaunchError, StopError
 from agterm_conformance.impls.swift_macos import LAUNCH_MODES, SwiftMacosAdapter
 from agterm_conformance.match import assert_ok, session_ids
@@ -100,7 +101,7 @@ def run(adapter: SwiftMacosAdapter, timeout: float) -> dict[str, Any]:
         session = press_new_session(driver, instance, report, timeout)
         report["newSession"] = session
         report["keystrokes"] = keystrokes(driver, instance, session, timeout)
-    except (AssertionError, DriverError, ElementNotFound) as error:
+    except (AssertionError, ClientError, DriverError) as error:
         report["error"] = f"{type(error).__name__}: {error}"
     finally:
         report["logTail"] = instance.log_tail(40)
