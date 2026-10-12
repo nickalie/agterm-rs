@@ -26,10 +26,10 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: install the suite and the ax driver's bindings
         run: python -m pip install -e "conformance[ax]"
       - name: resolve the upstream tag
@@ -46,7 +46,7 @@ jobs:
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/agterm-conformance/reference
           key: agterm-reference-${{ steps.tag.outputs.tag }}
@@ -97,7 +97,7 @@ jobs:
           if [[ -f "$plist" ]]; then plutil -p "$plist" | cut -c1-120 | head -n 60; else echo "none"; fi
       - name: upload the report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: reference-macos-${{ steps.tag.outputs.tag }}
           # A failed launch keeps its /tmp/agt-* root; its app log is the diagnosis.
