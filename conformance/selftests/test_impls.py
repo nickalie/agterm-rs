@@ -5,6 +5,7 @@ import re
 import shutil
 import signal
 import subprocess
+import threading
 import traceback
 from collections.abc import Iterator
 from pathlib import Path
@@ -1031,3 +1032,22 @@ def test_stop_reaps_a_listed_daemon_that_has_no_process_yet(
     commands = [json.loads(line)["cmd"] for line in requests_file.read_text().splitlines()]
     assert "zmx.kill" in commands
     shutil.rmtree(instance.root)
+
+
+def test_a_daemon_exiting_within_the_grace_is_not_a_leftover(
+    roots: list[Path],
+    fake_bin: Path,
+    tmp_path: Path,
+    daemons: list[subprocess.Popen[bytes]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(base, "LEFTOVER_GRACE", 5.0)
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    spawn_daemon(tmp_path, "zmx", instance.zmx_dir, daemons)
+    exiting = daemons[-1]
+    timer = threading.Timer(0.3, exiting.stdin.close)
+    timer.start()
+    adapter.stop(instance)
+    timer.join()
+    assert exiting.wait(timeout=5) == 0

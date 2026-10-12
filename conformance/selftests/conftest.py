@@ -32,3 +32,9 @@ def fake_bin(tmp_path: Path) -> Path:
     launcher.write_text(f"#!{sys.executable}\n" + FAKE_APP.read_text())
     launcher.chmod(0o755)
     return launcher
+
+
+@pytest.fixture(autouse=True)
+def short_leftover_grace(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fake daemons never exit on their own; the grace a real one gets would only slow every leftover test."""
+    monkeypatch.setattr(base, "LEFTOVER_GRACE", 0.1)

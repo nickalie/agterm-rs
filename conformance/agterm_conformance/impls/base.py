@@ -73,6 +73,7 @@ NOOP_MIME_TYPES = (
 LAUNCH_TIMEOUT = 30.0
 STOP_TIMEOUT = 10.0
 REAP_SETTLE = 8.0
+LEFTOVER_GRACE = 5.0
 POLL_INTERVAL = 0.05
 
 # The capability vocabulary `requires(...)` and `Adapter.has(...)` may name. A reason for each absence lives on the
@@ -500,7 +501,10 @@ class Adapter:
 
 
 def _leftovers_error(zmx_dir: str, steps: Iterable[str] = ()) -> LeftoverProcesses | None:
-    leftovers = find_leftovers(zmx_dir)
+    # A killed zmx daemon is confirmed gone by its socket and still exits for a moment after.
+    deadline = time.monotonic() + LEFTOVER_GRACE
+    while (leftovers := find_leftovers(zmx_dir)) and time.monotonic() < deadline:
+        threading.Event().wait(POLL_INTERVAL * 4)
     if not leftovers:
         return None
     # Cut: on macOS the command carries the whole `ps -E` environment.
