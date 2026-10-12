@@ -72,6 +72,9 @@ CAPABILITIES: Mapping[str, str] = {
     "modal-blocks-covers": "a pending GUI ask refuses control-driven covers such as `session.search` with `ask pending`",
     "pick-names-pending-ask": "`pick.open` under a pending GUI ask answers `ask already pending`, naming the ask",
     "quick-validates-input": "`quick.type` refuses a NUL, `quick.text` `--all` with `--lines` and a `--lines` below 1",
+    "sidebar-min-width": "`sidebar.width` narrows the sidebar down to the 160-point floor and reads that back",
+    "theme-slots-by-sync": "`theme.set`/`theme.list` report `theme` only while not following the system appearance, "
+    "`light`/`dark` only while following",
 }
 
 

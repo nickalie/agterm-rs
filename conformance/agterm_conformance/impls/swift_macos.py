@@ -22,6 +22,8 @@ BASE_CAPABILITIES = frozenset(
         "modal-blocks-covers",
         "pick-names-pending-ask",
         "quick-validates-input",
+        "theme-slots-by-sync",
+        "sidebar-min-width",
     }
 )
 LAUNCH_MODES = ("uitest", "plain")

@@ -437,9 +437,16 @@ events by kind, CLI by subcommand words (`cli` items carry their `wire`); exempt
 - Create: `conformance/tests/protocol/test_sidebar.py`
 - Create: `conformance/tests/protocol/test_notify.py`
 - Create: `conformance/tests/protocol/test_font_theme.py`
+- ➕ Modify: `conformance/agterm_conformance/impls/{base,swift_macos}.py` (capabilities `theme-slots-by-sync`,
+  `sidebar-min-width`: upstream behavior the Linux fork lacks)
+- ➕ Modify: `conformance/coverage-baseline.txt`
 
-- [ ] sidebar state/mode, notifications and status, `font.inc`/`font.dec`/`font.reset`, theme commands, each with read-back
-- [ ] run on reference-linux — green before task 16 (reference-macos in Task 19)
+- [x] sidebar state/mode, notifications and status, `font.inc`/`font.dec`/`font.reset`, theme commands, each with read-back
+- [x] run on reference-linux — green before task 16 (reference-macos in Task 19)
+- ➕ `session.status` and the `status` event were covered in Task 12; here `notify` is read back through `unseen` and
+  the `notify` event. ⚠️ The installed Linux fork's `theme.set` never answers once about seven sessions are mounted
+  (and the app then ignores SIGTERM); the font tests close the sessions they open. Task 16's `config.reload` runs
+  the same settings-apply path and should keep its instance as small.
 
 ### Task 16: Protocol — keymap, hooks, config, browser, surface
 

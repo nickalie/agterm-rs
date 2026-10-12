@@ -10,16 +10,6 @@ session.copy
 session.paste
 session.selectall
 session.overlay.copy
-sidebar
-sidebar.mode
-sidebar.flagged-layout
-sidebar.expand
-sidebar.collapse
-sidebar.width
-notify
-font.inc
-font.dec
-font.reset
 keymap.reload
 keymap.list
 keymap.run
@@ -28,8 +18,6 @@ hooks.list
 browser.clear
 browser.links
 config.reload
-theme.set
-theme.list
 restore.clear
 restore.capture
 restore.mode
@@ -43,12 +31,6 @@ zmx.screen
 session.overlay.job.run
 
 # fields
-field:result.theme
-field:result.themes
-field:result.sidebarWidth
-field:result.sync
-field:result.light
-field:result.dark
 field:result.keymap
 field:result.hooks
 field:result.cursor
@@ -59,7 +41,6 @@ field:result.liveReset
 field:result.restart
 field:tree.idleMs
 field:tree.autoFollowMs
-field:tree.sidebarWidth
 field:tree.liveReset
 field:tree.indexUnsaved
 field:tree.session.title
@@ -73,9 +54,6 @@ field:tree.session.splitForeground
 field:tree.session.foregroundShell
 field:tree.session.splitForegroundShell
 field:tree.session.splitRestoreCommand
-field:tree.session.fontSize
-field:tree.session.splitFontSize
-field:tree.session.scratchFontSize
 field:tree.session.remoteHost
 field:tree.session.presentation
 field:tree.session.presenters
@@ -83,7 +61,6 @@ field:tree.session.remoteOverlays
 field:window.autoFollowMs
 
 # events
-event:notify
 event:remote.opened
 event:remote.closed
 
