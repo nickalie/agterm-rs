@@ -9,13 +9,15 @@ use serde_with::skip_serializing_none;
 
 use crate::command::Command;
 
-/// Cap on a request line in bytes, newline excluded. Over it the server rejects the line and closes the
-/// connection; the client checks the same cap before writing.
+/// Cap on a request line in bytes, newline excluded (upstream's `ControlWire.maxRequestLineBytes`). Over it the
+/// server answers `request too large or read failed` and closes the connection; the client checks the same cap
+/// before writing.
 pub const MAX_REQUEST_LINE_BYTES: usize = 1 << 20;
 
 /// Implements `Serialize` and `Deserialize` for wire records whose derives carry `#[serde(remote = "Self")]`, so they
 /// decode from a JSON object only. A derived struct deserializer also takes a positional array
-/// (`["session.close", "active", null]`), which the Swift fork's `JSONDecoder` refuses; going through
+/// (`["session.close", "active", null]`), which upstream's `JSONDecoder` refuses for its keyed `Codable` structs
+/// (`ControlRequest`, `ControlArgs` in `agtermCore/Sources/agtermCore/ControlProtocol.swift`); going through
 /// `deserialize_map` makes that a decode error. The derived inherent `deserialize` stays lax: decode through the
 /// trait (`serde_json::from_str`), never by calling `Request::deserialize` as a path.
 macro_rules! object_only_serde {

@@ -1,5 +1,6 @@
-//! Control errors. Each variant's `Display` is the wire `error` string, verbatim from the Swift fork
-//! (`ControlResolve.swift`, `ControlServer.swift`, `ControlActionsDefaults.swift`) unless noted.
+//! Control errors. Each variant's `Display` is the wire `error` string, verbatim from upstream agterm
+//! (`agtermCore/Sources/agtermCore/ControlResolve.swift`, `HtmlBridge.swift`, `ControlActionsDefaults.swift`,
+//! `agterm/Control/ControlServer.swift`) unless noted.
 
 use agterm_proto::{Command, Response};
 
@@ -32,10 +33,16 @@ impl std::fmt::Display for Noun {
 /// A failed control request. Converts into an `ok:false` [`Response`] carrying the `Display` text.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ControlError {
+    /// The request line could not be read: EOF before any byte, a read error or timeout, the overall read deadline,
+    /// or a line over `MAX_REQUEST_LINE_BYTES` (`handleConnection` in `ControlServer.swift`).
+    #[error("request too large or read failed")]
+    UnreadableRequest,
+
     /// The request line is not JSON, not an object, names no known command, or has a field of the wrong type
-    /// (`protocol.malformed-request`). The fork's text; upstream's differs and the suite checks neither.
-    #[error("could not decode request")]
-    MalformedRequest,
+    /// (`protocol.malformed-request`). The prefix is upstream's `ControlWire.invalidRequestMessage`; the context is
+    /// the decoder's (see [`crate::decode_request`]).
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
 
     /// A target matched nothing.
     #[error("no such {noun}: {target}")]
@@ -61,7 +68,8 @@ pub enum ControlError {
     #[error("the app is shutting down")]
     ShuttingDown,
 
-    /// A result could not be serialized. Rust build only: the fork writes nothing at all in that case.
+    /// A result could not be serialized. Rust build only: upstream's `writeResponse` writes nothing at all in that
+    /// case.
     #[error("could not encode response")]
     Encode,
 }
@@ -87,9 +95,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn messages_match_the_fork() {
+    fn messages_are_the_wire_strings() {
         let cases = [
-            (ControlError::MalformedRequest, "could not decode request"),
+            (ControlError::UnreadableRequest, "request too large or read failed"),
+            (
+                ControlError::InvalidRequest("The given data was not valid JSON.".to_owned()),
+                "invalid request: The given data was not valid JSON.",
+            ),
             (
                 ControlError::NotFound {
                     noun: Noun::Session,

@@ -10,8 +10,8 @@ use agterm_proto::Response;
 /// Takes over a connection after its `ok` response was written.
 pub trait StreamOwner: Send {
     /// Owns `stream` from here on, on the connection's own thread; it may block for the stream's whole life and closes
-    /// the stream by dropping it. `pending` holds bytes the client sent after the request line that the server already
-    /// read.
+    /// the stream by dropping it. The stream comes without read or write timeouts: the owner sets its own. `pending`
+    /// holds bytes the client sent after the request line that the server already read.
     fn adopt(self: Box<Self>, stream: UnixStream, pending: Vec<u8>);
 
     /// The connection never reached the owner: the response was a failure or could not be written. The default does

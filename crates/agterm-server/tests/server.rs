@@ -10,14 +10,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, ThreadId};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agterm_core::paths::ownership_lock_path;
-use agterm_core::{Core, CoreConfig};
+use agterm_core::{Core, CoreConfig, decode_request};
 use agterm_host::MainLoop;
 use agterm_host::fakes::FakeMainLoop;
 use agterm_proto::{AppIdentity, MAX_REQUEST_LINE_BYTES, Request, Response, VersionResult};
-use agterm_server::{ControlServer, MAX_SOCKET_PATH_BYTES, Reply, ServerError, StreamOwner};
+use agterm_server::{ConnectionDeadlines, ControlServer, MAX_SOCKET_PATH_BYTES, Reply, ServerError, StreamOwner};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -25,6 +25,10 @@ type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(20);
 const VERSION: &[u8] = br#"{"cmd":"version"}"#;
+/// Upstream's answer to a request line that cannot be read.
+const UNREADABLE: &str = "request too large or read failed";
+/// A response well over what an `AF_UNIX` socket buffers, so writing it blocks on a client that does not read.
+const BIG_RESPONSE_BYTES: usize = 4 << 20;
 
 /// A short temp dir: socket paths must stay under 104 bytes whatever `TMPDIR` is.
 fn short_dir() -> io::Result<TempDir> {
@@ -58,10 +62,18 @@ where
     S: Send + 'static,
     H: Fn(&mut S, Request) -> Reply + Send + Sync + 'static,
 {
+    start_with(state, handler, ConnectionDeadlines::default())
+}
+
+fn start_with<S, H>(state: S, handler: H, deadlines: ConnectionDeadlines) -> TestResult<Fixture<S>>
+where
+    S: Send + 'static,
+    H: Fn(&mut S, Request) -> Reply + Send + Sync + 'static,
+{
     let dir = short_dir()?;
     let socket = dir.path().join("agterm.sock");
     let main_loop = Arc::new(FakeMainLoop::spawn(state)?);
-    let mut server = ControlServer::new(&socket);
+    let mut server = ControlServer::new(&socket).with_deadlines(deadlines);
     server.start(Arc::clone(&main_loop) as Arc<dyn MainLoop<S>>, handler)?;
     Ok(Fixture {
         server,
@@ -177,8 +189,15 @@ fn malformed_requests_get_the_decode_error() -> TestResult {
         br#"{"cmd":"events.read","args":{"limit":"5"}}"#,
     ] {
         let response = answer(&fixture.socket, line)?;
-        assert_eq!(response, Response::failure("could not decode request"), "{line:?}");
+        let error = decode_request(line).err().ok_or("decoded")?;
+        assert_eq!(response, Response::from(error), "{line:?}");
+        let text = response.error.ok_or("no error text")?;
+        assert!(text.starts_with("invalid request: "), "{text}");
     }
+    assert_eq!(
+        answer(&fixture.socket, br#"{"cmd":"session.nope"}"#)?,
+        Response::failure("invalid request: Cannot initialize Command from invalid String value session.nope")
+    );
     assert_version_ok(&fixture.socket)
 }
 
@@ -217,10 +236,150 @@ fn request_line_limit_is_inclusive() -> TestResult {
         // the server stops reading at the cap, so this write may fail with a broken pipe
         thread::spawn(move || stream.write_all(&vec![b'a'; MAX_REQUEST_LINE_BYTES + 1]).is_ok())
     };
-    assert_eq!(read_response(&stream)?, None);
+    assert_eq!(read_response(&stream)?, Some(Response::failure(UNREADABLE)));
     writer.join().map_err(|_| "writer panicked")?;
     stream.shutdown(Shutdown::Both).ok();
     assert_version_ok(&fixture.socket)
+}
+
+#[test]
+fn empty_connection_is_answered_before_it_closes() -> TestResult {
+    let fixture = start_core()?;
+    let stream = connect(&fixture.socket)?;
+    stream.shutdown(Shutdown::Write)?;
+    assert_eq!(read_response(&stream)?, Some(Response::failure(UNREADABLE)));
+    assert_version_ok(&fixture.socket)
+}
+
+#[test]
+fn idle_connection_is_answered_at_the_read_timeout() -> TestResult {
+    let fixture = start_with(
+        core(),
+        core_handler(),
+        ConnectionDeadlines {
+            read_timeout: Duration::from_millis(100),
+            ..ConnectionDeadlines::default()
+        },
+    )?;
+    let started = Instant::now();
+    let mut stream = connect(&fixture.socket)?;
+    stream.write_all(br#"{"cmd":"#)?;
+    assert_eq!(read_response(&stream)?, Some(Response::failure(UNREADABLE)));
+    // well before the 10 s overall deadline
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    Ok(())
+}
+
+#[test]
+fn trickle_past_the_read_deadline_is_answered() -> TestResult {
+    // the per-read timeout never trips on a byte every 20 ms; only the overall deadline ends the read
+    let fixture = start_with(
+        core(),
+        core_handler(),
+        ConnectionDeadlines {
+            read_timeout: Duration::from_secs(30),
+            read_deadline: Duration::from_millis(300),
+            ..ConnectionDeadlines::default()
+        },
+    )?;
+    let started = Instant::now();
+    let stream = connect(&fixture.socket)?;
+    let done = Arc::new(AtomicBool::new(false));
+    let trickle = {
+        let mut stream = stream.try_clone()?;
+        let done = Arc::clone(&done);
+        thread::spawn(move || {
+            while !done.load(Ordering::SeqCst) && stream.write_all(b" ").is_ok() {
+                thread::sleep(Duration::from_millis(20));
+            }
+        })
+    };
+    let response = read_response(&stream);
+    done.store(true, Ordering::SeqCst);
+    trickle.join().map_err(|_| "trickle panicked")?;
+    assert_eq!(response?, Some(Response::failure(UNREADABLE)));
+    assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+    Ok(())
+}
+
+/// A handler whose `ok` reply is too big to fit the socket buffer and claims the connection, so a write that never
+/// completes shows as the owner being abandoned.
+fn start_big_reply(deadlines: ConnectionDeadlines, abandoned: &Arc<AtomicBool>) -> TestResult<Fixture<()>> {
+    let flag = Arc::clone(abandoned);
+    start_with(
+        (),
+        move |(), _: Request| {
+            let response = Response::with_result(json!("x".repeat(BIG_RESPONSE_BYTES)));
+            Reply::streaming(response, Box::new(Abandoned(Arc::clone(&flag))))
+        },
+        deadlines,
+    )
+}
+
+/// Waits until `flag` is set; the time it took.
+fn wait_for(flag: &AtomicBool) -> TestResult<Duration> {
+    let started = Instant::now();
+    while !flag.load(Ordering::SeqCst) {
+        if started.elapsed() > CLIENT_TIMEOUT {
+            return Err("the flag was never set".into());
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    Ok(started.elapsed())
+}
+
+#[test]
+fn stalled_reader_times_the_response_write_out() -> TestResult {
+    let abandoned = Arc::new(AtomicBool::new(false));
+    let fixture = start_big_reply(
+        ConnectionDeadlines {
+            write_timeout: Duration::from_millis(100),
+            write_deadline: Duration::from_secs(30),
+            ..ConnectionDeadlines::default()
+        },
+        &abandoned,
+    )?;
+    let mut stream = connect(&fixture.socket)?;
+    stream.write_all(VERSION)?;
+    stream.write_all(b"\n")?;
+    // the client never reads; one write stalls past its timeout, long before the overall deadline
+    let waited = wait_for(&abandoned)?;
+    assert!(waited < Duration::from_secs(10), "{waited:?}");
+    Ok(())
+}
+
+#[test]
+fn slow_drip_reader_hits_the_write_deadline() -> TestResult {
+    let abandoned = Arc::new(AtomicBool::new(false));
+    let fixture = start_big_reply(
+        ConnectionDeadlines {
+            write_timeout: Duration::from_secs(30),
+            write_deadline: Duration::from_millis(300),
+            ..ConnectionDeadlines::default()
+        },
+        &abandoned,
+    )?;
+    let mut stream = connect(&fixture.socket)?;
+    stream.write_all(VERSION)?;
+    stream.write_all(b"\n")?;
+    // every write makes progress, so only the overall deadline ends the response
+    let drip = {
+        let mut stream = stream.try_clone()?;
+        thread::spawn(move || {
+            let mut chunk = [0_u8; 4096];
+            let mut total = 0;
+            while let Ok(read @ 1..) = stream.read(&mut chunk) {
+                total += read;
+                thread::sleep(Duration::from_millis(10));
+            }
+            total
+        })
+    };
+    let waited = wait_for(&abandoned)?;
+    assert!(waited < Duration::from_secs(10), "{waited:?}");
+    let drained = drip.join().map_err(|_| "drip panicked")?;
+    assert!(drained < BIG_RESPONSE_BYTES, "{drained}");
+    Ok(())
 }
 
 fn socket_path_of(dir: &Path, len: usize) -> TestResult<PathBuf> {

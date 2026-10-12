@@ -1,5 +1,5 @@
-//! `agtermctl version` (`MiscCommands.swift` `Version`): the serving app's `version (commit)`, then this CLI's own
-//! executable.
+//! `agtermctl version` (`agtermctlKit/MiscCommands.swift` `Version`): the serving app's `version (commit)`, then this
+//! CLI's own executable.
 
 use std::path::PathBuf;
 use std::{env, fs};
@@ -9,8 +9,9 @@ use agterm_proto::{Command, Request};
 
 use crate::{BasicOptions, Failure, RequestCommand};
 
-/// Print the version of the app serving the socket.
+/// `agtermctl version [--socket <socket>] [--json]`.
 #[derive(Debug, clap::Args)]
+#[command(about = "Print the version of the app serving the socket.")]
 pub struct Version {
     #[command(flatten)]
     options: BasicOptions,

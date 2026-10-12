@@ -1,9 +1,12 @@
 //! Which socket `agtermctl` talks to, and what a failed connect says about the instance behind it.
 //!
-//! Resolution is `BasicOptions.socketPath` of the fork (`Commands.swift` over `ControlResolve.socketPath`):
-//! `--socket`, then `<AGTERM_STATE_DIR>/agterm.sock`, then `<XDG data home>/agterm/agterm.sock`, then
-//! `/tmp/agterm/agterm.sock`. The CLI shares the app's state-dir code but never reads the app's socket variables:
-//! neither `AGTERM_CONTROL_SOCKET` nor a pane's `AGTERM_SOCKET` routes a command anywhere.
+//! Resolution is upstream's `BasicOptions.socketPath` (`agtermctlKit/Commands.swift`, over
+//! `ControlResolve.socketPath`): `--socket`, then `<AGTERM_STATE_DIR>/agterm.sock`, then the state directory's default,
+//! then `/tmp/agterm/agterm.sock`. Upstream's default is macOS's `~/Library/Application Support/agterm`; the Linux one
+//! is `<XDG data home>/agterm` (Linux glue: Foundation's application support directory on Linux, which the fork's
+//! `PersistenceStore.defaultDirectory` resolves). The CLI shares the app's state-dir code but, as upstream's, never
+//! reads the app's socket variables: neither `AGTERM_CONTROL_SOCKET` nor a pane's `AGTERM_SOCKET` routes a command
+//! anywhere.
 
 use std::fs;
 use std::os::unix::fs::MetadataExt;

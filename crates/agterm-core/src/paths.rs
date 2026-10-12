@@ -1,5 +1,11 @@
-//! Where state lives: the state directory and the control socket, resolved as the Swift fork does
-//! (`PersistenceStore.defaultDirectory`, `linuxStateDirectory()` in `App.swift`, `ControlResolve.socketPath`).
+//! Where state lives: the state directory and the control socket, in upstream's precedence
+//! (`ControlServer.defaultSocketPath` in `agterm/Control/ControlServer.swift`: `AGTERM_CONTROL_SOCKET`, else
+//! `ControlResolve.socketPath` over `AGTERM_STATE_DIR` or `PersistenceStore.defaultDirectory`).
+//!
+//! The Linux base is glue taken from the Linux fork: `PersistenceStore.defaultDirectory` is Foundation's application
+//! support directory, which on Linux is the XDG data home, and an empty variable counts as unset, as the fork's
+//! `linuxStateDirectory()` (`agterm-linux/Sources/AgtermLinux/App.swift`) treats `AGTERM_STATE_DIR`; upstream would
+//! take an empty value as given.
 //!
 //! Every function reads the environment through [`Env`], so tests pass a [`MapEnv`] instead of mutating the
 //! process environment.

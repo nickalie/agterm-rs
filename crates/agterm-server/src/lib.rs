@@ -1,12 +1,18 @@
 //! agterm's control server: an `AF_UNIX` stream socket answering one JSON request line per connection.
 //!
-//! Ported from the fork's `ControlServer.swift`:
+//! Ported from upstream's `agterm/Control/ControlServer.swift` (contract in `.claude/rules/control-api.md` >
+//! Transport and addressing):
 //! - ownership: an exclusive `flock` on `<socket>.lock`, taken in [`ControlServer::new`] (before any shell is
 //!   spawned, so `AGTERM_SOCKET` is right from the start) and kept until [`ControlServer::stop`]; a refused instance
 //!   never unlinks or binds the path and advertises `<socket>.unavailable` instead;
-//! - one thread per connection; the request hops to the main loop through [`agterm_host::MainLoop`], the handler's
-//!   panic becomes `ok:false`;
-//! - a reply may hand the connection to a [`StreamOwner`] after its `ok` (see [`stream`]).
+//! - each connection reads one line and writes one response within [`ConnectionDeadlines`]; a line that cannot be
+//!   read is answered `request too large or read failed`, one that does not decode `invalid request: <context>`;
+//! - the request hops to the main loop through [`agterm_host::MainLoop`];
+//! - a reply may hand the connection to a [`StreamOwner`] after its `ok` (see [`stream`]), as upstream hands
+//!   `zmx.present` and `session.overlay.job.run` connections to their stream owners.
+//!
+//! Rust-only: each connection gets its own thread, where upstream serves connections one at a time on its accept
+//! queue and gives a thread only to the commands that wait on the network; a handler's panic becomes `ok:false`.
 
 mod connection;
 pub mod stream;
@@ -26,10 +32,12 @@ use agterm_core::paths::{ownership_lock_path, unavailable_socket_path};
 use agterm_host::MainLoop;
 use agterm_proto::Request;
 
+pub use crate::connection::ConnectionDeadlines;
 use crate::connection::Hop;
 pub use crate::stream::{Reply, StreamOwner};
 
-/// A socket path must be shorter than this many bytes (the macOS `sun_path` size the fork keeps on Linux too).
+/// A socket path must be shorter than this many bytes: upstream's `start` guard (`socketPath.utf8.count < 104`, the
+/// macOS `sun_path` size), kept on Linux although its `sun_path` holds 108.
 pub const MAX_SOCKET_PATH_BYTES: usize = 104;
 
 /// Why the server is not serving.
@@ -65,6 +73,7 @@ struct Running {
 pub struct ControlServer {
     socket: PathBuf,
     ownership: Ownership,
+    deadlines: ConnectionDeadlines,
     running: Option<Running>,
 }
 
@@ -161,8 +170,17 @@ impl ControlServer {
         Self {
             socket,
             ownership,
+            deadlines: ConnectionDeadlines::default(),
             running: None,
         }
+    }
+
+    /// Serves every connection within `deadlines` instead of upstream's defaults; a running server takes them at its
+    /// next [`ControlServer::start`].
+    #[must_use]
+    pub fn with_deadlines(mut self, deadlines: ConnectionDeadlines) -> Self {
+        self.deadlines = deadlines;
+        self
     }
 
     /// The socket path this server owns or tried to.
@@ -220,6 +238,7 @@ impl ControlServer {
         let hop = Arc::new(Hop {
             main_loop,
             handler: Arc::new(handler),
+            deadlines: self.deadlines,
         });
         let stop = Arc::new(AtomicBool::new(false));
         let thread = thread::Builder::new()

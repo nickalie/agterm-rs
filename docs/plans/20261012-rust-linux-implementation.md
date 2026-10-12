@@ -381,35 +381,38 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 - Modify: `crates/agterm-server/src/{lib,connection}.rs`, `crates/agterm-server/tests/server.rs`
 - Modify: `crates/agterm-ctl/src/{main,output,socket}.rs`, `crates/agterm-ctl/tests/cli.rs`
 
-- [ ] libghostty at upstream v0.36.0's `GHOSTTY_REV` (683d8db, `scripts/setup.sh`) built with Zig 0.16.0 (the zmx
+- [x] libghostty at upstream v0.36.0's `GHOSTTY_REV` (683d8db, `scripts/setup.sh`) built with Zig 0.16.0 (the zmx
       one, so `GHOSTTY_ZIG_*` pins follow): carry the three Linux patches onto it, re-checking each is still needed
       and that the input-handoff one still synchronizes with the renderer state; refresh the themes pin and resource
       checks for that revision, regenerate the bindings, rebuild the prefix (background) and rerun the
-      `agterm-ghostty` tests; fallback per Technical Details > Toolchains
-- [ ] an undecodable request answers `invalid request: <context>` (`ControlWire.invalidRequestMessage`,
+      `agterm-ghostty` tests; fallback per Technical Details > Toolchains (no fallback needed: all three patches
+      still needed and rebased with `--fuzz=0`, the input handoff onto 0.16's `std.Io` futex API, the glad hunk
+      onto `root_module`; themes 602 from the 20260810 archive; bindings regenerated, plus
+      `ghostty_surface_deny_clipboard_request` that the new clipboard read contract requires)
+- [x] an undecodable request answers `invalid request: <context>` (`ControlWire.invalidRequestMessage`,
       `agtermCore/Sources/agtermCore/HtmlBridge.swift`; `control-api.md` > Transport), not the fork's
       `could not decode request`: the `invalid request: ` prefix always (`HtmlBridgeTests`), an unknown command
       named in the context as Foundation's `Cannot initialize Command from invalid String value <cmd>`, the other
       decode failures with the decoder's own context
-- [ ] a request line that cannot be read (EOF before any byte, a read error or timeout, a line over 1 MiB) is
+- [x] a request line that cannot be read (EOF before any byte, a read error or timeout, a line over 1 MiB) is
       answered `{"ok":false,"error":"request too large or read failed"}` before the connection closes, as upstream's
       `handleConnection` (`agterm/Control/ControlServer.swift`); the server now closes without a reply
-- [ ] upstream's connection deadlines: 10 s overall for the request read on top of the 5 s per-read timeout (a
+- [x] upstream's connection deadlines: 10 s overall for the request read on top of the 5 s per-read timeout (a
       byte-a-second client never trips the latter), 5 s per write and 10 s overall for the response write
       (`readDeadlineSeconds`, `writeTimeoutSeconds`, `writeDeadlineSeconds`)
-- [ ] `agtermctl` usage errors and help in swift-argument-parser's format (upstream's CLI is an `ArgumentParser`
+- [x] `agtermctl` usage errors and help in swift-argument-parser's format (upstream's CLI is an `ArgumentParser`
       tree): the usage line spells the options (`Usage: agtermctl version [--socket <socket>] [--json]`, not clap's
       `[OPTIONS]`), messages use its wording (`Unknown option '--bogus'`, `Missing expected argument '<id>'`,
       `Unexpected argument 'x'`, `The value 'x' is invalid for '--mode <mode>'`), and help uses its
       `OVERVIEW:`/`USAGE:`/`OPTIONS:`/`SUBCOMMANDS:` layout with `-h, --help  Show help information.`; one
       formatter later command groups inherit
-- [ ] doc comments and test names that cite the fork as the source (`messages_match_the_fork`, "verbatim from the
+- [x] doc comments and test names that cite the fork as the source (`messages_match_the_fork`, "verbatim from the
       Swift fork", "as the fork's per-read poll", `paths.rs` "as the Swift fork does") re-pointed at the upstream
       files; the Linux-only parts (XDG data home, `/proc/locks`) keep their fork reference as Linux glue
-- [ ] write tests: each malformed-request case of `test_addressing.py::test_undecodable_request_is_refused` against
+- [x] write tests: each malformed-request case of `test_addressing.py::test_undecodable_request_is_refused` against
       the dispatcher's full text; the unreadable-line reply (empty connection, oversized line, slow trickle past the
       overall deadline); a stalled reader times the response write out; the CLI usage-error and help texts
-- [ ] run `cargo test --workspace` and `cargo clippy --workspace --all-targets --all-features -- -D warnings`; both
+- [x] run `cargo test --workspace` and `cargo clippy --workspace --all-targets --all-features -- -D warnings`; both
       must pass before Task 5
 
 ### Task 5: Rust runner, ratchet, dev launcher, lint report and the cargo CI job

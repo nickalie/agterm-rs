@@ -386,12 +386,16 @@ impl fmt::Display for Command {
 }
 
 /// A `cmd` that names no command. A request carrying one fails to decode as a whole.
+///
+/// The text is the context Foundation's `JSONDecoder` gives a `String`-backed enum it cannot initialize (upstream's
+/// `Command` in `agtermCore/Sources/agtermCore/ControlProtocol.swift`), so a refused request names its `cmd` as
+/// upstream's does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownCommand(pub String);
 
 impl fmt::Display for UnknownCommand {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unknown command {}", self.0)
+        write!(f, "Cannot initialize Command from invalid String value {}", self.0)
     }
 }
 
@@ -438,6 +442,10 @@ mod tests {
                 "{name:?}"
             );
         }
+        assert_eq!(
+            UnknownCommand("nope.list".to_owned()).to_string(),
+            "Cannot initialize Command from invalid String value nope.list"
+        );
     }
 
     #[test]

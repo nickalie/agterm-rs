@@ -59,7 +59,8 @@ fn serve_core(socket: &Path) -> TestResult<Server<Core>> {
     })
 }
 
-/// The isolated environment every run gets: no `AGTERM_*` from the caller, a home and data dir under `root`.
+/// The isolated environment every run gets: no `AGTERM_*` or `COLUMNS` from the caller (help wraps at 80 on a pipe),
+/// a home and data dir under `root`.
 fn isolated(root: &Path) -> Vec<(String, PathBuf)> {
     vec![
         ("HOME".to_owned(), root.join("home")),
@@ -75,7 +76,7 @@ where
 {
     let mut command = Command::new(AGTERMCTL);
     for (name, _) in std::env::vars_os() {
-        if name.to_string_lossy().starts_with("AGTERM_") {
+        if name.to_string_lossy().starts_with("AGTERM_") || name == "COLUMNS" {
             command.env_remove(name);
         }
     }
@@ -279,23 +280,111 @@ fn a_server_refusal_exits_1() -> TestResult {
     Ok(())
 }
 
+const VERSION_USAGE: &str =
+    "Usage: agtermctl version [--socket <socket>] [--json]\n  See 'agtermctl version --help' for more information.\n";
+const ROOT_USAGE: &str = "Usage: agtermctl <subcommand>\n  See 'agtermctl --help' for more information.\n";
+
 #[test]
-fn usage_errors_exit_64_before_connecting() -> TestResult {
+fn usage_errors_are_reported_as_upstream_before_connecting() -> TestResult {
     let dir = short_dir()?;
-    for args in [
-        &["version", "--bogus"][..],
-        &["version", "extra"],
-        &["version", "--socket"],
-        &["--socket", "/tmp/x.sock", "version"],
-        &["--json", "version"],
-        &["bogus"],
-    ] {
-        let output = run(dir.path(), &[], args)?;
-        let (code, stdout, stderr) = outcome(&output);
-        assert_eq!((code, stdout.as_str()), (Some(64), ""), "{args:?}: {stderr}");
-        assert!(stderr.starts_with("Error: "), "{args:?}: {stderr}");
-        assert!(stderr.contains("\nUsage: agtermctl "), "{args:?}: {stderr}");
+    let cases: [(&[&str], &str, &str); 9] = [
+        (&["version", "--bogus"], "Unknown option '--bogus'\n", VERSION_USAGE),
+        (
+            &["version", "--jsn"],
+            "Unknown option '--jsn'. Did you mean '--json'?\n",
+            VERSION_USAGE,
+        ),
+        (&["version", "extra"], "Unexpected argument 'extra'\n", VERSION_USAGE),
+        (
+            &["version", "extra", "more"],
+            "2 unexpected arguments: 'extra', 'more'\n",
+            VERSION_USAGE,
+        ),
+        (
+            &["version", "--socket"],
+            "Missing value for '--socket <socket>'\nHelp:  --socket <socket>  Override the control socket path.\n",
+            VERSION_USAGE,
+        ),
+        (
+            &["version", "--json=3"],
+            "The option '--json' does not take any value, but '3' was specified.\n",
+            VERSION_USAGE,
+        ),
+        (
+            &["--socket", "/tmp/x.sock", "version"],
+            "Unknown option '--socket'\n",
+            ROOT_USAGE,
+        ),
+        (&["--json", "version"], "Unknown option '--json'\n", ROOT_USAGE),
+        (&["bogus"], "Unexpected argument 'bogus'\n", ROOT_USAGE),
+    ];
+    for (args, message, usage) in cases {
+        let expected = format!("Error: {message}{usage}");
+        assert_eq!(
+            outcome(&run(dir.path(), &[], args)?),
+            (Some(64), String::new(), expected),
+            "{args:?}"
+        );
     }
+    Ok(())
+}
+
+const ROOT_HELP: &str = "\
+OVERVIEW: Drive agterm over its control socket, and install its terminfo entry
+on other hosts.
+
+USAGE: agtermctl <subcommand>
+
+OPTIONS:
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  version                 Print the version of the app serving the socket.
+
+  See 'agtermctl help <subcommand>' for detailed help.
+";
+
+const VERSION_HELP: &str = "\
+OVERVIEW: Print the version of the app serving the socket.
+
+USAGE: agtermctl version [--socket <socket>] [--json]
+
+OPTIONS:
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  -h, --help              Show help information.
+
+";
+
+#[test]
+fn help_goes_to_stdout_in_the_argument_parser_layout() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], &str); 8] = [
+        (&[], ROOT_HELP),
+        (&["--help"], ROOT_HELP),
+        (&["help"], ROOT_HELP),
+        (&["bogus", "--help"], ROOT_HELP),
+        (&["version", "--help"], VERSION_HELP),
+        (&["version", "-h"], VERSION_HELP),
+        (&["help", "version"], VERSION_HELP),
+        (&["version", "--bogus", "--help"], VERSION_HELP),
+    ];
+    for (args, help) in cases {
+        assert_eq!(
+            outcome(&run(dir.path(), &[], args)?),
+            (Some(0), help.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn help_wraps_to_the_columns_variable() -> TestResult {
+    let dir = short_dir()?;
+    let output = run(dir.path(), &[("COLUMNS", Path::new("200"))], ["--help"])?;
+    let overview = "OVERVIEW: Drive agterm over its control socket, and install its terminfo entry on other hosts.\n\n";
+    assert!(text(&output.stdout).starts_with(overview), "{}", text(&output.stdout));
     Ok(())
 }
 
@@ -325,18 +414,6 @@ fn a_closed_stdout_ends_the_run_by_sigpipe_not_a_panic() -> TestResult {
             output.status
         );
         assert_eq!(text(&output.stderr), "", "{args:?}");
-    }
-    Ok(())
-}
-
-#[test]
-fn help_goes_to_stdout() -> TestResult {
-    let dir = short_dir()?;
-    for args in [&[][..], &["--help"], &["version", "--help"], &["help", "version"]] {
-        let output = run(dir.path(), &[], args)?;
-        let (code, stdout, stderr) = outcome(&output);
-        assert_eq!((code, stderr.as_str()), (Some(0), ""), "{args:?}");
-        assert!(stdout.contains("Usage: agtermctl"), "{args:?}: {stdout}");
     }
     Ok(())
 }

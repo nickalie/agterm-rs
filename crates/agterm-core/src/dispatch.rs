@@ -2,6 +2,7 @@
 
 use agterm_proto::{AppIdentity, Command, ConformanceProfile, PARITY_LEVEL, Request, Response, VersionResult};
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::error::ControlError;
 
@@ -22,13 +23,29 @@ pub struct Core {
     capabilities: Vec<String>,
 }
 
-/// Decodes one request line (newline excluded).
+/// Foundation's context for data that does not parse as JSON (swift-foundation's `JSONDecoder.decode`), whatever the
+/// syntax error; upstream's socket answers it for a line that is not JSON at all.
+const NOT_JSON: &str = "The given data was not valid JSON.";
+
+/// Decodes one request line (newline excluded), as upstream's `handleConnection` decodes a `ControlRequest`
+/// (`agterm/Control/ControlServer.swift`).
 ///
 /// # Errors
 ///
-/// [`ControlError::MalformedRequest`] for anything that is not a well-typed request object naming a known command.
+/// [`ControlError::InvalidRequest`] for anything that is not a well-typed request object naming a known command. Its
+/// context is the decoder's: Foundation's own sentence for a line that is not JSON and for an unknown `cmd`, serde's
+/// message for the rest (a missing `cmd`, a value of the wrong type, a non-object). An unknown `cmd` wins over every
+/// other defect, as Foundation decodes `cmd` first; that keeps the command an old app does not know named in the
+/// error, whatever else the newer client sent.
 pub fn decode_request(line: &[u8]) -> Result<Request, ControlError> {
-    serde_json::from_slice(line).map_err(|_| ControlError::MalformedRequest)
+    let value: Value = serde_json::from_slice(line).map_err(|_| ControlError::InvalidRequest(NOT_JSON.to_owned()))?;
+    if let Some(Value::String(cmd)) = value.get("cmd")
+        && let Err(unknown) = cmd.parse::<Command>()
+    {
+        return Err(ControlError::InvalidRequest(unknown.to_string()));
+    }
+    // from a parsed value, serde's messages carry no line and column, as Foundation's context carries none
+    serde_json::from_value(value).map_err(|error| ControlError::InvalidRequest(error.to_string()))
 }
 
 fn result_of(value: &impl Serialize) -> Result<Response, ControlError> {
@@ -152,20 +169,63 @@ mod tests {
         }
     }
 
+    /// The cases of `test_undecodable_request_is_refused` (`conformance/tests/protocol/test_addressing.py`), with the
+    /// full text the suite leaves open.
     #[test]
-    fn undecodable_lines_are_malformed_requests() {
+    fn undecodable_requests_answer_invalid_request_with_the_decoder_context() {
         let mut core = core();
-        for line in [
-            &b"not json"[..],
-            b"",
-            b"[]",
-            br#"{"cmd":"no.such.command"}"#,
-            br#"{"target":"active"}"#,
-            br#"{"cmd":"version","target":5}"#,
-            br#"{"cmd":"events.read","args":{"limit":"5"}}"#,
+        for (line, error) in [
+            (
+                &br#"{"cmd":"no.such.command"}"#[..],
+                "invalid request: Cannot initialize Command from invalid String value no.such.command",
+            ),
+            (b"not json", "invalid request: The given data was not valid JSON."),
+            (br#"{"target":"active"}"#, "invalid request: missing field `cmd`"),
+            (
+                b"[]",
+                "invalid request: invalid type: sequence, expected a JSON object (Request)",
+            ),
+            (
+                br#"{"cmd":"version","target":5}"#,
+                "invalid request: invalid type: integer `5`, expected a string",
+            ),
+            (
+                br#"{"cmd":"events.read","args":{"limit":"5"}}"#,
+                r#"invalid request: invalid type: string "5", expected i64"#,
+            ),
         ] {
-            let response = core.dispatch_line(line);
-            assert_eq!(response, Response::failure("could not decode request"), "{line:?}");
+            assert_eq!(core.dispatch_line(line), Response::failure(error), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn other_decode_failures_carry_their_context() {
+        let mut core = core();
+        for (line, error) in [
+            (&b""[..], "invalid request: The given data was not valid JSON."),
+            (
+                br#"{"cmd":"version"} trailing"#,
+                "invalid request: The given data was not valid JSON.",
+            ),
+            (
+                br#"{"cmd":5}"#,
+                "invalid request: invalid type: integer `5`, expected a string",
+            ),
+            (
+                br#"{"cmd":"version","args":["x"]}"#,
+                "invalid request: invalid type: sequence, expected a JSON object (Args)",
+            ),
+            (
+                br#"{"cmd":"pick.open","args":{"items":[{"id":"1"}]}}"#,
+                "invalid request: missing field `label`",
+            ),
+            // Foundation decodes `cmd` first, so an unknown one is named even next to another defect
+            (
+                br#"{"args":{"limit":"5"},"cmd":"session.nope","target":5}"#,
+                "invalid request: Cannot initialize Command from invalid String value session.nope",
+            ),
+        ] {
+            assert_eq!(core.dispatch_line(line), Response::failure(error), "{line:?}");
         }
         assert!(core.dispatch_line(br#"{"cmd":"version","args":{"bogus":1}}"#).ok);
     }

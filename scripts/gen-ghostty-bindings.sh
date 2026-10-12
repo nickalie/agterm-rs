@@ -23,7 +23,8 @@ FUNCTIONS=(
   ghostty_surface_foreground_pid ghostty_surface_set_color_scheme ghostty_surface_key ghostty_surface_text
   ghostty_surface_feed ghostty_surface_preedit ghostty_surface_mouse_button ghostty_surface_mouse_pos
   ghostty_surface_mouse_scroll ghostty_surface_ime_point ghostty_surface_binding_action
-  ghostty_surface_complete_clipboard_request ghostty_surface_has_selection ghostty_surface_read_selection
+  ghostty_surface_complete_clipboard_request ghostty_surface_deny_clipboard_request ghostty_surface_has_selection
+  ghostty_surface_read_selection
   ghostty_surface_read_text ghostty_surface_free_text
 )
 # Read through ghostty_config_get's untyped out-pointer, so no function signature reaches them.

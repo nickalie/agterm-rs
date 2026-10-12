@@ -8,7 +8,7 @@
 #        scripts/build-ghostty.sh --print-prefix  print the prefix path only (agterm-ghostty-sys/build.rs)
 #        scripts/build-ghostty.sh --verify        exit 0 when the prefix is complete, 1 otherwise
 #
-# Zig 0.15.2 comes from AGTERM_GHOSTTY_ZIG, a matching zig on PATH, mise, or the pinned ziglang.org tarball.
+# GHOSTTY_ZIG_VERSION comes from AGTERM_GHOSTTY_ZIG, a matching zig on PATH, mise, or the pinned ziglang.org tarball.
 set -euo pipefail
 
 # shellcheck source=lib/native.sh

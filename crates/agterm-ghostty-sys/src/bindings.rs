@@ -13,17 +13,46 @@ pub const GHOSTTY_PLATFORM_OPENGL: ghostty_platform_e = 3;
 pub type ghostty_platform_e = ::std::os::raw::c_uint;
 pub const GHOSTTY_CLIPBOARD_STANDARD: ghostty_clipboard_e = 0;
 pub const GHOSTTY_CLIPBOARD_SELECTION: ghostty_clipboard_e = 1;
+pub const GHOSTTY_CLIPBOARD_PRIMARY: ghostty_clipboard_e = 2;
 pub type ghostty_clipboard_e = ::std::os::raw::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ghostty_clipboard_content_s {
     pub mime: *const ::std::os::raw::c_char,
     pub data: *const ::std::os::raw::c_char,
+    pub len: usize,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ghostty_clipboard_complete_s {
+    pub contents: *const ghostty_clipboard_content_s,
+    pub contents_len: usize,
+    pub available: *const *const ::std::os::raw::c_char,
+    pub available_len: usize,
+    pub confirmed: bool,
+    pub remember: bool,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ghostty_clipboard_confirm_s {
+    pub contents: *const ghostty_clipboard_content_s,
+    pub contents_len: usize,
+    pub available: *const *const ::std::os::raw::c_char,
+    pub available_len: usize,
+    pub name: *const ::std::os::raw::c_char,
+    pub can_remember: bool,
 }
 pub const GHOSTTY_CLIPBOARD_REQUEST_PASTE: ghostty_clipboard_request_e = 0;
 pub const GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ: ghostty_clipboard_request_e = 1;
 pub const GHOSTTY_CLIPBOARD_REQUEST_OSC_52_WRITE: ghostty_clipboard_request_e = 2;
+pub const GHOSTTY_CLIPBOARD_REQUEST_KITTY_READ: ghostty_clipboard_request_e = 3;
+pub const GHOSTTY_CLIPBOARD_REQUEST_KITTY_WRITE: ghostty_clipboard_request_e = 4;
+pub const GHOSTTY_CLIPBOARD_REQUEST_LIST: ghostty_clipboard_request_e = 5;
 pub type ghostty_clipboard_request_e = ::std::os::raw::c_uint;
+pub const GHOSTTY_CLIPBOARD_READ_STARTED: ghostty_clipboard_read_result_e = 0;
+pub const GHOSTTY_CLIPBOARD_READ_UNAVAILABLE: ghostty_clipboard_read_result_e = 1;
+pub const GHOSTTY_CLIPBOARD_READ_UNSUPPORTED: ghostty_clipboard_read_result_e = 2;
+pub type ghostty_clipboard_read_result_e = ::std::os::raw::c_uint;
 pub const GHOSTTY_MOUSE_RELEASE: ghostty_input_mouse_state_e = 0;
 pub const GHOSTTY_MOUSE_PRESS: ghostty_input_mouse_state_e = 1;
 pub type ghostty_input_mouse_state_e = ::std::os::raw::c_uint;
@@ -448,6 +477,12 @@ pub const GHOSTTY_INSPECTOR_TOGGLE: ghostty_action_inspector_e = 0;
 pub const GHOSTTY_INSPECTOR_SHOW: ghostty_action_inspector_e = 1;
 pub const GHOSTTY_INSPECTOR_HIDE: ghostty_action_inspector_e = 2;
 pub type ghostty_action_inspector_e = ::std::os::raw::c_uint;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ghostty_action_export_terminal_io_s {
+    pub contents: *const ::std::os::raw::c_char,
+    pub len: usize,
+}
 pub const GHOSTTY_QUIT_TIMER_START: ghostty_action_quit_timer_e = 0;
 pub const GHOSTTY_QUIT_TIMER_STOP: ghostty_action_quit_timer_e = 1;
 pub type ghostty_action_quit_timer_e = ::std::os::raw::c_uint;
@@ -467,12 +502,16 @@ pub struct ghostty_action_set_title_s {
 }
 pub const GHOSTTY_PROMPT_TITLE_SURFACE: ghostty_action_prompt_title_e = 0;
 pub const GHOSTTY_PROMPT_TITLE_TAB: ghostty_action_prompt_title_e = 1;
+pub const GHOSTTY_PROMPT_TITLE_WINDOW: ghostty_action_prompt_title_e = 2;
 pub type ghostty_action_prompt_title_e = ::std::os::raw::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ghostty_action_pwd_s {
     pub pwd: *const ::std::os::raw::c_char,
 }
+pub const GHOSTTY_ACTION_OPEN_CONFIG_OS_OPEN: ghostty_action_open_config_e = 0;
+pub const GHOSTTY_ACTION_OPEN_CONFIG_NEW_WINDOW: ghostty_action_open_config_e = 1;
+pub type ghostty_action_open_config_e = ::std::os::raw::c_uint;
 pub const GHOSTTY_MOUSE_SHAPE_DEFAULT: ghostty_action_mouse_shape_e = 0;
 pub const GHOSTTY_MOUSE_SHAPE_CONTEXT_MENU: ghostty_action_mouse_shape_e = 1;
 pub const GHOSTTY_MOUSE_SHAPE_HELP: ghostty_action_mouse_shape_e = 2;
@@ -592,6 +631,7 @@ pub struct ghostty_action_reload_config_s {
 pub const GHOSTTY_ACTION_OPEN_URL_KIND_UNKNOWN: ghostty_action_open_url_kind_e = 0;
 pub const GHOSTTY_ACTION_OPEN_URL_KIND_TEXT: ghostty_action_open_url_kind_e = 1;
 pub const GHOSTTY_ACTION_OPEN_URL_KIND_HTML: ghostty_action_open_url_kind_e = 2;
+pub const GHOSTTY_ACTION_OPEN_URL_KIND_OSC8: ghostty_action_open_url_kind_e = 3;
 pub type ghostty_action_open_url_kind_e = ::std::os::raw::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -681,41 +721,44 @@ pub const GHOSTTY_ACTION_RENDER: ghostty_action_tag_e = 27;
 pub const GHOSTTY_ACTION_INSPECTOR: ghostty_action_tag_e = 28;
 pub const GHOSTTY_ACTION_SHOW_GTK_INSPECTOR: ghostty_action_tag_e = 29;
 pub const GHOSTTY_ACTION_RENDER_INSPECTOR: ghostty_action_tag_e = 30;
-pub const GHOSTTY_ACTION_DESKTOP_NOTIFICATION: ghostty_action_tag_e = 31;
-pub const GHOSTTY_ACTION_SET_TITLE: ghostty_action_tag_e = 32;
-pub const GHOSTTY_ACTION_SET_TAB_TITLE: ghostty_action_tag_e = 33;
-pub const GHOSTTY_ACTION_PROMPT_TITLE: ghostty_action_tag_e = 34;
-pub const GHOSTTY_ACTION_PWD: ghostty_action_tag_e = 35;
-pub const GHOSTTY_ACTION_MOUSE_SHAPE: ghostty_action_tag_e = 36;
-pub const GHOSTTY_ACTION_MOUSE_VISIBILITY: ghostty_action_tag_e = 37;
-pub const GHOSTTY_ACTION_MOUSE_OVER_LINK: ghostty_action_tag_e = 38;
-pub const GHOSTTY_ACTION_RENDERER_HEALTH: ghostty_action_tag_e = 39;
-pub const GHOSTTY_ACTION_OPEN_CONFIG: ghostty_action_tag_e = 40;
-pub const GHOSTTY_ACTION_QUIT_TIMER: ghostty_action_tag_e = 41;
-pub const GHOSTTY_ACTION_FLOAT_WINDOW: ghostty_action_tag_e = 42;
-pub const GHOSTTY_ACTION_SECURE_INPUT: ghostty_action_tag_e = 43;
-pub const GHOSTTY_ACTION_KEY_SEQUENCE: ghostty_action_tag_e = 44;
-pub const GHOSTTY_ACTION_KEY_TABLE: ghostty_action_tag_e = 45;
-pub const GHOSTTY_ACTION_COLOR_CHANGE: ghostty_action_tag_e = 46;
-pub const GHOSTTY_ACTION_RELOAD_CONFIG: ghostty_action_tag_e = 47;
-pub const GHOSTTY_ACTION_CONFIG_CHANGE: ghostty_action_tag_e = 48;
-pub const GHOSTTY_ACTION_CLOSE_WINDOW: ghostty_action_tag_e = 49;
-pub const GHOSTTY_ACTION_RING_BELL: ghostty_action_tag_e = 50;
-pub const GHOSTTY_ACTION_SELECTION_CHANGED: ghostty_action_tag_e = 51;
-pub const GHOSTTY_ACTION_UNDO: ghostty_action_tag_e = 52;
-pub const GHOSTTY_ACTION_REDO: ghostty_action_tag_e = 53;
-pub const GHOSTTY_ACTION_CHECK_FOR_UPDATES: ghostty_action_tag_e = 54;
-pub const GHOSTTY_ACTION_OPEN_URL: ghostty_action_tag_e = 55;
-pub const GHOSTTY_ACTION_SHOW_CHILD_EXITED: ghostty_action_tag_e = 56;
-pub const GHOSTTY_ACTION_PROGRESS_REPORT: ghostty_action_tag_e = 57;
-pub const GHOSTTY_ACTION_SHOW_ON_SCREEN_KEYBOARD: ghostty_action_tag_e = 58;
-pub const GHOSTTY_ACTION_COMMAND_FINISHED: ghostty_action_tag_e = 59;
-pub const GHOSTTY_ACTION_START_SEARCH: ghostty_action_tag_e = 60;
-pub const GHOSTTY_ACTION_END_SEARCH: ghostty_action_tag_e = 61;
-pub const GHOSTTY_ACTION_SEARCH_TOTAL: ghostty_action_tag_e = 62;
-pub const GHOSTTY_ACTION_SEARCH_SELECTED: ghostty_action_tag_e = 63;
-pub const GHOSTTY_ACTION_READONLY: ghostty_action_tag_e = 64;
-pub const GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD: ghostty_action_tag_e = 65;
+pub const GHOSTTY_ACTION_EXPORT_TERMINAL_IO: ghostty_action_tag_e = 31;
+pub const GHOSTTY_ACTION_DESKTOP_NOTIFICATION: ghostty_action_tag_e = 32;
+pub const GHOSTTY_ACTION_SET_TITLE: ghostty_action_tag_e = 33;
+pub const GHOSTTY_ACTION_SET_TAB_TITLE: ghostty_action_tag_e = 34;
+pub const GHOSTTY_ACTION_SET_WINDOW_TITLE: ghostty_action_tag_e = 35;
+pub const GHOSTTY_ACTION_PROMPT_TITLE: ghostty_action_tag_e = 36;
+pub const GHOSTTY_ACTION_PWD: ghostty_action_tag_e = 37;
+pub const GHOSTTY_ACTION_MOUSE_SHAPE: ghostty_action_tag_e = 38;
+pub const GHOSTTY_ACTION_MOUSE_VISIBILITY: ghostty_action_tag_e = 39;
+pub const GHOSTTY_ACTION_MOUSE_OVER_LINK: ghostty_action_tag_e = 40;
+pub const GHOSTTY_ACTION_RENDERER_HEALTH: ghostty_action_tag_e = 41;
+pub const GHOSTTY_ACTION_OPEN_CONFIG: ghostty_action_tag_e = 42;
+pub const GHOSTTY_ACTION_QUIT_TIMER: ghostty_action_tag_e = 43;
+pub const GHOSTTY_ACTION_FLOAT_WINDOW: ghostty_action_tag_e = 44;
+pub const GHOSTTY_ACTION_SECURE_INPUT: ghostty_action_tag_e = 45;
+pub const GHOSTTY_ACTION_KEY_SEQUENCE: ghostty_action_tag_e = 46;
+pub const GHOSTTY_ACTION_KEY_TABLE: ghostty_action_tag_e = 47;
+pub const GHOSTTY_ACTION_COLOR_CHANGE: ghostty_action_tag_e = 48;
+pub const GHOSTTY_ACTION_RELOAD_CONFIG: ghostty_action_tag_e = 49;
+pub const GHOSTTY_ACTION_CONFIG_CHANGE: ghostty_action_tag_e = 50;
+pub const GHOSTTY_ACTION_CLOSE_WINDOW: ghostty_action_tag_e = 51;
+pub const GHOSTTY_ACTION_RING_BELL: ghostty_action_tag_e = 52;
+pub const GHOSTTY_ACTION_SELECTION_CHANGED: ghostty_action_tag_e = 53;
+pub const GHOSTTY_ACTION_UNDO: ghostty_action_tag_e = 54;
+pub const GHOSTTY_ACTION_REDO: ghostty_action_tag_e = 55;
+pub const GHOSTTY_ACTION_CHECK_FOR_UPDATES: ghostty_action_tag_e = 56;
+pub const GHOSTTY_ACTION_OPEN_URL: ghostty_action_tag_e = 57;
+pub const GHOSTTY_ACTION_SHOW_CHILD_EXITED: ghostty_action_tag_e = 58;
+pub const GHOSTTY_ACTION_PROGRESS_REPORT: ghostty_action_tag_e = 59;
+pub const GHOSTTY_ACTION_SHOW_ON_SCREEN_KEYBOARD: ghostty_action_tag_e = 60;
+pub const GHOSTTY_ACTION_COMMAND_FINISHED: ghostty_action_tag_e = 61;
+pub const GHOSTTY_ACTION_START_SEARCH: ghostty_action_tag_e = 62;
+pub const GHOSTTY_ACTION_END_SEARCH: ghostty_action_tag_e = 63;
+pub const GHOSTTY_ACTION_SEARCH_TOTAL: ghostty_action_tag_e = 64;
+pub const GHOSTTY_ACTION_SEARCH_SELECTED: ghostty_action_tag_e = 65;
+pub const GHOSTTY_ACTION_READONLY: ghostty_action_tag_e = 66;
+pub const GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD: ghostty_action_tag_e = 67;
+pub const GHOSTTY_ACTION_MOVE_TAB_TO_NEW_WINDOW: ghostty_action_tag_e = 68;
 pub type ghostty_action_tag_e = ::std::os::raw::c_uint;
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -732,6 +775,7 @@ pub union ghostty_action_u {
     pub cell_size: ghostty_action_cell_size_s,
     pub scrollbar: ghostty_action_scrollbar_s,
     pub inspector: ghostty_action_inspector_e,
+    pub export_terminal_io: ghostty_action_export_terminal_io_s,
     pub desktop_notification: ghostty_action_desktop_notification_s,
     pub set_title: ghostty_action_set_title_s,
     pub set_tab_title: ghostty_action_set_title_s,
@@ -758,6 +802,7 @@ pub union ghostty_action_u {
     pub search_total: ghostty_action_search_total_s,
     pub search_selected: ghostty_action_search_selected_s,
     pub readonly: ghostty_action_readonly_e,
+    pub open_config: ghostty_action_open_config_e,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -771,12 +816,15 @@ pub type ghostty_runtime_read_clipboard_cb = ::std::option::Option<
         arg1: *mut ::std::os::raw::c_void,
         arg2: ghostty_clipboard_e,
         arg3: *mut ::std::os::raw::c_void,
-    ) -> bool,
+        arg4: *const *const ::std::os::raw::c_char,
+        arg5: usize,
+        arg6: bool,
+    ) -> ghostty_clipboard_read_result_e,
 >;
 pub type ghostty_runtime_confirm_read_clipboard_cb = ::std::option::Option<
     unsafe extern "C" fn(
         arg1: *mut ::std::os::raw::c_void,
-        arg2: *const ::std::os::raw::c_char,
+        arg2: *const ghostty_clipboard_confirm_s,
         arg3: *mut ::std::os::raw::c_void,
         arg4: ghostty_clipboard_request_e,
     ),
@@ -955,10 +1003,12 @@ unsafe extern "C" {
 unsafe extern "C" {
     pub fn ghostty_surface_complete_clipboard_request(
         arg1: ghostty_surface_t,
-        arg2: *const ::std::os::raw::c_char,
+        arg2: *const ghostty_clipboard_complete_s,
         arg3: *mut ::std::os::raw::c_void,
-        arg4: bool,
     );
+}
+unsafe extern "C" {
+    pub fn ghostty_surface_deny_clipboard_request(arg1: ghostty_surface_t, arg2: *mut ::std::os::raw::c_void);
 }
 unsafe extern "C" {
     pub fn ghostty_surface_has_selection(arg1: ghostty_surface_t) -> bool;
