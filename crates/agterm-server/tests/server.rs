@@ -512,6 +512,53 @@ impl StreamOwner for Echo {
     }
 }
 
+/// Reports the timeouts the stream came with as a first line, then echoes as [`Echo`].
+struct TimeoutProbe;
+
+impl StreamOwner for TimeoutProbe {
+    fn adopt(self: Box<Self>, mut stream: UnixStream, pending: Vec<u8>) {
+        let timeouts = format!("{:?} {:?}\n", stream.read_timeout().ok(), stream.write_timeout().ok());
+        if stream.write_all(timeouts.as_bytes()).is_ok() {
+            Box::new(Echo).adopt(stream, pending);
+        }
+    }
+}
+
+#[test]
+fn an_adopted_stream_outlives_the_request_timeouts() -> TestResult {
+    let short = Duration::from_millis(100);
+    let fixture = start_with(
+        (),
+        |(), _request: Request| Reply::streaming(Response::success(), Box::new(TimeoutProbe)),
+        ConnectionDeadlines {
+            read_timeout: short,
+            read_deadline: Duration::from_secs(1),
+            write_timeout: short,
+            write_deadline: Duration::from_secs(1),
+        },
+    )?;
+
+    let mut stream = connect(&fixture.socket)?;
+    stream.write_all(VERSION)?;
+    stream.write_all(b"\n")?;
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    assert_eq!(serde_json::from_str::<Response>(&line)?, Response::success());
+    line.clear();
+    reader.read_line(&mut line)?;
+    assert_eq!(line, "Some(None) Some(None)\n");
+
+    // idle well past the request-phase read timeout and deadline before the owner hears more
+    thread::sleep(Duration::from_millis(1200));
+    stream.write_all(b"late frame")?;
+    stream.shutdown(Shutdown::Write)?;
+    line.clear();
+    reader.read_line(&mut line)?;
+    assert_eq!(line, "echo:late frame\n");
+    Ok(())
+}
+
 /// Records that it was told it will never get the connection.
 struct Abandoned(Arc<AtomicBool>);
 

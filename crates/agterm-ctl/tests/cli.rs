@@ -283,11 +283,12 @@ fn a_server_refusal_exits_1() -> TestResult {
 const VERSION_USAGE: &str =
     "Usage: agtermctl version [--socket <socket>] [--json]\n  See 'agtermctl version --help' for more information.\n";
 const ROOT_USAGE: &str = "Usage: agtermctl <subcommand>\n  See 'agtermctl --help' for more information.\n";
+const HELP_USAGE: &str = "Usage: agtermctl help [<subcommands> ...]\n";
 
 #[test]
 fn usage_errors_are_reported_as_upstream_before_connecting() -> TestResult {
     let dir = short_dir()?;
-    let cases: [(&[&str], &str, &str); 9] = [
+    let cases: [(&[&str], &str, &str); 11] = [
         (&["version", "--bogus"], "Unknown option '--bogus'\n", VERSION_USAGE),
         (
             &["version", "--jsn"],
@@ -317,6 +318,12 @@ fn usage_errors_are_reported_as_upstream_before_connecting() -> TestResult {
         ),
         (&["--json", "version"], "Unknown option '--json'\n", ROOT_USAGE),
         (&["bogus"], "Unexpected argument 'bogus'\n", ROOT_USAGE),
+        (
+            &["help", "version", "--bogus"],
+            "Unknown option '--bogus'\n",
+            HELP_USAGE,
+        ),
+        (&["help", "version", "--json"], "Unknown option '--json'\n", HELP_USAGE),
     ];
     for (args, message, usage) in cases {
         let expected = format!("Error: {message}{usage}");
@@ -359,7 +366,7 @@ OPTIONS:
 #[test]
 fn help_goes_to_stdout_in_the_argument_parser_layout() -> TestResult {
     let dir = short_dir()?;
-    let cases: [(&[&str], &str); 8] = [
+    let cases: [(&[&str], &str); 10] = [
         (&[], ROOT_HELP),
         (&["--help"], ROOT_HELP),
         (&["help"], ROOT_HELP),
@@ -367,6 +374,8 @@ fn help_goes_to_stdout_in_the_argument_parser_layout() -> TestResult {
         (&["version", "--help"], VERSION_HELP),
         (&["version", "-h"], VERSION_HELP),
         (&["help", "version"], VERSION_HELP),
+        (&["help", "--", "version"], VERSION_HELP),
+        (&["help", "version", "--help"], VERSION_HELP),
         (&["version", "--bogus", "--help"], VERSION_HELP),
     ];
     for (args, help) in cases {

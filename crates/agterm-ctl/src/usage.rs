@@ -93,11 +93,11 @@ fn stdout_columns() -> Option<usize> {
 /// it, help wrapped to `width`.
 #[must_use]
 pub fn parse_exit(root: &Command, args: &[String], error: &clap::Error, width: usize) -> ParseExit {
-    if let Some((first, topics)) = args.split_first()
+    if let Some((first, rest)) = args.split_first()
         && first == "help"
         && root.find_subcommand("help").is_none()
     {
-        return ParseExit::help(&Stack::named_by(root, topics).0, width);
+        return help_command_exit(root, rest, width);
     }
     let (stack, named) = Stack::named_by(root, args);
     let rest = args.get(named..).unwrap_or_default();
@@ -106,6 +106,62 @@ pub fn parse_exit(root: &Command, args: &[String], error: &clap::Error, width: u
     }
     let (message, help) = error_message(stack.leaf, rest, error);
     ParseExit::usage(&stack, &message, &help)
+}
+
+/// The library's `help` command (`HelpCommand`): the command names to show help for, and a private
+/// `-h`/`--help`/`-help` flag it accepts and ignores. It has no help names of its own, so its usage error ends
+/// without a `See '... --help'` line.
+fn help_command() -> Command {
+    Command::new("help")
+        .about("Show subcommand help information.")
+        .no_binary_name(true)
+        .disable_help_flag(true)
+        .args_override_self(true)
+        .arg(Arg::new("subcommands").action(ArgAction::Append))
+        .arg(
+            Arg::new("help")
+                .short('h')
+                .long("help")
+                .action(ArgAction::SetTrue)
+                .hide(true),
+        )
+}
+
+/// `agtermctl help <args>`, parsed as the library parses its help command: options and `--` first, then the
+/// command names resolve the stack (from the first that names no subcommand on, they are ignored). An option the
+/// help command does not take is a usage error.
+fn help_command_exit(root: &Command, args: &[String], width: usize) -> ParseExit {
+    let help = help_command();
+    // `-help` is one of the flag's names: a single-dash long, which clap has no notion of
+    let mut separated = false;
+    let args: Vec<String> = args
+        .iter()
+        .map(|arg| {
+            separated |= arg == "--";
+            if !separated && arg == "-help" {
+                "--help".to_owned()
+            } else {
+                arg.clone()
+            }
+        })
+        .collect();
+    match help.clone().try_get_matches_from(&args) {
+        Ok(matches) => {
+            let topics: Vec<String> = matches
+                .get_many::<String>("subcommands")
+                .map(|topics| topics.cloned().collect())
+                .unwrap_or_default();
+            ParseExit::help(&Stack::named_by(root, &topics).0, width)
+        }
+        Err(error) => {
+            let stack = Stack {
+                path: vec![root, &help],
+                leaf: &help,
+            };
+            let (message, abstract_line) = error_message(&help, &args, &error);
+            ParseExit::usage(&stack, &message, &abstract_line)
+        }
+    }
 }
 
 /// The commands from the root down to the one being parsed.
@@ -168,11 +224,13 @@ fn usage_error(stack: &Stack<'_>, message: &str, help: &str) -> String {
     } else {
         format!("Help:  {help}\n")
     };
-    format!(
-        "{error}{help}Usage: {}\n  See '{} --help' for more information.\n",
-        usage_synopsis(stack),
-        stack.names()
-    )
+    // the hint names the command's help flag; a command without one (the help command) gets none
+    let see = if stack.leaf.is_disable_help_flag_set() {
+        String::new()
+    } else {
+        format!("  See '{} --help' for more information.\n", stack.names())
+    };
+    format!("{error}{help}Usage: {}\n{see}", usage_synopsis(stack))
 }
 
 // MARK: - error messages (`ErrorMessageGenerator`)
@@ -1002,6 +1060,39 @@ SUBCOMMANDS:
         for args in [&["group"][..], &["group", "--help"], &["help", "group", "extra"]] {
             assert_eq!(report(args).text, GROUP_HELP, "{args:?}");
         }
+    }
+
+    #[test]
+    fn the_help_command_parses_its_options_and_separator_first() {
+        for args in [
+            &["help", "--", "pick"][..],
+            &["help", "pick", "--help"],
+            &["help", "-h", "pick"],
+            &["help", "-help", "pick"],
+            &["help", "pick", "extra"],
+        ] {
+            let report = report(args);
+            assert_eq!((report.to_stdout, report.code), (true, 0), "{args:?}");
+            assert_eq!(report.text, PICK_HELP, "{args:?}");
+        }
+        assert_eq!(report(&["help", "--", "group", "leaf", "--x"]).code, 0);
+    }
+
+    #[test]
+    fn the_help_command_refuses_an_unknown_option() {
+        let refused = |option: &str| ParseExit {
+            text: format!("Error: Unknown option '{option}'\nUsage: agtermctl help [<subcommands> ...]\n"),
+            to_stdout: false,
+            code: USAGE_EXIT,
+        };
+        assert_eq!(report(&["help", "pick", "--bogus"]), refused("--bogus"));
+        assert_eq!(report(&["help", "--json", "pick"]), refused("--json"));
+        assert_eq!(report(&["help", "pick", "-x"]), refused("-x"));
+        assert_eq!(
+            report(&["help", "--help=1"]).text,
+            "Error: The option '--help' does not take any value, but '1' was specified.\nUsage: agtermctl help \
+             [<subcommands> ...]\n"
+        );
     }
 
     #[test]
