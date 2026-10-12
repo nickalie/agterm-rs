@@ -82,6 +82,12 @@ def test_clipboard_set_reaches_every_terminal_attached_to_the_pane(cli, launch):
     text = f"clip-{uuid.uuid4().hex[:8]}"
     sequence = f"\x1b]52;c;{base64.b64encode(text.encode()).decode()}\x07"
     with leading_client(ctl.instance, endpoint, daemon) as viewer:
+        # Attached once the pane follows; a `zmx print` into a daemon still taking the viewer finds it busy.
+        ctl.wait_tree(
+            lambda tree: (
+                next(s for s in find_session(tree, sid)["surfaces"] if s["kind"] == "left").get("lead") == "follower"
+            )
+        )
         env = _env(local, ZMX_SESSION=daemon, ZMX_DIR=ctl.instance.zmx_dir)
         result = local.local("clipboard", "set", text, env=env, input="")
         assert (result.returncode, result.stdout, result.stderr) == (0, "", "")

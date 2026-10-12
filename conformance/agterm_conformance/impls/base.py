@@ -468,7 +468,9 @@ class Adapter:
         try:
             refusals: list[str] = []
             try:
-                if instance.process.poll() is None and find_leftovers(instance.zmx_dir):
+                if (code := instance.process.poll()) is not None:
+                    refusals = [f"the app had already exited with {code}"]
+                elif find_leftovers(instance.zmx_dir):
                     refusals = reap_live_sessions(instance)
             finally:
                 killed = _terminate(instance.process)
@@ -497,7 +499,7 @@ def _leftovers_error(zmx_dir: str, refusals: Iterable[str] = ()) -> LeftoverProc
         return None
     # Cut: on macOS the command carries the whole `ps -E` environment.
     described = ", ".join(f"{pid} {command[:300]}" for pid, _, command in leftovers)
-    reaping = f"; reaping was refused: {'; '.join(refusals)}" if refusals else ""
+    reaping = f"; reaping: {'; '.join(refusals)}" if refusals else ""
     return LeftoverProcesses(f"processes left under ZMX_DIR {zmx_dir}: {described}{reaping}")
 
 
@@ -613,7 +615,14 @@ def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[
             response = instance.request("zmx.kill", entry["sessionID"], **args)
             if not response.ok:
                 refusals.append(f"zmx.kill {_daemon_key(entry)}: {response.error}")
-        instance.request("zmx.prune")
+        prune = instance.request("zmx.prune")
+        if not prune.ok:
+            refusals.append(f"zmx.prune: {prune.error}")
+        listing = instance.request("zmx.list")
+        inventory = (listing.result or {}).get("zmx") if listing.ok else None
+        for entry in inventory.get("entries") or [] if isinstance(inventory, dict) else []:
+            if isinstance(entry, dict):
+                refusals.append(f"still listed: {entry.get('daemon')} {entry.get('state')}/{entry.get('observation')}")
     except ClientError as error:
         refusals.append(f"reaping: {error}")
     return refusals
