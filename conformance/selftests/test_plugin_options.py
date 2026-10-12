@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -212,3 +214,218 @@ def test_must_pass_refuses_an_unknown_capability(pytester: pytest.Pytester) -> N
     result = pytester.runpytest("--must-pass", "live-session")
     assert result.ret == pytest.ExitCode.USAGE_ERROR
     result.stderr.fnmatch_lines(["*--must-pass: unknown capability live-session*"])
+
+
+def run_nodeid_report(
+    pytester: pytest.Pytester, *args: str, subprocess: bool = False
+) -> tuple[pytest.RunResult, list[dict[str, Any]]]:
+    """Runs pytester with a report in a not-yet-existing directory and reads its JSON lines back."""
+    run = pytester.runpytest_subprocess if subprocess else pytester.runpytest
+    result = run("--nodeid-report", "out/nodeids.jsonl", *args)
+    lines = (pytester.path / "out" / "nodeids.jsonl").read_text(encoding="utf-8").splitlines()
+    return result, [json.loads(line) for line in lines]
+
+
+def outcomes(records: list[dict[str, Any]]) -> list[tuple[str, str, str | None, str | None]]:
+    return [(r["nodeid"], r["outcome"], r["skip"], r["reason"]) for r in records if r["kind"] == "test"]
+
+
+def test_nodeid_report_merges_phases(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile(
+        test_phases="""
+        import pytest
+
+        @pytest.fixture
+        def broken_setup():
+            raise RuntimeError("setup")
+
+        @pytest.fixture
+        def broken_teardown():
+            yield
+            raise RuntimeError("teardown")
+
+        def test_pass():
+            pass
+
+        def test_fail():
+            assert False
+
+        def test_setup_error(broken_setup):
+            pass
+
+        def test_teardown_error(broken_teardown):
+            pass
+
+        def test_fail_then_teardown_error(broken_teardown):
+            assert False
+
+        def test_skip_then_teardown_error(broken_teardown):
+            pytest.skip("unsupported: rust lacks posix-shell")
+
+        def test_unsupported():
+            pytest.skip("unsupported: rust lacks posix-shell on this host: no zsh (needs zsh)")
+
+        def test_not_yet():
+            pytest.skip("not-yet-at-level: since 0.40.0, rust is at 0.36.0")
+
+        def test_other():
+            pytest.skip("no display")
+
+        @pytest.mark.skip(reason="marker skip")
+        def test_marker_skip():
+            pass
+
+        @pytest.mark.parametrize("text", ["   "])
+        def test_spaces(text):
+            pass
+        """
+    )
+    result, records = run_nodeid_report(pytester)
+    assert result.ret == pytest.ExitCode.TESTS_FAILED
+    assert records[0] == {"kind": "run", "partial": False}
+    unsupported = "unsupported: rust lacks posix-shell on this host: no zsh (needs zsh)"
+    not_yet = "not-yet-at-level: since 0.40.0, rust is at 0.36.0"
+    assert outcomes(records) == [
+        ("test_phases.py::test_pass", "passed", None, None),
+        ("test_phases.py::test_fail", "failed", None, None),
+        ("test_phases.py::test_setup_error", "error", None, None),
+        ("test_phases.py::test_teardown_error", "error", None, None),
+        ("test_phases.py::test_fail_then_teardown_error", "failed", None, None),
+        ("test_phases.py::test_skip_then_teardown_error", "error", None, None),
+        ("test_phases.py::test_unsupported", "skipped", "unsupported", unsupported),
+        ("test_phases.py::test_not_yet", "skipped", "not-yet-at-level", not_yet),
+        ("test_phases.py::test_other", "skipped", "other", "no display"),
+        ("test_phases.py::test_marker_skip", "skipped", "other", "marker skip"),
+        ("test_phases.py::test_spaces[   ]", "passed", None, None),
+    ]
+    assert len(records) == 12
+
+
+def test_nodeid_report_module_teardown_error_lands_on_last_test(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile(
+        test_module_fixture="""
+        import pytest
+
+        @pytest.fixture(scope="module")
+        def shared():
+            yield
+            raise RuntimeError("module teardown")
+
+        def test_first(shared):
+            pass
+
+        def test_last(shared):
+            pass
+        """
+    )
+    _, records = run_nodeid_report(pytester)
+    assert outcomes(records) == [
+        ("test_module_fixture.py::test_first", "passed", None, None),
+        ("test_module_fixture.py::test_last", "error", None, None),
+    ]
+
+
+def test_nodeid_report_xfail(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile(
+        test_xfail="""
+        import pytest
+
+        @pytest.mark.xfail(reason="known bug")
+        def test_xfailed():
+            assert False
+
+        @pytest.mark.xfail(reason="flaky")
+        def test_xpassed():
+            pass
+
+        @pytest.mark.xfail(reason="fixed", strict=True)
+        def test_strict_xpass():
+            pass
+
+        def test_imperative():
+            pytest.xfail("later")
+        """
+    )
+    _, records = run_nodeid_report(pytester)
+    assert outcomes(records) == [
+        ("test_xfail.py::test_xfailed", "xfailed", None, "known bug"),
+        ("test_xfail.py::test_xpassed", "xpassed", None, "flaky"),
+        ("test_xfail.py::test_strict_xpass", "failed", None, None),
+        ("test_xfail.py::test_imperative", "xfailed", None, "later"),
+    ]
+
+
+def test_nodeid_report_rerun_discards_earlier_attempts(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile(
+        test_rerun="""
+        def test_flaky(tmp_path_factory):
+            tried = tmp_path_factory.getbasetemp() / "tried"
+            if not tried.exists():
+                tried.write_text("")
+                assert False
+
+        def test_broken():
+            assert False
+        """
+    )
+    _, records = run_nodeid_report(pytester, "--reruns", "1")
+    assert outcomes(records) == [
+        ("test_rerun.py::test_flaky", "passed", None, None),
+        ("test_rerun.py::test_broken", "failed", None, None),
+    ]
+
+
+def test_nodeid_report_collection_error(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile(test_ok="def test_ok():\n    pass\n", test_broken="import no_such_module_xyz\n")
+    result, records = run_nodeid_report(pytester)
+    assert result.ret == pytest.ExitCode.INTERRUPTED
+    assert records[0] == {"kind": "run", "partial": False}
+    # A collection error stops the session before any test runs.
+    assert outcomes(records) == [("test_ok.py::test_ok", "not-run", None, None)]
+    (error,) = [r for r in records if r["kind"] == "collection-error"]
+    assert error["nodeid"] == "test_broken.py"
+    assert "no_such_module_xyz" in error["message"]
+
+
+@pytest.mark.parametrize(
+    ("args", "partial"),
+    [((), False), (("-k", "not two"), True), (("test_partial.py::test_one",), True)],
+)
+def test_nodeid_report_partial(pytester: pytest.Pytester, args: tuple[str, ...], partial: bool) -> None:
+    pytester.makepyfile(test_partial="def test_one():\n    pass\n\ndef test_two():\n    pass\n")
+    _, records = run_nodeid_report(pytester, *args)
+    assert records[0] == {"kind": "run", "partial": partial}
+    expected = ["test_partial.py::test_one"] + ([] if partial else ["test_partial.py::test_two"])
+    assert [nodeid for nodeid, *_ in outcomes(records)] == expected
+
+
+def test_nodeid_report_must_pass_problems(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile(test_must=MUST_PASS_TESTS.format(body="pytest.skip('unsupported: no zsh')"))
+    result, records = run_nodeid_report(pytester, "--must-pass", "live-sessions", "--must-pass", "posix-shell")
+    assert result.ret == pytest.ExitCode.TESTS_FAILED
+    assert [r for r in records if r["kind"] == "must-pass"] == [
+        {"kind": "must-pass", "problem": "no collected test requires posix-shell"},
+        {"kind": "must-pass", "problem": "test_must.py::test_live_two"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("body", "stopped"),
+    [("assert False", "failed"), ("raise KeyboardInterrupt", "not-run")],
+)
+def test_nodeid_report_not_run(pytester: pytest.Pytester, body: str, stopped: str) -> None:
+    pytester.makepyfile(test_stop=f"def test_stop():\n    {body}\n\ndef test_after():\n    pass\n")
+    # A subprocess: in-process pytester re-raises a KeyboardInterrupt into this session.
+    _, records = run_nodeid_report(pytester, "-x", subprocess=True)
+    assert records[0] == {"kind": "run", "partial": False}
+    assert outcomes(records) == [
+        ("test_stop.py::test_stop", stopped, None, None),
+        ("test_stop.py::test_after", "not-run", None, None),
+    ]
+
+
+def test_nodeid_report_refused_under_coverage_gate(pytester: pytest.Pytester) -> None:
+    result = pytester.runpytest("--nodeid-report", "nodeids.jsonl", "--coverage-gate")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*--nodeid-report cannot be combined with --coverage-gate*"])
+    assert not (pytester.path / "nodeids.jsonl").exists()

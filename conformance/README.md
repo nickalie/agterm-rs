@@ -25,6 +25,10 @@ conformance/tools/run-reference-linux.sh [--bin PATH] [-- PYTEST_ARGS...]
 
 # the Rust build; without --bin every test skips and parity reads 0%
 .venv/bin/python -m pytest conformance/tests --impl rust --bin <rust-binary>
+
+# the Rust build of this checkout: build, stage, protocol, cli and behaviors, then the ratchet;
+# report in conformance/reports/rust-linux/
+conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
 ```
 
 `--macos-launch-mode plain` replaces the default `uitest` launch (XCUITest sentinel with zmx on).
@@ -54,6 +58,8 @@ not-yet-at-level, so an unsupported capability is a recorded divergence, not a g
 
 - `--must-pass CAPABILITY` fails the run unless every collected test requiring it ran and passed, and at least one
   did (reference-macos uses it for `live-sessions`).
+- `--nodeid-report PATH` writes one JSON line per run test with its outcome merged over setup, call and teardown,
+  plus the run's collection errors and `--must-pass` problems; `tools/check_ratchet.py` reads it.
 - `--reruns N` (pytest-rerunfailures) is for the ui layer only, where accessibility reads race the app.
   Protocol, cli and behaviors tests wait on read-back and never rerun.
 
@@ -72,6 +78,15 @@ When the references disagree on observable state or effects:
   [docs/fork-bugs.md](docs/fork-bugs.md).
 
 Error text that differs only in wording is asserted on its shared part.
+
+The Rust build is held to upstream's contract, its capability branches included: it claims the capabilities listed
+in [docs/rust-build.md](docs/rust-build.md) > Rust target profile, and where a test branches on a capability it
+takes upstream's branch unless that list says otherwise.
+reference-linux is a diagnostic for it, not a reference: a Rust test that differs from the fork is judged against
+upstream.
+The per-platform rule above applies to the two Swift references.
+The Rust build's progress is held by a ratchet: `conformance/rust-passing.txt` lists the ids that went green, and
+`run-rust-linux.sh` fails when one of them goes red again (see rust-build.md > Ratchet).
 
 ## Catalog and coverage gate
 
@@ -128,4 +143,6 @@ These runs share a machine with a live agterm, so the harness refuses a launch t
 - `conformance-gate` (ubuntu): self-tests and the coverage gate on every PR and on `main`.
 - `reference-macos` (`macos-26`): protocol, cli and behaviors with `--must-pass live-sessions`, then the ui layer
   with `--reruns 1`, against the release named by the catalog's `upstream`.
+- `rust-linux` (`ubuntu-24.04`): the Rust workspace's format check, strict clippy, lint report (in the job summary)
+  and `cargo test`, over the vendored libghostty prefix.
 - `spike-macos` (`macos-26`): the launch and ax-driver spikes, when their tools change.

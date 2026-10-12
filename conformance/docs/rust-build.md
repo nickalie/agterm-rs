@@ -69,3 +69,48 @@ to it and to the references' profiles. `host`: claimed only where the account's 
 | `config-reload-counts` | yes |  | `config.reload` answers with the ghostty config's diagnostic count in `result.count` |
 | `hidden-split-holds-focus` |  | yes | `session.focus` on a hidden split reads back as `splitFocused`; upstream's shown left pane takes the focus back while its window is key |
 | `capture-reads-command-panes` |  | yes | `restore.capture` records a `--command` session's program; upstream reads only the foreground group's leader, there the setuid `login` wrapper whose argv a user cannot read |
+
+## Rust target profile
+
+The capabilities the Rust build claims are held to upstream's contract: the build takes upstream's branch of every
+capability whose behavior lives in upstream's own code, and claims each one in the task that implements its command,
+never ahead of it. By the end of the implementation plan (`docs/plans/20261012-rust-linux-implementation.md`) it
+claims:
+
+- `posix-shell`: panes run `/bin/sh` from the harness's ghostty config, as both references;
+- `status-shape`, `type-rejects-nul`: upstream validates both in `session.status` and `session.type`;
+- `drop-placement`: upstream's `session.move` places like a sidebar drop;
+- `select-takes-frontmost`: upstream's `windowSelect` calls `takeFrontmost` itself, a model change, not a compositor
+  focus;
+- `resize-echoes-ratio`, `hidden-split-holds-focus`: upstream's documented model contract (`control-api.md`, "works
+  shown or hidden; read `splitFocused`", and `AppStorePaneTests`); macOS's reversion is an AppKit first-responder
+  effect;
+- `quick-validates-input`, `modal-blocks-covers`, `pick-names-pending-ask`, `overlay-size-validated`,
+  `sidebar-min-width`, `theme-slots-by-sync`, `config-reload-counts`: upstream's validation and read-back;
+- `keymap-menu`: once a GTK menu carries the actions' live accelerators;
+- `live-sessions`: by host, where the login shell is zsh and zmx is staged;
+- `live-any-shell`: by host, live sessions for bash and fish login shells too, the one Rust-only extension; it joins
+  the vocabulary together with its tests.
+
+It does not claim:
+
+- `window-geometry`, `window-minimize`: Wayland gives a client no window position and no minimized read-back; their
+  tests branch, and the Rust build passes the other branch;
+- `capture-reads-command-panes`: it contradicts upstream's intent, `ForegroundProcess.command` reads only the
+  foreground group's leader, so a `--command` pane's creation command keeps the exec path, `--wait` and
+  close-on-exit.
+
+The table above stays the references' profiles; this list is the Rust build's.
+
+## Ratchet
+
+`conformance/tools/run-rust-linux.sh` builds the workspace (release), stages it with `scripts/stage.sh` and runs the
+protocol, cli and behaviors layers with `--impl rust` under run-reference-linux.sh's isolation.
+pytest writes each test's merged outcome with `--nodeid-report` next to the report in
+`conformance/reports/rust-linux/`, and `conformance/tools/check_ratchet.py` holds `conformance/rust-passing.txt`
+against it: one pytest node id per line, verbatim and sorted.
+A listed id that fails, errors (a teardown error included) or skips breaks the run, except an `unsupported` skip
+for a host-dependent capability (`live-sessions`, `live-any-shell`), which counts as not run.
+A collection error or a `--must-pass` problem breaks it too.
+The checker prints the newly passing ids not yet listed; `--add` writes them into the list.
+The script exits with the ratchet's status, or 1 when an instance root was left behind, whatever pytest's own status.

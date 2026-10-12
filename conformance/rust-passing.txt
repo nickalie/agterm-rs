@@ -1,0 +1,3 @@
+# The conformance ratchet: pytest node ids the Rust build passes, one per line, verbatim and sorted.
+# tools/check_ratchet.py fails a run in which a listed id fails, errors or skips (a host-dependent skip excepted).
+# Add newly passing ids with `tools/check_ratchet.py --report <nodeid report> --add`.

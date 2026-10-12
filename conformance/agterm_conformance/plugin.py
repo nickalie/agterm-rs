@@ -125,6 +125,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=None,
         help="coverage gate: file of uncovered items to accept, one covers key per line; it may only shrink",
     )
+    group.addoption(
+        "--nodeid-report",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="write each selected test's merged outcome as JSON lines to PATH, for the ratchet",
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -144,6 +151,11 @@ def pytest_configure(config: pytest.Config) -> None:
         if path is not None and not path.exists():
             raise pytest.UsageError(f"{flag} {path} does not exist")
     config.stash[_OPTIONS_KEY] = options
+    if (nodeid_report := config.getoption("nodeid_report")) is not None:
+        if options.coverage_gate:
+            raise pytest.UsageError("--nodeid-report cannot be combined with --coverage-gate")
+        report_path = config.invocation_params.dir / nodeid_report
+        config.pluginmanager.register(NodeidReport(report_path), "agterm-nodeid-report")
     if options.coverage_gate:
         config.pluginmanager.register(_GateCollector(), "agterm-coverage-gate-collector")
     elif must_pass := config.getoption("must_pass"):
@@ -228,6 +240,65 @@ class MustPass:
             terminalreporter.write_sep("-", f"--must-pass {', '.join(sorted(self.capabilities))}: not passed")
             for problem in self.problems:
                 terminalreporter.write_line(problem)
+
+
+class NodeidReport:
+    """`--nodeid-report`: JSON lines of each selected test's merged outcome, collection errors and must-pass problems."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.partial = False
+        self.merged: dict[str, dict[str, Any]] = {}
+        self.collection_errors: list[dict[str, Any]] = []
+
+    def pytest_deselected(self, items: list[pytest.Item]) -> None:
+        if items:
+            self.partial = True
+
+    def pytest_collectreport(self, report: pytest.CollectReport) -> None:
+        if report.failed:
+            self.collection_errors.append(
+                {"kind": "collection-error", "nodeid": report.nodeid, "message": str(report.longrepr)}
+            )
+
+    def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
+        if report.outcome == "rerun":
+            self.merged.pop(report.nodeid, None)
+            return
+        record = self.merged.setdefault(report.nodeid, _not_run())
+        if report.failed:
+            if report.when == "call":
+                record.update(outcome="failed", skip=None, reason=None)
+            elif record["outcome"] not in ("failed", "error"):
+                record.update(outcome="error", skip=None, reason=None)
+        elif report.skipped:
+            if hasattr(report, "wasxfail"):
+                record.update(outcome="xfailed", skip=None, reason=report.wasxfail)
+            else:
+                record.update(outcome="skipped", skip=_skip_category(report), reason=_skip_message(report))
+        elif report.when == "call":
+            if hasattr(report, "wasxfail"):
+                record.update(outcome="xpassed", skip=None, reason=report.wasxfail)
+            else:
+                record.update(outcome="passed", skip=None, reason=None)
+
+    @pytest.hookimpl(trylast=True)
+    def pytest_sessionfinish(self, session: pytest.Session) -> None:
+        # trylast: MustPass's tryfirst sessionfinish has set its problems by now.
+        partial = self.partial or any("::" in arg for arg in session.config.args)
+        lines: list[dict[str, Any]] = [{"kind": "run", "partial": partial}]
+        for item in getattr(session, "items", []):
+            lines.append({"kind": "test", "nodeid": item.nodeid, **self.merged.get(item.nodeid, _not_run())})
+        lines += self.collection_errors
+        must_pass = session.config.pluginmanager.get_plugin("agterm-must-pass")
+        if must_pass is not None:
+            lines += [{"kind": "must-pass", "problem": problem} for problem in must_pass.problems]
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+
+
+def _not_run() -> dict[str, Any]:
+    return {"outcome": "not-run", "skip": None, "reason": None}
 
 
 class _GateCollector:
@@ -444,10 +515,14 @@ def summary_line(stats: Mapping[str, list[Any]], impl: str | None, exercised: fr
     return f"{impl}: " + ", ".join(counts)
 
 
-def _skip_category(report: Any) -> str:
+def _skip_message(report: Any) -> str:
     longrepr = report.longrepr
     message = longrepr[2] if isinstance(longrepr, tuple) and len(longrepr) == 3 else str(longrepr)
-    message = message.removeprefix("Skipped: ")
+    return message.removeprefix("Skipped: ")
+
+
+def _skip_category(report: Any) -> str:
+    message = _skip_message(report)
     for category in (UNSUPPORTED, NOT_YET_AT_LEVEL):
         if message.startswith(f"{category}:"):
             return category

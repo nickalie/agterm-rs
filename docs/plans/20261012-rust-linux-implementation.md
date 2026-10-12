@@ -425,31 +425,32 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 - Create: `.github/workflows/rust-linux.yml`
 - Modify: `conformance/README.md`, `conformance/docs/rust-build.md`
 
-- [ ] `--nodeid-report PATH` per Technical Details, as a registered class next to `MustPass`
-- [ ] `run-rust-linux.sh`: cargo build (release), `stage.sh`, the suite with `--impl rust` under the same
+- [x] `--nodeid-report PATH` per Technical Details, as a registered class next to `MustPass`
+- [x] `run-rust-linux.sh`: cargo build (release), `stage.sh`, the suite with `--impl rust` under the same
       weston/dbus isolation as `run-reference-linux.sh` (keeping its leftover-instance-root check), report in
       `conformance/reports/rust-linux/`, then `check_ratchet.py`; exit non-zero on a ratchet failure or a leftover
       root, otherwise zero whatever pytest's own status
-- [ ] `check_ratchet.py` per Testing Strategy; prints newly passing unlisted ids
-- [ ] `scripts/run-dev.sh`: unique `AGTERM_APP_ID`, temp `AGTERM_STATE_DIR` and socket, then exec the staged build
-- [ ] `scripts/lint-report.sh`: list complexity `#[expect]`s with file, item, reason and count; fail on inner
+- [x] `check_ratchet.py` per Testing Strategy; prints newly passing unlisted ids
+- [x] `scripts/run-dev.sh`: unique `AGTERM_APP_ID`, temp `AGTERM_STATE_DIR` and socket, then exec the staged build
+- [x] `scripts/lint-report.sh`: list complexity `#[expect]`s with file, item, reason and count; fail on inner
       `#![allow`/`#![expect` outside `agterm-ghostty-sys`
-- [ ] CI job `rust-linux` (ubuntu-24.04), cargo part: both Zig versions by sha256, GTK4/libadwaita/WebKitGTK `-dev`
+- [x] CI job `rust-linux` (ubuntu-24.04), cargo part: both Zig versions by sha256, GTK4/libadwaita/WebKitGTK `-dev`
       packages, vendored prefix cached by the hash of `build/pins.env` and `build/patches/**`, fmt check, strict
-      clippy, lint report in the job summary, `cargo test`
-- [ ] `rust-build.md`: a "Rust target profile" section listing the capabilities the Rust build must claim by Task 37
+      clippy, lint report in the job summary, `cargo test` (written and actionlint-clean; its first GitHub run
+      happens after a push, not automatable here)
+- [x] `rust-build.md`: a "Rust target profile" section listing the capabilities the Rust build must claim by Task 37
       and the ones it does not, each with its reason (Technical Details); the capability table stays the
       references' profiles. `conformance/README.md` Reference discipline: the Rust build is held to upstream's
       contract (its capability branches included), reference-linux is a diagnostic for it, and the per-platform
       reference rule applies to the two Swift references
-- [ ] write tests: `test_ratchet.py` (pass; failed, errored, teardown-error and skipped listed ids; host-dependent
+- [x] write tests: `test_ratchet.py` (pass; failed, errored, teardown-error and skipped listed ids; host-dependent
       unsupported skip allowed, other unsupported skips not; collection error; not-collected on a partial and a full
       run; must-pass problem; ids containing spaces; unlisted new pass; malformed file)
-- [ ] write tests: pytester selftests for `--nodeid-report` in `test_plugin_options.py` (phase merge, module
+- [x] write tests: pytester selftests for `--nodeid-report` in `test_plugin_options.py` (phase merge, module
       teardown error, xfail/xpass, collection error, refused under `--coverage-gate`)
-- [ ] write tests: `test_run_rust_linux.py` with `fake_app`, like `test_run_reference_linux.py` (exit status follows
+- [x] write tests: `test_run_rust_linux.py` with `fake_app`, like `test_run_reference_linux.py` (exit status follows
       the ratchet, leftover root fails); runs before any `agterm` binary exists
-- [ ] run selftests and `cargo test`; must pass before Task 6
+- [x] run selftests and `cargo test`; must pass before Task 6
 
 ### Task 6: A libghostty surface in a GTK window
 

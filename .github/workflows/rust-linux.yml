@@ -1,0 +1,60 @@
+# The Rust workspace on Linux: format, strict clippy, the lint report and cargo test over the vendored libghostty.
+# The conformance run against the staged build joins this job once the app launches (run-rust-linux.sh).
+name: rust-linux
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+      - name: system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
+            curl xz-utils patch ncurses-bin
+      - name: rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # The prefixes and the Zig toolchains they were built with; keyed like the prefixes themselves.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/agterm-rs/vendor
+          key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
+      - name: pinned Zig toolchains (sha256 from build/pins.env)
+        shell: bash
+        run: |
+          source scripts/lib/native.sh
+          arch="$(host_zig_arch)"
+          for build in GHOSTTY ZMX; do
+            version_var="${build}_ZIG_VERSION"
+            sha_var="${build}_ZIG_SHA256_${arch^^}"
+            mkdir -p "$VENDOR_ROOT"
+            echo "$build: $(find_zig "${!version_var}" "${!sha_var}" "")"
+          done
+      - name: libghostty prefix
+        run: scripts/build-ghostty.sh
+      - name: format
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: lint report
+        shell: bash
+        run: scripts/lint-report.sh | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: test
+        run: cargo test --workspace
