@@ -193,6 +193,13 @@ class AxDriver(Driver):
         if error != AX_SUCCESS:
             raise DriverError(f"setting AXValue of {element} failed: AXError {error}")
 
+    def _focus(self, element: Element) -> None:
+        """Frontmost first: a field takes focus only in the key window."""
+        self.activate()
+        error = self.ax.AXUIElementSetAttributeValue(element.handle, "AXFocused", True)
+        if error != AX_SUCCESS:
+            raise DriverError(f"focusing {element} failed: AXError {error}")
+
     def _hover(self, element: Element) -> None:
         """A real pointer move through the HID tap, to the element's center: tracking areas ignore events posted to
         a pid. The app is made frontmost first, since hover tracking runs only in the key window."""

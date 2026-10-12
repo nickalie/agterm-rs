@@ -204,15 +204,20 @@ def test_find_bar_counts_the_matches(ctl, ui):
 
     def counted():
         # Typed, as the counter fills only once a typed needle searches; retyped, since a needle typed before the
-        # field took focus or before the output rendered never counts.
+        # output rendered never counts.
         ui.set_text(field, "")
+        ui.focus(field)
         ui.press(*marker)
         try:
             return wait_until(lambda: any("2" in ui.text(counter) for counter in ui.all("search-counter")), 3)
         except WaitTimeout:
             return None
 
-    wait_until(counted, 20)
+    try:
+        wait_until(counted, 20)
+    except WaitTimeout as error:
+        pane = assert_ok(ctl.request("session.text", sid))["text"][-300:]
+        raise AssertionError(f"{error}; field {ui.text(field)!r}; pane ends {pane!r}") from None
     ui.menu("View", "Find…")
     ui.absent("search-field")
     assert_ok(ctl.request("session.close", sid))

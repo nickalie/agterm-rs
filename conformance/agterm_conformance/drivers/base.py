@@ -220,6 +220,10 @@ class Driver(ABC):
         """Replace a text field's contents through the accessibility API, independent of keyboard focus."""
         self._set_text(self._resolve(target), text)
 
+    def focus(self, target: str | Element) -> None:
+        """Give the element keyboard focus, so `press` types into it."""
+        self._focus(self._resolve(target))
+
     def hover(self, target: str | Element) -> None:
         """Move the pointer over the element, for controls that appear only under it."""
         self._hover(self._resolve(target))
@@ -276,6 +280,9 @@ class Driver(ABC):
 
     @abstractmethod
     def _set_text(self, element: Element, text: str) -> None: ...
+
+    @abstractmethod
+    def _focus(self, element: Element) -> None: ...
 
     @abstractmethod
     def _hover(self, element: Element) -> None: ...
