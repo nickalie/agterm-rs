@@ -14,6 +14,7 @@ from agterm_conformance.impls.base import (
     DEFAULT_APP_ID,
     NO_PROFILE,
     SOCKET_PATH_CAP,
+    Adapter,
     LaunchError,
     LaunchRefused,
     LeftoverProcesses,
@@ -254,8 +255,9 @@ def test_launch_isolates_and_stop_cleans_up(roots: list[Path], fake_bin: Path, m
     assert not instance.root.exists()
 
 
-def test_launch_seeds_settings(roots: list[Path], fake_bin: Path) -> None:
-    adapter = SwiftLinuxAdapter(fake_bin)
+@pytest.mark.parametrize("adapter_class", [SwiftLinuxAdapter, RustAdapter])
+def test_launch_seeds_settings(roots: list[Path], fake_bin: Path, adapter_class: type[Adapter]) -> None:
+    adapter = adapter_class(fake_bin)
     instance = adapter.launch(settings={"restoreMode": "live", "autoFollowAttention": "s30"})
     try:
         seeded = json.loads((instance.state_dir / "settings.json").read_text())

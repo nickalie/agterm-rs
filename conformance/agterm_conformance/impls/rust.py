@@ -75,8 +75,10 @@ class RustAdapter(Adapter):
         assert self._profile is not None
         return self._profile
 
-    def launch(self, timeout: float = LAUNCH_TIMEOUT, app_id: str | None = None) -> Instance:
-        instance = super().launch(timeout, app_id)
+    def launch(
+        self, timeout: float = LAUNCH_TIMEOUT, app_id: str | None = None, settings: Mapping[str, Any] | None = None
+    ) -> Instance:
+        instance = super().launch(timeout, app_id, settings)
         if self._profile is None:
             try:
                 self._profile = profile_from_version(instance.version)
