@@ -1,0 +1,15 @@
+{
+    "assets": [
+        {
+            "browser_download_url": "https://github.com/umputun/agterm/releases/download/v0.36.0/agterm-0.36.0.dmg",
+            "content_type": "application/x-apple-diskimage",
+            "digest": "sha256:aa09d955b5c1ebafaa61f169febe582ad2f6189774efe2ea582cd74da04f36bf",
+            "name": "agterm-0.36.0.dmg",
+            "size": 21631491
+        }
+    ],
+    "draft": false,
+    "name": "Version 0.36.0",
+    "prerelease": false,
+    "tag_name": "v0.36.0"
+}

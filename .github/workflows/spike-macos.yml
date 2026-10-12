@@ -1,0 +1,113 @@
+# Spikes on reference-macos; findings go to conformance/docs/spike-macos.md.
+# A: fetch the upstream release, launch it through the swift-macos adapter, read version/tree, and round-trip a
+# line through the pane's /bin/sh. B: drive it through the ax driver (AXIdentifier, AXPress, CGEvent keystrokes).
+name: spike-macos
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: upstream release tag
+        default: v0.36.0
+        required: true
+  pull_request:
+    paths:
+      - .github/workflows/spike-macos.yml
+      - conformance/tools/spike_a.py
+      - conformance/tools/spike_b.py
+      - conformance/tools/fetch_reference.py
+      - conformance/agterm_conformance/drivers/**
+      - conformance/pyproject.toml
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    # Apple silicon: the upstream release is arm64-only.
+    runs-on: macos-26
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [uitest, plain]
+        # `env` alone gives the account's login shell on macOS (conformance/docs/spike-macos.md).
+        mechanism: [both, config]
+    env:
+      TAG: ${{ inputs.tag || 'v0.36.0' }}
+      REPORT: spike-${{ matrix.mode }}-${{ matrix.mechanism }}.json
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: install the suite
+        run: python -m pip install -e conformance
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/agterm-conformance/reference
+          key: agterm-reference-${{ env.TAG }}
+      - name: fetch the reference
+        id: reference
+        # bash, not the default `bash -e`: pipefail keeps a fetch failure from passing as tee's 0.
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python conformance/tools/fetch_reference.py --tag "$TAG" | tee -a "$GITHUB_OUTPUT"
+      - name: spike A
+        env:
+          BUNDLE: ${{ steps.reference.outputs.bundle }}
+        run: >
+          python conformance/tools/spike_a.py --impl swift-macos --bin "$BUNDLE"
+          --launch-mode "${{ matrix.mode }}" --mechanism "${{ matrix.mechanism }}" --out "$REPORT"
+      - name: upload the report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: spike-${{ matrix.mode }}-${{ matrix.mechanism }}
+          path: ${{ env.REPORT }}
+          if-no-files-found: warn
+
+  spike-b:
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      TAG: ${{ inputs.tag || 'v0.36.0' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: install the suite and the ax driver's bindings
+        run: python -m pip install -e "conformance[ax]"
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/agterm-conformance/reference
+          key: agterm-reference-${{ env.TAG }}
+      - name: fetch the reference
+        id: reference
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python conformance/tools/fetch_reference.py --tag "$TAG" | tee -a "$GITHUB_OUTPUT"
+      - name: accessibility grants
+        # The image grants the runner's /bin/bash and agent; TCC answers for the responsible process, not Python.
+        shell: bash
+        run: |
+          python -c 'from agterm_conformance.drivers.ax import trust; print(trust())'
+          for db in "/Library/Application Support/com.apple.TCC/TCC.db" "$HOME/Library/Application Support/com.apple.TCC/TCC.db"; do
+            echo "== $db"
+            sudo sqlite3 "$db" "SELECT service, client, client_type, auth_value FROM access
+              WHERE service IN ('kTCCServiceAccessibility', 'kTCCServicePostEvent', 'kTCCServiceListenEvent')" || true
+          done
+      - name: spike B
+        env:
+          BUNDLE: ${{ steps.reference.outputs.bundle }}
+        run: python conformance/tools/spike_b.py --bin "$BUNDLE" --out spike-b.json
+      - name: upload the report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: spike-b
+          path: spike-b.json
+          if-no-files-found: warn

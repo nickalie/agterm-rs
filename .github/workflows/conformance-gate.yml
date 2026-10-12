@@ -1,0 +1,26 @@
+# Host-free checks on every PR: the harness self-tests and the catalog coverage gate. Nothing here launches an app.
+name: conformance-gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: install the suite
+        run: python -m pip install -e conformance
+      - name: self-tests
+        run: python -m pytest conformance/selftests
+      - name: coverage gate
+        run: python -m pytest conformance --coverage-gate
