@@ -64,16 +64,21 @@ Upstream v0.36.0 (commit `6cef448a`) on the GitHub `macos-15` arm64 runner, not 
   `/bin/sh` there is bash 3.2.57 in POSIX mode.
 - The sentinel (`uitest`) stays the default; `plain` also renders a window and binds the socket for a lone instance.
   The full suite ran only under the sentinel, and only once each instance ran **its own copy of the bundle**.
-  The sentinel's FB11763863 workaround reopens `Bundle.main.bundleURL` through Launch Services, and with one
-  bundle path shared by several running instances that reopen reached another instance: every launch next to
-  a long-running one then sat in its run loop with no window and no socket.
-  `SwiftMacosAdapter` clones the bundle into `<root>/app/` (APFS `cp -c`, no data copied) and execs the clone.
+  With one bundle path shared, launches next to a long-running instance sat in their run loop with no window and
+  no socket. The likely cause, not verified: the sentinel's FB11763863 workaround reopens `Bundle.main.bundleURL`
+  through Launch Services, which delivered the reopen to the other instance.
+  `SwiftMacosAdapter` clones the bundle into `<root>/app/` (APFS `cp -c`, no data copied) and execs the clone;
+  no launch has failed since.
 - The macOS Local Network prompt for the test process ("Allow Python to find devices on local networks") is a
   system alert that, while it stays up, keeps every later launch from presenting a window.
-  Python's `HTTPServer` raised it by resolving its host with `getfqdn`; pages are now served by
-  `agterm_conformance.loopback`, which skips that lookup.
-- `CFFIXED_USER_HOME` holds: the reference writes `Library/Caches` and `Library/Application Support` under the
-  isolated home, and the runner's own `~/Library/Preferences` gains no agterm domain (checked by the workflow).
+  It came up while tests served pages with Python's `HTTPServer`, whose bind resolves the host with `getfqdn`.
+  Pages are now served by `agterm_conformance.loopback`, which skips that lookup, and the prompt has not
+  come back.
+- `CFFIXED_USER_HOME` moves `NSHomeDirectory()`: the reference writes `Library/Caches` and
+  `Library/Application Support` under the isolated home.
+  It does not move the defaults, which cfprefsd keeps per account: every instance reads and writes the account's
+  own `com.umputun.agterm` domain, so a run on a Mac with a live agterm would share its settings.
+  The workflow prints what the run left there.
 - SIGTERM ends the app at once in both modes, with no quit prompt and no final save:
   a selection saved on upstream's 0.3s debounce is lost if the quit comes first.
 - A downloaded and `ditto`-copied bundle starts, and so does its `cp -c` clone.
@@ -86,10 +91,10 @@ Upstream v0.36.0 (commit `6cef448a`) on the GitHub `macos-15` arm64 runner, not 
   and the host by that argv.
   The host outlives the app and takes a stop request only from a peer inside its bundle, so
   `SwiftMacosAdapter.stop_helpers` SIGTERMs it, by pid, only after re-checking that the pid runs the instance's
-  own bundle copy's `agterm-session-host` with `host <ZMX_DIR>` for that instance's state dir
-  (`docs/backlog/harness-stop-for-macos-session-host.md`, resolved).
+  own bundle copy's `agterm-session-host` with `host <ZMX_DIR>` for that instance's state dir.
 - Reaping waits for a claimed daemon zmx does not list yet (`observation: absent` refuses a kill) and for a closed
-  session's daemon to leave its 3s undo window.
+  session's daemon to leave its 3s undo window, and the leftover check gives a killed daemon up to 5s to exit:
+  zmx confirms a kill before the process is gone.
 
 ## The upstream release (v0.36.0)
 

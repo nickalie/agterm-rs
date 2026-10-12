@@ -549,16 +549,40 @@ a push to `nickalie/agterm-rs`. Everything before this task is Linux-only.
 - Modify: `conformance/docs/spike-macos.md`
 - Modify: `conformance/agterm_conformance/impls/swift_macos.py`
 - Modify: `.github/workflows/spike-macos.yml`, `.github/workflows/reference-macos.yml`
+- ➕ Modify: `impls/base.py` (`stop_helpers` and `instance_executable` hooks, process identity, reaping that waits and
+  reports, leftover grace, short `PS1`, two capabilities), `swift_linux.py`, `plugin.py` (`--must-pass`), and tests in
+  `protocol/{test_overlay,test_restore,test_split,test_window,test_zmx,test_surface,test_config_browser}.py`,
+  `cli/{test_cli_output,test_cli_only}.py`, `behaviors/test_relaunch.py`, with self-tests
+- ➕ Create: `conformance/agterm_conformance/loopback.py` (+ self-test); delete
+  `docs/backlog/harness-stop-for-macos-session-host.md`
 
-- [ ] prepare the VM: Python 3 for the suite (Command Line Tools or a standalone build), the upstream release at `catalog.upstream` via `fetch_reference.py`, the suite copied over
-- [ ] run spike A on the VM: fetch, launch, `version`/`tree`, `/bin/sh` round-trip
-- [ ] confirm or flip the interim sentinel choice from Task 5; confirm the `/bin/sh` mechanism on macOS; record outcomes in `spike-macos.md`
-- [ ] both workflows green on a PR (`conformance-gate` on ubuntu, `reference-macos` on macOS); needs a push to `nickalie/agterm-rs`
-- [ ] protocol and cli layers (Tasks 10–18) green on reference-macos; a red test is fixed or becomes a capability with a reason
-- [ ] ➕ every `requires("live-sessions")` test runs and passes on reference-macos (Task 17 never ran them): check the
+- [x] prepare the VM: Python 3 for the suite (Command Line Tools or a standalone build), the upstream release at `catalog.upstream` via `fetch_reference.py`, the suite copied over (blocked: VM is x86_64, upstream release is arm64-only — macOS verification ran on the GitHub macos-15 arm64 runner instead)
+- [x] run spike A on the VM: fetch, launch, `version`/`tree`, `/bin/sh` round-trip (on the GitHub macos-15 runner instead of the VM, `spike-macos.yml`)
+- [x] confirm or flip the interim sentinel choice from Task 5; confirm the `/bin/sh` mechanism on macOS; record outcomes in `spike-macos.md`
+- [x] both workflows green on a PR (`conformance-gate` on ubuntu, `reference-macos` on macOS); needs a push to `nickalie/agterm-rs`
+- [x] protocol and cli layers (Tasks 10–18) green on reference-macos; a red test is fixed or becomes a capability with a reason
+- [x] ➕ every `requires("live-sessions")` test runs and passes on reference-macos (Task 17 never ran them): check the
   runner account's login shell is zsh first, and count a `live-sessions` skip, a missing or a deselected Live test as
   a failure of this task, not a pass
-- [ ] run self-tests — must pass before task 20
+- [x] run self-tests — must pass before task 20
+- ➕ sentinel kept; only `command = /bin/sh` holds on macOS (`SHELL` alone gives the login shell through
+  `/usr/bin/login`). Each instance runs its own APFS clone of the bundle under its root: with a shared bundle path,
+  launches next to a running instance never presented a window. Test pages are served without `getfqdn`, which had
+  raised the Local Network prompt that blocked every later launch.
+- ➕ the macOS session host is ended by `SwiftMacosAdapter.stop_helpers` (option a): SIGTERM by exact pid after
+  re-checking executable (the instance's own bundle copy), `host <ZMX_DIR>` argv and the ZMX_DIR's derivation from
+  the instance's state dir; SIGKILL only for the same re-verified pid after 10s.
+- ➕ new capabilities, swift-linux has them and swift-macos lacks them: `capture-reads-command-panes` (upstream's
+  capture reads only the foreground group leader, the setuid `login` for a `--command` pane) and
+  `hidden-split-holds-focus` (upstream's shown left pane takes the focus back while its window is key).
+- ⚠️ `CFFIXED_USER_HOME` does not isolate the defaults: every macOS instance shares the account's
+  `com.umputun.agterm` domain (cfprefsd). Harmless on an ephemeral runner; never run reference-macos on a Mac with
+  a live agterm. The workflow prints what a run left there.
+- ⚠️ test changes made after the user stopped local reference-linux runs were validated by self-tests and the macOS
+  runner only: the `test_surface` cursor test reorder (park the right pane before the scratch comes up, after a
+  1-in-4 Linux flake) and the harness's reaping report and leftover grace. The last full reference-linux run before
+  that (a83eb66) was 639 passed, 12 skipped (Live, fish login shell), 1 failed (that flake). Re-run reference-linux
+  once Linux instances run on a headless compositor.
 
 ### Task 20: Spike B and the macOS AX driver
 

@@ -11,9 +11,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 class LoopbackServer(ThreadingHTTPServer):
     def server_bind(self) -> None:
-        # HTTPServer's own bind resolves the host with getfqdn, and on macOS that lookup raises the Local Network
-        # prompt for the test process: a system alert that keeps every agterm launched after it from presenting a
-        # window, so none of them binds its socket.
+        # HTTPServer's own bind resolves the host with getfqdn. On macOS the test process got the Local Network prompt
+        # while it did, a system alert that kept every later agterm from presenting a window and binding its socket.
         socketserver.TCPServer.server_bind(self)
         host, port = self.server_address[:2]
         self.server_name, self.server_port = str(host), int(port)

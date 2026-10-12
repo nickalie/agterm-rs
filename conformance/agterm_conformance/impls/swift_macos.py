@@ -115,8 +115,8 @@ class SwiftMacosAdapter(Adapter):
         return root / BUNDLE_DIR / bundle.name if bundle is not None else None
 
     def instance_executable(self, root: Path) -> list[str]:
-        """The instance's own copy of the bundle: the sentinel's window workaround reopens `Bundle.main.bundleURL`
-        through Launch Services, which hands a reopen for a bundle path several instances share to another one."""
+        """The instance's own copy of the bundle: next to a running instance of the same bundle path, a launch keeps
+        no window and binds no socket (conformance/docs/spike-macos.md)."""
         clone = self.instance_bundle(root)
         if clone is None:
             return self.executable()
