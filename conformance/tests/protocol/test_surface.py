@@ -168,11 +168,15 @@ def test_selectall_selects_the_buffer_for_copy(ctl, fresh):
     assert "\nsel1234\n" in f"\n{text}\n"
 
 
+@pytest.mark.requires("posix-shell", reason="the marker is printed by /bin/sh")
 @pytest.mark.covers("session.selectall", "session.copy", "behavior:protocol.target-resolution")
 def test_selection_commands_without_a_target_use_the_active_session(ctl, fresh):
     assert_error(ctl.request("session.copy"), "no selection")
+    assert_ok(ctl.request("session.type", fresh, text="printf '%s\\n' \"act$((1000 + 567))\"\n"))
+    ctl.wait_text(fresh, r"(?m)^act1567$")
     assert assert_ok(ctl.request("session.selectall")) == {"id": fresh}
-    assert isinstance(assert_ok(ctl.request("session.copy", fresh))["text"], str)
+    text = assert_ok(ctl.request("session.copy"))["text"]
+    assert "\nact1567\n" in f"\n{text}\n"
 
 
 @pytest.mark.covers("session.selectall", "session.copy", "session.paste")
