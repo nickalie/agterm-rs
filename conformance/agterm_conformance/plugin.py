@@ -638,7 +638,7 @@ class Launcher:
 
     def relaunch(self, ctl: Ctl) -> Ctl:
         index = self.launched.index(ctl.instance)
-        # Out of the list first: a relaunch that fails has stopped its process and keeps the root for diagnosis.
+        # Out of the list first: a failed relaunch has stopped its process, reported its leftovers and keeps the root.
         old = self.launched.pop(index)
         self.launched.insert(index, self.adapter.relaunch(old))
         return Ctl(self.launched[index])

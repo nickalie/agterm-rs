@@ -12,7 +12,15 @@ from agterm_conformance.impls.base import Instance, Profile
 from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
 from agterm_conformance.match import session_ids
 from agterm_conformance.plugin import Cli, Ctl, skip_reason
-from agterm_conformance.wait import Cursor, WaitTimeout, wait_event, wait_response, wait_text, wait_until
+from agterm_conformance.wait import (
+    Cursor,
+    WaitTimeout,
+    wait_event,
+    wait_frame,
+    wait_response,
+    wait_text,
+    wait_until,
+)
 
 TWO_SESSIONS = {
     "workspaces": [
@@ -772,6 +780,28 @@ def test_wait_until_timeout_names_the_check_and_its_last_failure() -> None:
 
     with pytest.raises(WaitTimeout, match=r"file_written did not hold within 0.2s; last check: no marker yet"):
         wait_until(file_written, timeout=0.2)
+
+
+def test_wait_frame_acks_pings_and_skips_other_frames() -> None:
+    frames = iter([{"kind": "ping", "gen": 3}, {"kind": "hud"}, {"kind": "status", "status": {}}])
+    sent = []
+    assert wait_frame(lambda seconds: next(frames), "status", sent.append, timeout=5) == {
+        "kind": "status",
+        "status": {},
+    }
+    assert sent == [{"kind": "ack", "gen": 3, "rev": 0}]
+
+
+def test_wait_frame_has_one_deadline_however_often_pings_arrive() -> None:
+    waits = [0.2]
+
+    def read(seconds: float) -> dict:
+        assert seconds <= waits[-1]
+        waits[-1] = seconds
+        return {"kind": "ping", "gen": 1}
+
+    with pytest.raises(WaitTimeout, match=r"no status frame within 0.2s; last skipped: \['ping'"):
+        wait_frame(read, "status", lambda frame: None, timeout=0.2)
 
 
 def test_wait_until_lets_other_errors_through() -> None:

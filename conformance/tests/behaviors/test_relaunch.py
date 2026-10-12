@@ -73,11 +73,13 @@ def test_relaunch_keeps_workspaces_sessions_and_their_metadata(launch):
 def test_relaunch_forgets_what_is_not_persisted(launch):
     ctl = launch()
     sid = _new(ctl)
+    assert_ok(ctl.request("session.select", sid))
     assert_ok(ctl.request("session.status", sid, status="blocked"))
-    assert_ok(ctl.request("notify", sid, body="relaunch"))
     assert_ok(ctl.request("session.scratch", sid, mode="on"))
     ctl.wait_mounted(sid, "scratch")
-    assert_ok(ctl.request("session.select", sid))
+    # After the select, which clears unseen.
+    assert_ok(ctl.request("notify", sid, body="relaunch"))
+    ctl.wait_tree(lambda tree: find_session(tree, sid).get("unseen", 0) >= 1)
 
     ctl = launch.relaunch(ctl)
     node = find_session(ctl.wait_tree(lambda tree: find_session(tree, sid)["realized"] is True), sid)

@@ -10,12 +10,11 @@ process left under the instance's `ZMX_DIR`.
 harness (see the catalog exemption)."""
 
 import itertools
-import time
 
 import pytest
-from agterm_conformance.client import ClientTimeout
 from agterm_conformance.match import assert_absent, assert_error, assert_ok, assert_subset, find_session, session_ids
 from agterm_conformance.plugin import Ctl
+from agterm_conformance.wait import wait_frame
 from agterm_conformance.zmx_client import leading_client
 
 UNKNOWN = "zzz"
@@ -332,30 +331,14 @@ def _hello(mode):
     }
 
 
-def _frame(stream, kind, timeout=10.0):
-    """The next frame of `kind` within `timeout`; pings are answered on the way, other frames skipped.
-
-    One deadline for the whole wait: the references ping every 10s, so a per-read timeout never expires."""
-    deadline = time.monotonic() + timeout
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise ClientTimeout(f"no {kind} frame within {timeout}s")
-        frame = stream.read(remaining)
-        if frame.get("kind") == "ping":
-            stream.send({"kind": "ack", "gen": frame["gen"], "rev": 0})
-        if frame.get("kind") == kind:
-            return frame
-
-
 def _subscribed(live, sid, mode):
     stream = live.stream("zmx.present", sid)
     assert stream.reply.ok, stream.reply.raw
     assert stream.reply.result == {"id": sid}
     stream.send(_hello(mode))
-    hello = _frame(stream, "hello")
+    hello = wait_frame(stream.read, "hello", stream.send)
     assert hello["hello"]["mode"] == mode and hello["hello"]["version"] == PRESENTATION_VERSION
-    _frame(stream, "snapshot")
+    wait_frame(stream.read, "snapshot", stream.send)
     return stream, hello["gen"]
 
 
@@ -382,7 +365,7 @@ def test_present_mirrors_a_live_session(live):
     with stream:
         _presenters(live, sid, {"mirrors": 1})
         assert_ok(live.request("session.status", sid, status="active"))
-        assert _frame(stream, "status")["status"]["status"] == "active"
+        assert wait_frame(stream.read, "status", stream.send)["status"]["status"] == "active"
     _presenters(live, sid, None)
     assert_ok(live.request("session.close", sid))
 
@@ -404,11 +387,11 @@ def test_job_run_serves_an_overlay_a_presenter_shows(live):
         presenter, gen = _subscribed(live, sid, "presenter")
         with presenter:
             presenter.send({"kind": "presenter.acquire", "gen": gen, "rev": 1})
-            _frame(presenter, "presenter.granted")
+            wait_frame(presenter.read, "presenter.granted", presenter.send)
             _presenters(live, sid, {"mirrors": 0, "presenter": True})
             # Handed to the presenter to show, and run by a helper that claims the job.
             assert assert_ok(live.request("session.overlay.open", sid, command="true"))["id"] == sid
-            job = _frame(presenter, "overlay.request")["overlay"]["job"]
+            job = wait_frame(presenter.read, "overlay.request", presenter.send)["overlay"]["job"]
             live.wait_tree(lambda tree: find_session(tree, sid).get("remoteOverlays") == [{}])
             assert find_session(live.tree(), sid)["overlay"] is False
             with live.stream("session.overlay.job.run", job) as helper:

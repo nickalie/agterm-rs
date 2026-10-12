@@ -395,20 +395,26 @@ class Adapter:
         """Quit `instance` with SIGTERM, then start the binary again on the same root, env and state directory.
 
         Nothing is reaped and no leftover is checked in between: a Live daemon outliving the quit is what the next
-        launch adopts. The returned instance replaces `instance`; stop that one, never the old.
+        launch adopts. A relaunch failing before the new process exists reports what the old one left instead.
+        The returned instance replaces `instance`; stop that one, never the old.
         """
         command = self.executable()
-        if _terminate(instance.process):
-            _release_app_id(instance.app_id)
-            raise StopError(f"pid {instance.pid} ignored SIGTERM for {STOP_TIMEOUT}s and was killed")
+        killed = _terminate(instance.process)
         _release_app_id(instance.app_id)
-        check_launch_env(instance.env, instance.root, self.needs_app_id, self.needs_runtime_dir)
-        if instance.app_id is not None:
-            _claim_app_id(instance.app_id)
         try:
-            process = _spawn(command, instance.env, instance.log, "ab")
-        except BaseException:
-            _release_app_id(instance.app_id)
+            if killed:
+                raise StopError(f"pid {instance.pid} ignored SIGTERM for {STOP_TIMEOUT}s and was killed")
+            check_launch_env(instance.env, instance.root, self.needs_app_id, self.needs_runtime_dir)
+            if instance.app_id is not None:
+                _claim_app_id(instance.app_id)
+            try:
+                process = _spawn(command, instance.env, instance.log, "ab")
+            except BaseException:
+                _release_app_id(instance.app_id)
+                raise
+        except BaseException as error:
+            if (leftovers := _leftovers_error(instance.zmx_dir)) is not None:
+                raise leftovers from error
             raise
         relaunched = Instance(
             process=process,
@@ -441,18 +447,25 @@ class Adapter:
                     reap_live_sessions(instance)
             finally:
                 killed = _terminate(instance.process)
-            leftovers = find_leftovers(instance.zmx_dir)
+            leftovers = _leftovers_error(instance.zmx_dir)
         finally:
             _release_app_id(instance.app_id)
-        if leftovers:
-            described = ", ".join(f"{pid} {command}" for pid, _, command in leftovers)
-            note = SESSION_HOST_NOTE if any(name == SESSION_HOST for _, name, _ in leftovers) else ""
-            raise LeftoverProcesses(f"processes left under ZMX_DIR {instance.zmx_dir}: {described}{note}")
+        if leftovers is not None:
+            raise leftovers
         if killed:
             raise StopError(f"pid {instance.pid} ignored SIGTERM for {STOP_TIMEOUT}s and was killed")
         if cleanup:
             shutil.rmtree(instance.root, ignore_errors=True)
             _remove_empty_dir(instance.zmx_dir)
+
+
+def _leftovers_error(zmx_dir: str) -> LeftoverProcesses | None:
+    leftovers = find_leftovers(zmx_dir)
+    if not leftovers:
+        return None
+    described = ", ".join(f"{pid} {command}" for pid, _, command in leftovers)
+    note = SESSION_HOST_NOTE if any(name == SESSION_HOST for _, name, _ in leftovers) else ""
+    return LeftoverProcesses(f"processes left under ZMX_DIR {zmx_dir}: {described}{note}")
 
 
 def _absolute(path: Path | None) -> Path | None:

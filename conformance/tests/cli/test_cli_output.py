@@ -21,7 +21,7 @@ from agterm_conformance.match import (
     workspaces,
 )
 from agterm_conformance.plugin import Ctl
-from agterm_conformance.wait import wait_until
+from agterm_conformance.wait import wait_frame, wait_until
 from agterm_conformance.zmx_client import leading_client
 
 UNKNOWN = "zzz"
@@ -178,7 +178,8 @@ def _events(ctl, cursor, last):
 def test_events_print_every_event_with_its_arguments(cli, ctl):
     cursor = ctl.events_baseline()
     with cli.spawn("events", "--run", cursor.run, "--after", str(cursor.after)) as stream:
-        sid = _new(ctl, name=_name("events"))
+        name = _name("events")
+        sid = _new(ctl, name=name)
         assert_ok(ctl.request("session.status", sid, status="active", blink=True, color="#ff8800", pane="left"))
         assert_ok(ctl.request("session.split", sid, mode="on"))
         assert_ok(ctl.request("session.scratch", sid, mode="on"))
@@ -186,9 +187,11 @@ def test_events_print_every_event_with_its_arguments(cli, ctl):
         assert_ok(ctl.request("session.close", sid))
         last = ctl.wait_event(cursor, "session.closed", {"session": sid})["seq"]
         expected = _events(ctl, cursor, last)
-        assert [stream.line() for _ in expected] == [cli_format.event(item) for item in expected]
-    lines = "\n".join(cli_format.event(item) for item in expected)
-    for argument in ("previous=idle", "pane=left", "blink", "color=#ff8800", "pane.split", "on", "cli title: cli body"):
+        printed = [stream.line() for _ in expected]
+    assert printed == [cli_format.event(item) for item in expected]
+    lines = "\n".join(printed) + "\n"
+    shown = (f"pane.split {name} shown\n", f"pane.scratch {name} shown\n", "cli title: cli body\n")
+    for argument in ("previous=idle", "pane=left", "blink", "color=#ff8800", *shown):
         assert argument in lines, argument
 
 
@@ -1067,16 +1070,19 @@ def test_live_present_bridges_the_stream(cli, live):
     cli = cli.on(live.instance)
     sid = _live_session(live)
     with cli.spawn("zmx", "present", sid, interactive=True) as bridge:
-        bridge.send(json.dumps(PRESENTATION_HELLO) + "\n")
-        kinds = []
-        while "snapshot" not in kinds:
-            kinds.append(json.loads(bridge.line())["kind"])
-        assert kinds[0] == "hello"
+
+        def read(seconds):
+            return json.loads(bridge.line(seconds))
+
+        def send(frame):
+            bridge.send(json.dumps(frame) + "\n")
+
+        send(PRESENTATION_HELLO)
+        assert read(10.0)["kind"] == "hello"
+        wait_frame(read, "snapshot", send)
         live.wait_tree(lambda tree: find_session(tree, sid).get("presenters") == {"mirrors": 1})
         assert_ok(live.request("session.status", sid, status="active"))
-        while (frame := json.loads(bridge.line()))["kind"] != "status":
-            pass
-        assert frame["status"]["status"] == "active"
+        assert wait_frame(read, "status", send)["status"]["status"] == "active"
     live.wait_tree(lambda tree: "presenters" not in find_session(tree, sid))
     assert_ok(live.request("session.close", sid))
 
@@ -1095,21 +1101,14 @@ def test_live_run_job_runs_the_handed_over_program(cli, live):
         )
         with live.stream("zmx.present", sid) as presenter:
             presenter.send({**PRESENTATION_HELLO, "hello": {**PRESENTATION_HELLO["hello"], "mode": "presenter"}})
-            gen = _stream_frame(presenter, "hello")["gen"]
+            gen = wait_frame(presenter.read, "hello", presenter.send)["gen"]
             presenter.send({"kind": "presenter.acquire", "gen": gen, "rev": 1})
-            _stream_frame(presenter, "presenter.granted")
+            wait_frame(presenter.read, "presenter.granted", presenter.send)
             assert_ok(live.request("session.overlay.open", sid, command="exit 3"))
-            job = _stream_frame(presenter, "overlay.request")["overlay"]["job"]
+            job = wait_frame(presenter.read, "overlay.request", presenter.send)["overlay"]["job"]
             ran = cli("session", "overlay", "run-job", job)
             assert ran.returncode == 3, (ran.stdout, ran.stderr)
             live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
             assert assert_ok(live.request("session.overlay.result", sid))["exitCode"] == 3
             _refused(cli("session", "overlay", "run-job", job), "job not claimable")
     assert_ok(live.request("session.close", sid))
-
-
-def _stream_frame(stream, kind):
-    while (frame := stream.read(10.0))["kind"] != kind:
-        if frame["kind"] == "ping":
-            stream.send({"kind": "ack", "gen": frame["gen"], "rev": 0})
-    return frame

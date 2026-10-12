@@ -30,11 +30,6 @@ def _env(cli, **changes):
     return env
 
 
-def _version(result):
-    assert (result.returncode, result.stderr) == (0, ""), (result.argv, result.returncode, result.stderr)
-    return result.stdout.splitlines()[0]
-
-
 def _unreachable(result, path):
     assert result.returncode == 1 and result.stdout == "", (result.argv, result.returncode, result.stdout)
     assert result.stderr.startswith(f"Error: connect({path}) failed: "), result.stderr

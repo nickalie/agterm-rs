@@ -301,6 +301,47 @@ def test_relaunch_of_an_app_ignoring_sigterm_fails_and_frees_its_app_id(
     adapter.stop(adapter.launch(app_id=app_id))
 
 
+def test_relaunch_killing_the_app_reports_the_daemons_it_left(
+    roots: list[Path],
+    fake_bin: Path,
+    tmp_path: Path,
+    daemons: list[subprocess.Popen[bytes]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_APP_MODE", "ignore-term")
+    monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    pid = spawn_daemon(tmp_path, "zmx", instance.zmx_dir, daemons)
+    with pytest.raises(LeftoverProcesses, match=rf"{pid} ") as raised:
+        adapter.relaunch(instance)
+    assert isinstance(raised.value.__cause__, StopError)
+    assert instance.process.returncode == -9 and instance.root.exists()
+
+
+def test_relaunch_failing_to_spawn_reports_the_daemons_left_and_frees_its_app_id(
+    roots: list[Path],
+    fake_bin: Path,
+    tmp_path: Path,
+    daemons: list[subprocess.Popen[bytes]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = SwiftLinuxAdapter(fake_bin)
+    app_id = f"{DEFAULT_APP_ID}.conformance.respawn"
+    instance = adapter.launch(app_id=app_id)
+    pid = spawn_daemon(tmp_path, "zmx", instance.zmx_dir, daemons)
+
+    def unspawnable(*args: object) -> subprocess.Popen[bytes]:
+        raise OSError("no binary")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(base, "_spawn", unspawnable)
+        with pytest.raises(LeftoverProcesses, match=rf"{pid} ") as raised:
+            adapter.relaunch(instance)
+    assert isinstance(raised.value.__cause__, OSError)
+    adapter.stop(adapter.launch(app_id=app_id))
+
+
 def test_duplicate_app_id_is_refused_until_the_owner_stops(roots: list[Path], fake_bin: Path) -> None:
     adapter = SwiftLinuxAdapter(fake_bin)
     app_id = f"{DEFAULT_APP_ID}.conformance.dup"

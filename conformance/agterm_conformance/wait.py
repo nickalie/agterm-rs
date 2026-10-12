@@ -11,6 +11,7 @@ import json
 import re
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
@@ -149,6 +150,29 @@ def wait_until(check: Callable[[], T], timeout: float = DEFAULT_TIMEOUT) -> T:
         if time.monotonic() >= deadline:
             raise WaitTimeout(f"{_describe(check)} did not hold within {timeout}s{last_failure}")
         _pause(POLL_INTERVAL)
+
+
+def wait_frame(
+    read: Callable[[float], dict[str, Any]],
+    kind: str,
+    send: Callable[[dict[str, Any]], None],
+    timeout: float = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """The next presentation frame of `kind`; pings are acked through `send` on the way, other frames skipped.
+
+    One deadline for the whole wait: the references ping every 10s, so a per-read timeout never expires.
+    `read(seconds)` returns the next frame or raises once none came in time.
+    """
+    deadline = time.monotonic() + timeout
+    skipped: deque[str] = deque(maxlen=_SHOWN_EVENTS)
+    while (remaining := deadline - time.monotonic()) > 0:
+        frame = read(remaining)
+        if frame.get("kind") == kind:
+            return frame
+        if frame.get("kind") == "ping":
+            send({"kind": "ack", "gen": frame["gen"], "rev": 0})
+        skipped.append(str(frame.get("kind")))
+    raise WaitTimeout(f"no {kind} frame within {timeout}s; last skipped: {list(skipped)}")
 
 
 def wait_text(
