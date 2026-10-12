@@ -6,6 +6,11 @@
 //! freed exactly once, by [`TerminalSurface::teardown`], which unrealizing the area calls with the context current.
 //! The embedding API cannot move a renderer to a new GL context, so a live surface's area must stay realized:
 //! containers keep it mounted and hide it, never re-parent it.
+//!
+//! Ownership: the area's `destroy` handler holds the one long-lived strong reference to the surface's state, and the
+//! state holds the area only weakly, so a container dropping the area disposes it, `destroy` releases the state and
+//! the key leaves the registry. A [`TerminalSurface`] handle holds the area strongly while it lives, which keeps a
+//! surface that is not in a container yet alive.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -61,7 +66,8 @@ type TitleHandler = Box<dyn Fn(&str)>;
 
 struct Inner {
     key: SurfaceKey,
-    area: gtk::GLArea,
+    /// Weak: the area owns this state through its `destroy` handler, so a strong reference here would be a cycle.
+    area: glib::WeakRef<gtk::GLArea>,
     im: gtk::IMMulticontext,
     spec: SurfaceSpec,
     ghostty: RefCell<Option<Surface>>,
@@ -81,11 +87,16 @@ thread_local! {
     static NEXT_KEY: Cell<usize> = const { Cell::new(1) };
 }
 
-/// The live surface libghostty knows by `key`, if it still exists.
+/// The live surface libghostty knows by `key`, if it still exists and is not torn down.
 pub fn lookup(key: SurfaceKey) -> Option<TerminalSurface> {
-    SURFACES
-        .with(|surfaces| surfaces.borrow().get(&key).and_then(Weak::upgrade))
-        .map(|inner| TerminalSurface { inner })
+    let weak = SURFACES.with(|surfaces| surfaces.borrow().get(&key).cloned())?;
+    TerminalSurface::upgrade(&weak).filter(|surface| !surface.inner.torn_down.get())
+}
+
+/// How many surfaces the registry holds (each one's area is alive).
+#[cfg(test)]
+fn registered() -> usize {
+    SURFACES.with(|surfaces| surfaces.borrow().len())
 }
 
 fn next_key() -> SurfaceKey {
@@ -96,10 +107,11 @@ fn next_key() -> SurfaceKey {
     })
 }
 
-/// A terminal widget. Cheap to clone; the area's `destroy` drops the last strong reference.
+/// A terminal widget. Cheap to clone; the area owns the surface, and its `destroy` releases it (module docs).
 #[derive(Clone)]
 pub struct TerminalSurface {
     inner: Rc<Inner>,
+    area: gtk::GLArea,
 }
 
 impl TerminalSurface {
@@ -116,7 +128,7 @@ impl TerminalSurface {
             .build();
         let inner = Rc::new(Inner {
             key: next_key(),
-            area,
+            area: area.downgrade(),
             im: gtk::IMMulticontext::new(),
             spec,
             ghostty: RefCell::new(None),
@@ -130,16 +142,20 @@ impl TerminalSurface {
             drew: Cell::new(false),
         });
         SURFACES.with(|surfaces| surfaces.borrow_mut().insert(inner.key, Rc::downgrade(&inner)));
-        let surface = Self { inner };
+        let surface = Self { inner, area };
         surface.connect_area();
         surface.connect_keyboard();
         surface.connect_pointer();
         surface.connect_focus();
-        // the widget owns the surface from here: its destroy releases the last strong reference
-        let owner = surface.clone();
-        surface.inner.area.connect_destroy(move |_| {
-            owner.teardown();
-            SURFACES.with(|surfaces| surfaces.borrow_mut().remove(&owner.inner.key));
+        // the widget owns the state from here: the handler's reference goes when dispose drops the area's handlers
+        let owner = Rc::clone(&surface.inner);
+        surface.area.connect_destroy(move |area| {
+            let surface = Self {
+                inner: Rc::clone(&owner),
+                area: area.clone(),
+            };
+            surface.teardown();
+            SURFACES.with(|surfaces| surfaces.borrow_mut().remove(&surface.inner.key));
         });
         surface
     }
@@ -147,7 +163,7 @@ impl TerminalSurface {
     /// The widget to place in a container.
     #[must_use]
     pub fn widget(&self) -> &gtk::GLArea {
-        &self.inner.area
+        &self.area
     }
 
     /// Called with each title a program sets (or the user's static one).
@@ -164,8 +180,11 @@ impl TerminalSurface {
         Rc::downgrade(&self.inner)
     }
 
+    /// A handle again, while both the state and its area are alive.
     fn upgrade(weak: &Weak<Inner>) -> Option<Self> {
-        weak.upgrade().map(|inner| Self { inner })
+        let inner = weak.upgrade()?;
+        let area = inner.area.upgrade()?;
+        Some(Self { inner, area })
     }
 
     /// Run `f` on the libghostty surface, if it exists. The borrow is shared, so callbacks libghostty makes during
@@ -175,7 +194,7 @@ impl TerminalSurface {
     }
 
     fn connect_area(&self) {
-        let area = &self.inner.area;
+        let area = &self.area;
         let weak = self.weak();
         area.connect_realize(move |area| {
             let Some(surface) = Self::upgrade(&weak) else { return };
@@ -229,7 +248,7 @@ impl TerminalSurface {
         if width == 0 || height == 0 {
             return;
         }
-        let scale = f64::from(self.inner.area.scale_factor());
+        let scale = f64::from(self.area.scale_factor());
         if self.inner.ghostty.borrow().is_none() {
             self.create(scale);
         }
@@ -245,7 +264,7 @@ impl TerminalSurface {
         if self.inner.torn_down.get() {
             return;
         }
-        let area = &self.inner.area;
+        let area = &self.area;
         area.make_current();
         if area.error().is_some() {
             return;
@@ -277,8 +296,10 @@ impl TerminalSurface {
         if self.inner.torn_down.replace(true) {
             return;
         }
-        // libghostty frees its GL objects in the area's context
-        self.inner.area.make_current();
+        // libghostty frees its GL objects in the area's context; an area never realized has no context and no surface
+        if self.area.is_realized() {
+            self.area.make_current();
+        }
         let Ok(mut slot) = self.inner.ghostty.try_borrow_mut() else {
             tracing::error!("terminal surface torn down while in use; it leaks");
             return;
@@ -288,11 +309,11 @@ impl TerminalSurface {
     }
 
     pub fn grab_focus(&self) {
-        self.inner.area.grab_focus();
+        self.area.grab_focus();
     }
 
     pub fn queue_render(&self) {
-        self.inner.area.queue_render();
+        self.area.queue_render();
     }
 
     pub fn apply_title(&self, title: &str) {
@@ -325,7 +346,7 @@ impl TerminalSurface {
         } else {
             pointer.shape.unwrap_or(MouseShape::Text).css_name()
         };
-        self.inner.area.set_cursor_from_name(Some(name));
+        self.area.set_cursor_from_name(Some(name));
     }
 
     /// The child exited: a command surface that should vanish closes now and suppresses libghostty's prompt (`true`);
@@ -391,7 +412,7 @@ impl TerminalSurface {
                 surface.focus_changed(false);
             }
         });
-        self.inner.area.add_controller(focus);
+        self.area.add_controller(focus);
     }
 
     fn focus_changed(&self, focused: bool) {
@@ -419,7 +440,7 @@ impl TerminalSurface {
                 surface.key_event(controller, KeyAction::Release, keyval, keycode, state);
             }
         });
-        self.inner.area.add_controller(keys);
+        self.area.add_controller(keys);
         self.connect_input_method();
     }
 
@@ -518,26 +539,21 @@ impl TerminalSurface {
         let Some(event) = controller.current_event() else {
             return false;
         };
+        // before the input method: a release it swallows must still lift the key
+        let action = self.inner.keys.borrow_mut().pressed.track(action, keycode);
         if self.filtered_by_input_method(&event) {
             self.inner.keys.borrow_mut().committed.clear();
             return true;
         }
-        let (action, text, composing) = {
+        let (text, composing) = {
             let mut keys = self.inner.keys.borrow_mut();
-            let action = match action {
-                KeyAction::Release => {
-                    keys.pressed.release(keycode);
-                    KeyAction::Release
-                }
-                _ => keys.pressed.press(keycode),
-            };
             let committed = std::mem::take(&mut keys.committed);
             let text = if committed.is_empty() {
                 input::keyval_text(keyval)
             } else {
                 Some(committed)
             };
-            (action, text, keys.composing)
+            (text, keys.composing)
         };
         let key_event = event.downcast_ref::<gdk::KeyEvent>();
         let num_lock = event.device().is_some_and(|device| device.is_num_locked());
@@ -548,9 +564,9 @@ impl TerminalSurface {
             action,
             mods: input::event_mods(state, keyval, action, num_lock),
             consumed_mods: input::translate_mods(consumed),
-            keycode,
+            keycode: key_event.map_or(keycode, |e| input::remapped_keycode(keycode, keyval, e.is_modifier())),
             text,
-            unshifted_codepoint: key_event.map_or(0, |e| unshifted_codepoint(&self.inner.area, e, keycode)),
+            unshifted_codepoint: key_event.map_or(0, |e| unshifted_codepoint(&self.area, e, keycode)),
             composing,
         };
         let used = self.with_surface(|s| s.send_key(&key)).unwrap_or(false);
@@ -575,7 +591,7 @@ impl TerminalSurface {
                 surface.click(gesture, MouseState::Release, x, y);
             }
         });
-        self.inner.area.add_controller(click);
+        self.area.add_controller(click);
 
         let motion = gtk::EventControllerMotion::new();
         let weak = self.weak();
@@ -603,7 +619,7 @@ impl TerminalSurface {
                 surface.with_surface(|s| s.mouse_pos(-1.0, -1.0, input::translate_mods(state)));
             }
         });
-        self.inner.area.add_controller(motion);
+        self.area.add_controller(motion);
         self.connect_scroll();
     }
 
@@ -631,12 +647,12 @@ impl TerminalSurface {
                 return glib::Propagation::Proceed;
             };
             let precision = controller.unit() == gdk::ScrollUnit::Surface;
-            let scale = f64::from(surface.inner.area.scale_factor());
+            let scale = f64::from(surface.area.scale_factor());
             let (x, y) = input::scroll_delta(dx, dy, scale, precision);
             surface.with_surface(|s| s.mouse_scroll(x, y, ScrollMods { precision }));
             glib::Propagation::Stop
         });
-        self.inner.area.add_controller(scroll);
+        self.area.add_controller(scroll);
     }
 }
 
@@ -654,4 +670,45 @@ fn unshifted_codepoint(widget: &impl IsA<gtk::Widget>, event: &gdk::KeyEvent, ke
         })
         .and_then(|(_, keyval)| keyval.to_unicode())
         .map_or(0, u32::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One test owns GTK: it initialises on the calling thread, and a second thread may not.
+    #[test]
+    fn the_area_owns_the_surface_without_a_cycle() {
+        if let Err(err) = gtk::init() {
+            eprintln!("skipped: GTK has no display ({err})");
+            return;
+        }
+
+        // a handle keeps a surface that is in no container yet
+        let unplaced = TerminalSurface::new(SurfaceSpec::default());
+        let key = unplaced.inner.key;
+        let state = unplaced.weak();
+        assert!(lookup(key).is_some());
+        drop(unplaced);
+        assert!(lookup(key).is_none(), "the last handle freed the unplaced surface");
+        assert!(state.upgrade().is_none());
+        assert_eq!(registered(), 0);
+
+        // once placed, the container owns it, and dropping the area frees everything
+        let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let terminal = TerminalSurface::new(SurfaceSpec::default());
+        let key = terminal.inner.key;
+        let state = terminal.weak();
+        container.append(terminal.widget());
+        drop(terminal);
+        let area = lookup(key).map(|surface| surface.widget().clone());
+        assert!(area.is_some(), "the container keeps the surface");
+        assert_eq!(registered(), 1);
+        if let Some(area) = area {
+            container.remove(&area);
+        }
+        assert!(lookup(key).is_none());
+        assert_eq!(registered(), 0, "destroy took the key out of the registry");
+        assert!(state.upgrade().is_none(), "nothing holds the surface's state");
+    }
 }

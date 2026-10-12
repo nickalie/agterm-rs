@@ -77,6 +77,101 @@ pub fn keyval_text(keyval: gdk::Key) -> Option<String> {
     keyval.to_unicode().filter(|c| *c >= ' ').map(String::from)
 }
 
+/// The XKB keycode libghostty takes for each keyval ghostty's GTK runtime maps to a key (`key.zig`'s `keymap`, with
+/// each key's Linux code from `input/keycodes.zig`). Keys with no Linux code there (F25, the keypad's navigation
+/// keyvals) are left out: the embedding API cannot name them, so they keep their physical code.
+#[rustfmt::skip]
+const KEYVAL_KEYCODES: &[(gdk::Key, u32)] = &[
+    (gdk::Key::a, 38), (gdk::Key::b, 56), (gdk::Key::c, 54), (gdk::Key::d, 40), (gdk::Key::e, 26), (gdk::Key::f, 41),
+    (gdk::Key::g, 42), (gdk::Key::h, 43), (gdk::Key::i, 31), (gdk::Key::j, 44), (gdk::Key::k, 45), (gdk::Key::l, 46),
+    (gdk::Key::m, 58), (gdk::Key::n, 57), (gdk::Key::o, 32), (gdk::Key::p, 33), (gdk::Key::q, 24), (gdk::Key::r, 27),
+    (gdk::Key::s, 39), (gdk::Key::t, 28), (gdk::Key::u, 30), (gdk::Key::v, 55), (gdk::Key::w, 25), (gdk::Key::x, 53),
+    (gdk::Key::y, 29), (gdk::Key::z, 52),
+    (gdk::Key::_0, 19), (gdk::Key::_1, 10), (gdk::Key::_2, 11), (gdk::Key::_3, 12), (gdk::Key::_4, 13),
+    (gdk::Key::_5, 14), (gdk::Key::_6, 15), (gdk::Key::_7, 16), (gdk::Key::_8, 17), (gdk::Key::_9, 18),
+    (gdk::Key::semicolon, 47), (gdk::Key::space, 65), (gdk::Key::apostrophe, 48), (gdk::Key::comma, 59),
+    (gdk::Key::grave, 49), (gdk::Key::period, 60), (gdk::Key::slash, 61), (gdk::Key::minus, 20), (gdk::Key::equal, 21),
+    (gdk::Key::bracketleft, 34), (gdk::Key::bracketright, 35), (gdk::Key::backslash, 51),
+    (gdk::Key::Up, 111), (gdk::Key::Down, 116), (gdk::Key::Right, 114), (gdk::Key::Left, 113), (gdk::Key::Home, 110),
+    (gdk::Key::End, 115), (gdk::Key::Insert, 118), (gdk::Key::Delete, 119), (gdk::Key::Caps_Lock, 66),
+    (gdk::Key::Scroll_Lock, 78), (gdk::Key::Num_Lock, 77), (gdk::Key::Page_Up, 112), (gdk::Key::Page_Down, 117),
+    (gdk::Key::Escape, 9), (gdk::Key::Return, 36), (gdk::Key::Tab, 23), (gdk::Key::BackSpace, 22),
+    (gdk::Key::Print, 107), (gdk::Key::Pause, 127),
+    (gdk::Key::F1, 67), (gdk::Key::F2, 68), (gdk::Key::F3, 69), (gdk::Key::F4, 70), (gdk::Key::F5, 71),
+    (gdk::Key::F6, 72), (gdk::Key::F7, 73), (gdk::Key::F8, 74), (gdk::Key::F9, 75), (gdk::Key::F10, 76),
+    (gdk::Key::F11, 95), (gdk::Key::F12, 96), (gdk::Key::F13, 191), (gdk::Key::F14, 192), (gdk::Key::F15, 193),
+    (gdk::Key::F16, 194), (gdk::Key::F17, 195), (gdk::Key::F18, 196), (gdk::Key::F19, 197), (gdk::Key::F20, 198),
+    (gdk::Key::F21, 199), (gdk::Key::F22, 200), (gdk::Key::F23, 201), (gdk::Key::F24, 202),
+    (gdk::Key::KP_0, 90), (gdk::Key::KP_1, 87), (gdk::Key::KP_2, 88), (gdk::Key::KP_3, 89), (gdk::Key::KP_4, 83),
+    (gdk::Key::KP_5, 84), (gdk::Key::KP_6, 85), (gdk::Key::KP_7, 79), (gdk::Key::KP_8, 80), (gdk::Key::KP_9, 81),
+    (gdk::Key::KP_Decimal, 91), (gdk::Key::KP_Divide, 106), (gdk::Key::KP_Multiply, 63), (gdk::Key::KP_Subtract, 82),
+    (gdk::Key::KP_Add, 86), (gdk::Key::KP_Enter, 104), (gdk::Key::KP_Equal, 125),
+    (gdk::Key::Copy, 141), (gdk::Key::Cut, 145), (gdk::Key::Paste, 143),
+    (gdk::Key::Shift_L, 50), (gdk::Key::Control_L, 37), (gdk::Key::Alt_L, 64), (gdk::Key::Super_L, 133),
+    (gdk::Key::Shift_R, 62), (gdk::Key::Control_R, 105), (gdk::Key::Alt_R, 108), (gdk::Key::Super_R, 134),
+];
+
+/// Whether an XKB keycode is a writing-system key (ghostty's `Key.shouldBeRemappable` is false for these): letters,
+/// digits and punctuation, including the international backslash, ro and yen keys.
+fn writing_system_key(keycode: u32) -> bool {
+    matches!(keycode, 10..=21 | 24..=35 | 38..=49 | 51..=61 | 94 | 97 | 132)
+}
+
+/// A keyval with modifier semantics GDK may not flag as a modifier event (ghostty's `isModifierKeyval`).
+fn modifier_keyval(keyval: gdk::Key) -> bool {
+    use gdk::Key;
+    [
+        Key::Shift_L,
+        Key::Shift_R,
+        Key::Shift_Lock,
+        Key::Control_L,
+        Key::Control_R,
+        Key::Caps_Lock,
+        Key::Meta_L,
+        Key::Meta_R,
+        Key::Alt_L,
+        Key::Alt_R,
+        Key::Super_L,
+        Key::Super_R,
+        Key::Hyper_L,
+        Key::Hyper_R,
+        Key::Num_Lock,
+        Key::Mode_switch,
+        Key::ISO_Lock,
+        Key::ISO_Level2_Latch,
+        Key::ISO_Level3_Shift,
+        Key::ISO_Level3_Latch,
+        Key::ISO_Level3_Lock,
+        Key::ISO_Level5_Shift,
+        Key::ISO_Level5_Latch,
+        Key::ISO_Level5_Lock,
+        Key::ISO_Group_Latch,
+        Key::ISO_Group_Lock,
+    ]
+    .contains(&keyval)
+}
+
+/// The keycode to give libghostty for a key event, after XKB remapping (ghostty's GTK `remapKey`): libghostty knows a
+/// key only by its code, so a remap such as Caps Lock to Escape must arrive as the remapped key's code. Remaps
+/// between two writing-system keys (another layout) keep the physical key, and a modifier with no key of its own
+/// becomes 0, no key, rather than the unrelated key that produced it.
+#[must_use]
+pub fn remapped_keycode(keycode: u32, keyval: gdk::Key, is_modifier: bool) -> u32 {
+    let remapped = KEYVAL_KEYCODES
+        .iter()
+        .find(|(key, _)| *key == keyval)
+        .map(|(_, code)| *code);
+    if let Some(remapped) = remapped
+        && (!writing_system_key(keycode) || !writing_system_key(remapped))
+    {
+        return remapped;
+    }
+    if is_modifier || modifier_keyval(keyval) {
+        return 0;
+    }
+    keycode
+}
+
 /// Which keys are down, to tell a repeat from a press: GTK delivers both as `key-pressed`.
 #[derive(Debug, Default)]
 pub struct PressedKeys {
@@ -95,6 +190,17 @@ impl PressedKeys {
 
     pub fn release(&mut self, keycode: u32) {
         self.down.remove(&keycode);
+    }
+
+    /// Record a key event before anything may consume it, so the set follows the physical keys even when the input
+    /// method swallows a release; the press or repeat it is, or the release.
+    pub fn track(&mut self, action: KeyAction, keycode: u32) -> KeyAction {
+        if action == KeyAction::Release {
+            self.release(keycode);
+            KeyAction::Release
+        } else {
+            self.press(keycode)
+        }
     }
 
     /// Forget every key, when the surface loses focus and their releases go elsewhere.
@@ -218,6 +324,66 @@ mod tests {
         assert_eq!(keys.press(38), KeyAction::Press);
         keys.clear();
         assert_eq!(keys.press(39), KeyAction::Press);
+    }
+
+    #[test]
+    fn a_release_the_input_method_swallows_still_lifts_the_key() {
+        let mut keys = PressedKeys::default();
+        assert_eq!(keys.track(KeyAction::Press, 50), KeyAction::Press);
+        assert_eq!(keys.track(KeyAction::Press, 50), KeyAction::Repeat);
+        // the release is tracked before the input method sees it, whatever it does with the event
+        assert_eq!(keys.track(KeyAction::Release, 50), KeyAction::Release);
+        assert_eq!(keys.track(KeyAction::Press, 50), KeyAction::Press);
+    }
+
+    #[test]
+    fn special_key_remaps_reach_libghostty_as_the_remapped_key() {
+        // caps:escape — the Caps Lock key (66) types Escape (9)
+        assert_eq!(remapped_keycode(66, gdk::Key::Escape, false), 9);
+        // caps:swapescape the other way round
+        assert_eq!(remapped_keycode(9, gdk::Key::Caps_Lock, true), 66);
+        // ctrl:nocaps — Caps Lock is Left Control
+        assert_eq!(remapped_keycode(66, gdk::Key::Control_L, true), 37);
+        // a writing-system key typing a special key is remapped too
+        assert_eq!(remapped_keycode(38, gdk::Key::Escape, false), 9);
+        // an unmapped special key keeps its code
+        assert_eq!(remapped_keycode(9, gdk::Key::Escape, false), 9);
+    }
+
+    #[test]
+    fn layouts_keep_the_physical_writing_system_key() {
+        // Dvorak: the physical A key types `a` as well, and the physical S key types `o`
+        assert_eq!(remapped_keycode(38, gdk::Key::a, false), 38);
+        assert_eq!(remapped_keycode(39, gdk::Key::o, false), 39);
+        // Russian: a keyval ghostty has no key for keeps the physical key
+        assert_eq!(remapped_keycode(54, gdk::Key::Cyrillic_es, false), 54);
+        // shifted keyvals are not in the map
+        assert_eq!(remapped_keycode(38, gdk::Key::A, false), 38);
+        // the keypad's navigation keyvals have no Linux code of their own
+        assert_eq!(remapped_keycode(87, gdk::Key::KP_End, false), 87);
+    }
+
+    #[test]
+    fn a_modifier_with_no_key_of_its_own_is_no_key() {
+        assert_eq!(remapped_keycode(119, gdk::Key::Mode_switch, false), 0);
+        assert_eq!(remapped_keycode(119, gdk::Key::VoidSymbol, true), 0);
+        assert_eq!(remapped_keycode(108, gdk::Key::ISO_Level3_Shift, true), 0);
+    }
+
+    #[test]
+    fn the_keycode_table_matches_writing_system_keys() {
+        for (keyval, code) in KEYVAL_KEYCODES {
+            if keyval.name().is_some_and(|name| name.starts_with("KP_")) {
+                assert!(!writing_system_key(*code), "{keyval:?} -> {code}");
+                continue;
+            }
+            let printable = keyval.to_unicode().is_some_and(|c| c.is_ascii_graphic());
+            assert_eq!(writing_system_key(*code), printable, "{keyval:?} -> {code}");
+        }
+        let mut codes: Vec<u32> = KEYVAL_KEYCODES.iter().map(|(_, code)| *code).collect();
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(codes.len(), KEYVAL_KEYCODES.len(), "each key has one code");
     }
 
     #[test]

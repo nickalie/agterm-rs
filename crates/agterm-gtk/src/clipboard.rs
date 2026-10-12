@@ -82,7 +82,7 @@ pub fn start_read(read: ClipboardRead, pending: PendingRequest) {
 
 fn complete_read(read: &ClipboardRead, pending: PendingRequest, text: Option<&str>) {
     let Some(surface) = surface::lookup(read.surface) else {
-        // the surface is gone, and freeing it discarded the request
+        // the surface is gone: the request cannot be completed and its record leaks (see PendingRequest)
         return;
     };
     let (contents, available) = read_completion(read, text);
