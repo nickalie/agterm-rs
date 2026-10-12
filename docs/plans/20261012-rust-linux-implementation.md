@@ -304,15 +304,15 @@
   module per command group (`src/<group>.rs`)
 - Create: `crates/agterm-ctl/tests/cli.rs`
 
-- [ ] clap command tree skeleton mirroring `agtermctlKit/Commands.swift` (global `--socket`, `--json` where upstream
-      has it)
-- [ ] socket resolution: `--socket`, then `AGTERM_STATE_DIR`, then the default, ported from `SocketClient.swift` and
+- [x] clap command tree skeleton mirroring `agtermctlKit/Commands.swift` (global `--socket`, `--json` where upstream
+      has it) (as upstream, both follow the subcommand: `agtermctl --socket S version` is a usage error, exit 64)
+- [x] socket resolution: `--socket`, then `AGTERM_STATE_DIR`, then the default, ported from `SocketClient.swift` and
       `ControlResolve.swift`; `agtermctl` reads neither `AGTERM_CONTROL_SOCKET` nor `AGTERM_SOCKET`
       (`test_agterm_socket_variable_is_not_read`), so it shares the state-dir code but not the app's socket env
-- [ ] `agtermctl version` prints `version (commit)`; exit codes and the error format as upstream
-- [ ] write tests: socket resolution order; exit code and stderr on a refused connection
-- [ ] write tests: `version` against an in-process server from `agterm-server`
-- [ ] run `cargo test`; must pass before Task 5
+- [x] `agtermctl version` prints `version (commit)`; exit codes and the error format as upstream
+- [x] write tests: socket resolution order; exit code and stderr on a refused connection
+- [x] write tests: `version` against an in-process server from `agterm-server`
+- [x] run `cargo test`; must pass before Task 5
 
 ### Task 5: Rust runner, ratchet, dev launcher, lint report and the cargo CI job
 
