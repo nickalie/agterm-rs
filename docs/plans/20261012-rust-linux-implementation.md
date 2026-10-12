@@ -544,17 +544,29 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 
 **Files:**
 - Create: `crates/agterm-core/src/model/{mod,window_library,store,workspace,session,pane,naming}.rs`
+- ➕ Create: `crates/agterm-core/src/model/{focus,navigation,recency,outbox}.rs` (focus filter and visible sets,
+  navigation and reselection, `RecencyStack`, the store's event/save outbox) and
+  `crates/agterm-core/src/model/tests/{mod,support,store,navigation,reselection,library}.rs`
+- ➕ Modify: `crates/agterm-core/src/lib.rs`
 
-- [ ] `WindowLibrary` → per-window `AppStore` → workspaces → sessions → panes, ported from upstream's
+- [x] `WindowLibrary` → per-window `AppStore` → workspaces → sessions → panes, ported from upstream's
       `WindowLibrary*.swift`, `AppStore.swift`, `AppStore+SessionState.swift`, `Workspace.swift`, `Session.swift`,
       `AppStore+Naming.swift` (the fork's extra `SessionNaming.swift` is not a source), per `sidebar.md` and
-      `windows.md`
-- [ ] selection, recency (`RecencyStack.swift`, `AppStore+Recency.swift`), new-session placement
+      `windows.md` (in-memory part: a store records its events and save requests in an `Outbox` the library
+      drains, for the ring (Task 12) and persistence (Task 9); sessions own their surfaces through `SurfaceSlot`
+      over the `Surface` trait; split fields grouped in `SplitLayout`, creation commands in `PaneLaunch`; the focus
+      filter, sidebar mode/width and multi-selection are in, since navigation and reselection scope by them;
+      soft close, recent closed (Task 11), restore from a snapshot (Task 9), status details (Task 15) and the
+      overlay/HUD/ask/scratch state come with their tasks; upstream's SwiftUI claim queue is not ported)
+- [x] selection, recency (`RecencyStack.swift`, `AppStore+Recency.swift`), new-session placement
       (`AppStore+NewSessionPlacement.swift`), close reselection (`AppStore+CloseReselection.swift`)
-- [ ] write tests: tree mutations, naming and display names (basename pins), placement (ported from upstream's
-      `AppStoreTests`, `AppStoreNameSanitizeTests`, `AppStoreNavigationTests`)
-- [ ] write tests: reselection after close, recency order
-- [ ] gate: full run; ratchet; must pass before Task 9
+- [x] write tests: tree mutations, naming and display names (basename pins), placement (ported from upstream's
+      `AppStoreTests`, `AppStoreNameSanitizeTests`, `AppStoreNavigationTests`; also `AppStoreFocusTests`,
+      `AppStoreOrganizationTests`, `AppStoreSidebarTests`, `AppStoreCurrentWorkspaceTests`, the store-level
+      `AppStoreEventTests` and the in-memory `WindowLibraryTests`: 345 tests in `model/tests/`)
+- [x] write tests: reselection after close, recency order
+- [x] gate: full run; ratchet; must pass before Task 9 (ratchet holds, 14 green as before: the model is not
+      wired into the app until Tasks 10–11)
 
 ### Task 9: Persistence and settings
 
@@ -562,6 +574,7 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 - Create: `crates/agterm-core/src/persist/{mod,snapshot,settings}.rs`
 - Create: `crates/agterm-core/tests/fixtures/` (snapshots and settings in upstream's format, plus files the
   installed fork wrote, for the replacement)
+- ➕ Modify: `crates/agterm-gtk/src/main.rs` (the log file under the state dir)
 
 - [ ] snapshot JSON identical to `Snapshot.swift`: `windows.json` index + `windows/<id>.json`, migration and recovery
       (legacy, corrupt, missing) as `WindowLibrary` init; debounced save through `MainLoop`; no save on a cwd report
@@ -570,6 +583,10 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 - [ ] write tests: load fixtures in upstream's format (`SnapshotRoundTripTests`, `PersistenceTests`) and ones the
       installed fork wrote; save → load round-trip is lossless
 - [ ] write tests: corrupt index, missing window file, unknown fields handled as upstream does
+- [ ] ➕ logging to the state dir, as Solution Overview promises: `tracing` today writes to stderr only, at the level
+      from `AGTERM_LOG` (`crates/agterm-gtk/src/main.rs`). Add a log file under the resolved state dir (rotation
+      and name settled against upstream's and the fork's practice), keep stderr, which the harness captures as the
+      instance log `conformance/tools/ghostty_probe.py` reads, and test the file appears under `AGTERM_STATE_DIR`
 - [ ] gate: full run; ratchet; must pass before Task 10
 
 ### Task 10: Tree projection and target resolution
@@ -850,10 +867,16 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 
 **Files:**
 - Create: `crates/agterm-core/src/commands/{config,browser,debug}.rs`
+- ➕ Modify: `crates/agterm-gtk/src/main.rs`, `crates/agterm-ghostty/src/app.rs` (argv to `ghostty_init`)
 
 - [ ] config.reload on every surface, answering the diagnostic count, so claim `config-reload-counts`;
       browser.clear, browser.links (`BrowserProfile.swift`, `ControlDispatcher+Browser.swift`); debug.appearance
       refused outside UI-test mode
+- [ ] ➕ `agterm`'s command line as upstream's: upstream has no options of its own and hands the full argv to
+      `ghostty_init` (`agterm/Ghostty/GhosttyApp.swift`), while the Rust build passes only argv[0] to both
+      GApplication and `ghostty_init` (`crates/agterm-gtk/src/main.rs`, `crates/agterm-ghostty/src/app.rs`). Pass
+      the argv on to `ghostty_init` as upstream does, keep GApplication from rejecting arguments it does not own, and
+      test that a launch with extra arguments starts and serves
 - [ ] matching `agtermctl` subcommands
 - [ ] write tests: reload propagation through the fake surfaces
 - [ ] write tests: browser profile paths and errors
