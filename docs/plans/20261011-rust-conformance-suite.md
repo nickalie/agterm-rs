@@ -608,13 +608,23 @@ a push to `nickalie/agterm-rs`. Everything before this task is Linux-only.
 **Files:**
 - Create: `conformance/tests/ui/`
 - Modify: `.github/workflows/reference-macos.yml`
+- ➕ Modify: `drivers/{base,ax}.py`, `plugin.py` (`ui_for`), `impls/{base,swift_macos,rust}.py` (`first_run`,
+  `serving`), `catalog.yaml` (exemptions), `coverage-baseline.txt`, `docs/spike-macos.md`,
+  `cli/test_cli_output.py`, self-tests
 
-- [ ] UI tests addressed only by `ui-ids.yaml` ids: role, name, state; no tree structure assertions
-- [ ] cover the ids or exempt them with a reason; coverage gate clean for `ui:` items
-- [ ] ➕ no `ui:` entry left in `conformance/coverage-baseline.txt`
-- [ ] ➕ read `tree.idleMs` after a GUI keystroke (Task 17's protocol test only pins that control input leaves it off)
-- [ ] add the ui layer to the macOS workflow with `--reruns 1`
-- [ ] run the ui layer on reference-macos — green before task 22
+- [x] UI tests addressed only by `ui-ids.yaml` ids: role, name, state; no tree structure assertions
+- [x] cover the ids or exempt them with a reason; coverage gate clean for `ui:` items
+- [x] ➕ no `ui:` entry left in `conformance/coverage-baseline.txt`
+- [x] ➕ read `tree.idleMs` after a GUI keystroke (Task 17's protocol test only pins that control input leaves it off)
+- [x] add the ui layer to the macOS workflow with `--reruns 1`
+- [x] run the ui layer on reference-macos — green before task 22
+- ➕ 111 of 114 ids covered by 35 tests in seven modules; exempted: `remote-reconnect-note-{pane}` (ssh) and
+  `palette-subtitle` / `palette-badge`, which the reference never exposes (its row id overrides theirs).
+  The driver gained `all`, `menu`, `tab`, `set_text`, `focus`, `hover` and an inventory of identified elements in
+  every miss; `ui_for(ctl)` drives an instance `launch` started; `launch(first_run=True)` shows the welcome and
+  returns before the socket serves (`adapter.serving`). Findings in `conformance/docs/spike-macos.md`.
+- ➕ fixed a Task 19 flake in `cli/test_cli_output.py::test_live_pane_commands`: it now renders a `zmx list` whose
+  every entry reports its client (upstream's count drops to 0 while a client attaches).
 
 ### Task 22: Verify acceptance criteria
 

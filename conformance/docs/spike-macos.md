@@ -123,6 +123,29 @@ It launches the reference through `SwiftMacosAdapter` (sentinel mode) and drives
 - pyobjc AX is viable, so the thin XCUITest bridge the plan held in reserve is not needed.
   The bindings are the `ax` extra: `pip install -e "conformance[ax]"`.
 
+## The ui layer on reference-macos (confirmed 2026-10-12)
+
+`conformance/tests/ui` runs as its own step of `reference-macos.yml`, with `--reruns 1`.
+What the reference showed while the tests settled:
+
+- `palette-subtitle` and `palette-badge` never reach the accessibility tree.
+  The palette row's own `palette-item-{item}` identifier overrides those of its texts,
+  so the subtitle reads as a second `palette-item-{item}` element. Both ids are exempted in `catalog.yaml`.
+- The first-run welcome is an `NSAlert` run modally before the window: the socket file exists but no request is
+  answered until it is dismissed. `launch(first_run=True)` therefore returns unserved, and the test calls
+  `adapter.serving(instance)` after pressing Later. Install is never pressed.
+- `workspace-add-session` is in the tree only while the pointer is over its workspace row.
+  `hover` moves the real pointer through the HID tap with the app frontmost: tracking areas ignore events posted
+  to a pid.
+- Keys posted to the pid did not reach the search field, and setting its `AXValue` shows the text without
+  searching. Focusing it through `AXFocused` (app frontmost) and typing does.
+- Some Settings elements fail `AXDescription` reads with `kAXErrorFailure` every time. The driver reads a failing
+  title, description, value or enabled flag as no value, and still treats a failing `AXChildren` or
+  `AXIdentifier` read as a read that did not happen.
+- The Settings window opens with `cmd+,`; its tabs are toolbar buttons found by title (`Driver.tab`).
+- `add-session`'s accessibility name is "Add session" on a fresh window and "Add Slide" once other views have
+  been up, so the test leaves its name unchecked.
+
 ## The upstream release (v0.36.0)
 
 - It has one asset, `agterm-0.36.0.dmg`, with sha256 `aa09d955…f36bf`, which GitHub records as the asset digest.
