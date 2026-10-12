@@ -48,7 +48,7 @@ def _open(ui, tab):
     try:
         found = ui.tab(tab, timeout=1)
     except ElementNotFound:
-        ui.menu("agterm", "Settings…")
+        ui.press("cmd+,")
         found = ui.tab(tab)
     ui.click(found)
 

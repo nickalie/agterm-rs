@@ -54,6 +54,8 @@ class FakeDriver(Driver):
         self.tabs: list[Element] = []
         self.pressed: list[Element] = []
         self.posted: list[Chord] = []
+        self.typed: list[tuple[Element, str]] = []
+        self.hovered: list[Element] = []
         self.polls = 0
 
     def _elements(self, ui_id: str) -> list[Element]:
@@ -80,6 +82,12 @@ class FakeDriver(Driver):
 
     def _post_chord(self, chord: Chord) -> None:
         self.posted.append(chord)
+
+    def _set_text(self, element: Element, text: str) -> None:
+        self.typed.append((element, text))
+
+    def _hover(self, element: Element) -> None:
+        self.hovered.append(element)
 
 
 # -- ids and templates
@@ -227,6 +235,14 @@ def test_click_and_text_resolve_an_id_or_take_an_element() -> None:
     driver.click(element)
     assert driver.pressed == [element, element]
     assert driver.text("add-session") == "label"
+
+
+def test_set_text_and_hover_resolve_an_id_or_take_an_element() -> None:
+    field = Element("add-session", "text-field")
+    driver = FakeDriver([field])
+    driver.set_text("add-session", "needle")
+    driver.hover(field)
+    assert driver.typed == [(field, "needle")] and driver.hovered == [field]
 
 
 def test_press_validates_every_chord_before_posting_any() -> None:

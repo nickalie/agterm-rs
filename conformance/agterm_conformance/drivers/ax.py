@@ -180,6 +180,29 @@ class AxDriver(Driver):
         value = element.value
         return value if isinstance(value, str) else element.name or ""
 
+    def _set_text(self, element: Element, text: str) -> None:
+        error = self.ax.AXUIElementSetAttributeValue(element.handle, "AXValue", text)
+        if error != AX_SUCCESS:
+            raise DriverError(f"setting AXValue of {element} failed: AXError {error}")
+
+    def _hover(self, element: Element) -> None:
+        """A real pointer move through the HID tap, to the element's center: tracking areas ignore events posted to
+        a pid. The app is made frontmost first, since hover tracking runs only in the key window."""
+        origin = self._geometry(element, "AXPosition", self.ax.kAXValueCGPointType)
+        size = self._geometry(element, "AXSize", self.ax.kAXValueCGSizeType)
+        center = (origin.x + size.width / 2, origin.y + size.height / 2)
+        self.activate()
+        q = self.quartz
+        for point in ((center[0] - 2, center[1]), center):
+            q.CGEventPost(q.kCGHIDEventTap, q.CGEventCreateMouseEvent(None, q.kCGEventMouseMoved, point, 0))
+
+    def _geometry(self, element: Element, name: str, kind: int) -> Any:
+        value = self.attribute(element.handle, name)
+        ok, unpacked = (False, None) if value is None else self.ax.AXValueGetValue(value, kind, None)
+        if not ok:
+            raise DriverError(f"{element} has no {name}")
+        return unpacked
+
     def _post_chord(self, chord: Chord) -> None:
         q = self.quartz
         flags = 0

@@ -216,6 +216,14 @@ class Driver(ABC):
     def text(self, target: str | Element) -> str:
         return self._text(self._resolve(target))
 
+    def set_text(self, target: str | Element, text: str) -> None:
+        """Replace a text field's contents through the accessibility API, independent of keyboard focus."""
+        self._set_text(self._resolve(target), text)
+
+    def hover(self, target: str | Element) -> None:
+        """Move the pointer over the element, for controls that appear only under it."""
+        self._hover(self._resolve(target))
+
     def press(self, *chords: str) -> None:
         """Post each chord as a synthesized key down and up, to the app process."""
         parsed = [parse_chord(chord) for chord in chords]
@@ -265,6 +273,12 @@ class Driver(ABC):
 
     @abstractmethod
     def _post_chord(self, chord: Chord) -> None: ...
+
+    @abstractmethod
+    def _set_text(self, element: Element, text: str) -> None: ...
+
+    @abstractmethod
+    def _hover(self, element: Element) -> None: ...
 
 
 def driver_name(impl: str, platform: str = sys.platform) -> str:

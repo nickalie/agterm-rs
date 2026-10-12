@@ -30,7 +30,7 @@ def test_rows_carry_the_names_the_tree_reads(ctl, ui):
 @pytest.mark.covers("ui:add-session")
 def test_add_session_menu_opens_a_session(ctl, ui):
     before = set(session_ids(ctl.tree()))
-    add = ui.find("add-session", role="popup", name="Add session")
+    add = ui.find("add-session", role="popup")
     ui.click(add)
     ui.click(ui.menu_item("New Session"))
     tree = ctl.wait_tree(lambda tree: set(session_ids(tree)) - before)
@@ -43,6 +43,9 @@ def test_add_session_menu_opens_a_session(ctl, ui):
 def test_workspace_add_session_opens_a_session_in_its_workspace(app, ctl, ui):
     (wid,) = workspace_ids(ctl.tree())
     (first,) = session_ids(ctl.tree())
+    ctl.wait_mounted(first, "left")
+    # Drawn only under the pointer.
+    ui.hover(ui.find("workspace-row"))
     ui.click(ui.find("workspace-add-session", role="button"))
     tree = ctl.wait_tree(lambda tree: len(session_ids(tree, wid)) == 2)
     (created,) = set(session_ids(tree, wid)) - {first}

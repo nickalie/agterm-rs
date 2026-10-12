@@ -398,5 +398,8 @@ exemptions:
   cli:zmx reset: a confirmed reset quits the app and relaunches it outside the harness, exempted with zmx.reset; its --force
     refusal is still tested
   cli:zmx attach: a successful attach runs ssh, exempted with zmx.attach; its refusals are still tested
+  ui:palette-subtitle: never exposed by the reference, since its row's `palette-item-{item}` identifier overrides those of the row's
+    texts, so the subtitle reads as a `palette-item-{item}` element, which the pick test checks
+  ui:palette-badge: never exposed by the reference, for the reason given for ui:palette-subtitle
   ui:remote-reconnect-note-{pane}: shows what ssh said when probing the remote host of an attached session failed, which
     needs zmx.attach over ssh, excluded by the suite's no-network constraints
