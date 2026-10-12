@@ -306,6 +306,9 @@ def test_restart_replaces_the_pane_shell(live):
     assert result["text"].startswith(f"restarted left pane: shell {before['leaderPID']} -> {new_pid}")
     # The daemon keeps its name: the pane identity it is derived from survives the restart.
     live.wait_response("zmx.list", None, lambda response: _rows(response, sid)["left"]["leaderPID"] == new_pid)
+    # Closed only once the pane runs the new program: a close racing the restart has left upstream's daemon
+    # orphaned rather than ended.
+    live.wait_tree(lambda tree: find_session(tree, sid).get("foreground") == ["cat"])
     assert_ok(live.request("session.close", sid))
     _gone(live, before["daemon"])
 
