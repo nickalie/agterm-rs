@@ -256,18 +256,21 @@
 - Create: `crates/agterm-ghostty/{Cargo.toml,build.rs,src/lib.rs,src/config.rs,src/app.rs}`,
   `crates/agterm-ghostty/tests/smoke.rs`
 
-- [ ] copy the pins (both Zig versions with sha256, `GHOSTTY_REV`, themes, `ZMX_REV`) and all six patches from the
-      fork
-- [ ] `build-ghostty.sh`: port `setup-linux.sh` (Zig 0.15.2, patches, shared `libghostty.so`, themes,
-      shell-integration, terminfo) into the vendored prefix; verify resources as `verify-linux-resources.sh`
-- [ ] `stage.sh`: assemble the staging layout from `target/` and the vendored prefix
-- [ ] `agterm-ghostty-sys`: checked-in bindgen output for the subset the fork uses; `links = "ghostty"`, `build.rs`
+- [x] copy the pins (both Zig versions with sha256, `GHOSTTY_REV`, themes, `ZMX_REV`) and all six patches from the
+      fork (ghostty patches numbered `0001`–`0003` in the fork's apply order; the OpenGL hunk got its missing
+      trailing context line so `patch --fuzz=0` takes it)
+- [x] `build-ghostty.sh`: port `setup-linux.sh` (Zig 0.15.2, patches, shared `libghostty.so`, themes,
+      shell-integration, terminfo) into the vendored prefix; verify resources as `verify-linux-resources.sh` (fetches
+      the source archive of `GHOSTTY_REV`, not a git checkout, and the pinned Zig tarball when no matching zig is
+      installed; `scripts/gen-ghostty-bindings.sh` regenerates the checked-in bindings)
+- [x] `stage.sh`: assemble the staging layout from `target/` and the vendored prefix
+- [x] `agterm-ghostty-sys`: checked-in bindgen output for the subset the fork uses; `links = "ghostty"`, `build.rs`
       links the prefix and exports its root (Technical Details > Linking); own rustc lints, no workspace lints
-- [ ] `agterm-ghostty`: safe wrapper for init, config load and read, diagnostics
-- [ ] write tests: smoke test that inits libghostty, loads a config file and reads a value back
-- [ ] write tests: a missing config file reports diagnostics instead of panicking
-- [ ] check: without the prefix the build fails with the "run scripts/build-ghostty.sh" message
-- [ ] run `build-ghostty.sh` (background) and `cargo test -p agterm-ghostty`; must pass before Task 3
+- [x] `agterm-ghostty`: safe wrapper for init, config load and read, diagnostics
+- [x] write tests: smoke test that inits libghostty, loads a config file and reads a value back
+- [x] write tests: a missing config file reports diagnostics instead of panicking
+- [x] check: without the prefix the build fails with the "run scripts/build-ghostty.sh" message
+- [x] run `build-ghostty.sh` (background) and `cargo test -p agterm-ghostty`; must pass before Task 3
 
 ### Task 3: Host traits, core skeleton and the control server
 

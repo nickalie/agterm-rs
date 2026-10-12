@@ -10,11 +10,14 @@ publish = false
 
 [workspace.dependencies]
 agterm-proto = { path = "crates/agterm-proto" }
+agterm-ghostty-sys = { path = "crates/agterm-ghostty-sys" }
+agterm-ghostty = { path = "crates/agterm-ghostty" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_with = { version = "3", default-features = false, features = ["macros"] }
 strum = { version = "0.27", features = ["derive"] }
 serde_norway = "0.9"
+tempfile = "3"
 
 # Inherited by every crate except `agterm-ghostty-sys` (`[lints] workspace = true`). Only a reasoned outer
 # `#[expect(..., reason = "...")]` on the one item can lift a lint: `#[allow]` is refused.
