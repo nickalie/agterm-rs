@@ -254,6 +254,9 @@ def test_pane_overlays_cover_one_pane_each(ctl):
     assert_absent(_node(ctl, sid), "paneOverlays")
     assert_error(ctl.request("session.overlay.close", sid, pane="left"), "no overlay")
 
+    # A fresh session: upstream records a closed overlay's status at its surface's teardown, which can land after
+    # the next overlay in the same pane has exited and overwrite that one's.
+    sid = _split(ctl)
     _open(ctl, sid, "exit 5", pane="right")
     ctl.wait_tree(lambda tree: "paneOverlays" not in find_session(tree, sid))
     _result(ctl, sid, 5, pane="right")

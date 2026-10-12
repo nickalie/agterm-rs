@@ -628,16 +628,18 @@ def mac_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[SwiftMaco
 
 def test_owned_session_host_gets_sigterm(mac_host: tuple[SwiftMacosAdapter, Instance, FakeHosts]) -> None:
     adapter, instance, hosts = mac_host
-    hosts.answers[41] = [host_identity(adapter.bundle(), instance.zmx_dir)]
+    hosts.answers[41] = [host_identity(adapter.instance_bundle(instance.root), instance.zmx_dir)]
     assert adapter.stop_helpers(instance) is None
     assert hosts.signals == [(41, signal.SIGTERM)]
 
 
+@pytest.mark.parametrize("which", ["shared", "other"])
 def test_session_host_from_another_bundle_is_not_signalled(
-    mac_host: tuple[SwiftMacosAdapter, Instance, FakeHosts], tmp_path: Path
+    mac_host: tuple[SwiftMacosAdapter, Instance, FakeHosts], tmp_path: Path, which: str
 ) -> None:
     adapter, instance, hosts = mac_host
-    hosts.answers[41] = [host_identity(tmp_path / "other" / "agterm.app", instance.zmx_dir)]
+    bundle = adapter.bundle() if which == "shared" else tmp_path / "other" / "agterm.app"
+    hosts.answers[41] = [host_identity(bundle, instance.zmx_dir)]
     assert adapter.stop_helpers(instance) is None
     assert hosts.signals == []
 
@@ -646,7 +648,7 @@ def test_session_host_for_another_zmx_dir_is_not_signalled(
     mac_host: tuple[SwiftMacosAdapter, Instance, FakeHosts],
 ) -> None:
     adapter, instance, hosts = mac_host
-    hosts.answers[41] = [host_identity(adapter.bundle(), "/tmp/agterm-zmx-0000000000000000")]
+    hosts.answers[41] = [host_identity(adapter.instance_bundle(instance.root), "/tmp/agterm-zmx-0000000000000000")]
     assert adapter.stop_helpers(instance) is None
     assert hosts.signals == []
 
@@ -659,7 +661,7 @@ def test_zmx_dir_not_derived_from_the_instance_state_dir_signals_nothing(
     outside.mkdir()
     instance.state_dir = outside
     instance.zmx_dir = zmx_socket_directory(outside)
-    hosts.answers[41] = [host_identity(adapter.bundle(), instance.zmx_dir)]
+    hosts.answers[41] = [host_identity(adapter.instance_bundle(instance.root), instance.zmx_dir)]
     assert adapter.stop_helpers(instance) is None
     assert hosts.signals == []
 
@@ -669,7 +671,7 @@ def test_pid_reused_before_the_signal_is_not_signalled(
 ) -> None:
     adapter, instance, hosts = mac_host
     stranger = ProcessIdentity("/usr/bin/vim", ("vim",))
-    hosts.answers[41] = [host_identity(adapter.bundle(), instance.zmx_dir), stranger]
+    hosts.answers[41] = [host_identity(adapter.instance_bundle(instance.root), instance.zmx_dir), stranger]
     assert adapter.stop_helpers(instance) is None
     assert hosts.signals == []
 
@@ -679,7 +681,7 @@ def test_session_host_ignoring_sigterm_is_killed_after_reverifying(
 ) -> None:
     adapter, instance, hosts = mac_host
     hosts.ignores_sigterm = True
-    hosts.answers[41] = [host_identity(adapter.bundle(), instance.zmx_dir)]
+    hosts.answers[41] = [host_identity(adapter.instance_bundle(instance.root), instance.zmx_dir)]
     assert "41 ignored SIGTERM" in (adapter.stop_helpers(instance) or "")
     assert hosts.signals == [(41, signal.SIGTERM), (41, signal.SIGKILL)]
 
@@ -694,7 +696,7 @@ def test_pid_reused_while_waiting_for_sigterm_gets_no_sigkill(
         raise swift_macos.WaitTimeout("still running")
 
     monkeypatch.setattr(swift_macos, "wait_until", timed_out)
-    owned = host_identity(adapter.bundle(), instance.zmx_dir)
+    owned = host_identity(adapter.instance_bundle(instance.root), instance.zmx_dir)
     hosts.answers[41] = [owned, owned, ProcessIdentity("/usr/bin/vim", ("vim",))]
     adapter.stop_helpers(instance)
     assert hosts.signals == [(41, signal.SIGTERM)]
@@ -763,7 +765,12 @@ def test_swift_linux_profile(zsh_login: Path, fake_bin: Path) -> None:
     _staged_zmx(fake_bin)
     adapter = SwiftLinuxAdapter(fake_bin)
     assert adapter.parity_level == "0.36.0"
-    assert adapter.capabilities == {"posix-shell", "capture-reads-command-panes", "live-sessions"}
+    assert adapter.capabilities == {
+        "posix-shell",
+        "capture-reads-command-panes",
+        "hidden-split-holds-focus",
+        "live-sessions",
+    }
     assert "window-geometry" not in adapter.capabilities
     assert adapter.profile.absent == {}
 
@@ -916,6 +923,19 @@ def test_swift_linux_without_share_sets_no_resource_root(fake_bin: Path, tmp_pat
     explicit = tmp_path / "resources"
     env = SwiftLinuxAdapter(fake_bin, resource_root=explicit).build_env(tmp_path)
     assert env["AGTERM_RESOURCE_ROOT"] == str(explicit)
+
+
+def test_swift_macos_instance_runs_its_own_copy_of_the_bundle(tmp_path: Path) -> None:
+    bundle = tmp_path / "ref" / "agterm.app"
+    (bundle / "Contents" / "MacOS").mkdir(parents=True)
+    (bundle / "Contents" / "MacOS" / "agterm").write_text("binary")
+    adapter = SwiftMacosAdapter(bundle / "Contents" / "MacOS" / "agterm")
+    root = tmp_path / "root"
+    command = adapter.instance_executable(root)
+    copy = root / "app" / "agterm.app"
+    assert command == [str(copy / "Contents" / "MacOS" / "agterm")]
+    assert (copy / "Contents" / "MacOS" / "agterm").read_text() == "binary"
+    assert adapter.instance_executable(root) == command
 
 
 def test_swift_macos_execs_inside_the_bundle(tmp_path: Path) -> None:

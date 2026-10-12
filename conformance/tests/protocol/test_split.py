@@ -126,13 +126,17 @@ def test_focus_names_a_pane_by_role_or_position(ctl):
 
 
 @pytest.mark.covers("session.focus")
-def test_focus_reaches_a_hidden_split(ctl):
+def test_focus_reaches_a_hidden_split(ctl, adapter):
     sid = _split(ctl)
     assert_ok(ctl.request("session.focus", sid, pane="left"))
     assert_ok(ctl.request("session.split", sid, mode="off"))
-    assert_ok(ctl.request("session.focus", sid, pane="right"))
-    # Upstream's read-back can trail the reply.
-    ctl.wait_tree(lambda tree: assert_subset(find_session(tree, sid), {"split": False, "splitFocused": True}) or True)
+    assert assert_ok(ctl.request("session.focus", sid, pane="right")) == {"id": sid}
+    if adapter.has("hidden-split-holds-focus"):
+        assert_subset(_node(ctl, sid), {"split": False, "splitFocused": True})
+    else:
+        # Upstream's shown left pane takes the focus back whenever its window is key, so the read-back
+        # depends on which app is frontmost.
+        assert _node(ctl, sid)["split"] is False
 
 
 @pytest.mark.covers("session.resize", "field:tree.session.splitRatio", "field:result.ratio")

@@ -93,6 +93,8 @@ CAPABILITIES: Mapping[str, str] = {
     "`light`/`dark` only while following",
     "keymap-menu": "`keymap.list` reports the menu bar's live key equivalents in `menu`",
     "config-reload-counts": "`config.reload` answers with the ghostty config's diagnostic count in `result.count`",
+    "hidden-split-holds-focus": "`session.focus` on a hidden split reads back as `splitFocused`; upstream's shown "
+    "left pane takes the focus back while its window is key",
     "capture-reads-command-panes": "`restore.capture` records a `--command` session's program; upstream reads only "
     "the foreground group's leader, there the setuid `login` wrapper whose argv a user cannot read",
 }
@@ -331,6 +333,10 @@ class Adapter:
             raise LaunchError(f"{self.name}: no binary to launch")
         return [os.fspath(self.bin)]
 
+    def instance_executable(self, root: Path) -> list[str]:
+        """The command one instance runs, given its root; a relaunch on the same root gets the same one."""
+        return self.executable()
+
     def platform_env(self, env: dict[str, str]) -> None:
         """Hook for adapter-specific variables; `env` is already isolated."""
 
@@ -373,13 +379,14 @@ class Adapter:
         self, timeout: float = LAUNCH_TIMEOUT, app_id: str | None = None, settings: Mapping[str, Any] | None = None
     ) -> Instance:
         """`settings` seeds `<state>/settings.json`, which both references read at launch (`restoreMode`, ...)."""
-        command = self.executable()
+        self.executable()  # refuses before anything exists
         root = make_root()
         try:
             env = self.build_env(root, app_id)
             check_launch_env(env, root, self.needs_app_id, self.needs_runtime_dir)
             app_id = env.get("AGTERM_APP_ID")
             _prepare_tree(root, Path(env["HOME"]), Path(env["AGTERM_STATE_DIR"]), self.ghostty_config(), settings)
+            command = self.instance_executable(root)
             if self.needs_runtime_dir:
                 os.mkdir(env["XDG_RUNTIME_DIR"], 0o700)  # the XDG spec's mode
                 write_noop_launchers(Path(env["XDG_CONFIG_HOME"]), Path(env["XDG_DATA_HOME"]))
@@ -415,7 +422,7 @@ class Adapter:
         launch adopts. A relaunch failing before the new process exists reports what the old one left instead.
         The returned instance replaces `instance`; stop that one, never the old.
         """
-        command = self.executable()
+        command = self.instance_executable(instance.root)
         killed = _terminate(instance.process)
         _release_app_id(instance.app_id)
         try:

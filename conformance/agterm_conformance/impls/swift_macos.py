@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import shutil
 import signal
+import subprocess
+import sys
 from pathlib import Path
 
 from agterm_conformance.client import ClientError, check_under_root
@@ -44,6 +47,7 @@ BASE_CAPABILITIES = frozenset(
     }
 )
 LAUNCH_MODES = ("uitest", "plain")
+BUNDLE_DIR = "app"
 
 
 class SwiftMacosAdapter(Adapter):
@@ -106,9 +110,30 @@ class SwiftMacosAdapter(Adapter):
         path = Path(self.bin)
         return next((candidate for candidate in (path, *path.parents) if candidate.suffix == ".app"), None)
 
-    def owns_session_host(self, instance: Instance, pid: int) -> bool:
-        """`pid` runs this bundle's session host for this instance's own ZMX_DIR, derived from a state dir in its root."""
+    def instance_bundle(self, root: Path) -> Path | None:
         bundle = self.bundle()
+        return root / BUNDLE_DIR / bundle.name if bundle is not None else None
+
+    def instance_executable(self, root: Path) -> list[str]:
+        """The instance's own copy of the bundle: the sentinel's window workaround reopens `Bundle.main.bundleURL`
+        through Launch Services, which hands a reopen for a bundle path several instances share to another one."""
+        clone = self.instance_bundle(root)
+        if clone is None:
+            return self.executable()
+        if not clone.exists():
+            clone.parent.mkdir(parents=True, exist_ok=True)
+            source = self.bundle()
+            if sys.platform == "darwin":
+                # An APFS clone: no data is copied.
+                subprocess.run(["cp", "-c", "-R", os.fspath(source), os.fspath(clone)], check=True)
+            else:
+                shutil.copytree(source, clone, symlinks=True)
+        return [os.fspath(clone / "Contents" / "MacOS" / "agterm")]
+
+    def owns_session_host(self, instance: Instance, pid: int) -> bool:
+        """`pid` runs the session host of this instance's own bundle copy for its ZMX_DIR, derived from a state dir
+        in its root."""
+        bundle = self.instance_bundle(instance.root)
         if bundle is None or instance.zmx_dir != zmx_socket_directory(instance.state_dir):
             return False
         try:
