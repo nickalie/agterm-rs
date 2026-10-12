@@ -303,8 +303,8 @@ def test_linux_launch_sends_every_uri_to_a_noop(
         if gio := shutil.which("gio"):
             env = {name: seen[name] for name in ("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "PATH")}
             for mime in ("inode/directory", "x-scheme-handler/https"):
-                answer = subprocess.run([gio, "mime", mime], env=env, capture_output=True, text=True).stdout
-                assert answer.splitlines()[0].endswith(f"“{mime}”: {NOOP_DESKTOP_ID}")
+                answer = subprocess.run([gio, "mime", mime], env=env, capture_output=True, text=True, check=False)
+                assert answer.stdout.splitlines()[0].endswith(f"“{mime}”: {NOOP_DESKTOP_ID}"), answer
     finally:
         adapter.stop(instance)
 
