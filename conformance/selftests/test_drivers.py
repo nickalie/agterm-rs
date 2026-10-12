@@ -326,10 +326,13 @@ def test_absent_waits_until_no_element_carries_the_id() -> None:
 class FakeAx:
     """ApplicationServices for one app whose AXChildren answers each read with the next queued AXError."""
 
-    def __init__(self, children_errors: list[int], child_error: int = ax.AX_SUCCESS) -> None:
+    def __init__(
+        self, children_errors: list[int], child_error: int = ax.AX_SUCCESS, failing: frozenset[str] = frozenset()
+    ) -> None:
         self.app, self.dialog = object(), object()
         self.children_errors = children_errors
         self.child_error = child_error
+        self.failing = failing
 
     def AXIsProcessTrusted(self) -> bool:
         return True
@@ -348,6 +351,8 @@ class FakeAx:
             return error, [self.dialog] if error == ax.AX_SUCCESS else None
         if self.child_error != ax.AX_SUCCESS:
             return self.child_error, None
+        if name in self.failing:
+            return ax.AX_FAILURE, None
         return {"AXIdentifier": (ax.AX_SUCCESS, "add-session"), "AXRole": (ax.AX_SUCCESS, "AXButton")}.get(
             name, (ax.AX_NO_VALUE, None)
         )
@@ -378,6 +383,17 @@ def test_ax_treats_a_vanished_child_as_absent_but_not_a_vanished_app(monkeypatch
     driver = fake_ax_driver(monkeypatch, FakeAx([ax.AX_INVALID_ELEMENT]))
     with pytest.raises(ReadFailed, match="AXError -25202"):
         driver.attribute(driver.app, "AXChildren")
+
+
+def test_ax_reads_a_failing_display_attribute_as_no_value_but_not_a_failing_identifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failing = frozenset({"AXDescription", "AXTitle"})
+    element = fake_ax_driver(monkeypatch, FakeAx([], failing=failing)).find("add-session")
+    assert (element.ui_id, element.name) == ("add-session", None)
+    driver = fake_ax_driver(monkeypatch, FakeAx([], failing=frozenset({"AXIdentifier"})))
+    with pytest.raises(AssertionError, match="still present.*AXIdentifier.*-25200"):
+        driver.absent("add-session", timeout=0.1)
 
 
 # -- selection

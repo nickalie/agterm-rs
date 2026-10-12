@@ -346,6 +346,8 @@ def test_first_run_launch_leaves_out_the_prior_state_marker(roots: list[Path], f
     try:
         assert not (instance.state_dir / "windows").exists()
         assert (instance.state_dir / "config" / "ghostty.conf").is_file()
+        assert instance.version == {}
+        assert adapter.serving(instance).version == {"app": {"version": "0.0.1"}}
     finally:
         adapter.stop(instance)
 

@@ -462,7 +462,11 @@ class Adapter:
         first_run: bool = False,
     ) -> Instance:
         """`settings` seeds `<state>/settings.json`, which both references read at launch (`restoreMode`, ...).
-        `first_run` leaves out the prior-state marker and asks for the welcome dialog an isolated launch suppresses."""
+
+        `first_run` leaves out the prior-state marker and asks for the welcome dialog an isolated launch suppresses.
+        The dialog is modal and holds the socket unanswered, so such a launch returns without waiting for it: the
+        caller dismisses the dialog, then calls `serving`.
+        """
         self.executable()  # refuses before anything exists
         headless = self.headless
         root = make_root()
@@ -511,6 +515,10 @@ class Adapter:
             compositor=compositor,
             session_bus=session_bus,
         )
+        return instance if first_run else self._serving(instance, timeout)
+
+    def serving(self, instance: Instance, timeout: float = LAUNCH_TIMEOUT) -> Instance:
+        """Wait until a `first_run` launch answers on its socket; a failure stops it and keeps its root."""
         return self._serving(instance, timeout)
 
     def relaunch(self, instance: Instance, timeout: float = LAUNCH_TIMEOUT) -> Instance:

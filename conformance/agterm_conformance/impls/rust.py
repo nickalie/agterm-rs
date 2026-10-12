@@ -83,6 +83,12 @@ class RustAdapter(Adapter):
         first_run: bool = False,
     ) -> Instance:
         instance = super().launch(timeout, app_id, settings, first_run)
+        return instance if first_run else self._profiled(instance)
+
+    def serving(self, instance: Instance, timeout: float = LAUNCH_TIMEOUT) -> Instance:
+        return self._profiled(super().serving(instance, timeout))
+
+    def _profiled(self, instance: Instance) -> Instance:
         if self._profile is None:
             try:
                 self._profile = profile_from_version(instance.version)

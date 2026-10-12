@@ -4,7 +4,7 @@ tree; a test that opens something closes it."""
 
 import pytest
 from agterm_conformance.match import active_session_id, assert_ok, find_session, session_ids
-from agterm_conformance.wait import wait_until
+from agterm_conformance.wait import WaitTimeout, wait_until
 
 
 def _new(ctl, **args):
@@ -200,8 +200,19 @@ def test_find_bar_counts_the_matches(ctl, ui):
     assert_ok(ctl.request("session.type", sid, text=f"printf '%s%s\\n%s%s\\n' zqx uisearch zqx uisearch\n"))
     ctl.wait_text(sid, rf"(?m)^{marker}\n{marker}$")
     ui.menu("View", "Find…")
-    ui.set_text(ui.find("search-field", role="text-field"), marker)
-    wait_until(lambda: "2" in ui.text("search-counter"))
+    field = ui.find("search-field", role="text-field")
+
+    def counted():
+        # Typed, as the counter fills only once a typed needle searches; retyped, since a needle typed before the
+        # field took focus or before the output rendered never counts.
+        ui.set_text(field, "")
+        ui.press(*marker)
+        try:
+            return wait_until(lambda: any("2" in ui.text(counter) for counter in ui.all("search-counter")), 3)
+        except WaitTimeout:
+            return None
+
+    wait_until(counted, 20)
     ui.menu("View", "Find…")
     ui.absent("search-field")
     assert_ok(ctl.request("session.close", sid))

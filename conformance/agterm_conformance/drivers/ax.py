@@ -44,6 +44,7 @@ KEY_CODES: Mapping[str, int] = {
 FLAGS: Mapping[str, int] = {"shift": 1 << 17, "ctrl": 1 << 18, "alt": 1 << 19, "cmd": 1 << 20}
 POST_MODES = ("pid", "hid")
 AX_SUCCESS = 0
+AX_FAILURE = -25200
 AX_INVALID_ELEMENT = -25202
 AX_CANNOT_COMPLETE = -25204
 AX_ATTRIBUTE_UNSUPPORTED = -25205
@@ -52,6 +53,9 @@ AX_NO_VALUE = -25212
 MENU_BAR_ROLE = "AXMenuBar"
 # A Settings window's tabs are toolbar buttons.
 TAB_ROLES = frozenset({"AXButton", "AXRadioButton", "AXToolbarButton"})
+# What an element shows rather than where it sits: some SwiftUI elements (Settings' grouped forms) fail these reads
+# outright and for good, which says nothing about the tree, so such a read counts as no value.
+DISPLAY_ATTRIBUTES = frozenset({"AXTitle", "AXDescription", "AXValue", "AXEnabled"})
 MAX_DEPTH = 64
 MESSAGING_TIMEOUT = 2.0
 
@@ -99,7 +103,11 @@ class AxDriver(Driver):
         error, value = self.ax.AXUIElementCopyAttributeValue(handle, name, None)
         if error == AX_SUCCESS:
             return value
-        if error in (AX_ATTRIBUTE_UNSUPPORTED, AX_NO_VALUE) or (error == AX_INVALID_ELEMENT and handle is not self.app):
+        if error in (AX_ATTRIBUTE_UNSUPPORTED, AX_NO_VALUE):
+            return None
+        if handle is not self.app and (
+            error == AX_INVALID_ELEMENT or (error == AX_FAILURE and name in DISPLAY_ATTRIBUTES)
+        ):
             return None
         raise ReadFailed(f"{self.name}: reading {name} in pid {self.pid} failed: AXError {error}")
 
