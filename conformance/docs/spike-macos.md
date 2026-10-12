@@ -1,4 +1,6 @@
-# Spike A: launching the references
+# Spikes on the references
+
+## Spike A: launching the references
 
 Spike A asks one question per reference.
 Can the harness launch an isolated instance, talk to its socket, and get a deterministic `/bin/sh` in its pane?
@@ -21,7 +23,7 @@ python conformance/tools/spike_a.py --impl swift-macos --bin "$bundle"
 The report holds the pane shell's `$0`, its `ps` comm, its parent's comm, and the shell version.
 `.github/workflows/spike-macos.yml` runs the macOS matrix.
 
-## reference-linux (confirmed 2026-10-11)
+### reference-linux (confirmed 2026-10-11)
 
 The installed fork was 0.36.0, commit `8a5f58d4`.
 It ran through `SwiftLinuxAdapter` with a unique `AGTERM_APP_ID` and an isolated `/tmp/agt-*` root.
@@ -48,7 +50,7 @@ It ran through `SwiftLinuxAdapter` with a unique `AGTERM_APP_ID` and an isolated
   A zmx-wrapped pane also runs the login zsh rather than `/bin/sh`.
   Both points come from static reading and are unverified at runtime.
 
-## reference-macos (confirmed 2026-10-12)
+### reference-macos (confirmed 2026-10-12)
 
 Upstream v0.36.0 (commit `6cef448a`) on the GitHub `macos-15` arm64 runner, not the x86_64 VM (see below).
 
@@ -95,6 +97,31 @@ Upstream v0.36.0 (commit `6cef448a`) on the GitHub `macos-15` arm64 runner, not 
 - Reaping waits for a claimed daemon zmx does not list yet (`observation: absent` refuses a kill) and for a closed
   session's daemon to leave its 3s undo window, and the leftover check gives a killed daemon up to 5s to exit:
   zmx confirms a kill before the process is gone.
+
+## Spike B: the ax driver on reference-macos (confirmed 2026-10-12)
+
+Spike B asks whether pyobjc's AX API can drive the reference the way the upstream XCUITests do.
+`conformance/tools/spike_b.py` runs it, the `spike-b` job of `spike-macos.yml` runs it on `macos-15`.
+It launches the reference through `SwiftMacosAdapter` (sentinel mode) and drives it through `AxDriver`.
+
+- `add-session` is found by `AXIdentifier`.
+  It is a SwiftUI `Menu`, so it surfaces as `AXPopUpButton` with `AXDescription` "Add session" and one action,
+  `AXPress`.
+- `AXPress` returns success at once and opens the menu.
+  Its "New Session" `AXMenuItem` is found by title outside the menu bar, since the menu bar keeps every closed
+  menu's items in the tree; `AXPress` on it adds a session, and the socket confirms it.
+- Synthesized keystrokes (`CGEventCreateKeyboardEvent`) reach the new session's pane on every route tried:
+  posted to the pid with the app in the background, the same after `AXFrontmost`, and through the HID tap.
+  The driver posts to the pid.
+- No grant was needed. The image's TCC databases already allow Accessibility for `/bin/bash` and
+  `/opt/hca/hosted-compute-agent`, and PostEvent for `/bin/bash` in the user database.
+  The run's process chain is `Python` ← `/bin/bash` ← `Runner.Worker` ← `Runner.Listener` ←
+  `hosted-compute-agent`, and TCC answers for the responsible process rather than Python:
+  `AXIsProcessTrusted` and `CGPreflightPostEventAccess` were both true with no row for Python.
+  The workflow prints both checks and the relevant TCC rows.
+  If an image drops the grant, `AxDriver` refuses to start, so a ui run fails rather than skipping.
+- pyobjc AX is viable, so the thin XCUITest bridge the plan held in reserve is not needed.
+  The bindings are the `ax` extra: `pip install -e "conformance[ax]"`.
 
 ## The upstream release (v0.36.0)
 

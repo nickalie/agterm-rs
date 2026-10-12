@@ -110,7 +110,9 @@ class UiIds:
 
     def key_for(self, ui_id: str) -> str:
         """The ui-ids.yaml key `ui_id` instantiates, which is also its `ui:` coverage key."""
-        if ui_id in self.keys and not _PLACEHOLDER.search(ui_id):
+        if _PLACEHOLDER.search(ui_id):
+            raise UnknownUiId(f"{ui_id!r} is a template: expand it first")
+        if ui_id in self.keys:
             return ui_id
         for key, pattern in self._templates:
             if pattern.fullmatch(ui_id):

@@ -591,12 +591,17 @@ a push to `nickalie/agterm-rs`. Everything before this task is Linux-only.
 - Create: `conformance/agterm_conformance/drivers/ax.py`
 - Modify: `.github/workflows/spike-macos.yml`
 - Modify: `conformance/docs/spike-macos.md`
+- ➕ Create: `conformance/tools/spike_b.py`, `conformance/selftests/test_drivers.py`; Modify: `plugin.py` (`ui` fixture
+  and its unsupported skip), `pyproject.toml` (`ax` extra for pyobjc)
 
-- [ ] spike B on the hosted runner: read `AXIdentifier` of `add-session`, `AXPress` it, post one synthesized keystroke (CGEvent, PostEvent TCC); try granting accessibility in the workflow if denied
-- [ ] record the outcome; if pyobjc AX is not viable, switch the plan to a thin XCUITest bridge before task 21
-- [ ] driver interface `find(id, **attrs)`, `click`, `press(keys)`, `text`; `ax` implementation
-- [ ] write self-tests for driver selection and id template expansion
-- [ ] run self-tests; spike B green — must pass before task 21
+- [x] spike B on the hosted runner: read `AXIdentifier` of `add-session`, `AXPress` it, post one synthesized keystroke (CGEvent, PostEvent TCC); try granting accessibility in the workflow if denied (not denied: the image already grants the runner's responsible processes)
+- [x] record the outcome; if pyobjc AX is not viable, switch the plan to a thin XCUITest bridge before task 21 (viable; no bridge)
+- [x] driver interface `find(id, **attrs)`, `click`, `press(keys)`, `text`; `ax` implementation
+- [x] write self-tests for driver selection and id template expansion
+- [x] run self-tests; spike B green — must pass before task 21
+- ➕ `add-session` is a SwiftUI `Menu` (`AXPopUpButton`): its press opens a menu, so the driver also has
+  `menu_item(title)` for system menu items, which carry no identifiers. Keystrokes posted to the pid reach the pane
+  with the app in the background.
 
 ### Task 21: UI tests on reference-macos
 

@@ -1,7 +1,7 @@
 """The macOS driver: the app's AX tree through pyobjc, AXPress for clicks, CGEvent keystrokes posted to the pid.
 
-Needs `pyobjc-framework-ApplicationServices` and `pyobjc-framework-Quartz`, and the accessibility grant for the
-process TCC holds responsible for the test run (conformance/docs/spike-macos.md, spike B).
+Needs the `ax` extra (pyobjc) and the accessibility grant for the process TCC holds responsible for the run
+(conformance/docs/spike-macos.md, spike B).
 """
 
 from __future__ import annotations
@@ -57,7 +57,8 @@ def _bindings() -> tuple[Any, Any]:
         import Quartz
     except ImportError as error:
         raise DriverError(
-            f"the ax driver needs pyobjc-framework-ApplicationServices and pyobjc-framework-Quartz: {error}"
+            "the ax driver needs pyobjc-framework-ApplicationServices and pyobjc-framework-Quartz "
+            f"(the conformance[ax] extra): {error}"
         ) from None
     return ApplicationServices, Quartz
 
