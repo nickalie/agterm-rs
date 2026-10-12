@@ -5,6 +5,7 @@ import re
 
 import pytest
 from agterm_conformance.match import assert_absent, assert_error, assert_ok, assert_subset, window_ids, workspaces
+from agterm_conformance.wait import WaitTimeout
 
 UNKNOWN = "zzz"
 NOT_OPEN = "window not open — window.select it first"
@@ -25,7 +26,7 @@ def _first(ctl):
     return _windows(ctl)[0]["id"]
 
 
-def _settled(ctl, wid, **expected):
+def _settled(ctl, wid, timeout=10.0, **expected):
     """Poll `window.list` until window `wid` reads `expected`: frame and state changes land after the reply."""
 
     def accept(response):
@@ -34,9 +35,22 @@ def _settled(ctl, wid, **expected):
         return True
 
     accept.__qualname__ = f"window {wid} reading {expected}"
-    response = ctl.wait_response("window.list", None, accept)
+    response = ctl.wait_response("window.list", None, accept, timeout)
     (node,) = [node for node in response.result["windows"] if node["id"] == wid]
     return node
+
+
+def _toggle_fullscreen(ctl, wid, toggle, fullscreen):
+    """`toggle()` until `wid` reads `fullscreen`. macOS drops a toggle now and then, with nothing in `window.list` to
+    tell, so one that changed nothing in 5s is sent again; an accepted one settles within about a second."""
+    for attempt in range(3):
+        toggle()
+        try:
+            return _settled(ctl, wid, timeout=5.0, fullscreen=fullscreen)
+        except WaitTimeout:
+            if attempt == 2:
+                raise
+    return None
 
 
 def _delete(ctl, wid):
@@ -161,10 +175,11 @@ def test_zoom_toggles(ctl, second):
 
 @pytest.mark.covers("window.fullscreen", "field:window.fullscreen")
 def test_fullscreen_toggles(ctl, second):
-    assert assert_ok(ctl.request("window.fullscreen", second))["id"] == second
-    _settled(ctl, second, fullscreen=True)
-    assert_ok(ctl.request("window.fullscreen", second))
-    _settled(ctl, second, fullscreen=False)
+    def toggle():
+        assert assert_ok(ctl.request("window.fullscreen", second))["id"] == second
+
+    for fullscreen in (True, False):
+        _toggle_fullscreen(ctl, second, toggle, fullscreen)
 
 
 @pytest.mark.covers("window.minimize", "field:window.minimized")

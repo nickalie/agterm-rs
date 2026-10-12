@@ -21,7 +21,7 @@ from agterm_conformance.match import (
     workspaces,
 )
 from agterm_conformance.plugin import Ctl
-from agterm_conformance.wait import wait_frame, wait_until
+from agterm_conformance.wait import WaitTimeout, wait_frame, wait_until
 from agterm_conformance.zmx_client import leading_client
 
 UNKNOWN = "zzz"
@@ -640,13 +640,13 @@ def _window(ctl, wid):
     return node
 
 
-def _window_reads(ctl, wid, **expected):
+def _window_reads(ctl, wid, timeout=10.0, **expected):
     def accept(response):
         (node,) = [node for node in assert_ok(response)["windows"] if node["id"] == wid]
         assert_subset(node, expected)
         return True
 
-    ctl.wait_response("window.list", None, accept)
+    ctl.wait_response("window.list", None, accept, timeout)
 
 
 @pytest.mark.covers(
@@ -676,10 +676,16 @@ def test_window_commands(cli, ctl, adapter):
         _window_reads(ctl, wid, zoomed=True)
         _ok(cli("window", "zoom", wid), "ok\n")
         _window_reads(ctl, wid, zoomed=False)
-        _ok(cli("window", "fullscreen", wid), "ok\n")
-        _window_reads(ctl, wid, fullscreen=True)
-        _ok(cli("window", "fullscreen", wid), "ok\n")
-        _window_reads(ctl, wid, fullscreen=False)
+        for fullscreen in (True, False):
+            # A dropped macOS toggle is sent again, as in protocol/test_window.py's _toggle_fullscreen.
+            for attempt in range(3):
+                _ok(cli("window", "fullscreen", wid), "ok\n")
+                try:
+                    _window_reads(ctl, wid, timeout=5.0, fullscreen=fullscreen)
+                    break
+                except WaitTimeout:
+                    if attempt == 2:
+                        raise
         _ok(cli("window", "minimize", wid, "off"), "ok\n")
         moved = cli("window", "move", wid, "--x", "40", "--y", "60")
         if adapter.has("window-geometry"):

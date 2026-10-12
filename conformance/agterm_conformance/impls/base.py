@@ -69,6 +69,7 @@ NOOP_MIME_TYPES = (
 )
 LAUNCH_TIMEOUT = 30.0
 STOP_TIMEOUT = 10.0
+REAP_SETTLE = 5.0
 POLL_INTERVAL = 0.05
 
 # The capability vocabulary `requires(...)` and `Adapter.has(...)` may name. A reason for each absence lives on the
@@ -458,13 +459,14 @@ class Adapter:
     def stop(self, instance: Instance, cleanup: bool = True) -> None:
         """Reap daemons, SIGTERM the launched pid only, then require no zmx/session-host left behind."""
         try:
+            refusals: list[str] = []
             try:
                 if instance.process.poll() is None and find_leftovers(instance.zmx_dir):
-                    reap_live_sessions(instance)
+                    refusals = reap_live_sessions(instance)
             finally:
                 killed = _terminate(instance.process)
             helper_problem = self.stop_helpers(instance)
-            leftovers = _leftovers_error(instance.zmx_dir)
+            leftovers = _leftovers_error(instance.zmx_dir, refusals)
         finally:
             _release_app_id(instance.app_id)
         if leftovers is not None:
@@ -482,12 +484,14 @@ class Adapter:
         return None
 
 
-def _leftovers_error(zmx_dir: str) -> LeftoverProcesses | None:
+def _leftovers_error(zmx_dir: str, refusals: Iterable[str] = ()) -> LeftoverProcesses | None:
     leftovers = find_leftovers(zmx_dir)
     if not leftovers:
         return None
-    described = ", ".join(f"{pid} {command}" for pid, _, command in leftovers)
-    return LeftoverProcesses(f"processes left under ZMX_DIR {zmx_dir}: {described}")
+    # Cut: on macOS the command carries the whole `ps -E` environment.
+    described = ", ".join(f"{pid} {command[:300]}" for pid, _, command in leftovers)
+    reaping = f"; reaping was refused: {'; '.join(refusals)}" if refusals else ""
+    return LeftoverProcesses(f"processes left under ZMX_DIR {zmx_dir}: {described}{reaping}")
 
 
 def _absolute(path: Path | None) -> Path | None:
@@ -576,29 +580,44 @@ def wait_for_socket(instance: Instance, timeout: float) -> dict[str, Any]:
         raise LaunchError(f"app exited with {code} before serving {instance.socket}; app log:\n{instance.log_tail()}")
 
 
-def reap_live_sessions(instance: Instance) -> None:
-    """Best effort over the protocol; whatever survives is reported by the leftover check.
+def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[str]:
+    """Best effort over the protocol; returns the refusals, and whatever survives is reported by the leftover check.
 
     Re-lists after every kill: killing a left pane promotes its split survivor into the left slot, so a
-    selector read before the kill no longer names that survivor.
+    selector read before the kill no longer names that survivor. A claimed daemon zmx does not list yet
+    (`observation: absent`, as right after it starts) refuses a kill as not running, so it is waited for until
+    `settle` runs out.
     """
+    refusals: list[str] = []
+    deadline = time.monotonic() + settle
     try:
         tried: set[str] = set()
-        while (entry := _next_claimed(instance, tried)) is not None:
+        while True:
+            entry, waiting = _next_claimed(instance, tried, time.monotonic() < deadline)
+            if entry is None:
+                if not waiting:
+                    break
+                threading.Event().wait(POLL_INTERVAL)
+                continue
             tried.add(_daemon_key(entry))
             args: dict[str, Any] = {"pane": entry["pane"], "force": True}
             if entry.get("windowID"):
                 args["window"] = entry["windowID"]
-            instance.request("zmx.kill", entry["sessionID"], **args)
+            response = instance.request("zmx.kill", entry["sessionID"], **args)
+            if not response.ok:
+                refusals.append(f"zmx.kill {_daemon_key(entry)}: {response.error}")
         instance.request("zmx.prune")
-    except ClientError:
-        pass
+    except ClientError as error:
+        refusals.append(f"reaping: {error}")
+    return refusals
 
 
-def _next_claimed(instance: Instance, tried: set[str]) -> dict[str, Any] | None:
+def _next_claimed(instance: Instance, tried: set[str], wait_absent: bool) -> tuple[dict[str, Any] | None, bool]:
+    """The next claimed daemon to kill, and whether one zmx does not list yet is still worth waiting for."""
     listing = instance.request("zmx.list")
     inventory = (listing.result or {}).get("zmx") if listing.ok else None
     entries = inventory.get("entries") if isinstance(inventory, dict) else None
+    waiting = False
     for entry in entries if isinstance(entries, list) else []:
         if (
             isinstance(entry, dict)
@@ -607,8 +626,11 @@ def _next_claimed(instance: Instance, tried: set[str]) -> dict[str, Any] | None:
             and entry.get("pane")
             and _daemon_key(entry) not in tried
         ):
-            return entry
-    return None
+            if wait_absent and entry.get("observation") == "absent":
+                waiting = True
+                continue
+            return entry, False
+    return None, waiting
 
 
 def _daemon_key(entry: dict[str, Any]) -> str:

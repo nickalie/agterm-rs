@@ -1,6 +1,7 @@
 import json
 import os
 import pwd
+import re
 import shutil
 import signal
 import subprocess
@@ -304,7 +305,9 @@ def test_linux_launch_sends_every_uri_to_a_noop(
             env = {name: seen[name] for name in ("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "PATH")}
             for mime in ("inode/directory", "x-scheme-handler/https"):
                 answer = subprocess.run([gio, "mime", mime], env=env, capture_output=True, text=True, check=False)
-                assert answer.stdout.splitlines()[0].endswith(f"“{mime}”: {NOOP_DESKTOP_ID}"), answer
+                # A C locale prints the curly quotes around the type as `?`.
+                expected = rf"Default application for .{re.escape(mime)}.: {re.escape(NOOP_DESKTOP_ID)}"
+                assert re.fullmatch(expected, answer.stdout.splitlines()[0]), answer
     finally:
         adapter.stop(instance)
 
@@ -952,3 +955,19 @@ def test_make_adapter_passes_the_macos_launch_mode(mode: str) -> None:
 def test_swift_macos_rejects_an_unknown_launch_mode() -> None:
     with pytest.raises(ValueError, match="launch_mode"):
         SwiftMacosAdapter(None, launch_mode="open")
+
+
+def test_reaping_waits_for_a_daemon_zmx_does_not_list_yet_and_reports_refusals(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = {"daemon": "d1", "state": "claimed", "sessionID": "s1", "pane": "left", "observation": "absent"}
+    monkeypatch.setenv("FAKE_ZMX_LIST", json.dumps({"zmx": {"entries": [row]}}))
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    try:
+        assert base.reap_live_sessions(instance, settle=0.2) == ["zmx.kill d1: no left pane daemon for session s1"]
+        requests = [json.loads(line) for line in (instance.state_dir / "fake-requests.jsonl").read_text().splitlines()]
+        commands = [request["cmd"] for request in requests]
+        assert commands.count("zmx.list") > 2 and commands.count("zmx.kill") == 1
+    finally:
+        adapter.stop(instance)

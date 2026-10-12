@@ -37,15 +37,22 @@ jobs:
           sudo dscl . -create "/Users/$USER" UserShell /bin/zsh
           dscl . -read "/Users/$USER" UserShell
           python -c 'import os, pwd; print(pwd.getpwuid(os.getuid()).pw_shell)'
-      - name: probe
+      - name: failing launches, with screenshots
         continue-on-error: true
+        shell: bash
         env:
           BUNDLE: ${{ steps.reference.outputs.bundle }}
-        run: python .github/probe/probe_macos.py "$BUNDLE" probe.txt
+          PYTHONPATH: .github/probe
+        run: |
+          python -m pytest -p probe_plugin conformance/tests/protocol/test_tree.py \
+            conformance/tests/protocol/test_dashboard_quick.py conformance/tests/protocol/test_zmx.py \
+            --impl swift-macos --bin "$BUNDLE" -ra 2>&1 | tee pytest.log
       - name: upload
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: probe
-          path: probe.txt
+          path: |
+            pytest.log
+            probe-out/
           if-no-files-found: warn
