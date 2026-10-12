@@ -1,0 +1,47 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+publish = false
+
+[workspace.dependencies]
+agterm-proto = { path = "crates/agterm-proto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_with = { version = "3", default-features = false, features = ["macros"] }
+strum = { version = "0.27", features = ["derive"] }
+serde_norway = "0.9"
+
+# Inherited by every crate except `agterm-ghostty-sys` (`[lints] workspace = true`). Only a reasoned outer
+# `#[expect(..., reason = "...")]` on the one item can lift a lint: `#[allow]` is refused.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+# complexity (thresholds in clippy.toml)
+cognitive_complexity = "deny"
+too_many_lines = "deny"
+excessive_nesting = "deny"
+too_many_arguments = "deny"
+type_complexity = "deny"
+fn_params_excessive_bools = "deny"
+struct_excessive_bools = "deny"
+# robustness
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+# FFI
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+# exceptions
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"

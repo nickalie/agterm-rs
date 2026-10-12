@@ -235,15 +235,15 @@
 - Create: `crates/agterm-proto/Cargo.toml`, `crates/agterm-proto/src/{lib,request,response,command,events,version}.rs`
 - Create: `crates/agterm-proto/tests/catalog.rs`
 
-- [ ] create the workspace (edition 2024) with `rust-toolchain.toml` pinning 1.98.1 with clippy and rustfmt
-- [ ] add the strict lint table to `[workspace.lints]`, `clippy.toml` thresholds and `rustfmt.toml` (Technical
+- [x] create the workspace (edition 2024) with `rust-toolchain.toml` pinning 1.98.1 with clippy and rustfmt
+- [x] add the strict lint table to `[workspace.lints]`, `clippy.toml` thresholds and `rustfmt.toml` (Technical
       Details)
-- [ ] two-level `Command` with strum-derived wire names, request `{cmd, target?, args?}`, response
+- [x] two-level `Command` with strum-derived wire names, request `{cmd, target?, args?}`, response
       `{ok, result?, error?}` (`ok:false` may carry `result`), `VersionResult` with `app` and `conformance`
-- [ ] write tests: serde round-trips for request/response shapes, including `ok:false` with `result`
-- [ ] write tests: the wire names equal `catalog.yaml` `commands` (dev-dependency `serde_norway` reads the YAML)
-- [ ] manual check (not kept in the tree): a scratch over-limit function fails clippy with the config
-- [ ] run `cargo test` and `cargo clippy --workspace --all-targets --all-features -- -D warnings`; both must pass
+- [x] write tests: serde round-trips for request/response shapes, including `ok:false` with `result`
+- [x] write tests: the wire names equal `catalog.yaml` `commands` (dev-dependency `serde_norway` reads the YAML)
+- [x] manual check (not kept in the tree): a scratch over-limit function fails clippy with the config (done in a scratch workspace: too_many_lines, too_many_arguments, excessive_nesting, unwrap_used and `#[allow]` all fail)
+- [x] run `cargo test` and `cargo clippy --workspace --all-targets --all-features -- -D warnings`; both must pass
       before Task 2
 
 ### Task 2: Native builds, staging layout and the libghostty crates
