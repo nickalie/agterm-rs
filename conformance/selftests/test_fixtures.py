@@ -107,7 +107,8 @@ def test_skip_reasons_and_summary(pytester: pytest.Pytester, roots: list[Path], 
         [
             "SKIPPED [[]1[]] test_skip_reasons_and_summary.py:7: not-yet-at-level: since 0.37.0, swift-linux is at 0.36.0",
             "*unsupported: swift-linux lacks window-geometry (GTK4 cannot restore x/y)",
-            "swift-linux: 3 pass, 1 fail, 1 skip(unsupported), 1 skip(not-yet-at-level), 1 skip(other), 0 reruns",
+            "swift-linux: 3 pass, 1 fail, 1 skip(unsupported), 1 skip(not-yet-at-level), 1 skip(other), 0 reruns, "
+            "parity 60.0%",
         ]
     )
     assert len(roots) == 1 and not roots[0].exists()
@@ -245,7 +246,7 @@ def test_rust_without_a_binary_skips_everything_as_not_yet_at_level(
     result.assert_outcomes(skipped=3)
     result.stdout.fnmatch_lines(
         [
-            "rust: 0 pass, 0 fail, 0 skip(unsupported), 3 skip(not-yet-at-level)*",
+            "rust: 0 pass, 0 fail, 0 skip(unsupported), 3 skip(not-yet-at-level), 0 skip(other), 0 reruns, parity 0.0%",
             "*not-yet-at-level: rust has no binary",
         ]
     )
@@ -277,7 +278,9 @@ def test_rust_profile_comes_from_version(
     pytester.makepyfile(RUST_SUITE)
     result = run_suite(pytester, "--impl", "rust", "--bin", str(fake_bin))
     result.assert_outcomes(passed=1, skipped=2)
-    result.stdout.fnmatch_lines(["rust: 1 pass, 0 fail, 1 skip(unsupported), 1 skip(not-yet-at-level)*"])
+    result.stdout.fnmatch_lines(
+        ["rust: 1 pass, 0 fail, 1 skip(unsupported), 1 skip(not-yet-at-level), 0 skip(other), 0 reruns, parity 50.0%"]
+    )
 
 
 def test_rust_without_a_profile_is_below_every_level(
@@ -340,7 +343,7 @@ def test_reruns_are_counted(pytester: pytest.Pytester, roots: list[Path], fake_b
     )
     result = run_suite(pytester, *swift_linux(fake_bin, "--reruns", "1"))
     assert result.parseoutcomes() == {"passed": 1, "rerun": 1}
-    result.stdout.fnmatch_lines(["swift-linux: 1 pass, 0 fail, * 1 reruns"])
+    result.stdout.fnmatch_lines(["swift-linux: 1 pass, 0 fail, * 1 reruns, parity 100.0%"])
 
 
 def test_summary_is_absent_without_conformance_tests(pytester: pytest.Pytester) -> None:

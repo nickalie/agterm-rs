@@ -431,6 +431,9 @@ def summary_line(stats: Mapping[str, list[Any]], impl: str | None) -> str:
         *(f"{count} skip({category})" for category, count in skips.items()),
         f"{len(stats.get('rerun', []))} reruns",
     ]
+    # Parity is judged on the tests the build owes: an unsupported capability is a recorded divergence, not a gap.
+    owed = len(passed) + len(failed) + skips[NOT_YET_AT_LEVEL]
+    counts.append(f"parity {100 * len(passed) / owed:.1f}%" if owed else "parity n/a")
     return f"{impl}: " + ", ".join(counts)
 
 

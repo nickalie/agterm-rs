@@ -101,15 +101,28 @@ def test_new_workspace_name(ctl, name):
     assert _node(ctl.tree(), wid)["name"] == ((name or "").strip() or default)
 
 
-@pytest.mark.covers("workspace.new", "field:tree.workspace.collapsed")
-def test_new_collapsed_workspace(ctl):
-    # Whether a collapsed create also becomes the current workspace differs by reference (macOS keeps the
-    # current one, the Linux fork moves to it), so only `collapsed` is compared.
+@pytest.mark.covers("workspace.new", "field:tree.workspace.collapsed", "field:tree.workspace.focused")
+def test_new_collapsed_workspace(ctl, adapter):
+    _clear_focus(ctl)
+    current, _ = _new_workspace(ctl, sessions=1)
+    assert_ok(ctl.request("workspace.focus", current, mode="on"))
+
     collapsed = assert_ok(ctl.request("workspace.new", collapsed=True))["id"]
-    plain = assert_ok(ctl.request("workspace.new", collapsed=False))["id"]
     tree = ctl.tree()
     assert_subset(_node(tree, collapsed), {"collapsed": True, "sessions": []})
+    if adapter.has("collapsed-create-stays-background"):
+        assert active_workspace_id(tree) == current
+        assert _focus_state(ctl) == ({current}, True)
+    else:
+        assert active_workspace_id(tree) == collapsed
+        assert _focus_state(ctl) == ({current, collapsed}, True)
+
+    plain = assert_ok(ctl.request("workspace.new", collapsed=False))["id"]
+    tree = ctl.tree()
     assert_absent(_node(tree, plain), "collapsed")
+    assert active_workspace_id(tree) == plain
+    assert plain in _focus_state(ctl)[0]
+    _clear_focus(ctl)
 
 
 @pytest.mark.covers("workspace.select", "field:tree.workspace.active", "event:session.selected")
@@ -297,12 +310,11 @@ def test_focus_modes(ctl):
 
 @pytest.mark.covers("workspace.focus")
 def test_focus_rejects_an_unknown_mode(ctl):
-    # The references disagree on the text: upstream `invalid focus mode: pin (on|off|toggle|add)`, the Linux
-    # fork's own dispatcher `invalid workspace.focus mode: pin`. Both name the rejected mode.
     before = ctl.tree()
     response = ctl.request("workspace.focus", "active", mode="pin")
     assert_error(response)
-    assert "pin" in response.error, response.raw
+    # Text differs: upstream `invalid focus mode: pin (on|off|toggle|add)`, fork `invalid workspace.focus mode: pin`.
+    assert response.error.startswith("invalid ") and "mode: pin" in response.error, response.raw
     assert ctl.tree()["tree"]["workspaceFilter"] == before["tree"]["workspaceFilter"]
 
 

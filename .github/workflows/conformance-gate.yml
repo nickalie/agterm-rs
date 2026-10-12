@@ -23,5 +23,4 @@ jobs:
       - name: self-tests
         run: python -m pytest conformance/selftests
       - name: coverage gate
-        # The baseline accepts today's uncovered items and may only shrink; plan Task 22 drops it.
-        run: python -m pytest conformance --coverage-gate --coverage-baseline conformance/coverage-baseline.txt
+        run: python -m pytest conformance --coverage-gate

@@ -107,7 +107,7 @@ It launches the reference through `SwiftMacosAdapter` (sentinel mode) and drives
 - `add-session` is found by `AXIdentifier`.
   It is a SwiftUI `Menu` with `AXDescription` "Add session" and one action, `AXPress`.
   Its role follows the OS, not the reference: `AXPopUpButton` on macOS 15, `AXMenuButton` on macOS 26
-  (spike-macos run 38248492987), so `test_add_session_menu_opens_a_session` expects `menu-button`, the runner's.
+  (spike-macos run 38248492987), so `test_add_session_menu_opens_a_session` accepts either.
 - `AXPress` returns success at once and opens the menu.
   Its "New Session" `AXMenuItem` is found by title outside the menu bar, since the menu bar keeps every closed
   menu's items in the tree; `AXPress` on it adds a session, and the socket confirms it.
@@ -144,8 +144,11 @@ What the reference showed while the tests settled:
   title, description, value or enabled flag as no value, and still treats a failing `AXChildren` or
   `AXIdentifier` read as a read that did not happen.
 - The Settings window opens with `cmd+,`; its tabs are toolbar buttons found by title (`Driver.tab`).
-- `add-session`'s accessibility name is "Add session" on a fresh window and "Add Slide" once other views have
-  been up, so the test leaves its name unchecked.
+- `add-session`'s name read "Add session" in spike B and "Add Slide" in a ui run (reference-macos 38248492989).
+  Upstream sets only `accessibilityLabel("Add session")`, which is `AXDescription`; the driver reads `AXTitle`
+  first, and the SwiftUI `Menu` whose label is just the `plus.rectangle` glyph presumably fills `AXTitle` with
+  the symbol's own description some time after the window appears.
+  Unverified beyond those two reads, so the test leaves the name unchecked; the menu's effect is its check.
 
 ## The upstream release (v0.36.0)
 

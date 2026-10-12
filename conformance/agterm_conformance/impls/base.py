@@ -132,6 +132,8 @@ CAPABILITIES: Mapping[str, str] = {
     "config-reload-counts": "`config.reload` answers with the ghostty config's diagnostic count in `result.count`",
     "hidden-split-holds-focus": "`session.focus` on a hidden split reads back as `splitFocused`; upstream's shown "
     "left pane takes the focus back while its window is key",
+    "collapsed-create-stays-background": "`workspace.new --collapsed` leaves the current workspace and an applied "
+    "focus set as they were; the Linux fork makes the collapsed workspace current and joins it to the set",
     "capture-reads-command-panes": "`restore.capture` records a `--command` session's program; upstream reads only "
     "the foreground group's leader, there the setuid `login` wrapper whose argv a user cannot read",
 }
@@ -286,6 +288,10 @@ def isolated_runtime_env(
         env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={os.path.join(parent_runtime, 'bus')}"
 
 
+# Where the app's config, data, state and cache resolve; each must lie under the instance root.
+XDG_HOMES = ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME")
+
+
 def check_launch_env(
     env: Mapping[str, str],
     root: str | os.PathLike[str],
@@ -296,7 +302,8 @@ def check_launch_env(
     for name in sorted(env):
         if name.startswith(SCRUB_PREFIXES) and name not in OWN_VARIABLES:
             raise LaunchRefused(f"{name} would leak into the instance: only harness-set AGTERM_* are allowed")
-    rooted = ["AGTERM_STATE_DIR", "AGTERM_CONTROL_SOCKET", "HOME"] + (["XDG_RUNTIME_DIR"] if needs_runtime_dir else [])
+    rooted = ["AGTERM_STATE_DIR", "AGTERM_CONTROL_SOCKET", "HOME", *XDG_HOMES]
+    rooted += ["XDG_RUNTIME_DIR"] if needs_runtime_dir else []
     if headless:
         if "DISPLAY" in env:
             raise LaunchRefused("DISPLAY is set: a headless instance would reach the user's X server")

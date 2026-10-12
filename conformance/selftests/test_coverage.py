@@ -381,9 +381,8 @@ def test_malformed_covers_marker(pytester: pytest.Pytester, marker: str, message
 
 
 def test_committed_catalog_passes_the_ci_gate() -> None:
-    """The command conformance-gate.yml runs, so a stale baseline line fails here first."""
-    command = [sys.executable, "-m", "pytest", "conformance", "--coverage-gate"]
-    command += ["--coverage-baseline", "conformance/coverage-baseline.txt", "-p", "no:cacheprovider", "-q"]
+    """The command conformance-gate.yml runs, with no baseline: every item is covered or exempted."""
+    command = [sys.executable, "-m", "pytest", "conformance", "--coverage-gate", "-p", "no:cacheprovider", "-q"]
     result = subprocess.run(command, cwd=CONFORMANCE.parent, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-2000:]
     assert "1 passed" in result.stdout

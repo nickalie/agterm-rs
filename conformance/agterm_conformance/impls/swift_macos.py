@@ -44,6 +44,7 @@ BASE_CAPABILITIES = frozenset(
         "sidebar-min-width",
         "keymap-menu",
         "config-reload-counts",
+        "collapsed-create-stays-background",
     }
 )
 LAUNCH_MODES = ("uitest", "plain")

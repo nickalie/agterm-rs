@@ -101,8 +101,7 @@ def test_tree_window_argument(ctl):
     ],
 )
 def test_undecodable_request_is_refused(ctl, line):
-    # Only ok:false is compared: the references disagree on the text. macOS answers
-    # `invalid request: <DecodingError context>` naming the rejected field, the Linux fork `could not decode request`.
+    # Text shares nothing: upstream `invalid request: <DecodingError context>`, fork `could not decode request`.
     response = ctl.instance.client().send_line(line)
     assert response.ok is False, response.raw
     assert isinstance(response.error, str) and response.error, response.raw

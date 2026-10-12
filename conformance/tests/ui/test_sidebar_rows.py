@@ -30,7 +30,9 @@ def test_rows_carry_the_names_the_tree_reads(ctl, ui):
 @pytest.mark.covers("ui:add-session")
 def test_add_session_menu_opens_a_session(ctl, ui):
     before = set(session_ids(ctl.tree()))
-    add = ui.find("add-session", role="menu-button")
+    add = ui.find("add-session")
+    # The OS picks the role of a SwiftUI Menu: macOS 26 AXMenuButton, macOS 15 AXPopUpButton.
+    assert add.role in {"menu-button", "popup"}, add
     ui.click(add)
     ui.click(ui.menu_item("New Session"))
     tree = ctl.wait_tree(lambda tree: set(session_ids(tree)) - before)

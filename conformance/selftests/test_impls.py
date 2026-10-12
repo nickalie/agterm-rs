@@ -22,6 +22,7 @@ from agterm_conformance.impls.base import (
     NOOP_DESKTOP_ID,
     NOOP_MIME_TYPES,
     SOCKET_PATH_CAP,
+    XDG_HOMES,
     Adapter,
     Instance,
     LaunchError,
@@ -79,6 +80,7 @@ def env_for(root: Path, **overrides: str) -> dict[str, str]:
         "AGTERM_STATE_DIR": str(root / "state"),
         "AGTERM_CONTROL_SOCKET": str(root / "state" / "agterm.sock"),
         "AGTERM_APP_ID": f"{DEFAULT_APP_ID}.conformance.test",
+        **{name: str(root / "home" / name.lower()) for name in XDG_HOMES},
     }
     env.update(overrides)
     return env
@@ -91,7 +93,7 @@ def test_launch_env_inside_root_is_accepted(tmp_path: Path) -> None:
     check_launch_env(env_for(tmp_path), tmp_path, needs_app_id=True)
 
 
-@pytest.mark.parametrize("name", ["AGTERM_CONTROL_SOCKET", "AGTERM_STATE_DIR", "HOME"])
+@pytest.mark.parametrize("name", ["AGTERM_CONTROL_SOCKET", "AGTERM_STATE_DIR", "HOME", *XDG_HOMES])
 def test_path_outside_root_is_refused(tmp_path: Path, name: str) -> None:
     root = tmp_path / "root"
     outside = tmp_path / "elsewhere" / "agterm.sock"
