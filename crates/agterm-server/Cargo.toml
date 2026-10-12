@@ -1,0 +1,22 @@
+[package]
+name = "agterm-server"
+description = "agterm's AF_UNIX control server: socket ownership, one thread per connection, main-loop hop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+agterm-proto.workspace = true
+agterm-host.workspace = true
+agterm-core.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+agterm-host = { workspace = true, features = ["fakes"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

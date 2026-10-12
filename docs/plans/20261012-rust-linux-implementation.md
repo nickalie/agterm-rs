@@ -280,22 +280,22 @@
 - Create: `crates/agterm-server/{Cargo.toml,src/lib.rs,src/connection.rs,src/stream.rs}`
 - Create: `crates/agterm-server/tests/server.rs`
 
-- [ ] `agterm-host`: the `Surface`, `SessionHost`, `MainLoop` and `ProcessLauncher` traits, plus in-memory fakes
+- [x] `agterm-host`: the `Surface`, `SessionHost`, `MainLoop` and `ProcessLauncher` traits, plus in-memory fakes
       (feature `fakes`, no unwrap)
-- [ ] `agterm-core`: `Core` state owner, `dispatch(request) -> response` routing per group, `ControlError` with
+- [x] `agterm-core`: `Core` state owner, `dispatch(request) -> response` routing per group, `ControlError` with
       Swift strings, `version`, the malformed-request error (`protocol.malformed-request`, the fork's text); state
       dir resolution (`AGTERM_STATE_DIR`, else `$XDG_DATA_HOME/agterm`, else `~/.local/share/agterm`) per
       `PersistenceStore.swift` and `DebugStateDirectory.swift`; socket path (`AGTERM_CONTROL_SOCKET`, else
       `<state dir>/agterm.sock`) per `ControlResolve.socketPath`
-- [ ] `agterm-server`: take `flock(LOCK_EX|LOCK_NB)` on `<socket>.lock` before unlinking and binding, and on refusal
+- [x] `agterm-server`: take `flock(LOCK_EX|LOCK_NB)` on `<socket>.lock` before unlinking and binding, and on refusal
       advertise `<socket>.unavailable` (port `acquireOwnership` from `ControlServer.swift`); refuse paths of
       104 bytes or more; one thread per connection, one JSON line per request, hop to the main loop through
       `MainLoop`, catch panics into `ok:false`; a stream handoff seam (used from Task 12)
-- [ ] write tests: server round-trip over a temp socket with a fake main loop; several concurrent connections
-- [ ] write tests: malformed JSON, unknown command, oversized path, a panicking handler
-- [ ] write tests: state dir with `XDG_DATA_HOME` set and unset, `AGTERM_STATE_DIR` override, socket path fallback;
+- [x] write tests: server round-trip over a temp socket with a fake main loop; several concurrent connections
+- [x] write tests: malformed JSON, unknown command, oversized path, a panicking handler
+- [x] write tests: state dir with `XDG_DATA_HOME` set and unset, `AGTERM_STATE_DIR` override, socket path fallback;
       a second server on the same path refuses and the first one's socket and lock survive
-- [ ] run `cargo test`; must pass before Task 4
+- [x] run `cargo test`; must pass before Task 4
 
 ### Task 4: agtermctl skeleton
 
