@@ -1,8 +1,9 @@
 //! Control command names: the `cmd` field of a request.
 //!
-//! A [`Command`] is two-level: a [`Group`] (the first dotted component of the wire name) and, for groups with more
-//! than one command, the group's own enum. Wire names come from the `strum` derives on the group enums, so parsing
-//! is a 22-arm match on the group followed by the group enum's derived parser.
+//! A [`Command`] is two-level: a [`Group`] (the first dotted component of the wire name) and, unless the group's
+//! only command is the bare group name (`tree`, `dashboard`, `notify`, `version`), the group's own enum. Wire names
+//! come from the `strum` derives on the group enums, so parsing is a 22-arm match on the group followed by the group
+//! enum's derived parser.
 
 use std::fmt;
 use std::str::FromStr;

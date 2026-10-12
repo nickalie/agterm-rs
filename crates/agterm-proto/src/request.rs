@@ -1,6 +1,10 @@
 //! The request line: `{cmd, target?, args?}`, one per connection, newline-delimited JSON.
 
-use serde::{Deserialize, Serialize};
+use std::fmt;
+
+use serde::de::value::MapAccessDeserializer;
+use serde::de::{MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_with::skip_serializing_none;
 
 use crate::command::Command;
@@ -9,10 +13,48 @@ use crate::command::Command;
 /// connection; the client checks the same cap before writing.
 pub const MAX_REQUEST_LINE_BYTES: usize = 1 << 20;
 
-/// One control request. A request whose `cmd` is unknown, or whose fields carry a wrong JSON type, fails to decode
-/// as a whole; unknown keys are ignored.
+/// Implements `Serialize` and `Deserialize` for wire records whose derives carry `#[serde(remote = "Self")]`, so they
+/// decode from a JSON object only. A derived struct deserializer also takes a positional array
+/// (`["session.close", "active", null]`), which the Swift fork's `JSONDecoder` refuses; going through
+/// `deserialize_map` makes that a decode error. The derived inherent `deserialize` stays lax: decode through the
+/// trait (`serde_json::from_str`), never by calling `Request::deserialize` as a path.
+macro_rules! object_only_serde {
+    ($($ty:ident),+ $(,)?) => {$(
+        impl Serialize for $ty {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                $ty::serialize(self, serializer)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $ty {
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                struct ObjectVisitor;
+
+                impl<'de> Visitor<'de> for ObjectVisitor {
+                    type Value = $ty;
+
+                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        formatter.write_str(concat!("a JSON object (", stringify!($ty), ")"))
+                    }
+
+                    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<$ty, A::Error> {
+                        $ty::deserialize(MapAccessDeserializer::new(map))
+                    }
+                }
+
+                deserializer.deserialize_map(ObjectVisitor)
+            }
+        }
+    )+};
+}
+
+object_only_serde!(Request, Args, PickItem, AskButton);
+
+/// One control request. A request that is not a JSON object, whose `cmd` is unknown, or whose fields carry a wrong
+/// JSON type fails to decode as a whole; unknown keys are ignored.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 pub struct Request {
     pub cmd: Command,
     /// A session or workspace id, `active`, or a unique prefix.
@@ -36,7 +78,7 @@ impl Request {
 /// from the JSON. Key names are the wire's (`paneID`, `workspaceName`, ...).
 #[skip_serializing_none]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(remote = "Self", rename_all = "camelCase")]
 pub struct Args {
     pub name: Option<String>,
     pub cwd: Option<String>,
@@ -130,6 +172,7 @@ pub struct Args {
 /// One caller-provided choice for `pick.open`.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 pub struct PickItem {
     pub id: String,
     pub label: String,
@@ -139,6 +182,7 @@ pub struct PickItem {
 /// One caller-provided dialog button for `ask.open`.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 pub struct AskButton {
     pub id: String,
     pub label: String,
@@ -213,6 +257,20 @@ mod tests {
             r#"["tree"]"#,
         ] {
             assert!(serde_json::from_str::<Request>(line).is_err(), "{line}");
+        }
+    }
+
+    #[test]
+    fn positional_arrays_are_refused_at_every_level() {
+        for line in [
+            r#"["session.close","active",null]"#,
+            r#"["session.close","active",{}]"#,
+            r#"{"cmd":"session.new","args":["build"]}"#,
+            r#"{"cmd":"pick.open","args":{"items":[["1","one",null]]}}"#,
+            r#"{"cmd":"ask.open","args":{"buttons":[["ok","OK",null]]}}"#,
+        ] {
+            let error = serde_json::from_str::<Request>(line).unwrap_err();
+            assert!(error.to_string().contains("expected a JSON object"), "{line}: {error}");
         }
     }
 
