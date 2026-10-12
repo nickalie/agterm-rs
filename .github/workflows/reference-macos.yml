@@ -23,7 +23,7 @@ concurrency:
 jobs:
   reference:
     # Apple silicon: the upstream release is arm64-only.
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7

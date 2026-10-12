@@ -101,7 +101,7 @@ Upstream v0.36.0 (commit `6cef448a`) on the GitHub `macos-15` arm64 runner, not 
 ## Spike B: the ax driver on reference-macos (confirmed 2026-10-12)
 
 Spike B asks whether pyobjc's AX API can drive the reference the way the upstream XCUITests do.
-`conformance/tools/spike_b.py` runs it, the `spike-b` job of `spike-macos.yml` runs it on `macos-15`.
+`conformance/tools/spike_b.py` runs it, the `spike-b` job of `spike-macos.yml` runs it on `macos-26`.
 It launches the reference through `SwiftMacosAdapter` (sentinel mode) and drives it through `AxDriver`.
 
 - `add-session` is found by `AXIdentifier`.
@@ -155,7 +155,7 @@ What the reference showed while the tests settled:
 - **The x86_64 macOS VM cannot run it.** Rosetta translates x86_64 to arm64, never the reverse.
   `fetch_reference.py` exits 2 on such a host.
   Task 19 needs one of these instead:
-  - an Apple-silicon host, such as the GitHub `macos-15` runner the workflows use;
+  - an Apple-silicon host, such as the GitHub `macos-26` runner the workflows use;
   - an x86_64 build from source on the VM (Xcode 26 and zig, a heavy setup).
 - The dmg needs `hdiutil`, so extraction works only on macOS.
   On Linux the tool stops after the download and the digest check, and caches nothing.
