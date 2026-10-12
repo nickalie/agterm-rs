@@ -46,7 +46,7 @@ class FakeDriver(Driver):
     name = "fake"
 
     def __init__(self, elements: list[Element], **kwargs: Any) -> None:
-        super().__init__(1234, IDS, timeout=0.2, **kwargs)
+        super().__init__(4242, IDS, timeout=0.2, **kwargs)
         self.elements = elements
         self.menu: list[Element] = []
         self.pressed: list[Element] = []
@@ -187,7 +187,7 @@ def test_find_waits_for_the_element() -> None:
 
 def test_find_times_out_with_a_diagnosis() -> None:
     driver = FakeDriver([Element("add-session", "button")])
-    with pytest.raises(ElementNotFound, match=r"no add-session \{'role': 'menu-button'\} in pid 1234"):
+    with pytest.raises(ElementNotFound, match=r"no add-session \{'role': 'menu-button'\} in pid 4242"):
         driver.find("add-session", timeout=0.1, role="menu-button")
 
 
