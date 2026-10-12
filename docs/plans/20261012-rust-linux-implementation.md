@@ -2,9 +2,12 @@
 
 ## Overview
 
-- Implement agterm in Rust, starting with a Linux build that is a drop-in replacement for the Swift/GTK fork
-  (`../agterm-linux`): same wire protocol, `agtermctl`, on-disk formats, control socket path, application id and
-  state dir.
+- Implement agterm in Rust, starting with a Linux build. The parity target is upstream macOS agterm
+  (`umputun/agterm` at the catalog's tag, v0.36.0): its wire protocol, command semantics, error strings, `agtermctl`,
+  on-disk formats, model and UI, the UI adapted to GTK4/libadwaita idioms where AppKit has no direct equivalent.
+- The Linux build also keeps the application id, state dir and control socket of the Swift/GTK fork
+  (`../agterm-linux`), so it can replace the fork installed on this machine with the existing state. The fork is a
+  reference for how Linux specifics were solved, never a port source (see Context > Reference rule).
 - Progress is measured by the conformance suite in `conformance/` (`--impl rust`): parity starts at 0% and grows
   task by task. A ratchet keeps every test that went green from going red again.
 - The core stays platform-neutral, so the macOS (objc2/AppKit + libghostty) and Windows frontends can come later
@@ -21,36 +24,60 @@
   10 s, `ZMX_DIR=/tmp/agterm-zmx-<FNV-1a 64 of the resolved state dir>`, `agtermctl` beside `--bin`, capability
   vocabulary). Adapter: `conformance/agterm_conformance/impls/rust.py`.
 - `conformance/docs/fork-bugs.md`: contracts the fork breaks. The Rust build implements upstream's contract there,
-  not the fork's code (today: `workspace new --collapsed`).
+  not the fork's code (today: `workspace new --collapsed`); this is one case of the Reference rule below.
+- Reference rule (user decision, 2026-10-12):
+  - upstream is the reference for the wire protocol, command semantics, error strings, `agtermctl` behavior and
+    output, on-disk formats, model and core behavior, and the UI. Port from upstream's sources and its Swift unit
+    tests (the source of exact strings), never from the fork's;
+  - the fork is consulted only for Linux platform glue upstream has no counterpart for: GtkGLArea surface hosting and
+    the input handoff, XDG paths, the app id and state dir a Linux build needs, the libghostty Linux build and its
+    patches, WebKitGTK. Its choices are adopted only where they serve upstream parity; user-visible behavior follows
+    upstream wherever upstream defines it;
+  - where upstream and the fork differ, upstream wins. A capability the fork claims is not a target by itself
+    (Technical Details lists the Rust target profile).
 - Catalog `conformance/catalog.yaml` (upstream v0.36.0): 110 commands in 22 groups (`session` alone has 41),
   10 events, 114 CLI subcommands, 14 behaviors. Exempt (no suite test): `remote.opened`, `remote.closed`,
   `zmx.attach`, `zmx.reset`, `debug.appearance`, `session.paste`, `session.overlay.copy`, `cli:session paste`,
   `zmx.tree.remote-host`, presentation fields, `field:result.liveReset`, `field:tree.liveReset`,
   `field:tree.session.remoteHost`.
-- Port sources in `../agterm-linux`:
-  - `agtermCore/Sources/agtermCore` (~32k lines, host-free): `ControlProtocol.swift`, `ControlResponse.swift`,
+- Port sources: upstream, cloned read-only at `.upstream/agterm` (git-ignored through `.git/info/exclude`;
+  `git clone --depth 1 --branch v0.36.0 https://github.com/umputun/agterm .upstream/agterm`, commit
+  `6cef448a5d63e2640c759a07d41c68ece5012b0a`). Paths below are relative to it:
+  - `agtermCore/Sources/agtermCore` (host-free): `ControlProtocol.swift`, `ControlResponse.swift`,
     `ControlPayloads.swift`, `ControlProjection.swift`, `ControlResolve.swift`, `ControlDispatcher*.swift`,
-    `ControlEvents.swift`, `AppStore*.swift`, `WindowLibrary*.swift`, `Snapshot.swift`, `PersistenceStore.swift`,
-    `SettingsStore.swift`, `SurfaceEnvironment.swift`, `Keymap.swift`, `Hooks.swift`, `HookScheduler.swift`,
-    `Zmx*.swift`, `RestoreMode.swift`, `CommandRestore.swift`.
-  - `agtermCore/Tests/agtermCoreTests`: the `ControlDispatcher*Tests` are the source of exact error strings.
+    `ControlActionsDefaults.swift`, `ControlEvents.swift`, `AppStore*.swift`, `WindowLibrary*.swift`,
+    `Snapshot.swift`, `PersistenceStore.swift`, `SettingsStore.swift`, `AppSettings.swift`,
+    `SurfaceEnvironment.swift`, `Keymap.swift`, `Hooks.swift`, `HookScheduler.swift`, `Zmx*.swift`,
+    `RestoreMode.swift`, `CommandRestore.swift`, `HtmlBridge.swift` (`ControlWire.invalidRequestMessage`).
+  - `agtermCore/Tests/agtermCoreTests`: the `ControlDispatcher*Tests` and `AppStore*Tests` are the source of exact
+    error strings and model edge cases; `agtermCore/Tests/agtermctlKitTests` the CLI's.
   - `agtermCore/Sources/agtermctlKit`: the CLI (`Commands.swift`, `SocketClient.swift`, per-group `*Commands.swift`).
-  - `agterm-linux/Sources/AgtermLinux` (~26k lines GTK4/libadwaita): `App.swift`, `GhosttyApp.swift`,
-    `GhosttySurface*.swift` (`GtkGLArea`), `GhosttyResourceResolver.swift`, `ControlServer*.swift`,
-    `ControlStreamOwner.swift`, `LinuxControlDispatcher*.swift`, `LinuxZmx*.swift`, `LinuxHtml*.swift` (WebKitGTK),
-    `WindowManager.swift`; `agterm-linux/Sources/LinuxIntegrations`.
-  - Build: `scripts/setup-linux.sh` (libghostty, Zig 0.15.2, shared `ghostty-internal.so` → `libghostty.so`),
-    `scripts/setup-linux-zmx.sh` (zmx, Zig 0.16.0, plus a private checkout of the ghostty revision zmx pins),
-    `scripts/verify-linux-resources.sh`, `scripts/stage-linux.sh`.
-  - Pins and patches: `linux/ghostty-resources.env`, `linux/zmx.env`, `linux/patches/ghostty-*.patch` (3),
-    `scripts/zmx-patches/000{1,2}-*.patch` (2), `scripts/zmx-patches/ghostty/0001-formatter-unstyled-blanks.patch`.
-  - `ARCHITECTURE.md`: model, surface ownership, control API split.
-- Fork defaults to keep: application id `io.github.melonamin.agterm` (`LinuxAppMetadata.swift`), overridable by
-  `AGTERM_APP_ID`; state dir `PersistenceStore.defaultDirectory` (Foundation's application support dir + `agterm`,
-  on Linux `$XDG_DATA_HOME/agterm`, else `~/.local/share/agterm`), overridden by `AGTERM_STATE_DIR`
-  (`DebugStateDirectory.swift`); config dir for `keymap.conf`/`hooks.conf` from `ConfigPaths.swift`; control socket
-  `<state dir>/agterm.sock` (`ControlResolve.socketPath`), owned through `flock` on `<socket>.lock`, with
-  `<socket>.unavailable` advertised by a refused second instance (`ControlServer.swift`).
+  - `agterm/` (the AppKit app target): `Control/ControlServer*.swift` (socket, app-side effects of every command
+    group), `Control/ControlStreamOwner.swift`, `Ghostty/*` (libghostty app, surfaces, input, zmx launch, foreground
+    process), `Views/*` (sidebar, deck, palette, switcher, HUD/ask/HTML overlays, quick terminal, settings),
+    `AppActions*.swift`, `agtermApp+Menus.swift`, `WindowRegistry.swift`, `WelcomeAlert.swift`,
+    `*Installer.swift`; `agtermTests/` (hosted tests, e.g. `ControlServer*Tests`).
+  - Behavior docs: `site/commands.html` (every command, argument and read-back), `site/docs.html` (the user guide),
+    `.claude/rules/*.md` (per-subsystem contracts: `control-api.md`, `sidebar.md`, `windows.md`, `menu-actions.md`,
+    `keymap.md`, `settings.md`, `notifications.md`, `libghostty.md`, `theme-picker.md`), `ARCHITECTURE.md`.
+  - zmx: `scripts/setup.sh` (`ZMX_REV`, `GHOSTTY_REV`), `scripts/zmx-patches/` (the same 2 + 1 patches the Rust
+    build carries).
+  - Layout difference from the fork: the fork keeps upstream's `agtermCore`/`agtermctlKit` almost verbatim (Linux
+    `#if` shims only) and replaces the `agterm/` app target with `agterm-linux/Sources/AgtermLinux`; upstream's app
+    logic lives in `agterm/Control/ControlServer+*.swift`, `agterm/Ghostty/` and `agterm/Views/`.
+- Linux glue reference in `../agterm-linux` (consulted, not ported): `agterm-linux/Sources/AgtermLinux`
+  (`GhosttyApp.swift`, `GhosttySurface*.swift` for `GtkGLArea` hosting and input, `GhosttyResourceResolver.swift`,
+  `LinuxHtml*.swift`/`LinuxWebKit.swift` for WebKitGTK, `LinuxAppMetadata.swift`); build scripts
+  `scripts/setup-linux.sh`, `scripts/setup-linux-zmx.sh`, `scripts/verify-linux-resources.sh`,
+  `scripts/stage-linux.sh`; pins and patches `linux/ghostty-resources.env`, `linux/zmx.env`,
+  `linux/patches/ghostty-*.patch` (3).
+- Linux compatibility to keep, so the build can replace the installed fork: application id
+  `io.github.melonamin.agterm` (the fork's `LinuxAppMetadata.swift`), overridable by `AGTERM_APP_ID`; state dir
+  `PersistenceStore.defaultDirectory` (Foundation's application support dir + `agterm`, on Linux
+  `$XDG_DATA_HOME/agterm`, else `~/.local/share/agterm`), overridden by `AGTERM_STATE_DIR`; config dir for
+  `keymap.conf`/`hooks.conf` from `ConfigPaths.swift`; control socket `AGTERM_CONTROL_SOCKET`, else
+  `<state dir>/agterm.sock` (`ControlServer.defaultSocketPath`, `ControlResolve.socketPath`), owned through `flock`
+  on `<socket>.lock`, with `<socket>.unavailable` advertised by a refused second instance (`ControlServer.swift`).
 - Harness model for the Rust runner: `conformance/tools/run-reference-linux.sh` (private headless weston + dbus).
 
 ## Development Approach
@@ -58,12 +85,20 @@
 - **testing approach**: Regular (code first, then tests in the same task). The red conformance tests already play the
   role of tests written ahead for each command group.
 - Each command-group task follows one loop:
-  1. read the Swift implementation and its unit tests for the group (error strings, edge cases, field order); check
-     `conformance/docs/fork-bugs.md` and implement upstream's contract where the fork's differs;
-  2. implement in `agterm-core` against the `agterm-host` traits, with unit tests on fakes;
-  3. wire the GTK side in `agterm-gtk`;
-  4. add the group's `agtermctl` subcommands;
-  5. run the gate (below) and append newly green ids to `conformance/rust-passing.txt`.
+  1. read upstream's implementation of the group in `.upstream/agterm` (`ControlDispatcher*.swift`, the
+     `AppStore+*` files it calls, the app-side `agterm/Control/ControlServer+*.swift`), its unit tests (error
+     strings, edge cases, field order), `site/commands.html` and the matching `.claude/rules/*.md`; consult the
+     fork only for Linux glue upstream lacks, and implement upstream's contract wherever the fork differs
+     (`conformance/docs/fork-bugs.md` lists the cases the suite already pins);
+  2. implement in `agterm-core` against the `agterm-host` traits, with unit tests on fakes; the full upstream error
+     string is asserted on the Rust dispatcher's output, dynamic arguments included (the suite asserts only the
+     part both Swift references share);
+  3. wire the GTK side in `agterm-gtk`, following upstream's UI (`agterm/Views`, `agterm/Ghostty`, the rules files)
+     in GTK4/libadwaita idioms;
+  4. add the group's `agtermctl` subcommands, ported from upstream's `agtermctlKit`;
+  5. claim the group's capabilities from the Rust target profile (Technical Details) once its commands implement
+     them;
+  6. run the gate (below) and append newly green ids to `conformance/rust-passing.txt`.
 - **Gate of every task from Task 7 on**: a full protocol/cli/behaviors run of `run-rust-linux.sh` in the background
   (an all-green reference run takes about 8 minutes; red tests hit launch and wait timeouts, so early Rust runs are
   slower: measure in Task 7 and restate here), with the ratchet passing. The ratchet appends the green ids; tests of
@@ -83,10 +118,10 @@
   the build or the test and is fixed.
 - **CRITICAL: update this plan file when scope changes during implementation.**
 - Builds, the zig builds and suite runs take minutes: run them with `run_in_background`, never with blocking waits.
-- The Rust build uses the fork's app id, state dir and socket. Never launch it by hand without `scripts/run-dev.sh`
-  while the fork runs: the launch would be forwarded to the fork, or both would write one `windows.json`. The socket
-  ownership lock (Task 3) keeps a stray instance from unlinking the fork's live socket, but not from sharing its
-  state.
+- The Rust build uses the fork's app id, state dir and socket (Linux compatibility, not a behavior reference).
+  Never launch it by hand without `scripts/run-dev.sh` while the fork runs: the launch would be forwarded to the
+  fork, or both would write one `windows.json`. The socket ownership lock (Task 3) keeps a stray instance from
+  unlinking the fork's live socket, but not from sharing its state.
 
 ## Testing Strategy
 
@@ -110,7 +145,8 @@
   - it prints newly passing ids not yet listed, also into the CI job summary, so ids that only go green in CI (the
     live tests) can be added.
 - **ui layer**: no Linux ui driver exists, so `tests/ui` skips on Linux. UI outside the suite is checked by hand
-  against the fork (Tasks 33–36).
+  against upstream's behavior (`site/docs.html`, the rules files, `tests/ui` and `ui-ids.yaml` as the list of what
+  upstream exposes), in GTK idioms (Tasks 33–36).
 - **live sessions**: need a zsh login shell until Task 31. CI runs a job whose runner login shell is zsh (from
   Task 28), and after Task 31 one with fish; the default job's login shell is bash, which then claims
   `live-any-shell` too. `--must-pass live-sessions` is enforced from Task 32, when every live test can be green;
@@ -148,8 +184,8 @@
   thread and sends `(request, reply_tx)` through `MainLoop`. Streaming commands (`events.read`, `zmx.present`,
   `session.overlay.job.run`) hand their socket to a stream owner after the first `ok`.
 - The dispatcher lives in `agterm-core`. Only work that needs a live terminal or widget goes through a trait.
-- On-disk formats match the fork: `settings.json`, `windows.json` + `windows/<id>.json`, keymap, `hooks.conf`,
-  `ghostty.conf`.
+- On-disk formats match upstream (the fork shares them): `settings.json`, `windows.json` + `windows/<id>.json`,
+  keymap, `hooks.conf`, `ghostty.conf`.
 - Errors: one `ControlError` enum whose `Display` reproduces the Swift strings verbatim. A panic while handling a
   request becomes `ok:false` plus a log entry. No panic crosses a libghostty callback (`catch_unwind`, then abort with
   a log entry). A surface is freed exactly once, in `Surface::teardown`. Logs go through `tracing` to the state dir,
@@ -158,11 +194,26 @@
 ## Technical Details
 
 - `version` result: `{"app": {"version", "commit"}, "conformance": {"parityLevel": "0.36.0", "capabilities": [...]}}`.
-  `tree.app` carries the same `app` object. Capabilities follow the swift-linux column of `rust-build.md`:
-  `posix-shell`, `hidden-split-holds-focus` and `capture-reads-command-panes` from Task 7 on. `live-sessions` comes
-  in Task 28, only when the password-database login shell is zsh and zmx is staged. `live-any-shell` comes in
-  Task 31, when that shell is zsh, bash or fish and zmx is staged.
-- Launch contract: bind `AGTERM_CONTROL_SOCKET` (rust-build.md; the Linux fork itself never reads it), else
+  `tree.app` carries the same `app` object.
+- Rust target profile (capabilities `version` claims; settled with Codex, see the progress log). The Rust build is
+  held to upstream's branch of every capability whose behavior lives in upstream's own code, and each capability is
+  claimed by the task that implements its command, never ahead of it:
+  - `posix-shell` (Task 7); `status-shape`, `type-rejects-nul` (Task 15); `drop-placement` (Task 11);
+    `select-takes-frontmost` (Task 14: upstream's `windowSelect` calls `takeFrontmost` itself, a model change, not
+    a compositor focus); `resize-echoes-ratio`, `hidden-split-holds-focus` (Task 16: upstream's documented model
+    contract, `control-api.md` "works shown or hidden; read `splitFocused`", and `AppStorePaneTests`; macOS's
+    reversion is an AppKit first-responder effect the suite calls nondeterministic); `quick-validates-input`
+    (Task 17); `modal-blocks-covers`, `pick-names-pending-ask` (Task 19); `overlay-size-validated` (Task 20);
+    `sidebar-min-width` (Task 22); `theme-slots-by-sync` (Task 23); `keymap-menu` (Task 24, once a GTK menu carries
+    the actions' live accelerators; dropping it needs an explicit exception recorded here before Task 37);
+    `config-reload-counts` (Task 25); `live-sessions` (Task 28) and `live-any-shell` (Task 31) by host.
+  - not claimed: `window-geometry` and `window-minimize` (Wayland gives a client no window position and no
+    minimized read-back; their tests branch, and Rust passes the other branch); `capture-reads-command-panes`
+    (it contradicts upstream's intent: `ForegroundProcess.command` is leader-only so a `--command` pane's creation
+    command keeps the exec path, `--wait` and close-on-exit, see Task 26).
+  - `conformance/docs/rust-build.md` gets a "Rust target profile" section with this list (Task 5); its capability
+    table stays the references' profiles, as `selftests/test_docs.py` checks.
+- Launch contract: bind `AGTERM_CONTROL_SOCKET` (rust-build.md; upstream reads it too, the Linux fork does not), else
   `<state dir>/agterm.sock`. Use `AGTERM_APP_ID`, else `io.github.melonamin.agterm`. Honor `AGTERM_STATE_DIR`, `HOME` and the XDG dirs. Load
   `<state>/config/ghostty.conf`. Quit on SIGTERM without a prompt.
 - Pane environment as `SurfaceEnvironment.swift`: session panes get `AGTERM_ENABLED`, `AGTERM_SESSION_ID`,
@@ -170,11 +221,14 @@
   `TERM_PROGRAM_VERSION`; the quick terminal gets its own variant without session and window ids. `AGTERM_SOCKET` is
   `<path>.unavailable` when the instance was refused the socket. `agtermctl --pane-id`, `--pane` forwarding and the
   agent-status hooks rely on it.
-- Toolchains: Zig 0.15.2 for libghostty at the fork's `GHOSTTY_REV` (2026-07-09), Zig 0.16.0 for zmx (zmx's
-  `minimum_zig_version`); they are not shared. ghostty `main` already requires 0.16.0, so a later pin bump would
-  unify both on one Zig; that bump is a dedicated task after this plan (rebasing the three ghostty patches and a
-  full suite run), not part of the first build. `build/pins.env` holds both Zig versions with sha256 (taken from
-  ziglang.org: the fork records only the 0.16.0 one), `GHOSTTY_REV`, the themes URL and sha, `ZMX_REV`.
+- Toolchains: Tasks 1–4 built libghostty with Zig 0.15.2 at the fork's `GHOSTTY_REV` (11b9a6e, 2026-07-09) and zmx
+  with Zig 0.16.0 (zmx's `minimum_zig_version`). Task 4.1 moves libghostty to upstream v0.36.0's `GHOSTTY_REV`
+  (683d8db, 2026-08-25, Zig 0.16.0, `.upstream/agterm/scripts/setup.sh`), so the terminal core matches the
+  reference (its hidden-surface GPU release, the font-increase scrollback fix upstream re-verified) and one Zig
+  builds both. Fallback if the three Linux patches cannot be carried onto it: ⚠️ with the concrete reason, the
+  fork's revision stays, and the profile and acceptance criteria record that exception before Task 37.
+  `build/pins.env` holds each build's Zig version with sha256 (taken from ziglang.org), `GHOSTTY_REV`, the themes
+  URL and sha, `ZMX_REV`.
 - Native build outside cargo: `scripts/build-ghostty.sh` and `scripts/build-zmx.sh` each fill their own vendored
   prefix `${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/{ghostty,zmx}-<key>/`. The ghostty key hashes its pins and
   `build/patches/ghostty/`; the zmx key hashes its pins, `build/patches/zmx/` and `build/patches/zmx/ghostty/`, so a
@@ -224,7 +278,8 @@
 ## What Goes Where
 
 - **Implementation Steps**: code, tests, scripts, CI, docs in this repo.
-- **Post-Completion**: manual checks against the fork, CI on GitHub, the macOS and Windows follow-up brainstorms.
+- **Post-Completion**: manual checks against upstream's behavior and of the fork replacement, CI on GitHub, the macOS
+  and Windows follow-up brainstorms.
 
 ## Implementation Steps
 
@@ -314,6 +369,49 @@
 - [x] write tests: `version` against an in-process server from `agterm-server`
 - [x] run `cargo test`; must pass before Task 5
 
+### Task 4.1: ➕ Realign Tasks 1–4 with upstream
+
+Tasks 1–4 followed the fork where it differs from upstream; paths under `.upstream/agterm` unless noted.
+
+**Files:**
+- Modify: `build/pins.env`, `build/patches/ghostty/*.patch`, `scripts/build-ghostty.sh`,
+  `scripts/gen-ghostty-bindings.sh`, `crates/agterm-ghostty-sys/src/bindings.rs`, `crates/agterm-ghostty/src/*`,
+  `crates/agterm-ghostty/tests/smoke.rs`
+- Modify: `crates/agterm-core/src/{lib,error,dispatch,paths}.rs`, `crates/agterm-proto/src/request.rs`
+- Modify: `crates/agterm-server/src/{lib,connection}.rs`, `crates/agterm-server/tests/server.rs`
+- Modify: `crates/agterm-ctl/src/{main,output,socket}.rs`, `crates/agterm-ctl/tests/cli.rs`
+
+- [ ] libghostty at upstream v0.36.0's `GHOSTTY_REV` (683d8db, `scripts/setup.sh`) built with Zig 0.16.0 (the zmx
+      one, so `GHOSTTY_ZIG_*` pins follow): carry the three Linux patches onto it, re-checking each is still needed
+      and that the input-handoff one still synchronizes with the renderer state; refresh the themes pin and resource
+      checks for that revision, regenerate the bindings, rebuild the prefix (background) and rerun the
+      `agterm-ghostty` tests; fallback per Technical Details > Toolchains
+- [ ] an undecodable request answers `invalid request: <context>` (`ControlWire.invalidRequestMessage`,
+      `agtermCore/Sources/agtermCore/HtmlBridge.swift`; `control-api.md` > Transport), not the fork's
+      `could not decode request`: the `invalid request: ` prefix always (`HtmlBridgeTests`), an unknown command
+      named in the context as Foundation's `Cannot initialize Command from invalid String value <cmd>`, the other
+      decode failures with the decoder's own context
+- [ ] a request line that cannot be read (EOF before any byte, a read error or timeout, a line over 1 MiB) is
+      answered `{"ok":false,"error":"request too large or read failed"}` before the connection closes, as upstream's
+      `handleConnection` (`agterm/Control/ControlServer.swift`); the server now closes without a reply
+- [ ] upstream's connection deadlines: 10 s overall for the request read on top of the 5 s per-read timeout (a
+      byte-a-second client never trips the latter), 5 s per write and 10 s overall for the response write
+      (`readDeadlineSeconds`, `writeTimeoutSeconds`, `writeDeadlineSeconds`)
+- [ ] `agtermctl` usage errors and help in swift-argument-parser's format (upstream's CLI is an `ArgumentParser`
+      tree): the usage line spells the options (`Usage: agtermctl version [--socket <socket>] [--json]`, not clap's
+      `[OPTIONS]`), messages use its wording (`Unknown option '--bogus'`, `Missing expected argument '<id>'`,
+      `Unexpected argument 'x'`, `The value 'x' is invalid for '--mode <mode>'`), and help uses its
+      `OVERVIEW:`/`USAGE:`/`OPTIONS:`/`SUBCOMMANDS:` layout with `-h, --help  Show help information.`; one
+      formatter later command groups inherit
+- [ ] doc comments and test names that cite the fork as the source (`messages_match_the_fork`, "verbatim from the
+      Swift fork", "as the fork's per-read poll", `paths.rs` "as the Swift fork does") re-pointed at the upstream
+      files; the Linux-only parts (XDG data home, `/proc/locks`) keep their fork reference as Linux glue
+- [ ] write tests: each malformed-request case of `test_addressing.py::test_undecodable_request_is_refused` against
+      the dispatcher's full text; the unreadable-line reply (empty connection, oversized line, slow trickle past the
+      overall deadline); a stalled reader times the response write out; the CLI usage-error and help texts
+- [ ] run `cargo test --workspace` and `cargo clippy --workspace --all-targets --all-features -- -D warnings`; both
+      must pass before Task 5
+
 ### Task 5: Rust runner, ratchet, dev launcher, lint report and the cargo CI job
 
 **Files:**
@@ -322,7 +420,7 @@
 - Create: `conformance/selftests/test_ratchet.py`, `conformance/selftests/test_run_rust_linux.py`
 - Create: `scripts/run-dev.sh`, `scripts/lint-report.sh`
 - Create: `.github/workflows/rust-linux.yml`
-- Modify: `conformance/README.md`
+- Modify: `conformance/README.md`, `conformance/docs/rust-build.md`
 
 - [ ] `--nodeid-report PATH` per Technical Details, as a registered class next to `MustPass`
 - [ ] `run-rust-linux.sh`: cargo build (release), `stage.sh`, the suite with `--impl rust` under the same
@@ -336,6 +434,11 @@
 - [ ] CI job `rust-linux` (ubuntu-24.04), cargo part: both Zig versions by sha256, GTK4/libadwaita/WebKitGTK `-dev`
       packages, vendored prefix cached by the hash of `build/pins.env` and `build/patches/**`, fmt check, strict
       clippy, lint report in the job summary, `cargo test`
+- [ ] `rust-build.md`: a "Rust target profile" section listing the capabilities the Rust build must claim by Task 37
+      and the ones it does not, each with its reason (Technical Details); the capability table stays the
+      references' profiles. `conformance/README.md` Reference discipline: the Rust build is held to upstream's
+      contract (its capability branches included), reference-linux is a diagnostic for it, and the per-platform
+      reference rule applies to the two Swift references
 - [ ] write tests: `test_ratchet.py` (pass; failed, errored, teardown-error and skipped listed ids; host-dependent
       unsupported skip allowed, other unsupported skips not; collection error; not-collected on a partial and a full
       run; must-pass problem; ids containing spaces; unlisted new pass; malformed file)
@@ -352,12 +455,19 @@
 - Modify: `crates/agterm-ghostty/src/` (surface, input, actions)
 
 - [ ] `adw::Application` with one window and a `GtkGLArea` hosting a libghostty surface that runs the configured
-      command, ported from `GhosttyApp.swift`, `GhosttySurface*.swift`, `GhosttyActionDecoder.swift`
-- [ ] keyboard, IME preedit, mouse, scroll, resize, focus and content scale, as the fork with its input-handoff and
-      OpenGL patches
+      command: app, callbacks and surface behavior from upstream's `agterm/Ghostty/GhosttyApp.swift`,
+      `GhosttyCallbacks.swift`, `GhosttySurfaceView*.swift` and `.claude/rules/libghostty.md` (wakeup coalescing,
+      close callback never frees synchronously, actions handled); the `GtkGLArea` hosting and OpenGL context from
+      the fork's `GhosttySurface*.swift` (Linux glue)
+- [ ] keyboard, IME preedit, mouse, scroll, resize, focus and content scale with upstream's semantics
+      (`GhosttySurfaceView+Input.swift`: fixed Edit chords, keycode fallbacks for non-Latin layouts, paste never
+      prompting), mapped onto GTK events; the input-handoff and OpenGL patches as the fork uses them
 - [ ] calibrate `excessive-nesting-threshold` on this code; record the frozen value in Technical Details
-- [ ] write tests: unit tests for the key and modifier translation (`ModifierKeyMods.swift`) and action decoding
-- [ ] manual check through `run-dev.sh`: the shell renders, takes input, resizes, copy and paste work
+- [ ] write tests: unit tests for the key and modifier translation and action decoding (the fork's
+      `ModifierKeyMods.swift`/`GhosttyActionDecoder.swift` only as a hint for the GDK side)
+- [ ] manual check through `run-dev.sh`: the shell renders, takes input, resizes, copy and paste work; a font-size
+      increase keeps the scrollback (the regression upstream's pin note names); a surface hidden and shown again
+      repaints; input stays responsive under heavy PTY output (the input-handoff patch on the new revision)
 - [ ] run `cargo test` and clippy; must pass before Task 7
 
 ### Task 7: App shell, server wiring and the GUI CI spike
@@ -370,15 +480,17 @@
 - [ ] `AGTERM_APP_ID` or `io.github.melonamin.agterm`; `MainLoop` over the GLib main context; the control server on
       the resolved socket
 - [ ] SIGTERM via `glib::unix_signal_add_local`: tear down the surfaces and quit without a prompt within 10 s
-- [ ] `version` with `parityLevel: "0.36.0"` and the Linux capabilities (Technical Details)
+- [ ] `version` with `parityLevel: "0.36.0"` and `posix-shell`, the first capability of the Rust target profile
+      (Technical Details); one `AppIdentity` feeds `version`, `tree.app` and `TERM_PROGRAM_VERSION`
+      (`control-api.md` > Tree and window read-back)
 - [ ] the pure pane-environment builder per `SurfaceEnvironment.swift` (session and quick-terminal variants, full
       variable set, `.unavailable` socket); the app's single surface gets the session variant. Wiring per surface
       kind follows in Tasks 11 (primary), 16 (split, scratch) and 17 (quick)
 - [ ] CI: weston + dbus + mesa (`libgl1-mesa-dri`, `libegl-mesa0`); the first step is a spike:
       `run-rust-linux.sh -- -k test_version` on the runner. If headless weston's GL backend cannot host libghostty
-      there, stop with ⚠️ and settle the display stack (xvfb + openbox, as the fork's CI) before going on. The spike
-      also opens a WebKitGTK view, to learn early whether Ubuntu 24.04's AppArmor userns restriction breaks WebKit's
-      sandbox on the runner
+      there, stop with ⚠️ and settle the display stack (xvfb + openbox, the fork's CI as the Linux hint) before
+      going on. The spike also opens a WebKitGTK view, to learn early whether Ubuntu 24.04's AppArmor userns
+      restriction breaks WebKit's sandbox on the runner
 - [ ] CI: a full-suite job (`run-rust-linux.sh`, protocol/cli/behaviors) after the spike; the node-id report is
       uploaded as an artifact and new green ids are printed in the job summary
 - [ ] write tests: the builder for every variant and optional field; socket path resolution in the app
@@ -391,11 +503,14 @@
 **Files:**
 - Create: `crates/agterm-core/src/model/{mod,window_library,store,workspace,session,pane,naming}.rs`
 
-- [ ] `WindowLibrary` → per-window `AppStore` → workspaces → sessions → panes, ported from `WindowLibrary*.swift`,
-      `AppStore.swift`, `Workspace.swift`, `Session.swift`, `SessionNaming.swift`, `AppStore+Naming.swift`
+- [ ] `WindowLibrary` → per-window `AppStore` → workspaces → sessions → panes, ported from upstream's
+      `WindowLibrary*.swift`, `AppStore.swift`, `AppStore+SessionState.swift`, `Workspace.swift`, `Session.swift`,
+      `AppStore+Naming.swift` (the fork's extra `SessionNaming.swift` is not a source), per `sidebar.md` and
+      `windows.md`
 - [ ] selection, recency (`RecencyStack.swift`, `AppStore+Recency.swift`), new-session placement
       (`AppStore+NewSessionPlacement.swift`), close reselection (`AppStore+CloseReselection.swift`)
-- [ ] write tests: tree mutations, naming and display names (basename pins), placement
+- [ ] write tests: tree mutations, naming and display names (basename pins), placement (ported from upstream's
+      `AppStoreTests`, `AppStoreNameSanitizeTests`, `AppStoreNavigationTests`)
 - [ ] write tests: reselection after close, recency order
 - [ ] gate: full run; ratchet; must pass before Task 9
 
@@ -403,14 +518,16 @@
 
 **Files:**
 - Create: `crates/agterm-core/src/persist/{mod,snapshot,settings}.rs`
-- Create: `crates/agterm-core/tests/fixtures/` (snapshots and settings written by the fork)
+- Create: `crates/agterm-core/tests/fixtures/` (snapshots and settings in upstream's format, plus files the
+  installed fork wrote, for the replacement)
 
 - [ ] snapshot JSON identical to `Snapshot.swift`: `windows.json` index + `windows/<id>.json`, migration and recovery
       (legacy, corrupt, missing) as `WindowLibrary` init; debounced save through `MainLoop`; no save on a cwd report
 - [ ] `settings.json` read/write as `SettingsStore.swift`/`AppSettings.swift`, including seeded settings from the
       harness
-- [ ] write tests: load fixtures produced by the fork; save → load round-trip is lossless
-- [ ] write tests: corrupt index, missing window file, unknown fields handled as the fork does
+- [ ] write tests: load fixtures in upstream's format (`SnapshotRoundTripTests`, `PersistenceTests`) and ones the
+      installed fork wrote; save → load round-trip is lossless
+- [ ] write tests: corrupt index, missing window file, unknown fields handled as upstream does
 - [ ] gate: full run; ratchet; must pass before Task 10
 
 ### Task 10: Tree projection and target resolution
@@ -421,8 +538,9 @@
 
 - [ ] `tree` projection per `ControlProjection.swift` (field names, order and optionality as the catalog `fields`),
       `tree.app`
-- [ ] target resolution per `ControlResolve.swift` and `LinuxControlDispatcher*.swift`: frontmost scoping, id and
-      prefix matching, the pinned error strings (`protocol.target-resolution`)
+- [ ] target resolution per upstream's `ControlResolve.swift` and `agterm/Control/ControlTargetResolver.swift`
+      (`control-api.md` > Transport and addressing): frontmost scoping, id and prefix matching, batch targets, the
+      pinned error strings (`protocol.target-resolution`)
 - [ ] `agtermctl tree` and the global target options
 - [ ] write tests: projection for multi-window and split layouts against expected JSON
 - [ ] write tests: resolver ambiguity, unknown id, cross-window targets
@@ -438,13 +556,17 @@
 - [ ] session.new, duplicate, close (soft close, recently closed), select, go, rename, reveal, move from
       `ControlDispatcher*.swift` and the `AppStore+*` files they call (`AppStore+Duplicate`, `+PendingClose`,
       `RecentClosed.swift`)
-- [ ] window.list; the eager deck of the fork: every session's surface stays mounted, visibility flips on select,
-      mount state readable for the harness's `wait_mounted`
+- [ ] window.list (upstream's cached list, `ControlServer+WindowCommands.swift`); upstream's eager deck
+      (`libghostty.md`, `WindowContentView+Detail.swift`): every session's surface stays mounted, visibility flips
+      on select, mount state readable for the harness's `wait_mounted`
 - [ ] pane environment wired into primary panes
-- [ ] a minimal sidebar of workspaces and sessions (full parity in Task 22)
+- [ ] a minimal sidebar of workspaces and sessions after upstream's `WorkspaceSidebar.swift` (full parity in
+      Task 22)
+- [ ] `session.move --after/--before` places like a sidebar drop (`SidebarDrop.resolveRelative`); claim
+      `drop-placement`
 - [ ] matching `agtermctl` subcommands (`SessionCommands.swift`, `WindowCommands.swift` list)
 - [ ] write tests: lifecycle and reselection on the fake surface; duplicate; recently closed and undo
-- [ ] write tests: dispatcher errors for these commands from the Swift tests
+- [ ] write tests: dispatcher errors for these commands from upstream's Swift tests
 - [ ] gate: full run; ratchet the green ids of `test_session.py`, `test_tree.py`, `test_addressing.py`,
       `cli/test_cli_output.py`
 
@@ -458,6 +580,7 @@
 - [ ] event ring per `ControlEvents.swift` and `AppStore+Events.swift`: the 10 event kinds, cursors, the anchor in
       `result.events` on a cursor failure
 - [ ] `events.read`: without a cursor it subscribes from now with no history; stream handoff after the first ok
+      (upstream's `agterm/Control/ControlStreamOwner.swift`)
 - [ ] `agtermctl events` subcommands (`EventCommands.swift`)
 - [ ] write tests: ring overflow, stale cursor, subscription delivery order
 - [ ] write tests: a stream connection survives other requests and closes cleanly on client hang-up
@@ -486,9 +609,11 @@
 - Modify: `crates/agterm-core/src/commands/window.rs`, `crates/agterm-ctl/src/window.rs`
 - Create: `crates/agterm-gtk/src/windows.rs`
 
-- [ ] window.new, select, go, close, rename, delete, resize, move, zoom, fullscreen, minimize with the fork's Linux
-      behavior (`WindowManager.swift`, `ControlActions+AppControllerWindows.swift`); no claims of `window-geometry`,
-      `window-minimize`, `select-takes-frontmost`
+- [ ] window.new, select, go, close, rename, delete, resize, move, zoom, fullscreen, minimize per upstream
+      (`ControlServer+WindowCommands.swift`, `WindowRegistry.swift`, `windows.md`) on GTK windows; `window.select`
+      and `window.go` take frontmost in the model as upstream's `takeFrontmost`, so claim `select-takes-frontmost`;
+      Wayland gives no client positioning and no minimized read-back, so `window-geometry` and `window-minimize`
+      stay unclaimed and their tests pass the other branch
 - [ ] multiple GTK windows, each over its own `AppStore`; close and delete persistence
 - [ ] `agtermctl window ...`
 - [ ] write tests: window lifecycle and index persistence
@@ -504,11 +629,14 @@
 - [ ] session.type (`KeystrokeSegments.swift`), text (`TerminalText.swift`), copy, paste, selectall, search;
       surface.cursor, surface.zoom (`TerminalZoom.swift`)
 - [ ] session.status, flag, context, seen (`AppStore+Status.swift`, `SessionContext.swift`, `AgentStatus.swift`)
-- [ ] `Surface` over libghostty: `read_text`, inject, selection, foreground pid; clipboard prompt policy
-      (`ClipboardPromptPolicy.swift`)
+- [ ] `Surface` over libghostty: `read_text`, inject (key events with the final-Return gap, never
+      `ghostty_surface_text`), selection, foreground pid; clipboard prompt policy (`ClipboardPromptPolicy.swift`,
+      `Ghostty/ClipboardPromptController.swift`); `control-api.md` > Surface input, output, and search
+- [ ] `session.type` refuses a NUL (`text must not contain a NUL byte`) and `session.status` validates and reads back
+      `shape`; claim `type-rejects-nul` and `status-shape`
 - [ ] matching `agtermctl` subcommands (`SessionMetadataCommands.swift`)
 - [ ] write tests: keystroke segmentation, text read-back, status/flag/context read-back on the fake surface
-- [ ] write tests: errors (NUL text per the Linux reference, unknown pane, `ControlDispatcherSessionMetadataTests`)
+- [ ] write tests: errors (NUL text, unknown pane, `ControlDispatcherSessionMetadataTests`, all as upstream)
 - [ ] gate: full run; ratchet (`test_session_text.py`, `test_surface.py`, `test_session.py`); scratch and split users
       ⚠️ until Task 16, quick, overlay and HUD users ⚠️ until Tasks 17–20
 
@@ -518,13 +646,19 @@
 - Create: `crates/agterm-core/src/commands/panes.rs`, `crates/agterm-gtk/src/split.rs`
 
 - [ ] session.split, split.close, swap, focus, resize, lead, scratch from `ControlDispatcher+Panes.swift`,
-      `AppStore+Panes.swift`; GTK `SplitPaneLayout.swift`, `SplitRatioRestoreCoordinator.swift`,
-      `AppControllerPaneSwap.swift`
-- [ ] `hidden-split-holds-focus` as the fork; `pane.split` and `pane.scratch` events
+      `AppStore+Panes.swift`, `ControlServer+SessionActions.swift` (`control-api.md` > Organization commands); the
+      GTK split after upstream's `WindowContentView+Detail.swift`, `Views/SplitRatioAccessor.swift`,
+      `AppActions.swift` and `menu-actions.md`
+- [ ] `session.resize` echoes the clamped ratio; claim `resize-echoes-ratio`
+- [ ] focus on a hidden split holds, as upstream's model (`AppStorePaneTests`): stale GTK focus callbacks after a
+      layout change never undo the chosen pane, and a hidden split with the right pane chosen shows that pane
+      maximized and gives it input; claim `hidden-split-holds-focus`; `pane.split` and `pane.scratch` events
 - [ ] pane environment wired into split and scratch panes
 - [ ] matching `agtermctl` subcommands (`Session+Swap.swift`, `Session+Lead.swift`)
 - [ ] write tests: split tree mutations, ratio restore, swap
-- [ ] write tests: focus on a hidden split; close of the last pane
+- [ ] write tests: focus on a hidden split (ported from `AppStorePaneTests`); close of the last pane
+- [ ] manual check through `run-dev.sh`: hide the split, focus right, type a marker, show both: the marker is in the
+      right pane and it still has focus
 - [ ] gate: full run; ratchet (`test_split.py` and newly green tests elsewhere)
 
 ### Task 17: Restart, background, restore, quick terminal, dashboard and auto-follow
@@ -534,15 +668,16 @@
 - Modify: `crates/agterm-core/src/commands/session.rs` (background, restore)
 - Create: `crates/agterm-gtk/src/{quick,dashboard}.rs`
 
-- [ ] session.restart (`RestartReplay.swift`, `ControlActions+Restart.swift`), session.background
-      (`PaneBackgrounds.swift`), session.restore
-- [ ] quick, quick.type, quick.text (`QuickTerminalMetrics.swift`, `AppControllerQuickTerminal.swift`); dashboard
-      (`Dashboard*.swift`, `ControlDispatcher+Dashboard.swift`)
-- [ ] auto-follow (`AppStore+AutoFollow.swift`, `LinuxAutoFollowCoordinator.swift`) behind `autoFollowMs`
+- [ ] session.restart (`RestartReplay.swift`, `ControlServer+Restart.swift`), session.background
+      (`PaneBackgrounds.swift`, `BackgroundWatermark.swift`), session.restore
+- [ ] quick, quick.type, quick.text (`QuickTerminalMetrics.swift`, `Views/QuickTerminal.swift`, `windows.md`);
+      dashboard (`Dashboard*.swift`, `ControlDispatcher+Dashboard.swift`, `Views/DashboardView.swift`); claim
+      `quick-validates-input`
+- [ ] auto-follow (`AppStore+AutoFollow.swift`) behind `autoFollowMs`
 - [ ] pane environment wired into the quick terminal (quick variant)
 - [ ] matching `agtermctl` subcommands
 - [ ] write tests: restart replay decisions, dashboard layout and targets, auto-follow decisions
-- [ ] write tests: quick.text `--lines`/`--all` validation as the Linux reference
+- [ ] write tests: quick.type NUL and quick.text `--lines`/`--all` validation as upstream
 - [ ] gate: full run; ratchet (`test_dashboard_quick.py` and newly green tests elsewhere)
 
 ### Task 18: HUD and notifications
@@ -550,10 +685,11 @@
 **Files:**
 - Create: `crates/agterm-core/src/commands/{hud,notify}.rs`, `crates/agterm-gtk/src/{hud,notifications}.rs`
 
-- [ ] session.hud.open, update, close (`Hud.swift`, `HudMarkdown*.swift`, `ControlDispatcher+Hud.swift`); the GTK
-      HUD (`GhosttySurface+Hud.swift`, `LinuxHudAutoHide.swift`, `LinuxHudLinkClick.swift`)
-- [ ] notify (`Notifications.swift`, `NotificationManager.swift`, `LinuxNotificationPolicy.swift`) over the
-      instance's own dbus
+- [ ] session.hud.open, update, close (`Hud.swift`, `HudMarkdown.swift`, `ControlDispatcher+Hud.swift`,
+      `ControlServer+Hud.swift`); the panel as upstream's: a pty running `agterm/Resources/hud/hud.sh`, auto-hide,
+      ⌘/Ctrl-click links (`Ghostty/HudLinkClick.swift`), per `control-api.md` > Overlay, zoom, dashboard
+- [ ] notify (`Notifications.swift`, `Notifications/NotificationManager.swift`, `notifications.md`) through
+      GNotification over the instance's own dbus (Linux glue)
 - [ ] matching `agtermctl` subcommands (`SessionHudCommands.swift`)
 - [ ] write tests: HUD markdown parsing and state transitions
 - [ ] write tests: notify argument validation
@@ -564,9 +700,12 @@
 **Files:**
 - Create: `crates/agterm-core/src/commands/{ask,pick}.rs`, `crates/agterm-gtk/src/{ask_dialog,picker}.rs`
 
-- [ ] ask.open, result, cancel (`Ask.swift`, `ControlAsk.swift`, `ControlDispatcher+Ask.swift`; GTK
-      `AskDialog.swift`, `ControlAsk.swift`)
-- [ ] pick.open, result, cancel (`Pick.swift`, `ControlPick.swift`, `Fuzzy.swift`; GTK `ControlPicker.swift`)
+- [ ] ask.open, result, cancel (`Ask.swift`, `ControlAsk.swift`, `ControlDispatcher+Ask.swift`,
+      `ControlServer+Ask.swift`); terminal and GUI styles drawn after `Views/AskDialogView.swift`
+- [ ] pick.open, result, cancel (`Pick.swift`, `ControlPick.swift`, `Fuzzy.swift`, `ControlServer+Pick.swift`); the
+      picker after `Views/Palette.swift`
+- [ ] a pending GUI ask refuses control-driven covers and `pick.open` names it; claim `modal-blocks-covers` and
+      `pick-names-pending-ask`
 - [ ] matching `agtermctl` subcommands (`AskCommands.swift`)
 - [ ] write tests: pending-ask rules, fuzzy ranking, result/cancel races
 - [ ] write tests: errors from `ControlDispatcherAskTests` and `ControlDispatcherPickTests`
@@ -579,11 +718,13 @@
 - Modify: `crates/agterm-server/src/stream.rs`
 
 - [ ] session.overlay.open (program), close, resize, result, submit, copy, text (`ControlDispatcher+Overlay.swift`,
-      `OverlayCapture.swift`; GTK `ControlActions+AppControllerOverlay.swift`)
-- [ ] session.overlay.job.run with the job-frame stream (`OverlayJobs.swift`, `ControlServer+Streams.swift`)
+      `OverlayCapture.swift`, `control-api.md` > Overlay); the overlay panel after upstream's session detail; a
+      `sizePercent` outside 1...100 is refused, so claim `overlay-size-validated`
+- [ ] session.overlay.job.run with the job-frame stream (`OverlayJobs.swift`, `ControlServer+OverlayJobs.swift`,
+      `ControlStreamOwner.swift`)
 - [ ] matching `agtermctl` subcommands (`OverlayPageCommands.swift`, `OverlayRunJob.swift`)
 - [ ] write tests: overlay slot rules, exit status capture, job claiming
-- [ ] write tests: size validation per the Linux reference
+- [ ] write tests: size validation as upstream
 - [ ] gate: full run; ratchet (program part of `test_overlay.py`, plus the HUD and surface tests waiting on it)
 
 ### Task 21: HTML overlays
@@ -592,11 +733,12 @@
 - Create: `crates/agterm-core/src/html/{mod,bridge,navigation,outcomes}.rs`, `crates/agterm-gtk/src/html_overlay.rs`
 
 - [ ] `--html` overlays on WebKitGTK through the `webkit6` crate behind the default cargo feature `html`; without it
-      the build refuses HTML overlays as the fork does when WebKitGTK is missing (no port of the `AgtermWebKit` C
-      shim); with it WebKitGTK is a runtime dependency (Technical Details)
-- [ ] `HtmlOverlay.swift`, `HtmlNavigationPolicy`, `HtmlBridge.swift`, `HtmlPageOutcomes.swift`; GTK
-      `LinuxHtml*.swift`, `LinuxWebKit.swift`; session.overlay.reload, navigate; the `data-agterm` adapter, `--js`
-      helper and `--block` outcomes
+      the build refuses HTML overlays (the fork's handling of a missing WebKitGTK as the Linux hint; no port of its
+      `AgtermWebKit` C shim); with it WebKitGTK is a runtime dependency (Technical Details)
+- [ ] `HtmlOverlay.swift` (origin pinning, navigation policy), `HtmlBridge.swift`, `HtmlPageOutcomes.swift`,
+      `BrowserProfile.swift`; the panel, identity strip and toolbar after `Views/HtmlOverlay*.swift` and
+      `control-api.md` > Overlay; the fork's `LinuxHtml*.swift`/`LinuxWebKit.swift` only for the WebKitGTK calls;
+      session.overlay.reload, navigate; the `data-agterm` adapter, `--js` helper and `--block` outcomes
 - [ ] matching `agtermctl` subcommands
 - [ ] write tests: bridge message → request mapping with page defaults; navigation policy
 - [ ] write tests: outcome bookkeeping by page id
@@ -609,9 +751,11 @@
 - Modify: `crates/agterm-gtk/src/sidebar.rs`
 
 - [ ] sidebar, sidebar.mode, flagged-layout, expand, collapse, width (`AppStore+Sidebar*.swift`, `SidebarMode.swift`,
-      `SidebarDrop.swift`; GTK `AppControllerSidebar*.swift`, `LinuxSidebarPolicy.swift`,
-      `AppControllerFlaggedLayout.swift`)
-- [ ] full sidebar rows: status glyphs, git status, context lines, drag-and-drop reorder as the fork
+      `SidebarDrop.swift`, `sidebar.md`); `sidebar.width` clamps to upstream's floor and echoes it, so claim
+      `sidebar-min-width`
+- [ ] full sidebar rows as upstream's (`Views/WorkspaceSidebar*.swift`, `SidebarRowViews.swift`, `StatusGlyph.swift`,
+      `SidebarRenameController.swift`): status glyphs, context lines, inline rename, context menu, flagged layout,
+      drag-and-drop reorder, in GTK list idioms
 - [ ] matching `agtermctl` subcommands
 - [ ] write tests: mode and width rules, drop placement
 - [ ] write tests: errors from `ControlDispatcherSidebarTests`
@@ -623,8 +767,9 @@
 - Create: `crates/agterm-core/src/commands/{font,theme}.rs`, `crates/agterm-gtk/src/theme.rs`
 
 - [ ] font.inc, dec, reset over libghostty
-- [ ] theme.set, theme.list (`ThemeCatalog.swift`, `ThemeName.swift`, `ThemeBrightness.swift`; GTK
-      `GhosttyConfigTheme.swift`, `LinuxThemePolicy.swift`) over the staged themes
+- [ ] theme.set, theme.list (`ThemeCatalog.swift`, `ThemeName.swift`, `ThemeBrightness.swift`, `theme-picker.md`,
+      `SystemAppearanceObserver.swift`) over the staged themes, following the system appearance through
+      libadwaita's style manager; claim `theme-slots-by-sync`
 - [ ] matching `agtermctl` subcommands
 - [ ] write tests: theme catalog listing and light/dark slots
 - [ ] write tests: unknown theme errors
@@ -638,11 +783,13 @@
 
 - [ ] config dir for `keymap.conf` and `hooks.conf` per `ConfigPaths.swift` (with the `AppSettings.configDirectory`
       override)
-- [ ] keymap model and matcher (`Keymap.swift`, `Keybind*.swift`, `BuiltinAction.swift`, `ControlKeymap.swift`);
-      keymap.reload, list, run; GTK `KeymapDispatch.swift`, `LinuxKeyboardPolicy.swift`
+- [ ] keymap model and matcher (`Keymap.swift`, `Keybind*.swift`, `BuiltinAction.swift`, `ControlKeymap.swift`,
+      `keymap.md`); keymap.reload, list, run; the app's menu actions and their accelerators after
+      `agtermApp+Menus.swift` and `Commands/KeyboardLayout.swift`, as a GTK menu whose live accelerators
+      `keymap.list` reports in `menu`; claim `keymap-menu` (or record the exception in Technical Details)
 - [ ] `hooks.conf` and `HookScheduler` (bounded queue, one child per hook, exit releases a slot); hooks.reload,
-      list; `ProcessLauncher` impl (`LinuxHookProcessRunner.swift`)
-- [ ] custom commands (`CustomCommand*.swift`, `LinuxCustomCommandProcess.swift`)
+      list; `ProcessLauncher` impl after `Commands/HookProcessRunner.swift` and `HookController.swift`
+- [ ] custom commands (`CustomCommand*.swift`, `Commands/CustomCommandRunner.swift`)
 - [ ] matching `agtermctl` subcommands
 - [ ] write tests: keymap parse/match, scheduler ordering and queue limits (port `HookSchedulerTests`, `HooksTests`)
 - [ ] write tests: reload with a broken file keeps the previous config and reports the error
@@ -653,8 +800,9 @@
 **Files:**
 - Create: `crates/agterm-core/src/commands/{config,browser,debug}.rs`
 
-- [ ] config.reload on every surface; browser.clear, browser.links (`BrowserProfile.swift`,
-      `ControlDispatcher+Browser.swift`); debug.appearance refused outside UI-test mode
+- [ ] config.reload on every surface, answering the diagnostic count, so claim `config-reload-counts`;
+      browser.clear, browser.links (`BrowserProfile.swift`, `ControlDispatcher+Browser.swift`); debug.appearance
+      refused outside UI-test mode
 - [ ] matching `agtermctl` subcommands
 - [ ] write tests: reload propagation through the fake surfaces
 - [ ] write tests: browser profile paths and errors
@@ -668,11 +816,19 @@
 - [ ] restore.mode, restore.capture, restore.clear (`RestoreMode.swift`, `CommandRestore.swift`,
       `AppStore+Restore.swift`); the launch mode frozen for the process, quit capture
 - [ ] `none` and `rerun` relaunch: layout, pinned commands, captured commands (`LaunchSpawnPlan.swift`,
-      `SpawnPacer.swift`); `capture-reads-command-panes` as the fork (`LinuxProcessCapture.swift`)
+      `SpawnPacer.swift`, `CommandRestore.restorePlan`)
+- [ ] capture keeps upstream's intent (`Ghostty/ForegroundProcess.swift` `command`): it never turns a pane's own
+      creation command into a shell replay, so a `--command` session keeps the exec path, `--wait` and
+      close-on-exit, while a foreground job started from a shell (also inside `--command /bin/sh`) still takes
+      precedence over the creation command. On Linux the foreground group's leader is the program itself, so a
+      leader-only read is not enough: a candidate predicate (leader is the pane's spawned child) is checked against
+      a shell wrapper, `exec`, a pipeline and a live pane. `capture-reads-command-panes` is not claimed
 - [ ] live requested without zmx: fall back with `unavailableReason` as upstream
 - [ ] matching `agtermctl` subcommands
 - [ ] write tests: capture argv parsing, shell recognition, denylist
 - [ ] write tests: relaunch plans for each mode; live fallback status
+- [ ] write tests: the whole chain capture → save → relaunch → surface spawn on the fakes, for a `--command` session
+      with and without `--wait` and for a job typed into a shell pane
 - [ ] gate: full run; ratchet (`test_restore.py`, `behaviors/test_relaunch.py` non-live cases)
 
 ### Task 27: zmx build and the `SessionHost` crate
@@ -689,7 +845,8 @@
       script (`ZmxSupport.swift`, `ZmxReplayScript.swift`), inventory and lifecycle (`ZmxInventory.swift`,
       `ZmxLifecycle.swift`, `LiveReset.swift`)
 - [ ] lead protocol (`ZmxLead.swift`), `zmx screen`/`zmx type` replies
-- [ ] write tests: FNV-1a dir against values computed by the fork; daemon name round-trip
+- [ ] write tests: FNV-1a dir against values computed by upstream's `ZmxSupport` algorithm (rust-build.md); daemon
+      name round-trip
 - [ ] write tests: wrap rejections (non-absolute path, missing binary, non-zsh shell, missing integration)
 - [ ] run `cargo test -p agterm-zmx`; gate: full run; ratchet
 
@@ -700,10 +857,13 @@
 - Create: `crates/agterm-core/src/commands/zmx.rs`, `crates/agterm-gtk/src/{zmx_runtime,pane_lead}.rs`
 - Modify: `.github/workflows/rust-linux.yml`
 
-- [ ] live launch of primary and split panes through `SessionHost` (`LinuxZmxLaunch.swift`, `LinuxZmxRuntime.swift`),
-      reattach on relaunch, reaping on mode switch
-- [ ] zmx.list, prune, kill, screen; zmx.reset refused as unsupported, as the fork; covered panes answered from the
-      daemon (`ControlActions+PaneLead.swift`, `LinuxPaneLead.swift`, `LinuxPaneLeadCover.swift`)
+- [ ] live launch of primary and split panes through `SessionHost` (`Ghostty/ZmxLaunch.swift`,
+      `Ghostty/ZmxClient.swift`, `ZmxLifecycle.swift`), reattach on relaunch, reaping on mode switch
+      (`control-api.md` > Restore mode and the zmx group)
+- [ ] zmx.list, prune, kill, screen; zmx.reset as upstream (`LiveReset.swift`, `LiveResetCoordinator.swift`,
+      `Ghostty/LiveResetConsumer.swift`, `LiveResetRelauncher.swift`: refusals, marker, relaunch; exempt in the
+      suite, so unit tests carry it), not the fork's refusal; covered panes answered from the daemon and the lead
+      cover (`ControlServer+PaneLead.swift`, `Ghostty/PaneLead.swift`, `Views/PaneLeadCover.swift`)
 - [ ] claim `live-sessions` only for a zsh password-database shell with zmx staged
 - [ ] matching `agtermctl zmx ...` subcommands (`ZmxCommands.swift`)
 - [ ] CI: a live job whose runner login shell is zsh (`sudo apt-get install -y zsh`, then
@@ -733,7 +893,9 @@
 - Create: `crates/agterm-core/src/remote/{client,layout,reconnect}.rs`, `crates/agterm-gtk/src/remote.rs`
 
 - [ ] zmx.attach and remote panes (`RemoteSession.swift`, `RemotePresentationClient.swift`, `RemoteReconnect.swift`,
-      `AppStore+Remote*.swift`; GTK `LinuxRemote*.swift`, `AppControllerRemoteAttach.swift`)
+      `AppStore+Remote*.swift`; app side `AppActions+RemoteAttach.swift`, `agtermApp+RemoteLayout.swift`,
+      `ControlServer+RemotePresentation.swift`, `ControlServer+RemoteReconnect.swift`,
+      `RemoteCommandProcessRunner.swift`, `RemotePresentationProcess.swift`)
 - [ ] `remote.opened` and `remote.closed` events (exempt in the catalog)
 - [ ] write tests: reconnect backoff, layout application to replicas, remote ask and overlay replicas
 - [ ] manual check against a second host (the suite exempts this side)
@@ -780,7 +942,7 @@
 - [ ] write tests: unit tests for formatting helpers and argument validation
 - [ ] write tests: cli-only commands against an in-process server
 - [ ] CI: the zsh job gains `--must-pass live-sessions`
-- [ ] gate: full run; every `tests/cli` test that passes on reference-linux is in the ratchet
+- [ ] gate: full run; every `tests/cli` test that passes in the reference-macos junit is in the ratchet
 
 ### Task 33: Settings dialog and first run
 
@@ -788,10 +950,14 @@
 - Create: `crates/agterm-gtk/src/settings/*.rs`, `crates/agterm-gtk/src/welcome.rs`
 - Create: `docs/linux-ui-checklist.md`
 
-- [ ] settings dialog with the fork's pages (`Settings*Page.swift`, `SettingsDialog.swift`), persisting through
-      `settings.json`
-- [ ] first-run welcome (`FirstRunWelcome.swift`, `WelcomeDialog.swift`), quit prompt (`QuitPrompt.swift`)
-- [ ] `docs/linux-ui-checklist.md`: every user-visible GTK feature of the fork, each with a manual check
+- [ ] settings with upstream's sections and controls (`Views/SettingsView.swift`, `SettingsModel.swift`,
+      `SettingsCatalog.swift`, `settings.md`) as libadwaita preference pages, persisting through `settings.json`;
+      the fork's `Settings*Page.swift` only as a GTK hint
+- [ ] first-run welcome (`FirstRunWelcome.swift`, `WelcomeAlert.swift`), quit prompt (`QuitPrompt.swift`,
+      `QuitReason.swift`)
+- [ ] `docs/linux-ui-checklist.md`: every user-visible feature of upstream macOS (`site/docs.html`, the rules files,
+      `conformance/ui-ids.yaml`), each with its GTK form and a manual check against upstream's behavior; the
+      fork's UI only as a hint for the GTK form
 - [ ] write tests: settings model validation and persistence round-trip
 - [ ] write tests: first-run decision logic
 - [ ] gate: full run; ratchet
@@ -801,8 +967,9 @@
 **Files:**
 - Create: `crates/agterm-gtk/src/{palette,session_switcher,search}.rs`
 
-- [ ] command palette (`Palette.swift`, `PalettePresentation.swift`, `PaletteCatalog.swift`, `PaletteCustomRow.swift`,
-      `PaletteSearchKeys.swift`), session switcher (`LinuxSessionSwitcher.swift`), scrollback search UI (`Search.swift`)
+- [ ] command palette (`Views/Palette.swift`, `AppActions+Palette.swift`, `PaletteCatalog.swift`,
+      `PaletteCustomRow.swift`, `PaletteSearchKeys.swift`), session switcher (`Views/SessionSwitcher.swift`),
+      scrollback search UI (`Views/TerminalSearchBar.swift`), per `menu-actions.md`
 - [ ] write tests: palette catalog and search keys
 - [ ] write tests: switcher ordering by recency
 - [ ] gate: full run; ratchet
@@ -812,8 +979,10 @@
 **Files:**
 - Create: `crates/agterm-gtk/src/{context_menus,popovers,watermark}.rs`
 
-- [ ] context menus (`AppControllerContextMenus.swift`), primary menu, attention and recent popovers
-      (`AppControllerAttention.swift`), watermark (`WatermarkRenderer.swift`, `WatermarkConfig.swift`), status sounds
+- [ ] context menus (`Views/WorkspaceSidebar+ContextMenu.swift`), the app menu (`agtermApp+Menus.swift`, as a GTK
+      menu), titlebar (`WindowContentView+Titlebar.swift`, `TitlebarComposition.swift`), attention and recent
+      sessions (`WindowContentView+RecentSessions.swift`, `WindowLibrary+Attention.swift`), watermark
+      (`Ghostty/WatermarkRenderer.swift`, `WatermarkConfig.swift`), status sounds (`StatusSoundPlayer.swift`)
 - [ ] write tests: menu model per selection state
 - [ ] write tests: watermark configuration parsing
 - [ ] gate: full run; ratchet
@@ -823,17 +992,24 @@
 **Files:**
 - Create: `crates/agterm-gtk/src/integrations/*.rs`
 
-- [ ] agent integrations (`LinuxIntegrations/*`, `AgentHooksInstall.swift`, `SkillInstall.swift`, `CLIInstall.swift`,
-      `LinuxAgentIntegrations.swift`)
-- [ ] walk `docs/linux-ui-checklist.md` against the fork; fix or record every gap with ⚠️
+- [ ] agent integrations as upstream's (`AgentHooksInstall.swift`, `SkillInstall.swift`, `CLIInstall.swift`,
+      `AgentHooksInstaller.swift`, `SkillInstaller.swift`, `CLIInstaller.swift`, `control-api.md` > Installation),
+      with Linux install paths (the fork's `LinuxIntegrations` as the Linux hint)
+- [ ] walk `docs/linux-ui-checklist.md` against upstream's behavior; fix or record every gap with ⚠️
 - [ ] write tests: integration plans and status detection on a temp home
 - [ ] write tests: managed-marker idempotence
 - [ ] gate: full run; ratchet
 
 ### Task 37: Verify acceptance criteria
 
-- [ ] run reference-linux fresh (`run-reference-linux.sh`) and `run-rust-linux.sh`: every test passing on the fork
-      passes on rust and is in `rust-passing.txt`; the `fork-bugs.md` tests pass on rust
+- [ ] `version` claims exactly the Rust target profile (Technical Details), plus the live capabilities the host
+      allows; any exception (`keymap-menu`, the libghostty fallback) is recorded there with its reason
+- [ ] `run-rust-linux.sh`, protocol/cli/behaviors: no unexpected failed, errored or skipped test (the allowed skips
+      are listed: host-dependent live ones and the ui layer); every passing id is in `rust-passing.txt`
+- [ ] a reference-macos CI run at the catalog's tag on the same suite commit (layers and options recorded): every id
+      green in its junit is green on rust, or is an allowed host-dependent skip from the item above
+- [ ] run reference-linux fresh (`run-reference-linux.sh`) as a diagnostic: every id green on the fork and red on
+      rust is resolved (upstream's branch or a Rust bug); the `fork-bugs.md` tests pass on rust
 - [ ] CI green: the cargo job, the full-suite job, the zsh job (`--must-pass live-sessions`) and the bash and fish
       jobs (`--must-pass live-any-shell`)
 - [ ] the staged build replaces the installed fork on this machine with the existing state dir
@@ -846,7 +1022,8 @@
 - [ ] README.md at the repo root: what agterm-rs is, build prerequisites (Rust 1.98.1, Zig 0.15.2 and 0.16.0, GTK4,
       libadwaita, WebKitGTK as a runtime dependency, weston for the suite), build, run and test commands
 - [ ] `conformance/README.md`: the Rust runner, the node-id report and the ratchet
-- [ ] CLAUDE.md with the crate map, the command-group porting loop, the fork-bugs rule and the fork-coexistence rule
+- [ ] CLAUDE.md with the crate map, the command-group porting loop, the Reference rule (upstream is the reference,
+      `.upstream/agterm` the source, the fork only for Linux glue) and the fork-coexistence rule
 - [ ] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
@@ -860,7 +1037,7 @@
 
 **External system updates**:
 - push to `nickalie/agterm-rs` so the CI jobs run
-- bump the libghostty pin to a ghostty that builds with Zig 0.16 (one toolchain for both native builds)
+- follow upstream releases: bump the catalog's tag, `.upstream/agterm` and the native pins together
 - packaging (Flatpak, distro packages) is a separate plan
 - macOS frontend (objc2/AppKit + libghostty) and the Windows decision are separate brainstorms
 - offer the bash/fish live-session support upstream
