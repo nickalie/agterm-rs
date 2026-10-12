@@ -131,7 +131,8 @@ def test_focus_reaches_a_hidden_split(ctl):
     assert_ok(ctl.request("session.focus", sid, pane="left"))
     assert_ok(ctl.request("session.split", sid, mode="off"))
     assert_ok(ctl.request("session.focus", sid, pane="right"))
-    assert_subset(_node(ctl, sid), {"split": False, "splitFocused": True})
+    # Upstream's read-back can trail the reply.
+    ctl.wait_tree(lambda tree: assert_subset(find_session(tree, sid), {"split": False, "splitFocused": True}) or True)
 
 
 @pytest.mark.covers("session.resize", "field:tree.session.splitRatio", "field:result.ratio")

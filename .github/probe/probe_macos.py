@@ -52,36 +52,47 @@ def attempt(adapter: SwiftMacosAdapter, label: str) -> bool:
     return True
 
 
-for mode in ("uitest", "plain"):
-    adapter = SwiftMacosAdapter(bundle, launch_mode=mode)
+def activated_holder(adapter: SwiftMacosAdapter):
     holder = adapter.launch()
-    note(f"{mode} holder", holder.pid)
-    results = [attempt(adapter, f"{mode} #{n}") for n in range(8)]
-    note(f"{mode} results", results)
-    adapter.stop(holder)
-    note(f"{mode} after", ps())
+    wid = assert_ok(holder.request("window.list"))["windows"][0]["id"]
+    for cmd, args in (("window.select", {}), ("session.new", {}), ("quick.show", {"mode": "on"})):
+        note(f"holder {cmd}", holder.request(cmd, wid if cmd == "window.select" else None, **args).raw)
+        time.sleep(1)
+    return holder
 
-# A private bundle clone per instance (APFS clonefile).
-clones = Path(tempfile.mkdtemp(prefix="agtb-", dir="/tmp"))
-results = []
-adapter = SwiftMacosAdapter(bundle)
-holder = adapter.launch()
-for n in range(8):
-    copy = clones / f"c{n}" / "agterm.app"
-    copy.parent.mkdir()
-    subprocess.run(["cp", "-c", "-R", str(bundle), str(copy)], check=True)
-    results.append(attempt(SwiftMacosAdapter(copy), f"clone #{n}"))
-note("clone results", results)
-adapter.stop(holder)
-shutil.rmtree(clones, ignore_errors=True)
+
+for label, factory in (
+    ("same bundle", lambda n: SwiftMacosAdapter(bundle)),
+    ("plain", lambda n: SwiftMacosAdapter(bundle, launch_mode="plain")),
+    ("clone", None),
+):
+    adapter = SwiftMacosAdapter(bundle)
+    holder = activated_holder(adapter)
+    clones = Path(tempfile.mkdtemp(prefix="agtb-", dir="/tmp"))
+    results = []
+    for n in range(4):
+        if factory is None:
+            copy = clones / f"c{n}" / "agterm.app"
+            copy.parent.mkdir()
+            subprocess.run(["cp", "-c", "-R", str(bundle), str(copy)], check=True)
+            candidate = SwiftMacosAdapter(copy)
+        else:
+            candidate = factory(n)
+        results.append(attempt(candidate, f"{label} #{n}"))
+        note(f"{label} holder windows", assert_ok(holder.request("window.list"))["windows"])
+    note(f"{label} results", results)
+    adapter.stop(holder)
+    shutil.rmtree(clones, ignore_errors=True)
+    note(f"{label} after", ps())
 
 # Live: reap by hand and watch what is left.
+adapter = SwiftMacosAdapter(bundle)
 live = adapter.launch(settings={"restoreMode": "live"})
 entries: list = []
 try:
-    for _ in range(50):
+    for _ in range(100):
         entries = assert_ok(live.request("zmx.list"))["zmx"]["entries"]
-        if entries:
+        if entries and all(entry.get("observation") == "running" for entry in entries):
             break
         time.sleep(0.2)
     note("zmx.list", entries)
