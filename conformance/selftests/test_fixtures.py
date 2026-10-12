@@ -11,7 +11,7 @@ from agterm_conformance.impls.base import Instance
 from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
 from agterm_conformance.match import session_ids
 from agterm_conformance.plugin import Ctl
-from agterm_conformance.wait import Cursor, WaitTimeout, wait_event, wait_response, wait_text
+from agterm_conformance.wait import Cursor, WaitTimeout, wait_event, wait_response, wait_text, wait_until
 
 TWO_SESSIONS = {
     "workspaces": [
@@ -634,3 +634,28 @@ def test_wait_response_lets_other_errors_through() -> None:
 def test_ctl_wait_response_drives_the_instance(ctl: Ctl) -> None:
     response = ctl.wait_response("tree", None, lambda reply: reply.ok and session_ids(reply.result) == ["s1"])
     assert response.ok
+
+
+def test_wait_until_returns_the_first_truthy_value() -> None:
+    values = iter([None, "", "written"])
+    assert wait_until(lambda: next(values), timeout=5) == "written"
+
+
+def test_wait_until_timeout_names_the_check_and_its_last_failure() -> None:
+    def file_written() -> bool:
+        raise AssertionError("no marker yet")
+
+    with pytest.raises(WaitTimeout, match=r"file_written did not hold within 0.2s; last check: no marker yet"):
+        wait_until(file_written, timeout=0.2)
+
+
+def test_wait_until_lets_other_errors_through() -> None:
+    calls = []
+
+    def broken() -> bool:
+        calls.append(1)
+        raise KeyError("marker")
+
+    with pytest.raises(KeyError):
+        wait_until(broken, timeout=5)
+    assert calls == [1]

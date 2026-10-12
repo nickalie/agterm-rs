@@ -366,3 +366,7 @@ exemptions:
   zmx.attach: a successful attach re-discovers the remote over ssh before creating anything, which the suite's no-network,
     no-remote-host constraints exclude; its refusals are still tested
   behavior:zmx.tree.remote-host: remote discovery runs ssh, excluded by the suite's no-network constraints
+  session.paste: a successful paste reads the desktop's own clipboard, which an isolated GUI instance shares with the user's
+    session and which no test may seed without overwriting the user's; its refusals are still tested
+  session.overlay.copy: no protocol command makes a selection inside an overlay terminal (session.selectall acts on
+    the panes underneath); its refusals are still tested

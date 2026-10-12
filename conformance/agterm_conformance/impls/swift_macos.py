@@ -24,6 +24,8 @@ BASE_CAPABILITIES = frozenset(
         "quick-validates-input",
         "theme-slots-by-sync",
         "sidebar-min-width",
+        "keymap-menu",
+        "config-reload-counts",
     }
 )
 LAUNCH_MODES = ("uitest", "plain")

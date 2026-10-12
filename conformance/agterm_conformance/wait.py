@@ -13,7 +13,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 from agterm_conformance.client import Response
 from agterm_conformance.match import assert_subset, find_session
@@ -24,6 +24,7 @@ POLL_INTERVAL = 0.05
 PAGE_LIMIT = 1000
 _SHOWN_CHARS = 2000
 _SHOWN_EVENTS = 5
+T = TypeVar("T")
 
 
 class Requester(Protocol):
@@ -127,6 +128,26 @@ def wait_response(
                 f"{cmd} did not satisfy {_describe(accept)} within {timeout}s{last_failure}; "
                 f"last reply: {_shown(response.raw)}"
             )
+        _pause(POLL_INTERVAL)
+
+
+def wait_until(check: Callable[[], T], timeout: float = DEFAULT_TIMEOUT) -> T:
+    """Call `check` until it returns something truthy, and return that.
+
+    For an effect outside the socket, such as a file a hook or a custom command writes. `check` may also assert:
+    an AssertionError means "not yet", and the last one is in the timeout message.
+    """
+    deadline = time.monotonic() + timeout
+    last_failure = ""
+    while True:
+        try:
+            if value := check():
+                return value
+            last_failure = ""
+        except AssertionError as error:
+            last_failure = f"; last check: {error}"
+        if time.monotonic() >= deadline:
+            raise WaitTimeout(f"{_describe(check)} did not hold within {timeout}s{last_failure}")
         _pause(POLL_INTERVAL)
 
 

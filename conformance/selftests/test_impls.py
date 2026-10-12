@@ -234,7 +234,8 @@ def test_launch_isolates_and_stop_cleans_up(roots: list[Path], fake_bin: Path, m
         assert seen["AGTERM_APP_ID"] == instance.app_id
         assert (instance.home / ".claude").is_dir() and (instance.home / ".codex").is_dir()
         assert (instance.state_dir / "windows").is_dir()
-        assert (instance.state_dir / "config" / "ghostty.conf").read_text() == "command = /bin/sh\n"
+        ghostty = (instance.state_dir / "config" / "ghostty.conf").read_text().splitlines()
+        assert ghostty == ["command = /bin/sh", "copy-on-select = false"]
         assert seen["XDG_RUNTIME_DIR"] == str(instance.root / "run")
         assert (instance.root / "run").stat().st_mode & 0o777 == 0o700
         assert instance.root.parent == Path(base.TEMP_PARENT)

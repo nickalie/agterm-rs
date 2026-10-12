@@ -454,10 +454,20 @@ events by kind, CLI by subcommand words (`cli` items carry their `wire`); exempt
 - Create: `conformance/tests/protocol/test_keymap_hooks.py`
 - Create: `conformance/tests/protocol/test_config_browser.py`
 - Create: `conformance/tests/protocol/test_surface.py`
+- ➕ Modify: `conformance/catalog.yaml` (exemptions) and `conformance/coverage-baseline.txt`
+- ➕ Modify: `conformance/agterm_conformance/wait.py` (`wait_until`: poll an effect outside the socket) and
+  `conformance/selftests/test_fixtures.py`
+- ➕ Modify: `conformance/agterm_conformance/impls/{base,swift_macos}.py` and `conformance/selftests/test_impls.py`
+  (`copy-on-select = false` in every instance's `ghostty.conf`; capabilities `keymap-menu`, `config-reload-counts`:
+  upstream behavior the Linux fork lacks)
 
-- [ ] keymap reload/edit, event hooks, agterm-scoped config, browser/HTML pages, surface commands
-- [ ] items not black-box testable move to `exemptions` with a reason
-- [ ] run on reference-linux — green before task 17 (reference-macos in Task 19)
+- [x] keymap reload/edit, event hooks, agterm-scoped config, browser/HTML pages, surface commands
+- [x] items not black-box testable move to `exemptions` with a reason
+- [x] run on reference-linux — green before task 17 (reference-macos in Task 19)
+- ➕ "edit" is editing the instance's own `keymap.conf`/`hooks.conf` then reloading: Edit Keymap/Hooks is GUI-only
+  and has no control command. Also covered here: `session.selectall`/`session.copy` (kept off the desktop's
+  selection by `copy-on-select = false`); exempted: `session.paste` (pastes the desktop's own clipboard) and
+  `session.overlay.copy` (no protocol command selects inside an overlay), refusals of both still tested
 
 ### Task 17: Protocol — restore and live sessions
 

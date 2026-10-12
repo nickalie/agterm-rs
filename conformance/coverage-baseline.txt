@@ -5,19 +5,6 @@
 # commands
 session.restart
 session.lead
-surface.cursor
-session.copy
-session.paste
-session.selectall
-session.overlay.copy
-keymap.reload
-keymap.list
-keymap.run
-hooks.reload
-hooks.list
-browser.clear
-browser.links
-config.reload
 restore.clear
 restore.capture
 restore.mode
@@ -31,9 +18,6 @@ zmx.screen
 session.overlay.job.run
 
 # fields
-field:result.keymap
-field:result.hooks
-field:result.cursor
 field:result.restore
 field:result.zmx
 field:result.remote

@@ -49,6 +49,8 @@ SESSION_HOST_NOTE = (
 # With SHELL=/bin/sh this is belt and braces: either alone gives a reference-linux pane /bin/sh
 # (conformance/docs/spike-macos.md).
 GHOSTTY_SHELL_CONFIG = "command = /bin/sh\n"
+# A selection (`session.selectall`) would otherwise land in the desktop's own primary selection.
+GHOSTTY_ISOLATION_CONFIG = "copy-on-select = false\n"
 # The private `XDG_RUNTIME_DIR` under the root: the Linux fork writes its ghostty config layers there
 # (`GhosttyApp.writeTempConf`/`writeDefaultsConf`), which in the shared one are the live app's own files.
 RUNTIME_DIR_NAME = "run"
@@ -75,6 +77,8 @@ CAPABILITIES: Mapping[str, str] = {
     "sidebar-min-width": "`sidebar.width` narrows the sidebar down to the 160-point floor and reads that back",
     "theme-slots-by-sync": "`theme.set`/`theme.list` report `theme` only while not following the system appearance, "
     "`light`/`dark` only while following",
+    "keymap-menu": "`keymap.list` reports the menu bar's live key equivalents in `menu`",
+    "config-reload-counts": "`config.reload` answers with the ghostty config's diagnostic count in `result.count`",
 }
 
 
@@ -301,7 +305,7 @@ class Adapter:
 
     def ghostty_config(self) -> str:
         """The agterm-scoped `<state>/config/ghostty.conf` the instance starts with."""
-        return GHOSTTY_SHELL_CONFIG
+        return GHOSTTY_SHELL_CONFIG + GHOSTTY_ISOLATION_CONFIG
 
     # -- launch
 
