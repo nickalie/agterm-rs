@@ -60,6 +60,7 @@ not-yet-at-level, so an unsupported capability is a recorded divergence, not a g
   did (reference-macos uses it for `live-sessions`).
 - `--nodeid-report PATH` writes one JSON line per run test with its outcome merged over setup, call and teardown,
   plus the run's collection errors and `--must-pass` problems; `tools/check_ratchet.py` reads it.
+  A run pytest refuses (a usage error, a path or node id that matches nothing) or that breaks internally writes none.
 - `--reruns N` (pytest-rerunfailures) is for the ui layer only, where accessibility reads race the app.
   Protocol, cli and behaviors tests wait on read-back and never rerun.
 

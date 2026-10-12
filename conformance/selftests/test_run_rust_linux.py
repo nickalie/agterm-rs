@@ -217,3 +217,12 @@ def test_pytest_args_reach_pytest(tmp_path: Path, stage: Path, layers: Path) -> 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "pytest args: -k version" in report
     assert "rust: 1 pass, 0 fail" in report
+
+
+def test_pytest_refusing_its_arguments_leaves_no_usable_report(tmp_path: Path, stage: Path, layers: Path) -> None:
+    """A typo in a path after `--`: nothing runs, so the run must not read as a holding ratchet."""
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--", str(layers / "protcol"))
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    assert "pytest status: 4" in report
+    assert "exit status: 2" in report
+    assert "ratchet holds" not in report

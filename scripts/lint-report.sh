@@ -3,9 +3,11 @@
 #
 # - Lists each outer #[expect(...)] that lifts a complexity lint (cognitive_complexity, too_many_lines,
 #   excessive_nesting, too_many_arguments, type_complexity, fn_params_excessive_bools, struct_excessive_bools)
-#   with its file, line, item, lint and reason, then the count. Markdown, so CI can append it to the job summary.
-# - Fails (exit 1) on any inner #![allow(...)] or #![expect(...)] outside crates/agterm-ghostty-sys, the bindgen
-#   crate that sets its own lints: an exception must be an outer #[expect] on the one item, with a reason.
+#   with its file, line, item, lint and reason, then the count, an expect wrapped in #[cfg_attr(..., expect(...))]
+#   included. Markdown, so CI can append it to the job summary.
+# - Fails (exit 1) on any inner #![allow(...)] or #![expect(...)], or an inner #![cfg_attr(...)] carrying one,
+#   outside crates/agterm-ghostty-sys, the bindgen crate that sets its own lints: an exception must be an outer
+#   #[expect] on the one item, with a reason.
 #
 # Usage: scripts/lint-report.sh [ROOT]   (default: the repository root)
 set -euo pipefail
@@ -28,8 +30,9 @@ COMPLEXITY = {
     "struct_excessive_bools",
 }
 EXEMPT_CRATE = "agterm-ghostty-sys"
-INNER = re.compile(r"#!\[\s*(allow|expect)\b")
-OUTER = re.compile(r"#\[\s*expect\s*\(")
+# An attribute that is, or may carry (cfg_attr), a lint level; group 1 is "!" for an inner one.
+ATTRIBUTE = re.compile(r"#(!?)\[\s*(allow|expect|cfg_attr)\s*\(")
+LEVEL = re.compile(r"\b(allow|expect)\s*\(")
 LINT = re.compile(r"clippy::(\w+)")
 REASON = re.compile(r'reason\s*=\s*"((?:[^"\\]|\\.)*)"', re.S)
 ITEM = re.compile(r"\b(fn|struct|enum|union|trait|impl|mod|type|const|static)\b\s*(<[^>]*>\s*)?([A-Za-z_][\w:<>, ]*)?")
@@ -74,6 +77,18 @@ def code_only(line: str) -> bool:
     return not line.lstrip().startswith("//")
 
 
+def levels(text: str, match: re.Match[str], end: int) -> list[tuple[str, str]]:
+    """The (level, body) pairs an attribute sets: itself, or each allow/expect inside a cfg_attr."""
+    body = text[match.end() : end - 1]
+    if match.group(2) != "cfg_attr":
+        return [(match.group(2), body)]
+    found = []
+    for level in LEVEL.finditer(body):
+        close = balanced(body, level.end() - 1)
+        found.append((level.group(1), body[level.end() : close - 1]))
+    return found
+
+
 root = Path(sys.argv[1])
 expects: list[tuple[str, int, str, str, str]] = []
 inner: list[tuple[str, int, str]] = []
@@ -83,21 +98,24 @@ for path in sorted((root / "crates").rglob("*.rs")):
         continue
     text = path.read_text(encoding="utf-8")
     exempt = relative.parts[1] == EXEMPT_CRATE
-    for number, line in enumerate(text.splitlines(), 1):
-        if not exempt and code_only(line) and INNER.search(line):
-            inner.append((str(relative), number, line.strip()))
-    for match in OUTER.finditer(text):
+    for match in ATTRIBUTE.finditer(text):
         line_start = text.rfind("\n", 0, match.start()) + 1
         if not code_only(text[line_start : match.start() + 1]):
             continue
         end = balanced(text, match.end() - 1)
-        body = text[match.end() : end - 1]
+        number = text.count("\n", 0, match.start()) + 1
+        set_levels = levels(text, match, end)
+        if match.group(1):
+            if not exempt and set_levels:
+                line_end = text.find("\n", match.start())
+                inner.append((str(relative), number, text[line_start : None if line_end < 0 else line_end].strip()))
+            continue
+        body = " ".join(inside for level, inside in set_levels if level == "expect")
         lints = [lint for lint in LINT.findall(body) if lint in COMPLEXITY]
         if not lints:
             continue
         found = REASON.search(body)
         reason = found.group(1).replace('\\"', '"') if found else "(no reason)"
-        number = text.count("\n", 0, match.start()) + 1
         item = item_after(text, end)
         expects += [(str(relative), number, item, lint, reason) for lint in lints]
 

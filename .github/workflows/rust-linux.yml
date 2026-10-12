@@ -45,7 +45,9 @@ jobs:
             version_var="${build}_ZIG_VERSION"
             sha_var="${build}_ZIG_SHA256_${arch^^}"
             mkdir -p "$VENDOR_ROOT"
-            echo "$build: $(find_zig "${!version_var}" "${!sha_var}" "")"
+            # Assign first: a failure inside $(...) of an echo argument would not reach errexit.
+            zig="$(find_zig "${!version_var}" "${!sha_var}" "")"
+            echo "$build: $zig"
           done
       - name: libghostty prefix
         run: scripts/build-ghostty.sh

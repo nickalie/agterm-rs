@@ -112,5 +112,6 @@ against it: one pytest node id per line, verbatim and sorted.
 A listed id that fails, errors (a teardown error included) or skips breaks the run, except an `unsupported` skip
 for a host-dependent capability (`live-sessions`, `live-any-shell`), which counts as not run.
 A collection error or a `--must-pass` problem breaks it too.
+When pytest refuses its arguments (a mistyped path after `--`) no report is written and the checker exits 2.
 The checker prints the newly passing ids not yet listed; `--add` writes them into the list.
 The script exits with the ratchet's status, or 1 when an instance root was left behind, whatever pytest's own status.

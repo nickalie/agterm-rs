@@ -429,3 +429,12 @@ def test_nodeid_report_refused_under_coverage_gate(pytester: pytest.Pytester) ->
     assert result.ret == pytest.ExitCode.USAGE_ERROR
     result.stderr.fnmatch_lines(["*--nodeid-report cannot be combined with --coverage-gate*"])
     assert not (pytester.path / "nodeids.jsonl").exists()
+
+
+@pytest.mark.parametrize("target", ["test_absent.py", "test_here.py::test_absent"])
+def test_nodeid_report_not_written_on_a_usage_error(pytester: pytest.Pytester, target: str) -> None:
+    """pytest refusing its arguments must leave no report, or the ratchet would read an empty run as holding."""
+    pytester.makepyfile(test_here="def test_here():\n    pass\n")
+    result = pytester.runpytest("--nodeid-report", "out/nodeids.jsonl", target)
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    assert not (pytester.path / "out" / "nodeids.jsonl").exists()

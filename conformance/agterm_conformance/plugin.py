@@ -285,6 +285,11 @@ class NodeidReport:
     @pytest.hookimpl(trylast=True)
     def pytest_sessionfinish(self, session: pytest.Session) -> None:
         # trylast: MustPass's tryfirst sessionfinish has set its problems by now.
+        if session.exitstatus in (pytest.ExitCode.USAGE_ERROR, pytest.ExitCode.INTERNAL_ERROR):
+            # pytest refused its arguments (a path or node id that matches nothing) or broke: nothing was judged,
+            # and a header-only report would read as an empty run that holds the ratchet. No file instead, so
+            # check_ratchet.py exits 2.
+            return
         partial = self.partial or any("::" in arg for arg in session.config.args)
         lines: list[dict[str, Any]] = [{"kind": "run", "partial": partial}]
         for item in getattr(session, "items", []):
