@@ -230,10 +230,7 @@ def _live_session(live, split=False):
 
     def running(response):
         rows = _rows(response, sid)
-        # The pane's attach client registers with the daemon after the daemon itself lists as running.
-        assert all(
-            rows.get(pane, {}).get("observation") == "running" and rows[pane].get("clients", 0) >= 1 for pane in panes
-        ), rows
+        assert all(rows.get(pane, {}).get("observation") == "running" for pane in panes), rows
         return True
 
     live.wait_response("zmx.list", None, running)
@@ -259,10 +256,14 @@ def test_live_panes_run_in_claimed_daemons(live):
     node = find_session(live.tree(), sid)
     assert [surface["backedByZmx"] for surface in node["surfaces"]] == [True, True]
     assert node["liveAttribution"] in ATTRIBUTIONS and node["splitLiveAttribution"] in ATTRIBUTIONS
-    rows = _entries(live, sid)
+    # One reply with both clients attached: upstream's count drops to 0 for a moment while a pane's client attaches.
+    attached = live.wait_response(
+        "zmx.list", None, lambda r: all(_rows(r, sid).get(p, {}).get("clients", 0) >= 1 for p in ("left", "right"))
+    )
+    rows = _rows(attached, sid)
     for pane in ("left", "right"):
         assert_subset(rows[pane], {"state": "claimed", "observation": "running"})
-        assert rows[pane]["clients"] >= 1 and rows[pane]["leaderPID"] > 0
+        assert rows[pane]["leaderPID"] > 0
     assert rows["left"]["daemon"] != rows["right"]["daemon"]
     assert_ok(live.request("session.close", sid))
     for pane in ("left", "right"):
