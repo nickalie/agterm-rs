@@ -10,7 +10,7 @@ diff --git i/src/apprt/embedded.zig w/src/apprt/embedded.zig
          return surface.newSurfaceOptions(source);
      }
  
-@@ -2046,6 +2048,8 @@
+@@ -2046,11 +2048,15 @@
  
      /// Update the focused state of a surface.
      export fn ghostty_surface_set_focus(surface: *Surface, focused: bool) void {
@@ -19,7 +19,14 @@ diff --git i/src/apprt/embedded.zig w/src/apprt/embedded.zig
          surface.focusCallback(focused);
      }
  
-@@ -2080,6 +2084,8 @@
+     /// Update the occlusion state of a surface.
+     export fn ghostty_surface_set_occlusion(surface: *Surface, visible: bool) void {
++        const demand = surface.core_surface.renderer_state.demandGuard(global.io());
++        defer demand.deinit();
+         surface.occlusionCallback(visible);
+     }
+ 
+@@ -2080,6 +2086,8 @@
          surface: *Surface,
          event: KeyEvent,
      ) bool {
@@ -28,7 +35,7 @@ diff --git i/src/apprt/embedded.zig w/src/apprt/embedded.zig
          return surface.app.keyEvent(
              .{ .surface = surface },
              event.keyEvent(),
-@@ -2118,6 +2124,8 @@
+@@ -2118,6 +2126,8 @@
          ptr: [*]const u8,
          len: usize,
      ) void {
@@ -37,7 +44,7 @@ diff --git i/src/apprt/embedded.zig w/src/apprt/embedded.zig
          surface.textCallback(ptr[0..len]);
      }
  
-@@ -2128,6 +2136,8 @@
+@@ -2128,6 +2138,8 @@
          ptr: [*]const u8,
          len: usize,
      ) void {
@@ -46,7 +53,7 @@ diff --git i/src/apprt/embedded.zig w/src/apprt/embedded.zig
          surface.preeditCallback(if (len == 0) null else ptr[0..len]);
      }
  
-@@ -2144,6 +2154,8 @@
+@@ -2144,6 +2156,8 @@
          button: input.MouseButton,
          mods: c_int,
      ) bool {
@@ -55,7 +62,7 @@ diff --git i/src/apprt/embedded.zig w/src/apprt/embedded.zig
          return surface.mouseButtonCallback(
              action,
              button,
-@@ -2161,6 +2173,8 @@
+@@ -2161,6 +2175,8 @@
          y: f64,
          mods: c_int,
      ) void {
@@ -64,7 +71,7 @@ diff --git i/src/apprt/embedded.zig w/src/apprt/embedded.zig
          surface.cursorPosCallback(
              x,
              y,
-@@ -2177,6 +2191,8 @@
+@@ -2177,6 +2193,8 @@
          y: f64,
          scroll_mods: c_int,
      ) void {
@@ -73,10 +80,37 @@ diff --git i/src/apprt/embedded.zig w/src/apprt/embedded.zig
          surface.scrollCallback(
              x,
              y,
+@@ -2200,6 +2218,8 @@
+         width: *f64,
+         height: *f64,
+     ) void {
++        const demand = surface.core_surface.renderer_state.demandGuard(global.io());
++        defer demand.deinit();
+         const pos = surface.core_surface.imePoint();
+         x.* = pos.x;
+         y.* = pos.y;
+@@ -2303,6 +2323,8 @@
+         complete: *const ClipboardComplete,
+         state: *apprt.ClipboardRequest,
+     ) void {
++        const demand = ptr.core_surface.renderer_state.demandGuard(global.io());
++        defer demand.deinit();
+         ptr.completeClipboardRequest(complete, state);
+     }
+ 
+@@ -2314,6 +2336,8 @@
+         ptr: *Surface,
+         state: *apprt.ClipboardRequest,
+     ) void {
++        const demand = ptr.core_surface.renderer_state.demandGuard(global.io());
++        defer demand.deinit();
+         ptr.denyClipboardRequest(state);
+     }
+ 
 diff --git i/src/renderer/State.zig w/src/renderer/State.zig
 --- i/src/renderer/State.zig
 +++ w/src/renderer/State.zig
-@@ -75,6 +75,30 @@
+@@ -75,6 +75,31 @@
  /// parked in `yieldToDemand` that the demanding waiter had its turn.
  pub fn unlockDemand(self: *State, io: std.Io) void {
      self.mutex.unlock(io);
@@ -86,7 +120,8 @@ diff --git i/src/renderer/State.zig w/src/renderer/State.zig
 +/// Keep demand asserted across a host callback that may take the raw mutex
 +/// one or more times. Embedded hosts call core surface APIs synchronously on
 +/// their UI thread, so those calls need the same handoff guarantee as the
-+/// renderer or sustained PTY output can starve keyboard and focus handling.
++/// renderer or sustained PTY output can starve keyboard, IME, focus and paste
++/// handling.
 +pub fn demandGuard(self: *State, io: std.Io) DemandGuard {
 +    _ = self.demand.fetchAdd(1, .monotonic);
 +    return .{ .state = self, .io = io };
