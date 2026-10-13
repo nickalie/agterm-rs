@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread::{self, JoinHandle, ThreadId};
 use std::time::Duration;
 
@@ -22,7 +22,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// A main loop on a thread of its own that owns the state `S` and runs posted tasks in order.
 pub struct FakeMainLoop<S> {
-    sender: Mutex<Option<mpsc::Sender<MainTask<S>>>>,
+    /// `None` once shut down. Shared with the timers of [`MainLoop::post_after`], which post through it only while
+    /// the loop is open, so a pending timer neither holds the loop open nor runs after a shutdown.
+    sender: Arc<Mutex<Option<mpsc::Sender<MainTask<S>>>>>,
     thread: Mutex<Option<JoinHandle<S>>>,
     thread_id: ThreadId,
 }
@@ -46,7 +48,7 @@ impl<S: Send + 'static> FakeMainLoop<S> {
             })?;
         let thread_id = handle.thread().id();
         Ok(Self {
-            sender: Mutex::new(Some(sender)),
+            sender: Arc::new(Mutex::new(Some(sender))),
             thread: Mutex::new(Some(handle)),
             thread_id,
         })
@@ -58,7 +60,8 @@ impl<S: Send + 'static> FakeMainLoop<S> {
         self.thread_id
     }
 
-    /// Stops accepting tasks, lets the queued ones run, and returns the state. `None` when already shut down or when a
+    /// Stops accepting tasks, lets the queued ones run, and returns the state; a delayed task whose timer is still
+    /// pending is dropped unrun. `None` when already shut down or when a
     /// task panicked and took the thread with it.
     pub fn shutdown(&self) -> Option<S> {
         lock(&self.sender).take();
@@ -74,15 +77,20 @@ impl<S: Send + 'static> MainLoop<S> for FakeMainLoop<S> {
         sender.send(task).map_err(|_| MainLoopClosed)
     }
 
-    /// A timer thread posts the task when the delay is up. A pending timer holds the loop open, so a
-    /// [`FakeMainLoop::shutdown`] waits for it and runs the task.
+    /// A timer thread posts the task when the delay is up, if the loop is still open then. As the trait says, a
+    /// [`FakeMainLoop::shutdown`] before that drops the task unrun, and it does not wait for the timer.
     fn post_after(&self, delay: Duration, task: MainTask<S>) -> Result<(), MainLoopClosed> {
-        let sender = lock(&self.sender).as_ref().ok_or(MainLoopClosed)?.clone();
+        if lock(&self.sender).is_none() {
+            return Err(MainLoopClosed);
+        }
+        let sender = Arc::clone(&self.sender);
         thread::Builder::new()
             .name("fake-main-loop-timer".to_owned())
             .spawn(move || {
                 thread::sleep(delay);
-                let _ = sender.send(task);
+                if let Some(sender) = lock(&sender).as_ref() {
+                    let _ = sender.send(task);
+                }
             })
             .map(drop)
             .map_err(|_| MainLoopClosed)
@@ -443,6 +451,31 @@ mod tests {
             .unwrap();
         assert!(rx.recv().unwrap() >= Duration::from_millis(50));
         assert_eq!(main_loop.shutdown(), Some(vec!["now", "late"]));
+    }
+
+    /// As `MainLoop::post_after` promises and the `GLib` loop does: a loop shut down before the delay is up drops the
+    /// task, and the shutdown does not wait for the timer.
+    #[test]
+    fn a_delayed_task_of_a_shut_down_loop_never_runs() {
+        let main_loop = FakeMainLoop::spawn(Vec::<&str>::new()).unwrap();
+        let (tx, rx) = mpsc::channel::<()>();
+        main_loop
+            .post_after(
+                Duration::from_millis(200),
+                Box::new(move |state: &mut Vec<&str>| {
+                    state.push("late");
+                    tx.send(()).unwrap();
+                }),
+            )
+            .unwrap();
+        let started = std::time::Instant::now();
+        assert_eq!(main_loop.shutdown(), Some(Vec::new()));
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "shutdown waited for the timer"
+        );
+        // the timer thread drops the task, and with it the reply channel, without running it
+        assert_eq!(rx.recv(), Err(mpsc::RecvError));
     }
 
     #[test]

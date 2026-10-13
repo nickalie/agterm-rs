@@ -16,6 +16,7 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::time::Instant;
 
 use agterm_core::model::{NewSession, WindowLibrary};
@@ -604,6 +605,30 @@ fn noise_without_window_files_falls_through_to_legacy_migration() {
     assert_eq!(workspace_names(&library, library.windows()[0].id), ["legacy"]);
 }
 
+/// A lower-case stem names a different file on a case-sensitive file system than the upper-case path a window loads
+/// from, so recovering it would open the window empty and strand its tree; it is skipped and left as it was.
+#[test]
+fn recovery_skips_a_window_file_not_spelled_upper_case() {
+    let (dir, _) = fresh().unwrap();
+    let (kept, skipped) = (
+        id("0AAAAAAA-0000-4000-8000-000000000001"),
+        id("0BBBBBBB-0000-4000-8000-00000000000B"),
+    );
+    write_window(dir.path(), kept, &tree(vec![workspace("alpha", Vec::new())])).unwrap();
+    let lower = dir.path().join("windows/0bbbbbbb-0000-4000-8000-00000000000b.json");
+    fs::write(&lower, "{}").unwrap();
+    let (_, library) = launch(dir.path());
+    assert_eq!(library.windows().iter().map(|info| info.id).collect::<Vec<_>>(), [kept]);
+    assert_eq!(names(&library), ["window 1"]);
+    assert_eq!(workspace_names(&library, kept), ["alpha"]);
+    assert!(!library.windows().iter().any(|info| info.id == skipped));
+    assert_eq!(
+        fs::read_to_string(&lower).unwrap(),
+        "{}",
+        "the skipped file is left untouched"
+    );
+}
+
 // MARK: - Captured commands at launch
 
 fn captured(session: Uuid) -> SessionSnapshot {
@@ -807,11 +832,15 @@ fn a_selection_save_is_debounced_and_the_latest_one_lands() {
     );
 }
 
-/// What the main loop of the debounce test saw: each save it was handed, and when.
-type Fired = Vec<(DebouncedSave, Instant)>;
+/// What the main loop of the debounce test saw: each save it was handed, and when, each also announced on `tick`.
+struct Fired {
+    saves: Vec<(DebouncedSave, Instant)>,
+    tick: mpsc::Sender<()>,
+}
 
 fn record(fired: &mut Fired, save: DebouncedSave) {
-    fired.push((save, Instant::now()));
+    fired.saves.push((save, Instant::now()));
+    let _ = fired.tick.send(());
 }
 
 #[test]
@@ -820,7 +849,12 @@ fn debounced_saves_come_back_through_the_main_loop_after_the_quiet_window() {
     let mut library = persistence.bootstrap(HOME);
     let window = library.windows()[0].id;
     let session = library.store(window).unwrap().workspaces()[0].sessions[0].id();
-    let main_loop = FakeMainLoop::spawn(Fired::new()).unwrap();
+    let (tick, ticks) = mpsc::channel();
+    let main_loop = FakeMainLoop::spawn(Fired {
+        saves: Vec::new(),
+        tick,
+    })
+    .unwrap();
     let armed_at = Instant::now();
     let mut armed = Vec::new();
     for size in [10.0, 11.0, 12.0] {
@@ -829,7 +863,13 @@ fn debounced_saves_come_back_through_the_main_loop_after_the_quiet_window() {
         arm_debounced_saves(&main_loop as &dyn MainLoop<Fired>, &commit.debounced, record);
         armed.extend(commit.debounced);
     }
-    let fired = main_loop.shutdown().unwrap();
+    // a shutdown drops pending timers, so wait for the three fires first
+    for _ in 0..3 {
+        ticks
+            .recv_timeout(SAVE_DEBOUNCE * 50)
+            .expect("a debounced save never fired");
+    }
+    let fired = main_loop.shutdown().unwrap().saves;
     assert_eq!(fired.len(), 3);
     assert!(armed.iter().all(|save| fired.iter().any(|(seen, _)| seen == save)));
     assert!(fired.iter().all(|(_, at)| at.duration_since(armed_at) >= SAVE_DEBOUNCE));

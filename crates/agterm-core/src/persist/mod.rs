@@ -15,7 +15,7 @@ pub mod snapshot;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
-use serde_json::Value;
+use serde_json::value::RawValue;
 
 pub use library::{DebouncedSave, LibraryPersistence, SAVE_DEBOUNCE, arm_debounced_saves};
 pub use settings::{AppSettings, RestoreMode, SettingsStore};
@@ -24,13 +24,22 @@ pub use snapshot::{PersistenceStore, SessionSnapshot, Snapshot, WindowEntry, Win
 /// Decodes an optional field LOSSILY, as upstream's `(try? c.decodeIfPresent(...)) ?? nil`: a present value that does
 /// not decode as `T` (a wrong type, a malformed id, an unknown enum name) reads as `None` instead of failing the
 /// whole document. Pair it with `#[serde(default)]` so a missing key reads as `None` too.
+///
+/// The value is taken as raw JSON text and decoded on its own, so one that even `serde_json::Value` rejects (a number
+/// past `f64`'s range, such as `1e400`) drops this field alone too. A document with lossy fields must therefore be
+/// decoded by `serde_json` from its text (`from_str`, `from_slice`, `from_reader`), not from a `Value`.
 pub(crate) fn lossy<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
     T: DeserializeOwned,
 {
-    let value = Value::deserialize(deserializer)?;
-    Ok(T::deserialize(value).ok())
+    let raw = Box::<RawValue>::deserialize(deserializer)?;
+    Ok(decode_raw(&raw))
+}
+
+/// Decodes a raw JSON value as `T`, `None` when it does not decode.
+pub(crate) fn decode_raw<T: DeserializeOwned>(raw: &RawValue) -> Option<T> {
+    serde_json::from_str(raw.get()).ok()
 }
 
 /// Ids as Foundation encodes a `UUID`: its upper-case `uuidString`.

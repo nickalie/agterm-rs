@@ -145,7 +145,7 @@ impl LibraryPersistence {
         }
     }
 
-    /// Recovers every UUID-named `windows/*.json` into an open window named "window N", in file name order, the
+    /// Recovers every (upper-case) UUID-named `windows/*.json` into an open window named "window N", in file name order, the
     /// first frontmost. A recovered file may be stale, so its one-shot captures are disarmed; the sticky override
     /// stays armed. False when nothing is recoverable.
     fn recover_orphaned_windows(&mut self, library: &mut WindowLibrary) -> bool {
@@ -415,6 +415,11 @@ fn disarm_captures(store: &mut AppStore) {
 
 /// The ids of the UUID-named `.json` files in the windows directory, in file name order; `None` when the directory
 /// cannot be read.
+///
+/// Only a stem spelled as [`LibraryPersistence::window_path`] spells it (upper case) counts. Upstream accepts either
+/// case, but it runs on a case-insensitive file system where both name one file; on a case-sensitive one the window
+/// would load from the upper-case path, find nothing and open empty, stranding the tree in the other spelling. Such a
+/// file is left on disk untouched instead.
 fn window_file_ids(directory: &Path) -> Option<Vec<Uuid>> {
     let mut names: Vec<String> = fs::read_dir(directory)
         .ok()?
@@ -426,7 +431,7 @@ fn window_file_ids(directory: &Path) -> Option<Vec<Uuid>> {
         names
             .iter()
             .filter_map(|name| name.strip_suffix(".json"))
-            .filter_map(parse_uuid_string)
+            .filter_map(|stem| parse_uuid_string(stem).filter(|id| uuid_string(*id) == stem))
             .collect(),
     )
 }

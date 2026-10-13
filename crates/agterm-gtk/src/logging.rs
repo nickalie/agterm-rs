@@ -9,7 +9,9 @@
 //! log and the Linux fork to stderr only. Appending matters here too: a second `agterm` launch runs this before
 //! `GApplication` forwards it to the running instance, so a truncation at startup would wipe the live instance's log.
 //! The one addition is a bound: a file past [`ROTATE_BYTES`] at startup moves to [`ROTATED_FILE_NAME`], replacing
-//! the previous one. A file that cannot be opened leaves logging on stderr alone, with a warning there.
+//! the previous one. That too must spare a running instance, whose log may have grown past the bound since its own
+//! startup: the process that logs to the file holds an exclusive `flock` on it for its lifetime, and a launch that
+//! finds it held never rotates. A file that cannot be opened leaves logging on stderr alone, with a warning there.
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -65,29 +67,38 @@ fn subscriber(filter: EnvFilter, file: Option<Arc<File>>) -> impl Subscriber + S
         .with(file_layer)
 }
 
-/// Opens [`LOG_FILE_NAME`] in `state_dir` for appending, creating the directory, after moving a file larger than
-/// `rotate_bytes` to [`ROTATED_FILE_NAME`].
+/// Opens [`LOG_FILE_NAME`] in `state_dir` for appending, creating the directory, and takes the instance lock on it:
+/// an exclusive `flock` the returned file holds while it stays open, the whole life of the process that installs it.
+/// Only a launch that gets the lock (no running agterm writes this log) moves a file larger than `rotate_bytes` to
+/// [`ROTATED_FILE_NAME`] and starts a fresh one, locked in turn. A launch that finds the lock held (a second `agterm`
+/// about to be forwarded to the running instance) only appends, so the live instance's file is never renamed under it.
 fn open_log_file(state_dir: &Path, rotate_bytes: u64) -> io::Result<Arc<File>> {
     fs::create_dir_all(state_dir)?;
     let path = state_dir.join(LOG_FILE_NAME);
-    rotate_if_large(&path, &state_dir.join(ROTATED_FILE_NAME), rotate_bytes)?;
-    let file = OpenOptions::new()
+    let file = open_append(&path)?;
+    // held by a running instance, or no locks on this file system: never rotate
+    if file.try_lock().is_err() {
+        return Ok(Arc::new(file));
+    }
+    let meta = file.metadata()?;
+    if !(meta.is_file() && meta.len() > rotate_bytes) {
+        return Ok(Arc::new(file));
+    }
+    fs::rename(&path, state_dir.join(ROTATED_FILE_NAME))?;
+    let fresh = open_append(&path)?;
+    // a launch racing in before this lock finds the fresh file empty, so it does not rotate it either
+    let _ = fresh.try_lock();
+    Ok(Arc::new(fresh))
+}
+
+/// Opens `path` for appending, creating it owner-only; a symlink is refused.
+fn open_append(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
         .append(true)
         .create(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(path)?;
-    Ok(Arc::new(file))
-}
-
-/// Moves `path` to `rotated` when it is a file larger than `limit`; a missing file needs nothing.
-fn rotate_if_large(path: &Path, rotated: &Path, limit: u64) -> io::Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(meta) if meta.is_file() && meta.len() > limit => fs::rename(path, rotated),
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
+        .open(path)
 }
 
 #[cfg(test)]
@@ -160,6 +171,37 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&path).unwrap(), "this run\n");
         assert_eq!(fs::read_to_string(&rotated).unwrap(), "previous run, past the limit\n");
+    }
+
+    /// A second launch, forwarded to the running instance, must not rotate the log that instance is writing, even
+    /// once it has grown past the bound; the rotating launch's fresh file is held the same way.
+    #[test]
+    fn a_log_held_by_a_running_instance_is_never_rotated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(LOG_FILE_NAME);
+        let rotated = tmp.path().join(ROTATED_FILE_NAME);
+        fs::write(&rotated, "oldest\n").unwrap();
+
+        let running = open_log_file(tmp.path(), 1024).unwrap();
+        io::Write::write_all(&mut &*running, b"running instance, now past the limit\n").unwrap();
+        let second = open_log_file(tmp.path(), 8).unwrap();
+        io::Write::write_all(&mut &*second, b"second launch\n").unwrap();
+        io::Write::write_all(&mut &*running, b"running instance again\n").unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "running instance, now past the limit\nsecond launch\nrunning instance again\n"
+        );
+        assert_eq!(fs::read_to_string(&rotated).unwrap(), "oldest\n");
+        drop((running, second));
+
+        // with no instance left, the next launch rotates, and holds the fresh file against the launch after it
+        let primary = open_log_file(tmp.path(), 8).unwrap();
+        assert_eq!(fs::read_to_string(&rotated).unwrap().lines().count(), 3);
+        io::Write::write_all(&mut &*primary, b"new primary, past the limit\n").unwrap();
+        drop(open_log_file(tmp.path(), 8).unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new primary, past the limit\n");
+        assert_eq!(fs::read_to_string(&rotated).unwrap().lines().count(), 3);
     }
 
     #[test]

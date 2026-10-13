@@ -14,10 +14,10 @@ use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::Value;
+use serde_json::value::RawValue;
 use uuid::Uuid;
 
-use super::{json, lossy, upper};
+use super::{decode_raw, json, lossy, upper};
 use crate::model::{BackgroundWatermark, PaneBackgrounds, SidebarMode, SplitAxis, validate_context};
 
 /// The per-window file shape's version; a mismatch makes the loader start fresh.
@@ -120,7 +120,7 @@ struct RawSnapshot {
     sidebar_mode: Option<SidebarMode>,
     /// Kept raw: `None` (absent or null) is what lets the legacy key migrate; a malformed value must not.
     #[serde(default, rename = "focusedWorkspaceIDs")]
-    focused_workspace_ids: Option<Value>,
+    focused_workspace_ids: Option<Box<RawValue>>,
     #[serde(default, deserialize_with = "lossy", rename = "focusedWorkspaceID")]
     legacy_focused_workspace_id: Option<Uuid>,
     #[serde(default, deserialize_with = "lossy")]
@@ -134,10 +134,7 @@ impl From<RawSnapshot> for Snapshot {
         let (focused_workspace_ids, focus_enabled) = match (raw.focused_workspace_ids, raw.legacy_focused_workspace_id)
         {
             (None, Some(legacy)) => (Some(vec![legacy]), Some(true)),
-            (ids, _) => (
-                ids.and_then(|ids| Vec::<Uuid>::deserialize(ids).ok()),
-                raw.focus_enabled,
-            ),
+            (ids, _) => (ids.and_then(|ids| decode_raw::<Vec<Uuid>>(&ids)), raw.focus_enabled),
         };
         Self {
             version: raw.version,
@@ -443,6 +440,41 @@ mod tests {
             r#"{{ "version": 1, "workspaces": [ {{ "id": "{WS}", "name": "work", "collapsed": "yes", "sessions": [] }} ] }}"#
         );
         assert_eq!(decode(&collapsed).workspaces[0].collapsed, None);
+    }
+
+    /// A number past `f64`'s range is one `serde_json::Value` cannot hold; it must drop its field alone too.
+    #[test]
+    fn an_out_of_range_number_drops_its_field_alone() {
+        for bad in [
+            r#""sidebarWidth": 1e400,"#,
+            r#""focusEnabled": -1e400,"#,
+            r#""focusedWorkspaceIDs": [1e400],"#,
+            r#""sessionRecency": [1e400],"#,
+            r#""someNewerKey": 1e400,"#,
+        ] {
+            let snapshot = decode(&with_snapshot_key(bad));
+            assert_eq!(snapshot.workspaces[0].sessions[0].id, session(), "{bad} wiped the tree");
+            assert_eq!(snapshot.sidebar_width, None, "{bad}");
+            assert_eq!(snapshot.focused_workspace_ids, None, "{bad}");
+        }
+        for bad in [
+            r#""fontSize": 1e400"#,
+            r#""splitRatio": 1e400"#,
+            r#""backgroundWatermark": {"kind": "color", "colorHex": "102030", "opacity": 1e400}"#,
+        ] {
+            let snapshot = decode(&with_session_key(bad));
+            assert_eq!(
+                snapshot.workspaces[0].sessions[0],
+                SessionSnapshot::new(session(), "/a"),
+                "{bad}"
+            );
+        }
+        // a nested lossy field drops alone inside its lossy parent
+        let nested = r#""paneBackgrounds": {"left": {"kind": "color", "opacity": 1e400}, "right": {"kind": "color"}}"#;
+        let snapshot = decode(&with_session_key(nested));
+        let panes = snapshot.workspaces[0].sessions[0].pane_backgrounds.as_ref().unwrap();
+        assert_eq!(panes.left, None);
+        assert!(panes.right.is_some());
     }
 
     #[test]
