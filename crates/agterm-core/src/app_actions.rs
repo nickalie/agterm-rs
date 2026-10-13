@@ -636,7 +636,7 @@ impl Core {
     }
 
     /// Runs a control command the way `agtermctl` would, logging a refusal (a chord has nobody to answer).
-    fn run_request(&mut self, cmd: Command, target: Option<String>, args: Args) {
+    pub(crate) fn run_request(&mut self, cmd: Command, target: Option<String>, args: Args) {
         self.try_request(cmd, target, args);
     }
 

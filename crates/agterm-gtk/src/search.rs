@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use agterm_core::Core;
-use agterm_core::model::{AppStore, SearchState};
+use agterm_core::model::{AppStore, SearchState, StatusPane};
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 use uuid::Uuid;
@@ -50,6 +50,15 @@ pub fn shown_search(core: &Core, window: Uuid) -> Option<(Uuid, &SearchState)> {
     session.search.active.then(|| (session.id(), &session.search))
 }
 
+/// The search a bar shows: its session and the pane the search is pinned to.
+pub type SearchKey = (Uuid, Option<StatusPane>);
+
+/// The key of the search the bar of window `window` shows now ([`shown_search`]).
+#[must_use]
+pub fn shown_key(core: &Core, window: Uuid) -> Option<SearchKey> {
+    shown_search(core, window).map(|(session, search)| (session, search.owner))
+}
+
 /// What a key in the field does beyond editing it: Shift+Return steps back, Escape closes.
 #[must_use]
 pub fn field_key(keyval: gdk::Key, state: gdk::ModifierType) -> Option<SearchInput> {
@@ -71,11 +80,17 @@ struct Shared {
     /// The needles the field sent, and how many of them landed.
     sent: Cell<u64>,
     landed: Arc<AtomicU64>,
+    /// The search the bar shows, which its input is meant for.
+    shown: Cell<Option<SearchKey>>,
 }
 
 impl Shared {
+    /// Posts `input` for the search the bar shows now; the app drops it if another search shows by the time it runs.
     fn send(&self, input: SearchInput) {
         let window = self.window;
+        let Some(key) = self.shown.get() else {
+            return;
+        };
         let landed = matches!(input, SearchInput::Needle(_)).then(|| {
             let number = self.sent.get() + 1;
             self.sent.set(number);
@@ -86,7 +101,7 @@ impl Shared {
             if let Some((landed, number)) = landed {
                 landed.store(number, Ordering::Release);
             }
-            state.search_bar(window, input);
+            state.search_bar(window, key, input);
         });
     }
 
@@ -102,8 +117,6 @@ pub struct SearchBar {
     entry: gtk::Entry,
     counter: gtk::Label,
     shared: Rc<Shared>,
-    /// The session the bar shows the search of.
-    shown: Cell<Option<Uuid>>,
 }
 
 impl SearchBar {
@@ -138,6 +151,7 @@ impl SearchBar {
             syncing: Cell::new(false),
             sent: Cell::new(0),
             landed: Arc::new(AtomicU64::new(0)),
+            shown: Cell::new(None),
         });
         for (icon, tip, input) in [
             ("go-up-symbolic", "Previous match", SearchInput::Step(false)),
@@ -152,7 +166,6 @@ impl SearchBar {
             entry,
             counter,
             shared,
-            shown: Cell::new(None),
         }
     }
 
@@ -170,11 +183,15 @@ impl SearchBar {
     /// caller gives the keyboard.
     pub fn sync(&self, core: &Core) -> bool {
         let Some((session, search)) = shown_search(core, self.shared.window) else {
-            self.shown.set(None);
+            self.shared.shown.set(None);
             self.root.set_visible(false);
             return false;
         };
-        let fresh = self.shown.replace(Some(session)) != Some(session);
+        let fresh = self
+            .shared
+            .shown
+            .replace(Some((session, search.owner)))
+            .is_none_or(|(shown, _)| shown != session);
         if (fresh || self.shared.idle()) && self.entry.text() != search.needle {
             self.shared.syncing.set(true);
             self.entry.set_text(&search.needle);
@@ -229,8 +246,13 @@ fn connect_field(entry: &gtk::Entry, shared: &Rc<Shared>) {
 }
 
 impl AppState {
-    /// Window `window`'s search bar asked for `input` (upstream's `updateSearchNeedle`, `navigateSearch`, `endSearch`).
-    pub fn search_bar(&mut self, window: Uuid, input: SearchInput) {
+    /// Window `window`'s search bar asked for `input` for search `key` (upstream's `updateSearchNeedle`,
+    /// `navigateSearch`, `endSearch`); dropped when another search shows by now (a queued selection change landed
+    /// first), so it never acts on a session it was not typed for.
+    pub fn search_bar(&mut self, window: Uuid, key: SearchKey, input: SearchInput) {
+        if shown_key(&self.core, window) != Some(key) {
+            return;
+        }
         match input {
             SearchInput::Needle(needle) => self.core.search_bar_needle(window, &needle),
             SearchInput::Step(next) => self.core.search_bar_step(window, next),
@@ -293,5 +315,58 @@ mod tests {
         };
         core.set_zoom_target(window, Some(zoom));
         assert!(shown_search(&core, window).is_none(), "hidden while zoomed");
+    }
+
+    #[test]
+    fn input_typed_for_one_search_never_lands_on_another() {
+        use agterm_host::fakes::FakeSurface;
+
+        let mut library = agterm_core::model::WindowLibrary::seeded("/home/u");
+        let window = library.active_window_id().unwrap();
+        let store = library.store_mut(window).unwrap();
+        let first = store.sessions().next().unwrap().id();
+        let workspace = store.workspaces()[0].id();
+        let second = store
+            .add_session(workspace, agterm_core::model::NewSession::at_cwd("/srv"))
+            .unwrap();
+        let mut probes = Vec::new();
+        for (session, token) in [(first, "A"), (second, "B")] {
+            let surface = FakeSurface::new(token);
+            probes.push(surface.probe());
+            let state = store.session_mut(session).unwrap();
+            state.surface.replace(Box::new(surface));
+            state.search.apply(StatusPane::Left, SearchReport::Started(None));
+        }
+        store.select_session(Some(first));
+        let core = Core::new(
+            agterm_core::CoreConfig {
+                app: agterm_proto::AppIdentity::from_recorded("0.1.0", None),
+                capabilities: Vec::new(),
+            },
+            agterm_core::CoreState {
+                library,
+                ..agterm_core::CoreState::default()
+            },
+        );
+        let mut state = AppState::new(core);
+        let typed_for_first = shown_key(&state.core, window).unwrap();
+        assert_eq!(typed_for_first.0, first);
+        // a queued selection change lands before the field's input
+        state
+            .core
+            .library_mut()
+            .store_mut(window)
+            .unwrap()
+            .select_session(Some(second));
+        state.search_bar(window, typed_for_first, SearchInput::Needle("err".to_owned()));
+        state.search_bar(window, typed_for_first, SearchInput::Close);
+        assert!(
+            probes[1].actions().is_empty(),
+            "nothing reached the second session's search"
+        );
+        let typed_for_second = shown_key(&state.core, window).unwrap();
+        state.search_bar(window, typed_for_second, SearchInput::Needle("err".to_owned()));
+        assert_eq!(probes[1].actions(), ["search:err"]);
+        assert!(probes[0].actions().is_empty());
     }
 }

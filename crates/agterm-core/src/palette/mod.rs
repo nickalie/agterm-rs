@@ -264,6 +264,22 @@ impl Core {
             .map(|original| (original.theme.clone(), original.dark.clone()))
     }
 
+    /// Runs `write`, an explicit theme change (`theme.set`), around an open theme preview: the previewed slot goes back
+    /// first, the change lands and saves as asked, and the preview starts over from the new slots, so neither the save
+    /// nor a later Escape undoes it (upstream's `persistAndApply` moves `committedTheme` the same way).
+    pub(crate) fn with_theme_preview_rebased(&mut self, write: impl FnOnce(&mut Self)) {
+        let original = self.palette.preview.take();
+        if let Some(original) = &original {
+            let settings = self.settings_unsaved();
+            settings.theme.clone_from(&original.theme);
+            settings.dark_theme.clone_from(&original.dark);
+        }
+        write(self);
+        if original.is_some() {
+            self.begin_theme_preview();
+        }
+    }
+
     fn begin_theme_preview(&mut self) {
         if self.palette.preview.is_none() {
             let settings = self.settings();

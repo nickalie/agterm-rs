@@ -130,6 +130,8 @@ struct Shared {
     frozen: Vec<Candidate>,
     layer: gtk::Box,
     list: gtk::ListBox,
+    /// The rows' scroller: a short window shows ten candidates only in part.
+    scroller: gtk::ScrolledWindow,
 }
 
 impl Shared {
@@ -188,6 +190,21 @@ impl Shared {
             .ok()
             .and_then(|index| self.list.row_at_index(index));
         self.list.select_row(row.as_ref());
+        self.reveal_highlight();
+    }
+
+    /// Scrolls the highlighted row into view (upstream's `scrollTo(index)`); run again whenever the rows are laid out
+    /// anew, as rows added a moment ago have no place yet to scroll to.
+    fn reveal_highlight(&self) {
+        if !self.switcher.is_active() {
+            return;
+        }
+        let row = i32::try_from(self.switcher.index())
+            .ok()
+            .and_then(|index| self.list.row_at_index(index));
+        if let Some(row) = row {
+            modal::reveal(&self.scroller, row.upcast_ref());
+        }
     }
 }
 
@@ -229,10 +246,17 @@ impl WindowSwitcher {
             .focusable(false)
             .build();
         list.add_css_class("agterm-pick-list");
+        // hugs its rows until they outgrow the room the frame gives the panel, then scrolls
+        let scroller = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vscrollbar_policy(gtk::PolicyType::Automatic)
+            .propagate_natural_height(true)
+            .child(&list)
+            .build();
         let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
         panel.set_overflow(gtk::Overflow::Hidden);
         panel.add_css_class(modal::PANEL_CLASS);
-        panel.append(&list);
+        panel.append(&scroller);
         let scrim = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         scrim.add_css_class(modal::DIM_CLASS);
         let frame = ModalFrame::new(&scrim, &panel, PanelRule::Palette { inset: 0.0 });
@@ -251,7 +275,16 @@ impl WindowSwitcher {
             frozen: Vec::new(),
             layer,
             list,
+            scroller: scroller.clone(),
         }));
+        let weak = Rc::downgrade(&shared);
+        scroller.vadjustment().connect_changed(move |_| {
+            if let Some(shared) = weak.upgrade()
+                && let Ok(shared) = shared.try_borrow()
+            {
+                shared.reveal_highlight();
+            }
+        });
         Self { shared, frame }
     }
 
@@ -374,6 +407,69 @@ mod tests {
         switcher.begin(order);
         switcher.reset();
         assert_eq!(switcher.commit(), None);
+    }
+
+    /// Runs the GTK main context until `done` holds or a few seconds pass; whether it held.
+    fn pump_until(mut done: impl FnMut() -> bool) -> bool {
+        let context = glib::MainContext::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !done() {
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            while context.iteration(false) {}
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        true
+    }
+
+    #[test]
+    fn the_highlight_scrolls_into_view_in_a_short_window() {
+        crate::gtk_test::on_gtk_thread(highlight_scrolls_into_view);
+    }
+
+    fn highlight_scrolls_into_view() {
+        let switcher = WindowSwitcher::new(Uuid::new_v4(), &crate::state::detached_poster());
+        let window = gtk::Window::builder().default_width(800).default_height(300).build();
+        window.set_child(Some(&switcher.widget()));
+        window.present();
+        {
+            let mut shared = switcher.shared.borrow_mut();
+            shared.can_switch = true;
+            shared.candidates = (0..MAX_CANDIDATES)
+                .map(|index| Candidate {
+                    id: Uuid::new_v4(),
+                    title: format!("session {index}"),
+                    subtitle: "work · ~".to_owned(),
+                })
+                .collect();
+            shared.press(SwitchKey::Tab { reverse: false });
+            for _ in 0..8 {
+                shared.press(SwitchKey::Tab { reverse: false });
+            }
+            assert_eq!(shared.switcher.index(), MAX_CANDIDATES - 1);
+        }
+        let in_view = || {
+            let shared = switcher.shared.borrow();
+            let Some(row) = shared.list.row_at_index(9) else {
+                return false;
+            };
+            let Some(bounds) = row.compute_bounds(&shared.list) else {
+                return false;
+            };
+            let adjustment = shared.scroller.vadjustment();
+            let bottom = f64::from(bounds.y() + bounds.height());
+            row.height() > 0
+                && adjustment.page_size() > 0.0
+                && bottom <= adjustment.value() + adjustment.page_size() + 0.5
+                && f64::from(bounds.y()) >= adjustment.value() - 0.5
+        };
+        assert!(pump_until(in_view), "the last candidate shows");
+        assert!(
+            switcher.shared.borrow().scroller.vadjustment().value() > 0.0,
+            "the rows scrolled"
+        );
+        window.destroy();
     }
 
     #[test]

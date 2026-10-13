@@ -633,6 +633,50 @@ fn a_preview_while_following_in_the_dark_writes_the_dark_slot_only() {
     assert_eq!(saved.theme.as_deref(), Some("Builtin Light"));
 }
 
+#[test]
+fn a_restore_mode_write_mid_preview_saves_the_committed_theme() {
+    let (mut core, window, dir) = themed(AppSettings {
+        theme: Some("Nord".to_owned()),
+        ..AppSettings::default()
+    });
+    core.open_palette(window, PaletteMode::Themes);
+    core.preview_palette_theme(Some("Dracula"));
+    assert!(core.save_restore_mode(crate::persist::RestoreMode::Rerun));
+    let saved = saved(&dir);
+    assert_eq!(saved.restore_mode, Some(crate::persist::RestoreMode::Rerun));
+    assert_eq!(
+        saved.theme.as_deref(),
+        Some("Nord"),
+        "the preview never reaches the disk"
+    );
+}
+
+#[test]
+fn an_explicit_theme_set_mid_preview_sticks_past_the_palettes_escape() {
+    let (mut core, window, dir) = themed(AppSettings {
+        theme: Some("Nord".to_owned()),
+        ..AppSettings::default()
+    });
+    core.open_palette(window, PaletteMode::Themes);
+    core.preview_palette_theme(Some("Dracula"));
+    let response = super::send(
+        &mut core,
+        Command::Theme(agterm_proto::command::ThemeCmd::Set),
+        None,
+        args(|a| a.name = Some("Builtin Light".to_owned())),
+    );
+    assert!(response.ok, "{response:?}");
+    assert_eq!(saved(&dir).theme.as_deref(), Some("Builtin Light"), "saved as asked");
+    core.preview_palette_theme(Some("Dracula"));
+    core.close_palette();
+    assert_eq!(
+        core.settings().theme.as_deref(),
+        Some("Builtin Light"),
+        "the Escape reverts to the explicit theme, not the one the palette found"
+    );
+    assert_eq!(saved(&dir).theme.as_deref(), Some("Builtin Light"));
+}
+
 // MARK: - the Ctrl-Tab switcher
 
 #[test]

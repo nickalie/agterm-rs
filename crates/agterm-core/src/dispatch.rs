@@ -474,16 +474,21 @@ impl Core {
             return;
         };
         let store = crate::persist::SettingsStore::new(persistence.directory());
-        let saved = match self.previewed_slots_to_persist() {
-            Some((theme, dark_theme)) => store.save(&AppSettings {
+        if let Err(err) = store.save(&self.persisted_settings()) {
+            tracing::warn!(%err, "could not write the settings");
+        }
+    }
+
+    /// The settings as `settings.json` takes them: while the theme palette previews, with the theme slots it found in
+    /// place of the preview's, so no write leaks an uncommitted theme (upstream's `committedTheme`).
+    fn persisted_settings(&self) -> AppSettings {
+        match self.previewed_slots_to_persist() {
+            Some((theme, dark_theme)) => AppSettings {
                 theme,
                 dark_theme,
                 ..self.settings.clone()
-            }),
-            None => store.save(&self.settings),
-        };
-        if let Err(err) = saved {
-            tracing::warn!(%err, "could not write the settings");
+            },
+            None => self.settings.clone(),
         }
     }
 
@@ -497,7 +502,7 @@ impl Core {
         let Some(persistence) = &self.persistence else {
             return true;
         };
-        match crate::persist::SettingsStore::new(persistence.directory()).save(&self.settings) {
+        match crate::persist::SettingsStore::new(persistence.directory()).save(&self.persisted_settings()) {
             Ok(()) => true,
             Err(err) => {
                 tracing::warn!(%err, "could not write the restore mode");

@@ -5,7 +5,7 @@
 //! row (Show Attention, Select Theme…) can open the next palette; a theme row commits its preview before the close.
 
 use agterm_proto::command::WindowCmd;
-use agterm_proto::{Args, Command, Request};
+use agterm_proto::{Args, Command};
 use uuid::Uuid;
 
 use super::{PaletteAction, PaletteMode, feeds::window_holds};
@@ -88,12 +88,11 @@ impl Core {
         }
         match action {
             PaletteAction::OpenWindow(id) => {
-                let request = Request {
-                    cmd: Command::Window(WindowCmd::Select),
-                    target: Some(uuid_string(*id)),
-                    args: Some(Args::default()),
-                };
-                let _ = self.dispatch(&request);
+                self.run_request(
+                    Command::Window(WindowCmd::Select),
+                    Some(uuid_string(*id)),
+                    Args::default(),
+                );
             }
             PaletteAction::MoveSession { session, workspace } => {
                 if let Some(store) = self.library_mut().store_mut(window) {
