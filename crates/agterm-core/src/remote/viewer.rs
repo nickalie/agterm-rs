@@ -238,15 +238,18 @@ impl Core {
     /// The terminal of session `session`'s overlay at generation `generation`, over `pane` (`None` for the
     /// session-wide slot), finished its program while `--wait` holds it (upstream's `replicaOverlayHeld`): a replica
     /// cut off from its stream closes now, since nothing could close it later; otherwise it stays for the user. The
-    /// session-wide and the pane overlays count their generations apart, so the replica is matched by its slot too.
-    /// Whether anything changed; commit afterwards.
+    /// session-wide and the pane overlays count their generations apart, so the replica is matched by its slot too; a
+    /// pane overlay's pane is found from its generation, since the role the frontend captured at mount names the other
+    /// pane after a swap or none after a promotion (as `pane_overlay_exited`). Whether anything changed; commit
+    /// afterwards.
     pub fn replica_overlay_held(&mut self, session: Uuid, pane: Option<OverlayPane>, generation: u64) -> bool {
         let identity = match pane {
-            Some(role) => match self
-                .library()
-                .held_session(session)
-                .and_then(|found| found.overlay_pane_identity(role))
-            {
+            Some(_) => match self.library().held_session(session).and_then(|found| {
+                found
+                    .pane_overlays
+                    .pane_of(generation)
+                    .and_then(|role| found.overlay_pane_identity(role))
+            }) {
                 Some(identity) => Some(identity),
                 None => return false,
             },
@@ -280,9 +283,30 @@ impl Core {
             if shown {
                 self.start_remote_presentation(session);
             } else {
+                self.release_leaving_row(session);
                 self.stop_remote_presentation(session);
             }
         }
+    }
+
+    /// A row leaving (soft close, close, window removal) closes every replica overlay its origin handed over, and the
+    /// origin hears `overlay.closed` while the stream is still up, so an undo brings none of them back (the replica
+    /// half of upstream's `releaseLeavingSession`; its replica ask is cancelled with the session's ask).
+    fn release_leaving_row(&mut self, session: Uuid) {
+        let jobs: Vec<String> = self
+            .remote
+            .viewer
+            .replicas
+            .get(&session)
+            .map(|replicas| replicas.iter().map(|replica| replica.job.clone()).collect())
+            .unwrap_or_default();
+        if jobs.is_empty() {
+            return;
+        }
+        for job in &jobs {
+            self.close_replica_overlay(job, session);
+        }
+        self.sync_replica_overlays();
     }
 
     /// Opens `session`'s presentation stream (upstream's `startRemotePresentation`); a row not attached, or whose
@@ -826,8 +850,13 @@ impl Core {
         lead: LeadAttachment,
         cover: bool,
     ) -> bool {
-        let library = self.library();
-        let Some(found) = library.held_session(session) else {
+        // only a row in a window's tree: the frontend installs no replacement in a pending close, and a rotated nonce
+        // would then drop every later report of the terminal an undo brings back
+        let Some(found) = self
+            .library()
+            .store_for_session(session)
+            .and_then(|store| store.session(session))
+        else {
             return false;
         };
         let Some(role) = found.pane_role_for_identity(pane) else {

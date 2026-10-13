@@ -854,3 +854,104 @@ fn retrying_the_remote_links_now_skips_every_backoff() {
         "the pane attached again at once"
     );
 }
+
+// MARK: - review round 2
+
+#[test]
+fn a_held_pane_replica_is_found_after_its_pane_was_swapped() {
+    let mut viewer = viewer_with(true);
+    viewer.connect(&json!({}));
+    let origin_pane = viewer.origin.0;
+    viewer.frame(overlay_request("PANE", Some(origin_pane), true));
+    let session = viewer.session;
+    let generation = viewer
+        .session()
+        .pane_overlay(crate::model::OverlayPane::Left)
+        .unwrap()
+        .generation;
+    // the frontend captured `left` at mount; the swap moves the overlay with its pane to the right
+    assert!(viewer.fixture.store_mut().unwrap().swap_panes(session).is_ok());
+    assert!(
+        viewer
+            .session()
+            .pane_overlay(crate::model::OverlayPane::Right)
+            .is_some()
+    );
+    assert!(
+        viewer
+            .fixture
+            .core
+            .replica_overlay_held(session, Some(crate::model::OverlayPane::Left), generation)
+    );
+    // marked ended, so losing the stream closes it
+    let key = viewer.link().0.borrow().key.unwrap();
+    viewer.fixture.core.viewer_closed(key, "exit 255");
+    viewer.fixture.core.commit();
+    assert!(
+        viewer
+            .session()
+            .pane_overlay(crate::model::OverlayPane::Right)
+            .is_none()
+    );
+}
+
+#[test]
+fn a_soft_closed_row_closes_its_replica_overlays_and_an_undo_brings_none_back() {
+    let mut viewer = viewer_with(false);
+    viewer.connect(&json!({}));
+    viewer.frame(overlay_request("J1", None, true));
+    assert!(viewer.session().overlay.program_active());
+    let session = viewer.session;
+    let link = viewer.link();
+    assert!(viewer.fixture.store_mut().unwrap().soft_close_session(session));
+    viewer.fixture.core.commit();
+    let closed: Vec<Value> = link
+        .0
+        .borrow()
+        .sent
+        .iter()
+        .filter(|frame| frame["kind"] == "overlay.closed")
+        .cloned()
+        .collect();
+    assert_eq!(closed.len(), 1, "the origin hears it while the stream is up");
+    assert_eq!(closed[0]["overlay"]["job"], "J1");
+    assert!(link.0.borrow().stopped);
+    assert!(viewer.fixture.store_mut().unwrap().undo_pending_close(None));
+    viewer.fixture.core.commit();
+    assert!(!viewer.session().overlay.active, "an undo brings no stale replica back");
+    // the slot is free for the origin's next handoff
+    viewer.connect(&json!({}));
+    viewer.frame(overlay_request("J2", None, false));
+    assert!(viewer.session().overlay.program_active());
+    assert!(viewer.sent("overlay.rejected").is_empty());
+}
+
+#[test]
+fn a_remote_pane_is_not_attached_again_while_its_row_is_a_pending_close() {
+    let mut viewer = viewer_with(false);
+    let session = viewer.session;
+    let pane = viewer.session().pane_identity;
+    let nonce = viewer.fixture.core.zmx.leads.nonce(pane).unwrap().to_owned();
+    assert!(viewer.fixture.store_mut().unwrap().soft_close_session(session));
+    viewer.fixture.core.commit();
+    assert!(!viewer.fixture.core.reattach_remote_pane(
+        session,
+        pane,
+        crate::zmx::lead::LeadAttachment::new(false),
+        true
+    ));
+    assert!(viewer.fixture.core.take_pane_replacements().is_empty());
+    assert_eq!(
+        viewer.fixture.core.zmx.leads.nonce(pane),
+        Some(nonce.as_str()),
+        "the nonce never rotated"
+    );
+    assert!(viewer.fixture.store_mut().unwrap().undo_pending_close(None));
+    viewer.fixture.core.commit();
+    assert!(viewer.fixture.core.reattach_remote_pane(
+        session,
+        pane,
+        crate::zmx::lead::LeadAttachment::new(false),
+        true
+    ));
+}
