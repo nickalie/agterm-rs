@@ -9,10 +9,10 @@ use std::time::{Duration, Instant};
 use agterm_core::persist::RestoreMode;
 use agterm_core::zmx::daemon_name;
 use agterm_core::zmx::lifecycle::{leaders, names_to_kill};
-use agterm_host::KillOutcome;
+use agterm_host::{KillOutcome, SessionHost};
 use uuid::Uuid;
 
-use crate::client::{ZmxClient, kill_outcome};
+use crate::client::ZmxClient;
 
 /// What the launch reap learned.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,16 +97,7 @@ impl ZmxClient {
         let unique: BTreeSet<&str> = names.iter().map(String::as_str).collect();
         unique
             .into_iter()
-            .map(|name| {
-                let outcome = match self.invoke(&["kill", name], None, true, None) {
-                    Ok(output) => kill_outcome(&output, name),
-                    Err(error) => {
-                        tracing::error!(name, %error, "zmx kill failed");
-                        KillOutcome::Failed(error.to_string())
-                    }
-                };
-                (name.to_owned(), outcome)
-            })
+            .map(|name| (name.to_owned(), SessionHost::kill(self, name, false)))
             .collect()
     }
 

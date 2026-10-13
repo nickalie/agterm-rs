@@ -194,7 +194,7 @@ impl SessionHost for ZmxClient {
         parse_screen(&output).ok_or_else(|| HostError("zmx screen answered no screen".to_owned()))
     }
 
-    /// True means the daemon queued the bytes, not that the program read them.
+    /// `Ok` means the daemon queued the bytes, not that the program read them.
     fn type_input(&self, name: &str, bytes: &[u8]) -> Result<(), HostError> {
         self.invoke(&["type", name], None, false, Some(bytes))
             .map(drop)

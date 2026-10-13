@@ -51,6 +51,9 @@ jobs:
           done
       - name: libghostty prefix
         run: scripts/build-ghostty.sh
+      # built here so the vendor cache this job saves holds it; the conformance job only restores that cache
+      - name: zmx prefix
+        run: scripts/build-zmx.sh
       - name: format
         run: cargo fmt --all --check
       - name: clippy
@@ -88,7 +91,7 @@ jobs:
           key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
       - name: libghostty prefix
         run: scripts/build-ghostty.sh
-      # stage.sh stages bin/zmx from this prefix; on a miss build-zmx.sh fetches its pinned Zig itself
+      # stage.sh stages bin/zmx from this prefix, restored from the cache the rust-linux job saved
       - name: zmx prefix
         run: scripts/build-zmx.sh
       - uses: actions/setup-python@v7
