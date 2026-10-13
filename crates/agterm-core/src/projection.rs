@@ -8,12 +8,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use agterm_proto::AppIdentity;
 use agterm_proto::tree::{
-    ControlHudNode, ControlSessionAsk, ControlSessionNode, ControlSurfaceNode, ControlTree, ControlWorkspaceNode,
+    ControlHtmlOverlayNode, ControlHudNode, ControlSessionAsk, ControlSessionNode, ControlSurfaceNode, ControlTree,
+    ControlWorkspaceNode,
 };
 use uuid::Uuid;
 
+use crate::html::{HtmlOverlay, HtmlSource};
 use crate::hud::HudSpinner;
-use crate::model::{AgentStatus, AppStore, Session, StatusPane, SurfaceSlot, Workspace};
+use crate::model::{AgentStatus, AppStore, OverlayPane, Session, StatusPane, SurfaceSlot, Workspace};
 use crate::pane_env::uuid_string;
 use crate::persist::AppSettings;
 use crate::zoom::{SurfaceId, ZoomSurface};
@@ -36,12 +38,22 @@ pub struct TreeContext<'a> {
 pub fn control_tree(store: &AppStore, context: &TreeContext<'_>) -> ControlTree {
     let current = store.current_workspace_id();
     let selected = store.selected_session_id();
-    let workspaces = store
+    let settings = context.settings;
+    let mut workspaces: Vec<ControlWorkspaceNode> = store
         .workspaces()
         .iter()
         .map(|workspace| workspace_node(store, workspace, current, selected))
         .collect();
-    let settings = context.settings;
+    // one app-wide page zoom, so every page reports the same factor
+    let zoom = crate::html::zoom::resolve(settings.html_overlay_zoom);
+    let pages = workspaces
+        .iter_mut()
+        .flat_map(|workspace| workspace.sessions.iter_mut())
+        .filter_map(|session| session.html_overlays.as_mut())
+        .flatten();
+    for page in pages {
+        page.zoom = Some(zoom);
+    }
     let sidebar = store.sidebar();
     ControlTree {
         workspaces,
@@ -131,12 +143,47 @@ fn apply_overlay(node: &mut ControlSessionNode, session: &Session) {
     let panes = session.pane_overlays.open_panes();
     node.pane_overlays = (!panes.is_empty()).then(|| panes.iter().map(|pane| pane.wire_name().to_owned()).collect());
     node.hud = hud_node(session);
+    let nodes: Vec<ControlHtmlOverlayNode> = session
+        .html_overlays()
+        .into_iter()
+        .map(|(slot, page)| html_overlay_node(slot.map(OverlayPane::wire_name), page))
+        .collect();
+    node.html_overlays = (!nodes.is_empty()).then_some(nodes);
     node.ask = session.ask().map(|pending| ControlSessionAsk {
         id: pending.ask.id.clone(),
         pane: session.ask_target_pane().map(|pane| pane.wire_name().to_owned()),
         remote: None,
         replica: None,
     });
+}
+
+/// One page in an overlay slot, as upstream's `htmlOverlayNodes`: the source opened, the load state, what the web view
+/// shows once it reported, and the flags; the zoom is the app's, set by the tree.
+fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverlayNode {
+    let (file, cwd, url) = match &page.source {
+        HtmlSource::File { path, grant_root } => (Some(path.clone()), grant_root.clone(), None),
+        HtmlSource::Url(address) => (None, None, Some(address.as_str().to_owned())),
+    };
+    let current = page.current.as_ref();
+    ControlHtmlOverlayNode {
+        pane: slot.map(str::to_owned),
+        file,
+        cwd,
+        url,
+        state: page.load_state.wire_name().to_owned(),
+        error: page.load_error.clone(),
+        page: current.map(|current| current.page.clone()),
+        title: current.and_then(|current| current.title.clone()),
+        can_go_back: current.map(|current| current.can_go_back),
+        can_go_forward: current.map(|current| current.can_go_forward),
+        navigation: page.flags.navigation.then_some(true),
+        javascript: page.flags.javascript,
+        chromeless: page.flags.chromeless,
+        persistent: page.flags.persistent,
+        browse: page.flags.browse,
+        zoom: None,
+        id: Some(uuid_string(page.id)),
+    }
 }
 
 /// The HUD occupying the slot, as upstream's `hudNode`: every effective value, omitted without a HUD.

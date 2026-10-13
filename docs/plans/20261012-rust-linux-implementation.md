@@ -957,18 +957,31 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 
 **Files:**
 - Create: `crates/agterm-core/src/html/{mod,bridge,navigation,outcomes}.rs`, `crates/agterm-gtk/src/html_overlay.rs`
+- ➕ Create: `crates/agterm-core/src/html/{profile,theme,page_tests}.rs`, `crates/agterm-core/src/model/html_overlay.rs`
+  (the page in the slots, upstream's `AppStore+HtmlOverlay.swift`/`Session+HtmlOverlay.swift`),
+  `crates/agterm-core/src/commands/overlay_page.rs` (the page arms, the outcomes and the frontend's hooks; a page's
+  outcome is settled at each commit by noticing it gone from every slot, in place of upstream's release singleton),
+  `crates/agterm-core/src/commands/tests/overlay_page.rs`; Modify: `model/{overlay,pane_overlay}.rs`, `commands/overlay.rs`,
+  `projection.rs`, `zoom.rs`, `dashboard.rs`, GTK `overlay.rs`, `split.rs`, `state.rs`; `conformance/tests/protocol/test_overlay.py`
+  (stable ids for `test_page_result_needs_a_known_page`, whose random UUID id never matched across runs)
 
-- [ ] `--html` overlays on WebKitGTK through the `webkit6` crate behind the default cargo feature `html`; without it
+- [x] `--html` overlays on WebKitGTK through the `webkit6` crate behind the default cargo feature `html`; without it
       the build refuses HTML overlays (the fork's handling of a missing WebKitGTK as the Linux hint; no port of its
       `AgtermWebKit` C shim); with it WebKitGTK is a runtime dependency (Technical Details)
-- [ ] `HtmlOverlay.swift` (origin pinning, navigation policy), `HtmlBridge.swift`, `HtmlPageOutcomes.swift`,
+- [x] `HtmlOverlay.swift` (origin pinning, navigation policy), `HtmlBridge.swift`, `HtmlPageOutcomes.swift`,
       `BrowserProfile.swift`; the panel, identity strip and toolbar after `Views/HtmlOverlay*.swift` and
       `control-api.md` > Overlay; the fork's `LinuxHtml*.swift`/`LinuxWebKit.swift` only for the WebKitGTK calls;
-      session.overlay.reload, navigate; the `data-agterm` adapter, `--js` helper and `--block` outcomes
-- [ ] matching `agtermctl` subcommands
-- [ ] write tests: bridge message → request mapping with page defaults; navigation policy
-- [ ] write tests: outcome bookkeeping by page id
-- [ ] gate: full run; ratchet (rest of `test_overlay.py`)
+      session.overlay.reload, navigate; the `data-agterm` adapter, `--js` helper and `--block` outcomes (Linux
+      specifics: a `--cwd` grant is served through an `agterm-file:` scheme confined to the grant, reported as
+      `file:`; WebKitGTK names no frame on a script message, so a `--js` page's `agterm.request` reaches the handler
+      through a top-window relay in agterm's world; persistent store at `<state>/browser/<profile id>/`; a clicked
+      link in overlay link mode opens a browsing page. Left for later tasks: the theme palette variables and theme
+      refresh (Task 23), `browser.clear` (Task 25), page zoom from font commands (Task 23))
+- [x] matching `agtermctl` subcommands (in since Task 20; the cli page tests now pass)
+- [x] write tests: bridge message → request mapping with page defaults; navigation policy
+- [x] write tests: outcome bookkeeping by page id
+- [x] gate: full run; ratchet (rest of `test_overlay.py`) (13 new green ids, 516 listed: every page test of
+      `test_overlay.py`, `test_hud.py`'s two page tests and the two cli page tests)
 
 ### Task 22: Sidebar
 

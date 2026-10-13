@@ -532,7 +532,7 @@ fn a_program_and_a_hud_share_the_slot() {
 }
 
 #[test]
-fn page_commands_need_a_page_and_pages_wait_for_their_task() {
+fn page_commands_need_a_page_and_a_build_without_web_views_refuses_pages() {
     let mut fixture = Fixture::new(1);
     let id = fixture.sessions[0];
     for cmd in [SessionCmd::OverlayReload, SessionCmd::OverlaySubmit] {

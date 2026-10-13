@@ -4,9 +4,9 @@
 //! `closeSessionOverlay`, `resizeSessionOverlay`, `sessionOverlayResult`), `ControlServer+SurfaceIO.swift`
 //! (`overlayReadSurface`) and `ControlServer+OverlayJobs.swift`.
 //!
-//! The slot is shared with the HUD ([`super::hud`]): a program replaces a HUD, the HUD is refused over a program, and
-//! the read commands refuse a HUD with their own messages. HTML pages are validated here as upstream does, but no page
-//! can open yet: they join with the HTML overlay task.
+//! The slot is shared with the HUD ([`super::hud`]) and with pages ([`super::overlay_page`]): a program or page
+//! replaces a HUD, the HUD is refused over either, and the read commands refuse a HUD or a page with their own
+//! messages.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -20,11 +20,12 @@ use agterm_proto::{Args, ControlResult, Request};
 use uuid::Uuid;
 
 use super::hud::PANE_NOT_VISIBLE;
+use super::overlay_page::{self, PAGE_NO_READ, PAGE_NO_RESULT, PageOpening};
 use super::surface::{buffer_extent, last_content_lines};
 use super::{Outcome, args_of, session_store, with_id};
 use crate::Core;
 use crate::error::{ControlError, Noun};
-use crate::html::{self, HtmlNavigation};
+use crate::html::{self, HtmlNavigation, HtmlSource};
 use crate::model::{OverlayPane, OverlayProgram, PaneOverlayOpenFailure, Session, is_valid_color_hex};
 use crate::overlay_jobs::{EXPIRY_SLACK, LAUNCH_WINDOW, OverlayJobFrame, OverlayJobOutcome, OverlayJobs, START_WINDOW};
 use crate::resolve::{ACTIVE, trimmed};
@@ -61,18 +62,14 @@ const CHROMELESS_REQUIRES_FILE: &str = "session.overlay.open: --chromeless requi
 const CHROMELESS_WITH_NAVIGATION: &str = "session.overlay.open: --chromeless cannot be combined with --navigation";
 const PERSISTENT_REQUIRES_URL: &str = "session.overlay.open: --persistent requires --url";
 const BROWSE_REQUIRES_URL: &str = "session.overlay.open: --browse requires --url";
-const NOT_HTML: &str = "the overlay is not an html page";
 const NAVIGATION: &str = "session.overlay.navigate requires back, forward, browser or finder";
 const SUBMIT_VALUE: &str = "session.overlay.submit requires a value";
 const INVALID_PAGE_ID: &str = "invalid page id";
-const UNKNOWN_PAGE: &str = "no such page";
 /// A program's command and directory reach its terminal as C strings (its environment and working directory), so a
 /// NUL would fail the launch after the slot was taken, leaving it open with no program (a Linux check: upstream has
 /// none).
 const COMMAND_NUL: &str = "session.overlay.open: the command must not contain a NUL byte";
 const CWD_NUL: &str = "session.overlay.open: --cwd must not contain a NUL byte";
-/// A page that passed validation: this build shows none yet (the HTML overlay task brings `WebKitGTK`).
-const PAGES_UNAVAILABLE: &str = "session.overlay.open: html overlays are not available in this build";
 /// Upstream's job claim refusals.
 const JOB_REQUIRED: &str = "session.overlay.job.run requires a job id";
 const INVALID_JOB: &str = "invalid job id";
@@ -96,18 +93,25 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         SessionCmd::OverlayResize => resize(core, target, args),
         SessionCmd::OverlayResult => result(core, target, args),
         SessionCmd::OverlaySubmit => {
-            if args.value.is_none() {
-                return Err(ControlError::rejected(SUBMIT_VALUE));
-            }
-            page_command(core, target, window, parse_overlay_pane(args.pane.as_deref())?)
+            let value = args
+                .value
+                .as_deref()
+                .ok_or_else(|| ControlError::rejected(SUBMIT_VALUE))?;
+            let pane = parse_overlay_pane(args.pane.as_deref())?;
+            overlay_page::submit(core, target, window, pane, value)
         }
-        SessionCmd::OverlayReload => page_command(core, target, window, parse_overlay_pane(args.pane.as_deref())?),
+        SessionCmd::OverlayReload => {
+            let pane = parse_overlay_pane(args.pane.as_deref())?;
+            overlay_page::reload(core, target, window, pane, args.current == Some(true))
+        }
         SessionCmd::OverlayNavigate => {
-            args.to
+            let navigation = args
+                .to
                 .as_deref()
                 .and_then(HtmlNavigation::from_wire)
                 .ok_or_else(|| ControlError::rejected(NAVIGATION))?;
-            page_command(core, target, window, parse_overlay_pane(args.pane.as_deref())?)
+            let pane = parse_overlay_pane(args.pane.as_deref())?;
+            overlay_page::navigate(core, target, window, pane, navigation)
         }
         SessionCmd::OverlayCopy => copy(core, target, window, parse_overlay_pane(args.pane.as_deref())?),
         SessionCmd::OverlayText => text(core, target, args),
@@ -124,10 +128,10 @@ fn parse_overlay_pane(raw: Option<&str>) -> Result<Option<OverlayPane>, ControlE
 }
 
 /// What `session.overlay.open` shows (upstream's `OverlayContent`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum OverlayContent {
     Program,
-    Page,
+    Page(HtmlSource),
 }
 
 /// Sorts a program from a page and refuses the flag combinations either cannot take (upstream's `overlayContent`).
@@ -176,7 +180,10 @@ fn overlay_content(command: &str, args: &Args, home: &str) -> Result<OverlayCont
             if let Some(error) = html::grant_error(file, args.cwd.as_deref(), home) {
                 return reject(&format!("session.overlay.open: {error}"));
             }
-            Ok(OverlayContent::Page)
+            Ok(OverlayContent::Page(HtmlSource::File {
+                path: file.to_owned(),
+                grant_root: args.cwd.clone(),
+            }))
         }
         (None, Some(url)) => {
             if !command.is_empty() {
@@ -191,10 +198,10 @@ fn overlay_content(command: &str, args: &Args, home: &str) -> Result<OverlayCont
             if set(args.chromeless) {
                 return reject(CHROMELESS_REQUIRES_FILE);
             }
-            if html::web_url(url).is_none() {
+            let Some(url) = html::web_url(url) else {
                 return reject(INVALID_URL);
-            }
-            Ok(OverlayContent::Page)
+            };
+            Ok(OverlayContent::Page(HtmlSource::Url(url)))
         }
     }
 }
@@ -227,10 +234,11 @@ fn open(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     if args.size_percent.is_some_and(|percent| !(1..=100).contains(&percent)) {
         return Err(size_range("open"));
     }
-    let (store, id) = session_store(core, target, args.window.as_deref())?;
-    if content == OverlayContent::Page {
-        return Err(ControlError::rejected(PAGES_UNAVAILABLE));
+    if let OverlayContent::Page(source) = content {
+        let opening = PageOpening::from_args(source, args, pane);
+        return overlay_page::open(core, target, args.window.as_deref(), opening);
     }
+    let (store, id) = session_store(core, target, args.window.as_deref())?;
     let program = OverlayProgram {
         command,
         cwd: args.cwd.clone(),
@@ -326,15 +334,17 @@ fn resize(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
 /// `--page` reads a page's outcome instead.
 fn result(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     if let Some(page) = args.page.as_deref() {
-        parse_uuid(page).ok_or_else(|| ControlError::rejected(INVALID_PAGE_ID))?;
-        // no page has opened in this build, so none has an outcome to read
-        return Err(ControlError::rejected(UNKNOWN_PAGE));
+        let page = parse_uuid(page).ok_or_else(|| ControlError::rejected(INVALID_PAGE_ID))?;
+        return overlay_page::page_result(core, page);
     }
     let pane = parse_overlay_pane(args.pane.as_deref())?;
     let (store, id) = session_store(core, target, args.window.as_deref())?;
     let session = store
         .session(id)
         .ok_or_else(|| ControlError::rejected("no such session"))?;
+    if session.html_covers(pane) {
+        return Err(ControlError::rejected(PAGE_NO_RESULT));
+    }
     let (running, exit_code) = match pane {
         Some(pane) => (
             session.pane_overlay(pane).is_some(),
@@ -361,29 +371,18 @@ fn parse_uuid(raw: &str) -> Option<Uuid> {
     (raw.len() == 36).then(|| Uuid::parse_str(raw).ok()).flatten()
 }
 
-/// `session.overlay.submit`, `.reload` and `.navigate` once validated (upstream's `htmlOverlayCommandFailure`): the slot
-/// they address must hold a page. No page can open in this build, so an occupied slot holds a program.
-fn page_command(core: &mut Core, target: Option<&str>, window: Option<&str>, pane: Option<OverlayPane>) -> Outcome {
-    let (store, id) = session_store(core, target, window)?;
-    let session = store
-        .session(id)
-        .ok_or_else(|| ControlError::rejected("no such session"))?;
-    let occupied = match pane {
-        Some(pane) => session.pane_overlay(pane).is_some(),
-        None => session.overlay.active && !session.overlay.hud_active(),
-    };
-    Err(ControlError::rejected(if occupied { NOT_HTML } else { NO_OVERLAY }))
-}
-
 // MARK: - copy and text
 
 /// The terminal `session.overlay.copy` and `.text` read (upstream's `overlayReadSurface`): the pane's own overlay with
-/// `pane`, else the session-wide slot's program; a HUD is refused, and a slot whose terminal is not up yet names the
-/// overlay rather than the session.
+/// `pane`, else the session-wide slot's program; a page and then a HUD are refused, and a slot whose terminal is not up
+/// yet names the overlay rather than the session.
 fn overlay_read_surface(
     session: &Session,
     pane: Option<OverlayPane>,
 ) -> Result<&dyn agterm_host::Surface, ControlError> {
+    if session.html_covers(pane) {
+        return Err(ControlError::rejected(PAGE_NO_READ));
+    }
     let (occupied, slot) = if let Some(pane) = pane {
         (
             session.pane_overlay(pane).is_some(),

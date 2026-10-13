@@ -9,6 +9,7 @@ pub(crate) mod hud;
 pub(crate) mod metadata;
 pub(crate) mod notify;
 pub(crate) mod overlay;
+pub(crate) mod overlay_page;
 pub(crate) mod panes;
 pub(crate) mod pick;
 pub(crate) mod quick;

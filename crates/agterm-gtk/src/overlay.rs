@@ -8,6 +8,10 @@
 //! the overlay's generation, so a swap or a promotion moves it with its pane. Each open mounts a fresh terminal and a
 //! close drops it: no terminal ever changes parent.
 //!
+//! A page (`--html`/`--url`) takes the same places by the same keys, its panel from [`crate::html_overlay`] in place
+//! of a terminal: the session-wide page in the program frame, covering or floating like a program, a pane page over
+//! its pane. The registry owns the panel; a close here only takes it out of its parent.
+//!
 //! Every overlay terminal runs the program through upstream's wrapper (`agterm_core::overlay_capture`), which leaves
 //! the exit status in a file the core reads when the terminal is torn down.
 
@@ -51,12 +55,18 @@ pub struct ProgramPlacement {
     pub fraction: Option<f64>,
 }
 
-/// The program panel's layer on a page and the terminal it holds.
+/// What the program panel holds: the program's terminal, or a page's panel (owned by [`crate::html_overlay`]).
+enum PanelContent {
+    Terminal(TerminalSurface),
+    Page { id: Uuid, widget: gtk::Widget },
+}
+
+/// The program panel's layer on a page and the terminal or page it holds.
 pub struct ProgramLayer {
     backdrop: gtk::Box,
     frame: gtk::Box,
-    /// The slot generation the mounted terminal belongs to, its focus key, and the terminal.
-    panel: Option<(u64, String, TerminalSurface)>,
+    /// The slot generation the mounted content belongs to, its focus key, and the content.
+    panel: Option<(u64, String, PanelContent)>,
 }
 
 impl ProgramLayer {
@@ -98,31 +108,67 @@ impl ProgramLayer {
     /// The mounted terminal, with its focus key.
     #[must_use]
     pub fn focus(&self) -> Option<(&str, &TerminalSurface)> {
-        self.panel.as_ref().map(|(_, key, terminal)| (key.as_str(), terminal))
+        match &self.panel {
+            Some((_, key, PanelContent::Terminal(terminal))) => Some((key.as_str(), terminal)),
+            _ => None,
+        }
+    }
+
+    /// The mounted page's web view, with its focus key.
+    #[must_use]
+    pub fn page_focus(&self) -> Option<(String, gtk::Widget)> {
+        match &self.panel {
+            Some((_, key, PanelContent::Page { id, .. })) => {
+                crate::html_overlay::focus_target(*id).map(|widget| (key.clone(), widget))
+            }
+            _ => None,
+        }
     }
 
     /// The mounted terminal.
     #[must_use]
     pub fn terminal(&self) -> Option<&TerminalSurface> {
-        self.panel.as_ref().map(|(_, _, terminal)| terminal)
+        self.focus().map(|(_, terminal)| terminal)
     }
 
-    /// Drops a terminal whose generation is not `live` (closed or replaced; the model tore it down already).
+    /// Drops content whose generation is not `live` (closed or replaced): a terminal the model tore down already, or
+    /// a page's panel, which the page's release may have taken out already.
     fn retain(&mut self, live: Option<u64>) {
         if self
             .panel
             .as_ref()
-            .is_some_and(|(generation, _, _)| Some(*generation) != live)
-            && let Some((_, _, terminal)) = self.panel.take()
+            .is_none_or(|(generation, _, _)| Some(*generation) == live)
         {
-            terminal.teardown();
-            self.frame.remove(terminal.widget());
+            return;
+        }
+        match self.panel.take() {
+            Some((_, _, PanelContent::Terminal(terminal))) => {
+                terminal.teardown();
+                self.frame.remove(terminal.widget());
+            }
+            Some((_, _, PanelContent::Page { widget, .. }))
+                if widget.parent().as_ref() == Some(self.frame.upcast_ref()) =>
+            {
+                self.frame.remove(&widget);
+            }
+            _ => {}
         }
     }
 
     fn mount(&mut self, generation: u64, terminal: TerminalSurface) {
         self.frame.append(terminal.widget());
-        self.panel = Some((generation, format!("overlay#{generation}"), terminal));
+        self.panel = Some((
+            generation,
+            format!("overlay#{generation}"),
+            PanelContent::Terminal(terminal),
+        ));
+    }
+
+    /// Mounts page `id`'s panel, taking it from where it sat (a session that moved to another window).
+    fn mount_page(&mut self, generation: u64, id: Uuid, widget: gtk::Widget) {
+        unparent(&widget);
+        self.frame.append(&widget);
+        self.panel = Some((generation, format!("html#{id}"), PanelContent::Page { id, widget }));
     }
 
     /// Hides the panel and its backdrop.
@@ -144,11 +190,21 @@ impl ProgramLayer {
         }
         self.backdrop.set_opacity(if floating { 1.0 } else { 0.0 });
         self.backdrop.set_can_target(floating);
-        if let Some((_, _, terminal)) = &self.panel {
+        if let Some((_, _, PanelContent::Terminal(terminal))) = &self.panel {
             let visible = placement.is_some();
             if terminal.is_deck_visible() != visible {
                 terminal.set_deck_visible(visible);
             }
+        }
+    }
+}
+
+/// Takes `widget` out of its parent, if any.
+pub fn unparent(widget: &gtk::Widget) {
+    if let Some(parent) = widget.parent() {
+        match parent.downcast_ref::<gtk::Box>() {
+            Some(container) => container.remove(widget),
+            None => widget.unparent(),
         }
     }
 }
@@ -164,6 +220,14 @@ pub struct PaneOverlayTerminal {
     pub generation: u64,
     pub key: String,
     pub terminal: TerminalSurface,
+}
+
+/// One pane page's panel on a page, keyed by the overlay's generation; the panel is the page registry's.
+pub struct PanePage {
+    pub generation: u64,
+    pub key: String,
+    pub id: Uuid,
+    pub widget: gtk::Widget,
 }
 
 thread_local! {
@@ -193,21 +257,7 @@ pub fn sync_page(
     plan: Option<&PanePlan>,
     shown: bool,
 ) {
-    let slot = &session.overlay;
-    let live = slot.program_active().then_some(slot.generation);
-    panes.program_mut().retain(live);
-    if let Some(generation) = live
-        && panes.program().panel.is_none()
-        && !session.overlay.surface.is_present()
-    {
-        let terminal = spawn(session, None, context);
-        connect(&terminal, session.id(), generation, None, context.poster);
-        panes.program_mut().mount(generation, terminal.clone());
-        session
-            .overlay
-            .surface
-            .replace(Box::new(PaneSurface::new(terminal, String::new())));
-    }
+    let live = sync_program(panes, session, context);
     let open: Vec<u64> = [OverlayPane::Left, OverlayPane::Right]
         .into_iter()
         .filter_map(|pane| session.pane_overlay(pane).map(|overlay| overlay.generation))
@@ -226,10 +276,49 @@ pub fn sync_page(
     panes.place_program(placement);
     panes.program_mut().show(placement);
     panes.show_pane_overlays(plan.filter(|_| shown));
+    for (pane, page) in session.html_overlays() {
+        let on_screen = match pane.and_then(|pane| session.pane_overlay(pane)) {
+            Some(overlay) => panes.pane_page_shown(overlay.generation),
+            None => placement.is_some(),
+        };
+        crate::html_overlay::apply(page, on_screen);
+    }
 }
 
-/// Mounts `pane`'s overlay terminal once the plan lays that pane out (a pane no host lays out never gets one, as
-/// upstream's surfaces wait for a backing size).
+/// Brings the session-wide slot's content in line with `session`: a closed or replaced program's terminal or page goes,
+/// an open program without a terminal gets one (installed in the slot), an open page its panel. The live slot
+/// generation, `None` while neither a program nor a page holds the slot.
+fn sync_program(panes: &mut PaneView, session: &mut Session, context: &HudContext<'_>) -> Option<u64> {
+    let slot = &session.overlay;
+    let program = slot.program_active().then_some(slot.generation);
+    let page = slot
+        .page()
+        .map(|page| (slot.generation, page.clone(), slot.background_color.clone()));
+    let live = program.or(page.as_ref().map(|(generation, _, _)| *generation));
+    panes.program_mut().retain(live);
+    if let Some(generation) = program
+        && panes.program().panel.is_none()
+        && !session.overlay.surface.is_present()
+    {
+        let terminal = spawn(session, None, context);
+        connect(&terminal, session.id(), generation, None, context.poster);
+        panes.program_mut().mount(generation, terminal.clone());
+        session
+            .overlay
+            .surface
+            .replace(Box::new(PaneSurface::new(terminal, String::new())));
+    }
+    if let Some((generation, page, background)) = page
+        && panes.program().panel.is_none()
+        && let Some(widget) = crate::html_overlay::mount(&page, background.as_deref(), context.poster)
+    {
+        panes.program_mut().mount_page(generation, page.id, widget);
+    }
+    live
+}
+
+/// Mounts `pane`'s overlay once the plan lays that pane out (a pane no host lays out never gets one, as upstream's
+/// surfaces wait for a backing size): a program's terminal, or a page's panel.
 fn mount_pane_overlay(
     panes: &mut PaneView,
     session: &mut Session,
@@ -237,11 +326,26 @@ fn mount_pane_overlay(
     context: &HudContext<'_>,
     plan: Option<&PanePlan>,
 ) {
-    let Some(generation) = session.pane_overlay(pane).map(|overlay| overlay.generation) else {
+    let Some(overlay) = session.pane_overlay(pane) else {
         return;
     };
+    let generation = overlay.generation;
     let laid_out = plan.is_some_and(|plan| plan.overlays.pane(Slot::of_overlay(pane)) == Some(generation));
-    if !laid_out || panes.pane_overlay(generation).is_some() || session.pane_overlays.slot(pane).surface.is_present() {
+    if !laid_out || panes.pane_overlay(generation).is_some() || panes.pane_page(generation).is_some() {
+        return;
+    }
+    if let Some(page) = &overlay.html {
+        if let Some(widget) = crate::html_overlay::mount(page, overlay.background_color.as_deref(), context.poster) {
+            panes.add_pane_page(PanePage {
+                generation,
+                key: format!("html#{}", page.id),
+                id: page.id,
+                widget,
+            });
+        }
+        return;
+    }
+    if session.pane_overlays.slot(pane).surface.is_present() {
         return;
     }
     let terminal = spawn(session, Some(pane), context);

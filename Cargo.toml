@@ -40,6 +40,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # GTK 4.14 and libadwaita 1.5 are Ubuntu 24.04's, the oldest platform CI builds on.
 gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
+# WebKitGTK 6.0 for HTML overlays; no version feature: the 2.40 API is enough, and Ubuntu 24.04 ships 2.44.
+webkit6 = "0.6"
 
 # Inherited by every crate except `agterm-ghostty-sys` (`[lints] workspace = true`). Only a reasoned outer
 # `#[expect(..., reason = "...")]` on the one item can lift a lint: `#[allow]` is refused.

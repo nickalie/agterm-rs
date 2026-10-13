@@ -367,10 +367,31 @@ fn report_search(surface: Option<surface::TerminalSurface>, report: &SearchRepor
 
 /// Carries out what the link policy decides for a clicked terminal link (upstream's `LinkOpener.follow`): a web or
 /// mail link opens with the desktop's handler, a local file is revealed in the file manager (never opened, which
-/// could run it), anything else is ignored. A session overlay route opens in the browser for now: the overlay is not
-/// there to take it yet, which is upstream's fallback when it cannot.
+/// could run it), anything else is ignored. A session overlay route opens in the browser here, upstream's fallback
+/// when the overlay cannot take it; [`follow_link_in`] shows it over its session.
 pub fn follow_link(raw: &str, mode: LinkOpenMode, origin: ClickOrigin) {
+    carry_out(raw, link_policy::route(raw, mode, origin));
+}
+
+/// [`follow_link`] under the app's link-open setting, a session overlay route shown as a browsing page over its
+/// session, or in the browser when the session cannot show it (upstream's `LinkOpener.overlay`).
+pub fn follow_link_in(state: &mut crate::state::AppState, raw: &str, origin: ClickOrigin) {
+    let mode = state.core.settings().effective_link_open_mode();
     match link_policy::route(raw, mode, origin) {
+        Route::Overlay { url, session } => {
+            let shown = url::Url::parse(&url).is_ok_and(|parsed| state.core.open_link_overlay(parsed, session));
+            if shown {
+                state.settle();
+            } else {
+                open_uri(&url);
+            }
+        }
+        route => carry_out(raw, route),
+    }
+}
+
+fn carry_out(raw: &str, route: Route) {
+    match route {
         Route::Browser(url) | Route::Overlay { url, .. } => open_uri(&url),
         Route::Reveal(path) => crate::app::reveal_in_file_manager(&path),
         Route::Ignore => tracing::debug!(raw, "link click ignored by the link policy"),

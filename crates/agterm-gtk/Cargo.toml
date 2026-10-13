@@ -27,7 +27,15 @@ libc.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+url.workspace = true
 uuid.workspace = true
+webkit6 = { workspace = true, optional = true }
+
+[features]
+default = ["html"]
+# HTML overlays on WebKitGTK, which becomes a runtime dependency; without it the app installs no page host and the
+# core refuses every page.
+html = ["dep:webkit6"]
 
 [lints]
 workspace = true

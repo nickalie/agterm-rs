@@ -14,12 +14,14 @@ use super::overlay::{OverlayPane, OverlayProgram};
 use super::pane::SurfaceSlot;
 use super::session::Session;
 use super::store::AppStore;
+use crate::html::HtmlOverlay;
 use crate::overlay_capture::{mint_code_file, take_exit_code};
 
 /// One pane's overlay (upstream's `PaneOverlay`): the session-wide slot's program fields minus the size, as a pane
-/// overlay is always full-pane.
+/// overlay is always full-pane, or a page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneOverlay {
+    /// The program; empty for a page, and never read then.
     pub command: String,
     /// The working directory; `None` inherits the session's.
     pub cwd: Option<String>,
@@ -29,8 +31,18 @@ pub struct PaneOverlay {
     pub wait: bool,
     /// Unique within the session, minted at the open; the frontend keys the overlay's terminal by it.
     pub generation: u64,
-    /// Where the wrapper writes the program's exit status, read when the terminal is torn down.
+    /// Where the wrapper writes the program's exit status, read when the terminal is torn down; `None` for a page.
     pub code_file: Option<PathBuf>,
+    /// The page this overlay shows instead of running `command` (upstream's `PaneOverlay.html`).
+    pub html: Option<HtmlOverlay>,
+}
+
+impl PaneOverlay {
+    /// Whether this overlay runs a program, which a terminal hosts: not a page.
+    #[must_use]
+    pub fn is_program(&self) -> bool {
+        self.html.is_none()
+    }
 }
 
 /// One pane's overlay slot: the overlay, its terminal, and the last exit status, which outlives the overlay's close.
@@ -137,7 +149,7 @@ impl PaneOverlays {
         std::mem::swap(&mut self.left, &mut self.right);
     }
 
-    fn next_generation(&mut self) -> u64 {
+    pub(super) fn next_generation(&mut self) -> u64 {
         self.generation += 1;
         self.generation
     }
@@ -176,18 +188,18 @@ impl Session {
         self.pane_overlay(pane).is_some().then_some(pane)
     }
 
-    /// Whether a caller's program or page covers the session and owns its input (upstream's `coverOverlayActive`;
-    /// pages join with HTML overlays).
+    /// Whether a caller's program or page covers the session and owns its input (upstream's `coverOverlayActive`), the
+    /// input-exclusion question; terminal-surface questions ask [`super::OverlaySlot::program_active`].
     #[must_use]
     pub fn cover_overlay_active(&self) -> bool {
-        self.overlay.program_active()
+        self.overlay.program_active() || self.overlay.html_active()
     }
 
     /// Whether a program or page covers the whole session, no size given (upstream's `fullOverlayActive`): it hides
     /// the panes and a shown scratch. A HUD never does.
     #[must_use]
     pub fn full_overlay_active(&self) -> bool {
-        self.overlay.program_active() && self.overlay.size_percent.is_none()
+        self.cover_overlay_active() && self.overlay.size_percent.is_none()
     }
 
     /// Drops the pane overlays that can never come up (upstream's `dropUnrealizedPaneOverlays`): no host lays their
@@ -198,7 +210,7 @@ impl Session {
         let mut dropped = false;
         for pane in [OverlayPane::Left, OverlayPane::Right] {
             let slot = self.pane_overlays.slot(pane);
-            let stranded = slot.overlay.is_some()
+            let stranded = slot.overlay.as_ref().is_some_and(PaneOverlay::is_program)
                 && !slot.surface.get().is_some_and(agterm_host::Surface::is_realized)
                 && !self.renders_overlay_pane(pane)
                 && !hosted(pane);
@@ -242,6 +254,7 @@ impl AppStore {
             wait: program.wait,
             generation,
             code_file: Some(mint_code_file()),
+            html: None,
         });
         Ok(())
     }

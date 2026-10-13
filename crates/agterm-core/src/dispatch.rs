@@ -148,6 +148,8 @@ pub struct Core {
     pub(crate) modals: crate::modal::Modals,
     /// The remote overlay jobs and their helpers' connections ([`commands::overlay`]).
     pub(crate) jobs: commands::overlay::JobRuntime,
+    /// The HTML pages' outcomes and the frontend's web views ([`commands::overlay_page`]).
+    pub(crate) pages: commands::overlay_page::PageRuntime,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -211,6 +213,7 @@ impl Core {
             notifications: Vec::new(),
             modals: crate::modal::Modals::default(),
             jobs: commands::overlay::JobRuntime::default(),
+            pages: commands::overlay_page::PageRuntime::default(),
         }
     }
 
@@ -423,6 +426,7 @@ impl Core {
         self.prune_zoom();
         self.drop_stranded_pane_overlays();
         self.sync_modals();
+        self.sync_pages();
         let (events, debounced, pending_closes) = if let Some(persistence) = self.persistence.as_mut() {
             let commit = persistence.commit(&mut self.library);
             (commit.events, commit.debounced, commit.pending_closes)

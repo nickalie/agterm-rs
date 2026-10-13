@@ -147,6 +147,7 @@ pub fn activate(app: &adw::Application) {
         core.set_hud_helper(helper, paths::hud_body_dir(&ProcessEnv));
     }
     core.set_cell_estimator(Box::new(crate::hud::estimate_cell));
+    crate::html_overlay::install(&mut core, paths::state_dir(&ProcessEnv));
     let state = Rc::new(RefCell::new(AppState::new(core)));
     let main_loop = Arc::new(GlibMainLoop::attach(&glib::MainContext::default(), Rc::clone(&state)));
     let posting: Arc<dyn MainLoop<AppState>> = Arc::clone(&main_loop) as _;

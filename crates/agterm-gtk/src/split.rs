@@ -18,6 +18,9 @@
 //! to and reports the page's geometry to the model, which measures a HUD against it (upstream's `hudPaneFrames`).
 //! A terminal ask's layer sits above the HUD, added once too ([`crate::ask_dialog`]), placed over the whole page or
 //! the pane the ask covers.
+//!
+//! An HTML page in the overlay slot is laid out as a program is ([`crate::overlay`]); a pane page's panel sits where a
+//! pane overlay's terminal would, and its web view takes the keyboard in place of a terminal ([`PaneView::page_focus`]).
 
 use agterm_core::hud::{HudPaneFrame, HudPaneFrames};
 use agterm_core::model::pane::{SPLIT_RATIO_DEFAULT, clamp_split_ratio};
@@ -30,7 +33,7 @@ use uuid::Uuid;
 
 use crate::ask_dialog::SessionAskLayer;
 use crate::hud::{HudLayer, HudPlacement, LayerView};
-use crate::overlay::{PaneOverlayTerminal, ProgramLayer, ProgramPlacement};
+use crate::overlay::{PaneOverlayTerminal, PanePage, ProgramLayer, ProgramPlacement};
 use crate::state::{self, AppState, Poster};
 use crate::surface::TerminalSurface;
 
@@ -129,10 +132,11 @@ impl OverlayPlan {
     /// The overlays of `session` under the window's zoom (`zoomed`, one of the session's own surfaces): a zoomed
     /// program covers the page, a zoomed pane overlay shows alone over its pane, a zoomed terminal shows bare; else
     /// the program shows at its size, and each pane laid out, uncovered, shows its own overlay. A covering program
-    /// holds the keyboard, else the focused pane's overlay does unless the scratch covers it.
+    /// holds the keyboard, else the focused pane's overlay does unless the scratch covers it. A page in the slot is laid
+    /// out as a program is (upstream's `coverOverlayActive`).
     fn of(session: &Session, zoomed: Option<ZoomSurface>, panes: Panes, scratch_covers: bool) -> Self {
         let slot = &session.overlay;
-        let program = slot.program_active().then_some(slot.generation);
+        let program = session.cover_overlay_active().then_some(slot.generation);
         let generation = |pane: OverlayPane| session.pane_overlay(pane).map(|overlay| overlay.generation);
         match zoomed {
             Some(ZoomSurface::Overlay) if program.is_some() => Self {
@@ -748,6 +752,8 @@ pub struct PaneView {
     program: ProgramLayer,
     /// The pane overlays' terminals, over the panes and under the scratch.
     pane_overlays: Vec<PaneOverlayTerminal>,
+    /// The pane pages' panels, where the pane overlays' terminals go.
+    pane_pages: Vec<PanePage>,
     plan: Option<PanePlan>,
     /// The page shows the dashboard's cells ([`PaneView::apply_grid`]).
     in_grid: bool,
@@ -798,6 +804,7 @@ impl PaneView {
             ask,
             program,
             pane_overlays: Vec::new(),
+            pane_pages: Vec::new(),
             plan: None,
             in_grid: false,
         };
@@ -903,14 +910,41 @@ impl PaneView {
         self.pane_overlays.push(overlay);
     }
 
-    /// Drops the pane overlay terminals whose generation is not in `live` (closed; the model tore them down already).
+    /// The panel of pane page `generation`.
+    #[must_use]
+    pub fn pane_page(&self, generation: u64) -> Option<&PanePage> {
+        self.pane_pages.iter().find(|page| page.generation == generation)
+    }
+
+    /// Mounts a pane page's panel where pane overlay terminals go, hidden until it is placed; it leaves the parent it
+    /// had (a session that moved to another window).
+    pub fn add_pane_page(&mut self, page: PanePage) {
+        crate::overlay::unparent(&page.widget);
+        page.widget.insert_after(&self.stack, Some(&self.divider));
+        set_widget_visible(&page.widget, false);
+        self.pane_pages.push(page);
+    }
+
+    /// Whether pane page `generation` shows over its pane.
+    #[must_use]
+    pub fn pane_page_shown(&self, generation: u64) -> bool {
+        self.pane_page(generation)
+            .is_some_and(|page| page.widget.can_target() && page.widget.opacity() > 0.0)
+    }
+
+    /// Drops the pane overlays whose generation is not in `live` (closed): a terminal the model tore down already, or a
+    /// page's panel, which the page's release may have taken out already.
     pub fn retain_pane_overlays(&mut self, live: &[u64]) {
         let (kept, gone): (Vec<PaneOverlayTerminal>, Vec<PaneOverlayTerminal>) =
             std::mem::take(&mut self.pane_overlays)
                 .into_iter()
                 .partition(|overlay| live.contains(&overlay.generation));
         self.pane_overlays = kept;
-        if gone.is_empty() {
+        let (kept, gone_pages): (Vec<PanePage>, Vec<PanePage>) = std::mem::take(&mut self.pane_pages)
+            .into_iter()
+            .partition(|page| live.contains(&page.generation));
+        self.pane_pages = kept;
+        if gone.is_empty() && gone_pages.is_empty() {
             return;
         }
         let mut layout = self.stack.layout();
@@ -920,26 +954,45 @@ impl PaneView {
             overlay.terminal.teardown();
             widget.unparent();
         }
+        for page in gone_pages {
+            layout.pane_overlays.retain(|(placed, _)| *placed != page.widget);
+            if page.widget.parent().as_ref() == Some(self.stack.upcast_ref()) {
+                page.widget.unparent();
+            }
+        }
+    }
+
+    /// The pane overlays' widgets and where `plan` puts each: a terminal or a page over the pane it covers.
+    fn placed_pane_overlays(&self, plan: Option<&PanePlan>) -> Vec<(gtk::Widget, Slot)> {
+        let slot_of = |generation: u64| {
+            [Slot::Primary, Slot::Split]
+                .into_iter()
+                .find(|slot| plan.is_some_and(|plan| plan.overlays.pane(*slot) == Some(generation)))
+        };
+        let terminals = self
+            .pane_overlays
+            .iter()
+            .filter_map(|overlay| Some((overlay.terminal.widget().clone().upcast(), slot_of(overlay.generation)?)));
+        let pages = self
+            .pane_pages
+            .iter()
+            .filter_map(|page| Some((page.widget.clone(), slot_of(page.generation)?)));
+        terminals.chain(pages).collect()
     }
 
     /// Shows each pane overlay over the pane `plan` puts it on, and hides the others (all of them without a plan).
     pub fn show_pane_overlays(&self, plan: Option<&PanePlan>) {
-        let placed: Vec<(gtk::Widget, Slot)> = self
-            .pane_overlays
-            .iter()
-            .filter_map(|overlay| {
-                let slot = [Slot::Primary, Slot::Split]
-                    .into_iter()
-                    .find(|slot| plan.is_some_and(|plan| plan.overlays.pane(*slot) == Some(overlay.generation)))?;
-                Some((overlay.terminal.widget().clone().upcast(), slot))
-            })
-            .collect();
+        let placed = self.placed_pane_overlays(plan);
         for overlay in &self.pane_overlays {
             let widget: gtk::Widget = overlay.terminal.widget().clone().upcast();
             let visible = placed.iter().any(|(shown, _)| *shown == widget);
             if overlay.terminal.is_deck_visible() != visible {
                 set_pane_visible(&overlay.terminal, visible);
             }
+        }
+        for page in &self.pane_pages {
+            let visible = placed.iter().any(|(shown, _)| *shown == page.widget);
+            set_widget_visible(&page.widget, visible);
         }
         let mut layout = self.stack.layout();
         if layout.pane_overlays != placed {
@@ -1067,6 +1120,20 @@ impl PaneView {
         }
     }
 
+    /// The focus key and web view of the page that should hold keyboard focus by the last plan, in place of a
+    /// terminal: the session-wide page, or the focused pane's page (upstream's `focusCover`).
+    #[must_use]
+    pub fn page_focus(&self) -> Option<(String, gtk::Widget)> {
+        let plan = self.plan.as_ref()?;
+        match plan.overlays.focus? {
+            OverlayFocus::Program => self.program.page_focus(),
+            OverlayFocus::Pane(slot) => {
+                let page = self.pane_page(plan.overlays.pane(slot)?)?;
+                crate::html_overlay::focus_target(page.id).map(|widget| (page.key.clone(), widget))
+            }
+        }
+    }
+
     fn widget_of(&self, token: Option<&str>) -> Option<gtk::Widget> {
         token
             .and_then(|token| self.terminal(token))
@@ -1103,6 +1170,14 @@ impl PaneView {
         self.divider.set_orientation(across);
         self.divider.set_cursor_from_name(Some(cursor));
     }
+}
+
+/// The visibility switch of a widget that is not a terminal (a page's panel): drawn, hit-tested and focusable only
+/// while shown.
+fn set_widget_visible(widget: &gtk::Widget, visible: bool) {
+    widget.set_opacity(if visible { 1.0 } else { 0.0 });
+    widget.set_can_target(visible);
+    widget.set_can_focus(visible);
 }
 
 /// The one visibility switch of a pane (module docs).
@@ -1346,6 +1421,7 @@ mod tests {
             wait: false,
             generation,
             code_file: None,
+            html: None,
         });
     }
 
@@ -1365,6 +1441,36 @@ mod tests {
         assert!(!plan.shows(Slot::Primary) && !plan.shows(Slot::Split) && !plan.shows(Slot::Scratch));
         assert!(!plan.shows_divider());
         assert_eq!(plan.overlays.focus, Some(OverlayFocus::Program));
+    }
+
+    #[test]
+    fn a_page_takes_the_slot_as_a_program_does() {
+        use agterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
+        let page = HtmlOverlay::new(
+            HtmlSource::File {
+                path: "/site/index.html".to_owned(),
+                grant_root: None,
+            },
+            HtmlPageFlags::default(),
+        );
+        for (size_percent, fraction) in [(None, None), (Some(50), Some(0.5))] {
+            let mut covered = session(Some(split(true, false)), false);
+            let slot = &mut covered.overlay;
+            slot.active = true;
+            slot.generation = 4;
+            slot.size_percent = size_percent;
+            slot.html = Some(page.clone());
+            let plan = PanePlan::layout(&covered, None);
+            assert_eq!(
+                plan.overlays.program,
+                Some(ProgramShow {
+                    generation: 4,
+                    fraction
+                })
+            );
+            assert_eq!(plan.overlays.covers, fraction.is_none());
+            assert_eq!(plan.overlays.focus, Some(OverlayFocus::Program));
+        }
     }
 
     #[test]

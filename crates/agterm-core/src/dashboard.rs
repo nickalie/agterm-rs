@@ -134,19 +134,32 @@ pub enum DashboardCover {
 }
 
 impl Session {
-    /// The cover over `pane` (upstream's `dashboardCover(for:)`): a full session-wide program first, then the pane's
-    /// own overlay. A HUD and a floating overlay leave the panes lit, so they cover nothing. Pages join with HTML
-    /// overlays.
+    /// The cover over `pane` (upstream's `dashboardCover(for:)`): a full session-wide program or page first, then the
+    /// pane's own overlay. A HUD and a floating overlay leave the panes lit, so they cover nothing.
     #[must_use]
     pub fn dashboard_cover(&self, pane: OverlayPane) -> Option<DashboardCover> {
         if self.full_overlay_active() {
+            if let Some(page) = self.overlay.html.as_ref() {
+                return Some(page_cover(page));
+            }
             return Some(DashboardCover::Program {
                 command: self.overlay.command.clone(),
             });
         }
-        self.pane_overlay(pane).map(|overlay| DashboardCover::Program {
-            command: Some(overlay.command.clone()),
+        self.pane_overlay(pane).map(|overlay| match overlay.html.as_ref() {
+            Some(html) => page_cover(html),
+            None => DashboardCover::Program {
+                command: Some(overlay.command.clone()),
+            },
         })
+    }
+}
+
+/// A page's cover: the app-derived identity and the page's own title.
+fn page_cover(page: &crate::html::HtmlOverlay) -> DashboardCover {
+    DashboardCover::Page {
+        identity: page.identity(),
+        title: page.current.as_ref().and_then(|current| current.title.clone()),
     }
 }
 

@@ -393,12 +393,15 @@ impl Deck {
     }
 
     /// Gives the keyboard to what should hold it: the dashboard's chrome while it is open, else the shown page's
-    /// terminal ask while it takes the keyboard, else the shown terminal.
+    /// terminal ask while it takes the keyboard, else the HTML page covering the shown session, else the shown
+    /// terminal.
     pub fn grab_focus(&self) {
         if self.in_grid {
             self.chrome.grab_focus();
         } else if let Some((_, dialog)) = self.shown_ask_focus() {
             dialog.grab_focus();
+        } else if let Some((_, page)) = self.shown_page_focus() {
+            page.grab_focus();
         } else if let Some(terminal) = self.shown_terminal() {
             terminal.grab_focus();
         }
@@ -409,6 +412,13 @@ impl Deck {
         self.shown
             .and_then(|id| self.pages.get(&id))
             .and_then(|page| page.panes.ask().focus_target())
+    }
+
+    /// The HTML page covering the shown session, which takes the keyboard in place of its terminal.
+    fn shown_page_focus(&self) -> Option<(String, gtk::Widget)> {
+        self.shown
+            .and_then(|id| self.pages.get(&id))
+            .and_then(|page| page.panes.page_focus())
     }
 
     /// The page of session `session`, which a GUI ask anchored to it is drawn over.
@@ -585,6 +595,14 @@ impl Deck {
             }
             return;
         }
+        // a page reports its own focus to the model (its web view's focus-enter), so it is not a given pane focus
+        if let Some((key, page)) = self.shown_page_focus() {
+            let desired = Some((id, key));
+            if (desired != self.focused || refocus) && page.grab_focus() {
+                self.focused = desired;
+            }
+            return;
+        }
         let focus = self.pages.get(&id).and_then(|page| page.panes.focus());
         let desired = focus.map(|(token, _)| (id, token.to_owned()));
         if desired == self.focused && !refocus {
@@ -708,8 +726,7 @@ fn connect_reports(terminal: &TerminalSurface, session: Uuid, token: &str, poste
     terminal.connect_open_url(move |url| {
         let url = url.to_owned();
         state::post(&posting, move |state: &mut AppState| {
-            let mode = state.core.settings().effective_link_open_mode();
-            ghostty_app::follow_link(&url, mode, ClickOrigin::Pane(session));
+            ghostty_app::follow_link_in(state, &url, ClickOrigin::Pane(session));
         });
     });
     let posting = poster.clone();

@@ -471,7 +471,11 @@ def test_url_page_reads_back_its_address(ctl, served_page, browse):
 
 
 @pytest.mark.covers("session.overlay.result")
-@pytest.mark.parametrize(("page", "error"), [("nope", "invalid page id"), (str(uuid.uuid4()), "no such page")])
+@pytest.mark.parametrize(
+    ("page", "error"),
+    [("nope", "invalid page id"), (str(uuid.uuid4()), "no such page")],
+    ids=["invalid", "unknown"],
+)
 def test_page_result_needs_a_known_page(ctl, page, error):
     assert_error(ctl.request("session.overlay.result", page=page), error)
 

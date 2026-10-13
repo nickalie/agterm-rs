@@ -13,6 +13,7 @@ use uuid::Uuid;
 use super::pane::SurfaceSlot;
 use super::session::Session;
 use super::store::AppStore;
+use crate::html::HtmlOverlay;
 use crate::hud::{self, HudPanelSize, HudSpec, PaneMetrics};
 use crate::overlay_capture::{mint_code_file, take_exit_code};
 
@@ -92,6 +93,8 @@ pub struct OverlaySlot {
     pub surface: SurfaceSlot,
     /// The HUD occupying the slot.
     pub hud: Option<HudState>,
+    /// The page the slot shows instead of running a program (upstream's `htmlOverlay`); `command` is then unset.
+    pub html: Option<HtmlOverlay>,
 }
 
 impl OverlaySlot {
@@ -101,10 +104,24 @@ impl OverlaySlot {
         self.active && self.hud.is_some()
     }
 
-    /// Whether the slot runs a caller's program (upstream's `programOverlayActive`; no page exists yet).
+    /// Whether the slot runs a caller's program (upstream's `programOverlayActive`), the terminal-surface question:
+    /// neither a HUD nor a page counts.
     #[must_use]
     pub fn program_active(&self) -> bool {
-        self.active && self.hud.is_none()
+        self.active && self.hud.is_none() && self.html.is_none()
+    }
+
+    /// Whether a page covers the session (upstream's `htmlOverlayActive`): it owns input like a program but has no
+    /// terminal, zoom target or exit status.
+    #[must_use]
+    pub fn html_active(&self) -> bool {
+        self.active && self.html.is_some()
+    }
+
+    /// The page the slot shows while it is open.
+    #[must_use]
+    pub fn page(&self) -> Option<&HtmlOverlay> {
+        self.html.as_ref().filter(|_| self.active)
     }
 
     /// The live HUD's spec, at the width an `overlay.resize` forced when one did (upstream's `effectiveHudSpec`).
@@ -139,9 +156,10 @@ impl OverlaySlot {
         }
     }
 
-    /// Empties the slot: its surface torn down, its fields cleared, a HUD discarded (upstream's `closeOverlay`). False
-    /// with nothing open. The exit status survives, and a program's is recorded here from its wrapper's file (upstream
-    /// reads it at the surface's teardown).
+    /// Empties the slot: its surface torn down, a page released, its fields cleared, a HUD discarded (upstream's
+    /// `closeOverlay`). False with nothing open. The exit status survives, and a program's is recorded here from its
+    /// wrapper's file (upstream reads it at the surface's teardown). A released page's outcome is settled by the core,
+    /// which notices the page gone from every slot.
     pub fn close(&mut self) -> bool {
         if !self.active {
             return false;
@@ -151,6 +169,7 @@ impl OverlaySlot {
         if let Some(code) = self.code_file.take().and_then(|file| take_exit_code(&file)) {
             self.exit_code = Some(code);
         }
+        self.html = None;
         self.command = None;
         self.cwd = None;
         self.wait = false;
@@ -239,6 +258,7 @@ impl AppStore {
             return false;
         }
         slot.generation += 1;
+        slot.html = None;
         slot.command = Some(program.command);
         slot.cwd = program.cwd;
         slot.wait = program.wait;
