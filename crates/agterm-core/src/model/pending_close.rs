@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use uuid::Uuid;
 
+use super::outbox::WatermarkRemoval;
 use super::recent_closed::ClosedSessionPlace;
 use super::session::Session;
 use super::store::{AppStore, Location};
@@ -716,10 +717,14 @@ impl AppStore {
         true
     }
 
-    /// Tears the sessions' terminals down and drops them from the recency order, as a hard close does.
+    /// Tears the sessions' terminals down, drops them from the recency order and deletes their rendered text, as a
+    /// hard close does.
     fn hard_finalize_pending_sessions(&mut self, sessions: Vec<Session>) {
         for mut session in sessions {
             session.teardown_surfaces();
+            self.outbox
+                .removed_watermarks
+                .push(WatermarkRemoval::Session(session.id()));
             self.session_recency.remove(session.id());
         }
     }

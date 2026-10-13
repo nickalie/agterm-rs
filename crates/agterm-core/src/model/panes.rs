@@ -141,11 +141,14 @@ impl AppStore {
         session.split_cwd = None;
         session.split_title = None;
         session.initial_split_cwd = None;
+        // the override's text file is named by the identity dropped next
+        let removal = session.pane_text_removal(StatusPane::Right);
         session.pane_backgrounds.right = None;
         session.split_pane_identity = None;
         session.split_restore = PaneRestore::default();
         session.split_launch = PaneLaunch::default();
         session.search.clear();
+        self.outbox.removed_watermarks.extend(removal);
         self.clear_indicator_owned_by(StatusPane::Right, id);
         if was_shown {
             self.emit_pane_visibility(EventKind::PaneSplit, id, false);
@@ -166,7 +169,10 @@ impl AppStore {
         }
         let Some(session) = self.session_mut(id) else { return };
         let was_shown = session.split.shown;
+        // the exiting primary's override goes with it; the survivor's moves left, its file named by the same identity
+        let removal = session.pane_text_removal(StatusPane::Left);
         promote_split_survivor(session);
+        self.outbox.removed_watermarks.extend(removal);
         self.retag_promoted_indicator(id);
         if was_shown {
             self.emit_pane_visibility(EventKind::PaneSplit, id, false);
@@ -213,8 +219,10 @@ impl AppStore {
         if session.search.owner == Some(StatusPane::Scratch) {
             session.search.clear();
         }
+        let removal = session.pane_text_removal(StatusPane::Scratch);
         session.pane_backgrounds.scratch = None;
         session.scratch_surface.teardown();
+        self.outbox.removed_watermarks.extend(removal);
         if was_shown && emit {
             self.emit_pane_visibility(EventKind::PaneScratch, id, false);
         }

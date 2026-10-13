@@ -14,7 +14,7 @@ use agterm_proto::events::EventKind;
 use uuid::Uuid;
 
 use super::naming::{default_workspace_name, sanitized, trimmed_or_none};
-use super::outbox::{EventPayload, ModelEvent, Outbox, SaveRequest};
+use super::outbox::{EventPayload, ModelEvent, Outbox, SaveRequest, WatermarkRemoval};
 use super::pending_close::PendingCloses;
 use super::recency::RecencyStack;
 use super::recent_closed::{ClosedSessionPlace, RecentClosedList};
@@ -669,6 +669,10 @@ impl AppStore {
         }
         for session in &mut workspace.sessions {
             session.teardown_surfaces();
+            // the session is gone, and its rendered text with it
+            self.outbox
+                .removed_watermarks
+                .push(WatermarkRemoval::Session(session.id()));
             self.session_recency.remove(session.id());
         }
         self.drop_focus_member(id);
@@ -848,6 +852,8 @@ impl AppStore {
         };
         self.record_recent_closed_session(&removed, &place, Uuid::new_v4());
         removed.teardown_surfaces();
+        // the session is gone, and its rendered text with it
+        self.outbox.removed_watermarks.push(WatermarkRemoval::Session(id));
         self.session_recency.remove(id);
         if was_active {
             let target = self.close_reselection_target(at);

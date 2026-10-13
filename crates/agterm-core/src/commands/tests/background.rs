@@ -3,15 +3,16 @@
 
 use agterm_host::fakes::FakeSurface;
 use agterm_proto::command::SessionCmd;
-use agterm_proto::{Args, Command, Response};
+use agterm_proto::{AppIdentity, Args, Command, Response};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::{Fixture, UNKNOWN, answered_id, args, failure, wire};
+use super::{Fixture, UNKNOWN, answered_id, args, failure, send, wire};
 use crate::model::{
-    BackgroundWatermark, SaveRequest, Session, StatusPane, WatermarkFit, WatermarkKind, WatermarkPosition,
+    AppStore, BackgroundWatermark, SaveRequest, Session, StatusPane, WatermarkFit, WatermarkKind, WatermarkPosition,
 };
-use crate::persist::{AppSettings, RestoreMode};
+use crate::persist::{AppSettings, LibraryPersistence, RestoreMode};
+use crate::{Core, CoreConfig, CoreState};
 
 fn session(fixture: &Fixture, id: Uuid) -> &Session {
     fixture.store().session(id).expect("the session is in the tree")
@@ -509,4 +510,67 @@ fn restore_arguments_are_refused_in_upstreams_order() {
         args(|a| a.mode = Some("none".into())),
     );
     assert_eq!(response, failure(&format!("no such session: {UNKNOWN}")));
+}
+
+fn restore_in(core: &mut Core, id: Uuid, edit: impl FnOnce(&mut Args)) -> Response {
+    send(core, Command::Session(SessionCmd::Restore), Some(&wire(id)), args(edit))
+}
+
+/// Upstream's `setRestoreCommand` and its `saveChecked`: a pin is acknowledged only once the window's file holds it,
+/// and one whose write fails is refused with the previous pin put back.
+#[test]
+fn a_pin_is_written_at_once_and_one_that_cannot_be_written_is_refused_and_put_back() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let mut persistence = LibraryPersistence::new(dir.path());
+    let library = persistence.bootstrap("/home/u");
+    let mut core = Core::new(
+        CoreConfig {
+            app: AppIdentity::from_recorded("0.1.0", None),
+            capabilities: Vec::new(),
+        },
+        CoreState {
+            library,
+            persistence: Some(persistence),
+            ..CoreState::default()
+        },
+    );
+    let _ = core.commit();
+    let window = core.library().active_window_id().expect("a window");
+    let id = core
+        .library()
+        .store(window)
+        .and_then(AppStore::selected_session_id)
+        .expect("a selected session");
+    let pinned = |core: &Core| {
+        core.library()
+            .store(window)
+            .and_then(|store| store.session(id))
+            .and_then(|session| session.restore.command.clone())
+    };
+
+    let response = restore_in(&mut core, id, |a| {
+        a.mode = Some("set".into());
+        a.command = Some("echo one".into());
+    });
+    assert!(response.ok, "{response:?}");
+    // on disk before any commit
+    let file = dir.path().join(format!("windows/{}.json", wire(window)));
+    let text = std::fs::read_to_string(&file).expect("the window file");
+    assert!(text.contains("echo one"), "{text}");
+
+    // a directory where the file goes makes every write of it fail
+    std::fs::remove_file(&file).expect("the file goes");
+    std::fs::create_dir_all(file.join("blocker")).expect("a blocking directory");
+    let response = restore_in(&mut core, id, |a| a.mode = Some("clear".into()));
+    assert_eq!(
+        response,
+        failure("failed to save the restore override, the previous value is still in effect")
+    );
+    assert_eq!(pinned(&core).as_deref(), Some("echo one"));
+    // an unchanged pin writes nothing, so it is acknowledged even now
+    let response = restore_in(&mut core, id, |a| {
+        a.mode = Some("set".into());
+        a.command = Some("echo one".into());
+    });
+    assert!(response.ok, "{response:?}");
 }

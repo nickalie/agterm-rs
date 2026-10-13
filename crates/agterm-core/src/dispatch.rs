@@ -324,6 +324,15 @@ impl Core {
         }
     }
 
+    /// Writes open window `id`'s snapshot now (upstream's `saveChecked`); whether it landed. True when the model is
+    /// kept in memory only, with nothing to write.
+    pub(crate) fn save_window_checked(&mut self, id: Uuid) -> bool {
+        match self.persistence.as_mut() {
+            Some(persistence) => persistence.save_window(&self.library, id),
+            None => true,
+        }
+    }
+
     /// Removes window `id` for good, its file deleted; keeps the last window. Commit afterwards.
     pub(crate) fn remove_window(&mut self, id: Uuid) {
         match self.persistence.as_mut() {

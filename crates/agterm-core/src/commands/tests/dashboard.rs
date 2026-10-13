@@ -275,6 +275,25 @@ fn the_auto_size_base_defaults_to_ghosttys_size() {
 }
 
 #[test]
+fn an_auto_size_follows_the_cells_that_survive() {
+    let mut fixture = Fixture::new(3);
+    let ids: Vec<String> = fixture.sessions.iter().copied().map(wire).collect();
+    open(&mut fixture, |a| {
+        a.targets = Some(ids);
+        a.auto_size = Some(true);
+    });
+    assert_eq!(read_tree(&fixture).dashboard_font_size, Some(10.0));
+    for id in fixture.sessions.clone().into_iter().skip(1) {
+        fixture.store_mut().unwrap().close_session(id);
+    }
+    // one cell left: 1×1 over 13, in the read-back at once and in what the frontend applies after a reconcile
+    assert_eq!(read_tree(&fixture).dashboard_font_size, Some(13.0));
+    fixture.core.reconcile_dashboards();
+    let controller = fixture.core.dashboard(fixture.window).unwrap();
+    assert_eq!(controller.applied_font_size(), Some(13.0));
+}
+
+#[test]
 fn what_it_left_out_is_named_in_the_text() {
     let mut fixture = Fixture::new(10);
     let single = fixture.sessions[0];

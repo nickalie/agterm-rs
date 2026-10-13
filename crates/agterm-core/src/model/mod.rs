@@ -30,7 +30,7 @@ mod tests;
 pub use background::{BackgroundWatermark, PaneBackgrounds, WatermarkFit, WatermarkKind, WatermarkPosition};
 pub use focus::FocusMode;
 pub use navigation::{NewSessionPlacement, SessionNavigation, WorkspaceNavigation};
-pub use outbox::{EventPayload, ModelEvent, Outbox, RecentClosedChange, SaveRequest};
+pub use outbox::{EventPayload, ModelEvent, Outbox, RecentClosedChange, SaveRequest, WatermarkRemoval};
 pub use pane::{PaneLaunch, PaneRestore, SplitAxis, SplitLayout, StatusPane, SurfaceSlot};
 pub use panes::SwapRefusal;
 pub use pending_close::{

@@ -1,5 +1,5 @@
 //! What a model mutation asks of the world: control events for the app's event ring, snapshot writes, soft closes'
-//! grace timers and Open Recent changes.
+//! grace timers, Open Recent changes and rendered watermarks to delete.
 //!
 //! Upstream's `AppStore` calls a library-owned event sink and its persistence directly on every mutation. Here a
 //! store records both in its [`Outbox`], and the [`WindowLibrary`](super::WindowLibrary) drains them after each
@@ -71,6 +71,16 @@ pub enum RecentClosedChange {
     Clear,
 }
 
+/// A rendered text watermark a mutation left without an owner, for the persistence to delete from the state dir
+/// (upstream's `WatermarkStorage.removeRenderedText` and `removeAllRenderedText` calls).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WatermarkRemoval {
+    /// Every file of a session removed for good.
+    Session(Uuid),
+    /// One pane override's file, by its session and pane key ([`super::Session::background_file_key`]).
+    Pane { session: Uuid, key: String },
+}
+
 /// A store's pending side effects, in order.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Outbox {
@@ -83,6 +93,8 @@ pub struct Outbox {
     pub cancel_debounced_save: bool,
     /// Open Recent changes, in order.
     pub recent_closed: Vec<RecentClosedChange>,
+    /// Rendered text watermarks to delete.
+    pub removed_watermarks: Vec<WatermarkRemoval>,
     /// Each event's place in the app-wide emission order ([`next_emission`]), parallel to `events`.
     emissions: Vec<u64>,
     /// The same for `recent_closed`, so the library can order them against its own changes.
@@ -98,6 +110,7 @@ impl Outbox {
             && self.pending_closes.is_empty()
             && !self.cancel_debounced_save
             && self.recent_closed.is_empty()
+            && self.removed_watermarks.is_empty()
     }
 
     pub(crate) fn emit(&mut self, event: ModelEvent) {

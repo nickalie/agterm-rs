@@ -7,8 +7,9 @@ use uuid::Uuid;
 use super::support::add;
 use crate::model::{
     AgentIndicator, AgentStatus, AppStore, BackgroundWatermark, ModelEvent, PaneLaunch, PaneRestore, SaveRequest,
-    Session, SplitAxis, SplitLayout, StatusPane, SwapRefusal, WatermarkKind,
+    Session, SplitAxis, SplitLayout, StatusPane, SwapRefusal, WatermarkKind, WatermarkRemoval,
 };
+use crate::pane_env::uuid_string;
 
 /// A store with one workspace holding one selected session at `/a`, its outbox drained.
 fn seeded() -> (AppStore, Uuid) {
@@ -777,4 +778,36 @@ fn closing_the_session_or_its_workspace_tears_the_scratch_down() {
     let scratch = install(&mut store, id, StatusPane::Scratch, "S");
     store.remove_workspace(ws);
     assert_eq!(scratch.teardowns(), 1);
+}
+
+/// Upstream's `dropPaneBackground` and `removeAllRenderedText`: a departing pane's text override and a session removed
+/// for good leave their rendered files for the persistence to delete.
+#[test]
+fn a_departing_panes_text_and_a_closed_session_leave_their_files_for_removal() {
+    let removed = |store: &mut AppStore| store.take_outbox().removed_watermarks;
+    let pane = |session: Uuid, key: String| WatermarkRemoval::Pane { session, key };
+
+    // the exiting primary's text goes; the survivor's color override has no file
+    let (mut store, id, _, _) = seeded_swap();
+    store.close_primary_pane(id);
+    assert_eq!(removed(&mut store), [pane(id, uuid_string(Uuid::from_u128(1)))]);
+
+    // the split's own text goes with it, named by the identity it had
+    let (mut store, id, _, _) = seeded_swap();
+    assert_eq!(store.swap_panes(id), Ok(()));
+    store.take_outbox();
+    store.close_split(id);
+    assert_eq!(removed(&mut store), [pane(id, uuid_string(Uuid::from_u128(1)))]);
+
+    install(&mut store, id, StatusPane::Scratch, "S");
+    get_mut(&mut store, id).pane_backgrounds.scratch = Some(watermark(WatermarkKind::Text, "S"));
+    assert!(store.close_scratch(id, true));
+    assert_eq!(removed(&mut store), [pane(id, "scratch".to_owned())]);
+    install(&mut store, id, StatusPane::Scratch, "S2");
+    get_mut(&mut store, id).pane_backgrounds.scratch = Some(watermark(WatermarkKind::Color, "#101010"));
+    assert!(store.close_scratch(id, true));
+    assert!(removed(&mut store).is_empty());
+
+    store.close_session(id);
+    assert_eq!(removed(&mut store), [WatermarkRemoval::Session(id)]);
 }

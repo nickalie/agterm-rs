@@ -328,8 +328,10 @@ impl DashboardController {
 
     /// Brings the cells in line with `store` after any model change: a split cell whose watched pane was promoted into
     /// the primary slot follows it ([`Self::promote_split_member`]), then the cells whose pane is gone drop out
-    /// ([`Self::reconcile`]), and the split identities are recorded for the next sync.
-    pub fn sync_with_store(&mut self, store: &AppStore) {
+    /// ([`Self::reconcile`]), the applied font size follows the surviving cell count over the settings' `base` size
+    /// (upstream re-applies the mode whenever the members change), and the split identities are recorded for the
+    /// next sync.
+    pub fn sync_with_store(&mut self, store: &AppStore, base: f64) {
         let promoted: Vec<Uuid> = self
             .members
             .iter()
@@ -344,6 +346,9 @@ impl DashboardController {
             self.promote_split_member(session);
         }
         self.reconcile(&store.dashboard_valid_members());
+        if self.is_open() {
+            self.applied_font_size = self.font_mode.applied_font_size(self.members.len(), base);
+        }
         self.track_splits(store);
     }
 

@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{AppStore, Session, StatusPane};
+use super::{AppStore, Session, StatusPane, WatermarkRemoval};
 use crate::pane_env::uuid_string;
 use crate::persist::lossy;
 
@@ -206,6 +206,20 @@ impl Session {
             StatusPane::Right => self.split_pane_identity.map(uuid_string),
             StatusPane::Scratch => Some("scratch".to_owned()),
         }
+    }
+
+    /// The file pane `pane`'s text override leaves behind when the pane goes (upstream's `dropPaneBackground`); `None`
+    /// without a text override. Taken before the identity naming the file changes.
+    pub(crate) fn pane_text_removal(&self, pane: StatusPane) -> Option<WatermarkRemoval> {
+        let text = self
+            .pane_backgrounds
+            .get(pane)
+            .is_some_and(|watermark| watermark.kind == WatermarkKind::Text);
+        let key = self.background_file_key(pane).filter(|_| text)?;
+        Some(WatermarkRemoval::Pane {
+            session: self.id(),
+            key,
+        })
     }
 }
 

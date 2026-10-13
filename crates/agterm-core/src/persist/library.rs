@@ -27,9 +27,11 @@ use super::parse_uuid_string;
 use super::recent_closed::RecentClosedStore;
 use super::snapshot::{PersistenceStore, Snapshot, WindowEntry, WindowsIndex};
 use crate::model::{
-    AppStore, PendingCloseTimer, RecentClosedChange, SaveRequest, WindowEvent, WindowInfo, WindowLibrary,
+    AppStore, PendingCloseTimer, RecentClosedChange, SaveRequest, WatermarkRemoval, WindowEvent, WindowInfo,
+    WindowLibrary,
 };
 use crate::pane_env::uuid_string;
+use crate::watermark;
 
 /// The window index's file name in the state directory.
 pub const INDEX_FILE_NAME: &str = "windows.json";
@@ -268,6 +270,7 @@ impl LibraryPersistence {
             self.pending.remove(window);
         }
         self.apply_recent_closed(&effects.recent_closed);
+        self.remove_watermarks(&effects.removed_watermarks);
         let mut debounced = Vec::new();
         for (id, request) in effects.window_saves {
             match request {
@@ -309,6 +312,18 @@ impl LibraryPersistence {
             };
             if let Err(error) = written {
                 tracing::warn!(%error, "saving the recent closed list failed");
+            }
+        }
+    }
+
+    /// Deletes the rendered text watermarks the model let go of, under `<state dir>/watermarks`.
+    fn remove_watermarks(&self, removals: &[WatermarkRemoval]) {
+        for removal in removals {
+            match removal {
+                WatermarkRemoval::Session(session) => watermark::remove_all_rendered_text(&self.directory, *session),
+                WatermarkRemoval::Pane { session, key } => {
+                    watermark::remove_rendered_text(&self.directory, *session, Some(key.as_str()));
+                }
             }
         }
     }
@@ -406,6 +421,15 @@ impl LibraryPersistence {
             return;
         }
         self.pending.remove(&id);
+        // a closed window's sessions are destroyed for good too, so their rendered text goes now, read from its file;
+        // an open window's leave through the library's effects
+        if !library.is_open(id) {
+            for workspace in self.window_store(id).load().workspaces {
+                for session in workspace.sessions {
+                    watermark::remove_all_rendered_text(&self.directory, session.id);
+                }
+            }
+        }
         library.remove_window(id);
         // best effort: a window that never wrote its file has nothing to remove
         let _ = fs::remove_file(self.window_path(id));

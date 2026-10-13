@@ -189,7 +189,7 @@ pub fn rendered_text_path(state_dir: &Path, session: Uuid, pane_key: Option<&str
 
 /// Deletes the default's or one pane override's rendered text; a missing file is fine.
 pub fn remove_rendered_text(state_dir: &Path, session: Uuid, pane_key: Option<&str>) {
-    remove_quietly(&rendered_text_path(state_dir, session, pane_key));
+    remove_rendered_file(&rendered_text_path(state_dir, session, pane_key));
 }
 
 /// Deletes every rendered text a session owns, for its permanent removal.
@@ -208,12 +208,14 @@ pub fn remove_all_rendered_text(state_dir: &Path, session: Uuid) {
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("png"));
         if name == whole || (name.starts_with(&prefix) && png) {
-            remove_quietly(&entry.path());
+            remove_rendered_file(&entry.path());
         }
     }
 }
 
-fn remove_quietly(path: &Path) {
+/// Deletes one rendered text file by its path, as the frontend tracks it; a missing file is fine, any other failure
+/// is logged.
+pub fn remove_rendered_file(path: &Path) {
     match std::fs::remove_file(path) {
         Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
             tracing::warn!(%err, path = %path.display(), "could not remove a rendered watermark");

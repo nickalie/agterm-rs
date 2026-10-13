@@ -6,7 +6,12 @@
 //!
 //! Applied only on change: the background a terminal last took is remembered by its key, so a page sync that changes
 //! nothing costs a comparison per pane. A text file no terminal uses any more is removed, which covers upstream's
-//! removal on a clear and on a switch away from text; a session's files outlive its permanent close.
+//! removal on a clear and on a switch away from text; the model's commit removes a session's files on its permanent
+//! close and a pane override's when its pane goes ([`agterm_core::model::WatermarkRemoval`]).
+//!
+//! A text re-rendered to the file a terminal already shows (new text, color or tint) needs the image reloaded:
+//! libghostty reloads a background image only when its path changes, so the overlay goes out once without the image
+//! and once with it.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -67,7 +72,7 @@ pub fn sync_page(panes: &PaneView, session: &Session) {
         if previous.as_ref() == Some(&desired) || (previous.is_none() && desired.watermark.is_none()) {
             continue;
         }
-        apply(terminal, &desired);
+        apply(terminal, &desired, rerenders_in_place(previous.as_ref(), &desired));
         let stale = previous
             .and_then(|previous| previous.text_file)
             .filter(|file| desired.text_file.as_ref() != Some(file));
@@ -76,6 +81,11 @@ pub fn sync_page(panes: &PaneView, session: &Session) {
             remove_unless_used(&stale);
         }
     }
+}
+
+/// Whether `desired` renders its text to the very file the terminal shows from `previous`.
+fn rerenders_in_place(previous: Option<&Applied>, desired: &Applied) -> bool {
+    previous.is_some_and(|previous| previous.text_file.is_some() && previous.text_file == desired.text_file)
 }
 
 /// Records what the terminal `key` took, forgetting terminals that are gone.
@@ -107,14 +117,28 @@ fn desired(session: &Session, pane: StatusPane, foreground: Option<Color>) -> Ap
     }
 }
 
-/// Builds the terminal's overlay for `desired`, rendering a text image first.
-fn apply(terminal: &TerminalSurface, desired: &Applied) {
+/// Builds the terminal's overlay for `desired`, rendering a text image first; `reload` when the image was rendered to
+/// the file the terminal already shows.
+fn apply(terminal: &TerminalSurface, desired: &Applied, reload: bool) {
     let resolved = desired
         .watermark
         .as_ref()
         .and_then(|watermark| materialize(watermark, desired.text_file.as_deref(), desired.foreground));
-    let overlay = watermark::overlay_text(desired.watermark.as_ref(), resolved.as_deref(), None, WINDOW_OPACITY);
-    terminal.set_config_overlay(&overlay);
+    for overlay in overlays(desired.watermark.as_ref(), resolved.as_deref(), reload) {
+        terminal.set_config_overlay(&overlay);
+    }
+}
+
+/// The overlays a terminal takes, in order. libghostty re-reads a background image only when the configured path
+/// changes, so a `reload` of an image at the same path first goes out without it (upstream's update after every
+/// `materialize` has the same intent).
+fn overlays(watermark: Option<&BackgroundWatermark>, resolved: Option<&str>, reload: bool) -> Vec<String> {
+    let mut overlays = Vec::with_capacity(2);
+    if reload && resolved.is_some() {
+        overlays.push(watermark::overlay_text(watermark, None, None, WINDOW_OPACITY));
+    }
+    overlays.push(watermark::overlay_text(watermark, resolved, None, WINDOW_OPACITY));
+    overlays
 }
 
 /// The image file a background draws (upstream's `WatermarkRenderer.materialize`): the user's image when it is a
@@ -222,15 +246,7 @@ fn remove_unless_used(file: &Path) {
             .any(|entry| entry.text_file.as_deref() == Some(file))
     });
     if !used {
-        remove_file(file);
-    }
-}
-
-fn remove_file(file: &Path) {
-    if let Err(err) = std::fs::remove_file(file)
-        && err.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::warn!(%err, file = %file.display(), "could not remove a rendered watermark");
+        watermark::remove_rendered_file(file);
     }
 }
 
@@ -298,6 +314,40 @@ mod tests {
         session.pane_backgrounds.scratch = Some(watermark(WatermarkKind::Color, Some("#102030")));
         let color = desired(&session, StatusPane::Scratch, foreground);
         assert_eq!((color.text_file, color.foreground), (None, None));
+    }
+
+    #[test]
+    fn a_text_rendered_again_to_its_file_drops_the_image_once_so_it_reloads() {
+        let text = watermark(WatermarkKind::Text, None);
+        let file = "/state/watermarks/S.png";
+        let fresh = overlays(Some(&text), Some(file), false);
+        assert_eq!(fresh.len(), 1);
+        assert!(fresh[0].contains(&format!("background-image = {file}")), "{fresh:?}");
+
+        let reloaded = overlays(Some(&text), Some(file), true);
+        assert_eq!(reloaded.len(), 2);
+        assert!(!reloaded[0].contains("background-image"), "{reloaded:?}");
+        assert_eq!(reloaded[1], fresh[0]);
+
+        // nothing drawn, nothing to reload
+        assert_eq!(overlays(Some(&text), None, true), [String::new()]);
+    }
+
+    #[test]
+    fn only_a_text_drawn_again_to_the_same_file_rerenders_in_place() {
+        let applied = |text: &str, file: Option<&str>| Applied {
+            watermark: Some(BackgroundWatermark {
+                text: Some(text.to_owned()),
+                ..watermark(WatermarkKind::Text, None)
+            }),
+            text_file: file.map(PathBuf::from),
+            foreground: None,
+        };
+        let prod = applied("PROD", Some("/w/S.png"));
+        assert!(rerenders_in_place(Some(&prod), &applied("DEV", Some("/w/S.png"))));
+        assert!(!rerenders_in_place(Some(&prod), &applied("DEV", Some("/w/S-K.png"))));
+        assert!(!rerenders_in_place(None, &prod));
+        assert!(!rerenders_in_place(Some(&applied("PROD", None)), &applied("DEV", None)));
     }
 
     #[test]

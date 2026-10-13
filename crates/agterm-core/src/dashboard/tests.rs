@@ -496,11 +496,11 @@ fn a_store_sync_follows_a_promotion_and_prunes_a_closed_split() {
     controller.open(vec![split(id)], None, DashboardFontMode::Untouched);
     controller.track_splits(&store);
     store.swap_panes(id).unwrap();
-    controller.sync_with_store(&store);
+    controller.sync_with_store(&store, GHOSTTY_DEFAULT_FONT_SIZE);
     assert_eq!(controller.members(), [split(id)], "a swap keeps the cell on its slot");
 
     store.close_primary_pane(id);
-    controller.sync_with_store(&store);
+    controller.sync_with_store(&store, GHOSTTY_DEFAULT_FONT_SIZE);
     assert_eq!(
         controller.members(),
         [primary(id)],
@@ -511,7 +511,7 @@ fn a_store_sync_follows_a_promotion_and_prunes_a_closed_split() {
     controller.open(vec![primary(id), split(id)], None, DashboardFontMode::Untouched);
     controller.track_splits(&store);
     store.close_split(id);
-    controller.sync_with_store(&store);
+    controller.sync_with_store(&store, GHOSTTY_DEFAULT_FONT_SIZE);
     assert_eq!(
         controller.members(),
         [primary(id)],

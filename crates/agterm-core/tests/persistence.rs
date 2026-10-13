@@ -28,6 +28,7 @@ use agterm_core::persist::{
     DebouncedSave, PersistenceStore, RecentClosedKind, RecentClosedState, RecentClosedStore, SAVE_DEBOUNCE,
     SessionSnapshot, SettingsStore, Snapshot, WindowEntry, WindowsIndex, WorkspaceSnapshot, arm_debounced_saves, json,
 };
+use agterm_core::watermark;
 use agterm_host::MainLoop;
 use agterm_host::fakes::FakeMainLoop;
 use agterm_proto::events::EventKind;
@@ -1171,4 +1172,65 @@ fn a_soft_close_keeps_the_window_file_until_undo_or_finalize() {
         1,
         "the entry outlives the finalize"
     );
+}
+
+/// A rendered text watermark file for `session` (the default's, or a pane override's by `key`).
+fn rendered(dir: &Path, session: Uuid, key: Option<&str>) -> io::Result<PathBuf> {
+    let path = watermark::rendered_text_path(dir, session, key);
+    fs::create_dir_all(watermark::directory(dir))?;
+    fs::write(&path, b"png")?;
+    Ok(path)
+}
+
+/// Upstream's `removeAllRenderedText` on a hard close, a soft close's finalize and `WindowLibrary.removeWindow`, open
+/// or closed.
+#[test]
+fn a_session_or_window_removed_for_good_takes_its_rendered_text_along() {
+    let (dir, mut persistence) = fresh().unwrap();
+    let mut library = persistence.bootstrap(HOME);
+    let window = library.open_ids()[0];
+    let store = library.store_mut(window).unwrap();
+    let workspace = store.workspaces()[0].id();
+    let kept = store.workspaces()[0].sessions[0].id();
+    let closed = store.add_session(workspace, NewSession::at_cwd("/tmp")).unwrap();
+    let soft = store.add_session(workspace, NewSession::at_cwd("/tmp")).unwrap();
+    persistence.commit(&mut library);
+    let kept_file = rendered(dir.path(), kept, None).unwrap();
+    let closed_files = [
+        rendered(dir.path(), closed, None).unwrap(),
+        rendered(dir.path(), closed, Some("scratch")).unwrap(),
+    ];
+    library.store_mut(window).unwrap().close_session(closed);
+    persistence.commit(&mut library);
+    assert!(closed_files.iter().all(|file| !file.exists()));
+    assert!(kept_file.exists(), "another session's file stays");
+
+    let soft_file = rendered(dir.path(), soft, None).unwrap();
+    assert!(library.store_mut(window).unwrap().soft_close_session(soft));
+    let timer = persistence.commit(&mut library).pending_closes[0];
+    assert!(soft_file.exists(), "an undo can still bring it back");
+    library
+        .store_mut(timer.window)
+        .unwrap()
+        .finalize_pending_close(timer.record);
+    persistence.commit(&mut library);
+    assert!(!soft_file.exists());
+
+    // a closed window's sessions are read from its file, an open one's from its store
+    let shut = library.new_window(Some("shut"));
+    let open = library.new_window(Some("open"));
+    persistence.commit(&mut library);
+    let first = |library: &WindowLibrary, window: Uuid| library.store(window).unwrap().workspaces()[0].sessions[0].id();
+    let shut_file = rendered(dir.path(), first(&library, shut), None).unwrap();
+    let open_file = rendered(dir.path(), first(&library, open), None).unwrap();
+    persistence.close_window(&mut library, shut);
+    persistence.commit(&mut library);
+    assert!(shut_file.exists(), "closing a window is not removing it");
+    persistence.remove_window(&mut library, shut);
+    persistence.commit(&mut library);
+    assert!(!shut_file.exists());
+    persistence.remove_window(&mut library, open);
+    persistence.commit(&mut library);
+    assert!(!open_file.exists());
+    assert!(kept_file.exists());
 }

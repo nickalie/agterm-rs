@@ -4,6 +4,7 @@
 //! when absent, carrying a control character, or over the storage cap.
 
 use agterm_proto::{ControlResult, Request};
+use uuid::Uuid;
 
 use super::{Outcome, args_of, not_found, parse_pane, session_store, unknown_pane_id};
 use crate::Core;
@@ -62,7 +63,20 @@ pub(crate) fn dispatch(core: &mut Core, request: &Request) -> Outcome {
         StatusPane::Right if !session.split.exists => return Err(ControlError::rejected("session has no split")),
         _ => {}
     }
-    if !store.set_restore_command(pin.value(), pane, id) {
+    let previous = match pane {
+        StatusPane::Right => session.split_restore.command.clone(),
+        _ => session.restore.command.clone(),
+    };
+    // a pin is re-typed on every launch, so it is acknowledged only once it is on disk: written now, and put back
+    // when the write fails (upstream's `saveChecked` rollback)
+    if store.set_restore_command(pin.value(), pane, id) && !saved_now(core, id) {
+        if let Some(store) = core
+            .library()
+            .window_holding_session(id)
+            .and_then(|window| core.library_mut().store_mut(window))
+        {
+            store.set_restore_command(previous, pane, id);
+        }
         return Err(ControlError::rejected(
             "failed to save the restore override, the previous value is still in effect",
         ));
@@ -75,6 +89,13 @@ pub(crate) fn dispatch(core: &mut Core, request: &Request) -> Outcome {
         pane: Some(pane.as_str().to_owned()),
         ..ControlResult::default()
     })
+}
+
+/// Writes the window holding session `id` now; whether it landed.
+fn saved_now(core: &mut Core, id: Uuid) -> bool {
+    core.library()
+        .window_holding_session(id)
+        .is_some_and(|window| core.save_window_checked(window))
 }
 
 /// The `set`|`none`|`clear` mode and its command. A control character would smuggle an extra line or an escape

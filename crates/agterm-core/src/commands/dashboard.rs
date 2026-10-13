@@ -129,7 +129,7 @@ fn open(
     if members.is_empty() {
         return Err(ControlError::rejected("no dashboard sessions resolved"));
     }
-    let base = core.settings().font_size.unwrap_or(GHOSTTY_DEFAULT_FONT_SIZE);
+    let base = base_font_size(core);
     let applied = font_mode.applied_font_size(members.len(), base);
     let mut controller = DashboardController::default();
     controller.open(members, None, font_mode);
@@ -200,6 +200,11 @@ pub(crate) fn close(core: &mut Core, window: Uuid) {
     core.dashboards.by_window.remove(&window);
 }
 
+/// The size an auto-sized grid shrinks from: the settings' font size, else libghostty's default.
+fn base_font_size(core: &Core) -> f64 {
+    core.settings().font_size.unwrap_or(GHOSTTY_DEFAULT_FONT_SIZE)
+}
+
 /// Fills the tree's `dashboard*` fields from window `window`'s open dashboard, as it stands against the model now.
 pub(crate) fn project(core: &Core, window: Option<Uuid>, tree: &mut ControlTree) {
     let Some((window, store)) = window.and_then(|id| core.library().store(id).map(|store| (id, store))) else {
@@ -208,7 +213,7 @@ pub(crate) fn project(core: &Core, window: Option<Uuid>, tree: &mut ControlTree)
     let Some(mut controller) = core.dashboards.by_window.get(&window).cloned() else {
         return;
     };
-    controller.sync_with_store(store);
+    controller.sync_with_store(store, base_font_size(core));
     if !controller.is_open() {
         return;
     }
@@ -234,12 +239,13 @@ impl Core {
     /// valid cells change): a promoted split pane's cell follows it, cells whose pane went away drop out, an emptied
     /// dashboard closes, and so does a closed window's.
     pub fn reconcile_dashboards(&mut self) {
+        let base = base_font_size(self);
         let mut dashboards = std::mem::take(&mut self.dashboards.by_window);
         dashboards.retain(|window, controller| {
             let Some(store) = self.library().store(*window) else {
                 return false;
             };
-            controller.sync_with_store(store);
+            controller.sync_with_store(store, base);
             controller.is_open()
         });
         self.dashboards.by_window = dashboards;
@@ -308,7 +314,7 @@ impl Core {
         if members.is_empty() {
             return;
         }
-        let base = self.settings().font_size.unwrap_or(GHOSTTY_DEFAULT_FONT_SIZE);
+        let base = base_font_size(self);
         let applied = DashboardFontMode::Auto.applied_font_size(members.len(), base);
         let mut controller = DashboardController::default();
         controller.open(members, None, DashboardFontMode::Auto);

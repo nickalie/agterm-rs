@@ -11,9 +11,10 @@ impl AppStore {
     /// unchanged value writes nothing. The pending slots stay untouched: a write during this run must not execute
     /// during this run, only an app-bootstrap restore arms the pin.
     ///
-    /// Whether the value is in place: false for an unknown session and for the scratch pane, which is never restored
-    /// (the command refuses both first). Upstream also rolls a failed save back; here the save runs when the core
-    /// commits after the command, which logs a failure.
+    /// Whether the value changed: false when it was already in place, for an unknown session and for the scratch
+    /// pane, which is never restored (the command refuses both first). A caller that must know the change reached
+    /// disk writes the window at once and sets the previous value back when that fails, as `session.restore` does
+    /// (upstream's `saveChecked` and rollback).
     pub fn set_restore_command(&mut self, value: Option<String>, pane: StatusPane, id: Uuid) -> bool {
         let Some(session) = self.session_mut(id) else {
             return false;
@@ -24,7 +25,7 @@ impl AppStore {
             StatusPane::Scratch => return false,
         };
         if restore.command == value {
-            return true;
+            return false;
         }
         restore.command = value;
         self.save();
@@ -52,7 +53,7 @@ mod tests {
         let (mut store, id) = store_with_session();
         assert!(store.set_restore_command(Some("echo hi".to_owned()), StatusPane::Left, id));
         assert_eq!(store.take_outbox().save, SaveRequest::Now);
-        assert!(store.set_restore_command(Some("echo hi".to_owned()), StatusPane::Left, id));
+        assert!(!store.set_restore_command(Some("echo hi".to_owned()), StatusPane::Left, id));
         assert_eq!(store.take_outbox().save, SaveRequest::None);
         assert!(store.set_restore_command(Some(String::new()), StatusPane::Right, id));
         let session = store.session(id).expect("the session");

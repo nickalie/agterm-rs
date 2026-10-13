@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use super::naming::{default_window_name, is_auto_window_name, sanitized, trimmed_or_none};
 use super::navigation::{WorkspaceNavigation, wrapped};
-use super::outbox::{ModelEvent, RecentClosedChange, SaveRequest, next_emission};
+use super::outbox::{ModelEvent, RecentClosedChange, SaveRequest, WatermarkRemoval, next_emission};
 use super::pending_close::PendingCloseTimer;
 use super::recent_closed::RecentClosedList;
 use super::session::Session;
@@ -57,6 +57,8 @@ pub struct LibraryEffects {
     pub cancelled_saves: Vec<Uuid>,
     /// Open Recent changes for `recent-closed.json`, in the order they happened.
     pub recent_closed: Vec<RecentClosedChange>,
+    /// Rendered text watermarks to delete from the state dir.
+    pub removed_watermarks: Vec<WatermarkRemoval>,
 }
 
 /// The app-global owner of the window set.
@@ -79,6 +81,8 @@ pub struct WindowLibrary {
     recent_closed: RecentClosedList,
     /// Open Recent changes the library itself made, and those of retired stores, with their emission places.
     pending_recent_closed: Vec<(u64, RecentClosedChange)>,
+    /// Rendered text watermarks of removed windows' sessions and of retired stores, waiting for the next drain.
+    pending_removed_watermarks: Vec<WatermarkRemoval>,
 }
 
 impl WindowLibrary {
@@ -348,6 +352,10 @@ impl WindowLibrary {
             return;
         };
         if let Some(store) = self.stores.remove(&id) {
+            // its sessions are destroyed for good, unlike a closed window's; a closed window's own sessions are swept
+            // from its file by the persistence
+            self.pending_removed_watermarks
+                .extend(store.sessions().map(|session| WatermarkRemoval::Session(session.id())));
             self.retire_store(id, store);
         }
         self.push_library_event(id, ModelEvent::bare(agterm_proto::EventKind::TreeChanged));
@@ -363,6 +371,7 @@ impl WindowLibrary {
         store.retire();
         let mut outbox = store.take_outbox();
         self.pending_recent_closed.extend(outbox.take_stamped_recent_closed());
+        self.pending_removed_watermarks.append(&mut outbox.removed_watermarks);
         self.pending_events.extend(
             outbox
                 .into_stamped_events()
@@ -411,11 +420,13 @@ impl WindowLibrary {
         let mut window_saves = Vec::new();
         let mut cancelled_saves = Vec::new();
         let mut pending_closes = Vec::new();
+        let mut removed_watermarks = std::mem::take(&mut self.pending_removed_watermarks);
         for id in self.windows.iter().map(|info| info.id) {
             let Some(store) = self.stores.get_mut(&id) else {
                 continue;
             };
             let mut outbox = store.take_outbox();
+            removed_watermarks.append(&mut outbox.removed_watermarks);
             pending_closes.extend(
                 std::mem::take(&mut outbox.pending_closes)
                     .into_iter()
@@ -447,6 +458,7 @@ impl WindowLibrary {
             pending_closes,
             cancelled_saves,
             recent_closed: recent.into_iter().map(|(_, change)| change).collect(),
+            removed_watermarks,
         }
     }
 
