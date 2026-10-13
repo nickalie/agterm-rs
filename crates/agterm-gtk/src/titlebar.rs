@@ -2,8 +2,10 @@
 //! dashboard variants): the sidebar toggle, the title's two lines ([`agterm_core::titlebar::compose`]), and the trailing
 //! cluster of recent-sessions and attention popovers, scratch and split toggles, the dashboard, the quick terminal and
 //! the custom-commands popover, each gated by its Settings ▸ Interface toggle, with a separator only between two
-//! groups of two or more. A terminal zoom or an open dashboard strips the bar to its title and an exit button; the
-//! hidden toolbar mode drops the bar entirely.
+//! groups of two or more. A terminal zoom or an open dashboard strips the bar to its title and an exit button. The hidden
+//! toolbar mode, upstream a bare drag strip under the macOS menu bar, keeps a minimal bar here: the window controls,
+//! the drag surface and the primary menu (Linux has no global menu bar, so it is the menu's only mouse path), without
+//! the title or the trailing cluster.
 //!
 //! In GTK idiom the bar is a libadwaita header bar, its buttons flat with symbolic icons and hover texts naming their
 //! chords; the split and scratch glyphs, which GNOME's icon theme has no half-filled forms for, are traced with cairo.
@@ -41,7 +43,7 @@ pub enum Cover {
     Dashboard(String),
 }
 
-/// The hover text `base`, with the chord of `action` when the keymap binds one (upstream's `helpHint`).
+/// The hover text `base`, followed by `chord_label` in parentheses when there is one (upstream's `helpHint`).
 #[must_use]
 pub fn hint(base: &str, chord_label: Option<&str>) -> String {
     match chord_label {
@@ -251,7 +253,6 @@ fn set_text(label: &gtk::Label, text: &str) {
 /// The header bar and what it shows.
 pub struct Titlebar {
     window: Uuid,
-    toolbar: adw::ToolbarView,
     sidebar_toggle: gtk::Button,
     label: Label,
     /// The trailing cluster, hidden under a cover.
@@ -329,7 +330,6 @@ impl Titlebar {
         install_css();
         let bar = Self {
             window,
-            toolbar: toolbar.clone(),
             sidebar_toggle,
             label,
             cluster,
@@ -384,16 +384,12 @@ impl Titlebar {
         );
         self.attention
             .sync(core.attention_rows(), model.attention.is_some_and(|b| b.enabled), core);
-        self.custom.sync(
-            core.custom_command_rows(),
-            model.custom_commands.is_some_and(|b| b.enabled),
-        );
+        self.custom.sync(core, model.custom_commands.is_some_and(|b| b.enabled));
         set_bell_color(core);
         let key = (model.clone(), cover.clone(), dialog_up, core.keymap_generation());
         if self.shown.borrow().as_ref() == Some(&key) {
             return;
         }
-        self.toolbar.set_reveal_top_bars(model.mode != ToolbarMode::Hidden);
         self.exit_zoom.set_visible(*cover == Cover::Zoom);
         self.exit_dashboard.set_visible(matches!(cover, Cover::Dashboard(_)));
         self.exit_zoom.set_sensitive(!dialog_up);
@@ -405,7 +401,9 @@ impl Titlebar {
             }),
             _ => self.label.show(&model.label),
         }
-        let uncovered = *cover == Cover::None;
+        let hidden = model.mode == ToolbarMode::Hidden;
+        self.label.widget.set_visible(!hidden);
+        let uncovered = *cover == Cover::None && !hidden;
         self.cluster.set_visible(uncovered);
         self.sidebar_toggle.set_visible(uncovered && model.sidebar_toggle);
         self.sync_buttons(core, &model);
@@ -632,9 +630,38 @@ mod tests {
             settings.hidden_interface_elements = Some(vec!["recentSessions".into()]);
         });
         bar.sync(&core, &Cover::None, false);
-        assert!(!toolbar.reveals_top_bars(), "hidden mode drops the bar");
+        assert!(toolbar.reveals_top_bars(), "hidden mode keeps a minimal bar");
+        assert!(
+            primary_menu(toolbar.upcast_ref()).is_some_and(|menu| menu.is_visible()),
+            "the app menu's only mouse path stays"
+        );
+        assert!(!bar.label.widget.is_visible(), "no title");
+        assert!(
+            !bar.cluster.is_visible() && !bar.sidebar_toggle.is_visible(),
+            "no buttons"
+        );
+        core.update_settings(|settings| settings.toolbar_mode = Some("normal".into()));
+        bar.sync(&core, &Cover::None, false);
+        assert!(bar.label.widget.is_visible() && bar.cluster.is_visible());
         assert!(!bar.recent.widget().is_visible());
         assert!(!bar.jump_divider.is_visible(), "one jump button left");
+    }
+
+    /// The header's primary menu button, found among `widget`'s descendants.
+    fn primary_menu(widget: &gtk::Widget) -> Option<gtk::MenuButton> {
+        if let Some(button) = widget.downcast_ref::<gtk::MenuButton>()
+            && button.is_primary()
+        {
+            return Some(button.clone());
+        }
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            if let Some(found) = primary_menu(&current) {
+                return Some(found);
+            }
+            child = current.next_sibling();
+        }
+        None
     }
 
     fn uncovered_shows_everything_shown(bar: &Titlebar) {

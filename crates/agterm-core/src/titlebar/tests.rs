@@ -1,6 +1,8 @@
 //! Ported from upstream's `TitlebarCompositionTests` and `InterfaceElementTests` (the divider rule), plus the button
 //! states, popover rows and actions per selection state.
 
+use std::fmt::Write as _;
+
 use agterm_proto::AppIdentity;
 
 use super::*;
@@ -351,10 +353,87 @@ fn a_covered_window_refuses_its_attention_rows_and_disables_its_buttons() {
     assert!(!core.select_attention(window, session));
 }
 
+/// A core whose keymap holds `count` custom commands `c0`..`c{count-1}` in that order, persisted under `state`.
+fn core_with_commands(state: &std::path::Path, count: usize) -> (Core, Uuid) {
+    let config = state.join("config");
+    std::fs::create_dir_all(&config).unwrap();
+    let keymap = (0..count).fold(String::new(), |mut keymap, index| {
+        let _ = writeln!(keymap, "command \"c{index}\" ctrl+shift+f{} true", index + 1);
+        keymap
+    });
+    std::fs::write(config.join("keymap.conf"), keymap).unwrap();
+    let mut persistence = crate::persist::LibraryPersistence::new(state);
+    let library = persistence.bootstrap("/home/u");
+    let window = library.active_window_id().unwrap();
+    let mut core = Core::new(
+        CoreConfig {
+            app: AppIdentity::from_recorded("0.1.0", None),
+            capabilities: Vec::new(),
+        },
+        CoreState {
+            library,
+            settings: AppSettings {
+                config_directory: Some(config.to_string_lossy().into_owned()),
+                ..AppSettings::default()
+            },
+            persistence: Some(persistence),
+        },
+    );
+    assert_eq!(core.reload_keymap(), 0, "the keymap parses");
+    (core, window)
+}
+
+fn names(commands: &[crate::keymap::CustomCommand]) -> Vec<&str> {
+    commands.iter().map(|command| command.name.as_str()).collect()
+}
+
 #[test]
-fn custom_command_rows_keep_keymap_order_without_usage() {
-    let (core, _) = core_with(AppSettings::default());
-    assert_eq!(core.custom_command_rows(), CustomCommandRows::default());
+fn a_short_keymap_lists_every_command_in_order_without_a_leading_section() {
+    let state = tempfile::tempdir().unwrap();
+    let (core, _) = core_with_commands(state.path(), 3);
+    let rows = core.custom_command_rows();
+    assert!(rows.leading.is_empty());
+    assert_eq!(names(&rows.rest), ["c0", "c1", "c2"]);
+}
+
+#[test]
+fn past_the_limit_the_most_run_commands_lead_both_groups_in_keymap_order() {
+    let state = tempfile::tempdir().unwrap();
+    let (core, _) = core_with_commands(state.path(), 7);
+    let rows = core.custom_command_rows();
+    assert!(rows.leading.is_empty(), "nothing run yet");
+    assert_eq!(names(&rows.rest), ["c0", "c1", "c2", "c3", "c4", "c5", "c6"]);
+    let usage = crate::keymap::usage::UsageStore::new(state.path());
+    let commands = core.keymap().commands().to_vec();
+    for (index, runs) in [(6, 3), (2, 1), (4, 2)] {
+        for _ in 0..runs {
+            usage.record(&commands[index]);
+        }
+    }
+    let rows = core.custom_command_rows();
+    assert_eq!(
+        names(&rows.leading),
+        ["c2", "c4", "c6"],
+        "keymap order, not count order"
+    );
+    assert_eq!(names(&rows.rest), ["c0", "c1", "c3", "c5"]);
+}
+
+#[test]
+fn a_command_row_does_not_run_under_a_cover() {
+    let state = tempfile::tempdir().unwrap();
+    let (mut core, window) = core_with_commands(state.path(), 1);
+    let id = core.keymap().commands()[0].id;
+    // the in-memory core has no process host, so a command that runs reports its failure in a banner
+    let _ = core.take_notifications();
+    core.toggle_dashboard(window);
+    assert!(core.dashboard(window).is_some());
+    core.titlebar_action(window, TitlebarAction::RunCustomCommand(id));
+    assert!(core.take_notifications().is_empty(), "nothing ran behind the dashboard");
+    core.toggle_dashboard(window);
+    assert!(core.dashboard(window).is_none());
+    core.titlebar_action(window, TitlebarAction::RunCustomCommand(id));
+    assert!(!core.take_notifications().is_empty(), "uncovered, the command runs");
 }
 
 #[test]
@@ -385,4 +464,69 @@ fn the_buttons_toggle_through_the_builtin_actions() {
     assert_ne!(visible(&core), before);
     core.titlebar_action(window, TitlebarAction::Dashboard);
     assert!(core.dashboard(window).is_some());
+}
+
+#[test]
+fn an_attention_row_reveals_the_pane_in_its_own_window_when_another_holds_the_same_id() {
+    use crate::model::WindowInfo;
+    use crate::persist::{SessionSnapshot, Snapshot, WorkspaceSnapshot};
+    let (a, b, session) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let snapshot = |name: &str| Snapshot {
+        workspaces: vec![WorkspaceSnapshot {
+            id: Uuid::new_v4(),
+            name: name.to_owned(),
+            sessions: vec![SessionSnapshot::new(session, "/project")],
+            collapsed: None,
+        }],
+        ..Snapshot::default()
+    };
+    let mut library = WindowLibrary::new("/home/u");
+    for (id, name) in [(a, "a"), (b, "b")] {
+        library.insert_window(WindowInfo {
+            id,
+            name: name.to_owned(),
+        });
+        let mut store = AppStore::new();
+        store.restore(&snapshot(name), false);
+        library.open_window(id, store);
+    }
+    library.set_frontmost(Some(a));
+    let mut core = Core::new(
+        CoreConfig {
+            app: AppIdentity::from_recorded("0.1.0", None),
+            capabilities: Vec::new(),
+        },
+        CoreState {
+            library,
+            settings: AppSettings::default(),
+            persistence: None,
+        },
+    );
+    for window in [a, b] {
+        let store = core.library_mut().store_mut(window).unwrap();
+        store.select_session(None);
+        store.session_mut(session).unwrap().scratch_active = true;
+    }
+    let store = core.library_mut().store_mut(b).unwrap();
+    store.set_agent_indicator(
+        AgentIndicator {
+            status: AgentStatus::Blocked,
+            status_pane: Some(StatusPane::Left),
+            ..AgentIndicator::default()
+        },
+        session,
+    );
+    assert!(core.select_attention(b, session));
+    let scratch = |core: &Core, window| {
+        core.library()
+            .store(window)
+            .unwrap()
+            .session(session)
+            .unwrap()
+            .scratch_active
+    };
+    assert!(!scratch(&core, b), "the blocked pane is revealed in the chosen window");
+    assert!(scratch(&core, a), "the other window's copy is left alone");
+    assert_eq!(core.library().store(b).unwrap().selected_session_id(), Some(session));
+    assert_eq!(core.library().store(a).unwrap().selected_session_id(), None);
 }

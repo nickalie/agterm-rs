@@ -21,6 +21,8 @@ use std::time::Duration;
 
 use adw::prelude::*;
 use agterm_core::model::{AppStore, PendingAsk, Session, WindowLibrary};
+// the title with no session selected (upstream's `WindowTitleSync` fallback), the header bar's too
+use agterm_core::titlebar::UNTITLED;
 use agterm_core::{Core, WindowRequest, WindowSize, WindowState};
 use gtk::gdk;
 use uuid::Uuid;
@@ -31,9 +33,6 @@ use crate::picker::WindowPicker;
 use crate::sidebar::Sidebar;
 use crate::state::{self, AppState, Poster};
 use crate::titlebar::{Cover, Titlebar};
-
-/// The title with no session selected (upstream's `WindowTitleSync` fallback).
-const UNTITLED: &str = "Agterm";
 
 /// The window title: the active session's display name, then the window's custom name when it has one (upstream's
 /// `WindowTitleSync.title`).

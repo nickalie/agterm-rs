@@ -5,7 +5,7 @@
 //! it and closes the popover. While one is open the window's auto-follow holds still, and one whose list empties or
 //! whose button turns off closes itself.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -247,6 +247,8 @@ pub struct CommandPopover {
     separator: gtk::Separator,
     rest: gtk::ListBox,
     rows: Rc<RefCell<CustomCommandRows>>,
+    /// The keymap generation the rows were composed from; `None` before the first.
+    generation: Cell<Option<u64>>,
 }
 
 impl CommandPopover {
@@ -289,6 +291,7 @@ impl CommandPopover {
             separator,
             rest,
             rows,
+            generation: Cell::new(None),
         }
     }
 
@@ -297,11 +300,25 @@ impl CommandPopover {
         &self.button
     }
 
-    /// Lists `rows` (rebuilt only when they changed).
-    pub fn sync(&self, rows: CustomCommandRows, enabled: bool) {
+    /// Whether the rows need composing: the keymap changed since, or the popover is open (opening it settles, so the
+    /// run counts are read once per open, as upstream's popover body reads them, not on every settle).
+    fn wants_rows(&self, generation: u64) -> bool {
+        self.popover.is_visible() || self.generation.get() != Some(generation)
+    }
+
+    /// Lists the core's custom commands while the button is `enabled`; a disabled button closes the popover and reads
+    /// nothing.
+    pub fn sync(&self, core: &Core, enabled: bool) {
         if !enabled {
             self.popover.popdown();
+            return;
         }
+        let generation = core.keymap_generation();
+        if !self.wants_rows(generation) {
+            return;
+        }
+        self.generation.set(Some(generation));
+        let rows = core.custom_command_rows();
         if *self.rows.borrow() == rows {
             return;
         }

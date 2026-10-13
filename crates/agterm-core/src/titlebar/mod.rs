@@ -569,13 +569,14 @@ impl Core {
             return false;
         }
         store.select_session(Some(session));
-        self.note_user_activity(session);
+        self.note_window_activity(window);
         self.request_pane_focus(session);
         true
     }
 
     /// An attention row (upstream's `selectAttention`): its window is raised and made frontmost first when it is not
-    /// the active one, then the session is selected as user activity and the pane that set the status revealed.
+    /// the active one, then the session is selected as user activity and the pane that set the status revealed, all in
+    /// that window (a legacy snapshot may hold one session id in two open windows).
     pub fn select_attention(&mut self, window: Uuid, session: Uuid) -> bool {
         if !self.can_select_attention(window, session) {
             return false;
@@ -588,15 +589,15 @@ impl Core {
             .library_mut()
             .store_mut(window)
             .and_then(|store| store.select_session(Some(session)));
-        self.note_user_activity(session);
-        self.reveal_blocked_pane(session, indicator.as_ref());
+        self.note_window_activity(window);
+        self.reveal_blocked_pane_in(window, session, indicator.as_ref());
         true
     }
 
     /// A custom-commands row: run for the active session's focused pane, as the palette does, then the terminal takes
-    /// the keyboard back.
+    /// the keyboard back. Nothing runs under a cover (upstream's `runCustomCommand` gates on `uiActionsEnabled`).
     fn run_popover_command(&mut self, window: Uuid, id: Uuid) -> bool {
-        if self.modal_pending(window) {
+        if !self.ui_actions_enabled(window) {
             return false;
         }
         let Some(command) = self
@@ -616,7 +617,7 @@ impl Core {
         else {
             return false;
         };
-        self.note_user_activity(session);
+        self.note_window_activity(window);
         if let Some(reason) = self.run_custom_command(&command, window, session) {
             tracing::info!(name = %command.name, %reason, session = %uuid_string(session), "custom command did not start");
         }
