@@ -169,8 +169,9 @@ fn delete(core: &mut Core, target: Option<&str>) -> Outcome {
 }
 
 /// `window.resize`: positive `--width` and `--height`, clamped between the window minimum and the display; echoes the
-/// applied size. The frontend takes a maximized or full-screen window out of that state first (as `setFrame` does to a
-/// zoomed `NSWindow`), so the echoed size is the one the window takes.
+/// applied size. The frontend takes a maximized window out of that state first (as `setFrame` does to a zoomed
+/// `NSWindow`), so the echoed size is the one the window takes. A full-screen window stays in full screen, as upstream
+/// leaves it only through `window.fullscreen`: nothing is requested, and the echo is the size it keeps, the display's.
 fn resize(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let requested = match (args.width, args.height) {
         (Some(width), Some(height)) if width > 0 && height > 0 => WindowSize { width, height },
@@ -181,8 +182,12 @@ fn resize(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         }
     };
     let id = open_window_id(core, target)?;
-    let display = core.window_state(id).and_then(|state| state.display);
-    let size = clamp_size(requested, MIN_WINDOW_SIZE, display);
+    let state = core.window_state(id).unwrap_or_default();
+    let size = clamp_size(requested, MIN_WINDOW_SIZE, state.display);
+    if state.fullscreen {
+        let kept = state.display.unwrap_or(size);
+        return Ok(ControlResult::sized(uuid_string(id), kept.width, kept.height));
+    }
     core.request_window(WindowRequest::Resize { window: id, size });
     Ok(ControlResult::sized(uuid_string(id), size.width, size.height))
 }

@@ -335,6 +335,34 @@ fn resize_echoes_the_size_clamped_between_the_minimum_and_the_display() {
     );
 }
 
+/// Upstream's resize never leaves full screen (only `window.fullscreen` does), so a full-screen window gets no request
+/// and the echo is the size it keeps.
+#[test]
+fn resize_leaves_a_full_screen_window_in_full_screen() {
+    let (mut core, ids) = with_windows(1);
+    let size = |width, height| args(|a| (a.width, a.height) = (Some(width), Some(height)));
+    let display = WindowSize {
+        width: 1920,
+        height: 1080,
+    };
+    for (display, echoed) in [(Some(display), (1920, 1080)), (None, (900, 600))] {
+        core.set_window_state(
+            ids[0],
+            Some(WindowState {
+                fullscreen: true,
+                display,
+                ..WindowState::default()
+            }),
+        );
+        let response = window(&mut core, WindowCmd::Resize, None, size(900, 600));
+        assert_eq!(
+            response.result,
+            Some(json!({"id": wire(ids[0]), "width": echoed.0, "height": echoed.1}))
+        );
+        assert!(core.take_window_requests().is_empty());
+    }
+}
+
 #[test]
 fn resize_needs_a_positive_width_and_height() {
     let (mut core, _) = with_windows(1);

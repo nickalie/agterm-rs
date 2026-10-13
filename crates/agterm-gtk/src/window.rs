@@ -243,11 +243,10 @@ impl WindowUi {
         match request {
             WindowRequest::Raise(_) => self.present(),
             WindowRequest::Resize { size, .. } => {
-                // GTK keeps a default size aside while the window is maximized or full screen; leaving that state
-                // makes the window take the size now, as `setFrame` resizes a zoomed `NSWindow` at once
-                if window.is_fullscreen() {
-                    window.unfullscreen();
-                }
+                // GTK keeps a default size aside while the window is maximized; leaving that state makes the window
+                // take the size now, as `setFrame` resizes a zoomed `NSWindow` at once. Full screen is never left here:
+                // the core sends no resize for a window it reads in full screen, and one racing that read-back is only
+                // kept aside for when the window leaves full screen
                 if window.is_maximized() {
                     window.unmaximize();
                 }
