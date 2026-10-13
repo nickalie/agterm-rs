@@ -14,6 +14,8 @@ use agterm_core::zmx::screen::parse_screen;
 use agterm_core::zmx::support::is_executable_file;
 use agterm_host::{HostError, KillOutcome, LiveScreen, LiveSessionRecord, SessionHost};
 
+use crate::sweep::Sweeper;
+
 /// How long one invocation may run before it is terminated.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
 /// The bound of a listing on the exit path: a 55-daemon cold refresh measured 10-30 ms upstream, so the timeout plus
@@ -61,6 +63,8 @@ pub struct ZmxClient {
     socket_directory: String,
     timeout: Duration,
     runner: Runner,
+    /// Hangs up a killed shell's foreground job; `None` signals nothing.
+    sweeper: Option<Sweeper>,
 }
 
 impl ZmxClient {
@@ -83,6 +87,60 @@ impl ZmxClient {
             socket_directory: socket_directory.into(),
             timeout,
             runner,
+            sweeper: None,
+        }
+    }
+
+    /// This client with `sweeper` hanging up what a confirmed kill leaves running.
+    #[must_use]
+    pub fn with_sweeper(mut self, sweeper: Sweeper) -> Self {
+        self.sweeper = Some(sweeper);
+        self
+    }
+
+    /// The foreground job of each named daemon's shell, read before a kill so a confirmed one can hang them up.
+    /// `shells` saves the listing when the caller holds the leader pids. Empty without a sweeper or when the listing
+    /// fails.
+    pub(crate) fn foreground_jobs(
+        &self,
+        names: &[&str],
+        shells: Option<&[(String, i32)]>,
+        timeout: Option<Duration>,
+    ) -> Vec<(String, Vec<agterm_host::ProcessRecord>)> {
+        let Some(sweeper) = &self.sweeper else {
+            return Vec::new();
+        };
+        let listed;
+        let known = if let Some(shells) = shells {
+            shells
+        } else {
+            let Ok(records) = self.session_records(timeout) else {
+                return Vec::new();
+            };
+            listed = records
+                .into_iter()
+                .filter_map(|record| record.leader_pid.map(|pid| (record.name, pid)))
+                .collect::<Vec<_>>();
+            &listed
+        };
+        let wanted: Vec<(String, i32)> = known
+            .iter()
+            .filter(|(name, _)| names.contains(&name.as_str()))
+            .cloned()
+            .collect();
+        sweeper.capture(&wanted)
+    }
+
+    /// Hangs up the jobs whose daemon the kill output confirmed; a stale-socket cleanup leaves the shell, and its
+    /// job, running.
+    pub(crate) fn hang_up_confirmed(&self, jobs: &[(String, Vec<agterm_host::ProcessRecord>)], output: &str) {
+        let Some(sweeper) = &self.sweeper else {
+            return;
+        };
+        for (name, job) in jobs {
+            if kill_outcome(output, name) == KillOutcome::Killed {
+                sweeper.send(libc::SIGHUP, job);
+            }
         }
     }
 
@@ -172,12 +230,37 @@ impl SessionHost for ZmxClient {
         } else {
             &["kill", name]
         };
+        let jobs = self.foreground_jobs(&[name], None, None);
         match self.invoke(arguments, None, true, None) {
-            Ok(output) => kill_outcome(&output, name),
+            Ok(output) => {
+                self.hang_up_confirmed(&jobs, &output);
+                kill_outcome(&output, name)
+            }
             Err(error) => {
                 tracing::error!(name, %error, "zmx kill failed");
                 KillOutcome::Failed(error.to_string())
             }
+        }
+    }
+
+    fn kill_batch(&self, names: &[String]) -> bool {
+        ZmxClient::kill_batch(self, names, None)
+    }
+
+    fn foreground_job(&self, shell: i32) -> Option<Vec<agterm_host::ProcessRecord>> {
+        match &self.sweeper {
+            Some(sweeper) => sweeper.foreground_job(shell),
+            None => Some(Vec::new()),
+        }
+    }
+
+    fn job_running(&self, job: &[agterm_host::ProcessRecord]) -> bool {
+        self.sweeper.as_ref().is_some_and(|sweeper| sweeper.is_running(job))
+    }
+
+    fn end_job(&self, job: &[agterm_host::ProcessRecord]) {
+        if let Some(sweeper) = &self.sweeper {
+            sweeper.send(libc::SIGKILL, job);
         }
     }
 

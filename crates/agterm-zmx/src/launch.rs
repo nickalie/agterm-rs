@@ -106,10 +106,11 @@ impl Runtime {
         })
     }
 
-    /// A client of this instance's daemons.
+    /// A client of this instance's daemons, hanging up what a confirmed kill leaves running.
     #[must_use]
     pub fn client(&self) -> ZmxClient {
         ZmxClient::new(self.zmx_executable.clone(), socket_directory(&self.state_dir))
+            .with_sweeper(crate::sweep::Sweeper::live())
     }
 }
 

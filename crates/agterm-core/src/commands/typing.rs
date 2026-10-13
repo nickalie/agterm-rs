@@ -11,11 +11,13 @@ use agterm_proto::{ControlResult, Request, Response};
 use uuid::Uuid;
 
 use super::surface::{POLL_INTERVAL, no_scratch, no_split_pane, not_realized};
+use super::zmx::PaneSource;
 use super::{Outcome, args_of, parse_surface_pane, session_store, unknown_pane_id, with_id};
 use crate::Core;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
-use crate::model::{AppStore, PaneAddress, StatusPane, StatusReset};
+use crate::keystrokes::{self, KeystrokeSegment};
+use crate::model::{PaneAddress, StatusPane, StatusReset};
 
 /// How many times the main pane is probed after the first miss (upstream's 12 × 0.03 s).
 pub(crate) const ATTEMPTS: u32 = 12;
@@ -68,13 +70,15 @@ fn start(core: &mut Core, request: &Request) -> Result<Dispatched, ControlError>
                     no_scratch()
                 });
             }
-            Ok(Dispatched::done(typed_result(store, id, pane, &text, reset)))
+            Ok(Dispatched::done(typed_result(core, id, pane, &text, reset)))
         }
         None | Some(StatusPane::Left) => {
-            if type_into(store, id, StatusPane::Left, &text, reset) {
+            if type_into(core, id, StatusPane::Left, &text, reset)? {
                 return Ok(Dispatched::done(Ok(answer(id, StatusPane::Left))));
             }
-            if args.select == Some(true) {
+            if args.select == Some(true)
+                && let Some(store) = core.library_mut().store_for_session_mut(id)
+            {
                 store.select_session(Some(id));
             }
             let job = TypeJob {
@@ -99,8 +103,8 @@ fn answer(id: Uuid, pane: StatusPane) -> ControlResult {
 }
 
 /// Types into a pane with no wait: a terminal not up answers `session not realized`.
-fn typed_result(store: &mut AppStore, id: Uuid, pane: StatusPane, text: &str, reset: StatusReset) -> Outcome {
-    if type_into(store, id, pane, text, reset) {
+fn typed_result(core: &mut Core, id: Uuid, pane: StatusPane, text: &str, reset: StatusReset) -> Outcome {
+    if type_into(core, id, pane, text, reset)? {
         Ok(answer(id, pane))
     } else {
         Err(not_realized())
@@ -108,16 +112,73 @@ fn typed_result(store: &mut AppStore, id: Uuid, pane: StatusPane, text: &str, re
 }
 
 /// Types `text` into pane `pane` of session `id` as user input: the keystrokes, then the status clear typing
-/// carries (upstream's `injectAsUserInput`). False when the pane has no realized terminal.
-fn type_into(store: &mut AppStore, id: Uuid, pane: StatusPane, text: &str, reset: StatusReset) -> bool {
-    let typed = store
-        .session_mut(id)
-        .and_then(|session| session.pane_slot_mut(pane).get_mut())
-        .is_some_and(|surface| surface.type_text(text));
-    if typed {
+/// carries (upstream's `injectAsUserInput`). A pane whose zmx reported a role types through its daemon's acknowledged
+/// path instead (upstream's `coveredType`). False when the pane has no realized terminal.
+///
+/// # Errors
+///
+/// The daemon refused the input, or the pane may not be driven from here.
+fn type_into(
+    core: &mut Core,
+    id: Uuid,
+    pane: StatusPane,
+    text: &str,
+    reset: StatusReset,
+) -> Result<bool, ControlError> {
+    let source = {
+        let core: &Core = core;
+        let surface = core
+            .library()
+            .store_for_session(id)
+            .and_then(|store| store.session(id))
+            .and_then(|session| session.pane_slot(pane).get())
+            .filter(|surface| surface.is_realized());
+        surface.map(|surface| core.pane_source(surface, false))
+    };
+    let typed = match source {
+        Some(PaneSource::Refused(reason)) => return Err(ControlError::rejected(reason)),
+        Some(PaneSource::Daemon(name)) => {
+            type_through_daemon(core, &name, text)?;
+            true
+        }
+        Some(PaneSource::Surface) | None => core
+            .library_mut()
+            .store_for_session_mut(id)
+            .and_then(|store| store.session_mut(id))
+            .and_then(|session| session.pane_slot_mut(pane).get_mut())
+            .is_some_and(|surface| surface.type_text(text)),
+    };
+    if typed && let Some(store) = core.library_mut().store_for_session_mut(id) {
         store.note_typed_input(id, pane, text, reset);
     }
-    typed
+    Ok(typed)
+}
+
+/// Types `text` into daemon `name`: the head at once, the final Return of a submitted line after
+/// [`SUBMIT_GAP`](crate::keystrokes::SUBMIT_GAP). A failed final Return does not prove it was dropped: the daemon queues
+/// before it answers.
+fn type_through_daemon(core: &Core, name: &str, text: &str) -> Result<(), ControlError> {
+    let refused = || ControlError::rejected("the pane's zmx daemon did not accept the input");
+    let host = core.zmx.host().ok_or_else(refused)?;
+    let paced = keystrokes::paced(text);
+    let bytes: Vec<u8> = paced
+        .head
+        .into_iter()
+        .flat_map(|segment| match segment {
+            KeystrokeSegment::Text(run) => run.into_bytes(),
+            KeystrokeSegment::Return => vec![0x0D],
+        })
+        .collect();
+    if !bytes.is_empty() {
+        host.type_input(name, &bytes).map_err(|_| refused())?;
+    }
+    if paced.paced_return {
+        std::thread::sleep(keystrokes::SUBMIT_GAP);
+        host.type_input(name, &[0x0D]).map_err(|_| {
+            ControlError::rejected("text typed, but its final Return could not be confirmed; do not retype the text")
+        })?;
+    }
+    Ok(())
 }
 
 /// Probes again after [`POLL_INTERVAL`].
@@ -148,5 +209,8 @@ fn try_type(core: &mut Core, job: &TypeJob) -> Option<Outcome> {
         },
         None => StatusPane::Left,
     };
-    type_into(store, job.session, pane, &job.text, job.reset).then(|| Ok(answer(job.session, pane)))
+    match type_into(core, job.session, pane, &job.text, job.reset) {
+        Ok(typed) => typed.then(|| Ok(answer(job.session, pane))),
+        Err(error) => Some(Err(error)),
+    }
 }

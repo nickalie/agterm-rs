@@ -22,6 +22,7 @@ pub(crate) mod process;
 pub(crate) mod quick;
 pub(crate) mod relaunch;
 pub(crate) mod restart;
+pub(crate) mod restart_live;
 pub(crate) mod restore;
 pub(crate) mod search;
 pub(crate) mod session;
@@ -32,6 +33,7 @@ pub(crate) mod theme;
 pub(crate) mod typing;
 pub(crate) mod window;
 pub(crate) mod workspace;
+pub(crate) mod zmx;
 
 pub use panes::PaneReport;
 pub(crate) use surface::deferred;

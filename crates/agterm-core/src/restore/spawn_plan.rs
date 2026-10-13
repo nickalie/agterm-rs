@@ -6,12 +6,13 @@
 //! captures across that window. The seed takes the pane's live role, since `session.swap` moves a terminal and its
 //! pending payloads to the other slot together.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use uuid::Uuid;
 
 use crate::command_restore::{RestoreInputs, restore_plan, shell_quoted_line, should_restore};
 use crate::model::{Session, StatusPane, WindowLibrary};
+use crate::zmx::support::{Configuration, attach_command, settled};
 
 /// What a pane spawns with: the exec `command`, the `initial_input` typed into a login shell, and whether a command's
 /// exit holds on the "press any key" prompt (upstream's `LaunchSeed`). `command` and `initial_input` exclude each
@@ -21,10 +22,13 @@ pub struct LaunchSeed {
     pub command: Option<String>,
     pub initial_input: Option<String>,
     pub wait_after_command: bool,
+    /// Variables the terminal runs with on top of the pane's own environment: a wrapped pane's zmx configuration.
+    pub env: Vec<(String, String)>,
+    /// The pane attaches to its live-session daemon (upstream's `backedByZmx`), fixed at spawn as its disposition is.
+    pub live: bool,
 }
 
-/// The launch-wide inputs a seed is decided against (upstream's `LaunchSeedPolicy` and the ordinary and fallback
-/// dispositions; the wrapped live disposition comes with live sessions).
+/// The launch-wide inputs a seed is decided against (upstream's `LaunchSeedPolicy`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LaunchSeedPolicy {
     /// This launch replays captured commands and pins (`rerun` is active).
@@ -33,6 +37,12 @@ pub struct LaunchSeedPolicy {
     pub live_fell_back: bool,
     /// The program basenames never re-run (`restore-denylist.conf`).
     pub denylist: HashSet<String>,
+    /// The daemon names the launch reap saw alive, a scheduling hint only: `None` (the listing failed) paces every
+    /// replaying live pane, and a name that died between the list and the attach merely spawns unpaced.
+    pub running_names: Option<BTreeSet<String>>,
+    /// Daemons whose reset could not be confirmed at this launch: their panes attach with neither the captured replay
+    /// nor the durable command, so a process that may still run is not started twice.
+    pub suppressed_daemons: BTreeSet<String>,
 }
 
 impl LaunchSeedPolicy {
@@ -78,6 +88,69 @@ pub fn resolve_seed(session: &mut Session, pane: StatusPane, policy: &LaunchSeed
         command: plan.command,
         initial_input: plan.initial_input,
         wait_after_command: plan.wait_after_command,
+        ..LaunchSeed::default()
+    }
+}
+
+/// Pane `pane`'s seed under the wrapped live disposition `configuration` (upstream's `ZmxLaunch.surfaceSeed`): the
+/// attach, carrying the pane's captured argv as the payload a new daemon runs, else its durable creation command. The
+/// capture is consumed either way; a suppressed daemon attaches with neither. The pending `session.restore` pin is
+/// never read here: a daemon that survived runs its own program. The attach's exit always closes the pane.
+pub fn resolve_live_seed(
+    session: &mut Session,
+    pane: StatusPane,
+    policy: &LaunchSeedPolicy,
+    configuration: &Configuration,
+) -> LaunchSeed {
+    let suppressed = policy.suppressed_daemons.contains(&configuration.daemon_name);
+    let captured = session.take_pending_foreground(pane);
+    let replay = captured.filter(|_| !suppressed);
+    let creation = if replay.is_none() && !suppressed {
+        session.pane_launch(pane).and_then(|launch| launch.command.clone())
+    } else {
+        None
+    };
+    let denylist: Vec<&str> = policy.denylist.iter().map(String::as_str).collect();
+    LaunchSeed {
+        command: Some(settled(&attach_command(
+            configuration,
+            replay.as_deref(),
+            creation.as_deref(),
+            &denylist,
+        ))),
+        initial_input: None,
+        wait_after_command: false,
+        env: configuration.environment.clone().into_iter().collect(),
+        live: true,
+    }
+}
+
+/// [`should_pace`] under the wrapped live disposition `configuration`: a restored pane whose daemon the reap saw alive
+/// is attached to, which runs no program, and a suppressed one runs none either; otherwise it paces when its captured
+/// argv may replay, or else when it has a durable command.
+#[must_use]
+pub fn should_pace_live(
+    session: &Session,
+    pane: StatusPane,
+    policy: &LaunchSeedPolicy,
+    configuration: &Configuration,
+) -> bool {
+    if !session.was_restored {
+        return false;
+    }
+    let name = &configuration.daemon_name;
+    if policy.running_names.as_ref().is_some_and(|names| names.contains(name))
+        || policy.suppressed_daemons.contains(name)
+    {
+        return false;
+    }
+    let denylist: Vec<&str> = policy.denylist.iter().map(String::as_str).collect();
+    match session
+        .pane_restore(pane)
+        .and_then(|restore| restore.pending_foreground.as_deref())
+    {
+        Some(capture) => should_restore(capture, &denylist),
+        None => session.pane_launch(pane).is_some_and(|launch| launch.command.is_some()),
     }
 }
 
@@ -158,6 +231,7 @@ mod tests {
             restore_enabled,
             live_fell_back: false,
             denylist: denylist.iter().map(|name| (*name).to_owned()).collect(),
+            ..LaunchSeedPolicy::default()
         }
     }
 
@@ -185,7 +259,8 @@ mod tests {
             LaunchSeed {
                 command: Some("cat".to_owned()),
                 initial_input: None,
-                wait_after_command: true
+                wait_after_command: true,
+                ..LaunchSeed::default()
             }
         );
         assert!(!should_pace(&fresh, StatusPane::Left, &policy(true, &[])));
@@ -257,7 +332,7 @@ mod tests {
         let fallback = LaunchSeedPolicy {
             restore_enabled: false,
             live_fell_back: true,
-            denylist: HashSet::new(),
+            ..LaunchSeedPolicy::default()
         };
         assert_eq!(
             resolve_seed(&mut restored, StatusPane::Left, &fallback),

@@ -306,6 +306,7 @@ fn surface_spec(cwd: String, context: &PaneContext) -> SurfaceSpec {
             .collect(),
         wait_after_command: false,
         font_size: None,
+        live: false,
     }
 }
 

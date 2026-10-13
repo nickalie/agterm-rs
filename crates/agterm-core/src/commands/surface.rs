@@ -10,6 +10,7 @@ use agterm_proto::command::{BrowserCmd, ConfigCmd, QuickCmd, SessionCmd};
 use agterm_proto::{Args, Command, ControlResult, Request};
 use uuid::Uuid;
 
+use super::zmx::PaneSource;
 use super::{Outcome, args_of, parse_pane, parse_surface_pane, session_store, unknown_pane_id, with_id};
 use crate::Core;
 use crate::dispatch::Dispatched;
@@ -71,6 +72,7 @@ pub(crate) fn deferred(core: &mut Core, request: &Request) -> Option<Dispatched>
         Command::Session(SessionCmd::Type) => Some(super::typing::begin(core, request)),
         Command::Session(SessionCmd::Search) => Some(super::search::begin(core, request)),
         Command::Session(SessionCmd::Swap) => Some(super::panes::begin_swap(core, request)),
+        Command::Session(SessionCmd::Restart) => Some(super::restart::begin(core, request)),
         Command::Quick(QuickCmd::Type | QuickCmd::Text) => Some(super::quick::begin(core, request)),
         Command::Config(ConfigCmd::Reload) => Some(super::config::begin_reload(core)),
         Command::Browser(BrowserCmd::Clear) => Some(super::browser::begin_clear(core, request)),
@@ -165,17 +167,35 @@ fn text(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         PaneAddress::Pane(Some(pane)) => existing_pane(session, pane)?,
         PaneAddress::Pane(None) => session.on_screen_pane(),
     };
+    let core: &Core = core;
+    let session = core
+        .library()
+        .store_for_session(id)
+        .and_then(|store| store.session(id))
+        .ok_or_else(not_realized)?;
     let surface = pane_surface(session, pane)
         .filter(|surface| surface.is_realized())
         .ok_or_else(not_realized)?;
-    let scope = if all || lines.is_some() {
-        TextScope::All
-    } else {
-        TextScope::Screen
+    let full = all || lines.is_some();
+    let read_failed = || ControlError::rejected("failed to read surface buffer");
+    let text = match core.pane_source(surface, !full) {
+        PaneSource::Surface => surface
+            .read_text(if full { TextScope::All } else { TextScope::Screen })
+            .ok_or_else(read_failed)?,
+        PaneSource::Refused(reason) => return Err(ControlError::rejected(reason)),
+        // a covered pane's surface holds another grid's output, so its daemon answers
+        PaneSource::Daemon(name) => {
+            let host = core.zmx.host().ok_or_else(read_failed)?;
+            let screen = host.screen(&name, full).map_err(|_| read_failed())?;
+            if let Some(lines) = lines {
+                return Ok(ControlResult {
+                    pane: Some(pane.as_str().to_owned()),
+                    ..ControlResult::text(crate::zmx::screen::last_lines(&screen.text, lines))
+                });
+            }
+            screen.text
+        }
     };
-    let text = surface
-        .read_text(scope)
-        .ok_or_else(|| ControlError::rejected("failed to read surface buffer"))?;
     let text = match lines {
         Some(lines) => last_content_lines(&text, lines),
         None => text,
@@ -201,11 +221,20 @@ pub(crate) fn last_content_lines(text: &str, count: usize) -> String {
 
 /// `session.copy`: the main pane's selection as text, never through the clipboard.
 fn copy(core: &mut Core, target: Option<&str>, window: Option<&str>) -> Outcome {
-    let (store, id) = session_store(core, target, window)?;
-    let session = store.session(id).ok_or_else(not_realized)?;
+    let (_, id) = session_store(core, target, window)?;
+    let core: &Core = core;
+    let session = core
+        .library()
+        .store_for_session(id)
+        .and_then(|store| store.session(id))
+        .ok_or_else(not_realized)?;
     let surface = pane_surface(session, session.addressable_pane())
         .filter(|surface| surface.is_realized())
         .ok_or_else(not_realized)?;
+    // a covered pane's selection is of another grid's output
+    if let Some(refusal) = core.covered_refusal(surface) {
+        return Err(ControlError::rejected(refusal));
+    }
     let text = surface
         .read_selection()
         .ok_or_else(|| ControlError::rejected("no selection"))?;
@@ -227,6 +256,23 @@ fn binding_action(
         None | Some(StatusPane::Left) => session.addressable_pane(),
         Some(pane) => existing_pane(session, pane)?,
     };
+    // a covered pane's surface holds another grid's output, and its daemon drops what it sends
+    let refusal = {
+        let core: &Core = core;
+        core.library()
+            .store_for_session(id)
+            .and_then(|store| store.session(id))
+            .and_then(|session| pane_surface(session, pane))
+            .and_then(|surface| core.covered_refusal(surface))
+    };
+    if let Some(refusal) = refusal {
+        return Err(ControlError::rejected(refusal));
+    }
+    let session = core
+        .library_mut()
+        .store_for_session_mut(id)
+        .and_then(|store| store.session_mut(id))
+        .ok_or_else(not_realized)?;
     if !run_binding(session, pane, action) {
         return Err(not_realized());
     }

@@ -206,6 +206,22 @@ pub fn launch_disposition(
     }
 }
 
+/// The shell line that waits for the terminal's first resize before it runs: up to 20 polls 10 ms apart, until
+/// `stty size` reads something new.
+const SETTLE_PREFIX: &str = "s=$(stty size 2>/dev/null); i=0; \
+    while [ \"$i\" -lt 20 ] && [ \"$(stty size 2>/dev/null)\" = \"$s\" ]; do sleep 0.01; i=$((i + 1)); done; ";
+
+/// `line` (an attach, run by the terminal through `/bin/sh -c`) started once the terminal has its size. A Linux
+/// adaptation: libghostty spawns a surface's program at its 800×600 px initial size and applies the widget's size a
+/// moment later. A GTK pane is often narrower than that, so a daemon the attach creates would start its shell at the
+/// initial width and reflow the first prompt row (zsh's `PROMPT_SP` spaces fill it) into soft-wrapped rows on the
+/// shrink, which every `zmx screen` read then joins to the next line. Upstream's macOS views only ever grow from that
+/// size, which reflows nothing. An attach to a daemon that exists waits the same, harmlessly.
+#[must_use]
+pub fn settled(line: &str) -> String {
+    format!("{SETTLE_PREFIX}exec {line}")
+}
+
 /// The command a wrapped pane's surface runs: the attach, with the creation payload a new daemon runs (a replayable
 /// captured `argv` first, else the durable `creation_command`), behind the session host's client when there is one.
 /// A refused replay (denylisted, unreplayable) keeps the bare attach rather than falling back to the creation command.
@@ -445,6 +461,19 @@ mod tests {
                 &configuration.daemon_name
             ])
         );
+    }
+
+    #[test]
+    fn a_settled_line_runs_after_the_wait_in_place_of_the_shell() {
+        let line = settled("echo \"$0\" settled");
+        assert!(line.ends_with("; exec echo \"$0\" settled"), "{line}");
+        // without a terminal `stty` reads nothing new, so the wait runs out and the line still runs
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", &line, "attached"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "attached settled\n");
     }
 
     #[test]

@@ -58,6 +58,8 @@ pub struct Commit {
     pub debounced: Vec<DebouncedSave>,
     /// The soft closes whose grace timers to arm on the main loop.
     pub pending_closes: Vec<PendingCloseTimer>,
+    /// The pane identities removed for good, whose live-session daemons the caller ends.
+    pub finalized_panes: Vec<Uuid>,
 }
 
 /// The persistence of one window library, rooted at the state directory.
@@ -104,6 +106,40 @@ impl LibraryPersistence {
 
     fn window_store(&self, id: Uuid) -> PersistenceStore {
         PersistenceStore::new(self.window_path(id))
+    }
+
+    /// Window `id`'s snapshot as its file holds it, read without writing anything.
+    ///
+    /// # Errors
+    ///
+    /// The file could not be read or decoded.
+    pub fn read_window_checked(&self, id: Uuid) -> Result<Snapshot, super::snapshot::LoadError> {
+        self.window_store(id).load_checked()
+    }
+
+    /// The window files on disk the index does not list, sorted by id: a stale index hides a surviving window's file,
+    /// whose panes would otherwise read as unclaimed. `None` when the directory itself cannot be read, which is not
+    /// the answer "none". A missing directory holds none.
+    #[must_use]
+    pub fn stray_window_ids(&self, indexed: &std::collections::HashSet<Uuid>) -> Option<Vec<Uuid>> {
+        let entries = match fs::read_dir(self.windows_directory()) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(Vec::new()),
+            Err(_) => return None,
+        };
+        let mut strays: Vec<Uuid> = entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let path = entry.path();
+                if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                    return None;
+                }
+                parse_uuid_string(path.file_stem()?.to_str()?)
+            })
+            .filter(|id| !indexed.contains(id))
+            .collect();
+        strays.sort_by_key(|id| uuid_string(*id));
+        Some(strays)
     }
 
     /// Whether the last index write failed and no later one landed.
@@ -288,6 +324,7 @@ impl LibraryPersistence {
             events: effects.events,
             debounced,
             pending_closes: effects.pending_closes,
+            finalized_panes: effects.finalized_panes,
         }
     }
 
@@ -427,6 +464,8 @@ impl LibraryPersistence {
             for workspace in self.window_store(id).load().workspaces {
                 for session in workspace.sessions {
                     watermark::remove_all_rendered_text(&self.directory, session.id);
+                    // and its live-session daemons
+                    library.note_finalized_panes(session.pane_identity.into_iter().chain(session.split_pane_identity));
                 }
             }
         }

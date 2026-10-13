@@ -28,6 +28,7 @@ mod surface;
 mod theme;
 mod window;
 mod workspace;
+mod zmx;
 
 use agterm_proto::command::SessionCmd;
 use agterm_proto::{AppIdentity, Args, Command, Request, Response};

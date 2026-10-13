@@ -29,6 +29,7 @@ mod notifications;
 mod overlay;
 mod palette;
 mod pane;
+mod pane_lead;
 mod picker;
 mod popovers;
 mod process_table;
@@ -50,6 +51,7 @@ mod titlebar;
 mod welcome;
 mod window;
 mod windows;
+mod zmx_runtime;
 
 use std::cell::RefCell;
 use std::ffi::OsString;

@@ -126,6 +126,12 @@ fn format_listing(result: &Value) -> Option<String> {
     {
         return Some(format_hooks(&hooks));
     }
+    if let Some(zmx) = result
+        .get("zmx")
+        .and_then(|zmx| serde_json::from_value::<agterm_proto::ControlZmxInventory>(zmx.clone()).ok())
+    {
+        return Some(crate::zmx::format_zmx(&zmx));
+    }
     result
         .get("restore")
         .and_then(|restore| serde_json::from_value::<ControlRestoreStatus>(restore.clone()).ok())
@@ -134,7 +140,7 @@ fn format_listing(result: &Value) -> Option<String> {
 
 /// `restore.mode`: what the next launch will do and what this one did, on separate lines (upstream's
 /// `formatRestoreStatus`).
-fn format_restore_status(status: &ControlRestoreStatus) -> String {
+pub(crate) fn format_restore_status(status: &ControlRestoreStatus) -> String {
     let mut lines = vec![
         format!("configured: {} (next launch)", status.configured),
         format!(

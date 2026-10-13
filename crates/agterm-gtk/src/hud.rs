@@ -343,6 +343,7 @@ fn spawn(session: &Session, hud: &HudContext<'_>) -> TerminalSurface {
         env,
         wait_after_command: false,
         font_size,
+        live: false,
     });
     // the panel was measured at its creation size: a config reload restates it
     terminal.keep_start_font_size();

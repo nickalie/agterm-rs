@@ -427,6 +427,17 @@ impl WindowUi {
         self.sidebar.set_expanded(id, expanded);
     }
 
+    /// Puts a fresh terminal in place of a pane of this window's deck (see [`crate::deck::Deck::replace_pane`]).
+    pub fn replace_pane(
+        &mut self,
+        core: &mut Core,
+        replacement: &agterm_core::PaneReplacement,
+        poster: &Poster,
+    ) -> bool {
+        self.deck
+            .replace_pane(core, self.window_id, replacement, &self.context, poster)
+    }
+
     /// Renders the model: the deck's pages, the sidebar's rows, visibility and width, and the title.
     pub fn sync(&mut self, core: &mut Core, poster: &Poster) {
         let id = self.window_id;

@@ -11,7 +11,8 @@
 //! - [`reset`]: Reset Live Sessions: selection, the one-shot marker, next-launch narrowing and the outcome;
 //! - [`build_record`]: when this state directory first launched the bundled zmx build;
 //! - [`lead`]: which client of a daemon leads its grid, from the role reports in terminal titles;
-//! - [`screen`]: the `zmx screen` reply.
+//! - [`screen`]: the `zmx screen` reply;
+//! - [`sweep`]: the foreground job a killed daemon's shell leaves behind.
 
 pub mod build_record;
 pub mod inventory;
@@ -21,6 +22,7 @@ pub mod replay;
 pub mod reset;
 pub mod screen;
 pub mod support;
+pub mod sweep;
 
 use std::path::{Component, Path, PathBuf};
 

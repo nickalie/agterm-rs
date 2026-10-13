@@ -700,10 +700,11 @@ impl AppStore {
         }
         for session in &mut workspace.sessions {
             session.teardown_surfaces();
-            // the session is gone, and its rendered text with it
+            // the session is gone, and its rendered text and live-session daemons with it
             self.outbox
                 .removed_watermarks
                 .push(WatermarkRemoval::Session(session.id()));
+            self.outbox.finalize_panes(session);
             self.session_recency.remove(session.id());
         }
         self.drop_focus_member(id);
@@ -884,8 +885,9 @@ impl AppStore {
         };
         self.record_recent_closed_session(&removed, &place, Uuid::new_v4());
         removed.teardown_surfaces();
-        // the session is gone, and its rendered text with it
+        // the session is gone, and its rendered text and live-session daemons with it
         self.outbox.removed_watermarks.push(WatermarkRemoval::Session(id));
+        self.outbox.finalize_panes(&removed);
         self.session_recency.remove(id);
         if was_active {
             let target = self.close_reselection_target(at);

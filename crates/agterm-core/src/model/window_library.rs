@@ -60,6 +60,8 @@ pub struct LibraryEffects {
     pub recent_closed: Vec<RecentClosedChange>,
     /// Rendered text watermarks to delete from the state dir.
     pub removed_watermarks: Vec<WatermarkRemoval>,
+    /// Pane identities removed for good, whose live-session daemons are ended (upstream's `paneFinalizer`).
+    pub finalized_panes: Vec<Uuid>,
 }
 
 /// The app-global owner of the window set.
@@ -84,6 +86,8 @@ pub struct WindowLibrary {
     pending_recent_closed: Vec<(u64, RecentClosedChange)>,
     /// Rendered text watermarks of removed windows' sessions and of retired stores, waiting for the next drain.
     pending_removed_watermarks: Vec<WatermarkRemoval>,
+    /// Pane identities of removed windows' sessions and of retired stores, removed for good, for the next drain.
+    pending_finalized_panes: Vec<Uuid>,
     /// Session asks that ended in stores no longer open, for [`WindowLibrary::take_ended_asks`].
     pending_ended_asks: Vec<EndedAsk>,
 }
@@ -359,6 +363,8 @@ impl WindowLibrary {
             // from its file by the persistence
             self.pending_removed_watermarks
                 .extend(store.sessions().map(|session| WatermarkRemoval::Session(session.id())));
+            self.pending_finalized_panes
+                .extend(store.sessions().flat_map(Session::locally_managed_pane_identities));
             self.retire_store(id, store);
         }
         self.push_library_event(id, ModelEvent::bare(agterm_proto::EventKind::TreeChanged));
@@ -376,6 +382,7 @@ impl WindowLibrary {
         let mut outbox = store.take_outbox();
         self.pending_recent_closed.extend(outbox.take_stamped_recent_closed());
         self.pending_removed_watermarks.append(&mut outbox.removed_watermarks);
+        self.pending_finalized_panes.append(&mut outbox.finalized_panes);
         self.pending_events.extend(
             outbox
                 .into_stamped_events()
@@ -434,12 +441,14 @@ impl WindowLibrary {
         let mut cancelled_saves = Vec::new();
         let mut pending_closes = Vec::new();
         let mut removed_watermarks = std::mem::take(&mut self.pending_removed_watermarks);
+        let mut finalized_panes = std::mem::take(&mut self.pending_finalized_panes);
         for id in self.windows.iter().map(|info| info.id) {
             let Some(store) = self.stores.get_mut(&id) else {
                 continue;
             };
             let mut outbox = store.take_outbox();
             removed_watermarks.append(&mut outbox.removed_watermarks);
+            finalized_panes.append(&mut outbox.finalized_panes);
             pending_closes.extend(
                 std::mem::take(&mut outbox.pending_closes)
                     .into_iter()
@@ -472,7 +481,14 @@ impl WindowLibrary {
             cancelled_saves,
             recent_closed: recent.into_iter().map(|(_, change)| change).collect(),
             removed_watermarks,
+            finalized_panes,
         }
+    }
+
+    /// Records pane identities removed for good outside any open store (a closed window deleted from its file), for
+    /// the next drain.
+    pub fn note_finalized_panes(&mut self, panes: impl IntoIterator<Item = Uuid>) {
+        self.pending_finalized_panes.extend(panes);
     }
 
     // MARK: - Pending closes and Open Recent (upstream's `WindowLibrary+RecentClosed.swift`)

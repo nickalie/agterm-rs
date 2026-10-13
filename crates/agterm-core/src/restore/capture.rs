@@ -23,25 +23,53 @@ use agterm_host::{ProcessTable, Surface};
 use crate::command_restore::{PaneForeground, ProcessGroupMember, group_descent_candidates, pane_foreground};
 use crate::model::Session;
 
+/// A live pane's foreground group by its pane token.
+pub type LiveGroup<'a> = &'a dyn Fn(&str) -> Option<i32>;
+
 /// Reads foreground processes through the frontend's process table.
 pub struct ForegroundReader<'a> {
     table: &'a dyn ProcessTable,
     /// The user's `$SHELL` basename, widening shell recognition to a non-standard login shell.
     shell: Option<&'a str>,
+    /// A live pane's foreground group by its pane token: its daemon's shell holds the terminal, not the pane's own
+    /// surface, whose foreground is the attach client.
+    live: Option<LiveGroup<'a>>,
 }
 
 impl<'a> ForegroundReader<'a> {
     #[must_use]
     pub fn new(table: &'a dyn ProcessTable, shell: Option<&'a str>) -> Self {
-        Self { table, shell }
+        Self {
+            table,
+            shell,
+            live: None,
+        }
     }
 
-    /// The `tree`'s read of foreground group `pgid` (upstream's `ForegroundProcess.running`): the program or the shell
-    /// holding the foreground; `None` when nothing in the group can be read.
+    /// This reader with `live` reading a live pane's foreground group from its pane token (upstream's
+    /// `ZmxForegroundResolver`); without it a live pane reads nothing.
     #[must_use]
-    pub fn running(&self, pgid: i32) -> Option<PaneForeground> {
+    pub fn with_live(mut self, live: LiveGroup<'a>) -> Self {
+        self.live = Some(live);
+        self
+    }
+
+    /// The foreground group of `surface`'s terminal: a live pane's through its daemon, any other's as libghostty
+    /// reports it; `None` while it is not realized or cannot be read.
+    #[must_use]
+    pub fn group_of(&self, surface: &dyn Surface) -> Option<i32> {
+        if surface.is_live_session() {
+            return self.live.and_then(|live| live(surface.pane_token()));
+        }
+        foreground_group(surface)
+    }
+
+    /// The process that holds group `pgid`'s foreground and what it is (upstream's `ForegroundProcess.observed`):
+    /// the leader, else the first readable member of its descent.
+    #[must_use]
+    pub fn observed(&self, pgid: i32) -> Option<(i32, PaneForeground)> {
         if let Some(argv) = self.table.argv(pgid) {
-            return pane_foreground(&argv, self.shell);
+            return pane_foreground(&argv, self.shell).map(|foreground| (pgid, foreground));
         }
         let members: Vec<ProcessGroupMember> = self
             .table
@@ -52,10 +80,17 @@ impl<'a> ForegroundReader<'a> {
                 ppid: stat.ppid,
             })
             .collect();
-        group_descent_candidates(pgid, &members)
+        let (member, argv) = group_descent_candidates(pgid, &members)
             .into_iter()
-            .find_map(|pid| self.table.argv(pid))
-            .and_then(|argv| pane_foreground(&argv, self.shell))
+            .find_map(|candidate| self.table.argv(candidate).map(|argv| (candidate, argv)))?;
+        pane_foreground(&argv, self.shell).map(|foreground| (member, foreground))
+    }
+
+    /// The `tree`'s read of foreground group `pgid` (upstream's `ForegroundProcess.running`): the program or the shell
+    /// holding the foreground; `None` when nothing in the group can be read.
+    #[must_use]
+    pub fn running(&self, pgid: i32) -> Option<PaneForeground> {
+        self.observed(pgid).map(|(_, foreground)| foreground)
     }
 
     /// The restore capture's read of foreground group `pgid` (upstream's `ForegroundProcess.command`): the leader's
@@ -76,13 +111,13 @@ impl<'a> ForegroundReader<'a> {
     /// [`ForegroundReader::running`] for a terminal: its foreground group as libghostty reports it.
     #[must_use]
     pub fn running_in(&self, surface: &dyn Surface) -> Option<PaneForeground> {
-        self.running(foreground_group(surface)?)
+        self.running(self.group_of(surface)?)
     }
 
     /// [`ForegroundReader::command`] for a terminal.
     #[must_use]
     pub fn command_in(&self, surface: &dyn Surface) -> Option<Vec<String>> {
-        self.command(foreground_group(surface)?)
+        self.command(self.group_of(surface)?)
     }
 }
 

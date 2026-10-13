@@ -166,8 +166,25 @@ pub enum KillOutcome {
     Failed(String),
 }
 
+/// One process of a terminal's foreground job, as a sweep matches it again later: by pid AND start time, so a pid the
+/// kernel recycled meanwhile is never signalled (upstream's `ProcessRecord`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProcessRecord {
+    pub pid: i32,
+    /// When the process started, in the platform's own clock (Linux: clock ticks since boot).
+    pub started: u64,
+    /// Its process group.
+    pub group: i32,
+    /// The foreground process group of its controlling terminal; zero or negative without one.
+    pub foreground: i32,
+}
+
 /// The daemons that keep live sessions running while no app is attached (zmx). Called from the main thread and
 /// from worker threads, hence `Send + Sync`.
+///
+/// A confirmed [`SessionHost::kill`] or [`SessionHost::kill_batch`] also hangs up the foreground job the killed
+/// daemon's shell leaves running, as closing a terminal would have (upstream's `ProcessSweeper`): the daemon signals
+/// only the shell's own process group, and a pane's program runs in another.
 pub trait SessionHost: Send + Sync {
     /// Whether the host binary is staged and usable.
     fn is_available(&self) -> bool;
@@ -197,6 +214,32 @@ pub trait SessionHost: Send + Sync {
     ///
     /// The daemon did not queue the bytes.
     fn type_input(&self, name: &str, bytes: &[u8]) -> Result<(), HostError>;
+
+    /// Kills every daemon of `names` in one forced batch (the pane finalizer and the reset's launch kill). The result
+    /// is diagnostic only: a batch failing part-way has already reached some daemons.
+    fn kill_batch(&self, names: &[String]) -> bool {
+        // every name is killed, a failed one included
+        let killed: Vec<bool> = names
+            .iter()
+            .map(|name| matches!(self.kill(name, true), KillOutcome::Killed))
+            .collect();
+        killed.into_iter().all(|killed| killed)
+    }
+
+    /// The foreground job of the terminal the shell `shell` leads, for a caller that waits for it to end; empty when
+    /// the shell holds its own foreground. `None` when the process table cannot be read: a caller waiting for the job
+    /// must not take that for "no job". A host that never signals jobs answers empty.
+    fn foreground_job(&self, _shell: i32) -> Option<Vec<ProcessRecord>> {
+        Some(Vec::new())
+    }
+
+    /// Whether any process of `job` still runs; an unreadable table counts as running.
+    fn job_running(&self, _job: &[ProcessRecord]) -> bool {
+        false
+    }
+
+    /// Kills what is left of `job` (SIGKILL), for a restart whose old program ignored the hangup.
+    fn end_job(&self, _job: &[ProcessRecord]) {}
 }
 
 /// A helper process to start.
@@ -273,4 +316,16 @@ pub trait ProcessTable {
 
     /// Every live member of process group `pgrp`; empty when none can be read.
     fn group(&self, pgrp: i32) -> Vec<ProcessStat>;
+
+    /// The foreground process group of the terminal process `pid` controls (`tpgid`): how a live pane's foreground is
+    /// read through its daemon's shell, whose terminal the pane's own surface does not hold. `None` when the process
+    /// is gone, has no controlling terminal, or cannot be read.
+    fn terminal_foreground(&self, _pid: i32) -> Option<i32> {
+        None
+    }
+
+    /// The working directory of process `pid`; `None` when it cannot be read (another user's process).
+    fn working_directory(&self, _pid: i32) -> Option<String> {
+        None
+    }
 }

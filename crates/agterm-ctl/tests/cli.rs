@@ -458,6 +458,7 @@ SUBCOMMANDS:
   pick                    Open, poll, or cancel a native fuzzy picker.
   ask                     Open, poll, or cancel a themed question dialog.
   restore                 Restore-running-command commands.
+  zmx                     Inspect and manage the daemons behind live sessions.
   terminfo                The terminal's terminfo entry on other hosts.
   clipboard               The clipboard of the terminals showing this pane.
   version                 Print the version of the app serving the socket.
@@ -840,6 +841,81 @@ fn restore_prints_its_note_and_background_and_restart_send_their_args() -> TestR
             (Some(0), printed, String::new()),
             "{args:?}"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn zmx_commands_send_their_args_and_print_the_inventory() -> TestResult {
+    let dir = short_dir()?;
+    let restore = serde_json::json!({"configured": "live", "requestedAtLaunch": "live", "active": "live",
+                                     "restartRequired": false});
+    let cases: [(&[&str], serde_json::Value, serde_json::Value, String); 4] = [
+        (
+            &["zmx", "list"],
+            serde_json::json!({"cmd": "zmx.list"}),
+            serde_json::json!({"zmx": {"restore": restore, "inventoryComplete": true, "entries": []}}),
+            "configured: live (next launch)\nthis launch: requested live, active live\nno daemons\n".to_owned(),
+        ),
+        (
+            &["zmx", "screen", "agterm-a", "--lines", "3"],
+            serde_json::json!({"cmd": "zmx.screen", "args": {"name": "agterm-a", "lines": 3}}),
+            serde_json::json!({"text": "a\nb\nc"}),
+            "a\nb\nc\n".to_owned(),
+        ),
+        (
+            &[
+                "zmx", "kill", "--pane", "right", "--force", "--target", "s1", "--window", "w1",
+            ],
+            serde_json::json!({"cmd": "zmx.kill", "target": "s1",
+                               "args": {"force": true, "window": "w1", "pane": "right"}}),
+            serde_json::json!({"id": NEW_ID, "text": "killed agterm-a", "pane": "right"}),
+            "killed agterm-a\n".to_owned(),
+        ),
+        (
+            &["zmx", "reset", "--force"],
+            serde_json::json!({"cmd": "zmx.reset", "args": {"force": true}}),
+            serde_json::json!({"text": "1 live session will be reset.",
+                               "liveReset": {"sessions": 1, "panes": 1, "pending": true}}),
+            "1 live session will be reset.\n".to_owned(),
+        ),
+    ];
+    for (index, (args, expected, result, printed)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("{index}.sock"));
+        let _server = scripted(&socket, expected, result)?;
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(0), printed, String::new()),
+            "{args:?}"
+        );
+    }
+    let socket = dir.path().join("absent.sock");
+    let refusals: [(&[&str], &str); 5] = [
+        (
+            &["zmx", "kill", "--pane", "left", "--target", "s1"],
+            "--force is required to destroy a running process",
+        ),
+        (
+            &["zmx", "kill", "--pane", "middle", "--force", "--target", "s1"],
+            "--pane must be left/primary/top or right/split/bottom",
+        ),
+        (
+            &["zmx", "kill", "--pane", "left", "--force", "--target", "active"],
+            "--target must name a session; 'active' is not accepted here",
+        ),
+        (
+            &["zmx", "reset"],
+            "--force is required to end the processes in the affected live sessions",
+        ),
+        (
+            &["zmx", "screen", "agterm-a", "--all", "--lines", "2"],
+            "use either --all or --lines, not both",
+        ),
+    ];
+    for (args, message) in refusals {
+        let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, args)?);
+        assert_eq!((code, stdout.as_str()), (Some(64), ""), "{args:?}");
+        assert!(stderr.starts_with(&format!("Error: {message}\nUsage: ")), "{stderr}");
     }
     Ok(())
 }

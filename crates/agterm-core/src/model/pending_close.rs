@@ -737,6 +737,7 @@ impl AppStore {
             self.outbox
                 .removed_watermarks
                 .push(WatermarkRemoval::Session(session.id()));
+            self.outbox.finalize_panes(&session);
             self.session_recency.remove(session.id());
         }
     }

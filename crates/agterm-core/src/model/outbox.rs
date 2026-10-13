@@ -95,6 +95,8 @@ pub struct Outbox {
     pub recent_closed: Vec<RecentClosedChange>,
     /// Rendered text watermarks to delete.
     pub removed_watermarks: Vec<WatermarkRemoval>,
+    /// The pane identities removed for good (upstream's `paneFinalizer`): their live-session daemons are ended.
+    pub finalized_panes: Vec<Uuid>,
     /// Each event's place in the app-wide emission order ([`next_emission`]), parallel to `events`.
     emissions: Vec<u64>,
     /// The same for `recent_closed`, so the library can order them against its own changes.
@@ -111,6 +113,12 @@ impl Outbox {
             && !self.cancel_debounced_save
             && self.recent_closed.is_empty()
             && self.removed_watermarks.is_empty()
+            && self.finalized_panes.is_empty()
+    }
+
+    /// Records every pane identity of `session` as removed for good.
+    pub(crate) fn finalize_panes(&mut self, session: &super::Session) {
+        self.finalized_panes.extend(session.locally_managed_pane_identities());
     }
 
     pub(crate) fn emit(&mut self, event: ModelEvent) {

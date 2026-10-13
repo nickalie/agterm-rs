@@ -34,8 +34,10 @@ use uuid::Uuid;
 use crate::ask_dialog::SessionAskLayer;
 use crate::hud::{HudLayer, HudPlacement, LayerView};
 use crate::overlay::{PaneOverlayTerminal, PanePage, ProgramLayer, ProgramPlacement};
+use crate::pane_lead::LeadCoverWidget;
 use crate::state::{self, AppState, Poster};
 use crate::surface::TerminalSurface;
+use agterm_core::LeadCover;
 
 /// The separator line between the split's panes, in pixels.
 const SEPARATOR: i32 = 1;
@@ -477,6 +479,8 @@ struct StackLayout {
     program_placement: Option<ProgramPlacement>,
     /// The pane overlays' terminals and the pane each covers.
     pane_overlays: Vec<(gtk::Widget, Slot)>,
+    /// The lead covers and the pane each lies over ([`crate::pane_lead`]).
+    lead_covers: Vec<(gtk::Widget, Slot)>,
     /// Where the page's geometry goes: its session and the main loop.
     reports: Option<(Uuid, Poster)>,
     /// The geometry last reported.
@@ -526,7 +530,12 @@ impl StackLayout {
                 ask_rect(self.ask_scope, panes, &geometry, width, height)
             } else if Some(&widget) == self.program_frame.as_ref() {
                 program_rect(self.program_placement, width, height)
-            } else if let Some((_, slot)) = self.pane_overlays.iter().find(|(overlay, _)| *overlay == widget) {
+            } else if let Some((_, slot)) = self
+                .pane_overlays
+                .iter()
+                .chain(&self.lead_covers)
+                .find(|(overlay, _)| *overlay == widget)
+            {
                 pane_rect(panes, &geometry, *slot).unwrap_or(Rect::full(width, height))
             } else {
                 Rect::full(width, height)
@@ -682,6 +691,7 @@ mod imp {
             layout.program_backdrop = None;
             layout.program_frame = None;
             layout.pane_overlays.clear();
+            layout.lead_covers.clear();
         }
     }
 
@@ -757,6 +767,8 @@ pub struct PaneView {
     plan: Option<PanePlan>,
     /// The page shows the dashboard's cells ([`PaneView::apply_grid`]).
     in_grid: bool,
+    /// The lead covers by pane position, created once a pane first needs one, above every terminal.
+    covers: Vec<(Slot, LeadCoverWidget)>,
 }
 
 impl PaneView {
@@ -807,6 +819,7 @@ impl PaneView {
             pane_pages: Vec::new(),
             plan: None,
             in_grid: false,
+            covers: Vec::new(),
         };
         view.orient_divider(SplitAxis::default());
         view
@@ -825,10 +838,81 @@ impl PaneView {
         if scratch {
             widget.insert_before(&self.stack, Some(self.program.backdrop()));
         } else {
-            widget.insert_before(&self.stack, Some(&self.divider));
+            widget.insert_before(&self.stack, Some(&self.panes_ceiling()));
         }
         set_pane_visible(&terminal, false);
         self.panes.push(Pane { token, terminal });
+    }
+
+    /// The child the panes' terminals go under: the first lead cover, else the divider.
+    fn panes_ceiling(&self) -> gtk::Widget {
+        self.covers.first().map_or_else(
+            || self.divider.clone().upcast(),
+            |(_, cover)| cover.widget().clone().upcast(),
+        )
+    }
+
+    /// Puts `terminal` in place of the one carrying `token`, keeping the token, the position in the stack and the
+    /// visibility, and hands back the replaced terminal, whose widget is already out; `None` (and nothing changed)
+    /// without such a terminal.
+    pub fn replace(&mut self, token: &str, terminal: TerminalSurface) -> Option<TerminalSurface> {
+        let pane = self.panes.iter_mut().find(|pane| pane.token == token)?;
+        terminal
+            .widget()
+            .insert_before(&self.stack, Some(pane.terminal.widget()));
+        set_pane_visible(&terminal, pane.terminal.is_deck_visible());
+        let old = std::mem::replace(&mut pane.terminal, terminal);
+        old.widget().unparent();
+        // the layout points at widgets: the page's next sync re-reads them
+        Some(old)
+    }
+
+    /// Lays a lead cover over each laid-out pane that `covers` says needs one while the page is shown, and marks every
+    /// terminal of `covers` covered or not, so a key press on a covered one takes it over.
+    pub fn sync_lead_covers(&mut self, covers: &[(String, Option<LeadCover>)], shown: bool) {
+        let mut placed = Vec::new();
+        for (token, cover) in covers {
+            let Some(terminal) = self.terminal(token).cloned() else {
+                continue;
+            };
+            terminal.set_lead_covered(cover.is_some());
+            let slot = self
+                .plan
+                .as_ref()
+                .filter(|_| !self.in_grid)
+                .and_then(|plan| plan.slot_of(token).filter(|slot| plan.shows(*slot)));
+            let Some(slot) = slot.filter(|slot| *slot != Slot::Scratch) else {
+                continue;
+            };
+            if cover.is_none() && !self.covers.iter().any(|(known, _)| *known == slot) {
+                continue;
+            }
+            let widget = self.cover_for(slot, &terminal);
+            widget.show(cover.as_ref(), shown);
+            placed.push((widget.widget().clone().upcast::<gtk::Widget>(), slot));
+        }
+        for (slot, cover) in &self.covers {
+            if !placed.iter().any(|(_, placed)| placed == slot) {
+                cover.show(None, false);
+            }
+        }
+        self.stack.layout().lead_covers = placed;
+        self.stack.queue_allocate();
+    }
+
+    /// The cover of pane position `slot`, created above every terminal the first time; a click on it focuses
+    /// `terminal`'s widget.
+    fn cover_for(&mut self, slot: Slot, terminal: &TerminalSurface) -> &LeadCoverWidget {
+        let known = self.covers.iter().position(|(known, _)| *known == slot);
+        let index = known.unwrap_or_else(|| {
+            let cover = LeadCoverWidget::new();
+            cover.widget().insert_before(&self.stack, Some(&self.divider));
+            self.covers.push((slot, cover));
+            self.covers.len() - 1
+        });
+        let cover = &self.covers[index].1;
+        cover.set_target(terminal);
+        cover
     }
 
     /// The terminal carrying `token`.
