@@ -17,10 +17,10 @@ use crate::Core;
 use crate::error::ControlError;
 use crate::keymap::failure;
 use crate::keymap::{
-    CommandContext, CommandPane, CustomCommand, Keymap, KeymapDiagnostic, ensure_starter_keymap, linux_defaults,
-    load_keymap, project,
+    CommandContext, CommandPane, CustomCommand, Keymap, KeymapDiagnostic, SurfaceOwner, TypingSurface,
+    ensure_starter_keymap, linux_defaults, load_keymap, project,
 };
-use crate::model::StatusPane;
+use crate::model::{OverlayPane, Session, StatusPane};
 use crate::pane_env::uuid_string;
 use crate::resolve::Resolver;
 
@@ -148,6 +148,81 @@ impl Core {
             .and_then(|store| store.session(session))
             .map(|state| state.local_working_directory(&context.session_pwd, self.library().home()));
         self.spawn_custom_command(command, &context, cwd)
+    }
+
+    /// Runs `command` fired by a chord typed in window `window` (upstream's `handleKeyDown` `.fired` arm): context from
+    /// the terminal that held the keyboard (`runFromKeybind`/`runFromSessionlessSurface`), so a chord typed in a
+    /// zoomed, split, scratch or overlay terminal acts for that terminal's session and pane and reads its selection;
+    /// with no session terminal holding it (the quick terminal, a page, a HUD, an emptied window) the active session's
+    /// focused pane as the palette runs it, else the sessionless launcher (`runNoSurface`).
+    pub fn run_custom_command_from_keybind(
+        &mut self,
+        command: &CustomCommand,
+        window: Option<Uuid>,
+        typing: Option<TypingSurface>,
+    ) {
+        if let Some(typing) = typing
+            && let Some((window, session, pane)) = self.typing_pane(window, &typing.owner)
+        {
+            let selection = typing.selection.unwrap_or_default();
+            let _ = self.run_custom_command_in(command, window, session, pane, Some(selection));
+            return;
+        }
+        let active = self.library().active_window_id();
+        let session = active
+            .and_then(|window| self.library().store(window))
+            .and_then(|store| store.active_session())
+            .map(Session::id);
+        match (active, session) {
+            (Some(window), Some(session)) => {
+                let _ = self.run_custom_command(command, window, session);
+            }
+            _ => self.run_custom_command_sessionless(command, active),
+        }
+    }
+
+    /// The window, session and `$AGT_PANE` of a typing terminal; `None` when no open window holds it any more. The
+    /// window it was typed in is asked first, as a session id can repeat across windows. A pane terminal names its
+    /// pane by its token's current role; an overlay names the pane underneath it (upstream's `sessionlessPane`): the
+    /// scratch whenever one is up, else a pane overlay's own pane, else the session's focused pane.
+    fn typing_pane(&self, window: Option<Uuid>, owner: &SurfaceOwner) -> Option<(Uuid, Uuid, CommandPane)> {
+        let session = owner.session();
+        let library = self.library();
+        let holds = |window: &Uuid| {
+            library
+                .store(*window)
+                .is_some_and(|store| store.session(session).is_some())
+        };
+        let window = window
+            .filter(holds)
+            .or_else(|| library.open_ids().into_iter().find(holds))?;
+        let state = library.store(window)?.session(session)?;
+        let pane = match owner {
+            SurfaceOwner::Pane { token, .. } => match state.pane_role_for_token(token)? {
+                StatusPane::Left => CommandPane::Left,
+                StatusPane::Right => CommandPane::Right,
+                StatusPane::Scratch => CommandPane::Scratch,
+            },
+            SurfaceOwner::Overlay { generation, pane, .. } => {
+                let overlay_pane = if *pane {
+                    Some(state.pane_overlays.pane_of(*generation)?)
+                } else if state.overlay.generation == *generation && state.overlay.program_active() {
+                    None
+                } else {
+                    return None;
+                };
+                let right =
+                    overlay_pane.map_or_else(|| state.focuses_split(), |pane| matches!(pane, OverlayPane::Right));
+                if state.scratch_active {
+                    CommandPane::Scratch
+                } else if right {
+                    CommandPane::Right
+                } else {
+                    CommandPane::Left
+                }
+            }
+        };
+        Some((window, session, pane))
     }
 
     /// A chord in a window with no session to act for (upstream's `spawnSessionless`): only a command naming no

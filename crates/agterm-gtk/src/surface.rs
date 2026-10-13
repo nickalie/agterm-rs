@@ -24,6 +24,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
+use agterm_core::keymap::{SurfaceOwner, TypingSurface};
 use agterm_core::keystrokes::{self, SUBMIT_GAP};
 use agterm_core::link_policy::ClickOrigin;
 use agterm_core::model::{SearchReport, StatusKeystroke};
@@ -158,6 +159,8 @@ struct Inner {
     /// The start size is the terminal's for its whole life (a HUD, measured at it; upstream's `restoreHudFontSize`):
     /// every config re-apply restates it.
     keeps_start_font_size: Cell<bool>,
+    /// Whose terminal this is (a session pane or a program overlay); `None` for the quick terminal, a HUD, an ask.
+    owner: RefCell<Option<SurfaceOwner>>,
 }
 
 thread_local! {
@@ -186,6 +189,18 @@ pub fn all() -> Vec<TerminalSurface> {
         .filter_map(TerminalSurface::upgrade)
         .filter(|surface| !surface.inner.torn_down.get())
         .collect()
+}
+
+/// The session terminal `focus` is, with its selection now (upstream's `keyWindow.firstResponder as?
+/// GhosttySurfaceView` for a chord's context); `None` for any other widget and for a terminal no session owns.
+pub fn typing_surface(focus: &gtk::Widget) -> Option<TypingSurface> {
+    let area = focus.downcast_ref::<gtk::GLArea>()?;
+    let terminal = all().into_iter().find(|terminal| terminal.widget() == area)?;
+    let owner = terminal.inner.owner.borrow().clone()?;
+    Some(TypingSurface {
+        owner,
+        selection: terminal.read_selection(),
+    })
 }
 
 /// How many surfaces the registry holds (each one's area is alive).
@@ -250,6 +265,7 @@ impl TerminalSurface {
             font_override: Cell::new(None),
             pending_font_restore: Cell::new(None),
             keeps_start_font_size: Cell::new(false),
+            owner: RefCell::new(None),
         });
         SURFACES.with(|surfaces| surfaces.borrow_mut().insert(inner.key, Rc::downgrade(&inner)));
         let surface = Self { inner, area };
@@ -601,6 +617,11 @@ impl TerminalSurface {
     #[must_use]
     pub fn key(&self) -> SurfaceKey {
         self.inner.key
+    }
+
+    /// Records whose terminal this is, which a chord typed in it reads its context from.
+    pub fn set_owner(&self, owner: SurfaceOwner) {
+        self.inner.owner.replace(Some(owner));
     }
 
     /// Moves keyboard focus to the terminal; whether it took it.
@@ -1261,6 +1282,26 @@ mod tests {
     fn a_cleared_override_arms_a_restore_only_for_a_real_change() {
         assert_eq!(pending_restore(8.0, 13.0), Some(13.0));
         assert_eq!(pending_restore(13.2, 13.0), None);
+    }
+
+    #[test]
+    fn a_focused_session_terminal_is_the_typing_surface() {
+        crate::gtk_test::on_gtk_thread(|| {
+            let owner = SurfaceOwner::Overlay {
+                session: uuid::Uuid::new_v4(),
+                generation: 3,
+                pane: false,
+            };
+            let session_terminal = TerminalSurface::new(SurfaceSpec::default());
+            session_terminal.set_owner(owner.clone());
+            let typing = typing_surface(session_terminal.widget().upcast_ref());
+            assert_eq!(typing, Some(TypingSurface { owner, selection: None }));
+            // the quick terminal, a HUD, an ask: no session owns them
+            let unowned = TerminalSurface::new(SurfaceSpec::default());
+            assert_eq!(typing_surface(unowned.widget().upcast_ref()), None);
+            let label = gtk::Label::new(None);
+            assert_eq!(typing_surface(label.upcast_ref()), None);
+        });
     }
 
     #[test]

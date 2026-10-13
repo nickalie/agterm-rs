@@ -57,6 +57,34 @@ pub enum CommandPane {
     Scratch,
 }
 
+/// The terminal that held the keyboard when a chord fired (upstream's `focusedSurface`), with what it had selected
+/// then: a keybind's context comes from it, not from the window's selected session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypingSurface {
+    pub owner: SurfaceOwner,
+    /// The typing terminal's selection at key-down; `None` when it had none.
+    pub selection: Option<String>,
+}
+
+/// Whose terminal a typing surface is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SurfaceOwner {
+    /// A session pane's terminal (main, split or scratch), by the pane token it carries.
+    Pane { session: Uuid, token: String },
+    /// A program overlay's terminal by its generation: the session-wide slot's, or a pane overlay's (`pane`).
+    Overlay { session: Uuid, generation: u64, pane: bool },
+}
+
+impl SurfaceOwner {
+    /// The session the terminal belongs to.
+    #[must_use]
+    pub fn session(&self) -> Uuid {
+        match self {
+            Self::Pane { session, .. } | Self::Overlay { session, .. } => *session,
+        }
+    }
+}
+
 impl CommandPane {
     #[must_use]
     pub fn wire_name(self) -> &'static str {

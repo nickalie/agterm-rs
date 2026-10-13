@@ -4,12 +4,14 @@
 use std::sync::{Arc, Mutex};
 
 use agterm_host::ProcessExit;
-use agterm_host::fakes::FakeProcessLauncher;
-use agterm_proto::command::KeymapCmd;
+use agterm_host::fakes::{FakeProcessLauncher, FakeSurface};
+use agterm_proto::command::{KeymapCmd, SessionCmd};
 use agterm_proto::{Args, Command, ControlKeymapMenuItem};
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 use super::{Fixture, UNKNOWN, args, failure, wire};
+use crate::keymap::{CustomCommand, SurfaceOwner, TypingSurface};
 use crate::paths::{ConfigLocator, MapEnv};
 use crate::{CoreTask, NotificationEffect, ProcessHost};
 
@@ -385,4 +387,175 @@ fn a_refused_editor_leaves_the_open_editors_reload_alone() {
         host.fixture.core.config_edit_ended(session, generation),
         Some(ConfigFile::Keymap)
     );
+}
+
+/// What the last launch exported as `key`.
+fn last_env(host: &Host, key: &str) -> Option<String> {
+    let launches = host.launcher.launches();
+    let launch = launches.last().expect("a launch");
+    launch
+        .env
+        .iter()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.clone())
+}
+
+/// A host with a `mark` command and session `typed` (an added one at `/tmp`, not the selected one) whose main pane
+/// carries terminal `L` with a selection of its own.
+fn chord_host() -> (Host, CustomCommand, Uuid) {
+    let mut host = Host::new(2);
+    host.write("keymap.conf", "command \"mark\" true\n");
+    assert!(host.keymap(KeymapCmd::Reload, None, Args::default()).ok);
+    let command = host.fixture.core.keymap().commands()[0].clone();
+    let selected = host.fixture.selected().unwrap();
+    let typed = *host.fixture.sessions.iter().rev().find(|id| **id != selected).unwrap();
+    let surface = FakeSurface::new("L");
+    surface.probe().set_selection(Some("pane-selection"));
+    let session = host.fixture.store_mut().unwrap().session_mut(typed).unwrap();
+    session.surface.replace(Box::new(surface));
+    (host, command, typed)
+}
+
+fn typed_in(owner: SurfaceOwner, selection: Option<&str>) -> TypingSurface {
+    TypingSurface {
+        owner,
+        selection: selection.map(str::to_owned),
+    }
+}
+
+#[test]
+fn a_chord_runs_for_the_terminal_typed_in_not_the_selected_session() {
+    // a zoomed session shows and takes the keyboard without being selected: the chord is its own
+    let (mut host, command, typed) = chord_host();
+    let window = host.fixture.window;
+    let owner = SurfaceOwner::Pane {
+        session: typed,
+        token: "L".into(),
+    };
+    host.fixture
+        .core
+        .run_custom_command_from_keybind(&command, Some(window), Some(typed_in(owner, Some("typed"))));
+    assert_eq!(last_env(&host, "AGT_SESSION_ID"), Some(wire(typed)));
+    assert_eq!(last_env(&host, "AGT_PANE").as_deref(), Some("left"));
+    assert_eq!(last_env(&host, "AGT_PANE_ID").as_deref(), Some("L"));
+    assert_eq!(last_env(&host, "AGT_SELECTION").as_deref(), Some("typed"));
+    assert_eq!(last_env(&host, "AGT_WINDOW_ID"), Some(wire(window)));
+    // the scratch names itself
+    let session = host.fixture.store_mut().unwrap().session_mut(typed).unwrap();
+    session.scratch_surface.replace(Box::new(FakeSurface::new("S")));
+    let owner = SurfaceOwner::Pane {
+        session: typed,
+        token: "S".into(),
+    };
+    host.fixture
+        .core
+        .run_custom_command_from_keybind(&command, Some(window), Some(typed_in(owner, None)));
+    assert_eq!(last_env(&host, "AGT_PANE").as_deref(), Some("scratch"));
+    assert_eq!(last_env(&host, "AGT_PANE_ID").as_deref(), Some("S"));
+    assert_eq!(last_env(&host, "AGT_SELECTION").as_deref(), Some(""));
+}
+
+#[test]
+fn an_overlay_chord_reads_the_overlays_selection_and_names_the_pane_underneath() {
+    let (mut host, command, typed) = chord_host();
+    let window = host.fixture.window;
+    let opened = host.fixture.session(
+        SessionCmd::OverlayOpen,
+        Some(&wire(typed)),
+        args(|a| a.command = Some("exec cat".into())),
+    );
+    assert!(opened.ok, "{opened:?}");
+    let generation = host.fixture.store().session(typed).unwrap().overlay.generation;
+    let overlay = |selection: Option<&str>| {
+        Some(typed_in(
+            SurfaceOwner::Overlay {
+                session: typed,
+                generation,
+                pane: false,
+            },
+            selection,
+        ))
+    };
+    host.fixture
+        .core
+        .run_custom_command_from_keybind(&command, Some(window), overlay(Some("in-overlay")));
+    assert_eq!(last_env(&host, "AGT_SESSION_ID"), Some(wire(typed)));
+    assert_eq!(last_env(&host, "AGT_PANE").as_deref(), Some("left"));
+    assert_eq!(last_env(&host, "AGT_PANE_ID").as_deref(), Some("L"));
+    assert_eq!(last_env(&host, "AGT_SELECTION").as_deref(), Some("in-overlay"));
+    // an overlay with nothing selected never reads the pane under it
+    host.fixture
+        .core
+        .run_custom_command_from_keybind(&command, Some(window), overlay(None));
+    assert_eq!(last_env(&host, "AGT_SELECTION").as_deref(), Some(""));
+    // a shown scratch is what lies under the overlay
+    host.fixture
+        .store_mut()
+        .unwrap()
+        .session_mut(typed)
+        .unwrap()
+        .scratch_active = true;
+    host.fixture
+        .core
+        .run_custom_command_from_keybind(&command, Some(window), overlay(None));
+    assert_eq!(last_env(&host, "AGT_PANE").as_deref(), Some("scratch"));
+    // a closed overlay's terminal no longer speaks for the session: the selected session does
+    host.fixture
+        .store_mut()
+        .unwrap()
+        .session_mut(typed)
+        .unwrap()
+        .scratch_active = false;
+    assert!(
+        host.fixture
+            .session(SessionCmd::OverlayClose, Some(&wire(typed)), Args::default())
+            .ok
+    );
+    host.fixture
+        .core
+        .run_custom_command_from_keybind(&command, Some(window), overlay(Some("gone")));
+    let selected = host.fixture.selected().unwrap();
+    assert_eq!(last_env(&host, "AGT_SESSION_ID"), Some(wire(selected)));
+}
+
+#[test]
+fn a_chord_off_any_session_terminal_runs_for_the_active_session_else_sessionless() {
+    let (mut host, command, typed) = chord_host();
+    let window = host.fixture.window;
+    let selected = host.fixture.selected().unwrap();
+    // the quick terminal, a page or a HUD: the active session's focused pane, as the palette runs it
+    host.fixture
+        .core
+        .run_custom_command_from_keybind(&command, Some(window), None);
+    assert_eq!(last_env(&host, "AGT_SESSION_ID"), Some(wire(selected)));
+    assert_eq!(last_env(&host, "AGT_PANE").as_deref(), Some("left"));
+    // a terminal whose token no pane carries any more is no session's
+    let stale = SurfaceOwner::Pane {
+        session: typed,
+        token: "gone".into(),
+    };
+    host.fixture
+        .core
+        .run_custom_command_from_keybind(&command, Some(window), Some(typed_in(stale, None)));
+    assert_eq!(last_env(&host, "AGT_SESSION_ID"), Some(wire(selected)));
+    // an emptied window: only a launcher naming no session token runs
+    let mut host = Host::new(0);
+    host.write(
+        "keymap.conf",
+        "command \"launch\" true\ncommand \"scoped\" echo {AGT_SESSION_ID}\n",
+    );
+    assert!(host.keymap(KeymapCmd::Reload, None, Args::default()).ok);
+    let only = host.fixture.selected().unwrap();
+    assert!(host.fixture.store_mut().unwrap().close_session(only).is_some());
+    let commands = host.fixture.core.keymap().commands().to_vec();
+    let window = host.fixture.window;
+    host.fixture
+        .core
+        .run_custom_command_from_keybind(&commands[1], Some(window), None);
+    assert!(host.launcher.launches().is_empty());
+    host.fixture
+        .core
+        .run_custom_command_from_keybind(&commands[0], Some(window), None);
+    assert_eq!(last_env(&host, "AGT_SESSION_ID").as_deref(), Some(""));
+    assert_eq!(last_env(&host, "AGT_WINDOW_ID"), Some(wire(window)));
 }

@@ -27,6 +27,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use agterm_core::keymap::SurfaceOwner;
 use agterm_core::link_policy::ClickOrigin;
 use agterm_core::model::pane::SPLIT_RATIO_DEFAULT;
 use agterm_core::model::{AppStore, Session, WindowLibrary, Workspace};
@@ -322,6 +323,10 @@ fn grid_cells(grid: &GridModel, session: &Session) -> Vec<(String, usize)> {
 /// A connected terminal for `spec`.
 fn spawn(spec: &PaneSpec, context: &PaneContext, poster: &Poster) -> TerminalSurface {
     let terminal = TerminalSurface::new(spec.surface_spec(context));
+    terminal.set_owner(SurfaceOwner::Pane {
+        session: spec.session,
+        token: spec.token().to_owned(),
+    });
     connect_terminal(&terminal, spec.session, spec.token(), poster);
     connect_reports(&terminal, spec.session, spec.token(), poster);
     terminal

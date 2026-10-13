@@ -24,8 +24,7 @@ use agterm_server::{LineStream, LineStreamLimits, LineStreamOwner, Reply, ReplyS
 use uuid::Uuid;
 
 use agterm_core::app_actions::{ActionEffect, ActionOrigin};
-use agterm_core::keymap::{CommandPane, CustomCommand};
-use agterm_core::model::StatusPane;
+use agterm_core::keymap::TypingSurface;
 
 use crate::app_menu::MenuCommand;
 use crate::keymap_dispatch::{Fired, KeyOrigin};
@@ -615,8 +614,8 @@ impl AppState {
     }
 
     /// A keymap chord fired (`keymap_dispatch`): a built-in runs as its menu item would, a custom command for the
-    /// pane on screen in the window it fired in (the active window for the quick terminal), else sessionless.
-    pub fn keymap_fired(&mut self, origin: KeyOrigin, fired: Fired) {
+    /// terminal it was typed in (`typing`), else for the active session, else sessionless.
+    pub fn keymap_fired(&mut self, origin: KeyOrigin, fired: Fired, typing: Option<TypingSurface>) {
         if self.quitting {
             return;
         }
@@ -634,29 +633,9 @@ impl AppState {
                 let effect = self.core.perform_builtin(origin, action);
                 self.apply_action_effect(effect);
             }
-            Fired::Command(command) => self.run_keybind_command(window, &command),
+            Fired::Command(command) => self.core.run_custom_command_from_keybind(&command, window, typing),
         }
         self.settle();
-    }
-
-    /// A custom command fired by a chord: for the active session's pane on screen, else sessionless.
-    fn run_keybind_command(&mut self, window: Option<Uuid>, command: &CustomCommand) {
-        let session = window.and_then(|window| {
-            let store = self.core.library().store(window)?;
-            let state = store.active_session()?;
-            let pane = match state.on_screen_pane() {
-                StatusPane::Scratch => CommandPane::Scratch,
-                StatusPane::Right => CommandPane::Right,
-                StatusPane::Left => CommandPane::Left,
-            };
-            Some((window, state.id(), pane))
-        });
-        match session {
-            Some((window, session, pane)) => {
-                let _ = self.core.run_custom_command_in(command, window, session, pane, None);
-            }
-            None => self.core.run_custom_command_sessionless(command, window),
-        }
     }
 
     /// An app menu item was chosen: it acts on the frontmost window.

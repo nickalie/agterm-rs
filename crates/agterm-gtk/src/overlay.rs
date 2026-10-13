@@ -17,6 +17,7 @@
 
 use std::path::PathBuf;
 
+use agterm_core::keymap::SurfaceOwner;
 use agterm_core::model::{BackgroundWatermark, OverlayPane, Session, WatermarkKind};
 use agterm_core::overlay_capture::{self, OverlayLaunchContext};
 use agterm_core::pane_env::{self, SessionPane};
@@ -442,6 +443,11 @@ pub fn config_overlay(background: Option<&str>) -> String {
 /// generation, so a replacement or a moved pane overlay is found), a click into a pane overlay moves the split's focus
 /// to its pane, and typing is user activity for auto-follow.
 fn connect(terminal: &TerminalSurface, session: Uuid, generation: u64, pane: Option<OverlayPane>, poster: &Poster) {
+    terminal.set_owner(SurfaceOwner::Overlay {
+        session,
+        generation,
+        pane: pane.is_some(),
+    });
     let posting = poster.clone();
     terminal.connect_exit(move || {
         state::post(&posting, move |state: &mut AppState| {

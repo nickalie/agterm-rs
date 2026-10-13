@@ -44,6 +44,13 @@ pub enum KeyOrigin {
     Quick,
 }
 
+/// Where a press landed: the controller's window and the widget holding that window's keyboard at key-down (upstream's
+/// `keyWindow.firstResponder`).
+struct Source {
+    origin: KeyOrigin,
+    focus: Option<gtk::Widget>,
+}
+
 /// What a chord fires, decided synchronously so the key is consumed or passed on at once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fired {
@@ -110,7 +117,11 @@ pub fn install(window: &impl IsA<gtk::Window>, origin: KeyOrigin) {
             return glib::Propagation::Proceed;
         }
         let chord = chord_of(controller, keyval, keycode, state);
-        let consumed = ROUTER.with_borrow_mut(|router| router.press(origin, keyval, keycode, chord));
+        let source = Source {
+            origin,
+            focus: gtk::prelude::GtkWindowExt::focus(&window),
+        };
+        let consumed = ROUTER.with_borrow_mut(|router| router.press(&source, keyval, keycode, chord));
         if consumed {
             glib::Propagation::Stop
         } else {
@@ -136,7 +147,7 @@ pub fn install(window: &impl IsA<gtk::Window>, origin: KeyOrigin) {
 
 impl Router {
     /// One press; whether it is consumed.
-    fn press(&mut self, origin: KeyOrigin, keyval: gdk::Key, keycode: u32, chord: Option<Chord>) -> bool {
+    fn press(&mut self, source: &Source, keyval: gdk::Key, keycode: u32, chord: Option<Chord>) -> bool {
         let Some(engine) = self.engine.as_mut() else {
             return false;
         };
@@ -149,7 +160,7 @@ impl Router {
                 EngineOutcome::Armed | EngineOutcome::Unmatched => None,
             });
             if let Some(fired) = fired {
-                self.fire(origin, fired);
+                self.fire(source, fired);
             }
             return true;
         }
@@ -162,14 +173,14 @@ impl Router {
         }
         // a bare modifier is the next chord being typed: the leader keeps waiting
         let Some(chord) = chord else { return false };
-        let consumed = self.advance(origin, keycode, &chord);
+        let consumed = self.advance(source, keycode, &chord);
         if consumed {
             self.consumed.insert(keycode);
         }
         consumed
     }
 
-    fn advance(&mut self, origin: KeyOrigin, keycode: u32, chord: &Chord) -> bool {
+    fn advance(&mut self, source: &Source, keycode: u32, chord: &Chord) -> bool {
         let Some(engine) = self.engine.as_mut() else {
             return false;
         };
@@ -177,12 +188,12 @@ impl Router {
         match engine.advance(chord) {
             EngineOutcome::Fired(command) => {
                 self.hold_repeat_or_cancel(keycode);
-                self.fire(origin, Fired::Command(command));
+                self.fire(source, Fired::Command(command));
                 true
             }
             EngineOutcome::FiredBuiltin(action) => {
                 self.hold_repeat_or_cancel(keycode);
-                self.fire(origin, Fired::Builtin(action));
+                self.fire(source, Fired::Builtin(action));
                 true
             }
             EngineOutcome::Armed => {
@@ -198,7 +209,7 @@ impl Router {
                 if was_armed && action == BuiltinAction::ToggleFullscreen {
                     return false;
                 }
-                self.fire(origin, Fired::Builtin(action));
+                self.fire(source, Fired::Builtin(action));
                 true
             }
         }
@@ -220,11 +231,20 @@ impl Router {
         self.held_repeat = repeating.then_some(keycode);
     }
 
-    fn fire(&mut self, origin: KeyOrigin, fired: Fired) {
+    /// Posts what fired; a custom command carries the terminal typed in, read now (its selection included), as the
+    /// keyboard may move before the task runs.
+    fn fire(&mut self, source: &Source, fired: Fired) {
         #[cfg(test)]
         self.fired.push(fired.clone());
         let Some(poster) = self.poster.as_ref() else { return };
-        state::post(poster, move |state: &mut AppState| state.keymap_fired(origin, fired));
+        let typing = match &fired {
+            Fired::Command(_) => source.focus.as_ref().and_then(crate::surface::typing_surface),
+            Fired::Builtin(_) => None,
+        };
+        let origin = source.origin;
+        state::post(poster, move |state: &mut AppState| {
+            state.keymap_fired(origin, fired, typing);
+        });
     }
 
     fn check_keyboard_left(&mut self) {
@@ -477,7 +497,11 @@ mod tests {
 
     fn press(router: &mut Router, keycode: u32, chord: &str) -> bool {
         let chord = agterm_core::keymap::parse_keybind(chord).unwrap().remove(0);
-        router.press(KeyOrigin::Quick, gdk::Key::a, keycode, Some(chord))
+        let source = Source {
+            origin: KeyOrigin::Quick,
+            focus: None,
+        };
+        router.press(&source, gdk::Key::a, keycode, Some(chord))
     }
 
     fn router(keymap: &str) -> Router {

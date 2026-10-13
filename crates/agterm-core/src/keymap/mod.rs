@@ -22,7 +22,9 @@ mod store;
 pub mod usage;
 
 pub use builtin::BuiltinAction;
-pub use command::{CommandContext, CommandPane, CustomCommand, SESSION_SCOPED_TOKEN_BASES};
+pub use command::{
+    CommandContext, CommandPane, CustomCommand, SESSION_SCOPED_TOKEN_BASES, SurfaceOwner, TypingSurface,
+};
 pub use defaults::ShippedDefaults;
 pub use engine::{CustomCommandEngine, EngineOutcome};
 pub use keybind::{
