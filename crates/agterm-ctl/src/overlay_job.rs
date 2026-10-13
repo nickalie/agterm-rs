@@ -165,6 +165,11 @@ impl JobRunner {
         let (mut child, pid) = match spawned {
             Ok(spawned) => spawned,
             Err(error) => {
+                // the child takes the terminal before its exec, which can still fail
+                if let Some(tty) = tty {
+                    // SAFETY: `getpgrp` only reads the calling process's group.
+                    give_terminal(tty, unsafe { libc::getpgrp() });
+                }
                 self.report(&OverlayJobFrame::LaunchFailed {
                     reason: format!("could not start the program: {}", os_message(&error)),
                 });
@@ -329,7 +334,8 @@ fn give_terminal(tty: RawFd, group: libc::pid_t) -> libc::c_int {
 }
 
 /// In the child between fork and exec: take the terminal before the program runs a single instruction, or its first
-/// read would stop it, then put back the signal dispositions the helper changed.
+/// read would stop it, then put back the signal dispositions the helper changed and unblock every signal: the child
+/// inherits the forking thread's mask, which holds the stop signals for the helper's waiter.
 fn prepare_child(tty: Option<RawFd>) -> io::Result<()> {
     // SAFETY: `getpid` only reads the calling process's id.
     let program = unsafe { libc::getpid() };
@@ -341,6 +347,15 @@ fn prepare_child(tty: Option<RawFd>) -> io::Result<()> {
     for signal in RESET_SIGNALS {
         // SAFETY: installs the default action, no handler code, for a valid signal.
         unsafe { libc::signal(signal, libc::SIG_DFL) };
+    }
+    // SAFETY: an all-zero `sigset_t` is a valid (empty) set on Linux, which `sigemptyset` then initializes.
+    let mut unblocked: libc::sigset_t = unsafe { std::mem::zeroed() };
+    // SAFETY: `unblocked` is a valid, writable set.
+    unsafe { libc::sigemptyset(&raw mut unblocked) };
+    // SAFETY: replaces only this thread's mask with a valid set.
+    let result = unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &raw const unblocked, std::ptr::null_mut()) };
+    if result != 0 {
+        return Err(io::Error::from_raw_os_error(result));
     }
     Ok(())
 }
@@ -357,8 +372,8 @@ fn spawn(context: &OverlayLaunchContext, base: &[(OsString, OsString)], tty: Opt
         .envs(&context.environment)
         .current_dir(&context.cwd)
         .process_group(0);
-    // SAFETY: the hook runs in the forked child after std put it in its own group and cleared its signal mask, and
-    // calls only async-signal-safe functions, allocating nothing.
+    // SAFETY: the hook runs in the forked child after std put it in its own group (std leaves it the forking thread's
+    // signal mask, which the hook clears), and calls only async-signal-safe functions, allocating nothing.
     unsafe { command.pre_exec(move || prepare_child(tty)) };
     command.spawn()
 }
@@ -646,6 +661,72 @@ mod tests {
         drop(runner);
         assert_eq!(status, 128 + libc::SIGKILL);
         assert!(started.elapsed() < Duration::from_secs(10));
+        assert_eq!(origin.frames(), [OverlayJobFrame::Started, OverlayJobFrame::Canceled]);
+    }
+
+    /// Blocks SIGTERM in the calling thread, as `route_signals` does in run-job's, until dropped.
+    struct SigtermBlocked(libc::sigset_t);
+
+    impl SigtermBlocked {
+        fn new() -> Self {
+            // SAFETY: zeroed sets are initialized by `sigemptyset` or written by `pthread_sigmask` before use.
+            let (mut term, mut previous): (libc::sigset_t, libc::sigset_t) = unsafe { std::mem::zeroed() };
+            // SAFETY: `term` is a valid, writable set.
+            unsafe { libc::sigemptyset(&raw mut term) };
+            // SAFETY: as above, and SIGTERM is a valid signal.
+            unsafe { libc::sigaddset(&raw mut term, libc::SIGTERM) };
+            // SAFETY: changes only this thread's mask; both sets are valid.
+            let result = unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &raw const term, &raw mut previous) };
+            assert_eq!(result, 0);
+            Self(previous)
+        }
+    }
+
+    impl Drop for SigtermBlocked {
+        fn drop(&mut self) {
+            // SAFETY: restores the mask read in `new`.
+            unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &raw const self.0, std::ptr::null_mut()) };
+        }
+    }
+
+    #[test]
+    fn the_program_gets_the_stop_signals_the_helpers_thread_blocks() {
+        let _blocked = SigtermBlocked::new();
+        let dir = tempfile::tempdir().unwrap();
+
+        let mask_file = dir.path().join("mask");
+        let probe = format!("grep '^SigBlk:' /proc/$$/status > {}", mask_file.display());
+        let (status, _) = run_to_end(&probe, &plain_base());
+        assert_eq!(status, 0);
+        let line = std::fs::read_to_string(&mask_file).unwrap();
+        let mask = u64::from_str_radix(line.trim_start_matches("SigBlk:").trim(), 16).unwrap();
+        assert_eq!(
+            mask & (1 << (libc::SIGTERM - 1)),
+            0,
+            "the shell started with SIGTERM blocked: {line}"
+        );
+
+        let ready = dir.path().join("ready");
+        let command = format!("trap 'exit 0' TERM; : > {}; while :; do :; done", ready.display());
+        let grace = Duration::from_secs(2);
+        let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context(&command)), false);
+        let runner = runner(helper, grace);
+        let claimed = runner.claim("job").unwrap();
+        let canceler = runner.canceler();
+        let (status, canceled_at) = thread::scope(|scope| {
+            let canceling = scope.spawn(|| {
+                while !ready.exists() {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                canceler.cancel();
+                Instant::now()
+            });
+            let status = runner.run(&claimed, &plain_base());
+            (status, canceling.join().unwrap())
+        });
+        drop(runner);
+        assert_eq!(status, 0, "the trap never ran");
+        assert!(canceled_at.elapsed() < grace);
         assert_eq!(origin.frames(), [OverlayJobFrame::Started, OverlayJobFrame::Canceled]);
     }
 
