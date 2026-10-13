@@ -15,7 +15,7 @@ use uuid::Uuid;
 use super::{Fixture, UNKNOWN, args, failure};
 use crate::NotificationEffect;
 use crate::dispatch::Dispatched;
-use crate::html::{HtmlHost, HtmlNavigation, StoreClear};
+use crate::html::{ClearProgress, HtmlHost, HtmlNavigation, StoreClear};
 use crate::model::{AppStore, NewSession};
 
 // MARK: - config.reload
@@ -224,6 +224,7 @@ struct StoreLog {
     refusal: Option<String>,
     exists: bool,
     clearing: bool,
+    failure: Option<String>,
     clears: usize,
 }
 
@@ -251,8 +252,13 @@ impl HtmlHost for ClearHost {
         Ok(StoreClear::Started)
     }
 
-    fn clearing_saved_store(&self) -> bool {
-        self.0.borrow().clearing
+    fn saved_store_clear(&self) -> ClearProgress {
+        let mut log = self.0.borrow_mut();
+        if log.clearing {
+            ClearProgress::Running
+        } else {
+            log.failure.take().map_or(ClearProgress::Done, ClearProgress::Failed)
+        }
     }
 }
 
@@ -296,6 +302,32 @@ fn a_clear_answers_once_the_store_is_empty() {
     log.borrow_mut().clearing = false;
     assert!(matches!(resume(&mut fixture.core), Dispatched::Done(response) if response == Response::success()));
     assert_eq!(log.borrow().clears, 1);
+}
+
+#[test]
+fn a_clear_the_web_engine_fails_answers_its_error() {
+    let (mut fixture, log) = clear_fixture();
+    log.borrow_mut().exists = true;
+    let Dispatched::Pending { resume, .. } = fixture.core.begin(&clear()) else {
+        panic!("a clear waits for the web engine");
+    };
+    {
+        let mut log = log.borrow_mut();
+        log.clearing = false;
+        log.failure = Some("Error removing website data".to_owned());
+    }
+    assert!(matches!(
+        resume(&mut fixture.core),
+        Dispatched::Done(response) if response == failure("browser.clear: Error removing website data")
+    ));
+    let Dispatched::Pending { resume, .. } = fixture.core.begin(&clear()) else {
+        panic!("a second clear runs");
+    };
+    log.borrow_mut().clearing = false;
+    assert!(
+        matches!(resume(&mut fixture.core), Dispatched::Done(response) if response == Response::success()),
+        "the failure was answered once"
+    );
 }
 
 #[test]

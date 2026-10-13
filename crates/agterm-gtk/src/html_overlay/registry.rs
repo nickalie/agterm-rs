@@ -10,7 +10,7 @@ use std::rc::Rc;
 use agterm_core::Core;
 use agterm_core::html::bridge;
 use agterm_core::html::profile::{self, BrowserProfile};
-use agterm_core::html::{HtmlHost, HtmlNavigation, HtmlOverlay, HtmlSource, StoreClear, errors};
+use agterm_core::html::{ClearProgress, HtmlHost, HtmlNavigation, HtmlOverlay, HtmlSource, StoreClear, errors};
 use agterm_core::pane_env::uuid_string;
 use agterm_proto::Response;
 use gtk::prelude::*;
@@ -41,6 +41,8 @@ struct Registry {
     saved: Option<NetworkSession>,
     /// The web engine is emptying the saved store (upstream's `clearing`): no page may use it meanwhile.
     clearing: bool,
+    /// Why the web engine could not empty the saved store, kept for the poll that answers the clear.
+    clear_failure: Option<String>,
     replies: HashMap<u64, Parked>,
     next_reply: u64,
     scheme_registered: bool,
@@ -74,8 +76,17 @@ impl HtmlHost for PageHost {
         clear_saved_store()
     }
 
-    fn clearing_saved_store(&self) -> bool {
-        with(|registry| registry.clearing)
+    fn saved_store_clear(&self) -> ClearProgress {
+        with(|registry| {
+            if registry.clearing {
+                ClearProgress::Running
+            } else {
+                registry
+                    .clear_failure
+                    .take()
+                    .map_or(ClearProgress::Done, ClearProgress::Failed)
+            }
+        })
     }
 }
 
@@ -220,7 +231,8 @@ fn persistent_store_failure() -> Option<String> {
 /// Starts removing everything the saved store holds (upstream's `clearPersistentStore`): refused while a clear runs,
 /// while a page built on the store is still registered (a soft-closed session's included, whose login would be written
 /// back), and when the profile cannot be read; a profile never created has nothing to remove and is not created for
-/// it. The web engine empties the store asynchronously; [`HtmlHost::clearing_saved_store`] holds until it is done.
+/// it. The web engine empties the store asynchronously; [`HtmlHost::saved_store_clear`] runs until it is done and
+/// then reports the engine's error, if any, once.
 fn clear_saved_store() -> Result<StoreClear, String> {
     let (clearing, open, state_dir) = with(|registry| {
         let open = registry.pages.values().filter(|page| page.uses_saved_store()).count();
@@ -236,16 +248,23 @@ fn clear_saved_store() -> Result<StoreClear, String> {
     let Some(manager) = with(|registry| registry.saved.as_ref().and_then(NetworkSession::website_data_manager)) else {
         return Err(errors::PERSISTENT_UNAVAILABLE.to_owned());
     };
-    with(|registry| registry.clearing = true);
+    with(|registry| {
+        registry.clearing = true;
+        registry.clear_failure = None;
+    });
     manager.clear(
         WebsiteDataTypes::ALL,
         glib::TimeSpan::from_seconds(0),
         None::<&gio::Cancellable>,
         |cleared| {
-            if let Err(err) = cleared {
+            let failure = cleared.err().map(|err| {
                 tracing::warn!(%err, "the web engine did not empty the saved browser store");
-            }
-            with(|registry| registry.clearing = false);
+                err.to_string()
+            });
+            with(|registry| {
+                registry.clearing = false;
+                registry.clear_failure = failure;
+            });
         },
     );
     Ok(StoreClear::Started)

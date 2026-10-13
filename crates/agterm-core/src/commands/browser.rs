@@ -11,7 +11,7 @@ use super::{Outcome, args_of};
 use crate::Core;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
-use crate::html::{HtmlHost, StoreClear, errors};
+use crate::html::{ClearProgress, HtmlHost, StoreClear, errors};
 use crate::persist::settings::LinkOpenMode;
 
 /// Refuses a target or `--window`: the browser commands are app-global.
@@ -58,15 +58,20 @@ pub(crate) fn begin_clear(core: &mut Core, request: &Request) -> Dispatched {
     }
 }
 
-/// Answers once the web engine finished emptying the store.
+/// Answers once the web engine finished emptying the store, with its error when it could not.
 fn wait_cleared() -> Dispatched {
     Dispatched::Pending {
         after: POLL_INTERVAL,
         resume: Box::new(|core: &mut Core| {
-            if core.html_host().is_some_and(HtmlHost::clearing_saved_store) {
-                wait_cleared()
-            } else {
-                Dispatched::Done(Response::success())
+            match core
+                .html_host()
+                .map_or(ClearProgress::Done, HtmlHost::saved_store_clear)
+            {
+                ClearProgress::Running => wait_cleared(),
+                ClearProgress::Done => Dispatched::Done(Response::success()),
+                ClearProgress::Failed(failure) => {
+                    Dispatched::done(Err(ControlError::rejected(format!("browser.clear: {failure}"))))
+                }
             }
         }),
     }

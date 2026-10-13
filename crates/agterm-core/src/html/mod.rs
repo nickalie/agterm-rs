@@ -350,7 +350,8 @@ pub trait HtmlHost {
 
     /// Starts removing everything the saved browser store holds (upstream's `clearPersistentStore`, its refusals in
     /// the order [`profile::clear_check`] gives them): [`StoreClear::Nothing`] when no store was ever created,
-    /// [`StoreClear::Started`] while the web engine empties it, until [`HtmlHost::clearing_saved_store`] turns false.
+    /// [`StoreClear::Started`] while the web engine empties it, until [`HtmlHost::saved_store_clear`] stops answering
+    /// [`ClearProgress::Running`].
     ///
     /// # Errors
     ///
@@ -359,10 +360,22 @@ pub trait HtmlHost {
         Err(errors::PERSISTENT_UNAVAILABLE.to_owned())
     }
 
-    /// Whether a clear [`HtmlHost::clear_saved_store`] started is still running.
-    fn clearing_saved_store(&self) -> bool {
-        false
+    /// How the clear [`HtmlHost::clear_saved_store`] started is going; a failure is answered once.
+    fn saved_store_clear(&self) -> ClearProgress {
+        ClearProgress::Done
     }
+}
+
+/// How a clear of the saved browser store is going.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClearProgress {
+    /// The web engine is still emptying the store.
+    Running,
+    /// The store is empty.
+    Done,
+    /// The web engine reported it could not empty the store: its error text, which `browser.clear` reports after its
+    /// own name (upstream's `removeData` cannot fail; the web engine's clear can).
+    Failed(String),
 }
 
 /// What [`HtmlHost::clear_saved_store`] did.
