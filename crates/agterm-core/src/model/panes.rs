@@ -365,11 +365,14 @@ fn promote_split_survivor(session: &mut Session) {
         .or_else(|| session.current_cwd.take());
     session.initial_split_cwd = None;
     session.osc_title = session.split_title.take();
-    // as upstream: the pin, the capture and the armed override follow the survivor; the armed capture stays put
+    // as upstream: the pin, the capture and the armed override follow the survivor. The capture still armed for
+    // this launch follows it too (upstream leaves it in the split slot): a survivor whose paced grant arrives after
+    // the promotion still replays it, and the next split the session opens does not inherit a gone pane's program
     let split = &mut session.split_restore;
     session.restore.foreground = split.foreground.take();
     session.restore.command = split.command.take();
     session.restore.pending_command = split.pending_command.take();
+    session.restore.pending_foreground = split.pending_foreground.take();
     // a search the survivor owned follows it into the left role; the exited primary's ends
     match session.search.owner {
         Some(StatusPane::Right) => session.search.owner = Some(StatusPane::Left),

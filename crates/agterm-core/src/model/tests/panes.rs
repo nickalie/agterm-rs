@@ -388,6 +388,26 @@ fn a_promotion_carries_the_split_creation_command_and_restore_halves() {
 }
 
 #[test]
+fn a_promotion_moves_the_survivors_armed_capture_left_and_clears_the_split_slot() {
+    let (mut store, id, _, _) = split_with_terminals();
+    let session = get_mut(&mut store, id);
+    // the primary consumed its own capture at its spawn; the split still waits for its paced grant
+    session.restore.pending_foreground = None;
+    session.split_restore.pending_foreground = Some(vec!["htop".to_owned()]);
+    store.close_primary_pane(id);
+    let session = get(&store, id);
+    assert_eq!(
+        session.restore.pending_foreground.as_deref(),
+        Some(["htop".to_owned()].as_slice()),
+        "the survivor replays its capture from the left slot"
+    );
+    assert_eq!(
+        session.split_restore.pending_foreground, None,
+        "the next split does not inherit the gone pane's capture"
+    );
+}
+
+#[test]
 fn a_promotion_uses_the_restored_split_cwd_and_drops_the_primary_title() {
     let (mut store, id, _, _) = split_with_terminals();
     let session = get_mut(&mut store, id);
