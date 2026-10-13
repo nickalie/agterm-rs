@@ -1,6 +1,10 @@
 # The conformance ratchet: pytest node ids the Rust build passes, one per line, verbatim and sorted.
 # tools/check_ratchet.py fails a run in which a listed id fails, errors or skips (a host-dependent skip excepted).
 # Add newly passing ids with `tools/check_ratchet.py --report <nodeid report> --add`.
+tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args0-event limit must be between 1 and 1000]
+tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args1-events.read requires --run and --after together]
+tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args2-invalid event run id]
+tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args3-invalid event cursor]
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args4-None]
 tests/cli/test_cli_output.py::test_version
 tests/cli/test_socket_resolution.py::test_agterm_socket_variable_is_not_read
@@ -20,10 +24,30 @@ tests/protocol/test_addressing.py::test_undecodable_request_is_refused[target-ty
 tests/protocol/test_addressing.py::test_undecodable_request_is_refused[unknown-command]
 tests/protocol/test_addressing.py::test_unresolved_target[session.select--no such session: ]
 tests/protocol/test_addressing.py::test_unresolved_target[session.select-zzz-no such session: zzz]
+tests/protocol/test_events.py::test_cursor_failure_carries_the_anchor[ahead]
+tests/protocol/test_events.py::test_cursor_failure_carries_the_anchor[other-run]
+tests/protocol/test_events.py::test_cursor_pages_through_the_ring
+tests/protocol/test_events.py::test_invalid_read_request[after-alone]
+tests/protocol/test_events.py::test_invalid_read_request[bad-after]
+tests/protocol/test_events.py::test_invalid_read_request[bad-run]
+tests/protocol/test_events.py::test_invalid_read_request[empty-kind]
+tests/protocol/test_events.py::test_invalid_read_request[limit-0]
+tests/protocol/test_events.py::test_invalid_read_request[limit-1001]
+tests/protocol/test_events.py::test_invalid_read_request[negative-after]
+tests/protocol/test_events.py::test_invalid_read_request[run-alone]
+tests/protocol/test_events.py::test_invalid_read_request[unknown-kind]
+tests/protocol/test_events.py::test_kinds_filter[comma-joined]
+tests/protocol/test_events.py::test_kinds_filter[list]
+tests/protocol/test_events.py::test_kinds_filter[padded]
+tests/protocol/test_events.py::test_next_advances_past_filtered_out_events
+tests/protocol/test_events.py::test_read_without_a_cursor_subscribes_from_now
+tests/protocol/test_events.py::test_run_id_is_case_insensitive
+tests/protocol/test_events.py::test_session_lifecycle_events
 tests/protocol/test_restore.py::test_panes_are_not_zmx_backed_outside_live_mode
 tests/protocol/test_session.py::test_close_requires_a_target
 tests/protocol/test_session.py::test_go_requires_a_direction[None]
 tests/protocol/test_session.py::test_go_requires_a_direction[sideways]
+tests/protocol/test_session.py::test_new_appends_a_selected_session_to_the_current_workspace
 tests/protocol/test_session.py::test_new_into_a_workspace_by_name
 tests/protocol/test_session.py::test_new_rejects[anchor-and-workspace-name]
 tests/protocol/test_session.py::test_new_rejects[anchor-and-workspace]
@@ -34,6 +58,7 @@ tests/protocol/test_session.py::test_new_rejects[unknown-workspace]
 tests/protocol/test_session.py::test_new_rejects[wait-alone]
 tests/protocol/test_session.py::test_new_rejects[workspace-and-name]
 tests/protocol/test_session.py::test_new_without_selecting_keeps_the_selection
+tests/protocol/test_session.py::test_rename_and_blank_restores_the_automatic_name
 tests/protocol/test_session.py::test_rename_requires_a_name
 tests/protocol/test_session.py::test_reveal_answers_with_the_session
 tests/protocol/test_session.py::test_unknown_session_target[session.close-args0]

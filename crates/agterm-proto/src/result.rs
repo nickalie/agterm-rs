@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
+use crate::events::EventBatch;
+
 /// A command's result object.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -19,6 +21,9 @@ pub struct ControlResult {
     /// How many things a batch mutation actually changed (`session.close`, `session.move` with several targets).
     #[serde(default)]
     pub affected: Option<i64>,
+    /// `events.read`: a page of the event ring, also on a cursor failure (then the ring's current anchor).
+    #[serde(default)]
+    pub events: Option<EventBatch>,
 }
 
 impl ControlResult {
@@ -36,6 +41,15 @@ impl ControlResult {
     pub fn affected(affected: i64) -> Self {
         Self {
             affected: Some(affected),
+            ..Self::default()
+        }
+    }
+
+    /// `{"events": {...}}`.
+    #[must_use]
+    pub fn events(events: EventBatch) -> Self {
+        Self {
+            events: Some(events),
             ..Self::default()
         }
     }

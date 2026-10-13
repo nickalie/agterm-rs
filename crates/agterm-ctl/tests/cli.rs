@@ -436,6 +436,7 @@ OPTIONS:
 
 SUBCOMMANDS:
   tree                    Print the workspace/session tree.
+  events                  Continuously print control events.
   session                 Session commands.
   window                  Window commands.
   version                 Print the version of the app serving the socket.
@@ -469,10 +470,28 @@ OPTIONS:
 
 ";
 
+const EVENTS_HELP: &str = "\
+OVERVIEW: Continuously print control events.
+
+USAGE: agtermctl events [--socket <socket>] [--json] [--kind <kind> ...] [--run <run>] [--after <after>] [--limit <limit>]
+
+OPTIONS:
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  --kind <kind>           Event kind; repeat or comma-separate values.
+  --run <run>             App-run UUID paired with --after.
+  --after <after>         Sequence cursor paired with --run.
+  --limit <limit>         Events per read (1...1000).
+  -h, --help              Show help information.
+
+";
+
 #[test]
 fn help_goes_to_stdout_in_the_argument_parser_layout() -> TestResult {
     let dir = short_dir()?;
-    let cases: [(&[&str], &str); 12] = [
+    let cases: [(&[&str], &str); 14] = [
+        (&["events", "--help"], EVENTS_HELP),
+        (&["help", "events"], EVENTS_HELP),
         (&["tree", "--help"], TREE_HELP),
         (&["help", "tree"], TREE_HELP),
         (&[], ROOT_HELP),
@@ -1025,6 +1044,109 @@ fn session_and_window_help_in_the_argument_parser_layout() -> TestResult {
         assert_eq!(
             outcome(&run(dir.path(), &[], args)?),
             (Some(0), help.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+// MARK: - events
+
+const EVENT_RUN: &str = "CBB5E3D0-7A9B-4C96-9EA2-18B14380DDB1";
+
+/// A ring that answers `first` with one page, then refuses the read resuming from it with `event cursor expired`, and
+/// anything else by naming it: the stream ends on that refusal.
+fn event_ring(socket: &Path, first: serde_json::Value) -> TestResult<Server<usize>> {
+    let page = serde_json::json!({"events": {"run": EVENT_RUN, "next": 7, "items": [
+        {"seq": 6, "ts": 10.5, "kind": "status", "session": "S",
+         "payload": {"name": "api", "status": "active", "blink": true}},
+        {"seq": 7, "ts": 3661, "kind": "tree.changed", "window": "win", "payload": {}},
+    ]}});
+    serve(socket, 0, move |reads: &mut usize, request| {
+        *reads += 1;
+        let sent = serde_json::to_value(&request).unwrap_or_default();
+        let resumed = sent.get("args").is_some_and(|args| {
+            args.get("run").and_then(serde_json::Value::as_str) == Some(EVENT_RUN)
+                && args.get("after").and_then(serde_json::Value::as_str) == Some("7")
+        });
+        match *reads {
+            1 if sent == first => Response::with_result(page.clone()).into(),
+            2 if resumed => Response::failure("event cursor expired").into(),
+            _ => Response::failure(format!("unexpected request: {sent}")).into(),
+        }
+    })
+}
+
+#[test]
+fn events_print_each_page_in_local_time_until_the_server_refuses() -> TestResult {
+    let dir = short_dir()?;
+    let refused = "Error: event cursor expired\n".to_owned();
+    for (zone, printed) in [
+        ("UTC", "00:00:10 status api active blink\n01:01:01 tree.changed win\n"),
+        // POSIX spells three hours east of UTC with a minus
+        ("XXX-3", "03:00:10 status api active blink\n04:01:01 tree.changed win\n"),
+    ] {
+        let socket = dir.path().join(format!("{zone}.sock"));
+        let _server = event_ring(&socket, serde_json::json!({"cmd": "events.read"}))?;
+        let command_line = [OsStr::new("events"), OsStr::new("--socket"), socket.as_os_str()];
+        let output = run(dir.path(), &[("TZ", Path::new(zone))], command_line)?;
+        assert_eq!(
+            outcome(&output),
+            (Some(1), printed.to_owned(), refused.clone()),
+            "{zone}"
+        );
+    }
+
+    let socket = dir.path().join("agterm.sock");
+    let first = serde_json::json!({"cmd": "events.read", "args": {"kinds": ["status", "tree.changed"], "limit": 2}});
+    let _server = event_ring(&socket, first)?;
+    let args = ["events", "--json", "--kind", "tree.changed,status", "--limit", "2"];
+    let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, &args)?);
+    assert_eq!((code, stderr), (Some(1), refused));
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        [
+            r#"{"seq":6,"ts":10.5,"kind":"status","session":"S","payload":{"name":"api","status":"active","blink":true}}"#,
+            r#"{"seq":7,"ts":3661.0,"kind":"tree.changed","window":"win","payload":{}}"#,
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn events_without_a_cursor_fail_at_once_when_nothing_listens() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("agterm.sock");
+    let output = run_on(dir.path(), &socket, &["events"])?;
+    let error = connect_failure(&socket, "No such file or directory", NOT_RUNNING);
+    assert_eq!(outcome(&output), (Some(1), String::new(), error));
+    Ok(())
+}
+
+const EVENTS_USAGE: &str = "Usage: agtermctl events [--socket <socket>] [--json] [--kind <kind> ...] [--run <run>] \
+                            [--after <after>] [--limit <limit>]\n  See 'agtermctl events --help' for more \
+                            information.\n";
+
+#[test]
+fn events_refuse_a_bad_cursor_limit_or_kind_before_reading() -> TestResult {
+    let dir = short_dir()?;
+    // nothing listens here: a read would exit 1, not 64
+    let socket = dir.path().join("agterm.sock");
+    let cases: [(&[&str], &str); 5] = [
+        (&["--limit", "0"], "event limit must be between 1 and 1000"),
+        (&["--run", EVENT_RUN], "events.read requires --run and --after together"),
+        (&["--run", "not-a-run", "--after", "1"], "invalid event run id"),
+        (&["--run", EVENT_RUN, "--after", "x"], "invalid event cursor"),
+        (
+            &["--kind", "status, session.renamed"],
+            "invalid event kind: session.renamed",
+        ),
+    ];
+    for (args, message) in cases {
+        let command_line = [&["events"][..], args].concat();
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, &command_line)?),
+            (Some(64), String::new(), format!("Error: {message}\n{EVENTS_USAGE}")),
             "{args:?}"
         );
     }

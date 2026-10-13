@@ -10,7 +10,7 @@ pub mod tree;
 pub mod version;
 
 pub use command::{Command, Group, UnknownCommand};
-pub use events::EventKind;
+pub use events::{ControlEvent, EventBatch, EventKind, EventPayload};
 pub use request::{Args, AskButton, MAX_REQUEST_LINE_BYTES, PickItem, Request};
 pub use response::Response;
 pub use result::{ControlResult, ControlWindowFrame, ControlWindowNode};

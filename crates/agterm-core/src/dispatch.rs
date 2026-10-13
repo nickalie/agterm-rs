@@ -4,8 +4,10 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
+use agterm_proto::command::EventsCmd;
 use agterm_proto::{
-    AppIdentity, Command, ConformanceProfile, ControlTree, PARITY_LEVEL, Request, Response, VersionResult,
+    AppIdentity, Args, Command, ConformanceProfile, ControlResult, ControlTree, PARITY_LEVEL, Request, Response,
+    VersionResult,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -13,9 +15,10 @@ use uuid::Uuid;
 
 use crate::commands;
 use crate::error::ControlError;
+use crate::events::{ControlEvents, EventRing, ReadOptions, TreeChangedTimer};
 use crate::model::PendingCloseTimer;
 use crate::model::{AppStore, WindowLibrary};
-use crate::persist::{AppSettings, Commit, DebouncedSave, LibraryPersistence};
+use crate::persist::{AppSettings, DebouncedSave, LibraryPersistence};
 use crate::projection::{TreeContext, control_tree};
 use crate::resolve::Resolver;
 
@@ -47,6 +50,19 @@ pub struct WindowState {
     pub minimized: bool,
 }
 
+/// The main-loop timers a [`Core::commit`] leaves to arm.
+#[derive(Debug, Default)]
+pub struct CommitTimers {
+    /// The debounced snapshot writes, for [`Core::fire_debounced`] after
+    /// [`SAVE_DEBOUNCE`](crate::persist::SAVE_DEBOUNCE).
+    pub debounced: Vec<DebouncedSave>,
+    /// The soft closes' grace timers, for [`Core::finalize_pending_close`] after each one's grace.
+    pub pending_closes: Vec<PendingCloseTimer>,
+    /// The windows' debounced `tree.changed`, for [`Core::fire_tree_changed`] after
+    /// [`TREE_CHANGED_DEBOUNCE`](crate::events::TREE_CHANGED_DEBOUNCE).
+    pub tree_changed: Vec<TreeChangedTimer>,
+}
+
 /// The frontend's file-manager reveal of a directory (`session.reveal`).
 struct RevealHandler(Box<dyn Fn(&Path)>);
 
@@ -65,6 +81,8 @@ pub struct Core {
     library: WindowLibrary,
     settings: AppSettings,
     persistence: Option<LibraryPersistence>,
+    /// The app run's event ring, fed by every commit.
+    events: ControlEvents,
     /// The frontend's on-screen windows, by window id.
     window_states: HashMap<Uuid, WindowState>,
     reveal_handler: Option<RevealHandler>,
@@ -117,9 +135,24 @@ impl Core {
             library: state.library,
             settings: state.settings,
             persistence: state.persistence,
+            events: ControlEvents::default(),
             window_states: HashMap::new(),
             reveal_handler: None,
         }
+    }
+
+    /// Replaces the event ring (tests pin its run id and clock). Events already sequenced are dropped with the old
+    /// ring.
+    #[must_use]
+    pub fn with_event_ring(mut self, ring: EventRing) -> Self {
+        self.events = ControlEvents::new(ring);
+        self
+    }
+
+    /// The event ring and its pending `tree.changed` debounces.
+    #[must_use]
+    pub fn events(&self) -> &ControlEvents {
+        &self.events
     }
 
     /// Records what the frontend shows of window `id`; `None` once it no longer shows it.
@@ -168,20 +201,26 @@ impl Core {
     }
 
     /// Lands the model's side effects after a mutation, as every main-loop task that may mutate must: writes the
-    /// immediate snapshot saves and a changed index, and hands back what the caller arms on the main loop (the
-    /// debounced saves, for [`Core::fire_debounced`], and the soft closes' grace timers, for
-    /// [`Core::finalize_pending_close`]) and the events (for the ring, Task 12). Without persistence the effects are
-    /// drained and the saves dropped.
-    pub fn commit(&mut self) -> Commit {
-        if let Some(persistence) = self.persistence.as_mut() {
-            return persistence.commit(&mut self.library);
+    /// immediate snapshot saves and a changed index, sequences the events into the ring, and hands back the timers
+    /// the caller arms on the main loop. Without persistence the effects are drained and the saves dropped.
+    pub fn commit(&mut self) -> CommitTimers {
+        let (events, debounced, pending_closes) = if let Some(persistence) = self.persistence.as_mut() {
+            let commit = persistence.commit(&mut self.library);
+            (commit.events, commit.debounced, commit.pending_closes)
+        } else {
+            let effects = self.library.drain_effects();
+            (effects.events, Vec::new(), effects.pending_closes)
+        };
+        CommitTimers {
+            debounced,
+            pending_closes,
+            tree_changed: self.events.record(events),
         }
-        let effects = self.library.drain_effects();
-        Commit {
-            events: effects.events,
-            debounced: Vec::new(),
-            pending_closes: effects.pending_closes,
-        }
+    }
+
+    /// A window's `tree.changed` debounce elapsed: sequence the event unless a later change re-armed it.
+    pub fn fire_tree_changed(&mut self, timer: TreeChangedTimer) {
+        self.events.fire_tree_changed(timer);
     }
 
     /// A debounced save's quiet window elapsed: write it unless a later save superseded it.
@@ -252,11 +291,26 @@ impl Core {
         Ok(control_tree(store, &context))
     }
 
+    /// `events.read`: a page of the ring after the cursor, or the anchor alone without one; a cursor the ring cannot
+    /// serve fails with the anchor in `result.events` (upstream's `WindowLibrary.readEvents`).
+    fn read_events(&self, args: Option<&Args>) -> Result<Response, ControlError> {
+        let options = ReadOptions::parse(args)?;
+        match self.events.read(&options) {
+            Ok(batch) => result_of(&ControlResult::events(batch)),
+            Err(failure) => {
+                let anchor =
+                    serde_json::to_value(ControlResult::events(failure.anchor)).map_err(|_| ControlError::Encode)?;
+                Ok(Response::failure_with_result(failure.error.to_string(), anchor))
+            }
+        }
+    }
+
     /// One arm per group, routing to the group's handler; groups without one yet are refused by name.
     fn route(&mut self, request: &Request) -> Result<Response, ControlError> {
         match request.cmd {
             Command::Session(cmd) => result_of(&commands::session::dispatch(self, cmd, request)?),
             Command::Window(cmd) => result_of(&commands::window::dispatch(self, cmd)?),
+            Command::Events(EventsCmd::Read) => self.read_events(request.args.as_ref()),
             Command::Version => result_of(&self.version()),
             Command::Tree => {
                 let window = request.args.as_ref().and_then(|args| args.window.as_deref());
@@ -269,7 +323,6 @@ impl Core {
             | Command::Config(_)
             | Command::Dashboard
             | Command::Debug(_)
-            | Command::Events(_)
             | Command::Font(_)
             | Command::Hooks(_)
             | Command::Keymap(_)
@@ -288,7 +341,7 @@ impl Core {
 
 #[cfg(test)]
 mod tests {
-    use agterm_proto::command::{SessionCmd, WindowCmd, ZmxCmd};
+    use agterm_proto::command::{EventsCmd, SessionCmd, WindowCmd, ZmxCmd};
     use serde_json::json;
 
     use super::*;
@@ -305,7 +358,12 @@ mod tests {
 
     /// The commands answered so far, against a core with no window (the throwaway empty window makes `session.new`
     /// and `session.go` fail on their arguments or their target, as upstream's would).
-    const ANSWERED: &[Command] = &[Command::Version, Command::Tree, Command::Window(WindowCmd::List)];
+    const ANSWERED: &[Command] = &[
+        Command::Version,
+        Command::Tree,
+        Command::Window(WindowCmd::List),
+        Command::Events(EventsCmd::Read),
+    ];
 
     #[test]
     fn version_reports_app_and_profile() {

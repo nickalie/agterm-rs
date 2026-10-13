@@ -20,6 +20,7 @@ use super::recency::RecencyStack;
 use super::recent_closed::{ClosedSessionPlace, RecentClosedList};
 use super::session::{AgentIndicator, AgentStatus, Session, SessionSeed};
 use super::workspace::{ReorderDirection, SidebarMode, Workspace};
+use crate::pane_env::uuid_string;
 
 /// The sidebar width a window starts with, in points.
 pub const SIDEBAR_WIDTH_DEFAULT: f64 = 220.0;
@@ -461,7 +462,7 @@ impl AppStore {
         let (session, name) = selected.unzip();
         let payload = EventPayload {
             name,
-            previous,
+            previous: previous.map(uuid_string),
             ..EventPayload::default()
         };
         self.emit(EventKind::SessionSelected, workspace, session, payload);

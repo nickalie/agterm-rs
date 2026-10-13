@@ -3,6 +3,7 @@
 //! and reports through [`output`]. Each command group lives in its own module.
 
 mod client;
+mod events;
 mod output;
 mod session;
 mod socket;
@@ -42,6 +43,7 @@ struct Agtermctl {
 #[derive(Debug, Subcommand)]
 enum Command {
     Tree(tree::Tree),
+    Events(events::Events),
     Session(session::Session),
     Window(window::Window),
     Version(version::Version),
@@ -52,6 +54,7 @@ impl Command {
     fn validate(&self) -> Result<(), String> {
         match self {
             Self::Tree(command) => command.validate(),
+            Self::Events(command) => command.validate(),
             Self::Session(group) => group.command().validate(),
             Self::Window(group) => group.command().validate(),
             Self::Version(_) => Ok(()),
@@ -61,6 +64,7 @@ impl Command {
     fn run(&self, env: &dyn Env) -> Result<(), Failure> {
         match self {
             Self::Tree(command) => command.default_run(env),
+            Self::Events(command) => command.run(env),
             Self::Session(group) => group.command().default_run(env),
             Self::Window(group) => group.command().default_run(env),
             Self::Version(command) => command.run(env),
@@ -160,7 +164,7 @@ enum Failure {
 
 impl From<ClientError> for Failure {
     fn from(error: ClientError) -> Self {
-        Self::Local(error.0)
+        Self::Local(error.message)
     }
 }
 

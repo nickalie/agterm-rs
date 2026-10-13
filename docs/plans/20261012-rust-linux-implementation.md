@@ -692,14 +692,24 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 - Modify: `crates/agterm-server/src/stream.rs`
 - Create: `crates/agterm-ctl/src/events.rs`
 
-- [ ] event ring per `ControlEvents.swift` and `AppStore+Events.swift`: the 10 event kinds, cursors, the anchor in
-      `result.events` on a cursor failure
-- [ ] `events.read`: without a cursor it subscribes from now with no history; stream handoff after the first ok
-      (upstream's `agterm/Control/ControlStreamOwner.swift`)
-- [ ] `agtermctl events` subcommands (`EventCommands.swift`)
-- [ ] write tests: ring overflow, stale cursor, subscription delivery order
-- [ ] write tests: a stream connection survives other requests and closes cleanly on client hang-up
-- [ ] gate: full run; ratchet (`test_events.py`)
+- ➕ Create: `crates/agterm-core/src/events/tests.rs`, `crates/agterm-core/src/commands/tests/events.rs`,
+  `crates/agterm-server/tests/stream.rs`; Modify: `crates/agterm-proto/src/{events,result}.rs` (event, payload and
+  batch wire types), `crates/agterm-core/src/{dispatch,lib}.rs`, the model's outbox and store (the wire payload),
+  `crates/agterm-gtk/src/state.rs`, `crates/agterm-ctl/src/{main,client}.rs`
+
+- [x] event ring per `ControlEvents.swift` and `AppStore+Events.swift`: the 10 event kinds, cursors, the anchor in
+      `result.events` on a cursor failure (every commit sequences the model's events into the ring; `tree.changed`
+      coalesces per window behind upstream's 0.1 s debounce, armed on the main loop by `settle`)
+- [x] `events.read`: without a cursor it subscribes from now with no history; stream handoff after the first ok
+      (upstream's `agterm/Control/ControlStreamOwner.swift`) (upstream's `events.read` is a plain read that
+      `agtermctl events` polls, so it hands nothing off; `ControlStreamOwner` is ported as `LineStream` in
+      `stream.rs` for `zmx.present` and overlay jobs)
+- [x] `agtermctl events` subcommands (`EventCommands.swift`)
+- [x] write tests: ring overflow, stale cursor, subscription delivery order
+- [x] write tests: a stream connection survives other requests and closes cleanly on client hang-up
+- [x] gate: full run; ratchet (`test_events.py`) (25 new green ids, 74 listed;
+      `test_cursor_expires_past_the_ring_capacity` and the CLI event-printing tests wait for `session.status`,
+      `session.split`, `notify` in later tasks)
 
 ### Task 13: `workspace.*`
 

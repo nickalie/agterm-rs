@@ -16,6 +16,7 @@ agterm-core.workspace = true
 clap.workspace = true
 libc.workspace = true
 serde_json.workspace = true
+strum.workspace = true
 
 [dev-dependencies]
 agterm-host ={ workspace = true, features = ["fakes"] }

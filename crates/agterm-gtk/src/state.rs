@@ -1,16 +1,18 @@
 //! The main loop's state: the core and the window it shows, and the tasks that change them.
 //!
 //! RULE: every mutation runs as a main-loop task and ends with [`AppState::settle`], which lands the model's side
-//! effects (the immediate saves, the debounced saves and the soft closes' grace timers armed on the loop) and brings
-//! the deck, the sidebar and the window title in line with the model. GTK and libghostty handlers never touch the
+//! effects (the immediate saves and the events in the ring; the debounced saves, the soft closes' grace timers and the
+//! windows' `tree.changed` debounces armed on the loop) and brings the deck, the sidebar and the window title in line
+//! with the model. GTK and libghostty handlers never touch the
 //! state in place: they [`post`] a task, since libghostty may call back while the state is borrowed and a widget
 //! must not be rebuilt inside its own handler.
 
 use std::sync::Weak;
 
-use agterm_core::Core;
+use agterm_core::events::{TREE_CHANGED_DEBOUNCE, TreeChangedTimer};
 use agterm_core::model::PendingCloseTimer;
-use agterm_core::persist::{Commit, DebouncedSave, arm_debounced_saves};
+use agterm_core::persist::{DebouncedSave, arm_debounced_saves};
+use agterm_core::{CommitTimers, Core};
 use agterm_host::MainLoop;
 use uuid::Uuid;
 
@@ -37,20 +39,37 @@ pub fn post(poster: &Poster, task: impl FnOnce(&mut AppState) + Send + 'static) 
     }
 }
 
-/// Arms what a commit leaves to the main loop: each debounced save fires after `SAVE_DEBOUNCE` through `fire`, each
-/// soft close's grace timer after its grace through `finalize`. A closed loop drops them: the quit path writes
-/// everything and makes every pending close final anyway.
-pub fn arm_commit<S: 'static>(
-    main_loop: &dyn MainLoop<S>,
-    commit: &Commit,
-    fire: fn(&mut S, DebouncedSave),
-    finalize: fn(&mut S, PendingCloseTimer),
-) {
-    arm_debounced_saves(main_loop, &commit.debounced, fire);
-    for timer in commit.pending_closes.iter().copied() {
+/// Where the timers of a commit land when they fire.
+pub struct TimerHandlers<S> {
+    /// A debounced save's quiet window elapsed.
+    pub save: fn(&mut S, DebouncedSave),
+    /// A soft close's grace ran out.
+    pub finalize: fn(&mut S, PendingCloseTimer),
+    /// A window's `tree.changed` debounce elapsed.
+    pub tree_changed: fn(&mut S, TreeChangedTimer),
+}
+
+/// Arms what a commit leaves to the main loop: each debounced save fires after `SAVE_DEBOUNCE`, each soft close's
+/// grace timer after its grace, each window's `tree.changed` after [`TREE_CHANGED_DEBOUNCE`]. A closed loop drops
+/// them: the quit path writes everything and makes every pending close final anyway, and nobody reads the ring after.
+pub fn arm_commit<S: 'static>(main_loop: &dyn MainLoop<S>, timers: &CommitTimers, handlers: &TimerHandlers<S>) {
+    arm_debounced_saves(main_loop, &timers.debounced, handlers.save);
+    for timer in timers.pending_closes.iter().copied() {
+        let finalize = handlers.finalize;
         let _ = main_loop.post_after(timer.grace, Box::new(move |state: &mut S| finalize(state, timer)));
     }
+    for timer in timers.tree_changed.iter().copied() {
+        let fire = handlers.tree_changed;
+        let _ = main_loop.post_after(TREE_CHANGED_DEBOUNCE, Box::new(move |state: &mut S| fire(state, timer)));
+    }
 }
+
+/// The app state's handlers of a commit's timers.
+const APP_TIMERS: TimerHandlers<AppState> = TimerHandlers {
+    save: fire_debounced,
+    finalize: finalize_pending_close,
+    tree_changed: fire_tree_changed,
+};
 
 /// A terminal report bound for the session that shows the terminal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,10 +121,9 @@ impl AppState {
         if self.quitting {
             return;
         }
-        // the events go to the ring with Task 12
-        let commit = self.core.commit();
+        let timers = self.core.commit();
         if let Some(main_loop) = self.poster.upgrade() {
-            arm_commit(&*main_loop, &commit, fire_debounced, finalize_pending_close);
+            arm_commit(&*main_loop, &timers, &APP_TIMERS);
         }
         if let Some(ui) = self.ui.as_mut() {
             ui.sync(&mut self.core, &self.poster);
@@ -237,6 +255,12 @@ fn fire_debounced(state: &mut AppState, save: DebouncedSave) {
     }
 }
 
+fn fire_tree_changed(state: &mut AppState, timer: TreeChangedTimer) {
+    if !state.quitting {
+        state.core.fire_tree_changed(timer);
+    }
+}
+
 fn finalize_pending_close(state: &mut AppState, timer: PendingCloseTimer) {
     if state.quitting {
         return;
@@ -250,12 +274,13 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use agterm_core::events::{EventCursor, ReadOptions};
     use agterm_core::model::{NewSession, WindowLibrary};
     use agterm_core::persist::{LibraryPersistence, SAVE_DEBOUNCE};
     use agterm_core::{CoreConfig, CoreState};
     use agterm_host::fakes::FakeSurface;
     use agterm_host::{MainLoopClosed, MainTask};
-    use agterm_proto::AppIdentity;
+    use agterm_proto::{AppIdentity, EventKind};
 
     use super::*;
 
@@ -303,33 +328,43 @@ mod tests {
     }
 
     #[test]
-    fn a_commit_arms_its_saves_and_grace_timers_with_their_delays() {
+    fn a_commit_arms_its_saves_grace_timers_and_tree_changed_with_their_delays() {
         let dir = tempfile::Builder::new().prefix("agt").tempdir_in("/tmp").unwrap();
         let mut persistence = LibraryPersistence::new(dir.path());
-        let mut library = persistence.bootstrap("/home/u");
+        let library = persistence.bootstrap("/home/u");
         let window = library.active_window_id().unwrap();
-        let store = library.store_mut(window).unwrap();
+        let mut core = core(library, Some(persistence));
+        let store = core.library_mut().store_mut(window).unwrap();
         let workspace = store.workspaces()[0].id();
         let first = store.sessions().next().unwrap().id();
         store.add_session(workspace, NewSession::at_cwd("/srv")).unwrap();
-        let _ = persistence.commit(&mut library);
-        library.store_mut(window).unwrap().select_session(Some(first));
-        let mut commit = persistence.commit(&mut library);
-        assert_eq!(commit.debounced.len(), 1, "a selection saves debounced");
+        let structural = core.commit();
+        assert_eq!(
+            structural.tree_changed.len(),
+            1,
+            "a structural change invalidates the tree"
+        );
+        core.library_mut()
+            .store_mut(window)
+            .unwrap()
+            .select_session(Some(first));
+        let mut timers = core.commit();
+        assert_eq!(timers.debounced.len(), 1, "a selection saves debounced");
+        timers.tree_changed = structural.tree_changed;
         let timer = PendingCloseTimer {
             window,
             record: Uuid::new_v4(),
             grace: Duration::from_secs(3),
         };
-        commit.pending_closes.push(timer);
+        timers.pending_closes.push(timer);
 
         let main_loop = RecordingLoop::<Vec<String>>::new();
-        arm_commit(
-            &main_loop,
-            &commit,
-            |seen, save| seen.push(format!("save {}", save.window)),
-            |seen, timer| seen.push(format!("finalize {}", timer.record)),
-        );
+        let handlers = TimerHandlers {
+            save: |seen: &mut Vec<String>, save| seen.push(format!("save {}", save.window)),
+            finalize: |seen: &mut Vec<String>, timer| seen.push(format!("finalize {}", timer.record)),
+            tree_changed: |seen: &mut Vec<String>, timer| seen.push(format!("tree {}", timer.window)),
+        };
+        arm_commit(&main_loop, &timers, &handlers);
         let mut seen = Vec::new();
         let delays: Vec<Option<Duration>> = main_loop
             .take()
@@ -339,8 +374,57 @@ mod tests {
                 delay
             })
             .collect();
-        assert_eq!(delays, [Some(SAVE_DEBOUNCE), Some(Duration::from_secs(3))]);
-        assert_eq!(seen, [format!("save {window}"), format!("finalize {}", timer.record)]);
+        assert_eq!(
+            delays,
+            [
+                Some(SAVE_DEBOUNCE),
+                Some(Duration::from_secs(3)),
+                Some(TREE_CHANGED_DEBOUNCE)
+            ]
+        );
+        assert_eq!(
+            seen,
+            [
+                format!("save {window}"),
+                format!("finalize {}", timer.record),
+                format!("tree {window}")
+            ]
+        );
+    }
+
+    #[test]
+    fn settle_sequences_events_and_lands_tree_changed_when_its_timer_fires() {
+        let (mut state, window, _) = state_with_terminal();
+        let main_loop: Arc<RecordingLoop<AppState>> = Arc::new(RecordingLoop::new());
+        let as_dyn: Arc<dyn MainLoop<AppState>> = Arc::clone(&main_loop) as _;
+        state.poster = Arc::downgrade(&as_dyn);
+        state.settle();
+        let _ = main_loop.take();
+        let tail = state.core.events().ring().current_sequence();
+
+        let store = state.core.library_mut().store_mut(window).unwrap();
+        let workspace = store.workspaces()[0].id();
+        store.add_session(workspace, NewSession::at_cwd("/srv")).unwrap();
+        state.settle();
+        let ring = state.core.events().ring();
+        assert_eq!(ring.current_sequence(), tail + 2, "created and selected, at once");
+        let posted = main_loop.take();
+        assert_eq!(posted.len(), 1);
+        for (delay, task) in posted {
+            assert_eq!(delay, Some(TREE_CHANGED_DEBOUNCE));
+            task(&mut state);
+        }
+        let options = ReadOptions {
+            cursor: Some(EventCursor {
+                run: state.core.events().ring().run(),
+                after: tail + 2,
+            }),
+            ..ReadOptions::default()
+        };
+        let batch = state.core.events().read(&options).unwrap();
+        assert_eq!(batch.items.len(), 1);
+        assert_eq!(batch.items[0].kind, EventKind::TreeChanged);
+        assert_eq!(batch.items[0].window, Some(agterm_core::pane_env::uuid_string(window)));
     }
 
     #[test]
@@ -366,6 +450,7 @@ mod tests {
             saved.contains(&agterm_core::pane_env::uuid_string(added)),
             "a structural change saves now"
         );
+        let _ = main_loop.take();
 
         let first = state
             .core

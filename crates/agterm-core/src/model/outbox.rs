@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use agterm_proto::events::EventKind;
+pub use agterm_proto::events::EventPayload;
 use uuid::Uuid;
 
 use crate::persist::RecentClosedItem;
@@ -21,19 +22,6 @@ static EMISSION_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// The next place in the app-wide emission order: strictly increasing across every store and the library.
 pub(crate) fn next_emission() -> u64 {
     EMISSION_COUNTER.fetch_add(1, Ordering::Relaxed)
-}
-
-/// The kind-specific fields of one event (upstream's `ControlEventPayload`), as far as the model fills them.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct EventPayload {
-    /// The session's display name at emit time.
-    pub name: Option<String>,
-    /// `session.selected`: the selection it replaced.
-    pub previous: Option<Uuid>,
-    /// `status`: the new status' wire name.
-    pub status: Option<String>,
-    /// `status`: the pane that set it.
-    pub pane: Option<String>,
 }
 
 /// One event a store emitted, before the library adds its window and the ring its sequence (upstream's

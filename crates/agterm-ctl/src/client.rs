@@ -20,13 +20,29 @@ const MAX_LINE_BYTES: usize = 64 << 20;
 const READ_CHUNK: usize = 64 * 1024;
 
 /// A failure talking to the socket (connect, write, read, decode), as opposed to a server-side `{"ok":false}`, which
-/// is a valid [`Reply`]. Its text is what follows `Error: ` on stderr.
+/// is a valid [`Reply`] (upstream's `SocketClientError`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClientError(pub String);
+pub struct ClientError {
+    /// What follows `Error: ` on stderr.
+    pub message: String,
+    /// The errno of a failed connect, `None` for every other failure.
+    pub connect_errno: Option<i32>,
+}
+
+impl ClientError {
+    /// A failure other than a failed connect.
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            connect_errno: None,
+        }
+    }
+}
 
 impl fmt::Display for ClientError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.message)
     }
 }
 
@@ -48,7 +64,7 @@ impl Reply {
 }
 
 /// The OS's own text for an I/O error (`strerror`), without the `(os error N)` suffix std appends.
-fn os_message(error: &io::Error) -> String {
+pub fn os_message(error: &io::Error) -> String {
     let text = error.to_string();
     match (error.raw_os_error(), text.rfind(" (os error ")) {
         (Some(_), Some(at)) => text[..at].to_owned(),
@@ -75,18 +91,19 @@ fn connect_hint(error: &io::Error, path: &Path) -> &'static str {
 pub fn connect(path: &Path) -> Result<UnixStream, ClientError> {
     let len = path.as_os_str().as_bytes().len();
     if len >= SUN_PATH_CAPACITY {
-        return Err(ClientError(format!(
+        return Err(ClientError::new(format!(
             "socket path too long ({len} bytes): {}",
             path.display()
         )));
     }
-    UnixStream::connect(path).map_err(|error| {
-        ClientError(format!(
+    UnixStream::connect(path).map_err(|error| ClientError {
+        message: format!(
             "connect({}) failed: {} — {}",
             path.display(),
             os_message(&error),
             connect_hint(&error, path)
-        ))
+        ),
+        connect_errno: error.raw_os_error(),
     })
 }
 
@@ -139,11 +156,11 @@ fn send_all(stream: &UnixStream, mut data: &[u8]) -> io::Result<()> {
 /// Sends `request` as one newline-terminated JSON line to `path` and decodes the one response line.
 pub fn send(path: &Path, request: &Request) -> Result<Reply, ClientError> {
     let mut data =
-        serde_json::to_vec(request).map_err(|error| ClientError(format!("could not encode request: {error}")))?;
+        serde_json::to_vec(request).map_err(|error| ClientError::new(format!("could not encode request: {error}")))?;
     // the server rejects a line over the shared cap and closes the connection: say so before writing instead of
     // failing the write against the closing peer
     if data.len() > MAX_REQUEST_LINE_BYTES {
-        return Err(ClientError(format!(
+        return Err(ClientError::new(format!(
             "request too large ({} bytes, cap {MAX_REQUEST_LINE_BYTES}) — split the input into smaller requests",
             data.len()
         )));
@@ -152,9 +169,10 @@ pub fn send(path: &Path, request: &Request) -> Result<Reply, ClientError> {
     let mut stream = connect(path)?;
     // main restores SIGPIPE's default action for stdout, so the request goes out with MSG_NOSIGNAL: a write to a
     // hung-up peer (one that rejected the line) is an EPIPE error here, not a silent death
-    send_all(&stream, &data).map_err(|error| ClientError(format!("write failed: {}", os_message(&error))))?;
-    let raw = read_line(&mut stream).ok_or_else(|| ClientError(format!("no response from {}", path.display())))?;
-    let response = decode_response(&raw).map_err(|error| ClientError(format!("could not decode response: {error}")))?;
+    send_all(&stream, &data).map_err(|error| ClientError::new(format!("write failed: {}", os_message(&error))))?;
+    let raw = read_line(&mut stream).ok_or_else(|| ClientError::new(format!("no response from {}", path.display())))?;
+    let response =
+        decode_response(&raw).map_err(|error| ClientError::new(format!("could not decode response: {error}")))?;
     Ok(Reply { response, raw })
 }
 
@@ -276,8 +294,25 @@ mod tests {
         let path = format!("/tmp/{}", "x".repeat(SUN_PATH_CAPACITY - 5));
         let error = connect(Path::new(&path)).unwrap_err();
         assert_eq!(
-            error.0,
-            format!("socket path too long ({SUN_PATH_CAPACITY} bytes): {path}")
+            error,
+            ClientError::new(format!("socket path too long ({SUN_PATH_CAPACITY} bytes): {path}"))
+        );
+    }
+
+    #[test]
+    fn a_failed_connect_carries_its_errno() {
+        let dir = tempfile::Builder::new().prefix("agc").tempdir_in("/tmp").unwrap();
+        let missing = connect(&dir.path().join("missing.sock")).unwrap_err();
+        assert_eq!(missing.connect_errno, Some(libc::ENOENT));
+        // a socket file nobody listens on any more refuses
+        let stale = dir.path().join("stale.sock");
+        drop(std::os::unix::net::UnixListener::bind(&stale).unwrap());
+        let refused = connect(&stale).unwrap_err();
+        assert_eq!(refused.connect_errno, Some(libc::ECONNREFUSED), "{refused}");
+        assert!(
+            refused
+                .message
+                .starts_with(&format!("connect({}) failed: ", stale.display()))
         );
     }
 }

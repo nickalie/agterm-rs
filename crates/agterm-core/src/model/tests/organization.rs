@@ -19,6 +19,7 @@ use crate::model::{
     AgentIndicator, AgentStatus, AppStore, EventPayload, ModelEvent, NewSession, NewSessionPlacement, ReorderDirection,
     SaveRequest, Session, SidebarMode, StatusPane, Workspace, WorkspaceOptions,
 };
+use crate::pane_env::uuid_string;
 
 // MARK: - Helpers
 
@@ -1122,13 +1123,13 @@ fn selecting_another_session_emits_it_with_the_one_that_lost_the_selection() {
     assert_eq!(events[0].workspace, Some(workspace));
     let selected = EventPayload {
         name: Some("api".to_owned()),
-        previous: Some(first),
+        previous: Some(uuid_string(first)),
         ..EventPayload::default()
     };
     assert_eq!(events[0].payload, selected);
     assert_eq!(events[1].session, None);
     let cleared = EventPayload {
-        previous: Some(second),
+        previous: Some(uuid_string(second)),
         ..EventPayload::default()
     };
     assert_eq!(events[1].payload, cleared);
@@ -1151,7 +1152,7 @@ fn a_selected_add_is_created_before_it_is_selected_and_a_background_add_selects_
         ]
     );
     assert_eq!(events[1].session, Some(added));
-    assert_eq!(events[1].payload.previous, Some(first));
+    assert_eq!(events[1].payload.previous, Some(uuid_string(first)));
 }
 
 #[test]
@@ -1165,7 +1166,7 @@ fn closing_the_selected_session_emits_the_reselection() {
     let events = selections(&store);
     assert_eq!(kinds(&events), [EventKind::SessionClosed, EventKind::SessionSelected]);
     assert_eq!(events[1].session, Some(first));
-    assert_eq!(events[1].payload.previous, Some(added));
+    assert_eq!(events[1].payload.previous, Some(uuid_string(added)));
 }
 
 // MARK: - tree.changed (AppStoreEventTests)

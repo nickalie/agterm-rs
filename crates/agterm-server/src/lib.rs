@@ -9,7 +9,8 @@
 //!   read is answered `request too large or read failed`, one that does not decode `invalid request: <context>`;
 //! - the request hops to the main loop through [`agterm_host::MainLoop`];
 //! - a reply may hand the connection to a [`StreamOwner`] after its `ok` (see [`stream`]), as upstream hands
-//!   `zmx.present` and `session.overlay.job.run` connections to their stream owners.
+//!   `zmx.present` and `session.overlay.job.run` connections to their stream owners, which usually run a
+//!   [`LineStream`] over it (upstream's `ControlStreamOwner`).
 //!
 //! Rust-only: each connection gets its own thread, where upstream serves connections one at a time on its accept
 //! queue and gives a thread only to the commands that wait on the network; a handler's panic becomes `ok:false`.
@@ -34,7 +35,7 @@ use agterm_proto::Request;
 
 pub use crate::connection::ConnectionDeadlines;
 use crate::connection::Hop;
-pub use crate::stream::{Reply, StreamOwner};
+pub use crate::stream::{LineStream, LineStreamLimits, Reply, StreamOwner};
 
 /// A socket path must be shorter than this many bytes: upstream's `start` guard (`socketPath.utf8.count < 104`, the
 /// macOS `sun_path` size), kept on Linux although its `sun_path` holds 108.
