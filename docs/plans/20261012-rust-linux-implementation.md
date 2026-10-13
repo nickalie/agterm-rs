@@ -1134,6 +1134,41 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
       617 listed: every non-live `test_restore.py` test, the three non-live relaunch behaviors and cli `test_restore`;
       the 28 still red are zmx, terminfo and live clipboard tests of later tasks)
 
+### Task 26.1: ➕ Quick terminal as a floating layer-shell panel
+
+Task 17 hosts the quick terminal in an ordinary undecorated GTK window. Upstream's `QuickTerminalPanel`
+(`agterm/Views/QuickTerminal.swift`, `.claude/rules/windows.md` "Quick terminal") is a borderless, non-activating
+`NSPanel` at `.floating` level on every space, shown on the pointer's screen over any application and dismissed on
+focus loss when summoned by the user. On Wayland an ordinary window cannot ask to float, so a tiling compositor
+(niri here) places it in its layout like any other window. The Linux equivalent of upstream's panel is a
+wlr-layer-shell surface.
+
+**Files:**
+- Modify: `crates/agterm-gtk/Cargo.toml`, `crates/agterm-gtk/src/quick.rs` (and its callers in `state.rs`/`app.rs`)
+- Modify: `.github/workflows/rust-linux.yml` (the `-dev` package), `README.md`/`conformance/README.md` if they list
+  runtime dependencies
+
+- [ ] host the quick terminal in a layer-shell surface through `gtk4-layer-shell` (the standard library, used via its
+      Rust bindings): layer `top` (or `overlay` if `top` does not cover full-screen windows on the compositor), anchored
+      to the top edge on the monitor under the pointer (upstream's pointer-screen rule), sized by
+      `QuickTerminalMetrics` as today, keyboard interactivity `on-demand` (exclusive only if on-demand loses keys),
+      exclusive zone 0 so it overlays without pushing other windows
+- [ ] keep upstream's behavior on top of it: summon/dismiss, dismiss on focus loss for a user summon and the pinned
+      control-driven `quick show`, never activating or raising agterm's own windows, one panel per app, the surface kept
+      realized while hidden (Task 17), the quick pane environment, `quickVisible`, zoom and `quick.type`/`quick.text`
+- [ ] fall back to today's ordinary window when the compositor has no layer-shell (GNOME/Mutter, X11): detect at
+      runtime with `gtk4_layer_shell::is_supported()`, log which host is used
+- [ ] the build dependency (`libgtk4-layer-shell-dev` / `gtk4-layer-shell`) in CI and the README's build prerequisites;
+      the shared library is a runtime dependency only where layer-shell is used — if the crate links it
+      unconditionally, record that as a runtime dependency
+- [ ] write tests: the placement and sizing decisions (monitor choice, anchors, margins from `QuickTerminalMetrics`)
+      as pure functions; the host selection (layer-shell vs fallback)
+- [ ] manual check (not automatable here): on niri the panel drops over the current workspace above other windows,
+      takes keys, hides on focus loss, and does not tile; on a compositor without layer-shell the fallback window works
+- [ ] gate: full run; ratchet (`test_dashboard_quick.py` and every quick test stay green under the private headless
+      weston; check whether that weston offers layer-shell — if not, the suite exercises the fallback host and the
+      layer-shell host is covered by the unit tests and the manual check)
+
 ### Task 27: zmx build and the `SessionHost` crate
 
 **Files:**
