@@ -48,23 +48,14 @@ pub fn symlink_target(path: &Path) -> Option<PathBuf> {
     Some(path.parent().map_or_else(|| link.clone(), |parent| parent.join(&link)))
 }
 
-/// Writes `text` to `path` atomically (a sibling temp renamed over it), then applies `mode` when given, so a rewrite
-/// keeps a restrictive mode instead of the fresh file's default (upstream's `AgentHooksInstall.writeFile`).
+/// Writes `text` to `path` atomically (a sibling temp renamed over it) with `mode` when given, so a rewrite keeps a
+/// restrictive mode instead of the fresh file's default (upstream's `AgentHooksInstall.writeFile`). The temp carries
+/// that mode before any contents reach it, so a chmod-600 file's text is never readable more widely, not even for the
+/// length of the write or after an interrupted install.
 pub fn write_file(text: &str, path: &Path, mode: Option<u32>) -> io::Result<()> {
-    let name = path
-        .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
-    let mut temp_name = std::ffi::OsString::from(".");
-    temp_name.push(name);
-    temp_name.push(format!(".agterm-{}.tmp", std::process::id()));
-    let temp = path.with_file_name(temp_name);
+    let temp = temp_path(path)?;
     let written = (|| {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o666)
-            .open(&temp)?;
+        let mut file = open_temp(&temp, mode)?;
         file.write_all(text.as_bytes())?;
         file.sync_all()?;
         fs::rename(&temp, path)
@@ -72,11 +63,34 @@ pub fn write_file(text: &str, path: &Path, mode: Option<u32>) -> io::Result<()> 
     if written.is_err() {
         let _ = fs::remove_file(&temp);
     }
-    written?;
+    written
+}
+
+/// The sibling temp a write of `path` goes through.
+fn temp_path(path: &Path) -> io::Result<PathBuf> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
+    let mut temp_name = std::ffi::OsString::from(".");
+    temp_name.push(name);
+    temp_name.push(format!(".agterm-{}.tmp", std::process::id()));
+    Ok(path.with_file_name(temp_name))
+}
+
+/// Creates the temp afresh (a stale one, or anything planted under its name, removed first, so the creation mode
+/// applies): owner-only while `mode` is given, then exactly `mode`, both before a byte is written; the umask's
+/// default otherwise.
+fn open_temp(temp: &Path, mode: Option<u32>) -> io::Result<fs::File> {
+    let _ = fs::remove_file(temp);
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(if mode.is_some() { 0o600 } else { 0o666 })
+        .open(temp)?;
     if let Some(mode) = mode {
-        fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+        file.set_permissions(fs::Permissions::from_mode(mode))?;
     }
-    Ok(())
+    Ok(file)
 }
 
 /// Writes `text` through an existing symlink to its target, so a dotfiles-managed link survives, keeping the target's
@@ -183,6 +197,28 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(&target).unwrap(), "new");
         assert_eq!(posix_mode(&target), Some(0o600));
+    }
+
+    /// The temp holds the contents before the rename: it must already be restrictive when opened, and a stale temp
+    /// with a wide mode must not lend it its permissions.
+    #[test]
+    fn the_temp_is_restrictive_before_anything_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let temp = temp_path(&path).unwrap();
+        fs::write(&temp, "stale").unwrap();
+        fs::set_permissions(&temp, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let file = open_temp(&temp, Some(0o600)).unwrap();
+        assert_eq!(file.metadata().unwrap().len(), 0, "a fresh file, not the stale one");
+        assert_eq!(posix_mode(&temp), Some(0o600));
+        drop(file);
+
+        write_file("secret", &path, Some(0o600)).unwrap();
+        assert_eq!(posix_mode(&path), Some(0o600));
+        assert!(!temp.exists());
+        write_file("script", &path, Some(0o755)).unwrap();
+        assert_eq!(posix_mode(&path), Some(0o755), "a wider mode is applied exactly");
     }
 
     #[test]

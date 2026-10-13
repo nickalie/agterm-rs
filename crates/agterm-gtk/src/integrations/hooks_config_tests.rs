@@ -284,6 +284,18 @@ fn codex_merge_removes_only_the_retired_notify_value() {
     assert!(contents.starts_with(own));
     assert!(contents.contains(&format!("my-own-notify.sh\"]\n\n{RC_MARKER_BEGIN}")));
 
+    let multiline =
+        "notify = [\"/home/me/.config/agterm/agent-status/codex-notify.sh\",\n  \"--flag\"]\nmodel = \"x\"\n";
+    let contents = merged(merge_codex_config(multiline, SCRIPT_DIR));
+    assert!(
+        contents.starts_with(multiline),
+        "a multi-line notify is kept whole, not half-cut"
+    );
+    assert!(
+        contents.parse::<toml::Table>().is_ok(),
+        "the merged config stays valid TOML"
+    );
+
     let comment = "notify = [\"/home/me/custom.sh\"] # replaces codex-notify.sh\n";
     let contents = merged(merge_codex_config(comment, SCRIPT_DIR));
     assert!(contents.contains("notify = [\"/home/me/custom.sh\"]"));

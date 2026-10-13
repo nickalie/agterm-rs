@@ -83,6 +83,8 @@ pub struct HooksPlan {
     pub claude: ClaudePlan,
     /// The rc files that gain the `source` block, with their new contents.
     pub shell_rcs: Vec<FileWrite>,
+    /// The rc files that could not be read, left untouched.
+    pub rcs_skipped: Vec<PathBuf>,
     pub codex: CodexPlan,
     pub pi: PiPlan,
     pub opencode: OpenCodePlan,
@@ -162,6 +164,8 @@ impl OpenCodeResult {
 pub struct HooksOutcome {
     pub script_dir: PathBuf,
     pub settings_skipped: bool,
+    /// The rc files that could not be read and did not get the `source` line.
+    pub rcs_skipped: Vec<PathBuf>,
     pub codex: CodexResult,
     pub pi: PiResult,
     pub opencode: OpenCodeResult,
@@ -170,7 +174,25 @@ pub struct HooksOutcome {
 impl HooksOutcome {
     #[must_use]
     pub fn is_warning(&self) -> bool {
-        self.settings_skipped || self.codex.is_warning() || self.pi.is_warning() || self.opencode.is_warning()
+        self.settings_skipped
+            || !self.rcs_skipped.is_empty()
+            || self.codex.is_warning()
+            || self.pi.is_warning()
+            || self.opencode.is_warning()
+    }
+
+    /// The shell line: upstream's, plus the rc files left untouched because they could not be read.
+    fn shell_text(&self) -> String {
+        let added = "The source line was added to ~/.zshrc, ~/.bashrc (and ~/.config/fish/config.fish if fish is \
+                     installed).";
+        if self.rcs_skipped.is_empty() {
+            return added.to_owned();
+        }
+        let skipped: Vec<String> = self.rcs_skipped.iter().map(|path| path.display().to_string()).collect();
+        format!(
+            "{added} Except {}: it couldn't be read, so agterm left it untouched; add the source line there by hand.",
+            skipped.join(", ")
+        )
     }
 
     #[must_use]
@@ -194,13 +216,13 @@ impl HooksOutcome {
             "Claude Code hooks merged into ~/.claude/settings.json."
         };
         format!(
-            "Scripts installed to {}.\n{claude}\n{}\n{}\n{}\nThe source line was added to ~/.zshrc, ~/.bashrc (and \
-             ~/.config/fish/config.fish if fish is installed).\n\nOpen a new terminal for the shell integration to take \
+            "Scripts installed to {}.\n{claude}\n{}\n{}\n{}\n{}\n\nOpen a new terminal for the shell integration to take \
              effect.",
             self.script_dir.display(),
             codex_text(self.codex),
             pi_text(self.pi),
             opencode_text(&self.opencode),
+            self.shell_text(),
         )
     }
 }
@@ -431,10 +453,12 @@ pub fn plan(env: &Environment, opencode: &OpenCodeStart, probe: Option<&Probe>) 
         OpenCodeStart::Install(version) => plan_opencode(&env.home, &package, Some(*version), probe)?,
         OpenCodeStart::Ask => plan_opencode(&env.home, &package, None, probe)?,
     };
+    let (shell_rcs, rcs_skipped) = plan_shell_rcs(&env.home, &dir);
     Ok(HooksPlan {
         bake: env.bundled_cli.as_ref().map(|tool| tool.to_string_lossy().into_owned()),
         claude: plan_claude(&env.home, &dir),
-        shell_rcs: plan_shell_rcs(&env.home, &dir),
+        shell_rcs,
+        rcs_skipped,
         codex: plan_codex(&env.home, &dir),
         pi: plan_pi(&env.home, &package)?,
         opencode,
@@ -460,9 +484,10 @@ fn plan_claude(home: &Path, script_dir: &str) -> ClaudePlan {
 }
 
 /// The rc files gaining the block: `~/.zshrc` and `~/.bashrc` always, `config.fish` only with `~/.config/fish`
-/// present. An unreadable rc file is left untouched rather than replaced.
-fn plan_shell_rcs(home: &Path, script_dir: &str) -> Vec<FileWrite> {
+/// present. An unreadable rc file is left untouched rather than replaced, and returned second for the alert.
+fn plan_shell_rcs(home: &Path, script_dir: &str) -> (Vec<FileWrite>, Vec<PathBuf>) {
     let mut writes = Vec::new();
+    let mut skipped = Vec::new();
     for (name, script) in [
         (".zshrc", config::INTEGRATION_RELATIVE_PATH),
         (".bashrc", config::INTEGRATION_RELATIVE_PATH),
@@ -474,6 +499,7 @@ fn plan_shell_rcs(home: &Path, script_dir: &str) -> Vec<FileWrite> {
         }
         let Ok(existing) = files::read_existing(&path) else {
             tracing::warn!(path = %path.display(), "agent hooks: the rc file is unreadable, left untouched");
+            skipped.push(path);
             continue;
         };
         let (contents, changed) = config::append_shell_rc(existing.as_deref().unwrap_or_default(), script_dir, script);
@@ -485,7 +511,7 @@ fn plan_shell_rcs(home: &Path, script_dir: &str) -> Vec<FileWrite> {
             });
         }
     }
-    writes
+    (writes, skipped)
 }
 
 fn plan_codex(home: &Path, script_dir: &str) -> CodexPlan {
@@ -554,6 +580,7 @@ pub fn apply(plan: &HooksPlan) -> Result<HooksOutcome, InstallError> {
     Ok(HooksOutcome {
         script_dir: plan.script_dir.clone(),
         settings_skipped,
+        rcs_skipped: plan.rcs_skipped.clone(),
         codex,
         pi: apply_pi(&plan.pi),
         opencode: apply_opencode(&plan.opencode),
@@ -563,31 +590,37 @@ pub fn apply(plan: &HooksPlan) -> Result<HooksOutcome, InstallError> {
 /// Copies the package over the script directory and bakes `agtermctl` into the generic and Codex wrappers (the
 /// Claude adapter execs the generic one, so it needs none).
 fn install_package(plan: &HooksPlan) -> Result<(), InstallError> {
-    files::copy_tree(&plan.package, &plan.script_dir)?;
+    files::copy_tree(&plan.package, &plan.script_dir).map_err(failed("install the scripts into", &plan.script_dir))?;
     let Some(tool) = &plan.bake else {
         return Ok(());
     };
     for name in [config::WRAPPER_NAME, config::CODEX_WRAPPER_NAME] {
         let wrapper = plan.script_dir.join(name);
-        let original = fs::read_to_string(&wrapper)?;
-        files::write_preserving_symlink(&config::bake_agtermctl_path(&original, tool), &wrapper)?;
+        let original = fs::read_to_string(&wrapper).map_err(failed("read", &wrapper))?;
+        files::write_preserving_symlink(&config::bake_agtermctl_path(&original, tool), &wrapper)
+            .map_err(failed("write", &wrapper))?;
     }
     Ok(())
+}
+
+/// The failure of `action` on `path`, naming both: the Install Failed alert says which file stopped the install.
+fn failed(action: &'static str, path: &Path) -> impl FnOnce(std::io::Error) -> InstallError {
+    let path = path.display().to_string();
+    move |err| InstallError(format!("Could not {action} {path}: {err}"))
 }
 
 /// Writes `write` through a symlink with the target's mode, backing the previous contents up beside the link (never
 /// into a dotfiles directory the link resolves into) with that same mode.
 fn write_with_backup(write: &FileWrite, create_parent: bool) -> Result<(), InstallError> {
     if create_parent && let Some(parent) = write.path.parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent).map_err(failed("create", parent))?;
     }
     if let Some(previous) = &write.backup {
         let mode = files::posix_mode(&files::write_target(&write.path));
         let backup = PathBuf::from(config::backup_path(&write.path.to_string_lossy()));
-        files::write_file(previous, &backup, mode)?;
+        files::write_file(previous, &backup, mode).map_err(failed("write", &backup))?;
     }
-    files::write_preserving_symlink(&write.contents, &write.path)?;
-    Ok(())
+    files::write_preserving_symlink(&write.contents, &write.path).map_err(failed("write", &write.path))
 }
 
 fn apply_codex(codex: &CodexPlan) -> Result<CodexResult, InstallError> {

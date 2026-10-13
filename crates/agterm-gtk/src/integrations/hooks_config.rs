@@ -162,11 +162,14 @@ pub fn merge_codex_config(existing: &str, script_dir: &str) -> CodexMerge {
             .unwrap_or_default(),
         _ => Vec::new(),
     };
-    let text = if notify.iter().any(|program| program.contains("codex-notify.sh")) {
-        remove_legacy_codex_notify(existing)
-    } else {
-        existing.to_owned()
-    };
+    // the removal is a one-line cut: a notify array a user spread over several lines would leave its tail behind as
+    // invalid TOML, so such a file keeps its notify line and only gains the block
+    let text = notify
+        .iter()
+        .any(|program| program.contains("codex-notify.sh"))
+        .then(|| remove_legacy_codex_notify(existing))
+        .filter(|removed| removed.parse::<toml::Table>().is_ok())
+        .unwrap_or_else(|| existing.to_owned());
     CodexMerge::Merged(append_codex_block(&text, script_dir))
 }
 

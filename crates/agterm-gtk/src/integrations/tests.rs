@@ -238,6 +238,55 @@ fn files_the_install_cannot_safely_change_are_left_alone() {
         zshrc,
         "an unreadable rc file is not replaced"
     );
+    assert_eq!(outcome.rcs_skipped, [home.path(".zshrc")]);
+    assert!(
+        home.read(".bashrc").contains("shell/integration.sh'"),
+        "the readable one still gets it"
+    );
+    let text = outcome.text();
+    assert!(
+        text.contains(&format!(
+            "Except {}: it couldn't be read, so agterm left it untouched",
+            home.path(".zshrc").display()
+        )),
+        "{text}"
+    );
+}
+
+/// An unreadable rc file alone is enough for the warning title.
+#[test]
+fn a_skipped_rc_file_alone_makes_the_install_a_warning() {
+    let home = Home::new();
+    fs::write(home.path(".bashrc"), [0xff_u8, 0xfe]).unwrap();
+    let outcome = home.install_hooks(&no_opencode(&home), None);
+    assert!(outcome.is_warning());
+    assert_eq!(outcome.title(), "Agent Status Hooks Installed — with a warning");
+    let clean = Home::new();
+    let outcome = clean.install_hooks(&no_opencode(&clean), None);
+    assert!(outcome.rcs_skipped.is_empty() && !outcome.is_warning());
+    assert!(
+        outcome
+            .text()
+            .contains("The source line was added to ~/.zshrc, ~/.bashrc (and")
+    );
+    assert!(!outcome.text().contains("Except"));
+}
+
+#[test]
+fn a_failed_write_names_the_path_it_stopped_on() {
+    let home = Home::new();
+    home.write(".config/agterm", "a file where the directory should be");
+    let plan = hooks::plan(&home.env, &no_opencode(&home), None).unwrap();
+    let err = hooks::apply(&plan).unwrap_err();
+    let script_dir = home.path(".config/agterm/agent-status");
+    assert!(
+        err.0.starts_with(&format!(
+            "Could not install the scripts into {}: ",
+            script_dir.display()
+        )),
+        "{}",
+        err.0
+    );
 }
 
 #[test]

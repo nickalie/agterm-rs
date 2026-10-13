@@ -45,12 +45,6 @@ pub struct Environment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallError(pub String);
 
-impl From<std::io::Error> for InstallError {
-    fn from(err: std::io::Error) -> Self {
-        Self(err.to_string())
-    }
-}
-
 impl Environment {
     /// The running app's: the user's home, the resources staged beside the binary (or this checkout's, in a dev or
     /// test build), its `agtermctl`. `None` without a home directory.
