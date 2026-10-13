@@ -15,6 +15,12 @@ pub struct ControlResult {
     /// The new or affected id of a mutating command (upper-case UUID).
     #[serde(default)]
     pub id: Option<String>,
+    /// `window.resize`: the applied frame width.
+    #[serde(default)]
+    pub width: Option<i64>,
+    /// `window.resize`: the applied frame height.
+    #[serde(default)]
+    pub height: Option<i64>,
     /// `window.list`.
     #[serde(default)]
     pub windows: Option<Vec<ControlWindowNode>>,
@@ -50,6 +56,17 @@ impl ControlResult {
     pub fn events(events: EventBatch) -> Self {
         Self {
             events: Some(events),
+            ..Self::default()
+        }
+    }
+
+    /// `{"id": id, "width": width, "height": height}`: a window's applied size.
+    #[must_use]
+    pub fn sized(id: impl Into<String>, width: i64, height: i64) -> Self {
+        Self {
+            id: Some(id.into()),
+            width: Some(width),
+            height: Some(height),
             ..Self::default()
         }
     }
@@ -119,6 +136,10 @@ mod tests {
             json!({"affected": 0})
         );
         assert_eq!(serde_json::to_value(ControlResult::default()).unwrap(), json!({}));
+        assert_eq!(
+            serde_json::to_string(&ControlResult::sized("A", 900, 600)).unwrap(),
+            r#"{"id":"A","width":900,"height":600}"#
+        );
     }
 
     #[test]

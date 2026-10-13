@@ -1,9 +1,9 @@
-//! The main loop's state: the core and the window it shows, and the tasks that change them.
+//! The main loop's state: the core and its on-screen windows, and the tasks that change them.
 //!
 //! RULE: every mutation runs as a main-loop task and ends with [`AppState::settle`], which lands the model's side
 //! effects (the immediate saves and the events in the ring; the debounced saves, the soft closes' grace timers and the
-//! windows' `tree.changed` debounces armed on the loop) and brings the deck, the sidebar and the window title in line
-//! with the model. GTK and libghostty handlers never touch the
+//! windows' `tree.changed` debounces armed on the loop) and brings the windows (one per open store, each with its deck,
+//! sidebar and title) in line with the model. GTK and libghostty handlers never touch the
 //! state in place: they [`post`] a task, since libghostty may call back while the state is borrowed and a widget
 //! must not be rebuilt inside its own handler.
 
@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::main_loop::GlibMainLoop;
 use crate::sidebar::{RowKind, SidebarRow};
-use crate::window::WindowUi;
+use crate::windows::Windows;
 
 /// Where handlers post tasks: the main loop, held weakly so a handler outliving it posts nothing.
 pub type Poster = Weak<dyn MainLoop<AppState>>;
@@ -84,8 +84,8 @@ pub enum PaneReport {
 pub struct AppState {
     pub core: Core,
     poster: Poster,
-    /// The window; `None` until the first activation built it (and in tests).
-    ui: Option<WindowUi>,
+    /// The on-screen windows; `None` until the first activation (and in tests).
+    windows: Option<Windows>,
     /// The quit save ran: nothing is committed, saved or re-rendered after it.
     quitting: bool,
 }
@@ -96,23 +96,23 @@ impl AppState {
         Self {
             core,
             poster: detached_poster(),
-            ui: None,
+            windows: None,
             quitting: false,
         }
     }
 
-    /// Connects the state to its main loop and its window, and renders the model into the window.
-    pub fn attach(&mut self, poster: Poster, ui: WindowUi) {
+    /// Connects the state to its main loop and its windows, and builds, renders and presents a window for every open
+    /// store.
+    pub fn attach(&mut self, poster: Poster, windows: Windows) {
         self.poster = poster;
-        self.ui = Some(ui);
+        self.windows = Some(windows);
         self.settle();
-        self.window_state_changed();
     }
 
-    /// Shows the window, the shown terminal focused.
+    /// Raises the frontmost window, its shown terminal focused.
     pub fn present(&self) {
-        if let Some(ui) = self.ui.as_ref() {
-            ui.present();
+        if let Some(windows) = self.windows.as_ref() {
+            windows.present_frontmost(&self.core);
         }
     }
 
@@ -125,8 +125,10 @@ impl AppState {
         if let Some(main_loop) = self.poster.upgrade() {
             arm_commit(&*main_loop, &timers, &APP_TIMERS);
         }
-        if let Some(ui) = self.ui.as_mut() {
-            ui.sync(&mut self.core, &self.poster);
+        match self.windows.as_mut() {
+            Some(windows) => windows.sync(&mut self.core, &self.poster),
+            // no frontend to ask
+            None => drop(self.core.take_window_requests()),
         }
     }
 
@@ -208,7 +210,7 @@ impl AppState {
                 if let Some(store) = window.and_then(|id| library.store_mut(id)) {
                     store.set_workspace_expanded(row.id, !expanded);
                 }
-                if let Some(ui) = self.ui.as_mut() {
+                if let Some(ui) = window.and_then(|id| self.windows.as_mut()?.get_mut(id)) {
                     ui.set_workspace_expanded(row.id, !expanded);
                 }
             }
@@ -216,9 +218,14 @@ impl AppState {
         self.settle();
     }
 
-    /// The user dragged the sidebar divider: the shown window's sidebar takes the new width.
-    pub fn sidebar_resized(&mut self) {
-        let Some((window, width)) = self.ui.as_ref().and_then(WindowUi::dragged_sidebar_width) else {
+    /// The user dragged window `window`'s sidebar divider: its sidebar takes the new width.
+    pub fn sidebar_resized(&mut self, window: Uuid) {
+        let Some(width) = self
+            .windows
+            .as_ref()
+            .and_then(|windows| windows.get(window))
+            .and_then(crate::window::WindowUi::dragged_sidebar_width)
+        else {
             return;
         };
         if let Some(store) = self.core.library_mut().store_mut(window) {
@@ -227,25 +234,30 @@ impl AppState {
         self.settle();
     }
 
-    /// Reports the window's full-screen and maximized state for `window.list`.
-    pub fn window_state_changed(&mut self) {
-        if let Some((window, state)) = self.ui.as_ref().and_then(WindowUi::window_state) {
-            self.core.set_window_state(window, Some(state));
+    /// Window `window`'s on-screen state changed (full screen, maximized, minimized): recorded for `window.list`.
+    pub fn window_state_changed(&mut self, window: Uuid) {
+        if let Some(ui) = self.windows.as_ref().and_then(|windows| windows.get(window)) {
+            self.core.set_window_state(window, Some(ui.window_state()));
         }
     }
 
-    /// The user closed the window: the quit save runs while every terminal still lives, the window's live state
-    /// (full screen, maximized, minimized) is withdrawn from `window.list`, then the window closes for real (and
-    /// with it the app).
-    pub fn close_requested(&mut self) {
-        self.save_on_quit();
-        let Some(ui) = self.ui.as_ref() else {
+    /// The user activated window `window`: it becomes frontmost (upstream's `WindowAccessor.reportFrontmost`).
+    pub fn report_frontmost(&mut self, window: Uuid) {
+        if self.quitting {
             return;
-        };
-        if let Some(window) = ui.window_id() {
-            self.core.set_window_state(window, None);
         }
-        ui.close();
+        self.core.report_frontmost(window);
+        self.settle();
+    }
+
+    /// The user closed window `window` (upstream's window `willClose`): its snapshot is written and its store closed,
+    /// tearing its terminals down; the settle then drops the GTK window, and the app quits once none is open.
+    pub fn close_requested(&mut self, window: Uuid) {
+        if self.quitting {
+            return;
+        }
+        self.core.close_window(window);
+        self.settle();
     }
 }
 
@@ -577,6 +589,45 @@ mod tests {
             "the grace-period cwd survives the undo"
         );
         assert_eq!(restored.osc_title.as_deref(), Some("htop"));
+    }
+
+    #[test]
+    fn closing_a_window_saves_it_closes_its_store_and_tears_its_terminals_down() {
+        let dir = tempfile::Builder::new().prefix("agt").tempdir_in("/tmp").unwrap();
+        let mut persistence = LibraryPersistence::new(dir.path());
+        let mut library = persistence.bootstrap("/home/u");
+        let first = library.active_window_id().unwrap();
+        let second = library.new_window(Some("second"));
+        let path = persistence.window_path(second);
+        let store = library.store_mut(second).unwrap();
+        let session = store.sessions().next().unwrap().id();
+        let terminal = FakeSurface::new("T");
+        let probe = terminal.probe();
+        store.session_mut(session).unwrap().surface.replace(Box::new(terminal));
+        let mut state = AppState::new(core(library, Some(persistence)));
+        state.close_requested(second);
+        assert!(!state.core.library().is_open(second));
+        assert_eq!(state.core.library().windows().len(), 2, "its bundle stays");
+        assert_eq!(state.core.library().active_window_id(), Some(first));
+        assert_eq!(probe.teardowns(), 1, "its terminals go with it");
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            saved.contains(&agterm_core::pane_env::uuid_string(session)),
+            "written before it closed"
+        );
+    }
+
+    #[test]
+    fn an_activated_window_becomes_frontmost_unless_quitting() {
+        let mut library = WindowLibrary::seeded("/home/u");
+        let first = library.active_window_id().unwrap();
+        let second = library.new_window(None);
+        let mut state = AppState::new(core(library, None));
+        state.report_frontmost(first);
+        assert_eq!(state.core.library().active_window_id(), Some(first));
+        state.save_on_quit();
+        state.report_frontmost(second);
+        assert_eq!(state.core.library().active_window_id(), Some(first));
     }
 
     #[test]

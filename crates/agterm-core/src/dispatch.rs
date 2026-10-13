@@ -21,6 +21,7 @@ use crate::model::{AppStore, WindowLibrary};
 use crate::persist::{AppSettings, DebouncedSave, LibraryPersistence};
 use crate::projection::{TreeContext, control_tree};
 use crate::resolve::Resolver;
+use crate::windows::{WindowRequest, WindowState};
 
 /// What the app tells the core about itself at startup.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,16 +39,6 @@ pub struct CoreState {
     pub settings: AppSettings,
     /// `None` keeps the model in memory only (tests).
     pub persistence: Option<LibraryPersistence>,
-}
-
-/// What the frontend reports about one on-screen window, for `window.list` (upstream's window cache flags). A window
-/// the frontend has not reported, or no longer shows, has none.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct WindowState {
-    pub fullscreen: bool,
-    /// Maximized, not full screen.
-    pub zoomed: bool,
-    pub minimized: bool,
 }
 
 /// The main-loop timers a [`Core::commit`] leaves to arm.
@@ -85,6 +76,8 @@ pub struct Core {
     events: ControlEvents,
     /// The frontend's on-screen windows, by window id.
     window_states: HashMap<Uuid, WindowState>,
+    /// What window commands left for the frontend's windows, in order, until it takes them.
+    window_requests: Vec<WindowRequest>,
     reveal_handler: Option<RevealHandler>,
 }
 
@@ -137,7 +130,89 @@ impl Core {
             persistence: state.persistence,
             events: ControlEvents::default(),
             window_states: HashMap::new(),
+            window_requests: Vec::new(),
             reveal_handler: None,
+        }
+    }
+
+    /// Whether this host claims the conformance capability `name` (`window-geometry` decides whether `window.move`
+    /// can act).
+    #[must_use]
+    pub fn has_capability(&self, name: &str) -> bool {
+        self.capabilities.iter().any(|claimed| claimed == name)
+    }
+
+    /// Takes what window commands asked of the on-screen windows since the last take, in order. The frontend applies
+    /// them after building the windows the same commit opened.
+    pub fn take_window_requests(&mut self) -> Vec<WindowRequest> {
+        std::mem::take(&mut self.window_requests)
+    }
+
+    pub(crate) fn request_window(&mut self, request: WindowRequest) {
+        self.window_requests.push(request);
+    }
+
+    /// The user brought window `id` to the front (upstream's `WindowAccessor.reportFrontmost`): it becomes the
+    /// frontmost window, recorded in the index when that changed, and with auto-hide on, its sidebar shows and the
+    /// other windows' hide, on every report. A closed or unknown id is ignored. Commit afterwards.
+    pub fn report_frontmost(&mut self, id: Uuid) {
+        if !self.library.is_open(id) {
+            return;
+        }
+        self.library.set_frontmost(Some(id));
+        if self.auto_hide_inactive_sidebars() {
+            self.library.apply_inactive_window_sidebar_hiding();
+        }
+    }
+
+    /// A control command made window `id` frontmost (upstream's `ControlServer.takeFrontmost`): recorded and, with
+    /// auto-hide on, the sidebars reconciled, only when it changed.
+    pub(crate) fn take_frontmost(&mut self, id: Uuid) {
+        if self.library.frontmost_window_id == Some(id) {
+            return;
+        }
+        self.library.set_frontmost(Some(id));
+        if self.auto_hide_inactive_sidebars() {
+            self.library.apply_inactive_window_sidebar_hiding();
+        }
+    }
+
+    fn auto_hide_inactive_sidebars(&self) -> bool {
+        self.settings.auto_hide_sidebar_inactive_windows.unwrap_or(false)
+    }
+
+    /// Opens closed window `id` from its file (upstream's `loadStore`), or with an empty tree when the model is kept
+    /// in memory only. A no-op for an open or unknown id. Commit afterwards.
+    pub(crate) fn open_window(&mut self, id: Uuid) {
+        match self.persistence.as_mut() {
+            Some(persistence) => {
+                persistence.load_window(&mut self.library, id);
+            }
+            None => self.library.open_window(id, AppStore::new()),
+        }
+    }
+
+    /// Closes window `id`, its snapshot written first (upstream's window `willClose` save, then `closeWindow`); its
+    /// metadata stays. The frontend drops its on-screen window once the commit lands. A no-op for a closed or unknown
+    /// id and while terminating. Commit afterwards.
+    pub fn close_window(&mut self, id: Uuid) {
+        match self.persistence.as_mut() {
+            Some(persistence) => persistence.close_window(&mut self.library, id),
+            None => self.library.close_window(id),
+        }
+        if !self.library.is_open(id) {
+            self.window_states.remove(&id);
+        }
+    }
+
+    /// Removes window `id` for good, its file deleted; keeps the last window. Commit afterwards.
+    pub(crate) fn remove_window(&mut self, id: Uuid) {
+        match self.persistence.as_mut() {
+            Some(persistence) => persistence.remove_window(&mut self.library, id),
+            None => self.library.remove_window(id),
+        }
+        if !self.library.windows().iter().any(|info| info.id == id) {
+            self.window_states.remove(&id);
         }
     }
 
@@ -309,7 +384,7 @@ impl Core {
     fn route(&mut self, request: &Request) -> Result<Response, ControlError> {
         match request.cmd {
             Command::Session(cmd) => result_of(&commands::session::dispatch(self, cmd, request)?),
-            Command::Window(cmd) => result_of(&commands::window::dispatch(self, cmd)?),
+            Command::Window(cmd) => result_of(&commands::window::dispatch(self, cmd, request)?),
             Command::Workspace(cmd) => match commands::workspace::dispatch(self, cmd, request)? {
                 Some(result) => result_of(&result),
                 None => Ok(Response::success()),
@@ -365,6 +440,7 @@ mod tests {
     const ANSWERED: &[Command] = &[
         Command::Version,
         Command::Tree,
+        Command::Window(WindowCmd::New),
         Command::Window(WindowCmd::List),
         Command::Events(EventsCmd::Read),
         Command::Workspace(WorkspaceCmd::New),
@@ -387,7 +463,7 @@ mod tests {
         let mut core = core();
         for cmd in [
             Command::Session(SessionCmd::Swap),
-            Command::Window(WindowCmd::New),
+            Command::Notify,
             Command::Zmx(ZmxCmd::List),
         ] {
             let response = core.dispatch(&Request::new(cmd));
@@ -456,9 +532,9 @@ mod tests {
 
     #[test]
     fn every_command_gets_an_answer() {
-        let mut core = core();
         for cmd in Command::all() {
-            let response = core.dispatch(&Request::new(cmd));
+            // a fresh core each, so `window.new` opens no window for the commands after it
+            let response = core().dispatch(&Request::new(cmd));
             assert_eq!(response.ok, ANSWERED.contains(&cmd), "{cmd}");
         }
     }

@@ -1,8 +1,8 @@
-//! The app shell: who this build is, the core and its control server on the main loop, the window, and the quit path.
+//! The app shell: who this build is, the core and its control server on the main loop, the windows, and the quit path.
 //!
 //! Order on the first activation follows upstream's `agtermApp`: the control server settles socket ownership before
 //! any shell is spawned, so a shell's `AGTERM_SOCKET` is right from the start (`<socket>.unavailable` when another
-//! instance owns the socket), and the server starts serving once the window exists. The main loop owns an
+//! instance owns the socket), and the server starts serving once the windows exist. The main loop owns an
 //! [`AppState`]: every request is dispatched and then settled there (`state.rs`).
 
 use std::cell::RefCell;
@@ -24,14 +24,14 @@ use crate::ghostty_app;
 use crate::main_loop::GlibMainLoop;
 use crate::state::AppState;
 use crate::surface;
-use crate::window::WindowUi;
+use crate::windows::Windows;
 
 /// The application id the Linux fork registered, kept so this build can take over its state.
 const DEFAULT_APP_ID: &str = "io.github.melonamin.agterm";
 const APP_ID_ENV: &str = "AGTERM_APP_ID";
 
 /// The capabilities of the Rust target profile implemented so far (`conformance/docs/rust-build.md`).
-const CAPABILITIES: &[&str] = &["posix-shell", "drop-placement"];
+const CAPABILITIES: &[&str] = &["posix-shell", "drop-placement", "select-takes-frontmost"];
 
 /// `AGTERM_APP_ID` when it is a valid application id, else the fork's.
 pub fn app_id(env: &dyn Env) -> String {
@@ -107,10 +107,15 @@ fn handle(state: &mut AppState, request: &Request) -> Reply {
 }
 
 pub fn activate(app: &adw::Application) {
-    if SHELL.with(|shell| shell.borrow().is_some()) {
-        if let Some(window) = app.active_window() {
-            window.present();
+    // a later activation (a second launch forwarded here) raises the frontmost window
+    let running = SHELL.with(|shell| {
+        let shell = shell.borrow();
+        if let Some(state) = shell.as_ref().and_then(|shell| shell.state.try_borrow().ok()) {
+            state.present();
         }
+        shell.is_some()
+    });
+    if running {
         return;
     }
     let dark = adw::StyleManager::default().is_dark();
@@ -133,15 +138,12 @@ pub fn activate(app: &adw::Application) {
         load_state(&ProcessEnv),
     );
     core.set_reveal_handler(Box::new(reveal_in_file_manager));
-    let window_id = core.library().active_window_id();
     let state = Rc::new(RefCell::new(AppState::new(core)));
     let main_loop = Arc::new(GlibMainLoop::attach(&glib::MainContext::default(), Rc::clone(&state)));
     let posting: Arc<dyn MainLoop<AppState>> = Arc::clone(&main_loop) as _;
     let poster = Arc::downgrade(&posting);
-    let ui = WindowUi::build(app, window_id, context, &poster);
-    // not a task: no task runs before the shell exists, and the window must render before it is presented
-    state.borrow_mut().attach(poster, ui);
-    state.borrow().present();
+    // not a task: no task runs before the shell exists; every open window renders before it is presented
+    state.borrow_mut().attach(poster, Windows::new(app.clone(), context));
     if let Err(err) = server.start(posting, |state: &mut AppState, request: Request| {
         handle(state, &request)
     }) {
@@ -242,7 +244,10 @@ mod tests {
     }
 
     #[test]
-    fn the_profile_claims_drop_placement() {
-        assert_eq!(CAPABILITIES, ["posix-shell", "drop-placement"]);
+    fn the_profile_claims_drop_placement_and_select_takes_frontmost() {
+        assert_eq!(
+            CAPABILITIES,
+            ["posix-shell", "drop-placement", "select-takes-frontmost"]
+        );
     }
 }

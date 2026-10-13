@@ -18,6 +18,7 @@ mod signals;
 mod state;
 mod surface;
 mod window;
+mod windows;
 
 use std::cell::RefCell;
 use std::ffi::OsString;

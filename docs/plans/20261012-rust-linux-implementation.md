@@ -743,17 +743,27 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 **Files:**
 - Modify: `crates/agterm-core/src/commands/window.rs`, `crates/agterm-ctl/src/window.rs`
 - Create: `crates/agterm-gtk/src/windows.rs`
+- ➕ Create: `crates/agterm-core/src/windows.rs` (`WindowState`, `WindowRequest`, `WindowSize`, upstream's
+  `WindowGeometry.clampSize`); Modify: `crates/agterm-core/src/{dispatch,lib}.rs`,
+  `crates/agterm-core/src/commands/tests/window.rs`, `crates/agterm-proto/src/result.rs` (`width`, `height`),
+  `crates/agterm-ctl/src/output.rs`, `crates/agterm-ctl/tests/cli.rs`, `crates/agterm-gtk/src/{app,main,state,window}.rs`
 
-- [ ] window.new, select, go, close, rename, delete, resize, move, zoom, fullscreen, minimize per upstream
+- [x] window.new, select, go, close, rename, delete, resize, move, zoom, fullscreen, minimize per upstream
       (`ControlServer+WindowCommands.swift`, `WindowRegistry.swift`, `windows.md`) on GTK windows; `window.select`
       and `window.go` take frontmost in the model as upstream's `takeFrontmost`, so claim `select-takes-frontmost`;
       Wayland gives no client positioning and no minimized read-back, so `window-geometry` and `window-minimize`
-      stay unclaimed and their tests pass the other branch
-- [ ] multiple GTK windows, each over its own `AppStore`; close and delete persistence
-- [ ] `agtermctl window ...`
-- [ ] write tests: window lifecycle and index persistence
-- [ ] write tests: error paths (last window, unknown id)
-- [ ] gate: full run; ratchet (`test_window.py`)
+      stay unclaimed and their tests pass the other branch (the core leaves on-screen work to the frontend as
+      `WindowRequest`s applied after the commit; `window.move` refuses with the fork's string unless the host claims
+      `window-geometry`; minimized is read back on X11 only, else a request is always sent and `window.list` reads
+      false; resize clamps between 640x400 and the monitor)
+- [x] multiple GTK windows, each over its own `AppStore`; close and delete persistence (`windows.rs` registry driven
+      by the open set; each window's deck and sidebar are its own, so a terminal never changes windows; the user's
+      close is upstream's `willClose`; the app quits once no window is open; activation reports frontmost)
+- [x] `agtermctl window ...`
+- [x] write tests: window lifecycle and index persistence
+- [x] write tests: error paths (last window, unknown id)
+- [x] gate: full run; ratchet (`test_window.py`) (31 new green ids, 170 listed: all of `test_window.py`, the CLI
+      `test_window_commands`, and `test_tree.py::test_index_unsaved_while_windows_json_cannot_be_written`)
 
 ### Task 15: Terminal I/O and session metadata
 

@@ -17,7 +17,7 @@ use crate::tree::format_tree;
 use crate::window::format_windows;
 
 /// Renders a response as its human-readable summary (no trailing newline): an `error:` line, the tree or window
-/// listing, the serving app's version, a batch's affected count, the affected id (only with `echo_id`, for the
+/// listing, the serving app's version, a batch's affected count, a resized window's `W H`, the affected id (only with `echo_id`, for the
 /// create commands), or a bare `ok`. Never JSON: `--json` prints the server's own line.
 ///
 /// The result's fields are tested in upstream's fixed order (`formatResponse`: `tree` first, `app` after the
@@ -47,6 +47,12 @@ pub fn format_response(response: &Response, echo_id: bool) -> String {
     }
     if let Some(affected) = result.and_then(|result| result.get("affected")).and_then(Value::as_i64) {
         return format_affected(affected);
+    }
+    // `window.resize` echoes the applied (clamped) frame size
+    if let Some((width, height)) =
+        result.and_then(|result| Some((result.get("width")?.as_i64()?, result.get("height")?.as_i64()?)))
+    {
+        return format!("{width} {height}");
     }
     if echo_id && let Some(id) = result.and_then(|result| result.get("id")).and_then(Value::as_str) {
         return id.to_owned();
@@ -162,6 +168,20 @@ mod tests {
             format_response(&ok(json!({"id": "abc", "affected": 2})), true),
             "2 sessions"
         );
+    }
+
+    #[test]
+    fn a_resize_prints_the_applied_width_and_height() {
+        assert_eq!(
+            format_response(&ok(json!({"width": 900, "height": 640})), false),
+            "900 640"
+        );
+        // the size wins over an echoed id, and needs both halves
+        assert_eq!(
+            format_response(&ok(json!({"id": "abc", "width": 900, "height": 640})), true),
+            "900 640"
+        );
+        assert_eq!(format_response(&ok(json!({"width": 900})), false), "ok");
     }
 
     #[test]

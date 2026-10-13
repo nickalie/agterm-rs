@@ -692,6 +692,49 @@ fn window_list_renders_one_line_per_window() -> TestResult {
 }
 
 #[test]
+fn window_commands_print_the_new_id_the_applied_size_or_ok() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], serde_json::Value, serde_json::Value, String); 4] = [
+        (
+            &["window", "new", "Work", "--minimized"],
+            serde_json::json!({"cmd": "window.new", "args": {"name": "Work", "minimized": true}}),
+            serde_json::json!({"id": NEW_ID}),
+            format!("{NEW_ID}\n"),
+        ),
+        (
+            &["window", "resize", "--width", "1000", "--height", "700"],
+            serde_json::json!({"cmd": "window.resize", "target": "active",
+                               "args": {"width": 1000, "height": 700}}),
+            serde_json::json!({"id": NEW_ID, "width": 900, "height": 640}),
+            "900 640\n".to_owned(),
+        ),
+        (
+            &["window", "minimize", "on"],
+            serde_json::json!({"cmd": "window.minimize", "target": "active", "args": {"mode": "on"}}),
+            serde_json::json!({"id": NEW_ID}),
+            "ok\n".to_owned(),
+        ),
+        (
+            &["window", "move", "9f3c", "--x", "100", "--y", "50", "--display", "1"],
+            serde_json::json!({"cmd": "window.move", "target": "9f3c",
+                               "args": {"x": 100, "y": 50, "display": 1}}),
+            serde_json::json!({"id": NEW_ID}),
+            "ok\n".to_owned(),
+        ),
+    ];
+    for (at, (args, expected, result, stdout)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("{at}.sock"));
+        let _server = scripted(&socket, expected, result)?;
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(0), stdout, String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn a_window_list_that_does_not_decode_fails_the_reply() -> TestResult {
     let dir = short_dir()?;
     let socket = dir.path().join("agterm.sock");
@@ -774,7 +817,14 @@ fn parse_errors_of_the_new_commands_name_their_usage() -> TestResult {
                     'agtermctl session go --help' for more information.\n";
     let list_usage = "Usage: agtermctl window list [--socket <socket>] [--json]\n  See 'agtermctl window list --help' for more \
          information.\n";
-    let cases: [(&[&str], String); 3] = [
+    let cases: [(&[&str], String); 4] = [
+        (
+            &["window", "resize", "--width", "1000"],
+            "Error: Missing expected argument '--height <height>'\nHelp:  --height <height>  New height in points.\n\
+             Usage: agtermctl window resize [<id>] --width <width> --height <height> [--socket <socket>] [--json]\n  \
+             See 'agtermctl window resize --help' for more information.\n"
+                .to_owned(),
+        ),
         (
             &["session", "go"],
             format!(
@@ -1005,9 +1055,59 @@ OPTIONS:
   -h, --help              Show help information.
 
 SUBCOMMANDS:
+  new                     Create and open a window.
   list                    List windows (id, name, open, active).
+  select                  Select (raise or open) a window.
+  go                      Navigate open windows: next|prev.
+  close                   Close a window (its bundle is kept).
+  rename                  Rename a window.
+  delete                  Delete a window (keeps at least one).
+  resize                  Resize a window (frame size in points).
+  move                    Move a window (top-left x,y in points, relative to a
+                          display).
+  zoom                    Zoom a window (maximize-to-screen toggle).
+  fullscreen              Toggle native macOS full screen for a window.
+  minimize                Minimize a window to the Dock, or restore it.
 
   See 'agtermctl help window <subcommand>' for detailed help.
+";
+
+const WINDOW_RESIZE_HELP: &str = "\
+OVERVIEW: Resize a window (frame size in points).
+
+Prints the applied width and height as W H after clamping to the window minimum
+and display bounds.
+
+USAGE: agtermctl window resize [<id>] --width <width> --height <height> [--socket <socket>] [--json]
+
+ARGUMENTS:
+  <id>                    Window id, unique prefix, or 'active'. (default:
+                          active)
+
+OPTIONS:
+  --width <width>         New width in points.
+  --height <height>       New height in points.
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  -h, --help              Show help information.
+
+";
+
+const WINDOW_MINIMIZE_HELP: &str = "\
+OVERVIEW: Minimize a window to the Dock, or restore it.
+
+USAGE: agtermctl window minimize [<id>] [<mode>] [--socket <socket>] [--json]
+
+ARGUMENTS:
+  <id>                    Window id, unique prefix, or 'active'. (default:
+                          active)
+  <mode>                  on, off, or toggle (default: toggle).
+
+OPTIONS:
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  -h, --help              Show help information.
+
 ";
 
 const WINDOW_LIST_HELP: &str = "\
@@ -1025,7 +1125,7 @@ OPTIONS:
 #[test]
 fn session_and_window_help_in_the_argument_parser_layout() -> TestResult {
     let dir = short_dir()?;
-    let cases: [(&[&str], &str); 14] = [
+    let cases: [(&[&str], &str); 16] = [
         (&["session"], SESSION_HELP),
         (&["session", "--help"], SESSION_HELP),
         (&["help", "session"], SESSION_HELP),
@@ -1040,6 +1140,8 @@ fn session_and_window_help_in_the_argument_parser_layout() -> TestResult {
         (&["window"], WINDOW_HELP),
         (&["window", "list", "--help"], WINDOW_LIST_HELP),
         (&["help", "window", "list"], WINDOW_LIST_HELP),
+        (&["window", "resize", "--help"], WINDOW_RESIZE_HELP),
+        (&["help", "window", "minimize"], WINDOW_MINIMIZE_HELP),
     ];
     for (args, help) in cases {
         assert_eq!(
