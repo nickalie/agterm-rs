@@ -437,6 +437,7 @@ OPTIONS:
 SUBCOMMANDS:
   tree                    Print the workspace/session tree.
   events                  Continuously print control events.
+  workspace               Workspace commands.
   session                 Session commands.
   window                  Window commands.
   version                 Print the version of the app serving the socket.
@@ -1044,6 +1045,136 @@ fn session_and_window_help_in_the_argument_parser_layout() -> TestResult {
         assert_eq!(
             outcome(&run(dir.path(), &[], args)?),
             (Some(0), help.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+const WORKSPACE_HELP: &str = "\
+OVERVIEW: Workspace commands.
+
+USAGE: agtermctl workspace <subcommand>
+
+OPTIONS:
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  new                     Create a workspace.
+  rename                  Rename a workspace.
+  delete                  Delete a workspace.
+  select                  Select a workspace.
+  go                      Navigate workspaces: next|prev.
+  move                    Reorder a workspace among its siblings.
+  focus                   Mark a workspace in the sidebar focus set
+                          (on|off|toggle|add).
+  filter                  Turn the sidebar workspace focus filter on or off
+                          (on|off|toggle).
+  collapse                Collapse a workspace in the sidebar tree.
+  expand                  Expand a workspace in the sidebar tree.
+
+  See 'agtermctl help workspace <subcommand>' for detailed help.
+";
+
+const WORKSPACE_NEW_HELP: &str = "\
+OVERVIEW: Create a workspace.
+
+USAGE: agtermctl workspace new [<name>] [--collapsed] [--socket <socket>] [--json] [--window <window>]
+
+ARGUMENTS:
+  <name>                  Workspace name (defaults to the auto-generated name).
+
+OPTIONS:
+  --collapsed             Create the workspace collapsed in the sidebar.
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  --window <window>       Target window id, unique prefix, or 'active'
+                          (defaults to the frontmost).
+  -h, --help              Show help information.
+
+";
+
+const WORKSPACE_FOCUS_HELP: &str = "\
+OVERVIEW: Mark a workspace in the sidebar focus set (on|off|toggle|add).
+
+USAGE: agtermctl workspace focus [<mode>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
+
+ARGUMENTS:
+  <mode>                  Mode: on (mark it alone and apply the filter), off
+                          (unmark it; the filter switches off as the set
+                          empties), toggle (replace-toggle and apply the
+                          filter, the default; clears when it is the only
+                          marked one AND the filter is applied), add (mark it
+                          alongside the others, leaving the filter flag alone).
+                          (default: toggle)
+
+OPTIONS:
+  --target <target>       Target session/workspace id, unique prefix, or
+                          'active'. (default: active)
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  --window <window>       Target window id, unique prefix, or 'active'
+                          (defaults to the frontmost).
+  -h, --help              Show help information.
+
+";
+
+const WORKSPACE_FILTER_HELP: &str = "\
+OVERVIEW: Turn the sidebar workspace focus filter on or off (on|off|toggle).
+
+USAGE: agtermctl workspace filter [<mode>] [--socket <socket>] [--json] [--window <window>]
+
+ARGUMENTS:
+  <mode>                  Mode: on, off, or toggle (default). (default: toggle)
+
+OPTIONS:
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  --window <window>       Target window id, unique prefix, or 'active'
+                          (defaults to the frontmost).
+  -h, --help              Show help information.
+
+";
+
+#[test]
+fn workspace_help_in_the_argument_parser_layout() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], &str); 5] = [
+        (&["workspace"], WORKSPACE_HELP),
+        (&["help", "workspace"], WORKSPACE_HELP),
+        (&["workspace", "new", "--help"], WORKSPACE_NEW_HELP),
+        (&["workspace", "focus", "--help"], WORKSPACE_FOCUS_HELP),
+        (&["help", "workspace", "filter"], WORKSPACE_FILTER_HELP),
+    ];
+    for (args, help) in cases {
+        assert_eq!(
+            outcome(&run(dir.path(), &[], args)?),
+            (Some(0), help.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn workspace_modes_are_refused_before_connecting() -> TestResult {
+    let dir = short_dir()?;
+    for (args, refusal) in [
+        (
+            &["workspace", "focus", "pin"][..],
+            "Error: mode must be one of: on, off, toggle, add\nUsage: agtermctl workspace focus [<mode>] [--target \
+             <target>] [--socket <socket>] [--json] [--window <window>]\n  See 'agtermctl workspace focus --help' for \
+             more information.\n",
+        ),
+        (
+            &["workspace", "filter", "show"],
+            "Error: mode must be on, off, or toggle\nUsage: agtermctl workspace filter [<mode>] [--socket <socket>] \
+             [--json] [--window <window>]\n  See 'agtermctl workspace filter --help' for more information.\n",
+        ),
+    ] {
+        assert_eq!(
+            outcome(&run(dir.path(), &[], args)?),
+            (Some(64), String::new(), refusal.to_owned()),
             "{args:?}"
         );
     }

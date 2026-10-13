@@ -24,6 +24,65 @@ pub enum FocusMode {
     Toggle,
 }
 
+impl FocusMode {
+    /// Every mode in upstream's declaration order (`ControlWorkspaceFocusMode.allCases`), the source of each list of
+    /// accepted names, so a new mode reaches all of them.
+    pub const ALL: [Self; 4] = [Self::On, Self::Off, Self::Toggle, Self::Add];
+
+    /// The wire spelling.
+    #[must_use]
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+            Self::Toggle => "toggle",
+            Self::Add => "add",
+        }
+    }
+
+    /// Parses the wire spelling; `None` for anything else.
+    #[must_use]
+    pub fn from_wire(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.wire_name() == name)
+    }
+
+    /// `on|off|toggle|add`, for the dispatcher's refusal.
+    #[must_use]
+    pub fn valid_names_list() -> String {
+        Self::names().join("|")
+    }
+
+    /// `on, off, toggle, add`, for the CLI's local refusal.
+    #[must_use]
+    pub fn valid_names_phrase() -> String {
+        Self::names().join(", ")
+    }
+
+    /// What the mode does, one clause for the CLI's argument help (upstream's `helpSummary`).
+    #[must_use]
+    pub fn help_summary(self) -> &'static str {
+        match self {
+            Self::On => "on (mark it alone and apply the filter)",
+            Self::Off => "off (unmark it; the filter switches off as the set empties)",
+            Self::Toggle => {
+                "toggle (replace-toggle and apply the filter, the default; clears when it is the only marked one AND \
+                 the filter is applied)"
+            }
+            Self::Add => "add (mark it alongside the others, leaving the filter flag alone)",
+        }
+    }
+
+    /// Every mode's [`FocusMode::help_summary`], comma-joined: the whole help sentence.
+    #[must_use]
+    pub fn help_phrase() -> String {
+        Self::ALL.map(Self::help_summary).join(", ")
+    }
+
+    fn names() -> [&'static str; 4] {
+        Self::ALL.map(Self::wire_name)
+    }
+}
+
 impl AppStore {
     /// Suspends the filter, keeping the marked set, when the newly selected session lies outside it, so an explicit
     /// cross-set select reveals its target. A no-op with the filter off, nothing selected, a selection inside the set,

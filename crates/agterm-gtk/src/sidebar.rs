@@ -38,8 +38,9 @@ pub enum RowKind {
 
 /// The workspace rows the outline renders open (upstream's coordinator `expandedWorkspaceIDs`): seeded from the
 /// persisted `Workspace::is_expanded`, kept in step with the model on every refresh (gone workspaces drop out, any
-/// the model marks open join, a user fold stays folded), and opened for view only when the selection moves into a
-/// folded workspace (`syncSelection`'s reveal, which never persists).
+/// the model marks open join, a user fold stays folded, a `workspace.collapse`/`expand` request opens or folds its
+/// row), and opened for view only when the selection moves into a folded workspace (`syncSelection`'s reveal, which
+/// never persists).
 #[derive(Debug, Default)]
 pub struct Expansion {
     ids: HashSet<Uuid>,
@@ -48,6 +49,14 @@ pub struct Expansion {
 }
 
 impl Expansion {
+    /// Takes `store`'s pending per-row open and fold requests (upstream's `setWorkspaceExpandedNotified`): the row
+    /// follows even where the persisted flag did not change, as after a reveal.
+    pub fn apply_requests(&mut self, store: &mut AppStore) {
+        for (id, expanded) in store.take_sidebar_expansion_requests() {
+            self.set(id, expanded);
+        }
+    }
+
     /// Brings the open set in line with `store` (see the type docs) and returns it.
     pub fn sync(&mut self, store: &AppStore) -> &HashSet<Uuid> {
         let existing: HashSet<Uuid> = store.workspaces().iter().map(Workspace::id).collect();
@@ -168,6 +177,7 @@ impl Sidebar {
     /// (`AppStore::note_sidebar_expansion`, view state for Collapse/Expand Workspace).
     pub fn refresh(&mut self, store: &mut AppStore, badges: bool) {
         self.root.set_visible(store.sidebar().visible);
+        self.expansion.apply_requests(store);
         let expanded = self.expansion.sync(store).clone();
         let rows = rows(store, &expanded, badges);
         store.note_sidebar_expansion(expanded);
@@ -327,6 +337,32 @@ mod tests {
         assert!(!expansion.sync(&store).contains(&one));
         store.select_session(Some(first));
         assert!(expansion.sync(&store).contains(&one), "a new selection reveals again");
+    }
+
+    #[test]
+    fn a_collapse_or_expand_request_folds_or_opens_the_row_even_over_a_reveal() {
+        let (mut store, [one, two], [first, _, third]) = store();
+        store.set_workspace_expanded(two, false);
+        store.select_session(Some(third));
+        let mut expansion = Expansion::default();
+        // the selection revealed the workspace persisted as collapsed
+        assert!(expansion.sync(&store).contains(&two));
+        // `workspace.collapse` on it changes no persisted flag, yet folds the row
+        store.set_workspace_expanded_in_outline(two, false);
+        expansion.apply_requests(&mut store);
+        assert!(!expansion.sync(&store).contains(&two));
+        store.set_workspace_expanded_in_outline(two, true);
+        store.set_workspace_expanded_in_outline(one, false);
+        expansion.apply_requests(&mut store);
+        let open = expansion.sync(&store).clone();
+        assert!(open.contains(&two) && !open.contains(&one));
+        assert!(
+            store.take_sidebar_expansion_requests().is_empty(),
+            "requests are taken once"
+        );
+        // a new selection into the folded one reveals it again
+        store.select_session(Some(first));
+        assert!(expansion.sync(&store).contains(&one));
     }
 
     #[test]

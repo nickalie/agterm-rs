@@ -310,6 +310,10 @@ impl Core {
         match request.cmd {
             Command::Session(cmd) => result_of(&commands::session::dispatch(self, cmd, request)?),
             Command::Window(cmd) => result_of(&commands::window::dispatch(self, cmd)?),
+            Command::Workspace(cmd) => match commands::workspace::dispatch(self, cmd, request)? {
+                Some(result) => result_of(&result),
+                None => Ok(Response::success()),
+            },
             Command::Events(EventsCmd::Read) => self.read_events(request.args.as_ref()),
             Command::Version => result_of(&self.version()),
             Command::Tree => {
@@ -333,7 +337,6 @@ impl Core {
             | Command::Sidebar(_)
             | Command::Surface(_)
             | Command::Theme(_)
-            | Command::Workspace(_)
             | Command::Zmx(_)) => Err(ControlError::NotSupported(cmd)),
         }
     }
@@ -341,7 +344,7 @@ impl Core {
 
 #[cfg(test)]
 mod tests {
-    use agterm_proto::command::{EventsCmd, SessionCmd, WindowCmd, ZmxCmd};
+    use agterm_proto::command::{EventsCmd, SessionCmd, WindowCmd, WorkspaceCmd, ZmxCmd};
     use serde_json::json;
 
     use super::*;
@@ -357,12 +360,14 @@ mod tests {
     }
 
     /// The commands answered so far, against a core with no window (the throwaway empty window makes `session.new`
-    /// and `session.go` fail on their arguments or their target, as upstream's would).
+    /// and `session.go` fail on their arguments or their target, as upstream's would, while `workspace.new` creates
+    /// its workspace there and answers).
     const ANSWERED: &[Command] = &[
         Command::Version,
         Command::Tree,
         Command::Window(WindowCmd::List),
         Command::Events(EventsCmd::Read),
+        Command::Workspace(WorkspaceCmd::New),
     ];
 
     #[test]

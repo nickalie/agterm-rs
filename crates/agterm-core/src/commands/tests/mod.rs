@@ -5,6 +5,7 @@ mod events;
 mod moves;
 mod session;
 mod window;
+mod workspace;
 
 use agterm_proto::command::SessionCmd;
 use agterm_proto::{AppIdentity, Args, Command, Request, Response};

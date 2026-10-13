@@ -4,6 +4,7 @@
 
 pub(crate) mod session;
 pub(crate) mod window;
+pub(crate) mod workspace;
 
 #[cfg(test)]
 mod tests;
@@ -67,6 +68,20 @@ fn session_store<'a>(
     Ok((store, resolved.session))
 }
 
+/// The workspace target (default `active`, the current workspace) and the store owning it.
+fn workspace_store<'a>(
+    core: &'a mut Core,
+    target: Option<&str>,
+    window: Option<&str>,
+) -> Result<(&'a mut AppStore, Uuid), ControlError> {
+    let resolved = Resolver::new(core.library()).workspace(target, window)?;
+    let store = core
+        .library_mut()
+        .store_mut(resolved.window)
+        .ok_or_else(|| not_found(Noun::Workspace, target.unwrap_or(ACTIVE)))?;
+    Ok((store, resolved.workspace))
+}
+
 /// A batch of session targets (repeated `--target`) resolved in the first one's window, and that window's store.
 fn session_batch_store<'a>(
     core: &'a mut Core,
@@ -91,5 +106,35 @@ fn not_found(noun: Noun, target: &str) -> ControlError {
     ControlError::NotFound {
         noun,
         target: target.to_owned(),
+    }
+}
+
+/// An on/off/toggle mode argument, `toggle` when absent (upstream's `ControlToggleMode`). Each command keeps its own
+/// refusal message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToggleMode {
+    On,
+    Off,
+    Toggle,
+}
+
+impl ToggleMode {
+    /// Parses `on`, `off` or `toggle`; an absent mode is `toggle`.
+    pub(crate) fn parse(mode: Option<&str>) -> Option<Self> {
+        match mode.unwrap_or("toggle") {
+            "on" => Some(Self::On),
+            "off" => Some(Self::Off),
+            "toggle" => Some(Self::Toggle),
+            _ => None,
+        }
+    }
+
+    /// The value the mode asks for, given the `current` one.
+    pub(crate) fn desired_value(self, current: bool) -> bool {
+        match self {
+            Self::On => true,
+            Self::Off => false,
+            Self::Toggle => !current,
+        }
     }
 }

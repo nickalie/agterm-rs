@@ -717,16 +717,26 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 - Create: `crates/agterm-core/src/commands/workspace.rs`
 - Modify: `crates/agterm-gtk/src/sidebar.rs`
 - Create: `crates/agterm-ctl/src/workspace.rs`
+- ➕ Create: `crates/agterm-core/src/commands/tests/workspace.rs`; Modify: `crates/agterm-core/src/commands/mod.rs`
+  (`workspace_store`, `ToggleMode`), `crates/agterm-core/src/dispatch.rs`, `crates/agterm-core/src/model/{focus,store}.rs`
+  (`FocusMode` wire names and help, the outline's expansion requests), `crates/agterm-ctl/src/main.rs`,
+  `crates/agterm-ctl/tests/cli.rs`
 
-- [ ] the 10 workspace commands (new, rename, delete, select, go, move, focus, filter, collapse, expand) from
+- [x] the 10 workspace commands (new, rename, delete, select, go, move, focus, filter, collapse, expand) from
       `ControlDispatcher.swift`, `AppStore+Focus.swift`, `AppStore+Sidebar*.swift` and
-      `ControlDispatcherWorkspaceTests`
-- [ ] `workspace new --collapsed` per upstream (`fork-bugs.md`): it never takes the active workspace and opts out of
+      `ControlDispatcherWorkspaceTests` (`workspace.delete` closes hard via `remove_workspace`, as upstream's control
+      arm; `collapse`/`expand` also queue a per-row request the GTK outline applies on refresh, upstream's
+      `.agtermSetWorkspaceExpanded` notification, so a row a reveal opened folds even when the persisted flag is
+      unchanged)
+- [x] `workspace new --collapsed` per upstream (`fork-bugs.md`): it never takes the active workspace and opts out of
       focus membership
-- [ ] `agtermctl workspace ...` (`WorkspaceCommands.swift`)
-- [ ] write tests: each command's success path and its errors (strings from the Swift tests)
-- [ ] write tests: the background create keeps the current workspace
-- [ ] gate: full run; ratchet (`test_workspace.py`, including `test_background_create_keeps_the_current_workspace`)
+- [x] `agtermctl workspace ...` (`WorkspaceCommands.swift`)
+- [x] write tests: each command's success path and its errors (strings from the Swift tests)
+- [x] write tests: the background create keeps the current workspace
+- [x] gate: full run; ratchet (`test_workspace.py`, including `test_background_create_keeps_the_current_workspace`)
+      (65 new green ids, 139 listed: all 35 of `test_workspace.py`, the CLI workspace and session tests, and the
+      `test_session.py`/`test_addressing.py` ids that waited on `workspace.new`, `test_move_after_an_anchor_below_it`
+      included)
 
 ### Task 14: The rest of `window.*`
 

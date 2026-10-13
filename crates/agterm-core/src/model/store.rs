@@ -7,7 +7,7 @@
 //! [`Outbox`]. The focus filter and visibility rules live in `focus.rs`, navigation and reselection in
 //! `navigation.rs`.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::SystemTime;
 
 use agterm_proto::events::EventKind;
@@ -48,6 +48,10 @@ pub struct SidebarState {
     /// The workspace rows the outline renders open, mirrored from it. View state, never persisted, and at odds with
     /// [`Workspace::is_expanded`] wherever a reveal opened a row collapsed on disk.
     pub expanded_workspace_ids: HashSet<Uuid>,
+    /// Per-row opens and folds asked from outside the outline (`workspace.collapse`/`expand`), last one per workspace
+    /// winning, for the outline to apply on its next refresh (upstream's `.agtermSetWorkspaceExpanded` notification).
+    /// View state, never persisted.
+    pub(crate) expansion_requests: HashMap<Uuid, bool>,
 }
 
 impl Default for SidebarState {
@@ -57,6 +61,7 @@ impl Default for SidebarState {
             mode: SidebarMode::Tree,
             width: SIDEBAR_WIDTH_DEFAULT,
             expanded_workspace_ids: HashSet::new(),
+            expansion_requests: HashMap::new(),
         }
     }
 }
@@ -748,6 +753,23 @@ impl AppStore {
         if changed {
             self.save();
         }
+    }
+
+    /// Sets a workspace's persisted expansion and asks the outline to open or fold its row to match, even where a
+    /// reveal opened a row the persisted flag already calls collapsed (upstream's `AppActions.setWorkspaceExpanded`:
+    /// the store write plus the notification the sidebar coordinator applies).
+    pub fn set_workspace_expanded_in_outline(&mut self, id: Uuid, expanded: bool) {
+        if self.workspace(id).is_none() {
+            return;
+        }
+        self.set_workspace_expanded(id, expanded);
+        self.sidebar.expansion_requests.insert(id, expanded);
+    }
+
+    /// Takes the outline's pending per-row open and fold requests (see
+    /// [`AppStore::set_workspace_expanded_in_outline`]); called by the sidebar alone.
+    pub fn take_sidebar_expansion_requests(&mut self) -> HashMap<Uuid, bool> {
+        std::mem::take(&mut self.sidebar.expansion_requests)
     }
 
     /// Records what the sidebar outline shows expanded; called by the sidebar alone.

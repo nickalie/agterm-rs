@@ -11,6 +11,7 @@ mod tree;
 mod usage;
 mod version;
 mod window;
+mod workspace;
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -44,6 +45,7 @@ struct Agtermctl {
 enum Command {
     Tree(tree::Tree),
     Events(events::Events),
+    Workspace(workspace::Workspace),
     Session(session::Session),
     Window(window::Window),
     Version(version::Version),
@@ -55,6 +57,7 @@ impl Command {
         match self {
             Self::Tree(command) => command.validate(),
             Self::Events(command) => command.validate(),
+            Self::Workspace(group) => group.command().validate(),
             Self::Session(group) => group.command().validate(),
             Self::Window(group) => group.command().validate(),
             Self::Version(_) => Ok(()),
@@ -65,6 +68,7 @@ impl Command {
         match self {
             Self::Tree(command) => command.default_run(env),
             Self::Events(command) => command.run(env),
+            Self::Workspace(group) => group.command().default_run(env),
             Self::Session(group) => group.command().default_run(env),
             Self::Window(group) => group.command().default_run(env),
             Self::Version(command) => command.run(env),
