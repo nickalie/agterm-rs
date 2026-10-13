@@ -60,6 +60,7 @@ dependencies = [
  "agterm-host",
  "agterm-proto",
  "agterm-server",
+ "agterm-zmx",
  "async-channel",
  "glib-unix",
  "gtk4",
@@ -101,6 +102,19 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tracing",
+]
+
+[[package]]
+name = "agterm-zmx"
+version = "0.1.0"
+dependencies = [
+ "agterm-core",
+ "agterm-host",
+ "libc",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

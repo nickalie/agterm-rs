@@ -30,16 +30,23 @@ pin_lines() {
   grep -E "^$1_" "$PINS"
 }
 
-# A key over the pin lines of one dependency, the patches of one directory (top level only) and the host arch.
+# A key over the pin lines of one dependency, the patches of one or more directories (top level of each) and the host
+# arch. A patch of the first directory is named by its file name alone, one of a later directory by
+# `<directory name>/<file name>`, so a single-directory key is the same as it ever was.
 prefix_key() {
-  local pins_prefix="$1" patches="$2" patch
+  local pins_prefix="$1" first="$2" patches patch label
+  shift
   {
     echo "arch $(uname -m)"
     pin_lines "$pins_prefix"
-    for patch in "$patches"/*.patch; do
-      [[ -f "$patch" ]] || continue
-      echo "patch $(basename "$patch")"
-      cat "$patch"
+    for patches in "$@"; do
+      label=""
+      [[ "$patches" == "$first" ]] || label="$(basename "$patches")/"
+      for patch in "$patches"/*.patch; do
+        [[ -f "$patch" ]] || continue
+        echo "patch $label$(basename "$patch")"
+        cat "$patch"
+      done
     done
   } | sha256_of | cut -c1-16
 }

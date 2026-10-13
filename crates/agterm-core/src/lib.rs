@@ -43,6 +43,7 @@ pub mod sidebar_drop;
 pub mod theme;
 pub mod watermark;
 pub mod windows;
+pub mod zmx;
 pub mod zoom;
 
 pub use commands::PaneReport;

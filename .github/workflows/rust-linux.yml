@@ -88,6 +88,9 @@ jobs:
           key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
       - name: libghostty prefix
         run: scripts/build-ghostty.sh
+      # stage.sh stages bin/zmx from this prefix; on a miss build-zmx.sh fetches its pinned Zig itself
+      - name: zmx prefix
+        run: scripts/build-zmx.sh
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"

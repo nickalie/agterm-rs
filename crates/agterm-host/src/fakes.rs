@@ -12,8 +12,8 @@ use std::thread::{self, JoinHandle, ThreadId};
 use std::time::Duration;
 
 use crate::{
-    ExitHandler, HostError, KillOutcome, LaunchSpec, LaunchedProcess, LiveSessionRecord, MainLoop, MainLoopClosed,
-    MainTask, ProcessExit, ProcessLauncher, SessionHost, Surface, TextScope,
+    ExitHandler, HostError, KillOutcome, LaunchSpec, LaunchedProcess, LiveScreen, LiveSessionRecord, MainLoop,
+    MainLoopClosed, MainTask, ProcessExit, ProcessLauncher, SessionHost, Surface, TextScope,
 };
 
 /// A fake never leaves a lock poisoned on purpose; a panicking test thread must not cascade into every other one.
@@ -355,6 +355,12 @@ pub struct FakeLiveSession {
     pub typed: Vec<u8>,
 }
 
+impl FakeLiveSession {
+    /// The grid every fake daemon reports.
+    pub const COLUMNS: u32 = 80;
+    pub const ROWS: u32 = 24;
+}
+
 /// A live-session host over an in-memory set of daemons.
 pub struct FakeSessionHost {
     available: bool,
@@ -448,16 +454,22 @@ impl SessionHost for FakeSessionHost {
         }
     }
 
-    fn screen(&self, name: &str, all: bool) -> Result<String, HostError> {
+    fn screen(&self, name: &str, all: bool) -> Result<LiveScreen, HostError> {
         self.require_available()?;
         let sessions = lock(&self.sessions);
         let session = sessions
             .get(name)
             .ok_or_else(|| HostError(format!("session not found: {name}")))?;
-        Ok(if all {
+        let text = if all {
             format!("{}{}", session.scrollback, session.screen)
         } else {
             session.screen.clone()
+        };
+        Ok(LiveScreen {
+            columns: FakeLiveSession::COLUMNS,
+            rows: FakeLiveSession::ROWS,
+            text,
+            ..LiveScreen::default()
         })
     }
 
@@ -732,7 +744,9 @@ mod tests {
         host.insert("agterm-a", "$ ");
         host.type_input("agterm-a", b"ls\n").unwrap();
         assert_eq!(host.session("agterm-a").unwrap().typed, b"ls\n");
-        assert_eq!(host.screen("agterm-a", false).unwrap(), "$ ");
+        let screen = host.screen("agterm-a", false).unwrap();
+        assert_eq!(screen.text, "$ ");
+        assert_eq!((screen.columns, screen.rows), (80, 24));
         assert_eq!(host.list().unwrap().len(), 1);
         assert_eq!(host.kill("agterm-a", true), KillOutcome::Killed);
         assert!(matches!(host.kill("agterm-a", true), KillOutcome::Failed(_)));

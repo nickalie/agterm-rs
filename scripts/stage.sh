@@ -2,10 +2,11 @@
 # Assemble the staging layout the conformance runner, scripts/run-dev.sh and the install check run from:
 #
 #   bin/{agterm,agtermctl,zmx}  lib/libghostty.so  share/ghostty/{themes,shell-integration}  share/terminfo
+#   share/agterm/zmx-BUILD (the staged zmx's build id, with bin/zmx)
 #
 # from cargo's target dir and the vendored prefixes, plus agterm's own themes from build/themes. Binaries are
-# staged when they exist (agterm and agtermctl appear with their crates, zmx with scripts/build-zmx.sh); libghostty
-# and its resources are required. The binaries find lib/ through their $ORIGIN/../lib rpath.
+# staged when they exist (agterm and agtermctl appear with their crates, zmx once scripts/build-zmx.sh filled its
+# prefix); libghostty and its resources are required. The binaries find lib/ through their $ORIGIN/../lib rpath.
 #
 # Usage: scripts/stage.sh DESTINATION [--profile release|debug]   (default: release)
 set -euo pipefail
@@ -44,9 +45,11 @@ for binary in agterm agtermctl; do
   fi
 done
 if [[ -x "$NATIVE_ROOT/scripts/build-zmx.sh" ]]; then
-  ZMX="$("$NATIVE_ROOT/scripts/build-zmx.sh" --print-prefix)/bin/zmx"
-  if [[ -x "$ZMX" ]]; then
-    install -m755 "$ZMX" "$DEST/bin/zmx"
+  ZMX_PREFIX="$("$NATIVE_ROOT/scripts/build-zmx.sh" --print-prefix)"
+  # only a complete prefix: a zmx without its build id would read as one predating every Live sessions update
+  if "$NATIVE_ROOT/scripts/build-zmx.sh" --verify; then
+    install -m755 "$ZMX_PREFIX/bin/zmx" "$DEST/bin/zmx"
+    install -Dm644 "$ZMX_PREFIX/share/agterm/zmx-BUILD" "$DEST/share/agterm/zmx-BUILD"
     staged+=(zmx)
   fi
 fi
