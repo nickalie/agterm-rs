@@ -55,6 +55,9 @@ jobs:
       # Ubuntu 24.04 has no gtk4-layer-shell package; cargo finds the prefix through scripts/pkg-config.sh.
       - name: gtk4-layer-shell prefix
         run: scripts/build-layer-shell.sh
+      # built here so the vendor cache this job saves holds it; the conformance job only restores that cache
+      - name: zmx prefix
+        run: scripts/build-zmx.sh
       - name: format
         run: cargo fmt --all --check
       - name: clippy
@@ -95,6 +98,9 @@ jobs:
         run: scripts/build-ghostty.sh
       - name: gtk4-layer-shell prefix
         run: scripts/build-layer-shell.sh
+      # stage.sh stages bin/zmx from this prefix, restored from the cache the rust-linux job saved
+      - name: zmx prefix
+        run: scripts/build-zmx.sh
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"

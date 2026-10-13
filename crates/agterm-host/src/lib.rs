@@ -138,6 +138,23 @@ pub struct LiveSessionRecord {
     pub created_at: Option<u64>,
 }
 
+/// A daemon's own terminal as the host reads it (upstream's `ZmxScreen`): its grid, the cursor and the text.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LiveScreen {
+    /// Counts the daemon's screen changes.
+    pub revision: u64,
+    pub columns: u32,
+    pub rows: u32,
+    /// Zero-based, in the active screen.
+    pub cursor_column: u32,
+    /// Zero-based, in the active screen.
+    pub cursor_row: u32,
+    /// The alternate screen is active.
+    pub alternate: bool,
+    /// The screen's text, verbatim: one line per row, trailing blank rows included.
+    pub text: String,
+}
+
 /// What a kill actually did. Only [`KillOutcome::Killed`] means the shell is gone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KillOutcome {
@@ -165,12 +182,13 @@ pub trait SessionHost: Send + Sync {
     /// Kills the daemon `name`; `force` also removes a stale socket.
     fn kill(&self, name: &str, force: bool) -> KillOutcome;
 
-    /// The daemon's own screen for `name`, with scrollback when `all`.
+    /// The daemon's own screen for `name`, with scrollback when `all`. It always has the leader's layout, so a caller
+    /// must not fall back to a pane's own surface when the read fails: that layout is the thing in doubt.
     ///
     /// # Errors
     ///
-    /// The read failed for any reason, an unknown name included.
-    fn screen(&self, name: &str, all: bool) -> Result<String, HostError>;
+    /// The read failed for any reason, an unknown name and a host without the query included; never a blank screen.
+    fn screen(&self, name: &str, all: bool) -> Result<LiveScreen, HostError>;
 
     /// Queues `bytes` as typed input to `name` without taking the lead. Never retried by the host: a second attempt
     /// after an unclear failure would type twice.

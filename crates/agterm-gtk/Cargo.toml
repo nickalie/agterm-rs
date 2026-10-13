@@ -16,6 +16,7 @@ agterm-core.workspace = true
 agterm-host.workspace = true
 agterm-proto.workspace = true
 agterm-server.workspace = true
+agterm-zmx.workspace = true
 agterm-ghostty.workspace = true
 # Not used in code: a links crate's metadata (DEP_GHOSTTY_ROOT, for the rpaths in build.rs) reaches only the build
 # scripts of its direct dependents.

@@ -1,0 +1,546 @@
+//! Whether and how a pane is wrapped in a zmx daemon (upstream's `ZmxSupport.swift`): the host's eligibility walk,
+//! shared with the launch probe ([`crate::restore::mode::LiveProbe`]) so the rejection order lives once, the wrap
+//! configuration, the launch disposition and the attach command a wrapped pane's surface runs.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use uuid::Uuid;
+
+use super::lead::{CLAIM_VARIABLE, LeadAttachment, NONCE_VARIABLE};
+use super::{daemon_name, replay, socket_directory};
+use crate::command_restore::{basename, shell_quoted_line, should_restore};
+use crate::pane_env::uuid_string;
+use crate::persist::RestoreMode;
+use crate::restore::mode::LiveRejection;
+
+/// What the host offers a wrap: the zmx executable, the login shell and the zsh integration, all checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Eligible {
+    /// The zmx executable, standardized.
+    pub executable: PathBuf,
+    /// The password-database login shell.
+    pub shell: String,
+    /// The bundled `shell-integration/zsh` directory.
+    pub integration_dir: PathBuf,
+}
+
+/// The first reason this host cannot wrap a pane, in upstream's order, or what a wrap runs with: a relative zmx path,
+/// a zmx that is not an executable file, a login shell other than zsh (`$SHELL` cannot override the password
+/// database), a resources directory without `shell-integration/zsh/.zshenv`.
+///
+/// # Errors
+///
+/// The first [`LiveRejection`] that applies.
+pub fn eligibility(
+    zmx_executable: &Path,
+    login_shell: Option<&str>,
+    resources_dir: Option<&Path>,
+) -> Result<Eligible, LiveRejection> {
+    if !zmx_executable.is_absolute() {
+        return Err(LiveRejection::ExecutablePathNotAbsolute);
+    }
+    let executable = super::standardized_path(zmx_executable);
+    if !is_executable_file(&executable) {
+        return Err(LiveRejection::ExecutableUnavailable);
+    }
+    let shell = login_shell
+        .filter(|shell| basename(shell) == "zsh")
+        .ok_or(LiveRejection::UnsupportedLoginShell)?;
+    let resources = resources_dir.ok_or(LiveRejection::MissingZshIntegration)?;
+    let integration_dir = super::standardized_path(resources).join("shell-integration/zsh");
+    if !integration_dir.join(".zshenv").exists() {
+        return Err(LiveRejection::MissingZshIntegration);
+    }
+    Ok(Eligible {
+        executable,
+        shell: shell.to_owned(),
+        integration_dir,
+    })
+}
+
+/// Whether `path` is a regular file this process may execute.
+#[must_use]
+pub fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        metadata.is_file()
+    }
+}
+
+/// Everything a pane's wrap configuration is built from (upstream's `ZmxSupport.Inputs`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Inputs {
+    pub zmx_executable: PathBuf,
+    /// The login shell the password database names.
+    pub login_shell: Option<String>,
+    /// The Ghostty resources directory holding `shell-integration/zsh`.
+    pub resources_dir: Option<PathBuf>,
+    pub state_dir: PathBuf,
+    pub pane_identity: Uuid,
+    /// The pane's own environment, which the wrap extends.
+    pub base_environment: BTreeMap<String, String>,
+    /// The app's own `ZDOTDIR`, handed on to the integration.
+    pub inherited_zdotdir: Option<String>,
+    /// A supervising session host (macOS's `agterm-session-host`); Linux has none.
+    pub session_host_executable: Option<PathBuf>,
+    /// `None` leaves the attach unmanaged, as a zmx without explicit leadership expects.
+    pub lead: Option<LeadAttachment>,
+}
+
+/// How a wrapped pane attaches to its daemon (upstream's `ZmxSupport.Configuration`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Configuration {
+    pub executable: String,
+    pub session_host_executable: Option<String>,
+    /// The surface's environment.
+    pub environment: BTreeMap<String, String>,
+    pub daemon_name: String,
+    pub socket_directory: String,
+    /// The pane identity as `AGTERM_PANE_ID` spells it (upper case).
+    pub pane_id: String,
+}
+
+impl Configuration {
+    /// `zmx attach <daemon>`.
+    #[must_use]
+    pub fn attach_arguments(&self) -> Vec<String> {
+        vec![self.executable.clone(), "attach".to_owned(), self.daemon_name.clone()]
+    }
+
+    /// The bare attach as one shell line.
+    #[must_use]
+    pub fn command(&self) -> String {
+        shell_quoted_line(&self.attach_arguments())
+    }
+}
+
+/// The wrap configuration of `inputs`' pane.
+///
+/// # Errors
+///
+/// The host cannot wrap a pane ([`eligibility`]).
+pub fn configuration(inputs: &Inputs) -> Result<Configuration, LiveRejection> {
+    let eligible = eligibility(
+        &inputs.zmx_executable,
+        inputs.login_shell.as_deref(),
+        inputs.resources_dir.as_deref(),
+    )?;
+    let socket_directory = socket_directory(&inputs.state_dir);
+    let pane_id = uuid_string(inputs.pane_identity);
+    let mut environment = inputs.base_environment.clone();
+    let mut set = |key: &str, value: &str| environment.insert(key.to_owned(), value.to_owned());
+    set("AGTERM_PANE_ID", &pane_id);
+    set("SHELL", &eligible.shell);
+    set("ZDOTDIR", &eligible.integration_dir.to_string_lossy());
+    if let Some(zdotdir) = &inputs.inherited_zdotdir {
+        set("GHOSTTY_ZSH_ZDOTDIR", zdotdir);
+    }
+    set("ZMX_DIR", &socket_directory);
+    set("ZMX_SESSION", "");
+    set("ZMX_SESSION_PREFIX", "");
+    set("ZMX_NO_DETACH_KEY", "1");
+    // a stale value inherited from the app's own environment would opt the client in under a nonce no pane expects
+    environment.remove(NONCE_VARIABLE);
+    environment.remove(CLAIM_VARIABLE);
+    if let Some(lead) = &inputs.lead {
+        environment.extend(lead.environment());
+    }
+    let session_host_executable = inputs
+        .session_host_executable
+        .as_deref()
+        .filter(|path| path.is_absolute() && is_executable_file(path))
+        .map(|path| super::standardized_path(path).to_string_lossy().into_owned());
+    Ok(Configuration {
+        executable: eligible.executable.to_string_lossy().into_owned(),
+        session_host_executable,
+        environment,
+        daemon_name: daemon_name(inputs.pane_identity),
+        socket_directory,
+        pane_id,
+    })
+}
+
+/// How a pane starts (upstream's `ZmxSupport.LaunchDisposition`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LaunchDisposition {
+    /// Not a live launch: a plain surface.
+    Ordinary,
+    /// Wrapped in its daemon.
+    Wrapped(Configuration),
+    /// Live was requested but is unavailable. Restored panes start plain shells without consuming rerun state; fresh
+    /// primary panes still honor their creation command.
+    Fallback,
+}
+
+impl LaunchDisposition {
+    /// Whether the pane runs inside a daemon.
+    #[must_use]
+    pub fn backed_by_zmx(&self) -> bool {
+        matches!(self, Self::Wrapped(_))
+    }
+}
+
+/// The disposition of a pane in a launch that requested `requested` and runs `active`, with the pane's configuration
+/// when one could be built.
+#[must_use]
+pub fn launch_disposition(
+    requested: RestoreMode,
+    active: RestoreMode,
+    configuration: Option<Configuration>,
+) -> LaunchDisposition {
+    if requested != RestoreMode::Live {
+        return LaunchDisposition::Ordinary;
+    }
+    match configuration {
+        Some(configuration) if active == RestoreMode::Live => LaunchDisposition::Wrapped(configuration),
+        _ => LaunchDisposition::Fallback,
+    }
+}
+
+/// The command a wrapped pane's surface runs: the attach, with the creation payload a new daemon runs (a replayable
+/// captured `argv` first, else the durable `creation_command`), behind the session host's client when there is one.
+/// A refused replay (denylisted, unreplayable) keeps the bare attach rather than falling back to the creation command.
+#[must_use]
+pub fn attach_command<S: AsRef<str>>(
+    configuration: &Configuration,
+    replaying: Option<&[String]>,
+    creation_command: Option<&str>,
+    denylist: &[S],
+) -> String {
+    let mut arguments = configuration.attach_arguments();
+    arguments.extend(creation_arguments(configuration, replaying, creation_command, denylist));
+    if let Some(host) = &configuration.session_host_executable {
+        let mut wrapped = vec![
+            host.clone(),
+            "client".to_owned(),
+            configuration.daemon_name.clone(),
+            "--".to_owned(),
+        ];
+        wrapped.append(&mut arguments);
+        arguments = wrapped;
+    }
+    shell_quoted_line(&arguments)
+}
+
+fn creation_arguments<S: AsRef<str>>(
+    configuration: &Configuration,
+    replaying: Option<&[String]>,
+    creation_command: Option<&str>,
+    denylist: &[S],
+) -> Vec<String> {
+    let environment = &configuration.environment;
+    let (Some(shell), Some(integration_dir)) = (environment.get("SHELL"), environment.get("ZDOTDIR")) else {
+        return Vec::new();
+    };
+    let inherited_zdotdir = environment.get("GHOSTTY_ZSH_ZDOTDIR").map(String::as_str);
+    let script = match (replaying, creation_command) {
+        (Some(argv), _) if !should_restore(argv, denylist) => return Vec::new(),
+        (Some(argv), _) => replay::render_argv(argv, integration_dir, inherited_zdotdir, shell),
+        (None, Some(line)) => replay::render_command_line(line, integration_dir, inherited_zdotdir, shell),
+        (None, None) => return Vec::new(),
+    };
+    vec![shell.clone(), "-lic".to_owned(), script]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    const NO_DENYLIST: [&str; 0] = [];
+
+    fn resources(with_loader: bool) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let integration = dir.path().join("shell-integration/zsh");
+        fs::create_dir_all(&integration).unwrap();
+        if with_loader {
+            fs::write(integration.join(".zshenv"), "").unwrap();
+        }
+        dir
+    }
+
+    fn inputs(resources: &Path) -> Inputs {
+        Inputs {
+            zmx_executable: PathBuf::from("/bin/echo"),
+            login_shell: Some("/bin/zsh".to_owned()),
+            resources_dir: Some(resources.to_path_buf()),
+            state_dir: PathBuf::from("/tmp/agterm-state"),
+            pane_identity: Uuid::parse_str("11111111-2222-3333-4444-555555555555").unwrap(),
+            ..Inputs::default()
+        }
+    }
+
+    fn replay_configuration(host: Option<&str>) -> Configuration {
+        Configuration {
+            executable: "/bin/zmx".to_owned(),
+            session_host_executable: host.map(str::to_owned),
+            environment: BTreeMap::from([
+                ("SHELL".to_owned(), "/bin/zsh".to_owned()),
+                ("ZDOTDIR".to_owned(), "/bundle resources/zsh".to_owned()),
+                ("GHOSTTY_ZSH_ZDOTDIR".to_owned(), "/user/zsh".to_owned()),
+            ]),
+            daemon_name: "agterm-pane".to_owned(),
+            socket_directory: "/tmp/zmx".to_owned(),
+            pane_id: "pane".to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_configuration_uses_the_password_database_zsh_and_the_full_pane_identity() {
+        let resources = resources(true);
+        let mut inputs = inputs(resources.path());
+        inputs.pane_identity = Uuid::parse_str("ABCDEF01-2345-6789-ABCD-EF0123456789").unwrap();
+        inputs.base_environment = BTreeMap::from([
+            ("AGTERM_ENABLED".to_owned(), "1".to_owned()),
+            ("AGTERM_PANE_ID".to_owned(), "old".to_owned()),
+            ("ZMX_SESSION".to_owned(), "parent-session".to_owned()),
+            ("ZMX_SESSION_PREFIX".to_owned(), "parent.".to_owned()),
+        ]);
+        inputs.inherited_zdotdir = Some("/home/test/.config/zsh".to_owned());
+        let configuration = configuration(&inputs).unwrap();
+        assert_eq!(configuration.daemon_name, "agterm-abcdef0123456789abcdef0123456789");
+        assert_eq!(configuration.pane_id, "ABCDEF01-2345-6789-ABCD-EF0123456789");
+        assert_eq!(
+            configuration.command(),
+            "'/bin/echo' 'attach' 'agterm-abcdef0123456789abcdef0123456789'"
+        );
+        assert_eq!(
+            configuration.socket_directory,
+            socket_directory(Path::new("/tmp/agterm-state"))
+        );
+        let env = |key: &str| configuration.environment.get(key).map(String::as_str);
+        assert_eq!(env("AGTERM_ENABLED"), Some("1"));
+        assert_eq!(env("AGTERM_PANE_ID"), Some("ABCDEF01-2345-6789-ABCD-EF0123456789"));
+        assert_eq!(env("SHELL"), Some("/bin/zsh"));
+        let integration = resources.path().join("shell-integration/zsh");
+        assert_eq!(env("ZDOTDIR"), integration.to_str());
+        assert_eq!(env("GHOSTTY_ZSH_ZDOTDIR"), Some("/home/test/.config/zsh"));
+        assert_eq!(env("ZMX_DIR"), Some(configuration.socket_directory.as_str()));
+        assert_eq!(env("ZMX_NO_DETACH_KEY"), Some("1"));
+        assert_eq!((env("ZMX_SESSION"), env("ZMX_SESSION_PREFIX")), (Some(""), Some("")));
+        assert_eq!(configuration.session_host_executable, None);
+    }
+
+    #[test]
+    fn a_lead_attachment_reaches_the_attach_environment_and_an_inherited_one_does_not() {
+        let resources = resources(true);
+        let environment = |lead: Option<LeadAttachment>| {
+            let mut inputs = inputs(resources.path());
+            inputs.base_environment = BTreeMap::from([
+                ("ZMX_MANAGED".to_owned(), "stale".to_owned()),
+                ("ZMX_MANAGED_CLAIM".to_owned(), "1".to_owned()),
+            ]);
+            inputs.lead = lead;
+            configuration(&inputs).unwrap().environment
+        };
+        let unmanaged = environment(None);
+        assert!(!unmanaged.contains_key("ZMX_MANAGED") && !unmanaged.contains_key("ZMX_MANAGED_CLAIM"));
+        let recovering = environment(Some(LeadAttachment {
+            nonce: "n1".to_owned(),
+            claim: false,
+        }));
+        assert_eq!(recovering.get("ZMX_MANAGED").map(String::as_str), Some("n1"));
+        assert!(!recovering.contains_key("ZMX_MANAGED_CLAIM"));
+        let claiming = environment(Some(LeadAttachment {
+            nonce: "n2".to_owned(),
+            claim: true,
+        }));
+        assert_eq!(claiming.get("ZMX_MANAGED").map(String::as_str), Some("n2"));
+        assert_eq!(claiming.get("ZMX_MANAGED_CLAIM").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn wrap_rejections_come_in_upstreams_order() {
+        let with_loader = resources(true);
+        let without_loader = resources(false);
+        let mut relative = inputs(with_loader.path());
+        relative.zmx_executable = PathBuf::from("zmx");
+        assert_eq!(configuration(&relative), Err(LiveRejection::ExecutablePathNotAbsolute));
+        let mut missing = inputs(with_loader.path());
+        missing.zmx_executable = with_loader.path().join("no-such-zmx");
+        assert_eq!(configuration(&missing), Err(LiveRejection::ExecutableUnavailable));
+        let mut not_executable = inputs(with_loader.path());
+        not_executable.zmx_executable = with_loader.path().join("shell-integration/zsh/.zshenv");
+        assert_eq!(
+            configuration(&not_executable),
+            Err(LiveRejection::ExecutableUnavailable)
+        );
+        let mut bash = inputs(with_loader.path());
+        bash.login_shell = Some("/bin/bash".to_owned());
+        // the pane's own `$SHELL` never overrides the password database
+        bash.base_environment = BTreeMap::from([("SHELL".to_owned(), "/bin/zsh".to_owned())]);
+        assert_eq!(configuration(&bash), Err(LiveRejection::UnsupportedLoginShell));
+        let mut no_shell = inputs(with_loader.path());
+        no_shell.login_shell = None;
+        assert_eq!(configuration(&no_shell), Err(LiveRejection::UnsupportedLoginShell));
+        assert_eq!(
+            configuration(&inputs(without_loader.path())),
+            Err(LiveRejection::MissingZshIntegration)
+        );
+        let mut no_resources = inputs(with_loader.path());
+        no_resources.resources_dir = None;
+        assert_eq!(configuration(&no_resources), Err(LiveRejection::MissingZshIntegration));
+        assert!(configuration(&inputs(with_loader.path())).is_ok());
+    }
+
+    #[test]
+    fn rejection_messages_are_the_user_facing_settings_reasons() {
+        for (rejection, message) in [
+            (
+                LiveRejection::ExecutablePathNotAbsolute,
+                "the zmx executable path is not absolute",
+            ),
+            (
+                LiveRejection::ExecutableUnavailable,
+                "the zmx executable is unavailable",
+            ),
+            (
+                LiveRejection::UnsupportedLoginShell,
+                "the password-database login shell is not zsh",
+            ),
+            (
+                LiveRejection::MissingZshIntegration,
+                "the bundled zsh integration is unavailable",
+            ),
+        ] {
+            assert_eq!(rejection.message(), message);
+        }
+    }
+
+    #[test]
+    fn an_unavailable_session_host_keeps_the_bare_attach() {
+        let resources = resources(true);
+        for host in [None, Some("relative/helper"), Some("/no/such/session-host")] {
+            let mut inputs = inputs(resources.path());
+            inputs.session_host_executable = host.map(PathBuf::from);
+            let configuration = configuration(&inputs).unwrap();
+            assert_eq!(configuration.session_host_executable, None);
+            assert_eq!(
+                attach_command(&configuration, None, None, &NO_DENYLIST),
+                configuration.command()
+            );
+        }
+        let mut inputs = inputs(resources.path());
+        inputs.session_host_executable = Some(PathBuf::from("/bin/cat"));
+        let configuration = configuration(&inputs).unwrap();
+        assert_eq!(
+            attach_command(&configuration, None, None, &NO_DENYLIST),
+            shell_quoted_line(&[
+                "/bin/cat",
+                "client",
+                &configuration.daemon_name,
+                "--",
+                "/bin/echo",
+                "attach",
+                &configuration.daemon_name
+            ])
+        );
+    }
+
+    #[test]
+    fn the_launch_disposition_keeps_live_fallback_state_unconsumed() {
+        let configuration = replay_configuration(None);
+        assert_eq!(
+            launch_disposition(RestoreMode::Rerun, RestoreMode::Rerun, Some(configuration.clone())),
+            LaunchDisposition::Ordinary
+        );
+        let wrapped = launch_disposition(RestoreMode::Live, RestoreMode::Live, Some(configuration.clone()));
+        assert!(wrapped.backed_by_zmx());
+        assert_eq!(wrapped, LaunchDisposition::Wrapped(configuration.clone()));
+        assert_eq!(
+            launch_disposition(RestoreMode::Live, RestoreMode::None, None),
+            LaunchDisposition::Fallback
+        );
+        assert_eq!(
+            launch_disposition(RestoreMode::Live, RestoreMode::None, Some(configuration)),
+            LaunchDisposition::Fallback
+        );
+    }
+
+    #[test]
+    fn an_eligible_replay_wins_over_the_durable_command_as_one_outer_quoted_payload() {
+        let configuration = replay_configuration(None);
+        let argv: Vec<String> = ["printf", "%s", "two words", "single'quote"]
+            .map(str::to_owned)
+            .to_vec();
+        let script = replay::render_argv(&argv, "/bundle resources/zsh", Some("/user/zsh"), "/bin/zsh");
+        assert_eq!(
+            attach_command(&configuration, Some(&argv), Some("echo durable"), &NO_DENYLIST),
+            format!(
+                "{} {}",
+                configuration.command(),
+                shell_quoted_line(&["/bin/zsh", "-lic", &script])
+            )
+        );
+    }
+
+    #[test]
+    fn the_session_host_wraps_the_replay_without_changing_the_script() {
+        let configuration = replay_configuration(Some("/bundle's files/agterm-session-host"));
+        let argv: Vec<String> = ["printf", "%s", "two words", "single'quote", "$literal"]
+            .map(str::to_owned)
+            .to_vec();
+        let script = replay::render_argv(&argv, "/bundle resources/zsh", Some("/user/zsh"), "/bin/zsh");
+        assert_eq!(
+            attach_command(&configuration, Some(&argv), Some("do not run"), &NO_DENYLIST),
+            shell_quoted_line(&[
+                "/bundle's files/agterm-session-host",
+                "client",
+                "agterm-pane",
+                "--",
+                "/bin/zmx",
+                "attach",
+                "agterm-pane",
+                "/bin/zsh",
+                "-lic",
+                &script
+            ])
+        );
+    }
+
+    #[test]
+    fn a_refused_replay_keeps_the_bare_attach() {
+        let configuration = replay_configuration(None);
+        for (argv, denylist) in [
+            (vec!["tmux"], vec!["tmux"]),
+            (vec!["echo", "a\nb"], vec![]),
+            (vec!["grep", "caf\u{FFFD}"], vec![]),
+            (vec![""], vec![]),
+        ] {
+            let argv: Vec<String> = argv.into_iter().map(str::to_owned).collect();
+            assert_eq!(
+                attach_command(&configuration, Some(&argv), Some("echo durable"), &denylist),
+                configuration.command()
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_replay_uses_the_durable_command_as_a_shell_line() {
+        let configuration = replay_configuration(None);
+        let line = "printf durable && echo 'two words'";
+        let script = replay::render_command_line(line, "/bundle resources/zsh", Some("/user/zsh"), "/bin/zsh");
+        assert_eq!(
+            attach_command(&configuration, None, Some(line), &NO_DENYLIST),
+            format!(
+                "{} {}",
+                configuration.command(),
+                shell_quoted_line(&["/bin/zsh", "-lic", &script])
+            )
+        );
+        assert_eq!(
+            attach_command(&configuration, None, None, &NO_DENYLIST),
+            configuration.command()
+        );
+    }
+}

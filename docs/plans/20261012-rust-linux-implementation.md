@@ -1196,18 +1196,31 @@ wlr-layer-shell surface.
 - Create: `scripts/build-zmx.sh`
 - Create: `crates/agterm-zmx/{Cargo.toml,src/lib.rs,src/launch.rs,src/client.rs,src/inventory.rs}`
 - Modify: `scripts/stage.sh`
+- ➕ Create: `crates/agterm-core/src/zmx/{mod,support,replay,lifecycle,inventory,reset,build_record,lead,screen}.rs`
+  (the host-free zmx logic, settled with Codex: transcript
+  `/tmp/plan-exec-revmux-rust-linux-implementation/task-27-crate-layering/transcript.md`),
+  `crates/agterm-core/src/zmx/reset/tests.rs`, `crates/agterm-zmx/src/client/tests.rs`,
+  `crates/agterm-zmx/tests/zmx_binary.rs` (the client against the built zmx when `AGTERM_TEST_ZMX` names it);
+  Modify: `crates/agterm-host/src/{lib,fakes}.rs` (`LiveScreen`,
+  `SessionHost::screen` returns it), `crates/agterm-core/src/{lib,restore/mode}.rs` (`LiveProbe` shares the wrap's
+  rejection walk), `crates/agterm-gtk/{Cargo.toml,src/restore_launch.rs}` (the probe's inputs from
+  `agterm_zmx::Runtime`), `scripts/lib/native.sh` (`prefix_key` over several patch dirs), `Cargo.toml`,
+  `.github/workflows/rust-linux.yml` (the conformance job builds the zmx prefix). `agterm-zmx` depends on
+  `agterm-core`; the launch payload and replay script Task 31 extends live in `agterm-core/src/zmx/{support,replay}.rs`
 
-- [ ] `build-zmx.sh`: port `setup-linux-zmx.sh` (Zig 0.16.0, `ZMX_REV` + its 2 patches, a private checkout of the
+- [x] `build-zmx.sh`: port `setup-linux-zmx.sh` (Zig 0.16.0, `ZMX_REV` + its 2 patches, a private checkout of the
       ghostty revision zmx's `build.zig.zon` pins + its patch, both digests in the cache key) into the vendored
       prefix; `stage.sh` adds `bin/zmx`
-- [ ] `SessionHost` over zmx: socket dir `/tmp/agterm-zmx-<FNV-1a 64>`, daemon names, wrap configuration and replay
+- [x] `SessionHost` over zmx: socket dir `/tmp/agterm-zmx-<FNV-1a 64>`, daemon names, wrap configuration and replay
       script (`ZmxSupport.swift`, `ZmxReplayScript.swift`), inventory and lifecycle (`ZmxInventory.swift`,
-      `ZmxLifecycle.swift`, `LiveReset.swift`)
-- [ ] lead protocol (`ZmxLead.swift`), `zmx screen`/`zmx type` replies
-- [ ] write tests: FNV-1a dir against values computed by upstream's `ZmxSupport` algorithm (rust-build.md); daemon
+      `ZmxLifecycle.swift`, `LiveReset.swift`) (the SIGHUP a confirmed kill sends the shell's foreground job,
+      upstream's `ProcessSweeper`, needs the panes and comes with Task 28's wiring)
+- [x] lead protocol (`ZmxLead.swift`), `zmx screen`/`zmx type` replies
+- [x] write tests: FNV-1a dir against values computed by upstream's `ZmxSupport` algorithm (rust-build.md); daemon
       name round-trip
-- [ ] write tests: wrap rejections (non-absolute path, missing binary, non-zsh shell, missing integration)
-- [ ] run `cargo test -p agterm-zmx`; gate: full run; ratchet
+- [x] write tests: wrap rejections (non-absolute path, missing binary, non-zsh shell, missing integration)
+- [x] run `cargo test -p agterm-zmx`; gate: full run; ratchet (holds, 614 pass; no new green ids: the live tests
+      skip on this fish login shell; the client also passed against the built zmx with `AGTERM_TEST_ZMX` set)
 
 ### Task 28: Live sessions in the app
 
