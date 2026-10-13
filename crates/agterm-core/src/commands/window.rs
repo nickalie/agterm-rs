@@ -169,7 +169,8 @@ fn delete(core: &mut Core, target: Option<&str>) -> Outcome {
 }
 
 /// `window.resize`: positive `--width` and `--height`, clamped between the window minimum and the display; echoes the
-/// applied size.
+/// applied size. The frontend takes a maximized or full-screen window out of that state first (as `setFrame` does to a
+/// zoomed `NSWindow`), so the echoed size is the one the window takes.
 fn resize(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let requested = match (args.width, args.height) {
         (Some(width), Some(height)) if width > 0 && height > 0 => WindowSize { width, height },
@@ -216,7 +217,8 @@ fn toggle(core: &mut Core, target: Option<&str>, request: fn(Uuid) -> WindowRequ
 
 /// `window.minimize [on|off|toggle]` (default toggle), resolved against the window's minimized state as read back:
 /// `on` and `off` are idempotent where it is, and a request is sent anyway where it is not (Wayland). A window in full
-/// screen is refused rather than reported minimized. Minimizing hands frontmost to a window still in view.
+/// screen is known not minimized (upstream checks idempotence before its full-screen guard), so restoring it is an ok
+/// no-op and only a minimize is refused rather than reported done. Minimizing hands frontmost to a window still in view.
 fn minimize(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let mode = ToggleMode::parse(args.mode.as_deref()).ok_or_else(|| {
         ControlError::rejected(format!(
@@ -226,8 +228,9 @@ fn minimize(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     })?;
     let id = open_window_id(core, target)?;
     let state = core.window_state(id).unwrap_or_default();
-    let desired = mode.desired_value(state.minimized.unwrap_or(false));
-    if state.minimized != Some(desired) {
+    let minimized = if state.fullscreen { Some(false) } else { state.minimized };
+    let desired = mode.desired_value(minimized.unwrap_or(false));
+    if minimized != Some(desired) {
         if state.fullscreen {
             return Err(ControlError::rejected(
                 "cannot minimize a full-screen window — window.fullscreen it first",

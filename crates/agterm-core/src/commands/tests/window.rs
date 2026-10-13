@@ -545,6 +545,34 @@ fn minimize_with_a_read_back_is_idempotent_and_refuses_full_screen() {
 }
 
 #[test]
+fn minimize_without_a_read_back_restores_a_full_screen_window_as_a_no_op() {
+    let (mut core, ids) = with_windows(1);
+    core.set_window_state(
+        ids[0],
+        Some(WindowState {
+            fullscreen: true,
+            minimized: None,
+            ..WindowState::default()
+        }),
+    );
+    let mode = |mode: &str| args(|a| a.mode = Some(mode.to_owned()));
+    let response = window(&mut core, WindowCmd::Minimize, None, mode("off"));
+    assert_eq!(answered_id(&response), Some(ids[0]));
+    assert!(
+        core.take_window_requests().is_empty(),
+        "a full-screen window is not minimized"
+    );
+    for refused in ["on", "toggle"] {
+        assert_eq!(
+            window(&mut core, WindowCmd::Minimize, None, mode(refused)),
+            failure("cannot minimize a full-screen window — window.fullscreen it first"),
+            "{refused}"
+        );
+    }
+    assert!(core.take_window_requests().is_empty());
+}
+
+#[test]
 fn a_hand_off_skips_windows_read_back_as_minimized() {
     let (mut core, ids) = with_windows(3);
     core.set_window_state(

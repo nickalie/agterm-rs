@@ -8,6 +8,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use adw::prelude::*;
 use agterm_core::model::{AppStore, Session, WindowLibrary};
@@ -56,6 +57,41 @@ fn reads_minimized(display: &gdk::Display) -> bool {
     display.type_().name().starts_with("GdkX11")
 }
 
+/// Full screen and maximized as last painted.
+///
+/// GTK flips its flags when the compositor's configure arrives, a frame before the window commits that state, and
+/// weston drops an unmaximize or unfullscreen that arrives before the client committed the state it just configured.
+/// So `window.list` reports these only once a frame in that state is painted (and committed): a caller that waits for
+/// the new state before toggling back is not dropped (upstream likewise reports once the transition settled).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct Painted {
+    fullscreen: bool,
+    maximized: bool,
+}
+
+impl Painted {
+    fn of(window: &adw::ApplicationWindow) -> Self {
+        Self {
+            fullscreen: window.is_fullscreen(),
+            maximized: window.is_maximized(),
+        }
+    }
+}
+
+/// How long a minimize or restore asked of an X11 window is reported as done before the window manager confirms it
+/// (upstream's settle poll budget, 30 × 0.05 s); after it the state read back is reported again.
+const MINIMIZE_SETTLE: Duration = Duration::from_millis(1500);
+
+/// The minimized state to report, given the one `read` back and the one a request is `pending` on, and whether the
+/// request is still pending. The window manager confirms an iconify a round trip after it is asked, so until the read
+/// back catches up the requested state is reported: a quick `off` or `toggle` then acts on the window's new state.
+fn reported_minimized(read: Option<bool>, pending: Option<bool>) -> (Option<bool>, bool) {
+    match pending {
+        Some(desired) if read.is_some() && read != Some(desired) => (Some(desired), true),
+        _ => (read, false),
+    }
+}
+
 /// The window, its deck and its sidebar.
 pub struct WindowUi {
     window: adw::ApplicationWindow,
@@ -67,6 +103,14 @@ pub struct WindowUi {
     context: PaneContext,
     /// Set once the model closed the window, so its close request goes through.
     closing: Rc<Cell<bool>>,
+    /// The minimized state last asked of an X11 window and the request's number, until the window manager confirms it
+    /// or [`MINIMIZE_SETTLE`] passes ([`reported_minimized`]).
+    pending_minimized: Rc<Cell<Option<(bool, u64)>>>,
+    /// Numbers the minimize requests, so only the latest one's settle timer clears the pending state.
+    minimize_requests: Cell<u64>,
+    /// Full screen and maximized as last painted ([`Painted`]).
+    painted: Rc<Cell<Painted>>,
+    poster: Poster,
 }
 
 impl WindowUi {
@@ -106,6 +150,10 @@ impl WindowUi {
             sidebar,
             context,
             closing: Rc::new(Cell::new(false)),
+            pending_minimized: Rc::new(Cell::new(None)),
+            minimize_requests: Cell::new(0),
+            painted: Rc::new(Cell::new(Painted::default())),
+            poster: poster.clone(),
         };
         ui.connect(poster);
         ui
@@ -128,19 +176,30 @@ impl WindowUi {
                 state::post(&posting, move |state: &mut AppState| state.report_frontmost(id));
             }
         });
+        // full screen and maximized are reported once painted (`Painted`): a change draws a frame
         for property in ["fullscreened", "maximized"] {
-            let posting = poster.clone();
-            self.window.connect_notify_local(Some(property), move |_, _| {
-                state::post(&posting, move |state: &mut AppState| state.window_state_changed(id));
-            });
+            self.window
+                .connect_notify_local(Some(property), |window, _| window.queue_draw());
         }
-        // the toplevel's state (minimized on X11) and its monitor are known once it is realized
+        // the toplevel's state (minimized on X11), its monitor and its frame clock are known once it is realized
         let posting = poster.clone();
+        let painted = Rc::clone(&self.painted);
         self.window.connect_realize(move |window| {
             let Some(surface) = window.surface() else { return };
-            let posting = posting.clone();
+            let changed = posting.clone();
             surface.connect_notify_local(Some("state"), move |_, _| {
-                state::post(&posting, move |state: &mut AppState| state.window_state_changed(id));
+                state::post(&changed, move |state: &mut AppState| state.window_state_changed(id));
+            });
+            let clock = surface.frame_clock();
+            let weak = window.downgrade();
+            let painted = Rc::clone(&painted);
+            let posting = posting.clone();
+            clock.connect_after_paint(move |_| {
+                let Some(window) = weak.upgrade() else { return };
+                let now = Painted::of(&window);
+                if painted.replace(now) != now {
+                    state::post(&posting, move |state: &mut AppState| state.window_state_changed(id));
+                }
             });
         });
         self.connect_divider(poster);
@@ -184,6 +243,14 @@ impl WindowUi {
         match request {
             WindowRequest::Raise(_) => self.present(),
             WindowRequest::Resize { size, .. } => {
+                // GTK keeps a default size aside while the window is maximized or full screen; leaving that state
+                // makes the window take the size now, as `setFrame` resizes a zoomed `NSWindow` at once
+                if window.is_fullscreen() {
+                    window.unfullscreen();
+                }
+                if window.is_maximized() {
+                    window.unmaximize();
+                }
                 window.set_default_size(gtk_size(size.width), gtk_size(size.height));
             }
             WindowRequest::ToggleZoom(_) => {
@@ -200,24 +267,56 @@ impl WindowUi {
                     window.fullscreen();
                 }
             }
-            WindowRequest::Minimize { minimized: true, .. } => window.minimize(),
-            WindowRequest::Minimize { minimized: false, .. } => window.unminimize(),
+            WindowRequest::Minimize { minimized, .. } => {
+                if minimized {
+                    window.minimize();
+                } else {
+                    window.unminimize();
+                }
+                self.expect_minimized(minimized);
+            }
             WindowRequest::Move { .. } => tracing::warn!("window.move reached a host that cannot place windows"),
         }
     }
 
-    /// What `window.list` and the window commands read of this window: full screen, maximized, minimized where the
-    /// display reads it back, and the size of the monitor it is on.
+    /// On a display that reads the minimized state back, reports `minimized` until the window manager confirms it or
+    /// [`MINIMIZE_SETTLE`] passes, then reports the state read back again.
+    fn expect_minimized(&self, minimized: bool) {
+        let display = gtk::prelude::WidgetExt::display(&self.window);
+        if !reads_minimized(&display) {
+            return;
+        }
+        let request = self.minimize_requests.get().wrapping_add(1);
+        self.minimize_requests.set(request);
+        self.pending_minimized.set(Some((minimized, request)));
+        let pending = Rc::clone(&self.pending_minimized);
+        let posting = self.poster.clone();
+        let id = self.window_id;
+        gtk::glib::timeout_add_local_once(MINIMIZE_SETTLE, move || {
+            if pending.get().is_some_and(|(_, number)| number == request) {
+                pending.set(None);
+                state::post(&posting, move |state: &mut AppState| state.window_state_changed(id));
+            }
+        });
+    }
+
+    /// What `window.list` and the window commands read of this window: full screen and maximized as last painted
+    /// ([`Painted`]), minimized where the display reads it back, and the size of the monitor it is on.
     #[must_use]
     pub fn window_state(&self) -> WindowState {
-        let fullscreen = self.window.is_fullscreen();
+        let Painted { fullscreen, maximized } = self.painted.get();
         let surface = self.window.surface();
         let display = gtk::prelude::WidgetExt::display(&self.window);
-        let minimized = surface
+        let read = surface
             .as_ref()
             .filter(|_| reads_minimized(&display))
             .and_then(|surface| surface.downcast_ref::<gdk::Toplevel>().map(gdk::Toplevel::state))
             .map(|state| state.contains(gdk::ToplevelState::MINIMIZED));
+        let pending = self.pending_minimized.get().map(|(desired, _)| desired);
+        let (minimized, still_pending) = reported_minimized(read, pending);
+        if !still_pending {
+            self.pending_minimized.set(None);
+        }
         let monitor = surface
             .as_ref()
             .and_then(|surface| display.monitor_at_surface(surface))
@@ -229,7 +328,7 @@ impl WindowUi {
         WindowState {
             fullscreen,
             // maximized, not full screen (`WindowState::zoomed`)
-            zoomed: self.window.is_maximized() && !fullscreen,
+            zoomed: maximized && !fullscreen,
             minimized,
             display: monitor,
         }
@@ -286,6 +385,31 @@ mod tests {
     fn widths_round_to_whole_points() {
         assert_eq!(divider_position(220.0), 220);
         assert_eq!(divider_position(180.6), 181);
+    }
+
+    #[test]
+    fn a_pending_minimize_is_reported_until_the_read_back_confirms_it() {
+        assert_eq!(
+            reported_minimized(Some(false), Some(true)),
+            (Some(true), true),
+            "iconify not confirmed yet"
+        );
+        assert_eq!(
+            reported_minimized(Some(true), Some(false)),
+            (Some(false), true),
+            "restore not confirmed yet"
+        );
+        assert_eq!(
+            reported_minimized(Some(true), Some(true)),
+            (Some(true), false),
+            "confirmed"
+        );
+        assert_eq!(reported_minimized(Some(false), None), (Some(false), false));
+        assert_eq!(
+            reported_minimized(None, Some(true)),
+            (None, false),
+            "no read-back (Wayland)"
+        );
     }
 
     #[test]
