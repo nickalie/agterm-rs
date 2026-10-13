@@ -708,15 +708,18 @@ impl TerminalSurface {
         if self.inner.torn_down.replace(true) {
             return;
         }
-        // libghostty frees its GL objects in the area's context; an area never realized has no context and no surface
-        if self.area.is_realized() {
-            self.area.make_current();
-        }
         let Ok(mut slot) = self.inner.ghostty.try_borrow_mut() else {
             tracing::error!("terminal surface torn down while in use; it leaks");
             return;
         };
-        drop(slot.take());
+        crate::ghostty_app::drain_around(|| {
+            // libghostty frees its GL objects in the area's context; an area never realized has no context and no
+            // surface
+            if self.area.is_realized() {
+                self.area.make_current();
+            }
+            drop(slot.take());
+        });
         if let Some(tick) = self.inner.creation_tick.borrow_mut().take() {
             tick.remove();
         }

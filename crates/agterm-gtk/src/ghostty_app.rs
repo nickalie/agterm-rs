@@ -62,11 +62,36 @@ impl GhosttyApp {
 
 thread_local! {
     static GHOSTTY: RefCell<Option<Rc<GhosttyApp>>> = const { RefCell::new(None) };
+    /// A tick is running: libghostty's tick must not be re-entered from a callback.
+    static TICKING: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The app, cloned out so no borrow is held while libghostty calls back.
 fn current() -> Option<Rc<GhosttyApp>> {
     GHOSTTY.with(|slot| slot.borrow().clone())
+}
+
+/// Runs the app's tick now unless one is running already.
+fn tick() {
+    if TICKING.with(Cell::get) {
+        return;
+    }
+    if let Some(ghostty) = current() {
+        TICKING.with(|ticking| ticking.set(true));
+        ghostty.app.tick();
+        TICKING.with(|ticking| ticking.set(false));
+    }
+}
+
+/// Delivers the messages libghostty queued for its surfaces, around a surface's free. The app mailbox names a surface
+/// by its address and checks it only against the live surfaces, so a message the freed surface left queued (its
+/// child's exit) would otherwise reach the next surface allocated at that address: a replacement terminal took its
+/// predecessor's exit and closed its pane. Drained before the free, such a message finds the surface torn down and is
+/// dropped; drained after it, before any new surface exists, it names no live surface.
+pub fn drain_around(free: impl FnOnce()) {
+    tick();
+    free();
+    tick();
 }
 
 /// Candidate resource directories, highest priority first: the staged layout beside the binary (`bin/` and
@@ -351,9 +376,7 @@ fn schedule_tick() {
     }
     glib::idle_add_once(|| {
         TICK_SCHEDULED.store(false, Ordering::Release);
-        if let Some(ghostty) = current() {
-            ghostty.app.tick();
-        }
+        tick();
     });
 }
 
