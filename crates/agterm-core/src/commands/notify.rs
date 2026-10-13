@@ -3,8 +3,10 @@
 //! and `send(toSession:)`, `Notifications.swift`, `notifications.md`).
 //!
 //! The core records the event and bumps the badge; the banner itself is the frontend's ([`Core::take_notifications`]),
-//! gated by the "Show notification banners" setting. Delivered banners are the frontend's to withdraw once the badge
-//! is cleared.
+//! gated by the "Show notification banners" setting. Withdrawing delivered banners is edge-triggered, as upstream's
+//! `clearDelivered`: the core queues a [`NotificationEffect::Clear`] in the same queue as the posts at each site that
+//! clears them (a pane taking focus, zoomed or not, and a successful swap), and only for a session an open window
+//! holds. The badge clears on its own path (a selection, `session.seen`), which leaves the banners alone.
 
 use agterm_proto::{ControlResult, Request};
 use uuid::Uuid;
@@ -93,6 +95,30 @@ impl NotificationPost {
     }
 }
 
+/// What the frontend does with banners, queued in order so a post and a withdrawal are never reordered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotificationEffect {
+    /// Post a banner.
+    Post(NotificationPost),
+    /// Withdraw every pane's delivered banner of session `session` in open window `window` (upstream's
+    /// `clearDelivered`).
+    Clear { window: Uuid, session: Uuid },
+}
+
+impl NotificationEffect {
+    /// The identities the effect withdraws: every pane's for a clear, none for a post.
+    #[must_use]
+    pub fn withdrawn_identities(&self) -> Vec<String> {
+        match self {
+            Self::Post(_) => Vec::new(),
+            Self::Clear { window, session } => PaneRole::ALL
+                .into_iter()
+                .map(|pane| identity(*window, *session, pane))
+                .collect(),
+        }
+    }
+}
+
 /// `notify`: a body is required, checked before the target; the badge always counts it and the banner obeys the
 /// setting, whose being off the result notes.
 pub(crate) fn dispatch(core: &mut Core, request: &Request) -> Outcome {
@@ -135,13 +161,13 @@ impl Core {
             return false;
         };
         if self.banners_enabled() {
-            self.notifications.push(NotificationPost {
+            self.notifications.push(NotificationEffect::Post(NotificationPost {
                 window,
                 session,
                 pane,
                 title,
                 body: body.to_owned(),
-            });
+            }));
         } else {
             tracing::info!(%session, "notify: badge bumped, but banners are off in the settings");
         }
@@ -169,7 +195,8 @@ impl Core {
 
     /// A banner was clicked (upstream's `AppActions.reveal`): the session is revealed in the open window holding it,
     /// else window `window` is opened again when it was closed since. The owning window leaves its zoom (the selection
-    /// would change behind it), the session is selected and its badge cleared, the pane that fired takes the keyboard
+    /// would change behind it), the session is selected and its badge cleared, the pane that fired is asked to take the
+    /// keyboard (its banners are withdrawn only once the frontend gives it focus, which a cover may block)
     /// (the primary when the session no longer has a split), and the window comes to the front. Whether the split
     /// survives is the model's `split.exists` (upstream's `hasSplit`), not whether its terminal is mounted yet: a
     /// reopened window's split, or a restored hidden one, has none until the frontend lays it out, and the focus
@@ -209,8 +236,20 @@ impl Core {
         true
     }
 
-    /// Takes the banners queued since the last take, in order.
-    pub fn take_notifications(&mut self) -> Vec<NotificationPost> {
+    /// Queues the withdrawal of session `session`'s delivered banners, every pane's (upstream's `clearDelivered`): a
+    /// no-op when no open window holds the session, so a closed window's banners stay clickable. The badge is left
+    /// as it is. Whether a withdrawal was queued; settle afterwards when it was.
+    pub(crate) fn clear_delivered(&mut self, session: Uuid) -> bool {
+        let Some(window) = self.library().window_id_for_session(session) else {
+            tracing::debug!(%session, "notify: no open window holds the session; no banner to clear");
+            return false;
+        };
+        self.notifications.push(NotificationEffect::Clear { window, session });
+        true
+    }
+
+    /// Takes the banner posts and withdrawals queued since the last take, in order.
+    pub fn take_notifications(&mut self) -> Vec<NotificationEffect> {
         std::mem::take(&mut self.notifications)
     }
 }

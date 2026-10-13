@@ -318,6 +318,9 @@ pub struct Deck {
     shown: Option<Uuid>,
     /// The page and pane token keyboard focus was last moved to.
     focused: Option<(Uuid, String)>,
+    /// The panes this deck gave focus to since the last [`Deck::take_given_focus`], reported as focus moves even when
+    /// the terminal held the keyboard already and GTK sends no focus-enter.
+    given_focus: Vec<(Uuid, String)>,
     chrome: Chrome,
     /// The window's dashboard was open at the last reconcile.
     in_grid: bool,
@@ -346,6 +349,7 @@ impl Deck {
             pages: HashMap::new(),
             shown: None,
             focused: None,
+            given_focus: Vec::new(),
             chrome,
             in_grid: false,
             fonts: FontOverrides::default(),
@@ -528,9 +532,22 @@ impl Deck {
         if desired == self.focused && !refocus {
             return;
         }
-        if focus.is_some_and(|(_, terminal)| terminal.grab_focus()) || desired.is_none() {
+        if focus.is_some_and(|(_, terminal)| terminal.grab_focus()) {
+            if let Some(given) = &desired {
+                self.given_focus.push(given.clone());
+            }
             self.focused = desired;
+        } else if desired.is_none() {
+            self.focused = None;
         }
+    }
+
+    /// The panes given focus since the last take, as (session, pane token), in order: the frontend's own focus moves,
+    /// which the window reports as [`crate::state::AppState::pane_focused`] (upstream's `becomeFirstResponder` fires
+    /// for a programmatic focus as for a click, and an explicit refocus of the terminal that holds the keyboard sends
+    /// GTK no focus-enter).
+    pub fn take_given_focus(&mut self) -> Vec<(Uuid, String)> {
+        std::mem::take(&mut self.given_focus)
     }
 }
 
@@ -928,6 +945,20 @@ mod tests {
         assert!(split.is_focus(), "the requested pane took the keyboard back");
         walk.core.clear_pane_focus_requests();
 
+        // a refocus of the pane that holds the keyboard already sends GTK no focus-enter: the deck reports it itself,
+        // so the session's banners are withdrawn all the same
+        let _ = walk.deck.take_given_focus();
+        assert!(walk.core.dispatch(&request).ok);
+        walk.settle();
+        assert!(split.is_focus());
+        assert_eq!(walk.deck.take_given_focus(), [(walk.session, walk.split.clone())]);
+        walk.core.clear_pane_focus_requests();
+        walk.settle();
+        assert!(
+            walk.deck.take_given_focus().is_empty(),
+            "an ordinary render gives no focus"
+        );
+
         GtkWindowExt::set_focus(&window, None::<&gtk::Widget>);
         walk.settle();
         assert!(!split.is_focus(), "the request was one-shot");
@@ -957,8 +988,14 @@ mod tests {
             }),
         };
         assert!(walk.core.dispatch(&request).ok);
+        let _ = walk.deck.take_given_focus();
         walk.settle();
         assert!(walk.deck.in_grid);
+        // a selection under the dashboard gives no pane focus, so the session's banners stay
+        let session = walk.session;
+        walk.store().select_session(Some(session));
+        walk.settle();
+        assert!(walk.deck.take_given_focus().is_empty());
         assert!(walk.deck.chrome().widget().get_visible());
         for token in [&walk.primary, &walk.split] {
             let terminal = walk.probe().terminal(token).clone();

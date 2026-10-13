@@ -406,6 +406,9 @@ impl WindowUi {
         let zoomed = core.zoom_target(id);
         let dashboard = core.dashboard(id).is_some();
         self.deck.reconcile(core, Some(id), zoomed, &self.context, poster);
+        for (session, token) in self.deck.take_given_focus() {
+            state::post(poster, move |state: &mut AppState| state.pane_focused(session, &token));
+        }
         let badges = core.settings().notification_badge_enabled.unwrap_or(true);
         if let Some(store) = core.library_mut().store_mut(id) {
             self.sidebar.refresh(store, badges);

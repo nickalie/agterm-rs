@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{Fixture, UNKNOWN, answered_id, args, failure, wire};
+use crate::commands::notify::{NotificationEffect, NotificationPost, PaneRole};
 use crate::hud::{HudPaneFrame, HudPaneFrames};
 use crate::persist::AppSettings;
 
@@ -595,6 +596,17 @@ fn notify(fixture: &mut Fixture, target: &str, edit: impl FnOnce(&mut Args)) -> 
     fixture.send(Command::Notify, Some(target), args(edit))
 }
 
+/// The banners queued since the last take, every one of them a post.
+fn posts(core: &mut crate::Core) -> Vec<NotificationPost> {
+    core.take_notifications()
+        .into_iter()
+        .map(|effect| match effect {
+            NotificationEffect::Post(post) => post,
+            clear @ NotificationEffect::Clear { .. } => panic!("unexpected {clear:?}"),
+        })
+        .collect()
+}
+
 #[test]
 fn notify_raises_the_badge_emits_the_event_and_queues_a_banner() {
     let mut fixture = Fixture::new(1);
@@ -623,7 +635,7 @@ fn notify_raises_the_badge_emits_the_event_and_queues_a_banner() {
             (Some(id), Some(name.clone()), Some("second".to_owned())),
         ]
     );
-    let posts = fixture.core.take_notifications();
+    let posts = posts(&mut fixture.core);
     assert_eq!(posts.len(), 2);
     assert_eq!(posts[1].title, name);
     assert_eq!(
@@ -689,8 +701,8 @@ fn a_terminal_notification_names_its_pane_and_a_click_reveals_it() {
     session.split_surface.replace(Box::new(FakeSurface::new("R")));
     fixture.store_mut().unwrap().select_session(Some(second));
     assert!(fixture.core.terminal_notification(first, "R", "", "done"));
-    let post = fixture.core.take_notifications().remove(0);
-    assert_eq!(post.pane, crate::commands::notify::PaneRole::Split);
+    let post = posts(&mut fixture.core).remove(0);
+    assert_eq!(post.pane, PaneRole::Split);
     fixture.store_mut().unwrap().set_split_focus(first, false);
     assert!(fixture.core.reveal_notification(post.window, first, post.pane));
     let store = fixture.store();
@@ -721,11 +733,7 @@ fn a_reveal_focuses_a_split_whose_terminal_is_not_mounted_yet() {
     store.set_split_focus(first, false);
     store.select_session(Some(second));
     assert!(!store.session(first).unwrap().split_surface.is_present());
-    assert!(
-        fixture
-            .core
-            .reveal_notification(window, first, crate::commands::notify::PaneRole::Split)
-    );
+    assert!(fixture.core.reveal_notification(window, first, PaneRole::Split));
     let session = fixture.store().session(first).unwrap();
     assert!(
         session.split.focused,
@@ -733,11 +741,7 @@ fn a_reveal_focuses_a_split_whose_terminal_is_not_mounted_yet() {
     );
     assert!(fixture.core.pane_focus_requested(first));
     // without a split at all the primary takes it
-    assert!(
-        fixture
-            .core
-            .reveal_notification(window, second, crate::commands::notify::PaneRole::Split)
-    );
+    assert!(fixture.core.reveal_notification(window, second, PaneRole::Split));
     assert!(!fixture.store().session(second).unwrap().split.focused);
 }
 
@@ -751,11 +755,7 @@ fn a_reveal_leaves_the_owning_windows_zoom() {
         surface: crate::zoom::ZoomSurface::Primary,
     };
     fixture.core.set_zoom_target(window, Some(zoomed));
-    assert!(
-        fixture
-            .core
-            .reveal_notification(window, second, crate::commands::notify::PaneRole::Main)
-    );
+    assert!(fixture.core.reveal_notification(window, second, PaneRole::Main));
     assert_eq!(
         fixture.core.zoom_target(window),
         None,
@@ -774,9 +774,7 @@ fn a_reveal_reopens_a_closed_window_even_for_a_gone_session() {
     fixture.core.library_mut().close_window(window);
     assert!(!fixture.core.library().is_open(window));
     assert!(
-        fixture
-            .core
-            .reveal_notification(window, Uuid::new_v4(), crate::commands::notify::PaneRole::Main),
+        fixture.core.reveal_notification(window, Uuid::new_v4(), PaneRole::Main),
         "the reopened window is a change the caller commits"
     );
     assert!(fixture.core.library().is_open(window));
@@ -796,4 +794,195 @@ fn focusing_a_pane_clears_the_badge() {
     assert!(notify(&mut fixture, &wire(id), |a| a.body = Some("b".into())).ok);
     assert!(fixture.core.pane_focused(id, "L"));
     assert_eq!(fixture.store().session(id).unwrap().unseen_count, 0);
+}
+
+// MARK: - withdrawing delivered banners (upstream's `clearDelivered` sites)
+
+fn with_terminal(fixture: &mut Fixture, id: Uuid, token: &str) {
+    fixture
+        .store_mut()
+        .unwrap()
+        .session_mut(id)
+        .unwrap()
+        .surface
+        .replace(Box::new(FakeSurface::new(token)));
+}
+
+fn cleared(window: Uuid, session: Uuid) -> NotificationEffect {
+    NotificationEffect::Clear { window, session }
+}
+
+#[test]
+fn a_pane_focus_withdraws_every_panes_banner_even_with_the_badge_clear() {
+    let mut fixture = Fixture::new(1);
+    let id = fixture.sessions[0];
+    let window = fixture.window;
+    with_terminal(&mut fixture, id, "L");
+    assert_eq!(fixture.store().session(id).unwrap().unseen_count, 0);
+    assert!(
+        fixture.core.pane_focused(id, "L"),
+        "a withdrawal is queued, so the caller settles"
+    );
+    let effects = fixture.core.take_notifications();
+    assert_eq!(effects, [cleared(window, id)]);
+    let identities: Vec<String> = PaneRole::ALL
+        .into_iter()
+        .map(|pane| crate::commands::notify::identity(window, id, pane))
+        .collect();
+    assert_eq!(effects[0].withdrawn_identities(), identities);
+
+    // zoomed, the split's focus stays but the session was still seen
+    let zoomed = crate::zoom::SurfaceId {
+        session: id,
+        surface: crate::zoom::ZoomSurface::Primary,
+    };
+    fixture.core.set_zoom_target(window, Some(zoomed));
+    assert!(notify(&mut fixture, &wire(id), |a| a.body = Some("b".into())).ok);
+    let _ = fixture.core.take_notifications();
+    assert!(fixture.core.pane_focused(id, "L"));
+    assert_eq!(fixture.store().session(id).unwrap().unseen_count, 0);
+    assert_eq!(fixture.core.take_notifications(), [cleared(window, id)]);
+}
+
+#[test]
+fn posts_and_withdrawals_keep_their_order_and_spare_other_sessions() {
+    let mut fixture = Fixture::new(1);
+    let (first, second) = (fixture.sessions[0], fixture.sessions[1]);
+    let window = fixture.window;
+    with_terminal(&mut fixture, first, "L");
+    assert!(notify(&mut fixture, &wire(first), |a| a.body = Some("one".into())).ok);
+    assert!(notify(&mut fixture, &wire(second), |a| a.body = Some("two".into())).ok);
+    assert!(fixture.core.pane_focused(first, "L"));
+    assert!(notify(&mut fixture, &wire(first), |a| a.body = Some("three".into())).ok);
+    let effects = fixture.core.take_notifications();
+    let shape: Vec<(Uuid, Option<&str>)> = effects
+        .iter()
+        .map(|effect| match effect {
+            NotificationEffect::Post(post) => (post.session, Some(post.body.as_str())),
+            NotificationEffect::Clear { session, .. } => (*session, None),
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            (first, Some("one")),
+            (second, Some("two")),
+            (first, None),
+            (first, Some("three")),
+        ]
+    );
+    assert_eq!(effects[2], cleared(window, first));
+    assert_eq!(
+        fixture.store().session(second).unwrap().unseen_count,
+        1,
+        "another session's badge stays"
+    );
+}
+
+#[test]
+fn a_closed_windows_banners_stay_and_still_reopen_it() {
+    let mut fixture = Fixture::new(1);
+    let id = fixture.sessions[0];
+    let window = fixture.window;
+    with_terminal(&mut fixture, id, "L");
+    // a second window keeps the app up once the notified one closes
+    let other = fixture.core.library_mut().new_window(None);
+    let _ = fixture.core.commit();
+    assert!(notify(&mut fixture, &wire(id), |a| a.body = Some("done".into())).ok);
+    let post = posts(&mut fixture.core).remove(0);
+    fixture.core.close_window(window);
+    assert!(fixture.core.library().is_open(other));
+    for _ in 0..3 {
+        let _ = fixture.core.commit();
+        assert!(fixture.core.take_notifications().is_empty(), "nothing is withdrawn");
+    }
+    assert!(
+        !fixture.core.pane_focused(id, "L"),
+        "a late focus report of the closed window clears nothing"
+    );
+    assert!(fixture.core.take_notifications().is_empty());
+    let (window_id, session, pane) = crate::commands::notify::parse_identity(&post.identity()).unwrap();
+    assert!(fixture.core.reveal_notification(window_id, session, pane));
+    assert!(fixture.core.library().is_open(window), "the click reopened it");
+}
+
+#[test]
+fn a_window_reopened_another_way_keeps_its_banners() {
+    use agterm_proto::command::WindowCmd;
+
+    fn window_cmd(core: &mut crate::Core, cmd: WindowCmd, target: Option<Uuid>) -> Response {
+        let target = target.map(wire);
+        let response = super::send(core, Command::Window(cmd), target.as_deref(), Args::default());
+        assert!(response.ok, "{response:?}");
+        response
+    }
+
+    let dir = tempfile::Builder::new().prefix("agt").tempdir_in("/tmp").unwrap();
+    let mut core = super::window::persisted(dir.path());
+    let window = core.library().active_window_id().unwrap();
+    let store = core.library_mut().store_mut(window).unwrap();
+    let workspace = store.workspaces()[0].id();
+    let kept = store.selected_session_id().unwrap();
+    let notified = store
+        .add_session(workspace, crate::model::NewSession::at_cwd("/tmp"))
+        .unwrap();
+    store.select_session(Some(kept));
+    let other = answered_id(&window_cmd(&mut core, WindowCmd::New, None)).unwrap();
+    let _ = core.commit();
+    let response = super::send(
+        &mut core,
+        Command::Notify,
+        Some(&wire(notified)),
+        args(|a| a.body = Some("done".into())),
+    );
+    assert!(response.ok, "{response:?}");
+    assert_eq!(posts(&mut core).len(), 1);
+    let _ = window_cmd(&mut core, WindowCmd::Close, Some(window));
+    let _ = core.commit();
+    assert!(core.library().is_open(other));
+    assert!(core.take_notifications().is_empty());
+    // window.select opens it from its file, not through the banner
+    let _ = window_cmd(&mut core, WindowCmd::Select, Some(window));
+    for _ in 0..3 {
+        let _ = core.commit();
+    }
+    let store = core.library().store(window).unwrap();
+    assert_eq!(store.selected_session_id(), Some(kept));
+    assert_eq!(
+        store.session(notified).unwrap().unseen_count,
+        0,
+        "the badge is not persisted"
+    );
+    assert!(core.take_notifications().is_empty(), "nothing is withdrawn");
+}
+
+#[test]
+fn session_seen_clears_the_badge_and_keeps_the_banners() {
+    let mut fixture = Fixture::new(1);
+    let id = fixture.sessions[0];
+    assert!(notify(&mut fixture, &wire(id), |a| a.body = Some("b".into())).ok);
+    let _ = posts(&mut fixture.core);
+    assert!(fixture.session(SessionCmd::Seen, Some(&wire(id)), Args::default()).ok);
+    assert_eq!(fixture.store().session(id).unwrap().unseen_count, 0);
+    assert!(fixture.core.take_notifications().is_empty());
+}
+
+#[test]
+fn a_selection_under_a_dashboard_clears_the_badge_and_keeps_the_banners() {
+    let mut fixture = Fixture::new(1);
+    let (first, second) = (fixture.sessions[0], fixture.sessions[1]);
+    assert_eq!(fixture.selected(), Some(second));
+    let response = fixture.send(
+        Command::Dashboard,
+        None,
+        args(|a| a.targets = Some(vec![wire(first), wire(second)])),
+    );
+    assert!(response.ok, "{response:?}");
+    assert!(notify(&mut fixture, &wire(first), |a| a.body = Some("b".into())).ok);
+    let _ = posts(&mut fixture.core);
+    // the model's selection clears the badge; only a pane focus, which the dashboard holds back, would withdraw
+    fixture.store_mut().unwrap().select_session(Some(first));
+    let _ = fixture.core.commit();
+    assert_eq!(fixture.store().session(first).unwrap().unseen_count, 0);
+    assert!(fixture.core.take_notifications().is_empty());
 }

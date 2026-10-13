@@ -7,6 +7,8 @@
 //! Keyboard focus is the frontend's: its deck gives input to the pane the model marks focused whenever that changes, so
 //! these commands only change the model (upstream's `focusSplitPane` calls); `session.focus` also leaves a one-shot
 //! [`Core::pane_focus_requested`] so the pane takes the keyboard back even when the model's choice did not change.
+//! The frontend reports every focus it sees or gives through [`Core::pane_focused`], which withdraws the session's
+//! delivered banners; a successful `session.swap` withdraws them too, without touching the badge.
 
 use agterm_proto::command::SessionCmd;
 use agterm_proto::{Args, Command, ControlResult, Request, Response};
@@ -51,32 +53,38 @@ impl Core {
         true
     }
 
-    /// The user moved keyboard focus into the pane carrying `token` (a click): a shown split's focused pane follows it.
-    /// See [`crate::model::AppStore::note_pane_focus`]. While the session's window is zoomed into a terminal the report
-    /// changes nothing: the zoom gives its terminal the keyboard itself, and that must not move the split's focus
-    /// (upstream's zoom hosts suppress focus reports). Zoomed or not, the session was seen: its unseen badge clears
-    /// (upstream's `onFocusChange`/`onClearUnseen`). Whether anything changed; commit afterwards when it did.
+    /// Keyboard focus moved into the pane carrying `token`: the user clicked it, or the frontend gave it focus
+    /// (a selection, a `session.focus`, a reveal), even to a terminal that already held it. A shown split's focused
+    /// pane follows it; see [`crate::model::AppStore::note_pane_focus`]. While the session's window is zoomed into a
+    /// terminal the split's focus stays put: the zoom gives its terminal the keyboard itself, and that must not move
+    /// the split's focus (upstream's zoom hosts suppress focus reports). Zoomed or not, the session was seen: its unseen
+    /// badge clears and its delivered banners are withdrawn (upstream's `onFocusChange` and the focus-free
+    /// `onClearUnseen`, both ending in `clearDelivered`). Only the primary and split panes report, as upstream wires
+    /// neither callback to the scratch; a token no pane of the session carries any more changes nothing. True whenever
+    /// a withdrawal was queued, even with the badge already clear; settle afterwards.
     pub fn pane_focused(&mut self, session: Uuid, token: &str) -> bool {
         let zoomed = self
             .library()
             .window_holding_session(session)
             .is_some_and(|window| self.zoom_target(window).is_some());
-        let Some(store) = self.library_mut().store_for_session_mut(session) else {
+        let pane = self
+            .library()
+            .store_for_session(session)
+            .and_then(|store| store.session(session))
+            .and_then(|found| found.pane_role_for_token(token));
+        let Some(pane @ (StatusPane::Left | StatusPane::Right)) = pane else {
             return false;
         };
-        // focusing a pane means the session was seen: its badge clears, and the frontend withdraws its banners
-        let unseen = store.session(session).is_some_and(|found| found.unseen_count > 0);
-        store.clear_unseen(session);
-        if zoomed {
-            return unseen;
+        if !self.clear_delivered(session) {
+            return false;
         }
-        let Some(pane) = store
-            .session(session)
-            .and_then(|found| found.pane_role_for_token(token))
-        else {
-            return unseen;
-        };
-        store.note_pane_focus(session, pane) || unseen
+        if let Some(store) = self.library_mut().store_for_session_mut(session) {
+            store.clear_unseen(session);
+            if !zoomed {
+                store.note_pane_focus(session, pane);
+            }
+        }
+        true
     }
 
     /// Lands a pane's cwd or title report on the pane carrying `token` (upstream's `applyPwd`/`applyTitle`, routed by
@@ -185,7 +193,12 @@ fn swap_step(core: &mut Core, id: Uuid, attempt: u32) -> Dispatched {
         None => Some(SwapRefusal::NoSession),
     };
     match refusal {
-        None => Dispatched::done(Ok(with_id(id))),
+        None => {
+            // the terminals traded slots, so a delivered banner's pane identity names the other one now: withdraw them
+            // (upstream's swap handler calls `clearDelivered`); the badge stays
+            core.clear_delivered(id);
+            Dispatched::done(Ok(with_id(id)))
+        }
         Some(SwapRefusal::SlotNotRealized) if attempt < ATTEMPTS => Dispatched::Pending {
             after: POLL_INTERVAL,
             resume: Box::new(move |core: &mut Core| swap_step(core, id, attempt + 1)),

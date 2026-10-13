@@ -669,7 +669,7 @@ fn select_reconciles_auto_hidden_sidebars_only_when_frontmost_changes() {
 // MARK: - persistence
 
 /// A core over a bootstrapped state dir.
-fn persisted(dir: &std::path::Path) -> Core {
+pub(super) fn persisted(dir: &std::path::Path) -> Core {
     let mut persistence = LibraryPersistence::new(dir);
     let library = persistence.bootstrap("/home/u");
     Core::new(

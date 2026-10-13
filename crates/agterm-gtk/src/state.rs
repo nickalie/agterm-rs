@@ -22,7 +22,6 @@ use agterm_server::{Reply, ReplySender};
 use uuid::Uuid;
 
 use crate::main_loop::GlibMainLoop;
-use crate::notifications::Notifications;
 use crate::quick::QuickPanel;
 use crate::sidebar::{RowKind, SidebarRow};
 use crate::windows::Windows;
@@ -99,8 +98,6 @@ pub struct AppState {
     quitting: bool,
     /// The app's one quick terminal panel.
     quick: QuickPanel,
-    /// The delivered desktop notifications.
-    notifications: Notifications,
 }
 
 impl AppState {
@@ -112,7 +109,6 @@ impl AppState {
             windows: None,
             quitting: false,
             quick: QuickPanel::default(),
-            notifications: Notifications::default(),
         }
     }
 
@@ -141,7 +137,7 @@ impl AppState {
             arm_commit(&*main_loop, &timers, &APP_TIMERS);
         }
         let sounds = self.core.take_status_sounds();
-        let posts = self.core.take_notifications();
+        let banners = self.core.take_notifications();
         match self.windows.as_mut() {
             Some(windows) => {
                 windows.sync(&mut self.core, &self.poster);
@@ -149,7 +145,7 @@ impl AppState {
                 for name in &sounds {
                     play_status_sound(name);
                 }
-                self.notifications.deliver(windows.app(), &posts, &self.core);
+                crate::notifications::deliver(windows.app(), &banners);
             }
             // no frontend to ask
             None => drop(self.core.take_window_requests()),
@@ -294,7 +290,8 @@ impl AppState {
         }
     }
 
-    /// The user moved keyboard focus into the pane carrying `token`: a shown split's focus follows it.
+    /// Keyboard focus moved into the pane carrying `token`, by the user or by the deck: a shown split's focus follows
+    /// it, and the session's badge and delivered banners clear (see [`Core::pane_focused`]).
     pub fn pane_focused(&mut self, session: Uuid, token: &str) {
         if !self.quitting && self.core.pane_focused(session, token) {
             self.settle();

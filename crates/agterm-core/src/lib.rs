@@ -36,7 +36,7 @@ pub mod zoom;
 pub use commands::PaneReport;
 pub use commands::hud::{CellEstimator, HudHideTimer, WINDOW_PADDING as HUD_WINDOW_PADDING};
 pub use commands::notify::{
-    BANNERS_OFF_NOTE, NotificationPost, PaneRole, identity as notification_identity,
+    BANNERS_OFF_NOTE, NotificationEffect, NotificationPost, PaneRole, identity as notification_identity,
     parse_identity as parse_notification_identity, should_deliver,
 };
 pub use commands::surface::POLL_INTERVAL;

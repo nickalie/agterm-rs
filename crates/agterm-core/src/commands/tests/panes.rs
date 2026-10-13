@@ -264,8 +264,8 @@ fn focus_on_a_hidden_split_holds_and_shows_the_pane_maximized() {
         args(|a| a.pane = Some("right".into())),
     );
     assert_eq!(response.result, Some(json!({"id": target})));
-    // the frontend's focus report about the pane it no longer shows is stale
-    assert!(!fixture.core.pane_focused(id, "L"));
+    // the frontend's focus report about the pane it no longer shows is stale: the split's focus stays
+    let _ = fixture.core.pane_focused(id, "L");
     let node_value = node(&mut fixture, id);
     assert_eq!(node_value["split"], json!(false));
     assert_eq!(node_value["splitFocused"], json!(true));
@@ -406,6 +406,33 @@ fn swap_exchanges_the_panes_and_focus_follows_the_terminal() {
             .get()
             .map(agterm_host::Surface::pane_token),
         Some("L")
+    );
+}
+
+#[test]
+fn a_swap_withdraws_the_sessions_banners_and_keeps_its_badge() {
+    let (mut fixture, id) = split_fixture();
+    let window = fixture.window;
+    let plain = fixture.sessions[1];
+    // a background session, its split's terminal notified
+    fixture.store_mut().unwrap().select_session(Some(plain));
+    assert!(fixture.core.terminal_notification(id, "R", "", "done"));
+    let _ = fixture.core.take_notifications();
+    ok_id(&fixture.session(SessionCmd::Swap, Some(&wire(id)), Args::default()), id);
+    assert_eq!(
+        fixture.core.take_notifications(),
+        [crate::NotificationEffect::Clear { window, session: id }]
+    );
+    assert_eq!(session(&fixture, id).unseen_count, 1, "the badge stays");
+
+    assert!(
+        !fixture
+            .session(SessionCmd::Swap, Some(&wire(plain)), Args::default())
+            .ok
+    );
+    assert!(
+        fixture.core.take_notifications().is_empty(),
+        "a refused swap withdraws nothing"
     );
 }
 
@@ -683,8 +710,17 @@ fn a_click_moves_a_shown_splits_focus() {
     let (mut fixture, id) = split_fixture();
     assert!(fixture.core.pane_focused(id, "L"));
     assert!(!session(&fixture, id).split.focused);
-    assert!(!fixture.core.pane_focused(id, "L"));
+    assert!(
+        fixture.core.pane_focused(id, "L"),
+        "the same pane again still withdraws the banners"
+    );
+    assert!(!session(&fixture, id).split.focused);
     assert!(!fixture.core.pane_focused(id, "unknown"));
+    install(&mut fixture, id, StatusPane::Scratch, "S");
+    assert!(
+        !fixture.core.pane_focused(id, "S"),
+        "the scratch reports no focus (upstream wires none)"
+    );
     assert!(fixture.core.pane_focused(id, "R"));
     assert!(session(&fixture, id).split.focused);
 }
@@ -700,12 +736,12 @@ fn a_zoom_taking_focus_does_not_move_the_splits_focus() {
     };
     fixture.core.set_zoom_target(window, Some(zoomed));
     assert!(
-        !fixture.core.pane_focused(id, "L"),
-        "the zoom's own grab of the left pane is not a click"
+        fixture.core.pane_focused(id, "L"),
+        "the zoom's own grab of the left pane still means the session was seen"
     );
     assert!(
         session(&fixture, id).split.focused,
-        "unzooming returns to the right pane"
+        "but it is not a click: unzooming returns to the right pane"
     );
     fixture.core.set_zoom_target(window, None);
     assert!(fixture.core.pane_focused(id, "L"));

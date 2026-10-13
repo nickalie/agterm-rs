@@ -143,7 +143,7 @@ pub struct Core {
     pub(crate) hud: commands::hud::HudRuntime,
     /// The desktop notifications commands and terminals asked for, in order, until the frontend takes them
     /// ([`commands::notify`]).
-    pub(crate) notifications: Vec<commands::notify::NotificationPost>,
+    pub(crate) notifications: Vec<commands::notify::NotificationEffect>,
 }
 
 /// The `tree` result: `{"tree": {...}}`.

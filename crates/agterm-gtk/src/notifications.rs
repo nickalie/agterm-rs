@@ -4,13 +4,14 @@
 //!
 //! The core records each notification (the badge and the `notify` event) and queues its banner; this posts the queued
 //! banners, each under its identity `<windowID>:<sessionID>:<pane>`, so a repeat from one pane replaces the last, and
-//! a click reveals the pane that fired. A session's delivered banners are withdrawn once its badge clears (selected,
-//! seen, or its pane focused), as upstream's `clearDelivered`. `GNotification` carries no sound, so the configured
-//! notification sound is not played; the badge and the event never depend on it.
+//! a click reveals the pane that fired. Withdrawals are the core's explicit clears, queued with the posts and applied
+//! in that order: when a pane of the session takes focus (zoomed or not, the user's doing or the frontend's) and after
+//! a successful swap, as upstream's `clearDelivered` call sites. A clear withdraws every pane's identity of that window
+//! and session; a session no open window holds gets none, so a closed window's banners stay clickable and reopen it.
+//! The badge clears on its own path (a selection, `session.seen`) and leaves the banners. `GNotification` carries no
+//! sound, so the configured notification sound is not played; the badge and the event never depend on it.
 
-use std::collections::{BTreeSet, HashMap};
-
-use agterm_core::{Core, NotificationPost, parse_notification_identity, should_deliver};
+use agterm_core::{NotificationEffect, parse_notification_identity, should_deliver};
 use gtk::gio;
 use gtk::prelude::*;
 use uuid::Uuid;
@@ -20,51 +21,43 @@ use crate::state::{self, AppState, Poster};
 /// The app action a banner's click activates, with the banner's identity as its target.
 const REVEAL_ACTION: &str = "notification-reveal";
 
-/// The banners delivered and not withdrawn yet, by session.
-#[derive(Debug, Default)]
-pub struct Notifications {
-    delivered: HashMap<Uuid, BTreeSet<String>>,
+/// Where banners go: the application's notification server, or a recorder in tests.
+pub trait BannerSink {
+    /// Posts a banner under `identity`, replacing one posted under it before.
+    fn send(&self, identity: &str, title: &str, body: &str);
+    /// Withdraws the banner posted under `identity`, if any.
+    fn withdraw(&self, identity: &str);
 }
 
-impl Notifications {
-    /// Posts `posts` on `app`, then withdraws the banners of every session whose badge is clear or that is gone.
-    pub fn deliver(&mut self, app: &impl IsA<gio::Application>, posts: &[NotificationPost], core: &Core) {
-        for post in posts {
-            let identity = post.identity();
-            let notification = gio::Notification::new(&post.title);
-            notification.set_body(Some(&post.body));
-            notification
-                .set_default_action_and_target_value(&format!("app.{REVEAL_ACTION}"), Some(&identity.to_variant()));
-            tracing::info!(session = %post.session, "notify: posting banner");
-            app.send_notification(Some(&identity), &notification);
-            self.delivered.entry(post.session).or_default().insert(identity);
-        }
-        self.withdraw_seen(app, core);
+impl BannerSink for adw::Application {
+    fn send(&self, identity: &str, title: &str, body: &str) {
+        let notification = gio::Notification::new(title);
+        notification.set_body(Some(body));
+        notification.set_default_action_and_target_value(&format!("app.{REVEAL_ACTION}"), Some(&identity.to_variant()));
+        self.send_notification(Some(identity), &notification);
     }
 
-    /// Withdraws the banners of sessions whose badge is clear, or that are gone.
-    fn withdraw_seen(&mut self, app: &impl IsA<gio::Application>, core: &Core) {
-        let seen: Vec<Uuid> = self
-            .delivered
-            .keys()
-            .copied()
-            .filter(|session| unseen(core, *session) == 0)
-            .collect();
-        for session in seen {
-            for identity in self.delivered.remove(&session).unwrap_or_default() {
-                app.withdraw_notification(&identity);
+    fn withdraw(&self, identity: &str) {
+        self.withdraw_notification(identity);
+    }
+}
+
+/// Applies the core's banner posts and withdrawals on `sink`, in the order the core queued them.
+pub fn deliver(sink: &impl BannerSink, effects: &[NotificationEffect]) {
+    for effect in effects {
+        match effect {
+            NotificationEffect::Post(post) => {
+                tracing::info!(session = %post.session, "notify: posting banner");
+                sink.send(&post.identity(), &post.title, &post.body);
+            }
+            NotificationEffect::Clear { session, .. } => {
+                tracing::debug!(%session, "notify: withdrawing the session's delivered banners");
+                for identity in effect.withdrawn_identities() {
+                    sink.withdraw(&identity);
+                }
             }
         }
     }
-}
-
-/// Session `session`'s unseen count, 0 when it is gone.
-fn unseen(core: &Core, session: Uuid) -> usize {
-    core.library()
-        .window_holding_session(session)
-        .and_then(|window| core.library().store(window))
-        .and_then(|store| store.session(session))
-        .map_or(0, |found| found.unseen_count)
 }
 
 /// Adds the banners' click action to `app`: it reveals the pane the clicked banner names.
@@ -127,5 +120,66 @@ mod tests {
     fn the_reveal_action_takes_the_identity_as_a_string() {
         assert_eq!(glib_string_type().as_str(), "s");
         assert_eq!(format!("app.{REVEAL_ACTION}"), "app.notification-reveal");
+    }
+
+    /// Records what reaches the notification server, in order.
+    #[derive(Default)]
+    struct Recorder(std::cell::RefCell<Vec<String>>);
+
+    impl BannerSink for Recorder {
+        fn send(&self, identity: &str, _title: &str, body: &str) {
+            self.0.borrow_mut().push(format!("send {identity} {body}"));
+        }
+
+        fn withdraw(&self, identity: &str) {
+            self.0.borrow_mut().push(format!("withdraw {identity}"));
+        }
+    }
+
+    fn post(window: Uuid, session: Uuid, pane: agterm_core::PaneRole, body: &str) -> NotificationEffect {
+        NotificationEffect::Post(agterm_core::NotificationPost {
+            window,
+            session,
+            pane,
+            title: "t".to_owned(),
+            body: body.to_owned(),
+        })
+    }
+
+    #[test]
+    fn posts_and_withdrawals_reach_the_server_in_order_and_only_for_their_session() {
+        use agterm_core::{PaneRole, notification_identity as identity};
+        let (window, other_window) = (Uuid::new_v4(), Uuid::new_v4());
+        let (session, other) = (Uuid::new_v4(), Uuid::new_v4());
+        let effects = [
+            post(window, session, PaneRole::Split, "one"),
+            post(window, other, PaneRole::Main, "two"),
+            post(other_window, session, PaneRole::Main, "elsewhere"),
+            NotificationEffect::Clear { window, session },
+            post(window, session, PaneRole::Main, "three"),
+        ];
+        let recorder = Recorder::default();
+        deliver(&recorder, &effects);
+        let expected = [
+            format!("send {} one", identity(window, session, PaneRole::Split)),
+            format!("send {} two", identity(window, other, PaneRole::Main)),
+            format!("send {} elsewhere", identity(other_window, session, PaneRole::Main)),
+            format!("withdraw {}", identity(window, session, PaneRole::Main)),
+            format!("withdraw {}", identity(window, session, PaneRole::Split)),
+            format!("withdraw {}", identity(window, session, PaneRole::Overlay)),
+            format!("send {} three", identity(window, session, PaneRole::Main)),
+        ];
+        assert_eq!(*recorder.0.borrow(), expected);
+    }
+
+    #[test]
+    fn posts_alone_withdraw_nothing() {
+        let recorder = Recorder::default();
+        let (window, session) = (Uuid::new_v4(), Uuid::new_v4());
+        deliver(&recorder, &[post(window, session, agterm_core::PaneRole::Main, "b")]);
+        deliver(&recorder, &[]);
+        deliver(&recorder, &[]);
+        assert_eq!(recorder.0.borrow().len(), 1);
+        assert!(recorder.0.borrow()[0].starts_with("send "));
     }
 }
