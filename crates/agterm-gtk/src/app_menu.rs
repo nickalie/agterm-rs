@@ -132,7 +132,7 @@ impl Item {
     }
 
     /// The item's title as upstream's menu spells it in `context`.
-    fn title(self, context: PaletteContext, sidebar_shown: bool, scratch_shown: bool) -> String {
+    fn title(self, context: PaletteContext, toggles: Toggles) -> String {
         let title = match self {
             Self::Builtin(BuiltinAction::NewWindow) => "New Window",
             Self::Builtin(BuiltinAction::RenameWindow) => "Rename Window…",
@@ -146,19 +146,20 @@ impl Item {
             Self::Row(PaletteCommand::EditGhosttyConfig) => "Edit ghostty.conf…",
             Self::Row(PaletteCommand::ShowAttention) => "Go to Attention…",
             Self::Row(PaletteCommand::ToggleSidebar) => {
-                if sidebar_shown {
+                if toggles.sidebar_shown {
                     "Hide Sidebar"
                 } else {
                     "Show Sidebar"
                 }
             }
             Self::Row(PaletteCommand::ToggleScratch) => {
-                if scratch_shown {
+                if toggles.scratch_shown {
                     "Hide Scratch"
                 } else {
                     "Show Scratch"
                 }
             }
+            Self::Row(PaletteCommand::FocusWorkspace) if toggles.sole_focus => "Unfocus Workspace",
             Self::Row(command) => command.title(&context),
         };
         title.to_owned()
@@ -174,6 +175,15 @@ impl Item {
     }
 }
 
+/// The frontmost window's state the toggling items name: Hide/Show Sidebar and Scratch, and Focus Workspace reading
+/// Unfocus Workspace while the current workspace is the sole focus (upstream's `isCurrentWorkspaceSoleFocus`).
+#[derive(Debug, Clone, Copy, Default)]
+struct Toggles {
+    sidebar_shown: bool,
+    scratch_shown: bool,
+    sole_focus: bool,
+}
+
 /// An app item: its action name, its title and what it runs.
 type AppItem = (&'static str, &'static str, fn(&mut AppState));
 
@@ -182,6 +192,25 @@ type AppItem = (&'static str, &'static str, fn(&mut AppState));
 const APP_ITEMS: [AppItem; 2] = [
     ("preferences", "Preferences", |state| crate::settings::present(state)),
     ("quit", "Quit", |state| crate::welcome::request_quit(state)),
+];
+
+/// The Help menu after File, View and Navigate (upstream's `CommandGroup(replacing: .help)`), sections separated: the
+/// developer documentation, then the installers. No keymap action runs them, so they carry no accelerator.
+const HELP_ITEMS: [&[AppItem]; 2] = [
+    &[("developer-docs", "Developer Documentation…", |state| {
+        crate::integrations::ui::open_developer_docs(state.frontmost_gtk_window().as_ref());
+    })],
+    &[
+        ("install-cli", "Install Command Line Tool…", |state| {
+            crate::integrations::ui::run_cli(state.frontmost_gtk_window());
+        }),
+        ("install-hooks", "Install Agent Status Hooks…", |state| {
+            crate::integrations::ui::run_hooks(state.frontmost_gtk_window());
+        }),
+        ("install-skill", "Install Agent Skill…", |state| {
+            crate::integrations::ui::run_skill(state.frontmost_gtk_window());
+        }),
+    ],
 ];
 
 /// The items a keymap shows accelerators on: upstream's menu carries none for Reopen Closed Item, which its own
@@ -213,7 +242,7 @@ impl AppMenu {
             });
             group.add_action(&action);
         }
-        for (name, _, run) in APP_ITEMS {
+        for (name, _, run) in APP_ITEMS.iter().chain(HELP_ITEMS.iter().copied().flatten()).copied() {
             let action = gio::SimpleAction::new(name, None);
             let posting = poster.clone();
             action.connect_activate(move |_, _| state::post(&posting, run));
@@ -243,10 +272,13 @@ impl AppMenu {
         let window = core.library().active_window_id();
         let context = window.map(|id| core.palette_context(id)).unwrap_or_default();
         let store = window.and_then(|id| core.library().store(id));
-        let sidebar_shown = store.is_none_or(|store| store.sidebar().visible);
-        let scratch_shown = store
-            .and_then(|store| store.active_session())
-            .is_some_and(|session| session.scratch_active);
+        let toggles = Toggles {
+            sidebar_shown: store.is_none_or(|store| store.sidebar().visible),
+            scratch_shown: store
+                .and_then(|store| store.active_session())
+                .is_some_and(|session| session.scratch_active),
+            sole_focus: store.is_some_and(agterm_core::model::AppStore::is_current_workspace_sole_focus),
+        };
         let can_remove_window = core.library().can_remove_window();
         let entries: Vec<(String, Option<String>)> = all_items()
             .map(|item| {
@@ -255,7 +287,7 @@ impl AppMenu {
                     .filter(|_| shows_accelerator(item))
                     .and_then(|action| core.keymap().equivalent(action))
                     .and_then(accelerator);
-                (item.title(context, sidebar_shown, scratch_shown), accel)
+                (item.title(context, toggles), accel)
             })
             .collect();
         for item in all_items() {
@@ -287,6 +319,15 @@ impl AppMenu {
             }
             self.model.append_submenu(Some(menu), &submenu);
         }
+        let help = gio::Menu::new();
+        for section in HELP_ITEMS {
+            let part = gio::Menu::new();
+            for (name, title, _) in section {
+                part.append(Some(title), Some(&format!("menu.{name}")));
+            }
+            help.append_section(None, &part);
+        }
+        self.model.append_submenu(Some("Help"), &help);
         let app = gio::Menu::new();
         for (name, title, _) in APP_ITEMS {
             app.append(Some(title), Some(&format!("menu.{name}")));
@@ -465,6 +506,35 @@ mod tests {
             let listed = items.iter().any(|item| item.builtin() == Some(action));
             assert!(listed, "{} has no menu item", action.name());
         }
+    }
+
+    #[test]
+    fn focus_workspace_reads_unfocus_while_the_current_workspace_is_the_sole_focus() {
+        let item = Item::Row(PaletteCommand::FocusWorkspace);
+        let context = PaletteContext::default();
+        assert_eq!(item.title(context, Toggles::default()), "Focus Workspace");
+        let sole = Toggles {
+            sole_focus: true,
+            ..Toggles::default()
+        };
+        assert_eq!(item.title(context, sole), "Unfocus Workspace");
+    }
+
+    #[test]
+    fn the_help_menu_offers_the_docs_and_the_three_installers() {
+        let titles: Vec<&str> = HELP_ITEMS
+            .iter()
+            .flat_map(|section| section.iter().map(|item| item.1))
+            .collect();
+        assert_eq!(
+            titles,
+            [
+                "Developer Documentation…",
+                "Install Command Line Tool…",
+                "Install Agent Status Hooks…",
+                "Install Agent Skill…"
+            ]
+        );
     }
 
     #[test]

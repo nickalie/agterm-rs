@@ -19,6 +19,7 @@ mod hook_runner;
 mod html_overlay;
 mod hud;
 mod input;
+mod integrations;
 mod keymap_actions;
 mod keymap_dispatch;
 mod logging;

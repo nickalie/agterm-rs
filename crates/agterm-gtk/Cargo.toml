@@ -25,6 +25,7 @@ glib-unix.workspace = true
 gtk.workspace = true
 libc.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true

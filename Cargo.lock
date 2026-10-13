@@ -67,6 +67,7 @@ dependencies = [
  "libc",
  "serde_json",
  "tempfile",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "url",
