@@ -40,6 +40,11 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # GTK 4.14 and libadwaita 1.5 are Ubuntu 24.04's, the oldest platform CI builds on.
 gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
+# The quick terminal's layer-shell panel. No version feature: the 1.0 API is enough. It links the C library, built by
+# scripts/build-layer-shell.sh or taken from a system package (scripts/pkg-config.sh picks).
+gtk4-layer-shell = "0.8"
+# agterm-gtk's build script asks the same pkg-config the link used where gtk4-layer-shell lives, for its rpath.
+pkg-config = "0.3"
 # WebKitGTK 6.0 for HTML overlays; no version feature: the 2.40 API is enough, and Ubuntu 24.04 ships 2.44.
 webkit6 = "0.6"
 

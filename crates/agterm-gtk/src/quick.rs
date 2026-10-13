@@ -10,10 +10,17 @@
 //! its GPU resources released, as a hidden deck page (upstream's `deckOnScreen = false` on `orderOut`). The shell
 //! exiting drops the panel with its terminal; the next show builds both afresh.
 //!
-//! Sizing: Wayland gives a client no position, so the panel is sized, not placed: [`quick_metrics::panel_size`] of the
-//! monitor the active agterm window is on (the pointer's screen upstream, which Wayland does not expose), on every
-//! show, so a settings change lands on the next summon. The zoom (`surface.zoom --target quick`) maximizes the panel,
-//! filling the monitor's work area as upstream fills the screen's visible frame.
+//! Host ([`placement::QuickHost`], chosen once per panel, logged): a wlr-layer-shell surface ([`layer`]) where the
+//! compositor has one, so the panel floats over every window on the current output and is never tiled, as upstream's
+//! floating `NSPanel`; elsewhere (GNOME/Mutter, X11) an ordinary undecorated window the compositor places like any
+//! other.
+//!
+//! Sizing: [`agterm_core::quick_metrics::panel_size`] of the panel's monitor, on every show, so a settings change lands
+//! on the next summon. The layer surface names no output and the compositor puts it on its current one, so it is sized
+//! against the active agterm window's monitor until it lands, then re-fitted to the monitor it entered; it is centered
+//! there ([`placement::layer_placement`]). The window is only sized (Wayland gives a client no position), against the
+//! active agterm window's monitor. The zoom (`surface.zoom --target quick`) fills the output's usable area: the layer
+//! surface anchors to every edge, the window maximizes, as upstream fills the screen's visible frame.
 //!
 //! Losing the keyboard dismisses only a panel the user summoned ([`Core::quick_lost_focus`]); the window asked to
 //! close (the compositor's close) hides the panel, its shell kept.
@@ -24,15 +31,20 @@ use std::rc::Rc;
 
 use agterm_core::Core;
 use agterm_core::pane_env;
-use agterm_core::quick_metrics::{self, PanelSize};
+use agterm_core::quick_metrics::PanelSize;
 use gtk::prelude::*;
 use gtk::{gdk, glib};
+
+use placement::{LayerPlacement, QuickHost};
 
 use crate::deck::PaneContext;
 use crate::pane::PaneSurface;
 use crate::state::{self, AppState, Poster};
 use crate::surface::{SurfaceSpec, TerminalSurface};
 use crate::windows::Windows;
+
+mod layer;
+mod placement;
 
 /// The panel's style: a rounded frame with upstream's faint white border (12 pt radius, white at 18%) over a
 /// transparent window, so the corners show what is behind.
@@ -70,22 +82,37 @@ impl QuickPanel {
             return;
         };
         if visible {
-            let size = panel_size(core, windows);
-            panel.show(size, core.quick_zoomed());
+            let fit = Fit {
+                size_percent: core.settings().effective_quick_terminal_size_percent(),
+                zoomed: core.quick_zoomed(),
+            };
+            panel.show(active_monitor_size(windows), fit);
         } else {
             panel.hide();
         }
     }
 }
 
+/// What the panel's frame follows besides its monitor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Fit {
+    /// The user's size setting (`None`: the built-in default).
+    size_percent: Option<i64>,
+    /// The quick zoom.
+    zoomed: bool,
+}
+
 /// The panel window and its terminal.
 struct Panel {
     window: gtk::Window,
     terminal: TerminalSurface,
+    host: QuickHost,
     /// Whether the window is shown.
     shown: bool,
-    /// Whether the window is maximized for the quick zoom.
+    /// Whether the window fills its output for the quick zoom.
     zoomed: bool,
+    /// The fit of the last show, read when the layer surface lands on a monitor.
+    fit: Rc<Cell<Fit>>,
     /// Whether the panel holds the keyboard (upstream's `holdsKey`): only losing it after holding it is a focus loss,
     /// not the window going inactive because it was hidden.
     holds_key: Rc<Cell<bool>>,
@@ -108,6 +135,16 @@ impl Panel {
             .css_classes(["agterm-quick-terminal"])
             .child(&frame)
             .build();
+        let host = QuickHost::select(layer::supported());
+        tracing::info!(host = host.name(), "quick terminal panel");
+        let fit = Rc::new(Cell::new(Fit {
+            size_percent: None,
+            zoomed: false,
+        }));
+        if host == QuickHost::LayerShell {
+            layer::init(&window);
+            refit_on_landing(&window, &fit);
+        }
         let holds_key = Rc::new(Cell::new(false));
         connect_terminal(&terminal, poster);
         connect_window(&window, &holds_key, poster);
@@ -115,32 +152,49 @@ impl Panel {
         Self {
             window,
             terminal,
+            host,
             shown: false,
             zoomed: false,
+            fit,
             holds_key,
         }
     }
 
-    /// Shows the panel at `size`, or maximized while `zoomed`; a shown panel only follows a zoom change.
-    fn show(&mut self, size: Option<(i32, i32)>, zoomed: bool) {
-        if self.shown && self.zoomed == zoomed {
+    /// Shows the panel framed on `monitor` (the estimate, see the module docs) as `fit` says; a shown panel only
+    /// follows a zoom change.
+    fn show(&mut self, monitor: Option<PanelSize>, fit: Fit) {
+        if self.shown && self.zoomed == fit.zoomed {
             return;
         }
-        if zoomed {
-            self.window.maximize();
-        } else {
-            self.window.unmaximize();
-            if let Some((width, height)) = size.filter(|_| !self.shown) {
-                self.window.set_default_size(width, height);
+        match self.host {
+            QuickHost::LayerShell => {
+                self.fit.set(fit);
+                if let Some(placement) = monitor_placement(monitor, fit) {
+                    layer::apply(&self.window, placement);
+                }
             }
+            QuickHost::Window => self.frame_window(monitor, fit),
         }
-        self.zoomed = zoomed;
+        self.zoomed = fit.zoomed;
         if !self.shown {
             self.shown = true;
             self.terminal.set_deck_visible(true);
             self.window.present();
         }
         self.terminal.grab_focus();
+    }
+
+    /// Frames the window host: maximized while zoomed, else sized on `monitor` when it is coming on screen.
+    fn frame_window(&self, monitor: Option<PanelSize>, fit: Fit) {
+        if fit.zoomed {
+            self.window.maximize();
+            return;
+        }
+        self.window.unmaximize();
+        if let Some(monitor) = monitor.filter(|_| !self.shown) {
+            let (width, height) = placement::panel_pixels(monitor, fit.size_percent);
+            self.window.set_default_size(width, height);
+        }
     }
 
     /// Hides the panel: its window goes, its terminal stays realized, occluded and without GPU resources.
@@ -229,35 +283,54 @@ fn install_css() {
     gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
 }
 
-/// The panel's size on the monitor of the active agterm window, else the first monitor; `None` when GTK reports no
-/// monitor.
-fn panel_size(core: &Core, windows: &Windows) -> Option<(i32, i32)> {
-    let geometry = active_monitor(windows)?.geometry();
-    let visible = PanelSize {
-        width: f64::from(geometry.width()),
-        height: f64::from(geometry.height()),
-    };
-    let size = quick_metrics::panel_size(visible, core.settings().effective_quick_terminal_size_percent());
-    Some((pixels(size.width), pixels(size.height)))
+/// The layer placement on `monitor` for `fit`; a zoomed panel needs no monitor, an unzoomed one without a monitor keeps
+/// its frame.
+fn monitor_placement(monitor: Option<PanelSize>, fit: Fit) -> Option<LayerPlacement> {
+    if fit.zoomed {
+        return Some(LayerPlacement::Filled);
+    }
+    monitor.map(|monitor| placement::layer_placement(monitor, fit.size_percent, false))
 }
 
-fn active_monitor(windows: &Windows) -> Option<gdk::Monitor> {
+/// Re-fits the layer surface to each monitor it lands on: the compositor picks the output, which may not be the one
+/// the panel was sized against.
+fn refit_on_landing(window: &gtk::Window, fit: &Rc<Cell<Fit>>) {
+    let fit = Rc::clone(fit);
+    window.connect_realize(move |window| {
+        let Some(surface) = window.surface() else {
+            return;
+        };
+        let window = window.downgrade();
+        let fit = Rc::clone(&fit);
+        surface.connect_enter_monitor(move |_, monitor| {
+            if let Some(window) = window.upgrade().filter(gtk::Window::is_visible)
+                && let Some(placement) = monitor_placement(Some(monitor_size(monitor)), fit.get())
+            {
+                layer::apply(&window, placement);
+            }
+        });
+    });
+}
+
+/// The size of the monitor the active agterm window is on, else of the first monitor; `None` when GTK reports no
+/// monitor.
+fn active_monitor_size(windows: &Windows) -> Option<PanelSize> {
     let display = gdk::Display::default()?;
     let under_active = windows
         .app()
         .active_window()
         .and_then(|window| window.surface())
         .and_then(|surface| display.monitor_at_surface(&surface));
-    under_active.or_else(|| display.monitors().item(0).and_downcast::<gdk::Monitor>())
+    let first = display.monitors().item(0).and_downcast::<gdk::Monitor>();
+    placement::sizing_monitor(None, under_active, first).map(|monitor| monitor_size(&monitor))
 }
 
-/// A panel extent as GTK takes it.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "a share of a monitor's extent, rounded, fits an i32 by far"
-)]
-fn pixels(extent: f64) -> i32 {
-    extent.round().max(1.0) as i32
+fn monitor_size(monitor: &gdk::Monitor) -> PanelSize {
+    let geometry = monitor.geometry();
+    PanelSize {
+        width: f64::from(geometry.width()),
+        height: f64::from(geometry.height()),
+    }
 }
 
 #[cfg(test)]
@@ -289,8 +362,28 @@ mod tests {
     }
 
     #[test]
-    fn panel_extents_round_and_stay_positive() {
-        assert_eq!(pixels(1_007.999_999), 1008);
-        assert_eq!(pixels(0.2), 1);
+    fn a_zoomed_layer_panel_fills_its_output_without_a_monitor() {
+        let fit = Fit {
+            size_percent: Some(50),
+            zoomed: true,
+        };
+        assert_eq!(monitor_placement(None, fit), Some(LayerPlacement::Filled));
+    }
+
+    #[test]
+    fn an_unzoomed_layer_panel_without_a_monitor_keeps_its_frame() {
+        let fit = Fit {
+            size_percent: None,
+            zoomed: false,
+        };
+        assert_eq!(monitor_placement(None, fit), None);
+        let monitor = PanelSize {
+            width: 1920.0,
+            height: 1080.0,
+        };
+        assert_eq!(
+            monitor_placement(Some(monitor), fit),
+            Some(placement::layer_placement(monitor, None, false))
+        );
     }
 }

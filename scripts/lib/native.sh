@@ -1,4 +1,5 @@
-# Shared helpers of the native build scripts (build-ghostty.sh, stage.sh, later build-zmx.sh). Sourced, not run.
+# Shared helpers of the native build scripts (build-ghostty.sh, build-layer-shell.sh, pkg-config.sh, stage.sh, later
+# build-zmx.sh). Sourced, not run.
 #
 # Each native dependency lives in its own vendored prefix, ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/<name>-<key>/,
 # where <key> hashes that dependency's pins and patches only. Cargo never runs zig: agterm-ghostty-sys asks
@@ -46,6 +47,18 @@ prefix_key() {
 
 ghostty_prefix() {
   echo "$VENDOR_ROOT/ghostty-$(prefix_key GHOSTTY "$NATIVE_ROOT/build/patches/ghostty")"
+}
+
+# gtk4-layer-shell carries no patches: its key hashes the LAYER_SHELL_ pins only.
+layer_shell_prefix() {
+  echo "$VENDOR_ROOT/gtk4-layer-shell-$(prefix_key LAYER_SHELL /nonexistent)"
+}
+
+# A gtk4-layer-shell prefix is complete when its library, header and pkg-config file are all there.
+layer_shell_prefix_is_complete() {
+  local prefix="$1"
+  [[ -s "$prefix/lib/libgtk4-layer-shell.so" && -s "$prefix/include/gtk4-layer-shell/gtk4-layer-shell.h" \
+    && -s "$prefix/lib/pkgconfig/gtk4-layer-shell-0.pc" ]]
 }
 
 # The Zig triple arch and the matching pinned sha256 variable suffix for this host.

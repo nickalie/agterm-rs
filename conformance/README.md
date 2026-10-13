@@ -152,5 +152,5 @@ These runs share a machine with a live agterm, so the harness refuses a launch t
 - `reference-macos` (`macos-26`): protocol, cli and behaviors with `--must-pass live-sessions`, then the ui layer
   with `--reruns 1`, against the release named by the catalog's `upstream`.
 - `rust-linux` (`ubuntu-24.04`): the Rust workspace's format check, strict clippy, lint report (in the job summary)
-  and `cargo test`, over the vendored libghostty prefix.
+  and `cargo test`, over the vendored libghostty and gtk4-layer-shell prefixes.
 - `spike-macos` (`macos-26`): the launch and ax-driver spikes, when their tools change.

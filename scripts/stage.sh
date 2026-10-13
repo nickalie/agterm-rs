@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Assemble the staging layout the conformance runner, scripts/run-dev.sh and the install check run from:
 #
-#   bin/{agterm,agtermctl,zmx}  lib/libghostty.so  share/ghostty/{themes,shell-integration}  share/terminfo
+#   bin/{agterm,agtermctl,zmx}  lib/{libghostty.so,libgtk4-layer-shell.so.*}  share/ghostty/{themes,shell-integration}
+#   share/terminfo
 #
 # from cargo's target dir and the vendored prefixes, plus agterm's own themes from build/themes. Binaries are
 # staged when they exist (agterm and agtermctl appear with their crates, zmx with scripts/build-zmx.sh); libghostty
-# and its resources are required. The binaries find lib/ through their $ORIGIN/../lib rpath.
+# and its resources are required. gtk4-layer-shell is staged from wherever the built agterm resolves it when that is
+# a vendored prefix (scripts/build-layer-shell.sh); a system package stays the system's. The binaries find lib/
+# through their $ORIGIN/../lib rpath.
 #
 # Usage: scripts/stage.sh DESTINATION [--profile release|debug]   (default: release)
 set -euo pipefail
@@ -48,6 +51,13 @@ if [[ -x "$NATIVE_ROOT/scripts/build-zmx.sh" ]]; then
   if [[ -x "$ZMX" ]]; then
     install -m755 "$ZMX" "$DEST/bin/zmx"
     staged+=(zmx)
+  fi
+fi
+
+if [[ -x "$DEST/bin/agterm" ]]; then
+  layer_shell="$(ldd "$DEST/bin/agterm" | awk '$1 ~ /^libgtk4-layer-shell\.so/ { print $3 }')" || layer_shell=""
+  if [[ "$layer_shell" == "$VENDOR_ROOT"/* ]]; then
+    cp -P "$(dirname "$layer_shell")"/libgtk4-layer-shell.so.* "$DEST/lib/"
   fi
 fi
 

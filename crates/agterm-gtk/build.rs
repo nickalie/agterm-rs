@@ -4,6 +4,10 @@
 //! As `agterm-ghostty`'s build script: `$ORIGIN/../lib` for a staged build, `<prefix>/lib` for `cargo run`, both as
 //! `DT_RPATH` so an inherited `LD_LIBRARY_PATH` cannot swap in another agterm's libghostty. The prefix is also baked
 //! in as `AGTERM_GHOSTTY_PREFIX`, the last place an unstaged build looks for ghostty's resources.
+//!
+//! gtk4-layer-shell gets an rpath to the directory the link found it in when that is not a system one: the vendored
+//! prefix of `scripts/build-layer-shell.sh`, which `scripts/pkg-config.sh` puts ahead of a system package. The same
+//! pkg-config answers here as in `gtk4-layer-shell-sys`, so the rpath follows the library the binary linked.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -22,7 +26,38 @@ fn main() -> ExitCode {
     println!("cargo::rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib");
     println!("cargo::rustc-link-arg=-Wl,-rpath,{}", root.join("lib").display());
     println!("cargo::rustc-env=AGTERM_GHOSTTY_PREFIX={}", root.display());
+    layer_shell_rpath();
     ExitCode::SUCCESS
+}
+
+/// The rpath to a gtk4-layer-shell outside the system library directories (module docs). A failed query emits
+/// nothing: `gtk4-layer-shell-sys` fails the build with the reason.
+fn layer_shell_rpath() {
+    for watched in [
+        "../../build/pins.env",
+        "../../scripts/pkg-config.sh",
+        "../../scripts/lib/native.sh",
+    ] {
+        println!("cargo::rerun-if-changed={watched}");
+    }
+    for name in [
+        "AGTERM_VENDOR",
+        "PKG_CONFIG",
+        "PKG_CONFIG_PATH",
+        "PKG_CONFIG_LIBDIR",
+        "PKG_CONFIG_SYSROOT_DIR",
+    ] {
+        println!("cargo::rerun-if-env-changed={name}");
+    }
+    let Ok(libdir) = pkg_config::get_variable("gtk4-layer-shell-0", "libdir") else {
+        return;
+    };
+    let system = ["/usr/", "/lib/", "/lib64/"]
+        .iter()
+        .any(|dir| format!("{libdir}/").starts_with(dir));
+    if !system {
+        println!("cargo::rustc-link-arg=-Wl,-rpath,{libdir}");
+    }
 }
 
 /// `git <args>` in this crate's directory, trimmed; `None` when git is missing or fails.

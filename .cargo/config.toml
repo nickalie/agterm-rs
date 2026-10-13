@@ -1,0 +1,5 @@
+# Every cargo build in this repository resolves native libraries through scripts/pkg-config.sh: the system
+# pkg-config with the vendored gtk4-layer-shell prefix (scripts/build-layer-shell.sh) first when it is built. An
+# exported PKG_CONFIG wins over this one.
+[env]
+PKG_CONFIG = { value = "scripts/pkg-config.sh", relative = true }

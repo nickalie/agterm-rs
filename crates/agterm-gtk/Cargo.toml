@@ -23,6 +23,7 @@ agterm-ghostty-sys.workspace = true
 async-channel.workspace = true
 glib-unix.workspace = true
 gtk.workspace = true
+gtk4-layer-shell.workspace = true
 libc.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
@@ -39,6 +40,9 @@ html = ["dep:webkit6"]
 
 [lints]
 workspace = true
+
+[build-dependencies]
+pkg-config.workspace = true
 
 [dev-dependencies]
 agterm-host = { workspace = true, features = ["fakes"] }
