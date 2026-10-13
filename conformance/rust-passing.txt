@@ -3,6 +3,8 @@
 # Add newly passing ids with `tools/check_ratchet.py --report <nodeid report> --add`.
 tests/behaviors/test_relaunch.py::test_relaunch_forgets_what_is_not_persisted
 tests/behaviors/test_relaunch.py::test_relaunch_keeps_workspaces_sessions_and_their_metadata
+tests/cli/test_cli_output.py::test_ask_blocks_until_cancelled
+tests/cli/test_cli_output.py::test_ask_without_blocking
 tests/cli/test_cli_output.py::test_events_json_prints_each_event_object_of_the_asked_kinds
 tests/cli/test_cli_output.py::test_events_print_every_event_with_its_arguments
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args0-event limit must be between 1 and 1000]
@@ -12,6 +14,8 @@ tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_re
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args4-None]
 tests/cli/test_cli_output.py::test_hud
 tests/cli/test_cli_output.py::test_notify_raises_the_unseen_count
+tests/cli/test_cli_output.py::test_pick_blocks_until_cancelled
+tests/cli/test_cli_output.py::test_pick_without_blocking
 tests/cli/test_cli_output.py::test_quick_terminal
 tests/cli/test_cli_output.py::test_session_background
 tests/cli/test_cli_output.py::test_session_create_select_and_close
@@ -47,6 +51,50 @@ tests/protocol/test_addressing.py::test_undecodable_request_is_refused[unknown-c
 tests/protocol/test_addressing.py::test_unresolved_target[session.select--no such session: ]
 tests/protocol/test_addressing.py::test_unresolved_target[session.select-zzz-no such session: zzz]
 tests/protocol/test_addressing.py::test_unresolved_target[workspace.select-zzz-no such workspace: zzz]
+tests/protocol/test_ask_pick.py::test_ask_refusals[align]
+tests/protocol/test_ask_pick.py::test_ask_refusals[blank-title]
+tests/protocol/test_ask_pick.py::test_ask_refusals[default-destructive]
+tests/protocol/test_ask_pick.py::test_ask_refusals[default]
+tests/protocol/test_ask_pick.py::test_ask_refusals[destructive]
+tests/protocol/test_ask_pick.py::test_ask_refusals[empty-buttons]
+tests/protocol/test_ask_pick.py::test_ask_refusals[hotkey-digit]
+tests/protocol/test_ask_pick.py::test_ask_refusals[hotkey-long]
+tests/protocol/test_ask_pick.py::test_ask_refusals[hotkey-twice]
+tests/protocol/test_ask_pick.py::test_ask_refusals[ids]
+tests/protocol/test_ask_pick.py::test_ask_refusals[label]
+tests/protocol/test_ask_pick.py::test_ask_refusals[message-control]
+tests/protocol/test_ask_pick.py::test_ask_refusals[no-buttons]
+tests/protocol/test_ask_pick.py::test_ask_refusals[no-title]
+tests/protocol/test_ask_pick.py::test_ask_refusals[pane]
+tests/protocol/test_ask_pick.py::test_ask_refusals[seven-buttons]
+tests/protocol/test_ask_pick.py::test_ask_refusals[style]
+tests/protocol/test_ask_pick.py::test_ask_refusals[title-control]
+tests/protocol/test_ask_pick.py::test_ask_refusals[width-high]
+tests/protocol/test_ask_pick.py::test_ask_refusals[width-low]
+tests/protocol/test_ask_pick.py::test_closing_the_session_cancels_its_ask
+tests/protocol/test_ask_pick.py::test_gui_ask_and_control_driven_covers
+tests/protocol/test_ask_pick.py::test_gui_ask_holds_the_window_slot
+tests/protocol/test_ask_pick.py::test_gui_ask_target_must_be_on_screen
+tests/protocol/test_ask_pick.py::test_pick_refusals[empty]
+tests/protocol/test_ask_pick.py::test_pick_refusals[ids]
+tests/protocol/test_ask_pick.py::test_pick_refusals[label-bell]
+tests/protocol/test_ask_pick.py::test_pick_refusals[label]
+tests/protocol/test_ask_pick.py::test_pick_refusals[many]
+tests/protocol/test_ask_pick.py::test_pick_refusals[no-items]
+tests/protocol/test_ask_pick.py::test_pick_refusals[prompt-select]
+tests/protocol/test_ask_pick.py::test_pick_refusals[selection]
+tests/protocol/test_ask_pick.py::test_pick_refusals[subtitle-newline]
+tests/protocol/test_ask_pick.py::test_pick_waits_in_the_window_slot
+tests/protocol/test_ask_pick.py::test_pick_with_no_items_is_a_text_prompt
+tests/protocol/test_ask_pick.py::test_result_and_cancel_need_a_known_id[ask.cancel]
+tests/protocol/test_ask_pick.py::test_result_and_cancel_need_a_known_id[ask.result]
+tests/protocol/test_ask_pick.py::test_result_and_cancel_need_a_known_id[pick.cancel]
+tests/protocol/test_ask_pick.py::test_result_and_cancel_need_a_known_id[pick.result]
+tests/protocol/test_ask_pick.py::test_terminal_ask_on_one_pane
+tests/protocol/test_ask_pick.py::test_terminal_ask_pane_must_be_laid_out
+tests/protocol/test_ask_pick.py::test_terminal_ask_waits_hidden_on_an_unselected_session
+tests/protocol/test_ask_pick.py::test_terminal_ask_waits_on_its_session
+tests/protocol/test_ask_pick.py::test_terminal_ask_without_a_target_lands_on_the_selected_session
 tests/protocol/test_dashboard_quick.py::test_dashboard_and_terminal_zoom_replace_each_other
 tests/protocol/test_dashboard_quick.py::test_dashboard_font_modes
 tests/protocol/test_dashboard_quick.py::test_dashboard_mru_takes_the_recent_sessions

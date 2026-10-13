@@ -7,6 +7,11 @@
 //! The header bar carries the dashboard's opener while it is closed and its exit while it is open (upstream's
 //! `dashboardButton` and `dashboardTitlebar`); the open grid is titled "Dashboard" and, like a terminal zoom, fills the
 //! window with the sidebar stepped aside.
+//!
+//! Over the window's content sit its two modal layers, added once: the GUI ask ([`crate::ask_dialog::WindowAsk`]) and
+//! the native picker ([`crate::picker::WindowPicker`]), drawn from the window's modal slot on every sync. While either
+//! is up the header's zoom and dashboard controls stand down, no terminal is given the keyboard, and the layer that
+//! came up takes it.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -15,12 +20,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use adw::prelude::*;
-use agterm_core::model::{AppStore, Session, WindowLibrary};
+use agterm_core::model::{AppStore, PendingAsk, Session, WindowLibrary};
 use agterm_core::{Core, WindowRequest, WindowSize, WindowState};
 use gtk::gdk;
 use uuid::Uuid;
 
+use crate::ask_dialog::{AnchorTarget, Look, WindowAsk};
 use crate::deck::{Deck, PaneContext};
+use crate::picker::WindowPicker;
 use crate::sidebar::Sidebar;
 use crate::state::{self, AppState, Poster};
 
@@ -120,6 +127,10 @@ pub struct WindowUi {
     exit_dashboard: gtk::Button,
     deck: Deck,
     sidebar: Sidebar,
+    /// The GUI ask over the window's content.
+    ask: WindowAsk,
+    /// The native picker over the window's content.
+    picker: WindowPicker,
     context: PaneContext,
     /// Set once the model closed the window, so its close request goes through.
     closing: Rc<Cell<bool>>,
@@ -170,9 +181,15 @@ impl WindowUi {
         header.pack_end(&exit_zoom);
         header.pack_end(&exit_dashboard);
         header.pack_end(&open_dashboard);
+        let ask_layer = WindowAsk::new();
+        let pick_layer = WindowPicker::new();
+        let modal_host = gtk::Overlay::new();
+        modal_host.set_child(Some(&paned));
+        modal_host.add_overlay(ask_layer.widget());
+        modal_host.add_overlay(pick_layer.widget());
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(&header);
-        toolbar.set_content(Some(&paned));
+        toolbar.set_content(Some(&modal_host));
         let window = adw::ApplicationWindow::builder()
             .application(app)
             .title(UNTITLED)
@@ -189,6 +206,8 @@ impl WindowUi {
             exit_dashboard,
             deck,
             sidebar,
+            ask: ask_layer,
+            picker: pick_layer,
             context,
             closing: Rc::new(Cell::new(false)),
             pending_minimized: Rc::new(Cell::new(None)),
@@ -276,10 +295,13 @@ impl WindowUi {
         });
     }
 
-    /// Shows the window and focuses the shown terminal (the dashboard's grid while it is open).
+    /// Shows the window and focuses its picker or GUI ask while one is up, else the shown terminal (the dashboard's
+    /// grid while it is open).
     pub fn present(&self) {
         self.window.present();
-        self.deck.grab_focus();
+        if !self.picker.grab_focus() && !self.ask.grab_focus() {
+            self.deck.grab_focus();
+        }
     }
 
     /// Closes the window for good: the model closed it, and its terminals with it.
@@ -435,8 +457,59 @@ impl WindowUi {
             .library()
             .store(id)
             .is_some_and(|store| store.active_session().is_some());
-        self.open_dashboard.set_sensitive(has_session);
+        let modal = self.sync_modals(core, poster, terminal_area_inset(core, id));
+        self.open_dashboard.set_sensitive(has_session && !modal);
+        self.exit_dashboard.set_sensitive(!modal);
+        self.exit_zoom.set_sensitive(!modal);
     }
+
+    /// Draws the window's modal slot: its picker or GUI ask, a new one taking the keyboard. Whether one is up.
+    fn sync_modals(&mut self, core: &Core, poster: &Poster, inset: f64) -> bool {
+        let id = self.window_id;
+        let slot = core.modal_slot(id);
+        let pick = slot.and_then(agterm_core::modal::PickController::pending);
+        let ask = slot.and_then(agterm_core::modal::PickController::pending_ask);
+        let target = ask.map(|ask| self.anchor_target(core, ask));
+        let look = Look::current(core);
+        let new_ask = self.ask.sync(ask, target.flatten().as_ref(), &look, id, poster);
+        let new_pick = self.picker.sync(pick, inset, id, poster);
+        if new_pick {
+            self.picker.grab_focus();
+        } else if new_ask {
+            self.ask.grab_focus();
+        }
+        self.picker.is_open() || self.ask.is_open()
+    }
+
+    /// What GUI ask `ask` covers (upstream's `askAnchorFrame`): the terminal area without an anchor, else its
+    /// session's page or that page's pane; `None` while the page or pane is gone (the core cancels the ask then).
+    fn anchor_target(&self, core: &Core, ask: &PendingAsk) -> Option<AnchorTarget> {
+        let Some(anchor) = &ask.anchor else {
+            return Some(AnchorTarget::Area(self.deck.widget().clone().upcast()));
+        };
+        let stack = self.deck.page_stack(anchor.session)?;
+        let pane = match anchor.pane_identity {
+            None => None,
+            Some(identity) => {
+                let session = core.library().store(self.window_id)?.session(anchor.session)?;
+                Some(crate::ask_dialog::slot_of(session.pane_role_for_identity(identity)?))
+            }
+        };
+        Some(AnchorTarget::Page { stack, pane })
+    }
+}
+
+/// Where the terminal area starts in window `window`'s content: past the sidebar and its divider while the sidebar
+/// shows, else at the edge (upstream's `terminalAreaInset`; a zoom or the dashboard covers the sidebar).
+fn terminal_area_inset(core: &Core, window: Uuid) -> f64 {
+    if core.zoom_target(window).is_some() || core.dashboard(window).is_some() {
+        return 0.0;
+    }
+    core.library()
+        .store(window)
+        .map(AppStore::sidebar)
+        .filter(|sidebar| sidebar.visible)
+        .map_or(0.0, |sidebar| sidebar.width + 1.0)
 }
 
 #[cfg(test)]

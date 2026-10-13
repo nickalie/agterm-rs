@@ -16,6 +16,8 @@
 //!
 //! The HUD's layer sits above everything, added once ([`crate::hud`]); the stack places it in the bounds it is scoped
 //! to and reports the page's geometry to the model, which measures a HUD against it (upstream's `hudPaneFrames`).
+//! A terminal ask's layer sits above the HUD, added once too ([`crate::ask_dialog`]), placed over the whole page or
+//! the pane the ask covers.
 
 use agterm_core::hud::{HudPaneFrame, HudPaneFrames};
 use agterm_core::model::pane::{SPLIT_RATIO_DEFAULT, clamp_split_ratio};
@@ -26,6 +28,7 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use uuid::Uuid;
 
+use crate::ask_dialog::SessionAskLayer;
 use crate::hud::{HudLayer, HudPlacement, LayerView};
 use crate::state::{self, AppState, Poster};
 use crate::surface::TerminalSurface;
@@ -54,6 +57,15 @@ impl Slot {
             StatusPane::Scratch => Self::Scratch,
         }
     }
+}
+
+/// What a terminal ask covers on its page (upstream's `SessionAskOverlay.coveredFrame`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AskScope {
+    /// The whole page.
+    Session,
+    /// The pane laid out at this slot.
+    Pane(Slot),
 }
 
 /// Which of the split's panes the page lays out.
@@ -317,6 +329,9 @@ struct StackLayout {
     /// The HUD's layer, and where its panel goes while one is up.
     hud: Option<gtk::Widget>,
     hud_placement: Option<HudPlacement>,
+    /// The terminal ask's layer, and what it covers while one shows.
+    ask: Option<gtk::Widget>,
+    ask_scope: Option<AskScope>,
     /// Where the page's geometry goes: its session and the main loop.
     reports: Option<(Uuid, Poster)>,
     /// The geometry last reported.
@@ -362,6 +377,8 @@ impl StackLayout {
                 geometry.divider.unwrap_or_default()
             } else if Some(&widget) == self.hud.as_ref() {
                 hud
+            } else if Some(&widget) == self.ask.as_ref() {
+                ask_rect(self.ask_scope, panes, &geometry, width, height)
             } else {
                 Rect::full(width, height)
             };
@@ -396,6 +413,24 @@ impl StackLayout {
         state::post(&poster, move |state: &mut AppState| {
             state.report_hud_frames(session, &frames);
         });
+    }
+}
+
+/// The terminal ask layer's rectangle: the page, or the pane it covers while that pane is laid out.
+fn ask_rect(scope: Option<AskScope>, panes: Panes, geometry: &Geometry, width: i32, height: i32) -> Rect {
+    match scope {
+        Some(AskScope::Session) => Rect::full(width, height),
+        Some(AskScope::Pane(slot)) => pane_rect(panes, geometry, slot).unwrap_or_default(),
+        None => Rect::default(),
+    }
+}
+
+/// The rectangle of the pane at `slot` (primary or split) while `panes` lays it out.
+fn pane_rect(panes: Panes, geometry: &Geometry, slot: Slot) -> Option<Rect> {
+    match slot {
+        Slot::Primary if lays_out(panes, slot) => Some(geometry.primary),
+        Slot::Split if lays_out(panes, slot) => Some(geometry.split),
+        _ => None,
     }
 }
 
@@ -472,6 +507,7 @@ mod imp {
             layout.divider = None;
             layout.grid = None;
             layout.hud = None;
+            layout.ask = None;
         }
     }
 
@@ -506,6 +542,18 @@ impl PaneStack {
     fn layout(&self) -> std::cell::RefMut<'_, StackLayout> {
         self.imp().layout.borrow_mut()
     }
+
+    /// Where the pane at `slot` is laid out in the page now; `None` while it is not (or under the dashboard).
+    #[must_use]
+    pub fn pane_rect(&self, slot: Slot) -> Option<Rect> {
+        let layout = self.imp().layout.try_borrow().ok()?;
+        if layout.grid.is_some() {
+            return None;
+        }
+        let panes = layout.panes?;
+        let geometry = geometry(panes, layout.axis, layout.ratio(), self.width(), self.height());
+        pane_rect(panes, &geometry, slot)
+    }
 }
 
 // MARK: - the session's panes
@@ -522,8 +570,10 @@ pub struct PaneView {
     divider: gtk::Box,
     separator: gtk::Separator,
     panes: Vec<Pane>,
-    /// The HUD's layer, above everything.
+    /// The HUD's layer, above the panes.
     hud: std::rc::Rc<std::cell::RefCell<HudLayer>>,
+    /// The terminal ask's layer, above everything.
+    ask: SessionAskLayer,
     plan: Option<PanePlan>,
     /// The page shows the dashboard's cells ([`PaneView::apply_grid`]).
     in_grid: bool,
@@ -544,9 +594,12 @@ impl PaneView {
         connect_divider(&divider, &stack, session, poster);
         let hud = HudLayer::new();
         hud.widget().set_parent(&stack);
+        let ask = SessionAskLayer::new();
+        ask.widget().set_parent(&stack);
         {
             let mut layout = stack.layout();
             layout.hud = Some(hud.widget().clone().upcast());
+            layout.ask = Some(ask.widget().clone().upcast());
             layout.reports = Some((session, poster.clone()));
         }
         let hud = std::rc::Rc::new(std::cell::RefCell::new(hud));
@@ -563,6 +616,7 @@ impl PaneView {
             separator,
             panes: Vec::new(),
             hud,
+            ask,
             plan: None,
             in_grid: false,
         };
@@ -624,6 +678,27 @@ impl PaneView {
     /// The HUD's layer.
     pub fn hud_mut(&self) -> std::cell::RefMut<'_, HudLayer> {
         self.hud.borrow_mut()
+    }
+
+    /// The terminal ask's layer.
+    pub fn ask_mut(&mut self) -> &mut SessionAskLayer {
+        &mut self.ask
+    }
+
+    /// The terminal ask's layer.
+    #[must_use]
+    pub fn ask(&self) -> &SessionAskLayer {
+        &self.ask
+    }
+
+    /// Places the terminal ask's layer over what it covers (`None`: none shows).
+    pub fn place_ask(&self, scope: Option<AskScope>) {
+        let mut layout = self.stack.layout();
+        if layout.ask_scope != scope {
+            layout.ask_scope = scope;
+            drop(layout);
+            self.stack.queue_allocate();
+        }
     }
 
     /// Places the HUD's panel (`None`: none is up).
@@ -688,7 +763,7 @@ impl PaneView {
         self.divider.set_visible(false);
     }
 
-    /// Hides every terminal: the session is out of the tree, held by a pending close.
+    /// Hides every terminal and takes a terminal ask down: the session is out of the tree, held by a pending close.
     pub fn hide(&mut self) {
         for pane in &self.panes {
             if pane.terminal.is_deck_visible() {
@@ -696,6 +771,8 @@ impl PaneView {
             }
         }
         self.divider.set_visible(false);
+        self.ask.clear();
+        self.place_ask(None);
     }
 
     /// The token and terminal that should hold keyboard focus by the last plan.

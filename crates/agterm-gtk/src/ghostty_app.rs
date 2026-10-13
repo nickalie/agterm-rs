@@ -232,6 +232,19 @@ pub fn foreground_color() -> Option<agterm_ghostty::Color> {
     current().and_then(|ghostty| ghostty.config.get(keys::FOREGROUND))
 }
 
+/// The terminals' default background color, from the app config.
+pub fn background_color() -> Option<agterm_ghostty::Color> {
+    current().and_then(|ghostty| ghostty.config.get(keys::BACKGROUND))
+}
+
+/// The terminals' base font size in points, from the app config.
+pub fn base_font_size() -> Option<f64> {
+    current()
+        .and_then(|ghostty| ghostty.config.get(keys::FONT_SIZE))
+        .map(f64::from)
+        .filter(|size| *size > 0.0)
+}
+
 fn schedule_tick() {
     if TICK_SCHEDULED.swap(true, Ordering::AcqRel) {
         return;

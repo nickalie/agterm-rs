@@ -42,6 +42,12 @@ pub struct ControlResult {
     /// `events.read`: a page of the event ring, also on a cursor failure (then the ring's current anchor).
     #[serde(default)]
     pub events: Option<EventBatch>,
+    /// `pick.result`: the current or terminal picker outcome.
+    #[serde(default)]
+    pub pick: Option<ControlPickResult>,
+    /// `ask.result`: the current or terminal dialog outcome.
+    #[serde(default)]
+    pub ask: Option<ControlAskResult>,
     /// `surface.cursor`: the cursor's column.
     #[serde(default)]
     pub cursor: Option<ControlCursor>,
@@ -125,6 +131,94 @@ impl ControlResult {
     }
 }
 
+/// The state or terminal outcome `pick.result` reports (upstream's `ControlPickOutcome`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ControlPickOutcome {
+    Pending,
+    Picked,
+    Custom,
+    Cancelled,
+}
+
+/// `pick.result`'s nested payload (upstream's `ControlPickResult`).
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPickResult {
+    pub result: ControlPickOutcome,
+    /// The picked item's id; absent for a custom answer and without an answer.
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    /// The picked item's zero-based position in the caller's order.
+    #[serde(default)]
+    pub index: Option<i64>,
+    /// The typed text of a custom answer.
+    #[serde(default)]
+    pub query: Option<String>,
+}
+
+impl ControlPickResult {
+    /// A result carrying only its outcome.
+    #[must_use]
+    pub fn outcome(result: ControlPickOutcome) -> Self {
+        Self {
+            result,
+            id: None,
+            label: None,
+            index: None,
+            query: None,
+        }
+    }
+}
+
+/// The state or terminal outcome `ask.result` reports (upstream's `ControlAskOutcome`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ControlAskOutcome {
+    /// The dialog awaits an answer.
+    Pending,
+    /// The dialog resolved to a caller-provided button.
+    Answered,
+    /// The user dismissed the dialog (Esc, Ctrl+W).
+    Escaped,
+    /// The dialog was cancelled administratively.
+    Cancelled,
+}
+
+/// `ask.result`'s nested payload (upstream's `ControlAskResult`).
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlAskResult {
+    pub result: ControlAskOutcome,
+    /// The answered button's id; absent without a button answer.
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    /// The answered button's zero-based position in the caller's order.
+    #[serde(default)]
+    pub index: Option<i64>,
+    /// Why a cancelled dialog ended, absent for an ordinary cancel.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+impl ControlAskResult {
+    /// A result carrying only its outcome.
+    #[must_use]
+    pub fn outcome(result: ControlAskOutcome) -> Self {
+        Self {
+            result,
+            id: None,
+            label: None,
+            index: None,
+            reason: None,
+        }
+    }
+}
+
 /// A surface's cursor position (upstream's `ControlCursor`): the column only, zero-based from the grid's left edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlCursor {
@@ -174,6 +268,34 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn pick_and_ask_outcomes_nest_with_their_fields_in_upstreams_order() {
+        let result = ControlResult {
+            pick: Some(ControlPickResult {
+                id: Some("b".into()),
+                label: Some("Beta".into()),
+                index: Some(1),
+                ..ControlPickResult::outcome(ControlPickOutcome::Picked)
+            }),
+            ..ControlResult::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&result).unwrap(),
+            r#"{"pick":{"result":"picked","id":"b","label":"Beta","index":1}}"#
+        );
+        let ask = ControlResult {
+            ask: Some(ControlAskResult::outcome(ControlAskOutcome::Escaped)),
+            ..ControlResult::default()
+        };
+        assert_eq!(serde_json::to_string(&ask).unwrap(), r#"{"ask":{"result":"escaped"}}"#);
+        let decoded: ControlResult =
+            serde_json::from_str(r#"{"ask":{"result":"cancelled","reason":"presentation-lost"}}"#).unwrap();
+        assert_eq!(
+            decoded.ask.and_then(|ask| ask.reason).as_deref(),
+            Some("presentation-lost")
+        );
+    }
 
     #[test]
     fn unset_fields_are_absent() {

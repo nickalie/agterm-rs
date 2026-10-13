@@ -144,6 +144,8 @@ pub struct Core {
     /// The desktop notifications commands and terminals asked for, in order, until the frontend takes them
     /// ([`commands::notify`]).
     pub(crate) notifications: Vec<commands::notify::NotificationEffect>,
+    /// Every window's modal slot and the asks' and picks' retained outcomes ([`crate::modal`]).
+    pub(crate) modals: crate::modal::Modals,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -205,6 +207,7 @@ impl Core {
             auto_follow: crate::auto_follow::AutoFollow::default(),
             hud: commands::hud::HudRuntime::default(),
             notifications: Vec::new(),
+            modals: crate::modal::Modals::default(),
         }
     }
 
@@ -415,6 +418,7 @@ impl Core {
     /// the caller arms on the main loop. Without persistence the effects are drained and the saves dropped.
     pub fn commit(&mut self) -> CommitTimers {
         self.prune_zoom();
+        self.sync_modals();
         let (events, debounced, pending_closes) = if let Some(persistence) = self.persistence.as_mut() {
             let commit = persistence.commit(&mut self.library);
             (commit.events, commit.debounced, commit.pending_closes)
@@ -451,6 +455,7 @@ impl Core {
     /// The quit path: makes every pending close final, then writes every open window and the index (upstream's
     /// `applicationWillTerminate` save). Whether every write landed.
     pub fn save_all(&mut self) -> bool {
+        self.cancel_all_modals();
         self.library.finalize_all_pending_closes();
         self.library.is_terminating = true;
         let _ = self.commit();
@@ -518,6 +523,10 @@ impl Core {
         };
         commands::dashboard::project(self, scoped, &mut tree);
         crate::auto_follow::project(self, scoped, &mut tree);
+        if let Some(slot) = scoped.and_then(|id| self.modals.controller(id)) {
+            tree.pick_pending = slot.pending().map(|pick| pick.id.clone());
+            tree.ask_pending = slot.pending_ask().map(|ask| ask.id.clone());
+        }
         Ok(tree)
     }
 
@@ -567,6 +576,8 @@ impl Core {
                 Some(result) => result_of(&result),
                 None => Ok(Response::success()),
             },
+            Command::Ask(cmd) => result_of(&commands::ask::dispatch(self, cmd, request)?),
+            Command::Pick(cmd) => result_of(&commands::pick::dispatch(self, cmd, request)?),
             Command::Events(EventsCmd::Read) => self.read_events(request.args.as_ref()),
             Command::Version => result_of(&self.version()),
             Command::Tree => {
@@ -575,14 +586,12 @@ impl Core {
                     tree: self.tree(window)?,
                 })
             }
-            cmd @ (Command::Ask(_)
-            | Command::Browser(_)
+            cmd @ (Command::Browser(_)
             | Command::Config(_)
             | Command::Debug(_)
             | Command::Font(_)
             | Command::Hooks(_)
             | Command::Keymap(_)
-            | Command::Pick(_)
             | Command::Restore(_)
             | Command::Sidebar(_)
             | Command::Theme(_)

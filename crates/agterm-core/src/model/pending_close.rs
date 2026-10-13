@@ -330,6 +330,7 @@ impl AppStore {
             return false;
         };
         let was_active = self.selected_session_id == Some(id);
+        self.release_leaving_session(id);
         self.close_timed_hud(id);
         let workspace_id = self.workspaces[at.workspace].id();
         let workspace_name = self.workspaces[at.workspace].name.clone();
@@ -378,6 +379,9 @@ impl AppStore {
         }
         let previous = self.selected_session_id;
         for id in &targets {
+            if self.location(*id).is_some() {
+                self.release_leaving_session(*id);
+            }
             self.close_timed_hud(*id);
         }
         let closes = self.take_closing_sessions(&targets);
@@ -488,6 +492,10 @@ impl AppStore {
         let Some(index) = self.workspace_index(id) else {
             return false;
         };
+        let leaving: Vec<Uuid> = self.workspaces[index].sessions.iter().map(Session::id).collect();
+        for session in leaving {
+            self.release_leaving_session(session);
+        }
         let visible = self.workspaces.remove(index);
         self.forget_fresh_workspace(id);
         for session in &visible.sessions {

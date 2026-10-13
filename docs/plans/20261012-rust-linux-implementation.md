@@ -902,17 +902,27 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 
 **Files:**
 - Create: `crates/agterm-core/src/commands/{ask,pick}.rs`, `crates/agterm-gtk/src/{ask_dialog,picker}.rs`
+- ➕ Create: `crates/agterm-core/src/{modal,fuzzy}.rs` (the window modal slot, the ask and pick registries; the
+  palettes' fuzzy ranking), `crates/agterm-core/src/model/ask.rs` (`PendingAsk`, the session ask slot,
+  `AskNavigation`), `crates/agterm-core/src/commands/tests/{ask,pick}.rs`,
+  `crates/agterm-ctl/src/{ask,pick,modal}.rs`; Modify: `agterm-proto` `result.rs` (`pick`, `ask` outcomes), core
+  `dispatch`, `projection`, `model/{session,store,panes,pending_close,window_library,mod}.rs` (a leaving session or
+  closing pane cancels its ask), `commands/{quick,dashboard,search,surface_target}.rs` (the modal refusals),
+  `crates/agterm-ctl/src/{main,usage}.rs`, `crates/agterm-ctl/tests/cli.rs`, `crates/agterm-gtk/src/modal.rs` (the
+  shared dim-and-panel frame), GTK `app.rs` (capabilities) and the
+  window/deck wiring of the dialog and picker
 
-- [ ] ask.open, result, cancel (`Ask.swift`, `ControlAsk.swift`, `ControlDispatcher+Ask.swift`,
+- [x] ask.open, result, cancel (`Ask.swift`, `ControlAsk.swift`, `ControlDispatcher+Ask.swift`,
       `ControlServer+Ask.swift`); terminal and GUI styles drawn after `Views/AskDialogView.swift`
-- [ ] pick.open, result, cancel (`Pick.swift`, `ControlPick.swift`, `Fuzzy.swift`, `ControlServer+Pick.swift`); the
+- [x] pick.open, result, cancel (`Pick.swift`, `ControlPick.swift`, `Fuzzy.swift`, `ControlServer+Pick.swift`); the
       picker after `Views/Palette.swift`
-- [ ] a pending GUI ask refuses control-driven covers and `pick.open` names it; claim `modal-blocks-covers` and
+- [x] a pending GUI ask refuses control-driven covers and `pick.open` names it; claim `modal-blocks-covers` and
       `pick-names-pending-ask`
-- [ ] matching `agtermctl` subcommands (`AskCommands.swift`)
-- [ ] write tests: pending-ask rules, fuzzy ranking, result/cancel races
-- [ ] write tests: errors from `ControlDispatcherAskTests` and `ControlDispatcherPickTests`
-- [ ] gate: full run; ratchet (`test_ask_pick.py`)
+- [x] matching `agtermctl` subcommands (`AskCommands.swift`)
+- [x] write tests: pending-ask rules, fuzzy ranking, result/cancel races
+- [x] write tests: errors from `ControlDispatcherAskTests` and `ControlDispatcherPickTests`
+- [x] gate: full run; ratchet (`test_ask_pick.py`) (48 new green ids, 440 listed: all 44 of
+      `test_ask_pick.py` and the four cli ask/pick tests of `test_cli_output.py`)
 
 ### Task 20: Program overlays and overlay jobs
 
@@ -1091,6 +1101,9 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 
 - [ ] zmx.tree (`RemoteTree.swift`, `Remotes.swift`), the `zmx.present` stream and its origin hub
       (`PresentationFrames.swift`, `PresentationHub.swift`, `PresentationLayout.swift`, `PresenterGrant.swift`)
+- [ ] ➕ the origin side of a handed-over ask, left by Task 19 (`AppStore+RemoteAsk.swift`,
+      `ControlServer+Ask.swift` `presentAskRemotely`/`takeBackRemoteAsk`/`receivePresenterFrame`; the tree's
+      `ask.remote`): `ask.open` on a presented session goes to the presenter
 - [ ] `agtermctl zmx tree` and the `agtermctl zmx present` stdio bridge (`StreamBridge.swift`)
 - [ ] write tests: frame codec, hub subscribe-before-snapshot, generation and revision
 - [ ] write tests: tree listing errors
@@ -1179,6 +1192,8 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 - [ ] command palette (`Views/Palette.swift`, `AppActions+Palette.swift`, `PaletteCatalog.swift`,
       `PaletteCustomRow.swift`, `PaletteSearchKeys.swift`), session switcher (`Views/SessionSwitcher.swift`),
       scrollback search UI (`Views/TerminalSearchBar.swift`), per `menu-actions.md`
+- [ ] ➕ left by Task 19: `pick.open` and a GUI `ask.open` on the frontmost window close its palette, and the palette
+      does not open while that window's modal slot is held (`Core::modal_pending`); reuse `agterm_core::fuzzy`
 - [ ] write tests: palette catalog and search keys
 - [ ] write tests: switcher ordering by recency
 - [ ] gate: full run; ratchet

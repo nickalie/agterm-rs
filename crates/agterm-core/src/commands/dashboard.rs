@@ -109,6 +109,9 @@ fn open(
     font_mode: DashboardFontMode,
 ) -> Result<Option<ControlResult>, ControlError> {
     let window = open_window(core, window)?;
+    if let Some(error) = core.modals.pending_modal_error(window) {
+        return Err(ControlError::rejected(error));
+    }
     let store = core.library().store(window).ok_or(ControlError::WindowNotOpen)?;
     let (resolved, unresolved) = match what {
         Open::Mru => {
@@ -300,7 +303,7 @@ impl Core {
     /// closes; a closed one opens over the window's most recently used sessions, auto-sized. Inert while the window is
     /// zoomed and with no recent session.
     pub fn toggle_dashboard(&mut self, window: Uuid) {
-        if self.zoom_target(window).is_some() {
+        if self.zoom_target(window).is_some() || self.modal_pending(window) {
             return;
         }
         if self.dashboard(window).is_some() {

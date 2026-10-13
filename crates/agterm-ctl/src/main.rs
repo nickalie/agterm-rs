@@ -2,11 +2,14 @@
 //! socket subcommand takes upstream's `BasicOptions` (`--socket`, `--json`) after its own name, one request per run,
 //! and reports through [`output`]. Each command group lives in its own module.
 
+mod ask;
 mod client;
 mod dashboard;
 mod events;
+mod modal;
 mod notify;
 mod output;
+mod pick;
 mod quick;
 mod session;
 mod session_background;
@@ -62,6 +65,8 @@ enum Command {
     Window(window::Window),
     Quick(quick::Quick),
     Notify(notify::Notify),
+    Pick(pick::Pick),
+    Ask(ask::Ask),
     Version(version::Version),
 }
 
@@ -78,7 +83,8 @@ impl Command {
             Self::Window(group) => group.command().validate(),
             Self::Quick(command) => command.check(),
             Self::Notify(command) => command.validate(),
-            Self::Version(_) => Ok(()),
+            Self::Ask(command) => command.check(),
+            Self::Pick(_) | Self::Version(_) => Ok(()),
         }
     }
 
@@ -93,6 +99,8 @@ impl Command {
             Self::Window(group) => group.command().default_run(env),
             Self::Quick(command) => command.execute(env),
             Self::Notify(command) => command.default_run(env),
+            Self::Pick(command) => command.execute(env),
+            Self::Ask(command) => command.execute(env),
             Self::Version(command) => command.run(env),
         }
     }

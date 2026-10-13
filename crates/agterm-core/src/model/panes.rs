@@ -136,6 +136,7 @@ impl AppStore {
     pub fn close_split(&mut self, id: Uuid) {
         let split_identity = self.session(id).and_then(|session| session.split_pane_identity);
         self.close_hud_owned_by(id, split_identity);
+        self.cancel_ask_owned_by(id, split_identity);
         let Some(session) = self.session_mut(id) else { return };
         let was_shown = session.split.shown;
         session.split = SplitLayout::default();
@@ -171,6 +172,7 @@ impl AppStore {
         }
         let primary_identity = self.session(id).map(|session| session.pane_identity);
         self.close_hud_owned_by(id, primary_identity);
+        self.cancel_ask_owned_by(id, primary_identity);
         let Some(session) = self.session_mut(id) else { return };
         let was_shown = session.split.shown;
         // the exiting primary's override goes with it; the survivor's moves left, its file named by the same identity

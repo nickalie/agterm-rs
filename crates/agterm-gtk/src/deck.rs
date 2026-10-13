@@ -17,6 +17,10 @@
 //! While the window's dashboard is open every member session's page shows at once, each laying its member panes out
 //! at their grid cells over an opaque backdrop, under the grid's chrome, which holds the keyboard ([`crate::dashboard`]).
 //!
+//! A terminal ask on the shown page takes the keyboard in place of the terminal it covers while it may
+//! ([`crate::ask_dialog`]); while the window's picker or GUI ask is up no terminal is given the keyboard, and the shown
+//! terminal gets it back once the slot frees.
+//!
 //! The plan of what to add, remove and show is a pure function of the model ([`plan`]), so it is testable without a
 //! display.
 
@@ -206,6 +210,9 @@ struct PageSync<'a> {
     grid: Option<&'a GridModel>,
     context: &'a PaneContext,
     poster: &'a Poster,
+    /// Something other than the window's terminals holds the keyboard: its picker or GUI ask, or the quick terminal.
+    focus_blocked: bool,
+    look: &'a crate::ask_dialog::Look,
 }
 
 /// One session's page: its panes and their container.
@@ -259,6 +266,13 @@ impl Page {
             poster: sync.poster,
         };
         crate::hud::sync_page(&mut self.panes, session, &hud, plan.as_ref(), shown);
+        let ask = crate::ask_dialog::AskPage {
+            shown: shown && sync.zoom.is_none() && sync.grid.is_none(),
+            focus_blocked: sync.focus_blocked,
+            look: sync.look,
+            poster: sync.poster,
+        };
+        crate::ask_dialog::sync_page(&mut self.panes, session, &ask);
         crate::background::sync_page(&self.panes, session);
     }
 
@@ -377,13 +391,29 @@ impl Deck {
             .map(|(_, terminal)| terminal)
     }
 
-    /// Gives the keyboard to what should hold it: the dashboard's chrome while it is open, else the shown terminal.
+    /// Gives the keyboard to what should hold it: the dashboard's chrome while it is open, else the shown page's
+    /// terminal ask while it takes the keyboard, else the shown terminal.
     pub fn grab_focus(&self) {
         if self.in_grid {
             self.chrome.grab_focus();
+        } else if let Some((_, dialog)) = self.shown_ask_focus() {
+            dialog.grab_focus();
         } else if let Some(terminal) = self.shown_terminal() {
             terminal.grab_focus();
         }
+    }
+
+    /// The shown page's terminal ask, while it takes the keyboard in place of its terminal.
+    fn shown_ask_focus(&self) -> Option<(String, gtk::Widget)> {
+        self.shown
+            .and_then(|id| self.pages.get(&id))
+            .and_then(|page| page.panes.ask().focus_target())
+    }
+
+    /// The page of session `session`, which a GUI ask anchored to it is drawn over.
+    #[must_use]
+    pub fn page_stack(&self, session: Uuid) -> Option<split::PaneStack> {
+        self.pages.get(&session).map(|page| page.panes.widget().clone())
     }
 
     /// Brings the deck in line with `window`'s sessions: pages for new sessions, gone sessions' pages removed, every
@@ -414,13 +444,17 @@ impl Deck {
         let zoom = zoom.filter(|zoom| self.pages.contains_key(&zoom.session));
         let shown = zoom.map(|zoom| zoom.session).or(plan.shown);
         let grid = window.and_then(|window| GridModel::of(core, window));
+        let modal = window.is_some_and(|window| core.modal_pending(window));
         if let Some(window) = window {
+            let look = crate::ask_dialog::Look::current(core);
             let sync = PageSync {
                 window,
                 zoom,
                 grid: grid.as_ref(),
                 context,
                 poster,
+                focus_blocked: modal || core.quick_visible(),
+                look: &look,
             };
             for (id, page) in &mut self.pages {
                 // under the grid only its member pages show
@@ -437,7 +471,7 @@ impl Deck {
         }
         // a zoom keeps the keyboard on its terminal (upstream's `focusSplitPane` steps aside while zoomed)
         let refocus = zoom.is_none() && shown.is_some_and(|id| core.pane_focus_requested(id));
-        self.show(shown, refocus);
+        self.show(shown, refocus, modal);
     }
 
     /// Shows the dashboard: every member page at once over the backdrop (a page shows, but takes no input: the chrome
@@ -507,8 +541,9 @@ impl Deck {
     /// Shows the page of `shown` alone and gives its focused pane the keyboard when the page or that pane changed
     /// (upstream focuses the active session after a select or a create, and the focused pane within it), or when
     /// `refocus` (a `session.focus` asked for it, wherever focus sits now); with none shown the focus leaves the
-    /// hidden terminals.
-    fn show(&mut self, shown: Option<Uuid>, refocus: bool) {
+    /// hidden terminals. While the window's picker or GUI ask is up (`modal`) nothing is focused, and the next show
+    /// after it focuses again.
+    fn show(&mut self, shown: Option<Uuid>, refocus: bool, modal: bool) {
         for (id, page) in &self.pages {
             let visible = Some(*id) == shown;
             let widget = page.panes.widget();
@@ -527,6 +562,22 @@ impl Deck {
             }
             return;
         };
+        if modal {
+            self.focused = None;
+            return;
+        }
+        self.focus_page(id, refocus);
+    }
+
+    /// Gives page `id`'s terminal ask or focused pane the keyboard when that changed or `refocus` asks for it.
+    fn focus_page(&mut self, id: Uuid, refocus: bool) {
+        if let Some((key, dialog)) = self.shown_ask_focus() {
+            let desired = Some((id, key));
+            if (desired != self.focused || refocus) && dialog.grab_focus() {
+                self.focused = desired;
+            }
+            return;
+        }
         let focus = self.pages.get(&id).and_then(|page| page.panes.focus());
         let desired = focus.map(|(token, _)| (id, token.to_owned()));
         if desired == self.focused && !refocus {
@@ -1083,6 +1134,112 @@ mod tests {
         assert!(walk.deck.pages[&walk.session].panes.hud_mut().terminal().is_none());
         assert!(second.parent().is_none());
         assert_eq!(layer.parent().as_ref(), Some(&walk.stack));
+    }
+
+    #[test]
+    fn a_terminal_ask_takes_the_keyboard_in_its_layer() {
+        crate::gtk_test::on_gtk_thread(terminal_ask_takes_the_keyboard);
+    }
+
+    /// A terminal ask over the focused split pane mounts its dialog in the page's ask layer, which stays the stack's
+    /// child, and takes the keyboard from the pane; once answered the pane gets the keyboard back.
+    fn terminal_ask_takes_the_keyboard() {
+        let mut walk = Walk::split();
+        let window = gtk::Window::new();
+        window.set_child(Some(walk.deck.widget()));
+        walk.settle();
+        let split = walk.probe().area(&walk.split);
+        assert!(split.is_focus());
+        let open = Request {
+            cmd: Command::Ask(agterm_proto::command::AskCmd::Open),
+            target: Some(pane_env::uuid_string(walk.session)),
+            args: Some(Args {
+                title: Some("Deploy?".to_owned()),
+                buttons: Some(vec![agterm_proto::AskButton {
+                    id: "yes".to_owned(),
+                    label: "Yes".to_owned(),
+                    hotkey: None,
+                }]),
+                pane: Some("right".to_owned()),
+                ..Args::default()
+            }),
+        };
+        let response = walk.core.dispatch(&open);
+        assert!(response.ok, "{response:?}");
+        walk.settle();
+        let layer = walk.deck.pages[&walk.session].panes.ask().widget().clone();
+        assert_eq!(layer.parent().and_upcast::<gtk::Widget>(), Some(walk.stack.clone()));
+        assert!(layer.get_visible());
+        let (_, dialog) = walk.deck.pages[&walk.session].panes.ask().focus_target().unwrap();
+        assert!(dialog.is_focus(), "the dialog holds the keyboard");
+        assert!(!split.is_focus());
+
+        let session = walk
+            .core
+            .library()
+            .store(walk.window)
+            .unwrap()
+            .session(walk.session)
+            .unwrap();
+        let id = session.ask().unwrap().ask.id.clone();
+        let escaped = agterm_proto::ControlAskResult::outcome(agterm_proto::ControlAskOutcome::Escaped);
+        walk.core.answer_session_ask(walk.session, &id, escaped);
+        walk.settle();
+        assert!(!layer.get_visible());
+        assert!(dialog.parent().is_none(), "the dialog went");
+        assert_eq!(layer.parent().and_upcast::<gtk::Widget>(), Some(walk.stack.clone()));
+        assert!(split.is_focus(), "the pane got the keyboard back");
+        window.set_child(None::<&gtk::Widget>);
+        window.destroy();
+    }
+
+    #[test]
+    fn a_window_modal_holds_the_terminals_keyboard() {
+        crate::gtk_test::on_gtk_thread(modal_holds_the_keyboard);
+    }
+
+    /// While the window's picker is up no terminal is given the keyboard, not even by a focus request; once it is
+    /// answered the shown pane is.
+    fn modal_holds_the_keyboard() {
+        let mut walk = Walk::split();
+        let window = gtk::Window::new();
+        window.set_child(Some(walk.deck.widget()));
+        walk.settle();
+        let split = walk.probe().area(&walk.split);
+        GtkWindowExt::set_focus(&window, None::<&gtk::Widget>);
+        let open = Request {
+            cmd: Command::Pick(agterm_proto::command::PickCmd::Open),
+            target: None,
+            args: Some(Args {
+                items: Some(vec![agterm_proto::PickItem {
+                    id: "a".to_owned(),
+                    label: "Alpha".to_owned(),
+                    subtitle: None,
+                }]),
+                ..Args::default()
+            }),
+        };
+        let response = walk.core.dispatch(&open);
+        assert!(response.ok, "{response:?}");
+        let focus = Request {
+            cmd: Command::Session(SessionCmd::Focus),
+            target: Some(pane_env::uuid_string(walk.session)),
+            args: Some(Args {
+                pane: Some("right".to_owned()),
+                ..Args::default()
+            }),
+        };
+        assert!(walk.core.dispatch(&focus).ok);
+        walk.settle();
+        assert!(!split.is_focus(), "no terminal takes the keyboard under the picker");
+        walk.core.clear_pane_focus_requests();
+        let id = walk.core.modal_slot(walk.window).unwrap().pending().unwrap().id.clone();
+        let cancelled = agterm_proto::ControlPickResult::outcome(agterm_proto::ControlPickOutcome::Cancelled);
+        walk.core.resolve_pick(walk.window, &id, cancelled);
+        walk.settle();
+        assert!(split.is_focus(), "the shown pane gets the keyboard back");
+        window.set_child(None::<&gtk::Widget>);
+        window.destroy();
     }
 
     /// A session's page in the deck, read by pane token.

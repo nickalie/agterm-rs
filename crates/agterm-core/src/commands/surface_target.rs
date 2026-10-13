@@ -174,6 +174,13 @@ fn zoom(
     }
     let id = SurfaceId::parse(target).ok_or_else(|| invalid_surface(target))?;
     let owner = surface_owner(core, id, window)?;
+    let current = core.zoom_target(owner);
+    if mode.desired_value(current == Some(id))
+        && current != Some(id)
+        && let Some(error) = core.modals.pending_modal_error(owner)
+    {
+        return Err(ControlError::rejected(error));
+    }
     if mode != ToggleMode::Off && !id.is_valid_in(open_store(core, owner)?) {
         return Err(not_available(&id.control_id()));
     }
@@ -187,6 +194,12 @@ fn zoom(
 fn active_zoom(core: &mut Core, window: Option<&str>, mode: ToggleMode) -> Result<Option<ControlResult>, ControlError> {
     let window = Resolver::new(core.library()).open_placement_window(window)?;
     let current = core.zoom_target(window);
+    if current.is_none()
+        && mode != ToggleMode::Off
+        && let Some(error) = core.modals.pending_modal_error(window)
+    {
+        return Err(ControlError::rejected(error));
+    }
     let effective = match current {
         Some(current) => current,
         None if mode == ToggleMode::Off => return Ok(None),

@@ -49,7 +49,7 @@ impl QuickState {
     }
 
     /// Hides the panel, ending its zoom and pin; the terminal stays.
-    fn hide(&mut self) {
+    pub(crate) fn hide(&mut self) {
         self.visible = false;
         self.zoomed = false;
         self.pinned = false;
@@ -90,7 +90,7 @@ impl Core {
     pub fn toggle_quick_terminal(&mut self) {
         if self.quick.visible {
             self.quick.hide();
-        } else if !self.library().open_ids().is_empty() {
+        } else if !self.library().open_ids().is_empty() && !self.active_window_modal_pending() {
             self.quick.show(false);
         }
     }
@@ -162,6 +162,14 @@ fn set_visibility(core: &mut Core, mode: Option<&str>) -> Result<(), ControlErro
     let mode = ToggleMode::parse_with(mode, "show", "hide")
         .ok_or_else(|| ControlError::rejected(format!("invalid quick mode: {}", mode.unwrap_or("toggle"))))?;
     if mode.desired_value(core.quick.visible) {
+        // not gated on the panel being hidden: `show` also carries the pin
+        if let Some(error) = core
+            .library()
+            .active_window_id()
+            .and_then(|id| core.modals.pending_modal_error(id))
+        {
+            return Err(ControlError::rejected(error));
+        }
         core.quick.show(true);
     } else {
         core.quick.hide();

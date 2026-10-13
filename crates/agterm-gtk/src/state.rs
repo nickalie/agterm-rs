@@ -227,6 +227,50 @@ impl AppState {
         self.settle();
     }
 
+    /// The user answered window `window`'s picker `id`: a row, typed text, or a dismissal. A stale id changes nothing.
+    pub fn resolve_pick(&mut self, window: Uuid, id: &str, outcome: agterm_proto::ControlPickResult) {
+        if self.quitting {
+            return;
+        }
+        self.core.resolve_pick(window, id, outcome);
+        self.settle();
+    }
+
+    /// The user answered window `window`'s GUI ask `id`: a button, or Escape. A stale id changes nothing.
+    pub fn answer_window_ask(&mut self, window: Uuid, id: &str, outcome: agterm_proto::ControlAskResult) {
+        if self.quitting {
+            return;
+        }
+        self.core.answer_window_ask(window, id, outcome);
+        self.settle();
+    }
+
+    /// The user answered session `session`'s terminal ask `id`: a button, or Escape. A stale id changes nothing.
+    pub fn answer_session_ask(&mut self, session: Uuid, id: &str, outcome: agterm_proto::ControlAskResult) {
+        if self.quitting {
+            return;
+        }
+        self.core.answer_session_ask(session, id, outcome);
+        self.settle();
+    }
+
+    /// The user clicked session `session`'s terminal ask: the pane it covers becomes the split's focused pane, so the
+    /// dialog takes the keyboard (upstream's `SessionAskInput.selectPane`).
+    pub fn select_ask_pane(&mut self, session: Uuid) {
+        let Some(store) = self.core.library_mut().store_for_session_mut(session) else {
+            return;
+        };
+        let Some(pane) = store
+            .session(session)
+            .and_then(agterm_core::model::Session::ask_target_pane)
+        else {
+            return;
+        };
+        if store.set_split_focus(session, pane == agterm_core::model::OverlayPane::Right) {
+            self.settle();
+        }
+    }
+
     /// Answers one control request and settles what it changed. A command waiting on the frontend (a terminal coming
     /// up, libghostty reporting a search count) answers later: its steps run as delayed main-loop tasks, each settled,
     /// while the connection's thread waits for the deferred reply.

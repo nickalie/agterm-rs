@@ -177,6 +177,8 @@ pub struct AppStore {
     pub(crate) pending: PendingCloses,
     /// Open Recent, shared with the library and its other stores once the store is open in one.
     pub(crate) recent_closed: RecentClosedList,
+    /// Session asks that ended since the core last took them ([`AppStore::take_ended_asks`]).
+    pub(crate) ended_asks: Vec<super::ask::EndedAsk>,
 }
 
 impl AppStore {
@@ -426,6 +428,7 @@ impl AppStore {
         // the undo window dies with the store: a session left pending would keep its terminals with nothing left to
         // finalize it
         self.finalize_all_pending_closes();
+        self.cancel_all_session_asks();
         let closing: Vec<(Uuid, Uuid, EventPayload)> = self
             .workspaces
             .iter()
@@ -680,6 +683,10 @@ impl AppStore {
             .selected_session_id
             .filter(|selected| self.workspaces[index].session(*selected).is_some());
         let removing_active = selected.is_some();
+        let leaving: Vec<Uuid> = self.workspaces[index].sessions.iter().map(Session::id).collect();
+        for session in leaving {
+            self.release_leaving_session(session);
+        }
         let mut workspace = self.workspaces.remove(index);
         // before the membership is dropped below, so a reopen can mark it again
         let focus_member = self.focus.ids.contains(&id);
@@ -862,6 +869,7 @@ impl AppStore {
     /// the most recent visible session of its scope takes the selection (`close_reselection_target`).
     pub fn close_session(&mut self, id: Uuid) -> Option<Session> {
         let at = self.location(id)?;
+        self.release_leaving_session(id);
         let was_active = self.selected_session_id == Some(id);
         let workspace = self.workspaces[at.workspace].id();
         let workspace_name = self.workspaces[at.workspace].name.clone();

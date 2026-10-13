@@ -4,6 +4,7 @@
 //! The model is plain data on the main thread. A mutation records the events and snapshot writes it implies in its
 //! store's [`Outbox`]; the library drains them for the event ring and persistence.
 
+mod ask;
 mod background;
 mod duplicate;
 mod focus;
@@ -28,6 +29,7 @@ mod workspace;
 #[cfg(test)]
 mod tests;
 
+pub use ask::{AskAlignment, AskAnchor, AskNavigation, AskStyle, EndedAsk, MAX_ASK_BUTTONS, PendingAsk, SessionAsk};
 pub use background::{BackgroundWatermark, PaneBackgrounds, WatermarkFit, WatermarkKind, WatermarkPosition};
 pub use focus::FocusMode;
 pub use navigation::{NewSessionPlacement, SessionNavigation, WorkspaceNavigation};

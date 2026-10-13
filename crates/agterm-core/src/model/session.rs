@@ -250,6 +250,8 @@ pub struct Session {
     /// The deck's last non-empty geometry of the session's detail area and panes, which a HUD is measured against
     /// (upstream's `hudPaneFrames`). Ephemeral.
     pub hud_frames: HudPaneFrames,
+    /// The pending terminal ask ([`Session::ask`]), independent of the overlay slot. Ephemeral.
+    pub(crate) ask: Option<super::ask::SessionAsk>,
 }
 
 /// The outcome of resolving a command's `--pane-id` and `--pane` pair (upstream's `Session.PaneAddress`).
@@ -315,6 +317,7 @@ impl Session {
             search: SearchState::default(),
             overlay: OverlaySlot::default(),
             hud_frames: HudPaneFrames::default(),
+            ask: None,
         }
     }
 

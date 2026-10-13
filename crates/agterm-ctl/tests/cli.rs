@@ -447,6 +447,8 @@ SUBCOMMANDS:
                           text.
   notify                  Post a desktop notification (default: the active
                           session of the frontmost window).
+  pick                    Open, poll, or cancel a native fuzzy picker.
+  ask                     Open, poll, or cancel a themed question dialog.
   version                 Print the version of the app serving the socket.
 
   See 'agtermctl help <subcommand>' for detailed help.
@@ -2708,5 +2710,294 @@ fn hud_and_notify_refusals_are_usage_errors_before_connecting() -> TestResult {
             format!("Error: Missing expected argument '<body>'\nHelp:  <body>  Notification body.\n{NOTIFY_USAGE}")
         )
     );
+    Ok(())
+}
+
+// MARK: - pick and ask
+
+const MODAL_ID: &str = "7D3C0A51-2B6E-4F0A-9C1D-3E4F5A6B7C8D";
+
+/// A modal host for `family` (`pick` or `ask`): `open` must equal `expected_open`; `result` reports the outcomes in
+/// `results` in turn (the last one repeating); `cancel` of the open id answers ok; an unknown id is refused.
+fn modal_host(
+    socket: &Path,
+    family: &'static str,
+    expected_open: serde_json::Value,
+    results: Vec<serde_json::Value>,
+) -> TestResult<Server<usize>> {
+    serve(socket, 0, move |polls: &mut usize, request| {
+        let sent = serde_json::to_value(&request).unwrap_or_default();
+        let cmd = sent["cmd"].as_str().unwrap_or_default().to_owned();
+        let target = sent["target"].as_str().unwrap_or_default().to_owned();
+        if cmd == format!("{family}.open") {
+            return if sent == expected_open {
+                Response::with_result(serde_json::json!({"id": MODAL_ID})).into()
+            } else {
+                Response::failure(format!("unexpected request: {sent}")).into()
+            };
+        }
+        if target != MODAL_ID {
+            return Response::failure(format!("unknown {family}: {target}")).into();
+        }
+        if cmd == format!("{family}.cancel") {
+            return Response::success().into();
+        }
+        let outcome = results[(*polls).min(results.len() - 1)].clone();
+        *polls += 1;
+        Response::with_result(serde_json::json!({ family: outcome })).into()
+    })
+}
+
+#[test]
+fn pick_without_blocking_prints_the_id_and_result_reads_each_outcome() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("agterm.sock");
+    let open = serde_json::json!({"cmd": "pick.open", "args": {
+        "items": [{"id": "a=Alpha", "label": "a=Alpha"}, {"id": "b=Beta", "label": "b=Beta"}], "prompt": "choose"}});
+    let results = vec![
+        serde_json::json!({"result": "pending"}),
+        serde_json::json!({"result": "cancelled"}),
+    ];
+    let _server = modal_host(&socket, "pick", open, results)?;
+    let opened = run_with_input(
+        dir.path(),
+        &socket,
+        &["pick", "--no-block", "--prompt", "choose"],
+        b"a=Alpha\nb=Beta\n",
+    )?;
+    let id_line = format!("{{\"id\":\"{MODAL_ID}\"}}\n");
+    assert_eq!(outcome(&opened), (Some(0), id_line, String::new()));
+    let pending = run_on(dir.path(), &socket, &["pick", "result", MODAL_ID])?;
+    assert_eq!(
+        outcome(&pending),
+        (Some(1), "{\"result\":\"pending\"}\n".to_owned(), String::new())
+    );
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &["pick", "cancel", MODAL_ID])?),
+        (Some(0), "ok\n".to_owned(), String::new())
+    );
+    let cancelled = run_on(dir.path(), &socket, &["pick", "result", MODAL_ID])?;
+    assert_eq!(
+        outcome(&cancelled),
+        (Some(2), "{\"result\":\"cancelled\"}\n".to_owned(), String::new())
+    );
+    for verb in ["result", "cancel"] {
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, &["pick", verb, "zzz"])?),
+            (Some(1), String::new(), "error: unknown pick: zzz\n".to_owned()),
+            "{verb}"
+        );
+    }
+    let refused_json = run_on(dir.path(), &socket, &["pick", "result", "zzz", "--json"])?;
+    assert_eq!(
+        outcome(&refused_json),
+        (
+            Some(1),
+            "{\"ok\":false,\"error\":\"unknown pick: zzz\"}\n".to_owned(),
+            String::new()
+        )
+    );
+    Ok(())
+}
+
+#[test]
+fn a_blocking_pick_polls_until_it_resolves() -> TestResult {
+    let dir = short_dir()?;
+    let cases = [
+        (serde_json::json!({"result": "cancelled"}), 2),
+        (
+            serde_json::json!({"result": "picked", "id": "b", "label": "Beta", "index": 1}),
+            0,
+        ),
+    ];
+    for (index, (result, code)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("pick{index}.sock"));
+        let open = serde_json::json!({"cmd": "pick.open", "args": {
+            "items": [{"id": "a", "label": "Alpha"}, {"id": "b", "label": "Beta", "subtitle": "second"}]}});
+        let results = vec![serde_json::json!({"result": "pending"}), result.clone()];
+        let _server = modal_host(&socket, "pick", open, results)?;
+        let input = br#"[{"id":"a","label":"Alpha"},{"id":"b","label":"Beta","subtitle":"second"}]"#;
+        let (status, stdout, stderr) = outcome(&run_with_input(dir.path(), &socket, &["pick"], input)?);
+        assert_eq!((status, stderr), (Some(code), String::new()), "{result}");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&stdout)?, result);
+        assert_eq!(stdout.matches('\n').count(), 1, "{stdout}");
+    }
+    Ok(())
+}
+
+#[test]
+fn pick_refuses_stdin_that_is_neither_text_nor_an_item_array() -> TestResult {
+    let dir = short_dir()?;
+    // nothing listens here: a sent request would fail to connect instead
+    let socket = dir.path().join("agterm.sock");
+    let (code, stdout, stderr) = outcome(&run_with_input(dir.path(), &socket, &["pick"], &[0xFF, b'\n'])?);
+    assert_eq!((code, stdout.as_str()), (Some(64), ""));
+    assert!(
+        stderr.starts_with("Error: stdin must be UTF-8 text or a JSON item array\n") && stderr.ends_with(ROOT_USAGE),
+        "{stderr}"
+    );
+    let (code, stdout, stderr) = outcome(&run_with_input(dir.path(), &socket, &["pick"], b"[{\"id\":")?);
+    assert_eq!((code, stdout.as_str()), (Some(1), ""));
+    assert!(
+        stderr.starts_with("Error: stdin is not a valid JSON item array: "),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn ask_without_blocking_prints_the_id_and_result_reads_each_outcome() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("agterm.sock");
+    let open = serde_json::json!({"cmd": "ask.open", "target": "s1", "args": {
+        "buttons": [{"id": "yes", "label": "Yes"}, {"id": "no", "label": "no"}], "style": "terminal",
+        "align": "right", "title": "Proceed?"}});
+    let results = vec![
+        serde_json::json!({"result": "pending"}),
+        serde_json::json!({"result": "escaped"}),
+    ];
+    let _server = modal_host(&socket, "ask", open, results)?;
+    let args = [
+        "ask",
+        "--no-block",
+        "--button",
+        "yes=Yes",
+        "--button",
+        "no",
+        "--target",
+        "s1",
+        "Proceed?",
+    ];
+    let id_line = format!("{{\"id\":\"{MODAL_ID}\"}}\n");
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &args)?),
+        (Some(0), id_line, String::new())
+    );
+    let pending = run_on(dir.path(), &socket, &["ask", "result", MODAL_ID])?;
+    assert_eq!(
+        outcome(&pending),
+        (Some(1), "{\"result\":\"pending\"}\n".to_owned(), String::new())
+    );
+    let escaped = run_on(dir.path(), &socket, &["ask", "result", MODAL_ID])?;
+    assert_eq!(
+        outcome(&escaped),
+        (Some(3), "{\"result\":\"escaped\"}\n".to_owned(), String::new())
+    );
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &["ask", "cancel", MODAL_ID])?),
+        (Some(0), "ok\n".to_owned(), String::new())
+    );
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &["ask", "result", "zzz"])?),
+        (Some(1), String::new(), "error: unknown ask: zzz\n".to_owned())
+    );
+    Ok(())
+}
+
+#[test]
+fn a_blocking_ask_polls_until_it_is_cancelled() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("agterm.sock");
+    let open = serde_json::json!({"cmd": "ask.open", "target": "s1", "args": {
+        "buttons": [{"id": "ok", "label": "ok"}], "style": "terminal", "align": "right", "title": "Wait here"}});
+    let results = vec![
+        serde_json::json!({"result": "pending"}),
+        serde_json::json!({"result": "cancelled"}),
+    ];
+    let _server = modal_host(&socket, "ask", open, results)?;
+    let args = ["ask", "--button", "ok", "--target", "s1", "Wait here"];
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &args)?),
+        (Some(2), "{\"result\":\"cancelled\"}\n".to_owned(), String::new())
+    );
+    Ok(())
+}
+
+const ASK_OPEN_USAGE: &str = "Usage: agtermctl ask open [<options>] <title>\n  See 'agtermctl ask open --help' for more \
+                              information.\n";
+
+#[test]
+fn ask_refusals_are_usage_errors_before_connecting() -> TestResult {
+    let dir = short_dir()?;
+    // nothing listens here: a sent request would exit 1, not 64
+    let socket = dir.path().join("agterm.sock");
+    let cases: [(&[&str], &str); 4] = [
+        (&["ask", "--no-block", "Proceed?"], "ask requires at least one --button"),
+        (
+            &["ask", "--no-block", "--button", "y", "--width", "5", "Proceed?"],
+            "width must be 10 to 100",
+        ),
+        (
+            &["ask", "--button", "y", "--width", "-1", "Proceed?"],
+            "width must be 10 to 100",
+        ),
+        (
+            &[
+                "ask", "open", "cancel", "--button", "ok", "--style", "gui", "--pane", "right",
+            ],
+            "--pane requires a session",
+        ),
+    ];
+    for (args, message) in cases {
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(64), String::new(), format!("Error: {message}\n{ASK_OPEN_USAGE}")),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+const ASK_HELP: &str = "\
+OVERVIEW: Open, poll, or cancel a themed question dialog.
+
+Use ask open TITLE when the title is 'open', 'result', or 'cancel'.
+
+USAGE: agtermctl ask <subcommand>
+
+OPTIONS:
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  open (default)          Ask a question and wait for its button answer.
+  result                  Print a dialog's current or terminal result as JSON.
+  cancel                  Cancel a dialog without answering a button.
+
+  See 'agtermctl help ask <subcommand>' for detailed help.
+";
+
+const PICK_HELP: &str = "\
+OVERVIEW: Open, poll, or cancel a native fuzzy picker.
+
+USAGE: agtermctl pick <subcommand>
+
+OPTIONS:
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  open (default)          Read choices from stdin and open a native fuzzy
+                          picker.
+  result                  Print a picker's current or terminal result as JSON.
+  cancel                  Cancel a pending picker.
+
+  See 'agtermctl help pick <subcommand>' for detailed help.
+";
+
+#[test]
+fn ask_and_pick_help_mark_their_default_subcommand() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], &str); 4] = [
+        (&["ask", "--help"], ASK_HELP),
+        (&["help", "ask"], ASK_HELP),
+        (&["pick", "--help"], PICK_HELP),
+        (&["help", "pick"], PICK_HELP),
+    ];
+    for (args, help) in cases {
+        assert_eq!(
+            outcome(&run(dir.path(), &[], args)?),
+            (Some(0), help.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
     Ok(())
 }

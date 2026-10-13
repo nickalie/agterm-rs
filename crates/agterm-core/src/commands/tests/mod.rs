@@ -1,6 +1,7 @@
 //! The command handlers driven through [`Core::dispatch`] over a seeded window library; no surfaces needed. Error
 //! strings are asserted in full, dynamic parts included.
 
+mod ask;
 mod auto_follow;
 mod background;
 mod dashboard;
@@ -9,6 +10,7 @@ mod hud;
 mod metadata;
 mod moves;
 mod panes;
+mod pick;
 mod quick;
 mod restart;
 mod session;

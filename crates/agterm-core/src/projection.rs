@@ -7,7 +7,9 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agterm_proto::AppIdentity;
-use agterm_proto::tree::{ControlHudNode, ControlSessionNode, ControlSurfaceNode, ControlTree, ControlWorkspaceNode};
+use agterm_proto::tree::{
+    ControlHudNode, ControlSessionAsk, ControlSessionNode, ControlSurfaceNode, ControlTree, ControlWorkspaceNode,
+};
 use uuid::Uuid;
 
 use crate::hud::HudSpinner;
@@ -126,6 +128,12 @@ fn apply_overlay(node: &mut ControlSessionNode, session: &Session) {
     node.overlay = slot.program_active();
     node.overlay_size_percent = slot.size_percent.filter(|_| slot.program_active());
     node.hud = hud_node(session);
+    node.ask = session.ask().map(|pending| ControlSessionAsk {
+        id: pending.ask.id.clone(),
+        pane: session.ask_target_pane().map(|pane| pane.wire_name().to_owned()),
+        remote: None,
+        replica: None,
+    });
 }
 
 /// The HUD occupying the slot, as upstream's `hudNode`: every effective value, omitted without a HUD.

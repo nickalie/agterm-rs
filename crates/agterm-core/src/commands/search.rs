@@ -68,6 +68,9 @@ fn start(core: &mut Core, request: &Request) -> Result<Dispatched, ControlError>
         Some("close") => return Ok(Dispatched::done(close(core, resolved.session))),
         Some(_) => return Err(ControlError::rejected("session.search --to must be next|prev|close")),
     };
+    if let Some(error) = core.modals.pending_modal_error(resolved.window) {
+        return Err(ControlError::rejected(error));
+    }
     if core.zoom_target(resolved.window).is_some() {
         return Err(ControlError::rejected("terminal zoom active"));
     }

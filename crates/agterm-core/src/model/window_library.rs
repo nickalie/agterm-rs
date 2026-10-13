@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
 
+use super::ask::EndedAsk;
 use super::naming::{default_window_name, is_auto_window_name, sanitized, trimmed_or_none};
 use super::navigation::{WorkspaceNavigation, wrapped};
 use super::outbox::{ModelEvent, RecentClosedChange, SaveRequest, WatermarkRemoval, next_emission};
@@ -83,6 +84,8 @@ pub struct WindowLibrary {
     pending_recent_closed: Vec<(u64, RecentClosedChange)>,
     /// Rendered text watermarks of removed windows' sessions and of retired stores, waiting for the next drain.
     pending_removed_watermarks: Vec<WatermarkRemoval>,
+    /// Session asks that ended in stores no longer open, for [`WindowLibrary::take_ended_asks`].
+    pending_ended_asks: Vec<EndedAsk>,
 }
 
 impl WindowLibrary {
@@ -369,6 +372,7 @@ impl WindowLibrary {
     /// Retires a store leaving the open set and keeps its events and Open Recent changes for the next drain.
     fn retire_store(&mut self, id: Uuid, mut store: AppStore) {
         store.retire();
+        self.pending_ended_asks.append(&mut store.take_ended_asks());
         let mut outbox = store.take_outbox();
         self.pending_recent_closed.extend(outbox.take_stamped_recent_closed());
         self.pending_removed_watermarks.append(&mut outbox.removed_watermarks);
@@ -398,6 +402,15 @@ impl WindowLibrary {
         for store in self.stores.values_mut() {
             store.reset_session_font_sizes();
         }
+    }
+
+    /// Takes the session asks that ended since the last take, from every open store and every store that closed.
+    pub fn take_ended_asks(&mut self) -> Vec<EndedAsk> {
+        let mut ended = std::mem::take(&mut self.pending_ended_asks);
+        for store in self.stores.values_mut() {
+            ended.append(&mut store.take_ended_asks());
+        }
+        ended
     }
 
     /// Shows the frontmost open window's sidebar and hides every other one's (auto-hide inactive sidebars).
