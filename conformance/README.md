@@ -95,6 +95,9 @@ upstream.
 The per-platform rule above applies to the two Swift references.
 The Rust build's progress is held by a ratchet: `conformance/rust-passing.txt` lists the ids that went green, and
 `run-rust-linux.sh` fails when one of them goes red again (see rust-build.md > Ratchet).
+A Rust-only extension (today `live-any-shell`, Live sessions in bash and fish login shells) is a capability neither
+reference claims: its tests skip as unsupported on both references and are validated by the Rust CI with
+`--must-pass` on the capability (see rust-build.md > Rust-only extensions).
 
 ## Catalog and coverage gate
 
@@ -152,5 +155,7 @@ These runs share a machine with a live agterm, so the harness refuses a launch t
 - `reference-macos` (`macos-26`): protocol, cli and behaviors with `--must-pass live-sessions`, then the ui layer
   with `--reruns 1`, against the release named by the catalog's `upstream`.
 - `rust-linux` (`ubuntu-24.04`): the Rust workspace's format check, strict clippy, lint report (in the job summary)
-  and `cargo test`, over the vendored libghostty prefix.
+  and `cargo test`, over the vendored libghostty prefix; then the staged build under the suite, held by the ratchet,
+  once per login shell: bash (`conformance`) and fish (`conformance-fish`) with `--must-pass live-any-shell`, zsh
+  (`conformance-zsh`).
 - `spike-macos` (`macos-26`): the launch and ax-driver spikes, when their tools change.

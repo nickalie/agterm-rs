@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use agterm_proto::ControlRestoreStatus;
 
 use crate::persist::RestoreMode;
+use crate::zmx::shell_integration::LoginShell;
 use crate::zmx::support::eligibility;
 
 /// The mode the settings asked this launch for, the one it runs in, and why `live` fell back when it did (upstream's
@@ -87,19 +88,22 @@ pub enum LiveRejection {
     ExecutablePathNotAbsolute,
     ExecutableUnavailable,
     UnsupportedLoginShell,
-    MissingZshIntegration,
+    /// The resources lack the integration of the login shell, which is supported.
+    MissingShellIntegration(LoginShell),
 }
 
 impl LiveRejection {
-    /// The reason `restore.mode` reports, upstream's wording.
+    /// The reason `restore.mode` reports, upstream's wording; the shell names widen with the bash and fish extension.
     #[must_use]
     pub fn message(self) -> &'static str {
         match self {
             Self::UiTestLaunch => "Live sessions are disabled for default UI tests.",
             Self::ExecutablePathNotAbsolute => "the zmx executable path is not absolute",
             Self::ExecutableUnavailable => "the zmx executable is unavailable",
-            Self::UnsupportedLoginShell => "the password-database login shell is not zsh",
-            Self::MissingZshIntegration => "the bundled zsh integration is unavailable",
+            Self::UnsupportedLoginShell => "the password-database login shell is not zsh, bash or fish",
+            Self::MissingShellIntegration(LoginShell::Zsh) => "the bundled zsh integration is unavailable",
+            Self::MissingShellIntegration(LoginShell::Bash) => "the bundled bash integration is unavailable",
+            Self::MissingShellIntegration(LoginShell::Fish) => "the bundled fish integration is unavailable",
         }
     }
 }
@@ -115,7 +119,7 @@ pub struct LiveProbe {
     pub zmx_executable: PathBuf,
     /// The login shell in the password database.
     pub login_shell: Option<String>,
-    /// The bundled resources directory holding `shell-integration/zsh`.
+    /// The bundled resources directory holding `shell-integration/<shell>`.
     pub resources_dir: Option<PathBuf>,
 }
 
@@ -202,7 +206,7 @@ mod tests {
             ui_test_launch: true,
             ui_test_opt_in: false,
             zmx_executable: PathBuf::from("zmx"),
-            login_shell: Some("/bin/bash".to_owned()),
+            login_shell: Some("/bin/tcsh".to_owned()),
             resources_dir: Some(resources.clone()),
         };
         assert_eq!(probe.rejection(), Some(LiveRejection::UiTestLaunch));
@@ -222,9 +226,26 @@ mod tests {
         }
         assert_eq!(probe.rejection(), Some(LiveRejection::UnsupportedLoginShell));
         probe.login_shell = Some("/usr/bin/zsh".to_owned());
-        assert_eq!(probe.rejection(), Some(LiveRejection::MissingZshIntegration));
+        assert_eq!(
+            probe.rejection(),
+            Some(LiveRejection::MissingShellIntegration(LoginShell::Zsh))
+        );
         fs::create_dir_all(resources.join("shell-integration/zsh")).unwrap();
         fs::write(resources.join("shell-integration/zsh/.zshenv"), "").unwrap();
         assert_eq!(probe.rejection(), None);
+        // bash and fish are probed for their own integration
+        probe.login_shell = Some("/bin/bash".to_owned());
+        assert_eq!(
+            probe.unavailable_reason().as_deref(),
+            Some("the bundled bash integration is unavailable")
+        );
+        fs::create_dir_all(resources.join("shell-integration/bash")).unwrap();
+        fs::write(resources.join("shell-integration/bash/ghostty.bash"), "").unwrap();
+        assert_eq!(probe.rejection(), None);
+        probe.login_shell = Some("/usr/bin/fish".to_owned());
+        assert_eq!(
+            probe.unavailable_reason().as_deref(),
+            Some("the bundled fish integration is unavailable")
+        );
     }
 }

@@ -1,6 +1,7 @@
 //! What a live launch reads of this host (upstream's `agterm/Ghostty/ZmxLaunch.swift`): the staged zmx (or a debug
-//! build's `AGTERM_ZMX_PATH`), the password-database login shell, the Ghostty resources holding the zsh integration,
-//! the state directory naming the socket namespace and the bundled zmx build id. Linux has no supervising session host
+//! build's `AGTERM_ZMX_PATH`), the password-database login shell, the Ghostty resources holding its shell integration,
+//! the app's own values of the variables that integration hands on, the state directory naming the socket namespace
+//! and the bundled zmx build id. Linux has no supervising session host
 //! (macOS's `agterm-session-host`), so no configuration names one.
 
 use std::collections::BTreeMap;
@@ -11,6 +12,7 @@ use std::path::{Path, PathBuf};
 use agterm_core::paths::{self, Env};
 use agterm_core::restore::mode::{LiveProbe, LiveRejection, UI_TEST_OPT_IN};
 use agterm_core::zmx::lead::LeadAttachment;
+use agterm_core::zmx::shell_integration::Inherited;
 use agterm_core::zmx::socket_directory;
 use agterm_core::zmx::support::{self, Configuration, Inputs};
 use uuid::Uuid;
@@ -31,8 +33,8 @@ pub struct Runtime {
     pub login_shell: Option<String>,
     pub resources_dir: Option<PathBuf>,
     pub state_dir: PathBuf,
-    /// The app's own `ZDOTDIR`, handed on to the zsh integration.
-    pub inherited_zdotdir: Option<String>,
+    /// The app's own `ZDOTDIR`, `ENV`, `HISTFILE`, home and `XDG_DATA_DIRS`, handed on to the shell integration.
+    pub inherited: Inherited,
 }
 
 impl Runtime {
@@ -66,7 +68,7 @@ impl Runtime {
             resources_dir: var("GHOSTTY_RESOURCES_DIR")
                 .or_else(|| staged_root.map(|root| root.join(BUNDLED_RESOURCES))),
             state_dir: paths::state_dir(env),
-            inherited_zdotdir: env.var("ZDOTDIR").map(|value| value.to_string_lossy().into_owned()),
+            inherited: Inherited::read(env),
         }
     }
 
@@ -100,7 +102,7 @@ impl Runtime {
             state_dir: self.state_dir.clone(),
             pane_identity,
             base_environment,
-            inherited_zdotdir: self.inherited_zdotdir.clone(),
+            inherited: self.inherited.clone(),
             session_host_executable: None,
             lead,
         })
@@ -152,7 +154,7 @@ mod tests {
 
     use super::*;
 
-    /// A staged layout: `bin/zmx`, the zsh integration under `share/ghostty` and the build id.
+    /// A staged layout: `bin/zmx`, the zsh, bash and fish integrations under `share/ghostty` and the build id.
     fn staged() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("bin")).unwrap();
@@ -162,6 +164,12 @@ mod tests {
         let integration = root.path().join("share/ghostty/shell-integration/zsh");
         fs::create_dir_all(&integration).unwrap();
         fs::write(integration.join(".zshenv"), "").unwrap();
+        let bash = root.path().join("share/ghostty/shell-integration/bash");
+        fs::create_dir_all(&bash).unwrap();
+        fs::write(bash.join("ghostty.bash"), "").unwrap();
+        let fish = root.path().join("share/ghostty/shell-integration/fish/vendor_conf.d");
+        fs::create_dir_all(&fish).unwrap();
+        fs::write(fish.join("ghostty-shell-integration.fish"), "").unwrap();
         fs::create_dir_all(root.path().join("share/agterm")).unwrap();
         fs::write(root.path().join(BUILD_ID_PATH), "rev x86_64-linux-gnu.2.39 digest\n").unwrap();
         root
@@ -198,6 +206,34 @@ mod tests {
     }
 
     #[test]
+    fn bash_and_fish_login_shells_wrap_with_their_own_integration_and_the_apps_environment() {
+        let root = staged();
+        let bin = root.path().join("bin");
+        let resources = root.path().join("share/ghostty/shell-integration");
+        let env = MapEnv::new()
+            .with("AGTERM_STATE_DIR", "/tmp/agterm-state")
+            .with("HOME", "/home/u")
+            .with("ENV", "/home/u/.shrc")
+            .with("XDG_DATA_DIRS", "/opt/share:/usr/share");
+        let pane = Uuid::new_v4();
+        let bash = Runtime::resolve(&env, Some(&bin), Some("/bin/bash".to_owned()), false);
+        let bash = bash.configuration(pane, BTreeMap::new(), None).unwrap().environment;
+        assert_eq!(
+            bash.get("ENV").map(PathBuf::from),
+            Some(resources.join("bash/ghostty.bash"))
+        );
+        assert_eq!(bash.get("GHOSTTY_BASH_ENV").map(String::as_str), Some("/home/u/.shrc"));
+        assert_eq!(bash.get("HISTFILE").map(String::as_str), Some("/home/u/.bash_history"));
+        let fish = Runtime::resolve(&env, Some(&bin), Some("/usr/bin/fish".to_owned()), false);
+        let fish = fish.configuration(pane, BTreeMap::new(), None).unwrap().environment;
+        assert_eq!(
+            fish.get("XDG_DATA_DIRS").cloned(),
+            Some(format!("{}:/opt/share:/usr/share", resources.display()))
+        );
+        assert!(!fish.contains_key("ENV") && !fish.contains_key("ZDOTDIR"));
+    }
+
+    #[test]
     fn the_resources_dir_comes_from_the_environment_first() {
         let root = staged();
         let env = MapEnv::new().with("GHOSTTY_RESOURCES_DIR", "/opt/ghostty");
@@ -231,11 +267,15 @@ mod tests {
     fn the_probe_names_the_first_rejection_and_honors_the_ui_test_bypass() {
         let root = staged();
         let bin = root.path().join("bin");
-        let fish = Runtime::resolve(&MapEnv::new(), Some(&bin), Some("/usr/bin/fish".to_owned()), false);
+        let tcsh = Runtime::resolve(&MapEnv::new(), Some(&bin), Some("/bin/tcsh".to_owned()), false);
         assert_eq!(
-            fish.live_probe(&MapEnv::new()).unavailable_reason().as_deref(),
-            Some("the password-database login shell is not zsh")
+            tcsh.live_probe(&MapEnv::new()).unavailable_reason().as_deref(),
+            Some("the password-database login shell is not zsh, bash or fish")
         );
+        for shell in ["/bin/bash", "/usr/bin/fish"] {
+            let runtime = Runtime::resolve(&MapEnv::new(), Some(&bin), Some(shell.to_owned()), false);
+            assert_eq!(runtime.live_probe(&MapEnv::new()).unavailable_reason(), None, "{shell}");
+        }
         let unstaged = Runtime::resolve(&MapEnv::new(), Some(Path::new("/nonexistent/bin")), None, false);
         assert_eq!(
             unstaged.live_probe(&MapEnv::new()).unavailable_reason().as_deref(),
