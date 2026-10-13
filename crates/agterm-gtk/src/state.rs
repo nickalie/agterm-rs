@@ -217,8 +217,9 @@ impl AppState {
                     crate::status_sound::play(name);
                 }
                 crate::notifications::deliver(windows.app(), &banners);
+                // the same throttled bell as the status sounds: a banner posted with a status sound rings once
                 if let Some(sound) = crate::notifications::banner_sound(&banners, self.core.settings()) {
-                    play_status_sound(sound);
+                    crate::status_sound::play(sound);
                 }
             }
             // no frontend to ask

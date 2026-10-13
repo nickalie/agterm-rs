@@ -10,7 +10,8 @@
 //! and session; a session no open window holds gets none, so a closed window's banners stay clickable and reopen it.
 //! The badge clears on its own path (a selection, `session.seen`) and leaves the banners. `GNotification` carries no
 //! sound, so a batch that posts banners sounds the configured notification sound as the display's alert (Linux has
-//! none of upstream's named sounds); the badge and the event never depend on it.
+//! none of upstream's named sounds), through the status sounds' throttled bell ([`crate::status_sound`]); the badge and
+//! the event never depend on it.
 
 use agterm_core::{NotificationEffect, parse_notification_identity, should_deliver};
 use gtk::gio;
