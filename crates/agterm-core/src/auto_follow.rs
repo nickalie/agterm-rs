@@ -318,6 +318,19 @@ impl Core {
         };
         reveal_pane(store, session, indicator.status_pane);
     }
+
+    /// [`Core::reveal_blocked_pane`] in window `window`'s copy of `session`, for a caller that already resolved the
+    /// window: a legacy snapshot may hold one session id in two open windows.
+    pub(crate) fn reveal_blocked_pane_in(&mut self, window: Uuid, session: Uuid, indicator: Option<&AgentIndicator>) {
+        self.request_pane_focus(session);
+        let Some(indicator) = indicator.filter(|indicator| indicator.status.needs_attention()) else {
+            return;
+        };
+        let Some(store) = self.library_mut().store_mut(window) else {
+            return;
+        };
+        reveal_pane(store, session, indicator.status_pane);
+    }
 }
 
 fn reveal_pane(store: &mut AppStore, id: Uuid, pane: Option<StatusPane>) {

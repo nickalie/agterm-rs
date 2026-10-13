@@ -1363,14 +1363,31 @@ wlr-layer-shell surface.
 
 **Files:**
 - Create: `crates/agterm-gtk/src/{context_menus,popovers,watermark}.rs`
+- ➕ as built: `crates/agterm-gtk/src/{titlebar,popovers,status_sound}.rs`, `crates/agterm-core/src/{titlebar/,menu_lists,
+  sound_throttle}.rs`; the sidebar context menus already live in `sidebar/menu.rs` (Task 22) and the watermark in
+  `background.rs` + `agterm_core::watermark` (Task 17), so no `context_menus.rs`/`watermark.rs`
 
-- [ ] context menus (`Views/WorkspaceSidebar+ContextMenu.swift`), the app menu (`agtermApp+Menus.swift`, as a GTK
+- [x] context menus (`Views/WorkspaceSidebar+ContextMenu.swift`), the app menu (`agtermApp+Menus.swift`, as a GTK
       menu), titlebar (`WindowContentView+Titlebar.swift`, `TitlebarComposition.swift`), attention and recent
       sessions (`WindowContentView+RecentSessions.swift`, `WindowLibrary+Attention.swift`), watermark
       (`Ghostty/WatermarkRenderer.swift`, `WatermarkConfig.swift`), status sounds (`StatusSoundPlayer.swift`)
-- [ ] write tests: menu model per selection state
-- [ ] write tests: watermark configuration parsing
-- [ ] gate: full run; ratchet
+      (sidebar row menus were complete from Task 22; the app menu gained Open Window (checked per open window), Open
+      Recent (sessions/workspaces, Clear Menu), Reveal in Files and a Help menu with Developer Documentation and
+      About (`agterm_core::menu_lists`); the header bar is the upstream title bar in libadwaita form: sidebar toggle,
+      the composed two-line title (`agterm_core::titlebar::compose`, toolbar modes normal/compact/hidden, the
+      Interface toggles), the trailing recent/attention · scratch/split · dashboard/quick/custom-commands cluster with
+      upstream's divider rule, chord hover texts, traced split/scratch glyphs, the bell tinted in the blocked color,
+      stripped to title + exit under a zoom or the dashboard; the recent-sessions, cross-window attention and
+      custom-commands popovers hold auto-follow while open. The watermark was complete from Task 17. Status sounds
+      keep the desktop bell (no named system sounds on Linux, as the fork) behind upstream's 200 ms `SoundThrottle`)
+- [x] write tests: menu model per selection state (`titlebar/tests.rs`: composition matrix, divider rule, button
+      states per selection/split/status/cover, popover rows and actions; `menu_lists` tests; GTK bar and menu tests;
+      the sidebar row menus' tests are Task 22's)
+- [x] write tests: watermark configuration parsing (snapshot round-trip and lossy decode added to Task 17's
+      `WatermarkConfigTests` port)
+- [x] gate: full run; ratchet (613–614 passed, 28–29 failed, 12 skipped; ratchet holds at 614 — a UI task, no new
+      green ids; one run's `test_hud_refusals[spinner-session.hud.update]` mount timeout under parallel-lane load
+      passed on the re-run)
 
 ### Task 36: Agent integrations and the checklist walk
 

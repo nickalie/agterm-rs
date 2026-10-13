@@ -605,12 +605,6 @@ impl AppState {
         }
     }
 
-    /// The header bar's dashboard button: the window's most recently used sessions, auto-sized, or closes the grid.
-    pub fn toggle_dashboard(&mut self, window: Uuid) {
-        self.core.toggle_dashboard(window);
-        self.settle();
-    }
-
     /// The header bar's exit button.
     pub fn exit_dashboard(&mut self, window: Uuid) {
         self.core.dashboard_close(window);

@@ -1,6 +1,7 @@
 //! Ported from upstream's `WatermarkConfigTests` and `WatermarkStorageTests`.
 
 use super::*;
+use crate::persist::SessionSnapshot;
 
 fn watermark(kind: WatermarkKind) -> BackgroundWatermark {
     BackgroundWatermark {
@@ -216,5 +217,47 @@ fn removal_takes_one_file_or_one_sessions_files_only() -> std::io::Result<()> {
     assert!(doomed.iter().all(|path| !path.exists()));
     assert!(kept.iter().all(|path| path.exists()));
     remove_all_rendered_text(&state.join("absent"), id);
+    Ok(())
+}
+
+#[test]
+fn a_watermark_survives_a_snapshot_round_trip() -> serde_json::Result<()> {
+    let watermark = BackgroundWatermark {
+        text: Some("STAGING".to_owned()),
+        color_hex: Some("#ffaa00".to_owned()),
+        opacity: Some(0.18),
+        fit: Some(WatermarkFit::Contain),
+        position: Some(WatermarkPosition::Center),
+        ..watermark(WatermarkKind::Text)
+    };
+    let snapshot = SessionSnapshot {
+        id: Uuid::new_v4(),
+        custom_name: Some("s".to_owned()),
+        cwd: "/tmp".to_owned(),
+        background_watermark: Some(watermark.clone()),
+        ..SessionSnapshot::default()
+    };
+    let decoded: SessionSnapshot = serde_json::from_str(&serde_json::to_string(&snapshot)?)?;
+    assert_eq!(decoded, snapshot);
+    assert_eq!(decoded.background_watermark, Some(watermark));
+    Ok(())
+}
+
+#[test]
+fn a_legacy_or_invalid_watermark_decodes_to_none_without_losing_the_session() -> serde_json::Result<()> {
+    let id = Uuid::new_v4();
+    let legacy: SessionSnapshot = serde_json::from_str(&format!(r#"{{"id":"{id}","cwd":"/tmp"}}"#))?;
+    assert_eq!(legacy.background_watermark, None);
+    for bad in [
+        r#"{"kind":"text","text":"X","fit":"bogus"}"#,
+        r#"{"kind":"text","text":"X","position":"middle"}"#,
+        r#"{"kind":"hologram","text":"X"}"#,
+    ] {
+        let raw = format!(r#"{{"id":"{id}","cwd":"/tmp","customName":"keep","backgroundWatermark":{bad}}}"#);
+        let decoded: SessionSnapshot = serde_json::from_str(&raw)?;
+        assert_eq!(decoded.id, id, "{bad}");
+        assert_eq!(decoded.custom_name.as_deref(), Some("keep"), "{bad}");
+        assert_eq!(decoded.background_watermark, None, "{bad}");
+    }
     Ok(())
 }
