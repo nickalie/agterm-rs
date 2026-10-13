@@ -172,9 +172,11 @@ impl Core {
         self.zmx.leads.begin(identity, attachment, reattaching);
     }
 
-    /// The frontend installed `replacement`'s terminal.
+    /// The frontend installed `replacement`'s terminal, claiming the replaced one's exit itself: a restart's claim on
+    /// the pane token ends here, so the new terminal's own exit closes the pane (upstream claims per surface).
     pub fn pane_replaced(&mut self, replacement: &PaneReplacement) {
         self.zmx.superseded.remove(&replacement.token);
+        self.zmx.claimed_exits.remove(&replacement.token);
     }
 
     /// The frontend could not install `replacement`'s terminal (no page holds the pane): the pane keeps the lead state

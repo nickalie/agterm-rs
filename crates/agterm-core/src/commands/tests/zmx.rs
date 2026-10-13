@@ -720,6 +720,31 @@ fn a_replacement_whose_attach_exits_closes_the_pane_and_ends_the_restart() {
 }
 
 #[test]
+fn an_installed_replacement_s_exit_closes_the_pane_before_the_first_probe() {
+    let mut live = live();
+    let token = uuid_string(live.left);
+    let session = live.session;
+    let dispatched = begin_restart(&mut live);
+    let response = drive(live.core(), dispatched, |core, step| {
+        if step == 0 {
+            // the settle after the rebuild installs the replacement; its attach exits before the restart probes again
+            let replacements = core.take_pane_replacements();
+            assert_eq!(replacements.len(), 1);
+            core.pane_replaced(&replacements[0]);
+            assert!(
+                core.pane_exited(session, &token),
+                "the new terminal's exit was swallowed"
+            );
+        }
+    });
+    assert_eq!(
+        response,
+        failure("the old shell ended (pid 100) and no new one was observed")
+    );
+    assert!(live.fixture.store().session(session).is_none());
+}
+
+#[test]
 fn a_dropped_restart_replacement_closes_the_ended_pane() {
     let mut live = live();
     let session = live.session;

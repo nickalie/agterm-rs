@@ -231,9 +231,9 @@ fn await_new_shell(
     replayed: Option<Vec<String>>,
     deadline: Instant,
 ) -> Dispatched {
-    // the claim covered the old terminal from the kill until the frontend installed the replacement, which it did in
-    // the settle right after the rebuild, claiming the old terminal's exit itself; the new terminal's own exit must
-    // close the pane (upstream claims per surface), so the claim ends at the first probe after the rebuild
+    // the claim covered the old terminal from the kill until the frontend installed the replacement
+    // (`Core::pane_replaced` ends it, the frontend claiming the old terminal's exit itself) or dropped it; this only
+    // makes sure no claim outlives the rebuild
     core.zmx.claimed_exits.remove(&job.token);
     let Some(new) = listed_shell(core, &job.daemon, Some(old)) else {
         // a replacement whose attach already exited closed the pane: no new shell will show up
