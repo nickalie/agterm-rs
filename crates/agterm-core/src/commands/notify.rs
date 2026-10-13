@@ -170,8 +170,11 @@ impl Core {
     /// A banner was clicked (upstream's `AppActions.reveal`): the session is revealed in the open window holding it,
     /// else window `window` is opened again when it was closed since. The owning window leaves its zoom (the selection
     /// would change behind it), the session is selected and its badge cleared, the pane that fired takes the keyboard
-    /// (the primary when the split is gone), and the window comes to the front. A closed window is reopened even when
-    /// the session turns out gone, as upstream's. Whether anything changed; commit afterwards.
+    /// (the primary when the session no longer has a split), and the window comes to the front. Whether the split
+    /// survives is the model's `split.exists` (upstream's `hasSplit`), not whether its terminal is mounted yet: a
+    /// reopened window's split, or a restored hidden one, has none until the frontend lays it out, and the focus
+    /// request takes it once it does. A closed window is reopened even when the session turns out gone, as upstream's.
+    /// Whether anything changed; commit afterwards.
     pub fn reveal_notification(&mut self, window: Uuid, session: Uuid, pane: PaneRole) -> bool {
         let holder = self.library().window_id_for_session(session);
         let mut reopened = false;
@@ -196,7 +199,7 @@ impl Core {
         let Some(found) = store.session(session) else {
             return reopened;
         };
-        let split = pane == PaneRole::Split && found.split_surface.is_present();
+        let split = pane == PaneRole::Split && found.split.exists;
         store.select_session(Some(session));
         store.clear_unseen(session);
         store.set_split_focus(session, split);

@@ -705,6 +705,43 @@ fn a_terminal_notification_names_its_pane_and_a_click_reveals_it() {
 }
 
 #[test]
+fn a_reveal_focuses_a_split_whose_terminal_is_not_mounted_yet() {
+    let mut fixture = Fixture::new(1);
+    let (first, second) = (fixture.sessions[0], fixture.sessions[1]);
+    let window = fixture.window;
+    let response = fixture.session(
+        SessionCmd::Split,
+        Some(&wire(first)),
+        args(|a| a.mode = Some("on".into())),
+    );
+    assert!(response.ok);
+    let store = fixture.store_mut().unwrap();
+    // a reopened window, or a restored hidden split: the split exists before the frontend mounts its terminal
+    store.session_mut(first).unwrap().split.shown = false;
+    store.set_split_focus(first, false);
+    store.select_session(Some(second));
+    assert!(!store.session(first).unwrap().split_surface.is_present());
+    assert!(
+        fixture
+            .core
+            .reveal_notification(window, first, crate::commands::notify::PaneRole::Split)
+    );
+    let session = fixture.store().session(first).unwrap();
+    assert!(
+        session.split.focused,
+        "the split still exists, so it takes the keyboard"
+    );
+    assert!(fixture.core.pane_focus_requested(first));
+    // without a split at all the primary takes it
+    assert!(
+        fixture
+            .core
+            .reveal_notification(window, second, crate::commands::notify::PaneRole::Split)
+    );
+    assert!(!fixture.store().session(second).unwrap().split.focused);
+}
+
+#[test]
 fn a_reveal_leaves_the_owning_windows_zoom() {
     let mut fixture = Fixture::new(1);
     let (first, second) = (fixture.sessions[0], fixture.sessions[1]);
