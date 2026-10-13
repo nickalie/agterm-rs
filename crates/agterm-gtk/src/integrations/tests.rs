@@ -534,6 +534,11 @@ fn the_bundled_resources_carry_their_ownership_markers() {
     for version in Version::ALL {
         assert!(read(&version.relative_path()).contains(version.marker()));
     }
+    // NixOS, Guix and a non-merged /usr have no /usr/bin tools: only the shebang's env and macOS's plutil may be named
+    for line in read("agterm-codex-status.sh").lines() {
+        let line = line.replace("/usr/bin/env", "").replace("/usr/bin/plutil", "");
+        assert!(!line.contains("/usr/bin/"), "{line}");
+    }
     let skill_md = fs::read_to_string(resources().join("skills/agterm/SKILL.md")).unwrap();
     assert!(skill_md.contains(skill::MARKER));
     for script in [

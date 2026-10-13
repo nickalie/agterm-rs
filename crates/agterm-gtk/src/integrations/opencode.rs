@@ -181,8 +181,9 @@ pub fn detect(environment: &HashMap<String, String>, fallback_home: &str) -> Opt
         .cloned()
         .unwrap_or_else(|| "/bin/sh".to_owned());
     let marker = format!("agterm-opencode-version-{}", uuid::Uuid::new_v4());
+    // `printf` is the POSIX shell's builtin, not upstream's `/usr/bin/printf`, which NixOS and Guix do not have
     let command = format!(
-        "/usr/bin/printf '\\n{marker}\\n%s\\000%s\\000%s\\000%s\\000%s\\000' \"$HOME\" \"$PWD\" \
+        "printf '\\n{marker}\\n%s\\000%s\\000%s\\000%s\\000%s\\000' \"$HOME\" \"$PWD\" \
          \"${{OPENCODE_CONFIG_DIR+x}}\" \"${{OPENCODE_CONFIG_DIR-}}\" \"${{XDG_CONFIG_HOME-}}\"; \
          exec /usr/bin/env opencode --version"
     );

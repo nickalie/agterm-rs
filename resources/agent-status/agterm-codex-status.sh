@@ -28,7 +28,8 @@ report_status() {
 
 assistant_message_contains_question() {
   local message prose question quoted_mark
-  # Linux: no plutil, so python3 or jq reads the payload's field (agterm-rs's only change to this script)
+  # agterm-rs's Linux changes to this script: with no plutil, python3 or jq reads the payload's field, and awk, sed,
+  # tr and tail are found on PATH (NixOS, Guix and a non-merged /usr have no /usr/bin copies)
   if [ -x /usr/bin/plutil ]; then
     message=$(/usr/bin/plutil -extract last_assistant_message raw -o - - 2>/dev/null) || return 1
   elif command -v python3 >/dev/null 2>&1; then
@@ -50,8 +51,8 @@ sys.stdout.write(value)
   quoted_mark=$'s/(^|[[:space:]])([“‘"\'([*_]+)\\?/\\1\\2/g'
   # a span becomes a word rather than nothing so "run `make test`?" keeps its ? attached
   prose=$(printf '%s\n' "$message" \
-    | /usr/bin/awk '/^[[:space:]]*```/ { fenced = !fenced; next } !fenced' \
-    | /usr/bin/sed -E -e 's/`[^`]*`/code/g' -e "$quoted_mark")
+    | awk '/^[[:space:]]*```/ { fenced = !fenced; next } !fenced' \
+    | sed -E -e 's/`[^`]*`/code/g' -e "$quoted_mark")
   # bash 3.2 cannot parse this bracket set inline in [[ ]]
   question=$'[^[:space:]]\\?[]"\')*_!’”]*([[:space:]]|$)'
   [[ "$prose" =~ $question ]]
@@ -71,7 +72,7 @@ watch_file_path() {
   fi
   local key pane_key
   pane_key=${AGTERM_PANE_ID:-${AGTERM_PANE:-left}}
-  key=$(printf '%s-%s' "$AGTERM_SESSION_ID" "$pane_key" | /usr/bin/tr -c 'A-Za-z0-9._-' '_')
+  key=$(printf '%s-%s' "$AGTERM_SESSION_ID" "$pane_key" | tr -c 'A-Za-z0-9._-' '_')
   printf '%s/agterm-codex-watch-%s-%s' "${TMPDIR:-/tmp}" "${UID:-0}" "$key"
 }
 
@@ -100,7 +101,7 @@ watch_for_blocker() {
     current_token=$(cat "$token_file" 2>/dev/null) || break
     [ "$current_token" = "$token" ] || break
     screen=$(read_visible_screen) || break
-    footer=$(printf '%s\n' "$screen" | /usr/bin/tail -n 12 | /usr/bin/tr '[:upper:]' '[:lower:]')
+    footer=$(printf '%s\n' "$screen" | tail -n 12 | tr '[:upper:]' '[:lower:]')
 
     case "$footer" in
       *"press enter to confirm"*|*"enter to submit answer"*|*"enter to submit all"*|*"allow command?"*)
