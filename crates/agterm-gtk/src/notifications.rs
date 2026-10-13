@@ -9,7 +9,8 @@
 //! a successful swap, as upstream's `clearDelivered` call sites. A clear withdraws every pane's identity of that window
 //! and session; a session no open window holds gets none, so a closed window's banners stay clickable and reopen it.
 //! The badge clears on its own path (a selection, `session.seen`) and leaves the banners. `GNotification` carries no
-//! sound, so the configured notification sound is not played; the badge and the event never depend on it.
+//! sound, so a batch that posts banners sounds the configured notification sound as the display's alert (Linux has
+//! none of upstream's named sounds); the badge and the event never depend on it.
 
 use agterm_core::{NotificationEffect, parse_notification_identity, should_deliver};
 use gtk::gio;
@@ -62,6 +63,22 @@ pub fn deliver(sink: &impl BannerSink, effects: &[NotificationEffect]) {
             }
         }
     }
+}
+
+/// The configured notification sound when `effects` post a banner (upstream attaches it to every banner it posts):
+/// one alert per batch, however many banners it carries.
+#[must_use]
+pub fn banner_sound<'a>(
+    effects: &[NotificationEffect],
+    settings: &'a agterm_core::persist::AppSettings,
+) -> Option<&'a str> {
+    let posts = effects
+        .iter()
+        .any(|effect| matches!(effect, NotificationEffect::Post(_) | NotificationEffect::App { .. }));
+    settings
+        .notification_sound_name
+        .as_deref()
+        .filter(|name| posts && !name.is_empty())
 }
 
 /// Adds the banners' click action to `app`: it reveals the pane the clicked banner names.
@@ -124,6 +141,24 @@ mod tests {
     fn the_reveal_action_takes_the_identity_as_a_string() {
         assert_eq!(glib_string_type().as_str(), "s");
         assert_eq!(format!("app.{REVEAL_ACTION}"), "app.notification-reveal");
+    }
+
+    #[test]
+    fn the_notification_sound_follows_a_posted_banner_only() {
+        let banner = NotificationEffect::App {
+            identity: "w:s:main".to_owned(),
+            title: "t".to_owned(),
+            body: "b".to_owned(),
+        };
+        let mut settings = agterm_core::persist::AppSettings::default();
+        assert_eq!(
+            banner_sound(std::slice::from_ref(&banner), &settings),
+            None,
+            "no sound picked"
+        );
+        settings.notification_sound_name = Some("Glass".to_owned());
+        assert_eq!(banner_sound(std::slice::from_ref(&banner), &settings), Some("Glass"));
+        assert_eq!(banner_sound(&[], &settings), None, "no banner, no sound");
     }
 
     /// Records what reaches the notification server, in order.

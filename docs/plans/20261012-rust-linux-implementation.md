@@ -1393,14 +1393,29 @@ wlr-layer-shell surface.
 
 **Files:**
 - Create: `crates/agterm-gtk/src/integrations/*.rs`
+- ➕ Create: `resources/{agent-status,skills/agterm}/**`, `resources/LICENSE.upstream` (upstream v0.36.0's payloads);
+  Modify: `scripts/stage.sh` (`share/agterm/`), `Cargo.toml` (`toml`), `crates/agterm-gtk/src/{app_menu,welcome,
+  notifications,state,surface,main}.rs`, `docs/linux-ui-checklist.md`
 
-- [ ] agent integrations as upstream's (`AgentHooksInstall.swift`, `SkillInstall.swift`, `CLIInstall.swift`,
+- [x] agent integrations as upstream's (`AgentHooksInstall.swift`, `SkillInstall.swift`, `CLIInstall.swift`,
       `AgentHooksInstaller.swift`, `SkillInstaller.swift`, `CLIInstaller.swift`, `control-api.md` > Installation),
-      with Linux install paths (the fork's `LinuxIntegrations` as the Linux hint)
-- [ ] walk `docs/linux-ui-checklist.md` against upstream's behavior; fix or record every gap with ⚠️
-- [ ] write tests: integration plans and status detection on a temp home
-- [ ] write tests: managed-marker idempotence
-- [ ] gate: full run; ratchet
+      with Linux install paths (the fork's `LinuxIntegrations` as the Linux hint) (`integrations/`: each installer
+      plans from the home (agents present, what is current, what is the user's) then applies; upstream's transforms,
+      outcomes and alert texts; the OpenCode login-shell probe and version chooser; Help ▸ Developer Documentation…
+      and the three installers, and the welcome's Install runs the checked ones. Linux: `agtermctl` linked into
+      `~/.local/bin` without a prompt, a real file there left alone; the payloads vendored under `resources/` and
+      staged to `share/agterm/`, the Codex adapter reading its payload with `python3`/`jq` where macOS has `plutil`;
+      a reinstall keeps files the package does not ship (the fork's `agterm-claude-restore.sh`); an unreadable rc file
+      is left untouched)
+- [x] walk `docs/linux-ui-checklist.md` against upstream's behavior; fix or record every gap with ⚠️ (a Walk column
+      per row; fixed: View ▸ Unfocus Workspace, the notification sound on a banner, the terminal's accessible role,
+      the Help menu; recorded open: File ▸ Open Window / Open Recent / Reveal, window sizes not restored, unnamed
+      ids on the ask dialog, picker, dashboard, zoom and HTML overlay, the Delete default button, the Dock; rows of
+      Tasks 26.1, 28, 34 and 35 marked pending; the hands-on walk on a desktop is not automatable here)
+- [x] write tests: integration plans and status detection on a temp home
+- [x] write tests: managed-marker idempotence
+- [x] gate: full run; ratchet (614 passed, 28 failed, 12 skipped; ratchet holds at 614, no new ids: the task's UI has
+      no suite test on Linux, the 28 red are zmx and CLI-only tests of Tasks 27–32)
 
 ### Task 37: Verify acceptance criteria
 

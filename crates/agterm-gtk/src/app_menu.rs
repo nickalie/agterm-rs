@@ -4,7 +4,7 @@
 //!
 //! File also carries upstream's live parts ([`agterm_core::menu_lists`]): Open Window, listing the library with the open
 //! windows checked; Open Recent, the closed sessions and workspaces; and Reveal in Files. A Help menu holds the
-//! developer documentation and the About window, and the app's own Preferences and Quit close the menu.
+//! developer documentation, the agent integrations' installers and the About window, and the app's own Preferences and Quit close the menu.
 //!
 //! The accelerators are display only: the keymap monitor (`keymap_dispatch`) dispatches the chords before any widget
 //! sees them, from the same resolved keymap. `keymap.list` reads them back from this menu model (`menu_items`).
@@ -137,7 +137,7 @@ impl Item {
     }
 
     /// The item's title as upstream's menu spells it in `context`.
-    fn title(self, context: PaletteContext, sidebar_shown: bool, scratch_shown: bool) -> String {
+    fn title(self, context: PaletteContext, toggles: Toggles) -> String {
         let title = match self {
             Self::Builtin(BuiltinAction::NewWindow) => "New Window",
             Self::Builtin(BuiltinAction::RenameWindow) => "Rename Window…",
@@ -151,19 +151,20 @@ impl Item {
             Self::Row(PaletteCommand::EditGhosttyConfig) => "Edit ghostty.conf…",
             Self::Row(PaletteCommand::ShowAttention) => "Go to Attention…",
             Self::Row(PaletteCommand::ToggleSidebar) => {
-                if sidebar_shown {
+                if toggles.sidebar_shown {
                     "Hide Sidebar"
                 } else {
                     "Show Sidebar"
                 }
             }
             Self::Row(PaletteCommand::ToggleScratch) => {
-                if scratch_shown {
+                if toggles.scratch_shown {
                     "Hide Scratch"
                 } else {
                     "Show Scratch"
                 }
             }
+            Self::Row(PaletteCommand::FocusWorkspace) if toggles.sole_focus => "Unfocus Workspace",
             Self::Row(command) => command.title(&context),
         };
         title.to_owned()
@@ -179,6 +180,15 @@ impl Item {
     }
 }
 
+/// The frontmost window's state the toggling items name: Hide/Show Sidebar and Scratch, and Focus Workspace reading
+/// Unfocus Workspace while the current workspace is the sole focus (upstream's `isCurrentWorkspaceSoleFocus`).
+#[derive(Debug, Clone, Copy, Default)]
+struct Toggles {
+    sidebar_shown: bool,
+    scratch_shown: bool,
+    sole_focus: bool,
+}
+
 /// An app item: its action name, its title and what it runs.
 type AppItem = (&'static str, &'static str, fn(&mut AppState));
 
@@ -189,14 +199,30 @@ const APP_ITEMS: [AppItem; 2] = [
     ("quit", "Quit", |state| crate::welcome::request_quit(state)),
 ];
 
+/// The Help menu after File, View and Navigate (upstream's `CommandGroup(replacing: .help)`), sections separated: the
+/// developer documentation, then the installers. No keymap action runs them, so they carry no accelerator.
+const HELP_ITEMS: [&[AppItem]; 2] = [
+    &[("developer-docs", "Developer Documentation…", |state| {
+        crate::integrations::ui::open_developer_docs(state.frontmost_gtk_window().as_ref());
+    })],
+    &[
+        ("install-cli", "Install Command Line Tool…", |state| {
+            crate::integrations::ui::run_cli(state.frontmost_gtk_window());
+        }),
+        ("install-hooks", "Install Agent Status Hooks…", |state| {
+            crate::integrations::ui::run_hooks(state.frontmost_gtk_window());
+        }),
+        ("install-skill", "Install Agent Skill…", |state| {
+            crate::integrations::ui::run_skill(state.frontmost_gtk_window());
+        }),
+    ],
+];
+
 /// The items a keymap shows accelerators on: upstream's menu carries none for Reopen Closed Item, which its own
 /// monitor delivers so text undo keeps working.
 fn shows_accelerator(item: Item) -> bool {
     item != Item::Row(PaletteCommand::UndoClose)
 }
-
-/// The developer documentation Help opens (upstream's `Developer Documentation…`).
-const DOCS_URL: &str = "https://agterm.com/docs#agtermctl";
 
 /// The live parts of the menu, rebuilt when they change.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -234,7 +260,7 @@ impl AppMenu {
             });
             group.add_action(&action);
         }
-        for (name, _, run) in APP_ITEMS {
+        for (name, _, run) in APP_ITEMS.iter().chain(HELP_ITEMS.iter().copied().flatten()).copied() {
             let action = gio::SimpleAction::new(name, None);
             let posting = poster.clone();
             action.connect_activate(move |_, _| state::post(&posting, run));
@@ -267,10 +293,13 @@ impl AppMenu {
         let window = core.library().active_window_id();
         let context = window.map(|id| core.palette_context(id)).unwrap_or_default();
         let store = window.and_then(|id| core.library().store(id));
-        let sidebar_shown = store.is_none_or(|store| store.sidebar().visible);
-        let scratch_shown = store
-            .and_then(|store| store.active_session())
-            .is_some_and(|session| session.scratch_active);
+        let toggles = Toggles {
+            sidebar_shown: store.is_none_or(|store| store.sidebar().visible),
+            scratch_shown: store
+                .and_then(|store| store.active_session())
+                .is_some_and(|session| session.scratch_active),
+            sole_focus: store.is_some_and(agterm_core::model::AppStore::is_current_workspace_sole_focus),
+        };
         let can_remove_window = core.library().can_remove_window();
         let entries: Vec<(String, Option<String>)> = all_items()
             .map(|item| {
@@ -279,7 +308,7 @@ impl AppMenu {
                     .filter(|_| shows_accelerator(item))
                     .and_then(|action| core.keymap().equivalent(action))
                     .and_then(accelerator);
-                (item.title(context, sidebar_shown, scratch_shown), accel)
+                (item.title(context, toggles), accel)
             })
             .collect();
         for item in all_items() {
@@ -415,11 +444,21 @@ fn window_menu(windows: &[WindowEntry]) -> gio::Menu {
     menu
 }
 
-/// Help: the developer documentation and the About window, their actions added by [`add_list_actions`].
+/// Help: upstream's sections (the developer documentation, then the installers), then the About window in a section of
+/// its own, last (upstream keeps About in the app menu, which a GTK window menu has no counterpart of; its action is
+/// added by [`add_list_actions`]).
 fn help_menu() -> gio::Menu {
     let help = gio::Menu::new();
-    help.append(Some("Developer Documentation…"), Some("menu.menu-developer-docs"));
-    help.append(Some("About Agterm"), Some("menu.menu-about"));
+    for section in HELP_ITEMS {
+        let part = gio::Menu::new();
+        for (name, title, _) in section {
+            part.append(Some(title), Some(&format!("menu.{name}")));
+        }
+        help.append_section(None, &part);
+    }
+    let about = gio::Menu::new();
+    about.append(Some("About Agterm"), Some("menu.menu-about"));
+    help.append_section(None, &about);
     help
 }
 
@@ -449,7 +488,7 @@ fn recent_menu(recent: &RecentEntries) -> gio::Menu {
 }
 
 /// The live items' fixed actions: Open Recent's entries (by id), Clear Menu, Reveal in Files, the inert "No Recent
-/// Items", and Help's two.
+/// Items", and Help's About.
 fn add_list_actions(group: &gio::SimpleActionGroup, poster: &Poster) {
     let open = gio::SimpleAction::new("menu-open-recent", Some(gtk::glib::VariantTy::STRING));
     let posting = poster.clone();
@@ -479,9 +518,6 @@ fn add_list_actions(group: &gio::SimpleActionGroup, poster: &Poster) {
     let none = gio::SimpleAction::new("menu-no-recent", None);
     none.set_enabled(false);
     group.add_action(&none);
-    let docs = gio::SimpleAction::new("menu-developer-docs", None);
-    docs.connect_activate(|_, _| crate::ghostty_app::open_uri(DOCS_URL));
-    group.add_action(&docs);
     let about = gio::SimpleAction::new("menu-about", None);
     about.connect_activate(|_, _| show_about());
     group.add_action(&about);
@@ -686,6 +722,35 @@ mod tests {
     }
 
     #[test]
+    fn focus_workspace_reads_unfocus_while_the_current_workspace_is_the_sole_focus() {
+        let item = Item::Row(PaletteCommand::FocusWorkspace);
+        let context = PaletteContext::default();
+        assert_eq!(item.title(context, Toggles::default()), "Focus Workspace");
+        let sole = Toggles {
+            sole_focus: true,
+            ..Toggles::default()
+        };
+        assert_eq!(item.title(context, sole), "Unfocus Workspace");
+    }
+
+    #[test]
+    fn the_help_menu_offers_the_docs_and_the_three_installers() {
+        let titles: Vec<&str> = HELP_ITEMS
+            .iter()
+            .flat_map(|section| section.iter().map(|item| item.1))
+            .collect();
+        assert_eq!(
+            titles,
+            [
+                "Developer Documentation…",
+                "Install Command Line Tool…",
+                "Install Agent Status Hooks…",
+                "Install Agent Skill…"
+            ]
+        );
+    }
+
+    #[test]
     fn accelerators_use_gtk_names() {
         crate::gtk_test::on_gtk_thread(accelerator_names);
     }
@@ -755,6 +820,11 @@ mod tests {
         let position = |label: &str| all.iter().position(|item| item == label).unwrap();
         assert_eq!(position("Open Window"), position("New Window") + 1);
         assert_eq!(position("Reveal in Files"), position("Duplicate Session") + 1);
+        let docs = all.iter().filter(|label| *label == "Developer Documentation…").count();
+        assert_eq!(docs, 1, "one Developer Documentation item: {all:?}");
+        assert!(position("Help") < position("Developer Documentation…"));
+        assert!(position("Developer Documentation…") < position("Install Command Line Tool…"));
+        assert!(position("Install Agent Skill…") < position("About Agterm"));
         let window = menu
             .group()
             .lookup_action(&window_action_name(closed))

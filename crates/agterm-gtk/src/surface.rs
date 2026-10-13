@@ -256,7 +256,13 @@ impl TerminalSurface {
             .focus_on_click(true)
             .hexpand(true)
             .vexpand(true)
+            // upstream exposes the pane to assistive tools as an editable text area named Terminal
+            .accessible_role(gtk::AccessibleRole::TextBox)
             .build();
+        area.update_property(&[
+            gtk::accessible::Property::Label("Terminal"),
+            gtk::accessible::Property::MultiLine(true),
+        ]);
         let inner = Rc::new(Inner {
             key: next_key(),
             area: area.downgrade(),

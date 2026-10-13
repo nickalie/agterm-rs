@@ -217,6 +217,9 @@ impl AppState {
                     crate::status_sound::play(name);
                 }
                 crate::notifications::deliver(windows.app(), &banners);
+                if let Some(sound) = crate::notifications::banner_sound(&banners, self.core.settings()) {
+                    play_status_sound(sound);
+                }
             }
             // no frontend to ask
             None => drop(self.core.take_window_requests()),

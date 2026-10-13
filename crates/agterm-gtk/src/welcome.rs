@@ -22,9 +22,10 @@ pub fn present_once(state: &mut AppState) {
         return;
     };
     let (dialog, skill, hooks) = welcome_dialog();
+    let installer_parent = parent.clone();
     dialog.choose(Some(&parent), None::<&gio::Cancellable>, move |response| {
         if response == "install" {
-            install(skill.is_active(), hooks.is_active());
+            crate::integrations::ui::run_picked(Some(installer_parent), skill.is_active(), hooks.is_active());
         }
     });
 }
@@ -48,16 +49,6 @@ fn welcome_dialog() -> (adw::AlertDialog, gtk::CheckButton, gtk::CheckButton) {
     dialog.set_default_response(Some("install"));
     dialog.set_close_response("later");
     (dialog, skill, hooks)
-}
-
-/// Runs the picked installers. The agent integrations (the skill and the status hooks installers) arrive with their
-/// own task; until then the pick is only recorded in the log.
-fn install(skill: bool, hooks: bool) {
-    tracing::info!(
-        skill,
-        hooks,
-        "welcome: the agent integration installers are not built yet"
-    );
 }
 
 /// The user asked to quit (the app menu's Quit): confirmed while windows are open, naming what the quit closes, then

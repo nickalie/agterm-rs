@@ -2,13 +2,13 @@
 # Assemble the staging layout the conformance runner, scripts/run-dev.sh and the install check run from:
 #
 #   bin/{agterm,agtermctl,zmx}  lib/{libghostty.so,libgtk4-layer-shell.so.*}  share/ghostty/{themes,shell-integration}
-#   share/terminfo  share/agterm/zmx-BUILD (the staged zmx's build id, with bin/zmx)
+#   share/terminfo  share/agterm/zmx-BUILD (the staged zmx's build id, with bin/zmx)  share/agterm/{agent-status,skills/agterm}
 #
-# from cargo's target dir and the vendored prefixes, plus agterm's own themes from build/themes. Binaries are
-# staged when they exist (agterm and agtermctl appear with their crates, zmx once scripts/build-zmx.sh filled its
-# prefix); libghostty and its resources are required. gtk4-layer-shell is staged from wherever the built agterm
-# resolves it when that is a vendored prefix (scripts/build-layer-shell.sh); a system package stays the system's.
-# The binaries find lib/ through their $ORIGIN/../lib rpath.
+# from cargo's target dir and the vendored prefixes, plus agterm's own themes from build/themes and the agent
+# integrations' payloads from resources/. Binaries are staged when they exist (agterm and agtermctl appear with their
+# crates, zmx once scripts/build-zmx.sh filled its prefix); libghostty and its resources are required. gtk4-layer-shell
+# is staged from wherever the built agterm resolves it when that is a vendored prefix (scripts/build-layer-shell.sh); a
+# system package stays the system's. The binaries find lib/ through their $ORIGIN/../lib rpath.
 #
 # Usage: scripts/stage.sh DESTINATION [--profile release|debug]   (default: release)
 set -euo pipefail
@@ -67,4 +67,9 @@ verify_ghostty_resources "$DEST/share" >&2
 # after the check of Ghostty's own catalog: agterm's bundled theme(s), the seeded default `agterm` among them
 # (upstream's stage_custom_themes)
 install -m644 "$NATIVE_ROOT"/build/themes/* "$DEST/share/ghostty/themes/"
+# the agent integrations' payloads (upstream's agent-status package and agent skill, see resources/): the Help menu
+# installers copy them from share/agterm
+mkdir -p "$DEST/share/agterm/skills"
+cp -R "$NATIVE_ROOT/resources/agent-status" "$DEST/share/agterm/agent-status"
+cp -R "$NATIVE_ROOT/resources/skills/agterm" "$DEST/share/agterm/skills/agterm"
 echo "→ staged ${staged[*]:-no binaries} + libghostty ($PROFILE) into $DEST" >&2
