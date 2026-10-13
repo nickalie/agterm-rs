@@ -166,6 +166,14 @@ impl AppStore {
         }
     }
 
+    /// Puts a workspace back into the marked set when its removal is reversed (an undo or an Open Recent reopen).
+    /// Mark only: membership belongs to the closed workspace, but the filter's on/off state is current window state,
+    /// so a restore never switches it, and inserting alone cannot reach "enabled with an empty set". Callers mark
+    /// before they reselect, so a restored member is inside the set for the focus check, and save themselves.
+    pub(crate) fn mark_focus_member(&mut self, id: Uuid) {
+        self.focus.ids.insert(id);
+    }
+
     /// The workspaces the tree renders: the marked ones while the filter applies, else all. Should the invariant ever
     /// break and nothing be marked, the whole tree beats no rows.
     #[must_use]

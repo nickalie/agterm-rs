@@ -1,4 +1,5 @@
-//! `agterm`, the GTK4/libadwaita frontend: one window hosting one libghostty terminal for now, and the control socket.
+//! `agterm`, the GTK4/libadwaita frontend: a window of a session sidebar beside a deck of libghostty terminals, one
+//! per session, and the control socket.
 //!
 //! Startup order matters: the environment is settled while the process has one thread (GDK's GL switch before GTK
 //! starts, ghostty's resources dir), GTK reads its switch at display init, the switch is put back on activate, and
@@ -6,13 +7,17 @@
 
 mod app;
 mod clipboard;
+mod deck;
 mod ghostty_app;
 mod input;
 mod logging;
 mod main_loop;
 mod pane;
+mod sidebar;
 mod signals;
+mod state;
 mod surface;
+mod window;
 
 use std::cell::RefCell;
 use std::ffi::OsString;

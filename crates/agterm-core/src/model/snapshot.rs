@@ -139,6 +139,18 @@ fn restored_workspaces(snapshot: &Snapshot, launch_restore: bool) -> Vec<Workspa
     restored
 }
 
+/// Rebuilds one workspace with nothing armed (upstream's `workspace(from:)`, an Open Recent reopen).
+pub(crate) fn workspace_from_snapshot(snapshot: &WorkspaceSnapshot) -> Workspace {
+    let mut workspace = Workspace::with_id(snapshot.id, snapshot.name.clone());
+    workspace.sessions = snapshot
+        .sessions
+        .iter()
+        .map(|session| session_from_snapshot(session, false))
+        .collect();
+    workspace.is_expanded = !snapshot.collapsed.unwrap_or(false);
+    workspace
+}
+
 /// One workspace as persisted: its local sessions, and the collapsed flag only when collapsed, so an all-expanded
 /// tree writes what a legacy snapshot held.
 #[must_use]

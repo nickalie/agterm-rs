@@ -7,15 +7,18 @@
 //! Upstream's claim queue, which hands `SwiftUI`'s id-less `WindowGroup` windows their ids, has no counterpart: the GTK
 //! frontend builds each window for a known id.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
 
 use super::naming::{default_window_name, is_auto_window_name, sanitized, trimmed_or_none};
 use super::navigation::{WorkspaceNavigation, wrapped};
-use super::outbox::{ModelEvent, SaveRequest, next_emission};
+use super::outbox::{ModelEvent, RecentClosedChange, SaveRequest, next_emission};
+use super::pending_close::PendingCloseTimer;
+use super::recent_closed::RecentClosedList;
 use super::session::Session;
 use super::store::{AppStore, NewSession};
+use crate::persist::{RecentClosedItem, RecentClosedKind};
 
 /// One window's metadata (upstream's `WindowInfo`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,7 +43,7 @@ pub struct WindowEvent {
 }
 
 /// What the library's mutations since the last drain ask of the world.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct LibraryEffects {
     /// Events in emission order, each tagged with its window.
     pub events: Vec<WindowEvent>,
@@ -48,6 +51,12 @@ pub struct LibraryEffects {
     pub window_saves: Vec<(Uuid, SaveRequest)>,
     /// Whether the window index changed and must be written.
     pub index_save: bool,
+    /// Soft closes whose grace timer the caller arms (`AppStore::finalize_pending_close` when it fires).
+    pub pending_closes: Vec<PendingCloseTimer>,
+    /// The windows whose armed debounced write must be dropped unwritten, before `window_saves` apply.
+    pub cancelled_saves: Vec<Uuid>,
+    /// Open Recent changes for `recent-closed.json`, in the order they happened.
+    pub recent_closed: Vec<RecentClosedChange>,
 }
 
 /// The app-global owner of the window set.
@@ -66,6 +75,10 @@ pub struct WindowLibrary {
     /// each with its place in the app-wide emission order.
     pending_events: Vec<(u64, WindowEvent)>,
     index_dirty: bool,
+    /// Open Recent, newest first (upstream's `recentClosedItems`), shared with every open store.
+    recent_closed: RecentClosedList,
+    /// Open Recent changes the library itself made, and those of retired stores, with their emission places.
+    pending_recent_closed: Vec<(u64, RecentClosedChange)>,
 }
 
 impl WindowLibrary {
@@ -87,6 +100,12 @@ impl WindowLibrary {
     }
 
     // MARK: - Lookup
+
+    /// The home directory: where a new window's first session starts, and a session's default cwd.
+    #[must_use]
+    pub fn home(&self) -> &str {
+        &self.home
+    }
 
     /// The window metadata in window order.
     #[must_use]
@@ -253,6 +272,7 @@ impl WindowLibrary {
             .unwrap_or_else(|| self.default_window_name());
         let id = Uuid::new_v4();
         let mut store = AppStore::new();
+        store.recent_closed = self.recent_closed.share();
         let workspace = store.add_workspace("workspace 1");
         store.add_session(workspace, NewSession::at_cwd(self.home.clone()));
         self.windows.push(WindowInfo { id, name });
@@ -264,10 +284,11 @@ impl WindowLibrary {
 
     /// Opens a window with an already built store (a load from disk). A no-op for an id with no metadata or an open
     /// window.
-    pub fn open_window(&mut self, id: Uuid, store: AppStore) {
+    pub fn open_window(&mut self, id: Uuid, mut store: AppStore) {
         if self.info(id).is_none() || self.is_open(id) {
             return;
         }
+        store.recent_closed = self.recent_closed.share();
         self.stores.insert(id, store);
         self.index_dirty = true;
     }
@@ -337,10 +358,11 @@ impl WindowLibrary {
         self.index_dirty = true;
     }
 
-    /// Retires a store leaving the open set and keeps its events for the next drain.
+    /// Retires a store leaving the open set and keeps its events and Open Recent changes for the next drain.
     fn retire_store(&mut self, id: Uuid, mut store: AppStore) {
         store.retire();
-        let outbox = store.take_outbox();
+        let mut outbox = store.take_outbox();
+        self.pending_recent_closed.extend(outbox.take_stamped_recent_closed());
         self.pending_events.extend(
             outbox
                 .into_stamped_events()
@@ -385,15 +407,31 @@ impl WindowLibrary {
     /// back into the order they were emitted in; the saves come in window order.
     pub fn drain_effects(&mut self) -> LibraryEffects {
         let mut stamped = std::mem::take(&mut self.pending_events);
+        let mut recent = std::mem::take(&mut self.pending_recent_closed);
         let mut window_saves = Vec::new();
+        let mut cancelled_saves = Vec::new();
+        let mut pending_closes = Vec::new();
         for id in self.windows.iter().map(|info| info.id) {
             let Some(store) = self.stores.get_mut(&id) else {
                 continue;
             };
-            let outbox = store.take_outbox();
+            let mut outbox = store.take_outbox();
+            pending_closes.extend(
+                std::mem::take(&mut outbox.pending_closes)
+                    .into_iter()
+                    .map(|(record, grace)| PendingCloseTimer {
+                        window: id,
+                        record,
+                        grace,
+                    }),
+            );
+            if outbox.cancel_debounced_save {
+                cancelled_saves.push(id);
+            }
             if outbox.save != SaveRequest::None {
                 window_saves.push((id, outbox.save));
             }
+            recent.extend(outbox.take_stamped_recent_closed());
             stamped.extend(
                 outbox
                     .into_stamped_events()
@@ -401,10 +439,136 @@ impl WindowLibrary {
             );
         }
         stamped.sort_by_key(|(emission, _)| *emission);
+        recent.sort_by_key(|(emission, _)| *emission);
         LibraryEffects {
             events: stamped.into_iter().map(|(_, event)| event).collect(),
             window_saves,
             index_save: std::mem::take(&mut self.index_dirty),
+            pending_closes,
+            cancelled_saves,
+            recent_closed: recent.into_iter().map(|(_, change)| change).collect(),
         }
+    }
+
+    // MARK: - Pending closes and Open Recent (upstream's `WindowLibrary+RecentClosed.swift`)
+
+    /// Makes every open window's pending closes final (before a teardown).
+    pub fn finalize_all_pending_closes(&mut self) {
+        for store in self.stores.values_mut() {
+            store.finalize_all_pending_closes();
+        }
+    }
+
+    /// The open window holding `session`, in its tree or in a pending close, in window order.
+    #[must_use]
+    pub fn window_holding_session(&self, session: Uuid) -> Option<Uuid> {
+        self.open_ids().into_iter().find(|id| {
+            self.stores
+                .get(id)
+                .is_some_and(|store| store.session(session).is_some() || store.pending_close_session(session).is_some())
+        })
+    }
+
+    /// The Open Recent entries, newest first.
+    #[must_use]
+    pub fn recent_closed_items(&self) -> Vec<RecentClosedItem> {
+        self.recent_closed.items()
+    }
+
+    /// Replaces the Open Recent entries with what was read from disk; records no change.
+    pub fn set_recent_closed_items(&mut self, items: Vec<RecentClosedItem>) {
+        self.recent_closed.replace(items);
+    }
+
+    /// Empties Open Recent.
+    pub fn clear_recent_closed_items(&mut self) {
+        self.recent_closed.clear();
+        self.push_recent_closed_change(RecentClosedChange::Clear);
+    }
+
+    fn push_recent_closed_change(&mut self, change: RecentClosedChange) {
+        self.pending_recent_closed.push((next_emission(), change));
+    }
+
+    /// Reopens the entry `item`; whether anything was restored. See
+    /// [`WindowLibrary::reopen_recent_closed_reporting_window`].
+    pub fn reopen_recent_closed(&mut self, item: Uuid, into: Option<Uuid>) -> bool {
+        self.reopen_recent_closed_reporting_window(item, into).is_some()
+    }
+
+    /// Reopens the newest entry; whether anything was restored.
+    pub fn reopen_latest_recent_closed(&mut self, into: Option<Uuid>) -> bool {
+        self.reopen_latest_recent_closed_reporting_window(into).is_some()
+    }
+
+    /// [`WindowLibrary::reopen_recent_closed_reporting_window`] over the newest entry.
+    pub fn reopen_latest_recent_closed_reporting_window(&mut self, into: Option<Uuid>) -> Option<Uuid> {
+        let item = self.recent_closed.first()?;
+        self.reopen_recent_closed_reporting_window(item.id, into)
+    }
+
+    /// Reopens the entry `item` and answers the window it went to, for the caller to reveal; `None` when nothing was
+    /// restored. That window is the one holding the entry's session, else the one holding its workspace, else `into`
+    /// (an open window), else the active one: a second object under one id would make every id-keyed lookup answer
+    /// with whichever window sorts first. The entry survives an incomplete restore, so a member left in no window
+    /// can still be reopened.
+    pub fn reopen_recent_closed_reporting_window(&mut self, item: Uuid, into: Option<Uuid>) -> Option<Uuid> {
+        let item = self.recent_closed.item(item)?;
+        let window = self.restore_destination(&item, into)?;
+        let occupied = self.session_ids_held_outside(window);
+        let outcome = self
+            .stores
+            .get_mut(&window)?
+            .restore_recent_closed_with(&item, &occupied);
+        if !outcome.restored {
+            return None;
+        }
+        if outcome.complete {
+            self.recent_closed.remove(item.id);
+            self.push_recent_closed_change(RecentClosedChange::Remove(item.id));
+        }
+        Some(window)
+    }
+
+    /// Which window restores `item`: the one holding the session itself, then the one holding its workspace, then
+    /// the requested one. Session first, since an old snapshot can leave one session in two windows, where the stale
+    /// workspace would rebuild the copy just closed.
+    fn restore_destination(&self, item: &RecentClosedItem, requested: Option<Uuid>) -> Option<Uuid> {
+        if item.kind == RecentClosedKind::Session
+            && let Some(owner) = item
+                .session
+                .as_ref()
+                .and_then(|recent| self.window_holding_session(recent.snapshot.id))
+        {
+            return Some(owner);
+        }
+        self.window_holding_workspace(item)
+            .or_else(|| requested.filter(|id| self.is_open(*id)))
+            .or_else(|| self.active_window_id())
+    }
+
+    /// The open window holding `item`'s workspace (a workspace entry's own, a session entry's parent), in its tree or
+    /// in a pending close.
+    fn window_holding_workspace(&self, item: &RecentClosedItem) -> Option<Uuid> {
+        let workspace = match item.kind {
+            RecentClosedKind::Session => item.session.as_ref().map(|recent| recent.workspace_id),
+            RecentClosedKind::Workspace => item.workspace.as_ref().map(|recent| recent.snapshot.id),
+        }?;
+        self.open_ids().into_iter().find(|id| {
+            self.stores
+                .get(id)
+                .is_some_and(|store| store.workspace(workspace).is_some() || store.pending_holds_workspace(workspace))
+        })
+    }
+
+    /// Every session id an open window other than `window` holds, in its tree or in a pending close: the restoring
+    /// window must rebuild none of them.
+    fn session_ids_held_outside(&self, window: Uuid) -> HashSet<Uuid> {
+        let mut held = HashSet::new();
+        for (_, store) in self.stores.iter().filter(|(id, _)| **id != window) {
+            held.extend(store.sessions().map(Session::id));
+            held.extend(store.pending_held_session_ids());
+        }
+        held
     }
 }

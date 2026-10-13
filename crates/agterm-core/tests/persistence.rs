@@ -1,11 +1,12 @@
 //! The state files on disk: fixtures in upstream's format and in the format the installed Linux fork writes, the
-//! launch bootstrap's recovery matrix, and the saves the model asks for (ported from upstream's
-//! `WindowLibraryTests`, `WindowLibraryIndexTests` and `SettingsStoreTests`).
+//! launch bootstrap's recovery matrix, the saves the model asks for, and Open Recent's `recent-closed.json` (ported
+//! from upstream's `WindowLibraryTests`, `WindowLibraryIndexTests`, `SettingsStoreTests` and `RecentClosedTests`).
 //!
 //! Fixtures (`tests/fixtures/`) are hand-written from upstream's `Snapshot.swift`, `WindowLibrary.swift`,
 //! `AppSettings.swift` and Foundation's `JSONEncoder` output rules (`[.prettyPrinted, .sortedKeys]`):
 //! - `upstream/`: a state dir as upstream writes it: an index with an open and a closed window, a window with every
-//!   snapshot field the model writes, a closed window carrying a captured command and a font size, and settings;
+//!   snapshot field the model writes, a closed window carrying a captured command and a font size, settings, and an
+//!   Open Recent list with a closed workspace (collapsed, a focus member, its selection) and a closed split session;
 //! - `fork/`: files the Linux fork writes. It keeps upstream's `agtermCore` (its `Snapshot.swift`,
 //!   `PersistenceStore.swift`, `SettingsStore.swift` and the index types are identical), so the format is the same;
 //!   the fixture carries what older fork builds left behind: the legacy single focus key, sessions without pane
@@ -19,12 +20,13 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Instant;
 
-use agterm_core::model::{NewSession, WindowLibrary};
+use agterm_core::model::{NewSession, PENDING_CLOSE_GRACE, WindowLibrary};
 use agterm_core::persist::library::{Commit, LibraryPersistence};
+use agterm_core::persist::recent_closed::reference_date;
 use agterm_core::persist::settings::RestoreMode;
 use agterm_core::persist::{
-    DebouncedSave, PersistenceStore, SAVE_DEBOUNCE, SessionSnapshot, SettingsStore, Snapshot, WindowEntry,
-    WindowsIndex, WorkspaceSnapshot, arm_debounced_saves, json,
+    DebouncedSave, PersistenceStore, RecentClosedKind, RecentClosedState, RecentClosedStore, SAVE_DEBOUNCE,
+    SessionSnapshot, SettingsStore, Snapshot, WindowEntry, WindowsIndex, WorkspaceSnapshot, arm_debounced_saves, json,
 };
 use agterm_host::MainLoop;
 use agterm_host::fakes::FakeMainLoop;
@@ -1009,4 +1011,164 @@ fn a_failed_index_write_is_retried_by_the_next_snapshot_save_that_lands() {
     assert!(persistence.save_window(&library, window));
     assert!(!persistence.index_unsaved());
     assert_eq!(WindowsIndex::load(&index).unwrap().windows[0].name, "renamed");
+}
+
+// MARK: - Open Recent
+
+#[test]
+fn an_upstream_recent_closed_file_reencodes_byte_for_byte() {
+    let dir = state_from("upstream").unwrap();
+    let store = RecentClosedStore::new(dir.path());
+    let original = fs::read_to_string(store.path()).unwrap();
+    let items = store.load();
+    assert_eq!(items.len(), 2);
+    let workspace = &items[0];
+    assert_eq!(
+        (workspace.kind, workspace.title.as_str()),
+        (RecentClosedKind::Workspace, "infra")
+    );
+    assert!((reference_date::seconds(workspace.closed_at) - 781_912_345.25).abs() < 1e-6);
+    let recent = workspace.workspace.as_ref().unwrap();
+    assert_eq!(recent.focus_member, Some(true));
+    assert_eq!(
+        recent.selected_session_id,
+        Some(id("5E000000-0000-4000-8000-000000000012"))
+    );
+    assert_eq!(recent.snapshot.collapsed, Some(true));
+    let session = items[1].session.as_ref().unwrap();
+    assert_eq!((session.workspace_name.as_str(), session.session_index), ("work", 1));
+    assert!(session.snapshot.has_any_split());
+    assert_eq!(
+        String::from_utf8(json::to_foundation_pretty(&RecentClosedState::new(items)).unwrap()).unwrap(),
+        original
+    );
+}
+
+#[test]
+fn the_launch_loads_open_recent_and_a_reopen_consumes_the_entry_on_disk() {
+    let dir = state_from("upstream").unwrap();
+    let (mut persistence, mut library) = launch(dir.path());
+    let items = library.recent_closed_items();
+    assert_eq!(items.len(), 2);
+    let window = id(WINDOW_A);
+
+    assert_eq!(
+        library.reopen_recent_closed_reporting_window(items[0].id, None),
+        Some(window)
+    );
+    persistence.commit(&mut library);
+
+    let infra = id("1D000000-0000-4000-8000-000000000011");
+    let store = library.store(window).unwrap();
+    let restored = store.workspace(infra).unwrap();
+    assert_eq!((restored.name.as_str(), restored.is_expanded), ("infra", false));
+    assert_eq!(
+        store.selected_session_id(),
+        Some(id("5E000000-0000-4000-8000-000000000012"))
+    );
+    assert!(store.focus().ids().contains(&infra), "a member comes back marked");
+    let deploy = store.session(id("5E000000-0000-4000-8000-000000000012")).unwrap();
+    assert_eq!(deploy.restore.command.as_deref(), Some("claude --resume abc"));
+    assert_eq!(deploy.restore.pending_command, None, "a reopen arms nothing");
+
+    let left: Vec<_> = RecentClosedStore::new(dir.path())
+        .load()
+        .into_iter()
+        .map(|item| item.id)
+        .collect();
+    assert_eq!(left, [items[1].id]);
+    let on_disk = window_store(dir.path(), window).load();
+    assert!(
+        on_disk.workspaces.iter().any(|workspace| workspace.id == infra),
+        "the reopen saves the window"
+    );
+}
+
+#[test]
+fn a_hard_close_is_recorded_on_disk_by_the_commit() {
+    let (dir, mut persistence) = fresh().unwrap();
+    let mut library = persistence.bootstrap(HOME);
+    let window = library.windows()[0].id;
+    let store = library.store_mut(window).unwrap();
+    let workspace = store.workspaces()[0].id();
+    let closing = store.add_session(workspace, NewSession::at_cwd("/closing")).unwrap();
+    persistence.commit(&mut library);
+    assert!(!persistence.recent_closed_store().path().exists());
+
+    library.store_mut(window).unwrap().close_session(closing);
+    persistence.commit(&mut library);
+
+    let on_disk = RecentClosedStore::new(dir.path()).load();
+    assert_eq!(on_disk, library.recent_closed_items());
+    assert_eq!(on_disk[0].session.as_ref().unwrap().snapshot.id, closing);
+    let text = fs::read_to_string(persistence.recent_closed_store().path()).unwrap();
+    assert!(
+        text.starts_with("{\n  \"items\" : [") && text.ends_with("\"version\" : 1\n}"),
+        "{text}"
+    );
+
+    library.clear_recent_closed_items();
+    persistence.commit(&mut library);
+    assert!(RecentClosedStore::new(dir.path()).load().is_empty());
+}
+
+#[test]
+fn a_soft_close_keeps_the_window_file_until_undo_or_finalize() {
+    let (dir, mut persistence) = fresh().unwrap();
+    let mut library = persistence.bootstrap(HOME);
+    let window = library.windows()[0].id;
+    let store = library.store_mut(window).unwrap();
+    let workspace = store.workspaces()[0].id();
+    let kept = store.workspaces()[0].sessions[0].id();
+    let closing = store.add_session(workspace, NewSession::at_cwd("/closing")).unwrap();
+    persistence.commit(&mut library);
+    library.store_mut(window).unwrap().select_session(Some(kept));
+    let armed = persistence.commit(&mut library).debounced;
+    let in_file = |dir: &Path, session| {
+        window_store(dir, window).load().workspaces[0]
+            .sessions
+            .iter()
+            .any(|candidate| candidate.id == session)
+    };
+
+    assert!(library.store_mut(window).unwrap().soft_close_session(closing));
+    let commit = persistence.commit(&mut library);
+
+    assert_eq!(commit.pending_closes.len(), 1);
+    assert_eq!(commit.pending_closes[0].grace, PENDING_CLOSE_GRACE);
+    assert!(
+        in_file(dir.path(), closing),
+        "the file keeps the session through the grace"
+    );
+    assert!(
+        !persistence.fire_debounced(&library, armed[0]),
+        "the armed write was dropped"
+    );
+    assert_eq!(
+        RecentClosedStore::new(dir.path()).load().len(),
+        1,
+        "recorded at the close"
+    );
+
+    assert!(library.store_mut(window).unwrap().undo_pending_close(None));
+    persistence.commit(&mut library);
+    assert!(in_file(dir.path(), closing));
+    assert!(
+        RecentClosedStore::new(dir.path()).load().is_empty(),
+        "the undo removes the entry"
+    );
+
+    assert!(library.store_mut(window).unwrap().soft_close_session(closing));
+    let timer = persistence.commit(&mut library).pending_closes[0];
+    library
+        .store_mut(timer.window)
+        .unwrap()
+        .finalize_pending_close(timer.record);
+    persistence.commit(&mut library);
+    assert!(!in_file(dir.path(), closing), "the finalize writes the window");
+    assert_eq!(
+        RecentClosedStore::new(dir.path()).load().len(),
+        1,
+        "the entry outlives the finalize"
+    );
 }

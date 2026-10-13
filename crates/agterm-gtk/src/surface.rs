@@ -2,10 +2,16 @@
 //! focus wiring. Behavior follows upstream's `GhosttySurfaceView*.swift` and `libghostty.md`; the `GtkGLArea` hosting
 //! is the Linux glue (the patched OpenGL platform draws on this thread into the area's current context).
 //!
-//! Lifecycle: the libghostty surface is created on the first `resize` (upstream creates only at a nonzero size) and
-//! freed exactly once, by [`TerminalSurface::teardown`], which unrealizing the area calls with the context current.
-//! The embedding API cannot move a renderer to a new GL context, so a live surface's area must stay realized:
-//! containers keep it mounted and hide it, never re-parent it.
+//! Lifecycle: the libghostty surface is created once the realized area first has a nonzero size (upstream creates
+//! only at a nonzero size) and freed exactly once, by [`TerminalSurface::teardown`], which unrealizing the area calls
+//! with the context current. The embedding API cannot move a renderer to a new GL context, so a live surface's area
+//! must stay realized: containers keep it mounted and hide it, never re-parent it.
+//!
+//! Creation does not wait for a draw. A `GtkGLArea` emits `resize` only from its snapshot, and GTK snapshots no
+//! widget at opacity 0, so a hidden deck page (upstream's eager deck mounts every session and spawns its shell at
+//! startup) would never get its surface that way. The realized area instead runs a one-shot frame-clock tick that
+//! creates the surface at the area's allocated size as soon as it has one; `resize` then only pushes sizes (and
+//! creates, should it come first).
 //!
 //! Ownership: the area's `destroy` handler holds the one long-lived strong reference to the surface's state, and the
 //! state holds the area only weakly, so a container dropping the area disposes it, `destroy` releases the state and
@@ -81,6 +87,10 @@ struct Inner {
     exit_handled: Cell<bool>,
     /// The first frame was drawn (logged once).
     drew: Cell<bool>,
+    /// Whether the deck shows this terminal (the selected session's page); a hidden one is occluded.
+    deck_visible: Cell<bool>,
+    /// The pending creation tick, while the area is realized and the surface not created yet.
+    creation_tick: RefCell<Option<gtk::TickCallbackId>>,
 }
 
 thread_local! {
@@ -150,6 +160,8 @@ impl TerminalSurface {
             on_exit: RefCell::new(None),
             exit_handled: Cell::new(false),
             drew: Cell::new(false),
+            deck_visible: Cell::new(true),
+            creation_tick: RefCell::new(None),
         });
         SURFACES.with(|surfaces| surfaces.borrow_mut().insert(inner.key, Rc::downgrade(&inner)));
         let surface = Self { inner, area };
@@ -218,6 +230,7 @@ impl TerminalSurface {
                 tracing::error!(%err, "the terminal's GtkGLArea has no OpenGL context");
             }
             surface.inner.im.set_client_widget(Some(area));
+            surface.arm_creation_tick();
         });
         let weak = self.weak();
         area.connect_unrealize(move |_| {
@@ -244,7 +257,8 @@ impl TerminalSurface {
         let weak = self.weak();
         area.connect_map(move |_| {
             if let Some(surface) = Self::upgrade(&weak) {
-                surface.with_surface(|s| s.set_occlusion(true));
+                let visible = surface.inner.deck_visible.get();
+                surface.with_surface(|s| s.set_occlusion(visible));
             }
         });
         let weak = self.weak();
@@ -253,6 +267,70 @@ impl TerminalSurface {
                 surface.with_surface(|s| s.set_occlusion(false));
             }
         });
+    }
+
+    /// Creates the surface on the first frame-clock tick at which the realized area has a nonzero allocation,
+    /// whether or not it is drawn (module docs). One tick per frame until then; none once created or torn down.
+    fn arm_creation_tick(&self) {
+        if self.inner.torn_down.get() || self.inner.ghostty.borrow().is_some() {
+            return;
+        }
+        let weak = self.weak();
+        let id = self.area.add_tick_callback(move |area, _| {
+            let Some(surface) = Self::upgrade(&weak) else {
+                return glib::ControlFlow::Break;
+            };
+            if surface.inner.torn_down.get() || surface.inner.ghostty.borrow().is_some() {
+                surface.inner.creation_tick.borrow_mut().take();
+                return glib::ControlFlow::Break;
+            }
+            let scale = area.scale_factor();
+            let (width, height) = (area.width() * scale, area.height() * scale);
+            if width <= 0 || height <= 0 {
+                return glib::ControlFlow::Continue;
+            }
+            surface.inner.creation_tick.borrow_mut().take();
+            surface.resized(width, height);
+            glib::ControlFlow::Break
+        });
+        if let Some(previous) = self.inner.creation_tick.replace(Some(id)) {
+            previous.remove();
+        }
+    }
+
+    /// Shows or hides the terminal as a deck page: only the shown one is focusable and visible to its programs
+    /// (occlusion, upstream's `deckOnScreen`); a hidden one keeps its surface and shell running.
+    pub fn set_deck_visible(&self, visible: bool) {
+        self.inner.deck_visible.set(visible);
+        self.area.set_focusable(visible);
+        self.area.set_can_target(visible);
+        if self.area.is_mapped() {
+            self.with_surface(|s| s.set_occlusion(visible));
+        }
+        if !visible {
+            self.release_gpu_resources();
+        }
+    }
+
+    /// Frees a hidden terminal's GPU resources (render targets, atlas textures, buffers). The OpenGL renderer draws
+    /// on this thread, so occlusion alone frees nothing (libghostty releases on occlusion only where it draws on its
+    /// own thread); the objects die in whatever context is current, hence the area's. A hidden page is never
+    /// snapshotted, so nothing draws until it shows again, and that draw rebuilds everything.
+    fn release_gpu_resources(&self) {
+        if !self.area.is_realized() {
+            return;
+        }
+        self.area.make_current();
+        if self.area.error().is_some() {
+            return;
+        }
+        self.with_surface(Surface::release_gpu_resources);
+    }
+
+    /// Whether the deck shows this terminal.
+    #[must_use]
+    pub fn is_deck_visible(&self) -> bool {
+        self.inner.deck_visible.get()
     }
 
     /// The area's drawable changed size (or scale): create the surface the first time, else push the new size.
@@ -297,9 +375,13 @@ impl TerminalSurface {
             Ok(surface) => {
                 tracing::debug!(key = self.inner.key.get(), scale, "terminal surface created");
                 surface.set_focus(area.has_focus());
+                surface.set_occlusion(self.inner.deck_visible.get() && area.is_mapped());
                 *self.inner.ghostty.borrow_mut() = Some(surface);
                 if let Some(title) = ghostty_app::static_title() {
                     self.apply_title(&title);
+                }
+                if !self.inner.deck_visible.get() {
+                    self.release_gpu_resources();
                 }
             }
             Err(err) => tracing::error!(%err, "could not create the terminal surface"),
@@ -320,10 +402,14 @@ impl TerminalSurface {
             return;
         };
         drop(slot.take());
+        if let Some(tick) = self.inner.creation_tick.borrow_mut().take() {
+            tick.remove();
+        }
         self.inner.im.set_client_widget(None::<&gtk::Widget>);
     }
 
-    /// Whether the libghostty surface exists: created at the area's first nonzero size and not torn down since.
+    /// Whether the libghostty surface exists: created at the realized area's first nonzero size and not torn down
+    /// since.
     pub fn is_realized(&self) -> bool {
         !self.inner.torn_down.get() && self.inner.ghostty.try_borrow().is_ok_and(|surface| surface.is_some())
     }

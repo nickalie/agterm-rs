@@ -4,10 +4,12 @@
 
 mod client;
 mod output;
+mod session;
 mod socket;
 mod tree;
 mod usage;
 mod version;
+mod window;
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -40,13 +42,27 @@ struct Agtermctl {
 #[derive(Debug, Subcommand)]
 enum Command {
     Tree(tree::Tree),
+    Session(session::Session),
+    Window(window::Window),
     Version(version::Version),
 }
 
 impl Command {
+    /// Checks what the parser cannot (upstream's `validate()`): a refusal is a usage error, before anything is sent.
+    fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Tree(command) => command.validate(),
+            Self::Session(group) => group.command().validate(),
+            Self::Window(group) => group.command().validate(),
+            Self::Version(_) => Ok(()),
+        }
+    }
+
     fn run(&self, env: &dyn Env) -> Result<(), Failure> {
         match self {
             Self::Tree(command) => command.default_run(env),
+            Self::Session(group) => group.command().default_run(env),
+            Self::Window(group) => group.command().default_run(env),
             Self::Version(command) => command.run(env),
         }
     }
@@ -99,10 +115,6 @@ impl ClientOptions {
 
 /// The `--target` of a command addressing one session or workspace (upstream's `TargetOptions`).
 #[derive(Debug, clap::Args)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the session and workspace commands take it from Task 11 on")
-)]
 struct TargetOptions {
     #[arg(
         long,
@@ -116,10 +128,6 @@ struct TargetOptions {
 /// on the wire in command-line order, the first also as the request's own target, so a server without batches acts
 /// on it rather than on the active session.
 #[derive(Debug, clap::Args)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the batch session commands take it from Task 11 on")
-)]
 struct BatchTargetOptions {
     #[arg(
         long = "target",
@@ -129,10 +137,6 @@ struct BatchTargetOptions {
     targets: Vec<String>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the batch session commands take it from Task 11 on")
-)]
 impl BatchTargetOptions {
     /// The request's own target: the first `--target`, else `active`.
     fn first(&self) -> String {
@@ -174,6 +178,11 @@ trait RequestCommand {
         false
     }
 
+    /// What the parser cannot check (upstream's `validate()`), as the message of a usage error.
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Sends the request once and prints the reply; a refusal exits 1 after its `error:` line.
     fn default_run(&self, env: &dyn Env) -> Result<(), Failure> {
         let options = self.options();
@@ -209,14 +218,30 @@ fn report_parse_error(args: &[OsString], error: &clap::Error) -> ExitCode {
     ExitCode::from(report.code)
 }
 
-/// The report of a parse failure of `args` (the program name first), help wrapped to `width`.
-fn parse_report(args: &[OsString], error: &clap::Error, width: usize) -> usage::ParseExit {
-    let args: Vec<String> = args
-        .iter()
+/// Prints a validation refusal as swift-argument-parser does (`Error: <message>`, the usage line, on stderr) and
+/// returns its exit status.
+fn report_validation_error(args: &[OsString], message: &str) -> ExitCode {
+    let report = validation_report(args, message);
+    eprint!("{}", report.text);
+    ExitCode::from(report.code)
+}
+
+/// The report of a validation refusal of `args` (the program name first).
+fn validation_report(args: &[OsString], message: &str) -> usage::ParseExit {
+    usage::validation_exit(&Agtermctl::command(), &plain_args(args), message)
+}
+
+/// `args` without the program name, as text.
+fn plain_args(args: &[OsString]) -> Vec<String> {
+    args.iter()
         .skip(1)
         .map(|arg| arg.to_string_lossy().into_owned())
-        .collect();
-    usage::parse_exit(&Agtermctl::command(), &args, error, width)
+        .collect()
+}
+
+/// The report of a parse failure of `args` (the program name first), help wrapped to `width`.
+fn parse_report(args: &[OsString], error: &clap::Error, width: usize) -> usage::ParseExit {
+    usage::parse_exit(&Agtermctl::command(), &plain_args(args), error, width)
 }
 
 fn main() -> ExitCode {
@@ -226,6 +251,9 @@ fn main() -> ExitCode {
         Ok(cli) => cli,
         Err(error) => return report_parse_error(&args, &error),
     };
+    if let Err(message) = cli.command.validate() {
+        return report_validation_error(&args, &message);
+    }
     match cli.command.run(&ProcessEnv) {
         Ok(()) => ExitCode::SUCCESS,
         Err(Failure::Exit(code)) => code,

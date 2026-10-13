@@ -108,6 +108,15 @@ pub fn parse_exit(root: &Command, args: &[String], error: &clap::Error, width: u
     ParseExit::usage(&stack, &message, &help)
 }
 
+/// Renders a refusal from a command's `validate()` (a `ValidationError`) for `args` (without the program name),
+/// which parsed: `Error: <message>`, the usage line and the hint of the command they name, on stderr, exit 64. It
+/// has no `Help:` line: the library adds one only to an argument's own parse error (`MessageInfo.swift`).
+#[must_use]
+pub fn validation_exit(root: &Command, args: &[String], message: &str) -> ParseExit {
+    let (stack, _) = Stack::named_by(root, args);
+    ParseExit::usage(&stack, message, "")
+}
+
 /// The library's `help` command (`HelpCommand`): the command names to show help for, and a private
 /// `-h`/`--help`/`-help` flag it accepts and ignores. It has no help names of its own, so its usage error ends
 /// without a `See '... --help'` line.
@@ -997,6 +1006,12 @@ mod tests {
                 None
             )
         );
+    }
+
+    #[test]
+    fn a_validation_refusal_reports_against_the_named_command_without_a_help_line() {
+        let args = ["pick", "x", "--mode", "fast"].map(str::to_owned);
+        assert_eq!(validation_exit(&root(), &args, "use one"), usage("use one", None));
     }
 
     #[test]

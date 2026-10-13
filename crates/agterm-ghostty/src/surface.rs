@@ -1,7 +1,8 @@
 //! One libghostty surface: a terminal with its child process and renderer.
 //!
 //! The OpenGL platform (agterm's Linux patch) renders into whatever GL context is current: the host makes its
-//! context current before [`Surface::new`], [`Surface::draw`] and dropping the surface, all on the app's thread.
+//! context current before [`Surface::new`], [`Surface::draw`], [`Surface::release_gpu_resources`] and dropping the
+//! surface, all on the app's thread.
 
 use std::ffi::{CString, c_char, c_void};
 use std::os::unix::ffi::OsStrExt;
@@ -199,6 +200,21 @@ impl Surface {
     pub fn set_occlusion(&self, visible: bool) {
         // SAFETY: a live surface on its thread.
         unsafe { sys::ghostty_surface_set_occlusion(self.ptr(), visible) };
+    }
+
+    /// Free the renderer's GPU resources (render targets, font atlas textures, cell and uniform buffers) while the
+    /// surface is hidden; the next [`Surface::draw`] re-creates them at the size current then.
+    ///
+    /// Call it on the app's thread **with this surface's GL context current** (its `GtkGLArea`'s, as for
+    /// [`Surface::draw`]): the objects are deleted in whatever context is current, so another context would lose its
+    /// own objects instead. libghostty's renderer does this itself on occlusion only where it draws on its own
+    /// thread (macOS); this OpenGL embedding draws on the app thread, so the host calls it (agterm's
+    /// `0004-embedded-release-gpu-resources.patch`). Repeating it is harmless. It is not occlusion: the terminal and
+    /// its visibility (mode 2033 reports) are untouched, so pair it with [`Surface::set_occlusion`] as needed, and do
+    /// not draw a hidden surface, which would re-create everything.
+    pub fn release_gpu_resources(&self) {
+        // SAFETY: a live surface on its thread; the caller has its GL context current (documented above).
+        unsafe { sys::ghostty_surface_release_gpu_resources(self.ptr()) };
     }
 
     pub fn set_color_scheme(&self, scheme: ColorScheme) {

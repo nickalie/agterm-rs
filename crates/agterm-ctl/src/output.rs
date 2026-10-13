@@ -9,15 +9,16 @@
 
 use std::process::ExitCode;
 
-use agterm_proto::{ControlTree, Response};
+use agterm_proto::{ControlTree, ControlWindowNode, Response};
 use serde_json::Value;
 
 use crate::client::Reply;
 use crate::tree::format_tree;
+use crate::window::format_windows;
 
-/// Renders a response as its human-readable summary (no trailing newline): an `error:` line, the tree listing, the
-/// serving app's version, the affected id (only with `echo_id`, for the create commands), or a bare `ok`. Never
-/// JSON: `--json` prints the server's own line.
+/// Renders a response as its human-readable summary (no trailing newline): an `error:` line, the tree or window
+/// listing, the serving app's version, a batch's affected count, the affected id (only with `echo_id`, for the
+/// create commands), or a bare `ok`. Never JSON: `--json` prints the server's own line.
 ///
 /// The result's fields are tested in upstream's fixed order (`formatResponse`: `tree` first, `app` after the
 /// listings); each command group adds its branch at its place in that order.
@@ -34,8 +35,18 @@ pub fn format_response(response: &Response, echo_id: bool) -> String {
     {
         return format_tree(&tree);
     }
+    // a present-but-empty list still takes this branch and renders empty
+    if let Some(windows) = result
+        .and_then(|result| result.get("windows"))
+        .and_then(|windows| serde_json::from_value::<Vec<ControlWindowNode>>(windows.clone()).ok())
+    {
+        return format_windows(&windows);
+    }
     if let Some(app) = result.and_then(|result| result.get("app")) {
         return format_app(app);
+    }
+    if let Some(affected) = result.and_then(|result| result.get("affected")).and_then(Value::as_i64) {
+        return format_affected(affected);
     }
     if echo_id && let Some(id) = result.and_then(|result| result.get("id")).and_then(Value::as_str) {
         return id.to_owned();
@@ -49,6 +60,15 @@ fn format_app(app: &Value) -> String {
     match app.get("commit").and_then(Value::as_str) {
         Some(commit) if !commit.is_empty() => format!("{version} ({commit})"),
         _ => version.to_owned(),
+    }
+}
+
+/// How many sessions a batch changed: `1 session`, else `N sessions`.
+fn format_affected(affected: i64) -> String {
+    if affected == 1 {
+        "1 session".to_owned()
+    } else {
+        format!("{affected} sessions")
     }
 }
 
@@ -117,6 +137,31 @@ mod tests {
             "app": {"version": "0.1.0"},
         }));
         assert_eq!(format_response(&response, false), "* w  [W]");
+    }
+
+    #[test]
+    fn windows_list_one_per_line_and_an_empty_list_renders_empty() {
+        let response = ok(json!({"windows": [
+            {"id": "w1", "name": "work", "open": true, "active": true},
+            {"id": "w3", "name": "archive", "open": false, "active": false},
+        ]}));
+        assert_eq!(
+            format_response(&response, false),
+            "w1  work [open] [active]\nw3  archive"
+        );
+        assert_eq!(format_response(&ok(json!({"windows": []})), true), "");
+    }
+
+    #[test]
+    fn a_batch_reports_how_many_sessions_it_changed() {
+        for (affected, expected) in [(1, "1 session"), (2, "2 sessions"), (0, "0 sessions")] {
+            assert_eq!(format_response(&ok(json!({"affected": affected})), false), expected);
+        }
+        // the count wins over an echoed id
+        assert_eq!(
+            format_response(&ok(json!({"id": "abc", "affected": 2})), true),
+            "2 sessions"
+        );
     }
 
     #[test]

@@ -15,7 +15,9 @@ use uuid::Uuid;
 
 use super::naming::{default_workspace_name, sanitized, trimmed_or_none};
 use super::outbox::{EventPayload, ModelEvent, Outbox, SaveRequest};
+use super::pending_close::PendingCloses;
 use super::recency::RecencyStack;
+use super::recent_closed::{ClosedSessionPlace, RecentClosedList};
 use super::session::{AgentIndicator, AgentStatus, Session, SessionSeed};
 use super::workspace::{ReorderDirection, SidebarMode, Workspace};
 
@@ -165,6 +167,10 @@ pub struct AppStore {
     /// focus filter hiding it, and by a restore.
     pub(crate) fresh_workspace_id: Option<Uuid>,
     pub(crate) outbox: Outbox,
+    /// The undoable closes: their sessions, out of the tree, still own their terminals.
+    pub(crate) pending: PendingCloses,
+    /// Open Recent, shared with the library and its other stores once the store is open in one.
+    pub(crate) recent_closed: RecentClosedList,
 }
 
 impl AppStore {
@@ -406,11 +412,14 @@ impl AppStore {
         self.schedule_tree_changed();
     }
 
-    /// Emits `session.closed` for every session, tears their terminals down and drops the pending write: the store
-    /// is leaving the open set and its outbox is all that remains of it. A deleted window's write must not re-create
+    /// Makes every pending close final, emits `session.closed` for every session, tears their terminals down and drops
+    /// the pending write: the store is leaving the open set and its outbox is all that remains of it. A deleted window's write must not re-create
     /// its removed file (upstream's `removeWindow` cancels the pending save); a closing window's caller has already
     /// written its snapshot (see [`WindowLibrary::close_window`](super::WindowLibrary::close_window)).
     pub(crate) fn retire(&mut self) {
+        // the undo window dies with the store: a session left pending would keep its terminals with nothing left to
+        // finalize it
+        self.finalize_all_pending_closes();
         let closing: Vec<(Uuid, Uuid, EventPayload)> = self
             .workspaces
             .iter()
@@ -620,17 +629,22 @@ impl AppStore {
         self.save();
     }
 
-    /// Removes a workspace and its sessions, tearing their terminals down, and returns it. A no-op unless another
-    /// workspace remains. When it held the selection, the most recent visible session takes it.
+    /// Removes a workspace and its sessions, tearing their terminals down, records it in Open Recent and returns it.
+    /// A no-op unless another workspace remains. When it held the selection, the most recent visible session takes
+    /// it.
     pub fn remove_workspace(&mut self, id: Uuid) -> Option<Workspace> {
         if !self.can_remove_workspace() {
             return None;
         }
         let index = self.workspace_index(id)?;
-        let removing_active = self
+        let selected = self
             .selected_session_id
-            .is_some_and(|selected| self.workspaces[index].session(selected).is_some());
+            .filter(|selected| self.workspaces[index].session(*selected).is_some());
+        let removing_active = selected.is_some();
         let mut workspace = self.workspaces.remove(index);
+        // before the membership is dropped below, so a reopen can mark it again
+        let focus_member = self.focus.ids.contains(&id);
+        self.record_recent_closed_workspace(&workspace, selected, focus_member, Uuid::new_v4());
         for session in &workspace.sessions {
             self.emit_session_closed(session, id);
         }
@@ -784,14 +798,22 @@ impl AppStore {
         Some(id)
     }
 
-    /// Removes a session, tears its terminals down and returns it. When it was selected, the most recent visible
-    /// session of its scope takes the selection (`close_reselection_target`).
+    /// Removes a session, tears its terminals down, records it in Open Recent and returns it. When it was selected,
+    /// the most recent visible session of its scope takes the selection (`close_reselection_target`).
     pub fn close_session(&mut self, id: Uuid) -> Option<Session> {
         let at = self.location(id)?;
         let was_active = self.selected_session_id == Some(id);
         let workspace = self.workspaces[at.workspace].id();
+        let workspace_name = self.workspaces[at.workspace].name.clone();
         let mut removed = self.workspaces[at.workspace].sessions.remove(at.session);
         self.emit_session_closed(&removed, workspace);
+        let place = ClosedSessionPlace {
+            workspace_id: workspace,
+            workspace_name: &workspace_name,
+            workspace_index: at.workspace,
+            session_index: at.session,
+        };
+        self.record_recent_closed_session(&removed, &place, Uuid::new_v4());
         removed.teardown_surfaces();
         self.session_recency.remove(id);
         if was_active {

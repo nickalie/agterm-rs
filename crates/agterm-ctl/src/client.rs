@@ -8,7 +8,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
-use agterm_proto::{ControlTree, MAX_REQUEST_LINE_BYTES, Request, Response};
+use agterm_proto::{ControlResult, ControlTree, MAX_REQUEST_LINE_BYTES, Request, Response};
 
 use crate::socket;
 
@@ -163,12 +163,12 @@ pub fn send(path: &Path, request: &Request) -> Result<Reply, ClientError> {
 /// the whole reply, `--json` included, instead of reading as absent.
 fn decode_response(raw: &[u8]) -> serde_json::Result<Response> {
     let response: Response = serde_json::from_slice(raw)?;
-    if let Some(tree) = response
-        .result
-        .as_ref()
-        .and_then(|result| result.get("tree"))
-        .filter(|tree| !tree.is_null())
-    {
+    let Some(result) = response.result.as_ref().filter(|result| !result.is_null()) else {
+        return Ok(response);
+    };
+    // the shared result object: `id`, `windows`, `affected` and the fields later commands add to it
+    serde_json::from_value::<ControlResult>(result.clone())?;
+    if let Some(tree) = result.get("tree").filter(|tree| !tree.is_null()) {
         serde_json::from_value::<ControlTree>(tree.clone())?;
     }
     Ok(response)
@@ -193,6 +193,26 @@ mod tests {
             decode_response(unflagged).is_err(),
             "a session node without its required flagged"
         );
+    }
+
+    #[test]
+    fn a_result_field_of_the_wrong_type_fails_the_reply() {
+        let windows = br#"{"ok":true,"result":{"windows":[{"id":"W","name":"w","open":true,"active":false}]}}"#;
+        assert!(decode_response(windows).is_ok());
+        assert!(decode_response(br#"{"ok":true,"result":{"id":"S","affected":2,"unmodelled":[1]}}"#).is_ok());
+        assert!(decode_response(br#"{"ok":true,"result":null}"#).is_ok());
+        for malformed in [
+            &br#"{"ok":true,"result":{"windows":[{"id":"W","name":"w"}]}}"#[..],
+            br#"{"ok":true,"result":{"windows":{}}}"#,
+            br#"{"ok":true,"result":{"affected":"two"}}"#,
+            br#"{"ok":true,"result":{"id":5}}"#,
+        ] {
+            assert!(
+                decode_response(malformed).is_err(),
+                "{}",
+                String::from_utf8_lossy(malformed)
+            );
+        }
     }
 
     #[test]

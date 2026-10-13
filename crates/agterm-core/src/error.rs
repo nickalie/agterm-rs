@@ -69,6 +69,11 @@ pub enum ControlError {
     #[error("session command requires at least one --target")]
     BatchNeedsTarget,
 
+    /// A command refused its arguments or could not act on its target. The text is the command's own upstream
+    /// message, verbatim (`ControlDispatcher.swift`, `agterm/Control/ControlServer+*.swift`).
+    #[error("{0}")]
+    Rejected(String),
+
     /// A command this build does not implement (yet).
     #[error("{0} is not supported by this host")]
     NotSupported(Command),
@@ -92,6 +97,14 @@ fn short_ids(hits: &[String]) -> String {
         .map(|id| id.chars().take(8).collect::<String>())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+impl ControlError {
+    /// A [`ControlError::Rejected`] with `message`.
+    #[must_use]
+    pub fn rejected(message: impl Into<String>) -> Self {
+        Self::Rejected(message.into())
+    }
 }
 
 impl From<ControlError> for Response {
@@ -138,6 +151,10 @@ mod tests {
                 "session.swap is not supported by this host",
             ),
             (ControlError::WindowNotOpen, "window not open — window.select it first"),
+            (
+                ControlError::Rejected("no session to navigate".to_owned()),
+                "no session to navigate",
+            ),
             (ControlError::NoOpenWindow, "no open window"),
             (
                 ControlError::BatchNeedsTarget,

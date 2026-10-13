@@ -638,29 +638,52 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 **Files:**
 - Create: `crates/agterm-core/src/commands/{session,window}.rs`, `crates/agterm-gtk/src/{deck,sidebar}.rs`
 - Create: `crates/agterm-ctl/src/{session,window}.rs`
+- ➕ Create: `crates/agterm-proto/src/result.rs` (upstream's `ControlResult` subset and `ControlWindowNode`),
+  `crates/agterm-core/src/commands/{mod,tests/*}.rs`, `crates/agterm-core/src/sidebar_drop.rs`,
+  `crates/agterm-core/src/model/{pending_close,recent_closed,duplicate}.rs` and their `model/tests/`,
+  `crates/agterm-core/src/persist/recent_closed.rs`, `crates/agterm-gtk/src/{state,window}.rs`,
+  `build/patches/ghostty/0004-embedded-release-gpu-resources.patch`, `crates/agterm-ghostty/tests/gpu_release.rs`
+- ➕ Modify: `crates/agterm-core/src/{dispatch,error,lib}.rs`, the model's store/outbox/window library/focus/snapshot,
+  `crates/agterm-core/src/persist/{library,mod}.rs`, `crates/agterm-gtk/src/{app,surface,main}.rs`,
+  `crates/agterm-ghostty/src/surface.rs`, `crates/agterm-ghostty-sys/src/bindings.rs`,
+  `scripts/gen-ghostty-bindings.sh`, `crates/agterm-ctl/src/{main,client,output,usage}.rs`, the server test
 
-- [ ] session.new, duplicate, close (soft close, recently closed), select, go, rename, reveal, move from
+- [x] session.new, duplicate, close (soft close, recently closed), select, go, rename, reveal, move from
       `ControlDispatcher*.swift` and the `AppStore+*` files they call (`AppStore+Duplicate`, `+PendingClose`,
-      `RecentClosed.swift`)
-- [ ] window.list (upstream's cached list, `ControlServer+WindowCommands.swift`); upstream's eager deck
+      `RecentClosed.swift`) (a batch close soft-closes under `closeGraceUndoEnabled`, a single one closes hard, as
+      upstream; Open Recent is recorded at close time into `recent-closed.json`; its reopen path and undo exist in
+      the model, tested, with no UI caller until the menus; `session.reveal` opens the directory through
+      `gtk::FileLauncher::open_containing_folder`)
+- [x] window.list (upstream's cached list, `ControlServer+WindowCommands.swift`); upstream's eager deck
       (`libghostty.md`, `WindowContentView+Detail.swift`): every session's surface stays mounted, visibility flips
-      on select, mount state readable for the harness's `wait_mounted`
-- [ ] ➕ hidden surfaces release their GPU resources: libghostty releases them on occlusion only where the
+      on select, mount state readable for the harness's `wait_mounted` (`window.list` is computed on dispatch, no
+      off-thread cache; geometry absent until Task 14; the deck is a `gtk::Overlay` of per-session pages, hidden
+      ones at opacity 0 and untargetable but mapped, and a hidden page's surface is created from a frame-clock tick
+      once its area is realized and allocated, since a `GtkGLArea` emits `resize` only when snapshotted; every
+      mutation is a main-loop task that ends in `settle`: commit, arm debounced saves and grace timers, reconcile
+      the deck and sidebar; quit saves everything first; one GTK window shows the frontmost store until Task 14)
+- [x] ➕ hidden surfaces release their GPU resources: libghostty releases them on occlusion only where the
       renderer draws on its own thread, and the OpenGL build draws on the app thread, so a hidden deck surface
       needs a release call there, with its area's context current. The embedding API has none at 683d8db: a
       `build/patches/ghostty/` patch exporting `releaseGpuResources` (Task 6 only drives `set_occlusion` on
       map/unmap). Keep a live surface's `GtkGLArea` mounted (hide, never re-parent): unrealizing it frees the surface
       (`TerminalSurface::teardown`), since the embedding API cannot move a renderer to a new GL context
-- [ ] pane environment wired into primary panes
-- [ ] a minimal sidebar of workspaces and sessions after upstream's `WorkspaceSidebar.swift` (full parity in
-      Task 22)
-- [ ] `session.move --after/--before` places like a sidebar drop (`SidebarDrop.resolveRelative`); claim
+      (patch 0004 exports `ghostty_surface_release_gpu_resources`, upstream's own `releaseGpuResources`; the deck
+      calls it with the area's context current when a page hides or is created hidden; an EGL test checks the
+      object count drops and the next draw is identical)
+- [x] pane environment wired into primary panes
+- [x] a minimal sidebar of workspaces and sessions after upstream's `WorkspaceSidebar.swift` (full parity in
+      Task 22) (a `navigation-sidebar` list in a `gtk::Paned`, tree mode only; clicks select or expand)
+- [x] `session.move --after/--before` places like a sidebar drop (`SidebarDrop.resolveRelative`); claim
       `drop-placement`
-- [ ] matching `agtermctl` subcommands (`SessionCommands.swift`, `WindowCommands.swift` list)
-- [ ] write tests: lifecycle and reselection on the fake surface; duplicate; recently closed and undo
-- [ ] write tests: dispatcher errors for these commands from upstream's Swift tests
-- [ ] gate: full run; ratchet the green ids of `test_session.py`, `test_tree.py`, `test_addressing.py`,
-      `cli/test_cli_output.py`
+- [x] matching `agtermctl` subcommands (`SessionCommands.swift`, `WindowCommands.swift` list)
+- [x] write tests: lifecycle and reselection on the fake surface; duplicate; recently closed and undo
+- [x] write tests: dispatcher errors for these commands from upstream's Swift tests
+- [x] gate: full run; ratchet the green ids of `test_session.py`, `test_tree.py`, `test_addressing.py`,
+      `cli/test_cli_output.py` (30 new green ids, 49 listed; the rest of these files stays red on commands of later
+      tasks: `workspace.*`, `events.read`, `session.flag/context/seen/status/restore/type`, `window.rename`, so
+      `test_move_after_an_anchor_below_it` and the CLI session tests wait for Task 13; `drop-placement` is checked by
+      the dispatcher's unit tests until then)
 
 ### Task 12: Event ring and `events.read`
 

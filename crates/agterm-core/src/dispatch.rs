@@ -1,14 +1,21 @@
 //! The core state owner and the command dispatcher: one request in, one response out, on the main thread.
 
+use std::collections::HashMap;
+use std::fmt;
+use std::path::Path;
+
 use agterm_proto::{
     AppIdentity, Command, ConformanceProfile, ControlTree, PARITY_LEVEL, Request, Response, VersionResult,
 };
 use serde::Serialize;
 use serde_json::Value;
+use uuid::Uuid;
 
+use crate::commands;
 use crate::error::ControlError;
+use crate::model::PendingCloseTimer;
 use crate::model::{AppStore, WindowLibrary};
-use crate::persist::{AppSettings, LibraryPersistence};
+use crate::persist::{AppSettings, Commit, DebouncedSave, LibraryPersistence};
 use crate::projection::{TreeContext, control_tree};
 use crate::resolve::Resolver;
 
@@ -30,6 +37,25 @@ pub struct CoreState {
     pub persistence: Option<LibraryPersistence>,
 }
 
+/// What the frontend reports about one on-screen window, for `window.list` (upstream's window cache flags). A window
+/// the frontend has not reported, or no longer shows, has none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WindowState {
+    pub fullscreen: bool,
+    /// Maximized, not full screen.
+    pub zoomed: bool,
+    pub minimized: bool,
+}
+
+/// The frontend's file-manager reveal of a directory (`session.reveal`).
+struct RevealHandler(Box<dyn Fn(&Path)>);
+
+impl fmt::Debug for RevealHandler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RevealHandler")
+    }
+}
+
 /// The single owner of the app state. Lives on the main thread; every control request reaches it through
 /// [`Core::dispatch`].
 #[derive(Debug)]
@@ -39,6 +65,9 @@ pub struct Core {
     library: WindowLibrary,
     settings: AppSettings,
     persistence: Option<LibraryPersistence>,
+    /// The frontend's on-screen windows, by window id.
+    window_states: HashMap<Uuid, WindowState>,
+    reveal_handler: Option<RevealHandler>,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -88,6 +117,36 @@ impl Core {
             library: state.library,
             settings: state.settings,
             persistence: state.persistence,
+            window_states: HashMap::new(),
+            reveal_handler: None,
+        }
+    }
+
+    /// Records what the frontend shows of window `id`; `None` once it no longer shows it.
+    pub fn set_window_state(&mut self, id: Uuid, state: Option<WindowState>) {
+        match state {
+            Some(state) => self.window_states.insert(id, state),
+            None => self.window_states.remove(&id),
+        };
+    }
+
+    /// What the frontend last reported of window `id`.
+    #[must_use]
+    pub fn window_state(&self, id: Uuid) -> Option<WindowState> {
+        self.window_states.get(&id).copied()
+    }
+
+    /// Installs the frontend's reveal of a directory in the file manager, which `session.reveal` calls with the
+    /// session's existing focused-pane directory (upstream's `revealSessionInFinder`). Without one the command still
+    /// checks the directory and answers.
+    pub fn set_reveal_handler(&mut self, handler: Box<dyn Fn(&Path)>) {
+        self.reveal_handler = Some(RevealHandler(handler));
+    }
+
+    /// Hands `directory` to the reveal handler, if one is installed.
+    pub(crate) fn reveal_directory(&self, directory: &Path) {
+        if let Some(RevealHandler(handler)) = &self.reveal_handler {
+            handler(directory);
         }
     }
 
@@ -100,6 +159,58 @@ impl Core {
     /// The model, for the frontend to put the terminals it creates in their sessions.
     pub fn library_mut(&mut self) -> &mut WindowLibrary {
         &mut self.library
+    }
+
+    /// The app settings.
+    #[must_use]
+    pub fn settings(&self) -> &AppSettings {
+        &self.settings
+    }
+
+    /// Lands the model's side effects after a mutation, as every main-loop task that may mutate must: writes the
+    /// immediate snapshot saves and a changed index, and hands back what the caller arms on the main loop (the
+    /// debounced saves, for [`Core::fire_debounced`], and the soft closes' grace timers, for
+    /// [`Core::finalize_pending_close`]) and the events (for the ring, Task 12). Without persistence the effects are
+    /// drained and the saves dropped.
+    pub fn commit(&mut self) -> Commit {
+        if let Some(persistence) = self.persistence.as_mut() {
+            return persistence.commit(&mut self.library);
+        }
+        let effects = self.library.drain_effects();
+        Commit {
+            events: effects.events,
+            debounced: Vec::new(),
+            pending_closes: effects.pending_closes,
+        }
+    }
+
+    /// A debounced save's quiet window elapsed: write it unless a later save superseded it.
+    pub fn fire_debounced(&mut self, save: DebouncedSave) {
+        if let Some(persistence) = self.persistence.as_mut() {
+            persistence.fire_debounced(&self.library, save);
+        }
+    }
+
+    /// A soft close's grace ran out: make it final. The caller commits afterwards, as after any mutation.
+    pub fn finalize_pending_close(&mut self, timer: PendingCloseTimer) {
+        if let Some(store) = self.library.store_mut(timer.window) {
+            store.finalize_pending_close(timer.record);
+        }
+    }
+
+    /// The quit path: makes every pending close final, then writes every open window and the index (upstream's
+    /// `applicationWillTerminate` save). Whether every write landed.
+    pub fn save_all(&mut self) -> bool {
+        for id in self.library.open_ids() {
+            if let Some(store) = self.library.store_mut(id) {
+                store.finalize_all_pending_closes();
+            }
+        }
+        self.library.is_terminating = true;
+        let _ = self.commit();
+        self.persistence
+            .as_mut()
+            .is_none_or(|persistence| persistence.save_all_checked(&self.library))
     }
 
     /// Answers one request. Failures become `ok:false` with the error's text.
@@ -148,6 +259,8 @@ impl Core {
     /// One arm per group, routing to the group's handler; groups without one yet are refused by name.
     fn route(&mut self, request: &Request) -> Result<Response, ControlError> {
         match request.cmd {
+            Command::Session(cmd) => result_of(&commands::session::dispatch(self, cmd, request)?),
+            Command::Window(cmd) => result_of(&commands::window::dispatch(self, cmd)?),
             Command::Version => result_of(&self.version()),
             Command::Tree => {
                 let window = request.args.as_ref().and_then(|args| args.window.as_deref());
@@ -168,11 +281,9 @@ impl Core {
             | Command::Pick(_)
             | Command::Quick(_)
             | Command::Restore(_)
-            | Command::Session(_)
             | Command::Sidebar(_)
             | Command::Surface(_)
             | Command::Theme(_)
-            | Command::Window(_)
             | Command::Workspace(_)
             | Command::Zmx(_)) => Err(ControlError::NotSupported(cmd)),
         }
@@ -181,7 +292,7 @@ impl Core {
 
 #[cfg(test)]
 mod tests {
-    use agterm_proto::command::{SessionCmd, ZmxCmd};
+    use agterm_proto::command::{SessionCmd, WindowCmd, ZmxCmd};
     use serde_json::json;
 
     use super::*;
@@ -196,8 +307,9 @@ mod tests {
         )
     }
 
-    /// The commands answered so far.
-    const ANSWERED: &[Command] = &[Command::Version, Command::Tree];
+    /// The commands answered so far, against a core with no window (the throwaway empty window makes `session.new`
+    /// and `session.go` fail on their arguments or their target, as upstream's would).
+    const ANSWERED: &[Command] = &[Command::Version, Command::Tree, Command::Window(WindowCmd::List)];
 
     #[test]
     fn version_reports_app_and_profile() {
@@ -214,7 +326,11 @@ mod tests {
     #[test]
     fn unimplemented_commands_are_refused_by_name() {
         let mut core = core();
-        for cmd in [Command::Session(SessionCmd::New), Command::Zmx(ZmxCmd::List)] {
+        for cmd in [
+            Command::Session(SessionCmd::Swap),
+            Command::Window(WindowCmd::New),
+            Command::Zmx(ZmxCmd::List),
+        ] {
             let response = core.dispatch(&Request::new(cmd));
             assert!(!response.ok);
             assert_eq!(

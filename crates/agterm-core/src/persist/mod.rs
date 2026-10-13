@@ -1,15 +1,17 @@
 //! Persistence in upstream's on-disk formats, which the Linux fork shares: the window index `windows.json`, each
-//! window's `windows/<ID>.json` snapshot, the legacy single-window `workspaces.json`, and `settings.json`, all in the
-//! state directory.
+//! window's `windows/<ID>.json` snapshot, the legacy single-window `workspaces.json`, `settings.json` and Open Recent's
+//! `recent-closed.json`, all in the state directory.
 //!
 //! - [`json`]: Foundation's pretty, key-sorted JSON and its atomic write.
 //! - [`snapshot`]: the snapshot and index types, with upstream's lossy decoding.
 //! - [`settings`]: the app settings and their store.
 //! - [`library`]: the window library's persistence: the launch bootstrap (index, orphan recovery, legacy migration,
 //!   seeding), loading a closed window, and the saves the model asks for, the debounced ones through the main loop.
+//! - [`recent_closed`]: Open Recent's `recent-closed.json`.
 
 pub mod json;
 pub mod library;
+pub mod recent_closed;
 pub mod settings;
 pub mod snapshot;
 
@@ -17,7 +19,11 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 
-pub use library::{DebouncedSave, LibraryPersistence, SAVE_DEBOUNCE, arm_debounced_saves};
+pub use library::{Commit, DebouncedSave, LibraryPersistence, SAVE_DEBOUNCE, arm_debounced_saves};
+pub use recent_closed::{
+    RECENT_CLOSED_FILE_NAME, RECENT_CLOSED_LIMIT, RecentClosedItem, RecentClosedKind, RecentClosedSession,
+    RecentClosedState, RecentClosedStore, RecentClosedWorkspace,
+};
 pub use settings::{AppSettings, RestoreMode, SettingsStore};
 pub use snapshot::{PersistenceStore, SessionSnapshot, Snapshot, WindowEntry, WindowsIndex, WorkspaceSnapshot};
 

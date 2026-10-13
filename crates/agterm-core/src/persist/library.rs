@@ -6,7 +6,9 @@
 //! debounced save is armed on the main loop ([`arm_debounced_saves`]) and lands through
 //! [`LibraryPersistence::fire_debounced`] unless a later save of the same window superseded it, which is upstream's
 //! `Debouncer` (a new schedule or an immediate `save()` cancels the pending one). No save happens on a cwd report:
-//! the live cwd reaches disk with the next structural or debounced save.
+//! the live cwd reaches disk with the next structural or debounced save. A soft close drops the window's armed
+//! debounced save unwritten, and the commit applies the model's Open Recent changes to `recent-closed.json`, which
+//! the bootstrap loads into the library.
 //!
 //! Recovery never fails: a corrupt, version-mismatched or empty index counts as absent, and the launch then recovers
 //! the surviving `windows/<ID>.json` files, else migrates a legacy `workspaces.json`, else seeds one window. A
@@ -22,8 +24,11 @@ use agterm_host::MainLoop;
 use uuid::Uuid;
 
 use super::parse_uuid_string;
+use super::recent_closed::RecentClosedStore;
 use super::snapshot::{PersistenceStore, Snapshot, WindowEntry, WindowsIndex};
-use crate::model::{AppStore, SaveRequest, WindowEvent, WindowInfo, WindowLibrary};
+use crate::model::{
+    AppStore, PendingCloseTimer, RecentClosedChange, SaveRequest, WindowEvent, WindowInfo, WindowLibrary,
+};
 use crate::pane_env::uuid_string;
 
 /// The window index's file name in the state directory.
@@ -49,6 +54,8 @@ pub struct Commit {
     pub events: Vec<WindowEvent>,
     /// The debounced writes to arm on the main loop.
     pub debounced: Vec<DebouncedSave>,
+    /// The soft closes whose grace timers to arm on the main loop.
+    pub pending_closes: Vec<PendingCloseTimer>,
 }
 
 /// The persistence of one window library, rooted at the state directory.
@@ -110,6 +117,7 @@ impl LibraryPersistence {
     /// seeded with a session in `home`. The launch emits no events; what it wants written is written now.
     pub fn bootstrap(&mut self, home: &str) -> WindowLibrary {
         let mut library = WindowLibrary::new(home);
+        library.set_recent_closed_items(self.recent_closed_store().load());
         if let Some(index) = WindowsIndex::load(&self.index_path()) {
             for entry in &index.windows {
                 library.insert_window(WindowInfo {
@@ -256,6 +264,10 @@ impl LibraryPersistence {
     /// debounced saves to arm.
     pub fn commit(&mut self, library: &mut WindowLibrary) -> Commit {
         let effects = library.drain_effects();
+        for window in &effects.cancelled_saves {
+            self.pending.remove(window);
+        }
+        self.apply_recent_closed(&effects.recent_closed);
         let mut debounced = Vec::new();
         for (id, request) in effects.window_saves {
             match request {
@@ -272,6 +284,32 @@ impl LibraryPersistence {
         Commit {
             events: effects.events,
             debounced,
+            pending_closes: effects.pending_closes,
+        }
+    }
+
+    /// The Open Recent file of the state directory.
+    #[must_use]
+    pub fn recent_closed_store(&self) -> RecentClosedStore {
+        RecentClosedStore::new(&self.directory)
+    }
+
+    /// Applies the model's Open Recent changes to `recent-closed.json`, in order; a failed write is logged and the
+    /// next change starts from what the file holds.
+    fn apply_recent_closed(&self, changes: &[RecentClosedChange]) {
+        if changes.is_empty() {
+            return;
+        }
+        let store = self.recent_closed_store();
+        for change in changes {
+            let written = match change {
+                RecentClosedChange::Record(item) => store.record(item.as_ref().clone()),
+                RecentClosedChange::Remove(id) => store.remove(*id),
+                RecentClosedChange::Clear => store.clear(),
+            };
+            if let Err(error) = written {
+                tracing::warn!(%error, "saving the recent closed list failed");
+            }
         }
     }
 

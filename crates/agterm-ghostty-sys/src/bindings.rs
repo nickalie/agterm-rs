@@ -945,6 +945,9 @@ unsafe extern "C" {
     pub fn ghostty_surface_set_occlusion(arg1: ghostty_surface_t, arg2: bool);
 }
 unsafe extern "C" {
+    pub fn ghostty_surface_release_gpu_resources(arg1: ghostty_surface_t);
+}
+unsafe extern "C" {
     pub fn ghostty_surface_set_size(arg1: ghostty_surface_t, arg2: u32, arg3: u32);
 }
 unsafe extern "C" {

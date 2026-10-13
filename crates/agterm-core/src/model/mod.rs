@@ -5,12 +5,15 @@
 //! store's [`Outbox`]; the library drains them for the event ring and persistence.
 
 mod background;
+mod duplicate;
 mod focus;
 pub mod naming;
 mod navigation;
 mod outbox;
 pub mod pane;
+mod pending_close;
 mod recency;
+mod recent_closed;
 mod session;
 mod snapshot;
 mod store;
@@ -23,9 +26,13 @@ mod tests;
 pub use background::{BackgroundWatermark, PaneBackgrounds, WatermarkFit, WatermarkKind, WatermarkPosition};
 pub use focus::FocusMode;
 pub use navigation::{NewSessionPlacement, SessionNavigation, WorkspaceNavigation};
-pub use outbox::{EventPayload, ModelEvent, Outbox, SaveRequest};
+pub use outbox::{EventPayload, ModelEvent, Outbox, RecentClosedChange, SaveRequest};
 pub use pane::{PaneLaunch, PaneRestore, SplitAxis, SplitLayout, StatusPane, SurfaceSlot};
+pub use pending_close::{
+    PENDING_CLOSE_GRACE, PendingCloseKind, PendingCloseMember, PendingCloseSummary, PendingCloseTimer,
+};
 pub use recency::{RECENCY_LIMIT, RecencyStack};
+pub use recent_closed::RecentClosedRestore;
 pub use session::{AgentIndicator, AgentStatus, CONTEXT_BYTE_LIMIT, Session, SessionSeed, validate_context};
 pub use store::{
     AppStore, FocusFilter, NewSession, SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN, SessionLocation,

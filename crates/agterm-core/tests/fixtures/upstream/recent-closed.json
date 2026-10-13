@@ -1,0 +1,63 @@
+{
+  "items" : [
+    {
+      "closedAt" : 781912345.25,
+      "id" : "3C000000-0000-4000-8000-000000000001",
+      "kind" : "workspace",
+      "subtitle" : "2 sessions",
+      "title" : "infra",
+      "workspace" : {
+        "focusMember" : true,
+        "selectedSessionID" : "5E000000-0000-4000-8000-000000000012",
+        "snapshot" : {
+          "collapsed" : true,
+          "id" : "1D000000-0000-4000-8000-000000000011",
+          "name" : "infra",
+          "sessions" : [
+            {
+              "cwd" : "\/srv\/infra",
+              "flagged" : false,
+              "id" : "5E000000-0000-4000-8000-000000000011",
+              "isSplit" : false,
+              "paneIdentity" : "9A000000-0000-4000-8000-000000000011"
+            },
+            {
+              "customName" : "deploy",
+              "cwd" : "\/srv\/deploy",
+              "flagged" : true,
+              "id" : "5E000000-0000-4000-8000-000000000012",
+              "isSplit" : false,
+              "paneIdentity" : "9A000000-0000-4000-8000-000000000012",
+              "restoreCommand" : "claude --resume abc"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "closedAt" : 781900000,
+      "id" : "3C000000-0000-4000-8000-000000000002",
+      "kind" : "session",
+      "session" : {
+        "sessionIndex" : 1,
+        "snapshot" : {
+          "cwd" : "\/home\/user\/project",
+          "flagged" : false,
+          "hasSplit" : true,
+          "id" : "5E000000-0000-4000-8000-000000000013",
+          "isSplit" : true,
+          "paneIdentity" : "9A000000-0000-4000-8000-000000000013",
+          "splitAxis" : "vertical",
+          "splitPaneIdentity" : "9A000000-0000-4000-8000-000000000014",
+          "splitRatio" : 0.5
+        },
+        "workspaceID" : "1D000000-0000-4000-8000-000000000012",
+        "workspaceIndex" : 0,
+        "workspaceName" : "work"
+      },
+      "subtitle" : "work",
+      "title" : "project"
+    }
+  ],
+  "version" : 1
+}
