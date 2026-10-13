@@ -10,7 +10,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::{Fixture, UNKNOWN, answered_affected, answered_id, args, core_over, failure, send, wire};
-use crate::model::{AgentStatus, WindowLibrary};
+use crate::model::{AgentStatus, PendingCloseKind, WindowLibrary};
 use crate::persist::AppSettings;
 
 // MARK: - session.new
@@ -299,6 +299,22 @@ fn close_batch_deduplicates_and_counts_with_grace_undo_on_or_off() {
             fixture.order(fixture.workspace),
             [fixture.sessions[1]],
             "{keep} {grace:?}"
+        );
+        let pending = fixture.store().pending_close_summary();
+        if grace == Some(false) {
+            assert!(pending.is_none(), "grace undo off closes for good");
+            continue;
+        }
+        assert_eq!(
+            pending.map(|summary| summary.kind),
+            Some(PendingCloseKind::Sessions),
+            "one grouped undo record {grace:?}"
+        );
+        assert!(fixture.store_mut().unwrap().undo_pending_close(None));
+        assert_eq!(
+            fixture.order(fixture.workspace),
+            fixture.sessions,
+            "the undo restores both {grace:?}"
         );
     }
 }

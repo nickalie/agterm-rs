@@ -376,11 +376,14 @@ mod tests {
         let (mut library, window, ids) = three_sessions();
         let mounted: HashSet<Uuid> = ids.iter().copied().collect();
         let store = library.store_mut(window).unwrap();
-        store.close_session(ids[1]);
+        assert!(store.soft_close_session(ids[1]));
         store.close_session(ids[2]);
-        let held = HashSet::from([ids[1]]);
-        let plan = plan_store(window, library.store(window).unwrap(), &held, &mounted);
-        assert_eq!(plan.remove, vec![ids[2]], "the held session's page stays");
+        let plan = plan(&library, Some(window), &mounted);
+        assert_eq!(
+            plan.remove,
+            vec![ids[2]],
+            "the held session's page stays, the hard-closed one's goes"
+        );
         assert!(plan.add.is_empty(), "a held session out of the tree gets no new page");
         assert_ne!(plan.shown, Some(ids[1]), "and never shows");
     }

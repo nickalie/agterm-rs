@@ -145,14 +145,23 @@ impl AppState {
     }
 
     /// Lands a primary pane's report on its session, wherever that session lives now (upstream's
-    /// `applyPwd`/`applyTitle`); a session gone since is skipped. Nothing is saved, as upstream.
+    /// `applyPwd`/`applyTitle`): in a window's tree, or held by a pending soft close whose terminal still runs. A
+    /// session gone since is skipped. Nothing is saved, as upstream.
     pub fn apply_report(&mut self, session: Uuid, report: &PaneReport) {
-        let Some(session) = self
-            .core
-            .library_mut()
-            .store_for_session_mut(session)
-            .and_then(|store| store.session_mut(session))
+        let library = self.core.library_mut();
+        let Some(store) = library
+            .window_holding_session(session)
+            .and_then(|window| library.store_mut(window))
         else {
+            return;
+        };
+        let in_tree = store.session(session).is_some();
+        let target = if in_tree {
+            store.session_mut(session)
+        } else {
+            store.pending_close_session_mut(session)
+        };
+        let Some(session) = target else {
             return;
         };
         match report {
@@ -207,8 +216,9 @@ impl AppState {
         }
     }
 
-    /// The user closed the window: the quit save runs while every terminal still lives, the window leaves
-    /// `window.list`, then the window closes for real (and with it the app).
+    /// The user closed the window: the quit save runs while every terminal still lives, the window's live state
+    /// (full screen, maximized, minimized) is withdrawn from `window.list`, then the window closes for real (and
+    /// with it the app).
     pub fn close_requested(&mut self) {
         self.save_on_quit();
         let Some(ui) = self.ui.as_ref() else {
@@ -458,6 +468,30 @@ mod tests {
         assert_eq!(reported.effective_cwd(), "/tmp/next");
         assert_eq!(reported.osc_title.as_deref(), Some("vim"));
         assert_eq!(reported.display_name(), "vim");
+    }
+
+    #[test]
+    fn a_terminal_report_lands_on_a_session_a_soft_close_holds() {
+        let (mut state, window, session) = state_with_terminal();
+        let store = state.core.library_mut().store_mut(window).unwrap();
+        let workspace = store.workspaces()[0].id();
+        store.add_session(workspace, NewSession::at_cwd("/srv")).unwrap();
+        assert!(store.soft_close_session(session));
+        assert!(
+            store.session(session).is_none(),
+            "out of the tree, held by the pending close"
+        );
+        state.apply_report(session, &PaneReport::Pwd("/tmp/held".to_owned()));
+        state.apply_report(session, &PaneReport::Title("htop".to_owned()));
+        let store = state.core.library_mut().store_mut(window).unwrap();
+        assert!(store.undo_pending_close(None));
+        let restored = store.session(session).unwrap();
+        assert_eq!(
+            restored.effective_cwd(),
+            "/tmp/held",
+            "the grace-period cwd survives the undo"
+        );
+        assert_eq!(restored.osc_title.as_deref(), Some("htop"));
     }
 
     #[test]

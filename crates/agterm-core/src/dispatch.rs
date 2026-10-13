@@ -201,11 +201,7 @@ impl Core {
     /// The quit path: makes every pending close final, then writes every open window and the index (upstream's
     /// `applicationWillTerminate` save). Whether every write landed.
     pub fn save_all(&mut self) -> bool {
-        for id in self.library.open_ids() {
-            if let Some(store) = self.library.store_mut(id) {
-                store.finalize_all_pending_closes();
-            }
-        }
+        self.library.finalize_all_pending_closes();
         self.library.is_terminating = true;
         let _ = self.commit();
         self.persistence
