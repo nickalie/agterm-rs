@@ -242,6 +242,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
+            meson ninja-build libwayland-dev wayland-protocols \
             curl xz-utils patch ncurses-bin \
             weston dbus-daemon libgl1-mesa-dri libegl-mesa0 fish
       # the app and the harness read the password database, never $SHELL
@@ -258,6 +259,9 @@ jobs:
           key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
       - name: libghostty prefix
         run: scripts/build-ghostty.sh
+      - name: gtk4-layer-shell prefix
+        run: scripts/build-layer-shell.sh
+      # stage.sh stages bin/zmx from this prefix, restored from the cache the rust-linux job saved
       - name: zmx prefix
         run: scripts/build-zmx.sh
       - uses: actions/setup-python@v7
