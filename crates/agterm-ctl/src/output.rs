@@ -18,8 +18,8 @@ use crate::window::format_windows;
 
 /// Renders a response as its human-readable summary (no trailing newline): an `error:` line, the tree or window
 /// listing, the serving app's version, the text read (or a search's counter), a batch's affected count, a count of
-/// diagnostics, a cursor column, a resized window's `W H`, the affected id (only with `echo_id`, for the create
-/// commands), or a bare `ok`. Never JSON: `--json` prints the server's own line.
+/// diagnostics, a cursor column, a resized window's `W H`, a resized split's ratio, the affected id (only with
+/// `echo_id`, for the create commands), or a bare `ok`. Never JSON: `--json` prints the server's own line.
 ///
 /// The result's fields are tested in upstream's fixed order (`formatResponse`: `tree` first, `app` after the
 /// listings); each command group adds its branch at its place in that order.
@@ -73,6 +73,10 @@ pub fn format_response(response: &Response, echo_id: bool) -> String {
         result.and_then(|result| Some((result.get("width")?.as_i64()?, result.get("height")?.as_i64()?)))
     {
         return format!("{width} {height}");
+    }
+    // `session.resize` echoes the applied (clamped) primary-pane fraction, as `%.3f`
+    if let Some(ratio) = result.and_then(|result| result.get("ratio")).and_then(Value::as_f64) {
+        return format!("{ratio:.3}");
     }
     if echo_id && let Some(id) = result.and_then(|result| result.get("id")).and_then(Value::as_str) {
         return id.to_owned();
@@ -241,6 +245,21 @@ mod tests {
         assert_eq!(
             format_response(&ok(json!({"cursor": {"column": 4}, "width": 1, "height": 2})), false),
             "4"
+        );
+    }
+
+    #[test]
+    fn a_split_resize_prints_the_applied_ratio_to_three_places() {
+        assert_eq!(
+            format_response(&ok(json!({"id": "9f3c", "ratio": 0.85})), false),
+            "0.850"
+        );
+        assert_eq!(format_response(&ok(json!({"id": "9f3c", "ratio": 0.3})), true), "0.300");
+        assert_eq!(format_response(&ok(json!({"ratio": 1})), false), "1.000");
+        // the size wins over a ratio, as upstream tests it first
+        assert_eq!(
+            format_response(&ok(json!({"width": 1, "height": 2, "ratio": 0.5})), false),
+            "1 2"
         );
     }
 

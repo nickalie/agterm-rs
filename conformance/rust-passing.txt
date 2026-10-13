@@ -9,6 +9,7 @@ tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_re
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args4-None]
 tests/cli/test_cli_output.py::test_session_create_select_and_close
 tests/cli/test_cli_output.py::test_session_move_and_go
+tests/cli/test_cli_output.py::test_session_panes
 tests/cli/test_cli_output.py::test_session_status_carries_its_overrides
 tests/cli/test_cli_output.py::test_session_type_text_search_and_copy
 tests/cli/test_cli_output.py::test_version
@@ -108,6 +109,7 @@ tests/protocol/test_session.py::test_rename_and_blank_restores_the_automatic_nam
 tests/protocol/test_session.py::test_rename_requires_a_name
 tests/protocol/test_session.py::test_reveal_answers_with_the_session
 tests/protocol/test_session.py::test_select_moves_the_selection_across_workspaces
+tests/protocol/test_session.py::test_status_records_the_pane
 tests/protocol/test_session.py::test_status_rejects[color]
 tests/protocol/test_session.py::test_status_rejects[missing]
 tests/protocol/test_session.py::test_status_rejects[pane]
@@ -129,6 +131,7 @@ tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[scratch-sess
 tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[scratch-session has no scratch terminal-session.type]
 tests/protocol/test_session_text.py::test_search_counts_the_matches
 tests/protocol/test_session_text.py::test_text_all_includes_the_scrollback
+tests/protocol/test_session_text.py::test_text_defaults_to_the_pane_on_screen
 tests/protocol/test_session_text.py::test_text_lines_returns_the_last_content_lines
 tests/protocol/test_session_text.py::test_text_rejects[all-and-lines]
 tests/protocol/test_session_text.py::test_text_rejects[negative-lines]
@@ -136,6 +139,8 @@ tests/protocol/test_session_text.py::test_text_rejects[pane-id]
 tests/protocol/test_session_text.py::test_text_rejects[pane]
 tests/protocol/test_session_text.py::test_text_rejects[zero-lines]
 tests/protocol/test_session_text.py::test_title_reads_the_terminal_title_a_program_set
+tests/protocol/test_session_text.py::test_type_and_text_address_a_pane
+tests/protocol/test_session_text.py::test_type_and_text_address_a_pane_by_token
 tests/protocol/test_session_text.py::test_type_rejects[no-text]
 tests/protocol/test_session_text.py::test_type_rejects[pane-id]
 tests/protocol/test_session_text.py::test_type_rejects[pane]
@@ -144,9 +149,37 @@ tests/protocol/test_session_text.py::test_type_then_read_the_marker_back
 tests/protocol/test_session_text.py::test_unknown_session_target[session.search-args2]
 tests/protocol/test_session_text.py::test_unknown_session_target[session.text-args1]
 tests/protocol/test_session_text.py::test_unknown_session_target[session.type-args0]
+tests/protocol/test_split.py::test_focus_names_a_pane_by_role_or_position
+tests/protocol/test_split.py::test_focus_reaches_a_hidden_split
+tests/protocol/test_split.py::test_focus_rejects_an_unknown_pane
+tests/protocol/test_split.py::test_pane_commands_need_a_split[session.focus-args0-session has no split]
+tests/protocol/test_split.py::test_pane_commands_need_a_split[session.resize-args1-session has no split]
+tests/protocol/test_split.py::test_pane_commands_need_a_split[session.swap-args2-session has no split pane]
+tests/protocol/test_split.py::test_resize_a_hidden_split_applies_when_shown
+tests/protocol/test_split.py::test_resize_by_a_delta
+tests/protocol/test_split.py::test_resize_rejects[both]
+tests/protocol/test_split.py::test_resize_rejects[nothing]
+tests/protocol/test_split.py::test_resize_sets_and_clamps_the_ratio
+tests/protocol/test_split.py::test_scratch_rejects_an_unknown_mode
+tests/protocol/test_split.py::test_scratch_shows_and_hides
+tests/protocol/test_split.py::test_split_axis
+tests/protocol/test_split.py::test_split_close_tears_the_pane_down
+tests/protocol/test_split.py::test_split_rejects[axis]
+tests/protocol/test_split.py::test_split_rejects[mode]
+tests/protocol/test_split.py::test_split_shows_hides_and_keeps_the_pane
+tests/protocol/test_split.py::test_swap_exchanges_the_panes_and_focus_follows_the_terminal
+tests/protocol/test_split.py::test_swap_reaches_a_hidden_split
+tests/protocol/test_split.py::test_unknown_session_target[session.focus-args4]
+tests/protocol/test_split.py::test_unknown_session_target[session.resize-args5]
+tests/protocol/test_split.py::test_unknown_session_target[session.scratch-args3]
+tests/protocol/test_split.py::test_unknown_session_target[session.split-args0]
+tests/protocol/test_split.py::test_unknown_session_target[session.split.close-args1]
+tests/protocol/test_split.py::test_unknown_session_target[session.swap-args2]
+tests/protocol/test_split.py::test_zoom_one_surface_and_back
 tests/protocol/test_split.py::test_zoom_rejects_an_unknown_mode
 tests/protocol/test_split.py::test_zoom_rejects_an_unknown_surface[surface:zzz:left]
 tests/protocol/test_split.py::test_zoom_rejects_an_unknown_surface[zzz]
+tests/protocol/test_surface.py::test_cursor_reads_each_pane_by_surface_id_or_pane_id
 tests/protocol/test_surface.py::test_cursor_refusals[bogus-kind-args2-invalid surface: surface:{sid}:bogus]
 tests/protocol/test_surface.py::test_cursor_refusals[left-args6-surface.cursor: --pane-id takes a session target]
 tests/protocol/test_surface.py::test_cursor_refusals[quick-args7-surface.cursor: --pane-id takes a session target]
@@ -240,4 +273,7 @@ tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.focus-
 tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.move-args3]
 tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.rename-args1]
 tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.select-args0]
+tests/protocol/test_zmx.py::test_lead_rejects[no-split]
+tests/protocol/test_zmx.py::test_lead_rejects[not-live]
+tests/protocol/test_zmx.py::test_lead_rejects[scratch]
 tests/protocol/test_zmx.py::test_present_refuses_without_a_session

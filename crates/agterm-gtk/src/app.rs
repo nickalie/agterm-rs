@@ -37,6 +37,8 @@ const CAPABILITIES: &[&str] = &[
     "select-takes-frontmost",
     "status-shape",
     "type-rejects-nul",
+    "resize-echoes-ratio",
+    "hidden-split-holds-focus",
 ];
 
 /// `AGTERM_APP_ID` when it is a valid application id, else the fork's.
@@ -180,7 +182,7 @@ mod tests {
     use agterm_core::paths::MapEnv;
 
     use super::*;
-    use crate::deck::PageSpec;
+    use crate::deck::PaneSpec;
 
     #[test]
     fn the_app_id_honours_a_valid_override() {
@@ -225,7 +227,7 @@ mod tests {
         let window = library.active_window_id().ok_or("no window")?;
         let store = library.store(window).ok_or("no store")?;
         let session = store.sessions().next().ok_or("no session")?.id();
-        let spec = PageSpec::primary(window, store, session).ok_or("no page")?;
+        let spec = PaneSpec::primary(window, store, session).ok_or("no page")?;
         let context = |socket| PaneContext {
             socket,
             program_version: identity().version,
@@ -251,7 +253,9 @@ mod tests {
                 "drop-placement",
                 "select-takes-frontmost",
                 "status-shape",
-                "type-rejects-nul"
+                "type-rejects-nul",
+                "resize-echoes-ratio",
+                "hidden-split-holds-focus"
             ]
         );
     }

@@ -133,11 +133,7 @@ fn cursor_of(store: &AppStore, id: SurfaceId) -> Result<ControlResult, ControlEr
         .session(id.session)
         .filter(|session| id.surface.is_available(session))
         .ok_or_else(|| not_available(&control_id))?;
-    let pane = match id.surface {
-        ZoomSurface::Primary => StatusPane::Left,
-        ZoomSurface::Split => StatusPane::Right,
-        _ => return Err(not_available(&control_id)),
-    };
+    let pane = id.surface.pane().ok_or_else(|| not_available(&control_id))?;
     let surface = pane_surface(session, pane).ok_or_else(|| not_available(&control_id))?;
     if !surface.is_realized() {
         return Err(ControlError::rejected("surface not realized"));

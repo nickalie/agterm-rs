@@ -165,6 +165,9 @@ impl FakeSurface {
     /// The visible screen height [`TextScope::Screen`] reads.
     pub const ROWS: usize = 24;
 
+    /// The font size a realized fake reports.
+    pub const FONT_SIZE: f64 = 13.0;
+
     /// A realized surface that owns its shell, with pane token `token` and no text.
     #[must_use]
     pub fn new(token: impl Into<String>) -> Self {
@@ -320,6 +323,10 @@ impl Surface for FakeSurface {
     fn foreground_pid(&self) -> Option<u32> {
         let state = self.state.borrow();
         state.foreground_pid.filter(|_| state.realized)
+    }
+
+    fn font_size(&self) -> Option<f64> {
+        self.state.borrow().realized.then_some(Self::FONT_SIZE)
     }
 
     fn teardown(self: Box<Self>) {

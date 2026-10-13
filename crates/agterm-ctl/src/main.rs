@@ -8,6 +8,7 @@ mod output;
 mod session;
 mod session_io;
 mod session_meta;
+mod session_panes;
 mod socket;
 mod surface;
 mod tree;
@@ -271,6 +272,7 @@ fn parse_report(args: &[OsString], error: &clap::Error, width: usize) -> usage::
 fn main() -> ExitCode {
     restore_default_sigpipe();
     let args: Vec<OsString> = std::env::args_os().collect();
+    let args = usage::name_default_subcommands(&Agtermctl::command(), &args);
     let cli = match Agtermctl::try_parse_from(&args) {
         Ok(cli) => cli,
         Err(error) => return report_parse_error(&args, &error),

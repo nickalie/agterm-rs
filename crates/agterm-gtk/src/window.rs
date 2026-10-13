@@ -366,8 +366,7 @@ impl WindowUi {
     pub fn sync(&mut self, core: &mut Core, poster: &Poster) {
         let id = self.window_id;
         let zoomed = core.zoom_target(id);
-        self.deck
-            .reconcile(core, Some(id), zoomed.map(|zoom| zoom.session), &self.context, poster);
+        self.deck.reconcile(core, Some(id), zoomed, &self.context, poster);
         let badges = core.settings().notification_badge_enabled.unwrap_or(true);
         if let Some(store) = core.library_mut().store_mut(id) {
             self.sidebar.refresh(store, badges);

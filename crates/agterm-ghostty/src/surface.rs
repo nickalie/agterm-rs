@@ -366,6 +366,16 @@ impl Surface {
         solve_cursor_column(probe.top_left_x, before, ime, after)
     }
 
+    /// The font size the terminal draws with, in points, as a new window would inherit it (upstream's
+    /// `currentFontSize`); `None` when libghostty reports none.
+    #[must_use]
+    pub fn font_size(&self) -> Option<f64> {
+        // SAFETY: a live surface on its thread; the returned struct is read for its scalar field only.
+        let config = unsafe { sys::ghostty_surface_inherited_config(self.ptr(), sys::GHOSTTY_SURFACE_CONTEXT_WINDOW) };
+        let size = f64::from(config.font_size);
+        (size > 0.0).then_some(size)
+    }
+
     /// The pid of the terminal's foreground process; `None` when libghostty reports none.
     #[must_use]
     pub fn foreground_pid(&self) -> Option<u32> {

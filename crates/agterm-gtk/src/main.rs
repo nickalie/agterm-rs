@@ -17,6 +17,7 @@ mod main_loop;
 mod pane;
 mod sidebar;
 mod signals;
+mod split;
 mod state;
 mod surface;
 mod window;

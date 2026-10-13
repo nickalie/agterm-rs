@@ -15,7 +15,7 @@ use super::{Outcome, args_of, parse_surface_pane, session_store, unknown_pane_id
 use crate::Core;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
-use crate::model::{AppStore, PaneAddress, StatusPane, StatusReset, SurfaceSlot};
+use crate::model::{AppStore, PaneAddress, StatusPane, StatusReset};
 
 /// How many times the main pane is probed after the first miss (upstream's 12 × 0.03 s).
 pub(crate) const ATTEMPTS: u32 = 12;
@@ -57,22 +57,19 @@ fn start(core: &mut Core, request: &Request) -> Result<Dispatched, ControlError>
         .clone()
         .filter(|token| session.pane_role_for_token(token).is_some());
     match pane {
-        Some(StatusPane::Right) => {
+        Some(pane @ (StatusPane::Right | StatusPane::Scratch)) => {
             if !store
                 .session(id)
-                .is_some_and(|session| session.split_surface.is_present())
+                .is_some_and(|session| session.pane_slot(pane).is_present())
             {
-                return Err(no_split_pane());
+                return Err(if pane == StatusPane::Right {
+                    no_split_pane()
+                } else {
+                    no_scratch()
+                });
             }
-            Ok(Dispatched::done(typed_result(
-                store,
-                id,
-                StatusPane::Right,
-                &text,
-                reset,
-            )))
+            Ok(Dispatched::done(typed_result(store, id, pane, &text, reset)))
         }
-        Some(StatusPane::Scratch) => Err(no_scratch()),
         None | Some(StatusPane::Left) => {
             if type_into(store, id, StatusPane::Left, &text, reset) {
                 return Ok(Dispatched::done(Ok(answer(id, StatusPane::Left))));
@@ -113,8 +110,7 @@ fn typed_result(store: &mut AppStore, id: Uuid, pane: StatusPane, text: &str, re
 fn type_into(store: &mut AppStore, id: Uuid, pane: StatusPane, text: &str, reset: StatusReset) -> bool {
     let typed = store
         .session_mut(id)
-        .and_then(|session| session.pane_slot_mut(pane))
-        .and_then(SurfaceSlot::get_mut)
+        .and_then(|session| session.pane_slot_mut(pane).get_mut())
         .is_some_and(|surface| surface.type_text(text));
     if typed {
         store.note_typed_input(id, pane, text, reset);

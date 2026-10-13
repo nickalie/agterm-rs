@@ -33,6 +33,9 @@ pub struct ControlResult {
     /// How many things a batch mutation actually changed (`session.close`, `session.move` with several targets).
     #[serde(default)]
     pub affected: Option<i64>,
+    /// `session.resize`: the applied, clamped primary-pane fraction.
+    #[serde(default)]
+    pub ratio: Option<f64>,
     /// The pane a command read or typed into (`left|right|scratch`).
     #[serde(default)]
     pub pane: Option<String>,

@@ -570,7 +570,7 @@ mod tests {
     fn unimplemented_commands_are_refused_by_name() {
         let mut core = core();
         for cmd in [
-            Command::Session(SessionCmd::Swap),
+            Command::Session(SessionCmd::Restart),
             Command::Notify,
             Command::Zmx(ZmxCmd::List),
         ] {

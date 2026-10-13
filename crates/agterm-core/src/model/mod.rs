@@ -11,6 +11,7 @@ pub mod naming;
 mod navigation;
 mod outbox;
 pub mod pane;
+mod panes;
 mod pending_close;
 mod recency;
 mod recent_closed;
@@ -30,6 +31,7 @@ pub use focus::FocusMode;
 pub use navigation::{NewSessionPlacement, SessionNavigation, WorkspaceNavigation};
 pub use outbox::{EventPayload, ModelEvent, Outbox, RecentClosedChange, SaveRequest};
 pub use pane::{PaneLaunch, PaneRestore, SplitAxis, SplitLayout, StatusPane, SurfaceSlot};
+pub use panes::SwapRefusal;
 pub use pending_close::{
     PENDING_CLOSE_GRACE, PendingCloseKind, PendingCloseMember, PendingCloseSummary, PendingCloseTimer,
 };

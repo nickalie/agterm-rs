@@ -78,6 +78,7 @@ type ExitHandler = Box<dyn FnOnce()>;
 type ReportHandler = Box<dyn Fn(&str)>;
 type SearchHandler = Box<dyn Fn(&SearchReport)>;
 type KeystrokeHandler = Box<dyn Fn(StatusKeystroke)>;
+type FocusHandler = Box<dyn Fn()>;
 
 struct Inner {
     key: SurfaceKey,
@@ -95,6 +96,7 @@ struct Inner {
     on_search: RefCell<Vec<SearchHandler>>,
     on_open_url: RefCell<Vec<ReportHandler>>,
     on_keystroke: RefCell<Vec<KeystrokeHandler>>,
+    on_focus_in: RefCell<Vec<FocusHandler>>,
     on_exit: RefCell<Option<ExitHandler>>,
     /// The input method is being reset to end a composition this side already committed or dropped: what it emits
     /// meanwhile is ignored (upstream's `committingComposition`).
@@ -175,6 +177,7 @@ impl TerminalSurface {
             on_search: RefCell::new(Vec::new()),
             on_open_url: RefCell::new(Vec::new()),
             on_keystroke: RefCell::new(Vec::new()),
+            on_focus_in: RefCell::new(Vec::new()),
             on_exit: RefCell::new(None),
             resetting_im: Cell::new(false),
             exit_handled: Cell::new(false),
@@ -234,6 +237,11 @@ impl TerminalSurface {
     /// Bare modifier keys are not reported.
     pub fn connect_keystroke(&self, handler: impl Fn(StatusKeystroke) + 'static) {
         self.inner.on_keystroke.borrow_mut().push(Box::new(handler));
+    }
+
+    /// Adds a handler called each time the area gains keyboard focus, whoever moved it there.
+    pub fn connect_focus_in(&self, handler: impl Fn() + 'static) {
+        self.inner.on_focus_in.borrow_mut().push(Box::new(handler));
     }
 
     /// Called once when the terminal's process ends.
@@ -452,8 +460,15 @@ impl TerminalSurface {
         !self.inner.torn_down.get() && self.inner.ghostty.try_borrow().is_ok_and(|surface| surface.is_some())
     }
 
-    pub fn grab_focus(&self) {
-        self.area.grab_focus();
+    /// The key libghostty knows this terminal by, which [`lookup`] resolves back to it.
+    #[must_use]
+    pub fn key(&self) -> SurfaceKey {
+        self.inner.key
+    }
+
+    /// Moves keyboard focus to the terminal; whether it took it.
+    pub fn grab_focus(&self) -> bool {
+        self.area.grab_focus()
     }
 
     pub fn queue_render(&self) {
@@ -642,6 +657,11 @@ impl TerminalSurface {
         .is_some()
     }
 
+    /// The terminal's live font size in points.
+    pub fn font_size(&self) -> Option<f64> {
+        self.with_surface(Surface::font_size).flatten()
+    }
+
     /// The pid of the terminal's foreground process.
     pub fn foreground_pid(&self) -> Option<u32> {
         self.with_surface(Surface::foreground_pid).flatten()
@@ -668,6 +688,9 @@ impl TerminalSurface {
         self.with_surface(|s| s.set_focus(focused));
         if focused {
             self.inner.im.focus_in();
+            for handler in self.inner.on_focus_in.borrow().iter() {
+                handler();
+            }
         } else {
             self.inner.im.focus_out();
             // the releases of keys held now go to whatever takes focus

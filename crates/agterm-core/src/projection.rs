@@ -2,7 +2,7 @@
 //!
 //! Built fresh per request from the model. What the model does not hold yet reads as upstream reports it in that
 //! state: overlays, HUDs, asks, the dashboard, zoom, the quick terminal and live sessions arrive with their command
-//! groups, and the live per-pane reads (foreground process, font sizes) with the host seams that answer them.
+//! groups, and the live foreground-process read with the host seam that answers it.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,9 +10,10 @@ use agterm_proto::AppIdentity;
 use agterm_proto::tree::{ControlSessionNode, ControlSurfaceNode, ControlTree, ControlWorkspaceNode};
 use uuid::Uuid;
 
-use crate::model::{AgentStatus, AppStore, Session, StatusPane, Workspace};
+use crate::model::{AgentStatus, AppStore, Session, StatusPane, SurfaceSlot, Workspace};
 use crate::pane_env::uuid_string;
 use crate::persist::AppSettings;
+use crate::zoom::{SurfaceId, ZoomSurface};
 
 /// The app-wide inputs of a tree beside the window's store.
 #[derive(Debug, Clone, Copy)]
@@ -109,6 +110,9 @@ pub fn session_node(session: &Session, active: bool) -> ControlSessionNode {
     node.backed_by_zmx = Some(all_panes_backed(session));
     node.surfaces = Some(surface_nodes(session));
     node.realized = Some(session.surface.get().is_some_and(agterm_host::Surface::is_realized));
+    node.font_size = font_size(session.pane_slot(session.addressable_pane()));
+    node.split_font_size = font_size(&session.split_surface);
+    node.scratch_font_size = font_size(&session.scratch_surface);
     apply_split(&mut node, session);
     apply_status(&mut node, session);
     node
@@ -154,69 +158,54 @@ fn all_panes_backed(session: &Session) -> bool {
     live(&session.surface) && (!session.split.exists || live(&session.split_surface))
 }
 
-/// The focused pane: the split one while it has focus and is shown or exists (upstream's `Session.focusedPane`).
-fn split_pane_focused(session: &Session) -> bool {
-    session.split.focused && (session.split.shown || session.split_surface.is_present())
+/// A pane's live font size, omitted while its terminal is not up.
+fn font_size(slot: &SurfaceSlot) -> Option<f64> {
+    slot.get()
+        .filter(|surface| surface.is_realized())
+        .and_then(agterm_host::Surface::font_size)
 }
 
-/// Whether the detail pane lays the pane out: both while the split is shown, else the focused one.
-fn renders_pane(session: &Session, right: bool) -> bool {
-    session.split.shown || right == split_pane_focused(session)
-}
-
-/// The session's addressable surfaces in upstream's `TerminalZoomSurface` order: the primary pane, the split pane
-/// while one exists, the scratch terminal while shown. No overlay is modelled yet, so none covers a pane.
+/// The session's addressable surfaces in upstream's `TerminalZoomSurface` order (the primary pane, the split pane
+/// while one exists, the scratch terminal while shown or alive). No overlay is modelled yet, so none covers a pane.
 fn surface_nodes(session: &Session) -> Vec<ControlSurfaceNode> {
-    let id = |kind: &str| format!("surface:{}:{kind}", uuid_string(session.id()));
-    let uncovered = !session.scratch_active;
-    let mut nodes = Vec::new();
-    let primary_gone = !session.surface.is_present() && session.split_surface.is_present() && session.split.focused;
-    if !primary_gone {
-        nodes.push(ControlSurfaceNode {
-            id: id("left"),
-            kind: "left".to_owned(),
-            active: uncovered && !split_pane_focused(session),
-            visible: uncovered && renders_pane(session, false),
-            backed_by_zmx: Some(session.surface.get().is_some_and(agterm_host::Surface::is_live_session)),
-            lead: None,
-            reconnect: None,
-            pane_id: pane_token(&session.surface),
-        });
+    ZoomSurface::ALL
+        .into_iter()
+        .filter(|kind| kind.is_available(session))
+        .filter_map(|kind| {
+            let pane = kind.pane()?;
+            let slot = session.pane_slot(pane);
+            Some(ControlSurfaceNode {
+                id: SurfaceId {
+                    session: session.id(),
+                    surface: kind,
+                }
+                .control_id(),
+                kind: kind.wire_name().to_owned(),
+                active: kind.is_active(session),
+                visible: surface_visible(session, pane),
+                backed_by_zmx: (pane != StatusPane::Scratch)
+                    .then(|| slot.get().is_some_and(agterm_host::Surface::is_live_session)),
+                lead: None,
+                reconnect: None,
+                pane_id: pane_token(slot),
+            })
+        })
+        .collect()
+}
+
+/// Whether the detail pane shows a pane (upstream's `TerminalZoomSurface.isVisible`): the scratch while shown, a pane
+/// while laid out and no scratch covers it.
+fn surface_visible(session: &Session, pane: StatusPane) -> bool {
+    match pane {
+        StatusPane::Scratch => session.scratch_active,
+        StatusPane::Left | StatusPane::Right => {
+            !session.scratch_active && session.renders_pane(pane == StatusPane::Right)
+        }
     }
-    if session.split.exists || session.split_surface.is_present() {
-        nodes.push(ControlSurfaceNode {
-            id: id("right"),
-            kind: "right".to_owned(),
-            active: uncovered && split_pane_focused(session),
-            visible: uncovered && renders_pane(session, true),
-            backed_by_zmx: Some(
-                session
-                    .split_surface
-                    .get()
-                    .is_some_and(agterm_host::Surface::is_live_session),
-            ),
-            lead: None,
-            reconnect: None,
-            pane_id: pane_token(&session.split_surface),
-        });
-    }
-    if session.scratch_active {
-        nodes.push(ControlSurfaceNode {
-            id: id("scratch"),
-            kind: "scratch".to_owned(),
-            active: true,
-            visible: true,
-            backed_by_zmx: None,
-            lead: None,
-            reconnect: None,
-            pane_id: None,
-        });
-    }
-    nodes
 }
 
 /// The surface's `AGTERM_PANE_ID`, absent for an empty slot or a surface spawned without one.
-fn pane_token(slot: &crate::model::SurfaceSlot) -> Option<String> {
+fn pane_token(slot: &SurfaceSlot) -> Option<String> {
     slot.get()
         .map(agterm_host::Surface::pane_token)
         .filter(|token| !token.is_empty())
@@ -329,6 +318,7 @@ mod tests {
             "id": id(sid), "name": "sub", "cwd": "/repo", "splitCwd": "/repo/sub", "active": true, "split": true,
             "hasSplit": true, "backedByZmx": false, "splitAxis": "horizontal", "splitRatio": 0.3,
             "splitFocused": true, "overlay": false, "scratch": false, "flagged": false,
+            "fontSize": 13.0, "splitFontSize": 13.0,
             "surfaces": [
                 {"id": surface("left"), "kind": "left", "active": false, "visible": true, "backedByZmx": false,
                  "paneID": "TOKEN-L"},

@@ -14,7 +14,7 @@ use std::time::Duration;
 use agterm_core::events::{TREE_CHANGED_DEBOUNCE, TreeChangedTimer};
 use agterm_core::model::PendingCloseTimer;
 use agterm_core::persist::{DebouncedSave, arm_debounced_saves};
-use agterm_core::{CommitTimers, ControlError, Core, Dispatched, Resume};
+use agterm_core::{CommitTimers, ControlError, Core, Dispatched, PaneReport, Resume};
 use agterm_host::MainLoop;
 use agterm_proto::{Command, Request};
 use agterm_server::{Reply, ReplySender};
@@ -74,15 +74,6 @@ const APP_TIMERS: TimerHandlers<AppState> = TimerHandlers {
     finalize: finalize_pending_close,
     tree_changed: fire_tree_changed,
 };
-
-/// A terminal report bound for the session that shows the terminal.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PaneReport {
-    /// An OSC 7 working directory.
-    Pwd(String),
-    /// A title a program set (or the user's static one).
-    Title(String),
-}
 
 /// Plays a status sound. Linux has none of the named system sounds upstream plays, so every name, `default` and `beep`
 /// included, sounds the display's alert.
@@ -213,50 +204,42 @@ impl AppState {
         self.quitting = true;
     }
 
-    /// A primary pane's shell ended: its session closes (upstream's `handlePaneExit` → `closePrimaryPane` →
-    /// `closeSession` without a split), unless the session's terminal is another one by now.
-    pub fn close_exited_session(&mut self, session: Uuid, token: &str) {
-        if self.quitting {
-            return;
-        }
-        let Some(store) = self.core.library_mut().store_for_session_mut(session) else {
-            return;
-        };
-        let current = store
-            .session(session)
-            .and_then(|session| session.surface.get())
-            .is_some_and(|surface| surface.pane_token() == token);
-        if current {
-            store.close_session(session);
+    /// The shell of the pane carrying `token` ended: its pane closes by the pane's role now (upstream's per-pane
+    /// `onExit`: the primary's promotes a split survivor or closes the session, the split's collapses the split, the
+    /// scratch's closes the scratch). Nothing after the quit save, so terminals ending as they go close nothing.
+    pub fn pane_exited(&mut self, session: Uuid, token: &str) {
+        if !self.quitting && self.core.pane_exited(session, token) {
             self.settle();
         }
     }
 
-    /// Lands a primary pane's report on its session, wherever that session lives now (upstream's
-    /// `applyPwd`/`applyTitle`): in a window's tree, or held by a pending soft close whose terminal still runs. A
-    /// session gone since is skipped. Nothing is saved, as upstream.
-    pub fn apply_report(&mut self, session: Uuid, report: &PaneReport) {
-        let library = self.core.library_mut();
-        let Some(store) = library
-            .window_holding_session(session)
-            .and_then(|window| library.store_mut(window))
-        else {
-            return;
-        };
-        let in_tree = store.session(session).is_some();
-        let target = if in_tree {
-            store.session_mut(session)
-        } else {
-            store.pending_close_session_mut(session)
-        };
-        let Some(session) = target else {
-            return;
-        };
-        match report {
-            PaneReport::Pwd(pwd) => session.report_pwd(false, pwd),
-            PaneReport::Title(title) => session.report_title(false, title),
+    /// The user moved keyboard focus into the pane carrying `token`: a shown split's focus follows it.
+    pub fn pane_focused(&mut self, session: Uuid, token: &str) {
+        if !self.quitting && self.core.pane_focused(session, token) {
+            self.settle();
         }
-        self.settle();
+    }
+
+    /// Lands a pane's cwd or title report on the pane carrying `token`, wherever its session lives now (upstream's
+    /// `applyPwd`/`applyTitle`): in a window's tree, or held by a pending soft close whose terminal still runs. Nothing
+    /// is saved, as upstream.
+    pub fn report_pane(&mut self, session: Uuid, token: &str, report: &PaneReport) {
+        if self.core.report_pane(session, token, report) {
+            self.settle();
+        }
+    }
+
+    /// The user dragged session `session`'s split divider to `ratio`, or double-clicked it back to even: the session
+    /// stores it, clamped, and saves (upstream's `applySplitRatio`).
+    pub fn set_split_ratio(&mut self, session: Uuid, ratio: f64) {
+        let applied = self
+            .core
+            .library_mut()
+            .store_for_session_mut(session)
+            .and_then(|store| store.apply_split_ratio(ratio, session));
+        if applied.is_some() {
+            self.settle();
+        }
     }
 
     /// A sidebar row was clicked: a session row selects its session, a workspace row opens or folds the workspace
@@ -589,7 +572,7 @@ mod tests {
             .unwrap()
             .surface
             .replace(Box::new(FakeSurface::new(token.clone())));
-        state.close_exited_session(session, &token);
+        state.pane_exited(session, &token);
         assert!(state.core.library().store(window).unwrap().session(session).is_some());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
     }
@@ -644,16 +627,16 @@ mod tests {
     }
 
     #[test]
-    fn the_primary_shell_exiting_closes_its_session() {
+    fn the_primary_shell_exiting_closes_a_session_without_a_split() {
         let (mut state, window, session) = state_with_terminal();
-        state.close_exited_session(session, "other");
+        state.pane_exited(session, "other");
         assert!(
             state.core.library().store(window).unwrap().session(session).is_some(),
             "not its terminal"
         );
-        state.close_exited_session(session, "T");
+        state.pane_exited(session, "T");
         assert!(state.core.library().store(window).unwrap().session(session).is_none());
-        state.close_exited_session(session, "T");
+        state.pane_exited(session, "T");
     }
 
     #[test]
@@ -661,9 +644,10 @@ mod tests {
         let (mut state, window, session) = state_with_terminal();
         state.core.library_mut().new_window(None);
         assert_ne!(state.core.library().active_window_id(), Some(window));
-        state.apply_report(session, &PaneReport::Pwd("/tmp/next".to_owned()));
-        state.apply_report(session, &PaneReport::Title("vim".to_owned()));
-        state.apply_report(Uuid::new_v4(), &PaneReport::Title("lost".to_owned()));
+        state.report_pane(session, "T", &PaneReport::Pwd("/tmp/next".to_owned()));
+        state.report_pane(session, "T", &PaneReport::Title("vim".to_owned()));
+        state.report_pane(Uuid::new_v4(), "T", &PaneReport::Title("lost".to_owned()));
+        state.report_pane(session, "other", &PaneReport::Title("stale".to_owned()));
         let reported = state.core.library().store(window).unwrap().session(session).unwrap();
         assert_eq!(reported.effective_cwd(), "/tmp/next");
         assert_eq!(reported.osc_title.as_deref(), Some("vim"));
@@ -681,8 +665,8 @@ mod tests {
             store.session(session).is_none(),
             "out of the tree, held by the pending close"
         );
-        state.apply_report(session, &PaneReport::Pwd("/tmp/held".to_owned()));
-        state.apply_report(session, &PaneReport::Title("htop".to_owned()));
+        state.report_pane(session, "T", &PaneReport::Pwd("/tmp/held".to_owned()));
+        state.report_pane(session, "T", &PaneReport::Title("htop".to_owned()));
         let store = state.core.library_mut().store_mut(window).unwrap();
         assert!(store.undo_pending_close(None));
         let restored = store.session(session).unwrap();
@@ -692,6 +676,90 @@ mod tests {
             "the grace-period cwd survives the undo"
         );
         assert_eq!(restored.osc_title.as_deref(), Some("htop"));
+    }
+
+    /// [`state_with_terminal`] with a shown split whose pane is a fake with token `S`, the split focused.
+    fn state_with_split() -> (AppState, Uuid, Uuid) {
+        let (mut state, window, session) = state_with_terminal();
+        let store = state.core.library_mut().store_mut(window).unwrap();
+        store.set_split_visibility(session, true, None);
+        store
+            .session_mut(session)
+            .unwrap()
+            .split_surface
+            .replace(Box::new(FakeSurface::new("S")));
+        (state, window, session)
+    }
+
+    #[test]
+    fn the_split_shell_exiting_collapses_the_split_and_the_primary_promotes_it() {
+        let (mut state, window, session) = state_with_split();
+        state.pane_exited(session, "S");
+        let found = state.core.library().store(window).unwrap().session(session).unwrap();
+        assert!(!found.split.exists && !found.split_surface.is_present());
+
+        let (mut state, window, session) = state_with_split();
+        state.pane_exited(session, "T");
+        let found = state.core.library().store(window).unwrap().session(session).unwrap();
+        assert_eq!(found.surface.get().map(agterm_host::Surface::pane_token), Some("S"));
+        assert!(!found.split.exists);
+    }
+
+    #[test]
+    fn a_split_pane_report_lands_on_the_split_fields() {
+        let (mut state, window, session) = state_with_split();
+        state.report_pane(session, "S", &PaneReport::Pwd("/srv/right".to_owned()));
+        state.report_pane(session, "S", &PaneReport::Title("htop".to_owned()));
+        let found = state.core.library().store(window).unwrap().session(session).unwrap();
+        assert_eq!(found.split_cwd.as_deref(), Some("/srv/right"));
+        assert_eq!(found.split_title.as_deref(), Some("htop"));
+        assert_eq!(found.effective_cwd(), "/home/u", "the primary's stays");
+    }
+
+    #[test]
+    fn focusing_a_shown_split_pane_moves_the_split_focus_but_never_a_hidden_ones() {
+        let (mut state, window, session) = state_with_split();
+        let focused = |state: &AppState| {
+            state
+                .core
+                .library()
+                .store(window)
+                .unwrap()
+                .session(session)
+                .unwrap()
+                .split
+                .focused
+        };
+        assert!(focused(&state));
+        state.pane_focused(session, "T");
+        assert!(!focused(&state));
+        state.pane_focused(session, "S");
+        assert!(focused(&state));
+        let store = state.core.library_mut().store_mut(window).unwrap();
+        store.set_split_visibility(session, false, None);
+        state.pane_focused(session, "T");
+        assert!(focused(&state), "a hidden split keeps its chosen pane");
+    }
+
+    #[test]
+    fn a_dragged_divider_stores_its_ratio_clamped() {
+        let (mut state, window, session) = state_with_split();
+        state.set_split_ratio(session, 0.3);
+        let ratio = |state: &AppState| {
+            state
+                .core
+                .library()
+                .store(window)
+                .unwrap()
+                .session(session)
+                .unwrap()
+                .split
+                .ratio
+        };
+        assert_eq!(ratio(&state), Some(0.3));
+        state.set_split_ratio(session, 2.0);
+        assert_eq!(ratio(&state), Some(agterm_core::model::pane::SPLIT_RATIO_MAX));
+        state.set_split_ratio(Uuid::new_v4(), 0.5);
     }
 
     #[test]

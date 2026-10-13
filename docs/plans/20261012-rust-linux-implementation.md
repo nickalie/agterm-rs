@@ -809,21 +809,23 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 **Files:**
 - Create: `crates/agterm-core/src/commands/panes.rs`, `crates/agterm-gtk/src/split.rs`
 
-- [ ] session.split, split.close, swap, focus, resize, lead, scratch from `ControlDispatcher+Panes.swift`,
+- [x] session.split, split.close, swap, focus, resize, lead, scratch from `ControlDispatcher+Panes.swift`,
       `AppStore+Panes.swift`, `ControlServer+SessionActions.swift` (`control-api.md` > Organization commands); the
       GTK split after upstream's `WindowContentView+Detail.swift`, `Views/SplitRatioAccessor.swift`,
       `AppActions.swift` and `menu-actions.md`
-- [ ] `session.resize` echoes the clamped ratio; claim `resize-echoes-ratio`
-- [ ] focus on a hidden split holds, as upstream's model (`AppStorePaneTests`): stale GTK focus callbacks after a
+- [x] `session.resize` echoes the clamped ratio; claim `resize-echoes-ratio`
+- [x] focus on a hidden split holds, as upstream's model (`AppStorePaneTests`): stale GTK focus callbacks after a
       layout change never undo the chosen pane, and a hidden split with the right pane chosen shows that pane
       maximized and gives it input; claim `hidden-split-holds-focus`; `pane.split` and `pane.scratch` events
-- [ ] pane environment wired into split and scratch panes
-- [ ] matching `agtermctl` subcommands (`Session+Swap.swift`, `Session+Lead.swift`)
-- [ ] write tests: split tree mutations, ratio restore, swap
-- [ ] write tests: focus on a hidden split (ported from `AppStorePaneTests`); close of the last pane
-- [ ] manual check through `run-dev.sh`: hide the split, focus right, type a marker, show both: the marker is in the
+- [x] pane environment wired into split and scratch panes
+- [x] matching `agtermctl` subcommands (`Session+Swap.swift`, `Session+Lead.swift`)
+- [x] write tests: split tree mutations, ratio restore, swap
+- [x] write tests: focus on a hidden split (ported from `AppStorePaneTests`); close of the last pane
+- [x] manual check through `run-dev.sh`: hide the split, focus right, type a marker, show both: the marker is in the
       right pane and it still has focus
-- [ ] gate: full run; ratchet (`test_split.py` and newly green tests elsewhere)
+- [x] ➕ per-pane font-size read-back (`fontSize`, `splitFontSize`, `scratchFontSize` through `Surface::font_size`):
+      the harness's `wait_mounted` reads a split or scratch pane as up by them, so every split test needs them
+- [x] gate: full run; ratchet (`test_split.py` and newly green tests elsewhere)
 
 ### Task 17: Restart, background, restore, quick terminal, dashboard and auto-follow
 

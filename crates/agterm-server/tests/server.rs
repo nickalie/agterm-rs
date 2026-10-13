@@ -220,10 +220,10 @@ fn malformed_requests_get_the_decode_error() -> TestResult {
 #[test]
 fn unimplemented_command_is_refused_by_name() -> TestResult {
     let fixture = start_core()?;
-    let response = answer(&fixture.socket, br#"{"cmd":"session.swap"}"#)?;
+    let response = answer(&fixture.socket, br#"{"cmd":"session.restart"}"#)?;
     assert_eq!(
         response,
-        Response::failure("session.swap is not supported by this host")
+        Response::failure("session.restart is not supported by this host")
     );
     Ok(())
 }

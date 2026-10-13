@@ -1,13 +1,16 @@
 //! `agtermctl session ...` (`agtermctlKit/SessionCommands.swift` `Session`): the group, and here its lifecycle
-//! subcommands; [`crate::session_io`] drives the terminal, [`crate::session_meta`] sets metadata. Each takes its own
-//! options first, then `--target` where it addresses a session, then [`ClientOptions`], the order its help and usage
-//! line list them in. The rest of upstream's group (`split`, `restore`, ...) joins with the tasks that implement
-//! those commands.
+//! subcommands; [`crate::session_io`] drives the terminal, [`crate::session_panes`] arranges its panes,
+//! [`crate::session_meta`] sets metadata. Each takes its own options first, then `--target` where it addresses a
+//! session, then [`ClientOptions`], the order its help and usage line list them in. The rest of upstream's group
+//! (`restore`, ...) joins with the tasks that implement those commands.
 
 use agterm_proto::command::SessionCmd;
 use agterm_proto::{Args, Command, Request};
 
-use crate::{BasicOptions, BatchTargetOptions, ClientOptions, RequestCommand, TargetOptions, session_io, session_meta};
+use crate::{
+    BasicOptions, BatchTargetOptions, ClientOptions, RequestCommand, TargetOptions, session_io, session_meta,
+    session_panes,
+};
 
 /// `agtermctl session <subcommand>`.
 #[derive(Debug, clap::Args)]
@@ -34,6 +37,12 @@ impl Session {
             SessionCommand::Reveal(command) => command,
             SessionCommand::Move(command) => command,
             SessionCommand::Type(command) => command,
+            SessionCommand::Split(group) => group.command(),
+            SessionCommand::Swap(command) => command,
+            SessionCommand::Lead(command) => command,
+            SessionCommand::Scratch(command) => command,
+            SessionCommand::Focus(command) => command,
+            SessionCommand::Resize(command) => command,
             SessionCommand::Copy(command) => command,
             SessionCommand::Paste(command) => command,
             SessionCommand::SelectAll(command) => command,
@@ -59,6 +68,12 @@ enum SessionCommand {
     Reveal(Reveal),
     Move(Move),
     Type(session_io::Type),
+    Split(session_panes::Split),
+    Swap(session_panes::Swap),
+    Lead(session_panes::Lead),
+    Scratch(session_panes::Scratch),
+    Focus(session_panes::Focus),
+    Resize(session_panes::Resize),
     Copy(session_io::Copy),
     Paste(session_io::Paste),
     SelectAll(session_io::SelectAll),

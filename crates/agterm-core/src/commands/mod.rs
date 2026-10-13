@@ -3,6 +3,7 @@
 //! Effects that need the frontend (focusing a terminal, revealing a directory) go through [`crate::Core`]'s hooks.
 
 pub(crate) mod metadata;
+pub(crate) mod panes;
 pub(crate) mod search;
 pub(crate) mod session;
 pub(crate) mod surface;
@@ -11,6 +12,7 @@ pub(crate) mod typing;
 pub(crate) mod window;
 pub(crate) mod workspace;
 
+pub use panes::PaneReport;
 pub(crate) use surface::deferred;
 
 #[cfg(test)]

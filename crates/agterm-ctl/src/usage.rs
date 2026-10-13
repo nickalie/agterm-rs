@@ -17,10 +17,14 @@
 //!   capitals) becomes the library's own (the long name, else the field name in kebab case);
 //! - an argument is optional unless `required`, repeating with `ArgAction::Append` or several values, and taken after
 //!   `--` with `last`; its possible values and default join its abstract as `(values: ...; default: ...)`;
-//! - a `help_heading` is a titled section between `ARGUMENTS:` and `OPTIONS:`.
+//! - a `help_heading` is a titled section between `ARGUMENTS:` and `OPTIONS:`;
+//! - a group's default subcommand (`CommandConfiguration.defaultSubcommand`), which clap has no notion of, is listed
+//!   in [`DEFAULT_SUBCOMMANDS`], and [`name_default_subcommands`] spells it out before clap parses.
 //!
 //! clap derive drops a doc comment's trailing period, so abstracts are `about = "..."`/`help = "..."` attributes,
 //! written as upstream's `abstract:`/`help:` strings.
+
+use std::ffi::OsString;
 
 use agterm_core::paths::Env;
 use clap::error::{ContextKind, ContextValue, ErrorKind};
@@ -39,6 +43,52 @@ const DEFAULT_SCREEN_WIDTH: usize = 80;
 const MAX_USAGE_ARGUMENTS: usize = 12;
 /// An unknown option closer than this (edit distance) to a known one is suggested.
 const SIMILARITY_FLOOR: usize = 4;
+
+/// The groups that run a subcommand when none is named (the library's `defaultSubcommand`): the group's path below the
+/// root, and the subcommand's name.
+const DEFAULT_SUBCOMMANDS: [(&[&str], &str); 1] = [(&["session", "split"], "visibility")];
+
+/// The default subcommand of the group at `path` (below the root), if it has one.
+fn default_subcommand(path: &[&str]) -> Option<&'static str> {
+    DEFAULT_SUBCOMMANDS
+        .iter()
+        .find(|(group, _)| *group == path)
+        .map(|(_, name)| *name)
+}
+
+/// `args` (the program name first) with each default subcommand spelled out where the library falls back to it
+/// (`CommandParser.descendingParse`): at a group whose next argument names none of its subcommands, unless the only
+/// argument left is a help flag, which shows the group's own help.
+#[must_use]
+pub fn name_default_subcommands(root: &Command, args: &[OsString]) -> Vec<OsString> {
+    let Some((program, rest)) = args.split_first() else {
+        return Vec::new();
+    };
+    let mut named = vec![program.clone()];
+    let mut command = root;
+    let mut path: Vec<&str> = Vec::new();
+    let mut at = 0;
+    loop {
+        let next = rest.get(at).and_then(|arg| arg.to_str());
+        let named_next = next.and_then(|name| command.find_subcommand(name));
+        let solo_help = rest.len() == at + 1 && next.is_some_and(|arg| ["-h", "--help", "-help"].contains(&arg));
+        let fallback = default_subcommand(&path)
+            .filter(|_| !solo_help)
+            .and_then(|name| command.find_subcommand(name));
+        let Some((subcommand, explicit)) = named_next
+            .map(|named| (named, true))
+            .or(fallback.map(|default| (default, false)))
+        else {
+            break;
+        };
+        named.push(OsString::from(subcommand.get_name()));
+        at += usize::from(explicit);
+        path.push(subcommand.get_name());
+        command = subcommand;
+    }
+    named.extend(rest.iter().skip(at).cloned());
+    named
+}
 
 /// What to print for a failed parse, where, and the exit status.
 #[derive(Debug, PartialEq, Eq)]
@@ -196,6 +246,11 @@ impl<'c> Stack<'c> {
         }
         let named = stack.path.len() - 1;
         (stack, named)
+    }
+
+    /// The command names below the root: `["session", "split"]`.
+    fn path_names(&self) -> Vec<&'c str> {
+        self.path.iter().skip(1).map(|command| command.get_name()).collect()
     }
 
     /// `agtermctl version`.
@@ -653,7 +708,7 @@ fn help_text(stack: &Stack<'_>, width: usize) -> String {
     } else {
         format!("{}\n\n", wrap(&format!("OVERVIEW: {overview}"), width, 0))
     };
-    let sections = sections(stack.leaf);
+    let sections = sections(stack.leaf, default_subcommand(&stack.path_names()));
     let has_subcommands = sections
         .iter()
         .any(|section| section.header == SUBCOMMANDS && !section.elements.is_empty());
@@ -705,8 +760,9 @@ impl Section {
     }
 }
 
-/// `ARGUMENTS`, the titled sections, `OPTIONS` (help last) and `SUBCOMMANDS`, empty ones included.
-fn sections(command: &Command) -> Vec<Section> {
+/// `ARGUMENTS`, the titled sections, `OPTIONS` (help last) and `SUBCOMMANDS`, empty ones included; the default
+/// subcommand's label ends in `(default)`.
+fn sections(command: &Command, default: Option<&str>) -> Vec<Section> {
     let mut positionals = Section::new("Arguments");
     let mut titled: Vec<Section> = Vec::new();
     let mut options = Section::new("Options");
@@ -734,7 +790,10 @@ fn sections(command: &Command) -> Vec<Section> {
         let names: Vec<&str> = std::iter::once(subcommand.get_name())
             .chain(subcommand.get_visible_aliases())
             .collect();
-        let label = names.join(", ");
+        let mut label = names.join(", ");
+        if default == Some(subcommand.get_name()) {
+            label.push_str(" (default)");
+        }
         let about = subcommand.get_about().map(ToString::to_string).unwrap_or_default();
         subcommands.elements.push((label, about));
     }

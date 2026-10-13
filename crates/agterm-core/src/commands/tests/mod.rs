@@ -4,6 +4,7 @@
 mod events;
 mod metadata;
 mod moves;
+mod panes;
 mod session;
 mod surface;
 mod window;

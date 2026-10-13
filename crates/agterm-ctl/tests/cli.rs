@@ -877,6 +877,15 @@ SUBCOMMANDS:
                           --to, or place relative to an anchor with
                           --after/--before.
   type                    Inject text into a session.
+  split                   Show, hide, or close a session split.
+  swap                    Exchange a split session's two panes, including their
+                          live roles and state.
+  lead                    Take the lead of a pane's terminal for this Mac.
+  scratch                 Show or hide a session scratch terminal
+                          (on|off|toggle).
+  focus                   Focus a split session's pane by position or role.
+  resize                  Resize a split session's divider (set or nudge the
+                          primary-pane fraction).
   copy                    Print a session's selected text (does not touch the
                           system clipboard).
   paste                   Paste the system clipboard into a session (like ⌘V).
@@ -1708,6 +1717,257 @@ fn io_metadata_and_surface_help_in_the_argument_parser_layout() -> TestResult {
         (&["surface", "cursor", "--help"], SURFACE_CURSOR_HELP),
         (&["help", "session", "type"], SESSION_TYPE_HELP),
         (&["session", "flag", "--help"], SESSION_FLAG_HELP),
+    ];
+    for (args, help) in cases {
+        assert_eq!(
+            outcome(&run(dir.path(), &[], args)?),
+            (Some(0), help.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+// MARK: - split, scratch and pane commands
+
+#[test]
+fn pane_commands_send_their_request_and_print_ok() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], serde_json::Value); 8] = [
+        (
+            &["session", "split"],
+            serde_json::json!({"cmd": "session.split", "target": "active", "args": {"mode": "toggle"}}),
+        ),
+        (
+            &[
+                "session",
+                "split",
+                "on",
+                "--axis",
+                "horizontal",
+                "--target",
+                "s1",
+                "--window",
+                "w1",
+            ],
+            serde_json::json!({"cmd": "session.split", "target": "s1",
+                               "args": {"mode": "on", "axis": "horizontal", "window": "w1"}}),
+        ),
+        (
+            &["session", "split", "close", "--target", "s1"],
+            serde_json::json!({"cmd": "session.split.close", "target": "s1"}),
+        ),
+        (
+            &["session", "swap", "--window", "w1"],
+            serde_json::json!({"cmd": "session.swap", "target": "active", "args": {"window": "w1"}}),
+        ),
+        (
+            &["session", "lead", "--pane", "right"],
+            serde_json::json!({"cmd": "session.lead", "target": "active", "args": {"pane": "right"}}),
+        ),
+        (
+            &["session", "scratch", "on", "--command", "htop"],
+            serde_json::json!({"cmd": "session.scratch", "target": "active",
+                               "args": {"mode": "on", "command": "htop"}}),
+        ),
+        (
+            &["session", "focus"],
+            serde_json::json!({"cmd": "session.focus", "target": "active", "args": {"pane": "other"}}),
+        ),
+        (
+            &["session", "focus", "bottom", "--target", "s1"],
+            serde_json::json!({"cmd": "session.focus", "target": "s1", "args": {"pane": "bottom"}}),
+        ),
+    ];
+    for (at, (args, expected)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("{at}.sock"));
+        let _server = scripted(&socket, expected, serde_json::json!({"id": NEW_ID}))?;
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(0), "ok\n".to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn resize_prints_the_applied_ratio_and_json_the_server_line() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], serde_json::Value); 2] = [
+        (
+            &["session", "resize", "--split-ratio", "0.01", "--target", "s1"],
+            serde_json::json!({"cmd": "session.resize", "target": "s1", "args": {"ratio": 0.01}}),
+        ),
+        (
+            &["session", "resize", "--grow-bottom", "0.2", "--window", "w1"],
+            serde_json::json!({"cmd": "session.resize", "target": "active",
+                               "args": {"ratioDelta": -0.2, "window": "w1"}}),
+        ),
+    ];
+    for (at, (args, expected)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("{at}.sock"));
+        let _server = scripted(&socket, expected, serde_json::json!({"id": NEW_ID, "ratio": 0.3}))?;
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(0), "0.300\n".to_owned(), String::new()),
+            "{args:?}"
+        );
+        let json = run_on(dir.path(), &socket, &[args, &["--json"]].concat())?;
+        let line = format!("{{\"ok\":true,\"result\":{{\"id\":\"{NEW_ID}\",\"ratio\":0.3}}}}\n");
+        assert_eq!(outcome(&json), (Some(0), line, String::new()), "{args:?}");
+    }
+    Ok(())
+}
+
+const SPLIT_VISIBILITY_USAGE: &str = "Usage: agtermctl session split visibility [<mode>] [--axis <axis>] [--target \
+                                      <target>] [--socket <socket>] [--json] [--window <window>]\n  See 'agtermctl \
+                                      session split visibility --help' for more information.\n";
+const RESIZE_USAGE: &str = "Usage: agtermctl session resize [--split-ratio <split-ratio>] [--grow-left <grow-left>] \
+                            [--grow-right <grow-right>] [--grow-primary <grow-primary>] [--grow-split <grow-split>] \
+                            [--grow-top <grow-top>] [--grow-bottom <grow-bottom>] [--target <target>] [--socket \
+                            <socket>] [--json] [--window <window>]\n  See 'agtermctl session resize --help' for more \
+                            information.\n";
+const LEAD_USAGE: &str = "Usage: agtermctl session lead [--pane <pane>] [--target <target>] [--socket <socket>] \
+                          [--json] [--window <window>]\n  See 'agtermctl session lead --help' for more information.\n";
+
+#[test]
+fn pane_command_refusals_are_usage_errors_before_connecting() -> TestResult {
+    let dir = short_dir()?;
+    // nothing listens here: a connection attempt would exit 1, not 64
+    let socket = dir.path().join("agterm.sock");
+    let cases: [(&[&str], &str, &str); 7] = [
+        (
+            &["session", "split", "--axis", "diagonal"],
+            "--axis must be vertical or horizontal",
+            SPLIT_VISIBILITY_USAGE,
+        ),
+        (
+            &["session", "split", "visibility", "off", "--axis", "Vertical"],
+            "--axis must be vertical or horizontal",
+            SPLIT_VISIBILITY_USAGE,
+        ),
+        (
+            &["session", "resize"],
+            "provide exactly one split ratio or grow option",
+            RESIZE_USAGE,
+        ),
+        (
+            &["session", "resize", "--grow-left", "0.1", "--grow-right", "0.1"],
+            "provide exactly one split ratio or grow option",
+            RESIZE_USAGE,
+        ),
+        (
+            &["session", "resize", "--split-ratio", "nan"],
+            "the resize value must be a finite number",
+            RESIZE_USAGE,
+        ),
+        (
+            &["session", "resize", "--grow-top", "1e999"],
+            "the resize value must be a finite number",
+            RESIZE_USAGE,
+        ),
+        (
+            &["session", "lead", "--pane", "other"],
+            "--pane must be left, right, or scratch",
+            LEAD_USAGE,
+        ),
+    ];
+    for (args, message, usage) in cases {
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(64), String::new(), format!("Error: {message}\n{usage}")),
+            "{args:?}"
+        );
+    }
+    let close_usage = "Usage: agtermctl session split close [--target <target>] [--socket <socket>] [--json] \
+                       [--window <window>]\n  See 'agtermctl session split close --help' for more information.\n";
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &["session", "split", "close", "extra"])?),
+        (
+            Some(64),
+            String::new(),
+            format!("Error: Unexpected argument 'extra'\n{close_usage}")
+        )
+    );
+    Ok(())
+}
+
+const SESSION_SPLIT_HELP: &str = "\
+OVERVIEW: Show, hide, or close a session split.
+
+USAGE: agtermctl session split <subcommand>
+
+OPTIONS:
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  visibility (default)    Show or hide a session split (on|off|toggle).
+  close                   Close the split pane (destroys it, killing whatever
+                          it runs); ok when there is none.
+
+  See 'agtermctl help session split <subcommand>' for detailed help.
+";
+
+const SESSION_SPLIT_VISIBILITY_HELP: &str = "\
+OVERVIEW: Show or hide a session split (on|off|toggle).
+
+USAGE: agtermctl session split visibility [<mode>] [--axis <axis>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
+
+ARGUMENTS:
+  <mode>                  Mode: on (show), off (hide), or toggle (default).
+                          Hidden panes stay alive. (default: toggle)
+
+OPTIONS:
+  --axis <axis>           Divider direction: vertical (left/right) or
+                          horizontal (top/bottom).
+  --target <target>       Target session/workspace id, unique prefix, or
+                          'active'. (default: active)
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  --window <window>       Target window id, unique prefix, or 'active'
+                          (defaults to the frontmost).
+  -h, --help              Show help information.
+
+";
+
+const SESSION_LEAD_HELP: &str = "\
+OVERVIEW: Take the lead of a pane's terminal for this Mac.
+
+A session attached from another Mac has one leading client per pane, whose
+window size the program sees. A pane that does not lead is covered; this
+uncovers it, as pressing a key on the cover does, and covers it on the other
+Mac. Read each pane's `lead` from `tree`.
+
+USAGE: agtermctl session lead [--pane <pane>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
+
+OPTIONS:
+  --pane <pane>           Which pane: primary/left/top or split/right/bottom.
+                          Defaults to primary.
+  --target <target>       Target session/workspace id, unique prefix, or
+                          'active'. (default: active)
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  --window <window>       Target window id, unique prefix, or 'active'
+                          (defaults to the frontmost).
+  -h, --help              Show help information.
+
+";
+
+#[test]
+fn split_help_marks_its_default_subcommand() -> TestResult {
+    let dir = short_dir()?;
+    // a lone help flag shows the group; beside anything else it falls through to the default subcommand
+    let cases: [(&[&str], &str); 6] = [
+        (&["session", "split", "--help"], SESSION_SPLIT_HELP),
+        (&["session", "split", "-h"], SESSION_SPLIT_HELP),
+        (&["help", "session", "split"], SESSION_SPLIT_HELP),
+        (&["session", "split", "on", "--help"], SESSION_SPLIT_VISIBILITY_HELP),
+        (
+            &["help", "session", "split", "visibility"],
+            SESSION_SPLIT_VISIBILITY_HELP,
+        ),
+        (&["session", "lead", "--help"], SESSION_LEAD_HELP),
     ];
     for (args, help) in cases {
         assert_eq!(

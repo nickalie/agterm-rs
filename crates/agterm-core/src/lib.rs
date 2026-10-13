@@ -25,6 +25,7 @@ pub mod sidebar_drop;
 pub mod windows;
 pub mod zoom;
 
+pub use commands::PaneReport;
 pub use commands::surface::POLL_INTERVAL;
 pub use dispatch::{CommitTimers, Core, CoreConfig, CoreState, Dispatched, Resume, decode_request};
 pub use error::{ControlError, Noun};

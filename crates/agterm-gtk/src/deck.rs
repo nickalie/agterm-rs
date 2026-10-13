@@ -1,13 +1,18 @@
-//! The detail deck: every session of the shown window holds one page with its terminal, all mounted at once so each
+//! The detail deck: every session of the shown window holds one page with its terminals, all mounted at once so each
 //! spawns its shell at startup, and only the selected one visible, hit-testable and focused (upstream's eager deck,
 //! `WindowContentView+Detail.swift` `detailPane`, and `libghostty.md` > Resources and lifecycle).
 //!
 //! A page is created once and never re-parented: a live `GtkGLArea` must stay realized, as unrealizing it frees its
-//! surface. Switching sessions is a visibility flip: a hidden page sits at opacity 0, not targetable, its terminal
-//! unfocusable and occluded, but mapped, so its surface is still created and its shell runs (the conformance
+//! surface. Switching sessions is a visibility flip: a hidden page sits at opacity 0, not targetable, its terminals
+//! unfocusable and occluded, but mapped, so their surfaces are still created and their shells run (the conformance
 //! harness's `wait_mounted` waits for a `noSelect` session's `realized` too). Sessions a soft close holds out of the
 //! tree keep their pages, hidden, until the close is final. A page goes once its session is gone; closing the session
-//! already tore its terminal down.
+//! already tore its terminals down. Inside a page the session's panes follow [`crate::split`].
+//!
+//! The model moves keyboard focus only by what it says should hold it: the deck grabs focus for the shown page's
+//! focused pane whenever that pane (or the shown page) differs from what it last focused, which is how selecting a
+//! session, `session.focus`, a swap or the scratch move the input. A terminal the user focuses reports back through
+//! [`AppState::pane_focused`], from a task that first checks the focus is still there.
 //!
 //! The plan of what to add, remove and show is a pure function of the model ([`plan`]), so it is testable without a
 //! display.
@@ -15,37 +20,43 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use agterm_core::Core;
 use agterm_core::link_policy::ClickOrigin;
-use agterm_core::model::{AppStore, WindowLibrary};
+use agterm_core::model::pane::SPLIT_RATIO_DEFAULT;
+use agterm_core::model::{AppStore, Session, WindowLibrary, Workspace};
 use agterm_core::pane_env::{self, PaneEnv, SessionPane, StatusPane};
+use agterm_core::zoom::SurfaceId;
+use agterm_core::{Core, PaneReport};
 use gtk::prelude::*;
 use uuid::Uuid;
 
 use crate::ghostty_app;
 use crate::pane::PaneSurface;
-use crate::state::{self, AppState, PaneReport, Poster};
-use crate::surface::{SurfaceSpec, TerminalSurface};
+use crate::split::{self, PanePlan, PaneView};
+use crate::state::{self, AppState, Poster};
+use crate::surface::{self, SurfaceSpec, TerminalSurface};
 
 /// What upstream's deck shows with no session selected.
 const NO_SESSION: &str = "No session selected";
 
-/// The terminal a new page runs: its session's primary pane.
+/// A terminal a page runs: one of its session's panes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PageSpec {
+pub struct PaneSpec {
     pub window: Uuid,
     pub workspace: Uuid,
     pub session: Uuid,
-    /// The pane token, `AGTERM_PANE_ID` (upstream's `paneIdentity.uuidString`).
-    pub pane_identity: Uuid,
+    /// `AGTERM_PANE`.
+    pub pane: StatusPane,
+    /// The pane token, `AGTERM_PANE_ID` (upstream's `paneIdentity.uuidString` and its split twin; a fresh one per
+    /// scratch terminal, as upstream's `surfaceEnv`).
+    pub token: String,
     pub cwd: String,
-    /// `session.new --command`, run instead of the login shell.
+    /// What the pane runs instead of the login shell.
     pub command: Option<String>,
     /// Hold the pane after the command exits.
     pub wait: bool,
 }
 
-impl PageSpec {
+impl PaneSpec {
     /// The primary pane of `session` in `store`, `None` when the session is not in its tree.
     #[must_use]
     pub fn primary(window: Uuid, store: &AppStore, session: Uuid) -> Option<Self> {
@@ -55,31 +66,62 @@ impl PageSpec {
             window,
             workspace,
             session: session.id(),
-            pane_identity: session.pane_identity,
+            pane: StatusPane::Left,
+            token: pane_env::uuid_string(session.pane_identity),
             cwd: session.effective_cwd().to_owned(),
             command: session.launch.command.clone(),
             wait: session.launch.wait,
         })
     }
 
-    /// The pane token baked into the shell and reported by the session's surface slot.
+    /// The split pane of `session`: its own cwd and creation command; `None` without a split identity.
     #[must_use]
-    pub fn token(&self) -> String {
-        pane_env::uuid_string(self.pane_identity)
+    pub fn split(window: Uuid, workspace: Uuid, session: &Session) -> Option<Self> {
+        Some(Self {
+            window,
+            workspace,
+            session: session.id(),
+            pane: StatusPane::Right,
+            token: pane_env::uuid_string(session.split_pane_identity?),
+            cwd: session.cwd_for(StatusPane::Right).to_owned(),
+            command: session.split_launch.command.clone(),
+            wait: session.split_launch.wait,
+        })
     }
 
-    /// The primary pane's environment: the session, window and workspace ids, `AGTERM_PANE=left` and the pane token.
+    /// A scratch terminal of `session`, in the primary's cwd, running the pending scratch command once (it is taken)
+    /// or a login shell.
+    #[must_use]
+    pub fn scratch(window: Uuid, workspace: Uuid, session: &mut Session) -> Self {
+        Self {
+            window,
+            workspace,
+            session: session.id(),
+            pane: StatusPane::Scratch,
+            token: pane_env::uuid_string(Uuid::new_v4()),
+            cwd: session.effective_cwd().to_owned(),
+            command: session.scratch_command.take(),
+            wait: false,
+        }
+    }
+
+    /// The pane token baked into the shell and reported by the session's surface slot.
+    #[must_use]
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    /// The pane's environment: the session, window and workspace ids, `AGTERM_PANE` and the pane token.
     #[must_use]
     pub fn env(&self, context: &PaneContext) -> PaneEnv {
-        let token = self.token();
         pane_env::session(&SessionPane {
             session: self.session,
             window: Some(self.window),
             workspace: Some(self.workspace),
             socket_path: &context.socket,
             program_version: &context.program_version,
-            pane: Some(StatusPane::Left),
-            pane_token: Some(&token),
+            pane: Some(self.pane),
+            pane_token: Some(&self.token),
         })
     }
 
@@ -107,8 +149,8 @@ pub struct PaneContext {
 /// One reconcile of the deck against the model.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DeckPlan {
-    /// Sessions without a page yet, in tree order.
-    pub add: Vec<PageSpec>,
+    /// The primary panes of sessions without a page yet, in tree order.
+    pub add: Vec<PaneSpec>,
     /// Pages whose session is gone (closed, a soft close made final, moved out of the window).
     pub remove: Vec<Uuid>,
     /// The page to show: the selected session's, `None` when no session is selected.
@@ -136,7 +178,7 @@ fn plan_store(window: Uuid, store: &AppStore, held: &HashSet<Uuid>, mounted: &Ha
     let add = store
         .sessions()
         .filter(|session| !mounted.contains(&session.id()))
-        .filter_map(|session| PageSpec::primary(window, store, session.id()))
+        .filter_map(|session| PaneSpec::primary(window, store, session.id()))
         .collect();
     let mut remove: Vec<Uuid> = mounted
         .iter()
@@ -151,10 +193,76 @@ fn plan_store(window: Uuid, store: &AppStore, held: &HashSet<Uuid>, mounted: &Ha
     }
 }
 
-/// One session's page: a container for its panes (the split comes with Task 16) and the primary terminal.
+/// What every page's reconcile shares.
+struct PageSync<'a> {
+    window: Uuid,
+    zoom: Option<SurfaceId>,
+    context: &'a PaneContext,
+    poster: &'a Poster,
+}
+
+/// One session's page: its panes and their container.
 struct Page {
-    widget: gtk::Box,
-    terminal: TerminalSurface,
+    panes: PaneView,
+}
+
+impl Page {
+    /// Brings the page in line with its session: the terminals the model dropped go, the panes it lays out and has
+    /// no terminal for are created and installed in their slots, and the layout follows the session and the zoom.
+    fn sync(&mut self, core: &mut Core, sync: &PageSync<'_>, id: Uuid, shown: bool) {
+        let Some(store) = core.library_mut().store_mut(sync.window) else {
+            self.panes.hide();
+            return;
+        };
+        let workspace = store.workspace_for_session(id).map(Workspace::id);
+        let (Some(workspace), Some(session)) = (workspace, store.session_mut(id)) else {
+            // held by a pending soft close: its terminals keep running, hidden, until the close is final or undone
+            self.panes.hide();
+            return;
+        };
+        self.panes.retain(|token| session.pane_role_for_token(token).is_some());
+        let needs = split::needs(session, sync.zoom);
+        if needs.split
+            && let Some(spec) = PaneSpec::split(sync.window, workspace, session)
+        {
+            self.mount(session, &spec, sync);
+        }
+        if needs.scratch {
+            let spec = PaneSpec::scratch(sync.window, workspace, session);
+            self.mount(session, &spec, sync);
+        }
+        // the first layout of a shown split seeds an even ratio, so a shown split always reports one (upstream's
+        // `restoreDivider`); a zoomed window lays no split out
+        if sync.zoom.is_none() && session.split.shown && session.split.ratio.is_none() {
+            session.split.ratio = Some(SPLIT_RATIO_DEFAULT);
+        }
+        self.panes.apply(PanePlan::layout(session, sync.zoom), shown);
+    }
+
+    /// Creates the terminal of `spec`, mounts it and installs it in its slot of `session`.
+    fn mount(&mut self, session: &mut Session, spec: &PaneSpec, sync: &PageSync<'_>) {
+        let terminal = spawn(spec, sync.context, sync.poster);
+        self.panes
+            .add(spec.token.clone(), terminal.clone(), spec.pane == StatusPane::Scratch);
+        install(session, spec, terminal);
+    }
+}
+
+/// A connected terminal for `spec`.
+fn spawn(spec: &PaneSpec, context: &PaneContext, poster: &Poster) -> TerminalSurface {
+    let terminal = TerminalSurface::new(spec.surface_spec(context));
+    connect_terminal(&terminal, spec.session, spec.token(), poster);
+    connect_reports(&terminal, spec.session, spec.token(), poster);
+    terminal
+}
+
+/// Puts `terminal` in the slot of `spec`'s pane; a terminal already there is torn down (it never should be).
+fn install(session: &mut Session, spec: &PaneSpec, terminal: TerminalSurface) {
+    let surface = Box::new(PaneSurface::new(terminal, spec.token.clone()));
+    if let Some(previous) = session.pane_slot_mut(spec.pane).replace(surface) {
+        tracing::error!(session = %spec.session, pane = spec.pane.as_str(), "a pane got a second terminal");
+        previous.teardown();
+    }
 }
 
 /// The deck widget: the "No session selected" placeholder under one overlay page per session.
@@ -163,6 +271,8 @@ pub struct Deck {
     placeholder: gtk::Label,
     pages: HashMap<Uuid, Page>,
     shown: Option<Uuid>,
+    /// The page and pane token keyboard focus was last moved to.
+    focused: Option<(Uuid, String)>,
 }
 
 impl Deck {
@@ -181,6 +291,7 @@ impl Deck {
             placeholder,
             pages: HashMap::new(),
             shown: None,
+            focused: None,
         }
     }
 
@@ -190,21 +301,25 @@ impl Deck {
         &self.overlay
     }
 
-    /// The shown page's terminal.
+    /// The shown page's focused terminal.
     #[must_use]
     pub fn shown_terminal(&self) -> Option<&TerminalSurface> {
-        self.shown.and_then(|id| self.pages.get(&id)).map(|page| &page.terminal)
+        self.shown
+            .and_then(|id| self.pages.get(&id))
+            .and_then(|page| page.panes.focus())
+            .map(|(_, terminal)| terminal)
     }
 
-    /// Brings the deck in line with `window`'s sessions: pages for new sessions (their terminals installed in the
-    /// sessions' surface slots), gone sessions' pages removed, the selected session's page shown and focused when
-    /// the selection changed. While the window is zoomed to one of `zoomed`'s terminals, that session's page shows
-    /// instead, selected or not (upstream's zoom layer; a terminal is never reparented, so its own page fills).
+    /// Brings the deck in line with `window`'s sessions: pages for new sessions, gone sessions' pages removed, every
+    /// page's panes synced with its session, the selected session's page shown and its focused pane given the
+    /// keyboard when that changed. While the window is zoomed into one of its terminals, that session's page shows
+    /// instead, selected or not, with that terminal alone (upstream's zoom layer; a terminal is never reparented, so
+    /// its own page fills).
     pub fn reconcile(
         &mut self,
         core: &mut Core,
         window: Option<Uuid>,
-        zoomed: Option<Uuid>,
+        zoom: Option<SurfaceId>,
         context: &PaneContext,
         poster: &Poster,
     ) {
@@ -212,60 +327,74 @@ impl Deck {
         let plan = plan(core.library(), window, &mounted);
         for id in &plan.remove {
             if let Some(page) = self.pages.remove(id) {
-                // the session's close tore the terminal down already; this only drops the widget
-                page.terminal.teardown();
-                self.overlay.remove_overlay(&page.widget);
+                // the session's close tore the terminals down already; this only drops the widgets
+                page.panes.teardown();
+                self.overlay.remove_overlay(page.panes.widget());
             }
         }
         for spec in &plan.add {
             self.add_page(core, spec, context, poster);
         }
-        let zoomed = zoomed.filter(|id| self.pages.contains_key(id));
-        self.show(zoomed.or(plan.shown));
+        let zoom = zoom.filter(|zoom| self.pages.contains_key(&zoom.session));
+        let shown = zoom.map(|zoom| zoom.session).or(plan.shown);
+        if let Some(window) = window {
+            let sync = PageSync {
+                window,
+                zoom,
+                context,
+                poster,
+            };
+            for (id, page) in &mut self.pages {
+                page.sync(core, &sync, *id, Some(*id) == shown);
+            }
+        }
+        self.show(shown);
     }
 
-    fn add_page(&mut self, core: &mut Core, spec: &PageSpec, context: &PaneContext, poster: &Poster) {
-        let terminal = TerminalSurface::new(spec.surface_spec(context));
-        let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        widget.append(terminal.widget());
-        set_page_visible(&widget, &terminal, false);
-        self.overlay.add_overlay(&widget);
-        connect_terminal(&terminal, spec, poster);
-        let slot = core
+    fn add_page(&mut self, core: &mut Core, spec: &PaneSpec, context: &PaneContext, poster: &Poster) {
+        let mut panes = PaneView::new(spec.session, poster);
+        set_page_visible(panes.widget(), false);
+        self.overlay.add_overlay(panes.widget());
+        let terminal = spawn(spec, context, poster);
+        panes.add(spec.token.clone(), terminal.clone(), false);
+        let session = core
             .library_mut()
             .store_mut(spec.window)
-            .and_then(|store| store.session_mut(spec.session))
-            .map(|session| &mut session.surface);
-        if let Some(slot) = slot
-            && let Some(previous) = slot.replace(Box::new(PaneSurface::new(terminal.clone(), spec.token())))
-        {
-            tracing::error!(session = %spec.session, "a session got a second primary terminal");
-            previous.teardown();
+            .and_then(|store| store.session_mut(spec.session));
+        if let Some(session) = session {
+            install(session, spec, terminal);
         }
-        self.pages.insert(spec.session, Page { widget, terminal });
+        self.pages.insert(spec.session, Page { panes });
     }
 
-    /// Shows the page of `shown` alone; a change of the shown page moves keyboard focus to it (upstream focuses the
-    /// active session after a select or a create), and with none shown the focus leaves the hidden terminals.
+    /// Shows the page of `shown` alone and gives its focused pane the keyboard when the page or that pane changed
+    /// (upstream focuses the active session after a select or a create, and the focused pane within it); with none
+    /// shown the focus leaves the hidden terminals.
     fn show(&mut self, shown: Option<Uuid>) {
         for (id, page) in &self.pages {
             let visible = Some(*id) == shown;
-            if page.terminal.is_deck_visible() != visible {
-                set_page_visible(&page.widget, &page.terminal, visible);
+            let widget = page.panes.widget();
+            if widget.can_target() != visible {
+                set_page_visible(widget, visible);
             }
         }
         self.placeholder.set_visible(shown.is_none());
-        if self.shown == shown {
+        let changed = self.shown != shown;
+        self.shown = shown;
+        let Some(id) = shown else {
+            self.focused = None;
+            if changed && let Some(root) = self.overlay.root() {
+                root.set_focus(None::<&gtk::Widget>);
+            }
+            return;
+        };
+        let focus = self.pages.get(&id).and_then(|page| page.panes.focus());
+        let desired = focus.map(|(token, _)| (id, token.to_owned()));
+        if desired == self.focused {
             return;
         }
-        self.shown = shown;
-        match self.shown_terminal() {
-            Some(terminal) => terminal.grab_focus(),
-            None => {
-                if let Some(root) = self.overlay.root() {
-                    root.set_focus(None::<&gtk::Widget>);
-                }
-            }
+        if focus.is_some_and(|(_, terminal)| terminal.grab_focus()) || desired.is_none() {
+            self.focused = desired;
         }
     }
 }
@@ -276,31 +405,40 @@ impl Default for Deck {
     }
 }
 
-/// The one visibility switch of a page (see the module docs): a hidden page stays mapped and allocated so its
-/// surface exists, but is not drawn, hit-tested or focusable, and its terminal is occluded.
-fn set_page_visible(widget: &gtk::Box, terminal: &TerminalSurface, visible: bool) {
+/// The page-level visibility switch (see the module docs): a hidden page stays mapped and allocated so its surfaces
+/// exist, but is not drawn, hit-tested or focusable. Its terminals' own switch is the pane layout's.
+fn set_page_visible(widget: &split::PaneStack, visible: bool) {
     widget.set_opacity(if visible { 1.0 } else { 0.0 });
     widget.set_can_target(visible);
     widget.set_can_focus(visible);
-    terminal.set_deck_visible(visible);
 }
 
-/// Routes the terminal's events to the model as main-loop tasks: its shell exiting closes the session (upstream's
-/// `handlePaneExit` without a split), its cwd and title reports land on the session, its search reports on the
-/// session's search (upstream's `wireSearchCallbacks`), a key press clears the session's status when this pane owns
-/// it (upstream's `wireStatusClear`), and a clicked link opens through the link policy as a click in this session's
-/// pane, under the link-open setting.
-fn connect_terminal(terminal: &TerminalSurface, spec: &PageSpec, poster: &Poster) {
-    let (session, token) = (spec.session, spec.token());
+/// Routes the terminal's lifecycle and input to the model as main-loop tasks, by the pane token it carries: its shell
+/// exiting closes its pane by the pane's role now (upstream's per-pane `onExit`), the user focusing it moves the
+/// split's focus there (unless the focus moved on before the task ran, or the pane is hidden), and a key press clears
+/// the session's status when this pane owns it (upstream's `wireStatusClear`).
+fn connect_terminal(terminal: &TerminalSurface, session: Uuid, token: &str, poster: &Poster) {
     let posting = poster.clone();
-    let exit_token = token.clone();
+    let exit_token = token.to_owned();
     terminal.connect_exit(move || {
         state::post(&posting, move |state: &mut AppState| {
-            state.close_exited_session(session, &exit_token);
+            state.pane_exited(session, &exit_token);
         });
     });
     let posting = poster.clone();
-    let keystroke_token = token.clone();
+    let focus_token = token.to_owned();
+    let key = terminal.key();
+    terminal.connect_focus_in(move || {
+        let token = focus_token.clone();
+        state::post(&posting, move |state: &mut AppState| {
+            let current = surface::lookup(key).is_some_and(|terminal| still_focused(&terminal));
+            if current {
+                state.pane_focused(session, &token);
+            }
+        });
+    });
+    let posting = poster.clone();
+    let keystroke_token = token.to_owned();
     terminal.connect_keystroke(move |keystroke| {
         let token = keystroke_token.clone();
         state::post(&posting, move |state: &mut AppState| {
@@ -309,9 +447,22 @@ fn connect_terminal(terminal: &TerminalSurface, spec: &PageSpec, poster: &Poster
             }
         });
     });
+}
+
+/// Whether a terminal that reported taking focus still has it and is on screen: focus GTK moves while panes come and
+/// go must not undo the pane the model chose.
+fn still_focused(terminal: &TerminalSurface) -> bool {
+    terminal.widget().has_focus() && terminal.is_deck_visible()
+}
+
+/// Routes the terminal's reports to the model as main-loop tasks: its search reports on the session's search
+/// (upstream's `wireSearchCallbacks`), its cwd and title reports on its pane's fields by role, and a clicked link
+/// through the link policy as a click in this session's pane, under the link-open setting.
+fn connect_reports(terminal: &TerminalSurface, session: Uuid, token: &str, poster: &Poster) {
     let posting = poster.clone();
+    let search_token = token.to_owned();
     terminal.connect_search(move |report| {
-        let (report, token) = (report.clone(), token.clone());
+        let (report, token) = (report.clone(), search_token.clone());
         state::post(&posting, move |state: &mut AppState| {
             state.core.report_search(session, &token, report);
             state.settle();
@@ -326,24 +477,26 @@ fn connect_terminal(terminal: &TerminalSurface, spec: &PageSpec, poster: &Poster
         });
     });
     let posting = poster.clone();
+    let pwd_token = token.to_owned();
     terminal.connect_pwd(move |pwd| {
-        let report = PaneReport::Pwd(pwd.to_owned());
+        let (report, token) = (PaneReport::Pwd(pwd.to_owned()), pwd_token.clone());
         state::post(&posting, move |state: &mut AppState| {
-            state.apply_report(session, &report);
+            state.report_pane(session, &token, &report);
         });
     });
     let posting = poster.clone();
+    let title_token = token.to_owned();
     terminal.connect_title(move |title| {
-        let report = PaneReport::Title(title.to_owned());
+        let (report, token) = (PaneReport::Title(title.to_owned()), title_token.clone());
         state::post(&posting, move |state: &mut AppState| {
-            state.apply_report(session, &report);
+            state.report_pane(session, &token, &report);
         });
     });
 }
 
 #[cfg(test)]
 mod tests {
-    use agterm_core::model::NewSession;
+    use agterm_core::model::{NewSession, SplitAxis};
 
     use super::*;
 
@@ -482,7 +635,7 @@ mod tests {
         let store = library.store(window).unwrap();
         let workspace = store.workspaces()[0].id();
         for id in ids {
-            let spec = PageSpec::primary(window, store, id).unwrap();
+            let spec = PaneSpec::primary(window, store, id).unwrap();
             let session = store.session(id).unwrap();
             let env = spec.env(&context());
             assert_eq!(env["AGTERM_SESSION_ID"], pane_env::uuid_string(id));
@@ -505,8 +658,270 @@ mod tests {
     fn a_session_outside_the_tree_has_no_page_spec() {
         let (library, window, _) = three_sessions();
         assert_eq!(
-            PageSpec::primary(window, library.store(window).unwrap(), Uuid::new_v4()),
+            PaneSpec::primary(window, library.store(window).unwrap(), Uuid::new_v4()),
             None
         );
+    }
+
+    #[test]
+    fn the_split_pane_runs_in_its_own_cwd_with_its_identity_and_command() {
+        let (mut library, window, ids) = three_sessions();
+        let store = library.store_mut(window).unwrap();
+        let workspace = store.workspaces()[0].id();
+        assert_eq!(
+            PaneSpec::split(window, workspace, store.session(ids[0]).unwrap()),
+            None,
+            "no split yet"
+        );
+        store.set_split_visibility(ids[0], true, None);
+        let session = store.session_mut(ids[0]).unwrap();
+        session.split_cwd = Some("/srv/right".to_owned());
+        session.split_launch.command = Some("htop".to_owned());
+        session.split_launch.wait = true;
+        let session = store.session(ids[0]).unwrap();
+        let spec = PaneSpec::split(window, workspace, session).unwrap();
+        let env = spec.env(&context());
+        assert_eq!(env["AGTERM_PANE"], "right");
+        let identity = pane_env::uuid_string(session.split_pane_identity.unwrap());
+        assert_eq!(env["AGTERM_PANE_ID"], identity);
+        assert_eq!(spec.token(), identity);
+        assert_eq!(env["AGTERM_SESSION_ID"], pane_env::uuid_string(ids[0]));
+        let surface = spec.surface_spec(&context());
+        assert_eq!(surface.working_directory, Some(PathBuf::from("/srv/right")));
+        assert_eq!(session.cwd_for(StatusPane::Right), "/srv/right");
+        assert_eq!(surface.command.as_deref(), Some("htop"));
+        assert!(surface.wait_after_command);
+    }
+
+    #[test]
+    fn each_scratch_terminal_gets_a_fresh_token_and_runs_its_command_once() {
+        let (mut library, window, ids) = three_sessions();
+        let store = library.store_mut(window).unwrap();
+        let workspace = store.workspaces()[0].id();
+        let session = store.session_mut(ids[1]).unwrap();
+        session.scratch_command = Some("lazygit".to_owned());
+        let first = PaneSpec::scratch(window, workspace, session);
+        assert_eq!(first.command.as_deref(), Some("lazygit"));
+        assert_eq!(session.scratch_command, None, "taken: it runs once");
+        let env = first.env(&context());
+        assert_eq!(env["AGTERM_PANE"], "scratch");
+        assert_eq!(env["AGTERM_PANE_ID"], first.token());
+        assert_eq!(first.cwd, "/srv");
+        assert!(!first.wait);
+        let second = PaneSpec::scratch(window, workspace, session);
+        assert_eq!(second.command, None, "a respawn is a login shell");
+        assert_ne!(second.token(), first.token());
+        assert_ne!(first.token(), pane_env::uuid_string(session.pane_identity));
+    }
+
+    fn test_core(library: WindowLibrary) -> Core {
+        Core::new(
+            agterm_core::CoreConfig {
+                app: agterm_proto::AppIdentity::from_recorded("1.2.3", None),
+                capabilities: Vec::new(),
+            },
+            agterm_core::CoreState {
+                library,
+                ..agterm_core::CoreState::default()
+            },
+        )
+    }
+
+    #[test]
+    fn pane_terminals_never_change_parent() {
+        crate::gtk_test::on_gtk_thread(pane_terminals_keep_their_parent);
+    }
+
+    /// A session's page in the deck, read by pane token.
+    struct Probe<'a> {
+        deck: &'a Deck,
+        session: Uuid,
+    }
+
+    impl Probe<'_> {
+        fn terminal(&self, token: &str) -> &TerminalSurface {
+            self.deck.pages[&self.session].panes.terminal(token).unwrap()
+        }
+
+        fn area(&self, token: &str) -> gtk::GLArea {
+            self.terminal(token).widget().clone()
+        }
+
+        fn visible(&self, token: &str) -> bool {
+            self.terminal(token).is_deck_visible()
+        }
+
+        fn focus(&self) -> Option<String> {
+            self.deck.pages[&self.session]
+                .panes
+                .focus()
+                .map(|(token, _)| token.to_owned())
+        }
+    }
+
+    fn slot_token(core: &Core, window: Uuid, session: Uuid, pane: StatusPane) -> String {
+        let session = core.library().store(window).unwrap().session(session).unwrap();
+        session.pane_slot(pane).get().unwrap().pane_token().to_owned()
+    }
+
+    fn store(core: &mut Core, window: Uuid) -> &mut AppStore {
+        core.library_mut().store_mut(window).unwrap()
+    }
+
+    /// One page's walk through every layout change: the core, the deck, and the two pane terminals it started with.
+    struct Walk {
+        core: Core,
+        deck: Deck,
+        window: Uuid,
+        session: Uuid,
+        primary: String,
+        split: String,
+        stack: gtk::Widget,
+        areas: (gtk::GLArea, gtk::GLArea),
+    }
+
+    impl Walk {
+        /// A seeded window whose selected session was just split.
+        fn split() -> Self {
+            let library = WindowLibrary::seeded("/home/u");
+            let window = library.active_window_id().unwrap();
+            let session = library.store(window).unwrap().selected_session_id().unwrap();
+            let mut core = test_core(library);
+            let mut deck = Deck::new();
+            reconcile(&mut deck, &mut core, window);
+            let primary = slot_token(&core, window, session, StatusPane::Left);
+            store(&mut core, window).set_split_visibility(session, true, None);
+            reconcile(&mut deck, &mut core, window);
+            let split = slot_token(&core, window, session, StatusPane::Right);
+            let stack = deck.pages[&session].panes.widget().clone().upcast();
+            let probe = Probe { deck: &deck, session };
+            let areas = (probe.area(&primary), probe.area(&split));
+            Self {
+                core,
+                deck,
+                window,
+                session,
+                primary,
+                split,
+                stack,
+                areas,
+            }
+        }
+
+        fn store(&mut self) -> &mut AppStore {
+            store(&mut self.core, self.window)
+        }
+
+        fn probe(&self) -> Probe<'_> {
+            Probe {
+                deck: &self.deck,
+                session: self.session,
+            }
+        }
+
+        /// Reconciles, then checks both pane terminals are the same widgets in the same container.
+        fn settle(&mut self) {
+            reconcile(&mut self.deck, &mut self.core, self.window);
+            let probe = self.probe();
+            for token in [&self.primary, &self.split] {
+                assert_eq!(probe.area(token).parent().as_ref(), Some(&self.stack), "{token}");
+            }
+            assert_eq!(probe.area(&self.primary), self.areas.0);
+            assert_eq!(probe.area(&self.split), self.areas.1);
+        }
+
+        /// Whether the original primary and split terminals are visible.
+        fn shown(&self) -> (bool, bool) {
+            let probe = self.probe();
+            (probe.visible(&self.primary), probe.visible(&self.split))
+        }
+    }
+
+    fn reconcile(deck: &mut Deck, core: &mut Core, window: Uuid) {
+        let zoom = core.zoom_target(window);
+        deck.reconcile(core, Some(window), zoom, &context(), &state::detached_poster());
+    }
+
+    fn pane_terminals_keep_their_parent() {
+        let mut walk = Walk::split();
+        assert_eq!(walk.shown(), (true, true));
+        assert_eq!(
+            walk.probe().focus(),
+            Some(walk.split.clone()),
+            "a new split focuses right"
+        );
+        let session = walk.session;
+        let ratio = walk.store().session(session).unwrap().split.ratio;
+        assert_eq!(
+            ratio,
+            Some(SPLIT_RATIO_DEFAULT),
+            "a shown split's first layout seeds its ratio"
+        );
+
+        walk.store().set_split_visibility(session, false, None);
+        walk.settle();
+        assert_eq!(walk.shown(), (false, true), "the hidden split shows right maximized");
+
+        walk.store().swap_panes(session).unwrap();
+        walk.settle();
+        assert_eq!(
+            slot_token(&walk.core, walk.window, session, StatusPane::Left),
+            walk.split
+        );
+        assert_eq!(walk.shown(), (false, true), "focus followed the terminal");
+        assert_eq!(walk.probe().focus(), Some(walk.split.clone()));
+
+        walk.store()
+            .set_split_visibility(session, true, Some(SplitAxis::TopBottom));
+        walk.settle();
+        assert_eq!(walk.shown(), (true, true));
+
+        let zoomed = SurfaceId {
+            session,
+            surface: agterm_core::zoom::ZoomSurface::Split,
+        };
+        walk.core.set_zoom_target(walk.window, Some(zoomed));
+        walk.settle();
+        assert_eq!(walk.shown(), (true, false), "the split slot holds the old primary now");
+        assert_eq!(walk.probe().focus(), Some(walk.primary.clone()));
+        walk.core.set_zoom_target(walk.window, None);
+        scratch_covers_and_closes(walk);
+    }
+
+    fn scratch_covers_and_closes(mut walk: Walk) {
+        let session = walk.session;
+        walk.store().toggle_scratch(session, true);
+        walk.settle();
+        let scratch = slot_token(&walk.core, walk.window, session, StatusPane::Scratch);
+        assert!(walk.probe().visible(&scratch), "the scratch covers");
+        assert_eq!(walk.shown(), (false, false));
+        assert_eq!(walk.probe().focus(), Some(scratch.clone()));
+        assert_eq!(walk.probe().area(&scratch).parent().as_ref(), Some(&walk.stack));
+
+        walk.store().toggle_scratch(session, true);
+        walk.settle();
+        assert!(!walk.probe().visible(&scratch));
+        assert_eq!(walk.shown(), (true, true));
+        walk.stack.size_allocate(&gtk::Allocation::new(0, 0, 800, 601), -1);
+        let (bottom, top) = &walk.areas;
+        assert_eq!(
+            (top.width(), top.height()),
+            (800, 300),
+            "the swapped-in terminal sits on top"
+        );
+        assert_eq!((bottom.width(), bottom.height()), (800, 300));
+        assert_eq!(
+            walk.probe().area(&scratch).height(),
+            601,
+            "the hidden scratch keeps the full page"
+        );
+
+        assert!(walk.store().close_scratch(session, true));
+        walk.store().close_split(session);
+        reconcile(&mut walk.deck, &mut walk.core, walk.window);
+        let page = &walk.deck.pages[&session].panes;
+        assert!(page.terminal(&scratch).is_none() && page.terminal(&walk.primary).is_none());
+        assert_eq!(walk.areas.1.parent().as_ref(), Some(&walk.stack), "the survivor stays");
+        assert!(walk.areas.0.parent().is_none(), "the closed split's widget is gone");
     }
 }

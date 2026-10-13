@@ -2,8 +2,8 @@
 //! sidebar, title bar and control read-back project (upstream's `Session`, `AgentStatus.swift`).
 //!
 //! Fields mirror upstream's names (snake case) except where Rust groups them: the split fields live in
-//! [`SplitLayout`], each pane's creation command in a [`PaneLaunch`]. Overlay, HUD, ask, scratch, restore and
-//! remote-presentation state joins with the tasks that implement them.
+//! [`SplitLayout`], each pane's creation command in a [`PaneLaunch`]. Overlay, HUD, ask and remote-presentation state
+//! joins with the tasks that implement them.
 
 use std::time::SystemTime;
 
@@ -213,6 +213,9 @@ pub struct Session {
     pub was_restored: bool,
     /// Whether the scratch terminal is shown. Ephemeral.
     pub scratch_active: bool,
+    /// What the next scratch terminal runs instead of a login shell (`session.scratch --command`); the frontend takes
+    /// it when it creates the scratch, so it runs once. Ephemeral.
+    pub scratch_command: Option<String>,
     /// The session's background; `None` is none. Persisted.
     pub background_watermark: Option<BackgroundWatermark>,
     /// Per-pane overrides of the background; the scratch's is never persisted.
@@ -226,6 +229,8 @@ pub struct Session {
     /// The split pane's terminal, created on the first split and kept while the split is hidden; freed when the split
     /// closes.
     pub split_surface: SurfaceSlot,
+    /// The scratch terminal, created on its first show and kept while hidden; freed when its shell exits.
+    pub scratch_surface: SurfaceSlot,
     /// The in-terminal search. Ephemeral.
     pub search: SearchState,
 }
@@ -281,12 +286,14 @@ impl Session {
             font_size: None,
             was_restored: false,
             scratch_active: false,
+            scratch_command: None,
             background_watermark: None,
             pane_backgrounds: PaneBackgrounds::default(),
             restore: PaneRestore::default(),
             split_restore: PaneRestore::default(),
             surface: SurfaceSlot::default(),
             split_surface: SurfaceSlot::default(),
+            scratch_surface: SurfaceSlot::default(),
             search: SearchState::default(),
         }
     }
@@ -456,6 +463,8 @@ impl Session {
             Some(StatusPane::Left)
         } else if carries(&self.split_surface) {
             Some(StatusPane::Right)
+        } else if carries(&self.scratch_surface) {
+            Some(StatusPane::Scratch)
         } else {
             None
         }
@@ -474,23 +483,37 @@ impl Session {
         }
     }
 
-    /// The terminal slot of a pane role; `None` for the scratch, which has no slot yet.
+    /// The terminal slot of a pane role.
     #[must_use]
-    pub fn pane_slot(&self, pane: StatusPane) -> Option<&SurfaceSlot> {
+    pub fn pane_slot(&self, pane: StatusPane) -> &SurfaceSlot {
         match pane {
-            StatusPane::Left => Some(&self.surface),
-            StatusPane::Right => Some(&self.split_surface),
-            StatusPane::Scratch => None,
+            StatusPane::Left => &self.surface,
+            StatusPane::Right => &self.split_surface,
+            StatusPane::Scratch => &self.scratch_surface,
         }
     }
 
-    /// The mutable terminal slot of a pane role, as [`Session::pane_slot`].
-    pub fn pane_slot_mut(&mut self, pane: StatusPane) -> Option<&mut SurfaceSlot> {
+    /// The mutable terminal slot of a pane role.
+    pub fn pane_slot_mut(&mut self, pane: StatusPane) -> &mut SurfaceSlot {
         match pane {
-            StatusPane::Left => Some(&mut self.surface),
-            StatusPane::Right => Some(&mut self.split_surface),
-            StatusPane::Scratch => None,
+            StatusPane::Left => &mut self.surface,
+            StatusPane::Right => &mut self.split_surface,
+            StatusPane::Scratch => &mut self.scratch_surface,
         }
+    }
+
+    /// Whether the right pane is the focused one: it holds focus and is laid out or has a terminal (upstream's
+    /// `focusedPane == .right`).
+    #[must_use]
+    pub fn focuses_split(&self) -> bool {
+        self.split.focused && (self.split.shown || self.split_surface.is_present())
+    }
+
+    /// Whether the detail pane lays pane `right` (else the left one) out: both while the split is shown, else only
+    /// the focused one, maximized (upstream's `rendersPane`).
+    #[must_use]
+    pub fn renders_pane(&self, right: bool) -> bool {
+        self.split.shown || right == self.focuses_split()
     }
 
     /// The pane a command reads when none is named (upstream's `onScreenSurface`): the scratch while shown, else the
@@ -521,6 +544,7 @@ impl Session {
     pub fn teardown_surfaces(&mut self) {
         self.surface.teardown();
         self.split_surface.teardown();
+        self.scratch_surface.teardown();
         self.search.clear();
     }
 }
@@ -698,14 +722,47 @@ mod tests {
     }
 
     #[test]
-    fn teardown_frees_both_panes() {
+    fn teardown_frees_every_pane() {
         let mut s = session("/");
         let main = FakeSurface::new("left");
         let split = FakeSurface::new("right");
-        let (main_probe, split_probe) = (main.probe(), split.probe());
+        let scratch = FakeSurface::new("scratch");
+        let probes = [main.probe(), split.probe(), scratch.probe()];
         s.surface.replace(Box::new(main));
         s.split_surface.replace(Box::new(split));
+        s.scratch_surface.replace(Box::new(scratch));
         s.teardown_surfaces();
-        assert_eq!((main_probe.teardowns(), split_probe.teardowns()), (1, 1));
+        assert!(probes.iter().all(|probe| probe.teardowns() == 1));
+    }
+
+    #[test]
+    fn a_token_names_its_pane_the_scratch_included() {
+        let mut s = session("/");
+        s.surface.replace(Box::new(FakeSurface::new("L")));
+        s.split_surface.replace(Box::new(FakeSurface::new("R")));
+        s.scratch_surface.replace(Box::new(FakeSurface::new("S")));
+        assert_eq!(s.pane_role_for_token("L"), Some(StatusPane::Left));
+        assert_eq!(s.pane_role_for_token("R"), Some(StatusPane::Right));
+        assert_eq!(s.pane_role_for_token("S"), Some(StatusPane::Scratch));
+        assert_eq!(s.pane_role_for_token("X"), None);
+        assert_eq!(s.pane_role_for_token(""), None);
+    }
+
+    #[test]
+    fn the_focused_pane_is_the_only_one_a_hidden_split_lays_out() {
+        let mut s = session("/");
+        assert!(s.renders_pane(false) && !s.renders_pane(true));
+        s.split = SplitLayout {
+            shown: true,
+            exists: true,
+            focused: true,
+            ..SplitLayout::default()
+        };
+        assert!(s.renders_pane(false) && s.renders_pane(true));
+        s.split.shown = false;
+        assert!(!s.focuses_split(), "no terminal: the left pane shows");
+        s.split_surface.replace(Box::new(FakeSurface::new("R")));
+        assert!(s.focuses_split());
+        assert!(!s.renders_pane(false) && s.renders_pane(true));
     }
 }

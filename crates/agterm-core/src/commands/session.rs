@@ -60,6 +60,13 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         | SessionCmd::Paste
         | SessionCmd::SelectAll
         | SessionCmd::Search => super::surface::dispatch_session(core, cmd, request),
+        SessionCmd::Split
+        | SessionCmd::SplitClose
+        | SessionCmd::Swap
+        | SessionCmd::Lead
+        | SessionCmd::Scratch
+        | SessionCmd::Focus
+        | SessionCmd::Resize => super::panes::dispatch(core, cmd, request),
         other => Err(ControlError::NotSupported(Command::Session(other))),
     }
 }

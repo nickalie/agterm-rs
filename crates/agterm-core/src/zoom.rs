@@ -73,8 +73,20 @@ impl ZoomSurface {
                 !(!session.surface.is_present() && session.split_surface.is_present() && session.split.focused)
             }
             Self::Split => session.split.exists || session.split_surface.is_present(),
-            Self::Scratch => session.scratch_active,
+            Self::Scratch => session.scratch_active || session.scratch_surface.is_present(),
             Self::Overlay | Self::OverlayLeft | Self::OverlayRight => false,
+        }
+    }
+
+    /// The pane role of a terminal slot; `None` for the overlay kinds.
+    #[must_use]
+    pub fn pane(self) -> Option<crate::model::StatusPane> {
+        use crate::model::StatusPane;
+        match self {
+            Self::Primary => Some(StatusPane::Left),
+            Self::Split => Some(StatusPane::Right),
+            Self::Scratch => Some(StatusPane::Scratch),
+            Self::Overlay | Self::OverlayLeft | Self::OverlayRight => None,
         }
     }
 
@@ -83,17 +95,12 @@ impl ZoomSurface {
     pub fn is_active(self, session: &Session) -> bool {
         let uncovered = !session.scratch_active;
         match self {
-            Self::Primary => uncovered && !focuses_split(session),
-            Self::Split => uncovered && focuses_split(session),
+            Self::Primary => uncovered && !session.focuses_split(),
+            Self::Split => uncovered && session.focuses_split(),
             Self::Scratch => session.scratch_active,
             Self::Overlay | Self::OverlayLeft | Self::OverlayRight => false,
         }
     }
-}
-
-/// Upstream's `focusedPane == .right`: the split holds focus and is laid out or has a terminal.
-fn focuses_split(session: &Session) -> bool {
-    session.split.focused && (session.split.shown || session.split_surface.is_present())
 }
 
 /// A surface id, `surface:<SESSION-ID>:<kind>` (upstream's `TerminalSurfaceID`).

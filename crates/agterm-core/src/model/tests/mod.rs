@@ -5,6 +5,7 @@ mod duplicate;
 mod library;
 mod navigation;
 mod organization;
+mod panes;
 mod pending_close;
 mod recent_closed;
 mod reselection;

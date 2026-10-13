@@ -101,6 +101,9 @@ pub trait Surface {
     /// The pid of the terminal's foreground process; `None` when not realized or unknown.
     fn foreground_pid(&self) -> Option<u32>;
 
+    /// The terminal's live font size in points; `None` when not realized (upstream's `currentFontSize`).
+    fn font_size(&self) -> Option<f64>;
+
     /// Frees the libghostty surface and its shell. Taking the box makes a second teardown impossible.
     fn teardown(self: Box<Self>);
 }

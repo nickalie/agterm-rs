@@ -56,6 +56,10 @@ impl Surface for PaneSurface {
         self.terminal.foreground_pid()
     }
 
+    fn font_size(&self) -> Option<f64> {
+        self.terminal.font_size()
+    }
+
     fn teardown(self: Box<Self>) {
         self.terminal.teardown();
     }

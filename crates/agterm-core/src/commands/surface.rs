@@ -2,9 +2,6 @@
 //! [`super::typing`], `session.search` in [`super::search`], `surface.cursor` and `surface.zoom` in
 //! [`super::surface_target`]. Validation follows upstream's `ControlDispatcher.swift`; the effects follow
 //! `agterm/Control/ControlServer+SurfaceIO.swift` (`readSessionText`, `copySelection`, `surfaceBindingAction`).
-//!
-//! The scratch terminal has no surface slot yet, so a command naming it answers as upstream does for a session
-//! without one.
 
 use std::time::Duration;
 
@@ -17,7 +14,7 @@ use super::{Outcome, args_of, parse_pane, parse_surface_pane, session_store, unk
 use crate::Core;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
-use crate::model::{PaneAddress, SearchFollowUp, SearchReport, Session, StatusKeystroke, StatusPane, SurfaceSlot};
+use crate::model::{PaneAddress, SearchFollowUp, SearchReport, Session, StatusKeystroke, StatusPane};
 
 /// How long a command waiting on the frontend sleeps between probes (upstream's 0.03 s main-actor polls).
 pub const POLL_INTERVAL: Duration = Duration::from_millis(30);
@@ -67,6 +64,7 @@ pub(crate) fn deferred(core: &mut Core, request: &Request) -> Option<Dispatched>
     match request.cmd {
         Command::Session(SessionCmd::Type) => Some(super::typing::begin(core, request)),
         Command::Session(SessionCmd::Search) => Some(super::search::begin(core, request)),
+        Command::Session(SessionCmd::Swap) => Some(super::panes::begin_swap(core, request)),
         _ => None,
     }
 }
@@ -105,7 +103,7 @@ pub(crate) fn no_scratch() -> ControlError {
 
 /// The terminal in pane `pane`, if its slot holds one.
 pub(crate) fn pane_surface(session: &Session, pane: StatusPane) -> Option<&dyn agterm_host::Surface> {
-    session.pane_slot(pane).and_then(SurfaceSlot::get)
+    session.pane_slot(pane).get()
 }
 
 /// Whether pane `pane` holds a realized terminal.
@@ -117,16 +115,17 @@ pub(crate) fn pane_realized(session: &Session, pane: StatusPane) -> bool {
 pub(crate) fn run_binding(session: &mut Session, pane: StatusPane, action: &str) -> bool {
     session
         .pane_slot_mut(pane)
-        .and_then(SurfaceSlot::get_mut)
+        .get_mut()
         .is_some_and(|surface| surface.binding_action(action))
 }
 
-/// A named pane that must exist: the split pane needs a terminal in its slot, the scratch is never there yet.
+/// A named pane that must exist: the split pane and the scratch need a terminal in their slots.
 fn existing_pane(session: &Session, pane: StatusPane) -> Result<StatusPane, ControlError> {
     match pane {
         StatusPane::Left => Ok(StatusPane::Left),
         StatusPane::Right if session.split_surface.is_present() => Ok(StatusPane::Right),
         StatusPane::Right => Err(no_split_pane()),
+        StatusPane::Scratch if session.scratch_surface.is_present() => Ok(StatusPane::Scratch),
         StatusPane::Scratch => Err(no_scratch()),
     }
 }
