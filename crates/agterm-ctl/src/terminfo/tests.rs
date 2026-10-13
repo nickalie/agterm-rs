@@ -558,10 +558,13 @@ fn ssh_inherits_no_descriptor_beyond_its_standard_three() {
     // SAFETY: `stray` is a valid two-element array for `pipe` to fill.
     assert_eq!(unsafe { libc::pipe(stray.as_mut_ptr()) }, 0);
     let record = fixture.path("ssh.fd");
-    // each branch redirects on its own: a redirect around the whole `if` makes bash park its stdout on fd 10 while
-    // the test runs, which reads as inherited whenever the stray pipe got that number
+    // the probe matches the pipe itself (`pipe:[inode]`), not just its number, which the shell's own descriptors may
+    // take with nothing leaked: dash (Ubuntu's /bin/sh) keeps its script open on the lowest free one from 10, and
+    // both shells park stdout on 10 or above while a redirect is in force
+    let pipe = fs::read_link(format!("/proc/self/fd/{}", stray[1])).unwrap();
     let probe = format!(
-        "if [ -e /dev/fd/{fd} ]; then echo inherited > '{record}'; else echo absent > '{record}'; fi",
+        "if [ \"$(readlink /proc/$$/fd/{fd})\" = '{pipe}' ]; then echo inherited; else echo absent; fi > '{record}'",
+        pipe = pipe.display(),
         record = record.display(),
         fd = stray[1]
     );
