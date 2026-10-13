@@ -1254,7 +1254,7 @@ wlr-layer-shell surface.
       half of `session.restart` and `session.lead`, left by Tasks 16/17. ⚠️ Linux has no responsibility API, so every
       leader attributes `unknown` and a reset offers outdated daemons only; the Agterm ▸ Reset Live Sessions… menu
       item is not wired yet: `Core::prepare_live_reset`/`confirm_live_reset` are its API, the app menu belongs to
-      Task 35's lane)
+      Task 35's lane; ➕ wired when Task 28 merged: `app_menu.rs` + `zmx_runtime::reset_from_menu`)
 - [x] claim `live-sessions` only for a zsh password-database shell with zmx staged
 - [x] matching `agtermctl zmx ...` subcommands (`ZmxCommands.swift`) (`list`, `screen`, `prune`, `kill`, `reset`;
       `tree`, `attach` and `present` come with Tasks 29/30)

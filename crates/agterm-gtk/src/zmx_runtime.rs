@@ -1,20 +1,24 @@
 //! Live sessions on this host (upstream's `restoredRuntime` zmx wiring in `agtermApp.swift`, `GhosttyApp`'s live
-//! probe and `LiveResetRelauncher.swift`): the staged zmx as the core's session host, the launch steps that run before
-//! any window mounts, whether this host claims the `live-sessions` capability, and the reopen after a Live sessions
-//! reset quit.
+//! probe, `LiveResetCoordinator.swift`'s dialogs and `LiveResetRelauncher.swift`): the staged zmx as the core's session
+//! host, the launch steps that run before any window mounts, whether this host claims the `live-sessions` capability,
+//! the Reset Live Sessions… menu item and the reopen after its quit.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use adw::prelude::*;
 use agterm_core::paths::Env;
 use agterm_core::zmx::build_record::launch_cutoff;
 use agterm_core::zmx::support::Inputs;
-use agterm_core::{Core, LiveInstall};
+use agterm_core::{Core, LiveInstall, ResetPrompt, ResetRefusal};
 use agterm_proto::ControlZmxEndpoint;
 use agterm_zmx::Runtime;
 use agterm_zmx::launch::bundled_build_id;
+use gtk::gio;
+
+use crate::state::{self, AppState};
 
 /// The capability a host claims when its panes can run in zmx daemons (`conformance/docs/rust-build.md`).
 pub const LIVE_SESSIONS: &str = "live-sessions";
@@ -93,6 +97,57 @@ pub fn spawn_relauncher() -> bool {
     }
 }
 
+/// The confirm dialog's response that resets.
+const RESET_RESPONSE: &str = "reset";
+
+/// Reset Live Sessions… (upstream's `LiveResetCoordinator.runFromMenu`): a refusal is shown, a cancel does nothing, a
+/// confirmation quits without the quit prompt; the quit arms the reset and reopens the app ([`spawn_relauncher`]).
+pub fn reset_from_menu(state: &mut AppState) {
+    let parent = state.frontmost_gtk_window();
+    match state.core.prepare_live_reset() {
+        Ok(prompt) => {
+            let poster = state.poster().clone();
+            reset_dialog(&prompt).choose(parent.as_ref(), None::<&gio::Cancellable>, move |response| {
+                if response == RESET_RESPONSE {
+                    state::post(&poster, confirm_reset);
+                }
+            });
+        }
+        Err(refusal) => refusal_dialog(refusal).present(parent.as_ref()),
+    }
+}
+
+/// The dialog confirmed: the core selects again, and the app quits once the selection is held.
+fn confirm_reset(state: &mut AppState) {
+    match state.core.confirm_live_reset() {
+        Ok(()) => {
+            if let Some(app) = state.app() {
+                app.quit();
+            }
+        }
+        Err(refusal) => refusal_dialog(refusal).present(state.frontmost_gtk_window().as_ref()),
+    }
+}
+
+/// Upstream's warning alert: Cancel first and the default, then Reset.
+fn reset_dialog(prompt: &ResetPrompt) -> adw::AlertDialog {
+    let dialog = adw::AlertDialog::new(Some(&prompt.title), Some(&prompt.body));
+    dialog.add_responses(&[("cancel", "Cancel"), (RESET_RESPONSE, "Reset")]);
+    dialog.set_response_appearance(RESET_RESPONSE, adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+    dialog
+}
+
+/// Upstream's informational alert for a refused menu reset.
+fn refusal_dialog(refusal: ResetRefusal) -> adw::AlertDialog {
+    let dialog = adw::AlertDialog::new(Some("Reset Live Sessions"), Some(refusal.user_message()));
+    dialog.add_response("ok", "OK");
+    dialog.set_default_response(Some("ok"));
+    dialog.set_close_response("ok");
+    dialog
+}
+
 /// The waiter's command for `executable` after process `pid` exits, detached from the app's process group.
 fn relaunch_command(executable: &Path, pid: u32) -> Command {
     let mut command = Command::new("/bin/sh");
@@ -118,6 +173,27 @@ mod tests {
     use agterm_core::paths::MapEnv;
 
     use super::*;
+
+    #[test]
+    fn the_reset_dialog_defaults_to_cancel_and_a_refusal_explains_itself() {
+        crate::gtk_test::on_gtk_thread(|| {
+            let prompt = ResetPrompt {
+                title: "Reset Live Sessions?".to_owned(),
+                body: "2 live sessions will be reset.".to_owned(),
+            };
+            let dialog = reset_dialog(&prompt);
+            assert_eq!(dialog.heading().as_deref(), Some("Reset Live Sessions?"));
+            assert_eq!(dialog.body(), "2 live sessions will be reset.");
+            assert_eq!(dialog.response_label("cancel"), "Cancel");
+            assert_eq!(dialog.response_label(RESET_RESPONSE), "Reset");
+            assert_eq!(dialog.default_response().as_deref(), Some("cancel"));
+            assert_eq!(dialog.close_response(), "cancel");
+            let refusal = refusal_dialog(ResetRefusal::NothingToReset);
+            assert_eq!(refusal.heading().as_deref(), Some("Reset Live Sessions"));
+            assert_eq!(refusal.body(), ResetRefusal::NothingToReset.user_message());
+            assert_eq!(refusal.response_label("ok"), "OK");
+        });
+    }
 
     #[test]
     fn a_host_without_a_staged_zmx_claims_no_live_sessions() {

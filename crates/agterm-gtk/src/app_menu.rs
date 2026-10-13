@@ -4,7 +4,8 @@
 //!
 //! File also carries upstream's live parts ([`agterm_core::menu_lists`]): Open Window, listing the library with the open
 //! windows checked; Open Recent, the closed sessions and workspaces; and Reveal in Files. A Help menu holds the
-//! developer documentation, the agent integrations' installers and the About window, and the app's own Preferences and Quit close the menu.
+//! developer documentation, the agent integrations' installers and the About window, and the app's own Preferences,
+//! Reset Live Sessions… (live sessions only) and Quit close the menu.
 //!
 //! The accelerators are display only: the keymap monitor (`keymap_dispatch`) dispatches the chords before any widget
 //! sees them, from the same resolved keymap. `keymap.list` reads them back from this menu model (`menu_items`).
@@ -193,11 +194,20 @@ struct Toggles {
 type AppItem = (&'static str, &'static str, fn(&mut AppState));
 
 /// The app's own items closing the menu, after File, View, Navigate and Help: no keymap action runs them, so they carry
-/// no accelerator (upstream's app menu Settings… and Quit).
-const APP_ITEMS: [AppItem; 2] = [
+/// no accelerator (upstream's app menu Settings… and Quit). Reset Live Sessions… shares Quit's section, as upstream's
+/// `CommandGroup(before: .appTermination)`, and is shown only while live sessions are both configured and running.
+const APP_ITEMS: [AppItem; 3] = [
     ("preferences", "Preferences", |state| crate::settings::present(state)),
+    (
+        LIVE_RESET_ACTION,
+        "Reset Live Sessions…",
+        crate::zmx_runtime::reset_from_menu,
+    ),
     ("quit", "Quit", |state| crate::welcome::request_quit(state)),
 ];
+
+/// Reset Live Sessions…'s action.
+const LIVE_RESET_ACTION: &str = "reset-live-sessions";
 
 /// The Help menu after File, View and Navigate (upstream's `CommandGroup(replacing: .help)`), sections separated: the
 /// developer documentation, then the installers. No keymap action runs them, so they carry no accelerator.
@@ -229,6 +239,8 @@ fn shows_accelerator(item: Item) -> bool {
 struct Lists {
     windows: Vec<WindowEntry>,
     recent: RecentEntries,
+    /// Whether Reset Live Sessions… is shown.
+    live_reset: bool,
 }
 
 /// What the model was built from: the static items' titles and accelerators, and the live lists.
@@ -323,7 +335,15 @@ impl AppMenu {
         let lists = Lists {
             windows: core.window_entries(),
             recent: core.recent_entries(),
+            live_reset: core.live_reset_menu_visible(),
         };
+        if let Some(action) = self
+            .group
+            .lookup_action(LIVE_RESET_ACTION)
+            .and_downcast::<gio::SimpleAction>()
+        {
+            action.set_enabled(lists.live_reset);
+        }
         let built = (entries, lists);
         if *self.built.borrow() != built {
             self.rebuild(&built);
@@ -350,7 +370,9 @@ impl AppMenu {
         self.model.append_submenu(Some("Help"), &help_menu());
         let app = gio::Menu::new();
         for (name, title, _) in APP_ITEMS {
-            app.append(Some(title), Some(&format!("menu.{name}")));
+            if name != LIVE_RESET_ACTION || lists.live_reset {
+                app.append(Some(title), Some(&format!("menu.{name}")));
+            }
         }
         self.model.append_section(None, &app);
     }
@@ -835,5 +857,73 @@ mod tests {
             !menu_items(menu.model(), menu.group()).is_empty(),
             "the accelerators still read back"
         );
+    }
+
+    #[test]
+    fn reset_live_sessions_sits_before_quit_only_under_live_sessions() {
+        crate::gtk_test::on_gtk_thread(live_reset_item);
+    }
+
+    fn live_reset_item() {
+        use agterm_core::persist::{AppSettings, RestoreMode};
+        use agterm_core::restore::mode::RestoreLaunchDecision;
+
+        let core = |configured: RestoreMode, active: RestoreMode| {
+            let mut core = Core::new(
+                agterm_core::CoreConfig {
+                    app: agterm_proto::AppIdentity::from_recorded("0.1.0", None),
+                    capabilities: Vec::new(),
+                },
+                agterm_core::CoreState {
+                    library: agterm_core::model::WindowLibrary::seeded("/home/u"),
+                    settings: AppSettings {
+                        restore_mode: Some(configured),
+                        ..AppSettings::default()
+                    },
+                    persistence: None,
+                },
+            );
+            core.set_restore_launch(RestoreLaunchDecision::new(active, None));
+            core
+        };
+        let menu = AppMenu::new(&crate::state::detached_poster());
+        let shown = |menu: &AppMenu| {
+            let mut all = Vec::new();
+            labels(menu.model().upcast_ref(), &mut all);
+            all
+        };
+        let action = |menu: &AppMenu| {
+            menu.group()
+                .lookup_action(LIVE_RESET_ACTION)
+                .expect("the item's action")
+        };
+
+        menu.sync(&core(RestoreMode::Live, RestoreMode::Live));
+        let all = shown(&menu);
+        let position = |label: &str| all.iter().position(|item| item == label).unwrap();
+        assert_eq!(position("Reset Live Sessions…"), position("Preferences") + 1);
+        assert_eq!(position("Quit"), position("Reset Live Sessions…") + 1);
+        assert!(action(&menu).is_enabled());
+        let wired = (0..menu.model().n_items())
+            .filter_map(|index| menu.model().item_link(index, "section"))
+            .any(|section| {
+                (0..section.n_items()).any(|index| {
+                    string_attribute(&section, index, "action").as_deref() == Some("menu.reset-live-sessions")
+                })
+            });
+        assert!(wired, "the item activates its action");
+
+        for (configured, active) in [
+            (RestoreMode::None, RestoreMode::None),
+            (RestoreMode::Live, RestoreMode::None),
+            (RestoreMode::None, RestoreMode::Live),
+        ] {
+            menu.sync(&core(configured, active));
+            assert!(
+                !shown(&menu).iter().any(|label| label == "Reset Live Sessions…"),
+                "{configured:?}/{active:?}"
+            );
+            assert!(!action(&menu).is_enabled());
+        }
     }
 }
