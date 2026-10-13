@@ -5,12 +5,12 @@
 //! The decision is taken once, before the first terminal, and never changes for the process: a pane is wrapped in a
 //! live-session daemon or not when it is created, so a mode set later applies to the next launch only.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use agterm_proto::ControlRestoreStatus;
 
-use crate::command_restore::basename;
 use crate::persist::RestoreMode;
+use crate::zmx::support::eligibility;
 
 /// The mode the settings asked this launch for, the one it runs in, and why `live` fell back when it did (upstream's
 /// `RestoreLaunchDecision`).
@@ -123,51 +123,25 @@ pub struct LiveProbe {
 pub const UI_TEST_OPT_IN: &str = "AGTERM_UITEST_ENABLE_ZMX";
 
 impl LiveProbe {
-    /// The first reason this host cannot run live sessions, in upstream's order; `None` when it can.
+    /// The first reason this host cannot run live sessions, in upstream's order; `None` when it can. After the UI-test
+    /// bypass it is the wrap's own walk ([`crate::zmx::support::eligibility`]), so the order lives once.
     #[must_use]
     pub fn rejection(&self) -> Option<LiveRejection> {
         if self.ui_test_launch && !self.ui_test_opt_in {
             return Some(LiveRejection::UiTestLaunch);
         }
-        if !self.zmx_executable.is_absolute() {
-            return Some(LiveRejection::ExecutablePathNotAbsolute);
-        }
-        if !is_executable_file(&self.zmx_executable) {
-            return Some(LiveRejection::ExecutableUnavailable);
-        }
-        if self.login_shell.as_deref().map(basename) != Some("zsh") {
-            return Some(LiveRejection::UnsupportedLoginShell);
-        }
-        let integration = self
-            .resources_dir
-            .as_ref()
-            .map(|dir| dir.join("shell-integration/zsh/.zshenv"));
-        if !integration.is_some_and(|path| path.exists()) {
-            return Some(LiveRejection::MissingZshIntegration);
-        }
-        None
+        eligibility(
+            &self.zmx_executable,
+            self.login_shell.as_deref(),
+            self.resources_dir.as_deref(),
+        )
+        .err()
     }
 
     /// [`LiveProbe::rejection`]'s message.
     #[must_use]
     pub fn unavailable_reason(&self) -> Option<String> {
         self.rejection().map(|rejection| rejection.message().to_owned())
-    }
-}
-
-/// Whether `path` is a regular file this process may execute.
-fn is_executable_file(path: &Path) -> bool {
-    let Ok(metadata) = path.metadata() else {
-        return false;
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        metadata.is_file()
     }
 }
 

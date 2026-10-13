@@ -484,7 +484,8 @@ impl Deck {
         let zoom = zoom.filter(|zoom| self.pages.contains_key(&zoom.session));
         let shown = zoom.map(|zoom| zoom.session).or(plan.shown);
         let grid = window.and_then(|window| GridModel::of(core, window));
-        let modal = window.is_some_and(|window| core.modal_pending(window));
+        // the palette holds the keyboard like a modal: a selection change under it leaves its field focused
+        let modal = window.is_some_and(|window| core.modal_pending(window) || core.palette_holds(window));
         if let Some(window) = window {
             let look = crate::ask_dialog::Look::current(core);
             let sync = PageSync {

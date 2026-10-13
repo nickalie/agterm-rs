@@ -174,6 +174,16 @@ impl Item {
     }
 }
 
+/// An app item: its action name, its title and what it runs.
+type AppItem = (&'static str, &'static str, fn(&mut AppState));
+
+/// The app's own items closing the menu, outside File, View and Navigate: no keymap action runs them, so they carry no
+/// accelerator (upstream's app menu Settings… and Quit).
+const APP_ITEMS: [AppItem; 2] = [
+    ("preferences", "Preferences", |state| crate::settings::present(state)),
+    ("quit", "Quit", |state| crate::welcome::request_quit(state)),
+];
+
 /// The items a keymap shows accelerators on: upstream's menu carries none for Reopen Closed Item, which its own
 /// monitor delivers so text undo keeps working.
 fn shows_accelerator(item: Item) -> bool {
@@ -201,6 +211,12 @@ impl AppMenu {
                     state.menu_activated(item_command(item));
                 });
             });
+            group.add_action(&action);
+        }
+        for (name, _, run) in APP_ITEMS {
+            let action = gio::SimpleAction::new(name, None);
+            let posting = poster.clone();
+            action.connect_activate(move |_, _| state::post(&posting, run));
             group.add_action(&action);
         }
         Self {
@@ -271,6 +287,11 @@ impl AppMenu {
             }
             self.model.append_submenu(Some(menu), &submenu);
         }
+        let app = gio::Menu::new();
+        for (name, title, _) in APP_ITEMS {
+            app.append(Some(title), Some(&format!("menu.{name}")));
+        }
+        self.model.append_section(None, &app);
     }
 
     /// What `keymap.list` reads the live accelerators with.

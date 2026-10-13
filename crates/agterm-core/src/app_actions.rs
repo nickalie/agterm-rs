@@ -4,8 +4,8 @@
 //! An action runs only when the palette row behind it is enabled ([`PaletteCommand::is_enabled`], the one predicate
 //! the menu item, the palette row and the keymap share); the actions without a palette row (window management and the
 //! three palette launchers) stand down under any cover. The model work happens here, through the same control
-//! handlers `agtermctl` reaches where one exists; what needs a dialog, a widget or a later task's UI comes back as a
-//! [`FrontendAction`] for the frontend.
+//! handlers `agtermctl` reaches where one exists, the palettes included ([`crate::palette`]); what needs a dialog, a
+//! widget or a later task's UI comes back as a [`FrontendAction`] for the frontend.
 
 use agterm_proto::command::{FontCmd, SessionCmd, SurfaceCmd, WindowCmd, WorkspaceCmd};
 use agterm_proto::{
@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::Core;
 use crate::keymap::BuiltinAction;
 use crate::model::{AppStore, SidebarMode};
+use crate::palette::PaletteMode;
 use crate::palette_catalog::{PaletteCommand, PaletteContext, PaletteFacts};
 use crate::pane_env::uuid_string;
 use crate::persist::settings::FlaggedViewLayout;
@@ -35,15 +36,9 @@ pub enum FrontendAction {
     CloseWindow(Uuid),
     /// Ask before closing `session` (the `confirmCloseSession` setting), then perform
     /// [`SidebarAction::CloseSessions`].
-    ConfirmCloseSession {
-        window: Uuid,
-        session: Uuid,
-    },
+    ConfirmCloseSession { window: Uuid, session: Uuid },
     /// Rename Window: a dialog prefilled with `name`, committed through `window.rename`.
-    RenameWindow {
-        window: Uuid,
-        name: String,
-    },
+    RenameWindow { window: Uuid, name: String },
     /// Delete Window: confirmed while it holds sessions, then removed.
     DeleteWindow {
         window: Uuid,
@@ -51,33 +46,16 @@ pub enum FrontendAction {
         sessions: usize,
     },
     /// The sidebar's inline rename of a session row.
-    RenameSession {
-        window: Uuid,
-        session: Uuid,
-    },
+    RenameSession { window: Uuid, session: Uuid },
     /// The sidebar's inline rename of a workspace row.
-    RenameWorkspace {
-        window: Uuid,
-        workspace: Uuid,
-    },
+    RenameWorkspace { window: Uuid, workspace: Uuid },
     /// Delete Workspace: confirmed while it holds sessions, as the row menu does.
-    DeleteWorkspace {
-        window: Uuid,
-        workspace: Uuid,
-    },
+    DeleteWorkspace { window: Uuid, workspace: Uuid },
     /// Open Directory…: the directory chooser, then [`SidebarAction::OpenDirectories`].
-    OpenDirectory {
-        window: Uuid,
-        workspace: Uuid,
-    },
+    OpenDirectory { window: Uuid, workspace: Uuid },
     /// Toggle the window's full screen.
     ToggleFullscreen(Uuid),
-    /// The palettes and pickers a later frontend task owns.
-    SessionPalette(Uuid),
-    CommandPalette(Uuid),
-    CustomCommandPalette(Uuid),
-    ShowAttention(Uuid),
-    SelectTheme(Uuid),
+    /// Attach Remote…, which a later frontend task owns.
     AttachRemote(Uuid),
 }
 
@@ -398,11 +376,14 @@ impl Core {
             BuiltinAction::DecreaseFontSize => self.run_font(window, FontCmd::Dec),
             BuiltinAction::ResetFontSize => self.run_font(window, FontCmd::Reset),
             BuiltinAction::ToggleFullscreen => Some(FrontendAction::ToggleFullscreen(window)),
-            BuiltinAction::SessionPalette => Some(FrontendAction::SessionPalette(window)),
-            BuiltinAction::CommandPalette => Some(FrontendAction::CommandPalette(window)),
-            BuiltinAction::CustomCommandPalette => Some(FrontendAction::CustomCommandPalette(window)),
-            BuiltinAction::ShowAttention => Some(FrontendAction::ShowAttention(window)),
-            BuiltinAction::SelectTheme => Some(FrontendAction::SelectTheme(window)),
+            BuiltinAction::SessionPalette => self.launch_palette(window, PaletteMode::Sessions),
+            BuiltinAction::CommandPalette => self.launch_palette(window, PaletteMode::Actions),
+            BuiltinAction::CustomCommandPalette => self.launch_palette(window, PaletteMode::CustomCommands),
+            BuiltinAction::ShowAttention => self.launch_palette(window, PaletteMode::Attention),
+            BuiltinAction::SelectTheme => {
+                self.open_palette(window, PaletteMode::Themes);
+                None
+            }
             _ => Some(FrontendAction::AttachRemote(window)),
         };
         launcher.map_or(ActionEffect::Done, frontend)
@@ -537,6 +518,12 @@ impl Core {
         );
     }
 
+    /// A palette launcher's chord or menu item: the palette toggles (the theme picker only opens).
+    fn launch_palette(&mut self, window: Uuid, mode: PaletteMode) -> Option<FrontendAction> {
+        self.toggle_palette(window, mode);
+        None
+    }
+
     fn run_font(&mut self, window: Uuid, cmd: FontCmd) -> Option<FrontendAction> {
         self.run_request(Command::Font(cmd), None, window_args(window, Args::default()));
         None
@@ -649,7 +636,7 @@ impl Core {
     }
 
     /// Runs a control command the way `agtermctl` would, logging a refusal (a chord has nobody to answer).
-    fn run_request(&mut self, cmd: Command, target: Option<String>, args: Args) {
+    pub(crate) fn run_request(&mut self, cmd: Command, target: Option<String>, args: Args) {
         self.try_request(cmd, target, args);
     }
 

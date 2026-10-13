@@ -1196,18 +1196,31 @@ wlr-layer-shell surface.
 - Create: `scripts/build-zmx.sh`
 - Create: `crates/agterm-zmx/{Cargo.toml,src/lib.rs,src/launch.rs,src/client.rs,src/inventory.rs}`
 - Modify: `scripts/stage.sh`
+- ➕ Create: `crates/agterm-core/src/zmx/{mod,support,replay,lifecycle,inventory,reset,build_record,lead,screen}.rs`
+  (the host-free zmx logic, settled with Codex: transcript
+  `/tmp/plan-exec-revmux-rust-linux-implementation/task-27-crate-layering/transcript.md`),
+  `crates/agterm-core/src/zmx/reset/tests.rs`, `crates/agterm-zmx/src/client/tests.rs`,
+  `crates/agterm-zmx/tests/zmx_binary.rs` (the client against the built zmx when `AGTERM_TEST_ZMX` names it);
+  Modify: `crates/agterm-host/src/{lib,fakes}.rs` (`LiveScreen`,
+  `SessionHost::screen` returns it), `crates/agterm-core/src/{lib,restore/mode}.rs` (`LiveProbe` shares the wrap's
+  rejection walk), `crates/agterm-gtk/{Cargo.toml,src/restore_launch.rs}` (the probe's inputs from
+  `agterm_zmx::Runtime`), `scripts/lib/native.sh` (`prefix_key` over several patch dirs), `Cargo.toml`,
+  `.github/workflows/rust-linux.yml` (the conformance job builds the zmx prefix). `agterm-zmx` depends on
+  `agterm-core`; the launch payload and replay script Task 31 extends live in `agterm-core/src/zmx/{support,replay}.rs`
 
-- [ ] `build-zmx.sh`: port `setup-linux-zmx.sh` (Zig 0.16.0, `ZMX_REV` + its 2 patches, a private checkout of the
+- [x] `build-zmx.sh`: port `setup-linux-zmx.sh` (Zig 0.16.0, `ZMX_REV` + its 2 patches, a private checkout of the
       ghostty revision zmx's `build.zig.zon` pins + its patch, both digests in the cache key) into the vendored
       prefix; `stage.sh` adds `bin/zmx`
-- [ ] `SessionHost` over zmx: socket dir `/tmp/agterm-zmx-<FNV-1a 64>`, daemon names, wrap configuration and replay
+- [x] `SessionHost` over zmx: socket dir `/tmp/agterm-zmx-<FNV-1a 64>`, daemon names, wrap configuration and replay
       script (`ZmxSupport.swift`, `ZmxReplayScript.swift`), inventory and lifecycle (`ZmxInventory.swift`,
-      `ZmxLifecycle.swift`, `LiveReset.swift`)
-- [ ] lead protocol (`ZmxLead.swift`), `zmx screen`/`zmx type` replies
-- [ ] write tests: FNV-1a dir against values computed by upstream's `ZmxSupport` algorithm (rust-build.md); daemon
+      `ZmxLifecycle.swift`, `LiveReset.swift`) (the SIGHUP a confirmed kill sends the shell's foreground job,
+      upstream's `ProcessSweeper`, needs the panes and comes with Task 28's wiring)
+- [x] lead protocol (`ZmxLead.swift`), `zmx screen`/`zmx type` replies
+- [x] write tests: FNV-1a dir against values computed by upstream's `ZmxSupport` algorithm (rust-build.md); daemon
       name round-trip
-- [ ] write tests: wrap rejections (non-absolute path, missing binary, non-zsh shell, missing integration)
-- [ ] run `cargo test -p agterm-zmx`; gate: full run; ratchet
+- [x] write tests: wrap rejections (non-absolute path, missing binary, non-zsh shell, missing integration)
+- [x] run `cargo test -p agterm-zmx`; gate: full run; ratchet (holds, 614 pass; no new green ids: the live tests
+      skip on this fish login shell; the client also passed against the built zmx with `AGTERM_TEST_ZMX` set)
 
 ### Task 28: Live sessions in the app
 
@@ -1311,32 +1324,40 @@ wlr-layer-shell surface.
 **Files:**
 - Create: `crates/agterm-gtk/src/settings/*.rs`, `crates/agterm-gtk/src/welcome.rs`
 - Create: `docs/linux-ui-checklist.md`
+- ➕ Create: `crates/agterm-core/src/{settings_model,first_run}.rs`
 
-- [ ] settings with upstream's sections and controls (`Views/SettingsView.swift`, `SettingsModel.swift`,
+- [x] settings with upstream's sections and controls (`Views/SettingsView.swift`, `SettingsModel.swift`,
       `SettingsCatalog.swift`, `settings.md`) as libadwaita preference pages, persisting through `settings.json`;
-      the fork's `Settings*Page.swift` only as a GTK hint
-- [ ] first-run welcome (`FirstRunWelcome.swift`, `WelcomeAlert.swift`), quit prompt (`QuitPrompt.swift`,
-      `QuitReason.swift`)
-- [ ] `docs/linux-ui-checklist.md`: every user-visible feature of upstream macOS (`site/docs.html`, the rules files,
+      the fork's `Settings*Page.swift` only as a GTK hint (`agterm_core::settings_model`: one `SettingsChange` per
+      control, validated, defaults stored as nil, applied by `Core::change_settings` as upstream's setters; GTK
+      `settings/`: an `adw::PreferencesDialog` of upstream's six pages, rows named with upstream's ids, refreshed
+      from the settings after every settle; File ▸ Preferences and Quit close the primary menu. ➕ the ghostty config
+      now loads the settings' config directory and, with `inheritGlobalGhosttyConfig`, the user's global config)
+- [x] first-run welcome (`FirstRunWelcome.swift`, `WelcomeAlert.swift`), quit prompt (`QuitPrompt.swift`,
+      `QuitReason.swift`) (`agterm_core::first_run`; GTK `welcome.rs`: alert dialogs; Install logs until Task 36
+      builds the installers; a signal or the last window closing quits without asking)
+- [x] `docs/linux-ui-checklist.md`: every user-visible feature of upstream macOS (`site/docs.html`, the rules files,
       `conformance/ui-ids.yaml`), each with its GTK form and a manual check against upstream's behavior; the
       fork's UI only as a hint for the GTK form
-- [ ] write tests: settings model validation and persistence round-trip
-- [ ] write tests: first-run decision logic
-- [ ] gate: full run; ratchet
+- [x] write tests: settings model validation and persistence round-trip
+- [x] write tests: first-run decision logic
+- [x] gate: full run; ratchet (614 passed, 28 failed, 12 skipped; ratchet holds at 614, no new ids: the task's UI has
+      no suite test on Linux)
 
 ### Task 34: Command palette, session switcher and search
 
 **Files:**
 - Create: `crates/agterm-gtk/src/{palette,session_switcher,search}.rs`
+- Create: `crates/agterm-core/src/palette/{mod,feeds,run,search}.rs` (palette state, feeds, row runs, search keys)
 
-- [ ] command palette (`Views/Palette.swift`, `AppActions+Palette.swift`, `PaletteCatalog.swift`,
+- [x] command palette (`Views/Palette.swift`, `AppActions+Palette.swift`, `PaletteCatalog.swift`,
       `PaletteCustomRow.swift`, `PaletteSearchKeys.swift`), session switcher (`Views/SessionSwitcher.swift`),
       scrollback search UI (`Views/TerminalSearchBar.swift`), per `menu-actions.md`
-- [ ] ➕ left by Task 19: `pick.open` and a GUI `ask.open` on the frontmost window close its palette, and the palette
+- [x] ➕ left by Task 19: `pick.open` and a GUI `ask.open` on the frontmost window close its palette, and the palette
       does not open while that window's modal slot is held (`Core::modal_pending`); reuse `agterm_core::fuzzy`
-- [ ] write tests: palette catalog and search keys
-- [ ] write tests: switcher ordering by recency
-- [ ] gate: full run; ratchet
+- [x] write tests: palette catalog and search keys
+- [x] write tests: switcher ordering by recency
+- [x] gate: full run; ratchet
 
 ### Task 35: Context menus, popovers and decorations
 

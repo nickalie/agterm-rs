@@ -124,8 +124,10 @@ fn set(core: &mut Core, request: &Request) -> Outcome {
     if let Some(unknown) = named.into_iter().flatten().find(|theme| !catalog.contains(theme)) {
         return Err(ControlError::rejected(format!("unknown theme: {unknown}")));
     }
-    core.update_settings(|settings| apply_slots(settings, light_slot, dark, clear_dark));
-    core.apply_settings();
+    core.with_theme_preview_rebased(|core| {
+        core.update_settings(|settings| apply_slots(settings, light_slot, dark, clear_dark));
+        core.apply_settings();
+    });
     Ok(slots(core.settings()))
 }
 

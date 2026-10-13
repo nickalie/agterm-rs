@@ -25,6 +25,7 @@ impl Core {
     /// pinned pane instead, whose end report then clears the state. A session or token gone since is skipped. Commit
     /// afterwards.
     pub fn report_search(&mut self, session: Uuid, token: &str, report: SearchReport) {
+        let id = session;
         let Some(session) = self
             .library_mut()
             .store_for_session_mut(session)
@@ -35,8 +36,13 @@ impl Core {
         let Some(pane) = session.pane_role_for_token(token) else {
             return;
         };
+        let ended = report == SearchReport::Ended;
         if let SearchFollowUp::EndOn(owner) = session.search.apply(pane, report) {
             run_binding(session, owner, "end_search");
+        }
+        // the end of a search gives the terminal the keyboard back from the search bar's field
+        if ended {
+            self.request_pane_focus(id);
         }
     }
 

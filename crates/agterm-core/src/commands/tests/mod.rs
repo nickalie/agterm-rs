@@ -16,6 +16,7 @@ mod metadata;
 mod moves;
 mod overlay;
 mod overlay_page;
+mod palette;
 mod panes;
 mod pick;
 mod quick;
