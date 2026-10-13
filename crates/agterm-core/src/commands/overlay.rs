@@ -66,6 +66,11 @@ const NAVIGATION: &str = "session.overlay.navigate requires back, forward, brows
 const SUBMIT_VALUE: &str = "session.overlay.submit requires a value";
 const INVALID_PAGE_ID: &str = "invalid page id";
 const UNKNOWN_PAGE: &str = "no such page";
+/// A program's command and directory reach its terminal as C strings (its environment and working directory), so a
+/// NUL would fail the launch after the slot was taken, leaving it open with no program (a Linux check: upstream has
+/// none).
+const COMMAND_NUL: &str = "session.overlay.open: the command must not contain a NUL byte";
+const CWD_NUL: &str = "session.overlay.open: --cwd must not contain a NUL byte";
 /// A page that passed validation: this build shows none yet (the HTML overlay task brings `WebKitGTK`).
 const PAGES_UNAVAILABLE: &str = "session.overlay.open: html overlays are not available in this build";
 /// Upstream's job claim refusals.
@@ -202,6 +207,14 @@ fn overlay_content(command: &str, args: &Args, home: &str) -> Result<OverlayCont
 fn open(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let command = args.command.clone().unwrap_or_default();
     let content = overlay_content(&command, args, core.library().home())?;
+    if content == OverlayContent::Program {
+        if command.contains('\0') {
+            return Err(ControlError::rejected(COMMAND_NUL));
+        }
+        if args.cwd.as_deref().is_some_and(|cwd| cwd.contains('\0')) {
+            return Err(ControlError::rejected(CWD_NUL));
+        }
+    }
     if let Some(color) = args.color.as_deref()
         && !is_valid_color_hex(color)
     {
@@ -431,15 +444,17 @@ fn text(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
 
 impl Core {
     /// The terminal of pane overlay `generation` of session `session` ended (upstream's pane overlay `onExit`): the
-    /// overlay closes wherever it sits now, a swap or promotion having moved it. Whether it closed; commit afterwards.
+    /// overlay closes wherever it sits now, a swap or promotion having moved it, and wherever its session is, a
+    /// pending close included (its terminal runs on, and an undo brings the same object back). Whether it closed;
+    /// commit afterwards.
     pub fn pane_overlay_exited(&mut self, session: Uuid, generation: u64) -> bool {
-        let Some(store) = self.library_mut().store_for_session_mut(session) else {
+        let Some(found) = self.library_mut().held_session_mut(session) else {
             return false;
         };
-        let pane = store
-            .session(session)
-            .and_then(|found| found.pane_overlays.pane_of(generation));
-        pane.is_some_and(|pane| store.close_pane_overlay(session, pane))
+        found
+            .pane_overlays
+            .pane_of(generation)
+            .is_some_and(|pane| found.pane_overlays.slot_mut(pane).close())
     }
 
     /// The user focused pane overlay `generation` of session `session` (upstream's pane overlay `onFocusChange`): the

@@ -484,13 +484,11 @@ impl Core {
     }
 
     /// The terminal of slot generation `generation` of session `session` ended (upstream's overlay `onExit`): the slot
-    /// closes, unless a replacement took it since. Whether it closed; commit afterwards.
+    /// closes, unless a replacement took it since, wherever its session is, a pending close included (its terminal
+    /// runs on, and an undo brings the same object back). Whether it closed; commit afterwards.
     pub fn overlay_exited(&mut self, session: Uuid, generation: u64) -> bool {
-        self.library_mut().store_for_session_mut(session).is_some_and(|store| {
-            store
-                .session(session)
-                .is_some_and(|found| found.overlay.active && found.overlay.generation == generation)
-                && store.close_overlay(session)
+        self.library_mut().held_session_mut(session).is_some_and(|found| {
+            found.overlay.active && found.overlay.generation == generation && found.overlay.close()
         })
     }
 

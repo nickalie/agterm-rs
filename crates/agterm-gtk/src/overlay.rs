@@ -75,6 +75,8 @@ impl ProgramLayer {
             widget.set_focusable(false);
             widget.set_opacity(0.0);
         }
+        // the frame's `can-focus` gates its terminal (GTK keeps focus out of a non-focusable subtree): `show` lets
+        // focus in while the panel shows; the frame itself never takes it (`focusable` stays false)
         Self {
             backdrop,
             frame,
@@ -131,6 +133,7 @@ impl ProgramLayer {
     fn show(&self, placement: Option<ProgramPlacement>) {
         let floating = placement.is_some_and(|placement| placement.fraction.is_some());
         self.frame.set_opacity(if placement.is_some() { 1.0 } else { 0.0 });
+        self.frame.set_can_focus(placement.is_some());
         if floating {
             self.frame.add_css_class(FLOATING_CLASS);
         } else {

@@ -65,8 +65,8 @@ impl AppStore {
             session.split_pane_identity = Some(Uuid::new_v4());
             session.split.focused = true;
         }
-        // hiding the split un-renders a pane, so an overlay opened on it that never came up would sit forever
-        session.drop_unrealized_pane_overlays(|_| false);
+        // hiding the split un-renders a pane, so an overlay opened on it that never came up would sit forever: upstream
+        // drops it here; the store cannot see the zoom that may host it, so `Core::commit` drops it, sparing that zoom
         if was_shown != shown {
             self.emit_pane_visibility(EventKind::PaneSplit, id, shown);
         }

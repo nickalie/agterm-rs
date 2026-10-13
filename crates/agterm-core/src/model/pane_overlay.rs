@@ -46,7 +46,7 @@ pub struct PaneOverlaySlot {
 impl PaneOverlaySlot {
     /// Closes the overlay: its terminal torn down, the program's status recorded from its wrapper's file. The exit
     /// status survives (upstream's `closePaneOverlay`). False with no overlay.
-    fn close(&mut self) -> bool {
+    pub(crate) fn close(&mut self) -> bool {
         let Some(overlay) = self.overlay.take() else {
             return false;
         };

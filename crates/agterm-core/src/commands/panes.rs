@@ -92,19 +92,9 @@ impl Core {
     /// lives: in a window's tree, or held by a pending soft close whose terminal still runs. The scratch reports into
     /// nothing, as upstream's scratch is not wired to the session's fields. Nothing is saved. Whether it landed.
     pub fn report_pane(&mut self, session: Uuid, token: &str, report: &PaneReport) -> bool {
-        let library = self.library_mut();
-        let Some(store) = library
-            .window_holding_session(session)
-            .and_then(|window| library.store_mut(window))
-        else {
+        let Some(target) = self.library_mut().held_session_mut(session) else {
             return false;
         };
-        let target = if store.session(session).is_some() {
-            store.session_mut(session)
-        } else {
-            store.pending_close_session_mut(session)
-        };
-        let Some(target) = target else { return false };
         let split = match target.pane_role_for_token(token) {
             Some(StatusPane::Left) => false,
             Some(StatusPane::Right) => true,

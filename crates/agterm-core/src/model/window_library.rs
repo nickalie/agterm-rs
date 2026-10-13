@@ -494,6 +494,18 @@ impl WindowLibrary {
         })
     }
 
+    /// The live object of `session` wherever an open window holds it: in its tree, or in a pending close whose
+    /// terminals still run (so their exits and reports land on the object an undo brings back).
+    pub fn held_session_mut(&mut self, session: Uuid) -> Option<&mut Session> {
+        let window = self.window_holding_session(session)?;
+        let store = self.stores.get_mut(&window)?;
+        if store.session(session).is_some() {
+            store.session_mut(session)
+        } else {
+            store.pending_close_session_mut(session)
+        }
+    }
+
     /// The Open Recent entries, newest first.
     #[must_use]
     pub fn recent_closed_items(&self) -> Vec<RecentClosedItem> {

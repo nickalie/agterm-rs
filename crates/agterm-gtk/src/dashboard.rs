@@ -11,8 +11,8 @@
 //! ring, then enters it after [`CLICK_ENTER_DELAY`] unless another click or key moved the highlight meanwhile.
 //!
 //! A fixed or auto font mode gives every member terminal a transient font size while it is in the grid, put back when
-//! it leaves ([`FontOverrides`]). Not ported yet: the cover a member pane's overlay would put over its cell
-//! (upstream's `DashboardCover`; overlays join with their tasks) and the status-colored name chip.
+//! it leaves ([`FontOverrides`]). A member pane under an overlay shows the overlay's cover over its cell (upstream's
+//! `DashboardCover`). Not ported yet: the status-colored name chip.
 
 use std::cell::Cell;
 use std::collections::HashMap;

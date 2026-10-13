@@ -1163,6 +1163,8 @@ mod tests {
     /// close drops its terminal and gives the pane back.
     fn overlays_mount_in_place() {
         let mut walk = Walk::split();
+        let window = gtk::Window::new();
+        window.set_child(Some(walk.deck.widget()));
         let pane_overlay = pane_overlay_covers_its_pane(&mut walk);
         let program = program_covers_the_page(&mut walk, &pane_overlay);
         assert!(
@@ -1179,6 +1181,12 @@ mod tests {
         assert!(pane_overlay.widget().parent().is_none());
         assert_eq!(walk.shown(), (true, true));
         assert_eq!(walk.probe().focus(), Some(walk.split.clone()));
+        assert!(
+            walk.probe().area(&walk.split).is_focus(),
+            "the pane got the keyboard back"
+        );
+        window.set_child(None::<&gtk::Widget>);
+        window.destroy();
     }
 
     fn pane_overlay_covers_its_pane(walk: &mut Walk) -> TerminalSurface {
@@ -1202,6 +1210,10 @@ mod tests {
         assert!(pane_overlay.is_deck_visible());
         assert_eq!(walk.shown(), (true, false), "the right pane hides under its overlay");
         assert_eq!(walk.probe().focus(), Some(format!("overlay-pane#{generation}")));
+        assert!(
+            pane_overlay.widget().is_focus(),
+            "GTK gave the pane overlay the keyboard"
+        );
         pane_overlay
     }
 
@@ -1222,6 +1234,10 @@ mod tests {
         assert_eq!(walk.shown(), (false, false), "a covering program hides the panes");
         assert!(!pane_overlay.is_deck_visible(), "and the pane overlay");
         assert_eq!(walk.probe().focus(), Some("overlay#1".to_owned()));
+        assert!(
+            program.widget().is_focus(),
+            "GTK gave the program the keyboard through its frame"
+        );
         program
     }
 

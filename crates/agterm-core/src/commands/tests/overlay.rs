@@ -311,6 +311,14 @@ fn open_refusals_name_the_flag_combination() {
             json!({"command": "true", "pane": "left", "sizePercent": 50}),
             "session.overlay.open: --pane is mutually exclusive with --size-percent",
         ),
+        (
+            json!({"command": "printf a\u{0}b"}),
+            "session.overlay.open: the command must not contain a NUL byte",
+        ),
+        (
+            json!({"command": "true", "pane": "left", "cwd": "/tmp\u{0}x"}),
+            "session.overlay.open: --cwd must not contain a NUL byte",
+        ),
     ]);
 }
 
@@ -710,18 +718,42 @@ fn pane_overlays_follow_their_panes() {
 }
 
 #[test]
+fn an_overlay_exit_during_a_pending_close_lands_on_the_session_an_undo_restores() {
+    let mut fixture = Fixture::new(2);
+    let id = fixture.sessions[0];
+    split(&mut fixture, id);
+    assert!(open(&mut fixture, id, "exit 5", |_| {}).ok);
+    let program = mount(&mut fixture, id);
+    assert!(open(&mut fixture, id, "exec cat", |a| a.pane = Some("right".into())).ok);
+    let pane = mount_pane(&mut fixture, id, OverlayPane::Right);
+    let generation = fixture.store().session(id).unwrap().overlay.generation;
+    let pane_generation = pane_generation(&fixture, id, OverlayPane::Right);
+    exit_with(&mut fixture, id, 5);
+    assert!(fixture.store_mut().unwrap().soft_close_session(id));
+    // both programs end inside the grace period, their terminals still running in the pending close
+    assert!(fixture.core.overlay_exited(id, generation));
+    assert!(fixture.core.pane_overlay_exited(id, pane_generation));
+    assert_eq!((program.teardowns(), pane.teardowns()), (1, 1));
+    assert!(fixture.store_mut().unwrap().undo_pending_close(None));
+    let response = overlay(&mut fixture, SessionCmd::OverlayResult, id, |_| {});
+    assert_eq!(result_code(&response), Some(5), "{response:?}");
+    assert!(node(&mut fixture, id).get("paneOverlays").is_none());
+}
+
+#[test]
 fn a_stranded_pane_overlay_goes_at_the_commit() {
     let mut fixture = Fixture::new(1);
     let id = fixture.sessions[0];
     split(&mut fixture, id);
     assert!(open(&mut fixture, id, "exec cat", |a| a.pane = Some("left".into())).ok);
-    // hide the split behind the focused right pane: the left one is no longer laid out
-    fixture.store_mut().unwrap().session_mut(id).unwrap().split.shown = false;
     let zoom = SurfaceId {
         session: id,
         surface: ZoomSurface::OverlayLeft,
     };
     fixture.core.set_zoom_target(fixture.window, Some(zoom));
+    let _ = fixture.core.commit();
+    // hide the split behind the focused right pane before the overlay realizes: the left pane is no longer laid out
+    fixture.store_mut().unwrap().set_split_visibility(id, false, None);
     let _ = fixture.core.commit();
     assert_eq!(
         node(&mut fixture, id)["paneOverlays"],
