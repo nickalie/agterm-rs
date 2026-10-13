@@ -1242,6 +1242,182 @@ mod tests {
     }
 
     #[test]
+    fn overlay_terminals_take_the_pointer_and_a_hud_never_does() {
+        crate::gtk_test::on_gtk_thread(overlays_take_the_pointer);
+    }
+
+    /// Runs the GTK main context until `done` holds (layout and mapping happen on the frame clock) or a few seconds
+    /// pass; whether it held.
+    fn pump_until(mut done: impl FnMut() -> bool) -> bool {
+        let context = gtk::glib::MainContext::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !done() {
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            while context.iteration(false) {}
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        true
+    }
+
+    /// What a click at the center of `target` reaches in `window` (GTK's hit-testing, which skips a widget that is
+    /// not targetable together with everything under it), once the layout gives `expected` (or a few seconds pass).
+    fn pick_center(
+        window: &gtk::Window,
+        target: &impl IsA<gtk::Widget>,
+        expected: impl Fn(Option<&gtk::Widget>) -> bool,
+    ) -> Option<gtk::Widget> {
+        let mut picked = None;
+        pump_until(|| {
+            picked = target
+                .compute_bounds(window)
+                .filter(|rect| rect.width() > 0.0 && rect.height() > 0.0)
+                .and_then(|rect| {
+                    window.pick(
+                        f64::from(rect.x() + rect.width() / 2.0),
+                        f64::from(rect.y() + rect.height() / 2.0),
+                        gtk::PickFlags::DEFAULT,
+                    )
+                });
+            expected(picked.as_ref())
+        });
+        picked
+    }
+
+    /// Whether a pick reached `widget`.
+    fn reached(widget: &impl IsA<gtk::Widget>) -> impl Fn(Option<&gtk::Widget>) -> bool + '_ {
+        move |picked| picked == Some(widget.upcast_ref())
+    }
+
+    /// A shown overlay's terminal is what a click over it reaches (its clicks, scrolls and motion go to the program),
+    /// covering, floating or over a pane; a floating panel's backdrop takes the clicks around it; a HUD's terminal
+    /// never takes one.
+    fn overlays_take_the_pointer() {
+        let mut walk = Walk::split();
+        let window = gtk::Window::new();
+        window.set_default_size(800, 600);
+        window.set_child(Some(walk.deck.widget()));
+        window.present();
+        pump_until(|| walk.stack.is_mapped() && walk.stack.width() > 0);
+        pane_overlay_takes_the_pointer(&mut walk, &window);
+        program_takes_the_pointer(&mut walk, &window);
+        hud_lets_the_pointer_through(&mut walk, &window);
+        window.set_child(None::<&gtk::Widget>);
+        window.destroy();
+    }
+
+    fn pane_overlay_takes_the_pointer(walk: &mut Walk, window: &gtk::Window) {
+        let open_right = overlay_request(walk, SessionCmd::OverlayOpen, |a| {
+            a.command = Some("exec cat".to_owned());
+            a.pane = Some("right".to_owned());
+        });
+        assert!(walk.core.dispatch(&open_right).ok);
+        walk.settle();
+        let session = walk.session;
+        let generation = walk
+            .store()
+            .session(session)
+            .unwrap()
+            .pane_overlay(agterm_core::model::OverlayPane::Right)
+            .unwrap()
+            .generation;
+        let pane_overlay = walk.deck.pages[&session]
+            .panes
+            .pane_overlay(generation)
+            .unwrap()
+            .terminal
+            .clone();
+        let pane_overlay = pane_overlay.widget().clone();
+        assert_eq!(
+            pick_center(window, &pane_overlay, reached(&pane_overlay)).as_ref(),
+            Some(pane_overlay.upcast_ref()),
+            "a click over the right pane reaches its overlay"
+        );
+        let primary = walk.probe().area(&walk.primary);
+        assert_eq!(
+            pick_center(window, &primary, reached(&primary)).as_ref(),
+            Some(primary.upcast_ref()),
+            "the left pane keeps its clicks"
+        );
+    }
+
+    fn program_takes_the_pointer(walk: &mut Walk, window: &gtk::Window) {
+        let session = walk.session;
+        let full = overlay_request(walk, SessionCmd::OverlayOpen, |a| {
+            a.command = Some("exec cat".to_owned());
+            a.full = Some(true);
+        });
+        assert!(walk.core.dispatch(&full).ok);
+        walk.settle();
+        let program = walk.deck.pages[&session]
+            .panes
+            .program()
+            .terminal()
+            .unwrap()
+            .widget()
+            .clone();
+        let stack = walk.stack.clone();
+        assert_eq!(
+            pick_center(window, &stack, reached(&program)).as_ref(),
+            Some(program.upcast_ref()),
+            "a covering program takes the clicks over the page"
+        );
+
+        let floating = overlay_request(walk, SessionCmd::OverlayResize, |a| a.size_percent = Some(50));
+        assert!(walk.core.dispatch(&floating).ok);
+        walk.settle();
+        let backdrop: gtk::Widget = walk.deck.pages[&session].panes.program().backdrop().clone().upcast();
+        let corner = || {
+            let origin = stack.compute_point(window, &gtk::graphene::Point::new(4.0, 4.0))?;
+            window.pick(f64::from(origin.x()), f64::from(origin.y()), gtk::PickFlags::DEFAULT)
+        };
+        pump_until(|| corner().as_ref() == Some(&backdrop));
+        assert_eq!(
+            corner(),
+            Some(backdrop),
+            "a floating program's backdrop absorbs the clicks around it"
+        );
+        assert_eq!(
+            pick_center(window, &stack, reached(&program)).as_ref(),
+            Some(program.upcast_ref()),
+            "a floating program takes the clicks over itself"
+        );
+    }
+
+    fn hud_lets_the_pointer_through(walk: &mut Walk, window: &gtk::Window) {
+        let session = walk.session;
+        let stack = walk.stack.clone();
+        assert!(
+            walk.core
+                .dispatch(&overlay_request(walk, SessionCmd::OverlayClose, |_| {}))
+                .ok
+        );
+        walk.settle();
+        let dir = tempfile::tempdir().unwrap();
+        walk.core
+            .set_hud_helper(crate::hud::install_helper(dir.path()).unwrap(), dir.path().join("hud"));
+        let hud = overlay_request(walk, SessionCmd::HudOpen, |a| a.message = Some("passive".to_owned()));
+        assert!(walk.core.dispatch(&hud).ok);
+        walk.settle();
+        let hud = walk.deck.pages[&session]
+            .panes
+            .hud_mut()
+            .terminal()
+            .unwrap()
+            .widget()
+            .clone();
+        let layer: gtk::Widget = walk.deck.pages[&session].panes.hud_mut().widget().clone().upcast();
+        let laid_out = || hud.compute_bounds(window).is_some_and(|rect| rect.width() > 0.0);
+        assert!(pump_until(laid_out), "the HUD is laid out");
+        let under = pick_center(window, &hud, |_| true).expect("a click lands on the page");
+        assert!(
+            under != *hud.upcast_ref::<gtk::Widget>() && under != layer && under.is_ancestor(&stack),
+            "a HUD lets the clicks through to the page under it: {under:?}"
+        );
+    }
+
+    #[test]
     fn a_terminal_ask_takes_the_keyboard_in_its_layer() {
         crate::gtk_test::on_gtk_thread(terminal_ask_takes_the_keyboard);
     }

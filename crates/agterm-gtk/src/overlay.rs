@@ -75,8 +75,9 @@ impl ProgramLayer {
             widget.set_focusable(false);
             widget.set_opacity(0.0);
         }
-        // the frame's `can-focus` gates its terminal (GTK keeps focus out of a non-focusable subtree): `show` lets
-        // focus in while the panel shows; the frame itself never takes it (`focusable` stays false)
+        // the frame's `can-focus` and `can-target` gate its terminal (GTK keeps focus out of a non-focusable subtree
+        // and picking skips an untargetable widget's whole subtree): `show` lets the keyboard and the pointer in while
+        // the panel shows; the frame itself never takes focus (`focusable` stays false)
         Self {
             backdrop,
             frame,
@@ -129,11 +130,13 @@ impl ProgramLayer {
         self.show(None);
     }
 
-    /// Shows the panel (floating or covering) or hides it; a floating panel's backdrop takes the clicks around it.
+    /// Shows the panel (floating or covering) or hides it: a shown panel's terminal takes the keyboard and the
+    /// pointer, a floating panel's backdrop takes the clicks around it.
     fn show(&self, placement: Option<ProgramPlacement>) {
         let floating = placement.is_some_and(|placement| placement.fraction.is_some());
         self.frame.set_opacity(if placement.is_some() { 1.0 } else { 0.0 });
         self.frame.set_can_focus(placement.is_some());
+        self.frame.set_can_target(placement.is_some());
         if floating {
             self.frame.add_css_class(FLOATING_CLASS);
         } else {
