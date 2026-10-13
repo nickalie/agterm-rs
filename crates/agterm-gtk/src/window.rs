@@ -149,7 +149,7 @@ impl WindowUi {
     #[must_use]
     pub fn build(app: &adw::Application, window_id: Uuid, context: PaneContext, poster: &Poster) -> Self {
         let deck = Deck::new();
-        let sidebar = Sidebar::new(poster);
+        let sidebar = Sidebar::new(window_id, poster);
         let paned = gtk::Paned::builder()
             .orientation(gtk::Orientation::Horizontal)
             .start_child(sidebar.widget())
@@ -417,7 +417,7 @@ impl WindowUi {
         Some(f64::from(self.paned.position()))
     }
 
-    /// Records a user's open or fold of a workspace row.
+    /// Opens or folds a workspace row in the sidebar's outline (view state; the caller persists a user toggle).
     pub fn set_workspace_expanded(&mut self, id: Uuid, expanded: bool) {
         self.sidebar.set_expanded(id, expanded);
     }
@@ -431,9 +431,9 @@ impl WindowUi {
         for (session, token) in self.deck.take_given_focus() {
             state::post(poster, move |state: &mut AppState| state.pane_focused(session, &token));
         }
-        let badges = core.settings().notification_badge_enabled.unwrap_or(true);
+        let settings = core.settings().clone();
         if let Some(store) = core.library_mut().store_mut(id) {
-            self.sidebar.refresh(store, badges);
+            self.sidebar.refresh(store, &settings);
             // a zoomed terminal or the dashboard fills the window: the sidebar steps aside without its visibility
             // changing
             if zoomed.is_some() || dashboard {

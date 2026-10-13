@@ -28,6 +28,7 @@ tests/cli/test_cli_output.py::test_session_panes
 tests/cli/test_cli_output.py::test_session_restore_prints_the_note_or_ok
 tests/cli/test_cli_output.py::test_session_status_carries_its_overrides
 tests/cli/test_cli_output.py::test_session_type_text_search_and_copy
+tests/cli/test_cli_output.py::test_sidebar
 tests/cli/test_cli_output.py::test_surface_and_dashboard
 tests/cli/test_cli_output.py::test_tree_lists_workspaces_and_tagged_sessions
 tests/cli/test_cli_output.py::test_version
@@ -369,6 +370,25 @@ tests/protocol/test_session_text.py::test_type_then_read_the_marker_back
 tests/protocol/test_session_text.py::test_unknown_session_target[session.search-args2]
 tests/protocol/test_session_text.py::test_unknown_session_target[session.text-args1]
 tests/protocol/test_session_text.py::test_unknown_session_target[session.type-args0]
+tests/protocol/test_sidebar.py::test_collapse_is_a_no_op_under_the_flat_flagged_list
+tests/protocol/test_sidebar.py::test_collapse_keeps_the_current_workspace_open_and_expand_opens_all
+tests/protocol/test_sidebar.py::test_flagged_layout_echoes_the_layout_it_set
+tests/protocol/test_sidebar.py::test_flagged_layout_is_app_wide
+tests/protocol/test_sidebar.py::test_mode_switches_between_the_tree_and_the_flagged_view
+tests/protocol/test_sidebar.py::test_sidebar_shows_hides_and_toggles
+tests/protocol/test_sidebar.py::test_unknown_mode_is_refused[sidebar-sidebarVisible-invalid sidebar mode: sideways]
+tests/protocol/test_sidebar.py::test_unknown_mode_is_refused[sidebar.flagged-layout-sidebarFlaggedLayout-invalid flagged layout: sideways]
+tests/protocol/test_sidebar.py::test_unknown_mode_is_refused[sidebar.mode-sidebarMode-invalid sidebar mode: sideways]
+tests/protocol/test_sidebar.py::test_unknown_window_is_refused[sidebar.collapse-args2]
+tests/protocol/test_sidebar.py::test_unknown_window_is_refused[sidebar.expand-args1]
+tests/protocol/test_sidebar.py::test_unknown_window_is_refused[sidebar.width-args0]
+tests/protocol/test_sidebar.py::test_width_below_the_floor_is_clamped
+tests/protocol/test_sidebar.py::test_width_is_clamped_and_read_back[250-250]
+tests/protocol/test_sidebar.py::test_width_is_clamped_and_read_back[300.5-300.5]
+tests/protocol/test_sidebar.py::test_width_is_clamped_and_read_back[99999-560]
+tests/protocol/test_sidebar.py::test_width_is_required
+tests/protocol/test_sidebar.py::test_width_window_option_sets_that_window_alone
+tests/protocol/test_sidebar.py::test_window_option_collapses_that_window_alone
 tests/protocol/test_split.py::test_background_default_and_pane_override
 tests/protocol/test_split.py::test_background_rejects[color]
 tests/protocol/test_split.py::test_background_rejects[fit]

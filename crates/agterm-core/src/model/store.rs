@@ -21,6 +21,7 @@ use super::recent_closed::{ClosedSessionPlace, RecentClosedList};
 use super::session::{AgentIndicator, AgentStatus, Session, SessionSeed};
 use super::workspace::{ReorderDirection, SidebarMode, Workspace};
 use crate::pane_env::uuid_string;
+use crate::persist::settings::FlaggedViewLayout;
 
 /// The sidebar width a window starts with, in points.
 pub const SIDEBAR_WIDTH_DEFAULT: f64 = 220.0;
@@ -1133,6 +1134,43 @@ impl AppStore {
         }
         self.sidebar.width = clamped;
         self.save();
+    }
+
+    /// Whether the sidebar has workspace rows: always in the ordinary tree, and in the flagged view only under the
+    /// tree layout (upstream's `rendersWorkspaceRows(flaggedLayout:)`). The layout is app-wide, so the caller passes
+    /// it in. The precondition of every expand and collapse path.
+    #[must_use]
+    pub fn renders_workspace_rows(&self, layout: FlaggedViewLayout) -> bool {
+        self.sidebar.mode == SidebarMode::Tree || layout == FlaggedViewLayout::Tree
+    }
+
+    /// Expand Workspaces (upstream's coordinator `expandAll`): every workspace opens, the ones the focus filter or the
+    /// flagged tree leave out included, persisted in one write, and every row is asked to open. A no-op without
+    /// workspace rows.
+    pub fn expand_all_workspaces(&mut self, layout: FlaggedViewLayout) {
+        if !self.renders_workspace_rows(layout) {
+            return;
+        }
+        let all: HashSet<Uuid> = self.workspaces.iter().map(Workspace::id).collect();
+        self.set_workspaces_expanded(&all);
+        for id in all {
+            self.sidebar.expansion_requests.insert(id, true);
+        }
+    }
+
+    /// Collapse Workspaces (upstream's coordinator `collapseOthers`): every workspace but the current one folds and
+    /// the current one opens, persisted in one write, and every row is asked to follow. A no-op without workspace rows.
+    pub fn collapse_other_workspaces(&mut self, layout: FlaggedViewLayout) {
+        if !self.renders_workspace_rows(layout) {
+            return;
+        }
+        let keep = self.current_workspace_id();
+        let open: HashSet<Uuid> = keep.into_iter().collect();
+        self.set_workspaces_expanded(&open);
+        let ids: Vec<Uuid> = self.workspaces.iter().map(Workspace::id).collect();
+        for id in ids {
+            self.sidebar.expansion_requests.insert(id, Some(id) == keep);
+        }
     }
 }
 

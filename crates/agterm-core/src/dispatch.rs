@@ -419,6 +419,24 @@ impl Core {
         &self.settings
     }
 
+    /// Applies `update` to the app settings and writes `settings.json` when that changed them (upstream's
+    /// `SettingsModel` setters, which skip an unchanged value). A failed write is logged and the new value stands in
+    /// memory, as upstream's `SettingsStore.save` failure leaves it. Whether anything changed.
+    pub fn update_settings(&mut self, update: impl FnOnce(&mut AppSettings)) -> bool {
+        let before = self.settings.clone();
+        update(&mut self.settings);
+        if self.settings == before {
+            return false;
+        }
+        if let Some(persistence) = &self.persistence {
+            let store = crate::persist::SettingsStore::new(persistence.directory());
+            if let Err(err) = store.save(&self.settings) {
+                tracing::warn!(%err, "could not write the settings");
+            }
+        }
+        true
+    }
+
     /// Lands the model's side effects after a mutation, as every main-loop task that may mutate must: writes the
     /// immediate snapshot saves and a changed index, sequences the events into the ring, and hands back the timers
     /// the caller arms on the main loop. Without persistence the effects are drained and the saves dropped.
@@ -596,6 +614,10 @@ impl Core {
                 Some(result) => result_of(&result),
                 None => Ok(Response::success()),
             },
+            Command::Sidebar(cmd) => match commands::sidebar::dispatch(self, cmd, request)? {
+                Some(result) => result_of(&result),
+                None => Ok(Response::success()),
+            },
             Command::Ask(cmd) => result_of(&commands::ask::dispatch(self, cmd, request)?),
             Command::Pick(cmd) => result_of(&commands::pick::dispatch(self, cmd, request)?),
             Command::Events(EventsCmd::Read) => self.read_events(request.args.as_ref()),
@@ -613,7 +635,6 @@ impl Core {
             | Command::Hooks(_)
             | Command::Keymap(_)
             | Command::Restore(_)
-            | Command::Sidebar(_)
             | Command::Theme(_)
             | Command::Zmx(_)) => Err(ControlError::NotSupported(cmd)),
         }
@@ -622,7 +643,7 @@ impl Core {
 
 #[cfg(test)]
 mod tests {
-    use agterm_proto::command::{EventsCmd, ThemeCmd, WindowCmd, WorkspaceCmd, ZmxCmd};
+    use agterm_proto::command::{EventsCmd, SidebarCmd, ThemeCmd, WindowCmd, WorkspaceCmd, ZmxCmd};
     use serde_json::json;
 
     use super::*;
@@ -647,6 +668,8 @@ mod tests {
         Command::Window(WindowCmd::List),
         Command::Events(EventsCmd::Read),
         Command::Workspace(WorkspaceCmd::New),
+        // app-wide: it needs no window
+        Command::Sidebar(SidebarCmd::FlaggedLayout),
     ];
 
     #[test]

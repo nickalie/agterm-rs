@@ -17,6 +17,7 @@ pub(crate) mod restart;
 pub(crate) mod restore;
 pub(crate) mod search;
 pub(crate) mod session;
+pub(crate) mod sidebar;
 pub(crate) mod surface;
 pub(crate) mod surface_target;
 pub(crate) mod typing;

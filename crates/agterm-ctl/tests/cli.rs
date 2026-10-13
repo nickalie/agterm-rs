@@ -445,6 +445,7 @@ SUBCOMMANDS:
   window                  Window commands.
   quick                   Quick terminal: visibility, type into it, read its
                           text.
+  sidebar                 Sidebar visibility and view mode.
   notify                  Post a desktop notification (default: the active
                           session of the frontmost window).
   pick                    Open, poll, or cancel a native fuzzy picker.
@@ -3320,6 +3321,188 @@ fn overlay_help_in_the_argument_parser_layout() -> TestResult {
         assert_eq!(
             outcome(&run(dir.path(), &[], args)?),
             (Some(0), help.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+// MARK: - sidebar
+
+const SIDEBAR_HELP: &str = "\
+OVERVIEW: Sidebar visibility and view mode.
+
+USAGE: agtermctl sidebar <subcommand>
+
+OPTIONS:
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  visibility (default)    Sidebar visibility (show|hide|toggle).
+  mode                    Sidebar view mode (tree|flagged|toggle).
+  flagged-layout          Flagged view layout (flat|plain|tree|toggle).
+  expand                  Expand every workspace in the sidebar.
+  collapse                Collapse all workspaces except the active one.
+  width                   Set the sidebar width in points.
+
+  See 'agtermctl help sidebar <subcommand>' for detailed help.
+";
+
+const SIDEBAR_WIDTH_HELP: &str = "\
+OVERVIEW: Set the sidebar width in points.
+
+USAGE: agtermctl sidebar width <points> [--socket <socket>] [--json] [--window <window>]
+
+ARGUMENTS:
+  <points>                Sidebar width in points, clamped to the drag range.
+
+OPTIONS:
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  --window <window>       Target window id, unique prefix, or 'active'
+                          (defaults to the frontmost).
+  -h, --help              Show help information.
+
+";
+
+#[test]
+fn sidebar_help_marks_its_default_subcommand() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], &str); 4] = [
+        (&["sidebar", "--help"], SIDEBAR_HELP),
+        (&["help", "sidebar"], SIDEBAR_HELP),
+        (&["sidebar", "width", "--help"], SIDEBAR_WIDTH_HELP),
+        (&["help", "sidebar", "width"], SIDEBAR_WIDTH_HELP),
+    ];
+    for (args, help) in cases {
+        assert_eq!(
+            outcome(&run(dir.path(), &[], args)?),
+            (Some(0), help.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn sidebar_commands_send_their_request_and_print_the_reply() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], serde_json::Value, serde_json::Value, &str); 7] = [
+        (
+            &["sidebar"],
+            serde_json::json!({"cmd": "sidebar", "args": {"mode": "toggle"}}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+        (
+            &["sidebar", "hide"],
+            serde_json::json!({"cmd": "sidebar", "args": {"mode": "hide"}}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+        (
+            &["sidebar", "mode", "flagged"],
+            serde_json::json!({"cmd": "sidebar.mode", "args": {"mode": "flagged"}}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+        (
+            &["sidebar", "flagged-layout", "toggle"],
+            serde_json::json!({"cmd": "sidebar.flagged-layout", "args": {"mode": "toggle"}}),
+            serde_json::json!({"text": "flat"}),
+            "flat\n",
+        ),
+        (
+            &["sidebar", "expand", "--window", "w1"],
+            serde_json::json!({"cmd": "sidebar.expand", "args": {"window": "w1"}}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+        (
+            &["sidebar", "collapse"],
+            serde_json::json!({"cmd": "sidebar.collapse"}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+        (
+            &["sidebar", "width", "300"],
+            serde_json::json!({"cmd": "sidebar.width", "args": {"sidebarWidth": 300.0}}),
+            serde_json::json!({"sidebarWidth": 300.0}),
+            "300.0\n",
+        ),
+    ];
+    for (at, (args, expected, result, stdout)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("{at}.sock"));
+        let _server = scripted(&socket, expected, result)?;
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(0), stdout.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn sidebar_width_json_prints_the_result_and_a_refusal_exits_1() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("agterm.sock");
+    let expected = serde_json::json!({"cmd": "sidebar.width", "args": {"window": "w1", "sidebarWidth": 301.5}});
+    let _server = scripted(&socket, expected, serde_json::json!({"sidebarWidth": 301.5}))?;
+    let json = run_on(
+        dir.path(),
+        &socket,
+        &["sidebar", "width", "301.5", "--window", "w1", "--json"],
+    )?;
+    let (code, stdout, stderr) = outcome(&json);
+    assert_eq!((code, stderr.as_str()), (Some(0), ""));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stdout)?,
+        serde_json::json!({"ok": true, "result": {"sidebarWidth": 301.5}})
+    );
+    // the scripted server refuses any other request, naming it
+    let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, &["sidebar", "width", "1"])?);
+    assert_eq!((code, stdout.as_str()), (Some(1), ""));
+    assert!(stderr.starts_with("error: unexpected request: "), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn sidebar_refusals_are_usage_errors_before_connecting() -> TestResult {
+    let dir = short_dir()?;
+    // nothing listens here: a connection attempt would exit 1, not 64
+    let socket = dir.path().join("agterm.sock");
+    let width = "Usage: agtermctl sidebar width <points> [--socket <socket>] [--json] [--window <window>]\n  See \
+                 'agtermctl sidebar width --help' for more information.\n";
+    let mode = "Usage: agtermctl sidebar mode [<mode>] [--socket <socket>] [--json]\n  See 'agtermctl sidebar mode \
+                --help' for more information.\n";
+    let layout = "Usage: agtermctl sidebar flagged-layout [<layout>] [--socket <socket>] [--json]\n  See 'agtermctl \
+                  sidebar flagged-layout --help' for more information.\n";
+    let cases: [(&[&str], String); 4] = [
+        (
+            &["sidebar", "width", "wide"],
+            format!(
+                "Error: The value 'wide' is invalid for '<points>'\nHelp:  <points>  Sidebar width in points, clamped \
+                 to the drag range.\n{width}"
+            ),
+        ),
+        (
+            &["sidebar", "width", "nan"],
+            format!("Error: points must be a number\n{width}"),
+        ),
+        (
+            &["sidebar", "mode", "grid"],
+            format!("Error: mode must be tree, flagged, or toggle\n{mode}"),
+        ),
+        (
+            &["sidebar", "flagged-layout", "grid"],
+            format!("Error: layout must be flat, plain, tree, or toggle\n{layout}"),
+        ),
+    ];
+    for (args, expected) in cases {
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(64), String::new(), expected),
             "{args:?}"
         );
     }

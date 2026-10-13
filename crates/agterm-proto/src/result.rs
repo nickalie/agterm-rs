@@ -39,6 +39,9 @@ pub struct ControlResult {
     /// `session.resize`: the applied, clamped primary-pane fraction.
     #[serde(default)]
     pub ratio: Option<f64>,
+    /// `sidebar.width`: the stored, clamped sidebar width in points.
+    #[serde(default)]
+    pub sidebar_width: Option<f64>,
     /// The pane a command read or typed into (`left|right|scratch`).
     #[serde(default)]
     pub pane: Option<String>,
@@ -126,6 +129,15 @@ impl ControlResult {
     pub fn text(text: impl Into<String>) -> Self {
         Self {
             text: Some(text.into()),
+            ..Self::default()
+        }
+    }
+
+    /// `{"sidebarWidth": width}`.
+    #[must_use]
+    pub fn sidebar_width(width: f64) -> Self {
+        Self {
+            sidebar_width: Some(width),
             ..Self::default()
         }
     }

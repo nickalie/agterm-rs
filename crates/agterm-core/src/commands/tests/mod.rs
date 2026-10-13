@@ -16,6 +16,7 @@ mod pick;
 mod quick;
 mod restart;
 mod session;
+mod sidebar;
 mod surface;
 mod window;
 mod workspace;

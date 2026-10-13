@@ -21,6 +21,7 @@ mod session_meta;
 mod session_overlay;
 mod session_panes;
 mod session_restore;
+mod sidebar;
 mod socket;
 mod surface;
 mod tree;
@@ -67,6 +68,7 @@ enum Command {
     Dashboard(dashboard::Dashboard),
     Window(window::Window),
     Quick(quick::Quick),
+    Sidebar(sidebar::Sidebar),
     Notify(notify::Notify),
     Pick(pick::Pick),
     Ask(ask::Ask),
@@ -85,6 +87,7 @@ impl Command {
             Self::Dashboard(command) => command.check(),
             Self::Window(group) => group.command().validate(),
             Self::Quick(command) => command.check(),
+            Self::Sidebar(command) => command.check(),
             Self::Notify(command) => command.validate(),
             Self::Ask(command) => command.check(),
             Self::Pick(_) | Self::Version(_) => Ok(()),
@@ -101,6 +104,7 @@ impl Command {
             Self::Dashboard(command) => command.execute(env),
             Self::Window(group) => group.command().default_run(env),
             Self::Quick(command) => command.execute(env),
+            Self::Sidebar(command) => command.execute(env),
             Self::Notify(command) => command.default_run(env),
             Self::Pick(command) => command.execute(env),
             Self::Ask(command) => command.execute(env),

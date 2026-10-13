@@ -987,18 +987,23 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 
 **Files:**
 - Create: `crates/agterm-core/src/commands/sidebar.rs`
-- Modify: `crates/agterm-gtk/src/sidebar.rs`
+- Modify: `crates/agterm-gtk/src/sidebar.rs` (became the `sidebar/` module: rows, row, menu, drag, context, footer)
 
-- [ ] sidebar, sidebar.mode, flagged-layout, expand, collapse, width (`AppStore+Sidebar*.swift`, `SidebarMode.swift`,
+- [x] sidebar, sidebar.mode, flagged-layout, expand, collapse, width (`AppStore+Sidebar*.swift`, `SidebarMode.swift`,
       `SidebarDrop.swift`, `sidebar.md`); `sidebar.width` clamps to upstream's floor and echoes it, so claim
-      `sidebar-min-width`
-- [ ] full sidebar rows as upstream's (`Views/WorkspaceSidebar*.swift`, `SidebarRowViews.swift`, `StatusGlyph.swift`,
+      `sidebar-min-width` (`commands/sidebar.rs`; `AppStore::renders_workspace_rows`, `expand_all_workspaces`,
+      `collapse_other_workspaces` persist first and queue per-row requests, so they hold with the sidebar hidden;
+      `Core::update_settings` writes `settings.json`; `sidebar-min-width` claimed)
+- [x] full sidebar rows as upstream's (`Views/WorkspaceSidebar*.swift`, `SidebarRowViews.swift`, `StatusGlyph.swift`,
       `SidebarRenameController.swift`): status glyphs, context lines, inline rename, context menu, flagged layout,
-      drag-and-drop reorder, in GTK list idioms
-- [ ] matching `agtermctl` subcommands
-- [ ] write tests: mode and width rules, drop placement
-- [ ] write tests: errors from `ControlDispatcherSidebarTests`
-- [ ] gate: full run; ratchet (`test_sidebar.py`)
+      drag-and-drop reorder, in GTK list idioms (GTK `sidebar/`, `status_glyph.rs`, `row_icon.rs`; the gestures go
+      through `agterm_core::sidebar_actions` and stand down while the modal slot is held; upstream's rows carry no
+      context line: `session.context` shows in the title bar, which Task 35 builds)
+- [x] matching `agtermctl` subcommands
+- [x] write tests: mode and width rules, drop placement
+- [x] write tests: errors from `ControlDispatcherSidebarTests`
+- [x] gate: full run; ratchet (`test_sidebar.py`) (20 new green ids, 536 listed: all of `test_sidebar.py` and the cli
+      `test_sidebar`)
 
 ### Task 23: Fonts and themes
 

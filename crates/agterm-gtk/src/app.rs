@@ -43,6 +43,7 @@ const CAPABILITIES: &[&str] = &[
     "modal-blocks-covers",
     "pick-names-pending-ask",
     "overlay-size-validated",
+    "sidebar-min-width",
 ];
 
 /// `AGTERM_APP_ID` when it is a valid application id, else the fork's.
@@ -269,7 +270,8 @@ mod tests {
                 "quick-validates-input",
                 "modal-blocks-covers",
                 "pick-names-pending-ask",
-                "overlay-size-validated"
+                "overlay-size-validated",
+                "sidebar-min-width"
             ]
         );
     }

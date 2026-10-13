@@ -15,6 +15,7 @@ use agterm_core::auto_follow::AutoFollowTimer;
 use agterm_core::events::{TREE_CHANGED_DEBOUNCE, TreeChangedTimer};
 use agterm_core::model::PendingCloseTimer;
 use agterm_core::persist::{DebouncedSave, arm_debounced_saves};
+use agterm_core::sidebar_actions::SidebarAction;
 use agterm_core::{CommitTimers, ControlError, Core, Dispatched, PaneReport, Resume};
 use agterm_host::MainLoop;
 use agterm_proto::command::SessionCmd;
@@ -24,7 +25,6 @@ use uuid::Uuid;
 
 use crate::main_loop::GlibMainLoop;
 use crate::quick::QuickPanel;
-use crate::sidebar::{RowKind, SidebarRow};
 use crate::windows::Windows;
 
 /// The bounds of an overlay job helper's connection (upstream's `overlayJobLimits`: a presentation frame's size).
@@ -495,38 +495,48 @@ impl AppState {
         }
     }
 
-    /// A sidebar row was clicked: a session row selects its session as user activity and reveals the pane its status
-    /// tags (upstream's outline selection handler), a workspace row opens or folds the workspace and persists that
-    /// (upstream's whole-row toggle, a genuine user expand).
-    pub fn sidebar_clicked(&mut self, row: &SidebarRow) {
-        match row.kind {
-            RowKind::Session { .. } => {
-                // a genuine user click buys the full idle grace before auto-follow pulls away again
-                self.core.note_user_activity(row.id);
-                let indicator = self
-                    .core
-                    .library_mut()
-                    .store_for_session_mut(row.id)
-                    .map(|store| store.select_session(Some(row.id)));
-                if let Some(indicator) = indicator {
-                    self.core.reveal_blocked_pane(row.id, indicator.as_ref());
-                }
-            }
-            RowKind::Workspace { expanded } => {
-                let library = self.core.library_mut();
-                let window = library.open_ids().into_iter().find(|id| {
-                    library
-                        .store(*id)
-                        .is_some_and(|store| store.workspace(row.id).is_some())
-                });
-                if let Some(store) = window.and_then(|id| library.store_mut(id)) {
-                    store.set_workspace_expanded(row.id, !expanded);
-                }
-                if let Some(ui) = window.and_then(|id| self.windows.as_mut()?.get_mut(id)) {
-                    ui.set_workspace_expanded(row.id, !expanded);
-                }
-            }
+    /// A sidebar gesture in window `window` ([`agterm_core::sidebar_actions`]); stands down while its modal slot is
+    /// held.
+    pub fn sidebar_action(&mut self, window: Uuid, action: SidebarAction) {
+        if self.core.sidebar_action(window, action) {
+            self.settle();
         }
+    }
+
+    /// The user opened or folded workspace `workspace`'s row in window `window`: the outline follows and the model
+    /// persists it (upstream's outline expand and collapse callbacks, a genuine user toggle).
+    pub fn sidebar_toggle_workspace(&mut self, window: Uuid, workspace: Uuid, expanded: bool) {
+        let action = SidebarAction::SetWorkspaceExpanded { workspace, expanded };
+        if !self.core.sidebar_action(window, action) {
+            return;
+        }
+        if let Some(ui) = self.windows.as_mut().and_then(|windows| windows.get_mut(window)) {
+            ui.set_workspace_expanded(workspace, expanded);
+        }
+        self.settle();
+    }
+
+    /// A drag opened (or, unlanded, folds back) workspace `workspace`'s row in window `window`, for view only.
+    pub fn sidebar_spring_load(&mut self, window: Uuid, workspace: Uuid, open: bool) {
+        if let Some(ui) = self.windows.as_mut().and_then(|windows| windows.get_mut(window)) {
+            ui.set_workspace_expanded(workspace, open);
+            self.settle();
+        }
+    }
+
+    /// An inline rename began in window `window`'s sidebar: auto-follow waits until it ends.
+    pub fn sidebar_rename_began(&mut self, window: Uuid) {
+        self.core.suppress_auto_follow(window);
+    }
+
+    /// The inline rename in window `window`'s sidebar ended, renaming with `action` when committed: auto-follow
+    /// resumes and the selected terminal takes the keyboard back.
+    pub fn sidebar_rename_ended(&mut self, window: Uuid, action: Option<SidebarAction>) {
+        self.core.resume_auto_follow(window);
+        if let Some(action) = action {
+            self.core.sidebar_action(window, action);
+        }
+        self.core.sidebar_action(window, SidebarAction::FocusActiveTerminal);
         self.settle();
     }
 
@@ -540,9 +550,14 @@ impl AppState {
         else {
             return;
         };
-        if let Some(store) = self.core.library_mut().store_mut(window) {
-            store.set_sidebar_width(width);
+        let Some(store) = self.core.library_mut().store_mut(window) else {
+            return;
+        };
+        // the divider sits on whole pixels: a position the stored width rounds to is the model's own, not a drag
+        if (store.sidebar().width.round() - width).abs() < f64::EPSILON {
+            return;
         }
+        store.set_sidebar_width(width);
         self.settle();
     }
 
@@ -1063,27 +1078,42 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_clicks_select_sessions_and_fold_workspaces() {
+    fn sidebar_actions_select_sessions_and_fold_workspaces() {
         let (mut state, window, first) = state_with_terminal();
         let store = state.core.library_mut().store_mut(window).unwrap();
         let workspace = store.workspaces()[0].id();
         let second = store.add_session(workspace, NewSession::at_cwd("/srv")).unwrap();
         assert_eq!(store.selected_session_id(), Some(second));
-        let row = |id, kind| SidebarRow {
-            id,
-            kind,
-            name: String::new(),
-            badge: 0,
-        };
-        state.sidebar_clicked(&row(first, RowKind::Session { selected: false }));
+        state.sidebar_action(
+            window,
+            SidebarAction::SelectSessions {
+                active: first,
+                selection: vec![first],
+            },
+        );
         let store = state.core.library().store(window).unwrap();
         assert_eq!(store.selected_session_id(), Some(first));
-        state.sidebar_clicked(&row(workspace, RowKind::Workspace { expanded: true }));
+        state.sidebar_toggle_workspace(window, workspace, false);
         let store = state.core.library().store(window).unwrap();
         assert!(!store.workspace(workspace).unwrap().is_expanded);
-        state.sidebar_clicked(&row(workspace, RowKind::Workspace { expanded: false }));
+        state.sidebar_toggle_workspace(window, workspace, true);
         let store = state.core.library().store(window).unwrap();
         assert!(store.workspace(workspace).unwrap().is_expanded);
+    }
+
+    #[test]
+    fn a_sidebar_rename_holds_auto_follow_until_it_ends() {
+        let (mut state, window, first) = state_with_terminal();
+        state.sidebar_rename_began(window);
+        state.sidebar_rename_ended(
+            window,
+            Some(SidebarAction::RenameSession {
+                session: first,
+                name: "build".into(),
+            }),
+        );
+        let store = state.core.library().store(window).unwrap();
+        assert_eq!(store.session(first).unwrap().display_name(), "build");
     }
 
     #[test]
@@ -1110,13 +1140,13 @@ mod tests {
             timeout: Duration::ZERO,
             stay_on_active: false,
         }));
-        let row = SidebarRow {
-            id: second,
-            kind: RowKind::Session { selected: true },
-            name: String::new(),
-            badge: 0,
-        };
-        state.sidebar_clicked(&row);
+        state.sidebar_action(
+            window,
+            SidebarAction::SelectSessions {
+                active: second,
+                selection: vec![second],
+            },
+        );
         assert!(state.core.tree(None).unwrap().idle_ms.is_some());
         let fires: Vec<_> = main_loop
             .take()
