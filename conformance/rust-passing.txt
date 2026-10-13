@@ -6,8 +6,11 @@ tests/behaviors/test_hooks.py::test_an_edit_takes_effect_only_on_reload
 tests/behaviors/test_hooks.py::test_hooks_file_is_read_at_launch
 tests/behaviors/test_keymap.py::test_an_edit_takes_effect_only_on_reload
 tests/behaviors/test_keymap.py::test_keymap_file_is_read_at_launch
+tests/behaviors/test_relaunch.py::test_fresh_shells_do_not_run_the_pin
 tests/behaviors/test_relaunch.py::test_relaunch_forgets_what_is_not_persisted
 tests/behaviors/test_relaunch.py::test_relaunch_keeps_workspaces_sessions_and_their_metadata
+tests/behaviors/test_relaunch.py::test_rerun_replays_the_captured_foreground_program
+tests/behaviors/test_relaunch.py::test_rerun_types_the_pinned_line_at_the_next_launch
 tests/cli/test_cli_output.py::test_ask_blocks_until_cancelled
 tests/cli/test_cli_output.py::test_ask_without_blocking
 tests/cli/test_cli_output.py::test_browser_and_config
@@ -29,6 +32,7 @@ tests/cli/test_cli_output.py::test_overlay_program
 tests/cli/test_cli_output.py::test_pick_blocks_until_cancelled
 tests/cli/test_cli_output.py::test_pick_without_blocking
 tests/cli/test_cli_output.py::test_quick_terminal
+tests/cli/test_cli_output.py::test_restore
 tests/cli/test_cli_output.py::test_session_background
 tests/cli/test_cli_output.py::test_session_create_select_and_close
 tests/cli/test_cli_output.py::test_session_metadata
@@ -331,7 +335,15 @@ tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.text
 tests/protocol/test_overlay.py::test_unsplit_session_takes_a_left_pane_overlay
 tests/protocol/test_overlay.py::test_url_page_reads_back_its_address[browse]
 tests/protocol/test_overlay.py::test_url_page_reads_back_its_address[pinned]
+tests/protocol/test_restore.py::test_a_held_command_moves_to_the_split_with_a_swap
+tests/protocol/test_restore.py::test_capture_counts_the_panes_running_a_program_and_clear_drops_them
+tests/protocol/test_restore.py::test_capture_needs_rerun_mode
+tests/protocol/test_restore.py::test_foreground_names_the_program_or_the_shell
+tests/protocol/test_restore.py::test_mode_reads_the_launch_policy
+tests/protocol/test_restore.py::test_mode_rejects_an_unknown_mode
+tests/protocol/test_restore.py::test_mode_set_applies_to_the_next_launch
 tests/protocol/test_restore.py::test_panes_are_not_zmx_backed_outside_live_mode
+tests/protocol/test_restore.py::test_seeded_live_mode_is_requested_at_launch
 tests/protocol/test_restore.py::test_split_restore_pin_reads_back
 tests/protocol/test_session.py::test_close_removes_the_session_and_reselects
 tests/protocol/test_session.py::test_close_requires_a_target

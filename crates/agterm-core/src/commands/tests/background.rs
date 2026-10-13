@@ -11,7 +11,8 @@ use super::{Fixture, UNKNOWN, answered_id, args, failure, send, wire};
 use crate::model::{
     AppStore, BackgroundWatermark, SaveRequest, Session, StatusPane, WatermarkFit, WatermarkKind, WatermarkPosition,
 };
-use crate::persist::{AppSettings, LibraryPersistence, RestoreMode};
+use crate::persist::{LibraryPersistence, RestoreMode};
+use crate::restore::mode::RestoreLaunchDecision;
 use crate::{Core, CoreConfig, CoreState};
 
 fn session(fixture: &Fixture, id: Uuid) -> &Session {
@@ -382,11 +383,15 @@ fn a_pin_reads_back_and_outside_rerun_carries_a_note() {
 
 #[test]
 fn rerun_mode_takes_a_pin_without_a_note_and_live_falls_back_to_fresh_shells() {
-    let settings = |mode| AppSettings {
-        restore_mode: Some(mode),
-        ..AppSettings::default()
+    // the note follows the mode this launch runs in, not what the settings hold now
+    let launched = |requested, reason: Option<&str>| {
+        let mut fixture = Fixture::new(0);
+        fixture
+            .core
+            .set_restore_launch(RestoreLaunchDecision::new(requested, reason.map(str::to_owned)));
+        fixture
     };
-    let mut fixture = Fixture::with_settings(0, settings(RestoreMode::Rerun));
+    let mut fixture = launched(RestoreMode::Rerun, None);
     let id = fixture.sessions[0];
     let response = restore(&mut fixture, id, |a| {
         a.mode = Some("set".into());
@@ -394,7 +399,7 @@ fn rerun_mode_takes_a_pin_without_a_note_and_live_falls_back_to_fresh_shells() {
     });
     assert_eq!(result(&response), json!({"id": wire(id), "pane": "left"}));
 
-    let mut fixture = Fixture::with_settings(0, settings(RestoreMode::Live));
+    let mut fixture = launched(RestoreMode::Live, Some("the zmx executable is unavailable"));
     let id = fixture.sessions[0];
     let response = restore(&mut fixture, id, |a| a.mode = Some("none".into()));
     assert_eq!(

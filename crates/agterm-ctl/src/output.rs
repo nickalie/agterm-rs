@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use agterm_core::theme::DEFAULT_TITLE;
 use agterm_proto::keymap::{ControlHooks, ControlKeymap};
-use agterm_proto::{ControlTree, ControlWindowNode, Response};
+use agterm_proto::{ControlRestoreStatus, ControlTree, ControlWindowNode, Response};
 use serde_json::Value;
 
 use crate::client::Reply;
@@ -21,10 +21,10 @@ use crate::tree::format_tree;
 use crate::window::format_windows;
 
 /// Renders a response as its human-readable summary (no trailing newline): an `error:` line, the tree or window
-/// listing, the theme listing, the keymap or hooks listing, the serving app's version, the text read (or a search's
-/// counter), an overlay program's `exit N`, a batch's affected count, a count of diagnostics, a cursor column, a resized
-/// window's `W H`, a resized split's ratio, the applied sidebar width, the affected id (only with `echo_id`, for the
-/// create commands), or a bare `ok`. Never JSON: `--json` prints the server's own line.
+/// listing, the theme listing, the keymap or hooks listing, the restore policy, the serving app's version, the text
+/// read (or a search's counter), an overlay program's `exit N`, a batch's affected count, a count of diagnostics, a
+/// cursor column, a resized window's `W H`, a resized split's ratio, the applied sidebar width, the affected id (only
+/// with `echo_id`, for the create commands), or a bare `ok`. Never JSON: `--json` prints the server's own line.
 ///
 /// The result's fields are tested in upstream's fixed order (`formatResponse`: `tree` first, `app` after the
 /// listings); each command group adds its branch at its place in that order.
@@ -34,37 +34,8 @@ pub fn format_response(response: &Response, echo_id: bool) -> String {
         return format!("error: {}", response.error.as_deref().unwrap_or("unknown error"));
     }
     let result = response.result.as_ref();
-    // `client::send` already refused a reply whose tree does not decode, as upstream's whole-response decode does
-    if let Some(tree) = result
-        .and_then(|result| result.get("tree"))
-        .and_then(|tree| serde_json::from_value::<ControlTree>(tree.clone()).ok())
-    {
-        return format_tree(&tree);
-    }
-    // a present-but-empty list still takes this branch and renders empty
-    if let Some(windows) = result
-        .and_then(|result| result.get("windows"))
-        .and_then(|windows| serde_json::from_value::<Vec<ControlWindowNode>>(windows.clone()).ok())
-    {
-        return format_windows(&windows);
-    }
-    if let Some(themes) = result
-        .and_then(|result| result.get("themes"))
-        .and_then(|themes| serde_json::from_value::<Vec<String>>(themes.clone()).ok())
-    {
-        return format_themes(&themes, result.map_or(&Value::Null, |result| result));
-    }
-    if let Some(keymap) = result
-        .and_then(|result| result.get("keymap"))
-        .and_then(|keymap| serde_json::from_value::<ControlKeymap>(keymap.clone()).ok())
-    {
-        return format_keymap(&keymap);
-    }
-    if let Some(hooks) = result
-        .and_then(|result| result.get("hooks"))
-        .and_then(|hooks| serde_json::from_value::<ControlHooks>(hooks.clone()).ok())
-    {
-        return format_hooks(&hooks);
+    if let Some(listing) = result.and_then(format_listing) {
+        return listing;
     }
     if let Some(app) = result.and_then(|result| result.get("app")) {
         return format_app(app);
@@ -118,6 +89,66 @@ pub fn format_response(response: &Response, echo_id: bool) -> String {
         return id.to_owned();
     }
     "ok".to_owned()
+}
+
+/// The listing branches of [`format_response`], in upstream's order: the tree, the windows, the themes, the keymap,
+/// the hooks, the restore policy. `None` when the result carries none of them.
+fn format_listing(result: &Value) -> Option<String> {
+    // `client::send` already refused a reply whose tree does not decode, as upstream's whole-response decode does
+    if let Some(tree) = result
+        .get("tree")
+        .and_then(|tree| serde_json::from_value::<ControlTree>(tree.clone()).ok())
+    {
+        return Some(format_tree(&tree));
+    }
+    // a present-but-empty list still takes this branch and renders empty
+    if let Some(windows) = result
+        .get("windows")
+        .and_then(|windows| serde_json::from_value::<Vec<ControlWindowNode>>(windows.clone()).ok())
+    {
+        return Some(format_windows(&windows));
+    }
+    if let Some(themes) = result
+        .get("themes")
+        .and_then(|themes| serde_json::from_value::<Vec<String>>(themes.clone()).ok())
+    {
+        return Some(format_themes(&themes, result));
+    }
+    if let Some(keymap) = result
+        .get("keymap")
+        .and_then(|keymap| serde_json::from_value::<ControlKeymap>(keymap.clone()).ok())
+    {
+        return Some(format_keymap(&keymap));
+    }
+    if let Some(hooks) = result
+        .get("hooks")
+        .and_then(|hooks| serde_json::from_value::<ControlHooks>(hooks.clone()).ok())
+    {
+        return Some(format_hooks(&hooks));
+    }
+    result
+        .get("restore")
+        .and_then(|restore| serde_json::from_value::<ControlRestoreStatus>(restore.clone()).ok())
+        .map(|restore| format_restore_status(&restore))
+}
+
+/// `restore.mode`: what the next launch will do and what this one did, on separate lines (upstream's
+/// `formatRestoreStatus`).
+fn format_restore_status(status: &ControlRestoreStatus) -> String {
+    let mut lines = vec![
+        format!("configured: {} (next launch)", status.configured),
+        format!(
+            "this launch: requested {}, active {}",
+            status.requested_at_launch, status.active
+        ),
+    ];
+    if status.restart_required {
+        lines.push("restart agterm to apply the configured mode".to_owned());
+    }
+    if let Some(reason) = &status.unavailable_reason {
+        lines.push(format!("live unavailable: {reason}"));
+    }
+    lines.join("\n")
 }
 
 /// `theme.list`: one theme per line under a leading `default ghostty` entry, the active one(s) marked `* `. Plain, the
@@ -385,6 +416,68 @@ mod tests {
         assert_eq!(
             format_response(&ok(json!({"themes": [], "keymap": keymap})), false),
             "* default ghostty"
+        );
+    }
+
+    fn restore_status(restart_required: bool, reason: Option<&str>) -> Value {
+        json!({
+            "configured": "live",
+            "requestedAtLaunch": if restart_required { "rerun" } else { "live" },
+            "active": if reason.is_some() { "none" } else if restart_required { "rerun" } else { "live" },
+            "restartRequired": restart_required,
+            "unavailableReason": reason,
+        })
+    }
+
+    #[test]
+    fn the_restore_status_separates_the_next_launch_from_this_one() {
+        assert_eq!(
+            format_response(&ok(json!({"restore": restore_status(false, None)})), false),
+            "configured: live (next launch)\nthis launch: requested live, active live"
+        );
+        assert_eq!(
+            format_response(&ok(json!({"restore": restore_status(true, None)})), false),
+            "configured: live (next launch)\nthis launch: requested rerun, active rerun\nrestart agterm to apply the \
+             configured mode"
+        );
+        assert_eq!(
+            format_response(&ok(json!({"restore": restore_status(false, Some("no zmx"))})), false),
+            "configured: live (next launch)\nthis launch: requested live, active none\nlive unavailable: no zmx"
+        );
+        assert_eq!(
+            format_response(&ok(json!({"restore": restore_status(true, Some("no zmx"))})), false),
+            "configured: live (next launch)\nthis launch: requested rerun, active none\nrestart agterm to apply the \
+             configured mode\nlive unavailable: no zmx"
+        );
+    }
+
+    #[test]
+    fn the_restore_status_sits_after_the_hooks_and_before_the_app() {
+        let hooks = json!({"path": "/h", "diagnostics": [], "hooks": []});
+        let restore = restore_status(false, None);
+        assert_eq!(
+            format_response(&ok(json!({"hooks": hooks, "restore": restore})), false),
+            "hooks: /h\n  (no hooks)"
+        );
+        assert_eq!(
+            format_response(
+                &ok(json!({"restore": restore, "app": {"version": "1"}, "text": "t", "count": 2})),
+                false
+            ),
+            "configured: live (next launch)\nthis launch: requested live, active live"
+        );
+        // a malformed status falls through, as an undecodable listing does
+        assert_eq!(
+            format_response(&ok(json!({"restore": {"configured": "live"}})), false),
+            "ok"
+        );
+    }
+
+    #[test]
+    fn a_capture_prints_its_text_rather_than_a_diagnostic_count() {
+        assert_eq!(
+            format_response(&ok(json!({"count": 2, "text": "captured 2 panes"})), false),
+            "captured 2 panes"
         );
     }
 

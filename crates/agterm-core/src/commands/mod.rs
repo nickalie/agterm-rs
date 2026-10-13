@@ -20,6 +20,7 @@ pub(crate) mod panes;
 pub(crate) mod pick;
 pub(crate) mod process;
 pub(crate) mod quick;
+pub(crate) mod relaunch;
 pub(crate) mod restart;
 pub(crate) mod restore;
 pub(crate) mod search;

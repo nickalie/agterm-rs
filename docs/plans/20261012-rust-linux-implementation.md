@@ -1102,24 +1102,37 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 
 **Files:**
 - Create: `crates/agterm-core/src/restore/{mod,mode,capture}.rs`, `crates/agterm-core/src/commands/restore.rs`
+- ➕ Create: `crates/agterm-core/src/restore/{pacer,spawn_plan}.rs`, `crates/agterm-core/src/commands/relaunch.rs`,
+  `crates/agterm-core/src/commands/tests/restore.rs`, `crates/agterm-ctl/src/restore.rs`,
+  `crates/agterm-gtk/src/{process_table,restore_launch}.rs`; Modify: `crates/agterm-host/src/{lib,fakes}.rs`
+  (`ProcessTable` seam), `crates/agterm-proto/src/{lib,result}.rs` (`ControlRestoreStatus`),
+  `crates/agterm-core/src/{command_restore,dispatch,lib}.rs`, `model/restore.rs`, `commands/{mod,typing}.rs`,
+  `crates/agterm-gtk/src/{app,deck,main,state,surface}.rs`, `crates/agterm-ctl/src/{main,output}.rs`,
+  `crates/agterm-ctl/tests/cli.rs`
 
-- [ ] restore.mode, restore.capture, restore.clear (`RestoreMode.swift`, `CommandRestore.swift`,
+- [x] restore.mode, restore.capture, restore.clear (`RestoreMode.swift`, `CommandRestore.swift`,
       `AppStore+Restore.swift`); the launch mode frozen for the process, quit capture
-- [ ] `none` and `rerun` relaunch: layout, pinned commands, captured commands (`LaunchSpawnPlan.swift`,
+- [x] `none` and `rerun` relaunch: layout, pinned commands, captured commands (`LaunchSpawnPlan.swift`,
       `SpawnPacer.swift`, `CommandRestore.restorePlan`)
-- [ ] capture keeps upstream's intent (`Ghostty/ForegroundProcess.swift` `command`): it never turns a pane's own
+- [x] capture keeps upstream's intent (`Ghostty/ForegroundProcess.swift` `command`): it never turns a pane's own
       creation command into a shell replay, so a `--command` session keeps the exec path, `--wait` and
       close-on-exit, while a foreground job started from a shell (also inside `--command /bin/sh`) still takes
       precedence over the creation command. On Linux the foreground group's leader is the program itself, so a
       leader-only read is not enough: a candidate predicate (leader is the pane's spawned child) is checked against
-      a shell wrapper, `exec`, a pipeline and a live pane. `capture-reads-command-panes` is not claimed
-- [ ] live requested without zmx: fall back with `unavailableReason` as upstream
-- [ ] matching `agtermctl` subcommands
-- [ ] write tests: capture argv parsing, shell recognition, denylist
-- [ ] write tests: relaunch plans for each mode; live fallback status
-- [ ] write tests: the whole chain capture → save → relaunch → surface spawn on the fakes, for a `--command` session
+      a shell wrapper, `exec`, a pipeline and a live pane. `capture-reads-command-panes` is not claimed (predicate:
+      the foreground group's leader is the terminal's session leader, `/proc/<pgid>/stat` session == pgid, i.e. the
+      process libghostty spawned; refused for a `--command` program, a shell wrapper, an `exec`, a shell at its
+      prompt; a job an interactive shell starts, also a pipeline's first element, is captured; ⚠️ a live pane's
+      leader is read through the zmx daemon and lands with Task 28)
+- [x] live requested without zmx: fall back with `unavailableReason` as upstream
+- [x] matching `agtermctl` subcommands
+- [x] write tests: capture argv parsing, shell recognition, denylist
+- [x] write tests: relaunch plans for each mode; live fallback status
+- [x] write tests: the whole chain capture → save → relaunch → surface spawn on the fakes, for a `--command` session
       with and without `--wait` and for a job typed into a shell pane
-- [ ] gate: full run; ratchet (`test_restore.py`, `behaviors/test_relaunch.py` non-live cases)
+- [x] gate: full run; ratchet (`test_restore.py`, `behaviors/test_relaunch.py` non-live cases) (12 new green ids,
+      617 listed: every non-live `test_restore.py` test, the three non-live relaunch behaviors and cli `test_restore`;
+      the 28 still red are zmx, terminfo and live clipboard tests of later tasks)
 
 ### Task 27: zmx build and the `SessionHost` crate
 

@@ -2,7 +2,13 @@
 //! follow `dispatchSessionRestore` in upstream's `ControlDispatcher.swift`; the effect follows `setSessionRestore` in
 //! `agterm/Control/ControlServer+SessionActions.swift`. A pin is shell code and is never rewritten: it is refused only
 //! when absent, carrying a control character, or over the storage cap.
+//!
+//! `restore.mode`, `restore.capture` and `restore.clear`: the restore policy and the app-global captures (upstream's
+//! `ControlDispatcher+Zmx.swift` `restoreMode` parse and `ControlServer.swift`'s `readRestoreMode`, `setRestoreMode`,
+//! `captureRestoreCommands` and `clearRestoreCommands`). Each capture and clear is acknowledged only once every open
+//! window's write landed: the write is the whole effect.
 
+use agterm_proto::command::RestoreCmd;
 use agterm_proto::{ControlResult, Request};
 use uuid::Uuid;
 
@@ -10,10 +16,12 @@ use super::{Outcome, args_of, not_found, parse_pane, session_store, unknown_pane
 use crate::Core;
 use crate::command_restore::has_control_character;
 use crate::error::{ControlError, Noun};
+use crate::model::Session;
 use crate::model::{PaneAddress, StatusPane};
 use crate::pane_env::uuid_string;
 use crate::persist::RestoreMode;
 use crate::resolve::ACTIVE;
+use crate::restore::capture::{CaptureKind, capture_foreground_commands};
 
 /// The longest pin, in UTF-8 bytes (upstream's `ControlRestoreOverride.maxCommandBytes`): it persists in the window's
 /// snapshot, so the cap guards the file, not the display.
@@ -48,7 +56,7 @@ pub(crate) fn dispatch(core: &mut Core, request: &Request) -> Outcome {
     let args = args_of(request);
     let pin = parse_pin(args.mode.as_deref(), args.command.as_deref())?;
     let pane = parse_pane(args.pane.as_deref())?;
-    let mode = launch_restore_mode(core);
+    let mode = core.restore_launch().active;
     let target = request.target.as_deref();
     let (store, id) = session_store(core, target, args.window.as_deref())?;
     let session = store
@@ -122,13 +130,104 @@ fn parse_pin(mode: Option<&str>, command: Option<&str>) -> Result<Pin, ControlEr
     }
 }
 
-/// The restore mode this launch runs in (upstream's `launchRestoreMode`): the settings' mode, with `live` falling back
-/// to fresh shells, since this build has no live sessions yet. The restore-mode work replaces it with the launch
-/// decision recorded at startup.
-fn launch_restore_mode(core: &Core) -> RestoreMode {
-    match core.settings().effective_restore_mode() {
-        RestoreMode::Live => RestoreMode::None,
-        mode => mode,
+/// Answers `restore.mode`, `restore.capture` and `restore.clear`; `None` is a bare ok.
+pub(crate) fn dispatch_group(
+    core: &mut Core,
+    cmd: RestoreCmd,
+    request: &Request,
+) -> Result<Option<ControlResult>, ControlError> {
+    match cmd {
+        RestoreCmd::Mode => mode(core, args_of(request).mode.as_deref()).map(Some),
+        RestoreCmd::Capture => capture(core).map(Some),
+        RestoreCmd::Clear => clear(core).map(|()| None),
+    }
+}
+
+/// `restore.mode`: the policy, or the mode for the NEXT launch written first. The mode parses strictly, unlike the
+/// settings' tolerant decode: a typo must not select `none`, whose next launch reaps every live daemon.
+fn mode(core: &mut Core, raw: Option<&str>) -> Result<ControlResult, ControlError> {
+    if let Some(raw) = raw {
+        let mode = RestoreMode::from_wire(raw)
+            .ok_or_else(|| ControlError::rejected(format!("invalid restore mode: {raw}")))?;
+        if !core.save_restore_mode(mode) {
+            return Err(ControlError::rejected(format!(
+                "could not save the restore mode; settings keep {}",
+                core.settings().effective_restore_mode().wire_name()
+            )));
+        }
+    }
+    Ok(ControlResult {
+        restore: Some(core.restore_status()),
+        ..ControlResult::default()
+    })
+}
+
+/// `restore.capture`: every open pane's foreground program captured now, for the exit that never reaches the quit
+/// capture (a force quit, a crash). Only with `rerun` configured for the next launch.
+fn capture(core: &mut Core) -> Result<ControlResult, ControlError> {
+    let configured = core.settings().effective_restore_mode();
+    if configured != RestoreMode::Rerun {
+        return Err(ControlError::rejected(format!(
+            "restore.capture requires rerun mode; configured restore mode is {}",
+            configured.wire_name()
+        )));
+    }
+    let ids = core.library().open_ids();
+    let reader = core.restore.reader();
+    let mut captured = 0;
+    for id in &ids {
+        if let (Some(reader), Some(store)) = (&reader, core.library.store_mut(*id)) {
+            captured += capture_foreground_commands(store.sessions_mut(), reader, CaptureKind::OnDemand, &|| true);
+        }
+    }
+    let plural = if captured == 1 { "" } else { "s" };
+    if !core.save_open_windows_checked() {
+        return Err(ControlError::rejected(format!(
+            "captured {captured} pane{plural} but at least one window's save failed; failed windows keep their argv \
+             in memory until they save successfully"
+        )));
+    }
+    Ok(ControlResult {
+        count: Some(i64::try_from(captured).unwrap_or(i64::MAX)),
+        text: Some(format!("captured {captured} pane{plural}")),
+        ..ControlResult::default()
+    })
+}
+
+/// `restore.clear`: every open pane's captured command dropped, the armed ones included (the socket can take this
+/// before the later windows' terminals spawn); the `session.restore` pins stay.
+fn clear(core: &mut Core) -> Result<(), ControlError> {
+    for id in core.library().open_ids() {
+        if let Some(store) = core.library.store_mut(id) {
+            store
+                .sessions_mut()
+                .for_each(Session::clear_captured_foreground_commands);
+        }
+    }
+    if !core.save_open_windows_checked() {
+        return Err(ControlError::rejected(
+            "cleared every open pane but at least one window's save failed; those windows keep their captured \
+             commands on disk until they save successfully",
+        ));
+    }
+    Ok(())
+}
+
+impl Core {
+    /// The `restore.mode` read-back.
+    #[must_use]
+    pub fn restore_status(&self) -> agterm_proto::ControlRestoreStatus {
+        self.restore_launch().status(self.settings().effective_restore_mode())
+    }
+
+    /// Writes every open window now (upstream's `saveAllOpenChecked`); whether every write landed.
+    fn save_open_windows_checked(&mut self) -> bool {
+        // every window is written, a failed one included
+        let mut saved = true;
+        for id in self.library().open_ids() {
+            saved &= self.save_window_checked(id);
+        }
+        saved
     }
 }
 

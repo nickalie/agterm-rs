@@ -83,6 +83,8 @@ fn start(core: &mut Core, request: &Request) -> Result<Dispatched, ControlError>
                 token,
                 reset,
             };
+            // a pane waiting for its paced launch turn spawns now, so the poll waits only for the terminal
+            core.expedite_pane_spawns(id, std::time::Instant::now());
             Ok(wait(job, 0))
         }
     }

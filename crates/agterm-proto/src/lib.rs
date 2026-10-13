@@ -20,7 +20,7 @@ pub use request::{Args, AskButton, MAX_REQUEST_LINE_BYTES, PickItem, Request};
 pub use response::Response;
 pub use result::{
     ControlAskOutcome, ControlAskResult, ControlCursor, ControlHtmlPageOutcome, ControlHtmlPageOutcomeState,
-    ControlPickOutcome, ControlPickResult, ControlResult, ControlWindowFrame, ControlWindowNode,
+    ControlPickOutcome, ControlPickResult, ControlRestoreStatus, ControlResult, ControlWindowFrame, ControlWindowNode,
 };
 pub use tree::{ControlSessionNode, ControlSurfaceNode, ControlTree, ControlWorkspaceNode};
 pub use version::{AppIdentity, ConformanceProfile, PARITY_LEVEL, VersionResult};

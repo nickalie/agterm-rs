@@ -9,12 +9,14 @@
 
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Weak;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agterm_core::auto_follow::AutoFollowTimer;
 use agterm_core::events::{TREE_CHANGED_DEBOUNCE, TreeChangedTimer};
-use agterm_core::model::PendingCloseTimer;
+use agterm_core::keymap::SurfaceOwner;
+use agterm_core::model::{AppStore, PendingCloseTimer};
 use agterm_core::persist::{DebouncedSave, arm_debounced_saves};
+use agterm_core::restore::spawn_plan::LaunchSeed;
 use agterm_core::sidebar_actions::SidebarAction;
 use agterm_core::{CommitTimers, ControlError, Core, Dispatched, PaneReport, Resume};
 use agterm_host::MainLoop;
@@ -211,9 +213,55 @@ impl AppState {
             None => drop(self.core.take_window_requests()),
         }
         self.core.clear_pane_focus_requests();
+        self.spawn_paced_panes();
         self.arm_auto_follow();
         self.arm_hud_timers();
         self.arm_job_expiries();
+    }
+
+    /// A session pane's terminal is ready to spawn: it spawns now with its seed, or once its paced launch turn comes
+    /// (see [`Core::request_pane_spawn`]).
+    pub fn pane_spawn_ready(&mut self, session: Uuid, token: &str) {
+        if self.quitting {
+            return;
+        }
+        if let Some(seed) = self.core.request_pane_spawn(session, token, Instant::now()) {
+            spawn_pane(session, token, seed);
+        }
+        self.settle();
+    }
+
+    /// The launch's paced spawns after a settle: every window's selected session jumps the queue (it is on screen),
+    /// the granted panes spawn, and one timer is armed for the next paced grant.
+    fn spawn_paced_panes(&mut self) {
+        let now = Instant::now();
+        let library = self.core.library();
+        let selected: Vec<Uuid> = library
+            .open_ids()
+            .into_iter()
+            .filter_map(|id| library.store(id).and_then(AppStore::selected_session_id))
+            .collect();
+        for session in selected {
+            self.core.expedite_pane_spawns(session, now);
+        }
+        for grant in self.core.take_spawn_grants() {
+            spawn_pane(grant.session, &grant.token, grant.seed);
+        }
+        let Some(delay) = self.core.take_spawn_wake(now) else {
+            return;
+        };
+        let Some(main_loop) = self.poster.upgrade() else {
+            return;
+        };
+        let task = Box::new(|state: &mut Self| {
+            if !state.quitting {
+                state.core.spawn_wake(Instant::now());
+                state.settle();
+            }
+        });
+        if main_loop.post_after(delay, task).is_err() {
+            tracing::debug!("launch spawn wake dropped: the loop is closed");
+        }
     }
 
     /// Rebuilds the ghostty config and feeds it to the app and every terminal on the desktop's side now (upstream's
@@ -506,6 +554,8 @@ impl AppState {
         if self.quitting {
             return;
         }
+        // the capture reads the panes' foreground programs, so it runs while every terminal still lives
+        self.core.capture_on_exit();
         if !self.core.save_all() {
             tracing::error!("the quit save did not write everything");
         }
@@ -722,6 +772,22 @@ fn finalize_pending_close(state: &mut AppState, timer: PendingCloseTimer) {
     }
     state.core.finalize_pending_close(timer);
     state.settle();
+}
+
+/// Hands `seed` to the terminal of `session`'s pane carrying `token`, which then creates its surface.
+fn spawn_pane(session: Uuid, token: &str, seed: LaunchSeed) {
+    let owner = SurfaceOwner::Pane {
+        session,
+        token: token.to_owned(),
+    };
+    let terminal = crate::surface::all()
+        .into_iter()
+        .find(|terminal| terminal.owner().as_ref() == Some(&owner));
+    if let Some(terminal) = terminal {
+        terminal.spawn_with(seed);
+    } else {
+        tracing::debug!(%session, token, "a granted pane has no terminal");
+    }
 }
 
 #[cfg(test)]

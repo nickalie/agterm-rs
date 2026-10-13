@@ -1,9 +1,59 @@
-//! The persisted per-pane restore-command pin behind `session.restore` (upstream's `AppStore+Restore.swift`). The
-//! state lives on the session's [`PaneRestore`](super::PaneRestore) pair; this is its one mutation point.
+//! The persisted per-pane restore-command pin behind `session.restore` (upstream's `AppStore+Restore.swift`), and the
+//! session's restore slots the relaunch reads and the captures fill (upstream's `Session.takePending*`,
+//! `clearCapturedForegroundCommands`). The state lives on the session's [`PaneRestore`](super::PaneRestore) pair.
 
 use uuid::Uuid;
 
-use super::{AppStore, StatusPane};
+use super::{AppStore, PaneLaunch, PaneRestore, Session, StatusPane};
+
+impl Session {
+    /// Pane `pane`'s restore slots; `None` for the scratch, which is never restored.
+    #[must_use]
+    pub fn pane_restore(&self, pane: StatusPane) -> Option<&PaneRestore> {
+        match pane {
+            StatusPane::Left => Some(&self.restore),
+            StatusPane::Right => Some(&self.split_restore),
+            StatusPane::Scratch => None,
+        }
+    }
+
+    fn pane_restore_mut(&mut self, pane: StatusPane) -> Option<&mut PaneRestore> {
+        match pane {
+            StatusPane::Left => Some(&mut self.restore),
+            StatusPane::Right => Some(&mut self.split_restore),
+            StatusPane::Scratch => None,
+        }
+    }
+
+    /// Pane `pane`'s creation command (`session.new --command` and its split twin); `None` for the scratch.
+    #[must_use]
+    pub fn pane_launch(&self, pane: StatusPane) -> Option<&PaneLaunch> {
+        match pane {
+            StatusPane::Left => Some(&self.launch),
+            StatusPane::Right => Some(&self.split_launch),
+            StatusPane::Scratch => None,
+        }
+    }
+
+    /// Takes the captured argv a launch restore armed for pane `pane`: the relaunch consumes it once.
+    pub fn take_pending_foreground(&mut self, pane: StatusPane) -> Option<Vec<String>> {
+        self.pane_restore_mut(pane)?.pending_foreground.take()
+    }
+
+    /// Takes the `session.restore` pin a launch restore armed for pane `pane`.
+    pub fn take_pending_restore_override(&mut self, pane: StatusPane) -> Option<String> {
+        self.pane_restore_mut(pane)?.pending_command.take()
+    }
+
+    /// Drops both panes' captured argv, persisted and armed alike (upstream's `clearCapturedForegroundCommands`); the
+    /// sticky pins stay. The caller saves.
+    pub fn clear_captured_foreground_commands(&mut self) {
+        for restore in [&mut self.restore, &mut self.split_restore] {
+            restore.foreground = None;
+            restore.disarm_foreground();
+        }
+    }
+}
 
 impl AppStore {
     /// Sets pane `pane`'s persisted restore pin: `None` is no pin (auto-capture), `""` pinned to nothing (a plain

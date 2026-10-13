@@ -18,6 +18,7 @@ mod overlay_job;
 mod overlay_page;
 mod pick;
 mod quick;
+mod restore;
 mod session;
 mod session_background;
 mod session_hud;
@@ -84,6 +85,7 @@ enum Command {
     Theme(theme::Theme),
     Pick(pick::Pick),
     Ask(ask::Ask),
+    Restore(restore::Restore),
     Version(version::Version),
 }
 
@@ -108,6 +110,7 @@ impl Command {
             Self::Config(command) => command.check(),
             Self::Theme(command) => command.check(),
             Self::Ask(command) => command.check(),
+            Self::Restore(command) => command.check(),
             Self::Pick(_) | Self::Version(_) => Ok(()),
         }
     }
@@ -132,6 +135,7 @@ impl Command {
             Self::Theme(command) => command.execute(env),
             Self::Pick(command) => command.execute(env),
             Self::Ask(command) => command.execute(env),
+            Self::Restore(command) => command.execute(env),
             Self::Version(command) => command.run(env),
         }
     }

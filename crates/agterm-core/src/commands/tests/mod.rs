@@ -20,6 +20,7 @@ mod panes;
 mod pick;
 mod quick;
 mod restart;
+mod restore;
 mod session;
 mod sidebar;
 mod surface;

@@ -29,6 +29,7 @@ use agterm_core::keystrokes::{self, SUBMIT_GAP};
 use agterm_core::link_policy::ClickOrigin;
 use agterm_core::model::{SearchReport, StatusKeystroke};
 use agterm_core::persist::settings::LinkOpenMode;
+use agterm_core::restore::spawn_plan::LaunchSeed;
 use agterm_ghostty::input::{KeyAction, KeyEvent, MouseState, ScrollMods};
 use agterm_ghostty::{
     ClipboardContent, MouseShape, PendingRequest, PointTag, Selection, Surface, SurfaceKey, SurfaceOptions,
@@ -78,6 +79,25 @@ struct PointerState {
 }
 
 type ExitHandler = Box<dyn FnOnce()>;
+
+/// When and with what a session pane's surface is created (upstream's `LaunchSeedProvider` and spawn permit on
+/// `GhosttySurfaceView`): a gated terminal asks the core once it is ready, and creates only once the core handed it
+/// the seed, which may wait for the launch's paced turn.
+enum Launch {
+    /// Created from the spec as soon as the area is ready.
+    Open,
+    /// Waiting for its seed; `asked` once the ask went out.
+    Gated { ask: Box<dyn Fn()>, asked: Cell<bool> },
+    /// Created with this seed in place of the spec's command.
+    Seeded(LaunchSeed),
+}
+
+/// What [`TerminalSurface::create`] runs: the spec's command, or a seed's.
+struct Run<'a> {
+    command: Option<&'a str>,
+    initial_input: Option<&'a str>,
+    wait_after_command: bool,
+}
 type ReportHandler = Box<dyn Fn(&str)>;
 type SearchHandler = Box<dyn Fn(&SearchReport)>;
 type KeystrokeHandler = Box<dyn Fn(StatusKeystroke)>;
@@ -161,6 +181,7 @@ struct Inner {
     keeps_start_font_size: Cell<bool>,
     /// Whose terminal this is (a session pane or a program overlay); `None` for the quick terminal, a HUD, an ask.
     owner: RefCell<Option<SurfaceOwner>>,
+    launch: RefCell<Launch>,
 }
 
 thread_local! {
@@ -266,6 +287,7 @@ impl TerminalSurface {
             pending_font_restore: Cell::new(None),
             keeps_start_font_size: Cell::new(false),
             owner: RefCell::new(None),
+            launch: RefCell::new(Launch::Open),
         });
         SURFACES.with(|surfaces| surfaces.borrow_mut().insert(inner.key, Rc::downgrade(&inner)));
         let surface = Self { inner, area };
@@ -547,8 +569,48 @@ impl TerminalSurface {
         });
     }
 
+    /// Gates this terminal's creation on a seed: once the area is ready it calls `ask` (once), and creates only after
+    /// [`TerminalSurface::spawn_with`] handed it the seed.
+    pub fn gate_launch(&self, ask: impl Fn() + 'static) {
+        *self.inner.launch.borrow_mut() = Launch::Gated {
+            ask: Box::new(ask),
+            asked: Cell::new(false),
+        };
+    }
+
+    /// Lets a gated terminal create its surface with `seed`, on the next frame once its area is ready. Ignored once
+    /// the terminal has a seed, a surface, or is torn down.
+    pub fn spawn_with(&self, seed: LaunchSeed) {
+        if self.inner.torn_down.get() || self.inner.ghostty.borrow().is_some() {
+            return;
+        }
+        {
+            let mut launch = self.inner.launch.borrow_mut();
+            if matches!(*launch, Launch::Seeded(_)) {
+                return;
+            }
+            *launch = Launch::Seeded(seed);
+        }
+        if self.area.is_realized() {
+            self.arm_creation_tick();
+        }
+    }
+
+    /// Whether the terminal may create its surface now; a gated one asks for its seed the first time.
+    fn may_create(&self) -> bool {
+        match &*self.inner.launch.borrow() {
+            Launch::Open | Launch::Seeded(_) => true,
+            Launch::Gated { ask, asked } => {
+                if !asked.replace(true) {
+                    ask();
+                }
+                false
+            }
+        }
+    }
+
     fn create(&self, scale: f64) {
-        if self.inner.torn_down.get() {
+        if self.inner.torn_down.get() || !self.may_create() {
             return;
         }
         let area = &self.area;
@@ -557,16 +619,32 @@ impl TerminalSurface {
             return;
         }
         let spec = &self.inner.spec;
+        let launch = self.inner.launch.borrow();
+        let run = match &*launch {
+            Launch::Seeded(seed) => Run {
+                command: seed.command.as_deref(),
+                initial_input: seed.initial_input.as_deref(),
+                wait_after_command: seed.wait_after_command,
+            },
+            Launch::Open | Launch::Gated { .. } => Run {
+                command: spec.command.as_deref(),
+                initial_input: None,
+                wait_after_command: spec.wait_after_command,
+            },
+        };
         let options = SurfaceOptions {
             scale_factor: scale,
             working_directory: spec.working_directory.as_deref(),
-            command: spec.command.as_deref(),
+            command: run.command,
+            initial_input: run.initial_input,
             env: &spec.env,
-            wait_after_command: spec.wait_after_command,
+            wait_after_command: run.wait_after_command,
             font_size: spec.font_size,
             ..SurfaceOptions::default()
         };
-        match ghostty_app::create_surface(self.inner.key, &options) {
+        let created = ghostty_app::create_surface(self.inner.key, &options);
+        drop(launch);
+        match created {
             Ok(surface) => {
                 tracing::debug!(key = self.inner.key.get(), scale, "terminal surface created");
                 surface.set_focus(area.has_focus());
@@ -620,6 +698,12 @@ impl TerminalSurface {
     }
 
     /// Records whose terminal this is, which a chord typed in it reads its context from.
+    /// Whose terminal this is.
+    #[must_use]
+    pub fn owner(&self) -> Option<SurfaceOwner> {
+        self.inner.owner.borrow().clone()
+    }
+
     pub fn set_owner(&self, owner: SurfaceOwner) {
         self.inner.owner.replace(Some(owner));
     }

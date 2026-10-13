@@ -37,6 +37,7 @@ pub mod projection;
 pub mod quick_metrics;
 pub mod resolve;
 pub mod restart_replay;
+pub mod restore;
 pub mod sidebar_actions;
 pub mod sidebar_drop;
 pub mod theme;
@@ -54,6 +55,7 @@ pub use commands::notify::{
 };
 pub use commands::overlay::JobChannel;
 pub use commands::process::{CorePoster, CoreTask, ProcessHost, widened_path};
+pub use commands::relaunch::{EXIT_CAPTURE_BUDGET, PaneSpawn};
 pub use commands::surface::POLL_INTERVAL;
 pub use dispatch::{CommitTimers, Core, CoreConfig, CoreState, Dispatched, Resume, decode_request};
 pub use error::{ControlError, Noun};

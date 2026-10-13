@@ -329,6 +329,16 @@ fn spawn(spec: &PaneSpec, context: &PaneContext, poster: &Poster) -> TerminalSur
     });
     connect_terminal(&terminal, spec.session, spec.token(), poster);
     connect_reports(&terminal, spec.session, spec.token(), poster);
+    if spec.pane != StatusPane::Scratch {
+        // a session pane spawns with the seed the core decides when it is ready, after its paced launch turn
+        let (session, token, poster) = (spec.session, spec.token().to_owned(), poster.clone());
+        terminal.gate_launch(move || {
+            let token = token.clone();
+            state::post(&poster, move |state: &mut AppState| {
+                state.pane_spawn_ready(session, &token);
+            });
+        });
+    }
     terminal
 }
 

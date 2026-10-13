@@ -115,7 +115,7 @@ impl fmt::Debug for RevealHandler {
 pub struct Core {
     app: AppIdentity,
     capabilities: Vec<String>,
-    library: WindowLibrary,
+    pub(crate) library: WindowLibrary,
     settings: AppSettings,
     pub(crate) persistence: Option<LibraryPersistence>,
     /// The app run's event ring, fed by every commit.
@@ -164,6 +164,8 @@ pub struct Core {
     pub(crate) config_reloads: commands::config::ConfigReloads,
     /// The UI-test appearance seam ([`commands::debug`]).
     pub(crate) debug_appearance: commands::debug::DebugAppearance,
+    /// The launch's restore decision, denylist, process table and spawn pacing ([`commands::relaunch`]).
+    pub(crate) restore: commands::relaunch::RestoreRuntime,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -235,6 +237,7 @@ impl Core {
             config_edits: crate::app_actions::ConfigEdits::default(),
             config_reloads: commands::config::ConfigReloads::default(),
             debug_appearance: commands::debug::DebugAppearance::default(),
+            restore: commands::relaunch::RestoreRuntime::default(),
         }
     }
 
@@ -352,6 +355,7 @@ impl Core {
     /// metadata stays. The frontend drops its on-screen window once the commit lands. A no-op for a closed or unknown
     /// id and while terminating. Commit afterwards.
     pub fn close_window(&mut self, id: Uuid) {
+        self.captures_on_window_close(id);
         match self.persistence.as_mut() {
             Some(persistence) => persistence.close_window(&mut self.library, id),
             None => self.library.close_window(id),
@@ -458,6 +462,26 @@ impl Core {
         true
     }
 
+    /// Writes `mode` as the restore mode of the NEXT launch, the legacy boolean dropped (upstream's
+    /// `SettingsModel.setRestoreMode`). Unlike [`Core::update_settings`] a failed write rolls memory back, so no read
+    /// promises a next launch the disk will not deliver. Whether it landed.
+    pub fn save_restore_mode(&mut self, mode: crate::persist::RestoreMode) -> bool {
+        let before = self.settings.clone();
+        self.settings.restore_mode = Some(mode);
+        self.settings.restore_running_command = None;
+        let Some(persistence) = &self.persistence else {
+            return true;
+        };
+        match crate::persist::SettingsStore::new(persistence.directory()).save(&self.settings) {
+            Ok(()) => true,
+            Err(err) => {
+                tracing::warn!(%err, "could not write the restore mode");
+                self.settings = before;
+                false
+            }
+        }
+    }
+
     /// Clears every session's font size in every window, closed ones' files included (upstream's
     /// `resetSessionFontSizesAllWindows`): a config reload resets the terminals to the configured size. Commit
     /// afterwards.
@@ -473,6 +497,7 @@ impl Core {
     /// the caller arms on the main loop. Without persistence the effects are drained and the saves dropped.
     pub fn commit(&mut self) -> CommitTimers {
         self.prune_zoom();
+        self.prune_spawn_queue();
         self.drop_stranded_pane_overlays();
         self.sync_modals();
         self.sync_pages();
@@ -576,6 +601,7 @@ impl Core {
             quick_visible: commands::quick::visible(self),
         };
         let mut tree = control_tree(store, &context);
+        self.project_foreground(store, &mut tree);
         tree.zoomed_surface = if commands::quick::zoomed(self) {
             Some("quick".to_owned())
         } else {
@@ -666,11 +692,14 @@ impl Core {
                     tree: self.tree(window)?,
                 })
             }
+            Command::Restore(cmd) => match commands::restore::dispatch_group(self, cmd, request)? {
+                Some(result) => result_of(&result),
+                None => Ok(Response::success()),
+            },
             Command::Browser(BrowserCmd::Links) => result_of(&commands::browser::links(self, request)?),
             Command::Debug(DebugCmd::Appearance) => result_of(&commands::debug::appearance(self, request)?),
             // `browser.clear` and `config.reload` start through `deferred`
-            cmd
-            @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Restore(_) | Command::Zmx(_)) => {
+            cmd @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Zmx(_)) => {
                 Err(ControlError::NotSupported(cmd))
             }
         }
@@ -718,6 +747,9 @@ mod tests {
         // a reload without a frontend counts no diagnostics; the link mode reads back the default
         Command::Config(ConfigCmd::Reload),
         Command::Browser(BrowserCmd::Links),
+        // the policy reads back; a clear with no window writes nothing and answers
+        Command::Restore(RestoreCmd::Mode),
+        Command::Restore(RestoreCmd::Clear),
     ];
 
     #[test]
@@ -735,7 +767,7 @@ mod tests {
     #[test]
     fn unimplemented_commands_are_refused_by_name() {
         let mut core = core();
-        for cmd in [Command::Restore(RestoreCmd::Clear), Command::Zmx(ZmxCmd::List)] {
+        for cmd in [Command::Zmx(ZmxCmd::List), Command::Zmx(ZmxCmd::Prune)] {
             let response = core.dispatch(&Request::new(cmd));
             assert!(!response.ok);
             assert_eq!(

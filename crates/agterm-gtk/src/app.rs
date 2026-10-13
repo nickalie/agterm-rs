@@ -181,6 +181,16 @@ pub fn activate(app: &adw::Application) {
     crate::html_overlay::install(&mut core, paths::state_dir(&ProcessEnv));
     core.set_config_locator(paths::ConfigLocator::capture(&ProcessEnv));
     core.set_ui_test_launch(agterm_core::is_ui_test_launch(&ProcessEnv));
+    // the restore decision is frozen before the first terminal, and the launch spawn order armed before any window
+    // shows (upstream's `GhosttyApp.restoreLaunchDecision` and the pacer's arm at app init)
+    let decision = crate::restore_launch::launch_decision(core.settings(), &ProcessEnv);
+    core.set_restore_launch(decision);
+    core.load_restore_denylist_at_launch();
+    core.set_process_table(
+        Box::new(crate::process_table::ProcTable::new()),
+        crate::restore_launch::shell_basename(&ProcessEnv),
+    );
+    core.arm_launch_spawns(std::time::Instant::now());
     let socket = context.socket.clone();
     let state = Rc::new(RefCell::new(AppState::new(core)));
     let main_loop = Arc::new(GlibMainLoop::attach(&glib::MainContext::default(), Rc::clone(&state)));

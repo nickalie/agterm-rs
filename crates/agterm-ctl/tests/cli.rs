@@ -457,6 +457,7 @@ SUBCOMMANDS:
   theme                   Theme commands.
   pick                    Open, poll, or cancel a native fuzzy picker.
   ask                     Open, poll, or cancel a themed question dialog.
+  restore                 Restore-running-command commands.
   version                 Print the version of the app serving the socket.
 
   See 'agtermctl help <subcommand>' for detailed help.
@@ -3815,6 +3816,232 @@ fn browser_and_config_usage_errors_come_before_connecting() -> TestResult {
         (&["browser", "clear", "--window", "w1"], "Error: "),
         (&["browser", "clear", "--target", "s1"], "Error: "),
         (&["config", "reload", "--window", "w1"], "Error: "),
+    ];
+    for (args, prefix) in cases {
+        let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, args)?);
+        assert_eq!((code, stdout.as_str()), (Some(64), ""), "{args:?}");
+        assert!(stderr.starts_with(prefix), "{stderr}");
+        assert!(stderr.contains("\nUsage: agtermctl "), "{stderr}");
+    }
+    Ok(())
+}
+
+// MARK: - restore
+
+const RESTORE_HELP: &str = "\
+OVERVIEW: Restore-running-command commands.
+
+USAGE: agtermctl restore <subcommand>
+
+OPTIONS:
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  capture                 Capture every pane's running command now, so a forced
+                          exit restores it.
+  clear                   Clear every session's saved foreground command so the
+                          next restart restores plain shells.
+  mode                    Read or set what a restart does with your sessions.
+
+  See 'agtermctl help restore <subcommand>' for detailed help.
+";
+
+const RESTORE_CAPTURE_HELP: &str = "\
+OVERVIEW: Capture every pane's running command now, so a forced exit restores
+it.
+
+agterm captures the running commands when it quits, so an exit that never gets
+there leaves every pane restoring a plain shell: a force quit, a crash, a hard
+reset, a power loss. This runs the same capture on demand, app-global across
+every open window, and prints how many panes had a command to capture.
+Consumption is unchanged: the next launch arms each captured command once and
+clears it.
+
+A capture is only as fresh as its last run, so a pager or a build that has
+finished since still re-runs after a crash. \"restore clear\" drops every
+captured command, and restore-denylist.conf in the config directory keeps a
+named program from re-running at all.
+
+Typed at a prompt it records ITSELF: while it runs it is that pane's foreground
+process, so that pane comes back running the capture command. Bind it or run it
+from a scheduled job rather than by hand; \"restore clear\" is app-global, so it
+is no per-pane undo.
+
+This command is available only when this launch is in rerun mode. In
+fresh-shell or live mode it fails and names the active mode.
+
+USAGE: agtermctl restore capture [--socket <socket>] [--json]
+
+OPTIONS:
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  -h, --help              Show help information.
+
+";
+
+const RESTORE_CLEAR_HELP: &str = "\
+OVERVIEW: Clear every session's saved foreground command so the next restart
+restores plain shells.
+
+This is app-global and CAPTURE-scoped: it drops the foreground commands agterm
+captured at quit, across every open window, and leaves per-session
+restore-command overrides alone.
+
+Not to be confused with `agtermctl session restore --clear`, which is
+per-session and OVERRIDE-scoped: it drops one pane's pinned command so that
+pane goes back to auto-capture.
+
+USAGE: agtermctl restore clear [--socket <socket>] [--json]
+
+OPTIONS:
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  -h, --help              Show help information.
+
+";
+
+const RESTORE_MODE_HELP: &str = "\
+OVERVIEW: Read or set what a restart does with your sessions.
+
+With no argument this reports the policy: what settings hold for the next
+launch, what THIS launch asked for, and what it actually got. The two requested
+values differ once the mode has been changed since this instance started, which
+is exactly when a caller is confused about why nothing happened.
+
+Setting one writes it for the NEXT launch. This process keeps the mode it
+started with, and that is not a shortcut: a pane is wrapped in a zmx daemon or
+not at the moment it is created, so no setting can retrofit a shell that is
+already running.
+
+fresh shells (none) re-spawns each pane in its saved directory. re-run (rerun)
+starts the command each pane had at the last clean quit. live keeps the actual
+processes alive.
+
+Switching away from live and restarting ends every detached live process in
+this state directory. If live was requested but could not be used, the reason
+is reported here.
+
+USAGE: agtermctl restore mode [<mode>] [--socket <socket>] [--json]
+
+ARGUMENTS:
+  <mode>                  none|rerun|live. Omit to read the current policy.
+
+OPTIONS:
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  -h, --help              Show help information.
+
+";
+
+#[test]
+fn restore_help_in_the_argument_parser_layout() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], &str); 6] = [
+        (&["restore", "--help"], RESTORE_HELP),
+        (&["restore"], RESTORE_HELP),
+        (&["help", "restore"], RESTORE_HELP),
+        (&["restore", "capture", "--help"], RESTORE_CAPTURE_HELP),
+        (&["restore", "clear", "--help"], RESTORE_CLEAR_HELP),
+        (&["help", "restore", "mode"], RESTORE_MODE_HELP),
+    ];
+    for (args, help) in cases {
+        assert_eq!(
+            outcome(&run(dir.path(), &[], args)?),
+            (Some(0), help.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn restore_commands_send_their_request_and_print_the_reply() -> TestResult {
+    let dir = short_dir()?;
+    let status = serde_json::json!({
+        "configured": "live",
+        "requestedAtLaunch": "rerun",
+        "active": "rerun",
+        "restartRequired": true,
+    });
+    let cases: [(&[&str], serde_json::Value, serde_json::Value, &str); 4] = [
+        (
+            &["restore", "capture"],
+            serde_json::json!({"cmd": "restore.capture"}),
+            serde_json::json!({"count": 2, "text": "captured 2 panes"}),
+            "captured 2 panes\n",
+        ),
+        (
+            &["restore", "clear"],
+            serde_json::json!({"cmd": "restore.clear"}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+        (
+            &["restore", "mode"],
+            serde_json::json!({"cmd": "restore.mode"}),
+            serde_json::json!({"restore": status}),
+            "configured: live (next launch)\nthis launch: requested rerun, active rerun\nrestart agterm to apply the \
+             configured mode\n",
+        ),
+        (
+            &["restore", "mode", "live"],
+            serde_json::json!({"cmd": "restore.mode", "args": {"mode": "live"}}),
+            serde_json::json!({"restore": status}),
+            "configured: live (next launch)\nthis launch: requested rerun, active rerun\nrestart agterm to apply the \
+             configured mode\n",
+        ),
+    ];
+    for (at, (args, expected, result, stdout)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("{at}.sock"));
+        let _server = scripted(&socket, expected, result)?;
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(0), stdout.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    let socket = dir.path().join("json.sock");
+    let _server = scripted(
+        &socket,
+        serde_json::json!({"cmd": "restore.mode"}),
+        serde_json::json!({"restore": status}),
+    )?;
+    let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, &["restore", "mode", "--json"])?);
+    assert_eq!((code, stderr.as_str()), (Some(0), ""));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stdout)?,
+        serde_json::json!({"ok": true, "result": {"restore": status}})
+    );
+    let socket = dir.path().join("refuse.sock");
+    let _server = serve(&socket, (), |(), _| {
+        Response::failure("restore capture requires rerun mode; the active mode is live").into()
+    })?;
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &["restore", "capture"])?),
+        (
+            Some(1),
+            String::new(),
+            "error: restore capture requires rerun mode; the active mode is live\n".to_owned()
+        )
+    );
+    Ok(())
+}
+
+#[test]
+fn restore_usage_errors_come_before_connecting() -> TestResult {
+    let dir = short_dir()?;
+    // nothing listens here: a connection attempt would exit 1, not 64
+    let socket = dir.path().join("agterm.sock");
+    let cases: [(&[&str], &str); 5] = [
+        (
+            &["restore", "mode", "fresh"],
+            "Error: mode must be none, rerun, or live\nUsage: agtermctl restore mode [<mode>] [--socket <socket>] \
+             [--json]\n  See 'agtermctl restore mode --help' for more information.\n",
+        ),
+        (&["restore", "mode", "live", "--window", "w1"], "Error: "),
+        (&["restore", "capture", "--window", "w1"], "Error: "),
+        (&["restore", "clear", "--target", "s1"], "Error: "),
+        (&["restore", "bogus"], "Error: "),
     ];
     for (args, prefix) in cases {
         let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, args)?);

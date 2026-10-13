@@ -540,6 +540,54 @@ impl ProcessLauncher for FakeProcessLauncher {
     }
 }
 
+/// An in-memory process table: the processes a test put in it.
+#[derive(Debug, Default)]
+pub struct FakeProcessTable {
+    processes: std::cell::RefCell<Vec<(crate::ProcessStat, Option<Vec<String>>)>>,
+}
+
+impl FakeProcessTable {
+    /// Adds process `stat` with `argv` (`None` for one whose argv cannot be read), replacing one with its pid.
+    pub fn insert(&self, stat: crate::ProcessStat, argv: Option<&[&str]>) {
+        let argv = argv.map(|argv| argv.iter().map(|arg| (*arg).to_owned()).collect());
+        let mut processes = self.processes.borrow_mut();
+        processes.retain(|(known, _)| known.pid != stat.pid);
+        processes.push((stat, argv));
+    }
+
+    /// Removes process `pid`, as when it exits.
+    pub fn remove(&self, pid: i32) {
+        self.processes.borrow_mut().retain(|(known, _)| known.pid != pid);
+    }
+}
+
+impl crate::ProcessTable for FakeProcessTable {
+    fn argv(&self, pid: i32) -> Option<Vec<String>> {
+        self.processes
+            .borrow()
+            .iter()
+            .find(|(stat, _)| stat.pid == pid)
+            .and_then(|(_, argv)| argv.clone())
+    }
+
+    fn stat(&self, pid: i32) -> Option<crate::ProcessStat> {
+        self.processes
+            .borrow()
+            .iter()
+            .find(|(stat, _)| stat.pid == pid)
+            .map(|(stat, _)| *stat)
+    }
+
+    fn group(&self, pgrp: i32) -> Vec<crate::ProcessStat> {
+        self.processes
+            .borrow()
+            .iter()
+            .filter(|(stat, _)| stat.pgrp == pgrp)
+            .map(|(stat, _)| *stat)
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

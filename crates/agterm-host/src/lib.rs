@@ -4,6 +4,7 @@
 //! - [`Surface`]: one live terminal (libghostty in a widget), owned on the main thread.
 //! - [`SessionHost`]: the daemons that keep live sessions alive across app restarts (zmx).
 //! - [`ProcessLauncher`]: starts helper processes (overlay programs, hooks, custom commands).
+//! - [`ProcessTable`]: reads the process table (a pane's foreground program for the tree and the restore capture).
 //!
 //! In-memory fakes of each live in [`fakes`] behind the `fakes` feature.
 
@@ -229,4 +230,29 @@ pub trait ProcessLauncher: Send + Sync {
     ///
     /// The process could not be started.
     fn launch(&self, spec: &LaunchSpec, on_exit: ExitHandler) -> io::Result<LaunchedProcess>;
+}
+
+/// One process as the process table reports it: its id, its parent's, its process group's and its session's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessStat {
+    pub pid: i32,
+    pub ppid: i32,
+    /// The process group id.
+    pub pgrp: i32,
+    /// The session id: the pid of the session leader (a terminal's spawned child).
+    pub session: i32,
+}
+
+/// Reads the process table for a pane's foreground process (upstream's `sysctl` reads in
+/// `Ghostty/ForegroundProcess.swift`). Only ever asked about processes of this app's own terminals.
+pub trait ProcessTable {
+    /// The argv of process `pid`, each argument decoded lossily (an undecodable byte becomes U+FFFD); `None` when the
+    /// process is gone, has no argv (a zombie, a kernel thread) or cannot be read.
+    fn argv(&self, pid: i32) -> Option<Vec<String>>;
+
+    /// The ids of process `pid`; `None` when it is gone or cannot be read.
+    fn stat(&self, pid: i32) -> Option<ProcessStat>;
+
+    /// Every live member of process group `pgrp`; empty when none can be read.
+    fn group(&self, pgrp: i32) -> Vec<ProcessStat>;
 }

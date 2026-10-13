@@ -79,6 +79,9 @@ pub struct ControlResult {
     /// `surface.cursor`: the cursor's column.
     #[serde(default)]
     pub cursor: Option<ControlCursor>,
+    /// `restore.mode`: the restore-mode policy (`zmx.list` repeats it as its header).
+    #[serde(default)]
+    pub restore: Option<ControlRestoreStatus>,
     /// `session.overlay.open --html|--url`: the page opened, which `session.overlay.result --page` reads back.
     #[serde(default, rename = "pageID")]
     pub page_id: Option<String>,
@@ -88,6 +91,25 @@ pub struct ControlResult {
     /// `session.restart`: the replaced shells.
     #[serde(default)]
     pub restart: Option<ControlRestartReceipt>,
+}
+
+/// The restore-mode policy `restore.mode` reads (upstream's `ControlRestoreStatus`). The modes travel as raw strings, so
+/// a client reading a mode a newer app wrote prints it rather than mistaking it for `none`.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlRestoreStatus {
+    /// What `settings.json` holds, and so what the next launch requests.
+    pub configured: String,
+    /// What this process requested at launch.
+    pub requested_at_launch: String,
+    /// What this launch got: `none` when live was requested but unavailable.
+    pub active: String,
+    /// `configured` differs from `requestedAtLaunch`.
+    pub restart_required: bool,
+    /// Why live fell back; present only when live was requested and refused.
+    #[serde(default)]
+    pub unavailable_reason: Option<String>,
 }
 
 /// What a successful `session.restart` proves: the pane's shell was replaced (upstream's `ControlRestartReceipt`). The
