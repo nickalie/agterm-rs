@@ -505,3 +505,129 @@ impl crate::Core {
             .is_some_and(|window| self.modal_pending(window))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{AskAlignment, AskStyle};
+
+    fn pick(id: &str) -> PendingPick {
+        PendingPick {
+            id: id.to_owned(),
+            items: Vec::new(),
+            prompt: None,
+            query: None,
+            allow_custom: true,
+            selection: None,
+        }
+    }
+
+    fn ask(id: &str) -> PendingAsk {
+        PendingAsk {
+            id: id.to_owned(),
+            title: "T".to_owned(),
+            message: None,
+            buttons: Vec::new(),
+            default_id: None,
+            destructive_id: None,
+            style: AskStyle::Gui,
+            align: AskAlignment::Right,
+            width: None,
+            anchor: None,
+        }
+    }
+
+    fn outcome(result: ControlAskOutcome) -> ControlAskResult {
+        ControlAskResult::outcome(result)
+    }
+
+    /// Upstream's `PickTests.retainedResultsStopAtTheLimitDroppingTheOldest`, app-wide: windows answer their picks
+    /// interleaved and close in the reverse order, and the newest answers survive whichever window brought them.
+    #[test]
+    fn retained_results_keep_the_newest_answers_across_windows() {
+        let mut modals = Modals::default();
+        let windows: Vec<Uuid> = (0..5).map(|_| Uuid::new_v4()).collect();
+        // round `round`'s pick of window `w` is answer number `round * 5 + w`
+        for round in 0..WINDOW_RETAINED_PICKS {
+            for (w, window) in windows.iter().enumerate() {
+                modals.open_pick(*window, pick(&format!("pick-{round}-{w}"))).unwrap();
+                modals.resolve_pick(*window, PendingPick::custom(&format!("{}", round * 5 + w)));
+            }
+        }
+        for window in windows.iter().rev() {
+            modals.unregister(*window);
+        }
+        assert_eq!(modals.retained_picks.len(), APP_RETAINED_PICKS);
+        // 40 answers, 32 kept: the 8 oldest (round 0, and round 1 of windows 0..3) are gone
+        for round in 0..WINDOW_RETAINED_PICKS {
+            for (w, window) in windows.iter().enumerate() {
+                let id = format!("pick-{round}-{w}");
+                let answer = round * 5 + w;
+                let expected = (answer >= 8).then(|| (*window, PendingPick::custom(&format!("{answer}"))));
+                assert_eq!(modals.retained_pick(&id), expected, "{id}");
+            }
+        }
+    }
+
+    /// Upstream's `AskTests.registryEvictsByResolutionOrderAndNeverEvictsPendingAsks`.
+    #[test]
+    fn the_registry_evicts_by_resolution_order_and_never_a_pending_ask() {
+        let mut modals = Modals::default();
+        let windows: Vec<Uuid> = (0..RETAINED_ASKS + 3).map(|_| Uuid::new_v4()).collect();
+        for (index, window) in windows.iter().enumerate() {
+            modals.open_window_ask(*window, ask(&format!("ask-{index}"))).unwrap();
+        }
+        for (index, window) in windows.iter().enumerate().skip(1).rev() {
+            modals.resolve_window_ask(*window, outcome(ControlAskOutcome::Cancelled));
+            assert_eq!(modals.ask_owner(&format!("ask-{index}")), None, "ask-{index} ended");
+        }
+        assert_eq!(modals.ask_owner("ask-0"), Some(AskOwner::Window(windows[0])));
+        assert_eq!(modals.window_ask(windows[0]).map(|ask| ask.id.as_str()), Some("ask-0"));
+        assert_eq!(
+            modals.finished_ask("ask-0"),
+            None,
+            "a pending ask reads through its owner"
+        );
+        for (index, window) in windows.iter().enumerate().take(RETAINED_ASKS + 1).skip(1) {
+            assert_eq!(
+                modals.finished_ask(&format!("ask-{index}")),
+                Some((outcome(ControlAskOutcome::Cancelled), *window)),
+                "ask-{index}"
+            );
+        }
+        for index in [RETAINED_ASKS + 1, RETAINED_ASKS + 2] {
+            assert_eq!(
+                modals.finished_ask(&format!("ask-{index}")),
+                None,
+                "ask-{index} resolved first"
+            );
+        }
+    }
+
+    /// Upstream's `AskTests.registryRejectsDuplicateIDsWrongWindowsAndNonterminalRetention`.
+    #[test]
+    fn the_registry_rejects_duplicates_wrong_windows_and_nonterminal_outcomes() {
+        let mut modals = Modals::default();
+        let window = Uuid::new_v4();
+        modals.open_window_ask(window, ask("original")).unwrap();
+        assert!(!modals.register_ask("original".to_owned(), AskOwner::Window(Uuid::new_v4())));
+        assert_eq!(modals.ask_owner("original"), Some(AskOwner::Window(window)));
+        modals.retain_ask("original", outcome(ControlAskOutcome::Pending), window);
+        modals.retain_ask("original", outcome(ControlAskOutcome::Cancelled), Uuid::new_v4());
+        assert_eq!(
+            modals.ask_owner("original"),
+            Some(AskOwner::Window(window)),
+            "still live"
+        );
+        assert_eq!(modals.finished_ask("original"), None);
+
+        modals.retain_ask("original", outcome(ControlAskOutcome::Escaped), window);
+        modals.retain_ask("original", outcome(ControlAskOutcome::Cancelled), window);
+        assert!(!modals.register_ask("original".to_owned(), AskOwner::Window(window)));
+        assert_eq!(
+            modals.finished_ask("original"),
+            Some((outcome(ControlAskOutcome::Escaped), window)),
+            "the first terminal outcome wins"
+        );
+    }
+}

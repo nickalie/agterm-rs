@@ -85,8 +85,8 @@ impl Core {
     }
 
     /// The user's toggle (a keybinding or a titlebar button, upstream's `toggle()`): hides a shown panel, else shows
-    /// one that dismisses itself when it loses focus. Refused with no open window, as upstream's `canShow`. Commit
-    /// afterwards.
+    /// one that dismisses itself when it loses focus. Refused with no open window, as upstream's `canShow`, or while
+    /// the frontmost window's modal slot is held. Commit afterwards.
     pub fn toggle_quick_terminal(&mut self) {
         if self.quick.visible {
             self.quick.hide();

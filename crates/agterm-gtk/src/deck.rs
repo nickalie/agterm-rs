@@ -463,7 +463,7 @@ impl Deck {
         }
         if let Some(grid) = &grid {
             let store = window.and_then(|window| core.library().store(window));
-            self.show_grid(store, grid);
+            self.show_grid(store, grid, modal);
             return;
         }
         if self.in_grid {
@@ -475,8 +475,9 @@ impl Deck {
     }
 
     /// Shows the dashboard: every member page at once over the backdrop (a page shows, but takes no input: the chrome
-    /// does), the chrome with the keyboard, and the member terminals at the grid's font size.
-    fn show_grid(&mut self, store: Option<&AppStore>, grid: &GridModel) {
+    /// does), the chrome with the keyboard unless the window's picker or GUI ask holds it (`modal`), and the member
+    /// terminals at the grid's font size.
+    fn show_grid(&mut self, store: Option<&AppStore>, grid: &GridModel, modal: bool) {
         for (id, page) in &self.pages {
             let widget = page.panes.widget();
             if grid.hosts(*id) {
@@ -490,7 +491,9 @@ impl Deck {
         self.placeholder.set_visible(false);
         self.overlay.add_css_class(dashboard::BACKDROP_CLASS);
         self.chrome.update(&grid.chrome_cells(store));
-        self.chrome.grab_focus();
+        if !modal {
+            self.chrome.grab_focus();
+        }
         let terminals = store
             .map(|store| self.member_terminals(store, grid))
             .unwrap_or_default();
@@ -1238,6 +1241,58 @@ mod tests {
         walk.core.resolve_pick(walk.window, &id, cancelled);
         walk.settle();
         assert!(split.is_focus(), "the shown pane gets the keyboard back");
+        window.set_child(None::<&gtk::Widget>);
+        window.destroy();
+    }
+
+    #[test]
+    fn a_window_modal_holds_the_keyboard_over_the_dashboard() {
+        crate::gtk_test::on_gtk_thread(modal_holds_the_keyboard_over_the_dashboard);
+    }
+
+    /// A picker opened over the dashboard keeps the keyboard through every later reconcile (a blocking `pick` polls,
+    /// and each poll settles); once it is answered the dashboard's chrome takes the keyboard back.
+    fn modal_holds_the_keyboard_over_the_dashboard() {
+        let mut walk = Walk::split();
+        let window = gtk::Window::new();
+        window.set_child(Some(walk.deck.widget()));
+        walk.settle();
+        let dashboard = Request {
+            cmd: Command::Dashboard,
+            target: None,
+            args: Some(Args {
+                targets: Some(vec![pane_env::uuid_string(walk.session)]),
+                ..Args::default()
+            }),
+        };
+        assert!(walk.core.dispatch(&dashboard).ok);
+        walk.settle();
+        let chrome = walk.deck.chrome().widget().clone();
+        assert!(chrome.is_focus(), "the open dashboard's chrome holds the keyboard");
+        let open = Request {
+            cmd: Command::Pick(agterm_proto::command::PickCmd::Open),
+            target: None,
+            args: Some(Args {
+                items: Some(vec![agterm_proto::PickItem {
+                    id: "a".to_owned(),
+                    label: "Alpha".to_owned(),
+                    subtitle: None,
+                }]),
+                ..Args::default()
+            }),
+        };
+        let response = walk.core.dispatch(&open);
+        assert!(response.ok, "{response:?}");
+        // the picker takes the keyboard (the window does that; here nothing holds it)
+        GtkWindowExt::set_focus(&window, None::<&gtk::Widget>);
+        walk.settle();
+        walk.settle();
+        assert!(!chrome.is_focus(), "the chrome leaves the keyboard to the picker");
+        let id = walk.core.modal_slot(walk.window).unwrap().pending().unwrap().id.clone();
+        let cancelled = agterm_proto::ControlPickResult::outcome(agterm_proto::ControlPickOutcome::Cancelled);
+        walk.core.resolve_pick(walk.window, &id, cancelled);
+        walk.settle();
+        assert!(chrome.is_focus(), "the chrome gets the keyboard back");
         window.set_child(None::<&gtk::Widget>);
         window.destroy();
     }

@@ -270,7 +270,7 @@ fn a_pick_hides_the_quick_terminal_pauses_auto_follow_and_refuses_its_show() {
 }
 
 #[test]
-fn a_window_keeps_eight_results_and_the_app_thirty_two() {
+fn a_window_keeps_eight_results_readable_after_it_closes() {
     let mut fixture = Fixture::new(0);
     let window = fixture.window;
     let ids: Vec<String> = (0..9)

@@ -765,7 +765,7 @@ pub fn shown_scope(session: &Session, shown: bool) -> Option<AskScope> {
         return Some(AskScope::Session);
     }
     let pane = session.ask_target_pane()?;
-    (session.renders_overlay_pane(pane) && !session.scratch_active).then_some(AskScope::Pane(slot_of(pane)))
+    (session.renders_overlay_pane(pane) && !session.scratch_active).then_some(AskScope::Pane(Slot::of_overlay(pane)))
 }
 
 /// Whether a shown terminal ask takes the keyboard (upstream's `wantsFocus`): nothing else holds it and, for a pane
@@ -784,15 +784,6 @@ pub fn wants_focus(session: &Session, focus_blocked: bool) -> bool {
                 OverlayPane::Left
             }
         }
-    }
-}
-
-/// The slot a pane role is laid out at.
-#[must_use]
-pub fn slot_of(pane: OverlayPane) -> Slot {
-    match pane {
-        OverlayPane::Left => Slot::Primary,
-        OverlayPane::Right => Slot::Split,
     }
 }
 

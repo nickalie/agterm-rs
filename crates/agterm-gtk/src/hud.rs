@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use agterm_core::HUD_WINDOW_PADDING as WINDOW_PADDING;
 use agterm_core::hud::{Band, HudPosition};
-use agterm_core::model::{BackgroundWatermark, OverlayPane, OverlaySlot, Session, WatermarkKind};
+use agterm_core::model::{BackgroundWatermark, OverlaySlot, Session, WatermarkKind};
 use agterm_core::pane_env::{self, SessionPane};
 use agterm_core::watermark;
 use agterm_ghostty::input::{Mods, MouseState};
@@ -171,14 +171,6 @@ pub struct HudPlacement {
     pub scope: Option<Slot>,
 }
 
-/// The slot a pane role is laid out at.
-fn slot_of(pane: OverlayPane) -> Slot {
-    match pane {
-        OverlayPane::Left => Slot::Primary,
-        OverlayPane::Right => Slot::Split,
-    }
-}
-
 // MARK: - the layer
 
 /// The panel's framed layer on a page and the terminal it holds.
@@ -311,7 +303,7 @@ pub fn sync_page(
     let Some(style) = PanelStyle::of(&session.overlay) else {
         return;
     };
-    let scope = session.hud_target_pane().map(slot_of);
+    let scope = session.hud_target_pane().map(Slot::of_overlay);
     // a scoped panel mounts only while its pane is laid out (upstream's `hudCanMount`)
     let laid_out = plan.is_some_and(|plan| scope.is_none_or(|slot| plan.shows(slot)));
     panes.place_hud(Some(HudPlacement { style, scope }));

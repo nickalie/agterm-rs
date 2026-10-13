@@ -593,17 +593,19 @@ mod tests {
         let seen = Rc::clone(&answers);
         let mut pending = pick(true);
         pending.query = Some("new".to_owned());
+        // the caller's row is not the filter's first, so the seeding is told apart from the first-row fallback
+        pending.selection = Some("nw".to_owned());
         let picker = Picker::new(&pending, 0.0, move |result| seen.borrow_mut().push(result));
         assert_eq!(
             picker.state.borrow().rows,
             [PickRow::Item(2), PickRow::Item(3)],
             "the prefill filters"
         );
-        assert_eq!(picker.state.borrow().selection, 0, "the caller's row is shown first");
+        assert_eq!(picker.state.borrow().selection, 1, "the caller's row is selected");
         let selected = || picker.state.borrow().list.selected_row().map(|row| row.index());
-        assert_eq!(selected(), Some(0));
-        picker.state.borrow_mut().key(PickKey::Move(1));
         assert_eq!(selected(), Some(1));
+        picker.state.borrow_mut().key(PickKey::Move(-1));
+        assert_eq!(selected(), Some(0));
         picker.entry.set_text("zzz");
         assert_eq!(picker.state.borrow().rows.len(), 1, "the custom row");
         assert_eq!(selected(), Some(0), "an edit goes back to the first row");

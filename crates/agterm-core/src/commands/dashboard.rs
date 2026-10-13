@@ -301,7 +301,7 @@ impl Core {
 
     /// The GUI's dashboard toggle (upstream's `toggleDashboard`, `dashboard --mru --auto-size`): an open dashboard
     /// closes; a closed one opens over the window's most recently used sessions, auto-sized. Inert while the window is
-    /// zoomed and with no recent session.
+    /// zoomed, while its modal slot holds a picker or GUI ask, and with no recent session.
     pub fn toggle_dashboard(&mut self, window: Uuid) {
         if self.zoom_target(window).is_some() || self.modal_pending(window) {
             return;

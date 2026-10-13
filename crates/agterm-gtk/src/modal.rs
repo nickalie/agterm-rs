@@ -351,12 +351,6 @@ impl ModalFrame {
         }
         self.queue_allocate();
     }
-
-    /// The anchor the last layout placed the panel in.
-    #[must_use]
-    pub fn placed_anchor(&self) -> Option<Rect> {
-        self.imp().layout.borrow().placed
-    }
 }
 
 /// The rectangle of `widget` in `frame`'s coordinates while it is on screen.

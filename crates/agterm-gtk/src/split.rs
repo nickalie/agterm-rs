@@ -14,14 +14,14 @@
 //! While the window's dashboard is open the page lays out its member panes at their grid cells instead
 //! ([`PaneView::apply_grid`], cells from [`crate::dashboard::cell_rects`]), shown but view-only, and hides the rest.
 //!
-//! The HUD's layer sits above everything, added once ([`crate::hud`]); the stack places it in the bounds it is scoped
+//! The HUD's layer sits above the panes, added once ([`crate::hud`]); the stack places it in the bounds it is scoped
 //! to and reports the page's geometry to the model, which measures a HUD against it (upstream's `hudPaneFrames`).
 //! A terminal ask's layer sits above the HUD, added once too ([`crate::ask_dialog`]), placed over the whole page or
 //! the pane the ask covers.
 
 use agterm_core::hud::{HudPaneFrame, HudPaneFrames};
 use agterm_core::model::pane::{SPLIT_RATIO_DEFAULT, clamp_split_ratio};
-use agterm_core::model::{Session, SplitAxis, StatusPane};
+use agterm_core::model::{OverlayPane, Session, SplitAxis, StatusPane};
 use agterm_core::zoom::SurfaceId;
 use gtk::glib;
 use gtk::prelude::*;
@@ -55,6 +55,15 @@ impl Slot {
             StatusPane::Left => Self::Primary,
             StatusPane::Right => Self::Split,
             StatusPane::Scratch => Self::Scratch,
+        }
+    }
+
+    /// The slot an overlay's pane role (a HUD's or a terminal ask's) is laid out at.
+    #[must_use]
+    pub fn of_overlay(pane: OverlayPane) -> Self {
+        match pane {
+            OverlayPane::Left => Self::Primary,
+            OverlayPane::Right => Self::Split,
         }
     }
 }

@@ -492,7 +492,9 @@ impl WindowUi {
             None => None,
             Some(identity) => {
                 let session = core.library().store(self.window_id)?.session(anchor.session)?;
-                Some(crate::ask_dialog::slot_of(session.pane_role_for_identity(identity)?))
+                Some(crate::split::Slot::of_overlay(
+                    session.pane_role_for_identity(identity)?,
+                ))
             }
         };
         Some(AnchorTarget::Page { stack, pane })
