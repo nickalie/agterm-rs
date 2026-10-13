@@ -404,11 +404,13 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/catalog.yaml");
         let catalog: serde_norway::Value = serde_norway::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let cli = catalog["cli"].as_mapping().unwrap();
-        // the zmx group comes with Live and remote sessions (plan Tasks 28 and 29), which drop this exception
+        // `zmx tree`/`zmx present` come with remote sessions (plan Task 29) and `zmx attach` with Task 30, which drop
+        // this exception
+        let not_yet = ["zmx tree", "zmx present", "zmx attach"];
         let expected: std::collections::BTreeSet<String> = cli
             .keys()
             .map(|name| name.as_str().unwrap().to_owned())
-            .filter(|name| !name.starts_with("zmx "))
+            .filter(|name| !not_yet.contains(&name.as_str()))
             .collect();
         let mut ours = std::collections::BTreeSet::new();
         catalog_names(&Agtermctl::command(), &[], &mut ours);
