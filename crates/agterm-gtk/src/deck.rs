@@ -544,8 +544,8 @@ impl Deck {
     /// Shows the page of `shown` alone and gives its focused pane the keyboard when the page or that pane changed
     /// (upstream focuses the active session after a select or a create, and the focused pane within it), or when
     /// `refocus` (a `session.focus` asked for it, wherever focus sits now); with none shown the focus leaves the
-    /// hidden terminals. While the window's picker or GUI ask is up (`modal`) nothing is focused, and the next show
-    /// after it focuses again.
+    /// hidden terminals. While the window's picker or GUI ask is up (`modal`) nothing is focused or unfocused (the
+    /// modal holds the keyboard, also when the window's last session goes), and the next show after it focuses again.
     fn show(&mut self, shown: Option<Uuid>, refocus: bool, modal: bool) {
         for (id, page) in &self.pages {
             let visible = Some(*id) == shown;
@@ -560,7 +560,10 @@ impl Deck {
         self.shown = shown;
         let Some(id) = shown else {
             self.focused = None;
-            if changed && let Some(root) = self.overlay.root() {
+            if changed
+                && !modal
+                && let Some(root) = self.overlay.root()
+            {
                 root.set_focus(None::<&gtk::Widget>);
             }
             return;
@@ -1293,6 +1296,42 @@ mod tests {
         walk.core.resolve_pick(walk.window, &id, cancelled);
         walk.settle();
         assert!(chrome.is_focus(), "the chrome gets the keyboard back");
+        window.set_child(None::<&gtk::Widget>);
+        window.destroy();
+    }
+
+    #[test]
+    fn a_window_modal_keeps_the_keyboard_when_the_last_session_goes() {
+        crate::gtk_test::on_gtk_thread(modal_keeps_the_keyboard_when_the_last_session_goes);
+    }
+
+    /// The window's last session going while its picker is up leaves the picker the keyboard (the deck drops focus
+    /// to nothing only when no modal holds it); a session shown after the picker went gets the keyboard again.
+    fn modal_keeps_the_keyboard_when_the_last_session_goes() {
+        let mut walk = Walk::split();
+        let window = gtk::Window::new();
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let picker = gtk::Button::with_label("picker");
+        picker.set_focusable(true);
+        content.append(walk.deck.widget());
+        content.append(&picker);
+        window.set_child(Some(&content));
+        walk.settle();
+        let split = walk.probe().area(&walk.split);
+        assert!(split.is_focus());
+        assert!(
+            picker.grab_focus(),
+            "the picker takes the keyboard (the window does that)"
+        );
+        walk.deck.show(None, false, true);
+        assert!(picker.is_focus(), "the picker keeps the keyboard with no session shown");
+        walk.deck.show(Some(walk.session), false, false);
+        assert!(split.is_focus(), "the next shown session gets the keyboard");
+        walk.deck.show(None, false, false);
+        assert!(
+            !split.is_focus() && !picker.is_focus(),
+            "with no modal the focus leaves the hidden terminals"
+        );
         window.set_child(None::<&gtk::Widget>);
         window.destroy();
     }
