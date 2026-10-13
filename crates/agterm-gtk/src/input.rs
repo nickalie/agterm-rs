@@ -6,7 +6,8 @@
 
 use std::collections::HashSet;
 
-use agterm_ghostty::input::{KeyAction, Mods, MouseButton};
+use agterm_core::keystrokes::KeystrokeSegment;
+use agterm_ghostty::input::{KeyAction, KeyEvent, Mods, MouseButton};
 use gtk::gdk;
 
 /// GDK modifier state as libghostty's modifiers. Lock is taken as Caps Lock, as ghostty does.
@@ -170,6 +171,53 @@ pub fn remapped_keycode(keycode: u32, keyval: gdk::Key, is_modifier: bool) -> u3
         return 0;
     }
     keycode
+}
+
+/// The XKB keycode of Return (`KEYVAL_KEYCODES`), the key a synthetic Return presses.
+pub const RETURN_KEYCODE: u32 = 36;
+
+/// A text run typed as one key press with no physical key (keycode 0): libghostty writes the text as typed, with no
+/// key encoding. An input method's commit outside a key event and `session.type`'s runs go in this way.
+#[must_use]
+pub fn text_key(text: &str) -> KeyEvent {
+    KeyEvent {
+        action: KeyAction::Press,
+        mods: Mods::empty(),
+        consumed_mods: Mods::empty(),
+        keycode: 0,
+        text: Some(text.to_owned()),
+        unshifted_codepoint: 0,
+        composing: false,
+    }
+}
+
+/// A synthetic Return keypress, press then release, through the keyboard's own path so the program sees Enter
+/// (upstream's `sendReturn`, with Linux's code for the key).
+#[must_use]
+pub fn return_keys() -> [KeyEvent; 2] {
+    let press = KeyEvent {
+        action: KeyAction::Press,
+        mods: Mods::empty(),
+        consumed_mods: Mods::empty(),
+        keycode: RETURN_KEYCODE,
+        text: None,
+        unshifted_codepoint: 0,
+        composing: false,
+    };
+    let release = KeyEvent {
+        action: KeyAction::Release,
+        ..press.clone()
+    };
+    [press, release]
+}
+
+/// The key events `session.type` sends for one segment of its payload.
+#[must_use]
+pub fn segment_keys(segment: &KeystrokeSegment) -> Vec<KeyEvent> {
+    match segment {
+        KeystrokeSegment::Text(run) => vec![text_key(run)],
+        KeystrokeSegment::Return => return_keys().into(),
+    }
 }
 
 /// Which keys are down, to tell a repeat from a press: GTK delivers both as `key-pressed`.
@@ -408,5 +456,41 @@ mod tests {
         assert_eq!(scroll_delta(0.0, 1.0, 1.0, false), (-0.0, -1.0));
         assert_eq!(scroll_delta(-1.0, 0.0, 2.0, false), (2.0, -0.0));
         assert_eq!(scroll_delta(0.5, -2.0, 2.0, true), (-10.0, 40.0));
+    }
+
+    #[test]
+    fn a_synthetic_return_is_the_return_key_pressed_and_released() {
+        assert!(KEYVAL_KEYCODES.contains(&(gdk::Key::Return, RETURN_KEYCODE)));
+        let [press, release] = return_keys();
+        assert_eq!(press.action, KeyAction::Press);
+        assert_eq!(release.action, KeyAction::Release);
+        for key in [&press, &release] {
+            assert_eq!(key.keycode, RETURN_KEYCODE);
+            assert_eq!(key.text, None);
+            assert_eq!(key.mods, Mods::empty());
+            assert_eq!(key.consumed_mods, Mods::empty());
+            assert_eq!(key.unshifted_codepoint, 0);
+            assert!(!key.composing);
+        }
+    }
+
+    #[test]
+    fn typed_text_is_one_keyless_press_per_run() {
+        let key = text_key("echo hi");
+        assert_eq!(key.action, KeyAction::Press);
+        assert_eq!(key.keycode, 0);
+        assert_eq!(key.text.as_deref(), Some("echo hi"));
+        assert_eq!(key.mods, Mods::empty());
+        assert!(!key.composing);
+    }
+
+    #[test]
+    fn segments_map_onto_their_key_events() {
+        let keys: Vec<KeyEvent> = agterm_core::keystrokes::split("ls\npwd")
+            .iter()
+            .flat_map(segment_keys)
+            .collect();
+        let [press, release] = return_keys();
+        assert_eq!(keys, [text_key("ls"), press, release, text_key("pwd")]);
     }
 }

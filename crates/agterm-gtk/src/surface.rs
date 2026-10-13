@@ -24,8 +24,15 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
-use agterm_ghostty::input::{KeyAction, KeyEvent, Mods, MouseState, ScrollMods};
-use agterm_ghostty::{ClipboardContent, MouseShape, PendingRequest, Surface, SurfaceKey, SurfaceOptions};
+use agterm_core::keystrokes::{self, SUBMIT_GAP};
+use agterm_core::link_policy::ClickOrigin;
+use agterm_core::model::SearchReport;
+use agterm_core::persist::settings::LinkOpenMode;
+use agterm_ghostty::input::{KeyAction, KeyEvent, MouseState, ScrollMods};
+use agterm_ghostty::{
+    ClipboardContent, MouseShape, PendingRequest, PointTag, Selection, Surface, SurfaceKey, SurfaceOptions,
+};
+use agterm_host::TextScope;
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 
@@ -69,6 +76,7 @@ struct PointerState {
 
 type ExitHandler = Box<dyn FnOnce()>;
 type ReportHandler = Box<dyn Fn(&str)>;
+type SearchHandler = Box<dyn Fn(&SearchReport)>;
 
 struct Inner {
     key: SurfaceKey,
@@ -83,7 +91,12 @@ struct Inner {
     pwd: RefCell<Option<String>>,
     on_title: RefCell<Vec<ReportHandler>>,
     on_pwd: RefCell<Vec<ReportHandler>>,
+    on_search: RefCell<Vec<SearchHandler>>,
+    on_open_url: RefCell<Vec<ReportHandler>>,
     on_exit: RefCell<Option<ExitHandler>>,
+    /// The input method is being reset to end a composition this side already committed or dropped: what it emits
+    /// meanwhile is ignored (upstream's `committingComposition`).
+    resetting_im: Cell<bool>,
     exit_handled: Cell<bool>,
     /// The first frame was drawn (logged once).
     drew: Cell<bool>,
@@ -157,7 +170,10 @@ impl TerminalSurface {
             pwd: RefCell::new(None),
             on_title: RefCell::new(Vec::new()),
             on_pwd: RefCell::new(Vec::new()),
+            on_search: RefCell::new(Vec::new()),
+            on_open_url: RefCell::new(Vec::new()),
             on_exit: RefCell::new(None),
+            resetting_im: Cell::new(false),
             exit_handled: Cell::new(false),
             drew: Cell::new(false),
             deck_visible: Cell::new(true),
@@ -196,6 +212,18 @@ impl TerminalSurface {
     /// Adds a handler called with each working directory the shell reports (OSC 7).
     pub fn connect_pwd(&self, handler: impl Fn(&str) + 'static) {
         self.inner.on_pwd.borrow_mut().push(Box::new(handler));
+    }
+
+    /// Adds a handler called with each report libghostty makes on this terminal's search (start, end, match count,
+    /// selected match).
+    pub fn connect_search(&self, handler: impl Fn(&SearchReport) + 'static) {
+        self.inner.on_search.borrow_mut().push(Box::new(handler));
+    }
+
+    /// Adds a handler called with each link clicked in the terminal (`GHOSTTY_ACTION_OPEN_URL`), which then owns
+    /// opening it. A terminal with none opens links as a sessionless one (see [`TerminalSurface::open_url`]).
+    pub fn connect_open_url(&self, handler: impl Fn(&str) + 'static) {
+        self.inner.on_open_url.borrow_mut().push(Box::new(handler));
     }
 
     /// Called once when the terminal's process ends.
@@ -435,6 +463,24 @@ impl TerminalSurface {
         *self.inner.pwd.borrow_mut() = Some(pwd);
     }
 
+    pub fn report_search(&self, report: &SearchReport) {
+        for handler in self.inner.on_search.borrow().iter() {
+            handler(report);
+        }
+    }
+
+    /// A link clicked in the terminal goes to the open-url handlers, or, with none connected, through the link policy
+    /// as a click from a terminal with no session (upstream's `.quick` origin: the browser, whatever the mode).
+    pub fn open_url(&self, url: &str) {
+        let handlers = self.inner.on_open_url.borrow();
+        if handlers.is_empty() {
+            ghostty_app::follow_link(url, LinkOpenMode::Browser, ClickOrigin::Quick);
+        }
+        for handler in handlers.iter() {
+            handler(url);
+        }
+    }
+
     pub fn set_mouse_shape(&self, shape: MouseShape) {
         self.inner.pointer.borrow_mut().shape = Some(shape);
         self.apply_cursor();
@@ -504,6 +550,93 @@ impl TerminalSurface {
         }
     }
 
+    /// Types `text` into the terminal as keystrokes through the keyboard's path (upstream's `inject(text:)`), never as
+    /// a paste: `ghostty_surface_text`'s bracketed-paste wrapping would keep a trailing newline from submitting. Each
+    /// run is one key press carrying the text, each line ending a Return keypress, and the final Return after text
+    /// waits [`SUBMIT_GAP`] (a blocking sleep: a deferred Return could be overtaken by another injection or a
+    /// keystroke). A live composition is committed first. False, sending nothing, when the surface does not exist.
+    pub fn type_text(&self, text: &str) -> bool {
+        if !self.is_realized() {
+            return false;
+        }
+        // typing under a live composition would leave it to re-commit on the user's next key, after the injected text
+        self.commit_or_discard_composition();
+        let paced = keystrokes::paced(text);
+        for segment in &paced.head {
+            self.send_keys(&input::segment_keys(segment));
+        }
+        if paced.paced_return {
+            std::thread::sleep(SUBMIT_GAP);
+            self.send_keys(&input::return_keys());
+        }
+        true
+    }
+
+    fn send_keys(&self, keys: &[KeyEvent]) {
+        self.with_surface(|s| {
+            for key in keys {
+                let _ = s.send_key(key);
+            }
+        });
+    }
+
+    /// Ends a live input-method composition before input that does not come through it lands (upstream's
+    /// `commitOrDiscardComposition`): its text goes in as typed, an empty one is dropped, and the input method is
+    /// reset so it does not commit the same text again. A no-op unless this terminal is composing.
+    fn commit_or_discard_composition(&self) {
+        if !std::mem::take(&mut self.inner.keys.borrow_mut().composing) {
+            return;
+        }
+        let (preedit, _, _) = self.inner.im.preedit_string();
+        self.with_surface(|s| s.preedit(None));
+        if !preedit.is_empty() {
+            self.send_keys(&[input::text_key(&preedit)]);
+        }
+        self.inner.resetting_im.set(true);
+        self.inner.im.reset();
+        self.inner.resetting_im.set(false);
+    }
+
+    /// The terminal's text for `scope` (upstream's `readScreenText` without `lines`, which the core applies): the
+    /// viewport, or the screen with its scrollback, trailing blank rows included; empty for a blank screen. `None`
+    /// when the surface does not exist or the read failed.
+    pub fn read_text(&self, scope: TextScope) -> Option<String> {
+        let tag = match scope {
+            TextScope::Screen => PointTag::Viewport,
+            TextScope::All => PointTag::Screen,
+        };
+        self.with_surface(|s| s.read_text(Selection::whole(tag)))
+            .flatten()
+            .map(|read| read.text)
+    }
+
+    /// The selection's text; `None` with no or an empty selection, or no surface.
+    pub fn read_selection(&self) -> Option<String> {
+        self.with_surface(Surface::read_selection)
+            .flatten()
+            .map(|read| read.text)
+            .filter(|text| !text.is_empty())
+    }
+
+    /// The cursor's zero-based column (upstream's `readCursorColumn`, see [`agterm_ghostty::solve_cursor_column`]).
+    pub fn cursor_column(&self) -> Option<u32> {
+        self.with_surface(Surface::cursor_column).flatten()
+    }
+
+    /// Runs a libghostty binding action (upstream's `performBindingAction`); true when the surface exists, whatever
+    /// libghostty made of the action.
+    pub fn binding_action(&self, action: &str) -> bool {
+        self.with_surface(|s| {
+            let _ = s.binding_action(action);
+        })
+        .is_some()
+    }
+
+    /// The pid of the terminal's foreground process.
+    pub fn foreground_pid(&self) -> Option<u32> {
+        self.with_surface(Surface::foreground_pid).flatten()
+    }
+
     fn connect_focus(&self) {
         let focus = gtk::EventControllerFocus::new();
         let weak = self.weak();
@@ -562,7 +695,9 @@ impl TerminalSurface {
         });
         let weak = self.weak();
         im.connect_preedit_changed(move |im| {
-            if let Some(surface) = Self::upgrade(&weak) {
+            if let Some(surface) = Self::upgrade(&weak)
+                && !surface.inner.resetting_im.get()
+            {
                 // fcitx5-hangul can commit and keep composing without a new preedit-start
                 surface.inner.keys.borrow_mut().composing = true;
                 let (text, _, _) = im.preedit_string();
@@ -587,6 +722,10 @@ impl TerminalSurface {
     /// Text the input method committed: inside a plain key event it rides with the key (so libghostty knows which key
     /// made it); a composition's result or text from elsewhere (an on-screen keyboard) goes in on its own.
     fn im_commit(&self, text: &str) {
+        // a reset ending a composition this side already handled may commit it once more
+        if self.inner.resetting_im.get() {
+            return;
+        }
         {
             let mut keys = self.inner.keys.borrow_mut();
             if keys.phase == KeyPhase::NotComposing {
@@ -598,17 +737,7 @@ impl TerminalSurface {
         }
         // well-behaved input methods end the preedit themselves, some (ibus 1.5.29) do not
         self.with_surface(|s| s.preedit(None));
-        // keycode 0 is no key: the text goes in without a key encoding
-        let event = KeyEvent {
-            action: KeyAction::Press,
-            mods: Mods::empty(),
-            consumed_mods: Mods::empty(),
-            keycode: 0,
-            text: Some(text.to_owned()),
-            unshifted_codepoint: 0,
-            composing: false,
-        };
-        self.with_surface(|s| s.send_key(&event));
+        self.send_keys(&[input::text_key(text)]);
     }
 
     /// Pass the event through the input method; `true` when it consumed the key (ghostty's GTK runtime's rules).

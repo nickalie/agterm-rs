@@ -86,7 +86,7 @@ pub fn resolve_id(noun: Noun, target: &str, candidates: &[Uuid], active: Option<
 }
 
 /// `value` without surrounding whitespace, `None` when absent or blank (upstream's `trimmed`).
-fn trimmed(value: Option<&str>) -> Option<&str> {
+pub(crate) fn trimmed(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 

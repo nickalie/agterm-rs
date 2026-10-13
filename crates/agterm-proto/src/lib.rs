@@ -13,6 +13,6 @@ pub use command::{Command, Group, UnknownCommand};
 pub use events::{ControlEvent, EventBatch, EventKind, EventPayload};
 pub use request::{Args, AskButton, MAX_REQUEST_LINE_BYTES, PickItem, Request};
 pub use response::Response;
-pub use result::{ControlResult, ControlWindowFrame, ControlWindowNode};
+pub use result::{ControlCursor, ControlResult, ControlWindowFrame, ControlWindowNode};
 pub use tree::{ControlSessionNode, ControlSurfaceNode, ControlTree, ControlWorkspaceNode};
 pub use version::{AppIdentity, ConformanceProfile, PARITY_LEVEL, VersionResult};

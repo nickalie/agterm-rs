@@ -8,7 +8,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::Arc;
 
 use agterm_core::model::WindowLibrary;
@@ -439,6 +439,7 @@ SUBCOMMANDS:
   events                  Continuously print control events.
   workspace               Workspace commands.
   session                 Session commands.
+  surface                 Terminal surface commands.
   window                  Window commands.
   version                 Print the version of the app serving the socket.
 
@@ -875,6 +876,22 @@ SUBCOMMANDS:
   move                    Move a session: to another workspace, reorder with
                           --to, or place relative to an anchor with
                           --after/--before.
+  type                    Inject text into a session.
+  copy                    Print a session's selected text (does not touch the
+                          system clipboard).
+  paste                   Paste the system clipboard into a session (like ⌘V).
+  select-all              Select a session's entire terminal buffer (like ⌘A).
+  text                    Print a session's terminal buffer as plain text (does
+                          not touch the system clipboard).
+  status                  Set a session's agent status indicator.
+  flag                    Flag a session for the flagged working-set view
+                          (on|off|toggle|clear).
+  context                 Set or clear what a session is about, shown in the
+                          title bar.
+  seen                    Clear a session's unseen-notification badge without
+                          changing the selection or focus (idempotent).
+  search                  Search a session's terminal output (open the bar, set
+                          a needle, or step matches).
 
   See 'agtermctl help session <subcommand>' for detailed help.
 ";
@@ -1380,6 +1397,322 @@ fn events_refuse_a_bad_cursor_limit_or_kind_before_reading() -> TestResult {
         assert_eq!(
             outcome(&run_on(dir.path(), &socket, &command_line)?),
             (Some(64), String::new(), format!("Error: {message}\n{EVENTS_USAGE}")),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+// MARK: - terminal I/O, session metadata and surface commands
+
+/// Runs `agtermctl args --socket <socket>` with `input` on its standard input.
+fn run_with_input(root: &Path, socket: &Path, args: &[&str], input: &[u8]) -> TestResult<Output> {
+    let mut command = Command::new(AGTERMCTL);
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("AGTERM_") || name == "COLUMNS" {
+            command.env_remove(name);
+        }
+    }
+    command
+        .envs(isolated(root))
+        .args(args)
+        .arg("--socket")
+        .arg(socket)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    child.stdin.take().ok_or("no stdin")?.write_all(input)?;
+    Ok(child.wait_with_output()?)
+}
+
+#[test]
+fn reads_print_their_text_a_search_its_counter_and_a_cursor_its_column() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], serde_json::Value, serde_json::Value, &str); 8] = [
+        (
+            &["session", "text", "--lines", "2", "--target", "s1"],
+            serde_json::json!({"cmd": "session.text", "target": "s1", "args": {"lines": 2}}),
+            serde_json::json!({"id": NEW_ID, "text": "$ echo hi\nhi\n", "pane": "left"}),
+            "$ echo hi\nhi\n\n",
+        ),
+        (
+            &["session", "copy"],
+            serde_json::json!({"cmd": "session.copy", "target": "active"}),
+            serde_json::json!({"id": NEW_ID, "text": "selected"}),
+            "selected\n",
+        ),
+        (
+            &["session", "search", "needle", "--target", "s1"],
+            serde_json::json!({"cmd": "session.search", "target": "s1", "args": {"text": "needle"}}),
+            serde_json::json!({"id": NEW_ID, "text": "1/3", "count": 3}),
+            "1/3\n",
+        ),
+        (
+            &["session", "search", "--close", "--target", "s1"],
+            serde_json::json!({"cmd": "session.search", "target": "s1", "args": {"to": "close"}}),
+            serde_json::json!({"id": NEW_ID}),
+            "ok\n",
+        ),
+        (
+            &["surface", "cursor", "--target", "surface:S:left"],
+            serde_json::json!({"cmd": "surface.cursor", "target": "surface:S:left", "args": {}}),
+            serde_json::json!({"id": "surface:S:left", "cursor": {"column": 7}}),
+            "7\n",
+        ),
+        (
+            &["surface", "zoom", "show", "--target", "surface:S:left"],
+            serde_json::json!({"cmd": "surface.zoom", "target": "surface:S:left", "args": {"mode": "show"}}),
+            serde_json::json!({"id": "surface:S:left"}),
+            "ok\n",
+        ),
+        (
+            &[
+                "session", "status", "active", "--blink", "--color", "#ff8800", "--pane", "left", "--target", "s1",
+            ],
+            serde_json::json!({"cmd": "session.status", "target": "s1",
+                               "args": {"pane": "left", "status": "active", "blink": true, "color": "#ff8800"}}),
+            serde_json::json!({"id": NEW_ID}),
+            "ok\n",
+        ),
+        (
+            &["session", "context", "--clear", "--target", "s1"],
+            serde_json::json!({"cmd": "session.context", "target": "s1", "args": {"mode": "clear"}}),
+            serde_json::json!({"id": NEW_ID}),
+            "ok\n",
+        ),
+    ];
+    for (at, (args, expected, result, stdout)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("{at}.sock"));
+        let _server = scripted(&socket, expected, result)?;
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(0), stdout.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn type_takes_text_after_a_separator_or_from_stdin() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("agterm.sock");
+    let expected = serde_json::json!({"cmd": "session.type", "target": "s1",
+                                      "args": {"text": "printf 'a%s\\n' b\n", "select": false}});
+    let _server = scripted(&socket, expected, serde_json::json!({"id": NEW_ID}))?;
+    let output = run_with_input(
+        dir.path(),
+        &socket,
+        &["session", "type", "--stdin", "--target", "s1"],
+        b"printf 'a%s\\n' b\n",
+    )?;
+    assert_eq!(outcome(&output), (Some(0), "ok\n".to_owned(), String::new()));
+
+    let dashed = dir.path().join("dash.sock");
+    let expected = serde_json::json!({"cmd": "session.type", "target": "s1",
+                                      "args": {"text": "--dash", "select": false}});
+    let _server = scripted(&dashed, expected, serde_json::json!({"id": NEW_ID}))?;
+    let args = ["session", "type", "--target", "s1", "--socket"]
+        .map(OsStr::new)
+        .into_iter()
+        .chain([dashed.as_os_str(), OsStr::new("--"), OsStr::new("--dash")]);
+    assert_eq!(
+        outcome(&run(dir.path(), &[], args)?),
+        (Some(0), "ok\n".to_owned(), String::new())
+    );
+    Ok(())
+}
+
+#[test]
+fn type_without_a_payload_or_with_invalid_utf8_is_a_usage_error_at_run_time() -> TestResult {
+    let dir = short_dir()?;
+    // nothing listens here: a connection attempt would exit 1, not 64
+    let socket = dir.path().join("agterm.sock");
+    let refusal = |message: &str| format!("Error: {message}\n{ROOT_USAGE}");
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &["session", "type"])?),
+        (Some(64), String::new(), refusal("provide TEXT or --stdin"))
+    );
+    let invalid = run_with_input(dir.path(), &socket, &["session", "type", "--stdin"], &[b'a', 0xFF])?;
+    assert_eq!(
+        outcome(&invalid),
+        (Some(64), String::new(), refusal("stdin must be valid UTF-8"))
+    );
+    Ok(())
+}
+
+#[test]
+fn io_and_metadata_refusals_are_usage_errors_before_connecting() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("agterm.sock");
+    let common = "[--target <target>] [--socket <socket>] [--json] [--window <window>]";
+    let usage = |command: &str, synopsis: &str| {
+        format!(
+            "Usage: agtermctl session {command} {synopsis}{common}\n  See 'agtermctl session {command} --help' for \
+             more information.\n"
+        )
+    };
+    let text = usage(
+        "text",
+        "[--all] [--lines <lines>] [--pane <pane>] [--pane-id <pane-id>] ",
+    );
+    let status = usage(
+        "status",
+        "<state> [--blink] [--auto-reset] [--sound <sound>] [--color <color>] [--shape <shape>] [--pane <pane>] \
+         [--pane-id <pane-id>] ",
+    );
+    let cases: [(&[&str], &str, String); 7] = [
+        (
+            &["session", "text", "--all", "--lines", "2"],
+            "use either --all or --lines, not both",
+            text.clone(),
+        ),
+        (
+            &["session", "text", "--lines", "0"],
+            "--lines must be greater than 0",
+            text,
+        ),
+        (
+            &["session", "paste", "--pane", "middle"],
+            "--pane must be left, right, or scratch",
+            usage("paste", "[--pane <pane>] "),
+        ),
+        (
+            &["session", "status", "blocked", "--color", "nope"],
+            "color must be a #rrggbb hex value",
+            status,
+        ),
+        (
+            &["session", "flag", "bogus"],
+            "mode must be on, off, toggle, or clear",
+            usage("flag", "[<mode>] "),
+        ),
+        (
+            &["session", "context"],
+            "provide exactly one of a TEXT or --clear",
+            usage("context", "[<text>] [--clear] "),
+        ),
+        (
+            &["session", "search", "--next", "--prev"],
+            "--next, --prev, and --close are mutually exclusive",
+            usage("search", "[<needle>] [--next] [--prev] [--close] "),
+        ),
+    ];
+    for (args, message, usage) in cases {
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(64), String::new(), format!("Error: {message}\n{usage}")),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+const SURFACE_HELP: &str = "\
+OVERVIEW: Terminal surface commands.
+
+USAGE: agtermctl surface <subcommand>
+
+OPTIONS:
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  zoom                    Zoom a terminal surface (show|hide|toggle).
+  cursor                  Report a terminal surface's zero-based cursor column.
+
+  See 'agtermctl help surface <subcommand>' for detailed help.
+";
+
+const SURFACE_CURSOR_HELP: &str = "\
+OVERVIEW: Report a terminal surface's zero-based cursor column.
+
+Prints the column alone, so it drops straight into a command substitution. Row
+is not reported: the pinned libghostty exposes no cursor accessor and the
+vertical metrics it does export cannot recover a row that survives a custom
+`adjust-font-baseline`.
+
+A column is a signal, not proof about the line's content. Past the prompt it
+establishes the line is not empty; AT the prompt it establishes nothing, since
+the caret may have been moved back over text that is still there.
+
+USAGE: agtermctl surface cursor [--pane-id <pane-id>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
+
+OPTIONS:
+  --pane-id <pane-id>     Stable pane token ($AGTERM_PANE_ID). With it --target
+                          names the session ('active' or a session id), not a
+                          surface.
+  --target <target>       Target surface id from tree, 'quick' (the quick
+                          terminal), or 'active'. (default: active)
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  --window <window>       Target window id, unique prefix, or 'active'
+                          (defaults to the frontmost).
+  -h, --help              Show help information.
+
+";
+
+const SESSION_TYPE_HELP: &str = "\
+OVERVIEW: Inject text into a session.
+
+USAGE: agtermctl session type [<text>] [--stdin] [--select] [--pane <pane>] [--target <target>] [--socket <socket>] [--json] [--window <window>] [--pane-id <pane-id>]
+
+ARGUMENTS:
+  <text>                  Text to inject (omit with --stdin).
+
+OPTIONS:
+  --stdin                 Read the text from stdin instead of an argument.
+  --select                Select the session first if its surface is not ready
+                          (main pane only; a split pane must already exist).
+  --pane <pane>           Which pane to type into: primary/left/top,
+                          split/right/bottom, or scratch (even when hidden).
+                          Defaults to primary.
+  --target <target>       Target session/workspace id, unique prefix, or
+                          'active'. (default: active)
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  --window <window>       Target window id, unique prefix, or 'active'
+                          (defaults to the frontmost).
+  --pane-id <pane-id>     Stable pane token ($AGTERM_PANE_ID); overrides
+                          --pane, and unknown without --pane is an error.
+  -h, --help              Show help information.
+
+";
+
+const SESSION_FLAG_HELP: &str = "\
+OVERVIEW: Flag a session for the flagged working-set view (on|off|toggle|clear).
+
+USAGE: agtermctl session flag [<mode>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
+
+ARGUMENTS:
+  <mode>                  Mode: on, off, toggle (default), or clear (unflag
+                          all; ignores --target). (default: toggle)
+
+OPTIONS:
+  --target <target>       Target session/workspace id, unique prefix, or
+                          'active'. (default: active)
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  --window <window>       Target window id, unique prefix, or 'active'
+                          (defaults to the frontmost).
+  -h, --help              Show help information.
+
+";
+
+#[test]
+fn io_metadata_and_surface_help_in_the_argument_parser_layout() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], &str); 5] = [
+        (&["surface"], SURFACE_HELP),
+        (&["help", "surface"], SURFACE_HELP),
+        (&["surface", "cursor", "--help"], SURFACE_CURSOR_HELP),
+        (&["help", "session", "type"], SESSION_TYPE_HELP),
+        (&["session", "flag", "--help"], SESSION_FLAG_HELP),
+    ];
+    for (args, help) in cases {
+        assert_eq!(
+            outcome(&run(dir.path(), &[], args)?),
+            (Some(0), help.to_owned(), String::new()),
             "{args:?}"
         );
     }

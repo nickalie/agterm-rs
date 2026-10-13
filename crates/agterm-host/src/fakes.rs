@@ -134,16 +134,22 @@ impl<S: 'static> MainLoop<S> for FakeMainLoop<S> {
 
 #[derive(Debug, Default)]
 struct SurfaceState {
+    realized: bool,
     lines: Vec<String>,
+    selection: Option<String>,
+    cursor_column: Option<u32>,
+    foreground_pid: Option<u32>,
     typed: Vec<String>,
+    actions: Vec<String>,
     promotions: u32,
     teardowns: u32,
 }
 
 /// A terminal whose text is set by the test and whose input is recorded. Main-thread only, like a real surface.
+///
+/// `select_all` selects every line; any other binding action is only recorded.
 pub struct FakeSurface {
     token: String,
-    realized: bool,
     live_session: bool,
     rows: usize,
     state: Rc<RefCell<SurfaceState>>,
@@ -164,17 +170,19 @@ impl FakeSurface {
     pub fn new(token: impl Into<String>) -> Self {
         Self {
             token: token.into(),
-            realized: true,
             live_session: false,
             rows: Self::ROWS,
-            state: Rc::default(),
+            state: Rc::new(RefCell::new(SurfaceState {
+                realized: true,
+                ..SurfaceState::default()
+            })),
         }
     }
 
     /// Sets whether the terminal exists yet.
     #[must_use]
-    pub fn with_realized(mut self, realized: bool) -> Self {
-        self.realized = realized;
+    pub fn with_realized(self, realized: bool) -> Self {
+        self.state.borrow_mut().realized = realized;
         self
     }
 
@@ -198,6 +206,32 @@ impl FakeSurfaceProbe {
     /// Replaces the terminal's text, scrollback first, one entry per line.
     pub fn set_lines<I: IntoIterator<Item = S>, S: Into<String>>(&self, lines: I) {
         self.state.borrow_mut().lines = lines.into_iter().map(Into::into).collect();
+    }
+
+    /// Sets whether the terminal exists, as its creation landing later would.
+    pub fn set_realized(&self, realized: bool) {
+        self.state.borrow_mut().realized = realized;
+    }
+
+    /// Sets the selection [`Surface::read_selection`] reports.
+    pub fn set_selection(&self, selection: Option<&str>) {
+        self.state.borrow_mut().selection = selection.map(str::to_owned);
+    }
+
+    /// Sets the column [`Surface::cursor_column`] reports.
+    pub fn set_cursor_column(&self, column: Option<u32>) {
+        self.state.borrow_mut().cursor_column = column;
+    }
+
+    /// Sets the pid [`Surface::foreground_pid`] reports.
+    pub fn set_foreground_pid(&self, pid: Option<u32>) {
+        self.state.borrow_mut().foreground_pid = pid;
+    }
+
+    /// Every binding action run, in order.
+    #[must_use]
+    pub fn actions(&self) -> Vec<String> {
+        self.state.borrow().actions.clone()
     }
 
     /// Every [`Surface::type_text`] call, in order.
@@ -225,7 +259,7 @@ impl Surface for FakeSurface {
     }
 
     fn is_realized(&self) -> bool {
-        self.realized
+        self.state.borrow().realized
     }
 
     fn is_live_session(&self) -> bool {
@@ -236,22 +270,56 @@ impl Surface for FakeSurface {
         self.state.borrow_mut().promotions += 1;
     }
 
-    fn type_text(&mut self, text: &str) {
-        self.state.borrow_mut().typed.push(text.to_owned());
+    fn type_text(&mut self, text: &str) -> bool {
+        let mut state = self.state.borrow_mut();
+        if !state.realized {
+            return false;
+        }
+        state.typed.push(text.to_owned());
+        true
     }
 
     fn read_text(&self, scope: TextScope) -> Option<String> {
-        if !self.realized {
+        let state = self.state.borrow();
+        if !state.realized {
             return None;
         }
-        let state = self.state.borrow();
         let keep = match scope {
             TextScope::Screen => self.rows,
             TextScope::All => state.lines.len(),
-            TextScope::LastLines(count) => usize::try_from(count.get()).unwrap_or(usize::MAX),
         };
         let start = state.lines.len().saturating_sub(keep);
         Some(state.lines[start..].join("\n"))
+    }
+
+    fn read_selection(&self) -> Option<String> {
+        let state = self.state.borrow();
+        if !state.realized {
+            return None;
+        }
+        state.selection.clone().filter(|selection| !selection.is_empty())
+    }
+
+    fn cursor_column(&self) -> Option<u32> {
+        let state = self.state.borrow();
+        state.cursor_column.filter(|_| state.realized)
+    }
+
+    fn binding_action(&mut self, action: &str) -> bool {
+        let mut state = self.state.borrow_mut();
+        if !state.realized {
+            return false;
+        }
+        if action == "select_all" {
+            state.selection = Some(state.lines.join("\n"));
+        }
+        state.actions.push(action.to_owned());
+        true
+    }
+
+    fn foreground_pid(&self) -> Option<u32> {
+        let state = self.state.borrow();
+        state.foreground_pid.filter(|_| state.realized)
     }
 
     fn teardown(self: Box<Self>) {
@@ -441,7 +509,6 @@ impl ProcessLauncher for FakeProcessLauncher {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
     use std::sync::Arc;
     use std::sync::mpsc;
 
@@ -552,12 +619,16 @@ mod tests {
         assert_eq!(screen.lines().count(), FakeSurface::ROWS);
         assert!(screen.starts_with("line 6\n"));
         assert_eq!(surface.read_text(TextScope::All).unwrap().lines().count(), 30);
-        let last = surface.read_text(TextScope::LastLines(NonZeroU32::new(2).unwrap()));
-        assert_eq!(last.as_deref(), Some("line 28\nline 29"));
-        surface.type_text("echo hi\n");
+        assert!(surface.type_text("echo hi\n"));
+        assert_eq!(surface.read_selection(), None);
+        assert!(surface.binding_action("select_all"));
+        assert_eq!(surface.read_selection().unwrap().lines().count(), 30);
+        probe.set_cursor_column(Some(5));
+        assert_eq!(surface.cursor_column(), Some(5));
         surface.promote_to_primary();
         surface.teardown();
         assert_eq!(probe.typed(), ["echo hi\n"]);
+        assert_eq!(probe.actions(), ["select_all"]);
         assert_eq!(probe.promotions(), 1);
         assert_eq!(probe.teardowns(), 1);
     }
@@ -568,6 +639,10 @@ mod tests {
         assert!(!surface.is_realized());
         assert!(surface.is_live_session());
         assert_eq!(surface.read_text(TextScope::All), None);
+        let mut surface: Box<dyn Surface> = Box::new(surface);
+        assert!(!surface.type_text("x"));
+        assert!(!surface.binding_action("select_all"));
+        assert_eq!(surface.cursor_column(), None);
     }
 
     #[test]

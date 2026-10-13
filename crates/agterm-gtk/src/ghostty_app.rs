@@ -11,12 +11,16 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use agterm_core::link_policy::{self, ClickOrigin, Route};
+use agterm_core::model::SearchReport;
 use agterm_core::paths::{self, Env, ProcessEnv};
+use agterm_core::persist::settings::LinkOpenMode;
 use agterm_ghostty::{
     Action, App, ClipboardConfirm, ClipboardContent, ClipboardKind, ClipboardRead, ClipboardReadResult, ColorScheme,
     Config, PendingRequest, Runtime, Surface, SurfaceKey, SurfaceOptions, Target, keys,
 };
-use gtk::glib;
+use gtk::prelude::*;
+use gtk::{gio, glib};
 
 use crate::{clipboard, surface};
 
@@ -229,17 +233,17 @@ impl Runtime for GtkRuntime {
     }
 
     fn confirm_clipboard_request(&self, confirm: ClipboardConfirm, pending: PendingRequest) {
-        clipboard::confirm(&confirm, pending);
+        clipboard::confirm(confirm, pending);
     }
 
     fn write_clipboard(
         &self,
-        _surface: Option<SurfaceKey>,
+        surface: Option<SurfaceKey>,
         clipboard: ClipboardKind,
         contents: Vec<ClipboardContent>,
         confirm: bool,
     ) {
-        clipboard::write(clipboard, &contents, confirm);
+        clipboard::write(surface, clipboard, contents, confirm);
     }
 
     fn close_surface(&self, key: SurfaceKey, _process_alive: bool) {
@@ -290,13 +294,52 @@ fn handle_action(target: Target, action: Action) -> bool {
         // upstream keeps the applied app config for the chrome colors; nothing reads them yet
         Action::ConfigChange(_) => true,
         Action::OpenUrl { url, .. } => {
-            // consumed, not opened: unhandled, libghostty would open any scheme itself. Clicks go through upstream's
-            // LinkPolicy (Task 15).
-            tracing::info!(url, "link click not opened yet");
+            // always consumed: unhandled, libghostty would open any scheme itself. Opened off the callback, as
+            // upstream's main-queue hop, through the link policy.
+            if let Some(surface) = surface {
+                glib::idle_add_local_once(move || surface.open_url(&url));
+            }
             true
         }
+        Action::StartSearch { needle } => report_search(surface, &SearchReport::Started(needle)),
+        Action::EndSearch => report_search(surface, &SearchReport::Ended),
+        Action::SearchTotal(total) => report_search(surface, &SearchReport::Total(total)),
+        Action::SearchSelected(selected) => report_search(surface, &SearchReport::Selected(selected)),
         _ => false,
     }
+}
+
+/// Hands a search report to the surface's handlers; consumed whether or not the surface still exists, as upstream.
+fn report_search(surface: Option<surface::TerminalSurface>, report: &SearchReport) -> bool {
+    if let Some(surface) = surface {
+        surface.report_search(report);
+    }
+    true
+}
+
+/// Carries out what the link policy decides for a clicked terminal link (upstream's `LinkOpener.follow`): a web or
+/// mail link opens with the desktop's handler, a local file is revealed in the file manager (never opened, which
+/// could run it), anything else is ignored. A session overlay route opens in the browser for now: the overlay is not
+/// there to take it yet, which is upstream's fallback when it cannot.
+pub fn follow_link(raw: &str, mode: LinkOpenMode, origin: ClickOrigin) {
+    match link_policy::route(raw, mode, origin) {
+        Route::Browser(url) | Route::Overlay { url, .. } => open_uri(&url),
+        Route::Reveal(path) => crate::app::reveal_in_file_manager(&path),
+        Route::Ignore => tracing::debug!(raw, "link click ignored by the link policy"),
+    }
+}
+
+/// Opens `uri` with the desktop's handler for its scheme, through the portal when sandboxed, without blocking; a
+/// failure is only logged.
+fn open_uri(uri: &str) {
+    let parent = gio::Application::default()
+        .and_downcast::<gtk::Application>()
+        .and_then(|app| app.active_window());
+    gtk::UriLauncher::new(uri).launch(parent.as_ref(), None::<&gio::Cancellable>, |result| {
+        if let Err(err) = result {
+            tracing::warn!(%err, "could not open the link");
+        }
+    });
 }
 
 #[cfg(test)]

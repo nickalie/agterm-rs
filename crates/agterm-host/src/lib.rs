@@ -9,7 +9,6 @@
 
 use std::fmt;
 use std::io;
-use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -54,15 +53,14 @@ pub trait MainLoop<S>: Send + Sync {
 /// How much of a terminal's text [`Surface::read_text`] returns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextScope {
-    /// The visible screen.
+    /// The visible screen (the viewport).
     Screen,
     /// Scrollback plus the screen.
     All,
-    /// The last `n` lines of scrollback plus screen.
-    LastLines(NonZeroU32),
 }
 
-/// One live terminal: a libghostty surface with its shell, owned by a session pane on the main thread.
+/// One live terminal: a libghostty surface with its shell, owned by a session pane on the main thread (upstream's
+/// `TerminalSurface` plus the `GhosttySurfaceView` I/O the control commands reach).
 pub trait Surface {
     /// The stable per-surface identity baked into the shell as `AGTERM_PANE_ID`; empty for a surface spawned with
     /// no pane identity (overlay, quick terminal).
@@ -78,11 +76,30 @@ pub trait Surface {
     /// Reassigns a split survivor to the primary role, so its pwd and title reports reach the session's main fields.
     fn promote_to_primary(&mut self);
 
-    /// Sends `text` to the terminal as typed input.
-    fn type_text(&mut self, text: &str);
+    /// Types `text` into the terminal as keystrokes through the keyboard's own path, never as a paste (upstream's
+    /// `inject(text:)`): each printable run as key text, each line ending (`\n`, `\r`, `\r\n`) as one Return
+    /// keypress, and a final Return after text sent only after `agterm_core::keystrokes::SUBMIT_GAP`. False when the
+    /// terminal is not realized, so nothing was queued.
+    fn type_text(&mut self, text: &str) -> bool;
 
-    /// The terminal's text for `scope`; `None` when the surface is not realized or the read failed.
+    /// The terminal's text for `scope`, trailing blank rows included; an empty string for a blank screen. `None` only
+    /// when the surface is not realized or the read failed.
     fn read_text(&self, scope: TextScope) -> Option<String>;
+
+    /// The current selection's text; `None` with no or an empty selection, or no realized terminal.
+    fn read_selection(&self) -> Option<String>;
+
+    /// The cursor's zero-based column; `None` when the terminal is not realized or the geometry cannot be trusted
+    /// (upstream's `readCursorColumn`).
+    fn cursor_column(&self) -> Option<u32>;
+
+    /// Runs a libghostty binding action on this terminal (`paste_from_clipboard`, `select_all`, `start_search`,
+    /// `search:<needle>`, `navigate_search:next`, `end_search`, `increase_font_size:1`, ...). False when the terminal
+    /// is not realized, so nothing ran.
+    fn binding_action(&mut self, action: &str) -> bool;
+
+    /// The pid of the terminal's foreground process; `None` when not realized or unknown.
+    fn foreground_pid(&self) -> Option<u32>;
 
     /// Frees the libghostty surface and its shell. Taking the box makes a second teardown impossible.
     fn teardown(self: Box<Self>);

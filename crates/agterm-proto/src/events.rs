@@ -131,6 +131,20 @@ mod tests {
 
     use super::*;
 
+    /// `agtermctl events --json` re-encodes what it read: a timestamp must come back as the same double, which
+    /// `serde_json`'s parser only guarantees with its `float_roundtrip` feature.
+    #[test]
+    fn a_timestamp_survives_a_decode_and_reencode_bit_for_bit() {
+        let line = r#"{"seq":10,"ts":1791864251.0450583,"kind":"status","payload":{}}"#;
+        let value: serde_json::Value = serde_json::from_str(line).unwrap();
+        let event: ControlEvent = serde_json::from_value(value).unwrap();
+        assert!(
+            serde_json::to_string(&event)
+                .unwrap()
+                .contains(r#""ts":1791864251.0450583"#)
+        );
+    }
+
     #[test]
     fn kinds_round_trip_through_json() {
         for kind in EventKind::iter() {

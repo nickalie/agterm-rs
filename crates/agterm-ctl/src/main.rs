@@ -6,7 +6,10 @@ mod client;
 mod events;
 mod output;
 mod session;
+mod session_io;
+mod session_meta;
 mod socket;
+mod surface;
 mod tree;
 mod usage;
 mod version;
@@ -47,6 +50,7 @@ enum Command {
     Events(events::Events),
     Workspace(workspace::Workspace),
     Session(session::Session),
+    Surface(surface::Surface),
     Window(window::Window),
     Version(version::Version),
 }
@@ -59,6 +63,7 @@ impl Command {
             Self::Events(command) => command.validate(),
             Self::Workspace(group) => group.command().validate(),
             Self::Session(group) => group.command().validate(),
+            Self::Surface(group) => group.command().validate(),
             Self::Window(group) => group.command().validate(),
             Self::Version(_) => Ok(()),
         }
@@ -70,6 +75,7 @@ impl Command {
             Self::Events(command) => command.run(env),
             Self::Workspace(group) => group.command().default_run(env),
             Self::Session(group) => group.command().default_run(env),
+            Self::Surface(group) => group.command().default_run(env),
             Self::Window(group) => group.command().default_run(env),
             Self::Version(command) => command.run(env),
         }
@@ -164,6 +170,9 @@ enum Failure {
     Exit(ExitCode),
     /// A local failure, reported as `Error: <text>` with exit 1.
     Local(String),
+    /// A refusal while building the request, after validation passed (upstream's `ValidationError` thrown from
+    /// `run()`): a usage error naming the root command, since the library no longer knows which subcommand ran.
+    Usage(String),
 }
 
 impl From<ClientError> for Failure {
@@ -180,6 +189,12 @@ trait RequestCommand {
     /// The request this invocation sends.
     fn make_request(&self) -> Request;
 
+    /// The request a run sends: [`Self::make_request`], unless the command reads its payload when it runs
+    /// (`--stdin`) or refuses then, as upstream's throwing `makeRequest()`.
+    fn run_request(&self) -> Result<Request, Failure> {
+        Ok(self.make_request())
+    }
+
     /// Whether the human output echoes `result.id`: only the create commands do, since the caller does not know the
     /// new id yet. `--json` always carries it.
     fn echoes_result_id(&self) -> bool {
@@ -194,7 +209,8 @@ trait RequestCommand {
     /// Sends the request once and prints the reply; a refusal exits 1 after its `error:` line.
     fn default_run(&self, env: &dyn Env) -> Result<(), Failure> {
         let options = self.options();
-        let reply = client::send(&options.socket_path(env), &self.make_request())?;
+        let request = self.run_request()?;
+        let reply = client::send(&options.socket_path(env), &request)?;
         output::print_response(&reply, options.json, self.echoes_result_id());
         if reply.response.ok {
             Ok(())
@@ -266,6 +282,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(Failure::Exit(code)) => code,
         Err(Failure::Local(message)) => output::fail(&message),
+        Err(Failure::Usage(message)) => report_validation_error(&[], &message),
     }
 }
 

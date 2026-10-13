@@ -11,7 +11,7 @@ use std::io::{self, ErrorKind, Read};
 use std::net::Shutdown;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -30,26 +30,69 @@ pub trait StreamOwner: Send {
     fn abandon(self: Box<Self>) {}
 }
 
-/// A handler's answer: the response, plus an optional owner for the connection afterwards.
+/// A handler's answer: the response, plus an optional owner for the connection afterwards. A deferred reply
+/// ([`Reply::deferred`]) carries no answer yet: the connection waits for the one its [`ReplySender`] sends later.
 pub struct Reply {
     pub response: Response,
     pub stream: Option<Box<dyn StreamOwner>>,
+    deferred: Option<mpsc::Receiver<Reply>>,
+}
+
+/// The far end of a [`Reply::deferred`]: sends the connection its answer once the main loop has one (a command that
+/// waits for a terminal to come up or for libghostty to report back). Dropping it unsent answers "shutting down".
+#[derive(Debug)]
+pub struct ReplySender(mpsc::SyncSender<Reply>);
+
+impl ReplySender {
+    /// Answers the waiting connection; a connection gone since drops the reply.
+    pub fn send(self, reply: impl Into<Reply>) {
+        if self.0.send(reply.into()).is_err() {
+            tracing::debug!("control connection gone before its deferred reply");
+        }
+    }
 }
 
 impl Reply {
+    /// A reply the main loop finishes later through the returned [`ReplySender`]; the connection's thread waits for
+    /// it, the main loop does not.
+    #[must_use]
+    pub fn deferred() -> (Self, ReplySender) {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let reply = Self {
+            response: Response::from(ControlError::ShuttingDown),
+            stream: None,
+            deferred: Some(receiver),
+        };
+        (reply, ReplySender(sender))
+    }
+
+    /// Waits out a deferred reply, a deferred one answered with another included; a ready one returns at once.
+    #[must_use]
+    pub fn settled(mut self) -> Self {
+        while let Some(receiver) = self.deferred.take() {
+            self = receiver.recv().unwrap_or_else(|_| ControlError::ShuttingDown.into());
+        }
+        self
+    }
+
     /// A response after which `owner` takes the connection, provided the response is `ok` and was written.
     #[must_use]
     pub fn streaming(response: Response, owner: Box<dyn StreamOwner>) -> Self {
         Self {
             response,
             stream: Some(owner),
+            deferred: None,
         }
     }
 }
 
 impl From<Response> for Reply {
     fn from(response: Response) -> Self {
-        Self { response, stream: None }
+        Self {
+            response,
+            stream: None,
+            deferred: None,
+        }
     }
 }
 
@@ -64,6 +107,7 @@ impl fmt::Debug for Reply {
         f.debug_struct("Reply")
             .field("response", &self.response)
             .field("streams", &self.stream.is_some())
+            .field("deferred", &self.deferred.is_some())
             .finish()
     }
 }

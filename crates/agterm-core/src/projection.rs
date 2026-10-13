@@ -138,6 +138,7 @@ fn apply_status(node: &mut ControlSessionNode, session: &Session) {
     node.status_pane = indicator.status_pane.map(|pane| pane.as_str().to_owned());
     node.status_blink = indicator.blink.then_some(true);
     node.status_color.clone_from(&indicator.color);
+    node.status_shape = indicator.shape.map(|shape| shape.wire_name().to_owned());
 }
 
 fn epoch_seconds(time: SystemTime) -> f64 {
@@ -230,7 +231,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::model::{AgentIndicator, NewSession, SplitAxis, SplitLayout, WindowLibrary};
+    use crate::model::{AgentIndicator, NewSession, SplitAxis, SplitLayout, StatusShape, WindowLibrary};
 
     fn app() -> AppIdentity {
         AppIdentity::from_recorded("0.1.0", Some("abc1234"))
@@ -414,6 +415,7 @@ mod tests {
             status: AgentStatus::Blocked,
             blink: true,
             color: Some("#ff0000".to_owned()),
+            shape: Some(StatusShape::Star),
             status_pane: Some(StatusPane::Left),
             ..AgentIndicator::default()
         };
@@ -447,6 +449,7 @@ mod tests {
             ("statusPane", json!("left")),
             ("statusBlink", json!(true)),
             ("statusColor", json!("#ff0000")),
+            ("statusShape", json!("star")),
             ("statusChangedAt", json!(1.5)),
             ("unseen", json!(3)),
             ("context", json!("deploy")),
@@ -466,12 +469,13 @@ mod tests {
         session.agent_indicator = AgentIndicator {
             blink: true,
             color: Some("#00ff00".to_owned()),
+            shape: Some(StatusShape::Diamond),
             ..AgentIndicator::default()
         };
         session.status_changed_at = Some(UNIX_EPOCH + Duration::from_secs(2));
         let tree = tree_json(store, &AppSettings::default(), false);
         let node = tree["workspaces"][0]["sessions"][0].as_object().unwrap();
-        for key in ["status", "statusPane", "statusBlink", "statusColor"] {
+        for key in ["status", "statusPane", "statusBlink", "statusColor", "statusShape"] {
             assert!(!node.contains_key(key), "{key}");
         }
         // `statusChangedAt` is reported whenever it exists, idle included (`control-api.md`)

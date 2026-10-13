@@ -32,11 +32,28 @@ impl Surface for PaneSurface {
 
     fn promote_to_primary(&mut self) {}
 
-    // typing into and reading a terminal come with the terminal I/O commands
-    fn type_text(&mut self, _text: &str) {}
+    fn type_text(&mut self, text: &str) -> bool {
+        self.terminal.type_text(text)
+    }
 
-    fn read_text(&self, _scope: TextScope) -> Option<String> {
-        None
+    fn read_text(&self, scope: TextScope) -> Option<String> {
+        self.terminal.read_text(scope)
+    }
+
+    fn read_selection(&self) -> Option<String> {
+        self.terminal.read_selection()
+    }
+
+    fn cursor_column(&self) -> Option<u32> {
+        self.terminal.cursor_column()
+    }
+
+    fn binding_action(&mut self, action: &str) -> bool {
+        self.terminal.binding_action(action)
+    }
+
+    fn foreground_pid(&self) -> Option<u32> {
+        self.terminal.foreground_pid()
     }
 
     fn teardown(self: Box<Self>) {

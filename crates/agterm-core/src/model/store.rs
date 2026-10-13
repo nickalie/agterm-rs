@@ -549,23 +549,29 @@ impl AppStore {
         }
     }
 
-    /// Sets a session's status glyph and stamps the change time; `status` fires only when the indicator changed.
+    /// Sets a session's status glyph and stamps the change time, repeats and idle included; `status` fires only when
+    /// the indicator changed, carrying the glyph's overrides and the status it replaced (upstream's
+    /// `setAgentIndicator`). Control writes go through [`AppStore::apply_control_status`], which may refuse one.
     pub fn set_agent_indicator(&mut self, mut indicator: AgentIndicator, id: Uuid) {
         let workspace = self.workspace_for_session(id).map(Workspace::id);
         let Some(session) = self.session_mut(id) else { return };
         // gated on the split EXISTING, not on its surface: a scripted split followed at once by a `--pane right`
         // status lands before the frontend realized the split surface, where `right` is the correct tag
         indicator.status_pane = indicator.normalized_pane(session.split.exists);
-        let changed = session.agent_indicator != indicator;
-        session.agent_indicator = indicator;
+        let previous = std::mem::replace(&mut session.agent_indicator, indicator);
         session.status_changed_at = Some(SystemTime::now());
-        if !changed {
+        let current = &session.agent_indicator;
+        if previous == *current {
             return;
         }
         let payload = EventPayload {
             name: Some(session.display_name()),
-            status: Some(session.agent_indicator.status.wire_name().to_owned()),
-            pane: session.agent_indicator.status_pane.map(|pane| pane.as_str().to_owned()),
+            status: Some(current.status.wire_name().to_owned()),
+            pane: current.status_pane.map(|pane| pane.as_str().to_owned()),
+            blink: Some(current.blink),
+            color: current.color.clone(),
+            shape: current.shape.map(|shape| shape.wire_name().to_owned()),
+            previous: Some(previous.status.wire_name().to_owned()),
             ..EventPayload::default()
         };
         self.emit(EventKind::Status, workspace, Some(id), payload);

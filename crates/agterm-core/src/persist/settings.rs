@@ -8,7 +8,7 @@
 //! decode, as Swift's synthesized `Decodable` does, and [`SettingsStore::load`] then falls back to the seeded
 //! default. Unknown keys are ignored on read and dropped on the next write, as upstream does.
 //!
-//! The accessors whose consumers come later (the ghostty config lines, status shapes, the status reset, the HTML
+//! The accessors whose consumers come later (the ghostty config lines, status shapes, the HTML
 //! zoom, the quick-terminal size grid) join with those consumers.
 
 use std::path::{Path, PathBuf};
@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::json;
+use crate::model::StatusReset;
 
 /// The settings file's name in the state directory.
 pub const SETTINGS_FILE_NAME: &str = "settings.json";
@@ -418,6 +419,16 @@ impl AppSettings {
     #[must_use]
     pub fn effective_auto_follow_attention(&self) -> AutoFollowAttention {
         AutoFollowAttention::tolerant(self.auto_follow_attention.as_deref())
+    }
+
+    /// Which keystroke clears a blocked or completed status glyph; `firstKey` when unset or unknown (upstream's
+    /// `effectiveStatusReset`).
+    #[must_use]
+    pub fn effective_status_reset(&self) -> StatusReset {
+        self.status_reset
+            .as_deref()
+            .and_then(StatusReset::from_raw)
+            .unwrap_or_default()
     }
 
     /// The directory a new session opens in: home by default, the active session's cwd or the custom directory

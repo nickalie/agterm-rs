@@ -16,7 +16,7 @@ use agterm_core::persist::{LibraryPersistence, SettingsStore};
 use agterm_core::{Core, CoreConfig, CoreState};
 use agterm_host::MainLoop;
 use agterm_proto::{AppIdentity, Request};
-use agterm_server::{ControlServer, Reply};
+use agterm_server::ControlServer;
 use gtk::{gio, glib};
 
 use crate::deck::PaneContext;
@@ -31,7 +31,13 @@ const DEFAULT_APP_ID: &str = "io.github.melonamin.agterm";
 const APP_ID_ENV: &str = "AGTERM_APP_ID";
 
 /// The capabilities of the Rust target profile implemented so far (`conformance/docs/rust-build.md`).
-const CAPABILITIES: &[&str] = &["posix-shell", "drop-placement", "select-takes-frontmost"];
+const CAPABILITIES: &[&str] = &[
+    "posix-shell",
+    "drop-placement",
+    "select-takes-frontmost",
+    "status-shape",
+    "type-rejects-nul",
+];
 
 /// `AGTERM_APP_ID` when it is a valid application id, else the fork's.
 pub fn app_id(env: &dyn Env) -> String {
@@ -99,13 +105,6 @@ thread_local! {
     static SHELL: RefCell<Option<Shell>> = const { RefCell::new(None) };
 }
 
-/// Answers one control request and settles what it changed.
-fn handle(state: &mut AppState, request: &Request) -> Reply {
-    let reply = state.core.dispatch(request);
-    state.settle();
-    reply.into()
-}
-
 pub fn activate(app: &adw::Application) {
     // a later activation (a second launch forwarded here) raises the frontmost window
     let running = SHELL.with(|shell| {
@@ -145,7 +144,7 @@ pub fn activate(app: &adw::Application) {
     // not a task: no task runs before the shell exists; every open window renders before it is presented
     state.borrow_mut().attach(poster, Windows::new(app.clone(), context));
     if let Err(err) = server.start(posting, |state: &mut AppState, request: Request| {
-        handle(state, &request)
+        state.handle_request(&request)
     }) {
         tracing::error!(%err, "the control server is not serving");
     }
@@ -244,10 +243,16 @@ mod tests {
     }
 
     #[test]
-    fn the_profile_claims_drop_placement_and_select_takes_frontmost() {
+    fn the_profile_claims_the_capabilities_implemented_so_far() {
         assert_eq!(
             CAPABILITIES,
-            ["posix-shell", "drop-placement", "select-takes-frontmost"]
+            [
+                "posix-shell",
+                "drop-placement",
+                "select-takes-frontmost",
+                "status-shape",
+                "type-rejects-nul"
+            ]
         );
     }
 }

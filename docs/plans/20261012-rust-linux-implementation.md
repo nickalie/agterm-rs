@@ -770,23 +770,39 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 **Files:**
 - Modify: `crates/agterm-gtk/src/surface.rs`, `crates/agterm-core/src/commands/session.rs`
 - Create: `crates/agterm-core/src/commands/surface.rs`
+- ➕ Create: `crates/agterm-core/src/{keystrokes,interrupt,zoom,clipboard_policy,link_policy}.rs`,
+  `crates/agterm-core/src/model/{search,status}.rs`, `crates/agterm-core/src/commands/{metadata,typing,search,
+  surface_target}.rs` (+ `commands/tests/{metadata,surface}.rs`, `model/tests/status.rs`),
+  `crates/agterm-ghostty/src/text.rs`, `crates/agterm-ghostty/tests/{common/mod.rs,surface_io.rs}`,
+  `crates/agterm-ctl/src/{session_io,session_meta,surface}.rs`; Modify: `crates/agterm-host/src/{lib,fakes}.rs` (the
+  `Surface` I/O methods), `crates/agterm-server/src/{stream,connection,lib}.rs` (deferred replies),
+  `crates/agterm-core/src/{dispatch,lib,pane_env,projection,resolve}.rs`, `model/{session,store,outbox,mod}.rs`,
+  `persist/settings.rs`, `crates/agterm-proto/src/{result,lib,events}.rs`, `crates/agterm-gtk/src/{app,state,deck,
+  window,pane,clipboard,ghostty_app,input}.rs`, `crates/agterm-ghostty/src/{surface,lib}.rs`, `crates/agterm-ctl/src/{main,
+  session,output}.rs`, `crates/agterm-ctl/tests/cli.rs`, `Cargo.toml` (serde_json `float_roundtrip`)
 
-- [ ] session.type (`KeystrokeSegments.swift`), text (`TerminalText.swift`), copy, paste, selectall, search;
-      surface.cursor, surface.zoom (`TerminalZoom.swift`)
-- [ ] session.status, flag, context, seen (`AppStore+Status.swift`, `SessionContext.swift`, `AgentStatus.swift`)
-- [ ] `Surface` over libghostty: `read_text`, inject (key events with the final-Return gap, never
+- [x] session.type (`KeystrokeSegments.swift`), text (`TerminalText.swift`), copy, paste, selectall, search;
+      surface.cursor, surface.zoom (`TerminalZoom.swift`) (`session.type` and `session.search` wait on the frontend
+      as upstream's main-actor polls do: `Core::begin` answers `Dispatched::Pending` with a step the GTK state runs as
+      a delayed main-loop task, and the connection waits on a deferred `Reply`; terminal zoom is a per-window target in
+      `Core` the GTK window shows as the zoomed session's page with the sidebar stepped aside and an exit-zoom button,
+      no terminal reparented)
+- [x] session.status, flag, context, seen (`AppStore+Status.swift`, `SessionContext.swift`, `AgentStatus.swift`)
+      (status sounds are queued for the frontend, which sounds the display's alert: Linux has no named system sounds)
+- [x] `Surface` over libghostty: `read_text`, inject (key events with the final-Return gap, never
       `ghostty_surface_text`), selection, foreground pid; clipboard prompt policy (`ClipboardPromptPolicy.swift`,
       `Ghostty/ClipboardPromptController.swift`); `control-api.md` > Surface input, output, and search
-- [ ] ➕ replace Task 6's interim clipboard and link handling: OSC 52/Kitty reads and `ask` writes go through the
+- [x] ➕ replace Task 6's interim clipboard and link handling: OSC 52/Kitty reads and `ask` writes go through the
       prompt instead of being denied (`crates/agterm-gtk/src/clipboard.rs`), and `GHOSTTY_ACTION_OPEN_URL` through
       upstream's `LinkPolicy.swift`/`LinkOpener.swift` instead of being consumed unopened (`ghostty_app.rs`)
-- [ ] `session.type` refuses a NUL (`text must not contain a NUL byte`) and `session.status` validates and reads back
+      (automount roots are Linux's `/net` and `/misc`; an overlay route opens in the browser until Task 20)
+- [x] `session.type` refuses a NUL (`text must not contain a NUL byte`) and `session.status` validates and reads back
       `shape`; claim `type-rejects-nul` and `status-shape`
-- [ ] matching `agtermctl` subcommands (`SessionMetadataCommands.swift`)
-- [ ] write tests: keystroke segmentation, text read-back, status/flag/context read-back on the fake surface
-- [ ] write tests: errors (NUL text, unknown pane, `ControlDispatcherSessionMetadataTests`, all as upstream)
-- [ ] gate: full run; ratchet (`test_session_text.py`, `test_surface.py`, `test_session.py`); scratch and split users
-      ⚠️ until Task 16, quick, overlay and HUD users ⚠️ until Tasks 17–20
+- [x] matching `agtermctl` subcommands (`SessionMetadataCommands.swift`)
+- [x] write tests: keystroke segmentation, text read-back, status/flag/context read-back on the fake surface
+- [x] write tests: errors (NUL text, unknown pane, `ControlDispatcherSessionMetadataTests`, all as upstream)
+- [x] gate: full run; ratchet (`test_session_text.py`, `test_surface.py`, `test_session.py`); scratch and split users
+      ⚠️ until Task 16, quick, overlay and HUD users ⚠️ until Tasks 17–20 (70 new green ids, 240 listed, identical over two full runs: the reachable `test_session_text.py`, `test_surface.py` and `test_session.py` ids (status, flag, context, type, text, search, cursor refusals, selection), `test_split.py`'s zoom refusals, `test_events.py` and `test_tree.py` ids that waited on `session.status`/`session.type`, and `test_events_json_prints_each_event_object_of_the_asked_kinds` once serde_json parses floats exactly)
 
 ### Task 16: Splits and the scratch terminal
 

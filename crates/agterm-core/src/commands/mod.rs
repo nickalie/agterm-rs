@@ -2,9 +2,16 @@
 //! does it, then the effect as upstream's app-side `agterm/Control/ControlServer+*.swift` performs it on the model.
 //! Effects that need the frontend (focusing a terminal, revealing a directory) go through [`crate::Core`]'s hooks.
 
+pub(crate) mod metadata;
+pub(crate) mod search;
 pub(crate) mod session;
+pub(crate) mod surface;
+pub(crate) mod surface_target;
+pub(crate) mod typing;
 pub(crate) mod window;
 pub(crate) mod workspace;
+
+pub(crate) use surface::deferred;
 
 #[cfg(test)]
 mod tests;
@@ -14,7 +21,7 @@ use uuid::Uuid;
 
 use crate::Core;
 use crate::error::{ControlError, Noun};
-use crate::model::AppStore;
+use crate::model::{AppStore, StatusPane};
 use crate::pane_env::uuid_string;
 use crate::resolve::{ACTIVE, Resolver, resolve_id, session_ids};
 
@@ -109,6 +116,30 @@ fn not_found(noun: Noun, target: &str) -> ControlError {
     }
 }
 
+/// The role selector of `session.status`, `session.restore` and `session.paste` (upstream's `parsePane`): the role and
+/// position aliases, absent as `None`, anything else refused naming the canonical spellings.
+pub(crate) fn parse_pane(raw: Option<&str>) -> Result<Option<StatusPane>, ControlError> {
+    raw.map(|raw| {
+        StatusPane::from_control_name(raw)
+            .ok_or_else(|| ControlError::rejected("--pane must be left, right, or scratch"))
+    })
+    .transpose()
+}
+
+/// The surface I/O selector of `session.type`, `session.text` and `font.*` (upstream's `parseSurfacePane`): the same
+/// vocabulary as [`parse_pane`], refused as `invalid pane: <value>`.
+pub(crate) fn parse_surface_pane(raw: Option<&str>) -> Result<Option<StatusPane>, ControlError> {
+    raw.map(|raw| {
+        StatusPane::from_control_name(raw).ok_or_else(|| ControlError::rejected(format!("invalid pane: {raw}")))
+    })
+    .transpose()
+}
+
+/// `unknown pane id: <token>`.
+pub(crate) fn unknown_pane_id(token: &str) -> ControlError {
+    ControlError::rejected(format!("unknown pane id: {token}"))
+}
+
 /// An on/off/toggle mode argument, `toggle` when absent (upstream's `ControlToggleMode`). Each command keeps its own
 /// refusal message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,9 +152,15 @@ pub(crate) enum ToggleMode {
 impl ToggleMode {
     /// Parses `on`, `off` or `toggle`; an absent mode is `toggle`.
     pub(crate) fn parse(mode: Option<&str>) -> Option<Self> {
+        Self::parse_with(mode, "on", "off")
+    }
+
+    /// Parses a mode whose command spells on and off its own way (`surface.zoom`'s `show`/`hide`), or `toggle`; an
+    /// absent mode is `toggle`.
+    pub(crate) fn parse_with(mode: Option<&str>, on: &str, off: &str) -> Option<Self> {
         match mode.unwrap_or("toggle") {
-            "on" => Some(Self::On),
-            "off" => Some(Self::Off),
+            value if value == on => Some(Self::On),
+            value if value == off => Some(Self::Off),
             "toggle" => Some(Self::Toggle),
             _ => None,
         }

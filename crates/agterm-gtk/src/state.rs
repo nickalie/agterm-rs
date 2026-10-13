@@ -7,13 +7,17 @@
 //! state in place: they [`post`] a task, since libghostty may call back while the state is borrowed and a widget
 //! must not be rebuilt inside its own handler.
 
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::Weak;
+use std::time::Duration;
 
 use agterm_core::events::{TREE_CHANGED_DEBOUNCE, TreeChangedTimer};
 use agterm_core::model::PendingCloseTimer;
 use agterm_core::persist::{DebouncedSave, arm_debounced_saves};
-use agterm_core::{CommitTimers, Core};
+use agterm_core::{CommitTimers, ControlError, Core, Dispatched, Resume};
 use agterm_host::MainLoop;
+use agterm_proto::{Command, Request};
+use agterm_server::{Reply, ReplySender};
 use uuid::Uuid;
 
 use crate::main_loop::GlibMainLoop;
@@ -80,6 +84,17 @@ pub enum PaneReport {
     Title(String),
 }
 
+/// Plays a status sound. Linux has none of the named system sounds upstream plays, so every name, `default` and `beep`
+/// included, sounds the display's alert.
+fn play_status_sound(name: &str) {
+    use gtk::prelude::DisplayExt;
+    if let Some(display) = gtk::gdk::Display::default() {
+        display.beep();
+    } else {
+        tracing::debug!(name, "no display to sound the status alert on");
+    }
+}
+
 /// What the main loop owns.
 pub struct AppState {
     pub core: Core,
@@ -125,10 +140,63 @@ impl AppState {
         if let Some(main_loop) = self.poster.upgrade() {
             arm_commit(&*main_loop, &timers, &APP_TIMERS);
         }
+        let sounds = self.core.take_status_sounds();
         match self.windows.as_mut() {
-            Some(windows) => windows.sync(&mut self.core, &self.poster),
+            Some(windows) => {
+                windows.sync(&mut self.core, &self.poster);
+                for name in &sounds {
+                    play_status_sound(name);
+                }
+            }
             // no frontend to ask
             None => drop(self.core.take_window_requests()),
+        }
+    }
+
+    /// The window's exit-zoom control was clicked: its terminal zoom ends.
+    pub fn exit_zoom(&mut self, window: Uuid) {
+        self.core.set_zoom_target(window, None);
+        self.settle();
+    }
+
+    /// Answers one control request and settles what it changed. A command waiting on the frontend (a terminal coming
+    /// up, libghostty reporting a search count) answers later: its steps run as delayed main-loop tasks, each settled,
+    /// while the connection's thread waits for the deferred reply.
+    pub fn handle_request(&mut self, request: &Request) -> Reply {
+        let dispatched = self.core.begin(request);
+        self.settle();
+        match dispatched {
+            Dispatched::Done(response) => response.into(),
+            Dispatched::Pending { after, resume } => {
+                let (reply, sender) = Reply::deferred();
+                self.schedule(request.cmd, after, resume, sender);
+                reply
+            }
+        }
+    }
+
+    /// Runs `resume` after `after`; a closed loop drops it, and the dropped sender answers "shutting down".
+    fn schedule(&self, cmd: Command, after: Duration, resume: Resume, sender: ReplySender) {
+        let Some(main_loop) = self.poster.upgrade() else {
+            return;
+        };
+        let task = Box::new(move |state: &mut Self| state.resume(cmd, resume, sender));
+        if main_loop.post_after(after, task).is_err() {
+            tracing::debug!(%cmd, "deferred reply dropped: the loop is closed");
+        }
+    }
+
+    /// One step of a waiting command; a panic in it answers `ok:false` as a handler's panic does.
+    fn resume(&mut self, cmd: Command, resume: Resume, sender: ReplySender) {
+        let step = panic::catch_unwind(AssertUnwindSafe(|| resume(&mut self.core)));
+        self.settle();
+        match step {
+            Ok(Dispatched::Done(response)) => sender.send(response),
+            Ok(Dispatched::Pending { after, resume }) => self.schedule(cmd, after, resume, sender),
+            Err(_) => {
+                tracing::error!(%cmd, "control handler panicked in a deferred step");
+                sender.send(ControlError::HandlerPanicked(cmd));
+            }
         }
     }
 
@@ -538,6 +606,41 @@ mod tests {
             .surface
             .replace(Box::new(FakeSurface::new("T")));
         (AppState::new(core(library, None)), window, session)
+    }
+
+    #[test]
+    fn a_command_waiting_on_its_terminal_answers_from_a_delayed_step() {
+        let mut library = WindowLibrary::seeded("/home/u");
+        let window = library.active_window_id().unwrap();
+        let store = library.store_mut(window).unwrap();
+        let session = store.sessions().next().unwrap().id();
+        let surface = FakeSurface::new("T").with_realized(false);
+        let probe = surface.probe();
+        store.session_mut(session).unwrap().surface.replace(Box::new(surface));
+        let mut state = AppState::new(core(library, None));
+        let main_loop: Arc<RecordingLoop<AppState>> = Arc::new(RecordingLoop::new());
+        let as_dyn: Arc<dyn MainLoop<AppState>> = Arc::clone(&main_loop) as _;
+        state.poster = Arc::downgrade(&as_dyn);
+
+        let request = Request {
+            cmd: Command::Session(agterm_proto::command::SessionCmd::Type),
+            target: None,
+            args: Some(agterm_proto::Args {
+                text: Some("late".to_owned()),
+                ..agterm_proto::Args::default()
+            }),
+        };
+        let reply = state.handle_request(&request);
+        let posted = main_loop.take();
+        let step = posted
+            .into_iter()
+            .find(|(delay, _)| *delay == Some(agterm_core::POLL_INTERVAL));
+        let (_, step) = step.expect("a delayed step");
+        probe.set_realized(true);
+        step(&mut state);
+        let reply = reply.settled();
+        assert!(reply.response.ok, "{:?}", reply.response);
+        assert_eq!(probe.typed(), ["late"]);
     }
 
     #[test]

@@ -12,6 +12,8 @@ use uuid::Uuid;
 use super::background::{BackgroundWatermark, PaneBackgrounds};
 use super::naming::{last_path_component, sanitized, trimmed_or_none};
 use super::pane::{PaneLaunch, PaneRestore, SplitLayout, StatusPane, SurfaceSlot};
+use super::search::SearchState;
+use super::status::{StatusKeystroke, StatusReset, StatusShape};
 
 /// A session's agent status, set over the control channel (`session.status`); the sidebar row's glyph reacts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
@@ -37,6 +39,45 @@ impl AgentStatus {
             Self::Completed => "completed",
             Self::Blocked => "blocked",
         }
+    }
+
+    /// Parses the wire spelling; `None` for anything else.
+    #[must_use]
+    pub fn from_wire(name: &str) -> Option<Self> {
+        [Self::Idle, Self::Active, Self::Completed, Self::Blocked]
+            .into_iter()
+            .find(|status| status.wire_name() == name)
+    }
+
+    /// Whether a keystroke in the session's terminal clears this glyph back to idle (upstream's
+    /// `clearedBy(keystroke:reset:)`). `blocked` and `completed` clear as `reset` says: on any key, on a submit only
+    /// (a half-typed reply keeps the glyph), or never; under submit-only an interrupt also clears `blocked`, since
+    /// cancelling a prompt fires no hook. `active` clears ONLY on an interrupt, whatever `reset` says, so typing while
+    /// the agent works keeps the glyph.
+    #[must_use]
+    pub fn cleared_by(self, keystroke: StatusKeystroke, reset: StatusReset) -> bool {
+        match self {
+            Self::Blocked | Self::Completed => match reset {
+                StatusReset::FirstKey => true,
+                StatusReset::Enter => {
+                    keystroke == StatusKeystroke::Submit
+                        || (self == Self::Blocked && keystroke == StatusKeystroke::Interrupt)
+                }
+                StatusReset::Never => false,
+            },
+            Self::Active => keystroke == StatusKeystroke::Interrupt,
+            Self::Idle => false,
+        }
+    }
+
+    /// The sound a `session.status` write plays, `None` for none (upstream's `effectiveSound`): a per-call sound wins,
+    /// else the configured blocked default plays for `blocked` only. Empty strings count as unset.
+    #[must_use]
+    pub fn effective_sound<'a>(self, per_call: Option<&'a str>, blocked_default: Option<&'a str>) -> Option<&'a str> {
+        if let Some(sound) = per_call.filter(|sound| !sound.is_empty()) {
+            return Some(sound);
+        }
+        blocked_default.filter(|sound| self == Self::Blocked && !sound.is_empty())
     }
 
     /// The states attention navigation (`session.go next-attention|prev-attention`) steps through: a `blocked`
@@ -68,6 +109,8 @@ pub struct AgentIndicator {
     pub auto_reset: bool,
     /// A `#rrggbb` tint for this glyph only; `None` is the configured tint.
     pub color: Option<String>,
+    /// A silhouette for this glyph only; `None` is the configured shape, else a circle.
+    pub shape: Option<StatusShape>,
     /// Which pane set the status; `None` reads as the main pane.
     pub status_pane: Option<StatusPane>,
 }
@@ -82,6 +125,14 @@ impl AgentIndicator {
             Some(StatusPane::Right) if !has_split => Some(StatusPane::Left),
             pane => pane,
         }
+    }
+
+    /// Whether a keystroke from `pane` clears this indicator: only when that pane owns the status (an untagged one
+    /// is the main pane's) and [`AgentStatus::cleared_by`] allows it, so typing in one pane cannot wipe another
+    /// pane's status (upstream's `clearedBy(pane:keystroke:reset:)`).
+    #[must_use]
+    pub fn cleared_by(&self, pane: StatusPane, keystroke: StatusKeystroke, reset: StatusReset) -> bool {
+        self.status_pane.unwrap_or(StatusPane::Left) == pane && self.status.cleared_by(keystroke, reset)
     }
 }
 
@@ -175,6 +226,17 @@ pub struct Session {
     /// The split pane's terminal, created on the first split and kept while the split is hidden; freed when the split
     /// closes.
     pub split_surface: SurfaceSlot,
+    /// The in-terminal search. Ephemeral.
+    pub search: SearchState,
+}
+
+/// The outcome of resolving a command's `--pane-id` and `--pane` pair (upstream's `Session.PaneAddress`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaneAddress {
+    /// The pane addressed; `None` when neither selector was given and the command's own default applies.
+    Pane(Option<StatusPane>),
+    /// A token no live pane of the session carries, and no role was named beside it.
+    UnknownToken(String),
 }
 
 /// What a new session starts with (upstream's `Session.init` arguments).
@@ -225,6 +287,7 @@ impl Session {
             split_restore: PaneRestore::default(),
             surface: SurfaceSlot::default(),
             split_surface: SurfaceSlot::default(),
+            search: SearchState::default(),
         }
     }
 
@@ -381,10 +444,84 @@ impl Session {
         }
     }
 
+    /// The role of the live pane whose terminal carries `token` (upstream's `paneRole(forToken:)`); `None` for an
+    /// empty token or one no pane carries.
+    #[must_use]
+    pub fn pane_role_for_token(&self, token: &str) -> Option<StatusPane> {
+        if token.is_empty() {
+            return None;
+        }
+        let carries = |slot: &SurfaceSlot| slot.get().is_some_and(|surface| surface.pane_token() == token);
+        if carries(&self.surface) {
+            Some(StatusPane::Left)
+        } else if carries(&self.split_surface) {
+            Some(StatusPane::Right)
+        } else {
+            None
+        }
+    }
+
+    /// Resolves a `--pane-id`/`--pane` pair (upstream's `paneAddress(token:pane:)`): a live token wins over the role
+    /// named beside it, an unknown token falls back to that role, and an unknown token alone is refused.
+    #[must_use]
+    pub fn pane_address(&self, token: Option<&str>, pane: Option<StatusPane>) -> PaneAddress {
+        match token.filter(|token| !token.is_empty()) {
+            None => PaneAddress::Pane(pane),
+            Some(token) => match self.pane_role_for_token(token).or(pane) {
+                Some(resolved) => PaneAddress::Pane(Some(resolved)),
+                None => PaneAddress::UnknownToken(token.to_owned()),
+            },
+        }
+    }
+
+    /// The terminal slot of a pane role; `None` for the scratch, which has no slot yet.
+    #[must_use]
+    pub fn pane_slot(&self, pane: StatusPane) -> Option<&SurfaceSlot> {
+        match pane {
+            StatusPane::Left => Some(&self.surface),
+            StatusPane::Right => Some(&self.split_surface),
+            StatusPane::Scratch => None,
+        }
+    }
+
+    /// The mutable terminal slot of a pane role, as [`Session::pane_slot`].
+    pub fn pane_slot_mut(&mut self, pane: StatusPane) -> Option<&mut SurfaceSlot> {
+        match pane {
+            StatusPane::Left => Some(&mut self.surface),
+            StatusPane::Right => Some(&mut self.split_surface),
+            StatusPane::Scratch => None,
+        }
+    }
+
+    /// The pane a command reads when none is named (upstream's `onScreenSurface`): the scratch while shown, else the
+    /// focused split pane while it has a terminal (`activeSurface`), else the main pane.
+    #[must_use]
+    pub fn on_screen_pane(&self) -> StatusPane {
+        if self.scratch_active {
+            StatusPane::Scratch
+        } else if self.split.focused && self.split_surface.is_present() {
+            StatusPane::Right
+        } else {
+            StatusPane::Left
+        }
+    }
+
+    /// The main pane, else a promoted split survivor's while the main slot is empty (upstream's
+    /// `addressableSurface`).
+    #[must_use]
+    pub fn addressable_pane(&self) -> StatusPane {
+        if !self.surface.is_present() && self.split_surface.is_present() {
+            StatusPane::Right
+        } else {
+            StatusPane::Left
+        }
+    }
+
     /// Frees every terminal the session holds.
     pub fn teardown_surfaces(&mut self) {
         self.surface.teardown();
         self.split_surface.teardown();
+        self.search.clear();
     }
 }
 

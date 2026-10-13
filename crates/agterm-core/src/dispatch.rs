@@ -3,8 +3,9 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
+use std::time::Duration;
 
-use agterm_proto::command::EventsCmd;
+use agterm_proto::command::{EventsCmd, SessionCmd};
 use agterm_proto::{
     AppIdentity, Args, Command, ConformanceProfile, ControlResult, ControlTree, PARITY_LEVEL, Request, Response,
     VersionResult,
@@ -22,6 +23,7 @@ use crate::persist::{AppSettings, DebouncedSave, LibraryPersistence};
 use crate::projection::{TreeContext, control_tree};
 use crate::resolve::Resolver;
 use crate::windows::{WindowRequest, WindowState};
+use crate::zoom::SurfaceId;
 
 /// What the app tells the core about itself at startup.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +56,50 @@ pub struct CommitTimers {
     pub tree_changed: Vec<TreeChangedTimer>,
 }
 
+/// The next step of a command that waits on the frontend: run on the main loop once its delay passed.
+pub type Resume = Box<dyn FnOnce(&mut Core) -> Dispatched + Send>;
+
+/// A request's answer, or the step that will produce it once the frontend caught up (a terminal coming up, libghostty
+/// reporting a search count), as upstream's handlers await short main-actor polls.
+pub enum Dispatched {
+    /// The answer.
+    Done(Response),
+    /// Not answered yet: run `resume` on the main loop after `after`, and answer with what it returns.
+    Pending { after: Duration, resume: Resume },
+}
+
+impl Dispatched {
+    /// An answer from a handler's outcome.
+    pub(crate) fn done(outcome: Result<ControlResult, ControlError>) -> Self {
+        Self::Done(
+            outcome
+                .and_then(|result| result_of(&result))
+                .unwrap_or_else(Response::from),
+        )
+    }
+
+    /// Runs the pending steps at once, without waiting out their delays: the answer a caller gets that cannot wait
+    /// (tests over fakes, which change only when the test changes them).
+    #[must_use]
+    pub fn finish_now(mut self, core: &mut Core) -> Response {
+        loop {
+            match self {
+                Self::Done(response) => return response,
+                Self::Pending { resume, .. } => self = resume(core),
+            }
+        }
+    }
+}
+
+impl fmt::Debug for Dispatched {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Done(response) => f.debug_tuple("Done").field(response).finish(),
+            Self::Pending { after, .. } => f.debug_struct("Pending").field("after", after).finish_non_exhaustive(),
+        }
+    }
+}
+
 /// The frontend's file-manager reveal of a directory (`session.reveal`).
 struct RevealHandler(Box<dyn Fn(&Path)>);
 
@@ -79,6 +125,11 @@ pub struct Core {
     /// What window commands left for the frontend's windows, in order, until it takes them.
     window_requests: Vec<WindowRequest>,
     reveal_handler: Option<RevealHandler>,
+    /// The status sounds commands asked the frontend to play, in order, until it takes them.
+    status_sounds: Vec<String>,
+    /// Each window's terminal zoom: the one surface it fills itself with (upstream's per-window
+    /// `TerminalZoomController.target`).
+    zoom: HashMap<Uuid, SurfaceId>,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -132,6 +183,8 @@ impl Core {
             window_states: HashMap::new(),
             window_requests: Vec::new(),
             reveal_handler: None,
+            status_sounds: Vec::new(),
+            zoom: HashMap::new(),
         }
     }
 
@@ -146,6 +199,38 @@ impl Core {
     /// them after building the windows the same commit opened.
     pub fn take_window_requests(&mut self) -> Vec<WindowRequest> {
         std::mem::take(&mut self.window_requests)
+    }
+
+    /// Takes the status sounds commands asked for since the last take, in order (`session.status --sound`, the
+    /// blocked-status default). The frontend plays them after the commit.
+    pub fn take_status_sounds(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.status_sounds)
+    }
+
+    /// The surface window `id` is zoomed to, if any.
+    #[must_use]
+    pub fn zoom_target(&self, id: Uuid) -> Option<SurfaceId> {
+        self.zoom.get(&id).copied()
+    }
+
+    /// Sets or clears window `id`'s zoom (the frontend's exit-zoom control clears it). Commit afterwards.
+    pub fn set_zoom_target(&mut self, id: Uuid, target: Option<SurfaceId>) {
+        match target {
+            Some(target) => self.zoom.insert(id, target),
+            None => self.zoom.remove(&id),
+        };
+    }
+
+    /// Drops the zoom of a closed window or of a surface no longer addressable, as upstream's zoom layer clears a
+    /// stale target when it renders.
+    fn prune_zoom(&mut self) {
+        let library = &self.library;
+        self.zoom
+            .retain(|window, target| library.store(*window).is_some_and(|store| target.is_valid_in(store)));
+    }
+
+    pub(crate) fn play_status_sound(&mut self, name: String) {
+        self.status_sounds.push(name);
     }
 
     pub(crate) fn request_window(&mut self, request: WindowRequest) {
@@ -279,6 +364,7 @@ impl Core {
     /// immediate snapshot saves and a changed index, sequences the events into the ring, and hands back the timers
     /// the caller arms on the main loop. Without persistence the effects are drained and the saves dropped.
     pub fn commit(&mut self) -> CommitTimers {
+        self.prune_zoom();
         let (events, debounced, pending_closes) = if let Some(persistence) = self.persistence.as_mut() {
             let commit = persistence.commit(&mut self.library);
             (commit.events, commit.debounced, commit.pending_closes)
@@ -324,8 +410,19 @@ impl Core {
     }
 
     /// Answers one request. Failures become `ok:false` with the error's text.
+    ///
+    /// A command that waits on the frontend runs its steps at once here (see [`Dispatched::finish_now`]); the app
+    /// answers through [`Core::begin`] instead.
     pub fn dispatch(&mut self, request: &Request) -> Response {
-        self.route(request).unwrap_or_else(Response::from)
+        self.begin(request).finish_now(self)
+    }
+
+    /// Answers one request, or starts a command that waits on the frontend and hands back its next step.
+    pub fn begin(&mut self, request: &Request) -> Dispatched {
+        match commands::deferred(self, request) {
+            Some(dispatched) => dispatched,
+            None => Dispatched::Done(self.route(request).unwrap_or_else(Response::from)),
+        }
     }
 
     /// Decodes and answers one request line, as the socket receives it.
@@ -363,7 +460,9 @@ impl Core {
             index_unsaved: self.persistence.as_ref().is_some_and(LibraryPersistence::index_unsaved),
             quick_visible: false,
         };
-        Ok(control_tree(store, &context))
+        let mut tree = control_tree(store, &context);
+        tree.zoomed_surface = scoped.and_then(|id| self.zoom_target(id)).map(SurfaceId::control_id);
+        Ok(tree)
     }
 
     /// `events.read`: a page of the ring after the cursor, or the anchor alone without one; a cursor the ring cannot
@@ -383,9 +482,19 @@ impl Core {
     /// One arm per group, routing to the group's handler; groups without one yet are refused by name.
     fn route(&mut self, request: &Request) -> Result<Response, ControlError> {
         match request.cmd {
+            Command::Session(
+                cmd @ (SessionCmd::Status | SessionCmd::Flag | SessionCmd::Context | SessionCmd::Seen),
+            ) => match commands::metadata::dispatch(self, cmd, request)? {
+                Some(result) => result_of(&result),
+                None => Ok(Response::success()),
+            },
             Command::Session(cmd) => result_of(&commands::session::dispatch(self, cmd, request)?),
             Command::Window(cmd) => result_of(&commands::window::dispatch(self, cmd, request)?),
             Command::Workspace(cmd) => match commands::workspace::dispatch(self, cmd, request)? {
+                Some(result) => result_of(&result),
+                None => Ok(Response::success()),
+            },
+            Command::Surface(cmd) => match commands::surface_target::dispatch(self, cmd, request)? {
                 Some(result) => result_of(&result),
                 None => Ok(Response::success()),
             },
@@ -410,7 +519,6 @@ impl Core {
             | Command::Quick(_)
             | Command::Restore(_)
             | Command::Sidebar(_)
-            | Command::Surface(_)
             | Command::Theme(_)
             | Command::Zmx(_)) => Err(ControlError::NotSupported(cmd)),
         }

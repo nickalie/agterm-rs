@@ -35,7 +35,7 @@ use agterm_proto::Request;
 
 pub use crate::connection::ConnectionDeadlines;
 use crate::connection::Hop;
-pub use crate::stream::{LineStream, LineStreamLimits, Reply, StreamOwner};
+pub use crate::stream::{LineStream, LineStreamLimits, Reply, ReplySender, StreamOwner};
 
 /// A socket path must be shorter than this many bytes: upstream's `start` guard (`socketPath.utf8.count < 104`, the
 /// macOS `sun_path` size), kept on Linux although its `sun_path` holds 108.

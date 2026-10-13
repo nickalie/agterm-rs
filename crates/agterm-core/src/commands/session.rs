@@ -54,6 +54,12 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
                 None => move_one(core, target, window, &form),
             }
         }
+        SessionCmd::Type
+        | SessionCmd::Text
+        | SessionCmd::Copy
+        | SessionCmd::Paste
+        | SessionCmd::SelectAll
+        | SessionCmd::Search => super::surface::dispatch_session(core, cmd, request),
         other => Err(ControlError::NotSupported(Command::Session(other))),
     }
 }

@@ -98,6 +98,8 @@ pub struct WindowUi {
     /// The model window shown.
     window_id: Uuid,
     paned: gtk::Paned,
+    /// The header bar's exit-zoom button, shown while the window is zoomed to one terminal.
+    exit_zoom: gtk::Button,
     deck: Deck,
     sidebar: Sidebar,
     context: PaneContext,
@@ -132,8 +134,15 @@ impl WindowUi {
         sidebar
             .widget()
             .set_size_request(divider_position(agterm_core::model::SIDEBAR_WIDTH_MIN), -1);
+        let exit_zoom = gtk::Button::builder()
+            .icon_name("view-restore-symbolic")
+            .tooltip_text("Exit Terminal Zoom")
+            .visible(false)
+            .build();
+        let header = adw::HeaderBar::new();
+        header.pack_end(&exit_zoom);
         let toolbar = adw::ToolbarView::new();
-        toolbar.add_top_bar(&adw::HeaderBar::new());
+        toolbar.add_top_bar(&header);
         toolbar.set_content(Some(&paned));
         let window = adw::ApplicationWindow::builder()
             .application(app)
@@ -146,6 +155,7 @@ impl WindowUi {
             window,
             window_id,
             paned,
+            exit_zoom,
             deck,
             sidebar,
             context,
@@ -203,6 +213,10 @@ impl WindowUi {
             });
         });
         self.connect_divider(poster);
+        let posting = poster.clone();
+        self.exit_zoom.connect_clicked(move |_| {
+            state::post(&posting, move |state: &mut AppState| state.exit_zoom(id));
+        });
     }
 
     /// A drag notifies per pixel: one task at a time reads the latest position.
@@ -351,16 +365,23 @@ impl WindowUi {
     /// Renders the model: the deck's pages, the sidebar's rows, visibility and width, and the title.
     pub fn sync(&mut self, core: &mut Core, poster: &Poster) {
         let id = self.window_id;
-        self.deck.reconcile(core, Some(id), &self.context, poster);
+        let zoomed = core.zoom_target(id);
+        self.deck
+            .reconcile(core, Some(id), zoomed.map(|zoom| zoom.session), &self.context, poster);
         let badges = core.settings().notification_badge_enabled.unwrap_or(true);
         if let Some(store) = core.library_mut().store_mut(id) {
             self.sidebar.refresh(store, badges);
+            // a zoomed terminal fills the window: the sidebar steps aside without its visibility changing
+            if zoomed.is_some() {
+                self.sidebar.widget().set_visible(false);
+            }
             let position = divider_position(store.sidebar().width);
             if self.paned.position() != position {
                 self.paned.set_position(position);
             }
         }
         self.window.set_title(Some(&window_title(core.library(), Some(id))));
+        self.exit_zoom.set_visible(zoomed.is_some());
     }
 }
 

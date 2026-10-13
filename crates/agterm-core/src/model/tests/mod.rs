@@ -9,5 +9,6 @@ mod pending_close;
 mod recent_closed;
 mod reselection;
 mod snapshot;
+mod status;
 mod store;
 mod support;

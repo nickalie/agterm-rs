@@ -33,6 +33,18 @@ impl StatusPane {
             Self::Scratch => "scratch",
         }
     }
+
+    /// Parses a pane selector with its role and position aliases (upstream's `StatusPane(controlName:)`):
+    /// `left|top|primary`, `right|bottom|split`, `scratch`.
+    #[must_use]
+    pub fn from_control_name(name: &str) -> Option<Self> {
+        match name {
+            "left" | "top" | "primary" => Some(Self::Left),
+            "right" | "bottom" | "split" => Some(Self::Right),
+            "scratch" => Some(Self::Scratch),
+            _ => None,
+        }
+    }
 }
 
 /// A session-owned surface: main pane, split pane, overlay or scratch.

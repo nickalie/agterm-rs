@@ -16,11 +16,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use agterm_core::Core;
+use agterm_core::link_policy::ClickOrigin;
 use agterm_core::model::{AppStore, WindowLibrary};
 use agterm_core::pane_env::{self, PaneEnv, SessionPane, StatusPane};
 use gtk::prelude::*;
 use uuid::Uuid;
 
+use crate::ghostty_app;
 use crate::pane::PaneSurface;
 use crate::state::{self, AppState, PaneReport, Poster};
 use crate::surface::{SurfaceSpec, TerminalSurface};
@@ -196,8 +198,16 @@ impl Deck {
 
     /// Brings the deck in line with `window`'s sessions: pages for new sessions (their terminals installed in the
     /// sessions' surface slots), gone sessions' pages removed, the selected session's page shown and focused when
-    /// the selection changed.
-    pub fn reconcile(&mut self, core: &mut Core, window: Option<Uuid>, context: &PaneContext, poster: &Poster) {
+    /// the selection changed. While the window is zoomed to one of `zoomed`'s terminals, that session's page shows
+    /// instead, selected or not (upstream's zoom layer; a terminal is never reparented, so its own page fills).
+    pub fn reconcile(
+        &mut self,
+        core: &mut Core,
+        window: Option<Uuid>,
+        zoomed: Option<Uuid>,
+        context: &PaneContext,
+        poster: &Poster,
+    ) {
         let mounted: HashSet<Uuid> = self.pages.keys().copied().collect();
         let plan = plan(core.library(), window, &mounted);
         for id in &plan.remove {
@@ -210,7 +220,8 @@ impl Deck {
         for spec in &plan.add {
             self.add_page(core, spec, context, poster);
         }
-        self.show(plan.shown);
+        let zoomed = zoomed.filter(|id| self.pages.contains_key(id));
+        self.show(zoomed.or(plan.shown));
     }
 
     fn add_page(&mut self, core: &mut Core, spec: &PageSpec, context: &PaneContext, poster: &Poster) {
@@ -275,13 +286,32 @@ fn set_page_visible(widget: &gtk::Box, terminal: &TerminalSurface, visible: bool
 }
 
 /// Routes the terminal's events to the model as main-loop tasks: its shell exiting closes the session (upstream's
-/// `handlePaneExit` without a split), its cwd and title reports land on the session.
+/// `handlePaneExit` without a split), its cwd and title reports land on the session, its search reports on the
+/// session's search (upstream's `wireSearchCallbacks`), and a clicked link opens through the link policy as a click
+/// in this session's pane, under the link-open setting.
 fn connect_terminal(terminal: &TerminalSurface, spec: &PageSpec, poster: &Poster) {
     let (session, token) = (spec.session, spec.token());
     let posting = poster.clone();
+    let exit_token = token.clone();
     terminal.connect_exit(move || {
         state::post(&posting, move |state: &mut AppState| {
-            state.close_exited_session(session, &token);
+            state.close_exited_session(session, &exit_token);
+        });
+    });
+    let posting = poster.clone();
+    terminal.connect_search(move |report| {
+        let (report, token) = (report.clone(), token.clone());
+        state::post(&posting, move |state: &mut AppState| {
+            state.core.report_search(session, &token, report);
+            state.settle();
+        });
+    });
+    let posting = poster.clone();
+    terminal.connect_open_url(move |url| {
+        let url = url.to_owned();
+        state::post(&posting, move |state: &mut AppState| {
+            let mode = state.core.settings().effective_link_open_mode();
+            ghostty_app::follow_link(&url, mode, ClickOrigin::Pane(session));
         });
     });
     let posting = poster.clone();

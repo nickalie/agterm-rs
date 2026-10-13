@@ -1,12 +1,13 @@
-//! `agtermctl session ...` (`agtermctlKit/SessionCommands.swift` `Session`): the session lifecycle subcommands.
-//! Each takes its own options first, then `--target` where it addresses a session, then [`ClientOptions`], the
-//! order its help and usage line list them in. The rest of upstream's group (`type`, `split`, `status`, ...) joins
-//! with the tasks that implement those commands.
+//! `agtermctl session ...` (`agtermctlKit/SessionCommands.swift` `Session`): the group, and here its lifecycle
+//! subcommands; [`crate::session_io`] drives the terminal, [`crate::session_meta`] sets metadata. Each takes its own
+//! options first, then `--target` where it addresses a session, then [`ClientOptions`], the order its help and usage
+//! line list them in. The rest of upstream's group (`split`, `restore`, ...) joins with the tasks that implement
+//! those commands.
 
 use agterm_proto::command::SessionCmd;
 use agterm_proto::{Args, Command, Request};
 
-use crate::{BasicOptions, BatchTargetOptions, ClientOptions, RequestCommand, TargetOptions};
+use crate::{BasicOptions, BatchTargetOptions, ClientOptions, RequestCommand, TargetOptions, session_io, session_meta};
 
 /// `agtermctl session <subcommand>`.
 #[derive(Debug, clap::Args)]
@@ -32,6 +33,16 @@ impl Session {
             SessionCommand::Rename(command) => command,
             SessionCommand::Reveal(command) => command,
             SessionCommand::Move(command) => command,
+            SessionCommand::Type(command) => command,
+            SessionCommand::Copy(command) => command,
+            SessionCommand::Paste(command) => command,
+            SessionCommand::SelectAll(command) => command,
+            SessionCommand::Text(command) => command,
+            SessionCommand::Status(command) => command,
+            SessionCommand::Flag(command) => command,
+            SessionCommand::Context(command) => command,
+            SessionCommand::Seen(command) => command,
+            SessionCommand::Search(command) => command,
         }
     }
 }
@@ -47,10 +58,25 @@ enum SessionCommand {
     Rename(Rename),
     Reveal(Reveal),
     Move(Move),
+    Type(session_io::Type),
+    Copy(session_io::Copy),
+    Paste(session_io::Paste),
+    SelectAll(session_io::SelectAll),
+    Text(session_io::Text),
+    Status(session_meta::Status),
+    Flag(session_meta::Flag),
+    Context(session_meta::Context),
+    Seen(session_meta::Seen),
+    Search(session_io::Search),
 }
 
 /// A request for `cmd` on `target` with `args` (`--window` folded in).
-fn session_request(cmd: SessionCmd, target: Option<String>, args: Option<Args>, options: &ClientOptions) -> Request {
+pub fn session_request(
+    cmd: SessionCmd,
+    target: Option<String>,
+    args: Option<Args>,
+    options: &ClientOptions,
+) -> Request {
     Request {
         cmd: Command::Session(cmd),
         target,

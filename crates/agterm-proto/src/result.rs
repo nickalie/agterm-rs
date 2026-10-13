@@ -21,15 +21,27 @@ pub struct ControlResult {
     /// `window.resize`: the applied frame height.
     #[serde(default)]
     pub height: Option<i64>,
+    /// `session.text`/`session.copy`: the text read; `session.search`: the match counter's display text.
+    #[serde(default)]
+    pub text: Option<String>,
     /// `window.list`.
     #[serde(default)]
     pub windows: Option<Vec<ControlWindowNode>>,
+    /// `session.search`: libghostty's match count, absent before a query ran.
+    #[serde(default)]
+    pub count: Option<i64>,
     /// How many things a batch mutation actually changed (`session.close`, `session.move` with several targets).
     #[serde(default)]
     pub affected: Option<i64>,
+    /// The pane a command read or typed into (`left|right|scratch`).
+    #[serde(default)]
+    pub pane: Option<String>,
     /// `events.read`: a page of the event ring, also on a cursor failure (then the ring's current anchor).
     #[serde(default)]
     pub events: Option<EventBatch>,
+    /// `surface.cursor`: the cursor's column.
+    #[serde(default)]
+    pub cursor: Option<ControlCursor>,
 }
 
 impl ControlResult {
@@ -71,6 +83,15 @@ impl ControlResult {
         }
     }
 
+    /// `{"text": text}`.
+    #[must_use]
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            text: Some(text.into()),
+            ..Self::default()
+        }
+    }
+
     /// `{"windows": [...]}`.
     #[must_use]
     pub fn windows(windows: Vec<ControlWindowNode>) -> Self {
@@ -79,6 +100,12 @@ impl ControlResult {
             ..Self::default()
         }
     }
+}
+
+/// A surface's cursor position (upstream's `ControlCursor`): the column only, zero-based from the grid's left edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlCursor {
+    pub column: i64,
 }
 
 /// An open window's on-screen frame, in the coordinates `window.move`/`window.resize` take (upstream's

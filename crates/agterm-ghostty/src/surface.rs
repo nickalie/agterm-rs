@@ -17,6 +17,7 @@ use crate::app::{App, AppHandle};
 use crate::clipboard::{ClipboardContent, PendingRequest};
 use crate::config::Config;
 use crate::input::{KeyEvent, Mods, MouseButton, MouseState, ScrollMods};
+use crate::text::{PointTag, Selection, SurfaceText, solve_cursor_column};
 use crate::{ColorScheme, Error};
 
 /// Where a new surface sits, which decides what it inherits.
@@ -312,6 +313,67 @@ impl Surface {
         }
     }
 
+    /// The text of `selection`; `None` when libghostty could not read it. A blank region reads as empty text.
+    #[must_use]
+    pub fn read_text(&self, selection: Selection) -> Option<SurfaceText> {
+        let mut raw = empty_text();
+        // SAFETY: a live surface on its thread; raw is a valid output struct.
+        let read = unsafe { sys::ghostty_surface_read_text(self.ptr(), selection.raw(), &raw mut raw) };
+        read.then(|| self.take_text(raw))
+    }
+
+    /// The current selection's text; `None` with no selection or when libghostty could not read it.
+    #[must_use]
+    pub fn read_selection(&self) -> Option<SurfaceText> {
+        if !self.has_selection() {
+            return None;
+        }
+        let mut raw = empty_text();
+        // SAFETY: a live surface on its thread; raw is a valid output struct.
+        let read = unsafe { sys::ghostty_surface_read_selection(self.ptr(), &raw mut raw) };
+        read.then(|| self.take_text(raw))
+    }
+
+    /// Copies a successful read's text out and frees libghostty's buffer.
+    fn take_text(&self, mut raw: sys::ghostty_text_s) -> SurfaceText {
+        let text = if raw.text.is_null() || raw.text_len == 0 {
+            String::new()
+        } else {
+            // SAFETY: a successful read left text valid for text_len bytes until the free below.
+            let bytes = unsafe { std::slice::from_raw_parts(raw.text.cast::<u8>(), raw.text_len) };
+            String::from_utf8_lossy(bytes).into_owned()
+        };
+        let copied = SurfaceText {
+            text,
+            top_left_x: raw.tl_px_x,
+            top_left_y: raw.tl_px_y,
+            offset_start: raw.offset_start,
+            offset_len: raw.offset_len,
+        };
+        // SAFETY: a live surface on its thread; raw holds this surface's successful read, freed once, here.
+        unsafe { sys::ghostty_surface_free_text(self.ptr(), &raw mut raw) };
+        copied
+    }
+
+    /// The cursor's zero-based column, solved from the viewport's top-left cell, the IME point and the grid read on
+    /// both sides of it ([`solve_cursor_column`]); `None` when the geometry cannot be trusted.
+    #[must_use]
+    pub fn cursor_column(&self) -> Option<u32> {
+        let probe = self.read_text(Selection::cell(PointTag::Viewport, 0, 0))?;
+        let before = self.size();
+        let ime = self.ime_point();
+        let after = self.size();
+        solve_cursor_column(probe.top_left_x, before, ime, after)
+    }
+
+    /// The pid of the terminal's foreground process; `None` when libghostty reports none.
+    #[must_use]
+    pub fn foreground_pid(&self) -> Option<u32> {
+        // SAFETY: a live surface on its thread.
+        let pid = unsafe { sys::ghostty_surface_foreground_pid(self.ptr()) };
+        u32::try_from(pid).ok().filter(|pid| *pid > 0)
+    }
+
     /// Complete a read or confirmation with `contents`; `confirmed` says the user approved it. A request that belongs
     /// to another surface is refused and handed back.
     ///
@@ -371,6 +433,18 @@ impl Surface {
         // SAFETY: a live surface on its thread; pending.state is its open request, consumed here.
         unsafe { sys::ghostty_surface_deny_clipboard_request(self.ptr(), pending.state.as_ptr()) };
         Ok(())
+    }
+}
+
+/// An output struct for a text read: no text, no position.
+fn empty_text() -> sys::ghostty_text_s {
+    sys::ghostty_text_s {
+        tl_px_x: 0.0,
+        tl_px_y: 0.0,
+        offset_start: 0,
+        offset_len: 0,
+        text: std::ptr::null(),
+        text_len: 0,
     }
 }
 

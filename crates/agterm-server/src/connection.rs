@@ -84,7 +84,10 @@ impl<S: 'static> Hop<S> {
             return ControlError::ShuttingDown.into();
         }
         // a task dropped unrun by a shutting-down loop drops the sender with it
-        reply_rx.recv().unwrap_or_else(|_| ControlError::ShuttingDown.into())
+        reply_rx
+            .recv()
+            .unwrap_or_else(|_| ControlError::ShuttingDown.into())
+            .settled()
     }
 }
 
@@ -169,6 +172,7 @@ fn deliver(mut stream: UnixStream, reply: Reply, pending: Vec<u8>, deadlines: &C
     let Reply {
         response,
         stream: owner,
+        ..
     } = reply;
     let written = write_response(&mut stream, &response, deadlines);
     let Some(owner) = owner else {

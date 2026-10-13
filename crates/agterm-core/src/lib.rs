@@ -7,10 +7,14 @@
 //!
 //! Work that needs a live terminal, widget, daemon or process goes through the `agterm-host` traits.
 
+pub mod clipboard_policy;
 mod commands;
 pub mod dispatch;
 pub mod error;
 pub mod events;
+pub mod interrupt;
+pub mod keystrokes;
+pub mod link_policy;
 pub mod model;
 pub mod pane_env;
 pub mod paths;
@@ -19,7 +23,9 @@ pub mod projection;
 pub mod resolve;
 pub mod sidebar_drop;
 pub mod windows;
+pub mod zoom;
 
-pub use dispatch::{CommitTimers, Core, CoreConfig, CoreState, decode_request};
+pub use commands::surface::POLL_INTERVAL;
+pub use dispatch::{CommitTimers, Core, CoreConfig, CoreState, Dispatched, Resume, decode_request};
 pub use error::{ControlError, Noun};
 pub use windows::{WindowRequest, WindowSize, WindowState};

@@ -14,8 +14,10 @@ pub mod pane;
 mod pending_close;
 mod recency;
 mod recent_closed;
+mod search;
 mod session;
 mod snapshot;
+mod status;
 mod store;
 mod window_library;
 mod workspace;
@@ -33,7 +35,14 @@ pub use pending_close::{
 };
 pub use recency::{RECENCY_LIMIT, RecencyStack};
 pub use recent_closed::RecentClosedRestore;
-pub use session::{AgentIndicator, AgentStatus, CONTEXT_BYTE_LIMIT, Session, SessionSeed, validate_context};
+pub use search::{SearchFollowUp, SearchReport, SearchState};
+pub use session::{
+    AgentIndicator, AgentStatus, CONTEXT_BYTE_LIMIT, PaneAddress, Session, SessionSeed, validate_context,
+};
+pub use status::{
+    STANDARD_SOUND_NAMES, StatusKeystroke, StatusReset, StatusShape, StatusWriteResult, is_known_sound,
+    is_valid_color_hex,
+};
 pub use store::{
     AppStore, FocusFilter, NewSession, SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN, SessionLocation,
     SidebarState, WorkspaceOptions, WorkspaceStep, attention_order, clamp_sidebar_width,

@@ -2,8 +2,10 @@
 //! strings are asserted in full, dynamic parts included.
 
 mod events;
+mod metadata;
 mod moves;
 mod session;
+mod surface;
 mod window;
 mod workspace;
 

@@ -24,7 +24,7 @@ libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 # `preserve_order`: a result built as a `Value` keeps its fields in upstream's order on the wire (the catalog's
 # `fields` order) instead of sorting them.
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 serde_with = { version = "3", default-features = false, features = ["macros"] }
 strum = { version = "0.27", features = ["derive"] }
 serde_norway = "0.9"
