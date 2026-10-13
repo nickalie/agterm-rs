@@ -410,15 +410,25 @@ mod tests {
     #[test]
     fn a_prefix_shared_across_windows_is_ambiguous_in_window_order() {
         let (mut library, [first, second]) = two_windows();
-        // seventeen workspaces always hold two whose ids share a first hex digit
-        for _ in 0..8 {
+        let ids = |library: &WindowLibrary, window: Uuid| -> Vec<String> {
+            workspace_ids(library.store(window).unwrap())
+                .into_iter()
+                .map(uuid_string)
+                .collect()
+        };
+        let digit = |id: &String| id[..1].to_lowercase();
+        // add workspaces until a first hex digit starts an id in each window, so the collision crosses windows
+        let shared = loop {
+            let in_second: Vec<String> = ids(&library, second).iter().map(digit).collect();
+            if let Some(shared) = ids(&library, first).iter().map(digit).find(|d| in_second.contains(d)) {
+                break shared;
+            }
             library.store_mut(first).unwrap().add_workspace("w");
             library.store_mut(second).unwrap().add_workspace("w");
-        }
+        };
         let all: Vec<String> = [first, second]
-            .iter()
-            .flat_map(|window| workspace_ids(library.store(*window).unwrap()))
-            .map(uuid_string)
+            .into_iter()
+            .flat_map(|window| ids(&library, window))
             .collect();
         let starts = |digit: &str| -> Vec<String> {
             all.iter()
@@ -426,11 +436,6 @@ mod tests {
                 .cloned()
                 .collect()
         };
-        let shared = all
-            .iter()
-            .map(|id| id[..1].to_lowercase())
-            .find(|digit| starts(digit).len() > 1)
-            .unwrap();
         let error = Resolver::new(&library).workspace(Some(&shared), None).unwrap_err();
         let ControlError::Ambiguous { hits, .. } = &error else {
             panic!("{error}")

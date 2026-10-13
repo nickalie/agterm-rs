@@ -62,7 +62,7 @@ struct PointerState {
 }
 
 type ExitHandler = Box<dyn FnOnce()>;
-type TitleHandler = Box<dyn Fn(&str)>;
+type ReportHandler = Box<dyn Fn(&str)>;
 
 struct Inner {
     key: SurfaceKey,
@@ -75,7 +75,8 @@ struct Inner {
     keys: RefCell<KeyState>,
     pointer: RefCell<PointerState>,
     pwd: RefCell<Option<String>>,
-    on_title: RefCell<Option<TitleHandler>>,
+    on_title: RefCell<Vec<ReportHandler>>,
+    on_pwd: RefCell<Vec<ReportHandler>>,
     on_exit: RefCell<Option<ExitHandler>>,
     exit_handled: Cell<bool>,
     /// The first frame was drawn (logged once).
@@ -144,7 +145,8 @@ impl TerminalSurface {
             keys: RefCell::new(KeyState::default()),
             pointer: RefCell::new(PointerState::default()),
             pwd: RefCell::new(None),
-            on_title: RefCell::new(None),
+            on_title: RefCell::new(Vec::new()),
+            on_pwd: RefCell::new(Vec::new()),
             on_exit: RefCell::new(None),
             exit_handled: Cell::new(false),
             drew: Cell::new(false),
@@ -174,9 +176,14 @@ impl TerminalSurface {
         &self.area
     }
 
-    /// Called with each title a program sets (or the user's static one).
+    /// Adds a handler called with each title a program sets (or the user's static one), empty ones included.
     pub fn connect_title(&self, handler: impl Fn(&str) + 'static) {
-        *self.inner.on_title.borrow_mut() = Some(Box::new(handler));
+        self.inner.on_title.borrow_mut().push(Box::new(handler));
+    }
+
+    /// Adds a handler called with each working directory the shell reports (OSC 7).
+    pub fn connect_pwd(&self, handler: impl Fn(&str) + 'static) {
+        self.inner.on_pwd.borrow_mut().push(Box::new(handler));
     }
 
     /// Called once when the terminal's process ends.
@@ -330,15 +337,15 @@ impl TerminalSurface {
     }
 
     pub fn apply_title(&self, title: &str) {
-        if title.is_empty() {
-            return;
-        }
-        if let Some(handler) = self.inner.on_title.borrow().as_ref() {
+        for handler in self.inner.on_title.borrow().iter() {
             handler(title);
         }
     }
 
     pub fn apply_pwd(&self, pwd: String) {
+        for handler in self.inner.on_pwd.borrow().iter() {
+            handler(&pwd);
+        }
         *self.inner.pwd.borrow_mut() = Some(pwd);
     }
 

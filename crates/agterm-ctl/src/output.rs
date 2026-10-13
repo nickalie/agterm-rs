@@ -15,19 +15,19 @@ use serde_json::Value;
 use crate::client::Reply;
 use crate::tree::format_tree;
 
-/// Renders a response as its human-readable summary (no trailing newline): an `error:` line, the serving app's
-/// version, the affected id (only with `echo_id`, for the create commands), or a bare `ok`. Never JSON: `--json`
-/// prints the server's own line.
+/// Renders a response as its human-readable summary (no trailing newline): an `error:` line, the tree listing, the
+/// serving app's version, the affected id (only with `echo_id`, for the create commands), or a bare `ok`. Never
+/// JSON: `--json` prints the server's own line.
 ///
-/// Upstream tests the result's fields in a fixed order (`tree` before `app`, since a tree carries `app` too); each
-/// command group adds its branch at its place in that order.
+/// The result's fields are tested in upstream's fixed order (`formatResponse`: `tree` first, `app` after the
+/// listings); each command group adds its branch at its place in that order.
 #[must_use]
 pub fn format_response(response: &Response, echo_id: bool) -> String {
     if !response.ok {
         return format!("error: {}", response.error.as_deref().unwrap_or("unknown error"));
     }
     let result = response.result.as_ref();
-    // a tree this build cannot decode reads as no tree, as a field it does not model would
+    // `client::send` already refused a reply whose tree does not decode, as upstream's whole-response decode does
     if let Some(tree) = result
         .and_then(|result| result.get("tree"))
         .and_then(|tree| serde_json::from_value::<ControlTree>(tree.clone()).ok())
@@ -111,14 +111,12 @@ mod tests {
     }
 
     #[test]
-    fn a_tree_wins_over_the_app_it_carries() {
-        let response = ok(
-            json!({"tree": {"workspaces": [{"id": "W", "name": "w", "active": true, "sessions": []}],
-                                          "app": {"version": "0.1.0"}}}),
-        );
+    fn a_tree_wins_over_the_app() {
+        let response = ok(json!({
+            "tree": {"workspaces": [{"id": "W", "name": "w", "active": true, "sessions": []}]},
+            "app": {"version": "0.1.0"},
+        }));
         assert_eq!(format_response(&response, false), "* w  [W]");
-        let undecodable = ok(json!({"tree": {"workspaces": 5}}));
-        assert_eq!(format_response(&undecodable, false), "ok");
     }
 
     #[test]

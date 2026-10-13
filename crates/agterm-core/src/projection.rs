@@ -458,19 +458,23 @@ mod tests {
     }
 
     #[test]
-    fn an_idle_status_reports_nothing() {
+    fn an_idle_status_reports_only_when_it_changed() {
         let mut library = WindowLibrary::seeded("/home/u");
         let store = library.active_store_mut().unwrap();
         let sid = store.selected_session_id().unwrap();
-        store.session_mut(sid).unwrap().agent_indicator = AgentIndicator {
+        let session = store.session_mut(sid).unwrap();
+        session.agent_indicator = AgentIndicator {
             blink: true,
             color: Some("#00ff00".to_owned()),
             ..AgentIndicator::default()
         };
+        session.status_changed_at = Some(UNIX_EPOCH + Duration::from_secs(2));
         let tree = tree_json(store, &AppSettings::default(), false);
         let node = tree["workspaces"][0]["sessions"][0].as_object().unwrap();
-        for key in ["status", "statusPane", "statusBlink", "statusColor", "statusChangedAt"] {
+        for key in ["status", "statusPane", "statusBlink", "statusColor"] {
             assert!(!node.contains_key(key), "{key}");
         }
+        // `statusChangedAt` is reported whenever it exists, idle included (`control-api.md`)
+        assert_eq!(node["statusChangedAt"], json!(2.0));
     }
 }

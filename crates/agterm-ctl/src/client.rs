@@ -8,7 +8,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
-use agterm_proto::{MAX_REQUEST_LINE_BYTES, Request, Response};
+use agterm_proto::{ControlTree, MAX_REQUEST_LINE_BYTES, Request, Response};
 
 use crate::socket;
 
@@ -154,9 +154,24 @@ pub fn send(path: &Path, request: &Request) -> Result<Reply, ClientError> {
     // hung-up peer (one that rejected the line) is an EPIPE error here, not a silent death
     send_all(&stream, &data).map_err(|error| ClientError(format!("write failed: {}", os_message(&error))))?;
     let raw = read_line(&mut stream).ok_or_else(|| ClientError(format!("no response from {}", path.display())))?;
-    let response =
-        serde_json::from_slice(&raw).map_err(|error| ClientError(format!("could not decode response: {error}")))?;
+    let response = decode_response(&raw).map_err(|error| ClientError(format!("could not decode response: {error}")))?;
     Ok(Reply { response, raw })
+}
+
+/// Decodes a response line as upstream's `JSONDecoder().decode(ControlResponse.self, …)`: a result field this build
+/// models typed must decode as its type when present (a field it does not model is ignored), so a malformed one fails
+/// the whole reply, `--json` included, instead of reading as absent.
+fn decode_response(raw: &[u8]) -> serde_json::Result<Response> {
+    let response: Response = serde_json::from_slice(raw)?;
+    if let Some(tree) = response
+        .result
+        .as_ref()
+        .and_then(|result| result.get("tree"))
+        .filter(|tree| !tree.is_null())
+    {
+        serde_json::from_value::<ControlTree>(tree.clone())?;
+    }
+    Ok(response)
 }
 
 #[cfg(test)]
@@ -164,6 +179,21 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
+
+    #[test]
+    fn a_modelled_result_field_that_does_not_decode_fails_the_reply() {
+        let tree =
+            br#"{"ok":true,"result":{"tree":{"workspaces":[{"id":"W","name":"w","active":true,"sessions":[]}]}}}"#;
+        assert!(decode_response(tree).is_ok());
+        assert!(decode_response(br#"{"ok":true,"result":{"tree":null,"other":5}}"#).is_ok());
+        assert!(decode_response(br#"{"ok":true,"result":{"tree":{"workspaces":5}}}"#).is_err());
+        let unflagged = br#"{"ok":true,"result":{"tree":{"workspaces":[{"id":"W","name":"w","active":true,
+            "sessions":[{"id":"S","name":"s","cwd":"/","active":true,"scratch":false}]}]}}}"#;
+        assert!(
+            decode_response(unflagged).is_err(),
+            "a session node without its required flagged"
+        );
+    }
 
     #[test]
     fn os_message_drops_the_errno_suffix() {

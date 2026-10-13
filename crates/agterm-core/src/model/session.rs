@@ -354,6 +354,33 @@ impl Session {
         self.current_cwd = Some(sanitized(cwd));
     }
 
+    /// A pane's OSC 7 working-directory report, the split pane's when `split` (upstream's
+    /// `GhosttySurfaceView.applyPwd`). Sanitized, since the value reaches `/bin/sh -c` lines unquoted. The caller
+    /// does not save: the report fires on every prompt, and the live cwd is persisted with the next save.
+    pub fn report_pwd(&mut self, split: bool, pwd: &str) {
+        if split {
+            self.split_cwd = Some(sanitized(pwd));
+        } else {
+            self.set_current_cwd(pwd);
+        }
+    }
+
+    /// A pane's terminal title report, the split pane's when `split` (upstream's `GhosttySurfaceView.applyTitle`):
+    /// sanitized, and dropped when it equals the pane's cwd, since libghostty answers OSC 7 with a synthetic title
+    /// that is the bare path, which no shell titles with. Never saved, as [`Session::report_pwd`].
+    pub fn report_title(&mut self, split: bool, title: &str) {
+        let title = sanitized(title);
+        let pane = if split { StatusPane::Right } else { StatusPane::Left };
+        if title == self.cwd_for(pane) {
+            return;
+        }
+        if split {
+            self.split_title = Some(title);
+        } else {
+            self.osc_title = Some(title);
+        }
+    }
+
     /// Frees every terminal the session holds.
     pub fn teardown_surfaces(&mut self) {
         self.surface.teardown();
@@ -386,6 +413,46 @@ mod tests {
         assert_eq!(s.display_name(), "vim");
         s.osc_title = Some(" ".to_owned());
         assert_eq!(s.display_name(), "project");
+    }
+
+    #[test]
+    fn pane_reports_land_on_their_pane_sanitized() {
+        let mut s = session("/start");
+        s.report_pwd(false, "/live\n/dir");
+        assert_eq!(s.current_cwd.as_deref(), Some("/live/dir"));
+        s.report_title(false, "vim\u{7}");
+        assert_eq!(s.osc_title.as_deref(), Some("vim"));
+        s.report_pwd(true, "/side");
+        s.report_title(true, "htop");
+        assert_eq!(
+            (s.split_cwd.as_deref(), s.split_title.as_deref()),
+            (Some("/side"), Some("htop"))
+        );
+        assert_eq!(
+            (s.current_cwd.as_deref(), s.osc_title.as_deref()),
+            (Some("/live/dir"), Some("vim"))
+        );
+    }
+
+    #[test]
+    fn a_title_that_echoes_the_panes_cwd_is_dropped() {
+        let mut s = session("/start");
+        s.report_title(false, "/start");
+        assert_eq!(s.osc_title, None, "libghostty's synthetic OSC 7 title");
+        s.report_pwd(false, "/next");
+        s.report_title(false, "/next");
+        assert_eq!(s.osc_title, None);
+        s.report_title(false, "/start");
+        assert_eq!(
+            s.osc_title.as_deref(),
+            Some("/start"),
+            "only the pane's own cwd is an echo"
+        );
+        s.report_pwd(true, "/side");
+        s.report_title(true, "/side");
+        assert_eq!(s.split_title, None);
+        s.report_title(true, "/next");
+        assert_eq!(s.split_title.as_deref(), Some("/next"));
     }
 
     #[test]

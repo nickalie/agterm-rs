@@ -7,7 +7,7 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use adw::prelude::*;
 use agterm_core::model::WindowLibrary;
@@ -130,6 +130,49 @@ fn create_terminal(core: &mut Core, pane: &ShownPane, env: PaneEnv) -> TerminalS
     terminal
 }
 
+/// A terminal report bound for the session that shows the terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PaneReport {
+    /// An OSC 7 working directory.
+    Pwd(String),
+    /// A title a program set (or the user's static one).
+    Title(String),
+}
+
+/// Lands a primary pane's report on its session, wherever that session lives now; a session gone since is skipped.
+fn apply_report(core: &mut Core, session: Uuid, report: &PaneReport) {
+    let Some(session) = core
+        .library_mut()
+        .store_for_session_mut(session)
+        .and_then(|store| store.session_mut(session))
+    else {
+        return;
+    };
+    match report {
+        PaneReport::Pwd(pwd) => session.report_pwd(false, pwd),
+        PaneReport::Title(title) => session.report_title(false, title),
+    }
+}
+
+/// Forwards the shown terminal's cwd and title reports to its session, where `tree` reads them back (upstream's
+/// `applyPwd`/`applyTitle`). Each report is posted rather than applied in place: libghostty may call back while the
+/// core is borrowed. Nothing is saved, as upstream.
+fn forward_reports(terminal: &TerminalSurface, main_loop: &Arc<GlibMainLoop<Core>>, session: Uuid) {
+    let post = move |main_loop: &Weak<GlibMainLoop<Core>>, report: PaneReport| {
+        let Some(main_loop) = main_loop.upgrade() else {
+            return;
+        };
+        let task = Box::new(move |core: &mut Core| apply_report(core, session, &report));
+        if main_loop.post(task).is_err() {
+            tracing::debug!("terminal report dropped: the main loop is closed");
+        }
+    };
+    let posting = Arc::downgrade(main_loop);
+    terminal.connect_pwd(move |pwd| post(&posting, PaneReport::Pwd(pwd.to_owned())));
+    let posting = Arc::downgrade(main_loop);
+    terminal.connect_title(move |title| post(&posting, PaneReport::Title(title.to_owned())));
+}
+
 /// What the quit path stops, from the first activation on.
 struct Shell {
     main_loop: Arc<GlibMainLoop<Core>>,
@@ -158,6 +201,9 @@ fn build_window(app: &adw::Application, terminal: Option<&TerminalSurface>) {
     content.set_content(Some(terminal.widget()));
     let titled = window.downgrade();
     terminal.connect_title(move |title| {
+        if title.is_empty() {
+            return;
+        }
         if let Some(window) = titled.upgrade() {
             window.set_title(Some(title));
         }
@@ -195,15 +241,19 @@ pub fn activate(app: &adw::Application) {
         },
         load_state(&ProcessEnv),
     );
-    let terminal = shown_pane(core.library()).map(|pane| {
-        let env = primary_pane_env(&identity, &socket, &pane);
-        create_terminal(&mut core, &pane, env)
+    let shown = shown_pane(core.library());
+    let terminal = shown.as_ref().map(|pane| {
+        let env = primary_pane_env(&identity, &socket, pane);
+        create_terminal(&mut core, pane, env)
     });
     build_window(app, terminal.as_ref());
     let main_loop = Arc::new(GlibMainLoop::attach(
         &glib::MainContext::default(),
         Rc::new(RefCell::new(core)),
     ));
+    if let (Some(terminal), Some(pane)) = (&terminal, &shown) {
+        forward_reports(terminal, &main_loop, pane.session);
+    }
     let posting: Arc<dyn MainLoop<Core>> = Arc::clone(&main_loop) as _;
     let handle = |core: &mut Core, request: Request| -> Reply { core.dispatch(&request).into() };
     if let Err(err) = server.start(posting, handle) {
@@ -309,6 +359,35 @@ mod tests {
             store.close_session(id);
         }
         assert_eq!(shown_pane(&library), None);
+    }
+
+    #[test]
+    fn a_terminal_report_lands_on_its_session_in_any_window() {
+        let mut library = WindowLibrary::seeded("/home/u");
+        let session = shown_pane(&library).unwrap().session;
+        library.new_window(None);
+        let mut core = Core::new(
+            CoreConfig {
+                app: identity(),
+                capabilities: Vec::new(),
+            },
+            CoreState {
+                library,
+                ..CoreState::default()
+            },
+        );
+        apply_report(&mut core, session, &PaneReport::Pwd("/tmp/next".to_owned()));
+        apply_report(&mut core, session, &PaneReport::Title("vim".to_owned()));
+        apply_report(&mut core, Uuid::new_v4(), &PaneReport::Title("lost".to_owned()));
+        let reported = core
+            .library()
+            .store_for_session(session)
+            .unwrap()
+            .session(session)
+            .unwrap();
+        assert_eq!(reported.effective_cwd(), "/tmp/next");
+        assert_eq!(reported.osc_title.as_deref(), Some("vim"));
+        assert_eq!(reported.display_name(), "vim");
     }
 
     #[test]

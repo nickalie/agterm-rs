@@ -350,6 +350,25 @@ fn a_server_refusal_exits_1() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn a_tree_that_does_not_decode_fails_the_reply_with_or_without_json() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("agterm.sock");
+    let _server = serve(&socket, (), |(), _| {
+        Response::with_result(serde_json::json!({"tree": {"workspaces": 5}})).into()
+    })?;
+    let base = [OsStr::new("tree"), OsStr::new("--socket"), socket.as_os_str()];
+    for output in [
+        run(dir.path(), &[], base)?,
+        run(dir.path(), &[], base.into_iter().chain([OsStr::new("--json")]))?,
+    ] {
+        let (code, stdout, stderr) = outcome(&output);
+        assert_eq!((code, stdout.as_str()), (Some(1), ""));
+        assert!(stderr.starts_with("Error: could not decode response: "), "{stderr}");
+    }
+    Ok(())
+}
+
 const VERSION_USAGE: &str =
     "Usage: agtermctl version [--socket <socket>] [--json]\n  See 'agtermctl version --help' for more information.\n";
 const ROOT_USAGE: &str = "Usage: agtermctl <subcommand>\n  See 'agtermctl --help' for more information.\n";
