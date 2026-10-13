@@ -146,6 +146,9 @@ struct Inner {
     font_override: Cell<Option<f64>>,
     /// The size a cleared override reverts to, whose report is dropped (upstream's `pendingFontRestore`).
     pending_font_restore: Cell<Option<f64>>,
+    /// The start size is the terminal's for its whole life (a HUD, measured at it; upstream's `restoreHudFontSize`):
+    /// every config re-apply restates it.
+    keeps_start_font_size: Cell<bool>,
 }
 
 thread_local! {
@@ -237,6 +240,7 @@ impl TerminalSurface {
             config_overlay: RefCell::new(None),
             font_override: Cell::new(None),
             pending_font_restore: Cell::new(None),
+            keeps_start_font_size: Cell::new(false),
         });
         SURFACES.with(|surfaces| surfaces.borrow_mut().insert(inner.key, Rc::downgrade(&inner)));
         let surface = Self { inner, area };
@@ -830,35 +834,77 @@ impl TerminalSurface {
         self.apply_config_overlay();
     }
 
-    /// The app config was rebuilt (a theme change, a settings change, an appearance flip; upstream's
-    /// `GhosttyApp.reloadConfig` and `reapplySessionConfigIfNeeded`): the terminal takes the color scheme, then its own
-    /// overlay rebuilt over the new files with its live size, or `config` itself. With `keep_zoom` a terminal without an
-    /// overlay keeps its live size too; otherwise libghostty keeps only a size the user stepped. A terminal not created
-    /// yet takes the new config when it is.
-    pub fn reload_config(&self, config: &agterm_ghostty::Config, scheme: agterm_ghostty::ColorScheme, keep_zoom: bool) {
+    /// Pins the terminal's start size (its spec's `font_size`) for its whole life: every config re-apply restates it,
+    /// as a HUD's panel was measured at it (upstream's `currentEffectiveFontSize` for a HUD).
+    pub fn keep_start_font_size(&self) {
+        self.inner.keeps_start_font_size.set(true);
+    }
+
+    /// The pinned start size, when [`Self::keep_start_font_size`] set one.
+    fn pinned_font_size(&self) -> Option<f64> {
+        self.inner
+            .keeps_start_font_size
+            .get()
+            .then(|| self.inner.spec.font_size.map(f64::from))
+            .flatten()
+    }
+
+    /// The first half of a config reload, run on every terminal BEFORE the app takes the new config (upstream's
+    /// `syncColorScheme` ahead of `ghostty_app_update_config`): the terminal takes the color scheme, as libghostty
+    /// resolves a dual theme against it when the app re-feeds every surface, and its live font size is read while it
+    /// still holds it, as that re-feed resets a size the user did not step (a restored session's). The size, `None`
+    /// for a terminal not created yet.
+    pub fn prepare_reload(&self, scheme: agterm_ghostty::ColorScheme) -> Option<f64> {
+        if !self.is_realized() {
+            return None;
+        }
+        if self.area.is_realized() {
+            self.area.make_current();
+        }
+        self.with_surface(|surface| {
+            surface.set_color_scheme(scheme);
+            surface.font_size()
+        })
+        .flatten()
+    }
+
+    /// The app config was rebuilt and the app re-fed it to every terminal (a theme change, a settings change, an
+    /// appearance flip; upstream's `GhosttyApp.reloadConfig` and `reapplySessionConfigIfNeeded`), after
+    /// [`Self::prepare_reload`] read `size_before`: the terminal takes its own overlay rebuilt over the new files, or
+    /// `config` itself. With `keep_zoom` it restates `size_before`; otherwise an overlay restates the size libghostty
+    /// left (it keeps only a size the user stepped). A pinned start size wins over both. A terminal not created yet
+    /// takes the new config when it is.
+    pub fn reload_config(&self, config: &agterm_ghostty::Config, size_before: Option<f64>, keep_zoom: bool) {
         if !self.is_realized() {
             return;
         }
         if self.area.is_realized() {
             self.area.make_current();
         }
-        self.with_surface(|surface| surface.set_color_scheme(scheme));
+        let kept = self.pinned_font_size().or_else(|| size_before.filter(|_| keep_zoom));
         if self.inner.config_overlay.borrow().is_some() {
-            self.apply_config_overlay();
+            if let Some(live) = self.with_surface(Surface::font_size) {
+                self.push_config_overlay(kept.or(live));
+            }
             return;
         }
-        let kept = self.font_size().filter(|_| keep_zoom).and_then(|size| {
+        let kept = kept.and_then(|size| {
             ghostty_app::config_with_overlay(&agterm_core::watermark::overlay_text(None, None, Some(size), 1.0))
         });
         self.with_surface(|surface| surface.update_config(kept.as_ref().unwrap_or(config)));
     }
 
-    /// Pushes the stored overlay to the surface, if both exist; libghostty clones the config, so it is freed here.
+    /// Pushes the stored overlay to the surface, if both exist, at the pinned start size or the live one.
     fn apply_config_overlay(&self) {
+        if let Some(live) = self.with_surface(Surface::font_size) {
+            self.push_config_overlay(self.pinned_font_size().or(live));
+        }
+    }
+
+    /// Pushes the stored overlay with a `font-size` line for `font_size`; libghostty clones the config, so it is freed
+    /// here.
+    fn push_config_overlay(&self, font_size: Option<f64>) {
         let Some(overlay) = self.inner.config_overlay.borrow().clone() else {
-            return;
-        };
-        let Some(font_size) = self.with_surface(Surface::font_size) else {
             return;
         };
         let mut text = overlay;
@@ -1229,5 +1275,27 @@ mod tests {
         teardown_all();
         assert!(placed.inner.torn_down.get());
         assert!(lookup(key).is_none(), "a torn-down surface is not live");
+    }
+
+    #[test]
+    fn only_a_pinned_start_size_survives_every_reload() {
+        crate::gtk_test::on_gtk_thread(a_pinned_start_size_survives_every_reload);
+    }
+
+    fn a_pinned_start_size_survives_every_reload() {
+        let spec = SurfaceSpec {
+            font_size: Some(20.0),
+            ..SurfaceSpec::default()
+        };
+        let restored = TerminalSurface::new(spec.clone());
+        assert_eq!(restored.pinned_font_size(), None, "a session's start size is a zoom");
+        let hud = TerminalSurface::new(spec);
+        hud.keep_start_font_size();
+        assert_eq!(hud.pinned_font_size(), Some(20.0));
+        let no_size = TerminalSurface::new(SurfaceSpec::default());
+        no_size.keep_start_font_size();
+        assert_eq!(no_size.pinned_font_size(), None, "no start size, nothing pinned");
+        // a terminal libghostty has not created yet has no size to keep and takes the new config once it is
+        assert_eq!(restored.prepare_reload(agterm_ghostty::ColorScheme::Dark), None);
     }
 }

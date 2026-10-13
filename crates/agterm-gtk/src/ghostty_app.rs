@@ -227,8 +227,9 @@ pub fn is_dark() -> bool {
 }
 
 /// Rebuilds the app config from its files and hands it to the app and to every live terminal under the color scheme
-/// `dark` picks (upstream's `GhosttyApp.reloadConfig`): the scheme first, as libghostty resolves a dual theme against
-/// it, then the app, then each terminal with its own overlay re-applied. `keep_zoom` keeps every terminal's live font
+/// `dark` picks (upstream's `GhosttyApp.reloadConfig`): the scheme first, on the app and every terminal, as libghostty
+/// resolves a dual theme against it, then the app (which re-feeds every terminal), then each terminal with its own
+/// overlay re-applied. `keep_zoom` keeps every terminal's live font
 /// size (the automatic appearance flip); an explicit reload leaves libghostty to reset the sizes the user did not step.
 /// The static title is re-read and re-applied. Returns the rebuilt config's diagnostic count; `None` when there is no
 /// app or the config could not be built.
@@ -241,14 +242,23 @@ pub fn reload_config(dark: bool, keep_zoom: bool) -> Option<usize> {
     let scheme = scheme_of(dark);
     ghostty.scheme.set(scheme);
     ghostty.app.set_color_scheme(scheme);
+    // every terminal on the new side, its live size read, BEFORE the app's update re-feeds them all: a stale side
+    // resolves a dual theme the wrong way, and the re-feed resets a size libghostty does not count as stepped
+    let terminals: Vec<_> = surface::all()
+        .into_iter()
+        .map(|terminal| {
+            let size = terminal.prepare_reload(scheme);
+            (terminal, size)
+        })
+        .collect();
     ghostty.applied.borrow_mut().take();
     ghostty.app.update_config(&config);
     let count = config.diagnostics().len();
     *ghostty.config.borrow_mut() = config;
     ghostty.static_title.borrow_mut().clone_from(&static_title);
     let config = ghostty.config.borrow();
-    for terminal in surface::all() {
-        terminal.reload_config(&config, scheme, keep_zoom);
+    for (terminal, size_before) in terminals {
+        terminal.reload_config(&config, size_before, keep_zoom);
         if let Some(title) = &static_title {
             terminal.apply_title(title);
         }

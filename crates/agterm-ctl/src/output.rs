@@ -9,6 +9,7 @@
 
 use std::process::ExitCode;
 
+use agterm_core::theme::DEFAULT_TITLE;
 use agterm_proto::{ControlTree, ControlWindowNode, Response};
 use serde_json::Value;
 
@@ -104,9 +105,6 @@ pub fn format_response(response: &Response, echo_id: bool) -> String {
     "ok".to_owned()
 }
 
-/// The label of the no-theme (ghostty built-in) entry.
-const DEFAULT_THEME: &str = "default ghostty";
-
 /// `theme.list`: one theme per line under a leading `default ghostty` entry, the active one(s) marked `* `. Plain, the
 /// one `theme` is marked (none marks `default ghostty`); with `sync`, the light and dark themes are, under a header
 /// naming the pair.
@@ -122,7 +120,7 @@ fn format_themes(themes: &[String], result: &Value) -> String {
         }
     };
     let line = |name: Option<&str>, label: &str| format!("{}{label}", if active(name) { "* " } else { "  " });
-    let body = std::iter::once(line(None, DEFAULT_THEME))
+    let body = std::iter::once(line(None, DEFAULT_TITLE))
         .chain(themes.iter().map(|name| line(Some(name), name)))
         .collect::<Vec<_>>()
         .join("\n");
@@ -131,8 +129,8 @@ fn format_themes(themes: &[String], result: &Value) -> String {
     }
     format!(
         "syncing with macOS appearance — light: {}, dark: {}\n{body}",
-        light.unwrap_or(DEFAULT_THEME),
-        dark.unwrap_or(DEFAULT_THEME)
+        light.unwrap_or(DEFAULT_TITLE),
+        dark.unwrap_or(DEFAULT_TITLE)
     )
 }
 

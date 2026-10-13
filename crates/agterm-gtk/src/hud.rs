@@ -344,6 +344,8 @@ fn spawn(session: &Session, hud: &HudContext<'_>) -> TerminalSurface {
         wait_after_command: false,
         font_size,
     });
+    // the panel was measured at its creation size: a config reload restates it
+    terminal.keep_start_font_size();
     terminal.set_config_overlay(&config_overlay(slot.background_color.as_deref()));
     connect_panel(&terminal, session.id(), slot.generation, hud.poster);
     terminal

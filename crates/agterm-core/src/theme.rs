@@ -230,15 +230,18 @@ impl AppSettings {
     /// The `key = value` lines the settings emit into `ghostty-settings.conf` (upstream's `ghosttyConfigLines`), loaded
     /// after the user's `ghostty.conf` so they win. Values are written raw: ghostty takes the rest of the line, so
     /// names with spaces are not quoted.
+    ///
+    /// This build's GTK window has no translucency of its own, so the lines never carry upstream's translucency pins
+    /// (see [`Self::ghostty_config_lines_for`]).
     #[must_use]
     pub fn ghostty_config_lines(&self) -> Vec<String> {
-        self.ghostty_config_lines_for(true)
+        self.ghostty_config_lines_for(false)
     }
 
-    /// [`Self::ghostty_config_lines`] for a host that composites window translucency itself (`translucency`) or
-    /// not. Upstream's `AppKit` window draws the translucent tint, so a translucent opacity pins the renderer fully
-    /// transparent; a host without window translucency leaves the pins out, or its terminals would show the window
-    /// background through.
+    /// The config lines for a host that composites window translucency itself (`translucency`) or not. Upstream's
+    /// `AppKit` window draws the translucent tint, so a translucent opacity pins the renderer fully transparent; a
+    /// host without window translucency leaves the pins out, or its terminals would show the window background
+    /// through.
     #[must_use]
     pub fn ghostty_config_lines_for(&self, translucency: bool) -> Vec<String> {
         let mut lines = Vec::new();
@@ -485,13 +488,14 @@ mod tests {
             background_opacity: Some(0.63),
             ..AppSettings::default()
         };
-        let lines = translucent.ghostty_config_lines();
+        let lines = translucent.ghostty_config_lines_for(true);
         assert!(lines.contains(&"background-opacity = 0".to_owned()));
         assert!(lines.contains(&"background-blur = 0".to_owned()));
+        let this_host = translucent.ghostty_config_lines();
+        assert_eq!(this_host, translucent.ghostty_config_lines_for(false));
         assert!(
-            !translucent
-                .ghostty_config_lines_for(false)
-                .contains(&"background-opacity = 0".to_owned())
+            !this_host.iter().any(|line| line.starts_with("background-")),
+            "{this_host:?}"
         );
         for opaque in [Some(1.0), None] {
             let settings = AppSettings {
@@ -501,7 +505,7 @@ mod tests {
             };
             assert!(
                 !settings
-                    .ghostty_config_lines()
+                    .ghostty_config_lines_for(true)
                     .contains(&"background-blur = 0".to_owned())
             );
         }

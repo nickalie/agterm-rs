@@ -27,8 +27,6 @@ pub(crate) struct ThemeRuntime {
     settings_conf: Option<PathBuf>,
     /// The text last generated, compared against when there is no file.
     written: Option<String>,
-    /// Whether the host composites window translucency (see [`AppSettings::ghostty_config_lines_for`]).
-    translucency: bool,
     /// A settings change rewrote the config: the frontend reloads it into every terminal, zoom cleared.
     reload_requested: bool,
 }
@@ -55,7 +53,7 @@ impl Core {
     /// The launch calls it before libghostty loads its config, so the seeded default theme applies from the first
     /// terminal on; a failed write is logged and counts as unchanged.
     pub fn write_settings_config(&mut self) -> bool {
-        let text = theme::settings_config_text(&self.settings().ghostty_config_lines_for(self.themes.translucency));
+        let text = theme::settings_config_text(&self.settings().ghostty_config_lines());
         let changed = match self.themes.settings_conf.as_deref() {
             Some(path) => theme::write_settings_config(path, &text).unwrap_or_else(|err| {
                 tracing::warn!(%err, path = %path.display(), "could not write the ghostty settings config");
