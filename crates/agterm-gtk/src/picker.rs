@@ -18,6 +18,7 @@ use std::rc::Rc;
 
 use agterm_core::fuzzy::fuzzy_rank;
 use agterm_core::modal::PendingPick;
+use agterm_core::palette::{palette_search_keys, pick_custom_row_label};
 use agterm_proto::{ControlPickOutcome, ControlPickResult, PickItem};
 use gtk::prelude::*;
 use gtk::{gdk, glib};
@@ -45,7 +46,8 @@ pub enum PickRow {
 
 /// The rows `query` shows of `items` (upstream's `updateFiltered` for a caller-supplied picker): every item in the
 /// caller's order for a blank query (trimmed of whitespace and newlines), else the items whose label matches, best
-/// first; with `allow_custom`, a query matching none offers `Use "<query>"` alone (upstream's `pickCustomRowLabel`).
+/// first (a caller's subtitle is never searched, upstream's `paletteSearchKeys`); with `allow_custom`, a query matching
+/// none offers `Use "<query>"` alone (upstream's `pickCustomRowLabel`).
 #[must_use]
 pub fn filter_rows(items: &[PickItem], query: &str, allow_custom: bool) -> Vec<PickRow> {
     let query = query.trim();
@@ -55,12 +57,12 @@ pub fn filter_rows(items: &[PickItem], query: &str, allow_custom: bool) -> Vec<P
     let ranked = fuzzy_rank(query, 0..items.len(), |index| {
         items
             .get(*index)
-            .map(|item| vec![item.label.clone()])
+            .map(|item| palette_search_keys(&item.label, item.subtitle.as_deref(), true))
             .unwrap_or_default()
     });
-    if allow_custom && ranked.is_empty() {
+    if let Some(label) = pick_custom_row_label(query, ranked.len(), allow_custom) {
         return vec![PickRow::Custom {
-            label: format!("Use \"{query}\""),
+            label,
             query: query.to_owned(),
         }];
     }
@@ -314,8 +316,8 @@ impl Picker {
     }
 }
 
-/// The panel: the search field over a divider over the rows.
-fn panel(entry: &gtk::SearchEntry, scroller: &gtk::ScrolledWindow) -> gtk::Box {
+/// The panel: the search field over a divider over the rows (the palettes' too).
+pub fn panel(entry: &gtk::SearchEntry, scroller: &gtk::ScrolledWindow) -> gtk::Box {
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     for margin in [
         gtk::Box::set_margin_top,

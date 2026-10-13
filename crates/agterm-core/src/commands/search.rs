@@ -52,6 +52,73 @@ struct SearchRun {
     step: Option<Step>,
 }
 
+impl Core {
+    /// The search bar's field changed to `needle` in window `window` (upstream's `updateSearchNeedle`): the active
+    /// session's needle mirrors it and goes to the pane the open search is pinned to; an empty needle blanks the
+    /// counter at once rather than waiting out libghostty's teardown. Commit afterwards.
+    pub fn search_bar_needle(&mut self, window: Uuid, needle: &str) {
+        let Some(session) = active_search(self, window) else {
+            return;
+        };
+        needle.clone_into(&mut session.search.needle);
+        if needle.is_empty() {
+            session.search.total = None;
+            session.search.selected = None;
+        }
+        if let Some(owner) = session.search.owner {
+            run_binding(session, owner, &format!("search:{needle}"));
+        }
+    }
+
+    /// The search bar stepped to the next match (its down button, Return) or the previous one (its up button,
+    /// Shift+Return) in window `window` (upstream's `navigateSearch`). Commit afterwards.
+    pub fn search_bar_step(&mut self, window: Uuid, next: bool) {
+        let Some(session) = active_search(self, window) else {
+            return;
+        };
+        let step = if next { Step::Next } else { Step::Prev };
+        if let Some(owner) = session.search.owner {
+            run_binding(session, owner, step.action());
+        }
+    }
+
+    /// The search bar closed in window `window` (its close button, Escape): search really ends on its pane, whose end
+    /// report clears the state and gives the terminal the keyboard back (upstream's `endSearch`). Commit afterwards.
+    pub fn search_bar_close(&mut self, window: Uuid) {
+        let Some(session) = active_search(self, window) else {
+            return;
+        };
+        if let Some(owner) = session.search.owner {
+            run_binding(session, owner, "end_search");
+        }
+    }
+
+    /// A zoom began in window `window` on a terminal of session `zoomed`: an open search ends on the active session
+    /// and on the zoomed one, or libghostty keeps highlighting matches with no bar to show them (upstream's
+    /// `handleZoomTargetChange`).
+    pub(crate) fn end_search_for_zoom(&mut self, window: Uuid, zoomed: Uuid) {
+        let Some(store) = self.library_mut().store_mut(window) else {
+            return;
+        };
+        let active = store.selected_session_id();
+        for id in active.into_iter().chain((active != Some(zoomed)).then_some(zoomed)) {
+            let Some(session) = store.session_mut(id).filter(|session| session.search.active) else {
+                continue;
+            };
+            if let Some(owner) = session.search.owner {
+                run_binding(session, owner, "end_search");
+            }
+        }
+    }
+}
+
+/// Window `window`'s active session while its search is open.
+fn active_search(core: &mut Core, window: Uuid) -> Option<&mut Session> {
+    let store = core.library_mut().store_mut(window)?;
+    let id = store.selected_session_id()?;
+    store.session_mut(id).filter(|session| session.search.active)
+}
+
 /// Starts `session.search`.
 pub(crate) fn begin(core: &mut Core, request: &Request) -> Dispatched {
     start(core, request).unwrap_or_else(|error| Dispatched::Done(Response::from(error)))

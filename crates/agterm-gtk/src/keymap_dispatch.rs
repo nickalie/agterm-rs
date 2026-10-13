@@ -308,6 +308,19 @@ impl Router {
     }
 }
 
+/// The built-in whose menu chord a press spells, if any, for a text field that hands some menu chords on (a palette's
+/// search field passes its launchers', so the same chord closes or switches the palette).
+#[must_use]
+pub fn menu_action(
+    controller: &gtk::EventControllerKey,
+    keyval: gdk::Key,
+    keycode: u32,
+    state: gdk::ModifierType,
+) -> Option<BuiltinAction> {
+    let chord = chord_of(controller, keyval, keycode, state)?;
+    ROUTER.with_borrow(|router| router.menu.get(&chord).copied())
+}
+
 /// Whether `window`'s keyboard focus is a text field, which keeps its keystrokes.
 fn focus_is_text(window: &gtk::Window) -> bool {
     gtk::prelude::GtkWindowExt::focus(window)

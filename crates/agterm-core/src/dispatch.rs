@@ -166,6 +166,8 @@ pub struct Core {
     pub(crate) debug_appearance: commands::debug::DebugAppearance,
     /// The launch's restore decision, denylist, process table and spawn pacing ([`commands::relaunch`]).
     pub(crate) restore: commands::relaunch::RestoreRuntime,
+    /// The command palette ([`crate::palette`]).
+    pub(crate) palette: crate::palette::PaletteRuntime,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -238,6 +240,7 @@ impl Core {
             config_reloads: commands::config::ConfigReloads::default(),
             debug_appearance: commands::debug::DebugAppearance::default(),
             restore: commands::relaunch::RestoreRuntime::default(),
+            palette: crate::palette::PaletteRuntime::default(),
         }
     }
 
@@ -272,6 +275,7 @@ impl Core {
         match target {
             Some(target) => {
                 commands::dashboard::close(self, id);
+                self.end_search_for_zoom(id, target.session);
                 self.zoom.insert(id, target)
             }
             None => self.zoom.remove(&id),
@@ -453,13 +457,34 @@ impl Core {
         if self.settings == before {
             return false;
         }
-        if let Some(persistence) = &self.persistence {
-            let store = crate::persist::SettingsStore::new(persistence.directory());
-            if let Err(err) = store.save(&self.settings) {
-                tracing::warn!(%err, "could not write the settings");
-            }
-        }
+        self.save_settings();
         true
+    }
+
+    /// The settings to change without writing them (the theme palette's live preview); [`Core::save_settings`] writes
+    /// them.
+    pub(crate) fn settings_unsaved(&mut self) -> &mut AppSettings {
+        &mut self.settings
+    }
+
+    /// Writes `settings.json`, logging a failure (upstream's `try? settingsStore.save`). While the theme palette
+    /// previews, the theme slots written are the ones it found, never the preview's.
+    pub(crate) fn save_settings(&self) {
+        let Some(persistence) = &self.persistence else {
+            return;
+        };
+        let store = crate::persist::SettingsStore::new(persistence.directory());
+        let saved = match self.previewed_slots_to_persist() {
+            Some((theme, dark_theme)) => store.save(&AppSettings {
+                theme,
+                dark_theme,
+                ..self.settings.clone()
+            }),
+            None => store.save(&self.settings),
+        };
+        if let Err(err) = saved {
+            tracing::warn!(%err, "could not write the settings");
+        }
     }
 
     /// Writes `mode` as the restore mode of the NEXT launch, the legacy boolean dropped (upstream's
@@ -501,6 +526,7 @@ impl Core {
         self.drop_stranded_pane_overlays();
         self.sync_modals();
         self.sync_pages();
+        self.settle_palette();
         let (events, debounced, pending_closes) = if let Some(persistence) = self.persistence.as_mut() {
             let commit = persistence.commit(&mut self.library);
             (commit.events, commit.debounced, commit.pending_closes)

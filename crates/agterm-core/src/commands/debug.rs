@@ -39,6 +39,11 @@ impl Core {
         self.debug_appearance.applied_dark = dark;
     }
 
+    /// Whether the config was last fed on the dark side.
+    pub(crate) fn applied_dark(&self) -> bool {
+        self.debug_appearance.applied_dark
+    }
+
     /// Takes the side `debug.appearance` forced since the last take: the frontend forces the app's appearance to it
     /// and runs its appearance flip.
     pub fn take_debug_appearance(&mut self) -> Option<bool> {
