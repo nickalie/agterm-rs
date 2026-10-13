@@ -30,7 +30,8 @@ How to read it:
 ## Settings (`SettingsView.swift`, `SettingsModel.swift`, `settings.md`)
 
 One `adw::PreferencesDialog`, searchable, upstream's six tabs as pages in upstream's order, opening on General. Every
-edit writes `settings.json` at once (a control's default value is stored as nil) and applies live; a change made
+edit writes `settings.json` at once (a control's default value is stored as nil, except the font size, stored
+explicitly so it beats `ghostty.conf`) and applies live; a change made
 elsewhere (`theme.set`, `sidebar.flagged-layout`, `browser.links`) shows in the open dialog.
 
 | Feature | GTK form | Check | Built in |

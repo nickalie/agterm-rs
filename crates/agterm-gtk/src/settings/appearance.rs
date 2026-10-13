@@ -1,13 +1,14 @@
 //! Appearance: Terminal (font, size, cursor, the theme pickers) and Window (toolbar, translucency, the sidebar's tint
 //! and text size, the palette's text size, the inactive-pane mute) (upstream's `AppearanceSettingsView`).
 
+use std::ops::RangeInclusive;
 use std::rc::Rc;
 
 use adw::prelude::*;
 use agterm_core::persist::settings::{CursorStyle, ToolbarMode};
 use agterm_core::settings_model::{
-    AppearanceChange, FONT_SIZE_RANGE, INTERFACE_FONT_SIZE_RANGE, SIDEBAR_FONT_SIZE_RANGE, SettingsChange,
-    sidebar_shift_label,
+    AppearanceChange, BLUR_RANGE, FONT_SIZE_RANGE, INTERFACE_FONT_SIZE_RANGE, SIDEBAR_FONT_SIZE_RANGE, STRENGTH_RANGE,
+    SettingsChange, sidebar_shift_label,
 };
 
 use super::rows::{self, Slider};
@@ -200,7 +201,7 @@ fn add_translucency(rows: &mut Rows, group: &adw::PreferencesGroup) {
         "settings-bg-blur",
         "Background Blur",
         Slider {
-            range: 0.0..=100.0,
+            range: slider_range(&BLUR_RANGE),
             get: |snapshot: &Snapshot| blur_of(snapshot),
             label: |snapshot: &Snapshot| blur_of(snapshot).to_string(),
             set: |blur| change(AppearanceChange::BackgroundBlur(whole(blur))),
@@ -219,8 +220,17 @@ fn opacity_percent(snapshot: &Snapshot) -> f64 {
 }
 
 fn blur_of(snapshot: &Snapshot) -> f64 {
-    let blur = snapshot.settings.background_blur.unwrap_or(0).clamp(0, 100);
-    f64::from(u8::try_from(blur).unwrap_or(0))
+    position(snapshot.settings.background_blur.unwrap_or(0))
+}
+
+/// A whole-number range of the core's as a slider's bounds.
+fn slider_range(range: &RangeInclusive<i64>) -> RangeInclusive<f64> {
+    position(*range.start())..=position(*range.end())
+}
+
+/// A whole number as a slider position; the slider itself clamps it into its bounds.
+fn position(value: i64) -> f64 {
+    i32::try_from(value).map_or(0.0, f64::from)
 }
 
 /// A slider position as a whole number; the sliders round to whole steps, within `i64`.
@@ -239,8 +249,8 @@ fn add_sidebar_and_mute(rows: &mut Rows, group: &adw::PreferencesGroup) {
         "settings-sidebar-shift",
         "Sidebar Tint",
         Slider {
-            range: 0.0..=10.0,
-            get: |snapshot: &Snapshot| strength(snapshot.settings.effective_sidebar_shift()),
+            range: slider_range(&STRENGTH_RANGE),
+            get: |snapshot: &Snapshot| position(snapshot.settings.effective_sidebar_shift()),
             label: |snapshot: &Snapshot| sidebar_shift_label(snapshot.settings.effective_sidebar_shift()),
             set: |shift| change(AppearanceChange::SidebarBackgroundShift(whole(shift))),
         },
@@ -266,17 +276,12 @@ fn add_sidebar_and_mute(rows: &mut Rows, group: &adw::PreferencesGroup) {
         "settings-inactive-pane-mute",
         "Inactive pane and backdrop mute",
         Slider {
-            range: 0.0..=10.0,
-            get: |snapshot: &Snapshot| strength(snapshot.settings.effective_inactive_pane_mute()),
+            range: slider_range(&STRENGTH_RANGE),
+            get: |snapshot: &Snapshot| position(snapshot.settings.effective_inactive_pane_mute()),
             label: |snapshot: &Snapshot| snapshot.settings.effective_inactive_pane_mute().to_string(),
             set: |mute| change(AppearanceChange::InactivePaneMute(whole(mute))),
         },
     ));
-}
-
-/// A `0...10` strength as the slider's position.
-fn strength(value: i64) -> f64 {
-    f64::from(u8::try_from(value.clamp(0, 10)).unwrap_or(0))
 }
 
 #[cfg(test)]
@@ -299,6 +304,7 @@ mod tests {
 
     #[test]
     fn whole_rounds_slider_positions() {
-        assert_eq!((whole(4.6), strength(12)), (5, 10.0));
+        assert_eq!((whole(4.6), position(7)), (5, 7.0));
+        assert_eq!(slider_range(&STRENGTH_RANGE), 0.0..=10.0);
     }
 }

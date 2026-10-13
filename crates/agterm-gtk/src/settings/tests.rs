@@ -164,3 +164,20 @@ fn diagnostics_read_as_lines_or_no_issues() {
         "line 4: unknown action"
     );
 }
+
+/// An edit the core refuses (a restore mode `settings.json` could not take) leaves the settings as they were; the
+/// widget must still snap back to the stored value.
+#[test]
+fn a_refused_edit_snaps_its_widget_back_to_the_stored_value() {
+    on_gtk_thread(|| {
+        let (pages, open) = built();
+        let restore = combo(&pages, "settings-restore-mode");
+        assert_eq!(restore.selected(), 0);
+        restore.set_selected(1);
+        open.refresh(snapshot(AppSettings::default()));
+        assert_eq!(restore.selected(), 1, "an unchanged snapshot alone refreshes nothing");
+        open.invalidate();
+        open.refresh(snapshot(AppSettings::default()));
+        assert_eq!(restore.selected(), 0);
+    });
+}

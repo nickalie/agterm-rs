@@ -101,6 +101,19 @@ impl Open {
         REFRESHING.with(|flag| flag.set(false));
         *self.last.borrow_mut() = Some(snapshot);
     }
+
+    /// Makes the next refresh set every widget even when the settings did not change: an edit the core refused or
+    /// normalised to the stored value must snap its widget back to what is stored.
+    fn invalidate(&self) {
+        self.last.borrow_mut().take();
+    }
+}
+
+/// [`Open::invalidate`] on the open dialog, if any.
+fn invalidate_open() {
+    if let Some(open) = OPEN.with(|open| open.borrow().clone()) {
+        open.invalidate();
+    }
 }
 
 /// Whether a widget handler is running for a refresh rather than for the user.
@@ -114,6 +127,7 @@ pub fn send(poster: &Poster, change: SettingsChange) {
         return;
     }
     state::post(poster, move |state: &mut AppState| {
+        invalidate_open();
         state.core.change_settings(change);
         state.settle();
     });
@@ -125,6 +139,7 @@ pub fn act(poster: &Poster, task: impl FnOnce(&mut Core) + Send + 'static) {
         return;
     }
     state::post(poster, move |state: &mut AppState| {
+        invalidate_open();
         task(&mut state.core);
         state.settle();
     });
@@ -182,7 +197,7 @@ pub fn build(rows: &mut Rows, catalogs: &Catalogs) -> adw::PreferencesDialog {
     dialog
 }
 
-/// Opens the Settings dialog over the frontmost window, or raises the open one (File ▸ Settings).
+/// Opens the Settings dialog over the frontmost window, or raises the open one (the primary menu's Preferences).
 pub fn present(state: &AppState) {
     let Some(parent) = state.frontmost_gtk_window() else {
         return;

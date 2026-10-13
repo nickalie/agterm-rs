@@ -528,3 +528,18 @@ fn turning_auto_hide_on_hides_the_inactive_sidebars_at_once() {
         assert_eq!(visible, window == frontmost);
     }
 }
+
+#[test]
+fn a_chosen_directory_is_stored_exactly_and_a_blank_one_is_the_default() {
+    let settings = applied([
+        general(GeneralChange::NewSessionCustomDirectory("/tmp/work ".into())),
+        SettingsChange::ConfigDirectory(Some(" /tmp/config ".into())),
+    ]);
+    assert_eq!(settings.new_session_custom_directory.as_deref(), Some("/tmp/work "));
+    assert_eq!(settings.config_directory.as_deref(), Some(" /tmp/config "));
+    let blank = applied([
+        general(GeneralChange::NewSessionCustomDirectory("  ".into())),
+        SettingsChange::ConfigDirectory(Some(String::new())),
+    ]);
+    assert_eq!(blank, AppSettings::default());
+}

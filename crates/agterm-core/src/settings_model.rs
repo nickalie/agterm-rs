@@ -4,7 +4,8 @@
 //!
 //! Each change is validated on the way in, as the control's range bounds it (a slider or stepper value is rounded and
 //! clamped, a non-finite one ignored), and a control's DEFAULT value is stored as nil, so `settings.json` stays
-//! minimal. What a change does to the running app follows upstream's setter: most rewrite the settings' ghostty config
+//! minimal; the one exception is the font size, stored explicitly even at its default so it beats `ghostty.conf`
+//! (upstream's `setFontSize`). A chosen directory is stored exactly as picked. What a change does to the running app follows upstream's setter: most rewrite the settings' ghostty config
 //! and reload the terminals only when its text changed ([`Effect::Live`]); the global-config toggle reloads the config
 //! unconditionally, a config-directory change reloads the keymap, the hooks and the config, and a restore-mode change
 //! applies to the next launch only and rolls back when it could not be written.
@@ -50,7 +51,7 @@ pub enum Effect {
     ReloadConfig,
     /// Reloads `keymap.conf`, `hooks.conf` and the ghostty config from the (new) config directory.
     ReloadConfigFiles,
-    /// [`Effect::Live`], and the inactive windows' sidebars hide at once when auto-hide was turned on.
+    /// The inactive windows' sidebars hide at once when auto-hide was turned on; nothing reaches the ghostty config.
     HideInactiveSidebars,
 }
 
@@ -178,6 +179,11 @@ fn named(name: Option<String>) -> Option<String> {
     name.map(|name| name.trim().to_owned()).filter(|name| !name.is_empty())
 }
 
+/// A directory exactly as chosen (whitespace can be part of a path); `None` for a blank one.
+fn directory(path: Option<String>) -> Option<String> {
+    path.filter(|path| !path.trim().is_empty())
+}
+
 impl SettingsChange {
     /// Applies the change to `settings`, validated, and says what it does to the running app. A restore-mode change is
     /// applied here too, but [`Core::change_settings`] routes it through [`Core::save_restore_mode`].
@@ -197,8 +203,8 @@ impl SettingsChange {
                 change.apply_to(settings);
                 Effect::Live
             }
-            Self::ConfigDirectory(directory) => {
-                settings.config_directory = named(directory);
+            Self::ConfigDirectory(path) => {
+                settings.config_directory = directory(path);
                 Effect::ReloadConfigFiles
             }
             Self::WelcomeShown => {
@@ -226,8 +232,8 @@ impl GeneralChange {
                 settings.new_session_directory =
                     unless_default(mode, NewSessionDirectory::Home).map(|mode| mode.raw().to_owned());
             }
-            Self::NewSessionCustomDirectory(directory) => {
-                settings.new_session_custom_directory = named(Some(directory));
+            Self::NewSessionCustomDirectory(path) => {
+                settings.new_session_custom_directory = directory(Some(path));
             }
             Self::NewSessionPlacement(placement) => {
                 settings.new_session_placement = unless_default(placement, NewSessionPlacementSetting::End)
