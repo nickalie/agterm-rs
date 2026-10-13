@@ -9,6 +9,8 @@ mod app;
 mod clipboard;
 mod deck;
 mod ghostty_app;
+#[cfg(test)]
+mod gtk_test;
 mod input;
 mod logging;
 mod main_loop;

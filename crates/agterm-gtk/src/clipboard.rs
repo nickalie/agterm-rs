@@ -308,9 +308,14 @@ fn prompt_text(access: ClipboardAccess) -> (&'static str, &'static str) {
     }
 }
 
-/// Shows the prompt over the requesting terminal's window, else the active one: Allow (the default, as upstream's
-/// first button), Deny (also closing the dialog) and "Don't ask again this session".
+/// Shows the prompt over the requesting terminal's window, else the active one.
 fn present_prompt(key: PromptKey, id: u64) {
+    prompt_dialog(key, id).present(prompt_parent(key.requester).as_ref());
+}
+
+/// The prompt `id` for `key`: Allow (the default, as upstream's first button), Deny (also closing the dialog) and
+/// "Don't ask again this session".
+fn prompt_dialog(key: PromptKey, id: u64) -> adw::AlertDialog {
     let (heading, body) = prompt_text(key.access);
     let dialog = adw::AlertDialog::new(Some(heading), Some(body));
     dialog.add_responses(&[(DENY, "Deny"), (ALLOW, "Allow")]);
@@ -325,10 +330,9 @@ fn present_prompt(key: PromptKey, id: u64) {
             .is_some_and(|check| check.is_active());
         answer(key, id, response == ALLOW, remember);
     });
-    // a dialog closed without a response (its window went away) denies, so its waiters are not stranded; after a
-    // response the prompt is answered already and this releases nothing
-    dialog.connect_closed(move |_| answer(key, id, false, false));
-    dialog.present(prompt_parent(key.requester).as_ref());
+    // no `closed` handler: libadwaita emits `closed` before a button's `response`, so one would answer first and deny
+    // every Allow; a dialog closed without a button already responds with its close response (Deny)
+    dialog
 }
 
 /// The widget a prompt attaches to: the requesting terminal while it is in a window, else the active window.
@@ -496,6 +500,85 @@ mod tests {
             ClipboardDecision::Prompt
         );
         assert_eq!(prompts.answer(read, next, true, false).len(), 1);
+    }
+
+    /// The dialog's button labelled `label`.
+    fn button(dialog: &adw::AlertDialog, label: &str) -> gtk::Button {
+        let mut pending: Vec<gtk::Widget> = vec![dialog.clone().upcast()];
+        while let Some(widget) = pending.pop() {
+            if let Some(button) = widget.downcast_ref::<gtk::Button>()
+                && button.label().as_deref() == Some(label)
+            {
+                return button.clone();
+            }
+            let mut child = widget.first_child();
+            while let Some(next) = child {
+                child = next.next_sibling();
+                pending.push(next);
+            }
+        }
+        panic!("the prompt has a {label} button");
+    }
+
+    /// Clicks `label` on a prompt for a request.
+    fn click(access: ClipboardAccess, label: &'static str, remember: bool) -> Decided {
+        decide(access, remember, |dialog| button(dialog, label).emit_clicked())
+    }
+
+    /// What the request's waiter got and what the session decides for the next request.
+    type Decided = (Vec<(&'static str, bool)>, ClipboardDecision);
+
+    /// Presents a prompt for a request in a window, ticks "Don't ask again" when `remember` and lets `act` end it.
+    fn decide(access: ClipboardAccess, remember: bool, act: impl FnOnce(&adw::AlertDialog)) -> Decided {
+        PROMPTS.with(|prompts| *prompts.borrow_mut() = Prompts::default());
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let key = key(access, 1);
+        let Admission::Prompt(id) = PROMPTS.with(|prompts| prompts.borrow_mut().admit(key, recorder(&log, "asked")))
+        else {
+            panic!("the first request prompts");
+        };
+        let window = adw::Window::new();
+        let dialog = prompt_dialog(key, id);
+        dialog.present(Some(&window));
+        if remember {
+            dialog
+                .extra_child()
+                .and_downcast::<gtk::CheckButton>()
+                .expect("the prompt has its don't-ask-again check")
+                .set_active(true);
+        }
+        act(&dialog);
+        window.destroy();
+        let decision = PROMPTS.with(|prompts| prompts.borrow().policy.decision(access));
+        let answers = log.borrow().clone();
+        (answers, decision)
+    }
+
+    /// libadwaita closes the dialog, emitting `closed`, before it emits a button's `response`: the answer is the
+    /// button's. A dialog closed without one (Escape) answers with its close response, Deny.
+    #[test]
+    fn the_dialog_answers_with_the_button_clicked() {
+        let Some(results) = crate::gtk_test::on_gtk_thread(|| {
+            [
+                click(ClipboardAccess::Write, "Allow", false),
+                click(ClipboardAccess::Read, "Allow", true),
+                click(ClipboardAccess::Read, "Deny", true),
+                decide(ClipboardAccess::Write, false, |dialog| {
+                    assert!(dialog.close(), "the prompt closes");
+                }),
+            ]
+        }) else {
+            return;
+        };
+        assert_eq!(
+            results,
+            [
+                (vec![("asked", true)], ClipboardDecision::Prompt),
+                (vec![("asked", true)], ClipboardDecision::Allow),
+                (vec![("asked", false)], ClipboardDecision::Deny),
+                (vec![("asked", false)], ClipboardDecision::Prompt),
+            ]
+        );
     }
 
     #[test]

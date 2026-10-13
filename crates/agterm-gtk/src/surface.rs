@@ -938,14 +938,12 @@ fn unshifted_codepoint(widget: &impl IsA<gtk::Widget>, event: &gdk::KeyEvent, ke
 mod tests {
     use super::*;
 
-    /// One test owns GTK: it initialises on the calling thread, and a second thread may not.
     #[test]
     fn the_area_owns_the_surface_without_a_cycle() {
-        if let Err(err) = gtk::init() {
-            eprintln!("skipped: GTK has no display ({err})");
-            return;
-        }
+        crate::gtk_test::on_gtk_thread(the_area_owns_the_surface);
+    }
 
+    fn the_area_owns_the_surface() {
         // a handle keeps a surface that is in no container yet
         let unplaced = TerminalSurface::new(SurfaceSpec::default());
         let key = unplaced.inner.key;
