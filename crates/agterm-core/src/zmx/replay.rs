@@ -221,7 +221,7 @@ mod tests {
         assert_eq!(fs::read_to_string(&result).unwrap(), "two words and more");
     }
 
-    /// fish, when this host has one (CI's default job does not): `None` otherwise.
+    /// fish, when this host has one (the `rust-linux` CI job installs it for this test): `None` otherwise.
     fn fish() -> Option<&'static str> {
         ["/usr/bin/fish", "/bin/fish", "/usr/local/bin/fish"]
             .into_iter()

@@ -767,14 +767,13 @@ mod tests {
             .map(|line| line.replacen(&history, "HISTORY", 1))
             .collect();
         assert_eq!(lines.len(), 3, "{lines:?}");
-        assert!(
-            lines[0].starts_with("integration 1 HISTORY ") && lines[0].contains('i'),
-            "{lines:?}"
-        );
+        // both the shell that ran the command and the final one are interactive: `$-` (the last field) holds `i`
+        let interactive = |line: &str| {
+            line.strip_prefix("integration 1 HISTORY ")
+                .is_some_and(|flags| !flags.contains(' ') && flags.contains('i'))
+        };
+        assert!(interactive(&lines[0]), "{lines:?}");
         assert_eq!(lines[1], "command");
-        assert!(
-            lines[2].starts_with("integration 1 HISTORY ") && lines[2].contains('i'),
-            "{lines:?}"
-        );
+        assert!(interactive(&lines[2]), "{lines:?}");
     }
 }
