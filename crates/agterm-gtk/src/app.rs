@@ -10,9 +10,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
+use agterm_core::model::WindowLibrary;
 use agterm_core::pane_env::{self, PaneEnv, SessionPane, StatusPane};
 use agterm_core::paths::{self, Env, ProcessEnv};
-use agterm_core::{Core, CoreConfig};
+use agterm_core::persist::{LibraryPersistence, SettingsStore};
+use agterm_core::{Core, CoreConfig, CoreState};
 use agterm_host::MainLoop;
 use agterm_proto::{AppIdentity, Request};
 use agterm_server::{ControlServer, Reply};
@@ -21,6 +23,7 @@ use uuid::Uuid;
 
 use crate::ghostty_app;
 use crate::main_loop::GlibMainLoop;
+use crate::pane::PaneSurface;
 use crate::surface::{self, SurfaceSpec, TerminalSurface};
 
 /// The application id the Linux fork registered, kept so this build can take over its state.
@@ -55,19 +58,76 @@ fn advertised_socket(server: &ControlServer) -> String {
     server.advertised_path().to_string_lossy().into_owned()
 }
 
-/// The single terminal's environment: the main pane of a session. Interim until the model (Task 11) gives it real
-/// session, window and workspace ids.
-fn primary_pane_env(identity: &AppIdentity, socket: &str) -> PaneEnv {
-    let token = pane_env::uuid_string(Uuid::new_v4());
+/// The model as the last run left it in the state dir (upstream's launch bootstrap), with the settings.
+fn load_state(env: &dyn Env) -> CoreState {
+    let state_dir = paths::state_dir(env);
+    let home = paths::home_dir(env).map_or_else(|| "/".to_owned(), |home| home.to_string_lossy().into_owned());
+    let settings = SettingsStore::new(&state_dir).load();
+    let mut persistence = LibraryPersistence::new(&state_dir);
+    let library = persistence.bootstrap(&home);
+    CoreState {
+        library,
+        settings,
+        persistence: Some(persistence),
+    }
+}
+
+/// The session pane the window shows. Interim until the eager deck (Task 11) gives every session its terminal: the
+/// frontmost window's selected session, else its first, gets the one terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShownPane {
+    window: Uuid,
+    workspace: Uuid,
+    session: Uuid,
+    pane_identity: Uuid,
+    cwd: String,
+}
+
+fn shown_pane(library: &WindowLibrary) -> Option<ShownPane> {
+    let window = library.active_window_id()?;
+    let store = library.store(window)?;
+    let session = store.active_session().or_else(|| store.sessions().next())?;
+    Some(ShownPane {
+        window,
+        workspace: store.workspace_for_session(session.id())?.id(),
+        session: session.id(),
+        pane_identity: session.pane_identity,
+        cwd: session.effective_cwd().to_owned(),
+    })
+}
+
+/// The main pane's environment, its pane token the pane identity (upstream's `paneIdentity.uuidString`).
+fn primary_pane_env(identity: &AppIdentity, socket: &str, pane: &ShownPane) -> PaneEnv {
+    let token = pane_env::uuid_string(pane.pane_identity);
     pane_env::session(&SessionPane {
-        session: Uuid::new_v4(),
-        window: None,
-        workspace: None,
+        session: pane.session,
+        window: Some(pane.window),
+        workspace: Some(pane.workspace),
         socket_path: socket,
         program_version: &identity.version,
         pane: Some(StatusPane::Left),
         pane_token: Some(&token),
     })
+}
+
+/// Creates the shown pane's terminal and puts it in its session's slot, where `tree` reads it back.
+fn create_terminal(core: &mut Core, pane: &ShownPane, env: PaneEnv) -> TerminalSurface {
+    let terminal = TerminalSurface::new(SurfaceSpec {
+        working_directory: Some(PathBuf::from(&pane.cwd)),
+        env: env.into_iter().collect(),
+        ..SurfaceSpec::default()
+    });
+    let token = pane_env::uuid_string(pane.pane_identity);
+    if let Some(session) = core
+        .library_mut()
+        .store_mut(pane.window)
+        .and_then(|store| store.session_mut(pane.session))
+    {
+        session
+            .surface
+            .replace(Box::new(PaneSurface::new(terminal.clone(), token)));
+    }
+    terminal
 }
 
 /// What the quit path stops, from the first activation on.
@@ -80,15 +140,10 @@ thread_local! {
     static SHELL: RefCell<Option<Shell>> = const { RefCell::new(None) };
 }
 
-fn build_window(app: &adw::Application, env: PaneEnv) {
-    let terminal = TerminalSurface::new(SurfaceSpec {
-        env: env.into_iter().collect(),
-        ..SurfaceSpec::default()
-    });
+fn build_window(app: &adw::Application, terminal: Option<&TerminalSurface>) {
     let header = adw::HeaderBar::new();
     let content = adw::ToolbarView::new();
     content.add_top_bar(&header);
-    content.set_content(Some(terminal.widget()));
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("agterm")
@@ -96,6 +151,11 @@ fn build_window(app: &adw::Application, env: PaneEnv) {
         .default_height(640)
         .content(&content)
         .build();
+    let Some(terminal) = terminal else {
+        window.present();
+        return;
+    };
+    content.set_content(Some(terminal.widget()));
     let titled = window.downgrade();
     terminal.connect_title(move |title| {
         if let Some(window) = titled.upgrade() {
@@ -127,11 +187,19 @@ pub fn activate(app: &adw::Application) {
     }
     let identity = identity();
     let mut server = ControlServer::new(control_socket(&ProcessEnv));
-    build_window(app, primary_pane_env(&identity, &advertised_socket(&server)));
-    let core = Core::new(CoreConfig {
-        app: identity,
-        capabilities: CAPABILITIES.iter().map(|name| (*name).to_owned()).collect(),
+    let socket = advertised_socket(&server);
+    let mut core = Core::new(
+        CoreConfig {
+            app: identity.clone(),
+            capabilities: CAPABILITIES.iter().map(|name| (*name).to_owned()).collect(),
+        },
+        load_state(&ProcessEnv),
+    );
+    let terminal = shown_pane(core.library()).map(|pane| {
+        let env = primary_pane_env(&identity, &socket, &pane);
+        create_terminal(&mut core, &pane, env)
     });
+    build_window(app, terminal.as_ref());
     let main_loop = Arc::new(GlibMainLoop::attach(
         &glib::MainContext::default(),
         Rc::new(RefCell::new(core)),
@@ -200,10 +268,11 @@ mod tests {
         let serving = ControlServer::new(&socket);
         let refused = ControlServer::new(&socket);
         let identity = AppIdentity::from_recorded("1.2.3", None);
+        let pane = shown_pane(&WindowLibrary::seeded("/home/u")).ok_or("no pane")?;
 
-        let reachable = primary_pane_env(&identity, &advertised_socket(&serving));
+        let reachable = primary_pane_env(&identity, &advertised_socket(&serving), &pane);
         assert_eq!(reachable["AGTERM_SOCKET"], socket.to_string_lossy());
-        let unavailable = primary_pane_env(&identity, &advertised_socket(&refused));
+        let unavailable = primary_pane_env(&identity, &advertised_socket(&refused), &pane);
         assert_eq!(
             unavailable["AGTERM_SOCKET"],
             format!("{}.unavailable", socket.to_string_lossy())
@@ -212,15 +281,42 @@ mod tests {
     }
 
     #[test]
-    fn the_terminal_is_the_main_pane_of_a_session_on_this_build() {
-        let env = primary_pane_env(&identity(), "/tmp/a.sock");
+    fn the_terminal_is_the_main_pane_of_the_shown_session_on_this_build() {
+        let library = WindowLibrary::seeded("/home/u");
+        let pane = shown_pane(&library).unwrap();
+        let store = library.active_store().unwrap();
+        let session = store.active_session().unwrap();
+        assert_eq!(pane.session, session.id());
+        assert_eq!(pane.cwd, "/home/u");
+        let env = primary_pane_env(&identity(), "/tmp/a.sock", &pane);
         assert_eq!(env["TERM_PROGRAM"], "agterm");
         assert_eq!(env["TERM_PROGRAM_VERSION"], env!("CARGO_PKG_VERSION"));
         assert_eq!(env["AGTERM_PANE"], "left");
-        for id in ["AGTERM_SESSION_ID", "AGTERM_PANE_ID"] {
-            assert!(Uuid::parse_str(&env[id]).is_ok(), "{id}: {}", env[id]);
-            assert_eq!(env[id], env[id].to_uppercase(), "{id}");
+        assert_eq!(env["AGTERM_SESSION_ID"], pane_env::uuid_string(session.id()));
+        assert_eq!(env["AGTERM_PANE_ID"], pane_env::uuid_string(session.pane_identity));
+        assert_eq!(env["AGTERM_WINDOW_ID"], pane_env::uuid_string(pane.window));
+        assert_eq!(env["AGTERM_WORKSPACE_ID"], pane_env::uuid_string(pane.workspace));
+    }
+
+    #[test]
+    fn a_window_without_sessions_shows_no_terminal() {
+        let mut library = WindowLibrary::new("/home/u");
+        library.new_window(None);
+        let window = library.active_window_id().unwrap();
+        let store = library.store_mut(window).unwrap();
+        let ids: Vec<Uuid> = store.sessions().map(agterm_core::model::Session::id).collect();
+        for id in ids {
+            store.close_session(id);
         }
-        assert!(!env.contains_key("AGTERM_WINDOW_ID"));
+        assert_eq!(shown_pane(&library), None);
+    }
+
+    #[test]
+    fn the_shown_pane_falls_back_to_the_first_session() {
+        let mut library = WindowLibrary::seeded("/home/u");
+        let store = library.active_store_mut().unwrap();
+        let first = store.sessions().next().unwrap().id();
+        store.select_session(None);
+        assert_eq!(shown_pane(&library).unwrap().session, first);
     }
 }

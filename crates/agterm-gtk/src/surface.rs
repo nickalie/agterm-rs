@@ -316,6 +316,11 @@ impl TerminalSurface {
         self.inner.im.set_client_widget(None::<&gtk::Widget>);
     }
 
+    /// Whether the libghostty surface exists: created at the area's first nonzero size and not torn down since.
+    pub fn is_realized(&self) -> bool {
+        !self.inner.torn_down.get() && self.inner.ghostty.try_borrow().is_ok_and(|surface| surface.is_some())
+    }
+
     pub fn grab_focus(&self) {
         self.area.grab_focus();
     }

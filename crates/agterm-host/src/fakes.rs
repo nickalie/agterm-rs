@@ -1,6 +1,7 @@
 //! In-memory fakes of the host traits, for tests that run the core or the control server without a window, a
 //! terminal or a daemon. Each records what was asked of it so a test can assert on it afterwards.
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io;
@@ -20,12 +21,15 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// What the loop's thread hands back when it ends: the state, for a loop started with a state that can cross threads.
+type Returned = Option<Box<dyn Any + Send>>;
+
 /// A main loop on a thread of its own that owns the state `S` and runs posted tasks in order.
 pub struct FakeMainLoop<S> {
     /// `None` once shut down. Shared with the timers of [`MainLoop::post_after`], which post through it only while
     /// the loop is open, so a pending timer neither holds the loop open nor runs after a shutdown.
     sender: Arc<Mutex<Option<mpsc::Sender<MainTask<S>>>>>,
-    thread: Mutex<Option<JoinHandle<S>>>,
+    thread: Mutex<Option<JoinHandle<Returned>>>,
     thread_id: ThreadId,
 }
 
@@ -36,15 +40,42 @@ impl<S: Send + 'static> FakeMainLoop<S> {
     ///
     /// The thread could not be spawned.
     pub fn spawn(state: S) -> io::Result<Self> {
+        Self::start(move || state, |state| Some(Box::new(state)))
+    }
+
+    /// Stops accepting tasks, lets the queued ones run, and returns the state; a delayed task whose timer is still
+    /// pending is dropped unrun. `None` when already shut down or when a
+    /// task panicked and took the thread with it.
+    pub fn shutdown(&self) -> Option<S> {
+        let returned = self.join()??;
+        returned.downcast::<S>().ok().map(|state| *state)
+    }
+}
+
+impl<S: 'static> FakeMainLoop<S> {
+    /// Starts the loop's thread with the state `make` builds there: a state that must not cross threads, as the
+    /// app's own, which holds its terminals, never does.
+    ///
+    /// # Errors
+    ///
+    /// The thread could not be spawned.
+    pub fn spawn_with(make: impl FnOnce() -> S + Send + 'static) -> io::Result<Self> {
+        Self::start(make, |_| None)
+    }
+
+    fn start(
+        make: impl FnOnce() -> S + Send + 'static,
+        finish: impl FnOnce(S) -> Returned + Send + 'static,
+    ) -> io::Result<Self> {
         let (sender, receiver) = mpsc::channel::<MainTask<S>>();
         let handle = thread::Builder::new()
             .name("fake-main-loop".to_owned())
             .spawn(move || {
-                let mut state = state;
+                let mut state = make();
                 for task in receiver {
                     task(&mut state);
                 }
-                state
+                finish(state)
             })?;
         let thread_id = handle.thread().id();
         Ok(Self {
@@ -60,17 +91,21 @@ impl<S: Send + 'static> FakeMainLoop<S> {
         self.thread_id
     }
 
-    /// Stops accepting tasks, lets the queued ones run, and returns the state; a delayed task whose timer is still
-    /// pending is dropped unrun. `None` when already shut down or when a
-    /// task panicked and took the thread with it.
-    pub fn shutdown(&self) -> Option<S> {
+    /// Stops accepting tasks and lets the queued ones run, as [`FakeMainLoop::shutdown`] without returning the state.
+    /// False when already shut down or when a task panicked and took the thread with it.
+    pub fn close(&self) -> bool {
+        self.join().is_some()
+    }
+
+    /// Closes the channel and joins the thread; `None` when already joined or the thread panicked.
+    fn join(&self) -> Option<Returned> {
         lock(&self.sender).take();
         let handle = lock(&self.thread).take()?;
         handle.join().ok()
     }
 }
 
-impl<S: Send + 'static> MainLoop<S> for FakeMainLoop<S> {
+impl<S: 'static> MainLoop<S> for FakeMainLoop<S> {
     fn post(&self, task: MainTask<S>) -> Result<(), MainLoopClosed> {
         let sender = lock(&self.sender);
         let sender = sender.as_ref().ok_or(MainLoopClosed)?;
@@ -476,6 +511,22 @@ mod tests {
         );
         // the timer thread drops the task, and with it the reply channel, without running it
         assert_eq!(rx.recv(), Err(mpsc::RecvError));
+    }
+
+    #[test]
+    fn a_state_that_cannot_cross_threads_is_built_and_kept_on_the_loop() {
+        let main_loop = FakeMainLoop::spawn_with(|| Rc::new(RefCell::new(0_u8))).unwrap();
+        let (tx, rx) = mpsc::channel();
+        main_loop
+            .post(Box::new(move |state: &mut Rc<RefCell<u8>>| {
+                *state.borrow_mut() += 1;
+                tx.send(*state.borrow()).unwrap();
+            }))
+            .unwrap();
+        assert_eq!(rx.recv(), Ok(1));
+        assert!(main_loop.close());
+        assert!(!main_loop.close());
+        assert_eq!(main_loop.post(Box::new(|_| {})), Err(MainLoopClosed));
     }
 
     #[test]

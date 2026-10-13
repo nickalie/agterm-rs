@@ -10,6 +10,7 @@ mod ghostty_app;
 mod input;
 mod logging;
 mod main_loop;
+mod pane;
 mod signals;
 mod surface;
 

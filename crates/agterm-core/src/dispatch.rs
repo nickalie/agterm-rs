@@ -1,10 +1,16 @@
 //! The core state owner and the command dispatcher: one request in, one response out, on the main thread.
 
-use agterm_proto::{AppIdentity, Command, ConformanceProfile, PARITY_LEVEL, Request, Response, VersionResult};
+use agterm_proto::{
+    AppIdentity, Command, ConformanceProfile, ControlTree, PARITY_LEVEL, Request, Response, VersionResult,
+};
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::error::ControlError;
+use crate::model::{AppStore, WindowLibrary};
+use crate::persist::{AppSettings, LibraryPersistence};
+use crate::projection::{TreeContext, control_tree};
+use crate::resolve::Resolver;
 
 /// What the app tells the core about itself at startup.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,12 +21,30 @@ pub struct CoreConfig {
     pub capabilities: Vec<String>,
 }
 
+/// The model the core starts with: the windows and their stores, the settings, and the persistence that loaded them.
+#[derive(Debug, Default)]
+pub struct CoreState {
+    pub library: WindowLibrary,
+    pub settings: AppSettings,
+    /// `None` keeps the model in memory only (tests).
+    pub persistence: Option<LibraryPersistence>,
+}
+
 /// The single owner of the app state. Lives on the main thread; every control request reaches it through
 /// [`Core::dispatch`].
 #[derive(Debug)]
 pub struct Core {
     app: AppIdentity,
     capabilities: Vec<String>,
+    library: WindowLibrary,
+    settings: AppSettings,
+    persistence: Option<LibraryPersistence>,
+}
+
+/// The `tree` result: `{"tree": {...}}`.
+#[derive(Serialize)]
+struct TreeResult {
+    tree: ControlTree,
 }
 
 /// Foundation's context for data that does not parse as JSON (swift-foundation's `JSONDecoder.decode`), whatever the
@@ -55,12 +79,27 @@ fn result_of(value: &impl Serialize) -> Result<Response, ControlError> {
 }
 
 impl Core {
+    /// A core over `state`.
     #[must_use]
-    pub fn new(config: CoreConfig) -> Self {
+    pub fn new(config: CoreConfig, state: CoreState) -> Self {
         Self {
             app: config.app,
             capabilities: config.capabilities,
+            library: state.library,
+            settings: state.settings,
+            persistence: state.persistence,
         }
+    }
+
+    /// The windows and their stores.
+    #[must_use]
+    pub fn library(&self) -> &WindowLibrary {
+        &self.library
+    }
+
+    /// The model, for the frontend to put the terminals it creates in their sessions.
+    pub fn library_mut(&mut self) -> &mut WindowLibrary {
+        &mut self.library
     }
 
     /// Answers one request. Failures become `ok:false` with the error's text.
@@ -88,10 +127,34 @@ impl Core {
         }
     }
 
+    /// The `tree` of the `--window` window, else of the frontmost one; an empty tree once every window is closed.
+    ///
+    /// # Errors
+    ///
+    /// The `--window` target does not resolve or names a closed window.
+    pub fn tree(&self, window: Option<&str>) -> Result<ControlTree, ControlError> {
+        let scoped = Resolver::new(&self.library).placement_window(window)?;
+        let empty = AppStore::new();
+        let store = scoped.and_then(|id| self.library.store(id)).unwrap_or(&empty);
+        let context = TreeContext {
+            app: &self.app,
+            settings: &self.settings,
+            index_unsaved: self.persistence.as_ref().is_some_and(LibraryPersistence::index_unsaved),
+            quick_visible: false,
+        };
+        Ok(control_tree(store, &context))
+    }
+
     /// One arm per group, routing to the group's handler; groups without one yet are refused by name.
     fn route(&mut self, request: &Request) -> Result<Response, ControlError> {
         match request.cmd {
             Command::Version => result_of(&self.version()),
+            Command::Tree => {
+                let window = request.args.as_ref().and_then(|args| args.window.as_deref());
+                result_of(&TreeResult {
+                    tree: self.tree(window)?,
+                })
+            }
             cmd @ (Command::Ask(_)
             | Command::Browser(_)
             | Command::Config(_)
@@ -109,7 +172,6 @@ impl Core {
             | Command::Sidebar(_)
             | Command::Surface(_)
             | Command::Theme(_)
-            | Command::Tree
             | Command::Window(_)
             | Command::Workspace(_)
             | Command::Zmx(_)) => Err(ControlError::NotSupported(cmd)),
@@ -125,11 +187,17 @@ mod tests {
     use super::*;
 
     fn core() -> Core {
-        Core::new(CoreConfig {
-            app: AppIdentity::from_recorded("0.1.0", Some("abc1234")),
-            capabilities: vec!["posix-shell".to_owned()],
-        })
+        Core::new(
+            CoreConfig {
+                app: AppIdentity::from_recorded("0.1.0", Some("abc1234")),
+                capabilities: vec!["posix-shell".to_owned()],
+            },
+            CoreState::default(),
+        )
     }
+
+    /// The commands answered so far.
+    const ANSWERED: &[Command] = &[Command::Version, Command::Tree];
 
     #[test]
     fn version_reports_app_and_profile() {
@@ -146,11 +214,7 @@ mod tests {
     #[test]
     fn unimplemented_commands_are_refused_by_name() {
         let mut core = core();
-        for cmd in [
-            Command::Tree,
-            Command::Session(SessionCmd::New),
-            Command::Zmx(ZmxCmd::List),
-        ] {
+        for cmd in [Command::Session(SessionCmd::New), Command::Zmx(ZmxCmd::List)] {
             let response = core.dispatch(&Request::new(cmd));
             assert!(!response.ok);
             assert_eq!(
@@ -160,12 +224,67 @@ mod tests {
         }
     }
 
+    fn tree_request(window: Option<&str>) -> Request {
+        Request {
+            args: window.map(|window| agterm_proto::Args {
+                window: Some(window.to_owned()),
+                ..agterm_proto::Args::default()
+            }),
+            ..Request::new(Command::Tree)
+        }
+    }
+
+    #[test]
+    fn tree_projects_the_named_or_frontmost_window() {
+        let mut library = WindowLibrary::new("/home/u");
+        let first = library.new_window(None);
+        let second = library.new_window(None);
+        let workspace_of = |window| crate::pane_env::uuid_string(library.store(window).unwrap().workspaces()[0].id());
+        let (first_ws, second_ws) = (workspace_of(first), workspace_of(second));
+        let mut core = Core::new(
+            CoreConfig {
+                app: AppIdentity::from_recorded("0.1.0", None),
+                capabilities: Vec::new(),
+            },
+            CoreState {
+                library,
+                ..CoreState::default()
+            },
+        );
+        let workspace_id = |response: Response| response.result.unwrap()["tree"]["workspaces"][0]["id"].clone();
+        assert_eq!(workspace_id(core.dispatch(&tree_request(None))), json!(second_ws));
+        let first_prefix = crate::pane_env::uuid_string(first)[..6].to_lowercase();
+        assert_eq!(
+            workspace_id(core.dispatch(&tree_request(Some(&first_prefix)))),
+            json!(first_ws)
+        );
+        assert_eq!(
+            core.dispatch(&tree_request(Some("zzz"))),
+            Response::failure("no such window: zzz")
+        );
+        core.library_mut().close_window(first);
+        assert_eq!(
+            core.dispatch(&tree_request(Some(&first_prefix))),
+            Response::failure("window not open — window.select it first")
+        );
+        let tree = core.dispatch(&tree_request(None)).result.unwrap();
+        assert_eq!(tree["tree"]["app"], json!({"version": "0.1.0"}));
+    }
+
+    #[test]
+    fn tree_of_no_open_window_is_empty() {
+        let response = core().dispatch(&tree_request(None));
+        let tree = &response.result.unwrap()["tree"];
+        assert_eq!(tree["workspaces"], json!([]));
+        assert_eq!(tree["sidebarVisible"], true);
+    }
+
     #[test]
     fn every_command_gets_an_answer() {
         let mut core = core();
         for cmd in Command::all() {
             let response = core.dispatch(&Request::new(cmd));
-            assert_eq!(response.ok, cmd == Command::Version, "{cmd}");
+            assert_eq!(response.ok, ANSWERED.contains(&cmd), "{cmd}");
         }
     }
 

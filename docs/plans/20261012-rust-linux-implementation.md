@@ -610,17 +610,28 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 **Files:**
 - Create: `crates/agterm-core/src/{projection,resolve}.rs`
 - Modify: `crates/agterm-ctl/src/main.rs`
+- ➕ Create: `crates/agterm-proto/src/tree.rs` (the wire nodes, shared with `agtermctl`), `crates/agterm-ctl/src/tree.rs`,
+  `crates/agterm-gtk/src/pane.rs` (the terminal as the core's `Surface`)
+- ➕ Modify: `Cargo.toml` (serde_json `preserve_order`, so a result keeps upstream's field order on the wire),
+  `crates/agterm-core/src/{dispatch,error,lib}.rs`, `crates/agterm-ctl/src/output.rs`,
+  `crates/agterm-gtk/src/{app,main,surface}.rs`, `crates/agterm-host/src/fakes.rs` (`FakeMainLoop::spawn_with`: the
+  core holds its terminals and no longer crosses threads), the server and CLI integration tests
 
-- [ ] `tree` projection per `ControlProjection.swift` (field names, order and optionality as the catalog `fields`),
-      `tree.app`
-- [ ] target resolution per upstream's `ControlResolve.swift` and `agterm/Control/ControlTargetResolver.swift`
+- [x] `tree` projection per `ControlProjection.swift` (field names, order and optionality as the catalog `fields`),
+      `tree.app` (fields the model does not hold yet — overlays, HUD, ask, dashboard, zoom, foreground, font sizes,
+      live attribution — stay absent until their tasks; minimal wiring so `tree` answers over the socket: `Core`
+      owns the bootstrapped library and settings, and the GTK window's one terminal sits in the shown session's
+      primary slot with that session's real ids; the eager deck and saves after mutations stay Task 11's)
+- [x] target resolution per upstream's `ControlResolve.swift` and `agterm/Control/ControlTargetResolver.swift`
       (`control-api.md` > Transport and addressing): frontmost scoping, id and prefix matching, batch targets, the
       pinned error strings (`protocol.target-resolution`)
-- [ ] `agtermctl tree` and the global target options
-- [ ] write tests: projection for multi-window and split layouts against expected JSON
-- [ ] write tests: resolver ambiguity, unknown id, cross-window targets
-- [ ] gate: full run; the `test_tree.py`/`test_addressing.py` tests that need only tree and resolution green, the
-      rest ⚠️ until Tasks 11–15; ratchet
+- [x] `agtermctl tree` and the global target options (`--window`; `--target` and the repeatable batch `--target`
+      are defined and tested, their first commands come in Task 11)
+- [x] write tests: projection for multi-window and split layouts against expected JSON
+- [x] write tests: resolver ambiguity, unknown id, cross-window targets
+- [x] gate: full run; the `test_tree.py`/`test_addressing.py` tests that need only tree and resolution green, the
+      rest ⚠️ until Tasks 11–15 (they use `window.list`, `session.*` or `workspace.*`); ratchet (holds; 5 new green
+      ids: the four fresh-tree tests of `test_tree.py` and `test_tree_app_is_the_version_identity`, 19 listed)
 
 ### Task 11: Session lifecycle, eager deck and `window.list`
 

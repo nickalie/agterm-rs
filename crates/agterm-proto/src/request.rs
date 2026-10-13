@@ -288,6 +288,6 @@ mod tests {
             panic!("args is not an object")
         };
         let keys: Vec<&str> = map.keys().map(String::as_str).collect();
-        assert_eq!(keys, ["fontSize", "hideAfter", "paneID"]);
+        assert_eq!(keys, ["paneID", "hideAfter", "fontSize"]);
     }
 }

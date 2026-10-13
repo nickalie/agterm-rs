@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::Arc;
 
-use agterm_core::{Core, CoreConfig};
+use agterm_core::model::WindowLibrary;
+use agterm_core::{Core, CoreConfig, CoreState};
 use agterm_host::MainLoop;
 use agterm_host::fakes::FakeMainLoop;
 use agterm_proto::{AppIdentity, Request, Response};
@@ -30,7 +31,7 @@ fn short_dir() -> io::Result<TempDir> {
 
 /// A server on `<dir>/agterm.sock` answering through `handler` on a fake main loop. Fields drop top to bottom: the
 /// server stops before its main loop and the directory holding its socket go.
-struct Server<S: Send + 'static> {
+struct Server<S: 'static> {
     _server: ControlServer,
     _main_loop: Arc<FakeMainLoop<S>>,
 }
@@ -40,7 +41,15 @@ where
     S: Send + 'static,
     H: Fn(&mut S, Request) -> Reply + Send + Sync + 'static,
 {
-    let main_loop = Arc::new(FakeMainLoop::spawn(state)?);
+    serve_on(socket, FakeMainLoop::spawn(state)?, handler)
+}
+
+fn serve_on<S, H>(socket: &Path, main_loop: FakeMainLoop<S>, handler: H) -> TestResult<Server<S>>
+where
+    S: 'static,
+    H: Fn(&mut S, Request) -> Reply + Send + Sync + 'static,
+{
+    let main_loop = Arc::new(main_loop);
     let mut server = ControlServer::new(socket);
     server.start(Arc::clone(&main_loop) as Arc<dyn MainLoop<S>>, handler)?;
     Ok(Server {
@@ -49,14 +58,24 @@ where
     })
 }
 
-fn serve_core(socket: &Path) -> TestResult<Server<Core>> {
-    let core = Core::new(CoreConfig {
-        app: AppIdentity::from_recorded("0.1.0", Some("abc1234")),
-        capabilities: vec!["posix-shell".to_owned()],
-    });
-    serve(socket, core, |core: &mut Core, request: Request| {
+/// A core over `state`, built on its main loop's thread, which it never leaves.
+fn serve_core_with(socket: &Path, state: impl FnOnce() -> CoreState + Send + 'static) -> TestResult<Server<Core>> {
+    let main_loop = FakeMainLoop::spawn_with(move || {
+        Core::new(
+            CoreConfig {
+                app: AppIdentity::from_recorded("0.1.0", Some("abc1234")),
+                capabilities: vec!["posix-shell".to_owned()],
+            },
+            state(),
+        )
+    })?;
+    serve_on(socket, main_loop, |core: &mut Core, request: Request| {
         core.dispatch(&request).into()
     })
+}
+
+fn serve_core(socket: &Path) -> TestResult<Server<Core>> {
+    serve_core_with(socket, CoreState::default)
 }
 
 /// The isolated environment every run gets: no `AGTERM_*` or `COLUMNS` from the caller (help wraps at 80 on a pipe),
@@ -142,6 +161,57 @@ fn version_json_prints_the_server_line_unchanged() -> TestResult {
         ],
     )?;
     assert_eq!(outcome(&output), (Some(0), version_line(&socket)?, String::new()));
+    Ok(())
+}
+
+#[test]
+fn tree_lists_the_frontmost_window_and_refuses_an_unknown_one() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("agterm.sock");
+    let _server = serve_core_with(&socket, || CoreState {
+        library: WindowLibrary::seeded("/home/u"),
+        ..CoreState::default()
+    })?;
+    let with_socket = |args: &[&str]| -> TestResult<Output> {
+        let argv = args
+            .iter()
+            .map(OsStr::new)
+            .chain([OsStr::new("--socket"), socket.as_os_str()]);
+        run(dir.path(), &[], argv)
+    };
+
+    let json = with_socket(&["tree", "--json"])?;
+    let (code, stdout, stderr) = outcome(&json);
+    assert_eq!((code, stderr.as_str()), (Some(0), ""));
+    let response: Response = serde_json::from_str(&stdout)?;
+    let tree = &response.result.ok_or("no result")?["tree"];
+    let workspace = &tree["workspaces"][0];
+    let session = &workspace["sessions"][0];
+    let (wid, sid) = (
+        workspace["id"].as_str().ok_or("no workspace id")?,
+        session["id"].as_str().ok_or("no session id")?,
+    );
+    let human = format!("* workspace 1  [{wid}]\n  * u (not realized)  [{sid}]  /home/u\n");
+    assert_eq!(
+        outcome(&with_socket(&["tree"])?),
+        (Some(0), human.clone(), String::new())
+    );
+    assert_eq!(
+        outcome(&with_socket(&["tree", "--window", "active"])?),
+        (Some(0), human, String::new())
+    );
+
+    let refusal = "no such window: zzz";
+    assert_eq!(
+        outcome(&with_socket(&["tree", "--window", "zzz"])?),
+        (Some(1), String::new(), format!("error: {refusal}\n"))
+    );
+    let refused_json = with_socket(&["tree", "--json", "--window", "zzz"])?;
+    assert_eq!(refused_json.status.code(), Some(1));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&refused_json.stdout)?,
+        serde_json::json!({"ok": false, "error": refusal})
+    );
     Ok(())
 }
 
@@ -346,9 +416,24 @@ OPTIONS:
   -h, --help              Show help information.
 
 SUBCOMMANDS:
+  tree                    Print the workspace/session tree.
   version                 Print the version of the app serving the socket.
 
   See 'agtermctl help <subcommand>' for detailed help.
+";
+
+const TREE_HELP: &str = "\
+OVERVIEW: Print the workspace/session tree.
+
+USAGE: agtermctl tree [--socket <socket>] [--json] [--window <window>]
+
+OPTIONS:
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  --window <window>       Target window id, unique prefix, or 'active'
+                          (defaults to the frontmost).
+  -h, --help              Show help information.
+
 ";
 
 const VERSION_HELP: &str = "\
@@ -366,7 +451,9 @@ OPTIONS:
 #[test]
 fn help_goes_to_stdout_in_the_argument_parser_layout() -> TestResult {
     let dir = short_dir()?;
-    let cases: [(&[&str], &str); 10] = [
+    let cases: [(&[&str], &str); 12] = [
+        (&["tree", "--help"], TREE_HELP),
+        (&["help", "tree"], TREE_HELP),
         (&[], ROOT_HELP),
         (&["--help"], ROOT_HELP),
         (&["help"], ROOT_HELP),

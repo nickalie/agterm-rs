@@ -5,6 +5,7 @@
 mod client;
 mod output;
 mod socket;
+mod tree;
 mod usage;
 mod version;
 
@@ -13,7 +14,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use agterm_core::paths::{Env, ProcessEnv};
-use agterm_proto::Request;
+use agterm_proto::{Args, Request};
 use clap::{CommandFactory, Parser, Subcommand};
 
 use crate::client::ClientError;
@@ -38,12 +39,14 @@ struct Agtermctl {
 /// abstract is an `about` attribute (clap derive drops a doc comment's final period), as upstream's `abstract:`.
 #[derive(Debug, Subcommand)]
 enum Command {
+    Tree(tree::Tree),
     Version(version::Version),
 }
 
 impl Command {
     fn run(&self, env: &dyn Env) -> Result<(), Failure> {
         match self {
+            Self::Tree(command) => command.default_run(env),
             Self::Version(command) => command.run(env),
         }
     }
@@ -64,6 +67,81 @@ impl BasicOptions {
     /// `--socket`, else `<AGTERM_STATE_DIR>/agterm.sock`, else the platform default.
     fn socket_path(&self, env: &dyn Env) -> PathBuf {
         socket::resolve(self.socket.as_deref(), env)
+    }
+}
+
+/// [`BasicOptions`] plus the `--window` selector of the commands that act on a window's tree (upstream's
+/// `ClientOptions`).
+#[derive(Debug, clap::Args)]
+struct ClientOptions {
+    #[command(flatten)]
+    basic: BasicOptions,
+
+    #[arg(
+        long,
+        help = "Target window id, unique prefix, or 'active' (defaults to the frontmost)."
+    )]
+    window: Option<String>,
+}
+
+impl ClientOptions {
+    /// Folds `--window` into `base`, or makes args carrying only it; `None` without a window and a base, so the
+    /// request carries no empty `args` object.
+    fn with_window(&self, base: Option<Args>) -> Option<Args> {
+        let Some(window) = &self.window else {
+            return base;
+        };
+        let mut args = base.unwrap_or_default();
+        args.window = Some(window.clone());
+        Some(args)
+    }
+}
+
+/// The `--target` of a command addressing one session or workspace (upstream's `TargetOptions`).
+#[derive(Debug, clap::Args)]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the session and workspace commands take it from Task 11 on")
+)]
+struct TargetOptions {
+    #[arg(
+        long,
+        default_value = "active",
+        help = "Target session/workspace id, unique prefix, or 'active'."
+    )]
+    target: String,
+}
+
+/// The repeatable `--target` of a batch-capable session command (upstream's `BatchTargetOptions`): the targets go
+/// on the wire in command-line order, the first also as the request's own target, so a server without batches acts
+/// on it rather than on the active session.
+#[derive(Debug, clap::Args)]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the batch session commands take it from Task 11 on")
+)]
+struct BatchTargetOptions {
+    #[arg(
+        long = "target",
+        action = clap::ArgAction::Append,
+        help = "Target session id, prefix, or 'active'. Repeat for a batch."
+    )]
+    targets: Vec<String>,
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the batch session commands take it from Task 11 on")
+)]
+impl BatchTargetOptions {
+    /// The request's own target: the first `--target`, else `active`.
+    fn first(&self) -> String {
+        self.targets.first().cloned().unwrap_or_else(|| "active".to_owned())
+    }
+
+    /// `args.targets`: the whole batch when more than one target was given.
+    fn batch(&self) -> Option<Vec<String>> {
+        (self.targets.len() > 1).then(|| self.targets.clone())
     }
 }
 
@@ -177,7 +255,9 @@ mod tests {
     #[test]
     fn connection_options_follow_the_subcommand() {
         let parsed = Agtermctl::try_parse_from(["agtermctl", "version", "--socket", "/s", "--json"]).unwrap();
-        let Command::Version(version) = parsed.command;
+        let Command::Version(version) = parsed.command else {
+            panic!("not version")
+        };
         assert_eq!(version.options().socket.as_deref(), Some(std::path::Path::new("/s")));
         assert!(version.options().json);
         for misplaced in [&["--socket", "/s", "version"][..], &["--json", "version"]] {
@@ -198,7 +278,9 @@ mod tests {
             "--json",
         ])
         .unwrap();
-        let Command::Version(version) = parsed.command;
+        let Command::Version(version) = parsed.command else {
+            panic!("not version")
+        };
         assert_eq!(version.options().socket.as_deref(), Some(std::path::Path::new("/b")));
         assert!(version.options().json);
     }
@@ -219,5 +301,72 @@ mod tests {
             "Error: Unknown option '--bogus'\nUsage: agtermctl version [--socket <socket>] [--json]\n  See 'agtermctl \
              version --help' for more information.\n"
         );
+    }
+
+    fn tree_request(options: &[&str]) -> Request {
+        let command_line = ["agtermctl", "tree"].iter().chain(options).copied();
+        let Command::Tree(tree) = Agtermctl::try_parse_from(command_line).unwrap().command else {
+            panic!("not tree")
+        };
+        tree.make_request()
+    }
+
+    #[test]
+    fn tree_sends_the_window_only_when_given() {
+        assert_eq!(
+            serde_json::to_value(tree_request(&[])).unwrap(),
+            serde_json::json!({"cmd": "tree"})
+        );
+        assert_eq!(
+            serde_json::to_value(tree_request(&["--window", "ab12", "--json"])).unwrap(),
+            serde_json::json!({"cmd": "tree", "args": {"window": "ab12"}})
+        );
+    }
+
+    #[test]
+    fn tree_usage_lists_the_window_after_the_connection_options() {
+        let report = report(&["tree", "--bogus"]);
+        assert_eq!(report.code, usage::USAGE_EXIT);
+        assert!(
+            report
+                .text
+                .contains("\nUsage: agtermctl tree [--socket <socket>] [--json] [--window <window>]\n"),
+            "{}",
+            report.text
+        );
+    }
+
+    #[derive(Debug, Parser)]
+    #[command(args_override_self = true)]
+    struct Targets {
+        #[command(flatten)]
+        target: TargetOptions,
+    }
+
+    #[derive(Debug, Parser)]
+    #[command(args_override_self = true)]
+    struct Batch {
+        #[command(flatten)]
+        batch: BatchTargetOptions,
+    }
+
+    #[test]
+    fn a_single_target_defaults_to_active_and_takes_its_last_value() {
+        assert_eq!(Targets::try_parse_from(["t"]).unwrap().target.target, "active");
+        let parsed = Targets::try_parse_from(["t", "--target", "a", "--target", "b"]).unwrap();
+        assert_eq!(parsed.target.target, "b");
+    }
+
+    #[test]
+    fn batch_targets_keep_command_line_order() {
+        let none = Batch::try_parse_from(["t"]).unwrap().batch;
+        assert_eq!((none.first(), none.batch()), ("active".to_owned(), None));
+        let one = Batch::try_parse_from(["t", "--target", "a"]).unwrap().batch;
+        assert_eq!((one.first(), one.batch()), ("a".to_owned(), None));
+        let many = Batch::try_parse_from(["t", "--target", "b", "--target", "a", "--target", "b"])
+            .unwrap()
+            .batch;
+        assert_eq!(many.first(), "b");
+        assert_eq!(many.batch(), Some(vec!["b".to_owned(), "a".to_owned(), "b".to_owned()]));
     }
 }

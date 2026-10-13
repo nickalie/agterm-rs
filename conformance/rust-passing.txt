@@ -13,5 +13,10 @@ tests/protocol/test_addressing.py::test_undecodable_request_is_refused[not-an-ob
 tests/protocol/test_addressing.py::test_undecodable_request_is_refused[not-json]
 tests/protocol/test_addressing.py::test_undecodable_request_is_refused[target-type]
 tests/protocol/test_addressing.py::test_undecodable_request_is_refused[unknown-command]
+tests/protocol/test_tree.py::test_fresh_session_node
+tests/protocol/test_tree.py::test_fresh_tree_omits_unset_top_level_fields
+tests/protocol/test_tree.py::test_fresh_tree_top_level
+tests/protocol/test_tree.py::test_fresh_workspace_node
+tests/protocol/test_version.py::test_tree_app_is_the_version_identity
 tests/protocol/test_version.py::test_version_reports_the_app_version
 tests/protocol/test_zmx.py::test_present_refuses_without_a_session

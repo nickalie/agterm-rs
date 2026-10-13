@@ -56,6 +56,19 @@ pub enum ControlError {
         hits: Vec<String>,
     },
 
+    /// A `--window` target resolved to a closed window, which only `window.select` opens
+    /// (`ControlTargetResolver.swift`).
+    #[error("window not open — window.select it first")]
+    WindowNotOpen,
+
+    /// A window-scoped command without `--window` while every window is closed (`ControlTargetResolver.swift`).
+    #[error("no open window")]
+    NoOpenWindow,
+
+    /// A batch of session targets with none in it (`ControlServer+SessionActions.swift`).
+    #[error("session command requires at least one --target")]
+    BatchNeedsTarget,
+
     /// A command this build does not implement (yet).
     #[error("{0} is not supported by this host")]
     NotSupported(Command),
@@ -123,6 +136,12 @@ mod tests {
             (
                 ControlError::NotSupported(Command::Session(SessionCmd::Swap)),
                 "session.swap is not supported by this host",
+            ),
+            (ControlError::WindowNotOpen, "window not open — window.select it first"),
+            (ControlError::NoOpenWindow, "no open window"),
+            (
+                ControlError::BatchNeedsTarget,
+                "session command requires at least one --target",
             ),
             (
                 ControlError::HandlerPanicked(Command::Tree),

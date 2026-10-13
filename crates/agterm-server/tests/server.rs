@@ -13,7 +13,7 @@ use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
 use agterm_core::paths::ownership_lock_path;
-use agterm_core::{Core, CoreConfig, decode_request};
+use agterm_core::{Core, CoreConfig, CoreState, decode_request};
 use agterm_host::MainLoop;
 use agterm_host::fakes::FakeMainLoop;
 use agterm_proto::{AppIdentity, MAX_REQUEST_LINE_BYTES, Request, Response, VersionResult};
@@ -35,11 +35,19 @@ fn short_dir() -> io::Result<TempDir> {
     tempfile::Builder::new().prefix("agt").tempdir_in("/tmp")
 }
 
+/// The app's core, which holds its terminals and so stays on the thread that built it: a fake main loop builds it.
 fn core() -> Core {
-    Core::new(CoreConfig {
-        app: AppIdentity::from_recorded("0.1.0", Some("abc1234")),
-        capabilities: vec!["posix-shell".to_owned()],
-    })
+    Core::new(
+        CoreConfig {
+            app: AppIdentity::from_recorded("0.1.0", Some("abc1234")),
+            capabilities: vec!["posix-shell".to_owned()],
+        },
+        CoreState::default(),
+    )
+}
+
+fn core_loop() -> io::Result<FakeMainLoop<Core>> {
+    FakeMainLoop::spawn_with(core)
 }
 
 /// The app's handler: the core answers on the main loop.
@@ -50,7 +58,7 @@ fn core_handler() -> impl Fn(&mut Core, Request) -> Reply + Send + Sync + 'stati
 /// A running server over a fake main loop owning `state`.
 /// Fields drop top to bottom: the server stops (waking and joining its accept thread through the socket) before
 /// the temp dir holding that socket is deleted.
-struct Fixture<S: Send + 'static> {
+struct Fixture<S: 'static> {
     server: ControlServer,
     main_loop: Arc<FakeMainLoop<S>>,
     socket: PathBuf,
@@ -70,9 +78,17 @@ where
     S: Send + 'static,
     H: Fn(&mut S, Request) -> Reply + Send + Sync + 'static,
 {
+    start_on(FakeMainLoop::spawn(state)?, handler, deadlines)
+}
+
+fn start_on<S, H>(main_loop: FakeMainLoop<S>, handler: H, deadlines: ConnectionDeadlines) -> TestResult<Fixture<S>>
+where
+    S: 'static,
+    H: Fn(&mut S, Request) -> Reply + Send + Sync + 'static,
+{
     let dir = short_dir()?;
     let socket = dir.path().join("agterm.sock");
-    let main_loop = Arc::new(FakeMainLoop::spawn(state)?);
+    let main_loop = Arc::new(main_loop);
     let mut server = ControlServer::new(&socket).with_deadlines(deadlines);
     server.start(Arc::clone(&main_loop) as Arc<dyn MainLoop<S>>, handler)?;
     Ok(Fixture {
@@ -84,7 +100,7 @@ where
 }
 
 fn start_core() -> TestResult<Fixture<Core>> {
-    start(core(), core_handler())
+    start_on(core_loop()?, core_handler(), ConnectionDeadlines::default())
 }
 
 fn connect(socket: &Path) -> io::Result<UnixStream> {
@@ -253,8 +269,8 @@ fn empty_connection_is_answered_before_it_closes() -> TestResult {
 
 #[test]
 fn idle_connection_is_answered_at_the_read_timeout() -> TestResult {
-    let fixture = start_with(
-        core(),
+    let fixture = start_on(
+        core_loop()?,
         core_handler(),
         ConnectionDeadlines {
             read_timeout: Duration::from_millis(100),
@@ -273,8 +289,8 @@ fn idle_connection_is_answered_at_the_read_timeout() -> TestResult {
 #[test]
 fn trickle_past_the_read_deadline_is_answered() -> TestResult {
     // the per-read timeout never trips on a byte every 20 ms; only the overall deadline ends the read
-    let fixture = start_with(
-        core(),
+    let fixture = start_on(
+        core_loop()?,
         core_handler(),
         ConnectionDeadlines {
             read_timeout: Duration::from_secs(30),
@@ -391,7 +407,7 @@ fn socket_path_of(dir: &Path, len: usize) -> TestResult<PathBuf> {
 #[test]
 fn socket_paths_of_104_bytes_or_more_are_refused() -> TestResult {
     let dir = short_dir()?;
-    let main_loop: Arc<dyn MainLoop<Core>> = Arc::new(FakeMainLoop::spawn(core())?);
+    let main_loop: Arc<dyn MainLoop<Core>> = Arc::new(core_loop()?);
 
     let too_long = socket_path_of(dir.path(), MAX_SOCKET_PATH_BYTES)?;
     let mut server = ControlServer::new(&too_long);
@@ -411,24 +427,22 @@ fn socket_paths_of_104_bytes_or_more_are_refused() -> TestResult {
 
 #[test]
 fn panicking_handler_answers_and_keeps_serving() -> TestResult {
-    let fixture = start(core(), |core: &mut Core, request: Request| {
+    let handler = |core: &mut Core, request: Request| -> Reply {
         assert!(request.cmd != agterm_proto::Command::Tree, "handler blew up");
         core.dispatch(&request).into()
-    })?;
+    };
+    let fixture = start_on(core_loop()?, handler, ConnectionDeadlines::default())?;
     let response = answer(&fixture.socket, br#"{"cmd":"tree"}"#)?;
     assert_eq!(response, Response::failure("internal error handling tree"));
     assert_version_ok(&fixture.socket)?;
-    assert!(
-        fixture.main_loop.shutdown().is_some(),
-        "the main loop died with the handler"
-    );
+    assert!(fixture.main_loop.close(), "the main loop died with the handler");
     Ok(())
 }
 
 #[test]
 fn closed_main_loop_answers_shutting_down() -> TestResult {
     let fixture = start_core()?;
-    fixture.main_loop.shutdown().ok_or("main loop lost")?;
+    assert!(fixture.main_loop.close(), "main loop lost");
     let response = answer(&fixture.socket, VERSION)?;
     assert_eq!(response, Response::failure("the app is shutting down"));
     Ok(())
@@ -447,7 +461,7 @@ fn second_server_refuses_and_the_first_survives() -> TestResult {
         second.advertised_path(),
         dir_join(&fixture.dir, "agterm.sock.unavailable")
     );
-    let main_loop: Arc<dyn MainLoop<Core>> = Arc::new(FakeMainLoop::spawn(core())?);
+    let main_loop: Arc<dyn MainLoop<Core>> = Arc::new(core_loop()?);
     let error = second.start(main_loop, core_handler()).err();
     assert!(matches!(error, Some(ServerError::Refused(_))), "{error:?}");
     assert!(!second.is_running());
@@ -490,10 +504,7 @@ fn stale_socket_file_is_replaced() -> TestResult {
     let socket = dir.path().join("agterm.sock");
     fs::write(&socket, b"left over by a crashed instance")?;
     let mut server = ControlServer::new(&socket);
-    server.start(
-        Arc::new(FakeMainLoop::spawn(core())?) as Arc<dyn MainLoop<Core>>,
-        core_handler(),
-    )?;
+    server.start(Arc::new(core_loop()?) as Arc<dyn MainLoop<Core>>, core_handler())?;
     assert_version_ok(&socket)
 }
 
