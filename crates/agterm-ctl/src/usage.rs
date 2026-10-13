@@ -56,7 +56,7 @@ const DEFAULT_SUBCOMMANDS: [(&[&str], &str); 6] = [
 ];
 
 /// The default subcommand of the group at `path` (below the root), if it has one.
-fn default_subcommand(path: &[&str]) -> Option<&'static str> {
+pub fn default_subcommand(path: &[&str]) -> Option<&'static str> {
     DEFAULT_SUBCOMMANDS
         .iter()
         .find(|(group, _)| *group == path)
