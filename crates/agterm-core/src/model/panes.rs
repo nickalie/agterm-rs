@@ -134,6 +134,8 @@ impl AppStore {
     /// Closes the split pane: hides it and tears its terminal down, dropping everything it owned, so a later split
     /// starts a fresh shell at an even ratio (upstream's `closeSplit`).
     pub fn close_split(&mut self, id: Uuid) {
+        let split_identity = self.session(id).and_then(|session| session.split_pane_identity);
+        self.close_hud_owned_by(id, split_identity);
         let Some(session) = self.session_mut(id) else { return };
         let was_shown = session.split.shown;
         session.split = SplitLayout::default();
@@ -167,6 +169,8 @@ impl AppStore {
             self.close_session(id);
             return;
         }
+        let primary_identity = self.session(id).map(|session| session.pane_identity);
+        self.close_hud_owned_by(id, primary_identity);
         let Some(session) = self.session_mut(id) else { return };
         let was_shown = session.split.shown;
         // the exiting primary's override goes with it; the survivor's moves left, its file named by the same identity
@@ -178,6 +182,19 @@ impl AppStore {
             self.emit_pane_visibility(EventKind::PaneSplit, id, false);
         }
         self.save();
+    }
+
+    /// Closes session `id`'s HUD when it is scoped to the pane `identity` names, before that identity goes or moves
+    /// (upstream's `hudPaneIdentity == ... { closeHud }`): an unresolved identity would read as a session-wide HUD.
+    fn close_hud_owned_by(&mut self, id: Uuid, identity: Option<Uuid>) {
+        let owned = identity.is_some_and(|identity| {
+            self.session(id)
+                .and_then(|session| session.overlay.hud.as_ref())
+                .is_some_and(|hud| hud.pane_identity == Some(identity))
+        });
+        if owned {
+            self.close_hud(id);
+        }
     }
 
     /// The split pane's shell exited: a live two-pane split collapses to the primary; otherwise this was the

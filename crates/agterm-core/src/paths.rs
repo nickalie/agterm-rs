@@ -149,6 +149,25 @@ pub fn config_dir(env: &dyn Env, setting: Option<&Path>) -> PathBuf {
     )
 }
 
+/// Where the HUD body files go: a private per-user directory standing in for upstream's `NSTemporaryDirectory()`
+/// (a per-user 0700 directory on macOS), never the shared `/tmp`. `<AGTERM_STATE_DIR>/hud` when the state dir is
+/// overridden (instances stay apart, as [`config_dir`]), else `<XDG_RUNTIME_DIR>/agterm/hud` when that is an absolute
+/// path (the user's 0700 runtime directory, emptied at logout), else `<state dir>/hud`. The caller makes it 0700.
+#[must_use]
+pub fn hud_body_dir(env: &dyn Env) -> PathBuf {
+    if let Some(state) = non_empty(env, STATE_DIR_ENV) {
+        return PathBuf::from(state).join("hud");
+    }
+    let runtime = env
+        .var("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute() && path.as_os_str().len() > 1);
+    runtime.map_or_else(
+        || state_dir(env).join("hud"),
+        |base| base.join(APP_DIR_NAME).join("hud"),
+    )
+}
+
 /// The agterm-scoped ghostty config inside a config directory: `<dir>/ghostty.conf`.
 #[must_use]
 pub fn ghostty_config_path(config_dir: &Path) -> PathBuf {
@@ -188,6 +207,22 @@ mod tests {
 
     fn home(path: &str) -> MapEnv {
         MapEnv::new().with("HOME", path)
+    }
+
+    #[test]
+    fn hud_bodies_go_to_the_overridden_state_dir_else_the_runtime_dir_else_the_state_dir() {
+        let runtime = home("/home/u").with("XDG_RUNTIME_DIR", "/run/user/1000");
+        assert_eq!(hud_body_dir(&runtime), Path::new("/run/user/1000/agterm/hud"));
+        let overridden = runtime.clone().with(STATE_DIR_ENV, "/tmp/inst");
+        assert_eq!(hud_body_dir(&overridden), Path::new("/tmp/inst/hud"));
+        for value in ["", "relative", "/"] {
+            let env = home("/home/u").with("XDG_RUNTIME_DIR", value);
+            assert_eq!(
+                hud_body_dir(&env),
+                Path::new("/home/u/.local/share/agterm/hud"),
+                "{value:?}"
+            );
+        }
     }
 
     #[test]

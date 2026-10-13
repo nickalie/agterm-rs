@@ -167,19 +167,34 @@ impl Core {
         self.deliver_notification(window, session, pane, title, body)
     }
 
-    /// A banner was clicked (upstream's `AppActions.reveal`): window `window` is opened again when it was closed since,
-    /// the session is selected and its badge cleared, the pane that fired takes the keyboard (the primary when the split
-    /// is gone), and the window comes to the front. False, changing nothing, for a session no longer there. Commit
-    /// afterwards.
+    /// A banner was clicked (upstream's `AppActions.reveal`): the session is revealed in the open window holding it,
+    /// else window `window` is opened again when it was closed since. The owning window leaves its zoom (the selection
+    /// would change behind it), the session is selected and its badge cleared, the pane that fired takes the keyboard
+    /// (the primary when the split is gone), and the window comes to the front. A closed window is reopened even when
+    /// the session turns out gone, as upstream's. Whether anything changed; commit afterwards.
     pub fn reveal_notification(&mut self, window: Uuid, session: Uuid, pane: PaneRole) -> bool {
-        if !self.library().is_open(window) {
+        let holder = self.library().window_id_for_session(session);
+        let mut reopened = false;
+        if holder.is_none() && !self.library().is_open(window) {
             self.open_window(window);
+            reopened = self.library().is_open(window);
         }
+        let window = holder.unwrap_or(window);
+        if self
+            .library()
+            .store(window)
+            .and_then(|store| store.session(session))
+            .is_none()
+        {
+            return reopened;
+        }
+        self.set_zoom_target(window, None);
+        self.note_window_activity(window);
         let Some(store) = self.library_mut().store_mut(window) else {
-            return false;
+            return reopened;
         };
         let Some(found) = store.session(session) else {
-            return false;
+            return reopened;
         };
         let split = pane == PaneRole::Split && found.split_surface.is_present();
         store.select_session(Some(session));

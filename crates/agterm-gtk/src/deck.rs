@@ -587,23 +587,25 @@ fn connect_terminal(terminal: &TerminalSurface, session: Uuid, token: &str, post
     });
 }
 
-/// Routes the terminal's desktop notifications (OSC 9/777) to the model, with whether this pane held the keyboard of
-/// the active window when it fired, sampled now (upstream's `NotificationManager.notify` suppression).
+/// Routes the terminal's desktop notifications (OSC 9/777) to the model, with whether this pane held its window's
+/// keyboard and whether that window was active when it fired, sampled now (upstream's `NotificationManager.notify`
+/// suppression: the first responder and `NSApp.isActive`).
 fn connect_notifications(terminal: &TerminalSurface, session: Uuid, token: &str, poster: &Poster) {
     let posting = poster.clone();
     let token = token.to_owned();
     let area = terminal.widget().downgrade();
     terminal.connect_notification(move |title, body| {
-        let focused = area.upgrade().is_some_and(|area| {
-            area.has_focus()
-                && area
-                    .root()
-                    .and_downcast::<gtk::Window>()
-                    .is_some_and(|window| window.is_active())
-        });
+        let area = area.upgrade();
+        let focus = crate::notifications::Focus {
+            pane: area.as_ref().is_some_and(WidgetExt::has_focus),
+            active: area
+                .and_then(|area| area.root())
+                .and_downcast::<gtk::Window>()
+                .is_some_and(|window| window.is_active()),
+        };
         let (title, body, token) = (title.to_owned(), body.to_owned(), token.clone());
         state::post(&posting, move |state: &mut AppState| {
-            state.terminal_notification(session, &token, &title, &body, focused);
+            state.terminal_notification(session, &token, &title, &body, focus);
         });
     });
 }
@@ -993,7 +995,7 @@ mod tests {
         let mut walk = Walk::split();
         let dir = tempfile::tempdir().unwrap();
         walk.core
-            .set_hud_helper(crate::hud::install_helper(dir.path()).unwrap());
+            .set_hud_helper(crate::hud::install_helper(dir.path()).unwrap(), dir.path().join("hud"));
         let open = |walk: &mut Walk, message: &str| {
             let request = Request {
                 cmd: Command::Session(SessionCmd::HudOpen),

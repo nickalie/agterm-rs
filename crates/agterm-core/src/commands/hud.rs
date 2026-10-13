@@ -53,6 +53,8 @@ pub struct HudHideTimer {
 pub(crate) struct HudRuntime {
     /// The bundled painter's script.
     helper: Option<PathBuf>,
+    /// The private directory the body files go to.
+    body_dir: Option<PathBuf>,
     cell_estimator: Option<CellEstimator>,
     /// The revision of each session's armed auto-hide; a timer of another revision is inert.
     armed: HashMap<Uuid, u64>,
@@ -65,6 +67,7 @@ impl fmt::Debug for HudRuntime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HudRuntime")
             .field("helper", &self.helper)
+            .field("body_dir", &self.body_dir)
             .field("armed", &self.armed)
             .field("timers", &self.timers)
             .finish_non_exhaustive()
@@ -76,6 +79,13 @@ impl HudRuntime {
     fn helper_command(&self) -> Option<String> {
         let helper = self.helper.as_deref().filter(|path| path.is_file())?;
         Some(format!("/bin/sh {}", shell_quoted(helper)))
+    }
+
+    /// The per-session body file (upstream's `bodyFile(for:)`), so an update rewrites the path the running painter
+    /// opened and a replacement reuses it. `None` until the frontend installed the painter.
+    fn body_file(&self, session: Uuid) -> Option<PathBuf> {
+        let dir = self.body_dir.as_deref()?;
+        Some(dir.join(format!("agterm-hud-{}.txt", uuid_string(session))))
     }
 
     /// Arms `spec`'s auto-hide for `session`, superseding whatever was armed; a spec that stays only cancels.
@@ -102,12 +112,6 @@ impl HudRuntime {
 /// `path` single-quoted for `/bin/sh`.
 fn shell_quoted(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', r"'\''"))
-}
-
-/// The per-session body file in the temp directory (upstream's `bodyFile(for:)`), so an update rewrites the path the
-/// running painter opened and a replacement reuses it.
-fn body_file(session: Uuid) -> PathBuf {
-    std::env::temp_dir().join(format!("agterm-hud-{}.txt", uuid_string(session)))
 }
 
 // MARK: - validation
@@ -406,9 +410,11 @@ impl Core {
         }
     }
 
-    /// Installs the bundled painter's script; without one `session.hud.open` is refused.
-    pub fn set_hud_helper(&mut self, path: PathBuf) {
-        self.hud.helper = Some(path);
+    /// Installs the bundled painter's script and the private directory the body files go to
+    /// ([`crate::paths::hud_body_dir`], made 0700 on each write); without them `session.hud.open` is refused.
+    pub fn set_hud_helper(&mut self, script: PathBuf, body_dir: PathBuf) {
+        self.hud.helper = Some(script);
+        self.hud.body_dir = Some(body_dir);
     }
 
     /// Installs the cell estimate a HUD over a session no terminal draws yet is sized with.
@@ -509,13 +515,42 @@ fn write_body(store: &AppStore, session: Uuid, pane: &PaneMetrics) -> bool {
     let grid = hud::paint_grid(&spec, &size, pane);
     let body = hud::rendered_body(&spec, grid, std::process::id());
     let staging = hud_state.file.with_extension("txt.tmp");
-    let written = std::fs::write(&staging, body).and_then(|()| std::fs::rename(&staging, &hud_state.file));
+    let written = write_private(&staging, body.as_bytes()).and_then(|()| std::fs::rename(&staging, &hud_state.file));
     if let Err(error) = written {
         tracing::warn!(file = %hud_state.file.display(), %error, "could not write the hud body");
         let _ = std::fs::remove_file(&staging);
         return false;
     }
     true
+}
+
+/// Writes `contents` to a fresh `path` only its owner can read, in a directory only its owner can enter: the body
+/// carries whatever an agent posts, and in a shared directory another user could read it or squat its name. A
+/// staging file a crash left behind is replaced.
+fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+
+    if let Some(dir) = path.parent() {
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+        let metadata = std::fs::symlink_metadata(dir)?;
+        if !metadata.is_dir() {
+            return Err(std::io::Error::other("the hud body directory is not a directory"));
+        }
+        if metadata.permissions().mode() & 0o077 != 0 {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+        _ => {}
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(contents)
 }
 
 // MARK: - the commands
@@ -529,10 +564,9 @@ fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, spec: HudSp
         .store(resolved.window)
         .and_then(|store| store.session(id))
         .ok_or_else(|| ControlError::rejected("no such session"))?;
-    let command = core
-        .hud
-        .helper_command()
-        .ok_or_else(|| ControlError::rejected("hud helper is not bundled in this build"))?;
+    let (Some(command), Some(file)) = (core.hud.helper_command(), core.hud.body_file(id)) else {
+        return Err(ControlError::rejected("hud helper is not bundled in this build"));
+    };
     let resolved_pane = resolve_pane_placement(
         session,
         placement.pane,
@@ -547,7 +581,7 @@ fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, spec: HudSp
     let metrics = core.hud_metrics(session, resolved_pane.map(|(_, pane)| pane), font_size);
     let opening = HudOpening {
         command,
-        file: body_file(id),
+        file,
         size: hud::panel_size(&spec, &metrics),
         pane_identity: resolved_pane.map(|(identity, _)| identity),
         font_size: Some(font_size),

@@ -141,7 +141,7 @@ pub fn activate(app: &adw::Application) {
     );
     core.set_reveal_handler(Box::new(reveal_in_file_manager));
     if let Some(helper) = crate::hud::install_helper(&paths::state_dir(&ProcessEnv)) {
-        core.set_hud_helper(helper);
+        core.set_hud_helper(helper, paths::hud_body_dir(&ProcessEnv));
     }
     core.set_cell_estimator(Box::new(crate::hud::estimate_cell));
     let state = Rc::new(RefCell::new(AppState::new(core)));

@@ -106,9 +106,7 @@ pub trait Surface {
 
     /// The cell the terminal draws, width and height in points; `None` when not realized or unknown (upstream's
     /// `cellSize()`, which sizes a HUD panel).
-    fn cell_size(&self) -> Option<(f64, f64)> {
-        None
-    }
+    fn cell_size(&self) -> Option<(f64, f64)>;
 
     /// Frees the libghostty surface and its shell. Taking the box makes a second teardown impossible.
     fn teardown(self: Box<Self>);

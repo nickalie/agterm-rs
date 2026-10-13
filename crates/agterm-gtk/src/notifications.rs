@@ -85,11 +85,20 @@ fn glib_string_type() -> &'static gtk::glib::VariantTy {
     gtk::glib::VariantTy::STRING
 }
 
+/// Where the keyboard was when a terminal's notification fired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Focus {
+    /// The firing pane held its window's keyboard (upstream's first-responder check).
+    pub pane: bool,
+    /// Its window was the active one (upstream's `NSApp.isActive`).
+    pub active: bool,
+}
+
 impl AppState {
-    /// A terminal's desktop notification; `focused` says its pane held the keyboard of the active window when it
-    /// fired, which suppresses it (upstream's strict first-responder check).
-    pub fn terminal_notification(&mut self, session: Uuid, token: &str, title: &str, body: &str, focused: bool) {
-        if !should_deliver(focused, focused) {
+    /// A terminal's desktop notification, suppressed while its pane holds the keyboard of the active window
+    /// (upstream's `shouldDeliver`).
+    pub fn terminal_notification(&mut self, session: Uuid, token: &str, title: &str, body: &str, focus: Focus) {
+        if !should_deliver(focus.pane, focus.active) {
             tracing::info!(%session, "notify: the firing pane is focused; suppressed");
             return;
         }
@@ -98,7 +107,8 @@ impl AppState {
         }
     }
 
-    /// A banner was clicked: its pane is revealed; a malformed identity or a gone session only leaves the app up.
+    /// A banner was clicked: its pane is revealed (its closed window reopened, even when the session turned out gone);
+    /// a malformed identity only leaves the app up.
     pub fn reveal_notification(&mut self, identity: &str) {
         let Some((window, session, pane)) = parse_notification_identity(identity) else {
             return;

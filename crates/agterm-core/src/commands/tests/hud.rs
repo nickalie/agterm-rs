@@ -19,7 +19,7 @@ fn hud_fixture() -> (Fixture, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let helper = dir.path().join("hud.sh");
     std::fs::write(&helper, "#!/bin/sh\n").unwrap();
-    fixture.core.set_hud_helper(helper);
+    fixture.core.set_hud_helper(helper, dir.path().join("bodies"));
     (fixture, dir)
 }
 
@@ -372,6 +372,82 @@ fn a_hud_scopes_to_a_pane_by_role_or_id() {
     );
 }
 
+/// A two-pane session with its terminals in place.
+fn split_session(fixture: &mut Fixture, id: Uuid) {
+    let response = fixture.session(SessionCmd::Split, Some(&wire(id)), args(|a| a.mode = Some("on".into())));
+    assert!(response.ok);
+    let session = fixture.store_mut().unwrap().session_mut(id).unwrap();
+    session.surface.replace(Box::new(FakeSurface::new("L")));
+    session.split_surface.replace(Box::new(FakeSurface::new("R")));
+}
+
+fn open_over(fixture: &mut Fixture, id: Uuid, pane: &str) {
+    let response = hud(fixture, SessionCmd::HudOpen, id, |a| {
+        a.message = Some("m".into());
+        a.pane = Some(pane.into());
+    });
+    assert!(response.ok, "{response:?}");
+}
+
+#[test]
+fn a_hud_goes_with_the_pane_it_is_scoped_to() {
+    let (mut fixture, _dir) = hud_fixture();
+    let id = fixture.sessions[0];
+    let hud_active = |fixture: &Fixture| fixture.store().session(id).unwrap().overlay.hud_active();
+
+    split_session(&mut fixture, id);
+    open_over(&mut fixture, id, "right");
+    fixture.store_mut().unwrap().close_split(id);
+    assert!(
+        !hud_active(&fixture),
+        "a closed split takes its HUD, never widening it to the session"
+    );
+
+    split_session(&mut fixture, id);
+    open_over(&mut fixture, id, "left");
+    fixture.store_mut().unwrap().close_primary_pane(id);
+    assert!(!hud_active(&fixture), "an exited primary takes its HUD");
+
+    split_session(&mut fixture, id);
+    open_over(&mut fixture, id, "right");
+    fixture.store_mut().unwrap().close_primary_pane(id);
+    assert!(hud_active(&fixture), "the survivor keeps its own HUD");
+    assert_eq!(
+        fixture.store().session(id).unwrap().hud_target_pane(),
+        Some(crate::model::OverlayPane::Left),
+        "now over the promoted pane"
+    );
+}
+
+#[test]
+fn a_soft_close_takes_a_timed_hud_down_and_leaves_a_lasting_one() {
+    let (mut fixture, _dir) = hud_fixture();
+    let single = fixture.add_session(fixture.workspace);
+    let (timed, lasting) = (fixture.sessions[0], fixture.sessions[1]);
+    for (id, hide_after) in [(timed, Some(5.0)), (lasting, None), (single, Some(5.0))] {
+        assert!(
+            hud(&mut fixture, SessionCmd::HudOpen, id, |a| {
+                a.message = Some("m".into());
+                a.hide_after = hide_after;
+            })
+            .ok
+        );
+    }
+    let response = fixture.session(
+        SessionCmd::Close,
+        None,
+        args(|a| a.targets = Some(vec![wire(timed), wire(lasting)])),
+    );
+    assert!(response.ok, "{response:?}");
+    assert!(fixture.store_mut().unwrap().soft_close_session(single));
+    assert!(fixture.store_mut().unwrap().undo_pending_close(None));
+    assert!(fixture.store_mut().unwrap().undo_pending_close(None));
+    let hud_of = |fixture: &Fixture, id| fixture.store().session(id).unwrap().overlay.hud_active();
+    assert!(!hud_of(&fixture, timed), "an undo brings back no expired panel");
+    assert!(!hud_of(&fixture, single), "the single soft close too");
+    assert!(hud_of(&fixture, lasting), "a HUD with no auto-hide survives the undo");
+}
+
 #[test]
 fn the_auto_hide_closes_unless_superseded() {
     let (mut fixture, _dir) = hud_fixture();
@@ -476,6 +552,41 @@ fn the_slot_closes_with_its_session_and_its_painters_exit() {
     let file = body_file(&fixture, id);
     assert!(fixture.session(SessionCmd::Close, Some(&wire(id)), Args::default()).ok);
     assert!(!file.exists(), "a session close discards the body");
+}
+
+#[test]
+fn the_body_is_private_to_its_owner() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let (mut fixture, dir) = hud_fixture();
+    let bodies = dir.path().join("bodies");
+    // a directory left readable by others is tightened, a crash's staging file is replaced
+    std::fs::create_dir(&bodies).unwrap();
+    std::fs::set_permissions(&bodies, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let id = fixture.sessions[0];
+    let staging = bodies.join(format!("agterm-hud-{}.txt.tmp", wire(id)));
+    std::fs::write(&staging, "stale").unwrap();
+
+    assert!(open(&mut fixture, id, "secret status").ok);
+    let file = body_file(&fixture, id);
+    assert_eq!(
+        file.parent(),
+        Some(bodies.as_path()),
+        "the body goes to the installed directory"
+    );
+    assert!(!staging.exists());
+    let mode = |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&bodies), 0o700);
+    assert_eq!(mode(&file), 0o600);
+    assert!(std::fs::read_to_string(&file).unwrap().contains("secret status"));
+
+    assert!(
+        hud(&mut fixture, SessionCmd::HudUpdate, id, |a| {
+            a.message = Some("next".into());
+        })
+        .ok
+    );
+    assert_eq!(mode(&file), 0o600, "an update keeps it private");
 }
 
 // MARK: - notify
@@ -591,6 +702,47 @@ fn a_terminal_notification_names_its_pane_and_a_click_reveals_it() {
     );
     assert!(fixture.core.pane_focus_requested(first));
     assert!(!fixture.core.reveal_notification(post.window, Uuid::new_v4(), post.pane));
+}
+
+#[test]
+fn a_reveal_leaves_the_owning_windows_zoom() {
+    let mut fixture = Fixture::new(1);
+    let (first, second) = (fixture.sessions[0], fixture.sessions[1]);
+    let window = fixture.window;
+    let zoomed = crate::zoom::SurfaceId {
+        session: first,
+        surface: crate::zoom::ZoomSurface::Primary,
+    };
+    fixture.core.set_zoom_target(window, Some(zoomed));
+    assert!(
+        fixture
+            .core
+            .reveal_notification(window, second, crate::commands::notify::PaneRole::Main)
+    );
+    assert_eq!(
+        fixture.core.zoom_target(window),
+        None,
+        "the selection is not hidden behind a zoom"
+    );
+    assert_eq!(fixture.store().selected_session_id(), Some(second));
+}
+
+#[test]
+fn a_reveal_reopens_a_closed_window_even_for_a_gone_session() {
+    let mut fixture = Fixture::new(0);
+    let window = fixture.window;
+    // a second window keeps the library alive once the first closes
+    let other = fixture.core.library_mut().new_window(None);
+    assert!(fixture.core.library().is_open(other));
+    fixture.core.library_mut().close_window(window);
+    assert!(!fixture.core.library().is_open(window));
+    assert!(
+        fixture
+            .core
+            .reveal_notification(window, Uuid::new_v4(), crate::commands::notify::PaneRole::Main),
+        "the reopened window is a change the caller commits"
+    );
+    assert!(fixture.core.library().is_open(window));
 }
 
 #[test]

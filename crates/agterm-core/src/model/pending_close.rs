@@ -330,6 +330,7 @@ impl AppStore {
             return false;
         };
         let was_active = self.selected_session_id == Some(id);
+        self.close_timed_hud(id);
         let workspace_id = self.workspaces[at.workspace].id();
         let workspace_name = self.workspaces[at.workspace].name.clone();
         let mut session = self.workspaces[at.workspace].sessions.remove(at.session);
@@ -376,6 +377,9 @@ impl AppStore {
             return ids.first().is_some_and(|id| self.soft_close_session(*id));
         }
         let previous = self.selected_session_id;
+        for id in &targets {
+            self.close_timed_hud(*id);
+        }
         let closes = self.take_closing_sessions(&targets);
         if closes.is_empty() {
             return false;

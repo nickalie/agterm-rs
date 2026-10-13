@@ -506,7 +506,7 @@ impl LayerView {
 
 #[cfg(test)]
 mod tests {
-    use agterm_core::hud::{HudPanelSize, HudSpec};
+    use agterm_core::hud::HudSpec;
     use agterm_core::model::HudState;
 
     use super::*;
@@ -596,11 +596,6 @@ mod tests {
         assert_eq!(style.height_points, Some(48.0));
         assert!(style.edge_margin.abs() < f64::EPSILON && !style.frame);
         assert_eq!(style.position, HudPosition::BottomCenter);
-        let _ = HudPanelSize {
-            width_percent: 40,
-            height_percent: 12,
-            height_points: None,
-        };
     }
 
     #[test]

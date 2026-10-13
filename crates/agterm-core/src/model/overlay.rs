@@ -333,4 +333,21 @@ impl AppStore {
         }
         self.close_overlay(id)
     }
+
+    /// Closes session `id`'s HUD when it has an auto-hide (upstream's `closeTimedHud`), before a soft close takes the
+    /// session out of the tree: the expiry cannot find a pending session, and an undo would bring back a panel whose
+    /// time is up and that nothing closes any more.
+    pub(crate) fn close_timed_hud(&mut self, id: Uuid) {
+        let timed = self.session(id).is_some_and(|session| {
+            session.overlay.hud_active()
+                && session
+                    .overlay
+                    .hud
+                    .as_ref()
+                    .is_some_and(|hud| hud.spec.effective_hide_after() > 0.0)
+        });
+        if timed {
+            self.close_hud(id);
+        }
+    }
 }
