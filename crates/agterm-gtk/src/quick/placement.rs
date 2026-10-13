@@ -70,26 +70,48 @@ pub fn panel_pixels(monitor: PanelSize, size_percent: Option<i64>) -> (i32, i32)
     (pixels(size.width), pixels(size.height))
 }
 
-/// The monitor the panel is framed on: `placed`, the one it is on while on screen (a shown layer surface never changes
-/// output), else the active agterm window's, else the first. A Wayland client cannot read the pointer outside its own
-/// surfaces, so upstream's pointer-screen rule becomes the active agterm window's monitor when the panel comes on
-/// screen.
+/// The monitor the panel is framed on: `landed`, the one a shown layer surface is on (as the compositor reported it),
+/// else the frontmost agterm window's, else the first. The compositor chooses the layer surface's output, usually the
+/// focused one (a Wayland client cannot read the pointer outside its own surfaces, so that stands in for upstream's
+/// pointer-screen rule); until it reports where the surface landed, the frontmost agterm window's monitor is the
+/// estimate.
 #[must_use]
-pub fn sizing_monitor<T>(placed: Option<T>, active_window: Option<T>, first: Option<T>) -> Option<T> {
-    placed.or(active_window).or(first)
+pub fn sizing_monitor<T>(landed: Option<T>, frontmost: Option<T>, first: Option<T>) -> Option<T> {
+    landed.or(frontmost).or(first)
 }
 
-/// What becomes of the layer surface's output when the monitors change.
+/// Whether a layer panel that entered `entered` is refitted to it: only while shown and not zoomed (a zoomed panel
+/// fills whatever output it is on), and only when its frame was computed against another monitor (`sized_for`, the
+/// estimate when the compositor chose another output).
+#[must_use]
+pub fn refits_on_enter<T: PartialEq>(entered: &T, sized_for: Option<&T>, shown: bool, zoomed: bool) -> bool {
+    shown && !zoomed && sized_for != Some(entered)
+}
+
+/// What becomes of the hidden layer surface's output (`bound`) as the panel comes on screen: it is cleared, so the
+/// compositor puts the surface on its current output. Hidden, the surface has no layer role, so clearing the output
+/// does not remap it.
+#[must_use]
+pub fn output_on_show<T>(bound: Option<&T>) -> OutputChange<T> {
+    match bound {
+        Some(_) => OutputChange::Move(None),
+        None => OutputChange::Keep,
+    }
+}
+
+/// What becomes of the layer surface's output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutputChange<T> {
-    /// The bound monitor is still usable, or there is neither a bound nor a usable one: nothing moves.
+    /// The output stays as it is.
     Keep,
-    /// The bound monitor went away, or none was bound: the surface moves to this one, `None` when none is left.
+    /// The surface moves to this output; `None` clears it, so the compositor chooses.
     Move(Option<T>),
 }
 
-/// The output change for a surface bound to `bound` when `usable` are the monitors left: it stays while its monitor
-/// is usable, else it moves to the first usable one.
+/// The output change for a surface bound to `bound` when the monitors changed (or the panel was just hidden) and
+/// `usable` are the monitors left: it stays while its monitor is usable, else it moves to the first usable one. A
+/// surface without an output always moves (the library unrealizes an output-less surface on every monitor change), so
+/// a shown panel, which never names one, is hidden first ([`super::layer`]).
 #[must_use]
 pub fn output_change<T: Clone + PartialEq>(bound: Option<&T>, usable: &[T]) -> OutputChange<T> {
     match bound {
@@ -187,14 +209,43 @@ mod tests {
     }
 
     #[test]
-    fn a_shown_panel_is_framed_on_its_own_monitor() {
+    fn a_landed_panel_is_framed_on_its_own_monitor_else_the_frontmost_windows() {
         assert_eq!(
-            sizing_monitor(Some("placed"), Some("active"), Some("first")),
-            Some("placed")
+            sizing_monitor(Some("landed"), Some("frontmost"), Some("first")),
+            Some("landed")
         );
-        assert_eq!(sizing_monitor(None, Some("active"), Some("first")), Some("active"));
+        assert_eq!(
+            sizing_monitor(None, Some("frontmost"), Some("first")),
+            Some("frontmost")
+        );
         assert_eq!(sizing_monitor(None, None, Some("first")), Some("first"));
         assert_eq!(sizing_monitor::<&str>(None, None, None), None);
+    }
+
+    #[test]
+    fn a_shown_panel_is_refitted_when_it_lands_off_its_estimate() {
+        assert!(refits_on_enter(&"b", Some(&"a"), true, false));
+        assert!(refits_on_enter(&"b", None, true, false));
+        assert!(!refits_on_enter(&"a", Some(&"a"), true, false));
+    }
+
+    #[test]
+    fn a_hidden_or_zoomed_panel_is_not_refitted_on_enter() {
+        assert!(!refits_on_enter(&"b", Some(&"a"), false, false));
+        assert!(!refits_on_enter(&"b", Some(&"a"), true, true));
+    }
+
+    #[test]
+    fn the_output_is_cleared_as_the_panel_comes_on_screen() {
+        assert_eq!(output_on_show(Some(&"a")), OutputChange::Move(None));
+        assert_eq!(output_on_show::<&str>(None), OutputChange::Keep);
+    }
+
+    #[test]
+    fn a_shown_output_less_panel_moves_on_any_monitor_change() {
+        // a monitor plugged in or out under the shown panel (no output): it is hidden and bound to the first left
+        assert_eq!(output_change(None, &["a", "b"]), OutputChange::Move(Some("a")));
+        assert_eq!(output_change(None, &["a"]), OutputChange::Move(Some("a")));
     }
 
     #[test]

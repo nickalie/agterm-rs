@@ -88,9 +88,16 @@ impl Windows {
         self.shown.get_mut(&id)
     }
 
+    /// The frontmost agterm window (the model's active window), when shown. Unlike the application's active window,
+    /// never the quick terminal panel, which also belongs to the application.
+    #[must_use]
+    pub fn frontmost(&self, core: &Core) -> Option<&WindowUi> {
+        core.library().active_window_id().and_then(|id| self.shown.get(&id))
+    }
+
     /// Raises the frontmost window.
     pub fn present_frontmost(&self, core: &Core) {
-        if let Some(ui) = core.library().active_window_id().and_then(|id| self.shown.get(&id)) {
+        if let Some(ui) = self.frontmost(core) {
             ui.present();
         }
     }

@@ -3,16 +3,19 @@
 //! taking the keyboard on demand (focus moves away from it, which is what dismisses a summoned panel), with no
 //! exclusive zone, so it overlays without pushing other windows aside.
 //!
-//! Output: the surface always names one, and changes it only while hidden. The library unrealizes the window of a
-//! surface without an output on every monitor hotplug (`gtk_layer_surface_remap` from its `items-changed` handler on
-//! the display's monitors), and changing a shown surface's output does the same; unrealizing the window would tear
-//! down the terminal for good (its `GtkGLArea` must stay realized, see [`crate::surface`]). Hiding destroys the layer
-//! role, so a hidden surface moves without that. The panel is put on [`super::placement::sizing_monitor`]'s monitor
-//! as it comes on screen ([`place`]). When its monitor goes away, our handlers run before the library's (the monitors'
-//! `items-changed`, connected before the library's own in [`supported`], and the monitor's `invalidate`, ahead of the
-//! library's after-handler): a shown panel is hidden, after its owner is told, and the surface moves to the first
-//! monitor left ([`super::placement::output_change`]); with none left it clears while hidden, and the next monitor to
-//! appear is bound before the library sees a surface without an output.
+//! Output: shown, the surface names none, so the compositor puts it on its current output (usually the focused one,
+//! the stand-in for upstream's pointer-screen rule); hidden, it always names one. The library unrealizes the window of
+//! a surface without an output on every monitor change, mapped or not (`gtk_layer_surface_remap` from its
+//! `items-changed` handler on the display's monitors), and changing a shown surface's output does the same;
+//! unrealizing the window would tear down the terminal for good (its `GtkGLArea` must stay realized, see
+//! [`crate::surface`]). Hiding destroys the layer role, so a hidden surface changes output without a remap: the output
+//! is cleared just before the panel comes on screen ([`release_output`]) and bound again as soon as it is hidden
+//! ([`bind_hidden`]). On a monitor change our handlers run before the library's (the monitors' `items-changed`,
+//! connected before the library's own in [`supported`], and the bound monitor's `invalidate`, ahead of the library's
+//! after-handler): a shown panel, which names no output, is hidden on any change, after its owner is told, and bound
+//! to the first monitor left before the library sees it; a hidden one moves only when its monitor went away
+//! ([`super::placement::output_change`]); with none left it clears while hidden, and the next monitor to appear is
+//! bound before the library sees a surface without an output.
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -39,9 +42,9 @@ pub fn supported() -> bool {
     gtk4_layer_shell::is_supported()
 }
 
-/// Makes the not yet realized `window` a layer surface on the first monitor. `on_lost_output` runs just before a shown
-/// panel is hidden because its monitor went away.
-pub fn init(window: &gtk::Window, on_lost_output: impl Fn() + 'static) {
+/// Makes the not yet realized `window` a layer surface, bound to the first monitor while hidden. `on_forced_hide` runs
+/// just before a shown panel is hidden because the monitors changed under it.
+pub fn init(window: &gtk::Window, on_forced_hide: impl Fn() + 'static) {
     window.init_layer_shell();
     window.set_namespace(Some(NAMESPACE));
     window.set_layer(Layer::Overlay);
@@ -49,7 +52,7 @@ pub fn init(window: &gtk::Window, on_lost_output: impl Fn() + 'static) {
     window.set_exclusive_zone(0);
     let binding = Rc::new(Binding {
         window: window.downgrade(),
-        on_lost_output: Box::new(on_lost_output),
+        on_forced_hide: Box::new(on_forced_hide),
         invalidate: RefCell::new(None),
     });
     let weak = Rc::downgrade(&binding);
@@ -60,18 +63,24 @@ pub fn init(window: &gtk::Window, on_lost_output: impl Fn() + 'static) {
     keep_output(None);
 }
 
-/// The monitor the layer surface is on (or goes to when shown).
-pub fn monitor(window: &gtk::Window) -> Option<gdk::Monitor> {
-    LayerShell::monitor(window)
-}
-
-/// Puts the hidden `window` on `monitor` for its next show; a shown one never changes output (module docs).
-pub fn place(window: &gtk::Window, monitor: &gdk::Monitor) {
-    if window.is_mapped() || LayerShell::monitor(window).as_ref() == Some(monitor) {
+/// Clears the hidden `window`'s output just before it is shown, so the compositor puts it on its current output
+/// ([`placement::output_on_show`]); a shown one keeps its output (module docs).
+pub fn release_output(window: &gtk::Window) {
+    if window.is_mapped() {
         return;
     }
+    let OutputChange::Move(next) = placement::output_on_show(LayerShell::monitor(window).as_ref()) else {
+        return;
+    };
     if let Some(binding) = current() {
-        binding.bind(window, Some(monitor));
+        binding.bind(window, next.as_ref());
+    }
+}
+
+/// Binds the just hidden `window` to a monitor, so no monitor change can unrealize it (module docs).
+pub fn bind_hidden(window: &gtk::Window) {
+    if !window.is_mapped() {
+        keep_output(None);
     }
 }
 
@@ -98,12 +107,12 @@ pub fn apply(window: &gtk::Window, placement: LayerPlacement) {
 /// The panel's layer surface and the `invalidate` handler on the monitor it is bound to.
 struct Binding {
     window: glib::WeakRef<gtk::Window>,
-    on_lost_output: Box<dyn Fn()>,
+    on_forced_hide: Box<dyn Fn()>,
     invalidate: RefCell<Option<(gdk::Monitor, glib::SignalHandlerId)>>,
 }
 
 impl Binding {
-    /// Binds the hidden `window` to `monitor`, watching that monitor go away.
+    /// Binds the hidden `window` to `monitor` (`None`: the compositor chooses on show), watching that monitor go away.
     fn bind(&self, window: &gtk::Window, monitor: Option<&gdk::Monitor>) {
         self.release();
         window.set_monitor(monitor);
@@ -154,8 +163,9 @@ fn watch_monitors() {
     }
 }
 
-/// Keeps the panel on a usable monitor after the monitors changed (`dying`: the one being invalidated): it moves only
-/// when its monitor went away, hidden first when shown (module docs).
+/// Keeps the panel on a usable monitor after the monitors changed (`dying`: the one being invalidated) or it was just
+/// hidden: a hidden panel moves only when its monitor went away or it has none; a shown one, which names no output, is
+/// hidden first (module docs).
 fn keep_output(dying: Option<&gdk::Monitor>) {
     let Some(binding) = current() else {
         return;
@@ -169,8 +179,8 @@ fn keep_output(dying: Option<&gdk::Monitor>) {
         return;
     };
     if window.is_mapped() {
-        tracing::info!("the quick terminal's monitor went away; hiding it");
-        (binding.on_lost_output)();
+        tracing::info!("the monitors changed under the quick terminal; hiding it");
+        (binding.on_forced_hide)();
         window.set_visible(false);
     }
     binding.bind(&window, next.as_ref());

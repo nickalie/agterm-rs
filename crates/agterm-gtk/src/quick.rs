@@ -15,18 +15,21 @@
 //! `NSPanel`; elsewhere (GNOME/Mutter, X11) an ordinary undecorated window the compositor places like any other.
 //!
 //! Sizing: [`agterm_core::quick_metrics::panel_size`] of the panel's monitor ([`placement::sizing_monitor`]), on every
-//! show, so a settings change lands on the next summon. Coming on screen, the layer surface is put on the active agterm
-//! window's monitor (else the first: a Wayland client cannot read the pointer outside its own surfaces) and centered
-//! there ([`placement::layer_placement`]); while shown it never changes output, so a zoom change is fitted to the
-//! monitor it is on. The window is only sized (Wayland gives a client no position), against the active agterm window's
-//! monitor. The zoom (`surface.zoom --target quick`) fills the output's usable area: the layer surface anchors to every
-//! edge, the window maximizes, as upstream fills the screen's visible frame.
+//! show, so a settings change lands on the next summon. The layer surface names no output as it comes on screen, so
+//! the compositor puts it on its current one, usually the focused output (a Wayland client cannot read the pointer
+//! outside its own surfaces, so that stands in for upstream's pointer-screen rule). It is centered
+//! ([`placement::layer_placement`]) against the frontmost agterm window's monitor (else the first) until the
+//! compositor reports where it landed, then refitted there ([`placement::refits_on_enter`]); while shown it never
+//! changes output, so a zoom change is fitted to the monitor it landed on. The window is only sized (Wayland gives a
+//! client no position), against the frontmost agterm window's monitor. The zoom (`surface.zoom --target quick`) fills
+//! the output's usable area: the layer surface anchors to every edge, the window maximizes, as upstream fills the
+//! screen's visible frame.
 //!
 //! Losing the keyboard dismisses only a panel the user summoned ([`Core::quick_lost_focus`]); the window asked to
-//! close (the compositor's close) hides the panel, its shell kept, and so does the layer panel's monitor going away
-//! ([`layer`]).
+//! close (the compositor's close) hides the panel, its shell kept, and so does a monitor change under the shown layer
+//! panel ([`layer`]).
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -87,7 +90,7 @@ impl QuickPanel {
                 size_percent: core.settings().effective_quick_terminal_size_percent(),
                 zoomed: core.quick_zoomed(),
             };
-            panel.show(windows, fit);
+            panel.show(core, windows, fit);
         } else {
             panel.hide();
         }
@@ -113,6 +116,8 @@ struct Panel {
     shown: bool,
     /// Whether the window fills its output for the quick zoom.
     zoomed: bool,
+    /// The layer host's frame, shared with its surface's monitor handlers.
+    frame: Rc<LayerFrame>,
     /// Whether the panel holds the keyboard (upstream's `holdsKey`): only losing it after holding it is a focus loss,
     /// not the window going inactive because it was hidden.
     holds_key: Rc<Cell<bool>>,
@@ -138,8 +143,10 @@ impl Panel {
         let host = QuickHost::select(layer::supported());
         tracing::info!(host = host.name(), "quick terminal panel");
         let holds_key = Rc::new(Cell::new(false));
+        let frame = Rc::new(LayerFrame::default());
         if host == QuickHost::LayerShell {
-            layer::init(&window, lost_output_handler(&holds_key, poster));
+            layer::init(&window, forced_hide_handler(&holds_key, poster));
+            follow_landing(&window, &frame);
         }
         connect_terminal(&terminal, poster);
         connect_window(&window, &holds_key, poster);
@@ -150,23 +157,24 @@ impl Panel {
             host,
             shown: false,
             zoomed: false,
+            frame,
             holds_key,
         }
     }
 
     /// Shows the panel framed on its monitor (see the module docs) as `fit` says; a panel on screen only follows a
     /// zoom change.
-    fn show(&mut self, windows: &Windows, fit: Fit) {
+    fn show(&mut self, core: &Core, windows: &Windows, fit: Fit) {
         let on_screen = self.shown && self.window.is_visible();
         if on_screen && self.zoomed == fit.zoomed {
             return;
         }
-        let placed = if on_screen && self.host == QuickHost::LayerShell {
-            layer::monitor(&self.window)
+        let landed = if on_screen && self.host == QuickHost::LayerShell {
+            self.frame.landed.borrow().clone()
         } else {
             None
         };
-        let monitor = panel_monitor(windows, placed);
+        let monitor = panel_monitor(core, windows, landed);
         let framed = match self.host {
             QuickHost::LayerShell => self.frame_layer(monitor.as_ref(), fit, on_screen),
             QuickHost::Window => {
@@ -186,19 +194,19 @@ impl Panel {
         self.terminal.grab_focus();
     }
 
-    /// Frames the layer host on `monitor`, putting it there first when it is coming on screen; false when there is no
-    /// monitor to show it on (GTK cannot map a layer surface without one).
+    /// Frames the layer host on `monitor` (the estimate while it is coming on screen), clearing its output first then
+    /// so the compositor chooses one; false when there is no monitor to show it on (GTK cannot map a layer surface
+    /// without one).
     fn frame_layer(&self, monitor: Option<&gdk::Monitor>, fit: Fit, on_screen: bool) -> bool {
         if !on_screen {
-            let Some(monitor) = monitor else {
+            if monitor.is_none() {
                 tracing::warn!("no monitor to show the quick terminal on");
                 return false;
-            };
-            layer::place(&self.window, monitor);
+            }
+            layer::release_output(&self.window);
         }
-        if let Some(placement) = placement::layer_placement(monitor.map(monitor_size), fit.size_percent, fit.zoomed) {
-            layer::apply(&self.window, placement);
-        }
+        self.frame.fit.set(Some(fit));
+        self.frame.apply(&self.window, monitor, fit);
         true
     }
 
@@ -222,9 +230,70 @@ impl Panel {
         }
         self.shown = false;
         self.holds_key.set(false);
+        self.frame.fit.set(None);
         self.terminal.set_deck_visible(false);
         self.window.set_visible(false);
+        if self.host == QuickHost::LayerShell {
+            layer::bind_hidden(&self.window);
+        }
     }
+}
+
+/// The layer host's frame: the compositor chooses the output, so the panel is sized against an estimate first and
+/// refitted to the monitor it lands on.
+#[derive(Default)]
+struct LayerFrame {
+    /// The shown panel's fit; `None` while hidden.
+    fit: Cell<Option<Fit>>,
+    /// The monitor the frame was last computed against.
+    sized_for: RefCell<Option<gdk::Monitor>>,
+    /// The monitor the surface is on, as the compositor last reported it.
+    landed: RefCell<Option<gdk::Monitor>>,
+}
+
+impl LayerFrame {
+    /// Anchors and sizes the layer surface for `fit` on `monitor` ([`placement::layer_placement`]).
+    fn apply(&self, window: &gtk::Window, monitor: Option<&gdk::Monitor>, fit: Fit) {
+        if let Some(placement) = placement::layer_placement(monitor.map(monitor_size), fit.size_percent, fit.zoomed) {
+            layer::apply(window, placement);
+            self.sized_for.replace(monitor.cloned());
+        }
+    }
+}
+
+/// Tracks the monitor the layer surface is on and refits a shown panel to the one it lands on when it was sized
+/// against another ([`placement::refits_on_enter`]). The surface is watched from its realization (the panel window is
+/// realized once and never unrealized while it lives).
+fn follow_landing(window: &gtk::Window, frame: &Rc<LayerFrame>) {
+    let frame = Rc::clone(frame);
+    window.connect_realize(move |window| {
+        let Some(surface) = window.surface() else {
+            return;
+        };
+        let weak = window.downgrade();
+        let entering = Rc::clone(&frame);
+        surface.connect_enter_monitor(move |_, monitor| {
+            entering.landed.replace(Some(monitor.clone()));
+            let fit = entering.fit.get();
+            let refits = placement::refits_on_enter(
+                monitor,
+                entering.sized_for.borrow().as_ref(),
+                fit.is_some(),
+                fit.is_some_and(|fit| fit.zoomed),
+            );
+            if let (true, Some(fit), Some(window)) = (refits, fit, weak.upgrade()) {
+                tracing::info!("the quick terminal landed off its estimate; refitting it");
+                entering.apply(&window, Some(monitor), fit);
+            }
+        });
+        let leaving = Rc::clone(&frame);
+        surface.connect_leave_monitor(move |_, monitor| {
+            let left = leaving.landed.borrow().as_ref() == Some(monitor);
+            if left {
+                leaving.landed.replace(None);
+            }
+        });
+    });
 }
 
 /// What the quick terminal runs: a login shell in `cwd` with the quick-terminal environment.
@@ -301,9 +370,9 @@ fn install_css() {
     gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
 }
 
-/// What the layer host does just before it hides a shown panel whose monitor went away: the panel no longer holds the
-/// keyboard, and the core hides it as a dismissal, its shell kept.
-fn lost_output_handler(holds_key: &Rc<Cell<bool>>, poster: &Poster) -> impl Fn() + 'static {
+/// What the layer host does just before it hides a shown panel because the monitors changed under it: the panel no
+/// longer holds the keyboard, and the core hides it as a dismissal, its shell kept.
+fn forced_hide_handler(holds_key: &Rc<Cell<bool>>, poster: &Poster) -> impl Fn() + 'static {
     let holds_key = Rc::clone(holds_key);
     let posting = poster.clone();
     move || {
@@ -315,17 +384,16 @@ fn lost_output_handler(holds_key: &Rc<Cell<bool>>, poster: &Poster) -> impl Fn()
     }
 }
 
-/// The monitor the panel is framed on ([`placement::sizing_monitor`]): `placed`, else the one the active agterm window
-/// is on, else the first; `None` when GTK reports no monitor.
-fn panel_monitor(windows: &Windows, placed: Option<gdk::Monitor>) -> Option<gdk::Monitor> {
+/// The monitor the panel is framed on ([`placement::sizing_monitor`]): `landed`, else the one the frontmost agterm
+/// window is on (an agterm window, never the quick panel itself), else the first; `None` when GTK reports no monitor.
+fn panel_monitor(core: &Core, windows: &Windows, landed: Option<gdk::Monitor>) -> Option<gdk::Monitor> {
     let display = gdk::Display::default()?;
-    let under_active = windows
-        .app()
-        .active_window()
-        .and_then(|window| window.surface())
+    let under_frontmost = windows
+        .frontmost(core)
+        .and_then(|ui| ui.gtk_window().surface())
         .and_then(|surface| display.monitor_at_surface(&surface));
     let first = display.monitors().item(0).and_downcast::<gdk::Monitor>();
-    placement::sizing_monitor(placed, under_active, first)
+    placement::sizing_monitor(landed, under_frontmost, first)
 }
 
 fn monitor_size(monitor: &gdk::Monitor) -> PanelSize {
