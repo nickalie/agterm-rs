@@ -1010,14 +1010,23 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 **Files:**
 - Create: `crates/agterm-core/src/commands/{font,theme}.rs`, `crates/agterm-gtk/src/theme.rs`
 
-- [ ] font.inc, dec, reset over libghostty
-- [ ] theme.set, theme.list (`ThemeCatalog.swift`, `ThemeName.swift`, `ThemeBrightness.swift`, `theme-picker.md`,
+- [x] font.inc, dec, reset over libghostty (`commands/font.rs`: the binding action on the addressed pane, a page over
+      the pane steps the HTML page zoom; cell-size reports persist the main-role pane's size through
+      `Core::report_font_size`, dropped under a dashboard font override and for its revert; new terminals start at the
+      session's `fontSize`)
+- [x] theme.set, theme.list (`ThemeCatalog.swift`, `ThemeName.swift`, `ThemeBrightness.swift`, `theme-picker.md`,
       `SystemAppearanceObserver.swift`) over the staged themes, following the system appearance through
-      libadwaita's style manager; claim `theme-slots-by-sync`
-- [ ] matching `agtermctl` subcommands
-- [ ] write tests: theme catalog listing and light/dark slots
-- [ ] write tests: unknown theme errors
-- [ ] gate: full run; ratchet (`test_font_theme.py`)
+      libadwaita's style manager; claim `theme-slots-by-sync` (`agterm_core::theme`: catalog, dual-name parser, slot
+      setters, `ghosttyConfigLines`; a change rewrites `ghostty-settings.conf`, written at launch too, and a changed
+      text clears the session font sizes and reloads the config into every terminal: background/HUD/overlay
+      overlays re-applied, text watermarks re-rendered, ask colors and HTML pages (palette `--agterm-color-N` vars)
+      re-themed. The desktop's dark flip re-feeds a dual theme keeping zoom (GTK `theme.rs`). ➕ agterm's own
+      `agterm` theme staged from `build/themes/` by `scripts/stage.sh`; `theme-slots-by-sync` claimed)
+- [x] matching `agtermctl` subcommands
+- [x] write tests: theme catalog listing and light/dark slots
+- [x] write tests: unknown theme errors
+- [x] gate: full run; ratchet (`test_font_theme.py`) (562 passed, 80 failed, 12 skipped, 17 errors; ratchet 536 → 562:
+      all 24 `test_font_theme.py` ids plus cli `test_font`/`test_theme`)
 
 ### Task 24: Keymap, hooks and custom commands
 

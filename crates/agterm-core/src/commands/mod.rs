@@ -5,6 +5,7 @@
 pub(crate) mod ask;
 pub(crate) mod background;
 pub(crate) mod dashboard;
+pub(crate) mod font;
 pub(crate) mod hud;
 pub(crate) mod metadata;
 pub(crate) mod notify;
@@ -20,6 +21,7 @@ pub(crate) mod session;
 pub(crate) mod sidebar;
 pub(crate) mod surface;
 pub(crate) mod surface_target;
+pub(crate) mod theme;
 pub(crate) mod typing;
 pub(crate) mod window;
 pub(crate) mod workspace;

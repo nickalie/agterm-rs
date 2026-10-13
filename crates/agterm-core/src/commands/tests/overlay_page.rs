@@ -579,3 +579,37 @@ fn with_hud_helper(fixture: &mut Fixture) -> tempfile::TempDir {
     fixture.core.set_hud_helper(helper, dir.path().join("bodies"));
     dir
 }
+
+#[test]
+fn a_font_command_over_a_page_steps_the_page_zoom_and_leaves_the_terminal() {
+    use agterm_proto::command::FontCmd;
+    let (mut fixture, _) = fixture_with_host(0);
+    let id = fixture.sessions[0];
+    let surface = FakeSurface::new("L");
+    let probe = surface.probe();
+    fixture
+        .store_mut()
+        .unwrap()
+        .session_mut(id)
+        .unwrap()
+        .surface
+        .replace(Box::new(surface));
+    assert!(open_page(&mut fixture, id, |_| {}).ok);
+    let target = wire(id);
+    let font = |fixture: &mut Fixture, cmd: FontCmd| fixture.send(Command::Font(cmd), Some(&target), Args::default());
+    assert_eq!(answered_id(&font(&mut fixture, FontCmd::Inc)), Some(id));
+    assert!(fixture.core.html_zoom() > 1.0);
+    assert!(fixture.core.settings().html_overlay_zoom.is_some());
+    assert_eq!(answered_id(&font(&mut fixture, FontCmd::Reset)), Some(id));
+    assert_eq!(fixture.core.settings().html_overlay_zoom, None);
+    assert!(probe.actions().is_empty(), "the terminal under the page keeps its size");
+    // a missing pane keeps its error even under a page
+    assert_eq!(
+        fixture.send(
+            Command::Font(FontCmd::Inc),
+            Some(&target),
+            args(|a| a.pane = Some("right".to_owned()))
+        ),
+        failure("session has no split pane")
+    );
+}

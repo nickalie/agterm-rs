@@ -2,6 +2,8 @@
 //! over the web view, and the failure shown over a page that did not load (upstream's `HtmlOverlayView`). A chromeless
 //! page has no strip.
 
+use std::cell::RefCell;
+
 use agterm_core::html::{HtmlLoadState, HtmlNavigation, HtmlOverlay, HtmlOverlayTheme, HtmlReloadTarget};
 use agterm_core::model::is_valid_color_hex;
 use gtk::prelude::*;
@@ -23,6 +25,7 @@ const STRIP_HEIGHT: i32 = 28;
 const IDENTITY_CHARS: usize = 24;
 
 /// The colors a page is drawn in: the terminal's, the overlay's own background first.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PanelColors {
     /// The terminal's background, which the strip sits on.
     terminal: String,
@@ -30,14 +33,33 @@ pub(super) struct PanelColors {
     background: String,
     foreground: String,
     dark: bool,
+    /// The theme's 16 ANSI colors as `#rrggbb`, empty when unknown.
+    palette: Vec<String>,
 }
 
 impl PanelColors {
-    /// The colors under the overlay's `background` (`#rrggbb`), the theme's when it has none or an invalid one.
+    /// The colors under the overlay's `background` (`#rrggbb`) in the terminal's current theme, the theme's
+    /// background when the overlay has none or an invalid one.
     pub(super) fn new(background: Option<&str>) -> Self {
         let hex = |color: agterm_ghostty::Color| format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b);
-        let terminal = crate::ghostty_app::background_color().map_or_else(|| FALLBACK_BACKGROUND.to_owned(), hex);
-        let foreground = crate::ghostty_app::foreground_color().map_or_else(|| FALLBACK_FOREGROUND.to_owned(), hex);
+        Self::resolve(
+            crate::ghostty_app::background_color().map(hex),
+            crate::ghostty_app::foreground_color().map(hex),
+            crate::ghostty_app::palette(),
+            background,
+        )
+    }
+
+    /// The colors from the terminal's `terminal` background, `foreground` and `palette` (each `#rrggbb`; the two
+    /// colors fall back to upstream's when unknown) under the overlay's `background`.
+    pub(super) fn resolve(
+        terminal: Option<String>,
+        foreground: Option<String>,
+        palette: Vec<String>,
+        background: Option<&str>,
+    ) -> Self {
+        let terminal = terminal.unwrap_or_else(|| FALLBACK_BACKGROUND.to_owned());
+        let foreground = foreground.unwrap_or_else(|| FALLBACK_FOREGROUND.to_owned());
         let background = background.filter(|color| is_valid_color_hex(color)).map_or_else(
             || terminal.clone(),
             |color| format!("#{}", color.trim_start_matches('#')),
@@ -48,13 +70,14 @@ impl PanelColors {
             background,
             foreground,
             dark,
+            palette,
         }
     }
 
-    /// The terminal theme as the page sees it (upstream's `HtmlOverlayRegistry.theme`). The palette is not read from
-    /// libghostty yet, so a page gets no `--agterm-color-N`.
+    /// The terminal theme as the page sees it (upstream's `HtmlOverlayRegistry.theme`), its palette giving the page
+    /// `--agterm-color-0` to `15`.
     pub(super) fn theme(&self) -> HtmlOverlayTheme {
-        HtmlOverlayTheme::new(&self.background, &self.foreground, self.dark, &[])
+        HtmlOverlayTheme::new(&self.background, &self.foreground, self.dark, &self.palette)
     }
 }
 
@@ -86,6 +109,10 @@ pub(super) struct Panel {
     failure: gtk::Box,
     error: gtk::Label,
     provider: gtk::CssProvider,
+    /// The style class that scopes the provider's rules to this panel.
+    class: String,
+    /// The stylesheet the provider holds now.
+    style: RefCell<String>,
 }
 
 impl Panel {
@@ -93,7 +120,8 @@ impl Panel {
     pub(super) fn new(overlay: &HtmlOverlay, colors: &PanelColors, web_view: &WebView, poster: &Poster) -> Self {
         let class = format!("agterm-page-{}", overlay.id.simple());
         let provider = gtk::CssProvider::new();
-        provider.load_from_string(&stylesheet(&class, colors));
+        let style = stylesheet(&class, colors);
+        provider.load_from_string(&style);
         if let Some(display) = gdk::Display::default() {
             gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
         }
@@ -125,6 +153,8 @@ impl Panel {
             failure,
             error,
             provider,
+            class,
+            style: RefCell::new(style),
         };
         panel.update(overlay);
         panel
@@ -160,6 +190,17 @@ impl Panel {
         self.failure.set_visible(overlay.load_state == HtmlLoadState::Failed);
         self.error.set_label(overlay.load_error.as_deref().unwrap_or_default());
         self.error.set_visible(overlay.load_error.is_some());
+    }
+
+    /// Redraws the panel in `colors`, so the strip and the page's background follow a changed terminal theme; the
+    /// colors it already wears change nothing.
+    pub(super) fn restyle(&self, colors: &PanelColors) {
+        let style = stylesheet(&self.class, colors);
+        if *self.style.borrow() == style {
+            return;
+        }
+        self.provider.load_from_string(&style);
+        self.style.replace(style);
     }
 
     /// Takes the panel out of its parent and its style off the display: the page is gone.
@@ -325,5 +366,57 @@ mod tests {
         assert_eq!(rgb("#ff0000"), Some((1.0, 0.0, 0.0)));
         assert_eq!(rgb("#zz0000"), None);
         assert_eq!(rgb("ff0000"), None);
+    }
+
+    fn palette() -> Vec<String> {
+        (0..16).map(|slot| format!("#0000{slot:02x}")).collect()
+    }
+
+    #[test]
+    fn the_theme_carries_the_terminal_palette() {
+        let colors = PanelColors::resolve(Some("#101010".to_owned()), Some("#eeeeee".to_owned()), palette(), None);
+        let theme = colors.theme();
+        assert_eq!(theme.palette, palette(), "a page gets --agterm-color-0 to 15");
+        assert_eq!(theme.background, "#101010");
+        assert_eq!(theme.foreground, "#eeeeee");
+        assert!(theme.dark);
+        assert!(theme.stylesheet(false).contains("--agterm-color-15: #00000f"));
+    }
+
+    #[test]
+    fn an_unknown_palette_gives_the_page_none() {
+        let colors = PanelColors::resolve(None, None, Vec::new(), None);
+        let theme = colors.theme();
+        assert!(theme.palette.is_empty());
+        assert_eq!(theme.background, FALLBACK_BACKGROUND);
+        assert_eq!(theme.foreground, FALLBACK_FOREGROUND);
+    }
+
+    #[test]
+    fn the_overlay_background_replaces_the_terminal_one_but_not_under_the_strip() {
+        let colors = PanelColors::resolve(Some("#101010".to_owned()), None, palette(), Some("fafafa"));
+        let theme = colors.theme();
+        assert_eq!(theme.background, "#fafafa");
+        assert!(!theme.dark, "a light page background reads as a light scheme");
+        let style = stylesheet("page", &colors);
+        assert!(
+            style.contains("background-color: #101010; font-size"),
+            "the strip sits on the terminal's"
+        );
+        assert!(style.contains(".page { background-color: #fafafa;"));
+        let invalid = PanelColors::resolve(Some("#101010".to_owned()), None, Vec::new(), Some("nope"));
+        assert_eq!(invalid.theme().background, "#101010");
+    }
+
+    #[test]
+    fn a_new_terminal_theme_changes_the_panel_style() {
+        let before = PanelColors::resolve(Some("#101010".to_owned()), None, palette(), None);
+        let after = PanelColors::resolve(Some("#f0f0f0".to_owned()), Some("#111111".to_owned()), palette(), None);
+        assert_ne!(stylesheet("page", &before), stylesheet("page", &after));
+        assert_eq!(
+            stylesheet("page", &before),
+            stylesheet("page", &before.clone()),
+            "the same colors give the same style, which a refresh leaves alone"
+        );
     }
 }

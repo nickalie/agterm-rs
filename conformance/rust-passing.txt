@@ -12,6 +12,7 @@ tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_re
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args2-invalid event run id]
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args3-invalid event cursor]
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args4-None]
+tests/cli/test_cli_output.py::test_font
 tests/cli/test_cli_output.py::test_hud
 tests/cli/test_cli_output.py::test_notify_raises_the_unseen_count
 tests/cli/test_cli_output.py::test_overlay_page_blocks_until_submitted
@@ -30,6 +31,7 @@ tests/cli/test_cli_output.py::test_session_status_carries_its_overrides
 tests/cli/test_cli_output.py::test_session_type_text_search_and_copy
 tests/cli/test_cli_output.py::test_sidebar
 tests/cli/test_cli_output.py::test_surface_and_dashboard
+tests/cli/test_cli_output.py::test_theme
 tests/cli/test_cli_output.py::test_tree_lists_workspaces_and_tagged_sessions
 tests/cli/test_cli_output.py::test_version
 tests/cli/test_cli_output.py::test_window_commands
@@ -143,6 +145,30 @@ tests/protocol/test_events.py::test_next_advances_past_filtered_out_events
 tests/protocol/test_events.py::test_read_without_a_cursor_subscribes_from_now
 tests/protocol/test_events.py::test_run_id_is_case_insensitive
 tests/protocol/test_events.py::test_session_lifecycle_events
+tests/protocol/test_font_theme.py::test_bare_set_returns_to_ghostty_builtin_colors
+tests/protocol/test_font_theme.py::test_dark_slot_turns_appearance_sync_on_and_none_turns_it_off
+tests/protocol/test_font_theme.py::test_font_pane_right_steps_the_split_alone
+tests/protocol/test_font_theme.py::test_font_pane_scratch_steps_the_scratch_terminal_alone
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-middle-invalid pane: middle-font.dec]
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-middle-invalid pane: middle-font.inc]
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-middle-invalid pane: middle-font.reset]
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-right-session has no split pane-font.dec]
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-right-session has no split pane-font.inc]
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-right-session has no split pane-font.reset]
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-scratch-session has no scratch terminal-font.dec]
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-scratch-session has no scratch terminal-font.inc]
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-scratch-session has no scratch terminal-font.reset]
+tests/protocol/test_font_theme.py::test_font_refusals[zzz-None-no such session: zzz-font.dec]
+tests/protocol/test_font_theme.py::test_font_refusals[zzz-None-no such session: zzz-font.inc]
+tests/protocol/test_font_theme.py::test_font_refusals[zzz-None-no such session: zzz-font.reset]
+tests/protocol/test_font_theme.py::test_font_steps_the_main_pane_by_one_point_and_resets
+tests/protocol/test_font_theme.py::test_font_without_a_target_steps_the_active_session_alone
+tests/protocol/test_font_theme.py::test_list_names_the_bundled_themes
+tests/protocol/test_font_theme.py::test_set_a_single_theme
+tests/protocol/test_font_theme.py::test_set_refusals_leave_the_slots_alone[args0-theme.set takes either a name or --light, not both]
+tests/protocol/test_font_theme.py::test_set_refusals_leave_the_slots_alone[args1-unknown theme: No Such Theme]
+tests/protocol/test_font_theme.py::test_set_refusals_leave_the_slots_alone[args2-unknown theme: No Such Theme]
+tests/protocol/test_font_theme.py::test_set_refusals_leave_the_slots_alone[args3-unknown theme: dracula]
 tests/protocol/test_hud.py::test_hud_and_program_share_one_slot
 tests/protocol/test_hud.py::test_hud_font_size_range[font-high]
 tests/protocol/test_hud.py::test_hud_font_size_range[font-low]

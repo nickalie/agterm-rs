@@ -21,7 +21,7 @@ pub use clipboard::{
     ClipboardConfirm, ClipboardContent, ClipboardKind, ClipboardRead, ClipboardReadResult, ClipboardRequestKind,
     PendingRequest,
 };
-pub use config::{Color, Config, ConfigKey, ConfigValue, Diagnostic, StringKey, keys};
+pub use config::{Color, Config, ConfigKey, ConfigValue, Diagnostic, Palette, StringKey, keys};
 pub use surface::{ImePoint, Surface, SurfaceContext, SurfaceOptions, SurfaceSize};
 pub use text::{Point, PointCoord, PointTag, Selection, SurfaceText, solve_cursor_column};
 

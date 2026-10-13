@@ -26,7 +26,7 @@ use webkit6::{
 
 use super::files;
 use super::panel::{Panel, PanelColors};
-use super::policy::{self, DecisionTarget, LoadEvent, LoadOutcome, LoadTracker};
+use super::policy::{self, DecisionTarget, LoadEvent, LoadOutcome, LoadTracker, ThemeChange};
 use super::registry;
 use crate::state::{self, AppState, Poster};
 
@@ -97,7 +97,11 @@ pub(super) struct Page {
     web_view: WebView,
     panel: Panel,
     content: UserContentManager,
-    theme: HtmlOverlayTheme,
+    /// The overlay's own background (`--background-color`), which replaces the theme's; kept to redraw the page in a
+    /// changed theme.
+    background: Option<String>,
+    /// The theme the page's scripts carry.
+    theme: RefCell<HtmlOverlayTheme>,
     poster: Poster,
     state: RefCell<PageState>,
 }
@@ -136,7 +140,8 @@ impl Page {
             web_view,
             panel,
             content,
-            theme: colors.theme(),
+            background: background.map(str::to_owned),
+            theme: RefCell::new(colors.theme()),
             poster: poster.clone(),
             state: RefCell::new(PageState {
                 overlay: overlay.clone(),
@@ -203,11 +208,8 @@ impl Page {
             };
             self.content.add_script(&script);
         };
-        add(
-            &self.theme.script(themed),
-            UserScriptInjectionTime::Start,
-            Some(THEME_WORLD),
-        );
+        let theme = self.theme.borrow().script(themed);
+        add(&theme, UserScriptInjectionTime::Start, Some(THEME_WORLD));
         if !themed {
             return;
         }
@@ -216,6 +218,31 @@ impl Page {
             add(HELPER_SCRIPT, UserScriptInjectionTime::Start, None);
         }
         add(ADAPTER_SCRIPT, UserScriptInjectionTime::End, Some(WORLD));
+    }
+
+    /// Follows the terminal's current colors (upstream's `applyTheme`): the panel is redrawn in them, and a changed
+    /// theme is given to later loads; a file page wears it at once by reloading what it shows, a URL page gets the
+    /// variables alone at its next load. Nothing runs in the live document.
+    pub(super) fn apply_theme(&self) {
+        let overlay = {
+            let state = self.state.borrow();
+            if !state.active() {
+                return;
+            }
+            state.overlay.clone()
+        };
+        let colors = PanelColors::new(self.background.as_deref());
+        self.panel.restyle(&colors);
+        let next = colors.theme();
+        let change = policy::theme_change(&self.theme.borrow(), &next, overlay.themed());
+        if change == ThemeChange::Unchanged {
+            return;
+        }
+        self.theme.replace(next);
+        self.install_scripts(&overlay);
+        if change == ThemeChange::ReinstallAndReload {
+            self.reload_shown();
+        }
     }
 
     // MARK: - the bridge

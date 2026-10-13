@@ -57,6 +57,35 @@ fn loads_a_config_file_and_reads_values_back() -> TestResult {
 }
 
 #[test]
+fn the_palette_reads_back_by_slot() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let path = write_config(dir.path(), "palette = 1=#d25252\npalette = 15=#fefefe\n")?;
+    let mut config = Config::new()?;
+    config.load_file(&path);
+    config.finalize();
+
+    let palette = config.get(keys::PALETTE).ok_or("no palette")?;
+    assert_eq!(palette.ansi().len(), 16);
+    assert_eq!(
+        palette.ansi()[1],
+        Color {
+            r: 0xd2,
+            g: 0x52,
+            b: 0x52
+        }
+    );
+    assert_eq!(
+        palette.0[15],
+        Color {
+            r: 0xfe,
+            g: 0xfe,
+            b: 0xfe
+        }
+    );
+    Ok(())
+}
+
+#[test]
 fn defaults_apply_without_files() -> TestResult {
     let mut config = Config::new()?;
     config.finalize();

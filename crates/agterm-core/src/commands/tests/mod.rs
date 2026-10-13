@@ -6,6 +6,7 @@ mod auto_follow;
 mod background;
 mod dashboard;
 mod events;
+mod font;
 mod hud;
 mod metadata;
 mod moves;
@@ -18,6 +19,7 @@ mod restart;
 mod session;
 mod sidebar;
 mod surface;
+mod theme;
 mod window;
 mod workspace;
 

@@ -47,7 +47,7 @@ use crate::surface::{self, SurfaceSpec, TerminalSurface};
 const NO_SESSION: &str = "No session selected";
 
 /// A terminal a page runs: one of its session's panes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PaneSpec {
     pub window: Uuid,
     pub workspace: Uuid,
@@ -62,6 +62,8 @@ pub struct PaneSpec {
     pub command: Option<String>,
     /// Hold the pane after the command exits.
     pub wait: bool,
+    /// The point size the terminal starts at: the session's persisted size, `None` for the configured one.
+    pub font_size: Option<f64>,
 }
 
 impl PaneSpec {
@@ -79,6 +81,7 @@ impl PaneSpec {
             cwd: session.effective_cwd().to_owned(),
             command: session.launch.command.clone(),
             wait: session.launch.wait,
+            font_size: session.font_size,
         })
     }
 
@@ -94,6 +97,7 @@ impl PaneSpec {
             cwd: session.cwd_for(StatusPane::Right).to_owned(),
             command: session.split_launch.command.clone(),
             wait: session.split_launch.wait,
+            font_size: session.font_size,
         })
     }
 
@@ -110,6 +114,7 @@ impl PaneSpec {
             cwd: session.effective_cwd().to_owned(),
             command: session.scratch_command.take(),
             wait: false,
+            font_size: session.font_size,
         }
     }
 
@@ -136,12 +141,14 @@ impl PaneSpec {
     /// What the terminal runs.
     #[must_use]
     pub fn surface_spec(&self, context: &PaneContext) -> SurfaceSpec {
+        #[expect(clippy::cast_possible_truncation, reason = "a point size fits an f32")]
+        let font_size = self.font_size.map(|size| size as f32);
         SurfaceSpec {
             working_directory: Some(PathBuf::from(&self.cwd)),
             command: self.command.clone(),
             env: self.env(context).into_iter().collect(),
             wait_after_command: self.wait,
-            font_size: None,
+            font_size,
         }
     }
 }
@@ -156,7 +163,7 @@ pub struct PaneContext {
 }
 
 /// One reconcile of the deck against the model.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct DeckPlan {
     /// The primary panes of sessions without a page yet, in tree order.
     pub add: Vec<PaneSpec>,
@@ -650,9 +657,20 @@ fn set_page_visible(widget: &split::PaneStack, visible: bool) {
 
 /// Routes the terminal's lifecycle and input to the model as main-loop tasks, by the pane token it carries: its shell
 /// exiting closes its pane by the pane's role now (upstream's per-pane `onExit`), the user focusing it moves the
-/// split's focus there (unless the focus moved on before the task ran, or the pane is hidden), and a key press clears
-/// the session's status when this pane owns it (upstream's `wireStatusClear`).
+/// split's focus there (unless the focus moved on before the task ran, or the pane is hidden), a key press clears
+/// the session's status when this pane owns it (upstream's `wireStatusClear`), and a font size change persists when
+/// the pane is in the main role (upstream's `onFontSizeChange` → `persistFontSize`).
 fn connect_terminal(terminal: &TerminalSurface, session: Uuid, token: &str, poster: &Poster) {
+    let posting = poster.clone();
+    let font_token = token.to_owned();
+    terminal.connect_font_size(move |size| {
+        let token = font_token.clone();
+        state::post(&posting, move |state: &mut AppState| {
+            if state.core.report_font_size(session, &token, size) {
+                state.settle();
+            }
+        });
+    });
     let posting = poster.clone();
     let exit_token = token.to_owned();
     terminal.connect_exit(move || {

@@ -17,7 +17,7 @@ use crate::tree::format_tree;
 use crate::window::format_windows;
 
 /// Renders a response as its human-readable summary (no trailing newline): an `error:` line, the tree or window
-/// listing, the serving app's version, the text read (or a search's counter), an overlay program's `exit N`, a
+/// listing, the theme listing, the serving app's version, the text read (or a search's counter), an overlay program's `exit N`, a
 /// batch's affected count, a count of
 /// diagnostics, a cursor column, a resized window's `W H`, a resized split's ratio, the applied sidebar width, the
 /// affected id (only with `echo_id`, for the create commands), or a bare `ok`. Never JSON: `--json` prints the server's own line.
@@ -43,6 +43,12 @@ pub fn format_response(response: &Response, echo_id: bool) -> String {
         .and_then(|windows| serde_json::from_value::<Vec<ControlWindowNode>>(windows.clone()).ok())
     {
         return format_windows(&windows);
+    }
+    if let Some(themes) = result
+        .and_then(|result| result.get("themes"))
+        .and_then(|themes| serde_json::from_value::<Vec<String>>(themes.clone()).ok())
+    {
+        return format_themes(&themes, result.map_or(&Value::Null, |result| result));
     }
     if let Some(app) = result.and_then(|result| result.get("app")) {
         return format_app(app);
@@ -96,6 +102,38 @@ pub fn format_response(response: &Response, echo_id: bool) -> String {
         return id.to_owned();
     }
     "ok".to_owned()
+}
+
+/// The label of the no-theme (ghostty built-in) entry.
+const DEFAULT_THEME: &str = "default ghostty";
+
+/// `theme.list`: one theme per line under a leading `default ghostty` entry, the active one(s) marked `* `. Plain, the
+/// one `theme` is marked (none marks `default ghostty`); with `sync`, the light and dark themes are, under a header
+/// naming the pair.
+fn format_themes(themes: &[String], result: &Value) -> String {
+    let field = |key: &str| result.get(key).and_then(Value::as_str);
+    let sync = result.get("sync").and_then(Value::as_bool).unwrap_or(false);
+    let (current, light, dark) = (field("theme"), field("light"), field("dark"));
+    let active = |name: Option<&str>| {
+        if sync {
+            name.is_some() && (name == light || name == dark)
+        } else {
+            name == current
+        }
+    };
+    let line = |name: Option<&str>, label: &str| format!("{}{label}", if active(name) { "* " } else { "  " });
+    let body = std::iter::once(line(None, DEFAULT_THEME))
+        .chain(themes.iter().map(|name| line(Some(name), name)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !sync {
+        return body;
+    }
+    format!(
+        "syncing with macOS appearance — light: {}, dark: {}\n{body}",
+        light.unwrap_or(DEFAULT_THEME),
+        dark.unwrap_or(DEFAULT_THEME)
+    )
 }
 
 /// `version (commit)`, or the bare version when the build recorded no commit.
@@ -194,6 +232,78 @@ mod tests {
             "w1  work [open] [active]\nw3  archive"
         );
         assert_eq!(format_response(&ok(json!({"windows": []})), true), "");
+    }
+
+    fn theme_lines(result: Value) -> Vec<String> {
+        format_response(&ok(result), false)
+            .split('\n')
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn themes_mark_the_current_one() {
+        assert_eq!(
+            theme_lines(json!({"theme": "Nord", "themes": ["Dracula", "Nord"]})),
+            ["  default ghostty", "  Dracula", "* Nord"]
+        );
+    }
+
+    #[test]
+    fn themes_mark_the_ghostty_default_when_no_theme_is_set() {
+        assert_eq!(
+            theme_lines(json!({"themes": ["Dracula"]})),
+            ["* default ghostty", "  Dracula"]
+        );
+        assert_eq!(theme_lines(json!({"themes": []})), ["* default ghostty"]);
+    }
+
+    #[test]
+    fn a_theme_set_without_a_list_is_bare_ok() {
+        assert_eq!(format_response(&ok(json!({"theme": "Dracula"})), false), "ok");
+    }
+
+    #[test]
+    fn syncing_themes_mark_both_sides_under_a_header() {
+        let lines = theme_lines(json!({
+            "themes": ["agterm", "Builtin Light", "Nord"], "sync": true, "light": "Builtin Light", "dark": "agterm",
+        }));
+        assert_eq!(
+            lines,
+            [
+                "syncing with macOS appearance — light: Builtin Light, dark: agterm",
+                "  default ghostty",
+                "* agterm",
+                "* Builtin Light",
+                "  Nord",
+            ]
+        );
+        // a missing side names the built-in default, which is never marked while syncing
+        assert_eq!(
+            theme_lines(json!({"themes": ["Nord"], "sync": true, "dark": "Nord"})),
+            [
+                "syncing with macOS appearance — light: default ghostty, dark: Nord",
+                "  default ghostty",
+                "* Nord",
+            ]
+        );
+        // an empty side is kept, as Swift's `??`
+        assert_eq!(
+            theme_lines(json!({"themes": [], "sync": true, "light": "", "dark": "Nord"}))[0],
+            "syncing with macOS appearance — light: , dark: Nord"
+        );
+    }
+
+    #[test]
+    fn themes_sit_after_the_windows_and_before_the_app() {
+        assert_eq!(
+            format_response(&ok(json!({"windows": [], "themes": ["Nord"]})), false),
+            ""
+        );
+        assert_eq!(
+            format_response(&ok(json!({"themes": [], "app": {"version": "1"}, "text": "t"})), false),
+            "* default ghostty"
+        );
     }
 
     #[test]

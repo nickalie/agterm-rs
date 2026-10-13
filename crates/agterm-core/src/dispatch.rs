@@ -150,6 +150,8 @@ pub struct Core {
     pub(crate) jobs: commands::overlay::JobRuntime,
     /// The HTML pages' outcomes and the frontend's web views ([`commands::overlay_page`]).
     pub(crate) pages: commands::overlay_page::PageRuntime,
+    /// The bundled themes and the settings' ghostty config ([`commands::theme`]).
+    pub(crate) themes: commands::theme::ThemeRuntime,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -214,6 +216,7 @@ impl Core {
             modals: crate::modal::Modals::default(),
             jobs: commands::overlay::JobRuntime::default(),
             pages: commands::overlay_page::PageRuntime::default(),
+            themes: commands::theme::ThemeRuntime::default(),
         }
     }
 
@@ -437,6 +440,16 @@ impl Core {
         true
     }
 
+    /// Clears every session's font size in every window, closed ones' files included (upstream's
+    /// `resetSessionFontSizesAllWindows`): a config reload resets the terminals to the configured size. Commit
+    /// afterwards.
+    pub(crate) fn reset_session_font_sizes(&mut self) {
+        match self.persistence.as_mut() {
+            Some(persistence) => persistence.reset_session_font_sizes_all_windows(&mut self.library),
+            None => self.library.reset_session_font_sizes_all_windows(),
+        }
+    }
+
     /// Lands the model's side effects after a mutation, as every main-loop task that may mutate must: writes the
     /// immediate snapshot saves and a changed index, sequences the events into the ring, and hands back the timers
     /// the caller arms on the main loop. Without persistence the effects are drained and the saves dropped.
@@ -619,6 +632,8 @@ impl Core {
                 None => Ok(Response::success()),
             },
             Command::Ask(cmd) => result_of(&commands::ask::dispatch(self, cmd, request)?),
+            Command::Font(cmd) => result_of(&commands::font::dispatch(self, cmd, request)?),
+            Command::Theme(cmd) => result_of(&commands::theme::dispatch(self, cmd, request)?),
             Command::Pick(cmd) => result_of(&commands::pick::dispatch(self, cmd, request)?),
             Command::Events(EventsCmd::Read) => self.read_events(request.args.as_ref()),
             Command::Version => result_of(&self.version()),
@@ -631,11 +646,9 @@ impl Core {
             cmd @ (Command::Browser(_)
             | Command::Config(_)
             | Command::Debug(_)
-            | Command::Font(_)
             | Command::Hooks(_)
             | Command::Keymap(_)
             | Command::Restore(_)
-            | Command::Theme(_)
             | Command::Zmx(_)) => Err(ControlError::NotSupported(cmd)),
         }
     }
@@ -643,7 +656,7 @@ impl Core {
 
 #[cfg(test)]
 mod tests {
-    use agterm_proto::command::{EventsCmd, SidebarCmd, ThemeCmd, WindowCmd, WorkspaceCmd, ZmxCmd};
+    use agterm_proto::command::{EventsCmd, HooksCmd, SidebarCmd, ThemeCmd, WindowCmd, WorkspaceCmd, ZmxCmd};
     use serde_json::json;
 
     use super::*;
@@ -668,8 +681,10 @@ mod tests {
         Command::Window(WindowCmd::List),
         Command::Events(EventsCmd::Read),
         Command::Workspace(WorkspaceCmd::New),
-        // app-wide: it needs no window
+        // app-wide: they need no window (a bare `theme.set` returns to ghostty's built-in colors)
         Command::Sidebar(SidebarCmd::FlaggedLayout),
+        Command::Theme(ThemeCmd::Set),
+        Command::Theme(ThemeCmd::List),
     ];
 
     #[test]
@@ -687,7 +702,7 @@ mod tests {
     #[test]
     fn unimplemented_commands_are_refused_by_name() {
         let mut core = core();
-        for cmd in [Command::Theme(ThemeCmd::List), Command::Zmx(ZmxCmd::List)] {
+        for cmd in [Command::Hooks(HooksCmd::List), Command::Zmx(ZmxCmd::List)] {
             let response = core.dispatch(&Request::new(cmd));
             assert!(!response.ok);
             assert_eq!(

@@ -448,6 +448,8 @@ SUBCOMMANDS:
   sidebar                 Sidebar visibility and view mode.
   notify                  Post a desktop notification (default: the active
                           session of the frontmost window).
+  font                    Font size commands.
+  theme                   Theme commands.
   pick                    Open, poll, or cancel a native fuzzy picker.
   ask                     Open, poll, or cancel a themed question dialog.
   version                 Print the version of the app serving the socket.
@@ -3439,6 +3441,79 @@ fn sidebar_commands_send_their_request_and_print_the_reply() -> TestResult {
             (Some(0), stdout.to_owned(), String::new()),
             "{args:?}"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn font_and_theme_commands_send_their_request_and_print_the_reply() -> TestResult {
+    let dir = short_dir()?;
+    let listing = serde_json::json!({"themes": ["Dracula", "Nord"], "theme": "Nord"});
+    let cases: [(&[&str], serde_json::Value, serde_json::Value, &str); 5] = [
+        (
+            &["font", "inc", "--target", "s1"],
+            serde_json::json!({"cmd": "font.inc", "target": "s1"}),
+            serde_json::json!({"id": "s1"}),
+            "ok\n",
+        ),
+        (
+            &["font", "reset", "--pane", "right", "--window", "w1"],
+            serde_json::json!({"cmd": "font.reset", "target": "active", "args": {"pane": "right", "window": "w1"}}),
+            serde_json::json!({"id": "s1"}),
+            "ok\n",
+        ),
+        (
+            &["theme", "list"],
+            serde_json::json!({"cmd": "theme.list"}),
+            listing.clone(),
+            "  default ghostty\n  Dracula\n* Nord\n",
+        ),
+        (
+            &["theme", "set", "Nord"],
+            serde_json::json!({"cmd": "theme.set", "args": {"name": "Nord"}}),
+            listing,
+            "  default ghostty\n  Dracula\n* Nord\n",
+        ),
+        (
+            &["theme", "set", "--light", "Builtin Light", "--dark", "Nord"],
+            serde_json::json!({"cmd": "theme.set", "args": {"light": "Builtin Light", "dark": "Nord"}}),
+            serde_json::json!({"themes": ["Builtin Light", "Nord"], "sync": true, "light": "Builtin Light", "dark": "Nord"}),
+            "syncing with macOS appearance — light: Builtin Light, dark: Nord\n  default ghostty\n* Builtin Light\n* \
+             Nord\n",
+        ),
+    ];
+    for (at, (args, expected, result, stdout)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("{at}.sock"));
+        let _server = scripted(&socket, expected, result)?;
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(0), stdout.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn font_and_theme_refusals_are_usage_errors_before_connecting() -> TestResult {
+    let dir = short_dir()?;
+    // nothing listens here: a connection attempt would exit 1, not 64
+    let socket = dir.path().join("agterm.sock");
+    let cases: [(&[&str], &str); 2] = [
+        (
+            &["font", "inc", "--pane", "middle", "--target", "s1"],
+            "--pane must be left, right, or scratch",
+        ),
+        (
+            &["theme", "set", "Dracula", "--light", "Builtin Light"],
+            "Pass either a NAME or --light, not both.",
+        ),
+    ];
+    for (args, message) in cases {
+        let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, args)?);
+        assert_eq!((code, stdout.as_str()), (Some(64), ""), "{args:?}");
+        assert!(stderr.starts_with(&format!("Error: {message}\n")), "{stderr}");
+        assert!(stderr.contains("\nUsage: agtermctl "), "{stderr}");
     }
     Ok(())
 }

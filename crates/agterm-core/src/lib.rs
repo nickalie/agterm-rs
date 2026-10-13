@@ -35,6 +35,7 @@ pub mod resolve;
 pub mod restart_replay;
 pub mod sidebar_actions;
 pub mod sidebar_drop;
+pub mod theme;
 pub mod watermark;
 pub mod windows;
 pub mod zoom;

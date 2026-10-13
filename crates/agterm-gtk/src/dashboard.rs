@@ -188,7 +188,8 @@ struct FontOverride {
 
 /// The transient font sizes the grid gives its member terminals (upstream's `dashboardFontOverride`): set while a
 /// terminal sits in a cell under a fixed or auto mode, and put back to the size it had when it leaves the grid or the
-/// grid closes. A terminal whose surface is not up yet gets its size on a later render.
+/// grid closes. A terminal whose surface is not up yet gets its size on a later render. While overridden a terminal's
+/// size reports are not persisted, nor is the revert's (see [`TerminalSurface::set_font_override`]).
 #[derive(Default)]
 pub struct FontOverrides {
     by_key: HashMap<SurfaceKey, FontOverride>,
@@ -206,6 +207,7 @@ impl FontOverrides {
             let stays = keep.contains(key);
             if !stays {
                 set_font_size(&entry.terminal, entry.original);
+                entry.terminal.clear_font_override(entry.original);
             }
             stays
         });
@@ -220,10 +222,12 @@ impl FontOverrides {
             Some(entry) if (entry.applied - size).abs() < f64::EPSILON => {}
             Some(entry) => {
                 entry.applied = size;
+                terminal.set_font_override(size);
                 set_font_size(terminal, size);
             }
             None => {
                 let Some(original) = terminal.font_size() else { return };
+                terminal.set_font_override(size);
                 set_font_size(terminal, size);
                 let entry = FontOverride {
                     terminal: terminal.clone(),

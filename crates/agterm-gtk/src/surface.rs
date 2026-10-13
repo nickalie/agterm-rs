@@ -82,6 +82,30 @@ type SearchHandler = Box<dyn Fn(&SearchReport)>;
 type KeystrokeHandler = Box<dyn Fn(StatusKeystroke)>;
 type FocusHandler = Box<dyn Fn()>;
 type NotificationHandler = Box<dyn Fn(&str, &str)>;
+type FontSizeHandler = Box<dyn Fn(f64)>;
+
+/// How far apart two font sizes may be and still count as the same report (upstream's half-point tolerance).
+const FONT_REPORT_TOLERANCE: f64 = 0.5;
+
+/// What a cell-size report does under the dashboard's font override (upstream's `reportFontSize`): whether the live
+/// `size` is reported as the pane's own, and the pending restore left. Nothing is reported while an override is on (its
+/// size is transient); the first report after the override cleared is the revert to `pending`, dropped when it
+/// matches, so restoring the grid's font never pins a session to it.
+#[must_use]
+pub fn font_report(override_size: Option<f64>, pending: Option<f64>, size: f64) -> (bool, Option<f64>) {
+    if override_size.is_some() {
+        return (false, pending);
+    }
+    let revert = pending.is_some_and(|pending| (size - pending).abs() <= FONT_REPORT_TOLERANCE);
+    (!revert, None)
+}
+
+/// The restore a cleared override arms: the size the terminal reverts to, when that is a real change from the
+/// override's (an equal size emits no cell-size report, and a pending restore would swallow a later zoom).
+#[must_use]
+pub fn pending_restore(applied: f64, revert_to: f64) -> Option<f64> {
+    ((applied - revert_to).abs() > FONT_REPORT_TOLERANCE).then_some(revert_to)
+}
 
 struct Inner {
     key: SurfaceKey,
@@ -102,6 +126,7 @@ struct Inner {
     on_focus_in: RefCell<Vec<FocusHandler>>,
     on_created: RefCell<Vec<FocusHandler>>,
     on_notification: RefCell<Vec<NotificationHandler>>,
+    on_font_size: RefCell<Vec<FontSizeHandler>>,
     on_exit: RefCell<Option<ExitHandler>>,
     /// The input method is being reset to end a composition this side already committed or dropped: what it emits
     /// meanwhile is ignored (upstream's `committingComposition`).
@@ -116,6 +141,11 @@ struct Inner {
     /// This terminal's own config overlay (a session background), without the zoom-keeping font size, which is read
     /// when it applies; `None` until one is set, so a terminal that never had one keeps the app config.
     config_overlay: RefCell<Option<String>>,
+    /// The dashboard's transient font size while the terminal sits in a grid cell (upstream's
+    /// `dashboardFontOverride`): its cell-size reports are not the pane's.
+    font_override: Cell<Option<f64>>,
+    /// The size a cleared override reverts to, whose report is dropped (upstream's `pendingFontRestore`).
+    pending_font_restore: Cell<Option<f64>>,
 }
 
 thread_local! {
@@ -135,6 +165,15 @@ pub fn teardown_all() {
     for surface in live.iter().filter_map(TerminalSurface::upgrade) {
         surface.teardown();
     }
+}
+
+/// Every live terminal that is not torn down: the session panes, the overlays and HUDs, the quick terminal.
+pub fn all() -> Vec<TerminalSurface> {
+    let live: Vec<Weak<Inner>> = SURFACES.with(|surfaces| surfaces.borrow().values().cloned().collect());
+    live.iter()
+        .filter_map(TerminalSurface::upgrade)
+        .filter(|surface| !surface.inner.torn_down.get())
+        .collect()
 }
 
 /// How many surfaces the registry holds (each one's area is alive).
@@ -188,6 +227,7 @@ impl TerminalSurface {
             on_focus_in: RefCell::new(Vec::new()),
             on_created: RefCell::new(Vec::new()),
             on_notification: RefCell::new(Vec::new()),
+            on_font_size: RefCell::new(Vec::new()),
             on_exit: RefCell::new(None),
             resetting_im: Cell::new(false),
             exit_handled: Cell::new(false),
@@ -195,6 +235,8 @@ impl TerminalSurface {
             deck_visible: Cell::new(true),
             creation_tick: RefCell::new(None),
             config_overlay: RefCell::new(None),
+            font_override: Cell::new(None),
+            pending_font_restore: Cell::new(None),
         });
         SURFACES.with(|surfaces| surfaces.borrow_mut().insert(inner.key, Rc::downgrade(&inner)));
         let surface = Self { inner, area };
@@ -270,6 +312,54 @@ impl TerminalSurface {
     pub fn desktop_notification(&self, title: &str, body: &str) {
         for handler in self.inner.on_notification.borrow().iter() {
             handler(title, body);
+        }
+    }
+
+    /// Adds a handler called with the terminal's live font size after a cell-size change (a font key or command, a DPI
+    /// change), except while the dashboard overrides it and for the revert when that ends (upstream's
+    /// `onFontSizeChange`).
+    pub fn connect_font_size(&self, handler: impl Fn(f64) + 'static) {
+        self.inner.on_font_size.borrow_mut().push(Box::new(handler));
+    }
+
+    /// libghostty reported a new cell size (`GHOSTTY_ACTION_CELL_SIZE`): a trigger only, the live font size is read and
+    /// reported off the callback, as upstream hops to the main queue.
+    pub fn cell_size_changed(&self) {
+        let weak = self.weak();
+        glib::idle_add_local_once(move || {
+            if let Some(surface) = Self::upgrade(&weak) {
+                surface.report_font_size();
+            }
+        });
+    }
+
+    fn report_font_size(&self) {
+        let Some(size) = self.font_size() else {
+            return;
+        };
+        let (report, pending) = font_report(
+            self.inner.font_override.get(),
+            self.inner.pending_font_restore.get(),
+            size,
+        );
+        self.inner.pending_font_restore.set(pending);
+        if report {
+            for handler in self.inner.on_font_size.borrow().iter() {
+                handler(size);
+            }
+        }
+    }
+
+    /// The dashboard sets this terminal's font to its transient `size`: reports stop being the pane's.
+    pub fn set_font_override(&self, size: f64) {
+        self.inner.font_override.set(Some(size));
+        self.inner.pending_font_restore.set(None);
+    }
+
+    /// The dashboard gave the terminal back its own size `revert_to`: the report of that revert is dropped.
+    pub fn clear_font_override(&self, revert_to: f64) {
+        if let Some(applied) = self.inner.font_override.take() {
+            self.inner.pending_font_restore.set(pending_restore(applied, revert_to));
         }
     }
 
@@ -740,6 +830,29 @@ impl TerminalSurface {
         self.apply_config_overlay();
     }
 
+    /// The app config was rebuilt (a theme change, a settings change, an appearance flip; upstream's
+    /// `GhosttyApp.reloadConfig` and `reapplySessionConfigIfNeeded`): the terminal takes the color scheme, then its own
+    /// overlay rebuilt over the new files with its live size, or `config` itself. With `keep_zoom` a terminal without an
+    /// overlay keeps its live size too; otherwise libghostty keeps only a size the user stepped. A terminal not created
+    /// yet takes the new config when it is.
+    pub fn reload_config(&self, config: &agterm_ghostty::Config, scheme: agterm_ghostty::ColorScheme, keep_zoom: bool) {
+        if !self.is_realized() {
+            return;
+        }
+        if self.area.is_realized() {
+            self.area.make_current();
+        }
+        self.with_surface(|surface| surface.set_color_scheme(scheme));
+        if self.inner.config_overlay.borrow().is_some() {
+            self.apply_config_overlay();
+            return;
+        }
+        let kept = self.font_size().filter(|_| keep_zoom).and_then(|size| {
+            ghostty_app::config_with_overlay(&agterm_core::watermark::overlay_text(None, None, Some(size), 1.0))
+        });
+        self.with_surface(|surface| surface.update_config(kept.as_ref().unwrap_or(config)));
+    }
+
     /// Pushes the stored overlay to the surface, if both exist; libghostty clones the config, so it is freed here.
     fn apply_config_overlay(&self) {
         let Some(overlay) = self.inner.config_overlay.borrow().clone() else {
@@ -1054,6 +1167,28 @@ fn unshifted_codepoint(widget: &impl IsA<gtk::Widget>, event: &gdk::KeyEvent, ke
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_report_under_the_dashboard_override_is_not_the_panes() {
+        assert_eq!(font_report(Some(8.0), None, 8.0), (false, None));
+        // the pending restore waits for the override to clear
+        assert_eq!(font_report(Some(8.0), Some(13.0), 8.0), (false, Some(13.0)));
+        assert_eq!(font_report(None, None, 14.0), (true, None));
+    }
+
+    #[test]
+    fn the_revert_report_is_dropped_once_and_a_later_zoom_persists() {
+        assert_eq!(font_report(None, Some(13.0), 13.0), (false, None));
+        assert_eq!(font_report(None, Some(13.0), 13.4), (false, None));
+        // a report that is not the revert clears the restore and counts
+        assert_eq!(font_report(None, Some(13.0), 15.0), (true, None));
+    }
+
+    #[test]
+    fn a_cleared_override_arms_a_restore_only_for_a_real_change() {
+        assert_eq!(pending_restore(8.0, 13.0), Some(13.0));
+        assert_eq!(pending_restore(13.2, 13.0), None);
+    }
 
     #[test]
     fn the_area_owns_the_surface_without_a_cycle() {

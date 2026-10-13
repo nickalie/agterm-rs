@@ -86,6 +86,29 @@ impl sealed::Sealed for Color {
     }
 }
 
+/// The 256-color palette, as libghostty's `ghostty_config_palette_s`: the 16 ANSI colors first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Palette(pub [Color; 256]);
+
+impl Palette {
+    /// The 16 ANSI colors by slot.
+    #[must_use]
+    pub fn ansi(&self) -> &[Color] {
+        &self.0[..16]
+    }
+}
+
+impl ConfigValue for Palette {}
+impl sealed::Sealed for Palette {
+    fn decode(slot: &Slot) -> Self {
+        let bytes: [u8; 768] = slot.head();
+        Self(std::array::from_fn(|index| {
+            let [r, g, b] = [bytes[index * 3], bytes[index * 3 + 1], bytes[index * 3 + 2]];
+            Color { r, g, b }
+        }))
+    }
+}
+
 /// A configuration key bound to the type libghostty reports it as. The predefined ones are in [`keys`].
 #[derive(Debug)]
 pub struct ConfigKey<T> {
@@ -127,6 +150,8 @@ pub mod keys {
     pub const FONT_SIZE: ConfigKey<f32> = ConfigKey::new("font-size");
     pub const BACKGROUND: ConfigKey<Color> = ConfigKey::new("background");
     pub const FOREGROUND: ConfigKey<Color> = ConfigKey::new("foreground");
+    /// The 256-color palette; its first 16 entries are the theme's ANSI colors.
+    pub const PALETTE: ConfigKey<super::Palette> = ConfigKey::new("palette");
     pub const CURSOR_OPACITY: ConfigKey<f64> = ConfigKey::new("cursor-opacity");
     /// Optional in ghostty: unset reads as `None`.
     pub const CURSOR_STYLE_BLINK: ConfigKey<bool> = ConfigKey::new("cursor-style-blink");

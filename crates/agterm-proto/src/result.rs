@@ -36,6 +36,12 @@ pub struct ControlResult {
     /// How many things a batch mutation actually changed (`session.close`, `session.move` with several targets).
     #[serde(default)]
     pub affected: Option<i64>,
+    /// `theme.set`/`theme.list`: the single theme, absent for ghostty's built-in and while following the appearance.
+    #[serde(default)]
+    pub theme: Option<String>,
+    /// `theme.list`: the bundled theme names.
+    #[serde(default)]
+    pub themes: Option<Vec<String>>,
     /// `session.resize`: the applied, clamped primary-pane fraction.
     #[serde(default)]
     pub ratio: Option<f64>,
@@ -45,6 +51,15 @@ pub struct ControlResult {
     /// The pane a command read or typed into (`left|right|scratch`).
     #[serde(default)]
     pub pane: Option<String>,
+    /// `theme.set`/`theme.list`: whether the theme follows the system appearance.
+    #[serde(default)]
+    pub sync: Option<bool>,
+    /// `theme.set`/`theme.list` while following the appearance: the light slot.
+    #[serde(default)]
+    pub light: Option<String>,
+    /// `theme.set`/`theme.list` while following the appearance: the dark slot.
+    #[serde(default)]
+    pub dark: Option<String>,
     /// `events.read`: a page of the event ring, also on a cursor failure (then the ring's current anchor).
     #[serde(default)]
     pub events: Option<EventBatch>,
@@ -337,6 +352,23 @@ mod tests {
         assert_eq!(
             decoded.ask.and_then(|ask| ask.reason).as_deref(),
             Some("presentation-lost")
+        );
+    }
+
+    #[test]
+    fn theme_fields_keep_upstreams_order() {
+        let result = ControlResult {
+            sidebar_width: Some(200.0),
+            dark: Some("Nord".to_owned()),
+            light: Some("Dracula".to_owned()),
+            sync: Some(true),
+            themes: Some(vec!["Dracula".to_owned(), "Nord".to_owned()]),
+            theme: Some("Nord".to_owned()),
+            ..ControlResult::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&result).unwrap(),
+            r#"{"theme":"Nord","themes":["Dracula","Nord"],"sidebarWidth":200.0,"sync":true,"light":"Dracula","dark":"Nord"}"#
         );
     }
 

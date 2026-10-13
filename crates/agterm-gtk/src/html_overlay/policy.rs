@@ -1,7 +1,8 @@
 //! The page's `WebKitGTK` specifics as pure functions: how a `WebKitGTK` policy decision maps onto the shared navigation
 //! policy, how a load's events settle into the state the model reads (upstream's `loadPending`/`committed` in
 //! `HtmlOverlayPage`), what the page reports as shown (upstream's `pageURL`, `browserURL`, `urlChanged`), the grant's
-//! own URI scheme, and the strip's buttons (upstream's `HtmlOverlayView.strip`).
+//! own URI scheme, the strip's buttons (upstream's `HtmlOverlayView.strip`), and how a page follows a changed theme
+//! (upstream's `applyTheme`).
 //!
 //! `WebKitGTK` differs from `WKWebView` in two ways that shape this (the Linux fork met both): a navigation action names
 //! no target frame, so the main frame's origin is checked again on its response, which does say whether it is the
@@ -11,7 +12,9 @@
 use std::path::{Path, PathBuf};
 
 use agterm_core::html::navigation::file_path;
-use agterm_core::html::{HtmlNavigationAction, HtmlNavigationTarget, HtmlOverlay, HtmlPageInfo, HtmlSource};
+use agterm_core::html::{
+    HtmlNavigationAction, HtmlNavigationTarget, HtmlOverlay, HtmlOverlayTheme, HtmlPageInfo, HtmlSource,
+};
 use url::Url;
 
 /// The scheme a granted file page loads through: every read passes the handler, which answers only inside the grant,
@@ -327,6 +330,30 @@ pub fn identity_tooltip(overlay: &HtmlOverlay) -> String {
         .current
         .as_ref()
         .map_or_else(|| overlay.source.text(), |current| current.page.clone())
+}
+
+/// What a page does when the terminal theme may have changed (upstream's `applyTheme`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeChange {
+    /// The theme is the one the page already has.
+    Unchanged,
+    /// The page's scripts are installed again with the new theme, which its next load wears: a URL page.
+    Reinstall,
+    /// The scripts are installed again and the page reloads what it shows to wear the theme now: a themed (file) page.
+    ReinstallAndReload,
+}
+
+/// How a page showing `current` follows `next`; `themed` is a file page. Nothing is evaluated in the live document:
+/// script the app runs there carries a user gesture the page's own code could borrow.
+#[must_use]
+pub fn theme_change(current: &HtmlOverlayTheme, next: &HtmlOverlayTheme, themed: bool) -> ThemeChange {
+    if current == next {
+        ThemeChange::Unchanged
+    } else if themed {
+        ThemeChange::ReinstallAndReload
+    } else {
+        ThemeChange::Reinstall
+    }
 }
 
 #[cfg(test)]
@@ -649,5 +676,26 @@ mod tests {
         assert_eq!(identity_tooltip(&page), "https://example.com/start");
         page.current = Some(page_info(&url("https://example.com/next"), None, false, false));
         assert_eq!(identity_tooltip(&page), "https://example.com/next");
+    }
+
+    #[test]
+    fn a_changed_theme_reinstalls_and_reloads_only_a_file_page() {
+        let palette: Vec<String> = (0..16).map(|slot| format!("#{slot:02x}0000")).collect();
+        let dark = HtmlOverlayTheme::new("#101010", "#eeeeee", true, &palette);
+        let light = HtmlOverlayTheme::new("#fafafa", "#111111", false, &palette);
+        assert_eq!(theme_change(&dark, &dark.clone(), true), ThemeChange::Unchanged);
+        assert_eq!(theme_change(&dark, &dark.clone(), false), ThemeChange::Unchanged);
+        assert_eq!(theme_change(&dark, &light, true), ThemeChange::ReinstallAndReload);
+        assert_eq!(
+            theme_change(&dark, &light, false),
+            ThemeChange::Reinstall,
+            "a URL page gets the new variables at its next load only"
+        );
+        let recolored = HtmlOverlayTheme::new("#101010", "#eeeeee", true, &[]);
+        assert_eq!(
+            theme_change(&dark, &recolored, false),
+            ThemeChange::Reinstall,
+            "a palette change alone is a change"
+        );
     }
 }

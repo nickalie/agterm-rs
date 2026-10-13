@@ -7,6 +7,9 @@
 //! page in its session's [`crate::split::PaneStack`] over the pane it covers, mounted by `crate::overlay`; a web view,
 //! unlike a terminal's GL area, may change parent, which only a session moving to another window asks for.
 //!
+//! Every page is drawn in the terminal's colors and its scripts carry them as the page's theme; [`refresh_themes`]
+//! brings them up to date after a config reload or theme change.
+//!
 //! The registry is the core's [`agterm_core::html::HtmlHost`] ([`install`]). Without the `html` cargo feature none is
 //! installed, so the core refuses every page and nothing here mounts.
 
@@ -24,7 +27,7 @@ mod registry;
 #[cfg(all(test, feature = "html"))]
 pub(crate) use registry::on_screen;
 #[cfg(feature = "html")]
-pub use registry::{answer, apply, focus_target, install, mount, settle};
+pub use registry::{answer, apply, focus_target, install, mount, refresh_themes, settle};
 
 #[cfg(not(feature = "html"))]
 mod unavailable {
@@ -53,7 +56,10 @@ mod unavailable {
     }
 
     pub fn settle(_core: &mut Core) {}
+
+    /// No page follows the theme.
+    pub fn refresh_themes() {}
 }
 
 #[cfg(not(feature = "html"))]
-pub use unavailable::{apply, focus_target, install, mount, settle};
+pub use unavailable::{apply, focus_target, install, mount, refresh_themes, settle};

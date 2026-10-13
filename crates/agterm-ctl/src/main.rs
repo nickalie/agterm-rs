@@ -6,6 +6,7 @@ mod ask;
 mod client;
 mod dashboard;
 mod events;
+mod font;
 mod modal;
 mod notify;
 mod output;
@@ -24,6 +25,7 @@ mod session_restore;
 mod sidebar;
 mod socket;
 mod surface;
+mod theme;
 mod tree;
 mod usage;
 mod version;
@@ -70,6 +72,8 @@ enum Command {
     Quick(quick::Quick),
     Sidebar(sidebar::Sidebar),
     Notify(notify::Notify),
+    Font(font::Font),
+    Theme(theme::Theme),
     Pick(pick::Pick),
     Ask(ask::Ask),
     Version(version::Version),
@@ -89,6 +93,8 @@ impl Command {
             Self::Quick(command) => command.check(),
             Self::Sidebar(command) => command.check(),
             Self::Notify(command) => command.validate(),
+            Self::Font(command) => command.check(),
+            Self::Theme(command) => command.check(),
             Self::Ask(command) => command.check(),
             Self::Pick(_) | Self::Version(_) => Ok(()),
         }
@@ -106,6 +112,8 @@ impl Command {
             Self::Quick(command) => command.execute(env),
             Self::Sidebar(command) => command.execute(env),
             Self::Notify(command) => command.default_run(env),
+            Self::Font(command) => command.execute(env),
+            Self::Theme(command) => command.execute(env),
             Self::Pick(command) => command.execute(env),
             Self::Ask(command) => command.execute(env),
             Self::Version(command) => command.run(env),

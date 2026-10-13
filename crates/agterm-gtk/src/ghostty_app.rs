@@ -5,7 +5,7 @@
 //! the tick, so a wakeup during it schedules another instead of being lost. Idle priority keeps a stream of ticks from
 //! starving GTK's input and redraw sources.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -35,14 +35,28 @@ const SHELL_FEATURES: [&str; 6] = ["cursor", "sudo", "title", "ssh-env", "ssh-te
 static RESOURCES_RESOLVED: OnceLock<bool> = OnceLock::new();
 static TICK_SCHEDULED: AtomicBool = AtomicBool::new(false);
 
-/// The running app and what building its config learned.
+/// The running app and what building its config learned. Main thread only; replaced in place by a reload.
 struct GhosttyApp {
     app: App,
-    /// The app's config, read for the colors a rendered watermark defaults to; kept for the reloads to come.
-    config: Config,
+    /// The app's config as built from the files.
+    config: RefCell<Config>,
+    /// The config libghostty applied last (the app-target `CONFIG_CHANGE` clone): a dual `theme = light:…,dark:…`
+    /// resolved to the side on screen, which `config` cannot show (it reads the light side). The terminal colors are
+    /// read from it when there is one.
+    applied: RefCell<Option<Config>>,
     /// The user's static `title`, applied by agterm in place of program titles (libghostty would drop them all).
-    static_title: Option<String>,
-    scheme: ColorScheme,
+    static_title: RefCell<Option<String>>,
+    scheme: Cell<ColorScheme>,
+}
+
+impl GhosttyApp {
+    /// Runs `read` on the config the terminals render: the applied one, else the built one.
+    fn read<R>(&self, read: impl FnOnce(&Config) -> R) -> R {
+        match self.applied.borrow().as_ref() {
+            Some(applied) => read(applied),
+            None => read(&self.config.borrow()),
+        }
+    }
 }
 
 thread_local! {
@@ -166,6 +180,11 @@ fn build_config_with(
     Ok((config, static_title))
 }
 
+/// The bundled themes' directory: `themes` beside the resolved resources (staged, vendored or system).
+pub fn themes_dir() -> Option<PathBuf> {
+    std::env::var_os(RESOURCES_ENV).map(|dir| PathBuf::from(dir).join("themes"))
+}
+
 /// Create the app once, on the main thread. A dark launch re-sides the app config before any surface exists
 /// (upstream `syncLaunchColorScheme`): a surface born under a scheme the app config does not match is rebuilt from the
 /// config files alone and loses its environment, initial input and command (#260).
@@ -180,19 +199,61 @@ pub fn start(dark: bool) -> Result<(), agterm_ghostty::Error> {
     let resolved = RESOURCES_RESOLVED.get().copied().unwrap_or(false);
     let (config, static_title) = build_config(&ProcessEnv, resolved)?;
     let app = App::new(&config, Rc::new(GtkRuntime), Box::new(schedule_tick))?;
-    let scheme = if dark { ColorScheme::Dark } else { ColorScheme::Light };
-    if dark {
-        app.set_color_scheme(scheme);
-        app.update_config(&config);
-    }
-    let ghostty = GhosttyApp {
+    let scheme = scheme_of(dark);
+    let ghostty = Rc::new(GhosttyApp {
         app,
-        config,
-        static_title,
-        scheme,
-    };
-    GHOSTTY.with(|slot| *slot.borrow_mut() = Some(Rc::new(ghostty)));
+        config: RefCell::new(config),
+        applied: RefCell::new(None),
+        static_title: RefCell::new(static_title),
+        scheme: Cell::new(scheme),
+    });
+    GHOSTTY.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&ghostty)));
+    // after the app is current, so the applied config's CONFIG_CHANGE lands
+    if dark {
+        ghostty.app.set_color_scheme(scheme);
+        let config = ghostty.config.borrow().try_clone()?;
+        ghostty.app.update_config(&config);
+    }
     Ok(())
+}
+
+fn scheme_of(dark: bool) -> ColorScheme {
+    if dark { ColorScheme::Dark } else { ColorScheme::Light }
+}
+
+/// Whether the terminals render the dark side of a dual theme.
+pub fn is_dark() -> bool {
+    current().is_some_and(|ghostty| ghostty.scheme.get() == ColorScheme::Dark)
+}
+
+/// Rebuilds the app config from its files and hands it to the app and to every live terminal under the color scheme
+/// `dark` picks (upstream's `GhosttyApp.reloadConfig`): the scheme first, as libghostty resolves a dual theme against
+/// it, then the app, then each terminal with its own overlay re-applied. `keep_zoom` keeps every terminal's live font
+/// size (the automatic appearance flip); an explicit reload leaves libghostty to reset the sizes the user did not step.
+/// The static title is re-read and re-applied. Returns the rebuilt config's diagnostic count; `None` when there is no
+/// app or the config could not be built.
+pub fn reload_config(dark: bool, keep_zoom: bool) -> Option<usize> {
+    let ghostty = current()?;
+    let resolved = RESOURCES_RESOLVED.get().copied().unwrap_or(false);
+    let (config, static_title) = build_config(&ProcessEnv, resolved)
+        .inspect_err(|err| tracing::warn!(%err, "could not rebuild the ghostty config"))
+        .ok()?;
+    let scheme = scheme_of(dark);
+    ghostty.scheme.set(scheme);
+    ghostty.app.set_color_scheme(scheme);
+    ghostty.applied.borrow_mut().take();
+    ghostty.app.update_config(&config);
+    let count = config.diagnostics().len();
+    *ghostty.config.borrow_mut() = config;
+    ghostty.static_title.borrow_mut().clone_from(&static_title);
+    let config = ghostty.config.borrow();
+    for terminal in surface::all() {
+        terminal.reload_config(&config, scheme, keep_zoom);
+        if let Some(title) = &static_title {
+            terminal.apply_title(title);
+        }
+    }
+    Some(count)
 }
 
 /// Release the app; libghostty frees it once its last surface is gone.
@@ -208,13 +269,13 @@ pub fn shutdown() {
 pub fn create_surface(key: SurfaceKey, options: &SurfaceOptions<'_>) -> Result<Surface, agterm_ghostty::Error> {
     let ghostty = current().ok_or(agterm_ghostty::Error::Null("ghostty app"))?;
     let surface = Surface::new(&ghostty.app, key, options)?;
-    surface.set_color_scheme(ghostty.scheme);
+    surface.set_color_scheme(ghostty.scheme.get());
     Ok(surface)
 }
 
 /// The user's static title, when the config sets one.
 pub fn static_title() -> Option<String> {
-    current().and_then(|ghostty| ghostty.static_title.clone())
+    current().and_then(|ghostty| ghostty.static_title.borrow().clone())
 }
 
 /// A config for one surface: the app's stack with `overlay` loaded last (upstream's `configWithOverlay`), for
@@ -229,18 +290,33 @@ pub fn config_with_overlay(overlay: &str) -> Option<Config> {
 
 /// The terminals' default foreground color, from the app config.
 pub fn foreground_color() -> Option<agterm_ghostty::Color> {
-    current().and_then(|ghostty| ghostty.config.get(keys::FOREGROUND))
+    current().and_then(|ghostty| ghostty.read(|config| config.get(keys::FOREGROUND)))
 }
 
 /// The terminals' default background color, from the app config.
 pub fn background_color() -> Option<agterm_ghostty::Color> {
-    current().and_then(|ghostty| ghostty.config.get(keys::BACKGROUND))
+    current().and_then(|ghostty| ghostty.read(|config| config.get(keys::BACKGROUND)))
+}
+
+/// The theme's 16 ANSI colors as `#rrggbb` by slot (upstream's `GhosttyApp.terminalPalette`), from the applied app
+/// config; empty when there is none.
+pub fn palette() -> Vec<String> {
+    current()
+        .and_then(|ghostty| ghostty.read(|config| config.get(keys::PALETTE)))
+        .map(|palette| {
+            palette
+                .ansi()
+                .iter()
+                .map(|color| format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The terminals' base font size in points, from the app config.
 pub fn base_font_size() -> Option<f64> {
     current()
-        .and_then(|ghostty| ghostty.config.get(keys::FONT_SIZE))
+        .and_then(|ghostty| ghostty.read(|config| config.get(keys::FONT_SIZE)))
         .map(f64::from)
         .filter(|size| *size > 0.0)
 }
@@ -332,8 +408,21 @@ fn handle_action(target: Target, action: Action) -> bool {
             true
         }
         Action::ShowChildExited { .. } => surface.is_some_and(|surface| surface.child_exited()),
-        // upstream keeps the applied app config for the chrome colors; nothing reads them yet
-        Action::ConfigChange(_) => true,
+        // the app's applied config, a dual theme resolved to the side on screen: the terminal colors come from it
+        Action::ConfigChange(config) => {
+            if matches!(target, Target::App)
+                && let (Some(ghostty), Some(config)) = (current(), config)
+            {
+                *ghostty.applied.borrow_mut() = Some(config);
+            }
+            true
+        }
+        Action::CellSize { .. } => {
+            if let Some(surface) = surface {
+                surface.cell_size_changed();
+            }
+            true
+        }
         Action::OpenUrl { url, .. } => {
             // always consumed: unhandled, libghostty would open any scheme itself. Opened off the callback, as
             // upstream's main-queue hop, through the link policy.

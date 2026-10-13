@@ -121,7 +121,7 @@ pub(crate) fn run_binding(session: &mut Session, pane: StatusPane, action: &str)
 }
 
 /// A named pane that must exist: the split pane and the scratch need a terminal in their slots.
-fn existing_pane(session: &Session, pane: StatusPane) -> Result<StatusPane, ControlError> {
+pub(crate) fn existing_pane(session: &Session, pane: StatusPane) -> Result<StatusPane, ControlError> {
     match pane {
         StatusPane::Left => Ok(StatusPane::Left),
         StatusPane::Right if session.split_surface.is_present() => Ok(StatusPane::Right),

@@ -3,9 +3,9 @@
 #
 #   bin/{agterm,agtermctl,zmx}  lib/libghostty.so  share/ghostty/{themes,shell-integration}  share/terminfo
 #
-# from cargo's target dir and the vendored prefixes. Binaries are staged when they exist (agterm and agtermctl
-# appear with their crates, zmx with scripts/build-zmx.sh); libghostty and its resources are required. The
-# binaries find lib/ through their $ORIGIN/../lib rpath.
+# from cargo's target dir and the vendored prefixes, plus agterm's own themes from build/themes. Binaries are
+# staged when they exist (agterm and agtermctl appear with their crates, zmx with scripts/build-zmx.sh); libghostty
+# and its resources are required. The binaries find lib/ through their $ORIGIN/../lib rpath.
 #
 # Usage: scripts/stage.sh DESTINATION [--profile release|debug]   (default: release)
 set -euo pipefail
@@ -52,4 +52,7 @@ if [[ -x "$NATIVE_ROOT/scripts/build-zmx.sh" ]]; then
 fi
 
 verify_ghostty_resources "$DEST/share" >&2
+# after the check of Ghostty's own catalog: agterm's bundled theme(s), the seeded default `agterm` among them
+# (upstream's stage_custom_themes)
+install -m644 "$NATIVE_ROOT"/build/themes/* "$DEST/share/ghostty/themes/"
 echo "→ staged ${staged[*]:-no binaries} + libghostty ($PROFILE) into $DEST" >&2

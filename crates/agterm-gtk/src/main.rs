@@ -32,6 +32,7 @@ mod split;
 mod state;
 mod status_glyph;
 mod surface;
+mod theme;
 mod window;
 mod windows;
 

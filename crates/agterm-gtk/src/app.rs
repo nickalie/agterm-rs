@@ -44,6 +44,7 @@ const CAPABILITIES: &[&str] = &[
     "pick-names-pending-ask",
     "overlay-size-validated",
     "sidebar-min-width",
+    "theme-slots-by-sync",
 ];
 
 /// `AGTERM_APP_ID` when it is a valid application id, else the fork's.
@@ -124,12 +125,6 @@ pub fn activate(app: &adw::Application) {
     if running {
         return;
     }
-    let dark = adw::StyleManager::default().is_dark();
-    if let Err(err) = ghostty_app::start(dark) {
-        tracing::error!(%err, "libghostty did not start");
-        app.quit();
-        return;
-    }
     let identity = identity();
     let mut server = ControlServer::new(control_socket(&ProcessEnv));
     let context = PaneContext {
@@ -143,6 +138,17 @@ pub fn activate(app: &adw::Application) {
         },
         load_state(&ProcessEnv),
     );
+    // the settings' ghostty config goes out before libghostty loads it, so the first terminal has the theme
+    core.set_theme_paths(
+        ghostty_app::themes_dir(),
+        Some(paths::ghostty_settings_config_path(&ProcessEnv)),
+    );
+    core.write_settings_config();
+    if let Err(err) = ghostty_app::start(crate::theme::desktop_is_dark()) {
+        tracing::error!(%err, "libghostty did not start");
+        app.quit();
+        return;
+    }
     core.set_reveal_handler(Box::new(reveal_in_file_manager));
     if let Some(helper) = crate::hud::install_helper(&paths::state_dir(&ProcessEnv)) {
         core.set_hud_helper(helper, paths::hud_body_dir(&ProcessEnv));
@@ -155,6 +161,7 @@ pub fn activate(app: &adw::Application) {
     let poster = Arc::downgrade(&posting);
     // not a task: no task runs before the shell exists; every open window renders before it is presented
     crate::notifications::install_actions(app, poster.clone());
+    crate::theme::follow_appearance(&poster);
     state.borrow_mut().attach(poster, Windows::new(app.clone(), context));
     if let Err(err) = server.start(posting, |state: &mut AppState, request: Request| {
         state.handle_request(&request)
@@ -271,7 +278,8 @@ mod tests {
                 "modal-blocks-covers",
                 "pick-names-pending-ask",
                 "overlay-size-validated",
-                "sidebar-min-width"
+                "sidebar-min-width",
+                "theme-slots-by-sync"
             ]
         );
     }

@@ -136,6 +136,8 @@ pub struct AppState {
     quitting: bool,
     /// The app's one quick terminal panel.
     quick: QuickPanel,
+    /// The terminal theme's side as last applied.
+    appearance: crate::theme::Appearance,
 }
 
 impl AppState {
@@ -147,6 +149,7 @@ impl AppState {
             windows: None,
             quitting: false,
             quick: QuickPanel::default(),
+            appearance: crate::theme::Appearance::new(crate::ghostty_app::is_dark()),
         }
     }
 
@@ -176,6 +179,10 @@ impl AppState {
         }
         // before the windows sync: a released page's panel leaves its parent first
         crate::html_overlay::settle(&mut self.core);
+        // before the windows sync too, which re-renders what follows the terminal colors (text backgrounds, asks)
+        if self.core.take_config_reload() {
+            self.reload_config(false);
+        }
         let sounds = self.core.take_status_sounds();
         let banners = self.core.take_notifications();
         match self.windows.as_mut() {
@@ -194,6 +201,28 @@ impl AppState {
         self.arm_auto_follow();
         self.arm_hud_timers();
         self.arm_job_expiries();
+    }
+
+    /// Rebuilds the ghostty config and feeds it to the app and every terminal on the desktop's side now (upstream's
+    /// `GhosttyApp.reloadConfig`), the side recorded on every path; `keep_zoom` for the automatic appearance flip. The
+    /// pages take the new colors; the next render re-applies what else follows them. The rebuilt config's diagnostic
+    /// count, `None` when it could not be built.
+    pub fn reload_config(&mut self, keep_zoom: bool) -> Option<usize> {
+        let dark = crate::theme::desktop_is_dark();
+        let count = crate::ghostty_app::reload_config(dark, keep_zoom);
+        self.appearance.last_applied_dark = dark;
+        crate::html_overlay::refresh_themes();
+        count
+    }
+
+    /// The desktop's appearance settled on `dark` (upstream's `SettingsModel.appearanceChanged`): while following with
+    /// both slots set, a new side re-feeds the config, every terminal keeping its font zoom.
+    pub fn appearance_changed(&mut self, dark: bool) {
+        if self.quitting || !self.appearance.flip_reloads(self.core.settings(), dark) {
+            return;
+        }
+        self.reload_config(true);
+        self.settle();
     }
 
     /// Arms the HUD auto-hides the core asked for since the last arm; each lands in [`Core::fire_hud_hide`].

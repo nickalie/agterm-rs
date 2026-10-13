@@ -137,6 +137,16 @@ pub fn settle(core: &mut Core) {
     }
 }
 
+/// Every page follows the terminal's current colors (upstream's `refreshThemes`, run on `.agtermAppearanceChanged`):
+/// its panel is redrawn and a changed theme reaches its scripts. Call it on the GTK thread after every config reload
+/// or theme change.
+pub fn refresh_themes() {
+    let pages = with(|registry| registry.pages.values().cloned().collect::<Vec<_>>());
+    for page in pages {
+        page.apply_theme();
+    }
+}
+
 /// A history step or hand-off on page `id` (upstream's `navigate`), shared by the toolbar and the control API.
 pub(super) fn navigate(id: Uuid, navigation: HtmlNavigation) -> Result<(), String> {
     page(id)
