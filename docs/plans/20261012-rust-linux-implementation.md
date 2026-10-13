@@ -1310,14 +1310,25 @@ wlr-layer-shell surface.
 
 **Files:**
 - Modify: `crates/agterm-ctl/src/*`
+- ➕ Create: `crates/agterm-ctl/src/{clipboard,terminfo,local}.rs`, `crates/agterm-ctl/src/terminfo/tests.rs`,
+  `crates/agterm-ctl/tests/cli_local.rs`; Modify: `Cargo.toml`, `crates/agterm-ctl/Cargo.toml` (`base64` for the
+  OSC 52 payload, `serde_norway` to read the catalog in a test)
 
-- [ ] the CLI-only commands (`clipboard set`, `terminfo install`; `ClipboardCommands.swift`, `TerminfoCommands.swift`)
-      and any subcommand still missing from the 114 in the catalog
-- [ ] output formats and exit codes still red in `tests/cli`
-- [ ] write tests: unit tests for formatting helpers and argument validation
-- [ ] write tests: cli-only commands against an in-process server
-- [ ] CI: the zsh job gains `--must-pass live-sessions`
-- [ ] gate: full run; every `tests/cli` test that passes in the reference-macos junit is in the ratchet
+- [x] the CLI-only commands (`clipboard set`, `terminfo install`; `ClipboardCommands.swift`, `TerminfoCommands.swift`)
+      and any subcommand still missing from the 114 in the catalog (partial: every catalog subcommand but the `zmx`
+      group, which Tasks 28/29 add; a unit test holds the command tree equal to the catalog's `cli` minus `zmx *`)
+- [x] output formats and exit codes still red in `tests/cli` (partial: those outside the zmx group and Live/remote
+      sessions; the rest wait for Tasks 28–30)
+- [x] write tests: unit tests for formatting helpers and argument validation
+- [x] write tests: cli-only commands against an in-process server
+- [ ] CI: the zsh job gains `--must-pass live-sessions` (waits for Tasks 28/29 — follow-up after they merge)
+- [ ] gate: full run; every `tests/cli` test that passes in the reference-macos junit is in the ratchet (every
+      non-zmx, non-live, non-remote cli id is in the ratchet; still red, owned by Tasks 28–30:
+      `test_cli_only.py::test_clipboard_set_reaches_every_terminal_attached_to_the_pane` (Live sessions, Task 28),
+      `test_cli_output.py::test_session_commands_refused_outside_their_state` (`zmx present`, Task 29),
+      `test_zmx_reads_outside_live` (Tasks 28/29), `test_zmx_commands_refused_before_acting` (Tasks 28–30),
+      `test_live_pane_commands` (Task 28), `test_live_present_bridges_the_stream` (Task 29),
+      `test_live_run_job_runs_the_handed_over_program` (Task 29))
 
 ### Task 33: Settings dialog and first run
 

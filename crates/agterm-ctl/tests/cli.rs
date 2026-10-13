@@ -458,6 +458,8 @@ SUBCOMMANDS:
   pick                    Open, poll, or cancel a native fuzzy picker.
   ask                     Open, poll, or cancel a themed question dialog.
   restore                 Restore-running-command commands.
+  terminfo                The terminal's terminfo entry on other hosts.
+  clipboard               The clipboard of the terminals showing this pane.
   version                 Print the version of the app serving the socket.
 
   See 'agtermctl help <subcommand>' for detailed help.

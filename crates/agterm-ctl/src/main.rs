@@ -5,12 +5,14 @@
 mod ask;
 mod browser;
 mod client;
+mod clipboard;
 mod config;
 mod dashboard;
 mod events;
 mod font;
 mod hooks;
 mod keymap;
+mod local;
 mod modal;
 mod notify;
 mod output;
@@ -30,6 +32,7 @@ mod session_restore;
 mod sidebar;
 mod socket;
 mod surface;
+mod terminfo;
 mod theme;
 mod tree;
 mod usage;
@@ -86,6 +89,8 @@ enum Command {
     Pick(pick::Pick),
     Ask(ask::Ask),
     Restore(restore::Restore),
+    Terminfo(terminfo::Terminfo),
+    Clipboard(clipboard::Clipboard),
     Version(version::Version),
 }
 
@@ -111,7 +116,8 @@ impl Command {
             Self::Theme(command) => command.check(),
             Self::Ask(command) => command.check(),
             Self::Restore(command) => command.check(),
-            Self::Pick(_) | Self::Version(_) => Ok(()),
+            Self::Terminfo(command) => command.check(),
+            Self::Pick(_) | Self::Clipboard(_) | Self::Version(_) => Ok(()),
         }
     }
 
@@ -136,6 +142,8 @@ impl Command {
             Self::Pick(command) => command.execute(env),
             Self::Ask(command) => command.execute(env),
             Self::Restore(command) => command.execute(env),
+            Self::Terminfo(command) => command.execute(),
+            Self::Clipboard(command) => command.execute(),
             Self::Version(command) => command.run(env),
         }
     }
@@ -369,6 +377,53 @@ mod tests {
     #[test]
     fn the_command_tree_is_consistent() {
         Agtermctl::command().debug_assert();
+    }
+
+    /// The catalog names of `command`'s subcommands below `path`: a leaf's path, except that a group's default
+    /// subcommand is named by the group's own path (`pick open` is `pick`).
+    fn catalog_names(command: &clap::Command, path: &[&str], names: &mut std::collections::BTreeSet<String>) {
+        for sub in command.get_subcommands() {
+            let mut sub_path = path.to_vec();
+            sub_path.push(sub.get_name());
+            if sub.has_subcommands() {
+                catalog_names(sub, &sub_path, names);
+            } else if usage::default_subcommand(path) == Some(sub.get_name()) {
+                names.insert(path.join(" "));
+            } else {
+                names.insert(sub_path.join(" "));
+            }
+        }
+    }
+
+    #[test]
+    fn the_command_tree_is_the_catalogs_cli() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/catalog.yaml");
+        let catalog: serde_norway::Value = serde_norway::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let cli = catalog["cli"].as_mapping().unwrap();
+        // the zmx group comes with Live and remote sessions (plan Tasks 28 and 29), which drop this exception
+        let expected: std::collections::BTreeSet<String> = cli
+            .keys()
+            .map(|name| name.as_str().unwrap().to_owned())
+            .filter(|name| !name.starts_with("zmx "))
+            .collect();
+        let mut ours = std::collections::BTreeSet::new();
+        catalog_names(&Agtermctl::command(), &[], &mut ours);
+        assert_eq!(ours, expected);
+    }
+
+    #[test]
+    fn the_local_commands_are_no_request_commands() {
+        for argv in [
+            &["agtermctl", "clipboard", "set", "hello"][..],
+            &["agtermctl", "terminfo", "install", "buildbox"],
+        ] {
+            let parsed = Agtermctl::try_parse_from(argv).unwrap();
+            assert!(
+                matches!(parsed.command, Command::Clipboard(_) | Command::Terminfo(_)),
+                "{argv:?}"
+            );
+            assert_eq!(parsed.command.validate(), Ok(()));
+        }
     }
 
     #[test]

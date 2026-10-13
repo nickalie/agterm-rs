@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 agterm-proto.workspace = true
 agterm-core.workspace = true
+base64.workspace = true
 clap.workspace = true
 libc.workspace = true
 serde_json.workspace = true
@@ -21,6 +22,7 @@ strum.workspace = true
 [dev-dependencies]
 agterm-host ={ workspace = true, features = ["fakes"] }
 agterm-server.workspace = true
+serde_norway.workspace = true
 tempfile.workspace = true
 
 [lints]

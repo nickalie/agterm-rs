@@ -42,6 +42,6 @@ impl Version {
 
 /// The running executable's real path: the kernel's answer (`/proc/self/exe`), not `argv[0]`, resolved through
 /// symlinks since an installed CLI is usually one.
-fn client_path() -> Option<PathBuf> {
+pub fn client_path() -> Option<PathBuf> {
     env::current_exe().and_then(fs::canonicalize).ok()
 }
