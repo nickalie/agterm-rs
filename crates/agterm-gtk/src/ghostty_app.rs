@@ -499,7 +499,7 @@ fn carry_out(raw: &str, route: Route) {
 
 /// Opens `uri` with the desktop's handler for its scheme, through the portal when sandboxed, without blocking; a
 /// failure is only logged.
-fn open_uri(uri: &str) {
+pub(crate) fn open_uri(uri: &str) {
     let parent = gio::Application::default()
         .and_downcast::<gtk::Application>()
         .and_then(|app| app.active_window());

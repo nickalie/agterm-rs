@@ -28,6 +28,7 @@ mod notifications;
 mod overlay;
 mod pane;
 mod picker;
+mod popovers;
 mod process_table;
 mod quick;
 mod restore_launch;
@@ -37,8 +38,10 @@ mod signals;
 mod split;
 mod state;
 mod status_glyph;
+mod status_sound;
 mod surface;
 mod theme;
+mod titlebar;
 mod window;
 mod windows;
 

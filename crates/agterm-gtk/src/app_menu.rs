@@ -2,6 +2,10 @@
 //! menu, every item an app action named after its row, enabled by the frontmost window's palette context (the one
 //! predicate the palette and the keymap read), and every keyed item showing its resolved chord as its accelerator.
 //!
+//! File also carries upstream's live parts ([`agterm_core::menu_lists`]): Open Window, listing the library with the open
+//! windows checked; Open Recent, the closed sessions and workspaces; and Reveal in Files. A Help menu holds the
+//! developer documentation and the About window.
+//!
 //! The accelerators are display only: the keymap monitor (`keymap_dispatch`) dispatches the chords before any widget
 //! sees them, from the same resolved keymap. `keymap.list` reads them back from this menu model (`menu_items`).
 
@@ -9,6 +13,7 @@ use std::cell::RefCell;
 
 use agterm_core::Core;
 use agterm_core::keymap::{BuiltinAction, Chord};
+use agterm_core::menu_lists::{MenuListAction, RecentEntries, WindowEntry};
 use agterm_core::palette_catalog::{PaletteCommand, PaletteContext};
 use agterm_proto::ControlKeymapMenuItem;
 use gtk::prelude::*;
@@ -180,12 +185,28 @@ fn shows_accelerator(item: Item) -> bool {
     item != Item::Row(PaletteCommand::UndoClose)
 }
 
+/// The developer documentation Help opens (upstream's `Developer Documentation…`).
+const DOCS_URL: &str = "https://agterm.com/docs#agtermctl";
+
+/// The live parts of the menu, rebuilt when they change.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Lists {
+    windows: Vec<WindowEntry>,
+    recent: RecentEntries,
+}
+
+/// What the model was built from: the static items' titles and accelerators, and the live lists.
+type Built = (Vec<(String, Option<String>)>, Lists);
+
 /// The menu model, its actions, and what it was last built from.
 pub struct AppMenu {
     model: gio::Menu,
     group: gio::SimpleActionGroup,
-    /// The titles and accelerators the model was built with, so an unchanged state rebuilds nothing.
-    built: RefCell<Vec<(String, Option<String>)>>,
+    /// What the model was built with, so an unchanged state rebuilds nothing.
+    built: RefCell<Built>,
+    /// The Open Window entries' actions, one checkable action per window, replaced on a rebuild.
+    window_actions: RefCell<Vec<String>>,
+    poster: Poster,
 }
 
 impl AppMenu {
@@ -203,10 +224,13 @@ impl AppMenu {
             });
             group.add_action(&action);
         }
+        add_list_actions(&group, poster);
         Self {
             model: gio::Menu::new(),
             group,
-            built: RefCell::new(Vec::new()),
+            built: RefCell::new(Built::default()),
+            window_actions: RefCell::new(Vec::new()),
+            poster: poster.clone(),
         }
     }
 
@@ -251,25 +275,82 @@ impl AppMenu {
                 action.set_enabled(window.is_some() && item.enabled(context, can_remove_window));
             }
         }
-        if *self.built.borrow() != entries {
-            self.rebuild(&entries);
-            *self.built.borrow_mut() = entries;
+        let lists = Lists {
+            windows: core.window_entries(),
+            recent: core.recent_entries(),
+        };
+        let built = (entries, lists);
+        if *self.built.borrow() != built {
+            self.rebuild(&built);
+            *self.built.borrow_mut() = built;
         }
+        self.sync_lists(core, window, context.modal_active());
     }
 
-    fn rebuild(&self, entries: &[(String, Option<String>)]) {
+    fn rebuild(&self, (entries, lists): &Built) {
         self.model.remove_all();
+        self.replace_window_actions(&lists.windows);
         let mut entries = entries.iter();
         for (menu, sections) in MENUS {
             let submenu = gio::Menu::new();
             for section in sections {
                 let part = gio::Menu::new();
                 for (item, (title, accel)) in section.iter().zip(entries.by_ref()) {
-                    part.append_item(&menu_item(*item, title, accel.as_deref()));
+                    append_with_live_parts(&part, *item, (title, accel.as_deref()), lists);
                 }
                 submenu.append_section(None, &part);
             }
             self.model.append_submenu(Some(menu), &submenu);
+        }
+        let help = gio::Menu::new();
+        help.append(Some("Developer Documentation…"), Some("menu.menu-developer-docs"));
+        help.append(Some("About Agterm"), Some("menu.menu-about"));
+        self.model.append_submenu(Some("Help"), &help);
+    }
+
+    /// One checkable action per window for Open Window, replacing the previous build's.
+    fn replace_window_actions(&self, windows: &[WindowEntry]) {
+        for name in self.window_actions.borrow_mut().drain(..) {
+            self.group.remove_action(&name);
+        }
+        let mut names = self.window_actions.borrow_mut();
+        for entry in windows {
+            let name = window_action_name(entry.id);
+            let action = gio::SimpleAction::new_stateful(&name, None, &entry.open.to_variant());
+            let posting = self.poster.clone();
+            let id = entry.id;
+            action.connect_activate(move |_, _| {
+                state::post(&posting, move |state: &mut AppState| {
+                    state.menu_list_activated(MenuListAction::OpenWindow(id));
+                });
+            });
+            self.group.add_action(&action);
+            names.push(name);
+        }
+    }
+
+    /// The live items' check marks and enablement: opening and reopening stand down under a cover.
+    fn sync_lists(&self, core: &Core, window: Option<uuid::Uuid>, modal: bool) {
+        let available = window.is_some() && !modal;
+        for entry in &self.built.borrow().1.windows {
+            if let Some(action) = self
+                .group
+                .lookup_action(&window_action_name(entry.id))
+                .and_downcast::<gio::SimpleAction>()
+            {
+                action.set_state(&entry.open.to_variant());
+                action.set_enabled(available);
+            }
+        }
+        let reveal = window.is_some_and(|id| core.can_reveal_active_session(id));
+        for (name, enabled) in [
+            ("menu-open-recent", available),
+            ("menu-clear-recent", window.is_some()),
+            ("menu-reveal-session", reveal),
+        ] {
+            if let Some(action) = self.group.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+                action.set_enabled(enabled);
+            }
         }
     }
 
@@ -278,6 +359,138 @@ impl AppMenu {
     pub fn reader(&self) -> agterm_core::MenuReader {
         let (model, group) = (self.model.clone(), self.group.clone());
         Box::new(move || menu_items(&model, &group))
+    }
+}
+
+/// Appends `item` to `part`, with the live parts upstream places around it: Open Window after New Window, Open Recent
+/// before Reopen Last Closed Item, Reveal in Files after Duplicate Session.
+fn append_with_live_parts(part: &gio::Menu, item: Item, (title, accel): (&str, Option<&str>), lists: &Lists) {
+    if item == Item::Row(PaletteCommand::ReopenRecent) {
+        part.append_submenu(Some("Open Recent"), &recent_menu(&lists.recent));
+    }
+    part.append_item(&menu_item(item, title, accel));
+    match item {
+        Item::Builtin(BuiltinAction::NewWindow) => {
+            part.append_submenu(Some("Open Window"), &window_menu(&lists.windows));
+        }
+        Item::Row(PaletteCommand::DuplicateSession) => {
+            part.append(Some("Reveal in Files"), Some("menu.menu-reveal-session"));
+        }
+        _ => {}
+    }
+}
+
+/// The Open Window entry action of window `id`.
+fn window_action_name(id: uuid::Uuid) -> String {
+    format!("menu-window-{id}")
+}
+
+/// Open Window: every window of the library, the open ones checked.
+fn window_menu(windows: &[WindowEntry]) -> gio::Menu {
+    let menu = gio::Menu::new();
+    for entry in windows {
+        menu.append(
+            Some(&entry.name),
+            Some(&format!("menu.{}", window_action_name(entry.id))),
+        );
+    }
+    menu
+}
+
+/// Open Recent: the closed sessions, then the closed workspaces, then Clear Menu; "No Recent Items" when empty.
+fn recent_menu(recent: &RecentEntries) -> gio::Menu {
+    let menu = gio::Menu::new();
+    if recent.is_empty() {
+        menu.append(Some("No Recent Items"), Some("menu.menu-no-recent"));
+        return menu;
+    }
+    for (label, entries) in [("Sessions", &recent.sessions), ("Workspaces", &recent.workspaces)] {
+        if entries.is_empty() {
+            continue;
+        }
+        let section = gio::Menu::new();
+        for entry in entries {
+            let item = gio::MenuItem::new(Some(&entry.title), None);
+            item.set_action_and_target_value(Some("menu.menu-open-recent"), Some(&entry.id.to_string().to_variant()));
+            section.append_item(&item);
+        }
+        menu.append_section(Some(label), &section);
+    }
+    let clear = gio::Menu::new();
+    clear.append(Some("Clear Menu"), Some("menu.menu-clear-recent"));
+    menu.append_section(None, &clear);
+    menu
+}
+
+/// The live items' fixed actions: Open Recent's entries (by id), Clear Menu, Reveal in Files, the inert "No Recent
+/// Items", and Help's two.
+fn add_list_actions(group: &gio::SimpleActionGroup, poster: &Poster) {
+    let open = gio::SimpleAction::new("menu-open-recent", Some(gtk::glib::VariantTy::STRING));
+    let posting = poster.clone();
+    open.connect_activate(move |_, target| {
+        let Some(id) = target
+            .and_then(gtk::glib::Variant::get::<String>)
+            .and_then(|id| uuid::Uuid::parse_str(&id).ok())
+        else {
+            return;
+        };
+        state::post(&posting, move |state: &mut AppState| {
+            state.menu_list_activated(MenuListAction::OpenRecent(id));
+        });
+    });
+    group.add_action(&open);
+    for (name, chosen) in [
+        ("menu-clear-recent", MenuListAction::ClearRecent),
+        ("menu-reveal-session", MenuListAction::RevealSession),
+    ] {
+        let action = gio::SimpleAction::new(name, None);
+        let posting = poster.clone();
+        action.connect_activate(move |_, _| {
+            state::post(&posting, move |state: &mut AppState| state.menu_list_activated(chosen));
+        });
+        group.add_action(&action);
+    }
+    let none = gio::SimpleAction::new("menu-no-recent", None);
+    none.set_enabled(false);
+    group.add_action(&none);
+    let docs = gio::SimpleAction::new("menu-developer-docs", None);
+    docs.connect_activate(|_, _| crate::ghostty_app::open_uri(DOCS_URL));
+    group.add_action(&docs);
+    let about = gio::SimpleAction::new("menu-about", None);
+    about.connect_activate(|_, _| show_about());
+    group.add_action(&about);
+}
+
+/// The About window (upstream's standard About panel with its agterm.com link and the build's commit).
+fn show_about() {
+    let app = gio::Application::default().and_downcast::<gtk::Application>();
+    let parent = app.as_ref().and_then(GtkApplicationExt::active_window);
+    let mut version = env!("CARGO_PKG_VERSION").to_owned();
+    if let Some(commit) = option_env!("AGTERM_BUILD_COMMIT").filter(|commit| !commit.is_empty()) {
+        version = format!("{version} ({commit})");
+    }
+    let icon = app
+        .as_ref()
+        .and_then(gio::prelude::ApplicationExt::application_id)
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+    let about = adw::AboutDialog::builder()
+        .application_name("Agterm")
+        .application_icon(icon)
+        .version(version)
+        .website("https://agterm.com")
+        .build();
+    adw::prelude::AdwDialogExt::present(&about, parent.as_ref());
+}
+
+impl AppState {
+    /// A live menu entry was chosen: it acts on the frontmost window.
+    pub fn menu_list_activated(&mut self, action: MenuListAction) {
+        let Some(window) = self.core.library().active_window_id() else {
+            return;
+        };
+        self.core.perform_menu_list(window, action);
+        self.settle();
     }
 }
 
@@ -461,5 +674,70 @@ mod tests {
         assert_eq!(accelerator(&chord("f11")).as_deref(), Some("F11"));
         assert_eq!(accelerator(&chord("opt+shift+up")).as_deref(), Some("<Shift><Alt>Up"));
         assert_eq!(accelerator(&chord("cmd+n")).as_deref(), Some("<Super>n"));
+    }
+
+    /// Every label of `model` and its sections and submenus, in order.
+    fn labels(model: &gio::MenuModel, into: &mut Vec<String>) {
+        for index in 0..model.n_items() {
+            if let Some(label) = string_attribute(model, index, "label") {
+                into.push(label);
+            }
+            for link in ["section", "submenu"] {
+                if let Some(nested) = model.item_link(index, link) {
+                    labels(&nested, into);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn file_carries_the_live_lists_and_help_the_docs_and_about() {
+        crate::gtk_test::on_gtk_thread(live_lists);
+    }
+
+    fn live_lists() {
+        let mut library = agterm_core::model::WindowLibrary::seeded("/home/u");
+        let closed = library.new_window(Some("work"));
+        library.close_window(closed);
+        let core = Core::new(
+            agterm_core::CoreConfig {
+                app: agterm_proto::AppIdentity::from_recorded("0.1.0", None),
+                capabilities: Vec::new(),
+            },
+            agterm_core::CoreState {
+                library,
+                settings: agterm_core::persist::AppSettings::default(),
+                persistence: None,
+            },
+        );
+        let menu = AppMenu::new(&crate::state::detached_poster());
+        menu.sync(&core);
+        let mut all = Vec::new();
+        labels(menu.model().upcast_ref(), &mut all);
+        for expected in [
+            "Open Window",
+            "work",
+            "Open Recent",
+            "No Recent Items",
+            "Reveal in Files",
+            "Help",
+            "Developer Documentation…",
+            "About Agterm",
+        ] {
+            assert!(all.iter().any(|label| label == expected), "{expected} missing: {all:?}");
+        }
+        let position = |label: &str| all.iter().position(|item| item == label).unwrap();
+        assert_eq!(position("Open Window"), position("New Window") + 1);
+        assert_eq!(position("Reveal in Files"), position("Duplicate Session") + 1);
+        let window = menu
+            .group()
+            .lookup_action(&window_action_name(closed))
+            .expect("one action per window");
+        assert_eq!(window.state().and_then(|state| state.get::<bool>()), Some(false));
+        assert!(window.is_enabled());
+        assert!(
+            !menu_items(menu.model(), menu.group()).is_empty(),
+            "the accelerators still read back"
+        );
     }
 }

@@ -4,9 +4,9 @@
 //! `WindowAccessor.reportFrontmost`) and its close (upstream's window `willClose`), and applying the window commands'
 //! requests. [`crate::windows`] owns the set of them.
 //!
-//! The header bar carries the dashboard's opener while it is closed and its exit while it is open (upstream's
-//! `dashboardButton` and `dashboardTitlebar`); the open grid is titled "Dashboard" and, like a terminal zoom, fills the
-//! window with the sidebar stepped aside.
+//! The header bar is the window's [`Titlebar`]: its title, its buttons and popovers, stripped to an exit under a
+//! terminal zoom or the open dashboard (upstream's `dashboardTitlebar`), which is titled "Dashboard" and, like a
+//! terminal zoom, fills the window with the sidebar stepped aside.
 //!
 //! Over the window's content sit its two modal layers, added once: the GUI ask ([`crate::ask_dialog::WindowAsk`]) and
 //! the native picker ([`crate::picker::WindowPicker`]), drawn from the window's modal slot on every sync. While either
@@ -30,6 +30,7 @@ use crate::deck::{Deck, PaneContext};
 use crate::picker::WindowPicker;
 use crate::sidebar::Sidebar;
 use crate::state::{self, AppState, Poster};
+use crate::titlebar::{Cover, Titlebar};
 
 /// The title with no session selected (upstream's `WindowTitleSync` fallback).
 const UNTITLED: &str = "Agterm";
@@ -119,12 +120,7 @@ pub struct WindowUi {
     /// The model window shown.
     window_id: Uuid,
     paned: gtk::Paned,
-    /// The header bar's exit-zoom button, shown while the window is zoomed to one terminal.
-    exit_zoom: gtk::Button,
-    /// The header bar's dashboard opener, shown while neither the dashboard nor a zoom is up.
-    open_dashboard: gtk::Button,
-    /// The header bar's exit-dashboard button, shown while the dashboard is open.
-    exit_dashboard: gtk::Button,
+    titlebar: Titlebar,
     deck: Deck,
     sidebar: Sidebar,
     /// The GUI ask over the window's content.
@@ -169,31 +165,6 @@ impl WindowUi {
         sidebar
             .widget()
             .set_size_request(divider_position(agterm_core::model::SIDEBAR_WIDTH_MIN), -1);
-        let exit_zoom = gtk::Button::builder()
-            .icon_name("view-restore-symbolic")
-            .tooltip_text("Exit Terminal Zoom")
-            .visible(false)
-            .build();
-        let open_dashboard = gtk::Button::builder()
-            .icon_name("view-grid-symbolic")
-            .tooltip_text("Dashboard")
-            .build();
-        let exit_dashboard = gtk::Button::builder()
-            .icon_name("window-close-symbolic")
-            .tooltip_text("Exit Dashboard")
-            .visible(false)
-            .build();
-        let header = adw::HeaderBar::new();
-        let primary = gtk::MenuButton::builder()
-            .icon_name("open-menu-symbolic")
-            .tooltip_text("Main Menu")
-            .menu_model(menu.model())
-            .primary(true)
-            .build();
-        header.pack_end(&primary);
-        header.pack_end(&exit_zoom);
-        header.pack_end(&exit_dashboard);
-        header.pack_end(&open_dashboard);
         let ask_layer = WindowAsk::new();
         let pick_layer = WindowPicker::new();
         let modal_host = gtk::Overlay::new();
@@ -201,7 +172,7 @@ impl WindowUi {
         modal_host.add_overlay(ask_layer.widget());
         modal_host.add_overlay(pick_layer.widget());
         let toolbar = adw::ToolbarView::new();
-        toolbar.add_top_bar(&header);
+        let titlebar = Titlebar::new(window_id, &toolbar, menu.model().upcast_ref(), poster);
         toolbar.set_content(Some(&modal_host));
         let window = adw::ApplicationWindow::builder()
             .application(app)
@@ -216,9 +187,7 @@ impl WindowUi {
             window,
             window_id,
             paned,
-            exit_zoom,
-            open_dashboard,
-            exit_dashboard,
+            titlebar,
             deck,
             sidebar,
             ask: ask_layer,
@@ -278,18 +247,6 @@ impl WindowUi {
             });
         });
         self.connect_divider(poster);
-        let posting = poster.clone();
-        self.exit_zoom.connect_clicked(move |_| {
-            state::post(&posting, move |state: &mut AppState| state.exit_zoom(id));
-        });
-        let posting = poster.clone();
-        self.open_dashboard.connect_clicked(move |_| {
-            state::post(&posting, move |state: &mut AppState| state.toggle_dashboard(id));
-        });
-        let posting = poster.clone();
-        self.exit_dashboard.connect_clicked(move |_| {
-            state::post(&posting, move |state: &mut AppState| state.exit_dashboard(id));
-        });
         self.deck.chrome().connect(id, poster);
     }
 
@@ -476,18 +433,16 @@ impl WindowUi {
         } else {
             window_title(core.library(), Some(id))
         };
+        let cover = if dashboard {
+            Cover::Dashboard(title.clone())
+        } else if zoomed.is_some() {
+            Cover::Zoom
+        } else {
+            Cover::None
+        };
         self.window.set_title(Some(&title));
-        self.exit_zoom.set_visible(zoomed.is_some());
-        self.exit_dashboard.set_visible(dashboard);
-        self.open_dashboard.set_visible(!dashboard && zoomed.is_none());
-        let has_session = core
-            .library()
-            .store(id)
-            .is_some_and(|store| store.active_session().is_some());
         let modal = self.sync_modals(core, poster, terminal_area_inset(core, id));
-        self.open_dashboard.set_sensitive(has_session && !modal);
-        self.exit_dashboard.set_sensitive(!modal);
-        self.exit_zoom.set_sensitive(!modal);
+        self.titlebar.sync(core, &cover, modal);
     }
 
     /// Draws the window's modal slot: its picker or GUI ask, a new one taking the keyboard. Whether one is up.

@@ -122,17 +122,6 @@ const APP_TIMERS: TimerHandlers<AppState> = TimerHandlers {
     tree_changed: fire_tree_changed,
 };
 
-/// Plays a status sound. Linux has none of the named system sounds upstream plays, so every name, `default` and `beep`
-/// included, sounds the display's alert.
-fn play_status_sound(name: &str) {
-    use gtk::prelude::DisplayExt;
-    if let Some(display) = gtk::gdk::Display::default() {
-        display.beep();
-    } else {
-        tracing::debug!(name, "no display to sound the status alert on");
-    }
-}
-
 /// What the main loop owns.
 pub struct AppState {
     pub core: Core,
@@ -205,7 +194,7 @@ impl AppState {
                 windows.menu().sync(&self.core);
                 self.quick.sync(&mut self.core, windows, &self.poster);
                 for name in &sounds {
-                    play_status_sound(name);
+                    crate::status_sound::play(name);
                 }
                 crate::notifications::deliver(windows.app(), &banners);
             }

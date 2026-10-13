@@ -230,7 +230,7 @@ fn reveal(core: &mut Core, target: Option<&str>, window: Option<&str>) -> Outcom
 
 /// `path` with a leading `~` expanded to `home`, when it names an existing directory (upstream's
 /// `DirectoryPanelDefaults.existingDirectoryURL`).
-fn existing_directory(path: &str, home: &str) -> Option<PathBuf> {
+pub(crate) fn existing_directory(path: &str, home: &str) -> Option<PathBuf> {
     if path.is_empty() {
         return None;
     }
