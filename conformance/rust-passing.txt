@@ -1,6 +1,11 @@
 # The conformance ratchet: pytest node ids the Rust build passes, one per line, verbatim and sorted.
 # tools/check_ratchet.py fails a run in which a listed id fails, errors or skips (a host-dependent skip excepted).
 # Add newly passing ids with `tools/check_ratchet.py --report <nodeid report> --add`.
+tests/behaviors/test_hooks.py::test_a_hook_runs_once_per_event_in_event_order
+tests/behaviors/test_hooks.py::test_an_edit_takes_effect_only_on_reload
+tests/behaviors/test_hooks.py::test_hooks_file_is_read_at_launch
+tests/behaviors/test_keymap.py::test_an_edit_takes_effect_only_on_reload
+tests/behaviors/test_keymap.py::test_keymap_file_is_read_at_launch
 tests/behaviors/test_relaunch.py::test_relaunch_forgets_what_is_not_persisted
 tests/behaviors/test_relaunch.py::test_relaunch_keeps_workspaces_sessions_and_their_metadata
 tests/cli/test_cli_output.py::test_ask_blocks_until_cancelled
@@ -13,7 +18,9 @@ tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_re
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args3-invalid event cursor]
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args4-None]
 tests/cli/test_cli_output.py::test_font
+tests/cli/test_cli_output.py::test_hooks
 tests/cli/test_cli_output.py::test_hud
+tests/cli/test_cli_output.py::test_keymap
 tests/cli/test_cli_output.py::test_notify_raises_the_unseen_count
 tests/cli/test_cli_output.py::test_overlay_page_blocks_until_submitted
 tests/cli/test_cli_output.py::test_overlay_page_dismissed_exits_2
@@ -224,6 +231,25 @@ tests/protocol/test_hud.py::test_unknown_session_target[session.hud.close-args2]
 tests/protocol/test_hud.py::test_unknown_session_target[session.hud.open-args0]
 tests/protocol/test_hud.py::test_unknown_session_target[session.hud.update-args1]
 tests/protocol/test_hud.py::test_update_replaces_the_whole_spec
+tests/protocol/test_keymap_hooks.py::test_a_running_hook_queues_its_events_and_survives_its_removal
+tests/protocol/test_keymap_hooks.py::test_hook_gets_its_event_on_stdin_and_in_its_environment
+tests/protocol/test_keymap_hooks.py::test_hooks_take_no_target_or_window[None-args2-hooks.list]
+tests/protocol/test_keymap_hooks.py::test_hooks_take_no_target_or_window[None-args2-hooks.reload]
+tests/protocol/test_keymap_hooks.py::test_hooks_take_no_target_or_window[active-args0-hooks.list]
+tests/protocol/test_keymap_hooks.py::test_hooks_take_no_target_or_window[active-args0-hooks.reload]
+tests/protocol/test_keymap_hooks.py::test_hooks_take_no_target_or_window[zzz-args1-hooks.list]
+tests/protocol/test_keymap_hooks.py::test_hooks_take_no_target_or_window[zzz-args1-hooks.reload]
+tests/protocol/test_keymap_hooks.py::test_list_without_a_file_has_no_hooks
+tests/protocol/test_keymap_hooks.py::test_list_without_a_file_reports_the_builtins_alone
+tests/protocol/test_keymap_hooks.py::test_reload_applies_the_edited_file
+tests/protocol/test_keymap_hooks.py::test_reload_reaches_every_window
+tests/protocol/test_keymap_hooks.py::test_reload_reports_each_bad_line_and_keeps_the_good_ones
+tests/protocol/test_keymap_hooks.py::test_run_refusals[None-args0-keymap.run requires a command name]
+tests/protocol/test_keymap_hooks.py::test_run_refusals[None-args1-keymap.run requires a command name]
+tests/protocol/test_keymap_hooks.py::test_run_refusals[None-args2-no custom command named nope]
+tests/protocol/test_keymap_hooks.py::test_run_refusals[None-args3-no custom command named  plain]
+tests/protocol/test_keymap_hooks.py::test_run_refusals[zzz-args4-no such session: zzz]
+tests/protocol/test_keymap_hooks.py::test_run_starts_the_command_for_the_addressed_session
 tests/protocol/test_notify.py::test_notify_raises_the_badge_and_emits_the_event
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args0-notify requires a body]
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args1-notify requires a body]

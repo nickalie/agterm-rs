@@ -10,18 +10,21 @@
 use std::process::ExitCode;
 
 use agterm_core::theme::DEFAULT_TITLE;
+use agterm_proto::keymap::{ControlHooks, ControlKeymap};
 use agterm_proto::{ControlTree, ControlWindowNode, Response};
 use serde_json::Value;
 
 use crate::client::Reply;
+use crate::hooks::format_hooks;
+use crate::keymap::format_keymap;
 use crate::tree::format_tree;
 use crate::window::format_windows;
 
 /// Renders a response as its human-readable summary (no trailing newline): an `error:` line, the tree or window
-/// listing, the theme listing, the serving app's version, the text read (or a search's counter), an overlay program's `exit N`, a
-/// batch's affected count, a count of
-/// diagnostics, a cursor column, a resized window's `W H`, a resized split's ratio, the applied sidebar width, the
-/// affected id (only with `echo_id`, for the create commands), or a bare `ok`. Never JSON: `--json` prints the server's own line.
+/// listing, the theme listing, the keymap or hooks listing, the serving app's version, the text read (or a search's
+/// counter), an overlay program's `exit N`, a batch's affected count, a count of diagnostics, a cursor column, a resized
+/// window's `W H`, a resized split's ratio, the applied sidebar width, the affected id (only with `echo_id`, for the
+/// create commands), or a bare `ok`. Never JSON: `--json` prints the server's own line.
 ///
 /// The result's fields are tested in upstream's fixed order (`formatResponse`: `tree` first, `app` after the
 /// listings); each command group adds its branch at its place in that order.
@@ -50,6 +53,18 @@ pub fn format_response(response: &Response, echo_id: bool) -> String {
         .and_then(|themes| serde_json::from_value::<Vec<String>>(themes.clone()).ok())
     {
         return format_themes(&themes, result.map_or(&Value::Null, |result| result));
+    }
+    if let Some(keymap) = result
+        .and_then(|result| result.get("keymap"))
+        .and_then(|keymap| serde_json::from_value::<ControlKeymap>(keymap.clone()).ok())
+    {
+        return format_keymap(&keymap);
+    }
+    if let Some(hooks) = result
+        .and_then(|result| result.get("hooks"))
+        .and_then(|hooks| serde_json::from_value::<ControlHooks>(hooks.clone()).ok())
+    {
+        return format_hooks(&hooks);
     }
     if let Some(app) = result.and_then(|result| result.get("app")) {
         return format_app(app);
@@ -345,6 +360,31 @@ mod tests {
         assert_eq!(
             format_response(&ok(json!({"app": {"version": "0.1.0"}, "text": "x"})), false),
             "0.1.0"
+        );
+    }
+
+    #[test]
+    fn keymap_and_hooks_listings_sit_after_the_themes_and_before_the_app() {
+        let keymap = json!({"path": "/k", "actions": [], "commands": [], "diagnostics": []});
+        let hooks = json!({"path": "/h", "diagnostics": [], "hooks": []});
+        assert_eq!(
+            format_response(
+                &ok(json!({"keymap": keymap, "app": {"version": "1"}, "count": 2})),
+                false
+            ),
+            "keymap: /k\n\nactions:"
+        );
+        assert_eq!(
+            format_response(&ok(json!({"hooks": hooks, "text": "t"})), false),
+            "hooks: /h\n  (no hooks)"
+        );
+        assert_eq!(
+            format_response(&ok(json!({"keymap": keymap, "hooks": hooks})), false),
+            "keymap: /k\n\nactions:"
+        );
+        assert_eq!(
+            format_response(&ok(json!({"themes": [], "keymap": keymap})), false),
+            "* default ghostty"
         );
     }
 

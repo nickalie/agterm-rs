@@ -45,6 +45,7 @@ const CAPABILITIES: &[&str] = &[
     "overlay-size-validated",
     "sidebar-min-width",
     "theme-slots-by-sync",
+    "keymap-menu",
 ];
 
 /// `AGTERM_APP_ID` when it is a valid application id, else the fork's.
@@ -102,6 +103,28 @@ pub fn reveal_in_file_manager(path: &Path) {
     });
 }
 
+/// The process seam of the hooks and custom commands: children start through [`SystemLauncher`], and each exit comes
+/// back as a main-loop task that settles.
+///
+/// [`SystemLauncher`]: crate::hook_runner::SystemLauncher
+fn process_host(poster: &crate::state::Poster, socket: String) -> agterm_core::ProcessHost {
+    let posting = poster.clone();
+    agterm_core::ProcessHost {
+        launcher: Arc::new(crate::hook_runner::SystemLauncher),
+        poster: Arc::new(move |task: agterm_core::CoreTask| {
+            crate::state::post(&posting, move |state: &mut AppState| {
+                task(&mut state.core);
+                state.settle();
+            });
+        }),
+        socket,
+        cli_dir: std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(Path::to_path_buf)),
+        path: std::env::var("PATH").ok(),
+    }
+}
+
 /// What the quit path stops, from the first activation on.
 struct Shell {
     main_loop: Arc<GlibMainLoop<AppState>>,
@@ -155,14 +178,27 @@ pub fn activate(app: &adw::Application) {
     }
     core.set_cell_estimator(Box::new(crate::hud::estimate_cell));
     crate::html_overlay::install(&mut core, paths::state_dir(&ProcessEnv));
+    core.set_config_locator(paths::ConfigLocator::capture(&ProcessEnv));
+    let socket = context.socket.clone();
     let state = Rc::new(RefCell::new(AppState::new(core)));
     let main_loop = Arc::new(GlibMainLoop::attach(&glib::MainContext::default(), Rc::clone(&state)));
     let posting: Arc<dyn MainLoop<AppState>> = Arc::clone(&main_loop) as _;
     let poster = Arc::downgrade(&posting);
+    let menu = crate::app_menu::AppMenu::new(&poster);
+    {
+        let mut state = state.borrow_mut();
+        state.core.set_process_host(process_host(&poster, socket));
+        state.core.set_menu_reader(menu.reader());
+        // read at launch: a file edited later takes effect only on reload
+        state.core.load_keymap_at_launch();
+        state.core.load_hooks_at_launch();
+    }
     // not a task: no task runs before the shell exists; every open window renders before it is presented
     crate::notifications::install_actions(app, poster.clone());
     crate::theme::follow_appearance(&poster);
-    state.borrow_mut().attach(poster, Windows::new(app.clone(), context));
+    state
+        .borrow_mut()
+        .attach(poster, Windows::new(app.clone(), context, menu));
     if let Err(err) = server.start(posting, |state: &mut AppState, request: Request| {
         state.handle_request(&request)
     }) {
@@ -279,7 +315,8 @@ mod tests {
                 "pick-names-pending-ask",
                 "overlay-size-validated",
                 "sidebar-min-width",
-                "theme-slots-by-sync"
+                "theme-slots-by-sync",
+                "keymap-menu"
             ]
         );
     }

@@ -171,6 +171,27 @@ impl Sidebar {
         self.expansion.set(id, expanded);
     }
 
+    /// Starts the inline rename of session or workspace row `id` (the Rename Session and Rename Workspace actions);
+    /// nothing when the row is not shown or an edit is already open.
+    pub fn begin_rename(&self, id: Uuid) {
+        self.shared.begin_rename(id);
+    }
+
+    /// Close Session for `ids`, confirmed first when the setting asks for it.
+    pub fn close_sessions(&self, ids: Vec<Uuid>) {
+        self.shared.confirm_close(ids);
+    }
+
+    /// Delete Workspace `id`, confirmed first while it holds sessions.
+    pub fn delete_workspace(&self, id: Uuid) {
+        self.shared.confirm_delete(id);
+    }
+
+    /// Open Directory…: the folder chooser, then a session there in `workspace`.
+    pub fn open_directory(&self, workspace: Uuid) {
+        self.shared.choose_directory(workspace);
+    }
+
     /// Re-renders from `store` under `settings`, mirroring the rows the outline shows open back into it
     /// (`AppStore::note_sidebar_expansion`, view state for Collapse/Expand Workspace).
     pub fn refresh(&mut self, store: &mut AppStore, settings: &AppSettings) {

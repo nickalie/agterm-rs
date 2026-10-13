@@ -449,6 +449,8 @@ SUBCOMMANDS:
   notify                  Post a desktop notification (default: the active
                           session of the frontmost window).
   font                    Font size commands.
+  keymap                  Keymap commands.
+  hooks                   Event hook commands.
   theme                   Theme commands.
   pick                    Open, poll, or cancel a native fuzzy picker.
   ask                     Open, poll, or cancel a themed question dialog.
@@ -3513,6 +3515,107 @@ fn font_and_theme_refusals_are_usage_errors_before_connecting() -> TestResult {
         let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, args)?);
         assert_eq!((code, stdout.as_str()), (Some(64), ""), "{args:?}");
         assert!(stderr.starts_with(&format!("Error: {message}\n")), "{stderr}");
+        assert!(stderr.contains("\nUsage: agtermctl "), "{stderr}");
+    }
+    Ok(())
+}
+
+#[test]
+fn keymap_and_hooks_commands_send_their_request_and_print_the_reply() -> TestResult {
+    let dir = short_dir()?;
+    let keymap = serde_json::json!({"keymap": {
+        "path": "/c/keymap.conf",
+        "actions": [{"action": "new_session", "chord": "ctrl+shift+f12", "overridden": true}, {"action": "dashboard"}],
+        "commands": [
+            {"name": "mark", "shortcut": "ctrl+shift+f11", "errorHud": true, "errorPosition": "center", "repeats": false},
+        ],
+        "diagnostics": [{"line": 3, "message": "unknown verb 'bogus'"}],
+    }});
+    let hooks = serde_json::json!({"hooks": {
+        "path": "/c/hooks.conf",
+        "diagnostics": [{"line": 2, "message": "unknown event 'session.renamed'"}],
+        "hooks": [{"kind": "session.created", "command": "true", "line": 1, "pending": 0, "dropped": 0}],
+    }});
+    let cases: [(&[&str], serde_json::Value, serde_json::Value, &str); 6] = [
+        (
+            &["keymap", "reload"],
+            serde_json::json!({"cmd": "keymap.reload"}),
+            serde_json::json!({"count": 1}),
+            "1 diagnostic(s)\n",
+        ),
+        (
+            &["hooks", "reload"],
+            serde_json::json!({"cmd": "hooks.reload"}),
+            serde_json::json!({"count": 0}),
+            "ok\n",
+        ),
+        (
+            &["keymap", "list"],
+            serde_json::json!({"cmd": "keymap.list"}),
+            keymap,
+            "keymap: /c/keymap.conf\n\nactions:\n  * new_session  ctrl+shift+f12\n    dashboard    -\n\ncommands:\n    \
+             mark  ctrl+shift+f11  --error-hud --error-position center\n\ndiagnostics:\n    line 3: unknown verb \
+             'bogus'\n",
+        ),
+        (
+            &["hooks", "list"],
+            serde_json::json!({"cmd": "hooks.list"}),
+            hooks,
+            "hooks: /c/hooks.conf\n  line 1: on session.created true\n\ndiagnostics:\n    line 2: unknown event \
+             'session.renamed'\n",
+        ),
+        (
+            &["keymap", "run", "mark", "--target", "s1"],
+            serde_json::json!({"cmd": "keymap.run", "target": "s1", "args": {"name": "mark"}}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+        (
+            &["keymap", "reload", "--json"],
+            serde_json::json!({"cmd": "keymap.reload"}),
+            serde_json::json!({"count": 1}),
+            "{\"ok\":true,\"result\":{\"count\":1}}\n",
+        ),
+    ];
+    for (at, (args, expected, result, stdout)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("{at}.sock"));
+        let _server = scripted(&socket, expected, result)?;
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(0), stdout.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    let socket = dir.path().join("refuse.sock");
+    let _server = serve(&socket, (), |(), _| {
+        Response::failure("no custom command named nope").into()
+    })?;
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &["keymap", "run", "nope"])?),
+        (
+            Some(1),
+            String::new(),
+            "error: no custom command named nope\n".to_owned()
+        )
+    );
+    Ok(())
+}
+
+#[test]
+fn keymap_and_hooks_usage_errors_come_before_connecting() -> TestResult {
+    let dir = short_dir()?;
+    // nothing listens here: a connection attempt would exit 1, not 64
+    let socket = dir.path().join("agterm.sock");
+    let cases: [&[&str]; 4] = [
+        &["keymap", "run"],
+        &["keymap", "reload", "--window", "w1"],
+        &["hooks", "list", "--window", "active"],
+        &["hooks", "reload", "--target", "s1"],
+    ];
+    for args in cases {
+        let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, args)?);
+        assert_eq!((code, stdout.as_str()), (Some(64), ""), "{args:?}");
+        assert!(stderr.starts_with("Error: "), "{stderr}");
         assert!(stderr.contains("\nUsage: agtermctl "), "{stderr}");
     }
     Ok(())

@@ -147,7 +147,13 @@ pub struct WindowUi {
 impl WindowUi {
     /// Builds the window for `window_id` (not presented yet); its handlers post through `poster`.
     #[must_use]
-    pub fn build(app: &adw::Application, window_id: Uuid, context: PaneContext, poster: &Poster) -> Self {
+    pub fn build(
+        app: &adw::Application,
+        window_id: Uuid,
+        context: PaneContext,
+        menu: &crate::app_menu::AppMenu,
+        poster: &Poster,
+    ) -> Self {
         let deck = Deck::new();
         let sidebar = Sidebar::new(window_id, poster);
         let paned = gtk::Paned::builder()
@@ -178,6 +184,13 @@ impl WindowUi {
             .visible(false)
             .build();
         let header = adw::HeaderBar::new();
+        let primary = gtk::MenuButton::builder()
+            .icon_name("open-menu-symbolic")
+            .tooltip_text("Main Menu")
+            .menu_model(menu.model())
+            .primary(true)
+            .build();
+        header.pack_end(&primary);
         header.pack_end(&exit_zoom);
         header.pack_end(&exit_dashboard);
         header.pack_end(&open_dashboard);
@@ -197,6 +210,8 @@ impl WindowUi {
             .default_height(640)
             .content(&toolbar)
             .build();
+        window.insert_action_group("menu", Some(menu.group()));
+        crate::keymap_dispatch::install(&window, crate::keymap_dispatch::KeyOrigin::Window(window_id));
         let ui = Self {
             window,
             window_id,
@@ -302,6 +317,18 @@ impl WindowUi {
         if !self.picker.grab_focus() && !self.ask.grab_focus() {
             self.deck.grab_focus();
         }
+    }
+
+    /// The window's sidebar.
+    #[must_use]
+    pub fn sidebar(&self) -> &Sidebar {
+        &self.sidebar
+    }
+
+    /// The GTK window.
+    #[must_use]
+    pub fn gtk_window(&self) -> &adw::ApplicationWindow {
+        &self.window
     }
 
     /// Closes the window for good: the model closed it, and its terminals with it.

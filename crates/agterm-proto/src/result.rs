@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 use crate::events::EventBatch;
+use crate::keymap::{ControlHooks, ControlKeymap};
 
 /// A command's result object.
 #[skip_serializing_none]
@@ -63,6 +64,12 @@ pub struct ControlResult {
     /// `events.read`: a page of the event ring, also on a cursor failure (then the ring's current anchor).
     #[serde(default)]
     pub events: Option<EventBatch>,
+    /// `keymap.list`: what `keymap.conf` resolved and what the menu carries.
+    #[serde(default)]
+    pub keymap: Option<ControlKeymap>,
+    /// `hooks.list`: the hooks and their live state.
+    #[serde(default)]
+    pub hooks: Option<ControlHooks>,
     /// `pick.result`: the current or terminal picker outcome.
     #[serde(default)]
     pub pick: Option<ControlPickResult>,
@@ -115,6 +122,33 @@ impl ControlResult {
     pub fn affected(affected: i64) -> Self {
         Self {
             affected: Some(affected),
+            ..Self::default()
+        }
+    }
+
+    /// `{"count": n}`: a reload's diagnostic count.
+    #[must_use]
+    pub fn count(count: i64) -> Self {
+        Self {
+            count: Some(count),
+            ..Self::default()
+        }
+    }
+
+    /// `{"keymap": {...}}`.
+    #[must_use]
+    pub fn keymap(keymap: ControlKeymap) -> Self {
+        Self {
+            keymap: Some(keymap),
+            ..Self::default()
+        }
+    }
+
+    /// `{"hooks": {...}}`.
+    #[must_use]
+    pub fn hooks(hooks: ControlHooks) -> Self {
+        Self {
+            hooks: Some(hooks),
             ..Self::default()
         }
     }

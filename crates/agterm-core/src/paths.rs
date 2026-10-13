@@ -149,6 +149,44 @@ pub fn config_dir(env: &dyn Env, setting: Option<&Path>) -> PathBuf {
     )
 }
 
+/// What [`config_dir`] reads of the environment, captured once so the core can resolve the config directory again
+/// whenever the `configDirectory` setting changes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfigLocator {
+    state_dir_override: Option<OsString>,
+    home: Option<PathBuf>,
+}
+
+impl ConfigLocator {
+    /// The locator of `env`.
+    #[must_use]
+    pub fn capture(env: &dyn Env) -> Self {
+        Self {
+            state_dir_override: non_empty(env, STATE_DIR_ENV),
+            home: home_dir(env),
+        }
+    }
+
+    /// [`config_dir`] under the captured environment.
+    #[must_use]
+    pub fn config_dir(&self, setting: Option<&Path>) -> PathBuf {
+        let mut env = MapEnv::new();
+        if let Some(state) = &self.state_dir_override {
+            env = env.with(STATE_DIR_ENV, state.clone());
+        }
+        if let Some(home) = &self.home {
+            env = env.with("HOME", home.clone());
+        }
+        config_dir(&env, setting)
+    }
+
+    /// The captured home directory.
+    #[must_use]
+    pub fn home(&self) -> Option<&Path> {
+        self.home.as_deref()
+    }
+}
+
 /// Where the HUD body files go: a private per-user directory standing in for upstream's `NSTemporaryDirectory()`
 /// (a per-user 0700 directory on macOS), never the shared `/tmp`. `<AGTERM_STATE_DIR>/hud` when the state dir is
 /// overridden (instances stay apart, as [`config_dir`]), else `<XDG_RUNTIME_DIR>/agterm/hud` when that is an absolute

@@ -50,6 +50,10 @@ pub fn deliver(sink: &impl BannerSink, effects: &[NotificationEffect]) {
                 tracing::info!(session = %post.session, "notify: posting banner");
                 sink.send(&post.identity(), &post.title, &post.body);
             }
+            NotificationEffect::App { identity, title, body } => {
+                tracing::info!(%identity, "notify: posting app banner");
+                sink.send(identity, title, body);
+            }
             NotificationEffect::Clear { session, .. } => {
                 tracing::debug!(%session, "notify: withdrawing the session's delivered banners");
                 for identity in effect.withdrawn_identities() {

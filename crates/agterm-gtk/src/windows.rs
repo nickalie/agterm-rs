@@ -46,15 +46,17 @@ pub fn plan(open: &[Uuid], shown: &HashSet<Uuid>, frontmost: Option<Uuid>) -> Wi
 pub struct Windows {
     app: adw::Application,
     context: PaneContext,
+    menu: crate::app_menu::AppMenu,
     shown: HashMap<Uuid, WindowUi>,
 }
 
 impl Windows {
     #[must_use]
-    pub fn new(app: adw::Application, context: PaneContext) -> Self {
+    pub fn new(app: adw::Application, context: PaneContext, menu: crate::app_menu::AppMenu) -> Self {
         Self {
             app,
             context,
+            menu,
             shown: HashMap::new(),
         }
     }
@@ -63,6 +65,12 @@ impl Windows {
     #[must_use]
     pub fn app(&self) -> &adw::Application {
         &self.app
+    }
+
+    /// The app menu every window shows.
+    #[must_use]
+    pub fn menu(&self) -> &crate::app_menu::AppMenu {
+        &self.menu
     }
 
     /// What every shell of this instance is told about it.
@@ -101,7 +109,7 @@ impl Windows {
             }
         }
         for id in &plan.build {
-            let ui = WindowUi::build(&self.app, *id, self.context.clone(), poster);
+            let ui = WindowUi::build(&self.app, *id, self.context.clone(), &self.menu, poster);
             self.shown.insert(*id, ui);
         }
         for ui in self.shown.values_mut() {

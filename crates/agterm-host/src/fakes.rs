@@ -12,8 +12,8 @@ use std::thread::{self, JoinHandle, ThreadId};
 use std::time::Duration;
 
 use crate::{
-    HostError, KillOutcome, LaunchSpec, LaunchedProcess, LiveSessionRecord, MainLoop, MainLoopClosed, MainTask,
-    ProcessLauncher, SessionHost, Surface, TextScope,
+    ExitHandler, HostError, KillOutcome, LaunchSpec, LaunchedProcess, LiveSessionRecord, MainLoop, MainLoopClosed,
+    MainTask, ProcessExit, ProcessLauncher, SessionHost, Surface, TextScope,
 };
 
 /// A fake never leaves a lock poisoned on purpose; a panicking test thread must not cascade into every other one.
@@ -472,9 +472,11 @@ impl SessionHost for FakeSessionHost {
     }
 }
 
-/// A launcher that records each launch and hands out increasing pids without starting anything.
+/// A launcher that records each launch and hands out increasing pids without starting anything; a test ends a
+/// process with [`FakeProcessLauncher::finish`].
 pub struct FakeProcessLauncher {
     launches: Mutex<Vec<LaunchSpec>>,
+    exits: Mutex<BTreeMap<u32, ExitHandler>>,
     next_pid: AtomicU32,
     failure: Mutex<Option<io::ErrorKind>>,
 }
@@ -493,6 +495,7 @@ impl FakeProcessLauncher {
     pub fn new() -> Self {
         Self {
             launches: Mutex::default(),
+            exits: Mutex::default(),
             next_pid: AtomicU32::new(Self::FIRST_PID),
             failure: Mutex::default(),
         }
@@ -508,10 +511,22 @@ impl FakeProcessLauncher {
     pub fn launches(&self) -> Vec<LaunchSpec> {
         lock(&self.launches).clone()
     }
+
+    /// The pids launched and not finished yet, ascending.
+    #[must_use]
+    pub fn running(&self) -> Vec<u32> {
+        lock(&self.exits).keys().copied().collect()
+    }
+
+    /// Ends process `pid` with `exit`, calling its exit handler on this thread. False for an unknown or finished pid.
+    pub fn finish(&self, pid: u32, exit: ProcessExit) -> bool {
+        let handler = lock(&self.exits).remove(&pid);
+        handler.map(|handler| handler(exit)).is_some()
+    }
 }
 
 impl ProcessLauncher for FakeProcessLauncher {
-    fn launch(&self, spec: &LaunchSpec) -> io::Result<LaunchedProcess> {
+    fn launch(&self, spec: &LaunchSpec, on_exit: ExitHandler) -> io::Result<LaunchedProcess> {
         if let Some(kind) = *lock(&self.failure) {
             return Err(io::Error::new(
                 kind,
@@ -519,9 +534,9 @@ impl ProcessLauncher for FakeProcessLauncher {
             ));
         }
         lock(&self.launches).push(spec.clone());
-        Ok(LaunchedProcess {
-            pid: self.next_pid.fetch_add(1, Ordering::Relaxed),
-        })
+        let pid = self.next_pid.fetch_add(1, Ordering::Relaxed);
+        lock(&self.exits).insert(pid, on_exit);
+        Ok(LaunchedProcess { pid })
     }
 }
 
@@ -693,10 +708,41 @@ mod tests {
             program: "/bin/true".into(),
             ..LaunchSpec::default()
         };
-        assert_eq!(launcher.launch(&spec).unwrap().pid, FakeProcessLauncher::FIRST_PID);
-        assert_eq!(launcher.launch(&spec).unwrap().pid, FakeProcessLauncher::FIRST_PID + 1);
+        assert_eq!(
+            launcher.launch(&spec, Box::new(|_| ())).unwrap().pid,
+            FakeProcessLauncher::FIRST_PID
+        );
+        assert_eq!(
+            launcher.launch(&spec, Box::new(|_| ())).unwrap().pid,
+            FakeProcessLauncher::FIRST_PID + 1
+        );
         launcher.fail_with(Some(io::ErrorKind::NotFound));
-        assert_eq!(launcher.launch(&spec).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            launcher.launch(&spec, Box::new(|_| ())).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
         assert_eq!(launcher.launches(), [spec.clone(), spec]);
+    }
+
+    #[test]
+    fn launcher_finishes_a_process_once() {
+        let launcher = FakeProcessLauncher::new();
+        let (tx, rx) = mpsc::channel();
+        let pid = launcher
+            .launch(
+                &LaunchSpec::default(),
+                Box::new(move |exit| tx.send(exit.status).unwrap()),
+            )
+            .unwrap()
+            .pid;
+        assert_eq!(launcher.running(), [pid]);
+        let exit = ProcessExit {
+            status: 3,
+            ..ProcessExit::default()
+        };
+        assert!(launcher.finish(pid, exit.clone()));
+        assert!(!launcher.finish(pid, exit));
+        assert_eq!(rx.try_recv(), Ok(3));
+        assert!(launcher.running().is_empty());
     }
 }

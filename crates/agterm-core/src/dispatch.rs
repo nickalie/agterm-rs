@@ -117,9 +117,9 @@ pub struct Core {
     capabilities: Vec<String>,
     library: WindowLibrary,
     settings: AppSettings,
-    persistence: Option<LibraryPersistence>,
+    pub(crate) persistence: Option<LibraryPersistence>,
     /// The app run's event ring, fed by every commit.
-    events: ControlEvents,
+    pub(crate) events: ControlEvents,
     /// The frontend's on-screen windows, by window id.
     window_states: HashMap<Uuid, WindowState>,
     /// What window commands left for the frontend's windows, in order, until it takes them.
@@ -152,6 +152,14 @@ pub struct Core {
     pub(crate) pages: commands::overlay_page::PageRuntime,
     /// The bundled themes and the settings' ghostty config ([`commands::theme`]).
     pub(crate) themes: commands::theme::ThemeRuntime,
+    /// The frontend's process seam and the config directory ([`commands::process`]).
+    pub(crate) processes: commands::process::ProcessRuntime,
+    /// `hooks.conf` and its scheduler ([`commands::hooks`]).
+    pub(crate) hooks: commands::hooks::HookRuntime,
+    /// `keymap.conf` as the app holds it ([`commands::keymap`]).
+    pub(crate) keymap: commands::keymap::KeymapRuntime,
+    /// The editor overlays the Edit menu items opened ([`crate::app_actions`]).
+    pub(crate) config_edits: crate::app_actions::ConfigEdits,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -217,6 +225,10 @@ impl Core {
             jobs: commands::overlay::JobRuntime::default(),
             pages: commands::overlay_page::PageRuntime::default(),
             themes: commands::theme::ThemeRuntime::default(),
+            processes: commands::process::ProcessRuntime::default(),
+            hooks: commands::hooks::HookRuntime::default(),
+            keymap: commands::keymap::KeymapRuntime::default(),
+            config_edits: crate::app_actions::ConfigEdits::default(),
         }
     }
 
@@ -465,16 +477,19 @@ impl Core {
             let effects = self.library.drain_effects();
             (effects.events, Vec::new(), effects.pending_closes)
         };
+        let tree_changed = self.events.record(events);
+        self.run_hooks();
         CommitTimers {
             debounced,
             pending_closes,
-            tree_changed: self.events.record(events),
+            tree_changed,
         }
     }
 
     /// A window's `tree.changed` debounce elapsed: sequence the event unless a later change re-armed it.
     pub fn fire_tree_changed(&mut self, timer: TreeChangedTimer) {
         self.events.fire_tree_changed(timer);
+        self.run_hooks();
     }
 
     /// A debounced save's quiet window elapsed: write it unless a later save superseded it.
@@ -635,6 +650,8 @@ impl Core {
             Command::Font(cmd) => result_of(&commands::font::dispatch(self, cmd, request)?),
             Command::Theme(cmd) => result_of(&commands::theme::dispatch(self, cmd, request)?),
             Command::Pick(cmd) => result_of(&commands::pick::dispatch(self, cmd, request)?),
+            Command::Keymap(cmd) => result_of(&commands::keymap::dispatch(self, cmd, request)?),
+            Command::Hooks(cmd) => result_of(&commands::hooks::dispatch(self, cmd, request)?),
             Command::Events(EventsCmd::Read) => self.read_events(request.args.as_ref()),
             Command::Version => result_of(&self.version()),
             Command::Tree => {
@@ -646,8 +663,6 @@ impl Core {
             cmd @ (Command::Browser(_)
             | Command::Config(_)
             | Command::Debug(_)
-            | Command::Hooks(_)
-            | Command::Keymap(_)
             | Command::Restore(_)
             | Command::Zmx(_)) => Err(ControlError::NotSupported(cmd)),
         }
@@ -656,7 +671,9 @@ impl Core {
 
 #[cfg(test)]
 mod tests {
-    use agterm_proto::command::{EventsCmd, HooksCmd, SidebarCmd, ThemeCmd, WindowCmd, WorkspaceCmd, ZmxCmd};
+    use agterm_proto::command::{
+        BrowserCmd, EventsCmd, HooksCmd, KeymapCmd, SidebarCmd, ThemeCmd, WindowCmd, WorkspaceCmd, ZmxCmd,
+    };
     use serde_json::json;
 
     use super::*;
@@ -685,6 +702,10 @@ mod tests {
         Command::Sidebar(SidebarCmd::FlaggedLayout),
         Command::Theme(ThemeCmd::Set),
         Command::Theme(ThemeCmd::List),
+        Command::Keymap(KeymapCmd::Reload),
+        Command::Keymap(KeymapCmd::List),
+        Command::Hooks(HooksCmd::Reload),
+        Command::Hooks(HooksCmd::List),
     ];
 
     #[test]
@@ -702,7 +723,7 @@ mod tests {
     #[test]
     fn unimplemented_commands_are_refused_by_name() {
         let mut core = core();
-        for cmd in [Command::Hooks(HooksCmd::List), Command::Zmx(ZmxCmd::List)] {
+        for cmd in [Command::Browser(BrowserCmd::Clear), Command::Zmx(ZmxCmd::List)] {
             let response = core.dispatch(&Request::new(cmd));
             assert!(!response.ok);
             assert_eq!(

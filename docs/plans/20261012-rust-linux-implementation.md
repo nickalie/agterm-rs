@@ -215,6 +215,23 @@
     command keeps the exec path, `--wait` and close-on-exit, see Task 26).
   - `conformance/docs/rust-build.md` gets a "Rust target profile" section with this list (Task 5); its capability
     table stays the references' profiles, as `selftests/test_docs.py` checks.
+- Linux keymap defaults (Task 24, settled with Codex: transcript
+  `/tmp/plan-exec-revmux-rust-linux-implementation/task-24-linux-chords/transcript.md`). Upstream's
+  `BuiltinAction.defaultChord` is built on ⌘, which GNOME/KDE take as Super chords, so the Linux build ships its own
+  table (`agterm_core::keymap::linux_defaults`), keeping upstream's grammar and canonical display (`cmd` = Super,
+  `opt` = Alt, `keymap.list` prints `ctrl+cmd+opt+shift`): Ctrl+Shift+<letter> base with the replaced fork's letters
+  (new_window n, new_workspace w, new_session t, open_directory o, close_session q, toggle_split d,
+  toggle_horizontal_split h, toggle_scratch j, toggle_search f, toggle_sidebar s, toggle_flag g, show_attention i,
+  dashboard m, attach_remote r, command_palette p); upstream's ctrl-only chords kept (quick_terminal ctrl+`,
+  session_palette ctrl+p); reopen_recent ctrl+opt+shift+t, custom_command_palette ctrl+opt+shift+o, undo_close
+  ctrl+shift+z, fonts ctrl+= / ctrl+- / ctrl+0, toggle_terminal_zoom ctrl+shift+return, toggle_fullscreen f11, panes
+  ctrl+shift+left/right, sessions ctrl+shift+up/down, attention sessions opt+shift+up/down. Upstream's
+  vacate-when-used rule applies to the defaults new relative to the fork (reopen_recent, undo_close, the three font
+  actions, toggle_terminal_zoom, toggle_fullscreen, custom_command_palette, the six arrow actions) plus attach_remote.
+  The chords are dispatched by one capture-phase key controller per window (custom-command matcher first, then the
+  menu chords); the GTK menu shows them as display-only accelerators, which `keymap.list` reads back.
+  `global-hotkey` lines are parsed and diagnosed as upstream but not registered: Wayland has no client-side global
+  hotkey (the GlobalShortcuts portal is a later option).
 - Launch contract: bind `AGTERM_CONTROL_SOCKET` (rust-build.md; upstream reads it too, the Linux fork does not), else
   `<state dir>/agterm.sock`. Use `AGTERM_APP_ID`, else `io.github.melonamin.agterm`. Honor `AGTERM_STATE_DIR`, `HOME` and the XDG dirs. Load
   `<state>/config/ghostty.conf`. Quit on SIGTERM without a prompt.
@@ -1033,20 +1050,34 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 **Files:**
 - Create: `crates/agterm-core/src/{keymap,hooks}/mod.rs`, `crates/agterm-core/src/commands/{keymap,hooks}.rs`
 - Create: `crates/agterm-gtk/src/{keymap_dispatch,hook_runner}.rs`
+- ➕ Create: `crates/agterm-core/src/{app_actions,palette_catalog}.rs`, `crates/agterm-core/src/commands/process.rs`,
+  `crates/agterm-gtk/src/{app_menu,keymap_actions}.rs`, `crates/agterm-proto/src/keymap.rs`
 
-- [ ] config dir for `keymap.conf` and `hooks.conf` per `ConfigPaths.swift` (with the `AppSettings.configDirectory`
-      override)
-- [ ] keymap model and matcher (`Keymap.swift`, `Keybind*.swift`, `BuiltinAction.swift`, `ControlKeymap.swift`,
+- [x] config dir for `keymap.conf` and `hooks.conf` per `ConfigPaths.swift` (with the `AppSettings.configDirectory`
+      override) (`paths::ConfigLocator`, `Core::config_dir`)
+- [x] keymap model and matcher (`Keymap.swift`, `Keybind*.swift`, `BuiltinAction.swift`, `ControlKeymap.swift`,
       `keymap.md`); keymap.reload, list, run; the app's menu actions and their accelerators after
       `agtermApp+Menus.swift` and `Commands/KeyboardLayout.swift`, as a GTK menu whose live accelerators
-      `keymap.list` reports in `menu`; claim `keymap-menu` (or record the exception in Technical Details)
-- [ ] `hooks.conf` and `HookScheduler` (bounded queue, one child per hook, exit releases a slot); hooks.reload,
-      list; `ProcessLauncher` impl after `Commands/HookProcessRunner.swift` and `HookController.swift`
-- [ ] custom commands (`CustomCommand*.swift`, `Commands/CustomCommandRunner.swift`)
-- [ ] matching `agtermctl` subcommands
-- [ ] write tests: keymap parse/match, scheduler ordering and queue limits (port `HookSchedulerTests`, `HooksTests`)
-- [ ] write tests: reload with a broken file keeps the previous config and reports the error
-- [ ] gate: full run; ratchet (`test_keymap_hooks.py`, `behaviors/test_keymap.py`, `behaviors/test_hooks.py`)
+      `keymap.list` reports in `menu`; claim `keymap-menu` (or record the exception in Technical Details) (Linux
+      default table in Technical Details; one capture-phase key monitor per window and on the quick terminal; the
+      primary menu's File/View/Navigate items carry display-only accelerators read back by `keymap.list`;
+      `PaletteCatalog` ported for the menu/keymap enablement; `keymap-menu` claimed. ➕ the palettes, the theme
+      picker and Attach Remote reach their action but log until Tasks 34 and 29/30 build their UI; `global-hotkey`
+      parsed, not registered)
+- [x] `hooks.conf` and `HookScheduler` (bounded queue, one child per hook, exit releases a slot); hooks.reload,
+      list; `ProcessLauncher` impl after `Commands/HookProcessRunner.swift` and `HookController.swift` (the ring's
+      appended events feed the scheduler after every commit and `tree.changed` fire; `ProcessLauncher` grew an exit
+      handler and stderr capture; GTK `SystemLauncher`)
+- [x] custom commands (`CustomCommand*.swift`, `Commands/CustomCommandRunner.swift`) (spawn, failure banner and
+      `--error-hud` panel, usage counts, Edit Keymap/Hooks/ghostty.conf editor overlays reloading on exit)
+- [x] matching `agtermctl` subcommands
+- [x] write tests: keymap parse/match, scheduler ordering and queue limits (port `HookSchedulerTests`, `HooksTests`)
+- [x] write tests: reload with a broken file keeps the previous config and reports the error (upstream's
+      contract followed: bad lines are reported and the good ones kept; an unreadable file loads nothing and reports
+      one line-0 diagnostic, as `KeymapStore.load`/`loadHooks`)
+- [x] gate: full run; ratchet (`test_keymap_hooks.py`, `behaviors/test_keymap.py`, `behaviors/test_hooks.py`)
+      (588 passed, 54 failed, 12 skipped, 2 errors; ratchet 562 → 588: every keymap/hooks protocol, behaviors and
+      cli id)
 
 ### Task 25: Config reload, browser and debug
 

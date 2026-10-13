@@ -103,6 +103,13 @@ pub enum NotificationEffect {
     /// Withdraw every pane's delivered banner of session `session` in open window `window` (upstream's
     /// `clearDelivered`).
     Clear { window: Uuid, session: Uuid },
+    /// Post an app-level banner tied to no pane (a keymap or hooks problem, a failed custom command or hook), under
+    /// `identity`, which coalesces repeats.
+    App {
+        identity: String,
+        title: String,
+        body: String,
+    },
 }
 
 impl NotificationEffect {
@@ -110,7 +117,7 @@ impl NotificationEffect {
     #[must_use]
     pub fn withdrawn_identities(&self) -> Vec<String> {
         match self {
-            Self::Post(_) => Vec::new(),
+            Self::Post(_) | Self::App { .. } => Vec::new(),
             Self::Clear { window, session } => PaneRole::ALL
                 .into_iter()
                 .map(|pane| identity(*window, *session, pane))
@@ -246,6 +253,19 @@ impl Core {
         };
         self.notifications.push(NotificationEffect::Clear { window, session });
         true
+    }
+
+    /// Queues an app-level banner when banners are on (upstream's `NotificationManager` app-level posts, each guarded
+    /// by `bannersEnabled`).
+    pub(crate) fn post_app_banner(&mut self, identity: impl Into<String>, title: &str, body: impl Into<String>) {
+        if !self.banners_enabled() {
+            return;
+        }
+        self.notifications.push(NotificationEffect::App {
+            identity: identity.into(),
+            title: title.to_owned(),
+            body: body.into(),
+        });
     }
 
     /// Takes the banner posts and withdrawals queued since the last take, in order.

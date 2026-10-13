@@ -7,6 +7,7 @@
 //!
 //! Work that needs a live terminal, widget, daemon or process goes through the `agterm-host` traits.
 
+pub mod app_actions;
 pub mod auto_follow;
 pub mod clipboard_policy;
 pub mod command_restore;
@@ -16,9 +17,11 @@ pub mod dispatch;
 pub mod error;
 pub mod events;
 pub mod fuzzy;
+pub mod hooks;
 pub mod html;
 pub mod hud;
 pub mod interrupt;
+pub mod keymap;
 pub mod keystrokes;
 pub mod link_policy;
 pub mod modal;
@@ -26,6 +29,7 @@ pub mod model;
 pub mod osc_background;
 pub mod overlay_capture;
 pub mod overlay_jobs;
+pub mod palette_catalog;
 pub mod pane_env;
 pub mod paths;
 pub mod persist;
@@ -42,11 +46,13 @@ pub mod zoom;
 
 pub use commands::PaneReport;
 pub use commands::hud::{CellEstimator, HudHideTimer, WINDOW_PADDING as HUD_WINDOW_PADDING};
+pub use commands::keymap::{FAILURE_HUD_SECONDS, MenuReader};
 pub use commands::notify::{
     BANNERS_OFF_NOTE, NotificationEffect, NotificationPost, PaneRole, identity as notification_identity,
     parse_identity as parse_notification_identity, should_deliver,
 };
 pub use commands::overlay::JobChannel;
+pub use commands::process::{CorePoster, CoreTask, ProcessHost, widened_path};
 pub use commands::surface::POLL_INTERVAL;
 pub use dispatch::{CommitTimers, Core, CoreConfig, CoreState, Dispatched, Resume, decode_request};
 pub use error::{ControlError, Noun};

@@ -192,6 +192,9 @@ pub struct LaunchSpec {
     pub cwd: Option<PathBuf>,
     /// Bytes written to the process's stdin, which is then closed; stdin is null when `None`.
     pub stdin: Option<Vec<u8>>,
+    /// Capture the tail of what the process writes to stderr (to a temp file, never a pipe, so a descendant outliving
+    /// the app is not killed by a broken pipe) and hand it back on exit; stderr is null otherwise.
+    pub capture_stderr: bool,
 }
 
 /// A started helper process.
@@ -200,12 +203,30 @@ pub struct LaunchedProcess {
     pub pid: u32,
 }
 
+/// How a launched process ended, delivered once, after its stdin was written and closed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProcessExit {
+    /// The exit status, or the number of the signal that ended the process.
+    pub status: i32,
+    /// The last [`STDERR_TAIL_LIMIT`] bytes the process wrote to stderr, when captured.
+    pub stderr_tail: Vec<u8>,
+    /// Why writing `stdin` failed, other than the process leaving without reading it (a broken pipe).
+    pub stdin_failure: Option<String>,
+}
+
+/// How much of a captured stderr comes back (upstream's `CommandFailure.tailLimit`).
+pub const STDERR_TAIL_LIMIT: usize = 16 * 1024;
+
+/// Receives a launched process's [`ProcessExit`], on a thread of the launcher's.
+pub type ExitHandler = Box<dyn FnOnce(ProcessExit) + Send + 'static>;
+
 /// Starts helper processes (overlay programs, hooks, custom commands) and reaps them.
 pub trait ProcessLauncher: Send + Sync {
-    /// Starts `spec` detached; the launcher reaps it.
+    /// Starts `spec` detached; the launcher reaps it and calls `on_exit` exactly once. Never calls `on_exit` when the
+    /// launch fails.
     ///
     /// # Errors
     ///
     /// The process could not be started.
-    fn launch(&self, spec: &LaunchSpec) -> io::Result<LaunchedProcess>;
+    fn launch(&self, spec: &LaunchSpec, on_exit: ExitHandler) -> io::Result<LaunchedProcess>;
 }

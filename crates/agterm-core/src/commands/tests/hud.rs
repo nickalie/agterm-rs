@@ -602,7 +602,9 @@ fn posts(core: &mut crate::Core) -> Vec<NotificationPost> {
         .into_iter()
         .map(|effect| match effect {
             NotificationEffect::Post(post) => post,
-            clear @ NotificationEffect::Clear { .. } => panic!("unexpected {clear:?}"),
+            other @ (NotificationEffect::Clear { .. } | NotificationEffect::App { .. }) => {
+                panic!("unexpected {other:?}")
+            }
         })
         .collect()
 }
@@ -860,6 +862,7 @@ fn posts_and_withdrawals_keep_their_order_and_spare_other_sessions() {
         .map(|effect| match effect {
             NotificationEffect::Post(post) => (post.session, Some(post.body.as_str())),
             NotificationEffect::Clear { session, .. } => (*session, None),
+            NotificationEffect::App { .. } => (Uuid::nil(), None),
         })
         .collect();
     assert_eq!(

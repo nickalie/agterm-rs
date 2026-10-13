@@ -7,6 +7,8 @@ mod client;
 mod dashboard;
 mod events;
 mod font;
+mod hooks;
+mod keymap;
 mod modal;
 mod notify;
 mod output;
@@ -73,6 +75,8 @@ enum Command {
     Sidebar(sidebar::Sidebar),
     Notify(notify::Notify),
     Font(font::Font),
+    Keymap(keymap::Keymap),
+    Hooks(hooks::Hooks),
     Theme(theme::Theme),
     Pick(pick::Pick),
     Ask(ask::Ask),
@@ -94,6 +98,8 @@ impl Command {
             Self::Sidebar(command) => command.check(),
             Self::Notify(command) => command.validate(),
             Self::Font(command) => command.check(),
+            Self::Keymap(command) => command.check(),
+            Self::Hooks(command) => command.check(),
             Self::Theme(command) => command.check(),
             Self::Ask(command) => command.check(),
             Self::Pick(_) | Self::Version(_) => Ok(()),
@@ -113,6 +119,8 @@ impl Command {
             Self::Sidebar(command) => command.execute(env),
             Self::Notify(command) => command.default_run(env),
             Self::Font(command) => command.execute(env),
+            Self::Keymap(command) => command.execute(env),
+            Self::Hooks(command) => command.execute(env),
             Self::Theme(command) => command.execute(env),
             Self::Pick(command) => command.execute(env),
             Self::Ask(command) => command.execute(env),

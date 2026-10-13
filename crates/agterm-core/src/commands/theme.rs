@@ -28,7 +28,7 @@ pub(crate) struct ThemeRuntime {
     /// The text last generated, compared against when there is no file.
     written: Option<String>,
     /// A settings change rewrote the config: the frontend reloads it into every terminal, zoom cleared.
-    reload_requested: bool,
+    pub(crate) reload_requested: bool,
 }
 
 impl Core {

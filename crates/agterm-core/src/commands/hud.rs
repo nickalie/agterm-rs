@@ -487,9 +487,13 @@ impl Core {
     /// closes, unless a replacement took it since, wherever its session is, a pending close included (its terminal
     /// runs on, and an undo brings the same object back). Whether it closed; commit afterwards.
     pub fn overlay_exited(&mut self, session: Uuid, generation: u64) -> bool {
-        self.library_mut().held_session_mut(session).is_some_and(|found| {
+        let closed = self.library_mut().held_session_mut(session).is_some_and(|found| {
             found.overlay.active && found.overlay.generation == generation && found.overlay.close()
-        })
+        });
+        if closed {
+            self.config_edit_ended(session, generation);
+        }
+        closed
     }
 
     /// Session `id`, wherever its window is.

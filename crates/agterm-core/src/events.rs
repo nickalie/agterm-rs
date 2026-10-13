@@ -322,6 +322,9 @@ pub struct ControlEvents {
     /// The live debounce of each window with a `tree.changed` pending, by token.
     pending_tree_changed: HashMap<Uuid, u64>,
     next_token: u64,
+    /// The events sequenced since the last [`ControlEvents::take_appended`], in order: what the ring's post-append
+    /// observers (the hooks) still have to see (upstream's `WindowLibrary.onControlEvent`).
+    appended: Vec<ControlEvent>,
 }
 
 impl ControlEvents {
@@ -332,6 +335,7 @@ impl ControlEvents {
             ring,
             pending_tree_changed: HashMap::new(),
             next_token: 0,
+            appended: Vec::new(),
         }
     }
 
@@ -352,7 +356,8 @@ impl ControlEvents {
                 }
                 continue;
             }
-            self.ring.append(event.into());
+            let event = self.ring.append(event.into());
+            self.appended.push(event);
         }
         debounced.into_iter().map(|window| self.arm(window)).collect()
     }
@@ -373,7 +378,9 @@ impl ControlEvents {
             return None;
         }
         self.pending_tree_changed.remove(&timer.window);
-        Some(self.ring.append(tree_changed(timer.window)))
+        let event = self.ring.append(tree_changed(timer.window));
+        self.appended.push(event.clone());
+        Some(event)
     }
 
     /// Sequences every pending `tree.changed` now, in the order they were armed (upstream's `flushTreeEvents`, a
@@ -386,8 +393,14 @@ impl ControlEvents {
             .collect();
         pending.sort_unstable();
         for (_, window) in pending {
-            self.ring.append(tree_changed(window));
+            let event = self.ring.append(tree_changed(window));
+            self.appended.push(event);
         }
+    }
+
+    /// Takes the events sequenced since the last take, in sequence order.
+    pub fn take_appended(&mut self) -> Vec<ControlEvent> {
+        std::mem::take(&mut self.appended)
     }
 
     /// Reads the ring (see [`EventRing::read`]).

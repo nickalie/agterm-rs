@@ -23,6 +23,12 @@ use agterm_proto::{Command, Request};
 use agterm_server::{LineStream, LineStreamLimits, LineStreamOwner, Reply, ReplySender};
 use uuid::Uuid;
 
+use agterm_core::app_actions::{ActionEffect, ActionOrigin};
+use agterm_core::keymap::{CommandPane, CustomCommand};
+use agterm_core::model::StatusPane;
+
+use crate::app_menu::MenuCommand;
+use crate::keymap_dispatch::{Fired, KeyOrigin};
 use crate::main_loop::GlibMainLoop;
 use crate::quick::QuickPanel;
 use crate::windows::Windows;
@@ -185,9 +191,11 @@ impl AppState {
         }
         let sounds = self.core.take_status_sounds();
         let banners = self.core.take_notifications();
+        crate::keymap_dispatch::sync(&self.core, &self.poster);
         match self.windows.as_mut() {
             Some(windows) => {
                 windows.sync(&mut self.core, &self.poster);
+                windows.menu().sync(&self.core);
                 self.quick.sync(&mut self.core, windows, &self.poster);
                 for name in &sounds {
                     play_status_sound(name);
@@ -608,6 +616,86 @@ impl AppState {
 
     /// The user closed window `window` (upstream's window `willClose`): its snapshot is written and its store closed,
     /// tearing its terminals down; the settle then drops the GTK window, and the app quits once none is open.
+    /// A keymap chord fired (`keymap_dispatch`): a built-in runs as its menu item would, a custom command for the
+    /// pane on screen in the window it fired in (the active window for the quick terminal), else sessionless.
+    pub fn keymap_fired(&mut self, origin: KeyOrigin, fired: Fired) {
+        if self.quitting {
+            return;
+        }
+        let window = match origin {
+            KeyOrigin::Window(window) => Some(window),
+            KeyOrigin::Quick => self.core.library().active_window_id(),
+        };
+        match fired {
+            Fired::Builtin(action) => {
+                let Some(window) = window else { return };
+                let origin = ActionOrigin {
+                    window,
+                    quick: origin == KeyOrigin::Quick,
+                };
+                let effect = self.core.perform_builtin(origin, action);
+                self.apply_action_effect(effect);
+            }
+            Fired::Command(command) => self.run_keybind_command(window, &command),
+        }
+        self.settle();
+    }
+
+    /// A custom command fired by a chord: for the active session's pane on screen, else sessionless.
+    fn run_keybind_command(&mut self, window: Option<Uuid>, command: &CustomCommand) {
+        let session = window.and_then(|window| {
+            let store = self.core.library().store(window)?;
+            let state = store.active_session()?;
+            let pane = match state.on_screen_pane() {
+                StatusPane::Scratch => CommandPane::Scratch,
+                StatusPane::Right => CommandPane::Right,
+                StatusPane::Left => CommandPane::Left,
+            };
+            Some((window, state.id(), pane))
+        });
+        match session {
+            Some((window, session, pane)) => {
+                let _ = self.core.run_custom_command_in(command, window, session, pane, None);
+            }
+            None => self.core.run_custom_command_sessionless(command, window),
+        }
+    }
+
+    /// An app menu item was chosen: it acts on the frontmost window.
+    pub fn menu_activated(&mut self, command: MenuCommand) {
+        let Some(window) = self.core.library().active_window_id().filter(|_| !self.quitting) else {
+            return;
+        };
+        let effect = match command {
+            MenuCommand::Row(row) => self.core.perform_menu_command(window, row),
+            MenuCommand::Builtin(action) => self.core.perform_builtin(ActionOrigin { window, quick: false }, action),
+        };
+        self.apply_action_effect(effect);
+        self.settle();
+    }
+
+    /// Finishes what an action left to the frontend.
+    fn apply_action_effect(&mut self, effect: ActionEffect) {
+        let ActionEffect::Frontend(action) = effect else { return };
+        let Some(windows) = self.windows.as_ref() else { return };
+        let close_grace = self.core.settings().close_grace_undo_enabled.unwrap_or(true);
+        crate::keymap_actions::perform(windows, &self.poster, action, close_grace);
+    }
+
+    /// A window dialog committed: `window.rename` or `window.delete` for window `window`.
+    pub fn window_command(&mut self, cmd: agterm_proto::command::WindowCmd, window: Uuid, name: Option<String>) {
+        if self.quitting {
+            return;
+        }
+        let response = self
+            .core
+            .dispatch(&crate::keymap_actions::window_request(cmd, window, name));
+        if !response.ok {
+            tracing::info!(error = ?response.error, "window dialog refused");
+        }
+        self.settle();
+    }
+
     pub fn close_requested(&mut self, window: Uuid) {
         if self.quitting {
             return;

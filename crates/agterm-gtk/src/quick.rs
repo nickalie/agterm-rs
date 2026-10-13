@@ -111,6 +111,7 @@ impl Panel {
         let holds_key = Rc::new(Cell::new(false));
         connect_terminal(&terminal, poster);
         connect_window(&window, &holds_key, poster);
+        crate::keymap_dispatch::install(&window, crate::keymap_dispatch::KeyOrigin::Quick);
         Self {
             window,
             terminal,

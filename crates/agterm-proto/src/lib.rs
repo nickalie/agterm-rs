@@ -3,6 +3,7 @@
 
 pub mod command;
 pub mod events;
+pub mod keymap;
 pub mod request;
 pub mod response;
 pub mod result;
@@ -11,6 +12,10 @@ pub mod version;
 
 pub use command::{Command, Group, UnknownCommand};
 pub use events::{ControlEvent, EventBatch, EventKind, EventPayload};
+pub use keymap::{
+    ControlHookEntry, ControlHooks, ControlKeymap, ControlKeymapAction, ControlKeymapCommand, ControlKeymapDiagnostic,
+    ControlKeymapMenuItem,
+};
 pub use request::{Args, AskButton, MAX_REQUEST_LINE_BYTES, PickItem, Request};
 pub use response::Response;
 pub use result::{
