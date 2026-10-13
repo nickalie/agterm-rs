@@ -4,8 +4,9 @@
 //! - An argv is `/proc/<pid>/cmdline`: NUL-terminated arguments, decoded lossily so an undecodable byte becomes U+FFFD,
 //!   which the restore then refuses to replay, as upstream's lossy decode does. A zombie or a kernel thread reads
 //!   empty and has no argv.
-//! - The ids are `/proc/<pid>/stat`, whose command name may hold spaces and parentheses, so the fields after it are
-//!   found from the last `)`.
+//! - The ids are `/proc/<pid>/stat`, whose command name may hold spaces, parentheses and any byte (the kernel cuts it
+//!   at 15 bytes, even inside a UTF-8 character), so the line is read as bytes and the fields after it are found from
+//!   the last `)`.
 //! - A process group's members come from a scan of every `/proc/<pid>/stat`: Linux has no per-group listing.
 
 use std::fs;
@@ -41,7 +42,7 @@ impl ProcTable {
     }
 
     fn read_stat(path: &Path) -> Option<ProcessStat> {
-        parse_stat(&fs::read_to_string(path).ok()?)
+        parse_stat(&fs::read(path).ok()?)
     }
 }
 
@@ -83,11 +84,14 @@ pub fn parse_cmdline(bytes: &[u8]) -> Option<Vec<String>> {
     )
 }
 
-/// The ids in a `/proc/<pid>/stat` line, `pid (comm) state ppid pgrp session …`. The command name may hold spaces and
-/// `)`, so the fields after it start at the last `)`. `None` for a malformed line.
-pub fn parse_stat(text: &str) -> Option<ProcessStat> {
-    let (head, tail) = text.rsplit_once(')')?;
-    let (pid, _comm) = head.split_once('(')?;
+/// The ids in a `/proc/<pid>/stat` line, `pid (comm) state ppid pgrp session …`. The command name may hold spaces, `)`
+/// and bytes that are not UTF-8, so only the fields around it are decoded: the pid before the first `(` and the fields
+/// after the last `)`. `None` for a malformed line.
+pub fn parse_stat(line: &[u8]) -> Option<ProcessStat> {
+    let close = line.iter().rposition(|byte| *byte == b')')?;
+    let open = line[..close].iter().position(|byte| *byte == b'(')?;
+    let pid = std::str::from_utf8(&line[..open]).ok()?;
+    let tail = std::str::from_utf8(&line[close + 1..]).ok()?;
     let mut fields = tail.split_ascii_whitespace().skip(1).map(str::parse::<i32>);
     Some(ProcessStat {
         pid: pid.trim().parse().ok()?,
@@ -140,29 +144,39 @@ mod tests {
     #[test]
     fn a_stat_line_reads_past_spaces_and_parentheses_in_the_command_name() {
         assert_eq!(
-            parse_stat("4242 (zsh) S 4200 4242 4242 34817 4300 4194560 0"),
+            parse_stat(b"4242 (zsh) S 4200 4242 4242 34817 4300 4194560 0"),
             Some(stat(4242, 4200, 4242, 4242))
         );
-        assert_eq!(parse_stat("17 (a (b) c) R 1 17 9 0 -1\n"), Some(stat(17, 1, 17, 9)));
-        assert_eq!(parse_stat("18 ()) S 2 3 4 0"), Some(stat(18, 2, 3, 4)));
-        assert_eq!(parse_stat("19 (x) S 2 3"), None);
-        assert_eq!(parse_stat("(x) S 2 3 4"), None);
-        assert_eq!(parse_stat(""), None);
+        assert_eq!(parse_stat(b"17 (a (b) c) R 1 17 9 0 -1\n"), Some(stat(17, 1, 17, 9)));
+        assert_eq!(parse_stat(b"18 ()) S 2 3 4 0"), Some(stat(18, 2, 3, 4)));
+        assert_eq!(parse_stat(b"19 (x) S 2 3"), None);
+        assert_eq!(parse_stat(b"(x) S 2 3 4"), None);
+        assert_eq!(parse_stat(b""), None);
+    }
+
+    #[test]
+    fn a_command_name_that_is_not_utf8_still_reads() {
+        // fourteen ASCII bytes and an `é` the kernel cut after its first byte
+        assert_eq!(
+            parse_stat(b"20 (abcdefghijklmn\xc3) S 1 20 20 0"),
+            Some(stat(20, 1, 20, 20))
+        );
+        assert_eq!(parse_stat(b"21 (\xff\xfe) S 1 21 9 0"), Some(stat(21, 1, 21, 9)));
     }
 
     #[test]
     fn a_fake_tree_answers_argv_stat_and_group() {
         let root = tempfile::tempdir().unwrap();
-        let write = |pid: i32, cmdline: &[u8], stat: &str| {
+        let write = |pid: i32, cmdline: &[u8], stat: &[u8]| {
             let dir = root.path().join(pid.to_string());
             fs::create_dir(&dir).unwrap();
             fs::write(dir.join("cmdline"), cmdline).unwrap();
             fs::write(dir.join("stat"), stat).unwrap();
         };
-        write(100, b"-zsh\0", "100 (zsh) S 9 100 100 0");
-        write(101, b"tail\0-f\0log\0", "101 (tail) S 100 101 100 0");
-        write(102, b"grep\0x\0", "102 (grep) S 100 101 100 0");
-        write(103, b"", "103 (defunct) Z 100 101 100 0");
+        write(100, b"-zsh\0", b"100 (zsh) S 9 100 100 0");
+        write(101, b"tail\0-f\0log\0", b"101 (tail) S 100 101 100 0");
+        write(102, b"grep\0x\0", b"102 (gr\xc3) S 100 101 100 0");
+        write(103, b"", b"103 (defunct) Z 100 101 100 0");
         fs::create_dir(root.path().join("self")).unwrap();
         let table = ProcTable::at(root.path());
 

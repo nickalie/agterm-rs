@@ -20,7 +20,7 @@ use crate::command_restore::{DENYLIST_FILE, DENYLIST_STARTER, parse_denylist};
 use agterm_proto::ControlTree;
 
 use crate::command_restore::PaneForeground;
-use crate::model::{AppStore, Session, StatusPane, SurfaceSlot};
+use crate::model::{AppStore, Session, StatusPane, SurfaceSlot, WindowLibrary};
 use crate::restore::capture::{CaptureKind, ForegroundReader, capture_foreground_commands};
 use crate::restore::mode::{RestoreLaunchDecision, captures_on_exit};
 use crate::restore::pacer::{DEFAULT_INTERVAL, SpawnPacer};
@@ -49,6 +49,10 @@ pub(crate) struct RestoreRuntime {
     pacer: SpawnPacer,
     /// Keys the pacer granted since the frontend last collected them.
     grants: Vec<Uuid>,
+    /// Panes whose terminal asked, or was granted, while the pane could not show: a hidden split, or a session a
+    /// pending close holds. Upstream unmounts such a pane and its remounted view asks again; here the terminal stays
+    /// and asks only once, so the pane is granted when it shows again, and forgotten once it leaves the model.
+    held: HashSet<Uuid>,
 }
 
 impl Default for RestoreRuntime {
@@ -60,6 +64,7 @@ impl Default for RestoreRuntime {
             shell: None,
             pacer: SpawnPacer::new(DEFAULT_INTERVAL),
             grants: Vec::new(),
+            held: HashSet::new(),
         }
     }
 }
@@ -143,14 +148,25 @@ impl Core {
     /// The terminal of `session`'s pane carrying `token` is ready to spawn: its seed when it may spawn now, consuming
     /// the slots the launch armed for it; `None` while it waits for its paced turn, which
     /// [`Core::take_spawn_grants`] later hands back. A pane that replays nothing leaves the queue and spawns at once;
-    /// one no session holds any more spawns a plain shell.
+    /// one a pending close holds waits for the undo; one no session holds any more spawns a plain shell.
     pub fn request_pane_spawn(&mut self, session: Uuid, token: &str, now: Instant) -> Option<LaunchSeed> {
+        let seed = self.answer_pane_spawn(session, token, now);
+        self.log_spawn_drain(now);
+        seed
+    }
+
+    fn answer_pane_spawn(&mut self, session: Uuid, token: &str, now: Instant) -> Option<LaunchSeed> {
         let policy = self.restore.policy();
         let Some((role, key, paces)) = self.find_session(session).and_then(|session| {
             let role = session.pane_role_for_token(token)?;
             let key = pane_key(session, role)?;
             Some((role, key, should_pace(session, role, &policy)))
         }) else {
+            // a session a pending close holds spawns on its undo, as upstream's remounted view would
+            if let Some(key) = self.pending_close_pane_key(session, token) {
+                self.restore.held.insert(key);
+                return None;
+            }
             return Some(LaunchSeed::default());
         };
         if !paces {
@@ -182,6 +198,7 @@ impl Core {
                 self.restore.grants.push(key);
             }
         }
+        self.log_spawn_drain(now);
     }
 
     /// The panes granted since the last call, with their seeds; a granted pane whose session or slot is gone is
@@ -192,6 +209,10 @@ impl Core {
         let mut spawns = Vec::new();
         for key in keys {
             let Some(session) = self.find_session_by_pane_mut(key) else {
+                // a pane a pending close holds gets its grant back on the undo
+                if pane_hold(self.library(), key) == PaneHold::Held {
+                    self.restore.held.insert(key);
+                }
                 continue;
             };
             let role = if session.pane_identity == key {
@@ -226,11 +247,14 @@ impl Core {
         if let Some(key) = self.restore.pacer.wake(now) {
             self.restore.grants.push(key);
         }
+        self.log_spawn_drain(now);
     }
 
-    /// Drops the queued keys of panes no open window holds any more, or the queue would wait on them forever
-    /// (upstream's `launchPaneDrop`). Part of every commit.
+    /// Drops the queued keys of panes that cannot show (upstream's `launchPaneDrop`): a pane no open window holds, a
+    /// hidden split, a session a pending close holds; or the queue would wait on them. A dropped pane whose terminal
+    /// already asked is held, and granted once it shows again (see `RestoreRuntime::held`). Part of every commit.
     pub(crate) fn prune_spawn_queue(&mut self) {
+        self.release_held_spawns();
         if self.restore.pacer.is_passthrough() {
             return;
         }
@@ -243,7 +267,37 @@ impl Core {
                 std::iter::once(session.pane_identity).chain(split)
             })
             .collect();
+        for key in self.restore.pacer.waiting_keys() {
+            if !live.contains(&key) && pane_hold(self.library(), key) == PaneHold::Held {
+                self.restore.held.insert(key);
+            }
+        }
         self.restore.pacer.retain(|key| live.contains(key));
+        self.log_spawn_drain(Instant::now());
+    }
+
+    /// Grants the held panes that show again, and forgets the ones that left the model, whose terminal went with them.
+    fn release_held_spawns(&mut self) {
+        if self.restore.held.is_empty() {
+            return;
+        }
+        for key in std::mem::take(&mut self.restore.held) {
+            match pane_hold(self.library(), key) {
+                PaneHold::Shown => self.restore.grants.push(key),
+                PaneHold::Held => {
+                    self.restore.held.insert(key);
+                }
+                PaneHold::Gone => {}
+            }
+        }
+    }
+
+    /// Logs how long the launch spawn queue took to drain, once, right after the call that drained it (upstream's
+    /// `pacer.onDrain`).
+    fn log_spawn_drain(&mut self, now: Instant) {
+        if let Some(drained) = self.restore.pacer.take_drained(now) {
+            tracing::debug!(ms = drained.as_millis(), "launch spawn queue drained");
+        }
     }
 
     /// The quit capture (upstream's `makeExitCapture` closure from `applicationWillTerminate`): with `rerun` or `live`
@@ -325,6 +379,16 @@ impl Core {
         self.library_mut().store_mut(window)?.session_mut(id)
     }
 
+    /// The pacer key of `session`'s pane carrying `token`, when a pending close of an open window holds the session.
+    fn pending_close_pane_key(&self, session: Uuid, token: &str) -> Option<Uuid> {
+        let library = self.library();
+        let held = library
+            .open_ids()
+            .into_iter()
+            .find_map(|id| library.store(id)?.pending_close_session(session))?;
+        pane_key(held, held.pane_role_for_token(token)?)
+    }
+
     fn find_session_by_pane_mut(&mut self, key: Uuid) -> Option<&mut Session> {
         let id = self
             .library()
@@ -334,6 +398,38 @@ impl Core {
             .id();
         self.find_session_mut(id)
     }
+}
+
+/// Whether the pane keyed `key` can show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaneHold {
+    /// An open window's session shows it: a main pane, or a shown split.
+    Shown,
+    /// Its terminal lives but the pane cannot show: a hidden split, or a session a pending close holds.
+    Held,
+    /// No open window holds it.
+    Gone,
+}
+
+fn pane_hold(library: &WindowLibrary, key: Uuid) -> PaneHold {
+    let holds = |session: &Session| session.pane_identity == key || session.split_pane_identity == Some(key);
+    for store in library.open_ids().into_iter().filter_map(|id| library.store(id)) {
+        if let Some(session) = store.sessions().find(|session| holds(session)) {
+            return if session.pane_identity == key || session.split.shown {
+                PaneHold::Shown
+            } else {
+                PaneHold::Held
+            };
+        }
+        if store
+            .pending_close_members()
+            .into_iter()
+            .any(|member| holds(member.session))
+        {
+            return PaneHold::Held;
+        }
+    }
+    PaneHold::Gone
 }
 
 /// The pacer key of `session`'s pane `role`: its pane identity.

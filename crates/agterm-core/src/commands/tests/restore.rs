@@ -80,7 +80,7 @@ fn a_refused_live_request_reports_why_and_runs_fresh_shells() {
         json!({"configured": "live", "requestedAtLaunch": "live", "active": "none", "restartRequired": false,
                "unavailableReason": reason})
     );
-    // switching away keeps the reason off: it is only ever about a live request this launch made
+    // switching away keeps the reason: it describes the live request this launch made, whatever the settings now hold
     let set = status(&restore(&mut fixture.core, RestoreCmd::Mode, |a| {
         a.mode = Some("rerun".into());
     }));
@@ -373,4 +373,112 @@ fn a_window_close_clears_its_captures_unless_it_is_the_last() {
     core.close_window(second);
     let _ = core.commit();
     assert!(file(second).contains("sleep"), "{}", file(second));
+}
+
+/// A relaunch whose `queued` session (a `cat` pane with a split pinned to `htop`) waits its paced turn behind the
+/// selected one; answers the core, `queued` and the window holding it.
+fn relaunch_with_a_queued_split(dir: &Path) -> (Core, Uuid, Uuid) {
+    let mut core = persistent_core(dir, settings(RestoreMode::Rerun));
+    let queued = new_session(&mut core, Some("cat"), false);
+    let on = args(|a| a.mode = Some("on".into()));
+    assert!(send(&mut core, Command::Session(SessionCmd::Split), Some(&wire(queued)), on).ok);
+    let window = core.library().window_holding_session(queued).expect("a window");
+    core.library_mut()
+        .store_mut(window)
+        .and_then(|store| store.session_mut(queued))
+        .expect("queued")
+        .split_restore
+        .command = Some("htop".to_owned());
+    new_session(&mut core, None, false);
+    let _ = core.commit();
+    assert!(core.save_all());
+
+    let mut core = persistent_core(dir, settings(RestoreMode::Rerun));
+    core.set_restore_launch(RestoreLaunchDecision::new(RestoreMode::Rerun, None));
+    core.arm_launch_spawns(Instant::now());
+    (core, queued, window)
+}
+
+/// Installs a terminal in `session`'s split slot; its token.
+fn install_split(core: &mut Core, session: Uuid) -> String {
+    let window = core.library().window_holding_session(session).expect("a window");
+    let target = core
+        .library_mut()
+        .store_mut(window)
+        .and_then(|store| store.session_mut(session))
+        .expect("the session");
+    let token = wire(target.split_pane_identity.expect("a split"));
+    let _ = target.split_surface.replace(Box::new(terminal(&token, None)));
+    token
+}
+
+fn open_store(core: &mut Core, window: Uuid) -> &mut crate::model::AppStore {
+    core.library_mut().store_mut(window).expect("open")
+}
+
+fn split_mode(core: &mut Core, session: Uuid, mode: &str) {
+    let mode = args(|a| a.mode = Some(mode.into()));
+    assert!(send(core, Command::Session(SessionCmd::Split), Some(&wire(session)), mode).ok);
+    let _ = core.commit();
+}
+
+/// Upstream unmounts a hidden split and its remounted view asks again; here the terminal stays and asks once, so a
+/// split hidden while it waited its turn is granted when it shows again rather than left without a shell.
+#[test]
+fn a_queued_split_hidden_while_it_waits_spawns_when_it_shows_again() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let (mut core, queued, _) = relaunch_with_a_queued_split(dir.path());
+    let token = install_split(&mut core, queued);
+    assert_eq!(core.request_pane_spawn(queued, &token, Instant::now()), None);
+    split_mode(&mut core, queued, "off");
+    assert_eq!(core.take_spawn_grants(), Vec::new(), "no grant while hidden");
+    split_mode(&mut core, queued, "on");
+    let grants = core.take_spawn_grants();
+    assert_eq!(grants.len(), 1, "{grants:?}");
+    assert_eq!((grants[0].session, grants[0].token.as_str()), (queued, token.as_str()));
+    // the pin is typed, never exec'd
+    assert_eq!(grants[0].seed.initial_input.as_deref(), Some("htop\n"));
+    // granted once
+    split_mode(&mut core, queued, "off");
+    split_mode(&mut core, queued, "on");
+    assert_eq!(core.take_spawn_grants(), Vec::new());
+}
+
+/// A queued pane whose session is soft-closed spawns on the undo, and one that asks while the close holds it waits
+/// for the undo too; a finalized close forgets it.
+#[test]
+fn a_soft_closed_session_spawns_its_waiting_panes_on_the_undo() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let (mut core, queued, window) = relaunch_with_a_queued_split(dir.path());
+    let main = install(&mut core, queued, None);
+    let split = install_split(&mut core, queued);
+    let now = Instant::now();
+    assert_eq!(core.request_pane_spawn(queued, &main, now), None);
+    assert!(open_store(&mut core, window).soft_close_session(queued));
+    let _ = core.commit();
+    assert_eq!(
+        core.take_spawn_grants(),
+        Vec::new(),
+        "no grant while the close holds it"
+    );
+    assert_eq!(
+        core.request_pane_spawn(queued, &split, now),
+        None,
+        "an ask while held waits too"
+    );
+    assert!(open_store(&mut core, window).undo_pending_close(None));
+    let _ = core.commit();
+    let mut granted: Vec<String> = core.take_spawn_grants().into_iter().map(|grant| grant.token).collect();
+    granted.sort();
+    let mut expected = vec![main, split.clone()];
+    expected.sort();
+    assert_eq!(granted, expected);
+
+    // finalized: nothing comes back
+    assert!(open_store(&mut core, window).soft_close_session(queued));
+    let _ = core.commit();
+    assert_eq!(core.request_pane_spawn(queued, &split, now), None);
+    open_store(&mut core, window).finalize_all_pending_closes();
+    let _ = core.commit();
+    assert_eq!(core.take_spawn_grants(), Vec::new());
 }

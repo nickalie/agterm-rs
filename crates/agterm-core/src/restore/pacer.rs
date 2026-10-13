@@ -183,6 +183,16 @@ impl SpawnPacer {
         }
     }
 
+    /// The keys whose view asked and that wait for their turn.
+    #[must_use]
+    pub fn waiting_keys(&self) -> Vec<Uuid> {
+        self.states
+            .iter()
+            .filter(|(_, state)| **state == State::Ready)
+            .map(|(key, _)| *key)
+            .collect()
+    }
+
     /// Answers a fired wake timer: grants the head of the queue when its view has asked and the interval since the
     /// last grant has passed, and the caller spawns it. `None` when the wake came early or nothing is grantable; ask
     /// [`Self::take_wake_request`] after it either way.

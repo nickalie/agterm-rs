@@ -697,13 +697,13 @@ impl TerminalSurface {
         self.inner.key
     }
 
-    /// Records whose terminal this is, which a chord typed in it reads its context from.
     /// Whose terminal this is.
     #[must_use]
     pub fn owner(&self) -> Option<SurfaceOwner> {
         self.inner.owner.borrow().clone()
     }
 
+    /// Records whose terminal this is, which a chord typed in it reads its context from.
     pub fn set_owner(&self, owner: SurfaceOwner) {
         self.inner.owner.replace(Some(owner));
     }
