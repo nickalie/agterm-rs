@@ -743,7 +743,7 @@ impl AppState {
     }
 
     /// Finishes what an action left to the frontend.
-    fn apply_action_effect(&mut self, effect: ActionEffect) {
+    pub(crate) fn apply_action_effect(&mut self, effect: ActionEffect) {
         let ActionEffect::Frontend(action) = effect else { return };
         let Some(windows) = self.windows.as_ref() else { return };
         let close_grace = self.core.settings().close_grace_undo_enabled.unwrap_or(true);

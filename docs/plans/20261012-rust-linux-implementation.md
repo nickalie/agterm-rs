@@ -1348,15 +1348,16 @@ wlr-layer-shell surface.
 
 **Files:**
 - Create: `crates/agterm-gtk/src/{palette,session_switcher,search}.rs`
+- Create: `crates/agterm-core/src/palette/{mod,feeds,run,search}.rs` (palette state, feeds, row runs, search keys)
 
-- [ ] command palette (`Views/Palette.swift`, `AppActions+Palette.swift`, `PaletteCatalog.swift`,
+- [x] command palette (`Views/Palette.swift`, `AppActions+Palette.swift`, `PaletteCatalog.swift`,
       `PaletteCustomRow.swift`, `PaletteSearchKeys.swift`), session switcher (`Views/SessionSwitcher.swift`),
       scrollback search UI (`Views/TerminalSearchBar.swift`), per `menu-actions.md`
-- [ ] ➕ left by Task 19: `pick.open` and a GUI `ask.open` on the frontmost window close its palette, and the palette
+- [x] ➕ left by Task 19: `pick.open` and a GUI `ask.open` on the frontmost window close its palette, and the palette
       does not open while that window's modal slot is held (`Core::modal_pending`); reuse `agterm_core::fuzzy`
-- [ ] write tests: palette catalog and search keys
-- [ ] write tests: switcher ordering by recency
-- [ ] gate: full run; ratchet
+- [x] write tests: palette catalog and search keys
+- [x] write tests: switcher ordering by recency
+- [x] gate: full run; ratchet
 
 ### Task 35: Context menus, popovers and decorations
 

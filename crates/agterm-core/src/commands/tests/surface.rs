@@ -487,6 +487,51 @@ fn search_refuses_as_upstream() {
     assert_eq!(search(&mut fixture, &target, "next"), failure("terminal zoom active"));
 }
 
+// MARK: - the search bar
+
+#[test]
+fn the_search_bar_drives_the_pinned_pane_and_its_end_refocuses_the_terminal() {
+    let (mut fixture, id, probe) = fixture_with_terminal();
+    let window = fixture.window;
+    fixture.store_mut().unwrap().select_session(Some(id));
+    fixture.core.search_bar_needle(window, "ignored");
+    assert!(probe.actions().is_empty(), "no search is open");
+    fixture.core.report_search(id, TOKEN, SearchReport::Started(None));
+    fixture.core.search_bar_needle(window, "err");
+    fixture.core.report_search(id, TOKEN, SearchReport::Total(Some(3)));
+    fixture.core.search_bar_step(window, true);
+    fixture.core.search_bar_step(window, false);
+    assert_eq!(
+        probe.actions(),
+        ["search:err", "navigate_search:previous", "navigate_search:next"],
+        "next is visually down, libghostty's previous"
+    );
+    let search = &fixture.store().session(id).unwrap().search;
+    assert_eq!((search.needle.as_str(), search.total), ("err", Some(3)));
+    fixture.core.search_bar_needle(window, "");
+    let search = &fixture.store().session(id).unwrap().search;
+    assert_eq!(search.total, None, "an empty needle blanks the counter at once");
+    fixture.core.search_bar_close(window);
+    assert_eq!(probe.actions().last().map(String::as_str), Some("end_search"));
+    fixture.core.clear_pane_focus_requests();
+    fixture.core.report_search(id, TOKEN, SearchReport::Ended);
+    assert!(fixture.core.pane_focus_requested(id));
+}
+
+#[test]
+fn a_zoom_ends_the_open_search() {
+    let (mut fixture, id, probe) = fixture_with_terminal();
+    fixture.store_mut().unwrap().select_session(Some(id));
+    fixture.core.report_search(id, TOKEN, SearchReport::Started(None));
+    let zoomed = fixture.send(
+        Command::Surface(SurfaceCmd::Zoom),
+        None,
+        args(|a| a.mode = Some("show".into())),
+    );
+    assert!(zoomed.ok, "{zoomed:?}");
+    assert_eq!(probe.actions(), ["end_search"]);
+}
+
 // MARK: - surface.cursor
 
 fn surface_id(id: Uuid, kind: &str) -> String {

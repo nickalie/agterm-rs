@@ -19,6 +19,8 @@ use crate::split::Rect;
 pub const DIM_CLASS: &str = "agterm-modal-dim";
 /// The native (rounded, popover-backed) panel's style class.
 pub const PANEL_CLASS: &str = "agterm-modal-panel";
+/// A palette row's badge (`custom`, `current`): a small capsule.
+pub const BADGE_CLASS: &str = "agterm-palette-badge";
 
 const CSS: &str = "
 .agterm-modal-dim { background-color: alpha(black, 0.2); }
@@ -32,6 +34,8 @@ const CSS: &str = "
 .agterm-pick-list { background: transparent; }
 .agterm-pick-list > row { border-radius: 0; }
 .agterm-pick-list > row:selected { background-color: alpha(@accent_bg_color, 0.25); color: inherit; }
+.agterm-palette-badge { background-color: alpha(@window_fg_color, 0.15); border-radius: 999px; padding: 2px 6px; }
+.agterm-search-bar { border-radius: 8px; padding: 6px 10px; }
 ";
 
 thread_local! {
@@ -384,7 +388,12 @@ pub fn reveal(scroller: &gtk::ScrolledWindow, child: &gtk::Widget) {
         });
         return;
     }
-    let Some(bounds) = child.compute_bounds(&content) else {
+    // a viewport draws its child scrolled, so the child's own coordinates are the adjustment's
+    let shown = content
+        .downcast_ref::<gtk::Viewport>()
+        .and_then(gtk::Viewport::child)
+        .unwrap_or(content);
+    let Some(bounds) = child.compute_bounds(&shown) else {
         return;
     };
     let adjustment = scroller.vadjustment();

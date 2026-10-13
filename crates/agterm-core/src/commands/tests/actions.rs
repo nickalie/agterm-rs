@@ -93,9 +93,11 @@ fn dialogs_and_later_uis_are_left_to_the_frontend() {
             workspace: fixture.workspace
         })
     );
+    assert_eq!(perform(&mut fixture, BuiltinAction::CommandPalette), ActionEffect::Done);
     assert_eq!(
-        perform(&mut fixture, BuiltinAction::CommandPalette),
-        ActionEffect::Frontend(FrontendAction::CommandPalette(window))
+        fixture.core.palette_mode(),
+        Some(crate::palette::PaletteMode::Actions),
+        "the palettes are the core's own"
     );
     assert_eq!(
         perform(&mut fixture, BuiltinAction::ToggleFullscreen),

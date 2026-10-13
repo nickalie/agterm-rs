@@ -11,7 +11,9 @@
 //! Over the window's content sit its two modal layers, added once: the GUI ask ([`crate::ask_dialog::WindowAsk`]) and
 //! the native picker ([`crate::picker::WindowPicker`]), drawn from the window's modal slot on every sync. While either
 //! is up the header's zoom and dashboard controls stand down, no terminal is given the keyboard, and the layer that
-//! came up takes it.
+//! came up takes it. Beside them: the scrollback search bar ([`crate::search::SearchBar`]), the command palette while
+//! the window draws it ([`crate::palette::WindowPalette`]), and the Ctrl-Tab switcher's overlay
+//! ([`crate::session_switcher::WindowSwitcher`]).
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -27,7 +29,10 @@ use uuid::Uuid;
 
 use crate::ask_dialog::{AnchorTarget, Look, WindowAsk};
 use crate::deck::{Deck, PaneContext};
+use crate::palette::{PaletteView, WindowPalette};
 use crate::picker::WindowPicker;
+use crate::search::SearchBar;
+use crate::session_switcher::WindowSwitcher;
 use crate::sidebar::Sidebar;
 use crate::state::{self, AppState, Poster};
 
@@ -131,6 +136,12 @@ pub struct WindowUi {
     ask: WindowAsk,
     /// The native picker over the window's content.
     picker: WindowPicker,
+    /// The command palette, while this window draws it.
+    palette: WindowPalette,
+    /// The scrollback search bar.
+    search: SearchBar,
+    /// The Ctrl-Tab switcher.
+    switcher: WindowSwitcher,
     context: PaneContext,
     /// Set once the model closed the window, so its close request goes through.
     closing: Rc<Cell<bool>>,
@@ -169,37 +180,19 @@ impl WindowUi {
         sidebar
             .widget()
             .set_size_request(divider_position(agterm_core::model::SIDEBAR_WIDTH_MIN), -1);
-        let exit_zoom = gtk::Button::builder()
-            .icon_name("view-restore-symbolic")
-            .tooltip_text("Exit Terminal Zoom")
-            .visible(false)
-            .build();
-        let open_dashboard = gtk::Button::builder()
-            .icon_name("view-grid-symbolic")
-            .tooltip_text("Dashboard")
-            .build();
-        let exit_dashboard = gtk::Button::builder()
-            .icon_name("window-close-symbolic")
-            .tooltip_text("Exit Dashboard")
-            .visible(false)
-            .build();
-        let header = adw::HeaderBar::new();
-        let primary = gtk::MenuButton::builder()
-            .icon_name("open-menu-symbolic")
-            .tooltip_text("Main Menu")
-            .menu_model(menu.model())
-            .primary(true)
-            .build();
-        header.pack_end(&primary);
-        header.pack_end(&exit_zoom);
-        header.pack_end(&exit_dashboard);
-        header.pack_end(&open_dashboard);
+        let (header, [exit_zoom, open_dashboard, exit_dashboard]) = header_bar(menu);
         let ask_layer = WindowAsk::new();
         let pick_layer = WindowPicker::new();
+        let palette = WindowPalette::new();
+        let search = SearchBar::new(window_id, poster);
+        let switcher = WindowSwitcher::new(window_id, poster);
         let modal_host = gtk::Overlay::new();
         modal_host.set_child(Some(&paned));
+        modal_host.add_overlay(search.widget());
         modal_host.add_overlay(ask_layer.widget());
         modal_host.add_overlay(pick_layer.widget());
+        modal_host.add_overlay(palette.widget());
+        modal_host.add_overlay(&switcher.widget());
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(&header);
         toolbar.set_content(Some(&modal_host));
@@ -211,6 +204,8 @@ impl WindowUi {
             .content(&toolbar)
             .build();
         window.insert_action_group("menu", Some(menu.group()));
+        // ahead of the keymap's monitor: Ctrl+Tab is the switcher's
+        switcher.install(&window);
         crate::keymap_dispatch::install(&window, crate::keymap_dispatch::KeyOrigin::Window(window_id));
         let ui = Self {
             window,
@@ -223,6 +218,9 @@ impl WindowUi {
             sidebar,
             ask: ask_layer,
             picker: pick_layer,
+            palette,
+            search,
+            switcher,
             context,
             closing: Rc::new(Cell::new(false)),
             pending_minimized: Rc::new(Cell::new(None)),
@@ -310,11 +308,11 @@ impl WindowUi {
         });
     }
 
-    /// Shows the window and focuses its picker or GUI ask while one is up, else the shown terminal (the dashboard's
-    /// grid while it is open).
+    /// Shows the window and focuses its picker, GUI ask or palette while one is up, else the shown terminal (the
+    /// dashboard's grid while it is open).
     pub fn present(&self) {
         self.window.present();
-        if !self.picker.grab_focus() && !self.ask.grab_focus() {
+        if !self.picker.grab_focus() && !self.ask.grab_focus() && !self.palette.grab_focus() {
             self.deck.grab_focus();
         }
     }
@@ -484,7 +482,9 @@ impl WindowUi {
             .library()
             .store(id)
             .is_some_and(|store| store.active_session().is_some());
-        let modal = self.sync_modals(core, poster, terminal_area_inset(core, id));
+        let inset = terminal_area_inset(core, id);
+        let modal = self.sync_modals(core, poster, inset);
+        self.sync_transients(core, poster, inset, modal);
         self.open_dashboard.set_sensitive(has_session && !modal);
         self.exit_dashboard.set_sensitive(!modal);
         self.exit_zoom.set_sensitive(!modal);
@@ -508,6 +508,19 @@ impl WindowUi {
         self.picker.is_open() || self.ask.is_open()
     }
 
+    /// Draws what is not the modal slot: the palette (taking the keyboard when it comes up), the search bar (likewise,
+    /// unless a modal holds it) and the switcher.
+    fn sync_transients(&mut self, core: &Core, poster: &Poster, inset: f64, modal: bool) {
+        let id = self.window_id;
+        if self.palette.sync(PaletteView::of(core, id), inset, id, poster) {
+            self.palette.grab_focus();
+        }
+        if self.search.sync(core) && !modal && !core.palette_holds(id) {
+            self.search.grab_focus();
+        }
+        self.switcher.sync(core, inset);
+    }
+
     /// What GUI ask `ask` covers (upstream's `askAnchorFrame`): the terminal area without an anchor, else its
     /// session's page or that page's pane; `None` while the page or pane is gone (the core cancels the ask then).
     fn anchor_target(&self, core: &Core, ask: &PendingAsk) -> Option<AnchorTarget> {
@@ -526,6 +539,36 @@ impl WindowUi {
         };
         Some(AnchorTarget::Page { stack, pane })
     }
+}
+
+/// The header bar: the main menu, then the exit-zoom, exit-dashboard and dashboard buttons, in that order.
+fn header_bar(menu: &crate::app_menu::AppMenu) -> (adw::HeaderBar, [gtk::Button; 3]) {
+    let exit_zoom = gtk::Button::builder()
+        .icon_name("view-restore-symbolic")
+        .tooltip_text("Exit Terminal Zoom")
+        .visible(false)
+        .build();
+    let open_dashboard = gtk::Button::builder()
+        .icon_name("view-grid-symbolic")
+        .tooltip_text("Dashboard")
+        .build();
+    let exit_dashboard = gtk::Button::builder()
+        .icon_name("window-close-symbolic")
+        .tooltip_text("Exit Dashboard")
+        .visible(false)
+        .build();
+    let header = adw::HeaderBar::new();
+    let primary = gtk::MenuButton::builder()
+        .icon_name("open-menu-symbolic")
+        .tooltip_text("Main Menu")
+        .menu_model(menu.model())
+        .primary(true)
+        .build();
+    header.pack_end(&primary);
+    header.pack_end(&exit_zoom);
+    header.pack_end(&exit_dashboard);
+    header.pack_end(&open_dashboard);
+    (header, [exit_zoom, open_dashboard, exit_dashboard])
 }
 
 /// Where the terminal area starts in window `window`'s content: past the sidebar and its divider while the sidebar

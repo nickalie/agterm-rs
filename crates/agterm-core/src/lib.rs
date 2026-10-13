@@ -30,6 +30,7 @@ pub mod model;
 pub mod osc_background;
 pub mod overlay_capture;
 pub mod overlay_jobs;
+pub mod palette;
 pub mod palette_catalog;
 pub mod pane_env;
 pub mod paths;

@@ -51,12 +51,11 @@ pub fn perform(windows: &Windows, poster: &Poster, action: FrontendAction, close
                 gtk_window.set_fullscreened(!gtk_window.is_fullscreen());
             }
         }
-        other => later_task(&other),
+        other @ FrontendAction::AttachRemote(_) => later_task(&other),
     }
 }
 
-/// The palettes, the theme picker and remote attach arrive with their own tasks (34 and 29/30); their chords already
-/// reach this point.
+/// Remote attach arrives with its own tasks (29/30); its chord already reaches this point.
 fn later_task(action: &FrontendAction) {
     tracing::info!(?action, "this action's UI is not built yet");
 }
