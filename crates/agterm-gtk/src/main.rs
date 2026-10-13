@@ -32,6 +32,7 @@ mod process_table;
 mod quick;
 mod restore_launch;
 mod row_icon;
+mod settings;
 mod sidebar;
 mod signals;
 mod split;
@@ -39,6 +40,7 @@ mod state;
 mod status_glyph;
 mod surface;
 mod theme;
+mod welcome;
 mod window;
 mod windows;
 

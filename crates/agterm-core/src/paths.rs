@@ -212,6 +212,20 @@ pub fn ghostty_config_path(config_dir: &Path) -> PathBuf {
     config_dir.join("ghostty.conf")
 }
 
+/// The user's own ghostty config, which the Settings toggle `inheritGlobalGhosttyConfig` loads below the
+/// agterm-scoped one: `<XDG config home>/ghostty/config`, the XDG config home being an absolute `XDG_CONFIG_HOME`,
+/// else `<home>/.config` (upstream reads `~/.config/ghostty/config`). `None` without a home.
+#[must_use]
+pub fn global_ghostty_config_path(env: &dyn Env) -> Option<PathBuf> {
+    let explicit = env
+        .var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute() && path.as_os_str().len() > 1);
+    explicit
+        .or_else(|| home_dir(env).map(|home| home.join(".config")))
+        .map(|base| base.join("ghostty").join("config"))
+}
+
 /// The ghostty config the Settings window writes: `<state dir>/ghostty-settings.conf`
 /// (`GhosttyApp.settingsConfigURL`).
 #[must_use]
@@ -261,6 +275,24 @@ mod tests {
                 "{value:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_global_ghostty_config_follows_the_xdg_config_home() {
+        assert_eq!(
+            global_ghostty_config_path(&home("/home/u")).as_deref(),
+            Some(Path::new("/home/u/.config/ghostty/config"))
+        );
+        let env = home("/home/u").with("XDG_CONFIG_HOME", "/cfg");
+        assert_eq!(
+            global_ghostty_config_path(&env).as_deref(),
+            Some(Path::new("/cfg/ghostty/config"))
+        );
+        let relative = home("/home/u").with("XDG_CONFIG_HOME", "rel");
+        assert_eq!(
+            global_ghostty_config_path(&relative).as_deref(),
+            Some(Path::new("/home/u/.config/ghostty/config"))
+        );
     }
 
     #[test]

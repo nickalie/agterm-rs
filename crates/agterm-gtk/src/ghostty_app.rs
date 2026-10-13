@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use agterm_core::link_policy::{self, ClickOrigin, Route};
 use agterm_core::model::SearchReport;
 use agterm_core::paths::{self, Env, ProcessEnv};
+use agterm_core::persist::SettingsStore;
 use agterm_core::persist::settings::LinkOpenMode;
 use agterm_ghostty::{
     Action, App, ClipboardConfirm, ClipboardContent, ClipboardKind, ClipboardRead, ClipboardReadResult, ColorScheme,
@@ -132,10 +133,10 @@ fn shell_features_override(bits: u32) -> String {
         .join(",")
 }
 
-/// The app's config, upstream's stack in order: built-in defaults, the agterm-scoped `ghostty.conf`, the Settings
-/// window's `ghostty-settings.conf`, their `config-file` includes; then the ssh features forced off and the static
-/// title taken out. The user's global ghostty config joins with the settings model (`inheritGlobalGhosttyConfig`,
-/// off by default).
+/// The app's config, upstream's stack in order: built-in defaults, the user's global ghostty config when the settings
+/// inherit it (`inheritGlobalGhosttyConfig`, off by default), the agterm-scoped `ghostty.conf` of the settings' config
+/// directory, the Settings window's `ghostty-settings.conf`, their `config-file` includes; then the ssh features forced
+/// off and the static title taken out.
 fn build_config(env: &dyn Env, resources_resolved: bool) -> Result<(Config, Option<String>), agterm_ghostty::Error> {
     build_config_with(env, resources_resolved, None)
 }
@@ -149,10 +150,7 @@ fn build_config_with(
 ) -> Result<(Config, Option<String>), agterm_ghostty::Error> {
     let mut config = Config::new()?;
     config.load_text(&defaults_text(resources_resolved));
-    for file in [
-        paths::ghostty_config_path(&paths::config_dir(env, None)),
-        paths::ghostty_settings_config_path(env),
-    ] {
+    for file in config_files(env) {
         if file.is_file() {
             config.load_file(&file);
         }
@@ -178,6 +176,22 @@ fn build_config_with(
         tracing::warn!(%diagnostic, "ghostty config");
     }
     Ok((config, static_title))
+}
+
+/// The config files the settings select, in load order. The settings are read from `settings.json` on every build, as
+/// upstream's `resolveConfigInputs` reads them for every `loadConfig`.
+fn config_files(env: &dyn Env) -> Vec<PathBuf> {
+    let settings = SettingsStore::new(paths::state_dir(env)).load();
+    let config_dir = paths::config_dir(env, settings.config_directory.as_deref().map(Path::new));
+    let global =
+        paths::global_ghostty_config_path(env).filter(|_| settings.inherit_global_ghostty_config == Some(true));
+    global
+        .into_iter()
+        .chain([
+            paths::ghostty_config_path(&config_dir),
+            paths::ghostty_settings_config_path(env),
+        ])
+        .collect()
 }
 
 /// The bundled themes' directory: `themes` beside the resolved resources (staged, vendored or system).
@@ -594,6 +608,32 @@ mod tests {
         assert_eq!(
             config.get(agterm_ghostty::ConfigKey::<bool>::new("cursor-click-to-move")),
             Some(false)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_settings_pick_the_config_directory_and_the_global_config() -> Result<(), Box<dyn std::error::Error>> {
+        let state = tempfile::tempdir()?;
+        let env = paths::MapEnv::new()
+            .with("HOME", "/home/u")
+            .with(paths::STATE_DIR_ENV, state.path());
+        let settings_conf = state.path().join("ghostty-settings.conf");
+        assert_eq!(
+            config_files(&env),
+            [state.path().join("config/ghostty.conf"), settings_conf.clone()]
+        );
+        std::fs::write(
+            state.path().join("settings.json"),
+            r#"{"configDirectory": "/elsewhere", "inheritGlobalGhosttyConfig": true}"#,
+        )?;
+        assert_eq!(
+            config_files(&env),
+            [
+                PathBuf::from("/home/u/.config/ghostty/config"),
+                PathBuf::from("/elsewhere/ghostty.conf"),
+                settings_conf
+            ]
         );
         Ok(())
     }
