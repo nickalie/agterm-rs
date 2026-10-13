@@ -507,6 +507,7 @@ impl Core {
         self.drop_stranded_pane_overlays();
         // before the modals: a presenter's answer or loss ends asks they retain
         self.sync_presentation();
+        self.sync_replica_overlays();
         self.sync_modals();
         self.sync_pages();
         let (events, debounced, pending_closes, finalized) = if let Some(persistence) = self.persistence.as_mut() {
@@ -527,7 +528,9 @@ impl Core {
             )
         };
         self.finalize_panes(finalized);
+        let rows = crate::remote::row_changes(&events);
         let tree_changed = self.events.record(events);
+        self.follow_remote_rows(rows);
         self.run_hooks();
         CommitTimers {
             debounced,
@@ -793,15 +796,10 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_commands_are_refused_by_name() {
+    fn an_attach_without_a_host_is_refused_before_anything_runs() {
         let mut core = core();
-        let cmd = Command::Zmx(ZmxCmd::Attach);
-        let response = core.dispatch(&Request::new(cmd));
-        assert!(!response.ok);
-        assert_eq!(
-            response.error,
-            Some(format!("{} is not supported by this host", cmd.wire_name()))
-        );
+        let response = core.dispatch(&Request::new(Command::Zmx(ZmxCmd::Attach)));
+        assert_eq!(response.error.as_deref(), Some("zmx.attach requires a host"));
     }
 
     fn tree_request(window: Option<&str>) -> Request {

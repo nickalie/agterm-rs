@@ -55,6 +55,7 @@ tests/cli/test_cli_output.py::test_window_commands
 tests/cli/test_cli_output.py::test_workspace_focus_and_filter
 tests/cli/test_cli_output.py::test_workspace_go_and_move
 tests/cli/test_cli_output.py::test_workspace_lifecycle
+tests/cli/test_cli_output.py::test_zmx_commands_refused_before_acting
 tests/cli/test_cli_output.py::test_zmx_reads_outside_live
 tests/cli/test_socket_resolution.py::test_agterm_socket_variable_is_not_read
 tests/cli/test_socket_resolution.py::test_default_socket_without_a_state_dir

@@ -161,7 +161,7 @@ impl Core {
 
     /// Records a notification on session `session` of open window `window` and, with banners on, queues its banner:
     /// the `notify` event, the badge, the post. Its effective title; `None` when the window or session is gone.
-    fn deliver_notification(
+    pub(crate) fn deliver_notification(
         &mut self,
         window: Uuid,
         session: Uuid,

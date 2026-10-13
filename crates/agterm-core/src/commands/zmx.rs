@@ -74,6 +74,9 @@ pub struct PaneReplacement {
     pub command: String,
     pub env: Vec<(String, String)>,
     pub cwd: Option<String>,
+    /// A remote replica's ssh attach rather than a live-session client: its terminal holds after the command exits,
+    /// as the attach pane's own does, so its last line stays readable.
+    pub remote: bool,
 }
 
 /// The installed live-session host and what the core keeps about its daemons.

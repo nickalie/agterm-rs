@@ -1,4 +1,5 @@
-//! `agtermctl zmx list|screen|prune|kill|reset` (`agtermctlKit/ZmxCommands.swift`): the daemons behind live sessions.
+//! `agtermctl zmx list|screen|prune|kill|reset|tree|attach|present` (`agtermctlKit/ZmxCommands.swift`): the daemons
+//! behind live sessions, and attaching them from another machine.
 //! Every one needs a running agterm, the only party that can join its windows, pending closes and saved snapshots
 //! against what zmx reports. `list` prints through [`format_zmx`]; the rest print their `result.text` (or `ok`).
 
@@ -28,8 +29,7 @@ pub struct Zmx {
     command: ZmxCommand,
 }
 
-/// The subcommands, in upstream's `Zmx.configuration.subcommands` order; `attach` comes with the viewer side of remote
-/// sessions.
+/// The subcommands, in upstream's `Zmx.configuration.subcommands` order.
 #[derive(Debug, clap::Subcommand)]
 enum ZmxCommand {
     List(List),
@@ -38,6 +38,7 @@ enum ZmxCommand {
     Kill(Kill),
     Reset(Reset),
     Tree(Tree),
+    Attach(Attach),
     Present(Present),
 }
 
@@ -50,6 +51,7 @@ impl Zmx {
             ZmxCommand::Kill(command) => command,
             ZmxCommand::Reset(command) => command,
             ZmxCommand::Tree(command) => command,
+            ZmxCommand::Attach(command) => command,
             ZmxCommand::Present(command) => command,
         }
     }
@@ -412,6 +414,57 @@ impl RequestCommand for Tree {
             ..Args::default()
         });
         zmx_request(ZmxCmd::Tree, None, args)
+    }
+}
+
+/// `agtermctl zmx attach HOST SESSION [--window]`.
+#[derive(Debug, clap::Args)]
+#[command(
+    about = "Attach to a session on another Mac, as a session here.",
+    long_about = "Takes a host and the id of one of the sessions `zmx tree` listed, and opens it in the chosen window \
+                  marked as remote. Defaults to the frontmost window after discovery. A remote session with a split \
+                  arrives with the same split.\n\
+                  \n\
+                  The remote is resolved again before anything is created, so a session that has gone since the list \
+                  was taken fails rather than handing back a fresh shell wearing its name.\n\
+                  \n\
+                  Closing it here ends only this side's connection: the far-side processes keep running, and nothing \
+                  this command does can kill them. The session is not restored after a relaunch."
+)]
+pub struct Attach {
+    #[arg(help = "The host, as ssh would take it.")]
+    host: String,
+
+    #[arg(help = "The remote session's id, as `zmx tree` prints it.")]
+    session: String,
+
+    #[arg(
+        long,
+        help = "Local open window id, unique prefix, or active (default: frontmost after discovery)."
+    )]
+    window: Option<String>,
+
+    #[command(flatten)]
+    options: BasicOptions,
+}
+
+impl RequestCommand for Attach {
+    fn options(&self) -> &BasicOptions {
+        &self.options
+    }
+
+    /// It creates a local session, so it echoes that session's id like every other create command.
+    fn echoes_result_id(&self) -> bool {
+        true
+    }
+
+    fn make_request(&self) -> Request {
+        let args = Args {
+            host: Some(self.host.clone()),
+            window: self.window.clone(),
+            ..Args::default()
+        };
+        zmx_request(ZmxCmd::Attach, Some(self.session.clone()), Some(args))
     }
 }
 

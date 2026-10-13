@@ -46,9 +46,13 @@ pub fn is_host(value: &str) -> bool {
 pub enum InvocationError {
     EmptyHost,
     InvalidHost,
+    /// A session, job or daemon name that is not one plain token of the expected shape.
+    InvalidSession,
+    /// A zmx endpoint path carrying control characters.
+    InvalidEndpoint,
 }
 
-fn validate(host: &str) -> Result<(), InvocationError> {
+pub(crate) fn validate(host: &str) -> Result<(), InvocationError> {
     if host.is_empty() {
         return Err(InvocationError::EmptyHost);
     }

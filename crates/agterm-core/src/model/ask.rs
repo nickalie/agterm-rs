@@ -112,6 +112,9 @@ pub struct SessionAsk {
     /// `askRemoteOwner`). A remotely presented ask keeps the slot and its result here but is neither drawn nor
     /// answered here.
     pub remote_owner: Option<i64>,
+    /// On a viewer, the origin's presenter generation of an ask the origin handed over (upstream's `askReplica`):
+    /// drawn and answered here, but owned and resolved on the origin, which its outcome is sent to.
+    pub replica: Option<i64>,
 }
 
 /// A session's ask that ended, waiting for the core's registry to retain its outcome.
@@ -122,6 +125,8 @@ pub struct EndedAsk {
     pub result: ControlAskResult,
     /// The presenter generation it was handed to, which is told to take its dialog down.
     pub remote_owner: Option<i64>,
+    /// The origin's owner generation of a replica, whose outcome goes to the origin instead of the registry.
+    pub replica: Option<i64>,
 }
 
 impl Session {
@@ -168,7 +173,26 @@ impl AppStore {
             ask,
             pane_identity,
             remote_owner,
+            replica: None,
         });
+        true
+    }
+
+    /// Reserves session `session`'s ask slot for a replica of an ask its origin handed over under presenter generation
+    /// `owner` (upstream's `openReplicaAsk`); false when the session is unknown or already has an ask pending.
+    pub fn open_replica_ask(
+        &mut self,
+        session: Uuid,
+        ask: PendingAsk,
+        pane_identity: Option<Uuid>,
+        owner: i64,
+    ) -> bool {
+        if !self.open_session_ask_owned(session, ask, pane_identity, None) {
+            return false;
+        }
+        if let Some(pending) = self.session_mut(session).and_then(|found| found.ask.as_mut()) {
+            pending.replica = Some(owner);
+        }
         true
     }
 
@@ -230,12 +254,16 @@ impl AppStore {
         if target.ask.as_ref().is_none_or(|pending| pending.ask.id != id) {
             return false;
         }
-        let remote_owner = target.ask.take().and_then(|pending| pending.remote_owner);
+        let (remote_owner, replica) = target
+            .ask
+            .take()
+            .map_or((None, None), |pending| (pending.remote_owner, pending.replica));
         self.ended_asks.push(EndedAsk {
             session,
             id: id.to_owned(),
             result,
             remote_owner,
+            replica,
         });
         true
     }

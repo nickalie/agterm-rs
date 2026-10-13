@@ -39,6 +39,12 @@ impl LeadBook {
         state.apply(notice).then(|| state.role()).flatten()
     }
 
+    /// The nonce of `pane`'s current attachment.
+    #[must_use]
+    pub(crate) fn nonce(&self, pane: Uuid) -> Option<&str> {
+        self.states.get(&pane).map(|state| state.attachment().nonce.as_str())
+    }
+
     #[must_use]
     pub(crate) fn role(&self, pane: Uuid) -> Option<LeadRole> {
         self.states.get(&pane).and_then(LeadState::role)
@@ -142,6 +148,8 @@ impl Core {
             "Taking over…"
         } else if leads.role(identity) == Some(LeadRole::Unowned) {
             "Reconnecting…"
+        } else if self.pane_is_remote(identity) {
+            "In use on the machine it runs on"
         } else {
             "In use from another machine"
         };
@@ -165,6 +173,11 @@ impl Core {
         let Ok(identity) = Uuid::parse_str(token) else {
             return false;
         };
+        // a remote pane waiting to be attached again retries now instead (upstream's `PaneLead.consumes`)
+        if self.remote.viewer.reconnects.waiting(identity) {
+            self.retry_reconnect(identity, std::time::Instant::now());
+            return true;
+        }
         if !self.zmx.leads.covered(identity) || self.zmx.leads.reattaching(identity) {
             return false;
         }
@@ -188,7 +201,8 @@ impl Core {
             .and_then(|slot| slot.get())
             .is_some_and(Surface::is_live_session);
         if !live {
-            return false;
+            // a remote replica is attached again over ssh, covered until its first report
+            return self.reattach_remote_pane(session, identity, LeadAttachment::new(claim), true);
         }
         let attachment = LeadAttachment::new(claim);
         let Some(configuration) = self.wrap_configuration(identity, Some(attachment.clone())) else {
@@ -208,6 +222,7 @@ impl Core {
             command: crate::zmx::support::settled(&shell_quoted_line(&arguments)),
             env: configuration.environment.into_iter().collect(),
             cwd: None,
+            remote: false,
         });
         true
     }

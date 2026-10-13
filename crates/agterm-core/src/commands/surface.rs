@@ -71,6 +71,7 @@ pub(crate) fn deferred(core: &mut Core, request: &Request) -> Option<Dispatched>
         Command::Config(ConfigCmd::Reload) => Some(super::config::begin_reload(core)),
         Command::Browser(BrowserCmd::Clear) => Some(super::browser::begin_clear(core, request)),
         Command::Zmx(ZmxCmd::Tree) => Some(crate::remote::begin_tree(core, request)),
+        Command::Zmx(ZmxCmd::Attach) => Some(crate::remote::attach::begin_attach(core, request)),
         _ => None,
     }
 }

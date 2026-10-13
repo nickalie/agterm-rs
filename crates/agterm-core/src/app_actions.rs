@@ -78,7 +78,6 @@ pub enum FrontendAction {
     CustomCommandPalette(Uuid),
     ShowAttention(Uuid),
     SelectTheme(Uuid),
-    AttachRemote(Uuid),
 }
 
 /// A config file the menu's Edit items open in an editor overlay.
@@ -118,6 +117,7 @@ impl Core {
         facts.set(PaletteFacts::TERMINAL_ZOOM_ACTIVE, self.zoom_target(window).is_some());
         facts.set(PaletteFacts::DASHBOARD_OPEN, self.dashboard(window).is_some());
         facts.set(PaletteFacts::PICKER_ACTIVE, self.modal_pending(window));
+        facts.set(PaletteFacts::HAS_REMOTES, !self.configured_remotes().is_empty());
         let Some(store) = library.store(window) else {
             return PaletteContext::new(facts);
         };
@@ -403,7 +403,11 @@ impl Core {
             BuiltinAction::CustomCommandPalette => Some(FrontendAction::CustomCommandPalette(window)),
             BuiltinAction::ShowAttention => Some(FrontendAction::ShowAttention(window)),
             BuiltinAction::SelectTheme => Some(FrontendAction::SelectTheme(window)),
-            _ => Some(FrontendAction::AttachRemote(window)),
+            // File ▸ Attach Remote runs in the core: its pickers are the window's modal slot ([`crate::remote`])
+            _ => {
+                self.attach_remote(window);
+                None
+            }
         };
         launcher.map_or(ActionEffect::Done, frontend)
     }

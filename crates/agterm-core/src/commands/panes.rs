@@ -102,6 +102,12 @@ impl Core {
         {
             return self.lead_reported(session, token, &notice);
         }
+        // a remote pane's attach wrapper reports a lost connection the same way
+        if let PaneReport::Title(title) = report
+            && let Some(notice) = crate::remote::reconnect::RemoteLinkNotice::parse(title)
+        {
+            return self.remote_link_lost(session, token, &notice);
+        }
         let Some(target) = self.library_mut().held_session_mut(session) else {
             return false;
         };

@@ -311,7 +311,11 @@ impl AppStore {
         let Some(indicator) = self.session(id).map(|session| session.agent_indicator.clone()) else {
             return;
         };
-        if indicator.status == AgentStatus::Idle {
+        let owner_unknown = self
+            .session(id)
+            .and_then(Session::remote_presentation)
+            .is_some_and(super::RemotePresentationState::status_owner_unknown);
+        if indicator.status == AgentStatus::Idle || owner_unknown {
             return;
         }
         match indicator.status_pane.unwrap_or(StatusPane::Left) {
@@ -321,7 +325,18 @@ impl AppStore {
                     status_pane: Some(StatusPane::Left),
                     ..indicator
                 };
+                // a re-tag, not a write: the setter would take a mirrored glyph away from the bridge
+                let bridged = self
+                    .session(id)
+                    .and_then(Session::remote_presentation)
+                    .is_some_and(|state| state.status_bridged);
                 self.set_agent_indicator(promoted, id);
+                if let Some(state) = self
+                    .session_mut(id)
+                    .and_then(|session| session.remote_presentation.as_mut())
+                {
+                    state.status_bridged = bridged;
+                }
             }
             StatusPane::Scratch => {}
         }
@@ -346,9 +361,15 @@ fn swap_pane_fields(session: &mut Session) {
     let backgrounds = &mut session.pane_backgrounds;
     std::mem::swap(&mut backgrounds.left, &mut backgrounds.right);
     session.search.owner = session.search.owner.map(other_pane);
+    let owner_unknown = session
+        .remote_presentation
+        .as_ref()
+        .is_some_and(super::RemotePresentationState::status_owner_unknown);
     let indicator = &mut session.agent_indicator;
     indicator.status_pane = if indicator.status == AgentStatus::Idle {
         None
+    } else if owner_unknown {
+        indicator.status_pane
     } else {
         match indicator.status_pane {
             None | Some(StatusPane::Left) => Some(StatusPane::Right),

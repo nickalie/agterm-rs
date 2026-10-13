@@ -31,6 +31,7 @@ mod pane_lead;
 mod picker;
 mod process_table;
 mod quick;
+mod remote;
 mod restore_launch;
 mod row_icon;
 mod sidebar;

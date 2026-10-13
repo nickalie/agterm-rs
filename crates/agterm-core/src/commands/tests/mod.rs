@@ -26,6 +26,7 @@ mod session;
 mod sidebar;
 mod surface;
 mod theme;
+mod viewer;
 mod window;
 mod workspace;
 mod zmx;

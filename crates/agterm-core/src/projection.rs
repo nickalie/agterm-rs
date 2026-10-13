@@ -15,7 +15,9 @@ use uuid::Uuid;
 
 use crate::html::{HtmlOverlay, HtmlSource};
 use crate::hud::HudSpinner;
-use crate::model::{AgentStatus, AppStore, OverlayPane, Session, StatusPane, SurfaceSlot, Workspace};
+use crate::model::{
+    AgentStatus, AppStore, OverlayPane, RemotePresentationState, Session, StatusPane, SurfaceSlot, Workspace,
+};
 use crate::pane_env::uuid_string;
 use crate::persist::AppSettings;
 use crate::zoom::{SurfaceId, ZoomSurface};
@@ -109,6 +111,7 @@ pub fn session_node(session: &Session, active: bool) -> ControlSessionNode {
     node.flagged = session.flagged;
     node.context = session.effective_context().map(str::to_owned);
     node.remote_host = session.remote_host().map(str::to_owned);
+    node.presentation = session.remote_presentation().map(RemotePresentationState::node);
     node.unseen = (session.unseen_count > 0).then(|| i64::try_from(session.unseen_count).unwrap_or(i64::MAX));
     node.command_wait = session.launch.holds().then_some(true);
     node.split_command_wait = session.split_launch.holds().then_some(true);
@@ -153,7 +156,7 @@ fn apply_overlay(node: &mut ControlSessionNode, session: &Session) {
         id: pending.ask.id.clone(),
         pane: session.ask_target_pane().map(|pane| pane.wire_name().to_owned()),
         remote: pending.remote_owner.map(|_| true),
-        replica: None,
+        replica: pending.replica.map(|_| true),
     });
     // one entry per slot a viewer's presenter holds
     let slots = session.remote_overlays().slots();
@@ -254,6 +257,17 @@ pub(crate) fn epoch_seconds(time: SystemTime) -> f64 {
     match time.duration_since(UNIX_EPOCH) {
         Ok(after) => after.as_secs_f64(),
         Err(before) => -before.duration().as_secs_f64(),
+    }
+}
+
+/// The wall-clock time `seconds` after the Unix epoch, as [`epoch_seconds`] wrote it; `None` for a value no time can
+/// hold (not finite, or out of range).
+pub(crate) fn system_time(seconds: f64) -> Option<SystemTime> {
+    let offset = std::time::Duration::try_from_secs_f64(seconds.abs()).ok()?;
+    if seconds >= 0.0 {
+        UNIX_EPOCH.checked_add(offset)
+    } else {
+        UNIX_EPOCH.checked_sub(offset)
     }
 }
 

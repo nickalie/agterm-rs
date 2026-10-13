@@ -67,17 +67,17 @@ impl agterm_core::LineChannel for StreamLines {
 /// Bounds the lines a stream's reader may have waiting for the main loop: the reader blocks in
 /// [`InboundGate::acquire`] past the limit until a task releases its place (upstream's inbound semaphore).
 #[derive(Clone)]
-struct InboundGate(std::sync::Arc<(std::sync::Mutex<usize>, std::sync::Condvar)>);
+pub(crate) struct InboundGate(std::sync::Arc<(std::sync::Mutex<usize>, std::sync::Condvar)>);
 
 impl InboundGate {
-    fn new(limit: usize) -> Self {
+    pub(crate) fn new(limit: usize) -> Self {
         Self(std::sync::Arc::new((
             std::sync::Mutex::new(limit),
             std::sync::Condvar::new(),
         )))
     }
 
-    fn acquire(&self) {
+    pub(crate) fn acquire(&self) {
         let (free, wake) = &*self.0;
         let mut free = free.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while *free == 0 {
@@ -86,7 +86,7 @@ impl InboundGate {
         *free -= 1;
     }
 
-    fn release(&self) {
+    pub(crate) fn release(&self) {
         let (free, wake) = &*self.0;
         *free.lock().unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
         wake.notify_one();
@@ -186,6 +186,8 @@ pub struct AppState {
     appearance: crate::theme::Appearance,
     /// The presentation heartbeat is armed on the loop.
     heartbeat_armed: bool,
+    /// The remote tick (the attached rows' clients, reconnects and attaches) is armed on the loop.
+    remote_tick_armed: bool,
 }
 
 impl AppState {
@@ -201,12 +203,16 @@ impl AppState {
             quick: QuickPanel::default(),
             appearance: crate::theme::Appearance::new(dark),
             heartbeat_armed: false,
+            remote_tick_armed: false,
         }
     }
 
     /// Connects the state to its main loop and its windows, and builds, renders and presents a window for every open
     /// store.
     pub fn attach(&mut self, poster: Poster, windows: Windows) {
+        // the attached rows' presentation bridges run as children reporting back through the loop
+        self.core
+            .set_presentation_transport(std::rc::Rc::new(crate::remote::ProcessTransport::new(poster.clone())));
         self.poster = poster;
         self.windows = Some(windows);
         self.settle();
@@ -263,6 +269,48 @@ impl AppState {
         self.arm_auto_follow();
         self.arm_hud_timers();
         self.arm_job_expiries();
+        self.arm_remote_tick();
+    }
+
+    /// Arms the remote tick when the core asks for one and none is armed (upstream's `startRemoteTick`); it runs
+    /// [`Core::remote_tick`] and settles, which re-arms it while anything remote is up.
+    fn arm_remote_tick(&mut self) {
+        if self.remote_tick_armed {
+            return;
+        }
+        let Some(delay) = self.core.remote_wake() else {
+            return;
+        };
+        let Some(main_loop) = self.poster.upgrade() else {
+            return;
+        };
+        let task = Box::new(|state: &mut Self| {
+            state.remote_tick_armed = false;
+            if state.quitting {
+                return;
+            }
+            state.core.remote_tick(Instant::now());
+            state.settle();
+        });
+        if main_loop.post_after(delay, task).is_ok() {
+            self.remote_tick_armed = true;
+        }
+    }
+
+    /// A line a presentation bridge read ([`crate::remote`]).
+    pub fn viewer_line(&mut self, key: agterm_core::remote::LinkKey, line: &[u8]) {
+        if !self.quitting {
+            self.core.viewer_line(key, line);
+            self.settle();
+        }
+    }
+
+    /// A presentation bridge ended ([`crate::remote`]).
+    pub fn viewer_closed(&mut self, key: agterm_core::remote::LinkKey, reason: &str) {
+        if !self.quitting {
+            self.core.viewer_closed(key, reason);
+            self.settle();
+        }
     }
 
     /// A session pane's terminal is ready to spawn: it spawns now with its seed, or once its paced launch turn comes
@@ -719,6 +767,7 @@ impl AppState {
             tracing::error!("the quit save did not write everything");
         }
         self.core.shutdown_presentation_streams();
+        self.core.shutdown_remote_presentations();
         self.quitting = true;
     }
 

@@ -186,6 +186,11 @@ impl Core {
                     .as_deref()
                     .and_then(|token| self.pane_lead(token))
                     .map(str::to_owned);
+                surface.reconnect = surface
+                    .pane_id
+                    .as_deref()
+                    .and_then(|token| uuid::Uuid::parse_str(token).ok())
+                    .and_then(|pane| self.reconnect_readback(pane));
             }
         }
     }

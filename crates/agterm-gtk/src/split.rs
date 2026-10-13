@@ -34,10 +34,9 @@ use uuid::Uuid;
 use crate::ask_dialog::SessionAskLayer;
 use crate::hud::{HudLayer, HudPlacement, LayerView};
 use crate::overlay::{PaneOverlayTerminal, PanePage, ProgramLayer, ProgramPlacement};
-use crate::pane_lead::LeadCoverWidget;
+use crate::pane_lead::{LeadCoverWidget, PaneCover};
 use crate::state::{self, AppState, Poster};
 use crate::surface::TerminalSurface;
-use agterm_core::LeadCover;
 
 /// The separator line between the split's panes, in pixels.
 const SEPARATOR: i32 = 1;
@@ -869,13 +868,14 @@ impl PaneView {
 
     /// Lays a lead cover over each laid-out pane that `covers` says needs one while the page is shown, and marks every
     /// terminal of `covers` covered or not, so a key press on a covered one takes it over.
-    pub fn sync_lead_covers(&mut self, covers: &[(String, Option<LeadCover>)], shown: bool) {
+    pub fn sync_lead_covers(&mut self, covers: &[(String, PaneCover)], shown: bool) {
         let mut placed = Vec::new();
-        for (token, cover) in covers {
+        for (token, pane) in covers {
             let Some(terminal) = self.terminal(token).cloned() else {
                 continue;
             };
-            terminal.set_lead_covered(cover.is_some());
+            terminal.set_lead_covered(pane.holds_keys);
+            let cover = &pane.cover;
             let slot = self
                 .plan
                 .as_ref()
@@ -884,16 +884,16 @@ impl PaneView {
             let Some(slot) = slot.filter(|slot| *slot != Slot::Scratch) else {
                 continue;
             };
-            if cover.is_none() && !self.covers.iter().any(|(known, _)| *known == slot) {
+            if cover.is_none() && pane.note.is_none() && !self.covers.iter().any(|(known, _)| *known == slot) {
                 continue;
             }
             let widget = self.cover_for(slot, &terminal);
-            widget.show(cover.as_ref(), shown);
+            widget.show(cover.as_ref(), pane.note.as_deref(), shown);
             placed.push((widget.widget().clone().upcast::<gtk::Widget>(), slot));
         }
         for (slot, cover) in &self.covers {
             if !placed.iter().any(|(_, placed)| placed == slot) {
-                cover.show(None, false);
+                cover.show(None, None, false);
             }
         }
         self.stack.layout().lead_covers = placed;

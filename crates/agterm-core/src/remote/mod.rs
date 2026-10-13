@@ -1,9 +1,13 @@
-//! Remote sessions, origin side: what this instance offers another machine attaching one of its live sessions.
+//! Remote sessions: what this instance offers another machine attaching one of its live sessions (the origin side),
+//! and the sessions it attached from other machines (the viewer side).
 //!
 //! - [`tree`]: `zmx.tree`, the attachable sessions here or, over ssh, on another host;
 //! - [`frames`] and [`hub`]: the `zmx.present` stream that carries a session's presentation (status, context, layout,
 //!   HUD, notifications) to its viewers, and decides which one viewer is the session's sole presenter;
 //! - [`remotes`]: `remotes.conf`, the hosts offered for an attach;
+//! - the viewer side: `zmx.attach` and File ▸ Attach Remote ([`attach`]), the ssh lines it runs ([`ssh`]), each
+//!   attached row's presentation client ([`client`]) and what its frames put on the row ([`viewer`], [`layout`]), and
+//!   the panes whose ssh lost the connection ([`reconnect`]);
 //! - the presenter's work (upstream's `AppStore+RemoteAsk.swift`, `AppStore+RemoteOverlay.swift` and the server's
 //!   `presentAskRemotely`/`takeBackRemoteAsk`/`receivePresenterFrame`): an ask or a program overlay opened on a session
 //!   whose panes follow a remote lead goes to its presenter instead of being drawn here.
@@ -13,21 +17,28 @@
 //! `ControlServer+Presentation.swift`). State frames are published by comparing each watched session with what its
 //! viewers last got, on every commit; a notification and a HUD publication are sent when they happen.
 
+pub(crate) mod attach;
+pub mod client;
 pub mod frames;
 mod handoff;
 pub mod hub;
+mod layout;
+pub mod reconnect;
 pub mod remotes;
+pub mod ssh;
 pub mod tree;
+mod viewer;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use agterm_proto::{ControlResult, ControlTree, Request, Response};
 use uuid::Uuid;
 
+pub use self::client::{LinkKey, PresentationLink, PresentationTransport};
 use self::frames::{
     Body, PresentationFrame, PresentationHud, PresentationLayout, PresentationNotify, PresentationPane,
     PresentationSnapshot, PresentationStatus,
@@ -38,6 +49,7 @@ pub(crate) use self::handoff::{
 };
 use self::hub::{CloseReason, HubEvent, PresentationHub, PresentationSink, SubscriberId};
 use self::tree::{ProcessRemoteRunner, RemoteCommandResult, RemoteCommandRunner, RemoteWindowProjection};
+pub(crate) use self::viewer::row_changes;
 use crate::Core;
 use crate::commands::Outcome;
 pub use crate::commands::overlay::LineChannel;
@@ -123,6 +135,8 @@ pub(crate) struct PresentationRuntime {
     published: HashMap<Uuid, Published>,
     huds: HashMap<Uuid, HudPublication>,
     runner: Arc<dyn RemoteCommandRunner>,
+    /// The viewer side: the attached rows' clients and their reconnects.
+    pub(crate) viewer: viewer::ViewerRuntime,
 }
 
 impl Default for PresentationRuntime {
@@ -134,6 +148,7 @@ impl Default for PresentationRuntime {
             published: HashMap::new(),
             huds: HashMap::new(),
             runner: Arc::new(ProcessRemoteRunner),
+            viewer: viewer::ViewerRuntime::default(),
         }
     }
 }
@@ -144,6 +159,7 @@ impl fmt::Debug for PresentationRuntime {
             .field("hub", &self.hub)
             .field("streams", &self.streams.keys().collect::<Vec<_>>())
             .field("huds", &self.huds)
+            .field("viewer", &self.viewer)
             .finish_non_exhaustive()
     }
 }
@@ -180,57 +196,34 @@ pub(crate) fn begin_tree(core: &mut Core, request: &Request) -> Dispatched {
     let Some(host) = host else {
         return Dispatched::done(local_tree(core));
     };
-    // the host is not echoed: it is refused for carrying control characters, which agtermctl would print
-    let Ok(argv) = tree::tree_command(&host) else {
-        return Dispatched::done(Err(ControlError::rejected("invalid host")));
-    };
-    let answer: Arc<Mutex<Option<RemoteCommandResult>>> = Arc::new(Mutex::new(None));
-    let (runner, slot) = (Arc::clone(&core.remote.runner), Arc::clone(&answer));
-    let spawned = std::thread::Builder::new()
-        .name("agterm.remote-tree".to_owned())
-        .spawn(move || {
-            let result = runner.run(&argv, tree::TREE_DEADLINE);
-            *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
-        });
-    if spawned.is_err() {
-        return Dispatched::done(Err(ControlError::rejected(format!(
-            "the remote command failed on {host}"
-        ))));
+    match attach::start_tree_read(core, &host) {
+        Ok(answer) => poll_tree(answer, host),
+        Err(error) => Dispatched::done(Err(error)),
     }
-    poll_tree(answer, host)
 }
 
 /// Waits for the far side's answer without holding the main loop.
-fn poll_tree(answer: Arc<Mutex<Option<RemoteCommandResult>>>, host: String) -> Dispatched {
+fn poll_tree(answer: viewer::Answer, host: String) -> Dispatched {
     Dispatched::Pending {
         after: TREE_POLL,
-        resume: Box::new(move |_core: &mut Core| {
-            let taken = answer.lock().unwrap_or_else(PoisonError::into_inner).take();
-            match taken {
-                Some(result) => Dispatched::Done(remote_tree_answer(&result, &host)),
-                None => poll_tree(answer, host),
-            }
+        resume: Box::new(move |_core: &mut Core| match viewer::take_answer(&answer) {
+            Some(result) => Dispatched::Done(remote_tree_answer(&result, &host)),
+            None => poll_tree(answer, host),
         }),
     }
 }
 
-/// The answer of a finished remote read: stdout's own refusal first, since the far side's agtermctl prints it there
-/// and exits nonzero; ssh's failures reach stderr. An ok-looking payload from a nonzero process is never accepted.
+/// The answer of a finished remote read ([`attach::read_remote_tree`]).
 fn remote_tree_answer(result: &RemoteCommandResult, host: &str) -> Response {
-    if result.status != 0 {
-        let stderr = result.stderr.trim();
-        let detail = tree::remote_error(&result.stdout).or_else(|| (!stderr.is_empty()).then(|| stderr.to_owned()));
-        return Response::failure(detail.unwrap_or_else(|| format!("the remote command failed on {host}")));
-    }
-    match tree::decode(&result.stdout) {
+    match attach::read_remote_tree(result, host) {
         Ok(remote) => {
             let result = ControlResult {
-                remote: Some(remote.stamped(host)),
+                remote: Some(remote),
                 ..ControlResult::default()
             };
             serde_json::to_value(result).map_or_else(|_| ControlError::Encode.into(), Response::with_result)
         }
-        Err(error) => Response::failure(error.message()),
+        Err(error) => Response::failure(error),
     }
 }
 

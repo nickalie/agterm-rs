@@ -431,6 +431,7 @@ impl crate::Core {
     pub(crate) fn sync_modals(&mut self) {
         let ended = self.library_mut().take_ended_asks();
         self.dismiss_remote_asks(&ended);
+        self.answer_replica_asks(&ended);
         self.modals.retain_ended(ended);
         for window in self.modals.windows() {
             if !self.library().is_open(window) {

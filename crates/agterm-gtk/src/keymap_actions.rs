@@ -55,8 +55,7 @@ pub fn perform(windows: &Windows, poster: &Poster, action: FrontendAction, close
     }
 }
 
-/// The palettes, the theme picker and remote attach arrive with their own tasks (34 and 29/30); their chords already
-/// reach this point.
+/// The palettes and the theme picker arrive with their own task (34); their chords already reach this point.
 fn later_task(action: &FrontendAction) {
     tracing::info!(?action, "this action's UI is not built yet");
 }

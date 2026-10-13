@@ -218,10 +218,10 @@ fn malformed_requests_get_the_decode_error() -> TestResult {
 }
 
 #[test]
-fn unimplemented_command_is_refused_by_name() -> TestResult {
+fn a_refusal_is_answered_with_its_reason() -> TestResult {
     let fixture = start_core()?;
     let response = answer(&fixture.socket, br#"{"cmd":"zmx.attach"}"#)?;
-    assert_eq!(response, Response::failure("zmx.attach is not supported by this host"));
+    assert_eq!(response, Response::failure("zmx.attach requires a host"));
     Ok(())
 }
 

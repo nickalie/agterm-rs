@@ -1281,15 +1281,30 @@ wlr-layer-shell surface.
 
 **Files:**
 - Create: `crates/agterm-core/src/remote/{client,layout,reconnect}.rs`, `crates/agterm-gtk/src/remote.rs`
+- ➕ Create: `crates/agterm-core/src/remote/{ssh,attach,viewer}.rs` (the attach/present/run-job/probe ssh lines,
+  `zmx.attach` with File ▸ Attach Remote, and the viewer runtime applying a client's frames),
+  `crates/agterm-core/src/model/remote_presentation.rs` (`RemoteBinding`, `RemotePresentationState` on `Session`),
+  `crates/agterm-core/src/commands/tests/viewer.rs`; Modify: the model's status/ask/panes/store (bridged status,
+  replica asks, `remote.opened`/`remote.closed`), `commands/{zmx,zmx/lead,zmx/launch,panes,hud,notify,surface}.rs`,
+  `dispatch.rs`, `modal.rs`, `projection.rs`, `app_actions.rs` (Attach Remote runs in the core, `HAS_REMOTES`),
+  `crates/agterm-ctl/src/zmx.rs` (`zmx attach`), `crates/agterm-gtk/src/{state,surface,deck,overlay,split,pane_lead}.rs`
 
-- [ ] zmx.attach and remote panes (`RemoteSession.swift`, `RemotePresentationClient.swift`, `RemoteReconnect.swift`,
+- [x] zmx.attach and remote panes (`RemoteSession.swift`, `RemotePresentationClient.swift`, `RemoteReconnect.swift`,
       `AppStore+Remote*.swift`; app side `AppActions+RemoteAttach.swift`, `agtermApp+RemoteLayout.swift`,
       `ControlServer+RemotePresentation.swift`, `ControlServer+RemoteReconnect.swift`,
-      `RemoteCommandProcessRunner.swift`, `RemotePresentationProcess.swift`)
-- [ ] `remote.opened` and `remote.closed` events (exempt in the catalog)
-- [ ] write tests: reconnect backoff, layout application to replicas, remote ask and overlay replicas
-- [ ] manual check against a second host (the suite exempts this side)
-- [ ] gate: full run; ratchet
+      `RemoteCommandProcessRunner.swift`, `RemotePresentationProcess.swift`) (the ssh runs reuse Task 29's
+      `RemoteCommandRunner` seam; the bridge is a child process the GTK side runs and reports back; File ▸ Attach Remote
+      runs in the core over the window's modal picker, so no frontend action is left for it; `agtermctl zmx attach`)
+- [x] `remote.opened` and `remote.closed` events (exempt in the catalog) (they also start and stop the row's
+      presentation stream at commit, undo included)
+- [x] write tests: reconnect backoff, layout application to replicas, remote ask and overlay replicas
+- [x] manual check against a second host (the suite exempts this side) (manual - not automatable here; covered by a
+      two-instance local test: two private instances, the viewer's `ssh` a stand-in on its own PATH running the remote
+      command against the origin's state dir, as localhost sshd refuses; attach, presenter role, typing both ways,
+      status/context, a handed-over ask and overlay, a dropped link reconnecting, and closing the row all checked)
+- [x] gate: full run; ratchet (full run on fish: 635 pass, 7 fail (Task 32's clipboard/terminfo, not on this lane),
+      ratchet holds, 1 id added: `test_zmx_commands_refused_before_acting`; live subset in the private zsh namespace:
+      49 pass)
 
 ### Task 31: Live sessions for bash and fish
 

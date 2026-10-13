@@ -20,6 +20,7 @@ mod pending_close;
 mod recency;
 mod recent_closed;
 mod remote_overlay;
+mod remote_presentation;
 mod restore;
 mod search;
 mod session;
@@ -48,6 +49,7 @@ pub use pending_close::{
 pub use recency::{RECENCY_LIMIT, RecencyStack};
 pub use recent_closed::RecentClosedRestore;
 pub use remote_overlay::{RemoteOverlayClose, RemoteOverlayOutcome, RemoteOverlaySlot, RemoteOverlays};
+pub use remote_presentation::{RemoteBinding, RemoteConnection, RemoteOrigin, RemotePresentationState};
 pub use search::{SearchFollowUp, SearchReport, SearchState};
 pub use session::{
     AgentIndicator, AgentStatus, CONTEXT_BYTE_LIMIT, PaneAddress, Session, SessionSeed, validate_context,

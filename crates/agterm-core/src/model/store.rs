@@ -410,6 +410,10 @@ impl AppStore {
     pub(crate) fn emit_session_created(&mut self, session: Uuid, workspace: Uuid) {
         let payload = self.session(session).map(Self::named).unwrap_or_default();
         self.emit(EventKind::SessionCreated, Some(workspace), Some(session), payload);
+        if let Some(found) = self.session(session) {
+            let visibility = Self::remote_visibility(found);
+            self.emit_remote_visibility(EventKind::RemoteOpened, visibility, session, workspace);
+        }
         self.schedule_tree_changed();
     }
 
@@ -420,7 +424,36 @@ impl AppStore {
             Some(session.id()),
             Self::named(session),
         );
+        self.emit_remote_visibility(
+            EventKind::RemoteClosed,
+            Self::remote_visibility(session),
+            session.id(),
+            workspace,
+        );
         self.schedule_tree_changed();
+    }
+
+    /// The `remote.opened`/`remote.closed` payload of an attached row: its name and host; `None` for a local one.
+    fn remote_visibility(session: &Session) -> Option<EventPayload> {
+        session.remote_host().map(|host| EventPayload {
+            host: Some(host.to_owned()),
+            ..Self::named(session)
+        })
+    }
+
+    /// `remote.opened`/`remote.closed` describe the row's visibility, undo included, never the ssh connection's state,
+    /// which the app cannot observe under the hold prompt (upstream's `emitRemoteVisibility`). The core starts and
+    /// stops the row's presentation stream on them.
+    fn emit_remote_visibility(
+        &mut self,
+        kind: EventKind,
+        payload: Option<EventPayload>,
+        session: Uuid,
+        workspace: Uuid,
+    ) {
+        if let Some(payload) = payload {
+            self.emit(kind, Some(workspace), Some(session), payload);
+        }
     }
 
     /// Makes every pending close final, emits `session.closed` for every session, tears their terminals down and drops
@@ -436,18 +469,23 @@ impl AppStore {
         for session in sessions {
             self.release_remote_overlays(session);
         }
-        let closing: Vec<(Uuid, Uuid, EventPayload)> = self
+        let closing: Vec<(Uuid, Uuid, EventPayload, Option<EventPayload>)> = self
             .workspaces
             .iter()
             .flat_map(|workspace| {
-                workspace
-                    .sessions
-                    .iter()
-                    .map(move |session| (workspace.id(), session.id(), Self::named(session)))
+                workspace.sessions.iter().map(move |session| {
+                    (
+                        workspace.id(),
+                        session.id(),
+                        Self::named(session),
+                        Self::remote_visibility(session),
+                    )
+                })
             })
             .collect();
-        for (workspace, session, payload) in closing {
+        for (workspace, session, payload, remote) in closing {
             self.emit(EventKind::SessionClosed, Some(workspace), Some(session), payload);
+            self.emit_remote_visibility(EventKind::RemoteClosed, remote, session, workspace);
             self.schedule_tree_changed();
         }
         for session in self
@@ -589,6 +627,10 @@ impl AppStore {
     pub fn set_agent_indicator(&mut self, mut indicator: AgentIndicator, id: Uuid) {
         let workspace = self.workspace_for_session(id).map(Workspace::id);
         let Some(session) = self.session_mut(id) else { return };
+        // any write through here is a local one until `apply_remote_status` says otherwise right after it
+        if let Some(state) = session.remote_presentation.as_mut() {
+            state.status_bridged = false;
+        }
         // gated on the split EXISTING, not on its surface: a scripted split followed at once by a `--pane right`
         // status lands before the frontend realized the split surface, where `right` is the correct tag
         indicator.status_pane = indicator.normalized_pane(session.split.exists);
