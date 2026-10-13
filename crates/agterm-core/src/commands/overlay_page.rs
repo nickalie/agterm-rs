@@ -218,6 +218,11 @@ impl Core {
         self.pages.host = Some(host);
     }
 
+    /// The frontend's web views, if it installed them.
+    pub(crate) fn html_host(&self) -> Option<&dyn HtmlHost> {
+        self.pages.host.as_deref()
+    }
+
     /// Settles the pages that left every slot: each is dismissed (a no-op for one already answered) and queued for
     /// the frontend to release its web view. Runs at every commit and before an outcome is read.
     pub(crate) fn sync_pages(&mut self) {

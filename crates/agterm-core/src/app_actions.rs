@@ -257,13 +257,6 @@ impl Core {
         }
     }
 
-    /// Reload Config (upstream's `reloadGhosttyConfig`): every session's font size cleared, then the config reloaded
-    /// into every terminal by the frontend.
-    fn request_config_reload(&mut self) {
-        self.reset_session_font_sizes();
-        self.themes.reload_requested = true;
-    }
-
     /// An overlay of `session` at slot generation `generation` ended: an editor the Edit items opened reloads its file.
     pub(crate) fn config_edit_ended(&mut self, session: Uuid, generation: u64) -> Option<ConfigFile> {
         let index = self

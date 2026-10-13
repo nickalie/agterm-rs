@@ -104,6 +104,8 @@ pub(super) struct Page {
     theme: RefCell<HtmlOverlayTheme>,
     poster: Poster,
     state: RefCell<PageState>,
+    /// The page is built on the saved browser store (upstream's `usesSavedStore`), which a clear must wait for.
+    uses_saved_store: bool,
 }
 
 impl Page {
@@ -120,6 +122,7 @@ impl Page {
             Storage::Ready(session) => (session, None),
             Storage::Unavailable(failure) => (NetworkSession::new_ephemeral(), Some(failure)),
         };
+        let uses_saved_store = !session.is_ephemeral();
         let content = UserContentManager::new();
         let web_view = WebView::builder()
             .network_session(&session)
@@ -143,6 +146,7 @@ impl Page {
             background: background.map(str::to_owned),
             theme: RefCell::new(colors.theme()),
             poster: poster.clone(),
+            uses_saved_store,
             state: RefCell::new(PageState {
                 overlay: overlay.clone(),
                 applied_revision: overlay.reload_revision,
@@ -177,6 +181,10 @@ impl Page {
 
     pub(super) fn web_view(&self) -> &WebView {
         &self.web_view
+    }
+
+    pub(super) fn uses_saved_store(&self) -> bool {
+        self.uses_saved_store
     }
 
     pub(super) fn grant_root(&self) -> Option<PathBuf> {

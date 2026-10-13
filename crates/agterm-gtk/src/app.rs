@@ -46,6 +46,7 @@ const CAPABILITIES: &[&str] = &[
     "sidebar-min-width",
     "theme-slots-by-sync",
     "keymap-menu",
+    "config-reload-counts",
 ];
 
 /// `AGTERM_APP_ID` when it is a valid application id, else the fork's.
@@ -179,6 +180,7 @@ pub fn activate(app: &adw::Application) {
     core.set_cell_estimator(Box::new(crate::hud::estimate_cell));
     crate::html_overlay::install(&mut core, paths::state_dir(&ProcessEnv));
     core.set_config_locator(paths::ConfigLocator::capture(&ProcessEnv));
+    core.set_ui_test_launch(agterm_core::is_ui_test_launch(&ProcessEnv));
     let socket = context.socket.clone();
     let state = Rc::new(RefCell::new(AppState::new(core)));
     let main_loop = Arc::new(GlibMainLoop::attach(&glib::MainContext::default(), Rc::clone(&state)));
@@ -316,7 +318,8 @@ mod tests {
                 "overlay-size-validated",
                 "sidebar-min-width",
                 "theme-slots-by-sync",
-                "keymap-menu"
+                "keymap-menu",
+                "config-reload-counts"
             ]
         );
     }

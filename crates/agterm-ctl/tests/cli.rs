@@ -451,6 +451,9 @@ SUBCOMMANDS:
   font                    Font size commands.
   keymap                  Keymap commands.
   hooks                   Event hook commands.
+  browser                 Saved browser storage of --persistent URL overlays,
+                          and where clicked links open.
+  config                  Config commands.
   theme                   Theme commands.
   pick                    Open, poll, or cancel a native fuzzy picker.
   ask                     Open, poll, or cancel a themed question dialog.
@@ -3616,6 +3619,207 @@ fn keymap_and_hooks_usage_errors_come_before_connecting() -> TestResult {
         let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, args)?);
         assert_eq!((code, stdout.as_str()), (Some(64), ""), "{args:?}");
         assert!(stderr.starts_with("Error: "), "{stderr}");
+        assert!(stderr.contains("\nUsage: agtermctl "), "{stderr}");
+    }
+    Ok(())
+}
+
+// MARK: - browser and config
+
+const BROWSER_HELP: &str = "\
+OVERVIEW: Saved browser storage of --persistent URL overlays, and where clicked
+links open.
+
+USAGE: agtermctl browser <subcommand>
+
+OPTIONS:
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  clear                   Remove every cookie and all site data the saved
+                          browser store holds.
+  links                   Set or read where a clicked web link in a terminal
+                          opens (browser|overlay).
+
+  See 'agtermctl help browser <subcommand>' for detailed help.
+";
+
+const BROWSER_LINKS_HELP: &str = "\
+OVERVIEW: Set or read where a clicked web link in a terminal opens
+(browser|overlay).
+
+overlay opens http and https links in a full session web overlay with
+JavaScript, navigation buttons and the saved browser store; with no MODE the
+current one is printed. A link in a HUD, a link clicked while a HUD is up or
+the terminal is zoomed, and a link the overlay cannot show open in the browser.
+
+USAGE: agtermctl browser links [<mode>] [--socket <socket>] [--json]
+
+ARGUMENTS:
+  <mode>                  Mode: browser or overlay. Omit to read the current
+                          mode.
+
+OPTIONS:
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  -h, --help              Show help information.
+
+";
+
+const BROWSER_CLEAR_HELP: &str = "\
+OVERVIEW: Remove every cookie and all site data the saved browser store holds.
+
+Refused while a --persistent page is open, one in a just-closed session that
+can still be restored included: an open page writes its login back. Removing
+the local data does not sign you out on the server.
+
+USAGE: agtermctl browser clear [--socket <socket>] [--json]
+
+OPTIONS:
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  -h, --help              Show help information.
+
+";
+
+const CONFIG_HELP: &str = "\
+OVERVIEW: Config commands.
+
+USAGE: agtermctl config <subcommand>
+
+OPTIONS:
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  reload                  Re-read and apply the agterm-scoped ghostty.conf
+                          (prints the diagnostic count).
+
+  See 'agtermctl help config <subcommand>' for detailed help.
+";
+
+const CONFIG_RELOAD_HELP: &str = "\
+OVERVIEW: Re-read and apply the agterm-scoped ghostty.conf (prints the
+diagnostic count).
+
+USAGE: agtermctl config reload [--socket <socket>] [--json]
+
+OPTIONS:
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  -h, --help              Show help information.
+
+";
+
+#[test]
+fn browser_and_config_help_in_the_argument_parser_layout() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], &str); 8] = [
+        (&["browser", "--help"], BROWSER_HELP),
+        (&["browser"], BROWSER_HELP),
+        (&["help", "browser", "links"], BROWSER_LINKS_HELP),
+        (&["browser", "links", "--help"], BROWSER_LINKS_HELP),
+        (&["browser", "clear", "--help"], BROWSER_CLEAR_HELP),
+        (&["config", "--help"], CONFIG_HELP),
+        (&["help", "config"], CONFIG_HELP),
+        (&["config", "reload", "--help"], CONFIG_RELOAD_HELP),
+    ];
+    for (args, help) in cases {
+        assert_eq!(
+            outcome(&run(dir.path(), &[], args)?),
+            (Some(0), help.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn browser_and_config_commands_send_their_request_and_print_the_reply() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], serde_json::Value, serde_json::Value, &str); 7] = [
+        (
+            &["browser", "links"],
+            serde_json::json!({"cmd": "browser.links"}),
+            serde_json::json!({"text": "browser"}),
+            "browser\n",
+        ),
+        (
+            &["browser", "links", "overlay"],
+            serde_json::json!({"cmd": "browser.links", "args": {"mode": "overlay"}}),
+            serde_json::json!({"text": "overlay"}),
+            "overlay\n",
+        ),
+        (
+            &["browser", "links", "overlay", "--json"],
+            serde_json::json!({"cmd": "browser.links", "args": {"mode": "overlay"}}),
+            serde_json::json!({"text": "overlay"}),
+            "{\"ok\":true,\"result\":{\"text\":\"overlay\"}}\n",
+        ),
+        (
+            &["browser", "clear"],
+            serde_json::json!({"cmd": "browser.clear"}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+        (
+            &["config", "reload"],
+            serde_json::json!({"cmd": "config.reload"}),
+            serde_json::json!({"count": 2}),
+            "2 diagnostic(s)\n",
+        ),
+        (
+            &["config", "reload"],
+            serde_json::json!({"cmd": "config.reload"}),
+            serde_json::json!({"count": 0}),
+            "ok\n",
+        ),
+        (
+            &["config", "reload", "--json"],
+            serde_json::json!({"cmd": "config.reload"}),
+            serde_json::json!({"count": 0}),
+            "{\"ok\":true,\"result\":{\"count\":0}}\n",
+        ),
+    ];
+    for (at, (args, expected, result, stdout)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("{at}.sock"));
+        let _server = scripted(&socket, expected, result)?;
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(0), stdout.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    let socket = dir.path().join("refuse.sock");
+    let _server = serve(&socket, (), |(), _| {
+        Response::failure("1 persistent page(s) still open").into()
+    })?;
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &["browser", "clear"])?),
+        (
+            Some(1),
+            String::new(),
+            "error: 1 persistent page(s) still open\n".to_owned()
+        )
+    );
+    Ok(())
+}
+
+#[test]
+fn browser_and_config_usage_errors_come_before_connecting() -> TestResult {
+    let dir = short_dir()?;
+    // nothing listens here: a connection attempt would exit 1, not 64
+    let socket = dir.path().join("agterm.sock");
+    let cases: [(&[&str], &str); 5] = [
+        (&["browser", "links", "tab"], "Error: mode must be browser or overlay\n"),
+        (&["browser", "links", "overlay", "--window", "w1"], "Error: "),
+        (&["browser", "clear", "--window", "w1"], "Error: "),
+        (&["browser", "clear", "--target", "s1"], "Error: "),
+        (&["config", "reload", "--window", "w1"], "Error: "),
+    ];
+    for (args, prefix) in cases {
+        let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, args)?);
+        assert_eq!((code, stdout.as_str()), (Some(64), ""), "{args:?}");
+        assert!(stderr.starts_with(prefix), "{stderr}");
         assert!(stderr.contains("\nUsage: agtermctl "), "{stderr}");
     }
     Ok(())

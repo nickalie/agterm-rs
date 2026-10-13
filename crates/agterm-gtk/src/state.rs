@@ -147,14 +147,16 @@ pub struct AppState {
 
 impl AppState {
     #[must_use]
-    pub fn new(core: Core) -> Self {
+    pub fn new(mut core: Core) -> Self {
+        let dark = crate::ghostty_app::is_dark();
+        core.report_applied_appearance(dark);
         Self {
             core,
             poster: detached_poster(),
             windows: None,
             quitting: false,
             quick: QuickPanel::default(),
-            appearance: crate::theme::Appearance::new(crate::ghostty_app::is_dark()),
+            appearance: crate::theme::Appearance::new(dark),
         }
     }
 
@@ -186,7 +188,11 @@ impl AppState {
         crate::html_overlay::settle(&mut self.core);
         // before the windows sync too, which re-renders what follows the terminal colors (text backgrounds, asks)
         if self.core.take_config_reload() {
-            self.reload_config(false);
+            let count = self.reload_config(false);
+            self.core.report_config_reload(count);
+        }
+        if let Some(dark) = self.core.take_debug_appearance() {
+            self.force_appearance(dark);
         }
         let sounds = self.core.take_status_sounds();
         let banners = self.core.take_notifications();
@@ -218,8 +224,22 @@ impl AppState {
         let dark = crate::theme::desktop_is_dark();
         let count = crate::ghostty_app::reload_config(dark, keep_zoom);
         self.appearance.last_applied_dark = dark;
+        self.core.report_applied_appearance(dark);
         crate::html_overlay::refresh_themes();
         count
+    }
+
+    /// `debug.appearance` forced the app's appearance to `dark` (upstream's UI-test seam): the style manager takes
+    /// the side, and the flip runs the real appearance path at once rather than waiting out the style manager's
+    /// debounced report, which then finds the side already applied.
+    fn force_appearance(&self, dark: bool) {
+        let scheme = if dark {
+            adw::ColorScheme::ForceDark
+        } else {
+            adw::ColorScheme::ForceLight
+        };
+        adw::StyleManager::default().set_color_scheme(scheme);
+        post(&self.poster, move |state: &mut Self| state.appearance_changed(dark));
     }
 
     /// The desktop's appearance settled on `dark` (upstream's `SettingsModel.appearanceChanged`): while following with

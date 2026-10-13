@@ -9,14 +9,16 @@ use std::rc::Rc;
 
 use agterm_core::Core;
 use agterm_core::html::bridge;
-use agterm_core::html::profile::BrowserProfile;
-use agterm_core::html::{HtmlHost, HtmlNavigation, HtmlOverlay, HtmlSource, errors};
+use agterm_core::html::profile::{self, BrowserProfile};
+use agterm_core::html::{HtmlHost, HtmlNavigation, HtmlOverlay, HtmlSource, StoreClear, errors};
 use agterm_core::pane_env::uuid_string;
 use agterm_proto::Response;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use uuid::Uuid;
-use webkit6::{NetworkSession, ScriptMessageReply, URISchemeRequest, WebContext, WebView, javascriptcore};
+use webkit6::{
+    NetworkSession, ScriptMessageReply, URISchemeRequest, WebContext, WebView, WebsiteDataTypes, javascriptcore,
+};
 
 use super::page::{Page, Storage};
 use super::policy::{self, GRANT_SCHEME};
@@ -37,6 +39,8 @@ struct Registry {
     state_dir: Option<PathBuf>,
     /// The saved browser store, built on first use (upstream's `persistentStore`).
     saved: Option<NetworkSession>,
+    /// The web engine is emptying the saved store (upstream's `clearing`): no page may use it meanwhile.
+    clearing: bool,
     replies: HashMap<u64, Parked>,
     next_reply: u64,
     scheme_registered: bool,
@@ -64,6 +68,14 @@ impl HtmlHost for PageHost {
 
     fn navigate(&self, id: Uuid, navigation: HtmlNavigation) -> Result<(), String> {
         navigate(id, navigation)
+    }
+
+    fn clear_saved_store(&self) -> Result<StoreClear, String> {
+        clear_saved_store()
+    }
+
+    fn clearing_saved_store(&self) -> bool {
+        with(|registry| registry.clearing)
     }
 }
 
@@ -181,7 +193,11 @@ pub(super) fn open_in_browser(uri: &str) -> bool {
 /// Why the saved store cannot be used, `None` when it can, building it on first use (upstream's
 /// `persistentStoreFailure`): kept under `<state>/browser/<profile id>/`, data and cache apart.
 fn persistent_store_failure() -> Option<String> {
-    let (built, state_dir) = with(|registry| (registry.saved.is_some(), registry.state_dir.clone()));
+    let (built, clearing, state_dir) =
+        with(|registry| (registry.saved.is_some(), registry.clearing, registry.state_dir.clone()));
+    if clearing {
+        return Some(errors::CLEARING.to_owned());
+    }
     if built {
         return None;
     }
@@ -199,6 +215,40 @@ fn persistent_store_failure() -> Option<String> {
     refuse_downloads(&session);
     with(|registry| registry.saved = Some(session));
     None
+}
+
+/// Starts removing everything the saved store holds (upstream's `clearPersistentStore`): refused while a clear runs,
+/// while a page built on the store is still registered (a soft-closed session's included, whose login would be written
+/// back), and when the profile cannot be read; a profile never created has nothing to remove and is not created for
+/// it. The web engine empties the store asynchronously; [`HtmlHost::clearing_saved_store`] holds until it is done.
+fn clear_saved_store() -> Result<StoreClear, String> {
+    let (clearing, open, state_dir) = with(|registry| {
+        let open = registry.pages.values().filter(|page| page.uses_saved_store()).count();
+        (registry.clearing, open, registry.state_dir.clone())
+    });
+    let profile = state_dir.as_deref().map(BrowserProfile::new);
+    if !profile::clear_check(clearing, open, profile.as_ref())? {
+        return Ok(StoreClear::Nothing);
+    }
+    if let Some(failure) = persistent_store_failure() {
+        return Err(failure);
+    }
+    let Some(manager) = with(|registry| registry.saved.as_ref().and_then(NetworkSession::website_data_manager)) else {
+        return Err(errors::PERSISTENT_UNAVAILABLE.to_owned());
+    };
+    with(|registry| registry.clearing = true);
+    manager.clear(
+        WebsiteDataTypes::ALL,
+        glib::TimeSpan::from_seconds(0),
+        None::<&gio::Cancellable>,
+        |cleared| {
+            if let Err(err) = cleared {
+                tracing::warn!(%err, "the web engine did not empty the saved browser store");
+            }
+            with(|registry| registry.clearing = false);
+        },
+    );
+    Ok(StoreClear::Started)
 }
 
 /// The store page `overlay` is built on (upstream's `storage(for:)`): a persistent URL page the saved one, or none

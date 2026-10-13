@@ -26,8 +26,8 @@ static INIT: OnceLock<Result<(), Error>> = OnceLock::new();
 
 /// Initialise libghostty once for the process; later calls return the first call's outcome.
 ///
-/// Every other entry point of this crate calls it first. Only `argv[0]` is handed over: libghostty scans its argv
-/// for `+action` CLI verbs, and agterm's own arguments are not ghostty's.
+/// Every other entry point of this crate calls it first. The process's whole argv is handed over, as upstream's
+/// `GhosttyApp` does (`ghostty_init(CommandLine.argc, CommandLine.unsafeArgv)`): agterm has no options of its own.
 ///
 /// libghostty snapshots the process environment here and hands that snapshot to every shell it spawns, so the
 /// environment must be final before this runs and must not change afterwards: a variable added later reallocates
@@ -41,16 +41,30 @@ pub fn init() -> Result<(), Error> {
 }
 
 fn init_once() -> Result<(), Error> {
-    let argv0 = std::env::args_os()
-        .next()
-        .and_then(|arg| CString::new(arg.into_vec()).ok())
-        .unwrap_or_else(|| c"agterm".to_owned());
+    let vector = process_argv();
+    let count = vector.len() - 1;
     // Leaked on purpose: libghostty keeps the vector as its process argv for the rest of the process.
-    let argv: &'static mut [*mut c_char; 2] = Box::leak(Box::new([argv0.into_raw(), std::ptr::null_mut()]));
-    // SAFETY: argv is a null-terminated vector of one NUL-terminated string, alive for the whole process, and the
+    let argv: &'static mut [*mut c_char] = Box::leak(vector.into_boxed_slice());
+    // SAFETY: argv is a null-terminated vector of `count` NUL-terminated strings, alive for the whole process, and the
     // OnceLock guarantees ghostty_init runs once.
-    let status = unsafe { sys::ghostty_init(1, argv.as_mut_ptr()) };
+    let status = unsafe { sys::ghostty_init(count, argv.as_mut_ptr()) };
     if status == 0 { Ok(()) } else { Err(Error::Init(status)) }
+}
+
+/// The process's arguments as a C argv: owned strings (leaked by the caller) and a closing null pointer. An argument
+/// with an interior NUL, which no exec can produce, is left out; with no arguments at all `agterm` stands in for
+/// argv[0].
+fn process_argv() -> Vec<*mut c_char> {
+    let mut args: Vec<CString> = std::env::args_os()
+        .filter_map(|arg| CString::new(arg.into_vec()).ok())
+        .collect();
+    if args.is_empty() {
+        args.push(c"agterm".to_owned());
+    }
+    args.into_iter()
+        .map(CString::into_raw)
+        .chain(std::iter::once(std::ptr::null_mut()))
+        .collect()
 }
 
 /// What the host does for libghostty. Called on the thread that owns the [`App`], never re-entered for the same

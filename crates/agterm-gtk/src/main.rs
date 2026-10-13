@@ -120,7 +120,8 @@ fn main() -> glib::ExitCode {
         }
         app::activate(app);
     });
-    // agterm's arguments are its own, not GApplication's
+    // the command line goes to libghostty whole (`ghostty_init`, as upstream's): GApplication gets argv[0] alone, so
+    // it rejects no option or file it does not own
     let argv0: Vec<String> = std::env::args().take(1).collect();
     let status = app.run_with_args(&argv0);
     app::shutdown();

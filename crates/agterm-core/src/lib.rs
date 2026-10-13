@@ -45,6 +45,7 @@ pub mod windows;
 pub mod zoom;
 
 pub use commands::PaneReport;
+pub use commands::debug::is_ui_test_launch;
 pub use commands::hud::{CellEstimator, HudHideTimer, WINDOW_PADDING as HUD_WINDOW_PADDING};
 pub use commands::keymap::{FAILURE_HUD_SECONDS, MenuReader};
 pub use commands::notify::{

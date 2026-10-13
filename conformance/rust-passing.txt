@@ -10,6 +10,7 @@ tests/behaviors/test_relaunch.py::test_relaunch_forgets_what_is_not_persisted
 tests/behaviors/test_relaunch.py::test_relaunch_keeps_workspaces_sessions_and_their_metadata
 tests/cli/test_cli_output.py::test_ask_blocks_until_cancelled
 tests/cli/test_cli_output.py::test_ask_without_blocking
+tests/cli/test_cli_output.py::test_browser_and_config
 tests/cli/test_cli_output.py::test_events_json_prints_each_event_object_of_the_asked_kinds
 tests/cli/test_cli_output.py::test_events_print_every_event_with_its_arguments
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args0-event limit must be between 1 and 1000]
@@ -109,6 +110,19 @@ tests/protocol/test_ask_pick.py::test_terminal_ask_pane_must_be_laid_out
 tests/protocol/test_ask_pick.py::test_terminal_ask_waits_hidden_on_an_unselected_session
 tests/protocol/test_ask_pick.py::test_terminal_ask_waits_on_its_session
 tests/protocol/test_ask_pick.py::test_terminal_ask_without_a_target_lands_on_the_selected_session
+tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[None-args2-browser.clear]
+tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[None-args2-browser.links]
+tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[active-args0-browser.clear]
+tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[active-args0-browser.links]
+tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[zzz-args1-browser.clear]
+tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[zzz-args1-browser.links]
+tests/protocol/test_config_browser.py::test_clear_empties_the_store_persistent_pages_share
+tests/protocol/test_config_browser.py::test_clear_without_a_saved_store_creates_none
+tests/protocol/test_config_browser.py::test_links_refuses_an_unknown_mode[Overlay]
+tests/protocol/test_config_browser.py::test_links_refuses_an_unknown_mode[]
+tests/protocol/test_config_browser.py::test_links_refuses_an_unknown_mode[bogus]
+tests/protocol/test_config_browser.py::test_links_sets_and_reads_the_link_open_mode
+tests/protocol/test_config_browser.py::test_reload_applies_the_edited_config_to_open_and_new_sessions
 tests/protocol/test_dashboard_quick.py::test_dashboard_and_terminal_zoom_replace_each_other
 tests/protocol/test_dashboard_quick.py::test_dashboard_font_modes
 tests/protocol/test_dashboard_quick.py::test_dashboard_mru_takes_the_recent_sessions

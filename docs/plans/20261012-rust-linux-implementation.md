@@ -1085,18 +1085,18 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 - Create: `crates/agterm-core/src/commands/{config,browser,debug}.rs`
 - ➕ Modify: `crates/agterm-gtk/src/main.rs`, `crates/agterm-ghostty/src/app.rs` (argv to `ghostty_init`)
 
-- [ ] config.reload on every surface, answering the diagnostic count, so claim `config-reload-counts`;
+- [x] config.reload on every surface, answering the diagnostic count, so claim `config-reload-counts`;
       browser.clear, browser.links (`BrowserProfile.swift`, `ControlDispatcher+Browser.swift`); debug.appearance
       refused outside UI-test mode
-- [ ] ➕ `agterm`'s command line as upstream's: upstream has no options of its own and hands the full argv to
+- [x] ➕ `agterm`'s command line as upstream's: upstream has no options of its own and hands the full argv to
       `ghostty_init` (`agterm/Ghostty/GhosttyApp.swift`), while the Rust build passes only argv[0] to both
       GApplication and `ghostty_init` (`crates/agterm-gtk/src/main.rs`, `crates/agterm-ghostty/src/app.rs`). Pass
       the argv on to `ghostty_init` as upstream does, keep GApplication from rejecting arguments it does not own, and
       test that a launch with extra arguments starts and serves
-- [ ] matching `agtermctl` subcommands
-- [ ] write tests: reload propagation through the fake surfaces
-- [ ] write tests: browser profile paths and errors
-- [ ] gate: full run; ratchet (`test_config_browser.py`)
+- [x] matching `agtermctl` subcommands
+- [x] write tests: reload propagation through the fake surfaces
+- [x] write tests: browser profile paths and errors
+- [x] gate: full run; ratchet (`test_config_browser.py`)
 
 ### Task 26: Restore modes and relaunch
 

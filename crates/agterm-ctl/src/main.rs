@@ -3,7 +3,9 @@
 //! and reports through [`output`]. Each command group lives in its own module.
 
 mod ask;
+mod browser;
 mod client;
+mod config;
 mod dashboard;
 mod events;
 mod font;
@@ -77,6 +79,8 @@ enum Command {
     Font(font::Font),
     Keymap(keymap::Keymap),
     Hooks(hooks::Hooks),
+    Browser(browser::Browser),
+    Config(config::Config),
     Theme(theme::Theme),
     Pick(pick::Pick),
     Ask(ask::Ask),
@@ -100,6 +104,8 @@ impl Command {
             Self::Font(command) => command.check(),
             Self::Keymap(command) => command.check(),
             Self::Hooks(command) => command.check(),
+            Self::Browser(command) => command.check(),
+            Self::Config(command) => command.check(),
             Self::Theme(command) => command.check(),
             Self::Ask(command) => command.check(),
             Self::Pick(_) | Self::Version(_) => Ok(()),
@@ -121,6 +127,8 @@ impl Command {
             Self::Font(command) => command.execute(env),
             Self::Keymap(command) => command.execute(env),
             Self::Hooks(command) => command.execute(env),
+            Self::Browser(command) => command.execute(env),
+            Self::Config(command) => command.execute(env),
             Self::Theme(command) => command.execute(env),
             Self::Pick(command) => command.execute(env),
             Self::Ask(command) => command.execute(env),

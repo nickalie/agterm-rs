@@ -347,6 +347,31 @@ pub trait HtmlHost {
     /// The control error text ([`errors`]): the page has no web view yet, no history that way, no browser, or a
     /// file-manager hand-off of a URL page.
     fn navigate(&self, page: uuid::Uuid, navigation: HtmlNavigation) -> Result<(), String>;
+
+    /// Starts removing everything the saved browser store holds (upstream's `clearPersistentStore`, its refusals in
+    /// the order [`profile::clear_check`] gives them): [`StoreClear::Nothing`] when no store was ever created,
+    /// [`StoreClear::Started`] while the web engine empties it, until [`HtmlHost::clearing_saved_store`] turns false.
+    ///
+    /// # Errors
+    ///
+    /// Why the store cannot be cleared now, the text `browser.clear` reports after its own name.
+    fn clear_saved_store(&self) -> Result<StoreClear, String> {
+        Err(errors::PERSISTENT_UNAVAILABLE.to_owned())
+    }
+
+    /// Whether a clear [`HtmlHost::clear_saved_store`] started is still running.
+    fn clearing_saved_store(&self) -> bool {
+        false
+    }
+}
+
+/// What [`HtmlHost::clear_saved_store`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreClear {
+    /// No saved store was ever created: nothing to remove, and none is created for it.
+    Nothing,
+    /// The web engine is emptying the store.
+    Started,
 }
 
 /// The page refusals only the frontend's host can tell (upstream's `OverlayHtmlError`).
@@ -358,6 +383,19 @@ pub mod errors {
     pub const NO_BROWSER: &str = "no default web browser to open the page in";
     pub const FINDER_REQUIRES_FILE: &str = "show in Finder requires a file page";
     pub const PERSISTENT_UNAVAILABLE: &str = "persistent browser storage is not available";
+    /// The saved store is being emptied: neither a second clear nor a persistent page may use it (upstream's
+    /// `BrowserClearError.clearing`).
+    pub const CLEARING: &str = "browser storage is being cleared";
+
+    /// Persistent pages still hold the saved store and would write their logins back (upstream's
+    /// `BrowserClearError.pagesOpen`).
+    #[must_use]
+    pub fn pages_open(count: usize) -> String {
+        format!(
+            "{count} persistent {} still open",
+            if count == 1 { "page" } else { "pages" }
+        )
+    }
 
     /// The page has nowhere to go in that direction.
     #[must_use]

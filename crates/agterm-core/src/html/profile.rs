@@ -107,6 +107,29 @@ impl BrowserProfile {
     }
 }
 
+/// Whether the saved browser store may be emptied now, the refusals in upstream's `clearPersistentStore` order: a
+/// clear already running, then the persistent pages still holding the store (`open_pages`, a soft-closed one
+/// included: its login lives in memory and would be written back), then a missing or unreadable profile. `Ok(true)`
+/// when a store exists to empty, `Ok(false)` when the profile was never created: nothing to remove, and none is
+/// created for it.
+///
+/// # Errors
+///
+/// The refusal's text ([`super::errors`] or the profile's [`ProfileFailure`]).
+pub fn clear_check(clearing: bool, open_pages: usize, profile: Option<&BrowserProfile>) -> Result<bool, String> {
+    if clearing {
+        return Err(super::errors::CLEARING.to_owned());
+    }
+    if open_pages > 0 {
+        return Err(super::errors::pages_open(open_pages));
+    }
+    let profile = profile.ok_or_else(|| super::errors::PERSISTENT_UNAVAILABLE.to_owned())?;
+    profile
+        .existing_identifier()
+        .map(|id| id.is_some())
+        .map_err(|failure| failure.to_string())
+}
+
 /// A UUID as Foundation's `UUID(uuidString:)` reads one: the hyphenated 36-character form only, in either case.
 fn parse(text: &str) -> Option<Uuid> {
     let hyphenated = text.len() == 36
@@ -245,6 +268,60 @@ mod tests {
         assert_eq!(
             ProfileFailure::Malformed("/s/browser-profile".to_owned()).to_string(),
             "browser profile is not a UUID: /s/browser-profile"
+        );
+    }
+
+    /// Upstream's `clearPersistentStore` order: clearing, open pages, no profile, then the profile file itself.
+    #[test]
+    fn a_clear_is_refused_in_upstream_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = BrowserProfile::new(dir.path());
+        fs::write(profile.file(), "garbage").unwrap();
+        assert_eq!(
+            clear_check(true, 2, Some(&profile)),
+            Err("browser storage is being cleared".to_owned())
+        );
+        assert_eq!(
+            clear_check(false, 1, Some(&profile)),
+            Err("1 persistent page still open".to_owned())
+        );
+        assert_eq!(
+            clear_check(false, 3, None),
+            Err("3 persistent pages still open".to_owned())
+        );
+        assert_eq!(
+            clear_check(false, 0, None),
+            Err("persistent browser storage is not available".to_owned())
+        );
+        assert_eq!(
+            clear_check(false, 0, Some(&profile)),
+            Err(format!("browser profile is not a UUID: {}", profile.file().display()))
+        );
+    }
+
+    #[test]
+    fn a_clear_without_a_profile_creates_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = BrowserProfile::new(dir.path());
+        assert_eq!(clear_check(false, 0, Some(&profile)), Ok(false));
+        assert!(!profile.file().exists());
+        let id = profile.identifier().unwrap();
+        assert_eq!(clear_check(false, 0, Some(&profile)), Ok(true));
+        assert_eq!(
+            profile.existing_identifier(),
+            Ok(Some(id)),
+            "a clear keeps the profile id"
+        );
+    }
+
+    #[test]
+    fn a_clear_behind_an_unreadable_profile_names_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = BrowserProfile::new(dir.path());
+        fs::create_dir(profile.file()).unwrap();
+        assert_eq!(
+            clear_check(false, 0, Some(&profile)),
+            Err(format!("browser profile cannot be read: {}", profile.file().display()))
         );
     }
 }

@@ -5,6 +5,7 @@ mod actions;
 mod ask;
 mod auto_follow;
 mod background;
+mod config_browser;
 mod dashboard;
 mod events;
 mod font;

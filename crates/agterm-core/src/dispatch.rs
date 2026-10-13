@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::Path;
 use std::time::Duration;
 
-use agterm_proto::command::{EventsCmd, SessionCmd};
+use agterm_proto::command::{BrowserCmd, DebugCmd, EventsCmd, SessionCmd};
 use agterm_proto::{
     AppIdentity, Args, Command, ConformanceProfile, ControlResult, ControlTree, PARITY_LEVEL, Request, Response,
     VersionResult,
@@ -160,6 +160,10 @@ pub struct Core {
     pub(crate) keymap: commands::keymap::KeymapRuntime,
     /// The editor overlays the Edit menu items opened ([`crate::app_actions`]).
     pub(crate) config_edits: crate::app_actions::ConfigEdits,
+    /// The explicit config reloads and the frontend's reports of them ([`commands::config`]).
+    pub(crate) config_reloads: commands::config::ConfigReloads,
+    /// The UI-test appearance seam ([`commands::debug`]).
+    pub(crate) debug_appearance: commands::debug::DebugAppearance,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -229,6 +233,8 @@ impl Core {
             hooks: commands::hooks::HookRuntime::default(),
             keymap: commands::keymap::KeymapRuntime::default(),
             config_edits: crate::app_actions::ConfigEdits::default(),
+            config_reloads: commands::config::ConfigReloads::default(),
+            debug_appearance: commands::debug::DebugAppearance::default(),
         }
     }
 
@@ -660,11 +666,13 @@ impl Core {
                     tree: self.tree(window)?,
                 })
             }
-            cmd @ (Command::Browser(_)
-            | Command::Config(_)
-            | Command::Debug(_)
-            | Command::Restore(_)
-            | Command::Zmx(_)) => Err(ControlError::NotSupported(cmd)),
+            Command::Browser(BrowserCmd::Links) => result_of(&commands::browser::links(self, request)?),
+            Command::Debug(DebugCmd::Appearance) => result_of(&commands::debug::appearance(self, request)?),
+            // `browser.clear` and `config.reload` start through `deferred`
+            cmd
+            @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Restore(_) | Command::Zmx(_)) => {
+                Err(ControlError::NotSupported(cmd))
+            }
         }
     }
 }
@@ -672,7 +680,8 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use agterm_proto::command::{
-        BrowserCmd, EventsCmd, HooksCmd, KeymapCmd, SidebarCmd, ThemeCmd, WindowCmd, WorkspaceCmd, ZmxCmd,
+        BrowserCmd, ConfigCmd, EventsCmd, HooksCmd, KeymapCmd, RestoreCmd, SidebarCmd, ThemeCmd, WindowCmd,
+        WorkspaceCmd, ZmxCmd,
     };
     use serde_json::json;
 
@@ -706,6 +715,9 @@ mod tests {
         Command::Keymap(KeymapCmd::List),
         Command::Hooks(HooksCmd::Reload),
         Command::Hooks(HooksCmd::List),
+        // a reload without a frontend counts no diagnostics; the link mode reads back the default
+        Command::Config(ConfigCmd::Reload),
+        Command::Browser(BrowserCmd::Links),
     ];
 
     #[test]
@@ -723,7 +735,7 @@ mod tests {
     #[test]
     fn unimplemented_commands_are_refused_by_name() {
         let mut core = core();
-        for cmd in [Command::Browser(BrowserCmd::Clear), Command::Zmx(ZmxCmd::List)] {
+        for cmd in [Command::Restore(RestoreCmd::Clear), Command::Zmx(ZmxCmd::List)] {
             let response = core.dispatch(&Request::new(cmd));
             assert!(!response.ok);
             assert_eq!(

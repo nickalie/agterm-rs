@@ -57,3 +57,16 @@ def test_the_log_filter_is_harness_owned_but_never_inherited() -> None:
 def test_a_missing_binary_fails_without_launching(tmp_path: Path) -> None:
     report = ghostty_probe.probe(tmp_path / "agterm", 1.0)
     assert report["ok"] is False and "no agterm at" in report["error"]
+
+
+def test_extra_arguments_reach_the_probe_in_order(monkeypatch, tmp_path: Path) -> None:
+    seen = {}
+
+    def fake_probe(bin: Path, timeout: float, args=()) -> dict:
+        seen.update(bin=bin, timeout=timeout, args=list(args))
+        return {"ok": True}
+
+    monkeypatch.setattr(ghostty_probe, "probe", fake_probe)
+    status = ghostty_probe.main(["--bin", str(tmp_path / "agterm"), "--arg=--no-such-option", "--arg", "file.txt"])
+    assert status == 0
+    assert seen["args"] == ["--no-such-option", "file.txt"]
