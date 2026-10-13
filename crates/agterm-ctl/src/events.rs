@@ -236,8 +236,13 @@ impl StreamState {
     }
 
     /// The wait before reading again after `error`, `None` when the error ends the stream. Only a refused connect is
-    /// retried: a live server whose backlog is full refuses, while a missing socket means the app quit, and a relaunch
-    /// is a new run the cursor cannot resume. Without a cursor there is nothing to keep, so a first read fails fast.
+    /// retried, as upstream's `EventStreamState.retryDelay`, whose reason is Darwin's: there a live server whose
+    /// backlog is full refuses, while a missing socket means the app quit, and a relaunch is a new run the cursor
+    /// cannot resume. Linux differs: a full backlog makes the blocking connect wait for room, and a refusal means a
+    /// socket file nobody listens on, left by an app that died. So here the retry never reaches a live server: it
+    /// only delays that failure by up to [`RETRY_BUDGET`], or ends in `event run changed` when a relaunched app
+    /// answers first. It is kept for parity with upstream (the Linux fork keeps it too). Without a cursor there is
+    /// nothing to keep, so a first read fails fast.
     fn retry_delay(&mut self, error: &ClientError) -> Option<Duration> {
         let refused = error.connect_errno == Some(libc::ECONNREFUSED);
         if self.cursor.is_none() || !refused || self.retried_for >= RETRY_BUDGET {
