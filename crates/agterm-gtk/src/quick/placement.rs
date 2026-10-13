@@ -5,8 +5,8 @@ use agterm_core::quick_metrics::{self, PanelSize};
 /// What hosts the panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickHost {
-    /// A wlr-layer-shell surface: it floats over every window on the compositor's current output and is never tiled,
-    /// the Linux counterpart of upstream's floating, all-spaces `NSPanel`.
+    /// A wlr-layer-shell surface: it floats over every window on its output and is never tiled, the Linux
+    /// counterpart of upstream's floating, all-spaces `NSPanel`.
     LayerShell,
     /// An ordinary undecorated window, where the compositor offers no layer-shell (GNOME/Mutter, X11): it is placed
     /// like any other window.
@@ -46,19 +46,21 @@ pub enum LayerPlacement {
     Filled,
 }
 
-/// The layer-shell placement on a monitor measuring `monitor`.
+/// The layer-shell placement for the quick zoom (`zoomed`) or the size setting on a monitor measuring `monitor`: a
+/// zoomed panel fills its output and needs no monitor; an unzoomed one without a monitor keeps its frame (`None`).
 #[must_use]
-pub fn layer_placement(monitor: PanelSize, size_percent: Option<i64>, zoomed: bool) -> LayerPlacement {
+pub fn layer_placement(monitor: Option<PanelSize>, size_percent: Option<i64>, zoomed: bool) -> Option<LayerPlacement> {
     if zoomed {
-        return LayerPlacement::Filled;
+        return Some(LayerPlacement::Filled);
     }
+    let monitor = monitor?;
     let (width, height) = panel_pixels(monitor, size_percent);
     let top_margin = ((pixels(monitor.height) - height) / 2).max(0);
-    LayerPlacement::Centered {
+    Some(LayerPlacement::Centered {
         width,
         height,
         top_margin,
-    }
+    })
 }
 
 /// The panel's size in pixels on a monitor measuring `monitor` ([`quick_metrics::panel_size`]).
@@ -68,13 +70,33 @@ pub fn panel_pixels(monitor: PanelSize, size_percent: Option<i64>) -> (i32, i32)
     (pixels(size.width), pixels(size.height))
 }
 
-/// The monitor the panel is sized against: the one the compositor put it on, once known, else the active agterm
-/// window's, else the first. A Wayland client cannot read the pointer outside its own surfaces, so upstream's
-/// pointer-screen rule is the compositor's to apply (the layer surface names no output); the active window's monitor
-/// is the estimate until the panel lands.
+/// The monitor the panel is framed on: `placed`, the one it is on while on screen (a shown layer surface never changes
+/// output), else the active agterm window's, else the first. A Wayland client cannot read the pointer outside its own
+/// surfaces, so upstream's pointer-screen rule becomes the active agterm window's monitor when the panel comes on
+/// screen.
 #[must_use]
 pub fn sizing_monitor<T>(placed: Option<T>, active_window: Option<T>, first: Option<T>) -> Option<T> {
     placed.or(active_window).or(first)
+}
+
+/// What becomes of the layer surface's output when the monitors change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutputChange<T> {
+    /// The bound monitor is still usable, or there is neither a bound nor a usable one: nothing moves.
+    Keep,
+    /// The bound monitor went away, or none was bound: the surface moves to this one, `None` when none is left.
+    Move(Option<T>),
+}
+
+/// The output change for a surface bound to `bound` when `usable` are the monitors left: it stays while its monitor
+/// is usable, else it moves to the first usable one.
+#[must_use]
+pub fn output_change<T: Clone + PartialEq>(bound: Option<&T>, usable: &[T]) -> OutputChange<T> {
+    match bound {
+        Some(bound) if usable.contains(bound) => OutputChange::Keep,
+        None if usable.is_empty() => OutputChange::Keep,
+        _ => OutputChange::Move(usable.first().cloned()),
+    }
 }
 
 /// A panel extent as GTK takes it.
@@ -106,12 +128,12 @@ mod tests {
     #[test]
     fn the_panel_is_centered_at_the_metrics_size() {
         assert_eq!(
-            layer_placement(LARGE, None, false),
-            LayerPlacement::Centered {
+            layer_placement(Some(LARGE), None, false),
+            Some(LayerPlacement::Centered {
                 width: 1100,
                 height: 700,
                 top_margin: 370
-            }
+            })
         );
     }
 
@@ -122,18 +144,27 @@ mod tests {
             height: 1080.0,
         };
         assert_eq!(
-            layer_placement(monitor, Some(50), false),
-            LayerPlacement::Centered {
+            layer_placement(Some(monitor), Some(50), false),
+            Some(LayerPlacement::Centered {
                 width: 960,
                 height: 540,
                 top_margin: 270
-            }
+            })
         );
     }
 
     #[test]
-    fn the_zoomed_panel_fills_the_output() {
-        assert_eq!(layer_placement(LARGE, Some(50), true), LayerPlacement::Filled);
+    fn the_zoomed_panel_fills_its_output_with_or_without_a_monitor() {
+        assert_eq!(
+            layer_placement(Some(LARGE), Some(50), true),
+            Some(LayerPlacement::Filled)
+        );
+        assert_eq!(layer_placement(None, Some(50), true), Some(LayerPlacement::Filled));
+    }
+
+    #[test]
+    fn an_unzoomed_panel_without_a_monitor_keeps_its_frame() {
+        assert_eq!(layer_placement(None, None, false), None);
     }
 
     #[test]
@@ -142,7 +173,7 @@ mod tests {
             width: 1.0,
             height: 1.0,
         };
-        let LayerPlacement::Centered { top_margin, .. } = layer_placement(tiny, Some(90), false) else {
+        let Some(LayerPlacement::Centered { top_margin, .. }) = layer_placement(Some(tiny), Some(90), false) else {
             panic!("an unzoomed panel is centered");
         };
         assert_eq!(top_margin, 0);
@@ -156,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn the_panel_is_sized_on_its_own_monitor_once_placed() {
+    fn a_shown_panel_is_framed_on_its_own_monitor() {
         assert_eq!(
             sizing_monitor(Some("placed"), Some("active"), Some("first")),
             Some("placed")
@@ -164,5 +195,18 @@ mod tests {
         assert_eq!(sizing_monitor(None, Some("active"), Some("first")), Some("active"));
         assert_eq!(sizing_monitor(None, None, Some("first")), Some("first"));
         assert_eq!(sizing_monitor::<&str>(None, None, None), None);
+    }
+
+    #[test]
+    fn the_output_stays_while_its_monitor_is_usable() {
+        assert_eq!(output_change(Some(&"a"), &["b", "a"]), OutputChange::Keep);
+        assert_eq!(output_change::<&str>(None, &[]), OutputChange::Keep);
+    }
+
+    #[test]
+    fn a_lost_or_missing_output_moves_to_the_first_monitor_left() {
+        assert_eq!(output_change(Some(&"a"), &["b", "c"]), OutputChange::Move(Some("b")));
+        assert_eq!(output_change(None, &["b"]), OutputChange::Move(Some("b")));
+        assert_eq!(output_change(Some(&"a"), &[]), OutputChange::Move(None));
     }
 }
