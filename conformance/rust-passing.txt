@@ -27,6 +27,8 @@ tests/cli/test_cli_output.py::test_hooks
 tests/cli/test_cli_output.py::test_hud
 tests/cli/test_cli_output.py::test_keymap
 tests/cli/test_cli_output.py::test_live_pane_commands
+tests/cli/test_cli_output.py::test_live_present_bridges_the_stream
+tests/cli/test_cli_output.py::test_live_run_job_runs_the_handed_over_program
 tests/cli/test_cli_output.py::test_notify_raises_the_unseen_count
 tests/cli/test_cli_output.py::test_overlay_page_blocks_until_submitted
 tests/cli/test_cli_output.py::test_overlay_page_dismissed_exits_2
@@ -36,6 +38,7 @@ tests/cli/test_cli_output.py::test_pick_without_blocking
 tests/cli/test_cli_output.py::test_quick_terminal
 tests/cli/test_cli_output.py::test_restore
 tests/cli/test_cli_output.py::test_session_background
+tests/cli/test_cli_output.py::test_session_commands_refused_outside_their_state
 tests/cli/test_cli_output.py::test_session_create_select_and_close
 tests/cli/test_cli_output.py::test_session_metadata
 tests/cli/test_cli_output.py::test_session_move_and_go
@@ -52,6 +55,7 @@ tests/cli/test_cli_output.py::test_window_commands
 tests/cli/test_cli_output.py::test_workspace_focus_and_filter
 tests/cli/test_cli_output.py::test_workspace_go_and_move
 tests/cli/test_cli_output.py::test_workspace_lifecycle
+tests/cli/test_cli_output.py::test_zmx_reads_outside_live
 tests/cli/test_socket_resolution.py::test_agterm_socket_variable_is_not_read
 tests/cli/test_socket_resolution.py::test_default_socket_without_a_state_dir
 tests/cli/test_socket_resolution.py::test_socket_option_wins_over_the_state_dir
@@ -604,6 +608,7 @@ tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.focus-
 tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.move-args3]
 tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.rename-args1]
 tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.select-args0]
+tests/protocol/test_zmx.py::test_job_run_serves_an_overlay_a_presenter_shows
 tests/protocol/test_zmx.py::test_kill_ends_the_daemon_and_closes_its_pane
 tests/protocol/test_zmx.py::test_kill_refuses_a_daemon_that_is_not_running
 tests/protocol/test_zmx.py::test_kill_rejects[active]
@@ -619,6 +624,7 @@ tests/protocol/test_zmx.py::test_lead_rejects[not-live]
 tests/protocol/test_zmx.py::test_lead_rejects[scratch]
 tests/protocol/test_zmx.py::test_list_joins_each_pane_claim
 tests/protocol/test_zmx.py::test_live_panes_run_in_claimed_daemons
+tests/protocol/test_zmx.py::test_present_mirrors_a_live_session
 tests/protocol/test_zmx.py::test_present_refuses_without_a_session
 tests/protocol/test_zmx.py::test_prune_finds_no_orphans
 tests/protocol/test_zmx.py::test_reset_requires_force
@@ -638,3 +644,5 @@ tests/protocol/test_zmx.py::test_screen_rejects[zero-lines]
 tests/protocol/test_zmx.py::test_stream_commands_refuse_before_streaming[job-invalid]
 tests/protocol/test_zmx.py::test_stream_commands_refuse_before_streaming[job-no-id]
 tests/protocol/test_zmx.py::test_stream_commands_refuse_before_streaming[job-unknown]
+tests/protocol/test_zmx.py::test_stream_commands_refuse_before_streaming[present-not-live]
+tests/protocol/test_zmx.py::test_tree_without_a_host_lists_no_attachable_session_outside_live

@@ -256,6 +256,9 @@ pub struct Session {
     pub hud_frames: HudPaneFrames,
     /// The pending terminal ask ([`Session::ask`]), independent of the overlay slot. Ephemeral.
     pub(crate) ask: Option<super::ask::SessionAsk>,
+    /// The overlay slots a viewer's presenter holds and the outcomes of remote jobs ([`Session::remote_overlays`]).
+    /// Ephemeral.
+    pub(crate) remote_overlays: super::remote_overlay::RemoteOverlays,
 }
 
 /// The outcome of resolving a command's `--pane-id` and `--pane` pair (upstream's `Session.PaneAddress`).
@@ -323,6 +326,7 @@ impl Session {
             pane_overlays: PaneOverlays::default(),
             hud_frames: HudPaneFrames::default(),
             ask: None,
+            remote_overlays: super::remote_overlay::RemoteOverlays::default(),
         }
     }
 

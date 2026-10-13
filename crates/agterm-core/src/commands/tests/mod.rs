@@ -19,6 +19,7 @@ mod overlay_page;
 mod panes;
 mod pick;
 mod quick;
+mod remote;
 mod restart;
 mod restore;
 mod session;

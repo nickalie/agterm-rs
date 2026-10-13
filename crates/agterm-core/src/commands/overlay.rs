@@ -28,7 +28,8 @@ use crate::error::{ControlError, Noun};
 use crate::html::{self, HtmlNavigation, HtmlSource};
 use crate::model::{OverlayPane, OverlayProgram, PaneOverlayOpenFailure, Session, is_valid_color_hex};
 use crate::overlay_jobs::{EXPIRY_SLACK, LAUNCH_WINDOW, OverlayJobFrame, OverlayJobOutcome, OverlayJobs, START_WINDOW};
-use crate::resolve::{ACTIVE, trimmed};
+use crate::remote::{RemoteOverlayOpen, RemoteProgram};
+use crate::resolve::{ACTIVE, Resolver, trimmed};
 
 // MARK: - messages
 
@@ -74,6 +75,10 @@ const CWD_NUL: &str = "session.overlay.open: --cwd must not contain a NUL byte";
 const JOB_REQUIRED: &str = "session.overlay.job.run requires a job id";
 const INVALID_JOB: &str = "invalid job id";
 const JOB_NOT_CLAIMABLE: &str = "job not claimable";
+/// Upstream's `OverlayResultError` for an overlay a viewer presents.
+const SHOWN_ELSEWHERE: &str = "overlay is shown on another Mac";
+const VIEWER_GONE: &str = "the viewer showing this overlay is gone";
+const TOO_LARGE: &str = "overlay command too large to show on another Mac";
 
 /// The `--size-percent` range error of `command` (`open` or `resize`).
 fn size_range(command: &str) -> ControlError {
@@ -238,7 +243,6 @@ fn open(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         let opening = PageOpening::from_args(source, args, pane);
         return overlay_page::open(core, target, args.window.as_deref(), opening);
     }
-    let (store, id) = session_store(core, target, args.window.as_deref())?;
     let program = OverlayProgram {
         command,
         cwd: args.cwd.clone(),
@@ -246,6 +250,33 @@ fn open(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         size_percent: args.size_percent,
         background_color: args.color.clone(),
     };
+    let resolved = Resolver::new(core.library()).session(target, args.window.as_deref())?;
+    let remote = RemoteProgram {
+        pane,
+        program: &program,
+        follow: args.follow == Some(true),
+    };
+    let taken = || {
+        ControlError::rejected(if pane.is_none() {
+            ALREADY_OPEN
+        } else {
+            PANE_ALREADY_OPEN
+        })
+    };
+    match crate::remote::open_remote_overlay(core, resolved.window, resolved.session, &remote) {
+        RemoteOverlayOpen::NotPresented => {}
+        RemoteOverlayOpen::SlotTaken => return Err(taken()),
+        RemoteOverlayOpen::PaneMissing => return Err(ControlError::rejected(PANE_NOT_VISIBLE)),
+        RemoteOverlayOpen::TooLarge => return Err(ControlError::rejected(TOO_LARGE)),
+        RemoteOverlayOpen::Opened => return Ok(with_id(resolved.session)),
+    }
+    let (store, id) = session_store(core, target, args.window.as_deref())?;
+    if store
+        .session(id)
+        .is_some_and(|session| session.remote_overlays().slot(pane).is_some())
+    {
+        return Err(taken());
+    }
     match pane {
         Some(pane) => store
             .open_pane_overlay(id, pane, program)
@@ -276,13 +307,16 @@ fn pane_open_failure(failure: PaneOverlayOpenFailure, target: Option<&str>) -> C
 /// slot, a HUD in it included as a courtesy, since the slot is shared.
 fn close(core: &mut Core, target: Option<&str>, window: Option<&str>, pane: Option<OverlayPane>) -> Outcome {
     let (store, id) = session_store(core, target, window)?;
-    let closed = match pane {
-        Some(pane) => store.close_pane_overlay(id, pane),
-        None => store.close_overlay(id),
-    };
+    // a remote job first: a HUD opened here during its run shares the slot and must not absorb the close
+    let closed = store.close_remote_overlay(id, pane)
+        || match pane {
+            Some(pane) => store.close_pane_overlay(id, pane),
+            None => store.close_overlay(id),
+        };
     if !closed {
         return Err(ControlError::rejected(NO_OVERLAY));
     }
+    core.settle_remote_overlays();
     Ok(with_id(id))
 }
 
@@ -309,6 +343,12 @@ fn resize(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         (_, Some(percent)) if !(1..=100).contains(&percent) => return Err(size_range("resize")),
         (_, percent) => percent,
     };
+    let resolved = Resolver::new(core.library()).session(target, args.window.as_deref())?;
+    match core.resize_remote_overlay(resolved.session, size) {
+        Some(true) => return Ok(with_id(resolved.session)),
+        Some(false) => return Err(ControlError::rejected(VIEWER_GONE)),
+        None => {}
+    }
     let (store, id) = session_store(core, target, args.window.as_deref())?;
     let slot = store.session(id).map(|session| &session.overlay);
     let hud = slot.is_some_and(crate::model::OverlaySlot::hud_active);
@@ -324,6 +364,9 @@ fn resize(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
             store.set_hud_size(id, size, forced);
         }
         return Err(ControlError::rejected(HUD_WRITE_FAILED));
+    }
+    if hud {
+        core.publish_hud_resize(id);
     }
     Ok(with_id(id))
 }
@@ -342,6 +385,9 @@ fn result(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let session = store
         .session(id)
         .ok_or_else(|| ControlError::rejected("no such session"))?;
+    if session.remote_overlays().slot(pane).is_some_and(|slot| !slot.ended) {
+        return Err(ControlError::rejected(STILL_RUNNING));
+    }
     if session.html_covers(pane) {
         return Err(ControlError::rejected(PAGE_NO_RESULT));
     }
@@ -355,7 +401,13 @@ fn result(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     if running {
         return Err(ControlError::rejected(STILL_RUNNING));
     }
-    // a HUD opened after a program clears its result; the painter itself never reports a status
+    if exit_code.is_none()
+        && let Some(failure) = session.remote_overlays().failure(pane)
+    {
+        return Err(ControlError::rejected(format!("overlay ended: {failure}")));
+    }
+    // a HUD opened after a program clears its result, so one recorded here is a remote job's that ended under a HUD;
+    // the painter itself never reports a status
     if exit_code.is_none() && pane.is_none() && session.overlay.hud_active() {
         return Err(ControlError::rejected(HUD_NO_RESULT));
     }
@@ -380,6 +432,10 @@ fn overlay_read_surface(
     session: &Session,
     pane: Option<OverlayPane>,
 ) -> Result<&dyn agterm_host::Surface, ControlError> {
+    // an overlay shown on another machine leaves this one nothing to read or copy
+    if session.remote_overlays().slot(pane).is_some() {
+        return Err(ControlError::rejected(SHOWN_ELSEWHERE));
+    }
     if session.html_covers(pane) {
         return Err(ControlError::rejected(PAGE_NO_READ));
     }
@@ -638,12 +694,18 @@ impl Core {
     }
 
     /// Arms the expiry a newly handed-out job needs once its launch window ends.
-    #[expect(
-        dead_code,
-        reason = "remote overlays register jobs; they join with the remote session tasks"
-    )]
     pub(crate) fn arm_job_launch_expiry(&mut self) {
         self.jobs.expiries.push(LAUNCH_WINDOW + EXPIRY_SLACK);
+    }
+
+    /// The jobs that reached their outcome since the last take (upstream's `overlayJobs.onFinished`); a cancel still
+    /// waiting for a helper's connection is dropped with its job.
+    pub(crate) fn take_finished_overlay_jobs(&mut self) -> Vec<crate::overlay_jobs::OverlayJob> {
+        let finished = self.jobs.jobs.take_finished();
+        for job in &finished {
+            self.jobs.pending_cancels.remove(&job.id);
+        }
+        finished
     }
 }
 

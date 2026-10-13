@@ -300,6 +300,14 @@ impl Modals {
         true
     }
 
+    /// Moves a live ask to another owner (upstream's `reassign`), as a taken-back GUI ask moves from its session into
+    /// its window's slot.
+    pub(crate) fn reassign_ask(&mut self, id: &str, owner: AskOwner) {
+        if let Some(current) = self.ask_owners.get_mut(id) {
+            *current = owner;
+        }
+    }
+
     /// The live owner of ask `id`.
     #[must_use]
     pub fn ask_owner(&self, id: &str) -> Option<AskOwner> {
@@ -404,7 +412,14 @@ impl crate::Core {
             return;
         };
         if let Some(store) = self.library_mut().store_mut(window) {
-            store.resolve_session_ask(session, id, outcome);
+            // one a viewer presents is answered there, never here
+            let remote = store
+                .session(session)
+                .and_then(crate::model::Session::ask)
+                .is_some_and(|pending| pending.remote_owner.is_some());
+            if !remote {
+                store.resolve_session_ask(session, id, outcome);
+            }
         }
         self.sync_modals();
     }
@@ -415,6 +430,7 @@ impl crate::Core {
     /// until the slot frees.
     pub(crate) fn sync_modals(&mut self) {
         let ended = self.library_mut().take_ended_asks();
+        self.dismiss_remote_asks(&ended);
         self.modals.retain_ended(ended);
         for window in self.modals.windows() {
             if !self.library().is_open(window) {

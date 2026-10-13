@@ -28,8 +28,8 @@ pub struct Zmx {
     command: ZmxCommand,
 }
 
-/// The subcommands, in upstream's `Zmx.configuration.subcommands` order; `tree`, `attach` and `present` come with
-/// remote sessions.
+/// The subcommands, in upstream's `Zmx.configuration.subcommands` order; `attach` comes with the viewer side of remote
+/// sessions.
 #[derive(Debug, clap::Subcommand)]
 enum ZmxCommand {
     List(List),
@@ -37,6 +37,8 @@ enum ZmxCommand {
     Prune(Prune),
     Kill(Kill),
     Reset(Reset),
+    Tree(Tree),
+    Present(Present),
 }
 
 impl Zmx {
@@ -47,6 +49,8 @@ impl Zmx {
             ZmxCommand::Prune(command) => command,
             ZmxCommand::Kill(command) => command,
             ZmxCommand::Reset(command) => command,
+            ZmxCommand::Tree(command) => command,
+            ZmxCommand::Present(command) => command,
         }
     }
 
@@ -57,7 +61,7 @@ impl Zmx {
 
     /// Runs the command.
     pub fn execute(&self, env: &dyn Env) -> Result<(), Failure> {
-        self.command().default_run(env)
+        self.command().invoke(env)
     }
 }
 
@@ -367,6 +371,137 @@ fn zmx_row(entry: &ControlZmxEntry) -> String {
 /// The prefix a caller pastes into `--target`/`--window`.
 fn short_id(id: &str) -> &str {
     id.char_indices().nth(8).map_or(id, |(end, _)| &id[..end])
+}
+
+/// `agtermctl zmx tree [HOST]`.
+#[derive(Debug, clap::Args)]
+#[command(
+    about = "List the sessions that can be attached to, here or on another Mac.",
+    long_about = "With a HOST, runs over ssh against a machine that is also running agterm and reports what it offers, \
+                  across every one of its open windows. Feed the result to a picker and hand what the user chooses to \
+                  `zmx attach`.\n\
+                  \n\
+                  With no HOST, reports this app's own attachable sessions in the same shape — which is exactly the \
+                  form the remote call runs on the far side, so it is also how to see what another machine would \
+                  answer without sshing anywhere.\n\
+                  \n\
+                  Only a session whose every pane has a live daemon is listed. One whose daemon has gone is omitted \
+                  rather than offered, because attaching to a name that no longer exists would create a fresh shell \
+                  wearing it. An empty list is a successful answer: it does not distinguish a store that is not \
+                  running in live mode, which `zmx list` reports.\n\
+                  \n\
+                  The connection is non-interactive: ssh runs with BatchMode, so key-based auth must already work for \
+                  this host and a password or host-key prompt is a failure rather than a question."
+)]
+pub struct Tree {
+    #[arg(help = "The host, as ssh would take it. Omit for this app's own sessions.")]
+    host: Option<String>,
+
+    #[command(flatten)]
+    options: BasicOptions,
+}
+
+impl RequestCommand for Tree {
+    fn options(&self) -> &BasicOptions {
+        &self.options
+    }
+
+    fn make_request(&self) -> Request {
+        let args = self.host.as_ref().map(|host| Args {
+            host: Some(host.clone()),
+            ..Args::default()
+        });
+        zmx_request(ZmxCmd::Tree, None, args)
+    }
+}
+
+/// `agtermctl zmx present SESSION`.
+#[derive(Debug, clap::Args)]
+#[command(
+    about = "Carry a presentation stream for one session between stdin/stdout and this app.",
+    long_about = "Run by the agterm on another Mac, over ssh, after it attached one of this app's sessions: it is \
+                  how that Mac shows this session's status, context, notifications and HUD. Stdout carries \
+                  newline-delimited JSON frames and nothing else, and stdin takes the other side's frames. It is not \
+                  meant to be run by hand. A refused session exits nonzero with the reason on stderr."
+)]
+pub struct Present {
+    #[arg(help = "The session id the other Mac attached.")]
+    session: String,
+
+    #[command(flatten)]
+    options: BasicOptions,
+}
+
+impl RequestCommand for Present {
+    fn options(&self) -> &BasicOptions {
+        &self.options
+    }
+
+    fn make_request(&self) -> Request {
+        zmx_request(ZmxCmd::Present, Some(self.session.clone()), None)
+    }
+
+    /// Opens the stream and bridges it to stdin/stdout until either side ends (upstream's `Present.run`).
+    fn invoke(&self, env: &dyn Env) -> Result<(), Failure> {
+        let socket = crate::client::connect(&self.options.socket_path(env))?;
+        let bridge = crate::stream_bridge::StreamBridge::new(socket, libc::STDIN_FILENO, libc::STDOUT_FILENO);
+        bridge.open(&self.make_request()).map_err(Failure::Local)?;
+        bridge.pump();
+        Ok(())
+    }
+}
+
+/// `zmx.tree`: one attachable session per line, carrying the id `zmx attach` takes (upstream's `formatRemoteTree`).
+/// An empty answer says so rather than printing nothing, which a caller cannot tell from a failed read.
+#[must_use]
+pub fn format_remote_tree(tree: &agterm_proto::ControlRemoteTree) -> String {
+    let place = tree
+        .host
+        .as_deref()
+        .map(|host| format!(" on {host}"))
+        .unwrap_or_default();
+    if tree.sessions.is_empty() {
+        return format!("no attachable sessions{place}");
+    }
+    tree.sessions
+        .iter()
+        .map(|session| {
+            let split = if session.panes.len() > 1 {
+                let axis = session
+                    .split_axis
+                    .as_deref()
+                    .map(|axis| format!(" {axis}"))
+                    .unwrap_or_default();
+                format!(" (split{axis})")
+            } else {
+                String::new()
+            };
+            // what the row is for, then where it is: the running command answers "attach to which one" more often
+            // than the path does, and the context line is the far side's own answer to it
+            let running: Vec<&str> = session
+                .panes
+                .iter()
+                .filter_map(|pane| pane.foreground.as_ref()?.first())
+                .map(|program| agterm_core::command_restore::basename(program))
+                .collect();
+            let detail = [
+                session.context.clone(),
+                (!running.is_empty()).then(|| running.join(" | ")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("  ");
+            let tail = if detail.is_empty() {
+                String::new()
+            } else {
+                format!("  {detail}")
+            };
+            let at = format!("{}/{}/{}", session.window_name, session.workspace_name, session.name);
+            format!("  {at}{split}  [{}]  {}{tail}", session.id, session.cwd)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]

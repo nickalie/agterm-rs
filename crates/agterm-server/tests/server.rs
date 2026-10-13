@@ -220,8 +220,8 @@ fn malformed_requests_get_the_decode_error() -> TestResult {
 #[test]
 fn unimplemented_command_is_refused_by_name() -> TestResult {
     let fixture = start_core()?;
-    let response = answer(&fixture.socket, br#"{"cmd":"zmx.tree"}"#)?;
-    assert_eq!(response, Response::failure("zmx.tree is not supported by this host"));
+    let response = answer(&fixture.socket, br#"{"cmd":"zmx.attach"}"#)?;
+    assert_eq!(response, Response::failure("zmx.attach is not supported by this host"));
     Ok(())
 }
 

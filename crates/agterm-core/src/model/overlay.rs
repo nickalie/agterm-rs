@@ -267,6 +267,8 @@ impl AppStore {
         slot.size_percent = program.size_percent.map(|percent| percent.clamp(1, 100));
         slot.background_color = program.background_color;
         slot.active = true;
+        // a local open starts a new result, a remote job's failure included
+        session.remote_overlays.clear_failure(None);
         true
     }
 

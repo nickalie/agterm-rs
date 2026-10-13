@@ -108,6 +108,10 @@ pub struct SessionAsk {
     pub ask: PendingAsk,
     /// The covered pane's stable identity; `None` covers the whole session.
     pub pane_identity: Option<Uuid>,
+    /// The presenter generation the ask was handed to, `None` while this instance draws it (upstream's
+    /// `askRemoteOwner`). A remotely presented ask keeps the slot and its result here but is neither drawn nor
+    /// answered here.
+    pub remote_owner: Option<i64>,
 }
 
 /// A session's ask that ended, waiting for the core's registry to retain its outcome.
@@ -116,6 +120,8 @@ pub struct EndedAsk {
     pub session: Uuid,
     pub id: String,
     pub result: ControlAskResult,
+    /// The presenter generation it was handed to, which is told to take its dialog down.
+    pub remote_owner: Option<i64>,
 }
 
 impl Session {
@@ -140,14 +146,76 @@ impl AppStore {
     /// Reserves session `session`'s ask slot for `ask` over the pane `pane_identity` names (upstream's `openAsk`);
     /// false when the session is unknown or already has an ask pending.
     pub fn open_session_ask(&mut self, session: Uuid, ask: PendingAsk, pane_identity: Option<Uuid>) -> bool {
+        self.open_session_ask_owned(session, ask, pane_identity, None)
+    }
+
+    /// [`AppStore::open_session_ask`] for an ask handed to the presenter of generation `remote_owner` (`None` draws
+    /// it here).
+    pub fn open_session_ask_owned(
+        &mut self,
+        session: Uuid,
+        ask: PendingAsk,
+        pane_identity: Option<Uuid>,
+        remote_owner: Option<i64>,
+    ) -> bool {
         let Some(session) = self.session_mut(session) else {
             return false;
         };
         if session.ask.is_some() {
             return false;
         }
-        session.ask = Some(SessionAsk { ask, pane_identity });
+        session.ask = Some(SessionAsk {
+            ask,
+            pane_identity,
+            remote_owner,
+        });
         true
+    }
+
+    /// Takes a handed-over ask back to be drawn here, so an answer from its former presenter is stale (upstream's
+    /// `takeAskBack`).
+    pub fn take_session_ask_back(&mut self, session: Uuid) {
+        if let Some(pending) = self.session_mut(session).and_then(|found| found.ask.as_mut()) {
+            pending.remote_owner = None;
+        }
+    }
+
+    /// Empties session `session`'s ask slot without an outcome, for an ask that moves to another owner rather than
+    /// ending (upstream's `releaseAsk`).
+    pub fn release_session_ask(&mut self, session: Uuid) {
+        if let Some(found) = self.session_mut(session) {
+            found.ask = None;
+        }
+    }
+
+    /// Whether session `session` presents ask `id` remotely under presenter generation `owner`, so a refusal from a
+    /// presenter that already lost it cannot take back a newer one (upstream's `isPresentingRemotely`).
+    #[must_use]
+    pub fn is_presenting_remotely(&self, session: Uuid, id: &str, owner: i64) -> bool {
+        self.session(session)
+            .and_then(Session::ask)
+            .is_some_and(|pending| pending.ask.id == id && pending.remote_owner == Some(owner))
+    }
+
+    /// Applies the presenter's answer to session `session`'s ask `id`: a button id, or `None` for a dismissal
+    /// (upstream's `resolveRemoteAsk`). Refused unless the ask is presented under `owner`, and for a button the ask
+    /// does not have; the label and index come from the stored buttons.
+    pub fn resolve_remote_ask(&mut self, session: Uuid, id: &str, owner: i64, button: Option<&str>) -> bool {
+        if !self.is_presenting_remotely(session, id, owner) {
+            return false;
+        }
+        let Some(button) = button else {
+            return self.resolve_session_ask(session, id, ControlAskResult::outcome(ControlAskOutcome::Escaped));
+        };
+        let answer = self.session(session).and_then(Session::ask).and_then(|pending| {
+            let index = pending
+                .ask
+                .buttons
+                .iter()
+                .position(|candidate| candidate.id == button)?;
+            pending.ask.answer(index)
+        });
+        answer.is_some_and(|answer| self.resolve_session_ask(session, id, answer))
     }
 
     /// Ends session `session`'s pending ask `id` with `result` (upstream's `resolveAsk`), keeping the outcome for the
@@ -162,11 +230,12 @@ impl AppStore {
         if target.ask.as_ref().is_none_or(|pending| pending.ask.id != id) {
             return false;
         }
-        target.ask = None;
+        let remote_owner = target.ask.take().and_then(|pending| pending.remote_owner);
         self.ended_asks.push(EndedAsk {
             session,
             id: id.to_owned(),
             result,
+            remote_owner,
         });
         true
     }
@@ -195,9 +264,10 @@ impl AppStore {
     }
 
     /// What a session leaving the window drops at once (upstream's `releaseLeavingSession`): its pending ask ends
-    /// cancelled, so a soft close's undo does not bring it back.
+    /// cancelled and the overlays it handed to a presenter close, so a soft close's undo brings back neither.
     pub(crate) fn release_leaving_session(&mut self, session: Uuid) {
         self.cancel_pending_ask(session);
+        self.release_remote_overlays(session);
     }
 
     /// Cancels every session's pending ask (a window going away, the app quitting).

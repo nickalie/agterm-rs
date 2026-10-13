@@ -602,6 +602,8 @@ fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, spec: HudSp
         return Err(ControlError::rejected(WRITE_FAILED));
     }
     core.hud.arm_after(id, hide_after);
+    // published once its body is on disk, never before
+    core.publish_hud(id, hide_after);
     Ok(with_id(id))
 }
 
@@ -646,6 +648,7 @@ fn update(
         return Err(ControlError::rejected(WRITE_FAILED));
     }
     core.hud.arm(id, spec);
+    core.publish_hud(id, spec.effective_hide_after());
     Ok(with_id(id))
 }
 

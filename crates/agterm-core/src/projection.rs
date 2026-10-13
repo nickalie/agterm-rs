@@ -8,8 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use agterm_proto::AppIdentity;
 use agterm_proto::tree::{
-    ControlHtmlOverlayNode, ControlHudNode, ControlSessionAsk, ControlSessionNode, ControlSurfaceNode, ControlTree,
-    ControlWorkspaceNode,
+    ControlHtmlOverlayNode, ControlHudNode, ControlRemoteOverlayNode, ControlSessionAsk, ControlSessionNode,
+    ControlSurfaceNode, ControlTree, ControlWorkspaceNode,
 };
 use uuid::Uuid;
 
@@ -152,8 +152,19 @@ fn apply_overlay(node: &mut ControlSessionNode, session: &Session) {
     node.ask = session.ask().map(|pending| ControlSessionAsk {
         id: pending.ask.id.clone(),
         pane: session.ask_target_pane().map(|pane| pane.wire_name().to_owned()),
-        remote: None,
+        remote: pending.remote_owner.map(|_| true),
         replica: None,
+    });
+    // one entry per slot a viewer's presenter holds
+    let slots = session.remote_overlays().slots();
+    node.remote_overlays = (!slots.is_empty()).then(|| {
+        slots
+            .iter()
+            .map(|slot| ControlRemoteOverlayNode {
+                pane: slot.pane.map(|pane| pane.wire_name().to_owned()),
+                size_percent: slot.size_percent,
+            })
+            .collect()
     });
 }
 
@@ -239,7 +250,7 @@ fn apply_status(node: &mut ControlSessionNode, session: &Session) {
     node.status_shape = indicator.shape.map(|shape| shape.wire_name().to_owned());
 }
 
-fn epoch_seconds(time: SystemTime) -> f64 {
+pub(crate) fn epoch_seconds(time: SystemTime) -> f64 {
     match time.duration_since(UNIX_EPOCH) {
         Ok(after) => after.as_secs_f64(),
         Err(before) => -before.duration().as_secs_f64(),
@@ -247,7 +258,7 @@ fn epoch_seconds(time: SystemTime) -> f64 {
 }
 
 /// Whether every existing primary and split pane is backed by a live-session daemon.
-fn all_panes_backed(session: &Session) -> bool {
+pub(crate) fn all_panes_backed(session: &Session) -> bool {
     let live = |slot: &crate::model::SurfaceSlot| slot.get().is_some_and(agterm_host::Surface::is_live_session);
     live(&session.surface) && (!session.split.exists || live(&session.split_surface))
 }

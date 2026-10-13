@@ -180,6 +180,8 @@ pub struct AppStore {
     pub(crate) recent_closed: RecentClosedList,
     /// Session asks that ended since the core last took them ([`AppStore::take_ended_asks`]).
     pub(crate) ended_asks: Vec<super::ask::EndedAsk>,
+    /// Remote overlays the model closed since the core last took them ([`AppStore::take_remote_overlay_closes`]).
+    pub(crate) remote_overlay_closes: Vec<super::remote_overlay::RemoteOverlayClose>,
 }
 
 impl AppStore {
@@ -430,6 +432,10 @@ impl AppStore {
         // finalize it
         self.finalize_all_pending_closes();
         self.cancel_all_session_asks();
+        let sessions: Vec<Uuid> = self.sessions().map(Session::id).collect();
+        for session in sessions {
+            self.release_remote_overlays(session);
+        }
         let closing: Vec<(Uuid, Uuid, EventPayload)> = self
             .workspaces
             .iter()

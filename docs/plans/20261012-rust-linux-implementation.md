@@ -1255,16 +1255,27 @@ wlr-layer-shell surface.
 
 **Files:**
 - Create: `crates/agterm-core/src/remote/{mod,tree,frames,hub}.rs`
+- ➕ Create: `crates/agterm-core/src/remote/{handoff,remotes}.rs`, `crates/agterm-core/src/model/remote_overlay.rs`,
+  `crates/agterm-ctl/src/stream_bridge.rs`, `crates/agterm-core/src/commands/tests/remote.rs`
 
-- [ ] zmx.tree (`RemoteTree.swift`, `Remotes.swift`), the `zmx.present` stream and its origin hub
+- [x] zmx.tree (`RemoteTree.swift`, `Remotes.swift`), the `zmx.present` stream and its origin hub
       (`PresentationFrames.swift`, `PresentationHub.swift`, `PresentationLayout.swift`, `PresenterGrant.swift`)
-- [ ] ➕ the origin side of a handed-over ask, left by Task 19 (`AppStore+RemoteAsk.swift`,
+      (the `--host` form runs ssh through a `RemoteCommandRunner` seam whose process runner lives in
+      `remote/tree.rs`, for Task 30 to reuse; state frames are published by comparing each watched session at commit)
+- [x] ➕ the origin side of a handed-over ask, left by Task 19 (`AppStore+RemoteAsk.swift`,
       `ControlServer+Ask.swift` `presentAskRemotely`/`takeBackRemoteAsk`/`receivePresenterFrame`; the tree's
       `ask.remote`): `ask.open` on a presented session goes to the presenter
-- [ ] `agtermctl zmx tree` and the `agtermctl zmx present` stdio bridge (`StreamBridge.swift`)
-- [ ] write tests: frame codec, hub subscribe-before-snapshot, generation and revision
-- [ ] write tests: tree listing errors
-- [ ] gate: full run; ratchet (rest of `test_zmx.py`)
+- [x] ➕ the origin side of a handed-over program overlay (`AppStore+RemoteOverlay.swift`, `RemoteOverlays.swift`,
+      `ControlServer+OverlayJobs.swift` `openRemoteOverlay`, the remote paths of `ControlServer+SessionActions.swift`
+      and `overlayReadSurface`; the tree's `remoteOverlays`): `session.overlay.open` on a presented session hands a
+      job to the presenter, which `test_zmx.py::test_job_run_serves_an_overlay_a_presenter_shows` needs
+- [x] `agtermctl zmx tree` and the `agtermctl zmx present` stdio bridge (`StreamBridge.swift`)
+- [x] write tests: frame codec, hub subscribe-before-snapshot, generation and revision
+- [x] write tests: tree listing errors
+- [x] gate: full run; ratchet (rest of `test_zmx.py`) (full run on fish: 634 pass, ratchet holds, 4 ids added; the
+      live tests ran in Task 28's private user+mount namespace with a zsh password-database shell: every live
+      `test_zmx.py` and live cli test green, 4 more ids added; `test_zmx_commands_refused_before_acting` stays red on
+      `zmx attach`, Task 30)
 
 ### Task 30: Remote sessions, viewer side
 

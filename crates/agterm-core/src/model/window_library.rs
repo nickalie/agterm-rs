@@ -90,6 +90,8 @@ pub struct WindowLibrary {
     pending_finalized_panes: Vec<Uuid>,
     /// Session asks that ended in stores no longer open, for [`WindowLibrary::take_ended_asks`].
     pending_ended_asks: Vec<EndedAsk>,
+    /// Remote overlays closed in stores no longer open, for [`WindowLibrary::take_remote_overlay_closes`].
+    pending_remote_overlay_closes: Vec<super::remote_overlay::RemoteOverlayClose>,
 }
 
 impl WindowLibrary {
@@ -379,6 +381,8 @@ impl WindowLibrary {
     fn retire_store(&mut self, id: Uuid, mut store: AppStore) {
         store.retire();
         self.pending_ended_asks.append(&mut store.take_ended_asks());
+        self.pending_remote_overlay_closes
+            .append(&mut store.take_remote_overlay_closes());
         let mut outbox = store.take_outbox();
         self.pending_recent_closed.extend(outbox.take_stamped_recent_closed());
         self.pending_removed_watermarks.append(&mut outbox.removed_watermarks);
@@ -418,6 +422,15 @@ impl WindowLibrary {
             ended.append(&mut store.take_ended_asks());
         }
         ended
+    }
+
+    /// Takes the remote overlays closed since the last take, from every open store and every store that closed.
+    pub fn take_remote_overlay_closes(&mut self) -> Vec<super::remote_overlay::RemoteOverlayClose> {
+        let mut closed = std::mem::take(&mut self.pending_remote_overlay_closes);
+        for store in self.stores.values_mut() {
+            closed.append(&mut store.take_remote_overlay_closes());
+        }
+        closed
     }
 
     /// Shows the frontmost open window's sidebar and hides every other one's (auto-hide inactive sidebars).

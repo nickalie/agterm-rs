@@ -85,6 +85,9 @@ pub struct ControlResult {
     /// `zmx.list`: the daemons joined against the panes that claim them.
     #[serde(default)]
     pub zmx: Option<ControlZmxInventory>,
+    /// `zmx.tree`: the attachable sessions, here or on another machine.
+    #[serde(default)]
+    pub remote: Option<ControlRemoteTree>,
     /// `zmx.reset`: what was confirmed for the next launch.
     #[serde(default)]
     pub live_reset: Option<ControlLiveResetStatus>,
@@ -166,6 +169,69 @@ pub struct ControlZmxEndpoint {
     pub executable: String,
     /// The `ZMX_DIR` its daemons live under.
     pub socket_directory: String,
+}
+
+/// One pane of an attachable session (upstream's `ControlRemotePane`).
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlRemotePane {
+    /// `left` or `right`, the local pane vocabulary.
+    pub pane: String,
+    pub daemon: String,
+    /// The argv the far side reports running in this pane; absent for a plain idle shell.
+    #[serde(default)]
+    pub foreground: Option<Vec<String>>,
+}
+
+/// A session whose every pane resolves to a live daemon (upstream's `ControlRemoteSession`); one whose panes did not
+/// all resolve is absent rather than partial.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlRemoteSession {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "windowID")]
+    pub window_id: String,
+    pub window_name: String,
+    #[serde(rename = "workspaceID")]
+    pub workspace_id: String,
+    pub workspace_name: String,
+    /// The far side's own note of what the session is for.
+    #[serde(default)]
+    pub context: Option<String>,
+    pub cwd: String,
+    /// The divider direction, present only for a session with a split.
+    #[serde(default)]
+    pub split_axis: Option<String>,
+    pub panes: Vec<ControlRemotePane>,
+}
+
+/// `zmx.tree [HOST]` (upstream's `ControlRemoteTree`): every open window's attachable sessions and the one endpoint
+/// they attach through.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlRemoteTree {
+    /// The ssh destination the requesting app was given, stamped on after decoding; absent from the local form.
+    #[serde(default)]
+    pub host: Option<String>,
+    pub endpoint: ControlZmxEndpoint,
+    pub sessions: Vec<ControlRemoteSession>,
+    /// The presentation protocol version this app speaks; absent from an app that predates the stream.
+    #[serde(default)]
+    pub presentation: Option<i64>,
+}
+
+impl ControlRemoteTree {
+    /// This answer with the ssh destination the requesting app was given (upstream's `stamped(host:)`).
+    #[must_use]
+    pub fn stamped(self, host: &str) -> Self {
+        Self {
+            host: Some(host.to_owned()),
+            ..self
+        }
+    }
 }
 
 /// `zmx.list` (upstream's `ControlZmxInventory`): the restore status as the header, then one row per daemon and per

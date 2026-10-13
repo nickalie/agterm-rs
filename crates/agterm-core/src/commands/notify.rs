@@ -137,9 +137,11 @@ pub(crate) fn dispatch(core: &mut Core, request: &Request) -> Outcome {
         .ok_or_else(|| ControlError::rejected("notify requires a body"))?;
     let resolved = Resolver::new(core.library()).session(request.target.as_deref(), args.window.as_deref())?;
     let title = args.title.as_deref().unwrap_or("");
-    if !core.deliver_notification(resolved.window, resolved.session, PaneRole::Main, title, body) {
+    let Some(title) = core.deliver_notification(resolved.window, resolved.session, PaneRole::Main, title, body) else {
         return Err(ControlError::rejected("session's window is not open"));
-    }
+    };
+    // only a control-origin notification travels to viewers: a terminal's reaches them through zmx itself
+    core.publish_notify(resolved.session, title, body);
     let mut result = with_id(resolved.session);
     if !core.banners_enabled() {
         result = ControlResult {
@@ -158,27 +160,31 @@ impl Core {
     }
 
     /// Records a notification on session `session` of open window `window` and, with banners on, queues its banner:
-    /// the `notify` event, the badge, the post. False when the window or session is gone.
-    fn deliver_notification(&mut self, window: Uuid, session: Uuid, pane: PaneRole, title: &str, body: &str) -> bool {
-        let Some(title) = self
+    /// the `notify` event, the badge, the post. Its effective title; `None` when the window or session is gone.
+    fn deliver_notification(
+        &mut self,
+        window: Uuid,
+        session: Uuid,
+        pane: PaneRole,
+        title: &str,
+        body: &str,
+    ) -> Option<String> {
+        let title = self
             .library_mut()
             .store_mut(window)
-            .and_then(|store| store.record_notification(session, title, body))
-        else {
-            return false;
-        };
+            .and_then(|store| store.record_notification(session, title, body))?;
         if self.banners_enabled() {
             self.notifications.push(NotificationEffect::Post(NotificationPost {
                 window,
                 session,
                 pane,
-                title,
+                title: title.clone(),
                 body: body.to_owned(),
             }));
         } else {
             tracing::info!(%session, "notify: badge bumped, but banners are off in the settings");
         }
-        true
+        Some(title)
     }
 
     /// A terminal's OSC 9/777 desktop notification from the pane carrying `token` of session `session` (upstream's
@@ -197,7 +203,7 @@ impl Core {
             Some(StatusPane::Right) => PaneRole::Split,
             _ => PaneRole::Main,
         };
-        self.deliver_notification(window, session, pane, title, body)
+        self.deliver_notification(window, session, pane, title, body).is_some()
     }
 
     /// A banner was clicked (upstream's `AppActions.reveal`): the session is revealed in the open window holding it,
