@@ -256,6 +256,7 @@ mod tests {
             badge: 0,
             icon: Glyph::Workspace { focus_member: false },
             status: None,
+            icon_tooltip: None,
         }
     }
 
@@ -274,6 +275,7 @@ mod tests {
                 flagged: false,
             },
             status: None,
+            icon_tooltip: None,
         }
     }
 

@@ -193,21 +193,21 @@ impl ReconnectBook {
         self.entries.remove(&pane);
         self.resumed.remove(&pane);
     }
+}
 
-    /// Every waiting pane.
-    #[must_use]
-    pub fn panes(&self) -> Vec<Uuid> {
-        self.entries.keys().copied().collect()
-    }
+/// Decides when a network report retries the remote links (upstream's `RemoteLinkObserver.pathChanged`): the first
+/// report is the state at start, never a change; every later one with the network up retries.
+#[derive(Debug, Default)]
+pub struct NetworkReports {
+    reported: bool,
+}
 
-    /// When the next probe is due, `None` with none waiting or every one probing.
-    #[must_use]
-    pub fn next_due(&self) -> Option<Instant> {
-        self.entries
-            .values()
-            .filter(|entry| !entry.probing)
-            .map(|entry| entry.retry_at)
-            .min()
+impl NetworkReports {
+    /// A report of the network being `available`; whether it retries the links now.
+    pub fn changed(&mut self, available: bool) -> bool {
+        let retry = self.reported && available;
+        self.reported = true;
+        retry
     }
 }
 
@@ -265,6 +265,18 @@ mod tests {
         let delays: Vec<u64> = (1..=10).map(|failures| retry_delay(failures).as_secs()).collect();
         assert_eq!(delays, [1, 2, 4, 8, 16, 30, 30, 30, 256, 300]);
         assert_eq!(retry_delay(100), LATE_CAP);
+    }
+
+    #[test]
+    fn the_first_network_report_is_the_state_at_start_and_later_ones_retry_while_up() {
+        let mut reports = NetworkReports::default();
+        assert!(!reports.changed(true), "the state at start");
+        assert!(reports.changed(true));
+        assert!(!reports.changed(false), "nothing to reach while down");
+        assert!(reports.changed(true), "back up");
+        let mut down_first = NetworkReports::default();
+        assert!(!down_first.changed(false));
+        assert!(down_first.changed(true));
     }
 
     #[test]

@@ -94,6 +94,8 @@ pub(crate) struct ViewerRuntime {
     replicas: HashMap<Uuid, Vec<ReplicaOverlay>>,
     /// The File ▸ Attach Remote flows in progress ([`super::attach`]).
     pub(crate) attach_flows: Vec<super::attach::AttachFlow>,
+    /// The id of the last client made, so a row's recreated client never reuses an earlier one's link keys.
+    last_client: u64,
 }
 
 impl std::fmt::Debug for ViewerRuntime {
@@ -139,7 +141,13 @@ impl Core {
 
     /// One line, without its newline, a bridge read; commit afterwards.
     pub fn viewer_line(&mut self, key: LinkKey, line: &[u8]) {
-        let Some(client) = self.remote.viewer.clients.get_mut(&key.session) else {
+        let Some(client) = self
+            .remote
+            .viewer
+            .clients
+            .get_mut(&key.session)
+            .filter(|client| client.id() == key.client)
+        else {
             return;
         };
         let effects = client.receive(key.launch, line, Instant::now());
@@ -148,7 +156,13 @@ impl Core {
 
     /// A bridge ended with `reason`; commit afterwards.
     pub fn viewer_closed(&mut self, key: LinkKey, reason: &str) {
-        let Some(client) = self.remote.viewer.clients.get_mut(&key.session) else {
+        let Some(client) = self
+            .remote
+            .viewer
+            .clients
+            .get_mut(&key.session)
+            .filter(|client| client.id() == key.client)
+        else {
             return;
         };
         let effects = client.link_closed(key.launch, reason, Instant::now());
@@ -221,14 +235,30 @@ impl Core {
         self.remote.viewer.reconnects.readback(pane)
     }
 
-    /// The terminal of an overlay slot of session `session` at generation `generation` finished its program while
-    /// `--wait` holds it (upstream's `replicaOverlayHeld`): a replica cut off from its stream closes now, since nothing
-    /// could close it later; otherwise it stays for the user. Whether anything changed; commit afterwards.
-    pub fn replica_overlay_held(&mut self, session: Uuid, generation: u64) -> bool {
+    /// The terminal of session `session`'s overlay at generation `generation`, over `pane` (`None` for the
+    /// session-wide slot), finished its program while `--wait` holds it (upstream's `replicaOverlayHeld`): a replica
+    /// cut off from its stream closes now, since nothing could close it later; otherwise it stays for the user. The
+    /// session-wide and the pane overlays count their generations apart, so the replica is matched by its slot too.
+    /// Whether anything changed; commit afterwards.
+    pub fn replica_overlay_held(&mut self, session: Uuid, pane: Option<OverlayPane>, generation: u64) -> bool {
+        let identity = match pane {
+            Some(role) => match self
+                .library()
+                .held_session(session)
+                .and_then(|found| found.overlay_pane_identity(role))
+            {
+                Some(identity) => Some(identity),
+                None => return false,
+            },
+            None => None,
+        };
         let Some(replicas) = self.remote.viewer.replicas.get_mut(&session) else {
             return false;
         };
-        let Some(replica) = replicas.iter_mut().find(|replica| replica.generation == generation) else {
+        let Some(replica) = replicas
+            .iter_mut()
+            .find(|replica| replica.generation == generation && replica.pane == identity)
+        else {
             return false;
         };
         if replica.orphaned {
@@ -276,7 +306,9 @@ impl Core {
             tracing::error!(%session, "no presentation stream: the origin's session id cannot be sent");
             return;
         };
-        let mut client = PresentationClient::new(session, argv, binding.presentation_version);
+        let version = binding.presentation_version;
+        self.remote.viewer.last_client += 1;
+        let mut client = PresentationClient::new(session, self.remote.viewer.last_client, argv, version);
         let Some(transport) = self.remote.viewer.transport.clone() else {
             tracing::debug!(%session, "no presentation transport installed");
             return;
@@ -468,12 +500,14 @@ impl Core {
             else {
                 return false;
             };
-            pane_identity = Some(match role {
-                OverlayPane::Left => found.pane_identity,
-                OverlayPane::Right => found.split_pane_identity.unwrap_or(found.pane_identity),
-            });
+            pane_identity = found.overlay_pane_identity(role);
         }
-        if ask.style == AskStyle::Gui && store.selected_session_id() != Some(session) {
+        // a GUI one keeps the local rule of refusing a target not on screen (upstream's `guiTargetShown`): the row
+        // selected, and neither a terminal zoom nor the dashboard covering the window
+        let shown = store.selected_session_id() == Some(session)
+            && self.zoom_target(window).is_none()
+            && self.dashboard(window).is_none();
+        if ask.style == AskStyle::Gui && !shown {
             return false;
         }
         let pending = PendingAsk {
@@ -567,10 +601,7 @@ impl Core {
             let Some(role) = found.local_pane(overlay.pane.as_ref()) else {
                 return false;
             };
-            let identity = match role {
-                OverlayPane::Left => found.pane_identity,
-                OverlayPane::Right => found.split_pane_identity.unwrap_or(found.pane_identity),
-            };
+            let identity = found.overlay_pane_identity(role);
             if store.open_pane_overlay(session, role, program).is_err() {
                 return false;
             }
@@ -578,7 +609,7 @@ impl Core {
                 .session(session)
                 .and_then(|found| found.pane_overlay(role))
                 .map(|open| open.generation);
-            (Some(identity), generation)
+            (identity, generation)
         } else {
             let occupied = found.overlay.active && !found.overlay.hud_active();
             if occupied || !store.open_overlay(session, program) {
@@ -674,11 +705,7 @@ impl Core {
     /// Whether `replica`'s slot still holds it.
     fn replica_shown(&self, session: Uuid, replica: &ReplicaOverlay) -> bool {
         let library = self.library();
-        let Some(found) = library
-            .window_holding_session(session)
-            .and_then(|window| library.store(window))
-            .and_then(|store| store.session(session).or_else(|| store.pending_close_session(session)))
-        else {
+        let Some(found) = library.held_session(session) else {
             return false;
         };
         match replica.pane {
@@ -704,11 +731,7 @@ impl Core {
         }
         let cover = self.zmx.leads.role(pane).is_some() || self.zmx.leads.reattaching(pane);
         let library = self.library();
-        let Some(found) = library
-            .window_holding_session(session)
-            .and_then(|window| library.store(window))
-            .and_then(|store| store.session(session).or_else(|| store.pending_close_session(session)))
-        else {
+        let Some(found) = library.held_session(session) else {
             return false;
         };
         let Some(host) = found.remote_host().map(str::to_owned) else {
@@ -788,18 +811,9 @@ impl Core {
     fn waiting_surface(&self, pane: Uuid, session: Uuid) -> bool {
         let library = self.library();
         library
-            .window_holding_session(session)
-            .and_then(|window| library.store(window))
-            .and_then(|store| store.session(session).or_else(|| store.pending_close_session(session)))
+            .held_session(session)
             .and_then(|found| found.pane_role_for_identity(pane).map(|role| (found, role)))
-            .is_some_and(|(found, role)| {
-                let slot = if role == OverlayPane::Left {
-                    &found.surface
-                } else {
-                    &found.split_surface
-                };
-                slot.is_present()
-            })
+            .is_some_and(|(found, role)| found.overlay_pane_slot(role).is_present())
     }
 
     /// Replaces the remote replica `pane` of session `session` with a fresh ssh attach of its daemon under `lead`
@@ -813,22 +827,17 @@ impl Core {
         cover: bool,
     ) -> bool {
         let library = self.library();
-        let Some(found) = library
-            .window_holding_session(session)
-            .and_then(|window| library.store(window))
-            .and_then(|store| store.session(session).or_else(|| store.pending_close_session(session)))
-        else {
+        let Some(found) = library.held_session(session) else {
             return false;
         };
         let Some(role) = found.pane_role_for_identity(pane) else {
             return false;
         };
-        let slot = if role == OverlayPane::Left {
-            &found.surface
-        } else {
-            &found.split_surface
-        };
-        let Some(token) = slot.get().map(|surface| surface.pane_token().to_owned()) else {
+        let Some(token) = found
+            .overlay_pane_slot(role)
+            .get()
+            .map(|surface| surface.pane_token().to_owned())
+        else {
             return false;
         };
         let Some(state) = found.remote_presentation() else {

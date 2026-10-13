@@ -512,7 +512,7 @@ fn a_held_replica_closes_when_its_stream_goes_and_a_running_one_when_its_ssh_end
     viewer.frame(overlay_request("J1", None, true));
     let session = viewer.session;
     let generation = viewer.session().overlay.generation;
-    assert!(viewer.fixture.core.replica_overlay_held(session, generation));
+    assert!(viewer.fixture.core.replica_overlay_held(session, None, generation));
     assert!(
         viewer.session().overlay.program_active(),
         "it stays for the user while its stream is up"
@@ -533,7 +533,7 @@ fn a_held_replica_closes_when_its_stream_goes_and_a_running_one_when_its_ssh_end
     viewer.fixture.core.viewer_closed(key, "exit 255");
     viewer.fixture.core.commit();
     assert!(viewer.session().overlay.program_active());
-    assert!(viewer.fixture.core.replica_overlay_held(session, generation));
+    assert!(viewer.fixture.core.replica_overlay_held(session, None, generation));
     assert!(!viewer.session().overlay.active);
 }
 
@@ -691,5 +691,166 @@ fn attach_remote_lists_the_machines_sessions_in_the_picker_and_attaches_the_chos
         fixture.core.remote_wake(),
         Some(Duration::from_secs(1)),
         "only the stream is left to tick"
+    );
+}
+
+// MARK: - review round 1
+
+#[test]
+fn a_gui_replica_ask_is_refused_under_a_terminal_zoom_or_the_dashboard() {
+    let gui = |id: &str| {
+        let mut request = ask_request(id, None);
+        request["ask"]["style"] = json!("gui");
+        request
+    };
+    let mut viewer = viewer_with(false);
+    viewer.connect(&json!({}));
+    let (window, session) = (viewer.fixture.window, viewer.session);
+    viewer.fixture.core.set_zoom_target(
+        window,
+        Some(crate::zoom::SurfaceId {
+            session,
+            surface: crate::zoom::ZoomSurface::Primary,
+        }),
+    );
+    viewer.fixture.core.commit();
+    assert!(viewer.fixture.core.zoom_target(window).is_some());
+    viewer.frame(gui("G1"));
+    assert_eq!(
+        viewer.sent("ask.rejected").last().unwrap()["ask"]["id"],
+        "G1",
+        "hidden under the zoom"
+    );
+    viewer.fixture.core.set_zoom_target(window, None);
+    viewer.fixture.core.toggle_dashboard(window);
+    viewer.fixture.core.commit();
+    assert!(viewer.fixture.core.dashboard(window).is_some());
+    viewer.frame(gui("G2"));
+    assert_eq!(
+        viewer.sent("ask.rejected").last().unwrap()["ask"]["id"],
+        "G2",
+        "hidden under the dashboard"
+    );
+    viewer.fixture.core.toggle_dashboard(window);
+    viewer.fixture.core.commit();
+    viewer.frame(gui("G3"));
+    assert_eq!(viewer.sent("ask.rejected").len(), 2);
+    assert_eq!(
+        viewer.node()["ask"]["replica"],
+        true,
+        "shown once nothing covers the row"
+    );
+}
+
+#[test]
+fn a_held_pane_replica_is_told_apart_from_a_session_wide_one_of_the_same_generation() {
+    let mut viewer = viewer_with(false);
+    viewer.connect(&json!({}));
+    let origin_pane = viewer.origin.0;
+    viewer.frame(overlay_request("WIDE", None, true));
+    viewer.frame(overlay_request("PANE", Some(origin_pane), true));
+    let session = viewer.session;
+    let wide = viewer.session().overlay.generation;
+    let pane = viewer
+        .session()
+        .pane_overlay(crate::model::OverlayPane::Left)
+        .unwrap()
+        .generation;
+    assert_eq!(wide, pane, "the two slots count apart and meet here");
+    // the pane one holds: only it is marked, so losing the stream closes it and leaves the running one
+    assert!(
+        viewer
+            .fixture
+            .core
+            .replica_overlay_held(session, Some(crate::model::OverlayPane::Left), pane)
+    );
+    let key = viewer.link().0.borrow().key.unwrap();
+    viewer.fixture.core.viewer_closed(key, "exit 255");
+    viewer.fixture.core.commit();
+    assert!(viewer.session().pane_overlay(crate::model::OverlayPane::Left).is_none());
+    assert!(
+        viewer.session().overlay.program_active(),
+        "the session-wide job still runs"
+    );
+    // and the running one closes once its own ssh ends
+    assert!(viewer.fixture.core.replica_overlay_held(session, None, wide));
+    assert!(!viewer.session().overlay.active);
+}
+
+#[test]
+fn a_late_close_from_a_rows_previous_client_leaves_the_new_one_alone() {
+    let mut viewer = viewer_with(false);
+    viewer.connect(&json!({}));
+    let old = viewer.link().0.borrow().key.unwrap();
+    let session = viewer.session;
+    // the row hides for undo and comes back: a new client, a new bridge
+    assert!(viewer.fixture.store_mut().unwrap().soft_close_session(session));
+    viewer.fixture.core.commit();
+    assert!(viewer.fixture.store_mut().unwrap().undo_pending_close(None));
+    viewer.fixture.core.commit();
+    assert_eq!(viewer.transport.0.borrow().len(), 2);
+    let new = viewer.link().0.borrow().key.unwrap();
+    assert_eq!((new.launch, new.session), (old.launch, old.session));
+    assert_ne!(new.client, old.client);
+    viewer.connect(&json!({}));
+    viewer.fixture.core.viewer_closed(old, "signal 15");
+    viewer.fixture.core.commit();
+    assert!(!viewer.link().0.borrow().stopped);
+    assert_eq!(viewer.node()["presentation"]["state"], "connected");
+}
+
+#[test]
+fn retrying_the_remote_links_now_skips_every_backoff() {
+    let mut viewer = viewer_with(false);
+    let session = viewer.session;
+    let pane = viewer.session().pane_identity;
+    let token = wire(pane);
+    let nonce = viewer.fixture.core.zmx.leads.nonce(pane).unwrap().to_owned();
+    let lost = crate::PaneReport::Title(RemoteLinkNotice::title(&nonce));
+    assert!(viewer.fixture.core.report_pane(session, &token, &lost));
+    // the stream drops too and backs off
+    let key = viewer.link().0.borrow().key.unwrap();
+    viewer.fixture.core.viewer_closed(key, "exit 255");
+    let drain = |viewer: &mut Viewer| {
+        for _ in 0..200 {
+            if viewer.fixture.core.remote.viewer.probes_idle() {
+                return;
+            }
+            viewer.fixture.core.remote_tick(Instant::now());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    for _ in 0..6 {
+        viewer
+            .fixture
+            .core
+            .remote_tick(Instant::now() + Duration::from_secs(3600));
+        drain(&mut viewer);
+        let key = viewer.link().0.borrow().key.unwrap();
+        viewer.fixture.core.viewer_closed(key, "exit 255");
+    }
+    let failures = viewer
+        .fixture
+        .core
+        .remote
+        .viewer
+        .reconnects
+        .readback(pane)
+        .unwrap()
+        .failures;
+    assert!(failures >= 5, "{failures}");
+    let launched = viewer.transport.0.borrow().len();
+    *viewer.runner.probe_status.lock().unwrap() = 0;
+    viewer.fixture.core.retry_remote_links_now(Instant::now());
+    drain(&mut viewer);
+    assert_eq!(
+        viewer.transport.0.borrow().len(),
+        launched + 1,
+        "the stream relaunched at once"
+    );
+    assert_eq!(
+        viewer.fixture.core.take_pane_replacements().len(),
+        1,
+        "the pane attached again at once"
     );
 }

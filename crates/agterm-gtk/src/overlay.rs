@@ -464,7 +464,7 @@ fn connect(terminal: &TerminalSurface, session: Uuid, generation: u64, pane: Opt
     let posting = poster.clone();
     terminal.connect_held(move || {
         state::post(&posting, move |state: &mut AppState| {
-            if state.core.replica_overlay_held(session, generation) {
+            if state.core.replica_overlay_held(session, pane, generation) {
                 state.settle();
             }
         });

@@ -196,6 +196,15 @@ impl Session {
         self.remote_presentation.as_ref().map(|state| &state.connection)
     }
 
+    /// What the row tells the user while its presentation stream is not up (upstream's sidebar
+    /// `presentationNotice(for:)`): `None` for a local row and for a remote one whose stream is connected or
+    /// unsupported. The sidebar draws the remote glyph disconnected while there is one, and shows it as its tooltip.
+    #[must_use]
+    pub fn presentation_notice(&self) -> Option<String> {
+        let host = self.remote_host()?;
+        self.remote_connection()?.row_notice(host)
+    }
+
     /// Whether the live HUD is the one the bridge opened.
     #[must_use]
     pub fn hud_bridged(&self) -> bool {
@@ -534,7 +543,14 @@ mod tests {
         );
         store.set_remote_connection(RemoteConnection::Connecting, id);
         assert_eq!(store.session(id).unwrap().agent_indicator.status, AgentStatus::Active);
-        let node = store.session(id).unwrap().remote_presentation().unwrap().node();
+        let session = store.session(id).unwrap();
+        assert!(
+            session
+                .presentation_notice()
+                .unwrap()
+                .starts_with("Connecting to origin")
+        );
+        let node = session.remote_presentation().unwrap().node();
         assert_eq!((node.state.as_str(), node.mode.as_str()), ("connecting", "mirror"));
     }
 }

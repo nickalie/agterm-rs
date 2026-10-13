@@ -114,6 +114,7 @@ impl RowWidget {
     pub fn update(&self, row: &SidebarRow) {
         self.label.set_label(&row.label);
         self.icon.set_glyph(row.icon);
+        self.icon.widget().set_tooltip_text(row.icon_tooltip.as_deref());
         if let (Some(arrow), RowKind::Workspace { expanded }) = (&self.arrow, row.kind) {
             arrow.set_icon_name(if expanded {
                 "pan-down-symbolic"

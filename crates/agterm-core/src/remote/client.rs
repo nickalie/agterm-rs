@@ -25,10 +25,13 @@ use crate::model::RemoteConnection;
 /// The origin pings every ten seconds, so three missed is a dead link and not a quiet one.
 pub const STALE_AFTER: Duration = Duration::from_secs(30);
 
-/// One launch of the bridge, as the transport's reports name it.
+/// One launch of the bridge, as the transport's reports name it: the row, the client (a row's client is recreated
+/// when the row comes back, and a late report from the previous one's bridge must not reach the new one) and the
+/// client's launch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LinkKey {
     pub session: Uuid,
+    pub client: u64,
     pub launch: u64,
 }
 
@@ -71,6 +74,8 @@ pub enum ClientEffect {
 /// Keeps one attached session's presentation stream up (upstream's `RemotePresentationClient`).
 pub struct PresentationClient {
     session: Uuid,
+    /// Unique among the clients this instance made, so their links' reports cannot be mixed up.
+    id: u64,
     argv: Vec<String>,
     presentation_version: Option<i64>,
     link: Option<Box<dyn PresentationLink>>,
@@ -101,10 +106,12 @@ impl std::fmt::Debug for PresentationClient {
 }
 
 impl PresentationClient {
+    /// A stopped client of row `session`; `id` must be unique among the instance's clients.
     #[must_use]
-    pub fn new(session: Uuid, argv: Vec<String>, presentation_version: Option<i64>) -> Self {
+    pub fn new(session: Uuid, id: u64, argv: Vec<String>, presentation_version: Option<i64>) -> Self {
         Self {
             session,
+            id,
             argv,
             presentation_version,
             link: None,
@@ -121,22 +128,10 @@ impl PresentationClient {
         }
     }
 
-    /// Whether a link is up or due to be launched again.
+    /// The client's unique id, which its links' keys carry.
     #[must_use]
-    pub fn running(&self) -> bool {
-        self.running
-    }
-
-    /// When the next launch is due, `None` while a link is up or nothing is pending.
-    #[must_use]
-    pub fn retry_at(&self) -> Option<Instant> {
-        self.retry_at.filter(|_| self.running && self.link.is_none())
-    }
-
-    /// When the link counts as stale unless a frame arrives first, `None` without a link.
-    #[must_use]
-    pub fn stale_at(&self) -> Option<Instant> {
-        self.link.as_ref().and(self.last_frame_at).map(|at| at + STALE_AFTER)
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     /// Opens the stream; an origin that predates the protocol is never launched at all.
@@ -295,6 +290,7 @@ impl PresentationClient {
         self.launch_count += 1;
         let key = LinkKey {
             session: self.session,
+            client: self.id,
             launch: self.launch_count,
         };
         let link = transport.open(&self.argv, key);
@@ -453,6 +449,7 @@ mod tests {
             Self {
                 client: PresentationClient::new(
                     Uuid::new_v4(),
+                    1,
                     vec!["ssh".to_owned(), "buildbox".to_owned(), "present".to_owned()],
                     version,
                 ),

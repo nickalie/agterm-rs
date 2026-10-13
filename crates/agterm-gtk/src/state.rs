@@ -213,6 +213,7 @@ impl AppState {
         // the attached rows' presentation bridges run as children reporting back through the loop
         self.core
             .set_presentation_transport(std::rc::Rc::new(crate::remote::ProcessTransport::new(poster.clone())));
+        crate::remote::observe_links(&poster);
         self.poster = poster;
         self.windows = Some(windows);
         self.settle();
@@ -294,6 +295,15 @@ impl AppState {
         });
         if main_loop.post_after(delay, task).is_ok() {
             self.remote_tick_armed = true;
+        }
+    }
+
+    /// The network came back or the machine woke ([`crate::remote::observe_links`]): every waiting remote pane and
+    /// dropped stream retries now, not on its backoff.
+    pub fn retry_remote_links(&mut self) {
+        if !self.quitting {
+            self.core.retry_remote_links_now(Instant::now());
+            self.settle();
         }
     }
 

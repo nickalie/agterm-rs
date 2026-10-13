@@ -524,6 +524,14 @@ impl WindowLibrary {
     }
 
     /// The live object of `session` wherever an open window holds it: in its tree, or in a pending close whose
+    /// terminals still run.
+    #[must_use]
+    pub fn held_session(&self, session: Uuid) -> Option<&Session> {
+        let store = self.stores.get(&self.window_holding_session(session)?)?;
+        store.session(session).or_else(|| store.pending_close_session(session))
+    }
+
+    /// The live object of `session` wherever an open window holds it: in its tree, or in a pending close whose
     /// terminals still run (so their exits and reports land on the object an undo brings back).
     pub fn held_session_mut(&mut self, session: Uuid) -> Option<&mut Session> {
         let window = self.window_holding_session(session)?;

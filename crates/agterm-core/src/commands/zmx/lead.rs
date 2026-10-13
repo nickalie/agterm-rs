@@ -167,8 +167,9 @@ impl Core {
         self.zmx.leads.role(identity).map(<&'static str>::from)
     }
 
-    /// A key press on a covered pane (upstream's `PaneLead.consumes`): the pane is attached again with the claim,
-    /// unless a takeover is already on its way. Whether one started; settle afterwards.
+    /// A key press on a covered pane, or on a remote pane waiting to be attached again (upstream's
+    /// `PaneLead.consumes`): a waiting pane's reconnect probe is due now, its backoff over; a covered one is attached
+    /// again with the claim, unless a takeover is already on its way. Whether either happened; settle afterwards.
     pub fn take_pane_lead(&mut self, session: Uuid, token: &str) -> bool {
         let Ok(identity) = Uuid::parse_str(token) else {
             return false;
@@ -187,16 +188,16 @@ impl Core {
     /// Replaces the live pane carrying `token` with a fresh attach to its daemon (upstream's `reattachPane` and
     /// `PaneReattach.launch`), covered until its first report. The attach never creates: its trailing `/bin/sh -c`
     /// runs only when the daemon is gone, and fails, so a vanished session ends the pane rather than handing back a
-    /// fresh shell under the old identity. False when the pane is not a live one this instance can wrap.
+    /// fresh shell under the old identity. A remote replica (not a live client here) is attached again over ssh
+    /// instead ([`Core::reattach_remote_pane`]). False when the pane is neither a live one this instance can wrap nor
+    /// a replica its binding can attach again.
     pub(crate) fn reattach_pane(&mut self, session: Uuid, token: &str, claim: bool) -> bool {
         let Ok(identity) = Uuid::parse_str(token) else {
             return false;
         };
-        let library = self.library();
-        let live = library
-            .window_holding_session(session)
-            .and_then(|window| library.store(window))
-            .and_then(|store| store.session(session).or_else(|| store.pending_close_session(session)))
+        let live = self
+            .library()
+            .held_session(session)
             .and_then(|found| found.pane_role_for_token(token).map(|role| found.pane_slot(role)))
             .and_then(|slot| slot.get())
             .is_some_and(Surface::is_live_session);
