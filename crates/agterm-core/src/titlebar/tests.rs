@@ -8,7 +8,7 @@ use agterm_proto::AppIdentity;
 use super::*;
 use crate::model::{NewSession, StatusPane, WindowLibrary};
 use crate::persist::AppSettings;
-use crate::{CoreConfig, CoreState};
+use crate::{CoreConfig, CoreState, WindowRequest};
 
 fn parts() -> TitlebarParts {
     TitlebarParts {

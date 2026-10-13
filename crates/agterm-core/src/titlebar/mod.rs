@@ -10,8 +10,8 @@ use crate::Core;
 use crate::app_actions::{ActionEffect, ActionOrigin};
 use crate::keymap::{BuiltinAction, CustomCommand};
 use crate::model::{AgentIndicator, AgentStatus, AppStore, Session, SplitAxis, WindowLibrary, attention_order};
+use crate::pane_env::uuid_string;
 use crate::persist::settings::{InterfaceElement, ToolbarMode};
-use crate::{WindowRequest, pane_env::uuid_string};
 
 #[cfg(test)]
 mod tests;
@@ -334,16 +334,6 @@ fn session_subtitle(store: Option<&AppStore>, session: &Session) -> String {
 }
 
 impl Core {
-    /// Whether window `window` takes title-bar and popover actions: no terminal zoom, dashboard or pending dialog
-    /// covers it (upstream's `uiActionsEnabled`).
-    #[must_use]
-    pub fn ui_actions_enabled(&self, window: Uuid) -> bool {
-        self.library().is_open(window)
-            && self.zoom_target(window).is_none()
-            && self.dashboard(window).is_none()
-            && !self.modal_pending(window)
-    }
-
     /// Window `window`'s title bar under the current settings.
     #[must_use]
     pub fn titlebar(&self, window: Uuid) -> Titlebar {
@@ -512,16 +502,6 @@ impl Core {
             .unwrap_or_default()
     }
 
-    /// Whether attention row `session` of window `window` can be chosen.
-    #[must_use]
-    pub fn can_select_attention(&self, window: Uuid, session: Uuid) -> bool {
-        self.ui_actions_enabled(window)
-            && self
-                .library()
-                .store(window)
-                .is_some_and(|store| store.session(session).is_some())
-    }
-
     /// Runs a title-bar button or popover row for window `window`. Commit afterwards.
     pub fn titlebar_action(&mut self, window: Uuid, action: TitlebarAction) -> ActionEffect {
         let builtin = |core: &mut Self, action| core.perform_builtin(ActionOrigin { window, quick: false }, action);
@@ -571,26 +551,6 @@ impl Core {
         store.select_session(Some(session));
         self.note_window_activity(window);
         self.request_pane_focus(session);
-        true
-    }
-
-    /// An attention row (upstream's `selectAttention`): its window is raised and made frontmost first when it is not
-    /// the active one, then the session is selected as user activity and the pane that set the status revealed, all in
-    /// that window (a legacy snapshot may hold one session id in two open windows).
-    pub fn select_attention(&mut self, window: Uuid, session: Uuid) -> bool {
-        if !self.can_select_attention(window, session) {
-            return false;
-        }
-        if self.library().active_window_id() != Some(window) {
-            self.request_window(WindowRequest::Raise(window));
-            self.take_frontmost(window);
-        }
-        let indicator = self
-            .library_mut()
-            .store_mut(window)
-            .and_then(|store| store.select_session(Some(session)));
-        self.note_window_activity(window);
-        self.reveal_blocked_pane_in(window, session, indicator.as_ref());
         true
     }
 

@@ -24,7 +24,6 @@ use crate::keymap::Chord;
 use crate::model::AgentIndicator;
 use crate::palette_catalog::PaletteCommand;
 
-pub use feeds::{AttentionEntry, attention_across_windows, attention_subtitle};
 pub use search::{filter_entries, palette_search_keys, pick_custom_row_label};
 
 /// Which palette is open (upstream's `PaletteMode`).

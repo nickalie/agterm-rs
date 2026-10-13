@@ -138,27 +138,30 @@ impl Core {
     }
 
     /// Selects `session` in `window`, raising that window first when it is not the frontmost one, and lands the
-    /// keyboard on the pane that asked for attention (upstream's `selectAttention`). Commit afterwards.
-    pub fn select_attention(&mut self, window: Uuid, session: Uuid) {
+    /// keyboard on the pane that asked for attention (upstream's `selectAttention`): the attention palette's rows and
+    /// the title bar's attention popover. Whether it ran. Commit afterwards.
+    pub fn select_attention(&mut self, window: Uuid, session: Uuid) -> bool {
         if !self.can_select_attention(window, session) {
-            return;
+            return false;
         }
         if self.library().active_window_id() != Some(window) {
             self.request_window(WindowRequest::Raise(window));
             self.take_frontmost(window);
         }
         self.pick_session(window, session);
+        true
     }
 
     /// A user's pick of `session` in `window` (the session palette, an attention row): activity noted, so auto-follow
-    /// grants its full idle grace, the session selected and its blocked pane revealed.
+    /// grants its full idle grace, the session selected and its blocked pane revealed, all in that window (a legacy
+    /// snapshot may hold one session id in two open windows).
     fn pick_session(&mut self, window: Uuid, session: Uuid) {
-        self.note_user_activity(session);
         let Some(store) = self.library_mut().store_mut(window) else {
             return;
         };
         let indicator = store.select_session(Some(session));
-        self.reveal_blocked_pane(session, indicator.as_ref());
+        self.note_window_activity(window);
+        self.reveal_blocked_pane_in(window, session, indicator.as_ref());
     }
 
     /// The Ctrl-Tab switcher's candidates in window `window`: up to `limit` most recently selected sessions of the

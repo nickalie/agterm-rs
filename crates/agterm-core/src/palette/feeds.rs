@@ -1,60 +1,16 @@
 //! The rows each palette lists (upstream's `paletteActions`, `paletteSessions`, `paletteThemes`,
-//! `paletteCustomCommands` and `paletteAttention`), and the cross-window attention list behind the attention palette
-//! (upstream's `WindowLibrary+Attention.swift`).
+//! `paletteCustomCommands` and `paletteAttention`); the attention palette reads the cross-window attention list the
+//! title bar's bell shares ([`WindowLibrary::attention_across_windows`]).
 
 use uuid::Uuid;
 
 use super::{PaletteAction, PaletteEntry, PaletteMode, PaletteShortcut};
 use crate::Core;
 use crate::keymap::{BuiltinAction, CustomCommand};
-use crate::model::{AppStore, Session, WindowInfo, WindowLibrary, attention_order};
+use crate::model::{AppStore, WindowLibrary};
 use crate::palette_catalog::PaletteCommand;
 use crate::pane_env::uuid_string;
 use crate::theme::ThemeCatalog;
-
-/// One row of the cross-window attention list: a session needing attention and the open window it lives in.
-#[derive(Debug, Clone, Copy)]
-pub struct AttentionEntry<'a> {
-    pub window: &'a WindowInfo,
-    pub session: &'a Session,
-}
-
-/// Every open window's sessions needing attention (non-idle), paired with their window, in one attention order:
-/// blocked, active, completed, newest change first (upstream's `attentionAcrossWindows`). With one window open it is
-/// that store's `attention_sessions`.
-#[must_use]
-pub fn attention_across_windows(library: &WindowLibrary) -> Vec<AttentionEntry<'_>> {
-    let mut entries: Vec<AttentionEntry<'_>> = library
-        .windows()
-        .iter()
-        .filter_map(|window| library.store(window.id).map(|store| (window, store)))
-        .flat_map(|(window, store)| {
-            store
-                .attention_sessions()
-                .into_iter()
-                .map(move |session| AttentionEntry { window, session })
-        })
-        .collect();
-    entries.sort_by(|a, b| attention_order(a.session, b.session));
-    entries
-}
-
-/// The subtitle every attention row shares: `workspace · detail`, led by the window's name once more than one window
-/// is open (upstream's `attentionSubtitle`).
-#[must_use]
-pub fn attention_subtitle(library: &WindowLibrary, entry: &AttentionEntry<'_>) -> String {
-    let session = entry.session.id();
-    let workspace = library
-        .store(entry.window.id)
-        .and_then(|store| store.workspace_for_session(session))
-        .map_or("", |workspace| workspace.name.as_str());
-    let detail = format!("{workspace} · {}", entry.session.switcher_detail());
-    if library.open_ids().len() > 1 {
-        format!("{} · {detail}", entry.window.name)
-    } else {
-        detail
-    }
-}
 
 impl Core {
     /// The rows of palette `mode` for the frontmost window, in source order (the search ranks them).
@@ -188,18 +144,19 @@ impl Core {
     /// (upstream's `paletteAttention`).
     fn palette_attention(&self) -> Vec<PaletteEntry> {
         let library = self.library();
-        attention_across_windows(library)
+        library
+            .attention_across_windows()
             .iter()
             .map(|entry| {
                 let session = entry.session.id();
                 PaletteEntry {
-                    subtitle: Some(attention_subtitle(library, entry)),
+                    subtitle: Some(library.attention_subtitle(entry)),
                     indicator: Some(entry.session.agent_indicator.clone()),
                     ..plain_entry(
                         uuid_string(session),
                         entry.session.display_name(),
                         PaletteAction::Attention {
-                            window: entry.window.id,
+                            window: entry.window,
                             session,
                         },
                     )
