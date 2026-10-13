@@ -132,7 +132,7 @@ fn read_line(stream: &mut impl Read) -> Option<Vec<u8>> {
 
 /// Writes all of `data` to `stream` with `MSG_NOSIGNAL`, looping over short writes: a peer that hung up yields
 /// `EPIPE` rather than SIGPIPE, whatever the process's SIGPIPE disposition (upstream's `SO_NOSIGPIPE`).
-fn send_all(stream: &UnixStream, mut data: &[u8]) -> io::Result<()> {
+pub fn send_all(stream: &UnixStream, mut data: &[u8]) -> io::Result<()> {
     let fd = stream.as_raw_fd();
     while !data.is_empty() {
         let (buf, len) = (data.as_ptr().cast::<libc::c_void>(), data.len());

@@ -929,16 +929,29 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 **Files:**
 - Create: `crates/agterm-core/src/commands/overlay.rs`, `crates/agterm-gtk/src/overlay.rs`
 - Modify: `crates/agterm-server/src/stream.rs`
+- ➕ Create: `crates/agterm-core/src/{overlay_capture,overlay_jobs}.rs`, `crates/agterm-core/src/model/pane_overlay.rs`
+  (the pane-scoped overlays), `crates/agterm-core/src/html/mod.rs` (the page checks the dispatcher runs before any
+  web view: `grantError`, `webURL`, `HtmlNavigation`; Task 21 extends it), `crates/agterm-core/src/commands/tests/overlay.rs`,
+  `crates/agterm-ctl/src/{session_overlay,overlay_page,overlay_job}.rs`; Modify: `agterm-proto` `result.rs`
+  (`exitCode`, `pageID`, `pageOutcome`), core `zoom.rs` (overlay surfaces addressable), `projection.rs`, `dashboard.rs`
+  (`DashboardCover`), `model/{overlay,panes,session}.rs`, GTK `split.rs`, `deck.rs`, `dashboard.rs`, `state.rs`; dep `url`
 
-- [ ] session.overlay.open (program), close, resize, result, submit, copy, text (`ControlDispatcher+Overlay.swift`,
+- [x] session.overlay.open (program), close, resize, result, submit, copy, text (`ControlDispatcher+Overlay.swift`,
       `OverlayCapture.swift`, `control-api.md` > Overlay); the overlay panel after upstream's session detail; a
-      `sizePercent` outside 1...100 is refused, so claim `overlay-size-validated`
-- [ ] session.overlay.job.run with the job-frame stream (`OverlayJobs.swift`, `ControlServer+OverlayJobs.swift`,
-      `ControlStreamOwner.swift`)
-- [ ] matching `agtermctl` subcommands (`OverlayPageCommands.swift`, `OverlayRunJob.swift`)
-- [ ] write tests: overlay slot rules, exit status capture, job claiming
-- [ ] write tests: size validation as upstream
-- [ ] gate: full run; ratchet (program part of `test_overlay.py`, plus the HUD and surface tests waiting on it)
+      `sizePercent` outside 1...100 is refused, so claim `overlay-size-validated` (pane overlays with `--pane` too; a
+      valid `--html`/`--url` open is refused until Task 21, while every page flag check and the no-page refusals of
+      submit/reload/navigate/`result --page` answer as upstream)
+- [x] session.overlay.job.run with the job-frame stream (`OverlayJobs.swift`, `ControlServer+OverlayJobs.swift`,
+      `ControlStreamOwner.swift`) (the table, frames and the helper connection; nothing registers a job until the
+      remote session tasks, so a claim answers `job not claimable`)
+- [x] matching `agtermctl` subcommands (`OverlayPageCommands.swift`, `OverlayRunJob.swift`; upstream names the helper
+      `session overlay run-job`)
+- [x] write tests: overlay slot rules, exit status capture, job claiming
+- [x] write tests: size validation as upstream
+- [x] gate: full run; ratchet (program part of `test_overlay.py`, plus the HUD and surface tests waiting on it) (63 new
+      green ids, 503 listed: every non-page test of `test_overlay.py`, the three HUD tests over a program, the surface
+      cursor test, the cli overlay program and tree tests, and `test_zmx.py`'s job.run refusals; red until Task 21: the
+      page tests of `test_overlay.py`, `test_hud.py`'s two page tests and the cli page tests)
 
 ### Task 21: HTML overlays
 

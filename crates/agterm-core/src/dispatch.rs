@@ -146,6 +146,8 @@ pub struct Core {
     pub(crate) notifications: Vec<commands::notify::NotificationEffect>,
     /// Every window's modal slot and the asks' and picks' retained outcomes ([`crate::modal`]).
     pub(crate) modals: crate::modal::Modals,
+    /// The remote overlay jobs and their helpers' connections ([`commands::overlay`]).
+    pub(crate) jobs: commands::overlay::JobRuntime,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -208,6 +210,7 @@ impl Core {
             hud: commands::hud::HudRuntime::default(),
             notifications: Vec::new(),
             modals: crate::modal::Modals::default(),
+            jobs: commands::overlay::JobRuntime::default(),
         }
     }
 
@@ -418,6 +421,7 @@ impl Core {
     /// the caller arms on the main loop. Without persistence the effects are drained and the saves dropped.
     pub fn commit(&mut self) -> CommitTimers {
         self.prune_zoom();
+        self.drop_stranded_pane_overlays();
         self.sync_modals();
         let (events, debounced, pending_closes) = if let Some(persistence) = self.persistence.as_mut() {
             let commit = persistence.commit(&mut self.library);
@@ -557,6 +561,18 @@ impl Core {
             Command::Session(cmd @ (SessionCmd::HudOpen | SessionCmd::HudUpdate | SessionCmd::HudClose)) => {
                 result_of(&commands::hud::dispatch(self, cmd, request)?)
             }
+            Command::Session(
+                cmd @ (SessionCmd::OverlayOpen
+                | SessionCmd::OverlayClose
+                | SessionCmd::OverlayResize
+                | SessionCmd::OverlayReload
+                | SessionCmd::OverlayNavigate
+                | SessionCmd::OverlayResult
+                | SessionCmd::OverlaySubmit
+                | SessionCmd::OverlayCopy
+                | SessionCmd::OverlayText
+                | SessionCmd::OverlayJobRun),
+            ) => result_of(&commands::overlay::dispatch(self, cmd, request)?),
             Command::Notify => result_of(&commands::notify::dispatch(self, request)?),
             Command::Session(cmd) => result_of(&commands::session::dispatch(self, cmd, request)?),
             Command::Window(cmd) => result_of(&commands::window::dispatch(self, cmd, request)?),
@@ -602,7 +618,7 @@ impl Core {
 
 #[cfg(test)]
 mod tests {
-    use agterm_proto::command::{EventsCmd, SessionCmd, ThemeCmd, WindowCmd, WorkspaceCmd, ZmxCmd};
+    use agterm_proto::command::{EventsCmd, ThemeCmd, WindowCmd, WorkspaceCmd, ZmxCmd};
     use serde_json::json;
 
     use super::*;
@@ -644,11 +660,7 @@ mod tests {
     #[test]
     fn unimplemented_commands_are_refused_by_name() {
         let mut core = core();
-        for cmd in [
-            Command::Session(SessionCmd::OverlayOpen),
-            Command::Theme(ThemeCmd::List),
-            Command::Zmx(ZmxCmd::List),
-        ] {
+        for cmd in [Command::Theme(ThemeCmd::List), Command::Zmx(ZmxCmd::List)] {
             let response = core.dispatch(&Request::new(cmd));
             assert!(!response.ok);
             assert_eq!(

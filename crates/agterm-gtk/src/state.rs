@@ -17,14 +17,35 @@ use agterm_core::model::PendingCloseTimer;
 use agterm_core::persist::{DebouncedSave, arm_debounced_saves};
 use agterm_core::{CommitTimers, ControlError, Core, Dispatched, PaneReport, Resume};
 use agterm_host::MainLoop;
+use agterm_proto::command::SessionCmd;
 use agterm_proto::{Command, Request};
-use agterm_server::{Reply, ReplySender};
+use agterm_server::{LineStream, LineStreamLimits, LineStreamOwner, Reply, ReplySender};
 use uuid::Uuid;
 
 use crate::main_loop::GlibMainLoop;
 use crate::quick::QuickPanel;
 use crate::sidebar::{RowKind, SidebarRow};
 use crate::windows::Windows;
+
+/// The bounds of an overlay job helper's connection (upstream's `overlayJobLimits`: a presentation frame's size).
+const JOB_STREAM_LIMITS: LineStreamLimits = LineStreamLimits {
+    max_line_bytes: 256 * 1024,
+    max_pending_lines: 16,
+    write_timeout: Duration::from_secs(5),
+};
+
+/// A helper connection as the core sends to it.
+struct JobLines(LineStream);
+
+impl agterm_core::JobChannel for JobLines {
+    fn send(&self, line: Vec<u8>) -> bool {
+        self.0.send(line)
+    }
+
+    fn shutdown(&self) {
+        self.0.shutdown();
+    }
+}
 
 /// Where handlers post tasks: the main loop, held weakly so a handler outliving it posts nothing.
 pub type Poster = Weak<dyn MainLoop<AppState>>;
@@ -153,6 +174,7 @@ impl AppState {
         self.core.clear_pane_focus_requests();
         self.arm_auto_follow();
         self.arm_hud_timers();
+        self.arm_job_expiries();
     }
 
     /// Arms the HUD auto-hides the core asked for since the last arm; each lands in [`Core::fire_hud_hide`].
@@ -276,13 +298,84 @@ impl AppState {
     /// while the connection's thread waits for the deferred reply.
     pub fn handle_request(&mut self, request: &Request) -> Reply {
         let dispatched = self.core.begin(request);
+        let reply = match dispatched {
+            Dispatched::Done(response) if request.cmd == Command::Session(SessionCmd::OverlayJobRun) && response.ok => {
+                self.job_stream(response)
+            }
+            other => {
+                self.settle();
+                return self.reply(request, other);
+            }
+        };
         self.settle();
+        reply
+    }
+
+    /// The reply of a dispatched request: its answer, or a deferred one its next step sends.
+    fn reply(&self, request: &Request, dispatched: Dispatched) -> Reply {
         match dispatched {
             Dispatched::Done(response) => response.into(),
             Dispatched::Pending { after, resume } => {
                 let (reply, sender) = Reply::deferred();
                 self.schedule(request.cmd, after, resume, sender);
                 reply
+            }
+        }
+    }
+
+    /// The answer to a won overlay job claim, which keeps the connection (upstream's `adoptOverlayJobStream`): the
+    /// helper's stream, registered with the core so it gets the launch context first, its frames and its close
+    /// reported back as main-loop tasks.
+    fn job_stream(&mut self, response: agterm_proto::Response) -> Reply {
+        let Some(job) = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+        else {
+            return response.into();
+        };
+        let stream = LineStream::new(JOB_STREAM_LIMITS);
+        let serial = self
+            .core
+            .adopt_overlay_job_stream(&job, Box::new(JobLines(stream.clone())));
+        let (lines, closes) = (self.poster.clone(), self.poster.clone());
+        let (line_job, close_job) = (job.clone(), job);
+        let owner = LineStreamOwner::new(
+            stream,
+            move |line| {
+                let job = line_job.clone();
+                post(&lines, move |state: &mut Self| {
+                    state.core.overlay_job_line(&job, serial, &line);
+                    state.settle();
+                });
+            },
+            move || {
+                post(&closes, move |state: &mut Self| {
+                    state.core.overlay_job_closed(&close_job, serial);
+                    state.settle();
+                });
+            },
+        );
+        Reply::streaming(response, Box::new(owner))
+    }
+
+    /// Arms the overlay job expiries the core asked for since the last arm.
+    fn arm_job_expiries(&mut self) {
+        let delays = self.core.take_overlay_job_expiries();
+        let Some(main_loop) = self.poster.upgrade() else {
+            return;
+        };
+        for delay in delays {
+            let task = Box::new(|state: &mut Self| {
+                if !state.quitting {
+                    state.core.expire_overlay_jobs();
+                    state.settle();
+                }
+            });
+            if main_loop.post_after(delay, task).is_err() {
+                tracing::debug!("overlay job expiry dropped: the loop is closed");
             }
         }
     }

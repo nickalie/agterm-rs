@@ -120,8 +120,8 @@ fn validate_font_size(points: Option<f64>) -> Result<(), String> {
 }
 
 /// A panel covers the session or one split pane, never the scratch terminal (upstream's `Overlay.validatePane`, which
-/// takes `OverlayPane`'s role and axis aliases).
-fn validate_overlay_pane(pane: Option<&str>) -> Result<(), String> {
+/// takes `OverlayPane`'s role and axis aliases); the overlay group shares it.
+pub fn validate_overlay_pane(pane: Option<&str>) -> Result<(), String> {
     match pane.map(StatusPane::from_control_name) {
         Some(None | Some(StatusPane::Scratch)) => Err("--pane must be left or right".to_owned()),
         _ => Ok(()),

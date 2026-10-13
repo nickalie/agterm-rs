@@ -13,6 +13,7 @@ mod navigation;
 mod outbox;
 mod overlay;
 pub mod pane;
+mod pane_overlay;
 mod panes;
 mod pending_close;
 mod recency;
@@ -34,8 +35,9 @@ pub use background::{BackgroundWatermark, PaneBackgrounds, WatermarkFit, Waterma
 pub use focus::FocusMode;
 pub use navigation::{NewSessionPlacement, SessionNavigation, WorkspaceNavigation};
 pub use outbox::{EventPayload, ModelEvent, Outbox, RecentClosedChange, SaveRequest, WatermarkRemoval};
-pub use overlay::{HudOpening, HudState, OverlayPane, OverlaySlot};
+pub use overlay::{HudOpening, HudState, OverlayPane, OverlayProgram, OverlaySlot};
 pub use pane::{PaneLaunch, PaneRestore, SplitAxis, SplitLayout, StatusPane, SurfaceSlot};
+pub use pane_overlay::{PaneOverlay, PaneOverlayOpenFailure, PaneOverlaySlot, PaneOverlays};
 pub use panes::SwapRefusal;
 pub use pending_close::{
     PENDING_CLOSE_GRACE, PendingCloseKind, PendingCloseMember, PendingCloseSummary, PendingCloseTimer,

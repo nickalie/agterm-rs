@@ -35,6 +35,7 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-normalization = "0.1"
+url = "2.5"
 uuid = { version = "1", features = ["v4", "serde"] }
 # GTK 4.14 and libadwaita 1.5 are Ubuntu 24.04's, the oldest platform CI builds on.
 gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }

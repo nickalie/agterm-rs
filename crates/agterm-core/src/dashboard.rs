@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
 
-use crate::model::AppStore;
+use crate::model::{AppStore, OverlayPane, Session};
 use crate::pane_env::uuid_string;
 use crate::zoom::ZoomSurface;
 
@@ -120,6 +120,33 @@ impl DashboardFontMode {
             Self::Fixed(_) => "fixed",
             Self::Auto => "auto",
         }
+    }
+}
+
+/// What hides a member pane's terminal in the session's own view, so its dashboard cell says so instead of showing a
+/// shell the session does not show (upstream's `DashboardCover`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DashboardCover {
+    /// A page: `identity` is the app-derived source, `title` the page's own text.
+    Page { identity: String, title: Option<String> },
+    /// A program; `command` is `None` for one shown from another instance.
+    Program { command: Option<String> },
+}
+
+impl Session {
+    /// The cover over `pane` (upstream's `dashboardCover(for:)`): a full session-wide program first, then the pane's
+    /// own overlay. A HUD and a floating overlay leave the panes lit, so they cover nothing. Pages join with HTML
+    /// overlays.
+    #[must_use]
+    pub fn dashboard_cover(&self, pane: OverlayPane) -> Option<DashboardCover> {
+        if self.full_overlay_active() {
+            return Some(DashboardCover::Program {
+                command: self.overlay.command.clone(),
+            });
+        }
+        self.pane_overlay(pane).map(|overlay| DashboardCover::Program {
+            command: Some(overlay.command.clone()),
+        })
     }
 }
 

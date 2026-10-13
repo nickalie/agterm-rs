@@ -19,8 +19,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use agterm_core::Core;
-use agterm_core::dashboard::{DashboardController, DashboardMember, Direction, MAX_CELLS, grid};
-use agterm_core::model::{AppStore, Session, SplitAxis};
+use agterm_core::dashboard::{DashboardController, DashboardCover, DashboardMember, Direction, MAX_CELLS, grid};
+use agterm_core::model::{AppStore, OverlayPane, Session, SplitAxis};
 use agterm_core::zoom::ZoomSurface;
 use agterm_ghostty::SurfaceKey;
 use gtk::glib;
@@ -55,6 +55,8 @@ const CSS: &str = "
   font-size: smaller;
 }
 .agterm-dashboard-caption.highlighted { color: @view_fg_color; }
+.agterm-dashboard-cell.covered { background-color: @view_bg_color; }
+.agterm-dashboard-cover-source { font-size: smaller; }
 ";
 
 /// The CSS class the deck's backdrop carries while its window's dashboard is open.
@@ -156,10 +158,19 @@ impl GridModel {
                     .and_then(|store| store.session(member.session))
                     .map(|session| format!("{}{}", session.display_name(), pane_marker(*member, session)))
                     .unwrap_or_default();
+                let pane = if member.surface == ZoomSurface::Split {
+                    OverlayPane::Right
+                } else {
+                    OverlayPane::Left
+                };
+                let cover = store
+                    .and_then(|store| store.session(member.session))
+                    .and_then(|session| session.dashboard_cover(pane));
                 ChromeCell {
                     member: *member,
                     caption,
                     highlighted: self.highlighted == Some(*member),
+                    cover,
                 }
             })
             .collect()
@@ -239,6 +250,8 @@ pub struct ChromeCell {
     /// The session's name and the pane marker.
     pub caption: String,
     pub highlighted: bool,
+    /// What hides the member pane's terminal in its session's own view, which the cell then names instead.
+    pub cover: Option<DashboardCover>,
 }
 
 /// A key the grid acts on.
@@ -263,10 +276,71 @@ pub fn grid_key(key: gdk::Key) -> Option<GridKey> {
     }
 }
 
-/// One cell's frame and name chip.
+/// One cell's frame, the cover it shows over a covered pane, and its name chip.
 struct CellChrome {
     frame: gtk::Box,
+    cover: CoverLabels,
     caption: gtk::Label,
+}
+
+/// The stand-in for a covered member pane (upstream's `DashboardOverlayCover`): the kind of cover, its app-derived
+/// source, and a page's own title as a separate dimmed line.
+struct CoverLabels {
+    column: gtk::Box,
+    kind: gtk::Label,
+    source: gtk::Label,
+    title: gtk::Label,
+}
+
+impl CoverLabels {
+    fn new(frame: &gtk::Box) -> Self {
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        column.set_hexpand(true);
+        column.set_halign(gtk::Align::Center);
+        column.set_valign(gtk::Align::Center);
+        column.set_can_target(false);
+        let label = |class: Option<&str>, ellipsize: pango::EllipsizeMode| {
+            let label = gtk::Label::new(None);
+            label.set_ellipsize(ellipsize);
+            label.set_single_line_mode(true);
+            if let Some(class) = class {
+                label.add_css_class(class);
+            }
+            column.append(&label);
+            label
+        };
+        let kind = label(None, pango::EllipsizeMode::End);
+        let source = label(Some("agterm-dashboard-cover-source"), pango::EllipsizeMode::Middle);
+        let title = label(Some("dim-label"), pango::EllipsizeMode::End);
+        frame.append(&column);
+        column.set_visible(false);
+        Self {
+            column,
+            kind,
+            source,
+            title,
+        }
+    }
+
+    /// Shows `cover`, or nothing.
+    fn update(&self, frame: &gtk::Box, cover: Option<&DashboardCover>) {
+        let Some(cover) = cover else {
+            self.column.set_visible(false);
+            frame.remove_css_class("covered");
+            return;
+        };
+        let (kind, source, title) = match cover {
+            DashboardCover::Page { identity, title } => ("HTML overlay", Some(identity.as_str()), title.as_deref()),
+            DashboardCover::Program { command } => ("Program overlay", command.as_deref(), None),
+        };
+        self.kind.set_label(kind);
+        self.source.set_label(source.unwrap_or_default());
+        self.source.set_visible(source.is_some());
+        self.title.set_label(title.unwrap_or_default());
+        self.title.set_visible(title.is_some());
+        self.column.set_visible(true);
+        frame.add_css_class("covered");
+    }
 }
 
 /// What [`ChromeWidget`] lays out and hit-tests.
@@ -416,6 +490,7 @@ impl Chrome {
         }
         for (chrome, cell) in layout.cells.iter().zip(cells) {
             chrome.caption.set_label(&cell.caption);
+            chrome.cover.update(&chrome.frame, cell.cover.as_ref());
             for widget in [chrome.frame.upcast_ref::<gtk::Widget>(), chrome.caption.upcast_ref()] {
                 if cell.highlighted {
                     widget.add_css_class("highlighted");
@@ -449,13 +524,14 @@ fn cell_chrome(chrome: &ChromeWidget) -> CellChrome {
     frame.add_css_class("agterm-dashboard-cell");
     frame.set_can_target(false);
     frame.set_parent(chrome);
+    let cover = CoverLabels::new(&frame);
     let caption = gtk::Label::new(None);
     caption.add_css_class("agterm-dashboard-caption");
     caption.set_ellipsize(pango::EllipsizeMode::Middle);
     caption.set_single_line_mode(true);
     caption.set_can_target(false);
     caption.set_parent(chrome);
-    CellChrome { frame, caption }
+    CellChrome { frame, cover, caption }
 }
 
 /// A click highlights the cell at once, then enters it after the flash if it is still the highlighted one.

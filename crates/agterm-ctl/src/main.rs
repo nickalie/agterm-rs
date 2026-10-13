@@ -9,6 +9,8 @@ mod events;
 mod modal;
 mod notify;
 mod output;
+mod overlay_job;
+mod overlay_page;
 mod pick;
 mod quick;
 mod session;
@@ -16,6 +18,7 @@ mod session_background;
 mod session_hud;
 mod session_io;
 mod session_meta;
+mod session_overlay;
 mod session_panes;
 mod session_restore;
 mod socket;
@@ -93,7 +96,7 @@ impl Command {
             Self::Tree(command) => command.default_run(env),
             Self::Events(command) => command.run(env),
             Self::Workspace(group) => group.command().default_run(env),
-            Self::Session(group) => group.command().default_run(env),
+            Self::Session(group) => group.command().invoke(env),
             Self::Surface(group) => group.command().default_run(env),
             Self::Dashboard(command) => command.execute(env),
             Self::Window(group) => group.command().default_run(env),
@@ -228,6 +231,12 @@ trait RequestCommand {
     /// What the parser cannot check (upstream's `validate()`), as the message of a usage error.
     fn validate(&self) -> Result<(), String> {
         Ok(())
+    }
+
+    /// Runs the command: [`Self::default_run`], unless it waits or supervises beyond one round trip (an overlay's
+    /// `--block`, `result --page`, `run-job`), as upstream's overridden `run()`.
+    fn invoke(&self, env: &dyn Env) -> Result<(), Failure> {
+        self.default_run(env)
     }
 
     /// Sends the request once and prints the reply; a refusal exits 1 after its `error:` line.

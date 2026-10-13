@@ -14,6 +14,7 @@ use super::pane::SurfaceSlot;
 use super::session::Session;
 use super::store::AppStore;
 use crate::hud::{self, HudPanelSize, HudSpec, PaneMetrics};
+use crate::overlay_capture::{mint_code_file, take_exit_code};
 
 /// Which pane a pane-scoped placement covers (upstream's `OverlayPane`): two cases, so a scratch placement is not
 /// representable.
@@ -82,6 +83,9 @@ pub struct OverlaySlot {
     pub background_color: Option<String>,
     /// The last program's exit status, kept past its close.
     pub exit_code: Option<i32>,
+    /// Where the open program's wrapper writes its exit status, read when its terminal is torn down; `None` for a
+    /// HUD, which runs the app's painter rather than a program a caller could ask about.
+    pub code_file: Option<PathBuf>,
     /// Bumped on every open, so the frontend builds a fresh surface for a replacement.
     pub generation: u64,
     /// The occupant's terminal, created by the frontend once the slot is open.
@@ -136,13 +140,17 @@ impl OverlaySlot {
     }
 
     /// Empties the slot: its surface torn down, its fields cleared, a HUD discarded (upstream's `closeOverlay`). False
-    /// with nothing open. The exit status survives.
+    /// with nothing open. The exit status survives, and a program's is recorded here from its wrapper's file (upstream
+    /// reads it at the surface's teardown).
     pub fn close(&mut self) -> bool {
         if !self.active {
             return false;
         }
         self.active = false;
         self.surface.teardown();
+        if let Some(code) = self.code_file.take().and_then(|file| take_exit_code(&file)) {
+            self.exit_code = Some(code);
+        }
         self.command = None;
         self.cwd = None;
         self.wait = false;
@@ -184,6 +192,20 @@ impl Session {
     }
 }
 
+/// What a caller's program in an overlay runs with (upstream's `openOverlay`/`openPaneOverlay` arguments).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OverlayProgram {
+    pub command: String,
+    /// The working directory; `None` inherits the session's.
+    pub cwd: Option<String>,
+    /// Hold the terminal after the program exits.
+    pub wait: bool,
+    /// A floating overlay's share of the pane, `None` for a full-pane cover; pane overlays never take one.
+    pub size_percent: Option<i64>,
+    /// The overlay's own `#rrggbb` background.
+    pub background_color: Option<String>,
+}
+
 /// What opening a HUD takes besides its spec (upstream's `openHud` arguments).
 #[derive(Debug, Clone, PartialEq)]
 pub struct HudOpening {
@@ -197,15 +219,15 @@ pub struct HudOpening {
 }
 
 impl AppStore {
-    /// Opens the session-wide slot for `command` (upstream's `openOverlay`): a live HUD yields the slot, a caller's
-    /// program refuses. `size_percent` is clamped into 1...100. False for an unknown session or an occupied slot.
-    pub fn open_overlay(
-        &mut self,
-        id: Uuid,
-        command: &str,
-        size_percent: Option<i64>,
-        background_color: Option<String>,
-    ) -> bool {
+    /// Opens the session-wide slot for a caller's program (upstream's `openOverlay`): a live HUD yields the slot, a
+    /// caller's program refuses. The size is clamped into 1...100; the wrapper's exit-status file is minted here. False
+    /// for an unknown session or an occupied slot.
+    pub fn open_overlay(&mut self, id: Uuid, program: OverlayProgram) -> bool {
+        self.occupy_overlay(id, program, Some(mint_code_file()))
+    }
+
+    /// Takes the session-wide slot for `program`, replacing a HUD, with `code_file` for its exit status.
+    fn occupy_overlay(&mut self, id: Uuid, program: OverlayProgram, code_file: Option<PathBuf>) -> bool {
         let Some(session) = self.session_mut(id) else {
             return false;
         };
@@ -217,12 +239,13 @@ impl AppStore {
             return false;
         }
         slot.generation += 1;
-        slot.command = Some(command.to_owned());
-        slot.cwd = None;
-        slot.wait = false;
+        slot.command = Some(program.command);
+        slot.cwd = program.cwd;
+        slot.wait = program.wait;
         slot.exit_code = None;
-        slot.size_percent = size_percent.map(|percent| percent.clamp(1, 100));
-        slot.background_color = background_color;
+        slot.code_file = code_file;
+        slot.size_percent = program.size_percent.map(|percent| percent.clamp(1, 100));
+        slot.background_color = program.background_color;
         slot.active = true;
         true
     }
@@ -290,7 +313,13 @@ impl AppStore {
     /// unknown session or an occupied slot.
     pub fn open_hud(&mut self, id: Uuid, spec: HudSpec, opening: HudOpening) -> bool {
         let width = hud::clamp_size_percent_for(opening.size.width_percent, &spec);
-        if !self.open_overlay(id, &opening.command, Some(width), spec.background_color.clone()) {
+        let program = OverlayProgram {
+            command: opening.command.clone(),
+            size_percent: Some(width),
+            background_color: spec.background_color.clone(),
+            ..OverlayProgram::default()
+        };
+        if !self.occupy_overlay(id, program, None) {
             return false;
         }
         let Some(session) = self.session_mut(id) else {

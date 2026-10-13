@@ -2,12 +2,13 @@
 //! session's surfaces a `surface:<session-id>:<kind>` id names, whether it is addressable, and the per-window zoom
 //! target a window fills with one surface.
 //!
-//! The overlay kinds parse but are never available yet: program and pane overlays join with their task.
+//! A program overlay and the pane overlays are addressable while open; a HUD never is (it takes no input), and pages
+//! join with HTML overlays.
 
 use uuid::Uuid;
 
 use crate::commands::ToggleMode;
-use crate::model::{AppStore, Session};
+use crate::model::{AppStore, OverlayPane, Session, SurfaceSlot};
 use crate::pane_env::uuid_string;
 
 /// One of a session's terminal slots (upstream's `TerminalZoomSurface`), in its declaration order.
@@ -64,7 +65,8 @@ impl ZoomSurface {
         }
     }
 
-    /// Whether the slot is addressable: a session can be while its terminal has yet to come up.
+    /// Whether the slot is addressable: a session can be while its terminal has yet to come up. A HUD is not: it
+    /// takes no input, and `tree` reports the slot as no overlay while one is up.
     #[must_use]
     pub fn is_available(self, session: &Session) -> bool {
         match self {
@@ -74,7 +76,9 @@ impl ZoomSurface {
             }
             Self::Split => session.split.exists || session.split_surface.is_present(),
             Self::Scratch => session.scratch_active || session.scratch_surface.is_present(),
-            Self::Overlay | Self::OverlayLeft | Self::OverlayRight => false,
+            Self::Overlay => session.overlay.program_active(),
+            Self::OverlayLeft => session.pane_overlay(OverlayPane::Left).is_some(),
+            Self::OverlayRight => session.pane_overlay(OverlayPane::Right).is_some(),
         }
     }
 
@@ -90,15 +94,66 @@ impl ZoomSurface {
         }
     }
 
-    /// Whether this is the session's active surface; at most one kind is.
+    /// The pane a pane overlay kind covers; `None` for the other kinds.
+    #[must_use]
+    pub fn overlay_pane(self) -> Option<OverlayPane> {
+        match self {
+            Self::OverlayLeft => Some(OverlayPane::Left),
+            Self::OverlayRight => Some(OverlayPane::Right),
+            _ => None,
+        }
+    }
+
+    /// The pane overlay kind covering `pane`.
+    #[must_use]
+    pub fn of_overlay_pane(pane: OverlayPane) -> Self {
+        match pane {
+            OverlayPane::Left => Self::OverlayLeft,
+            OverlayPane::Right => Self::OverlayRight,
+        }
+    }
+
+    /// The terminal slot this kind names in `session`.
+    #[must_use]
+    pub fn slot(self, session: &Session) -> &SurfaceSlot {
+        match (self.pane(), self.overlay_pane()) {
+            (Some(pane), _) => session.pane_slot(pane),
+            (None, Some(pane)) => &session.pane_overlays.slot(pane).surface,
+            (None, None) => &session.overlay.surface,
+        }
+    }
+
+    /// Whether this is the session's active surface; at most one kind is (upstream's `isActive`).
     #[must_use]
     pub fn is_active(self, session: &Session) -> bool {
-        let uncovered = !session.scratch_active;
+        let uncovered = !session.cover_overlay_active() && !session.scratch_active;
+        let focused = session.focused_overlay_pane_role();
+        let covered = |pane: OverlayPane| session.pane_overlay(pane).is_some();
         match self {
-            Self::Primary => uncovered && !session.focuses_split(),
-            Self::Split => uncovered && session.focuses_split(),
-            Self::Scratch => session.scratch_active,
-            Self::Overlay | Self::OverlayLeft | Self::OverlayRight => false,
+            Self::Primary => uncovered && focused == OverlayPane::Left && !covered(OverlayPane::Left),
+            Self::Split => uncovered && focused == OverlayPane::Right && !covered(OverlayPane::Right),
+            Self::Scratch => !session.cover_overlay_active() && session.scratch_active,
+            Self::Overlay => session.overlay.program_active(),
+            Self::OverlayLeft => uncovered && focused == OverlayPane::Left && covered(OverlayPane::Left),
+            Self::OverlayRight => uncovered && focused == OverlayPane::Right && covered(OverlayPane::Right),
+        }
+    }
+
+    /// Whether the detail pane shows this surface (upstream's `isVisible`): a pane while laid out, uncovered by the
+    /// session-wide cover and the scratch and by its own overlay, which then takes the visibility.
+    #[must_use]
+    pub fn is_visible(self, session: &Session) -> bool {
+        let pane_visible = |pane: OverlayPane| {
+            !session.cover_overlay_active() && !session.scratch_active && session.renders_overlay_pane(pane)
+        };
+        let covered = |pane: OverlayPane| session.pane_overlay(pane).is_some();
+        match self {
+            Self::Primary => pane_visible(OverlayPane::Left) && !covered(OverlayPane::Left),
+            Self::Split => pane_visible(OverlayPane::Right) && !covered(OverlayPane::Right),
+            Self::Scratch => !session.cover_overlay_active() && session.scratch_active,
+            Self::Overlay => session.overlay.program_active(),
+            Self::OverlayLeft => pane_visible(OverlayPane::Left) && covered(OverlayPane::Left),
+            Self::OverlayRight => pane_visible(OverlayPane::Right) && covered(OverlayPane::Right),
         }
     }
 }

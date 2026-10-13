@@ -8,6 +8,7 @@ use agterm_proto::EventKind;
 use uuid::Uuid;
 
 use super::outbox::EventPayload;
+use super::overlay::OverlayPane;
 use super::pane::{PaneLaunch, PaneRestore, SplitAxis, SplitLayout, StatusPane, clamp_split_ratio};
 use super::session::{AgentIndicator, AgentStatus, Session};
 use super::store::AppStore;
@@ -64,6 +65,8 @@ impl AppStore {
             session.split_pane_identity = Some(Uuid::new_v4());
             session.split.focused = true;
         }
+        // hiding the split un-renders a pane, so an overlay opened on it that never came up would sit forever
+        session.drop_unrealized_pane_overlays(|_| false);
         if was_shown != shown {
             self.emit_pane_visibility(EventKind::PaneSplit, id, shown);
         }
@@ -141,6 +144,8 @@ impl AppStore {
         let was_shown = session.split.shown;
         session.split = SplitLayout::default();
         session.split_surface.teardown();
+        // the right pane is gone: its overlay has nothing left to cover and nobody left to read its status
+        session.pane_overlays.teardown(OverlayPane::Right);
         session.split_cwd = None;
         session.split_title = None;
         session.initial_split_cwd = None;
@@ -325,6 +330,7 @@ fn swap_pane_fields(session: &mut Session) {
         }
     };
     session.split.focused = !session.split.focused;
+    session.pane_overlays.swap();
 }
 
 /// The other pane of a split; the scratch stays.
@@ -339,6 +345,10 @@ fn other_pane(pane: StatusPane) -> StatusPane {
 /// The model side of [`AppStore::close_primary_pane`] with a survivor in the split slot.
 fn promote_split_survivor(session: &mut Session) {
     session.surface.teardown();
+    // the pane overlays follow their panes: the exiting primary's dies with it, the survivor's moves left with its
+    // exit status
+    session.pane_overlays.teardown(OverlayPane::Left);
+    session.pane_overlays.promote();
     if let Some(mut survivor) = session.split_surface.take() {
         survivor.promote_to_primary();
         session.surface.replace(survivor);

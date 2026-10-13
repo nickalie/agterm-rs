@@ -112,6 +112,56 @@ impl fmt::Debug for Reply {
     }
 }
 
+/// A [`StreamOwner`] that runs a [`LineStream`] over the adopted connection and hands each received line and the close
+/// to callbacks on the connection's thread: what an app-side owner such as an overlay job's helper connection needs,
+/// its callbacks posting to the main loop. A connection that never reached it reports its close all the same, so a
+/// claim waiting on the stream is released either way.
+pub struct LineStreamOwner {
+    stream: LineStream,
+    on_line: Box<dyn FnMut(Vec<u8>) + Send>,
+    on_close: Box<dyn FnOnce() + Send>,
+}
+
+impl LineStreamOwner {
+    /// An owner running `stream`, calling `on_line` with each line (newline excluded) and `on_close` once.
+    #[must_use]
+    pub fn new(
+        stream: LineStream,
+        on_line: impl FnMut(Vec<u8>) + Send + 'static,
+        on_close: impl FnOnce() + Send + 'static,
+    ) -> Self {
+        Self {
+            stream,
+            on_line: Box::new(on_line),
+            on_close: Box::new(on_close),
+        }
+    }
+}
+
+impl StreamOwner for LineStreamOwner {
+    fn adopt(self: Box<Self>, socket: UnixStream, pending: Vec<u8>) {
+        let Self {
+            stream,
+            mut on_line,
+            on_close,
+        } = *self;
+        stream.run(socket, &pending, |line| on_line(line.to_vec()), on_close);
+    }
+
+    fn abandon(self: Box<Self>) {
+        self.stream.shutdown();
+        (self.on_close)();
+    }
+}
+
+impl fmt::Debug for LineStreamOwner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LineStreamOwner")
+            .field("stream", &self.stream)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The bounds of one [`LineStream`], upstream's `ControlStreamOwner.Limits`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LineStreamLimits {

@@ -17,7 +17,8 @@ use crate::tree::format_tree;
 use crate::window::format_windows;
 
 /// Renders a response as its human-readable summary (no trailing newline): an `error:` line, the tree or window
-/// listing, the serving app's version, the text read (or a search's counter), a batch's affected count, a count of
+/// listing, the serving app's version, the text read (or a search's counter), an overlay program's `exit N`, a
+/// batch's affected count, a count of
 /// diagnostics, a cursor column, a resized window's `W H`, a resized split's ratio, the affected id (only with
 /// `echo_id`, for the create commands), or a bare `ok`. Never JSON: `--json` prints the server's own line.
 ///
@@ -48,6 +49,10 @@ pub fn format_response(response: &Response, echo_id: bool) -> String {
     }
     if let Some(text) = result.and_then(|result| result.get("text")).and_then(Value::as_str) {
         return text.to_owned();
+    }
+    // `session.overlay.result`: the program's exit status
+    if let Some(code) = result.and_then(|result| result.get("exitCode")).and_then(Value::as_i64) {
+        return format!("exit {code}");
     }
     if let Some(affected) = result.and_then(|result| result.get("affected")).and_then(Value::as_i64) {
         return format_affected(affected);
@@ -260,6 +265,18 @@ mod tests {
         assert_eq!(
             format_response(&ok(json!({"width": 1, "height": 2, "ratio": 0.5})), false),
             "1 2"
+        );
+    }
+
+    #[test]
+    fn an_overlay_result_prints_its_exit_status_after_the_text() {
+        assert_eq!(format_response(&ok(json!({"id": "S", "exitCode": 5})), true), "exit 5");
+        assert_eq!(format_response(&ok(json!({"exitCode": 0})), false), "exit 0");
+        // the text wins over the status and the status over a count, as upstream tests them in that order
+        assert_eq!(format_response(&ok(json!({"text": "t", "exitCode": 1})), false), "t");
+        assert_eq!(
+            format_response(&ok(json!({"exitCode": 2, "affected": 3})), false),
+            "exit 2"
         );
     }
 

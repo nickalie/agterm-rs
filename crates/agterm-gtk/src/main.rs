@@ -20,6 +20,7 @@ mod logging;
 mod main_loop;
 mod modal;
 mod notifications;
+mod overlay;
 mod pane;
 mod picker;
 mod quick;

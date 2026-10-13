@@ -22,7 +22,7 @@
 use agterm_core::hud::{HudPaneFrame, HudPaneFrames};
 use agterm_core::model::pane::{SPLIT_RATIO_DEFAULT, clamp_split_ratio};
 use agterm_core::model::{OverlayPane, Session, SplitAxis, StatusPane};
-use agterm_core::zoom::SurfaceId;
+use agterm_core::zoom::{SurfaceId, ZoomSurface};
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
@@ -30,6 +30,7 @@ use uuid::Uuid;
 
 use crate::ask_dialog::SessionAskLayer;
 use crate::hud::{HudLayer, HudPlacement, LayerView};
+use crate::overlay::{PaneOverlayTerminal, ProgramLayer, ProgramPlacement};
 use crate::state::{self, AppState, Poster};
 use crate::surface::TerminalSurface;
 
@@ -86,6 +87,120 @@ pub enum Panes {
     Alone(Slot),
 }
 
+/// The program overlay a page shows: its slot generation and its share of the page (`None`: it covers the page).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProgramShow {
+    pub generation: u64,
+    pub fraction: Option<f64>,
+}
+
+/// An overlay that holds the keyboard in place of a pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayFocus {
+    /// The session-wide program.
+    Program,
+    /// The overlay over the pane at this slot.
+    Pane(Slot),
+}
+
+/// The overlays a page shows (upstream's `overlayPanel` and `paneOverlayPanel` gates): the program, and each laid-out
+/// pane's own overlay by generation.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct OverlayPlan {
+    pub program: Option<ProgramShow>,
+    /// The program covers the whole page: the panes, the divider and the scratch hide under it.
+    pub covers: bool,
+    pub primary: Option<u64>,
+    pub split: Option<u64>,
+    pub focus: Option<OverlayFocus>,
+}
+
+impl OverlayPlan {
+    /// The generation of the pane overlay shown over the pane at `slot`.
+    #[must_use]
+    pub fn pane(&self, slot: Slot) -> Option<u64> {
+        match slot {
+            Slot::Primary => self.primary,
+            Slot::Split => self.split,
+            Slot::Scratch => None,
+        }
+    }
+
+    /// The overlays of `session` under the window's zoom (`zoomed`, one of the session's own surfaces): a zoomed
+    /// program covers the page, a zoomed pane overlay shows alone over its pane, a zoomed terminal shows bare; else
+    /// the program shows at its size, and each pane laid out, uncovered, shows its own overlay. A covering program
+    /// holds the keyboard, else the focused pane's overlay does unless the scratch covers it.
+    fn of(session: &Session, zoomed: Option<ZoomSurface>, panes: Panes, scratch_covers: bool) -> Self {
+        let slot = &session.overlay;
+        let program = slot.program_active().then_some(slot.generation);
+        let generation = |pane: OverlayPane| session.pane_overlay(pane).map(|overlay| overlay.generation);
+        match zoomed {
+            Some(ZoomSurface::Overlay) if program.is_some() => Self {
+                program: program.map(|generation| ProgramShow {
+                    generation,
+                    fraction: None,
+                }),
+                covers: true,
+                focus: Some(OverlayFocus::Program),
+                ..Self::default()
+            },
+            Some(kind @ (ZoomSurface::OverlayLeft | ZoomSurface::OverlayRight)) => {
+                let Some(pane) = kind.overlay_pane() else {
+                    return Self::default();
+                };
+                let mut plan = Self {
+                    focus: Some(OverlayFocus::Pane(Slot::of_overlay(pane))),
+                    ..Self::default()
+                };
+                plan.set_pane(Slot::of_overlay(pane), generation(pane));
+                plan
+            }
+            Some(_) => Self::default(),
+            None => {
+                let fraction = slot.size_percent.map(percent_fraction);
+                let mut plan = Self {
+                    program: program.map(|generation| ProgramShow { generation, fraction }),
+                    covers: program.is_some() && fraction.is_none(),
+                    ..Self::default()
+                };
+                if !plan.covers && !scratch_covers {
+                    let laid_out = [OverlayPane::Left, OverlayPane::Right]
+                        .into_iter()
+                        .filter(|pane| lays_out(panes, Slot::of_overlay(*pane)));
+                    for pane in laid_out {
+                        plan.set_pane(Slot::of_overlay(pane), generation(pane));
+                    }
+                }
+                let focused = Slot::of_overlay(session.focused_overlay_pane_role());
+                plan.focus = if plan.program.is_some() {
+                    Some(OverlayFocus::Program)
+                } else if !scratch_covers && plan.pane(focused).is_some() {
+                    Some(OverlayFocus::Pane(focused))
+                } else {
+                    None
+                };
+                plan
+            }
+        }
+    }
+
+    fn set_pane(&mut self, slot: Slot, generation: Option<u64>) {
+        match slot {
+            Slot::Primary => self.primary = generation,
+            Slot::Split => self.split = generation,
+            Slot::Scratch => {}
+        }
+    }
+}
+
+/// A percent within 1...100 as a fraction.
+fn percent_fraction(percent: i64) -> f64 {
+    // within 1...100 by the slot's clamp, so the conversion is exact
+    #[expect(clippy::cast_precision_loss, reason = "a percent within 0...100")]
+    let percent = percent.clamp(1, 100) as f64;
+    percent / 100.0
+}
+
 /// How a session's page lays its terminals out, by pane token.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PanePlan {
@@ -100,8 +215,9 @@ pub struct PanePlan {
     pub panes: Panes,
     /// The scratch fills the page over the panes, which it hides.
     pub scratch_covers: bool,
-    /// The slot that should hold keyboard focus while the page shows.
+    /// The slot that should hold keyboard focus while the page shows, unless an overlay holds it.
     pub focus: Slot,
+    pub overlays: OverlayPlan,
 }
 
 impl PanePlan {
@@ -110,13 +226,19 @@ impl PanePlan {
     /// the focused pane does. Zoomed into one of the session's terminals, the page shows that terminal alone.
     #[must_use]
     pub fn layout(session: &Session, zoom: Option<SurfaceId>) -> Self {
-        let (panes, scratch_covers, focus) = match zoomed_pane(session, zoom) {
-            Some(StatusPane::Scratch) => (unzoomed_panes(session), true, Slot::Scratch),
-            Some(pane) => (Panes::Alone(Slot::of(pane)), false, Slot::of(pane)),
-            None if session.scratch_active => (unzoomed_panes(session), true, Slot::Scratch),
-            None if session.focuses_split() => (unzoomed_panes(session), false, Slot::Split),
-            None => (unzoomed_panes(session), false, Slot::Primary),
+        let zoomed = zoom
+            .filter(|zoom| zoom.session == session.id() && zoom.surface.is_available(session))
+            .map(|zoom| zoom.surface);
+        let zoomed_overlay_pane = zoomed.and_then(ZoomSurface::overlay_pane).map(Slot::of_overlay);
+        let (panes, scratch_covers, focus) = match (zoomed_pane(session, zoom), zoomed_overlay_pane) {
+            (_, Some(slot)) => (Panes::Alone(slot), false, slot),
+            (Some(StatusPane::Scratch), None) => (unzoomed_panes(session), true, Slot::Scratch),
+            (Some(pane), None) => (Panes::Alone(Slot::of(pane)), false, Slot::of(pane)),
+            (None, None) if session.scratch_active => (unzoomed_panes(session), true, Slot::Scratch),
+            (None, None) if session.focuses_split() => (unzoomed_panes(session), false, Slot::Split),
+            (None, None) => (unzoomed_panes(session), false, Slot::Primary),
         };
+        let overlays = OverlayPlan::of(session, zoomed, panes, scratch_covers);
         let token = |pane: StatusPane| {
             session
                 .pane_slot(pane)
@@ -132,12 +254,16 @@ impl PanePlan {
             panes,
             scratch_covers,
             focus,
+            overlays,
         }
     }
 
     /// Whether the page shows the terminal at `slot`.
     #[must_use]
     pub fn shows(&self, slot: Slot) -> bool {
+        if self.overlays.covers {
+            return false;
+        }
         match (slot, self.panes) {
             (Slot::Scratch, _) => self.scratch_covers,
             (_, Panes::Both) => !self.scratch_covers,
@@ -173,7 +299,7 @@ impl PanePlan {
     /// Whether the divider shows: both panes laid out and uncovered.
     #[must_use]
     pub fn shows_divider(&self) -> bool {
-        self.panes == Panes::Both && !self.scratch_covers
+        self.panes == Panes::Both && !self.scratch_covers && !self.overlays.covers
     }
 }
 
@@ -341,6 +467,12 @@ struct StackLayout {
     /// The terminal ask's layer, and what it covers while one shows.
     ask: Option<gtk::Widget>,
     ask_scope: Option<AskScope>,
+    /// The program overlay's backdrop and panel, and where the panel goes while one shows.
+    program_backdrop: Option<gtk::Widget>,
+    program_frame: Option<gtk::Widget>,
+    program_placement: Option<ProgramPlacement>,
+    /// The pane overlays' terminals and the pane each covers.
+    pane_overlays: Vec<(gtk::Widget, Slot)>,
     /// Where the page's geometry goes: its session and the main loop.
     reports: Option<(Uuid, Poster)>,
     /// The geometry last reported.
@@ -388,6 +520,10 @@ impl StackLayout {
                 hud
             } else if Some(&widget) == self.ask.as_ref() {
                 ask_rect(self.ask_scope, panes, &geometry, width, height)
+            } else if Some(&widget) == self.program_frame.as_ref() {
+                program_rect(self.program_placement, width, height)
+            } else if let Some((_, slot)) = self.pane_overlays.iter().find(|(overlay, _)| *overlay == widget) {
+                pane_rect(panes, &geometry, *slot).unwrap_or(Rect::full(width, height))
             } else {
                 Rect::full(width, height)
             };
@@ -422,6 +558,28 @@ impl StackLayout {
         state::post(&poster, move |state: &mut AppState| {
             state.report_hud_frames(session, &frames);
         });
+    }
+}
+
+/// The program panel's rectangle: centered at its share of the page across and down while it floats, else the page
+/// (upstream's program `OverlayPanelStyle`, always centered).
+fn program_rect(placement: Option<ProgramPlacement>, width: i32, height: i32) -> Rect {
+    let Some(fraction) = placement.and_then(|placement| placement.fraction) else {
+        return Rect::full(width, height);
+    };
+    let scaled = |extent: i32| {
+        let value = (f64::from(extent) * fraction.clamp(0.0, 1.0)).round();
+        // within 0..=extent by the clamp, so the conversion is exact
+        #[expect(clippy::cast_possible_truncation, reason = "rounded and bounded by an i32")]
+        let value = value as i32;
+        value
+    };
+    let (panel_width, panel_height) = (scaled(width), scaled(height));
+    Rect {
+        x: (width - panel_width) / 2,
+        y: (height - panel_height) / 2,
+        width: panel_width,
+        height: panel_height,
     }
 }
 
@@ -517,6 +675,9 @@ mod imp {
             layout.grid = None;
             layout.hud = None;
             layout.ask = None;
+            layout.program_backdrop = None;
+            layout.program_frame = None;
+            layout.pane_overlays.clear();
         }
     }
 
@@ -583,6 +744,10 @@ pub struct PaneView {
     hud: std::rc::Rc<std::cell::RefCell<HudLayer>>,
     /// The terminal ask's layer, above everything.
     ask: SessionAskLayer,
+    /// The program overlay's layer, above the scratch and under the HUD.
+    program: ProgramLayer,
+    /// The pane overlays' terminals, over the panes and under the scratch.
+    pane_overlays: Vec<PaneOverlayTerminal>,
     plan: Option<PanePlan>,
     /// The page shows the dashboard's cells ([`PaneView::apply_grid`]).
     in_grid: bool,
@@ -601,6 +766,9 @@ impl PaneView {
         divider.set_parent(&stack);
         stack.layout().divider = Some(divider.clone().upcast());
         connect_divider(&divider, &stack, session, poster);
+        let program = ProgramLayer::new();
+        program.backdrop().set_parent(&stack);
+        program.frame().set_parent(&stack);
         let hud = HudLayer::new();
         hud.widget().set_parent(&stack);
         let ask = SessionAskLayer::new();
@@ -609,6 +777,8 @@ impl PaneView {
             let mut layout = stack.layout();
             layout.hud = Some(hud.widget().clone().upcast());
             layout.ask = Some(ask.widget().clone().upcast());
+            layout.program_backdrop = Some(program.backdrop().clone().upcast());
+            layout.program_frame = Some(program.frame().clone().upcast());
             layout.reports = Some((session, poster.clone()));
         }
         let hud = std::rc::Rc::new(std::cell::RefCell::new(hud));
@@ -626,6 +796,8 @@ impl PaneView {
             panes: Vec::new(),
             hud,
             ask,
+            program,
+            pane_overlays: Vec::new(),
             plan: None,
             in_grid: false,
         };
@@ -644,7 +816,7 @@ impl PaneView {
     pub fn add(&mut self, token: String, terminal: TerminalSurface, scratch: bool) {
         let widget = terminal.widget();
         if scratch {
-            widget.insert_before(&self.stack, Some(self.hud.borrow().widget()));
+            widget.insert_before(&self.stack, Some(self.program.backdrop()));
         } else {
             widget.insert_before(&self.stack, Some(&self.divider));
         }
@@ -679,6 +851,12 @@ impl PaneView {
         for pane in &self.panes {
             pane.terminal.teardown();
         }
+        for overlay in &self.pane_overlays {
+            overlay.terminal.teardown();
+        }
+        if let Some(terminal) = self.program.terminal() {
+            terminal.teardown();
+        }
         if let Some(terminal) = self.hud.borrow().terminal() {
             terminal.teardown();
         }
@@ -687,6 +865,88 @@ impl PaneView {
     /// The HUD's layer.
     pub fn hud_mut(&self) -> std::cell::RefMut<'_, HudLayer> {
         self.hud.borrow_mut()
+    }
+
+    /// The program overlay's layer.
+    pub fn program_mut(&mut self) -> &mut ProgramLayer {
+        &mut self.program
+    }
+
+    /// The program overlay's layer.
+    #[must_use]
+    pub fn program(&self) -> &ProgramLayer {
+        &self.program
+    }
+
+    /// Places the program panel (`None`: none shows).
+    pub fn place_program(&self, placement: Option<ProgramPlacement>) {
+        let mut layout = self.stack.layout();
+        if layout.program_placement != placement {
+            layout.program_placement = placement;
+            drop(layout);
+            self.stack.queue_allocate();
+        }
+    }
+
+    /// The terminal of pane overlay `generation`.
+    #[must_use]
+    pub fn pane_overlay(&self, generation: u64) -> Option<&PaneOverlayTerminal> {
+        self.pane_overlays
+            .iter()
+            .find(|overlay| overlay.generation == generation)
+    }
+
+    /// Mounts a pane overlay's terminal over the panes and under the scratch, hidden until it is placed.
+    pub fn add_pane_overlay(&mut self, overlay: PaneOverlayTerminal) {
+        overlay.terminal.widget().insert_after(&self.stack, Some(&self.divider));
+        set_pane_visible(&overlay.terminal, false);
+        self.pane_overlays.push(overlay);
+    }
+
+    /// Drops the pane overlay terminals whose generation is not in `live` (closed; the model tore them down already).
+    pub fn retain_pane_overlays(&mut self, live: &[u64]) {
+        let (kept, gone): (Vec<PaneOverlayTerminal>, Vec<PaneOverlayTerminal>) =
+            std::mem::take(&mut self.pane_overlays)
+                .into_iter()
+                .partition(|overlay| live.contains(&overlay.generation));
+        self.pane_overlays = kept;
+        if gone.is_empty() {
+            return;
+        }
+        let mut layout = self.stack.layout();
+        for overlay in gone {
+            let widget: gtk::Widget = overlay.terminal.widget().clone().upcast();
+            layout.pane_overlays.retain(|(placed, _)| *placed != widget);
+            overlay.terminal.teardown();
+            widget.unparent();
+        }
+    }
+
+    /// Shows each pane overlay over the pane `plan` puts it on, and hides the others (all of them without a plan).
+    pub fn show_pane_overlays(&self, plan: Option<&PanePlan>) {
+        let placed: Vec<(gtk::Widget, Slot)> = self
+            .pane_overlays
+            .iter()
+            .filter_map(|overlay| {
+                let slot = [Slot::Primary, Slot::Split]
+                    .into_iter()
+                    .find(|slot| plan.is_some_and(|plan| plan.overlays.pane(*slot) == Some(overlay.generation)))?;
+                Some((overlay.terminal.widget().clone().upcast(), slot))
+            })
+            .collect();
+        for overlay in &self.pane_overlays {
+            let widget: gtk::Widget = overlay.terminal.widget().clone().upcast();
+            let visible = placed.iter().any(|(shown, _)| *shown == widget);
+            if overlay.terminal.is_deck_visible() != visible {
+                set_pane_visible(&overlay.terminal, visible);
+            }
+        }
+        let mut layout = self.stack.layout();
+        if layout.pane_overlays != placed {
+            layout.pane_overlays = placed;
+            drop(layout);
+            self.stack.queue_allocate();
+        }
     }
 
     /// The terminal ask's layer.
@@ -737,7 +997,11 @@ impl PaneView {
         }
         self.stack.queue_allocate();
         for pane in &self.panes {
-            let visible = shown && plan.slot_of(&pane.token).is_some_and(|slot| plan.shows(slot));
+            // a pane renders hidden under its own overlay, which takes its place
+            let visible = shown
+                && plan
+                    .slot_of(&pane.token)
+                    .is_some_and(|slot| plan.shows(slot) && plan.overlays.pane(slot).is_none());
             // a grid cell was view-only: the terminal takes input again
             if leaving_grid || pane.terminal.is_deck_visible() != visible {
                 set_pane_visible(&pane.terminal, visible);
@@ -782,13 +1046,25 @@ impl PaneView {
         self.divider.set_visible(false);
         self.ask.clear();
         self.place_ask(None);
+        self.place_program(None);
+        self.program.hide();
+        self.show_pane_overlays(None);
     }
 
     /// The token and terminal that should hold keyboard focus by the last plan.
     #[must_use]
     pub fn focus(&self) -> Option<(&str, &TerminalSurface)> {
-        let token = self.plan.as_ref()?.focus_token()?;
-        self.terminal(token).map(|terminal| (token, terminal))
+        let plan = self.plan.as_ref()?;
+        match plan.overlays.focus {
+            Some(OverlayFocus::Program) => self.program.focus(),
+            Some(OverlayFocus::Pane(slot)) => self
+                .pane_overlay(plan.overlays.pane(slot)?)
+                .map(|overlay| (overlay.key.as_str(), &overlay.terminal)),
+            None => {
+                let token = plan.focus_token()?;
+                self.terminal(token).map(|terminal| (token, terminal))
+            }
+        }
     }
 
     fn widget_of(&self, token: Option<&str>) -> Option<gtk::Widget> {
@@ -1050,6 +1326,127 @@ mod tests {
         let plan = PanePlan::layout(&covered, Some(zoom(&covered, ZoomSurface::Scratch)));
         assert!(plan.shows(Slot::Scratch) && !plan.shows(Slot::Primary) && !plan.shows(Slot::Split));
         assert_eq!(plan.focus_token(), Some("X"));
+    }
+
+    /// Opens a program in `session`'s slot at `size_percent`.
+    fn program(session: &mut Session, size_percent: Option<i64>) {
+        let slot = &mut session.overlay;
+        slot.active = true;
+        slot.generation += 1;
+        slot.command = Some("exec cat".to_owned());
+        slot.size_percent = size_percent;
+    }
+
+    /// Opens an overlay over `pane` with `generation`.
+    fn pane_overlay(session: &mut Session, pane: OverlayPane, generation: u64) {
+        session.pane_overlays.slot_mut(pane).overlay = Some(agterm_core::model::PaneOverlay {
+            command: "exec cat".to_owned(),
+            cwd: None,
+            background_color: None,
+            wait: false,
+            generation,
+            code_file: None,
+        });
+    }
+
+    #[test]
+    fn a_covering_program_hides_the_panes_and_takes_the_keyboard() {
+        let mut covered = session(Some(split(true, false)), true);
+        program(&mut covered, None);
+        let plan = PanePlan::layout(&covered, None);
+        assert!(plan.overlays.covers);
+        assert_eq!(
+            plan.overlays.program,
+            Some(ProgramShow {
+                generation: 1,
+                fraction: None
+            })
+        );
+        assert!(!plan.shows(Slot::Primary) && !plan.shows(Slot::Split) && !plan.shows(Slot::Scratch));
+        assert!(!plan.shows_divider());
+        assert_eq!(plan.overlays.focus, Some(OverlayFocus::Program));
+    }
+
+    #[test]
+    fn a_floating_program_leaves_the_panes_lit_but_holds_the_keyboard() {
+        let mut floating = session(Some(split(true, false)), false);
+        program(&mut floating, Some(40));
+        pane_overlay(&mut floating, OverlayPane::Right, 3);
+        let plan = PanePlan::layout(&floating, None);
+        assert!(!plan.overlays.covers && plan.shows(Slot::Primary) && plan.shows_divider());
+        assert_eq!(plan.overlays.program.and_then(|program| program.fraction), Some(0.4));
+        assert_eq!(plan.overlays.focus, Some(OverlayFocus::Program));
+        assert_eq!(
+            plan.overlays.pane(Slot::Split),
+            Some(3),
+            "a pane overlay shows beside it"
+        );
+    }
+
+    #[test]
+    fn a_pane_overlay_covers_its_laid_out_pane_and_takes_its_focus() {
+        let mut both = session(Some(split(true, true)), false);
+        pane_overlay(&mut both, OverlayPane::Right, 1);
+        let plan = PanePlan::layout(&both, None);
+        assert_eq!((plan.overlays.primary, plan.overlays.split), (None, Some(1)));
+        assert_eq!(plan.overlays.focus, Some(OverlayFocus::Pane(Slot::Split)));
+        both.split.focused = false;
+        assert_eq!(
+            PanePlan::layout(&both, None).overlays.focus,
+            None,
+            "the bare pane has focus"
+        );
+
+        let mut hidden = session(Some(split(false, false)), false);
+        pane_overlay(&mut hidden, OverlayPane::Right, 2);
+        assert_eq!(
+            PanePlan::layout(&hidden, None).overlays.split,
+            None,
+            "its pane is not laid out"
+        );
+        let mut scratch = session(Some(split(true, true)), true);
+        pane_overlay(&mut scratch, OverlayPane::Right, 2);
+        let plan = PanePlan::layout(&scratch, None);
+        assert_eq!(
+            (plan.overlays.split, plan.overlays.focus),
+            (None, None),
+            "the scratch covers it"
+        );
+    }
+
+    #[test]
+    fn a_zoomed_overlay_fills_the_page() {
+        let mut full = session(Some(split(true, false)), false);
+        program(&mut full, Some(30));
+        let plan = PanePlan::layout(&full, Some(zoom(&full, ZoomSurface::Overlay)));
+        assert!(plan.overlays.covers);
+        assert_eq!(plan.overlays.program.and_then(|program| program.fraction), None);
+
+        let mut panes = session(Some(split(true, false)), false);
+        pane_overlay(&mut panes, OverlayPane::Right, 4);
+        let plan = PanePlan::layout(&panes, Some(zoom(&panes, ZoomSurface::OverlayRight)));
+        assert_eq!(plan.panes, Panes::Alone(Slot::Split));
+        assert_eq!(plan.overlays.focus, Some(OverlayFocus::Pane(Slot::Split)));
+        let plan = PanePlan::layout(&panes, Some(zoom(&panes, ZoomSurface::Split)));
+        assert_eq!(plan.overlays, OverlayPlan::default(), "a zoomed terminal shows bare");
+    }
+
+    #[test]
+    fn a_floating_panel_is_centered_at_its_share() {
+        let placement = Some(ProgramPlacement { fraction: Some(0.5) });
+        assert_eq!(
+            program_rect(placement, 1000, 600),
+            Rect {
+                x: 250,
+                y: 150,
+                width: 500,
+                height: 300
+            }
+        );
+        assert_eq!(
+            program_rect(Some(ProgramPlacement { fraction: None }), 10, 20),
+            Rect::full(10, 20)
+        );
     }
 
     #[test]

@@ -3,7 +3,8 @@
 //!
 //! Fields mirror upstream's names (snake case) except where Rust groups them: the split fields live in
 //! [`SplitLayout`], each pane's creation command in a [`PaneLaunch`], the session-wide overlay slot and its HUD in an
-//! [`OverlaySlot`]. Pane overlay, ask and remote-presentation state joins with the tasks that implement them.
+//! [`OverlaySlot`], the pane-scoped overlays in [`PaneOverlays`]. Remote-presentation state joins with the task that
+//! implements it.
 
 use std::time::SystemTime;
 
@@ -13,6 +14,7 @@ use super::background::{BackgroundWatermark, PaneBackgrounds};
 use super::naming::{last_path_component, sanitized, trimmed_or_none};
 use super::overlay::OverlaySlot;
 use super::pane::{PaneLaunch, PaneRestore, SplitLayout, StatusPane, SurfaceSlot};
+use super::pane_overlay::PaneOverlays;
 use super::search::SearchState;
 use super::status::{StatusKeystroke, StatusReset, StatusShape};
 use crate::hud::HudPaneFrames;
@@ -247,6 +249,8 @@ pub struct Session {
     pub search: SearchState,
     /// The session-wide overlay slot and the HUD in it. Ephemeral.
     pub overlay: OverlaySlot,
+    /// The pane-scoped overlays. Ephemeral.
+    pub pane_overlays: PaneOverlays,
     /// The deck's last non-empty geometry of the session's detail area and panes, which a HUD is measured against
     /// (upstream's `hudPaneFrames`). Ephemeral.
     pub hud_frames: HudPaneFrames,
@@ -316,6 +320,7 @@ impl Session {
             scratch_surface: SurfaceSlot::default(),
             search: SearchState::default(),
             overlay: OverlaySlot::default(),
+            pane_overlays: PaneOverlays::default(),
             hud_frames: HudPaneFrames::default(),
             ask: None,
         }
@@ -579,9 +584,10 @@ impl Session {
         }
     }
 
-    /// Frees every terminal the session holds, the overlay slot's included (its HUD body file goes with it).
+    /// Frees every terminal the session holds, the overlay slots' included (a HUD body file goes with it).
     pub fn teardown_surfaces(&mut self) {
         self.overlay.close();
+        self.pane_overlays.teardown_all();
         self.surface.teardown();
         self.split_surface.teardown();
         self.scratch_surface.teardown();

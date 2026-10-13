@@ -27,6 +27,9 @@ pub struct ControlResult {
     /// `window.list`.
     #[serde(default)]
     pub windows: Option<Vec<ControlWindowNode>>,
+    /// `session.overlay.result`: the overlay program's exit status.
+    #[serde(default)]
+    pub exit_code: Option<i64>,
     /// `session.search`: libghostty's match count, absent before a query ran.
     #[serde(default)]
     pub count: Option<i64>,
@@ -51,6 +54,12 @@ pub struct ControlResult {
     /// `surface.cursor`: the cursor's column.
     #[serde(default)]
     pub cursor: Option<ControlCursor>,
+    /// `session.overlay.open --html|--url`: the page opened, which `session.overlay.result --page` reads back.
+    #[serde(default, rename = "pageID")]
+    pub page_id: Option<String>,
+    /// `session.overlay.result --page`: the page's selector outcome.
+    #[serde(default)]
+    pub page_outcome: Option<ControlHtmlPageOutcome>,
     /// `session.restart`: the replaced shells.
     #[serde(default)]
     pub restart: Option<ControlRestartReceipt>,
@@ -217,6 +226,28 @@ impl ControlAskResult {
             reason: None,
         }
     }
+}
+
+/// Where a page stands as a selector (upstream's `ControlHtmlPageOutcomeState`): still open, answered, or closed
+/// without an answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ControlHtmlPageOutcomeState {
+    Pending,
+    Submitted,
+    Dismissed,
+}
+
+/// `session.overlay.result --page`'s payload (upstream's `ControlHtmlPageOutcome`); `value` only for a submitted page,
+/// and it may be empty.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlHtmlPageOutcome {
+    #[serde(rename = "pageID")]
+    pub page_id: String,
+    pub outcome: ControlHtmlPageOutcomeState,
+    #[serde(default)]
+    pub value: Option<String>,
 }
 
 /// A surface's cursor position (upstream's `ControlCursor`): the column only, zero-based from the grid's left edge.

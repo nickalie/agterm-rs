@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use agterm_host::MainLoop;
 use agterm_host::fakes::FakeMainLoop;
 use agterm_proto::{Command, Request, Response};
-use agterm_server::{ControlServer, LineStream, LineStreamLimits, Reply, StreamOwner};
+use agterm_server::{ControlServer, LineStream, LineStreamLimits, LineStreamOwner, Reply, StreamOwner};
 use tempfile::TempDir;
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -335,5 +335,61 @@ fn an_over_long_line_closes_the_stream() -> TestResult {
         opened.assert_closed_once()?;
         runner.join().map_err(|_| "runner panicked")?;
     }
+    Ok(())
+}
+
+/// What a [`LineStreamOwner`]'s callbacks saw.
+#[derive(Debug, PartialEq, Eq)]
+enum Seen {
+    Line(Vec<u8>),
+    Closed,
+}
+
+fn recording_owner(stream: &LineStream) -> (LineStreamOwner, Receiver<Seen>) {
+    let (lines, seen) = mpsc::channel();
+    let closes = lines.clone();
+    let owner = LineStreamOwner::new(
+        stream.clone(),
+        move |line| {
+            lines.send(Seen::Line(line)).ok();
+        },
+        move || {
+            closes.send(Seen::Closed).ok();
+        },
+    );
+    (owner, seen)
+}
+
+#[test]
+fn a_line_stream_owner_hands_lines_and_the_close_to_its_callbacks() -> TestResult {
+    let stream = LineStream::new(LIMITS);
+    let (owner, seen) = recording_owner(&stream);
+    assert!(
+        stream.send(b"hello".to_vec()),
+        "queued before the connection is adopted"
+    );
+    let (mut client, server) = UnixStream::pair()?;
+    let runner = thread::spawn(move || Box::new(owner).adopt(server, b"first\n".to_vec()));
+    let mut reader = BufReader::new(client.try_clone()?);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    assert_eq!(line, "hello\n");
+    client.write_all(b"second\n")?;
+    assert_eq!(seen.recv_timeout(TIMEOUT)?, Seen::Line(b"first".to_vec()));
+    assert_eq!(seen.recv_timeout(TIMEOUT)?, Seen::Line(b"second".to_vec()));
+    drop(reader);
+    drop(client);
+    assert_eq!(seen.recv_timeout(TIMEOUT)?, Seen::Closed);
+    runner.join().map_err(|_| "runner panicked")?;
+    Ok(())
+}
+
+#[test]
+fn an_abandoned_line_stream_owner_reports_its_close() -> TestResult {
+    let stream = LineStream::new(LIMITS);
+    let (owner, seen) = recording_owner(&stream);
+    Box::new(owner).abandon();
+    assert_eq!(seen.recv_timeout(TIMEOUT)?, Seen::Closed);
+    assert!(!stream.send(b"late".to_vec()), "the stream is shut");
     Ok(())
 }

@@ -9,6 +9,7 @@ mod events;
 mod hud;
 mod metadata;
 mod moves;
+mod overlay;
 mod panes;
 mod pick;
 mod quick;

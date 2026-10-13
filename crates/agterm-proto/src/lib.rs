@@ -14,8 +14,8 @@ pub use events::{ControlEvent, EventBatch, EventKind, EventPayload};
 pub use request::{Args, AskButton, MAX_REQUEST_LINE_BYTES, PickItem, Request};
 pub use response::Response;
 pub use result::{
-    ControlAskOutcome, ControlAskResult, ControlCursor, ControlPickOutcome, ControlPickResult, ControlResult,
-    ControlWindowFrame, ControlWindowNode,
+    ControlAskOutcome, ControlAskResult, ControlCursor, ControlHtmlPageOutcome, ControlHtmlPageOutcomeState,
+    ControlPickOutcome, ControlPickResult, ControlResult, ControlWindowFrame, ControlWindowNode,
 };
 pub use tree::{ControlSessionNode, ControlSurfaceNode, ControlTree, ControlWorkspaceNode};
 pub use version::{AppIdentity, ConformanceProfile, PARITY_LEVEL, VersionResult};

@@ -998,6 +998,8 @@ SUBCOMMANDS:
                           a needle, or step matches).
   background              Set or clear a session's background (image,
                           rasterized text, or solid color).
+  overlay                 Open, read, resize, or close an ephemeral overlay
+                          terminal on a session.
   hud                     Post, update, or close a passive message panel over a
                           session.
 
@@ -2991,6 +2993,328 @@ fn ask_and_pick_help_mark_their_default_subcommand() -> TestResult {
         (&["help", "ask"], ASK_HELP),
         (&["pick", "--help"], PICK_HELP),
         (&["help", "pick"], PICK_HELP),
+    ];
+    for (args, help) in cases {
+        assert_eq!(
+            outcome(&run(dir.path(), &[], args)?),
+            (Some(0), help.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+// MARK: - session overlay
+
+const OVERLAY_SESSION: &str = "5B1E2C3D-4F5A-4B6C-8D7E-9F0A1B2C3D4E";
+const OVERLAY_PAGE: &str = "9A8B7C6D-5E4F-4A3B-8C2D-1E0F9A8B7C6D";
+
+/// An overlay host: `session.overlay.open` must equal `expected_open` and answers `opened`; each
+/// `session.overlay.result` answers the next of `results` (the last one repeating), a refusal written as
+/// `{"error": ...}`.
+fn overlay_host(
+    socket: &Path,
+    expected_open: serde_json::Value,
+    opened: serde_json::Value,
+    results: Vec<serde_json::Value>,
+) -> TestResult<Server<usize>> {
+    serve(socket, 0, move |polls: &mut usize, request| {
+        let sent = serde_json::to_value(&request).unwrap_or_default();
+        match sent["cmd"].as_str().unwrap_or_default() {
+            "session.overlay.open" if sent == expected_open => Response::with_result(opened.clone()).into(),
+            "session.overlay.result" => {
+                let result = results[(*polls).min(results.len() - 1)].clone();
+                *polls += 1;
+                match result["error"].as_str() {
+                    Some(error) => Response::failure(error).into(),
+                    None => Response::with_result(result).into(),
+                }
+            }
+            _ => Response::failure(format!("unexpected request: {sent}")).into(),
+        }
+    })
+}
+
+#[test]
+fn a_blocked_overlay_program_exits_with_its_status_and_prints_nothing() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("agterm.sock");
+    let open = serde_json::json!({"cmd": "session.overlay.open", "target": OVERLAY_SESSION,
+                                  "args": {"command": "exit 5"}});
+    let results = vec![
+        serde_json::json!({"error": "overlay still running"}),
+        serde_json::json!({"id": OVERLAY_SESSION, "exitCode": 5}),
+    ];
+    let _server = overlay_host(&socket, open, serde_json::json!({"id": OVERLAY_SESSION}), results)?;
+    let args = [
+        "session",
+        "overlay",
+        "open",
+        "--block",
+        "--target",
+        OVERLAY_SESSION,
+        "exit 5",
+    ];
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &args)?),
+        (Some(5), String::new(), String::new())
+    );
+    let line = format!("{{\"ok\":true,\"result\":{{\"id\":\"{OVERLAY_SESSION}\",\"exitCode\":5}}}}\n");
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &[&args[..], &["--json"]].concat())?),
+        (Some(5), line, String::new())
+    );
+    Ok(())
+}
+
+#[test]
+fn a_blocked_overlay_program_without_a_status_or_refused_exits_1() -> TestResult {
+    let dir = short_dir()?;
+    let open = serde_json::json!({"cmd": "session.overlay.open", "target": "active", "args": {"command": "echo"}});
+    let cases = [
+        (
+            serde_json::json!({"id": OVERLAY_SESSION}),
+            "error: result missing exit code\n",
+        ),
+        (serde_json::json!({"error": "no overlay"}), "error: no overlay\n"),
+    ];
+    for (at, (result, stderr)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("{at}.sock"));
+        let _server = overlay_host(
+            &socket,
+            open.clone(),
+            serde_json::json!({"id": OVERLAY_SESSION}),
+            vec![result],
+        )?;
+        assert_eq!(
+            outcome(&run_on(
+                dir.path(),
+                &socket,
+                &["session", "overlay", "open", "echo", "--block"]
+            )?),
+            (Some(1), String::new(), stderr.to_owned())
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn an_overlay_program_result_prints_its_exit_status() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("agterm.sock");
+    let expected = serde_json::json!({"cmd": "session.overlay.result", "target": OVERLAY_SESSION});
+    let _server = scripted(
+        &socket,
+        expected,
+        serde_json::json!({"id": OVERLAY_SESSION, "exitCode": 5}),
+    )?;
+    let args = ["session", "overlay", "result", "--target", OVERLAY_SESSION];
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &args)?),
+        (Some(0), "exit 5\n".to_owned(), String::new())
+    );
+    let line = format!("{{\"ok\":true,\"result\":{{\"id\":\"{OVERLAY_SESSION}\",\"exitCode\":5}}}}\n");
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &[&args[..], &["--json"]].concat())?),
+        (Some(0), line, String::new())
+    );
+    Ok(())
+}
+
+#[test]
+fn a_blocked_page_prints_its_outcome_and_a_page_result_reads_it_again() -> TestResult {
+    let dir = short_dir()?;
+    let page = dir.path().join("p.html");
+    let page = page.to_str().ok_or("not UTF-8")?;
+    let cases = [
+        (
+            "submitted",
+            serde_json::json!({"pageID": OVERLAY_PAGE, "outcome": "submitted", "value": "picked"}),
+            0,
+        ),
+        (
+            "dismissed",
+            serde_json::json!({"pageID": OVERLAY_PAGE, "outcome": "dismissed"}),
+            2,
+        ),
+    ];
+    for (name, outcome_object, code) in cases {
+        let socket = dir.path().join(format!("{name}.sock"));
+        let open = serde_json::json!({"cmd": "session.overlay.open", "target": OVERLAY_SESSION,
+                                      "args": {"html": page}});
+        let results = vec![
+            serde_json::json!({"pageOutcome": {"pageID": OVERLAY_PAGE, "outcome": "pending"}}),
+            serde_json::json!({ "pageOutcome": outcome_object }),
+        ];
+        let opened = serde_json::json!({"id": OVERLAY_SESSION, "pageID": OVERLAY_PAGE});
+        let _server = overlay_host(&socket, open, opened, results)?;
+        let args = [
+            "session",
+            "overlay",
+            "open",
+            "--html",
+            page,
+            "--block",
+            "--target",
+            OVERLAY_SESSION,
+        ];
+        let (status, stdout, stderr) = outcome(&run_on(dir.path(), &socket, &args)?);
+        assert_eq!((status, stderr), (Some(code), String::new()), "{name}");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&stdout)?, outcome_object);
+        let read = run_on(
+            dir.path(),
+            &socket,
+            &["session", "overlay", "result", "--page", OVERLAY_PAGE],
+        )?;
+        let (status, stdout, _) = outcome(&read);
+        assert_eq!(status, Some(code), "{name}");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&stdout)?, outcome_object);
+    }
+    Ok(())
+}
+
+#[test]
+fn an_unclaimable_job_exits_1_having_launched_nothing() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("agterm.sock");
+    let _server = serve(&socket, (), |(), request| {
+        let sent = serde_json::to_value(&request).unwrap_or_default();
+        if sent == serde_json::json!({"cmd": "session.overlay.job.run", "target": "J1"}) {
+            Response::failure("job not claimable").into()
+        } else {
+            Response::failure(format!("unexpected request: {sent}")).into()
+        }
+    })?;
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &["session", "overlay", "run-job", "J1"])?),
+        (Some(1), String::new(), "error: job not claimable\n".to_owned())
+    );
+    Ok(())
+}
+
+const OVERLAY_OPEN_USAGE: &str = "Usage: agtermctl session overlay open [<options>] [<command>]\n  See 'agtermctl session \
+                                  overlay open --help' for more information.\n";
+const OVERLAY_RESIZE_USAGE: &str = "Usage: agtermctl session overlay resize [--size-percent <size-percent>] [--full] \
+                                    [--target <target>] [--socket <socket>] [--json] [--window <window>]\n  See \
+                                    'agtermctl session overlay resize --help' for more information.\n";
+
+#[test]
+fn overlay_refusals_are_usage_errors_before_connecting() -> TestResult {
+    let dir = short_dir()?;
+    // nothing listens here: a connection attempt would exit 1, not 64
+    let socket = dir.path().join("agterm.sock");
+    let cases: [(&[&str], &str, &str); 4] = [
+        (
+            &[
+                "session", "overlay", "open", "--block", "--wait", "--target", "s", "true",
+            ],
+            "--block cannot be combined with --wait",
+            OVERLAY_OPEN_USAGE,
+        ),
+        (
+            &[
+                "session",
+                "overlay",
+                "open",
+                "--url",
+                "http://localhost:5173/",
+                "--block",
+            ],
+            "a page takes no --wait, and a --url page no --block",
+            OVERLAY_OPEN_USAGE,
+        ),
+        (
+            &["session", "overlay", "resize", "--target", "s"],
+            "provide --size-percent PERCENT or --full",
+            OVERLAY_RESIZE_USAGE,
+        ),
+        (
+            &["session", "overlay", "resize", "--full", "--size-percent", "50"],
+            "--full cannot be combined with --size-percent",
+            OVERLAY_RESIZE_USAGE,
+        ),
+    ];
+    for (args, message, usage) in cases {
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(64), String::new(), format!("Error: {message}\n{usage}")),
+            "{args:?}"
+        );
+    }
+    let navigate = run_on(dir.path(), &socket, &["session", "overlay", "navigate", "sideways"])?;
+    assert_eq!(navigate.status.code(), Some(64));
+    assert!(
+        text(&navigate.stderr).starts_with("Error: step must be back, forward, browser, or finder\n"),
+        "{}",
+        text(&navigate.stderr)
+    );
+    Ok(())
+}
+
+const OVERLAY_HELP: &str = "\
+OVERVIEW: Open, read, resize, or close an ephemeral overlay terminal on a
+session.
+
+USAGE: agtermctl session overlay <subcommand>
+
+OPTIONS:
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  open                    Open an overlay running COMMAND (it closes when
+                          COMMAND exits), or showing a page with --html or
+                          --url.
+  close                   Close the overlay terminal (destroys it; for one
+                          shown on another Mac, requests its cancel).
+  resize                  Resize an open overlay: floating at a percent, or
+                          back to full-pane.
+  reload                  Reload an HTML overlay: the file or URL it was opened
+                          with, or with --current the page shown now.
+  navigate                Step an HTML overlay's history, open it in the
+                          browser, or reveal its current file in Finder.
+  result                  Print the overlay program's exit status, or with
+                          --page an HTML page's outcome.
+  submit                  Answer an HTML overlay with a value and close it, as
+                          its page would; a waiting --block prints the value.
+  copy                    Print the selection made INSIDE the overlay (session
+                          copy reads the pane underneath).
+  text                    Print the overlay's terminal buffer as plain text (a
+                          TUI's drawn screen, wrapped as rendered).
+  run-job                 Run a remote overlay job this app handed to another
+                          Mac.
+
+  See 'agtermctl help session overlay <subcommand>' for detailed help.
+";
+
+const OVERLAY_RUN_JOB_HELP: &str = "\
+OVERVIEW: Run a remote overlay job this app handed to another Mac.
+
+Run on this Mac by the agterm on another Mac, over ssh, when it shows one of
+this app's overlays: it claims the job, runs its program under that ssh
+terminal, and reports how it ended. It is not meant to be run by hand. A job
+that cannot be claimed exits 1 having launched nothing, one whose program
+cannot be launched exits 127, and otherwise it exits with the program's status.
+
+USAGE: agtermctl session overlay run-job <job> [--socket <socket>] [--json]
+
+ARGUMENTS:
+  <job>                   The job id the other Mac was handed.
+
+OPTIONS:
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  -h, --help              Show help information.
+
+";
+
+#[test]
+fn overlay_help_in_the_argument_parser_layout() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], &str); 4] = [
+        (&["session", "overlay"], OVERLAY_HELP),
+        (&["help", "session", "overlay"], OVERLAY_HELP),
+        (&["session", "overlay", "run-job", "--help"], OVERLAY_RUN_JOB_HELP),
+        (&["help", "session", "overlay", "run-job"], OVERLAY_RUN_JOB_HELP),
     ];
     for (args, help) in cases {
         assert_eq!(

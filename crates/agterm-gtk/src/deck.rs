@@ -265,6 +265,7 @@ impl Page {
             context: sync.context,
             poster: sync.poster,
         };
+        crate::overlay::sync_page(&mut self.panes, session, &hud, plan.as_ref(), shown);
         crate::hud::sync_page(&mut self.panes, session, &hud, plan.as_ref(), shown);
         let ask = crate::ask_dialog::AskPage {
             shown: shown && sync.zoom.is_none() && sync.grid.is_none(),
@@ -1140,6 +1141,88 @@ mod tests {
         assert!(walk.deck.pages[&walk.session].panes.hud_mut().terminal().is_none());
         assert!(second.parent().is_none());
         assert_eq!(layer.parent().as_ref(), Some(&walk.stack));
+    }
+
+    #[test]
+    fn overlays_mount_in_place_cover_and_take_the_keyboard() {
+        crate::gtk_test::on_gtk_thread(overlays_mount_in_place);
+    }
+
+    fn overlay_request(walk: &Walk, cmd: SessionCmd, edit: impl FnOnce(&mut Args)) -> Request {
+        let mut args = Args::default();
+        edit(&mut args);
+        Request {
+            cmd: Command::Session(cmd),
+            target: Some(agterm_core::pane_env::uuid_string(walk.session)),
+            args: Some(args),
+        }
+    }
+
+    /// A pane overlay's terminal is a child of the stack over its pane, which hides under it, and takes the focused
+    /// pane's keyboard; a covering program's terminal sits in its layer, hides both panes and takes the keyboard; each
+    /// close drops its terminal and gives the pane back.
+    fn overlays_mount_in_place() {
+        let mut walk = Walk::split();
+        let pane_overlay = pane_overlay_covers_its_pane(&mut walk);
+        let program = program_covers_the_page(&mut walk, &pane_overlay);
+        assert!(
+            walk.core
+                .dispatch(&overlay_request(&walk, SessionCmd::OverlayClose, |_| {}))
+                .ok
+        );
+        walk.settle();
+        assert!(program.widget().parent().is_none());
+        assert!(walk.deck.pages[&walk.session].panes.program().terminal().is_none());
+        let close_right = overlay_request(&walk, SessionCmd::OverlayClose, |a| a.pane = Some("right".to_owned()));
+        assert!(walk.core.dispatch(&close_right).ok);
+        walk.settle();
+        assert!(pane_overlay.widget().parent().is_none());
+        assert_eq!(walk.shown(), (true, true));
+        assert_eq!(walk.probe().focus(), Some(walk.split.clone()));
+    }
+
+    fn pane_overlay_covers_its_pane(walk: &mut Walk) -> TerminalSurface {
+        let open_right = overlay_request(walk, SessionCmd::OverlayOpen, |a| {
+            a.command = Some("exec cat".to_owned());
+            a.pane = Some("right".to_owned());
+        });
+        assert!(walk.core.dispatch(&open_right).ok);
+        walk.settle();
+        let session = walk.session;
+        let generation = walk
+            .store()
+            .session(session)
+            .unwrap()
+            .pane_overlay(agterm_core::model::OverlayPane::Right)
+            .unwrap()
+            .generation;
+        let page = &walk.deck.pages[&walk.session].panes;
+        let pane_overlay = page.pane_overlay(generation).unwrap().terminal.clone();
+        assert_eq!(pane_overlay.widget().parent().as_ref(), Some(&walk.stack));
+        assert!(pane_overlay.is_deck_visible());
+        assert_eq!(walk.shown(), (true, false), "the right pane hides under its overlay");
+        assert_eq!(walk.probe().focus(), Some(format!("overlay-pane#{generation}")));
+        pane_overlay
+    }
+
+    fn program_covers_the_page(walk: &mut Walk, pane_overlay: &TerminalSurface) -> TerminalSurface {
+        let open_program = overlay_request(walk, SessionCmd::OverlayOpen, |a| {
+            a.command = Some("exec cat".to_owned());
+        });
+        assert!(walk.core.dispatch(&open_program).ok);
+        walk.settle();
+        let layer = walk.deck.pages[&walk.session].panes.program();
+        let frame = layer.frame().clone();
+        let program = layer.terminal().unwrap().clone();
+        assert_eq!(
+            program.widget().parent().and_upcast::<gtk::Widget>(),
+            Some(frame.clone().upcast())
+        );
+        assert_eq!(frame.parent().as_ref(), Some(&walk.stack));
+        assert_eq!(walk.shown(), (false, false), "a covering program hides the panes");
+        assert!(!pane_overlay.is_deck_visible(), "and the pane overlay");
+        assert_eq!(walk.probe().focus(), Some("overlay#1".to_owned()));
+        program
     }
 
     #[test]

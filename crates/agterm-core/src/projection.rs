@@ -122,11 +122,14 @@ pub fn session_node(session: &Session, active: bool) -> ControlSessionNode {
     node
 }
 
-/// The session-wide slot's read-back: `overlay` and its size for a caller's program, `hud` for a HUD, never both.
+/// The overlay read-back: `overlay` and its size for a caller's program, `hud` for a HUD, never both; `paneOverlays`
+/// names the panes covered by their own overlay, omitted when neither is.
 fn apply_overlay(node: &mut ControlSessionNode, session: &Session) {
     let slot = &session.overlay;
-    node.overlay = slot.program_active();
-    node.overlay_size_percent = slot.size_percent.filter(|_| slot.program_active());
+    node.overlay = session.cover_overlay_active();
+    node.overlay_size_percent = slot.size_percent.filter(|_| session.cover_overlay_active());
+    let panes = session.pane_overlays.open_panes();
+    node.pane_overlays = (!panes.is_empty()).then(|| panes.iter().map(|pane| pane.wire_name().to_owned()).collect());
     node.hud = hud_node(session);
     node.ask = session.ask().map(|pending| ControlSessionAsk {
         id: pending.ask.id.clone(),
@@ -210,15 +213,16 @@ fn font_size(slot: &SurfaceSlot) -> Option<f64> {
 }
 
 /// The session's addressable surfaces in upstream's `TerminalZoomSurface` order (the primary pane, the split pane
-/// while one exists, the scratch terminal while shown or alive). No overlay is modelled yet, so none covers a pane.
+/// while one exists, the scratch terminal while shown or alive, a program overlay and the pane overlays while open).
+/// Only the primary and split panes report their live-session backing.
 fn surface_nodes(session: &Session) -> Vec<ControlSurfaceNode> {
     ZoomSurface::ALL
         .into_iter()
         .filter(|kind| kind.is_available(session))
-        .filter_map(|kind| {
-            let pane = kind.pane()?;
-            let slot = session.pane_slot(pane);
-            Some(ControlSurfaceNode {
+        .map(|kind| {
+            let slot = kind.slot(session);
+            let backed = matches!(kind.pane(), Some(StatusPane::Left | StatusPane::Right));
+            ControlSurfaceNode {
                 id: SurfaceId {
                     session: session.id(),
                     surface: kind,
@@ -226,26 +230,14 @@ fn surface_nodes(session: &Session) -> Vec<ControlSurfaceNode> {
                 .control_id(),
                 kind: kind.wire_name().to_owned(),
                 active: kind.is_active(session),
-                visible: surface_visible(session, pane),
-                backed_by_zmx: (pane != StatusPane::Scratch)
-                    .then(|| slot.get().is_some_and(agterm_host::Surface::is_live_session)),
+                visible: kind.is_visible(session),
+                backed_by_zmx: backed.then(|| slot.get().is_some_and(agterm_host::Surface::is_live_session)),
                 lead: None,
                 reconnect: None,
                 pane_id: pane_token(slot),
-            })
+            }
         })
         .collect()
-}
-
-/// Whether the detail pane shows a pane (upstream's `TerminalZoomSurface.isVisible`): the scratch while shown, a pane
-/// while laid out and no scratch covers it.
-fn surface_visible(session: &Session, pane: StatusPane) -> bool {
-    match pane {
-        StatusPane::Scratch => session.scratch_active,
-        StatusPane::Left | StatusPane::Right => {
-            !session.scratch_active && session.renders_pane(pane == StatusPane::Right)
-        }
-    }
 }
 
 /// The surface's `AGTERM_PANE_ID`, absent for an empty slot or a surface spawned without one.

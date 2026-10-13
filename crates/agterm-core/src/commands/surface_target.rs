@@ -11,7 +11,6 @@ use agterm_proto::{ControlCursor, ControlResult, Request};
 use uuid::Uuid;
 
 use super::quick::{self, QUICK};
-use super::surface::pane_surface;
 use super::{Outcome, ToggleMode, args_of, session_store, unknown_pane_id};
 use crate::Core;
 use crate::error::ControlError;
@@ -134,8 +133,11 @@ fn cursor_of(store: &AppStore, id: SurfaceId) -> Result<ControlResult, ControlEr
         .session(id.session)
         .filter(|session| id.surface.is_available(session))
         .ok_or_else(|| not_available(&control_id))?;
-    let pane = id.surface.pane().ok_or_else(|| not_available(&control_id))?;
-    let surface = pane_surface(session, pane).ok_or_else(|| not_available(&control_id))?;
+    let surface = id
+        .surface
+        .slot(session)
+        .get()
+        .ok_or_else(|| not_available(&control_id))?;
     cursor_answer(surface, control_id)
 }
 

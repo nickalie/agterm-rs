@@ -24,6 +24,7 @@ async-channel.workspace = true
 glib-unix.workspace = true
 gtk.workspace = true
 libc.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true

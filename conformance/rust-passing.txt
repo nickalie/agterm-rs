@@ -14,6 +14,7 @@ tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_re
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args4-None]
 tests/cli/test_cli_output.py::test_hud
 tests/cli/test_cli_output.py::test_notify_raises_the_unseen_count
+tests/cli/test_cli_output.py::test_overlay_program
 tests/cli/test_cli_output.py::test_pick_blocks_until_cancelled
 tests/cli/test_cli_output.py::test_pick_without_blocking
 tests/cli/test_cli_output.py::test_quick_terminal
@@ -26,6 +27,7 @@ tests/cli/test_cli_output.py::test_session_restore_prints_the_note_or_ok
 tests/cli/test_cli_output.py::test_session_status_carries_its_overrides
 tests/cli/test_cli_output.py::test_session_type_text_search_and_copy
 tests/cli/test_cli_output.py::test_surface_and_dashboard
+tests/cli/test_cli_output.py::test_tree_lists_workspaces_and_tagged_sessions
 tests/cli/test_cli_output.py::test_version
 tests/cli/test_cli_output.py::test_window_commands
 tests/cli/test_cli_output.py::test_workspace_focus_and_filter
@@ -138,9 +140,11 @@ tests/protocol/test_events.py::test_next_advances_past_filtered_out_events
 tests/protocol/test_events.py::test_read_without_a_cursor_subscribes_from_now
 tests/protocol/test_events.py::test_run_id_is_case_insensitive
 tests/protocol/test_events.py::test_session_lifecycle_events
+tests/protocol/test_hud.py::test_hud_and_program_share_one_slot
 tests/protocol/test_hud.py::test_hud_font_size_range[font-high]
 tests/protocol/test_hud.py::test_hud_font_size_range[font-low]
 tests/protocol/test_hud.py::test_hud_hides_itself_after_its_interval
+tests/protocol/test_hud.py::test_hud_holds_the_slot_without_covering_the_session
 tests/protocol/test_hud.py::test_hud_over_one_pane
 tests/protocol/test_hud.py::test_hud_pane_must_exist
 tests/protocol/test_hud.py::test_hud_reads_back_every_option
@@ -184,6 +188,7 @@ tests/protocol/test_hud.py::test_hud_width_is_clamped[max]
 tests/protocol/test_hud.py::test_hud_width_is_clamped[min]
 tests/protocol/test_hud.py::test_hud_width_is_clamped[sticky-center]
 tests/protocol/test_hud.py::test_hud_width_is_clamped[sticky-edge]
+tests/protocol/test_hud.py::test_resize_sets_the_hud_width
 tests/protocol/test_hud.py::test_unknown_session_target[session.hud.close-args2]
 tests/protocol/test_hud.py::test_unknown_session_target[session.hud.open-args0]
 tests/protocol/test_hud.py::test_unknown_session_target[session.hud.update-args1]
@@ -192,6 +197,60 @@ tests/protocol/test_notify.py::test_notify_raises_the_badge_and_emits_the_event
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args0-notify requires a body]
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args1-notify requires a body]
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[zzz-args2-no such session: zzz]
+tests/protocol/test_overlay.py::test_open_refusals[browse-html]
+tests/protocol/test_overlay.py::test_open_refusals[browse-program]
+tests/protocol/test_overlay.py::test_open_refusals[chromeless-navigation]
+tests/protocol/test_overlay.py::test_open_refusals[chromeless-program]
+tests/protocol/test_overlay.py::test_open_refusals[chromeless-url]
+tests/protocol/test_overlay.py::test_open_refusals[cmd-html]
+tests/protocol/test_overlay.py::test_open_refusals[cmd-url]
+tests/protocol/test_overlay.py::test_open_refusals[color]
+tests/protocol/test_overlay.py::test_open_refusals[cwd-is-file]
+tests/protocol/test_overlay.py::test_open_refusals[cwd-url]
+tests/protocol/test_overlay.py::test_open_refusals[empty-command]
+tests/protocol/test_overlay.py::test_open_refusals[ftp-url]
+tests/protocol/test_overlay.py::test_open_refusals[html-url]
+tests/protocol/test_overlay.py::test_open_refusals[js-program]
+tests/protocol/test_overlay.py::test_open_refusals[navigation-program]
+tests/protocol/test_overlay.py::test_open_refusals[no-command]
+tests/protocol/test_overlay.py::test_open_refusals[outside-cwd]
+tests/protocol/test_overlay.py::test_open_refusals[pane-size]
+tests/protocol/test_overlay.py::test_open_refusals[pane]
+tests/protocol/test_overlay.py::test_open_refusals[persistent-html]
+tests/protocol/test_overlay.py::test_open_refusals[persistent-program]
+tests/protocol/test_overlay.py::test_open_refusals[relative-cwd]
+tests/protocol/test_overlay.py::test_open_refusals[relative-html]
+tests/protocol/test_overlay.py::test_open_refusals[relative-url]
+tests/protocol/test_overlay.py::test_open_refusals[root-cwd]
+tests/protocol/test_overlay.py::test_open_refusals[wait-html]
+tests/protocol/test_overlay.py::test_open_refusals[wait-url]
+tests/protocol/test_overlay.py::test_overlay_open_size_outside_its_range[0-1]
+tests/protocol/test_overlay.py::test_overlay_open_size_outside_its_range[101-100]
+tests/protocol/test_overlay.py::test_overlay_opens_in_the_background_unless_it_follows
+tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.close-args0]
+tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.reload-args3]
+tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.result-args1]
+tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.submit-args4]
+tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.text-args2]
+tests/protocol/test_overlay.py::test_overlay_result_reports_the_exit_status
+tests/protocol/test_overlay.py::test_overlay_runs_in_its_cwd
+tests/protocol/test_overlay.py::test_overlay_size_and_resize
+tests/protocol/test_overlay.py::test_overlay_text_reads_the_covering_program
+tests/protocol/test_overlay.py::test_page_commands_need_a_page
+tests/protocol/test_overlay.py::test_page_result_needs_a_known_page[4e316360-feae-44e7-9dec-f12335b17d07-no such page]
+tests/protocol/test_overlay.py::test_page_result_needs_a_known_page[nope-invalid page id]
+tests/protocol/test_overlay.py::test_pane_overlay_needs_a_rendered_pane[hidden-split]
+tests/protocol/test_overlay.py::test_pane_overlay_needs_a_rendered_pane[unsplit]
+tests/protocol/test_overlay.py::test_pane_overlays_cover_one_pane_each
+tests/protocol/test_overlay.py::test_program_overlay_covers_the_session
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.close-args1]
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.open-args0]
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.reload-args6]
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.resize-args2]
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.result-args3]
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.submit-args5]
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.text-args4]
+tests/protocol/test_overlay.py::test_unsplit_session_takes_a_left_pane_overlay
 tests/protocol/test_restore.py::test_panes_are_not_zmx_backed_outside_live_mode
 tests/protocol/test_restore.py::test_split_restore_pin_reads_back
 tests/protocol/test_session.py::test_close_removes_the_session_and_reselects
@@ -336,6 +395,7 @@ tests/protocol/test_split.py::test_zoom_one_surface_and_back
 tests/protocol/test_split.py::test_zoom_rejects_an_unknown_mode
 tests/protocol/test_split.py::test_zoom_rejects_an_unknown_surface[surface:zzz:left]
 tests/protocol/test_split.py::test_zoom_rejects_an_unknown_surface[zzz]
+tests/protocol/test_surface.py::test_cursor_reads_a_program_overlay_but_not_a_hud
 tests/protocol/test_surface.py::test_cursor_reads_each_pane_by_surface_id_or_pane_id
 tests/protocol/test_surface.py::test_cursor_reads_the_quick_terminal_only_while_shown
 tests/protocol/test_surface.py::test_cursor_refusals[bogus-kind-args2-invalid surface: surface:{sid}:bogus]
@@ -441,3 +501,6 @@ tests/protocol/test_zmx.py::test_restart_rejects[no-split]
 tests/protocol/test_zmx.py::test_restart_rejects[not-live]
 tests/protocol/test_zmx.py::test_restart_rejects[scratch]
 tests/protocol/test_zmx.py::test_restart_rejects[unknown-pane-id]
+tests/protocol/test_zmx.py::test_stream_commands_refuse_before_streaming[job-invalid]
+tests/protocol/test_zmx.py::test_stream_commands_refuse_before_streaming[job-no-id]
+tests/protocol/test_zmx.py::test_stream_commands_refuse_before_streaming[job-unknown]

@@ -16,6 +16,7 @@ pub mod dispatch;
 pub mod error;
 pub mod events;
 pub mod fuzzy;
+pub mod html;
 pub mod hud;
 pub mod interrupt;
 pub mod keystrokes;
@@ -23,6 +24,8 @@ pub mod link_policy;
 pub mod modal;
 pub mod model;
 pub mod osc_background;
+pub mod overlay_capture;
+pub mod overlay_jobs;
 pub mod pane_env;
 pub mod paths;
 pub mod persist;
@@ -41,6 +44,7 @@ pub use commands::notify::{
     BANNERS_OFF_NOTE, NotificationEffect, NotificationPost, PaneRole, identity as notification_identity,
     parse_identity as parse_notification_identity, should_deliver,
 };
+pub use commands::overlay::JobChannel;
 pub use commands::surface::POLL_INTERVAL;
 pub use dispatch::{CommitTimers, Core, CoreConfig, CoreState, Dispatched, Resume, decode_request};
 pub use error::{ControlError, Noun};

@@ -1,16 +1,16 @@
 //! `agtermctl session ...` (`agtermctlKit/SessionCommands.swift` `Session`): the group, and here its lifecycle
 //! subcommands; [`crate::session_io`] drives the terminal, [`crate::session_panes`] arranges its panes,
 //! [`crate::session_meta`] sets metadata, [`crate::session_restore`] pins or replaces what a pane runs and
-//! [`crate::session_background`] sets backgrounds and [`crate::session_hud`] posts the message panel. Each takes its
-//! own options first, then `--target` where it addresses a session, then [`ClientOptions`], the order its help and
-//! usage line list them in. The rest of upstream's group (`overlay`) joins with the task that implements it.
+//! [`crate::session_background`] sets backgrounds, [`crate::session_overlay`] runs overlay programs and pages and
+//! [`crate::session_hud`] posts the message panel. Each takes its own options first, then `--target` where it
+//! addresses a session, then [`ClientOptions`], the order its help and usage line list them in.
 
 use agterm_proto::command::SessionCmd;
 use agterm_proto::{Args, Command, Request};
 
 use crate::{
     BasicOptions, BatchTargetOptions, ClientOptions, RequestCommand, TargetOptions, session_background, session_hud,
-    session_io, session_meta, session_panes, session_restore,
+    session_io, session_meta, session_overlay, session_panes, session_restore,
 };
 
 /// `agtermctl session <subcommand>`.
@@ -56,6 +56,7 @@ impl Session {
             SessionCommand::Seen(command) => command,
             SessionCommand::Search(command) => command,
             SessionCommand::Background(group) => group.command(),
+            SessionCommand::Overlay(group) => group.command(),
             SessionCommand::Hud(group) => group.command(),
         }
     }
@@ -91,6 +92,7 @@ enum SessionCommand {
     Seen(session_meta::Seen),
     Search(session_io::Search),
     Background(session_background::Background),
+    Overlay(session_overlay::Overlay),
     Hud(session_hud::Hud),
 }
 
