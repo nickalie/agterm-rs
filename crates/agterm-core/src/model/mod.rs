@@ -10,6 +10,7 @@ mod focus;
 pub mod naming;
 mod navigation;
 mod outbox;
+mod overlay;
 pub mod pane;
 mod panes;
 mod pending_close;
@@ -31,6 +32,7 @@ pub use background::{BackgroundWatermark, PaneBackgrounds, WatermarkFit, Waterma
 pub use focus::FocusMode;
 pub use navigation::{NewSessionPlacement, SessionNavigation, WorkspaceNavigation};
 pub use outbox::{EventPayload, ModelEvent, Outbox, RecentClosedChange, SaveRequest, WatermarkRemoval};
+pub use overlay::{HudOpening, HudState, OverlayPane, OverlaySlot};
 pub use pane::{PaneLaunch, PaneRestore, SplitAxis, SplitLayout, StatusPane, SurfaceSlot};
 pub use panes::SwapRefusal;
 pub use pending_close::{

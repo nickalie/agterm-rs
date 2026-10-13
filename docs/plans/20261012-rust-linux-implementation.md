@@ -872,16 +872,31 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 
 **Files:**
 - Create: `crates/agterm-core/src/commands/{hud,notify}.rs`, `crates/agterm-gtk/src/{hud,notifications}.rs`
+- ➕ Create: `crates/agterm-core/src/hud/{mod,layout,markdown,tests}.rs`, `crates/agterm-core/src/hud/markdown/tests.rs`,
+  `crates/agterm-core/src/model/overlay.rs` (the session-wide overlay slot Task 20 extends),
+  `crates/agterm-core/src/commands/tests/hud.rs`, `crates/agterm-ctl/src/{session_hud,notify}.rs`,
+  `crates/agterm-gtk/resources/hud/hud.sh` (upstream's painter, embedded and written to `<state>/hud/hud.sh`);
+  Modify: `agterm-host` (`Surface::cell_size`), core `dispatch`, `projection`, `model/{session,store,mod}.rs`,
+  `commands/panes.rs` (a pane focus clears the badge), GTK `split.rs` (the HUD layer and the page geometry report),
+  `deck.rs`, `state.rs`, `surface.rs`, `app.rs`, `ghostty_app.rs` (OSC 9/777); deps `pulldown-cmark`,
+  `unicode-normalization`
 
-- [ ] session.hud.open, update, close (`Hud.swift`, `HudMarkdown.swift`, `ControlDispatcher+Hud.swift`,
+- [x] session.hud.open, update, close (`Hud.swift`, `HudMarkdown.swift`, `ControlDispatcher+Hud.swift`,
       `ControlServer+Hud.swift`); the panel as upstream's: a pty running `agterm/Resources/hud/hud.sh`, auto-hide,
-      ⌘/Ctrl-click links (`Ghostty/HudLinkClick.swift`), per `control-api.md` > Overlay, zoom, dashboard
-- [ ] notify (`Notifications.swift`, `Notifications/NotificationManager.swift`, `notifications.md`) through
-      GNotification over the instance's own dbus (Linux glue)
-- [ ] matching `agtermctl` subcommands (`SessionHudCommands.swift`)
-- [ ] write tests: HUD markdown parsing and state transitions
-- [ ] write tests: notify argument validation
-- [ ] gate: full run; ratchet (`test_hud.py`, `test_notify.py`); HUD-over-overlay tests ⚠️ until Task 20
+      ⌘/Ctrl-click links (`Ghostty/HudLinkClick.swift`), per `control-api.md` > Overlay, zoom, dashboard (the panel
+      is a passive libghostty terminal in a framed layer added once to the page's `PaneStack`; markdown parsed with
+      pulldown-cmark in place of Foundation's parser; cells measured from the live terminal, else pango)
+- [x] notify (`Notifications.swift`, `Notifications/NotificationManager.swift`, `notifications.md`) through
+      GNotification over the instance's own dbus (Linux glue) (terminal OSC 9/777 too, with upstream's focus
+      suppression; banners withdrawn once the badge clears; no notification sound or dock bounce on Linux)
+- [x] matching `agtermctl` subcommands (`SessionHudCommands.swift`)
+- [x] write tests: HUD markdown parsing and state transitions
+- [x] write tests: notify argument validation
+- [x] gate: full run; ratchet (`test_hud.py`, `test_notify.py`); HUD-over-overlay tests ⚠️ until Task 20 (60 new
+      green ids, 392 listed; red until Task 20: `test_hud_holds_the_slot_without_covering_the_session`,
+      `test_hud_and_program_share_one_slot`, `test_page_replaces_a_hud`, `test_hud_refused_over_a_page`,
+      `test_resize_sets_the_hud_width`, `test_surface.py::test_cursor_reads_a_program_overlay_but_not_a_hud`, all
+      on `session.overlay.*`)
 
 ### Task 19: ask and pick
 

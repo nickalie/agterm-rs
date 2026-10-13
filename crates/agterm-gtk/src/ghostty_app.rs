@@ -329,6 +329,13 @@ fn handle_action(target: Target, action: Action) -> bool {
             }
             true
         }
+        Action::DesktopNotification { title, body } => {
+            // the strings are owned copies already; the handlers only post a task
+            if let Some(surface) = surface {
+                surface.desktop_notification(&title, &body);
+            }
+            true
+        }
         Action::StartSearch { needle } => report_search(surface, &SearchReport::Started(needle)),
         Action::EndSearch => report_search(surface, &SearchReport::Ended),
         Action::SearchTotal(total) => report_search(surface, &SearchReport::Total(total)),

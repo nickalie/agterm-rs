@@ -13,7 +13,11 @@
 //!
 //! While the window's dashboard is open the page lays out its member panes at their grid cells instead
 //! ([`PaneView::apply_grid`], cells from [`crate::dashboard::cell_rects`]), shown but view-only, and hides the rest.
+//!
+//! The HUD's layer sits above everything, added once ([`crate::hud`]); the stack places it in the bounds it is scoped
+//! to and reports the page's geometry to the model, which measures a HUD against it (upstream's `hudPaneFrames`).
 
+use agterm_core::hud::{HudPaneFrame, HudPaneFrames};
 use agterm_core::model::pane::{SPLIT_RATIO_DEFAULT, clamp_split_ratio};
 use agterm_core::model::{Session, SplitAxis, StatusPane};
 use agterm_core::zoom::SurfaceId;
@@ -22,6 +26,7 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use uuid::Uuid;
 
+use crate::hud::{HudLayer, HudPlacement, LayerView};
 use crate::state::{self, AppState, Poster};
 use crate::surface::TerminalSurface;
 
@@ -298,7 +303,7 @@ pub fn dragged_ratio(start: f64, offset: f64, length: i32) -> f64 {
 // MARK: - the container widget
 
 /// What [`PaneStack`] allocates: the plan's layout and which child sits where.
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct StackLayout {
     panes: Option<Panes>,
     axis: SplitAxis,
@@ -309,6 +314,13 @@ struct StackLayout {
     drag: DividerDrag,
     /// The dashboard's layout while it is open: the cell index of each member terminal among `count` cells.
     grid: Option<GridCells>,
+    /// The HUD's layer, and where its panel goes while one is up.
+    hud: Option<gtk::Widget>,
+    hud_placement: Option<HudPlacement>,
+    /// Where the page's geometry goes: its session and the main loop.
+    reports: Option<(Uuid, Poster)>,
+    /// The geometry last reported.
+    reported: Option<HudPaneFrames>,
 }
 
 /// A page's terminals placed on the dashboard grid.
@@ -332,18 +344,14 @@ impl StackLayout {
         self.drag.ratio.unwrap_or(self.ratio)
     }
 
-    fn allocate(&self, stack: &gtk::Widget, width: i32, height: i32) {
+    fn allocate(&mut self, stack: &gtk::Widget, width: i32, height: i32) {
         if let Some(grid) = &self.grid {
             allocate_grid(stack, grid, width, height);
             return;
         }
-        let geometry = geometry(
-            self.panes.unwrap_or(Panes::Alone(Slot::Primary)),
-            self.axis,
-            self.ratio(),
-            width,
-            height,
-        );
+        let panes = self.panes.unwrap_or(Panes::Alone(Slot::Primary));
+        let geometry = geometry(panes, self.axis, self.ratio(), width, height);
+        let hud = self.hud_rect(panes, &geometry, width, height);
         let mut child = stack.first_child();
         while let Some(widget) = child {
             let rect = if Some(&widget) == self.primary.as_ref() {
@@ -352,12 +360,66 @@ impl StackLayout {
                 geometry.split
             } else if Some(&widget) == self.divider.as_ref() {
                 geometry.divider.unwrap_or_default()
+            } else if Some(&widget) == self.hud.as_ref() {
+                hud
             } else {
                 Rect::full(width, height)
             };
             widget.size_allocate(&gtk::Allocation::new(rect.x, rect.y, rect.width, rect.height), -1);
             child = widget.next_sibling();
         }
+        self.report(page_frames(panes, &geometry, width, height));
+    }
+
+    /// The HUD panel's rectangle: in its pane while it is scoped to one laid out, else in the whole page.
+    fn hud_rect(&self, panes: Panes, geometry: &Geometry, width: i32, height: i32) -> Rect {
+        let Some(placement) = self.hud_placement else {
+            return Rect::default();
+        };
+        let bounds = match placement.scope {
+            Some(Slot::Primary) if lays_out(panes, Slot::Primary) => geometry.primary,
+            Some(Slot::Split) if lays_out(panes, Slot::Split) => geometry.split,
+            _ => Rect::full(width, height),
+        };
+        placement.style.panel_frame(bounds)
+    }
+
+    /// Posts the page's geometry to the model when it changed.
+    fn report(&mut self, frames: HudPaneFrames) {
+        if self.reported.as_ref() == Some(&frames) {
+            return;
+        }
+        let Some((session, poster)) = self.reports.clone() else {
+            return;
+        };
+        self.reported = Some(frames);
+        state::post(&poster, move |state: &mut AppState| {
+            state.report_hud_frames(session, &frames);
+        });
+    }
+}
+
+/// Whether `panes` lays the pane at `slot` out.
+fn lays_out(panes: Panes, slot: Slot) -> bool {
+    panes == Panes::Both || panes == Panes::Alone(slot)
+}
+
+/// A rectangle as the model's frame.
+fn frame_of(rect: Rect) -> HudPaneFrame {
+    HudPaneFrame {
+        x: f64::from(rect.x),
+        y: f64::from(rect.y),
+        width: f64::from(rect.width),
+        height: f64::from(rect.height),
+    }
+}
+
+/// The page's detail area and the frames of the panes it lays out, by role (upstream's pane anchors).
+fn page_frames(panes: Panes, geometry: &Geometry, width: i32, height: i32) -> HudPaneFrames {
+    HudPaneFrames {
+        left: lays_out(panes, Slot::Primary).then(|| frame_of(geometry.primary)),
+        right: lays_out(panes, Slot::Split).then(|| frame_of(geometry.split)),
+        detail: (width > 0 && height > 0).then(|| frame_of(Rect::full(width, height))),
     }
 }
 
@@ -409,6 +471,7 @@ mod imp {
             layout.split = None;
             layout.divider = None;
             layout.grid = None;
+            layout.hud = None;
         }
     }
 
@@ -418,7 +481,9 @@ mod imp {
         }
 
         fn size_allocate(&self, width: i32, height: i32, _baseline: i32) {
-            self.layout.borrow().allocate(self.obj().upcast_ref(), width, height);
+            self.layout
+                .borrow_mut()
+                .allocate(self.obj().upcast_ref(), width, height);
         }
     }
 }
@@ -457,6 +522,8 @@ pub struct PaneView {
     divider: gtk::Box,
     separator: gtk::Separator,
     panes: Vec<Pane>,
+    /// The HUD's layer, above everything.
+    hud: std::rc::Rc<std::cell::RefCell<HudLayer>>,
     plan: Option<PanePlan>,
     /// The page shows the dashboard's cells ([`PaneView::apply_grid`]).
     in_grid: bool,
@@ -475,11 +542,27 @@ impl PaneView {
         divider.set_parent(&stack);
         stack.layout().divider = Some(divider.clone().upcast());
         connect_divider(&divider, &stack, session, poster);
+        let hud = HudLayer::new();
+        hud.widget().set_parent(&stack);
+        {
+            let mut layout = stack.layout();
+            layout.hud = Some(hud.widget().clone().upcast());
+            layout.reports = Some((session, poster.clone()));
+        }
+        let hud = std::rc::Rc::new(std::cell::RefCell::new(hud));
+        let (weak, layer) = (stack.downgrade(), std::rc::Rc::downgrade(&hud));
+        crate::hud::connect_link_clicks(stack.upcast_ref(), move || {
+            let stack = weak.upgrade()?;
+            let layer = layer.upgrade()?;
+            let layer = layer.try_borrow().ok()?;
+            Some(LayerView::new(stack.upcast_ref(), &layer))
+        });
         let view = Self {
             stack,
             divider,
             separator,
             panes: Vec::new(),
+            hud,
             plan: None,
             in_grid: false,
         };
@@ -498,7 +581,7 @@ impl PaneView {
     pub fn add(&mut self, token: String, terminal: TerminalSurface, scratch: bool) {
         let widget = terminal.widget();
         if scratch {
-            widget.set_parent(&self.stack);
+            widget.insert_before(&self.stack, Some(self.hud.borrow().widget()));
         } else {
             widget.insert_before(&self.stack, Some(&self.divider));
         }
@@ -532,6 +615,24 @@ impl PaneView {
     pub fn teardown(&self) {
         for pane in &self.panes {
             pane.terminal.teardown();
+        }
+        if let Some(terminal) = self.hud.borrow().terminal() {
+            terminal.teardown();
+        }
+    }
+
+    /// The HUD's layer.
+    pub fn hud_mut(&self) -> std::cell::RefMut<'_, HudLayer> {
+        self.hud.borrow_mut()
+    }
+
+    /// Places the HUD's panel (`None`: none is up).
+    pub fn place_hud(&self, placement: Option<HudPlacement>) {
+        let mut layout = self.stack.layout();
+        if layout.hud_placement != placement {
+            layout.hud_placement = placement;
+            drop(layout);
+            self.stack.queue_allocate();
         }
     }
 

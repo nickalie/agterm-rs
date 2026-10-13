@@ -4,7 +4,9 @@
 
 pub(crate) mod background;
 pub(crate) mod dashboard;
+pub(crate) mod hud;
 pub(crate) mod metadata;
+pub(crate) mod notify;
 pub(crate) mod panes;
 pub(crate) mod quick;
 pub(crate) mod restart;

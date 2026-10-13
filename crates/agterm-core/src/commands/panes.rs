@@ -54,25 +54,29 @@ impl Core {
     /// The user moved keyboard focus into the pane carrying `token` (a click): a shown split's focused pane follows it.
     /// See [`crate::model::AppStore::note_pane_focus`]. While the session's window is zoomed into a terminal the report
     /// changes nothing: the zoom gives its terminal the keyboard itself, and that must not move the split's focus
-    /// (upstream's zoom hosts suppress focus reports). Whether it changed; commit afterwards when it did.
+    /// (upstream's zoom hosts suppress focus reports). Zoomed or not, the session was seen: its unseen badge clears
+    /// (upstream's `onFocusChange`/`onClearUnseen`). Whether anything changed; commit afterwards when it did.
     pub fn pane_focused(&mut self, session: Uuid, token: &str) -> bool {
         let zoomed = self
             .library()
             .window_holding_session(session)
             .is_some_and(|window| self.zoom_target(window).is_some());
-        if zoomed {
-            return false;
-        }
         let Some(store) = self.library_mut().store_for_session_mut(session) else {
             return false;
         };
-        match store
+        // focusing a pane means the session was seen: its badge clears, and the frontend withdraws its banners
+        let unseen = store.session(session).is_some_and(|found| found.unseen_count > 0);
+        store.clear_unseen(session);
+        if zoomed {
+            return unseen;
+        }
+        let Some(pane) = store
             .session(session)
             .and_then(|found| found.pane_role_for_token(token))
-        {
-            Some(pane) => store.note_pane_focus(session, pane),
-            None => false,
-        }
+        else {
+            return unseen;
+        };
+        store.note_pane_focus(session, pane) || unseen
     }
 
     /// Lands a pane's cwd or title report on the pane carrying `token` (upstream's `applyPwd`/`applyTitle`, routed by

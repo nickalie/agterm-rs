@@ -139,6 +139,11 @@ pub struct Core {
     pub(crate) dashboards: commands::dashboard::Dashboards,
     /// Every window's auto-follow ([`crate::auto_follow`]).
     pub(crate) auto_follow: crate::auto_follow::AutoFollow,
+    /// The HUD commands' inputs and armed auto-hides ([`commands::hud`]).
+    pub(crate) hud: commands::hud::HudRuntime,
+    /// The desktop notifications commands and terminals asked for, in order, until the frontend takes them
+    /// ([`commands::notify`]).
+    pub(crate) notifications: Vec<commands::notify::NotificationPost>,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -198,6 +203,8 @@ impl Core {
             quick: commands::quick::QuickState::default(),
             dashboards: commands::dashboard::Dashboards::default(),
             auto_follow: crate::auto_follow::AutoFollow::default(),
+            hud: commands::hud::HudRuntime::default(),
+            notifications: Vec::new(),
         }
     }
 
@@ -538,6 +545,10 @@ impl Core {
                 None => Ok(Response::success()),
             },
             Command::Session(SessionCmd::Restart) => result_of(&commands::restart::dispatch(self, request)?),
+            Command::Session(cmd @ (SessionCmd::HudOpen | SessionCmd::HudUpdate | SessionCmd::HudClose)) => {
+                result_of(&commands::hud::dispatch(self, cmd, request)?)
+            }
+            Command::Notify => result_of(&commands::notify::dispatch(self, request)?),
             Command::Session(cmd) => result_of(&commands::session::dispatch(self, cmd, request)?),
             Command::Window(cmd) => result_of(&commands::window::dispatch(self, cmd, request)?),
             Command::Workspace(cmd) => match commands::workspace::dispatch(self, cmd, request)? {
@@ -571,7 +582,6 @@ impl Core {
             | Command::Font(_)
             | Command::Hooks(_)
             | Command::Keymap(_)
-            | Command::Notify
             | Command::Pick(_)
             | Command::Restore(_)
             | Command::Sidebar(_)
@@ -583,7 +593,7 @@ impl Core {
 
 #[cfg(test)]
 mod tests {
-    use agterm_proto::command::{EventsCmd, SessionCmd, WindowCmd, WorkspaceCmd, ZmxCmd};
+    use agterm_proto::command::{EventsCmd, SessionCmd, ThemeCmd, WindowCmd, WorkspaceCmd, ZmxCmd};
     use serde_json::json;
 
     use super::*;
@@ -627,7 +637,7 @@ mod tests {
         let mut core = core();
         for cmd in [
             Command::Session(SessionCmd::OverlayOpen),
-            Command::Notify,
+            Command::Theme(ThemeCmd::List),
             Command::Zmx(ZmxCmd::List),
         ] {
             let response = core.dispatch(&Request::new(cmd));

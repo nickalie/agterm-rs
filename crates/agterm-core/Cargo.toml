@@ -9,11 +9,14 @@ publish.workspace = true
 [dependencies]
 agterm-proto.workspace = true
 agterm-host.workspace = true
+bitflags.workspace = true
+pulldown-cmark.workspace = true
 serde.workspace = true
 # `raw_value`: a lossy optional takes its value as raw JSON text, so even a number past `f64`'s range drops alone.
 serde_json = { workspace = true, features = ["raw_value"] }
 thiserror.workspace = true
 tracing.workspace = true
+unicode-normalization.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

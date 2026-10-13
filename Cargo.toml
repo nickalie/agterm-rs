@@ -21,6 +21,8 @@ glib-unix = "0.22"
 bitflags = "2"
 clap = { version = "4.6", features = ["derive"] }
 libc = "0.2"
+# `default-features = false` drops the `html` renderer and the CLI's `getopts`: the HUD walks the events itself.
+pulldown-cmark = { version = "0.13", default-features = false }
 serde = { version = "1", features = ["derive"] }
 # `preserve_order`: a result built as a `Value` keeps its fields in upstream's order on the wire (the catalog's
 # `fields` order) instead of sorting them.
@@ -32,6 +34,7 @@ tempfile = "3"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 # GTK 4.14 and libadwaita 1.5 are Ubuntu 24.04's, the oldest platform CI builds on.
 gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }

@@ -60,6 +60,10 @@ impl Surface for PaneSurface {
         self.terminal.font_size()
     }
 
+    fn cell_size(&self) -> Option<(f64, f64)> {
+        self.terminal.cell_size()
+    }
+
     fn teardown(self: Box<Self>) {
         self.terminal.teardown();
     }

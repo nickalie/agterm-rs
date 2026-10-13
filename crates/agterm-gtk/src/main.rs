@@ -13,9 +13,11 @@ mod deck;
 mod ghostty_app;
 #[cfg(test)]
 mod gtk_test;
+mod hud;
 mod input;
 mod logging;
 mod main_loop;
+mod notifications;
 mod pane;
 mod quick;
 mod sidebar;

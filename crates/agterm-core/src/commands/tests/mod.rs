@@ -5,6 +5,7 @@ mod auto_follow;
 mod background;
 mod dashboard;
 mod events;
+mod hud;
 mod metadata;
 mod moves;
 mod panes;

@@ -1,16 +1,16 @@
 //! `agtermctl session ...` (`agtermctlKit/SessionCommands.swift` `Session`): the group, and here its lifecycle
 //! subcommands; [`crate::session_io`] drives the terminal, [`crate::session_panes`] arranges its panes,
 //! [`crate::session_meta`] sets metadata, [`crate::session_restore`] pins or replaces what a pane runs and
-//! [`crate::session_background`] sets backgrounds. Each takes its own options first, then `--target` where it
-//! addresses a session, then [`ClientOptions`], the order its help and usage line list them in. The rest of upstream's
-//! group (`overlay`, `hud`) joins with the tasks that implement those commands.
+//! [`crate::session_background`] sets backgrounds and [`crate::session_hud`] posts the message panel. Each takes its
+//! own options first, then `--target` where it addresses a session, then [`ClientOptions`], the order its help and
+//! usage line list them in. The rest of upstream's group (`overlay`) joins with the task that implements it.
 
 use agterm_proto::command::SessionCmd;
 use agterm_proto::{Args, Command, Request};
 
 use crate::{
-    BasicOptions, BatchTargetOptions, ClientOptions, RequestCommand, TargetOptions, session_background, session_io,
-    session_meta, session_panes, session_restore,
+    BasicOptions, BatchTargetOptions, ClientOptions, RequestCommand, TargetOptions, session_background, session_hud,
+    session_io, session_meta, session_panes, session_restore,
 };
 
 /// `agtermctl session <subcommand>`.
@@ -56,6 +56,7 @@ impl Session {
             SessionCommand::Seen(command) => command,
             SessionCommand::Search(command) => command,
             SessionCommand::Background(group) => group.command(),
+            SessionCommand::Hud(group) => group.command(),
         }
     }
 }
@@ -90,6 +91,7 @@ enum SessionCommand {
     Seen(session_meta::Seen),
     Search(session_io::Search),
     Background(session_background::Background),
+    Hud(session_hud::Hud),
 }
 
 /// A request for `cmd` on `target` with `args` (`--window` folded in).
@@ -106,8 +108,16 @@ pub fn session_request(
     }
 }
 
+/// Upstream's `Session.validateSizePercent`: a `--size-percent` is a share of the pane, 1 to 100.
+pub fn validate_size_percent(size_percent: Option<i64>) -> Result<(), String> {
+    match size_percent {
+        Some(percent) if !(1..=100).contains(&percent) => Err("--size-percent must be between 1 and 100".to_owned()),
+        _ => Ok(()),
+    }
+}
+
 /// `Some(true)` for a set flag, absent otherwise: the wire carries a flag only when it is on.
-fn flag(set: bool) -> Option<bool> {
+pub fn flag(set: bool) -> Option<bool> {
     set.then_some(true)
 }
 

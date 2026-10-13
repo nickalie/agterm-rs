@@ -543,6 +543,29 @@ impl AppStore {
         }
     }
 
+    /// Records a delivered notification on a session (upstream's `recordNotificationEvent` plus the manager's badge
+    /// bump): the `notify` event with the effective title (the caller's, else the session's name) and the unseen
+    /// count raised. The effective title; `None` for a session not in the tree, which records nothing.
+    pub fn record_notification(&mut self, id: Uuid, title: &str, body: &str) -> Option<String> {
+        let workspace = self.workspace_for_session(id)?.id();
+        let session = self.session_mut(id)?;
+        let name = session.display_name();
+        let effective = if title.is_empty() {
+            name.clone()
+        } else {
+            title.to_owned()
+        };
+        session.unseen_count += 1;
+        let payload = EventPayload {
+            name: Some(name),
+            title: Some(effective.clone()),
+            body: Some(body.to_owned()),
+            ..EventPayload::default()
+        };
+        self.emit(EventKind::Notify, Some(workspace), Some(id), payload);
+        Some(effective)
+    }
+
     pub(crate) fn record_recency(&mut self) {
         if let Some(id) = self.selected_session_id {
             self.session_recency.push(id);

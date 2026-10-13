@@ -140,11 +140,16 @@ pub fn activate(app: &adw::Application) {
         load_state(&ProcessEnv),
     );
     core.set_reveal_handler(Box::new(reveal_in_file_manager));
+    if let Some(helper) = crate::hud::install_helper(&paths::state_dir(&ProcessEnv)) {
+        core.set_hud_helper(helper);
+    }
+    core.set_cell_estimator(Box::new(crate::hud::estimate_cell));
     let state = Rc::new(RefCell::new(AppState::new(core)));
     let main_loop = Arc::new(GlibMainLoop::attach(&glib::MainContext::default(), Rc::clone(&state)));
     let posting: Arc<dyn MainLoop<AppState>> = Arc::clone(&main_loop) as _;
     let poster = Arc::downgrade(&posting);
     // not a task: no task runs before the shell exists; every open window renders before it is presented
+    crate::notifications::install_actions(app, poster.clone());
     state.borrow_mut().attach(poster, Windows::new(app.clone(), context));
     if let Err(err) = server.start(posting, |state: &mut AppState, request: Request| {
         state.handle_request(&request)

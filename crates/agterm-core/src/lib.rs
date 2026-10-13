@@ -15,6 +15,7 @@ pub mod dashboard;
 pub mod dispatch;
 pub mod error;
 pub mod events;
+pub mod hud;
 pub mod interrupt;
 pub mod keystrokes;
 pub mod link_policy;
@@ -33,6 +34,11 @@ pub mod windows;
 pub mod zoom;
 
 pub use commands::PaneReport;
+pub use commands::hud::{CellEstimator, HudHideTimer, WINDOW_PADDING as HUD_WINDOW_PADDING};
+pub use commands::notify::{
+    BANNERS_OFF_NOTE, NotificationPost, PaneRole, identity as notification_identity,
+    parse_identity as parse_notification_identity, should_deliver,
+};
 pub use commands::surface::POLL_INTERVAL;
 pub use dispatch::{CommitTimers, Core, CoreConfig, CoreState, Dispatched, Resume, decode_request};
 pub use error::{ControlError, Noun};

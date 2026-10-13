@@ -47,6 +47,8 @@ pub struct SurfaceSpec {
     pub command: Option<String>,
     pub env: Vec<(String, String)>,
     pub wait_after_command: bool,
+    /// The point size the terminal starts at; `None` is the config's.
+    pub font_size: Option<f32>,
 }
 
 /// Where the input method is inside a key event (ghostty's GTK runtime tracks the same: input methods differ in the
@@ -79,6 +81,7 @@ type ReportHandler = Box<dyn Fn(&str)>;
 type SearchHandler = Box<dyn Fn(&SearchReport)>;
 type KeystrokeHandler = Box<dyn Fn(StatusKeystroke)>;
 type FocusHandler = Box<dyn Fn()>;
+type NotificationHandler = Box<dyn Fn(&str, &str)>;
 
 struct Inner {
     key: SurfaceKey,
@@ -97,6 +100,8 @@ struct Inner {
     on_open_url: RefCell<Vec<ReportHandler>>,
     on_keystroke: RefCell<Vec<KeystrokeHandler>>,
     on_focus_in: RefCell<Vec<FocusHandler>>,
+    on_created: RefCell<Vec<FocusHandler>>,
+    on_notification: RefCell<Vec<NotificationHandler>>,
     on_exit: RefCell<Option<ExitHandler>>,
     /// The input method is being reset to end a composition this side already committed or dropped: what it emits
     /// meanwhile is ignored (upstream's `committingComposition`).
@@ -181,6 +186,8 @@ impl TerminalSurface {
             on_open_url: RefCell::new(Vec::new()),
             on_keystroke: RefCell::new(Vec::new()),
             on_focus_in: RefCell::new(Vec::new()),
+            on_created: RefCell::new(Vec::new()),
+            on_notification: RefCell::new(Vec::new()),
             on_exit: RefCell::new(None),
             resetting_im: Cell::new(false),
             exit_handled: Cell::new(false),
@@ -246,6 +253,24 @@ impl TerminalSurface {
     /// Adds a handler called each time the area gains keyboard focus, whoever moved it there.
     pub fn connect_focus_in(&self, handler: impl Fn() + 'static) {
         self.inner.on_focus_in.borrow_mut().push(Box::new(handler));
+    }
+
+    /// Adds a handler called once the libghostty surface exists (it then has a grid and a cell).
+    pub fn connect_created(&self, handler: impl Fn() + 'static) {
+        self.inner.on_created.borrow_mut().push(Box::new(handler));
+    }
+
+    /// Adds a handler called with the title and body of each desktop notification the terminal's program posts
+    /// (OSC 9/777, `GHOSTTY_ACTION_DESKTOP_NOTIFICATION`).
+    pub fn connect_notification(&self, handler: impl Fn(&str, &str) + 'static) {
+        self.inner.on_notification.borrow_mut().push(Box::new(handler));
+    }
+
+    /// Hands a desktop notification to the notification handlers.
+    pub fn desktop_notification(&self, title: &str, body: &str) {
+        for handler in self.inner.on_notification.borrow().iter() {
+            handler(title, body);
+        }
     }
 
     /// Called once when the terminal's process ends.
@@ -419,6 +444,7 @@ impl TerminalSurface {
             command: spec.command.as_deref(),
             env: &spec.env,
             wait_after_command: spec.wait_after_command,
+            font_size: spec.font_size,
             ..SurfaceOptions::default()
         };
         match ghostty_app::create_surface(self.inner.key, &options) {
@@ -433,6 +459,9 @@ impl TerminalSurface {
                 self.apply_config_overlay();
                 if !self.inner.deck_visible.get() {
                     self.release_gpu_resources();
+                }
+                for handler in self.inner.on_created.borrow().iter() {
+                    handler();
                 }
             }
             Err(err) => tracing::error!(%err, "could not create the terminal surface"),
@@ -665,6 +694,33 @@ impl TerminalSurface {
     /// The terminal's live font size in points.
     pub fn font_size(&self) -> Option<f64> {
         self.with_surface(Surface::font_size).flatten()
+    }
+
+    /// The cell the terminal draws, width and height in logical pixels (points).
+    pub fn cell_size(&self) -> Option<(f64, f64)> {
+        let scale = f64::from(self.area.scale_factor().max(1));
+        let size = self.with_surface(Surface::size)?;
+        (size.cell_width_px > 0 && size.cell_height_px > 0).then(|| {
+            (
+                f64::from(size.cell_width_px) / scale,
+                f64::from(size.cell_height_px) / scale,
+            )
+        })
+    }
+
+    /// Reports the pointer at (`x`, `y`) in the terminal's own coordinates to a terminal that takes no pointer events
+    /// itself (a passive HUD panel, upstream's `passivePointer`); a negative point takes it away.
+    pub fn passive_pointer(&self, x: f64, y: f64, mods: agterm_ghostty::input::Mods) {
+        self.with_surface(|s| s.mouse_pos(x, y, mods));
+    }
+
+    /// Forwards a primary-button press or release at (`x`, `y`) to a terminal that takes no clicks itself, without
+    /// moving focus (upstream's `passiveClick`): libghostty resolves a link under it and opens it.
+    pub fn passive_click(&self, state: MouseState, x: f64, y: f64, mods: agterm_ghostty::input::Mods) {
+        self.with_surface(|s| {
+            s.mouse_pos(x, y, mods);
+            let _ = s.mouse_button(state, agterm_ghostty::input::MouseButton::Left, mods);
+        });
     }
 
     /// The pid of the terminal's foreground process.

@@ -137,6 +137,7 @@ impl PaneSpec {
             command: self.command.clone(),
             env: self.env(context).into_iter().collect(),
             wait_after_command: self.wait,
+            font_size: None,
         }
     }
 }
@@ -243,10 +244,21 @@ impl Page {
         if sync.zoom.is_none() && session.split.shown && session.split.ratio.is_none() {
             session.split.ratio = Some(SPLIT_RATIO_DEFAULT);
         }
-        match grid {
-            Some(grid) => self.panes.apply_grid(&grid_cells(grid, session), grid.members.len()),
-            None => self.panes.apply(PanePlan::layout(session, sync.zoom), shown),
-        }
+        let plan = if let Some(grid) = grid {
+            self.panes.apply_grid(&grid_cells(grid, session), grid.members.len());
+            None
+        } else {
+            let plan = PanePlan::layout(session, sync.zoom);
+            self.panes.apply(plan.clone(), shown);
+            Some(plan)
+        };
+        let hud = crate::hud::HudContext {
+            window: sync.window,
+            workspace,
+            context: sync.context,
+            poster: sync.poster,
+        };
+        crate::hud::sync_page(&mut self.panes, session, &hud, plan.as_ref(), shown);
         crate::background::sync_page(&self.panes, session);
     }
 
@@ -560,6 +572,7 @@ fn connect_terminal(terminal: &TerminalSurface, session: Uuid, token: &str, post
             }
         });
     });
+    connect_notifications(terminal, session, token, poster);
     let posting = poster.clone();
     let keystroke_token = token.to_owned();
     terminal.connect_keystroke(move |keystroke| {
@@ -570,6 +583,27 @@ fn connect_terminal(terminal: &TerminalSurface, session: Uuid, token: &str, post
             if state.core.clear_status_on_keystroke(session, &token, keystroke) {
                 state.settle();
             }
+        });
+    });
+}
+
+/// Routes the terminal's desktop notifications (OSC 9/777) to the model, with whether this pane held the keyboard of
+/// the active window when it fired, sampled now (upstream's `NotificationManager.notify` suppression).
+fn connect_notifications(terminal: &TerminalSurface, session: Uuid, token: &str, poster: &Poster) {
+    let posting = poster.clone();
+    let token = token.to_owned();
+    let area = terminal.widget().downgrade();
+    terminal.connect_notification(move |title, body| {
+        let focused = area.upgrade().is_some_and(|area| {
+            area.has_focus()
+                && area
+                    .root()
+                    .and_downcast::<gtk::Window>()
+                    .is_some_and(|window| window.is_active())
+        });
+        let (title, body, token) = (title.to_owned(), body.to_owned(), token.clone());
+        state::post(&posting, move |state: &mut AppState| {
+            state.terminal_notification(session, &token, &title, &body, focused);
         });
     });
 }
@@ -946,6 +980,70 @@ mod tests {
         assert!(walk.probe().terminal(&walk.primary).widget().is_focusable());
         window.set_child(None::<&gtk::Widget>);
         window.destroy();
+    }
+
+    #[test]
+    fn the_hud_panel_mounts_in_its_layer_and_goes_with_the_slot() {
+        crate::gtk_test::on_gtk_thread(hud_mounts_in_its_layer);
+    }
+
+    /// A HUD's terminal is mounted into the page's layer, passive; a reopen gives a fresh terminal in the same layer,
+    /// a close drops it, and the layer itself stays the stack's child throughout.
+    fn hud_mounts_in_its_layer() {
+        let mut walk = Walk::split();
+        let dir = tempfile::tempdir().unwrap();
+        walk.core
+            .set_hud_helper(crate::hud::install_helper(dir.path()).unwrap());
+        let open = |walk: &mut Walk, message: &str| {
+            let request = Request {
+                cmd: Command::Session(SessionCmd::HudOpen),
+                target: Some(agterm_core::pane_env::uuid_string(walk.session)),
+                args: Some(Args {
+                    message: Some(message.to_owned()),
+                    ..Args::default()
+                }),
+            };
+            assert!(walk.core.dispatch(&request).ok);
+            walk.settle();
+        };
+        open(&mut walk, "first");
+        let layer = walk.deck.pages[&walk.session].panes.hud_mut().widget().clone();
+        assert_eq!(layer.parent().as_ref(), Some(&walk.stack));
+        let first = walk.deck.pages[&walk.session]
+            .panes
+            .hud_mut()
+            .terminal()
+            .unwrap()
+            .widget()
+            .clone();
+        assert_eq!(first.parent().and_upcast::<gtk::Widget>(), Some(layer.clone().upcast()));
+        assert!(!first.is_focusable() && !first.can_target(), "passive");
+        assert!(
+            walk.probe().terminal(&walk.split).widget().is_focusable(),
+            "the pane keeps the keyboard"
+        );
+
+        open(&mut walk, "second");
+        let second = walk.deck.pages[&walk.session]
+            .panes
+            .hud_mut()
+            .terminal()
+            .unwrap()
+            .widget()
+            .clone();
+        assert_ne!(first, second, "a replacement is a fresh terminal");
+        assert!(first.parent().is_none());
+
+        let close = Request {
+            cmd: Command::Session(SessionCmd::HudClose),
+            target: Some(agterm_core::pane_env::uuid_string(walk.session)),
+            args: None,
+        };
+        assert!(walk.core.dispatch(&close).ok);
+        walk.settle();
+        assert!(walk.deck.pages[&walk.session].panes.hud_mut().terminal().is_none());
+        assert!(second.parent().is_none());
+        assert_eq!(layer.parent().as_ref(), Some(&walk.stack));
     }
 
     /// A session's page in the deck, read by pane token.

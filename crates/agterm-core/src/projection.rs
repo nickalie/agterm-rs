@@ -1,15 +1,16 @@
 //! The `tree` projection of one window's store (upstream's `AppStore.controlTree`, `ControlProjection.swift`).
 //!
 //! Built fresh per request from the model. What the model does not hold yet reads as upstream reports it in that
-//! state: overlays, HUDs, asks, the dashboard, zoom, the quick terminal and live sessions arrive with their command
+//! state: overlays, asks, the dashboard, zoom, the quick terminal and live sessions arrive with their command
 //! groups, and the live foreground-process read with the host seam that answers it.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agterm_proto::AppIdentity;
-use agterm_proto::tree::{ControlSessionNode, ControlSurfaceNode, ControlTree, ControlWorkspaceNode};
+use agterm_proto::tree::{ControlHudNode, ControlSessionNode, ControlSurfaceNode, ControlTree, ControlWorkspaceNode};
 use uuid::Uuid;
 
+use crate::hud::HudSpinner;
 use crate::model::{AgentStatus, AppStore, Session, StatusPane, SurfaceSlot, Workspace};
 use crate::pane_env::uuid_string;
 use crate::persist::AppSettings;
@@ -115,7 +116,42 @@ pub fn session_node(session: &Session, active: bool) -> ControlSessionNode {
     node.scratch_font_size = font_size(&session.scratch_surface);
     apply_split(&mut node, session);
     apply_status(&mut node, session);
+    apply_overlay(&mut node, session);
     node
+}
+
+/// The session-wide slot's read-back: `overlay` and its size for a caller's program, `hud` for a HUD, never both.
+fn apply_overlay(node: &mut ControlSessionNode, session: &Session) {
+    let slot = &session.overlay;
+    node.overlay = slot.program_active();
+    node.overlay_size_percent = slot.size_percent.filter(|_| slot.program_active());
+    node.hud = hud_node(session);
+}
+
+/// The HUD occupying the slot, as upstream's `hudNode`: every effective value, omitted without a HUD.
+fn hud_node(session: &Session) -> Option<ControlHudNode> {
+    let slot = &session.overlay;
+    let hud = slot.hud.as_ref().filter(|_| slot.hud_active())?;
+    let spec = &hud.spec;
+    Some(ControlHudNode {
+        message: spec.message.clone(),
+        detail: spec.detail.clone(),
+        spinner: spec
+            .spinner
+            .map_or(HudSpinner::NONE_NAME, HudSpinner::wire_name)
+            .to_owned(),
+        background_color: spec.background_color.clone(),
+        text_color: spec.text_color.clone(),
+        size_percent: slot.size_percent,
+        height_percent: Some(hud.height_percent),
+        position: spec.position.wire_name().to_owned(),
+        pane: session.hud_target_pane().map(|pane| pane.wire_name().to_owned()),
+        hide_after: spec.effective_hide_after(),
+        markdown: spec.markdown,
+        font_size: spec.font_size,
+        sticky: spec.sticky,
+        frame: spec.frame,
+    })
 }
 
 /// The split read-back, present exactly while the session has a split pane, shown or hidden.

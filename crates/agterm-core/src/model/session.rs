@@ -2,8 +2,8 @@
 //! sidebar, title bar and control read-back project (upstream's `Session`, `AgentStatus.swift`).
 //!
 //! Fields mirror upstream's names (snake case) except where Rust groups them: the split fields live in
-//! [`SplitLayout`], each pane's creation command in a [`PaneLaunch`]. Overlay, HUD, ask and remote-presentation state
-//! joins with the tasks that implement them.
+//! [`SplitLayout`], each pane's creation command in a [`PaneLaunch`], the session-wide overlay slot and its HUD in an
+//! [`OverlaySlot`]. Pane overlay, ask and remote-presentation state joins with the tasks that implement them.
 
 use std::time::SystemTime;
 
@@ -11,9 +11,11 @@ use uuid::Uuid;
 
 use super::background::{BackgroundWatermark, PaneBackgrounds};
 use super::naming::{last_path_component, sanitized, trimmed_or_none};
+use super::overlay::OverlaySlot;
 use super::pane::{PaneLaunch, PaneRestore, SplitLayout, StatusPane, SurfaceSlot};
 use super::search::SearchState;
 use super::status::{StatusKeystroke, StatusReset, StatusShape};
+use crate::hud::HudPaneFrames;
 
 /// A session's agent status, set over the control channel (`session.status`); the sidebar row's glyph reacts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
@@ -243,6 +245,11 @@ pub struct Session {
     pub scratch_surface: SurfaceSlot,
     /// The in-terminal search. Ephemeral.
     pub search: SearchState,
+    /// The session-wide overlay slot and the HUD in it. Ephemeral.
+    pub overlay: OverlaySlot,
+    /// The deck's last non-empty geometry of the session's detail area and panes, which a HUD is measured against
+    /// (upstream's `hudPaneFrames`). Ephemeral.
+    pub hud_frames: HudPaneFrames,
 }
 
 /// The outcome of resolving a command's `--pane-id` and `--pane` pair (upstream's `Session.PaneAddress`).
@@ -306,6 +313,8 @@ impl Session {
             split_surface: SurfaceSlot::default(),
             scratch_surface: SurfaceSlot::default(),
             search: SearchState::default(),
+            overlay: OverlaySlot::default(),
+            hud_frames: HudPaneFrames::default(),
         }
     }
 
@@ -567,8 +576,9 @@ impl Session {
         }
     }
 
-    /// Frees every terminal the session holds.
+    /// Frees every terminal the session holds, the overlay slot's included (its HUD body file goes with it).
     pub fn teardown_surfaces(&mut self) {
+        self.overlay.close();
         self.surface.teardown();
         self.split_surface.teardown();
         self.scratch_surface.teardown();

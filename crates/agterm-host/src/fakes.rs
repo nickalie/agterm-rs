@@ -139,6 +139,7 @@ struct SurfaceState {
     selection: Option<String>,
     cursor_column: Option<u32>,
     foreground_pid: Option<u32>,
+    cell_size: Option<(f64, f64)>,
     typed: Vec<String>,
     actions: Vec<String>,
     promotions: u32,
@@ -224,6 +225,11 @@ impl FakeSurfaceProbe {
     /// Sets the column [`Surface::cursor_column`] reports.
     pub fn set_cursor_column(&self, column: Option<u32>) {
         self.state.borrow_mut().cursor_column = column;
+    }
+
+    /// Sets the cell [`Surface::cell_size`] reports while realized, in points.
+    pub fn set_cell_size(&self, cell: Option<(f64, f64)>) {
+        self.state.borrow_mut().cell_size = cell;
     }
 
     /// Sets the pid [`Surface::foreground_pid`] reports.
@@ -327,6 +333,11 @@ impl Surface for FakeSurface {
 
     fn font_size(&self) -> Option<f64> {
         self.state.borrow().realized.then_some(Self::FONT_SIZE)
+    }
+
+    fn cell_size(&self) -> Option<(f64, f64)> {
+        let state = self.state.borrow();
+        state.cell_size.filter(|_| state.realized)
     }
 
     fn teardown(self: Box<Self>) {

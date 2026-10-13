@@ -22,6 +22,7 @@ use agterm_server::{Reply, ReplySender};
 use uuid::Uuid;
 
 use crate::main_loop::GlibMainLoop;
+use crate::notifications::Notifications;
 use crate::quick::QuickPanel;
 use crate::sidebar::{RowKind, SidebarRow};
 use crate::windows::Windows;
@@ -98,6 +99,8 @@ pub struct AppState {
     quitting: bool,
     /// The app's one quick terminal panel.
     quick: QuickPanel,
+    /// The delivered desktop notifications.
+    notifications: Notifications,
 }
 
 impl AppState {
@@ -109,6 +112,7 @@ impl AppState {
             windows: None,
             quitting: false,
             quick: QuickPanel::default(),
+            notifications: Notifications::default(),
         }
     }
 
@@ -137,6 +141,7 @@ impl AppState {
             arm_commit(&*main_loop, &timers, &APP_TIMERS);
         }
         let sounds = self.core.take_status_sounds();
+        let posts = self.core.take_notifications();
         match self.windows.as_mut() {
             Some(windows) => {
                 windows.sync(&mut self.core, &self.poster);
@@ -144,12 +149,39 @@ impl AppState {
                 for name in &sounds {
                     play_status_sound(name);
                 }
+                self.notifications.deliver(windows.app(), &posts, &self.core);
             }
             // no frontend to ask
             None => drop(self.core.take_window_requests()),
         }
         self.core.clear_pane_focus_requests();
         self.arm_auto_follow();
+        self.arm_hud_timers();
+    }
+
+    /// Arms the HUD auto-hides the core asked for since the last arm; each lands in [`Core::fire_hud_hide`].
+    fn arm_hud_timers(&mut self) {
+        let timers = self.core.take_hud_timers();
+        let Some(main_loop) = self.poster.upgrade() else {
+            return;
+        };
+        for timer in timers {
+            let task = Box::new(move |state: &mut Self| {
+                if !state.quitting && state.core.fire_hud_hide(timer) {
+                    state.settle();
+                }
+            });
+            if main_loop.post_after(timer.delay, task).is_err() {
+                tracing::debug!("hud auto-hide dropped: the loop is closed");
+            }
+        }
+    }
+
+    /// The deck laid session `session`'s page out anew: a live HUD is measured against it again.
+    pub fn report_hud_frames(&mut self, session: Uuid, frames: &agterm_core::hud::HudPaneFrames) {
+        if !self.quitting && self.core.report_hud_frames(session, frames) {
+            self.settle();
+        }
     }
 
     /// Arms the auto-follow fires the core asked for since the last arm; each lands in [`AppState::fire_auto_follow`].

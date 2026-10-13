@@ -5,10 +5,12 @@
 mod client;
 mod dashboard;
 mod events;
+mod notify;
 mod output;
 mod quick;
 mod session;
 mod session_background;
+mod session_hud;
 mod session_io;
 mod session_meta;
 mod session_panes;
@@ -59,6 +61,7 @@ enum Command {
     Dashboard(dashboard::Dashboard),
     Window(window::Window),
     Quick(quick::Quick),
+    Notify(notify::Notify),
     Version(version::Version),
 }
 
@@ -74,6 +77,7 @@ impl Command {
             Self::Dashboard(command) => command.check(),
             Self::Window(group) => group.command().validate(),
             Self::Quick(command) => command.check(),
+            Self::Notify(command) => command.validate(),
             Self::Version(_) => Ok(()),
         }
     }
@@ -88,6 +92,7 @@ impl Command {
             Self::Dashboard(command) => command.execute(env),
             Self::Window(group) => group.command().default_run(env),
             Self::Quick(command) => command.execute(env),
+            Self::Notify(command) => command.default_run(env),
             Self::Version(command) => command.run(env),
         }
     }

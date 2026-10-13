@@ -163,6 +163,7 @@ fn surface_spec(cwd: String, context: &PaneContext) -> SurfaceSpec {
             .into_iter()
             .collect(),
         wait_after_command: false,
+        font_size: None,
     }
 }
 

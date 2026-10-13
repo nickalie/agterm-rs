@@ -445,6 +445,8 @@ SUBCOMMANDS:
   window                  Window commands.
   quick                   Quick terminal: visibility, type into it, read its
                           text.
+  notify                  Post a desktop notification (default: the active
+                          session of the frontmost window).
   version                 Print the version of the app serving the socket.
 
   See 'agtermctl help <subcommand>' for detailed help.
@@ -994,6 +996,8 @@ SUBCOMMANDS:
                           a needle, or step matches).
   background              Set or clear a session's background (image,
                           rasterized text, or solid color).
+  hud                     Post, update, or close a passive message panel over a
+                          session.
 
   See 'agtermctl help session <subcommand>' for detailed help.
 ";
@@ -2354,5 +2358,355 @@ fn dashboard_refusals_are_usage_errors_before_connecting() -> TestResult {
             "{args:?}"
         );
     }
+    Ok(())
+}
+
+// MARK: - hud and notify
+
+const SESSION_HUD_HELP: &str = "\
+OVERVIEW: Post, update, or close a passive message panel over a session.
+
+USAGE: agtermctl session hud <subcommand>
+
+OPTIONS:
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  open (default)          Post a message panel over the session; the session
+                          keeps focus and stays typable.
+  update                  Replace the panel's text in place (no re-spawn, no
+                          blink).
+  close                   Take the message panel down (a program overlay in the
+                          same slot is left alone).
+
+  See 'agtermctl help session hud <subcommand>' for detailed help.
+";
+
+const SESSION_HUD_OPEN_HELP: &str = "\
+OVERVIEW: Post a message panel over the session; the session keeps focus and
+stays typable.
+
+USAGE: agtermctl session hud open [<options>] [<message>]
+
+ARGUMENTS:
+  <message>               Message shown in the panel (omit with --file).
+
+OPTIONS:
+  --file <file>           Read the message from FILE instead of the argument.
+  --markdown              Render the message as markdown, up to 4096
+                          characters. A single newline inside a paragraph is a
+                          soft break; end a line with two spaces or a backslash
+                          to break it. A link is underlined and opens on a
+                          command-click.
+  --font-size <font-size> The panel's own font size in points, 6-72; omit to
+                          use the session's. Fixed for the panel's life.
+  --detail <detail>       Dim second line under the message (e.g. what the
+                          caller is waiting on).
+  --spinner               Animate a spinner glyph in the panel, in the default
+                          style.
+  --spinner-style <spinner-style>
+                          Spinner style: bar, braille, circle, blocks, dot,
+                          none (default: bar). Implies --spinner; none leaves
+                          the panel static.
+  --position <position>   Placement in the pane: top-left, top-center,
+                          top-right, center-left, center, center-right,
+                          bottom-left, bottom-center, bottom-right (default:
+                          center), the same anchors session background takes.
+                          Every anchor off center holds a fixed margin at that
+                          edge. Here top and bottom are also accepted, for
+                          top-center and bottom-center.
+  --background-color <background-color>
+                          Solid background color (#rrggbb) for the panel,
+                          independent of the session's own.
+  --text-color <text-color>
+                          Color (#rrggbb) for the panel's text; omit to keep
+                          the terminal foreground.
+  --size-percent <size-percent>
+                          Set the panel's WIDTH to PERCENT (1-100) of the pane
+                          instead of measuring the message; bounded to 10-80,
+                          or up to 100 with --sticky off center. Height always
+                          follows the message.
+  --sticky                Put the panel flush against the edge or corner
+                          --position names, with no margin; center has no edge
+                          and ignores it. Add --size-percent 100 for a strip
+                          across the pane.
+  --no-frame              Draw no border, no rounded corners and no blank row
+                          above and below the text.
+  --pane <pane>           Anchor inside primary/left/top or split/right/bottom;
+                          omit for the whole session.
+  --pane-id <pane-id>     Stable pane token ($AGTERM_PANE_ID); overrides --pane
+                          when it resolves.
+  --hide-after <hide-after>
+                          Take the panel down by itself after SECONDS,
+                          0...86400; omit or 0 to leave it up until something
+                          closes it. The clock runs whether or not the session
+                          is on screen.
+  --target <target>       Target session/workspace id, unique prefix, or
+                          'active'. (default: active)
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  --window <window>       Target window id, unique prefix, or 'active'
+                          (defaults to the frontmost).
+  -h, --help              Show help information.
+
+";
+
+const NOTIFY_USAGE: &str = "Usage: agtermctl notify <body> [--title <title>] [--target <target>] [--socket <socket>] \
+                            [--json] [--window <window>]\n  See 'agtermctl notify --help' for more information.\n";
+
+const NOTIFY_HELP: &str = "\
+OVERVIEW: Post a desktop notification (default: the active session of the
+frontmost window).
+
+USAGE: agtermctl notify <body> [--title <title>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
+
+ARGUMENTS:
+  <body>                  Notification body.
+
+OPTIONS:
+  --title <title>         Notification title (defaults to the session name).
+  --target <target>       Target session/workspace id, unique prefix, or
+                          'active'. (default: active)
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  --window <window>       Target window id, unique prefix, or 'active'
+                          (defaults to the frontmost).
+  -h, --help              Show help information.
+
+";
+
+#[test]
+fn hud_and_notify_help_in_the_argument_parser_layout() -> TestResult {
+    let dir = short_dir()?;
+    // a lone help flag shows the group; beside anything else it falls through to `open`
+    let cases: [(&[&str], &str); 6] = [
+        (&["session", "hud", "--help"], SESSION_HUD_HELP),
+        (&["help", "session", "hud"], SESSION_HUD_HELP),
+        (&["session", "hud", "open", "--help"], SESSION_HUD_OPEN_HELP),
+        (&["session", "hud", "a message", "--help"], SESSION_HUD_OPEN_HELP),
+        (&["notify", "--help"], NOTIFY_HELP),
+        (&["help", "notify"], NOTIFY_HELP),
+    ];
+    for (args, help) in cases {
+        assert_eq!(
+            outcome(&run(dir.path(), &[], args)?),
+            (Some(0), help.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn hud_and_notify_send_their_request_and_print_ok_or_the_note() -> TestResult {
+    let dir = short_dir()?;
+    let banners_off = "badge updated, but \"Show notification banners\" is off, so no banner was posted";
+    let cases: [(&[&str], serde_json::Value, serde_json::Value, String); 6] = [
+        (
+            &[
+                "session",
+                "hud",
+                "first",
+                "--detail",
+                "waiting",
+                "--position",
+                "top",
+                "--target",
+                "s1",
+            ],
+            serde_json::json!({"cmd": "session.hud.open", "target": "s1",
+                               "args": {"message": "first", "detail": "waiting", "position": "top"}}),
+            serde_json::json!({"id": NEW_ID}),
+            "ok\n".to_owned(),
+        ),
+        (
+            // a message named like a subcommand takes the explicit verb
+            &[
+                "session",
+                "hud",
+                "open",
+                "update",
+                "--spinner-style",
+                "dot",
+                "--no-frame",
+            ],
+            serde_json::json!({"cmd": "session.hud.open", "target": "active",
+                               "args": {"message": "update", "spinner": "dot", "frame": false}}),
+            serde_json::json!({"id": NEW_ID}),
+            "ok\n".to_owned(),
+        ),
+        (
+            &["session", "hud", "update", "second", "--target", "s1", "--window", "w1"],
+            serde_json::json!({"cmd": "session.hud.update", "target": "s1",
+                               "args": {"message": "second", "window": "w1"}}),
+            serde_json::json!({"id": NEW_ID}),
+            "ok\n".to_owned(),
+        ),
+        (
+            &["session", "hud", "close", "--target", "s1"],
+            serde_json::json!({"cmd": "session.hud.close", "target": "s1"}),
+            serde_json::json!({"id": NEW_ID}),
+            "ok\n".to_owned(),
+        ),
+        (
+            &["notify", "cli body", "--title", "cli title", "--target", "s1"],
+            serde_json::json!({"cmd": "notify", "target": "s1",
+                               "args": {"title": "cli title", "body": "cli body"}}),
+            serde_json::json!({"id": NEW_ID}),
+            "ok\n".to_owned(),
+        ),
+        (
+            // banners off: the badge still rose, and the note says no banner was posted
+            &["notify", "done"],
+            serde_json::json!({"cmd": "notify", "target": "active", "args": {"body": "done"}}),
+            serde_json::json!({"id": NEW_ID, "text": banners_off}),
+            format!("{banners_off}\n"),
+        ),
+    ];
+    for (at, (args, expected, result, stdout)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("{at}.sock"));
+        let _server = scripted(&socket, expected, result)?;
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(0), stdout, String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn a_hud_message_read_from_a_file_is_sent_without_its_terminator() -> TestResult {
+    let dir = short_dir()?;
+    let file = dir.path().join("hud.md");
+    fs::write(&file, "# Tasks\r\n\r\n- build\r\n")?;
+    let socket = dir.path().join("agterm.sock");
+    let expected = serde_json::json!({"cmd": "session.hud.update", "target": "active",
+                                      "args": {"message": "# Tasks\n\n- build", "markdown": true}});
+    let _server = scripted(&socket, expected, serde_json::json!({"id": NEW_ID}))?;
+    let file = file.to_str().ok_or("temp path is not UTF-8")?;
+    let args = ["session", "hud", "update", "--file", file, "--markdown"];
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &args)?),
+        (Some(0), "ok\n".to_owned(), String::new())
+    );
+    Ok(())
+}
+
+#[test]
+fn hud_close_json_prints_the_server_line() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("json.sock");
+    let expected = serde_json::json!({"cmd": "session.hud.close", "target": "s1"});
+    let _server = scripted(&socket, expected, serde_json::json!({"id": NEW_ID}))?;
+    let json = run_on(
+        dir.path(),
+        &socket,
+        &["session", "hud", "close", "--target", "s1", "--json"],
+    )?;
+    let line = format!("{{\"ok\":true,\"result\":{{\"id\":\"{NEW_ID}\"}}}}\n");
+    assert_eq!(outcome(&json), (Some(0), line, String::new()));
+    Ok(())
+}
+
+#[test]
+fn a_hud_update_without_a_panel_exits_1_with_the_server_error() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("agterm.sock");
+    let _server = serve(&socket, (), |(), _| Response::failure("no hud").into())?;
+    assert_eq!(
+        outcome(&run_on(
+            dir.path(),
+            &socket,
+            &["session", "hud", "update", "third", "--target", "s1"]
+        )?),
+        (Some(1), String::new(), "error: no hud\n".to_owned())
+    );
+    Ok(())
+}
+
+#[test]
+fn hud_and_notify_refusals_are_usage_errors_before_connecting() -> TestResult {
+    let dir = short_dir()?;
+    // nothing listens here: a connection attempt would exit 1, not 64
+    let socket = dir.path().join("agterm.sock");
+    let open = "Usage: agtermctl session hud open [<options>] [<message>]\n  See 'agtermctl session hud open --help' for \
+                more information.\n";
+    let update = "Usage: agtermctl session hud update [<options>] [<message>]\n  See 'agtermctl session hud update \
+                  --help' for more information.\n";
+    let cases: [(&[&str], &str, &str); 7] = [
+        (
+            &[
+                "session",
+                "hud",
+                "open",
+                "--spinner-style",
+                "wheel",
+                "--target",
+                "s1",
+                "x",
+            ],
+            "spinner style must be one of: bar, braille, circle, blocks, dot, none",
+            open,
+        ),
+        (&["session", "hud"], "provide MESSAGE or --file", open),
+        (
+            &["session", "hud", "x", "--pane", "scratch"],
+            "--pane must be left or right",
+            open,
+        ),
+        (
+            &["session", "hud", "x", "--font-size", "80"],
+            "font-size must be 6...72 points",
+            open,
+        ),
+        (&["session", "hud", "update"], "provide MESSAGE or --file", update),
+        (
+            &["session", "hud", "update", "x", "--position", "middle"],
+            "position must be one of: top-left, top-center, top-right, center-left, center, center-right, \
+             bottom-left, bottom-center, bottom-right, top, bottom",
+            update,
+        ),
+        (
+            &["session", "hud", "update", "x", "--hide-after", "90000"],
+            "hide-after must be 0...86400 seconds",
+            update,
+        ),
+    ];
+    for (args, message, usage) in cases {
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(64), String::new(), format!("Error: {message}\n{usage}")),
+            "{args:?}"
+        );
+    }
+    // update has no creation-only option
+    let (code, _, stderr) = outcome(&run_on(
+        dir.path(),
+        &socket,
+        &["session", "hud", "update", "x", "--background-color", "#112233"],
+    )?);
+    assert_eq!(code, Some(64));
+    assert!(
+        stderr.starts_with("Error: Unknown option '--background-color'\n"),
+        "{stderr}"
+    );
+    // an unreadable file is refused when the run reads it, so the usage line is the root's
+    let missing = dir.path().join("missing.md");
+    let missing = missing.to_str().ok_or("temp path is not UTF-8")?;
+    let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, &["session", "hud", "--file", missing])?);
+    assert_eq!((code, stdout.as_str()), (Some(64), ""));
+    assert!(
+        stderr.starts_with(&format!("Error: cannot read --file {missing}: ")) && stderr.ends_with(ROOT_USAGE),
+        "{stderr}"
+    );
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &["notify", "--target", "s1"])?),
+        (
+            Some(64),
+            String::new(),
+            format!("Error: Missing expected argument '<body>'\nHelp:  <body>  Notification body.\n{NOTIFY_USAGE}")
+        )
+    );
     Ok(())
 }

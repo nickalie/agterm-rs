@@ -104,6 +104,12 @@ pub trait Surface {
     /// The terminal's live font size in points; `None` when not realized (upstream's `currentFontSize`).
     fn font_size(&self) -> Option<f64>;
 
+    /// The cell the terminal draws, width and height in points; `None` when not realized or unknown (upstream's
+    /// `cellSize()`, which sizes a HUD panel).
+    fn cell_size(&self) -> Option<(f64, f64)> {
+        None
+    }
+
     /// Frees the libghostty surface and its shell. Taking the box makes a second teardown impossible.
     fn teardown(self: Box<Self>);
 }
