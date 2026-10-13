@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use agterm_host::{MainLoop, MainLoopClosed, MainTask};
 use gtk::glib;
@@ -13,6 +14,8 @@ pub struct GlibMainLoop<S> {
     /// Kept to drop what is still queued at [`GlibMainLoop::close`]: the context's future, which holds the other
     /// receiver, never runs again once the loop has quit.
     receiver: async_channel::Receiver<MainTask<S>>,
+    /// Where delayed tasks' timers run; they feed the same queue when they fire.
+    context: glib::MainContext,
 }
 
 impl<S: 'static> GlibMainLoop<S> {
@@ -31,7 +34,11 @@ impl<S: 'static> GlibMainLoop<S> {
                 }
             }
         });
-        Self { sender, receiver }
+        Self {
+            sender,
+            receiver,
+            context: context.clone(),
+        }
     }
 
     /// Stops accepting tasks and drops the queued ones unrun, so their waiters see the loop closed. Main thread only.
@@ -44,6 +51,24 @@ impl<S: 'static> GlibMainLoop<S> {
 impl<S: 'static> MainLoop<S> for GlibMainLoop<S> {
     fn post(&self, task: MainTask<S>) -> Result<(), MainLoopClosed> {
         self.sender.try_send(task).map_err(|_| MainLoopClosed)
+    }
+
+    /// A one-shot `GLib` timeout on the loop's context queues the task when it fires; after [`GlibMainLoop::close`]
+    /// the queue refuses it and the task is dropped.
+    fn post_after(&self, delay: Duration, task: MainTask<S>) -> Result<(), MainLoopClosed> {
+        if self.sender.is_closed() {
+            return Err(MainLoopClosed);
+        }
+        let sender = self.sender.clone();
+        let mut task = Some(task);
+        let source = glib::timeout_source_new(delay, None, glib::Priority::DEFAULT, move || {
+            if let Some(task) = task.take() {
+                let _ = sender.try_send(task);
+            }
+            glib::ControlFlow::Break
+        });
+        source.attach(Some(&self.context));
+        Ok(())
     }
 }
 
@@ -85,6 +110,51 @@ mod tests {
         run_until(&context, || state.borrow().len() == 20);
         let expected: Vec<(u32, bool)> = (0..20).map(|n| (n, true)).collect();
         assert_eq!(*state.borrow(), expected);
+    }
+
+    #[test]
+    fn a_delayed_task_runs_after_its_delay_and_after_the_immediate_ones() {
+        let context = glib::MainContext::new();
+        let state = Rc::new(RefCell::new(Vec::<&str>::new()));
+        let main_loop = context
+            .with_thread_default(|| GlibMainLoop::attach(&context, Rc::clone(&state)))
+            .unwrap();
+        let posted = Instant::now();
+        main_loop
+            .post_after(
+                Duration::from_millis(40),
+                Box::new(|seen: &mut Vec<&str>| seen.push("late")),
+            )
+            .unwrap();
+        main_loop
+            .post(Box::new(|seen: &mut Vec<&str>| seen.push("now")))
+            .unwrap();
+        run_until(&context, || state.borrow().len() == 2);
+        assert!(posted.elapsed() >= Duration::from_millis(40));
+        assert_eq!(*state.borrow(), ["now", "late"]);
+    }
+
+    #[test]
+    fn a_delayed_task_of_a_closed_loop_never_runs() {
+        let context = glib::MainContext::new();
+        let state = Rc::new(RefCell::new(0_u32));
+        let main_loop = context
+            .with_thread_default(|| GlibMainLoop::attach(&context, Rc::clone(&state)))
+            .unwrap();
+        main_loop
+            .post_after(Duration::from_millis(10), Box::new(|count: &mut u32| *count += 1))
+            .unwrap();
+        main_loop.close();
+        assert_eq!(
+            main_loop.post_after(Duration::ZERO, Box::new(|count: &mut u32| *count += 1)),
+            Err(MainLoopClosed)
+        );
+        let deadline = Instant::now() + Duration::from_millis(60);
+        while Instant::now() < deadline {
+            context.iteration(false);
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(*state.borrow(), 0);
     }
 
     #[test]

@@ -95,6 +95,31 @@ impl PaneLaunch {
     }
 }
 
+/// A pane's restore state across an app restart (upstream's `restoreCommand`, `foregroundCommand` and their
+/// `pending` twins on `Session`, one set per pane).
+///
+/// The persisted fields round-trip through the snapshot; the pending ones are what an app-bootstrap restore armed
+/// for the surface factory to consume, never serialized, so no save before the surfaces spawn can write a consumed
+/// capture back.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PaneRestore {
+    /// The sticky `session.restore` override: `None` is no override, `""` a plain shell, else that shell line.
+    pub command: Option<String>,
+    /// The pane's foreground argv as of the last clean quit or `restore.capture`.
+    pub foreground: Option<Vec<String>>,
+    /// The override an app-bootstrap restore armed.
+    pub pending_command: Option<String>,
+    /// The captured argv an app-bootstrap restore armed.
+    pub pending_foreground: Option<Vec<String>>,
+}
+
+impl PaneRestore {
+    /// Drops the armed one-shot capture, keeping the sticky override armed.
+    pub fn disarm_foreground(&mut self) {
+        self.pending_foreground = None;
+    }
+}
+
 /// A live terminal slot of a session: empty until the frontend creates the pane's surface, freed exactly once.
 #[derive(Default)]
 pub struct SurfaceSlot(Option<Box<dyn Surface>>);

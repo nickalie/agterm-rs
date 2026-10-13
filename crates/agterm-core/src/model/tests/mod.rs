@@ -4,5 +4,6 @@ mod library;
 mod navigation;
 mod organization;
 mod reselection;
+mod snapshot;
 mod store;
 mod support;

@@ -11,6 +11,7 @@ use std::fmt;
 use std::io;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[cfg(any(test, feature = "fakes"))]
 pub mod fakes;
@@ -40,6 +41,14 @@ pub trait MainLoop<S>: Send + Sync {
     ///
     /// [`MainLoopClosed`] when the loop no longer accepts work; `task` is dropped unrun.
     fn post(&self, task: MainTask<S>) -> Result<(), MainLoopClosed>;
+
+    /// Queues `task` for the main thread once `delay` has passed: a timer on the loop, for debounced work (snapshot
+    /// writes, `tree.changed`). A loop that shuts down first drops the task unrun.
+    ///
+    /// # Errors
+    ///
+    /// [`MainLoopClosed`] when the loop no longer accepts work; `task` is dropped unrun.
+    fn post_after(&self, delay: Duration, task: MainTask<S>) -> Result<(), MainLoopClosed>;
 }
 
 /// How much of a terminal's text [`Surface::read_text`] returns.

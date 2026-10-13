@@ -8,6 +8,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread::{self, JoinHandle, ThreadId};
+use std::time::Duration;
 
 use crate::{
     HostError, KillOutcome, LaunchSpec, LaunchedProcess, LiveSessionRecord, MainLoop, MainLoopClosed, MainTask,
@@ -71,6 +72,20 @@ impl<S: Send + 'static> MainLoop<S> for FakeMainLoop<S> {
         let sender = lock(&self.sender);
         let sender = sender.as_ref().ok_or(MainLoopClosed)?;
         sender.send(task).map_err(|_| MainLoopClosed)
+    }
+
+    /// A timer thread posts the task when the delay is up. A pending timer holds the loop open, so a
+    /// [`FakeMainLoop::shutdown`] waits for it and runs the task.
+    fn post_after(&self, delay: Duration, task: MainTask<S>) -> Result<(), MainLoopClosed> {
+        let sender = lock(&self.sender).as_ref().ok_or(MainLoopClosed)?.clone();
+        thread::Builder::new()
+            .name("fake-main-loop-timer".to_owned())
+            .spawn(move || {
+                thread::sleep(delay);
+                let _ = sender.send(task);
+            })
+            .map(drop)
+            .map_err(|_| MainLoopClosed)
     }
 }
 
@@ -410,10 +425,35 @@ mod tests {
     }
 
     #[test]
+    fn main_loop_runs_a_delayed_task_after_its_delay() {
+        let main_loop = FakeMainLoop::spawn(Vec::<&str>::new()).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let posted = std::time::Instant::now();
+        main_loop
+            .post_after(
+                Duration::from_millis(50),
+                Box::new(move |state: &mut Vec<&str>| {
+                    state.push("late");
+                    tx.send(posted.elapsed()).unwrap();
+                }),
+            )
+            .unwrap();
+        main_loop
+            .post(Box::new(|state: &mut Vec<&str>| state.push("now")))
+            .unwrap();
+        assert!(rx.recv().unwrap() >= Duration::from_millis(50));
+        assert_eq!(main_loop.shutdown(), Some(vec!["now", "late"]));
+    }
+
+    #[test]
     fn main_loop_refuses_work_after_shutdown() {
         let main_loop = FakeMainLoop::spawn(0_u8).unwrap();
         assert_eq!(main_loop.shutdown(), Some(0));
         assert_eq!(main_loop.post(Box::new(|_| {})), Err(MainLoopClosed));
+        assert_eq!(
+            main_loop.post_after(Duration::ZERO, Box::new(|_| {})),
+            Err(MainLoopClosed)
+        );
         assert_eq!(main_loop.shutdown(), None);
     }
 

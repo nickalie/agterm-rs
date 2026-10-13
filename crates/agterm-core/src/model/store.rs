@@ -335,6 +335,35 @@ impl AppStore {
         self.outbox.request_save(SaveRequest::Debounced);
     }
 
+    pub(crate) fn request_save(&mut self, request: SaveRequest) {
+        self.outbox.request_save(request);
+    }
+
+    /// Every session, for the restore paths' per-session repairs.
+    pub(crate) fn sessions_mut(&mut self) -> impl Iterator<Item = &mut Session> {
+        self.workspaces
+            .iter_mut()
+            .flat_map(|workspace| workspace.sessions.iter_mut())
+    }
+
+    /// Emits `session.created` for every session, as a window opened mid-run announces the sessions it brings back.
+    pub(crate) fn announce_sessions(&mut self) {
+        let created: Vec<(Uuid, Uuid)> = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| {
+                workspace
+                    .sessions
+                    .iter()
+                    .map(move |session| (session.id(), workspace.id()))
+            })
+            .collect();
+        for (session, workspace) in created {
+            self.emit_session_created(session, workspace);
+        }
+        self.schedule_tree_changed();
+    }
+
     pub(crate) fn emit(
         &mut self,
         kind: EventKind,

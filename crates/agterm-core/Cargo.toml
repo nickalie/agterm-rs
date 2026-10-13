@@ -12,10 +12,12 @@ agterm-host.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 agterm-host = { workspace = true, features = ["fakes"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -8,6 +8,7 @@ mod app;
 mod clipboard;
 mod ghostty_app;
 mod input;
+mod logging;
 mod main_loop;
 mod signals;
 mod surface;
@@ -18,9 +19,6 @@ use std::ffi::OsString;
 use adw::prelude::*;
 use agterm_core::paths::ProcessEnv;
 use gtk::glib;
-use tracing_subscriber::EnvFilter;
-
-const LOG_ENV: &str = "AGTERM_LOG";
 
 /// GDK's switch that keeps GL areas on desktop OpenGL, and the flag to add, for a GTK minor version: libghostty
 /// renders through desktop GL only, and GDK creates every area's context to share the display's, so a display that
@@ -76,20 +74,12 @@ impl GlEnvRestore {
     }
 }
 
-fn init_tracing() {
-    let filter = EnvFilter::try_from_env(LOG_ENV).unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .init();
-}
-
 fn main() -> glib::ExitCode {
     // SAFETY: first thing in main, while the process has one thread.
     let gl_env = unsafe { GlEnvRestore::prefer_desktop_gl() };
     // SAFETY: as above.
     unsafe { ghostty_app::export_resources_dir() };
-    init_tracing();
+    logging::init(&ProcessEnv);
 
     let app = adw::Application::builder()
         .application_id(app::app_id(&ProcessEnv))

@@ -9,6 +9,7 @@ pub mod error;
 pub mod model;
 pub mod pane_env;
 pub mod paths;
+pub mod persist;
 
 pub use dispatch::{Core, CoreConfig, decode_request};
 pub use error::{ControlError, Noun};

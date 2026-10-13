@@ -9,8 +9,9 @@ use std::time::SystemTime;
 
 use uuid::Uuid;
 
+use super::background::{BackgroundWatermark, PaneBackgrounds};
 use super::naming::{last_path_component, sanitized, trimmed_or_none};
-use super::pane::{PaneLaunch, SplitLayout, StatusPane, SurfaceSlot};
+use super::pane::{PaneLaunch, PaneRestore, SplitLayout, StatusPane, SurfaceSlot};
 
 /// A session's agent status, set over the control channel (`session.status`); the sidebar row's glyph reacts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
@@ -84,6 +85,33 @@ impl AgentIndicator {
     }
 }
 
+/// The most UTF-8 bytes a session context may hold (upstream's `Session.contextByteLimit`).
+pub const CONTEXT_BYTE_LIMIT: usize = 256;
+
+/// Validates a session context (upstream's `Session.validateContext`): trimmed, non-empty, at most
+/// [`CONTEXT_BYTE_LIMIT`] bytes, and no control character or line or paragraph separator anywhere in the raw value,
+/// so a trailing newline is refused rather than trimmed away.
+///
+/// # Errors
+///
+/// Upstream's message for the first rule broken.
+pub fn validate_context(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("context must not be empty (use --clear to remove it)".to_owned());
+    }
+    if trimmed.len() > CONTEXT_BYTE_LIMIT {
+        return Err(format!("context must be at most {CONTEXT_BYTE_LIMIT} UTF-8 bytes"));
+    }
+    if raw
+        .chars()
+        .any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}')
+    {
+        return Err("context must not contain control characters or line breaks".to_owned());
+    }
+    Ok(trimmed.to_owned())
+}
+
 /// One session. Its id is stable for its life and across a relaunch; its pane identities name the panes' processes
 /// (and their live-session daemons) and follow a pane through a swap or a promotion.
 #[derive(Debug)]
@@ -134,6 +162,14 @@ pub struct Session {
     pub was_restored: bool,
     /// Whether the scratch terminal is shown. Ephemeral.
     pub scratch_active: bool,
+    /// The session's background; `None` is none. Persisted.
+    pub background_watermark: Option<BackgroundWatermark>,
+    /// Per-pane overrides of the background; the scratch's is never persisted.
+    pub pane_backgrounds: PaneBackgrounds,
+    /// The primary pane's restore state.
+    pub restore: PaneRestore,
+    /// The split pane's restore state, which a swap moves with the pane.
+    pub split_restore: PaneRestore,
     /// The primary pane's terminal, created lazily by the frontend on first display.
     pub surface: SurfaceSlot,
     /// The split pane's terminal, created on the first split and kept while the split is hidden; freed when the split
@@ -183,6 +219,10 @@ impl Session {
             font_size: None,
             was_restored: false,
             scratch_active: false,
+            background_watermark: None,
+            pane_backgrounds: PaneBackgrounds::default(),
+            restore: PaneRestore::default(),
+            split_restore: PaneRestore::default(),
             surface: SurfaceSlot::default(),
             split_surface: SurfaceSlot::default(),
         }
@@ -428,6 +468,19 @@ mod tests {
         assert_eq!(s.effective_context(), Some("origin"));
         s.context = Some("local".to_owned());
         assert_eq!(s.effective_context(), Some("local"));
+    }
+
+    #[test]
+    fn context_validation_follows_upstreams_rules() {
+        assert_eq!(validate_context("  PR #517  "), Ok("PR #517".to_owned()));
+        for invalid in ["", "   ", "PR\n517", "PR\u{2028}517", "PR\t517", "PR517\n"] {
+            assert!(validate_context(invalid).is_err(), "{invalid:?}");
+        }
+        assert_eq!(
+            validate_context(&"a".repeat(CONTEXT_BYTE_LIMIT + 1)),
+            Err("context must be at most 256 UTF-8 bytes".to_owned())
+        );
+        assert!(validate_context(&"a".repeat(CONTEXT_BYTE_LIMIT)).is_ok());
     }
 
     #[test]

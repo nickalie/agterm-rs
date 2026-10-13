@@ -1,0 +1,78 @@
+{
+  "focusedWorkspaceIDs" : [
+    "1D000000-0000-4000-8000-000000000001"
+  ],
+  "focusEnabled" : true,
+  "selectedSessionID" : "5E000000-0000-4000-8000-000000000002",
+  "sessionRecency" : [
+    "5E000000-0000-4000-8000-000000000002",
+    "5E000000-0000-4000-8000-000000000001"
+  ],
+  "sidebarMode" : "tree",
+  "sidebarVisible" : true,
+  "sidebarWidth" : 260,
+  "version" : 1,
+  "workspaces" : [
+    {
+      "id" : "1D000000-0000-4000-8000-000000000001",
+      "name" : "work",
+      "sessions" : [
+        {
+          "backgroundWatermark" : {
+            "colorHex" : "#FF8800",
+            "fit" : "cover",
+            "kind" : "text",
+            "opacity" : 0.25,
+            "position" : "bottom-right",
+            "repeats" : false,
+            "text" : "PROD"
+          },
+          "commandWait" : true,
+          "context" : "PR #517: restore reap ordering",
+          "customName" : "build",
+          "cwd" : "\/home\/user\/dev\/agterm",
+          "flagged" : true,
+          "fontSize" : 14,
+          "hasSplit" : true,
+          "id" : "5E000000-0000-4000-8000-000000000001",
+          "initialCommand" : "make test",
+          "isSplit" : true,
+          "paneBackgrounds" : {
+            "left" : {
+              "colorHex" : "#101010",
+              "kind" : "color"
+            },
+            "right" : {
+              "imagePath" : "\/home\/user\/bg.png",
+              "kind" : "image"
+            }
+          },
+          "paneIdentity" : "9A000000-0000-4000-8000-000000000001",
+          "restoreCommand" : "claude --resume abc",
+          "splitAxis" : "horizontal",
+          "splitCommandWait" : true,
+          "splitCwd" : "\/var\/log",
+          "splitInitialCommand" : "tail -f \/var\/log\/syslog",
+          "splitPaneIdentity" : "9A000000-0000-4000-8000-000000000002",
+          "splitRatio" : 0.6,
+          "splitRestoreCommand" : ""
+        },
+        {
+          "cwd" : "\/tmp",
+          "flagged" : false,
+          "id" : "5E000000-0000-4000-8000-000000000002",
+          "isSplit" : false,
+          "paneIdentity" : "9A000000-0000-4000-8000-000000000003"
+        }
+      ]
+    },
+    {
+      "collapsed" : true,
+      "id" : "1D000000-0000-4000-8000-000000000002",
+      "name" : "personal",
+      "sessions" : [
+
+      ]
+    }
+  ]
+}

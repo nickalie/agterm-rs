@@ -1,0 +1,23 @@
+{
+  "attentionButtonEnabled" : true,
+  "autoFollowAttention" : "s30",
+  "backgroundBlur" : 20,
+  "backgroundOpacity" : 0.85,
+  "configDirectory" : "\/home\/user\/.config\/agterm",
+  "cursorStyle" : "bar",
+  "darkTheme" : "Adwaita Dark",
+  "dockBounce" : "once",
+  "followSystemAppearance" : true,
+  "fontFamily" : "JetBrains Mono",
+  "fontSize" : 13.5,
+  "hiddenInterfaceElements" : [
+    "split"
+  ],
+  "inactivePaneMuteStrength" : 7,
+  "newSessionDirectory" : "currentSession",
+  "restoreMode" : "rerun",
+  "sidebarFontSize" : 14,
+  "theme" : "agterm",
+  "toolbarMode" : "normal",
+  "welcomeShown" : true
+}

@@ -1,0 +1,11 @@
+{
+  "frontmost" : "7C33CCCC-3333-4333-8333-00000000000C",
+  "version" : 1,
+  "windows" : [
+    {
+      "id" : "7C33CCCC-3333-4333-8333-00000000000C",
+      "isOpen" : true,
+      "name" : "window 1"
+    }
+  ]
+}

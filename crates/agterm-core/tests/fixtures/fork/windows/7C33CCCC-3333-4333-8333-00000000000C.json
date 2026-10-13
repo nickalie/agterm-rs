@@ -1,0 +1,36 @@
+{
+  "focusedWorkspaceID" : "1D000000-0000-4000-8000-0000000000F1",
+  "selectedSessionID" : "5E000000-0000-4000-8000-0000000000F2",
+  "sidebarVisible" : true,
+  "sidebarWidth" : 240.5,
+  "version" : 1,
+  "workspaces" : [
+    {
+      "id" : "1D000000-0000-4000-8000-0000000000F1",
+      "name" : "linux",
+      "sessions" : [
+        {
+          "customName" : "editor",
+          "cwd" : "\/home\/user\/src",
+          "id" : "5E000000-0000-4000-8000-0000000000F1",
+          "isSplit" : true,
+          "splitCwd" : "\/home\/user"
+        },
+        {
+          "cwd" : "\/home\/user",
+          "id" : "5E000000-0000-4000-8000-0000000000F2"
+        }
+      ]
+    },
+    {
+      "id" : "1D000000-0000-4000-8000-0000000000F2",
+      "name" : "other",
+      "sessions" : [
+        {
+          "cwd" : "\/",
+          "id" : "5E000000-0000-4000-8000-0000000000F3"
+        }
+      ]
+    }
+  ]
+}

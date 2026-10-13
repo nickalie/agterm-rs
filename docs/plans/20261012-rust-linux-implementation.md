@@ -576,19 +576,34 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 - Create: `crates/agterm-core/tests/fixtures/` (snapshots and settings in upstream's format, plus files the
   installed fork wrote, for the replacement)
 - ➕ Modify: `crates/agterm-gtk/src/main.rs` (the log file under the state dir)
+- ➕ Create: `crates/agterm-core/src/persist/{json,library}.rs` (Foundation's pretty, key-sorted JSON and atomic
+  write; the library's bootstrap, loads and saves), `crates/agterm-core/src/model/{snapshot,background}.rs` (the
+  model ↔ snapshot boundary; `BackgroundWatermark`/`PaneBackgrounds`), `crates/agterm-core/src/model/tests/snapshot.rs`,
+  `crates/agterm-core/tests/persistence.rs`, `crates/agterm-gtk/src/logging.rs`
+- ➕ Modify: `crates/agterm-host/src/{lib,fakes}.rs` and `crates/agterm-gtk/src/main_loop.rs` (`MainLoop::post_after`,
+  the timer the debounced save arms), `crates/agterm-core/src/model/{session,pane,store}.rs` (per-pane
+  `PaneRestore`, backgrounds, `validate_context`)
 
-- [ ] snapshot JSON identical to `Snapshot.swift`: `windows.json` index + `windows/<id>.json`, migration and recovery
+- [x] snapshot JSON identical to `Snapshot.swift`: `windows.json` index + `windows/<id>.json`, migration and recovery
       (legacy, corrupt, missing) as `WindowLibrary` init; debounced save through `MainLoop`; no save on a cwd report
-- [ ] `settings.json` read/write as `SettingsStore.swift`/`AppSettings.swift`, including seeded settings from the
-      harness
-- [ ] write tests: load fixtures in upstream's format (`SnapshotRoundTripTests`, `PersistenceTests`) and ones the
-      installed fork wrote; save → load round-trip is lossless
-- [ ] write tests: corrupt index, missing window file, unknown fields handled as upstream does
-- [ ] ➕ logging to the state dir, as Solution Overview promises: `tracing` today writes to stderr only, at the level
+      (written as Foundation's `[.prettyPrinted, .sortedKeys]` output, ids upper case; the model's outbox is drained
+      by `LibraryPersistence::commit`, debounced saves armed with `MainLoop::post_after`; wiring it into `Core` and
+      the GTK app is Task 11's)
+- [x] `settings.json` read/write as `SettingsStore.swift`/`AppSettings.swift`, including seeded settings from the
+      harness (accessors whose consumers come later, e.g. the ghostty config lines, join with them)
+- [x] write tests: load fixtures in upstream's format (`SnapshotRoundTripTests`, `PersistenceTests`) and ones the
+      installed fork wrote; save → load round-trip is lossless (fixtures hand-written from upstream's code; the
+      fork keeps upstream's `agtermCore` persistence code verbatim, so its files are the same format plus older
+      builds' legacy keys and the fork-only `sessionNameFromTerminalTitle` setting)
+- [x] write tests: corrupt index, missing window file, unknown fields handled as upstream does
+- [x] ➕ logging to the state dir, as Solution Overview promises: `tracing` today writes to stderr only, at the level
       from `AGTERM_LOG` (`crates/agterm-gtk/src/main.rs`). Add a log file under the resolved state dir (rotation
       and name settled against upstream's and the fork's practice), keep stderr, which the harness captures as the
       instance log `conformance/tools/ghostty_probe.py` reads, and test the file appears under `AGTERM_STATE_DIR`
-- [ ] gate: full run; ratchet; must pass before Task 10
+      (`<state>/agterm.log`, appended, owner-only, no symlink follow, as upstream's `session-host.log`; moved to
+      `agterm.log.1` at startup past 8 MiB)
+- [x] gate: full run; ratchet; must pass before Task 10 (ratchet holds, 14 green as before: persistence is not
+      wired into the app until Task 11)
 
 ### Task 10: Tree projection and target resolution
 

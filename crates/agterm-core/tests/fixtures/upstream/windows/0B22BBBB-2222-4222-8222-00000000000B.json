@@ -1,0 +1,32 @@
+{
+  "selectedSessionID" : "5E000000-0000-4000-8000-000000000003",
+  "sessionRecency" : [
+    "5E000000-0000-4000-8000-000000000003"
+  ],
+  "sidebarMode" : "flagged",
+  "sidebarVisible" : false,
+  "sidebarWidth" : 220,
+  "version" : 1,
+  "workspaces" : [
+    {
+      "id" : "1D000000-0000-4000-8000-000000000003",
+      "name" : "ops",
+      "sessions" : [
+        {
+          "cwd" : "\/srv",
+          "flagged" : true,
+          "fontSize" : 18,
+          "foregroundCommand" : [
+            "ssh",
+            "prod",
+            "-p",
+            "22"
+          ],
+          "id" : "5E000000-0000-4000-8000-000000000003",
+          "isSplit" : false,
+          "paneIdentity" : "9A000000-0000-4000-8000-000000000004"
+        }
+      ]
+    }
+  ]
+}

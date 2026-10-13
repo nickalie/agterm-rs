@@ -1,0 +1,16 @@
+{
+  "frontmost" : "0A11AAAA-1111-4111-8111-00000000000A",
+  "version" : 1,
+  "windows" : [
+    {
+      "id" : "0A11AAAA-1111-4111-8111-00000000000A",
+      "isOpen" : true,
+      "name" : "window 1"
+    },
+    {
+      "id" : "0B22BBBB-2222-4222-8222-00000000000B",
+      "isOpen" : false,
+      "name" : "servers"
+    }
+  ]
+}
