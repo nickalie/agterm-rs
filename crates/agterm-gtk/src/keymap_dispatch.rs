@@ -6,17 +6,22 @@
 //! no modifier, or, on a layout that cannot type ASCII, by the Latin key at that physical position, as upstream's
 //! `chordKey` resolves per layout). The custom-command matcher sees it first (custom commands and the `map`
 //! alternatives the menu cannot carry, leaders timing out after 1.5 s, a `--repeat` tail live until 0.5 s after its
-//! release); an unmatched chord, unless it ended a half-typed leader, then goes to the built-in menu chords. Matched
-//! chords are consumed, as are their autorepeats and releases; the action itself runs as a main-loop task. A focused
-//! text field (an inline rename, a picker's search) keeps every key.
+//! release); an unmatched chord then goes to the built-in menu chords, as the menu's key-equivalent pass takes it
+//! upstream, except `toggle_fullscreen`'s after a half-typed leader (upstream's monitor matches that one itself).
+//! Matched chords are consumed, as are their autorepeats and releases; the action itself runs as a main-loop task. A
+//! focused text field (an inline rename, a picker's search) and a window's open dialog keep every key.
+//!
+//! GTK flags no autorepeat, so a consumed key's next press reads as its autorepeat until its release; a release that
+//! lands outside agterm never arrives, so when no agterm window holds the keyboard any more the consumed keys are
+//! forgotten and an open repeat window closes (upstream's fresh-press ownership and `closeRepeatWindow`).
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+use adw::prelude::*;
 use agterm_core::Core;
 use agterm_core::keymap::{BuiltinAction, Chord, CustomCommand, CustomCommandEngine, EngineOutcome, Modifiers};
-use gtk::prelude::*;
 use gtk::{gdk, glib};
 use uuid::Uuid;
 
@@ -26,6 +31,9 @@ use crate::state::{self, AppState, Poster};
 const LEADER_TIMEOUT: Duration = Duration::from_millis(1500);
 /// How long a `--repeat` sequence's prefix stays live after its tail is released (tmux's `repeat-time`).
 const REPEAT_TIMEOUT: Duration = Duration::from_millis(500);
+/// How long after a window loses the keyboard the app is checked for another agterm window holding it: a switch
+/// between agterm windows deactivates one before activating the other.
+const LEAVE_CHECK_DELAY: Duration = Duration::from_millis(150);
 
 /// Where a key controller sits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +66,11 @@ struct Router {
     poster: Option<Poster>,
     /// Whether the leader and repeat timeouts are armed on the main loop (off in unit tests, which run none).
     live_timers: bool,
+    /// The windows carrying the monitor.
+    windows: Vec<glib::WeakRef<gtk::Window>>,
+    /// What fired, in order, for the unit tests (which post nothing).
+    #[cfg(test)]
+    fired: Vec<Fired>,
 }
 
 thread_local! {
@@ -92,7 +105,7 @@ pub fn install(window: &impl IsA<gtk::Window>, origin: KeyOrigin) {
         let Some(window) = weak.upgrade() else {
             return glib::Propagation::Proceed;
         };
-        if focus_is_text(&window) {
+        if focus_is_text(&window) || presents_dialog(&window) {
             ROUTER.with_borrow_mut(Router::reset_if_live);
             return glib::Propagation::Proceed;
         }
@@ -108,6 +121,17 @@ pub fn install(window: &impl IsA<gtk::Window>, origin: KeyOrigin) {
         ROUTER.with_borrow_mut(|router| router.release(keycode));
     });
     window.as_ref().add_controller(keys);
+    ROUTER.with_borrow_mut(|router| {
+        router.windows.retain(|window| window.upgrade().is_some());
+        router.windows.push(window.as_ref().downgrade());
+    });
+    window.as_ref().connect_is_active_notify(|window| {
+        if !window.is_active() {
+            glib::timeout_add_local_once(LEAVE_CHECK_DELAY, || {
+                ROUTER.with_borrow_mut(Router::check_keyboard_left);
+            });
+        }
+    });
 }
 
 impl Router {
@@ -167,13 +191,13 @@ impl Router {
             }
             EngineOutcome::Unmatched => {
                 self.cancel_timer();
-                if was_armed {
-                    return false;
-                }
                 // the menu's key equivalents: consumed even when the item is disabled, as a menu consumes its own
                 let Some(action) = self.menu.get(chord).copied() else {
                     return false;
                 };
+                if was_armed && action == BuiltinAction::ToggleFullscreen {
+                    return false;
+                }
                 self.fire(origin, Fired::Builtin(action));
                 true
             }
@@ -196,9 +220,31 @@ impl Router {
         self.held_repeat = repeating.then_some(keycode);
     }
 
-    fn fire(&self, origin: KeyOrigin, fired: Fired) {
+    fn fire(&mut self, origin: KeyOrigin, fired: Fired) {
+        #[cfg(test)]
+        self.fired.push(fired.clone());
         let Some(poster) = self.poster.as_ref() else { return };
         state::post(poster, move |state: &mut AppState| state.keymap_fired(origin, fired));
+    }
+
+    fn check_keyboard_left(&mut self) {
+        let held = self
+            .windows
+            .iter()
+            .any(|window| window.upgrade().is_some_and(|window| window.is_active()));
+        if !held {
+            self.keyboard_left();
+        }
+    }
+
+    /// No agterm window holds the keyboard: releases now land elsewhere, so the consumed keys are forgotten and a
+    /// repeat window closes; a half-typed leader keeps its own timeout.
+    fn keyboard_left(&mut self) {
+        self.consumed.clear();
+        self.held_repeat = None;
+        if self.engine.as_ref().is_some_and(CustomCommandEngine::is_repeating) {
+            self.reset();
+        }
     }
 
     fn reset_if_live(&mut self) {
@@ -246,6 +292,13 @@ impl Router {
 fn focus_is_text(window: &gtk::Window) -> bool {
     gtk::prelude::GtkWindowExt::focus(window)
         .is_some_and(|widget| widget.is::<gtk::Text>() || widget.is::<gtk::TextView>() || widget.is::<gtk::Editable>())
+}
+
+/// Whether `window` presents an in-window dialog (a confirmation, a prompt), which owns the keyboard.
+fn presents_dialog(window: &gtk::Window) -> bool {
+    window
+        .downcast_ref::<adw::ApplicationWindow>()
+        .is_some_and(|window| window.visible_dialog().is_some())
 }
 
 /// The chord a press spells, `None` for a bare modifier or a key with no usable base.
@@ -438,16 +491,78 @@ mod tests {
         }
     }
 
+    fn fired_names(router: &Router) -> Vec<String> {
+        router
+            .fired
+            .iter()
+            .map(|fired| match fired {
+                Fired::Command(command) => command.name.clone(),
+                Fired::Builtin(action) => action.name().to_owned(),
+            })
+            .collect()
+    }
+
     #[test]
     fn menu_chords_and_commands_are_consumed_and_others_pass() {
         let mut router = router("command \"x\" ctrl+shift+b true\n");
         assert!(press(&mut router, 56, "ctrl+shift+b"));
         assert!(press(&mut router, 28, "ctrl+shift+t"));
         assert!(!press(&mut router, 38, "a"));
-        // an autorepeat of a consumed key stays consumed; its release frees it
-        assert!(press(&mut router, 28, "ctrl+shift+t"));
+        assert_eq!(fired_names(&router), ["x", "new_session"]);
         router.release(28);
-        assert!(router.consumed.is_empty() || !router.consumed.contains(&28));
+        assert!(!router.consumed.contains(&28));
+    }
+
+    #[test]
+    fn an_autorepeat_of_a_leader_prefix_is_swallowed_without_rearming() {
+        let mut router = router("command \"g\" ctrl+a>g true\n");
+        assert!(press(&mut router, 38, "ctrl+a"));
+        assert!(press(&mut router, 38, "ctrl+a"));
+        assert!(router.fired.is_empty());
+        assert!(router.engine.as_ref().is_some_and(CustomCommandEngine::is_armed));
+        assert!(press(&mut router, 42, "g"));
+        assert_eq!(fired_names(&router), ["g"]);
+    }
+
+    #[test]
+    fn an_autorepeat_of_a_held_repeat_tail_fires_again() {
+        let mut router = router("command \"n\" ctrl+a>n --repeat true\n");
+        assert!(press(&mut router, 38, "ctrl+a"));
+        router.release(38);
+        assert!(press(&mut router, 57, "n"));
+        assert!(press(&mut router, 57, "n"));
+        assert_eq!(fired_names(&router), ["n", "n"]);
+        // released, the window stays open for a fresh press of the tail
+        router.release(57);
+        assert!(press(&mut router, 57, "n"));
+        assert_eq!(router.fired.len(), 3);
+    }
+
+    #[test]
+    fn a_menu_chord_ending_a_leader_still_fires_but_full_screen_does_not() {
+        let mut router = router("command \"g\" ctrl+a>g true\n");
+        assert!(press(&mut router, 38, "ctrl+a"));
+        router.release(38);
+        assert!(press(&mut router, 28, "ctrl+shift+t"));
+        assert_eq!(fired_names(&router), ["new_session"]);
+        assert!(press(&mut router, 38, "ctrl+a"));
+        router.release(38);
+        assert!(!press(&mut router, 95, "f11"));
+        assert!(press(&mut router, 95, "f11"));
+        assert_eq!(fired_names(&router), ["new_session", "toggle_fullscreen"]);
+    }
+
+    #[test]
+    fn leaving_agterm_forgets_consumed_keys_and_closes_the_repeat_window() {
+        let mut router = router("command \"n\" ctrl+a>n --repeat true\n");
+        assert!(press(&mut router, 28, "ctrl+shift+t"));
+        assert!(press(&mut router, 38, "ctrl+a"));
+        assert!(press(&mut router, 57, "n"));
+        // neither release arrives: the keyboard went to another application
+        router.keyboard_left();
+        assert!(press(&mut router, 28, "ctrl+shift+t"));
+        assert_eq!(fired_names(&router), ["new_session", "n", "new_session"]);
+        assert!(!press(&mut router, 57, "n"));
     }
 
     #[test]

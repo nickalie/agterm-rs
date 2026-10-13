@@ -173,3 +173,22 @@ fn every_builtin_reaches_an_effect_without_panicking() {
         let _ = perform(&mut fixture, action);
     }
 }
+
+#[test]
+fn new_session_and_open_directory_need_only_the_workspace() {
+    let mut fixture = Fixture::new(0);
+    let window = fixture.window;
+    perform(&mut fixture, BuiltinAction::CloseSession);
+    assert_eq!(fixture.selected(), None);
+    assert!(fixture.order(fixture.workspace).is_empty());
+    assert_eq!(
+        perform(&mut fixture, BuiltinAction::OpenDirectory),
+        ActionEffect::Frontend(FrontendAction::OpenDirectory {
+            window,
+            workspace: fixture.workspace
+        })
+    );
+    assert_eq!(perform(&mut fixture, BuiltinAction::NewSession), ActionEffect::Done);
+    assert_eq!(fixture.order(fixture.workspace).len(), 1);
+    assert!(fixture.selected().is_some());
+}

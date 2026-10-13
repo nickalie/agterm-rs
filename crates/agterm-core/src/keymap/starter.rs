@@ -1,5 +1,6 @@
 //! The commented starter `keymap.conf` and the editor command the Edit Keymap overlay runs (upstream's
-//! `ConfigPaths.starterKeymapConf` and `ConfigPaths.editorCommand`), with the macOS-only wording made neutral.
+//! `ConfigPaths.starterKeymapConf` and `ConfigPaths.editorCommand`), with the macOS-only wording made neutral and
+//! `global-hotkey` documented as parsed but not registered on Linux.
 
 use std::fmt::Write as _;
 
@@ -52,23 +53,12 @@ const STARTER_HEAD: &str = r#"# agterm keymap — a kitty-flavored config for re
 #           command "Deploy"                    ./deploy.sh
 #
 #   global-hotkey <chord>
-#       Bind ONE system-wide chord that summons the quick terminal while any application is
-#       frontmost — the only binding here that fires when agterm does not have the keyboard.
-#       Exactly one chord: no `|` alternatives, no leader sequence. A modifier is required
-#       except for function keys (f1 through f20). A second global-hotkey line replaces the
-#       first. The chord names a physical key position, so it works on a non-Latin layout.
-#       The system owns it, so it takes no part in the collision rules above. Note the
-#       precedence: the system hotkey WINS, agterm frontmost included, so a chord shared with a
-#       menu action fires this and the menu binding never sees it. There is no default because
-#       registering a chord takes it from every other application on the desktop, which is not
-#       a cost to impose on someone who never summons the panel from outside agterm. Spending it
-#       on the chord the in-app binding already uses is allowed, and is how to get ONE shortcut
-#       that works everywhere — at the price of that chord no longer reaching anything else.
-#       Examples:
-#
-#           global-hotkey ctrl+opt+space
-#           global-hotkey f5  # takes F5 machine-wide, including from local map/command bindings
-#           global-hotkey ctrl+`            # same chord as the in-app quick_terminal binding
+#       On macOS this binds one system-wide chord that summons the quick terminal from any
+#       application. This Linux build accepts and validates the line (one chord, a modifier
+#       or a function key) but does NOT register it (Wayland gives an app no system-wide key
+#       grab), so the line has no effect. Bind the quick terminal to a chord in your
+#       desktop's own shortcut settings instead (a custom shortcut that runs a command such as
+#       `agtermctl quick toggle`), or use the in-app `quick_terminal` chord.
 #
 # Built-in actions (raw name → shipped default chord):
 #
@@ -90,7 +80,6 @@ const STARTER_TAIL: &str = r#"#
 #
 # Uncomment and edit a line below to start.
 # map cmd+shift+l toggle_split
-# global-hotkey ctrl+opt+space
 "#;
 
 /// The commented starter `keymap.conf`: the three-verb syntax, every built-in's name with its default chord from

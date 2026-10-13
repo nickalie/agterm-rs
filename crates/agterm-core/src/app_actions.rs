@@ -235,11 +235,16 @@ impl Core {
             size_percent: Some(95),
             ..Args::default()
         };
-        self.run_request(
+        // only an editor that actually opened is recorded (upstream records the edit when `openOverlay` succeeds): a
+        // refused open leaves the editor already in the slot, and its record, alone.
+        let opened = self.try_request(
             Command::Session(SessionCmd::OverlayOpen),
             Some(uuid_string(session)),
             window_args(window, args),
         );
+        if !opened {
+            return;
+        }
         let generation = self
             .library()
             .store(window)
@@ -417,9 +422,12 @@ impl Core {
             }
             return ActionEffect::Done;
         }
-        let Some(session) = self.active_session_of(window) else {
+        // New Session and Open Directory need only the current workspace (upstream's `newSession`/`openDirectory`),
+        // so they still work in a window whose last session closed.
+        if action == BuiltinAction::NewSession {
+            self.sidebar_act(window, SidebarAction::NewSessionInCurrent);
             return ActionEffect::Done;
-        };
+        }
         if action == BuiltinAction::OpenDirectory {
             return self
                 .library()
@@ -429,6 +437,9 @@ impl Core {
                     frontend(FrontendAction::OpenDirectory { window, workspace })
                 });
         }
+        let Some(session) = self.active_session_of(window) else {
+            return ActionEffect::Done;
+        };
         self.perform_on_session(window, session, action)
     }
 
@@ -436,7 +447,6 @@ impl Core {
         let target = Some(uuid_string(session));
         let on = |args: Args| window_args(window, args);
         match action {
-            BuiltinAction::NewSession => self.sidebar_act(window, SidebarAction::NewSessionInCurrent),
             BuiltinAction::RenameSession => return frontend(FrontendAction::RenameSession { window, session }),
             BuiltinAction::DuplicateSession => self.sidebar_act(window, SidebarAction::Duplicate(session)),
             BuiltinAction::ClearStatus => self.sidebar_act(window, SidebarAction::ClearStatus(vec![session])),
@@ -647,6 +657,11 @@ impl Core {
 
     /// Runs a control command the way `agtermctl` would, logging a refusal (a chord has nobody to answer).
     fn run_request(&mut self, cmd: Command, target: Option<String>, args: Args) {
+        self.try_request(cmd, target, args);
+    }
+
+    /// [`Self::run_request`], answering whether the command succeeded.
+    fn try_request(&mut self, cmd: Command, target: Option<String>, args: Args) -> bool {
         let request = Request {
             cmd,
             target,
@@ -656,6 +671,7 @@ impl Core {
         if !response.ok {
             tracing::debug!(cmd = %cmd, error = ?response.error, "keymap action refused");
         }
+        response.ok
     }
 }
 

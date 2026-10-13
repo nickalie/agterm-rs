@@ -45,16 +45,20 @@ fn an_unreadable_file_is_the_empty_keymap_with_one_whole_file_diagnostic() {
     assert_eq!(keymap, Keymap::empty(&upstream()));
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].line, 0);
-    assert!(
-        diagnostics[0].message.starts_with("could not read keymap.conf: "),
-        "{}",
-        diagnostics[0].message
+    assert_eq!(
+        diagnostics[0].message,
+        "could not read keymap.conf: the file isn't valid UTF-8 text"
     );
 
     // a directory where the file should be exists but cannot be read either.
     let (_, diagnostics) = load_keymap(dir.path(), &upstream());
     assert_eq!(diagnostics.len(), 1);
     assert!(diagnostics[0].message.starts_with("could not read keymap.conf: "));
+    assert!(
+        !diagnostics[0].message.contains("os error"),
+        "{}",
+        diagnostics[0].message
+    );
 }
 
 #[test]

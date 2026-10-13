@@ -67,7 +67,9 @@ fn the_starter_keymap_is_commented_and_documents_the_verbs() {
             action.name()
         );
     }
-    assert!(starter.ends_with("# global-hotkey ctrl+opt+space\n"));
+    assert!(starter.ends_with("# map cmd+shift+l toggle_split\n"));
+    // Linux registers no global hotkey: the file says so and offers no global-hotkey line to uncomment.
+    assert!(starter.contains("does NOT register it"));
     assert!(
         starter
             .lines()
@@ -105,7 +107,7 @@ fn the_action_column_follows_the_given_table() {
     assert!(starter.contains("#   close_session               (no default)\n"));
 }
 
-/// Uncommenting every `map`, `command` and `global-hotkey` example must parse clean and bind `expected_bound`
+/// Uncommenting every `map` and `command` example (and any `global-hotkey` one) must parse clean and bind `expected_bound`
 /// chords: an example rots when a default claims its chord (issue #405), on either verb.
 fn assert_starter_examples_apply(defaults: &ShippedDefaults, expected_bound: usize) {
     let starter = starter_keymap_conf(defaults);
@@ -118,8 +120,9 @@ fn assert_starter_examples_apply(defaults: &ShippedDefaults, expected_bound: usi
             (matches!(verb, "map" | "command" | "global-hotkey") && !text.contains('<')).then_some(text)
         })
         .collect();
-    // three `map`, three `command`, four `global-hotkey`: an example dropped from the filter must fail here.
-    assert_eq!(examples.len(), 10, "{examples:?}");
+    // three `map`, three `command`, no `global-hotkey` (not registered on Linux): an example dropped from the filter
+    // must fail here.
+    assert_eq!(examples.len(), 6, "{examples:?}");
     let mut bound = 0;
     for example in examples {
         let (keymap, diagnostics) = parse_keymap(example, defaults);
@@ -138,14 +141,14 @@ fn assert_starter_examples_apply(defaults: &ShippedDefaults, expected_bound: usi
             + usize::from(keymap.global_hotkey().is_some());
     }
     // every `map` example (the alternatives one twice: menu chord and monitor half), the two chorded commands
-    // (`Deploy` is palette-only by design) and the four global hotkeys.
+    // (`Deploy` is palette-only by design).
     assert_eq!(bound, expected_bound);
 }
 
 #[test]
 fn the_starter_examples_apply_when_uncommented() {
-    assert_starter_examples_apply(&ShippedDefaults::upstream(), 10);
-    assert_starter_examples_apply(&linux_defaults(), 10);
+    assert_starter_examples_apply(&ShippedDefaults::upstream(), 6);
+    assert_starter_examples_apply(&linux_defaults(), 6);
 }
 
 #[test]

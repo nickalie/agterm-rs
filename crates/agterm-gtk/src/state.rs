@@ -614,8 +614,6 @@ impl AppState {
         self.settle();
     }
 
-    /// The user closed window `window` (upstream's window `willClose`): its snapshot is written and its store closed,
-    /// tearing its terminals down; the settle then drops the GTK window, and the app quits once none is open.
     /// A keymap chord fired (`keymap_dispatch`): a built-in runs as its menu item would, a custom command for the
     /// pane on screen in the window it fired in (the active window for the quick terminal), else sessionless.
     pub fn keymap_fired(&mut self, origin: KeyOrigin, fired: Fired) {
@@ -696,6 +694,8 @@ impl AppState {
         self.settle();
     }
 
+    /// The user closed window `window` (upstream's window `willClose`): its snapshot is written and its store closed,
+    /// tearing its terminals down; the settle then drops the GTK window, and the app quits once none is open.
     pub fn close_requested(&mut self, window: Uuid) {
         if self.quitting {
             return;

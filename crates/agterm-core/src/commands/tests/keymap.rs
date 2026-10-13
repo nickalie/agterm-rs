@@ -359,3 +359,30 @@ fn a_session_directory_that_is_gone_refuses_the_run() {
     );
     assert!(host.launcher.launches().is_empty());
 }
+
+#[test]
+fn a_refused_editor_leaves_the_open_editors_reload_alone() {
+    use crate::app_actions::ConfigFile;
+    use crate::palette_catalog::PaletteCommand;
+    let mut host = Host::new(0);
+    let window = host.fixture.window;
+    let session = host.fixture.selected().unwrap();
+    host.fixture
+        .core
+        .perform_menu_command(window, PaletteCommand::EditKeymap);
+    let state = host.fixture.store().session(session).unwrap();
+    assert!(state.overlay.program_active());
+    let generation = state.overlay.generation;
+    // the slot is held by the keymap editor, so the hooks editor is refused
+    host.fixture
+        .core
+        .perform_menu_command(window, PaletteCommand::EditHooks);
+    assert_eq!(
+        host.fixture.store().session(session).unwrap().overlay.generation,
+        generation
+    );
+    assert_eq!(
+        host.fixture.core.config_edit_ended(session, generation),
+        Some(ConfigFile::Keymap)
+    );
+}

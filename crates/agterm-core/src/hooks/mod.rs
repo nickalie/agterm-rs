@@ -156,8 +156,8 @@ pub fn load_hooks(path: &Path) -> (Hooks, Vec<KeymapDiagnostic>) {
 }
 
 /// A readable reason for a failed read: the OS error's text without its ` (os error N)` suffix, or Foundation's
-/// wording for a file that is not UTF-8.
-fn read_error_reason(err: &io::Error) -> String {
+/// wording for a file that is not UTF-8. Shared with `keymap.conf`'s loader.
+pub(crate) fn read_error_reason(err: &io::Error) -> String {
     if err.kind() == io::ErrorKind::InvalidData {
         return "the file isn't valid UTF-8 text".to_owned();
     }
