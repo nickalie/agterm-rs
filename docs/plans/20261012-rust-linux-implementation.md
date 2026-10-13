@@ -833,18 +833,40 @@ Tasks 1–4 followed the fork where it differs from upstream; paths under `.upst
 - Create: `crates/agterm-core/src/commands/{quick,dashboard,restart}.rs`, `crates/agterm-core/src/auto_follow.rs`
 - Modify: `crates/agterm-core/src/commands/session.rs` (background, restore)
 - Create: `crates/agterm-gtk/src/{quick,dashboard}.rs`
+- ➕ Create: `crates/agterm-core/src/{dashboard,quick_metrics,restart_replay,command_restore,watermark,
+  osc_background}.rs`, `crates/agterm-core/src/{dashboard,watermark}/tests.rs`,
+  `crates/agterm-core/src/commands/{background,restore}.rs`,
+  `crates/agterm-core/src/model/restore.rs`, `crates/agterm-core/src/commands/tests/{restart,background,quick,
+  dashboard,auto_follow}.rs`, `crates/agterm-ctl/src/{quick,dashboard,session_restore,session_background}.rs`,
+  `crates/agterm-gtk/src/background.rs`; Modify: `crates/agterm-core/src/{dispatch,lib}.rs`,
+  `commands/{mod,surface,surface_target}.rs`, `model/{background,session,store,mod}.rs`,
+  `crates/agterm-proto/src/result.rs` (`restart` receipt), `crates/agterm-ctl/src/{main,session,usage}.rs`,
+  `crates/agterm-ctl/tests/cli.rs`, `crates/agterm-gtk/src/{app,deck,split,window,windows,state,surface,
+  ghostty_app,main}.rs`, `crates/agterm-server/tests/server.rs` (the unimplemented-command test now uses
+  `session.overlay.open`)
 
-- [ ] session.restart (`RestartReplay.swift`, `ControlServer+Restart.swift`), session.background
-      (`PaneBackgrounds.swift`, `BackgroundWatermark.swift`), session.restore
-- [ ] quick, quick.type, quick.text (`QuickTerminalMetrics.swift`, `Views/QuickTerminal.swift`, `windows.md`);
+- [x] session.restart (`RestartReplay.swift`, `ControlServer+Restart.swift`), session.background
+      (`PaneBackgrounds.swift`, `BackgroundWatermark.swift`), session.restore (restart: upstream's validation and
+      `resolveRestartTarget` refusals through the live check, `RestartReplay` ported; ⚠️ the kill/rebuild of a live
+      pane needs zmx and lands with Task 28; backgrounds render as per-surface libghostty config overlays, text
+      rasterized to `<state>/watermarks/` as upstream's `WatermarkStorage`; the OSC background policy is ported but
+      not wired, translucency and wash regions wait for their tasks)
+- [x] quick, quick.type, quick.text (`QuickTerminalMetrics.swift`, `Views/QuickTerminal.swift`, `windows.md`);
       dashboard (`Dashboard*.swift`, `ControlDispatcher+Dashboard.swift`, `Views/DashboardView.swift`); claim
-      `quick-validates-input`
-- [ ] auto-follow (`AppStore+AutoFollow.swift`) behind `autoFollowMs`
-- [ ] pane environment wired into the quick terminal (quick variant)
-- [ ] matching `agtermctl` subcommands
-- [ ] write tests: restart replay decisions, dashboard layout and targets, auto-follow decisions
-- [ ] write tests: quick.type NUL and quick.text `--lines`/`--all` validation as upstream
-- [ ] gate: full run; ratchet (`test_dashboard_quick.py` and newly green tests elsewhere)
+      `quick-validates-input` (the quick panel is one undecorated GTK window per app, sized against the active
+      window's monitor since Wayland gives no position; the dashboard lays the members' existing terminals out in
+      their grid cells in place, never reparented, view-only under a chrome layer for keys, clicks and captions;
+      opening a dashboard hides the quick terminal and pauses auto-follow, as upstream)
+- [x] auto-follow (`AppStore+AutoFollow.swift`) behind `autoFollowMs` (user activity from terminal keystrokes and
+      sidebar clicks; suppression hooks exist for the rename/palette/pick tasks)
+- [x] pane environment wired into the quick terminal (quick variant)
+- [x] matching `agtermctl` subcommands
+- [x] write tests: restart replay decisions, dashboard layout and targets, auto-follow decisions
+- [x] write tests: quick.type NUL and quick.text `--lines`/`--all` validation as upstream
+- [x] gate: full run; ratchet (`test_dashboard_quick.py` and newly green tests elsewhere) (56 new green ids, 332
+      listed: every `test_dashboard_quick.py` test, the session.restore/session.background tests of
+      `test_session.py`, `test_split.py` and `test_restore.py`, `test_zmx.py`'s non-live restart refusals, the quick
+      cursor test of `test_surface.py`, and the cli background/restore/quick/dashboard tests)
 
 ### Task 18: HUD and notifications
 

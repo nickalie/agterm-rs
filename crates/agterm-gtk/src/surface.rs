@@ -108,6 +108,9 @@ struct Inner {
     deck_visible: Cell<bool>,
     /// The pending creation tick, while the area is realized and the surface not created yet.
     creation_tick: RefCell<Option<gtk::TickCallbackId>>,
+    /// This terminal's own config overlay (a session background), without the zoom-keeping font size, which is read
+    /// when it applies; `None` until one is set, so a terminal that never had one keeps the app config.
+    config_overlay: RefCell<Option<String>>,
 }
 
 thread_local! {
@@ -184,6 +187,7 @@ impl TerminalSurface {
             drew: Cell::new(false),
             deck_visible: Cell::new(true),
             creation_tick: RefCell::new(None),
+            config_overlay: RefCell::new(None),
         });
         SURFACES.with(|surfaces| surfaces.borrow_mut().insert(inner.key, Rc::downgrade(&inner)));
         let surface = Self { inner, area };
@@ -426,6 +430,7 @@ impl TerminalSurface {
                 if let Some(title) = ghostty_app::static_title() {
                     self.apply_title(&title);
                 }
+                self.apply_config_overlay();
                 if !self.inner.deck_visible.get() {
                     self.release_gpu_resources();
                 }
@@ -665,6 +670,39 @@ impl TerminalSurface {
     /// The pid of the terminal's foreground process.
     pub fn foreground_pid(&self) -> Option<u32> {
         self.with_surface(Surface::foreground_pid).flatten()
+    }
+
+    /// Sets this terminal's own config overlay (upstream's per-surface `applyWatermarkFromSession`): the app config
+    /// with `overlay` loaded last, plus a `font-size` line keeping the terminal's live zoom, which a config update
+    /// would otherwise reset. `""` returns to the app config. Applied now when the surface exists, else once it is
+    /// created; an unchanged overlay does nothing.
+    pub fn set_config_overlay(&self, overlay: &str) {
+        if self.inner.config_overlay.borrow().as_deref() == Some(overlay) {
+            return;
+        }
+        *self.inner.config_overlay.borrow_mut() = Some(overlay.to_owned());
+        self.apply_config_overlay();
+    }
+
+    /// Pushes the stored overlay to the surface, if both exist; libghostty clones the config, so it is freed here.
+    fn apply_config_overlay(&self) {
+        let Some(overlay) = self.inner.config_overlay.borrow().clone() else {
+            return;
+        };
+        let Some(font_size) = self.with_surface(Surface::font_size) else {
+            return;
+        };
+        let mut text = overlay;
+        // with no background the overlay is the font-size line alone
+        text.push_str(&agterm_core::watermark::overlay_text(None, None, font_size, 1.0));
+        let Some(config) = ghostty_app::config_with_overlay(&text) else {
+            return;
+        };
+        // a config change may touch the renderer, whose objects live in the area's context
+        if self.area.is_realized() {
+            self.area.make_current();
+        }
+        self.with_surface(|surface| surface.update_config(&config));
     }
 
     fn connect_focus(&self) {

@@ -14,6 +14,9 @@
 //! session, `session.focus`, a swap or the scratch move the input. A terminal the user focuses reports back through
 //! [`AppState::pane_focused`], from a task that first checks the focus is still there.
 //!
+//! While the window's dashboard is open every member session's page shows at once, each laying its member panes out
+//! at their grid cells over an opaque backdrop, under the grid's chrome, which holds the keyboard ([`crate::dashboard`]).
+//!
 //! The plan of what to add, remove and show is a pure function of the model ([`plan`]), so it is testable without a
 //! display.
 
@@ -24,11 +27,12 @@ use agterm_core::link_policy::ClickOrigin;
 use agterm_core::model::pane::SPLIT_RATIO_DEFAULT;
 use agterm_core::model::{AppStore, Session, WindowLibrary, Workspace};
 use agterm_core::pane_env::{self, PaneEnv, SessionPane, StatusPane};
-use agterm_core::zoom::SurfaceId;
+use agterm_core::zoom::{SurfaceId, ZoomSurface};
 use agterm_core::{Core, PaneReport};
 use gtk::prelude::*;
 use uuid::Uuid;
 
+use crate::dashboard::{self, Chrome, FontOverrides, GridModel};
 use crate::ghostty_app;
 use crate::pane::PaneSurface;
 use crate::split::{self, PanePlan, PaneView};
@@ -197,6 +201,8 @@ fn plan_store(window: Uuid, store: &AppStore, held: &HashSet<Uuid>, mounted: &Ha
 struct PageSync<'a> {
     window: Uuid,
     zoom: Option<SurfaceId>,
+    /// The window's open dashboard.
+    grid: Option<&'a GridModel>,
     context: &'a PaneContext,
     poster: &'a Poster,
 }
@@ -221,8 +227,9 @@ impl Page {
             return;
         };
         self.panes.retain(|token| session.pane_role_for_token(token).is_some());
+        let grid = sync.grid.filter(|grid| grid.hosts(id));
         let needs = split::needs(session, sync.zoom);
-        if needs.split
+        if (needs.split || grid.is_some_and(|grid| grid_needs_split(grid, session)))
             && let Some(spec) = PaneSpec::split(sync.window, workspace, session)
         {
             self.mount(session, &spec, sync);
@@ -236,7 +243,11 @@ impl Page {
         if sync.zoom.is_none() && session.split.shown && session.split.ratio.is_none() {
             session.split.ratio = Some(SPLIT_RATIO_DEFAULT);
         }
-        self.panes.apply(PanePlan::layout(session, sync.zoom), shown);
+        match grid {
+            Some(grid) => self.panes.apply_grid(&grid_cells(grid, session), grid.members.len()),
+            None => self.panes.apply(PanePlan::layout(session, sync.zoom), shown),
+        }
+        crate::background::sync_page(&self.panes, session);
     }
 
     /// Creates the terminal of `spec`, mounts it and installs it in its slot of `session`.
@@ -246,6 +257,25 @@ impl Page {
             .add(spec.token.clone(), terminal.clone(), spec.pane == StatusPane::Scratch);
         install(session, spec, terminal);
     }
+}
+
+/// Whether the grid hosts `session`'s split pane while it has no terminal yet: a hidden split's unfocused pane is
+/// created for its cell, as upstream's cell mounts the pane it hosts.
+fn grid_needs_split(grid: &GridModel, session: &Session) -> bool {
+    grid.cells_of(session.id()).any(|(_, pane)| pane == ZoomSurface::Split)
+        && session.split.exists
+        && session.split_pane_identity.is_some()
+        && !session.split_surface.is_present()
+}
+
+/// The pane token and cell index of each of `session`'s grid cells that has a terminal.
+fn grid_cells(grid: &GridModel, session: &Session) -> Vec<(String, usize)> {
+    grid.cells_of(session.id())
+        .filter_map(|(index, surface)| {
+            let surface = session.pane_slot(surface.pane()?).get()?;
+            Some((surface.pane_token().to_owned(), index))
+        })
+        .collect()
 }
 
 /// A connected terminal for `spec`.
@@ -265,14 +295,21 @@ fn install(session: &mut Session, spec: &PaneSpec, terminal: TerminalSurface) {
     }
 }
 
-/// The deck widget: the "No session selected" placeholder under one overlay page per session.
+/// The deck widget: the "No session selected" placeholder under one overlay page per session, all under the
+/// dashboard's chrome.
 pub struct Deck {
+    /// The pages' overlay under the chrome.
+    root: gtk::Overlay,
     overlay: gtk::Overlay,
     placeholder: gtk::Label,
     pages: HashMap<Uuid, Page>,
     shown: Option<Uuid>,
     /// The page and pane token keyboard focus was last moved to.
     focused: Option<(Uuid, String)>,
+    chrome: Chrome,
+    /// The window's dashboard was open at the last reconcile.
+    in_grid: bool,
+    fonts: FontOverrides,
 }
 
 impl Deck {
@@ -286,22 +323,36 @@ impl Deck {
         placeholder.add_css_class("dim-label");
         let overlay = gtk::Overlay::builder().hexpand(true).vexpand(true).build();
         overlay.set_child(Some(&placeholder));
+        let chrome = Chrome::new();
+        let root = gtk::Overlay::builder().hexpand(true).vexpand(true).build();
+        root.set_child(Some(&overlay));
+        root.add_overlay(chrome.widget());
         Self {
+            root,
             overlay,
             placeholder,
             pages: HashMap::new(),
             shown: None,
             focused: None,
+            chrome,
+            in_grid: false,
+            fonts: FontOverrides::default(),
         }
     }
 
     /// The widget to place in the window.
     #[must_use]
     pub fn widget(&self) -> &gtk::Overlay {
-        &self.overlay
+        &self.root
     }
 
-    /// The shown page's focused terminal.
+    /// The dashboard's chrome, whose clicks and keys the window connects.
+    #[must_use]
+    pub fn chrome(&self) -> &Chrome {
+        &self.chrome
+    }
+
+    /// The shown page's focused terminal; none while the dashboard is open.
     #[must_use]
     pub fn shown_terminal(&self) -> Option<&TerminalSurface> {
         self.shown
@@ -310,11 +361,20 @@ impl Deck {
             .map(|(_, terminal)| terminal)
     }
 
+    /// Gives the keyboard to what should hold it: the dashboard's chrome while it is open, else the shown terminal.
+    pub fn grab_focus(&self) {
+        if self.in_grid {
+            self.chrome.grab_focus();
+        } else if let Some(terminal) = self.shown_terminal() {
+            terminal.grab_focus();
+        }
+    }
+
     /// Brings the deck in line with `window`'s sessions: pages for new sessions, gone sessions' pages removed, every
     /// page's panes synced with its session, the selected session's page shown and its focused pane given the
     /// keyboard when that changed. While the window is zoomed into one of its terminals, that session's page shows
     /// instead, selected or not, with that terminal alone (upstream's zoom layer; a terminal is never reparented, so
-    /// its own page fills).
+    /// its own page fills). While the window's dashboard is open its member pages show instead, laid out as the grid.
     pub fn reconcile(
         &mut self,
         core: &mut Core,
@@ -337,20 +397,79 @@ impl Deck {
         }
         let zoom = zoom.filter(|zoom| self.pages.contains_key(&zoom.session));
         let shown = zoom.map(|zoom| zoom.session).or(plan.shown);
+        let grid = window.and_then(|window| GridModel::of(core, window));
         if let Some(window) = window {
             let sync = PageSync {
                 window,
                 zoom,
+                grid: grid.as_ref(),
                 context,
                 poster,
             };
             for (id, page) in &mut self.pages {
-                page.sync(core, &sync, *id, Some(*id) == shown);
+                // under the grid only its member pages show
+                page.sync(core, &sync, *id, grid.is_none() && Some(*id) == shown);
             }
+        }
+        if let Some(grid) = &grid {
+            let store = window.and_then(|window| core.library().store(window));
+            self.show_grid(store, grid);
+            return;
+        }
+        if self.in_grid {
+            self.leave_grid();
         }
         // a zoom keeps the keyboard on its terminal (upstream's `focusSplitPane` steps aside while zoomed)
         let refocus = zoom.is_none() && shown.is_some_and(|id| core.pane_focus_requested(id));
         self.show(shown, refocus);
+    }
+
+    /// Shows the dashboard: every member page at once over the backdrop (a page shows, but takes no input: the chrome
+    /// does), the chrome with the keyboard, and the member terminals at the grid's font size.
+    fn show_grid(&mut self, store: Option<&AppStore>, grid: &GridModel) {
+        for (id, page) in &self.pages {
+            let widget = page.panes.widget();
+            if grid.hosts(*id) {
+                widget.set_opacity(1.0);
+                widget.set_can_target(false);
+                widget.set_can_focus(false);
+            } else if widget.opacity() > 0.0 || widget.can_target() {
+                set_page_visible(widget, false);
+            }
+        }
+        self.placeholder.set_visible(false);
+        self.overlay.add_css_class(dashboard::BACKDROP_CLASS);
+        self.chrome.update(&grid.chrome_cells(store));
+        self.chrome.grab_focus();
+        let terminals = store
+            .map(|store| self.member_terminals(store, grid))
+            .unwrap_or_default();
+        self.fonts.sync(&terminals, grid.font_size);
+        self.in_grid = true;
+        self.shown = None;
+        self.focused = None;
+    }
+
+    /// The dashboard closed: the backdrop and chrome go, the member terminals get their own font back, and the next
+    /// show gives the keyboard to the shown page's focused pane again.
+    fn leave_grid(&mut self) {
+        self.overlay.remove_css_class(dashboard::BACKDROP_CLASS);
+        self.chrome.update(&[]);
+        self.fonts.sync(&[], None);
+        self.in_grid = false;
+        self.focused = None;
+    }
+
+    /// The terminals of the grid's cells, in cell order.
+    fn member_terminals(&self, store: &AppStore, grid: &GridModel) -> Vec<TerminalSurface> {
+        grid.members
+            .iter()
+            .filter_map(|member| {
+                let session = store.session(member.session)?;
+                let token = session.pane_slot(member.surface.pane()?).get()?.pane_token().to_owned();
+                self.pages.get(&member.session)?.panes.terminal(&token).cloned()
+            })
+            .collect()
     }
 
     fn add_page(&mut self, core: &mut Core, spec: &PaneSpec, context: &PaneContext, poster: &Poster) {
@@ -377,7 +496,8 @@ impl Deck {
         for (id, page) in &self.pages {
             let visible = Some(*id) == shown;
             let widget = page.panes.widget();
-            if widget.can_target() != visible {
+            // a grid page shows without taking input: both switches are checked
+            if widget.can_target() != visible || (widget.opacity() > 0.0) != visible {
                 set_page_visible(widget, visible);
             }
         }
@@ -445,6 +565,8 @@ fn connect_terminal(terminal: &TerminalSurface, session: Uuid, token: &str, post
     terminal.connect_keystroke(move |keystroke| {
         let token = keystroke_token.clone();
         state::post(&posting, move |state: &mut AppState| {
+            state.core.note_user_activity(session);
+            state.arm_auto_follow();
             if state.core.clear_status_on_keystroke(session, &token, keystroke) {
                 state.settle();
             }
@@ -773,6 +895,55 @@ mod tests {
         GtkWindowExt::set_focus(&window, None::<&gtk::Widget>);
         walk.settle();
         assert!(!split.is_focus(), "the request was one-shot");
+        window.set_child(None::<&gtk::Widget>);
+        window.destroy();
+    }
+
+    #[test]
+    fn the_dashboard_lays_member_panes_out_in_place() {
+        crate::gtk_test::on_gtk_thread(grid_lays_panes_out_in_place);
+    }
+
+    /// The dashboard over a split session shows both of its terminals at their cells, view-only, without moving them;
+    /// closing it gives them their page and their input back.
+    fn grid_lays_panes_out_in_place() {
+        let mut walk = Walk::split();
+        let window = gtk::Window::new();
+        window.set_child(Some(walk.deck.widget()));
+        walk.settle();
+        let request = Request {
+            cmd: Command::Dashboard,
+            target: None,
+            args: Some(Args {
+                targets: Some(vec![agterm_core::pane_env::uuid_string(walk.session)]),
+                font_size: Some(9.0),
+                ..Args::default()
+            }),
+        };
+        assert!(walk.core.dispatch(&request).ok);
+        walk.settle();
+        assert!(walk.deck.in_grid);
+        assert!(walk.deck.chrome().widget().get_visible());
+        for token in [&walk.primary, &walk.split] {
+            let terminal = walk.probe().terminal(token).clone();
+            assert!(terminal.is_deck_visible(), "{token} shows in its cell");
+            assert!(
+                !terminal.widget().is_focusable() && !terminal.widget().can_target(),
+                "view-only"
+            );
+        }
+        walk.stack.size_allocate(&gtk::Allocation::new(0, 0, 812, 612), -1);
+        let (primary, split) = &walk.areas;
+        assert_eq!((primary.width(), primary.height()), (388, 588));
+        assert_eq!((split.width(), split.height()), (388, 588));
+        assert!(walk.deck.shown_terminal().is_none(), "the chrome holds the keyboard");
+
+        walk.core.dashboard_close(walk.window);
+        walk.settle();
+        assert!(!walk.deck.in_grid);
+        assert!(!walk.deck.chrome().widget().get_visible());
+        assert_eq!(walk.shown(), (true, true));
+        assert!(walk.probe().terminal(&walk.primary).widget().is_focusable());
         window.set_child(None::<&gtk::Widget>);
         window.destroy();
     }

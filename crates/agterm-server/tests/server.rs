@@ -220,10 +220,10 @@ fn malformed_requests_get_the_decode_error() -> TestResult {
 #[test]
 fn unimplemented_command_is_refused_by_name() -> TestResult {
     let fixture = start_core()?;
-    let response = answer(&fixture.socket, br#"{"cmd":"session.restart"}"#)?;
+    let response = answer(&fixture.socket, br#"{"cmd":"session.overlay.open"}"#)?;
     assert_eq!(
         response,
-        Response::failure("session.restart is not supported by this host")
+        Response::failure("session.overlay.open is not supported by this host")
     );
     Ok(())
 }

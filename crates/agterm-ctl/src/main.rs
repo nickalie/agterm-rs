@@ -3,12 +3,16 @@
 //! and reports through [`output`]. Each command group lives in its own module.
 
 mod client;
+mod dashboard;
 mod events;
 mod output;
+mod quick;
 mod session;
+mod session_background;
 mod session_io;
 mod session_meta;
 mod session_panes;
+mod session_restore;
 mod socket;
 mod surface;
 mod tree;
@@ -52,7 +56,9 @@ enum Command {
     Workspace(workspace::Workspace),
     Session(session::Session),
     Surface(surface::Surface),
+    Dashboard(dashboard::Dashboard),
     Window(window::Window),
+    Quick(quick::Quick),
     Version(version::Version),
 }
 
@@ -65,7 +71,9 @@ impl Command {
             Self::Workspace(group) => group.command().validate(),
             Self::Session(group) => group.command().validate(),
             Self::Surface(group) => group.command().validate(),
+            Self::Dashboard(command) => command.check(),
             Self::Window(group) => group.command().validate(),
+            Self::Quick(command) => command.check(),
             Self::Version(_) => Ok(()),
         }
     }
@@ -77,7 +85,9 @@ impl Command {
             Self::Workspace(group) => group.command().default_run(env),
             Self::Session(group) => group.command().default_run(env),
             Self::Surface(group) => group.command().default_run(env),
+            Self::Dashboard(command) => command.execute(env),
             Self::Window(group) => group.command().default_run(env),
+            Self::Quick(command) => command.execute(env),
             Self::Version(command) => command.run(env),
         }
     }

@@ -46,7 +46,7 @@ const SIMILARITY_FLOOR: usize = 4;
 
 /// The groups that run a subcommand when none is named (the library's `defaultSubcommand`): the group's path below the
 /// root, and the subcommand's name.
-const DEFAULT_SUBCOMMANDS: [(&[&str], &str); 1] = [(&["session", "split"], "visibility")];
+const DEFAULT_SUBCOMMANDS: [(&[&str], &str); 2] = [(&["session", "split"], "visibility"), (&["quick"], "visibility")];
 
 /// The default subcommand of the group at `path` (below the root), if it has one.
 fn default_subcommand(path: &[&str]) -> Option<&'static str> {

@@ -67,6 +67,8 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         | SessionCmd::Scratch
         | SessionCmd::Focus
         | SessionCmd::Resize => super::panes::dispatch(core, cmd, request),
+        SessionCmd::Background => super::background::dispatch(core, request),
+        SessionCmd::Restore => super::restore::dispatch(core, request),
         other => Err(ControlError::NotSupported(Command::Session(other))),
     }
 }

@@ -1,15 +1,16 @@
 //! `agtermctl session ...` (`agtermctlKit/SessionCommands.swift` `Session`): the group, and here its lifecycle
 //! subcommands; [`crate::session_io`] drives the terminal, [`crate::session_panes`] arranges its panes,
-//! [`crate::session_meta`] sets metadata. Each takes its own options first, then `--target` where it addresses a
-//! session, then [`ClientOptions`], the order its help and usage line list them in. The rest of upstream's group
-//! (`restore`, ...) joins with the tasks that implement those commands.
+//! [`crate::session_meta`] sets metadata, [`crate::session_restore`] pins or replaces what a pane runs and
+//! [`crate::session_background`] sets backgrounds. Each takes its own options first, then `--target` where it
+//! addresses a session, then [`ClientOptions`], the order its help and usage line list them in. The rest of upstream's
+//! group (`overlay`, `hud`) joins with the tasks that implement those commands.
 
 use agterm_proto::command::SessionCmd;
 use agterm_proto::{Args, Command, Request};
 
 use crate::{
-    BasicOptions, BatchTargetOptions, ClientOptions, RequestCommand, TargetOptions, session_io, session_meta,
-    session_panes,
+    BasicOptions, BatchTargetOptions, ClientOptions, RequestCommand, TargetOptions, session_background, session_io,
+    session_meta, session_panes, session_restore,
 };
 
 /// `agtermctl session <subcommand>`.
@@ -48,10 +49,13 @@ impl Session {
             SessionCommand::SelectAll(command) => command,
             SessionCommand::Text(command) => command,
             SessionCommand::Status(command) => command,
+            SessionCommand::Restore(command) => command,
+            SessionCommand::Restart(command) => command,
             SessionCommand::Flag(command) => command,
             SessionCommand::Context(command) => command,
             SessionCommand::Seen(command) => command,
             SessionCommand::Search(command) => command,
+            SessionCommand::Background(group) => group.command(),
         }
     }
 }
@@ -79,10 +83,13 @@ enum SessionCommand {
     SelectAll(session_io::SelectAll),
     Text(session_io::Text),
     Status(session_meta::Status),
+    Restore(session_restore::Restore),
+    Restart(session_restore::Restart),
     Flag(session_meta::Flag),
     Context(session_meta::Context),
     Seen(session_meta::Seen),
     Search(session_io::Search),
+    Background(session_background::Background),
 }
 
 /// A request for `cmd` on `target` with `args` (`--window` folded in).

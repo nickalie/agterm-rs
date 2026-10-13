@@ -11,6 +11,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::sync::Weak;
 use std::time::Duration;
 
+use agterm_core::auto_follow::AutoFollowTimer;
 use agterm_core::events::{TREE_CHANGED_DEBOUNCE, TreeChangedTimer};
 use agterm_core::model::PendingCloseTimer;
 use agterm_core::persist::{DebouncedSave, arm_debounced_saves};
@@ -21,6 +22,7 @@ use agterm_server::{Reply, ReplySender};
 use uuid::Uuid;
 
 use crate::main_loop::GlibMainLoop;
+use crate::quick::QuickPanel;
 use crate::sidebar::{RowKind, SidebarRow};
 use crate::windows::Windows;
 
@@ -94,6 +96,8 @@ pub struct AppState {
     windows: Option<Windows>,
     /// The quit save ran: nothing is committed, saved or re-rendered after it.
     quitting: bool,
+    /// The app's one quick terminal panel.
+    quick: QuickPanel,
 }
 
 impl AppState {
@@ -104,6 +108,7 @@ impl AppState {
             poster: detached_poster(),
             windows: None,
             quitting: false,
+            quick: QuickPanel::default(),
         }
     }
 
@@ -135,6 +140,7 @@ impl AppState {
         match self.windows.as_mut() {
             Some(windows) => {
                 windows.sync(&mut self.core, &self.poster);
+                self.quick.sync(&mut self.core, windows, &self.poster);
                 for name in &sounds {
                     play_status_sound(name);
                 }
@@ -143,6 +149,48 @@ impl AppState {
             None => drop(self.core.take_window_requests()),
         }
         self.core.clear_pane_focus_requests();
+        self.arm_auto_follow();
+    }
+
+    /// Arms the auto-follow fires the core asked for since the last arm; each lands in [`AppState::fire_auto_follow`].
+    pub fn arm_auto_follow(&mut self) {
+        let timers = self.core.take_auto_follow_timers();
+        let Some(main_loop) = self.poster.upgrade() else {
+            return;
+        };
+        for timer in timers {
+            let task = Box::new(move |state: &mut Self| state.fire_auto_follow(timer));
+            if main_loop.post_after(timer.delay, task).is_err() {
+                tracing::debug!("auto-follow fire dropped: the loop is closed");
+            }
+        }
+    }
+
+    /// An armed auto-follow delay elapsed. When the jump lands in the window holding the keyboard and no zoom covers
+    /// it, the pane that set the status takes focus (upstream's `autoFollowed`); elsewhere only the selection moves.
+    fn fire_auto_follow(&mut self, timer: AutoFollowTimer) {
+        if self.quitting {
+            return;
+        }
+        if let Some(followed) = self.core.fire_auto_follow(timer)
+            && self.is_key_window(followed.window)
+            && self.core.zoom_target(followed.window).is_none()
+        {
+            self.core
+                .reveal_blocked_pane(followed.session, followed.indicator.as_ref());
+        }
+        self.settle();
+    }
+
+    /// Whether window `window` holds the keyboard: the frontmost window while the app's active window is focused.
+    fn is_key_window(&self, window: Uuid) -> bool {
+        use gtk::prelude::{GtkApplicationExt, GtkWindowExt};
+        self.core.library().frontmost_window_id == Some(window)
+            && self
+                .windows
+                .as_ref()
+                .and_then(|windows| windows.app().active_window())
+                .is_some_and(|active| active.is_active())
     }
 
     /// The window's exit-zoom control was clicked: its terminal zoom ends.
@@ -243,17 +291,25 @@ impl AppState {
         }
     }
 
-    /// A sidebar row was clicked: a session row selects its session, a workspace row opens or folds the workspace
-    /// and persists that (upstream's whole-row toggle, a genuine user expand).
+    /// A sidebar row was clicked: a session row selects its session as user activity and reveals the pane its status
+    /// tags (upstream's outline selection handler), a workspace row opens or folds the workspace and persists that
+    /// (upstream's whole-row toggle, a genuine user expand).
     pub fn sidebar_clicked(&mut self, row: &SidebarRow) {
-        let library = self.core.library_mut();
         match row.kind {
             RowKind::Session { .. } => {
-                if let Some(store) = library.store_for_session_mut(row.id) {
-                    store.select_session(Some(row.id));
+                // a genuine user click buys the full idle grace before auto-follow pulls away again
+                self.core.note_user_activity(row.id);
+                let indicator = self
+                    .core
+                    .library_mut()
+                    .store_for_session_mut(row.id)
+                    .map(|store| store.select_session(Some(row.id)));
+                if let Some(indicator) = indicator {
+                    self.core.reveal_blocked_pane(row.id, indicator.as_ref());
                 }
             }
             RowKind::Workspace { expanded } => {
+                let library = self.core.library_mut();
                 let window = library.open_ids().into_iter().find(|id| {
                     library
                         .store(*id)
@@ -824,5 +880,50 @@ mod tests {
         state.sidebar_clicked(&row(workspace, RowKind::Workspace { expanded: false }));
         let store = state.core.library().store(window).unwrap();
         assert!(store.workspace(workspace).unwrap().is_expanded);
+    }
+
+    #[test]
+    fn a_sidebar_click_is_activity_and_an_armed_fire_follows_to_the_blocked_session() {
+        use agterm_core::auto_follow::FollowConfig;
+        use agterm_core::model::{AgentIndicator, AgentStatus};
+
+        let (mut state, window, first) = state_with_terminal();
+        let main_loop: Arc<RecordingLoop<AppState>> = Arc::new(RecordingLoop::new());
+        let as_dyn: Arc<dyn MainLoop<AppState>> = Arc::clone(&main_loop) as _;
+        state.poster = Arc::downgrade(&as_dyn);
+        state.settle();
+        let _ = main_loop.take();
+        assert_eq!(state.core.tree(None).unwrap().idle_ms, None);
+        let store = state.core.library_mut().store_mut(window).unwrap();
+        let workspace = store.workspaces()[0].id();
+        let second = store.add_session(workspace, NewSession::at_cwd("/srv")).unwrap();
+        let blocked = AgentIndicator {
+            status: AgentStatus::Blocked,
+            ..AgentIndicator::default()
+        };
+        store.set_agent_indicator(blocked, first);
+        state.core.set_auto_follow(Some(FollowConfig {
+            timeout: Duration::ZERO,
+            stay_on_active: false,
+        }));
+        let row = SidebarRow {
+            id: second,
+            kind: RowKind::Session { selected: true },
+            name: String::new(),
+            badge: 0,
+        };
+        state.sidebar_clicked(&row);
+        assert!(state.core.tree(None).unwrap().idle_ms.is_some());
+        let fires: Vec<_> = main_loop
+            .take()
+            .into_iter()
+            .filter(|(delay, _)| *delay == Some(Duration::ZERO))
+            .collect();
+        assert_eq!(fires.len(), 1);
+        for (_, task) in fires {
+            task(&mut state);
+        }
+        let store = state.core.library().store(window).unwrap();
+        assert_eq!(store.selected_session_id(), Some(first));
     }
 }

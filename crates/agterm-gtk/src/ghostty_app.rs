@@ -38,8 +38,8 @@ static TICK_SCHEDULED: AtomicBool = AtomicBool::new(false);
 /// The running app and what building its config learned.
 struct GhosttyApp {
     app: App,
-    /// Kept for the reloads and per-surface overlays to come.
-    _config: Config,
+    /// The app's config, read for the colors a rendered watermark defaults to; kept for the reloads to come.
+    config: Config,
     /// The user's static `title`, applied by agterm in place of program titles (libghostty would drop them all).
     static_title: Option<String>,
     scheme: ColorScheme,
@@ -123,6 +123,16 @@ fn shell_features_override(bits: u32) -> String {
 /// title taken out. The user's global ghostty config joins with the settings model (`inheritGlobalGhosttyConfig`,
 /// off by default).
 fn build_config(env: &dyn Env, resources_resolved: bool) -> Result<(Config, Option<String>), agterm_ghostty::Error> {
+    build_config_with(env, resources_resolved, None)
+}
+
+/// [`build_config`] with a per-surface `overlay` loaded after the includes, so it wins over all of them (upstream's
+/// `loadConfig(_:extraOverlayPath:)`).
+fn build_config_with(
+    env: &dyn Env,
+    resources_resolved: bool,
+    overlay: Option<&str>,
+) -> Result<(Config, Option<String>), agterm_ghostty::Error> {
     let mut config = Config::new()?;
     config.load_text(&defaults_text(resources_resolved));
     for file in [
@@ -134,6 +144,9 @@ fn build_config(env: &dyn Env, resources_resolved: bool) -> Result<(Config, Opti
         }
     }
     config.load_recursive_files();
+    if let Some(overlay) = overlay.filter(|overlay| !overlay.is_empty()) {
+        config.load_text(overlay);
+    }
     if let Some(bits) = config.get(keys::SHELL_INTEGRATION_FEATURES) {
         config.load_text(&format!(
             "shell-integration-features = {}\n",
@@ -174,7 +187,7 @@ pub fn start(dark: bool) -> Result<(), agterm_ghostty::Error> {
     }
     let ghostty = GhosttyApp {
         app,
-        _config: config,
+        config,
         static_title,
         scheme,
     };
@@ -202,6 +215,21 @@ pub fn create_surface(key: SurfaceKey, options: &SurfaceOptions<'_>) -> Result<S
 /// The user's static title, when the config sets one.
 pub fn static_title() -> Option<String> {
     current().and_then(|ghostty| ghostty.static_title.clone())
+}
+
+/// A config for one surface: the app's stack with `overlay` loaded last (upstream's `configWithOverlay`), for
+/// [`agterm_ghostty::Surface::update_config`]. `None`, logged, when libghostty cannot build it.
+pub fn config_with_overlay(overlay: &str) -> Option<Config> {
+    let resolved = RESOURCES_RESOLVED.get().copied().unwrap_or(false);
+    build_config_with(&ProcessEnv, resolved, Some(overlay))
+        .map(|(config, _)| config)
+        .inspect_err(|err| tracing::warn!(%err, "could not build a terminal's config overlay"))
+        .ok()
+}
+
+/// The terminals' default foreground color, from the app config.
+pub fn foreground_color() -> Option<agterm_ghostty::Color> {
+    current().and_then(|ghostty| ghostty.config.get(keys::FOREGROUND))
 }
 
 fn schedule_tick() {

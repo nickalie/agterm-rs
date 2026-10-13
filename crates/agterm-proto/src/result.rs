@@ -45,6 +45,26 @@ pub struct ControlResult {
     /// `surface.cursor`: the cursor's column.
     #[serde(default)]
     pub cursor: Option<ControlCursor>,
+    /// `session.restart`: the replaced shells.
+    #[serde(default)]
+    pub restart: Option<ControlRestartReceipt>,
+}
+
+/// What a successful `session.restart` proves: the pane's shell was replaced (upstream's `ControlRestartReceipt`). The
+/// pids are the pane's root shells, not the program the caller's line starts.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlRestartReceipt {
+    /// The pane's stable token.
+    #[serde(rename = "paneID")]
+    pub pane_id: String,
+    pub old_pid: i32,
+    pub new_pid: i32,
+    /// The foreground program a restart without a command asked the new shell to run; absent when the caller named
+    /// the line. What was requested, not proof the program started.
+    #[serde(default)]
+    pub replayed_argv: Option<Vec<String>>,
 }
 
 impl ControlResult {
@@ -196,5 +216,46 @@ mod tests {
         assert_eq!(closed.sidebar_visible, None);
         let back: ControlResult = serde_json::from_str(&text).unwrap();
         assert_eq!(back.windows, Some(vec![node]));
+    }
+
+    /// Upstream's `SessionRestartTests`: the receipt rides last, with upstream's key spellings.
+    #[test]
+    fn a_restart_receipt_round_trips_and_a_replay_carries_its_argv() {
+        let receipt = ControlRestartReceipt {
+            pane_id: "token".to_owned(),
+            old_pid: 11,
+            new_pid: 22,
+            replayed_argv: None,
+        };
+        let result = ControlResult {
+            id: Some("9f3c".to_owned()),
+            text: Some("restarted".to_owned()),
+            pane: Some("right".to_owned()),
+            restart: Some(receipt.clone()),
+            ..ControlResult::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&result).unwrap(),
+            r#"{"id":"9f3c","text":"restarted","pane":"right","restart":{"paneID":"token","oldPid":11,"newPid":22}}"#
+        );
+        let back: ControlResult = serde_json::from_value(serde_json::to_value(&result).unwrap()).unwrap();
+        assert_eq!(back.restart, Some(receipt));
+        assert!(
+            !serde_json::to_string(&ControlResult::id("9f3c"))
+                .unwrap()
+                .contains("restart")
+        );
+
+        let replayed = ControlRestartReceipt {
+            pane_id: "token".to_owned(),
+            old_pid: 11,
+            new_pid: 22,
+            replayed_argv: Some(vec!["sh".into(), "-c".into(), "a b".into(), String::new()]),
+        };
+        let text = serde_json::to_string(&replayed).unwrap();
+        assert!(text.ends_with(r#""replayedArgv":["sh","-c","a b",""]}"#), "{text}");
+        assert_eq!(serde_json::from_str::<ControlRestartReceipt>(&text).unwrap(), replayed);
+        let old: ControlRestartReceipt = serde_json::from_str(r#"{"paneID":"token","oldPid":11,"newPid":22}"#).unwrap();
+        assert_eq!(old.replayed_argv, None);
     }
 }

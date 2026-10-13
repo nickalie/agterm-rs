@@ -10,6 +10,9 @@
 //!
 //! What goes where is a pure function of the session and the window's zoom ([`PanePlan::layout`], [`needs`]), and the
 //! rectangles a pure function of the plan and the page size ([`geometry`]).
+//!
+//! While the window's dashboard is open the page lays out its member panes at their grid cells instead
+//! ([`PaneView::apply_grid`], cells from [`crate::dashboard::cell_rects`]), shown but view-only, and hides the rest.
 
 use agterm_core::model::pane::{SPLIT_RATIO_DEFAULT, clamp_split_ratio};
 use agterm_core::model::{Session, SplitAxis, StatusPane};
@@ -198,7 +201,7 @@ pub struct Rect {
 }
 
 impl Rect {
-    fn full(width: i32, height: i32) -> Self {
+    pub(crate) fn full(width: i32, height: i32) -> Self {
         Self {
             x: 0,
             y: 0,
@@ -304,6 +307,15 @@ struct StackLayout {
     split: Option<gtk::Widget>,
     divider: Option<gtk::Widget>,
     drag: DividerDrag,
+    /// The dashboard's layout while it is open: the cell index of each member terminal among `count` cells.
+    grid: Option<GridCells>,
+}
+
+/// A page's terminals placed on the dashboard grid.
+#[derive(Debug, Default)]
+struct GridCells {
+    count: usize,
+    cells: Vec<(gtk::Widget, usize)>,
 }
 
 /// The divider's drag: the ratio it started from while one runs, and the ratio it shows until the model has it.
@@ -321,6 +333,10 @@ impl StackLayout {
     }
 
     fn allocate(&self, stack: &gtk::Widget, width: i32, height: i32) {
+        if let Some(grid) = &self.grid {
+            allocate_grid(stack, grid, width, height);
+            return;
+        }
         let geometry = geometry(
             self.panes.unwrap_or(Panes::Alone(Slot::Primary)),
             self.axis,
@@ -342,6 +358,22 @@ impl StackLayout {
             widget.size_allocate(&gtk::Allocation::new(rect.x, rect.y, rect.width, rect.height), -1);
             child = widget.next_sibling();
         }
+    }
+}
+
+/// Allocates the grid's member terminals at their cells and every other child at the full page, hidden under them.
+fn allocate_grid(stack: &gtk::Widget, grid: &GridCells, width: i32, height: i32) {
+    let rects = crate::dashboard::cell_rects(grid.count, width, height);
+    let mut child = stack.first_child();
+    while let Some(widget) = child {
+        let rect = grid
+            .cells
+            .iter()
+            .find(|(cell, _)| *cell == widget)
+            .and_then(|(_, index)| rects.get(*index).copied())
+            .unwrap_or(Rect::full(width, height));
+        widget.size_allocate(&gtk::Allocation::new(rect.x, rect.y, rect.width, rect.height), -1);
+        child = widget.next_sibling();
     }
 }
 
@@ -376,6 +408,7 @@ mod imp {
             layout.primary = None;
             layout.split = None;
             layout.divider = None;
+            layout.grid = None;
         }
     }
 
@@ -425,6 +458,8 @@ pub struct PaneView {
     separator: gtk::Separator,
     panes: Vec<Pane>,
     plan: Option<PanePlan>,
+    /// The page shows the dashboard's cells ([`PaneView::apply_grid`]).
+    in_grid: bool,
 }
 
 impl PaneView {
@@ -446,6 +481,7 @@ impl PaneView {
             separator,
             panes: Vec::new(),
             plan: None,
+            in_grid: false,
         };
         view.orient_divider(SplitAxis::default());
         view
@@ -501,8 +537,10 @@ impl PaneView {
 
     /// Lays the terminals out by `plan`; with the page `shown`, the terminals it shows become visible.
     pub fn apply(&mut self, plan: PanePlan, shown: bool) {
+        let leaving_grid = std::mem::take(&mut self.in_grid);
         {
             let mut layout = self.stack.layout();
+            layout.grid = None;
             layout.panes = Some(plan.panes);
             layout.axis = plan.axis;
             layout.ratio = plan.ratio;
@@ -515,13 +553,38 @@ impl PaneView {
         self.stack.queue_allocate();
         for pane in &self.panes {
             let visible = shown && plan.slot_of(&pane.token).is_some_and(|slot| plan.shows(slot));
-            if pane.terminal.is_deck_visible() != visible {
+            // a grid cell was view-only: the terminal takes input again
+            if leaving_grid || pane.terminal.is_deck_visible() != visible {
                 set_pane_visible(&pane.terminal, visible);
             }
         }
         self.orient_divider(plan.axis);
         self.divider.set_visible(shown && plan.shows_divider());
         self.plan = Some(plan);
+    }
+
+    /// Lays the terminals carrying the tokens of `cells` out at their dashboard cell indexes among `count` cells, shown
+    /// but view-only (no input, no focus, upstream's `.allowsHitTesting(false)`), and hides the others and the divider.
+    pub fn apply_grid(&mut self, cells: &[(String, usize)], count: usize) {
+        self.in_grid = true;
+        let placed: Vec<(gtk::Widget, usize)> = cells
+            .iter()
+            .filter_map(|(token, index)| self.widget_of(Some(token)).map(|widget| (widget, *index)))
+            .collect();
+        self.stack.layout().grid = Some(GridCells { count, cells: placed });
+        self.stack.queue_allocate();
+        for pane in &self.panes {
+            let member = cells.iter().any(|(token, _)| *token == pane.token);
+            if pane.terminal.is_deck_visible() != member {
+                set_pane_visible(&pane.terminal, member);
+            }
+            if member {
+                let widget = pane.terminal.widget();
+                widget.set_focusable(false);
+                widget.set_can_target(false);
+            }
+        }
+        self.divider.set_visible(false);
     }
 
     /// Hides every terminal: the session is out of the tree, held by a pending close.

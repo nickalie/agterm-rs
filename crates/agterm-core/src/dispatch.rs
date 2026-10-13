@@ -133,6 +133,12 @@ pub struct Core {
     /// Sessions whose focused pane a command asked to get the keyboard again, even unchanged, until the frontend's
     /// next render (upstream's `session.focus` grabs the pane whatever the model held).
     pane_focus_requests: HashSet<Uuid>,
+    /// The app's one quick terminal ([`commands::quick`]).
+    pub(crate) quick: commands::quick::QuickState,
+    /// Every window's dashboard ([`commands::dashboard`]).
+    pub(crate) dashboards: commands::dashboard::Dashboards,
+    /// Every window's auto-follow ([`crate::auto_follow`]).
+    pub(crate) auto_follow: crate::auto_follow::AutoFollow,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -189,6 +195,9 @@ impl Core {
             status_sounds: Vec::new(),
             zoom: HashMap::new(),
             pane_focus_requests: HashSet::new(),
+            quick: commands::quick::QuickState::default(),
+            dashboards: commands::dashboard::Dashboards::default(),
+            auto_follow: crate::auto_follow::AutoFollow::default(),
         }
     }
 
@@ -217,10 +226,14 @@ impl Core {
         self.zoom.get(&id).copied()
     }
 
-    /// Sets or clears window `id`'s zoom (the frontend's exit-zoom control clears it). Commit afterwards.
+    /// Sets or clears window `id`'s zoom (the frontend's exit-zoom control clears it); a zoom replaces the window's
+    /// dashboard. Commit afterwards.
     pub fn set_zoom_target(&mut self, id: Uuid, target: Option<SurfaceId>) {
         match target {
-            Some(target) => self.zoom.insert(id, target),
+            Some(target) => {
+                commands::dashboard::close(self, id);
+                self.zoom.insert(id, target)
+            }
             None => self.zoom.remove(&id),
         };
     }
@@ -479,10 +492,16 @@ impl Core {
             app: &self.app,
             settings: &self.settings,
             index_unsaved: self.persistence.as_ref().is_some_and(LibraryPersistence::index_unsaved),
-            quick_visible: false,
+            quick_visible: commands::quick::visible(self),
         };
         let mut tree = control_tree(store, &context);
-        tree.zoomed_surface = scoped.and_then(|id| self.zoom_target(id)).map(SurfaceId::control_id);
+        tree.zoomed_surface = if commands::quick::zoomed(self) {
+            Some("quick".to_owned())
+        } else {
+            scoped.and_then(|id| self.zoom_target(id)).map(SurfaceId::control_id)
+        };
+        commands::dashboard::project(self, scoped, &mut tree);
+        crate::auto_follow::project(self, scoped, &mut tree);
         Ok(tree)
     }
 
@@ -509,6 +528,7 @@ impl Core {
                 Some(result) => result_of(&result),
                 None => Ok(Response::success()),
             },
+            Command::Session(SessionCmd::Restart) => result_of(&commands::restart::dispatch(self, request)?),
             Command::Session(cmd) => result_of(&commands::session::dispatch(self, cmd, request)?),
             Command::Window(cmd) => result_of(&commands::window::dispatch(self, cmd, request)?),
             Command::Workspace(cmd) => match commands::workspace::dispatch(self, cmd, request)? {
@@ -516,6 +536,14 @@ impl Core {
                 None => Ok(Response::success()),
             },
             Command::Surface(cmd) => match commands::surface_target::dispatch(self, cmd, request)? {
+                Some(result) => result_of(&result),
+                None => Ok(Response::success()),
+            },
+            Command::Quick(cmd) => match commands::quick::dispatch(self, cmd, request)? {
+                Some(result) => result_of(&result),
+                None => Ok(Response::success()),
+            },
+            Command::Dashboard => match commands::dashboard::dispatch(self, request)? {
                 Some(result) => result_of(&result),
                 None => Ok(Response::success()),
             },
@@ -530,14 +558,12 @@ impl Core {
             cmd @ (Command::Ask(_)
             | Command::Browser(_)
             | Command::Config(_)
-            | Command::Dashboard
             | Command::Debug(_)
             | Command::Font(_)
             | Command::Hooks(_)
             | Command::Keymap(_)
             | Command::Notify
             | Command::Pick(_)
-            | Command::Quick(_)
             | Command::Restore(_)
             | Command::Sidebar(_)
             | Command::Theme(_)
@@ -591,7 +617,7 @@ mod tests {
     fn unimplemented_commands_are_refused_by_name() {
         let mut core = core();
         for cmd in [
-            Command::Session(SessionCmd::Restart),
+            Command::Session(SessionCmd::OverlayOpen),
             Command::Notify,
             Command::Zmx(ZmxCmd::List),
         ] {

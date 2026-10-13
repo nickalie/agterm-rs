@@ -3,6 +3,10 @@
 //! session, reporting its on-screen state for `window.list`, its activation as frontmost (upstream's
 //! `WindowAccessor.reportFrontmost`) and its close (upstream's window `willClose`), and applying the window commands'
 //! requests. [`crate::windows`] owns the set of them.
+//!
+//! The header bar carries the dashboard's opener while it is closed and its exit while it is open (upstream's
+//! `dashboardButton` and `dashboardTitlebar`); the open grid is titled "Dashboard" and, like a terminal zoom, fills the
+//! window with the sidebar stepped aside.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -34,6 +38,16 @@ pub fn window_title(library: &WindowLibrary, window: Option<Uuid>) -> String {
     match window.and_then(|id| library.custom_window_name(id)) {
         Some(name) => format!("{session} — {name}"),
         None => session,
+    }
+}
+
+/// The title of an open dashboard: "Dashboard", then the window's custom name when it has one (upstream's
+/// `dashboardWindowTitle`).
+#[must_use]
+pub fn dashboard_title(library: &WindowLibrary, window: Uuid) -> String {
+    match library.custom_window_name(window) {
+        Some(name) => format!("Dashboard — {name}"),
+        None => "Dashboard".to_owned(),
     }
 }
 
@@ -100,6 +114,10 @@ pub struct WindowUi {
     paned: gtk::Paned,
     /// The header bar's exit-zoom button, shown while the window is zoomed to one terminal.
     exit_zoom: gtk::Button,
+    /// The header bar's dashboard opener, shown while neither the dashboard nor a zoom is up.
+    open_dashboard: gtk::Button,
+    /// The header bar's exit-dashboard button, shown while the dashboard is open.
+    exit_dashboard: gtk::Button,
     deck: Deck,
     sidebar: Sidebar,
     context: PaneContext,
@@ -139,8 +157,19 @@ impl WindowUi {
             .tooltip_text("Exit Terminal Zoom")
             .visible(false)
             .build();
+        let open_dashboard = gtk::Button::builder()
+            .icon_name("view-grid-symbolic")
+            .tooltip_text("Dashboard")
+            .build();
+        let exit_dashboard = gtk::Button::builder()
+            .icon_name("window-close-symbolic")
+            .tooltip_text("Exit Dashboard")
+            .visible(false)
+            .build();
         let header = adw::HeaderBar::new();
         header.pack_end(&exit_zoom);
+        header.pack_end(&exit_dashboard);
+        header.pack_end(&open_dashboard);
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(&header);
         toolbar.set_content(Some(&paned));
@@ -156,6 +185,8 @@ impl WindowUi {
             window_id,
             paned,
             exit_zoom,
+            open_dashboard,
+            exit_dashboard,
             deck,
             sidebar,
             context,
@@ -217,6 +248,15 @@ impl WindowUi {
         self.exit_zoom.connect_clicked(move |_| {
             state::post(&posting, move |state: &mut AppState| state.exit_zoom(id));
         });
+        let posting = poster.clone();
+        self.open_dashboard.connect_clicked(move |_| {
+            state::post(&posting, move |state: &mut AppState| state.toggle_dashboard(id));
+        });
+        let posting = poster.clone();
+        self.exit_dashboard.connect_clicked(move |_| {
+            state::post(&posting, move |state: &mut AppState| state.exit_dashboard(id));
+        });
+        self.deck.chrome().connect(id, poster);
     }
 
     /// A drag notifies per pixel: one task at a time reads the latest position.
@@ -236,12 +276,10 @@ impl WindowUi {
         });
     }
 
-    /// Shows the window and focuses the shown terminal.
+    /// Shows the window and focuses the shown terminal (the dashboard's grid while it is open).
     pub fn present(&self) {
         self.window.present();
-        if let Some(terminal) = self.deck.shown_terminal() {
-            terminal.grab_focus();
-        }
+        self.deck.grab_focus();
     }
 
     /// Closes the window for good: the model closed it, and its terminals with it.
@@ -366,12 +404,14 @@ impl WindowUi {
     pub fn sync(&mut self, core: &mut Core, poster: &Poster) {
         let id = self.window_id;
         let zoomed = core.zoom_target(id);
+        let dashboard = core.dashboard(id).is_some();
         self.deck.reconcile(core, Some(id), zoomed, &self.context, poster);
         let badges = core.settings().notification_badge_enabled.unwrap_or(true);
         if let Some(store) = core.library_mut().store_mut(id) {
             self.sidebar.refresh(store, badges);
-            // a zoomed terminal fills the window: the sidebar steps aside without its visibility changing
-            if zoomed.is_some() {
+            // a zoomed terminal or the dashboard fills the window: the sidebar steps aside without its visibility
+            // changing
+            if zoomed.is_some() || dashboard {
                 self.sidebar.widget().set_visible(false);
             }
             let position = divider_position(store.sidebar().width);
@@ -379,8 +419,20 @@ impl WindowUi {
                 self.paned.set_position(position);
             }
         }
-        self.window.set_title(Some(&window_title(core.library(), Some(id))));
+        let title = if dashboard {
+            dashboard_title(core.library(), id)
+        } else {
+            window_title(core.library(), Some(id))
+        };
+        self.window.set_title(Some(&title));
         self.exit_zoom.set_visible(zoomed.is_some());
+        self.exit_dashboard.set_visible(dashboard);
+        self.open_dashboard.set_visible(!dashboard && zoomed.is_none());
+        let has_session = core
+            .library()
+            .store(id)
+            .is_some_and(|store| store.active_session().is_some());
+        self.open_dashboard.set_sensitive(has_session);
     }
 }
 
@@ -398,6 +450,15 @@ mod tests {
         library.store_mut(window).unwrap().select_session(None);
         assert_eq!(window_title(&library, Some(window)), "Agterm — work");
         assert_eq!(window_title(&library, None), "Agterm");
+    }
+
+    #[test]
+    fn the_dashboard_title_names_a_custom_window() {
+        let mut library = WindowLibrary::seeded("/home/u");
+        let window = library.active_window_id().unwrap();
+        assert_eq!(dashboard_title(&library, window), "Dashboard");
+        library.rename_window(window, "work");
+        assert_eq!(dashboard_title(&library, window), "Dashboard — work");
     }
 
     #[test]

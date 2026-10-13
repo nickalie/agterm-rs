@@ -15,6 +15,7 @@ mod panes;
 mod pending_close;
 mod recency;
 mod recent_closed;
+mod restore;
 mod search;
 mod session;
 mod snapshot;

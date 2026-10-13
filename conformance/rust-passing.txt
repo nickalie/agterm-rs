@@ -1,17 +1,22 @@
 # The conformance ratchet: pytest node ids the Rust build passes, one per line, verbatim and sorted.
 # tools/check_ratchet.py fails a run in which a listed id fails, errors or skips (a host-dependent skip excepted).
 # Add newly passing ids with `tools/check_ratchet.py --report <nodeid report> --add`.
+tests/behaviors/test_relaunch.py::test_relaunch_keeps_workspaces_sessions_and_their_metadata
 tests/cli/test_cli_output.py::test_events_json_prints_each_event_object_of_the_asked_kinds
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args0-event limit must be between 1 and 1000]
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args1-events.read requires --run and --after together]
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args2-invalid event run id]
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args3-invalid event cursor]
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args4-None]
+tests/cli/test_cli_output.py::test_quick_terminal
+tests/cli/test_cli_output.py::test_session_background
 tests/cli/test_cli_output.py::test_session_create_select_and_close
 tests/cli/test_cli_output.py::test_session_move_and_go
 tests/cli/test_cli_output.py::test_session_panes
+tests/cli/test_cli_output.py::test_session_restore_prints_the_note_or_ok
 tests/cli/test_cli_output.py::test_session_status_carries_its_overrides
 tests/cli/test_cli_output.py::test_session_type_text_search_and_copy
+tests/cli/test_cli_output.py::test_surface_and_dashboard
 tests/cli/test_cli_output.py::test_version
 tests/cli/test_cli_output.py::test_window_commands
 tests/cli/test_cli_output.py::test_workspace_focus_and_filter
@@ -37,6 +42,29 @@ tests/protocol/test_addressing.py::test_undecodable_request_is_refused[unknown-c
 tests/protocol/test_addressing.py::test_unresolved_target[session.select--no such session: ]
 tests/protocol/test_addressing.py::test_unresolved_target[session.select-zzz-no such session: zzz]
 tests/protocol/test_addressing.py::test_unresolved_target[workspace.select-zzz-no such workspace: zzz]
+tests/protocol/test_dashboard_quick.py::test_dashboard_and_terminal_zoom_replace_each_other
+tests/protocol/test_dashboard_quick.py::test_dashboard_font_modes
+tests/protocol/test_dashboard_quick.py::test_dashboard_mru_takes_the_recent_sessions
+tests/protocol/test_dashboard_quick.py::test_dashboard_names_what_it_left_out
+tests/protocol/test_dashboard_quick.py::test_dashboard_pane_refs_pick_one_pane
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[bad-pane-ref]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[both-font-modes]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[close-with-auto-size]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[close-with-font-size]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[close-with-ids]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[close-with-mru]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[mru-with-ids]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[negative]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[none-resolved]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[nothing]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[unknown-window]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[zero]
+tests/protocol/test_dashboard_quick.py::test_dashboard_shows_each_pane_of_the_given_sessions
+tests/protocol/test_dashboard_quick.py::test_quick_commands_need_a_shown_terminal
+tests/protocol/test_dashboard_quick.py::test_quick_input_validation
+tests/protocol/test_dashboard_quick.py::test_quick_show_hide_toggle
+tests/protocol/test_dashboard_quick.py::test_quick_type_then_read_the_marker_back
+tests/protocol/test_dashboard_quick.py::test_quick_zoom_ends_with_the_panel
 tests/protocol/test_events.py::test_cursor_expires_past_the_ring_capacity
 tests/protocol/test_events.py::test_cursor_failure_carries_the_anchor[ahead]
 tests/protocol/test_events.py::test_cursor_failure_carries_the_anchor[other-run]
@@ -58,6 +86,7 @@ tests/protocol/test_events.py::test_read_without_a_cursor_subscribes_from_now
 tests/protocol/test_events.py::test_run_id_is_case_insensitive
 tests/protocol/test_events.py::test_session_lifecycle_events
 tests/protocol/test_restore.py::test_panes_are_not_zmx_backed_outside_live_mode
+tests/protocol/test_restore.py::test_split_restore_pin_reads_back
 tests/protocol/test_session.py::test_close_removes_the_session_and_reselects
 tests/protocol/test_session.py::test_close_requires_a_target
 tests/protocol/test_session.py::test_close_several_targets_at_once
@@ -107,6 +136,16 @@ tests/protocol/test_session.py::test_new_rejects[workspace-and-name]
 tests/protocol/test_session.py::test_new_without_selecting_keeps_the_selection
 tests/protocol/test_session.py::test_rename_and_blank_restores_the_automatic_name
 tests/protocol/test_session.py::test_rename_requires_a_name
+tests/protocol/test_session.py::test_restore_pins_read_back_without_touching_the_shell
+tests/protocol/test_session.py::test_restore_rejects[bad-pane]
+tests/protocol/test_session.py::test_restore_rejects[control-character]
+tests/protocol/test_session.py::test_restore_rejects[no-mode]
+tests/protocol/test_session.py::test_restore_rejects[right-without-split]
+tests/protocol/test_session.py::test_restore_rejects[scratch]
+tests/protocol/test_session.py::test_restore_rejects[set-without-command]
+tests/protocol/test_session.py::test_restore_rejects[too-long]
+tests/protocol/test_session.py::test_restore_rejects[unknown-mode]
+tests/protocol/test_session.py::test_restore_rejects[unknown-pane-id]
 tests/protocol/test_session.py::test_reveal_answers_with_the_session
 tests/protocol/test_session.py::test_select_moves_the_selection_across_workspaces
 tests/protocol/test_session.py::test_status_records_the_pane
@@ -121,6 +160,7 @@ tests/protocol/test_session.py::test_unknown_session_target[session.context-args
 tests/protocol/test_session.py::test_unknown_session_target[session.duplicate-args4]
 tests/protocol/test_session.py::test_unknown_session_target[session.flag-args5]
 tests/protocol/test_session.py::test_unknown_session_target[session.rename-args2]
+tests/protocol/test_session.py::test_unknown_session_target[session.restore-args9]
 tests/protocol/test_session.py::test_unknown_session_target[session.reveal-args3]
 tests/protocol/test_session.py::test_unknown_session_target[session.seen-args6]
 tests/protocol/test_session.py::test_unknown_session_target[session.select-args1]
@@ -149,6 +189,14 @@ tests/protocol/test_session_text.py::test_type_then_read_the_marker_back
 tests/protocol/test_session_text.py::test_unknown_session_target[session.search-args2]
 tests/protocol/test_session_text.py::test_unknown_session_target[session.text-args1]
 tests/protocol/test_session_text.py::test_unknown_session_target[session.type-args0]
+tests/protocol/test_split.py::test_background_default_and_pane_override
+tests/protocol/test_split.py::test_background_rejects[color]
+tests/protocol/test_split.py::test_background_rejects[fit]
+tests/protocol/test_split.py::test_background_rejects[mode]
+tests/protocol/test_split.py::test_background_rejects[no-color]
+tests/protocol/test_split.py::test_background_rejects[opacity]
+tests/protocol/test_split.py::test_background_rejects[position]
+tests/protocol/test_split.py::test_background_rejects[right]
 tests/protocol/test_split.py::test_focus_names_a_pane_by_role_or_position
 tests/protocol/test_split.py::test_focus_reaches_a_hidden_split
 tests/protocol/test_split.py::test_focus_rejects_an_unknown_pane
@@ -169,6 +217,7 @@ tests/protocol/test_split.py::test_split_rejects[mode]
 tests/protocol/test_split.py::test_split_shows_hides_and_keeps_the_pane
 tests/protocol/test_split.py::test_swap_exchanges_the_panes_and_focus_follows_the_terminal
 tests/protocol/test_split.py::test_swap_reaches_a_hidden_split
+tests/protocol/test_split.py::test_unknown_session_target[session.background-args6]
 tests/protocol/test_split.py::test_unknown_session_target[session.focus-args4]
 tests/protocol/test_split.py::test_unknown_session_target[session.resize-args5]
 tests/protocol/test_split.py::test_unknown_session_target[session.scratch-args3]
@@ -180,6 +229,7 @@ tests/protocol/test_split.py::test_zoom_rejects_an_unknown_mode
 tests/protocol/test_split.py::test_zoom_rejects_an_unknown_surface[surface:zzz:left]
 tests/protocol/test_split.py::test_zoom_rejects_an_unknown_surface[zzz]
 tests/protocol/test_surface.py::test_cursor_reads_each_pane_by_surface_id_or_pane_id
+tests/protocol/test_surface.py::test_cursor_reads_the_quick_terminal_only_while_shown
 tests/protocol/test_surface.py::test_cursor_refusals[bogus-kind-args2-invalid surface: surface:{sid}:bogus]
 tests/protocol/test_surface.py::test_cursor_refusals[left-args6-surface.cursor: --pane-id takes a session target]
 tests/protocol/test_surface.py::test_cursor_refusals[quick-args7-surface.cursor: --pane-id takes a session target]
@@ -277,3 +327,9 @@ tests/protocol/test_zmx.py::test_lead_rejects[no-split]
 tests/protocol/test_zmx.py::test_lead_rejects[not-live]
 tests/protocol/test_zmx.py::test_lead_rejects[scratch]
 tests/protocol/test_zmx.py::test_present_refuses_without_a_session
+tests/protocol/test_zmx.py::test_restart_rejects[blank-command]
+tests/protocol/test_zmx.py::test_restart_rejects[no-pane]
+tests/protocol/test_zmx.py::test_restart_rejects[no-split]
+tests/protocol/test_zmx.py::test_restart_rejects[not-live]
+tests/protocol/test_zmx.py::test_restart_rejects[scratch]
+tests/protocol/test_zmx.py::test_restart_rejects[unknown-pane-id]

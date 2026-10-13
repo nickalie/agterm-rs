@@ -39,6 +39,7 @@ const CAPABILITIES: &[&str] = &[
     "type-rejects-nul",
     "resize-echoes-ratio",
     "hidden-split-holds-focus",
+    "quick-validates-input",
 ];
 
 /// `AGTERM_APP_ID` when it is a valid application id, else the fork's.
@@ -255,7 +256,8 @@ mod tests {
                 "status-shape",
                 "type-rejects-nul",
                 "resize-echoes-ratio",
-                "hidden-split-holds-focus"
+                "hidden-split-holds-focus",
+                "quick-validates-input"
             ]
         );
     }

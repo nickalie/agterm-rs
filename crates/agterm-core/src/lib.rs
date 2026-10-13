@@ -7,8 +7,11 @@
 //!
 //! Work that needs a live terminal, widget, daemon or process goes through the `agterm-host` traits.
 
+pub mod auto_follow;
 pub mod clipboard_policy;
+pub mod command_restore;
 mod commands;
+pub mod dashboard;
 pub mod dispatch;
 pub mod error;
 pub mod events;
@@ -16,12 +19,16 @@ pub mod interrupt;
 pub mod keystrokes;
 pub mod link_policy;
 pub mod model;
+pub mod osc_background;
 pub mod pane_env;
 pub mod paths;
 pub mod persist;
 pub mod projection;
+pub mod quick_metrics;
 pub mod resolve;
+pub mod restart_replay;
 pub mod sidebar_drop;
+pub mod watermark;
 pub mod windows;
 pub mod zoom;
 

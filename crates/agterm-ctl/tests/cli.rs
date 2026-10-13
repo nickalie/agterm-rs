@@ -440,7 +440,11 @@ SUBCOMMANDS:
   workspace               Workspace commands.
   session                 Session commands.
   surface                 Terminal surface commands.
+  dashboard               Open a view-only grid of live sessions, or --close
+                          the open one.
   window                  Window commands.
+  quick                   Quick terminal: visibility, type into it, read its
+                          text.
   version                 Print the version of the app serving the socket.
 
   See 'agtermctl help <subcommand>' for detailed help.
@@ -769,6 +773,89 @@ fn a_session_refusal_exits_1_with_the_server_error() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn restore_prints_its_note_and_background_and_restart_send_their_args() -> TestResult {
+    let dir = short_dir()?;
+    let note = "saved for rerun mode; active restore mode is none";
+    let cases: [(&[&str], serde_json::Value, serde_json::Value, String); 4] = [
+        (
+            &["session", "restore", "echo pinned", "--target", "s1"],
+            serde_json::json!({"cmd": "session.restore", "target": "s1",
+                               "args": {"mode": "set", "command": "echo pinned"}}),
+            serde_json::json!({"id": NEW_ID, "text": note, "pane": "left"}),
+            format!("{note}\n"),
+        ),
+        (
+            &["session", "restore", "--clear", "--pane", "right"],
+            serde_json::json!({"cmd": "session.restore", "target": "active",
+                               "args": {"mode": "clear", "pane": "right"}}),
+            serde_json::json!({"id": NEW_ID, "pane": "right"}),
+            "ok\n".to_owned(),
+        ),
+        (
+            &[
+                "session",
+                "background",
+                "text",
+                "WATERMARK",
+                "--color",
+                "#336699",
+                "--pane",
+                "scratch",
+            ],
+            serde_json::json!({"cmd": "session.background", "target": "active",
+                               "args": {"text": "WATERMARK", "mode": "text", "color": "#336699", "pane": "scratch"}}),
+            serde_json::json!({"id": NEW_ID}),
+            "ok\n".to_owned(),
+        ),
+        (
+            &["session", "restart", "--pane-id", "T", "--command", "cat"],
+            serde_json::json!({"cmd": "session.restart", "target": "active",
+                               "args": {"paneID": "T", "command": "cat"}}),
+            serde_json::json!({"id": NEW_ID, "text": "restarted left pane: shell 1 -> 2", "pane": "left",
+                               "restart": {"paneID": "T", "oldPid": 1, "newPid": 2}}),
+            "restarted left pane: shell 1 -> 2\n".to_owned(),
+        ),
+    ];
+    for (index, (args, expected, result, printed)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("{index}.sock"));
+        let _server = scripted(&socket, expected, result)?;
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(0), printed, String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn restore_background_and_restart_refuse_bad_forms_before_connecting() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("absent.sock");
+    let cases: [(&[&str], &str); 4] = [
+        (
+            &["session", "restore", "--none", "--clear"],
+            "provide exactly one of a COMMAND, --none, or --clear",
+        ),
+        (&["session", "restart"], "provide --pane-id or --pane"),
+        (
+            &["session", "background", "color", "blue"],
+            "color must be a #rrggbb hex value",
+        ),
+        (
+            &["session", "background", "image", "/a.png", "--opacity", "2"],
+            "opacity must be between 0.0 and 1.0",
+        ),
+    ];
+    for (args, message) in cases {
+        let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, args)?);
+        assert_eq!((code, stdout.as_str()), (Some(64), ""), "{args:?}");
+        assert!(stderr.starts_with(&format!("Error: {message}\nUsage: ")), "{stderr}");
+    }
+    Ok(())
+}
+
 const MOVE_USAGE: &str = "Usage: agtermctl session move [<workspace>] [--to <to>] [--after <after>] [--before \
                           <before>] [--target <target> ...] [--socket <socket>] [--json] [--window <window>]\n  See \
                           'agtermctl session move --help' for more information.\n";
@@ -893,6 +980,10 @@ SUBCOMMANDS:
   text                    Print a session's terminal buffer as plain text (does
                           not touch the system clipboard).
   status                  Set a session's agent status indicator.
+  restore                 Pin the command a session's pane re-runs on the next
+                          launch.
+  restart                 Replace the shell of one live pane and run a shell
+                          line, or the same program again, in the new one.
   flag                    Flag a session for the flagged working-set view
                           (on|off|toggle|clear).
   context                 Set or clear what a session is about, shown in the
@@ -901,6 +992,8 @@ SUBCOMMANDS:
                           changing the selection or focus (idempotent).
   search                  Search a session's terminal output (open the bar, set
                           a needle, or step matches).
+  background              Set or clear a session's background (image,
+                          rasterized text, or solid color).
 
   See 'agtermctl help session <subcommand>' for detailed help.
 ";
@@ -1973,6 +2066,291 @@ fn split_help_marks_its_default_subcommand() -> TestResult {
         assert_eq!(
             outcome(&run(dir.path(), &[], args)?),
             (Some(0), help.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+// MARK: - quick
+
+const QUICK_HELP: &str = "\
+OVERVIEW: Quick terminal: visibility, type into it, read its text.
+
+USAGE: agtermctl quick <subcommand>
+
+OPTIONS:
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  visibility (default)    Quick terminal visibility (show|hide|toggle).
+  type                    Inject text into the quick terminal.
+  text                    Print the quick terminal's buffer as plain text.
+
+  See 'agtermctl help quick <subcommand>' for detailed help.
+";
+
+const QUICK_VISIBILITY_HELP: &str = "\
+OVERVIEW: Quick terminal visibility (show|hide|toggle).
+
+USAGE: agtermctl quick visibility [<mode>] [--socket <socket>] [--json]
+
+ARGUMENTS:
+  <mode>                  Mode: show, hide, or toggle (default). (default:
+                          toggle)
+
+OPTIONS:
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  -h, --help              Show help information.
+
+";
+
+const QUICK_TYPE_HELP: &str = "\
+OVERVIEW: Inject text into the quick terminal.
+
+USAGE: agtermctl quick type [<text>] [--stdin] [--socket <socket>] [--json]
+
+ARGUMENTS:
+  <text>                  Text to inject (omit with --stdin).
+
+OPTIONS:
+  --stdin                 Read the text from stdin instead of an argument.
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  -h, --help              Show help information.
+
+";
+
+const QUICK_TEXT_HELP: &str = "\
+OVERVIEW: Print the quick terminal's buffer as plain text.
+
+USAGE: agtermctl quick text [--all] [--lines <lines>] [--socket <socket>] [--json]
+
+OPTIONS:
+  --all                   Read the full screen + scrollback instead of just the
+                          visible screen.
+  --lines <lines>         Keep only the last N lines of the full buffer.
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  -h, --help              Show help information.
+
+";
+
+#[test]
+fn quick_help_marks_its_default_subcommand() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], &str); 6] = [
+        (&["quick", "--help"], QUICK_HELP),
+        (&["help", "quick"], QUICK_HELP),
+        (&["quick", "show", "--help"], QUICK_VISIBILITY_HELP),
+        (&["help", "quick", "visibility"], QUICK_VISIBILITY_HELP),
+        (&["quick", "type", "--help"], QUICK_TYPE_HELP),
+        (&["quick", "text", "--help"], QUICK_TEXT_HELP),
+    ];
+    for (args, help) in cases {
+        assert_eq!(
+            outcome(&run(dir.path(), &[], args)?),
+            (Some(0), help.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn quick_commands_send_their_request_and_print_the_reply() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], serde_json::Value, serde_json::Value, &str); 4] = [
+        (
+            &["quick"],
+            serde_json::json!({"cmd": "quick", "args": {"mode": "toggle"}}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+        (
+            &["quick", "show"],
+            serde_json::json!({"cmd": "quick", "args": {"mode": "show"}}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+        (
+            &["quick", "text", "--lines", "2"],
+            serde_json::json!({"cmd": "quick.text", "args": {"lines": 2}}),
+            serde_json::json!({"text": "$ echo hi\nhi"}),
+            "$ echo hi\nhi\n",
+        ),
+        (
+            &["quick", "type", "ls"],
+            serde_json::json!({"cmd": "quick.type", "args": {"text": "ls"}}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+    ];
+    for (at, (args, expected, result, stdout)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("{at}.sock"));
+        let _server = scripted(&socket, expected, result)?;
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(0), stdout.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    let socket = dir.path().join("stdin.sock");
+    let expected = serde_json::json!({"cmd": "quick.type", "args": {"text": "printf 'a%s\\n' b\n"}});
+    let _server = scripted(&socket, expected, serde_json::json!({}))?;
+    let output = run_with_input(
+        dir.path(),
+        &socket,
+        &["quick", "type", "--stdin"],
+        b"printf 'a%s\\n' b\n",
+    )?;
+    assert_eq!(outcome(&output), (Some(0), "ok\n".to_owned(), String::new()));
+    Ok(())
+}
+
+#[test]
+fn quick_refusals_are_usage_errors_before_connecting() -> TestResult {
+    let dir = short_dir()?;
+    // nothing listens here: a connection attempt would exit 1, not 64
+    let socket = dir.path().join("agterm.sock");
+    let text = "Usage: agtermctl quick text [--all] [--lines <lines>] [--socket <socket>] [--json]\n  See 'agtermctl \
+                quick text --help' for more information.\n";
+    let cases: [(&[&str], &str); 2] = [
+        (
+            &["quick", "text", "--all", "--lines", "1"],
+            "use either --all or --lines, not both",
+        ),
+        (&["quick", "text", "--lines", "0"], "--lines must be greater than 0"),
+    ];
+    for (args, message) in cases {
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(64), String::new(), format!("Error: {message}\n{text}")),
+            "{args:?}"
+        );
+    }
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &["quick", "type"])?),
+        (
+            Some(64),
+            String::new(),
+            format!("Error: provide TEXT or --stdin\n{ROOT_USAGE}")
+        )
+    );
+    Ok(())
+}
+
+// MARK: - dashboard
+
+const DASHBOARD_USAGE: &str = "Usage: agtermctl dashboard [<ids> ...] [--font-size <font-size>] [--auto-size] [--mru] \
+                               [--close] [--socket <socket>] [--json] [--window <window>]\n  See 'agtermctl \
+                               dashboard --help' for more information.\n";
+
+#[test]
+fn dashboard_sends_its_ids_verbatim_and_prints_ok_or_the_note() -> TestResult {
+    let dir = short_dir()?;
+    let cases: [(&[&str], serde_json::Value, serde_json::Value, &str); 7] = [
+        (
+            &["dashboard", "s1", "s2", "--font-size", "12"],
+            serde_json::json!({"cmd": "dashboard", "args": {"targets": ["s1", "s2"], "fontSize": 12.0}}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+        (
+            &["dashboard", "s1", "s2", "--auto-size"],
+            serde_json::json!({"cmd": "dashboard", "args": {"targets": ["s1", "s2"], "autoSize": true}}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+        (
+            &["dashboard", "s1", "--window", "win"],
+            serde_json::json!({"cmd": "dashboard", "args": {"targets": ["s1"], "window": "win"}}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+        (
+            &["dashboard", "--close"],
+            serde_json::json!({"cmd": "dashboard", "args": {"close": true}}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+        (
+            // the pane grammar is the server's to check
+            &["dashboard", "s1:left", "s2:right", "s3", "active:left", "s4:nope"],
+            serde_json::json!({"cmd": "dashboard",
+                               "args": {"targets": ["s1:left", "s2:right", "s3", "active:left", "s4:nope"]}}),
+            serde_json::json!({"text": "unresolved: s4:nope"}),
+            "unresolved: s4:nope\n",
+        ),
+        (
+            &["dashboard", "--mru"],
+            serde_json::json!({"cmd": "dashboard", "args": {"mru": true}}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+        (
+            &["dashboard", "--mru", "--auto-size", "--window", "win"],
+            serde_json::json!({"cmd": "dashboard", "args": {"window": "win", "autoSize": true, "mru": true}}),
+            serde_json::json!({}),
+            "ok\n",
+        ),
+    ];
+    for (at, (args, expected, result, stdout)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("{at}.sock"));
+        let _server = scripted(&socket, expected, result)?;
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(0), stdout.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn dashboard_refusals_are_usage_errors_before_connecting() -> TestResult {
+    let dir = short_dir()?;
+    // nothing listens here: a connection attempt would exit 1, not 64
+    let socket = dir.path().join("agterm.sock");
+    let cases: [(&[&str], &str); 8] = [
+        (
+            &["dashboard"],
+            "dashboard requires at least one session id (or --mru, or --close)",
+        ),
+        (
+            &["dashboard", "s1:left", "--mru"],
+            "--mru cannot be combined with session ids",
+        ),
+        (
+            &["dashboard", "s1", "--font-size", "12", "--auto-size"],
+            "--font-size is mutually exclusive with --auto-size",
+        ),
+        (
+            &["dashboard", "s1", "--font-size", "0"],
+            "--font-size must be a positive number",
+        ),
+        (
+            &["dashboard", "s1", "--font-size", "nan"],
+            "--font-size must be a positive number",
+        ),
+        (
+            &["dashboard", "s1", "--close"],
+            "--close takes no ids, --mru, or font options",
+        ),
+        (
+            &["dashboard", "--close", "--auto-size"],
+            "--close takes no ids, --mru, or font options",
+        ),
+        (
+            &["dashboard", "--close", "--mru"],
+            "--close takes no ids, --mru, or font options",
+        ),
+    ];
+    for (args, message) in cases {
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(64), String::new(), format!("Error: {message}\n{DASHBOARD_USAGE}")),
             "{args:?}"
         );
     }

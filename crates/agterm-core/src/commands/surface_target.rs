@@ -3,14 +3,16 @@
 //! Upstream's `readSurfaceCursor` (`ControlServer+SurfaceIO.swift`) and `setSurfaceZoom`, `resolveOpenWindow`,
 //! `resolveSurfaceOwner` (`ControlServer+SessionActions.swift`).
 //!
-//! The quick terminal joins with its task; until then `quick` is never available.
+//! `quick` names the detached quick-terminal panel, which no window's zoom can hold: [`super::quick`] answers it.
 
+use agterm_host::Surface;
 use agterm_proto::command::SurfaceCmd;
 use agterm_proto::{ControlCursor, ControlResult, Request};
 use uuid::Uuid;
 
+use super::quick::{self, QUICK};
 use super::surface::pane_surface;
-use super::{ToggleMode, args_of, session_store, unknown_pane_id};
+use super::{Outcome, ToggleMode, args_of, session_store, unknown_pane_id};
 use crate::Core;
 use crate::error::ControlError;
 use crate::model::{AppStore, StatusPane};
@@ -18,7 +20,6 @@ use crate::resolve::{Resolver, trimmed};
 use crate::zoom::{SurfaceId, ZoomSurface, apply_mode};
 
 const ACTIVE: &str = "active";
-const QUICK: &str = "quick";
 
 /// Answers a `surface.*` command; `None` is a bare `ok`.
 pub(crate) fn dispatch(
@@ -100,7 +101,7 @@ fn cursor(
         return cursor_of(store, id);
     }
     if target == QUICK {
-        return Err(not_available(QUICK));
+        return cursor_answer(quick::cursor_surface(core)?, QUICK.to_owned());
     }
     let (window, id) = if target == ACTIVE {
         let window = Resolver::new(core.library()).open_placement_window(window)?;
@@ -135,6 +136,12 @@ fn cursor_of(store: &AppStore, id: SurfaceId) -> Result<ControlResult, ControlEr
         .ok_or_else(|| not_available(&control_id))?;
     let pane = id.surface.pane().ok_or_else(|| not_available(&control_id))?;
     let surface = pane_surface(session, pane).ok_or_else(|| not_available(&control_id))?;
+    cursor_answer(surface, control_id)
+}
+
+/// The cursor of a terminal addressed as `control_id` (upstream's `cursorResponse`): a terminal not up is reported,
+/// not waited for.
+fn cursor_answer(surface: &dyn Surface, control_id: String) -> Outcome {
     if !surface.is_realized() {
         return Err(ControlError::rejected("surface not realized"));
     }
@@ -163,7 +170,7 @@ fn zoom(
         return active_zoom(core, window, mode);
     }
     if target == QUICK {
-        return Err(not_available(QUICK));
+        return quick::set_zoom(core, mode).map(Some);
     }
     let id = SurfaceId::parse(target).ok_or_else(|| invalid_surface(target))?;
     let owner = surface_owner(core, id, window)?;

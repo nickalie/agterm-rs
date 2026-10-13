@@ -59,6 +59,18 @@ impl Windows {
         }
     }
 
+    /// The application the windows belong to.
+    #[must_use]
+    pub fn app(&self) -> &adw::Application {
+        &self.app
+    }
+
+    /// What every shell of this instance is told about it.
+    #[must_use]
+    pub fn context(&self) -> &PaneContext {
+        &self.context
+    }
+
     #[must_use]
     pub fn get(&self, id: Uuid) -> Option<&WindowUi> {
         self.shown.get(&id)
@@ -77,6 +89,8 @@ impl Windows {
 
     /// Brings the windows in line with the model (module docs), then reports every window's state to the core.
     pub fn sync(&mut self, core: &mut Core, poster: &Poster) {
+        // a dashboard follows the model before anything renders it
+        core.reconcile_dashboards();
         let library = core.library();
         let shown: HashSet<Uuid> = self.shown.keys().copied().collect();
         let plan = plan(&library.open_ids(), &shown, library.active_window_id());

@@ -1,10 +1,15 @@
 //! The command handlers driven through [`Core::dispatch`] over a seeded window library; no surfaces needed. Error
 //! strings are asserted in full, dynamic parts included.
 
+mod auto_follow;
+mod background;
+mod dashboard;
 mod events;
 mod metadata;
 mod moves;
 mod panes;
+mod quick;
+mod restart;
 mod session;
 mod surface;
 mod window;

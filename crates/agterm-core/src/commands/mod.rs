@@ -2,8 +2,13 @@
 //! does it, then the effect as upstream's app-side `agterm/Control/ControlServer+*.swift` performs it on the model.
 //! Effects that need the frontend (focusing a terminal, revealing a directory) go through [`crate::Core`]'s hooks.
 
+pub(crate) mod background;
+pub(crate) mod dashboard;
 pub(crate) mod metadata;
 pub(crate) mod panes;
+pub(crate) mod quick;
+pub(crate) mod restart;
+pub(crate) mod restore;
 pub(crate) mod search;
 pub(crate) mod session;
 pub(crate) mod surface;

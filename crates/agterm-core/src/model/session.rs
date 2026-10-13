@@ -163,6 +163,15 @@ pub fn validate_context(raw: &str) -> Result<String, String> {
     Ok(trimmed.to_owned())
 }
 
+/// Whether idle auto-follow already pulled the user to a session's current blocked episode (upstream's
+/// `autoFollowConsumed`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum FollowMark {
+    #[default]
+    Fresh,
+    Consumed,
+}
+
 /// One session. Its id is stable for its life and across a relaunch; its pane identities name the panes' processes
 /// (and their live-session daemons) and follow a pane through a swap or a promotion.
 #[derive(Debug)]
@@ -193,6 +202,7 @@ pub struct Session {
     /// When the status was last set, repeats included; wall clock, since `tree` ships it as epoch seconds a client
     /// compares against event timestamps. Never persisted.
     pub status_changed_at: Option<SystemTime>,
+    auto_follow: FollowMark,
     remote_host: Option<String>,
     /// Membership of the flagged working set, the sidebar's cross-workspace flagged view. Persisted.
     pub flagged: bool,
@@ -276,6 +286,7 @@ impl Session {
             unseen_count: 0,
             agent_indicator: AgentIndicator::default(),
             status_changed_at: None,
+            auto_follow: FollowMark::Fresh,
             remote_host: seed.remote_host,
             flagged: false,
             context: None,
@@ -296,6 +307,22 @@ impl Session {
             scratch_surface: SurfaceSlot::default(),
             search: SearchState::default(),
         }
+    }
+
+    /// Whether idle auto-follow already pulled the user to this blocked episode, so a later fire skips it; cleared when
+    /// the status re-enters blocked, never by a blocked-over-blocked repeat. Ephemeral.
+    #[must_use]
+    pub fn auto_follow_consumed(&self) -> bool {
+        self.auto_follow == FollowMark::Consumed
+    }
+
+    /// Marks or clears [`Session::auto_follow_consumed`].
+    pub fn set_auto_follow_consumed(&mut self, consumed: bool) {
+        self.auto_follow = if consumed {
+            FollowMark::Consumed
+        } else {
+            FollowMark::Fresh
+        };
     }
 
     #[must_use]

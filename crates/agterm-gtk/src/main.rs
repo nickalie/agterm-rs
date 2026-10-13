@@ -6,7 +6,9 @@
 //! only then is libghostty initialised, which snapshots the environment its shells inherit.
 
 mod app;
+mod background;
 mod clipboard;
+mod dashboard;
 mod deck;
 mod ghostty_app;
 #[cfg(test)]
@@ -15,6 +17,7 @@ mod input;
 mod logging;
 mod main_loop;
 mod pane;
+mod quick;
 mod sidebar;
 mod signals;
 mod split;

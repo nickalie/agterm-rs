@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use agterm_host::TextScope;
-use agterm_proto::command::SessionCmd;
+use agterm_proto::command::{QuickCmd, SessionCmd};
 use agterm_proto::{Args, Command, ControlResult, Request};
 use uuid::Uuid;
 
@@ -65,6 +65,7 @@ pub(crate) fn deferred(core: &mut Core, request: &Request) -> Option<Dispatched>
         Command::Session(SessionCmd::Type) => Some(super::typing::begin(core, request)),
         Command::Session(SessionCmd::Search) => Some(super::search::begin(core, request)),
         Command::Session(SessionCmd::Swap) => Some(super::panes::begin_swap(core, request)),
+        Command::Quick(QuickCmd::Type | QuickCmd::Text) => Some(super::quick::begin(core, request)),
         _ => None,
     }
 }
@@ -134,7 +135,7 @@ fn existing_pane(session: &Session, pane: StatusPane) -> Result<StatusPane, Cont
 
 /// The extent `session.text` reads (upstream's `parseBufferExtent`): `--all` and `--lines` are exclusive, and a
 /// line count must be positive.
-fn buffer_extent(args: &Args) -> Result<(bool, Option<usize>), ControlError> {
+pub(crate) fn buffer_extent(args: &Args) -> Result<(bool, Option<usize>), ControlError> {
     let all = args.all.unwrap_or(false);
     match args.lines {
         Some(_) if all => Err(ControlError::rejected("use either --all or --lines, not both")),

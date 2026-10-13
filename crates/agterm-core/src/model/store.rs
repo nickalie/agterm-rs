@@ -551,7 +551,8 @@ impl AppStore {
 
     /// Sets a session's status glyph and stamps the change time, repeats and idle included; `status` fires only when
     /// the indicator changed, carrying the glyph's overrides and the status it replaced (upstream's
-    /// `setAgentIndicator`). Control writes go through [`AppStore::apply_control_status`], which may refuse one.
+    /// `setAgentIndicator`). A transition into blocked is a new episode, which idle auto-follow may pull to again.
+    /// Control writes go through [`AppStore::apply_control_status`], which may refuse one.
     pub fn set_agent_indicator(&mut self, mut indicator: AgentIndicator, id: Uuid) {
         let workspace = self.workspace_for_session(id).map(Workspace::id);
         let Some(session) = self.session_mut(id) else { return };
@@ -560,6 +561,9 @@ impl AppStore {
         indicator.status_pane = indicator.normalized_pane(session.split.exists);
         let previous = std::mem::replace(&mut session.agent_indicator, indicator);
         session.status_changed_at = Some(SystemTime::now());
+        if previous.status != AgentStatus::Blocked && session.agent_indicator.status == AgentStatus::Blocked {
+            session.set_auto_follow_consumed(false);
+        }
         let current = &session.agent_indicator;
         if previous == *current {
             return;
