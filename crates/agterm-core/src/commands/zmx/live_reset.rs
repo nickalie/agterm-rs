@@ -29,10 +29,22 @@ const CONSUME_BUDGET: Duration = Duration::from_secs(15);
 const LEADER_POLL: Duration = Duration::from_millis(100);
 
 /// The reset this run confirmed, held until the quit, and the outcome the launch's consumption left.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ResetState {
     pub(crate) pending: Option<Selection>,
     pub(crate) last: Option<ResetOutcome>,
+    /// How long the launch's consumption may wait for the killed leaders ([`CONSUME_BUDGET`]; shorter in tests).
+    pub(crate) consume_budget: Duration,
+}
+
+impl Default for ResetState {
+    fn default() -> Self {
+        Self {
+            pending: None,
+            last: None,
+            consume_budget: CONSUME_BUDGET,
+        }
+    }
 }
 
 /// Why a reset is refused, in the order the checks run (upstream's `LiveResetCoordinator.Refusal`).
@@ -179,7 +191,7 @@ impl Core {
                 return;
             }
         };
-        let deadline = Instant::now() + CONSUME_BUDGET;
+        let deadline = Instant::now() + self.zmx.reset.consume_budget;
         let walk = self.pane_claims();
         let claimed: Option<BTreeSet<uuid::Uuid>> = walk
             .complete

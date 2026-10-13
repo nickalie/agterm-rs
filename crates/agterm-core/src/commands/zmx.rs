@@ -20,7 +20,7 @@ mod lead;
 mod live_reset;
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -37,6 +37,7 @@ pub use self::live_reset::{LiveQuit, ResetPrompt, ResetRefusal};
 use crate::Core;
 use crate::error::ControlError;
 use crate::zmx::daemon_name;
+use crate::zmx::lead::{LeadAttachment, LeadState};
 use crate::zmx::reset::{MarkerStore, Outcome, Selection};
 use crate::zmx::support::Inputs;
 
@@ -101,6 +102,9 @@ pub(crate) struct ZmxRuntime {
     pub(crate) claimed_exits: HashSet<String>,
     /// Pane terminals commands asked the frontend to replace, in order.
     replacements: Vec<PaneReplacement>,
+    /// The lead state each pane in a replacement had before it, by pane token, until the frontend reports the
+    /// replacement installed or dropped: a dropped one puts it back, so the pane is not left covered for good.
+    superseded: HashMap<String, Option<LeadState>>,
     /// A quit a command asked for once its reply is out.
     quit: Option<LiveQuit>,
 }
@@ -152,6 +156,44 @@ impl Core {
 
     pub(crate) fn request_pane_replacement(&mut self, replacement: PaneReplacement) {
         self.zmx.replacements.push(replacement);
+    }
+
+    /// Starts the attachment a replacement of the pane carrying `token` runs with, keeping what it replaces until the
+    /// frontend reports the replacement ([`Core::pane_replaced`], [`Core::replacement_dropped`]).
+    pub(crate) fn begin_replacement_lead(
+        &mut self,
+        token: &str,
+        identity: Uuid,
+        attachment: LeadAttachment,
+        reattaching: bool,
+    ) {
+        let previous = self.zmx.leads.snapshot(identity);
+        self.zmx.superseded.entry(token.to_owned()).or_insert(previous);
+        self.zmx.leads.begin(identity, attachment, reattaching);
+    }
+
+    /// The frontend installed `replacement`'s terminal.
+    pub fn pane_replaced(&mut self, replacement: &PaneReplacement) {
+        self.zmx.superseded.remove(&replacement.token);
+    }
+
+    /// The frontend could not install `replacement`'s terminal (no page holds the pane): the pane keeps the lead state
+    /// it had, and a pane whose shell a restart already ended is closed by the exit the restart claimed, as upstream's
+    /// `closeEndedPane`. Whether the model changed; commit afterwards.
+    pub fn replacement_dropped(&mut self, replacement: &PaneReplacement) -> bool {
+        if let (Some(previous), Ok(identity)) = (
+            self.zmx.superseded.remove(&replacement.token),
+            Uuid::parse_str(&replacement.token),
+        ) {
+            self.zmx.leads.restore(identity, previous);
+        }
+        if !self.zmx.claimed_exits.remove(&replacement.token) {
+            return false;
+        }
+        if let Ok(identity) = Uuid::parse_str(&replacement.token) {
+            self.note_already_finalized(identity);
+        }
+        self.pane_exited(replacement.session, &replacement.token)
     }
 
     pub(crate) fn request_live_quit(&mut self, quit: LiveQuit) {

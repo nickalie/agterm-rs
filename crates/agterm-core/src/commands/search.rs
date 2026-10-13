@@ -74,6 +74,8 @@ fn start(core: &mut Core, request: &Request) -> Result<Dispatched, ControlError>
     if core.zoom_target(resolved.window).is_some() {
         return Err(ControlError::rejected("terminal zoom active"));
     }
+    // the pinned owner when a search is open, else the pane an open would land on (`--to close` stays available)
+    refuse_covered(core, resolved.session, None)?;
     if let Some(store) = core.library_mut().store_mut(resolved.window) {
         store.select_session(Some(resolved.session));
     }
@@ -94,6 +96,29 @@ fn close(core: &mut Core, id: Uuid) -> Result<ControlResult, ControlError> {
         run_binding(session, owner, "end_search");
     }
     Ok(with_id(id))
+}
+
+/// The refusal of a search on a lead-covered pane (upstream's `coveredRefusal`): its surface holds output laid out for
+/// another client's grid, so a count from it would be of the wrong text. The pane is the pinned owner when a search
+/// is open, else `pane`, else the on-screen one; the role can change across every wait, so it is checked before each
+/// mutation and before the answer.
+fn refuse_covered(core: &Core, id: Uuid, pane: Option<StatusPane>) -> Result<(), ControlError> {
+    let Some(session) = core.library().store_for_session(id).and_then(|store| store.session(id)) else {
+        return Ok(());
+    };
+    let pane = session
+        .search
+        .owner
+        .or(pane)
+        .unwrap_or_else(|| session.on_screen_pane());
+    match session
+        .pane_slot(pane)
+        .get()
+        .and_then(|surface| core.covered_refusal(surface))
+    {
+        Some(refusal) => Err(ControlError::rejected(refusal)),
+        None => Ok(()),
+    }
 }
 
 fn session_mut(core: &mut Core, id: Uuid) -> Result<&mut Session, ControlError> {
@@ -125,6 +150,12 @@ fn open(core: &mut Core, job: SearchJob, attempt: u32) -> Dispatched {
             Dispatched::done(Err(not_realized()))
         };
     }
+    if let Err(refusal) = refuse_covered(core, job.run.session, Some(pane)) {
+        return Dispatched::done(Err(refusal));
+    }
+    let Ok(session) = session_mut(core, job.run.session) else {
+        return Dispatched::done(Err(not_realized()));
+    };
     if !session.search.active {
         run_binding(session, pane, "start_search");
     }
@@ -141,6 +172,9 @@ fn open(core: &mut Core, job: SearchJob, attempt: u32) -> Dispatched {
 
 /// Sends the needle; an empty one clears the query and answers at once, as libghostty reports no count for it.
 fn query(core: &mut Core, run: SearchRun, owner: StatusPane, text: &str, clear: bool) -> Dispatched {
+    if let Err(refusal) = refuse_covered(core, run.session, Some(owner)) {
+        return Dispatched::done(Err(refusal));
+    }
     let session = match session_mut(core, run.session) {
         Ok(session) => session,
         Err(error) => return Dispatched::done(Err(error)),
@@ -162,6 +196,9 @@ fn query(core: &mut Core, run: SearchRun, owner: StatusPane, text: &str, clear: 
 
 /// Steps the selection, then waits for the count.
 fn navigate(core: &mut Core, run: SearchRun, owner: StatusPane) -> Dispatched {
+    if let Err(refusal) = refuse_covered(core, run.session, Some(owner)) {
+        return Dispatched::done(Err(refusal));
+    }
     if let Some(step) = run.step
         && let Ok(session) = session_mut(core, run.session)
     {
@@ -179,6 +216,12 @@ fn await_count(core: &mut Core, id: Uuid, attempt: u32) -> Dispatched {
     if session.search.total.is_none() && attempt + 1 < COUNT_ATTEMPTS {
         return after(move |core| await_count(core, id, attempt + 1));
     }
+    if let Err(refusal) = refuse_covered(core, id, None) {
+        return Dispatched::done(Err(refusal));
+    }
+    let Ok(session) = session_mut(core, id) else {
+        return Dispatched::done(Err(not_realized()));
+    };
     // an empty counter (no query ran yet) is left out, so the CLI prints `ok` rather than a blank line
     let display = session.search.display_text();
     Dispatched::done(Ok(ControlResult {

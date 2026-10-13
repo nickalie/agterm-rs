@@ -96,17 +96,23 @@ impl Windows {
     }
 
     /// Puts fresh terminals in place of the panes commands asked to replace (a lead takeover, a restart), before the
-    /// windows render; a pane no window shows is skipped, logged.
-    pub fn replace_panes(&mut self, core: &mut Core, poster: &Poster) {
+    /// windows render; each is reported back to the core, and one no window shows is dropped, logged. Whether a
+    /// dropped one changed the model, which then needs another settle.
+    pub fn replace_panes(&mut self, core: &mut Core, poster: &Poster) -> bool {
+        let mut changed = false;
         for replacement in core.take_pane_replacements() {
             let window = core.library().window_holding_session(replacement.session);
             let replaced = window
                 .and_then(|id| self.shown.get_mut(&id))
                 .is_some_and(|ui| ui.replace_pane(core, &replacement, poster));
-            if !replaced {
+            if replaced {
+                core.pane_replaced(&replacement);
+            } else {
                 tracing::warn!(session = %replacement.session, token = replacement.token, "no pane to replace");
+                changed |= core.replacement_dropped(&replacement);
             }
         }
+        changed
     }
 
     /// Brings the windows in line with the model (module docs), then reports every window's state to the core.

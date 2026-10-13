@@ -69,24 +69,17 @@ impl ProcessTable for ProcTable {
         members
     }
 
+    /// The `tpgid` of the stat line, read by the sweep's parser; `None` for a process without a terminal.
     fn terminal_foreground(&self, pid: i32) -> Option<i32> {
-        parse_terminal_foreground(&fs::read(self.process_file(pid, "stat")).ok()?)
+        agterm_zmx::sweep::parse_record(&fs::read(self.process_file(pid, "stat")).ok()?)
+            .map(|record| record.foreground)
+            .filter(|group| *group > 0)
     }
 
     fn working_directory(&self, pid: i32) -> Option<String> {
         let link = fs::read_link(self.process_file(pid, "cwd")).ok()?;
         link.into_os_string().into_string().ok()
     }
-}
-
-/// The foreground process group of the controlling terminal in a `/proc/<pid>/stat` line (`tpgid`, the fifth field
-/// after the command name); `None` for a malformed line or a process without a terminal.
-pub fn parse_terminal_foreground(line: &[u8]) -> Option<i32> {
-    let close = line.iter().rposition(|byte| *byte == b')')?;
-    let tail = std::str::from_utf8(&line[close + 1..]).ok()?;
-    // after the name: state ppid pgrp session tty_nr tpgid
-    let tpgid: i32 = tail.split_ascii_whitespace().nth(5)?.parse().ok()?;
-    (tpgid > 0).then_some(tpgid)
 }
 
 /// The argv in a `/proc/<pid>/cmdline`: NUL-separated arguments, the trailing NUL ending the last one, each decoded
@@ -221,12 +214,24 @@ mod tests {
 
     #[test]
     fn a_stat_line_gives_the_terminal_s_foreground_group() {
-        assert_eq!(
-            parse_terminal_foreground(b"4242 (z (s) h) S 4200 4242 4242 34817 4300 4194560 0"),
-            Some(4300)
+        let root = tempfile::tempdir().unwrap();
+        let write = |pid: i32, stat: &[u8]| {
+            let dir = root.path().join(pid.to_string());
+            fs::create_dir(&dir).unwrap();
+            fs::write(dir.join("stat"), stat).unwrap();
+        };
+        let tail = b" 0 0 0 0 1 2 0 0 20 0 1 0 987654 0 0";
+        write(
+            4242,
+            &[&b"4242 (z (s) h) S 4200 4242 4242 34817 4300 4194560"[..], tail].concat(),
         );
-        assert_eq!(parse_terminal_foreground(b"7 (daemon) S 1 7 7 0 -1 0"), None);
-        assert_eq!(parse_terminal_foreground(b"7 (short) S 1 7"), None);
+        write(7, &[&b"7 (daemon) S 1 7 7 0 -1 0"[..], tail].concat());
+        write(8, b"8 (short) S 1 8");
+        let table = ProcTable::at(root.path());
+        assert_eq!(table.terminal_foreground(4242), Some(4300));
+        assert_eq!(table.terminal_foreground(7), None, "no controlling terminal");
+        assert_eq!(table.terminal_foreground(8), None);
+        assert_eq!(table.terminal_foreground(9), None);
     }
 
     #[test]

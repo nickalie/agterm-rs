@@ -33,6 +33,19 @@ impl LeadBook {
         self.states.remove(&pane);
     }
 
+    /// `pane`'s state as it stands, for a replacement that may still be dropped to put back.
+    pub(crate) fn snapshot(&self, pane: Uuid) -> Option<LeadState> {
+        self.states.get(&pane).cloned()
+    }
+
+    /// Puts back the state [`LeadBook::snapshot`] took, or forgets the pane when it had none.
+    pub(crate) fn restore(&mut self, pane: Uuid, state: Option<LeadState>) {
+        match state {
+            Some(state) => self.states.insert(pane, state),
+            None => self.states.remove(&pane),
+        };
+    }
+
     /// Applies a report to `pane`'s current attachment; the new role when it changed.
     pub(crate) fn apply(&mut self, pane: Uuid, notice: &LeadNotice) -> Option<LeadRole> {
         let state = self.states.get_mut(&pane)?;
@@ -174,16 +187,17 @@ impl Core {
     /// Replaces the live pane carrying `token` with a fresh attach to its daemon (upstream's `reattachPane` and
     /// `PaneReattach.launch`), covered until its first report. The attach never creates: its trailing `/bin/sh -c`
     /// runs only when the daemon is gone, and fails, so a vanished session ends the pane rather than handing back a
-    /// fresh shell under the old identity. False when the pane is not a live one this instance can wrap.
+    /// fresh shell under the old identity. False when the pane is not a live one of an open window's tree this
+    /// instance can wrap: a session a pending close holds has no page to replace a terminal in (upstream's
+    /// `replacePane` resolves the session's store first), so it keeps its attachment and is not left covered.
     pub(crate) fn reattach_pane(&mut self, session: Uuid, token: &str, claim: bool) -> bool {
         let Ok(identity) = Uuid::parse_str(token) else {
             return false;
         };
-        let library = self.library();
-        let live = library
-            .window_holding_session(session)
-            .and_then(|window| library.store(window))
-            .and_then(|store| store.session(session).or_else(|| store.pending_close_session(session)))
+        let live = self
+            .library()
+            .store_for_session(session)
+            .and_then(|store| store.session(session))
             .and_then(|found| found.pane_role_for_token(token).map(|role| found.pane_slot(role)))
             .and_then(|slot| slot.get())
             .is_some_and(Surface::is_live_session);
@@ -200,7 +214,7 @@ impl Core {
                 .into_iter()
                 .map(str::to_owned),
         );
-        self.zmx.leads.begin(identity, attachment, true);
+        self.begin_replacement_lead(token, identity, attachment, true);
         self.zmx.leaders.borrow_mut().note_lifecycle_change();
         self.request_pane_replacement(PaneReplacement {
             session,

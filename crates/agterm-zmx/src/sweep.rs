@@ -111,12 +111,6 @@ pub fn parse_record(line: &[u8]) -> Option<ProcessRecord> {
     })
 }
 
-/// The terminal foreground group in a `/proc/<pid>/stat` line.
-#[must_use]
-pub fn parse_terminal_foreground(line: &[u8]) -> Option<i32> {
-    parse_record(line).map(|record| record.foreground)
-}
-
 fn is_pid(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_digit())
 }
@@ -140,7 +134,6 @@ mod tests {
                 foreground: 4260,
             })
         );
-        assert_eq!(parse_terminal_foreground(LINE), Some(4260));
         assert_eq!(parse_record(b"17 (x) S 1 17 17 0 -1"), None);
         assert_eq!(parse_record(b""), None);
     }

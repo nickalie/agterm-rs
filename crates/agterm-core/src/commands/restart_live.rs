@@ -207,7 +207,7 @@ fn rebuild(core: &mut Core, job: Job, ending: &Ending) -> Dispatched {
         job.command.as_deref(),
         &none,
     );
-    core.zmx.leads.begin(job.identity, attachment, false);
+    core.begin_replacement_lead(&job.token, job.identity, attachment, false);
     core.request_pane_replacement(super::zmx::PaneReplacement {
         session: job.session,
         token: job.token.clone(),
@@ -231,14 +231,17 @@ fn await_new_shell(
     replayed: Option<Vec<String>>,
     deadline: Instant,
 ) -> Dispatched {
+    // the claim covered the old terminal from the kill until the frontend installed the replacement, which it did in
+    // the settle right after the rebuild, claiming the old terminal's exit itself; the new terminal's own exit must
+    // close the pane (upstream claims per surface), so the claim ends at the first probe after the rebuild
+    core.zmx.claimed_exits.remove(&job.token);
     let Some(new) = listed_shell(core, &job.daemon, Some(old)) else {
-        if Instant::now() < deadline {
+        // a replacement whose attach already exited closed the pane: no new shell will show up
+        if Instant::now() < deadline && pane_unchanged(core, &job) {
             return later(move |core| await_new_shell(core, job, old, replayed, deadline));
         }
-        core.zmx.claimed_exits.remove(&job.token);
         return failure(format!("the old shell ended (pid {old}) and no new one was observed"));
     };
-    core.zmx.claimed_exits.remove(&job.token);
     core.zmx.leaders.borrow_mut().note_lifecycle_change();
     let pane = job.pane.as_str();
     let note = replayed

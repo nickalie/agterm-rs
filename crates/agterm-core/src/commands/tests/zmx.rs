@@ -391,23 +391,31 @@ fn screen_reads_the_daemon_grid_by_name() {
 // MARK: - the finalizer
 
 #[test]
-fn a_closed_session_ends_its_daemons() {
+fn a_soft_closed_session_ends_its_daemons_only_once_the_close_is_final() {
     let mut live = live();
     let split = live.split();
-    let sid = wire(live.session);
-    assert!(live.fixture.session(SessionCmd::Close, Some(&sid), Args::default()).ok);
+    let session = live.session;
+    assert!(live.fixture.store_mut().unwrap().soft_close_session(session));
     // a soft close holds the daemons for its undo window; making it final ends both
     let _ = live.core().commit();
-    let held: Vec<String> = live.host.kills().into_iter().map(|(name, _)| name).collect();
-    if held.is_empty() {
-        live.core().library_mut().finalize_all_pending_closes();
-        let _ = live.core().commit();
-    }
+    assert!(live.host.kills().is_empty(), "killed inside the undo window");
+    live.core().library_mut().finalize_all_pending_closes();
+    let _ = live.core().commit();
     let mut killed: Vec<(String, bool)> = live.host.kills();
     killed.sort();
     let mut expected = vec![(daemon_name(live.left), true), (daemon_name(split), true)];
     expected.sort();
     assert_eq!(killed, expected);
+}
+
+#[test]
+fn a_hard_closed_session_ends_its_daemons_at_once() {
+    let mut live = live();
+    let sid = wire(live.session);
+    // one target closes for good
+    assert!(live.fixture.session(SessionCmd::Close, Some(&sid), Args::default()).ok);
+    let _ = live.core().commit();
+    assert_eq!(live.host.kills(), [(daemon_name(live.left), true)]);
 }
 
 #[test]
@@ -665,6 +673,136 @@ fn a_restart_ends_the_old_shell_and_rebuilds_the_pane_on_its_daemon() {
     assert!(live.core().zmx.claimed_exits.is_empty());
 }
 
+/// Starts a restart of the live pane with `--command exit`, whose old shell (leader 100) has no job.
+fn begin_restart(live: &mut Live) -> Dispatched {
+    live.host.set_record(&daemon_name(live.left), Some(1), Some(100), None);
+    let request = Request {
+        cmd: Command::Session(SessionCmd::Restart),
+        target: Some(wire(live.session)),
+        args: Some(args(|a| {
+            (a.pane, a.command) = (Some("left".to_owned()), Some("exit".to_owned()));
+        })),
+    };
+    live.core().begin(&request)
+}
+
+#[test]
+fn a_replacement_whose_attach_exits_closes_the_pane_and_ends_the_restart() {
+    let mut live = live();
+    let token = uuid_string(live.left);
+    let session = live.session;
+    let dispatched = begin_restart(&mut live);
+    let mut rebuilt_at = None;
+    let started = std::time::Instant::now();
+    let response = drive(live.core(), dispatched, |core, step| {
+        if !core.take_pane_replacements().is_empty() {
+            rebuilt_at = Some(step);
+        }
+        // the frontend installed the replacement in the settle after the rebuild; the probe after that lifts the
+        // claim, and the new terminal's attach then exits at once (the daemon ran `exit`)
+        if rebuilt_at.is_some_and(|rebuilt| step == rebuilt + 2) {
+            assert!(!core.zmx.claimed_exits.contains(&token));
+            assert!(
+                core.pane_exited(session, &token),
+                "the replacement's own exit was swallowed"
+            );
+        }
+    });
+    assert_eq!(
+        response,
+        failure("the old shell ended (pid 100) and no new one was observed")
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "waited out the restart"
+    );
+    assert!(live.fixture.store().session(session).is_none());
+}
+
+#[test]
+fn a_dropped_restart_replacement_closes_the_ended_pane() {
+    let mut live = live();
+    let session = live.session;
+    let dispatched = begin_restart(&mut live);
+    let response = drive(live.core(), dispatched, |core, _| {
+        for replacement in core.take_pane_replacements() {
+            assert!(core.replacement_dropped(&replacement));
+        }
+    });
+    assert_eq!(
+        response,
+        failure("the old shell ended (pid 100) and no new one was observed")
+    );
+    assert!(live.fixture.store().session(session).is_none());
+    assert!(live.core().zmx.claimed_exits.is_empty());
+}
+
+#[test]
+fn a_dropped_takeover_leaves_the_pane_covered_as_it_was() {
+    let mut live = live();
+    let token = uuid_string(live.left);
+    let nonce = spawn_live(&mut live);
+    assert!(report(&mut live, &token, &nonce, "follower", 1));
+    assert!(live.fixture.core.take_pane_lead(live.session, &token));
+    let replacements = live.core().take_pane_replacements();
+    assert_eq!(live.core().pane_lead_cover(&token).unwrap().title, "Taking over…");
+    assert!(!live.core().replacement_dropped(&replacements[0]));
+    let cover = live.core().pane_lead_cover(&token).unwrap();
+    assert_eq!(
+        (cover.title, cover.offers_takeover),
+        ("In use from another machine", true)
+    );
+    // the old attachment's reports still count, and the takeover can be asked again
+    assert!(report(&mut live, &token, &nonce, "leader", 2));
+    assert_eq!(live.core().pane_lead_cover(&token), None);
+}
+
+#[test]
+fn a_pane_a_pending_close_holds_is_not_reattached() {
+    let mut live = live();
+    let token = uuid_string(live.left);
+    let nonce = spawn_live(&mut live);
+    let session = live.session;
+    assert!(live.fixture.store_mut().unwrap().soft_close_session(session));
+    let held = live.fixture.store().pending_close_session(session).is_some();
+    assert!(held, "the soft close holds the session for its undo");
+    // its daemon lost the leader during the undo window: no page could take a fresh attach
+    assert!(report(&mut live, &token, &nonce, "unowned", 1));
+    assert!(live.core().take_pane_replacements().is_empty());
+    assert_eq!(live.core().pane_lead_cover(&token).unwrap().title, "Reconnecting…");
+    // the attachment it kept still takes the next report
+    assert!(report(&mut live, &token, &nonce, "leader", 2));
+    assert_eq!(live.core().pane_lead_cover(&token), None);
+}
+
+#[test]
+fn search_is_refused_on_a_covered_pane() {
+    let mut live = live();
+    let token = uuid_string(live.left);
+    let nonce = spawn_live(&mut live);
+    assert!(report(&mut live, &token, &nonce, "follower", 1));
+    let sid = wire(live.session);
+    assert_eq!(
+        live.fixture.session(
+            SessionCmd::Search,
+            Some(&sid),
+            args(|a| a.text = Some("foo".to_owned()))
+        ),
+        failure("pane is covered while another Mac leads it; take the lead first (session lead)")
+    );
+    assert!(live.probe.actions().is_empty(), "the covered surface was searched");
+    // closing stays available as cleanup
+    assert!(
+        live.fixture
+            .session(
+                SessionCmd::Search,
+                Some(&sid),
+                args(|a| a.to = Some("close".to_owned()))
+            )
+            .ok
+    );
+}
+
 #[test]
 fn a_restart_refuses_before_killing_when_the_program_cannot_be_tracked_or_replayed() {
     let mut live = live();
@@ -745,7 +883,8 @@ fn a_confirmed_reset_holds_the_outdated_panes_quits_and_arms_the_marker() {
     assert!(live.core().arm_live_reset_on_quit());
     let marker = live.resources.path().join(crate::zmx::reset::MARKER_FILE_NAME);
     assert!(marker.exists());
-    // the next launch that gets live consumes it: the outdated daemon is ended and the outcome read back
+    // the next launch that gets live consumes it: the marker's pane is not claimed by that launch's model, so it is
+    // skipped rather than killed
     let mut next = live_with(0, RestoreMode::Live);
     next.core().save_restore_mode(RestoreMode::Live);
     let host = Arc::new(FakeSessionHost::new());
@@ -754,8 +893,56 @@ fn a_confirmed_reset_holds_the_outdated_panes_quits_and_arms_the_marker() {
     next.core().zmx.outdated_before = Some(100);
     next.core().consume_live_reset(host.as_ref());
     assert!(!marker.exists());
-    // the marker's pane is not claimed by this launch's model, so it is skipped rather than killed
     assert!(host.kills().is_empty());
-    let last = next.core().zmx.reset.last.clone().unwrap();
-    assert_eq!(last.panes.skipped, 1);
+    assert_eq!(next.core().zmx.reset.last.clone().unwrap().panes.skipped, 1);
+}
+
+/// Arms a reset of the live pane's outdated daemon (leader 100) and consumes it in the same model, whose process
+/// table holds the processes `alive`.
+fn consume_reset(alive: &[i32]) -> (Live, Arc<FakeSessionHost>) {
+    let mut live = live();
+    live.core().save_restore_mode(RestoreMode::Live);
+    live.core().zmx.outdated_before = Some(100);
+    let daemon = daemon_name(live.left);
+    live.host.set_record(&daemon, Some(1), Some(100), Some(50));
+    assert!(live.zmx(ZmxCmd::Reset, None, |a| a.force = Some(true)).ok);
+    assert!(live.core().arm_live_reset_on_quit());
+    let table = FakeProcessTable::default();
+    for pid in alive {
+        table.insert(
+            ProcessStat {
+                pid: *pid,
+                ppid: 1,
+                pgrp: *pid,
+                session: *pid,
+            },
+            Some(&["zsh"]),
+        );
+    }
+    live.core().set_process_table(Box::new(table), None);
+    live.core().zmx.reset.consume_budget = std::time::Duration::from_millis(50);
+    let host = Arc::clone(&live.host);
+    live.core().consume_live_reset(host.as_ref());
+    (live, host)
+}
+
+#[test]
+fn a_consumed_reset_ends_the_claimed_outdated_daemon() {
+    let (mut live, host) = consume_reset(&[]);
+    assert_eq!(host.kills(), [(daemon_name(live.left), true)]);
+    let last = live.core().zmx.reset.last.clone().unwrap();
+    assert_eq!((last.panes.killed, last.unconfirmed.len()), (1, 0));
+    assert!(live.core().zmx.suppressed.is_empty());
+}
+
+#[test]
+fn a_leader_outliving_the_reset_suppresses_its_pane_s_payloads() {
+    let (mut live, host) = consume_reset(&[100]);
+    assert_eq!(host.kills(), [(daemon_name(live.left), true)]);
+    let last = live.core().zmx.reset.last.clone().unwrap();
+    assert_eq!(last.unconfirmed, [live.left]);
+    assert!(live.fixture.core.zmx.suppressed.contains(&live.left));
+    // its pane attaches with neither a replay nor its durable command
+    let policy = live.core().seed_policy();
+    assert!(policy.suppressed_daemons.contains(&daemon_name(live.left)));
 }

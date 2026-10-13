@@ -207,7 +207,10 @@ impl AppState {
         }
         match self.windows.as_mut() {
             Some(windows) => {
-                windows.replace_panes(&mut self.core, &self.poster);
+                if windows.replace_panes(&mut self.core, &self.poster) {
+                    // a dropped restart closed its pane: committed by the next settle
+                    post(&self.poster, |state: &mut Self| state.settle());
+                }
                 windows.sync(&mut self.core, &self.poster);
                 windows.menu().sync(&self.core);
                 self.quick.sync(&mut self.core, windows, &self.poster);

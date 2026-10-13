@@ -80,32 +80,17 @@ impl<'a> ForegroundReader<'a> {
                 ppid: stat.ppid,
             })
             .collect();
-        let member = group_descent_candidates(pgid, &members)
+        let (member, argv) = group_descent_candidates(pgid, &members)
             .into_iter()
-            .find(|candidate| self.table.argv(*candidate).is_some())?;
-        pane_foreground(&self.table.argv(member)?, self.shell).map(|foreground| (member, foreground))
+            .find_map(|candidate| self.table.argv(candidate).map(|argv| (candidate, argv)))?;
+        pane_foreground(&argv, self.shell).map(|foreground| (member, foreground))
     }
 
     /// The `tree`'s read of foreground group `pgid` (upstream's `ForegroundProcess.running`): the program or the shell
     /// holding the foreground; `None` when nothing in the group can be read.
     #[must_use]
     pub fn running(&self, pgid: i32) -> Option<PaneForeground> {
-        if let Some(argv) = self.table.argv(pgid) {
-            return pane_foreground(&argv, self.shell);
-        }
-        let members: Vec<ProcessGroupMember> = self
-            .table
-            .group(pgid)
-            .into_iter()
-            .map(|stat| ProcessGroupMember {
-                pid: stat.pid,
-                ppid: stat.ppid,
-            })
-            .collect();
-        group_descent_candidates(pgid, &members)
-            .into_iter()
-            .find_map(|pid| self.table.argv(pid))
-            .and_then(|argv| pane_foreground(&argv, self.shell))
+        self.observed(pgid).map(|(_, foreground)| foreground)
     }
 
     /// The restore capture's read of foreground group `pgid` (upstream's `ForegroundProcess.command`): the leader's

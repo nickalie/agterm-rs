@@ -42,7 +42,8 @@ pub(crate) fn dispatch(core: &mut Core, cmd: ZmxCmd, request: &Request) -> Outco
 }
 
 impl Core {
-    /// The observed daemons joined against every pane claim; `None` when the listing failed.
+    /// The observed daemons joined against every pane claim; an error when this instance has no zmx or the listing
+    /// failed.
     fn inventory(&self) -> Result<InventoryResult, ControlError> {
         let host = self.zmx.require_host()?;
         let observed = host.list().map_err(|_| ControlError::rejected(LIST_FAILED))?;

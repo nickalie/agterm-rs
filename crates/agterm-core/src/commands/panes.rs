@@ -217,8 +217,9 @@ fn swap_error(refusal: SwapRefusal) -> ControlError {
 
 // MARK: - lead
 
-/// `session.lead [--pane]`: takes the lead of a pane's live-session client. Without a live-session client that ever
-/// reported a role there is no lead to take, which is every pane until live sessions arrive.
+/// `session.lead [--pane]`: takes the lead of a pane's live-session client: a covered pane is attached again with the
+/// claim (unless a takeover is already on its way), a leading one answers ok, and one whose zmx never reported a role
+/// has no lead to take.
 fn lead(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let pane = parse_surface_pane(args.pane.as_deref())?;
     if pane == Some(StatusPane::Scratch) {
