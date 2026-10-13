@@ -3,14 +3,11 @@
 //! ([`crate::usage::name_default_subcommands`]), so a bare `sidebar [show|hide|toggle]` keeps working. Visibility,
 //! mode and flagged layout take no `--window`: they act on the frontmost window, or app-wide.
 
-use std::process::ExitCode;
-
 use agterm_core::paths::Env;
 use agterm_proto::command::SidebarCmd;
-use agterm_proto::{Args, Command, Request, Response};
-use serde_json::Value;
+use agterm_proto::{Args, Command, Request};
 
-use crate::{BasicOptions, ClientOptions, Failure, RequestCommand, client, output};
+use crate::{BasicOptions, ClientOptions, Failure, RequestCommand};
 
 /// `agtermctl sidebar <subcommand>`.
 #[derive(Debug, clap::Args)]
@@ -231,45 +228,6 @@ impl RequestCommand for Width {
         };
         sidebar_request(SidebarCmd::Width, self.options.with_window(Some(args)))
     }
-
-    /// [`RequestCommand::default_run`], with the echoed `sidebarWidth` rendered as upstream's `formatResponse` does.
-    fn invoke(&self, env: &dyn Env) -> Result<(), Failure> {
-        let options = self.options();
-        let reply = client::send(&options.socket_path(env), &self.make_request())?;
-        if options.json || !reply.response.ok {
-            output::print_response(&reply, options.json, false);
-        } else {
-            println!("{}", format_width_reply(&reply.response));
-        }
-        if reply.response.ok {
-            Ok(())
-        } else {
-            Err(Failure::Exit(ExitCode::FAILURE))
-        }
-    }
-}
-
-/// The human summary of a successful `sidebar.width` reply. Upstream's `formatResponse` reads `sidebarWidth` last,
-/// after every other field (the echoed id is never asked for here), so it applies only where the shared rendering
-/// falls through to `ok`.
-fn format_width_reply(response: &Response) -> String {
-    let rendered = output::format_response(response, false);
-    let width = response
-        .result
-        .as_ref()
-        .and_then(|result| result.get("sidebarWidth"))
-        .and_then(Value::as_f64);
-    match width {
-        Some(width) if rendered == "ok" => format_sidebar_width(width),
-        _ => rendered,
-    }
-}
-
-/// The stored (clamped) width as the Double's own description, without fixed-decimal rounding: `300.0`, `271.34`. A
-/// caller compares it against its request numerically to detect a clamp. Rust's `Debug` spelling matches Swift's
-/// `description` across the drag range; they differ only in the exponent form of extreme magnitudes.
-fn format_sidebar_width(width: f64) -> String {
-    format!("{width:?}")
 }
 
 #[cfg(test)]
@@ -277,9 +235,8 @@ mod tests {
     use std::ffi::OsString;
 
     use clap::{CommandFactory, Parser};
-    use serde_json::json;
+    use serde_json::{Value, json};
 
-    use super::*;
     use crate::Agtermctl;
     use crate::usage::name_default_subcommands;
 
@@ -395,22 +352,5 @@ mod tests {
                 Err("points must be a number".to_owned())
             );
         }
-    }
-
-    #[test]
-    fn the_applied_width_prints_unrounded() {
-        for (stored, rendered) in [(271.3, "271.3"), (271.34, "271.34"), (300.0, "300.0")] {
-            let response = Response::with_result(json!({"sidebarWidth": stored}));
-            assert_eq!(format_width_reply(&response), rendered);
-        }
-        // an integral number on the wire is still a Double
-        assert_eq!(
-            format_width_reply(&Response::with_result(json!({"sidebarWidth": 300}))),
-            "300.0"
-        );
-        // the fields upstream reads first still win, and a reply without a width is `ok`
-        let text = Response::with_result(json!({"text": "t", "sidebarWidth": 1.0}));
-        assert_eq!(format_width_reply(&text), "t");
-        assert_eq!(format_width_reply(&Response::success()), "ok");
     }
 }

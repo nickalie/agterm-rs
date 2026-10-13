@@ -172,6 +172,12 @@ impl RowWidget {
     pub fn edited_text(&self) -> String {
         self.entry.text().to_string()
     }
+
+    /// The name the row shows.
+    #[cfg(test)]
+    pub fn shown_name(&self) -> String {
+        self.label.label().to_string()
+    }
 }
 
 /// The row's name: truncated at the end, with the full name as its tooltip only while truncated (upstream's

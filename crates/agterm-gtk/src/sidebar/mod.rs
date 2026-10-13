@@ -57,6 +57,15 @@ struct DragState {
     spring_open: Option<Uuid>,
 }
 
+impl DragState {
+    /// The pending hover opened workspace `id`: it becomes the one tracked, and the workspace an earlier hover
+    /// opened is returned to fold back, as upstream cancels the previous spring-load when the target changes.
+    fn spring_opened(&mut self, id: Uuid) -> Option<Uuid> {
+        self.spring_pending = None;
+        self.spring_open.replace(id).filter(|previous| *previous != id)
+    }
+}
+
 /// The state the list's handlers share.
 struct Shared {
     window: Uuid,
@@ -203,7 +212,8 @@ impl Shared {
     // MARK: - rendering
 
     /// Shows `rows`: rebuilt when their shape changed (a row added, removed or moved), else updated in place; the
-    /// selection follows the model. A rename in progress keeps its row untouched.
+    /// selection follows the model. An in-place update never touches the rename field, so the row being renamed
+    /// updates too (its glyph and badge live; its name behind the field) and is current when the field closes.
     fn render(self: &Rc<Self>, rows: Vec<SidebarRow>, selected: Option<Uuid>) {
         let reshaped = {
             let current = self.rows.borrow();
@@ -215,10 +225,9 @@ impl Shared {
             }
             self.rebuild(&rows);
         } else {
-            let editing = self.editing.get().map(|editing| editing.id);
             let current = self.rows.borrow();
             for ((old, new), widget) in current.iter().zip(&rows).zip(self.widgets.borrow().iter()) {
-                if old != new && Some(new.id) != editing {
+                if old != new {
                     widget.update(new);
                 }
             }
@@ -623,12 +632,14 @@ impl Shared {
         let weak = Rc::downgrade(self);
         let source = glib::timeout_add_local_once(SPRING_DELAY, move || {
             let Some(shared) = weak.upgrade() else { return };
-            let mut drag = shared.drag.borrow_mut();
-            drag.spring_pending.take();
-            drag.spring_open = Some(id);
-            drop(drag);
+            let previous = shared.drag.borrow_mut().spring_opened(id);
             let window = shared.window;
-            shared.post(move |state: &mut AppState| state.sidebar_spring_load(window, id, true));
+            shared.post(move |state: &mut AppState| {
+                if let Some(previous) = previous {
+                    state.sidebar_spring_load(window, previous, false);
+                }
+                state.sidebar_spring_load(window, id, true);
+            });
         });
         drag.spring_pending = Some((id, source));
     }
@@ -846,15 +857,25 @@ fn connect_folder_drops(shared: &Rc<Shared>) {
     shared.list.add_controller(target);
 }
 
+/// The list row a controller added to it sits on.
+fn controller_row(controller: &impl IsA<gtk::EventController>) -> Option<gtk::ListBoxRow> {
+    controller.widget().and_downcast::<gtk::ListBoxRow>()
+}
+
 /// One row's handlers: clicks (select, toggle, rename, menu), the workspace row's arrow, "+" and hover, the rename
 /// field, and the drag source.
+///
+/// RULE: a handler owned by the row (its controllers, its children's signals) never holds the row strongly: that
+/// cycle would keep every row set a rebuild drops alive. It reaches the row through the controller, or a weak ref.
 fn wire_row(shared: &Rc<Shared>, widget: &RowWidget, workspace: bool) {
-    let list_row = widget.widget().clone();
+    let list_row = widget.widget();
     let click = gtk::GestureClick::builder().button(0).build();
     let weak = Rc::downgrade(shared);
-    let pressed_row = list_row.clone();
     click.connect_pressed(move |gesture, presses, x, y| {
         let Some(shared) = weak.upgrade() else { return };
+        let Some(pressed_row) = controller_row(gesture) else {
+            return;
+        };
         let Some(row) = shared.row_of(&pressed_row) else { return };
         on_row_pressed(&shared, gesture, &pressed_row, &row, (presses, x, y));
     });
@@ -863,7 +884,7 @@ fn wire_row(shared: &Rc<Shared>, widget: &RowWidget, workspace: bool) {
         wire_workspace_controls(shared, widget);
     }
     wire_rename_field(shared, widget);
-    list_row.add_controller(drag_source(shared, &list_row));
+    list_row.add_controller(drag_source(shared));
 }
 
 fn on_row_pressed(
@@ -892,12 +913,14 @@ fn on_row_pressed(
 }
 
 fn wire_workspace_controls(shared: &Rc<Shared>, widget: &RowWidget) {
-    let list_row = widget.widget().clone();
+    let list_row = widget.widget();
     if let Some(arrow) = widget.arrow() {
         let weak = Rc::downgrade(shared);
-        let row = list_row.clone();
+        let row = list_row.downgrade();
         arrow.connect_clicked(move |_| {
-            let Some(shared) = weak.upgrade() else { return };
+            let (Some(shared), Some(row)) = (weak.upgrade(), row.upgrade()) else {
+                return;
+            };
             shared.cancel_toggle();
             if let Some(id) = shared.row_of(&row).map(|row| row.id) {
                 shared.toggle(id);
@@ -906,9 +929,11 @@ fn wire_workspace_controls(shared: &Rc<Shared>, widget: &RowWidget) {
     }
     let Some(add) = widget.add_button() else { return };
     let weak = Rc::downgrade(shared);
-    let row = list_row.clone();
+    let row = list_row.downgrade();
     add.connect_clicked(move |_| {
-        let Some(shared) = weak.upgrade() else { return };
+        let (Some(shared), Some(row)) = (weak.upgrade(), row.upgrade()) else {
+            return;
+        };
         shared.cancel_toggle();
         if let Some(id) = shared.row_of(&row).map(|row| row.id) {
             shared.act(SidebarAction::NewSession { workspace: id });
@@ -962,16 +987,15 @@ fn wire_rename_field(shared: &Rc<Shared>, widget: &RowWidget) {
 }
 
 /// The row's drag source: the tree only (the flagged view is a projection, not a reorderable tree), never mid-rename.
-fn drag_source(shared: &Rc<Shared>, list_row: &gtk::ListBoxRow) -> gtk::DragSource {
+fn drag_source(shared: &Rc<Shared>) -> gtk::DragSource {
     let source = gtk::DragSource::builder().actions(gdk::DragAction::MOVE).build();
     let weak: Weak<Shared> = Rc::downgrade(shared);
-    let row = list_row.clone();
-    source.connect_prepare(move |_, _, _| {
+    source.connect_prepare(move |source, _, _| {
         let shared = weak.upgrade()?;
         if shared.editing.get().is_some() {
             return None;
         }
-        let dragged = shared.row_of(&row)?;
+        let dragged = shared.row_of(&controller_row(source)?)?;
         let context = shared.context.borrow();
         if !context.drop.tree {
             return None;
@@ -989,9 +1013,8 @@ fn drag_source(shared: &Rc<Shared>, list_row: &gtk::ListBoxRow) -> gtk::DragSour
         };
         Some(gdk::ContentProvider::for_value(&payload.to_value()))
     });
-    let icon_row = list_row.clone();
-    source.connect_drag_begin(move |source, _| {
-        let paintable = gtk::WidgetPaintable::new(Some(&icon_row));
+    source.connect_drag_begin(|source, _| {
+        let paintable = gtk::WidgetPaintable::new(controller_row(source).as_ref());
         source.set_icon(Some(&paintable), 0, 0);
     });
     let weak = Rc::downgrade(shared);
@@ -1135,6 +1158,76 @@ mod tests {
         assert!(kept, "a content change updates the row in place");
         assert_eq!(flagged, ["s:build : workspace 1*"]);
         assert!(flagged_mode && !empty);
+    }
+
+    #[test]
+    fn a_rebuild_releases_the_rows_it_replaces() {
+        let released = on_gtk_thread(|| {
+            let mut library = WindowLibrary::seeded("/home/u");
+            let window = library.active_window_id().unwrap();
+            let store = library.store_mut(window).unwrap();
+            let one = store.workspaces()[0].id();
+            let settings = AppSettings::default();
+            let mut sidebar = Sidebar::new(window, &state::detached_poster());
+            sidebar.refresh(store, &settings);
+            // the workspace row carries the arrow and "+" handlers, the session row the click and drag ones
+            let old: Vec<glib::WeakRef<gtk::ListBoxRow>> = sidebar
+                .shared
+                .widgets
+                .borrow()
+                .iter()
+                .map(|widget| widget.widget().downgrade())
+                .collect();
+            store.add_session(one, NewSession::at_cwd("/srv")).unwrap();
+            sidebar.refresh(store, &settings);
+            let rebuilt = sidebar.shared.widgets.borrow().len();
+            (
+                old.len(),
+                rebuilt,
+                old.iter().filter(|row| row.upgrade().is_some()).count(),
+            )
+        });
+        let Some((old, rebuilt, alive)) = released else { return };
+        assert_eq!((old, rebuilt), (2, 3));
+        assert_eq!(
+            alive, 0,
+            "a dropped row set is finalized, not kept alive by its own handlers"
+        );
+    }
+
+    #[test]
+    fn a_row_that_changed_mid_rename_is_current_once_the_field_closes() {
+        let shown = on_gtk_thread(|| {
+            let mut library = WindowLibrary::seeded("/home/u");
+            let window = library.active_window_id().unwrap();
+            let store = library.store_mut(window).unwrap();
+            let one = store.workspaces()[0].id();
+            let srv = store.add_session(one, NewSession::at_cwd("/srv")).unwrap();
+            let settings = AppSettings::default();
+            let mut sidebar = Sidebar::new(window, &state::detached_poster());
+            sidebar.refresh(store, &settings);
+            sidebar.shared.begin_rename(srv);
+            store.rename_session(srv, "build");
+            sidebar.refresh(store, &settings);
+            sidebar.shared.finish_rename(false);
+            let name = sidebar.shared.widgets.borrow()[2].shown_name();
+            // the next refresh finds nothing changed
+            sidebar.refresh(store, &settings);
+            (name, sidebar.shared.widgets.borrow()[2].shown_name())
+        });
+        let Some((closed, refreshed)) = shown else { return };
+        assert_eq!(closed, "build", "the cancelled field reveals the current name");
+        assert_eq!(refreshed, "build");
+    }
+
+    #[test]
+    fn a_new_spring_load_folds_the_workspace_an_earlier_one_opened() {
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut drag = DragState::default();
+        assert_eq!(drag.spring_opened(a), None);
+        assert_eq!(drag.spring_opened(a), None, "the same workspace stays open");
+        assert_eq!(drag.spring_opened(b), Some(a));
+        assert_eq!(drag.spring_open, Some(b), "the drag now folds only b back");
     }
 
     #[test]

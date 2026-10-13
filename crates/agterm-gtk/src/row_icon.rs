@@ -66,7 +66,7 @@ pub enum Glyph {
     /// `rectangle.split.1x2` (top/bottom panes); each swaps to its filled variant while the session is flagged (tree
     /// mode only: the flagged view passes `false`, every row there being flagged).
     Session {
-        /// The pane arrangement, `None` while unsplit (or the split is hidden).
+        /// The pane arrangement, `None` while the session has no split (a hidden split still shows its arrangement).
         split: Option<SplitAxis>,
         /// The session is flagged.
         flagged: bool,

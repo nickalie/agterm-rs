@@ -496,7 +496,7 @@ impl AppState {
     }
 
     /// A sidebar gesture in window `window` ([`agterm_core::sidebar_actions`]); stands down while its modal slot is
-    /// held.
+    /// held, a committed rename aside.
     pub fn sidebar_action(&mut self, window: Uuid, action: SidebarAction) {
         if self.core.sidebar_action(window, action) {
             self.settle();
@@ -1103,17 +1103,70 @@ mod tests {
 
     #[test]
     fn a_sidebar_rename_holds_auto_follow_until_it_ends() {
+        use agterm_core::auto_follow::FollowConfig;
+        use agterm_core::model::{AgentIndicator, AgentStatus};
+
         let (mut state, window, first) = state_with_terminal();
+        let main_loop: Arc<RecordingLoop<AppState>> = Arc::new(RecordingLoop::new());
+        let as_dyn: Arc<dyn MainLoop<AppState>> = Arc::clone(&main_loop) as _;
+        state.poster = Arc::downgrade(&as_dyn);
+        state.settle();
+        let _ = main_loop.take();
+        // run the armed zero-delay fires; how many there were
+        let fire = |state: &mut AppState| {
+            let fires: Vec<_> = main_loop
+                .take()
+                .into_iter()
+                .filter(|(delay, _)| *delay == Some(Duration::ZERO))
+                .collect();
+            let count = fires.len();
+            for (_, task) in fires {
+                task(state);
+            }
+            count
+        };
+        let store = state.core.library_mut().store_mut(window).unwrap();
+        let workspace = store.workspaces()[0].id();
+        let second = store.add_session(workspace, NewSession::at_cwd("/srv")).unwrap();
+        let blocked = AgentIndicator {
+            status: AgentStatus::Blocked,
+            ..AgentIndicator::default()
+        };
+        store.set_agent_indicator(blocked, first);
+        let selected = |state: &AppState| state.core.library().store(window).unwrap().selected_session_id();
+
         state.sidebar_rename_began(window);
+        state.core.set_auto_follow(Some(FollowConfig {
+            timeout: Duration::ZERO,
+            stay_on_active: false,
+        }));
+        state.settle();
+        assert_eq!(fire(&mut state), 1, "a follow is armed mid-rename");
+        assert_eq!(
+            selected(&state),
+            Some(second),
+            "but does not fire while the field is open"
+        );
+
         state.sidebar_rename_ended(
             window,
             Some(SidebarAction::RenameSession {
-                session: first,
+                session: second,
                 name: "build".into(),
             }),
         );
         let store = state.core.library().store(window).unwrap();
-        assert_eq!(store.session(first).unwrap().display_name(), "build");
+        assert_eq!(store.session(second).unwrap().display_name(), "build");
+        // the suppression was lifted: the next armed follow jumps to the blocked session
+        state.sidebar_action(
+            window,
+            SidebarAction::SelectSessions {
+                active: second,
+                selection: vec![second],
+            },
+        );
+        assert_eq!(fire(&mut state), 1);
+        assert_eq!(selected(&state), Some(first));
     }
 
     #[test]

@@ -19,8 +19,8 @@ use crate::window::format_windows;
 /// Renders a response as its human-readable summary (no trailing newline): an `error:` line, the tree or window
 /// listing, the serving app's version, the text read (or a search's counter), an overlay program's `exit N`, a
 /// batch's affected count, a count of
-/// diagnostics, a cursor column, a resized window's `W H`, a resized split's ratio, the affected id (only with
-/// `echo_id`, for the create commands), or a bare `ok`. Never JSON: `--json` prints the server's own line.
+/// diagnostics, a cursor column, a resized window's `W H`, a resized split's ratio, the applied sidebar width, the
+/// affected id (only with `echo_id`, for the create commands), or a bare `ok`. Never JSON: `--json` prints the server's own line.
 ///
 /// The result's fields are tested in upstream's fixed order (`formatResponse`: `tree` first, `app` after the
 /// listings); each command group adds its branch at its place in that order.
@@ -82,6 +82,15 @@ pub fn format_response(response: &Response, echo_id: bool) -> String {
     // `session.resize` echoes the applied (clamped) primary-pane fraction, as `%.3f`
     if let Some(ratio) = result.and_then(|result| result.get("ratio")).and_then(Value::as_f64) {
         return format!("{ratio:.3}");
+    }
+    // `sidebar.width` echoes the stored (clamped) points as the Double's own description, never rounded (`300.0`,
+    // `271.34`): a caller compares it against its request numerically to detect a clamp. Rust's `Debug` spelling
+    // matches Swift's `description` across the drag range; they differ only in the exponent form of extreme values.
+    if let Some(width) = result
+        .and_then(|result| result.get("sidebarWidth"))
+        .and_then(Value::as_f64)
+    {
+        return format!("{width:?}");
     }
     if echo_id && let Some(id) = result.and_then(|result| result.get("id")).and_then(Value::as_str) {
         return id.to_owned();
@@ -265,6 +274,28 @@ mod tests {
         assert_eq!(
             format_response(&ok(json!({"width": 1, "height": 2, "ratio": 0.5})), false),
             "1 2"
+        );
+    }
+
+    #[test]
+    fn the_applied_sidebar_width_prints_unrounded_after_the_ratio() {
+        for (stored, rendered) in [(271.3, "271.3"), (271.34, "271.34"), (300.0, "300.0")] {
+            assert_eq!(format_response(&ok(json!({"sidebarWidth": stored})), false), rendered);
+        }
+        // an integral number on the wire is still a Double
+        assert_eq!(format_response(&ok(json!({"sidebarWidth": 300})), false), "300.0");
+        // the fields upstream reads first still win, and the width wins over an echoed id
+        assert_eq!(
+            format_response(&ok(json!({"text": "t", "sidebarWidth": 1.0})), false),
+            "t"
+        );
+        assert_eq!(
+            format_response(&ok(json!({"ratio": 0.5, "sidebarWidth": 1.0})), false),
+            "0.500"
+        );
+        assert_eq!(
+            format_response(&ok(json!({"id": "W", "sidebarWidth": 1.0})), true),
+            "1.0"
         );
     }
 

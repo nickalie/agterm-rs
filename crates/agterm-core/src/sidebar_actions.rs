@@ -4,8 +4,8 @@
 //!
 //! The frontend turns a click, a menu choice or a drop into a [`SidebarAction`] for the window it happened in and
 //! hands it to [`Core::sidebar_action`]; what needs a dialog (close and delete confirmations, the directory chooser),
-//! the clipboard or the inline rename field stays in the frontend. Every action stands down while the window's modal
-//! slot is held, as the rest of the window's chrome does.
+//! the clipboard or the inline rename field stays in the frontend. Every action but a committed rename stands down
+//! while the window's modal slot is held, as the rest of the window's chrome does.
 
 use uuid::Uuid;
 
@@ -96,9 +96,15 @@ pub enum SidebarAction {
 
 impl Core {
     /// Performs `action` in window `window`'s sidebar. False when it did nothing: the window is gone or not open, its
-    /// modal slot is held, or the action changed nothing it could. Commit afterwards.
+    /// modal slot is held (except for a committed rename), or the action changed nothing it could. Commit afterwards.
     pub fn sidebar_action(&mut self, window: Uuid, action: SidebarAction) -> bool {
-        if self.modal_pending(window) || !self.library().is_open(window) {
+        // a picker or ask arriving mid-rename takes the field's keyboard, and that focus loss is what commits it: the
+        // rename still lands, as upstream's `controlTextDidEndEditing` renames without the modal gate
+        let rename = matches!(
+            action,
+            SidebarAction::RenameSession { .. } | SidebarAction::RenameWorkspace { .. }
+        );
+        if (!rename && self.modal_pending(window)) || !self.library().is_open(window) {
             return false;
         }
         match action {
@@ -369,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn every_action_stands_down_while_the_modal_slot_is_held() {
+    fn every_action_but_a_committed_rename_stands_down_while_the_modal_slot_is_held() {
         let mut f = fixture(AppSettings::default());
         let picked = f.core.dispatch(&Request {
             cmd: Command::Pick(PickCmd::Open),
@@ -386,6 +392,19 @@ mod tests {
         assert!(picked.ok, "{picked:?}");
         assert!(!f.act(SidebarAction::NewWorkspace));
         assert_eq!(f.store().workspaces().len(), 2);
+        // the modal taking the rename field's keyboard commits it: the rename is not lost
+        let [first, ..] = f.sessions;
+        let [_, two] = f.workspaces;
+        f.act(SidebarAction::RenameSession {
+            session: first,
+            name: "build".into(),
+        });
+        f.act(SidebarAction::RenameWorkspace {
+            workspace: two,
+            name: "ops".into(),
+        });
+        assert_eq!(f.store().session(first).unwrap().display_name(), "build");
+        assert_eq!(f.store().workspace(two).unwrap().name, "ops");
     }
 
     #[test]

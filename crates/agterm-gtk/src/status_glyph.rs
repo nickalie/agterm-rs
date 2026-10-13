@@ -1,7 +1,7 @@
 //! The agent-status glyph: a small tinted silhouette for a session's [`AgentIndicator`], drawn by the sidebar rows
-//! and the dashboard from one resolver so they cannot drift (upstream's `AppKit` `StatusIconView` in
-//! `SidebarRowViews.swift`, its `SwiftUI` twin `StatusGlyph.swift`, and the `statusSymbolName(for:override:)` /
-//! `statusColor(for:override:)` resolvers of `GhosttyApp.swift`).
+//! from one resolver, which the dashboard's status chip is to share once it is ported so the two cannot drift
+//! (upstream's `AppKit` `StatusIconView` in `SidebarRowViews.swift`, its `SwiftUI` twin `StatusGlyph.swift`, and the
+//! `statusSymbolName(for:override:)` / `statusColor(for:override:)` resolvers of `GhosttyApp.swift`).
 //!
 //! [`resolve`] is display-free: it turns an indicator and the settings into a [`GlyphLook`], or `None` for `idle`,
 //! which renders nothing. [`StatusGlyph`] draws a look with cairo in place of the SF Symbol `*.fill` silhouettes and
