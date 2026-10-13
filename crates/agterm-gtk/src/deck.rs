@@ -229,9 +229,16 @@ impl Page {
             return;
         };
         let workspace = store.workspace_for_session(id).map(Workspace::id);
-        let (Some(workspace), Some(session)) = (workspace, store.session_mut(id)) else {
-            // held by a pending soft close: its terminals keep running, hidden, until the close is final or undone
+        if workspace.is_none() || store.session(id).is_none() {
+            // held by a pending soft close: its terminals keep running, hidden, until the close is final or undone; its
+            // pages stay but are off screen, so they ask nothing and a prompt they had goes
             self.panes.hide();
+            if let Some(session) = store.pending_close_session(id) {
+                crate::overlay::hide_pages(session);
+            }
+            return;
+        }
+        let (Some(workspace), Some(session)) = (workspace, store.session_mut(id)) else {
             return;
         };
         self.panes.retain(|token| session.pane_role_for_token(token).is_some());
@@ -1256,6 +1263,44 @@ mod tests {
             "GTK gave the program the keyboard through its frame"
         );
         program
+    }
+
+    #[cfg(feature = "html")]
+    #[test]
+    fn a_soft_closed_sessions_page_is_off_screen_until_the_undo() {
+        crate::gtk_test::on_gtk_thread(soft_closed_page_is_off_screen);
+    }
+
+    /// A shown page is on screen; once a soft close holds its session the page stays but is off screen, so a link a
+    /// script clicks asks nothing over the session shown next; the undo puts it back on screen.
+    #[cfg(feature = "html")]
+    fn soft_closed_page_is_off_screen() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("page.html");
+        std::fs::write(&file, "<p>page</p>").unwrap();
+        let mut walk = Walk::split();
+        crate::html_overlay::install(&mut walk.core, dir.path().join("state"));
+        let open = overlay_request(&walk, SessionCmd::OverlayOpen, |a| {
+            a.html = Some(file.display().to_string());
+        });
+        let response = walk.core.dispatch(&open);
+        assert!(response.ok, "{:?}", response.error);
+        walk.settle();
+        let session = walk.session;
+        let page = walk.store().session(session).unwrap().overlay.page().unwrap().id;
+        assert_eq!(crate::html_overlay::on_screen(page), Some(true));
+
+        assert!(walk.store().soft_close_session(session));
+        reconcile(&mut walk.deck, &mut walk.core, walk.window);
+        assert_eq!(
+            crate::html_overlay::on_screen(page),
+            Some(false),
+            "the held session's page is off screen"
+        );
+
+        assert!(walk.store().undo_pending_close(None));
+        walk.settle();
+        assert_eq!(crate::html_overlay::on_screen(page), Some(true));
     }
 
     #[test]

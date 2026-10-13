@@ -24,6 +24,7 @@ use webkit6::{
     UserContentInjectedFrames, UserContentManager, UserScript, UserScriptInjectionTime, WebView, javascriptcore,
 };
 
+use super::files;
 use super::panel::{Panel, PanelColors};
 use super::policy::{self, DecisionTarget, LoadEvent, LoadOutcome, LoadTracker};
 use super::registry;
@@ -159,6 +160,7 @@ impl Page {
         page.connect_policy();
         page.connect_refusals();
         page.connect_input();
+        files::refuse_file_pastes(&page.web_view);
         page.load_original();
         page
     }
@@ -174,6 +176,11 @@ impl Page {
 
     pub(super) fn grant_root(&self) -> Option<PathBuf> {
         self.state.borrow().grant_root.clone()
+    }
+
+    #[cfg(test)]
+    pub(super) fn on_screen(&self) -> bool {
+        self.state.borrow().on_screen
     }
 
     fn weak(self: &Rc<Self>) -> Weak<Self> {
@@ -573,8 +580,7 @@ impl Page {
                     DecisionTarget::Frame
                 };
                 let uri = uri.map(|uri| uri.to_string()).unwrap_or_default();
-                // a real file: address would bypass the grant, and nothing says which frame it targets
-                if !window && !uri.starts_with("file:") && self.allows(&uri, target, clicked) {
+                if policy::navigation_proceeds(&uri, window, || self.allows(&uri, target, clicked)) {
                     decision.use_();
                 } else {
                     decision.ignore();
@@ -732,9 +738,13 @@ impl Page {
         });
         self.web_view.connect_enter_fullscreen(|_| true);
         self.web_view.connect_show_notification(|_, _| true);
-        self.web_view.connect_context_menu(|_, menu, _| {
+        // a paste the clipboard's files could ride in goes too, as the paste keys refuse it
+        self.web_view.connect_context_menu(|web_view, menu, _| {
+            let pastes_refused = files::clipboard_may_carry_files(web_view);
             for item in menu.items() {
-                if REFUSED_MENU_ITEMS.contains(&item.stock_action()) {
+                let action = item.stock_action();
+                let paste = matches!(action, ContextMenuAction::Paste | ContextMenuAction::PasteAsPlainText);
+                if REFUSED_MENU_ITEMS.contains(&action) || (paste && pastes_refused) {
                     menu.remove(&item);
                 }
             }

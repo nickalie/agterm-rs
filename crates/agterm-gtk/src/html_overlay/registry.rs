@@ -107,6 +107,12 @@ pub fn focus_target(id: Uuid) -> Option<gtk::Widget> {
     page(id).map(|page| page.web_view().clone().upcast())
 }
 
+/// Whether page `id` is marked on screen; `None` without such a page.
+#[cfg(test)]
+pub(crate) fn on_screen(id: Uuid) -> Option<bool> {
+    page(id).map(|page| page.on_screen())
+}
+
 /// Whether page `id`'s web view is its window's focus widget now.
 pub(super) fn holds_focus(id: Uuid) -> bool {
     page(id).is_some_and(|page| page.web_view().is_focus())

@@ -4,7 +4,8 @@
 //!
 //! A page has no terminal: it never counts as a program (`program_active`), only as a cover (`cover_overlay_active`).
 //! Its outcome is the core's ([`crate::html::HtmlPageOutcomes`]): the core registers a page it opens, records a
-//! submit before the close, and settles a page that left every slot as dismissed.
+//! submit's answer, and settles a page that left every slot as dismissed at the next commit, leaving an answered page
+//! alone; closing a slot records nothing.
 
 use uuid::Uuid;
 

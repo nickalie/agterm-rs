@@ -11,6 +11,8 @@
 //! installed, so the core refuses every page and nothing here mounts.
 
 #[cfg(feature = "html")]
+mod files;
+#[cfg(feature = "html")]
 mod page;
 #[cfg(feature = "html")]
 mod panel;
@@ -19,6 +21,8 @@ mod policy;
 #[cfg(feature = "html")]
 mod registry;
 
+#[cfg(all(test, feature = "html"))]
+pub(crate) use registry::on_screen;
 #[cfg(feature = "html")]
 pub use registry::{answer, apply, focus_target, install, mount, settle};
 

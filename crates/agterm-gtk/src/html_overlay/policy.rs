@@ -53,6 +53,16 @@ pub fn navigation_action(url: Url, target: DecisionTarget, link_clicked: bool) -
     }
 }
 
+/// Whether a navigation or new-window request goes ahead in the page's own view. A real `file:` address would bypass
+/// the grant and is never asked about; any other request asks the policy (`allows`, which raises a hand-off prompt the
+/// policy offers), a new window's too, since that prompt is all a new window can lead to: the window itself never
+/// opens (upstream's `decidePolicyFor` with a nil target frame).
+#[must_use]
+pub fn navigation_proceeds(uri: &str, new_window: bool, allows: impl FnOnce() -> bool) -> bool {
+    let allowed = !uri.starts_with("file:") && allows();
+    allowed && !new_window
+}
+
 /// A web view address as the app spells it: a granted file as the `file:` URI it stands for.
 #[must_use]
 pub fn app_uri(uri: &str) -> String {
@@ -166,8 +176,8 @@ impl LoadTracker {
     }
 
     /// The policy refused the main frame's response for `url`. `WebKitGTK` asks once the load started, where `WebKit` on
-    /// macOS refuses a page's own navigation before it starts and the shown document stays, so only a load the app
-    /// started fails here.
+    /// macOS refuses a page's own navigation before it starts and the shown document stays, so a load the app started,
+    /// or one with nothing shown, fails here; a page's own load over a shown document settles.
     pub fn blocked(&mut self, url: &str) -> LoadOutcome {
         if !self.pending {
             return LoadOutcome::None;
@@ -341,6 +351,31 @@ mod tests {
 
     fn url_page(flags: HtmlPageFlags) -> HtmlOverlay {
         HtmlOverlay::new(HtmlSource::Url(url("https://example.com/start")), flags)
+    }
+
+    #[test]
+    fn a_new_window_asks_the_policy_for_its_prompt_and_never_proceeds() {
+        let count = std::cell::Cell::new(0);
+        let asked = &count;
+        let allows = |answer: bool| {
+            move || {
+                asked.set(asked.get() + 1);
+                answer
+            }
+        };
+        assert!(!navigation_proceeds("https://a.test/", true, allows(true)));
+        assert!(!navigation_proceeds("https://a.test/", true, allows(false)));
+        assert_eq!(
+            asked.get(),
+            2,
+            "a new window's link is asked about, so its hand-off prompt shows"
+        );
+        assert!(navigation_proceeds("https://a.test/", false, allows(true)));
+        assert!(!navigation_proceeds("https://a.test/", false, allows(false)));
+        assert_eq!(asked.get(), 4);
+        assert!(!navigation_proceeds("file:///etc/passwd", false, allows(true)));
+        assert!(!navigation_proceeds("file:///etc/passwd", true, allows(true)));
+        assert_eq!(asked.get(), 4, "a real file: address is never asked about");
     }
 
     #[test]

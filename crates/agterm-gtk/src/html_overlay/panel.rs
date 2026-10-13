@@ -9,6 +9,7 @@ use gtk::{gdk, pango};
 use uuid::Uuid;
 use webkit6::WebView;
 
+use super::files;
 use super::policy::{self, StripItem};
 use super::registry;
 use crate::state::{self, AppState, Poster};
@@ -117,7 +118,7 @@ impl Panel {
         content.set_hexpand(true);
         content.set_vexpand(true);
         root.append(&content);
-        refuse_file_drops(&root);
+        files::refuse_file_drops(&root);
         let panel = Self {
             root,
             strip,
@@ -163,12 +164,7 @@ impl Panel {
 
     /// Takes the panel out of its parent and its style off the display: the page is gone.
     pub(super) fn release(&self) {
-        if let Some(parent) = self.root.parent() {
-            match parent.downcast_ref::<gtk::Box>() {
-                Some(container) => container.remove(&self.root),
-                None => self.root.unparent(),
-            }
-        }
+        crate::overlay::unparent(self.root.upcast_ref());
         if let Some(display) = gdk::Display::default() {
             gtk::style_context_remove_provider_for_display(&display, &self.provider);
         }
@@ -318,28 +314,6 @@ fn failure_view() -> (gtk::Box, gtk::Label) {
     failure.append(&column);
     failure.set_visible(false);
     (failure, error)
-}
-
-/// The portal types a file manager's drag carries.
-const FILE_DRAG_TYPES: [&str; 2] = ["application/vnd.portal.filetransfer", "application/vnd.portal.files"];
-
-/// A dropped file reaches the page's script with its contents, so a drag carrying files is refused while text and
-/// links still go through (upstream's `draggingEntered`). Best effort: GTK names a drag's formats, not its contents, so
-/// only a drag offering the file portal's types is known to carry files.
-fn refuse_file_drops(root: &gtk::Box) {
-    let target = gtk::DropTargetAsync::new(None, gdk::DragAction::all());
-    target.set_propagation_phase(gtk::PropagationPhase::Capture);
-    target.connect_accept(|_, drop| {
-        let formats = drop.formats();
-        FILE_DRAG_TYPES.iter().any(|mime| formats.contain_mime_type(mime))
-    });
-    target.connect_drag_enter(|_, _, _, _| gdk::DragAction::empty());
-    target.connect_drag_motion(|_, _, _, _| gdk::DragAction::empty());
-    target.connect_drop(|_, drop, _, _| {
-        drop.finish(gdk::DragAction::empty());
-        true
-    });
-    root.add_controller(target);
 }
 
 #[cfg(test)]

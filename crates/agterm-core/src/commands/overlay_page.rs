@@ -128,8 +128,10 @@ fn open_failure(failure: HtmlOverlayOpenFailure, pane: Option<OverlayPane>) -> &
     }
 }
 
-/// `session.overlay.submit` (upstream's `submitHtmlOverlay`): the page in the addressed slot is answered with `value`,
-/// then closed; the answer is recorded first, so the close cannot record the page dismissed.
+/// `session.overlay.submit` (upstream's `submitHtmlOverlay`): the page in the addressed slot is closed and answered
+/// with `value`. The close only empties the slot and records nothing; the page is settled as dismissed later, at the
+/// next commit's `Core::sync_pages` (or a `result --page` read), which leaves a page that already has an answer alone,
+/// so the answer recorded here stands.
 pub(crate) fn submit(
     core: &mut Core,
     target: Option<&str>,

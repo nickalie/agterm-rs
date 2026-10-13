@@ -285,6 +285,14 @@ pub fn sync_page(
     }
 }
 
+/// Marks every page of `session` off screen, as its hidden panes are while a pending close holds it: a page off
+/// screen asks nothing, and a prompt it had goes (upstream's `setOnScreen(false)`).
+pub fn hide_pages(session: &Session) {
+    for (_, page) in session.html_overlays() {
+        crate::html_overlay::apply(page, false);
+    }
+}
+
 /// Brings the session-wide slot's content in line with `session`: a closed or replaced program's terminal or page goes,
 /// an open program without a terminal gets one (installed in the slot), an open page its panel. The live slot
 /// generation, `None` while neither a program nor a page holds the slot.

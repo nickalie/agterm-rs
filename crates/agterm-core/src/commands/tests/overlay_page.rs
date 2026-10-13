@@ -500,9 +500,24 @@ fn a_page_bridge_request_acts_from_where_the_page_sits() {
 
 #[test]
 fn a_clicked_link_opens_a_browsing_page_unless_a_hud_or_a_zoom_is_up() {
-    let (mut fixture, _) = fixture_with_host(1);
+    let (mut fixture, _) = fixture_with_host(2);
     let id = fixture.sessions[0];
     let url = url::Url::parse("https://example.com/docs").unwrap();
+    let zoomed = fixture.sessions[2];
+    let window = fixture.window;
+    fixture.core.set_zoom_target(
+        window,
+        Some(crate::zoom::SurfaceId {
+            session: zoomed,
+            surface: crate::zoom::ZoomSurface::Primary,
+        }),
+    );
+    assert!(
+        !fixture.core.open_link_overlay(url.clone(), zoomed),
+        "a zoom refuses it"
+    );
+    assert!(node(&mut fixture, zoomed).get("htmlOverlays").is_none());
+    fixture.core.set_zoom_target(window, None);
     assert!(fixture.core.open_link_overlay(url.clone(), id));
     let page = node(&mut fixture, id)["htmlOverlays"][0].clone();
     assert_eq!(page["url"], json!("https://example.com/docs"));
