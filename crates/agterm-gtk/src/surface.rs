@@ -107,6 +107,15 @@ pub fn pending_restore(applied: f64, revert_to: f64) -> Option<f64> {
     ((applied - revert_to).abs() > FONT_REPORT_TOLERANCE).then_some(revert_to)
 }
 
+/// The libghostty binding action that puts a terminal back at `before` after a config broadcast left it at `live`
+/// (the appearance flip keeping zoom): none when the size survived, which a size the user stepped does. The action,
+/// unlike a `font-size` config line, leaves the size `reset_font_size` returns to alone.
+#[must_use]
+pub fn font_size_restore_action(live: Option<f64>, before: f64) -> Option<String> {
+    let kept = live.is_some_and(|live| (live - before).abs() < 0.01);
+    (!kept).then(|| format!("set_font_size:{before}"))
+}
+
 struct Inner {
     key: SurfaceKey,
     /// Weak: the area owns this state through its `destroy` handler, so a strong reference here would be a cycle.
@@ -874,6 +883,11 @@ impl TerminalSurface {
     /// `config` itself. With `keep_zoom` it restates `size_before`; otherwise an overlay restates the size libghostty
     /// left (it keeps only a size the user stepped). A pinned start size wins over both. A terminal not created yet
     /// takes the new config when it is.
+    ///
+    /// Without an overlay or a pinned size the terminal takes `config` and keeps `size_before` through libghostty's
+    /// `set_font_size` action ([`font_size_restore_action`]), never a `font-size` config line: libghostty would make
+    /// that line the size `font.reset` returns to. The action marks the size as stepped, so a restored session's
+    /// size then lives like a zoom the user stepped.
     pub fn reload_config(&self, config: &agterm_ghostty::Config, size_before: Option<f64>, keep_zoom: bool) {
         if !self.is_realized() {
             return;
@@ -881,17 +895,30 @@ impl TerminalSurface {
         if self.area.is_realized() {
             self.area.make_current();
         }
-        let kept = self.pinned_font_size().or_else(|| size_before.filter(|_| keep_zoom));
+        let pinned = self.pinned_font_size();
         if self.inner.config_overlay.borrow().is_some() {
             if let Some(live) = self.with_surface(Surface::font_size) {
-                self.push_config_overlay(kept.or(live));
+                self.push_config_overlay(pinned.or_else(|| size_before.filter(|_| keep_zoom)).or(live));
             }
             return;
         }
-        let kept = kept.and_then(|size| {
-            ghostty_app::config_with_overlay(&agterm_core::watermark::overlay_text(None, None, Some(size), 1.0))
+        if let Some(size) = pinned {
+            let pinned =
+                ghostty_app::config_with_overlay(&agterm_core::watermark::overlay_text(None, None, Some(size), 1.0));
+            self.with_surface(|surface| surface.update_config(pinned.as_ref().unwrap_or(config)));
+            return;
+        }
+        self.with_surface(|surface| {
+            surface.update_config(config);
+            let restore = size_before
+                .filter(|_| keep_zoom)
+                .and_then(|before| font_size_restore_action(surface.font_size(), before));
+            if let Some(action) = restore
+                && !surface.binding_action(&action)
+            {
+                tracing::warn!(%action, "could not restore the font size after a config reload");
+            }
         });
-        self.with_surface(|surface| surface.update_config(kept.as_ref().unwrap_or(config)));
     }
 
     /// Pushes the stored overlay to the surface, if both exist, at the pinned start size or the live one.
@@ -1275,6 +1302,25 @@ mod tests {
         teardown_all();
         assert!(placed.inner.torn_down.get());
         assert!(lookup(key).is_none(), "a torn-down surface is not live");
+    }
+
+    #[test]
+    fn an_appearance_flip_restores_only_a_size_the_broadcast_reset() {
+        // a stepped size survived the broadcast: nothing to restate, so font.reset still returns to the config's size
+        assert_eq!(font_size_restore_action(Some(15.0), 15.0), None);
+        // a restored session's size the broadcast reset goes back through the action, not a config line
+        assert_eq!(
+            font_size_restore_action(Some(14.0), 15.0).as_deref(),
+            Some("set_font_size:15")
+        );
+        assert_eq!(
+            font_size_restore_action(Some(14.0), 13.5).as_deref(),
+            Some("set_font_size:13.5")
+        );
+        assert_eq!(
+            font_size_restore_action(None, 16.0).as_deref(),
+            Some("set_font_size:16")
+        );
     }
 
     #[test]
