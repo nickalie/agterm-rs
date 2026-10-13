@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{Fixture, UNKNOWN, answered_id, args, failure, wire};
-use crate::JobChannel;
+use crate::LineChannel;
 use crate::dashboard::DashboardCover;
 use crate::model::{OverlayPane, StatusPane};
 use crate::overlay_capture::OverlayLaunchContext;
@@ -803,7 +803,7 @@ struct Recorded {
     closed: Rc<RefCell<bool>>,
 }
 
-impl JobChannel for Recorded {
+impl LineChannel for Recorded {
     fn send(&self, line: Vec<u8>) -> bool {
         self.lines.borrow_mut().push(OverlayJobFrame::parse(&line).unwrap());
         true

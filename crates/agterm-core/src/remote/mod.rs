@@ -8,7 +8,7 @@
 //!   `presentAskRemotely`/`takeBackRemoteAsk`/`receivePresenterFrame`): an ask or a program overlay opened on a session
 //!   whose panes follow a remote lead goes to its presenter instead of being drawn here.
 //!
-//! The streams are the frontend's: it hands the core each adopted connection as a [`PresentationChannel`] and reports
+//! The streams are the frontend's: it hands the core each adopted connection as a [`LineChannel`] and reports
 //! the lines read from it and its close, arms the hello deadline and the heartbeat, and the core does the rest (upstream's
 //! `ControlServer+Presentation.swift`). State frames are published by comparing each watched session with what its
 //! viewers last got, on every commit; a notification and a HUD publication are sent when they happen.
@@ -40,6 +40,7 @@ use self::hub::{CloseReason, HubEvent, PresentationHub, PresentationSink, Subscr
 use self::tree::{ProcessRemoteRunner, RemoteCommandResult, RemoteCommandRunner, RemoteWindowProjection};
 use crate::Core;
 use crate::commands::Outcome;
+pub use crate::commands::overlay::LineChannel;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
 use crate::model::{AgentStatus, Session, StatusPane};
@@ -65,17 +66,9 @@ const PRESENT_REQUIRES_SESSION: &str = "zmx.present requires a session";
 const INVALID_SESSION: &str = "invalid session";
 const NOT_LIVE: &str = "session is not live-backed, so nothing can be attached to it";
 
-/// One adopted presentation connection, as the frontend hands it over: lines go out without their newline.
-pub trait PresentationChannel {
-    /// Queues one line; false when the connection cannot take it (gone or stalled).
-    fn send(&self, line: Vec<u8>) -> bool;
-    /// Closes the connection; the frontend reports the close through [`Core::presentation_closed`].
-    fn shutdown(&self);
-}
-
 /// The hub's sink over a channel: a frame that cannot be encoded counts as not taken, as reporting it taken would
 /// advance the revision over a frame the viewer never got.
-struct ChannelSink(Rc<dyn PresentationChannel>);
+struct ChannelSink(Rc<dyn LineChannel>);
 
 impl PresentationSink for ChannelSink {
     fn offer(&mut self, frame: &PresentationFrame) -> bool {
@@ -100,7 +93,7 @@ impl PresentationSink for ChannelSink {
 /// One viewer's stream: subscribed once its hello arrived.
 struct Stream {
     session: Uuid,
-    channel: Rc<dyn PresentationChannel>,
+    channel: Rc<dyn LineChannel>,
     subscriber: Option<SubscriberId>,
 }
 
@@ -311,12 +304,14 @@ impl PresentationRuntime {
     /// The published HUD as it travels, its remaining lifetime sampled at `now` (upstream's `presentationHud`).
     fn hud(&self, session: &Session, now: Instant) -> Option<PresentationHud> {
         let publication = self.huds.get(&session.id()).filter(|publication| publication.live)?;
-        let live = session.overlay.hud.as_ref().filter(|_| session.overlay.hud_active())?;
+        if !session.overlay.hud_active() {
+            return None;
+        }
+        let spec = session.overlay.effective_hud_spec()?;
+        let pane = session.overlay.hud.as_ref()?.pane_identity;
         Some(PresentationHud {
-            spec: live
-                .spec
-                .with_size_percent(live.resized_width_percent.or(live.spec.size_percent)),
-            pane: live.pane_identity.map(PresentationPane::Identity),
+            spec,
+            pane: pane.map(PresentationPane::Identity),
             generation: publication.generation,
             remaining: publication
                 .expires_at
@@ -394,10 +389,10 @@ impl Core {
     /// Takes over a connection whose `zmx.present` for `session` (its reply's id) was just answered ok (upstream's
     /// `adoptPresentationStream`). Returns the stream's serial, which the frontend's reports carry; the frontend arms
     /// [`HELLO_DEADLINE`] and, while streams are up, [`HEARTBEAT_INTERVAL`].
-    pub fn adopt_presentation_stream(&mut self, session: &str, channel: Box<dyn PresentationChannel>) -> u64 {
+    pub fn adopt_presentation_stream(&mut self, session: &str, channel: Box<dyn LineChannel>) -> u64 {
         self.remote.next_serial += 1;
         let serial = self.remote.next_serial;
-        let channel: Rc<dyn PresentationChannel> = Rc::from(channel);
+        let channel: Rc<dyn LineChannel> = Rc::from(channel);
         let Some(session) = frames::parse_uuid(session) else {
             channel.shutdown();
             return serial;
@@ -515,7 +510,7 @@ impl Core {
     /// Ends the streams of sessions no longer in any open window, so a viewer does not keep the last mirrored state
     /// for good on a stream that still answers pings.
     fn drop_orphaned_presentation_streams(&mut self) {
-        let orphaned: Vec<Rc<dyn PresentationChannel>> = self
+        let orphaned: Vec<Rc<dyn LineChannel>> = self
             .remote
             .streams
             .values()

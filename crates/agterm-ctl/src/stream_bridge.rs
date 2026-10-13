@@ -44,7 +44,8 @@ impl StreamBridge {
         let mut line = serde_json::to_vec(request).map_err(|error| format!("could not encode the request: {error}"))?;
         line.push(b'\n');
         client::send_all(&self.socket, &line).map_err(|_| "could not send the request".to_owned())?;
-        let reply = read_reply_line(&self.socket)
+        // a byte at a time: a frame can sit right behind the reply in the same packet
+        let reply = client::read_socket_line(&self.socket, MAX_REQUEST_LINE_BYTES)
             .ok_or_else(|| "the app closed the connection without answering".to_owned())?;
         let response: Response =
             serde_json::from_slice(&reply).map_err(|error| format!("could not decode the reply: {error}"))?;
@@ -87,24 +88,6 @@ fn duplicate(fd: RawFd) -> io::Result<File> {
     // it is only borrowed long enough to duplicate it.
     let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
     borrowed.try_clone_to_owned().map(File::from)
-}
-
-/// The reply line, a byte at a time: a frame can sit right behind it in the same packet, and a chunked read would
-/// swallow it. `None` at the end of the connection, on a read error, or past the request line cap.
-fn read_reply_line(socket: &UnixStream) -> Option<Vec<u8>> {
-    let mut line = Vec::new();
-    let mut byte = [0_u8; 1];
-    loop {
-        match (&*socket).read(&mut byte) {
-            Ok(1) if byte[0] == b'\n' => return Some(line),
-            Ok(1) => line.push(byte[0]),
-            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
-            _ => return None,
-        }
-        if line.len() > MAX_REQUEST_LINE_BYTES {
-            return None;
-        }
-    }
 }
 
 /// Copies `source` to the socket until `source` ends, which shuts the socket down, or `cancel` becomes readable, which

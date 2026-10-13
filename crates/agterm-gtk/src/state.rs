@@ -51,10 +51,10 @@ const PRESENTATION_LIMITS: LineStreamLimits = LineStreamLimits {
     write_timeout: agterm_core::remote::WRITE_TIMEOUT,
 };
 
-/// A viewer's presentation stream as the core sends to it.
+/// An adopted streaming connection (an overlay job's helper, a viewer's presentation stream) as the core sends to it.
 struct StreamLines(LineStream);
 
-impl agterm_core::PresentationChannel for StreamLines {
+impl agterm_core::LineChannel for StreamLines {
     fn send(&self, line: Vec<u8>) -> bool {
         self.0.send(line)
     }
@@ -90,19 +90,6 @@ impl InboundGate {
         let (free, wake) = &*self.0;
         *free.lock().unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
         wake.notify_one();
-    }
-}
-
-/// A helper connection as the core sends to it.
-struct JobLines(LineStream);
-
-impl agterm_core::JobChannel for JobLines {
-    fn send(&self, line: Vec<u8>) -> bool {
-        self.0.send(line)
-    }
-
-    fn shutdown(&self) {
-        self.0.shutdown();
     }
 }
 
@@ -543,7 +530,7 @@ impl AppState {
         let stream = LineStream::new(JOB_STREAM_LIMITS);
         let serial = self
             .core
-            .adopt_overlay_job_stream(&job, Box::new(JobLines(stream.clone())));
+            .adopt_overlay_job_stream(&job, Box::new(StreamLines(stream.clone())));
         let (lines, closes) = (self.poster.clone(), self.poster.clone());
         let (line_job, close_job) = (job.clone(), job);
         let owner = LineStreamOwner::new(

@@ -15,7 +15,7 @@ use uuid::Uuid;
 use super::zmx::{Live, live, report, spawn_live};
 use super::{Fixture, UNKNOWN, args, failure, wire};
 use crate::Core;
-use crate::remote::PresentationChannel;
+use crate::remote::LineChannel;
 use crate::remote::tree::{RemoteCommandResult, RemoteCommandRunner};
 use crate::zmx::daemon_name;
 
@@ -31,7 +31,7 @@ struct Seen {
 #[derive(Clone, Default)]
 struct Viewer(Rc<RefCell<Seen>>);
 
-impl PresentationChannel for Viewer {
+impl LineChannel for Viewer {
     fn send(&self, line: Vec<u8>) -> bool {
         let mut seen = self.0.borrow_mut();
         if seen.closed {
@@ -722,7 +722,7 @@ fn run_job(live: &mut Live, job: &str) {
 /// A job helper's connection the test reads.
 struct JobSink(Rc<RefCell<Vec<Vec<u8>>>>);
 
-impl crate::JobChannel for JobSink {
+impl crate::LineChannel for JobSink {
     fn send(&self, line: Vec<u8>) -> bool {
         self.0.borrow_mut().push(line);
         true

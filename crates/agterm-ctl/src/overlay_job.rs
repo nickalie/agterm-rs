@@ -7,7 +7,7 @@
 //! `cancel`; the helper reports `started`, then one of `exited`, `canceled` or `launch-failed`.
 
 use std::ffi::OsString;
-use std::io::{self, ErrorKind, Read};
+use std::io::{self, ErrorKind};
 use std::net::Shutdown;
 use std::os::fd::RawFd;
 use std::os::unix::net::UnixStream;
@@ -138,7 +138,7 @@ impl JobRunner {
             .map_err(|error| format!("could not encode the request: {error}"))?;
         line.push(b'\n');
         client::send_all(&self.socket, &line).map_err(|_| "could not send the request".to_owned())?;
-        let reply = read_line(&self.socket, MAX_REQUEST_LINE_BYTES)
+        let reply = client::read_socket_line(&self.socket, MAX_REQUEST_LINE_BYTES)
             .ok_or_else(|| "the app closed the connection without answering".to_owned())?;
         let response: Response =
             serde_json::from_slice(&reply).map_err(|error| format!("could not decode the reply: {error}"))?;
@@ -147,7 +147,7 @@ impl JobRunner {
                 .error
                 .unwrap_or_else(|| "the app refused the stream".to_owned()));
         }
-        match read_line(&self.socket, MAX_FRAME_BYTES).map(|line| OverlayJobFrame::parse(&line)) {
+        match client::read_socket_line(&self.socket, MAX_FRAME_BYTES).map(|line| OverlayJobFrame::parse(&line)) {
             Some(Ok(OverlayJobFrame::Context { context })) => Ok(context),
             _ => Err("the app sent no launch context".to_owned()),
         }
@@ -252,7 +252,7 @@ impl JobRunner {
         thread::Builder::new()
             .name("agtermctl.run-job.listen".to_owned())
             .spawn(move || {
-                while let Some(line) = read_line(&socket, MAX_FRAME_BYTES) {
+                while let Some(line) = client::read_socket_line(&socket, MAX_FRAME_BYTES) {
                     if matches!(OverlayJobFrame::parse(&line), Ok(OverlayJobFrame::Cancel)) {
                         shared.cancel();
                     }
@@ -275,24 +275,6 @@ fn claim_request(job: &str) -> Request {
         cmd: Command::Session(SessionCmd::OverlayJobRun),
         target: Some(job.to_owned()),
         args: None,
-    }
-}
-
-/// One line without its newline, a byte at a time, so nothing behind it is consumed before its reader asks. `None` at
-/// the end of the connection, on a read error, or past `cap` bytes.
-fn read_line(socket: &UnixStream, cap: usize) -> Option<Vec<u8>> {
-    let mut line = Vec::new();
-    let mut byte = [0_u8; 1];
-    loop {
-        match (&*socket).read(&mut byte) {
-            Ok(1) if byte[0] == b'\n' => return Some(line),
-            Ok(1) => line.push(byte[0]),
-            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
-            _ => return None,
-        }
-        if line.len() > cap {
-            return None;
-        }
     }
 }
 
@@ -506,7 +488,7 @@ mod tests {
             let writer = (!hang_up).then(|| origin.try_clone().unwrap());
             let reply = format!("{reply}\n");
             let served = thread::spawn(move || {
-                let claim = read_line(&origin, MAX_REQUEST_LINE_BYTES).unwrap_or_default();
+                let claim = client::read_socket_line(&origin, MAX_REQUEST_LINE_BYTES).unwrap_or_default();
                 client::send_all(&origin, reply.as_bytes()).unwrap();
                 if let Some(context) = context {
                     let line = OverlayJobFrame::Context { context }.line().unwrap();
@@ -516,7 +498,7 @@ mod tests {
                     return (claim, Vec::new());
                 }
                 let mut frames = Vec::new();
-                while let Some(line) = read_line(&origin, MAX_FRAME_BYTES) {
+                while let Some(line) = client::read_socket_line(&origin, MAX_FRAME_BYTES) {
                     frames.push(OverlayJobFrame::parse(&line).unwrap());
                 }
                 (claim, frames)

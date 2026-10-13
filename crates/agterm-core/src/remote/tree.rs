@@ -7,7 +7,7 @@
 //! fresh shell wearing the session's name. The remote form runs that same bare form on the far side over ssh and reads
 //! its one document back.
 
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -23,9 +23,6 @@ use crate::zmx::is_daemon_name;
 
 /// How long the remote form waits for the far side's answer (upstream's `remoteTreeDeadline`).
 pub const TREE_DEADLINE: Duration = Duration::from_secs(10);
-/// How long a timed-out command gets after SIGTERM, and its output after it exits (upstream's
-/// `ProcessOutputCapture.terminationGrace`).
-pub const TERMINATION_GRACE: Duration = Duration::from_millis(250);
 
 /// A host or remote-session token: not empty, no whitespace, no control characters (upstream's
 /// `RemoteSession.isPlain`). One predicate decides what may reach both an argv and an error message.
@@ -128,6 +125,10 @@ pub trait RemoteCommandRunner: Send + Sync {
 /// Runs the command as a child process (upstream's `RemoteCommandProcessRunner`): through `/usr/bin/env`, so a user's
 /// own `ssh` earlier on PATH wins; stdin closed; the deadline the caller's, since ssh's `ConnectTimeout` bounds only the
 /// handshake.
+///
+/// The output goes to unlinked temporary files rather than pipes, read once the command exited: nothing blocks reading
+/// it, so a background helper of a PATH-resolved ssh wrapper that keeps the output open strands no reader thread or
+/// descriptor here (upstream cancels its pipe readers instead), and what it wrote by the exit is the answer.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ProcessRemoteRunner;
 
@@ -136,18 +137,25 @@ impl RemoteCommandRunner for ProcessRemoteRunner {
         let Some(executable) = argv.first() else {
             return RemoteCommandResult::failed("no command to run");
         };
-        let spawned = Command::new("/usr/bin/env")
-            .args(argv)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
+        let could_not_run =
+            |error: std::io::Error| RemoteCommandResult::failed(format!("could not run {executable}: {error}"));
+        let (mut stdout, mut stderr) = match (tempfile::tempfile(), tempfile::tempfile()) {
+            (Ok(stdout), Ok(stderr)) => (stdout, stderr),
+            (Err(error), _) | (_, Err(error)) => return could_not_run(error),
+        };
+        let spawned = stdout.try_clone().and_then(|out| {
+            let err = stderr.try_clone()?;
+            Command::new("/usr/bin/env")
+                .args(argv)
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(out))
+                .stderr(Stdio::from(err))
+                .spawn()
+        });
         let mut child = match spawned {
             Ok(child) => child,
-            Err(error) => return RemoteCommandResult::failed(format!("could not run {executable}: {error}")),
+            Err(error) => return could_not_run(error),
         };
-        let stdout = child.stdout.take().map(drain);
-        let stderr = child.stderr.take().map(drain);
         let started = Instant::now();
         let status = loop {
             match child.try_wait() {
@@ -158,39 +166,25 @@ impl RemoteCommandRunner for ProcessRemoteRunner {
         };
         let Some(status) = status else {
             end_child(&mut child);
+            // the output stays empty on a miss: the caller prefers a remote error parsed from stdout, and a partial one
+            // must not replace this diagnostic
             return RemoteCommandResult::failed("the remote did not answer in time");
-        };
-        // the output stays empty on a miss: the caller prefers a remote error parsed from stdout, and a partial one
-        // must not replace this diagnostic
-        let collected = (collect(stdout), collect(stderr));
-        let (Some(stdout), Some(stderr)) = collected else {
-            return RemoteCommandResult::failed("the remote command output did not close in time");
         };
         RemoteCommandResult {
             status: status.code().unwrap_or(-1),
-            stdout,
-            stderr,
+            stdout: read_capture(&mut stdout),
+            stderr: read_capture(&mut stderr),
         }
     }
 }
 
-/// Reads `source` to its end on a thread of its own, so a full pipe never stalls the child.
-fn drain(mut source: impl Read + Send + 'static) -> std::sync::mpsc::Receiver<String> {
-    let (sender, receiver) = std::sync::mpsc::channel();
-    thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = source.read_to_end(&mut bytes);
-        let _ = sender.send(String::from_utf8_lossy(&bytes).into_owned());
-    });
-    receiver
-}
-
-/// What a drained pipe held, once it closed within the grace; an unopened pipe reads empty.
-fn collect(receiver: Option<std::sync::mpsc::Receiver<String>>) -> Option<String> {
-    match receiver {
-        Some(receiver) => receiver.recv_timeout(TERMINATION_GRACE).ok(),
-        None => Some(String::new()),
+/// What a capture file holds from its start, decoded lossily.
+fn read_capture(file: &mut std::fs::File) -> String {
+    let mut bytes = Vec::new();
+    if file.seek(SeekFrom::Start(0)).is_ok() {
+        let _ = file.read_to_end(&mut bytes);
     }
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// Kills and reaps a child past its deadline. Upstream terminates first and kills past a grace; the core stays free
@@ -705,6 +699,11 @@ mod tests {
                 stderr: "err\n".to_owned()
             }
         );
+        // a background helper keeping the output open neither delays the answer nor strands a reader
+        let started = Instant::now();
+        let lingering = runner.run(&argv("echo out; sleep 5 & exit 0"), Duration::from_secs(5));
+        assert_eq!((lingering.status, lingering.stdout.as_str()), (0, "out\n"));
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
         let slow = runner.run(&argv("sleep 5"), Duration::from_millis(100));
         assert_eq!(slow, RemoteCommandResult::failed("the remote did not answer in time"));
         let missing = runner.run(&["/nonexistent/ssh".to_owned()], Duration::from_secs(5));

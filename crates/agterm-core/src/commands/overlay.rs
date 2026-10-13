@@ -551,8 +551,9 @@ impl Core {
 
 // MARK: - remote overlay jobs
 
-/// One helper connection of a claimed job, as the frontend hands it over: lines go out without their newline.
-pub trait JobChannel {
+/// One adopted streaming connection as the frontend hands it over, a claimed job's helper or a viewer's presentation
+/// stream: lines go out without their newline, and the frontend reports the lines read from it and its close.
+pub trait LineChannel {
     /// Queues one line; false when the connection cannot take it (gone or stalled).
     fn send(&self, line: Vec<u8>) -> bool;
     /// Closes the connection.
@@ -565,7 +566,7 @@ pub trait JobChannel {
 pub(crate) struct JobRuntime {
     pub(crate) jobs: OverlayJobs,
     /// The adopted connection of each claimed job, with the serial of its adoption.
-    streams: HashMap<String, (u64, Box<dyn JobChannel>)>,
+    streams: HashMap<String, (u64, Box<dyn LineChannel>)>,
     next_stream: u64,
     /// Cancels that reached a claimed job before its connection was adopted.
     pending_cancels: HashSet<String>,
@@ -606,7 +607,7 @@ impl Core {
     /// Takes over the connection of a job whose claim was just answered `ok`, and sends its launch context (upstream's
     /// `adoptOverlayJobStream`). A job that ended between its claim and now must not launch: its connection closes.
     /// Returns the adoption's serial, which the connection's reports carry.
-    pub fn adopt_overlay_job_stream(&mut self, job: &str, channel: Box<dyn JobChannel>) -> u64 {
+    pub fn adopt_overlay_job_stream(&mut self, job: &str, channel: Box<dyn LineChannel>) -> u64 {
         self.jobs.next_stream += 1;
         let serial = self.jobs.next_stream;
         let context = self.jobs.jobs.job(job).and_then(|found| match found.state {
@@ -710,7 +711,7 @@ impl Core {
 }
 
 /// Sends `frame` on `channel`; a connection that cannot take it is closed (upstream's `OverlayJobStream.send`).
-fn send_frame(channel: &dyn JobChannel, frame: &OverlayJobFrame) {
+fn send_frame(channel: &dyn LineChannel, frame: &OverlayJobFrame) {
     let sent = serde_json::to_vec(frame).is_ok_and(|line| channel.send(line));
     if !sent {
         tracing::error!("closing a job helper connection that cannot take a frame");

@@ -130,6 +130,25 @@ fn read_line(stream: &mut impl Read) -> Option<Vec<u8>> {
     }
 }
 
+/// One line of a streaming connection without its newline, a byte at a time, so nothing behind it (a frame right
+/// behind a reply) is consumed before its reader asks. `None` at the end of the connection, on a read error, or past
+/// `cap` bytes.
+pub fn read_socket_line(socket: &UnixStream, cap: usize) -> Option<Vec<u8>> {
+    let mut line = Vec::new();
+    let mut byte = [0_u8; 1];
+    loop {
+        match (&*socket).read(&mut byte) {
+            Ok(1) if byte[0] == b'\n' => return Some(line),
+            Ok(1) => line.push(byte[0]),
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            _ => return None,
+        }
+        if line.len() > cap {
+            return None;
+        }
+    }
+}
+
 /// Writes all of `data` to `stream` with `MSG_NOSIGNAL`, looping over short writes: a peer that hung up yields
 /// `EPIPE` rather than SIGPIPE, whatever the process's SIGPIPE disposition (upstream's `SO_NOSIGPIPE`).
 pub fn send_all(stream: &UnixStream, mut data: &[u8]) -> io::Result<()> {

@@ -55,12 +55,11 @@ pub use commands::notify::{
     BANNERS_OFF_NOTE, NotificationEffect, NotificationPost, PaneRole, identity as notification_identity,
     parse_identity as parse_notification_identity, should_deliver,
 };
-pub use commands::overlay::JobChannel;
+pub use commands::overlay::LineChannel;
 pub use commands::process::{CorePoster, CoreTask, ProcessHost, widened_path};
 pub use commands::relaunch::{EXIT_CAPTURE_BUDGET, PaneSpawn};
 pub use commands::surface::POLL_INTERVAL;
 pub use commands::zmx::{LeadCover, LiveInstall, LiveQuit, PaneReplacement, ResetPrompt, ResetRefusal};
 pub use dispatch::{CommitTimers, Core, CoreConfig, CoreState, Dispatched, Resume, decode_request};
 pub use error::{ControlError, Noun};
-pub use remote::PresentationChannel;
 pub use windows::{WindowRequest, WindowSize, WindowState};
