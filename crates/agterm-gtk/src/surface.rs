@@ -26,7 +26,7 @@ use std::rc::{Rc, Weak};
 
 use agterm_core::keystrokes::{self, SUBMIT_GAP};
 use agterm_core::link_policy::ClickOrigin;
-use agterm_core::model::SearchReport;
+use agterm_core::model::{SearchReport, StatusKeystroke};
 use agterm_core::persist::settings::LinkOpenMode;
 use agterm_ghostty::input::{KeyAction, KeyEvent, MouseState, ScrollMods};
 use agterm_ghostty::{
@@ -77,6 +77,7 @@ struct PointerState {
 type ExitHandler = Box<dyn FnOnce()>;
 type ReportHandler = Box<dyn Fn(&str)>;
 type SearchHandler = Box<dyn Fn(&SearchReport)>;
+type KeystrokeHandler = Box<dyn Fn(StatusKeystroke)>;
 
 struct Inner {
     key: SurfaceKey,
@@ -93,6 +94,7 @@ struct Inner {
     on_pwd: RefCell<Vec<ReportHandler>>,
     on_search: RefCell<Vec<SearchHandler>>,
     on_open_url: RefCell<Vec<ReportHandler>>,
+    on_keystroke: RefCell<Vec<KeystrokeHandler>>,
     on_exit: RefCell<Option<ExitHandler>>,
     /// The input method is being reset to end a composition this side already committed or dropped: what it emits
     /// meanwhile is ignored (upstream's `committingComposition`).
@@ -172,6 +174,7 @@ impl TerminalSurface {
             on_pwd: RefCell::new(Vec::new()),
             on_search: RefCell::new(Vec::new()),
             on_open_url: RefCell::new(Vec::new()),
+            on_keystroke: RefCell::new(Vec::new()),
             on_exit: RefCell::new(None),
             resetting_im: Cell::new(false),
             exit_handled: Cell::new(false),
@@ -224,6 +227,13 @@ impl TerminalSurface {
     /// opening it. A terminal with none opens links as a sessionless one (see [`TerminalSurface::open_url`]).
     pub fn connect_open_url(&self, handler: impl Fn(&str) + 'static) {
         self.inner.on_open_url.borrow_mut().push(Box::new(handler));
+    }
+
+    /// Adds a handler called with each physical key press or repeat the terminal receives, classified for the status
+    /// glyph, before the input method or libghostty sees it (upstream's `onUserInputClearsStatus` from `keyDown`).
+    /// Bare modifier keys are not reported.
+    pub fn connect_keystroke(&self, handler: impl Fn(StatusKeystroke) + 'static) {
+        self.inner.on_keystroke.borrow_mut().push(Box::new(handler));
     }
 
     /// Called once when the terminal's process ends.
@@ -776,6 +786,12 @@ impl TerminalSurface {
         };
         // before the input method: a release it swallows must still lift the key
         let action = self.inner.keys.borrow_mut().pressed.track(action, keycode);
+        let key_event = event.downcast_ref::<gdk::KeyEvent>();
+        if action != KeyAction::Release
+            && let Some(key_event) = key_event
+        {
+            self.report_keystroke(key_event, keyval, keycode, state);
+        }
         if self.filtered_by_input_method(&event) {
             self.inner.keys.borrow_mut().committed.clear();
             return true;
@@ -790,7 +806,6 @@ impl TerminalSurface {
             };
             (text, keys.composing)
         };
-        let key_event = event.downcast_ref::<gdk::KeyEvent>();
         let num_lock = event.device().is_some_and(|device| device.is_num_locked());
         let consumed = key_event.map_or(gdk::ModifierType::empty(), |e| {
             e.consumed_modifiers() & gdk::MODIFIER_MASK
@@ -810,6 +825,18 @@ impl TerminalSurface {
             self.with_surface(|s| s.preedit(None));
         }
         used
+    }
+
+    /// Every press reaches the status clear, whatever consumes it next (upstream classifies first thing in
+    /// `keyDown`); the pane-scoped decision is the model's.
+    fn report_keystroke(&self, event: &gdk::KeyEvent, keyval: gdk::Key, keycode: u32, state: gdk::ModifierType) {
+        let is_modifier = event.is_modifier();
+        let keycode = input::remapped_keycode(keycode, keyval, is_modifier);
+        if let Some(keystroke) = input::status_keystroke(keycode, keyval, state, is_modifier) {
+            for handler in self.inner.on_keystroke.borrow().iter() {
+                handler(keystroke);
+            }
+        }
     }
 
     fn connect_pointer(&self) {

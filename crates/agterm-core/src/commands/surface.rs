@@ -17,7 +17,7 @@ use super::{Outcome, args_of, parse_pane, parse_surface_pane, session_store, unk
 use crate::Core;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
-use crate::model::{PaneAddress, SearchFollowUp, SearchReport, Session, StatusPane, SurfaceSlot};
+use crate::model::{PaneAddress, SearchFollowUp, SearchReport, Session, StatusKeystroke, StatusPane, SurfaceSlot};
 
 /// How long a command waiting on the frontend sleeps between probes (upstream's 0.03 s main-actor polls).
 pub const POLL_INTERVAL: Duration = Duration::from_millis(30);
@@ -41,6 +41,24 @@ impl Core {
         if let SearchFollowUp::EndOn(owner) = session.search.apply(pane, report) {
             run_binding(session, owner, "end_search");
         }
+    }
+
+    /// A physical keystroke in the pane carrying `token` (upstream's `keyDown` → `onUserInputClearsStatus` →
+    /// `wireStatusClear`): clears the session's status to idle when that pane owns it and the keystroke clears it under
+    /// the live Status reset setting. The pane is the token's role now, so a promoted survivor clears as the left
+    /// pane. Returns whether it cleared; commit afterwards when it did.
+    pub fn clear_status_on_keystroke(&mut self, session: Uuid, token: &str, keystroke: StatusKeystroke) -> bool {
+        let reset = self.settings().effective_status_reset();
+        let Some(store) = self.library_mut().store_for_session_mut(session) else {
+            return false;
+        };
+        let Some(pane) = store
+            .session(session)
+            .and_then(|found| found.pane_role_for_token(token))
+        else {
+            return false;
+        };
+        store.clear_status_on_input(session, pane, keystroke, reset)
     }
 }
 

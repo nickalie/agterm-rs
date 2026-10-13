@@ -2,8 +2,11 @@
 //! text classified as an interrupt (Escape, a bare Ctrl-C), a submit (Return, or text carrying a newline) or plain
 //! typing, for [`AgentIndicator::cleared_by`](crate::model::AgentIndicator::cleared_by).
 //!
-//! Upstream matches macOS virtual key codes; here the frontend maps its hardware key code onto [`Key`], the few
-//! physical keys the classification looks at, so the truth table stays host-free.
+//! Upstream matches macOS virtual key codes; here the GTK frontend maps its XKB key code onto [`Key`], the few
+//! physical keys the classification looks at, so the truth table stays host-free (`agterm-gtk`'s
+//! `input::status_keystroke`, reported per terminal key press and applied by [`Core::clear_status_on_keystroke`]).
+//!
+//! [`Core::clear_status_on_keystroke`]: crate::Core::clear_status_on_keystroke
 
 use std::ops::BitOr;
 

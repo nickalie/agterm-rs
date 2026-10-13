@@ -287,8 +287,9 @@ fn set_page_visible(widget: &gtk::Box, terminal: &TerminalSurface, visible: bool
 
 /// Routes the terminal's events to the model as main-loop tasks: its shell exiting closes the session (upstream's
 /// `handlePaneExit` without a split), its cwd and title reports land on the session, its search reports on the
-/// session's search (upstream's `wireSearchCallbacks`), and a clicked link opens through the link policy as a click
-/// in this session's pane, under the link-open setting.
+/// session's search (upstream's `wireSearchCallbacks`), a key press clears the session's status when this pane owns
+/// it (upstream's `wireStatusClear`), and a clicked link opens through the link policy as a click in this session's
+/// pane, under the link-open setting.
 fn connect_terminal(terminal: &TerminalSurface, spec: &PageSpec, poster: &Poster) {
     let (session, token) = (spec.session, spec.token());
     let posting = poster.clone();
@@ -296,6 +297,16 @@ fn connect_terminal(terminal: &TerminalSurface, spec: &PageSpec, poster: &Poster
     terminal.connect_exit(move || {
         state::post(&posting, move |state: &mut AppState| {
             state.close_exited_session(session, &exit_token);
+        });
+    });
+    let posting = poster.clone();
+    let keystroke_token = token.clone();
+    terminal.connect_keystroke(move |keystroke| {
+        let token = keystroke_token.clone();
+        state::post(&posting, move |state: &mut AppState| {
+            if state.core.clear_status_on_keystroke(session, &token, keystroke) {
+                state.settle();
+            }
         });
     });
     let posting = poster.clone();

@@ -6,7 +6,9 @@
 
 use std::collections::HashSet;
 
+use agterm_core::interrupt;
 use agterm_core::keystrokes::KeystrokeSegment;
+use agterm_core::model::StatusKeystroke;
 use agterm_ghostty::input::{KeyAction, KeyEvent, Mods, MouseButton};
 use gtk::gdk;
 
@@ -171,6 +173,42 @@ pub fn remapped_keycode(keycode: u32, keyval: gdk::Key, is_modifier: bool) -> u3
         return 0;
     }
     keycode
+}
+
+/// What a physical key press means to a status glyph (upstream's `classifyKeystroke`): its key by `keycode` (after
+/// [`remapped_keycode`], so a key remapped to Escape is Escape while another layout's letters keep their physical
+/// key), its character by the keyval GDK resolved, which ignores Control but not Shift as macOS's
+/// `charactersIgnoringModifiers` does, and its modifiers from the state before the event. `None` for a bare modifier
+/// key, which macOS reports apart from key presses.
+#[must_use]
+pub fn status_keystroke(
+    keycode: u32,
+    keyval: gdk::Key,
+    state: gdk::ModifierType,
+    is_modifier: bool,
+) -> Option<StatusKeystroke> {
+    if is_modifier || modifier_keyval(keyval) {
+        return None;
+    }
+    let key = match keycode {
+        9 => interrupt::Key::Escape,
+        RETURN_KEYCODE => interrupt::Key::Return,
+        104 => interrupt::Key::KeypadEnter,
+        54 => interrupt::Key::C,
+        _ => interrupt::Key::Other,
+    };
+    let pairs = [
+        (gdk::ModifierType::CONTROL_MASK, interrupt::KeyModifiers::CONTROL),
+        (gdk::ModifierType::SUPER_MASK, interrupt::KeyModifiers::COMMAND),
+        (gdk::ModifierType::ALT_MASK, interrupt::KeyModifiers::OPTION),
+        (gdk::ModifierType::SHIFT_MASK, interrupt::KeyModifiers::SHIFT),
+    ];
+    let modifiers = pairs
+        .into_iter()
+        .filter(|(mask, _)| state.contains(*mask))
+        .fold(interrupt::KeyModifiers::NONE, |modifiers, (_, bit)| modifiers | bit);
+    let character = keyval.to_unicode().map(String::from);
+    Some(interrupt::classify(key, character.as_deref(), modifiers))
 }
 
 /// The XKB keycode of Return (`KEYVAL_KEYCODES`), the key a synthetic Return presses.
@@ -492,5 +530,52 @@ mod tests {
             .collect();
         let [press, release] = return_keys();
         assert_eq!(keys, [text_key("ls"), press, release, text_key("pwd")]);
+    }
+
+    #[test]
+    fn key_presses_classify_for_the_status_glyph_as_upstream() {
+        use gdk::ModifierType as M;
+        let classify = |keycode, keyval, state| status_keystroke(keycode, keyval, state, false);
+        let none = M::empty();
+        assert_eq!(classify(9, gdk::Key::Escape, none), Some(StatusKeystroke::Interrupt));
+        // Caps Lock remapped to Escape arrives as Escape's code
+        let caps_as_escape = remapped_keycode(66, gdk::Key::Escape, false);
+        assert_eq!(
+            classify(caps_as_escape, gdk::Key::Escape, none),
+            Some(StatusKeystroke::Interrupt)
+        );
+        assert_eq!(
+            classify(54, gdk::Key::c, M::CONTROL_MASK),
+            Some(StatusKeystroke::Interrupt)
+        );
+        // a copy chord is no interrupt
+        assert_eq!(
+            classify(54, gdk::Key::C, M::CONTROL_MASK | M::SHIFT_MASK),
+            Some(StatusKeystroke::Other)
+        );
+        // Cyrillic: the physical C key; Dvorak: its J there is no interrupt
+        assert_eq!(
+            classify(54, gdk::Key::Cyrillic_es, M::CONTROL_MASK),
+            Some(StatusKeystroke::Interrupt)
+        );
+        assert_eq!(classify(54, gdk::Key::j, M::CONTROL_MASK), Some(StatusKeystroke::Other));
+        assert_eq!(
+            classify(RETURN_KEYCODE, gdk::Key::Return, none),
+            Some(StatusKeystroke::Submit)
+        );
+        assert_eq!(classify(104, gdk::Key::KP_Enter, none), Some(StatusKeystroke::Submit));
+        assert_eq!(
+            classify(RETURN_KEYCODE, gdk::Key::Return, M::SHIFT_MASK),
+            Some(StatusKeystroke::Other)
+        );
+        // Num Lock and Caps Lock are not modifiers to the classification
+        assert_eq!(
+            classify(104, gdk::Key::KP_Enter, M::LOCK_MASK),
+            Some(StatusKeystroke::Submit)
+        );
+        assert_eq!(classify(38, gdk::Key::a, none), Some(StatusKeystroke::Other));
+        // a bare modifier key is no keystroke
+        assert_eq!(classify(37, gdk::Key::Control_L, none), None);
+        assert_eq!(status_keystroke(50, gdk::Key::a, none, true), None);
     }
 }

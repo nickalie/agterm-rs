@@ -216,6 +216,69 @@ fn typed_input_clears_a_blocked_status_as_the_keyboard_does() {
     assert_eq!(status, Some(crate::model::AgentStatus::Idle));
 }
 
+#[test]
+fn a_keystroke_in_the_owning_pane_clears_the_status_as_upstream() {
+    use crate::model::{AgentStatus, StatusKeystroke};
+
+    let (mut fixture, id, _probe) = fixture_with_terminal();
+    let target = wire(id);
+    let status = |fixture: &Fixture| {
+        fixture
+            .store()
+            .session(id)
+            .map(|session| session.agent_indicator.status)
+    };
+    let set = |fixture: &mut Fixture, status: &str| {
+        let response = fixture.session(
+            SessionCmd::Status,
+            Some(&target),
+            args(|a| a.status = Some(status.into())),
+        );
+        assert!(response.ok, "{response:?}");
+    };
+
+    // active survives plain typing and a submit, an interrupt drops it
+    set(&mut fixture, "active");
+    assert!(
+        !fixture
+            .core
+            .clear_status_on_keystroke(id, TOKEN, StatusKeystroke::Other)
+    );
+    assert!(
+        !fixture
+            .core
+            .clear_status_on_keystroke(id, TOKEN, StatusKeystroke::Submit)
+    );
+    assert_eq!(status(&fixture), Some(AgentStatus::Active));
+    assert!(
+        fixture
+            .core
+            .clear_status_on_keystroke(id, TOKEN, StatusKeystroke::Interrupt)
+    );
+    assert_eq!(status(&fixture), Some(AgentStatus::Idle));
+
+    // blocked clears on the first key under the default Status reset
+    set(&mut fixture, "blocked");
+    // a terminal that is not this session's pane clears nothing
+    assert!(
+        !fixture
+            .core
+            .clear_status_on_keystroke(id, "other", StatusKeystroke::Other)
+    );
+    assert!(
+        !fixture
+            .core
+            .clear_status_on_keystroke(Uuid::new_v4(), TOKEN, StatusKeystroke::Other)
+    );
+    assert_eq!(status(&fixture), Some(AgentStatus::Blocked));
+    assert!(
+        fixture
+            .core
+            .clear_status_on_keystroke(id, TOKEN, StatusKeystroke::Other)
+    );
+    assert_eq!(status(&fixture), Some(AgentStatus::Idle));
+}
+
 // MARK: - session.text
 
 #[test]
