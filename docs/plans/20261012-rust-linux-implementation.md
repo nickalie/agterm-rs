@@ -1324,18 +1324,25 @@ wlr-layer-shell surface.
 **Files:**
 - Create: `crates/agterm-gtk/src/settings/*.rs`, `crates/agterm-gtk/src/welcome.rs`
 - Create: `docs/linux-ui-checklist.md`
+- ➕ Create: `crates/agterm-core/src/{settings_model,first_run}.rs`
 
-- [ ] settings with upstream's sections and controls (`Views/SettingsView.swift`, `SettingsModel.swift`,
+- [x] settings with upstream's sections and controls (`Views/SettingsView.swift`, `SettingsModel.swift`,
       `SettingsCatalog.swift`, `settings.md`) as libadwaita preference pages, persisting through `settings.json`;
-      the fork's `Settings*Page.swift` only as a GTK hint
-- [ ] first-run welcome (`FirstRunWelcome.swift`, `WelcomeAlert.swift`), quit prompt (`QuitPrompt.swift`,
-      `QuitReason.swift`)
-- [ ] `docs/linux-ui-checklist.md`: every user-visible feature of upstream macOS (`site/docs.html`, the rules files,
+      the fork's `Settings*Page.swift` only as a GTK hint (`agterm_core::settings_model`: one `SettingsChange` per
+      control, validated, defaults stored as nil, applied by `Core::change_settings` as upstream's setters; GTK
+      `settings/`: an `adw::PreferencesDialog` of upstream's six pages, rows named with upstream's ids, refreshed
+      from the settings after every settle; File ▸ Preferences and Quit close the primary menu. ➕ the ghostty config
+      now loads the settings' config directory and, with `inheritGlobalGhosttyConfig`, the user's global config)
+- [x] first-run welcome (`FirstRunWelcome.swift`, `WelcomeAlert.swift`), quit prompt (`QuitPrompt.swift`,
+      `QuitReason.swift`) (`agterm_core::first_run`; GTK `welcome.rs`: alert dialogs; Install logs until Task 36
+      builds the installers; a signal or the last window closing quits without asking)
+- [x] `docs/linux-ui-checklist.md`: every user-visible feature of upstream macOS (`site/docs.html`, the rules files,
       `conformance/ui-ids.yaml`), each with its GTK form and a manual check against upstream's behavior; the
       fork's UI only as a hint for the GTK form
-- [ ] write tests: settings model validation and persistence round-trip
-- [ ] write tests: first-run decision logic
-- [ ] gate: full run; ratchet
+- [x] write tests: settings model validation and persistence round-trip
+- [x] write tests: first-run decision logic
+- [x] gate: full run; ratchet (614 passed, 28 failed, 12 skipped; ratchet holds at 614, no new ids: the task's UI has
+      no suite test on Linux)
 
 ### Task 34: Command palette, session switcher and search
 

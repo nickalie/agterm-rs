@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
+use agterm_core::first_run::FirstRunWelcome;
 use agterm_core::paths::{self, Env, ProcessEnv};
 use agterm_core::persist::{LibraryPersistence, SettingsStore};
 use agterm_core::{Core, CoreConfig, CoreState};
@@ -137,6 +138,28 @@ thread_local! {
     static SHELL: RefCell<Option<Shell>> = const { RefCell::new(None) };
 }
 
+/// What the core reaches the host through, and the launch decisions frozen before the first terminal.
+fn install_launch_hosts(core: &mut Core) {
+    core.set_reveal_handler(Box::new(reveal_in_file_manager));
+    if let Some(helper) = crate::hud::install_helper(&paths::state_dir(&ProcessEnv)) {
+        core.set_hud_helper(helper, paths::hud_body_dir(&ProcessEnv));
+    }
+    core.set_cell_estimator(Box::new(crate::hud::estimate_cell));
+    crate::html_overlay::install(core, paths::state_dir(&ProcessEnv));
+    core.set_config_locator(paths::ConfigLocator::capture(&ProcessEnv));
+    core.set_ui_test_launch(agterm_core::is_ui_test_launch(&ProcessEnv));
+    // the restore decision is frozen before the first terminal, and the launch spawn order armed before any window
+    // shows (upstream's `GhosttyApp.restoreLaunchDecision` and the pacer's arm at app init)
+    let decision = crate::restore_launch::launch_decision(core.settings(), &ProcessEnv);
+    core.set_restore_launch(decision);
+    core.load_restore_denylist_at_launch();
+    core.set_process_table(
+        Box::new(crate::process_table::ProcTable::new()),
+        crate::restore_launch::shell_basename(&ProcessEnv),
+    );
+    core.arm_launch_spawns(std::time::Instant::now());
+}
+
 pub fn activate(app: &adw::Application) {
     // a later activation (a second launch forwarded here) raises the frontmost window
     let running = SHELL.with(|shell| {
@@ -155,6 +178,8 @@ pub fn activate(app: &adw::Application) {
         socket: advertised_socket(&server),
         program_version: identity.version.clone(),
     };
+    // read before the launch writes anything: the first launch seeds a window and saves it at once
+    let had_prior_state = FirstRunWelcome::has_prior_state(&paths::state_dir(&ProcessEnv));
     let mut core = Core::new(
         CoreConfig {
             app: identity,
@@ -173,25 +198,9 @@ pub fn activate(app: &adw::Application) {
         app.quit();
         return;
     }
-    core.set_reveal_handler(Box::new(reveal_in_file_manager));
-    if let Some(helper) = crate::hud::install_helper(&paths::state_dir(&ProcessEnv)) {
-        core.set_hud_helper(helper, paths::hud_body_dir(&ProcessEnv));
-    }
-    core.set_cell_estimator(Box::new(crate::hud::estimate_cell));
-    crate::html_overlay::install(&mut core, paths::state_dir(&ProcessEnv));
-    core.set_config_locator(paths::ConfigLocator::capture(&ProcessEnv));
-    core.set_ui_test_launch(agterm_core::is_ui_test_launch(&ProcessEnv));
-    // the restore decision is frozen before the first terminal, and the launch spawn order armed before any window
-    // shows (upstream's `GhosttyApp.restoreLaunchDecision` and the pacer's arm at app init)
-    let decision = crate::restore_launch::launch_decision(core.settings(), &ProcessEnv);
-    core.set_restore_launch(decision);
-    core.load_restore_denylist_at_launch();
-    core.set_process_table(
-        Box::new(crate::process_table::ProcTable::new()),
-        crate::restore_launch::shell_basename(&ProcessEnv),
-    );
-    core.arm_launch_spawns(std::time::Instant::now());
+    install_launch_hosts(&mut core);
     let socket = context.socket.clone();
+    let welcome_due = FirstRunWelcome::is_due(core.settings().welcome_shown, had_prior_state);
     let state = Rc::new(RefCell::new(AppState::new(core)));
     let main_loop = Arc::new(GlibMainLoop::attach(&glib::MainContext::default(), Rc::clone(&state)));
     let posting: Arc<dyn MainLoop<AppState>> = Arc::clone(&main_loop) as _;
@@ -210,11 +219,15 @@ pub fn activate(app: &adw::Application) {
     crate::theme::follow_appearance(&poster);
     state
         .borrow_mut()
-        .attach(poster, Windows::new(app.clone(), context, menu));
+        .attach(poster.clone(), Windows::new(app.clone(), context, menu));
     if let Err(err) = server.start(posting, |state: &mut AppState, request: Request| {
         state.handle_request(&request)
     }) {
         tracing::error!(%err, "the control server is not serving");
+    }
+    // last, once the windows are presented: the dialog opens over the frontmost one
+    if welcome_due {
+        crate::state::post(&poster, crate::welcome::present_once);
     }
     SHELL.with(|shell| {
         *shell.borrow_mut() = Some(Shell {

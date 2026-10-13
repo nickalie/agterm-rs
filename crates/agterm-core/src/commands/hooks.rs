@@ -76,6 +76,12 @@ impl HookLauncher for Launcher<'_> {
 }
 
 impl Core {
+    /// The problems the last `hooks.conf` read found (Settings ▸ Key Mapping's Hooks section).
+    #[must_use]
+    pub fn hooks_diagnostics(&self) -> &[KeymapDiagnostic] {
+        &self.hooks.diagnostics
+    }
+
     /// The `hooks.conf` the app reads.
     #[must_use]
     pub fn hooks_path(&self) -> PathBuf {

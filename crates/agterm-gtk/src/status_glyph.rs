@@ -106,9 +106,21 @@ fn tooltip(status: AgentStatus) -> String {
     format!("Agent status: {capitalized}")
 }
 
+/// The tint a status's glyph has when the settings set none; `None` for `idle`, which draws no glyph.
+#[must_use]
+pub fn default_rgb(status: AgentStatus) -> Option<Rgb> {
+    match status {
+        AgentStatus::Idle => None,
+        AgentStatus::Active => Some(DEFAULT_ACTIVE),
+        AgentStatus::Blocked => Some(DEFAULT_BLOCKED),
+        AgentStatus::Completed => Some(DEFAULT_COMPLETED),
+    }
+}
+
 /// Parses a six-digit hex color, `#` optional and surrounding whitespace ignored (upstream's
 /// `NSColor(agtermHex:)`); `None` when malformed.
-fn parse_hex(hex: &str) -> Option<Rgb> {
+#[must_use]
+pub fn parse_hex(hex: &str) -> Option<Rgb> {
     let hex = hex.trim();
     if !is_valid_color_hex(hex) {
         return None;

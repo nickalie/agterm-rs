@@ -170,6 +170,26 @@ impl AppState {
         self.settle();
     }
 
+    /// Where tasks for this state are posted.
+    #[must_use]
+    pub fn poster(&self) -> &Poster {
+        &self.poster
+    }
+
+    /// The application, once attached.
+    #[must_use]
+    pub fn app(&self) -> Option<&adw::Application> {
+        self.windows.as_ref().map(Windows::app)
+    }
+
+    /// The frontmost window's GTK window, which app-wide dialogs open over.
+    #[must_use]
+    pub fn frontmost_gtk_window(&self) -> Option<adw::ApplicationWindow> {
+        let window = self.core.library().active_window_id()?;
+        let ui = self.windows.as_ref()?.get(window)?;
+        Some(ui.gtk_window().clone())
+    }
+
     /// Raises the frontmost window, its shown terminal focused.
     pub fn present(&self) {
         if let Some(windows) = self.windows.as_ref() {
@@ -213,6 +233,7 @@ impl AppState {
             None => drop(self.core.take_window_requests()),
         }
         self.core.clear_pane_focus_requests();
+        crate::settings::sync(&self.core);
         self.spawn_paced_panes();
         self.arm_auto_follow();
         self.arm_hud_timers();
