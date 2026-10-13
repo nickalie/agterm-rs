@@ -65,6 +65,49 @@ pub fn close_inherited_descriptors() {
     unsafe { libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, libc::CLOSE_RANGE_CLOEXEC) };
 }
 
+/// Running a test as the real binary runs, with SIGPIPE at its default action. std ignores SIGPIPE before the test
+/// harness's `main`, and only `agtermctl`'s own `main` restores the default, so a test of [`SigpipeIgnored`] run in the
+/// harness passes whether or not the guard does anything. Setting the default in the harness itself would let a
+/// concurrent test's `EPIPE` kill the whole test binary, so the test runs again, alone, in a fresh copy of the binary.
+#[cfg(test)]
+pub mod default_sigpipe {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::Command;
+
+    /// Names the test a re-run copy of the binary is running with SIGPIPE at its default.
+    const PROBE: &str = "AGTERMCTL_TEST_DEFAULT_SIGPIPE";
+
+    /// Runs `body` with SIGPIPE at its default action: in the copy of the binary [`PROBE`] names `test` to (its full
+    /// path, `module::tests::name`), it sets the default and runs `body`; anywhere else it re-runs `test` alone in such
+    /// a copy and asserts the copy passed, rather than failing or dying of SIGPIPE.
+    pub fn run(test: &str, body: impl FnOnce()) {
+        if std::env::var(PROBE).is_ok_and(|probed| probed == test) {
+            // SAFETY: `signal` with a valid signal number and `SIG_DFL` installs no handler code.
+            unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+            body();
+            return;
+        }
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([test, "--exact", "--test-threads=1", "--nocapture"])
+            .env(PROBE, test)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{test} with SIGPIPE at its default: {:?} (signal {:?})\n{}{}",
+            output.status.code(),
+            output.status.signal(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // the filter matched the test: a mistyped name would pass with no test run
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{test} did not run"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::process::Command;
@@ -79,20 +122,27 @@ mod tests {
         assert_eq!(exit_status(killed), libc::SIGTERM);
     }
 
+    /// SIGPIPE's current action, read back by installing `SIG_IGN` and putting the old one back.
+    fn sigpipe_action() -> libc::sighandler_t {
+        // SAFETY: installing `SIG_IGN` runs no handler code.
+        let current = unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) };
+        // SAFETY: `current` is the action `signal` just returned for SIGPIPE.
+        unsafe { libc::signal(libc::SIGPIPE, current) };
+        current
+    }
+
     #[test]
-    fn sigpipe_comes_back_to_its_previous_action() {
-        let read = || {
-            // SAFETY: reading the action back by installing `SIG_IGN`; no handler code is involved.
-            let current = unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) };
-            // SAFETY: `current` is the action `signal` just returned for SIGPIPE.
-            unsafe { libc::signal(libc::SIGPIPE, current) };
-            current
-        };
-        let before = read();
-        {
-            let _ignored = SigpipeIgnored::new();
-            assert_eq!(read(), libc::SIG_IGN);
-        }
-        assert_eq!(read(), before);
+    fn sigpipe_is_ignored_while_the_guard_lives_and_default_again_after() {
+        default_sigpipe::run(
+            "local::tests::sigpipe_is_ignored_while_the_guard_lives_and_default_again_after",
+            || {
+                assert_eq!(sigpipe_action(), libc::SIG_DFL);
+                {
+                    let _ignored = SigpipeIgnored::new();
+                    assert_eq!(sigpipe_action(), libc::SIG_IGN);
+                }
+                assert_eq!(sigpipe_action(), libc::SIG_DFL);
+            },
+        );
     }
 }

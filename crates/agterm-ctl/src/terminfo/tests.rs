@@ -600,19 +600,26 @@ fn ssh_starts_with_signals_unblocked_whatever_the_caller_blocks() {
 
 #[test]
 fn an_ssh_that_exits_before_reading_stdin_still_reports_its_status() {
-    let fixture = Fixture::new();
-    let database = fixture.database("env", "78");
-    // larger than a pipe buffer, so the write would block or EPIPE against a reader that has gone
-    let infocmp = fixture.fake_infocmp(&"x".repeat(1 << 17));
-    let ssh = fixture.fake_ssh(255, false, "");
-    let outcome = run(
-        &connection("buildbox"),
-        None,
-        &env(&[("TERMINFO", &database)]),
-        &ssh,
-        &infocmp,
+    // with SIGPIPE at its default, as the real binary runs (a real infocmp dump stays under a pipe buffer, so only a
+    // fake one reaches this end to end)
+    crate::local::default_sigpipe::run(
+        "terminfo::tests::an_ssh_that_exits_before_reading_stdin_still_reports_its_status",
+        || {
+            let fixture = Fixture::new();
+            let database = fixture.database("env", "78");
+            // larger than a pipe buffer, so the write would block or EPIPE against a reader that has gone
+            let infocmp = fixture.fake_infocmp(&"x".repeat(1 << 17));
+            let ssh = fixture.fake_ssh(255, false, "");
+            let outcome = run(
+                &connection("buildbox"),
+                None,
+                &env(&[("TERMINFO", &database)]),
+                &ssh,
+                &infocmp,
+            );
+            assert_eq!(outcome, Ok(Outcome::Exited(255)));
+        },
     );
-    assert_eq!(outcome, Ok(Outcome::Exited(255)));
 }
 
 // -- the real infocmp against a real compiled entry

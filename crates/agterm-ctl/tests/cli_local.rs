@@ -304,6 +304,20 @@ fn clipboard_set_reports_zmx_failing_or_missing() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn clipboard_set_reports_a_zmx_that_exits_without_reading_a_large_text() -> TestResult {
+    // the built CLI runs SIGPIPE at its default: a write past the pipe buffer into a zmx that has gone must get EPIPE
+    // and report zmx's own status, not end the CLI by the signal (141 under a shell)
+    let sandbox = Sandbox::new()?;
+    let live = [("ZMX_SESSION", DAEMON), ("ZMX_DIR", "/tmp/agterm-zmx-1")];
+    let zmx = sandbox.path("stage/bin/zmx");
+    Sandbox::script(&zmx, "echo 'session not found' >&2\nexit 4")?;
+    let large = vec![b'x'; 1024 * 1024];
+    let output = sandbox.run(None, &["clipboard", "set"], &live, &large)?;
+    assert_eq!(outcome(&output), failed("zmx print exited 4: session not found"));
+    Ok(())
+}
+
 // -- terminfo install
 
 #[test]

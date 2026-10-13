@@ -516,15 +516,21 @@ mod tests {
 
     #[test]
     fn a_zmx_that_exits_without_reading_stdin_still_reports_its_status() {
-        let fixture = Fixture::new();
-        let zmx = fixture.fake_zmx(4, None, false);
-        let text = vec![0; 1024 * 1024];
-        assert_eq!(
-            copy(&text, None, &live(), Some(&zmx)),
-            Err(CopyFailure::PrintFailed {
-                status: 4,
-                stderr: String::new()
-            })
+        // with SIGPIPE at its default, as the real binary runs: the write past the pipe buffer must get EPIPE
+        crate::local::default_sigpipe::run(
+            "clipboard::tests::a_zmx_that_exits_without_reading_stdin_still_reports_its_status",
+            || {
+                let fixture = Fixture::new();
+                let zmx = fixture.fake_zmx(4, None, false);
+                let text = vec![0; 1024 * 1024];
+                assert_eq!(
+                    copy(&text, None, &live(), Some(&zmx)),
+                    Err(CopyFailure::PrintFailed {
+                        status: 4,
+                        stderr: String::new()
+                    })
+                );
+            },
         );
     }
 
