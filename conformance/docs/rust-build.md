@@ -47,11 +47,14 @@ Every zmx or session-host process carries `ZMX_DIR=<that dir>`: one left running
 
 Source of truth: `CAPABILITIES` in `agterm_conformance/impls/base.py`; `selftests/test_docs.py` keeps this table equal
 to it and to the references' profiles. `host`: claimed only where the account's login shell is zsh (on Linux, also with zmx staged).
+A row with both reference columns empty and a meaning starting `Rust-only` is an extension of the Rust build, see
+Rust-only extensions below.
 
 | capability | swift-macos | swift-linux | meaning |
 |---|---|---|---|
 | `posix-shell` | yes | yes | panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic |
 | `live-sessions` | host | host | restoreMode live keeps panes in zmx daemons that outlive the app |
+| `live-any-shell` |  |  | Rust-only: Live sessions in a zsh, bash or fish login shell, each started with Ghostty's shell integration; claimed where the password-database login shell is one of the three and zmx is staged |
 | `window-geometry` | yes |  | window x/y position is settable through `window.move`, read back as `geometry` and restored |
 | `window-minimize` | yes |  | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
 | `select-takes-frontmost` | yes |  | `window.select`/`window.go` make their window `active` without waiting on window focus |
@@ -89,8 +92,8 @@ claims:
   `sidebar-min-width`, `theme-slots-by-sync`, `config-reload-counts`: upstream's validation and read-back;
 - `keymap-menu`: once a GTK menu carries the actions' live accelerators;
 - `live-sessions`: by host, where the login shell is zsh and zmx is staged;
-- `live-any-shell`: by host, live sessions for bash and fish login shells too, the one Rust-only extension; it joins
-  the vocabulary together with its tests.
+- `live-any-shell`: by host, live sessions for bash and fish login shells too, the one Rust-only extension (below):
+  claimed together with `live-sessions` for a zsh login shell, alone for bash or fish.
 
 It does not claim:
 
@@ -101,6 +104,20 @@ It does not claim:
   close-on-exit.
 
 The table above stays the references' profiles; this list is the Rust build's.
+
+## Rust-only extensions
+
+A Rust-only extension is a capability no reference claims, so its tests (`requires` on it) skip as `unsupported` on
+both references and the reference discipline holds them to nothing there: the Rust CI validates them instead, with
+`--must-pass` on the capability in every job whose host can claim it.
+Today there is one, `live-any-shell`: a Live pane runs the password database's login shell in its zmx daemon, zsh as
+upstream, bash and fish as well, each started with Ghostty's shell integration the way libghostty starts a shell it
+spawns itself (`ZDOTDIR` for zsh, `ENV` in POSIX mode for bash, `XDG_DATA_DIRS` for fish).
+Its tests are in `tests/protocol/test_live_any_shell.py`; a test that branches on Live being active
+(`test_restore.py::test_seeded_live_mode_is_requested_at_launch`) takes the fallback branch only when the build has
+neither `live-sessions` nor `live-any-shell`.
+The jobs of `.github/workflows/rust-linux.yml` cover the three shells, each with `--must-pass live-any-shell`: the
+default job's login shell is bash, the `conformance-fish` job's fish, the `conformance-zsh` job's zsh.
 
 ## Ratchet
 

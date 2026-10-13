@@ -28,7 +28,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
             meson ninja-build libwayland-dev wayland-protocols \
-            curl xz-utils patch ncurses-bin
+            curl xz-utils patch ncurses-bin fish
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -65,10 +65,13 @@ jobs:
       - name: lint report
         shell: bash
         run: scripts/lint-report.sh | tee -a "$GITHUB_STEP_SUMMARY"
+      # fish is installed above so the fish replay script's unit test runs against a real fish parser
       - name: test
         run: cargo test --workspace
 
   # The staged build under the suite, each instance on its own headless weston and session bus (run-rust-linux.sh).
+  # The runner's login shell is bash, so the build claims `live-any-shell` (Live sessions in bash, a Rust-only
+  # extension) and every test requiring it must pass.
   conformance:
     needs: rust-linux
     runs-on: ubuntu-24.04
@@ -139,9 +142,12 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
+      # the app and the harness read the password database, never $SHELL
+      - name: the login shell (bash)
+        run: getent passwd "$USER"
       # Exits with the ratchet's status; check_ratchet.py lists the newly green ids in the job summary.
       - name: full suite (protocol, cli, behaviors)
-        run: conformance/tools/run-rust-linux.sh
+        run: conformance/tools/run-rust-linux.sh -- --must-pass live-any-shell
       - name: reports into the summary
         if: always()
         shell: bash
@@ -161,8 +167,9 @@ jobs:
 
   # Live sessions run only for a zsh password-database login shell (the references wrap a pane in zmx only then), so
   # this is the suite again with the runner's login shell switched to zsh: the build claims `live-sessions` and the
-  # live tests run. Gated by the ratchet only: `--must-pass live-sessions` waits until every live test can pass
-  # (`zmx.present` and `clipboard set` come later).
+  # live tests run. `--must-pass live-any-shell` (the Rust-only extension, claimed for zsh too); otherwise gated by the
+  # ratchet only: `--must-pass live-sessions` waits until every live test can pass (`zmx.present` and `clipboard set`
+  # come later).
   conformance-zsh:
     needs: rust-linux
     runs-on: ubuntu-24.04
@@ -205,7 +212,7 @@ jobs:
         run: python -m pip install -e conformance
       # Exits with the ratchet's status; check_ratchet.py lists the newly green (live) ids in the job summary.
       - name: full suite under a zsh login shell (protocol, cli, behaviors)
-        run: conformance/tools/run-rust-linux.sh --out conformance/reports/rust-linux-zsh
+        run: conformance/tools/run-rust-linux.sh --out conformance/reports/rust-linux-zsh -- --must-pass live-any-shell
       - name: report into the summary
         if: always()
         shell: bash
@@ -218,4 +225,63 @@ jobs:
         with:
           name: rust-linux-conformance-zsh
           path: conformance/reports/rust-linux-zsh/
+          if-no-files-found: warn
+
+  # The suite again under a fish login shell: Live sessions in fish are the other half of the Rust-only
+  # `live-any-shell` extension (bash is the default job's), so every test requiring it must pass here too.
+  conformance-fish:
+    needs: rust-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+      - name: system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
+            meson ninja-build libwayland-dev wayland-protocols \
+            curl xz-utils patch ncurses-bin \
+            weston dbus-daemon libgl1-mesa-dri libegl-mesa0 fish
+      # the app and the harness read the password database, never $SHELL
+      - name: fish as the login shell
+        run: |
+          sudo chsh -s "$(command -v fish)" "$USER"
+          getent passwd "$USER"
+      - name: rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/agterm-rs/vendor
+          key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
+      - name: libghostty prefix
+        run: scripts/build-ghostty.sh
+      - name: gtk4-layer-shell prefix
+        run: scripts/build-layer-shell.sh
+      # stage.sh stages bin/zmx from this prefix, restored from the cache the rust-linux job saved
+      - name: zmx prefix
+        run: scripts/build-zmx.sh
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: install the suite
+        run: python -m pip install -e conformance
+      # Exits with the ratchet's status; check_ratchet.py lists the newly green ids in the job summary.
+      - name: full suite under a fish login shell (protocol, cli, behaviors)
+        run: conformance/tools/run-rust-linux.sh --out conformance/reports/rust-linux-fish -- --must-pass live-any-shell
+      - name: report into the summary
+        if: always()
+        shell: bash
+        run: |
+          report=conformance/reports/rust-linux-fish/report.md
+          if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: upload the report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-linux-conformance-fish
+          path: conformance/reports/rust-linux-fish/
           if-no-files-found: warn

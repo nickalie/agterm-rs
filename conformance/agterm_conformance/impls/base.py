@@ -41,7 +41,9 @@ SOCKET_PATH_CAP = 104
 # `CONFORMANCE_TMP` (not `AGTERM_`-prefixed, which the plugin scrubs) gives run-reference-linux.sh its own parent.
 TEMP_PARENT = os.environ.get("CONFORMANCE_TMP") or "/tmp"
 MINIMAL_PATH = "/usr/bin:/bin"
-ZSH_STARTUP_VARIABLES = ("ZDOTDIR", "GHOSTTY_ZSH_ZDOTDIR")
+# The startup variables a Live pane's shell integration hands on to the login shell (zsh's ZDOTDIR, bash's ENV and
+# HISTFILE), which would point the pane at the user's real startup and history files.
+SHELL_STARTUP_VARIABLES = ("ZDOTDIR", "GHOSTTY_ZSH_ZDOTDIR", "ENV", "BASH_ENV", "GHOSTTY_BASH_ENV", "HISTFILE")
 DEFAULT_APP_ID = "io.github.melonamin.agterm"
 SESSION_HOST = "agterm-session-host"
 LEFTOVER_NAMES = frozenset({"zmx", SESSION_HOST})
@@ -114,6 +116,8 @@ POLL_INTERVAL = 0.05
 CAPABILITIES: Mapping[str, str] = {
     "posix-shell": "panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic",
     "live-sessions": "restoreMode live keeps panes in zmx daemons that outlive the app",
+    "live-any-shell": "Rust-only: Live sessions in a zsh, bash or fish login shell, each started with Ghostty's shell "
+    "integration; claimed where the password-database login shell is one of the three and zmx is staged",
     "window-geometry": "window x/y position is settable through `window.move`, read back as `geometry` and restored",
     "window-minimize": "`window.minimize` and `window.new --minimized` take effect and read back as `minimized`",
     "select-takes-frontmost": "`window.select`/`window.go` make their window `active` without waiting on window focus",
@@ -436,8 +440,8 @@ class Adapter:
         home, state = root / "home", root / "state"
         env = scrubbed_environ()
         # A Live pane's zsh restores an inherited ZDOTDIR (as GHOSTTY_ZSH_ZDOTDIR) and sources the user's startup
-        # files from it; without one it reads the isolated HOME.
-        for name in ZSH_STARTUP_VARIABLES:
+        # files from it, a bash one its ENV and HISTFILE; without them they read the isolated HOME.
+        for name in SHELL_STARTUP_VARIABLES:
             env.pop(name, None)
         env.update(
             HOME=os.fspath(home),

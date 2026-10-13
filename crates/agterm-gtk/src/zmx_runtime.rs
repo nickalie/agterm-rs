@@ -1,7 +1,7 @@
 //! Live sessions on this host (upstream's `restoredRuntime` zmx wiring in `agtermApp.swift`, `GhosttyApp`'s live
 //! probe, `LiveResetCoordinator.swift`'s dialogs and `LiveResetRelauncher.swift`): the staged zmx as the core's session
-//! host, the launch steps that run before any window mounts, whether this host claims the `live-sessions` capability,
-//! the Reset Live Sessions… menu item and the reopen after its quit.
+//! host, the launch steps that run before any window mounts, which live capabilities this host claims
+//! (`live-sessions`, `live-any-shell`), the Reset Live Sessions… menu item and the reopen after its quit.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -11,6 +11,7 @@ use std::time::SystemTime;
 use adw::prelude::*;
 use agterm_core::paths::Env;
 use agterm_core::zmx::build_record::launch_cutoff;
+use agterm_core::zmx::shell_integration::LoginShell;
 use agterm_core::zmx::support::Inputs;
 use agterm_core::{Core, LiveInstall, ResetPrompt, ResetRefusal};
 use agterm_proto::ControlZmxEndpoint;
@@ -20,8 +21,11 @@ use gtk::gio;
 
 use crate::state::{self, AppState};
 
-/// The capability a host claims when its panes can run in zmx daemons (`conformance/docs/rust-build.md`).
+/// The capability a host claims when its panes can run in zmx daemons in a zsh login shell, upstream's only one
+/// (`conformance/docs/rust-build.md`).
 pub const LIVE_SESSIONS: &str = "live-sessions";
+/// The Rust-only capability a host claims when its panes can run in zmx daemons in its login shell, zsh, bash or fish.
+pub const LIVE_ANY_SHELL: &str = "live-any-shell";
 
 /// The script the relauncher runs: wait for `$1` to exit (at most `$3` polls of 0.2 s), then start `$2` with the
 /// environment the app ran with. Arguments travel positionally, never inside the script text.
@@ -69,16 +73,28 @@ fn wrap_inputs(runtime: &Runtime) -> Inputs {
         login_shell: runtime.login_shell.clone(),
         resources_dir: runtime.resources_dir.clone(),
         state_dir: runtime.state_dir.clone(),
-        inherited_zdotdir: runtime.inherited_zdotdir.clone(),
+        inherited: runtime.inherited.clone(),
         ..Inputs::default()
     }
 }
 
-/// Whether this host can wrap panes in zmx daemons: zmx staged beside the app, a zsh password-database login shell and
-/// the bundled zsh integration. The `live-sessions` capability is claimed only then.
+/// The live capabilities this host claims: none unless it can wrap panes in zmx daemons (zmx staged beside the app, a
+/// zsh, bash or fish password-database login shell and that shell's bundled integration); then `live-sessions` for a
+/// zsh login shell, as upstream, and `live-any-shell` for any of the three.
 #[must_use]
-pub fn claims_live_sessions(env: &dyn Env) -> bool {
-    Runtime::capture(env).live_probe(env).rejection().is_none()
+pub fn live_capabilities(env: &dyn Env) -> Vec<&'static str> {
+    claims(&Runtime::capture(env), env)
+}
+
+fn claims(runtime: &Runtime, env: &dyn Env) -> Vec<&'static str> {
+    if runtime.live_probe(env).rejection().is_some() {
+        return Vec::new();
+    }
+    let zsh = runtime.login_shell.as_deref().and_then(LoginShell::of) == Some(LoginShell::Zsh);
+    zsh.then_some(LIVE_SESSIONS)
+        .into_iter()
+        .chain([LIVE_ANY_SHELL])
+        .collect()
 }
 
 /// Starts the waiter that reopens the app once this process exited, after a Live sessions reset quit; it inherits the
@@ -198,7 +214,39 @@ mod tests {
     #[test]
     fn a_host_without_a_staged_zmx_claims_no_live_sessions() {
         // the test binary has no zmx beside it
-        assert!(!claims_live_sessions(&MapEnv::new()));
+        assert!(live_capabilities(&MapEnv::new()).is_empty());
+    }
+
+    #[test]
+    fn live_sessions_need_zsh_and_live_any_shell_takes_bash_and_fish_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let zmx = dir.path().join("zmx");
+        std::fs::write(&zmx, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&zmx, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let resources = dir.path().join("ghostty");
+        for loader in [
+            "shell-integration/zsh/.zshenv",
+            "shell-integration/bash/ghostty.bash",
+            "shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish",
+        ] {
+            let path = resources.join(loader);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        let runtime = |shell: &str| Runtime {
+            zmx_executable: zmx.clone(),
+            login_shell: Some(shell.to_owned()),
+            resources_dir: Some(resources.clone()),
+            state_dir: dir.path().join("state"),
+            ..Runtime::default()
+        };
+        let env = MapEnv::new();
+        assert_eq!(claims(&runtime("/bin/zsh"), &env), [LIVE_SESSIONS, LIVE_ANY_SHELL]);
+        assert_eq!(claims(&runtime("/bin/bash"), &env), [LIVE_ANY_SHELL]);
+        assert_eq!(claims(&runtime("/usr/bin/fish"), &env), [LIVE_ANY_SHELL]);
+        assert!(claims(&runtime("/bin/tcsh"), &env).is_empty());
+        std::fs::remove_file(resources.join("shell-integration/bash/ghostty.bash")).unwrap();
+        assert!(claims(&runtime("/bin/bash"), &env).is_empty());
     }
 
     #[test]
@@ -228,13 +276,16 @@ mod tests {
             login_shell: Some("/bin/zsh".to_owned()),
             resources_dir: Some("/opt/agterm/share/ghostty".into()),
             state_dir: "/tmp/state".into(),
-            inherited_zdotdir: Some("/home/u/.zsh".to_owned()),
+            inherited: agterm_core::zmx::shell_integration::Inherited {
+                zdotdir: Some("/home/u/.zsh".to_owned()),
+                ..Default::default()
+            },
         };
         let inputs = wrap_inputs(&runtime);
         assert_eq!(inputs.zmx_executable, runtime.zmx_executable);
         assert_eq!(inputs.login_shell, runtime.login_shell);
         assert_eq!(inputs.state_dir, runtime.state_dir);
-        assert_eq!(inputs.inherited_zdotdir, runtime.inherited_zdotdir);
+        assert_eq!(inputs.inherited, runtime.inherited);
         assert_eq!(inputs.session_host_executable, None);
     }
 }

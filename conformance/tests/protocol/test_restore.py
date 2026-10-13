@@ -73,7 +73,8 @@ def test_seeded_live_mode_is_requested_at_launch(launch, adapter):
     assert_subset(status, {"configured": "live", "requestedAtLaunch": "live", "restartRequired": False})
     (session,) = [s for w in live.tree()["tree"]["workspaces"] for s in w["sessions"]]
     live.wait_mounted(session["id"], "left")
-    if adapter.has("live-sessions"):
+    # The Rust build's `live-any-shell` runs Live in a bash or fish login shell too; the references claim neither.
+    if adapter.has("live-sessions") or adapter.has("live-any-shell"):
         assert status["active"] == "live"
         assert_absent(status, "unavailableReason")
         _node_when(live, session["id"], backedByZmx=True)
