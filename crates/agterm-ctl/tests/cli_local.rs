@@ -7,7 +7,6 @@
 use std::error::Error;
 use std::fs;
 use std::io::{self, Write};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::Arc;
@@ -84,10 +83,22 @@ impl Sandbox {
         self.root.path().join(relative)
     }
 
+    /// Written by a child `install`, never through a descriptor of this process: a parallel test's fork would inherit
+    /// that descriptor until its exec, and running the script meanwhile fails with ETXTBSY.
     fn script(path: &Path, body: &str) -> io::Result<()> {
         fs::create_dir_all(path.parent().unwrap_or(Path::new("/")))?;
-        fs::write(path, format!("#!/bin/sh\n{body}\n"))?;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+        let source = tempfile::NamedTempFile::new()?;
+        fs::write(source.path(), format!("#!/bin/sh\n{body}\n"))?;
+        let status = Command::new("install")
+            .args(["-m", "755"])
+            .arg(source.path())
+            .arg(path)
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!("install {}: {status}", path.display())))
+        }
     }
 
     /// A `zmx` beside the CLI that records its arguments, its `ZMX_*` environment and its stdin, then exits `code`.

@@ -2,7 +2,6 @@
 //! root, the real `infocmp`/`tic` only against a temp database, and the remote side as a temp `HOME`.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::process::Command as Process;
 
 use clap::Parser;
@@ -33,10 +32,19 @@ impl Fixture {
         self.root.path().join(name)
     }
 
+    /// Written by a child `install`, never through a descriptor of this process: a parallel test's fork would inherit
+    /// that descriptor until its exec, and running the script meanwhile fails with ETXTBSY.
     fn script(path: &Path, body: &str) -> PathBuf {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        let source = tempfile::NamedTempFile::new().unwrap();
+        fs::write(source.path(), format!("#!/bin/sh\n{body}\n")).unwrap();
+        let status = Process::new("install")
+            .args(["-m", "755"])
+            .arg(source.path())
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "install {}: {status}", path.display());
         path.to_path_buf()
     }
 
@@ -550,9 +558,11 @@ fn ssh_inherits_no_descriptor_beyond_its_standard_three() {
     // SAFETY: `stray` is a valid two-element array for `pipe` to fill.
     assert_eq!(unsafe { libc::pipe(stray.as_mut_ptr()) }, 0);
     let record = fixture.path("ssh.fd");
+    // each branch redirects on its own: a redirect around the whole `if` makes bash park its stdout on fd 10 while
+    // the test runs, which reads as inherited whenever the stray pipe got that number
     let probe = format!(
-        "if [ -e /dev/fd/{fd} ]; then echo inherited; else echo absent; fi > '{}'",
-        record.display(),
+        "if [ -e /dev/fd/{fd} ]; then echo inherited > '{record}'; else echo absent > '{record}'; fi",
+        record = record.display(),
         fd = stray[1]
     );
     let ssh = fixture.fake_ssh(0, true, &probe);
