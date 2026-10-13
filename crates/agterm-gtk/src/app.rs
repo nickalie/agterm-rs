@@ -50,14 +50,10 @@ const CAPABILITIES: &[&str] = &[
     "config-reload-counts",
 ];
 
-/// The capabilities this host claims: the profile's, and `live-sessions` where panes can run in zmx daemons.
-fn capabilities(live_sessions: bool) -> Vec<String> {
-    CAPABILITIES
-        .iter()
-        .copied()
-        .chain(live_sessions.then_some(crate::zmx_runtime::LIVE_SESSIONS))
-        .map(str::to_owned)
-        .collect()
+/// The capabilities this host claims: the profile's, and the `live` ones by host
+/// ([`crate::zmx_runtime::live_capabilities`]).
+fn capabilities(live: &[&str]) -> Vec<String> {
+    CAPABILITIES.iter().chain(live).copied().map(str::to_owned).collect()
 }
 
 /// `AGTERM_APP_ID` when it is a valid application id, else the fork's.
@@ -195,7 +191,7 @@ pub fn activate(app: &adw::Application) {
     let mut core = Core::new(
         CoreConfig {
             app: identity,
-            capabilities: capabilities(crate::zmx_runtime::claims_live_sessions(&ProcessEnv)),
+            capabilities: capabilities(&crate::zmx_runtime::live_capabilities(&ProcessEnv)),
         },
         load_state(&ProcessEnv),
     );
@@ -341,10 +337,10 @@ mod tests {
 
     #[test]
     fn live_sessions_are_claimed_by_host() {
-        assert!(!capabilities(false).iter().any(|name| name == "live-sessions"));
-        let live = capabilities(true);
-        assert_eq!(live.last().map(String::as_str), Some("live-sessions"));
-        assert_eq!(live.len(), CAPABILITIES.len() + 1);
+        assert!(!capabilities(&[]).iter().any(|name| name.starts_with("live-")));
+        let live = capabilities(&["live-sessions", "live-any-shell"]);
+        assert_eq!(&live[CAPABILITIES.len()..], ["live-sessions", "live-any-shell"]);
+        assert_eq!(live.len(), CAPABILITIES.len() + 2);
     }
 
     #[test]

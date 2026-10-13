@@ -1309,27 +1309,38 @@ wlr-layer-shell surface.
 - Modify: `conformance/agterm_conformance/impls/base.py`, `conformance/docs/rust-build.md`, `conformance/README.md`,
   `conformance/tests/protocol/test_restore.py`, `.github/workflows/rust-linux.yml`
 - Create: `conformance/tests/protocol/test_live_any_shell.py`
+- ➕ the injection is host-free, so it lives in `crates/agterm-core/src/zmx/shell_integration.rs` (Create) beside the
+  wrap configuration and replay script it extends (`crates/agterm-core/src/zmx/{mod,support,replay}.rs`,
+  `crates/agterm-core/src/restore/mode.rs`: `LiveRejection::MissingShellIntegration(shell)`), not in `agterm-zmx`,
+  as Task 27's layering; `agterm-zmx/src/launch.rs` reads the inherited variables; `crates/agterm-gtk/src/{app,
+  zmx_runtime}.rs` claim the capabilities
 
-- [ ] port the injection from ghostty's `src/termio/shell_integration.zig` into the zmx wrap: bash (`ENV`, `--posix`,
-      `GHOSTTY_BASH_INJECT`), fish (`XDG_DATA_DIRS` with the integration's `vendor_conf.d`), zsh unchanged
-- [ ] per-shell replay script (fish: `set -gx`, `exec`; bash as zsh)
-- [ ] capability `live-any-shell` in `CAPABILITIES` (Rust-only; the references never claim it), its meaning text
+- [x] port the injection from ghostty's `src/termio/shell_integration.zig` into the zmx wrap: bash (`ENV`, `--posix`,
+      `GHOSTTY_BASH_INJECT`), fish (`XDG_DATA_DIRS` with the integration's `vendor_conf.d`), zsh unchanged (a bash
+      daemon always starts `bash --posix -l`, since zmx's own `-bash` login start passes no flag; bash also gets
+      Ghostty's `GHOSTTY_BASH_ENV` and `HISTFILE` handling; an unsupported shell now reads "is not zsh, bash or fish")
+- [x] per-shell replay script (fish: `set -gx`, `exec`; bash as zsh)
+- [x] capability `live-any-shell` in `CAPABILITIES` (Rust-only; the references never claim it), its meaning text
       carrying the claim rule (login shell zsh, bash or fish, zmx staged); the `rust-build.md` row follows from it
       with both reference columns empty, as `selftests/test_docs.py` generates; `live-sessions` stays as upstream
-- [ ] document Rust-only extension tests in the README's Reference discipline and in `rust-build.md`: they skip as
+- [x] document Rust-only extension tests in the README's Reference discipline and in `rust-build.md`: they skip as
       unsupported on both references and are validated by the Rust CI with `--must-pass live-any-shell`
-- [ ] `test_restore.py::test_seeded_live_mode_is_requested_at_launch`: the fallback branch runs only when the build
+- [x] `test_restore.py::test_seeded_live_mode_is_requested_at_launch`: the fallback branch runs only when the build
       has neither `live-sessions` nor `live-any-shell`; the references are unaffected
-- [ ] `test_live_any_shell.py` under `requires("live-any-shell")` with `covers` markers
+- [x] `test_live_any_shell.py` under `requires("live-any-shell")` with `covers` markers
       (`behavior:restore.live-session-survives-relaunch`, the cwd field): a live pane in the host's login shell
       reports its cwd through OSC 7 and survives a relaunch; the host picks the shell
-- [ ] CI: install fish and add a fish-login-shell job next to the zsh one; the default job's bash login shell covers
+- [x] CI: install fish and add a fish-login-shell job next to the zsh one; the default job's bash login shell covers
       bash; jobs on bash and fish run with `--must-pass live-any-shell`
-- [ ] reference discipline: `run-reference-linux.sh` stays green with the changed `test_restore.py` and the new file
-      (report on the PR), and reference-macos CI passes
-- [ ] write tests: unit tests for each shell's environment and replay script
-- [ ] gate: full run locally on fish (the new tests run here), the CI jobs, selftests and the coverage gate;
-      ratchet
+- [x] reference discipline: `run-reference-linux.sh` stays green with the changed `test_restore.py` and the new file
+      (report on the PR), and reference-macos CI passes (reference-linux run here on `test_restore or
+      test_live_any_shell`: 21 pass, the new test skips as unsupported; reference-macos CI needs a push - not run here)
+- [x] write tests: unit tests for each shell's environment and replay script
+- [x] gate: full run locally on fish (the new tests run here), the CI jobs, selftests and the coverage gate;
+      ratchet (fish, `--must-pass live-any-shell`: 631 pass, ratchet holds, 1 id added; the new test and Task 28's live
+      tests also green under bash and zsh password-database shells in a private user+mount namespace; selftests 705
+      pass, coverage gate passes; the CI jobs need a push - not run here, the workflow checked with actionlint and a
+      YAML parse)
 
 ### Task 32: CLI completeness
 

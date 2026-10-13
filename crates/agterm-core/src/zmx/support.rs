@@ -1,6 +1,7 @@
 //! Whether and how a pane is wrapped in a zmx daemon (upstream's `ZmxSupport.swift`): the host's eligibility walk,
 //! shared with the launch probe ([`crate::restore::mode::LiveProbe`]) so the rejection order lives once, the wrap
-//! configuration, the launch disposition and the attach command a wrapped pane's surface runs.
+//! configuration, the launch disposition and the attach command a wrapped pane's surface runs. Upstream wraps a zsh
+//! login shell only; this build also wraps bash and fish ([`super::shell_integration`], capability `live-any-shell`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -8,26 +9,30 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use super::lead::{CLAIM_VARIABLE, LeadAttachment, NONCE_VARIABLE};
+use super::replay::FinalShell;
+use super::shell_integration::{self, Inherited, LoginShell};
 use super::{daemon_name, replay, socket_directory};
-use crate::command_restore::{basename, shell_quoted_line, should_restore};
+use crate::command_restore::{shell_quoted_line, should_restore};
 use crate::pane_env::uuid_string;
 use crate::persist::RestoreMode;
 use crate::restore::mode::LiveRejection;
 
-/// What the host offers a wrap: the zmx executable, the login shell and the zsh integration, all checked.
+/// What the host offers a wrap: the zmx executable, the login shell and its bundled integration, all checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Eligible {
     /// The zmx executable, standardized.
     pub executable: PathBuf,
     /// The password-database login shell.
     pub shell: String,
-    /// The bundled `shell-integration/zsh` directory.
-    pub integration_dir: PathBuf,
+    /// Which shell it is.
+    pub kind: LoginShell,
+    /// The Ghostty resources directory bundling the shell's integration, standardized.
+    pub resources: PathBuf,
 }
 
 /// The first reason this host cannot wrap a pane, in upstream's order, or what a wrap runs with: a relative zmx path,
-/// a zmx that is not an executable file, a login shell other than zsh (`$SHELL` cannot override the password
-/// database), a resources directory without `shell-integration/zsh/.zshenv`.
+/// a zmx that is not an executable file, a login shell other than zsh, bash or fish (`$SHELL` cannot override the
+/// password database), a resources directory without that shell's integration.
 ///
 /// # Errors
 ///
@@ -44,18 +49,19 @@ pub fn eligibility(
     if !is_executable_file(&executable) {
         return Err(LiveRejection::ExecutableUnavailable);
     }
-    let shell = login_shell
-        .filter(|shell| basename(shell) == "zsh")
+    let (shell, kind) = login_shell
+        .and_then(|shell| LoginShell::of(shell).map(|kind| (shell, kind)))
         .ok_or(LiveRejection::UnsupportedLoginShell)?;
-    let resources = resources_dir.ok_or(LiveRejection::MissingZshIntegration)?;
-    let integration_dir = super::standardized_path(resources).join("shell-integration/zsh");
-    if !integration_dir.join(".zshenv").exists() {
-        return Err(LiveRejection::MissingZshIntegration);
+    let resources = resources_dir.ok_or(LiveRejection::MissingShellIntegration(kind))?;
+    let resources = super::standardized_path(resources);
+    if !kind.is_bundled(&resources) {
+        return Err(LiveRejection::MissingShellIntegration(kind));
     }
     Ok(Eligible {
         executable,
         shell: shell.to_owned(),
-        integration_dir,
+        kind,
+        resources,
     })
 }
 
@@ -82,14 +88,14 @@ pub struct Inputs {
     pub zmx_executable: PathBuf,
     /// The login shell the password database names.
     pub login_shell: Option<String>,
-    /// The Ghostty resources directory holding `shell-integration/zsh`.
+    /// The Ghostty resources directory holding `shell-integration/<shell>`.
     pub resources_dir: Option<PathBuf>,
     pub state_dir: PathBuf,
     pub pane_identity: Uuid,
     /// The pane's own environment, which the wrap extends.
     pub base_environment: BTreeMap<String, String>,
-    /// The app's own `ZDOTDIR`, handed on to the integration.
-    pub inherited_zdotdir: Option<String>,
+    /// The app's own values of the variables the shell integration hands on or extends.
+    pub inherited: Inherited,
     /// A supervising session host (macOS's `agterm-session-host`); Linux has none.
     pub session_host_executable: Option<PathBuf>,
     /// `None` leaves the attach unmanaged, as a zmx without explicit leadership expects.
@@ -140,14 +146,11 @@ pub fn configuration(inputs: &Inputs) -> Result<Configuration, LiveRejection> {
     let mut set = |key: &str, value: &str| environment.insert(key.to_owned(), value.to_owned());
     set("AGTERM_PANE_ID", &pane_id);
     set("SHELL", &eligible.shell);
-    set("ZDOTDIR", &eligible.integration_dir.to_string_lossy());
-    if let Some(zdotdir) = &inputs.inherited_zdotdir {
-        set("GHOSTTY_ZSH_ZDOTDIR", zdotdir);
-    }
     set("ZMX_DIR", &socket_directory);
     set("ZMX_SESSION", "");
     set("ZMX_SESSION_PREFIX", "");
     set("ZMX_NO_DETACH_KEY", "1");
+    shell_integration::inject(eligible.kind, &eligible.resources, &inputs.inherited, &mut environment);
     // a stale value inherited from the app's own environment would opt the client in under a nonce no pane expects
     environment.remove(NONCE_VARIABLE);
     environment.remove(CLAIM_VARIABLE);
@@ -225,6 +228,7 @@ pub fn settled(line: &str) -> String {
 /// The command a wrapped pane's surface runs: the attach, with the creation payload a new daemon runs (a replayable
 /// captured `argv` first, else the durable `creation_command`), behind the session host's client when there is one.
 /// A refused replay (denylisted, unreplayable) keeps the bare attach rather than falling back to the creation command.
+/// Without a payload a bash daemon still starts its login shell in POSIX mode, the one way it reads its integration.
 #[must_use]
 pub fn attach_command<S: AsRef<str>>(
     configuration: &Configuration,
@@ -254,23 +258,38 @@ fn creation_arguments<S: AsRef<str>>(
     denylist: &[S],
 ) -> Vec<String> {
     let environment = &configuration.environment;
-    let (Some(shell), Some(integration_dir)) = (environment.get("SHELL"), environment.get("ZDOTDIR")) else {
+    let Some((shell, kind)) = environment
+        .get("SHELL")
+        .and_then(|shell| LoginShell::of(shell).map(|kind| (shell, kind)))
+    else {
         return Vec::new();
     };
-    let inherited_zdotdir = environment.get("GHOSTTY_ZSH_ZDOTDIR").map(String::as_str);
-    let script = match (replaying, creation_command) {
-        (Some(argv), _) if !should_restore(argv, denylist) => return Vec::new(),
-        (Some(argv), _) => replay::render_argv(argv, integration_dir, inherited_zdotdir, shell),
-        (None, Some(line)) => replay::render_command_line(line, integration_dir, inherited_zdotdir, shell),
-        (None, None) => return Vec::new(),
+    let login = kind.login_arguments(shell);
+    let Some(rearm) = shell_integration::rearm(kind, environment) else {
+        return login;
     };
-    vec![shell.clone(), "-lic".to_owned(), script]
+    let final_shell = FinalShell {
+        path: shell,
+        kind,
+        rearm: &rearm,
+    };
+    let script = match (replaying, creation_command) {
+        (Some(argv), _) if !should_restore(argv, denylist) => return login,
+        (Some(argv), _) => replay::render_argv(argv, &final_shell),
+        (None, Some(line)) => replay::render_command_line(line, &final_shell),
+        (None, None) => return login,
+    };
+    let mut arguments = vec![shell.clone()];
+    arguments.extend(kind.script_flags().iter().map(|flag| (*flag).to_owned()));
+    arguments.push(script);
+    arguments
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
 
+    use super::super::shell_integration::Rearm;
     use super::*;
 
     const NO_DENYLIST: [&str; 0] = [];
@@ -294,6 +313,20 @@ mod tests {
             pane_identity: Uuid::parse_str("11111111-2222-3333-4444-555555555555").unwrap(),
             ..Inputs::default()
         }
+    }
+
+    /// The replay script `replay_configuration`'s zsh renders `argv` with.
+    fn zsh_script(argv: &[String]) -> String {
+        let rearm = [
+            Rearm::Export("ZDOTDIR", "/bundle resources/zsh".to_owned()),
+            Rearm::Export("GHOSTTY_ZSH_ZDOTDIR", "/user/zsh".to_owned()),
+        ];
+        let shell = FinalShell {
+            path: "/bin/zsh",
+            kind: LoginShell::Zsh,
+            rearm: &rearm,
+        };
+        replay::render_argv(argv, &shell)
     }
 
     fn replay_configuration(host: Option<&str>) -> Configuration {
@@ -322,7 +355,7 @@ mod tests {
             ("ZMX_SESSION".to_owned(), "parent-session".to_owned()),
             ("ZMX_SESSION_PREFIX".to_owned(), "parent.".to_owned()),
         ]);
-        inputs.inherited_zdotdir = Some("/home/test/.config/zsh".to_owned());
+        inputs.inherited.zdotdir = Some("/home/test/.config/zsh".to_owned());
         let configuration = configuration(&inputs).unwrap();
         assert_eq!(configuration.daemon_name, "agterm-abcdef0123456789abcdef0123456789");
         assert_eq!(configuration.pane_id, "ABCDEF01-2345-6789-ABCD-EF0123456789");
@@ -391,21 +424,31 @@ mod tests {
             configuration(&not_executable),
             Err(LiveRejection::ExecutableUnavailable)
         );
+        let mut tcsh = inputs(with_loader.path());
+        tcsh.login_shell = Some("/bin/tcsh".to_owned());
+        // the pane's own `$SHELL` never overrides the password database
+        tcsh.base_environment = BTreeMap::from([("SHELL".to_owned(), "/bin/zsh".to_owned())]);
+        assert_eq!(configuration(&tcsh), Err(LiveRejection::UnsupportedLoginShell));
+        // bash is supported, and its own integration is the one checked for
         let mut bash = inputs(with_loader.path());
         bash.login_shell = Some("/bin/bash".to_owned());
-        // the pane's own `$SHELL` never overrides the password database
-        bash.base_environment = BTreeMap::from([("SHELL".to_owned(), "/bin/zsh".to_owned())]);
-        assert_eq!(configuration(&bash), Err(LiveRejection::UnsupportedLoginShell));
+        assert_eq!(
+            configuration(&bash),
+            Err(LiveRejection::MissingShellIntegration(LoginShell::Bash))
+        );
         let mut no_shell = inputs(with_loader.path());
         no_shell.login_shell = None;
         assert_eq!(configuration(&no_shell), Err(LiveRejection::UnsupportedLoginShell));
         assert_eq!(
             configuration(&inputs(without_loader.path())),
-            Err(LiveRejection::MissingZshIntegration)
+            Err(LiveRejection::MissingShellIntegration(LoginShell::Zsh))
         );
         let mut no_resources = inputs(with_loader.path());
         no_resources.resources_dir = None;
-        assert_eq!(configuration(&no_resources), Err(LiveRejection::MissingZshIntegration));
+        assert_eq!(
+            configuration(&no_resources),
+            Err(LiveRejection::MissingShellIntegration(LoginShell::Zsh))
+        );
         assert!(configuration(&inputs(with_loader.path())).is_ok());
     }
 
@@ -422,11 +465,19 @@ mod tests {
             ),
             (
                 LiveRejection::UnsupportedLoginShell,
-                "the password-database login shell is not zsh",
+                "the password-database login shell is not zsh, bash or fish",
             ),
             (
-                LiveRejection::MissingZshIntegration,
+                LiveRejection::MissingShellIntegration(LoginShell::Zsh),
                 "the bundled zsh integration is unavailable",
+            ),
+            (
+                LiveRejection::MissingShellIntegration(LoginShell::Bash),
+                "the bundled bash integration is unavailable",
+            ),
+            (
+                LiveRejection::MissingShellIntegration(LoginShell::Fish),
+                "the bundled fish integration is unavailable",
             ),
         ] {
             assert_eq!(rejection.message(), message);
@@ -502,7 +553,7 @@ mod tests {
         let argv: Vec<String> = ["printf", "%s", "two words", "single'quote"]
             .map(str::to_owned)
             .to_vec();
-        let script = replay::render_argv(&argv, "/bundle resources/zsh", Some("/user/zsh"), "/bin/zsh");
+        let script = zsh_script(&argv);
         assert_eq!(
             attach_command(&configuration, Some(&argv), Some("echo durable"), &NO_DENYLIST),
             format!(
@@ -519,7 +570,7 @@ mod tests {
         let argv: Vec<String> = ["printf", "%s", "two words", "single'quote", "$literal"]
             .map(str::to_owned)
             .to_vec();
-        let script = replay::render_argv(&argv, "/bundle resources/zsh", Some("/user/zsh"), "/bin/zsh");
+        let script = zsh_script(&argv);
         assert_eq!(
             attach_command(&configuration, Some(&argv), Some("do not run"), &NO_DENYLIST),
             shell_quoted_line(&[
@@ -558,7 +609,17 @@ mod tests {
     fn a_missing_replay_uses_the_durable_command_as_a_shell_line() {
         let configuration = replay_configuration(None);
         let line = "printf durable && echo 'two words'";
-        let script = replay::render_command_line(line, "/bundle resources/zsh", Some("/user/zsh"), "/bin/zsh");
+        let script = replay::render_command_line(
+            line,
+            &FinalShell {
+                path: "/bin/zsh",
+                kind: LoginShell::Zsh,
+                rearm: &[
+                    Rearm::Export("ZDOTDIR", "/bundle resources/zsh".to_owned()),
+                    Rearm::Export("GHOSTTY_ZSH_ZDOTDIR", "/user/zsh".to_owned()),
+                ],
+            },
+        );
         assert_eq!(
             attach_command(&configuration, None, Some(line), &NO_DENYLIST),
             format!(
@@ -571,5 +632,148 @@ mod tests {
             attach_command(&configuration, None, None, &NO_DENYLIST),
             configuration.command()
         );
+    }
+
+    /// A resources directory bundling the integration file `loader` (under `shell-integration`) with `contents`.
+    fn bundled(loader: &str, contents: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shell-integration").join(loader);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
+        dir
+    }
+
+    fn shell_inputs(resources: &Path, shell: &str) -> Inputs {
+        let mut inputs = inputs(resources);
+        inputs.login_shell = Some(shell.to_owned());
+        inputs.inherited = Inherited {
+            home: Some("/home/u".to_owned()),
+            xdg_data_dirs: Some("/usr/share".to_owned()),
+            ..Inherited::default()
+        };
+        inputs
+    }
+
+    #[test]
+    fn a_bash_wrap_injects_through_env_and_starts_bash_in_posix_mode() {
+        let resources = bundled("bash/ghostty.bash", "");
+        let configuration = configuration(&shell_inputs(resources.path(), "/bin/bash")).unwrap();
+        let env = |key: &str| configuration.environment.get(key).map(String::as_str);
+        let script = resources.path().join("shell-integration/bash/ghostty.bash");
+        assert_eq!(env("SHELL"), Some("/bin/bash"));
+        assert_eq!(env("ENV"), script.to_str());
+        assert_eq!(env("GHOSTTY_BASH_INJECT"), Some("1"));
+        assert_eq!(env("HISTFILE"), Some("/home/u/.bash_history"));
+        assert_eq!(env("GHOSTTY_BASH_UNEXPORT_HISTFILE"), Some("1"));
+        assert_eq!(env("ZDOTDIR"), None);
+        assert_eq!(env("ZMX_DIR"), Some(configuration.socket_directory.as_str()));
+        // nothing to run: the attach still names bash in POSIX mode, the one way it reads ENV
+        let posix_login = format!(
+            "{} {}",
+            configuration.command(),
+            shell_quoted_line(&["/bin/bash", "--posix", "-l"])
+        );
+        assert_eq!(attach_command(&configuration, None, None, &NO_DENYLIST), posix_login);
+        let denied: Vec<String> = vec!["tmux".to_owned()];
+        assert_eq!(
+            attach_command(&configuration, Some(&denied), Some("echo durable"), &["tmux"]),
+            posix_login
+        );
+        let argv: Vec<String> = vec!["top".to_owned()];
+        let rearm = shell_integration::rearm(LoginShell::Bash, &configuration.environment).unwrap();
+        let shell = FinalShell {
+            path: "/bin/bash",
+            kind: LoginShell::Bash,
+            rearm: &rearm,
+        };
+        assert_eq!(
+            attach_command(&configuration, Some(&argv), None, &NO_DENYLIST),
+            format!(
+                "{} {}",
+                configuration.command(),
+                shell_quoted_line(&["/bin/bash", "--posix", "-lic", &replay::render_argv(&argv, &shell)])
+            )
+        );
+    }
+
+    #[test]
+    fn a_fish_wrap_puts_the_integration_on_the_data_dirs_and_attaches_bare() {
+        let resources = bundled("fish/vendor_conf.d/ghostty-shell-integration.fish", "");
+        let configuration = configuration(&shell_inputs(resources.path(), "/usr/bin/fish")).unwrap();
+        let env = |key: &str| configuration.environment.get(key).map(String::as_str);
+        let integration = resources.path().join("shell-integration").display().to_string();
+        assert_eq!(env("SHELL"), Some("/usr/bin/fish"));
+        assert_eq!(env("GHOSTTY_SHELL_INTEGRATION_XDG_DIR"), Some(integration.as_str()));
+        assert_eq!(env("XDG_DATA_DIRS"), Some(format!("{integration}:/usr/share").as_str()));
+        assert_eq!((env("ENV"), env("ZDOTDIR")), (None, None));
+        // zmx starts fish as a login shell itself
+        assert_eq!(
+            attach_command(&configuration, None, None, &NO_DENYLIST),
+            configuration.command()
+        );
+        let line = "cd /tmp; and ls";
+        let rearm = shell_integration::rearm(LoginShell::Fish, &configuration.environment).unwrap();
+        let shell = FinalShell {
+            path: "/usr/bin/fish",
+            kind: LoginShell::Fish,
+            rearm: &rearm,
+        };
+        assert_eq!(
+            attach_command(&configuration, None, Some(line), &NO_DENYLIST),
+            format!(
+                "{} {}",
+                configuration.command(),
+                shell_quoted_line(&["/usr/bin/fish", "-lic", &replay::render_command_line(line, &shell)])
+            )
+        );
+    }
+
+    /// The bash payload against a real bash: the POSIX-mode shell that runs the command reads `ENV` (the integration,
+    /// here a stand-in that logs and consumes its variables as Ghostty's does), and the final shell the script execs
+    /// reads the re-armed one again. `HOME` is a throwaway directory, so no user startup file is read.
+    #[test]
+    fn a_bash_payload_runs_the_command_and_rearms_the_integration_for_the_final_shell() {
+        let home = tempfile::tempdir().unwrap();
+        let log = home.path().join("log");
+        let quoted_log = shell_quoted_line(&[log.display().to_string()]);
+        let resources = bundled(
+            "bash/ghostty.bash",
+            &format!(
+                "builtin printf 'integration %s %s %s\\n' \"$GHOSTTY_BASH_INJECT\" \"$HISTFILE\" \"$-\" >> {quoted_log}\n\
+                 builtin unset ENV GHOSTTY_BASH_INJECT GHOSTTY_BASH_UNEXPORT_HISTFILE\nbuiltin set +o posix\n"
+            ),
+        );
+        let mut inputs = shell_inputs(resources.path(), "/bin/bash");
+        inputs.inherited.home = Some(home.path().display().to_string());
+        let configuration = configuration(&inputs).unwrap();
+        let argv: Vec<String> = ["/bin/sh", "-c", &format!("echo command >> {quoted_log}")]
+            .map(str::to_owned)
+            .to_vec();
+        let payload = creation_arguments(&configuration, Some(&argv), None, &NO_DENYLIST);
+        let output = std::process::Command::new(&payload[0])
+            .args(&payload[1..])
+            .env_clear()
+            .envs(&configuration.environment)
+            .env("HOME", home.path())
+            .env("PATH", "/usr/bin:/bin")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let history = home.path().join(".bash_history").display().to_string();
+        let lines: Vec<String> = fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(|line| line.replacen(&history, "HISTORY", 1))
+            .collect();
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        // both the shell that ran the command and the final one are interactive: `$-` (the last field) holds `i`
+        let interactive = |line: &str| {
+            line.strip_prefix("integration 1 HISTORY ")
+                .is_some_and(|flags| !flags.contains(' ') && flags.contains('i'))
+        };
+        assert!(interactive(&lines[0]), "{lines:?}");
+        assert_eq!(lines[1], "command");
+        assert!(interactive(&lines[2]), "{lines:?}");
     }
 }
