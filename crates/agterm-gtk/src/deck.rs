@@ -348,7 +348,9 @@ impl Deck {
                 page.sync(core, &sync, *id, Some(*id) == shown);
             }
         }
-        self.show(shown);
+        // a zoom keeps the keyboard on its terminal (upstream's `focusSplitPane` steps aside while zoomed)
+        let refocus = zoom.is_none() && shown.is_some_and(|id| core.pane_focus_requested(id));
+        self.show(shown, refocus);
     }
 
     fn add_page(&mut self, core: &mut Core, spec: &PaneSpec, context: &PaneContext, poster: &Poster) {
@@ -368,9 +370,10 @@ impl Deck {
     }
 
     /// Shows the page of `shown` alone and gives its focused pane the keyboard when the page or that pane changed
-    /// (upstream focuses the active session after a select or a create, and the focused pane within it); with none
-    /// shown the focus leaves the hidden terminals.
-    fn show(&mut self, shown: Option<Uuid>) {
+    /// (upstream focuses the active session after a select or a create, and the focused pane within it), or when
+    /// `refocus` (a `session.focus` asked for it, wherever focus sits now); with none shown the focus leaves the
+    /// hidden terminals.
+    fn show(&mut self, shown: Option<Uuid>, refocus: bool) {
         for (id, page) in &self.pages {
             let visible = Some(*id) == shown;
             let widget = page.panes.widget();
@@ -390,7 +393,7 @@ impl Deck {
         };
         let focus = self.pages.get(&id).and_then(|page| page.panes.focus());
         let desired = focus.map(|(token, _)| (id, token.to_owned()));
-        if desired == self.focused {
+        if desired == self.focused && !refocus {
             return;
         }
         if focus.is_some_and(|(_, terminal)| terminal.grab_focus()) || desired.is_none() {
@@ -497,6 +500,8 @@ fn connect_reports(terminal: &TerminalSurface, session: Uuid, token: &str, poste
 #[cfg(test)]
 mod tests {
     use agterm_core::model::{NewSession, SplitAxis};
+    use agterm_proto::command::SessionCmd;
+    use agterm_proto::{Args, Command, Request};
 
     use super::*;
 
@@ -730,6 +735,46 @@ mod tests {
     #[test]
     fn pane_terminals_never_change_parent() {
         crate::gtk_test::on_gtk_thread(pane_terminals_keep_their_parent);
+    }
+
+    #[test]
+    fn session_focus_gives_an_unchanged_pane_the_keyboard_back() {
+        crate::gtk_test::on_gtk_thread(focus_request_regrabs);
+    }
+
+    /// `session.focus` naming the pane the model already focused, after focus left the terminals (a sidebar click),
+    /// gives that pane the keyboard again (upstream's `setSplitFocus` grabs whatever the model held); an ordinary
+    /// render does not pull focus back.
+    fn focus_request_regrabs() {
+        let mut walk = Walk::split();
+        let window = gtk::Window::new();
+        window.set_child(Some(walk.deck.widget()));
+        walk.settle();
+        let split = walk.probe().area(&walk.split);
+        assert!(split.is_focus(), "a new split's right pane has the keyboard");
+
+        GtkWindowExt::set_focus(&window, None::<&gtk::Widget>);
+        walk.settle();
+        assert!(!split.is_focus(), "a render leaves focus where the user put it");
+
+        let request = Request {
+            cmd: Command::Session(SessionCmd::Focus),
+            target: Some(agterm_core::pane_env::uuid_string(walk.session)),
+            args: Some(Args {
+                pane: Some("right".to_owned()),
+                ..Args::default()
+            }),
+        };
+        assert!(walk.core.dispatch(&request).ok);
+        walk.settle();
+        assert!(split.is_focus(), "the requested pane took the keyboard back");
+        walk.core.clear_pane_focus_requests();
+
+        GtkWindowExt::set_focus(&window, None::<&gtk::Widget>);
+        walk.settle();
+        assert!(!split.is_focus(), "the request was one-shot");
+        window.set_child(None::<&gtk::Widget>);
+        window.destroy();
     }
 
     /// A session's page in the deck, read by pane token.

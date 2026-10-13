@@ -175,7 +175,7 @@ impl AppStore {
     }
 
     /// The split pane's shell exited: a live two-pane split collapses to the primary; otherwise this was the
-    /// session's last pane (a promoted survivor keeps its split exit route) and the session closes (upstream's
+    /// session's last pane (a split pane whose primary slot is empty) and the session closes (upstream's
     /// `closeSplitPane`).
     pub fn close_split_pane(&mut self, id: Uuid) {
         let two_panes = self

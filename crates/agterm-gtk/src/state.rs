@@ -142,6 +142,7 @@ impl AppState {
             // no frontend to ask
             None => drop(self.core.take_window_requests()),
         }
+        self.core.clear_pane_focus_requests();
     }
 
     /// The window's exit-zoom control was clicked: its terminal zoom ends.

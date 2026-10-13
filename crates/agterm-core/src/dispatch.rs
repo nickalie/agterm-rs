@@ -1,6 +1,6 @@
 //! The core state owner and the command dispatcher: one request in, one response out, on the main thread.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 use std::time::Duration;
@@ -130,6 +130,9 @@ pub struct Core {
     /// Each window's terminal zoom: the one surface it fills itself with (upstream's per-window
     /// `TerminalZoomController.target`).
     zoom: HashMap<Uuid, SurfaceId>,
+    /// Sessions whose focused pane a command asked to get the keyboard again, even unchanged, until the frontend's
+    /// next render (upstream's `session.focus` grabs the pane whatever the model held).
+    pane_focus_requests: HashSet<Uuid>,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -185,6 +188,7 @@ impl Core {
             reveal_handler: None,
             status_sounds: Vec::new(),
             zoom: HashMap::new(),
+            pane_focus_requests: HashSet::new(),
         }
     }
 
@@ -219,6 +223,23 @@ impl Core {
             Some(target) => self.zoom.insert(id, target),
             None => self.zoom.remove(&id),
         };
+    }
+
+    /// Whether a command asked session `session`'s focused pane to take the keyboard since the frontend's last render:
+    /// its deck then grabs the pane even when it already gave it focus, as focus may have moved out of the terminals.
+    #[must_use]
+    pub fn pane_focus_requested(&self, session: Uuid) -> bool {
+        self.pane_focus_requests.contains(&session)
+    }
+
+    /// Forgets the pane focus requests once the frontend rendered them; a request for a session no deck showed lapses,
+    /// as upstream's grab does nothing for a session that is not selected.
+    pub fn clear_pane_focus_requests(&mut self) {
+        self.pane_focus_requests.clear();
+    }
+
+    pub(crate) fn request_pane_focus(&mut self, session: Uuid) {
+        self.pane_focus_requests.insert(session);
     }
 
     /// Drops the zoom of a closed window or of a surface no longer addressable, as upstream's zoom layer clears a

@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use super::{Fixture, UNKNOWN, answered_id, args, failure, wire};
 use crate::model::{Session, SplitAxis, StatusPane};
+use crate::zoom::{SurfaceId, ZoomSurface};
 use crate::{Dispatched, PaneReport};
 
 fn ok_id(response: &Response, id: Uuid) {
@@ -686,6 +687,54 @@ fn a_click_moves_a_shown_splits_focus() {
     assert!(!fixture.core.pane_focused(id, "unknown"));
     assert!(fixture.core.pane_focused(id, "R"));
     assert!(session(&fixture, id).split.focused);
+}
+
+#[test]
+fn a_zoom_taking_focus_does_not_move_the_splits_focus() {
+    let (mut fixture, id) = split_fixture();
+    assert!(session(&fixture, id).split.focused, "a new split focuses right");
+    let window = fixture.window;
+    let zoomed = SurfaceId {
+        session: id,
+        surface: ZoomSurface::Primary,
+    };
+    fixture.core.set_zoom_target(window, Some(zoomed));
+    assert!(
+        !fixture.core.pane_focused(id, "L"),
+        "the zoom's own grab of the left pane is not a click"
+    );
+    assert!(
+        session(&fixture, id).split.focused,
+        "unzooming returns to the right pane"
+    );
+    fixture.core.set_zoom_target(window, None);
+    assert!(fixture.core.pane_focused(id, "L"));
+    assert!(!session(&fixture, id).split.focused);
+}
+
+#[test]
+fn focus_asks_the_frontend_to_regrab_even_an_unchanged_pane() {
+    let (mut fixture, id) = split_fixture();
+    let target = wire(id);
+    assert!(!fixture.core.pane_focus_requested(id));
+    assert!(session(&fixture, id).split.focused);
+    let right = fixture.session(
+        SessionCmd::Focus,
+        Some(&target),
+        args(|a| a.pane = Some("right".into())),
+    );
+    ok_id(&right, id);
+    assert!(session(&fixture, id).split.focused, "unchanged");
+    assert!(fixture.core.pane_focus_requested(id));
+    fixture.core.clear_pane_focus_requests();
+    assert!(!fixture.core.pane_focus_requested(id));
+    let refused = fixture.session(
+        SessionCmd::Focus,
+        Some(&target),
+        args(|a| a.pane = Some("middle".into())),
+    );
+    assert_eq!(refused, failure("invalid pane: middle"));
+    assert!(!fixture.core.pane_focus_requested(id), "a refusal asks nothing");
 }
 
 #[test]

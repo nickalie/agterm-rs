@@ -4,8 +4,9 @@
 //! `scratchSession`, `focusSessionPane` and `resizeSplit` (`agterm/Control/ControlServer+SessionActions.swift`),
 //! `swapSessionPanes` (`AppActions.swift`) and `takeSessionLead` (`ControlServer+PaneLead.swift`).
 //!
-//! Keyboard focus is the frontend's: its deck gives input to the pane the model marks focused whenever it settles, so
-//! these commands only change the model (upstream's `focusSplitPane` calls).
+//! Keyboard focus is the frontend's: its deck gives input to the pane the model marks focused whenever that changes, so
+//! these commands only change the model (upstream's `focusSplitPane` calls); `session.focus` also leaves a one-shot
+//! [`Core::pane_focus_requested`] so the pane takes the keyboard back even when the model's choice did not change.
 
 use agterm_proto::command::SessionCmd;
 use agterm_proto::{Args, Command, ControlResult, Request, Response};
@@ -13,11 +14,12 @@ use uuid::Uuid;
 
 use super::surface::{POLL_INTERVAL, no_split_pane, not_realized};
 use super::typing::ATTEMPTS;
-use super::{Outcome, ToggleMode, args_of, parse_surface_pane, session_store, with_id};
+use super::{Outcome, ToggleMode, args_of, not_found, parse_surface_pane, session_store, with_id};
 use crate::Core;
 use crate::dispatch::Dispatched;
-use crate::error::ControlError;
+use crate::error::{ControlError, Noun};
 use crate::model::{SplitAxis, StatusPane, SwapRefusal};
+use crate::resolve::ACTIVE;
 
 /// A terminal's report bound for its session's pane fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,8 +52,17 @@ impl Core {
     }
 
     /// The user moved keyboard focus into the pane carrying `token` (a click): a shown split's focused pane follows it.
-    /// See [`crate::model::AppStore::note_pane_focus`]. Whether it changed; commit afterwards when it did.
+    /// See [`crate::model::AppStore::note_pane_focus`]. While the session's window is zoomed into a terminal the report
+    /// changes nothing: the zoom gives its terminal the keyboard itself, and that must not move the split's focus
+    /// (upstream's zoom hosts suppress focus reports). Whether it changed; commit afterwards when it did.
     pub fn pane_focused(&mut self, session: Uuid, token: &str) -> bool {
+        let zoomed = self
+            .library()
+            .window_holding_session(session)
+            .is_some_and(|window| self.zoom_target(window).is_some());
+        if zoomed {
+            return false;
+        }
         let Some(store) = self.library_mut().store_for_session_mut(session) else {
             return false;
         };
@@ -270,6 +281,8 @@ fn focus(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         _ => return Err(ControlError::rejected(format!("invalid pane: {raw}"))),
     };
     store.set_split_focus(id, to_split);
+    // the pane takes the keyboard even when the model already focused it, wherever focus sits now
+    core.request_pane_focus(id);
     Ok(with_id(id))
 }
 
@@ -301,7 +314,7 @@ fn resize(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     };
     let applied = store
         .apply_split_ratio(requested, id)
-        .ok_or_else(|| not_found_session(target))?;
+        .ok_or_else(|| not_found(Noun::Session, target.unwrap_or(ACTIVE)))?;
     Ok(ControlResult {
         ratio: Some(applied),
         ..with_id(id)
@@ -312,11 +325,4 @@ fn resize(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
 enum Resize {
     Ratio(f64),
     Delta(f64),
-}
-
-fn not_found_session(target: Option<&str>) -> ControlError {
-    ControlError::NotFound {
-        noun: crate::error::Noun::Session,
-        target: target.unwrap_or(crate::resolve::ACTIVE).to_owned(),
-    }
 }
