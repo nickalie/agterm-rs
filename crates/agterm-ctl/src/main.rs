@@ -36,6 +36,7 @@ mod usage;
 mod version;
 mod window;
 mod workspace;
+mod zmx;
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -86,6 +87,7 @@ enum Command {
     Pick(pick::Pick),
     Ask(ask::Ask),
     Restore(restore::Restore),
+    Zmx(zmx::Zmx),
     Version(version::Version),
 }
 
@@ -111,6 +113,7 @@ impl Command {
             Self::Theme(command) => command.check(),
             Self::Ask(command) => command.check(),
             Self::Restore(command) => command.check(),
+            Self::Zmx(command) => command.check(),
             Self::Pick(_) | Self::Version(_) => Ok(()),
         }
     }
@@ -136,6 +139,7 @@ impl Command {
             Self::Pick(command) => command.execute(env),
             Self::Ask(command) => command.execute(env),
             Self::Restore(command) => command.execute(env),
+            Self::Zmx(command) => command.execute(env),
             Self::Version(command) => command.run(env),
         }
     }

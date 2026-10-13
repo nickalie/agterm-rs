@@ -10,6 +10,7 @@
 pub mod client;
 pub mod inventory;
 pub mod launch;
+pub mod sweep;
 
 pub use client::ZmxClient;
 pub use launch::Runtime;

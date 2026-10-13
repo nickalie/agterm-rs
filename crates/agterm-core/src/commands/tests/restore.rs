@@ -290,6 +290,7 @@ fn a_rerun_relaunch_respawns_commands_and_replays_the_typed_job_once() {
         command: Some("cat".to_owned()),
         initial_input: None,
         wait_after_command: wait,
+        ..LaunchSeed::default()
     };
     let grants = core.take_spawn_grants();
     assert_eq!(

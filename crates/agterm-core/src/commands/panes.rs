@@ -38,6 +38,10 @@ impl Core {
     /// of, the scratch's closes the scratch. A token no pane of the session carries any more (the terminal was replaced
     /// or torn down meanwhile) changes nothing. Whether it changed anything; commit afterwards when it did.
     pub fn pane_exited(&mut self, session: Uuid, token: &str) -> bool {
+        // a restart ended this shell on purpose and rebuilds the pane
+        if self.zmx.claimed_exits.contains(token) {
+            return false;
+        }
         let Some(store) = self.library_mut().store_for_session_mut(session) else {
             return false;
         };
@@ -92,6 +96,12 @@ impl Core {
     /// lives: in a window's tree, or held by a pending soft close whose terminal still runs. The scratch reports into
     /// nothing, as upstream's scratch is not wired to the session's fields. Nothing is saved. Whether it landed.
     pub fn report_pane(&mut self, session: Uuid, token: &str, report: &PaneReport) -> bool {
+        // a live pane's zmx reports its lead as a title under a reserved prefix, never shown as one
+        if let PaneReport::Title(title) = report
+            && let Some(notice) = crate::zmx::lead::LeadNotice::parse(title)
+        {
+            return self.lead_reported(session, token, &notice);
+        }
         let Some(target) = self.library_mut().held_session_mut(session) else {
             return false;
         };
@@ -225,13 +235,27 @@ fn lead(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     } else {
         &session.surface
     };
-    let identified = slot
+    let Some(token) = slot
         .get()
-        .is_some_and(|surface| Uuid::parse_str(surface.pane_token()).is_ok());
-    if !identified {
+        .map(|surface| surface.pane_token().to_owned())
+        .filter(|token| Uuid::parse_str(token).is_ok())
+    else {
         return Err(not_realized());
+    };
+    // a pane that already leads answers ok, so a caller can ask without reading `lead` first; one whose zmx never
+    // reported a role has no lead to take
+    let Ok(identity) = Uuid::parse_str(&token) else {
+        return Err(not_realized());
+    };
+    let leads = &core.zmx.leads;
+    let covered = leads.covered(identity);
+    if leads.role(identity).is_none() && !covered {
+        return Err(ControlError::rejected("pane has no lead to take"));
     }
-    Err(ControlError::rejected("pane has no lead to take"))
+    if covered && !leads.reattaching(identity) {
+        core.reattach_pane(id, &token, true);
+    }
+    Ok(with_id(id))
 }
 
 // MARK: - scratch

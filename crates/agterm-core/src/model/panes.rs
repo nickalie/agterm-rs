@@ -142,6 +142,9 @@ impl AppStore {
         self.cancel_ask_owned_by(id, split_identity);
         let Some(session) = self.session_mut(id) else { return };
         let was_shown = session.split.shown;
+        // the split pane is gone for good, and its live-session daemon with it; a remote split's daemon is another
+        // machine's
+        let finalized = split_identity.filter(|_| session.remote_host().is_none());
         session.split = SplitLayout::default();
         session.split_surface.teardown();
         // the right pane is gone: its overlay has nothing left to cover and nobody left to read its status
@@ -157,6 +160,7 @@ impl AppStore {
         session.split_launch = PaneLaunch::default();
         session.search.clear();
         self.outbox.removed_watermarks.extend(removal);
+        self.outbox.finalized_panes.extend(finalized);
         self.clear_indicator_owned_by(StatusPane::Right, id);
         if was_shown {
             self.emit_pane_visibility(EventKind::PaneSplit, id, false);
@@ -264,6 +268,24 @@ impl AppStore {
             ..EventPayload::default()
         };
         self.emit(kind, workspace, Some(id), payload);
+    }
+
+    /// Drops what pane `pane` of session `id` owned when its program is replaced in place (upstream's
+    /// `clearPaneOwnedState`, a restart): a HUD or ask scoped to it, its pane overlay, and a status it set. The scratch
+    /// owns none of these.
+    pub fn clear_pane_owned_state(&mut self, id: Uuid, pane: StatusPane) {
+        let (identity, overlay) = match pane {
+            StatusPane::Left => (self.session(id).map(|session| session.pane_identity), OverlayPane::Left),
+            StatusPane::Right => (
+                self.session(id).and_then(|session| session.split_pane_identity),
+                OverlayPane::Right,
+            ),
+            StatusPane::Scratch => return,
+        };
+        self.close_hud_owned_by(id, identity);
+        self.cancel_ask_owned_by(id, identity);
+        self.close_pane_overlay(id, overlay);
+        self.clear_indicator_owned_by(pane, id);
     }
 
     /// Clears the status when the departing pane `owner` owned it (an untagged status is the main pane's), so no glyph

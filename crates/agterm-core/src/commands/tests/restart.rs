@@ -10,6 +10,8 @@ use super::{Fixture, UNKNOWN, args, failure, wire};
 use crate::model::{NewSession, StatusPane};
 
 const NOT_LIVE: &str = "session.restart needs Live sessions mode; this pane has no live shell to replace";
+/// The main pane's token: a pane identity, as every session pane's is.
+const L: &str = "0A0B0C0D-0000-4000-8000-00000000000A";
 
 fn restart(fixture: &mut Fixture, id: Uuid, edit: impl FnOnce(&mut Args)) -> Response {
     fixture.session(SessionCmd::Restart, Some(&wire(id)), args(edit))
@@ -24,7 +26,7 @@ fn install(fixture: &mut Fixture, id: Uuid, pane: StatusPane, surface: FakeSurfa
 fn fixture() -> (Fixture, Uuid) {
     let mut fixture = Fixture::new(0);
     let id = fixture.sessions[0];
-    install(&mut fixture, id, StatusPane::Left, FakeSurface::new("L"));
+    install(&mut fixture, id, StatusPane::Left, FakeSurface::new(L));
     (fixture, id)
 }
 
@@ -124,31 +126,35 @@ fn a_local_pane_without_a_live_shell_needs_live_sessions() {
     let (mut fixture, id) = fixture();
     assert_eq!(restart(&mut fixture, id, pane("primary")), failure(NOT_LIVE));
     let response = restart(&mut fixture, id, |a| {
-        a.pane_id = Some("L".to_owned());
+        a.pane_id = Some(L.to_owned());
         a.command = Some("cld brief.md".to_owned());
     });
     assert_eq!(response, failure(NOT_LIVE));
     // a live token wins over the role beside it
     let response = restart(&mut fixture, id, |a| {
-        a.pane_id = Some("L".to_owned());
+        a.pane_id = Some(L.to_owned());
         a.pane = Some("right".to_owned());
     });
     assert_eq!(response, failure(NOT_LIVE));
 }
 
 #[test]
-fn a_live_pane_is_not_restarted_before_live_sessions_arrive() {
+fn a_live_pane_needs_this_instance_s_zmx() {
     let (mut fixture, id) = fixture();
     install(
         &mut fixture,
         id,
         StatusPane::Left,
-        FakeSurface::new("L").with_live_session(true),
+        FakeSurface::new(L).with_live_session(true),
     );
-    assert_eq!(
-        restart(&mut fixture, id, pane("left")),
-        failure("session.restart is not supported by this host")
-    );
+    assert_eq!(restart(&mut fixture, id, pane("left")), failure(NOT_LIVE));
+}
+
+#[test]
+fn a_pane_without_an_identity_is_not_realized() {
+    let (mut fixture, id) = fixture();
+    install(&mut fixture, id, StatusPane::Left, FakeSurface::new("L"));
+    assert_eq!(restart(&mut fixture, id, pane("left")), failure("session not realized"));
 }
 
 #[test]

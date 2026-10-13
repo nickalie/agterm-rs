@@ -58,6 +58,7 @@ pub use commands::overlay::JobChannel;
 pub use commands::process::{CorePoster, CoreTask, ProcessHost, widened_path};
 pub use commands::relaunch::{EXIT_CAPTURE_BUDGET, PaneSpawn};
 pub use commands::surface::POLL_INTERVAL;
+pub use commands::zmx::{LeadCover, LiveInstall, LiveQuit, PaneReplacement, ResetPrompt, ResetRefusal};
 pub use dispatch::{CommitTimers, Core, CoreConfig, CoreState, Dispatched, Resume, decode_request};
 pub use error::{ControlError, Noun};
 pub use windows::{WindowRequest, WindowSize, WindowState};

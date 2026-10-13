@@ -49,6 +49,16 @@ const CAPABILITIES: &[&str] = &[
     "config-reload-counts",
 ];
 
+/// The capabilities this host claims: the profile's, and `live-sessions` where panes can run in zmx daemons.
+fn capabilities(live_sessions: bool) -> Vec<String> {
+    CAPABILITIES
+        .iter()
+        .copied()
+        .chain(live_sessions.then_some(crate::zmx_runtime::LIVE_SESSIONS))
+        .map(str::to_owned)
+        .collect()
+}
+
 /// `AGTERM_APP_ID` when it is a valid application id, else the fork's.
 pub fn app_id(env: &dyn Env) -> String {
     env.var(APP_ID_ENV)
@@ -158,7 +168,7 @@ pub fn activate(app: &adw::Application) {
     let mut core = Core::new(
         CoreConfig {
             app: identity,
-            capabilities: CAPABILITIES.iter().map(|name| (*name).to_owned()).collect(),
+            capabilities: capabilities(crate::zmx_runtime::claims_live_sessions(&ProcessEnv)),
         },
         load_state(&ProcessEnv),
     );
@@ -190,6 +200,8 @@ pub fn activate(app: &adw::Application) {
         Box::new(crate::process_table::ProcTable::new()),
         crate::restore_launch::shell_basename(&ProcessEnv),
     );
+    // the launch reap and a pending live sessions reset finish before any window mounts
+    crate::zmx_runtime::install(&mut core, &ProcessEnv);
     core.arm_launch_spawns(std::time::Instant::now());
     let socket = context.socket.clone();
     let state = Rc::new(RefCell::new(AppState::new(core)));
@@ -233,6 +245,10 @@ pub fn shutdown() {
     if let Some(mut shell) = SHELL.with(|shell| shell.borrow_mut().take()) {
         if let Ok(mut state) = shell.state.try_borrow_mut() {
             state.save_on_quit();
+            // a confirmed live sessions reset is armed for the next launch, which this app then opens itself
+            if state.core.arm_live_reset_on_quit() {
+                crate::zmx_runtime::spawn_relauncher();
+            }
         } else {
             tracing::error!("quit save skipped: the app state is in use");
         }
@@ -308,6 +324,14 @@ mod tests {
             format!("{}.unavailable", socket.to_string_lossy())
         );
         Ok(())
+    }
+
+    #[test]
+    fn live_sessions_are_claimed_by_host() {
+        assert!(!capabilities(false).iter().any(|name| name == "live-sessions"));
+        let live = capabilities(true);
+        assert_eq!(live.last().map(String::as_str), Some("live-sessions"));
+        assert_eq!(live.len(), CAPABILITIES.len() + 1);
     }
 
     #[test]

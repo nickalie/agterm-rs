@@ -21,7 +21,7 @@ use crate::model::{PaneAddress, StatusPane};
 use crate::pane_env::uuid_string;
 use crate::persist::RestoreMode;
 use crate::resolve::ACTIVE;
-use crate::restore::capture::{CaptureKind, capture_foreground_commands};
+use crate::restore::capture::CaptureKind;
 
 /// The longest pin, in UTF-8 bytes (upstream's `ControlRestoreOverride.maxCommandBytes`): it persists in the window's
 /// snapshot, so the cap guards the file, not the display.
@@ -173,13 +173,7 @@ fn capture(core: &mut Core) -> Result<ControlResult, ControlError> {
         )));
     }
     let ids = core.library().open_ids();
-    let reader = core.restore.reader();
-    let mut captured = 0;
-    for id in &ids {
-        if let (Some(reader), Some(store)) = (&reader, core.library.store_mut(*id)) {
-            captured += capture_foreground_commands(store.sessions_mut(), reader, CaptureKind::OnDemand, &|| true);
-        }
-    }
+    let captured = core.capture_windows(&ids, CaptureKind::OnDemand, &|| true);
     let plural = if captured == 1 { "" } else { "s" };
     if !core.save_open_windows_checked() {
         return Err(ControlError::rejected(format!(

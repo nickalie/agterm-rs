@@ -82,6 +82,12 @@ pub struct ControlResult {
     /// `restore.mode`: the restore-mode policy (`zmx.list` repeats it as its header).
     #[serde(default)]
     pub restore: Option<ControlRestoreStatus>,
+    /// `zmx.list`: the daemons joined against the panes that claim them.
+    #[serde(default)]
+    pub zmx: Option<ControlZmxInventory>,
+    /// `zmx.reset`: what was confirmed for the next launch.
+    #[serde(default)]
+    pub live_reset: Option<ControlLiveResetStatus>,
     /// `session.overlay.open --html|--url`: the page opened, which `session.overlay.result --page` reads back.
     #[serde(default, rename = "pageID")]
     pub page_id: Option<String>,
@@ -110,6 +116,86 @@ pub struct ControlRestoreStatus {
     /// Why live fell back; present only when live was requested and refused.
     #[serde(default)]
     pub unavailable_reason: Option<String>,
+}
+
+/// One row of `zmx.list` (upstream's `ControlZmxEntry`): a daemon, a pane that claims one, or both. State and observation
+/// travel as raw strings, so a state a newer app adds fails one field rather than the whole response.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlZmxEntry {
+    pub daemon: String,
+    /// `claimed`, `orphan`, `unknown`, `conflicted`, `pendingClose` or `foreign`.
+    pub state: String,
+    /// `running`, `unreadable` or `absent`.
+    pub observation: String,
+    /// Present only for a daemon observed running.
+    #[serde(default)]
+    pub clients: Option<u32>,
+    #[serde(default, rename = "leaderPID")]
+    pub leader_pid: Option<i32>,
+    #[serde(default, rename = "windowID")]
+    pub window_id: Option<String>,
+    /// Absent for an unindexed window, whose name lives only in the index it is missing from.
+    #[serde(default)]
+    pub window_name: Option<String>,
+    /// `open`, `closed` or `unindexed`.
+    #[serde(default)]
+    pub window_state: Option<String>,
+    #[serde(default, rename = "workspaceID")]
+    pub workspace_id: Option<String>,
+    #[serde(default)]
+    pub workspace_name: Option<String>,
+    #[serde(default, rename = "sessionID")]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub session_name: Option<String>,
+    /// `left` or `right`.
+    #[serde(default)]
+    pub pane: Option<String>,
+    /// True when the daemon was created before the launch's recorded zmx build change; omitted otherwise.
+    #[serde(default)]
+    pub outdated: Option<bool>,
+}
+
+/// What a caller on another machine needs to reach these daemons (upstream's `ControlZmxEndpoint`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlZmxEndpoint {
+    /// The zmx this instance runs.
+    pub executable: String,
+    /// The `ZMX_DIR` its daemons live under.
+    pub socket_directory: String,
+}
+
+/// `zmx.list` (upstream's `ControlZmxInventory`): the restore status as the header, then one row per daemon and per
+/// pane expecting one.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlZmxInventory {
+    pub restore: ControlRestoreStatus,
+    pub inventory_complete: bool,
+    #[serde(default)]
+    pub endpoint: Option<ControlZmxEndpoint>,
+    /// The Live sessions reset read-back the tree carries too; omitted while nothing is pending and no launch
+    /// consumed a marker.
+    #[serde(default)]
+    pub live_reset: Option<serde_json::Value>,
+    pub entries: Vec<ControlZmxEntry>,
+}
+
+/// `zmx.reset`'s acknowledgement (upstream's `ControlLiveResetStatus`): what was confirmed for the next launch.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlLiveResetStatus {
+    pub sessions: u32,
+    pub panes: u32,
+    pub pending: bool,
+    /// How many of `sessions` predate the recorded zmx build change; omitted when none.
+    #[serde(default)]
+    pub outdated: Option<u32>,
 }
 
 /// What a successful `session.restart` proves: the pane's shell was replaced (upstream's `ControlRestartReceipt`). The

@@ -366,6 +366,16 @@ pub struct FakeSessionHost {
     available: bool,
     sessions: Mutex<BTreeMap<String, FakeLiveSession>>,
     list_error: Mutex<Option<String>>,
+    /// Every kill asked for, in order: the name and whether it was forced (a batch records each name forced).
+    kills: Mutex<Vec<(String, bool)>>,
+    /// The outcome a kill of a name reports instead of killing it.
+    kill_outcomes: Mutex<BTreeMap<String, KillOutcome>>,
+    /// The foreground job each shell pid reports.
+    jobs: Mutex<BTreeMap<i32, Vec<crate::ProcessRecord>>>,
+    /// The job processes still running.
+    running: Mutex<Vec<crate::ProcessRecord>>,
+    /// The job processes ended by [`SessionHost::end_job`].
+    ended: Mutex<Vec<crate::ProcessRecord>>,
 }
 
 impl Default for FakeSessionHost {
@@ -382,6 +392,11 @@ impl FakeSessionHost {
             available: true,
             sessions: Mutex::default(),
             list_error: Mutex::default(),
+            kills: Mutex::default(),
+            kill_outcomes: Mutex::default(),
+            jobs: Mutex::default(),
+            running: Mutex::default(),
+            ended: Mutex::default(),
         }
     }
 
@@ -417,9 +432,75 @@ impl FakeSessionHost {
         lock(&self.sessions).get(name).cloned()
     }
 
+    /// Replaces the listing row of daemon `name` (inserting a blank daemon when there is none).
+    pub fn set_record(&self, name: &str, clients: Option<u32>, leader_pid: Option<i32>, created_at: Option<u64>) {
+        let mut sessions = lock(&self.sessions);
+        let session = sessions.entry(name.to_owned()).or_insert_with(|| FakeLiveSession {
+            record: LiveSessionRecord {
+                name: name.to_owned(),
+                clients: None,
+                leader_pid: None,
+                created_at: None,
+            },
+            screen: String::new(),
+            scrollback: String::new(),
+            typed: Vec::new(),
+        });
+        session.record = LiveSessionRecord {
+            name: name.to_owned(),
+            clients,
+            leader_pid,
+            created_at,
+        };
+    }
+
+    /// Sets the scrollback [`SessionHost::screen`] adds before the screen when asked for everything.
+    pub fn set_scrollback(&self, name: &str, scrollback: impl Into<String>) {
+        if let Some(session) = lock(&self.sessions).get_mut(name) {
+            session.scrollback = scrollback.into();
+        }
+    }
+
+    /// Makes every later kill of `name` report `outcome` and leave the daemon alone; `None` kills it again.
+    pub fn set_kill_outcome(&self, name: &str, outcome: Option<KillOutcome>) {
+        let mut outcomes = lock(&self.kill_outcomes);
+        match outcome {
+            Some(outcome) => outcomes.insert(name.to_owned(), outcome),
+            None => outcomes.remove(name),
+        };
+    }
+
+    /// Every kill asked for, in order, with whether it was forced.
+    #[must_use]
+    pub fn kills(&self) -> Vec<(String, bool)> {
+        lock(&self.kills).clone()
+    }
+
+    /// Makes `shell` report `job` as its foreground job, every process of it running until ended.
+    pub fn set_job(&self, shell: i32, job: Vec<crate::ProcessRecord>) {
+        lock(&self.running).extend(job.iter().copied());
+        lock(&self.jobs).insert(shell, job);
+    }
+
+    /// Ends process `pid` of a job, as its exit would.
+    pub fn finish_job_process(&self, pid: i32) {
+        lock(&self.running).retain(|process| process.pid != pid);
+    }
+
+    /// The job processes [`SessionHost::end_job`] killed.
+    #[must_use]
+    pub fn ended(&self) -> Vec<crate::ProcessRecord> {
+        lock(&self.ended).clone()
+    }
+
     /// Makes every later [`SessionHost::list`] fail with `message`.
     pub fn fail_list(&self, message: impl Into<String>) {
         *lock(&self.list_error) = Some(message.into());
+    }
+
+    /// Lists again after [`FakeSessionHost::fail_list`].
+    pub fn heal_list(&self) {
+        *lock(&self.list_error) = None;
     }
 
     fn require_available(&self) -> Result<(), HostError> {
@@ -444,9 +525,13 @@ impl SessionHost for FakeSessionHost {
         Ok(lock(&self.sessions).values().map(|s| s.record.clone()).collect())
     }
 
-    fn kill(&self, name: &str, _force: bool) -> KillOutcome {
+    fn kill(&self, name: &str, force: bool) -> KillOutcome {
         if let Err(error) = self.require_available() {
             return KillOutcome::Failed(error.0);
+        }
+        lock(&self.kills).push((name.to_owned(), force));
+        if let Some(outcome) = lock(&self.kill_outcomes).get(name) {
+            return outcome.clone();
         }
         match lock(&self.sessions).remove(name) {
             Some(_) => KillOutcome::Killed,
@@ -481,6 +566,25 @@ impl SessionHost for FakeSessionHost {
             .ok_or_else(|| HostError(format!("session not found: {name}")))?;
         session.typed.extend_from_slice(bytes);
         Ok(())
+    }
+
+    fn foreground_job(&self, shell: i32) -> Option<Vec<crate::ProcessRecord>> {
+        Some(lock(&self.jobs).get(&shell).cloned().unwrap_or_default())
+    }
+
+    fn job_running(&self, job: &[crate::ProcessRecord]) -> bool {
+        let running = lock(&self.running);
+        job.iter().any(|process| running.contains(process))
+    }
+
+    fn end_job(&self, job: &[crate::ProcessRecord]) {
+        let mut running = lock(&self.running);
+        for process in job {
+            if running.contains(process) {
+                running.retain(|other| other != process);
+                lock(&self.ended).push(*process);
+            }
+        }
     }
 }
 
@@ -556,9 +660,23 @@ impl ProcessLauncher for FakeProcessLauncher {
 #[derive(Debug, Default)]
 pub struct FakeProcessTable {
     processes: std::cell::RefCell<Vec<(crate::ProcessStat, Option<Vec<String>>)>>,
+    /// The terminal foreground group each process reports.
+    foregrounds: std::cell::RefCell<BTreeMap<i32, i32>>,
+    /// The working directory each process reports.
+    directories: std::cell::RefCell<BTreeMap<i32, String>>,
 }
 
 impl FakeProcessTable {
+    /// Makes process `pid` report `pgrp` as its terminal's foreground group.
+    pub fn set_terminal_foreground(&self, pid: i32, pgrp: i32) {
+        self.foregrounds.borrow_mut().insert(pid, pgrp);
+    }
+
+    /// Makes process `pid` report `directory` as its working directory.
+    pub fn set_working_directory(&self, pid: i32, directory: &str) {
+        self.directories.borrow_mut().insert(pid, directory.to_owned());
+    }
+
     /// Adds process `stat` with `argv` (`None` for one whose argv cannot be read), replacing one with its pid.
     pub fn insert(&self, stat: crate::ProcessStat, argv: Option<&[&str]>) {
         let argv = argv.map(|argv| argv.iter().map(|arg| (*arg).to_owned()).collect());
@@ -597,6 +715,14 @@ impl crate::ProcessTable for FakeProcessTable {
             .filter(|(stat, _)| stat.pgrp == pgrp)
             .map(|(stat, _)| *stat)
             .collect()
+    }
+
+    fn terminal_foreground(&self, pid: i32) -> Option<i32> {
+        self.foregrounds.borrow().get(&pid).copied()
+    }
+
+    fn working_directory(&self, pid: i32) -> Option<String> {
+        self.directories.borrow().get(&pid).cloned()
     }
 }
 

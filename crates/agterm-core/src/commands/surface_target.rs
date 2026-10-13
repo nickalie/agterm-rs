@@ -11,6 +11,7 @@ use agterm_proto::{ControlCursor, ControlResult, Request};
 use uuid::Uuid;
 
 use super::quick::{self, QUICK};
+use super::zmx::PaneSource;
 use super::{Outcome, ToggleMode, args_of, session_store, unknown_pane_id};
 use crate::Core;
 use crate::error::ControlError;
@@ -97,7 +98,12 @@ fn cursor(
             session,
             surface: zoom_surface(pane),
         };
-        return cursor_of(store, id);
+        let core: &Core = core;
+        let store = core
+            .library()
+            .store_for_session(session)
+            .ok_or(ControlError::WindowNotOpen)?;
+        return cursor_of(core, store, id);
     }
     if target == QUICK {
         return cursor_answer(quick::cursor_surface(core)?, QUICK.to_owned());
@@ -115,7 +121,7 @@ fn cursor(
         let id = SurfaceId::parse(target).ok_or_else(|| invalid_surface(target))?;
         (surface_owner(core, id, window)?, id)
     };
-    cursor_of(open_store(core, window)?, id)
+    cursor_of(core, open_store(core, window)?, id)
 }
 
 fn zoom_surface(pane: StatusPane) -> ZoomSurface {
@@ -127,7 +133,7 @@ fn zoom_surface(pane: StatusPane) -> ZoomSurface {
 }
 
 /// The cursor of a valid surface id's terminal.
-fn cursor_of(store: &AppStore, id: SurfaceId) -> Result<ControlResult, ControlError> {
+fn cursor_of(core: &Core, store: &AppStore, id: SurfaceId) -> Result<ControlResult, ControlError> {
     let control_id = id.control_id();
     let session = store
         .session(id.session)
@@ -138,7 +144,29 @@ fn cursor_of(store: &AppStore, id: SurfaceId) -> Result<ControlResult, ControlEr
         .slot(session)
         .get()
         .ok_or_else(|| not_available(&control_id))?;
-    cursor_answer(surface, control_id)
+    if !surface.is_realized() {
+        return cursor_answer(surface, control_id);
+    }
+    match core.pane_source(surface, false) {
+        PaneSource::Surface => cursor_answer(surface, control_id),
+        PaneSource::Refused(reason) => Err(ControlError::rejected(reason)),
+        // a pane that took part in leadership reads its cursor from its daemon's grid
+        PaneSource::Daemon(name) => {
+            let failed = || ControlError::rejected("failed to read cursor position");
+            let screen = core
+                .zmx
+                .host()
+                .ok_or_else(failed)?
+                .screen(&name, false)
+                .map_err(|_| failed())?;
+            Ok(ControlResult {
+                cursor: Some(ControlCursor {
+                    column: i64::from(screen.cursor_column),
+                }),
+                ..ControlResult::id(control_id)
+            })
+        }
+    }
 }
 
 /// The cursor of a terminal addressed as `control_id` (upstream's `cursorResponse`): a terminal not up is reported,

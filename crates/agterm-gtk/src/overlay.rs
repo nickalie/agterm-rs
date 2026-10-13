@@ -415,6 +415,7 @@ fn spawn(session: &Session, pane: Option<OverlayPane>, context: &HudContext<'_>)
         env: launch.local_environment(&code_file, None).into_iter().collect(),
         wait_after_command: wait,
         font_size,
+        live: false,
     });
     let config = config_overlay(background.as_deref());
     if !config.is_empty() {

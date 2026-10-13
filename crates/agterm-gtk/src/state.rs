@@ -34,6 +34,9 @@ use crate::main_loop::GlibMainLoop;
 use crate::quick::QuickPanel;
 use crate::windows::Windows;
 
+/// How long a quit a command asked for waits, so the command's reply is written first.
+const LIVE_QUIT_DELAY: Duration = Duration::from_millis(250);
+
 /// The bounds of an overlay job helper's connection (upstream's `overlayJobLimits`: a presentation frame's size).
 const JOB_STREAM_LIMITS: LineStreamLimits = LineStreamLimits {
     max_line_bytes: 256 * 1024,
@@ -199,8 +202,12 @@ impl AppState {
         let sounds = self.core.take_status_sounds();
         let banners = self.core.take_notifications();
         crate::keymap_dispatch::sync(&self.core, &self.poster);
+        if let Some(quit) = self.core.take_live_quit() {
+            self.schedule_live_quit(quit);
+        }
         match self.windows.as_mut() {
             Some(windows) => {
+                windows.replace_panes(&mut self.core, &self.poster);
                 windows.sync(&mut self.core, &self.poster);
                 windows.menu().sync(&self.core);
                 self.quick.sync(&mut self.core, windows, &self.poster);
@@ -544,6 +551,23 @@ impl AppState {
                 tracing::error!(%cmd, "control handler panicked in a deferred step");
                 sender.send(ControlError::HandlerPanicked(cmd).into());
             }
+        }
+    }
+
+    /// Quits the app a moment after a command asked for it (`zmx.reset`), so the command's reply is written first
+    /// (upstream's connection thread terminates once the reply is out).
+    fn schedule_live_quit(&self, quit: agterm_core::LiveQuit) {
+        tracing::info!(relaunch = quit.relaunch, "quitting for the live sessions reset");
+        let Some(main_loop) = self.poster.upgrade() else {
+            return;
+        };
+        let task = Box::new(|state: &mut Self| {
+            if let Some(windows) = state.windows.as_ref() {
+                gtk::prelude::ApplicationExt::quit(windows.app());
+            }
+        });
+        if main_loop.post_after(LIVE_QUIT_DELAY, task).is_err() {
+            tracing::debug!("the live sessions reset quit was dropped: the loop is closed");
         }
     }
 

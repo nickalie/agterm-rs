@@ -50,8 +50,12 @@ impl ZmxClient {
             .collect();
         let known_names: Option<BTreeSet<String>> =
             known_pane_identities.map(|panes| panes.iter().copied().map(daemon_name).collect());
-        let killed_all =
-            names_to_kill(&records, requested, known_names.as_ref()).is_none_or(|names| self.kill_batch(&names, None));
+        let shells: Vec<(String, i32)> = records
+            .iter()
+            .filter_map(|record| record.leader_pid.map(|pid| (record.name.clone(), pid)))
+            .collect();
+        let killed_all = names_to_kill(&records, requested, known_names.as_ref())
+            .is_none_or(|names| self.kill_names(&names, Some(&shells), None));
         ReapOutcome {
             running_names: Some(running),
             killed_all,
@@ -68,7 +72,14 @@ impl ZmxClient {
     /// One `zmx kill <names…> --force` for every distinct name, in order; `timeout` overrides this invocation's bound.
     /// Diagnostic only: zmx handles the names in turn, so a failure part-way has already reached some daemons, and a
     /// caller confirms each by its leader's exit.
+    #[must_use]
     pub fn kill_batch(&self, names: &[String], timeout: Option<Duration>) -> bool {
+        self.kill_names(names, None, timeout)
+    }
+
+    /// [`ZmxClient::kill_batch`] with the leader pids the caller already holds (`shells`, else listed for the
+    /// sweep): each confirmed kill hangs up the foreground job its shell leaves behind.
+    pub fn kill_names(&self, names: &[String], shells: Option<&[(String, i32)]>, timeout: Option<Duration>) -> bool {
         let mut seen = BTreeSet::new();
         let unique: Vec<&str> = names
             .iter()
@@ -78,11 +89,15 @@ impl ZmxClient {
         if unique.is_empty() {
             return true;
         }
+        let jobs = self.foreground_jobs(&unique, shells, timeout);
         let mut arguments = vec!["kill"];
         arguments.extend(&unique);
         arguments.push("--force");
         match self.invoke(&arguments, timeout, true, None) {
-            Ok(_) => true,
+            Ok(output) => {
+                self.hang_up_confirmed(&jobs, &output);
+                true
+            }
             Err(error) => {
                 tracing::error!(names = unique.join(","), %error, "zmx kill failed");
                 false
@@ -95,11 +110,16 @@ impl ZmxClient {
     /// has no kill-if-detached, so the caller re-lists right before.
     pub fn kill_observed_orphans(&self, names: &[String]) -> BTreeMap<String, KillOutcome> {
         let unique: BTreeSet<&str> = names.iter().map(String::as_str).collect();
+        let listed: Vec<&str> = unique.iter().copied().collect();
+        let jobs = self.foreground_jobs(&listed, None, None);
         unique
             .into_iter()
             .map(|name| {
                 let outcome = match self.invoke(&["kill", name], None, true, None) {
-                    Ok(output) => kill_outcome(&output, name),
+                    Ok(output) => {
+                        self.hang_up_confirmed(&jobs, &output);
+                        kill_outcome(&output, name)
+                    }
                     Err(error) => {
                         tracing::error!(name, %error, "zmx kill failed");
                         KillOutcome::Failed(error.to_string())

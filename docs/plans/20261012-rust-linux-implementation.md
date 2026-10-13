@@ -1207,24 +1207,49 @@ wlr-layer-shell surface.
 - Modify: `crates/agterm-gtk/src/surface.rs`
 - Create: `crates/agterm-core/src/commands/zmx.rs`, `crates/agterm-gtk/src/{zmx_runtime,pane_lead}.rs`
 - Modify: `.github/workflows/rust-linux.yml`
+- ➕ Create: `crates/agterm-core/src/commands/zmx/{claims,inventory,launch,lead,live_reset}.rs`,
+  `crates/agterm-core/src/commands/{restart_live,tests/zmx}.rs`, `crates/agterm-core/src/zmx/sweep.rs`,
+  `crates/agterm-zmx/src/sweep.rs`, `crates/agterm-ctl/src/zmx.rs`; Modify: `crates/agterm-host/src/{lib,fakes}.rs`
+  (`ProcessRecord`, `SessionHost::{kill_batch,foreground_job,job_running,end_job}`,
+  `ProcessTable::{terminal_foreground,working_directory}`), `crates/agterm-proto/src/{lib,result}.rs`
+  (`ControlZmxInventory`, `ControlZmxEntry`, `ControlZmxEndpoint`, `ControlLiveResetStatus`), the model's pane finalizer
+  (`model/{outbox,store,panes,pending_close,window_library}.rs`, `persist/library.rs`), `restore/{capture,spawn_plan}.rs`,
+  `zmx/support.rs`, `commands/{panes,restart,restore,relaunch,surface,surface_target,typing}.rs`, `dispatch.rs`;
+  `crates/agterm-zmx/src/{client,inventory,launch}.rs`; `crates/agterm-gtk/src/{app,deck,split,state,window,windows,
+  pane,process_table}.rs` (and a `live: false` line in `quick.rs`, `hud.rs`, `overlay.rs`); `crates/agterm-ctl`
+  `{main,output}.rs`
 
-- [ ] live launch of primary and split panes through `SessionHost` (`Ghostty/ZmxLaunch.swift`,
+- [x] live launch of primary and split panes through `SessionHost` (`Ghostty/ZmxLaunch.swift`,
       `Ghostty/ZmxClient.swift`, `ZmxLifecycle.swift`), reattach on relaunch, reaping on mode switch
-      (`control-api.md` > Restore mode and the zmx group)
-- [ ] zmx.list, prune, kill, screen; zmx.reset as upstream (`LiveReset.swift`, `LiveResetCoordinator.swift`,
+      (`control-api.md` > Restore mode and the zmx group) (the disposition is decided at spawn, with the seed; the
+      pane finalizer ends a removed pane's daemon; a confirmed kill hangs up the shell's foreground job, upstream's
+      `ProcessSweeper`; a live pane's foreground is read through its daemon's shell. ⚠️ Linux adaptation: the attach
+      waits for the terminal's first resize, since libghostty spawns at its 800×600 px initial size and a narrower GTK
+      pane would make a new daemon reflow its first prompt row into soft-wrapped rows, see `zmx::support::settled`)
+- [x] zmx.list, prune, kill, screen; zmx.reset as upstream (`LiveReset.swift`, `LiveResetCoordinator.swift`,
       `Ghostty/LiveResetConsumer.swift`, `LiveResetRelauncher.swift`: refusals, marker, relaunch; exempt in the
       suite, so unit tests carry it), not the fork's refusal; covered panes answered from the daemon and the lead
-      cover (`ControlServer+PaneLead.swift`, `Ghostty/PaneLead.swift`, `Views/PaneLeadCover.swift`)
-- [ ] claim `live-sessions` only for a zsh password-database shell with zmx staged
-- [ ] matching `agtermctl zmx ...` subcommands (`ZmxCommands.swift`)
-- [ ] CI: a live job whose runner login shell is zsh (`sudo apt-get install -y zsh`, then
+      cover (`ControlServer+PaneLead.swift`, `Ghostty/PaneLead.swift`, `Views/PaneLeadCover.swift`) (also the live
+      half of `session.restart` and `session.lead`, left by Tasks 16/17. ⚠️ Linux has no responsibility API, so every
+      leader attributes `unknown` and a reset offers outdated daemons only; the Agterm ▸ Reset Live Sessions… menu
+      item is not wired yet: `Core::prepare_live_reset`/`confirm_live_reset` are its API, the app menu belongs to
+      Task 35's lane)
+- [x] claim `live-sessions` only for a zsh password-database shell with zmx staged
+- [x] matching `agtermctl zmx ...` subcommands (`ZmxCommands.swift`) (`list`, `screen`, `prune`, `kill`, `reset`;
+      `tree`, `attach` and `present` come with Tasks 29/30)
+- [x] CI: a live job whose runner login shell is zsh (`sudo apt-get install -y zsh`, then
       `sudo chsh -s "$(command -v zsh)" "$USER"`; the harness reads the password database), gated by the ratchet
       only: `--must-pass live-sessions` waits for Task 32, since `zmx.present` (Task 29) and `clipboard set`
-      (Task 32) tests also require the capability
-- [ ] write tests: launch disposition (ordinary, wrapped, fallback) and reaping decisions
-- [ ] write tests: the stop leaves no process with the instance's `ZMX_DIR`
-- [ ] gate: full run locally (live tests skip here) and the zsh CI job; ratchet (`test_zmx.py` live cases,
-      `behaviors/test_relaunch.py` live case)
+      (Task 32) tests also require the capability (`conformance-zsh` job; validated with actionlint and a YAML
+      parse, not run here: nothing is pushed)
+- [x] write tests: launch disposition (ordinary, wrapped, fallback) and reaping decisions
+- [x] write tests: the stop leaves no process with the instance's `ZMX_DIR` (`agterm-zmx/tests/zmx_binary.rs`, run
+      against the built zmx with `AGTERM_TEST_ZMX`)
+- [x] gate: full run locally (live tests skip here) and the zsh CI job; ratchet (`test_zmx.py` live cases,
+      `behaviors/test_relaunch.py` live case) (the zsh CI job is not runnable here; the live tests ran locally
+      instead in a private user+mount namespace whose password database gives the mapped user an extracted zsh:
+      every Task 28 live test passed, and 23 ids joined the ratchet, 7 of them live; the remaining red zmx tests are
+      `zmx.tree`/`zmx.present`/`zmx.attach`, Tasks 29/30)
 
 ### Task 29: Remote sessions, origin side
 

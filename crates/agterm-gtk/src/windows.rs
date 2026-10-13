@@ -95,6 +95,20 @@ impl Windows {
         }
     }
 
+    /// Puts fresh terminals in place of the panes commands asked to replace (a lead takeover, a restart), before the
+    /// windows render; a pane no window shows is skipped, logged.
+    pub fn replace_panes(&mut self, core: &mut Core, poster: &Poster) {
+        for replacement in core.take_pane_replacements() {
+            let window = core.library().window_holding_session(replacement.session);
+            let replaced = window
+                .and_then(|id| self.shown.get_mut(&id))
+                .is_some_and(|ui| ui.replace_pane(core, &replacement, poster));
+            if !replaced {
+                tracing::warn!(session = %replacement.session, token = replacement.token, "no pane to replace");
+            }
+        }
+    }
+
     /// Brings the windows in line with the model (module docs), then reports every window's state to the core.
     pub fn sync(&mut self, core: &mut Core, poster: &Poster) {
         // a dashboard follows the model before anything renders it

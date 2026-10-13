@@ -26,8 +26,10 @@ impl Surface for PaneSurface {
         self.terminal.is_realized()
     }
 
+    /// A live pane is a client of its daemon once its terminal exists: the attach runs from the surface's creation,
+    /// so a pane still waiting for its first size reads as not attached yet.
     fn is_live_session(&self) -> bool {
-        false
+        self.terminal.is_live() && self.terminal.is_realized()
     }
 
     fn promote_to_primary(&mut self) {}

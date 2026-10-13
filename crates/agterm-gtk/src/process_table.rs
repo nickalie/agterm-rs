@@ -68,6 +68,25 @@ impl ProcessTable for ProcTable {
         members.sort_unstable_by_key(|stat| stat.pid);
         members
     }
+
+    fn terminal_foreground(&self, pid: i32) -> Option<i32> {
+        parse_terminal_foreground(&fs::read(self.process_file(pid, "stat")).ok()?)
+    }
+
+    fn working_directory(&self, pid: i32) -> Option<String> {
+        let link = fs::read_link(self.process_file(pid, "cwd")).ok()?;
+        link.into_os_string().into_string().ok()
+    }
+}
+
+/// The foreground process group of the controlling terminal in a `/proc/<pid>/stat` line (`tpgid`, the fifth field
+/// after the command name); `None` for a malformed line or a process without a terminal.
+pub fn parse_terminal_foreground(line: &[u8]) -> Option<i32> {
+    let close = line.iter().rposition(|byte| *byte == b')')?;
+    let tail = std::str::from_utf8(&line[close + 1..]).ok()?;
+    // after the name: state ppid pgrp session tty_nr tpgid
+    let tpgid: i32 = tail.split_ascii_whitespace().nth(5)?.parse().ok()?;
+    (tpgid > 0).then_some(tpgid)
 }
 
 /// The argv in a `/proc/<pid>/cmdline`: NUL-separated arguments, the trailing NUL ending the last one, each decoded
@@ -201,6 +220,16 @@ mod tests {
     }
 
     #[test]
+    fn a_stat_line_gives_the_terminal_s_foreground_group() {
+        assert_eq!(
+            parse_terminal_foreground(b"4242 (z (s) h) S 4200 4242 4242 34817 4300 4194560 0"),
+            Some(4300)
+        );
+        assert_eq!(parse_terminal_foreground(b"7 (daemon) S 1 7 7 0 -1 0"), None);
+        assert_eq!(parse_terminal_foreground(b"7 (short) S 1 7"), None);
+    }
+
+    #[test]
     fn the_live_table_reads_this_test_process() {
         let table = ProcTable::new();
         let pid = i32::try_from(std::process::id()).unwrap();
@@ -208,5 +237,7 @@ mod tests {
         assert_eq!(own.pid, pid);
         assert!(!table.argv(pid).unwrap().is_empty());
         assert!(table.group(own.pgrp).contains(&own));
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(table.working_directory(pid).as_deref(), cwd.to_str());
     }
 }

@@ -33,7 +33,7 @@ use agterm_core::model::pane::SPLIT_RATIO_DEFAULT;
 use agterm_core::model::{AppStore, Session, WindowLibrary, Workspace};
 use agterm_core::pane_env::{self, PaneEnv, SessionPane, StatusPane};
 use agterm_core::zoom::{SurfaceId, ZoomSurface};
-use agterm_core::{Core, PaneReport};
+use agterm_core::{Core, PaneReplacement, PaneReport};
 use gtk::prelude::*;
 use uuid::Uuid;
 
@@ -150,6 +150,7 @@ impl PaneSpec {
             env: self.env(context).into_iter().collect(),
             wait_after_command: self.wait,
             font_size,
+            live: false,
         }
     }
 }
@@ -232,6 +233,7 @@ impl Page {
     /// Brings the page in line with its session: the terminals the model dropped go, the panes it lays out and has
     /// no terminal for are created and installed in their slots, and the layout follows the session and the zoom.
     fn sync(&mut self, core: &mut Core, sync: &PageSync<'_>, id: Uuid, shown: bool) {
+        let covers = lead_covers(core, sync.window, id);
         let Some(store) = core.library_mut().store_mut(sync.window) else {
             self.panes.hide();
             return;
@@ -274,6 +276,7 @@ impl Page {
             self.panes.apply(plan.clone(), shown);
             Some(plan)
         };
+        self.panes.sync_lead_covers(&covers, shown);
         let hud = crate::hud::HudContext {
             window: sync.window,
             workspace,
@@ -299,6 +302,23 @@ impl Page {
             .add(spec.token.clone(), terminal.clone(), spec.pane == StatusPane::Scratch);
         install(session, spec, terminal);
     }
+}
+
+/// The lead cover each of `session`'s panes needs now (see [`crate::pane_lead`]).
+fn lead_covers(core: &Core, window: Uuid, session: Uuid) -> Vec<(String, Option<agterm_core::LeadCover>)> {
+    let tokens: Vec<String> = core
+        .library()
+        .store(window)
+        .and_then(|store| store.session(session))
+        .map(|session| {
+            [StatusPane::Left, StatusPane::Right]
+                .into_iter()
+                .filter_map(|pane| session.pane_slot(pane).get())
+                .map(|surface| surface.pane_token().to_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    crate::pane_lead::covers(core, &tokens)
 }
 
 /// Whether the grid hosts `session`'s split pane while it has no terminal yet: a hidden split's unfocused pane is
@@ -329,6 +349,7 @@ fn spawn(spec: &PaneSpec, context: &PaneContext, poster: &Poster) -> TerminalSur
     });
     connect_terminal(&terminal, spec.session, spec.token(), poster);
     connect_reports(&terminal, spec.session, spec.token(), poster);
+    crate::pane_lead::connect_takeover(&terminal, spec.session, spec.token(), poster);
     if spec.pane != StatusPane::Scratch {
         // a session pane spawns with the seed the core decides when it is ready, after its paced launch turn
         let (session, token, poster) = (spec.session, spec.token().to_owned(), poster.clone());
@@ -653,6 +674,84 @@ impl Deck {
     /// GTK no focus-enter).
     pub fn take_given_focus(&mut self) -> Vec<(Uuid, String)> {
         std::mem::take(&mut self.given_focus)
+    }
+
+    /// Puts a fresh terminal in place of the session pane `replacement` names (upstream's `replacePane`): the same
+    /// token, page position and visibility, the replacement's command over the pane's own environment, and the keyboard
+    /// when the replaced one had it. The replaced terminal goes with none of the pane's close paths: its client's exit
+    /// is claimed first. False when this deck has no such pane.
+    pub fn replace_pane(
+        &mut self,
+        core: &mut Core,
+        window: Uuid,
+        replacement: &PaneReplacement,
+        context: &PaneContext,
+        poster: &Poster,
+    ) -> bool {
+        let (session, token) = (replacement.session, replacement.token.as_str());
+        let Some(page) = self.pages.get_mut(&session) else {
+            return false;
+        };
+        let Some(old) = page.panes.terminal(token).cloned() else {
+            return false;
+        };
+        let Some(spec) = replacement_spec(core, window, session, token) else {
+            return false;
+        };
+        let mut surface_spec = spec.surface_spec(context);
+        surface_spec.command = Some(replacement.command.clone());
+        surface_spec.wait_after_command = false;
+        surface_spec.env = surface::merged_env(&surface_spec.env, &replacement.env);
+        surface_spec.live = true;
+        surface_spec.working_directory = replacement
+            .cwd
+            .as_ref()
+            .map(PathBuf::from)
+            .or_else(|| old.working_directory());
+        #[expect(clippy::cast_possible_truncation, reason = "a point size fits an f32")]
+        if let Some(size) = old.font_size() {
+            surface_spec.font_size = Some(size as f32);
+        }
+        let terminal = TerminalSurface::new(surface_spec);
+        terminal.set_owner(SurfaceOwner::Pane {
+            session,
+            token: token.to_owned(),
+        });
+        connect_terminal(&terminal, session, token, poster);
+        connect_reports(&terminal, session, token, poster);
+        crate::pane_lead::connect_takeover(&terminal, session, token, poster);
+        let had_focus = old.widget().has_focus();
+        old.claim_exit();
+        page.panes.replace(token, terminal.clone());
+        let installed = core
+            .library_mut()
+            .store_mut(window)
+            .and_then(|store| store.session_mut(session))
+            .and_then(|found| Some((found.pane_role_for_token(token)?, found)))
+            .map(|(role, found)| {
+                found
+                    .pane_slot_mut(role)
+                    .replace(Box::new(PaneSurface::new(terminal.clone(), token.to_owned())))
+            });
+        if let Some(Some(previous)) = installed {
+            previous.teardown();
+        }
+        old.teardown();
+        if had_focus {
+            terminal.widget().grab_focus();
+        }
+        true
+    }
+}
+
+/// The pane spec of the session pane carrying `token` in window `window`: what a replacement inherits.
+fn replacement_spec(core: &Core, window: Uuid, session: Uuid, token: &str) -> Option<PaneSpec> {
+    let store = core.library().store(window)?;
+    let found = store.session(session)?;
+    match found.pane_role_for_token(token)? {
+        StatusPane::Left => PaneSpec::primary(window, store, session),
+        StatusPane::Right => PaneSpec::split(window, store.workspace_for_session(session)?.id(), found),
+        StatusPane::Scratch => None,
     }
 }
 

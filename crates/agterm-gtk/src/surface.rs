@@ -51,6 +51,8 @@ pub struct SurfaceSpec {
     pub wait_after_command: bool,
     /// The point size the terminal starts at; `None` is the config's.
     pub font_size: Option<f32>,
+    /// The terminal attaches to a live-session daemon (a pane's fresh attach replacing a covered or restarted one).
+    pub live: bool,
 }
 
 /// Where the input method is inside a key event (ghostty's GTK runtime tracks the same: input methods differ in the
@@ -107,6 +109,19 @@ type FontSizeHandler = Box<dyn Fn(f64)>;
 
 /// How far apart two font sizes may be and still count as the same report (upstream's half-point tolerance).
 const FONT_REPORT_TOLERANCE: f64 = 0.5;
+
+/// `base` with every variable of `overlay` set over it: a replaced value keeps its place, a new one is appended.
+#[must_use]
+pub fn merged_env(base: &[(String, String)], overlay: &[(String, String)]) -> Vec<(String, String)> {
+    let mut merged = base.to_vec();
+    for (key, value) in overlay {
+        match merged.iter_mut().find(|(known, _)| known == key) {
+            Some(entry) => entry.1.clone_from(value),
+            None => merged.push((key.clone(), value.clone())),
+        }
+    }
+    merged
+}
 
 /// What a cell-size report does under the dashboard's font override (upstream's `reportFontSize`): whether the live
 /// `size` is reported as the pane's own, and the pending restore left. Nothing is reported while an override is on (its
@@ -182,6 +197,13 @@ struct Inner {
     /// Whose terminal this is (a session pane or a program overlay); `None` for the quick terminal, a HUD, an ask.
     owner: RefCell<Option<SurfaceOwner>>,
     launch: RefCell<Launch>,
+    /// The terminal is a client of its pane's live-session daemon (upstream's `backedByZmx`): from its spec, or from
+    /// the seed it spawned with.
+    live: Cell<bool>,
+    /// Another client leads the pane's daemon, so the terminal draws its grid and must not take input (upstream's
+    /// `leadCovered`): a key press asks to take the pane over instead.
+    lead_covered: Cell<bool>,
+    on_takeover: RefCell<Option<FocusHandler>>,
 }
 
 thread_local! {
@@ -248,6 +270,7 @@ pub struct TerminalSurface {
 impl TerminalSurface {
     #[must_use]
     pub fn new(spec: SurfaceSpec) -> Self {
+        let live = spec.live;
         let area = gtk::GLArea::builder()
             .allowed_apis(gdk::GLAPI::GL)
             .has_depth_buffer(false)
@@ -288,6 +311,9 @@ impl TerminalSurface {
             keeps_start_font_size: Cell::new(false),
             owner: RefCell::new(None),
             launch: RefCell::new(Launch::Open),
+            live: Cell::new(live),
+            lead_covered: Cell::new(false),
+            on_takeover: RefCell::new(None),
         });
         SURFACES.with(|surfaces| surfaces.borrow_mut().insert(inner.key, Rc::downgrade(&inner)));
         let surface = Self { inner, area };
@@ -589,6 +615,7 @@ impl TerminalSurface {
             if matches!(*launch, Launch::Seeded(_)) {
                 return;
             }
+            self.inner.live.set(seed.live);
             *launch = Launch::Seeded(seed);
         }
         if self.area.is_realized() {
@@ -632,12 +659,17 @@ impl TerminalSurface {
                 wait_after_command: spec.wait_after_command,
             },
         };
+        // a wrapped pane runs with its zmx configuration over the pane's own environment
+        let env = match &*launch {
+            Launch::Seeded(seed) => merged_env(&spec.env, &seed.env),
+            Launch::Open | Launch::Gated { .. } => spec.env.clone(),
+        };
         let options = SurfaceOptions {
             scale_factor: scale,
             working_directory: spec.working_directory.as_deref(),
             command: run.command,
             initial_input: run.initial_input,
-            env: &spec.env,
+            env: &env,
             wait_after_command: run.wait_after_command,
             font_size: spec.font_size,
             ..SurfaceOptions::default()
@@ -772,7 +804,12 @@ impl TerminalSurface {
     /// any other keeps the prompt, and its close arrives through the close callback.
     pub fn child_exited(&self) -> bool {
         let spec = &self.inner.spec;
-        if spec.command.is_none() || spec.wait_after_command {
+        // what actually ran: a seed's command (a live pane's attach) in place of the spec's
+        let (command, wait) = match &*self.inner.launch.borrow() {
+            Launch::Seeded(seed) => (seed.command.is_some(), seed.wait_after_command),
+            Launch::Open | Launch::Gated { .. } => (spec.command.is_some(), spec.wait_after_command),
+        };
+        if !command || wait {
             return false;
         }
         let weak = self.weak();
@@ -782,6 +819,36 @@ impl TerminalSurface {
             }
         });
         true
+    }
+
+    /// Whether the terminal is a client of its pane's live-session daemon.
+    #[must_use]
+    pub fn is_live(&self) -> bool {
+        self.inner.live.get()
+    }
+
+    /// The working directory the terminal was started in.
+    #[must_use]
+    pub fn working_directory(&self) -> Option<PathBuf> {
+        self.inner.spec.working_directory.clone()
+    }
+
+    /// Drops the exit handler unrun: the terminal is being replaced, and its client's exit must not close the pane its
+    /// replacement owns (upstream's `claimProcessExit`).
+    pub fn claim_exit(&self) {
+        self.inner.exit_handled.set(true);
+        self.inner.on_exit.borrow_mut().take();
+    }
+
+    /// Covers or uncovers the terminal for another client's lead: while covered a key press calls the takeover
+    /// handler instead of reaching the program.
+    pub fn set_lead_covered(&self, covered: bool) {
+        self.inner.lead_covered.set(covered);
+    }
+
+    /// Sets what a key press on the covered terminal does.
+    pub fn connect_takeover(&self, handler: impl Fn() + 'static) {
+        *self.inner.on_takeover.borrow_mut() = Some(Box::new(handler));
     }
 
     /// The process ended: run the exit handler once.
@@ -1195,6 +1262,17 @@ impl TerminalSurface {
         // before the input method: a release it swallows must still lift the key
         let action = self.inner.keys.borrow_mut().pressed.track(action, keycode);
         let key_event = event.downcast_ref::<gdk::KeyEvent>();
+        if self.inner.lead_covered.get() {
+            // a covered terminal draws another client's grid: a key press (a modifier alone is not one) takes the pane
+            // over in a fresh terminal, and nothing reaches this one
+            if action == KeyAction::Press
+                && key_event.is_some_and(|key| !key.is_modifier())
+                && let Some(handler) = self.inner.on_takeover.borrow().as_ref()
+            {
+                handler();
+            }
+            return true;
+        }
         if action != KeyAction::Release
             && let Some(key_event) = key_event
         {

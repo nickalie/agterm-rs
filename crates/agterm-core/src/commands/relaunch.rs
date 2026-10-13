@@ -20,11 +20,12 @@ use crate::command_restore::{DENYLIST_FILE, DENYLIST_STARTER, parse_denylist};
 use agterm_proto::ControlTree;
 
 use crate::command_restore::PaneForeground;
+use crate::commands::zmx::launch::{live_foreground_group, pane_paces, pane_seed};
 use crate::model::{AppStore, Session, StatusPane, SurfaceSlot, WindowLibrary};
 use crate::restore::capture::{CaptureKind, ForegroundReader, capture_foreground_commands};
 use crate::restore::mode::{RestoreLaunchDecision, captures_on_exit};
 use crate::restore::pacer::{DEFAULT_INTERVAL, SpawnPacer};
-use crate::restore::spawn_plan::{LaunchSeed, LaunchSeedPolicy, LaunchSpawnPlan, resolve_seed, should_pace};
+use crate::restore::spawn_plan::{LaunchSeed, LaunchSeedPolicy, LaunchSpawnPlan};
 
 /// How long an exit capture may read processes before the rest of the panes keep what they had (upstream's
 /// `exitCaptureBudget`).
@@ -80,20 +81,38 @@ impl fmt::Debug for RestoreRuntime {
 }
 
 impl RestoreRuntime {
-    fn policy(&self) -> LaunchSeedPolicy {
+    pub(crate) fn policy(&self) -> LaunchSeedPolicy {
         LaunchSeedPolicy {
             restore_enabled: self.decision.replays(),
             live_fell_back: self.decision.live_fell_back(),
             denylist: self.denylist.clone(),
+            ..LaunchSeedPolicy::default()
         }
     }
 
-    /// A reader over the frontend's process table; `None` until one is installed.
-    pub(crate) fn reader(&self) -> Option<ForegroundReader<'_>> {
-        self.table
-            .as_deref()
-            .map(|table| ForegroundReader::new(table, self.shell.as_deref()))
+    /// The frontend's process table; `None` until one is installed.
+    pub(crate) fn table(&self) -> Option<&dyn ProcessTable> {
+        self.table.as_deref()
     }
+
+    /// The user's `$SHELL` basename.
+    pub(crate) fn shell(&self) -> Option<&str> {
+        self.shell.as_deref()
+    }
+
+    /// The restore denylist read at launch.
+    pub(crate) fn denylist(&self) -> &HashSet<String> {
+        &self.denylist
+    }
+}
+
+/// A reader over `table` that reads a live pane's foreground through its daemon's shell.
+fn reader_with_live<'a>(
+    table: &'a dyn ProcessTable,
+    shell: Option<&'a str>,
+    live: &'a dyn Fn(&str) -> Option<i32>,
+) -> ForegroundReader<'a> {
+    ForegroundReader::new(table, shell).with_live(live)
 }
 
 impl Core {
@@ -156,11 +175,13 @@ impl Core {
     }
 
     fn answer_pane_spawn(&mut self, session: Uuid, token: &str, now: Instant) -> Option<LaunchSeed> {
-        let policy = self.restore.policy();
-        let Some((role, key, paces)) = self.find_session(session).and_then(|session| {
+        let policy = self.seed_policy();
+        let Some((role, key, disposed, paces)) = self.find_session(session).and_then(|session| {
             let role = session.pane_role_for_token(token)?;
             let key = pane_key(session, role)?;
-            Some((role, key, should_pace(session, role, &policy)))
+            let disposed = self.pane_disposition(Some(key), session.remote_host().is_none());
+            let paces = pane_paces(session, role, &policy, &disposed);
+            Some((role, key, disposed, paces))
         }) else {
             // a session a pending close holds spawns on its undo, as upstream's remounted view would
             if let Some(key) = self.pending_close_pane_key(session, token) {
@@ -174,8 +195,9 @@ impl Core {
         } else if !self.restore.pacer.request(key, now) {
             return None;
         }
-        let session = self.find_session_mut(session)?;
-        Some(resolve_seed(session, role, &policy))
+        let window = self.library.window_holding_session(session)?;
+        let session = self.library.store_mut(window)?.session_mut(session)?;
+        Some(pane_seed(&mut self.zmx, session, role, &policy, disposed))
     }
 
     /// Lets the queued panes of `session` spawn now (upstream's `expediteSpawn`): the session is on screen, or a command
@@ -204,15 +226,25 @@ impl Core {
     /// The panes granted since the last call, with their seeds; a granted pane whose session or slot is gone is
     /// dropped.
     pub fn take_spawn_grants(&mut self) -> Vec<PaneSpawn> {
-        let policy = self.restore.policy();
+        let policy = self.seed_policy();
         let keys = std::mem::take(&mut self.restore.grants);
         let mut spawns = Vec::new();
         for key in keys {
-            let Some(session) = self.find_session_by_pane_mut(key) else {
+            let Some(id) = self.find_session_by_pane(key) else {
                 // a pane a pending close holds gets its grant back on the undo
                 if pane_hold(self.library(), key) == PaneHold::Held {
                     self.restore.held.insert(key);
                 }
+                continue;
+            };
+            let Some(local) = self.find_session(id).map(|session| session.remote_host().is_none()) else {
+                continue;
+            };
+            let disposed = self.pane_disposition(Some(key), local);
+            let Some(window) = self.library.window_holding_session(id) else {
+                continue;
+            };
+            let Some(session) = self.library.store_mut(window).and_then(|store| store.session_mut(id)) else {
                 continue;
             };
             let role = if session.pane_identity == key {
@@ -228,9 +260,9 @@ impl Core {
                 continue;
             };
             spawns.push(PaneSpawn {
-                session: session.id(),
+                session: id,
                 token,
-                seed: resolve_seed(session, role, &policy),
+                seed: pane_seed(&mut self.zmx, session, role, &policy, disposed),
             });
         }
         spawns
@@ -311,23 +343,42 @@ impl Core {
     /// The exit capture over windows `ids`.
     pub(crate) fn capture_windows_on_exit(&mut self, ids: &[Uuid]) {
         let capturing = captures_on_exit(self.settings().effective_restore_mode());
+        if !capturing {
+            for id in ids {
+                if let Some(store) = self.library.store_mut(*id) {
+                    store
+                        .sessions_mut()
+                        .for_each(Session::clear_captured_foreground_commands);
+                }
+            }
+            return;
+        }
         let deadline = Instant::now() + EXIT_CAPTURE_BUDGET;
-        let reader = self.restore.reader();
+        let count = self.capture_windows(ids, CaptureKind::Exit, &|| Instant::now() < deadline);
+        tracing::debug!(count, "exit capture");
+    }
+
+    /// Captures every pane of windows `ids` into its slot (see [`capture_foreground_commands`]), a live pane through
+    /// its daemon's shell; how many slots a read filled. Nothing without a process table.
+    pub(crate) fn capture_windows(
+        &mut self,
+        ids: &[Uuid],
+        kind: CaptureKind,
+        time_remaining: &dyn Fn() -> bool,
+    ) -> usize {
+        let (zmx, restore, library) = (&self.zmx, &self.restore, &mut self.library);
+        let Some(table) = restore.table() else {
+            return 0;
+        };
+        let live = |token: &str| live_foreground_group(zmx, table, token);
+        let reader = reader_with_live(table, restore.shell(), &live);
+        let mut captured = 0;
         for id in ids {
-            let Some(store) = self.library.store_mut(*id) else {
-                continue;
-            };
-            if !capturing {
-                store
-                    .sessions_mut()
-                    .for_each(Session::clear_captured_foreground_commands);
-            } else if let Some(reader) = &reader {
-                let time_remaining = || Instant::now() < deadline;
-                let count =
-                    capture_foreground_commands(store.sessions_mut(), reader, CaptureKind::Exit, &time_remaining);
-                tracing::debug!(window = %id, count, "exit capture");
+            if let Some(store) = library.store_mut(*id) {
+                captured += capture_foreground_commands(store.sessions_mut(), &reader, kind, time_remaining);
             }
         }
+        captured
     }
 
     /// What a window close does to the captures before the window is written (upstream's `willClose` arms): the last
@@ -351,9 +402,11 @@ impl Core {
     /// `splitPaneForeground` closures): each pane's program as `foreground`, or the recognized shell holding it as
     /// `foregroundShell`; neither when it cannot be read.
     pub(crate) fn project_foreground(&self, store: &AppStore, tree: &mut ControlTree) {
-        let Some(reader) = self.restore.reader() else {
+        let Some(table) = self.restore.table() else {
             return;
         };
+        let live = |token: &str| live_foreground_group(&self.zmx, table, token);
+        let reader = reader_with_live(table, self.restore.shell(), &live);
         let read = |slot: &SurfaceSlot| slot.get().and_then(|surface| reader.running_in(surface));
         let nodes = tree
             .workspaces
@@ -374,11 +427,6 @@ impl Core {
         self.library().store(window)?.session(id)
     }
 
-    fn find_session_mut(&mut self, id: Uuid) -> Option<&mut Session> {
-        let window = self.library().window_holding_session(id)?;
-        self.library_mut().store_mut(window)?.session_mut(id)
-    }
-
     /// The pacer key of `session`'s pane carrying `token`, when a pending close of an open window holds the session.
     fn pending_close_pane_key(&self, session: Uuid, token: &str) -> Option<Uuid> {
         let library = self.library();
@@ -389,14 +437,14 @@ impl Core {
         pane_key(held, held.pane_role_for_token(token)?)
     }
 
-    fn find_session_by_pane_mut(&mut self, key: Uuid) -> Option<&mut Session> {
-        let id = self
-            .library()
-            .all_open_sessions()
-            .into_iter()
-            .find(|session| session.pane_identity == key || session.split_pane_identity == Some(key))?
-            .id();
-        self.find_session_mut(id)
+    fn find_session_by_pane(&self, key: Uuid) -> Option<Uuid> {
+        Some(
+            self.library()
+                .all_open_sessions()
+                .into_iter()
+                .find(|session| session.pane_identity == key || session.split_pane_identity == Some(key))?
+                .id(),
+        )
     }
 }
 

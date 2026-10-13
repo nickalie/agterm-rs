@@ -166,6 +166,8 @@ pub struct Core {
     pub(crate) debug_appearance: commands::debug::DebugAppearance,
     /// The launch's restore decision, denylist, process table and spawn pacing ([`commands::relaunch`]).
     pub(crate) restore: commands::relaunch::RestoreRuntime,
+    /// The live-session host and what the core keeps about its daemons ([`commands::zmx`]).
+    pub(crate) zmx: commands::zmx::ZmxRuntime,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -238,6 +240,7 @@ impl Core {
             config_reloads: commands::config::ConfigReloads::default(),
             debug_appearance: commands::debug::DebugAppearance::default(),
             restore: commands::relaunch::RestoreRuntime::default(),
+            zmx: commands::zmx::ZmxRuntime::default(),
         }
     }
 
@@ -501,13 +504,24 @@ impl Core {
         self.drop_stranded_pane_overlays();
         self.sync_modals();
         self.sync_pages();
-        let (events, debounced, pending_closes) = if let Some(persistence) = self.persistence.as_mut() {
+        let (events, debounced, pending_closes, finalized) = if let Some(persistence) = self.persistence.as_mut() {
             let commit = persistence.commit(&mut self.library);
-            (commit.events, commit.debounced, commit.pending_closes)
+            (
+                commit.events,
+                commit.debounced,
+                commit.pending_closes,
+                commit.finalized_panes,
+            )
         } else {
             let effects = self.library.drain_effects();
-            (effects.events, Vec::new(), effects.pending_closes)
+            (
+                effects.events,
+                Vec::new(),
+                effects.pending_closes,
+                effects.finalized_panes,
+            )
         };
+        self.finalize_panes(finalized);
         let tree_changed = self.events.record(events);
         self.run_hooks();
         CommitTimers {
@@ -601,6 +615,7 @@ impl Core {
             quick_visible: commands::quick::visible(self),
         };
         let mut tree = control_tree(store, &context);
+        self.project_live(store, &mut tree);
         self.project_foreground(store, &mut tree);
         tree.zoomed_surface = if commands::quick::zoomed(self) {
             Some("quick".to_owned())
@@ -639,7 +654,6 @@ impl Core {
                 Some(result) => result_of(&result),
                 None => Ok(Response::success()),
             },
-            Command::Session(SessionCmd::Restart) => result_of(&commands::restart::dispatch(self, request)?),
             Command::Session(cmd @ (SessionCmd::HudOpen | SessionCmd::HudUpdate | SessionCmd::HudClose)) => {
                 result_of(&commands::hud::dispatch(self, cmd, request)?)
             }
@@ -698,6 +712,9 @@ impl Core {
             },
             Command::Browser(BrowserCmd::Links) => result_of(&commands::browser::links(self, request)?),
             Command::Debug(DebugCmd::Appearance) => result_of(&commands::debug::appearance(self, request)?),
+            Command::Zmx(cmd) if commands::zmx::answers(cmd) => {
+                result_of(&commands::zmx::dispatch(self, cmd, request)?)
+            }
             // `browser.clear` and `config.reload` start through `deferred`
             cmd @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Zmx(_)) => {
                 Err(ControlError::NotSupported(cmd))
@@ -767,7 +784,7 @@ mod tests {
     #[test]
     fn unimplemented_commands_are_refused_by_name() {
         let mut core = core();
-        for cmd in [Command::Zmx(ZmxCmd::List), Command::Zmx(ZmxCmd::Prune)] {
+        for cmd in [Command::Zmx(ZmxCmd::Tree), Command::Zmx(ZmxCmd::Attach)] {
             let response = core.dispatch(&Request::new(cmd));
             assert!(!response.ok);
             assert_eq!(
