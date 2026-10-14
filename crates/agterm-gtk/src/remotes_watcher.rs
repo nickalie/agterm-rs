@@ -118,7 +118,9 @@ fn concerns(interest: &[PathBuf], changed: &Path) -> bool {
 }
 
 /// The file, its nearest existing directory and, for a symlink, the nearest existing directory of each target on the
-/// way to the real file (upstream's `watchedPaths`, whose descriptor on the file follows the whole chain).
+/// way to the real file. Upstream's `watchedPaths` adds only the first target's directory and relies on its descriptor
+/// on the file, which follows the whole chain; gio's file monitor does not follow one, so each hop's directory is
+/// watched here.
 fn watched_paths(path: &Path) -> Vec<PathBuf> {
     let mut paths = vec![path.to_path_buf(), nearest_existing_directory(path)];
     for target in symlink_targets(path) {
