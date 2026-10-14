@@ -472,39 +472,66 @@ struct Hover {
     panel: Option<TerminalSurface>,
 }
 
+/// One page's hover answering a modifier change: the modifiers held once it lands.
+type Refresh = dyn Fn(gdk::ModifierType);
+
+thread_local! {
+    /// The page the pointer is over, which every modifier press or release in any window is reported to, wherever the
+    /// keyboard is (upstream's app-wide `.flagsChanged` monitor).
+    static HOVERED_PAGE: RefCell<Option<std::rc::Weak<Refresh>>> = const { RefCell::new(None) };
+}
+
 /// Reports the pointer to the panel under it while Ctrl alone is held, on a move and on a modifier press or release
-/// with the pointer still, and takes it away when either stops being true (upstream's `HudLinkClick.hover`).
-fn connect_hover(stack: &gtk::Widget, layer: impl Fn() -> Option<LayerView> + Clone + 'static) {
+/// with the pointer still ([`connect_link_modifiers`]), and takes it away when either stops being true (upstream's
+/// `HudLinkClick.hover`).
+fn connect_hover(stack: &gtk::Widget, layer: impl Fn() -> Option<LayerView> + 'static) {
     let hover: Rc<RefCell<Hover>> = Rc::default();
+    let refresh: Rc<Refresh> = {
+        let (hover, page) = (Rc::clone(&hover), stack.downgrade());
+        Rc::new(move |state| update_hover(&page, layer().as_ref(), &hover, state))
+    };
     let motion = gtk::EventControllerMotion::new();
     motion.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let (find, tracked, page) = (layer.clone(), Rc::clone(&hover), stack.downgrade());
+    let (tracked, refreshing) = (Rc::clone(&hover), Rc::clone(&refresh));
     motion.connect_motion(move |controller, x, y| {
         tracked.borrow_mut().point = Some((x, y));
-        update_hover(&page, find().as_ref(), &tracked, controller.current_event_state());
+        HOVERED_PAGE.set(Some(Rc::downgrade(&refreshing)));
+        refreshing(controller.current_event_state());
     });
-    let (find, tracked, page) = (layer.clone(), Rc::clone(&hover), stack.downgrade());
     motion.connect_leave(move |_| {
-        tracked.borrow_mut().point = None;
-        update_hover(&page, find().as_ref(), &tracked, gdk::ModifierType::empty());
+        hover.borrow_mut().point = None;
+        let this = Rc::downgrade(&refresh);
+        HOVERED_PAGE.with_borrow_mut(|page| {
+            if page.as_ref().is_some_and(|page| page.ptr_eq(&this)) {
+                *page = None;
+            }
+        });
+        refresh(gdk::ModifierType::empty());
     });
     stack.add_controller(motion);
+}
+
+/// Tells the page under the pointer of every modifier press and release `window` gets, so a Ctrl pressed or released
+/// with the pointer still raises or drops a panel's link whatever holds the keyboard: the search bar, the sidebar, or
+/// another window. Install it ahead of every other key monitor on `window`; it consumes nothing.
+pub fn connect_link_modifiers(window: &impl IsA<gtk::Window>) {
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let (find, tracked, page) = (layer.clone(), Rc::clone(&hover), stack.downgrade());
-    keys.connect_key_pressed(move |_, key, _, state| {
-        if !modifier_of(key).is_empty() {
-            update_hover(&page, find().as_ref(), &tracked, state_after(state, key, true));
-        }
+    keys.connect_key_pressed(|_, key, _, state| {
+        modifier_changed(key, state, true);
         glib::Propagation::Proceed
     });
-    let page = stack.downgrade();
-    keys.connect_key_released(move |_, key, _, state| {
-        if !modifier_of(key).is_empty() {
-            update_hover(&page, layer().as_ref(), &hover, state_after(state, key, false));
-        }
-    });
-    stack.add_controller(keys);
+    keys.connect_key_released(|_, key, _, state| modifier_changed(key, state, false));
+    window.as_ref().add_controller(keys);
+}
+
+fn modifier_changed(key: gdk::Key, state: gdk::ModifierType, pressed: bool) {
+    if modifier_of(key).is_empty() {
+        return;
+    }
+    if let Some(refresh) = HOVERED_PAGE.with_borrow(|page| page.as_ref().and_then(std::rc::Weak::upgrade)) {
+        refresh(state_after(state, key, pressed));
+    }
 }
 
 /// The modifier `key` holds, empty for any other key.
@@ -878,6 +905,56 @@ mod tests {
             assert!(layer.widget().has_css_class(LAYER_CLASS) && layer.widget().has_css_class(FRAMELESS_CLASS));
             layer.set_visible(true, true);
             assert!(layer.widget().has_css_class(LAYER_CLASS) && !layer.widget().has_css_class(FRAMELESS_CLASS));
+        });
+    }
+
+    /// A loop that counts what is posted to it.
+    #[derive(Default)]
+    struct CountingLoop(std::sync::atomic::AtomicUsize);
+
+    impl CountingLoop {
+        fn posted(&self) -> usize {
+            self.0.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl agterm_host::MainLoop<AppState> for CountingLoop {
+        fn post(&self, _: agterm_host::MainTask<AppState>) -> Result<(), agterm_host::MainLoopClosed> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn post_after(
+            &self,
+            _: std::time::Duration,
+            task: agterm_host::MainTask<AppState>,
+        ) -> Result<(), agterm_host::MainLoopClosed> {
+            self.post(task)
+        }
+    }
+
+    #[test]
+    fn a_changed_cell_on_the_live_panel_posts_its_remeasure() {
+        crate::gtk_test::on_gtk_thread(|| {
+            let main_loop = std::sync::Arc::new(CountingLoop::default());
+            let shared: std::sync::Arc<dyn agterm_host::MainLoop<AppState>> = main_loop.clone();
+            let poster: Poster = std::sync::Arc::downgrade(&shared);
+            let panel = TerminalSurface::new(crate::surface::SurfaceSpec::default());
+            connect_panel(&panel, Uuid::new_v4(), 1, &poster);
+            assert_eq!(main_loop.posted(), 0);
+
+            panel.cell_size_changed();
+            let context = glib::MainContext::default();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while main_loop.posted() == 0 && std::time::Instant::now() < deadline {
+                context.iteration(false);
+            }
+
+            assert_eq!(
+                main_loop.posted(),
+                1,
+                "the cell change hops to the main loop once, to remeasure the HUD"
+            );
         });
     }
 

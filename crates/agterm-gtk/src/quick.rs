@@ -150,6 +150,8 @@ impl Panel {
         }
         connect_terminal(&terminal, poster);
         connect_window(&window, &holds_key, poster);
+        // a Ctrl released here still drops a HUD link hovered in another window
+        crate::hud::connect_link_modifiers(&window);
         crate::keymap_dispatch::install(&window, crate::keymap_dispatch::KeyOrigin::Quick);
         Self {
             window,

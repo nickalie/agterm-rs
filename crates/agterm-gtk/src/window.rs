@@ -198,6 +198,8 @@ impl WindowUi {
             .content(&toolbar)
             .build();
         window.insert_action_group("menu", Some(menu.group()));
+        // ahead of every key monitor: a HUD link hears each modifier change, and consumes none
+        crate::hud::connect_link_modifiers(&window);
         // ahead of the keymap's monitor: Ctrl+Tab is the switcher's
         switcher.install(&window);
         crate::keymap_dispatch::install(&window, crate::keymap_dispatch::KeyOrigin::Window(window_id));
