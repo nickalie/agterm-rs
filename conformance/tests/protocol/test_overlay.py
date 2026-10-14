@@ -470,6 +470,103 @@ def test_url_page_reads_back_its_address(ctl, served_page, browse):
     _closed(ctl, sid)
 
 
+def _routes(routes):
+    """A handler serving `routes`, path -> (status, headers, body), for one site on 127.0.0.1."""
+
+    class Site(BaseHTTPRequestHandler):
+        def do_GET(self):
+            status, headers, body = routes.get(self.path, (404, {}, b""))
+            self.send_response(status)
+            for name, value in {"Content-Type": "text/html; charset=utf-8", **headers}.items():
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    return Site
+
+
+@pytest.fixture
+def closing_site():
+    """A page on 127.0.0.1 whose script closes its window as it loads."""
+    body = b"<!doctype html><title>Closing Page</title><body><script>window.close()</script></body>"
+    with serve(_routes({"/": (200, {}, body)})) as server:
+        yield f"http://127.0.0.1:{server.server_port}/"
+
+
+def _gone(sid):
+    def gone(tree):
+        node = find_session(tree, sid)
+        assert node["overlay"] is False, node.get("htmlOverlays")
+        return True
+
+    gone.__qualname__ = "the page's overlay closed"
+    return gone
+
+
+@pytest.mark.covers("session.overlay.open", "session.overlay.result", "field:result.pageOutcome")
+def test_a_script_page_closing_its_window_is_dismissed(ctl, closing_site):
+    sid = _new(ctl)
+    page_id = assert_ok(ctl.request("session.overlay.open", sid, url=closing_site, javascript=True))["pageID"]
+    node = find_session(ctl.wait_tree(_gone(sid)), sid)
+    assert_absent(node, "htmlOverlays")
+    assert _outcome(ctl, page_id) == {"pageID": page_id, "outcome": "dismissed"}
+
+
+@pytest.mark.covers("session.overlay.open", "session.overlay.result", "field:result.pageOutcome")
+def test_a_page_without_script_cannot_close_its_window(ctl, closing_site):
+    sid = _new(ctl)
+    page_id = assert_ok(ctl.request("session.overlay.open", sid, url=closing_site))["pageID"]
+    _loaded(ctl, sid, "Closing Page")
+    # a reload is a second whole load: a close the first one asked for has landed by the time it ends
+    assert_ok(ctl.request("session.overlay.reload", sid))
+    node = _loaded(ctl, sid, "Closing Page")
+    assert node["overlay"] is True
+    assert node["htmlOverlays"][0]["id"] == page_id
+    assert _outcome(ctl, page_id) == {"pageID": page_id, "outcome": "pending"}
+    _closed(ctl, sid)
+
+
+@pytest.fixture
+def redirecting_sites():
+    """Two sites on 127.0.0.1: the first one's `/away` redirects to the second one's root."""
+    second_body = b"<!doctype html><title>Second Site</title><body><p>second</p></body>"
+    with serve(_routes({"/": (200, {}, second_body)})) as second:
+        target = f"http://127.0.0.1:{second.server_port}/"
+        with serve(_routes({"/away": (302, {"Location": target}, b"")})) as first:
+            yield f"http://127.0.0.1:{first.server_port}/away", target
+
+
+@pytest.mark.covers("session.overlay.open", "field:tree.session.htmlOverlays")
+@pytest.mark.parametrize("browse", [False, True], ids=["pinned", "browse"])
+def test_url_page_follows_a_cross_origin_redirect_only_when_browsing(ctl, redirecting_sites, browse):
+    away, target = redirecting_sites
+    sid = _new(ctl)
+    result = assert_ok(
+        ctl.request("session.overlay.open", sid, url=away, **({"browse": True} if browse else {}))
+    )
+    if browse:
+        (page,) = _loaded(ctl, sid, "Second Site")["htmlOverlays"]
+        assert_subset(page, {"id": result["pageID"], "url": away, "browse": True, "page": target})
+        assert_absent(page, "error")
+    else:
+
+        def failed(tree):
+            (page,) = find_session(tree, sid)["htmlOverlays"]
+            assert page["state"] == "failed", page
+            return True
+
+        failed.__qualname__ = "the redirect refused"
+        (page,) = find_session(ctl.wait_tree(failed), sid)["htmlOverlays"]
+        assert_subset(
+            page, {"id": result["pageID"], "url": away, "browse": False, "error": f"navigation blocked: {target}"}
+        )
+    _closed(ctl, sid)
+
+
 @pytest.mark.covers("session.overlay.result")
 @pytest.mark.parametrize(
     ("page", "error"),
@@ -533,6 +630,11 @@ URL = "http://127.0.0.1:9/page.html"
         ),
         pytest.param(
             {"url": URL, "chromeless": True}, "session.overlay.open: --chromeless requires --html", id="chromeless-url"
+        ),
+        pytest.param(
+            {"url": URL, "chromeless": True, "browse": True},
+            "session.overlay.open: --chromeless requires --html",
+            id="chromeless-browse-url",
         ),
         pytest.param(
             {"html": FILE, "chromeless": True, "navigation": True},

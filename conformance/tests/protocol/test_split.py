@@ -281,6 +281,33 @@ def test_zoom_one_surface_and_back(ctl):
             assert_absent(tree, "zoomedSurface")
 
 
+@pytest.mark.covers("surface.zoom", "session.overlay.open")
+def test_zoom_the_pane_under_a_running_overlay(ctl):
+    sid = _mounted(ctl)
+    assert assert_ok(ctl.request("session.overlay.open", sid, command="printf 'under-zoom\\n'; exec cat"))["id"] == sid
+
+    def showing(response):
+        assert response.ok, response.error
+        return "under-zoom" in response.result["text"]
+
+    showing.__qualname__ = "the overlay's marker"
+    ctl.wait_response("session.overlay.text", sid, showing)
+    left = f"surface:{sid}:left"
+    assert assert_ok(ctl.request("surface.zoom", left, mode="show"))["id"] == left
+    tree = ctl.tree()["tree"]
+    assert tree["zoomedSurface"] == left
+    # the overlay keeps running under the zoom
+    node = find_session(tree, sid)
+    assert node["overlay"] is True and "overlay" in {surface["kind"] for surface in node["surfaces"]}
+    ctl.wait_response("session.overlay.text", sid, showing)
+    assert_ok(ctl.request("surface.zoom", mode="hide"))
+    tree = ctl.tree()["tree"]
+    assert_absent(tree, "zoomedSurface")
+    assert find_session(tree, sid)["overlay"] is True
+    ctl.wait_response("session.overlay.text", sid, showing)
+    assert assert_ok(ctl.request("session.overlay.close", sid))["id"] == sid
+
+
 @pytest.mark.covers("surface.zoom")
 @pytest.mark.parametrize("target", [UNKNOWN, f"surface:{UNKNOWN}:left"])
 def test_zoom_rejects_an_unknown_surface(ctl, target):

@@ -292,9 +292,12 @@ tests/protocol/test_notify.py::test_notify_raises_the_badge_and_emits_the_event
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args0-notify requires a body]
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args1-notify requires a body]
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[zzz-args2-no such session: zzz]
+tests/protocol/test_overlay.py::test_a_page_without_script_cannot_close_its_window
+tests/protocol/test_overlay.py::test_a_script_page_closing_its_window_is_dismissed
 tests/protocol/test_overlay.py::test_html_page_occupies_the_slot
 tests/protocol/test_overlay.py::test_open_refusals[browse-html]
 tests/protocol/test_overlay.py::test_open_refusals[browse-program]
+tests/protocol/test_overlay.py::test_open_refusals[chromeless-browse-url]
 tests/protocol/test_overlay.py::test_open_refusals[chromeless-navigation]
 tests/protocol/test_overlay.py::test_open_refusals[chromeless-program]
 tests/protocol/test_overlay.py::test_open_refusals[chromeless-url]
@@ -353,6 +356,8 @@ tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.resu
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.submit-args5]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.text-args4]
 tests/protocol/test_overlay.py::test_unsplit_session_takes_a_left_pane_overlay
+tests/protocol/test_overlay.py::test_url_page_follows_a_cross_origin_redirect_only_when_browsing[browse]
+tests/protocol/test_overlay.py::test_url_page_follows_a_cross_origin_redirect_only_when_browsing[pinned]
 tests/protocol/test_overlay.py::test_url_page_reads_back_its_address[browse]
 tests/protocol/test_overlay.py::test_url_page_reads_back_its_address[pinned]
 tests/protocol/test_restore.py::test_a_held_command_moves_to_the_split_with_a_swap
@@ -526,6 +531,7 @@ tests/protocol/test_split.py::test_zoom_one_surface_and_back
 tests/protocol/test_split.py::test_zoom_rejects_an_unknown_mode
 tests/protocol/test_split.py::test_zoom_rejects_an_unknown_surface[surface:zzz:left]
 tests/protocol/test_split.py::test_zoom_rejects_an_unknown_surface[zzz]
+tests/protocol/test_split.py::test_zoom_the_pane_under_a_running_overlay
 tests/protocol/test_surface.py::test_cursor_reads_a_program_overlay_but_not_a_hud
 tests/protocol/test_surface.py::test_cursor_reads_each_pane_by_surface_id_or_pane_id
 tests/protocol/test_surface.py::test_cursor_reads_the_quick_terminal_only_while_shown
