@@ -27,6 +27,9 @@ use crate::pane_env::uuid_string;
 
 /// A page that passed validation in a build with no web views (the `html` feature off).
 pub(crate) const PAGES_UNAVAILABLE: &str = "session.overlay.open: html overlays are not available in this build";
+/// A page that passed validation where the build's web engine cannot run (the host's
+/// [`HtmlHost::web_views_unavailable`]), before the host's reason.
+pub(crate) const PAGES_UNAVAILABLE_HERE: &str = "session.overlay.open: html overlays are not available here";
 /// Upstream's `OverlayHtmlError.noResult`/`noRead`: a page runs no program, so there is no status and no text.
 pub(crate) const PAGE_NO_RESULT: &str = "no overlay result: the slot holds an html page";
 pub(crate) const PAGE_NO_READ: &str = "no overlay to read: the slot holds an html page";
@@ -108,6 +111,9 @@ pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, 
     let Some(host) = core.pages.host.as_ref() else {
         return Err(ControlError::rejected(PAGES_UNAVAILABLE));
     };
+    if let Some(reason) = host.web_views_unavailable() {
+        return Err(ControlError::rejected(format!("{PAGES_UNAVAILABLE_HERE}: {reason}")));
+    }
     if opening.flags.persistent
         && let Some(failure) = host.persistent_store_failure()
     {

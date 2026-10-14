@@ -64,6 +64,10 @@ fn page(id: Uuid) -> Option<Rc<Page>> {
 struct PageHost;
 
 impl HtmlHost for PageHost {
+    fn web_views_unavailable(&self) -> Option<String> {
+        super::sandbox::failure()
+    }
+
     fn persistent_store_failure(&self) -> Option<String> {
         persistent_store_failure()
     }

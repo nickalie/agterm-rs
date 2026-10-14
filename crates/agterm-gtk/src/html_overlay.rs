@@ -11,7 +11,8 @@
 //! brings them up to date after a config reload or theme change.
 //!
 //! The registry is the core's [`agterm_core::html::HtmlHost`] ([`install`]). Without the `html` cargo feature none is
-//! installed, so the core refuses every page and nothing here mounts.
+//! installed, so the core refuses every page and nothing here mounts. Where `WebKit`'s sandbox cannot start, which
+//! would end the app at the first web view, the host refuses every page instead (`sandbox`).
 
 #[cfg(feature = "html")]
 mod files;
@@ -23,6 +24,8 @@ mod panel;
 mod policy;
 #[cfg(feature = "html")]
 mod registry;
+#[cfg(feature = "html")]
+mod sandbox;
 
 #[cfg(all(test, feature = "html"))]
 pub(crate) use registry::on_screen;

@@ -22,12 +22,17 @@ struct HostLog {
     navigations: Vec<(Uuid, HtmlNavigation)>,
     navigate_error: Option<String>,
     store_failure: Option<String>,
+    unavailable: Option<String>,
 }
 
 /// The frontend's web views, faked: it records navigations and answers what the test set.
 struct FakeHost(Rc<RefCell<HostLog>>);
 
 impl HtmlHost for FakeHost {
+    fn web_views_unavailable(&self) -> Option<String> {
+        self.0.borrow().unavailable.clone()
+    }
+
     fn persistent_store_failure(&self) -> Option<String> {
         self.0.borrow().store_failure.clone()
     }
@@ -311,6 +316,30 @@ fn a_refused_open_registers_nothing() {
         failure("session.overlay.open: persistent browser storage is not available")
     );
     assert_eq!(node(&mut fixture, other)["overlay"], json!(false));
+}
+
+#[test]
+fn a_host_whose_web_views_cannot_run_refuses_every_page_and_registers_nothing() {
+    let (mut fixture, log) = fixture_with_host(1);
+    let id = fixture.sessions[0];
+    log.borrow_mut().unavailable = Some("the web engine's sandbox cannot start (bwrap: no permission)".to_owned());
+    assert_eq!(
+        open_page(&mut fixture, id, |_| {}),
+        failure(
+            "session.overlay.open: html overlays are not available here: the web engine's sandbox cannot start \
+             (bwrap: no permission)"
+        )
+    );
+    assert_eq!(
+        open_page(&mut fixture, id, |a| a.html = Some("rel.html".into())),
+        failure("session.overlay.open: html file must be an absolute path"),
+        "validation still answers first"
+    );
+    assert_eq!(node(&mut fixture, id)["overlay"], json!(false));
+    let _ = fixture.core.commit();
+    assert!(fixture.core.take_released_pages().is_empty());
+    log.borrow_mut().unavailable = None;
+    let _ = page_id(&open_page(&mut fixture, id, |_| {}));
 }
 
 #[test]

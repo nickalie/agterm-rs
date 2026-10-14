@@ -336,6 +336,13 @@ fn last_path_component(path: &str) -> String {
 /// The frontend's web views, as the dispatcher reaches them (upstream's `HtmlOverlayRegistry` calls in
 /// `ControlServer+SessionActions.swift`). A build without one refuses pages.
 pub trait HtmlHost {
+    /// Why no web view can run here, `None` when one can; asked before any page is accepted, so a web engine that
+    /// cannot start is refused to the caller rather than met when the page mounts. Upstream has no such case: its web
+    /// views always run.
+    fn web_views_unavailable(&self) -> Option<String> {
+        None
+    }
+
     /// Why a persistent page cannot get the saved browser store, `None` when it can (upstream's
     /// `persistentStoreFailure`); asked before a persistent page is accepted, so the refusal reaches the caller.
     fn persistent_store_failure(&self) -> Option<String>;

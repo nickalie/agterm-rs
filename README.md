@@ -38,7 +38,10 @@ Run-time dependencies of every `agterm` binary:
 
 - GTK 4, libadwaita;
 - WebKitGTK 6.0, linked under `agterm-gtk`'s default `html` feature (HTML overlays). Without the feature
-  (`--no-default-features`) the app installs no page host and refuses every page;
+  (`--no-default-features`) the app installs no page host and refuses every page. WebKit runs its web process in a
+  bubblewrap sandbox, which needs unprivileged user namespaces; where `bwrap` cannot create one (Ubuntu 24.04's
+  AppArmor restriction, `kernel.apparmor_restrict_unprivileged_userns=1`, without a profile granting the app
+  `userns`) WebKit would abort the app, so it refuses every page with bubblewrap's error instead;
 - `libgtk4-layer-shell.so.0`, the quick terminal's layer-shell panel. It is linked unconditionally, since it must load
   before libwayland-client; on a compositor without layer-shell the quick terminal falls back to a window;
 - `libghostty.so` and, for Live sessions, `zmx`: both come from the vendored prefixes and are staged next to the
