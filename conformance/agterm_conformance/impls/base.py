@@ -999,21 +999,28 @@ def _terminate_app(instance: Instance) -> str | None:
         pass
     snapshot = thread_snapshot(process.pid)
     process.send_signal(signal.SIGABRT)
+    outlived_kill = ""
     try:
         process.wait(timeout=ABORT_GRACE)
     except subprocess.TimeoutExpired:
         process.kill()
-        process.wait(timeout=STOP_TIMEOUT)
-    # Appended once the app is gone: a first launch's stdout is not opened for appending, so a later write of the app
-    # would land on top of the snapshot.
+        try:
+            process.wait(timeout=STOP_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            # Uninterruptible sleep, a driver call say: the snapshot taken before SIGABRT names where.
+            outlived_kill = f" nor within {STOP_TIMEOUT}s of SIGKILL"
+    # Appended once the app is gone (or stuck in the kernel): a first launch's stdout is not opened for appending, so a
+    # later write of the app would land on top of the snapshot.
     try:
         with open(instance.log, "a", errors="replace") as sink:
             sink.write(snapshot)
-    except OSError:
-        pass
+        written, unwritten = f"thread snapshot in {instance.log}", ""
+    except OSError as error:
+        # The snapshot is what names the stalled step: carried in the message when the log takes no write.
+        written, unwritten = f"thread snapshot not written to {instance.log} ({error}), below", f"\n{snapshot}"
     return (
-        f"pid {process.pid} did not exit within {STOP_TIMEOUT}s of SIGTERM; thread snapshot in {instance.log}; "
-        f"core requested ({_core_hint(process.pid)})"
+        f"pid {process.pid} did not exit within {STOP_TIMEOUT}s of SIGTERM{outlived_kill}; {written}; "
+        f"core requested ({_core_hint(process.pid)}){unwritten}"
     )
 
 

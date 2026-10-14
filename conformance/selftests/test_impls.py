@@ -878,9 +878,38 @@ def test_an_unwritable_log_still_aborts_kills_and_reports(
     instance = adapter.launch()
     instance.log.unlink()
     instance.log.mkdir()
-    with pytest.raises(StopError, match="did not exit within 0.5s of SIGTERM"):
+    with pytest.raises(StopError) as raised:
         adapter.stop(instance)
     assert instance.process.returncode == -9
+    # The message carries the snapshot it could not write, and never points at the log for it
+    message = str(raised.value)
+    assert f"did not exit within 0.5s of SIGTERM; thread snapshot not written to {instance.log} (" in message
+    assert "), below; core requested (" in message
+    assert f"\n--- conformance: pid {instance.pid} outlived SIGTERM by 0.5s; its threads:\n" in message
+    assert f"thread snapshot in {instance.log}" not in message
+
+
+def test_an_app_outliving_sigkill_is_still_reported_with_its_snapshot(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_APP_MODE", "ignore-term")
+    monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    # Stands in for uninterruptible sleep: the SIGKILL never lands
+    monkeypatch.setattr(instance.process, "kill", lambda: None)
+    try:
+        with pytest.raises(
+            StopError, match=rf"pid {instance.pid} did not exit within 0.5s of SIGTERM nor within 0.5s of SIGKILL; "
+        ) as raised:
+            adapter.stop(instance)
+        assert instance.process.poll() is None
+        assert f"thread snapshot in {instance.log}; core requested (" in str(raised.value)
+        assert (instance.state_dir / "fake-signals").read_text() == "TERM\nABRT\n"
+        assert f"pid {instance.pid} outlived SIGTERM" in instance.log.read_text()
+    finally:
+        os.kill(instance.pid, signal.SIGKILL)
+        instance.process.wait(timeout=10)
 
 
 def test_an_app_quitting_on_sigterm_gets_no_sigabrt(
