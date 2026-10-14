@@ -5,13 +5,15 @@
 //! - [`Host::start`] spawns the engine thread with its own `GMainContext` (thread-default before any `WebKit` object
 //!   exists) and a display that renders on the consumer's render node with the formats it imports ([`HostConfig`],
 //!   [`FrameMode`]). One engine per process: `WebKit` binds its main run loop to the first thread that uses it, and
-//!   that thread never ends (a shutdown closes everything and leaves it idle).
+//!   that thread never ends (a shutdown closes everything and leaves it idle; the process then ends through
+//!   [`exit_process`], since `WebKit`'s exit handlers must not run off its main thread).
 //! - Commands go in through [`Host`]'s methods; everything else comes out as [`Event`]s on one channel: frames, load
 //!   progress, what a page shows, and the questions `WebKit` asks (navigation and response policy, script messages,
 //!   reads of the consumer's URI schemes), each held open until the consumer answers it by token.
 //! - Frames follow `WebKit`'s buffer protocol (module `frames`): a frame counts as rendered once the consumer presented
-//!   it, and a dmabuf goes back one frame later; acknowledgements run from idle sources, never inside `WebKit`'s
-//!   own hand-over.
+//!   it, and a dmabuf goes back one frame later; acknowledgements run from a source of their own on the engine's
+//!   context, never inside `WebKit`'s own hand-over. A page whose dmabufs the consumer cannot import falls back to
+//!   SHM frames while it runs ([`Host::fall_back_to_shm`]).
 //! - The `WebKit` surface the overlay uses: browser stores ([`SessionSpec`]: in memory, or on disk for saved logins;
 //!   downloads refused), [`Settings`], user scripts and script message handlers, navigation and response policy, URI
 //!   schemes, and what a page may not do (new windows, dialogs, file choosers, permissions, full screen) refused.
@@ -41,7 +43,7 @@ pub use event::{
     ReplyToken, SchemeError, SchemeRequest, SchemeResponse, SchemeToken, ScriptMessage, Termination,
 };
 pub use frames::{BufferId, DmaBuf, Frame, FrameContent, Plane, Rect, ShmRegion};
-pub use host::{Evaluation, Host, Load, StartError};
+pub use host::{Evaluation, Host, Load, StartError, exit_process};
 pub use input::{Button, Input, Key, Modifiers, Pointer, PointerKind, Scroll};
 pub use spec::{
     Geometry, InjectionTime, MessageHandler, Rgba, SessionId, SessionSpec, Settings, UserScript, ViewId, ViewSpec,

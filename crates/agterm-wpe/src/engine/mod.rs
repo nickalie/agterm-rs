@@ -19,7 +19,9 @@ use gio::prelude::*;
 
 use self::page::Page;
 use self::platform::Display;
-use self::webkit::{Download, JscContext, NetworkSession, PolicyDecision, ScriptReply, UriSchemeRequest, WebContext};
+use self::webkit::{
+    Download, JscContext, NetworkSession, PolicyDecision, ScriptReply, UriSchemeRequest, WebContext, WebView,
+};
 use crate::config::{FrameMode, HostConfig};
 use crate::event::{Event, PolicyToken, ReplyToken, SchemeError, SchemeRequest, SchemeResponse, SchemeToken};
 use crate::host::{Command, ViewCommand};
@@ -182,13 +184,7 @@ fn download_started(session: SessionId, download: &Download) {
     let web_view = download.web_view();
     download.cancel();
     with(|engine| {
-        let view = web_view.and_then(|web_view| {
-            engine
-                .pages
-                .values()
-                .find(|page| page.web_view == web_view)
-                .map(|page| page.id)
-        });
+        let view = page_of(engine, web_view.as_ref());
         send(&engine.events, Event::DownloadRefused { session, view, uri });
     });
 }
@@ -215,6 +211,16 @@ fn clear_session(id: SessionId) {
 
 // MARK: - pages
 
+/// The page `web_view` belongs to, if it is one of the engine's.
+fn page_of(engine: &Engine, web_view: Option<&WebView>) -> Option<ViewId> {
+    let web_view = web_view?;
+    engine
+        .pages
+        .values()
+        .find(|page| page.web_view == *web_view)
+        .map(|page| page.id)
+}
+
 fn create_view(id: ViewId, spec: &ViewSpec) {
     let Some((display, session, events)) = with(|engine| {
         (
@@ -225,15 +231,17 @@ fn create_view(id: ViewId, spec: &ViewSpec) {
     }) else {
         return;
     };
-    let Some(session) = session else {
-        tracing::warn!(?id, "a WPE page was asked for on a browser store that does not exist");
-        return;
-    };
-    match Page::new(id, spec, &display, &session, &events) {
+    let built = session
+        .ok_or_else(|| "no such browser store".to_owned())
+        .and_then(|session| Page::new(id, spec, &display, &session, &events));
+    match built {
         Ok(page) => {
             with(|engine| engine.pages.insert(id, page));
         }
-        Err(message) => tracing::warn!(?id, message, "a WPE page could not be built"),
+        Err(message) => {
+            tracing::warn!(?id, message, "a WPE page could not be built");
+            send(&events, Event::ViewFailed { view: id, message });
+        }
     }
 }
 
@@ -342,13 +350,7 @@ fn scheme_requested(request: &UriSchemeRequest) {
     let uri = request.uri();
     let web_view = request.web_view();
     let held = with(|engine| {
-        let view = web_view.and_then(|web_view| {
-            engine
-                .pages
-                .values()
-                .find(|page| page.web_view == web_view)
-                .map(|page| page.id)
-        });
+        let view = page_of(engine, web_view.as_ref());
         let token = SchemeToken(token(engine));
         engine.schemes.insert(token, (view, request.clone()));
         send(&engine.events, Event::SchemeRequest(SchemeRequest { token, view, uri }));
@@ -373,7 +375,7 @@ fn finish_scheme_request(token: SchemeToken, response: &SchemeResponse) {
     }
 }
 
-/// Streams the file at `path`, typed by its name and contents.
+/// Streams the file at `path`, typed by its name.
 fn serve_file(request: &UriSchemeRequest, path: &std::path::Path) {
     match gio::File::for_path(path).read(None::<&gio::Cancellable>) {
         Ok(stream) => {

@@ -132,7 +132,7 @@ pub enum SchemeError {
 /// The answer to a [`SchemeRequest`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemeResponse {
-    /// A file, streamed from disk with the type its name and contents suggest.
+    /// A file, streamed from disk with the type its name suggests.
     File(PathBuf),
     Bytes {
         data: Vec<u8>,
@@ -192,6 +192,12 @@ pub enum Event {
         session: SessionId,
         view: Option<ViewId>,
         uri: String,
+    },
+    /// A page could not be built ([`crate::Host::create_view`]): its store does not exist, or its spec is invalid
+    /// (a message handler twice in one world). The id takes no commands.
+    ViewFailed {
+        view: ViewId,
+        message: String,
     },
     /// A store's data was cleared ([`crate::Host::clear_session`]), or why it was not.
     SessionCleared {

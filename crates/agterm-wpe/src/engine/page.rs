@@ -4,7 +4,7 @@
 //! What a page may not do is refused here, as the HTML overlay refuses it (`agterm-gtk`'s `html_overlay/page.rs`): no
 //! new windows (`create` is left unconnected, so `WebKit` makes none), script dialogs answered silently, no file
 //! chooser, no permission, no full screen, no notification, no context menu (none is drawn offscreen, and its
-//! download items stay out of reach). Downloads are refused per store ([`super::Engine::create_session`]).
+//! download items stay out of reach). Downloads are refused per store ([`super::create_session`]).
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -32,12 +32,18 @@ pub(crate) struct Page {
     pub(crate) id: ViewId,
     pub(crate) web_view: WebView,
     view: View,
+    settings: Settings,
     content: UserContentManager,
     handlers: Vec<MessageHandler>,
     events: Sender<Event>,
     /// The last state reported, so an unchanged one is not reported again.
     reported: std::cell::RefCell<PageState>,
     closed: Cell<bool>,
+    /// The page renders dmabufs (the engine's mode, until [`Page::fall_back_to_shm`]).
+    dmabuf: Cell<bool>,
+    /// The web process is being ended for the fall-back to SHM: its termination is not reported, and the page
+    /// reloads.
+    falling_back: Cell<bool>,
 }
 
 impl Page {
@@ -72,11 +78,14 @@ impl Page {
             id,
             web_view,
             view,
+            settings,
             content,
             handlers: spec.message_handlers.clone(),
             events: events.clone(),
             reported: std::cell::RefCell::default(),
             closed: Cell::new(false),
+            dmabuf: Cell::new(display.renders_dmabuf()),
+            falling_back: Cell::new(false),
         });
         if let Some(background) = spec.background {
             page.web_view.set_background_color(background);
@@ -116,8 +125,34 @@ impl Page {
             ViewCommand::Focused(focused) => self.set_focused(focused),
             ViewCommand::Input(input) => self.input(input),
             ViewCommand::Presented(buffer) => self.view.presented(buffer),
+            ViewCommand::FallBackToShm => self.fall_back_to_shm(),
             ViewCommand::Evaluate { script, world, reply } => self.evaluate(&script, world.as_deref(), reply),
         }
+    }
+
+    /// Draws on the CPU into SHM buffers from now on (the consumer could not import its dmabufs): `WebKit`'s
+    /// `HardwareAcceleration` feature goes off in the page's settings, which a web process reads only when it builds
+    /// the page's surface, so the page's web process is ended and the page reloads in a new one, whose surface
+    /// hands over SHM buffers. A page that renders SHM already is left alone.
+    fn fall_back_to_shm(&self) {
+        if !self.dmabuf.replace(false) {
+            return;
+        }
+        if !self.settings.set_hardware_acceleration(false) {
+            tracing::warn!("this WPE WebKit has no HardwareAcceleration feature: the page cannot fall back to SHM");
+            return;
+        }
+        self.falling_back.set(true);
+        self.web_view.terminate_web_process();
+    }
+
+    /// The web process ended: a fall-back reloads the page silently, anything else is reported.
+    fn terminated(&self, reason: Termination) {
+        if reason == Termination::TerminatedByApi && self.falling_back.replace(false) {
+            self.web_view.reload();
+            return;
+        }
+        self.send(Event::WebProcessTerminated { view: self.id, reason });
     }
 
     fn set_geometry(&self, geometry: Geometry) {
@@ -235,7 +270,7 @@ impl Page {
                     _ => Termination::TerminatedByApi,
                 };
                 if let Some(page) = page.upgrade() {
-                    page.send(Event::WebProcessTerminated { view: page.id, reason });
+                    page.terminated(reason);
                 }
                 None
             });

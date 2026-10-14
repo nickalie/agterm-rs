@@ -18,9 +18,10 @@ use glib::prelude::*;
 use glib::subclass::prelude::*;
 use glib::translate::{Borrowed, IntoGlibPtr, ToGlibPtr, from_glib_borrow, from_glib_none};
 
+use super::send;
 use crate::config::DmaBufTarget;
 use crate::event::Event;
-use crate::frames::{Ack, BufferId, DmaBuf, Frame, FrameContent, FrameFlow, Plane, Rect, copy_regions};
+use crate::frames::{Ack, BufferId, DmaBuf, Frame, FrameContent, FrameFlow, Kind, Plane, Rect, copy_regions};
 use crate::platform_sys as platform;
 use crate::spec::ViewId;
 
@@ -150,9 +151,9 @@ impl Display {
         Ok(display)
     }
 
-    /// Whether frames arrive in shared memory.
-    pub(crate) fn shm(&self) -> bool {
-        self.imp().target.borrow().is_none()
+    /// Whether frames are dmabufs (else SHM, from the start).
+    pub(crate) fn renders_dmabuf(&self) -> bool {
+        self.imp().target.borrow().is_some()
     }
 
     /// Whether the consumer imports `fourcc` with `modifier` (it offered them).
@@ -422,7 +423,7 @@ struct Held {
 }
 
 mod view_imp {
-    use std::cell::{Cell, RefCell};
+    use std::cell::RefCell;
     use std::collections::HashMap;
 
     use glib::prelude::*;
@@ -435,7 +436,6 @@ mod view_imp {
         pub(super) link: RefCell<Option<Link>>,
         pub(super) flow: RefCell<FrameFlow>,
         pub(super) held: RefCell<HashMap<BufferId, Held>>,
-        pub(super) shm: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -458,9 +458,6 @@ mod view_imp {
             let view = self.obj();
             // the toplevel carries the size: a view that gets one takes its size and maps, one that loses it unmaps
             view.connect_notify_local(Some("toplevel"), |view, _| view.toplevel_changed());
-            let shm = view.display().is_some_and(|display| display.shm());
-            self.shm.set(shm);
-            self.flow.replace(FrameFlow::new(shm));
         }
     }
 }
@@ -605,7 +602,11 @@ impl View {
         self.remember(id, buffer);
         let (width, height) = buffer_size(buffer);
         let content = self.content(id, buffer, width, height, damage)?;
-        let acks = self.imp().flow.borrow_mut().rendered(id);
+        let kind = match content {
+            FrameContent::DmaBuf(_) => Kind::DmaBuf,
+            FrameContent::Shm(_) => Kind::Shm,
+        };
+        let acks = self.imp().flow.borrow_mut().rendered(id, kind);
         send(
             &events,
             Event::Frame(Frame {
@@ -670,12 +671,6 @@ impl View {
         if let Some(link) = self.imp().link.borrow().as_ref() {
             send(&link.events, Event::Cursor { view: link.id, name });
         }
-    }
-}
-
-fn send(events: &Sender<Event>, event: Event) {
-    if events.try_send(event).is_err() {
-        tracing::debug!("nobody listens to the WPE engine's events any more");
     }
 }
 

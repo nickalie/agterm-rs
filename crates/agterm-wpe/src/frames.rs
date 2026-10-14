@@ -87,23 +87,27 @@ pub(crate) enum Ack {
     Released(BufferId),
 }
 
-/// One page's buffer set and the frame in flight.
+/// What a frame's buffer is, which decides when it goes back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    /// Read by the consumer until a newer frame replaces it on screen.
+    DmaBuf,
+    /// Copied out on arrival, so given back at once.
+    Shm,
+}
+
+/// One page's buffer set and the frame in flight. A page may change kinds while it runs (a fall-back to SHM), so the
+/// kind is the buffer's, not the page's.
 #[derive(Debug, Default)]
 pub(crate) struct FrameFlow {
-    shm: bool,
     set: Vec<BufferId>,
     /// Handed over, not presented yet.
-    pending: Option<BufferId>,
-    /// Presented last and still read by the consumer (dmabuf only).
+    pending: Option<(BufferId, Kind)>,
+    /// The dmabuf presented last, still read by the consumer.
     shown: Option<BufferId>,
 }
 
 impl FrameFlow {
-    /// A flow for dmabuf frames, or SHM frames (`shm`), which are copied out on arrival.
-    pub(crate) fn new(shm: bool) -> Self {
-        Self { shm, ..Self::default() }
-    }
-
     /// Whether `buffer` is in the current set.
     pub(crate) fn contains(&self, buffer: BufferId) -> bool {
         self.set.contains(&buffer)
@@ -114,7 +118,7 @@ impl FrameFlow {
     pub(crate) fn buffers_changed(&mut self, set: Vec<BufferId>) -> Vec<BufferId> {
         let removed: Vec<BufferId> = self.set.iter().copied().filter(|id| !set.contains(id)).collect();
         self.set = set;
-        if self.pending.is_some_and(|id| !self.contains(id)) {
+        if self.pending.is_some_and(|(id, _)| !self.contains(id)) {
             self.pending = None;
         }
         if self.shown.is_some_and(|id| !self.contains(id)) {
@@ -123,36 +127,38 @@ impl FrameFlow {
         removed
     }
 
-    /// `WebKit` handed over a frame in `buffer`. A buffer not announced yet joins the set; a frame still pending is
-    /// superseded and given back, since it will never be presented.
-    pub(crate) fn rendered(&mut self, buffer: BufferId) -> Vec<Ack> {
+    /// `WebKit` handed over a frame in `buffer` of `kind`. A buffer not announced yet joins the set; a frame still
+    /// pending is superseded and given back, since it will never be presented; an SHM buffer goes back at once.
+    pub(crate) fn rendered(&mut self, buffer: BufferId, kind: Kind) -> Vec<Ack> {
         if !self.contains(buffer) {
             self.set.push(buffer);
         }
         let mut acks = Vec::new();
-        if let Some(superseded) = self.pending.replace(buffer).filter(|&id| id != buffer) {
+        if let Some((superseded, was)) = self.pending.replace((buffer, kind)).filter(|&(id, _)| id != buffer) {
             acks.push(Ack::Rendered(superseded));
-            if !self.shm {
+            if was == Kind::DmaBuf {
                 acks.push(Ack::Released(superseded));
             }
         }
-        if self.shm {
+        if kind == Kind::Shm {
             acks.push(Ack::Released(buffer));
         }
         acks
     }
 
-    /// The consumer presented the frame in `buffer`: it counts as rendered, and the buffer shown before it is
+    /// The consumer presented the frame in `buffer`: it counts as rendered, and the dmabuf shown before it is
     /// released. A frame that is not the pending one (superseded, or from a buffer that left the set) is ignored.
     pub(crate) fn presented(&mut self, buffer: BufferId) -> Vec<Ack> {
-        if self.pending != Some(buffer) {
+        let Some((pending, kind)) = self.pending.filter(|&(id, _)| id == buffer) else {
             return Vec::new();
-        }
+        };
         self.pending = None;
-        let mut acks = vec![Ack::Rendered(buffer)];
-        if !self.shm
-            && let Some(previous) = self.shown.replace(buffer).filter(|&id| id != buffer)
-        {
+        let mut acks = vec![Ack::Rendered(pending)];
+        let shown = match kind {
+            Kind::DmaBuf => Some(pending),
+            Kind::Shm => None,
+        };
+        if let Some(previous) = std::mem::replace(&mut self.shown, shown).filter(|&id| id != pending) {
             acks.push(Ack::Released(previous));
         }
         acks
@@ -208,45 +214,61 @@ mod tests {
     const B: BufferId = BufferId(2);
     const C: BufferId = BufferId(3);
 
+    const DMABUF: Kind = Kind::DmaBuf;
+    const SHM: Kind = Kind::Shm;
+
     #[test]
     fn a_dmabuf_is_released_one_frame_after_it_was_presented() {
-        let mut flow = FrameFlow::new(false);
+        let mut flow = FrameFlow::default();
         assert!(flow.buffers_changed(vec![A, B]).is_empty());
-        assert_eq!(flow.rendered(A), []);
+        assert_eq!(flow.rendered(A, DMABUF), []);
         assert_eq!(
             flow.presented(A),
             [Ack::Rendered(A)],
             "nothing shown before: nothing to release"
         );
-        assert_eq!(flow.rendered(B), []);
+        assert_eq!(flow.rendered(B, DMABUF), []);
         assert_eq!(flow.presented(B), [Ack::Rendered(B), Ack::Released(A)]);
-        assert_eq!(flow.rendered(A), []);
+        assert_eq!(flow.rendered(A, DMABUF), []);
         assert_eq!(flow.presented(A), [Ack::Rendered(A), Ack::Released(B)]);
     }
 
     #[test]
     fn an_shm_buffer_goes_back_on_arrival_and_counts_as_rendered_when_presented() {
-        let mut flow = FrameFlow::new(true);
+        let mut flow = FrameFlow::default();
         flow.buffers_changed(vec![A, B]);
-        assert_eq!(flow.rendered(A), [Ack::Released(A)]);
+        assert_eq!(flow.rendered(A, SHM), [Ack::Released(A)]);
         assert_eq!(flow.presented(A), [Ack::Rendered(A)]);
-        assert_eq!(flow.rendered(B), [Ack::Released(B)]);
+        assert_eq!(flow.rendered(B, SHM), [Ack::Released(B)]);
         assert_eq!(flow.presented(B), [Ack::Rendered(B)], "nothing held over");
     }
 
     #[test]
+    fn falling_back_to_shm_releases_the_last_dmabuf_once_an_shm_frame_replaces_it() {
+        let mut flow = FrameFlow::default();
+        flow.buffers_changed(vec![A, B]);
+        flow.rendered(A, DMABUF);
+        assert_eq!(flow.presented(A), [Ack::Rendered(A)]);
+        assert_eq!(flow.buffers_changed(vec![A, C]), [B], "WebKit's new SHM set");
+        assert_eq!(flow.rendered(C, SHM), [Ack::Released(C)]);
+        assert_eq!(flow.presented(C), [Ack::Rendered(C), Ack::Released(A)]);
+        assert_eq!(flow.rendered(C, SHM), [Ack::Released(C)]);
+        assert_eq!(flow.presented(C), [Ack::Rendered(C)], "no dmabuf held any more");
+    }
+
+    #[test]
     fn stale_and_repeated_presentations_are_dropped() {
-        let mut flow = FrameFlow::new(false);
+        let mut flow = FrameFlow::default();
         flow.buffers_changed(vec![A, B]);
         assert_eq!(flow.presented(A), [], "never handed over");
-        flow.rendered(A);
+        flow.rendered(A, DMABUF);
         assert_eq!(flow.presented(A), [Ack::Rendered(A)]);
         assert_eq!(flow.presented(A), [], "presented twice");
-        flow.rendered(B);
+        flow.rendered(B, DMABUF);
         assert_eq!(flow.buffers_changed(vec![C]), [A, B], "recreated on load");
         assert_eq!(flow.presented(B), [], "the pending frame's buffer left the set");
         assert!(!flow.contains(A));
-        assert_eq!(flow.rendered(C), []);
+        assert_eq!(flow.rendered(C, DMABUF), []);
         assert_eq!(
             flow.presented(C),
             [Ack::Rendered(C)],
@@ -256,26 +278,26 @@ mod tests {
 
     #[test]
     fn the_set_grows_with_buffers_rendered_before_they_were_announced() {
-        let mut flow = FrameFlow::new(false);
+        let mut flow = FrameFlow::default();
         flow.buffers_changed(vec![A, B]);
         assert!(!flow.contains(C));
-        flow.rendered(C);
+        flow.rendered(C, DMABUF);
         assert!(flow.contains(C));
         assert_eq!(flow.buffers_changed(vec![A, B, C]), []);
     }
 
     #[test]
     fn a_superseded_frame_is_given_back() {
-        let mut flow = FrameFlow::new(false);
+        let mut flow = FrameFlow::default();
         flow.buffers_changed(vec![A, B]);
-        flow.rendered(A);
-        assert_eq!(flow.rendered(B), [Ack::Rendered(A), Ack::Released(A)]);
+        flow.rendered(A, DMABUF);
+        assert_eq!(flow.rendered(B, DMABUF), [Ack::Rendered(A), Ack::Released(A)]);
         assert_eq!(flow.presented(A), []);
         assert_eq!(flow.presented(B), [Ack::Rendered(B)]);
-        let mut shm = FrameFlow::new(true);
-        shm.rendered(A);
+        let mut shm = FrameFlow::default();
+        shm.rendered(A, SHM);
         assert_eq!(
-            shm.rendered(B),
+            shm.rendered(B, SHM),
             [Ack::Rendered(A), Ack::Released(B)],
             "A went back when it arrived"
         );

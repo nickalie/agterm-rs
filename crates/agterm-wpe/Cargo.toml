@@ -14,6 +14,7 @@ async-channel.workspace = true
 bitflags.workspace = true
 gio.workspace = true
 glib.workspace = true
+libc.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
@@ -21,8 +22,6 @@ tracing.workspace = true
 pkg-config.workspace = true
 
 [dev-dependencies]
-# the engine tests map a linear dmabuf to read a pixel back
-libc.workspace = true
 tempfile.workspace = true
 
 # One engine per process (WebKit binds its main run loop to the first thread that uses it), so the engine tests run

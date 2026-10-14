@@ -153,6 +153,13 @@ impl WebView {
         unsafe { webkit::webkit_web_view_stop_loading(self.raw()) };
     }
 
+    /// Ends the web process the view renders through (`web-process-terminated` follows, by API); the next load
+    /// starts a new one.
+    pub(crate) fn terminate_web_process(&self) {
+        // SAFETY: a live web view.
+        unsafe { webkit::webkit_web_view_terminate_web_process(self.raw()) };
+    }
+
     pub(crate) fn go_back(&self) {
         // SAFETY: a live web view.
         unsafe { webkit::webkit_web_view_go_back(self.raw()) };
@@ -319,6 +326,33 @@ impl Settings {
             );
         };
         settings
+    }
+
+    /// Turns `WebKit`'s `HardwareAcceleration` feature on or off for the pages built on these settings: off, a page's
+    /// web process draws on the CPU into SHM buffers instead of dmabufs. False when this `WebKit` has no such feature.
+    pub(crate) fn set_hardware_acceleration(&self, enabled: bool) -> bool {
+        // SAFETY: a new reference to the list of every feature, dropped below.
+        let features = unsafe { webkit::webkit_settings_get_all_features() };
+        if features.is_null() {
+            return false;
+        }
+        let identifier = c_string("HardwareAcceleration");
+        // SAFETY: a live list and a NUL-terminated identifier; the feature stays owned by the list.
+        let feature = unsafe { webkit::webkit_feature_list_find(features, identifier.as_ptr()) };
+        let found = !feature.is_null();
+        if found {
+            // SAFETY: live settings and a feature of the list, which is still referenced.
+            unsafe {
+                webkit::webkit_settings_set_feature_enabled(
+                    self.to_glib_none().0,
+                    feature,
+                    glib::ffi::gboolean::from(enabled),
+                );
+            };
+        }
+        // SAFETY: drops the reference taken above.
+        unsafe { webkit::webkit_feature_list_unref(features) };
+        found
     }
 }
 

@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use agterm_wpe::{
-    Button, Event, FrameContent, Geometry, Host, HostConfig, InjectionTime, Input, Key, Load, LoadErrorKind,
+    Button, Event, FrameContent, Geometry, Host, HostConfig, InjectionTime, Input, Key, Load, LoadErrorKind, LoadEvent,
     MessageHandler, Modifiers, NavigationType, Pointer, PointerKind, PolicyKind, SchemeError, SchemeResponse, Scroll,
     SessionSpec, Settings, StartError, UserScript, fourcc,
 };
@@ -20,6 +20,7 @@ pub type Case = fn(&Harness, &Context) -> Outcome;
 
 pub const CASES: &[(&str, Case)] = &[
     ("frames_arrive_in_the_configured_mode_and_follow_the_geometry", frames),
+    ("a_running_page_falls_back_to_shm_and_goes_on_drawing", fallback),
     ("scheme_pages_are_served_by_the_consumer", schemes),
     (
         "the_script_bridge_round_trips_in_the_page_world_and_a_script_world",
@@ -30,6 +31,7 @@ pub const CASES: &[(&str, Case)] = &[
     ("a_saved_profile_outlives_its_pages_and_its_session", profile),
     ("downloads_are_refused", downloads),
     ("closing_a_page_answers_what_it_left_open", closing),
+    ("a_page_that_cannot_be_built_is_reported", unbuilt),
     ("the_engine_starts_once_per_process", once),
 ];
 
@@ -86,6 +88,76 @@ fn frames(h: &Harness, _: &Context) -> Outcome {
     h.host.frame_presented(view, resized.buffer);
     ensure(removed, || "the old buffers were never reported gone".to_owned())?;
     h.host.close_view(view);
+    Ok(())
+}
+
+/// The consumer's fall-back when it cannot import a page's dmabufs: the running page switches to SHM frames (its web
+/// process replaced, the page reloaded) and goes on drawing, while another page keeps its own web process; in an SHM
+/// engine the page is left as it is.
+fn fallback(h: &Harness, _: &Context) -> Outcome {
+    let session = h.ephemeral();
+    let bystander = h.view(session, Settings::overlay(true));
+    h.load(bystander, page("<script>window.mark = 'kept';</script>"))?;
+    let view = h.view(session, Settings::overlay(true));
+    h.load(
+        view,
+        page("<style>body{background:#c03030}</style><script>window.mark = 'first';</script>"),
+    )?;
+    let before = h.pixel_frame(view, 160, 120, RED)?;
+    let dmabuf_first = matches!(before.content, FrameContent::DmaBuf(_));
+    ensure(dmabuf_first != h.shm, || {
+        format!("the first frame reads {:?}", before.content)
+    })?;
+    h.evaluate(view, "window.mark = 'changed'", None)?;
+    h.host.fall_back_to_shm(view);
+    if !h.shm {
+        let mut terminated = false;
+        h.wait_for("the page to reload", |event| match event {
+            Event::WebProcessTerminated { view: id, .. } if *id == view => {
+                terminated = true;
+                None
+            }
+            Event::Load {
+                view: id,
+                event: LoadEvent::Finished,
+            } if *id == view => Some(()),
+            _ => None,
+        })?;
+        ensure(!terminated, || {
+            "the fall-back reported its own web process ending".to_owned()
+        })?;
+    }
+    // an SHM engine's page drew its last frame before the fall-back and has no new one to show
+    if !h.shm {
+        let after = h.wait_for("an SHM frame of the reloaded page", |event| match event {
+            Event::Frame(frame) if frame.view == view => {
+                let pixel = Harness::pixel(frame, 160, 120);
+                h.host.frame_presented(frame.view, frame.buffer);
+                (matches!(frame.content, FrameContent::Shm(_)) && pixel == Ok(RED)).then(|| frame.clone())
+            }
+            _ => None,
+        })?;
+        ensure((after.width, after.height) == (320, 240), || {
+            format!("the SHM frame is {}x{}", after.width, after.height)
+        })?;
+    }
+    let mark = h.evaluate(view, "window.mark", None)?;
+    let expected = if h.shm { "\"changed\"" } else { "\"first\"" };
+    ensure(mark.as_deref() == Some(expected), || {
+        format!("the page's script state reads {mark:?}, not {expected}")
+    })?;
+    // it goes on drawing, in SHM
+    h.evaluate(view, "document.body.style.background = '#3030c0'", None)?;
+    let blue = h.pixel_frame(view, 160, 120, BLUE)?;
+    ensure(matches!(blue.content, FrameContent::Shm(_)), || {
+        format!("a frame after the fall-back reads {:?}", blue.content)
+    })?;
+    let kept = h.evaluate(bystander, "window.mark", None)?;
+    ensure(kept.as_deref() == Some("\"kept\""), || {
+        format!("the other page's state reads {kept:?}")
+    })?;
+    h.host.close_view(view);
+    h.host.close_view(bystander);
     Ok(())
 }
 
@@ -391,12 +463,7 @@ fn profile(h: &Harness, context: &Context) -> Outcome {
     let reopened = h.host.create_session(store);
     let third = h.view(reopened, Settings::overlay(true));
     h.load(third, get.clone())?;
-    h.title_where(third, |title| title.starts_with("cookie="))
-        .and_then(|title| {
-            ensure(title.starts_with("cookie=saved=1;"), || {
-                format!("a reopened store shows {title}")
-            })
-        })?;
+    h.title(third, "cookie=saved=1;storage=v")?;
     h.host.close_view(third);
     let data = context.scratch.path().join("browser/data");
     let kept = std::fs::read_dir(&data).map_or(0, Iterator::count);
@@ -466,6 +533,47 @@ fn closing(h: &Harness, _: &Context) -> Outcome {
     h.title(next, "after")?;
     h.host.close_view(next);
     Ok(())
+}
+
+fn unbuilt(h: &Harness, _: &Context) -> Outcome {
+    let failed = |view| {
+        h.wait_for("the page's failure", |event| match event {
+            Event::ViewFailed { view: id, message } if *id == view => Some(message.clone()),
+            _ => None,
+        })
+    };
+    let gone = h.ephemeral();
+    h.host.drop_session(gone);
+    let orphan = h.view(gone, Settings::overlay(false));
+    let message = failed(orphan)?;
+    ensure(message == "no such browser store", || {
+        format!("a page on a dropped store failed with {message:?}")
+    })?;
+    let handler = || MessageHandler {
+        name: "agterm".to_owned(),
+        world: None,
+    };
+    let twice = h.view_with(agterm_wpe::ViewSpec {
+        session: h.ephemeral(),
+        settings: Settings::overlay(true),
+        scripts: Vec::new(),
+        message_handlers: vec![handler(), handler()],
+        zoom: 1.0,
+        background: None,
+        geometry: Geometry {
+            width: 320,
+            height: 240,
+            scale: 1.0,
+        },
+    });
+    let message = failed(twice)?;
+    ensure(message.contains("registered twice"), || {
+        format!("a doubled handler failed with {message:?}")
+    })?;
+    let gone = h.evaluate(twice, "1", None);
+    ensure(gone == Err("no such page".to_owned()), || {
+        format!("an unbuilt page evaluated {gone:?}")
+    })
 }
 
 fn once(_: &Harness, _: &Context) -> Outcome {

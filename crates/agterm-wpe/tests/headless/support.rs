@@ -306,18 +306,6 @@ impl Harness {
         }
     }
 
-    /// Waits until `view`'s title satisfies `matches` (at once when it already does); returns it.
-    pub fn title_where(&self, view: ViewId, matches: impl Fn(&str) -> bool) -> Result<String, String> {
-        if let Some(title) = self.current_title(view).filter(|title| matches(title)) {
-            return Ok(title);
-        }
-        self.wait_for("a title", |event| match event {
-            Event::Page { view: id, page } if *id == view => page.title.clone().filter(|title| matches(title)),
-            _ => None,
-        })
-        .map_err(|err| format!("{err} (the title is {:?})", self.current_title(view)))
-    }
-
     /// The color at (`x`, `y`) of `frame` as (red, green, blue), from SHM pixels or a linear dmabuf mapped read-only.
     pub fn pixel(frame: &agterm_wpe::Frame, x: u32, y: u32) -> Result<(u8, u8, u8), String> {
         match &frame.content {

@@ -73,11 +73,12 @@ pub enum ConfigError {
 }
 
 /// Schemes `WebKit` handles itself; a page's own scheme must not shadow them.
-const RESERVED_SCHEMES: [&str; 10] = [
+const RESERVED_SCHEMES: [&str; 11] = [
     "about",
     "blob",
     "data",
     "file",
+    "ftp",
     "http",
     "https",
     "javascript",
@@ -220,6 +221,11 @@ mod tests {
         assert_eq!(
             config(&["a b"]).validate(),
             Err(ConfigError::InvalidScheme("a b".to_owned()))
+        );
+        assert_eq!(
+            config(&["ftp"]).validate(),
+            Err(ConfigError::ReservedScheme("ftp".to_owned())),
+            "WebKit refuses to register its special schemes"
         );
         assert_eq!(
             config(&["HTTPS"]).validate(),

@@ -60,6 +60,7 @@ pub(crate) enum ViewCommand {
     Focused(bool),
     Input(Input),
     Presented(BufferId),
+    FallBackToShm,
     Evaluate {
         script: String,
         world: Option<String>,
@@ -92,11 +93,23 @@ fn next_id() -> u64 {
 /// How long a shutdown waits for the engine to close its pages.
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Ends the process with `code` at once, after flushing stdout and stderr, without running its exit handlers. A
+/// process that started the engine ends through this, after [`Host::shutdown`]: `WebKit` registers static
+/// destructors that unreference its objects and assert they run on its main thread, which is the engine thread (it
+/// never ends), so `exit` (and returning from `main`) runs them on the calling thread, where they abort.
+pub fn exit_process(code: i32) -> ! {
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    // SAFETY: `_exit` ends the process without touching any state of it; nothing after it runs.
+    unsafe { libc::_exit(code) }
+}
+
 /// The engine: WPE `WebKit` on a thread of its own, with its own `GMainContext`, rendering pages offscreen.
 ///
 /// One per process. Dropping it shuts the engine down, as [`Host::shutdown`] does; the thread itself lives on, idle,
 /// until the process ends, since it is `WebKit`'s main thread, which must never end (its thread-local teardown waits
-/// forever on the run loop it tears down).
+/// forever on the run loop it tears down). The process then ends through [`exit_process`].
 #[derive(Debug)]
 pub struct Host {
     commands: Sender<Command>,
@@ -232,6 +245,17 @@ impl Host {
     /// back (crate `frames`).
     pub fn frame_presented(&self, view: ViewId, buffer: BufferId) {
         self.view(view, ViewCommand::Presented(buffer));
+    }
+
+    /// Switches a running page to SHM frames, for good: the consumer could not import its dmabufs (a format outside
+    /// what it offered, a failed import). The page's web process is replaced and the page reloads what it shows
+    /// (its history stays; the document's script state does not, and a page loaded from text should be loaded
+    /// again); the frames that follow arrive as [`crate::FrameContent::Shm`], and the dmabuf shown last is released
+    /// once an SHM frame replaces it. The engine's own mode cannot change after the start (`WebKit` hands its web
+    /// processes the render node once per process, and a web process picks its buffers when it builds a page's
+    /// surface), so this is the per-page fall-back. A page in an SHM engine is left alone.
+    pub fn fall_back_to_shm(&self, view: ViewId) {
+        self.view(view, ViewCommand::FallBackToShm);
     }
 
     /// Runs `script` in the page's main frame, in `world` (`None`: the page's own); the result arrives on the

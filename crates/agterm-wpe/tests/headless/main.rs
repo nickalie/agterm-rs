@@ -151,6 +151,8 @@ fn run_child(exe: &Path, mode: &str, node: Option<&Path>, args: &[String]) -> Re
 
 // MARK: - a child: one mode's cases
 
+/// Runs one mode's cases and ends the process through [`agterm_wpe::exit_process`], as a program that ran the engine
+/// must.
 fn child(mode: &str, filter: Option<&str>) -> ExitCode {
     let outcome = match mode {
         "shm" => cases_in(FrameMode::Shm, filter),
@@ -161,13 +163,14 @@ fn child(mode: &str, filter: Option<&str>) -> ExitCode {
         "bad-device" => bad_device(),
         other => Err(format!("unknown mode {other}")),
     };
-    match outcome {
-        Ok(()) => ExitCode::SUCCESS,
+    let code = match outcome {
+        Ok(()) => 0,
         Err(message) => {
             println!("{message}");
-            ExitCode::FAILURE
+            1
         }
-    }
+    };
+    agterm_wpe::exit_process(code)
 }
 
 /// XRGB and ARGB, linear only: what every importer takes, and a layout the test can read back.

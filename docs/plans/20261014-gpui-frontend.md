@@ -998,7 +998,9 @@ Productionizes Task 2's prototype.
   Engine: one per process, its thread pushes a fresh `GMainContext` thread-default before any WebKit object and
   **never ends** — it is WebKit's main thread, whose thread-local teardown waits forever on the run loop it tears down
   (a joined shutdown hung there), so `shutdown`/drop closes everything, waits a bounded 10 s for "stopped" and leaves
-  the thread idle. Platform: `AgtermWpeDisplay`/`AgtermWpeView`/`AgtermWpeToplevel` (gtk-rs `ObjectSubclass` over the
+  the thread idle; ➕ (review) the process then ends through `agterm_wpe::exit_process` (`_exit`): WebKit's static
+  destructors assert they run on its main thread and aborted under `exit()` (4 of 15 suite runs) — Task 12/32 end the
+  GPUI app that way. Platform: `AgtermWpeDisplay`/`AgtermWpeView`/`AgtermWpeToplevel` (gtk-rs `ObjectSubclass` over the
   abstract WPEPlatform classes; the toplevel carries size and scale). The input the GPUI side fills (Task 29/32) is a
   plain struct: `FrameMode::DmaBuf(DmaBufTarget { render_node, formats: Vec<BufferFormat { fourcc, modifiers }> })`
   or `FrameMode::Shm`; the display resolves the render node's DRM device and opens EGL on it through a private
@@ -1024,13 +1026,18 @@ Productionizes Task 2's prototype.
   launcher) and `tests/headless` (custom harness: each frame mode in its own process, through the launcher, private
   XDG dirs): `shm`, `dmabuf` on the first Mesa-driven render node (Intel iGPU here, LINEAR XR24/AR24 offered, the
   pixel read back from the mapped dmabuf) and `bad-device` (a missing render node fails the start; one start per
-  process), 9 cases per frame mode: frames and resize/scale with the buffer set recreated, scheme pages (bytes, file,
-  error), the bridge in the page world and in a script world with page scripts off, policy (a clicked link and a
+  process), 11 cases per frame mode: frames and resize/scale with the buffer set recreated, the fall-back to SHM,
+  scheme pages (bytes, file, error), the bridge in the page world and in a script world with page scripts off, policy (a clicked link and a
   real click on a `target=_blank` link held and ignored, a refused response failing as interrupted), pointer/key/wheel
   input, a saved store across view restarts and across a new session on the same dirs (cookie and local storage) then
-  cleared, refused downloads, closing with questions open, a second start refused. ⚠️ NVIDIA's own driver
-  (renderD129) allocates no LINEAR render target and WebKit falls back to the driver's block-linear modifier outside
-  the offered list (logged as a warning): Task 29 must check each buffer's modifier before importing. CI: the `wpe`
+  cleared, refused downloads, closing with questions open, a page that cannot be built (`Event::ViewFailed`), a second
+  start refused. ⚠️ NVIDIA's own driver (renderD129) allocates no LINEAR render target and WebKit falls back to the
+  driver's block-linear modifier outside the offered list (logged as a warning): Task 29 must check each buffer's
+  modifier before importing. ➕ (review) SHM after the start: the engine's frame mode is fixed per process (WebKit
+  reads the display's DRM device once per UI process, and a web process picks dmabuf or SHM when it builds a page's
+  surface, never again), so `Host::fall_back_to_shm(view)` is the per-page fall-back Task 29/32 call when an import
+  fails: WebKit's `HardwareAcceleration` feature goes off in the page's settings and its web process is replaced (the
+  page reloads, history kept, script state lost; other pages untouched), and SHM frames follow. CI: the `wpe`
   job checks and tests `agterm-wpe` too (SHM and `bad-device`; no render node there); `WORKSPACE_WITHOUT_WPE` excludes
   it. AppArmor: the profile file holds `agterm` and `agterm-gpui` profiles, `install-apparmor-profile.sh --gpui PATH`
   (default the stage's `bin/agterm-gpui`). Checklist: the media row records the progressive-download stall. For Task
