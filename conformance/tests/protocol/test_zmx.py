@@ -295,12 +295,16 @@ def test_lead_on_a_pane_that_already_leads(live):
     assert_ok(live.request("session.close", sid))
 
 
+def _pane_id(live, sid):
+    return next(s for s in find_session(live.tree(), sid)["surfaces"] if s["kind"] == "left")["paneID"]
+
+
 @LIVE
 @pytest.mark.covers("session.restart", "field:result.restart", "field:result.pane")
 def test_restart_replaces_the_pane_shell(live):
     sid = _live_session(live)
     before = _entries(live, sid)["left"]
-    pane_id = next(s for s in find_session(live.tree(), sid)["surfaces"] if s["kind"] == "left")["paneID"]
+    pane_id = _pane_id(live, sid)
     result = assert_ok(live.request("session.restart", sid, pane="left", command="cat"))
     assert_subset(result, {"id": sid, "pane": "left", "restart": {"paneID": pane_id, "oldPid": before["leaderPID"]}})
     new_pid = result["restart"]["newPid"]
@@ -313,10 +317,6 @@ def test_restart_replaces_the_pane_shell(live):
     live.wait_tree(lambda tree: find_session(tree, sid).get("foreground") == ["cat"])
     assert_ok(live.request("session.close", sid))
     _gone(live, before["daemon"])
-
-
-def _pane_id(live, sid):
-    return next(s for s in find_session(live.tree(), sid)["surfaces"] if s["kind"] == "left")["paneID"]
 
 
 @LIVE
