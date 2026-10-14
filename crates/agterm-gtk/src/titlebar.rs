@@ -90,7 +90,12 @@ impl GlyphButton {
                 tracing::debug!(%err, "drawing a title-bar glyph failed");
             }
         });
-        let button = gtk::Button::builder().child(&area).name(name).build();
+        // a custom child gets no `image-button` class, and libadwaita draws such a header button raised
+        let button = gtk::Button::builder()
+            .child(&area)
+            .name(name)
+            .css_classes(["image-button"])
+            .build();
         Self {
             button,
             area,
