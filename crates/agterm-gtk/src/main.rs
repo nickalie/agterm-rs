@@ -16,6 +16,7 @@ mod deck;
 mod ghostty_app;
 #[cfg(test)]
 mod gtk_test;
+mod heap_trim;
 mod hook_runner;
 mod html_overlay;
 mod hud;

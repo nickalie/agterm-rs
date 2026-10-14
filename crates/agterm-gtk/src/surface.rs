@@ -528,6 +528,7 @@ impl TerminalSurface {
                 && !surface.inner.drew.replace(true)
             {
                 tracing::debug!(key = surface.inner.key.get(), "terminal drew its first frame");
+                crate::heap_trim::trim_soon();
             }
             glib::Propagation::Stop
         });
@@ -714,6 +715,7 @@ impl TerminalSurface {
         match created {
             Ok(surface) => {
                 tracing::debug!(key = self.inner.key.get(), scale, "terminal surface created");
+                crate::heap_trim::trim_soon();
                 surface.set_focus(area.has_focus());
                 surface.set_occlusion(self.inner.deck_visible.get() && area.is_mapped());
                 *self.inner.ghostty.borrow_mut() = Some(surface);
@@ -753,6 +755,7 @@ impl TerminalSurface {
             tick.remove();
         }
         self.inner.im.set_client_widget(None::<&gtk::Widget>);
+        crate::heap_trim::trim_soon();
     }
 
     /// Whether the libghostty surface exists: created at the realized area's first nonzero size and not torn down
