@@ -12,10 +12,10 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use agterm_core::chrome::{self, SelectionColors};
+use agterm_core::ghostty_config::{DEFAULTS, config_files, defaults_text};
 use agterm_core::link_policy::{self, ClickOrigin, Route};
 use agterm_core::model::SearchReport;
-use agterm_core::paths::{self, Env, ProcessEnv};
-use agterm_core::persist::SettingsStore;
+use agterm_core::paths::{Env, ProcessEnv};
 use agterm_core::persist::settings::LinkOpenMode;
 use agterm_ghostty::{
     Action, App, ClipboardConfirm, ClipboardContent, ClipboardKind, ClipboardRead, ClipboardReadResult, ColorScheme,
@@ -28,7 +28,6 @@ use crate::{clipboard, surface};
 
 /// The variable libghostty reads its resources (shell integration, themes) from; it derives `TERMINFO` from it.
 const RESOURCES_ENV: &str = "GHOSTTY_RESOURCES_DIR";
-const DEFAULTS: &str = include_str!("ghostty-defaults.conf");
 /// Shell integration features whose ssh wrappers call a `ghostty` CLI agterm does not ship (upstream #463).
 const UNSUPPORTED_SHELL_FEATURES: [&str; 2] = ["ssh-env", "ssh-terminfo"];
 /// `shell-integration-features` flags in libghostty's field order: the index is the bit.
@@ -139,15 +138,6 @@ pub unsafe fn export_resources_dir() {
     RESOURCES_RESOLVED.get_or_init(|| resolved.is_some());
 }
 
-/// The built-in defaults; without ghostty's terminfo the terminal claims `xterm-256color` instead of its own.
-fn defaults_text(resources_resolved: bool) -> String {
-    if resources_resolved {
-        DEFAULTS.to_owned()
-    } else {
-        format!("{DEFAULTS}\nterm = xterm-256color\n")
-    }
-}
-
 /// A `shell-integration-features` value restating every flag from the resolved `bits` with the unsupported ones off.
 /// All six are named: libghostty re-parses the key from its defaults, so an omitted flag would be reset.
 fn shell_features_override(bits: u32) -> String {
@@ -205,22 +195,6 @@ fn build_config_with(
         tracing::warn!(%diagnostic, "ghostty config");
     }
     Ok((config, static_title))
-}
-
-/// The config files the settings select, in load order. The settings are read from `settings.json` on every build, as
-/// upstream's `resolveConfigInputs` reads them for every `loadConfig`.
-fn config_files(env: &dyn Env) -> Vec<PathBuf> {
-    let settings = SettingsStore::new(paths::state_dir(env)).load();
-    let config_dir = paths::config_dir(env, settings.config_directory.as_deref().map(Path::new));
-    let global =
-        paths::global_ghostty_config_path(env).filter(|_| settings.inherit_global_ghostty_config == Some(true));
-    global
-        .into_iter()
-        .chain([
-            paths::ghostty_config_path(&config_dir),
-            paths::ghostty_settings_config_path(env),
-        ])
-        .collect()
 }
 
 /// The theme's selection colors under the config the settings select, on the `dark` side of a dual theme (upstream's
@@ -581,6 +555,8 @@ pub(crate) fn open_uri(uri: &str) {
 
 #[cfg(test)]
 mod tests {
+    use agterm_core::paths;
+
     use super::*;
 
     #[test]
@@ -635,12 +611,6 @@ mod tests {
             shell_features_override(0b10_0000),
             "no-cursor,no-sudo,no-title,no-ssh-env,no-ssh-terminfo,path"
         );
-    }
-
-    #[test]
-    fn unresolved_resources_fall_back_to_xterm_256color() {
-        assert!(!defaults_text(true).contains("term ="));
-        assert!(defaults_text(false).ends_with("term = xterm-256color\n"));
     }
 
     #[test]
@@ -725,32 +695,6 @@ mod tests {
         let resolved = receiver.recv_timeout(std::time::Duration::from_secs(10))?;
         assert_eq!(resolved.foreground, Some(chrome::Rgb::new(1, 2, 3)));
         assert_eq!(resolved.background, None, "the theme FIFO is skipped, not read");
-        Ok(())
-    }
-
-    #[test]
-    fn the_settings_pick_the_config_directory_and_the_global_config() -> Result<(), Box<dyn std::error::Error>> {
-        let state = tempfile::tempdir()?;
-        let env = paths::MapEnv::new()
-            .with("HOME", "/home/u")
-            .with(paths::STATE_DIR_ENV, state.path());
-        let settings_conf = state.path().join("ghostty-settings.conf");
-        assert_eq!(
-            config_files(&env),
-            [state.path().join("config/ghostty.conf"), settings_conf.clone()]
-        );
-        std::fs::write(
-            state.path().join("settings.json"),
-            r#"{"configDirectory": "/elsewhere", "inheritGlobalGhosttyConfig": true}"#,
-        )?;
-        assert_eq!(
-            config_files(&env),
-            [
-                PathBuf::from("/home/u/.config/ghostty/config"),
-                PathBuf::from("/elsewhere/ghostty.conf"),
-                settings_conf
-            ]
-        );
         Ok(())
     }
 }

@@ -19,6 +19,7 @@ pub mod error;
 pub mod events;
 pub mod first_run;
 pub mod fuzzy;
+pub mod ghostty_config;
 pub mod hooks;
 pub mod html;
 pub mod hud;

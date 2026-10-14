@@ -508,23 +508,26 @@ Both frontends use them while they coexist, so they must not be copied.
 - Create: `scripts/gen-ghostty-config-keys.sh`
 - Modify: `crates/agterm-core/src/commands/config.rs` (diagnostics source abstraction, if needed)
 
-- [ ] move `ghostty-defaults.conf` out of `agterm-gtk` into core (`include_str!` there), so both frontends load the
-      same defaults
-- [ ] parser: `key = value`, comments, repeatable keys, `config-file` with `?` optional includes and cycle detection,
-      today's load order (defaults, user files, includes, `ghostty-settings.conf`)
-- [ ] `gen-ghostty-config-keys.sh`: every key with its value type from `src/config/Config.zig` at the pinned rev into
+- [x] move `ghostty-defaults.conf` out of `agterm-gtk` into core (`include_str!` there), so both frontends load the
+      same defaults (`ghostty_config::{DEFAULTS, defaults_text, config_files}`; GTK calls them)
+- [x] parser: `key = value`, comments, repeatable keys, `config-file` with `?` optional includes and cycle detection,
+      today's load order (defaults, user files, includes, `ghostty-settings.conf`) — as the GTK build and upstream
+      load it: defaults, global/scoped/`ghostty-settings.conf`, then the includes, then a per-surface overlay
+- [x] `gen-ghostty-config-keys.sh`: every key with its value type from `src/config/Config.zig` at the pinned rev into
       `keys.rs` (checked in, regenerated on a pin bump)
-- [ ] ➕ (Task 4) the pinned rev for config keys is `GHOSTTY_REV` (the libghostty whose diagnostic counts upstream and
+- [x] ➕ (Task 4) the pinned rev for config keys is `GHOSTTY_REV` (the libghostty whose diagnostic counts upstream and
       the GTK build report), not `LIBGHOSTTY_VT_REV`; Task 34 moves it with the resources
-- [ ] typed model for the supported subset: font-family*, font-size, font-feature, theme incl. `light:,dark:`, palette,
+- [x] typed model for the supported subset: font-family*, font-size, font-feature, theme incl. `light:,dark:`, palette,
       background/foreground, cursor-*, selection-*, background-opacity, `background-image*` (watermark), window-padding-*
       incl. `window-padding-balance`, scrollback-limit, clipboard-*/mouse-*, cursor-click-to-move,
-      shell-integration-features, `term`, keybind, title; theme files through the same parser
-- [ ] diagnostics per Technical Details > Config diagnostics (unknown key, malformed value of any known key; supported
+      shell-integration-features, `term`, keybind, title; theme files through the same parser (`scrollback-limit` is
+      `scrollback-limit-bytes`/`-lines` at `GHOSTTY_REV`, the old name taken by ghostty's compatibility rename)
+- [x] diagnostics per Technical Details > Config diagnostics (unknown key, malformed value of any known key; supported
       or not)
-- [ ] tests: load order and overrides, includes and cycles, themes light/dark, each supported key, diagnostics counts
-      (unknown key, malformed known-unsupported value, valid unsupported value = 0), the residual-difference list
-- [ ] gates — must pass before Task 8
+- [x] tests: load order and overrides, includes and cycles, themes light/dark, each supported key, diagnostics counts
+      (unknown key, malformed known-unsupported value, valid unsupported value = 0), the residual-difference list;
+      ➕ `agterm-ghostty/tests/config_parity.rs` checks the counts against the linked libghostty
+- [x] gates — must pass before Task 8
 
 ### Task 8: Ghostty keybind actions in core
 

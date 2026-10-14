@@ -60,14 +60,15 @@ the Linux equivalent, or a recorded "no Linux counterpart" in the checklist.
 | `plugins/agterm/skills/agterm/` | `resources/skills/agterm/` | the agent skill the app installs |
 | `agterm/Resources/hud/` | `crates/agterm-gtk/resources/hud/` | `hud.sh`, included with `include_str!` |
 | `agterm/Resources/custom-themes/` | `build/themes/` | agterm's own themes |
-| `agterm/Resources/ghostty-defaults.conf` | `crates/agterm-gtk/src/ghostty-defaults.conf` | adapted (Linux chords, comments): usually a conflict, merge the setting, keep the Linux binds |
+| `agterm/Resources/ghostty-defaults.conf` | `crates/agterm-core/src/ghostty_config/ghostty-defaults.conf` | adapted (Linux chords, comments): usually a conflict, merge the setting, keep the Linux binds |
 | `scripts/zmx-patches/*.patch` (+ `ghostty/`) | `build/patches/zmx/` | upstream's own zmx patches; a change rebuilds zmx |
 | `LICENSE` | `resources/LICENSE.upstream` | |
 | `scripts/setup.sh` (`GHOSTTY_REV`, `ZMX_REV`) | `build/pins.env` | via `pins-delta.sh`; Zig version from each rev's `build.zig.zon`, sums from ziglang.org |
 
 `build/patches/ghostty/*.patch` are this repository's own Linux patches (embedded OpenGL, input handoff,
 resources, GPU release), not upstream's: a `GHOSTTY_REV` move must re-apply them (`scripts/build-ghostty.sh` does,
-with `--fuzz=0`), and `scripts/gen-ghostty-bindings.sh` regenerates the checked-in bindings afterwards.
+with `--fuzz=0`), and `scripts/gen-ghostty-bindings.sh` regenerates the checked-in bindings afterwards,
+`scripts/gen-ghostty-config-keys.sh` agterm-core's ghostty config key table.
 
 A new entry under `agterm/Resources/` (reported `unmapped`) has no copy yet: deciding where it goes is a plan task.
 

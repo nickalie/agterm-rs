@@ -140,7 +140,8 @@ because every plan task's subagent starts from this branch and must be able to r
    (`# libghostty at upstream agterm TARGET's GHOSTTY_REV (.upstream/agterm scripts/setup.sh, <date>)`, the zmx one
    alike). Then, in the background: `scripts/build-ghostty.sh` when a `GHOSTTY_*` pin moved, `scripts/build-zmx.sh`
    when a `ZMX_*` pin or `build/patches/zmx/` moved. They download, check every sha256, and apply the patches with
-   `--fuzz=0`; after a `GHOSTTY_REV` move also run `scripts/gen-ghostty-bindings.sh`. A sum mismatch, a patch that
+   `--fuzz=0`; after a `GHOSTTY_REV` move also run `scripts/gen-ghostty-bindings.sh` and
+   `scripts/gen-ghostty-config-keys.sh`. A sum mismatch, a patch that
    no longer applies, a failed build or bindings that no longer compile → `git checkout -- build/pins.env` (and the
    bindings), save the log to `WORK/`, and record a plan task "move <pin> to <rev>: rebase <patch> / fix <error>"
    with the log's key lines.
