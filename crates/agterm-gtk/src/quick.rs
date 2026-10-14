@@ -39,7 +39,7 @@ use agterm_core::quick_metrics::PanelSize;
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 
-use placement::QuickHost;
+use agterm_app::quick_placement::{self as placement, QuickHost};
 
 use crate::deck::PaneContext;
 use crate::pane::PaneSurface;
@@ -48,7 +48,6 @@ use crate::surface::{SurfaceSpec, TerminalSurface};
 use crate::windows::Windows;
 
 mod layer;
-mod placement;
 
 /// The panel's style: a rounded frame with upstream's faint white border (12 pt radius, white at 18%) over a
 /// transparent window, so the corners show what is behind.

@@ -231,7 +231,7 @@ mod tests {
     }
 
     /// Names the test a re-run copy of the test binary runs in place of re-running it: see [`in_a_fresh_process`].
-    const FRESH_PROCESS_ENV: &str = "AGTERM_GTK_TEST_FRESH_PROCESS";
+    const FRESH_PROCESS_ENV: &str = "AGTERM_APP_TEST_FRESH_PROCESS";
 
     /// Runs `body` alone in a fresh copy of the test binary: in the copy [`FRESH_PROCESS_ENV`] names `test` to (its
     /// full path, `module::tests::name`), it runs `body`; anywhere else it re-runs `test` alone in such a copy and

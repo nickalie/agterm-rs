@@ -150,7 +150,7 @@ because every plan task's subagent starts from this branch and must be able to r
    in the copies survives. `conflict` → a plan task to merge it by hand, keeping the Linux glue; the task names the
    upstream diff command (`git -C .upstream/agterm diff CURRENT TARGET -- <path>`), not the temp patch.
    `unmapped` → a plan task deciding where the new resource goes. When nothing conflicted, bump the release named in
-   `crates/agterm-gtk/src/integrations/mod.rs`'s header. A zmx patch change also needs `scripts/build-zmx.sh` (as in 2).
+   `crates/agterm-app/src/integrations/mod.rs`'s header. A zmx patch change also needs `scripts/build-zmx.sh` (as in 2).
 4. **Tag mentions**: `bash SKILL_DIR/scripts/tag-mentions.sh CURRENT TARGET --apply` rewrites the `bump` class
    (README.md, CLAUDE.md, conformance/README.md, spike-macos.yml) and lists the rest with its class. Then by hand:
    `reference` (swift_macos.py's `PARITY_LEVEL` with its assert in `conformance/selftests/test_impls.py`); `pins` and

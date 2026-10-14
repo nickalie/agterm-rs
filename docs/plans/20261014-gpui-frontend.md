@@ -324,11 +324,11 @@ Both frontends use them while they coexist, so they must not be copied.
 - Modify: `crates/agterm-gtk/src/{hook_runner,process_table,restore_launch,logging}.rs`, `quick/placement.rs`,
   `integrations/*` (re-export or call into `agterm-app`)
 
-- [ ] move each module with its tests; GTK keeps only widget glue
-- [ ] also move `remote.rs`'s presentation process (GTK-free apart from the network/resume observer, which stays per
+- [x] move each module with its tests; GTK keeps only widget glue
+- [x] also move `remote.rs`'s presentation process (GTK-free apart from the network/resume observer, which stays per
       frontend)
-- [ ] no behavior change: existing tests move along and pass unchanged
-- [ ] gates, full conformance on GTK (`rust-passing.txt` unchanged) — must pass before Task 7
+- [x] no behavior change: existing tests move along and pass unchanged
+- [x] gates, full conformance on GTK (`rust-passing.txt` unchanged) — must pass before Task 7
 
 ### Task 7: Ghostty config parser in core
 

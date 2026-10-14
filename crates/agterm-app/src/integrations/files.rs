@@ -14,6 +14,10 @@ pub struct Unreadable;
 
 /// The contents of an existing config file: `None` when absent (a fresh install), the text when readable,
 /// [`Unreadable`] when it exists but cannot be read (upstream's `readExistingConfig`). A dangling symlink is absent.
+///
+/// # Errors
+///
+/// [`Unreadable`] when the file exists but cannot be read or is not UTF-8.
 pub fn read_existing(path: &Path) -> Result<Option<String>, Unreadable> {
     match fs::metadata(path) {
         Ok(_) => {}
@@ -25,17 +29,20 @@ pub fn read_existing(path: &Path) -> Result<Option<String>, Unreadable> {
 }
 
 /// Whether anything is at `path`, a dangling symlink included (lstat, as upstream's `attributesOfItem`).
+#[must_use]
 pub fn entry_exists(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
 /// The permission bits of the file at `path`, `None` when absent or unreadable (upstream's `posixMode`).
+#[must_use]
 pub fn posix_mode(path: &Path) -> Option<u32> {
     fs::metadata(path).ok().map(|meta| meta.permissions().mode() & 0o7777)
 }
 
 /// The resolved target when `path` is itself a symlink (the chain followed), else `None` (upstream's `symlinkTarget`).
 /// A dangling link resolves one step, so the write recreates its target rather than replacing the link.
+#[must_use]
 pub fn symlink_target(path: &Path) -> Option<PathBuf> {
     let meta = fs::symlink_metadata(path).ok()?;
     if !meta.file_type().is_symlink() {
@@ -52,6 +59,10 @@ pub fn symlink_target(path: &Path) -> Option<PathBuf> {
 /// restrictive mode instead of the fresh file's default (upstream's `AgentHooksInstall.writeFile`). The temp carries
 /// that mode before any contents reach it, so a chmod-600 file's text is never readable more widely, not even for the
 /// length of the write or after an interrupted install.
+///
+/// # Errors
+///
+/// The temp could not be created, written, synced or renamed over `path`; the temp is removed then.
 pub fn write_file(text: &str, path: &Path, mode: Option<u32>) -> io::Result<()> {
     let temp = temp_path(path)?;
     let written = (|| {
@@ -95,6 +106,10 @@ fn open_temp(temp: &Path, mode: Option<u32>) -> io::Result<fs::File> {
 
 /// Writes `text` through an existing symlink to its target, so a dotfiles-managed link survives, keeping the target's
 /// mode, so a chmod-600 file is not widened and a script stays executable (upstream's `writePreservingSymlink`).
+///
+/// # Errors
+///
+/// As [`write_file`].
 pub fn write_preserving_symlink(text: &str, path: &Path) -> io::Result<()> {
     let target = write_target(path);
     let mode = posix_mode(&target);
@@ -102,12 +117,17 @@ pub fn write_preserving_symlink(text: &str, path: &Path) -> io::Result<()> {
 }
 
 /// The path a write lands on: a symlink's target, else the path itself.
+#[must_use]
 pub fn write_target(path: &Path) -> PathBuf {
     symlink_target(path).unwrap_or_else(|| path.to_path_buf())
 }
 
 /// Copies the directory tree `source` into `destination`, replacing every file the source ships and keeping any other
 /// file already there. Modes travel with the files, so the scripts stay executable.
+///
+/// # Errors
+///
+/// A directory could not be read or created, or a file could not be replaced or copied.
 pub fn copy_tree(source: &Path, destination: &Path) -> io::Result<()> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
@@ -127,6 +147,10 @@ pub fn copy_tree(source: &Path, destination: &Path) -> io::Result<()> {
 }
 
 /// Removes whatever is at `path`: a symlink or file is unlinked, a directory removed with its contents. Absent is fine.
+///
+/// # Errors
+///
+/// `path` could not be inspected or removed.
 pub fn remove_entry(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -137,6 +161,10 @@ pub fn remove_entry(path: &Path) -> io::Result<()> {
 }
 
 /// Every regular file under `root`, relative to it, sorted: what a package comparison walks.
+///
+/// # Errors
+///
+/// A directory under `root` could not be read.
 #[cfg(test)]
 pub fn relative_files(root: &Path) -> io::Result<Vec<PathBuf>> {
     fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {

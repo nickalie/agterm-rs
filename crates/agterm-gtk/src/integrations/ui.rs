@@ -8,9 +8,9 @@ use std::cell::Cell;
 use adw::prelude::*;
 use gtk::{gio, glib};
 
-use super::hooks::{self, OpenCodeStart};
-use super::opencode::{self, Version};
-use super::{Environment, InstallError, cli, skill};
+use agterm_app::integrations::hooks::{self, OpenCodeStart};
+use agterm_app::integrations::opencode::{self, Version};
+use agterm_app::integrations::{Environment, InstallError, cli, skill};
 
 /// Developer Documentation… in the Help menu (upstream's).
 pub const DEVELOPER_DOCS_URL: &str = "https://agterm.com/docs#agtermctl";

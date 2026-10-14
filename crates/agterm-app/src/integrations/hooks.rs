@@ -440,6 +440,10 @@ fn bundled_text(path: &Path, marker: &str, what: &str) -> Result<String, Install
 
 /// Plans the whole install over `env`'s home, without writing. `opencode` is where the `OpenCode` step stands after the
 /// probe and the chooser: an [`OpenCodeStart::Ask`] nobody answered counts as skipped.
+///
+/// # Errors
+///
+/// [`InstallError`] when the bundled package is missing or a step cannot be planned.
 pub fn plan(env: &Environment, opencode: &OpenCodeStart, probe: Option<&Probe>) -> Result<HooksPlan, InstallError> {
     let package = env
         .agent_status
@@ -563,6 +567,10 @@ fn plan_pi(home: &Path, package: &Path) -> Result<PiPlan, InstallError> {
 
 /// Carries `plan` out, every step regardless of an earlier one's outcome; a failed copy, bake or config write stops
 /// the install as upstream's thrown error does.
+///
+/// # Errors
+///
+/// [`InstallError`] naming the copy, bake or config write that failed.
 pub fn apply(plan: &HooksPlan) -> Result<HooksOutcome, InstallError> {
     install_package(plan)?;
     let settings_skipped = match &plan.claude {

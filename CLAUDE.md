@@ -17,6 +17,7 @@ the ratchet in [conformance/README.md](conformance/README.md) and
 | `agterm-ghostty-sys` | checked-in bindgen output (`scripts/gen-ghostty-bindings.sh`), links the vendored `libghostty.so`; not under the workspace lints | Linux, macOS |
 | `agterm-ghostty` | safe wrapper over the sys crate: app, config, surface, input, actions, clipboard, text | Linux, macOS |
 | `agterm-zmx` | the `SessionHost` over the patched zmx: launch inputs, client, inventory, reaps | Linux, macOS |
+| `agterm-app` | frontend-neutral app services both frontends share: the hooks' `ProcessLauncher`, the `/proc` `ProcessTable`, logging, the restore launch decision, quick-terminal placement, the agent integrations' installers, the remote presentation process | Linux |
 | `agterm-gtk` → `agterm` | GTK4/libadwaita frontend: windows, sidebar, deck, overlays, quick terminal (layer-shell), WebKitGTK HTML overlays (feature `html`), agent integrations | Linux |
 
 The GTK main loop owns the main thread and the whole state; control connections hop onto it through `MainLoop`.

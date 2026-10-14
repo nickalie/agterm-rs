@@ -3,6 +3,22 @@
 version = 4
 
 [[package]]
+name = "agterm-app"
+version = "0.1.0"
+dependencies = [
+ "agterm-core",
+ "agterm-host",
+ "agterm-zmx",
+ "libc",
+ "serde_json",
+ "tempfile",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "agterm-core"
 version = "0.1.0"
 dependencies = [
@@ -56,6 +72,7 @@ version = "0.1.0"
 name = "agterm-gtk"
 version = "0.1.0"
 dependencies = [
+ "agterm-app",
  "agterm-core",
  "agterm-ghostty",
  "agterm-ghostty-sys",
@@ -72,9 +89,7 @@ dependencies = [
  "pkg-config",
  "serde_json",
  "tempfile",
- "toml",
  "tracing",
- "tracing-subscriber",
  "url",
  "uuid",
  "webkit6",

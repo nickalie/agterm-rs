@@ -114,11 +114,11 @@ pub fn reveal_in_file_manager(path: &Path) {
 /// The process seam of the hooks and custom commands: children start through [`SystemLauncher`], and each exit comes
 /// back as a main-loop task that settles.
 ///
-/// [`SystemLauncher`]: crate::hook_runner::SystemLauncher
+/// [`SystemLauncher`]: agterm_app::hook_runner::SystemLauncher
 fn process_host(poster: &crate::state::Poster, socket: String) -> agterm_core::ProcessHost {
     let posting = poster.clone();
     agterm_core::ProcessHost {
-        launcher: Arc::new(crate::hook_runner::SystemLauncher),
+        launcher: Arc::new(agterm_app::hook_runner::SystemLauncher),
         poster: Arc::new(move |task: agterm_core::CoreTask| {
             crate::state::post(&posting, move |state: &mut AppState| {
                 task(&mut state.core);
@@ -156,12 +156,12 @@ fn install_launch_hosts(core: &mut Core) {
     core.set_ui_test_launch(agterm_core::is_ui_test_launch(&ProcessEnv));
     // the restore decision is frozen before the first terminal, and the launch spawn order armed before any window
     // shows (upstream's `GhosttyApp.restoreLaunchDecision` and the pacer's arm at app init)
-    let decision = crate::restore_launch::launch_decision(core.settings(), &ProcessEnv);
+    let decision = agterm_app::restore_launch::launch_decision(core.settings(), &ProcessEnv);
     core.set_restore_launch(decision);
     core.load_restore_denylist_at_launch();
     core.set_process_table(
-        Box::new(crate::process_table::ProcTable::new()),
-        crate::restore_launch::shell_basename(&ProcessEnv),
+        Box::new(agterm_app::process_table::ProcTable::new()),
+        agterm_app::restore_launch::shell_basename(&ProcessEnv),
     );
     // the launch reap and a pending live sessions reset finish before any window mounts
     crate::zmx_runtime::install(core, &ProcessEnv);

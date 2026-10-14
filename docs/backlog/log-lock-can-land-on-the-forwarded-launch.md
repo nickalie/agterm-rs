@@ -1,6 +1,6 @@
 ---
 worth: yes
-where: crates/agterm-gtk/src/logging.rs:79
+where: crates/agterm-app/src/logging.rs:79
 added: 2026-10-14
 ---
 # The log's instance lock can land on the launch that is forwarded away

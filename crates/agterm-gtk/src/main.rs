@@ -16,14 +16,12 @@ mod deck;
 mod ghostty_app;
 #[cfg(test)]
 mod gtk_test;
-mod hook_runner;
 mod html_overlay;
 mod hud;
 mod input;
 mod integrations;
 mod keymap_actions;
 mod keymap_dispatch;
-mod logging;
 mod main_loop;
 mod modal;
 mod mute;
@@ -34,11 +32,9 @@ mod pane;
 mod pane_lead;
 mod picker;
 mod popovers;
-mod process_table;
 mod quick;
 mod remote;
 mod remotes_watcher;
-mod restore_launch;
 mod row_icon;
 mod search;
 mod session_switcher;
@@ -123,7 +119,7 @@ fn main() -> glib::ExitCode {
     let gl_env = unsafe { GlEnvRestore::prefer_desktop_gl() };
     // SAFETY: as above.
     unsafe { ghostty_app::export_resources_dir() };
-    logging::init(&ProcessEnv);
+    agterm_app::logging::init(&ProcessEnv);
 
     let app = adw::Application::builder()
         .application_id(app::app_id(&ProcessEnv))
