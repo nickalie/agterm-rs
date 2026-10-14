@@ -22,15 +22,16 @@ agterm in Rust, Linux first: a GTK4/libadwaita terminal over libghostty, driven 
 - gtk4-layer-shell: the distribution's package, or `scripts/build-layer-shell.sh` (below), which needs meson, ninja, a
   C compiler and the Wayland development files.
 - For the native builds: curl, tar, xz, patch, sha256sum and ncurses' `tic`/`infocmp`.
-- For the conformance suite: Python 3.11+, weston and dbus-daemon (each instance gets its own headless weston and
-  bus); zsh or fish as the login shell for the Live tests of that shell.
+- For the GTK unit tests: Xvfb's `xvfb-run`, so they get a display of their own instead of the desktop.
+- For the conformance suite: Python 3.11+ with venv, weston and dbus-daemon (each instance gets its own headless
+  weston and bus); zsh or fish as the login shell for the Live tests of that shell.
 
-On Ubuntu 24.04, the CI image:
+On Ubuntu 24.04, the CI image's packages plus `xvfb` and `python3-venv` for local runs:
 
 ```sh
 sudo apt-get install pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
   meson ninja-build libwayland-dev wayland-protocols curl xz-utils patch ncurses-bin \
-  weston dbus-daemon libgl1-mesa-dri libegl-mesa0
+  weston dbus-daemon libgl1-mesa-dri libegl-mesa0 xvfb python3-venv
 ```
 
 Run-time dependencies of every `agterm` binary:
@@ -91,11 +92,12 @@ GDK_BACKEND=x11 xvfb-run -a cargo test --workspace
 conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
 ```
 
-- The GTK unit tests need a display and skip without one; under `xvfb-run` they run without touching the desktop.
+- The GTK unit tests need a display and skip without one (as in CI, which runs plain `cargo test --workspace`);
+  under `xvfb-run` they run without touching the desktop.
 - `run-rust-linux.sh` builds the release workspace, stages it into `target/conformance-stage`, runs the protocol, cli
   and behaviors layers with `--impl rust` and exits with the ratchet's status. It runs the suite with `$PYTHON`, else
   `.venv/bin/python`, else `python3`, with the suite installed:
-  `python -m venv .venv && .venv/bin/pip install -e conformance`. See
+  `python3 -m venv .venv && .venv/bin/pip install -e conformance`. See
   [conformance/README.md](conformance/README.md) and [conformance/docs/rust-build.md](conformance/docs/rust-build.md).
 - Lint rules: `[workspace.lints]` in `Cargo.toml` (clippy `all` + `pedantic`, the complexity and robustness lints
   denied) with the thresholds in `clippy.toml`; the only exception is a reasoned outer `#[expect]` on one item.
