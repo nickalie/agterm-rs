@@ -267,7 +267,6 @@ fn join_with_deadline(handle: std::thread::JoinHandle<Vec<u8>>, deadline: Instan
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
 
     use super::*;
 
@@ -363,9 +362,19 @@ mod tests {
     fn fake_environment(dir: &Path, version_script: &str) -> HashMap<String, String> {
         let bin = dir.join("bin");
         fs::create_dir_all(&bin).unwrap();
+        // A script this process wrote is not exec'd while a write descriptor to it may still be open: a test on
+        // another thread forking in between hands the child that descriptor until its own exec, and running the
+        // script then fails with ETXTBSY. `install` writes it in a process of its own, so no fork here inherits one.
         let write_exec = |path: &Path, text: &str| {
-            fs::write(path, text).unwrap();
-            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+            let source = path.with_extension("source");
+            fs::write(&source, text).unwrap();
+            let status = Command::new("install")
+                .args(["-m", "0755"])
+                .arg(&source)
+                .arg(path)
+                .status()
+                .unwrap();
+            assert!(status.success(), "install {}", path.display());
         };
         write_exec(&bin.join("opencode"), version_script);
         write_exec(&dir.join("shell"), "#!/bin/sh\nshift\nexec /bin/sh -c \"$1\"\n");

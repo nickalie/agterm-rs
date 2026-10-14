@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 use bitflags::bitflags;
 use strum::{EnumIter, EnumString, IntoStaticStr};
 
-use super::parse::Setting;
+use super::binds::Keybinds;
+use super::parse::{Diagnostic, Setting};
 use super::validate::{
     self, Accepted, Compat, ConfigPath, Padding, TerminalColor, ThemeName, parse_bool, parse_color, parse_float,
     parse_limit, parse_padding, parse_palette_entry, parse_terminal_color, parse_theme,
@@ -343,8 +344,8 @@ pub struct GhosttyConfig {
     pub shell_integration_features: ShellIntegrationFeatures,
     /// The child's `TERM`.
     pub term: String,
-    /// `keybind` lines as written, in order, an empty one included (it resets the binds); Task 8's table reads them.
-    pub keybind: Vec<String>,
+    /// `keybind`: ghostty's built-in binds with the lines over them.
+    pub keybind: Keybinds,
     /// A static window title in place of the programs' own.
     pub title: Option<String>,
 }
@@ -368,7 +369,7 @@ impl Default for GhosttyConfig {
             mouse: Mouse::default(),
             shell_integration_features: ShellIntegrationFeatures::DEFAULT,
             term: DEFAULT_TERM.to_owned(),
-            keybind: Vec::new(),
+            keybind: Keybinds::defaults(),
             title: None,
         }
     }
@@ -384,8 +385,12 @@ fn given(value: Option<&str>) -> Option<&str> {
 }
 
 impl GhosttyConfig {
-    /// Applies an accepted line; a refused one changes nothing, as in ghostty.
-    pub fn apply(&mut self, setting: &Setting) {
+    /// Applies an accepted line; a refused one changes nothing, as in ghostty. A line its key refuses only in the
+    /// context of the lines before it (a `keybind = chain=…` with no binding to extend) is the diagnostic returned.
+    pub fn apply(&mut self, setting: &Setting) -> Option<Diagnostic> {
+        if setting.key == "keybind" {
+            return self.apply_keybind(setting);
+        }
         match &setting.accepted {
             Ok(Accepted::Field(spec)) => {
                 if !self.apply_key(spec.name, setting) {
@@ -395,6 +400,23 @@ impl GhosttyConfig {
             Ok(Accepted::Compat(handler)) => self.apply_compat(*handler, setting),
             Err(_) => {}
         }
+        None
+    }
+
+    /// A `keybind` line over the binds so far. A refused one is still applied, without a second diagnostic: ghostty
+    /// defines the key table a refused `name/binding` names, and refuses any other line before it changes anything.
+    fn apply_keybind(&mut self, setting: &Setting) -> Option<Diagnostic> {
+        let value = setting.value.as_deref()?;
+        let applied = self.keybind.parse_cli(value);
+        if setting.accepted.is_err() {
+            return None;
+        }
+        let error = applied.err()?;
+        Some(Diagnostic {
+            location: setting.location.clone(),
+            key: setting.key.clone(),
+            message: format!("unknown error {}", error.zig_name()),
+        })
     }
 
     /// What `Config.finalize` derives: the bold and italic families default to `font-family`, an empty `term` is
@@ -483,7 +505,6 @@ impl GhosttyConfig {
             "scrollback-limit-lines" => self.scrollback.limit_lines = limit_or(value, None),
             "shell-integration-features" => self.shell_integration_features = shell_features(value),
             "term" => value.unwrap_or(DEFAULT_TERM).clone_into(&mut self.term),
-            "keybind" => self.keybind.push(value.unwrap_or("").to_owned()),
             "title" => self.title = value.map(str::to_owned),
             _ => return false,
         }

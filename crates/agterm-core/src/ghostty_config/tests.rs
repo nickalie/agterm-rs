@@ -428,7 +428,6 @@ fn compatibility_handlers_take_renamed_and_removed_keys() {
 fn residual_differences_accept_any_value_of_an_opaque_key() {
     // libghostty counts each of these once; agterm does not port their parse (module docs)
     for line in [
-        "keybind = garbage",
         "adjust-cell-height = tall",
         "mouse-scroll-multiplier = lots",
         "font-style = x",
@@ -476,7 +475,6 @@ fn residual_differences_accept_any_value_of_an_opaque_key() {
         "initial-command",
         "input",
         "key-remap",
-        "keybind",
         "macos-icon-screen-color",
         "mouse-scroll-multiplier",
         "quick-terminal-size",
@@ -577,13 +575,17 @@ fn agterms_defaults_load_clean() {
     assert_eq!(config.cursor.style, CursorStyle::Block);
     assert!(!config.cursor.click_to_move);
     assert_eq!(config.shell_integration_features, ShellIntegrationFeatures::PATH);
+    let mut expected = binds::Keybinds::defaults();
+    for line in [
+        "ctrl+shift+key_c=copy_to_clipboard",
+        "ctrl+shift+key_v=paste_from_clipboard",
+        "ctrl+shift+key_a=select_all",
+    ] {
+        expected.parse_cli(line).expect("a valid bind");
+    }
     assert_eq!(
-        config.keybind,
-        [
-            "ctrl+shift+key_c=copy_to_clipboard",
-            "ctrl+shift+key_v=paste_from_clipboard",
-            "ctrl+shift+key_a=select_all"
-        ]
+        config.keybind, expected,
+        "ghostty's binds with the physical-key Edit chords over them"
     );
 }
 
@@ -732,7 +734,9 @@ fn shell_features_term_keybind_and_title() {
         "named flags over ghostty's defaults"
     );
     assert_eq!(config.term, "xterm-256color");
-    assert_eq!(config.keybind, ["ctrl+a=select_all", "", "ctrl+b=copy_to_clipboard"]);
+    let mut expected = binds::Keybinds::defaults();
+    expected.parse_cli("ctrl+b=copy_to_clipboard").expect("a valid bind");
+    assert_eq!(config.keybind, expected, "an empty line restores ghostty's binds");
     assert_eq!(config.title.as_deref(), Some("pinned"));
     let reset = load("shell-integration-features = false\nterm =\ntitle = x\ntitle =\n").config;
     assert_eq!(reset.shell_integration_features, ShellIntegrationFeatures::empty());
