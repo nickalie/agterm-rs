@@ -6,8 +6,8 @@
 #   with its file, line, item, lint and reason, then the count, an expect wrapped in #[cfg_attr(..., expect(...))]
 #   included. Markdown, so CI can append it to the job summary.
 # - Fails (exit 1) on any inner #![allow(...)] or #![expect(...)], or an inner #![cfg_attr(...)] carrying one,
-#   outside crates/agterm-ghostty-sys, the bindgen crate that sets its own lints: an exception must be an outer
-#   #[expect] on the one item, with a reason.
+#   outside crates/agterm-ghostty-sys and crates/agterm-ghostty-vt-sys, the bindgen crates that set their own lints:
+#   an exception must be an outer #[expect] on the one item, with a reason.
 #
 # Usage: scripts/lint-report.sh [ROOT]   (default: the repository root)
 set -euo pipefail
@@ -29,7 +29,8 @@ COMPLEXITY = {
     "fn_params_excessive_bools",
     "struct_excessive_bools",
 }
-EXEMPT_CRATE = "agterm-ghostty-sys"
+# the bindgen crates, by exact name: their wrappers (agterm-ghostty, agterm-ghostty-vt) stay under every lint
+EXEMPT_CRATES = {"agterm-ghostty-sys", "agterm-ghostty-vt-sys"}
 # An attribute that is, or may carry (cfg_attr), a lint level; group 1 is "!" for an inner one.
 ATTRIBUTE = re.compile(r"#(!?)\[\s*(allow|expect|cfg_attr)\s*\(")
 LEVEL = re.compile(r"\b(allow|expect)\s*\(")
@@ -97,7 +98,7 @@ for path in sorted((root / "crates").rglob("*.rs")):
     if "target" in relative.parts:
         continue
     text = path.read_text(encoding="utf-8")
-    exempt = relative.parts[1] == EXEMPT_CRATE
+    exempt = relative.parts[1] in EXEMPT_CRATES
     for match in ATTRIBUTE.finditer(text):
         line_start = text.rfind("\n", 0, match.start()) + 1
         if not code_only(text[line_start : match.start() + 1]):

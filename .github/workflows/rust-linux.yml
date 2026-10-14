@@ -42,7 +42,7 @@ jobs:
         run: |
           source scripts/lib/native.sh
           arch="$(host_zig_arch)"
-          for build in GHOSTTY ZMX; do
+          for build in GHOSTTY LIBGHOSTTY_VT ZMX; do
             version_var="${build}_ZIG_VERSION"
             sha_var="${build}_ZIG_SHA256_${arch^^}"
             mkdir -p "$VENDOR_ROOT"
@@ -52,6 +52,9 @@ jobs:
           done
       - name: libghostty prefix
         run: scripts/build-ghostty.sh
+      # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds
+      - name: libghostty-vt prefix
+        run: scripts/build-ghostty-vt.sh
       # Ubuntu 24.04 has no gtk4-layer-shell package; cargo finds the prefix through scripts/pkg-config.sh.
       - name: gtk4-layer-shell prefix
         run: scripts/build-layer-shell.sh
@@ -98,6 +101,9 @@ jobs:
           key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
       - name: libghostty prefix
         run: scripts/build-ghostty.sh
+      # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds
+      - name: libghostty-vt prefix
+        run: scripts/build-ghostty-vt.sh
       - name: gtk4-layer-shell prefix
         run: scripts/build-layer-shell.sh
       # stage.sh stages bin/zmx from this prefix, restored from the cache the rust-linux job saved
@@ -213,6 +219,9 @@ jobs:
           key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
       - name: libghostty prefix
         run: scripts/build-ghostty.sh
+      # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds
+      - name: libghostty-vt prefix
+        run: scripts/build-ghostty-vt.sh
       - name: gtk4-layer-shell prefix
         run: scripts/build-layer-shell.sh
       # stage.sh stages bin/zmx from this prefix, restored from the cache the rust-linux job saved
@@ -282,6 +291,9 @@ jobs:
           key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
       - name: libghostty prefix
         run: scripts/build-ghostty.sh
+      # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds
+      - name: libghostty-vt prefix
+        run: scripts/build-ghostty-vt.sh
       - name: gtk4-layer-shell prefix
         run: scripts/build-layer-shell.sh
       # stage.sh stages bin/zmx from this prefix, restored from the cache the rust-linux job saved

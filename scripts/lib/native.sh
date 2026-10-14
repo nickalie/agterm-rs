@@ -1,10 +1,11 @@
-# Shared helpers of the native build scripts (build-ghostty.sh, build-layer-shell.sh, build-zmx.sh, pkg-config.sh,
-# stage.sh). Sourced, not run.
+# Shared helpers of the native build scripts (build-ghostty.sh, build-ghostty-vt.sh, build-layer-shell.sh, build-zmx.sh,
+# pkg-config.sh, stage.sh). Sourced, not run.
 #
 # Each native dependency lives in its own vendored prefix, ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/<name>-<key>/,
 # where <key> hashes that dependency's pins and patches only. Cargo never runs zig: agterm-ghostty-sys asks
-# `build-ghostty.sh --print-prefix` where the prefix is and fails when it is missing. A relative AGTERM_VENDOR is
-# taken against the repository root, so every caller (and cargo, which runs from a crate directory) sees one path.
+# `build-ghostty.sh --print-prefix` (agterm-ghostty-vt-sys `build-ghostty-vt.sh --print-prefix`) where the prefix is
+# and fails when it is missing. A relative AGTERM_VENDOR is taken against the repository root, so every caller (and
+# cargo, which runs from a crate directory) sees one path.
 
 NATIVE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PINS="$NATIVE_ROOT/build/pins.env"
@@ -54,6 +55,20 @@ prefix_key() {
 
 ghostty_prefix() {
   echo "$VENDOR_ROOT/ghostty-$(prefix_key GHOSTTY "$NATIVE_ROOT/build/patches/ghostty")"
+}
+
+# libghostty-vt carries no patches: its key hashes the LIBGHOSTTY_VT_ pins only.
+ghostty_vt_prefix() {
+  echo "$VENDOR_ROOT/ghostty-vt-$(prefix_key LIBGHOSTTY_VT /nonexistent)"
+}
+
+# A libghostty-vt prefix is complete when the static library, the umbrella header and the pin manifest are there and
+# the manifest matches the LIBGHOSTTY_VT_ pins.
+ghostty_vt_prefix_is_complete() {
+  local prefix="$1"
+  [[ -s "$prefix/lib/libghostty-vt.a" && -s "$prefix/include/ghostty/vt.h" \
+    && -s "$prefix/include/ghostty/vt/terminal.h" && -s "$prefix/share/agterm/ghostty-vt-PINS" ]] \
+    && pin_lines LIBGHOSTTY_VT | cmp -s - "$prefix/share/agterm/ghostty-vt-PINS"
 }
 
 # gtk4-layer-shell carries no patches: its key hashes the LAYER_SHELL_ pins only.
