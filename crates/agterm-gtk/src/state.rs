@@ -25,6 +25,7 @@ use agterm_proto::{Command, Request};
 use agterm_server::{LineStream, LineStreamLimits, LineStreamOwner, Reply, ReplySender};
 use uuid::Uuid;
 
+use agterm_app::remote::{InboundGate, PresentationViewer, ProcessTransport};
 use agterm_core::app_actions::{ActionEffect, ActionOrigin};
 use agterm_core::keymap::TypingSurface;
 
@@ -61,35 +62,6 @@ impl agterm_core::LineChannel for StreamLines {
 
     fn shutdown(&self) {
         self.0.shutdown();
-    }
-}
-
-/// Bounds the lines a stream's reader may have waiting for the main loop: the reader blocks in
-/// [`InboundGate::acquire`] past the limit until a task releases its place (upstream's inbound semaphore).
-#[derive(Clone)]
-pub(crate) struct InboundGate(std::sync::Arc<(std::sync::Mutex<usize>, std::sync::Condvar)>);
-
-impl InboundGate {
-    pub(crate) fn new(limit: usize) -> Self {
-        Self(std::sync::Arc::new((
-            std::sync::Mutex::new(limit),
-            std::sync::Condvar::new(),
-        )))
-    }
-
-    pub(crate) fn acquire(&self) {
-        let (free, wake) = &*self.0;
-        let mut free = free.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        while *free == 0 {
-            free = wake.wait(free).unwrap_or_else(std::sync::PoisonError::into_inner);
-        }
-        *free -= 1;
-    }
-
-    pub(crate) fn release(&self) {
-        let (free, wake) = &*self.0;
-        *free.lock().unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
-        wake.notify_one();
     }
 }
 
@@ -181,6 +153,23 @@ pub struct AppState {
     remotes_watcher: Option<crate::remotes_watcher::RemotesWatcher>,
 }
 
+/// The presentation bridges' reports ([`agterm_app::remote`]).
+impl PresentationViewer for AppState {
+    fn viewer_line(&mut self, key: agterm_core::remote::LinkKey, line: &[u8]) {
+        if !self.quitting {
+            self.core.viewer_line(key, line);
+            self.settle();
+        }
+    }
+
+    fn viewer_closed(&mut self, key: agterm_core::remote::LinkKey, reason: &str) {
+        if !self.quitting {
+            self.core.viewer_closed(key, reason);
+            self.settle();
+        }
+    }
+}
+
 impl AppState {
     #[must_use]
     pub fn new(mut core: Core) -> Self {
@@ -219,7 +208,7 @@ impl AppState {
     pub fn attach(&mut self, poster: Poster, windows: Windows) {
         // the attached rows' presentation bridges run as children reporting back through the loop
         self.core
-            .set_presentation_transport(std::rc::Rc::new(crate::remote::ProcessTransport::new(poster.clone())));
+            .set_presentation_transport(std::rc::Rc::new(ProcessTransport::new(poster.clone())));
         crate::remote::observe_links(&poster);
         self.poster = poster;
         self.windows = Some(windows);
@@ -344,22 +333,6 @@ impl AppState {
     pub fn retry_remote_links(&mut self) {
         if !self.quitting {
             self.core.retry_remote_links_now(Instant::now());
-            self.settle();
-        }
-    }
-
-    /// A line a presentation bridge read ([`crate::remote`]).
-    pub fn viewer_line(&mut self, key: agterm_core::remote::LinkKey, line: &[u8]) {
-        if !self.quitting {
-            self.core.viewer_line(key, line);
-            self.settle();
-        }
-    }
-
-    /// A presentation bridge ended ([`crate::remote`]).
-    pub fn viewer_closed(&mut self, key: agterm_core::remote::LinkKey, reason: &str) {
-        if !self.quitting {
-            self.core.viewer_closed(key, reason);
             self.settle();
         }
     }
@@ -1106,26 +1079,6 @@ mod tests {
                 ..CoreState::default()
             },
         )
-    }
-
-    #[test]
-    fn the_inbound_gate_holds_the_reader_past_its_limit_until_a_line_is_handled() {
-        let gate = InboundGate::new(2);
-        gate.acquire();
-        gate.acquire();
-        let (done, finished) = std::sync::mpsc::channel();
-        let reader = gate.clone();
-        let blocked = std::thread::spawn(move || {
-            reader.acquire();
-            done.send(()).unwrap();
-        });
-        assert!(
-            finished.recv_timeout(Duration::from_millis(100)).is_err(),
-            "a third line waits"
-        );
-        gate.release();
-        finished.recv_timeout(Duration::from_secs(5)).unwrap();
-        blocked.join().unwrap();
     }
 
     #[test]

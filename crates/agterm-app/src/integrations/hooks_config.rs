@@ -77,6 +77,11 @@ pub fn may_overwrite_pi_extension(file_exists: bool, existing: Option<&str>) -> 
 /// Merges the agent-status hooks into a Claude Code `settings.json` (upstream's `mergeClaudeSettings`). `existing`
 /// `None` or blank starts a fresh object. Idempotent: hooks already present (either wrapper named) leave the input
 /// unchanged. Entries an earlier install pointed straight at the generic wrapper move onto the Claude adapter first.
+///
+/// # Errors
+///
+/// [`MalformedSettings`] when `existing` is not a JSON object, or its `hooks` or an event the merge writes is
+/// wrong-shaped.
 pub fn merge_claude_settings(existing: Option<&str>, script_dir: &str) -> Result<(String, bool), MalformedSettings> {
     let mut root = parsed_object(existing)?;
     let mut hooks = claude_hooks_object(&root)?;

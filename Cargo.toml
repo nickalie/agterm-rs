@@ -16,6 +16,7 @@ agterm-host = { path = "crates/agterm-host" }
 agterm-core = { path = "crates/agterm-core" }
 agterm-server = { path = "crates/agterm-server" }
 agterm-zmx = { path = "crates/agterm-zmx" }
+agterm-app = { path = "crates/agterm-app" }
 async-channel = "2"
 # glib's Unix-only API (SIGTERM on the main loop), a crate of its own; it follows the glib that gtk4 0.11 uses.
 glib-unix = "0.22"

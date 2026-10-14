@@ -66,6 +66,10 @@ pub struct SkillPlan {
 }
 
 /// Plans the install over `env`'s home, without writing.
+///
+/// # Errors
+///
+/// [`InstallError`] when the build bundles no skill.
 pub fn plan(env: &Environment) -> Result<SkillPlan, InstallError> {
     let source = env
         .skill

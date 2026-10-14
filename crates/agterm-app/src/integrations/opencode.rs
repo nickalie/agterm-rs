@@ -3,6 +3,7 @@
 //! configuration directory `OpenCode` 2 reads.
 
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -172,9 +173,12 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// a POSIX hop first, so a version that fails still reports where `OpenCode` 2 would look. `None` when the shell could
 /// not run or printed nothing past its startup noise (upstream's `OpenCodeEnvironmentProbe.detect`).
 #[must_use]
-pub fn detect(environment: &HashMap<String, String>, fallback_home: &str) -> Option<Probe> {
-    let mut environment = environment.clone();
-    environment.remove("AGTERM_SESSION_ID");
+pub fn detect<H: BuildHasher>(environment: &HashMap<String, String, H>, fallback_home: &str) -> Option<Probe> {
+    let environment: HashMap<String, String> = environment
+        .iter()
+        .filter(|(key, _)| key.as_str() != "AGTERM_SESSION_ID")
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
     let shell = environment
         .get("SHELL")
         .filter(|shell| !shell.is_empty())

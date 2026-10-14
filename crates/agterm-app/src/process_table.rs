@@ -28,6 +28,7 @@ impl Default for ProcTable {
 
 impl ProcTable {
     /// The live process table at `/proc`.
+    #[must_use]
     pub fn new() -> Self {
         Self::at("/proc")
     }
@@ -84,6 +85,7 @@ impl ProcessTable for ProcTable {
 
 /// The argv in a `/proc/<pid>/cmdline`: NUL-separated arguments, the trailing NUL ending the last one, each decoded
 /// lossily. `None` for empty content: a zombie or a kernel thread.
+#[must_use]
 pub fn parse_cmdline(bytes: &[u8]) -> Option<Vec<String>> {
     if bytes.is_empty() {
         return None;

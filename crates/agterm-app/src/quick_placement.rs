@@ -1,4 +1,5 @@
-//! The quick terminal's host and placement decisions, pure so they test without a display or a compositor.
+//! The quick terminal's host and placement decisions, pure so they test without a display or a compositor; each
+//! frontend applies them to its own panel.
 
 use agterm_core::quick_metrics::{self, PanelSize};
 
@@ -111,7 +112,7 @@ pub enum OutputChange<T> {
 /// The output change for a surface bound to `bound` when the monitors changed (or the panel was just hidden) and
 /// `usable` are the monitors left: it stays while its monitor is usable, else it moves to the first usable one. A
 /// surface without an output always moves (the library unrealizes an output-less surface on every monitor change), so
-/// a shown panel, which never names one, is hidden first ([`super::layer`]).
+/// a shown panel, which never names one, is hidden first (the frontend's layer-shell host).
 #[must_use]
 pub fn output_change<T: Clone + PartialEq>(bound: Option<&T>, usable: &[T]) -> OutputChange<T> {
     match bound {
@@ -121,7 +122,7 @@ pub fn output_change<T: Clone + PartialEq>(bound: Option<&T>, usable: &[T]) -> O
     }
 }
 
-/// A panel extent as GTK takes it.
+/// A panel extent in whole pixels, as a toolkit takes it.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "a share of a monitor's extent, rounded, fits an i32 by far"
