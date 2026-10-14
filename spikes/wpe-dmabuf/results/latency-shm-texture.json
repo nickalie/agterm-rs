@@ -1,0 +1,52 @@
+{
+  "args": "Args { mode: ShmTexture, url: \"http://127.0.0.1:18431/latency.html\", device: None, width: 1920, height: 1080, bench: Latency, duration: 12, out: Some(\"/home/nick/develop/projects/my/agterm-rs/.claude/worktrees/gpui-frontend/spikes/wpe-dmabuf/results/raw/latency-shm-texture.json\") }",
+  "elapsed_s": 14.073613286,
+  "bench": [
+    {
+      "key_to_frame": {
+        "n": 20,
+        "p50_ms": 41.211373,
+        "p95_ms": 46.141156,
+        "max_ms": 50.913188
+      },
+      "click_to_frame": {
+        "n": 20,
+        "p50_ms": 41.113496999999995,
+        "p95_ms": 52.522322,
+        "max_ms": 58.086726999999996
+      },
+      "center_pixels_bgra_le": []
+    }
+  ],
+  "wpe_frames": {
+    "count": 42,
+    "fps": 2.9837943058202887,
+    "interval_ms_p50": 303.12927499999995,
+    "interval_ms_p95": 317.378419,
+    "interval_ms_p99": 1949.394855,
+    "interval_ms_max": 1949.394855,
+    "intervals_over_25ms": 41
+  },
+  "gpui_paints": {
+    "count": 42,
+    "fps": 2.9837560484775,
+    "interval_ms_p50": 303.11807899999997,
+    "interval_ms_p95": 317.32457400000004,
+    "interval_ms_p99": 1949.3224169999999,
+    "interval_ms_max": 1949.3224169999999,
+    "intervals_over_25ms": 41
+  },
+  "frames": 42,
+  "frame_size": "1714x1432",
+  "dmabuf_frames": 0,
+  "shm_frames": 42,
+  "damage_ratio": 1.0,
+  "fence_waits": 0,
+  "fence_wait_us_total": 0,
+  "shm_copy_us_total": 199452,
+  "buffers_changed": 1,
+  "dmabuf_imports": 0,
+  "dmabuf_import_failures": 0,
+  "pixel_upload_bytes": 412347264,
+  "external_draws": 42
+}

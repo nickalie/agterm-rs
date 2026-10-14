@@ -1,0 +1,61 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>long page bench</title>
+<style>
+  body { margin: 0 auto; max-width: 1100px; font: 16px/1.5 sans-serif; background: #fafafa; color: #222; }
+  section { padding: 12px 24px; border-bottom: 1px solid #ddd; }
+  .card { display: inline-block; width: 180px; height: 90px; margin: 6px; border-radius: 10px;
+          box-shadow: 0 2px 6px rgba(0,0,0,.25); }
+  h2 { margin: 8px 0; }
+</style>
+</head>
+<body>
+<div id="content"></div>
+<script>
+  // A long page (text, shadows, gradients). __autoscroll(ms) scrolls 8 px per rAF and records rAF intervals; with
+  // ?auto=1 it starts after 2 s and POSTs the result to the bench server.
+  const content = document.getElementById('content');
+  const words = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore'.split(' ');
+  for (let i = 0; i < 600; i++) {
+    const s = document.createElement('section');
+    let text = '';
+    for (let j = 0; j < 80; j++) text += words[(i * 7 + j * 3) % words.length] + ' ';
+    s.innerHTML = `<h2>Section ${i}</h2><p>${text}</p>` +
+      Array.from({length: 5}, (_, k) =>
+        `<span class="card" style="background: linear-gradient(${(i * 37 + k * 50) % 360}deg, hsl(${(i * 13 + k * 60) % 360} 70% 60%), hsl(${(i * 29 + k * 90) % 360} 70% 40%))"></span>`).join('');
+    content.appendChild(s);
+  }
+  let intervals = [];
+  window.__autoscroll = (ms) => {
+    intervals = [];
+    const start = performance.now();
+    let last = start;
+    function step(now) {
+      intervals.push(now - last);
+      last = now;
+      window.scrollBy(0, 8);
+      if (now - start < ms) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+    return true;
+  };
+  window.__bench = () => {
+    const sorted = intervals.slice(1).sort((a, b) => a - b);
+    const pct = p => sorted.length ? sorted[Math.round((sorted.length - 1) * p)] : null;
+    const span = intervals.slice(1).reduce((a, b) => a + b, 0);
+    return {engine: navigator.userAgent, frames: sorted.length, fps: sorted.length * 1000 / span,
+            p50: pct(0.5), p95: pct(0.95), p99: pct(0.99), max: sorted[sorted.length - 1],
+            over25: sorted.filter(x => x > 25).length};
+  };
+  const params = new URLSearchParams(location.search);
+  if (params.get('auto') === '1') {
+    setTimeout(() => {
+      window.__autoscroll(5000);
+      setTimeout(() => fetch('/report', {method: 'POST', body: JSON.stringify({page: 'scroll', ...window.__bench()})}), 5500);
+    }, 2000);
+  }
+</script>
+</body>
+</html>

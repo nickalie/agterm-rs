@@ -1,0 +1,20 @@
+{
+  "seconds": 11.1,
+  "cpu_pct_total": 98.3,
+  "cpu_pct_by_name": {
+    "WPEWebProcess": 49.2,
+    "wpe-dmabuf-spik": 49.1
+  },
+  "gpu_sm_pct_by_name_avg": {
+    "WPEWebProcess": 12.0
+  },
+  "gpu_dec_pct_by_name_avg": {},
+  "gpu_util_pct_whole_gpu_avg": 18.2,
+  "gpu_decoder_pct_whole_gpu_avg": 0.0,
+  "intel_engine_busy_pct_tree": {
+    "render": 14.1
+  },
+  "intel_engine_busy_pct_niri": {
+    "render": 14.1
+  }
+}

@@ -264,14 +264,14 @@ the live agterm.
 - Create: `spikes/wpe-dmabuf/` (Cargo project; minimal hand-written FFI or gir output is fine here)
 - Create: `docs/spikes/20261014-wpe-dmabuf.md` (report)
 
-- [ ] WPE WebKit (WPEPlatform, headless/offscreen display) in its own thread with its own `GMainContext`, loading a URL
-- [ ] receive dmabuf frames; prototype a GPUI element importing them into a wgpu texture through wgpu-hal Vulkan
+- [x] WPE WebKit (WPEPlatform, headless/offscreen display) in its own thread with its own `GMainContext`, loading a URL
+- [x] receive dmabuf frames; prototype a GPUI element importing them into a wgpu texture through wgpu-hal Vulkan
       (patched local copy of `gpui-pre`); release buffers after present
-- [ ] input forwarding: pointer, wheel, keyboard into WPE
-- [ ] fallback path: SHM frames with damage rects drawn as a GPUI image; measure it too
-- [ ] measurements: YouTube 1080p60 (dropped frames, CPU, GPU) for dmabuf and SHM, long-page scroll fps, input
+- [x] input forwarding: pointer, wheel, keyboard into WPE
+- [x] fallback path: SHM frames with damage rects drawn as a GPUI image; measure it too
+- [x] measurements: YouTube 1080p60 (dropped frames, CPU, GPU) for dmabuf and SHM, long-page scroll fps, input
       latency; the GTK build's WebKitGTK overlay on the same page as the baseline
-- [ ] report: pass/fail against "1080p60 without drops, CPU ≈ the GTK build", driver quirks met
+- [x] report: pass/fail against "1080p60 without drops, CPU ≈ the GTK build", driver quirks met
 
 ### Task 3: Spike — layer-shell quick terminal and window activation under niri (real screen)
 

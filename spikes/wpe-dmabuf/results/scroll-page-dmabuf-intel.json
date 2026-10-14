@@ -1,0 +1,36 @@
+{
+  "args": "Args { mode: DmaBuf, url: \"http://127.0.0.1:18431/long.html?auto=1\", device: Some(\"/dev/dri/renderD128\"), width: 1920, height: 1080, bench: None, duration: 10, out: Some(\"/home/nick/develop/projects/my/agterm-rs/.claude/worktrees/gpui-frontend/spikes/wpe-dmabuf/results/raw/scroll-page-dmabuf-intel.json\") }",
+  "elapsed_s": 10.011255905,
+  "bench": [],
+  "wpe_frames": {
+    "count": 373,
+    "fps": 37.382723000539514,
+    "interval_ms_p50": 16.651406,
+    "interval_ms_p95": 18.042637,
+    "interval_ms_p99": 30.780769,
+    "interval_ms_max": 1995.443598,
+    "intervals_over_25ms": 8
+  },
+  "gpui_paints": {
+    "count": 373,
+    "fps": 37.38287673016265,
+    "interval_ms_p50": 16.675265000000003,
+    "interval_ms_p95": 17.251244,
+    "interval_ms_p99": 32.56782200000001,
+    "interval_ms_max": 1986.516899,
+    "intervals_over_25ms": 7
+  },
+  "frames": 373,
+  "frame_size": "1714x1432",
+  "dmabuf_frames": 373,
+  "shm_frames": 0,
+  "damage_ratio": 0.8383975852232892,
+  "fence_waits": 0,
+  "fence_wait_us_total": 0,
+  "shm_copy_us_total": 0,
+  "buffers_changed": 5,
+  "dmabuf_imports": 5,
+  "dmabuf_import_failures": 0,
+  "pixel_upload_bytes": 0,
+  "external_draws": 373
+}

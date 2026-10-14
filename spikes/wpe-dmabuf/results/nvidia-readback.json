@@ -1,0 +1,92 @@
+{
+  "args": "Args { mode: DmaBuf, url: \"http://127.0.0.1:18431/latency.html\", device: Some(\"/dev/dri/renderD129\"), width: 1920, height: 1080, bench: Latency, duration: 30, out: Some(\"/home/nick/develop/projects/my/agterm-rs/.claude/worktrees/gpui-frontend/spikes/wpe-dmabuf/results/raw/nvidia-readback.json\") }",
+  "elapsed_s": 14.015529777,
+  "bench": [
+    {
+      "key_to_frame": {
+        "n": 20,
+        "p50_ms": 12.206646,
+        "p95_ms": 20.202199,
+        "max_ms": 21.170167
+      },
+      "click_to_frame": {
+        "n": 20,
+        "p50_ms": 14.581805999999998,
+        "p95_ms": 19.339443000000003,
+        "max_ms": 20.549871
+      },
+      "center_pixels_bgra_le": [
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030",
+        "00c03030",
+        "00303030"
+      ]
+    }
+  ],
+  "wpe_frames": {
+    "count": 42,
+    "fps": 2.921113693444646,
+    "interval_ms_p50": 305.37121099999996,
+    "interval_ms_p95": 312.734566,
+    "interval_ms_p99": 2003.83885,
+    "interval_ms_max": 2003.83885,
+    "intervals_over_25ms": 41
+  },
+  "gpui_paints": {
+    "count": 44,
+    "fps": 3.131043190509617,
+    "interval_ms_p50": 300.472038,
+    "interval_ms_p95": 311.56509,
+    "interval_ms_p99": 2002.6725000000001,
+    "interval_ms_max": 2002.6725000000001,
+    "intervals_over_25ms": 40
+  },
+  "frames": 42,
+  "dmabuf_frames": 42,
+  "shm_frames": 0,
+  "damage_ratio": 1.0,
+  "fence_waits": 0,
+  "fence_wait_us_total": 0,
+  "shm_copy_us_total": 0,
+  "buffers_changed": 4,
+  "dmabuf_imports": 4,
+  "dmabuf_import_failures": 0,
+  "pixel_upload_bytes": 0,
+  "external_draws": 42
+}

@@ -1,0 +1,49 @@
+{"sample": "{\"video\":false}"}
+{"sample": "{\"video\":false}"}
+{"sample": "{\"video\":false}"}
+{"sample": "{\"t\":0,\"w\":0,\"h\":0,\"paused\":false,\"total\":0,\"dropped\":0,\"error\":null,\"quality\":\"hd720\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (334) / opus (251)\",\"resolution\":\"0x0@60 / 1920x1080@60\"}"}
+{"sample": "{\"video\":false}"}
+{"sample": "{\"video\":false}"}
+{"sample": "{\"video\":false}"}
+{"sample": "{\"video\":false}"}
+{"sample": "{\"video\":false}"}
+{"sample": "{\"video\":false}"}
+{"sample": "{\"video\":false}"}
+{"sample": "{\"video\":false}"}
+{"sample": "{\"video\":false}"}
+{"sample": "{\"video\":false}"}
+{"sample": "{\"t\":0,\"w\":0,\"h\":0,\"paused\":false,\"total\":0,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"0x0@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":0,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":0,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":0.659939,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":40,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":1.662378,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":100,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":2.652612,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":159,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":3.650474,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":219,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":4.65627,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":280,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":5.665943,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":340,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":6.666469,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":400,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":7.668077,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":460,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":8.664081,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":520,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":9.66468,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":580,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":10.658046,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":639,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":11.650359,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":699,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":12.649256,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":759,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":13.663007,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":819,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":14.66982,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":880,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":15.670224,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":940,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":16.669148,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":1000,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":17.664184,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":1059,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":18.105941,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":1059,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":18.245787,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":1059,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":18.673368,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":1059,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":18.811994,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":1059,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":19.707564,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":54,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":20.663137,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":111,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":21.634063,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":169,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":22.598835,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":227,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":23.615518,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":288,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":24.664103,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":351,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":25.647621,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":410,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":26.680105,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":472,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":27.696373,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":533,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":28.687905,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":592,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}
+{"sample": "{\"t\":29.694535,\"w\":1920,\"h\":1080,\"paused\":false,\"total\":652,\"dropped\":0,\"error\":null,\"quality\":\"hd1080\",\"codecs\":\"vp09.02.51.10.01.09.16.09.00 (335) / opus (251)\",\"resolution\":\"1920x1080@60 / 1920x1080@60\"}"}

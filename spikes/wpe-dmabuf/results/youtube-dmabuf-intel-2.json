@@ -1,0 +1,581 @@
+{
+  "args": "Args { mode: DmaBuf, url: \"https://www.youtube.com/watch?v=LXb3EKWsInQ\", device: Some(\"/dev/dri/renderD128\"), width: 1920, height: 1080, bench: Youtube, duration: 34, out: Some(\"/home/nick/develop/projects/my/agterm-rs/.claude/worktrees/gpui-frontend/spikes/wpe-dmabuf/results/raw/youtube-dmabuf-intel-2.json\") }",
+  "elapsed_s": 46.168635868,
+  "bench": [
+    {
+      "video": true,
+      "t": 1.709917,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 103,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "11.17 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 2.699324,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 162,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "13.69 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 3.689474,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 222,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "15.56 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 4.693924,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 282,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "19.71 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 5.707883,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 343,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "23.02 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 6.703727,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 402,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "22.02 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 7.711173,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 463,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "21.01 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 8.724365,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 523,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "19.99 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 9.72354,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 583,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "19.00 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 10.728966,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 644,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "20.47 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 11.728858,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 704,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "21.87 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 12.728682,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 763,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "22.91 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 13.7477,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 825,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "24.11 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 14.756444,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 885,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "24.19 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 15.759537,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 945,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "26.30 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 16.760474,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1005,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "25.30 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 17.75689,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1065,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "24.29 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 18.759125,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1125,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "23.28 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 19.752836,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1184,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "26.04 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 20.746344,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1244,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "25.04 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 21.746328,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1304,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "24.03 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 22.761237,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1365,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "30.02 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 23.7682,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1425,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "29.00 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 24.770773,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1485,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "27.99 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 25.771127,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1545,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "26.99 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 26.767157,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1605,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "25.98 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 27.768988,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1665,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "24.98 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 28.763001,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1725,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "23.98 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 29.756426,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1784,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "26.78 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 30.75644,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1844,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "25.77 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 31.772421,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1905,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "24.75 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 32.780369,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 1965,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "29.11 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 33.782796,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 2025,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "28.10 s"
+      },
+      "bench": null
+    },
+    {
+      "video": true,
+      "t": 34.783605,
+      "paused": false,
+      "w": 1920,
+      "h": 1080,
+      "total": 2085,
+      "dropped": 0,
+      "quality": "hd1080",
+      "nerds": {
+        "resolution": "1920x1080@60 / 1920x1080@60",
+        "codecs": "av01.0.09M.10.0.110.09.16.09.0 (699) / opus (251)",
+        "buffer_health_seconds": "27.09 s"
+      },
+      "bench": null
+    }
+  ],
+  "wpe_frames": {
+    "count": 2489,
+    "fps": 54.21488700638956,
+    "interval_ms_p50": 16.693141,
+    "interval_ms_p95": 19.258992,
+    "interval_ms_p99": 60.290616,
+    "interval_ms_max": 1684.719936,
+    "intervals_over_25ms": 47
+  },
+  "gpui_paints": {
+    "count": 2488,
+    "fps": 54.197680555596584,
+    "interval_ms_p50": 16.678987,
+    "interval_ms_p95": 19.026661999999998,
+    "interval_ms_p99": 60.292723,
+    "interval_ms_max": 1684.760874,
+    "intervals_over_25ms": 45
+  },
+  "frames": 2489,
+  "frame_size": "1714x1432",
+  "dmabuf_frames": 2489,
+  "shm_frames": 0,
+  "damage_ratio": 0.31273778019503623,
+  "fence_waits": 0,
+  "fence_wait_us_total": 0,
+  "shm_copy_us_total": 0,
+  "buffers_changed": 4,
+  "dmabuf_imports": 5,
+  "dmabuf_import_failures": 0,
+  "pixel_upload_bytes": 0,
+  "external_draws": 2488
+}
