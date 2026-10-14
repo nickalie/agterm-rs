@@ -657,13 +657,15 @@ fn attach_remote_lists_the_machines_sessions_in_the_picker_and_attaches_the_chos
     );
     let pending = |core: &Core| core.modal_slot(window).and_then(|slot| slot.pending().cloned());
     let settle = |core: &mut Core| {
-        for _ in 0..200 {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
             core.remote_tick(Instant::now());
             if core.remote_wake() != Some(Duration::from_millis(100)) || pending(core).is_some() {
                 return;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
+        panic!("the attach flow never settled");
     };
     fixture.core.attach_remote(window);
     let hosts = pending(&fixture.core).expect("which machine?");
@@ -811,38 +813,43 @@ fn retrying_the_remote_links_now_skips_every_backoff() {
     // the stream drops too and backs off
     let key = viewer.link().0.borrow().key.unwrap();
     viewer.fixture.core.viewer_closed(key, "exit 255");
-    let drain = |viewer: &mut Viewer| {
-        for _ in 0..200 {
+    // one logical clock: a probe that finishes inside the tick that started it schedules its retry from that tick's
+    // `now`, so every tick of an iteration shares it and the next iteration is past any backoff
+    let mut now = Instant::now();
+    let drain = |viewer: &mut Viewer, now: Instant| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
             if viewer.fixture.core.remote.viewer.probes_idle() {
                 return;
             }
-            viewer.fixture.core.remote_tick(Instant::now());
+            viewer.fixture.core.remote_tick(now);
             std::thread::sleep(Duration::from_millis(5));
         }
+        panic!("the probe never finished");
     };
-    for _ in 0..6 {
+    let failures = |viewer: &Viewer| {
         viewer
             .fixture
             .core
-            .remote_tick(Instant::now() + Duration::from_secs(3600));
-        drain(&mut viewer);
+            .remote
+            .viewer
+            .reconnects
+            .readback(pane)
+            .unwrap()
+            .failures
+    };
+    for i in 0..6 {
+        now += Duration::from_secs(3600);
+        viewer.fixture.core.remote_tick(now);
+        drain(&mut viewer, now);
+        assert_eq!(failures(&viewer), i + 1, "every backed-off probe ran and failed");
         let key = viewer.link().0.borrow().key.unwrap();
         viewer.fixture.core.viewer_closed(key, "exit 255");
     }
-    let failures = viewer
-        .fixture
-        .core
-        .remote
-        .viewer
-        .reconnects
-        .readback(pane)
-        .unwrap()
-        .failures;
-    assert!(failures >= 5, "{failures}");
     let launched = viewer.transport.0.borrow().len();
     *viewer.runner.probe_status.lock().unwrap() = 0;
-    viewer.fixture.core.retry_remote_links_now(Instant::now());
-    drain(&mut viewer);
+    viewer.fixture.core.retry_remote_links_now(now);
+    drain(&mut viewer, now);
     assert_eq!(
         viewer.transport.0.borrow().len(),
         launched + 1,
