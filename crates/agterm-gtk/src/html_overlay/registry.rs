@@ -4,7 +4,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use agterm_core::Core;
@@ -17,7 +17,8 @@ use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use uuid::Uuid;
 use webkit6::{
-    NetworkSession, ScriptMessageReply, URISchemeRequest, WebContext, WebView, WebsiteDataTypes, javascriptcore,
+    CookiePersistentStorage, NetworkSession, ScriptMessageReply, URISchemeRequest, WebContext, WebView,
+    WebsiteDataTypes, javascriptcore,
 };
 
 use super::page::{Page, Storage};
@@ -226,10 +227,26 @@ fn persistent_store_failure() -> Option<String> {
     let root = state_dir.join("browser").join(uuid_string(id));
     let data = root.join("data");
     let cache = root.join("cache");
-    let session = NetworkSession::new(Some(&data.to_string_lossy()), Some(&cache.to_string_lossy()));
-    refuse_downloads(&session);
+    let session = saved_session(&data, &cache);
     with(|registry| registry.saved = Some(session));
     None
+}
+
+/// A store kept under `data` and `cache`, cookies included (upstream's `WKWebsiteDataStore(forIdentifier:)`):
+/// `WebKit` keeps a session's cookies in memory unless told where to save them, so they go to `cookies.sqlite` in the
+/// data directory, which a later session on the same directories reads back.
+fn saved_session(data: &Path, cache: &Path) -> NetworkSession {
+    let session = NetworkSession::new(Some(&data.to_string_lossy()), Some(&cache.to_string_lossy()));
+    if let Some(cookies) = session.cookie_manager() {
+        cookies.set_persistent_storage(
+            &data.join("cookies.sqlite").to_string_lossy(),
+            CookiePersistentStorage::Sqlite,
+        );
+    } else {
+        tracing::warn!("the saved browser store has no cookie manager: its logins last until agterm quits");
+    }
+    refuse_downloads(&session);
+    session
 }
 
 /// Starts removing everything the saved store holds (upstream's `clearPersistentStore`): refused while a clear runs,
@@ -387,5 +404,161 @@ fn finish(token: u64, answer: Result<serde_json::Value, String>) {
             parked.reply.return_value(&value);
         }
         Err(message) => parked.reply.return_error_message(&message),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread::JoinHandle;
+    use std::time::{Duration, Instant};
+
+    use webkit6::prelude::WebViewExt;
+
+    use super::*;
+
+    /// A local web server: `/set` sets a lasting login cookie, any other path titles its page with the cookies the
+    /// request carried (`cookie=<header>`).
+    struct Server {
+        origin: String,
+        stop: Arc<AtomicBool>,
+        thread: Option<JoinHandle<()>>,
+    }
+
+    impl Server {
+        fn start() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let stop = Arc::new(AtomicBool::new(false));
+            let stopping = Arc::clone(&stop);
+            let thread = std::thread::spawn(move || serve_until(&listener, &stopping));
+            Self {
+                origin,
+                stop,
+                thread: Some(thread),
+            }
+        }
+    }
+
+    /// Answers every connection `listener` takes until `stop` is set.
+    fn serve_until(listener: &TcpListener, stop: &AtomicBool) {
+        for stream in listener.incoming() {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            if let Ok(stream) = stream {
+                respond(stream);
+            }
+        }
+    }
+
+    impl Drop for Server {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+            // wakes the accept loop so it sees the stop
+            let _ = TcpStream::connect(self.origin.trim_start_matches("http://"));
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    /// Answers one request, closing the connection after.
+    fn respond(mut stream: TcpStream) {
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut path = String::new();
+        let mut cookie = String::new();
+        let mut line = String::new();
+        while reader.read_line(&mut line).is_ok_and(|read| read > 0) {
+            let header = line.trim_end();
+            if header.is_empty() {
+                break;
+            }
+            if path.is_empty() {
+                path = header.split(' ').nth(1).unwrap_or_default().to_owned();
+            } else if let Some((name, value)) = header.split_once(':')
+                && name.eq_ignore_ascii_case("cookie")
+            {
+                value.trim().clone_into(&mut cookie);
+            }
+            line.clear();
+        }
+        let (set_cookie, title) = if path == "/set" {
+            ("Set-Cookie: login=kept; Max-Age=3600; Path=/\r\n", "set".to_owned())
+        } else {
+            ("", format!("cookie={cookie}"))
+        };
+        let body = format!("<html><head><title>{title}</title></head><body></body></html>");
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n{set_cookie}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+    }
+
+    /// Loads `uri` in a web view on `session` and hands back its title once `done` accepts it, or the last one after
+    /// ten seconds; the web view is closed after.
+    fn title_of(session: &NetworkSession, uri: &str, done: impl Fn(&str) -> bool) -> String {
+        let view = WebView::builder().network_session(session).build();
+        view.load_uri(uri);
+        let context = glib::MainContext::default();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut title = String::new();
+        while Instant::now() < deadline {
+            while context.iteration(false) {}
+            title = view.title().map(Into::into).unwrap_or_default();
+            if done(&title) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        view.try_close();
+        title
+    }
+
+    fn cookie_title(title: &str) -> bool {
+        title.starts_with("cookie=")
+    }
+
+    #[test]
+    fn a_saved_stores_login_outlives_its_session() {
+        crate::gtk_test::on_gtk_thread(saved_login_outlives_its_session);
+    }
+
+    /// A login cookie a page sets in the saved store is read back by a store built anew on the same profile, as after
+    /// a restart; a page in an in-memory store never sees it.
+    fn saved_login_outlives_its_session() {
+        let state = tempfile::tempdir().unwrap();
+        let server = Server::start();
+        let get = format!("{}/get", server.origin);
+        let saved = || {
+            with(|registry| {
+                registry.state_dir = Some(state.path().to_owned());
+                registry.saved = None;
+            });
+            assert_eq!(persistent_store_failure(), None);
+            with(|registry| registry.saved.take()).unwrap()
+        };
+
+        let first = saved();
+        let set = format!("{}/set", server.origin);
+        assert_eq!(title_of(&first, &set, |title| title == "set"), "set");
+        assert_eq!(title_of(&first, &get, cookie_title), "cookie=login=kept");
+        drop(first);
+
+        let memory = NetworkSession::new_ephemeral();
+        assert_eq!(title_of(&memory, &get, cookie_title), "cookie=");
+
+        let reopened = saved();
+        assert_eq!(
+            title_of(&reopened, &get, cookie_title),
+            "cookie=login=kept",
+            "a store built anew on the same profile keeps the login"
+        );
+        drop(reopened);
+        with(|registry| registry.state_dir = None);
     }
 }
