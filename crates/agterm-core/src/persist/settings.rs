@@ -664,6 +664,32 @@ mod tests {
         assert_eq!(AutoFollowAttention::M5.timeout_secs(), Some(300));
     }
 
+    /// Upstream's `linkOpenModeDefaultsToBrowserResolvesTolerantlyAndIsNotAGhosttyKey`.
+    #[test]
+    fn the_link_open_mode_defaults_to_browser_resolves_tolerantly_and_is_not_a_ghostty_key() {
+        assert_eq!(AppSettings::default().effective_link_open_mode(), LinkOpenMode::Browser);
+        let with_mode = |raw: &str| AppSettings {
+            link_open_mode: Some(raw.to_owned()),
+            ..AppSettings::default()
+        };
+        assert_eq!(
+            with_mode("overlay").ghostty_config_lines(),
+            AppSettings::default().ghostty_config_lines()
+        );
+        let (_dir, store) = store();
+        for mode in LinkOpenMode::ALL {
+            store.save(&with_mode(mode.raw())).unwrap();
+            let decoded = store.load();
+            assert_eq!(decoded.link_open_mode.as_deref(), Some(mode.raw()));
+            assert_eq!(decoded.effective_link_open_mode(), *mode);
+        }
+        assert_eq!(with_mode("tab").effective_link_open_mode(), LinkOpenMode::Browser);
+        seed(&store, r#"{ "fontSize": 16 }"#);
+        let legacy = store.load();
+        assert_eq!(legacy.link_open_mode, None);
+        assert_eq!(legacy.effective_link_open_mode(), LinkOpenMode::Browser);
+    }
+
     #[test]
     fn hidden_interface_elements_resolve_both_lists() {
         let mut settings = AppSettings::default();

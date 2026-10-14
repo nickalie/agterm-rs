@@ -642,3 +642,117 @@ fn a_font_command_over_a_page_steps_the_page_zoom_and_leaves_the_terminal() {
         failure("session has no split pane")
     );
 }
+
+/// The page in session `id`'s session-wide slot.
+fn slot_page(fixture: &Fixture, id: Uuid) -> Option<crate::html::HtmlOverlay> {
+    fixture.store().session(id)?.overlay.html.clone()
+}
+
+/// Upstream's `testALinkOpensAsAFullBrowsingPageOnItsSessionWithoutSelectingIt`.
+#[test]
+fn a_link_opens_a_full_browsing_page_on_its_session_without_selecting_it() {
+    let (mut fixture, _) = fixture_with_host(1);
+    let (id, other) = (fixture.sessions[0], fixture.sessions[1]);
+    fixture.store_mut().unwrap().select_session(Some(other));
+    let url = url::Url::parse("http://127.0.0.1:1/pr/1").unwrap();
+    assert!(fixture.core.open_link_overlay(url.clone(), id));
+    let page = slot_page(&fixture, id).expect("the link's page");
+    assert_eq!(page.source, crate::html::HtmlSource::Url(url));
+    let flags = page.flags;
+    assert!(flags.browse && flags.javascript && flags.navigation && flags.persistent);
+    assert!(!flags.chromeless);
+    assert_eq!(fixture.store().session(id).unwrap().overlay.size_percent, None);
+    assert!(node(&mut fixture, id).get("overlaySizePercent").is_none());
+    assert_eq!(fixture.selected(), Some(other), "the link's session is not selected");
+}
+
+/// Upstream's `testALinkIsRefusedWithoutAUsableSavedStoreOrAKnownSession` and
+/// `testALinkIsRefusedWhileAProgramHoldsTheSlot`.
+#[test]
+fn a_link_is_refused_without_a_usable_saved_store_or_a_known_session() {
+    let (mut fixture, log) = fixture_with_host(0);
+    let id = fixture.sessions[0];
+    let url = url::Url::parse("http://127.0.0.1:1/").unwrap();
+    log.borrow_mut().store_failure = Some(errors::PERSISTENT_UNAVAILABLE.to_owned());
+    assert!(!fixture.core.open_link_overlay(url.clone(), id));
+    let read = node(&mut fixture, id);
+    assert_eq!(read["overlay"], json!(false));
+    assert!(read.get("htmlOverlays").is_none());
+    log.borrow_mut().store_failure = None;
+    assert!(!fixture.core.open_link_overlay(url.clone(), Uuid::new_v4()));
+    assert!(
+        overlay(&mut fixture, SessionCmd::OverlayOpen, id, |a| a.command =
+            Some("exec cat".into()))
+        .ok
+    );
+    assert!(
+        !fixture.core.open_link_overlay(url.clone(), id),
+        "a program holds the slot"
+    );
+    assert!(slot_page(&fixture, id).is_none());
+    assert_eq!(node(&mut fixture, id)["overlay"], json!(true));
+    let _ = fixture.core.commit();
+    assert!(fixture.core.take_released_pages().is_empty(), "no page was registered");
+
+    let mut bare = Fixture::new(0);
+    let id = bare.sessions[0];
+    assert!(!bare.core.open_link_overlay(url, id), "a build without web views");
+    assert!(bare.store().session(id).unwrap().overlay.html.is_none());
+}
+
+/// Upstream's `urlOpenRoutesItsNavigationScope`: `--browse` reaches the page as given, absent as off.
+#[test]
+fn a_url_open_routes_its_navigation_scope() {
+    let (mut fixture, _) = fixture_with_host(0);
+    let id = fixture.sessions[0];
+    let url = url::Url::parse("http://localhost:5173/").unwrap();
+    for browse in [None, Some(false), Some(true)] {
+        let opened = overlay(&mut fixture, SessionCmd::OverlayOpen, id, |a| {
+            a.url = Some(url.to_string());
+            a.browse = browse;
+        });
+        assert_eq!(answered_id(&opened), Some(id), "{browse:?}");
+        let page = slot_page(&fixture, id).unwrap();
+        assert_eq!(page.source, crate::html::HtmlSource::Url(url.clone()));
+        assert_eq!(
+            page.flags,
+            crate::html::HtmlPageFlags {
+                browse: browse == Some(true),
+                ..crate::html::HtmlPageFlags::default()
+            },
+            "{browse:?}"
+        );
+        assert_eq!(fixture.store().session(id).unwrap().overlay.size_percent, None);
+        assert!(overlay(&mut fixture, SessionCmd::OverlayClose, id, |_| {}).ok);
+    }
+}
+
+/// Upstream's `aBrowsingPageCoverNamesTheSiteShown`.
+#[test]
+fn a_browsing_page_cover_names_the_site_shown() {
+    let (mut fixture, _) = fixture_with_host(0);
+    let id = fixture.sessions[0];
+    split(&mut fixture, id);
+    let opened = overlay(&mut fixture, SessionCmd::OverlayOpen, id, |a| {
+        a.url = Some("http://localhost:5173/app".into());
+        a.browse = Some(true);
+        a.pane = Some("right".into());
+    });
+    let page = page_id(&opened);
+    assert!(fixture.core.set_html_page(
+        page,
+        Some(HtmlPageInfo {
+            page: "https://login.example/sso".into(),
+            title: None,
+            can_go_back: true,
+            can_go_forward: false,
+        })
+    ));
+    assert_eq!(
+        fixture.store().session(id).unwrap().dashboard_cover(OverlayPane::Right),
+        Some(DashboardCover::Page {
+            identity: "https://login.example".into(),
+            title: None
+        })
+    );
+}

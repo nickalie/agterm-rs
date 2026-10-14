@@ -1761,6 +1761,24 @@ pub(crate) mod tests {
         assert_eq!(plan.overlays, OverlayPlan::default(), "a zoomed terminal shows bare");
     }
 
+    /// Upstream's zoom of the pane under a running overlay (3d9d561): the zoomed terminal shows bare while the overlay
+    /// keeps its slot, and leaving zoom covers the session again.
+    #[test]
+    fn a_pane_zoomed_under_a_session_wide_overlay_shows_bare() {
+        let mut covered = session(Some(split(true, false)), false);
+        program(&mut covered, None);
+        let plan = PanePlan::layout(&covered, Some(zoom(&covered, ZoomSurface::Primary)));
+        assert_eq!(plan.overlays, OverlayPlan::default(), "the zoomed terminal shows bare");
+        assert_eq!(plan.panes, Panes::Alone(Slot::Primary));
+        assert!(plan.shows(Slot::Primary) && !plan.shows(Slot::Split));
+        assert_eq!(plan.focus_token(), Some("P"));
+
+        let plan = PanePlan::layout(&covered, None);
+        assert!(plan.overlays.covers, "unzoomed, the overlay covers the session again");
+        assert_eq!(plan.overlays.focus, Some(OverlayFocus::Program));
+        assert!(!plan.shows(Slot::Primary) && !plan.shows(Slot::Split));
+    }
+
     #[test]
     fn a_floating_panel_is_centered_at_its_share() {
         let placement = Some(ProgramPlacement { fraction: Some(0.5) });

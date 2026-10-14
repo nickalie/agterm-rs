@@ -300,6 +300,14 @@ fn open_refusals_name_the_flag_combination() {
             "session.overlay.open: --chromeless requires --html",
         ),
         (
+            json!({"url": url, "chromeless": true, "browse": true}),
+            "session.overlay.open: --chromeless requires --html",
+        ),
+        (
+            json!({"command": "true", "browse": true}),
+            "session.overlay.open: --browse requires --url",
+        ),
+        (
             json!({"command": "true", "color": "red"}),
             "invalid color: red (#rrggbb)",
         ),
