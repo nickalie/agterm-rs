@@ -253,6 +253,8 @@ fn set_text(label: &gtk::Label, text: &str) {
 /// The header bar and what it shows.
 pub struct Titlebar {
     window: Uuid,
+    /// The bar itself, painted by [`crate::chrome`].
+    header: adw::HeaderBar,
     sidebar_toggle: gtk::Button,
     label: Label,
     /// The trailing cluster, hidden under a cover.
@@ -320,6 +322,7 @@ impl Titlebar {
         let header = adw::HeaderBar::builder()
             .title_widget(&gtk::Box::new(gtk::Orientation::Horizontal, 0))
             .build();
+        header.add_css_class(crate::chrome::BAR_CLASS);
         header.pack_start(&sidebar_toggle);
         header.pack_start(&label.widget);
         header.pack_end(&primary);
@@ -330,6 +333,7 @@ impl Titlebar {
         install_css();
         let bar = Self {
             window,
+            header,
             sidebar_toggle,
             label,
             cluster,
@@ -403,6 +407,11 @@ impl Titlebar {
         }
         let hidden = model.mode == ToolbarMode::Hidden;
         self.label.widget.set_visible(!hidden);
+        if hidden {
+            self.header.add_css_class(crate::chrome::BAR_HIDDEN_CLASS);
+        } else {
+            self.header.remove_css_class(crate::chrome::BAR_HIDDEN_CLASS);
+        }
         let uncovered = *cover == Cover::None && !hidden;
         self.cluster.set_visible(uncovered);
         self.sidebar_toggle.set_visible(uncovered && model.sidebar_toggle);
@@ -623,6 +632,11 @@ mod tests {
         let bar = Titlebar::new(window, &toolbar, menu.upcast_ref(), &crate::state::detached_poster());
         bar.sync(&core, &Cover::None, false);
         assert!(toolbar.reveals_top_bars());
+        assert!(bar.header.has_css_class(crate::chrome::BAR_CLASS));
+        assert!(
+            !bar.header.has_css_class(crate::chrome::BAR_HIDDEN_CLASS),
+            "the hairline shows"
+        );
         uncovered_shows_everything_shown(&bar);
         covers_strip_the_bar(&bar, &core);
         core.update_settings(|settings| {
@@ -631,6 +645,10 @@ mod tests {
         });
         bar.sync(&core, &Cover::None, false);
         assert!(toolbar.reveals_top_bars(), "hidden mode keeps a minimal bar");
+        assert!(
+            bar.header.has_css_class(crate::chrome::BAR_HIDDEN_CLASS),
+            "no hairline (upstream #368)"
+        );
         assert!(
             primary_menu(toolbar.upcast_ref()).is_some_and(|menu| menu.is_visible()),
             "the app menu's only mouse path stays"
@@ -643,6 +661,7 @@ mod tests {
         core.update_settings(|settings| settings.toolbar_mode = Some("normal".into()));
         bar.sync(&core, &Cover::None, false);
         assert!(bar.label.widget.is_visible() && bar.cluster.is_visible());
+        assert!(!bar.header.has_css_class(crate::chrome::BAR_HIDDEN_CLASS));
         assert!(!bar.recent.widget().is_visible());
         assert!(!bar.jump_divider.is_visible(), "one jump button left");
     }

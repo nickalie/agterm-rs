@@ -272,6 +272,9 @@ impl AppState {
         if let Some(dark) = self.core.take_debug_appearance() {
             self.force_appearance(dark);
         }
+        // after any reload, so the chrome takes the colors the terminals now render; before the windows sync, so a new
+        // window's first frame has them
+        crate::chrome::sync(&self.core);
         let sounds = self.core.take_status_sounds();
         let banners = self.core.take_notifications();
         crate::keymap_dispatch::sync(&self.core, &self.poster);

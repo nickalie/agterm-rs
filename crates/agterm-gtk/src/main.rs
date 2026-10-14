@@ -9,6 +9,7 @@ mod app;
 mod app_menu;
 mod ask_dialog;
 mod background;
+mod chrome;
 mod clipboard;
 mod dashboard;
 mod deck;

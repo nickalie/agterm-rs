@@ -172,6 +172,7 @@ impl WindowUi {
             .shrink_end_child(false)
             .wide_handle(false)
             .build();
+        paned.add_css_class(crate::chrome::SPLIT_ROOT_CLASS);
         sidebar
             .widget()
             .set_size_request(divider_position(agterm_core::model::SIDEBAR_WIDTH_MIN), -1);
@@ -197,6 +198,7 @@ impl WindowUi {
             .default_height(640)
             .content(&toolbar)
             .build();
+        window.add_css_class(crate::chrome::WINDOW_CLASS);
         window.insert_action_group("menu", Some(menu.group()));
         // ahead of every key monitor: a HUD link hears each modifier change, and consumes none
         crate::hud::connect_link_modifiers(&window);

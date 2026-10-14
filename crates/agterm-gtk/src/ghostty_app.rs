@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use agterm_core::chrome::{self, SelectionColors};
 use agterm_core::link_policy::{self, ClickOrigin, Route};
 use agterm_core::model::SearchReport;
 use agterm_core::paths::{self, Env, ProcessEnv};
@@ -48,6 +49,9 @@ struct GhosttyApp {
     /// The user's static `title`, applied by agterm in place of program titles (libghostty would drop them all).
     static_title: RefCell<Option<String>>,
     scheme: Cell<ColorScheme>,
+    /// The theme's selection colors, resolved from the config sources with every config build
+    /// ([`resolve_selection`]): libghostty's getter cannot read them.
+    selection: Cell<SelectionColors>,
 }
 
 impl GhosttyApp {
@@ -219,6 +223,22 @@ fn config_files(env: &dyn Env) -> Vec<PathBuf> {
         .collect()
 }
 
+/// The theme's selection colors under the config the settings select, on the `dark` side of a dual theme (upstream's
+/// `GhosttyApp.resolveSelectionColors`): the same sources [`build_config`] loads, the built-in defaults first, then the
+/// theme's file from `themes` filling what they leave unset.
+fn resolve_selection(env: &dyn Env, themes: Option<&Path>, dark: bool) -> SelectionColors {
+    let files: Vec<String> = config_files(env)
+        .iter()
+        .filter_map(|file| std::fs::read_to_string(file).ok())
+        .collect();
+    let sources = std::iter::once(DEFAULTS).chain(files.iter().map(String::as_str));
+    chrome::resolve_selection_colors(
+        sources,
+        |name| themes.and_then(|dir| std::fs::read_to_string(dir.join(name)).ok()),
+        dark,
+    )
+}
+
 /// The bundled themes' directory: `themes` beside the resolved resources (staged, vendored or system).
 pub fn themes_dir() -> Option<PathBuf> {
     std::env::var_os(RESOURCES_ENV).map(|dir| PathBuf::from(dir).join("themes"))
@@ -245,6 +265,7 @@ pub fn start(dark: bool) -> Result<(), agterm_ghostty::Error> {
         applied: RefCell::new(None),
         static_title: RefCell::new(static_title),
         scheme: Cell::new(scheme),
+        selection: Cell::new(resolve_selection(&ProcessEnv, themes_dir().as_deref(), dark)),
     });
     GHOSTTY.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&ghostty)));
     // after the app is current, so the applied config's CONFIG_CHANGE lands
@@ -295,6 +316,9 @@ pub fn reload_config(dark: bool, keep_zoom: bool) -> Option<usize> {
     let count = config.diagnostics().len();
     *ghostty.config.borrow_mut() = config;
     ghostty.static_title.borrow_mut().clone_from(&static_title);
+    ghostty
+        .selection
+        .set(resolve_selection(&ProcessEnv, themes_dir().as_deref(), dark));
     let config = ghostty.config.borrow();
     for (terminal, size_before) in terminals {
         terminal.reload_config(&config, size_before, keep_zoom);
@@ -345,6 +369,11 @@ pub fn foreground_color() -> Option<agterm_ghostty::Color> {
 /// The terminals' default background color, from the app config.
 pub fn background_color() -> Option<agterm_ghostty::Color> {
     current().and_then(|ghostty| ghostty.read(|config| config.get(keys::BACKGROUND)))
+}
+
+/// The theme's selection colors, as the last config build resolved them; unset without an app.
+pub fn selection_colors() -> SelectionColors {
+    current().map_or_else(SelectionColors::default, |ghostty| ghostty.selection.get())
 }
 
 /// The theme's 16 ANSI colors as `#rrggbb` by slot (upstream's `GhosttyApp.terminalPalette`), from the applied app
@@ -631,6 +660,40 @@ mod tests {
         assert_eq!(
             config.get(agterm_ghostty::ConfigKey::<bool>::new("cursor-click-to-move")),
             Some(false)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn selection_colors_come_from_the_sources_then_the_theme() -> Result<(), Box<dyn std::error::Error>> {
+        let state = tempfile::tempdir()?;
+        let themes = tempfile::tempdir()?;
+        std::fs::create_dir_all(state.path().join("config"))?;
+        std::fs::write(
+            state.path().join("config/ghostty.conf"),
+            "theme = light:Paper,dark:Ink\nselection-foreground = #010203\n",
+        )?;
+        std::fs::write(
+            themes.path().join("Ink"),
+            "selection-background = #445566\nselection-foreground = #ffffff\n",
+        )?;
+        std::fs::write(themes.path().join("Paper"), "selection-background = #eeeeee\n")?;
+        let env = paths::MapEnv::new()
+            .with("HOME", "/nonexistent")
+            .with(paths::STATE_DIR_ENV, state.path());
+        let dark = resolve_selection(&env, Some(themes.path()), true);
+        assert_eq!(dark.background, Some(chrome::Rgb::new(0x44, 0x55, 0x66)));
+        assert_eq!(
+            dark.foreground,
+            Some(chrome::Rgb::new(1, 2, 3)),
+            "the explicit line wins over the theme's"
+        );
+        let light = resolve_selection(&env, Some(themes.path()), false);
+        assert_eq!(light.background, Some(chrome::Rgb::new(0xee, 0xee, 0xee)));
+        assert_eq!(
+            resolve_selection(&env, None, true).background,
+            None,
+            "no themes directory"
         );
         Ok(())
     }
