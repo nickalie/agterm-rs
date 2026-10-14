@@ -390,17 +390,22 @@ fn a_missing_directory_opens_the_failure_panel_only_when_opted_in() {
     };
     let (quiet, loud) = (quiet.clone(), loud.clone());
     let reason = format!("session directory {missing} no longer exists");
+    // every panel opening takes a new slot generation, so its count stands in for upstream's `posts.count`
+    let generation = |host: &Host| host.fixture.store().session(session).unwrap().overlay.generation;
+    let before = generation(&host);
 
     assert_eq!(
         host.fixture.core.run_custom_command(&quiet, window, session),
         Some(reason.clone())
     );
     assert!(host.fixture.store().session(session).unwrap().overlay.hud.is_none());
+    assert_eq!(generation(&host), before);
 
     assert_eq!(
         host.fixture.core.run_custom_command(&loud, window, session),
         Some(reason)
     );
+    assert_eq!(generation(&host), before + 1, "one panel");
     let state = host.fixture.store().session(session).unwrap();
     let hud = state.overlay.hud.as_ref().expect("the failure panel");
     assert_eq!(
