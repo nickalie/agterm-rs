@@ -4,6 +4,9 @@ Plan: `docs/plans/20261014-gpui-frontend.md`, Task 2. Run 2026-10-14 on the user
 for this spike), isolated from the live agterm: AGTERM_*/ZMX_* stripped, every agterm instance private (own app id,
 state dir, socket, zmx dir), nothing sent to the default socket.
 
+Spike code and raw results: branch `spike/wpe-dmabuf` at commit `9e092fd` (`spikes/wpe-dmabuf/`,
+removed from `gpui-frontend` in Task 4).
+
 ## Verdict
 
 | criterion | dmabuf path | SHM fallback |

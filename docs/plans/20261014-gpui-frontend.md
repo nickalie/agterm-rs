@@ -7,6 +7,9 @@
 - The terminal moves from full libghostty (its own OpenGL renderer inside a `GtkGLArea`) to **libghostty-vt** (Ghostty's
   parser and terminal state, no renderer) with the grid drawn by GPUI, the way Zed draws its terminal. GPUI cannot host
   a foreign GL/Metal view, and full libghostty has no Windows apprt; libghostty-vt keeps upstream's VT semantics.
+  libghostty-vt is used through its **official C API** (`include/ghostty/vt.h` at a pinned Ghostty commit) with our own
+  checked-in bindgen `-sys` crate and safe wrapper, as `agterm-ghostty-sys`/`agterm-ghostty` do for full libghostty
+  (user decision 2026-10-14, Task 4; the third-party `libghostty-vt` crate is not used).
 - `agterm-proto`, `agterm-host`, `agterm-server`, `agterm-ctl` and `agterm-zmx` stay as they are, and so does
   `agterm-core` apart from two additions (the ghostty config parser and keybind actions that libghostty used to own):
   the new frontend implements the same `agterm-host` traits. Everything that needs no window is tested without one.
@@ -62,19 +65,37 @@
 
 ### External pieces (verified 2026-10-14)
 
-- **libghostty-vt** — `Uzaaft/libghostty-rs`, crates `libghostty-vt` / `libghostty-vt-sys` 0.2.2 (2026-09-28), MIT,
-  ~165k downloads, active. Safe API: `Terminal` (effects `on_pty_write`, `on_bell`, `on_title_changed`,
-  `on_pwd_changed`, `on_desktop_notification`, `on_progress_report`, `on_clipboard_read/write`, `on_color_scheme`,
-  `on_size`, …), `RenderState` + row/cell iterators with dirty tracking and two-phase update, `KeyEncoder`,
-  `MouseEncoder`, `search`, `selection`, `fmt` (formatter), `paste`, `snapshot`, `kitty`, `osc`. Builds Ghostty with
-  Zig 0.16 from the commit pinned in its `build.rs` (`3425025e585a3403340d4dc6d65132f42e05e605` at 0.2.2);
-  `GHOSTTY_SOURCE_DIR` points it at a local checkout (no network); links `libghostty-vt.a` statically by default.
+- **libghostty-vt** (updated in Task 4, 2026-10-14) — Ghostty's own C library, `ghostty-org/ghostty`
+  `include/ghostty/vt.h` + `include/ghostty/vt/*.h`, built by Ghostty's `build.zig` (`zig build -Demit-lib-vt=true`)
+  into `lib/libghostty-vt.a` (static, empty `Libs.private` in `libghostty-vt-static.pc`), `libghostty-vt.so`, the
+  headers and pkg-config files. At the chosen pin (Technical Details > Pins) the API has: terminal options for every
+  effect the frontend needs (`WRITE_PTY`, `BELL`, `TITLE`/`TITLE_CHANGED`, `PWD`/`PWD_CHANGED`,
+  `DESKTOP_NOTIFICATION`, `PROGRESS_REPORT`, `PROGRAM_STATUS`, `CLIPBOARD_READ`/`CLIPBOARD_WRITE`, `COLOR_*`,
+  `COLOR_SCHEME`, `SELECTION`, `SEMANTIC_PROMPT`, `RENDER_HOLD`, `RESIZE_WINDOW`, `KITTY_IMAGE_*`, scrollback limits),
+  `render.h` (render state, dirty rows, two-phase update), `key/` + `mouse/` encoders, `selection.h`, `formatter.h`,
+  `paste.h`, `search.h` (scrollback search, ticked off-lock), `snapshot.h`, `kitty_graphics.h`, `osc.h` (standalone
+  OSC parser), `sys.h` (process-global PNG decoder, log, random). Verified by building it at the pin with Zig 0.16.0
+  (105 s, Task 4).
+- **Rejected: the `libghostty-vt` crate** (`Uzaaft/libghostty-rs` 0.2.2, user decision 2026-10-14): it pins an older
+  Ghostty (`a887df42…`, Zig 0.15.2, Zig found on PATH only), has no desktop-notification, progress, clipboard-read,
+  mouse-shape or color-change effects and no search or snapshot module, and makes every type `!Send`
+  (`docs/spikes/20261014-gpui-term.md`). Its source stays a reference for the safe-wrapper shape only.
 - **gpui-kit** — `longbridge/gpui-kit` (formerly gpui-component), ~17k stars, daily commits, Apache-2.0-family. Pins
   Zed's GPUI as the crates.io snapshot `gpui-pre`, re-exports it; 75+ components; headless UI integration tests. Its
-  optional `gpui-fast` backend is longbridge's own implementation — **not used** here.
+  optional `gpui-fast` backend is longbridge's own implementation — **not used** here. Confirmed in Tasks 1–3:
+  **gpui-kit 0.7.3** pins **`gpui-pre` / `gpui-pre-platform` `=0.3.9`** ("snapshot of zed@93d7456"; platform features
+  `font-kit`, `x11`, `wayland`, `runtime_shaders`) with **wgpu / wgpu-hal 29.0.4**; it builds with
+  `default-features = false` and with its defaults minus `gpui-fast` (no `gpui-fast*` package in `Cargo.lock`).
+- **WPE WebKit** — confirmed in Task 2: **WPE WebKit 2.54.1** (WPEPlatform API, `WPEDisplayHeadless`) from Arch's
+  `extra/wpewebkit` 2.54.1-2 binary package, unpacked into a private prefix (signature checked, no root); GStreamer
+  1.28.8. Distro builds compile their helper path in (`/usr/lib/wpe-webkit-2.0/WPEWebProcess`, no `WEBKIT_EXEC_PATH`
+  in release builds), so a private prefix only runs under a `bwrap --ro-overlay`; a packaged agterm depends on the
+  distro's `wpewebkit` instead (Task 30 decides the CI/packaging source).
 - GPUI's Linux renderer is wgpu (Zed PR #46758, 2026-02-13, replaced Blade); macOS/Windows keep native renderers.
 - `WindowKind::LayerShell` in GPUI (Zed PR #35610, after the revert of #32651): wlroots compositors, KDE, niri; not
-  GNOME, not X11.
+  GNOME, not X11. Confirmed in `gpui-pre` 0.3.9 (Task 3): a Wayland compositor without `zwlr_layer_shell_v1` fails
+  `open_window` with `LayerShellNotSupportedError`, but GPUI's X11 backend silently opens `LayerShell` as a plain
+  window, so the host is chosen by `cx.compositor_name()`, not by the open error.
 - `gpui-webview` (gpui-kit `crates/webview`, formerly `gpui-wry`): Wry; on Linux WebKitGTK 4.1/GTK3 in an X11 child
   window only (Wayland unsupported: one client cannot embed another's surface), and requires GPUI Fast. Rejected as a
   dependency; its GPUI-side element and API shape are the model for ours.
@@ -105,7 +126,9 @@
   + `live_capabilities` is the target); the ratchet and Task 34's superset check depend on it.
 - complexity limits (`clippy.toml`) are met by splitting; the only exception is an outer
   `#[expect(clippy::..., reason = "...")]` on one item. Thresholds are never raised.
-- dependencies follow the "popular tools only" rule: `libghostty-vt`, `gpui-kit`, `portable-pty`, `notify-rust`, `zbus`, `notify`, `gir`.
+- dependencies follow the "popular tools only" rule: `gpui-kit`, `portable-pty`, `notify-rust`, `zbus`, `notify`,
+  `gir`; libghostty-vt is Ghostty's own C library behind our own bindings (`bindgen`, as for libghostty), not a
+  third-party crate.
 - isolation (CLAUDE.md > Never touch the user's running agterm) holds everywhere: stripped `AGTERM_*`/`ZMX_*`, explicit
   `--socket`, private state dir, zmx reaped only by its own `ZMX_DIR`.
 - GUI runs headless (private weston) everywhere **except** Spikes 2 and 3, which the user allowed (2026-10-14, while
@@ -120,7 +143,9 @@
   `TerminalElement`, overlays and dialogs.
 - **conformance (e2e)**: the protocol/cli/behaviors suite runs against a staged GPUI build with its own ratchet
   `conformance/rust-gpui-passing.txt`; GPUI needs Vulkan, so the harness's private weston gets Mesa's lavapipe
-  (software Vulkan) — no dependency on the NVIDIA driver in CI-like runs.
+  (software Vulkan) — no dependency on the NVIDIA driver in CI-like runs — and `--fake-seat` (GPUI panics on a
+  compositor without `wl_seat`, Task 1). Fallback paths that need X11 (the quick terminal, activation) run under a
+  private Xvfb with GPUI's X11 backend (Task 3).
 - **pixel checks**: `chrome_probe.py` extended to the GPUI build (chrome vs terminal colors), plus golden PNGs for box
   drawing sprites against upstream's.
 - **manual**: `docs/linux-ui-checklist.md` gains a GPUI column; UI the suite cannot see is walked there.
@@ -140,9 +165,13 @@ agterm-core / proto / host / server / ctl / zmx      (unchanged; + ghostty confi
         ▲ agterm-host traits
 agterm-app    (no UI)  frontend-neutral app services moved out of agterm-gtk: hook runner, process table,
                        quick-terminal placement, restore launch, logging, integrations planners
-agterm-term   (no UI)  libghostty-vt Terminal + RenderState, PTY (portable-pty), IO thread per pane,
-                       effects → main-thread channel, render/kitty views, encoders, selection/search/read-text,
-                       launch (zmx attach or plain) + TERM env;
+agterm-ghostty-vt-sys  checked-in bindgen of Ghostty's `ghostty/vt.h`, links the vendored static libghostty-vt
+agterm-ghostty-vt      safe wrapper: terminal, render state, encoders, selection, formatter, search, kitty, effects
+                       (handles Send, not Sync)
+        ▲
+agterm-term   (no UI)  pane: VT behind a mutex + one capture render state, PTY (portable-pty), IO thread per pane,
+                       effects → main-thread channel, frames/kitty views in its own types, encoders,
+                       selection/search/read-text, launch (zmx attach or plain) + TERM env;
                        libghostty-vt types never leave its public API
         ▲
 agterm-gpui → bin `agterm`   gpui-kit app: AppState, windows, sidebar, deck/splits, TerminalElement (grid, sprites,
@@ -153,9 +182,11 @@ agterm-wpe   (Linux)   WPE WebKit offscreen in its own thread/GMainContext, gir 
 gpui-pre patch         wgpu external-texture element importing dmabuf (zero-copy video)
 ```
 
-- **Threads** (as in Zed): GPUI owns the main thread; `MainLoop` is GPUI's foreground executor. Each pane's IO thread
-  reads the PTY and calls `vt_write` under the pane's mutex; effects go to the main thread through a channel and wake
-  the view (`cx.notify()`, coalesced by GPUI to a frame). Painting locks only for `begin_update`.
+- **Threads** (as in Zed and Ghostty): GPUI owns the main thread; `MainLoop` is GPUI's foreground executor. Each pane's
+  IO thread reads the PTY and calls `vt_write` under the pane's mutex; effects go to the main thread through a channel
+  and wake the view (`cx.notify()`, coalesced by GPUI to a frame). Painting locks the VT only for `begin_update`. Task 4
+  re-checked this against the official C API's contract (the spike's actor model came from the third-party crate's
+  `!Send` types, not from Ghostty); the protocol and its evidence are in Technical Details > Threads.
 - **Config**: no libghostty config parser any more. Core parses ghostty config itself, same load order; unknown
   ghostty keys → diagnostic (keeps `config.reload`'s count meaningful); known-to-ghostty but unsupported keys → ignored
   and logged. Ghostty `keybind = …=action` runs through our own action table; an unknown action → diagnostic.
@@ -164,8 +195,10 @@ gpui-pre patch         wgpu external-texture element importing dmabuf (zero-copy
 - **Kitty graphics**: first version (parity with `show-image.sh`). `custom-shader`: not supported.
 - **HTML overlays**: GPUI element and API modeled on `gpui-webview`; the Linux engine is WPE WebKit offscreen (same
   WebKit API as today, so the port is near-mechanical, same engine family as upstream's WKWebView, Wayland-native).
-  Frames are imported zero-copy via dmabuf into a wgpu texture (video is a real use case); SHM with damage rects is the
-  fallback path when dmabuf import fails on a driver.
+  Frames are imported zero-copy via dmabuf into a wgpu texture (video is a real use case; Task 2: YouTube 1080p60 with
+  0 drops, CPU at or below the GTK build). SHM with damage rects is a **last-resort correctness fallback** only, for
+  documents when dmabuf import fails on a driver: Task 2 measured it at 80–115 % CPU on 1080p video and 2.5 fps on
+  YouTube, so it is never a performance path and never chosen while dmabuf works.
 - **Engine boundary**: `agterm-term`'s public API exposes only our own types (`PaneEvent`, render rows/cells, input
   structs). The compiler, not discipline, keeps libghostty-vt swappable (e.g. for `qwertty-term-vt`, a pure-Rust port,
   should the Zig toolchain ever go away for zmx too).
@@ -180,28 +213,109 @@ gpui-pre patch         wgpu external-texture element importing dmabuf (zero-copy
   fails registration without it). Both directions work: a GTK launch forwards to a running GPUI primary, and a GPUI
   launch finding the name owned calls `Activate` on the primary (GTK or GPUI) and exits before starting GPUI. The two
   builds never share `windows.json`, and no command is added to upstream's wire protocol. The xdg-activation token from
-  platform data raises the window (Task 3 verifies GPUI can use it).
+  platform data raises the window (Task 3: works on niri, focused in 10–12 ms). GPUI consumes `XDG_ACTIVATION_TOKEN`
+  only for its first toplevel and removes it from the environment at platform creation, and has no API to activate an
+  existing window with a foreign token, so: a forwarding GPUI launch reads `XDG_ACTIVATION_TOKEN` and
+  `DESKTOP_STARTUP_ID` **before** GPUI starts and sends them as `activation-token` / `desktop-startup-id` (plain
+  GApplication does not forward the token; GtkApplication does); the primary binds `xdg_activation_v1` on GPUI's own
+  `wl_display` (raw-window-handle) and calls `activate(token, surface)`; on X11 it sends `_NET_ACTIVE_WINDOW` (source 1)
+  with the startup id's `_TIME` timestamp, sets `_NET_WM_USER_TIME` and ends the startup sequence (x11rb on the raw
+  handle) — GPUI's own X11 `activate_window` sends time 0. Both are GPUI patch candidates (Technical Details > GPUI
+  patches).
 
 ## Technical Details
 
-- **Pins** (`build/pins.env`): `LIBGHOSTTY_VT_REV` = the commit `libghostty-vt-sys`'s `build.rs` pins (bump together
-  with the crate version, never independently). The prefix must not start with `GHOSTTY_`: `pin_lines GHOSTTY`
-  (`scripts/lib/native.sh`) keys the libghostty build on every `^GHOSTTY_` line. The source is fetched and verified into
-  a hash-keyed prefix and exposed at a fixed symlink (`build/vendor/ghostty-vt-src`) that `.cargo/config.toml`'s `[env]`
-  names as `GHOSTTY_SOURCE_DIR` (plus `GHOSTTY_ZIG_SYSTEM_DIR` for offline Zig packages); the pinned Zig 0.16 is linked
-  at a fixed path too and reaches the build script through `[env]` (or a PATH wrapper, whichever the crate's `build.rs`
-  honors — checked in Task 1), so a plain `cargo build --workspace` works.
+- **Pins** (`build/pins.env`, decided in Task 4): **two Ghostty pins while both frontends coexist.** `GHOSTTY_REV`
+  stays upstream agterm v0.36.0's pin (`683d8db6…`, 2026-08-25) with its four patches: it moves only with an upstream
+  release (CLAUDE.md), and the GTK ratchet rests on it. Its vt API lacks `search.h` and the October fixes, so
+  libghostty-vt gets its own pin: `LIBGHOSTTY_VT_REV="81598385d608dda4946093d6d6a234d204a2f225"` (ghostty main,
+  2026-10-13, merge #14691: every `build-libghostty-vt*` CI job green, only the snap builds red; includes `search.h`,
+  `PROGRAM_STATUS`, `SEMANTIC_PROMPT`/prompt navigation, the scrollback/cursor-page use-after-free fix #14686), with
+  its own Zig pin lines `LIBGHOSTTY_VT_ZIG_VERSION="0.16.0"` and sums (`minimum_zig_version` at that commit; the
+  same release as `GHOSTTY_`/`ZMX_ZIG_VERSION` today, kept separate by the pins.env rule "each build keeps its own
+  Zig pin"), and the source archive's sha256 (codeload tar.gz of the commit:
+  `1bb165d1e9458c8694370039cc1a8f2a2958929760bb80f6251499158ad6b694`, re-verified in Task 5). No patches. The prefix
+  must not start with `GHOSTTY_`: `pin_lines GHOSTTY` (`scripts/lib/native.sh`) keys the libghostty build on every
+  `^GHOSTTY_` line. The two pins become one in Task 34, when libghostty goes away. A vt pin bump regenerates the
+  bindings and is a change of its own (the vt API is still moving: names changed on 2026-10-14).
+- **Native build** (existing convention, `scripts/lib/native.sh`: Cargo never runs Zig): `scripts/build-ghostty-vt.sh`
+  builds `zig build -Demit-lib-vt=true -Doptimize=ReleaseFast` from the verified source archive into
+  `${AGTERM_VENDOR}/ghostty-vt-<key>/` (key = `LIBGHOSTTY_VT_` pin lines + arch), with `--print-prefix`/`--verify`
+  like `build-ghostty.sh`; `agterm-ghostty-vt-sys/build.rs` asks `--print-prefix`, links `static=ghostty-vt` and fails
+  with a pointer to the script when the prefix is incomplete. The static library is linked into the binary, so staging
+  gains nothing. The full-libghostty Zig and the vt Zig resolve through `find_zig` (one unpacked 0.16.0 serves both
+  while the versions match).
 - **Resources while both builds coexist**: terminfo, themes and shell integration keep coming from the libghostty
   prefix at `GHOSTTY_REV`, exactly as `scripts/stage.sh` stages them today (`share/terminfo`, `share/ghostty/*`). Task 34
   moves them to the Ghostty source at `LIBGHOSTTY_VT_REV` (terminfo compiled with `tic`) when libghostty goes away.
-- **Cargo**: `libghostty-vt = "=0.2.2"`, `gpui-kit` at an exact version with default features minus `gpui-fast`;
-  `[patch.crates-io]` for `gpui-pre`/`gpui-pre-platform` only once Task 29 lands (fork under `vendor/` or a git rev).
+- **Cargo**: no third-party libghostty-vt crate (`agterm-ghostty-vt-sys` + `agterm-ghostty-vt` are workspace crates);
+  `gpui-kit = "=0.7.3"` with default features minus `gpui-fast` (it pins `gpui-pre`/`gpui-pre-platform` `=0.3.9`, wgpu
+  29.0.4); `[patch.crates-io]` for the patched GPUI crates (`gpui-pre`, `gpui-pre-wgpu`, `gpui-pre-linux` as the
+  patches need) from the first task that lands a GPUI patch (Technical Details > GPUI patches), as a vendored copy
+  under `vendor/` with the patch series checked in (Task 2's `scripts/vendor.sh` shape) or a pinned git fork.
+- **GPUI patches** (gaps found by Tasks 2–3; each lands in the task that needs it, each is an upstream candidate):
+  1. dmabuf external surface: `PaintSurface` Linux payload + `Window::paint_external_surface`, wgpu-hal Vulkan import
+     (multi-plane, non-disjoint), and device creation through `open_with_callback` adding
+     `VK_EXT_image_drm_format_modifier` — Task 29;
+  2. activate a window with an external xdg-activation token (`xdg_activation_v1.activate`) — Task 12 uses the proven
+     raw-window-handle workaround until then;
+  3. X11 activation with the startup id's timestamp (`_NET_ACTIVE_WINDOW` source 1, `_NET_WM_USER_TIME`, startup
+     notification `remove`) — Task 12, x11rb workaround on the raw handle until then;
+  4. Wayland display bounds from `zxdg_output_v1` logical geometry (GPUI uses the integer `wl_output.scale`, so a
+     1.75-scaled output reports 1440x900 instead of 1645x1028) — Task 24;
+  5. optional: runtime `zwlr_layer_surface_v1` setters (anchor, margin, layer, keyboard interactivity) — Task 24
+     reopens the surface instead;
+  6. the exit SIGSEGV (wgpu's GLES instance runs `eglTerminate` in a TLS destructor after the Wayland connection is
+     gone, on every exit, Task 2 quirk 12) — reported upstream; Task 12 keeps the exit status clean meanwhile.
 - **Cell metrics**: advance of `M` for width; ascent + descent + line gap for height; `window-padding-x/y` around the
   grid; resize → `Terminal::resize` + PTY `TIOCSWINSZ` + cell size reported where `CELL_SIZE` was used.
-- **Frame**: `begin_update` (locked) → `end_update` → per dirty row: merged background quads + text runs shaped with
-  `shape_line` (row cache keyed by row content) → layers: backgrounds, selection/search highlight, kitty images below
-  text, text, sprites, decorations (underline styles, strikethrough, hovered link), kitty images above text, cursor
-  (block/bar/underline, hollow unfocused), IME preedit.
+- **Threads** (decided in Task 4 from the C API's contract at `LIBGHOSTTY_VT_REV`, Codex-reviewed). Evidence: the
+  library creates no threads and asks callers to serialize access to a terminal, from any thread — `render.h:29-51`
+  (render state needs terminal access only during the update, "safely multi-threaded (as long as a lock is held
+  during the update call …)"; two-phase update for "a renderer thread sharing a lock with an IO thread"),
+  `render.h:645-652` (`end_update` touches
+  only render-state memory, "safe to call while the terminal is being modified"), `terminal.h:79-84` (callbacks run
+  synchronously inside `vt_write`, must not call `vt_write` re-entrantly, must not block), `terminal.h:1845-1848`
+  ("Like every callback, this runs on the thread that called `ghostty_terminal_vt_write()`"), `search.h:92-110`
+  (terminal-touching search calls serialized with the terminal; `tick`/`get` safe while another thread modifies it —
+  "how Ghostty runs search on a background thread"), `kitty_graphics.h:109-115` (borrowed image handles die on any
+  mutating call), `formatter.h:124` (the formatter keeps a borrowed terminal and reads it live), `terminal.h:3284`
+  (compression serialized like everything else), `sys.h:21` + `src/terminal/sys.zig:18,65` +
+  `src/terminal/c/sys.zig:87` (PNG decoder, log, random are process-global plain variables set at startup — not
+  thread-local as the third-party crate made them); `grep threadlocal src/terminal` is empty. Hence wrapper handles are
+  **`Send`, not `Sync`**, and the plan's original design stands, with this protocol per pane:
+  - `Mutex<Vt>` holds the terminal, key/mouse encoders, selection and the search's terminal-touching side. The IO
+    thread reads the PTY and calls `vt_write` under the lock in bounded slices, releasing between slices. Callbacks
+    copy their data into the effects channel and return (no re-entrant `vt_write`, no blocking); `WRITE_PTY` replies go
+    to a PTY writer queue, never a blocking write under the lock.
+  - **One capture render state per pane**, not one per view: dirty flags have a single consumer (`render.zig:768`
+    "we're the only consumer of dirty state"; a two-state experiment in Task 4 left the second state clean). Lock order
+    VT → capture, never the reverse. Paint: `try_lock` VT, then `try_lock` capture (on either failure release both and
+    draw the previous frame, asking for another); while holding both, check the render hold, `begin_update` and copy
+    the bytes of any new kitty image `(id, generation)`; release VT; keep capture through `end_update` and the
+    conversion into the pane's frame in `agterm-term` types (rows shared as `Arc`, dirty rows only); release capture.
+    Every view (the pane, the dashboard) draws that frame. Paint never re-takes VT while holding capture.
+  - Synchronized output (`RENDER_HOLD`, mode 2026): the callback (IO thread, VT already held) takes capture and calls
+    `ghostty_render_state_update` there, as `terminal.h:1777-1785` asks; while the hold lasts paint does not update but
+    **does publish the frame the callback captured**.
+  - Clipboard read (OSC 52 / 5522) must be answered before the callback returns (`terminal.h:970-981`; no reply = empty
+    clipboard / `EPERM`), so it can never wait for GPUI under the VT lock. Task 9 picks the mechanism with tests:
+    answer from a pane-local snapshot the main thread keeps (policy decision + clipboard text), or intercept the read
+    with the standalone `ghostty_osc_*` parser before `vt_write` and reply into the PTY after the prompt, or an
+    upstream deferred-reply API. Parity with the GTK build's prompt is the requirement.
+  - Formatter (read-back, selection text) is created and run entirely under the VT lock; only owned bytes escape.
+    Search: `GhosttySearch` in its own mutex, `new`/`feed`/`run`/`set`/`free` also under the VT lock, `tick`/`get` on a
+    worker off the VT lock.
+  - PNG decoder installed once per process at startup (`ghostty_sys_set(GHOSTTY_SYS_OPT_DECODE_PNG)`), decoding with
+    the `png` crate.
+  - Fallback: if Task 9's measurements show paint or input waiting longer than a frame on the VT lock (a slice bounds
+    bytes, not time: PNG decode, reflow), `agterm-term` switches internally to the spike's actor-per-pane model; its
+    public API does not change.
+- **Frame**: capture per Threads (`begin_update` under the VT lock, `end_update` after it) → per dirty row: merged
+  background quads + text runs shaped with `shape_line` (row cache keyed by row content) → layers: backgrounds,
+  selection/search highlight, kitty images below text, text, sprites, decorations (underline styles, strikethrough,
+  hovered link), kitty images above text, cursor (block/bar/underline, hollow unfocused), IME preedit. GPUI's
+  `RenderImage` is BGRA: kitty RGBA is swapped once per image generation (Task 1).
 - **Terminal identity**: the pane's child gets `TERM=xterm-ghostty`, `TERMINFO=<stage>/share/terminfo` (the
   `xterm-ghostty` entry staged as above), `COLORTERM=truecolor`; `TERM=xterm-256color` without
   `TERMINFO` when the terminfo is not resolvable, matching today's fallback; the `term` config key overrides.
@@ -209,14 +323,26 @@ gpui-pre patch         wgpu external-texture element importing dmabuf (zero-copy
   values of every known key are validated by type (bool, ints, floats, enums, colors, durations; complex structs
   accepted), so malformed values count as libghostty counted them, supported or not. Residual differences are listed
   against the `config-reload-counts` capability tests.
-- **Keyboard**: GPUI keystroke → our keymap first (core), then ghostty keybind table, then `KeyEncoder` (legacy + kitty
-  protocol per terminal modes). Physical-key copy/paste/select-all as in `ghostty-defaults.conf`.
-- **Effects mapping** (replaces `GHOSTTY_ACTION_*`): title, pwd, bell, desktop notification (OSC 9/777), progress
-  report, clipboard read/write (with the existing `ClipboardPromptPolicy` confirmation), child exit (PTY EOF / wait
-  status), color changes (OSC 10/11/12/4) for the chrome tint.
+- **Keyboard**: GPUI keystroke → our keymap first (core), then ghostty keybind table, then the C API's key encoder
+  (`vt/key/`; legacy + kitty protocol per terminal modes). Physical-key copy/paste/select-all as in
+  `ghostty-defaults.conf`.
+- **Effects mapping** (replaces `GHOSTTY_ACTION_*`), each from a `GHOSTTY_TERMINAL_OPT_*` callback of the C API: title
+  (`TITLE_CHANGED`), pwd (`PWD_CHANGED`), bell (`BELL`), desktop notification (`DESKTOP_NOTIFICATION`, OSC 9/777),
+  progress report (`PROGRESS_REPORT`), clipboard read/write (`CLIPBOARD_READ`/`CLIPBOARD_WRITE`, with the existing
+  `ClipboardPromptPolicy` confirmation; read per Threads), color changes (`COLOR_*`, OSC 10/11/12/4) for the chrome
+  tint, mouse shape (`GHOSTTY_TERMINAL_DATA_MOUSE_SHAPE`, OSC 22, read at capture), child exit (PTY EOF / wait
+  status — not a VT effect).
 - **HTML frames**: WPE exports dmabuf (fourcc + modifier + planes) → Vulkan import (`VK_EXT_external_memory_dma_buf`,
   `VK_EXT_image_drm_format_modifier`) → `wgpu::Texture` via wgpu-hal → GPUI element. Sync with the buffer's
-  sync_file/implicit fence; release the buffer back to WPE after the frame is presented.
+  sync_file/implicit fence; release the buffer back to WPE after the frame is presented. Proven by Task 2 on Intel and
+  NVIDIA, with these conditions: wgpu does not enable `VK_EXT_image_drm_format_modifier` itself, so GPUI's Vulkan
+  device is opened through `open_with_callback` + `create_device_from_hal` (a GPUI patch, not only an element); every
+  memory plane's layout is passed (Intel CCS buffers have 3 planes in one BO, non-disjoint image); **WPE renders on the
+  GPU GPUI's wgpu adapter uses** (cross-GPU dmabufs fail in `vkCreateImage`: WPE gets the adapter's render node, e.g.
+  via `VK_EXT_physical_device_drm`, and offers only modifiers that device imports); WebKit's buffer set changes under
+  the host (2 → recreated on load → 3), so the host tracks the current set, drops stale acknowledgements and invalidates
+  an imported texture only when its buffer leaves the set; acknowledgements go through idle sources (acknowledging in
+  `render_buffer` re-enters WebKit); the headless display uses implicit sync (no rendering fence on either driver).
 
 ## What Goes Where
 
@@ -293,28 +419,60 @@ agterm: private state dir and socket, stripped `AGTERM_*`/`ZMX_*`, its own app i
 
 ### Task 4: Spike gate
 
-- [ ] read the three reports; if Task 2 or Task 3 failed, stop and bring the findings to the user before any
+- [x] read the three reports; if Task 2 or Task 3 failed, stop and bring the findings to the user before any
       production code (the HTML engine or the quick-terminal approach is reopened, not worked around)
-- [ ] fold confirmed versions (gpui-kit, gpui-pre, libghostty-vt, WPE) and design changes into this plan
-- [ ] spike code stays on its branches; reports stay in `docs/spikes/`
+- [x] fold confirmed versions (gpui-kit, gpui-pre, libghostty-vt, WPE) and design changes into this plan
+- [x] spike code stays on its branches; reports stay in `docs/spikes/`
+- result (2026-10-14): Tasks 1–3 pass, nothing reopened. Folded in: the official libghostty-vt C API with our own
+  `-sys` crate and wrapper instead of the `libghostty-vt` crate (user decision), a second Ghostty pin
+  `LIBGHOSTTY_VT_REV=81598385…` with Zig 0.16.0, the thread protocol re-derived from the C API (Technical Details >
+  Threads), gpui-kit 0.7.3 / `gpui-pre` 0.3.9 / wgpu 29.0.4, WPE WebKit 2.54.1, the GPUI patch list, SHM as a
+  last-resort fallback, the quick-terminal and activation rules incl. X11; ➕ items in Tasks 7, 11, 12, 17, 24, 29–32,
+  34. Spike code lives on `spike/gpui-term` (`74d7394`), `spike/wpe-dmabuf` (`9e092fd`), `spike/gpui-layer-shell`
+  (`caa56d7`) and is removed from `gpui-frontend`. Codex discussion:
+  `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/task-4-vt-pin-and-crates/transcript.md`.
 
 ### Stage 1 — no GUI
 
-### Task 5: Build wiring for libghostty-vt
+### Task 5: Build wiring for libghostty-vt (official C API, own bindings)
+
+Rewritten in Task 4: no third-party crate; the pattern of `build-ghostty.sh` + `gen-ghostty-bindings.sh` +
+`agterm-ghostty-sys` + `agterm-ghostty`, per Technical Details > Pins and > Native build.
 
 **Files:**
-- Modify: `build/pins.env`
-- Create: `scripts/fetch-ghostty-vt-src.sh`
-- Modify: `Cargo.toml` (workspace dependencies), `.cargo/config.toml` (`[env] GHOSTTY_SOURCE_DIR`)
-- Create: `crates/agterm-term/tests/link.rs` (with the crate skeleton)
+- Modify: `build/pins.env`, `scripts/lib/native.sh` (`ghostty_vt_prefix`, `ghostty_vt_prefix_is_complete`)
+- Create: `scripts/build-ghostty-vt.sh`, `scripts/gen-ghostty-vt-bindings.sh`
+- Create: `crates/agterm-ghostty-vt-sys/` (`Cargo.toml` with `links = "ghostty-vt"`, `build.rs`,
+  `src/{lib,bindings}.rs`)
+- Create: `crates/agterm-ghostty-vt/` (safe wrapper skeleton: `src/{lib,terminal,render}.rs`, `tests/link.rs`)
+- Modify: `Cargo.toml` (workspace members), `scripts/lint-report.sh` (exempt the bindgen crate, narrowly)
 
-- [ ] add `LIBGHOSTTY_VT_REV` (the wrapper's pinned commit) and its source sum to `pins.env` (Technical Details >
-      Pins: no `GHOSTTY_` prefix)
-- [ ] `fetch-ghostty-vt-src.sh`: fetch the pinned Ghostty source and its Zig packages into a hash-keyed prefix, verify
-      sums, reuse a matching one, point the fixed symlinks (source, Zig) at it (conventions of `build-ghostty.sh`)
-- [ ] workspace dependency `libghostty-vt = "=0.2.2"`; plain `cargo build --workspace` builds offline through `[env]`
-- [ ] test that bumping `LIBGHOSTTY_VT_REV` leaves the libghostty and zmx prefix keys unchanged
-- [ ] test: feed VT bytes and read the screen back through the crate (proves the link)
+- [ ] `pins.env`: `LIBGHOSTTY_VT_REPO`, `LIBGHOSTTY_VT_REV=81598385d608dda4946093d6d6a234d204a2f225`, the source
+      archive's sha256, `LIBGHOSTTY_VT_ZIG_VERSION=0.16.0` and its x86_64/aarch64 sums, with a comment block like the
+      others (no `GHOSTTY_` prefix; why a second Ghostty pin)
+- [ ] `build-ghostty-vt.sh`: fetch the archive, verify its sha256, `zig build -Demit-lib-vt=true
+      -Doptimize=ReleaseFast -Dtarget=<arch>-linux-gnu.2.39` with `find_zig` on the vt Zig pin, stage
+      `lib/libghostty-vt.a`, `include/ghostty/`, the pin manifest; atomic rename into `ghostty-vt-<key>`;
+      `--print-prefix`, `--verify`; reuse a complete prefix (conventions of `build-ghostty.sh`, scratch dirs in the
+      vendor root)
+- [ ] `gen-ghostty-vt-bindings.sh`: bindgen over `<prefix>/include/ghostty/vt.h` with an allowlist of the functions and
+      types the wrapper binds (terminal, options/effects, render state + row/cell iterators, key/mouse encoders,
+      selection, formatter, paste, search, kitty graphics, sys, osc), same flags as `gen-ghostty-bindings.sh`; output
+      checked in, regenerated on a pin bump
+- [ ] `agterm-ghostty-vt-sys/build.rs`: `--print-prefix`, `rustc-link-lib=static=ghostty-vt` plus whatever the static
+      archive needs (`libghostty-vt-static.pc` lists none at this pin — confirm on link), rerun-if-changed on the pins,
+      the scripts and `AGTERM_VENDOR`; a clear error naming `scripts/build-ghostty-vt.sh` when the prefix is missing;
+      not under the workspace lints, like `agterm-ghostty-sys` (`lint-report.sh`'s exemption extended to this one
+      bindgen crate only; the wrapper stays under every workspace lint)
+- [ ] `agterm-ghostty-vt` skeleton: `Terminal` (new/free, `vt_write`, resize) and `RenderState` (update, rows) as owned
+      handles that are `Send` and not `Sync` (Technical Details > Threads), each `unsafe` block documented; the rest of
+      the API grows in Tasks 9–10
+- [ ] CI (`.github/workflows/rust-linux.yml`, its vendor cache key) and `README.md` build steps call
+      `build-ghostty-vt.sh` next to `build-ghostty.sh`
+- [ ] test that bumping `LIBGHOSTTY_VT_REV` leaves the libghostty and zmx prefix keys unchanged, and that a
+      `GHOSTTY_` pin bump leaves the vt key unchanged
+- [ ] test (`tests/link.rs`): feed VT bytes and read the screen back through the wrapper (proves the link and the
+      bindings), plus `Send` checked at compile time and `!Sync` by a compile-fail doc test
 - [ ] gates — must pass before Task 6
 
 ### Task 6: Move GTK-free app services into `agterm-app`
@@ -346,6 +504,8 @@ Both frontends use them while they coexist, so they must not be copied.
       today's load order (defaults, user files, includes, `ghostty-settings.conf`)
 - [ ] `gen-ghostty-config-keys.sh`: every key with its value type from `src/config/Config.zig` at the pinned rev into
       `keys.rs` (checked in, regenerated on a pin bump)
+- [ ] ➕ (Task 4) the pinned rev for config keys is `GHOSTTY_REV` (the libghostty whose diagnostic counts upstream and
+      the GTK build report), not `LIBGHOSTTY_VT_REV`; Task 34 moves it with the resources
 - [ ] typed model for the supported subset: font-family*, font-size, font-feature, theme incl. `light:,dark:`, palette,
       background/foreground, cursor-*, selection-*, background-opacity, `background-image*` (watermark), window-padding-*
       incl. `window-padding-balance`, scrollback-limit, clipboard-*/mouse-*, cursor-click-to-move,
@@ -373,21 +533,40 @@ Both frontends use them while they coexist, so they must not be copied.
 
 ### Task 9: agterm-term — pane core (VT + PTY + IO thread)
 
+Built on `agterm-ghostty-vt` (Task 5), with the thread protocol of Technical Details > Threads (updated in Task 4).
+
 **Files:**
 - Create: `crates/agterm-term/src/{lib,pane,pty,effects,render}.rs`, `tests/pane.rs`, `tests/render.rs`
+- Modify: `crates/agterm-ghostty-vt/src/` (effect callbacks, render-state iterators, as the pane needs them)
 
-- [ ] `Pane`: `Terminal` behind a mutex, `portable-pty` child, IO thread reading the PTY into `vt_write`, `on_pty_write`
-      back to the PTY, bounded write queue (backpressure)
-- [ ] effects → `PaneEvent` (title, pwd, bell, desktop notification, progress, clipboard read/write, color changes,
-      child exited with status) over a channel the frontend drains on its main thread
+- [ ] `Pane`: `Mutex<Vt>` (terminal, encoders, selection), `portable-pty` child, IO thread reading the PTY into
+      `vt_write` in bounded slices, `WRITE_PTY` replies into a PTY writer queue (never a blocking write under the
+      lock), bounded write queue (backpressure)
+- [ ] effects → `PaneEvent` (title, pwd, bell, desktop notification, progress, program status, clipboard write, color
+      changes, child exited with status): callbacks copy into a channel the frontend drains on its main thread, never
+      block and never re-enter `vt_write`; the wrapper reaches callback userdata without aliased `&mut`
+- [ ] clipboard read (OSC 52 / 5522): pick and implement the mechanism of Technical Details > Threads (synchronous
+      reply from a main-thread-maintained snapshot, or interception with `ghostty_osc_*` and a PTY reply after the
+      prompt, or an upstream deferred reply); never wait for the UI under the VT lock; parity with the GTK prompt
 - [ ] resize (cells + pixels) to VT and PTY; scrollback limit from Task 7's config
-- [ ] render view in `agterm-term` types (`render.rs`): per-view `RenderState` update (two-phase, lock only for
-      `begin_update`), rows with dirty flags, cells (graphemes, width, style, colors, hyperlink id), cursor (position,
-      style, visibility), palette and default colors
+- [ ] render capture in `agterm-term` types (`render.rs`): **one** capture render state per pane (dirty flags have one
+      consumer), lock order VT → capture, `try_lock` on paint, two-phase update with only `begin_update` under the VT
+      lock, frame = rows shared as `Arc` with dirty flags, cells (graphemes, width, style, colors, hyperlink id), cursor
+      (position, style, visibility), mouse shape, palette and default colors; every view draws that frame
+- [ ] synchronized output: the `RENDER_HOLD` callback captures the held frame under the capture lock; paint publishes
+      that frame and does not update until the hold ends
+- [ ] process-global setup once: PNG decoder (`ghostty_sys_set`, `png` crate), log callback into `tracing`
 - [ ] public API exposes only `agterm-term` types (Technical Details > Engine boundary)
-- [ ] tests (real PTY): `printf` output on screen; OSC 0/2, 7, 9/777, BEL, 52 produce events; exit status; resize
-      reaches the child (`stty size`); render view dirty flags after partial updates, two views of one pane, styles
-      and wide cells; errors: spawn failure, PTY closed mid-write, backpressure limit
+- [ ] profile the read path through zmx (Task 1: `cat` of 50 MiB took ~1.45 s behind zmx vs 0.41–0.51 s for the GTK
+      build behind the same zmx, while plain-shell runs were within 1.0–1.7×): read sizes, per-read wakes, slicing;
+      target within 1.5× of the GTK build through zmx
+- [ ] measure the lock: worst-case paint wait and key-to-PTY latency under a 50 MiB `cat`, a kitty PNG burst and a
+      resize/reflow of a full scrollback; if either exceeds one frame (16.7 ms), switch `agterm-term` internally to the
+      spike's actor-per-pane model (same public API) and record it here
+- [ ] tests (real PTY): `printf` output on screen; OSC 0/2, 7, 9/777, 9;4, BEL, 52 write and read produce events or
+      replies; exit status; resize reaches the child (`stty size`); frame dirty flags after partial updates, two views
+      of one pane drawing one frame, a mode 2026 hold publishing the held frame, styles and wide cells; errors: spawn
+      failure, PTY closed mid-write, backpressure limit, `try_lock` contention keeps the previous frame
 - [ ] gates — must pass before Task 10
 
 ### Task 10: agterm-term — input, selection, search, read-back
@@ -395,14 +574,20 @@ Both frontends use them while they coexist, so they must not be copied.
 **Files:**
 - Create: `crates/agterm-term/src/{input,selection,search,text,kitty}.rs`, `tests/input.rs`, `tests/selection.rs`,
   `tests/kitty.rs`
+- Modify: `crates/agterm-ghostty-vt/src/` (key/mouse encoders, selection, formatter, paste, search, kitty graphics)
 
-- [ ] toolkit-neutral key struct (physical key, text, modifiers, action) → `KeyEncoder` per terminal modes (legacy,
-      kitty); mouse → `MouseEncoder`; focus events; bracketed paste via `paste`
-- [ ] selection (cell ranges, word/line, select all) via `selection`; selected text via `fmt`
-- [ ] scrollback search via `search` (matches, selected index, next/prev) — replaces the search actions
-- [ ] screen/scrollback read-back via `fmt` matching what `ghostty_surface_read_text` returned; cursor column
-- [ ] kitty view in `agterm-term` types (`kitty.rs`): images (id, generation, format, pixels), placements (layer, cell
-      rect, source rect, pixel size), deletions
+- [ ] toolkit-neutral key struct (physical key, text, modifiers, action) → the C API's key encoder (`vt/key/`) per
+      terminal modes (legacy, kitty), encoded under the VT lock (the encoder reads modes); mouse → `vt/mouse/` encoder;
+      focus events (`focus.h`); bracketed paste via `paste.h`
+- [ ] selection (cell ranges, word/line, select all) via `selection.h`; selected text via `formatter.h`, created and
+      run under the VT lock
+- [ ] scrollback search via `search.h` (matches, selected index, next/prev) — replaces the search actions;
+      `GhosttySearch` in its own mutex, terminal-touching calls under the VT lock, `tick`/`get` on a worker
+- [ ] screen/scrollback read-back via `formatter.h` matching what `ghostty_surface_read_text` returned; cursor column
+- [ ] kitty view in `agterm-term` types (`kitty.rs`) from `kitty_graphics.h`: images (id, generation, format, pixels —
+      copied under the VT lock, handles die on mutation), placements (layer, cell rect, source rect, pixel size),
+      deletions
+- [ ] the safe API for each of these lands in `agterm-ghostty-vt` with its own unit tests; `agterm-term` wraps it
 - [ ] tests: legacy and kitty encodings (arrows, F-keys, ctrl/alt), bracketed paste, selection text, search counts and
       navigation, read-back of wide chars and wrapped lines, kitty APC (chunked) → image and placement in the view
 - [ ] gates — must pass before Task 11
@@ -414,6 +599,12 @@ Both frontends use them while they coexist, so they must not be copied.
 - Modify: `crates/agterm-term/Cargo.toml` (dep `agterm-zmx`)
 
 - [ ] live panes: launch from `agterm-zmx` launch inputs (`zmx attach`, shell-integration env from core)
+- [ ] ➕ (Task 4) fix the zmx first-paint race (Task 1: `zmx attach` paints nothing until it sees a real size change
+      after its attach handshake; a prompt printed between the client's attach and its first snapshot is held by the
+      daemon, a resize before the handshake is lost; 1–4 of every 6 launches stayed blank): the real fix goes into
+      the zmx patch (`build/patches/zmx`) if the race is in zmx, otherwise the launch code waits for the handshake and
+      then resizes once; the spike's timed resize nudge is not the fix. Test: 50 consecutive launches all paint the
+      prompt
 - [ ] plain panes (no live capability), as libghostty spawned them (`agterm-gtk/src/surface.rs` ~675–710): `command`,
       `initial_input`, `wait_after_command` (the child-exited state that `SHOW_CHILD_EXITED` drove), working
       directory, env merge, shell-integration injection
@@ -443,9 +634,24 @@ Both frontends use them while they coexist, so they must not be copied.
       derivation, bus name, `org.gtk.Application` + `org.gtk.Actions` via `zbus`, both forwarding directions,
       activation token (per Task 3)
 - [ ] SIGTERM → orderly quit within 10 s (rust-build.md contract), installed only once this process is the primary
-- [ ] tests: `MainLoop` hop ordering and shutdown, `settle` cases carried over from GTK, SIGTERM deadline, forwarding of
-      a second GPUI launch and of a GTK-build launch to the GPUI instance, and of a GPUI launch to a GTK primary
-      (private bus); invalid `AGTERM_APP_ID` falls back; never two writers of `windows.json`
+- [ ] ➕ (Task 3) `Application::with_quit_mode(QuitMode::Explicit)`: GPUI's Linux default quits when the last window
+      closes, which hiding the quick terminal (a `remove_window`) triggers
+- [ ] ➕ (Task 3) activation per Solution Overview > Single instance: read `XDG_ACTIVATION_TOKEN` and
+      `DESKTOP_STARTUP_ID` before GPUI's platform is created (GPUI removes the variable); a forwarding launch sends them
+      as `activation-token` / `desktop-startup-id`; the primary activates its window with a received token by binding
+      `xdg_activation_v1` on GPUI's `wl_display` through raw-window-handle (Task 3's ~20-line workaround, until GPUI
+      patch 2), and on X11 by `_NET_ACTIVE_WINDOW` with the startup id's `_TIME`, `_NET_WM_USER_TIME` and the
+      startup-notification `remove` through x11rb on the raw handle (until GPUI patch 3)
+- [ ] ➕ (Task 2) the GPUI exit SIGSEGV (wgpu's GLES instance tears down EGL in a TLS destructor after the Wayland
+      connection is gone): find what creates the GLES instance under a Vulkan renderer and avoid it, or end the
+      process after the orderly shutdown before TLS destructors run, so a quit exits 0; file the upstream issue
+      (gpui/wgpu) with the stack from `docs/spikes/20261014-wpe-dmabuf.md` quirk 12
+- [ ] tests: `MainLoop` hop ordering and shutdown, `settle` cases carried over from GTK, SIGTERM deadline and exit
+      status 0, forwarding of a second GPUI launch and of a GTK-build launch to the GPUI instance, and of a GPUI launch
+      to a GTK primary (private bus); the activation token reaches the primary's platform data from a GPUI and from a
+      GTK launch, under a nested niri where installed (stock config, no `honor-xdg-activation-with-invalid-serial`;
+      skipped with a message otherwise) and under Xvfb; invalid
+      `AGTERM_APP_ID` falls back; never two writers of `windows.json`
 - [ ] gates — must pass before Task 13
 
 ### Task 13: TerminalElement — grid rendering and the Surface impl
@@ -517,11 +723,18 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 
 **Files:**
 - Modify: `scripts/stage.sh` (`--frontend gtk|gpui`), `conformance/tools/run-rust-linux.sh` (frontend switch,
-  ratchet per frontend), `conformance/agterm_conformance/impls/base.py` (lavapipe `VK_ICD_FILENAMES` for GPUI)
+  ratchet per frontend), `conformance/agterm_conformance/impls/base.py` (lavapipe `VK_DRIVER_FILES`, weston
+  `--fake-seat` for GPUI)
 - Modify: `conformance/tools/ghostty_probe.py` (GPUI first-frame line)
 - Create: `conformance/rust-gpui-passing.txt`
 
 - [ ] staged GPUI build runs under the harness's weston with lavapipe; isolation unchanged
+- [ ] ➕ (Task 1) the harness's weston gets `--fake-seat` for GPUI runs (GPUI panics without `wl_seat`); check the GTK
+      ratchet stays green with it, or pass it for the GPUI frontend only
+- [ ] ➕ (Task 1) provide lavapipe: it is not installed on the user's machine (the spike unpacked the signed
+      `vulkan-swrast` package into the vendor dir); pick a documented source per environment (distro package on CI,
+      a verified unpack into `${AGTERM_VENDOR}` otherwise) and point `VK_DRIVER_FILES` at it; a missing lavapipe is a
+      clear harness error, never a fallback to a hardware driver
 - [ ] first full run on GPUI; seed `rust-gpui-passing.txt` with `check_ratchet.py --add`
 - [ ] harness self-tests in `conformance/selftests` (`test_run_rust_linux`, `test_ghostty_probe`, `test_impls`) and
       `test_docs.py` (capability table in rust-build.md vs `CAPABILITIES` in `base.py`) updated and green; both ratchets
@@ -603,8 +816,26 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 - Create: `crates/agterm-gpui/src/quick/` (placement from `agterm-app`)
 
 - [ ] quick terminal on `WindowKind::LayerShell` per Task 3; fallback window where the protocol is missing
+- [ ] ➕ (Task 3) host chosen by `cx.compositor_name()` ("Wayland" → layer surface, falling back on
+      `LayerShellNotSupportedError`; X11 → the window host directly, since GPUI opens `LayerShell` on X11 as a plain
+      window): it must work in every environment (user, 2026-10-14) — layer-shell compositors, GNOME/weston (no
+      layer-shell) and X11. Fallback window: undecorated (`WindowDecorations::Client`, no titlebar, transparent
+      background), zoom = maximize
+- [ ] ➕ (Task 3) the GTK build's surface attributes: overlay layer, namespace, keyboard on demand, exclusive zone 0,
+      top anchor + centering margin; **name no output on show** (niri gives no keyboard to an on-demand surface on an
+      unfocused output), then refit by reopening named on the output it landed on (`observe_window_display`)
+- [ ] ➕ (Task 3) hide = `remove_window`, show = a new layer surface (GPUI cannot hide a window on Linux); zoom and the
+      refit reopen the surface (no runtime anchor/margin/layer setters — GPUI patch 5 optional); focus loss via
+      `observe_window_activation` dismisses a summoned panel; `zwlr_layer_surface_v1.closed` (output gone) maps to the
+      GTK build's dismissal
+- [ ] ➕ (Task 3) fractional-scale outputs: GPUI's display bounds use the integer `wl_output.scale` (eDP at 1.75 reports
+      1440x900 instead of 1645x1028, the panel 64 px off): land GPUI patch 4 (`zxdg_output_v1` logical geometry) or
+      compute placement from the output's logical size another way; test the placement math against both sizes
 - [ ] toggle via keymap and control commands; focus and hide behavior as upstream
 - [ ] tests (headless, fallback path); quick-terminal conformance tests green
+- [ ] ➕ (Task 3) fallback tests on both backends: weston (`--fake-seat`, no layer-shell) and **X11 under a private
+      Xvfb** (open, size, resize, hide/show, placement; focus and maximize are the window manager's on X11 and are not
+      asserted without one); a nested niri run for the layer-shell path where niri is installed
 - [ ] gates + conformance — must pass before Task 25
 
 ### Task 25: Settings window
@@ -660,8 +891,18 @@ Productionizes Task 2's prototype.
 - Create: `crates/agterm-gpui/src/external_texture.rs`
 
 - [ ] wgpu-hal Vulkan import of dmabuf (fourcc, modifier, planes), fence/sync_file handling, buffer release callback
+- [ ] ➕ (Task 2) the patch has three parts (GPUI patch 1): the scene primitive + `Window::paint_external_surface`
+      (`PaintSurface` Linux payload), the renderer draw, and device creation through wgpu-hal `open_with_callback` +
+      `create_device_from_hal` adding `VK_EXT_image_drm_format_modifier` (wgpu enables only the external-memory
+      extensions)
+- [ ] ➕ (Task 2) every memory plane's layout passed (Intel CCS: 3 planes in one BO, non-disjoint image); the import
+      cache keyed per buffer and invalidated only when the buffer leaves the producer's current set
+- [ ] ➕ (Task 2) expose the wgpu adapter's DRM render node (`VK_EXT_physical_device_drm`) and the modifiers it imports,
+      for Task 31 (cross-GPU dmabufs fail in `vkCreateImage`)
 - [ ] GPUI element drawing the imported texture with clipping and content mask, so overlays above it work
-- [ ] SHM-with-damage fallback behind the same element when import fails
+- [ ] SHM-with-damage fallback behind the same element when import fails — a **last-resort correctness fallback**
+      for documents only (Task 2: 80–115 % CPU on 1080p video, 2.5 fps on YouTube), logged as a warning when chosen,
+      never selected while dmabuf import works
 - [ ] tests: format/modifier negotiation, fallback selection, lifetime (no use after release) with a synthetic dmabuf
       (GBM/udmabuf) under Mesa where available
 - [ ] gates — must pass before Task 30
@@ -673,7 +914,13 @@ Productionizes Task 2's prototype.
   workspace lints like `agterm-ghostty-sys`)
 - Create: `scripts/gen-wpe-bindings.sh`
 
-- [ ] generation script pinned to the WPE version from Task 4; regenerated output is reproducible
+- [ ] generation script pinned to the WPE version from Task 4 (**WPE WebKit 2.54.1**, the version Task 2 ran);
+      regenerated output is reproducible
+- [ ] ➕ (Task 2) decide where WPE comes from per environment and record it in `build/pins.env`/README: the distro's
+      `wpewebkit` ≥ 2.54 where packaged (the user's Arch machine; distro builds compile the helper path in, so a
+      packaged agterm depends on it), and for CI images without it either a verified binary package unpacked into the
+      vendor prefix and run under `bwrap --ro-overlay` as the spike did, or a source build with its helper path
+      configured to the prefix; the `.gir` files come from the same source
 - [ ] test: link and version check against the system WPE
 - [ ] gates — must pass before Task 31
 
@@ -682,8 +929,18 @@ Productionizes Task 2's prototype.
 **Files:**
 - Create: `crates/agterm-wpe/` (thread + `GMainContext`, view, frames, input, profiles), `tests/`
 
-- [ ] dedicated WPE thread with its own `GMainContext`; commands in, frames/events out over channels
-- [ ] offscreen view producing dmabuf frames (Task 29 consumer) and SHM fallback
+- [ ] dedicated WPE thread with its own `GMainContext` (pushed thread-default before any WebKit object exists);
+      commands in, frames/events out over channels
+- [ ] offscreen view producing dmabuf frames (Task 29 consumer) and the SHM last-resort fallback (documents only,
+      Technical Details > HTML frames)
+- [ ] ➕ (Task 2) a proper `WPEDisplay`/`WPEView` subclass instead of the spike's patched `WPEViewHeadless` vfuncs; the
+      display's DRM device = the render node of GPUI's wgpu adapter (Task 29) and its preferred formats = the modifiers
+      that device imports; buffer-set tracking (the set is recreated and grows under the host) with stale
+      acknowledgements dropped; acknowledgements deferred to idle sources (acknowledging in `render_buffer` re-enters
+      WebKit); a buffer released one frame after GPUI presents it
+- [ ] ➕ (Task 2) media: keep `media_playback_requires_user_gesture` as the GTK overlay sets it; progressive media
+      download stalls in WPE 2.54.1 (MSE works) — record it in the checklist as an engine limitation, do not work
+      around it
 - [ ] the WebKit surface the overlay uses: `NetworkSession` (persistent dirs), `UserContentManager`/`UserScript`,
       script message handlers, navigation/response policy, `register_uri_scheme`, `Settings`, downloads
 - [ ] WPE's bubblewrap sandbox: `scripts/install-apparmor-profile.sh` attaches the profile to the `agterm-gpui` binary
@@ -707,6 +964,8 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
 - [ ] tests: registry/policy/sandbox unit tests carried over; page lifecycle (headless)
 - [ ] HTML conformance tests green on GPUI
 - [ ] manual check on the real screen recorded in the checklist: YouTube 1080p60 via dmabuf
+- [ ] ➕ (Task 2) the overlay never selects SHM while dmabuf import works; when it does fall back (import failed), the
+      checklist and the log say video is not supported in that mode (Task 2: 2.5 fps YouTube, 80–115 % CPU)
 - [ ] gates + conformance — must pass before Task 33
 
 ### Stage 4 — switch
@@ -735,6 +994,8 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
       from the Ghostty source at `LIBGHOSTTY_VT_REV` (Technical Details > Resources)
 - [ ] remove the GTK-era crates and scripts; `heap_trim.rs` is GTK-GL specific and does not carry over unless GPUI
       memory measurements show the same need
+- [ ] ➕ (Task 4) the two Ghostty pins become one: the `GHOSTTY_` libghostty lines go, `LIBGHOSTTY_VT_REV` is the only
+      Ghostty pin; `gen-ghostty-config-keys.sh` and the config-diagnostics residual list move to it
 - [ ] full conformance on the switched build; ratchet unchanged or grown; gates
 
 ### Task 35: Verify acceptance criteria
@@ -749,7 +1010,8 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
 ### Task 36: [Final] Update documentation
 
 - [ ] README.md: build prerequisites (Zig for libghostty-vt and zmx, Vulkan, WPE WebKit), run and test commands
-- [ ] CLAUDE.md: crate map (`agterm-app`, `agterm-term`, `agterm-gpui`, `agterm-wpe*`), terminal reference rule
+- [ ] CLAUDE.md: crate map (`agterm-app`, `agterm-ghostty-vt-sys`, `agterm-ghostty-vt`, `agterm-term`, `agterm-gpui`,
+      `agterm-wpe*`), terminal reference rule
       (libghostty-vt + references), fork coexistence via the D-Bus name served by `zbus`, headless Vulkan (lavapipe)
 - [ ] `conformance/docs/rust-build.md`: GPUI build, staging, lavapipe
 - [ ] move this plan to `docs/plans/completed/`
@@ -765,5 +1027,7 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
 
 **External system updates**:
 - offer the GPUI dmabuf external-texture element to Zed upstream; drop the `[patch]` once merged
-- PRs to `libghostty-rs` for any API gaps hit in Tasks 9–11, 16
+- issues/PRs to `ghostty-org/ghostty` for libghostty-vt C API gaps hit in Tasks 9–11, 16 (e.g. a deferred clipboard
+  read reply)
+- the GPUI patches (Technical Details > GPUI patches 2–5) offered to Zed; the exit SIGSEGV reported to gpui/wgpu
 - replace the installed GTK build on the machine after the switch

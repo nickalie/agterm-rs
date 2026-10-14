@@ -3,6 +3,9 @@
 Plan: `docs/plans/20261014-gpui-frontend.md`, Task 3. Code: `spikes/gpui-layer-shell/` (throwaway, its own cargo
 workspace outside the repository's). Raw results: `spikes/gpui-layer-shell/results/*.jsonl` (one JSON line per check).
 
+Spike code and raw results: branch `spike/gpui-layer-shell` at commit `caa56d7` (`spikes/gpui-layer-shell/`,
+removed from `gpui-frontend` in Task 4).
+
 **Verdict: pass.** The quick terminal can go on GPUI as planned: `WindowKind::LayerShell` is in the pinned GPUI
 (gpui-kit's pin, `gpui-pre` 0.3.9), it works on niri with the GTK build's surface attributes, and the
 no-layer-shell fallback works where a compositor has none. A second launch's xdg-activation token raises and focuses
