@@ -433,23 +433,30 @@ def test_page_in_a_pane_slot(ctl):
     assert _outcome(ctl, page_id) == {"pageID": page_id, "outcome": "submitted", "value": "pane"}
 
 
-class _Page(BaseHTTPRequestHandler):
-    def do_GET(self):
-        body = b"<!doctype html><title>Served Page</title><body><p>served</p></body>"
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+def _routes(routes):
+    """A handler serving `routes`, path -> (status, headers, body), for one site on 127.0.0.1."""
 
-    def log_message(self, *args):
-        pass
+    class Site(BaseHTTPRequestHandler):
+        def do_GET(self):
+            status, headers, body = routes.get(self.path, (404, {}, b""))
+            self.send_response(status)
+            for name, value in {"Content-Type": "text/html; charset=utf-8", **headers}.items():
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    return Site
 
 
 @pytest.fixture
 def served_page():
-    """A page on 127.0.0.1, served by this process for the one test that loads a URL."""
-    with serve(_Page) as server:
+    """A page on 127.0.0.1, served by this process."""
+    body = b"<!doctype html><title>Served Page</title><body><p>served</p></body>"
+    with serve(_routes({"/page.html": (200, {}, body)})) as server:
         yield f"http://127.0.0.1:{server.server_port}/page.html"
 
 
@@ -468,25 +475,6 @@ def test_url_page_reads_back_its_address(ctl, served_page, browse):
     )
     assert_absent(page, "file", "cwd")
     _closed(ctl, sid)
-
-
-def _routes(routes):
-    """A handler serving `routes`, path -> (status, headers, body), for one site on 127.0.0.1."""
-
-    class Site(BaseHTTPRequestHandler):
-        def do_GET(self):
-            status, headers, body = routes.get(self.path, (404, {}, b""))
-            self.send_response(status)
-            for name, value in {"Content-Type": "text/html; charset=utf-8", **headers}.items():
-                self.send_header(name, value)
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *args):
-            pass
-
-    return Site
 
 
 @pytest.fixture
