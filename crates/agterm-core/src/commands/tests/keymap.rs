@@ -362,6 +362,57 @@ fn a_session_directory_that_is_gone_refuses_the_run() {
     assert!(host.launcher.launches().is_empty());
 }
 
+/// Upstream's `testSpawnFailurePostsOnlyWhenOptedIn`: a command that cannot start in a removed directory opens the
+/// failure panel only when its line opts in, at the line's position and pane, with no detail.
+#[test]
+fn a_missing_directory_opens_the_failure_panel_only_when_opted_in() {
+    let mut host = Host::new(0);
+    let helper = host.dir.path().join("hud.sh");
+    std::fs::write(&helper, "#!/bin/sh\n").unwrap();
+    host.fixture.core.set_hud_helper(helper, host.dir.path().join("bodies"));
+    host.write(
+        "keymap.conf",
+        "command \"quiet\" true\n\
+         command \"loud\" --error-hud --error-position top-left --error-pane left true\n",
+    );
+    assert!(host.keymap(KeymapCmd::Reload, None, Args::default()).ok);
+    let missing = host.dir.path().join("missing-directory").to_string_lossy().into_owned();
+    let window = host.fixture.window;
+    let session = host.fixture.selected().unwrap();
+    host.fixture
+        .store_mut()
+        .unwrap()
+        .session_mut(session)
+        .unwrap()
+        .current_cwd = Some(missing.clone());
+    let [quiet, loud] = host.fixture.core.keymap().commands() else {
+        panic!("two commands")
+    };
+    let (quiet, loud) = (quiet.clone(), loud.clone());
+    let reason = format!("session directory {missing} no longer exists");
+
+    assert_eq!(
+        host.fixture.core.run_custom_command(&quiet, window, session),
+        Some(reason.clone())
+    );
+    assert!(host.fixture.store().session(session).unwrap().overlay.hud.is_none());
+
+    assert_eq!(
+        host.fixture.core.run_custom_command(&loud, window, session),
+        Some(reason)
+    );
+    let state = host.fixture.store().session(session).unwrap();
+    let hud = state.overlay.hud.as_ref().expect("the failure panel");
+    assert_eq!(
+        hud.spec.message,
+        format!("loud: session directory {missing} no longer exists")
+    );
+    assert_eq!(hud.spec.detail, None);
+    assert_eq!(hud.spec.position, crate::hud::HudPosition::TopLeft);
+    assert_eq!(hud.pane_identity, Some(state.pane_identity));
+    assert!(host.launcher.launches().is_empty());
+}
+
 #[test]
 fn a_refused_editor_leaves_the_open_editors_reload_alone() {
     use crate::app_actions::ConfigFile;

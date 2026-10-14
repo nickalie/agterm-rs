@@ -125,6 +125,40 @@ fn an_earlier_install_migrates_onto_the_adapter_in_place() {
     assert_eq!(again, json);
 }
 
+/// Upstream's `mergeAddsPermissionRequestToFourEventInstall`: an install from before `PermissionRequest` existed,
+/// already on the adapter, gains only that hook.
+#[test]
+fn a_four_event_adapter_install_gains_permission_request() {
+    let a = adapter();
+    let existing = format!(
+        r#"{{"hooks": {{
+          "UserPromptSubmit": [{{"hooks": [{{"type": "command", "command": "'{a}' active --blink"}}]}}],
+          "PostToolUse": [{{"hooks": [{{"type": "command", "command": "'{a}' active --blink"}}]}}],
+          "Stop": [{{"hooks": [{{"type": "command", "command": "'{a}' completed --auto-reset"}}]}}],
+          "Notification": [{{"matcher": "permission_prompt", "hooks": [{{"type": "command", "command": "'{a}' blocked"}}]}}]
+        }}}}"#
+    );
+    let (first, changed) = merge(Some(&existing));
+    assert!(changed);
+    let hooks = events(&first);
+    assert_eq!(hooks.len(), 5);
+    for event in [
+        "UserPromptSubmit",
+        "PostToolUse",
+        "Stop",
+        "Notification",
+        "PermissionRequest",
+    ] {
+        assert_eq!(hooks[event].as_array().map(Vec::len), Some(1), "{event}");
+    }
+    assert_eq!(commands(&first, "PermissionRequest"), [format!("'{a}' blocked")]);
+    assert!(hooks["PermissionRequest"][0].get("matcher").is_none());
+    assert_eq!(hooks["Notification"][0]["matcher"], "permission_prompt");
+    let (second, changed) = merge(Some(&first));
+    assert!(!changed);
+    assert_eq!(second, first);
+}
+
 #[test]
 fn the_pre_blink_prompt_entry_migrates_to_the_current_state() {
     let existing = format!(

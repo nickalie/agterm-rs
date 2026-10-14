@@ -33,7 +33,11 @@ pub const RC_MARKER_END: &str = "# <<< agterm agent-status <<<";
 
 /// The Claude Code hook events the merge installs, each with its matcher and the state (plus flags) it reports.
 /// `PostToolUse` re-asserts `active` after every tool, so a status returns to active when work resumes after a
-/// permission prompt; only `Stop` passes `--auto-reset`.
+/// permission prompt: Claude Code has no "permission answered" event, and the gated tool's `PreToolUse` fired before
+/// `blocked` was set, so its `PostToolUse` is the first hook afterwards. `PermissionRequest` sets `blocked` as the
+/// prompt opens; `Notification[permission_prompt]` fires only once the prompt has waited about six seconds with no
+/// keystroke, and stays for the sandboxed network prompt, which `PermissionRequest` does not cover. `Notification`
+/// alone carries a matcher, and only `Stop` passes `--auto-reset` (it clears on visit); the rest stay keep-state.
 const CLAUDE_HOOKS: [(&str, Option<&str>, &str); 5] = [
     ("UserPromptSubmit", None, "active --blink"),
     ("PostToolUse", None, "active --blink"),
