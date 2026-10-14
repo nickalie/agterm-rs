@@ -93,7 +93,7 @@ fi
 
 if [[ -z "$stage" ]]; then
     stage="${CARGO_TARGET_DIR:-$repo/target}/conformance-stage"
-    # the GTK app's workspace (WORKSPACE_WITHOUT_WPE): the WPE WebKit -sys crates need a WPE the GTK build does not
+    # the GTK app's workspace (WORKSPACE_WITHOUT_WPE): the WPE WebKit crates need a WPE the GTK build does not
     # shellcheck source=../../scripts/lib/native.sh
     (cd "$repo" && source scripts/lib/native.sh && cargo build --release "${WORKSPACE_WITHOUT_WPE[@]}")
     rm -rf "$stage"

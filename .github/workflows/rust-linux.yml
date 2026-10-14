@@ -1,7 +1,7 @@
 # The Rust workspace on Linux: format, strict clippy, the lint report and cargo test over the vendored libghostty.
-# Then the staged build under the conformance suite, once the cargo job passes. The WPE WebKit -sys crates need a WPE
-# WebKit Ubuntu does not package: the Ubuntu jobs build the workspace without them (WORKSPACE_WITHOUT_WPE in
-# scripts/lib/native.sh) and the wpe job checks them on Arch.
+# Then the staged build under the conformance suite, once the cargo job passes. The WPE WebKit crates (the -sys crates
+# and agterm-wpe) need a WPE WebKit Ubuntu does not package: the Ubuntu jobs build the workspace without them
+# (WORKSPACE_WITHOUT_WPE in scripts/lib/native.sh) and the wpe job checks them on Arch.
 name: rust-linux
 
 on:
@@ -119,10 +119,12 @@ jobs:
           key: vendor-wpe-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
       - name: clippy
         run: >-
-          cargo clippy -p agterm-wpe-sys -p agterm-wpe-platform-sys -p agterm-wpe-javascriptcore-sys
+          cargo clippy -p agterm-wpe -p agterm-wpe-sys -p agterm-wpe-platform-sys -p agterm-wpe-javascriptcore-sys
           --all-targets --all-features -- -D warnings
+      # agterm-wpe's engine tests run pages headless in SHM mode here (the runner has no DRM render node, so its
+      # dmabuf mode reports itself skipped)
       - name: test
-        run: cargo test -p agterm-wpe-sys -p agterm-wpe-platform-sys -p agterm-wpe-javascriptcore-sys
+        run: cargo test -p agterm-wpe -p agterm-wpe-sys -p agterm-wpe-platform-sys -p agterm-wpe-javascriptcore-sys
       - name: the bindings are a regeneration at the pins
         run: scripts/gen-wpe-bindings.sh --check
 
