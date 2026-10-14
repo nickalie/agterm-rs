@@ -846,6 +846,49 @@ fn restore_prints_its_note_and_background_and_restart_send_their_args() -> TestR
 }
 
 #[test]
+fn zmx_tree_and_present_send_their_args_and_print_the_sessions() -> TestResult {
+    let dir = short_dir()?;
+    let remote = serde_json::json!({"host": "buildbox", "endpoint": {"executable": "/z", "socketDirectory": "/t"},
+        "presentation": 1, "sessions": [{"id": "S1", "name": "build", "windowID": "W", "windowName": "main",
+        "workspaceID": "WS", "workspaceName": "dev", "context": "release prep", "cwd": "/repo",
+        "splitAxis": "vertical", "panes": [
+            {"pane": "left", "daemon": "agterm-a", "foreground": ["/usr/bin/tail", "-f"]},
+            {"pane": "right", "daemon": "agterm-b"}]}]});
+    let cases: [(&[&str], serde_json::Value, serde_json::Value, String); 3] = [
+        (
+            &["zmx", "tree"],
+            serde_json::json!({"cmd": "zmx.tree"}),
+            serde_json::json!({"remote": {"endpoint": {"executable": "/z", "socketDirectory": "/t"},
+                                          "sessions": []}}),
+            "no attachable sessions\n".to_owned(),
+        ),
+        (
+            &["zmx", "tree", "buildbox"],
+            serde_json::json!({"cmd": "zmx.tree", "args": {"host": "buildbox"}}),
+            serde_json::json!({"remote": remote}),
+            "  main/dev/build (split vertical)  [S1]  /repo  release prep  tail\n".to_owned(),
+        ),
+        (
+            // the app answers and hangs up: nothing but frames would reach stdout
+            &["zmx", "present", "S1"],
+            serde_json::json!({"cmd": "zmx.present", "target": "S1"}),
+            serde_json::json!({"id": "S1"}),
+            String::new(),
+        ),
+    ];
+    for (index, (args, expected, result, printed)) in cases.into_iter().enumerate() {
+        let socket = dir.path().join(format!("{index}.sock"));
+        let _server = scripted(&socket, expected, result)?;
+        assert_eq!(
+            outcome(&run_on(dir.path(), &socket, args)?),
+            (Some(0), printed, String::new()),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn zmx_commands_send_their_args_and_print_the_inventory() -> TestResult {
     let dir = short_dir()?;
     let restore = serde_json::json!({"configured": "live", "requestedAtLaunch": "live", "active": "live",
@@ -917,6 +960,19 @@ fn zmx_commands_send_their_args_and_print_the_inventory() -> TestResult {
         assert_eq!((code, stdout.as_str()), (Some(64), ""), "{args:?}");
         assert!(stderr.starts_with(&format!("Error: {message}\nUsage: ")), "{stderr}");
     }
+    Ok(())
+}
+
+#[test]
+fn zmx_present_reports_a_refusal_on_stderr_and_writes_no_frame() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("agterm.sock");
+    let message = "session is not live-backed, so nothing can be attached to it";
+    let _server = serve(&socket, (), move |(), _| Response::failure(message).into())?;
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &["zmx", "present", "S1"])?),
+        (Some(1), String::new(), format!("Error: {message}\n"))
+    );
     Ok(())
 }
 

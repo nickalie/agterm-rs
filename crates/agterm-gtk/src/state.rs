@@ -20,7 +20,7 @@ use agterm_core::restore::spawn_plan::LaunchSeed;
 use agterm_core::sidebar_actions::SidebarAction;
 use agterm_core::{CommitTimers, ControlError, Core, Dispatched, PaneReport, Resume};
 use agterm_host::MainLoop;
-use agterm_proto::command::SessionCmd;
+use agterm_proto::command::{SessionCmd, ZmxCmd};
 use agterm_proto::{Command, Request};
 use agterm_server::{LineStream, LineStreamLimits, LineStreamOwner, Reply, ReplySender};
 use uuid::Uuid;
@@ -44,16 +44,52 @@ const JOB_STREAM_LIMITS: LineStreamLimits = LineStreamLimits {
     write_timeout: Duration::from_secs(5),
 };
 
-/// A helper connection as the core sends to it.
-struct JobLines(LineStream);
+/// The bounds of a viewer's presentation stream (upstream's `presentationLimits`).
+const PRESENTATION_LIMITS: LineStreamLimits = LineStreamLimits {
+    max_line_bytes: agterm_core::remote::frames::MAX_FRAME_BYTES,
+    max_pending_lines: agterm_core::remote::frames::MAX_PENDING_FRAMES,
+    write_timeout: agterm_core::remote::WRITE_TIMEOUT,
+};
 
-impl agterm_core::JobChannel for JobLines {
+/// An adopted streaming connection (an overlay job's helper, a viewer's presentation stream) as the core sends to it.
+struct StreamLines(LineStream);
+
+impl agterm_core::LineChannel for StreamLines {
     fn send(&self, line: Vec<u8>) -> bool {
         self.0.send(line)
     }
 
     fn shutdown(&self) {
         self.0.shutdown();
+    }
+}
+
+/// Bounds the lines a stream's reader may have waiting for the main loop: the reader blocks in
+/// [`InboundGate::acquire`] past the limit until a task releases its place (upstream's inbound semaphore).
+#[derive(Clone)]
+pub(crate) struct InboundGate(std::sync::Arc<(std::sync::Mutex<usize>, std::sync::Condvar)>);
+
+impl InboundGate {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self(std::sync::Arc::new((
+            std::sync::Mutex::new(limit),
+            std::sync::Condvar::new(),
+        )))
+    }
+
+    pub(crate) fn acquire(&self) {
+        let (free, wake) = &*self.0;
+        let mut free = free.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        while *free == 0 {
+            free = wake.wait(free).unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        *free -= 1;
+    }
+
+    pub(crate) fn release(&self) {
+        let (free, wake) = &*self.0;
+        *free.lock().unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
+        wake.notify_one();
     }
 }
 
@@ -137,6 +173,10 @@ pub struct AppState {
     quick: QuickPanel,
     /// The terminal theme's side as last applied.
     appearance: crate::theme::Appearance,
+    /// The presentation heartbeat is armed on the loop.
+    heartbeat_armed: bool,
+    /// The remote tick (the attached rows' clients, reconnects and attaches) is armed on the loop.
+    remote_tick_armed: bool,
 }
 
 impl AppState {
@@ -151,12 +191,18 @@ impl AppState {
             quitting: false,
             quick: QuickPanel::default(),
             appearance: crate::theme::Appearance::new(dark),
+            heartbeat_armed: false,
+            remote_tick_armed: false,
         }
     }
 
     /// Connects the state to its main loop and its windows, and builds, renders and presents a window for every open
     /// store.
     pub fn attach(&mut self, poster: Poster, windows: Windows) {
+        // the attached rows' presentation bridges run as children reporting back through the loop
+        self.core
+            .set_presentation_transport(std::rc::Rc::new(crate::remote::ProcessTransport::new(poster.clone())));
+        crate::remote::observe_links(&poster);
         self.poster = poster;
         self.windows = Some(windows);
         self.settle();
@@ -241,6 +287,57 @@ impl AppState {
         self.arm_auto_follow();
         self.arm_hud_timers();
         self.arm_job_expiries();
+        self.arm_remote_tick();
+    }
+
+    /// Arms the remote tick when the core asks for one and none is armed (upstream's `startRemoteTick`); it runs
+    /// [`Core::remote_tick`] and settles, which re-arms it while anything remote is up.
+    fn arm_remote_tick(&mut self) {
+        if self.remote_tick_armed {
+            return;
+        }
+        let Some(delay) = self.core.remote_wake() else {
+            return;
+        };
+        let Some(main_loop) = self.poster.upgrade() else {
+            return;
+        };
+        let task = Box::new(|state: &mut Self| {
+            state.remote_tick_armed = false;
+            if state.quitting {
+                return;
+            }
+            state.core.remote_tick(Instant::now());
+            state.settle();
+        });
+        if main_loop.post_after(delay, task).is_ok() {
+            self.remote_tick_armed = true;
+        }
+    }
+
+    /// The network came back or the machine woke ([`crate::remote::observe_links`]): every waiting remote pane and
+    /// dropped stream retries now, not on its backoff.
+    pub fn retry_remote_links(&mut self) {
+        if !self.quitting {
+            self.core.retry_remote_links_now(Instant::now());
+            self.settle();
+        }
+    }
+
+    /// A line a presentation bridge read ([`crate::remote`]).
+    pub fn viewer_line(&mut self, key: agterm_core::remote::LinkKey, line: &[u8]) {
+        if !self.quitting {
+            self.core.viewer_line(key, line);
+            self.settle();
+        }
+    }
+
+    /// A presentation bridge ended ([`crate::remote`]).
+    pub fn viewer_closed(&mut self, key: agterm_core::remote::LinkKey, reason: &str) {
+        if !self.quitting {
+            self.core.viewer_closed(key, reason);
+            self.settle();
+        }
     }
 
     /// A session pane's terminal is ready to spawn: it spawns now with its seed, or once its paced launch turn comes
@@ -449,6 +546,9 @@ impl AppState {
             Dispatched::Done(response) if request.cmd == Command::Session(SessionCmd::OverlayJobRun) && response.ok => {
                 self.job_stream(response)
             }
+            Dispatched::Done(response) if request.cmd == Command::Zmx(ZmxCmd::Present) && response.ok => {
+                self.presentation_stream(response)
+            }
             other => {
                 self.settle();
                 return self.reply(request, other);
@@ -505,7 +605,7 @@ impl AppState {
         let stream = LineStream::new(JOB_STREAM_LIMITS);
         let serial = self
             .core
-            .adopt_overlay_job_stream(&job, Box::new(JobLines(stream.clone())));
+            .adopt_overlay_job_stream(&job, Box::new(StreamLines(stream.clone())));
         let (lines, closes) = (self.poster.clone(), self.poster.clone());
         let (line_job, close_job) = (job.clone(), job);
         let owner = LineStreamOwner::new(
@@ -525,6 +625,99 @@ impl AppState {
             },
         );
         Reply::streaming(response, Box::new(owner))
+    }
+
+    /// The answer to an accepted `zmx.present`, which keeps the connection (upstream's `adoptPresentationStream`): the
+    /// viewer's stream, registered with the core, its lines and close reported back as main-loop tasks. The reader
+    /// stops reading while [`INBOUND_LIMIT`](agterm_core::remote::INBOUND_LIMIT) lines wait for the loop, so a fast or
+    /// faulty peer backs up into its own socket; a stream that sends no hello within the deadline is closed.
+    fn presentation_stream(&mut self, response: agterm_proto::Response) -> Reply {
+        let Some(session) = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+        else {
+            return response.into();
+        };
+        let stream = LineStream::new(PRESENTATION_LIMITS);
+        let serial = self
+            .core
+            .adopt_presentation_stream(&session, Box::new(StreamLines(stream.clone())));
+        if let Some(main_loop) = self.poster.upgrade() {
+            let deadline = Box::new(move |state: &mut Self| {
+                if !state.quitting {
+                    state.core.presentation_hello_deadline(serial);
+                }
+            });
+            if main_loop
+                .post_after(agterm_core::remote::HELLO_DEADLINE, deadline)
+                .is_err()
+            {
+                tracing::debug!("presentation hello deadline dropped: the loop is closed");
+            }
+        }
+        self.arm_presentation_heartbeat();
+        let gate = InboundGate::new(agterm_core::remote::INBOUND_LIMIT);
+        let (lines, closes) = (self.poster.clone(), self.poster.clone());
+        let owner = LineStreamOwner::new(
+            stream,
+            move |line| {
+                gate.acquire();
+                let released = gate.clone();
+                let task = move |state: &mut Self| {
+                    if !state.quitting {
+                        state.core.presentation_line(serial, &line);
+                        state.settle();
+                    }
+                    released.release();
+                };
+                let posted = lines
+                    .upgrade()
+                    .is_some_and(|main_loop| main_loop.post(Box::new(task)).is_ok());
+                if !posted {
+                    gate.release();
+                }
+            },
+            move || {
+                post(&closes, move |state: &mut Self| {
+                    if !state.quitting {
+                        state.core.presentation_closed(serial);
+                        state.settle();
+                    }
+                });
+            },
+        );
+        Reply::streaming(response, Box::new(owner))
+    }
+
+    /// Arms the presentation heartbeat unless it is armed (upstream's `startPresentationHeartbeat`); it re-arms itself
+    /// while a stream is up.
+    fn arm_presentation_heartbeat(&mut self) {
+        if self.heartbeat_armed {
+            return;
+        }
+        let Some(main_loop) = self.poster.upgrade() else {
+            return;
+        };
+        let task = Box::new(|state: &mut Self| {
+            state.heartbeat_armed = false;
+            if state.quitting {
+                return;
+            }
+            let streams_up = state.core.presentation_heartbeat();
+            state.settle();
+            if streams_up {
+                state.arm_presentation_heartbeat();
+            }
+        });
+        if main_loop
+            .post_after(agterm_core::remote::HEARTBEAT_INTERVAL, task)
+            .is_ok()
+        {
+            self.heartbeat_armed = true;
+        }
     }
 
     /// Arms the overlay job expiries the core asked for since the last arm.
@@ -600,6 +793,8 @@ impl AppState {
         if !self.core.save_all() {
             tracing::error!("the quit save did not write everything");
         }
+        self.core.shutdown_presentation_streams();
+        self.core.shutdown_remote_presentations();
         self.quitting = true;
     }
 
@@ -887,6 +1082,26 @@ mod tests {
                 ..CoreState::default()
             },
         )
+    }
+
+    #[test]
+    fn the_inbound_gate_holds_the_reader_past_its_limit_until_a_line_is_handled() {
+        let gate = InboundGate::new(2);
+        gate.acquire();
+        gate.acquire();
+        let (done, finished) = std::sync::mpsc::channel();
+        let reader = gate.clone();
+        let blocked = std::thread::spawn(move || {
+            reader.acquire();
+            done.send(()).unwrap();
+        });
+        assert!(
+            finished.recv_timeout(Duration::from_millis(100)).is_err(),
+            "a third line waits"
+        );
+        gate.release();
+        finished.recv_timeout(Duration::from_secs(5)).unwrap();
+        blocked.join().unwrap();
     }
 
     #[test]

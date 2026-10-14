@@ -140,6 +140,7 @@ impl AppStore {
         let split_identity = self.session(id).and_then(|session| session.split_pane_identity);
         self.close_hud_owned_by(id, split_identity);
         self.cancel_ask_owned_by(id, split_identity);
+        self.drop_remote_overlay(id, OverlayPane::Right);
         let Some(session) = self.session_mut(id) else { return };
         let was_shown = session.split.shown;
         // the split pane is gone for good, and its live-session daemon with it; a remote split's daemon is another
@@ -182,11 +183,13 @@ impl AppStore {
         let primary_identity = self.session(id).map(|session| session.pane_identity);
         self.close_hud_owned_by(id, primary_identity);
         self.cancel_ask_owned_by(id, primary_identity);
+        self.drop_remote_overlay(id, OverlayPane::Left);
         let Some(session) = self.session_mut(id) else { return };
         let was_shown = session.split.shown;
         // the exiting primary's override goes with it; the survivor's moves left, its file named by the same identity
         let removal = session.pane_text_removal(StatusPane::Left);
         promote_split_survivor(session);
+        session.remote_overlays.promote_right();
         self.outbox.removed_watermarks.extend(removal);
         self.retag_promoted_indicator(id);
         if was_shown {
@@ -285,6 +288,8 @@ impl AppStore {
         self.close_hud_owned_by(id, identity);
         self.cancel_ask_owned_by(id, identity);
         self.close_pane_overlay(id, overlay);
+        // one handed to a viewer lives in the remote slot only, and the pane's kill does not end its job
+        self.close_remote_overlay(id, Some(overlay));
         self.clear_indicator_owned_by(pane, id);
     }
 
@@ -306,7 +311,11 @@ impl AppStore {
         let Some(indicator) = self.session(id).map(|session| session.agent_indicator.clone()) else {
             return;
         };
-        if indicator.status == AgentStatus::Idle {
+        let owner_unknown = self
+            .session(id)
+            .and_then(Session::remote_presentation)
+            .is_some_and(super::RemotePresentationState::status_owner_unknown);
+        if indicator.status == AgentStatus::Idle || owner_unknown {
             return;
         }
         match indicator.status_pane.unwrap_or(StatusPane::Left) {
@@ -316,7 +325,18 @@ impl AppStore {
                     status_pane: Some(StatusPane::Left),
                     ..indicator
                 };
+                // a re-tag, not a write: the setter would take a mirrored glyph away from the bridge
+                let bridged = self
+                    .session(id)
+                    .and_then(Session::remote_presentation)
+                    .is_some_and(|state| state.status_bridged);
                 self.set_agent_indicator(promoted, id);
+                if let Some(state) = self
+                    .session_mut(id)
+                    .and_then(|session| session.remote_presentation.as_mut())
+                {
+                    state.status_bridged = bridged;
+                }
             }
             StatusPane::Scratch => {}
         }
@@ -341,9 +361,15 @@ fn swap_pane_fields(session: &mut Session) {
     let backgrounds = &mut session.pane_backgrounds;
     std::mem::swap(&mut backgrounds.left, &mut backgrounds.right);
     session.search.owner = session.search.owner.map(other_pane);
+    let owner_unknown = session
+        .remote_presentation
+        .as_ref()
+        .is_some_and(super::RemotePresentationState::status_owner_unknown);
     let indicator = &mut session.agent_indicator;
     indicator.status_pane = if indicator.status == AgentStatus::Idle {
         None
+    } else if owner_unknown {
+        indicator.status_pane
     } else {
         match indicator.status_pane {
             None | Some(StatusPane::Left) => Some(StatusPane::Right),
@@ -353,6 +379,7 @@ fn swap_pane_fields(session: &mut Session) {
     };
     session.split.focused = !session.split.focused;
     session.pane_overlays.swap();
+    session.remote_overlays.swap_panes();
 }
 
 /// The other pane of a split; the scratch stays.

@@ -256,6 +256,7 @@ impl AppStore {
             code_file: Some(mint_code_file()),
             html: None,
         });
+        session.remote_overlays.clear_failure(Some(pane));
         Ok(())
     }
 

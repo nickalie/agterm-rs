@@ -30,7 +30,7 @@ use agterm_proto::command::ZmxCmd;
 use agterm_proto::{Command, ControlZmxEndpoint};
 use uuid::Uuid;
 
-pub(crate) use self::inventory::dispatch;
+pub(crate) use self::inventory::{control_inventory, dispatch};
 pub use self::lead::LeadCover;
 pub(crate) use self::lead::{LeadBook, PaneSource};
 pub use self::live_reset::{LiveQuit, ResetPrompt, ResetRefusal};
@@ -75,6 +75,9 @@ pub struct PaneReplacement {
     pub command: String,
     pub env: Vec<(String, String)>,
     pub cwd: Option<String>,
+    /// A remote replica's ssh attach rather than a live-session client: its terminal holds after the command exits,
+    /// as the attach pane's own does, so its last line stays readable.
+    pub remote: bool,
 }
 
 /// The installed live-session host and what the core keeps about its daemons.
@@ -234,11 +237,12 @@ impl Core {
     }
 }
 
-/// The commands of the zmx group this build answers; the remote ones come with remote sessions.
+/// The commands of the zmx group this build answers at once; `zmx.tree` starts through `deferred`, and `zmx.attach`
+/// comes with the viewer side of remote sessions.
 pub(crate) fn answers(cmd: ZmxCmd) -> bool {
     matches!(
         cmd,
-        ZmxCmd::List | ZmxCmd::Prune | ZmxCmd::Kill | ZmxCmd::Screen | ZmxCmd::Reset
+        ZmxCmd::List | ZmxCmd::Prune | ZmxCmd::Kill | ZmxCmd::Screen | ZmxCmd::Reset | ZmxCmd::Present
     )
 }
 

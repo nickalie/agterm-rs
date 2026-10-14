@@ -31,6 +31,7 @@ mod session_panes;
 mod session_restore;
 mod sidebar;
 mod socket;
+mod stream_bridge;
 mod surface;
 mod terminfo;
 mod theme;

@@ -305,7 +305,7 @@ impl Page {
 }
 
 /// The lead cover each of `session`'s panes needs now (see [`crate::pane_lead`]).
-fn lead_covers(core: &Core, window: Uuid, session: Uuid) -> Vec<(String, Option<agterm_core::LeadCover>)> {
+fn lead_covers(core: &Core, window: Uuid, session: Uuid) -> Vec<(String, crate::pane_lead::PaneCover)> {
     let tokens: Vec<String> = core
         .library()
         .store(window)
@@ -701,9 +701,10 @@ impl Deck {
         };
         let mut surface_spec = spec.surface_spec(context);
         surface_spec.command = Some(replacement.command.clone());
-        surface_spec.wait_after_command = false;
+        // a remote replica's attach holds after its ssh, as the pane's first attach did
+        surface_spec.wait_after_command = replacement.remote;
         surface_spec.env = surface::merged_env(&surface_spec.env, &replacement.env);
-        surface_spec.live = true;
+        surface_spec.live = !replacement.remote;
         surface_spec.working_directory = replacement
             .cwd
             .as_ref()
@@ -791,6 +792,15 @@ fn connect_terminal(terminal: &TerminalSurface, session: Uuid, token: &str, post
     terminal.connect_exit(move || {
         state::post(&posting, move |state: &mut AppState| {
             state.pane_exited(session, &exit_token);
+        });
+    });
+    let posting = poster.clone();
+    let held_token = token.to_owned();
+    terminal.connect_held(move || {
+        state::post(&posting, move |state: &mut AppState| {
+            if state.core.remote_pane_held(session, &held_token) {
+                state.settle();
+            }
         });
     });
     let posting = poster.clone();

@@ -179,9 +179,13 @@ impl AppStore {
         keystroke: StatusKeystroke,
         reset: StatusReset,
     ) -> bool {
-        let cleared = self
-            .session(id)
-            .is_some_and(|session| session.agent_indicator.cleared_by(pane, keystroke, reset));
+        // a status mirrored from an origin pane this machine has no counterpart for is not this pane's to clear
+        let cleared = self.session(id).is_some_and(|session| {
+            session
+                .remote_presentation()
+                .is_none_or(super::RemotePresentationState::allows_keystroke_status_clear)
+                && session.agent_indicator.cleared_by(pane, keystroke, reset)
+        });
         if cleared {
             self.set_agent_indicator(AgentIndicator::default(), id);
         }

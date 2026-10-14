@@ -29,6 +29,8 @@ pub struct SidebarRow {
     pub icon: Glyph,
     /// The agent-status glyph; `None` hides it (idle, and every workspace row).
     pub status: Option<GlyphLook>,
+    /// The leading glyph's tooltip: what a remote row's presentation stream is missing, `None` otherwise.
+    pub icon_tooltip: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,6 +174,7 @@ impl RowBuilder<'_> {
                 focus_member: self.store.focus().ids().contains(&workspace.id()),
             },
             status: None,
+            icon_tooltip: None,
         }
     }
 
@@ -196,19 +199,20 @@ impl RowBuilder<'_> {
             badge: self.badge(session.unseen_count),
             icon: session_icon(session, self.store.sidebar().mode == SidebarMode::Tree),
             status: status_glyph::resolve(&session.agent_indicator, self.settings.settings),
+            icon_tooltip: session.presentation_notice(),
         }
     }
 }
 
 /// A session row's glyph: the split arrangement while the session has a split (shown or hidden), filled while
 /// flagged in the tree (every flagged-view row is flagged, so the fill would be noise there); a remote session's
-/// cloud marks a split by weight instead.
+/// cloud marks a split by weight instead, slashed while its presentation stream is not up.
 fn session_icon(session: &Session, tree: bool) -> Glyph {
     let split = session.split.exists.then_some(session.split.axis);
     if session.remote_host().is_some() {
         return Glyph::Remote {
             split: split.is_some(),
-            disconnected: false,
+            disconnected: session.presentation_notice().is_some(),
         };
     }
     Glyph::Session {
@@ -453,6 +457,55 @@ mod tests {
         assert_eq!(rows[0].kind, RowKind::Workspace { expanded: true });
         assert_eq!(rows[0].icon, Glyph::Workspace { focus_member: true });
         assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn a_remote_rows_cloud_is_slashed_with_the_streams_notice_while_it_is_not_up() {
+        use agterm_core::model::{NewSession, RemoteBinding, RemoteConnection};
+        let (mut store, [one, _], _) = store();
+        let remote = store
+            .add_session(
+                one,
+                NewSession {
+                    remote_host: Some("buildbox".to_owned()),
+                    ..NewSession::at_cwd("/tmp")
+                },
+            )
+            .unwrap();
+        store.bind_remote(
+            RemoteBinding::new("ORIGIN", std::collections::HashMap::new(), Some(1), None),
+            remote,
+        );
+        let row = |store: &AppStore| {
+            let mut expansion = Expansion::default();
+            built(store, &mut expansion, &AppSettings::default())
+                .into_iter()
+                .find(|row| row.id == remote)
+                .unwrap()
+        };
+        store.set_remote_connection(RemoteConnection::Failed("exit 255".to_owned()), remote);
+        let failed = row(&store);
+        assert_eq!(
+            failed.icon,
+            Glyph::Remote {
+                split: false,
+                disconnected: true
+            }
+        );
+        assert_eq!(
+            failed.icon_tooltip.as_deref(),
+            Some("Lost the connection to buildbox (exit 255), retrying. Close and reattach the session to retry now.")
+        );
+        store.set_remote_connection(RemoteConnection::Connected, remote);
+        let connected = row(&store);
+        assert_eq!(
+            connected.icon,
+            Glyph::Remote {
+                split: false,
+                disconnected: false
+            }
+        );
+        assert_eq!(connected.icon_tooltip, None);
     }
 
     #[test]

@@ -170,6 +170,8 @@ pub struct Core {
     pub(crate) palette: crate::palette::PaletteRuntime,
     /// The live-session host and what the core keeps about its daemons ([`commands::zmx`]).
     pub(crate) zmx: commands::zmx::ZmxRuntime,
+    /// The presentation streams of attached viewers and their hub ([`crate::remote`]).
+    pub(crate) remote: crate::remote::PresentationRuntime,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -244,6 +246,7 @@ impl Core {
             restore: commands::relaunch::RestoreRuntime::default(),
             palette: crate::palette::PaletteRuntime::default(),
             zmx: commands::zmx::ZmxRuntime::default(),
+            remote: crate::remote::PresentationRuntime::default(),
         }
     }
 
@@ -532,6 +535,9 @@ impl Core {
         self.prune_zoom();
         self.prune_spawn_queue();
         self.drop_stranded_pane_overlays();
+        // before the modals: a presenter's answer or loss ends asks they retain
+        self.sync_presentation();
+        self.sync_replica_overlays();
         self.sync_modals();
         self.sync_pages();
         self.settle_palette();
@@ -553,7 +559,9 @@ impl Core {
             )
         };
         self.finalize_panes(finalized);
+        let rows = crate::remote::row_changes(&events);
         let tree_changed = self.events.record(events);
+        self.follow_remote_rows(rows);
         self.run_hooks();
         CommitTimers {
             debounced,
@@ -637,6 +645,11 @@ impl Core {
     /// The `--window` target does not resolve or names a closed window.
     pub fn tree(&self, window: Option<&str>) -> Result<ControlTree, ControlError> {
         let scoped = Resolver::new(&self.library).placement_window(window)?;
+        Ok(self.tree_of(scoped))
+    }
+
+    /// The tree of open window `scoped`; an empty tree for `None` or a window not open.
+    pub(crate) fn tree_of(&self, scoped: Option<Uuid>) -> ControlTree {
         let empty = AppStore::new();
         let store = scoped.and_then(|id| self.library.store(id)).unwrap_or(&empty);
         let context = TreeContext {
@@ -648,6 +661,7 @@ impl Core {
         let mut tree = control_tree(store, &context);
         self.project_live(store, &mut tree);
         self.project_foreground(store, &mut tree);
+        self.project_presenters(&mut tree);
         tree.zoomed_surface = if commands::quick::zoomed(self) {
             Some("quick".to_owned())
         } else {
@@ -659,7 +673,7 @@ impl Core {
             tree.pick_pending = slot.pending().map(|pick| pick.id.clone());
             tree.ask_pending = slot.pending_ask().map(|ask| ask.id.clone());
         }
-        Ok(tree)
+        tree
     }
 
     /// `events.read`: a page of the ring after the cursor, or the anchor alone without one; a cursor the ring cannot
@@ -813,16 +827,10 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_commands_are_refused_by_name() {
+    fn an_attach_without_a_host_is_refused_before_anything_runs() {
         let mut core = core();
-        for cmd in [Command::Zmx(ZmxCmd::Tree), Command::Zmx(ZmxCmd::Attach)] {
-            let response = core.dispatch(&Request::new(cmd));
-            assert!(!response.ok);
-            assert_eq!(
-                response.error,
-                Some(format!("{} is not supported by this host", cmd.wire_name()))
-            );
-        }
+        let response = core.dispatch(&Request::new(Command::Zmx(ZmxCmd::Attach)));
+        assert_eq!(response.error.as_deref(), Some("zmx.attach requires a host"));
     }
 
     fn tree_request(window: Option<&str>) -> Request {

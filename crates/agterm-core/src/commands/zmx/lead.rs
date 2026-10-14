@@ -52,6 +52,12 @@ impl LeadBook {
         state.apply(notice).then(|| state.role()).flatten()
     }
 
+    /// The nonce of `pane`'s current attachment.
+    #[must_use]
+    pub(crate) fn nonce(&self, pane: Uuid) -> Option<&str> {
+        self.states.get(&pane).map(|state| state.attachment().nonce.as_str())
+    }
+
     #[must_use]
     pub(crate) fn role(&self, pane: Uuid) -> Option<LeadRole> {
         self.states.get(&pane).and_then(LeadState::role)
@@ -155,6 +161,8 @@ impl Core {
             "Taking over…"
         } else if leads.role(identity) == Some(LeadRole::Unowned) {
             "Reconnecting…"
+        } else if self.pane_is_remote(identity) {
+            "In use on the machine it runs on"
         } else {
             "In use from another machine"
         };
@@ -172,12 +180,18 @@ impl Core {
         self.zmx.leads.role(identity).map(<&'static str>::from)
     }
 
-    /// A key press on a covered pane (upstream's `PaneLead.consumes`): the pane is attached again with the claim,
-    /// unless a takeover is already on its way. Whether one started; settle afterwards.
+    /// A key press on a covered pane, or on a remote pane waiting to be attached again (upstream's
+    /// `PaneLead.consumes`): a waiting pane's reconnect probe is due now, its backoff over; a covered one is attached
+    /// again with the claim, unless a takeover is already on its way. Whether either happened; settle afterwards.
     pub fn take_pane_lead(&mut self, session: Uuid, token: &str) -> bool {
         let Ok(identity) = Uuid::parse_str(token) else {
             return false;
         };
+        // a remote pane waiting to be attached again retries now instead (upstream's `PaneLead.consumes`)
+        if self.remote.viewer.reconnects.waiting(identity) {
+            self.retry_reconnect(identity, std::time::Instant::now());
+            return true;
+        }
         if !self.zmx.leads.covered(identity) || self.zmx.leads.reattaching(identity) {
             return false;
         }
@@ -187,9 +201,11 @@ impl Core {
     /// Replaces the live pane carrying `token` with a fresh attach to its daemon (upstream's `reattachPane` and
     /// `PaneReattach.launch`), covered until its first report. The attach never creates: its trailing `/bin/sh -c`
     /// runs only when the daemon is gone, and fails, so a vanished session ends the pane rather than handing back a
-    /// fresh shell under the old identity. False when the pane is not a live one of an open window's tree this
-    /// instance can wrap: a session a pending close holds has no page to replace a terminal in (upstream's
-    /// `replacePane` resolves the session's store first), so it keeps its attachment and is not left covered.
+    /// fresh shell under the old identity. A remote replica (not a live client here) is attached again over ssh
+    /// instead ([`Core::reattach_remote_pane`]). False when the pane is neither a live one of an open window's tree
+    /// this instance can wrap nor a replica its binding can attach again: a session a pending close holds has no page
+    /// to replace a terminal in (upstream's `replacePane` resolves the session's store first), so it keeps its
+    /// attachment and is not left covered.
     pub(crate) fn reattach_pane(&mut self, session: Uuid, token: &str, claim: bool) -> bool {
         let Ok(identity) = Uuid::parse_str(token) else {
             return false;
@@ -202,7 +218,8 @@ impl Core {
             .and_then(|slot| slot.get())
             .is_some_and(Surface::is_live_session);
         if !live {
-            return false;
+            // a remote replica is attached again over ssh, covered until its first report
+            return self.reattach_remote_pane(session, identity, LeadAttachment::new(claim), true);
         }
         let attachment = LeadAttachment::new(claim);
         let Some(configuration) = self.wrap_configuration(identity, Some(attachment.clone())) else {
@@ -222,6 +239,7 @@ impl Core {
             command: crate::zmx::support::settled(&shell_quoted_line(&arguments)),
             env: configuration.environment.into_iter().collect(),
             cwd: None,
+            remote: false,
         });
         true
     }

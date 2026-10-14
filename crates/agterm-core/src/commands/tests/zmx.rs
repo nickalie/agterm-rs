@@ -23,12 +23,12 @@ use crate::zmx::support::Inputs;
 use crate::{Core, LiveInstall};
 
 /// A live launch over a fake host: the first session's primary pane is a live terminal.
-struct Live {
-    fixture: Fixture,
-    host: Arc<FakeSessionHost>,
+pub(super) struct Live {
+    pub(super) fixture: Fixture,
+    pub(super) host: Arc<FakeSessionHost>,
     resources: tempfile::TempDir,
-    session: Uuid,
-    left: Uuid,
+    pub(super) session: Uuid,
+    pub(super) left: Uuid,
     probe: FakeSurfaceProbe,
 }
 
@@ -86,7 +86,7 @@ fn live_with(extra: usize, mode: RestoreMode) -> Live {
     }
 }
 
-fn live() -> Live {
+pub(super) fn live() -> Live {
     live_with(0, RestoreMode::Live)
 }
 
@@ -484,7 +484,7 @@ fn a_fallback_or_ordinary_launch_runs_a_plain_shell() {
 // MARK: - the lead
 
 /// Feeds the role report `role` of the live pane's current attachment.
-fn report(live: &mut Live, token: &str, nonce: &str, role: &str, generation: u32) -> bool {
+pub(super) fn report(live: &mut Live, token: &str, nonce: &str, role: &str, generation: u32) -> bool {
     let title = format!("zmx-role;{nonce}:{role}:{generation}");
     live.fixture
         .core
@@ -492,7 +492,7 @@ fn report(live: &mut Live, token: &str, nonce: &str, role: &str, generation: u32
 }
 
 /// Spawns the live pane, which begins its attachment, and returns its nonce.
-fn spawn_live(live: &mut Live) -> String {
+pub(super) fn spawn_live(live: &mut Live) -> String {
     let token = uuid_string(live.left);
     let seed = live
         .fixture

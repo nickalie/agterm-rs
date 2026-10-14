@@ -126,6 +126,12 @@ fn format_listing(result: &Value) -> Option<String> {
     {
         return Some(format_hooks(&hooks));
     }
+    if let Some(remote) = result
+        .get("remote")
+        .and_then(|remote| serde_json::from_value::<agterm_proto::ControlRemoteTree>(remote.clone()).ok())
+    {
+        return Some(crate::zmx::format_remote_tree(&remote));
+    }
     if let Some(zmx) = result
         .get("zmx")
         .and_then(|zmx| serde_json::from_value::<agterm_proto::ControlZmxInventory>(zmx.clone()).ok())

@@ -13,6 +13,8 @@ bitflags.workspace = true
 pulldown-cmark.workspace = true
 serde.workspace = true
 strum.workspace = true
+# the remote tree's ssh output capture: unlinked files nothing blocks reading
+tempfile.workspace = true
 # `raw_value`: a lossy optional takes its value as raw JSON text, so even a number past `f64`'s range drops alone.
 serde_json = { workspace = true, features = ["raw_value"] }
 thiserror.workspace = true
@@ -23,7 +25,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 agterm-host = { workspace = true, features = ["fakes"] }
-tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -38,6 +38,7 @@ pub mod paths;
 pub mod persist;
 pub mod projection;
 pub mod quick_metrics;
+pub mod remote;
 pub mod resolve;
 pub mod restart_replay;
 pub mod restore;
@@ -60,7 +61,7 @@ pub use commands::notify::{
     BANNERS_OFF_NOTE, NotificationEffect, NotificationPost, PaneRole, identity as notification_identity,
     parse_identity as parse_notification_identity, should_deliver,
 };
-pub use commands::overlay::JobChannel;
+pub use commands::overlay::LineChannel;
 pub use commands::process::{CorePoster, CoreTask, ProcessHost, widened_path};
 pub use commands::relaunch::{EXIT_CAPTURE_BUDGET, PaneSpawn};
 pub use commands::surface::POLL_INTERVAL;

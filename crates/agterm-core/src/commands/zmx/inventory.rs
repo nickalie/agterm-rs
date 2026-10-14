@@ -37,6 +37,8 @@ pub(crate) fn dispatch(core: &mut Core, cmd: ZmxCmd, request: &Request) -> Outco
         ZmxCmd::Kill => kill(core, request.target.as_deref(), args),
         ZmxCmd::Screen => screen(core, args),
         ZmxCmd::Reset => live_reset::reset(core, args),
+        ZmxCmd::Present => crate::remote::open_presentation(core, request.target.as_deref()),
+        // `zmx.tree` starts through `deferred`, as its remote form waits on ssh
         other => Err(not_yet(other)),
     }
 }
@@ -54,17 +56,22 @@ impl Core {
 
 /// `zmx.list`: the inventory under the restore status, with the endpoint and the reset read-back.
 fn list(core: &mut Core) -> Outcome {
+    Ok(ControlResult {
+        zmx: Some(control_inventory(core)?),
+        ..ControlResult::default()
+    })
+}
+
+/// The inventory as `zmx.list` answers it, which `zmx.tree` joins against the open windows.
+pub(crate) fn control_inventory(core: &Core) -> Result<ControlZmxInventory, ControlError> {
     let inventory = core.inventory()?;
     let outdated_before = core.zmx.outdated_before;
-    Ok(ControlResult {
-        zmx: Some(ControlZmxInventory {
-            restore: core.restore_status(),
-            inventory_complete: inventory.inventory_complete,
-            endpoint: core.zmx.endpoint.clone(),
-            live_reset: readback(core.zmx.reset.pending.as_ref(), core.zmx.reset.last.as_ref()),
-            entries: inventory.rows.iter().map(|row| entry(row, outdated_before)).collect(),
-        }),
-        ..ControlResult::default()
+    Ok(ControlZmxInventory {
+        restore: core.restore_status(),
+        inventory_complete: inventory.inventory_complete,
+        endpoint: core.zmx.endpoint.clone(),
+        live_reset: readback(core.zmx.reset.pending.as_ref(), core.zmx.reset.last.as_ref()),
+        entries: inventory.rows.iter().map(|row| entry(row, outdated_before)).collect(),
     })
 }
 

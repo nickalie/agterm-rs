@@ -72,7 +72,7 @@ pub struct OverlayJob {
     /// The pane the overlay covers, `None` for the session-wide slot.
     pub pane: Option<OverlayPane>,
     /// The presenter generation the job was handed to.
-    pub owner: u64,
+    pub owner: i64,
     pub context: OverlayLaunchContext,
     pub state: OverlayJobState,
 }
@@ -128,7 +128,7 @@ impl OverlayJobs {
         &mut self,
         session: Uuid,
         pane: Option<OverlayPane>,
-        owner: u64,
+        owner: i64,
         context: OverlayLaunchContext,
     ) -> String {
         let id = uuid_string(Uuid::new_v4());

@@ -118,9 +118,9 @@ fn shell_quoted(path: &Path) -> String {
 
 /// Where a HUD goes (upstream's `ControlHudPlacement`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct Placement {
-    pane: Option<OverlayPane>,
-    pane_id: Option<String>,
+pub(crate) struct Placement {
+    pub(crate) pane: Option<OverlayPane>,
+    pub(crate) pane_id: Option<String>,
 }
 
 /// Answers a `session.hud.*` command.
@@ -558,7 +558,13 @@ fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 // MARK: - the commands
 
 /// `session.hud.open` (upstream's `openHud`).
-fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, spec: HudSpec, placement: &Placement) -> Outcome {
+pub(crate) fn open(
+    core: &mut Core,
+    target: Option<&str>,
+    window: Option<&str>,
+    spec: HudSpec,
+    placement: &Placement,
+) -> Outcome {
     let resolved = Resolver::new(core.library()).session(target, window)?;
     let id = resolved.session;
     let session = core
@@ -602,12 +608,14 @@ fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, spec: HudSp
         return Err(ControlError::rejected(WRITE_FAILED));
     }
     core.hud.arm_after(id, hide_after);
+    // published once its body is on disk, never before
+    core.publish_hud(id, hide_after);
     Ok(with_id(id))
 }
 
 /// `session.hud.update` (upstream's `updateHud`): the body rewritten and the panel re-sized in place; a failed write
 /// rolls the store back, keeping the deadline the painted message came with.
-fn update(
+pub(crate) fn update(
     core: &mut Core,
     target: Option<&str>,
     window: Option<&str>,
@@ -646,6 +654,7 @@ fn update(
         return Err(ControlError::rejected(WRITE_FAILED));
     }
     core.hud.arm(id, spec);
+    core.publish_hud(id, spec.effective_hide_after());
     Ok(with_id(id))
 }
 

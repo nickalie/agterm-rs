@@ -173,6 +173,8 @@ struct Inner {
     on_notification: RefCell<Vec<NotificationHandler>>,
     on_font_size: RefCell<Vec<FontSizeHandler>>,
     on_exit: RefCell<Option<ExitHandler>>,
+    /// Called once when a held command's process ends and its terminal keeps showing it.
+    on_held: RefCell<Option<ExitHandler>>,
     /// The input method is being reset to end a composition this side already committed or dropped: what it emits
     /// meanwhile is ignored (upstream's `committingComposition`).
     resetting_im: Cell<bool>,
@@ -306,6 +308,7 @@ impl TerminalSurface {
             on_notification: RefCell::new(Vec::new()),
             on_font_size: RefCell::new(Vec::new()),
             on_exit: RefCell::new(None),
+            on_held: RefCell::new(None),
             resetting_im: Cell::new(false),
             exit_handled: Cell::new(false),
             drew: Cell::new(false),
@@ -449,6 +452,12 @@ impl TerminalSurface {
     /// Called once when the terminal's process ends.
     pub fn connect_exit(&self, handler: impl FnOnce() + 'static) {
         *self.inner.on_exit.borrow_mut() = Some(Box::new(handler));
+    }
+
+    /// Called once when a command run with `wait_after_command` ends and libghostty holds its terminal on the
+    /// press-any-key prompt (a remote pane's ssh, a replica overlay's job).
+    pub fn connect_held(&self, handler: impl FnOnce() + 'static) {
+        *self.inner.on_held.borrow_mut() = Some(Box::new(handler));
     }
 
     fn weak(&self) -> Weak<Inner> {
@@ -818,7 +827,15 @@ impl TerminalSurface {
             Launch::Seeded(seed) => (seed.command.is_some(), seed.wait_after_command),
             Launch::Open | Launch::Gated { .. } => (spec.command.is_some(), spec.wait_after_command),
         };
-        if !command || wait {
+        if !command {
+            return false;
+        }
+        if wait {
+            let handler = self.inner.on_held.borrow_mut().take();
+            if let Some(handler) = handler {
+                // never inside the callback, as the exit
+                glib::idle_add_local_once(handler);
+            }
             return false;
         }
         let weak = self.weak();

@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use agterm_host::TextScope;
-use agterm_proto::command::{BrowserCmd, ConfigCmd, QuickCmd, SessionCmd};
+use agterm_proto::command::{BrowserCmd, ConfigCmd, QuickCmd, SessionCmd, ZmxCmd};
 use agterm_proto::{Args, Command, ControlResult, Request};
 use uuid::Uuid;
 
@@ -76,6 +76,8 @@ pub(crate) fn deferred(core: &mut Core, request: &Request) -> Option<Dispatched>
         Command::Quick(QuickCmd::Type | QuickCmd::Text) => Some(super::quick::begin(core, request)),
         Command::Config(ConfigCmd::Reload) => Some(super::config::begin_reload(core)),
         Command::Browser(BrowserCmd::Clear) => Some(super::browser::begin_clear(core, request)),
+        Command::Zmx(ZmxCmd::Tree) => Some(crate::remote::begin_tree(core, request)),
+        Command::Zmx(ZmxCmd::Attach) => Some(crate::remote::attach::begin_attach(core, request)),
         _ => None,
     }
 }

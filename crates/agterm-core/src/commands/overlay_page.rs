@@ -33,6 +33,8 @@ pub(crate) const PAGE_NO_READ: &str = "no overlay to read: the slot holds an htm
 const UNKNOWN_PAGE: &str = "no such page";
 const ALREADY_OPEN: &str = "overlay already open";
 const PANE_ALREADY_OPEN: &str = "pane overlay already open";
+/// Upstream's `OverlayHtmlError.presenter`.
+const PRESENTER: &str = "a viewer presents this session: an html overlay would open where nobody sees it";
 /// The bridge's refusals of a page that left its slot (upstream's `handleBridgeRequest`).
 const PAGE_CLOSED: &str = "page closed";
 
@@ -92,7 +94,17 @@ impl PageOpening {
 /// `session.overlay.open --html|--url` once validated (upstream's `openHtmlOverlay`): the page takes its slot with the
 /// slot rules of a program and answers with its id, the one `session.overlay.result --page` reads.
 pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, opening: PageOpening) -> Outcome {
-    let id = session_store(core, target, window)?.1;
+    let (store, id) = session_store(core, target, window)?;
+    if store
+        .session(id)
+        .is_some_and(|session| session.remote_overlays().slot(opening.pane).is_some())
+    {
+        return Err(ControlError::rejected(if opening.pane.is_none() {
+            ALREADY_OPEN
+        } else {
+            PANE_ALREADY_OPEN
+        }));
+    }
     let Some(host) = core.pages.host.as_ref() else {
         return Err(ControlError::rejected(PAGES_UNAVAILABLE));
     };
@@ -100,6 +112,10 @@ pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, 
         && let Some(failure) = host.persistent_store_failure()
     {
         return Err(ControlError::rejected(format!("session.overlay.open: {failure}")));
+    }
+    // a page never takes the remote program path: it would render here, where nobody is looking
+    if core.has_presenter(id) {
+        return Err(ControlError::rejected(PRESENTER));
     }
     let page = HtmlOverlay::new(opening.source, opening.flags);
     let page_id = page.id;

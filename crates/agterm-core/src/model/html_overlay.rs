@@ -17,8 +17,8 @@ use super::store::AppStore;
 use super::window_library::WindowLibrary;
 use crate::html::{HtmlLoadState, HtmlOverlay, HtmlPageInfo, HtmlReloadTarget};
 
-/// Why [`AppStore::open_html_overlay`] refused (upstream's `HtmlOverlayOpenFailure`; its `presenter` case joins with
-/// the remote session tasks).
+/// Why [`AppStore::open_html_overlay`] refused (upstream's `HtmlOverlayOpenFailure`; its `presenter` case is the
+/// core's, which knows the presentation hub: `overlay_page::open` refuses before the store is asked).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HtmlOverlayOpenFailure {
     UnknownSession,
@@ -202,6 +202,7 @@ impl AppStore {
                 code_file: None,
                 html: Some(overlay),
             });
+            session.remote_overlays.clear_failure(Some(pane));
             return Ok(());
         }
         let slot = &mut session.overlay;
@@ -221,6 +222,7 @@ impl AppStore {
         slot.background_color = background_color;
         slot.html = Some(overlay);
         slot.active = true;
+        session.remote_overlays.clear_failure(None);
         Ok(())
     }
 

@@ -194,6 +194,24 @@ impl Session {
         }
     }
 
+    /// The stable identity of the pane in role `role`; `None` for the right one without a split pane.
+    #[must_use]
+    pub fn overlay_pane_identity(&self, role: OverlayPane) -> Option<Uuid> {
+        match role {
+            OverlayPane::Left => Some(self.pane_identity),
+            OverlayPane::Right => self.split_pane_identity,
+        }
+    }
+
+    /// The terminal slot of the pane in role `role`.
+    #[must_use]
+    pub fn overlay_pane_slot(&self, role: OverlayPane) -> &super::pane::SurfaceSlot {
+        match role {
+            OverlayPane::Left => &self.surface,
+            OverlayPane::Right => &self.split_surface,
+        }
+    }
+
     /// The pane the live HUD is scoped to now (upstream's `hudTargetPane`); `None` for session-wide or no HUD.
     #[must_use]
     pub fn hud_target_pane(&self) -> Option<OverlayPane> {
@@ -267,6 +285,8 @@ impl AppStore {
         slot.size_percent = program.size_percent.map(|percent| percent.clamp(1, 100));
         slot.background_color = program.background_color;
         slot.active = true;
+        // a local open starts a new result, a remote job's failure included
+        session.remote_overlays.clear_failure(None);
         true
     }
 

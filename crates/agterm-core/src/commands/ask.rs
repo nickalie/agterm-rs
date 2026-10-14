@@ -18,6 +18,7 @@ use crate::error::ControlError;
 use crate::modal::AskOwner;
 use crate::model::{AskAlignment, AskAnchor, AskStyle, MAX_ASK_BUTTONS, OverlayPane, PendingAsk};
 use crate::pane_env::uuid_string;
+use crate::remote::AskPlacement;
 use crate::resolve::Resolver;
 use crate::windows::WindowRequest;
 
@@ -198,8 +199,27 @@ struct Placement<'a> {
     follow: bool,
 }
 
+/// Hands the ask to the viewer presenting `session`, or `None` to open it here.
+fn present_remotely(
+    core: &mut Core,
+    ask: &PendingAsk,
+    window: Uuid,
+    session: Uuid,
+    placement: &Placement<'_>,
+) -> Option<Outcome> {
+    let remote = AskPlacement {
+        pane: placement.pane,
+        pane_id: placement.pane_id,
+        invalid_pane: INVALID_PANE,
+    };
+    crate::remote::present_ask_remotely(core, ask, window, session, &remote)
+}
+
 /// Upstream's `presentTerminalAsk`: the pane must be laid out, the session's slot free.
 fn open_terminal(core: &mut Core, ask: PendingAsk, window: Uuid, session: Uuid, placement: &Placement<'_>) -> Outcome {
+    if let Some(outcome) = present_remotely(core, &ask, window, session, placement) {
+        return outcome;
+    }
     let id = ask.id.clone();
     let store = core.library_mut().store_mut(window).ok_or_else(no_such_session)?;
     let target = store.session(session).ok_or_else(no_such_session)?;
@@ -223,6 +243,9 @@ fn open_gui(
     placement: &Placement<'_>,
 ) -> Outcome {
     if let Some(session) = session {
+        if let Some(outcome) = present_remotely(core, &ask, window, session, placement) {
+            return outcome;
+        }
         let store = core.library().store(window).ok_or_else(no_such_session)?;
         let target = store.session(session).ok_or_else(no_such_session)?;
         if store.selected_session_id() != Some(session)

@@ -757,7 +757,8 @@ pub struct AskPage<'a> {
 /// whole page, or its pane while that pane is laid out and no scratch covers it; nothing while the page is not shown.
 #[must_use]
 pub fn shown_scope(session: &Session, shown: bool) -> Option<AskScope> {
-    let ask = session.ask()?;
+    // one a viewer presents keeps the slot here but is drawn and answered there
+    let ask = session.ask().filter(|pending| pending.remote_owner.is_none())?;
     if !shown {
         return None;
     }

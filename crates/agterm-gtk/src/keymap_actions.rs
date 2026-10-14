@@ -51,13 +51,7 @@ pub fn perform(windows: &Windows, poster: &Poster, action: FrontendAction, close
                 gtk_window.set_fullscreened(!gtk_window.is_fullscreen());
             }
         }
-        other @ FrontendAction::AttachRemote(_) => later_task(&other),
     }
-}
-
-/// Remote attach arrives with its own tasks (29/30); its chord already reaches this point.
-fn later_task(action: &FrontendAction) {
-    tracing::info!(?action, "this action's UI is not built yet");
 }
 
 /// Rename Window: a dialog prefilled with the name (upstream's `renameActiveWindow` alert), committed through
