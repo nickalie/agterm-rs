@@ -20,7 +20,9 @@ pub enum Dirty {
 ///
 /// Updating needs the terminal only for the begin phase ([`RenderState::begin_update`]), so a caller sharing the
 /// terminal behind a lock holds it for that call alone. Rows read through [`RenderState::rows`] borrow the state, so
-/// the compiler keeps them from outliving the next update, which invalidates them in C. `Send`, not `Sync`.
+/// the compiler keeps them from outliving the next update, which invalidates them in C. A failed update can leave the
+/// C state half built (its row count set before its row storage grew), so until an update succeeds again the state
+/// reads as empty: no rows, size (0, 0). `Send`, not `Sync`.
 #[derive(Debug)]
 pub struct RenderState {
     // Allocated once and refilled on every read, as `render.h` suggests, rather than per frame or per row. Fields drop
@@ -28,6 +30,8 @@ pub struct RenderState {
     cells: Handle<sys::GhosttyRenderStateRowCellsImpl>,
     rows: Handle<sys::GhosttyRenderStateRowIteratorImpl>,
     raw: Handle<sys::GhosttyRenderStateImpl>,
+    // False after a failed update or begin: the C capture may claim rows its storage does not hold.
+    valid: bool,
 }
 
 // SAFETY: the render state, its row iterator and its row cells are plain library-owned memory with no thread
@@ -56,7 +60,12 @@ impl RenderState {
         // SAFETY: as above, for the row cells.
         Error::check(unsafe { sys::ghostty_render_state_row_cells_new(std::ptr::null(), &raw mut cells) })?;
         let cells = Handle::new(cells, sys::ghostty_render_state_row_cells_free)?;
-        Ok(Self { cells, rows, raw })
+        Ok(Self {
+            cells,
+            rows,
+            raw,
+            valid: true,
+        })
     }
 
     /// Capture the terminal in one call (both phases).
@@ -66,7 +75,8 @@ impl RenderState {
     /// [`Error::OutOfMemory`] when the capture cannot allocate.
     pub fn update(&mut self, terminal: &mut Terminal) -> Result<(), Error> {
         // SAFETY: both handles are live and owned by their `&mut` borrowers, so no other call runs on either.
-        Error::check(unsafe { sys::ghostty_render_state_update(self.raw.ptr(), terminal.as_raw()) })
+        let result = unsafe { sys::ghostty_render_state_update(self.raw.ptr(), terminal.as_raw()) };
+        self.record(Error::check(result))
     }
 
     /// Begin a two-phase capture: the only phase that reads the terminal. The returned [`PendingUpdate`] completes
@@ -79,11 +89,18 @@ impl RenderState {
     pub fn begin_update(&mut self, terminal: &mut Terminal) -> Result<PendingUpdate<'_>, Error> {
         // SAFETY: both handles are live and owned by their `&mut` borrowers, so no other call runs on either.
         let result = unsafe { sys::ghostty_render_state_begin_update(self.raw.ptr(), terminal.as_raw()) };
+        let result = self.record(Error::check(result));
         let pending = PendingUpdate {
             state: self,
             ended: false,
         };
-        Error::check(result).map(|()| pending)
+        result.map(|()| pending)
+    }
+
+    /// Keep the outcome of an update: a failure invalidates the capture until the next success.
+    fn record(&mut self, result: Result<(), Error>) -> Result<(), Error> {
+        self.valid = result.is_ok();
+        result
     }
 
     /// How much changed since the last [`RenderState::clean`].
@@ -112,9 +129,12 @@ impl RenderState {
         unsafe { sys::ghostty_render_state_clean(self.raw.ptr()) };
     }
 
-    /// The captured viewport's width and height in cells.
+    /// The captured viewport's width and height in cells; (0, 0) after a failed update.
     #[must_use]
     pub fn size(&self) -> (u16, u16) {
+        if !self.valid {
+            return (0, 0);
+        }
         (
             self.get_u16(sys::GHOSTTY_RENDER_STATE_DATA_COLS),
             self.get_u16(sys::GHOSTTY_RENDER_STATE_DATA_ROWS),
@@ -125,8 +145,12 @@ impl RenderState {
     ///
     /// # Errors
     ///
-    /// The library's result when the iterator cannot be filled (a state never updated yields no rows instead).
+    /// [`Error::NoValue`] after a failed update, until an update succeeds (the C capture may be half built); the
+    /// library's result when the iterator cannot be filled. A state never updated yields no rows.
     pub fn rows(&mut self) -> Result<Rows<'_>, Error> {
+        if !self.valid {
+            return Err(Error::NoValue);
+        }
         let mut iterator = self.rows.ptr();
         // SAFETY: the state and its iterator are live and owned by `self`; `GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR`
         // takes a pointer to the pre-allocated iterator handle and refills that iterator.
@@ -347,6 +371,24 @@ mod tests {
         assert_eq!(state.size(), (0, 0));
         assert_eq!(state.dirty(), Dirty::Clean);
         assert!(state.rows().unwrap().next_row().is_none());
+    }
+
+    #[test]
+    fn a_failed_update_reads_as_empty_until_the_next_success() {
+        let mut terminal = Terminal::new(10, 2).unwrap();
+        terminal.vt_write(b"kept");
+        let mut state = RenderState::new().unwrap();
+        state.update(&mut terminal).unwrap();
+        // the native failure (allocation) cannot be provoked here, so feed its result to the bookkeeping directly
+        assert_eq!(state.record(Err(Error::OutOfMemory)), Err(Error::OutOfMemory));
+        assert_eq!(state.size(), (0, 0));
+        assert_eq!(state.rows().err(), Some(Error::NoValue));
+        state.update(&mut terminal).unwrap();
+        assert_eq!(state.size(), (10, 2));
+        assert_eq!(screen(&mut state), ["kept", ""]);
+        state.record(Err(Error::OutOfMemory)).unwrap_err();
+        state.begin_update(&mut terminal).unwrap().end().unwrap();
+        assert_eq!(screen(&mut state), ["kept", ""]);
     }
 
     #[test]
