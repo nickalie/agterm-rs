@@ -1625,6 +1625,7 @@ mod tests {
         pane_overlay_takes_the_pointer(&mut walk, &window);
         program_takes_the_pointer(&mut walk, &window);
         hud_lets_the_pointer_through(&mut walk, &window);
+        an_ask_keeps_a_ctrl_click_over_the_hud(&mut walk);
         window.set_child(None::<&gtk::Widget>);
         window.destroy();
     }
@@ -1737,6 +1738,64 @@ mod tests {
             under != *hud.upcast_ref::<gtk::Widget>() && under != layer && under.is_ancestor(&stack),
             "a HUD lets the clicks through to the page under it: {under:?}"
         );
+    }
+
+    /// A terminal ask is drawn above the HUD, so a Ctrl-click or Ctrl-hover on it is the ask's, not the panel's
+    /// (upstream's `testACommandClickOnAnAskDrawnOverAHudPanelIsLeftToTheAsk`); an answered ask covers nothing.
+    fn an_ask_keeps_a_ctrl_click_over_the_hud(walk: &mut Walk) {
+        let session = walk.session;
+        let stack = walk.stack.clone();
+        let hud = walk.deck.pages[&session]
+            .panes
+            .hud_mut()
+            .terminal()
+            .unwrap()
+            .widget()
+            .clone();
+        let bounds = hud.compute_bounds(&stack).expect("the HUD is laid out");
+        let (x, y) = (
+            f64::from(bounds.x() + bounds.width() / 2.0),
+            f64::from(bounds.y() + bounds.height() / 2.0),
+        );
+        let over_panel = |walk: &Walk| walk.deck.pages[&session].panes.hud_link_view().at(x, y).is_some();
+        assert!(over_panel(walk), "with no ask the panel takes a Ctrl-click");
+
+        let open = Request {
+            cmd: Command::Ask(agterm_proto::command::AskCmd::Open),
+            target: Some(pane_env::uuid_string(session)),
+            args: Some(Args {
+                title: Some("Deploy?".to_owned()),
+                buttons: Some(vec![agterm_proto::AskButton {
+                    id: "yes".to_owned(),
+                    label: "Yes".to_owned(),
+                    hotkey: None,
+                }]),
+                ..Args::default()
+            }),
+        };
+        let response = walk.core.dispatch(&open);
+        assert!(response.ok, "{response:?}");
+        walk.settle();
+        let ask = walk.deck.pages[&session].panes.ask().widget().clone();
+        assert!(pump_until(|| ask.width() > 0), "the ask is laid out");
+        assert!(!over_panel(walk), "the ask is drawn over the panel and keeps the click");
+
+        let id = walk
+            .core
+            .library()
+            .store(walk.window)
+            .unwrap()
+            .session(session)
+            .unwrap()
+            .ask()
+            .unwrap()
+            .ask
+            .id
+            .clone();
+        let escaped = agterm_proto::ControlAskResult::outcome(agterm_proto::ControlAskOutcome::Escaped);
+        walk.core.answer_session_ask(session, &id, escaped);
+        walk.settle();
+        assert!(over_panel(walk), "an answered ask covers nothing");
     }
 
     #[test]

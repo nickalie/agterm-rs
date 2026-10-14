@@ -853,12 +853,16 @@ impl PaneView {
             layout.backdrop_wash = Some(backdrop_wash.widget().clone().upcast());
         }
         let hud = std::rc::Rc::new(std::cell::RefCell::new(hud));
-        let (weak, layer) = (stack.downgrade(), std::rc::Rc::downgrade(&hud));
+        let (weak, layer, asks) = (
+            stack.downgrade(),
+            std::rc::Rc::downgrade(&hud),
+            ask.widget().clone().upcast::<gtk::Widget>(),
+        );
         crate::hud::connect_link_clicks(stack.upcast_ref(), move || {
             let stack = weak.upgrade()?;
             let layer = layer.upgrade()?;
             let layer = layer.try_borrow().ok()?;
-            Some(LayerView::new(stack.upcast_ref(), &layer))
+            Some(LayerView::new(stack.upcast_ref(), &layer, &asks))
         });
         let view = Self {
             stack,
@@ -1009,6 +1013,17 @@ impl PaneView {
     /// The HUD's layer.
     pub fn hud_mut(&self) -> std::cell::RefMut<'_, HudLayer> {
         self.hud.borrow_mut()
+    }
+
+    /// The HUD's panel as the link gesture sees it.
+    #[cfg(test)]
+    #[must_use]
+    pub fn hud_link_view(&self) -> LayerView {
+        LayerView::new(
+            self.stack.upcast_ref(),
+            &self.hud.borrow(),
+            self.ask.widget().upcast_ref(),
+        )
     }
 
     /// The program overlay's layer.

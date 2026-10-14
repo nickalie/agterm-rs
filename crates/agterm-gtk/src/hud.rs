@@ -6,18 +6,22 @@
 //! added once, above every pane: each open (a new slot generation) mounts a fresh terminal into the layer and a close
 //! drops it; no terminal ever changes parent. The panel takes no focus and no clicks, so the session underneath keeps
 //! both; a Ctrl-click (Linux's link modifier, upstream's ⌘-click) over it is forwarded to the panel, which opens the
-//! link under the pointer.
+//! link under the pointer, and a Ctrl-hover over a link shows the pointing hand on whatever is under the panel. A
+//! terminal ask drawn above the panel keeps both gestures.
 //!
 //! Where the panel goes is a pure function of the slot and the bounds it is laid out in ([`PanelStyle`]).
 
+use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use agterm_core::HUD_WINDOW_PADDING as WINDOW_PADDING;
 use agterm_core::hud::{Band, HudPosition};
 use agterm_core::model::{BackgroundWatermark, OverlaySlot, Session, WatermarkKind};
 use agterm_core::pane_env::{self, SessionPane};
 use agterm_core::watermark;
+use agterm_ghostty::MouseShape;
 use agterm_ghostty::input::{Mods, MouseState};
 use gtk::prelude::*;
 use gtk::{gdk, glib};
@@ -379,7 +383,8 @@ pub fn config_overlay(background: Option<&str>) -> String {
 }
 
 /// The painter exiting (its body file gone) closes the slot it occupies, unless a replacement took it; the panel
-/// coming up measures it again with the cell libghostty really draws.
+/// coming up, and each change of its cell after (a config reload's font), measures it again with the cell libghostty
+/// really draws (upstream's `onGridChange`).
 fn connect_panel(terminal: &TerminalSurface, session: Uuid, generation: u64, poster: &Poster) {
     let posting = poster.clone();
     terminal.connect_exit(move || {
@@ -389,14 +394,17 @@ fn connect_panel(terminal: &TerminalSurface, session: Uuid, generation: u64, pos
             }
         });
     });
-    let posting = poster.clone();
-    terminal.connect_created(move || {
-        state::post(&posting, move |state: &mut AppState| {
-            if state.core.refresh_hud(session) {
-                state.settle();
-            }
-        });
-    });
+    let remeasure = move |posting: Poster| {
+        move || {
+            state::post(&posting, move |state: &mut AppState| {
+                if state.core.refresh_hud(session) {
+                    state.settle();
+                }
+            });
+        }
+    };
+    terminal.connect_created(remeasure(poster.clone()));
+    terminal.connect_cell_size(remeasure(poster.clone()));
 }
 
 // MARK: - link clicks
@@ -417,12 +425,18 @@ pub fn is_link_modifier(state: gdk::ModifierType) -> bool {
 /// stack's capture phase, so every other click still reaches the session underneath. `layer` reaches the page's
 /// panel at event time.
 pub fn connect_link_clicks(stack: &gtk::Widget, layer: impl Fn() -> Option<LayerView> + Clone + 'static) {
+    connect_clicks(stack, layer.clone());
+    connect_hover(stack, layer);
+}
+
+/// A Ctrl-press over the panel and its release, claimed as a pair so both reach the same terminal.
+fn connect_clicks(stack: &gtk::Widget, layer: impl Fn() -> Option<LayerView> + Clone + 'static) {
     let click = gtk::GestureClick::builder()
         .button(gdk::BUTTON_PRIMARY)
         .propagation_phase(gtk::PropagationPhase::Capture)
         .build();
-    let pressed: std::rc::Rc<std::cell::RefCell<Option<TerminalSurface>>> = std::rc::Rc::default();
-    let (find, held) = (layer.clone(), std::rc::Rc::clone(&pressed));
+    let pressed: Rc<RefCell<Option<TerminalSurface>>> = Rc::default();
+    let (find, held) = (layer.clone(), Rc::clone(&pressed));
     click.connect_pressed(move |gesture, _, x, y| {
         let state = gesture.current_event_state();
         if !is_link_modifier(state) {
@@ -435,33 +449,181 @@ pub fn connect_link_clicks(stack: &gtk::Widget, layer: impl Fn() -> Option<Layer
         terminal.passive_click(MouseState::Press, px, py, crate::input::translate_mods(state));
         *held.borrow_mut() = Some(terminal);
     });
-    let (find, held) = (layer.clone(), pressed);
     click.connect_released(move |gesture, _, x, y| {
-        let Some(terminal) = held.borrow_mut().take() else {
+        let Some(terminal) = pressed.borrow_mut().take() else {
             return;
         };
         let mods = crate::input::translate_mods(gesture.current_event_state());
-        let (px, py) = find()
+        let (px, py) = layer()
             .and_then(|view| view.at(x, y))
             .map_or((-1.0, -1.0), |(_, px, py)| (px, py));
         terminal.passive_click(MouseState::Release, px, py, mods);
     });
     stack.add_controller(click);
+}
+
+/// Where the pointer is over one page's stack and which panel was told it is over it (upstream's
+/// `HudLinkClick.hovered`).
+#[derive(Default)]
+struct Hover {
+    /// The pointer in the stack's coordinates, while it is over the stack.
+    point: Option<(f64, f64)>,
+    /// The panel the pointer is over with the link modifier held, the only time a panel is told where it is.
+    panel: Option<TerminalSurface>,
+}
+
+/// Reports the pointer to the panel under it while Ctrl alone is held, on a move and on a modifier press or release
+/// with the pointer still, and takes it away when either stops being true (upstream's `HudLinkClick.hover`).
+fn connect_hover(stack: &gtk::Widget, layer: impl Fn() -> Option<LayerView> + Clone + 'static) {
+    let hover: Rc<RefCell<Hover>> = Rc::default();
     let motion = gtk::EventControllerMotion::new();
     motion.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let (find, tracked, page) = (layer.clone(), Rc::clone(&hover), stack.downgrade());
     motion.connect_motion(move |controller, x, y| {
-        let state = controller.current_event_state();
-        let Some(view) = layer() else { return };
-        match view.at(x, y).filter(|_| is_link_modifier(state)) {
-            Some((terminal, px, py)) => terminal.passive_pointer(px, py, crate::input::translate_mods(state)),
-            None => {
-                if let Some(terminal) = view.terminal {
-                    terminal.passive_pointer(-1.0, -1.0, Mods::empty());
-                }
-            }
-        }
+        tracked.borrow_mut().point = Some((x, y));
+        update_hover(&page, find().as_ref(), &tracked, controller.current_event_state());
+    });
+    let (find, tracked, page) = (layer.clone(), Rc::clone(&hover), stack.downgrade());
+    motion.connect_leave(move |_| {
+        tracked.borrow_mut().point = None;
+        update_hover(&page, find().as_ref(), &tracked, gdk::ModifierType::empty());
     });
     stack.add_controller(motion);
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let (find, tracked, page) = (layer.clone(), Rc::clone(&hover), stack.downgrade());
+    keys.connect_key_pressed(move |_, key, _, state| {
+        if !modifier_of(key).is_empty() {
+            update_hover(&page, find().as_ref(), &tracked, state_after(state, key, true));
+        }
+        glib::Propagation::Proceed
+    });
+    let page = stack.downgrade();
+    keys.connect_key_released(move |_, key, _, state| {
+        if !modifier_of(key).is_empty() {
+            update_hover(&page, layer().as_ref(), &hover, state_after(state, key, false));
+        }
+    });
+    stack.add_controller(keys);
+}
+
+/// The modifier `key` holds, empty for any other key.
+fn modifier_of(key: gdk::Key) -> gdk::ModifierType {
+    match key {
+        gdk::Key::Control_L | gdk::Key::Control_R => gdk::ModifierType::CONTROL_MASK,
+        gdk::Key::Shift_L | gdk::Key::Shift_R => gdk::ModifierType::SHIFT_MASK,
+        gdk::Key::Alt_L | gdk::Key::Alt_R | gdk::Key::Meta_L | gdk::Key::Meta_R => gdk::ModifierType::ALT_MASK,
+        gdk::Key::Super_L | gdk::Key::Super_R => gdk::ModifierType::SUPER_MASK,
+        _ => gdk::ModifierType::empty(),
+    }
+}
+
+/// The modifiers held once `key` is pressed or released: a key event carries the state from before it.
+#[must_use]
+pub fn state_after(state: gdk::ModifierType, key: gdk::Key, pressed: bool) -> gdk::ModifierType {
+    let modifier = modifier_of(key);
+    if pressed { state | modifier } else { state - modifier }
+}
+
+fn update_hover(
+    stack: &glib::WeakRef<gtk::Widget>,
+    view: Option<&LayerView>,
+    hover: &Rc<RefCell<Hover>>,
+    state: gdk::ModifierType,
+) {
+    let point = hover.borrow().point;
+    let target = point
+        .filter(|_| is_link_modifier(state))
+        .and_then(|(x, y)| view?.at(x, y));
+    let previous = hover.borrow_mut().panel.take();
+    if let Some(previous) =
+        previous.filter(|previous| target.as_ref().is_none_or(|(panel, ..)| panel.key() != previous.key()))
+    {
+        previous.passive_pointer(-1.0, -1.0, Mods::empty());
+    }
+    if let Some((panel, px, py)) = target {
+        panel.passive_pointer(px, py, crate::input::translate_mods(state));
+        hover.borrow_mut().panel = Some(panel);
+    }
+    if hover.borrow().panel.is_none() && !cursor_held() {
+        return;
+    }
+    // once this event is dispatched: libghostty answers the pointer with the panel's shape
+    let (stack, hover) = (stack.clone(), Rc::clone(hover));
+    glib::idle_add_local_once(move || {
+        if let Some(stack) = stack.upgrade() {
+            sync_cursor(&stack, &hover.borrow());
+        }
+    });
+}
+
+/// Paints the pointing hand on what is under the pointer while the hovered panel shows a link there (upstream's
+/// `HudLinkClick.ownsCursor`), and gives that widget its own cursor back otherwise.
+fn sync_cursor(stack: &gtk::Widget, hover: &Hover) {
+    let owns = hover
+        .panel
+        .as_ref()
+        .is_some_and(|panel| panel.mouse_shape() == Some(MouseShape::Pointer));
+    match hover
+        .point
+        .filter(|_| owns)
+        .and_then(|(x, y)| stack.pick(x, y, gtk::PickFlags::DEFAULT))
+    {
+        Some(under) => hold_cursor(&under),
+        None => release_cursor(),
+    }
+}
+
+/// The widget under the pointer a panel's link paints the pointing hand on, and the cursor that widget gets back.
+struct HeldCursor {
+    widget: glib::WeakRef<gtk::Widget>,
+    own: Option<gdk::Cursor>,
+}
+
+thread_local! {
+    /// One pointer, so one held cursor across every page and window.
+    static HELD_CURSOR: RefCell<Option<HeldCursor>> = const { RefCell::new(None) };
+}
+
+fn cursor_held() -> bool {
+    HELD_CURSOR.with_borrow(Option::is_some)
+}
+
+/// Shows the pointing hand over `widget`, keeping the cursor it had for [`release_cursor`].
+pub fn hold_cursor(widget: &gtk::Widget) {
+    let held = HELD_CURSOR.with_borrow(|held| held.as_ref().and_then(|held| held.widget.upgrade()));
+    if held.as_ref() != Some(widget) {
+        release_cursor();
+        let own = widget.cursor();
+        HELD_CURSOR.with_borrow_mut(|held| {
+            *held = Some(HeldCursor {
+                widget: widget.downgrade(),
+                own,
+            });
+        });
+    }
+    widget.set_cursor_from_name(Some("pointer"));
+}
+
+/// Gives the widget under a link its own cursor back, the last one it asked for while the hand was shown.
+pub fn release_cursor() {
+    if let Some(held) = HELD_CURSOR.with_borrow_mut(Option::take)
+        && let Some(widget) = held.widget.upgrade()
+    {
+        widget.set_cursor(held.own.as_ref());
+    }
+}
+
+/// Whether a panel's link holds `widget`'s cursor (upstream's `ownsPointer` deferring to `HudLinkClick`): `cursor` is
+/// then kept as the one it gets back, not shown.
+pub fn defer_cursor(widget: &gtk::Widget, cursor: Option<&gdk::Cursor>) -> bool {
+    HELD_CURSOR.with_borrow_mut(|held| match held {
+        Some(held) if held.widget.upgrade().as_ref() == Some(widget) => {
+            held.own = cursor.cloned();
+            true
+        }
+        _ => false,
+    })
 }
 
 /// The page's panel as an event handler sees it.
@@ -469,34 +631,47 @@ pub struct LayerView {
     stack: glib::WeakRef<gtk::Widget>,
     frame: gtk::Box,
     terminal: Option<TerminalSurface>,
+    /// The terminal ask's layer, drawn above the panel.
+    ask: gtk::Widget,
 }
 
 impl LayerView {
-    /// A view of `layer` on `stack`.
+    /// A view of `layer` on `stack`, under the page's terminal ask layer `ask`.
     #[must_use]
-    pub fn new(stack: &gtk::Widget, layer: &HudLayer) -> Self {
+    pub fn new(stack: &gtk::Widget, layer: &HudLayer, ask: &gtk::Widget) -> Self {
         Self {
             stack: stack.downgrade(),
             frame: layer.frame.clone(),
             terminal: layer.terminal().cloned(),
+            ask: ask.clone(),
         }
     }
 
-    /// The shown panel's terminal and the stack's point (`x`, `y`) in its coordinates, when the point is over it.
-    fn at(&self, x: f64, y: f64) -> Option<(TerminalSurface, f64, f64)> {
+    /// The shown panel's terminal and the stack's point (`x`, `y`) in its coordinates, when the point is over it and
+    /// no terminal ask covers it (upstream's `askCovers`: a click on the ask is the ask's).
+    #[must_use]
+    pub fn at(&self, x: f64, y: f64) -> Option<(TerminalSurface, f64, f64)> {
         if self.frame.opacity() <= 0.0 {
             return None;
         }
         let stack = self.stack.upgrade()?;
+        if self.ask.is_visible() && local_point(&stack, &self.ask, x, y).is_some() {
+            return None;
+        }
         let terminal = self.terminal.clone()?;
-        #[expect(clippy::cast_possible_truncation, reason = "pointer coordinates in a widget")]
-        let point = gtk::graphene::Point::new(x as f32, y as f32);
-        let point = stack.compute_point(terminal.widget(), &point)?;
-        let (px, py) = (f64::from(point.x()), f64::from(point.y()));
-        let area = terminal.widget();
-        let inside = px >= 0.0 && py >= 0.0 && px < f64::from(area.width()) && py < f64::from(area.height());
-        inside.then_some((terminal, px, py))
+        let (px, py) = local_point(&stack, terminal.widget(), x, y)?;
+        Some((terminal, px, py))
     }
+}
+
+/// The stack's point (`x`, `y`) in `widget`'s coordinates, when it falls inside `widget`.
+fn local_point(stack: &gtk::Widget, widget: &impl IsA<gtk::Widget>, x: f64, y: f64) -> Option<(f64, f64)> {
+    #[expect(clippy::cast_possible_truncation, reason = "pointer coordinates in a widget")]
+    let point = gtk::graphene::Point::new(x as f32, y as f32);
+    let point = stack.compute_point(widget, &point)?;
+    let (px, py) = (f64::from(point.x()), f64::from(point.y()));
+    let inside = px >= 0.0 && py >= 0.0 && px < f64::from(widget.width()) && py < f64::from(widget.height());
+    inside.then_some((px, py))
 }
 
 #[cfg(test)]
@@ -591,6 +766,170 @@ mod tests {
         assert_eq!(style.height_points, Some(48.0));
         assert!(style.edge_margin.abs() < f64::EPSILON && !style.frame);
         assert_eq!(style.position, HudPosition::BottomCenter);
+    }
+
+    /// The pane upstream's sticky cases lay a caption out in.
+    const CAPTION_PANE: Rect = Rect {
+        x: 200,
+        y: 100,
+        width: 1000,
+        height: 800,
+    };
+
+    /// A 48-point caption's style at `position` and `size_percent` (upstream's `captionSession`).
+    fn caption(position: HudPosition, size_percent: i64, sticky: bool, frame: bool) -> PanelStyle {
+        let mut spec = HudSpec::new("caption");
+        spec.position = position;
+        spec.sticky = sticky;
+        spec.frame = frame;
+        let slot = OverlaySlot {
+            active: true,
+            size_percent: Some(size_percent),
+            hud: Some(HudState {
+                spec,
+                pane_identity: None,
+                file: PathBuf::from("/tmp/x"),
+                height_percent: 10,
+                height_points: Some(48.0),
+                font_size: None,
+                resized_width_percent: None,
+            }),
+            ..OverlaySlot::default()
+        };
+        PanelStyle::of(&slot).unwrap()
+    }
+
+    #[test]
+    fn a_sticky_top_panel_sits_flush_and_spans_the_pane() {
+        let panel = caption(HudPosition::TopCenter, 100, true, false).panel_frame(CAPTION_PANE);
+
+        assert_eq!(
+            panel,
+            Rect {
+                x: 200,
+                y: 100,
+                width: 1000,
+                height: 48
+            }
+        );
+    }
+
+    #[test]
+    fn a_sticky_bottom_panel_sits_flush_at_the_bottom() {
+        let panel = caption(HudPosition::BottomCenter, 100, true, false).panel_frame(CAPTION_PANE);
+
+        assert_eq!(panel.y + panel.height, CAPTION_PANE.y + CAPTION_PANE.height);
+        assert_eq!(panel.height, 48);
+    }
+
+    #[test]
+    fn a_sticky_corner_panel_touches_both_edges() {
+        let panel = caption(HudPosition::BottomRight, 40, true, false).panel_frame(CAPTION_PANE);
+
+        assert_eq!(panel.x + panel.width, CAPTION_PANE.x + CAPTION_PANE.width);
+        assert_eq!(panel.y + panel.height, CAPTION_PANE.y + CAPTION_PANE.height);
+        assert_eq!(panel.width, 400);
+    }
+
+    #[test]
+    fn a_sticky_side_panel_touches_its_edge_and_stays_vertically_centered() {
+        let panel = caption(HudPosition::CenterLeft, 40, true, false).panel_frame(CAPTION_PANE);
+
+        assert_eq!(panel.x, CAPTION_PANE.x);
+        assert_eq!(
+            2 * panel.y + panel.height,
+            2 * CAPTION_PANE.y + CAPTION_PANE.height,
+            "the same middle"
+        );
+    }
+
+    #[test]
+    fn sticky_changes_nothing_at_center() {
+        let sticky = caption(HudPosition::Center, 40, true, false);
+        let loose = caption(HudPosition::Center, 40, false, false);
+
+        assert_eq!(sticky.panel_frame(CAPTION_PANE), loose.panel_frame(CAPTION_PANE));
+    }
+
+    #[test]
+    fn a_panel_that_is_not_sticky_keeps_its_edge_margin() {
+        let panel = caption(HudPosition::TopLeft, 40, false, false).panel_frame(CAPTION_PANE);
+
+        assert_eq!((panel.x, panel.y), (CAPTION_PANE.x + 100, CAPTION_PANE.y + 80));
+    }
+
+    #[test]
+    fn the_height_in_points_wins_over_the_fraction_whatever_the_pane_height() {
+        let style = caption(HudPosition::Center, 40, false, true);
+        assert!(style.height_fraction > 0.0, "a fraction is there to lose to");
+
+        for height in [500, 1000] {
+            let pane = Rect { height, ..CAPTION_PANE };
+            assert_eq!(style.panel_frame(pane).height, 48, "{height}");
+        }
+    }
+
+    #[test]
+    fn a_frameless_panel_keeps_its_backing_and_loses_its_border_and_rounding() {
+        crate::gtk_test::on_gtk_thread(|| {
+            let layer = HudLayer::new();
+            assert!(caption(HudPosition::TopCenter, 100, true, true).frame);
+            layer.set_visible(true, caption(HudPosition::TopCenter, 100, true, false).frame);
+            assert!(layer.widget().has_css_class(LAYER_CLASS) && layer.widget().has_css_class(FRAMELESS_CLASS));
+            layer.set_visible(true, true);
+            assert!(layer.widget().has_css_class(LAYER_CLASS) && !layer.widget().has_css_class(FRAMELESS_CLASS));
+        });
+    }
+
+    #[test]
+    fn a_key_event_reports_the_modifiers_held_once_it_lands() {
+        let ctrl = gdk::ModifierType::CONTROL_MASK;
+        assert_eq!(state_after(gdk::ModifierType::empty(), gdk::Key::Control_L, true), ctrl);
+        assert_eq!(
+            state_after(ctrl, gdk::Key::Control_R, false),
+            gdk::ModifierType::empty()
+        );
+        assert!(!is_link_modifier(state_after(ctrl, gdk::Key::Shift_L, true)));
+        assert!(is_link_modifier(state_after(
+            ctrl | gdk::ModifierType::ALT_MASK,
+            gdk::Key::Alt_L,
+            false
+        )));
+        assert_eq!(
+            state_after(ctrl, gdk::Key::a, true),
+            ctrl,
+            "an ordinary key holds no modifier"
+        );
+    }
+
+    #[test]
+    fn a_held_link_cursor_keeps_what_the_widget_asks_for_and_gives_it_back() {
+        crate::gtk_test::on_gtk_thread(|| {
+            let name = |widget: &gtk::Widget| widget.cursor().and_then(|cursor| cursor.name()).map(String::from);
+            let pane: gtk::Widget = gtk::Label::new(None).upcast();
+            pane.set_cursor_from_name(Some("text"));
+
+            hold_cursor(&pane);
+            assert_eq!(name(&pane).as_deref(), Some("pointer"));
+            let default = gdk::Cursor::from_name("default", None);
+            assert!(defer_cursor(&pane, default.as_ref()), "the pane's own shape waits");
+            assert_eq!(name(&pane).as_deref(), Some("pointer"));
+            let other: gtk::Widget = gtk::Label::new(None).upcast();
+            assert!(
+                !defer_cursor(&other, default.as_ref()),
+                "only the widget under the link waits"
+            );
+
+            release_cursor();
+            assert_eq!(name(&pane).as_deref(), Some("default"), "the last shape it asked for");
+            assert!(!defer_cursor(&pane, None));
+            release_cursor();
+            assert_eq!(
+                name(&pane).as_deref(),
+                Some("default"),
+                "a second release changes nothing"
+            );
+        });
     }
 
     #[test]

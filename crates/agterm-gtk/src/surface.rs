@@ -172,6 +172,7 @@ struct Inner {
     on_created: RefCell<Vec<FocusHandler>>,
     on_notification: RefCell<Vec<NotificationHandler>>,
     on_font_size: RefCell<Vec<FontSizeHandler>>,
+    on_cell_size: RefCell<Vec<FocusHandler>>,
     on_exit: RefCell<Option<ExitHandler>>,
     /// Called once when a held command's process ends and its terminal keeps showing it.
     on_held: RefCell<Option<ExitHandler>>,
@@ -307,6 +308,7 @@ impl TerminalSurface {
             on_created: RefCell::new(Vec::new()),
             on_notification: RefCell::new(Vec::new()),
             on_font_size: RefCell::new(Vec::new()),
+            on_cell_size: RefCell::new(Vec::new()),
             on_exit: RefCell::new(None),
             on_held: RefCell::new(None),
             resetting_im: Cell::new(false),
@@ -408,6 +410,12 @@ impl TerminalSurface {
         self.inner.on_font_size.borrow_mut().push(Box::new(handler));
     }
 
+    /// Adds a handler called after each cell-size change, once the live font size was reported (upstream's
+    /// `onGridChange`, which a HUD panel is measured again from).
+    pub fn connect_cell_size(&self, handler: impl Fn() + 'static) {
+        self.inner.on_cell_size.borrow_mut().push(Box::new(handler));
+    }
+
     /// libghostty reported a new cell size (`GHOSTTY_ACTION_CELL_SIZE`): a trigger only, the live font size is read and
     /// reported off the callback, as upstream hops to the main queue.
     pub fn cell_size_changed(&self) {
@@ -415,6 +423,9 @@ impl TerminalSurface {
         glib::idle_add_local_once(move || {
             if let Some(surface) = Self::upgrade(&weak) {
                 surface.report_font_size();
+                for handler in surface.inner.on_cell_size.borrow().iter() {
+                    handler();
+                }
             }
         });
     }
@@ -803,6 +814,12 @@ impl TerminalSurface {
         self.apply_cursor();
     }
 
+    /// The pointer shape libghostty last asked for over this terminal.
+    #[must_use]
+    pub fn mouse_shape(&self) -> Option<MouseShape> {
+        self.inner.pointer.borrow().shape
+    }
+
     pub fn set_mouse_hidden(&self, hidden: bool) {
         self.inner.pointer.borrow_mut().hidden = hidden;
         self.apply_cursor();
@@ -815,7 +832,11 @@ impl TerminalSurface {
         } else {
             pointer.shape.unwrap_or(MouseShape::Text).css_name()
         };
-        self.area.set_cursor_from_name(Some(name));
+        let cursor = gdk::Cursor::from_name(name, None);
+        // a HUD panel's link under the pointer owns it: this terminal's shape waits for the hover to end
+        if !crate::hud::defer_cursor(self.area.upcast_ref(), cursor.as_ref()) {
+            self.area.set_cursor(cursor.as_ref());
+        }
     }
 
     /// The child exited: a command surface that should vanish closes now and suppresses libghostty's prompt (`true`);
