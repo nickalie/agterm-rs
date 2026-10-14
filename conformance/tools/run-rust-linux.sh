@@ -13,10 +13,11 @@
 # root behind; pytest's own status does not count, since most tests are red by design until parity.
 # CONFORMANCE_LINUX_DISPLAY=session uses this desktop's display and bus instead, for debugging.
 # One run at a time per user: a second run waits on the lock $CONFORMANCE_LOCK (default
-# $XDG_RUNTIME_DIR/agterm-conformance.lock), shared by every checkout. It does not hold back a stand-alone cargo run.
+# $XDG_RUNTIME_DIR/agterm-conformance.lock, else /tmp/agterm-conformance-<uid>/agterm-conformance.lock), shared by
+# every checkout. It does not hold back a stand-alone cargo run.
 set -euo pipefail
 
-# Set by the re-exec below; cleared before anything spawns, so a nested runner queues again.
+# Set for the child the lock block below runs; cleared before anything spawns, so a nested runner queues again.
 locked="${CONFORMANCE_RUN_LOCKED:-}"
 unset CONFORMANCE_RUN_LOCKED
 args=("$@")
@@ -36,7 +37,7 @@ while (($#)); do
         --tests) tests="$2"; shift 2 ;;
         --ratchet) ratchet="$2"; shift 2 ;;
         --) shift; extra=("$@"); break ;;
-        -h|--help) sed -n '2,17s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,18s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -62,8 +63,11 @@ for layer in protocol cli behaviors; do
 done
 ((${#layers[@]})) || { echo "no protocol, cli or behaviors layer under $tests" >&2; exit 2; }
 
-# Concurrent suites starve each other's software-rendered pane mounts past their deadlines: queue instead. flock -o
-# closes the lock before the runner starts, so the zmx daemons that outlive a run by design do not keep holding it.
+[[ -z "$stage" || -d "$stage" ]] || { echo "no staged tree at $stage" >&2; exit 2; }
+
+# Concurrent suites starve each other's software-rendered pane mounts past their deadlines: queue instead. This shell
+# holds the lock and runs the suite in a child without its descriptor, so the zmx daemons that outlive a run by design
+# do not keep holding it. One descriptor for the try and the wait: no window in which a queued run says nothing.
 if [[ -z "$locked" ]]; then
     lock="${CONFORMANCE_LOCK:-}"
     if [[ -z "$lock" ]]; then
@@ -74,10 +78,17 @@ if [[ -z "$locked" ]]; then
         fi
         lock="$lock_dir/agterm-conformance.lock"
     fi
-    if ! flock -n "$lock" true; then
-        echo "waiting for another conformance run (lock $lock)"
+    if ! exec {lock_fd}>>"$lock"; then
+        echo "cannot open the lock $lock: set CONFORMANCE_LOCK to a writable path" >&2
+        exit 2
     fi
-    exec flock -o "$lock" env CONFORMANCE_RUN_LOCKED=1 bash "$here/$(basename "${BASH_SOURCE[0]}")" "${args[@]}"
+    if ! flock -n "$lock_fd"; then
+        echo "waiting for another conformance run (lock $lock)"
+        flock "$lock_fd" || { echo "cannot take the lock $lock" >&2; exit 2; }
+    fi
+    status=0
+    CONFORMANCE_RUN_LOCKED=1 bash "$here/$(basename "${BASH_SOURCE[0]}")" "${args[@]}" {lock_fd}>&- || status=$?
+    exit "$status"
 fi
 
 if [[ -z "$stage" ]]; then

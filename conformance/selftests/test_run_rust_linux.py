@@ -213,7 +213,7 @@ def test_a_root_left_behind_fails_a_holding_run(tmp_path: Path, stage: Path, lay
 
 
 @pytest.mark.parametrize("case", ["missing stage", "no layer", "missing ratchet"])
-def test_bad_arguments_exit_2(tmp_path: Path, stage: Path, layers: Path, case: str) -> None:
+def test_bad_arguments_exit_2(tmp_path: Path, stage: Path, layers: Path, lock: Path, case: str) -> None:
     listed = ratchet(tmp_path)
     if case == "missing stage":
         stage = tmp_path / "absent"
@@ -221,8 +221,23 @@ def test_bad_arguments_exit_2(tmp_path: Path, stage: Path, layers: Path, case: s
         layers = Path("/")
     else:
         listed = tmp_path / "absent.txt"
-    completed, report = run(tmp_path, stage, layers, listed)
+    with open(lock, "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)  # refused before queueing: a check behind the lock would wait here
+        completed, report = run(tmp_path, stage, layers, listed)
     assert completed.returncode == 2
+    assert "waiting for another conformance run" not in completed.stdout
+    assert report == ""
+
+
+def test_a_lock_that_cannot_be_opened_exits_2(
+    tmp_path: Path, stage: Path, layers: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock = tmp_path / "absent" / "conformance.lock"
+    monkeypatch.setenv("CONFORMANCE_LOCK", str(lock))
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID))
+    assert completed.returncode == 2
+    assert "waiting for another conformance run" not in completed.stdout
+    assert f"cannot open the lock {lock}" in completed.stderr
     assert report == ""
 
 
