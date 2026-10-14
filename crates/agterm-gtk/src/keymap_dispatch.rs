@@ -411,9 +411,20 @@ fn function_key(keyval: gdk::Key) -> Option<&'static str> {
     agterm_core::keymap::FUNCTION_KEYS.into_iter().find(|key| *key == name)
 }
 
-/// The base key of a press: what the event's layout types on that key with no modifier when the layout can type
-/// ASCII, else the Latin key at that physical position.
-fn base_key(controller: &gtk::EventControllerKey, keycode: u32) -> Option<String> {
+/// What a press's layout says about its key: the character the layout types on that key with no modifier, and whether
+/// the layout can type ASCII at all (upstream's `charactersIgnoringModifiers` and `KeyboardLayout.isASCIICapable`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyLayout {
+    /// The character at level 0 of the event's group, `None` when the key types none there.
+    pub produced: Option<char>,
+    /// Whether the event's group types ASCII, which the keymap judges by the A key.
+    pub ascii: bool,
+}
+
+/// The layout of the press `controller` is handling at `keycode`: the event's group, read through the widget's display;
+/// `None` when the controller has no widget.
+#[must_use]
+pub fn key_layout(controller: &gtk::EventControllerKey, keycode: u32) -> Option<KeyLayout> {
     let display = controller.widget()?.display();
     let group = controller
         .current_event()
@@ -426,19 +437,45 @@ fn base_key(controller: &gtk::EventControllerKey, keycode: u32) -> Option<String
             .find(|(key, _)| u32::try_from(key.group()).ok() == Some(group) && key.level() == 0)
             .and_then(|(_, keyval)| keyval.to_unicode())
     };
-    // the layout types ASCII when the A key does
-    let ascii_layout = level0(KEYCODE_A).is_some_and(|ch| ch.is_ascii_alphabetic());
+    Some(KeyLayout {
+        produced: level0(keycode),
+        // the layout types ASCII when the A key does
+        ascii: level0(KEYCODE_A).is_some_and(|ch| ch.is_ascii_alphabetic()),
+    })
+}
+
+/// The base key of a press, resolved by [`chord_key`] from the event's layout.
+fn base_key(controller: &gtk::EventControllerKey, keycode: u32) -> Option<String> {
+    let layout = key_layout(controller, keycode)?;
+    chord_key(keycode, layout.produced, layout.ascii)
+}
+
+/// The base key for a press (upstream's `chordKey`), decided per layout, not per key: a layout that can type ASCII binds
+/// by what it types on the key (lowercased; a space is no base key), so an alternative Latin layout keeps its own
+/// letter positions; one that cannot binds by the Latin key at that physical position ([`latin_key`]), else by what a
+/// key outside that table types (the keypad aliases the number row, as upstream), except the ISO section key, whose
+/// layout-dependent character would alias a table key.
+#[must_use]
+pub fn chord_key(keycode: u32, produced: Option<char>, ascii_layout: bool) -> Option<String> {
+    let base = produced
+        .filter(|ch| *ch != ' ')
+        .map(|ch| ch.to_lowercase().collect::<String>());
     if ascii_layout {
-        level0(keycode)
-            .filter(|ch| !ch.is_whitespace())
-            .map(|ch| ch.to_lowercase().collect())
-    } else {
-        latin_key(keycode).map(str::to_owned)
+        return base;
     }
+    if let Some(latin) = latin_key(keycode) {
+        return Some(latin.to_owned());
+    }
+    // the ISO key left of Z has no table position and types a layout-dependent character (XKB's Russian types `/` there,
+    // against the slash key), so keeping it would fire one binding from two keys
+    if keycode == KEYCODE_ISO_SECTION { None } else { base }
 }
 
 /// The XKB keycode of the A key.
 const KEYCODE_A: u32 = 38;
+/// The XKB keycode of the ISO-only key left of Z (`LSGT`, upstream's `kVK_ISO_Section`), absent from an ANSI keyboard
+/// and from [`latin_key`].
+const KEYCODE_ISO_SECTION: u32 = 94;
 
 /// The Latin character at an XKB keycode on a US (ANSI) keyboard, `None` elsewhere (upstream's `latinKey`, by
 /// Linux's key codes).
@@ -500,6 +537,105 @@ mod tests {
         assert_eq!(latin_key(51), Some("\\"));
         assert_eq!(latin_key(94), None);
         assert_eq!(latin_key(36), None);
+    }
+
+    // upstream's KeybindTests `chordKey*`, by XKB keycodes (O 32, C 54, / 61, A 38, 2 11, T 28, Z 52, Q 24, W 25,
+    // ' 48, , 59, . 60, ; 47, the ISO key 94, space 65)
+    fn key(keycode: u32, produced: Option<char>, ascii: bool) -> Option<String> {
+        chord_key(keycode, produced, ascii)
+    }
+
+    #[test]
+    fn chord_key_keeps_the_produced_character_on_an_ascii_capable_layout() {
+        assert_eq!(key(32, Some('o'), true).as_deref(), Some("o"));
+        assert_eq!(
+            key(54, Some('j'), true).as_deref(),
+            Some("j"),
+            "Dvorak keeps its own letter positions"
+        );
+        assert_eq!(key(61, Some('/'), true).as_deref(), Some("/"));
+        assert_eq!(
+            key(38, Some('A'), true).as_deref(),
+            Some("a"),
+            "the base key is always lowercased"
+        );
+        assert_eq!(
+            key(11, Some('é'), true).as_deref(),
+            Some("é"),
+            "a Latin layout binds what it types, so French ctrl+é still fires"
+        );
+    }
+
+    #[test]
+    fn chord_key_resolves_any_non_ascii_layout_by_physical_position() {
+        assert_eq!(key(32, Some('щ'), false).as_deref(), Some("o"));
+        assert_eq!(key(28, Some('е'), false).as_deref(), Some("t"));
+        assert_eq!(key(52, Some('я'), false).as_deref(), Some("z"));
+        assert_eq!(key(24, Some(';'), false).as_deref(), Some("q"), "Greek Q");
+        assert_eq!(key(24, Some('/'), false).as_deref(), Some("q"), "Hebrew Q");
+        assert_eq!(key(25, Some('\''), false).as_deref(), Some("w"), "Hebrew-PC W");
+        // the standard Russian layout re-homes punctuation: '/' types '.'
+        assert_eq!(key(61, Some('.'), false).as_deref(), Some("/"));
+    }
+
+    #[test]
+    fn chord_key_never_collapses_two_positions_onto_one_key_on_a_non_ascii_layout() {
+        let hebrew = [(48, Some(',')), (59, Some('ת')), (60, Some('.')), (61, Some('ץ'))];
+        let greek = [(24, Some(';')), (47, None)];
+        let russian = [(60, Some('.')), (61, Some('ю'))];
+        for layout in [&hebrew[..], &greek[..], &russian[..]] {
+            let keys: Vec<_> = layout
+                .iter()
+                .map(|(code, produced)| key(*code, *produced, false))
+                .collect();
+            assert!(keys.iter().all(Option::is_some), "{keys:?}");
+            let distinct: std::collections::HashSet<_> = keys.iter().flatten().collect();
+            assert_eq!(distinct.len(), layout.len(), "positions collapsed: {keys:?}");
+        }
+    }
+
+    #[test]
+    fn chord_key_drops_the_iso_section_key_on_a_non_ascii_layout() {
+        assert_eq!(
+            key(94, Some('/'), false),
+            None,
+            "Russian types a slash here, which keycode 61 already owns"
+        );
+        assert_eq!(key(94, Some('\\'), false), None, "a backslash here aliases keycode 51");
+        assert_eq!(
+            key(94, Some('<'), true).as_deref(),
+            Some("<"),
+            "on a Latin layout it binds what it types"
+        );
+    }
+
+    #[test]
+    fn chord_key_resolves_a_position_that_produced_nothing() {
+        assert_eq!(key(32, None, false).as_deref(), Some("o"));
+        assert_eq!(
+            key(47, None, false).as_deref(),
+            Some(";"),
+            "a dead key at a table position resolves to its Latin key"
+        );
+        // the ASCII-capable branch never consults the table
+        assert_eq!(key(48, None, true), None);
+        assert_eq!(key(32, None, true), None);
+    }
+
+    #[test]
+    fn chord_key_returns_none_without_a_usable_base_key() {
+        assert_eq!(key(66, None, false), None, "Caps Lock carries no Latin key");
+        assert_eq!(key(66, None, true), None);
+        assert_eq!(
+            key(65, Some(' '), true),
+            None,
+            "space is a named key, never a produced base key"
+        );
+        assert_eq!(
+            key(63, Some('*'), false).as_deref(),
+            Some("*"),
+            "outside the table a non-ASCII layout keeps what it types (keypad `*`)"
+        );
     }
 
     #[test]

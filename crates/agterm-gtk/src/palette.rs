@@ -30,7 +30,7 @@ use uuid::Uuid;
 
 use crate::keymap_dispatch::{Fired, KeyOrigin};
 use crate::modal::{self, ModalFrame, PanelRule};
-use crate::picker::{PickKey, moved, pick_key};
+use crate::picker::{PickKey, moved, press_key};
 use crate::state::{self, AppState, Poster};
 use crate::status_glyph::{GlyphLook, StatusGlyph};
 
@@ -410,7 +410,7 @@ fn key_controller(state: &Rc<RefCell<PaletteState>>) -> gtk::EventControllerKey 
         let Some(state) = weak.upgrade() else {
             return glib::Propagation::Proceed;
         };
-        if let Some(key) = pick_key(keyval, keycode, modifiers) {
+        if let Some(key) = press_key(controller, keyval, keycode, modifiers) {
             state.borrow_mut().key(key);
             return glib::Propagation::Stop;
         }

@@ -24,6 +24,7 @@ use gtk::prelude::*;
 use gtk::{gdk, glib};
 use uuid::Uuid;
 
+use crate::keymap_dispatch::{KeyLayout, chord_key, key_layout};
 use crate::modal::{self, ModalFrame, PanelRule};
 use crate::state::{self, AppState, Poster};
 
@@ -31,9 +32,6 @@ use crate::state::{self, AppState, Poster};
 const DEFAULT_PROMPT: &str = "Select…";
 /// The rows' height at the default interface size (upstream's `resultsHeightAtDefaultFontSize`).
 const RESULTS_HEIGHT: i32 = 320;
-/// The physical keys of J and K (evdev codes + 8), for a layout whose letters are not Latin.
-const KEYCODE_J: u32 = 44;
-const KEYCODE_K: u32 = 45;
 
 /// One visible row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,11 +107,16 @@ pub enum PickKey {
     Swallow,
 }
 
-/// The search field's key handling (upstream's `onKeyPress` handlers): Up and Down move, Ctrl+J and Ctrl+K move (by
-/// the produced letter, else the physical key, as upstream resolves chords on a non-Latin layout), Escape cancels, and
-/// Tab stays in the picker.
+/// The search field's key handling (upstream's `onKeyPress` handlers): Up and Down move, Ctrl+J and Ctrl+K move (with
+/// exactly Control held, the key resolved by [`selection_step`] from the press's `layout`), Escape cancels, and Tab
+/// stays in the picker.
 #[must_use]
-pub fn pick_key(keyval: gdk::Key, keycode: u32, state: gdk::ModifierType) -> Option<PickKey> {
+pub fn pick_key(
+    keyval: gdk::Key,
+    keycode: u32,
+    state: gdk::ModifierType,
+    layout: Option<KeyLayout>,
+) -> Option<PickKey> {
     match keyval {
         gdk::Key::Up | gdk::Key::KP_Up => return Some(PickKey::Move(-1)),
         gdk::Key::Down | gdk::Key::KP_Down => return Some(PickKey::Move(1)),
@@ -129,16 +132,31 @@ pub fn pick_key(keyval: gdk::Key, keycode: u32, state: gdk::ModifierType) -> Opt
     if state & chord != gdk::ModifierType::CONTROL_MASK {
         return None;
     }
-    let letter = keyval
-        .to_unicode()
-        .filter(char::is_ascii_alphabetic)
-        .map(|letter| letter.to_ascii_lowercase());
-    let step = match (letter, keycode) {
-        (Some('j'), _) | (None, KEYCODE_J) => 1,
-        (Some('k'), _) | (None, KEYCODE_K) => -1,
-        _ => return None,
-    };
-    Some(PickKey::Move(step))
+    let layout = layout?;
+    selection_step(keycode, layout.produced, layout.ascii).map(PickKey::Move)
+}
+
+/// The selection move a Control chord asks for (upstream's `CommandPalette.selectionStep`): +1 for `j`, -1 for `k`,
+/// `None` for any other key. The key resolves as keymap chords do ([`chord_key`]), so a layout that types ASCII moves
+/// by the letter it types and a non-Latin one by the physical J and K positions.
+#[must_use]
+pub fn selection_step(keycode: u32, produced: Option<char>, ascii_layout: bool) -> Option<isize> {
+    match chord_key(keycode, produced, ascii_layout)?.as_str() {
+        "j" => Some(1),
+        "k" => Some(-1),
+        _ => None,
+    }
+}
+
+/// The picker key of a press `controller` handles, its layout read from the event (as the keymap reads it).
+#[must_use]
+pub fn press_key(
+    controller: &gtk::EventControllerKey,
+    keyval: gdk::Key,
+    keycode: u32,
+    state: gdk::ModifierType,
+) -> Option<PickKey> {
+    pick_key(keyval, keycode, state, key_layout(controller, keycode))
 }
 
 // MARK: - the widget
@@ -355,8 +373,8 @@ fn connect_picker(entry: &gtk::SearchEntry, list: &gtk::ListBox, scrim: &gtk::Bo
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     let weak = Rc::downgrade(state);
-    keys.connect_key_pressed(move |_, keyval, keycode, modifiers| {
-        let Some(key) = pick_key(keyval, keycode, modifiers) else {
+    keys.connect_key_pressed(move |controller, keyval, keycode, modifiers| {
+        let Some(key) = press_key(controller, keyval, keycode, modifiers) else {
             return glib::Propagation::Proceed;
         };
         if let Some(state) = weak.upgrade() {
@@ -562,27 +580,106 @@ mod tests {
         assert_eq!(outcome(&pick, &PickRow::Item(9)), None);
     }
 
+    /// The XKB keycodes of the J and K keys.
+    const KEYCODE_J: u32 = 44;
+    const KEYCODE_K: u32 = 45;
+
+    fn us(produced: char) -> KeyLayout {
+        KeyLayout {
+            produced: Some(produced),
+            ascii: true,
+        }
+    }
+
     #[test]
     fn keys_move_cancel_and_stay_in_the_picker() {
         let none = gdk::ModifierType::empty();
         let ctrl = gdk::ModifierType::CONTROL_MASK;
-        assert_eq!(pick_key(gdk::Key::Up, 0, none), Some(PickKey::Move(-1)));
-        assert_eq!(pick_key(gdk::Key::Down, 0, none), Some(PickKey::Move(1)));
-        assert_eq!(pick_key(gdk::Key::Escape, 0, none), Some(PickKey::Cancel));
-        assert_eq!(pick_key(gdk::Key::Tab, 0, none), Some(PickKey::Swallow));
-        assert_eq!(pick_key(gdk::Key::j, KEYCODE_J, ctrl), Some(PickKey::Move(1)));
-        assert_eq!(pick_key(gdk::Key::k, KEYCODE_K, ctrl), Some(PickKey::Move(-1)));
+        assert_eq!(pick_key(gdk::Key::Up, 0, none, None), Some(PickKey::Move(-1)));
+        assert_eq!(pick_key(gdk::Key::Down, 0, none, None), Some(PickKey::Move(1)));
+        assert_eq!(pick_key(gdk::Key::Escape, 0, none, None), Some(PickKey::Cancel));
+        assert_eq!(pick_key(gdk::Key::Tab, 0, none, None), Some(PickKey::Swallow));
         assert_eq!(
-            pick_key(gdk::Key::Cyrillic_o, KEYCODE_J, ctrl),
+            pick_key(gdk::Key::j, KEYCODE_J, ctrl, Some(us('j'))),
+            Some(PickKey::Move(1))
+        );
+        assert_eq!(
+            pick_key(gdk::Key::k, KEYCODE_K, ctrl, Some(us('k'))),
+            Some(PickKey::Move(-1))
+        );
+        let russian = Some(KeyLayout {
+            produced: Some('о'),
+            ascii: false,
+        });
+        assert_eq!(
+            pick_key(gdk::Key::Cyrillic_o, KEYCODE_J, ctrl, russian),
             Some(PickKey::Move(1)),
             "the physical key on a non-Latin layout"
         );
-        assert_eq!(pick_key(gdk::Key::j, KEYCODE_J, none), None, "typed text");
         assert_eq!(
-            pick_key(gdk::Key::j, KEYCODE_J, ctrl | gdk::ModifierType::SHIFT_MASK),
-            None
+            pick_key(gdk::Key::j, KEYCODE_J, none, Some(us('j'))),
+            None,
+            "typed text"
         );
-        assert_eq!(pick_key(gdk::Key::a, 38, ctrl), None);
+        for held in [
+            gdk::ModifierType::SHIFT_MASK,
+            gdk::ModifierType::ALT_MASK,
+            gdk::ModifierType::SUPER_MASK,
+            gdk::ModifierType::META_MASK,
+        ] {
+            assert_eq!(
+                pick_key(gdk::Key::j, KEYCODE_J, ctrl | held, Some(us('j'))),
+                None,
+                "{held:?}"
+            );
+        }
+        assert_eq!(pick_key(gdk::Key::a, 38, ctrl, Some(us('a'))), None);
+        assert_eq!(
+            pick_key(gdk::Key::j, KEYCODE_J, ctrl, None),
+            None,
+            "no layout, no letter"
+        );
+    }
+
+    // upstream's PaletteTests, by XKB keycodes (J 44, K 45, Dvorak's j on C 54 and k on V 55, A 38)
+    fn step(keycode: u32, produced: Option<char>, ascii: bool) -> Option<isize> {
+        selection_step(keycode, produced, ascii)
+    }
+
+    #[test]
+    fn latin_layout_moves_by_the_typed_letter() {
+        assert_eq!(step(KEYCODE_J, Some('j'), true), Some(1));
+        assert_eq!(step(KEYCODE_K, Some('k'), true), Some(-1));
+        assert_eq!(step(KEYCODE_J, Some('J'), true), Some(1), "caps lock");
+        assert_eq!(step(KEYCODE_K, Some('K'), true), Some(-1), "caps lock");
+    }
+
+    // regression: on a Cyrillic layout the J and K keys type `о` and `л`, and the selection did not move
+    #[test]
+    fn non_latin_layout_moves_by_the_physical_position() {
+        assert_eq!(step(KEYCODE_J, Some('о'), false), Some(1));
+        assert_eq!(step(KEYCODE_K, Some('л'), false), Some(-1));
+        assert_eq!(step(KEYCODE_J, None, false), Some(1));
+    }
+
+    // on Dvorak the physical J position types `h`, and `j` sits on the C key
+    #[test]
+    fn alternative_latin_layout_keeps_its_own_letter_positions() {
+        assert_eq!(step(KEYCODE_J, Some('h'), true), None);
+        assert_eq!(step(54, Some('j'), true), Some(1));
+        assert_eq!(step(55, Some('k'), true), Some(-1));
+    }
+
+    #[test]
+    fn other_keys_do_not_move() {
+        assert_eq!(step(38, Some('a'), true), None);
+        assert_eq!(step(38, Some('ф'), false), None);
+        assert_eq!(
+            step(KEYCODE_J, Some('о'), true),
+            None,
+            "a Latin layout typing a non-ASCII character binds what it types"
+        );
+        assert_eq!(step(KEYCODE_J, None, true), None);
     }
 
     #[test]
