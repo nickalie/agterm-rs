@@ -35,6 +35,7 @@ mod popovers;
 mod process_table;
 mod quick;
 mod remote;
+mod remotes_watcher;
 mod restore_launch;
 mod row_icon;
 mod search;

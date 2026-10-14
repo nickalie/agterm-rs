@@ -221,6 +221,9 @@ pub fn activate(app: &adw::Application) {
         // read at launch: a file edited later takes effect only on reload
         state.core.load_keymap_at_launch();
         state.core.load_hooks_at_launch();
+        // followed on disk: File ▸ Attach Remote lists the file as it is now
+        state.core.load_remotes_at_launch();
+        state.watch_remotes(&poster);
     }
     // not a task: no task runs before the shell exists; every open window renders before it is presented
     crate::notifications::install_actions(app, poster.clone());

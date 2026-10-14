@@ -6,6 +6,7 @@
 //! than handing back a fresh shell wearing its name; everything that can fail is checked before the model is touched.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use agterm_proto::command::SessionCmd;
@@ -15,6 +16,7 @@ use agterm_proto::{
 };
 use uuid::Uuid;
 
+use super::remotes::{RemoteEntry, diagnostics_banner_body};
 use super::ssh::{PaneLabel, attach_pane_command};
 use super::tree::{self, RemoteCommandResult};
 use super::viewer::{Answer, run_off_thread, take_answer};
@@ -280,17 +282,51 @@ fn pick_item(session: &ControlRemoteSession) -> PickItem {
 }
 
 impl Core {
-    /// The hosts `remotes.conf` lists; an unreadable file reads as none.
+    /// The `remotes.conf` of the config directory, beside `keymap.conf` (upstream's `remotesURL`).
     #[must_use]
-    pub fn configured_remotes(&self) -> Vec<super::remotes::RemoteEntry> {
-        let path = self.config_dir().join("remotes.conf");
-        match super::remotes::load_remotes(&path) {
-            Ok((remotes, _)) => remotes.entries,
-            Err(error) => {
-                tracing::debug!(path = %path.display(), %error, "remotes.conf could not be read");
-                Vec::new()
-            }
+    pub fn remotes_path(&self) -> PathBuf {
+        self.config_dir().join("remotes.conf")
+    }
+
+    /// The file the remotes state reads, which the frontend watches; it moves with the config directory.
+    #[must_use]
+    pub fn watched_remotes_path(&self) -> &Path {
+        self.remote.remotes.path()
+    }
+
+    /// The hosts `remotes.conf` listed at its last read; an unreadable file reads as none.
+    #[must_use]
+    pub fn configured_remotes(&self) -> &[RemoteEntry] {
+        self.remote.remotes.entries()
+    }
+
+    /// The launch step: reads `remotes.conf` and posts its problems banner when the file is already broken, as
+    /// upstream's scene task does. Commit afterwards.
+    pub fn load_remotes_at_launch(&mut self) {
+        self.repoint_remotes();
+        let count = self.remote.remotes.issue_count();
+        if count > 0 {
+            self.post_remotes_banner(count);
         }
+    }
+
+    /// Reads `remotes.conf` again, as the frontend's watch asks on every change of the file or its directory. With
+    /// `reporting`, an edit that turned a clean file into one with problems posts the banner, once per such episode.
+    /// Settle afterwards: File ▸ Attach Remote follows the entries.
+    pub fn refresh_remotes(&mut self, reporting: bool) {
+        if let Some(count) = self.remote.remotes.refresh(reporting) {
+            self.post_remotes_banner(count);
+        }
+    }
+
+    /// Points the remotes state at the config directory's file, without a report (upstream's `remotes.watch`).
+    pub(crate) fn repoint_remotes(&mut self) {
+        let path = self.remotes_path();
+        self.remote.remotes.watch(path);
+    }
+
+    fn post_remotes_banner(&mut self, count: usize) {
+        self.post_app_banner("remotes-diagnostics", "Remotes", diagnostics_banner_body(count));
     }
 
     /// File ▸ Attach Remote in window `window` (upstream's `attachRemote()`): with one configured machine it lists that
@@ -299,7 +335,7 @@ impl Core {
         if !self.library().is_open(window) || self.modal_pending(window) {
             return;
         }
-        let remotes = self.configured_remotes();
+        let remotes = self.configured_remotes().to_vec();
         let Some(first) = remotes.first() else {
             return;
         };

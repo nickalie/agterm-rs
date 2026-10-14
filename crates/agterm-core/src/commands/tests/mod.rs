@@ -3,6 +3,7 @@
 
 mod actions;
 mod ask;
+mod attach_remote;
 mod auto_follow;
 mod background;
 mod config_browser;

@@ -137,6 +137,8 @@ pub(crate) struct PresentationRuntime {
     runner: Arc<dyn RemoteCommandRunner>,
     /// The viewer side: the attached rows' clients and their reconnects.
     pub(crate) viewer: viewer::ViewerRuntime,
+    /// `remotes.conf`, the machines File ▸ Attach Remote offers.
+    pub(crate) remotes: remotes::RemotesState,
 }
 
 impl Default for PresentationRuntime {
@@ -149,6 +151,7 @@ impl Default for PresentationRuntime {
             huds: HashMap::new(),
             runner: Arc::new(ProcessRemoteRunner),
             viewer: viewer::ViewerRuntime::default(),
+            remotes: remotes::RemotesState::default(),
         }
     }
 }
@@ -160,6 +163,7 @@ impl fmt::Debug for PresentationRuntime {
             .field("streams", &self.streams.keys().collect::<Vec<_>>())
             .field("huds", &self.huds)
             .field("viewer", &self.viewer)
+            .field("remotes", &self.remotes)
             .finish_non_exhaustive()
     }
 }

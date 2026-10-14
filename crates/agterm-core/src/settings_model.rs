@@ -633,6 +633,8 @@ impl Core {
                 self.reload_keymap();
                 self.reload_hooks();
                 self.request_config_reload();
+                // the frontend's watch follows the state to the new file
+                self.repoint_remotes();
             }
             Effect::HideInactiveSidebars => {
                 if changed && self.settings().auto_hide_sidebar_inactive_windows == Some(true) {

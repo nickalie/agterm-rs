@@ -79,9 +79,10 @@ impl Core {
         self.processes.host = Some(host);
     }
 
-    /// Captures where `keymap.conf` and `hooks.conf` live (with the `configDirectory` setting on top).
+    /// Captures where `keymap.conf`, `hooks.conf` and `remotes.conf` live (with the `configDirectory` setting on top).
     pub fn set_config_locator(&mut self, locator: ConfigLocator) {
         self.processes.config = locator;
+        self.repoint_remotes();
     }
 
     /// The config directory: the `configDirectory` setting, else the environment's default.

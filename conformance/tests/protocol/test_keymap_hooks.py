@@ -121,6 +121,34 @@ def test_reload_applies_the_edited_file(ctl, keymap):
     assert listing["diagnostics"] == []
 
 
+@pytest.mark.covers("keymap.list", "keymap.reload", "field:result.keymap", "field:result.count")
+def test_attach_remote_ships_a_default_that_an_existing_binding_keeps(ctl, keymap):
+    """`attach_remote` came after files could already bind its chord: a file that does keeps it, and the action is
+    left unbound unless the file maps it. The chord is the platform's (cmd+shift+r on macOS), so it is read back."""
+    assert assert_ok(ctl.request("keymap.reload")) == {"count": 0}
+    shipped = _action(_listed(ctl), "attach_remote")
+    assert_absent(shipped, "overridden")
+    chord = shipped["chord"]
+
+    keymap.write_text(f"map {chord} toggle_workspace_filter\n")
+    assert assert_ok(ctl.request("keymap.reload")) == {"count": 0}
+    listing = _listed(ctl)
+    assert _action(listing, "toggle_workspace_filter") == {
+        "action": "toggle_workspace_filter",
+        "chord": chord,
+        "overridden": True,
+    }
+    assert _action(listing, "attach_remote") == {"action": "attach_remote", "overridden": True}
+
+    keymap.write_text("map ctrl+shift+y attach_remote\n")
+    assert assert_ok(ctl.request("keymap.reload")) == {"count": 0}
+    assert _action(_listed(ctl), "attach_remote") == {
+        "action": "attach_remote",
+        "chord": "ctrl+shift+y",
+        "overridden": True,
+    }
+
+
 @pytest.mark.covers("keymap.run", "field:result.id", "behavior:protocol.target-resolution")
 def test_run_starts_the_command_for_the_addressed_session(ctl, keymap):
     first, second = ctl.instance.root / "run-first", ctl.instance.root / "run-active"

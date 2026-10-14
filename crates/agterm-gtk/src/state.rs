@@ -177,6 +177,8 @@ pub struct AppState {
     heartbeat_armed: bool,
     /// The remote tick (the attached rows' clients, reconnects and attaches) is armed on the loop.
     remote_tick_armed: bool,
+    /// The watch on `remotes.conf`; `None` until the launch starts it (and in tests).
+    remotes_watcher: Option<crate::remotes_watcher::RemotesWatcher>,
 }
 
 impl AppState {
@@ -193,7 +195,23 @@ impl AppState {
             appearance: crate::theme::Appearance::new(dark),
             heartbeat_armed: false,
             remote_tick_armed: false,
+            remotes_watcher: None,
         }
+    }
+
+    /// Starts following `remotes.conf` on disk (upstream's `RemotesWatcher`): every change reads it again, which
+    /// enables or disables File ▸ Attach Remote and may post its problems banner. The watch moves with the config
+    /// directory at the next settle.
+    pub fn watch_remotes(&mut self, poster: &Poster) {
+        let poster = poster.clone();
+        let watcher = crate::remotes_watcher::RemotesWatcher::new(move || {
+            post(&poster, |state: &mut Self| {
+                state.core.refresh_remotes(true);
+                state.settle();
+            });
+        });
+        watcher.follow(self.core.watched_remotes_path());
+        self.remotes_watcher = Some(watcher);
     }
 
     /// Connects the state to its main loop and its windows, and builds, renders and presents a window for every open
@@ -282,6 +300,9 @@ impl AppState {
             None => drop(self.core.take_window_requests()),
         }
         self.core.clear_pane_focus_requests();
+        if let Some(watcher) = &self.remotes_watcher {
+            watcher.follow(self.core.watched_remotes_path());
+        }
         crate::settings::sync(&self.core);
         self.spawn_paced_panes();
         self.arm_auto_follow();

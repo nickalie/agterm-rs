@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::tree::is_host;
 use crate::keymap::KeymapDiagnostic;
@@ -98,6 +98,72 @@ pub fn load_remotes(path: &Path) -> io::Result<(Remotes, Vec<KeymapDiagnostic>)>
     }
 }
 
+/// `remotes.conf` as the app follows it (upstream's `RemotesWatcher` without the file watch, which is the frontend's): the
+/// entries File ▸ Attach Remote lists and how many problems the file has, both read again on every refresh.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RemotesState {
+    path: PathBuf,
+    entries: Vec<RemoteEntry>,
+    issue_count: usize,
+}
+
+impl RemotesState {
+    /// A state reading `path`, loaded at once without a report.
+    #[must_use]
+    pub fn at(path: PathBuf) -> Self {
+        let mut state = Self::default();
+        state.watch(path);
+        state
+    }
+
+    /// The file this state reads.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The entries of the last read; an unreadable file reads as none.
+    #[must_use]
+    pub fn entries(&self) -> &[RemoteEntry] {
+        &self.entries
+    }
+
+    /// How many problems the file had at the last read: its parse diagnostics, or one when it exists and cannot be
+    /// read.
+    #[must_use]
+    pub fn issue_count(&self) -> usize {
+        self.issue_count
+    }
+
+    /// Switches to another file, as a config directory change does; never reported.
+    pub fn watch(&mut self, path: PathBuf) {
+        self.path = path;
+        self.refresh(false);
+    }
+
+    /// Reads the file again. The issue count when `reporting` and the read turned a clean file into one with problems,
+    /// once per such episode: a file that stays broken is not reported again.
+    pub fn refresh(&mut self, reporting: bool) -> Option<usize> {
+        let (entries, issues) = match load_remotes(&self.path) {
+            Ok((remotes, diagnostics)) => (remotes.entries, diagnostics.len()),
+            Err(error) => {
+                tracing::debug!(path = %self.path.display(), %error, "remotes.conf could not be read");
+                (Vec::new(), 1)
+            }
+        };
+        let turned_bad = self.issue_count == 0 && issues > 0;
+        self.entries = entries;
+        self.issue_count = issues;
+        (reporting && turned_bad).then_some(issues)
+    }
+}
+
+/// The body of the `remotes.conf` problems banner (upstream's `notifyRemotesDiagnostics`).
+#[must_use]
+pub fn diagnostics_banner_body(count: usize) -> String {
+    format!("{count} issue{} in remotes.conf", if count == 1 { "" } else { "s" })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +255,119 @@ mod tests {
         let unreadable = dir.path().join("dir.conf");
         std::fs::create_dir(&unreadable).unwrap();
         assert!(load_remotes(&unreadable).is_err());
+    }
+
+    fn destinations(state: &RemotesState) -> Vec<&str> {
+        state.entries().iter().map(|entry| entry.destination.as_str()).collect()
+    }
+
+    /// Writes `text` to `path` as an editor saving by replacement does: a sibling renamed over it.
+    fn replace(path: &Path, text: &str) {
+        let staged = path.with_extension("tmp");
+        std::fs::write(&staged, text).unwrap();
+        std::fs::rename(&staged, path).unwrap();
+    }
+
+    #[test]
+    fn a_broken_file_at_start_is_counted_but_not_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("remotes.conf");
+        std::fs::write(&path, "studio\n-bad\n").unwrap();
+        let mut state = RemotesState::at(path);
+        assert_eq!(destinations(&state), ["studio"]);
+        assert_eq!(state.issue_count(), 1);
+        assert_eq!(state.refresh(true), None, "the file was already broken");
+    }
+
+    #[test]
+    fn one_report_per_clean_to_broken_episode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("remotes.conf");
+        std::fs::write(&path, "studio\n").unwrap();
+        let mut state = RemotesState::at(path.clone());
+        assert_eq!(state.issue_count(), 0);
+        let edit = |state: &mut RemotesState, text: &str, issues: usize| {
+            replace(&path, text);
+            let report = state.refresh(true);
+            assert_eq!(state.issue_count(), issues, "{text:?}");
+            report
+        };
+        let mut reported = Vec::new();
+        reported.extend(edit(&mut state, "studio\n-bad\n", 1));
+        reported.extend(edit(&mut state, "studio\n-bad\n-worse\nstudio dup\n", 3));
+        reported.extend(edit(&mut state, "studio\n-bad\n", 1));
+        assert_eq!(reported, [1], "a file that stays broken is not reported again");
+        reported.extend(edit(&mut state, "studio\n", 0));
+        reported.extend(edit(&mut state, "-bad\n-worse\n", 2));
+        assert_eq!(reported, [1, 2]);
+    }
+
+    #[test]
+    fn a_quiet_refresh_reports_nothing_but_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("remotes.conf");
+        let mut state = RemotesState::at(path.clone());
+        std::fs::write(&path, "-bad\n").unwrap();
+        assert_eq!(state.refresh(false), None);
+        assert_eq!(state.issue_count(), 1);
+        assert_eq!(state.refresh(true), None, "the quiet read already counted the episode");
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_one_issue_and_no_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("remotes.conf");
+        std::fs::write(&path, "studio\n").unwrap();
+        let mut state = RemotesState::at(path.clone());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert_eq!(state.refresh(true), Some(1));
+        assert!(state.entries().is_empty());
+        assert_eq!(state.issue_count(), 1);
+    }
+
+    #[test]
+    fn the_entries_follow_every_kind_of_edit_after_a_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("remotes.conf");
+        let mut state = RemotesState::at(path.clone());
+        assert!(state.entries().is_empty(), "no file lists nothing");
+        std::fs::write(&path, "studio Mac Studio\n-bad\n").unwrap();
+        state.refresh(true);
+        assert_eq!(destinations(&state), ["studio"], "a created file");
+        assert_eq!(state.entries()[0].label, "Mac Studio");
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(&mut file, b"mini\n").unwrap();
+        drop(file);
+        state.refresh(true);
+        assert_eq!(destinations(&state), ["studio", "mini"], "an in-place append");
+        replace(&path, "mini\n");
+        state.refresh(true);
+        assert_eq!(destinations(&state), ["mini"], "an atomic replace");
+        std::fs::remove_file(&path).unwrap();
+        state.refresh(true);
+        assert!(state.entries().is_empty(), "a deleted file");
+        assert_eq!(state.issue_count(), 0, "a missing file is no problem");
+    }
+
+    #[test]
+    fn watching_another_file_reads_it_and_reports_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("a.conf");
+        let second = dir.path().join("b.conf");
+        std::fs::write(&first, "studio\n").unwrap();
+        std::fs::write(&second, "mini\n-bad\n").unwrap();
+        let mut state = RemotesState::at(first);
+        state.watch(second.clone());
+        assert_eq!(state.path(), second);
+        assert_eq!(destinations(&state), ["mini"]);
+        assert_eq!(state.issue_count(), 1);
+        assert_eq!(state.refresh(true), None);
+    }
+
+    #[test]
+    fn the_banner_counts_its_issues() {
+        assert_eq!(diagnostics_banner_body(1), "1 issue in remotes.conf");
+        assert_eq!(diagnostics_banner_body(2), "2 issues in remotes.conf");
     }
 }

@@ -172,4 +172,51 @@ mod tests {
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert!(keymap.commands().iter().all(|command| !command.shortcut.is_empty()));
     }
+
+    fn attach_chord(keymap: &crate::keymap::Keymap) -> Option<String> {
+        keymap
+            .equivalent(BuiltinAction::AttachRemote)
+            .map(Chord::display_string)
+    }
+
+    #[test]
+    fn attach_remote_ships_on_ctrl_shift_r_and_can_be_remapped() {
+        assert_eq!(
+            attach_chord(&parse_keymap("", &linux_defaults()).0).as_deref(),
+            Some("ctrl+shift+r")
+        );
+        let (keymap, diagnostics) = parse_keymap("map ctrl+shift+y attach_remote", &linux_defaults());
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(attach_chord(&keymap).as_deref(), Some("ctrl+shift+y"));
+    }
+
+    #[test]
+    fn an_existing_ctrl_shift_r_binding_keeps_it_and_leaves_attach_remote_unbound() {
+        let (keymap, diagnostics) = parse_keymap("map ctrl+shift+r toggle_workspace_filter", &linux_defaults());
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(
+            keymap
+                .equivalent(BuiltinAction::ToggleWorkspaceFilter)
+                .map(Chord::display_string)
+                .as_deref(),
+            Some("ctrl+shift+r")
+        );
+        assert_eq!(attach_chord(&keymap), None);
+        assert!(keymap.builtin_unbound().contains(&BuiltinAction::AttachRemote));
+
+        let (keymap, diagnostics) = parse_keymap("command \"Old binding\" ctrl+shift+r echo ok", &linux_defaults());
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(keymap.commands()[0].shortcut, "ctrl+shift+r");
+        assert_eq!(attach_chord(&keymap), None);
+    }
+
+    #[test]
+    fn an_explicit_attach_remote_map_keeps_ctrl_shift_r_over_an_old_command_on_it() {
+        let (keymap, _) = parse_keymap(
+            "map ctrl+shift+r attach_remote\ncommand \"Old binding\" ctrl+shift+r echo ok",
+            &linux_defaults(),
+        );
+        assert_eq!(attach_chord(&keymap).as_deref(), Some("ctrl+shift+r"));
+        assert!(keymap.commands()[0].shortcut.is_empty());
+    }
 }

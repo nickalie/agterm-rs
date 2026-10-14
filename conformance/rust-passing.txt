@@ -265,6 +265,7 @@ tests/protocol/test_hud.py::test_unknown_session_target[session.hud.open-args0]
 tests/protocol/test_hud.py::test_unknown_session_target[session.hud.update-args1]
 tests/protocol/test_hud.py::test_update_replaces_the_whole_spec
 tests/protocol/test_keymap_hooks.py::test_a_running_hook_queues_its_events_and_survives_its_removal
+tests/protocol/test_keymap_hooks.py::test_attach_remote_ships_a_default_that_an_existing_binding_keeps
 tests/protocol/test_keymap_hooks.py::test_hook_gets_its_event_on_stdin_and_in_its_environment
 tests/protocol/test_keymap_hooks.py::test_hooks_take_no_target_or_window[None-args2-hooks.list]
 tests/protocol/test_keymap_hooks.py::test_hooks_take_no_target_or_window[None-args2-hooks.reload]

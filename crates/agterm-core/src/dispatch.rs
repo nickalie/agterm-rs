@@ -215,7 +215,7 @@ impl Core {
     /// A core over `state`.
     #[must_use]
     pub fn new(config: CoreConfig, state: CoreState) -> Self {
-        Self {
+        let mut core = Self {
             app: config.app,
             capabilities: config.capabilities,
             library: state.library,
@@ -247,7 +247,9 @@ impl Core {
             palette: crate::palette::PaletteRuntime::default(),
             zmx: commands::zmx::ZmxRuntime::default(),
             remote: crate::remote::PresentationRuntime::default(),
-        }
+        };
+        core.repoint_remotes();
+        core
     }
 
     /// Whether this host claims the conformance capability `name` (`window-geometry` decides whether `window.move`
