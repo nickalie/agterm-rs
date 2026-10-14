@@ -955,3 +955,38 @@ fn a_remote_pane_is_not_attached_again_while_its_row_is_a_pending_close() {
         true
     ));
 }
+
+#[test]
+fn a_dropped_remote_replacement_puts_the_panes_lead_back() {
+    let mut viewer = viewer_with(false);
+    let session = viewer.session;
+    let pane = viewer.session().pane_identity;
+    let nonce = viewer.fixture.core.zmx.leads.nonce(pane).unwrap().to_owned();
+    assert!(viewer.fixture.core.reattach_remote_pane(
+        session,
+        pane,
+        crate::zmx::lead::LeadAttachment::new(false),
+        true
+    ));
+    let replacements = viewer.fixture.core.take_pane_replacements();
+    assert_eq!(replacements.len(), 1);
+    assert!(replacements[0].remote);
+    assert!(viewer.fixture.core.zmx.leads.reattaching(pane));
+    // no page took the replacement: the pane is not left covered under a nonce no terminal reports
+    assert!(!viewer.fixture.core.replacement_dropped(&replacements[0]));
+    assert_eq!(viewer.fixture.core.zmx.leads.nonce(pane), Some(nonce.as_str()));
+    assert!(!viewer.fixture.core.zmx.leads.reattaching(pane));
+    // an installed one keeps its new attachment
+    assert!(viewer.fixture.core.reattach_remote_pane(
+        session,
+        pane,
+        crate::zmx::lead::LeadAttachment::new(false),
+        true
+    ));
+    let replacements = viewer.fixture.core.take_pane_replacements();
+    let rotated = viewer.fixture.core.zmx.leads.nonce(pane).unwrap().to_owned();
+    assert_ne!(rotated, nonce);
+    viewer.fixture.core.pane_replaced(&replacements[0]);
+    assert!(!viewer.fixture.core.replacement_dropped(&replacements[0]));
+    assert_eq!(viewer.fixture.core.zmx.leads.nonce(pane), Some(rotated.as_str()));
+}

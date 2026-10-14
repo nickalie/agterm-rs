@@ -883,7 +883,8 @@ impl Core {
         else {
             return false;
         };
-        self.zmx.leads.begin(pane, lead, cover);
+        // kept until the frontend reports the replacement installed or dropped, as a live pane's reattach
+        self.begin_replacement_lead(&token, pane, lead, cover);
         self.request_pane_replacement(crate::commands::zmx::PaneReplacement {
             session,
             token,
