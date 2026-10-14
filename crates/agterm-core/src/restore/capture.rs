@@ -6,7 +6,10 @@
 //!
 //! - [`ForegroundReader::running`], for the `tree`: the group leader's argv, classified as a program or a recognized
 //!   shell; when the leader's argv cannot be read (it exited, `cat f | less` keeps the reaped `cat`'s group), the
-//!   group's surviving members are tried as upstream's descent does.
+//!   group's surviving members are tried as upstream's descent does. A `--command` pane's program is run by
+//!   libghostty as `/bin/sh -c <command>` on Linux, where macOS's libghostty has bash `exec -l <command>`; a `/bin/sh`
+//!   that does not exec its last command (dash, Debian's and Ubuntu's) stays as the group's leader over the program,
+//!   so that wrapper is passed over for its child, the process upstream's `exec` leaves.
 //! - [`ForegroundReader::command`], for the restore capture: the leader's program only, and never the pane's own
 //!   creation command. Upstream gets that from macOS, where a `--command` pane's program runs under setuid `login`,
 //!   whose argv is unreadable, so a leader-only read finds nothing there. On Linux the foreground group of a pane with
@@ -71,6 +74,21 @@ impl<'a> ForegroundReader<'a> {
         if let Some(argv) = self.table.argv(pgid) {
             return pane_foreground(&argv, self.shell).map(|foreground| (pgid, foreground));
         }
+        self.descent(pgid)
+    }
+
+    /// The `tree`'s read of foreground group `pgid` (upstream's `ForegroundProcess.running`): the program or the shell
+    /// holding the foreground, past libghostty's `/bin/sh -c` wrapper of a `--command` pane (module docs); `None` when
+    /// nothing in the group can be read.
+    #[must_use]
+    pub fn running(&self, pgid: i32) -> Option<PaneForeground> {
+        self.past_command_wrapper(pgid)
+            .or_else(|| self.observed(pgid))
+            .map(|(_, foreground)| foreground)
+    }
+
+    /// The first readable member of group `pgid`'s descent (upstream's `groupDescentCandidates`).
+    fn descent(&self, pgid: i32) -> Option<(i32, PaneForeground)> {
         let members: Vec<ProcessGroupMember> = self
             .table
             .group(pgid)
@@ -86,11 +104,15 @@ impl<'a> ForegroundReader<'a> {
         pane_foreground(&argv, self.shell).map(|foreground| (member, foreground))
     }
 
-    /// The `tree`'s read of foreground group `pgid` (upstream's `ForegroundProcess.running`): the program or the shell
-    /// holding the foreground; `None` when nothing in the group can be read.
-    #[must_use]
-    pub fn running(&self, pgid: i32) -> Option<PaneForeground> {
-        self.observed(pgid).map(|(_, foreground)| foreground)
+    /// The child running the command when group `pgid` is led by the terminal's own process and that is libghostty's
+    /// `/bin/sh -c` wrapper, which a `/bin/sh` that execs its last command never leaves; `None` otherwise, and while
+    /// the wrapper runs no child (a builtin).
+    fn past_command_wrapper(&self, pgid: i32) -> Option<(i32, PaneForeground)> {
+        let leader = self.table.stat(pgid)?;
+        if leader.session != leader.pid || !is_command_wrapper(&self.table.argv(pgid)?) {
+            return None;
+        }
+        self.descent(pgid)
     }
 
     /// The restore capture's read of foreground group `pgid` (upstream's `ForegroundProcess.command`): the leader's
@@ -118,6 +140,16 @@ impl<'a> ForegroundReader<'a> {
     #[must_use]
     pub fn command_in(&self, surface: &dyn Surface) -> Option<Vec<String>> {
         self.command(self.group_of(surface)?)
+    }
+}
+
+/// Whether `argv` is the shell libghostty runs a command through on Linux: `/bin/sh -c <command>` (`-l` first inside
+/// Flatpak).
+fn is_command_wrapper(argv: &[String]) -> bool {
+    match argv {
+        [shell, flag, _] => shell == "/bin/sh" && flag == "-c",
+        [shell, login, flag, _] => shell == "/bin/sh" && login == "-l" && flag == "-c",
+        _ => false,
     }
 }
 
@@ -233,6 +265,47 @@ mod tests {
         table.remove(101);
         table.insert(stat(100, 1, 100, 100), Some(&["sleep", "600"]));
         assert_eq!(reader.command(100), None);
+    }
+
+    #[test]
+    fn the_tree_reads_past_a_dash_wrapper_to_the_command_it_runs() {
+        let table = FakeProcessTable::default();
+        // `--command cat` under a /bin/sh that does not exec its last command: `/bin/sh -c cat` leads, cat is its child
+        table.insert(stat(100, 1, 100, 100), Some(&["/bin/sh", "-c", "cat"]));
+        let reader = ForegroundReader::new(&table, Some("zsh"));
+        assert_eq!(
+            reader.running(100),
+            Some(PaneForeground::Program(argv(&["/bin/sh", "-c", "cat"]))),
+            "a wrapper running no child is what holds the foreground"
+        );
+        table.insert(stat(101, 100, 100, 100), Some(&["cat"]));
+        assert_eq!(reader.running(100), Some(PaneForeground::Program(argv(&["cat"]))));
+        assert_eq!(
+            reader.observed(100).map(|(pid, _)| pid),
+            Some(100),
+            "only the tree's read passes it"
+        );
+        assert_eq!(
+            reader.command(100),
+            None,
+            "still the pane's own program, never captured"
+        );
+        // Flatpak's libghostty adds `-l`
+        table.insert(stat(100, 1, 100, 100), Some(&["/bin/sh", "-l", "-c", "cat"]));
+        assert_eq!(reader.running(100), Some(PaneForeground::Program(argv(&["cat"]))));
+        // a `sh -c` the user runs is reported as it is: a job of a shell pane, or not libghostty's spelling
+        table.insert(stat(100, 1, 100, 100), Some(&["sh", "-c", "cat"]));
+        assert_eq!(
+            reader.running(100),
+            Some(PaneForeground::Program(argv(&["sh", "-c", "cat"])))
+        );
+        table.insert(stat(100, 1, 100, 100), Some(&["zsh"]));
+        table.insert(stat(200, 100, 200, 100), Some(&["/bin/sh", "-c", "cat"]));
+        table.insert(stat(201, 200, 200, 100), Some(&["cat"]));
+        assert_eq!(
+            reader.running(200),
+            Some(PaneForeground::Program(argv(&["/bin/sh", "-c", "cat"])))
+        );
     }
 
     #[test]
