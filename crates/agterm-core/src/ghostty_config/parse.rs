@@ -1,6 +1,7 @@
 //! Reading config text and files as libghostty does at `GHOSTTY_REV`: `cli/args.zig`'s `LineIterator` (one
-//! `key = value` per line, trimmed, `#` comments, surrounding quotes dropped from the value, a UTF-8 BOM skipped),
-//! each line checked as it is read, path values made absolute against the file that sets them (`Config.expandPaths`),
+//! `key = value` per line, trimmed, `#` comments, surrounding quotes dropped from the value; a UTF-8 BOM skipped in
+//! config files and includes as `Config.loadReader` does, not in themes, which `loadTheme` reads without it), each
+//! line checked as it is read, path values made absolute against the file that sets them (`Config.expandPaths`),
 //! and the `config-file` includes loaded after every base file in the order they were named, new ones appended as they
 //! are found, each file once (`Config.loadRecursiveFiles`).
 
@@ -92,10 +93,10 @@ pub enum Step {
     Diagnostic(Diagnostic),
 }
 
-/// The `key = value` lines of `text` with their line numbers, as `LineIterator` yields them.
+/// The `key = value` lines of `text` with their line numbers, as `LineIterator` yields them. A leading BOM is kept,
+/// as `LineIterator` keeps it: it becomes part of the first key.
 #[must_use]
 pub fn lines(text: &str) -> Vec<(usize, String, Option<String>)> {
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut lines = Vec::new();
     for (index, raw) in text.split('\n').enumerate() {
         if raw.len() > MAX_LINE {
@@ -217,7 +218,9 @@ impl Loader {
         self.load_lines(Some(path), &base, &text);
     }
 
+    /// A config file's or text's lines, a leading UTF-8 BOM skipped (`Config.loadReader`).
     fn load_lines(&mut self, source: Option<&Path>, base: &Path, text: &str) {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         for (line, key, value) in lines(text) {
             let location = source.map(|path| Location {
                 path: path.to_path_buf(),
@@ -276,8 +279,8 @@ fn is_path(accepted: &Result<Accepted, String>) -> bool {
     matches!(accepted, Ok(Accepted::Field(spec)) if matches!(spec.kind, Kind::Path | Kind::RepeatablePath))
 }
 
-/// The checked lines of a theme file. Like libghostty, which reads a theme without `expandPaths`, its path values
-/// stay as written.
+/// The checked lines of a theme file. Like libghostty, which reads a theme with a bare `LineIterator`, a leading BOM
+/// stays part of the first key and path values stay as written (no `expandPaths`).
 #[must_use]
 pub fn theme_settings(path: &Path, text: &str) -> Vec<Setting> {
     lines(text)

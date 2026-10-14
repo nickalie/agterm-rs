@@ -60,6 +60,14 @@ PORTED = {
     "Path": "Path",
     "RepeatablePath": "RepeatablePath",
 }
+# Types with a parseCLI validate.rs does not port (by their declaration's name): their values are accepted as is, the
+# residual differences ghostty_config/mod.rs lists. Any other unported parseCLI type stops the script.
+OPAQUE = {
+    "Modifier", "Command", "RepeatableReadableIO", "RepeatableStringMap", "RemapSet", "RepeatableFontVariation",
+    "RepeatableCodepointMap", "RepeatableClipboardCodepointMap", "FontStyle", "RepeatableLink", "RepeatableCommand",
+    "QuickTerminalSize", "BackgroundBlur", "SelectionWordChars", "MouseScrollMultiplier", "WorkingDirectory",
+    "ColorList", "Keybinds",
+}
 PATHS = {"Path": "src/config/path.zig", "RepeatablePath": "src/config/path.zig"}
 INTS = {"u8": (False, 8), "u16": (False, 16), "u21": (False, 21), "u32": (False, 32), "u64": (False, 64),
         "usize": (False, 64), "i8": (True, 8), "i16": (True, 16), "i32": (True, 32), "i64": (True, 64),
@@ -139,7 +147,10 @@ def top_level_lines(body):
 
 
 def opaque(name, body):
-    """A parseCLI validate.rs does not port: whether it needs a value, or refuses every one."""
+    """A parseCLI validate.rs does not port, listed in OPAQUE: whether it needs a value, or refuses every one."""
+    if name not in OPAQUE:
+        die(f"{name} has a parseCLI that is neither ported nor known opaque: port it in validate.rs, or add it to "
+            "OPAQUE and to the residual differences of ghostty_config/mod.rs")
     match = re.search(r"\bfn parseCLI\(", body)
     following = re.search(r"\bfn \w+\(", body[match.end():])
     snippet = body[match.end():match.end() + following.start()] if following else body[match.end():]

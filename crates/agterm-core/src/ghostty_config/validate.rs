@@ -419,13 +419,41 @@ fn float_value(integer: &[u8], fraction: &[u8], exponent: i64, base: u32) -> f64
         };
         return text.parse().unwrap_or(f64::NAN);
     }
-    let mantissa = integer
+    hex_float_value(integer, fraction, exponent)
+}
+
+/// A hex float's value: at most 13 significant digits (52 bits, exact in an `f64`), the dropped ones folded into a
+/// clamped binary exponent applied in steps whose powers of two stay finite and normal.
+fn hex_float_value(integer: &[u8], fraction: &[u8], exponent: i64) -> f64 {
+    const DIGITS: usize = 13;
+    const STEP: i32 = 1000;
+    let digits: Vec<u32> = integer
         .iter()
         .chain(fraction)
         .filter_map(|byte| char::from(*byte).to_digit(16))
-        .fold(0.0, |value: f64, digit| value * 16.0 + f64::from(digit));
-    let shift = i32::try_from(exponent).unwrap_or(i32::MAX) - 4 * i32::try_from(fraction.len()).unwrap_or(i32::MAX);
-    mantissa * 2_f64.powi(shift)
+        .skip_while(|digit| *digit == 0)
+        .collect();
+    if digits.is_empty() {
+        return 0.0;
+    }
+    let kept = digits.len().min(DIGITS);
+    let mantissa = digits[..kept]
+        .iter()
+        .fold(0.0, |value: f64, digit| value * 16.0 + f64::from(*digit));
+    let dropped = i64::try_from(digits.len() - kept).unwrap_or(i64::MAX);
+    let fraction = i64::try_from(fraction.len()).unwrap_or(i64::MAX);
+    let shift = exponent
+        .saturating_add(dropped.saturating_mul(4))
+        .saturating_sub(fraction.saturating_mul(4));
+    // past ±10 000 a 52-bit mantissa is infinite or zero anyway
+    let mut shift = i32::try_from(shift.clamp(-10_000, 10_000)).unwrap_or(0);
+    let mut value = mantissa;
+    while shift != 0 {
+        let step = shift.clamp(-STEP, STEP);
+        value *= 2_f64.powi(step);
+        shift -= step;
+    }
+    value
 }
 
 /// A packed struct of `names`: a boolean sets all of them, else a comma list of names (each trimmed, `no-` turning
@@ -460,7 +488,8 @@ pub fn parse_flags(value: &str, names: &[&str]) -> Result<Vec<Option<bool>>, Val
 /// [`ValueError::Invalid`] for anything else.
 pub fn parse_color(value: &str) -> Result<Rgb, ValueError> {
     let input = value.trim_matches([' ', '\t']);
-    if input.is_empty() {
+    // every form, X11 names included, is ASCII; the widths below slice by bytes
+    if input.is_empty() || !input.is_ascii() {
         return Err(ValueError::Invalid);
     }
     if let Some(hex) = input.strip_prefix('#') {

@@ -38,7 +38,7 @@ fn write(path: &Path, text: &str) -> std::io::Result<PathBuf> {
 
 #[test]
 fn lines_are_trimmed_comments_and_blanks_skipped() {
-    let text = "\u{feff}a = 1\n\n# comment\n  # indented comment\n  b=2  \r\nc\nd = \"quoted \"\ne =\n";
+    let text = "a = 1\n\n# comment\n  # indented comment\n  b=2  \r\nc\nd = \"quoted \"\ne =\n";
     let read = lines(text);
     assert_eq!(
         read,
@@ -49,6 +49,43 @@ fn lines_are_trimmed_comments_and_blanks_skipped() {
             (7, "d".to_owned(), Some("quoted ".to_owned())),
             (8, "e".to_owned(), Some(String::new())),
         ]
+    );
+}
+
+#[test]
+fn non_ascii_colors_are_refused_not_sliced() {
+    for bad in ["aé", "éa", "#aé", "#é0", "1=éa"] {
+        assert_eq!(validate::parse_color(bad), Err(ValueError::Invalid), "{bad}");
+    }
+    assert_eq!(
+        count("background = aé\ncursor-color = #é0\nbold-color = éa\npalette = 1=éa\n"),
+        4
+    );
+}
+
+#[test]
+fn hex_floats_stay_finite_and_exact_at_the_extremes() {
+    assert_eq!(validate::parse_float("0x1.0p-2147483647"), Ok(0.0));
+    assert_eq!(validate::parse_float("0x1p-3000000000"), Ok(0.0));
+    assert_eq!(validate::parse_float("0x1p3000000000"), Ok(f64::INFINITY));
+    assert_eq!(validate::parse_float("0x0p1024"), Ok(0.0));
+    assert_eq!(
+        validate::parse_float("0x1p-1074"),
+        Ok(f64::from_bits(1)),
+        "the smallest subnormal"
+    );
+    let wide = format!("0xe{}p-1200", "0".repeat(300));
+    assert_eq!(validate::parse_float(&wide), Ok(14.0));
+    assert_eq!(validate::parse_float("0x0.00fp12"), Ok(15.0));
+}
+
+#[test]
+fn a_bom_is_skipped_in_config_files_and_kept_by_the_bare_line_reader() {
+    assert_eq!(count("\u{feff}font-size = 13\n"), 0, "loadReader skips it");
+    assert_eq!(
+        lines("\u{feff}a = 1\n")[0].1,
+        "\u{feff}a",
+        "LineIterator alone keeps it in the key"
     );
 }
 
@@ -370,10 +407,50 @@ fn residual_differences_accept_any_value_of_an_opaque_key() {
         .filter(|spec| matches!(spec.kind, Kind::Opaque { .. }))
         .map(|spec| spec.name)
         .collect();
-    assert!(
-        opaque.contains(&"keybind") && opaque.contains(&"selection-word-chars"),
-        "{opaque:?}"
-    );
+    // exactly the residual list of the module docs: a new opaque key is a new residual difference to document
+    let adjust = [
+        "box-thickness",
+        "cell-height",
+        "cell-width",
+        "cursor-height",
+        "cursor-thickness",
+        "font-baseline",
+        "icon-height",
+        "overline-position",
+        "overline-thickness",
+        "strikethrough-position",
+        "strikethrough-thickness",
+        "underline-position",
+        "underline-thickness",
+    ]
+    .map(|metric| format!("adjust-{metric}"));
+    let mut expected: Vec<&str> = adjust.iter().map(String::as_str).collect();
+    expected.extend([
+        "background-blur",
+        "clipboard-codepoint-map",
+        "command",
+        "command-palette-entry",
+        "env",
+        "font-codepoint-map",
+        "font-style",
+        "font-style-bold",
+        "font-style-bold-italic",
+        "font-style-italic",
+        "font-variation",
+        "font-variation-bold",
+        "font-variation-bold-italic",
+        "font-variation-italic",
+        "initial-command",
+        "input",
+        "key-remap",
+        "keybind",
+        "macos-icon-screen-color",
+        "mouse-scroll-multiplier",
+        "quick-terminal-size",
+        "selection-word-chars",
+        "working-directory",
+    ]);
+    assert_eq!(opaque, expected);
 }
 
 // -- the generated table
@@ -939,8 +1016,10 @@ fn theme_files_go_through_the_same_parser() -> TestResult {
         "\u{feff}background = red\r\nselection-background = nope\nwho = 1\n",
     )?;
     let built = load(&format!("theme = {}\n", theme.display()));
-    assert_eq!(built.diagnostics.len(), 2);
-    assert_eq!(built.config.colors.background, Rgb::new(255, 0, 0));
+    // loadTheme skips no BOM: the first key is "\u{feff}background", an unknown field
+    assert_eq!(built.diagnostics.len(), 3);
+    assert_eq!(built.diagnostics[0].key, "\u{feff}background");
+    assert_eq!(built.config.colors.background, Colors::default().background);
     Ok(())
 }
 

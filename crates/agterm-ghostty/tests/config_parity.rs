@@ -86,6 +86,11 @@ const LINES: &[(&str, usize)] = &[
     ("background = rgb:1/2", 1),
     ("background = rgbi:2/0/0", 1),
     ("background = notacolor", 1),
+    ("background = aé", 1),
+    ("background = #aé", 1),
+    ("palette = 1=éa", 1),
+    ("background-opacity = 0x1.0p-2147483647", 0),
+    ("background-opacity = 0x0p1024", 0),
     ("cursor-color = cell-foreground", 0),
     ("selection-background = cell-backgrounds", 1),
     ("bold-color = bright", 0),
@@ -204,10 +209,15 @@ fn includes_count_as_libghostty_counts_them() -> TestResult {
 
 #[test]
 fn themes_count_as_libghostty_counts_them() -> TestResult {
-    let cases: [Files<'_>; 3] = [
+    let cases: [Files<'_>; 4] = [
         &[
             ("main.conf", "theme = {dir}/t\n"),
             ("t", "background = nope\nwho = 1\nforeground = red\n"),
+        ],
+        // loadTheme skips no BOM: the first key carries it
+        &[
+            ("main.conf", "theme = {dir}/t\n"),
+            ("t", "\u{feff}background = red\nforeground = red\n"),
         ],
         &[
             ("main.conf", "theme = light:{dir}/t,dark:{dir}/gone\n"),

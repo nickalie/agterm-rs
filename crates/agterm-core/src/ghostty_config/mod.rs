@@ -11,8 +11,8 @@
 //! **Diagnostics** (the count `config.reload` answers): every line is checked against the key table generated from
 //! ghostty's `Config.zig` at `GHOSTTY_REV` ([`known_keys`], `scripts/gen-ghostty-config-keys.sh`), the value by its
 //! key's type ([`validate`]), supported by agterm or not: an unknown key, a malformed value of any known key, an
-//! include that cannot be read or closes a cycle, a theme that cannot be found each count once, as libghostty counts
-//! them. A valid value of a key agterm does not support counts nothing; the key is ignored and logged. libghostty
+//! include that cannot be read or closes a cycle each count once, a theme that cannot be found once per theme
+//! directory tried, as libghostty counts them. A valid value of a key agterm does not support counts nothing; the key is ignored and logged. libghostty
 //! finalizes a fresh config on the light side of a dual theme, so [`LoadedConfig::diagnostic_count`] does too.
 //!
 //! **Residual differences** from libghostty (the count ones pinned by `agterm-ghostty`'s `config_parity` test, which
