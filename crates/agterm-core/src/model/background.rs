@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{AppStore, Session, StatusPane, WatermarkRemoval};
+use super::{AppStore, OverlayPane, Session, StatusPane, WatermarkRemoval, is_valid_color_hex};
 use crate::pane_env::uuid_string;
 use crate::persist::lossy;
 
@@ -181,6 +181,21 @@ impl PaneBackgrounds {
     }
 }
 
+/// The color of a solid-color background; `None` for none, an image or a text.
+fn solid_color_hex(watermark: Option<&BackgroundWatermark>) -> Option<&str> {
+    watermark
+        .filter(|watermark| watermark.kind == WatermarkKind::Color)
+        .and_then(|watermark| watermark.color_hex.as_deref())
+}
+
+/// One layer of a floating panel's backdrop wash (upstream's `BackdropWashRegion`): over pane `pane`, or the whole detail
+/// area for `None`, in `color_hex`, or the theme background for `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackdropWashRegion {
+    pub pane: Option<OverlayPane>,
+    pub color_hex: Option<String>,
+}
+
 impl Session {
     /// What pane `pane` renders: its own override, else the session default.
     #[must_use]
@@ -192,9 +207,51 @@ impl Session {
     /// including under an image or text.
     #[must_use]
     pub fn wash_color_hex(&self, pane: StatusPane) -> Option<&str> {
-        self.effective_background(pane)
-            .filter(|watermark| watermark.kind == WatermarkKind::Color)
-            .and_then(|watermark| watermark.color_hex.as_deref())
+        solid_color_hex(self.effective_background(pane))
+    }
+
+    /// The solid color a wash over split pane `pane` blends toward, whatever shows there: an overlay over it renders
+    /// its own valid background, else the theme (`None`), never the pane's (upstream's `overlayWashColor` and
+    /// `backdropWashRegions`); else the pane's own [`Session::wash_color_hex`].
+    #[must_use]
+    pub fn pane_wash_color_hex(&self, pane: OverlayPane) -> Option<&str> {
+        let status = match pane {
+            OverlayPane::Left => StatusPane::Left,
+            OverlayPane::Right => StatusPane::Right,
+        };
+        match self.pane_overlay(pane) {
+            // through the renderer's own predicate, so the wash matches what it painted
+            Some(overlay) => overlay
+                .background_color
+                .as_deref()
+                .filter(|hex| is_valid_color_hex(hex)),
+            None => self.wash_color_hex(status),
+        }
+    }
+
+    /// The layers of a floating panel's backdrop wash, back to front, for the frontend to paint opaque and mute once as
+    /// a group, so a pane's region over the default never mutes that pane twice (upstream's `backdropWashRegions`).
+    /// While the scratch shows, its color alone; else the session default over the whole detail area, then each pane's
+    /// [`Session::pane_wash_color_hex`] over that pane. A region names its pane rather than a frame, so the frontend
+    /// places it where the pane is laid out now and skips a pane it does not lay out.
+    #[must_use]
+    pub fn backdrop_wash_regions(&self) -> Vec<BackdropWashRegion> {
+        let owned = |hex: Option<&str>| hex.map(str::to_owned);
+        if self.scratch_active {
+            return vec![BackdropWashRegion {
+                pane: None,
+                color_hex: owned(self.wash_color_hex(StatusPane::Scratch)),
+            }];
+        }
+        let mut regions = vec![BackdropWashRegion {
+            pane: None,
+            color_hex: owned(solid_color_hex(self.background_watermark.as_ref())),
+        }];
+        regions.extend([OverlayPane::Left, OverlayPane::Right].map(|pane| BackdropWashRegion {
+            pane: Some(pane),
+            color_hex: owned(self.pane_wash_color_hex(pane)),
+        }));
+        regions
     }
 
     /// The key naming a pane override's rendered text file: the pane identity, which follows the terminal across a
@@ -357,6 +414,127 @@ mod tests {
             .and_then(|s| s.effective_background(StatusPane::Right).cloned());
         assert_eq!(effective, Some(tint));
         assert!(!store.set_background_watermark(None, Uuid::new_v4(), Some(StatusPane::Left)));
+    }
+
+    fn color(hex: &str) -> BackgroundWatermark {
+        BackgroundWatermark {
+            kind: WatermarkKind::Color,
+            color_hex: Some(hex.to_owned()),
+            ..text("")
+        }
+    }
+
+    fn region(pane: Option<OverlayPane>, hex: Option<&str>) -> BackdropWashRegion {
+        BackdropWashRegion {
+            pane,
+            color_hex: hex.map(str::to_owned),
+        }
+    }
+
+    /// A session in a store, edited through `edit`.
+    fn with_session(edit: impl FnOnce(&mut Session)) -> AppStore {
+        let mut store = AppStore::new();
+        let workspace = store.add_workspace("work");
+        let id = store
+            .add_session(workspace, crate::model::NewSession::at_cwd("/tmp"))
+            .expect("a session");
+        edit(store.session_mut(id).expect("the session"));
+        store
+    }
+
+    fn regions(store: &AppStore) -> Vec<BackdropWashRegion> {
+        store
+            .sessions()
+            .next()
+            .map(Session::backdrop_wash_regions)
+            .unwrap_or_default()
+    }
+
+    fn pane_overlay(background_color: Option<&str>) -> crate::model::PaneOverlay {
+        crate::model::PaneOverlay {
+            command: "top".to_owned(),
+            cwd: None,
+            background_color: background_color.map(str::to_owned),
+            wait: false,
+            generation: 1,
+            code_file: None,
+            html: None,
+        }
+    }
+
+    /// Upstream's `washColorIsTheEffectiveSolidColorOnly`.
+    #[test]
+    fn the_wash_color_is_the_effective_solid_color_only() {
+        let store = with_session(|session| {
+            session.background_watermark = Some(color("#201414"));
+            session.pane_backgrounds.right = Some(text("PEER"));
+            session.pane_backgrounds.scratch = Some(color("#102030"));
+        });
+        let session = store.sessions().next().expect("the session");
+        assert_eq!(session.wash_color_hex(StatusPane::Left), Some("#201414"));
+        assert_eq!(session.wash_color_hex(StatusPane::Right), None);
+        assert_eq!(session.wash_color_hex(StatusPane::Scratch), Some("#102030"));
+    }
+
+    /// Upstream's `backdropRegionsLayerEachPaneOverTheSessionDefault`.
+    #[test]
+    fn backdrop_regions_layer_each_pane_over_the_session_default() {
+        let store = with_session(|session| {
+            session.background_watermark = Some(color("#201414"));
+            session.pane_backgrounds.right = Some(color("#102030"));
+        });
+        assert_eq!(
+            regions(&store),
+            [
+                region(None, Some("#201414")),
+                region(Some(OverlayPane::Left), Some("#201414")),
+                region(Some(OverlayPane::Right), Some("#102030")),
+            ]
+        );
+    }
+
+    /// Upstream's `backdropRegionsTakeAPaneOverlaysOwnBackground`: an overlay's color, else the theme, never the pane's.
+    #[test]
+    fn backdrop_regions_take_a_pane_overlays_own_background() {
+        let store = with_session(|session| {
+            session.pane_backgrounds.left = Some(color("#201414"));
+            session.pane_backgrounds.right = Some(color("#201414"));
+            session.pane_overlays.slot_mut(OverlayPane::Left).overlay = Some(pane_overlay(Some("#0a0b0c")));
+            session.pane_overlays.slot_mut(OverlayPane::Right).overlay = Some(pane_overlay(None));
+        });
+        assert_eq!(
+            regions(&store),
+            [
+                region(None, None),
+                region(Some(OverlayPane::Left), Some("#0a0b0c")),
+                region(Some(OverlayPane::Right), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn backdrop_regions_drop_an_overlay_color_the_renderer_refuses() {
+        let store = with_session(|session| {
+            session.pane_backgrounds.left = Some(color("#201414"));
+            session.pane_overlays.slot_mut(OverlayPane::Left).overlay = Some(pane_overlay(Some("teal")));
+        });
+        assert_eq!(regions(&store)[1], region(Some(OverlayPane::Left), None));
+    }
+
+    /// Upstream's `backdropRegionsUseOnlyTheScratchWhileItIsShown`.
+    #[test]
+    fn backdrop_regions_use_only_the_scratch_while_it_is_shown() {
+        let mut store = with_session(|session| {
+            session.background_watermark = Some(color("#201414"));
+            session.pane_backgrounds.right = Some(color("#102030"));
+            session.scratch_active = true;
+        });
+        assert_eq!(regions(&store), [region(None, Some("#201414"))]);
+        let id = store.sessions().next().map(Session::id).expect("the session");
+        if let Some(session) = store.session_mut(id) {
+            session.pane_backgrounds.scratch = Some(text("PEER"));
+        }
+        assert_eq!(regions(&store), [region(None, None)]);
     }
 
     trait ClonedBackgrounds {

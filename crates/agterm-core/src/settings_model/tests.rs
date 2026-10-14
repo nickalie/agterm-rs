@@ -405,6 +405,20 @@ fn effective_values_resolve_unset_and_out_of_range() {
     assert_eq!(settings.effective_new_session_directory(), NewSessionDirectory::Custom);
 }
 
+/// Upstream's `muteOpacityScalesAndClamps`.
+#[test]
+fn mute_opacity_scales_and_clamps() {
+    assert!(mute_opacity(0).abs() < f64::EPSILON);
+    assert!((mute_opacity(5) - 0.4).abs() < 1e-9);
+    assert!((mute_opacity(10) - 0.8).abs() < 1e-9);
+    assert!(mute_opacity(-3).abs() < f64::EPSILON);
+    assert!((mute_opacity(99) - 0.8).abs() < 1e-9);
+    let mut settings = AppSettings::default();
+    assert!((settings.inactive_pane_mute_opacity() - 0.4).abs() < 1e-9);
+    settings.inactive_pane_mute_strength = Some(0);
+    assert!(settings.inactive_pane_mute_opacity().abs() < f64::EPSILON);
+}
+
 #[test]
 fn changes_round_trip_through_settings_json_minimally() {
     let dir = tempfile::tempdir().unwrap();

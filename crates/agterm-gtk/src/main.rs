@@ -25,6 +25,7 @@ mod keymap_dispatch;
 mod logging;
 mod main_loop;
 mod modal;
+mod mute;
 mod notifications;
 mod overlay;
 mod palette;

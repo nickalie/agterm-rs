@@ -33,6 +33,7 @@ use uuid::Uuid;
 
 use crate::ask_dialog::SessionAskLayer;
 use crate::hud::{HudLayer, HudPlacement, LayerView};
+use crate::mute::{BackdropWash, Muted, PaneWashes, Regions};
 use crate::overlay::{PaneOverlayTerminal, PanePage, ProgramLayer, ProgramPlacement};
 use crate::pane_lead::{LeadCoverWidget, PaneCover};
 use crate::state::{self, AppState, Poster};
@@ -306,6 +307,26 @@ impl PanePlan {
     pub fn shows_divider(&self) -> bool {
         self.panes == Panes::Both && !self.scratch_covers && !self.overlays.covers
     }
+
+    /// The pane the inactive-pane mute washes, or its overlay (upstream's `paneDim`): the unfocused one of a shown,
+    /// uncovered split, unless a floating program's backdrop washes the page already.
+    #[must_use]
+    pub fn muted(&self) -> Option<Slot> {
+        if !self.shows_divider() || self.backdrop() {
+            return None;
+        }
+        match self.focus {
+            Slot::Primary => Some(Slot::Split),
+            Slot::Split => Some(Slot::Primary),
+            Slot::Scratch => None,
+        }
+    }
+
+    /// Whether a floating program washes the page behind it (upstream's `OverlayPanelStyle.backdrop`).
+    #[must_use]
+    pub fn backdrop(&self) -> bool {
+        self.overlays.program.is_some_and(|program| program.fraction.is_some())
+    }
 }
 
 /// The pane `zoom` fills the window with, when it is one of `session`'s terminals.
@@ -480,6 +501,12 @@ struct StackLayout {
     pane_overlays: Vec<(gtk::Widget, Slot)>,
     /// The lead covers and the pane each lies over ([`crate::pane_lead`]).
     lead_covers: Vec<(gtk::Widget, Slot)>,
+    /// The mute washes and the pane each lies over ([`crate::mute`]).
+    washes: Vec<(gtk::Widget, Slot)>,
+    /// The floating program's backdrop wash, which paints at the panes' rectangles, and the page geometry it last
+    /// painted at: allocated at the whole page, it is drawn again only when told to.
+    backdrop_wash: Option<gtk::Widget>,
+    backdrop_frames: Option<HudPaneFrames>,
     /// Where the page's geometry goes: its session and the main loop.
     reports: Option<(Uuid, Poster)>,
     /// The geometry last reported.
@@ -533,6 +560,7 @@ impl StackLayout {
                 .pane_overlays
                 .iter()
                 .chain(&self.lead_covers)
+                .chain(&self.washes)
                 .find(|(overlay, _)| *overlay == widget)
             {
                 pane_rect(panes, &geometry, *slot).unwrap_or(Rect::full(width, height))
@@ -542,7 +570,14 @@ impl StackLayout {
             widget.size_allocate(&gtk::Allocation::new(rect.x, rect.y, rect.width, rect.height), -1);
             child = widget.next_sibling();
         }
-        self.report(page_frames(panes, &geometry, width, height));
+        let frames = page_frames(panes, &geometry, width, height);
+        if self.backdrop_frames.as_ref() != Some(&frames) {
+            self.backdrop_frames = Some(frames);
+            if let Some(wash) = &self.backdrop_wash {
+                wash.queue_draw();
+            }
+        }
+        self.report(frames);
     }
 
     /// The HUD panel's rectangle: in its pane while it is scoped to one laid out, else in the whole page.
@@ -691,6 +726,8 @@ mod imp {
             layout.program_frame = None;
             layout.pane_overlays.clear();
             layout.lead_covers.clear();
+            layout.washes.clear();
+            layout.backdrop_wash = None;
         }
     }
 
@@ -768,6 +805,10 @@ pub struct PaneView {
     in_grid: bool,
     /// The lead covers by pane position, created once a pane first needs one, above every terminal.
     covers: Vec<(Slot, LeadCoverWidget)>,
+    /// The inactive-pane mute: over the terminals under the lead covers, and over the pane overlays under the scratch.
+    washes: PaneWashes,
+    /// The floating program's backdrop wash, inside its backdrop.
+    backdrop_wash: BackdropWash,
 }
 
 impl PaneView {
@@ -783,7 +824,18 @@ impl PaneView {
         divider.set_parent(&stack);
         stack.layout().divider = Some(divider.clone().upcast());
         connect_divider(&divider, &stack, session, poster);
+        // the terminals go under the pane washes, the lead covers over them; the pane overlays go right after the
+        // divider, under the overlay washes, and the scratch over those
+        let washes = PaneWashes::new();
+        for wash in [&washes.primary, &washes.split] {
+            wash.widget().insert_before(&stack, Some(&divider));
+        }
+        for wash in [&washes.primary_overlay, &washes.split_overlay] {
+            wash.widget().set_parent(&stack);
+        }
         let program = ProgramLayer::new();
+        let backdrop_wash = BackdropWash::new(&stack);
+        program.backdrop().append(backdrop_wash.widget());
         program.backdrop().set_parent(&stack);
         program.frame().set_parent(&stack);
         let hud = HudLayer::new();
@@ -797,6 +849,8 @@ impl PaneView {
             layout.program_backdrop = Some(program.backdrop().clone().upcast());
             layout.program_frame = Some(program.frame().clone().upcast());
             layout.reports = Some((session, poster.clone()));
+            layout.washes = washes.placed().to_vec();
+            layout.backdrop_wash = Some(backdrop_wash.widget().clone().upcast());
         }
         let hud = std::rc::Rc::new(std::cell::RefCell::new(hud));
         let (weak, layer) = (stack.downgrade(), std::rc::Rc::downgrade(&hud));
@@ -819,6 +873,8 @@ impl PaneView {
             plan: None,
             in_grid: false,
             covers: Vec::new(),
+            washes,
+            backdrop_wash,
         };
         view.orient_divider(SplitAxis::default());
         view
@@ -843,12 +899,9 @@ impl PaneView {
         self.panes.push(Pane { token, terminal });
     }
 
-    /// The child the panes' terminals go under: the first lead cover, else the divider.
+    /// The child the panes' terminals go under: the first pane wash, under the lead covers.
     fn panes_ceiling(&self) -> gtk::Widget {
-        self.covers.first().map_or_else(
-            || self.divider.clone().upcast(),
-            |(_, cover)| cover.widget().clone().upcast(),
-        )
+        self.washes.primary.widget().clone().upcast()
     }
 
     /// Puts `terminal` in place of the one carrying `token`, keeping the token, the position in the stack and the
@@ -1186,6 +1239,27 @@ impl PaneView {
         self.place_program(None);
         self.program.hide();
         self.show_pane_overlays(None);
+        self.show_mutes(None, None);
+    }
+
+    /// Shows the inactive-pane wash `muted` says and the backdrop wash's regions at their opacity, hiding the rest.
+    pub fn show_mutes(&self, muted: Option<Muted>, backdrop: Option<(Regions, f64)>) {
+        self.washes.show(muted);
+        self.backdrop_wash.show(backdrop);
+    }
+
+    /// The inactive-pane washes.
+    #[cfg(test)]
+    #[must_use]
+    pub fn washes(&self) -> &PaneWashes {
+        &self.washes
+    }
+
+    /// The floating program's backdrop wash.
+    #[cfg(test)]
+    #[must_use]
+    pub fn backdrop_wash(&self) -> &BackdropWash {
+        &self.backdrop_wash
     }
 
     /// The token and terminal that should hold keyboard focus by the last plan.
@@ -1357,7 +1431,7 @@ fn post_ratio(poster: &Poster, session: Uuid, ratio: f64) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use agterm_core::model::{SessionSeed, SplitLayout};
     use agterm_core::zoom::ZoomSurface;
     use agterm_host::fakes::FakeSurface;
@@ -1365,7 +1439,7 @@ mod tests {
     use super::*;
 
     /// A session whose primary pane is `P`, with a split pane `S` and a scratch `X` installed as asked.
-    fn session(split: Option<SplitLayout>, scratch: bool) -> Session {
+    pub(crate) fn session(split: Option<SplitLayout>, scratch: bool) -> Session {
         let mut session = Session::new(SessionSeed {
             initial_cwd: "/home/u".to_owned(),
             ..SessionSeed::default()
@@ -1383,7 +1457,7 @@ mod tests {
         session
     }
 
-    fn split(shown: bool, focused: bool) -> SplitLayout {
+    pub(crate) fn split(shown: bool, focused: bool) -> SplitLayout {
         SplitLayout {
             shown,
             exists: true,
@@ -1487,8 +1561,59 @@ mod tests {
         assert_eq!(plan.focus_token(), Some("X"));
     }
 
+    #[test]
+    fn the_mute_washes_the_unfocused_pane_of_a_shown_uncovered_split() {
+        let mut shown = session(Some(split(true, true)), false);
+        assert_eq!(PanePlan::layout(&shown, None).muted(), Some(Slot::Primary));
+        shown.split.focused = false;
+        assert_eq!(PanePlan::layout(&shown, None).muted(), Some(Slot::Split));
+        let mut swapped = session(Some(split(true, true)), false);
+        std::mem::swap(&mut swapped.surface, &mut swapped.split_surface);
+        swapped.split.focused = false;
+        assert_eq!(
+            PanePlan::layout(&swapped, None).muted(),
+            Some(Slot::Split),
+            "the wash marks a position, wherever the terminals went"
+        );
+
+        let hidden = PanePlan::layout(&session(Some(split(false, true)), false), None);
+        assert_eq!(hidden.muted(), None, "a hidden split shows one pane");
+        assert_eq!(PanePlan::layout(&session(None, false), None).muted(), None);
+        let scratch = PanePlan::layout(&session(Some(split(true, true)), true), None);
+        assert_eq!(scratch.muted(), None, "the scratch covers both panes");
+        let zoomed = session(Some(split(true, true)), false);
+        let plan = PanePlan::layout(&zoomed, Some(zoom(&zoomed, ZoomSurface::Primary)));
+        assert_eq!(plan.muted(), None, "a zoomed pane shows alone");
+    }
+
+    #[test]
+    fn a_floating_program_washes_the_backdrop_in_place_of_the_pane() {
+        let mut floating = session(Some(split(true, true)), false);
+        program(&mut floating, Some(60));
+        let plan = PanePlan::layout(&floating, None);
+        assert!(plan.backdrop());
+        assert_eq!(plan.muted(), None, "the backdrop mutes both panes already");
+
+        let mut covered = session(Some(split(true, true)), false);
+        program(&mut covered, None);
+        let plan = PanePlan::layout(&covered, None);
+        assert!(!plan.backdrop(), "a covering program is chromeless");
+        assert_eq!(plan.muted(), None, "it hides the panes");
+
+        let mut overlaid = session(Some(split(true, true)), false);
+        pane_overlay(&mut overlaid, OverlayPane::Left, 1);
+        let plan = PanePlan::layout(&overlaid, None);
+        assert!(!plan.backdrop());
+        assert_eq!(
+            plan.muted(),
+            Some(Slot::Primary),
+            "an overlay on the unfocused pane is muted with it"
+        );
+        assert_eq!(plan.overlays.pane(Slot::Primary), Some(1));
+    }
+
     /// Opens a program in `session`'s slot at `size_percent`.
-    fn program(session: &mut Session, size_percent: Option<i64>) {
+    pub(crate) fn program(session: &mut Session, size_percent: Option<i64>) {
         let slot = &mut session.overlay;
         slot.active = true;
         slot.generation += 1;
@@ -1497,7 +1622,7 @@ mod tests {
     }
 
     /// Opens an overlay over `pane` with `generation`.
-    fn pane_overlay(session: &mut Session, pane: OverlayPane, generation: u64) {
+    pub(crate) fn pane_overlay(session: &mut Session, pane: OverlayPane, generation: u64) {
         session.pane_overlays.slot_mut(pane).overlay = Some(agterm_core::model::PaneOverlay {
             command: "exec cat".to_owned(),
             cwd: None,

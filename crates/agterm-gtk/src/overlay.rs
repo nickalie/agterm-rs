@@ -32,14 +32,13 @@ use crate::split::{PanePlan, PaneView, Slot};
 use crate::state::{self, AppState, Poster};
 use crate::surface::{self, SurfaceSpec, TerminalSurface};
 
-/// The program panel's style class, the floating variant's, and the backdrop's.
+/// The program panel's style class and the floating variant's.
 const PANEL_CLASS: &str = "agterm-overlay";
 const FLOATING_CLASS: &str = "agterm-overlay-floating";
-const BACKDROP_CLASS: &str = "agterm-overlay-backdrop";
 
 /// A floating program is a window hovering over the session: a wide radius and a shadow carry the separation and a
 /// faint border edges it (upstream's `floatingCornerRadius`, `floatingBorderOpacity`, `floatingShadowRadius`); the
-/// backdrop washes the session it leaves visible. A full overlay is chromeless.
+/// backdrop washes the session it leaves visible ([`crate::mute`]). A full overlay is chromeless.
 const CSS: &str = "
 .agterm-overlay.agterm-overlay-floating {
   border-radius: 12px;
@@ -47,7 +46,6 @@ const CSS: &str = "
   outline-offset: -1px;
   box-shadow: 0 0 24px alpha(black, 0.45);
 }
-.agterm-overlay-backdrop { background-color: alpha(black, 0.2); }
 ";
 
 /// Where the program panel goes in the page: its share of the page across and down, `None` for the whole page.
@@ -76,7 +74,6 @@ impl ProgramLayer {
     pub fn new() -> Self {
         install_css();
         let backdrop = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        backdrop.add_css_class(BACKDROP_CLASS);
         let frame = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         frame.add_css_class(PANEL_CLASS);
         frame.set_overflow(gtk::Overflow::Hidden);

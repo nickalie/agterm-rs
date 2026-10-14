@@ -34,7 +34,9 @@ mod workspace;
 mod tests;
 
 pub use ask::{AskAlignment, AskAnchor, AskNavigation, AskStyle, EndedAsk, MAX_ASK_BUTTONS, PendingAsk, SessionAsk};
-pub use background::{BackgroundWatermark, PaneBackgrounds, WatermarkFit, WatermarkKind, WatermarkPosition};
+pub use background::{
+    BackdropWashRegion, BackgroundWatermark, PaneBackgrounds, WatermarkFit, WatermarkKind, WatermarkPosition,
+};
 pub use focus::FocusMode;
 pub use html_overlay::{HtmlOverlayCommandFailure, HtmlOverlayOpenFailure, HtmlPageSlot};
 pub use navigation::{NewSessionPlacement, SessionNavigation, WorkspaceNavigation};

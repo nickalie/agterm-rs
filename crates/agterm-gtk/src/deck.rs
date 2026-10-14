@@ -234,6 +234,7 @@ impl Page {
     /// no terminal for are created and installed in their slots, and the layout follows the session and the zoom.
     fn sync(&mut self, core: &mut Core, sync: &PageSync<'_>, id: Uuid, shown: bool) {
         let covers = lead_covers(core, sync.window, id);
+        let mute = core.settings().inactive_pane_mute_opacity();
         let Some(store) = core.library_mut().store_mut(sync.window) else {
             self.panes.hide();
             return;
@@ -284,6 +285,12 @@ impl Page {
             poster: sync.poster,
         };
         crate::overlay::sync_page(&mut self.panes, session, &hud, plan.as_ref(), shown);
+        let on_screen = plan.as_ref().filter(|_| shown);
+        let theme = sync.look.background;
+        self.panes.show_mutes(
+            crate::mute::muted(session, on_screen, mute, theme),
+            crate::mute::backdrop(session, on_screen, theme).map(|regions| (regions, mute)),
+        );
         crate::hud::sync_page(&mut self.panes, session, &hud, plan.as_ref(), shown);
         let ask = crate::ask_dialog::AskPage {
             shown: shown && sync.zoom.is_none() && sync.grid.is_none(),
@@ -1244,6 +1251,116 @@ mod tests {
         assert!(walk.probe().terminal(&walk.primary).widget().is_focusable());
         window.set_child(None::<&gtk::Widget>);
         window.destroy();
+    }
+
+    #[test]
+    fn the_unfocused_pane_of_a_shown_split_is_muted() {
+        crate::gtk_test::on_gtk_thread(unfocused_pane_is_muted);
+    }
+
+    /// The inactive-pane wash lies over the unfocused pane of a shown split, above its terminal, at the setting's
+    /// opacity; it follows `session.focus`, goes with the split shown no more or at strength 0, and gives way to a
+    /// floating program's backdrop wash.
+    fn unfocused_pane_is_muted() {
+        let mut walk = Walk::split();
+        let window = gtk::Window::new();
+        window.set_child(Some(walk.deck.widget()));
+        walk.settle();
+        let [primary, split] = pane_washes(&walk);
+        assert!(split.is_none(), "the focused pane is not muted");
+        let (_, opacity) = primary.expect("the unfocused primary is muted");
+        assert!((opacity - 0.4).abs() < 1e-9, "the default strength 5");
+        wash_lies_over_its_pane(&walk);
+        mute_follows_the_split(&mut walk);
+        mute_follows_the_setting_and_the_backdrop(&mut walk);
+        window.set_child(None::<&gtk::Widget>);
+        window.destroy();
+    }
+
+    /// What each pane position's wash over its terminal shows.
+    fn pane_washes(walk: &Walk) -> [Option<(crate::status_glyph::Rgb, f64)>; 2] {
+        let washes = walk.deck.pages[&walk.session].panes.washes();
+        [split::Slot::Primary, split::Slot::Split]
+            .map(|slot| washes.wash(slot, false).and_then(crate::mute::Wash::look))
+    }
+
+    /// The primary's wash sits above its terminal, laid out over it, and lets clicks through.
+    fn wash_lies_over_its_pane(walk: &Walk) {
+        let page = &walk.deck.pages[&walk.session].panes;
+        let wash: gtk::Widget = page.washes().primary.widget().clone().upcast();
+        let children: Vec<gtk::Widget> =
+            std::iter::successors(walk.stack.first_child(), gtk::Widget::next_sibling).collect();
+        let index = |widget: &gtk::Widget| children.iter().position(|child| child == widget);
+        let terminal: gtk::Widget = walk.areas.0.clone().upcast();
+        assert!(index(&terminal) < index(&wash), "the wash lies over the terminal");
+        walk.stack.size_allocate(&gtk::Allocation::new(0, 0, 812, 612), -1);
+        assert_eq!(
+            (wash.width(), wash.height()),
+            (walk.areas.0.width(), walk.areas.0.height()),
+            "laid out over the pane"
+        );
+        assert!(!wash.can_target(), "a click reaches the pane");
+    }
+
+    /// The wash moves with `session.focus` and goes while the split is hidden.
+    fn mute_follows_the_split(walk: &mut Walk) {
+        let focus = Request {
+            cmd: Command::Session(SessionCmd::Focus),
+            target: Some(agterm_core::pane_env::uuid_string(walk.session)),
+            args: Some(Args {
+                pane: Some("left".to_owned()),
+                ..Args::default()
+            }),
+        };
+        assert!(walk.core.dispatch(&focus).ok);
+        walk.settle();
+        let [primary, split] = pane_washes(walk);
+        assert!(primary.is_none() && split.is_some(), "the wash follows the focus");
+
+        let session = walk.session;
+        walk.store().set_split_visibility(session, false, None);
+        walk.settle();
+        assert_eq!(pane_washes(walk), [None, None], "a hidden split shows one pane");
+        walk.store().set_split_visibility(session, true, None);
+        walk.settle();
+        assert!(pane_washes(walk)[1].is_some());
+    }
+
+    /// Strength 0 renders nothing, 10 the strongest wash; a floating program's backdrop takes over from the pane wash.
+    fn mute_follows_the_setting_and_the_backdrop(walk: &mut Walk) {
+        let mute = |walk: &mut Walk, strength: i64| {
+            walk.core
+                .change_settings(agterm_core::settings_model::SettingsChange::Appearance(
+                    agterm_core::settings_model::AppearanceChange::InactivePaneMute(strength),
+                ));
+            walk.settle();
+        };
+        mute(walk, 0);
+        assert_eq!(pane_washes(walk), [None, None], "strength 0 renders nothing");
+        mute(walk, 10);
+        assert!(pane_washes(walk)[1].is_some_and(|(_, opacity)| (opacity - 0.8).abs() < 1e-9));
+
+        let session = walk.session;
+        if let Some(session) = walk.store().session_mut(session) {
+            let slot = &mut session.overlay;
+            slot.active = true;
+            slot.generation += 1;
+            slot.command = Some("exec cat".to_owned());
+            slot.size_percent = Some(60);
+        }
+        walk.settle();
+        assert_eq!(
+            pane_washes(walk),
+            [None, None],
+            "the backdrop mutes both panes in place of the pane wash"
+        );
+        let backdrop = walk.deck.pages[&walk.session].panes.backdrop_wash().look();
+        let (regions, opacity) = backdrop.expect("the floating program's backdrop is washed");
+        assert_eq!(
+            regions.iter().map(|(slot, _)| *slot).collect::<Vec<_>>(),
+            [None, Some(split::Slot::Primary), Some(split::Slot::Split)]
+        );
+        assert!((opacity - 0.8).abs() < 1e-9);
     }
 
     #[test]

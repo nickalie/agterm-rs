@@ -312,6 +312,16 @@ fn clamp_strength(strength: i64) -> i64 {
     strength.clamp(*STRENGTH_RANGE.start(), *STRENGTH_RANGE.end())
 }
 
+/// The opacity of the mute wash at `strength` (upstream's `AppSettings.muteOpacity`): 0.08 a step, clamped, so 0.8 at
+/// the strongest and nothing at 0.
+#[must_use]
+pub fn mute_opacity(strength: i64) -> f64 {
+    // within 0...10 by the clamp, so the conversion is exact
+    #[expect(clippy::cast_precision_loss, reason = "a strength within 0...10")]
+    let steps = clamp_strength(strength) as f64;
+    steps * 0.08
+}
+
 impl InterfaceChange {
     fn apply_to(self, settings: &mut AppSettings) -> Effect {
         match self {
@@ -510,6 +520,12 @@ impl AppSettings {
     #[must_use]
     pub fn effective_inactive_pane_mute(&self) -> i64 {
         clamp_strength(self.inactive_pane_mute_strength.unwrap_or(DEFAULT_INACTIVE_PANE_MUTE))
+    }
+
+    /// The opacity of the wash muting the inactive split pane and a floating panel's backdrop.
+    #[must_use]
+    pub fn inactive_pane_mute_opacity(&self) -> f64 {
+        mute_opacity(self.effective_inactive_pane_mute())
     }
 
     /// The sidebar tint the slider shows.
