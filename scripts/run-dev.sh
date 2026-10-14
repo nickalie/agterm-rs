@@ -41,7 +41,8 @@ socket="$state/agterm.sock"
 # sun_path holds 108 bytes on Linux, but the app refuses 104 or more, as upstream's macOS limit.
 ((${#socket} < 104)) || die "socket path too long (${#socket} bytes, the limit is 103): $socket"
 
-cargo_args=(build --workspace)
+# the GTK app's workspace: the WPE WebKit -sys crates need a WPE the GTK build does not
+cargo_args=(build "${WORKSPACE_WITHOUT_WPE[@]}")
 [[ "$profile" == release ]] && cargo_args+=(--release)
 (cd "$NATIVE_ROOT" && cargo "${cargo_args[@]}")
 "$NATIVE_ROOT/scripts/stage.sh" "$root/stage" --profile "$profile"
