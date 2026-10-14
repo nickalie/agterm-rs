@@ -254,8 +254,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("started");
         let app = dir.path().join("app");
-        std::fs::write(&app, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
-        std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+        agterm_host::fakes::write_executable(&app, &format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
         let mut waited = Command::new("sleep").arg("0.3").spawn().unwrap();
         let mut relauncher = relaunch_command(&app, waited.id()).spawn().unwrap();
         std::thread::sleep(Duration::from_millis(100));

@@ -1,10 +1,13 @@
 //! In-memory fakes of the host traits, for tests that run the core or the control server without a window, a
-//! terminal or a daemon. Each records what was asked of it so a test can assert on it afterwards.
+//! terminal or a daemon. Each records what was asked of it so a test can assert on it afterwards. Beside them,
+//! [`write_executable`] writes a script a test runs.
 
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io;
+use std::path::Path;
+use std::process::Command;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
@@ -726,6 +729,33 @@ impl crate::ProcessTable for FakeProcessTable {
     }
 }
 
+/// Writes `text` to `path` as an executable (mode 0755) for a test to run, without this process ever holding a write
+/// descriptor to it. A test on another thread that forks while this process holds one hands its child a copy until the
+/// child's own exec (close-on-exec closes it only then), and running the file meanwhile fails with ETXTBSY ("Text file
+/// busy"). A child `install` writes it instead: the text goes to `<path>.source` first, which nothing runs, and is
+/// removed afterwards.
+///
+/// # Errors
+///
+/// Writing or removing the source, or starting `install`; an `install` that fails is an error naming `path`.
+pub fn write_executable(path: &Path, text: &str) -> io::Result<()> {
+    let mut source = path.as_os_str().to_owned();
+    source.push(".source");
+    std::fs::write(&source, text)?;
+    let status = Command::new("install")
+        .args(["-m", "755"])
+        .arg(&source)
+        .arg(path)
+        .status();
+    std::fs::remove_file(&source)?;
+    let status = status?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!("install {}: {status}", path.display())))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -932,5 +962,23 @@ mod tests {
         assert!(!launcher.finish(pid, exit));
         assert_eq!(rx.try_recv(), Ok(3));
         assert!(launcher.running().is_empty());
+    }
+
+    #[test]
+    fn an_executable_is_written_runnable_and_leaves_no_source() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = std::env::temp_dir().join(format!("agterm-host-exec-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("script");
+        write_executable(&script, "#!/bin/sh\nprintf '%s' \"$1\"\n").unwrap();
+        let mode = std::fs::metadata(&script).unwrap().permissions().mode() & 0o777;
+        let output = Command::new(&script).arg("ran").output().unwrap();
+        let entries = std::fs::read_dir(&dir).unwrap().count();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(mode, 0o755);
+        assert_eq!(output.stdout, b"ran");
+        assert_eq!(entries, 1, "the source is removed");
+        assert!(write_executable(&dir.join("missing/script"), "").is_err());
     }
 }

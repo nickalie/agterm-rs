@@ -1,7 +1,6 @@
 //! Ported from upstream's `ConfigPathsTests` (the starter keymap and the editor command).
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -164,12 +163,11 @@ fn the_editor_command_runs_through_an_interactive_login_shell_then_posix_sh() {
 fn recorder(dir: &Path, name: &str) -> (String, std::path::PathBuf) {
     let got = dir.join(format!("{name}.got"));
     let script = dir.join(name);
-    fs::write(
+    agterm_host::fakes::write_executable(
         &script,
-        format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", got.display()),
+        &format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", got.display()),
     )
     .unwrap();
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
     (script.display().to_string(), got)
 }
 
