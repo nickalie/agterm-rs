@@ -19,7 +19,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
@@ -254,7 +254,8 @@ OWN_VARIABLES = frozenset(
         "AGTERM_UITEST_FORCE_SIDEBAR_VISIBLE",
         "AGTERM_UITEST_ENABLE_ZMX",
         "AGTERM_UITEST_SHOW_WELCOME",
-        # The Rust build's log filter, set only by tools/ghostty_probe.py; an inherited one is still scrubbed.
+        # The Rust build's log filter, set only by tools/ghostty_probe.py and tools/chrome_probe.py; an inherited one
+        # is still scrubbed.
         "AGTERM_LOG",
     }
 )
@@ -377,6 +378,9 @@ class Adapter:
     needs_app_id: ClassVar[bool] = False
     # A Linux desktop app: its runtime dir is the live session's, so the instance gets a private one.
     needs_runtime_dir: ClassVar[bool] = False
+    # Arguments appended to the headless weston's command line, set only by tools/chrome_probe.py (`--debug`, which
+    # lets weston-screenshooter read the output).
+    compositor_args: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self, bin: Path | None, ctl: Path | None = None) -> None:
         # Absolute now: the child starts in the isolated HOME, where a relative path would not resolve.
@@ -501,7 +505,7 @@ class Adapter:
                 write_noop_launchers(Path(env["XDG_CONFIG_HOME"]), Path(env["XDG_DATA_HOME"]))
             if headless:
                 session_bus = start_session_bus(root, env, timeout)
-                compositor = start_compositor(root, env, timeout)
+                compositor = start_compositor(root, env, timeout, self.compositor_args)
             if app_id is not None:
                 _claim_app_id(app_id)
         except BaseException as error:
@@ -634,7 +638,8 @@ def compositor_program() -> str:
     raise LaunchError(f"no weston on PATH: install it, or set {DISPLAY_MODE_VARIABLE}=session to draw on this desktop")
 
 
-def weston_argv(program: str, root: Path) -> list[str]:
+def weston_argv(program: str, root: Path, extra: Sequence[str] = ()) -> list[str]:
+    """The headless weston's command line; `extra` comes last, so an option there overrides the one before it."""
     width, height = WESTON_SIZE
     return [
         program,
@@ -645,10 +650,13 @@ def weston_argv(program: str, root: Path) -> list[str]:
         f"--log={root / 'weston.log'}",
         f"--width={width}",
         f"--height={height}",
+        *extra,
     ]
 
 
-def start_compositor(root: Path, env: Mapping[str, str], timeout: float = LAUNCH_TIMEOUT) -> subprocess.Popen[bytes]:
+def start_compositor(
+    root: Path, env: Mapping[str, str], timeout: float = LAUNCH_TIMEOUT, extra: Sequence[str] = ()
+) -> subprocess.Popen[bytes]:
     """Start the instance's weston in its runtime dir and return once its socket accepts a connection."""
     (root / "weston.ini").write_text(WESTON_CONFIG)
     socket_path = os.path.join(env["XDG_RUNTIME_DIR"], WESTON_SOCKET)
@@ -657,7 +665,7 @@ def start_compositor(root: Path, env: Mapping[str, str], timeout: float = LAUNCH
     weston_env = {name: value for name, value in env.items() if name not in ("WAYLAND_DISPLAY", "DISPLAY")}
     if vendor := mesa_egl_vendor():
         weston_env[EGL_VENDOR_VARIABLE] = vendor
-    process = _spawn(weston_argv(compositor_program(), root), weston_env, root / "weston.out", "wb")
+    process = _spawn(weston_argv(compositor_program(), root, extra), weston_env, root / "weston.out", "wb")
     _wait_serving(socket_path, process, timeout, "weston", root / "weston.log")
     return process
 

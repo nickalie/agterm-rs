@@ -37,6 +37,11 @@ conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
 # whether the staged Rust build's libghostty surface is created and draws a frame under the same isolation (a CI
 # spike; `version` alone answers without a GL context); defaults to run-rust-linux.sh's stage
 .venv/bin/python conformance/tools/ghostty_probe.py [--bin PATH]
+
+# whether the staged Rust build's title bar, sidebar and terminal draw one color, the terminal theme's background, and
+# a sidebar tint washes the sidebar alone: screenshots of the maximized window from the same isolation, its weston
+# started with --debug for weston-screenshooter (a Rust-build check outside the catalog); defaults to the same stage
+.venv/bin/python conformance/tools/chrome_probe.py [--bin PATH] [--keep DIR]
 ```
 
 `--macos-launch-mode plain` replaces the default `uitest` launch (XCUITest sentinel with zmx on).

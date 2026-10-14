@@ -133,6 +133,21 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
+      # The title bar, the sidebar and the terminal draw one color, the theme's background, and the sidebar tint washes
+      # the sidebar alone: screenshots of the real app's maximized window (its weston started with --debug).
+      - name: the window chrome takes the terminal's colors
+        shell: bash
+        run: |
+          status=0
+          python conformance/tools/chrome_probe.py > "$RUNNER_TEMP/chrome-probe.json" || status=$?
+          cat "$RUNNER_TEMP/chrome-probe.json"
+          {
+            echo '### chrome probe'
+            echo '```json'
+            cat "$RUNNER_TEMP/chrome-probe.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
       # the app and the harness read the password database, never $SHELL
       - name: the login shell (bash)
         run: getent passwd "$USER"

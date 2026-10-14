@@ -299,6 +299,8 @@ def test_weston_argv(tmp_path: Path) -> None:
         "--width=1920",
         "--height=1080",
     ]
+    # an adapter's extra arguments come last, overriding the defaults before them
+    assert base.weston_argv("/usr/bin/weston", tmp_path, ("--debug", "--width=1280"))[-2:] == ["--debug", "--width=1280"]
 
 
 def test_each_build_env_gets_a_fresh_app_id(tmp_path: Path) -> None:
