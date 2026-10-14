@@ -22,6 +22,7 @@ agterm-app = { path = "crates/agterm-app" }
 agterm-wpe-javascriptcore-sys = { path = "crates/agterm-wpe-javascriptcore-sys" }
 agterm-wpe-platform-sys = { path = "crates/agterm-wpe-platform-sys" }
 agterm-wpe-sys = { path = "crates/agterm-wpe-sys" }
+agterm-wpe = { path = "crates/agterm-wpe" }
 async-channel = "2"
 # glib's Unix-only API (SIGTERM on the main loop), a crate of its own; it follows the glib that gtk4 0.11 uses.
 glib-unix = "0.22"
@@ -65,6 +66,11 @@ glib-sys = "0.22"
 gobject-sys = "0.22"
 gio-sys = "0.22"
 soup-sys = { package = "soup3-sys", version = "0.9" }
+# The safe GLib/Gio over the same -sys crates, for agterm-wpe: its engine thread's main context and loop, the
+# GObject subclasses of WPEPlatform's display, view and toplevel, signals and streams. The gtk-rs 0.22 family gtk4 0.11
+# uses, so one GLib binding is linked.
+glib = "0.22"
+gio = "0.22"
 
 # Inherited by every crate (`[lints] workspace = true`) except the generated -sys crates: `agterm-ghostty-sys` and
 # `agterm-ghostty-vt-sys` (bindgen), `agterm-wpe-sys`, `agterm-wpe-platform-sys` and `agterm-wpe-javascriptcore-sys`

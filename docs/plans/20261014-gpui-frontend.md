@@ -978,25 +978,80 @@ Productionizes Task 2's prototype.
 **Files:**
 - Create: `crates/agterm-wpe/` (thread + `GMainContext`, view, frames, input, profiles), `tests/`
 
-- [ ] dedicated WPE thread with its own `GMainContext` (pushed thread-default before any WebKit object exists);
+- [x] dedicated WPE thread with its own `GMainContext` (pushed thread-default before any WebKit object exists);
       commands in, frames/events out over channels
-- [ ] offscreen view producing dmabuf frames (Task 29 consumer) and the SHM last-resort fallback (documents only,
+- [x] offscreen view producing dmabuf frames (Task 29 consumer) and the SHM last-resort fallback (documents only,
       Technical Details > HTML frames)
-- [ ] ➕ (Task 2) a proper `WPEDisplay`/`WPEView` subclass instead of the spike's patched `WPEViewHeadless` vfuncs; the
+- [x] ➕ (Task 2) a proper `WPEDisplay`/`WPEView` subclass instead of the spike's patched `WPEViewHeadless` vfuncs; the
       display's DRM device = the render node of GPUI's wgpu adapter (Task 29) and its preferred formats = the modifiers
       that device imports; buffer-set tracking (the set is recreated and grows under the host) with stale
       acknowledgements dropped; acknowledgements deferred to idle sources (acknowledging in `render_buffer` re-enters
       WebKit); a buffer released one frame after GPUI presents it
-- [ ] ➕ (Task 2) media: keep `media_playback_requires_user_gesture` as the GTK overlay sets it; progressive media
+- [x] ➕ (Task 2) media: keep `media_playback_requires_user_gesture` as the GTK overlay sets it; progressive media
       download stalls in WPE 2.54.1 (MSE works) — record it in the checklist as an engine limitation, do not work
       around it
-- [ ] the WebKit surface the overlay uses: `NetworkSession` (persistent dirs), `UserContentManager`/`UserScript`,
+- [x] the WebKit surface the overlay uses: `NetworkSession` (persistent dirs), `UserContentManager`/`UserScript`,
       script message handlers, navigation/response policy, `register_uri_scheme`, `Settings`, downloads
-- [ ] WPE's bubblewrap sandbox: `scripts/install-apparmor-profile.sh` attaches the profile to the `agterm-gpui` binary
+- [x] WPE's bubblewrap sandbox: `scripts/install-apparmor-profile.sh` attaches the profile to the `agterm-gpui` binary
       path too (and to `agterm` after Task 34)
-- [ ] tests: load `data:`/custom-scheme pages headless, JS bridge round-trip, policy callbacks, profile persistence
+- [x] tests: load `data:`/custom-scheme pages headless, JS bridge round-trip, policy callbacks, profile persistence
       across view restarts
-- [ ] gates — must pass before Task 32
+- [x] gates — must pass before Task 32
+- result (2026-10-15): `crates/agterm-wpe` (Linux; over the Task 30 -sys crates and the gtk-rs 0.22 `glib`/`gio`,
+  added as workspace deps). API: `Host::start(HostConfig)` → `(Host, async_channel::Receiver<Event>)`; commands are
+  `Host` methods (stores, pages, loads, history, zoom, scripts, background, geometry, visibility, focus, input,
+  `frame_presented`, `evaluate`), and every synchronous question WebKit asks — navigation/response policy, script
+  message replies, reads of the consumer's URI schemes — is held open and reported with a token the consumer answers
+  (`decide_policy`, `reply_script_message`, `finish_scheme_request`); closing a page answers what it left open.
+  Engine: one per process, its thread pushes a fresh `GMainContext` thread-default before any WebKit object and
+  **never ends** — it is WebKit's main thread, whose thread-local teardown waits forever on the run loop it tears down
+  (a joined shutdown hung there), so `shutdown`/drop closes everything, waits a bounded 10 s for "stopped" and leaves
+  the thread idle; ➕ (review) the process then ends through `agterm_wpe::exit_process` (`_exit`): WebKit's static
+  destructors assert they run on its main thread and aborted under `exit()` (4 of 15 suite runs) — Task 12/32 end the
+  GPUI app that way. Platform: `AgtermWpeDisplay`/`AgtermWpeView`/`AgtermWpeToplevel` (gtk-rs `ObjectSubclass` over the
+  abstract WPEPlatform classes; the toplevel carries size and scale). The input the GPUI side fills (Task 29/32) is a
+  plain struct: `FrameMode::DmaBuf(DmaBufTarget { render_node, formats: Vec<BufferFormat { fourcc, modifiers }> })`
+  or `FrameMode::Shm`; the display resolves the render node's DRM device and opens EGL on it through a private
+  `WPEDisplayHeadless` on that node (libdrm/GBM stay WebKit's; its constructor is declared by hand, the -sys crates
+  bind no Headless namespace) and offers exactly the given formats; SHM mode offers no device and no formats, and
+  WebKit then renders on the CPU into SHM buffers by itself (no `WEBKIT_SKIA_ENABLE_CPU_RENDERING` needed). Frames:
+  `Event::Frame` with `FrameContent::DmaBuf(Arc<DmaBuf>)` (every plane, fds duplicated once per buffer so the consumer
+  may outlive WebKit's) or `Shm(Vec<ShmRegion>)` (damaged rects copied out, buffer released at once);
+  `Event::BuffersRemoved` when buffers leave the set; `FrameFlow` (unit-tested) marks a frame rendered on
+  presentation and releases a dmabuf one presentation later, dropping acknowledgements for buffers that left the set;
+  acknowledgements run from a source of their own on the engine's context — ⚠️ glib's `idle_add_local*` attaches to
+  the *global* default context, which nothing runs on the engine thread (frames stalled after the first one until
+  this was found). WebKit surface: `SessionSpec::{Ephemeral, Persistent { data_dir, cache_dir }}` with downloads
+  cancelled and reported (`Event::DownloadRefused`) and clearing (`Event::SessionCleared`); a persistent store also
+  saves cookies (`<data>/cookies.sqlite`): WebKit keeps them in memory otherwise, which the GTK overlay's saved store
+  does today (backlog: `docs/backlog/gtk-saved-store-forgets-cookies.md`); `Settings` bitflags with
+  `Settings::overlay(js)` = the GTK overlay's (media needs a gesture); user scripts per world; reply-style message
+  handlers per world; schemes registered at start (`HostConfig::schemes`, served as file, bytes or error); what a page
+  may not do is refused in the engine as the GTK overlay refuses it (no new window, silent script dialogs, no file
+  chooser, permission, full screen, notification or context menu); load/page/cursor/close/web-process events.
+  `agterm_wpe::launcher` builds the `bwrap --ro-overlay` launch for the vendored package (detected by `fetch-wpe.sh`'s
+  manifest; the system's package runs plain). Tests: 15 unit tests (config, frame protocol, SHM copy, input bits,
+  launcher) and `tests/headless` (custom harness: each frame mode in its own process, through the launcher, private
+  XDG dirs): `shm`, `dmabuf` on the first Mesa-driven render node (Intel iGPU here, LINEAR XR24/AR24 offered, the
+  pixel read back from the mapped dmabuf) and `bad-device` (a missing render node fails the start; one start per
+  process), 11 cases per frame mode: frames and resize/scale with the buffer set recreated, the fall-back to SHM,
+  scheme pages (bytes, file, error), the bridge in the page world and in a script world with page scripts off, policy (a clicked link and a
+  real click on a `target=_blank` link held and ignored, a refused response failing as interrupted), pointer/key/wheel
+  input, a saved store across view restarts and across a new session on the same dirs (cookie and local storage) then
+  cleared, refused downloads, closing with questions open, a page that cannot be built (`Event::ViewFailed`), a second
+  start refused. ⚠️ NVIDIA's own driver (renderD129) allocates no LINEAR render target and WebKit falls back to the
+  driver's block-linear modifier outside the offered list (logged as a warning): Task 29 must check each buffer's
+  modifier before importing. ➕ (review) SHM after the start: the engine's frame mode is fixed per process (WebKit
+  reads the display's DRM device once per UI process, and a web process picks dmabuf or SHM when it builds a page's
+  surface, never again), so `Host::fall_back_to_shm(view)` is the per-page fall-back Task 29/32 call when an import
+  fails: WebKit's `HardwareAcceleration` feature goes off in the page's settings and its web process is replaced (the
+  page reloads, history kept, script state lost; other pages untouched), and SHM frames follow. CI: the `wpe`
+  job checks and tests `agterm-wpe` too (SHM and `bad-device`; no render node there); `WORKSPACE_WITHOUT_WPE` excludes
+  it. AppArmor: the profile file holds `agterm` and `agterm-gpui` profiles, `install-apparmor-profile.sh --gpui PATH`
+  (default the stage's `bin/agterm-gpui`). Checklist: the media row records the progressive-download stall. For Task
+  32 (not in the WebKit surface the GTK overlay used, all WPE-only gaps): the clipboard (WPE has its own
+  `WPEClipboard`, not the system's), `<select>` popups (`show-option-menu`), context menus, IME, accessibility; the
+  file-paste refusal holds by construction while the WPE clipboard carries only what the host puts there.
 
 ### Task 32: HTML overlay on GPUI + WPE
 

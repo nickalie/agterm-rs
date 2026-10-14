@@ -15,11 +15,12 @@ VENDOR_ROOT="${AGTERM_VENDOR:-$HOME/.cache/agterm-rs/vendor}"
 # shellcheck source=../../build/pins.env
 source "$PINS"
 
-# The workspace minus the WPE WebKit -sys crates, as cargo arguments: what the GTK build's entry points build
-# (scripts/run-dev.sh, conformance/tools/run-rust-linux.sh, the Ubuntu CI jobs), so a machine without WPE WebKit
-# (Ubuntu 24.04 packages none) still builds, tests and stages the GTK app. Nothing else depends on these crates yet;
-# they build wherever WPE WebKit is (README > WPE WebKit), and CI checks them in its Arch job.
-WORKSPACE_WITHOUT_WPE=(--workspace --exclude agterm-wpe-sys --exclude agterm-wpe-platform-sys
+# The workspace minus the WPE WebKit crates (the -sys crates and the agterm-wpe host over them), as cargo arguments:
+# what the GTK build's entry points build (scripts/run-dev.sh, conformance/tools/run-rust-linux.sh, the Ubuntu CI
+# jobs), so a machine without WPE WebKit (Ubuntu 24.04 packages none) still builds, tests and stages the GTK app.
+# Nothing else depends on these crates yet; they build wherever WPE WebKit is (README > WPE WebKit), and CI checks them
+# in its Arch job.
+WORKSPACE_WITHOUT_WPE=(--workspace --exclude agterm-wpe --exclude agterm-wpe-sys --exclude agterm-wpe-platform-sys
   --exclude agterm-wpe-javascriptcore-sys)
 
 die() {

@@ -56,17 +56,20 @@ Without one, `bwrap` fails (`setting up uid map: Permission denied`) and WebKit 
 refuses every HTML page instead and names this fix in the error. The sandbox stays on either way.
 
 The fix is agterm's profile, [packaging/linux/apparmor/agterm](packaging/linux/apparmor/agterm): Ubuntu's shape,
-unconfined plus `userns`, attached to one agterm binary by its real path (the `bwrap` it starts inherits it):
+unconfined plus `userns`, attached to a binary by its real path (the `bwrap` it starts inherits it). While both
+frontends coexist the file holds two profiles: `agterm` for the GTK build's binary and `agterm-gpui` for the GPUI
+build's, whose WPE WebKit starts the same sandbox:
 
 ```sh
-scripts/install-apparmor-profile.sh /path/to/bin/agterm   # writes /etc/apparmor.d/agterm (sudo) and loads it
+scripts/install-apparmor-profile.sh [--gpui /path/to/bin/agterm-gpui] /path/to/bin/agterm   # writes
+                                                          # /etc/apparmor.d/agterm (sudo) and loads it
 scripts/install-apparmor-profile.sh --uninstall           # unloads and removes it
-scripts/install-apparmor-profile.sh --print [BINARY]      # shows the profile, changes nothing
+scripts/install-apparmor-profile.sh --print [--gpui GPUI_BINARY] [BINARY]   # shows the profiles, changes nothing
 ```
 
-Without a path it covers the conformance stage's `target/conformance-stage/bin/agterm`. A moved binary needs the
-profile installed again for its new path. On a host without AppArmor, or one that does not restrict user namespaces,
-the script installs nothing.
+Without paths it covers the conformance stage's `target/conformance-stage/bin/agterm` and `bin/agterm-gpui`. A moved
+binary needs the profile installed again for its new path. On a host without AppArmor, or one that does not restrict
+user namespaces, the script installs nothing.
 
 ## Native dependencies
 
@@ -105,9 +108,10 @@ need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through p
   `wpe-webkit-2.0` of the bound API wins over anything vendored.
 - No root, Arch-compatible userland (glibc 2.44+ and the package's libraries): `scripts/fetch-wpe.sh` verifies the
   pinned Arch package (`WPE_ARCH_PACKAGE_*`) and unpacks it into the vendored prefix, which `scripts/pkg-config.sh`
-  offers when the system has no WPE WebKit of the bound API. Building, linking and the crates' tests need nothing more;
-  running pages from that prefix needs the helper path overlaid (`bwrap --ro-overlay /usr/lib` with the prefix's
-  `lib/` on top), since nothing relocates it. Pick the distribution package whenever you can.
+  offers when the system has no WPE WebKit of the bound API. Building and linking need nothing more; running pages
+  from that prefix needs the helper path overlaid (`bwrap --ro-overlay /usr/lib` with the prefix's `lib/` on top),
+  since nothing relocates it: `agterm_wpe::launcher::command` builds that launch, and `agterm-wpe`'s engine tests
+  (`cargo test -p agterm-wpe`) run their pages through it. Pick the distribution package whenever you can.
 - Ubuntu 24.04 packages no `wpewebkit` at all (none since 22.04's 2.36) and cannot load the Arch package (glibc 2.39):
   it builds the GTK app without the WPE crates (`WORKSPACE_WITHOUT_WPE` in `scripts/lib/native.sh`, which
   `scripts/run-dev.sh`, `run-rust-linux.sh` and the Ubuntu CI jobs use). Before the GPUI frontend makes WPE a
@@ -116,8 +120,14 @@ need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through p
 - CI: the `wpe` job installs `wpewebkit` from a date-pinned Arch Linux Archive snapshot in a digest-pinned `archlinux`
   container, checks the WPE crates there and that the checked-in bindings equal a regeneration.
 
+`agterm-wpe` is the host over those bindings: WPE WebKit on an engine thread with its own `GMainContext`, a
+`WPEDisplay`/`WPEView` subclass rendering on the render node the GPUI side names with the formats it imports, frames
+out as dmabufs (SHM as a last-resort fallback), and the WebKit surface the HTML overlay uses. Its engine tests render
+headless on this machine's first DRM render node (Mesa; `WPE_TEST_RENDER_NODE` picks another) and in shared
+memory, each frame mode in a child process of its own.
+
 Cargo does not notice the provider changing: after installing or removing either, run
-`cargo clean -p agterm-wpe-sys -p agterm-wpe-platform-sys -p agterm-wpe-javascriptcore-sys`.
+`cargo clean -p agterm-wpe -p agterm-wpe-sys -p agterm-wpe-platform-sys -p agterm-wpe-javascriptcore-sys`.
 
 ## Build and run
 
@@ -151,8 +161,9 @@ conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
 
 - The GTK unit tests need a display and skip without one (as in CI, which runs plain `cargo test`); under `xvfb-run`
   they run without touching the desktop.
-- `--workspace` includes the WPE -sys crates, which need WPE WebKit ([WPE WebKit](#wpe-webkit)); without it, pass
-  `"${WORKSPACE_WITHOUT_WPE[@]}"` (from `scripts/lib/native.sh`) instead, as the Ubuntu CI jobs do.
+- `--workspace` includes the WPE crates (`agterm-wpe` and its -sys crates), which need WPE WebKit
+  ([WPE WebKit](#wpe-webkit)); without it, pass `"${WORKSPACE_WITHOUT_WPE[@]}"` (from `scripts/lib/native.sh`)
+  instead, as the Ubuntu CI jobs do.
 - `run-rust-linux.sh` builds the release workspace, stages it into `target/conformance-stage`, runs the protocol, cli
   and behaviors layers with `--impl rust` and exits with the ratchet's status. It runs the suite with `$PYTHON`, else
   `.venv/bin/python`, else `python3`, with the suite installed:

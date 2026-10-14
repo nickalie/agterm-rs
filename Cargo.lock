@@ -141,6 +141,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "agterm-wpe"
+version = "0.1.0"
+dependencies = [
+ "agterm-wpe-javascriptcore-sys",
+ "agterm-wpe-platform-sys",
+ "agterm-wpe-sys",
+ "async-channel",
+ "bitflags",
+ "gio",
+ "glib",
+ "libc",
+ "pkg-config",
+ "tempfile",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "agterm-wpe-javascriptcore-sys"
 version = "0.1.0"
 dependencies = [

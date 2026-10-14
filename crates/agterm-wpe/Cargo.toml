@@ -1,0 +1,35 @@
+[package]
+name = "agterm-wpe"
+description = "WPE WebKit host: offscreen web views on an engine thread of their own, frames out as dmabuf or SHM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+agterm-wpe-sys.workspace = true
+agterm-wpe-platform-sys.workspace = true
+agterm-wpe-javascriptcore-sys.workspace = true
+async-channel.workspace = true
+bitflags.workspace = true
+gio.workspace = true
+glib.workspace = true
+libc.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[build-dependencies]
+pkg-config.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+# One engine per process (WebKit binds its main run loop to the first thread that uses it), so the engine tests run
+# in processes of their own, which this harness starts (tests/headless/main.rs).
+[[test]]
+name = "headless"
+path = "tests/headless/main.rs"
+harness = false
+
+[lints]
+workspace = true
