@@ -157,5 +157,5 @@ These runs share a machine with a live agterm, so the harness refuses a launch t
 - `rust-linux` (`ubuntu-24.04`): the Rust workspace's format check, strict clippy, lint report (in the job summary)
   and `cargo test`, over the vendored libghostty and gtk4-layer-shell prefixes; then the staged build under the suite,
   held by the ratchet, once per login shell, each with `--must-pass live-any-shell`: bash (`conformance`), fish
-  (`conformance-fish`) and zsh (`conformance-zsh`).
+  (`conformance-fish`) and zsh (`conformance-zsh`, with `--must-pass live-sessions` too).
 - `spike-macos` (`macos-26`): the launch and ax-driver spikes, when their tools change.

@@ -167,9 +167,8 @@ jobs:
 
   # Live sessions run only for a zsh password-database login shell (the references wrap a pane in zmx only then), so
   # this is the suite again with the runner's login shell switched to zsh: the build claims `live-sessions` and the
-  # live tests run. `--must-pass live-any-shell` (the Rust-only extension, claimed for zsh too); otherwise gated by the
-  # ratchet only: `--must-pass live-sessions` waits until every live test can pass (`zmx.present` and `clipboard set`
-  # come later).
+  # live tests run. `--must-pass live-sessions` (every test the references hold to Live sessions) and
+  # `--must-pass live-any-shell` (the Rust-only extension, claimed for zsh too).
   conformance-zsh:
     needs: rust-linux
     runs-on: ubuntu-24.04
@@ -212,7 +211,9 @@ jobs:
         run: python -m pip install -e conformance
       # Exits with the ratchet's status; check_ratchet.py lists the newly green (live) ids in the job summary.
       - name: full suite under a zsh login shell (protocol, cli, behaviors)
-        run: conformance/tools/run-rust-linux.sh --out conformance/reports/rust-linux-zsh -- --must-pass live-any-shell
+        run: >-
+          conformance/tools/run-rust-linux.sh --out conformance/reports/rust-linux-zsh --
+          --must-pass live-sessions --must-pass live-any-shell
       - name: report into the summary
         if: always()
         shell: bash

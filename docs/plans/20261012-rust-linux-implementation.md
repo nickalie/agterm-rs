@@ -1383,14 +1383,14 @@ wlr-layer-shell surface.
       sessions; the rest wait for Tasks 28–30)
 - [x] write tests: unit tests for formatting helpers and argument validation
 - [x] write tests: cli-only commands against an in-process server
-- [ ] CI: the zsh job gains `--must-pass live-sessions` (waits for Tasks 28/29 — follow-up after they merge)
-- [ ] gate: full run; every `tests/cli` test that passes in the reference-macos junit is in the ratchet (every
-      non-zmx, non-live, non-remote cli id is in the ratchet; still red, owned by Tasks 28–30:
-      `test_cli_only.py::test_clipboard_set_reaches_every_terminal_attached_to_the_pane` (Live sessions, Task 28),
-      `test_cli_output.py::test_session_commands_refused_outside_their_state` (`zmx present`, Task 29),
-      `test_zmx_reads_outside_live` (Tasks 28/29), `test_zmx_commands_refused_before_acting` (Tasks 28–30),
-      `test_live_pane_commands` (Task 28), `test_live_present_bridges_the_stream` (Task 29),
-      `test_live_run_job_runs_the_handed_over_program` (Task 29))
+- [x] CI: the zsh job gains `--must-pass live-sessions` (follow-up after Tasks 28–30 merged: `conformance-zsh` runs
+      with `--must-pass live-sessions --must-pass live-any-shell`, the option repeating as pytest's `append`; YAML
+      parse and actionlint; the CI job is not runnable here, so the same must-pass set ran locally over the live
+      subset in Task 28's private user+mount namespace with a zsh password-database shell: all 12 tests requiring
+      `live-sessions` passed, no must-pass problem)
+- [x] gate: full run; every `tests/cli` test that passes in the reference-macos junit is in the ratchet (reference-macos
+      run 38276656124: all 57 green `tests/cli` ids are in the ratchet, the 7 zmx/live/remote ids Tasks 28–30 owned
+      included; all green on rust, the live ones in the zsh namespace run; none left red, no id added)
 
 ### Task 33: Settings dialog and first run
 

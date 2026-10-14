@@ -117,7 +117,8 @@ Its tests are in `tests/protocol/test_live_any_shell.py`; a test that branches o
 (`test_restore.py::test_seeded_live_mode_is_requested_at_launch`) takes the fallback branch only when the build has
 neither `live-sessions` nor `live-any-shell`.
 The jobs of `.github/workflows/rust-linux.yml` cover the three shells, each with `--must-pass live-any-shell`: the
-default job's login shell is bash, the `conformance-fish` job's fish, the `conformance-zsh` job's zsh.
+default job's login shell is bash, the `conformance-fish` job's fish, the `conformance-zsh` job's zsh. The zsh job,
+the one host where the build claims `live-sessions`, also runs with `--must-pass live-sessions`, as reference-macos.
 
 ## Ratchet
 
