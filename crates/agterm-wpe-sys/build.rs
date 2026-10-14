@@ -2,7 +2,7 @@
 // build_version.rs, which this script does not use (the crate binds no version-gated API).
 //
 // Probes wpe-webkit-2.0 through pkg-config (scripts/pkg-config.sh: the system's WPE WebKit, else the vendored package
-// of scripts/fetch-wpe.sh). A vendored WPE lies outside the loader's search path, so this crate's own tests get an
+// of scripts/fetch-wpe.sh) and, when there is none, says where one comes from. A vendored WPE lies outside the loader's search path, so this crate's own tests get an
 // rpath to every library directory the probe reports (pkg-config leaves the system ones out); its dependents link as
 // usual and run WPE from where their launcher puts it.
 
@@ -19,8 +19,12 @@ fn main() {
             }
         }
         Err(s) => {
-            println!("cargo:warning={s}");
-            std::process::exit(1);
+            println!(
+                "cargo::error={}: this crate needs WPE WebKit 2.54 or newer: install the distribution's wpewebkit or \
+                 run scripts/fetch-wpe.sh, or build without the WPE crates (\"${{WORKSPACE_WITHOUT_WPE[@]}}\" of \
+                 scripts/lib/native.sh in place of --workspace); see README > WPE WebKit",
+                s.to_string().replace('\n', " ")
+            );
         }
     }
 }

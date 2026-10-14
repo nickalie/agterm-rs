@@ -9,7 +9,9 @@
 # The inputs are all pinned and verified, so the output is reproducible: gir (built once into the vendored prefix
 # ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/gir-<key>/ from its source archive and build/patches/gir/), the GLib,
 # GObject and Gio .gir files of gtk-rs/gir-files, the Soup-3.0.gir of soup3-rs and the WPE .gir files of the pinned
-# WPE WebKit package (scripts/fetch-wpe.sh), whatever WPE the system has. The generated files name their inputs by
+# WPE WebKit package, whatever WPE the system has. Those are read from the vendored prefix when scripts/fetch-wpe.sh
+# filled it, else extracted from the verified package alone: the .gir XML is the same on every host, so generating
+# needs no WPE that loads here (any arch, any glibc). The generated files name their inputs by
 # directory (`gir-files-<rev>`, `soup3-rs`, `wpewebkit-<version>`): gir runs inside the staged inputs with git out of
 # reach, so no path or checkout state of this machine leaks into the output. rustfmt with the repository's
 # rustfmt.toml formats the output (gir's own `cargo fmt` would not find the workspace from a scratch copy).
@@ -79,15 +81,23 @@ GIR_DIRS=("gir-files-${GIR_FILES_REV:0:12}" soup3-rs "wpewebkit-$WPE_VERSION")
 
 # Stage every .gir input under DIR, in the GIR_DIRS layout.
 stage_girs() {
-  local dir="$1" files="${GIR_DIRS[0]}" soup="${GIR_DIRS[1]}" wpe="${GIR_DIRS[2]}" wpe_prefix name
+  local dir="$1" files="${GIR_DIRS[0]}" soup="${GIR_DIRS[1]}" wpe="${GIR_DIRS[2]}" wpe_girs name
   mkdir -p "$dir/$files" "$dir/$soup" "$dir/$wpe"
   fetch "$GIR_FILES_REPO/archive/$GIR_FILES_REV.tar.gz" "$WORK/gir-files.tar.gz" "$GIR_FILES_SHA256"
   tar -xzf "$WORK/gir-files.tar.gz" -C "$dir/$files" --strip-components=1 --wildcards '*/GLib-2.0.gir' \
     '*/GObject-2.0.gir' '*/Gio-2.0.gir' '*/GioUnix-2.0.gir' '*/GLibUnix-2.0.gir' '*/GModule-2.0.gir'
   fetch "$GIR_SOUP_URL" "$dir/$soup/Soup-3.0.gir" "$GIR_SOUP_SHA256"
-  wpe_prefix="$("$NATIVE_ROOT/scripts/fetch-wpe.sh")"
+  wpe_girs="$(wpe_prefix)/share/gir-1.0"
+  if ! wpe_prefix_is_complete "$(wpe_prefix)"; then
+    # only the .gir files of the verified package: none of fetch-wpe.sh's checks that the engine loads on this host
+    command -v zstd >/dev/null || die "zstd is required to read the WPE WebKit package"
+    fetch "$WPE_ARCH_PACKAGE_URL" "$WORK/wpewebkit.pkg.tar.zst" "$WPE_ARCH_PACKAGE_SHA256"
+    mkdir "$WORK/wpe-pkg"
+    tar --zstd -xf "$WORK/wpewebkit.pkg.tar.zst" -C "$WORK/wpe-pkg" usr/share/gir-1.0
+    wpe_girs="$WORK/wpe-pkg/usr/share/gir-1.0"
+  fi
   for name in "${WPE_GIRS[@]}"; do
-    cp "$wpe_prefix/share/gir-1.0/$name.gir" "$dir/$wpe/"
+    cp "$wpe_girs/$name.gir" "$dir/$wpe/"
   done
   # WPEJavaScriptCore names a pkg-config package no WPE build installs: its headers and symbols ship in WPEWebKit's
   # (include/wpe-webkit-2.0/jsc, libWPEWebKit-2.0), so the crate probes that one, in Cargo.toml and the ABI tests.
