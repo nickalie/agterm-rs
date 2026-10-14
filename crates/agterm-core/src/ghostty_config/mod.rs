@@ -17,22 +17,26 @@
 //!
 //! **Residual differences** from libghostty (the count ones pinned by `agterm-ghostty`'s `config_parity` test, which
 //! checks every other case above against the linked libghostty):
-//! - count: keys whose type has a `parseCLI` agterm does not port ([`validate::Kind::Opaque`]: `keybind` until its
-//!   action table, `font-style*`, `font-variation*`, `font-codepoint-map`, `clipboard-codepoint-map`, `adjust-*`,
-//!   `command`, `initial-command`, `env`, `input`, `working-directory`, `quick-terminal-size`, `background-blur`,
-//!   `mouse-scroll-multiplier`, `selection-word-chars`, `macos-icon-screen-color`, `command-palette-entry`,
-//!   `key-remap`) take any value: a malformed one counts 0 here, 1 in libghostty (a bare key still counts when the
-//!   type needs a value);
+//! - count: keys whose type has a `parseCLI` agterm does not port ([`validate::Kind::Opaque`]: `font-style*`,
+//!   `font-variation*`, `font-codepoint-map`, `clipboard-codepoint-map`, `adjust-*`, `command`, `initial-command`,
+//!   `env`, `input`, `working-directory`, `quick-terminal-size`, `background-blur`, `mouse-scroll-multiplier`,
+//!   `selection-word-chars`, `macos-icon-screen-color`, `command-palette-entry`, `key-remap`) take any value: a
+//!   malformed one counts 0 here, 1 in libghostty (a bare key still counts when the type needs a value). `keybind` is
+//!   ported ([`binds`]) and counts as libghostty counts it (a `chain=` with nothing before it to extend counts when
+//!   the line is applied, [`GhosttyConfig::apply`]);
 //! - message only: an include, theme or path that cannot be read for a reason other than its absence counts once as
 //!   in libghostty, its I/O error named after the closest Zig error;
 //! - value only: a relative path set by a theme file stays relative (libghostty makes it absolute against the first
 //!   config file replayed after the theme).
 
+pub mod binds;
 mod keys;
 mod model;
 mod parse;
 pub mod validate;
 
+#[cfg(test)]
+mod binds_tests;
 #[cfg(test)]
 mod tests;
 
@@ -159,13 +163,13 @@ impl LoadedConfig {
         let mut config = GhosttyConfig::default();
         for setting in &theme_settings {
             diagnostics.extend(setting.diagnostic());
-            config.apply(setting);
+            diagnostics.extend(config.apply(setting));
         }
         for step in &self.steps {
             match step {
                 Step::Setting(setting) => {
                     diagnostics.extend(setting.diagnostic());
-                    config.apply(setting);
+                    diagnostics.extend(config.apply(setting));
                 }
                 Step::Diagnostic(diagnostic) => diagnostics.push(diagnostic.clone()),
             }

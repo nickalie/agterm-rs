@@ -48,6 +48,8 @@ pub enum Kind {
     RepeatablePath,
     /// `RepeatableString`: one more entry per line.
     RepeatableString,
+    /// `Keybinds`: a `keybind` line ([`super::binds::check`]).
+    Keybind,
     /// A type with a `parseCLI` agterm does not port: every value is accepted, a bare key too unless `needs_value`.
     Opaque { needs_value: bool },
     /// A type whose `parseCLI` refuses every value (`error.NotImplemented`).
@@ -209,6 +211,7 @@ fn check_value(kind: Kind, value: &str) -> Result<(), ValueError> {
         Kind::Theme => parse_theme(value).map(drop),
         Kind::Palette => parse_palette_entry(value).map(drop),
         Kind::Limit => parse_limit(value).map(drop),
+        Kind::Keybind => super::binds::check(value).map_err(|error| ValueError::Other(error.zig_name())),
         Kind::Bool
         | Kind::String
         | Kind::Path
@@ -839,6 +842,24 @@ fn unquote(value: &str) -> Result<String, ValueError> {
         }
     }
     Ok(String::from_utf8_lossy(&decoded).into_owned())
+}
+
+/// `config/string.zig`'s `parse`: a Zig string literal's body, its escapes decoded (`\xNN` one byte, any other
+/// escape a character's UTF-8); `None` for a malformed escape.
+#[must_use]
+pub fn decode_string(text: &str) -> Option<Vec<u8>> {
+    let bytes = text.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while let Some(byte) = bytes.get(at) {
+        if *byte == b'\\' {
+            at = decode_escape(bytes, at + 1, &mut decoded).ok()?;
+        } else {
+            decoded.push(*byte);
+            at += 1;
+        }
+    }
+    Some(decoded)
 }
 
 /// `parseEscapeSequence` for the escape whose character is at `at`: its bytes appended to `out`, the index past it

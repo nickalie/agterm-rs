@@ -544,7 +544,7 @@ pub static KEYS: &[KeySpec] = &[
     KeySpec {
         name: "keybind",
         zig: "Keybinds",
-        kind: Kind::Opaque { needs_value: true },
+        kind: Kind::Keybind,
     },
     KeySpec {
         name: "language",

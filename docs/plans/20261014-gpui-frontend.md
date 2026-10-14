@@ -533,16 +533,24 @@ Both frontends use them while they coexist, so they must not be copied.
 
 **Files:**
 - Create: `crates/agterm-core/src/ghostty_config/binds.rs`, `ghostty_config/binds_tests.rs`
+- ➕ Create: `ghostty_config/binds/{action,trigger,set,defaults,keyboard}.rs` (split for the size and complexity
+  limits); Modify: `ghostty_config/{mod,model,validate,keys,tests}.rs`, `scripts/gen-ghostty-config-keys.sh`
+  (`Keybinds` ported, no longer opaque), `agterm-ghostty/tests/config_parity.rs`
 
-- [ ] parse `keybind = trigger=action` (physical `key_*` and unicode triggers, sequences, `unconsumed:`/`performable:`,
-      `unbind`), ghostty's built-in Linux defaults merged as ghostty does
-- [ ] action table: `copy_to_clipboard`, `paste_from_clipboard`, `select_all`, `scroll_*`, `jump_to_prompt`,
+- [x] parse `keybind = trigger=action` (physical `key_*` and unicode triggers, sequences, `unconsumed:`/`performable:`,
+      `unbind`), ghostty's built-in Linux defaults merged as ghostty does — also `all:`/`global:`, `chain=`, key
+      tables (`name/…`), `clear`, W3C codes and ghostty 1.1 key names; `GhosttyConfig.keybind` is the typed
+      `Keybinds`
+- [x] action table: `copy_to_clipboard`, `paste_from_clipboard`, `select_all`, `scroll_*`, `jump_to_prompt`,
       `increase/decrease/reset_font_size`, `set_font_size:N`, `clear_screen`, `start_search`/`end_search` and
       navigation, `text:`, `csi:`, `esc:` — every action core sends through `Surface::binding_action` included; unknown
-      action → diagnostic
-- [ ] resolution order with agterm's keymap (keymap, then ghostty binds, then encoding) documented and tested
-- [ ] tests: non-Latin layouts (physical keys), performable vs not, overrides and `unbind`, each core-sent action
-- [ ] gates — must pass before Task 9
+      action → diagnostic (all 87 settable actions of `Binding.Action` at `GHOSTTY_REV`; `keybind` lines now count as
+      libghostty counts them, messages included — `config_parity` checks every case and every action)
+- [x] resolution order with agterm's keymap (keymap, then ghostty binds, then encoding) documented and tested
+      (`binds` module docs, `Keyboard::route`/`handle`: the frontend passes its keymap stage, the binds return where
+      the key goes and the queued sequence keys' fate; actions run through the frontend's `Performer`)
+- [x] tests: non-Latin layouts (physical keys), performable vs not, overrides and `unbind`, each core-sent action
+- [x] gates — must pass before Task 9
 
 ### Task 9: agterm-term — pane core (VT + PTY + IO thread)
 

@@ -5,6 +5,7 @@
 use std::error::Error;
 use std::path::Path;
 
+use agterm_core::ghostty_config::binds::{Action, action_names};
 use agterm_core::ghostty_config::{Loader, defaults_text};
 use agterm_ghostty::Config;
 
@@ -41,10 +42,40 @@ fn ghostty_count(main: &Path) -> Result<usize, Box<dyn Error>> {
 }
 
 fn core_count(main: &Path) -> usize {
+    core_messages(main).len()
+}
+
+fn ghostty_messages(main: &Path) -> Result<Vec<String>, Box<dyn Error>> {
+    let mut config = Config::new()?;
+    config.load_file(main);
+    config.load_recursive_files();
+    config.finalize();
+    Ok(config
+        .diagnostics()
+        .into_iter()
+        .map(|diagnostic| diagnostic.message)
+        .collect())
+}
+
+fn core_messages(main: &Path) -> Vec<String> {
     let mut loader = Loader::new(None);
     loader.load_file(main);
     loader.load_includes();
-    loader.finish().diagnostic_count(&[])
+    loader
+        .finish()
+        .finalize(false, &[])
+        .diagnostics
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+/// One config text in a fresh `main.conf`: libghostty's diagnostics and agterm-core's, as `path:line:key: message`.
+fn messages(text: &str) -> Result<(Vec<String>, Vec<String>), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let main = dir.path().join("main.conf");
+    std::fs::write(&main, text)?;
+    Ok((ghostty_messages(&main)?, core_messages(&main)))
 }
 
 /// One-file cases: the line, and libghostty's count for it (checked too, so a case cannot pass vacuously).
@@ -142,6 +173,138 @@ const LINES: &[(&str, usize)] = &[
     ("config-file = absent.conf", 1),
     ("config-file =", 0),
 ];
+
+/// `keybind` lines (Task 8's port of `Binding.zig`): triggers, flags, sequences, tables, chains and parameters, and
+/// libghostty's count for each.
+const KEYBIND_LINES: &[(&str, usize)] = &[
+    ("keybind = ctrl+a=select_all", 0),
+    ("keybind = ctrl+shift+key_c=copy_to_clipboard", 0),
+    ("keybind = ctrl+KeyC=copy_to_clipboard:vt", 0),
+    ("keybind = ArrowUp=scroll_page_up", 0),
+    ("keybind = F12=toggle_quick_terminal", 0),
+    ("keybind = unconsumed:ctrl+a=text:x", 0),
+    ("keybind = performable:all:ctrl+a=reset", 0),
+    ("keybind = global:ctrl+a=quit", 0),
+    ("keybind = ctrl+a>b=new_window", 0),
+    (
+        "keybind = ctrl+a>ctrl+b>c=new_window\nkeybind = ctrl+a>ctrl+b>c=unbind",
+        0,
+    ),
+    ("keybind = ctrl+==increase_font_size:1", 0),
+    ("keybind = ctrl++=increase_font_size:2.5", 0),
+    ("keybind = +=text:plus", 0),
+    (r"keybind = a=text:\q", 0),
+    ("keybind = a=text:=x", 0),
+    ("keybind = catch_all=ignore", 0),
+    ("keybind = physical:one=goto_tab:1", 0),
+    ("keybind = kp_enter=csi:A", 0),
+    ("keybind = grave_accent=esc:x", 0),
+    ("keybind = ctrl=ignore", 0),
+    ("keybind = unidentified+a=ignore", 0),
+    ("keybind = cmd+opt+control+a=ignore", 0),
+    ("keybind = caps_lock+num_lock+a=ignore", 0),
+    ("keybind = ф=ignore", 0),
+    ("keybind = ctrl+a=new_split", 0),
+    ("keybind = ctrl+a=goto_split:top", 0),
+    ("keybind = ctrl+a=resize_split:up,10", 0),
+    ("keybind = ctrl+a=write_screen_file:open,html", 0),
+    ("keybind = ctrl+a=write_scrollback_file:paste", 0),
+    ("keybind = ctrl+a=close_tab", 0),
+    ("keybind = ctrl+a=open_config:new_window", 0),
+    ("keybind = ctrl+a=jump_to_prompt:-1", 0),
+    ("keybind = ctrl+a=move_tab:+3", 0),
+    ("keybind = ctrl+a=scroll_page_lines:-0", 0),
+    ("keybind = ctrl+a=scroll_page_fractional:0.5", 0),
+    ("keybind = ctrl+a=set_font_size:1e3", 0),
+    ("keybind = ctrl+a=goto_tab:1_0", 0),
+    ("keybind = ctrl+a=search:", 0),
+    ("keybind = vim/", 0),
+    ("keybind = vim/j=scroll_page_lines:1", 0),
+    ("keybind = /=text:x", 0),
+    ("keybind = ctrl+/=text:x", 0),
+    ("keybind = a=text:x\nkeybind = chain=text:y", 0),
+    ("keybind = chain=text:y", 0),
+    ("keybind = vim/j=text:x\nkeybind = chain=text:y", 0),
+    ("keybind = ctrl+a>b=text:x\nkeybind = chain=text:y", 0),
+    ("keybind = clear", 0),
+    ("keybind =", 0),
+    ("keybind", 1),
+    ("keybind = garbage", 1),
+    ("keybind = a=nope", 1),
+    ("keybind = a=cursor_key", 1),
+    ("keybind = a=", 1),
+    ("keybind = =ignore", 1),
+    ("keybind = a>=ignore", 1),
+    ("keybind = >a=ignore", 1),
+    ("keybind = ctrl+ctrl+a=ignore", 1),
+    ("keybind = control+ctrl+a=ignore", 1),
+    ("keybind = a+b=ignore", 1),
+    ("keybind = KeyA+KeyB=ignore", 1),
+    ("keybind = foo=ignore", 1),
+    ("keybind = all:all:a=ignore", 1),
+    ("keybind = unconsumed:unconsumed:a=ignore", 1),
+    ("keybind = global:a>b=ignore", 1),
+    ("keybind = a=select_all:x", 1),
+    ("keybind = a=text", 1),
+    ("keybind = a=increase_font_size", 1),
+    ("keybind = a=increase_font_size:big", 1),
+    ("keybind = a=goto_split:sideways", 1),
+    ("keybind = a=resize_split:up", 1),
+    ("keybind = a=resize_split:up,10,1", 1),
+    ("keybind = a=resize_split:up,70000", 1),
+    ("keybind = a=jump_to_prompt:40000", 1),
+    ("keybind = a=goto_tab:-1", 1),
+    ("keybind = a=goto_tab:0x10", 1),
+    ("keybind = a=inspector", 1),
+    ("keybind = a=write_screen_file", 1),
+    ("keybind = a=write_screen_file:copy,pdf", 1),
+    ("keybind = a=crash", 1),
+    ("keybind = vim/chain=text:x", 1),
+    ("keybind = unconsumed:chain=text:x", 1),
+    ("keybind = a=text:x\nkeybind = chain=unbind", 1),
+    ("keybind = clear\nkeybind = chain=text:y", 1),
+    ("keybind = a=unbind\nkeybind = chain=new_window", 1),
+    ("keybind = a=text:x\nkeybind = b=bogus\nkeybind = chain=text:y", 1),
+    ("keybind = vim/bogus\nkeybind = chain=text:y", 1),
+];
+
+#[test]
+fn keybind_lines_count_as_libghostty_counts_them() -> TestResult {
+    let mut mismatches = Vec::new();
+    for (text, expected) in KEYBIND_LINES {
+        let (ghostty, core) = messages(&format!("{text}\n"))?;
+        if ghostty.len() != *expected || core != ghostty {
+            mismatches.push(format!(
+                "{text:?}: libghostty {ghostty:?} (expected {expected}), agterm-core {core:?}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+    Ok(())
+}
+
+#[test]
+fn every_action_parses_as_in_libghostty() -> TestResult {
+    let mut mismatches = Vec::new();
+    for name in action_names() {
+        // the bare name (a parameter-less action, or one whose parameter has a default), then a parameter that fits
+        let fitting = [":x", ":1", ":up,1", ":copy", ":main", ":toggle", ":next", ":left"]
+            .iter()
+            .map(|param| format!("{name}{param}"))
+            .find(|action| action.parse::<Action>().is_ok());
+        if fitting.is_none() && name.parse::<Action>().is_err() {
+            mismatches.push(format!("{name}: no parameter tried parses"));
+        }
+        for action in std::iter::once(name.to_owned()).chain(fitting) {
+            let (ghostty, core) = messages(&format!("keybind = ctrl+a={action}\n"))?;
+            if core != ghostty {
+                mismatches.push(format!("{action}: libghostty {ghostty:?}, agterm-core {core:?}"));
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+    Ok(())
+}
 
 #[test]
 fn single_files_count_as_libghostty_counts_them() -> TestResult {
@@ -256,7 +419,6 @@ fn themes_count_as_libghostty_counts_them() -> TestResult {
 fn residual_differences_are_the_documented_ones() -> TestResult {
     // malformed values of keys whose parse agterm does not port: libghostty counts them, agterm-core does not
     for line in [
-        "keybind = garbage",
         "adjust-cell-height = tall",
         "mouse-scroll-multiplier = lots",
         "font-variation = wght",
