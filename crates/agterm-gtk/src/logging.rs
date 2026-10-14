@@ -89,7 +89,7 @@ const OPEN_ATTEMPTS: usize = 3;
 /// launch that stalls between its open and its lock can find the file it opened rotated to [`ROTATED_FILE_NAME`] by
 /// another launch, whose returning drops its own lock on it, and renaming by path then would move the other launch's
 /// live fresh log over the previous one. Such a launch drops the moved file and reopens the path, at most
-/// [`OPEN_ATTEMPTS`] times, then only appends to what it opened last.
+/// [`OPEN_ATTEMPTS`] times, then only appends to what it opened last, locked when its lock is free.
 fn settle_log_file(state_dir: &Path, mut file: File, rotate_bytes: u64) -> io::Result<Arc<File>> {
     let path = state_dir.join(LOG_FILE_NAME);
     for _ in 0..OPEN_ATTEMPTS {
@@ -99,6 +99,8 @@ fn settle_log_file(state_dir: &Path, mut file: File, rotate_bytes: u64) -> io::R
             Claim::Moved => file = open_append(&path)?,
         }
     }
+    // still moving after every attempt: append to the last open, holding its lock when free, as a fresh file is held
+    let _ = file.try_lock();
     Ok(Arc::new(file))
 }
 
