@@ -30,7 +30,8 @@ conformance/tools/run-reference-linux.sh [--bin PATH] [-- PYTEST_ARGS...]
 # report in conformance/reports/rust-linux/
 conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
 
-# whether a WebKitGTK view's web process starts under the same headless isolation (a CI spike)
+# whether a WebKitGTK view's web process starts under the same headless isolation (a diagnosis; the view runs in
+# python, which agterm's AppArmor profile does not cover, so Ubuntu's userns restriction stops its sandbox)
 .venv/bin/python conformance/tools/webkit_probe.py
 
 # whether the staged Rust build's libghostty surface is created and draws a frame under the same isolation (a CI
