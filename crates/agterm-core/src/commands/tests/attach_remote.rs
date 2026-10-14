@@ -320,6 +320,32 @@ fn the_menu_row_follows_the_file_once_it_is_read_again() {
 #[test]
 fn a_config_directory_switch_reads_the_new_file_and_reports_nothing() {
     let mut attach = Attach::new(Some("studio\n"));
+    let remotes_banners = |attach: &mut Attach| -> Vec<String> {
+        attach
+            .banners()
+            .into_iter()
+            .filter(|banner| banner.starts_with("remotes-diagnostics"))
+            .collect()
+    };
+    assert!(remotes_banners(&mut attach).is_empty(), "a clean file at the start");
+    // from a clean file to a broken one: the edge a refresh reports, which a switch must not
+    let broken = attach.config.path().join("broken");
+    std::fs::create_dir(&broken).unwrap();
+    std::fs::write(broken.join("remotes.conf"), "mini\n-bad\n").unwrap();
+    assert!(attach.core().change_settings(SettingsChange::ConfigDirectory(Some(
+        broken.to_string_lossy().into_owned()
+    ))));
+    assert_eq!(attach.destinations(), ["mini"], "the broken file switched to");
+    assert!(
+        remotes_banners(&mut attach).is_empty(),
+        "a switch from a clean file to a broken one reports nothing"
+    );
+    attach.core().refresh_remotes(true);
+    assert!(
+        remotes_banners(&mut attach).is_empty(),
+        "the switch counted the episode: a later read of the same file reports nothing"
+    );
+
     let later = attach.config.path().join("later/nested");
     assert!(attach.core().change_settings(SettingsChange::ConfigDirectory(Some(
         later.to_string_lossy().into_owned()
@@ -348,12 +374,7 @@ fn a_config_directory_switch_reads_the_new_file_and_reports_nothing() {
         ["other"],
         "the file of the directory switched to"
     );
-    let banners: Vec<String> = attach
-        .banners()
-        .into_iter()
-        .filter(|banner| banner.starts_with("remotes-diagnostics"))
-        .collect();
-    assert!(banners.is_empty(), "a switch never reports");
+    assert!(remotes_banners(&mut attach).is_empty(), "a switch never reports");
 }
 
 // MARK: - the flow
