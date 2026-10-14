@@ -848,8 +848,20 @@ fn retrying_the_remote_links_now_skips_every_backoff() {
     }
     let launched = viewer.transport.0.borrow().len();
     *viewer.runner.probe_status.lock().unwrap() = 0;
-    viewer.fixture.core.retry_remote_links_now(now);
-    drain(&mut viewer, now);
+    // the stream backs off on the wall clock, the pane on the logical one: a fresh wall instant is inside both
+    let retry = Instant::now();
+    viewer.fixture.core.remote_tick(retry);
+    assert_eq!(
+        viewer.transport.0.borrow().len(),
+        launched,
+        "the stream still backs off"
+    );
+    assert!(
+        viewer.fixture.core.remote.viewer.probes_idle(),
+        "the pane still backs off"
+    );
+    viewer.fixture.core.retry_remote_links_now(retry);
+    drain(&mut viewer, retry);
     assert_eq!(
         viewer.transport.0.borrow().len(),
         launched + 1,
