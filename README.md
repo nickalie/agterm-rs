@@ -38,14 +38,33 @@ Run-time dependencies of every `agterm` binary:
 
 - GTK 4, libadwaita;
 - WebKitGTK 6.0, linked under `agterm-gtk`'s default `html` feature (HTML overlays). Without the feature
-  (`--no-default-features`) the app installs no page host and refuses every page. WebKit runs its web process in a
-  bubblewrap sandbox, which needs unprivileged user namespaces; where `bwrap` cannot create one (Ubuntu 24.04's
-  AppArmor restriction, `kernel.apparmor_restrict_unprivileged_userns=1`, without a profile granting the app
-  `userns`) WebKit would abort the app, so it refuses every page with bubblewrap's error instead;
+  (`--no-default-features`) the app installs no page host and refuses every page. On Ubuntu 23.10+ see
+  [WebKit sandbox on Ubuntu (AppArmor)](#webkit-sandbox-on-ubuntu-apparmor);
 - `libgtk4-layer-shell.so.0`, the quick terminal's layer-shell panel. It is linked unconditionally, since it must load
   before libwayland-client; on a compositor without layer-shell the quick terminal falls back to a window;
 - `libghostty.so` and, for Live sessions, `zmx`: both come from the vendored prefixes and are staged next to the
   binaries.
+
+### WebKit sandbox on Ubuntu (AppArmor)
+
+WebKit runs the web process of every HTML overlay inside a bubblewrap sandbox, which needs an unprivileged user
+namespace. Ubuntu 23.10 and later (`kernel.apparmor_restrict_unprivileged_userns=1`) grant one only to a program whose
+AppArmor profile allows `userns`, as the profiles Ubuntu ships for its own WebKitGTK apps (epiphany, devhelp) do.
+Without one, `bwrap` fails (`setting up uid map: Permission denied`) and WebKit would abort the whole app, so agterm
+refuses every HTML page instead and names this fix in the error. The sandbox stays on either way.
+
+The fix is agterm's profile, [packaging/linux/apparmor/agterm](packaging/linux/apparmor/agterm): Ubuntu's shape,
+unconfined plus `userns`, attached to one agterm binary by its real path (the `bwrap` it starts inherits it):
+
+```sh
+scripts/install-apparmor-profile.sh /path/to/bin/agterm   # writes /etc/apparmor.d/agterm (sudo) and loads it
+scripts/install-apparmor-profile.sh --uninstall           # unloads and removes it
+scripts/install-apparmor-profile.sh --print [BINARY]      # shows the profile, changes nothing
+```
+
+Without a path it covers the conformance stage's `target/conformance-stage/bin/agterm`. A moved binary needs the
+profile installed again for its new path. On a host without AppArmor, or one that does not restrict user namespaces,
+the script installs nothing.
 
 ## Native dependencies
 
@@ -109,7 +128,8 @@ conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
 
 - `rust-linux.yml`: `rust-linux` (format, clippy, the lint report into the job summary, `cargo test`), then the staged
   build under the suite, once per login shell: `conformance` (bash), `conformance-fish` and `conformance-zsh`, each
-  with `--must-pass live-any-shell`, the zsh job with `--must-pass live-sessions` too.
+  with `--must-pass live-any-shell`, the zsh job with `--must-pass live-sessions` too. Each installs agterm's AppArmor
+  profile for the staged binary and keeps the runner's user-namespace restriction on, so the HTML tests prove it.
 - `conformance-gate.yml`: the suite's self-tests and catalog coverage gate.
 - `reference-macos.yml`, `spike-macos.yml`: the suite against upstream's macOS release.
 
@@ -118,7 +138,8 @@ conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
 - `crates/`: the Cargo workspace (crate map in [CLAUDE.md](CLAUDE.md)).
 - `conformance/`: the suite, its catalog of upstream's commands, the ratchet list `rust-passing.txt`.
 - `build/`: `pins.env`, the ghostty and zmx patches, agterm's own themes.
-- `scripts/`: native builds, staging, `run-dev.sh`, the lint report.
+- `scripts/`: native builds, staging, `run-dev.sh`, the lint report, the AppArmor profile installer.
+- `packaging/linux/apparmor/`: agterm's AppArmor profile (WebKit's sandbox on Ubuntu).
 - `resources/`: the agent-status hooks and agent skill the app installs.
 - `docs/linux-ui-checklist.md`: every upstream UI feature with its GTK form and manual check (no Linux UI driver
   exists). `docs/plans/`: implementation plans.
