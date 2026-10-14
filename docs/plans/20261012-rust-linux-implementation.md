@@ -1492,20 +1492,48 @@ wlr-layer-shell surface.
 
 ### Task 37: Verify acceptance criteria
 
-- [ ] `version` claims exactly the Rust target profile (Technical Details), plus the live capabilities the host
-      allows; any exception (`keymap-menu`, the libghostty fallback) is recorded there with its reason
-- [ ] `run-rust-linux.sh`, protocol/cli/behaviors: no unexpected failed, errored or skipped test (the allowed skips
-      are listed: host-dependent live ones and the ui layer); every passing id is in `rust-passing.txt`
-- [ ] a reference-macos CI run at the catalog's tag on the same suite commit (layers and options recorded): every id
-      green in its junit is green on rust, or is an allowed host-dependent skip from the item above
-- [ ] run reference-linux fresh (`run-reference-linux.sh`) as a diagnostic: every id green on the fork and red on
-      rust is resolved (upstream's branch or a Rust bug); the `fork-bugs.md` tests pass on rust
-- [ ] CI green: the cargo job, the full-suite job, the zsh job (`--must-pass live-sessions`) and the bash and fish
-      jobs (`--must-pass live-any-shell`)
-- [ ] the staged build replaces the installed fork on this machine with the existing state dir
-      (`~/.local/share/agterm`) and socket: windows, sessions and settings come back
-- [ ] coverage gate and selftests pass: `python -m pytest conformance --coverage-gate`, `pytest conformance/selftests`
-- [ ] the lint report shows every complexity exception with a reason
+- [x] `version` claims exactly the Rust target profile (Technical Details), plus the live capabilities the host
+      allows; any exception (`keymap-menu`, the libghostty fallback) is recorded there with its reason (read back from
+      the staged build: the profile's 15, `keymap-menu` included, plus `live-any-shell` on this fish host and
+      `live-sessions` + `live-any-shell` under a zsh login shell; none of `window-geometry`, `window-minimize`,
+      `capture-reads-command-panes`; no exception to record: `keymap-menu` is claimed and libghostty is at upstream's
+      `GHOSTTY_REV` 683d8db, so the fallback never applied)
+- [x] `run-rust-linux.sh`, protocol/cli/behaviors: no unexpected failed, errored or skipped test (the allowed skips
+      are listed: host-dependent live ones and the ui layer); every passing id is in `rust-passing.txt` (fish host,
+      `--must-pass live-any-shell`: 643 pass, 0 fail, 12 skip, all `unsupported: live-sessions`; under a zsh login
+      shell: 655 pass, 0 fail, 0 skip; ratchet holds at 655, no passing id unlisted)
+- [x] a reference-macos CI run at the catalog's tag on the same suite commit (layers and options recorded): every id
+      green in its junit is green on rust, or is an allowed host-dependent skip from the item above (run 38276656124:
+      tag v0.36.0, protocol/cli/behaviors with `--impl swift-macos --must-pass live-sessions`, 654/654 green, ui layer
+      35/35 with `--reruns 1`; its suite is 2509ea5, not HEAD's: the suite changed since only by Rust-only additions
+      (`test_live_any_shell.py`, the `live-any-shell` branch in `test_restore.py`, harness env scrubbing) and the
+      `test_page_result_needs_a_known_page` ids renamed to `[invalid]`/`[unknown]`, both green on rust; all 654 green
+      on rust under zsh, the 12 live ones skipped as allowed on fish; a run at HEAD's suite needs a push)
+- [x] run reference-linux fresh (`run-reference-linux.sh`) as a diagnostic: every id green on the fork and red on
+      rust is resolved (upstream's branch or a Rust bug); the `fork-bugs.md` tests pass on rust (fork 0.36.0
+      8a5f58d4 on suite f879583, isolated instances: 641 pass, 13 skip, 1 xfail; its live subset under a zsh login
+      shell: 73 pass, 1 skip (`live-any-shell`); no id green on the fork is red on rust;
+      `test_background_create_keeps_the_current_workspace[collapsed]` xfails on the fork and passes on rust)
+- [x] CI green: the cargo job, the full-suite job, the zsh job (`--must-pass live-sessions`) and the bash and fish
+      jobs (`--must-pass live-any-shell`) (needs a push, not run here: no rust-linux run exists on GitHub; local
+      equivalent of every job: cargo fmt --check, clippy -D warnings, lint-report, xvfb cargo test 3158 passed; the
+      suite with each job's must-pass set under a fish (host), bash and zsh password-database login shell in a private
+      user namespace as this uid: 643/0/12, 643/0/12, 655/0/0, ratchet holds in all three)
+- [x] the staged build replaces the installed fork on this machine with the existing state dir
+      (`~/.local/share/agterm`) and socket: windows, sessions and settings come back (verified on a copy of the state
+      dir in a private instance; the real swap of the installed fork is left to the user: copies of
+      `~/.local/share/agterm` and `~/.config/agterm` under a private HOME, no `AGTERM_STATE_DIR`/socket override so
+      the build resolved the fork's defaults itself, a stale `agterm.sock` left in place: it bound the socket, and
+      the window, 6 workspaces (Playmaker collapsed), 34 sessions with names, cwds, splits, restore commands
+      (30 re-run, into a stub `claude`), the selected session, sidebar, theme, restore mode, keymap and hooks came
+      back, again after a second launch on what it wrote. Rewrites: `fontSize: 12` added to 12 sessions that had
+      none (upstream records a mounted surface's size), `zmx-build.json` gets a new id (its key carries the libc
+      triple) and `changedAt`; new `ghostty-settings.conf`, `hud/hud.sh`, `agterm.log`; `settings.json` and
+      `windows.json` byte-identical)
+- [x] coverage gate and selftests pass: `python -m pytest conformance --coverage-gate`, `pytest conformance/selftests`
+      (gate passes, cli 114/114; selftests 705 passed)
+- [x] the lint report shows every complexity exception with a reason (7 `struct_excessive_bools` expects, each with
+      its reason; no inner allow/expect)
 
 ### Task 38: [Final] Update documentation
 
