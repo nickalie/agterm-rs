@@ -417,7 +417,7 @@ fn function_key(keyval: gdk::Key) -> Option<&'static str> {
 pub struct KeyLayout {
     /// The character at level 0 of the event's group, `None` when the key types none there.
     pub produced: Option<char>,
-    /// Whether the event's group types ASCII, which the keymap judges by the A key.
+    /// Whether the event's group types ASCII, judged by the whole layout, not one key.
     pub ascii: bool,
 }
 
@@ -439,9 +439,18 @@ pub fn key_layout(controller: &gtk::EventControllerKey, keycode: u32) -> Option<
     };
     Some(KeyLayout {
         produced: level0(keycode),
-        // the layout types ASCII when the A key does
-        ascii: level0(KEYCODE_A).is_some_and(|ch| ch.is_ascii_alphabetic()),
+        ascii: ascii_capable(level0),
     })
+}
+
+/// Whether a layout types ASCII (upstream's `KeyboardLayout.isASCIICapable`), judged by the whole layout rather than
+/// one probe key: some position of the Latin table ([`latin_key`]) types an ASCII letter at level 0. `level0` is the
+/// layout's level-0 character at an XKB keycode. One-handed Dvorak types `-` on the A key and Latin letters elsewhere;
+/// a non-Latin layout types no ASCII letter at any table position.
+fn ascii_capable(level0: impl Fn(u32) -> Option<char>) -> bool {
+    (LATIN_TABLE_FIRST..=LATIN_TABLE_LAST)
+        .filter(|code| latin_key(*code).is_some())
+        .any(|code| level0(code).is_some_and(|ch| ch.is_ascii_alphabetic()))
 }
 
 /// The base key of a press, resolved by [`chord_key`] from the event's layout.
@@ -453,8 +462,9 @@ fn base_key(controller: &gtk::EventControllerKey, keycode: u32) -> Option<String
 /// The base key for a press (upstream's `chordKey`), decided per layout, not per key: a layout that can type ASCII binds
 /// by what it types on the key (lowercased; a space is no base key), so an alternative Latin layout keeps its own
 /// letter positions; one that cannot binds by the Latin key at that physical position ([`latin_key`]), else by what a
-/// key outside that table types (the keypad aliases the number row, as upstream), except the ISO section key, whose
-/// layout-dependent character would alias a table key.
+/// key outside that table types (the keypad operators, which XKB types at level 0; a keypad digit's level 0 is its
+/// navigation keysym, so it has no base key), except the ISO section key, whose layout-dependent character would alias
+/// a table key.
 #[must_use]
 pub fn chord_key(keycode: u32, produced: Option<char>, ascii_layout: bool) -> Option<String> {
     let base = produced
@@ -471,8 +481,9 @@ pub fn chord_key(keycode: u32, produced: Option<char>, ascii_layout: bool) -> Op
     if keycode == KEYCODE_ISO_SECTION { None } else { base }
 }
 
-/// The XKB keycode of the A key.
-const KEYCODE_A: u32 = 38;
+/// The first and last XKB keycodes [`latin_key`] covers (the 1 key, the slash key).
+const LATIN_TABLE_FIRST: u32 = 10;
+const LATIN_TABLE_LAST: u32 = 61;
 /// The XKB keycode of the ISO-only key left of Z (`LSGT`, upstream's `kVK_ISO_Section`), absent from an ANSI keyboard
 /// and from [`latin_key`].
 const KEYCODE_ISO_SECTION: u32 = 94;
@@ -580,9 +591,9 @@ mod tests {
 
     #[test]
     fn chord_key_never_collapses_two_positions_onto_one_key_on_a_non_ascii_layout() {
-        let hebrew = [(48, Some(',')), (59, Some('ת')), (60, Some('.')), (61, Some('ץ'))];
+        let hebrew = [(48, Some(',')), (59, Some('ת')), (60, Some('ץ')), (61, Some('.'))];
         let greek = [(24, Some(';')), (47, None)];
-        let russian = [(60, Some('.')), (61, Some('ю'))];
+        let russian = [(60, Some('ю')), (61, Some('.'))];
         for layout in [&hebrew[..], &greek[..], &russian[..]] {
             let keys: Vec<_> = layout
                 .iter()
@@ -592,6 +603,37 @@ mod tests {
             let distinct: std::collections::HashSet<_> = keys.iter().flatten().collect();
             assert_eq!(distinct.len(), layout.len(), "positions collapsed: {keys:?}");
         }
+    }
+
+    /// A layout's level-0 characters by XKB keycode, every other position typing nothing.
+    fn layout(keys: &[(u32, char)]) -> impl Fn(u32) -> Option<char> + '_ {
+        move |code| keys.iter().find(|(at, _)| *at == code).map(|(_, ch)| *ch)
+    }
+
+    #[test]
+    fn ascii_capable_judges_the_whole_layout_not_one_key() {
+        let us: Vec<_> = (LATIN_TABLE_FIRST..=LATIN_TABLE_LAST)
+            .filter_map(|code| Some((code, latin_key(code)?.chars().next()?)))
+            .collect();
+        assert!(ascii_capable(layout(&us)));
+        // XKB us(dvorak-l): the A key types `-`, the Q row `; q b y u r s o . 6 5 =`
+        let dvorak_left = [(38, '-'), (24, ';'), (25, 'q'), (26, 'b'), (31, 'o')];
+        assert!(ascii_capable(layout(&dvorak_left)), "one-handed Dvorak types ASCII");
+        // XKB us(dvorak-r): the A key types `7`, the next ones `8 z a`
+        let dvorak_right = [(38, '7'), (39, '8'), (40, 'z'), (41, 'a')];
+        assert!(ascii_capable(layout(&dvorak_right)));
+        let russian = [(10, '1'), (24, 'й'), (38, 'ф'), (47, 'ж'), (61, '.')];
+        assert!(
+            !ascii_capable(layout(&russian)),
+            "digits and punctuation are not letters"
+        );
+        let greek = [(24, ';'), (25, 'ς'), (38, 'α')];
+        assert!(!ascii_capable(layout(&greek)));
+        assert!(!ascii_capable(layout(&[])), "a layout typing nothing binds by position");
+        assert!(
+            !ascii_capable(layout(&[(94, 'a'), (63, 'a')])),
+            "only the table's positions count"
+        );
     }
 
     #[test]
