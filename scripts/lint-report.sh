@@ -6,8 +6,10 @@
 #   with its file, line, item, lint and reason, then the count, an expect wrapped in #[cfg_attr(..., expect(...))]
 #   included. Markdown, so CI can append it to the job summary.
 # - Fails (exit 1) on any inner #![allow(...)] or #![expect(...)], or an inner #![cfg_attr(...)] carrying one,
-#   outside crates/agterm-ghostty-sys and crates/agterm-ghostty-vt-sys, the bindgen crates that set their own lints:
-#   an exception must be an outer #[expect] on the one item, with a reason.
+#   outside the generated -sys crates that set their own lints (crates/agterm-ghostty-sys and
+#   crates/agterm-ghostty-vt-sys from bindgen, crates/agterm-wpe-sys, crates/agterm-wpe-platform-sys and
+#   crates/agterm-wpe-javascriptcore-sys from gir): an exception must be an outer #[expect] on the one item, with a
+#   reason.
 #
 # Usage: scripts/lint-report.sh [ROOT]   (default: the repository root)
 set -euo pipefail
@@ -29,8 +31,15 @@ COMPLEXITY = {
     "fn_params_excessive_bools",
     "struct_excessive_bools",
 }
-# the bindgen crates, by exact name: their wrappers (agterm-ghostty, agterm-ghostty-vt) stay under every lint
-EXEMPT_CRATES = {"agterm-ghostty-sys", "agterm-ghostty-vt-sys"}
+# the generated -sys crates, by exact name: bindgen's (their wrappers agterm-ghostty and agterm-ghostty-vt stay under
+# every lint) and gir's
+EXEMPT_CRATES = {
+    "agterm-ghostty-sys",
+    "agterm-ghostty-vt-sys",
+    "agterm-wpe-sys",
+    "agterm-wpe-platform-sys",
+    "agterm-wpe-javascriptcore-sys",
+}
 # An attribute that is, or may carry (cfg_attr), a lint level; group 1 is "!" for an inner one.
 ATTRIBUTE = re.compile(r"#(!?)\[\s*(allow|expect|cfg_attr)\s*\(")
 LEVEL = re.compile(r"\b(allow|expect)\s*\(")

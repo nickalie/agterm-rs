@@ -927,15 +927,43 @@ Productionizes Task 2's prototype.
   workspace lints like `agterm-ghostty-sys`)
 - Create: `scripts/gen-wpe-bindings.sh`
 
-- [ ] generation script pinned to the WPE version from Task 4 (**WPE WebKit 2.54.1**, the version Task 2 ran);
+- [x] generation script pinned to the WPE version from Task 4 (**WPE WebKit 2.54.1**, the version Task 2 ran);
       regenerated output is reproducible
-- [ ] ➕ (Task 2) decide where WPE comes from per environment and record it in `build/pins.env`/README: the distro's
+- [x] ➕ (Task 2) decide where WPE comes from per environment and record it in `build/pins.env`/README: the distro's
       `wpewebkit` ≥ 2.54 where packaged (the user's Arch machine; distro builds compile the helper path in, so a
       packaged agterm depends on it), and for CI images without it either a verified binary package unpacked into the
       vendor prefix and run under `bwrap --ro-overlay` as the spike did, or a source build with its helper path
       configured to the prefix; the `.gir` files come from the same source
-- [ ] test: link and version check against the system WPE
-- [ ] gates — must pass before Task 31
+- [x] test: link and version check against the system WPE (here against the verified vendored package, the machine
+      has no system wpewebkit; against the distro package in the CI `wpe` job, run locally under podman)
+- [x] gates — must pass before Task 31
+- result (2026-10-15): **three gir-native crates, not one** (gir's sys mode is one crate per GObject namespace and
+  WPEWebKit includes two of ours): `agterm-wpe-sys` (WPEWebKit-2.0), `agterm-wpe-platform-sys` (WPEPlatform-2.0, with
+  the `WPEDisplayClass`/`WPEViewClass` vfuncs Task 31 fills) and `agterm-wpe-javascriptcore-sys` (WPEJavaScriptCore-2.0,
+  `JSCValue` of the script bridge, probing `wpe-webkit-2.0` since no WPE build installs the `.pc` its .gir names); no
+  Headless crate (Task 31 subclasses the base classes; add one if a task needs it). Soup comes from crates.io
+  `soup3-sys` 0.9 (as `soup-sys`), GLib/GObject/Gio from gtk-rs 0.22. `scripts/gen-wpe-bindings.sh [--check]` builds
+  gir (the 0.22 branch commit that generated glib-sys 0.22.9, `GIR_*` pins, `build/patches/gir/` for a build without
+  git) into the vendor root and generates from pinned, sha256-checked inputs only: gir-files at glib-sys 0.22.9's
+  commit, soup3-rs v0.9's `Soup-3.0.gir`, the WPE .gir files of the pinned Arch package; `--check` diffs a regeneration
+  against the checked-in crates (identical). Providers (README > WPE WebKit, `WPE_*` pins): the distro's `wpewebkit`
+  (system `wpe-webkit-2.0` ≥ `WPE_API_VERSION` wins in `scripts/pkg-config.sh`); rootless Arch-compatible machines:
+  `scripts/fetch-wpe.sh` unpacks the Arch Linux Archive package (sha256-pinned, glibc 2.44 guard, `ldd` check) into
+  `wpe-<key>` with relocated `.pc` files; pages from it need the `bwrap --ro-overlay` launcher (Task 31). CI: Ubuntu
+  packages no wpewebkit and cannot load Arch's (glibc 2.39), so a new `wpe` job runs the three crates' clippy/tests and
+  `--check` in a digest-pinned `archlinux:base-devel` container on a date-pinned Arch Linux Archive snapshot
+  (2026/10/14, `wpewebkit 2.54.1-2`); the Ubuntu jobs, `run-dev.sh` and `run-rust-linux.sh` build
+  `WORKSPACE_WITHOUT_WPE` (`scripts/lib/native.sh`). Tests: ABI (gir's layout/constant checks against the headers,
+  all three crates), runtime class/instance sizes of WPEDisplay/WPEView/WebKitWebView and the subclass vfunc
+  signatures, version (all three namespaces ≥ `WPE_API_VERSION`, one build), provider selection and prefix keys
+  (`agterm-wpe-sys/tests/provider.rs`). Header quirk: `wpe/webkit.h` hides `WebKitPointerLockPermissionRequest` behind
+  the build's `ENABLE_POINTER_LOCK` (set in the ABI tests' `manual.h`); `WPEKeymapXKB`'s `xkb_keymap`/`xkb_state` are
+  opaque hand-written types (`agterm-wpe-platform-sys/src/xkb.rs`). Codex discussion:
+  `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/task-30-wpe-source-and-crates/transcript.md`.
+- ⚠️ gate for Task 31/32 (from that discussion): before `agterm-wpe` or the GPUI `html` feature makes WPE a dependency
+  of anything the Ubuntu jobs build (`--exclude` does not drop dependencies of selected packages), choose a provider
+  for Ubuntu (a source build into the vendor prefix, keyed by the build environment too) or move the GPUI checks and
+  their weston/lavapipe harness into the Arch job, keeping both ratchets.
 
 ### Task 31: agterm-wpe — WPE WebKit host
 

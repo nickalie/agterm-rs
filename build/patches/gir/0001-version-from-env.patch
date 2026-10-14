@@ -1,0 +1,28 @@
+Build gir from a source archive: with no repository around it, take the version from GIR_VERSION.
+
+--- a/build.rs
++++ b/build.rs
+@@ -6,6 +6,12 @@
+ mod git;
+
+ fn main() {
++    // A build from a source archive has no git repository: GIR_VERSION names the revision instead.
++    println!("cargo:rerun-if-env-changed=GIR_VERSION");
++    if let Ok(ver) = std::env::var("GIR_VERSION") {
++        write_version(&ver);
++        return;
++    }
+     let repo_path = git::git_dir(".").unwrap();
+     let head_path = repo_path.join("HEAD");
+     println!("cargo:rerun-if-changed={}", head_path.display());
+@@ -16,7 +22,10 @@
+         println!("cargo:rerun-if-changed={}", ref_path.display());
+     }
+     let ver = git::repo_hash(".").unwrap_or_else(|| "???".into());
++    write_version(&ver);
++}
+
++fn write_version(ver: &str) {
+     File::create("src/gir_version.rs")
+         .and_then(|mut f| writeln!(f, "pub const VERSION: &str = \"{ver}\";",))
+         .unwrap();

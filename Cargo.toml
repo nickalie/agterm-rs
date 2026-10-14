@@ -19,6 +19,9 @@ agterm-core = { path = "crates/agterm-core" }
 agterm-server = { path = "crates/agterm-server" }
 agterm-zmx = { path = "crates/agterm-zmx" }
 agterm-app = { path = "crates/agterm-app" }
+agterm-wpe-javascriptcore-sys = { path = "crates/agterm-wpe-javascriptcore-sys" }
+agterm-wpe-platform-sys = { path = "crates/agterm-wpe-platform-sys" }
+agterm-wpe-sys = { path = "crates/agterm-wpe-sys" }
 async-channel = "2"
 # glib's Unix-only API (SIGTERM on the main loop), a crate of its own; it follows the glib that gtk4 0.11 uses.
 glib-unix = "0.22"
@@ -54,10 +57,16 @@ gtk4-layer-shell = "0.8"
 pkg-config = "0.3"
 # WebKitGTK 6.0 for HTML overlays; no version feature: the 2.40 API is enough, and Ubuntu 24.04 ships 2.44.
 webkit6 = "0.6"
+# The GLib and libsoup -sys crates the gir-generated WPE WebKit bindings (agterm-wpe*-sys) build on: the gtk-rs 0.22
+# family gtk4 0.11 uses, and the soup3-sys webkit6 uses, under the name gir gives it.
+glib-sys = "0.22"
+gobject-sys = "0.22"
+gio-sys = "0.22"
+soup-sys = { package = "soup3-sys", version = "0.9" }
 
-# Inherited by every crate except the bindgen crates `agterm-ghostty-sys` and `agterm-ghostty-vt-sys`
-# (`[lints] workspace = true`). Only a reasoned outer
-# `#[expect(..., reason = "...")]` on the one item can lift a lint: `#[allow]` is refused.
+# Inherited by every crate (`[lints] workspace = true`) except the generated -sys crates: `agterm-ghostty-sys` and
+# `agterm-ghostty-vt-sys` (bindgen), `agterm-wpe-sys`, `agterm-wpe-platform-sys` and `agterm-wpe-javascriptcore-sys`
+# (gir). Only a reasoned outer `#[expect(..., reason = "...")]` on the one item can lift a lint: `#[allow]` is refused.
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 

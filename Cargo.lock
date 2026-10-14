@@ -140,6 +140,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "agterm-wpe-javascriptcore-sys"
+version = "0.1.0"
+dependencies = [
+ "glib-sys",
+ "gobject-sys",
+ "libc",
+ "shell-words",
+ "system-deps 9.0.0",
+ "tempfile",
+]
+
+[[package]]
+name = "agterm-wpe-platform-sys"
+version = "0.1.0"
+dependencies = [
+ "gio-sys",
+ "glib-sys",
+ "gobject-sys",
+ "libc",
+ "shell-words",
+ "system-deps 9.0.0",
+ "tempfile",
+]
+
+[[package]]
+name = "agterm-wpe-sys"
+version = "0.1.0"
+dependencies = [
+ "agterm-wpe-javascriptcore-sys",
+ "agterm-wpe-platform-sys",
+ "gio-sys",
+ "glib-sys",
+ "gobject-sys",
+ "libc",
+ "shell-words",
+ "soup3-sys",
+ "system-deps 9.0.0",
+ "tempfile",
+]
+
+[[package]]
 name = "agterm-zmx"
 version = "0.1.0"
 dependencies = [
@@ -1391,6 +1432,12 @@ checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
 ]
+
+[[package]]
+name = "shell-words"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "slab"

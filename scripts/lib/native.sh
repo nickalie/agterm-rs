@@ -1,10 +1,11 @@
 # Shared helpers of the native build scripts (build-ghostty.sh, build-ghostty-vt.sh, build-layer-shell.sh, build-zmx.sh,
-# pkg-config.sh, stage.sh). Sourced, not run.
+# fetch-wpe.sh, gen-wpe-bindings.sh, pkg-config.sh, stage.sh, run-dev.sh). Sourced, not run.
 #
 # Each native dependency lives in its own vendored prefix, ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/<name>-<key>/,
 # where <key> hashes that dependency's pins and patches only. Cargo never runs zig: agterm-ghostty-sys asks
 # `build-ghostty.sh --print-prefix` (agterm-ghostty-vt-sys `build-ghostty-vt.sh --print-prefix`) where the prefix is
-# and fails when it is missing. A relative AGTERM_VENDOR is taken against the repository root, so every caller (and
+# and fails when it is missing. WPE WebKit is a binary package unpacked (fetch-wpe.sh) where the system has none, and
+# reaches cargo through pkg-config.sh. A relative AGTERM_VENDOR is taken against the repository root, so every caller (and
 # cargo, which runs from a crate directory) sees one path.
 
 NATIVE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -13,6 +14,13 @@ VENDOR_ROOT="${AGTERM_VENDOR:-$HOME/.cache/agterm-rs/vendor}"
 [[ "$VENDOR_ROOT" == /* ]] || VENDOR_ROOT="$NATIVE_ROOT/$VENDOR_ROOT"
 # shellcheck source=../../build/pins.env
 source "$PINS"
+
+# The workspace minus the WPE WebKit -sys crates, as cargo arguments: what the GTK build's entry points build
+# (scripts/run-dev.sh, conformance/tools/run-rust-linux.sh, the Ubuntu CI jobs), so a machine without WPE WebKit
+# (Ubuntu 24.04 packages none) still builds, tests and stages the GTK app. Nothing else depends on these crates yet;
+# they build wherever WPE WebKit is (README > WPE WebKit), and CI checks them in its Arch job.
+WORKSPACE_WITHOUT_WPE=(--workspace --exclude agterm-wpe-sys --exclude agterm-wpe-platform-sys
+  --exclude agterm-wpe-javascriptcore-sys)
 
 die() {
   echo "$*" >&2
@@ -81,6 +89,33 @@ layer_shell_prefix_is_complete() {
   local prefix="$1"
   [[ -s "$prefix/lib/libgtk4-layer-shell.so" && -s "$prefix/include/gtk4-layer-shell/gtk4-layer-shell.h" \
     && -s "$prefix/lib/pkgconfig/gtk4-layer-shell-0.pc" ]]
+}
+
+# The WPE WebKit package carries no patches: its key hashes the WPE_ pins only.
+wpe_prefix() {
+  echo "$VENDOR_ROOT/wpe-$(prefix_key WPE /nonexistent)"
+}
+
+# A WPE WebKit prefix is complete when the library, the web process, the headers, the pkg-config file, the .gir files
+# and the pin manifest are there and the manifest matches the WPE_ pins.
+wpe_prefix_is_complete() {
+  local prefix="$1"
+  [[ -s "$prefix/lib/libWPEWebKit-2.0.so.1" && -x "$prefix/lib/wpe-webkit-2.0/WPEWebProcess" \
+    && -s "$prefix/include/wpe-webkit-2.0/wpe/webkit.h" && -s "$prefix/lib/pkgconfig/wpe-webkit-2.0.pc" \
+    && -s "$prefix/share/gir-1.0/WPEWebKit-2.0.gir" && -s "$prefix/share/agterm/wpe-PINS" ]] \
+    && pin_lines WPE | cmp -s - "$prefix/share/agterm/wpe-PINS"
+}
+
+# The gir binary's key hashes the GIR_ pins and build/patches/gir/.
+gir_prefix() {
+  echo "$VENDOR_ROOT/gir-$(prefix_key GIR "$NATIVE_ROOT/build/patches/gir")"
+}
+
+# A gir prefix is complete when the binary runs and its pin manifest matches the GIR_ pins.
+gir_prefix_is_complete() {
+  local prefix="$1"
+  [[ -x "$prefix/bin/gir" && -s "$prefix/share/agterm/gir-PINS" ]] \
+    && pin_lines GIR | cmp -s - "$prefix/share/agterm/gir-PINS"
 }
 
 # The Zig triple arch and the matching pinned sha256 variable suffix for this host.
