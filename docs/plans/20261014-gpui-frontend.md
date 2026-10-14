@@ -242,15 +242,18 @@ sanity check, not a performance verdict.
 - Create: `spikes/gpui-term/` (Cargo project)
 - Create: `docs/spikes/20261014-gpui-term.md` (report)
 
-- [ ] gpui-kit window with one element drawing a libghostty-vt `RenderState` (bg quads + shaped text runs + cursor),
+- [x] gpui-kit window with one element drawing a libghostty-vt `RenderState` (bg quads + shaped text runs + cursor),
       PTY via `portable-pty` running `zmx attach` under a private `ZMX_DIR` (fallback: plain shell)
-- [ ] keyboard through `KeyEncoder`, IME commit/preedit, wheel scroll; resize propagates to VT and PTY
-- [ ] kitty graphics: draw one placement from the `kitty` API (APC input as `show-image.sh` emits it)
-- [ ] scripted checks recorded in the report: `vim`, `htop`, a kitty image, IME (an input method in the headless
+- [x] keyboard through `KeyEncoder`, IME commit/preedit, wheel scroll; resize propagates to VT and PTY
+- [x] kitty graphics: draw one placement from the `kitty` API (APC input as `show-image.sh` emits it)
+- [x] scripted checks recorded in the report: `vim`, `htop`, a kitty image, IME (an input method in the headless
       session or a synthetic preedit), throughput (`cat` of a 50 MB file: time, CPU) against the GTK build
-- [ ] record which `gpui-pre` revision gpui-kit pins and that it builds without `gpui-fast`; record how
+- [x] record which `gpui-pre` revision gpui-kit pins and that it builds without `gpui-fast`; record how
       `libghostty-vt-sys`'s `build.rs` finds Zig (env var or PATH) for Task 5
-- [ ] report: pass/fail per criterion, surprises, API gaps in `libghostty-vt` (candidates for upstream PRs)
+- [x] report: pass/fail per criterion, surprises, API gaps in `libghostty-vt` (candidates for upstream PRs)
+- ⚠️ result (2026-10-14): pass; for Task 4 to fold in — libghostty-vt types are `!Send` (actor thread per pane, not
+  `vt_write` under a mutex), 0.2.2 pins Ghostty `a887df42…` built with Zig 0.15.2 (PATH only), several effects and
+  `search`/`snapshot` are missing in 0.2.2, GPUI needs weston's `--fake-seat`; see the report's "Changes for the plan"
 
 ### Task 2: Spike — WPE WebKit offscreen frames into GPUI via dmabuf (real screen)
 

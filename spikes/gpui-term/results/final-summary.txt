@@ -1,0 +1,8 @@
+vim: ok
+htop: ok
+kitty: ok
+ime: ok
+scroll: ok
+resize: ok
+throughput: ok
+throughput-plain: ok

@@ -1,0 +1,4 @@
+target/
+target-build.log
+results/kit-defaults-check.log
+results/final/*.log

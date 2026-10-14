@@ -1,0 +1,9 @@
+{"run": "throughput", "ok": true, "catSeconds": 1.485, "wallSeconds": 1.53, "cpuSeconds": 1.15, "frames": 97, "framesBuilt": 95, "bytesIntoVt": 53085294, "vtSeconds": 0.278966637, "megabytes": 50.000060081481934}
+{"run": "throughput-plain", "ok": true, "catSeconds": 0.855, "wallSeconds": 0.88, "cpuSeconds": 1.7, "frames": 58, "framesBuilt": 55, "bytesIntoVt": 53085255, "vtSeconds": 0.421046822, "megabytes": 50.000060081481934}
+{"run": "gtk", "ok": true, "catSeconds": 0.472, "wallSeconds": 0.52, "cpuSeconds": 0.94, "megabytes": 50.000060081481934}
+{"run": "throughput", "ok": true, "catSeconds": 1.553, "wallSeconds": 1.59, "cpuSeconds": 1.29, "frames": 101, "framesBuilt": 99, "bytesIntoVt": 53085294, "vtSeconds": 0.297203271, "megabytes": 50.000060081481934}
+{"run": "throughput-plain", "ok": true, "catSeconds": 0.638, "wallSeconds": 0.67, "cpuSeconds": 1.28, "frames": 45, "framesBuilt": 43, "bytesIntoVt": 53085255, "vtSeconds": 0.323486351, "megabytes": 50.000060081481934}
+{"run": "gtk", "ok": true, "catSeconds": 0.513, "wallSeconds": 0.53, "cpuSeconds": 1.08, "megabytes": 50.000060081481934}
+{"run": "throughput", "ok": true, "catSeconds": 1.451, "wallSeconds": 1.53, "cpuSeconds": 1.13, "frames": 95, "framesBuilt": 93, "bytesIntoVt": 53085294, "vtSeconds": 0.266150374, "megabytes": 50.000060081481934}
+{"run": "throughput-plain", "ok": true, "catSeconds": 0.555, "wallSeconds": 0.61, "cpuSeconds": 1.1, "frames": 41, "framesBuilt": 38, "bytesIntoVt": 53085255, "vtSeconds": 0.281960036, "megabytes": 50.000060081481934}
+{"run": "gtk", "ok": true, "catSeconds": 0.407, "wallSeconds": 0.42, "cpuSeconds": 0.89, "megabytes": 50.000060081481934}
