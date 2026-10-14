@@ -173,6 +173,8 @@ fn latin(letter: char, mods: Mods) -> KeyEvent<'static> {
 struct Terminal {
     performed: Vec<Action>,
     everywhere: Vec<Action>,
+    /// How many actions had been performed each time the queued sequence keys were sent.
+    flushed_after: Vec<usize>,
     can: fn(&Action) -> bool,
 }
 
@@ -181,6 +183,7 @@ impl Terminal {
         Self {
             performed: Vec::new(),
             everywhere: Vec::new(),
+            flushed_after: Vec::new(),
             can,
         }
     }
@@ -198,6 +201,10 @@ impl Performer for Terminal {
 
     fn perform_all(&mut self, action: &Action) {
         self.everywhere.push(action.clone());
+    }
+
+    fn flush_sequence(&mut self) {
+        self.flushed_after.push(self.performed.len());
     }
 }
 
@@ -393,6 +400,15 @@ fn character_triggers_compare_case_folded() {
     assert_eq!(trigger("Ф"), trigger("ф"));
     assert_eq!(trigger("ẞ"), trigger("ß"));
     assert_eq!(trigger("ς"), trigger("σ"));
+    assert_eq!(trigger("\u{212a}"), trigger("k"), "the Kelvin sign folds to k");
+    assert_ne!(
+        trigger("ı"),
+        trigger("i"),
+        "full case folding keeps the dotless i apart"
+    );
+    let both = with_lines(&["ctrl+i=text:latin", "ctrl+ı=text:dotless"]);
+    assert_eq!(bound(&both, "ctrl+i").map(|b| b.0), Some(vec![action("text:latin")]));
+    assert_eq!(bound(&both, "ctrl+ı").map(|b| b.0), Some(vec![action("text:dotless")]));
     assert_ne!(trigger("a"), trigger("key_a"), "a character is not a key position");
     assert_ne!(trigger("ctrl+a"), trigger("a"));
 }
@@ -667,7 +683,10 @@ fn keys_are_looked_up_by_position_then_character_then_unshifted_then_catch_all()
         "key_q=text:position",
         "Q=text:typed",
         "w=text:unshifted",
+        "+=text:plus",
+        "==text:equals",
         "catch_all=text:any",
+        "ctrl+catch_all=text:ctrl-any",
     ]);
     let mut keyboard = Keyboard::default();
     let mut terminal = Terminal::capable();
@@ -675,12 +694,17 @@ fn keys_are_looked_up_by_position_then_character_then_unshifted_then_catch_all()
         press("key_q", Mods::empty(), "q", Some('q')),
         press("key_x", Mods::empty(), "q", Some('x')),
         press("key_z", Mods::empty(), "", Some('w')),
+        // the typed character before the unshifted one when both are bound (shift+= types +)
+        press("equal", Mods::empty(), "+", Some('=')),
         press("key_z", Mods::empty(), "z", Some('z')),
+        // a catch-all with the event's modifiers before the bare one
         press("key_z", Mods::CTRL, "", Some('z')),
+        press("key_z", Mods::ALT, "", Some('z')),
     ] {
         keyboard.handle(&binds, &event, &mut terminal);
     }
-    let typed = ["position", "typed", "unshifted", "any", "any"].map(|text| Action::Text(text.to_owned()));
+    let typed =
+        ["position", "typed", "unshifted", "plus", "any", "ctrl-any", "any"].map(|text| Action::Text(text.to_owned()));
     assert_eq!(terminal.performed, typed);
 }
 
@@ -876,10 +900,76 @@ fn end_key_sequence_sends_the_queued_keys() {
     let mut terminal = Terminal::capable();
     keyboard.handle(&binds, &latin('a', Mods::CTRL), &mut terminal);
     let escape = press("escape", Mods::empty(), "", None);
-    assert_eq!(
-        keyboard.handle(&binds, &escape, &mut terminal),
-        result(Queued::Flush, KeyEffect::Consumed)
-    );
+    assert_eq!(keyboard.handle(&binds, &escape, &mut terminal), CONSUMED);
     assert!(!keyboard.in_sequence());
     assert!(terminal.performed.is_empty(), "the keyboard ends its own sequence");
+    assert_eq!(terminal.flushed_after, [0], "the queued keys go out");
+}
+
+#[test]
+fn end_key_sequence_sends_the_queued_keys_before_a_chained_action() {
+    let binds = with_lines(&["ctrl+a>escape=end_key_sequence", "chain=text:X"]);
+    let mut keyboard = Keyboard::default();
+    let mut terminal = Terminal::capable();
+    keyboard.handle(&binds, &latin('a', Mods::CTRL), &mut terminal);
+    let escape = press("escape", Mods::empty(), "", None);
+    assert_eq!(keyboard.handle(&binds, &escape, &mut terminal), CONSUMED);
+    assert_eq!(terminal.performed, [action("text:X")]);
+    assert_eq!(
+        terminal.flushed_after,
+        [0],
+        "ghostty sends the queued `ctrl+a` before `X`"
+    );
+}
+
+#[test]
+fn an_all_binding_applies_key_tables_to_this_keyboard_and_hands_them_on() {
+    let binds = with_lines(&["vim/j=text:down", "all:ctrl+t=activate_key_table:vim"]);
+    let mut keyboard = Keyboard::default();
+    let mut terminal = Terminal::capable();
+    assert_eq!(
+        keyboard.handle(&binds, &latin('t', Mods::CTRL), &mut terminal),
+        CONSUMED
+    );
+    assert_eq!(keyboard.active_tables().collect::<Vec<_>>(), ["vim"]);
+    assert_eq!(terminal.everywhere, [action("activate_key_table:vim")]);
+    keyboard.handle(&binds, &latin('j', Mods::empty()), &mut terminal);
+    assert_eq!(terminal.performed, [action("text:down")]);
+    // the frontend applies it to another terminal's keyboard
+    let mut other = Keyboard::default();
+    assert_eq!(other.apply(&binds, &action("activate_key_table:vim")), Some(true));
+    assert_eq!(
+        other.apply(&binds, &action("activate_key_table:vim")),
+        Some(false),
+        "already innermost"
+    );
+    assert_eq!(other.apply(&binds, &action("deactivate_all_key_tables")), Some(true));
+    assert_eq!(other.apply(&binds, &action("activate_key_table:nope")), Some(false));
+    assert_eq!(other.apply(&binds, &action("text:x")), None, "not the keyboard's own");
+}
+
+#[test]
+fn a_refused_table_line_still_defines_its_table_in_the_config() {
+    let mut loader = Loader::new(None);
+    loader.load_text(
+        "test.conf",
+        "keybind = vim/bogus\nkeybind = other/chain=ignore\nkeybind = performable:ctrl+t=activate_key_table:vim\n",
+    );
+    let built = loader.finish().finalize(false, &[]);
+    assert_eq!(built.diagnostics.len(), 2, "{:?}", built.diagnostics);
+    let binds = built.config.keybind;
+    assert_eq!(
+        binds.table_names().collect::<Vec<_>>(),
+        ["vim", "other"],
+        "as libghostty defines them"
+    );
+    assert!(binds.table("vim").is_some_and(super::binds::BindSet::is_empty));
+    // so the activation is performed and takes the key
+    let mut keyboard = Keyboard::default();
+    let mut terminal = Terminal::capable();
+    assert_eq!(
+        keyboard.handle(&binds, &latin('t', Mods::CTRL), &mut terminal),
+        CONSUMED
+    );
+    assert_eq!(keyboard.active_tables().collect::<Vec<_>>(), ["vim"]);
 }

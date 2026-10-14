@@ -5,6 +5,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 
 use bitflags::bitflags;
+use unicase::UniCase;
 
 use super::BindError;
 
@@ -363,13 +364,22 @@ impl Trigger {
     }
 
     /// The key's identity for comparison: a unicode key case-folded.
-    fn identity(&self) -> (u8, &'static str, [char; 3]) {
+    fn identity(&self) -> Identity {
         match self.key {
-            TriggerKey::Physical(key) => (0, key.name(), ['\0'; 3]),
-            TriggerKey::Unicode(character) => (1, "", fold(character)),
-            TriggerKey::CatchAll => (2, "", ['\0'; 3]),
+            TriggerKey::Physical(key) => Identity::Physical(key.name()),
+            TriggerKey::Unicode(character) => Identity::Unicode(UniCase::unicode(character.to_string())),
+            TriggerKey::CatchAll => Identity::CatchAll,
         }
     }
+}
+
+/// What makes two trigger keys the same (`Trigger.foldedEqual`): a character by Unicode full case folding
+/// (`foldedCodepoint`), so `A` is `a` and `ẞ` is `ß`, while the dotless `ı` stays apart from `i`.
+#[derive(PartialEq, Eq, Hash)]
+enum Identity {
+    Physical(&'static str),
+    Unicode(UniCase<String>),
+    CatchAll,
 }
 
 impl PartialEq for Trigger {
@@ -406,25 +416,6 @@ impl fmt::Display for Trigger {
             TriggerKey::CatchAll => f.write_str("catch_all"),
         }
     }
-}
-
-/// `foldedCodepoint`: an ASCII letter lowercased; any other character through its case mappings (lower, upper, then
-/// lower again), which joins the characters full case folding joins for a single key's character (`ß` and `ẞ`, `ς`
-/// and `σ`, `ſ` and `s`).
-fn fold(character: char) -> [char; 3] {
-    let mut folded = ['\0'; 3];
-    if character.is_ascii() {
-        folded[0] = character.to_ascii_lowercase();
-        return folded;
-    }
-    let mapped = character
-        .to_lowercase()
-        .flat_map(char::to_uppercase)
-        .flat_map(char::to_lowercase);
-    for (slot, lower) in folded.iter_mut().zip(mapped) {
-        *slot = lower;
-    }
-    folded
 }
 
 /// The key one trigger part names, in `Trigger.parse`'s order: a literal `+` (an empty part), a physical key name,

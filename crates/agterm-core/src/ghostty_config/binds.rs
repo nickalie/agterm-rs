@@ -25,10 +25,8 @@
 //! ([`Keyboard::handle`]: the half-typed sequence, the active key tables innermost first, then the root set; looked up
 //! by physical key, the character typed, the unshifted character, then `catch_all`), then to the key encoder when no
 //! binding kept it. A `performable:` binding whose action is not performed acts as if it did not exist; an
-//! `unconsumed:` one performs and still encodes.
-//!
-//! **Residual difference**: a non-ASCII character trigger is compared through its simple case mappings, not
-//! Unicode's full case folding (the same characters match for a single key's character).
+//! `unconsumed:` one performs and still encodes. Character triggers compare by Unicode full case folding, as
+//! ghostty's do.
 
 mod action;
 mod defaults;

@@ -45,10 +45,16 @@ pub trait Performer {
     fn perform(&mut self, action: &Action) -> bool;
 
     /// Performs `action` everywhere, for an `all:` or `global:` binding: an app action once, a terminal action on
-    /// every terminal. Always counts as performed.
+    /// every terminal. Always counts as performed. A key-table action or `end_key_sequence` has already been applied
+    /// to this terminal's [`Keyboard`]; the other terminals' keyboards take it through [`Keyboard::apply`] (and
+    /// [`Performer::flush_sequence`] for their queued keys).
     fn perform_all(&mut self, action: &Action) {
         self.perform(action);
     }
+
+    /// Sends the keys this terminal's half-typed sequence queued to the terminal now, in order (`end_key_sequence`,
+    /// before any action chained after it runs).
+    fn flush_sequence(&mut self);
 }
 
 /// Where the key goes after the binds.
@@ -109,8 +115,6 @@ pub struct Keyboard {
     tables: Vec<(String, bool)>,
     /// The press a consumed binding took: its release is consumed too.
     last_trigger: Option<(PhysicalKey, Option<char>, Mods)>,
-    /// An `end_key_sequence` ran: the queued keys go to the terminal.
-    flush_sequence: bool,
 }
 
 /// A half-typed sequence: the key table it started in (`None` for the root set) and the triggers typed so far.
@@ -185,16 +189,30 @@ impl Keyboard {
                 self.sequence = Some(sequence);
                 KeyResult::new(Queued::Keep, KeyEffect::Queue)
             }
-            Entry::Leaf(leaf) => {
-                let result = self.fire(binds, &leaf, event, performer);
-                // an `end_key_sequence` sends the queued keys even when the binding consumes its own
-                if std::mem::take(&mut self.flush_sequence) && result.queued == Queued::Drop {
-                    KeyResult::new(Queued::Flush, result.effect)
-                } else {
-                    result
-                }
-            }
+            Entry::Leaf(leaf) => self.fire(binds, &leaf, event, performer),
         }
+    }
+
+    /// Applies an action that changes the keyboard itself (`ghostty`'s key-table actions and `end_key_sequence`,
+    /// whose queued keys the caller then sends); `None` for any other action. Whether it was performed: a table
+    /// activates when it is defined, not already the innermost and below the depth limit; a deactivation needs an
+    /// active table.
+    pub fn apply(&mut self, binds: &Keybinds, action: &Action) -> Option<bool> {
+        Some(match action {
+            Action::ActivateKeyTable(name) => self.activate(binds, name, false),
+            Action::ActivateKeyTableOnce(name) => self.activate(binds, name, true),
+            Action::DeactivateKeyTable => self.tables.pop().is_some(),
+            Action::DeactivateAllKeyTables => {
+                let active = !self.tables.is_empty();
+                self.tables.clear();
+                active
+            }
+            Action::EndKeySequence => {
+                self.sequence = None;
+                true
+            }
+            _ => return None,
+        })
     }
 
     /// A key the half-typed sequence does not bind: a modifier waits, an `ignore` catch-all drops the queue and the
@@ -255,10 +273,11 @@ impl Keyboard {
         let consumed = everywhere || leaf.flags.contains(BindFlags::CONSUMED);
         self.last_trigger = None;
         self.sequence = None;
-        // every action runs; any one performing counts, and an `all:` binding always does
+        // every action runs; any one performing counts, and an `all:` binding always does (on this keyboard too)
         let mut done = everywhere;
         for action in &leaf.actions {
             if everywhere {
+                self.own(binds, action, performer);
                 performer.perform_all(action);
             } else {
                 done |= self.perform(binds, action, performer);
@@ -283,23 +302,21 @@ impl Keyboard {
     /// Performs one action: the keyboard's own (`ignore`, key tables, `end_key_sequence`) here, the rest through the
     /// performer.
     fn perform(&mut self, binds: &Keybinds, action: &Action, performer: &mut dyn Performer) -> bool {
-        match action {
-            Action::Ignore => true,
-            Action::ActivateKeyTable(name) => self.activate(binds, name, false),
-            Action::ActivateKeyTableOnce(name) => self.activate(binds, name, true),
-            Action::DeactivateKeyTable => self.tables.pop().is_some(),
-            Action::DeactivateAllKeyTables => {
-                let active = !self.tables.is_empty();
-                self.tables.clear();
-                active
-            }
-            Action::EndKeySequence => {
-                self.sequence = None;
-                self.flush_sequence = true;
-                true
-            }
-            action => performer.perform(action),
+        if *action == Action::Ignore {
+            return true;
         }
+        self.own(binds, action, performer)
+            .unwrap_or_else(|| performer.perform(action))
+    }
+
+    /// [`Keyboard::apply`] on this terminal: an `end_key_sequence` sends the queued keys at once, as ghostty's
+    /// `endKeySequence(.flush)` does, before any action chained after it.
+    fn own(&mut self, binds: &Keybinds, action: &Action, performer: &mut dyn Performer) -> Option<bool> {
+        let applied = self.apply(binds, action)?;
+        if *action == Action::EndKeySequence {
+            performer.flush_sequence();
+        }
+        Some(applied)
     }
 
     /// `activate_key_table`: a defined table, not already the innermost, below the depth limit.

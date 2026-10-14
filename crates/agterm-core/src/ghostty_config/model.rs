@@ -388,8 +388,10 @@ impl GhosttyConfig {
     /// Applies an accepted line; a refused one changes nothing, as in ghostty. A line its key refuses only in the
     /// context of the lines before it (a `keybind = chain=…` with no binding to extend) is the diagnostic returned.
     pub fn apply(&mut self, setting: &Setting) -> Option<Diagnostic> {
+        if setting.key == "keybind" {
+            return self.apply_keybind(setting);
+        }
         match &setting.accepted {
-            Ok(Accepted::Field(spec)) if spec.name == "keybind" => return self.apply_keybind(setting),
             Ok(Accepted::Field(spec)) => {
                 if !self.apply_key(spec.name, setting) {
                     tracing::debug!(key = spec.name, "ghostty config key not supported; ignored");
@@ -401,9 +403,15 @@ impl GhosttyConfig {
         None
     }
 
-    /// A checked `keybind` line over the binds so far.
+    /// A `keybind` line over the binds so far. A refused one is still applied, without a second diagnostic: ghostty
+    /// defines the key table a refused `name/binding` names, and refuses any other line before it changes anything.
     fn apply_keybind(&mut self, setting: &Setting) -> Option<Diagnostic> {
-        let error = self.keybind.parse_cli(setting.value.as_deref().unwrap_or("")).err()?;
+        let value = setting.value.as_deref()?;
+        let applied = self.keybind.parse_cli(value);
+        if setting.accepted.is_err() {
+            return None;
+        }
+        let error = applied.err()?;
         Some(Diagnostic {
             location: setting.location.clone(),
             key: setting.key.clone(),
