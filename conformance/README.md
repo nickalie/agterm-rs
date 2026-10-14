@@ -99,6 +99,32 @@ A Rust-only extension (today `live-any-shell`, Live sessions in bash and fish lo
 reference claims: its tests skip as unsupported on both references and are validated by the Rust CI with
 `--must-pass` on the capability (see rust-build.md > Rust-only extensions).
 
+## Rust runner and ratchet
+
+`tools/run-rust-linux.sh` builds the workspace (release), stages it with `scripts/stage.sh` into
+`target/conformance-stage` (or runs an existing stage given with `--stage DIR`) and runs the protocol, cli and
+behaviors layers with `--impl rust` under run-reference-linux.sh's isolation.
+It runs pytest with `$PYTHON`, else `.venv/bin/python`, else `python3`, with this checkout's harness first on
+`PYTHONPATH`.
+Into `--out DIR` (default `reports/rust-linux/`) it writes `report.md`, `junit.xml`, `pytest.log` and `nodeids.jsonl`,
+the `--nodeid-report`.
+It exits with the ratchet's status, not pytest's, since red tests are expected until parity: 0 holds, 1 broken (or an
+instance root left behind), 2 no usable report.
+
+```sh
+conformance/tools/run-rust-linux.sh                          # full run
+conformance/tools/run-rust-linux.sh -- -k test_version       # partial run: listed ids not selected are not judged
+.venv/bin/python conformance/tools/check_ratchet.py \
+  --report conformance/reports/rust-linux/nodeids.jsonl --add  # merge the newly green ids into rust-passing.txt
+```
+
+`rust-passing.txt` holds one pytest node id per line, verbatim (an id may end in spaces) and sorted, after its `#`
+header.
+`check_ratchet.py` prints the breaks and the newly passing ids (into the job summary in CI); `--add` writes only when
+the ratchet holds.
+What breaks it is listed in [docs/rust-build.md](docs/rust-build.md) > Ratchet.
+`--nodeid-report` cannot be combined with `--coverage-gate`.
+
 ## Catalog and coverage gate
 
 `catalog.yaml` (commands, fields, events, CLI subcommands, behaviors, exemptions) and `ui-ids.yaml` are generated

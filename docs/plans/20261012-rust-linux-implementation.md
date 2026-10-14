@@ -1537,12 +1537,12 @@ wlr-layer-shell surface.
 
 ### Task 38: [Final] Update documentation
 
-- [ ] README.md at the repo root: what agterm-rs is, build prerequisites (Rust 1.98.1, Zig 0.15.2 and 0.16.0, GTK4,
+- [x] README.md at the repo root: what agterm-rs is, build prerequisites (Rust 1.98.1, Zig 0.15.2 and 0.16.0, GTK4,
       libadwaita, WebKitGTK as a runtime dependency, weston for the suite), build, run and test commands
-- [ ] `conformance/README.md`: the Rust runner, the node-id report and the ratchet
-- [ ] CLAUDE.md with the crate map, the command-group porting loop, the Reference rule (upstream is the reference,
+- [x] `conformance/README.md`: the Rust runner, the node-id report and the ratchet
+- [x] CLAUDE.md with the crate map, the command-group porting loop, the Reference rule (upstream is the reference,
       `.upstream/agterm` the source, the fork only for Linux glue) and the fork-coexistence rule
-- [ ] move this plan to `docs/plans/completed/`
+- [x] move this plan to `docs/plans/completed/` (moved by the harness at the end of the run)
 
 ## Post-Completion
 
