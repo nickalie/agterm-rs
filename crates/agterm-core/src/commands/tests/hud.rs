@@ -526,6 +526,243 @@ fn reported_geometry_measures_the_panel() {
 }
 
 #[test]
+fn sticky_and_no_frame_reach_the_spec_on_open_and_update() {
+    let (mut fixture, _dir) = hud_fixture();
+    let id = fixture.sessions[0];
+    let spec = |fixture: &Fixture| {
+        let hud = fixture.store().session(id).unwrap().overlay.hud.clone().unwrap();
+        (hud.spec.sticky, hud.spec.frame)
+    };
+    for cmd in [SessionCmd::HudOpen, SessionCmd::HudUpdate] {
+        let response = hud(&mut fixture, cmd, id, |a| {
+            a.message = Some("caption".into());
+            a.sticky = Some(true);
+            a.frame = Some(false);
+        });
+        assert!(response.ok, "{cmd:?}: {response:?}");
+        assert_eq!(spec(&fixture), (true, false), "{cmd:?}");
+
+        let response = hud(&mut fixture, cmd, id, |a| a.message = Some("caption".into()));
+        assert!(response.ok, "{cmd:?}: {response:?}");
+        assert_eq!(
+            spec(&fixture),
+            (false, true),
+            "{cmd:?}: an omitted pair is a framed panel with its margin"
+        );
+    }
+}
+
+/// Upstream's `widePane` cell, which the estimator gives every font here.
+const CELL: (f64, f64) = (8.0, 18.0);
+
+/// A split session whose left pane is `width` x `height`, a 400-wide right pane beside it (upstream's `setLeftPane`).
+fn left_pane(fixture: &mut Fixture, id: Uuid, width: f64, height: f64) -> bool {
+    let frames = HudPaneFrames {
+        left: Some(HudPaneFrame {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        }),
+        right: Some(HudPaneFrame {
+            x: width + 4.0,
+            y: 0.0,
+            width: 400.0,
+            height,
+        }),
+        detail: None,
+    };
+    fixture.core.report_hud_frames(id, &frames)
+}
+
+/// `edit`'s HUD opened over the left pane of a split 1600 x 1000 session (upstream's `openMeasuredHud`).
+fn open_measured(edit: impl FnOnce(&mut Args)) -> (Fixture, tempfile::TempDir, Uuid) {
+    let (mut fixture, dir) = hud_fixture();
+    fixture.core.set_cell_estimator(Box::new(|_, _| CELL));
+    let id = fixture.sessions[0];
+    split_session(&mut fixture, id);
+    left_pane(&mut fixture, id, 1600.0, 1000.0);
+    let response = hud(&mut fixture, SessionCmd::HudOpen, id, |a| {
+        a.pane = Some("left".into());
+        edit(a);
+    });
+    assert!(response.ok, "{response:?}");
+    (fixture, dir, id)
+}
+
+fn slot(fixture: &Fixture, id: Uuid) -> crate::model::HudState {
+    fixture
+        .store()
+        .session(id)
+        .unwrap()
+        .overlay
+        .hud
+        .clone()
+        .expect("a live hud")
+}
+
+fn markdown(message: &str) -> impl FnOnce(&mut Args) {
+    let message = message.to_owned();
+    move |a| {
+        a.message = Some(message);
+        a.markdown = Some(true);
+    }
+}
+
+#[test]
+fn a_hud_keeps_its_height_when_only_the_pane_height_changes() {
+    let (mut fixture, _dir, id) = open_measured(|a| a.message = Some("working on it".into()));
+    let before = slot(&fixture, id);
+
+    assert!(left_pane(&mut fixture, id, 1600.0, 500.0));
+
+    let after = slot(&fixture, id);
+    assert_eq!(after.height_points, before.height_points);
+    assert!(after.height_percent > before.height_percent);
+}
+
+#[test]
+fn a_narrowed_pane_rewraps_a_markdown_hud_and_grows_it_by_the_added_row() {
+    let message = format!("{} {}", "a".repeat(20), "b".repeat(20));
+    let (mut fixture, _dir, id) = open_measured(|a| {
+        markdown(&message)(a);
+        a.hide_after = Some(30.0);
+    });
+    let points = slot(&fixture, id).height_points.unwrap();
+    let generation = fixture.store().session(id).unwrap().overlay.generation;
+    let timers = fixture.core.take_hud_timers();
+    assert_eq!(timers.len(), 1);
+
+    assert!(left_pane(&mut fixture, id, 400.0, 1000.0));
+
+    assert_eq!(slot(&fixture, id).height_points, Some(points + CELL.1));
+    let overlay = &fixture.store().session(id).unwrap().overlay;
+    let (spec, size) = (overlay.effective_hud_spec().unwrap(), overlay.hud_panel_size().unwrap());
+    let metrics = crate::hud::PaneMetrics {
+        cell_width: CELL.0,
+        cell_height: CELL.1,
+        pane_width: 400.0,
+        pane_height: 1000.0,
+        padding_width: 8.0,
+        padding_height: 6.0,
+    };
+    let expected = crate::hud::rendered_body(
+        &spec,
+        crate::hud::paint_grid(&spec, &size, &metrics),
+        std::process::id(),
+    );
+    assert_eq!(std::fs::read_to_string(body_file(&fixture, id)).unwrap(), expected);
+    assert_eq!(
+        overlay.generation, generation,
+        "a remeasure must not re-host the surface"
+    );
+    assert!(fixture.core.take_hud_timers().is_empty(), "nor arm another auto-hide");
+    assert!(
+        fixture.core.fire_hud_hide(timers[0]),
+        "the open's auto-hide still stands"
+    );
+}
+
+#[test]
+fn a_width_forced_by_resize_holds_through_a_geometry_change_until_the_next_update() {
+    let (mut fixture, _dir, id) = open_measured(|a| a.message = Some("working on it".into()));
+    let resize = hud(&mut fixture, SessionCmd::OverlayResize, id, |a| {
+        a.size_percent = Some(50);
+    });
+    assert!(resize.ok, "{resize:?}");
+
+    assert!(left_pane(&mut fixture, id, 900.0, 700.0));
+
+    let overlay = &fixture.store().session(id).unwrap().overlay;
+    assert_eq!(overlay.size_percent, Some(50));
+    assert_eq!(overlay.effective_hud_spec().unwrap().size_percent, Some(50));
+    assert_eq!(
+        slot(&fixture, id).spec.size_percent,
+        None,
+        "the caller's own spec keeps the width he sent"
+    );
+
+    let update = hud(&mut fixture, SessionCmd::HudUpdate, id, |a| {
+        a.message = Some("done".into());
+        a.pane = Some("left".into());
+    });
+    assert!(update.ok, "{update:?}");
+    assert_eq!(slot(&fixture, id).resized_width_percent, None);
+}
+
+#[test]
+fn a_resized_unsized_markdown_hud_wraps_at_the_width_it_was_resized_to() {
+    let line = ["word"; 20].join(" ");
+    let (mut fixture, _dir, id) = open_measured(markdown(&line));
+    let wrapped = slot(&fixture, id).height_points.unwrap();
+
+    let resize = hud(&mut fixture, SessionCmd::OverlayResize, id, |a| {
+        a.size_percent = Some(80);
+    });
+    assert!(resize.ok, "{resize:?}");
+
+    assert_eq!(slot(&fixture, id).height_points, Some(wrapped - CELL.1));
+}
+
+#[test]
+fn a_session_wide_hud_is_measured_from_the_detail_area_it_is_drawn_in() {
+    let (mut fixture, _dir) = hud_fixture();
+    fixture.core.set_cell_estimator(Box::new(|_, _| CELL));
+    let id = fixture.sessions[0];
+    let detail = |width| HudPaneFrames {
+        detail: Some(HudPaneFrame {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height: 1000.0,
+        }),
+        ..HudPaneFrames::default()
+    };
+    fixture.core.report_hud_frames(id, &detail(1600.0));
+    let message = format!("{} {}", "a".repeat(20), "b".repeat(20));
+    assert!(hud(&mut fixture, SessionCmd::HudOpen, id, markdown(&message)).ok);
+    let points = slot(&fixture, id)
+        .height_points
+        .expect("no terminal is laid out here, so only the detail area can measure it");
+
+    assert!(fixture.core.report_hud_frames(id, &detail(400.0)));
+
+    assert_eq!(slot(&fixture, id).height_points, Some(points + CELL.1));
+}
+
+#[test]
+fn a_changed_cell_on_the_live_panel_remeasures_it_at_an_unchanged_frame() {
+    let (mut fixture, _dir, id) = open_measured(|a| {
+        markdown("- a\n- b")(a);
+        a.frame = Some(false);
+    });
+    let panel = FakeSurface::new("panel");
+    panel.probe().set_cell_size(Some((9.0, 21.0)));
+    let session = fixture.store_mut().unwrap().session_mut(id).unwrap();
+    session.overlay.surface.replace(Box::new(panel));
+
+    assert!(fixture.core.refresh_hud(id));
+
+    let state = slot(&fixture, id);
+    assert_eq!(state.height_points, Some(2.0 * 21.0 + 12.0));
+    let overlay = &fixture.store().session(id).unwrap().overlay;
+    let metrics = crate::hud::PaneMetrics {
+        cell_width: 9.0,
+        cell_height: 21.0,
+        pane_width: 1600.0,
+        pane_height: 1000.0,
+        padding_width: 8.0,
+        padding_height: 6.0,
+    };
+    let grid = crate::hud::paint_grid(
+        &overlay.effective_hud_spec().unwrap(),
+        &overlay.hud_panel_size().unwrap(),
+        &metrics,
+    );
+    assert_eq!(grid.rows, 2);
+}
+
+#[test]
 fn the_slot_closes_with_its_session_and_its_painters_exit() {
     let (mut fixture, _dir) = hud_fixture();
     let id = fixture.sessions[0];

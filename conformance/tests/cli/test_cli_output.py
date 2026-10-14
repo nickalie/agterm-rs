@@ -633,6 +633,19 @@ def test_hud(cli, ctl):
     assert_ok(ctl.request("session.close", sid))
 
 
+@pytest.mark.covers("cli:session hud", "cli:session hud update")
+def test_hud_sticky_and_no_frame(cli, ctl):
+    sid = _new(ctl)
+    opened = cli("session", "hud", "caption", "--sticky", "--no-frame", "--position", "top", "--target", sid)
+    _ok(opened, "ok\n")
+    assert_subset(_node(ctl, sid)["hud"], {"sticky": True, "frame": False, "position": "top-center"})
+    _ok(cli("session", "hud", "update", "plain", "--target", sid), "ok\n")
+    assert_subset(_node(ctl, sid)["hud"], {"sticky": False, "frame": True})
+    _ok(cli("session", "hud", "update", "caption", "--sticky", "--no-frame", "--target", sid), "ok\n")
+    assert_subset(_node(ctl, sid)["hud"], {"sticky": True, "frame": False})
+    assert_ok(ctl.request("session.close", sid))
+
+
 # -- windows, surfaces and the dashboard
 
 

@@ -174,6 +174,19 @@ def test_update_replaces_the_whole_spec(ctl):
     _close(ctl, sid)
 
 
+@pytest.mark.covers("session.hud.update", "field:tree.session.hud")
+def test_update_sets_and_drops_sticky_and_frame(ctl):
+    sid = _new(ctl)
+    _open(ctl, sid, "caption")
+    hud = _update(ctl, sid, "caption", sticky=True, frame=False, position="top", sizePercent=100)
+    assert_subset(hud, {"sticky": True, "frame": False, "position": "top-center", "sizePercent": 100})
+    # An update replaces the whole spec: one that names neither puts the edge margin and the frame back.
+    hud = _update(ctl, sid, "plain")
+    assert_subset(hud, {"sticky": False, "frame": True, "position": "center"})
+    assert hud["sizePercent"] <= 80
+    _close(ctl, sid)
+
+
 @pytest.mark.covers("session.hud.open", "session.hud.update", "field:tree.session.hud")
 def test_hud_hides_itself_after_its_interval(ctl):
     sid = _new(ctl)
@@ -254,6 +267,21 @@ def test_resize_sets_the_hud_width(ctl):
         "a hud is always floating: pass --size-percent, not --full",
     )
     assert _hud(ctl, sid)["sizePercent"] == 10
+    _close(ctl, sid)
+
+
+@pytest.mark.covers("session.overlay.resize", "field:tree.session.hud")
+def test_resize_lets_a_sticky_hud_span_the_pane(ctl):
+    sid = _new(ctl)
+    # A resize takes the HUD's own width bound: a sticky panel off center may span the pane, any other stops at 80.
+    for args, width in [
+        ({"sticky": True, "position": "top-left"}, 100),
+        ({"sticky": True}, 80),
+        ({"position": "top-left"}, 80),
+    ]:
+        _open(ctl, sid, "caption", **args)
+        assert assert_ok(ctl.request("session.overlay.resize", sid, sizePercent=100))["id"] == sid
+        assert _hud(ctl, sid)["sizePercent"] == width, args
     _close(ctl, sid)
 
 

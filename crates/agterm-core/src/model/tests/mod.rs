@@ -2,6 +2,7 @@
 //! `WindowLibraryTests`.
 
 mod duplicate;
+mod hud;
 mod library;
 mod navigation;
 mod organization;

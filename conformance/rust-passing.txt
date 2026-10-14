@@ -33,6 +33,7 @@ tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_re
 tests/cli/test_cli_output.py::test_font
 tests/cli/test_cli_output.py::test_hooks
 tests/cli/test_cli_output.py::test_hud
+tests/cli/test_cli_output.py::test_hud_sticky_and_no_frame
 tests/cli/test_cli_output.py::test_keymap
 tests/cli/test_cli_output.py::test_live_pane_commands
 tests/cli/test_cli_output.py::test_live_present_bridges_the_stream
@@ -259,11 +260,13 @@ tests/protocol/test_hud.py::test_hud_width_is_clamped[min]
 tests/protocol/test_hud.py::test_hud_width_is_clamped[sticky-center]
 tests/protocol/test_hud.py::test_hud_width_is_clamped[sticky-edge]
 tests/protocol/test_hud.py::test_page_replaces_a_hud
+tests/protocol/test_hud.py::test_resize_lets_a_sticky_hud_span_the_pane
 tests/protocol/test_hud.py::test_resize_sets_the_hud_width
 tests/protocol/test_hud.py::test_unknown_session_target[session.hud.close-args2]
 tests/protocol/test_hud.py::test_unknown_session_target[session.hud.open-args0]
 tests/protocol/test_hud.py::test_unknown_session_target[session.hud.update-args1]
 tests/protocol/test_hud.py::test_update_replaces_the_whole_spec
+tests/protocol/test_hud.py::test_update_sets_and_drops_sticky_and_frame
 tests/protocol/test_keymap_hooks.py::test_a_running_hook_queues_its_events_and_survives_its_removal
 tests/protocol/test_keymap_hooks.py::test_attach_remote_ships_a_default_that_an_existing_binding_keeps
 tests/protocol/test_keymap_hooks.py::test_hook_gets_its_event_on_stdin_and_in_its_environment
