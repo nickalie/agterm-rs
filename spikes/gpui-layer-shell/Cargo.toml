@@ -1,0 +1,23 @@
+[package]
+name = "gpui-layer-shell-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Throwaway spike (docs/plans/20261014-gpui-frontend.md, Task 3): its own workspace, outside the repository's.
+[workspace]
+
+[dependencies]
+# GPUI through gpui-kit, without its component and asset layers (not needed here) and without `gpui-fast`.
+gpui-kit = { version = "=0.7.3", default-features = false }
+anyhow = "1"
+futures = "0.3"
+raw-window-handle = "0.6"
+serde_json = "1"
+# The same wayland-rs family GPUI links, with libwayland's C backend: the spike binds xdg-activation on GPUI's own
+# `wl_display` to activate a window with a token handed over from another process (GPUI has no API for it).
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+# GApplication's D-Bus side (`org.gtk.Application`, `org.gtk.Actions`), as Task 12 plans it.
+zbus = "5"

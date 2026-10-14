@@ -279,14 +279,14 @@ agterm: private state dir and socket, stripped `AGTERM_*`/`ZMX_*`, its own app i
 - Create: `spikes/gpui-layer-shell/`
 - Create: `docs/spikes/20261014-gpui-layer-shell.md`
 
-- [ ] confirm `WindowKind::LayerShell` in the pinned `gpui-pre`; anchored top layer with keyboard interactivity,
+- [x] confirm `WindowKind::LayerShell` in the pinned `gpui-pre`; anchored top layer with keyboard interactivity,
       show/hide, resize
-- [ ] check what the quick terminal needs (`crates/agterm-gtk/src/quick*`): anchor/margins, exclusive zone, focus on
+- [x] check what the quick terminal needs (`crates/agterm-gtk/src/quick*`): anchor/margins, exclusive zone, focus on
       show, multi-output placement
-- [ ] check the fallback path for compositors without layer-shell (the suite's weston, GNOME)
-- [ ] window activation: a second launch hands an xdg-activation token through platform data; check GPUI can raise
+- [x] check the fallback path for compositors without layer-shell (the suite's weston, GNOME)
+- [x] window activation: a second launch hands an xdg-activation token through platform data; check GPUI can raise
       and focus its window with it
-- [ ] report: pass/fail per point; gaps that need a GPUI patch
+- [x] report: pass/fail per point; gaps that need a GPUI patch
 
 ### Task 4: Spike gate
 

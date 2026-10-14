@@ -1,0 +1,13 @@
+{"check": "primary_focused_on_open", "pass": false, "detail": {"focused": null}}
+{"check": "decoy_takes_focus", "pass": false, "detail": {"focused": null}}
+{"check": "control_gpui_activate_window_refused", "pass": true, "detail": {"check": "gpui_activate_window", "pass": false, "detail": {"ms_to_focus": null, "niri_focused_window": null}}}
+{"check": "second_gapplication_no_token", "pass": true, "detail": {"focused_before": null, "second_launch": {"kind": "GApplication", "env_token": null, "env_startup_id": null, "registered": true, "remote": true}, "primary": {"check": "activate_without_token", "pass": false, "detail": {"error": null, "ms_to_focus": null, "niri_focused_window": null}}, "received": [{"info": "activate_received", "detail": {"platform_data_keys": ["cwd"], "token": false}}]}}
+{"check": "second_gapplication_token_not_forwarded", "pass": true, "detail": {"focused_before": null, "second_launch": {"kind": "GApplication", "env_token": null, "env_startup_id": "spike-launch_TIME3279572", "registered": true, "remote": true}, "primary": {"check": "activate_without_token", "pass": false, "detail": {"error": null, "ms_to_focus": null, "niri_focused_window": null}}, "received": [{"info": "activate_received", "detail": {"platform_data_keys": ["cwd"], "token": false}}]}}
+{"check": "second_gtk_token", "pass": false, "detail": {"focused_before": null, "second_launch": {"kind": "GtkApplication", "env_token": null, "env_startup_id": "spike-launch_TIME3284703", "registered": true, "remote": true}, "primary": {"check": "activate_with_token", "pass": false, "detail": {"error": null, "ms_to_focus": null, "niri_focused_window": null}}, "received": [{"info": "activate_received", "detail": {"platform_data_keys": ["activation-token", "cwd", "desktop-startup-id"], "token": true}}]}}
+{"info": "exit", "detail": {"process": "second_gtk_token", "code": 0}}
+{"info": "exit", "detail": {"process": "second_gapplication_token_not_forwarded", "code": 0}}
+{"info": "exit", "detail": {"process": "second_gapplication_no_token", "code": 0}}
+{"info": "exit", "detail": {"process": "spike-decoy", "code": -15}}
+{"info": "exit", "detail": {"process": "primary", "code": -15}}
+{"info": "exit", "detail": {"process": "xvfb", "code": 0}}
+{"info": "exit", "detail": {"process": "dbus", "code": 0}}
