@@ -72,6 +72,8 @@ fn subscriber(filter: EnvFilter, file: Option<Arc<File>>) -> impl Subscriber + S
 /// Only a launch that gets the lock (no running agterm writes this log) moves a file larger than `rotate_bytes` to
 /// [`ROTATED_FILE_NAME`] and starts a fresh one, locked in turn. A launch that finds the lock held (a second `agterm`
 /// about to be forwarded to the running instance) only appends, so the live instance's file is never renamed under it.
+/// A child the last instance forked can still hold that lock until its exec closes the inherited descriptor, or it
+/// exits; a launch in that interval only appends too, and the rotation waits for a later launch.
 fn open_log_file(state_dir: &Path, rotate_bytes: u64) -> io::Result<Arc<File>> {
     fs::create_dir_all(state_dir)?;
     let path = state_dir.join(LOG_FILE_NAME);
@@ -173,10 +175,48 @@ mod tests {
         assert_eq!(fs::read_to_string(&rotated).unwrap(), "previous run, past the limit\n");
     }
 
+    /// Names the test a re-run copy of the test binary runs in place of re-running it: see [`in_a_fresh_process`].
+    const FRESH_PROCESS_ENV: &str = "AGTERM_GTK_TEST_FRESH_PROCESS";
+
+    /// Runs `body` alone in a fresh copy of the test binary: in the copy [`FRESH_PROCESS_ENV`] names `test` to (its
+    /// full path, `module::tests::name`), it runs `body`; anywhere else it re-runs `test` alone in such a copy and
+    /// asserts the copy passed. A test that needs a lock gone the moment its last handle drops runs this way: the lock
+    /// belongs to the open file description, and a child that another test of this multi-threaded binary spawns holds
+    /// a duplicate of every descriptor from its fork until its exec, so in the shared harness the lock can outlive the
+    /// handles for a moment. In the copy no other test runs, so nothing forks.
+    fn in_a_fresh_process(test: &str, body: impl FnOnce()) {
+        if std::env::var(FRESH_PROCESS_ENV).is_ok_and(|probed| probed == test) {
+            body();
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([test, "--exact", "--test-threads=1", "--nocapture"])
+            .env(FRESH_PROCESS_ENV, test)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{test} in a fresh process: {:?}\n{stdout}{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // the filter matched the test: a mistyped name would pass with no test run
+        assert!(stdout.contains("1 passed"), "{test} did not run:\n{stdout}");
+    }
+
     /// A second launch, forwarded to the running instance, must not rotate the log that instance is writing, even
-    /// once it has grown past the bound; the rotating launch's fresh file is held the same way.
+    /// once it has grown past the bound; the rotating launch's fresh file is held the same way. In a fresh process, as
+    /// the rotation once no instance is left needs the lock released when the last handle drops.
     #[test]
     fn a_log_held_by_a_running_instance_is_never_rotated() {
+        in_a_fresh_process(
+            "logging::tests::a_log_held_by_a_running_instance_is_never_rotated",
+            the_running_instance_keeps_its_log,
+        );
+    }
+
+    fn the_running_instance_keeps_its_log() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(LOG_FILE_NAME);
         let rotated = tmp.path().join(ROTATED_FILE_NAME);
