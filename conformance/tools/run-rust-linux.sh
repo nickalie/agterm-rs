@@ -12,7 +12,14 @@
 # Exits with check_ratchet.py's status (0 holds, 1 broken, 2 no usable report), or 1 when a run left an instance
 # root behind; pytest's own status does not count, since most tests are red by design until parity.
 # CONFORMANCE_LINUX_DISPLAY=session uses this desktop's display and bus instead, for debugging.
+# One run at a time per user: a second run waits on the lock $CONFORMANCE_LOCK (default
+# $XDG_RUNTIME_DIR/agterm-conformance.lock), shared by every checkout. It does not hold back a stand-alone cargo run.
 set -euo pipefail
+
+# Set by the re-exec below; cleared before anything spawns, so a nested runner queues again.
+locked="${CONFORMANCE_RUN_LOCKED:-}"
+unset CONFORMANCE_RUN_LOCKED
+args=("$@")
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
@@ -29,7 +36,7 @@ while (($#)); do
         --tests) tests="$2"; shift 2 ;;
         --ratchet) ratchet="$2"; shift 2 ;;
         --) shift; extra=("$@"); break ;;
-        -h|--help) sed -n '2,15s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,17s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -54,6 +61,24 @@ for layer in protocol cli behaviors; do
     if [[ -d "$tests/$layer" ]]; then layers+=("$tests/$layer"); fi
 done
 ((${#layers[@]})) || { echo "no protocol, cli or behaviors layer under $tests" >&2; exit 2; }
+
+# Concurrent suites starve each other's software-rendered pane mounts past their deadlines: queue instead. flock -o
+# closes the lock before the runner starts, so the zmx daemons that outlive a run by design do not keep holding it.
+if [[ -z "$locked" ]]; then
+    lock="${CONFORMANCE_LOCK:-}"
+    if [[ -z "$lock" ]]; then
+        lock_dir="${XDG_RUNTIME_DIR:-/tmp/agterm-conformance-$(id -u)}"
+        if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+            mkdir -p -m 0700 "$lock_dir"
+            [[ -O "$lock_dir" ]] || { echo "$lock_dir belongs to another user" >&2; exit 2; }
+        fi
+        lock="$lock_dir/agterm-conformance.lock"
+    fi
+    if ! flock -n "$lock" true; then
+        echo "waiting for another conformance run (lock $lock)"
+    fi
+    exec flock -o "$lock" env CONFORMANCE_RUN_LOCKED=1 bash "$here/$(basename "${BASH_SOURCE[0]}")" "${args[@]}"
+fi
 
 if [[ -z "$stage" ]]; then
     stage="${CARGO_TARGET_DIR:-$repo/target}/conformance-stage"

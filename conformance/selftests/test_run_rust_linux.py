@@ -1,9 +1,12 @@
+import fcntl
 import json
 import os
 import re
+import selectors
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -38,6 +41,24 @@ def test_reports_version(ctl):
     make_root()
 """
 
+# Runs in the runner's own pytest process, which inherits the runner's descriptors and environment as they are; the
+# app does not do for a probe, since the harness starts it with close_fds.
+PROBE_FDS_TEST = """
+import json
+import os
+
+def test_reports_version(ctl):
+    fds = []
+    for fd in os.listdir("/proc/self/fd"):
+        try:
+            found = os.stat(f"/proc/self/fd/{fd}")
+        except OSError:
+            continue  # the listing's own descriptor, closed by now
+        fds.append([found.st_dev, found.st_ino])
+    with open(os.environ["FD_PROBE"], "w") as sink:
+        json.dump({"fds": fds, "env": sorted(os.environ)}, sink)
+"""
+
 
 @pytest.fixture
 def layers(tmp_path: Path) -> Path:
@@ -70,10 +91,38 @@ def weston_on_path(
     return directory
 
 
+@pytest.fixture(autouse=True)
+def lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The runner's admission lock, private to the test: a real suite run elsewhere never queues it or is queued."""
+    path = tmp_path / "conformance.lock"
+    monkeypatch.setenv("CONFORMANCE_LOCK", str(path))
+    monkeypatch.delenv("CONFORMANCE_RUN_LOCKED", raising=False)
+    return path
+
+
 def ratchet(tmp_path: Path, *ids: str) -> Path:
     path = tmp_path / "rust-passing.txt"
     path.write_text("# ids the build passes\n" + "".join(f"{nodeid}\n" for nodeid in sorted(ids)))
     return path
+
+
+def command(tmp_path: Path, stage: Path, layers: Path, listed: Path, *args: str) -> list[str]:
+    return [
+        str(SCRIPT),
+        "--stage",
+        str(stage),
+        "--tests",
+        str(layers),
+        "--ratchet",
+        str(listed),
+        "--out",
+        str(tmp_path / "report"),
+        *args,
+    ]
+
+
+def run_env(**env: str) -> dict[str, str]:
+    return {**os.environ, "PYTHON": sys.executable, "FAKE_VERSION": AT_LEVEL, **env}
 
 
 def run(
@@ -81,19 +130,8 @@ def run(
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     out = tmp_path / "report"
     completed = subprocess.run(
-        [
-            str(SCRIPT),
-            "--stage",
-            str(stage),
-            "--tests",
-            str(layers),
-            "--ratchet",
-            str(listed),
-            "--out",
-            str(out),
-            *args,
-        ],
-        env={**os.environ, "PYTHON": sys.executable, "FAKE_VERSION": AT_LEVEL, **env},
+        command(tmp_path, stage, layers, listed, *args),
+        env=run_env(**env),
         capture_output=True,
         text=True,
         timeout=120,
@@ -226,3 +264,84 @@ def test_pytest_refusing_its_arguments_leaves_no_usable_report(tmp_path: Path, s
     assert "pytest status: 4" in report
     assert "exit status: 2" in report
     assert "ratchet holds" not in report
+
+
+def read_until(process: subprocess.Popen[str], needle: str, timeout: float = 30.0) -> str:
+    """The runner's stdout up to the line holding `needle`; fails on EOF or after `timeout` seconds."""
+    assert process.stdout is not None
+    seen = ""
+    deadline = time.monotonic() + timeout
+    with selectors.DefaultSelector() as selector:
+        selector.register(process.stdout, selectors.EVENT_READ)
+        while needle not in seen:
+            left = deadline - time.monotonic()
+            assert left > 0 and selector.select(left), f"no {needle!r} line within {timeout}s: {seen!r}"
+            line = process.stdout.readline()
+            assert line, f"the runner closed its output before {needle!r}: {seen!r}"
+            seen += line
+    return seen
+
+
+def test_a_second_run_waits_for_the_lock(tmp_path: Path, stage: Path, layers: Path, lock: Path) -> None:
+    with open(lock, "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        process = subprocess.Popen(
+            command(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID)),
+            env=run_env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        try:
+            seen = read_until(process, "waiting for another conformance run")
+            assert f"(lock {lock})" in seen
+            time.sleep(0.5)  # long enough for an unqueued runner to get as far as its report
+            assert process.poll() is None
+            assert not (tmp_path / "report").exists()
+        except BaseException:
+            process.kill()
+            process.communicate()
+            raise
+        fcntl.flock(held, fcntl.LOCK_UN)
+    output, _ = process.communicate(timeout=120)
+    assert process.returncode == 0, output
+    assert "rust: 1 pass, 0 fail" in (tmp_path / "report" / "report.md").read_text()
+
+
+def test_the_run_does_not_inherit_the_lock(tmp_path: Path, stage: Path, layers: Path, lock: Path) -> None:
+    """zmx daemons outlive a run by design: started holding the lock's descriptor, they would hold it forever."""
+    (layers / "protocol" / "test_probe.py").write_text(PROBE_FDS_TEST)
+    probe = tmp_path / "fds.json"
+    completed, _ = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), FD_PROBE=str(probe))
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "waiting for another conformance run" not in completed.stdout
+    found = json.loads(probe.read_text())
+    held = os.stat(lock)
+    assert found["fds"], "the probe saw no descriptors at all"
+    assert [held.st_dev, held.st_ino] not in found["fds"]
+    assert "CONFORMANCE_RUN_LOCKED" not in found["env"]
+
+
+def test_the_default_lock_is_the_users_runtime_dir(
+    tmp_path: Path, stage: Path, layers: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    monkeypatch.delenv("CONFORMANCE_LOCK")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    default = runtime / "agterm-conformance.lock"
+    with open(default, "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        process = subprocess.Popen(
+            command(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID)),
+            env=run_env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        try:
+            assert f"(lock {default})" in read_until(process, "waiting for another conformance run")
+        finally:
+            fcntl.flock(held, fcntl.LOCK_UN)
+            output, _ = process.communicate(timeout=120)
+    assert process.returncode == 0, output

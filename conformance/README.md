@@ -111,6 +111,9 @@ Into `--out DIR` (default `reports/rust-linux/`) it writes `report.md`, `junit.x
 the `--nodeid-report`.
 It exits with the ratchet's status, not pytest's, since red tests are expected until parity: 0 holds, 1 broken (or an
 instance root left behind), 2 no usable report.
+One suite run at a time per user: concurrent runs, from any checkout, queue on `$CONFORMANCE_LOCK` (default
+`$XDG_RUNTIME_DIR/agterm-conformance.lock`, else `/tmp/agterm-conformance-<uid>/`), and a waiting run says so; the
+deadlines assume one suite's load, and the lock does not hold back a stand-alone `cargo build` or `cargo test`.
 
 ```sh
 conformance/tools/run-rust-linux.sh                          # full run
