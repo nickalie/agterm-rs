@@ -1,7 +1,8 @@
 """A stand-in app for adapter self-tests: serves the JSON-line protocol on `AGTERM_CONTROL_SOCKET`.
 
 FAKE_APP_MODE: serve (default), exit (exit 3 before binding), silent (never binds), refuse (`version` fails),
-ignore-term (serve, ignoring SIGTERM). FAKE_VERSION: JSON for the `version` result. FAKE_ZMX_LIST: JSON
+ignore-term (serve, ignoring SIGTERM and SIGABRT, each recorded in `fake-signals`; FAKE_ABORT=exit makes SIGABRT
+exit 134 instead, without a core). FAKE_VERSION: JSON for the `version` result. FAKE_ZMX_LIST: JSON
 replacing the `zmx.list` result.
 `fake.adopt {pid, session?, pane?, daemon?}` makes that pid a claimed zmx daemon which `zmx.kill` terminates;
 killing a left pane promotes the session's right pane into the left slot, as the references do.
@@ -29,7 +30,17 @@ if mode == "exit":
 if mode == "silent":
     threading.Event().wait()
 if mode == "ignore-term":
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
+    def record(signum: int, frame: object) -> None:
+        name = signal.Signals(signum).name.removeprefix("SIG")
+        with open(os.path.join(state, "fake-signals"), "a") as sink:
+            sink.write(f"{name}\n")
+        if signum == signal.SIGABRT and os.environ.get("FAKE_ABORT") == "exit":
+            os._exit(134)
+
+    signal.signal(signal.SIGTERM, record)
+    # Handled, never the default action: no test may leave a real core behind.
+    signal.signal(signal.SIGABRT, record)
 
 daemons: list[dict] = []
 lock = threading.Lock()

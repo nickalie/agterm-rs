@@ -221,11 +221,20 @@ pub fn lookup(key: SurfaceKey) -> Option<TerminalSurface> {
 }
 
 /// Tear down every live surface, ending their processes: the quit path, which leaves the widgets to the process exit.
+/// Each step is logged, so a quit that stalls names the terminal it stalls in.
 pub fn teardown_all() {
-    let live: Vec<Weak<Inner>> = SURFACES.with(|surfaces| surfaces.borrow().values().cloned().collect());
-    for surface in live.iter().filter_map(TerminalSurface::upgrade) {
-        surface.teardown();
+    let live = all();
+    if live.is_empty() {
+        return;
     }
+    tracing::info!(count = live.len(), "quit: tearing down the terminals");
+    for surface in &live {
+        let key = surface.key().get();
+        tracing::info!(key, "quit: tearing down a terminal");
+        surface.teardown();
+        tracing::info!(key, "quit: the terminal is torn down");
+    }
+    tracing::info!("quit: every terminal is torn down");
 }
 
 /// Every live terminal that is not torn down: the session panes, the overlays and HUDs, the quick terminal.

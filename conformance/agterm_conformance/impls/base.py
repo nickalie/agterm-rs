@@ -107,6 +107,9 @@ DBUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Confi
 HEADLESS_HELPERS = ("weston", "dbus-daemon")
 LAUNCH_TIMEOUT = 30.0
 STOP_TIMEOUT = 10.0
+# How long an app outliving STOP_TIMEOUT gets to write its core after SIGABRT before it is killed.
+ABORT_GRACE = 10.0
+PROC_ROOT = Path("/proc")
 REAP_SETTLE = 8.0
 LEFTOVER_GRACE = 5.0
 POLL_INTERVAL = 0.05
@@ -540,11 +543,11 @@ class Adapter:
         The returned instance replaces `instance`; stop that one, never the old.
         """
         command = self.instance_executable(instance.root)
-        killed = _terminate(instance.process)
+        problem = _terminate_app(instance)
         _release_app_id(instance.app_id)
         try:
-            if killed:
-                raise StopError(f"pid {instance.pid} ignored SIGTERM for {STOP_TIMEOUT}s and was killed")
+            if problem is not None:
+                raise StopError(problem)
             check_launch_env(
                 instance.env, instance.root, self.needs_app_id, self.needs_runtime_dir, instance.compositor is not None
             )
@@ -602,7 +605,7 @@ class Adapter:
                 else:
                     steps = ["nothing listed or running to reap before the quit"]
             finally:
-                killed = _terminate(instance.process)
+                problem = _terminate_app(instance)
             helper_problem = self.stop_helpers(instance)
             leftovers = _leftovers_error(instance.zmx_dir, steps)
         finally:
@@ -610,8 +613,8 @@ class Adapter:
             headless_problem = stop_headless(instance.compositor, instance.session_bus, instance.root)
         if leftovers is not None:
             raise leftovers
-        if killed:
-            raise StopError(f"pid {instance.pid} ignored SIGTERM for {STOP_TIMEOUT}s and was killed")
+        if problem is not None:
+            raise StopError(problem)
         if helper_problem is not None:
             raise StopError(helper_problem)
         if headless_problem is not None:
@@ -977,6 +980,77 @@ def _terminate(process: subprocess.Popen[bytes]) -> bool:
         process.kill()
         process.wait(timeout=STOP_TIMEOUT)
         return True
+
+
+def _terminate_app(instance: Instance) -> str | None:
+    """SIGTERM the app; the StopError message when it outlives STOP_TIMEOUT, else None.
+
+    An app that stalls gets its threads snapshotted into its log and SIGABRT, so the system writes a core naming the
+    stalled step, then SIGKILL once ABORT_GRACE runs out. Weston and the session bus keep the plain `_terminate`.
+    """
+    process = instance.process
+    if process.poll() is not None:
+        return None
+    process.send_signal(signal.SIGTERM)
+    try:
+        process.wait(timeout=STOP_TIMEOUT)
+        return None
+    except subprocess.TimeoutExpired:
+        pass
+    snapshot = thread_snapshot(process.pid)
+    process.send_signal(signal.SIGABRT)
+    try:
+        process.wait(timeout=ABORT_GRACE)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=STOP_TIMEOUT)
+    # Appended once the app is gone: a first launch's stdout is not opened for appending, so a later write of the app
+    # would land on top of the snapshot.
+    try:
+        with open(instance.log, "a", errors="replace") as sink:
+            sink.write(snapshot)
+    except OSError:
+        pass
+    return (
+        f"pid {process.pid} did not exit within {STOP_TIMEOUT}s of SIGTERM; thread snapshot in {instance.log}; "
+        f"core requested ({_core_hint(process.pid)})"
+    )
+
+
+def thread_snapshot(pid: int) -> str:
+    """Best effort: each thread's id, name, state and the kernel function it sleeps in, read from /proc."""
+    header = f"--- conformance: pid {pid} outlived SIGTERM by {STOP_TIMEOUT}s; its threads:\n"
+    try:
+        tasks = sorted((PROC_ROOT / str(pid) / "task").iterdir(), key=lambda task: (len(task.name), task.name))
+    except OSError as error:
+        return f"{header}  thread snapshot unavailable: {error}\n"
+    lines = [
+        f"  tid={task.name} comm={_proc_line(task / 'comm')} state={_proc_state(task)} "
+        f"wchan={_proc_line(task / 'wchan')}\n"
+        for task in tasks
+    ]
+    return header + "".join(lines)
+
+
+def _proc_line(path: Path) -> str:
+    try:
+        return path.read_text(errors="replace").strip() or "-"
+    except OSError:
+        return "?"
+
+
+def _proc_state(task: Path) -> str:
+    try:
+        status = (task / "status").read_text(errors="replace")
+    except OSError:
+        return "?"
+    return next((line.split(":", 1)[1].strip() for line in status.splitlines() if line.startswith("State:")), "?")
+
+
+def _core_hint(pid: int) -> str:
+    if sys.platform == "darwin":
+        return f"a crash report for pid {pid} in ~/Library/Logs/DiagnosticReports"
+    return f"coredumpctl info {pid}"
 
 
 def find_leftovers(zmx_dir: str) -> list[tuple[int, str, str]]:

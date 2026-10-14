@@ -257,6 +257,7 @@ pub fn shutdown() {
     if let Some(mut shell) = SHELL.with(|shell| shell.borrow_mut().take()) {
         if let Ok(mut state) = shell.state.try_borrow_mut() {
             state.save_on_quit();
+            tracing::info!("quit: the state is saved");
             // a confirmed live sessions reset is armed for the next launch, which this app then opens itself
             if state.core.arm_live_reset_on_quit() {
                 crate::zmx_runtime::spawn_relauncher();
@@ -265,7 +266,11 @@ pub fn shutdown() {
             tracing::error!("quit save skipped: the app state is in use");
         }
         shell.main_loop.close();
+        tracing::info!("quit: the main loop is closed");
         shell.server.stop();
+        tracing::info!("quit: the control server is stopped");
+        drop(shell);
+        tracing::info!("quit: the shell is dropped");
     }
     surface::teardown_all();
 }

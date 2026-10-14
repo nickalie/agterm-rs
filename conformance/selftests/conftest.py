@@ -70,6 +70,12 @@ def short_leftover_grace(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(base, "LEFTOVER_GRACE", 0.1)
 
 
+@pytest.fixture(autouse=True)
+def short_abort_grace(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fake app ignoring SIGABRT is killed only once the grace for writing a core runs out."""
+    monkeypatch.setattr(base, "ABORT_GRACE", 0.5)
+
+
 @pytest.fixture
 def real_compositor(fake_compositor: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(base, "compositor_program", REAL_COMPOSITOR_PROGRAM)

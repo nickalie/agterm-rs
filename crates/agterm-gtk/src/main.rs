@@ -140,8 +140,10 @@ fn main() -> glib::ExitCode {
     // it rejects no option or file it does not own
     let argv0: Vec<String> = std::env::args().take(1).collect();
     let status = app.run_with_args(&argv0);
+    tracing::info!("quit: the application run returned");
     app::shutdown();
     ghostty_app::shutdown();
+    tracing::info!("quit: libghostty is shut down");
     status
 }
 

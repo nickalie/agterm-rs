@@ -6,6 +6,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -694,9 +695,11 @@ def test_relaunch_of_an_app_ignoring_sigterm_fails_and_frees_its_app_id(
     adapter = SwiftLinuxAdapter(fake_bin)
     app_id = f"{DEFAULT_APP_ID}.conformance.relaunch"
     instance = adapter.launch(app_id=app_id)
-    with pytest.raises(StopError, match="ignored SIGTERM"):
+    with pytest.raises(StopError, match=rf"pid {instance.pid} did not exit within 0.5s of SIGTERM"):
         adapter.relaunch(instance)
     assert instance.process.returncode == -9
+    assert (instance.state_dir / "fake-signals").read_text() == "TERM\nABRT\n"
+    assert f"pid {instance.pid} outlived SIGTERM" in instance.log.read_text()
     monkeypatch.delenv("FAKE_APP_MODE")
     adapter.stop(adapter.launch(app_id=app_id))
 
@@ -812,9 +815,89 @@ def test_app_ignoring_sigterm_is_killed_and_reported(
     monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
     adapter = SwiftLinuxAdapter(fake_bin)
     instance = adapter.launch()
-    with pytest.raises(StopError, match="ignored SIGTERM"):
+    hint = (
+        f"a crash report for pid {instance.pid} in ~/Library/Logs/DiagnosticReports"
+        if sys.platform == "darwin"
+        else f"coredumpctl info {instance.pid}"
+    )
+    message = (
+        f"pid {instance.pid} did not exit within 0.5s of SIGTERM; thread snapshot in {instance.log}; "
+        f"core requested ({hint})"
+    )
+    with pytest.raises(StopError, match=re.escape(message)):
+        adapter.stop(instance)
+    # SIGABRT came second and was ignored too, so SIGKILL ended it; the root stays for the post-mortem
+    assert instance.process.returncode == -9
+    assert (instance.state_dir / "fake-signals").read_text() == "TERM\nABRT\n"
+    assert instance.root.exists()
+    if sys.platform == "linux":
+        log = instance.log.read_text()
+        assert f"--- conformance: pid {instance.pid} outlived SIGTERM by 0.5s; its threads:\n" in log
+        assert re.search(rf"^  tid={instance.pid} comm=agterm-linux state=\S.* wchan=\S+$", log, re.MULTILINE), log
+
+
+def test_app_ending_on_sigabrt_is_not_killed_and_still_reported(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_APP_MODE", "ignore-term")
+    monkeypatch.setenv("FAKE_ABORT", "exit")
+    monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
+    monkeypatch.setattr(base, "ABORT_GRACE", 30.0)
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    started = time.monotonic()
+    with pytest.raises(StopError, match=r"did not exit within 0.5s of SIGTERM; .*; core requested"):
+        adapter.stop(instance)
+    assert instance.process.returncode == 134 and time.monotonic() - started < 15
+    assert (instance.state_dir / "fake-signals").read_text() == "TERM\nABRT\n"
+    assert instance.root.exists()
+
+
+def test_a_failed_thread_snapshot_still_aborts_kills_and_reports(
+    roots: list[Path], fake_bin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_APP_MODE", "ignore-term")
+    monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
+    monkeypatch.setattr(base, "PROC_ROOT", tmp_path / "no-proc")
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    with pytest.raises(StopError, match=r"thread snapshot in .*; core requested"):
         adapter.stop(instance)
     assert instance.process.returncode == -9
+    assert (instance.state_dir / "fake-signals").read_text() == "TERM\nABRT\n"
+    assert "thread snapshot unavailable: " in instance.log.read_text()
+    assert instance.root.exists()
+
+
+def test_an_unwritable_log_still_aborts_kills_and_reports(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_APP_MODE", "ignore-term")
+    monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    instance.log.unlink()
+    instance.log.mkdir()
+    with pytest.raises(StopError, match="did not exit within 0.5s of SIGTERM"):
+        adapter.stop(instance)
+    assert instance.process.returncode == -9
+
+
+def test_an_app_quitting_on_sigterm_gets_no_sigabrt(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[int] = []
+    send_signal = subprocess.Popen.send_signal
+
+    def recording(process: subprocess.Popen[bytes], signum: int) -> None:
+        sent.append(signum)
+        send_signal(process, signum)
+
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    monkeypatch.setattr(subprocess.Popen, "send_signal", recording)
+    adapter.stop(instance)
+    assert signal.SIGABRT not in sent and signal.SIGTERM in sent
 
 
 def test_stop_reaps_claimed_daemons_over_the_protocol(

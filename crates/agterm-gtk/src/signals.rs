@@ -10,7 +10,9 @@ pub fn quit_on_sigterm(app: &adw::Application) {
         tracing::info!("SIGTERM: quitting");
         crate::app::shutdown();
         if let Some(app) = app.upgrade() {
+            tracing::info!("SIGTERM: quitting the application");
             app.quit();
+            tracing::info!("SIGTERM: the application quit returned");
         }
     });
 }
