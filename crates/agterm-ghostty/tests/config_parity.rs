@@ -130,6 +130,10 @@ const LINES: &[(&str, usize)] = &[
     ("keybind", 1),
     ("key-remap", 0),
     ("theme = light:Only", 1),
+    (r#"theme = light:"\u{d800}",dark:x"#, 1),
+    (r#"theme = light:"\q",dark:x"#, 1),
+    (r"theme = light:a\qb,dark:x", 1),
+    (r#"theme = light:"\x5",dark:x"#, 1),
     ("theme = sub/dir", 1),
     ("theme = {dir}/missing", 1),
     ("theme = {dir}", 1),
@@ -209,10 +213,23 @@ fn includes_count_as_libghostty_counts_them() -> TestResult {
 
 #[test]
 fn themes_count_as_libghostty_counts_them() -> TestResult {
-    let cases: [Files<'_>; 4] = [
+    let cases: [Files<'_>; 7] = [
         &[
             ("main.conf", "theme = {dir}/t\n"),
             ("t", "background = nope\nwho = 1\nforeground = red\n"),
+        ],
+        // quoted sides decode Zig escapes: found, the theme's two bad lines count
+        &[
+            ("main.conf", "theme = light:\"{dir}/\\x74\",dark:x\n"),
+            ("t", "who = 1\nwhat = 2\n"),
+        ],
+        &[
+            ("main.conf", "theme = light:\"{dir}/\\u{74}\",dark:x\n"),
+            ("t", "who = 1\nwhat = 2\n"),
+        ],
+        &[
+            ("main.conf", "theme = light:\"{dir}/\\xff\",dark:{dir}/t\n"),
+            ("t", "who = 1\nwhat = 2\n"),
         ],
         // loadTheme skips no BOM: the first key carries it
         &[

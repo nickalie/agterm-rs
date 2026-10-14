@@ -738,18 +738,17 @@ pub fn parse_theme(value: &str) -> Result<ThemeName, ValueError> {
     }
 }
 
-/// `CommaSplitter`: fields split at commas outside double quotes, a backslash escaping the next character; a trailing
-/// comma ends the list.
+/// `CommaSplitter`: fields split at commas outside double quotes; a trailing comma ends the list. A backslash starts
+/// an escape that must be well formed (`\n \r \t \\ \' \"`, `\x` and two hex digits, `\u{` hex digits `}`), inside
+/// quotes or not.
 fn split_commas(value: &str) -> Result<Vec<&str>, ValueError> {
     let bytes = value.as_bytes();
     let (mut fields, mut start, mut at, mut quoted) = (Vec::new(), 0, 0, false);
     while at < bytes.len() {
         match bytes[at] {
             b'\\' => {
-                if at + 1 >= bytes.len() {
-                    return Err(ValueError::Other("error.UnfinishedEscape"));
-                }
-                at += 1;
+                at = skip_escape(bytes, at + 1)?;
+                continue;
             }
             b'"' => quoted = !quoted,
             b',' if !quoted => {
@@ -769,31 +768,118 @@ fn split_commas(value: &str) -> Result<Vec<&str>, ValueError> {
     Ok(fields)
 }
 
-/// A field value of `parseAutoStruct`: a double-quoted one decoded as a Zig string literal's simple escapes.
-fn unquote(value: &str) -> Result<String, ValueError> {
-    let Some(inner) = value
-        .strip_prefix('"')
-        .and_then(|rest| rest.strip_suffix('"'))
-        .filter(|_| value.len() >= 2)
-    else {
-        return Ok(value.to_owned());
-    };
-    let mut decoded = String::with_capacity(inner.len());
-    let mut characters = inner.chars();
-    while let Some(character) = characters.next() {
-        if character != '\\' {
-            decoded.push(character);
-            continue;
+/// The index past the escape whose character is at `at` (just after the backslash), as `CommaSplitter` checks it.
+fn skip_escape(bytes: &[u8], at: usize) -> Result<usize, ValueError> {
+    const UNFINISHED: ValueError = ValueError::Other("error.UnfinishedEscape");
+    const ILLEGAL: ValueError = ValueError::Other("error.IllegalEscape");
+    match bytes.get(at).ok_or(UNFINISHED)? {
+        b'n' | b'r' | b't' | b'\\' | b'\'' | b'"' => Ok(at + 1),
+        b'x' => {
+            for offset in 1..=2 {
+                if !bytes.get(at + offset).ok_or(UNFINISHED)?.is_ascii_hexdigit() {
+                    return Err(ILLEGAL);
+                }
+            }
+            Ok(at + 3)
         }
-        decoded.push(match characters.next() {
-            Some('n') => '\n',
-            Some('r') => '\r',
-            Some('t') => '\t',
-            Some(escaped @ ('\\' | '\'' | '"')) => escaped,
-            _ => return Err(ValueError::Invalid),
-        });
+        b'u' => {
+            if *bytes.get(at + 1).ok_or(UNFINISHED)? != b'{' {
+                return Err(ILLEGAL);
+            }
+            skip_unicode_digits(bytes, at + 2)
+        }
+        _ => Err(ILLEGAL),
     }
-    Ok(decoded)
+}
+
+/// `CommaSplitter`'s `\u{...}` digits from `at`: at least one, then `}`. Its running value is its own (a letter digit
+/// adds its offset from `a`/`A`, not 10 more), checked against U+10FFFF after each digit.
+fn skip_unicode_digits(bytes: &[u8], mut at: usize) -> Result<usize, ValueError> {
+    const UNFINISHED: ValueError = ValueError::Other("error.UnfinishedEscape");
+    const ILLEGAL: ValueError = ValueError::Other("error.IllegalEscape");
+    let (mut digits, mut value) = (0, 0_u32);
+    loop {
+        let byte = *bytes.get(at).ok_or(UNFINISHED)?;
+        at += 1;
+        let digit = match byte {
+            b'}' if digits == 0 => return Err(ILLEGAL),
+            b'}' => return Ok(at),
+            b'0'..=b'9' => byte - b'0',
+            b'a'..=b'f' => byte - b'a',
+            b'A'..=b'F' => byte - b'A',
+            _ => return Err(ILLEGAL),
+        };
+        digits += 1;
+        value = (value << 4) + u32::from(digit);
+        if value > 0x10_ffff {
+            return Err(ILLEGAL);
+        }
+    }
+}
+
+/// A field value of `parseAutoStruct`: a double-quoted one decoded as a Zig string literal
+/// (`std.zig.string_literal.parseWrite`), up to its first unescaped quote. A `\x` byte that leaves invalid UTF-8 is
+/// replaced (U+FFFD): libghostty looks such a theme up by its raw bytes, which a `String` cannot hold, and not finding
+/// either name counts the same.
+fn unquote(value: &str) -> Result<String, ValueError> {
+    if value.len() < 2 || !value.starts_with('"') || !value.ends_with('"') {
+        return Ok(value.to_owned());
+    }
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut at = 1;
+    loop {
+        match bytes.get(at).ok_or(ValueError::Invalid)? {
+            b'"' => break,
+            b'\\' => at = decode_escape(bytes, at + 1, &mut decoded)?,
+            byte => {
+                decoded.push(*byte);
+                at += 1;
+            }
+        }
+    }
+    Ok(String::from_utf8_lossy(&decoded).into_owned())
+}
+
+/// `parseEscapeSequence` for the escape whose character is at `at`: its bytes appended to `out`, the index past it
+/// returned. `\u{...}` takes any number of hex digits up to U+10FFFF and must name a scalar value.
+fn decode_escape(bytes: &[u8], at: usize, out: &mut Vec<u8>) -> Result<usize, ValueError> {
+    let hex = |index: usize| {
+        bytes
+            .get(index)
+            .and_then(|byte| char::from(*byte).to_digit(16))
+            .ok_or(ValueError::Invalid)
+    };
+    let simple = match bytes.get(at).ok_or(ValueError::Invalid)? {
+        b'n' => b'\n',
+        b'r' => b'\r',
+        b't' => b'\t',
+        byte @ (b'\\' | b'\'' | b'"') => *byte,
+        b'x' => {
+            let byte = hex(at + 1)? * 16 + hex(at + 2)?;
+            out.push(u8::try_from(byte).map_err(|_| ValueError::Invalid)?);
+            return Ok(at + 3);
+        }
+        b'u' => {
+            if bytes.get(at + 1) != Some(&b'{') || bytes.get(at + 2) == Some(&b'}') {
+                return Err(ValueError::Invalid);
+            }
+            let (mut index, mut value) = (at + 2, 0_u32);
+            while bytes.get(index) != Some(&b'}') {
+                value = value * 16 + hex(index)?;
+                if value > 0x10_ffff {
+                    return Err(ValueError::Invalid);
+                }
+                index += 1;
+            }
+            let character = char::from_u32(value).ok_or(ValueError::Invalid)?;
+            out.extend_from_slice(character.encode_utf8(&mut [0; 4]).as_bytes());
+            return Ok(index + 1);
+        }
+        _ => return Err(ValueError::Invalid),
+    };
+    out.push(simple);
+    Ok(at + 1)
 }
 
 /// `terminal.color.parsePaletteEntry`: `N=COLOR`, `N` a `u8` in Zig's base-0 syntax, spaces and tabs around both.

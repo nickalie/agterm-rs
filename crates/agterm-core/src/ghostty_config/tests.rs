@@ -344,6 +344,39 @@ fn themes_take_one_name_or_both_sides() {
 }
 
 #[test]
+fn quoted_theme_sides_decode_zig_string_escapes() {
+    let pair = |value: &str| validate::parse_theme(value).map(|theme| (theme.light, theme.dark));
+    let both = |light: &str, dark: &str| Ok((light.to_owned(), dark.to_owned()));
+    assert_eq!(pair(r#"light:"\x50aper",dark:Ink"#), both("Paper", "Ink"));
+    assert_eq!(
+        pair(r#"light:"\u{1F600}x",dark:"\u{0000041}""#),
+        both("\u{1F600}x", "A")
+    );
+    assert_eq!(pair(r#"light:"\t\"\\",dark:y"#), both("\t\"\\", "y"));
+    assert_eq!(
+        pair(r#"light:"\xff",dark:y"#),
+        both("\u{fffd}", "y"),
+        "invalid UTF-8 is replaced"
+    );
+    assert_eq!(
+        pair(r"light:a\x41,dark:b"),
+        both(r"a\x41", "b"),
+        "an unquoted side is not decoded"
+    );
+    for bad in [
+        r#"light:"\u{d800}",dark:y"#,
+        r#"light:"\u{110000}",dark:y"#,
+        r#"light:"\u{}",dark:y"#,
+        r#"light:"\x5",dark:y"#,
+        r#"light:"\q",dark:y"#,
+        r"light:a\qb,dark:c",
+        r"light:a,dark:c\",
+    ] {
+        assert!(validate::parse_theme(bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
 fn other_kinds_follow_their_parse() {
     assert_eq!(check_kind(kind("window-decoration"), None), Ok(()));
     assert_eq!(check_kind(kind("window-decoration"), Some("false")), Ok(()));
