@@ -23,6 +23,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use agterm_core::Core;
+use agterm_core::chrome::FALLBACK_BACKGROUND;
 use agterm_core::model::{AskAlignment, AskNavigation, AskStyle, OverlayPane, PendingAsk, Session};
 use agterm_ghostty::Color;
 use agterm_proto::{AskButton, ControlAskOutcome, ControlAskResult};
@@ -39,16 +40,16 @@ use crate::state::{self, AppState, Poster};
 const GUI_CELL: f64 = 8.0;
 /// The font size when neither the settings nor the terminal config name one.
 const DEFAULT_FONT_SIZE: f64 = 13.0;
-/// libghostty's default colors, for a terminal config that names none.
+/// libghostty's default colors, for a terminal config that names none; the background is the window chrome's fallback.
 const DEFAULT_FOREGROUND: Color = Color {
     r: 0xff,
     g: 0xff,
     b: 0xff,
 };
 const DEFAULT_BACKGROUND: Color = Color {
-    r: 0x28,
-    g: 0x2c,
-    b: 0x34,
+    r: FALLBACK_BACKGROUND.r,
+    g: FALLBACK_BACKGROUND.g,
+    b: FALLBACK_BACKGROUND.b,
 };
 
 /// Style classes of the dialog's parts.

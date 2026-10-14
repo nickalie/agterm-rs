@@ -227,16 +227,19 @@ fn config_files(env: &dyn Env) -> Vec<PathBuf> {
 /// `GhosttyApp.resolveSelectionColors`): the same sources [`build_config`] loads, the built-in defaults first, then the
 /// theme's file from `themes` filling what they leave unset.
 fn resolve_selection(env: &dyn Env, themes: Option<&Path>, dark: bool) -> SelectionColors {
-    let files: Vec<String> = config_files(env)
-        .iter()
-        .filter_map(|file| std::fs::read_to_string(file).ok())
-        .collect();
+    let files: Vec<String> = config_files(env).iter().filter_map(|file| read_regular(file)).collect();
     let sources = std::iter::once(DEFAULTS).chain(files.iter().map(String::as_str));
     chrome::resolve_selection_colors(
         sources,
-        |name| themes.and_then(|dir| std::fs::read_to_string(dir.join(name)).ok()),
+        |name| themes.and_then(|dir| read_regular(&dir.join(name))),
         dark,
     )
+}
+
+/// The text of `path` when it is a regular file (a symlink to one included), as [`build_config`] loads only those: a
+/// FIFO would block the read, and the main thread with it.
+fn read_regular(path: &Path) -> Option<String> {
+    path.is_file().then(|| std::fs::read_to_string(path).ok()).flatten()
 }
 
 /// The bundled themes' directory: `themes` beside the resolved resources (staged, vendored or system).
@@ -695,6 +698,33 @@ mod tests {
             None,
             "no themes directory"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn selection_colors_skip_sources_that_are_not_regular_files() -> Result<(), Box<dyn std::error::Error>> {
+        let state = tempfile::tempdir()?;
+        let themes = tempfile::tempdir()?;
+        std::fs::create_dir_all(state.path().join("config"))?;
+        std::fs::write(
+            state.path().join("config/ghostty.conf"),
+            "theme = Ink\nselection-foreground = #010203\n",
+        )?;
+        // a FIFO with no writer blocks an open: the generated settings file and the theme file are FIFOs here
+        for fifo in [state.path().join("ghostty-settings.conf"), themes.path().join("Ink")] {
+            assert!(std::process::Command::new("mkfifo").arg(&fifo).status()?.success());
+        }
+        let env = paths::MapEnv::new()
+            .with("HOME", "/nonexistent")
+            .with(paths::STATE_DIR_ENV, state.path());
+        let themes_dir = themes.path().to_owned();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(resolve_selection(&env, Some(&themes_dir), true));
+        });
+        let resolved = receiver.recv_timeout(std::time::Duration::from_secs(10))?;
+        assert_eq!(resolved.foreground, Some(chrome::Rgb::new(1, 2, 3)));
+        assert_eq!(resolved.background, None, "the theme FIFO is skipped, not read");
         Ok(())
     }
 

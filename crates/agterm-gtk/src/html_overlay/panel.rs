@@ -4,6 +4,7 @@
 
 use std::cell::RefCell;
 
+use agterm_core::chrome::FALLBACK_BACKGROUND;
 use agterm_core::html::{HtmlLoadState, HtmlNavigation, HtmlOverlay, HtmlOverlayTheme, HtmlReloadTarget};
 use agterm_core::model::is_valid_color_hex;
 use gtk::prelude::*;
@@ -16,8 +17,7 @@ use super::policy::{self, StripItem};
 use super::registry;
 use crate::state::{self, AppState, Poster};
 
-/// The theme background when the terminal's is unknown (upstream's sRGB 0.157, 0.173, 0.204).
-const FALLBACK_BACKGROUND: &str = "#282c34";
+/// The theme foreground when the terminal's is unknown (upstream's `HtmlOverlayRegistry` falls back to white).
 const FALLBACK_FOREGROUND: &str = "#ffffff";
 /// The strip's height (upstream's 28 points).
 const STRIP_HEIGHT: i32 = 28;
@@ -58,7 +58,7 @@ impl PanelColors {
         palette: Vec<String>,
         background: Option<&str>,
     ) -> Self {
-        let terminal = terminal.unwrap_or_else(|| FALLBACK_BACKGROUND.to_owned());
+        let terminal = terminal.unwrap_or_else(|| FALLBACK_BACKGROUND.to_string());
         let foreground = foreground.unwrap_or_else(|| FALLBACK_FOREGROUND.to_owned());
         let background = background.filter(|color| is_valid_color_hex(color)).map_or_else(
             || terminal.clone(),
@@ -388,7 +388,7 @@ mod tests {
         let colors = PanelColors::resolve(None, None, Vec::new(), None);
         let theme = colors.theme();
         assert!(theme.palette.is_empty());
-        assert_eq!(theme.background, FALLBACK_BACKGROUND);
+        assert_eq!(theme.background, "#282c34", "the window chrome's fallback");
         assert_eq!(theme.foreground, FALLBACK_FOREGROUND);
     }
 
