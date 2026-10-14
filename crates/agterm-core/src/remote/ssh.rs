@@ -192,7 +192,6 @@ pub fn probe_command(host: &str) -> Result<Vec<String>, InvocationError> {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
 
@@ -321,8 +320,7 @@ mod tests {
                 root.join("calls").display()
             );
             let ssh = root.join("bin/ssh");
-            std::fs::write(&ssh, script).unwrap();
-            std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+            agterm_host::fakes::write_executable(&ssh, &script).unwrap();
             Self { root }
         }
 

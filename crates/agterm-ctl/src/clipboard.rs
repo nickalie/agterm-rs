@@ -411,18 +411,8 @@ mod tests {
             self.root.path().join(name)
         }
 
-        /// Written by a child `install`, never through a descriptor of this process: a parallel test's fork would
-        /// inherit that descriptor until its exec, and running the script meanwhile fails with ETXTBSY.
         fn script(path: &Path, body: &str) {
-            let source = tempfile::NamedTempFile::new().unwrap();
-            fs::write(source.path(), format!("#!/bin/sh\n{body}\n")).unwrap();
-            let status = std::process::Command::new("install")
-                .args(["-m", "755"])
-                .arg(source.path())
-                .arg(path)
-                .status()
-                .unwrap();
-            assert!(status.success(), "install {}: {status}", path.display());
+            agterm_host::fakes::write_executable(path, &format!("#!/bin/sh\n{body}\n")).unwrap();
         }
 
         /// `bin/agtermctl` (an empty file) with or without an executable `bin/zmx` beside it.
