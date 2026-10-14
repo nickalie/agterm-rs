@@ -58,6 +58,7 @@ dependencies = [
 name = "agterm-ghostty"
 version = "0.1.0"
 dependencies = [
+ "agterm-core",
  "agterm-ghostty-sys",
  "bitflags",
  "tempfile",
