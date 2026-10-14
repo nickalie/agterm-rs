@@ -10,11 +10,12 @@ process left under the instance's `ZMX_DIR`.
 harness (see the catalog exemption)."""
 
 import itertools
+import os
 
 import pytest
 from agterm_conformance.match import assert_absent, assert_error, assert_ok, assert_subset, find_session, session_ids
 from agterm_conformance.plugin import Ctl
-from agterm_conformance.wait import wait_frame
+from agterm_conformance.wait import wait_frame, wait_until
 from agterm_conformance.zmx_client import leading_client
 
 UNKNOWN = "zzz"
@@ -310,6 +311,54 @@ def test_restart_replaces_the_pane_shell(live):
     # Closed only once the pane runs the new program: a close racing the restart has left upstream's daemon
     # orphaned rather than ended.
     live.wait_tree(lambda tree: find_session(tree, sid).get("foreground") == ["cat"])
+    assert_ok(live.request("session.close", sid))
+    _gone(live, before["daemon"])
+
+
+def _pane_id(live, sid):
+    return next(s for s in find_session(live.tree(), sid)["surfaces"] if s["kind"] == "left")["paneID"]
+
+
+@LIVE
+@pytest.mark.covers("session.restart", "field:result.restart")
+def test_restart_without_a_command_replays_the_foreground_program(live, tmp_path):
+    sid = _live_session(live)
+    pane_id = _pane_id(live, sid)
+    daemon = _entries(live, sid)["left"]["daemon"]
+    marker = tmp_path / "replay runs.txt"
+    work = tmp_path / "work dir"
+    work.mkdir()
+    # A `sh -c` job of the pane's shell, not its root: the trailing `:` keeps sh from exec'ing the sleep.
+    script = f"pwd -P >> '{marker}'; sleep 600; :"
+    assert_ok(live.request("session.restart", sid, paneID=pane_id, command=f"cd '{work}' && sh -c \"{script}\""))
+    ran = f"{os.path.realpath(work)}\n"
+    wait_until(lambda: marker.exists() and marker.read_text() == ran, timeout=20)
+
+    receipt = assert_ok(live.request("session.restart", sid, paneID=pane_id))["restart"]
+    assert receipt["replayedArgv"] == ["sh", "-c", script]
+    assert receipt["paneID"] == pane_id
+    # The replay runs the program again where it was running, its quoting intact.
+    wait_until(lambda: marker.read_text() == ran + ran, timeout=20)
+    assert _pane_id(live, sid) == pane_id
+    assert_ok(live.request("session.close", sid))
+    _gone(live, daemon)
+
+
+@LIVE
+@pytest.mark.covers("session.restart")
+def test_restart_replay_refuses_a_shell_at_its_prompt(live):
+    sid = _live_session(live)
+    marker = f"ZMARK{next(_markers)}"
+    # Once the marker prints, the pane's own shell is back at its prompt.
+    assert_ok(live.request("session.type", sid, text=f"printf '%s%s\\n' {marker[:5]} {marker[5:]}\n"))
+    live.wait_text(sid, rf"(?m)^{marker}$")
+    before = _entries(live, sid)["left"]
+    response = live.request("session.restart", sid, paneID=_pane_id(live, sid))
+    assert_error(response)
+    assert response.error.endswith("holds the pane; pass --command to name the line. nothing was changed"), (
+        response.error
+    )
+    assert _entries(live, sid)["left"]["leaderPID"] == before["leaderPID"]
     assert_ok(live.request("session.close", sid))
     _gone(live, before["daemon"])
 

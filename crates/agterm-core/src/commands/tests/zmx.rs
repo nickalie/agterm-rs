@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use agterm_host::fakes::{FakeProcessTable, FakeSessionHost, FakeSurface, FakeSurfaceProbe};
-use agterm_host::{KillOutcome, ProcessRecord, ProcessStat, SessionHost};
+use agterm_host::{KillOutcome, ProcessRecord, ProcessStat, SessionHost, Surface};
 use agterm_proto::command::{SessionCmd, ZmxCmd};
 use agterm_proto::{Args, Command, ControlZmxEndpoint, Request, Response};
 use serde_json::{Value, json};
@@ -20,7 +20,7 @@ use crate::persist::RestoreMode;
 use crate::restore::mode::RestoreLaunchDecision;
 use crate::zmx::daemon_name;
 use crate::zmx::support::Inputs;
-use crate::{Core, LiveInstall};
+use crate::{Core, LiveInstall, PaneReplacement};
 
 /// A live launch over a fake host: the first session's primary pane is a live terminal.
 pub(super) struct Live {
@@ -62,7 +62,11 @@ fn install(core: &mut Core, host: &Arc<FakeSessionHost>, resources: &Path, mode:
 }
 
 fn live_with(extra: usize, mode: RestoreMode) -> Live {
-    let mut fixture = Fixture::new(extra);
+    live_over(Fixture::new(extra), mode)
+}
+
+/// [`live_with`] over a fixture the caller built.
+fn live_over(mut fixture: Fixture, mode: RestoreMode) -> Live {
     let host = Arc::new(FakeSessionHost::new());
     let resources = resources();
     install(&mut fixture.core, &host, resources.path(), mode);
@@ -859,6 +863,194 @@ fn a_restart_refuses_before_killing_when_the_program_cannot_be_tracked_or_replay
         )
     );
     assert!(live.host.kills().is_empty());
+}
+
+// MARK: - session.restart replay (upstream's `ControlServerRestartTests` replay cases)
+
+/// The root shell's pid, the one the daemon listing reports as its leader.
+const ROOT_SHELL: i32 = 100;
+/// The pid of a job the root shell started, leading its own group.
+const JOB: i32 = 300;
+
+/// A process in the pane's terminal session.
+fn member(pid: i32, parent: i32, group: i32) -> ProcessStat {
+    ProcessStat {
+        pid,
+        ppid: parent,
+        pgrp: group,
+        session: ROOT_SHELL,
+    }
+}
+
+/// A table whose root shell runs `root` and hands its terminal to `foreground` (`None`: no foreground to read).
+fn replay_table(root: &[&str], foreground: Option<i32>) -> FakeProcessTable {
+    let table = FakeProcessTable::default();
+    table.insert(member(ROOT_SHELL, 1, ROOT_SHELL), Some(root));
+    if let Some(group) = foreground {
+        table.set_terminal_foreground(ROOT_SHELL, group);
+    }
+    table
+}
+
+/// A table whose root zsh runs job `argv` in the foreground, in `directory`.
+fn job_table(argv: &[&str], directory: &str) -> FakeProcessTable {
+    let table = replay_table(&["-zsh"], Some(JOB));
+    table.insert(member(JOB, ROOT_SHELL, JOB), Some(argv));
+    table.set_working_directory(JOB, directory);
+    table
+}
+
+/// Starts a restart without a command of the live pane by its token, over `table`.
+fn begin_replay(live: &mut Live, table: FakeProcessTable) -> Dispatched {
+    live.host
+        .set_record(&daemon_name(live.left), Some(1), Some(ROOT_SHELL), None);
+    live.core().set_process_table(Box::new(table), None);
+    let request = Request {
+        cmd: Command::Session(SessionCmd::Restart),
+        target: Some(wire(live.session)),
+        args: Some(args(|a| a.pane_id = Some(uuid_string(live.left)))),
+    };
+    live.core().begin(&request)
+}
+
+/// Replays over `table`: the new shell shows up as pid 200 once the pane is rebuilt. The response and the replacements.
+fn replay(live: &mut Live, table: FakeProcessTable) -> (Response, Vec<PaneReplacement>) {
+    let dispatched = begin_replay(live, table);
+    let host = Arc::clone(&live.host);
+    let daemon = daemon_name(live.left);
+    let mut launched = Vec::new();
+    let response = drive(live.core(), dispatched, |core, _| {
+        let replacements = core.take_pane_replacements();
+        if !replacements.is_empty() {
+            host.set_record(&daemon, Some(1), Some(200), None);
+        }
+        launched.extend(replacements);
+    });
+    (response, launched)
+}
+
+#[test]
+fn a_replay_launches_the_program_s_argv_in_the_directory_it_runs_in() {
+    let mut live = live();
+    let directory = tempfile::tempdir().unwrap();
+    let directory = directory.path().to_str().unwrap().to_owned();
+    let token = uuid_string(live.left);
+    let (response, launched) = replay(&mut live, job_table(&["/bin/sleep", "300"], &directory));
+    assert_eq!(
+        result(&response),
+        json!({
+            "id": wire(live.session),
+            "text": "restarted left pane: shell 100 -> 200; replay requested: '/bin/sleep' '300'",
+            "pane": "left",
+            "restart": {"paneID": token, "oldPid": 100, "newPid": 200, "replayedArgv": ["/bin/sleep", "300"]}
+        })
+    );
+    assert_eq!(live.host.kills(), [(daemon_name(live.left), true)]);
+    let [launch] = launched.as_slice() else {
+        panic!("{launched:?}")
+    };
+    let session_cwd = live
+        .fixture
+        .store()
+        .session(live.session)
+        .unwrap()
+        .cwd_for(StatusPane::Left)
+        .to_owned();
+    assert_eq!(launch.cwd.as_deref(), Some(directory.as_str()));
+    assert_ne!(directory, session_cwd);
+    assert!(
+        launch.command.contains(r"'\''/bin/sleep'\'' '\''300'\''"),
+        "{}",
+        launch.command
+    );
+}
+
+#[test]
+fn a_shell_started_as_a_job_is_replayed_like_any_program() {
+    let mut live = live();
+    let directory = tempfile::tempdir().unwrap();
+    let table = job_table(&["/bin/sh", "-c", "read line"], directory.path().to_str().unwrap());
+    let (response, launched) = replay(&mut live, table);
+    assert_eq!(
+        result(&response)["restart"]["replayedArgv"],
+        json!(["/bin/sh", "-c", "read line"])
+    );
+    assert_eq!(live.host.kills(), [(daemon_name(live.left), true)]);
+    assert_eq!(launched.len(), 1);
+}
+
+/// Upstream's refusal of a replay: `reason`, then the way out.
+fn refused(reason: &str) -> String {
+    format!("{reason}; pass --command to name the line. nothing was changed")
+}
+
+/// Asserts a replay over `table` is refused with `error` before anything is killed or replaced.
+fn assert_replay_refused(live: &mut Live, table: FakeProcessTable, error: &str) {
+    let Dispatched::Done(response) = begin_replay(live, table) else {
+        panic!("a refused replay waited")
+    };
+    assert_eq!(response, failure(error));
+    assert!(live.host.kills().is_empty(), "{:?}", live.host.kills());
+    assert!(live.core().take_pane_replacements().is_empty());
+    assert!(live.core().zmx.claimed_exits.is_empty());
+    let token = uuid_string(live.left);
+    let session = live.fixture.store().session(live.session).unwrap();
+    assert_eq!(session.pane_role_for_token(&token), Some(StatusPane::Left));
+    let surface = session.pane_slot(StatusPane::Left).get();
+    assert_eq!(surface.map(Surface::pane_token), Some(token.as_str()));
+}
+
+#[test]
+fn a_replay_is_refused_before_anything_is_killed() {
+    let present = tempfile::tempdir().unwrap();
+    let present = present.path().to_str().unwrap().to_owned();
+    let gone = tempfile::tempdir().unwrap();
+    let gone_path = gone.path().to_str().unwrap().to_owned();
+    gone.close().unwrap();
+    let long = "a".repeat(crate::restart_replay::MAX_COMMAND_BYTES);
+    let cases = [
+        // the pane's root shell runs its own line
+        (
+            replay_table(&["/bin/sh", "-c", "read line"], Some(ROOT_SHELL)),
+            "no replayable foreground program: sh holds the pane",
+        ),
+        (
+            job_table(&["/bin/sleep", "300"], &gone_path),
+            "the foreground program's working directory is unavailable",
+        ),
+        // a shell reading its script from stdin holds the pane
+        (
+            job_table(&["/bin/sh", "-s"], &present),
+            "no replayable foreground program: sh holds the pane",
+        ),
+        (
+            replay_table(&["-zsh"], None),
+            "the pane's foreground program cannot be read",
+        ),
+        (
+            job_table(&["/bin/sh", "-c", "read line", &long], &present),
+            "the foreground program's command line is too long to replay (max 4096 bytes)",
+        ),
+    ];
+    for (table, reason) in cases {
+        let mut live = live();
+        assert_replay_refused(&mut live, table, &refused(reason));
+    }
+}
+
+#[test]
+fn a_denylisted_replay_is_refused_before_anything_is_killed() {
+    let config = tempfile::tempdir().unwrap();
+    std::fs::write(config.path().join(crate::command_restore::DENYLIST_FILE), "sleep\n").unwrap();
+    let settings = crate::persist::AppSettings {
+        config_directory: Some(config.path().to_string_lossy().into_owned()),
+        ..crate::persist::AppSettings::default()
+    };
+    let mut live = live_over(Fixture::with_settings(0, settings), RestoreMode::Live);
+    live.core().load_restore_denylist_at_launch();
+    let directory = tempfile::tempdir().unwrap();
+    let table = job_table(&["/bin/sleep", "300"], directory.path().to_str().unwrap());
+    assert_replay_refused(&mut live, table, &refused("sleep is on the restore denylist"));
 }
 
 // MARK: - zmx.reset

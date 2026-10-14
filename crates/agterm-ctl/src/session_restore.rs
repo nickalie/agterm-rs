@@ -258,4 +258,61 @@ mod tests {
             Err("--pane must be left, right, or scratch".to_owned())
         );
     }
+
+    #[test]
+    fn restart_carries_the_line_the_pane_and_the_token() {
+        let (valid, request) = parse(&[
+            "restart",
+            "--target",
+            "s1",
+            "--pane",
+            "right",
+            "--pane-id",
+            "tok",
+            "--command",
+            "cld 'brief one'",
+            "--window",
+            "w1",
+        ]);
+        assert_eq!(valid, Ok(()));
+        assert_eq!(
+            request,
+            json!({"cmd": "session.restart", "target": "s1", "args": {
+                "command": "cld 'brief one'", "window": "w1", "pane": "right", "paneID": "tok"}})
+        );
+    }
+
+    #[test]
+    fn restart_omits_the_line_to_ask_for_a_replay() {
+        let (valid, request) = parse(&["restart", "--target", "s1", "--pane-id", "tok"]);
+        assert_eq!(valid, Ok(()));
+        assert_eq!(
+            serde_json::to_string(&request).unwrap(),
+            r#"{"cmd":"session.restart","target":"s1","args":{"paneID":"tok"}}"#
+        );
+    }
+
+    #[test]
+    fn restart_sends_an_empty_line_for_the_server_to_refuse() {
+        let (valid, request) = parse(&["restart", "--pane-id", "tok", "--command", ""]);
+        assert_eq!(valid, Ok(()));
+        assert_eq!(
+            request,
+            json!({"cmd": "session.restart", "target": "active", "args": {"command": "", "paneID": "tok"}})
+        );
+    }
+
+    #[test]
+    fn restart_requires_a_valid_pane_selector() {
+        for (words, error) in [
+            (&["restart", "--command", "cld"][..], "provide --pane-id or --pane"),
+            (&["restart"], "provide --pane-id or --pane"),
+            (
+                &["restart", "--command", "cld", "--pane", "middle"],
+                "--pane must be left, right, or scratch",
+            ),
+        ] {
+            assert_eq!(parse(words).0, Err(error.to_owned()), "{words:?}");
+        }
+    }
 }
