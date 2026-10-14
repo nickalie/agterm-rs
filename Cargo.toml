@@ -12,6 +12,8 @@ publish = false
 agterm-proto = { path = "crates/agterm-proto" }
 agterm-ghostty-sys = { path = "crates/agterm-ghostty-sys" }
 agterm-ghostty = { path = "crates/agterm-ghostty" }
+agterm-ghostty-vt-sys = { path = "crates/agterm-ghostty-vt-sys" }
+agterm-ghostty-vt = { path = "crates/agterm-ghostty-vt" }
 agterm-host = { path = "crates/agterm-host" }
 agterm-core = { path = "crates/agterm-core" }
 agterm-server = { path = "crates/agterm-server" }
@@ -53,7 +55,8 @@ pkg-config = "0.3"
 # WebKitGTK 6.0 for HTML overlays; no version feature: the 2.40 API is enough, and Ubuntu 24.04 ships 2.44.
 webkit6 = "0.6"
 
-# Inherited by every crate except `agterm-ghostty-sys` (`[lints] workspace = true`). Only a reasoned outer
+# Inherited by every crate except the bindgen crates `agterm-ghostty-sys` and `agterm-ghostty-vt-sys`
+# (`[lints] workspace = true`). Only a reasoned outer
 # `#[expect(..., reason = "...")]` on the one item can lift a lint: `#[allow]` is refused.
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

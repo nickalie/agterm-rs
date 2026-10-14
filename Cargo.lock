@@ -69,6 +69,20 @@ name = "agterm-ghostty-sys"
 version = "0.1.0"
 
 [[package]]
+name = "agterm-ghostty-vt"
+version = "0.1.0"
+dependencies = [
+ "agterm-ghostty-vt-sys",
+]
+
+[[package]]
+name = "agterm-ghostty-vt-sys"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "agterm-gtk"
 version = "0.1.0"
 dependencies = [

@@ -15,9 +15,9 @@ agterm in Rust, Linux first: a GTK4/libadwaita terminal over libghostty, driven 
 ## Prerequisites
 
 - Rust 1.98.1 with clippy and rustfmt, pinned by `rust-toolchain.toml` (`rustup toolchain install` reads it).
-- Zig 0.16.0 for libghostty and zmx (`*_ZIG_VERSION` in `build/pins.env`). The build scripts take `AGTERM_GHOSTTY_ZIG`
-  / `AGTERM_ZMX_ZIG`, a zig 0.16.0 on `PATH` or from mise, else they download the pinned ziglang.org tarball and check
-  its sha256.
+- Zig 0.16.0 for libghostty, libghostty-vt and zmx (`*_ZIG_VERSION` in `build/pins.env`). The build scripts take
+  `AGTERM_GHOSTTY_ZIG` / `AGTERM_GHOSTTY_VT_ZIG` / `AGTERM_ZMX_ZIG`, a zig 0.16.0 on `PATH` or from mise, else they
+  download the pinned ziglang.org tarball and check its sha256.
 - GTK 4.14+, libadwaita 1.5+ and WebKitGTK 6.0 with their development files, and pkg-config.
 - gtk4-layer-shell: the distribution's package, or `scripts/build-layer-shell.sh` (below), which needs meson, ninja, a
   C compiler and the Wayland development files.
@@ -68,21 +68,26 @@ the script installs nothing.
 
 ## Native dependencies
 
-libghostty, zmx and gtk4-layer-shell are built outside cargo, each into its own vendored prefix
+libghostty, libghostty-vt, zmx and gtk4-layer-shell are built outside cargo, each into its own vendored prefix
 `${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/<name>-<key>/`. The key hashes the build's pins in `build/pins.env` and
 its patches in `build/patches/`, so a complete prefix is reused as is and a pin of one build never rebuilds another.
 
 ```sh
 scripts/build-ghostty.sh       # the pinned, patched libghostty, its themes, shell integration and terminfo
+scripts/build-ghostty-vt.sh    # the pinned static libghostty-vt (Ghostty's vt C API) for the GPUI frontend
 scripts/build-layer-shell.sh   # gtk4-layer-shell 1.3.0; skip it when the distribution's package is installed
 scripts/build-zmx.sh           # the pinned, patched zmx behind Live sessions
 ```
 
 Each script also takes `--print-prefix` and `--verify`. Cargo never runs zig: `agterm-ghostty-sys` fails with "run
-scripts/build-ghostty.sh" when the prefix is missing. `.cargo/config.toml` makes `scripts/pkg-config.sh` the
-pkg-config of every cargo build, which puts the vendored gtk4-layer-shell ahead of a system package. After bumping the
-`LAYER_SHELL_*` pins, run `cargo clean -p gtk4-layer-shell-sys` so the link follows the new prefix.
-`scripts/gen-ghostty-bindings.sh` regenerates the checked-in bindings after a `GHOSTTY_REV` or ghostty patch change.
+scripts/build-ghostty.sh" when the prefix is missing, `agterm-ghostty-vt-sys` with "run scripts/build-ghostty-vt.sh".
+libghostty-vt has its own Ghostty pin (`LIBGHOSTTY_VT_*`, the source archive's sha256 included) while both frontends
+coexist, and is linked statically, so staging gains nothing from it. `.cargo/config.toml` makes
+`scripts/pkg-config.sh` the pkg-config of every cargo build, which puts the vendored gtk4-layer-shell ahead of a system
+package. After bumping the `LAYER_SHELL_*` pins, run `cargo clean -p gtk4-layer-shell-sys` so the link follows the new
+prefix.
+`scripts/gen-ghostty-bindings.sh` regenerates the checked-in bindings after a `GHOSTTY_REV` or ghostty patch change,
+`scripts/gen-ghostty-vt-bindings.sh` those of `agterm-ghostty-vt-sys` after a `LIBGHOSTTY_VT_REV` bump.
 
 ## Build and run
 

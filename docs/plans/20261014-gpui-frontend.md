@@ -447,33 +447,43 @@ Rewritten in Task 4: no third-party crate; the pattern of `build-ghostty.sh` + `
 - Create: `crates/agterm-ghostty-vt/` (safe wrapper skeleton: `src/{lib,terminal,render}.rs`, `tests/link.rs`)
 - Modify: `Cargo.toml` (workspace members), `scripts/lint-report.sh` (exempt the bindgen crate, narrowly)
 
-- [ ] `pins.env`: `LIBGHOSTTY_VT_REPO`, `LIBGHOSTTY_VT_REV=81598385d608dda4946093d6d6a234d204a2f225`, the source
+- [x] `pins.env`: `LIBGHOSTTY_VT_REPO`, `LIBGHOSTTY_VT_REV=81598385d608dda4946093d6d6a234d204a2f225`, the source
       archive's sha256, `LIBGHOSTTY_VT_ZIG_VERSION=0.16.0` and its x86_64/aarch64 sums, with a comment block like the
       others (no `GHOSTTY_` prefix; why a second Ghostty pin)
-- [ ] `build-ghostty-vt.sh`: fetch the archive, verify its sha256, `zig build -Demit-lib-vt=true
+- [x] `build-ghostty-vt.sh`: fetch the archive, verify its sha256, `zig build -Demit-lib-vt=true
       -Doptimize=ReleaseFast -Dtarget=<arch>-linux-gnu.2.39` with `find_zig` on the vt Zig pin, stage
       `lib/libghostty-vt.a`, `include/ghostty/`, the pin manifest; atomic rename into `ghostty-vt-<key>`;
       `--print-prefix`, `--verify`; reuse a complete prefix (conventions of `build-ghostty.sh`, scratch dirs in the
       vendor root)
-- [ ] `gen-ghostty-vt-bindings.sh`: bindgen over `<prefix>/include/ghostty/vt.h` with an allowlist of the functions and
+- [x] `gen-ghostty-vt-bindings.sh`: bindgen over `<prefix>/include/ghostty/vt.h` with an allowlist of the functions and
       types the wrapper binds (terminal, options/effects, render state + row/cell iterators, key/mouse encoders,
       selection, formatter, paste, search, kitty graphics, sys, osc), same flags as `gen-ghostty-bindings.sh`; output
       checked in, regenerated on a pin bump
-- [ ] `agterm-ghostty-vt-sys/build.rs`: `--print-prefix`, `rustc-link-lib=static=ghostty-vt` plus whatever the static
+- [x] `agterm-ghostty-vt-sys/build.rs`: `--print-prefix`, `rustc-link-lib=static=ghostty-vt` plus whatever the static
       archive needs (`libghostty-vt-static.pc` lists none at this pin — confirm on link), rerun-if-changed on the pins,
       the scripts and `AGTERM_VENDOR`; a clear error naming `scripts/build-ghostty-vt.sh` when the prefix is missing;
       not under the workspace lints, like `agterm-ghostty-sys` (`lint-report.sh`'s exemption extended to this one
       bindgen crate only; the wrapper stays under every workspace lint)
-- [ ] `agterm-ghostty-vt` skeleton: `Terminal` (new/free, `vt_write`, resize) and `RenderState` (update, rows) as owned
+- [x] `agterm-ghostty-vt` skeleton: `Terminal` (new/free, `vt_write`, resize) and `RenderState` (update, rows) as owned
       handles that are `Send` and not `Sync` (Technical Details > Threads), each `unsafe` block documented; the rest of
       the API grows in Tasks 9–10
-- [ ] CI (`.github/workflows/rust-linux.yml`, its vendor cache key) and `README.md` build steps call
+- [x] CI (`.github/workflows/rust-linux.yml`, its vendor cache key) and `README.md` build steps call
       `build-ghostty-vt.sh` next to `build-ghostty.sh`
-- [ ] test that bumping `LIBGHOSTTY_VT_REV` leaves the libghostty and zmx prefix keys unchanged, and that a
+- [x] test that bumping `LIBGHOSTTY_VT_REV` leaves the libghostty and zmx prefix keys unchanged, and that a
       `GHOSTTY_` pin bump leaves the vt key unchanged
-- [ ] test (`tests/link.rs`): feed VT bytes and read the screen back through the wrapper (proves the link and the
+- [x] test (`tests/link.rs`): feed VT bytes and read the screen back through the wrapper (proves the link and the
       bindings), plus `Send` checked at compile time and `!Sync` by a compile-fail doc test
-- [ ] gates — must pass before Task 6
+- [x] gates — must pass before Task 6
+- result (2026-10-14): archive sha256 re-verified (`1bb165d1…`, github archive = codeload), Zig 0.16.0 sums from
+  ziglang.org's index.json; `scripts/build-ghostty-vt.sh` built the prefix at the pin. The static archive needs only
+  libc (`nm`: 25 undefined libc symbols, compiler_rt bundled), so `build.rs` links `static=ghostty-vt`
+  alone. The prefix also holds `share/doc/ghostty-vt/LICENSE` and `share/agterm/ghostty-vt-PINS` (completeness
+  requires it to match the `LIBGHOSTTY_VT_` lines). The bindgen allowlist adds the helpers the listed families need
+  (`ghostty_alloc`/`ghostty_free`, raw cell/row reads, grid refs, mode reports, focus encoding, style default, build
+  info); `ghostty_mode_new`/`_value` are `static inline` in the header and not bound. The two-phase update is
+  `RenderState::begin_update` returning a `PendingUpdate` guard (ends on drop), so the state cannot be read
+  mid-update. The prefix-key test is `agterm-ghostty-vt-sys/tests/prefix_keys.rs` (real `--print-prefix` over a
+  copied, edited `pins.env`). CI's vendor cache key already hashes `pins.env`, so it needed no change.
 
 ### Task 6: Move GTK-free app services into `agterm-app`
 
