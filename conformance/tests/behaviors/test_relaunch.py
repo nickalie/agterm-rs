@@ -99,7 +99,9 @@ def test_rerun_types_the_pinned_line_at_the_next_launch(launch):
     assert_ok(ctl.request("session.restore", sid, mode="set", command=f"printf '%s%s\\n' {marker[:4]} {marker[4:]}"))
     ctl = launch.relaunch(ctl)
     ctl.wait_mounted(sid, "left")
-    ctl.wait_text(sid, rf"(?m)^{marker}$")
+    # Not anchored at the line's start: the line is typed before the shell's first prompt, and a /bin/sh without a
+    # line editor (dash) does not echo it again after that prompt, so the output follows the prompt on its line.
+    ctl.wait_text(sid, rf"(?m){marker}$")
     # The pin persists for the launches after this one too.
     assert find_session(ctl.tree(), sid)["restoreCommand"].endswith(marker[4:])
 
