@@ -236,28 +236,15 @@ fn reap_zmx(dir: &Path) {
 }
 
 /// Run `script` (which ends by printing `MARK`) to completion under the UI stand-ins; the wall time to the mark.
-fn run_to_mark(pane: &Pane, nudge: bool) -> (Duration, Ui, String) {
+fn run_to_mark(pane: &Pane) -> (Duration, Ui, String) {
     let done = AtomicBool::new(false);
-    let size = bench_size();
     let started = Instant::now();
     let (ui, screen) = std::thread::scope(|scope| {
         let ui = scope.spawn(|| run_ui(pane, &done));
-        let mut nudged = !nudge;
         let screen = loop {
             let frame = pane.shared().published_frame();
             if let Some(line) = frame.lines().into_iter().find(|line| line.contains("MARK")) {
                 break line;
-            }
-            if !nudged && started.elapsed() > Duration::from_millis(300) {
-                // zmx attach paints only after a real size change following its handshake (Task 1; fixed in Task 11)
-                pane.resize(GridSize {
-                    rows: size.rows - 1,
-                    ..size
-                })
-                .unwrap();
-                std::thread::sleep(Duration::from_millis(60));
-                pane.resize(size).unwrap();
-                nudged = true;
             }
             assert!(started.elapsed() < Duration::from_secs(120), "no mark");
             std::thread::sleep(Duration::from_millis(2));
@@ -276,7 +263,7 @@ fn cat_scenario(name: &str, file: &Path, zmx: Option<(&Path, &Path)>) {
     let session = format!("bench-{}", std::process::id());
     let command = command(&script, zmx.map(|(zmx, dir)| (zmx, dir, session.as_str())));
     let pane = Pane::spawn(&command, &PaneConfig::new(bench_size())).unwrap();
-    let (wall, mut ui, mark) = run_to_mark(&pane, zmx.is_some());
+    let (wall, mut ui, mark) = run_to_mark(&pane);
     let cat_ns: f64 = mark
         .rsplit('=')
         .next()
@@ -333,7 +320,7 @@ fn kitty_png_burst() {
         .terminal
         .set_kitty_image_storage_limit(320_000_000)
         .unwrap();
-    let (wall, mut ui, _) = run_to_mark(&pane, false);
+    let (wall, mut ui, _) = run_to_mark(&pane);
     report(
         "kitty-png-burst-10x1080p",
         &pane,
@@ -350,7 +337,7 @@ fn resize_reflows_a_full_scrollback() {
     let file = text_file(&dir);
     let script = format!("cat {}; printf '\\nMARK\\n'; exec sleep 60", shell_quote(&file));
     let pane = Arc::new(Pane::spawn(&command(&script, None), &PaneConfig::new(SIZE)).unwrap());
-    let _ = run_to_mark(&pane, false);
+    let _ = run_to_mark(&pane);
     let mut resizes = Vec::new();
     let done = AtomicBool::new(false);
     let mut ui = std::thread::scope(|scope| {
@@ -393,23 +380,11 @@ fn null_reader(name: &str, file: &Path, zmx: Option<(&Path, &Path)>, buffer_size
     let mut child = pair.slave.spawn_command(command.builder()).unwrap();
     drop(pair.slave);
     let mut reader = pair.master.try_clone_reader().unwrap();
-    let started = Instant::now();
-    let mut nudged = zmx.is_none();
     let mut tail = Vec::new();
     let mut buffer = vec![0_u8; buffer_size];
     let mut reads = 0_u64;
     let mut bytes = 0_u64;
     let cat_ns = loop {
-        if !nudged && started.elapsed() > Duration::from_millis(300) {
-            let smaller = GridSize {
-                rows: size.rows - 1,
-                ..size
-            };
-            pair.master.resize(smaller.pty()).unwrap();
-            std::thread::sleep(Duration::from_millis(60));
-            pair.master.resize(size.pty()).unwrap();
-            nudged = true;
-        }
         let read = reader.read(&mut buffer).unwrap();
         assert!(read > 0, "eof before the mark");
         reads += 1;

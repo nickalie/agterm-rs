@@ -117,6 +117,28 @@ impl ShellIntegrationFeatures {
     pub const NAMES: [&str; 6] = ["cursor", "sudo", "title", "ssh-env", "ssh-terminfo", "path"];
     /// Ghostty's default: `cursor`, `title` and `path` on.
     pub const DEFAULT: Self = Self::CURSOR.union(Self::TITLE).union(Self::PATH);
+    /// The flags whose ssh wrappers call a `ghostty` CLI agterm does not ship (upstream #463): always off.
+    pub const UNSUPPORTED: Self = Self::SSH_ENV.union(Self::SSH_TERMINFO);
+
+    /// `GHOSTTY_SHELL_FEATURES` as libghostty sets it for a terminal's program (`shell_integration.setupFeatures`):
+    /// the flags that are on, sorted by name, the cursor's spelled `cursor:blink` or `cursor:steady`; `None` with every
+    /// flag off.
+    #[must_use]
+    pub fn env_value(self, cursor_blink: bool) -> Option<String> {
+        // `all()` yields the flags in bit order, the order of `NAMES`
+        let mut names: Vec<(&str, Self)> = Self::NAMES.into_iter().zip(Self::all().iter()).collect();
+        names.sort_unstable_by_key(|(name, _)| *name);
+        let on: Vec<String> = names
+            .into_iter()
+            .filter(|(_, flag)| self.contains(*flag))
+            .map(|(name, flag)| match flag {
+                Self::CURSOR if cursor_blink => "cursor:blink".to_owned(),
+                Self::CURSOR => "cursor:steady".to_owned(),
+                _ => name.to_owned(),
+            })
+            .collect();
+        (!on.is_empty()).then(|| on.join(","))
+    }
 }
 
 impl Default for ShellIntegrationFeatures {

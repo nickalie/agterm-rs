@@ -12,6 +12,9 @@
 //! - Search: [`Pane::search`], [`Pane::navigate_search`], [`Pane::search_state`], with
 //!   [`PaneEvent::SearchTotal`] and [`PaneEvent::SearchSelected`] as libghostty reported them.
 //! - Kitty graphics: every [`Frame`] carries a [`KittyView`] of its images and placements.
+//! - Launch: [`Pane::launch`] runs a [`Launch`] (a session pane's seed: a live pane's `zmx attach`, a plain pane's
+//!   command or login shell) under a [`Host`] (the terminal identity and shell integration libghostty gave a surface),
+//!   with the [`ExitPolicy`] of a launched pane; [`Pane::foreground_pid`] is the terminal's foreground process group.
 //! - Threads and locks: Technical Details > Threads of the GPUI plan; the details are in [`pane`]'s and
 //!   [`effects`]'s docs. The IO thread holds the VT lock for one bounded slice of `vt_write` at a time; painting only
 //!   ever `try_lock`s it.
@@ -24,8 +27,10 @@
 #[cfg(test)]
 mod bench;
 mod effects;
+mod exit;
 mod input;
 mod kitty;
+mod launch;
 mod pane;
 mod png;
 mod pty;
@@ -40,12 +45,14 @@ pub use effects::{
     ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardReadRequest, ClipboardWrite, ExitStatus, PaneEvent,
     ProgramNeed, ProgramState, ProgramStatus, Progress, TerminalColors,
 };
+pub use exit::{ABNORMAL_EXIT_RUNTIME, ExitPolicy};
 pub use input::{
     KeyInput, ModSides, MouseAction, MouseButton, MouseInput, Padding, Paste, PasteSource, Scroll, Typing,
 };
 pub use kitty::{
     KittyFormat, KittyImage, KittyImageKey, KittyLayer, KittyPlacement, KittyView, PlacementRect, SourceRect,
 };
+pub use launch::{COMMAND_SHELL, FALLBACK_TERM, Host, Launch, Prepared, resolve_resources, resource_candidates};
 pub use pane::{DEFAULT_KITTY_IMAGE_LIMIT, DEFAULT_WRITE_LIMIT, FrameSnapshot, Pane, PaneConfig, PaneStats, Wake};
 pub use pty::{GridSize, PaneCommand};
 pub use render::{

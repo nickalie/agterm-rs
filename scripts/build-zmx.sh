@@ -7,6 +7,14 @@
 # The prefix holds bin/zmx, share/doc/zmx/LICENSE and share/agterm/zmx-BUILD: upstream's `.zmx-build-stamp`
 # (`<ZMX_REV> <target> <patch digest>`), which the app reads as the bundled zmx build id (`ZmxBuildRecord`).
 #
+# The patches are upstream's (scripts/zmx-patches), except 0003-first-attach-snapshot.patch, this build's own: a new
+# daemon's first attach is sent the screen the program drew before the client connected (zmx sends a snapshot on a
+# re-attach only, so a prompt printed in that window never reached the first client), every snapshot carries the
+# sequence the daemon's parser is in the middle of, so the client continues where the daemon does, and a client sent
+# output between its connect and its Init (first attach or re-attach) gets a reset ahead of the snapshot that repeats
+# it (CAN, then the pen, hyperlink, charsets, DEC and ISO protection, insert mode, margins and origin mode back to
+# their defaults, home, erase below).
+#
 # Usage: scripts/build-zmx.sh                 build the prefix unless it is complete, then print its path
 #        scripts/build-zmx.sh --print-prefix  print the prefix path only (scripts/stage.sh)
 #        scripts/build-zmx.sh --verify        exit 0 when the prefix is complete, 1 otherwise
