@@ -248,6 +248,25 @@ pub enum Paste {
     Unsafe,
 }
 
+/// What typing does besides sending the key, Ghostty's `scroll-to-bottom = keystroke` and
+/// `selection-clear-on-typing` (both on by default): applied when a key other than a modifier sent something.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Typing {
+    /// Scroll the viewport to the bottom.
+    pub scroll_to_bottom: bool,
+    /// Clear the selection (Escape always does).
+    pub clear_selection: bool,
+}
+
+impl Default for Typing {
+    fn default() -> Self {
+        Self {
+            scroll_to_bottom: true,
+            clear_selection: true,
+        }
+    }
+}
+
 /// A viewport scroll.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Scroll {
@@ -268,6 +287,7 @@ pub(crate) struct InputState {
     padding: Padding,
     /// The config's `mouse-reporting`: whether a program may have the mouse at all.
     reporting: bool,
+    typing: Typing,
 }
 
 impl InputState {
@@ -278,6 +298,7 @@ impl InputState {
             pressed: 0,
             padding: Padding::default(),
             reporting: true,
+            typing: Typing::default(),
         })
     }
 
@@ -327,7 +348,8 @@ impl InputState {
 
 impl Pane {
     /// Send a key to the program, encoded for the terminal's current keyboard modes. Whether it sent anything (a
-    /// lone modifier or a release outside the Kitty protocol's event reporting sends nothing).
+    /// lone modifier or a release outside the Kitty protocol's event reporting sends nothing). A key other than a
+    /// modifier that sent something then does what [`Typing`] says, as Ghostty's `keyCallback` does.
     ///
     /// # Errors
     ///
@@ -342,7 +364,43 @@ impl Pane {
             .keys
             .encode(terminal, &input.engine())
             .map_err(PaneError::terminal)?;
-        self.queue(&bytes)
+        let sent = self.queue(&bytes)?;
+        let mut moved = false;
+        if sent && !input.key.is_modifier() {
+            let typing = vt.input.typing;
+            if typing.clear_selection || input.key.name() == "escape" {
+                self.clear_selection_held(&mut vt);
+            }
+            moved = typing.scroll_to_bottom && vt.scroll_to_bottom();
+        }
+        let repaint = vt.take_cleared_selection() || moved;
+        drop(vt);
+        if repaint {
+            self.shared().wake();
+        }
+        Ok(sent)
+    }
+
+    /// What typing does besides sending the key ([`Typing`]).
+    pub fn set_typing(&self, typing: Typing) {
+        lock(&self.shared().vt).input.typing = typing;
+    }
+
+    /// Send bytes a key binding types (ghostty's `text:`, `csi:`, `esc:` and cursor-key actions) and scroll the
+    /// viewport to the bottom, which Ghostty always does for these inputs.
+    ///
+    /// # Errors
+    ///
+    /// [`PaneError::Backpressure`] or [`PaneError::Closed`] from the input queue.
+    pub fn send(&self, bytes: &[u8]) -> Result<(), PaneError> {
+        let mut vt = lock(&self.shared().vt);
+        self.queue(bytes)?;
+        let moved = vt.scroll_to_bottom();
+        drop(vt);
+        if moved {
+            self.shared().wake();
+        }
+        Ok(())
     }
 
     /// Report a pointer event to the program, as the mouse mode it turned on asks; whether anything was reported
@@ -407,7 +465,8 @@ impl Pane {
 
     /// Paste `text` per the terminal's state: bracketed (mode 2004) or with its line endings as carriage returns,
     /// unsafe control bytes replaced; a Kitty paste event instead when the program asked for one (mode 5522) and the
-    /// paste came from a clipboard. Text that could run a command is refused unless `allow_unsafe`.
+    /// paste came from a clipboard. Text that could run a command is refused unless `allow_unsafe`. A written paste
+    /// scrolls the viewport to the bottom, as Ghostty's always does.
     ///
     /// # Errors
     ///
@@ -436,7 +495,11 @@ impl Pane {
             vt::PasteOutcome::Unsafe => return Ok(Paste::Unsafe),
         };
         self.queue(&bytes)?;
+        let moved = vt.scroll_to_bottom();
         drop(vt);
+        if moved {
+            self.shared().wake();
+        }
         Ok(paste)
     }
 

@@ -11,8 +11,8 @@ use std::fmt::Write as _;
 
 use agterm_core::ghostty_config::binds::{KeyAction, Mods, PhysicalKey};
 use agterm_term::{
-    ClipboardLocation, KeyInput, MouseAction, MouseButton, MouseInput, Padding, PaneError, Paste, PasteSource,
-    TextRegion, Wheel, WheelInput,
+    ClipboardLocation, GridPoint, KeyInput, MouseAction, MouseButton, MouseInput, Padding, PaneError, Paste,
+    PasteSource, Scroll, TextRegion, Typing, Wheel, WheelInput,
 };
 use support::{Fixture, TestResult, spawn, wait_file, wait_text};
 
@@ -257,6 +257,77 @@ fn mouse_reporting_off_keeps_the_mouse_from_programs() -> TestResult {
     assert!(pane.mouse_tracking());
     assert!(pane.mouse(&click)?);
     assert_eq!(received(&fixture, b"\x1b[<0;1;1M"), b"\x1b[<0;1;1M");
+    Ok(())
+}
+
+/// A recorder with 40 rows of scrollback above `ready`, scrolled to the top with a selection made.
+fn scrolled_back() -> TestResult<Fixture> {
+    let fixture = spawn(
+        "for i in $(seq 1 40); do printf 'row %s\\r\\n' $i; done; stty raw -echo; printf ready; \
+         exec cat > \"$DIR/in\"",
+    )?;
+    wait_text(&fixture.pane, "ready");
+    back(&fixture.pane)?;
+    Ok(fixture)
+}
+
+/// Scroll to the top and select a word there.
+fn back(pane: &agterm_term::Pane) -> TestResult {
+    pane.scroll(Scroll::Top);
+    assert!(pane.read_text(TextRegion::Viewport)?.starts_with("row 1\n"));
+    assert!(pane.select_word(GridPoint::viewport(0, 0))?);
+    Ok(())
+}
+
+fn at_bottom(pane: &agterm_term::Pane) -> TestResult<bool> {
+    Ok(pane.read_text(TextRegion::Viewport)?.ends_with("ready"))
+}
+
+#[test]
+fn typing_scrolls_to_the_bottom_and_clears_the_selection() -> TestResult {
+    let fixture = scrolled_back()?;
+    let pane = &fixture.pane;
+    // a lone modifier sends nothing and changes nothing
+    assert!(!pane.key(&press("shift_left", Mods::SHIFT, ""))?);
+    assert!(!at_bottom(pane)? && pane.selection().is_some());
+    assert!(pane.key(&press("key_a", Mods::empty(), "a"))?);
+    assert!(at_bottom(pane)?);
+    assert_eq!(pane.selection(), None);
+
+    // both off: typing leaves the viewport and the selection, except that Escape clears the selection
+    back(pane)?;
+    pane.set_typing(Typing {
+        scroll_to_bottom: false,
+        clear_selection: false,
+    });
+    assert!(pane.key(&press("key_b", Mods::empty(), "b"))?);
+    assert!(!at_bottom(pane)? && pane.selection().is_some());
+    assert!(pane.key(&press("escape", Mods::empty(), ""))?);
+    assert!(!at_bottom(pane)?);
+    assert_eq!(pane.selection(), None);
+    assert_eq!(received(&fixture, b"ab\x1b"), b"ab\x1b");
+    Ok(())
+}
+
+#[test]
+fn a_paste_and_a_binding_s_text_always_scroll_to_the_bottom() -> TestResult {
+    let fixture = scrolled_back()?;
+    let pane = &fixture.pane;
+    pane.set_typing(Typing {
+        scroll_to_bottom: false,
+        clear_selection: false,
+    });
+    let pasted = pane.paste("p", PasteSource::Clipboard, ClipboardLocation::Standard, false)?;
+    assert_eq!(pasted, Paste::Written);
+    assert!(at_bottom(pane)?);
+    // an unsafe paste writes nothing and stays put
+    back(pane)?;
+    let refused = pane.paste("x\ny", PasteSource::Clipboard, ClipboardLocation::Standard, false)?;
+    assert_eq!(refused, Paste::Unsafe);
+    assert!(!at_bottom(pane)?);
+    pane.send(b"\x1b[A")?;
+    assert!(at_bottom(pane)?);
+    assert_eq!(received(&fixture, b"p\x1b[A"), b"p\x1b[A");
     Ok(())
 }
 

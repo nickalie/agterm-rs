@@ -131,10 +131,26 @@ pub(crate) struct Vt {
     pub(crate) input: InputState,
     /// The grid and cell size the terminal was last resized to.
     pub(crate) size: GridSize,
-    /// A wheel's routing cleared the selection (taken before the lock is let go, to wake the frontend).
+    /// An input path cleared the selection (taken before the lock is let go, to wake the frontend).
     pub(crate) cleared_selection: bool,
     /// The colors last reported with [`PaneEvent::Colors`].
     colors: vt::TerminalColors,
+}
+
+impl Vt {
+    /// Whether an input path cleared the selection under this lock (taking the mark).
+    pub(crate) fn take_cleared_selection(&mut self) -> bool {
+        std::mem::take(&mut self.cleared_selection)
+    }
+
+    /// Scroll the viewport to the bottom; whether it moved.
+    pub(crate) fn scroll_to_bottom(&mut self) -> bool {
+        if self.terminal.viewport_at_bottom() {
+            return false;
+        }
+        self.terminal.scroll_viewport(vt::Scroll::Bottom);
+        true
+    }
 }
 
 /// Messages to the IO thread while it waits on a clipboard answer.

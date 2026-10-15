@@ -52,7 +52,7 @@ impl Pane {
         let shared = self.shared();
         let mut vt = lock(&shared.vt);
         let routed = self.route(&mut vt, input);
-        let repaint = matches!(routed, Ok(Wheel::Scrolled)) || cleared(&mut vt);
+        let repaint = matches!(routed, Ok(Wheel::Scrolled)) || vt.take_cleared_selection();
         drop(vt);
         if repaint {
             shared.wake();
@@ -90,24 +90,6 @@ impl Pane {
         vt.terminal.scroll_viewport(vt::Scroll::Rows(-input.rows));
         Ok(Wheel::Scrolled)
     }
-
-    /// Clear the selection with the VT lock already held; the next frame shows it gone.
-    fn clear_selection_held(&self, vt: &mut Vt) {
-        if vt.terminal.selection(vt::PointTag::Screen).is_none() {
-            return;
-        }
-        if let Err(err) = vt.terminal.clear_selection() {
-            tracing::warn!(%err, "clearing the selection failed");
-        }
-        vt.cleared_selection = true;
-        // VT → capture
-        self.shared().touch_capture();
-    }
-}
-
-/// Whether the routing cleared the selection (taking the mark).
-fn cleared(vt: &mut Vt) -> bool {
-    std::mem::take(&mut vt.cleared_selection)
 }
 
 /// The wheel buttons' press reports, one per step: rows first (4 up, 5 down), then columns (6 right, 7 left).

@@ -4,8 +4,8 @@
 //! - [`Pane::spawn`] starts a [`PaneCommand`] on a PTY; [`Pane::write`] queues input, [`Pane::resize`] resizes the VT
 //!   and the PTY, [`Pane::frame`] captures the screen for painting, [`Pane::take_events`] drains the effects.
 //! - Input: [`Pane::key`] (a toolkit-neutral [`KeyInput`], encoded for the terminal's keyboard modes),
-//!   [`Pane::mouse`], [`Pane::wheel`] (routed as Ghostty routes the wheel), [`Pane::focus`], [`Pane::paste`],
-//!   [`Pane::scroll`].
+//!   [`Pane::send`] (a binding's text), [`Pane::mouse`], [`Pane::wheel`] (routed as Ghostty routes the wheel),
+//!   [`Pane::focus`], [`Pane::paste`], [`Pane::scroll`].
 //! - Selection and read-back: [`Pane::select`], [`Pane::select_word`],
 //!   [`Pane::select_line`], [`Pane::select_all`], [`Pane::selection_text`], [`Pane::read_text`],
 //!   [`Pane::cursor_column`]; a frame's rows carry their selected columns.
@@ -40,7 +40,9 @@ pub use effects::{
     ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardReadRequest, ClipboardWrite, ExitStatus, PaneEvent,
     ProgramNeed, ProgramState, ProgramStatus, Progress, TerminalColors,
 };
-pub use input::{KeyInput, ModSides, MouseAction, MouseButton, MouseInput, Padding, Paste, PasteSource, Scroll};
+pub use input::{
+    KeyInput, ModSides, MouseAction, MouseButton, MouseInput, Padding, Paste, PasteSource, Scroll, Typing,
+};
 pub use kitty::{
     KittyFormat, KittyImage, KittyImageKey, KittyLayer, KittyPlacement, KittyView, PlacementRect, SourceRect,
 };

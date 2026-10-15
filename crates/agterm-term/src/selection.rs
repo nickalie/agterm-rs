@@ -7,7 +7,7 @@
 use agterm_ghostty_vt as vt;
 
 use crate::PaneError;
-use crate::pane::{Pane, lock};
+use crate::pane::{Pane, Vt, lock};
 
 /// The coordinate space of a [`GridPoint`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -166,6 +166,20 @@ impl Pane {
             .ok()??;
         let text = String::from_utf8_lossy(&bytes).into_owned();
         (!text.is_empty()).then_some(text)
+    }
+
+    /// Clear the selection with the VT lock already held, marking the capture and `vt` (the caller wakes the frontend
+    /// once the lock is let go, see [`Vt::take_cleared_selection`]).
+    pub(crate) fn clear_selection_held(&self, vt: &mut Vt) {
+        if vt.terminal.selection(vt::PointTag::Screen).is_none() {
+            return;
+        }
+        if let Err(err) = vt.terminal.clear_selection() {
+            tracing::warn!(%err, "clearing the selection failed");
+        }
+        vt.cleared_selection = true;
+        // VT → capture
+        self.shared().touch_capture();
     }
 
     /// Run a selection change under the VT lock and mark the capture for the next frame.
