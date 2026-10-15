@@ -9,11 +9,19 @@
 //!   title, pwd, bell, notifications, progress, program status, clipboard, synchronized output), installed with
 //!   [`Terminal::set_effects`].
 //! - [`sys`]: the process-global hooks (PNG decoder, log), installed once at startup.
+//! - Input: [`KeyEncoder`] and [`MouseEncoder`] turn key and pointer events into what the program asked for
+//!   (legacy, Kitty keyboard protocol, the mouse tracking modes), [`encode_focus`] the focus reports,
+//!   [`Terminal::paste`] frames a paste (bracketed or not, unsafe text refused until confirmed).
+//! - Selection and read-back: [`Point`]s, the terminal's [`Selection`] (cell ranges, word, line, everything) and
+//!   [`Terminal::format`], which reads a region or the selection back as text.
+//! - [`Search`]: scrollback search, its terminal-touching calls serialized with the terminal, its ticks free of it.
+//! - [`KittyGraphics`]: the stored Kitty images and their placements.
 //!
 //! Every handle is `Send` and not `Sync`: the library creates no threads and keeps no thread-local state, and asks
 //! callers to serialize access to a terminal from any thread (`render.h`, `terminal.h`). A handle may move to another
 //! thread; sharing one takes a lock around it. The rest of the API (encoders, selection, formatter, search, kitty
-//! graphics) grows with the pane core.
+//! graphics) follows the same rule: a call that reads or writes the terminal takes it, and nothing the library lends
+//! outlives the borrow it was read under.
 //!
 //! ```
 //! fn moved<T: Send>() {}
@@ -30,10 +38,29 @@
 //! fn shared<T: Sync>() {}
 //! shared::<agterm_ghostty_vt::RenderState>();
 //! ```
+//!
+//! ```
+//! fn moved<T: Send>() {}
+//! moved::<agterm_ghostty_vt::KeyEncoder>();
+//! moved::<agterm_ghostty_vt::MouseEncoder>();
+//! moved::<agterm_ghostty_vt::Search>();
+//! ```
+//!
+//! ```compile_fail,E0277
+//! fn shared<T: Sync>() {}
+//! shared::<agterm_ghostty_vt::Search>();
+//! ```
 
 mod cell;
 mod effects;
+mod format;
+mod key;
+mod kitty;
+mod mouse;
+mod paste;
 mod render;
+mod search;
+mod selection;
 mod shape;
 pub mod sys;
 mod terminal;
@@ -44,11 +71,18 @@ pub use effects::{
     ClipboardWriteRequest, ClipboardWriteResult, DeviceAttributes, Effects, HeldTerminal, ProgramStatus,
     ProgramStatusKind, ProgramStatusState, ProgressReport, ProgressState, SizeReport,
 };
+pub use format::{Format, FormatOptions, Region};
+pub use key::{Key, KeyAction, KeyEncoder, KeyEvent, KeyMods, encode_focus};
+pub use kitty::{KittyFormat, KittyGraphics, KittyImage, KittyLayer, KittyPlacement, KittyRenderInfo, PixelRect};
+pub use mouse::{MouseAction, MouseButton, MouseEncoder, MouseEvent, MouseGeometry};
+pub use paste::{PasteOutcome, PasteSource, paste_is_safe};
 pub use render::{
     CursorPosition, CursorStyle, Dirty, PendingUpdate, RenderColors, RenderCursor, RenderState, RowId, RowRef, Rows,
 };
+pub use search::{Match, Search, SearchDirection, SearchResults, SearchStatus};
+pub use selection::{Point, PointTag, Selection};
 pub use shape::{Mode, MouseShape, ScrollbackLimits, TerminalColors};
-pub use terminal::Terminal;
+pub use terminal::{Scroll, Terminal};
 
 use std::ptr::NonNull;
 

@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 use agterm_ghostty_vt as vt;
 use bitflags::bitflags;
 
+use crate::kitty::KittyView;
+
 /// A 24-bit color.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Rgb {
@@ -87,16 +89,23 @@ pub struct Cell {
     text_len: u32,
 }
 
-/// One row of a [`Frame`]: its cells and their text.
+/// One row of a [`Frame`]: its cells, their text, and the selected columns.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Row {
     changed: u64,
     id: [u64; 2],
     cells: Vec<Cell>,
     text: String,
+    selection: Option<(u16, u16)>,
 }
 
 impl Row {
+    /// The selected columns of the row, first and last inclusive; `None` when the selection misses it.
+    #[must_use]
+    pub fn selection(&self) -> Option<(u16, u16)> {
+        self.selection
+    }
+
     /// The frame sequence number this row's content was captured in; a view that last drew frame `n` redraws the
     /// row when `changed > n`.
     #[must_use]
@@ -349,6 +358,8 @@ pub struct Frame {
     /// Captured at the start of a synchronized-output hold (mode 2026): the screen the program wants left up while it
     /// draws the next one.
     pub held: bool,
+    /// The Kitty images and their placements on this screen.
+    pub kitty: Arc<KittyView>,
 }
 
 impl Frame {
@@ -376,6 +387,10 @@ pub(crate) struct Capture {
     /// The hold callback captured a frame that is not converted yet.
     fresh: bool,
     seq: u64,
+    /// The Kitty view of the last frame made.
+    kitty: Arc<KittyView>,
+    /// A Kitty view captured with the state and not converted yet (`None`: unchanged since `kitty`).
+    pending_kitty: Option<KittyView>,
 }
 
 impl Capture {
@@ -385,15 +400,31 @@ impl Capture {
             held_since: None,
             fresh: false,
             seq: 0,
+            kitty: Arc::default(),
+            pending_kitty: None,
         })
     }
 
-    /// A hold began: capture the frame the program left on screen, from inside the callback (VT already held).
+    /// A hold began: capture the frame the program left on screen, its Kitty graphics included, from inside the
+    /// callback (VT already held).
     pub(crate) fn begin_hold(&mut self, terminal: &mut vt::HeldTerminal<'_>) {
         if let Err(err) = self.state.update_held(terminal) {
             tracing::warn!(%err, "capturing the held frame failed");
         }
+        self.capture_kitty(terminal.kitty_graphics());
         self.held_since = Some(Instant::now());
+        self.fresh = true;
+    }
+
+    /// Capture the Kitty graphics with the state (the terminal held, as for the state's update); the next conversion
+    /// carries them.
+    pub(crate) fn capture_kitty(&mut self, graphics: Option<vt::KittyGraphics<'_>>) {
+        self.pending_kitty = crate::kitty::capture(graphics, &self.kitty);
+    }
+
+    /// Something the dirty flags do not track changed (the selection): the next conversion makes a frame and checks
+    /// every row.
+    pub(crate) fn touch(&mut self) {
         self.fresh = true;
     }
 
@@ -424,7 +455,8 @@ impl Capture {
     /// Turn the state into the next frame after `previous`, or `None` when nothing changed; marks the state clean.
     ///
     /// The cursor, the colors and the mouse shape are compared with `previous` as well: the capture's dirty flags
-    /// track cell content, and a cursor that only moved or changed style leaves them clean.
+    /// track cell content, and a cursor that only moved or changed style leaves them clean. The Kitty view is the one
+    /// captured with the state ([`Capture::capture_kitty`], or the hold's).
     pub(crate) fn convert(&mut self, previous: &Frame, mouse_shape: MouseShape) -> Result<Option<Frame>, vt::Error> {
         let held = self.held();
         let cursor = self.state.cursor().map(cursor).unwrap_or_default();
@@ -436,10 +468,16 @@ impl Capture {
             && mouse_shape == previous.mouse_shape
             && held == previous.held
             && cursor == previous.cursor
-            && Arc::ptr_eq(&colors, &previous.colors);
+            && Arc::ptr_eq(&colors, &previous.colors)
+            && self.pending_kitty.is_none();
         if unchanged {
             return Ok(None);
         }
+        let kitty = self
+            .pending_kitty
+            .take()
+            .map_or_else(|| Arc::clone(&previous.kitty), Arc::new);
+        self.kitty = Arc::clone(&kitty);
         let seq = self.seq + 1;
         let full = self.state.dirty() == vt::Dirty::Full;
         let (cols, _) = self.state.size();
@@ -452,9 +490,16 @@ impl Capture {
         let mut walk = self.state.rows()?;
         while let Some(mut row) = walk.next_row() {
             let id = row.id().0;
+            let selection = row.selection();
             let kept = (!row.is_dirty()).then(|| reuse.get(&id)).flatten();
             rows.push(match kept {
-                Some(kept) => Arc::clone(kept),
+                Some(kept) if kept.selection == selection => Arc::clone(kept),
+                // the same cells under a changed selection
+                Some(kept) => Arc::new(Row {
+                    changed: seq,
+                    selection,
+                    ..Row::clone(kept)
+                }),
                 None => Arc::new(build_row(&mut row, id, seq, &colors.palette)?),
             });
         }
@@ -469,6 +514,7 @@ impl Capture {
             colors,
             mouse_shape,
             held,
+            kitty,
         }))
     }
 }
@@ -502,6 +548,7 @@ fn cursor(cursor: vt::RenderCursor) -> Cursor {
 }
 
 fn build_row(row: &mut vt::RowRef<'_>, id: [u64; 2], seq: u64, palette: &[Rgb; 256]) -> Result<Row, vt::Error> {
+    let selection = row.selection();
     let mut text = Vec::new();
     let mut cells = Vec::new();
     let mut walk = row.cells()?;
@@ -529,6 +576,7 @@ fn build_row(row: &mut vt::RowRef<'_>, id: [u64; 2], seq: u64, palette: &[Rgb; 2
         cells,
         // the library writes UTF-8; a lossy copy can only differ on bytes it never produces
         text: String::from_utf8(text).unwrap_or_else(|err| String::from_utf8_lossy(err.as_bytes()).into_owned()),
+        selection,
     })
 }
 
