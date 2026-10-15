@@ -480,6 +480,7 @@ def test_ratchet_only_narrowed_further_is_a_partial_run(pytester: pytest.Pyteste
         (("--also-k", "one"), "--also and --also-k need --ratchet-only"),
         (("--ratchet-only", "absent.txt"), "--ratchet-only: cannot read"),
         (("--ratchet-only", "list.txt", "--also-k", "one and"), "--also-k: bad expression"),
+        (("--ratchet-only", "list.txt", "--coverage-gate"), "--ratchet-only cannot be combined with --coverage-gate"),
     ],
 )
 def test_ratchet_only_usage_errors(pytester: pytest.Pytester, args: tuple[str, ...], message: str) -> None:

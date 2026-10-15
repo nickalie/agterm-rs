@@ -226,12 +226,44 @@ def test_a_narrower_run_adds_only_what_ran_and_removes_nothing(
     files: tuple[Path, Path], capsys: pytest.CaptureFixture[str], mode: str
 ) -> None:
     report, ratchet = files
-    # B listed but not in the report, C ran and passed, a failing unlisted id is neither added nor a break
-    write_report(report, rec(A), rec(C), rec(THREE_SPACES, "failed"), partial=True, mode=mode)
+    # B listed but not in the report, C ran and passed; unlisted ids that failed, were skipped or did not run are
+    # neither added nor a break
+    write_report(
+        report,
+        rec(A),
+        rec(C),
+        rec(THREE_SPACES, "failed"),
+        rec(TWO_SPACES, "skipped", "other", "skipped: not yet"),
+        rec("tests/protocol/test_d.py::test_four", "not-run"),
+        partial=True,
+        mode=mode,
+    )
     write_list(ratchet, A, B)
     code, out, _ = check(capsys, report, ratchet, "--add")
     assert code == 0
+    assert not any("BROKEN" in line for line in out)
+    # a ratchet-only run selected B, so its absence is warned about; a partial run left B out on purpose
+    assert any(B in line and "not collected" in line for line in out) == (mode == "ratchet-only")
+    assert f"ratchet holds: 2 listed id(s){' (1 not collected)' if mode == 'ratchet-only' else ''}, {mode} run" in out
     assert out[-1] == f"added 1 id(s) to {ratchet}"
+    assert ratchet.read_text() == HEADER + f"{A}\n{B}\n{C}\n"
+
+
+def test_a_partial_run_leaves_a_listed_id_it_did_not_run_unjudged(
+    files: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A listed red test outside a partial selection: not a break, not removed, and the passing ids still added."""
+    report, ratchet = files
+    write_report(report, rec(C), partial=True, mode="partial")
+    write_list(ratchet, A, B)
+    code, out, _ = check(capsys, report, ratchet, "--add")
+    assert code == 0
+    assert out == [
+        "newly passing, not in the list (1):",
+        C,
+        "ratchet holds: 2 listed id(s), partial run",
+        f"added 1 id(s) to {ratchet}",
+    ]
     assert ratchet.read_text() == HEADER + f"{A}\n{B}\n{C}\n"
 
 

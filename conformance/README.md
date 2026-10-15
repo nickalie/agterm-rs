@@ -164,7 +164,8 @@ the mode `partial`: the listed ids that did not run are not judged, so a partial
 the list through what it left out. The report names the mode and the suite time.
 A full run stays the default and is required at milestones: the GPUI switch (the plan's Task 34), and whenever a
 change touches the harness or shared crates broadly (agterm-core, -proto, -host, -server, -ctl, -zmx, -app or
--term). Between them a task's routine run is ratchet-only.
+-term). Between them a task's routine run is ratchet-only; it finds newly passing ids only among its `--also`
+selections, so a task that turns on a broad area (the terminal, say) grows the list with a full run.
 `--nodeid-report` cannot be combined with `--coverage-gate`.
 
 ## Catalog and coverage gate
