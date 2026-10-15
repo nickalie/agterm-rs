@@ -48,23 +48,35 @@ impl Device {
 ///
 /// `/proc/locks` prints the superblock's device, which differs from `st_dev` on btrfs (a subvolume reports its own
 /// anonymous device), so the device of the mount holding the file counts too.
+///
+/// One read of `/proc/locks` can miss a held lock: the table is a `seq_file`, each `read` returns at most a page and
+/// the next resumes the walk by position, so a lock released ahead of the cursor between two reads shifts the rest
+/// back and one entry goes unlisted. Only [`LOCKS_READS`] reads that all miss it count as not held.
 #[must_use]
 pub fn ownership_lock_held(socket: &Path) -> Option<bool> {
     let lock = ownership_lock_path(socket);
     let metadata = fs::metadata(&lock).ok()?;
-    let table = fs::read_to_string("/proc/locks").ok()?;
     let mut devices = vec![Device::from_dev(metadata.dev())];
     let mount = fs::canonicalize(&lock)
         .ok()
         .zip(fs::read_to_string("/proc/self/mountinfo").ok())
         .and_then(|(path, mountinfo)| mount_device(&mountinfo, &path));
     devices.extend(mount);
-    Some(
-        devices
-            .iter()
-            .any(|device| flock_listed(&table, &device.lock_key(metadata.ino()))),
-    )
+    let keys: Vec<String> = devices.iter().map(|device| device.lock_key(metadata.ino())).collect();
+    for _ in 0..LOCKS_READS {
+        let table = fs::read_to_string("/proc/locks").ok()?;
+        if keys.iter().any(|key| flock_listed(&table, key)) {
+            return Some(true);
+        }
+    }
+    Some(false)
 }
+
+/// How many whole reads of `/proc/locks` [`ownership_lock_held`] makes before it calls a lock not held. A miss needs
+/// the lock just past a page edge while locks ahead of it go between two `read`s. Measured with a held lock among
+/// hundreds of others taken and released on 12 cores at once: 1 read in 55 missed it, 3 in a row 8 times in 477k
+/// reads, 5 in a row never.
+const LOCKS_READS: usize = 5;
 
 /// The device of the mount that holds `path` in `mountinfo` (the text of `/proc/self/mountinfo`): the longest mount
 /// point that is a prefix of `path`, the later line on a tie (a mount over another). A line reads

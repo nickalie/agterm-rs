@@ -5,7 +5,7 @@ use std::error::Error;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -113,6 +113,18 @@ fn text(bytes: &[u8]) -> String {
 /// Exit status, stdout and stderr of a run.
 fn outcome(output: &Output) -> (Option<i32>, String, String) {
     (output.status.code(), text(&output.stdout), text(&output.stderr))
+}
+
+/// A socket file no socket is bound to, as a dead instance leaves behind: a connect to it is refused. Made with
+/// `mknod`, not by binding a listener and dropping it: a sibling test's spawn copies the listener's fd into a child
+/// that holds it until its `exec`, and a connect in that window is accepted into the backlog and then reset.
+fn stale_socket(path: &Path) -> TestResult {
+    let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())?;
+    // SAFETY: `path` is a NUL-terminated string that outlives the call.
+    if unsafe { libc::mknod(path.as_ptr(), libc::S_IFSOCK | 0o600, 0) } != 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    Ok(())
 }
 
 fn connect_failure(socket: &Path, reason: &str, hint: &str) -> String {
@@ -288,8 +300,7 @@ fn without_a_state_dir_the_xdg_data_home_is_the_default() -> TestResult {
 fn a_refused_connection_exits_1_with_the_error() -> TestResult {
     let dir = short_dir()?;
     let socket = dir.path().join("agterm.sock");
-    // a socket file nobody listens on: a stale socket of a dead instance
-    drop(UnixListener::bind(&socket)?);
+    stale_socket(&socket)?;
     let refused = connect_failure(&socket, "Connection refused", NOT_RUNNING);
     let output = run(
         dir.path(),
