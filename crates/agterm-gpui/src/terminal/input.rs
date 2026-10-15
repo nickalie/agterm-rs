@@ -14,7 +14,9 @@
 //! position (upstream's `chordKey`).
 
 use agterm_core::ghostty_config::binds::{KeyAction, Mods, PhysicalKey};
+use agterm_core::interrupt;
 use agterm_core::keymap::{Chord, Modifiers};
+use agterm_core::model::StatusKeystroke;
 use agterm_term::KeyInput;
 use gpui_kit::{Keystroke, Modifiers as GpuiModifiers};
 
@@ -139,6 +141,33 @@ impl KeyStroke {
         }
         stroke
     }
+}
+
+/// What a key press or repeat means to a status glyph (the GTK build's `input::status_keystroke`, upstream's
+/// `classifyKeystroke`): its key by the physical key, its character the text the key types before Ctrl
+/// transformations (Shift kept, as macOS's `charactersIgnoringModifiers`), its modifiers as held. GPUI never reports a
+/// bare modifier as a key on Linux.
+#[must_use]
+pub fn status_keystroke(stroke: &KeyStroke) -> StatusKeystroke {
+    let key = match stroke.key.name() {
+        "escape" => interrupt::Key::Escape,
+        "enter" => interrupt::Key::Return,
+        "numpad_enter" => interrupt::Key::KeypadEnter,
+        "key_c" => interrupt::Key::C,
+        _ => interrupt::Key::Other,
+    };
+    let pairs = [
+        (Mods::CTRL, interrupt::KeyModifiers::CONTROL),
+        (Mods::SUPER, interrupt::KeyModifiers::COMMAND),
+        (Mods::ALT, interrupt::KeyModifiers::OPTION),
+        (Mods::SHIFT, interrupt::KeyModifiers::SHIFT),
+    ];
+    let modifiers = pairs
+        .into_iter()
+        .filter(|(mods, _)| stroke.mods.contains(*mods))
+        .fold(interrupt::KeyModifiers::NONE, |modifiers, (_, bit)| modifiers | bit);
+    let character = Some(stroke.text.as_str()).filter(|text| !text.is_empty());
+    interrupt::classify(key, character, modifiers)
 }
 
 /// The ghostty modifiers of GPUI's (Super is GPUI's `platform` on Linux).

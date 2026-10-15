@@ -161,9 +161,16 @@ pub struct TerminalSpec {
     pub font_size: Option<f32>,
 }
 
-/// Starts the pane (Task 18 passes `Pane::launch` with the session's launch); called once, with the size of the grid
+/// Starts the pane (the deck passes `Pane::launch` with the pane's launch); called once, with the size of the grid
 /// the owner view first laid out and the wake that reaches this terminal's pump.
 pub type Spawn = Box<dyn FnOnce(PaneConfig) -> Result<Pane, PaneError>>;
+
+/// What a gated terminal calls once, when its owner view first has a size: it asks for its launch, which comes later
+/// through [`Shared::launch_with`] (a session pane waits for the core's seed and its paced launch turn).
+pub type AskLaunch = Box<dyn FnOnce()>;
+
+/// What a key press on a terminal that holds its keys does instead of reaching the program ([`Shared::hold_keys`]).
+pub type KeyHold = Rc<dyn Fn()>;
 
 /// What a terminal tells its frontend.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,6 +198,10 @@ pub enum TerminalEvent {
     /// in the active window, with no button held. The frontend focuses the pane (Ghostty's `moveFocus`; the deck owns
     /// pane focus); emitted once until the view's focus changes or the pointer leaves it.
     FocusFollowsMouse,
+    /// A key press or repeat reached the terminal's keyboard, classified for the status glyph (the GTK build's
+    /// `connect_keystroke`, upstream's `onUserInputClearsStatus` from `keyDown`): before its hold, ghostty's binds or
+    /// the program see it.
+    Keystroke(agterm_core::model::StatusKeystroke),
 }
 
 /// Work that needs the app, queued by the Surface for the pump.
@@ -204,6 +215,8 @@ enum Effect {
         html: String,
     },
     Emit(TerminalEvent),
+    /// A gated terminal's launch arrived after its owner laid it out: start it now.
+    Spawn,
 }
 
 /// Where a terminal is in its life.
@@ -211,6 +224,8 @@ enum Effect {
 enum Status {
     /// Waiting for the owner view's first grid.
     Pending,
+    /// Laid out, a gated terminal waits for its launch ([`Shared::launch_with`]).
+    Waiting,
     /// The spawn is queued.
     Spawning,
     Live,
@@ -242,8 +257,11 @@ pub struct Shared {
     status: Cell<Status>,
     /// The live font size in points.
     points: Cell<f32>,
-    /// What `reset_font_size` returns to.
-    original_points: f32,
+    /// What `reset_font_size` returns to: the size the terminal started at, then the config's after a reload.
+    original_points: Cell<f32>,
+    /// A font size action changed the size (`reset_font_size` clears it): a config reload keeps the live size then,
+    /// and takes the configured one otherwise (Ghostty's `font_size_adjusted`).
+    font_adjusted: Cell<bool>,
     /// The owner view's scale factor, last seen.
     scale: Cell<f32>,
     metrics: Cell<Option<(u32, u32, u64, CellMetrics)>>,
@@ -264,6 +282,12 @@ pub struct Shared {
     readonly: Cell<bool>,
     /// The URL of the link under the pointer (`copy_url_to_clipboard`; Task 14's hover sets it).
     hovered_url: RefCell<Option<String>>,
+    /// A gated terminal's ask for its launch, until it is made.
+    ask: RefCell<Option<AskLaunch>>,
+    /// The terminal is a client of its pane's live-session daemon: from the spec, or from the launch it started with.
+    live: Cell<bool>,
+    /// While set, a key press runs this instead of reaching the program (a lead cover, a held exit).
+    key_hold: RefCell<Option<KeyHold>>,
 }
 
 impl std::fmt::Debug for Shared {
@@ -318,7 +342,25 @@ impl Shared {
     /// The size `reset_font_size` returns to.
     #[must_use]
     pub fn original_font_points(&self) -> f32 {
-        self.original_points
+        self.original_points.get()
+    }
+
+    /// A font size action set `points`; `reset` (`reset_font_size`) gives a config reload the size back.
+    fn adjust_font_points(&self, points: f32, reset: bool) {
+        self.set_font_points(points);
+        self.font_adjusted.set(!reset);
+    }
+
+    /// A config reload of font size `configured`: it is what `reset_font_size` returns to from now on, and the live size
+    /// unless a font size action changed it (Ghostty's `changeConfig`). Whether the live size changed.
+    fn follow_config_points(&self, configured: f32) -> bool {
+        let configured = configured.clamp(1.0, 255.0);
+        self.original_points.set(configured);
+        if self.font_adjusted.get() || (configured - self.points.get()).abs() < f32::EPSILON {
+            return false;
+        }
+        self.points.set(configured);
+        true
     }
 
     /// The owner view's scale factor, as last laid out (1 before).
@@ -450,6 +492,58 @@ impl Shared {
         }
     }
 
+    /// Whether the terminal is a client of its pane's live-session daemon.
+    #[must_use]
+    pub fn is_live(&self) -> bool {
+        self.live.get()
+    }
+
+    /// Hands a gated terminal its launch: it starts at once when its owner already laid it out (on the pump's next
+    /// tick), else at its first layout. Ignored once the terminal started, failed or was torn down, and for a second
+    /// launch. `live`: the launch attaches to a live-session daemon.
+    pub fn launch_with(&self, spawn: Spawn, live: bool) {
+        if !matches!(self.status.get(), Status::Pending | Status::Waiting) || self.spawn.borrow().is_some() {
+            return;
+        }
+        self.live.set(live);
+        self.ask.borrow_mut().take();
+        *self.spawn.borrow_mut() = Some(spawn);
+        if self.status.get() == Status::Waiting {
+            self.status.set(Status::Spawning);
+            self.queue(Effect::Spawn);
+        }
+    }
+
+    /// Whether the terminal waits for its launch (gated, laid out, not handed one yet).
+    #[must_use]
+    pub fn is_waiting(&self) -> bool {
+        self.status.get() == Status::Waiting
+    }
+
+    /// While `hold` is set a key press runs it instead of reaching the program; `None` gives the keys back.
+    pub fn hold_keys(&self, hold: Option<KeyHold>) {
+        *self.key_hold.borrow_mut() = hold;
+    }
+
+    /// Whether the terminal holds its keys.
+    #[must_use]
+    pub fn holds_keys(&self) -> bool {
+        self.key_hold.borrow().is_some()
+    }
+
+    /// A key press reached the terminal: while it holds its keys, the hold runs and the key is consumed (`true`); the
+    /// keyboard path sends the key to the program only otherwise.
+    pub fn held_key(&self) -> bool {
+        let hold = self.key_hold.borrow().clone();
+        match hold {
+            Some(hold) => {
+                hold();
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Wakes the pump: the queued work runs and the views redraw.
     pub fn poke(&self) {
         let _ = self.wake.try_send(());
@@ -490,9 +584,18 @@ impl Shared {
         }
         self.laid.set(Some(laid));
         match self.status.get() {
-            Status::Pending => {
+            Status::Pending if self.spawn.borrow().is_some() => {
                 self.status.set(Status::Spawning);
                 true
+            }
+            Status::Pending => {
+                // gated: ask for the launch once, which may come back later
+                self.status.set(Status::Waiting);
+                let ask = self.ask.borrow_mut().take();
+                if let Some(ask) = ask {
+                    ask();
+                }
+                false
             }
             Status::Live => {
                 if let Some(pane) = self.pane()
@@ -502,7 +605,7 @@ impl Shared {
                 }
                 false
             }
-            Status::Spawning | Status::Failed | Status::TornDown => false,
+            Status::Waiting | Status::Spawning | Status::Failed | Status::TornDown => false,
         }
     }
 
@@ -550,6 +653,8 @@ impl Shared {
             return;
         }
         self.spawn.borrow_mut().take();
+        self.ask.borrow_mut().take();
+        self.key_hold.borrow_mut().take();
         self.effects.borrow_mut().clear();
         self.kitty.borrow_mut().clear();
         let pane = self.pane.borrow_mut().take();
@@ -593,7 +698,24 @@ impl EventEmitter<TerminalEvent> for Terminal {}
 impl Terminal {
     /// A terminal that starts its pane with `spawn` once its owner view has a size.
     pub fn new(spec: TerminalSpec, config: TerminalConfig, spawn: Spawn, cx: &mut Context<Self>) -> Self {
+        Self::build(spec, config, Some(spawn), None, cx)
+    }
+
+    /// A terminal that calls `ask` once its owner view has a size, and starts its pane only once
+    /// [`Shared::launch_with`] hands it a launch (the GTK build's gated surface).
+    pub fn gated(spec: TerminalSpec, config: TerminalConfig, ask: AskLaunch, cx: &mut Context<Self>) -> Self {
+        Self::build(spec, config, None, Some(ask), cx)
+    }
+
+    fn build(
+        spec: TerminalSpec,
+        config: TerminalConfig,
+        spawn: Option<Spawn>,
+        ask: Option<AskLaunch>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let (wake, woken) = async_channel::bounded::<()>(1);
+        let live = spec.live;
         let points = spec.font_size.unwrap_or(config.font.size).clamp(1.0, 255.0);
         let shared = Rc::new(Shared {
             key: NEXT_KEY.fetch_add(1, Ordering::Relaxed),
@@ -603,10 +725,11 @@ impl Terminal {
             fonts: RefCell::new(None),
             font_generation: Cell::new(0),
             pane: RefCell::new(None),
-            spawn: RefCell::new(Some(spawn)),
+            spawn: RefCell::new(spawn),
             status: Cell::new(Status::Pending),
             points: Cell::new(points),
-            original_points: points,
+            original_points: Cell::new(points),
+            font_adjusted: Cell::new(false),
             scale: Cell::new(1.0),
             metrics: Cell::new(None),
             laid: Cell::new(None),
@@ -619,6 +742,9 @@ impl Terminal {
             kitty: RefCell::new(kitty::KittyStore::default()),
             readonly: Cell::new(false),
             hovered_url: RefCell::new(None),
+            ask: RefCell::new(ask),
+            live: Cell::new(live),
+            key_hold: RefCell::new(None),
         });
         let pump = cx.spawn(async move |this, cx| {
             while woken.recv().await.is_ok() {
@@ -641,9 +767,21 @@ impl Terminal {
         TerminalSurface::new(Rc::clone(&self.shared))
     }
 
-    /// Takes a new config (a reload): the pane's theme, cursor and scrollback, the views' fonts and colors. The live
-    /// font size is kept.
+    /// Takes a new config of the same app config (its own overlay changed: a background watermark): the pane's theme,
+    /// cursor and scrollback, the views' fonts and colors. The live font size and the size a reset returns to are
+    /// kept, as the GTK build's overlay restates the live size.
     pub fn set_config(&mut self, config: TerminalConfig, cx: &mut Context<Self>) {
+        self.apply_config(config, false, cx);
+    }
+
+    /// Takes a reloaded app config as [`Self::set_config`] does, and its font size too: what a reset returns to from
+    /// now on, and the live size unless a font size action changed it. A restored or replacement terminal's start size
+    /// was not stepped, so it takes the configured one, as libghostty's re-feed does in the GTK build.
+    pub fn reload_config(&mut self, config: TerminalConfig, cx: &mut Context<Self>) {
+        self.apply_config(config, true, cx);
+    }
+
+    fn apply_config(&mut self, config: TerminalConfig, reload: bool, cx: &mut Context<Self>) {
         let shared = &self.shared;
         if let Some(pane) = shared.pane() {
             pane.set_mouse_reporting(config.mouse.reporting);
@@ -658,16 +796,17 @@ impl Terminal {
         }
         let fonts_changed = shared.config.borrow().font != config.font;
         let cell = shared.metrics_at(shared.font_points(), shared.scale());
+        let resized = reload && shared.follow_config_points(config.font.size);
         *shared.config.borrow_mut() = Rc::new(config);
         // the background image's file is looked at again (a watermark rendered anew into the same file)
         shared.background.borrow_mut().invalidate();
         if fonts_changed {
             shared.fonts.borrow_mut().take();
             shared.font_generation.set(shared.font_generation.get() + 1);
-            // the cell follows the fonts: report it as a font size change does
-            if shared.metrics_at(shared.font_points(), shared.scale()) != cell {
-                cx.emit(TerminalEvent::FontSize);
-            }
+        }
+        // the cell follows the fonts and the size: report it as a font size change does
+        if (fonts_changed || resized) && shared.metrics_at(shared.font_points(), shared.scale()) != cell {
+            cx.emit(TerminalEvent::FontSize);
         }
         cx.notify();
     }
@@ -693,6 +832,7 @@ impl Terminal {
 fn run_effect(shared: &Shared, effect: Effect, cx: &mut Context<Terminal>) {
     match effect {
         Effect::Emit(event) => cx.emit(event),
+        Effect::Spawn => shared.spawn(),
         Effect::CopyHtml { text, html } => copy_html(text, html, cx),
         Effect::Copy(text, location) => {
             let item = ClipboardItem::new_string(text);
@@ -771,6 +911,9 @@ pub struct TerminalView {
     blink: Option<Task<()>>,
     /// The frame drawn last.
     painted: Option<Arc<Frame>>,
+    /// The view is on screen. A hidden one (a deck page or pane not shown) still lays its grid out, so its pane
+    /// starts and follows the size, but captures no frame and redraws for nothing its terminal does.
+    shown: bool,
     /// The Kitty images and the background image this view put into its window's atlas.
     images: kitty::ViewImages,
     /// The layers the last paint drew, in order, with how many Kitty placements each Kitty layer had.
@@ -799,9 +942,14 @@ impl TerminalView {
             blink_on: true,
             blink: None,
             painted: None,
+            shown: true,
+            _observe: cx.observe(terminal, |view: &mut Self, _, cx| {
+                if view.shown {
+                    cx.notify();
+                }
+            }),
             images: kitty::ViewImages::default(),
             painted_layers: Vec::new(),
-            _observe: cx.observe(terminal, |_, _, cx| cx.notify()),
         }
     }
 
@@ -818,6 +966,20 @@ impl TerminalView {
     #[must_use]
     pub fn role(&self) -> ViewRole {
         self.role
+    }
+
+    /// Shows or hides the view (module docs of `TerminalView::shown`); a view shown again redraws.
+    pub fn set_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
+        if self.shown != shown {
+            self.shown = shown;
+            cx.notify();
+        }
+    }
+
+    /// Whether the view is on screen.
+    #[must_use]
+    pub fn is_shown(&self) -> bool {
+        self.shown
     }
 
     /// Draws at `points` instead of the terminal's size (a viewer: the dashboard's cells); `None` follows the terminal.

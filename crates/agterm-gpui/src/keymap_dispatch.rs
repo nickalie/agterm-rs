@@ -144,6 +144,12 @@ pub fn keyboard_left() {
     ROUTER.with_borrow_mut(Router::keyboard_left);
 }
 
+/// Whether `active`, the window holding the keyboard, is one under the monitor.
+#[must_use]
+pub fn holds_keyboard(active: Option<AnyWindowHandle>) -> bool {
+    active.is_some_and(|active| ROUTER.with_borrow(|router| router.windows.iter().any(|(window, _)| *window == active)))
+}
+
 /// What fired since the last call (tests).
 #[cfg(test)]
 pub(crate) fn take_fired() -> Vec<Fired> {

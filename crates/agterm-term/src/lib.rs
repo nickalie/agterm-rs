@@ -39,6 +39,7 @@ mod pane;
 mod placeholder;
 mod png;
 mod pty;
+pub mod pwd;
 mod render;
 mod scan;
 mod search;

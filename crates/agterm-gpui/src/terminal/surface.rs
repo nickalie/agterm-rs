@@ -91,7 +91,7 @@ impl Surface for TerminalSurface {
 
     /// A live pane is a client of its daemon once its terminal exists (the attach runs from the pane's start).
     fn is_live_session(&self) -> bool {
-        self.shared.spec().live && self.shared.is_realized()
+        self.shared.is_live() && self.shared.is_realized()
     }
 
     /// As in the GTK build: the reports of every pane already reach the session.
@@ -225,7 +225,8 @@ impl Actions<'_> {
             Action::SetFontSize(points) => *points,
             _ => return None,
         };
-        self.shared.set_font_points(points);
+        self.shared
+            .adjust_font_points(points, matches!(action, Action::ResetFontSize));
         Some(true)
     }
 

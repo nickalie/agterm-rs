@@ -17,10 +17,14 @@ agterm-host.workspace = true
 agterm-proto.workspace = true
 agterm-server.workspace = true
 agterm-term.workspace = true
+agterm-zmx.workspace = true
 async-channel.workspace = true
+cosmic-text.workspace = true
 gpui-kit.workspace = true
 image.workspace = true
 libc.workspace = true
+# text watermarks are written as PNG files the terminals' `background-image` reads
+png.workspace = true
 raw-window-handle.workspace = true
 regex.workspace = true
 serde_json.workspace = true
@@ -30,6 +34,7 @@ tempfile.workspace = true
 thiserror.workspace = true
 tiny-skia.workspace = true
 tracing.workspace = true
+url.workspace = true
 uuid.workspace = true
 wayland-backend.workspace = true
 wayland-client.workspace = true
@@ -44,7 +49,6 @@ gpui-pre-linux.workspace = true
 agterm-host = { workspace = true, features = ["fakes"] }
 gpui-kit = { workspace = true, features = ["test-support"] }
 gpui-pre-wgpu.workspace = true
-png.workspace = true
 
 # GPUI's headless renderer opens one GPU device per process, so the external texture cases run in a child process per
 # Vulkan driver, which this harness starts (tests/external_texture/main.rs).

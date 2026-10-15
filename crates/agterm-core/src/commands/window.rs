@@ -102,6 +102,8 @@ fn open_window_id(core: &Core, target: Option<&str>) -> Result<Uuid, ControlErro
 /// opened and made frontmost; `--minimized` parks it once created, leaving frontmost on a window still in view.
 fn new(core: &mut Core, args: &Args) -> ControlResult {
     let id = core.library_mut().new_window(args.name.as_deref());
+    // already frontmost: this only counts the take, so a frontend holds back an earlier new window's late focus
+    core.take_frontmost(id);
     if args.minimized.unwrap_or(false) {
         core.request_window(WindowRequest::Minimize {
             window: id,

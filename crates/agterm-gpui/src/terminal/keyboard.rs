@@ -201,6 +201,13 @@ impl TerminalView {
         if stroke.composing {
             return false;
         }
+        let keystroke = super::input::status_keystroke(stroke);
+        self.terminal
+            .update(cx, |_, cx| cx.emit(super::TerminalEvent::Keystroke(keystroke)));
+        // a lead cover's takeover and a held exit's close run instead of the program's key
+        if self.shared.held_key() {
+            return true;
+        }
         let Some(pane) = self.shared.pane().filter(|_| self.shared.is_realized()) else {
             return false;
         };

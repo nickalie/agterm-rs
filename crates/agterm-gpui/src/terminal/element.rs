@@ -276,6 +276,10 @@ impl TerminalView {
             ViewRole::Owner => lay_out(&shared, screen, scale, &metrics, explicit, cx),
             ViewRole::Viewer => explicit,
         };
+        if !self.shown {
+            // laid out (the pane starts and follows the size) but not drawn
+            return None;
+        }
         let fonts = shared.fonts();
         let font_size = px(points_to_px(points));
         let frame = shared.pane().map(|pane| {
