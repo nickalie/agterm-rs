@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use agterm_ghostty_vt::{
     ClipboardContent, ClipboardLocation, ClipboardReadReply, ClipboardReadRequest, ClipboardWriteRequest,
-    ClipboardWriteResult, DeviceAttributes, Effects, Error, HeldTerminal, Mode, MouseShape, ProgramStatus,
+    ClipboardWriteResult, ColorScheme, DeviceAttributes, Effects, Error, HeldTerminal, Mode, MouseShape, ProgramStatus,
     ProgramStatusKind, ProgramStatusState, ProgressReport, ProgressState, RenderState, Rgb, ScrollbackLimits,
     SizeReport, Terminal,
 };
@@ -33,6 +33,7 @@ struct Recorder {
     seen: Log,
     clipboard: Option<String>,
     capture: Option<RenderState>,
+    scheme: Option<ColorScheme>,
 }
 
 impl Recorder {
@@ -120,6 +121,10 @@ impl Effects for Recorder {
 
     fn xtversion(&mut self) -> Option<&str> {
         Some("agterm-test 1.0")
+    }
+
+    fn color_scheme(&mut self) -> Option<ColorScheme> {
+        self.scheme
     }
 
     fn reset(&mut self) {
@@ -262,6 +267,36 @@ fn queries_are_answered_from_the_handler() {
     assert_eq!(pty(&take(&seen)), b"\x1b[8;4;20t");
     terminal.vt_write(b"\x1b[14t");
     assert_eq!(pty(&take(&seen)), b"\x1b[4;64;160t");
+}
+
+#[test]
+fn a_color_scheme_query_is_answered_from_the_handler_and_mode_2031_is_tracked() {
+    let (mut unanswered, seen) = terminal(Recorder::default()).unwrap();
+    unanswered.vt_write(b"\x1b[?996n");
+    assert_eq!(pty(&take(&seen)), b"", "no scheme: the query goes unanswered");
+    for (scheme, report) in [
+        (ColorScheme::Dark, b"\x1b[?997;1n"),
+        (ColorScheme::Light, b"\x1b[?997;2n"),
+    ] {
+        let (mut answering, seen) = terminal(Recorder {
+            scheme: Some(scheme),
+            ..Recorder::default()
+        })
+        .unwrap();
+        answering.vt_write(b"\x1b[?996n");
+        let answer = pty(&take(&seen));
+        assert_eq!(answer, report, "{scheme:?}");
+        assert_eq!(
+            scheme.report(),
+            answer.as_slice(),
+            "an unsolicited report is the query's answer"
+        );
+    }
+    assert!(!unanswered.mode(Mode::COLOR_SCHEME_REPORT));
+    unanswered.vt_write(b"\x1b[?2031h");
+    assert!(unanswered.mode(Mode::COLOR_SCHEME_REPORT));
+    unanswered.vt_write(b"\x1b[?2031l");
+    assert!(!unanswered.mode(Mode::COLOR_SCHEME_REPORT));
 }
 
 #[test]

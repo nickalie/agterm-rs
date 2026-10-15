@@ -37,6 +37,7 @@ pub const CAPABILITIES: &[&str] = &[
     "type-rejects-nul",
     "resize-echoes-ratio",
     "hidden-split-holds-focus",
+    "theme-slots-by-sync",
     "config-reload-counts",
 ];
 
@@ -139,7 +140,9 @@ pub struct Launch {
 pub fn run(launch: Launch) -> i32 {
     // GPUI's Linux default quits when the last window closes, which hiding the quick terminal (a removed layer
     // surface) would trigger: this app quits only through its own quit path
-    let app = gpui_kit::application().with_quit_mode(QuitMode::Explicit);
+    let app = gpui_kit::application()
+        .with_quit_mode(QuitMode::Explicit)
+        .with_assets(crate::titlebar::Icons);
     let main_loop = Arc::new(GpuiMainLoop::<AppState>::new(app.background_executor()));
     let posting: Arc<dyn MainLoop<AppState>> = Arc::clone(&main_loop) as _;
     // SIGTERM is this process's from here: it is the primary
@@ -189,8 +192,15 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
     );
     core.write_settings_config();
     install_launch_hosts(&mut core, &poster, context.socket.clone());
-    let windows = windows(context, resources, &poster, &launch);
-    let state = cx.new(|_| AppState::new(core));
+    // the desktop's side before the config loads, so the first terminal starts on it (`appearance.rs`)
+    let portal = crate::appearance::Portal::session();
+    let dark = portal.as_ref().is_some_and(crate::appearance::Portal::is_dark);
+    let windows = windows(context, resources, dark, &poster, &launch);
+    let state = cx.new(|_| {
+        let mut state = AppState::new(core);
+        state.launched_on(dark);
+        state
+    });
     let tasks = main_loop.tasks();
     let shell = Rc::new(Shell {
         main_loop,
@@ -215,6 +225,11 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
         tracing::error!(%error, "the control server is not serving");
     }
     forward_bus_requests(launch.requests, poster.clone(), cx);
+    if let Some(portal) = portal
+        && let Err(error) = crate::appearance::follow_into(portal, poster.clone())
+    {
+        tracing::error!(%error, "appearance: the desktop's light/dark changes are not followed");
+    }
     // the last window closing quits, as in the GTK build
     let closing = poster;
     cx.on_window_closed(move |cx, _| {
@@ -232,20 +247,28 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
     .detach();
 }
 
-/// The windows' registry: the config the terminals draw with, the host they launch under, what their shells are told
-/// (`context`), Ghostty's `resources`.
-fn windows(context: PaneContext, resources: Option<PathBuf>, poster: &Poster, launch: &Launch) -> Windows {
-    let config = AppConfig::load(&ProcessEnv, resources.as_deref(), false);
+/// The windows' registry: the config the terminals draw with (on the `dark` side of the desktop's appearance), the
+/// host they launch under, what their shells are told (`context`), Ghostty's `resources`.
+fn windows(context: PaneContext, resources: Option<PathBuf>, dark: bool, poster: &Poster, launch: &Launch) -> Windows {
+    let config = AppConfig::load(&ProcessEnv, resources.as_deref(), dark);
     let host = Rc::new(RefCell::new(session_host::launch_host(
         &config,
         resources.clone(),
         &ProcessEnv,
     )));
     let overlay_resources = resources.clone();
+    let side = Rc::new(Cell::new(dark));
+    let overlay_side = Rc::clone(&side);
     let watermarks = Watermarks {
         state_dir: paths::state_dir(&ProcessEnv),
         config_with: Rc::new(move |overlay: &str| {
-            AppConfig::load_with(&ProcessEnv, overlay_resources.as_deref(), false, Some(overlay)).terminal()
+            AppConfig::load_with(
+                &ProcessEnv,
+                overlay_resources.as_deref(),
+                overlay_side.get(),
+                Some(overlay),
+            )
+            .terminal()
         }),
     };
     let env = Rc::new(DeckEnv::new(
@@ -258,7 +281,11 @@ fn windows(context: PaneContext, resources: Option<PathBuf>, poster: &Poster, la
     Windows::new(
         env,
         launch.app_id.clone(),
-        Some(ConfigHost { resources, host }),
+        Some(ConfigHost {
+            resources,
+            host,
+            dark: side,
+        }),
         Some(launch.activation.clone()),
     )
 }

@@ -8,8 +8,8 @@ mod support;
 use std::time::{Duration, Instant};
 
 use agterm_term::{
-    ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardWrite, GridSize, PaneCommand, PaneConfig, PaneError,
-    PaneEvent, Progress, ReadScope, Rgb,
+    ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardWrite, ColorScheme, GridSize, PaneCommand,
+    PaneConfig, PaneError, PaneEvent, Progress, ReadScope, Rgb,
 };
 use support::{SIZE, TestResult, spawn, spawn_with, wait_events, wait_file, wait_file_containing, wait_text};
 
@@ -316,4 +316,41 @@ fn raw_input_without_echo_is_not_password_input() {
         !fixture.pane.password_input(),
         "a full-screen program reads raw keys, not a password"
     );
+}
+
+#[test]
+fn color_scheme_queries_are_answered_and_mode_2031_gets_a_report_on_a_change_only() {
+    let mut config = PaneConfig::new(SIZE);
+    config.color_scheme = ColorScheme::Dark;
+    let fixture = spawn_with(
+        concat!(
+            "stty raw -echo; printf '\\033[?996n'; dd bs=1 count=9 of=\"$DIR/query\" 2>/dev/null; ",
+            "while [ ! -e \"$DIR/go\" ]; do sleep 0.02; done; ",
+            "printf '\\033[?2031h'; printf ready; dd bs=1 count=9 of=\"$DIR/report\" 2>/dev/null; printf done; ",
+            "exec sleep 5"
+        ),
+        &config,
+    )
+    .unwrap();
+    assert_eq!(
+        wait_file(&fixture.path("query"), 9),
+        b"\x1b[?997;1n",
+        "the query answers dark"
+    );
+    assert_eq!(fixture.pane.color_scheme(), ColorScheme::Dark);
+    // without mode 2031 a change is only remembered: a report of it would read light, not the dark one expected
+    fixture.pane.set_color_scheme(ColorScheme::Light);
+    assert_eq!(fixture.pane.color_scheme(), ColorScheme::Light);
+    std::fs::write(fixture.path("go"), b"").unwrap();
+    wait_text(&fixture.pane, "ready");
+    // the same scheme again is no change (a report of it would read light too)
+    fixture.pane.set_color_scheme(ColorScheme::Light);
+    fixture.pane.set_color_scheme(ColorScheme::Dark);
+    assert_eq!(fixture.pane.color_scheme(), ColorScheme::Dark);
+    assert_eq!(
+        wait_file(&fixture.path("report"), 9),
+        b"\x1b[?997;1n",
+        "one report, for the change made with mode 2031 on"
+    );
+    wait_text(&fixture.pane, "done");
 }

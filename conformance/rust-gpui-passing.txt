@@ -31,6 +31,7 @@ tests/cli/test_cli_output.py::test_restore
 tests/cli/test_cli_output.py::test_session_background
 tests/cli/test_cli_output.py::test_session_panes
 tests/cli/test_cli_output.py::test_sidebar
+tests/cli/test_cli_output.py::test_theme
 tests/cli/test_cli_output.py::test_tree_lists_workspaces_and_tagged_sessions
 tests/cli/test_cli_output.py::test_version
 tests/cli/test_cli_output.py::test_workspace_focus_and_filter
@@ -119,6 +120,8 @@ tests/protocol/test_events.py::test_next_advances_past_filtered_out_events
 tests/protocol/test_events.py::test_read_without_a_cursor_subscribes_from_now
 tests/protocol/test_events.py::test_run_id_is_case_insensitive
 tests/protocol/test_events.py::test_session_lifecycle_events
+tests/protocol/test_font_theme.py::test_bare_set_returns_to_ghostty_builtin_colors
+tests/protocol/test_font_theme.py::test_dark_slot_turns_appearance_sync_on_and_none_turns_it_off
 tests/protocol/test_font_theme.py::test_font_pane_right_steps_the_split_alone
 tests/protocol/test_font_theme.py::test_font_pane_scratch_steps_the_scratch_terminal_alone
 tests/protocol/test_font_theme.py::test_font_refusals[fresh-middle-invalid pane: middle-font.dec]
@@ -136,6 +139,11 @@ tests/protocol/test_font_theme.py::test_font_refusals[zzz-None-no such session: 
 tests/protocol/test_font_theme.py::test_font_steps_the_main_pane_by_one_point_and_resets
 tests/protocol/test_font_theme.py::test_font_without_a_target_steps_the_active_session_alone
 tests/protocol/test_font_theme.py::test_list_names_the_bundled_themes
+tests/protocol/test_font_theme.py::test_set_a_single_theme
+tests/protocol/test_font_theme.py::test_set_refusals_leave_the_slots_alone[args0-theme.set takes either a name or --light, not both]
+tests/protocol/test_font_theme.py::test_set_refusals_leave_the_slots_alone[args1-unknown theme: No Such Theme]
+tests/protocol/test_font_theme.py::test_set_refusals_leave_the_slots_alone[args2-unknown theme: No Such Theme]
+tests/protocol/test_font_theme.py::test_set_refusals_leave_the_slots_alone[args3-unknown theme: dracula]
 tests/protocol/test_hud.py::test_hud_font_size_range[font-high]
 tests/protocol/test_hud.py::test_hud_font_size_range[font-low]
 tests/protocol/test_hud.py::test_hud_refusals[pane-session.hud.open]
@@ -166,6 +174,10 @@ tests/protocol/test_notify.py::test_notify_raises_the_badge_and_emits_the_event
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args0-notify requires a body]
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args1-notify requires a body]
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[zzz-args2-no such session: zzz]
+tests/protocol/test_overlay.py::test_open_refusals[chromeless-browse-url]
+tests/protocol/test_overlay.py::test_open_refusals[chromeless-navigation]
+tests/protocol/test_overlay.py::test_open_refusals[chromeless-program]
+tests/protocol/test_overlay.py::test_open_refusals[chromeless-url]
 tests/protocol/test_overlay.py::test_open_refusals[cwd-is-file]
 tests/protocol/test_overlay.py::test_open_refusals[cwd-url]
 tests/protocol/test_overlay.py::test_open_refusals[outside-cwd]

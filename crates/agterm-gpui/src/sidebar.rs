@@ -21,7 +21,6 @@ mod view;
 mod tests;
 
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -45,7 +44,6 @@ use self::context::SidebarContext;
 use self::drag::{DragPayload, Highlight, Proposal, RowSpan};
 use self::menu::{MenuAction, MenuEntry};
 use self::rows::{Expansion, RowSettings};
-use crate::deck::DeckEnv;
 use crate::state::{self, AppState, Poster};
 
 /// How long a drag hovers over a folded workspace before it opens for the drag (upstream's spring-loading).
@@ -117,7 +115,6 @@ struct Resize {
 /// The sidebar of one window.
 pub struct Sidebar {
     window: Uuid,
-    env: Rc<DeckEnv>,
     poster: Poster,
     /// The sidebar shows: the window's sidebar is visible and no zoom or dashboard covers it.
     shown: bool,
@@ -147,14 +144,12 @@ pub struct Sidebar {
 }
 
 impl Sidebar {
-    /// The sidebar of model window `window`, its terminals' config read from `env`, its handlers posting through
-    /// `env`'s poster.
+    /// The sidebar of model window `window`, its handlers posting through `poster`; it paints in the window chrome's
+    /// colors ([`crate::chrome`]).
     #[must_use]
-    pub fn new(window: Uuid, env: Rc<DeckEnv>) -> Self {
-        let poster = env.poster.clone();
+    pub fn new(window: Uuid, poster: Poster) -> Self {
         Self {
             window,
-            env,
             poster,
             shown: false,
             width: agterm_core::model::SIDEBAR_WIDTH_DEFAULT,
@@ -241,7 +236,7 @@ impl Sidebar {
         let id = self.window;
         let covered = core.zoom_target(id).is_some() || core.dashboard(id).is_some();
         let settings = core.settings().clone();
-        self.look = Look::of(&self.env.config(), &settings);
+        self.look = Look::of(crate::chrome::current(cx), &settings);
         let Some(store) = core.library_mut().store_mut(id) else {
             return;
         };

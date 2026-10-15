@@ -117,3 +117,35 @@ def test_a_region_of_mixed_colors_is_refused() -> None:
     assert chrome_probe.regions(image, layout) == dict.fromkeys(("title", "sidebar_body", "terminal"), (9, 9, 9))
     with pytest.raises(chrome_probe.ProbeError, match="terminal box is not one color"):
         chrome_probe.regions(mixed, layout)
+
+
+def test_each_frontend_has_its_stage() -> None:
+    assert chrome_probe.DEFAULT_BINS["gtk"].parts[-3:] == ("conformance-stage", "bin", "agterm")
+    assert chrome_probe.DEFAULT_BINS["gpui"].parts[-3:] == ("conformance-stage-gpui", "bin", "agterm-gpui")
+
+
+def test_lavapipe_comes_from_the_variable_then_the_script(tmp_path: Path) -> None:
+    variable = chrome_probe.LAVAPIPE_ICD_VARIABLE
+    assert chrome_probe.find_lavapipe({variable: "/icd.json"}, tmp_path / "absent") == ("/icd.json", "")
+    icd, problem = chrome_probe.find_lavapipe({}, tmp_path / "absent")
+    assert icd is None and "no absent in this tree" in problem
+    script = tmp_path / "fetch-lavapipe.sh"
+    script.write_text('#!/bin/sh\n[ "$1" = --print-icd ] && echo /vendor/lvp_icd.json\n')
+    script.chmod(0o755)
+    assert chrome_probe.find_lavapipe({}, script) == ("/vendor/lvp_icd.json", "")
+    script.write_text("#!/bin/sh\necho 'no lavapipe unpacked: run it without --print-icd' >&2\nexit 1\n")
+    assert chrome_probe.find_lavapipe({}, script) == (None, "no lavapipe unpacked: run it without --print-icd")
+
+
+def test_a_gpui_probe_without_lavapipe_stops_before_launching(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(chrome_probe.LAVAPIPE_ICD_VARIABLE, raising=False)
+    monkeypatch.setattr(chrome_probe.find_lavapipe, "__defaults__", (tmp_path / "absent",))
+    report = chrome_probe.probe(tmp_path / "bin" / "agterm-gpui", 1.0, None, "gpui")
+    assert report["ok"] is False and report["frontend"] == "gpui"
+    assert report["error"].startswith("lavapipe: ")
+
+
+def test_a_gtk_probe_without_a_build_reports_it(tmp_path: Path) -> None:
+    report = chrome_probe.probe(tmp_path / "bin" / "agterm", 1.0, None)
+    assert report == {"bin": str(tmp_path / "bin" / "agterm"), "frontend": "gtk", "checks": {}, "ok": False,
+                      "error": f"no agterm at {tmp_path / 'bin' / 'agterm'}"}

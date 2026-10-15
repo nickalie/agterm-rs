@@ -1,13 +1,14 @@
-//! What the sidebar is painted with: the chrome colors of the terminal's theme (the GTK build's `chrome.rs`
-//! stylesheet for the sidebar, upstream's `sidebarTintWash`, `SidebarRowView` and `SidebarCellView.setColors`, colors
-//! resolved by [`agterm_core::chrome`]) and the rows' metrics (upstream's `WorkspaceSidebar+RowRendering.swift`
-//! `makeCell`, `SidebarRowViews.swift` `BadgeView`, `WindowContentView.swift` `bottomBar`).
+//! What the sidebar is painted with: the window chrome's colors ([`crate::chrome`], the one source the window body,
+//! the title bar and the sidebar share: the GTK build's `chrome.rs` stylesheet for the sidebar, upstream's
+//! `sidebarTintWash`, `SidebarRowView` and `SidebarCellView.setColors`) and the rows' metrics (upstream's
+//! `WorkspaceSidebar+RowRendering.swift` `makeCell`, `SidebarRowViews.swift` `BadgeView`, `WindowContentView.swift`
+//! `bottomBar`).
 
-use agterm_core::chrome::{ChromeColors, Rgb, SelectionColors};
+use agterm_core::chrome::{ChromeColors, Rgb};
 use agterm_core::persist::AppSettings;
 use gpui_kit::Hsla;
 
-use crate::terminal::{Pick, TerminalConfig};
+pub use crate::chrome::color;
 
 /// The rows' text size when the setting leaves it unset (upstream's `sidebarFontSize` default, the system font size).
 pub const DEFAULT_FONT_SIZE: f32 = 13.0;
@@ -57,34 +58,19 @@ pub struct Look {
 impl Default for Look {
     fn default() -> Self {
         Self {
-            colors: ChromeColors::new(None, None, SelectionColors::default(), 5),
+            colors: crate::chrome::default_colors(),
             font_size: DEFAULT_FONT_SIZE,
         }
     }
 }
 
 impl Look {
-    /// The look of the terminals' `config` under `settings`: the theme's background, foreground and selection colors
-    /// (a selection color that follows the cell counts as unset, as libghostty reports none for it), the sidebar tint,
-    /// and the rows' text size.
+    /// The look of the chrome's `colors` (the window's, [`crate::chrome::current`]) under `settings`: the rows' text
+    /// size.
     #[must_use]
-    pub fn of(config: &TerminalConfig, settings: &AppSettings) -> Self {
-        let rgb = |color: agterm_term::Rgb| Rgb::new(color.r, color.g, color.b);
-        let pick = |pick: Option<Pick>| match pick {
-            Some(Pick::Color(color)) => Some(rgb(color)),
-            _ => None,
-        };
-        let selection = SelectionColors {
-            background: pick(config.palette.selection_background),
-            foreground: pick(config.palette.selection_foreground),
-        };
+    pub fn of(colors: ChromeColors, settings: &AppSettings) -> Self {
         Self {
-            colors: ChromeColors::new(
-                Some(rgb(config.theme.background)),
-                Some(rgb(config.theme.foreground)),
-                selection,
-                settings.effective_sidebar_shift(),
-            ),
+            colors,
             font_size: font_size(settings.sidebar_font_size),
         }
     }
@@ -98,14 +84,14 @@ impl Look {
     /// The divider's line: the chrome text at low opacity.
     #[must_use]
     pub fn separator(&self) -> Hsla {
-        color(self.colors.foreground, ChromeColors::SEPARATOR_ALPHA)
+        crate::chrome::separator(&self.colors)
     }
 
     /// The text of a row, selected or not.
     #[must_use]
     pub fn text(&self, selected: bool) -> Hsla {
         if selected {
-            color(self.colors.selection_foreground, 1.0)
+            crate::chrome::selected_row(&self.colors, true).1
         } else {
             color(self.colors.foreground, 1.0)
         }
@@ -127,24 +113,7 @@ impl Look {
     /// upstream's soft white wash.
     #[must_use]
     pub fn pill(&self, key_window: bool) -> Hsla {
-        match self.colors.selection_background {
-            Some(selection) => color(
-                selection,
-                if key_window {
-                    1.0
-                } else {
-                    ChromeColors::INACTIVE_SELECTION_ALPHA
-                },
-            ),
-            None => color(
-                Rgb::WHITE,
-                if key_window {
-                    ChromeColors::WASH_ALPHA
-                } else {
-                    ChromeColors::INACTIVE_WASH_ALPHA
-                },
-            ),
-        }
+        crate::chrome::selected_row(&self.colors, key_window).0
     }
 }
 
@@ -157,10 +126,4 @@ pub fn font_size(setting: Option<f64>) -> f32 {
     #[expect(clippy::cast_possible_truncation, reason = "clamped to 9...20")]
     let size = size as f32;
     size
-}
-
-/// `rgb` at `alpha` as GPUI's color.
-#[must_use]
-pub fn color(rgb: Rgb, alpha: f64) -> Hsla {
-    crate::mute::color(rgb, alpha)
 }

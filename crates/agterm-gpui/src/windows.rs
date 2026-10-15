@@ -58,6 +58,8 @@ pub struct WindowUi {
 pub struct ConfigHost {
     pub resources: Option<std::path::PathBuf>,
     pub host: Rc<RefCell<Host>>,
+    /// The side of the desktop's appearance the config loads on, which the terminals' overlays load on too.
+    pub dark: Rc<std::cell::Cell<bool>>,
 }
 
 /// The windows by model window id.
@@ -107,10 +109,17 @@ impl Windows {
     /// Brings the windows in line with the model (module docs), then reports every window's state to the core, lands
     /// the pane focus requests and the spawn grants. Whether the model changed so that it needs another settle.
     pub fn sync(&mut self, state: &mut AppState, cx: &mut App) -> bool {
-        if state.core.take_config_reload() {
-            let count = self.reload_config(cx);
-            state.core.report_config_reload(count);
+        if let Some(reload) = state.take_config_reload() {
+            // a flip alone keeps every terminal's font size, as upstream's `reloadConfigPreservingSessionZoom` does
+            let count = self.reload_config(reload.dark, !reload.asked, cx);
+            state.config_applied(reload.dark);
+            if reload.asked {
+                state.core.report_config_reload(count);
+            }
         }
+        // after any reload, so the chrome takes the colors the terminals now render; before the windows render, so a
+        // new window's first frame has them
+        crate::chrome::sync(&state.core, &self.env.config.borrow(), cx);
         // a dashboard follows the model before anything renders it
         state.core.reconcile_dashboards();
         let mut resettle = self.replace_panes(&mut state.core, cx);
@@ -244,22 +253,26 @@ impl Windows {
         changed
     }
 
-    /// Rebuilds the ghostty config and feeds it to every terminal; its diagnostic count, `None` when there is no
-    /// config host (tests).
-    fn reload_config(&self, cx: &mut App) -> Option<usize> {
+    /// Rebuilds the ghostty config on the `dark` side of the desktop's appearance (upstream's
+    /// `GhosttyApp.reloadConfig`) and feeds it to every terminal, their overlays (backgrounds) loaded on that side too;
+    /// its diagnostic count, `None` when there is no config host (tests). With `keep_zoom` (an appearance flip) the
+    /// terminals keep their live font sizes.
+    fn reload_config(&self, dark: bool, keep_zoom: bool, cx: &mut App) -> Option<usize> {
         let config = self.config.as_ref()?;
-        let app = AppConfig::load(&agterm_core::paths::ProcessEnv, config.resources.as_deref(), false);
+        config.dark.set(dark);
+        let app = AppConfig::load(&agterm_core::paths::ProcessEnv, config.resources.as_deref(), dark);
         *config.host.borrow_mut() =
             crate::session_host::launch_host(&app, config.resources.clone(), &agterm_core::paths::ProcessEnv);
-        self.set_config(&app.terminal(), cx);
+        self.set_config(&app.terminal(), keep_zoom, cx);
         Some(app.diagnostics)
     }
 
-    /// Every terminal takes `config` (over its own overlay), and so does every terminal created from now on.
-    pub fn set_config(&self, config: &TerminalConfig, cx: &mut App) {
+    /// Every terminal takes `config` (over its own overlay), keeping its live font size with `keep_zoom`, and so does
+    /// every terminal created from now on.
+    pub fn set_config(&self, config: &TerminalConfig, keep_zoom: bool, cx: &mut App) {
         *self.env.config.borrow_mut() = Rc::new(config.clone());
         for ui in self.shown.values() {
-            ui.deck.update(cx, |deck, cx| deck.apply_config(cx));
+            ui.deck.update(cx, |deck, cx| deck.apply_config(keep_zoom, cx));
         }
     }
 

@@ -20,6 +20,7 @@
 //! The callback serves an armed answer only to a request it matches (same clipboard; a list-only answer never serves
 //! data) and clears it after that one byte; with nothing armed (a read the scanner did not see) it denies.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -222,6 +223,36 @@ fn device_attributes() -> vt::DeviceAttributes {
     }
 }
 
+/// The desktop's light or dark appearance, as the pane answers a program's color scheme query (`CSI ? 996 n`) and
+/// reports it to a program that asked for reports (mode 2031).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum ColorScheme {
+    #[default]
+    Light,
+    Dark,
+}
+
+impl ColorScheme {
+    pub(crate) fn engine(self) -> vt::ColorScheme {
+        match self {
+            Self::Light => vt::ColorScheme::Light,
+            Self::Dark => vt::ColorScheme::Dark,
+        }
+    }
+}
+
+/// The pane's color scheme, shared between its effects (the IO thread) and the frontend: dark when set.
+pub(crate) type SchemeSlot = Arc<AtomicBool>;
+
+/// The scheme `slot` holds.
+pub(crate) fn scheme_of(slot: &AtomicBool) -> ColorScheme {
+    if slot.load(Ordering::Acquire) {
+        ColorScheme::Dark
+    } else {
+        ColorScheme::Light
+    }
+}
+
 /// The pane's [`vt::Effects`].
 pub(crate) struct PaneEffects {
     pub events: Sender<PaneEvent>,
@@ -230,6 +261,7 @@ pub(crate) struct PaneEffects {
     pub armed: ArmedSlot,
     pub divert: DivertSlot,
     pub xtversion: String,
+    pub scheme: SchemeSlot,
 }
 
 impl PaneEffects {
@@ -382,6 +414,10 @@ impl vt::Effects for PaneEffects {
         Some(&self.xtversion)
     }
 
+    fn color_scheme(&mut self) -> Option<vt::ColorScheme> {
+        Some(scheme_of(&self.scheme).engine())
+    }
+
     fn reset(&mut self) {
         // a full reset clears the title and pwd without their own callbacks
         self.send(PaneEvent::Title(String::new()));
@@ -404,6 +440,7 @@ mod tests {
             armed: Arc::new(Mutex::new(armed)),
             divert: Arc::default(),
             xtversion: String::new(),
+            scheme: Arc::default(),
         }
     }
 

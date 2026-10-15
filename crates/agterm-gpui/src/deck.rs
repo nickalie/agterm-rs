@@ -537,12 +537,18 @@ impl Deck {
         sync_watermarks(&self.env, page, session, cx);
     }
 
-    /// The app's config changed (a reload): every terminal takes it, over its own overlay.
-    pub fn apply_config(&self, cx: &mut Context<Self>) {
+    /// The app's config changed (a reload): every terminal takes it, over its own overlay; with `keep_zoom` (an
+    /// appearance flip) each keeps its live font size.
+    pub fn apply_config(&self, keep_zoom: bool, cx: &mut Context<Self>) {
         for pane in self.terminals() {
             let config = self.env.config_for(pane.overlay.borrow().as_deref());
-            pane.terminal
-                .update(cx, |terminal, cx| terminal.reload_config(config, cx));
+            pane.terminal.update(cx, |terminal, cx| {
+                if keep_zoom {
+                    terminal.flip_config(config, cx);
+                } else {
+                    terminal.reload_config(config, cx);
+                }
+            });
         }
         cx.notify();
     }

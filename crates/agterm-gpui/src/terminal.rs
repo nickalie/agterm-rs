@@ -55,8 +55,8 @@ use agterm_core::ghostty_config::binds::Keybinds;
 use agterm_core::ghostty_config::{self, CopyOnSelect, GhosttyConfig};
 use agterm_core::keymap::SurfaceOwner;
 use agterm_term::{
-    ClipboardLocation, CursorDefaults, FormatRegion, Frame, GridSize, Pane, PaneConfig, PaneError, PaneEvent,
-    PasteSource, ScrollbackLimits, TextFormat, ThemeColors,
+    ClipboardLocation, ColorScheme, CursorDefaults, FormatRegion, Frame, GridSize, Pane, PaneConfig, PaneError,
+    PaneEvent, PasteSource, ScrollbackLimits, TextFormat, ThemeColors,
 };
 use gpui_kit::{
     App, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
@@ -98,6 +98,9 @@ pub struct TerminalConfig {
     pub clear_selection_on_copy: bool,
     /// `copy-on-select`: where a selection made is copied ([`Shared::copy_on_select`]).
     pub copy_on_select: CopyOnSelect,
+    /// The desktop's appearance the config was loaded on, which the terminal answers color scheme queries with and
+    /// reports to a program that asked (mode 2031), as libghostty's surface color scheme did.
+    pub color_scheme: ColorScheme,
     /// `selection-word-chars`: the word boundaries of word selections; `None` is Ghostty's default set.
     pub word_chars: Option<Vec<char>>,
 }
@@ -139,8 +142,16 @@ impl TerminalConfig {
             copy_trim: config.clipboard.trim_trailing_spaces,
             clear_selection_on_copy: config.selection.clear_on_copy,
             copy_on_select: config.copy_on_select,
+            color_scheme: ColorScheme::Light,
             word_chars: config.selection.word_chars.clone(),
         }
+    }
+
+    /// This config on the `dark` side of the desktop's appearance, or the light one.
+    #[must_use]
+    pub fn on_side(mut self, dark: bool) -> Self {
+        self.color_scheme = if dark { ColorScheme::Dark } else { ColorScheme::Light };
+        self
     }
 }
 
@@ -217,6 +228,17 @@ enum Effect {
     Emit(TerminalEvent),
     /// A gated terminal's launch arrived after its owner laid it out: start it now.
     Spawn,
+}
+
+/// How a new config reached a terminal, which decides what its font size does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigChange {
+    /// Its own overlay changed ([`Terminal::set_config`]).
+    Overlay,
+    /// An explicit reload ([`Terminal::reload_config`]).
+    Reload,
+    /// An appearance flip's reload ([`Terminal::flip_config`]).
+    Flip,
 }
 
 /// Where a terminal is in its life.
@@ -361,6 +383,13 @@ impl Shared {
         }
         self.points.set(configured);
         true
+    }
+
+    /// An appearance flip's reload of font size `configured`: it is what `reset_font_size` returns to from now on; the
+    /// live size stays, stepped or not as before, so a size the user never stepped (a restored or replacement
+    /// terminal's start size) still takes the configured one on a later explicit reload.
+    fn keep_live_points(&self, configured: f32) {
+        self.original_points.set(configured.clamp(1.0, 255.0));
     }
 
     /// The owner view's scale factor, as last laid out (1 before).
@@ -623,6 +652,7 @@ impl Shared {
             scrollback: config.scrollback,
             colors: config.theme.clone(),
             cursor: config.cursor,
+            color_scheme: config.color_scheme,
             wake: Some(Arc::new(move || {
                 let _ = wake.try_send(());
             })),
@@ -771,17 +801,25 @@ impl Terminal {
     /// cursor and scrollback, the views' fonts and colors. The live font size and the size a reset returns to are
     /// kept, as the GTK build's overlay restates the live size.
     pub fn set_config(&mut self, config: TerminalConfig, cx: &mut Context<Self>) {
-        self.apply_config(config, false, cx);
+        self.apply_config(config, ConfigChange::Overlay, cx);
     }
 
     /// Takes a reloaded app config as [`Self::set_config`] does, and its font size too: what a reset returns to from
     /// now on, and the live size unless a font size action changed it. A restored or replacement terminal's start size
     /// was not stepped, so it takes the configured one, as libghostty's re-feed does in the GTK build.
     pub fn reload_config(&mut self, config: TerminalConfig, cx: &mut Context<Self>) {
-        self.apply_config(config, true, cx);
+        self.apply_config(config, ConfigChange::Reload, cx);
     }
 
-    fn apply_config(&mut self, config: TerminalConfig, reload: bool, cx: &mut Context<Self>) {
+    /// Takes the config an appearance flip reloaded, keeping the live font size (upstream's
+    /// `reloadConfigPreservingSessionZoom`, the GTK build's `keep_zoom`): the configured size is what a reset returns
+    /// to from now on, and the live size keeps whether the user stepped it, so a later reload follows the config unless
+    /// the user did.
+    pub fn flip_config(&mut self, config: TerminalConfig, cx: &mut Context<Self>) {
+        self.apply_config(config, ConfigChange::Flip, cx);
+    }
+
+    fn apply_config(&mut self, config: TerminalConfig, change: ConfigChange, cx: &mut Context<Self>) {
         let shared = &self.shared;
         if let Some(pane) = shared.pane() {
             pane.set_mouse_reporting(config.mouse.reporting);
@@ -793,10 +831,18 @@ impl Terminal {
             if let Err(err) = applied {
                 tracing::warn!(target: "agterm::surface", key = shared.key, %err, "the terminal refused the config");
             }
+            pane.set_color_scheme(config.color_scheme);
         }
         let fonts_changed = shared.config.borrow().font != config.font;
         let cell = shared.metrics_at(shared.font_points(), shared.scale());
-        let resized = reload && shared.follow_config_points(config.font.size);
+        let resized = match change {
+            ConfigChange::Overlay => false,
+            ConfigChange::Reload => shared.follow_config_points(config.font.size),
+            ConfigChange::Flip => {
+                shared.keep_live_points(config.font.size);
+                false
+            }
+        };
         *shared.config.borrow_mut() = Rc::new(config);
         // the background image's file is looked at again (a watermark rendered anew into the same file)
         shared.background.borrow_mut().invalidate();

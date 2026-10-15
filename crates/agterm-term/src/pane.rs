@@ -25,7 +25,8 @@ use agterm_ghostty_vt as vt;
 use portable_pty::{Child, MasterPty, native_pty_system};
 
 use crate::effects::{
-    ArmedRead, ArmedSlot, ClipboardAnswer, ClipboardReadRequest, DivertSlot, PaneEffects, PaneEvent, TerminalColors,
+    ArmedRead, ArmedSlot, ClipboardAnswer, ClipboardReadRequest, ColorScheme, DivertSlot, PaneEffects, PaneEvent,
+    SchemeSlot, TerminalColors,
 };
 use crate::exit::{ExitPolicy, Layout};
 use crate::input::InputState;
@@ -64,6 +65,8 @@ pub struct PaneConfig {
     pub kitty_image_limit: u64,
     /// What the end of the program leaves on screen.
     pub exit: ExitPolicy,
+    /// The desktop's appearance the terminal answers color scheme queries with ([`Pane::set_color_scheme`]).
+    pub color_scheme: ColorScheme,
     pub wake: Option<Wake>,
 }
 
@@ -78,6 +81,7 @@ impl PaneConfig {
             write_limit: DEFAULT_WRITE_LIMIT,
             kitty_image_limit: DEFAULT_KITTY_IMAGE_LIMIT,
             exit: ExitPolicy::default(),
+            color_scheme: ColorScheme::default(),
             wake: None,
         }
     }
@@ -93,6 +97,7 @@ impl std::fmt::Debug for PaneConfig {
             .field("write_limit", &self.write_limit)
             .field("kitty_image_limit", &self.kitty_image_limit)
             .field("exit", &self.exit)
+            .field("color_scheme", &self.color_scheme)
             .field("wake", &self.wake.is_some())
             .finish()
     }
@@ -205,6 +210,8 @@ pub(crate) struct Shared {
     pub(crate) search_wake: Condvar,
     writer: Arc<WriteQueue>,
     events: Sender<PaneEvent>,
+    /// The color scheme the terminal answers queries with (dark when set).
+    scheme: SchemeSlot,
     wake: Option<Wake>,
     wake_pending: AtomicBool,
     counters: Counters,
@@ -435,6 +442,26 @@ impl Pane {
         Ok(())
     }
 
+    /// Follow the desktop's appearance: color scheme queries are answered with `scheme` from now on, and a program
+    /// that asked for color scheme reports (mode 2031) gets one when the scheme changed, as Ghostty's surface sends
+    /// it. Never blocks: the report joins the replies queued for the program.
+    pub fn set_color_scheme(&self, scheme: ColorScheme) {
+        let dark = scheme == ColorScheme::Dark;
+        if self.shared.scheme.swap(dark, Ordering::AcqRel) == dark {
+            return;
+        }
+        let reports = lock(&self.shared.vt).terminal.mode(vt::Mode::COLOR_SCHEME_REPORT);
+        if reports {
+            self.shared.writer.push_reply(scheme.engine().report());
+        }
+    }
+
+    /// The color scheme the terminal answers queries with.
+    #[must_use]
+    pub fn color_scheme(&self) -> ColorScheme {
+        crate::effects::scheme_of(&self.shared.scheme)
+    }
+
     /// Change the cursor the terminal returns to (a config reload); the current cursor follows while no program chose
     /// one.
     ///
@@ -522,6 +549,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
     let armed: ArmedSlot = Arc::default();
     let divert: DivertSlot = Arc::default();
     let writer = Arc::new(WriteQueue::new(config.write_limit));
+    let scheme: SchemeSlot = Arc::new(AtomicBool::new(config.color_scheme == ColorScheme::Dark));
     terminal
         .set_effects(Box::new(PaneEffects {
             events: events.clone(),
@@ -530,6 +558,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
             armed: Arc::clone(&armed),
             divert: Arc::clone(&divert),
             xtversion: format!("ghostty {}", vt::version()),
+            scheme: Arc::clone(&scheme),
         }))
         .map_err(PaneError::terminal)?;
     let colors = terminal.colors();
@@ -554,6 +583,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
         search_wake: Condvar::new(),
         writer,
         events,
+        scheme,
         wake: config.wake.clone(),
         wake_pending: AtomicBool::new(false),
         counters: Counters::default(),
