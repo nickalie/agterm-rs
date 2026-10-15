@@ -93,10 +93,12 @@ scripts/build-ghostty-vt.sh    # the pinned static libghostty-vt (Ghostty's vt C
 scripts/build-layer-shell.sh   # gtk4-layer-shell 1.3.0; skip it when the distribution's package is installed
 scripts/build-zmx.sh           # the pinned, patched zmx behind Live sessions
 scripts/fetch-wpe.sh           # the pinned WPE WebKit binary package, only where the system has none (below)
+scripts/fetch-fonts.sh         # the fonts Ghostty embeds, which the GPUI frontend embeds too (below)
 ```
 
 Each script also takes `--print-prefix` and `--verify`. Cargo never runs zig: `agterm-ghostty-sys` fails with "run
-scripts/build-ghostty.sh" when the prefix is missing, `agterm-ghostty-vt-sys` with "run scripts/build-ghostty-vt.sh".
+scripts/build-ghostty.sh" when the prefix is missing, `agterm-ghostty-vt-sys` with "run scripts/build-ghostty-vt.sh",
+`agterm-gpui` with "run scripts/fetch-fonts.sh".
 libghostty-vt has its own Ghostty pin (`LIBGHOSTTY_VT_*`, the source archive's sha256 included) while both frontends
 coexist, and is linked statically, so staging gains nothing from it. `.cargo/config.toml` makes
 `scripts/pkg-config.sh` the pkg-config of every cargo build, which puts the vendored gtk4-layer-shell ahead of a system
@@ -107,8 +109,16 @@ prefix.
 `scripts/gen-wpe-bindings.sh` the gir crates `agterm-wpe-sys`, `agterm-wpe-platform-sys` and
 `agterm-wpe-javascriptcore-sys` after a `WPE_*` or `GIR_*` bump (`--check` compares instead of writing).
 
+The GPUI frontend's terminal embeds the fonts Ghostty embeds, from the package deps of the Ghostty at
+`LIBGHOSTTY_VT_REV` (`FONTS_*` in `build/pins.env`, each archive's sha256 pinned): JetBrains Mono 2.304 (its static
+faces; SIL Open Font License 1.1), the face when `font-family` is unset, and Symbols Nerd Font Mono 3.4.0 (MIT), every
+family's symbol fallback. Their licenses are in the prefix's `share/doc/fonts/`; a package of the binary ships them. The terminal's procedural sprites (box drawing, blocks, powerline, braille, legacy computing) are a port of
+Ghostty's sprite font through qwertty-term (both MIT); `crates/agterm-gpui/tests/golden/` holds Ghostty's sprite test
+images with Ghostty's license.
+
 Some GPUI dependencies are patched in the tree rather than built: `vendor/calloop` and `vendor/gpui-pre{,-wgpu}`
-(GPUI's dmabuf external surfaces for the HTML overlays) are verified crates.io sources plus `build/patches/<crate>`,
+(GPUI's dmabuf external surfaces for the HTML overlays, the font metrics accessor and the coverage masks the terminal's
+sprites paint with) are verified crates.io sources plus `build/patches/<crate>`,
 recreated by `scripts/vendor-calloop.sh` and `scripts/vendor-gpui.sh` (`--check` compares, as CI does;
 `vendor-gpui.sh --diff` turns edits under `vendor/` back into the patch files).
 

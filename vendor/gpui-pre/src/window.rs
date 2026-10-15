@@ -15,7 +15,7 @@ use crate::{
     MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels,
     PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
     PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
-    RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
+    RenderAlphaMaskParams, RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
     SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
     StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab,
     SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextInputConfiguration,
@@ -4893,6 +4893,56 @@ impl Window {
                 });
             }
         }
+        Ok(())
+    }
+
+    /// Paints a coverage mask the caller rasterized itself (one byte per device pixel, row-major), tinted with
+    /// `color` as a monochrome glyph is: its top-left corner at `origin`, rounded to a whole device pixel, and one
+    /// texel per device pixel. The atlas keeps the mask under `params` once uploaded, so `render` (the mask's size
+    /// and bytes, `None` when there is nothing to draw) runs only while the atlas lacks it.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_alpha_mask(
+        &mut self,
+        origin: Point<Pixels>,
+        params: RenderAlphaMaskParams,
+        color: Hsla,
+        render: impl FnOnce() -> Option<(Size<DevicePixels>, Vec<u8>)>,
+    ) -> Result<()> {
+        self.invalidator.debug_assert_paint();
+
+        let element_opacity = self.element_opacity();
+        let scale_factor = self.scale_factor();
+        let mut render = Some(render);
+        let Some(tile) = self
+            .sprite_atlas
+            .get_or_insert_with(params.into(), &mut || {
+                Ok(render
+                    .take()
+                    .and_then(|render| render())
+                    .map(|(size, bytes)| (size, Cow::Owned(bytes))))
+            })?
+        else {
+            return Ok(());
+        };
+        let origin = origin.scale(scale_factor);
+        let bounds = Bounds {
+            origin: point(
+                ScaledPixels(round_half_toward_zero(origin.x.0)),
+                ScaledPixels(round_half_toward_zero(origin.y.0)),
+            ),
+            size: tile.bounds.size.map(Into::into),
+        };
+        let content_mask = self.snapped_content_mask();
+        self.next_frame.scene.insert_primitive(MonochromeSprite {
+            order: 0,
+            pad: 0,
+            bounds,
+            content_mask,
+            color: color.opacity(element_opacity),
+            tile,
+            transformation: TransformationMatrix::unit(),
+        });
         Ok(())
     }
 

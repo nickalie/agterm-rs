@@ -354,6 +354,27 @@ impl Pane {
             .filter(|pgrp| *pgrp > 0)
     }
 
+    /// Whether the program on the PTY is reading a password: canonical input with echo off, the heuristic Ghostty's
+    /// termio applies to the PTY's modes (polling them every 200 ms) to set the terminal's `password_input`, which
+    /// libghostty-vt leaves to its embedder. `false` once the PTY cannot say.
+    #[must_use]
+    pub fn password_input(&self) -> bool {
+        let master = lock(&self.master);
+        let Some(fd) = master.as_raw_fd() else {
+            return false;
+        };
+        let mut termios = std::mem::MaybeUninit::<libc::termios>::zeroed();
+        // SAFETY: `fd` is the master's descriptor, open while the lock holds the master; `tcgetattr` only writes a
+        // `termios` into the buffer, which is large enough and zeroed (a valid `termios`) whether or not it succeeds.
+        let read = unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) };
+        if read != 0 {
+            return false;
+        }
+        // SAFETY: zero-initialized above and filled by the successful `tcgetattr`.
+        let modes = unsafe { termios.assume_init() }.c_lflag;
+        modes & libc::ICANON != 0 && modes & libc::ECHO == 0
+    }
+
     /// Queue input for the child (keys, pastes). Never blocks.
     ///
     /// # Errors

@@ -5,7 +5,9 @@
 //! the cell metrics and the padding, and paint draws, in Ghostty's layer order: the default background, the cell
 //! backgrounds (selection and search marks included), underlines and overlines, the text, strikethroughs, the cursor
 //! (block, bar, underline, hollow when unfocused; the text under a block in the cursor-text color) and the input
-//! method's composition. Kitty images and the background image join in Task 16, procedural sprites in Task 15.
+//! method's composition. Kitty images and the background image join in Task 16. Box drawing, block, braille,
+//! powerline and legacy computing characters are not shaped: the procedural sprites (`sprite.rs`) draw them with the
+//! text, as Ghostty's sprite font does. At a password prompt the cursor is Ghostty's lock.
 //!
 //! Text is shaped without GPUI's forced widths: each glyph is placed at the column of the cluster it belongs to,
 //! keeping its offset from the cluster's first glyph (fallback fonts split a cluster's glyphs across shaped runs), so
@@ -18,15 +20,16 @@ use std::sync::Arc;
 use agterm_core::ghostty_config::PaddingColor;
 use agterm_term::{CellWidth, Colors, Cursor, CursorStyle, Frame, Row, Underline};
 use gpui_kit::{
-    App, BorderStyle, Bounds, ContentMask, Context, Element, ElementId, Entity, FontId, GlobalElementId, GlyphId, Hsla,
-    InspectorElementId, IntoElement, LayoutId, PathBuilder, Pixels, Point, Style, TextRun as GpuiRun, Window,
-    WindowTextSystem, fill, outline, point, px, relative, size,
+    App, BorderStyle, Bounds, ContentMask, Context, DevicePixels, Element, ElementId, Entity, FontId, GlobalElementId,
+    GlyphId, Hsla, InspectorElementId, IntoElement, LayoutId, PathBuilder, Pixels, Point, RenderAlphaMaskParams, Style,
+    TextRun as GpuiRun, Window, WindowTextSystem, fill, outline, point, px, relative, size,
 };
 
 use super::colors::{self, Palette, hsla};
 use super::font::Fonts;
 use super::metrics::{CellMetrics, Geometry, Padding, points_to_px};
-use super::row_cache::{Decoration, Line, RowLayout, RowMarks, search_marks};
+use super::row_cache::{Decoration, Line, RowLayout, RowMarks, SpriteCell, search_marks};
+use super::sprite;
 use super::{Laid, Shared, TerminalView, ViewRole};
 
 /// One glyph of a row, placed on the grid.
@@ -85,6 +88,8 @@ pub struct Plan {
     background: agterm_term::Rgb,
     frame: Option<Arc<Frame>>,
     preedit: Option<String>,
+    /// The program on the PTY reads a password (`Pane::password_input`): the cursor is the lock.
+    password_input: bool,
 }
 
 impl Plan {
@@ -232,6 +237,7 @@ impl TerminalView {
             background: config.theme.background,
             frame,
             preedit: shared.preedit(),
+            password_input: shared.pane().is_some_and(|pane| pane.password_input()),
         })
     }
 
@@ -278,6 +284,7 @@ impl TerminalView {
             if let Some(shaped) = row.shaped.as_ref() {
                 paint_glyphs(window, plan, index, &shaped.glyphs, None);
             }
+            paint_sprites(window, plan, index, &row.layout.sprites, None);
             paint_decorations(window, plan, index, &row.layout, |line| {
                 matches!(line, Line::Strikethrough)
             });
@@ -292,23 +299,35 @@ impl TerminalView {
     }
 
     fn paint_cursor(&self, window: &mut Window, plan: &Plan, frame: &Frame, focused: bool) {
-        let Some((style, col, row)) = cursor_shape(&frame.cursor, focused, self.blink_on) else {
-            return;
+        // a password prompt shows the lock whatever the cursor's style, visibility, blink or focus
+        let cursor = Cursor {
+            password_input: frame.cursor.password_input || plan.password_input,
+            ..frame.cursor
+        };
+        let (style, col, row) = if let Some((col, row)) = lock_cursor(&cursor) {
+            (None, col, row)
+        } else {
+            let Some((style, col, row)) = cursor_shape(&frame.cursor, focused, self.blink_on) else {
+                return;
+            };
+            (Some(style), col, row)
         };
         let wide = cursor_cell(frame, col, row).is_some_and(|cell| cell.width == CellWidth::Wide);
         let (color, text) = cursor_colors(frame, col, row, &plan.palette);
         let alpha = cursor_alpha(focused, &plan.palette);
+        let Some(style) = style else {
+            paint_lock(window, plan, (col, usize::from(row)), wide, hsla(color, alpha));
+            return;
+        };
         paint_cursor_shape(window, plan, style, (col, usize::from(row)), wide, hsla(color, alpha));
         if style == CursorStyle::Block
-            && let Some(shaped) = self.cache.row(usize::from(row)).and_then(|row| row.shaped.as_ref())
+            && let Some(cached) = self.cache.row(usize::from(row))
         {
-            paint_glyphs(
-                window,
-                plan,
-                usize::from(row),
-                &shaped.glyphs,
-                Some((col, hsla(text, u8::MAX))),
-            );
+            let text = Some((col, hsla(text, u8::MAX)));
+            if let Some(shaped) = cached.shaped.as_ref() {
+                paint_glyphs(window, plan, usize::from(row), &shaped.glyphs, text);
+            }
+            paint_sprites(window, plan, usize::from(row), &cached.layout.sprites, text);
         }
     }
 }
@@ -560,6 +579,86 @@ fn paint_one(
     };
     if let Err(err) = painted {
         tracing::debug!(%err, "a terminal glyph was not painted");
+    }
+}
+
+/// The atlas owner of the sprites' masks (`RenderAlphaMaskParams::owner`).
+const SPRITE_OWNER: &str = "agterm.terminal.sprite";
+
+/// A row's sprite cells, rasterized for the view's metrics (once per thread) and painted at whole device pixels in
+/// their foreground color; with `only`, just the cell at that column, in that color (the text under a block cursor).
+fn paint_sprites(window: &mut Window, plan: &Plan, row: usize, cells: &[SpriteCell], only: Option<(u16, Hsla)>) {
+    for cell in cells {
+        let color = match only {
+            Some((col, color)) if cell.col == col => color,
+            Some(_) => continue,
+            None => hsla(cell.color, cell.alpha),
+        };
+        let Some(sprite) = sprite::sprite(cell.codepoint, &plan.metrics, u32::from(cell.cells)) else {
+            continue;
+        };
+        let corner = plan.cell(cell.col, row);
+        let origin = point(
+            corner.x + plan.px(f64::from(sprite.mask.left)),
+            corner.y + plan.px(f64::from(sprite.mask.top)),
+        );
+        let params = RenderAlphaMaskParams {
+            owner: SPRITE_OWNER,
+            id: sprite.id,
+        };
+        let mask_size = size(device_pixels(sprite.mask.width), device_pixels(sprite.mask.height));
+        let painted = window.paint_alpha_mask(origin, params, color, || Some((mask_size, sprite.mask.alpha.clone())));
+        if let Err(err) = painted {
+            tracing::debug!(%err, "a terminal sprite was not painted");
+        }
+    }
+}
+
+fn device_pixels(value: u32) -> DevicePixels {
+    DevicePixels(i32::try_from(value).unwrap_or(i32::MAX))
+}
+
+/// The lock Ghostty draws for the cursor at a password prompt (`Cursor::password_input`): the cell, when the cursor is
+/// in the viewport. It shows whatever the cursor's style, visibility, blink or the view's focus.
+pub(super) fn lock_cursor(cursor: &Cursor) -> Option<(u16, u16)> {
+    let position = cursor.position?;
+    if !cursor.password_input {
+        return None;
+    }
+    let col = if position.wide_tail {
+        position.column.saturating_sub(1)
+    } else {
+        position.column
+    };
+    Some((col, position.row))
+}
+
+/// Nerd Font's lock (`nf-fa-lock`), the glyph Ghostty draws: the embedded `Symbols Nerd Font Mono` has it.
+const LOCK: &str = "\u{f023}";
+
+/// The lock in the cursor's color, centered in the cursor's cell (two for a wide character).
+fn paint_lock(window: &mut Window, plan: &Plan, (col, row): (u16, usize), wide: bool, color: Hsla) {
+    let run = GpuiRun {
+        len: LOCK.len(),
+        font: plan.fonts.regular.clone(),
+        color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let text = window.text_system().clone();
+    let line = text.layout_line(LOCK, plan.font_size, &[run], None);
+    let cell = plan.cell(col, row);
+    let width = plan.cell_width() * if wide { 2.0 } else { 1.0 };
+    let left = cell.x + (width - line.width).max(px(0.0)) / 2.0;
+    let baseline = plan.px(f64::from(plan.metrics.baseline_from_top()));
+    for shaped in &line.runs {
+        for glyph in &shaped.glyphs {
+            let origin = point(left + glyph.position.x, cell.y + baseline + glyph.position.y);
+            if let Err(err) = window.paint_glyph(origin, shaped.font_id, glyph.id, plan.font_size, color) {
+                tracing::debug!(%err, "the lock cursor was not painted");
+            }
+        }
     }
 }
 

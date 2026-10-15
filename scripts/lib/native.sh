@@ -107,6 +107,27 @@ wpe_prefix_is_complete() {
     && pin_lines WPE | cmp -s - "$prefix/share/agterm/wpe-PINS"
 }
 
+# The terminal fonts carry no patches: their key hashes the FONTS_ pins only.
+fonts_prefix() {
+  echo "$VENDOR_ROOT/fonts-$(prefix_key FONTS /nonexistent)"
+}
+
+# The faces agterm-gpui embeds, under the prefix's share/fonts/ (its build script reads the same list).
+FONT_FILES=(JetBrainsMono-Regular.ttf JetBrainsMono-Bold.ttf JetBrainsMono-Italic.ttf JetBrainsMono-BoldItalic.ttf
+  SymbolsNerdFontMono-Regular.ttf)
+
+# A fonts prefix is complete when every face, both licenses and the pin manifest are there and the manifest matches
+# the FONTS_ pins.
+fonts_prefix_is_complete() {
+  local prefix="$1" file
+  for file in "${FONT_FILES[@]}"; do
+    [[ -s "$prefix/share/fonts/$file" ]] || return 1
+  done
+  [[ -s "$prefix/share/doc/fonts/JetBrainsMono-OFL.txt" && -s "$prefix/share/doc/fonts/SymbolsNerdFont-LICENSE" \
+    && -s "$prefix/share/agterm/fonts-PINS" ]] \
+    && pin_lines FONTS | cmp -s - "$prefix/share/agterm/fonts-PINS"
+}
+
 # The gir binary's key hashes the GIR_ pins and build/patches/gir/.
 gir_prefix() {
   echo "$VENDOR_ROOT/gir-$(prefix_key GIR "$NATIVE_ROOT/build/patches/gir")"

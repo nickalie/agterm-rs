@@ -267,6 +267,9 @@ gpui-pre patch         wgpu external-texture element importing dmabuf (zero-copy
      reopens the surface instead;
   6. the exit SIGSEGV (wgpu's GLES instance runs `eglTerminate` in a TLS destructor after the Wayland connection is
      gone, on every exit, Task 2 quirk 12) — reported upstream; Task 12 keeps the exit status clean meanwhile.
+  7. ➕ `TextSystem::font_metrics` (the line gap and underline of a face) — Task 15, `gpui-pre` 0002;
+  8. ➕ `Window::paint_alpha_mask` (a caller-rasterized coverage mask from the sprite atlas, tinted like a glyph) —
+     Task 15, `gpui-pre` 0003.
 - **Cell metrics**: advance of `M` for width; ascent + descent + line gap for height; `window-padding-x/y` around the
   grid; resize → `Terminal::resize` + PTY `TIOCSWINSZ` + cell size reported where `CELL_SIZE` was used.
 - **Threads** (decided in Task 4 from the C API's contract at `LIBGHOSTTY_VT_REV`, Codex-reviewed). Evidence: the
@@ -1008,23 +1011,87 @@ Port from `qwertty-term-sprite` (MIT, attribution), adapted to GPUI paths/quads.
 **Files:**
 - Create: `crates/agterm-gpui/src/terminal/sprite/` (module per glyph family), `tests/sprite_golden.rs`,
   `tests/golden/`
+- ➕ Create: `terminal/sprite.rs` (module root), `terminal/font/tests.rs`, `crates/agterm-gpui/build.rs`,
+  `scripts/fetch-fonts.sh`, `build/patches/gpui-pre/{0002-font-metrics,0003-alpha-mask}.patch`; Modify:
+  `terminal/{element,metrics,font,row_cache,tests}.rs`, `terminal.rs`, `app.rs`, `tests/external_texture/{main,
+  cases}.rs`, `crates/agterm-term/src/pane.rs` + `tests/pane.rs`, `vendor/gpui-pre/src/{platform,window,
+  text_system}.rs`, `scripts/{vendor-gpui.sh,lib/native.sh}`, `build/pins.env`, `Cargo.toml` (`tiny-skia`),
+  `.github/workflows/rust-linux.yml`, `README.md`
 
-- [ ] box drawing U+2500–257F, blocks U+2580–259F, powerline U+E0B0–E0BF, braille U+2800–28FF, the legacy computing
+- [x] box drawing U+2500–257F, blocks U+2580–259F, powerline U+E0B0–E0BF, braille U+2800–28FF, the legacy computing
       ranges Ghostty draws — to cell bounds without gaps; the element routes these code points away from the font
-- [ ] ➕ (Task 13) Ghostty's embedded default fonts, deterministically: `JetBrains Mono` (Ghostty's variable faces) as
+- [x] ➕ (Task 13) Ghostty's embedded default fonts, deterministically: `JetBrains Mono` (Ghostty's variable faces) as
       the default face when `font-family` is unset (a configured family keeps system selection, even one named
       JetBrains Mono), and `Symbols Nerd Font Mono` as a symbol fallback for every family; from the pinned Ghostty's
       package deps (`build.zig.zon`: `JetBrainsMono-2.304.tar.gz`, `NerdFontsSymbolsOnly-3.4.0.tar.gz`) with their
       licenses, fetched and verified like the other native inputs (`scripts/lib/native.sh`), registered through
       `TextSystem::add_fonts`; Task 13's `terminal/font.rs` default list stands until then (Codex-reviewed, transcript
       `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/task-13-terminal-design/transcript.md`)
-- [ ] ➕ (Task 13) a public font-metrics accessor in the vendored GPUI patch series (Task 29's tree): `line_gap` and
+- [x] ➕ (Task 13) a public font-metrics accessor in the vendored GPUI patch series (Task 29's tree): `line_gap` and
       the underline position/thickness of the resolved face feed `terminal/metrics.rs` (`FaceMetrics`), closing Task
       13's line-gap residual; `box_thickness` (= the underline thickness) is what the sprites draw with. Strikethrough
       keeps Ghostty's estimate unless the face's strike metrics are exposed too
-- [ ] ➕ (Task 13) the lock cursor Ghostty draws at a password prompt (`Cursor::password_input`)
-- [ ] golden tests: each family at two cell sizes against goldens derived from upstream's
-- [ ] gates — must pass before Task 16
+- [x] ➕ (Task 13) the lock cursor Ghostty draws at a password prompt (`Cursor::password_input`)
+- [x] golden tests: each family at two cell sizes against goldens derived from upstream's
+- [x] gates — must pass before Task 16
+- result (2026-10-15):
+  - **Sprites** (`terminal/sprite.rs` + `sprite/{canvas,common,box_drawing,block,braille,geometric,powerline,branch,
+    legacy,legacy_supplement}.rs`, `octants.txt`): a port of `qwertty-term-sprite` (MIT, attribution in the headers)
+    of Ghostty's sprite font, every code point Ghostty's sprite face draws at `LIBGHOSTTY_VT_REV` (a unit test holds
+    the set to Ghostty's `draw*` function names: also geometric shapes U+25E2–25FF, branch U+F5D0–F60D, legacy
+    computing U+1FB00–1FBEF and the supplement's subset), brought up to that revision (the outlined half circles
+    U+E0B5/E0B7). Each family is a table, not a match per code point. ⚠️ Deviation from "adapted to GPUI
+    paths/quads": a sprite is rasterized on the CPU into a coverage mask exactly as Ghostty's canvas does (rectangles
+    and pixels straight into the mask, paths with `tiny-skia` 0.12 where Ghostty uses z2d, the quarter-cell padding,
+    the trim) and painted from GPUI's sprite atlas through a new GPUI patch, `build/patches/gpui-pre/0003-alpha-mask
+    .patch` (`Window::paint_alpha_mask`, `AtlasKey::AlphaMask`): pixel-for-pixel Ghostty geometry (quads at device
+    pixels cannot express the coverage compositing, inversion and inner strokes), testable against Ghostty's goldens,
+    and painted like a glyph. Masks are cached per thread by (code point, cells, `CellMetrics`) with unique atlas ids.
+  - **Routing**: `row_cache::layout_row` takes a cell whose text is one sprite code point out of the text runs into
+    `RowLayout::sprites` (`SpriteCell`), ending the run around it; the element paints sprites with the text, in the
+    cell's foreground (faint, selection and search colors included), a wide character's at two cells, and repaints
+    the one under a block cursor in the cursor-text color. U+E0C0 and the other stylized powerline glyphs stay with
+    the font, as in Ghostty.
+  - **Goldens** (`tests/sprite_golden.rs`, `tests/golden/`: Ghostty's own sheets at `LIBGHOSTTY_VT_REV` with its
+    license, all four sizes 18x36+4, 12x24+3, 11x21+2, 9x17+1): box drawing lines, blocks, braille and octants match
+    exactly; arcs and diagonals, geometric shapes, powerline, branch, legacy computing and the supplement within
+    budgets of mean coverage difference (worst measured 0.67 %, arcs and diagonals at 9x17+1) and stray pixels (off by
+    more than 96: none except branch hollow circles 0.24 %, the legacy hatch fills 0.03 % and the supplement's ellipses
+    0.01 %, all at 9x17+1), anti-aliasing differences between tiny-skia and z2d. `sprites_are_deterministic`, and a
+    real-render case in `tests/external_texture` (`alpha_masks_cover_whole_device_pixels`, lavapipe and Intel): two
+    masks meet on whole device pixels without a gap and a hole stays a hole.
+  - **Fonts** (`scripts/fetch-fonts.sh`, `FONTS_*` pins with each archive's sha256, whose Zig package hashes equal
+    the ones the pinned `build.zig.zon` lists; `scripts/lib/native.sh` `fonts_prefix`; `agterm-gpui/build.rs` points
+    `include_bytes!` at the prefix and fails with "run scripts/fetch-fonts.sh"; CI fetches it in every job that
+    builds the workspace; README > Native dependencies names the licenses: JetBrains Mono OFL 1.1, Nerd Fonts MIT,
+    kept in the prefix's `share/doc/fonts/`). `terminal::register_embedded_fonts` at app start: `JetBrains Mono`
+    (`DEFAULT_FAMILIES` is now just it, Task 13's fallback list is gone) and `Symbols Nerd Font Mono`, the last
+    fallback of every family. ⚠️ Deviations: the static Regular/Bold/Italic/BoldItalic faces of the same release
+    instead of the variable ones (GPUI loads every face at its default instance, `get_font(id, Weight::NORMAL)`, so a
+    variable bold would draw regular); the one-cell `Mono` variant of the symbols font (Ghostty embeds the wide one and
+    scales it with Nerd Font constraints GPUI lacks); the embedded JetBrains Mono is registered only where no
+    `JetBrains Mono` is installed, so a configured `font-family = JetBrains Mono` keeps the system's as the item asks,
+    at the cost of an unset `font-family` also taking an installed JetBrains Mono (same family; determinism holds on
+    every machine without one). GPUI accepts no face without an `m` as a primary font, so the symbols font is only
+    ever a fallback.
+  - **Metrics**: `build/patches/gpui-pre/0002-font-metrics.patch` (`TextSystem::font_metrics`, the platform's
+    `FontMetrics` in font units); `metrics::measure` takes the line gap and the `post` underline (Ghostty's broken-table
+    rule: a zero thickness is no thickness, a zero position with it no position) from it, so `box_thickness` is the
+    face's underline thickness; strikethrough keeps Ghostty's estimate (GPUI reads no OS/2 strikeout). JetBrains Mono
+    at 12 pt measures 10x21, baseline 5, underline at 18, box lines 1 px (2 px at 2x). `scripts/vendor-gpui.sh
+    --diff` now regenerates the last patch of each crate against the earlier ones.
+  - **Lock cursor**: libghostty-vt leaves the terminal's `password_input` flag to its embedder (no option sets it), so
+    `agterm-term` gains `Pane::password_input` — Ghostty termio's heuristic, canonical input without echo, read with
+    `tcgetattr` on the PTY master (Ghostty polls it every 200 ms; here at every paint: a prompt turns echo off before it
+    prints, so its output repaints with the lock) — and the element ORs it into the frame's flag. At a password prompt
+    the cursor is U+F023 (`nf-fa-lock`, from the symbols fallback) in the cursor color, centered in the cell, whatever
+    the style, visibility, blink or focus (Ghostty's `cursor.style` order). Behind zmx the PTY is the zmx client's (raw,
+    no echo), so a live session shows no lock, as upstream's libghostty surface over zmx does not either.
+  - Tests: `terminal/sprite/tests.rs` (7: Ghostty's code point set, disjoint ranges, routing of a cell's text, every
+    sprite covers pixels at three sizes, line placement, wide cells, the cache), `terminal/font/tests.rs` (4, GPUI's
+    Linux text system with only the embedded fonts), `terminal/tests.rs` (+2: sprite cells leave the runs in a real
+    pane's view; the lock whatever the cursor), `tests/sprite_golden.rs` (2), `agterm-term/tests/pane.rs` (+2:
+    `password_input` at `stty -echo; read`, not in raw mode), the external texture harness's mask case.
 
 ### Task 16: Kitty graphics and background image
 

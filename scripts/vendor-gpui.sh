@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Vendor the GPUI crates agterm patches (GPUI patch 1 of docs/plans/20261014-gpui-frontend.md, Technical Details >
-# GPUI patches) into vendor/<crate> with build/patches/<crate> applied, for the workspace's [patch.crates-io]:
+# Vendor the GPUI crates agterm patches (docs/plans/20261014-gpui-frontend.md, Technical Details > GPUI patches) into
+# vendor/<crate> with build/patches/<crate> applied, for the workspace's [patch.crates-io]:
 #   gpui-pre       the `ExternalSurface` payload of `PaintSurface` on Linux and `Window::paint_external_surface`, the
-#                  dmabuf import capabilities of the GPU GPUI renders with
+#                  dmabuf import capabilities of the GPU GPUI renders with (0001); `TextSystem::font_metrics`, a face's
+#                  metrics as its font declares them (0002); `Window::paint_alpha_mask`, a coverage mask the caller
+#                  rasterized, tinted like a glyph (0003)
 #   gpui-pre-wgpu  the renderer's side of external surfaces (dmabufs imported through wgpu-hal Vulkan, acquired from
 #                  the foreign queue family and copied on the GPU into a texture of its own; CPU pixels uploaded by
 #                  damaged rectangles) and the Vulkan device opened with VK_EXT_image_drm_format_modifier and
@@ -18,8 +20,11 @@
 #
 # Usage: scripts/vendor-gpui.sh           (re)create vendor/gpui-pre and vendor/gpui-pre-wgpu
 #        scripts/vendor-gpui.sh --check   rebuild into a scratch dir and fail if a vendored crate differs
-#        scripts/vendor-gpui.sh --diff    regenerate build/patches/<crate>/0001-*.patch from the vendored trees
-#                                         (after editing vendor/; the patch's leading description is kept)
+#        scripts/vendor-gpui.sh --diff    regenerate the last patch of each crate, build/patches/<crate>/NNNN-*.patch,
+#                                         as the vendored tree against the crate with the earlier patches applied
+#                                         (after editing vendor/; the patch's leading description is kept). A new
+#                                         patch starts as a file holding only its description, numbered after the
+#                                         others; edits that belong to an earlier patch go there by hand.
 set -euo pipefail
 shopt -s nullglob
 
@@ -42,7 +47,7 @@ case "${1:-}" in
   "") ;;
   --check) mode=check ;;
   --diff) mode=diff ;;
-  -h | --help) sed -n '2,22s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+  -h | --help) sed -n '2,27s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
   *) die "unknown argument: $1 (see --help)" ;;
 esac
 
@@ -65,12 +70,13 @@ pristine() {
   fi
 }
 
-# The crate $1 with its patches applied, in $scratch/built/$1.
+# The crate $1 with its patches applied, in $scratch/built/$1; with $2, only the patches before that one.
 built() {
-  local crate="$1" patch
+  local crate="$1" stop="${2:-}" patch
   mkdir -p "$scratch/built"
   cp -a "$scratch/pristine/$crate" "$scratch/built/$crate"
   for patch in "$root/build/patches/$crate"/*.patch; do
+    [[ "$patch" == "$stop" ]] && break
     patch -s -p1 -d "$scratch/built/$crate" <"$patch" || die "$(basename "$patch") does not apply to $crate $GPUI_VERSION"
   done
 }
@@ -80,12 +86,14 @@ for crate in "${CRATES[@]}"; do
   target="$root/vendor/$crate"
   case "$mode" in
     diff)
-      patch="$(ls "$root/build/patches/$crate"/0001-*.patch)"
+      patches=("$root/build/patches/$crate"/*.patch)
+      patch="${patches[-1]}"
       # $(...) drops the description's trailing blank lines; one blank line separates it from the diff
       description="$(sed -n '/^diff -ruN /q;/^--- a\//q;p' "$patch")"
       work="$scratch/diff/$crate"
       mkdir -p "$work"
-      mv "$scratch/pristine/$crate" "$work/a"
+      built "$crate" "$patch"
+      mv "$scratch/built/$crate" "$work/a"
       cp -a "$target" "$work/b"
       {
         printf '%s\n\n' "$description"

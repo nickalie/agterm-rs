@@ -514,6 +514,13 @@ impl TextSystem {
         self.read_metrics(font_id, |metrics| metrics.descent(font_size))
     }
 
+    /// Get every metric of the given font as the font declares it, in font units (`FontMetrics`' methods scale
+    /// them to a font size), including those no other accessor reports: the line gap and the underline's
+    /// position and thickness.
+    pub fn font_metrics(&self, font_id: FontId) -> FontMetrics {
+        self.read_metrics(font_id, |metrics| *metrics)
+    }
+
     /// Get the recommended baseline offset for the given font and line height.
     pub fn baseline_offset(
         &self,

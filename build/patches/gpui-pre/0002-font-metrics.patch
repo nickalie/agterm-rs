@@ -1,0 +1,24 @@
+A public accessor for a face's whole metrics (GPUI patch for docs/plans/20261014-gpui-frontend.md Task 15):
+`TextSystem::font_metrics` returns the `FontMetrics` the platform text system read, in font units, so a caller gets
+the line gap and the underline's position and thickness, which `TextSystem` measured but never exposed (it had
+`ascent`, `descent`, `cap_height`, `x_height` only). agterm's terminal sizes its cells and its box-drawing lines from
+them, as Ghostty does. An upstream candidate (Zed): read-only, no behavior change. scripts/vendor-gpui.sh applies
+this after 0001.
+
+diff -ruN a/src/text_system.rs b/src/text_system.rs
+--- a/src/text_system.rs
++++ b/src/text_system.rs
+@@ -514,6 +514,13 @@
+         self.read_metrics(font_id, |metrics| metrics.descent(font_size))
+     }
+ 
++    /// Get every metric of the given font as the font declares it, in font units (`FontMetrics`' methods scale
++    /// them to a font size), including those no other accessor reports: the line gap and the underline's
++    /// position and thickness.
++    pub fn font_metrics(&self, font_id: FontId) -> FontMetrics {
++        self.read_metrics(font_id, |metrics| *metrics)
++    }
++
+     /// Get the recommended baseline offset for the given font and line height.
+     pub fn baseline_offset(
+         &self,
