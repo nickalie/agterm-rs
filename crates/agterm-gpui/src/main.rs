@@ -1,9 +1,10 @@
 //! `agterm-gpui`, the GPUI frontend: one instance per application id (`instance.rs`), the core and its control
 //! socket on GPUI's main thread (`app.rs`).
 //!
-//! Startup order matters: the activation token is read while the process has one thread and before GPUI's platform
-//! exists (GPUI removes it from the environment), and a launch that forwards to a running agterm exits before GPUI
-//! starts and before the state directory is read.
+//! Startup order matters: the activation token and the startup id are read while the process has one thread and
+//! before GPUI's platform exists (GPUI removes the token from the environment; the startup id is removed here), and a
+//! launch that forwards to a running agterm exits before GPUI starts and before it reads or writes the model state
+//! (it only appends to the shared log).
 
 use std::io::Write as _;
 use std::process::ExitCode;
@@ -14,6 +15,9 @@ use agterm_gpui::instance::{self, Activation, Registration};
 
 fn main() -> ExitCode {
     let activation = Activation::from_env(&ProcessEnv);
+    // GDK unsets it once read, so no child (a hook, a custom command, a shell) claims this launch's sequence
+    // SAFETY: first thing in main, while the process has one thread.
+    unsafe { std::env::remove_var(instance::STARTUP_ID_ENV) };
     agterm_app::logging::init(&ProcessEnv);
     let app_id = instance::app_id(&ProcessEnv);
     let (requests, received) = async_channel::unbounded();
@@ -36,6 +40,7 @@ fn main() -> ExitCode {
     let status = app::run(Launch {
         app_id,
         requests: received,
+        activation,
     });
     exit_now(status)
 }

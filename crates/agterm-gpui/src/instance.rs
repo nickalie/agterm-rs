@@ -5,12 +5,16 @@
 //! `org.gtk.Application` (`Activate` with platform data: the only call a default-flags GTK launch makes; `Open` the
 //! same) and `org.gtk.Actions` (`DescribeAll`, which a non-primary `GApplication` calls while it registers and fails
 //! without, and `Activate`). A launch that finds the name owned sends `Activate` with its own platform data and exits
-//! before GPUI starts and before anything in the state directory is touched, so the two never both write
-//! `windows.json`. As `GApplication` does, a launch with no session bus runs as a primary of its own.
+//! before GPUI starts and before it reads or writes the model state (`windows.json`, the window files, the settings),
+//! so the two never both write them; like the GTK build's, it only appends its lines to the shared `agterm.log`
+//! (logging starts first, and rotates the file only under the running instance's lock). As `GApplication` does, a
+//! launch with no session bus runs as a primary of its own.
 //!
 //! The activation token travels in the platform data: GPUI consumes `XDG_ACTIVATION_TOKEN` for its first toplevel
 //! only and removes it from the environment when its platform is created, and a plain `GApplication` forwards no token
-//! (`GtkApplication` does), so [`Activation::from_env`] reads the token and the startup id first thing in `main`.
+//! (`GtkApplication` does), so [`Activation::from_env`] reads the token and the startup id first thing in `main`. A
+//! primary ends its own X11 startup sequence once its window exists (`activation::launched`), and `main` removes
+//! `DESKTOP_STARTUP_ID` from the environment, as GDK does, so no child inherits it.
 
 use std::collections::HashMap;
 use std::path::Path;
