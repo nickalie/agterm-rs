@@ -1,15 +1,16 @@
 //! External surfaces on Linux (an agterm-rs patch): frames produced outside GPUI that the renderer draws through
 //! [`crate::Window::paint_external_surface`], the Linux counterpart of macOS's `paint_surface`.
 //!
-//! A frame is either a dmabuf ([`DmaBufFrame`]), which the renderer imports zero-copy into its own device, or CPU
-//! pixels ([`PixelFrame`]), uploaded by damaged rectangle into a texture the renderer keeps per [`PixelSurface`]. Every
-//! frame reports once how it ended ([`FrameOutcome`]): `Presented` only after the GPU finished the first submission
-//! that drew it, so a producer that reuses a buffer on that report never races the renderer's reads.
+//! A frame is either a dmabuf ([`DmaBufFrame`]), which the renderer imports into its own device (no CPU copy: the GPU
+//! takes the buffer over from the producer's foreign queue family and copies the frame into a texture of its own), or
+//! CPU pixels ([`PixelFrame`]), uploaded by damaged rectangle into a texture the renderer keeps per [`PixelSurface`].
+//! Every frame reports once how it ended ([`FrameOutcome`]): `Presented` only after the GPU finished the submission
+//! that copied or first drew it, so a producer that reuses a buffer on that report never races the renderer's reads.
 //!
 //! A dmabuf is imported once per [`DmaBuffer`] and kept while the producer keeps the buffer: the renderer holds only a
-//! weak reference, so the import goes at the first frame after the producer drops its last `Arc` (when the buffer
-//! leaves its set), never while it is still in use. [`dmabuf_import_caps`] says what the renderer's device imports, for
-//! a producer to allocate on that device in formats it can import.
+//! weak reference, so the import goes once the producer dropped its last `Arc` (when the buffer leaves its set) and
+//! the GPU is done with it. [`dmabuf_import_caps`] says what the renderer's device imports, for a producer to allocate
+//! on that device in formats it can import.
 
 use std::fmt;
 use std::os::fd::OwnedFd;
@@ -48,12 +49,15 @@ pub struct DmaBuffer {
 /// How a frame ended, reported once per frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FrameOutcome {
-    /// The GPU finished the first submission that drew the frame.
+    /// The GPU finished the submission that copied or first drew the frame: the renderer reads its buffer no more.
     Presented,
-    /// The frame was dropped without being drawn (replaced before a draw, or its window closed).
+    /// The frame was dropped without being drawn (replaced before a draw, its window closed, its frame not submitted).
     Discarded,
     /// The renderer cannot draw it: the reason (a dmabuf that does not import, a device without dmabuf import).
     Failed(String),
+    /// The frame was submitted but the renderer cannot tell when the GPU finished it (the device was lost, or the
+    /// renderer shut down first): its buffer may still be read, so the producer must not render into it again.
+    Lost(String),
 }
 
 /// The callback a frame reports its [`FrameOutcome`] to, called at most once, on any thread; a frame dropped before it
@@ -162,7 +166,7 @@ pub struct PixelFrame {
 /// A frame produced outside GPUI.
 #[derive(Debug, Clone)]
 pub enum ExternalSurface {
-    /// A dmabuf, imported zero-copy.
+    /// A dmabuf, imported and copied on the GPU.
     DmaBuf(Arc<DmaBufFrame>),
     /// CPU pixels, uploaded by damaged rectangle.
     Pixels(Arc<PixelFrame>),
@@ -238,6 +242,8 @@ pub struct ExternalSurfaceStats {
     pub import_failures: u64,
     /// Imports dropped (their buffer gone, or their renderer).
     pub imports_released: u64,
+    /// Dmabuf frames copied into the renderer's own textures (one per new frame, none for a redraw).
+    pub copies: u64,
     /// Bytes of CPU pixels uploaded.
     pub pixel_bytes_uploaded: u64,
 }
@@ -260,6 +266,8 @@ pub mod external_surface_counters {
     pub static IMPORT_FAILURES: AtomicU64 = AtomicU64::new(0);
     /// Imports dropped.
     pub static IMPORTS_RELEASED: AtomicU64 = AtomicU64::new(0);
+    /// Dmabuf frames copied.
+    pub static COPIES: AtomicU64 = AtomicU64::new(0);
     /// Pixel bytes uploaded.
     pub static PIXEL_BYTES_UPLOADED: AtomicU64 = AtomicU64::new(0);
 
@@ -276,6 +284,7 @@ pub fn external_surface_stats() -> ExternalSurfaceStats {
         imports: IMPORTS.load(Ordering::Relaxed),
         import_failures: IMPORT_FAILURES.load(Ordering::Relaxed),
         imports_released: IMPORTS_RELEASED.load(Ordering::Relaxed),
+        copies: COPIES.load(Ordering::Relaxed),
         pixel_bytes_uploaded: PIXEL_BYTES_UPLOADED.load(Ordering::Relaxed),
     }
 }

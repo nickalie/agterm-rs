@@ -1499,6 +1499,9 @@ impl WgpuRendererCore {
             .inspect_err(|_| {
                 // Queue writes are staged before encoding; flush them even if the frame fails.
                 self.resources.queue.submit(std::iter::empty());
+                // External surfaces (agterm-rs patch): the frame's copies were not submitted.
+                #[cfg(target_os = "linux")]
+                self.resources.external_surfaces.abort_frame();
             })
     }
 
@@ -1658,19 +1661,29 @@ impl WgpuRendererCore {
             }
         }
 
+        // External surfaces (agterm-rs patch): their dmabuf copies go first, and the submission signals the
+        // completion timeline when it copies or first draws a frame.
         #[cfg(target_os = "linux")]
-        let completion = {
+        let (copies, completion) = {
             let resources = &mut self.resources;
-            resources
+            let completion = resources
                 .external_surfaces
-                .before_submit(&resources.device, &resources.queue)
+                .before_submit(&resources.device, &resources.queue);
+            (resources.external_surfaces.command_buffers(), completion)
         };
+        #[cfg(not(target_os = "linux"))]
+        let copies: Vec<wgpu::CommandBuffer> = Vec::new();
         let submission = self
             .resources()
             .queue
-            .submit(std::iter::once(encoder.finish()));
+            .submit(copies.into_iter().chain(std::iter::once(encoder.finish())));
         #[cfg(target_os = "linux")]
-        self.resources.external_surfaces.after_submit(completion);
+        {
+            let resources = &mut self.resources;
+            resources
+                .external_surfaces
+                .after_submit(&resources.device, submission.clone(), completion);
+        }
         Ok(submission)
     }
 

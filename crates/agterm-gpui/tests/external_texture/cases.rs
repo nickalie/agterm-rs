@@ -20,14 +20,18 @@ use gpui_kit::{
     WindowHandle, WindowOptions, div, external_surface_stats, point, px, size,
 };
 
-use crate::buffers::{AR24, GbmBuffer, Udmabuf, XR24};
+use crate::buffers::{AR24, Udmabuf, XR24};
+use crate::gl::{GlBuffer, GlProducer};
 
 type Outcome = Result<Verdict, String>;
 
 /// How a case ended when it did not fail.
 pub enum Verdict {
     Passed,
+    /// Something this machine lacks: fails under `AGTERM_REQUIRE_DISPLAY_TESTS`.
     Skipped(String),
+    /// The case does not apply to this GPU (hardware modifiers on lavapipe): never required.
+    NotApplicable(String),
 }
 
 /// What a case runs with.
@@ -51,7 +55,10 @@ pub const CASES: [(&str, Case); 11] = [
         "dmabuf_that_fails_to_import_falls_back",
         dmabuf_that_fails_to_import_falls_back,
     ),
-    ("dmabuf_of_the_devices_own_modifier", dmabuf_of_the_devices_own_modifier),
+    (
+        "dmabuf_rendered_by_gl_with_the_devices_modifiers",
+        dmabuf_rendered_by_gl_with_the_devices_modifiers,
+    ),
     ("shm_uploads_its_damage", shm_uploads_its_damage),
     ("clipped_and_drawn_under_overlays", clipped_and_drawn_under_overlays),
 ];
@@ -62,6 +69,7 @@ pub fn run(gpu: &str, node: Option<PathBuf>, filter: Option<&str>) -> ExitCode {
         name: gpu.to_owned(),
         node,
     };
+    let required = std::env::var_os(crate::REQUIRE_ENV).is_some();
     let mut failed = 0;
     for (name, case) in CASES {
         if filter.is_some_and(|filter| !name.contains(filter)) {
@@ -69,6 +77,15 @@ pub fn run(gpu: &str, node: Option<PathBuf>, filter: Option<&str>) -> ExitCode {
         }
         match case(&gpu) {
             Ok(Verdict::Passed) => println!("  {name} ... ok"),
+            Ok(Verdict::NotApplicable(reason)) => println!("  {name} ... not applicable ({reason})"),
+            Ok(Verdict::Skipped(reason)) if required => {
+                println!(
+                    "  {name} ... FAILED on {}: skipped under {}: {reason}",
+                    gpu.name,
+                    crate::REQUIRE_ENV
+                );
+                failed += 1;
+            }
             Ok(Verdict::Skipped(reason)) => println!("  {name} ... skipped ({reason})"),
             Err(message) => {
                 println!("  {name} ... FAILED on {}: {message}", gpu.name);
@@ -379,7 +396,7 @@ fn dmabuf_import_is_kept_per_buffer(_: &Gpu) -> Outcome {
     fixture.texture(|texture| texture.push_dmabuf(Arc::clone(&buffer), Acquire::Implicit, done))?;
     fixture.frame()?.expect(64, 32, RED, "the first frame")?;
     presented(&first, "the first frame")?;
-    // The producer renders the next frame into the same buffer: no new import, the new pixels show (zero-copy).
+    // The producer renders the next frame into the same buffer: no new import, the new pixels show.
     pixels.fill(GREEN_X)?;
     let (done, second) = listener();
     fixture.texture(|texture| texture.push_dmabuf(Arc::clone(&buffer), Acquire::Implicit, done))?;
@@ -387,10 +404,16 @@ fn dmabuf_import_is_kept_per_buffer(_: &Gpu) -> Outcome {
         .frame()?
         .expect(64, 32, GREEN, "the second frame, same buffer")?;
     presented(&second, "the second frame")?;
+    // Presented: the buffer is the producer's again. What it renders now does not reach a redraw of the frame.
+    pixels.fill(BLUE_X)?;
+    fixture
+        .frame()?
+        .expect(64, 32, GREEN, "a redraw after the producer rendered again")?;
     let after = stats();
-    check(after.imports == before.imports + 1, || {
-        format!("{before:?} -> {after:?}: one import for one buffer")
-    })?;
+    check(
+        after.imports == before.imports + 1 && after.copies == before.copies + 2,
+        || format!("{before:?} -> {after:?}: one import for one buffer, one copy per frame"),
+    )?;
     Ok(Verdict::Passed)
 }
 
@@ -555,11 +578,9 @@ fn signaled_fence() -> Result<OwnedFd, String> {
     Ok(OwnedFd::from(reader))
 }
 
-fn dmabuf_of_the_devices_own_modifier(gpu: &Gpu) -> Outcome {
+fn dmabuf_rendered_by_gl_with_the_devices_modifiers(gpu: &Gpu) -> Outcome {
     let Some(node) = &gpu.node else {
-        return Ok(Verdict::Skipped(
-            "a hardware GPU's own modifiers (mesa only)".to_owned(),
-        ));
+        return Ok(Verdict::NotApplicable("a hardware GPU's own modifiers".to_owned()));
     };
     let mut fixture = Fixture::new(Layout::Fill, black())?;
     let caps = caps_now()?;
@@ -568,37 +589,65 @@ fn dmabuf_of_the_devices_own_modifier(gpu: &Gpu) -> Outcome {
         .iter()
         .find(|format| format.fourcc == XR24)
         .ok_or_else(|| "no XR24".to_owned())?;
-    // The most planes first: Intel's CCS modifiers keep main, aux and clear color in one object.
-    let mut modifiers: Vec<_> = format
-        .modifiers
-        .iter()
-        .filter(|modifier| modifier.modifier != 0)
-        .collect();
-    modifiers.sort_by_key(|modifier| std::cmp::Reverse(modifier.plane_count));
-    let mut last_error = "no non-linear modifier".to_owned();
-    for modifier in modifiers {
-        let allocated = match GbmBuffer::allocate(node, 64, 32, XR24, &[modifier.modifier]) {
-            Ok(allocated) => allocated,
-            Err(error) => {
-                last_error = error;
-                continue;
-            }
+    let producer = match GlProducer::new(node) {
+        Ok(producer) => producer,
+        Err(reason) => return Ok(Verdict::Skipped(format!("no GL producer: {reason}"))),
+    };
+    let mut tested = Vec::new();
+    for modifier in format.modifiers.iter().filter(|modifier| modifier.modifier != 0) {
+        // A modifier GBM does not allocate for rendering here is not this test's to judge.
+        let Ok(buffer) = producer.allocate(64, 32, XR24, &[modifier.modifier]) else {
+            continue;
         };
-        let before = stats();
-        let (done, outcome) = listener();
-        let planes = allocated.buffer.planes.len();
-        fixture.texture(|texture| texture.push_dmabuf(Arc::clone(&allocated.buffer), Acquire::Implicit, done))?;
-        fixture.frame()?;
-        presented(
-            &outcome,
-            &format!("modifier {:#018x} ({planes} planes)", modifier.modifier),
-        )?;
-        let after = stats();
-        check(after.imports == before.imports + 1, || "not imported".to_owned())?;
-        println!("    imported modifier {:#018x} with {planes} planes", modifier.modifier);
-        return Ok(Verdict::Passed);
+        check(buffer.buffer.modifier == modifier.modifier, || {
+            format!(
+                "asked for {:#018x}, GBM allocated {:#018x}",
+                modifier.modifier, buffer.buffer.modifier
+            )
+        })?;
+        let label = format!(
+            "modifier {:#018x} ({} planes)",
+            modifier.modifier,
+            buffer.buffer.planes.len()
+        );
+        frames_of_one_gl_buffer(&mut fixture, &producer, &buffer).map_err(|error| format!("{label}: {error}"))?;
+        tested.push(label);
     }
-    Ok(Verdict::Skipped(format!("GBM allocated no buffer: {last_error}")))
+    if tested.is_empty() {
+        return Ok(Verdict::Skipped(
+            "GBM allocated no buffer with a non-linear modifier".to_owned(),
+        ));
+    }
+    println!("    rendered by GL and imported: {}", tested.join(", "));
+    Ok(Verdict::Passed)
+}
+
+/// GL clears one buffer red and the renderer shows it; GL clears the same buffer blue (a fast clear may only rewrite
+/// the clear colour plane) and the renderer shows that; GL clears it green without handing it over, and the renderer
+/// still shows blue from its own copy, without copying again.
+fn frames_of_one_gl_buffer(fixture: &mut Fixture, producer: &GlProducer, buffer: &GlBuffer) -> Result<(), String> {
+    let before = stats();
+    for (rgba, expected, what) in [
+        ([1.0, 0.0, 0.0, 1.0], RED, "the first clear"),
+        ([0.0, 0.0, 1.0, 1.0], BLUE, "the second clear"),
+    ] {
+        producer.clear(buffer, rgba);
+        let (done, outcome) = listener();
+        fixture.texture(|texture| texture.push_dmabuf(Arc::clone(&buffer.buffer), Acquire::Implicit, done))?;
+        let shot = fixture.frame()?;
+        presented(&outcome, what)?;
+        shot.expect(4, 4, expected, what)?;
+        shot.expect(124, 60, expected, what)?;
+    }
+    producer.clear(buffer, [0.0, 1.0, 0.0, 1.0]);
+    fixture
+        .frame()?
+        .expect(64, 32, BLUE, "a redraw after the producer rendered again")?;
+    let after = stats();
+    check(
+        after.imports == before.imports + 1 && after.copies == before.copies + 2,
+        || format!("{before:?} -> {after:?}: one import, one copy per frame handed over"),
+    )
 }
 
 // MARK: - SHM and layout

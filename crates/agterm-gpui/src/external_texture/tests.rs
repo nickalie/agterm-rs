@@ -309,6 +309,29 @@ fn a_frame_the_renderer_fails_requests_the_fallback() {
 }
 
 #[test]
+fn a_frame_lost_to_the_gpu_asks_for_no_fallback() {
+    // A lost device or a renderer shutting down says nothing about whether dmabufs import.
+    let mut texture = texture();
+    let (done, outcome) = listener();
+    texture.push_dmabuf(buffer(XR24, MODIFIER_LINEAR, 1), Acquire::Implicit, done);
+    texture.promote_ready();
+    let shown = texture.shown().expect("shown").clone();
+    shown.completion().complete(FrameOutcome::Lost(
+        "waiting for the frame's submission: ERROR_DEVICE_LOST".to_owned(),
+    ));
+    assert!(matches!(outcome.try_recv(), Ok(FrameOutcome::Lost(_))));
+    assert_eq!(texture.take_fallback(), None);
+    assert_eq!(texture.fallback(), &Fallback::None);
+    let (done, _outcome) = listener();
+    texture.push_dmabuf(buffer(XR24, MODIFIER_LINEAR, 1), Acquire::Implicit, done);
+    texture.promote_ready();
+    assert!(
+        matches!(texture.shown(), Some(ExternalSurface::DmaBuf(_))),
+        "dmabufs still shown"
+    );
+}
+
+#[test]
 fn without_a_device_a_dmabuf_frame_fails() {
     let mut texture = ExternalTexture::new();
     let (done, outcome) = listener();
@@ -424,4 +447,41 @@ fn a_new_shm_size_starts_a_new_frame() {
     let (frame, bytes) = pixels(texture.shown().expect("shown"));
     assert_eq!((frame.width, frame.height, frame.serial), (2, 2, 1));
     assert_eq!(bytes, vec![5; 16]);
+}
+
+/// The pixels the texture shows now, and where they live.
+fn shown_pixels(texture: &ExternalTexture) -> (*const Vec<u8>, Vec<u8>) {
+    let Some(ExternalSurface::Pixels(frame)) = texture.shown() else {
+        panic!("no SHM frame shown");
+    };
+    (Arc::as_ptr(&frame.pixels), frame.pixels.to_vec())
+}
+
+#[test]
+fn shm_frames_alternate_two_copies_catching_up_on_damage() {
+    let mut texture = texture();
+    let paint = |texture: &mut ExternalTexture, rect: PixelRect, value: u8| {
+        let (rect, bytes) = region(rect, value);
+        let (done, _outcome) = listener();
+        texture.push_shm(4, 2, [ShmRegion { rect, pixels: &bytes }], done);
+    };
+    paint(&mut texture, rect(0, 0, 4, 2), 1);
+    let (first, _) = shown_pixels(&texture);
+    paint(&mut texture, rect(0, 0, 1, 1), 2);
+    let (second, _) = shown_pixels(&texture);
+    assert_ne!(first, second, "the second frame goes into the other copy");
+    // Nothing holds the first frame any more: the third reuses its copy, no whole-frame copy.
+    paint(&mut texture, rect(3, 1, 1, 1), 3);
+    let (third, bytes) = shown_pixels(&texture);
+    assert_eq!(third, first);
+    let expected: Vec<u8> = [[2u8; 4], [1; 4], [1; 4], [1; 4], [1; 4], [1; 4], [1; 4], [3; 4]].concat();
+    assert_eq!(
+        bytes, expected,
+        "the reused copy caught up on the second frame's damage"
+    );
+    paint(&mut texture, rect(1, 0, 1, 1), 4);
+    let (fourth, bytes) = shown_pixels(&texture);
+    assert_eq!(fourth, second);
+    let expected: Vec<u8> = [[2u8; 4], [4; 4], [1; 4], [1; 4], [1; 4], [1; 4], [1; 4], [3; 4]].concat();
+    assert_eq!(bytes, expected);
 }

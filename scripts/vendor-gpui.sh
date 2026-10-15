@@ -3,15 +3,18 @@
 # GPUI patches) into vendor/<crate> with build/patches/<crate> applied, for the workspace's [patch.crates-io]:
 #   gpui-pre       the `ExternalSurface` payload of `PaintSurface` on Linux and `Window::paint_external_surface`, the
 #                  dmabuf import capabilities of the GPU GPUI renders with
-#   gpui-pre-wgpu  the renderer's draw of external surfaces (dmabufs imported zero-copy through wgpu-hal Vulkan, CPU
-#                  pixels uploaded by damaged rectangles) and the Vulkan device opened with
-#                  VK_EXT_image_drm_format_modifier, which wgpu does not enable itself
+#   gpui-pre-wgpu  the renderer's side of external surfaces (dmabufs imported through wgpu-hal Vulkan, acquired from
+#                  the foreign queue family and copied on the GPU into a texture of its own; CPU pixels uploaded by
+#                  damaged rectangles) and the Vulkan device opened with VK_EXT_image_drm_format_modifier and
+#                  VK_EXT_queue_family_foreign, which wgpu does not enable itself
 #
-# Each source is the crates.io archive of GPUI_VERSION, verified against the checksum Cargo.lock records for it,
-# unpacked verbatim apart from its Cargo.lock (which pins nothing for a dependency) and, for gpui-pre, its examples/
-# directory (5 MB of demo programs and images no build of ours compiles; Cargo reads a dependency's [[example]]
-# entries without looking for their files), then patched. Bump GPUI_VERSION and the sums together with gpui-kit's `gpui-pre` pin, run this, and check that the
-# patches still apply.
+# Each source is the crates.io archive of GPUI_VERSION, verified against SHA256 below: the release's crates.io
+# checksum (the `cksum` of its version's line in the crates.io index, https://index.crates.io/gp/ui/<crate>, also what
+# a Cargo.lock without the [patch.crates-io] entries records). It is unpacked verbatim apart from its Cargo.lock (which
+# pins nothing for a dependency) and, for gpui-pre, its examples/ directory (5 MB of demo programs and images no build
+# of ours compiles; Cargo reads a dependency's [[example]] entries without looking for their files), then patched.
+# Bump GPUI_VERSION and the sums together with gpui-kit's `gpui-pre` pin, run this, and check that the patches still
+# apply.
 #
 # Usage: scripts/vendor-gpui.sh           (re)create vendor/gpui-pre and vendor/gpui-pre-wgpu
 #        scripts/vendor-gpui.sh --check   rebuild into a scratch dir and fail if a vendored crate differs
@@ -39,7 +42,7 @@ case "${1:-}" in
   "") ;;
   --check) mode=check ;;
   --diff) mode=diff ;;
-  -h | --help) sed -n '2,20s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+  -h | --help) sed -n '2,22s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
   *) die "unknown argument: $1 (see --help)" ;;
 esac
 

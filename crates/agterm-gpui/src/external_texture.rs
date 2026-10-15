@@ -1,10 +1,11 @@
 //! Frames rendered outside GPUI — the HTML overlay's WPE `WebKit` pages — drawn in a GPUI element: dmabufs imported
-//! zero-copy into GPUI's own Vulkan device, or, as a last-resort correctness fallback for documents, CPU pixels updated
-//! by damaged rectangle (Technical Details > HTML frames in `docs/plans/20261014-gpui-frontend.md`).
+//! into GPUI's own Vulkan device with no CPU copy (the GPU takes each frame over from the producer's foreign queue
+//! family and copies it into a texture of its own), or, as a last-resort correctness fallback for documents, CPU pixels
+//! updated by damaged rectangle (Technical Details > HTML frames in `docs/plans/20261014-gpui-frontend.md`).
 //!
 //! The import itself is GPUI patch 1 (`vendor/gpui-pre`, `vendor/gpui-pre-wgpu`): `Window::paint_external_surface`,
-//! the renderer's draw, and a device opened with `VK_EXT_image_drm_format_modifier`. This module is the frontend's
-//! side of it:
+//! the renderer's copy and draw, and a device opened with `VK_EXT_image_drm_format_modifier` and
+//! `VK_EXT_queue_family_foreign`. This module is the frontend's side of it:
 //!
 //! - [`negotiate`]: from what GPUI's device imports ([`gpui_kit::dmabuf_import_caps`]), the [`FrameSource`] a
 //!   producer renders for: its render node (a dmabuf made on another GPU does not import) and the formats and
@@ -12,7 +13,7 @@
 //! - [`ExternalTexture`]: one producer surface's frames. A dmabuf frame is shown once the producer's rendering into it
 //!   finished (its `sync_file`, or the buffer's implicit fence), after its format and modifier were checked against the
 //!   device (`WebKit` on NVIDIA's own driver may use a modifier it was not offered); every frame reports its
-//!   [`FrameOutcome`] to the producer, `Presented` only once the GPU finished drawing it, so the producer reuses a
+//!   [`FrameOutcome`] to the producer, `Presented` only once the GPU finished copying it, so the producer reuses a
 //!   buffer only after the renderer's last read. A buffer that does not import asks the owner to fall back to SHM
 //!   ([`ExternalTexture::take_fallback`]), logged as a warning; SHM is never chosen while dmabufs import.
 //! - [`external_texture`]: the element painting the current frame in its bounds, clipped to the content mask like any
@@ -197,13 +198,19 @@ struct Pending {
     buffer: Arc<DmaBuffer>,
 }
 
-/// The CPU copy behind SHM frames: the renderer may still read the last frame's pixels, so an update copies them
-/// (`Arc::make_mut`) only while it does.
+/// The CPU copies behind SHM frames, two of them in turn: the last frame's pixels stay with the renderer and GPUI's
+/// retained scene until the next frame is drawn, so each frame is composed in the other copy, which first catches up
+/// on the damage of the frame before (it holds the frame before that). Only when the other copy is still held too
+/// (frames arriving faster than they are drawn) does an update copy the whole frame (`Arc::make_mut`).
 struct ShmCanvas {
     surface: Arc<PixelSurface>,
     width: u32,
     height: u32,
-    pixels: Arc<Vec<u8>>,
+    copies: [Arc<Vec<u8>>; 2],
+    /// The copy holding the latest frame.
+    latest: usize,
+    /// The latest frame's damage, which the other copy lacks.
+    latest_damage: Vec<PixelRect>,
     serial: u64,
 }
 
@@ -307,14 +314,14 @@ impl ExternalTexture {
             Some(canvas) if canvas.width == width && canvas.height == height => canvas,
             slot => slot.insert(ShmCanvas::new(width, height)),
         };
-        let damage = canvas.apply(regions);
+        let (pixels, damage) = canvas.apply(regions);
         canvas.serial += 1;
         let frame = PixelFrame {
             surface: Arc::clone(&canvas.surface),
             serial: canvas.serial,
             width,
             height,
-            pixels: Arc::clone(&canvas.pixels),
+            pixels,
             damage,
             completion: FrameCompletion::new(on_done),
         };
@@ -360,8 +367,9 @@ impl ExternalTexture {
         self.canvas = None;
     }
 
-    /// The fall-back to SHM, once, when a dmabuf did not import (checked here or failed in the renderer): the owner
-    /// then has its producer switch to SHM. Logged as a warning when requested.
+    /// The fall-back to SHM, once, when a dmabuf did not import (checked here, or `Failed` in the renderer): the owner
+    /// then has its producer switch to SHM. Logged as a warning when requested. A frame `Lost` to the GPU (device lost,
+    /// renderer gone) or `Discarded` says nothing about import and never asks for it.
     pub fn take_fallback(&mut self) -> Option<String> {
         let failed = self.failures.lock().unwrap_or_else(PoisonError::into_inner).take();
         if let Some(reason) = failed {
@@ -414,19 +422,35 @@ impl ShmCanvas {
             surface: PixelSurface::new(),
             width,
             height,
-            pixels: Arc::new(vec![0; size]),
+            copies: [Arc::new(vec![0; size]), Arc::new(vec![0; size])],
+            latest: 0,
+            latest_damage: Vec::new(),
             serial: 0,
         }
     }
 
-    /// Copies `regions` in, clipped to the frame; the rectangles written.
-    fn apply<'a>(&mut self, regions: impl IntoIterator<Item = ShmRegion<'a>>) -> Vec<PixelRect> {
+    /// Composes the next frame in the other copy: the latest frame's damage, then `regions`, clipped to the frame; the
+    /// frame's pixels and the rectangles `regions` wrote.
+    fn apply<'a>(&mut self, regions: impl IntoIterator<Item = ShmRegion<'a>>) -> (Arc<Vec<u8>>, Vec<PixelRect>) {
         let (width, height) = (self.width, self.height);
-        let pixels = Arc::make_mut(&mut self.pixels);
-        regions
+        let target = 1 - self.latest;
+        let latest = Arc::clone(&self.copies[self.latest]);
+        let pixels = Arc::make_mut(&mut self.copies[target]);
+        let stride = width as usize * 4;
+        for rect in &self.latest_damage {
+            let row_bytes = rect.width as usize * 4;
+            for row in rect.y as usize..(rect.y + rect.height) as usize {
+                let start = row * stride + rect.x as usize * 4;
+                pixels[start..start + row_bytes].copy_from_slice(&latest[start..start + row_bytes]);
+            }
+        }
+        let damage: Vec<PixelRect> = regions
             .into_iter()
             .filter_map(|region| copy_region(pixels, width, height, region))
-            .collect()
+            .collect();
+        self.latest = target;
+        self.latest_damage.clone_from(&damage);
+        (Arc::clone(&self.copies[target]), damage)
     }
 }
 

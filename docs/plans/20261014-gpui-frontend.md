@@ -1152,6 +1152,26 @@ Productionizes Task 2's prototype.
     timeline semaphore of the renderer's (`Queue::add_signal_semaphore`) and a thread reports those frames `Presented`
     after `vkWaitSemaphores` on it — outside wgpu's locks, since `Device::poll(Wait)` holds the fence lock that
     `Queue::submit` needs.
+  - ➕ (review) **acquire from the foreign queue family — a GPU copy, not direct sampling**: wgpu-core 29 enters
+    every texture from hal as UNINITIALIZED, so its first use was an UNDEFINED → SHADER_READ_ONLY transition (Mesa ANV
+    gen12 re-initialises fast-clear state there, and CC modifiers keep the clear colour in the dmabuf), and wgpu never
+    acquires from `VK_QUEUE_FAMILY_FOREIGN_EXT`; no wgpu 29 API seeds a tracked state, and raw and wgpu commands may
+    not share an encoder. So the import stays a raw `VkImage` wgpu never sees (`VK_EXT_queue_family_foreign` now
+    required, modifiers filtered for TRANSFER_SRC): per new frame a wgpu command buffer clears the buffer's snapshot
+    texture once and moves it to COPY_DST (`transition_resources`), a raw-only one acquires the image (FOREIGN →
+    queue family, GENERAL → TRANSFER_SRC), `vkCmdCopyImage`s it into the snapshot and releases it, then the frame
+    samples the snapshot; redraws copy nothing. `Presented` means the copy finished; imported images are destroyed
+    once their buffer left and the timeline passed their last copy. Deviation from "zero-copy into a wgpu texture":
+    no CPU copy, one GPU copy per new frame (1080p60 ≈ 1 GB/s of read+write bandwidth, nominal). Codex-reviewed
+    (agreed), transcript
+    `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/fixer-task-29-foreign-acquire/transcript.md`. Also:
+    `FrameOutcome::Lost` (device lost, renderer shut down; a slow GPU is waited for, logged after 10 s) never requests
+    the SHM fall-back, only `Failed` (import) does; frames of an abandoned submission report `Discarded`; no timeline
+    on GL renderers (CPU pixels only there); the SHM canvas alternates two copies, catching up on the previous
+    frame's damage, so a frame no longer clones the whole canvas. Tests: the hardware case renders through EGL/GLES
+    on GBM buffers of each non-linear XR24 modifier (Intel X/Y tiled, CCS 2-plane, CCS_CC 3-plane), GL clears red then
+    blue in the same buffer, both read back, then a redraw after GL cleared green without handing over still shows
+    blue with no new copy; under `AGTERM_REQUIRE_DISPLAY_TESTS` a skipped case fails (CI loads `udmabuf`).
   - **agterm-gpui `external_texture`**: `negotiate(caps) -> FrameSource::{DmaBuf { render_node, formats }, Shm {
     reason }}` (the drawn formats preferred AR24, XR24, AB24, XB24, `DRM_FORMAT_MOD_INVALID` dropped, LINEAR last; SHM
     only without a device, without dmabuf import, without a render node or drawn format — logged as a warning);

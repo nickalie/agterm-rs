@@ -86,6 +86,12 @@ jobs:
       # agterm-gpui's process tests run on their own private bus, headless weston and Xvfb, rendering on lavapipe
       # (mesa-vulkan-drivers), and forward to and from the GTK build's binary: none may skip here (only the nested-niri
       # check is #[ignore]d, no niri on Ubuntu)
+      # agterm-gpui's external texture test imports synthetic dmabufs from udmabuf on lavapipe; required here like
+      # the display tests, so the device must be there
+      - name: udmabuf for the external texture test
+        run: |
+          sudo modprobe udmabuf
+          sudo chmod a+rw /dev/udmabuf
       - name: test
         shell: bash
         env:

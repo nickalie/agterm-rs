@@ -1,19 +1,25 @@
-//! The external texture element against GPUI's real renderer, patched (`vendor/gpui-pre-wgpu`): dmabufs imported
-//! zero-copy into its Vulkan device, CPU pixels by damaged rectangle, clipping, the paint order, frame outcomes and
-//! import lifetime, rendered by GPUI's headless wgpu renderer and read back. No display and no compositor: Vulkan
-//! only.
+//! The external texture element against GPUI's real renderer, patched (`vendor/gpui-pre-wgpu`): dmabufs imported into
+//! its Vulkan device (acquired from the foreign queue family and copied on the GPU), CPU pixels by damaged rectangle,
+//! clipping, the paint order, frame outcomes and import lifetime, rendered by GPUI's headless wgpu renderer and read
+//! back. No display and no compositor: Vulkan only.
 //!
 //! GPUI's headless renderer opens one device per process, so this harness (no libtest) runs each GPU in a child
 //! process of its own, with an environment built from scratch (no display, no session bus, no `AGTERM_*`/`ZMX_*`):
-//! `lavapipe` (Mesa's software Vulkan; skipped with a message where it is not found, failed instead under
-//! `AGTERM_REQUIRE_DISPLAY_TESTS`) and `mesa`, the first render node a Mesa Vulkan driver runs (Intel, AMD), where
-//! there is one. GL adapters are kept to Mesa's software rasterizer so GPUI picks the Vulkan one. The synthetic
-//! dmabufs come from `/dev/udmabuf` (skipped where this user cannot open it) and, on hardware, from GBM.
+//! `lavapipe` (Mesa's software Vulkan) and `mesa`, the first render node a Mesa Vulkan driver runs (Intel, AMD), where
+//! there is one. GPUI is kept to the Vulkan adapter: on lavapipe Mesa's GL is forced to software (a CPU adapter like
+//! lavapipe, which Vulkan then outranks), on hardware `ZED_DEVICE_ID` names the node's PCI device (GL needs the
+//! hardware there, for the GL producer). The synthetic dmabufs come from `/dev/udmabuf` and, on hardware, from GBM
+//! buffers a GL context clears.
+//!
+//! A missing piece (no lavapipe, no udmabuf access, a lavapipe without dmabuf import) skips its cases with a message,
+//! and fails them instead under `AGTERM_REQUIRE_DISPLAY_TESTS`, as CI sets it; only the hardware-only case on lavapipe
+//! is never required.
 //!
 //! Arguments: a substring selects cases by name; `--list` lists them.
 
 mod buffers;
 mod cases;
+mod gl;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
@@ -148,6 +154,13 @@ fn mesa_gpu() -> Option<Gpu> {
     })
 }
 
+/// The PCI device id of `node`'s GPU (`0xa7a0`), as `ZED_DEVICE_ID` takes it.
+fn pci_device(node: &Path) -> Option<String> {
+    let name = node.file_name()?;
+    let id = std::fs::read_to_string(Path::new("/sys/class/drm").join(name).join("device/device")).ok()?;
+    Some(id.trim().to_owned())
+}
+
 fn kernel_driver(node: &Path) -> Option<String> {
     let name = node.file_name()?;
     let driver = std::fs::read_link(Path::new("/sys/class/drm").join(name).join("device/driver")).ok()?;
@@ -177,13 +190,20 @@ fn run_child(exe: &Path, gpu: &Gpu, args: &[String]) -> Result<(), String> {
     command
         .env(GPU_ENV, gpu.name)
         .env("VK_DRIVER_FILES", &gpu.icd)
-        .env("VK_ICD_FILENAMES", &gpu.icd)
-        .env("LIBGL_ALWAYS_SOFTWARE", "1");
+        .env("VK_ICD_FILENAMES", &gpu.icd);
     if let Some(vendor) = mesa_egl_vendor() {
         command.env("__EGL_VENDOR_LIBRARY_FILENAMES", vendor);
     }
-    if let Some(node) = &gpu.node {
-        command.env(NODE_ENV, node);
+    match &gpu.node {
+        Some(node) => {
+            command.env(NODE_ENV, node);
+            if let Some(device) = pci_device(node) {
+                command.env("ZED_DEVICE_ID", device);
+            }
+        }
+        None => {
+            command.env("LIBGL_ALWAYS_SOFTWARE", "1");
+        }
     }
     let mut child = command
         .spawn()

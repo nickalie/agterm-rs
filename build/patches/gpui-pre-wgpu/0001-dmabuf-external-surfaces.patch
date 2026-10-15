@@ -1,17 +1,24 @@
 External surfaces on Linux (GPUI patch 1 of docs/plans/20261014-gpui-frontend.md, the renderer half; the scene and
 window half is build/patches/gpui-pre). Three parts, as docs/spikes/20261014-wpe-dmabuf.md found them necessary:
 - device: the Vulkan device is opened through wgpu-hal's `open_with_callback` + `create_device_from_hal`, adding
-  VK_EXT_image_drm_format_modifier (wgpu enables the external memory extensions where supported, never this one); an
-  adapter without it, without Vulkan 1.2 timeline semaphores or not on Vulkan opens as before and imports nothing.
-  What the device imports (render node from VK_EXT_physical_device_drm, sampled formats and modifiers) is published.
-- import: a dmabuf becomes a `VkImage` with DRM-modifier tiling and every memory plane's layout (non-disjoint: Intel's
-  CCS keeps three planes in one object) on a dedicated allocation importing the fd, wrapped as a wgpu texture; checked
-  against the published capabilities first, cached per buffer while the producer keeps the buffer.
-- draw: a pipeline of its own (bindings 4-6 of group 1, clear of the macOS surface's) samples the texture within the
+  VK_EXT_image_drm_format_modifier and VK_EXT_queue_family_foreign (wgpu enables the external memory extensions where
+  supported, never these); an adapter without them, without Vulkan 1.2 timeline semaphores or not on Vulkan opens as
+  before and imports nothing. What the device imports (render node from VK_EXT_physical_device_drm, the formats and
+  modifiers it copies from) is published.
+- import: a dmabuf becomes a raw `VkImage` with DRM-modifier tiling and every memory plane's layout (non-disjoint:
+  Intel's CCS keeps three planes in one object) on a dedicated allocation importing the fd, checked against the
+  published capabilities first and never handed to wgpu (wgpu-core would make its first use an UNDEFINED transition,
+  letting the driver discard the producer's pixels, and never acquires from a foreign queue family). Each new frame is
+  acquired from VK_QUEUE_FAMILY_FOREIGN_EXT in GENERAL, copied into a wgpu texture (the buffer's snapshot, put into
+  and found in COPY_DST through `CommandEncoder::transition_resources`) and released back, in a raw-only command
+  buffer submitted with the frame; imports are cached per buffer and destroyed once the producer dropped it and the
+  GPU finished the last copy.
+- draw: a pipeline of its own (bindings 4-6 of group 1, clear of the macOS surface's) samples the snapshot within the
   content mask, padding alpha read as opaque, premultiplied texels blended for either target alpha mode; CPU pixels
   upload into a texture per surface, damaged rectangles only when the previous frame is the one uploaded last. Each
-  drawing submission signals a timeline semaphore and a thread reports the frames once the GPU reached it
-  (vkWaitSemaphores, outside wgpu's locks: `Device::poll` would hold the fence lock `Queue::submit` needs).
+  submission that copies or first draws a frame signals a timeline semaphore; a thread reports the frames once the GPU
+  reached it (vkWaitSemaphores, outside wgpu's locks: `Device::poll` would hold the fence lock `Queue::submit` needs),
+  `Lost` on a lost device; a frame whose submission was abandoned reports `Discarded`.
 scripts/vendor-gpui.sh applies this to the verified crates.io archive.
 
 diff -ruN a/Cargo.toml b/Cargo.toml
@@ -27,112 +34,212 @@ diff -ruN a/Cargo.toml b/Cargo.toml
  [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wgpu]
  version = "29.0"
  features = [
-diff -ruN a/src/external_surface.rs b/src/external_surface.rs
---- a/src/external_surface.rs
-+++ b/src/external_surface.rs
-@@ -0,0 +1,1043 @@
-+//! External surfaces on Linux (an agterm-rs patch): draws `gpui::ExternalSurface` frames — dmabufs imported
-+//! zero-copy through wgpu-hal Vulkan, and CPU pixels uploaded by damaged rectangle into a texture kept per surface —
-+//! and opens the Vulkan device so that it can import them.
-+//!
-+//! - Device: wgpu enables `VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf` where supported but never
-+//!   `VK_EXT_image_drm_format_modifier`, without which a buffer with a modifier (every GPU-rendered one) cannot be
-+//!   described, so [`open_device`] opens the adapter through wgpu-hal's `open_with_callback` adding it.
-+//!   [`record_caps`] publishes what the device imports (`gpui::dmabuf_import_caps`): its DRM render node
-+//!   (`VK_EXT_physical_device_drm`) and the formats and modifiers it samples from an imported dmabuf.
-+//! - Import: one `VkImage` per buffer with `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT` and every memory plane's layout
-+//!   (a non-disjoint image: several planes in one buffer object, as Intel's CCS modifiers have), bound to a dedicated
-+//!   allocation importing the dmabuf. A buffer is checked against the device's capabilities first: a format or
-+//!   modifier the device does not import, or a plane count the modifier does not have, fails the frame instead of
-+//!   reaching Vulkan. The import is cached per `gpui::DmaBuffer` and dropped when the producer drops the buffer.
-+//! - Completion: a frame reports `Presented` once the GPU finished the first submission that drew it. The renderer
-+//!   signals a timeline semaphore of its own with that submission (wgpu-hal's `add_signal_semaphore`), and a thread
-+//!   waits on it with `vkWaitSemaphores`, outside every wgpu lock (`Device::poll` holds the device's fence lock while it
-+//!   waits, which would stall the next `Queue::submit`).
-+//! - Acquire: the producer's rendering must be finished before a frame is handed over (the caller waits on the
-+//!   producer's fence); the renderer adds no wait of its own.
+diff -ruN a/src/external_surface/completion.rs b/src/external_surface/completion.rs
+--- a/src/external_surface/completion.rs
++++ b/src/external_surface/completion.rs
+@@ -0,0 +1,178 @@
++//! When the GPU finished a submission: a timeline semaphore of the renderer's own, signalled by each submission that
++//! copies or first draws an external frame (wgpu-hal's `add_signal_semaphore`), read for retiring imported images and
++//! waited on by a thread that reports frames. The thread waits with `vkWaitSemaphores`, outside every wgpu lock:
++//! `Device::poll` holds the device's fence lock while it waits, which would stall the next `Queue::submit`.
 +
-+use anyhow::{Context as _, Result, anyhow, bail, ensure};
++use super::Callback;
++use anyhow::{Context as _, Result, bail};
 +use ash::vk;
-+use collections::FxHashMap;
-+use gpui::external_surface_counters as counters;
-+use gpui::{
-+    DmaBufFormat, DmaBufImportCaps, DmaBufModifier, DmaBuffer, ExternalSurface, FrameOutcome,
-+    PaintSurface, PixelFrame, PixelSurface,
-+};
++use gpui::FrameOutcome;
++use std::sync::Arc;
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::sync::mpsc;
++use std::time::{Duration, Instant};
++use wgpu::hal::vulkan;
++
++/// How long a wait goes on before it is logged, and how long a shutdown waits for submissions still running.
++const PATIENCE: Duration = Duration::from_secs(10);
++
++/// The renderer's timeline semaphore and the thread reporting frames once the GPU reached their value.
++pub(super) struct Timeline {
++    semaphore: vk::Semaphore,
++    raw: ash::Device,
++    /// The value the last signalling submission was given.
++    last: u64,
++    sender: Option<mpsc::Sender<(u64, Vec<Callback>)>>,
++    thread: Option<std::thread::JoinHandle<()>>,
++    shutdown: Arc<AtomicBool>,
++    /// Keeps the device (and so `raw` and `semaphore`) alive until the thread ended.
++    _device: wgpu::Device,
++}
++
++impl Timeline {
++    /// A timeline on `device`; an error on a device that is not Vulkan or cannot make one.
++    pub(super) fn new(device: &wgpu::Device) -> Result<Self> {
++        let raw = {
++            // SAFETY: the guard is dropped at the end of this block; the ash device it hands out stays valid while
++            // `device` lives, which this value keeps.
++            let hal_device = unsafe { device.as_hal::<vulkan::Api>() }.context("the device is not Vulkan")?;
++            hal_device.raw_device().clone()
++        };
++        let mut timeline = vk::SemaphoreTypeCreateInfo::default()
++            .semaphore_type(vk::SemaphoreType::TIMELINE)
++            .initial_value(0);
++        // SAFETY: the device was opened with Vulkan 1.2 and the timeline semaphore feature (`missing_requirements`).
++        let semaphore = unsafe {
++            raw.create_semaphore(&vk::SemaphoreCreateInfo::default().push_next(&mut timeline), None)
++        }
++        .context("vkCreateSemaphore (timeline)")?;
++        let (sender, receiver) = mpsc::channel::<(u64, Vec<Callback>)>();
++        let shutdown = Arc::new(AtomicBool::new(false));
++        let waiter = raw.clone();
++        let stopping = Arc::clone(&shutdown);
++        let thread = std::thread::Builder::new()
++            .name("gpui-external-surfaces".to_owned())
++            .spawn(move || report(&waiter, semaphore, &receiver, &stopping));
++        let thread = match thread {
++            Ok(thread) => thread,
++            Err(error) => {
++                // SAFETY: the semaphore was created above and nothing waits on or signals it.
++                unsafe { raw.destroy_semaphore(semaphore, None) };
++                bail!("the completion thread did not start: {error}");
++            }
++        };
++        Ok(Self {
++            semaphore,
++            raw,
++            last: 0,
++            sender: Some(sender),
++            thread: Some(thread),
++            shutdown,
++            _device: device.clone(),
++        })
++    }
++
++    /// Has the next submission on `queue` signal a new value, which it returns.
++    pub(super) fn signal(&mut self, queue: &wgpu::Queue) -> Option<u64> {
++        // SAFETY: the guard is only used to queue the signal and is dropped before the submission.
++        let hal_queue = unsafe { queue.as_hal::<vulkan::Api>() }?;
++        self.last += 1;
++        hal_queue.add_signal_semaphore(self.semaphore, Some(self.last));
++        Some(self.last)
++    }
++
++    /// Reports `callbacks` once the GPU reached `value`.
++    pub(super) fn complete_at(&self, value: u64, callbacks: Vec<Callback>) {
++        if callbacks.is_empty() {
++            return;
++        }
++        if let Some(sender) = &self.sender
++            && let Err(mpsc::SendError((_, callbacks))) = sender.send((value, callbacks))
++        {
++            for callback in callbacks {
++                callback(FrameOutcome::Lost("the completion thread ended".to_owned()));
++            }
++        }
++    }
++
++    /// The value the GPU has reached (0 when it cannot be read).
++    pub(super) fn reached(&self) -> u64 {
++        // SAFETY: the semaphore is a timeline semaphore of this device, alive while `self` is.
++        unsafe { self.raw.get_semaphore_counter_value(self.semaphore) }.unwrap_or(0)
++    }
++
++    /// Waits, a bounded while, until the GPU reached every value signalled so far; whether it did.
++    pub(super) fn settle(&self) -> bool {
++        let semaphores = [self.semaphore];
++        let values = [self.last];
++        let info = vk::SemaphoreWaitInfo::default().semaphores(&semaphores).values(&values);
++        // SAFETY: the semaphore and device are alive while `self` is; waiting needs no external synchronization.
++        unsafe { self.raw.wait_semaphores(&info, PATIENCE.as_nanos() as u64) }.is_ok()
++    }
++}
++
++impl Drop for Timeline {
++    fn drop(&mut self) {
++        self.shutdown.store(true, Ordering::Relaxed);
++        self.sender = None;
++        if let Some(thread) = self.thread.take() {
++            let _ = thread.join();
++        }
++        if self.reached() >= self.last {
++            // SAFETY: the GPU reached every value any submission signals, so no queue operation refers to the
++            // semaphore any more, and the thread that waited on it has ended.
++            unsafe { self.raw.destroy_semaphore(self.semaphore, None) };
++        } else {
++            log::warn!("external surfaces: a submission never finished; its timeline semaphore is leaked");
++        }
++    }
++}
++
++/// The completion thread: for each batch in order, waits until the GPU reached its value and reports its frames:
++/// `Presented`, or `Lost` when the device was lost or a shutdown gave up waiting.
++fn report(
++    raw: &ash::Device,
++    semaphore: vk::Semaphore,
++    receiver: &mpsc::Receiver<(u64, Vec<Callback>)>,
++    shutdown: &AtomicBool,
++) {
++    for (value, callbacks) in receiver {
++        let outcome = match wait_value(raw, semaphore, value, shutdown) {
++            Ok(()) => FrameOutcome::Presented,
++            Err(error) => FrameOutcome::Lost(format!("{error:#}")),
++        };
++        for callback in callbacks {
++            callback(outcome.clone());
++        }
++    }
++}
++
++/// Waits until the GPU reached `value`. A slow GPU is waited for (logged once after [`PATIENCE`]); only a lost
++/// device, or a shutdown that waited [`PATIENCE`] more, ends the wait without it.
++fn wait_value(raw: &ash::Device, semaphore: vk::Semaphore, value: u64, shutdown: &AtomicBool) -> Result<()> {
++    let semaphores = [semaphore];
++    let values = [value];
++    let info = vk::SemaphoreWaitInfo::default().semaphores(&semaphores).values(&values);
++    let started = Instant::now();
++    let mut logged = false;
++    let mut shutdown_since: Option<Instant> = None;
++    loop {
++        // SAFETY: the semaphore and device stay alive while this thread runs (`Timeline` joins it before destroying
++        // the semaphore and keeps the device); waiting needs no external synchronization.
++        match unsafe { raw.wait_semaphores(&info, Duration::from_millis(100).as_nanos() as u64) } {
++            Ok(()) => return Ok(()),
++            Err(vk::Result::TIMEOUT) => {}
++            Err(error) => bail!("waiting for the frame's submission: {error}"),
++        }
++        if !logged && started.elapsed() >= PATIENCE {
++            log::warn!("external surfaces: the GPU has not finished a frame for {PATIENCE:?}; still waiting");
++            logged = true;
++        }
++        if shutdown.load(Ordering::Relaxed) {
++            let since = *shutdown_since.get_or_insert_with(Instant::now);
++            if since.elapsed() >= PATIENCE {
++                bail!("the renderer shut down before the GPU finished the frame");
++            }
++        }
++    }
++}
+diff -ruN a/src/external_surface/device.rs b/src/external_surface/device.rs
+--- a/src/external_surface/device.rs
++++ b/src/external_surface/device.rs
+@@ -0,0 +1,294 @@
++//! The Vulkan device that imports dmabufs, and what it imports (`gpui::dmabuf_import_caps`).
++
++use super::{FORMATS, fourcc_name};
++use anyhow::{Context as _, Result, ensure};
++use ash::vk;
++use gpui::{DmaBufFormat, DmaBufImportCaps, DmaBufModifier};
 +use std::ffi::CStr;
-+use std::os::fd::{AsRawFd as _, IntoRawFd as _, OwnedFd};
 +use std::os::unix::fs::MetadataExt as _;
 +use std::path::PathBuf;
-+use std::sync::{Arc, Weak, mpsc};
-+use std::time::{Duration, Instant};
-+use wgpu::hal::{self, vulkan};
++use wgpu::hal::vulkan;
 +
-+/// `fourcc_code` of `drm_fourcc.h`.
-+const fn fourcc(code: &[u8; 4]) -> u32 {
-+    u32::from_le_bytes(*code)
-+}
-+
-+/// A DRM format the renderer draws: its Vulkan and wgpu formats, and whether its fourth channel is padding.
-+struct Format {
-+    fourcc: u32,
-+    vk: vk::Format,
-+    wgpu: wgpu::TextureFormat,
-+    opaque: bool,
-+}
-+
-+/// The formats an external surface may have: 8-bit RGB with alpha or padding, in either byte order. DRM names
-+/// channels from the most significant bit of a little-endian word, so `AR24` (ARGB8888) is B, G, R, A in memory.
-+const FORMATS: [Format; 4] = [
-+    Format {
-+        fourcc: fourcc(b"AR24"),
-+        vk: vk::Format::B8G8R8A8_UNORM,
-+        wgpu: wgpu::TextureFormat::Bgra8Unorm,
-+        opaque: false,
-+    },
-+    Format {
-+        fourcc: fourcc(b"XR24"),
-+        vk: vk::Format::B8G8R8A8_UNORM,
-+        wgpu: wgpu::TextureFormat::Bgra8Unorm,
-+        opaque: true,
-+    },
-+    Format {
-+        fourcc: fourcc(b"AB24"),
-+        vk: vk::Format::R8G8B8A8_UNORM,
-+        wgpu: wgpu::TextureFormat::Rgba8Unorm,
-+        opaque: false,
-+    },
-+    Format {
-+        fourcc: fourcc(b"XB24"),
-+        vk: vk::Format::R8G8B8A8_UNORM,
-+        wgpu: wgpu::TextureFormat::Rgba8Unorm,
-+        opaque: true,
-+    },
-+];
-+
-+fn format_of(fourcc: u32) -> Option<&'static Format> {
-+    FORMATS.iter().find(|format| format.fourcc == fourcc)
-+}
-+
-+fn fourcc_name(fourcc: u32) -> String {
-+    fourcc
-+        .to_le_bytes()
-+        .iter()
-+        .map(|&byte| if byte.is_ascii_graphic() { char::from(byte) } else { '?' })
-+        .collect()
-+}
-+
-+/// The device extensions dmabuf import needs beyond what wgpu enables by itself.
-+const EXTENSIONS: [&CStr; 3] = [
++/// The device extensions dmabuf import needs beyond what wgpu enables by itself: the external memory pair (wgpu adds
++/// them where supported), DRM format modifiers (wgpu never does) and the foreign queue family a dmabuf is acquired
++/// from and released to.
++pub(super) const EXTENSIONS: [&CStr; 4] = [
 +    ash::khr::external_memory_fd::NAME,
 +    ash::ext::external_memory_dma_buf::NAME,
 +    ash::ext::image_drm_format_modifier::NAME,
++    ash::ext::queue_family_foreign::NAME,
 +];
-+
-+/// How long the completion thread waits for one submission before it gives the frame up.
-+const COMPLETION_TIMEOUT: Duration = Duration::from_secs(10);
-+
-+// MARK: - device
 +
 +/// Opens `adapter` as a Vulkan device that imports dmabufs; `None` when it is not a Vulkan adapter or cannot import
 +/// them (the caller then opens it as wgpu would, and [`record_caps`] says why).
@@ -288,7 +395,7 @@ diff -ruN a/src/external_surface.rs b/src/external_surface.rs
 +        .collect();
 +    let unsupported = formats
 +        .is_empty()
-+        .then(|| "the device imports none of AR24, XR24, AB24, XB24 as a sampled image".to_owned());
++        .then(|| "the device imports none of AR24, XR24, AB24, XB24 as a copy source".to_owned());
 +    Ok(DmaBufImportCaps {
 +        adapter: info.name,
 +        render_node: render_node(&hal_adapter),
@@ -297,7 +404,7 @@ diff -ruN a/src/external_surface.rs b/src/external_surface.rs
 +    })
 +}
 +
-+/// The modifiers of `format` the adapter samples from an imported dmabuf, in the driver's order.
++/// The modifiers of `format` the adapter copies from an imported dmabuf, in the driver's order.
 +fn importable_modifiers(adapter: &vulkan::Adapter, format: vk::Format) -> Vec<DmaBufModifier> {
 +    let instance = adapter.shared_instance().raw_instance();
 +    let physical = adapter.raw_physical_device();
@@ -328,7 +435,7 @@ diff -ruN a/src/external_surface.rs b/src/external_surface.rs
 +        .filter(|properties| {
 +            properties
 +                .drm_format_modifier_tiling_features
-+                .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR)
++                .contains(vk::FormatFeatureFlags::TRANSFER_SRC)
 +                && imports(adapter, format, properties.drm_format_modifier)
 +        })
 +        .map(|properties| DmaBufModifier {
@@ -338,7 +445,7 @@ diff -ruN a/src/external_surface.rs b/src/external_surface.rs
 +        .collect()
 +}
 +
-+/// Whether a dmabuf of `format` with `modifier` imports as a sampled 2D image.
++/// Whether a dmabuf of `format` with `modifier` imports as a 2D image to copy from.
 +fn imports(adapter: &vulkan::Adapter, format: vk::Format, modifier: u64) -> bool {
 +    let mut external_info =
 +        vk::PhysicalDeviceExternalImageFormatInfo::default().handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
@@ -349,7 +456,7 @@ diff -ruN a/src/external_surface.rs b/src/external_surface.rs
 +        .format(format)
 +        .ty(vk::ImageType::TYPE_2D)
 +        .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
-+        .usage(vk::ImageUsageFlags::SAMPLED)
++        .usage(vk::ImageUsageFlags::TRANSFER_SRC)
 +        .push_next(&mut external_info)
 +        .push_next(&mut modifier_info);
 +    let mut external = vk::ExternalImageFormatProperties::default();
@@ -395,7 +502,7 @@ diff -ruN a/src/external_surface.rs b/src/external_surface.rs
 +
 +/// The `/dev/dri` node with device number `major:minor`.
 +fn find_render_node(major: i64, minor: i64) -> Option<PathBuf> {
-+    let wanted = libc_makedev(u64::try_from(major).ok()?, u64::try_from(minor).ok()?);
++    let wanted = makedev(u64::try_from(major).ok()?, u64::try_from(minor).ok()?);
 +    std::fs::read_dir("/dev/dri")
 +        .ok()?
 +        .flatten()
@@ -404,18 +511,521 @@ diff -ruN a/src/external_surface.rs b/src/external_surface.rs
 +}
 +
 +/// glibc's `makedev`.
-+fn libc_makedev(major: u64, minor: u64) -> u64 {
++fn makedev(major: u64, minor: u64) -> u64 {
 +    ((major & 0xffff_f000) << 32) | ((major & 0x0000_0fff) << 8) | ((minor & 0xffff_ff00) << 12) | (minor & 0x0000_00ff)
 +}
+diff -ruN a/src/external_surface/import.rs b/src/external_surface/import.rs
+--- a/src/external_surface/import.rs
++++ b/src/external_surface/import.rs
+@@ -0,0 +1,393 @@
++//! A producer's dmabuf as a raw `VkImage` wgpu never tracks, and the GPU copy that acquires it from the foreign queue
++//! family, copies it into a wgpu texture (the snapshot the renderer samples) and releases it back.
++//!
++//! wgpu cannot hold the imported image itself: every texture from hal enters wgpu-core's tracker uninitialized, so its
++//! first use is an `UNDEFINED` layout transition, which lets the driver discard the producer's pixels (Mesa ANV
++//! re-initialises fast-clear state on it, and CC modifiers keep the clear colour in the dmabuf itself), and wgpu
++//! never acquires an image from `VK_QUEUE_FAMILY_FOREIGN_EXT`. So the image stays raw: each new frame is acquired
++//! (`GENERAL`, foreign → this queue family), copied, and released (this queue family → foreign, back to `GENERAL`) in a
++//! raw-only command buffer, the snapshot handed to and from wgpu's tracker as `COPY_DST` through
++//! `CommandEncoder::transition_resources`, wgpu's documented native-interop path.
++
++use super::{Format, fourcc_name, format_of};
++use anyhow::{Context as _, Result, anyhow, bail, ensure};
++use ash::vk;
++use gpui::{DmaBufFrame, DmaBufImportCaps, DmaBuffer};
++use std::os::fd::{AsRawFd as _, IntoRawFd as _, OwnedFd};
++use std::os::unix::fs::MetadataExt as _;
++use std::sync::Weak;
++use wgpu::hal::vulkan;
++
++/// The format `buffer` is copied as, if the device imports it as it is: its format and modifier among the device's,
++/// with the modifier's plane count, every plane in one buffer object, a size the device takes.
++pub(super) fn check_buffer(caps: &DmaBufImportCaps, buffer: &DmaBuffer) -> Result<&'static Format> {
++    if let Some(reason) = &caps.unsupported {
++        bail!("the renderer's device imports no dmabufs: {reason}");
++    }
++    let format = format_of(buffer.fourcc).ok_or_else(|| anyhow!("unsupported format {}", fourcc_name(buffer.fourcc)))?;
++    let modifiers = caps
++        .formats
++        .iter()
++        .find(|candidate| candidate.fourcc == buffer.fourcc)
++        .map(|candidate| candidate.modifiers.as_slice())
++        .unwrap_or_default();
++    let modifier = modifiers
++        .iter()
++        .find(|candidate| candidate.modifier == buffer.modifier)
++        .ok_or_else(|| anyhow!("the device does not import {} with this modifier", fourcc_name(buffer.fourcc)))?;
++    ensure!(
++        buffer.planes.len() == modifier.plane_count as usize,
++        "{} planes, the modifier has {}",
++        buffer.planes.len(),
++        modifier.plane_count
++    );
++    ensure!(buffer.width > 0 && buffer.height > 0, "empty buffer");
++    ensure!(
++        planes_share_one_object(buffer)?,
++        "planes in separate buffer objects (a disjoint image is not supported)"
++    );
++    Ok(format)
++}
++
++/// Whether every plane's fd is the same dmabuf (one inode per exported buffer object).
++fn planes_share_one_object(buffer: &DmaBuffer) -> Result<bool> {
++    let identity = |fd: &OwnedFd| -> Result<(u64, u64)> {
++        let file = std::fs::File::from(fd.try_clone().context("dup a plane fd")?);
++        let metadata = file.metadata().context("fstat a plane fd")?;
++        Ok((metadata.dev(), metadata.ino()))
++    };
++    let mut planes = buffer.planes.iter();
++    let Some(first) = planes.next() else {
++        return Ok(false);
++    };
++    let first = identity(&first.fd)?;
++    for plane in planes {
++        if identity(&plane.fd)? != first {
++            return Ok(false);
++        }
++    }
++    Ok(true)
++}
++
++/// An imported dmabuf: a `VkImage` with the buffer's modifier and plane layouts, bound to a dedicated allocation
++/// importing its fd. wgpu never sees it; [`RawImage::destroy`] frees it once no submission uses it any more.
++pub(super) struct RawImage {
++    pub(super) image: vk::Image,
++    memory: vk::DeviceMemory,
++}
++
++impl RawImage {
++    /// Imports `buffer` (checked by [`check_buffer`]) on `device` as a copy source.
++    pub(super) fn import(device: &wgpu::Device, buffer: &DmaBuffer, format: &Format) -> Result<Self> {
++        // SAFETY: the guard is dropped at the end of this function, before the device is used through wgpu again.
++        let hal_device = unsafe { device.as_hal::<vulkan::Api>() }.context("the device is not Vulkan")?;
++        let (image, memory) = create_image(&hal_device, buffer, format)?;
++        Ok(Self { image, memory })
++    }
++
++    /// Destroys the image and frees its memory.
++    ///
++    /// # Safety
++    ///
++    /// `raw` is the device the image was created on, and no submitted or recorded command uses the image any more.
++    pub(super) unsafe fn destroy(self, raw: &ash::Device) {
++        // SAFETY: the caller guarantees nothing uses the image; it and its memory were created on `raw`.
++        unsafe { raw.destroy_image(self.image, None) };
++        // SAFETY: as above; the image bound to the memory is gone.
++        unsafe { raw.free_memory(self.memory, None) };
++    }
++}
++
++/// The wgpu texture a buffer's frames are copied into and sampled from.
++pub(super) fn create_snapshot(device: &wgpu::Device, buffer: &DmaBuffer, format: &Format) -> wgpu::Texture {
++    device.create_texture(&wgpu::TextureDescriptor {
++        label: Some("dmabuf_snapshot"),
++        size: wgpu::Extent3d {
++            width: buffer.width,
++            height: buffer.height,
++            depth_or_array_layers: 1,
++        },
++        mip_level_count: 1,
++        sample_count: 1,
++        dimension: wgpu::TextureDimension::D2,
++        format: format.wgpu,
++        // RENDER_ATTACHMENT for the one clear that makes wgpu count the snapshot initialized (it would otherwise clear
++        // it lazily at the first sampling, over the raw copy).
++        usage: wgpu::TextureUsages::TEXTURE_BINDING
++            | wgpu::TextureUsages::COPY_DST
++            | wgpu::TextureUsages::RENDER_ATTACHMENT,
++        view_formats: &[],
++    })
++}
++
++/// One frame to copy: from the buffer's imported image into its snapshot.
++pub(super) struct CopyJob {
++    /// The import's key.
++    pub(super) key: usize,
++    /// The frame copied, kept weakly so its address names it until the cache moves on.
++    pub(super) frame: Weak<DmaBufFrame>,
++    pub(super) source: vk::Image,
++    pub(super) snapshot: wgpu::Texture,
++    pub(super) width: u32,
++    pub(super) height: u32,
++    /// The snapshot needs its initializing clear first.
++    pub(super) clear: bool,
++}
++
++/// The two command buffers of a batch of copies, to submit in this order before the frame's own: wgpu's (the
++/// snapshots' first clear and their transition to `COPY_DST`) and the raw one (acquire, copy, release).
++pub(super) fn record(device: &wgpu::Device, jobs: &[CopyJob]) -> Result<[wgpu::CommandBuffer; 2]> {
++    let mut prepare = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
++        label: Some("external_surfaces_prepare"),
++    });
++    for job in jobs.iter().filter(|job| job.clear) {
++        let view = job.snapshot.create_view(&wgpu::TextureViewDescriptor::default());
++        drop(prepare.begin_render_pass(&wgpu::RenderPassDescriptor {
++            label: Some("dmabuf_snapshot_clear"),
++            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
++                view: &view,
++                resolve_target: None,
++                ops: wgpu::Operations {
++                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
++                    store: wgpu::StoreOp::Store,
++                },
++                depth_slice: None,
++            })],
++            ..Default::default()
++        }));
++    }
++    prepare.transition_resources(
++        std::iter::empty(),
++        jobs.iter().map(|job| wgpu::TextureTransition {
++            texture: &job.snapshot,
++            selector: None,
++            state: wgpu::TextureUses::COPY_DST,
++        }),
++    );
++    let mut copy = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
++        label: Some("external_surfaces_copy"),
++    });
++    record_raw(device, &mut copy, jobs)?;
++    Ok([prepare.finish(), copy.finish()])
++}
++
++/// Records, raw, each job's acquire from the foreign queue family, copy into its snapshot (which wgpu left in
++/// `TRANSFER_DST_OPTIMAL` and finds there again) and release to the foreign queue family.
++fn record_raw(device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, jobs: &[CopyJob]) -> Result<()> {
++    let (raw, family) = {
++        // SAFETY: the guard is only read and dropped at the end of this block.
++        let hal_device = unsafe { device.as_hal::<vulkan::Api>() }.context("the device is not Vulkan")?;
++        (hal_device.raw_device().clone(), hal_device.queue_family_index())
++    };
++    let snapshots = jobs
++        .iter()
++        .map(|job| {
++            // SAFETY: the guard is only read and dropped at once; the handle stays valid while `job.snapshot` (held
++            // by the caller until the submission is recorded and by the cache after) lives.
++            let texture = unsafe { job.snapshot.as_hal::<vulkan::Api>() }?;
++            // SAFETY: the handle is only recorded into commands, never destroyed here.
++            Some(unsafe { texture.raw_handle() })
++        })
++        .collect::<Option<Vec<vk::Image>>>()
++        .context("a snapshot is not a Vulkan texture")?;
++    let color = vk::ImageSubresourceRange::default()
++        .aspect_mask(vk::ImageAspectFlags::COLOR)
++        .level_count(1)
++        .layer_count(1);
++    let acquire: Vec<vk::ImageMemoryBarrier<'_>> = jobs
++        .iter()
++        .map(|job| {
++            vk::ImageMemoryBarrier::default()
++                .image(job.source)
++                .subresource_range(color)
++                .src_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
++                .dst_queue_family_index(family)
++                .old_layout(vk::ImageLayout::GENERAL)
++                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
++                .src_access_mask(vk::AccessFlags::empty())
++                .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
++        })
++        .collect();
++    let release: Vec<vk::ImageMemoryBarrier<'_>> = jobs
++        .iter()
++        .map(|job| {
++            vk::ImageMemoryBarrier::default()
++                .image(job.source)
++                .subresource_range(color)
++                .src_queue_family_index(family)
++                .dst_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
++                .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
++                .new_layout(vk::ImageLayout::GENERAL)
++                .src_access_mask(vk::AccessFlags::TRANSFER_READ)
++                .dst_access_mask(vk::AccessFlags::empty())
++        })
++        .collect();
++    let record = |encoder: Option<&mut vulkan::CommandEncoder>| {
++        let encoder = encoder?;
++        // SAFETY: the command buffer is open (wgpu-core opened it for this call) and is only recorded into.
++        let commands = unsafe { encoder.raw_handle() };
++        // SAFETY: every image is alive (the sources are the cache's, the snapshots the jobs'); each source is
++        // released by the producer in GENERAL and owned by the foreign queue family between frames
++        // (VK_EXT_queue_family_foreign is enabled), each snapshot is in TRANSFER_DST_OPTIMAL (the prepare buffer put
++        // it there through wgpu's tracker); the copies are whole 2D images of one format and size.
++        unsafe { record_commands(&raw, commands, jobs, &snapshots, &acquire, &release) };
++        Some(())
++    };
++    // SAFETY: a raw-only encoder (wgpu forbids mixing it with wgpu commands), so wgpu records nothing into it.
++    let recorded = unsafe { encoder.as_hal_mut::<vulkan::Api, _, _>(record) };
++    recorded.context("the copy encoder is not a Vulkan encoder")
++}
++
++/// # Safety
++///
++/// As at the call in [`record_raw`].
++unsafe fn record_commands(
++    raw: &ash::Device,
++    commands: vk::CommandBuffer,
++    jobs: &[CopyJob],
++    snapshots: &[vk::Image],
++    acquire: &[vk::ImageMemoryBarrier<'_>],
++    release: &[vk::ImageMemoryBarrier<'_>],
++) {
++    // SAFETY: see the caller.
++    unsafe {
++        raw.cmd_pipeline_barrier(
++            commands,
++            vk::PipelineStageFlags::TOP_OF_PIPE,
++            vk::PipelineStageFlags::TRANSFER,
++            vk::DependencyFlags::empty(),
++            &[],
++            &[],
++            acquire,
++        );
++    }
++    let layers = vk::ImageSubresourceLayers::default()
++        .aspect_mask(vk::ImageAspectFlags::COLOR)
++        .layer_count(1);
++    for (job, &snapshot) in jobs.iter().zip(snapshots) {
++        let region = vk::ImageCopy::default()
++            .src_subresource(layers)
++            .dst_subresource(layers)
++            .extent(vk::Extent3D {
++                width: job.width,
++                height: job.height,
++                depth: 1,
++            });
++        // SAFETY: see the caller.
++        unsafe {
++            raw.cmd_copy_image(
++                commands,
++                job.source,
++                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
++                snapshot,
++                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
++                &[region],
++            );
++        }
++    }
++    // SAFETY: see the caller.
++    unsafe {
++        raw.cmd_pipeline_barrier(
++            commands,
++            vk::PipelineStageFlags::TRANSFER,
++            vk::PipelineStageFlags::BOTTOM_OF_PIPE,
++            vk::DependencyFlags::empty(),
++            &[],
++            &[],
++            release,
++        );
++    }
++}
++
++/// A `VkImage` over `buffer`'s memory: the modifier's tiling with every plane's layout, bound to a dedicated
++/// allocation importing the buffer's dmabuf.
++fn create_image(device: &vulkan::Device, buffer: &DmaBuffer, format: &Format) -> Result<(vk::Image, vk::DeviceMemory)> {
++    let raw = device.raw_device();
++    let plane_layouts: Vec<vk::SubresourceLayout> = buffer
++        .planes
++        .iter()
++        .map(|plane| vk::SubresourceLayout {
++            offset: u64::from(plane.offset),
++            size: 0,
++            row_pitch: u64::from(plane.stride),
++            array_pitch: 0,
++            depth_pitch: 0,
++        })
++        .collect();
++    let mut modifier_info = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
++        .drm_format_modifier(buffer.modifier)
++        .plane_layouts(&plane_layouts);
++    let mut external_info =
++        vk::ExternalMemoryImageCreateInfo::default().handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
++    // `initial_layout` UNDEFINED is what an external-memory image must be created with; no barrier ever transitions
++    // from it (every acquire names GENERAL, the layout the producer hands buffers over in).
++    let image_info = vk::ImageCreateInfo::default()
++        .image_type(vk::ImageType::TYPE_2D)
++        .format(format.vk)
++        .extent(vk::Extent3D {
++            width: buffer.width,
++            height: buffer.height,
++            depth: 1,
++        })
++        .mip_levels(1)
++        .array_layers(1)
++        .samples(vk::SampleCountFlags::TYPE_1)
++        .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
++        .usage(vk::ImageUsageFlags::TRANSFER_SRC)
++        .sharing_mode(vk::SharingMode::EXCLUSIVE)
++        .initial_layout(vk::ImageLayout::UNDEFINED)
++        .push_next(&mut external_info)
++        .push_next(&mut modifier_info);
++    // SAFETY: the device has VK_EXT_image_drm_format_modifier and the external memory extensions (`open_device`), and
++    // `check_buffer` matched the format, the modifier and its plane count against what the device reports it imports
++    // as a copy source; every chained struct lives until the call returns.
++    let image = unsafe { raw.create_image(&image_info, None) }.context("vkCreateImage")?;
++    match bind_imported_memory(device, image, buffer) {
++        Ok(memory) => Ok((image, memory)),
++        Err(error) => {
++            // SAFETY: the image was created above, bound to nothing and used by nothing.
++            unsafe { raw.destroy_image(image, None) };
++            Err(error)
++        }
++    }
++}
++
++/// Allocates memory importing `buffer`'s dmabuf for `image` and binds it.
++fn bind_imported_memory(device: &vulkan::Device, image: vk::Image, buffer: &DmaBuffer) -> Result<vk::DeviceMemory> {
++    let raw = device.raw_device();
++    let instance = device.shared_instance().raw_instance();
++    let first = buffer.planes.first().ok_or_else(|| anyhow!("no planes"))?;
++    let fd = first.fd.try_clone().context("dup the dmabuf fd")?;
++    let fd_device = ash::khr::external_memory_fd::Device::new(instance, raw);
++    let mut fd_properties = vk::MemoryFdPropertiesKHR::default();
++    // SAFETY: VK_KHR_external_memory_fd is enabled on this device; `fd` is an open dmabuf this function owns.
++    unsafe {
++        fd_device.get_memory_fd_properties(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT, fd.as_raw_fd(), &mut fd_properties)
++    }
++    .context("vkGetMemoryFdPropertiesKHR")?;
++    // SAFETY: `image` was created on this device and is not bound yet.
++    let requirements = unsafe { raw.get_image_memory_requirements(image) };
++    let type_bits = requirements.memory_type_bits & fd_properties.memory_type_bits;
++    ensure!(type_bits != 0, "no memory type fits both the image and the dmabuf");
++    let mut import = vk::ImportMemoryFdInfoKHR::default()
++        .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
++        .fd(fd.as_raw_fd());
++    let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().image(image);
++    let allocate = vk::MemoryAllocateInfo::default()
++        .allocation_size(requirements.size)
++        .memory_type_index(type_bits.trailing_zeros())
++        .push_next(&mut import)
++        .push_next(&mut dedicated);
++    // SAFETY: the memory type is one both the image and the dmabuf accept, the allocation is dedicated to `image`,
++    // and `fd` is open. On success Vulkan owns the fd (released from `OwnedFd` below without closing it); on failure
++    // it stays ours and `fd` closes it as it drops.
++    let memory = unsafe { raw.allocate_memory(&allocate, None) }.context("vkAllocateMemory (dmabuf import)")?;
++    let _owned_by_vulkan = fd.into_raw_fd();
++    // SAFETY: `memory` was allocated for `image` (dedicated, of its size) and neither is bound or in use.
++    if let Err(error) = unsafe { raw.bind_image_memory(image, memory, 0) } {
++        // SAFETY: `memory` was allocated above and is bound to nothing.
++        unsafe { raw.free_memory(memory, None) };
++        bail!("vkBindImageMemory: {error}");
++    }
++    Ok(memory)
++}
+diff -ruN a/src/external_surface.rs b/src/external_surface.rs
+--- a/src/external_surface.rs
++++ b/src/external_surface.rs
+@@ -0,0 +1,616 @@
++//! External surfaces on Linux (an agterm-rs patch): draws `gpui::ExternalSurface` frames — dmabufs a producer
++//! rendered on this GPU, and CPU pixels uploaded by damaged rectangle into a texture kept per surface — and opens the
++//! Vulkan device so that it can import dmabufs.
++//!
++//! - Device ([`device`]): wgpu enables `VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf` where
++//!   supported but never `VK_EXT_image_drm_format_modifier` (needed to describe any GPU-rendered buffer) nor
++//!   `VK_EXT_queue_family_foreign` (needed to take a buffer over from its producer), so [`open_device`] opens the
++//!   adapter through wgpu-hal's `open_with_callback` adding them. [`record_caps`] publishes what the device imports
++//!   (`gpui::dmabuf_import_caps`): its DRM render node (`VK_EXT_physical_device_drm`) and the formats and modifiers it
++//!   copies from an imported dmabuf.
++//! - Import ([`import`]): one raw `VkImage` per producer buffer with its modifier and every memory plane's layout (a
++//!   non-disjoint image: Intel's CCS modifiers keep three planes in one object), checked against the capabilities
++//!   first, bound to a dedicated allocation importing the dmabuf, never handed to wgpu. Each new frame is acquired from
++//!   the foreign queue family in `GENERAL`, copied on the GPU into a wgpu texture (the buffer's snapshot, which the
++//!   renderer samples) and released back; redraws of the same frame sample the snapshot alone. wgpu cannot hold the
++//!   imported image itself: its first use would be an `UNDEFINED` layout transition, which lets the driver discard
++//!   the producer's pixels, and it never transfers queue-family ownership. Imports are cached per `gpui::DmaBuffer`
++//!   and destroyed once the producer dropped the buffer and the GPU finished the last copy from it.
++//! - Completion ([`completion`]): a frame reports `Presented` once the GPU finished the submission that copied or
++//!   first drew it — from then on the renderer never reads the producer's buffer for it — `Lost` when that cannot be
++//!   known (device lost), `Discarded` when it was never submitted, `Failed` when it does not import.
++//! - Acquire: the producer's rendering must be finished before a frame is handed over (the caller waits on the
++//!   producer's fence); the renderer adds no wait of its own.
++
++mod completion;
++mod device;
++mod import;
++
++pub(crate) use device::{open_device, record_caps};
++
++use anyhow::{Result, anyhow, bail, ensure};
++use ash::vk;
++use collections::FxHashMap;
++use completion::Timeline;
++use gpui::external_surface_counters as counters;
++use gpui::{DmaBufFrame, DmaBuffer, ExternalSurface, FrameOutcome, PaintSurface, PixelFrame, PixelSurface};
++use import::{CopyJob, RawImage};
++use std::sync::{Arc, Weak};
++use std::time::Duration;
++use wgpu::hal::vulkan;
++
++/// `fourcc_code` of `drm_fourcc.h`.
++const fn fourcc(code: &[u8; 4]) -> u32 {
++    u32::from_le_bytes(*code)
++}
++
++/// A DRM format the renderer draws: its Vulkan and wgpu formats, and whether its fourth channel is padding.
++struct Format {
++    fourcc: u32,
++    vk: vk::Format,
++    wgpu: wgpu::TextureFormat,
++    opaque: bool,
++}
++
++/// The formats an external surface may have: 8-bit RGB with alpha or padding, in either byte order. DRM names
++/// channels from the most significant bit of a little-endian word, so `AR24` (ARGB8888) is B, G, R, A in memory.
++const FORMATS: [Format; 4] = [
++    Format {
++        fourcc: fourcc(b"AR24"),
++        vk: vk::Format::B8G8R8A8_UNORM,
++        wgpu: wgpu::TextureFormat::Bgra8Unorm,
++        opaque: false,
++    },
++    Format {
++        fourcc: fourcc(b"XR24"),
++        vk: vk::Format::B8G8R8A8_UNORM,
++        wgpu: wgpu::TextureFormat::Bgra8Unorm,
++        opaque: true,
++    },
++    Format {
++        fourcc: fourcc(b"AB24"),
++        vk: vk::Format::R8G8B8A8_UNORM,
++        wgpu: wgpu::TextureFormat::Rgba8Unorm,
++        opaque: false,
++    },
++    Format {
++        fourcc: fourcc(b"XB24"),
++        vk: vk::Format::R8G8B8A8_UNORM,
++        wgpu: wgpu::TextureFormat::Rgba8Unorm,
++        opaque: true,
++    },
++];
++
++fn format_of(fourcc: u32) -> Option<&'static Format> {
++    FORMATS.iter().find(|format| format.fourcc == fourcc)
++}
++
++fn fourcc_name(fourcc: u32) -> String {
++    fourcc
++        .to_le_bytes()
++        .iter()
++        .map(|&byte| if byte.is_ascii_graphic() { char::from(byte) } else { '?' })
++        .collect()
++}
++
 +
 +// MARK: - the renderer's side
 +
-+/// A dmabuf imported for a producer's buffer, kept while the buffer lives.
++/// A producer's buffer as the renderer holds it: the imported image and the snapshot the renderer samples.
 +struct Import {
 +    buffer: Weak<DmaBuffer>,
++    source: RawImage,
++    snapshot: wgpu::Texture,
 +    view: wgpu::TextureView,
-+    _texture: wgpu::Texture,
 +    opaque: bool,
++    /// The snapshot's initializing clear was submitted.
++    initialized: bool,
++    /// The frame whose pixels the snapshot holds (its copy was submitted); weak, so its address stays its own.
++    copied: Option<Weak<DmaBufFrame>>,
++    /// The timeline value of the last submission that copied from `source` (0: none, or known finished).
++    last_use: u64,
 +}
 +
 +/// The texture of a CPU-pixel surface.
@@ -431,7 +1041,18 @@ diff -ruN a/src/external_surface.rs b/src/external_surface.rs
 +
 +type Callback = Box<dyn FnOnce(FrameOutcome) + Send>;
 +
-+/// The renderer's external surfaces: imports, pixel textures, this frame's draws and the frames waiting to complete.
++/// What `prepare` recorded for the frame about to be submitted; the cache learns of it only once it was submitted.
++#[derive(Default)]
++struct Pending {
++    /// The copies recorded: (import key, frame).
++    copies: Vec<(usize, Weak<DmaBufFrame>)>,
++    /// Their command buffers, submitted before the frame's own.
++    command_buffers: Vec<wgpu::CommandBuffer>,
++    /// The completions of frames this frame copies or draws for the first time.
++    completing: Vec<Callback>,
++}
++
++/// The renderer's external surfaces: imports, pixel textures, this frame's draws and pending work.
 +#[derive(Default)]
 +pub(crate) struct ExternalSurfaces {
 +    /// By `Arc::as_ptr` of the buffer: the weak reference keeps the allocation, so the address is not reused while
@@ -440,12 +1061,15 @@ diff -ruN a/src/external_surface.rs b/src/external_surface.rs
 +    /// Buffers that did not import, keyed as `imports`, with why: a frame shown again is not imported again.
 +    failed: FxHashMap<usize, (Weak<DmaBuffer>, String)>,
 +    pixels: FxHashMap<usize, PixelTexture>,
++    /// Imported images whose buffer is gone, with the last timeline value that used them.
++    retired: Vec<(RawImage, u64)>,
 +    /// One bind group per `scene.surfaces` entry, in scene order; `None` when that frame is not drawn.
 +    draws: Vec<Option<wgpu::BindGroup>>,
-+    /// The completions of frames this frame draws for the first time.
-+    completing: Vec<Callback>,
++    pending: Pending,
 +    timeline: Option<Timeline>,
 +    timeline_failed: bool,
++    /// The device the raw images belong to, kept alive while any exists.
++    device: Option<(wgpu::Device, ash::Device)>,
 +}
 +
 +/// Uniforms of one external surface draw (`ExternalSurfaceParams` in shaders.wgsl).
@@ -472,13 +1096,14 @@ diff -ruN a/src/external_surface.rs b/src/external_surface.rs
 +        self.draws.get(index).and_then(Option::as_ref)
 +    }
 +
-+    /// Imports, uploads and binds this frame's surfaces, and forgets what their producers dropped.
++    /// Imports, copies, uploads and binds this frame's surfaces, and forgets what their producers dropped.
 +    pub(crate) fn prepare(&mut self, resources: &Resources<'_>, surfaces: &[PaintSurface]) {
-+        self.forget_dropped();
++        self.retire();
 +        self.draws.clear();
++        let mut jobs = Vec::new();
 +        for surface in surfaces {
 +            let drawn = match &surface.source {
-+                ExternalSurface::DmaBuf(frame) => self.dmabuf_view(resources.device, &frame.buffer),
++                ExternalSurface::DmaBuf(frame) => self.dmabuf_view(resources.device, frame, &mut jobs),
 +                ExternalSurface::Pixels(frame) => self.pixel_view(resources, frame).map(|view| (view, false)),
 +            };
 +            match drawn {
@@ -491,7 +1116,7 @@ diff -ruN a/src/external_surface.rs b/src/external_surface.rs
 +                    };
 +                    self.draws.push(Some(bind_group(resources, &view, &params)));
 +                    if let Some(callback) = surface.source.completion().take() {
-+                        self.completing.push(callback);
++                        self.pending.completing.push(callback);
 +                    }
 +                }
 +                Err(error) => {
@@ -500,70 +1125,174 @@ diff -ruN a/src/external_surface.rs b/src/external_surface.rs
 +                }
 +            }
 +        }
++        if jobs.is_empty() {
++            return;
++        }
++        match import::record(resources.device, &jobs) {
++            Ok(command_buffers) => {
++                counters::add(&counters::COPIES, jobs.len() as u64);
++                self.pending.command_buffers.extend(command_buffers);
++                self.pending
++                    .copies
++                    .extend(jobs.into_iter().map(|job| (job.key, job.frame)));
++            }
++            Err(error) => log::error!("external surfaces: recording the dmabuf copies failed: {error:#}"),
++        }
 +    }
 +
-+    /// Before the frame's submission: has it signal the completion timeline when frames complete with it.
++    /// The command buffers to submit before the frame's own (the copies), taken.
++    pub(crate) fn command_buffers(&mut self) -> Vec<wgpu::CommandBuffer> {
++        std::mem::take(&mut self.pending.command_buffers)
++    }
++
++    /// Before the frame's submission: has it signal the timeline when it copies or first draws a frame.
 +    pub(crate) fn before_submit(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<u64> {
-+        if self.completing.is_empty() {
++        if self.pending.completing.is_empty() && self.pending.copies.is_empty() {
 +            return None;
 +        }
 +        if self.timeline.is_none() && !self.timeline_failed {
-+            match Timeline::new(device) {
-+                Ok(timeline) => self.timeline = Some(timeline),
-+                Err(error) => {
-+                    log::error!("external surfaces: no completion timeline ({error:#}); frames report presented at submit");
-+                    self.timeline_failed = true;
++            // SAFETY: the guard is only checked and dropped at once.
++            let vulkan = unsafe { device.as_hal::<vulkan::Api>() }.is_some();
++            if vulkan {
++                match Timeline::new(device) {
++                    Ok(timeline) => self.timeline = Some(timeline),
++                    Err(error) => {
++                        log::error!("external surfaces: no completion timeline ({error:#}); waiting for each frame");
++                        self.timeline_failed = true;
++                    }
 +                }
++            } else {
++                // Not Vulkan (GL): no dmabuf imports here, and CPU pixels are copied at submission.
++                self.timeline_failed = true;
 +            }
 +        }
-+        let timeline = self.timeline.as_mut()?;
-+        timeline.next += 1;
-+        let value = timeline.next;
-+        // SAFETY: the guard is only used to queue the signal and is dropped before `submit`.
-+        let hal_queue = unsafe { queue.as_hal::<vulkan::Api>() }?;
-+        hal_queue.add_signal_semaphore(timeline.semaphore, Some(value));
-+        Some(value)
++        self.timeline.as_mut()?.signal(queue)
 +    }
 +
-+    /// After the frame's submission (`signal` from [`Self::before_submit`]): the frames it drew complete when the GPU
-+    /// finished it.
-+    pub(crate) fn after_submit(&mut self, signal: Option<u64>) {
-+        let callbacks = std::mem::take(&mut self.completing);
-+        if callbacks.is_empty() {
-+            return;
-+        }
-+        match (signal, &self.timeline) {
-+            (Some(value), Some(timeline)) => timeline.complete_at(value, callbacks),
-+            _ => {
++    /// After the frame's `submission` (`signal` from [`Self::before_submit`]): the copies it recorded join the cache,
++    /// and its frames complete once the GPU finished it.
++    pub(crate) fn after_submit(
++        &mut self,
++        device: &wgpu::Device,
++        submission: wgpu::SubmissionIndex,
++        signal: Option<u64>,
++    ) {
++        let copies = std::mem::take(&mut self.pending.copies);
++        let callbacks = std::mem::take(&mut self.pending.completing);
++        let (last_use, outcome) = match (signal, &self.timeline) {
++            (Some(value), Some(_)) => (value, None),
++            _ if copies.is_empty() => (0, Some(FrameOutcome::Presented)),
++            _ => match device.poll(wgpu::PollType::Wait {
++                submission_index: Some(submission),
++                timeout: Some(Duration::from_secs(10)),
++            }) {
++                Ok(_) => (0, Some(FrameOutcome::Presented)),
++                Err(error) => (u64::MAX, Some(FrameOutcome::Lost(format!("waiting for the frame: {error}")))),
++            },
++        };
++        match (outcome, &self.timeline) {
++            (Some(outcome), _) => {
 +                for callback in callbacks {
-+                    callback(FrameOutcome::Presented);
++                    callback(outcome.clone());
 +                }
++            }
++            (None, Some(timeline)) => timeline.complete_at(last_use, callbacks),
++            (None, None) => {}
++        }
++        for (key, frame) in copies {
++            if let Some(import) = self.imports.get_mut(&key) {
++                import.initialized = true;
++                import.copied = Some(frame);
++                import.last_use = last_use;
 +            }
 +        }
 +    }
 +
-+    fn forget_dropped(&mut self) {
-+        let before = self.imports.len();
-+        self.imports.retain(|_, import| import.buffer.strong_count() > 0);
-+        counters::add(&counters::IMPORTS_RELEASED, (before - self.imports.len()) as u64);
++    /// The frame was not submitted (recording it failed): its copies are forgotten and its frames discarded.
++    pub(crate) fn abort_frame(&mut self) {
++        self.pending.copies.clear();
++        self.pending.command_buffers.clear();
++        for callback in self.pending.completing.drain(..) {
++            callback(FrameOutcome::Discarded);
++        }
++    }
++
++    /// Forgets what producers dropped; destroys imported images the GPU is done with.
++    fn retire(&mut self) {
++        let mut released = 0;
++        let mut kept = FxHashMap::default();
++        for (key, import) in self.imports.drain() {
++            if import.buffer.strong_count() > 0 {
++                kept.insert(key, import);
++            } else {
++                released += 1;
++                self.retired.push((import.source, import.last_use));
++            }
++        }
++        self.imports = kept;
++        counters::add(&counters::IMPORTS_RELEASED, released);
 +        self.failed.retain(|_, (buffer, _)| buffer.strong_count() > 0);
 +        self.pixels.retain(|_, texture| texture.surface.strong_count() > 0);
++        if self.retired.is_empty() {
++            return;
++        }
++        let reached = self.timeline.as_ref().map_or(0, Timeline::reached);
++        let Some((_, raw)) = &self.device else {
++            return;
++        };
++        let (done, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.retired)
++            .into_iter()
++            .partition(|(_, last_use)| *last_use <= reached);
++        self.retired = waiting;
++        for (image, _) in done {
++            // SAFETY: the producer dropped the buffer, no frame of it is pending, and the GPU reached the last
++            // submission that copied from the image; it was created on this device.
++            unsafe { image.destroy(raw) };
++        }
 +    }
 +
-+    fn dmabuf_view(&mut self, device: &wgpu::Device, buffer: &Arc<DmaBuffer>) -> Result<(wgpu::TextureView, bool)> {
++    fn dmabuf_view(
++        &mut self,
++        device: &wgpu::Device,
++        frame: &Arc<DmaBufFrame>,
++        jobs: &mut Vec<CopyJob>,
++    ) -> Result<(wgpu::TextureView, bool)> {
++        let buffer = &frame.buffer;
 +        let key = Arc::as_ptr(buffer) as usize;
-+        if let Some(import) = self.imports.get(&key) {
-+            return Ok((import.view.clone(), import.opaque));
-+        }
 +        if let Some((_, reason)) = self.failed.get(&key) {
 +            bail!("{reason}");
 +        }
++        if !self.imports.contains_key(&key) {
++            self.import(device, buffer, key)?;
++        }
++        let import = self.imports.get(&key).ok_or_else(|| anyhow!("import missing"))?;
++        let frame_ptr = Arc::as_ptr(frame);
++        let copied = import.copied.as_ref().is_some_and(|copied| copied.as_ptr() == frame_ptr);
++        let queued = jobs
++            .iter()
++            .any(|job| job.key == key && job.frame.as_ptr() == frame_ptr);
++        if !copied && !queued {
++            let clear = !import.initialized && !jobs.iter().any(|job| job.key == key);
++            jobs.push(CopyJob {
++                key,
++                frame: Arc::downgrade(frame),
++                source: import.source.image,
++                snapshot: import.snapshot.clone(),
++                width: buffer.width,
++                height: buffer.height,
++                clear,
++            });
++        }
++        Ok((import.view.clone(), import.opaque))
++    }
++
++    fn import(&mut self, device: &wgpu::Device, buffer: &Arc<DmaBuffer>, key: usize) -> Result<()> {
 +        let caps = gpui::dmabuf_import_caps().ok_or_else(|| anyhow!("the renderer has no device yet"))?;
-+        let imported = check_buffer(&caps, buffer).and_then(|format| {
-+            let texture = import_dmabuf(device, buffer, format)?;
-+            Ok((texture, format.opaque))
++        let imported = import::check_buffer(&caps, buffer).and_then(|format| {
++            let source = RawImage::import(device, buffer, format)?;
++            Ok((source, format))
 +        });
-+        let (texture, opaque) = match imported {
++        let (source, format) = match imported {
 +            Ok(imported) => imported,
 +            Err(error) => {
 +                counters::add(&counters::IMPORT_FAILURES, 1);
@@ -580,18 +1309,29 @@ diff -ruN a/src/external_surface.rs b/src/external_surface.rs
 +                return Err(error);
 +            }
 +        };
++        if self.device.is_none() {
++            // SAFETY: the guard is only read and dropped at once; the ash device stays valid while the wgpu device
++            // kept beside it lives.
++            let raw = unsafe { device.as_hal::<vulkan::Api>() }.map(|hal| hal.raw_device().clone());
++            self.device = raw.map(|raw| (device.clone(), raw));
++        }
 +        counters::add(&counters::IMPORTS, 1);
-+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
++        let snapshot = import::create_snapshot(device, buffer, format);
++        let view = snapshot.create_view(&wgpu::TextureViewDescriptor::default());
 +        self.imports.insert(
 +            key,
 +            Import {
 +                buffer: Arc::downgrade(buffer),
-+                view: view.clone(),
-+                _texture: texture,
-+                opaque,
++                source,
++                snapshot,
++                view,
++                opaque: format.opaque,
++                initialized: false,
++                copied: None,
++                last_use: 0,
 +            },
 +        );
-+        Ok((view, opaque))
++        Ok(())
 +    }
 +
 +    fn pixel_view(&mut self, resources: &Resources<'_>, frame: &PixelFrame) -> Result<wgpu::TextureView> {
@@ -651,9 +1391,29 @@ diff -ruN a/src/external_surface.rs b/src/external_surface.rs
 +
 +impl Drop for ExternalSurfaces {
 +    fn drop(&mut self) {
++        self.abort_frame();
 +        counters::add(&counters::IMPORTS_RELEASED, self.imports.len() as u64);
-+        // Frames bound for a submission that never happened: their completions report `Discarded` as they drop.
-+        self.completing.clear();
++        // Every submission that copied from an imported image must be finished before the image goes.
++        let settled = self.timeline.as_ref().is_none_or(Timeline::settle);
++        self.timeline = None;
++        let images: Vec<(RawImage, u64)> = self
++            .imports
++            .drain()
++            .map(|(_, import)| (import.source, import.last_use))
++            .chain(std::mem::take(&mut self.retired))
++            .collect();
++        let Some((_, raw)) = &self.device else {
++            return;
++        };
++        for (image, last_use) in images {
++            if settled && last_use != u64::MAX {
++                // SAFETY: the GPU finished every submission that used the image (the timeline settled, or each copy
++                // was waited for), and nothing records commands any more; it was created on this device.
++                unsafe { image.destroy(raw) };
++            } else {
++                log::warn!("external surfaces: a dmabuf copy never finished; its imported image is leaked");
++            }
++        }
 +    }
 +}
 +
@@ -771,309 +1531,6 @@ diff -ruN a/src/external_surface.rs b/src/external_surface.rs
 +    }
 +}
 +
-+// MARK: - import
-+
-+/// The format `buffer` is drawn as, if the device imports it as it is: its format and modifier among the device's,
-+/// with the modifier's plane count, every plane in one buffer object, a size the device takes.
-+fn check_buffer(caps: &DmaBufImportCaps, buffer: &DmaBuffer) -> Result<&'static Format> {
-+    if let Some(reason) = &caps.unsupported {
-+        bail!("the renderer's device imports no dmabufs: {reason}");
-+    }
-+    let format = format_of(buffer.fourcc).ok_or_else(|| anyhow!("unsupported format {}", fourcc_name(buffer.fourcc)))?;
-+    let modifiers = caps
-+        .formats
-+        .iter()
-+        .find(|candidate| candidate.fourcc == buffer.fourcc)
-+        .map(|candidate| candidate.modifiers.as_slice())
-+        .unwrap_or_default();
-+    let modifier = modifiers
-+        .iter()
-+        .find(|candidate| candidate.modifier == buffer.modifier)
-+        .ok_or_else(|| anyhow!("the device does not import {} with this modifier", fourcc_name(buffer.fourcc)))?;
-+    ensure!(
-+        buffer.planes.len() == modifier.plane_count as usize,
-+        "{} planes, the modifier has {}",
-+        buffer.planes.len(),
-+        modifier.plane_count
-+    );
-+    ensure!(buffer.width > 0 && buffer.height > 0, "empty buffer");
-+    ensure!(
-+        planes_share_one_object(buffer)?,
-+        "planes in separate buffer objects (a disjoint image is not supported)"
-+    );
-+    Ok(format)
-+}
-+
-+/// Whether every plane's fd is the same dmabuf (one inode per exported buffer object).
-+fn planes_share_one_object(buffer: &DmaBuffer) -> Result<bool> {
-+    let identity = |fd: &OwnedFd| -> Result<(u64, u64)> {
-+        let file = std::fs::File::from(fd.try_clone().context("dup a plane fd")?);
-+        let metadata = file.metadata().context("fstat a plane fd")?;
-+        Ok((metadata.dev(), metadata.ino()))
-+    };
-+    let mut planes = buffer.planes.iter();
-+    let Some(first) = planes.next() else {
-+        return Ok(false);
-+    };
-+    let first = identity(&first.fd)?;
-+    for plane in planes {
-+        if identity(&plane.fd)? != first {
-+            return Ok(false);
-+        }
-+    }
-+    Ok(true)
-+}
-+
-+/// Imports `buffer` (checked by [`check_buffer`]) as a sampled texture of `device`.
-+fn import_dmabuf(device: &wgpu::Device, buffer: &DmaBuffer, format: &Format) -> Result<wgpu::Texture> {
-+    let size = wgpu::Extent3d {
-+        width: buffer.width,
-+        height: buffer.height,
-+        depth_or_array_layers: 1,
-+    };
-+    let hal_texture = {
-+        // SAFETY: the guard is dropped at the end of this block, before the device is used through wgpu again.
-+        let hal_device = unsafe { device.as_hal::<vulkan::Api>() }.context("the device is not Vulkan")?;
-+        let (image, memory) = create_image(&hal_device, buffer, format)?;
-+        let desc = hal::TextureDescriptor {
-+            label: Some("dmabuf"),
-+            size,
-+            mip_level_count: 1,
-+            sample_count: 1,
-+            dimension: wgpu::TextureDimension::D2,
-+            format: format.wgpu,
-+            usage: wgpu::TextureUses::RESOURCE,
-+            memory_flags: hal::MemoryFlags::empty(),
-+            view_formats: vec![],
-+        };
-+        // SAFETY: `image` was created on this device as `desc` describes (2D, one mip, one sample, the format's
-+        // `vk::Format`, sampled usage) and is bound to `memory`, which the texture now owns: wgpu-hal destroys the
-+        // image and frees the memory when wgpu drops the texture, after the GPU is done with it.
-+        unsafe { hal_device.texture_from_raw(image, &desc, None, vulkan::TextureMemory::Dedicated(memory)) }
-+    };
-+    // SAFETY: `hal_texture` belongs to this device and matches the descriptor; its memory is initialized (the
-+    // producer rendered it), so wgpu must not clear it, which a texture from hal never is.
-+    Ok(unsafe {
-+        device.create_texture_from_hal::<vulkan::Api>(
-+            hal_texture,
-+            &wgpu::TextureDescriptor {
-+                label: Some("dmabuf"),
-+                size,
-+                mip_level_count: 1,
-+                sample_count: 1,
-+                dimension: wgpu::TextureDimension::D2,
-+                format: format.wgpu,
-+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
-+                view_formats: &[],
-+            },
-+        )
-+    })
-+}
-+
-+/// A `VkImage` over `buffer`'s memory: the modifier's tiling with every plane's layout, bound to a dedicated
-+/// allocation importing the buffer's dmabuf.
-+fn create_image(device: &vulkan::Device, buffer: &DmaBuffer, format: &Format) -> Result<(vk::Image, vk::DeviceMemory)> {
-+    let raw = device.raw_device();
-+    let plane_layouts: Vec<vk::SubresourceLayout> = buffer
-+        .planes
-+        .iter()
-+        .map(|plane| vk::SubresourceLayout {
-+            offset: u64::from(plane.offset),
-+            size: 0,
-+            row_pitch: u64::from(plane.stride),
-+            array_pitch: 0,
-+            depth_pitch: 0,
-+        })
-+        .collect();
-+    let mut modifier_info = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
-+        .drm_format_modifier(buffer.modifier)
-+        .plane_layouts(&plane_layouts);
-+    let mut external_info =
-+        vk::ExternalMemoryImageCreateInfo::default().handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
-+    let image_info = vk::ImageCreateInfo::default()
-+        .image_type(vk::ImageType::TYPE_2D)
-+        .format(format.vk)
-+        .extent(vk::Extent3D {
-+            width: buffer.width,
-+            height: buffer.height,
-+            depth: 1,
-+        })
-+        .mip_levels(1)
-+        .array_layers(1)
-+        .samples(vk::SampleCountFlags::TYPE_1)
-+        .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
-+        .usage(vk::ImageUsageFlags::SAMPLED)
-+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
-+        .initial_layout(vk::ImageLayout::UNDEFINED)
-+        .push_next(&mut external_info)
-+        .push_next(&mut modifier_info);
-+    // SAFETY: the device has VK_EXT_image_drm_format_modifier and the external memory extensions (`open_device`), and
-+    // `check_buffer` matched the format, the modifier and its plane count against what the device reports it imports
-+    // as a sampled image; every chained struct lives until the call returns.
-+    let image = unsafe { raw.create_image(&image_info, None) }.context("vkCreateImage")?;
-+    match bind_imported_memory(device, image, buffer) {
-+        Ok(memory) => Ok((image, memory)),
-+        Err(error) => {
-+            // SAFETY: the image was created above, bound to nothing and used by nothing.
-+            unsafe { raw.destroy_image(image, None) };
-+            Err(error)
-+        }
-+    }
-+}
-+
-+/// Allocates memory importing `buffer`'s dmabuf for `image` and binds it.
-+fn bind_imported_memory(device: &vulkan::Device, image: vk::Image, buffer: &DmaBuffer) -> Result<vk::DeviceMemory> {
-+    let raw = device.raw_device();
-+    let instance = device.shared_instance().raw_instance();
-+    let first = buffer.planes.first().ok_or_else(|| anyhow!("no planes"))?;
-+    let fd = first.fd.try_clone().context("dup the dmabuf fd")?;
-+    let fd_device = ash::khr::external_memory_fd::Device::new(instance, raw);
-+    let mut fd_properties = vk::MemoryFdPropertiesKHR::default();
-+    // SAFETY: VK_KHR_external_memory_fd is enabled on this device; `fd` is an open dmabuf this function owns.
-+    unsafe {
-+        fd_device.get_memory_fd_properties(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT, fd.as_raw_fd(), &mut fd_properties)
-+    }
-+    .context("vkGetMemoryFdPropertiesKHR")?;
-+    // SAFETY: `image` was created on this device and is not bound yet.
-+    let requirements = unsafe { raw.get_image_memory_requirements(image) };
-+    let type_bits = requirements.memory_type_bits & fd_properties.memory_type_bits;
-+    ensure!(type_bits != 0, "no memory type fits both the image and the dmabuf");
-+    let mut import = vk::ImportMemoryFdInfoKHR::default()
-+        .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
-+        .fd(fd.as_raw_fd());
-+    let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().image(image);
-+    let allocate = vk::MemoryAllocateInfo::default()
-+        .allocation_size(requirements.size)
-+        .memory_type_index(type_bits.trailing_zeros())
-+        .push_next(&mut import)
-+        .push_next(&mut dedicated);
-+    // SAFETY: the memory type is one both the image and the dmabuf accept, the allocation is dedicated to `image`,
-+    // and `fd` is open. On success Vulkan owns the fd (released from `OwnedFd` below without closing it); on failure
-+    // it stays ours and `fd` closes it as it drops.
-+    let memory = unsafe { raw.allocate_memory(&allocate, None) }.context("vkAllocateMemory (dmabuf import)")?;
-+    let _owned_by_vulkan = fd.into_raw_fd();
-+    // SAFETY: `memory` was allocated for `image` (dedicated, of its size) and neither is bound or in use.
-+    if let Err(error) = unsafe { raw.bind_image_memory(image, memory, 0) } {
-+        // SAFETY: `memory` was allocated above and is bound to nothing.
-+        unsafe { raw.free_memory(memory, None) };
-+        bail!("vkBindImageMemory: {error}");
-+    }
-+    Ok(memory)
-+}
-+
-+// MARK: - completion
-+
-+/// A timeline semaphore each drawing submission signals, and the thread that reports frames once their submission
-+/// finished.
-+struct Timeline {
-+    semaphore: vk::Semaphore,
-+    raw: ash::Device,
-+    next: u64,
-+    sender: Option<mpsc::Sender<(u64, Vec<Callback>)>>,
-+    thread: Option<std::thread::JoinHandle<bool>>,
-+    /// Keeps the device (and so `raw` and `semaphore`) alive until the thread ended.
-+    _device: wgpu::Device,
-+}
-+
-+impl Timeline {
-+    fn new(device: &wgpu::Device) -> Result<Self> {
-+        let raw = {
-+            // SAFETY: the guard is dropped at the end of this block; the ash device it hands out stays valid while
-+            // `device` lives, which this value keeps.
-+            let hal_device = unsafe { device.as_hal::<vulkan::Api>() }.context("the device is not Vulkan")?;
-+            hal_device.raw_device().clone()
-+        };
-+        let mut timeline = vk::SemaphoreTypeCreateInfo::default()
-+            .semaphore_type(vk::SemaphoreType::TIMELINE)
-+            .initial_value(0);
-+        // SAFETY: the device was opened with Vulkan 1.2 and the timeline semaphore feature (`missing_requirements`).
-+        let semaphore = unsafe {
-+            raw.create_semaphore(&vk::SemaphoreCreateInfo::default().push_next(&mut timeline), None)
-+        }
-+        .context("vkCreateSemaphore (timeline)")?;
-+        let (sender, receiver) = mpsc::channel::<(u64, Vec<Callback>)>();
-+        let waiter = raw.clone();
-+        let thread = std::thread::Builder::new()
-+            .name("gpui-external-surfaces".to_owned())
-+            .spawn(move || wait_completions(&waiter, semaphore, &receiver));
-+        let thread = match thread {
-+            Ok(thread) => thread,
-+            Err(error) => {
-+                // SAFETY: the semaphore was created above and nothing waits on or signals it.
-+                unsafe { raw.destroy_semaphore(semaphore, None) };
-+                bail!("the completion thread did not start: {error}");
-+            }
-+        };
-+        Ok(Self {
-+            semaphore,
-+            raw,
-+            next: 0,
-+            sender: Some(sender),
-+            thread: Some(thread),
-+            _device: device.clone(),
-+        })
-+    }
-+
-+    fn complete_at(&self, value: u64, callbacks: Vec<Callback>) {
-+        if let Some(sender) = &self.sender
-+            && let Err(mpsc::SendError((_, callbacks))) = sender.send((value, callbacks))
-+        {
-+            for callback in callbacks {
-+                callback(FrameOutcome::Failed("the completion thread ended".to_owned()));
-+            }
-+        }
-+    }
-+}
-+
-+impl Drop for Timeline {
-+    fn drop(&mut self) {
-+        self.sender = None;
-+        let all_reached = self.thread.take().is_some_and(|thread| thread.join().unwrap_or(false));
-+        if all_reached {
-+            // SAFETY: the thread waited every value any submission signals (each value is sent to it right after
-+            // its submission), so no queue operation and no wait refers to the semaphore any more.
-+            unsafe { self.raw.destroy_semaphore(self.semaphore, None) };
-+        } else {
-+            log::warn!("external surfaces: a submission never finished; its timeline semaphore is leaked");
-+        }
-+    }
-+}
-+
-+/// The completion thread: for each submission in order, waits until the GPU reached its value and reports its frames.
-+/// Returns whether every value was reached.
-+fn wait_completions(raw: &ash::Device, semaphore: vk::Semaphore, receiver: &mpsc::Receiver<(u64, Vec<Callback>)>) -> bool {
-+    let mut all_reached = true;
-+    for (value, callbacks) in receiver {
-+        let outcome = match wait_value(raw, semaphore, value) {
-+            Ok(()) => FrameOutcome::Presented,
-+            Err(error) => {
-+                all_reached = false;
-+                FrameOutcome::Failed(format!("{error:#}"))
-+            }
-+        };
-+        for callback in callbacks {
-+            callback(outcome.clone());
-+        }
-+    }
-+    all_reached
-+}
-+
-+fn wait_value(raw: &ash::Device, semaphore: vk::Semaphore, value: u64) -> Result<()> {
-+    let semaphores = [semaphore];
-+    let values = [value];
-+    let info = vk::SemaphoreWaitInfo::default().semaphores(&semaphores).values(&values);
-+    let deadline = Instant::now() + COMPLETION_TIMEOUT;
-+    loop {
-+        // SAFETY: the semaphore and device stay alive while this thread runs (`Timeline` joins it before destroying
-+        // the semaphore and keeps the device); waiting needs no external synchronization.
-+        match unsafe { raw.wait_semaphores(&info, Duration::from_millis(100).as_nanos() as u64) } {
-+            Ok(()) => return Ok(()),
-+            Err(vk::Result::TIMEOUT) if Instant::now() < deadline => {}
-+            Err(vk::Result::TIMEOUT) => bail!("the GPU did not finish the frame in {COMPLETION_TIMEOUT:?}"),
-+            Err(error) => bail!("waiting for the frame's submission: {error}"),
-+        }
-+    }
-+}
 diff -ruN a/src/gpui_wgpu.rs b/src/gpui_wgpu.rs
 --- a/src/gpui_wgpu.rs
 +++ b/src/gpui_wgpu.rs
@@ -1271,7 +1728,17 @@ diff -ruN a/src/wgpu_renderer.rs b/src/wgpu_renderer.rs
              },
              atlas,
              path_globals_offset,
-@@ -1497,6 +1524,8 @@
+@@ -1472,6 +1499,9 @@
+             .inspect_err(|_| {
+                 // Queue writes are staged before encoding; flush them even if the frame fails.
+                 self.resources.queue.submit(std::iter::empty());
++                // External surfaces (agterm-rs patch): the frame's copies were not submitted.
++                #[cfg(target_os = "linux")]
++                self.resources.external_surfaces.abort_frame();
+             })
+     }
+ 
+@@ -1497,6 +1527,8 @@
                  )
              })?;
          self.prepare_texture_bind_groups(scene);
@@ -1280,7 +1747,7 @@ diff -ruN a/src/wgpu_renderer.rs b/src/wgpu_renderer.rs
  
          let mut encoder =
              self.resources()
-@@ -1609,20 +1638,56 @@
+@@ -1609,20 +1641,66 @@
                              &mut pass,
                          )?;
                      }
@@ -1306,19 +1773,30 @@ diff -ruN a/src/wgpu_renderer.rs b/src/wgpu_renderer.rs
              }
          }
  
++        // External surfaces (agterm-rs patch): their dmabuf copies go first, and the submission signals the
++        // completion timeline when it copies or first draws a frame.
 +        #[cfg(target_os = "linux")]
-+        let completion = {
++        let (copies, completion) = {
 +            let resources = &mut self.resources;
-+            resources
++            let completion = resources
 +                .external_surfaces
-+                .before_submit(&resources.device, &resources.queue)
++                .before_submit(&resources.device, &resources.queue);
++            (resources.external_surfaces.command_buffers(), completion)
 +        };
++        #[cfg(not(target_os = "linux"))]
++        let copies: Vec<wgpu::CommandBuffer> = Vec::new();
          let submission = self
              .resources()
              .queue
-             .submit(std::iter::once(encoder.finish()));
+-            .submit(std::iter::once(encoder.finish()));
++            .submit(copies.into_iter().chain(std::iter::once(encoder.finish())));
 +        #[cfg(target_os = "linux")]
-+        self.resources.external_surfaces.after_submit(completion);
++        {
++            let resources = &mut self.resources;
++            resources
++                .external_surfaces
++                .after_submit(&resources.device, submission.clone(), completion);
++        }
          Ok(submission)
      }
  

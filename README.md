@@ -32,7 +32,8 @@ agterm in Rust, Linux first: a GTK4/libadwaita terminal over libghostty, driven 
   CI sets it, which fails it instead. The nested-niri activation check (niri inside a headless weston) is
   `#[ignore]`d, since CI has no niri: `cargo test -p agterm-gpui --test instance -- --ignored`. The external texture
   test (`--test external_texture`, dmabufs drawn by GPUI's headless renderer) runs on lavapipe and on the first render
-  node a Mesa Vulkan driver runs; its synthetic dmabufs need read-write access to `/dev/udmabuf` (skipped without).
+  node a Mesa Vulkan driver runs; its synthetic dmabufs need read-write access to `/dev/udmabuf` (`modprobe udmabuf`;
+  skipped without, failed under `AGTERM_REQUIRE_DISPLAY_TESTS`), its hardware case GBM and EGL.
 - For the conformance suite: Python 3.11+ with venv, weston and dbus-daemon (each instance gets its own headless
   weston and bus); zsh or fish as the login shell for the Live tests of that shell.
 
