@@ -108,15 +108,13 @@ pub struct Sprite {
 type Key = (u32, u32, CellMetrics);
 
 /// The sprites rasterized so far on this thread, by code point, width in cells and metrics, each with an atlas id of
-/// its own. Every font size adds its sprites; past [`CACHE_LIMIT`] the cache starts over (the ids keep counting, so
-/// an atlas tile is never reused for another mask).
+/// its own. It grows as GPUI's glyph atlas does, one entry per sprite drawn per cell size, and never forgets one: the
+/// atlas keeps every tile under its id, so an entry dropped here would strand its tile and upload the mask again.
 #[derive(Default)]
 struct Cache {
     sprites: HashMap<Key, Rc<Sprite>>,
     next_id: u64,
 }
-
-const CACHE_LIMIT: usize = 8192;
 
 thread_local! {
     static CACHE: RefCell<Cache> = RefCell::new(Cache::default());
@@ -134,9 +132,6 @@ pub fn sprite(codepoint: u32, metrics: &CellMetrics, cells: u32) -> Option<Rc<Sp
         let mask = rasterize(codepoint, metrics, cells)?;
         if mask.width == 0 || mask.height == 0 {
             return None;
-        }
-        if cache.sprites.len() >= CACHE_LIMIT {
-            cache.sprites.clear();
         }
         cache.next_id += 1;
         let sprite = Rc::new(Sprite {

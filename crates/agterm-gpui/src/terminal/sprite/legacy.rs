@@ -9,7 +9,7 @@ use super::block::{
 };
 use super::box_drawing::{Style, arms, diagonal_cross, lines_char};
 use super::canvas::{Canvas, Path};
-use super::common::{Alignment, Corner, Edge, Fraction, ON, Quads, Shade, Thickness, fill, int, round};
+use super::common::{Alignment, Corner, Edge, Fraction, ON, Quads, Shade, Thickness, fill, index, int, round};
 use super::geometric::corner_triangle_shade;
 
 const ONE_THIRD: f64 = 1.0 / 3.0;
@@ -71,11 +71,6 @@ pub(super) fn draw(cp: u32, canvas: &mut Canvas, m: &CellMetrics) {
         0x1fbe0..=0x1fbef => circles(cp, canvas, m),
         _ => {}
     }
-}
-
-/// `cp - base` as an index.
-fn index(cp: u32, base: u32) -> usize {
-    usize::try_from(cp.saturating_sub(base)).unwrap_or(0)
 }
 
 /// The edges of the edge triangles, in code point order.
