@@ -239,4 +239,34 @@ mod tests {
         let red = pane.frame().frame.rows[0].cells()[3].foreground;
         assert!(red.is_some(), "the program's SGR 31 was applied whole");
     }
+
+    #[test]
+    fn a_clear_waiting_on_a_clipboard_read_goes_in_with_its_dispatch() {
+        let dir = tempfile::tempdir().unwrap();
+        // the clipboard read is the last thing the program writes: its BEL ends the batch
+        let command = PaneCommand::new("/bin/sh")
+            .arg("-c")
+            .arg("stty -echo; printf 'one\\r\\ntwo\\033]52;c;?\\007'; exec sleep 5")
+            .cwd(dir.path());
+        let pane = Pane::spawn(&command, &PaneConfig::new(SIZE)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let read = loop {
+            let found = pane.take_events().into_iter().find_map(|event| match event {
+                crate::PaneEvent::ClipboardRead(read) => Some(read),
+                _ => None,
+            });
+            if let Some(read) = found {
+                break read;
+            }
+            assert!(Instant::now() < deadline, "no clipboard read");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        // the IO thread waits for the answer inside the OSC: not at ground, so the clear waits
+        assert!(pane.clear_screen());
+        assert!(lock(&pane.shared().vt).pending_clear);
+        pane.answer_clipboard_read(read.id, crate::ClipboardAnswer::Denied);
+        // the dispatch byte reached ground and the clear went in, with no more output from the program
+        wait_line(&pane, 0, "two");
+        assert!(!lock(&pane.shared().vt).pending_clear);
+    }
 }
