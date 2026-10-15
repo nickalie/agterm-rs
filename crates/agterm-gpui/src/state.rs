@@ -831,6 +831,24 @@ impl AppState {
         self.settle();
     }
 
+    /// Window `window` took the keyboard: it is the key window and becomes frontmost, except on the focus the window
+    /// manager grants a new window when it maps it (`first`), which arrives after the open, so after any command that
+    /// took frontmost since: that later command keeps it, as on macOS, where a new window is key before the open
+    /// returns.
+    pub fn window_activated(&mut self, window: Uuid, first: bool) {
+        self.set_key_window(Some(window));
+        let library = self.core.library();
+        if first
+            && let Some(frontmost) = library.frontmost_window_id
+            && frontmost != window
+            && library.is_open(frontmost)
+        {
+            tracing::debug!(%window, %frontmost, "a new window's first focus came after frontmost moved on");
+            return;
+        }
+        self.report_frontmost(window);
+    }
+
     /// The user activated window `window`: it becomes frontmost (upstream's `WindowAccessor.reportFrontmost`).
     pub fn report_frontmost(&mut self, window: Uuid) {
         if self.quitting {

@@ -500,6 +500,32 @@ fn an_activated_window_becomes_frontmost_unless_quitting() {
 }
 
 #[test]
+fn a_new_windows_first_focus_leaves_frontmost_to_a_later_command() {
+    let mut library = WindowLibrary::seeded("/home/u");
+    let first = library.active_window_id().unwrap();
+    let second = library.new_window(None);
+    let mut state = AppState::new(core(library, None));
+    // `window.new` made the second window frontmost, then `window.select` took it back before the window manager
+    // focused the newly mapped second window
+    state.report_frontmost(second);
+    state.report_frontmost(first);
+    state.window_activated(second, true);
+    assert_eq!(state.key_window(), Some(second), "it holds the keyboard");
+    assert_eq!(
+        state.core.library().frontmost_window_id,
+        Some(first),
+        "the later command keeps frontmost"
+    );
+    // the first focus of a window still frontmost, and any later activation, are the user's
+    state.window_activated(second, false);
+    assert_eq!(state.core.library().frontmost_window_id, Some(second));
+    let third = state.core.library_mut().new_window(None);
+    state.report_frontmost(third);
+    state.window_activated(third, true);
+    assert_eq!(state.core.library().frontmost_window_id, Some(third));
+}
+
+#[test]
 fn sidebar_actions_select_sessions_and_fold_workspaces() {
     let (mut state, window, first) = state_with_terminal();
     let store = state.core.library_mut().store_mut(window).unwrap();

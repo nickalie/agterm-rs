@@ -146,15 +146,22 @@ impl WindowView {
         });
         crate::keymap_dispatch::register_window(window.window_handle(), KeyOrigin::Window(id));
         let posting = poster.clone();
+        let fresh = Rc::new(Cell::new(true));
+        let expiring = Rc::clone(&fresh);
+        window.on_next_frame(move |_, cx| {
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(FIRST_FOCUS_GRACE).await;
+                expiring.set(false);
+            })
+            .detach();
+        });
         let activation = cx.observe_window_activation(window, move |_, window, cx| {
             if !window.is_window_active() {
                 check_keyboard_left(cx);
             }
             if window.is_window_active() {
-                post(&posting, move |state: &mut AppState| {
-                    state.set_key_window(Some(id));
-                    state.report_frontmost(id);
-                });
+                let first = fresh.replace(false);
+                post(&posting, move |state: &mut AppState| state.window_activated(id, first));
             } else {
                 post(&posting, move |state: &mut AppState| state.key_window_lost(id));
             }
@@ -334,6 +341,11 @@ impl Render for WindowView {
 /// How long after a window loses the keyboard the monitor checks whether another agterm window took it (the GTK
 /// build's `LEAVE_CHECK_DELAY`): the next window's activation comes after this one's deactivation.
 const LEAVE_CHECK_DELAY: Duration = Duration::from_millis(150);
+
+/// How long after its first frame a new window's first activation still counts as the focus the window manager grants
+/// on mapping it ([`AppState::window_activated`]): that one follows the map at once, while a window left unfocused then
+/// is activated later only by the user, whose activation always counts.
+const FIRST_FOCUS_GRACE: Duration = Duration::from_secs(1);
 
 /// A window lost the keyboard: once the next activation had its chance, the key monitor forgets its consumed keys
 /// when no agterm window holds the keyboard.
