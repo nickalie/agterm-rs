@@ -10,9 +10,9 @@
 //! a 12-point font is 16 logical pixels; everything is computed and rounded in device pixels (logical × the window's
 //! scale), as Ghostty does, and converted back to logical pixels for GPUI.
 //!
-//! Residual (plan > Task 13 result): GPUI's public text system exposes neither the font's line gap nor its underline
-//! metrics, so the face's line gap counts as 0 (the cell is shorter than libghostty's for a font whose `hhea` line gap
-//! is not 0; most monospace fonts have none) and underline and strikethrough come from Ghostty's own estimates.
+//! The face's line gap and underline come from the font through `TextSystem::font_metrics` (GPUI patch 0002, plan >
+//! Task 15); GPUI reads no strikeout metrics, so the strikethrough keeps Ghostty's estimates. The box thickness, which
+//! the procedural sprites draw their lines with, is the underline's, as in Ghostty.
 
 use gpui_kit::{FontId, Pixels, TextSystem, px};
 
@@ -170,26 +170,41 @@ impl CellMetrics {
 const PRINTABLE_ASCII: std::ops::RangeInclusive<char> = ' '..='~';
 
 /// Measures the face `font_id` at `size` device pixels through GPUI's text system (its metrics scale linearly, so a
-/// device-pixel size gives device-pixel metrics).
+/// device-pixel size gives device-pixel metrics): the font's own metrics (`TextSystem::font_metrics`, GPUI patch 0002)
+/// and the widest printable ASCII advance.
 #[must_use]
 pub fn measure(text: &TextSystem, font_id: FontId, size: Pixels) -> FaceMetrics {
     let cell_width = PRINTABLE_ASCII
         .filter_map(|ch| text.advance(font_id, size, ch).ok())
         .map(|advance| f64::from(f32::from(advance.width)))
         .fold(0.0, f64::max);
+    let font = text.font_metrics(font_id);
+    let units_per_em = f64::from(font.units_per_em.max(1));
+    let scaled = |units: f32| f64::from(units) / units_per_em * f64::from(f32::from(size));
+    let (underline_position, underline_thickness) =
+        underline(scaled(font.underline_position), scaled(font.underline_thickness));
     FaceMetrics {
         cell_width,
-        ascent: f64::from(f32::from(text.ascent(font_id, size))),
-        // GPUI's descent is below the baseline already (negative); keep Ghostty's sign whatever the backend says
-        descent: -f64::from(f32::from(text.descent(font_id, size))).abs(),
-        line_gap: 0.0,
-        underline_position: None,
-        underline_thickness: None,
+        ascent: scaled(font.ascent),
+        // below the baseline, so negative, whatever sign the backend gives it
+        descent: -scaled(font.descent).abs(),
+        line_gap: scaled(font.line_gap).max(0.0),
+        underline_position,
+        underline_thickness,
+        // GPUI reads no strikeout metrics: Ghostty's estimates stand in
         strikethrough_position: None,
         strikethrough_thickness: None,
-        cap_height: Some(f64::from(f32::from(text.cap_height(font_id, size)))),
-        ex_height: Some(f64::from(f32::from(text.x_height(font_id, size)))),
+        cap_height: Some(scaled(font.cap_height)),
+        ex_height: Some(scaled(font.x_height)),
     }
+}
+
+/// The underline's position and thickness as Ghostty takes them from a font's `post` table: a zero thickness is a
+/// broken table (Ghostty estimates it), and so is a zero position along with it; a nonzero position stands alone.
+fn underline(position: f64, thickness: f64) -> (Option<f64>, Option<f64>) {
+    let broken = thickness == 0.0;
+    let position = (!broken || position != 0.0).then_some(position);
+    (position, (!broken).then_some(thickness))
 }
 
 /// The cell metrics of `font_id` at `points` on a display of `scale`.

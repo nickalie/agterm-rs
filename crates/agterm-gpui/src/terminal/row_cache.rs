@@ -12,6 +12,7 @@ use std::sync::Arc;
 use agterm_term::{CellFlags, CellWidth, Colors, Frame, Row, SearchState, Underline};
 
 use super::colors::{Mark, Palette, cell_paint};
+use super::sprite;
 
 /// Columns `start..start + len` of a row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -71,12 +72,25 @@ pub struct Decoration {
     pub alpha: u8,
 }
 
+/// A cell the procedural sprites draw instead of the font (box drawing, blocks, powerline, braille, …).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SpriteCell {
+    pub col: u16,
+    /// 2 for a wide character.
+    pub cells: u16,
+    pub codepoint: u32,
+    pub color: agterm_term::Rgb,
+    pub alpha: u8,
+}
+
 /// Everything a row draws, in columns.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RowLayout {
     /// Backgrounds other than the default, merged across equal neighbours.
     pub backgrounds: Vec<Span<agterm_term::Rgb>>,
     pub runs: Vec<TextRun>,
+    /// Cells drawn by the sprites, which end the text run around them.
+    pub sprites: Vec<SpriteCell>,
     pub decorations: Vec<Span<Decoration>>,
 }
 
@@ -226,6 +240,17 @@ pub fn layout_row(row: &Row, colors: &Colors, palette: &Palette, marks: &RowMark
         }
         if cell.width == 0 {
             // a spacer: no text of its own, and the run goes on past it
+            continue;
+        }
+        if let Some((style, codepoint)) = cell.style.zip(sprite::of_text(cell.text)) {
+            layout.runs.extend(current.take());
+            layout.sprites.push(SpriteCell {
+                col: cell.col,
+                cells: cell.width,
+                codepoint,
+                color: style.color,
+                alpha: style.alpha,
+            });
             continue;
         }
         match cell.style {

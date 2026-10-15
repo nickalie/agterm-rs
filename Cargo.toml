@@ -89,6 +89,9 @@ gpui-pre-wgpu = "=0.3.9"
 # agterm-gpui reads the native key behind a key event (`current_native_input`, a patch of ours) from GPUI's Linux
 # platform, the crate gpui-kit already links.
 gpui-pre-linux = { version = "=0.3.9", default-features = false }
+# agterm-gpui's procedural sprites (box drawing, blocks, powerline, braille) fill and stroke their paths with it, as
+# Ghostty's sprite font does with z2d. No PNG codec (`png-format`): the sprites only rasterize.
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
 # agterm-gpui's single instance: GApplication's own D-Bus protocol (`org.gtk.Application`, `org.gtk.Actions`) on the
 # app id's bus name, so GTK and GPUI launches forward to each other.
 zbus = "5.19"

@@ -1,7 +1,8 @@
 //! The external texture element against GPUI's real renderer, patched (`vendor/gpui-pre-wgpu`): dmabufs imported into
 //! its Vulkan device (acquired from the foreign queue family and copied on the GPU), CPU pixels by damaged rectangle,
 //! clipping, the paint order, frame outcomes and import lifetime, rendered by GPUI's headless wgpu renderer and read
-//! back. No display and no compositor: Vulkan only.
+//! back; and the coverage masks the terminal's sprites paint with (`Window::paint_alpha_mask`, patch 0003). No
+//! display and no compositor: Vulkan only.
 //!
 //! GPUI's headless renderer opens one device per process, so this harness (no libtest) runs each GPU in a child
 //! process of its own, with an environment built from scratch (no display, no session bus, no `AGTERM_*`/`ZMX_*`):

@@ -1700,6 +1700,16 @@ pub enum AtlasKey {
     Glyph(RenderGlyphParams),
     Svg(RenderSvgParams),
     Image(RenderImageParams),
+    AlphaMask(RenderAlphaMaskParams),
+}
+
+/// The atlas key of a coverage mask its caller rasterized (`Window::paint_alpha_mask`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RenderAlphaMaskParams {
+    /// Who paints the mask, keeping callers' ids apart.
+    pub owner: &'static str,
+    /// Unique per mask content within `owner`: masks painted under one key share the first one's tile.
+    pub id: u64,
 }
 
 impl AtlasKey {
@@ -1715,7 +1725,7 @@ impl AtlasKey {
                     AtlasTextureKind::Monochrome
                 }
             }
-            AtlasKey::Svg(_) => AtlasTextureKind::Monochrome,
+            AtlasKey::Svg(_) | AtlasKey::AlphaMask(_) => AtlasTextureKind::Monochrome,
             AtlasKey::Image(_) => AtlasTextureKind::Polychrome,
         }
     }
@@ -1736,6 +1746,12 @@ impl From<RenderSvgParams> for AtlasKey {
 impl From<RenderImageParams> for AtlasKey {
     fn from(params: RenderImageParams) -> Self {
         Self::Image(params)
+    }
+}
+
+impl From<RenderAlphaMaskParams> for AtlasKey {
+    fn from(params: RenderAlphaMaskParams) -> Self {
+        Self::AlphaMask(params)
     }
 }
 

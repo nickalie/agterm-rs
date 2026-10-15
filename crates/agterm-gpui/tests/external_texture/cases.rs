@@ -2,7 +2,8 @@
 //!
 //! A [`Fixture`] is a headless GPUI app with one 64x32 window (128x64 device pixels at the test window's scale of 2)
 //! showing an [`ExternalTexture`]; every frame is rendered and read back. Counters come from
-//! `gpui::external_surface_stats`, process-wide, so cases compare before and after.
+//! `gpui::external_surface_stats`, process-wide, so cases compare before and after. The last case paints the coverage
+//! masks of GPUI patch 0003 (the terminal's sprites) in a window of its own, on the same renderer.
 
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
@@ -15,9 +16,10 @@ use agterm_gpui::external_texture::{
 };
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    AppContext as _, Context, DmaBufImportCaps, ExternalSurfaceStats, FrameOutcome, HeadlessAppContext, Hsla,
-    IntoElement, NoopTextSystem, ParentElement as _, PixelRect, Render, Styled as _, Window, WindowBounds,
-    WindowHandle, WindowOptions, div, external_surface_stats, point, px, size,
+    App, AppContext as _, Bounds, Context, DevicePixels, DmaBufImportCaps, ExternalSurfaceStats, FrameOutcome,
+    HeadlessAppContext, Hsla, IntoElement, NoopTextSystem, ParentElement as _, PixelRect, Pixels, Render,
+    RenderAlphaMaskParams, Styled as _, Window, WindowBounds, WindowHandle, WindowOptions, canvas, div,
+    external_surface_stats, point, px, size,
 };
 
 use crate::buffers::{AR24, Udmabuf, XR24};
@@ -43,7 +45,7 @@ pub struct Gpu {
 
 pub type Case = fn(&Gpu) -> Outcome;
 
-pub const CASES: [(&str, Case); 11] = [
+pub const CASES: [(&str, Case); 12] = [
     ("caps", caps),
     ("dmabuf_draws", dmabuf_draws),
     ("dmabuf_import_is_kept_per_buffer", dmabuf_import_is_kept_per_buffer),
@@ -61,6 +63,10 @@ pub const CASES: [(&str, Case); 11] = [
     ),
     ("shm_uploads_its_damage", shm_uploads_its_damage),
     ("clipped_and_drawn_under_overlays", clipped_and_drawn_under_overlays),
+    (
+        "alpha_masks_cover_whole_device_pixels",
+        alpha_masks_cover_whole_device_pixels,
+    ),
 ];
 
 /// Runs the cases `filter` selects on `gpu`; the child's exit code.
@@ -734,5 +740,90 @@ fn clipped_and_drawn_under_overlays(_: &Gpu) -> Outcome {
     shot.expect(8, 8, GREEN, "the overlay drawn after the texture")?;
     shot.expect(40, 40, RED, "the texture inside its box")?;
     shot.expect(100, 40, BLACK, "the texture clipped by its box")?;
+    Ok(Verdict::Passed)
+}
+
+// MARK: - coverage masks (GPUI patch 0003, the terminal's sprites)
+
+/// A 10x4 device-pixel mask: full coverage but for a hole at (3, 1).
+const MASK: (i32, i32) = (10, 4);
+
+fn mask_bytes() -> Vec<u8> {
+    let mut bytes = vec![u8::MAX; 40];
+    bytes[10 + 3] = 0;
+    bytes
+}
+
+/// Two masks side by side, ten device pixels apart, as two sprite cells meet.
+struct Masks;
+
+impl Render for Masks {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let paint = |_: Bounds<Pixels>, (): (), window: &mut Window, _: &mut App| {
+            let scale = window.scale_factor();
+            for left in [0.0, 10.0] {
+                let params = RenderAlphaMaskParams {
+                    owner: "agterm.test",
+                    id: 1,
+                };
+                let mask = size(DevicePixels(MASK.0), DevicePixels(MASK.1));
+                let origin = point(px(left / scale), px(0.));
+                if let Err(error) = window.paint_alpha_mask(origin, params, red(), || Some((mask, mask_bytes()))) {
+                    eprintln!("the mask was not painted: {error:#}");
+                }
+            }
+        };
+        div()
+            .size_full()
+            .bg(black())
+            .child(canvas(|_, _, _| {}, paint).size_full())
+    }
+}
+
+fn red() -> Hsla {
+    gpui_kit::rgb(0xff_0000).into()
+}
+
+/// The masks land on whole device pixels, one texel each, tinted, the second reusing the first one's tile: two cells
+/// meet without a gap or an overlap, and a hole stays a hole.
+fn alpha_masks_cover_whole_device_pixels(_: &Gpu) -> Outcome {
+    let mut cx = HeadlessAppContext::with_platform(
+        Arc::new(NoopTextSystem),
+        Arc::new(()),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    let window = cx
+        .update(|cx| {
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(gpui_kit::Bounds {
+                        origin: point(px(0.), px(0.)),
+                        size: size(px(64.), px(32.)),
+                    })),
+                    focus: false,
+                    show: false,
+                    ..Default::default()
+                },
+                |_, cx| cx.new(|_| Masks),
+            )
+        })
+        .map_err(|error| format!("the window did not open: {error:#}"))?;
+    let handle = window.into();
+    cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+        .map_err(|error| format!("rendering: {error:#}"))?;
+    let image = cx
+        .capture_screenshot(handle)
+        .map_err(|error| format!("reading back: {error:#}"))?;
+    let shot = Shot {
+        width: image.width(),
+        raw: image.into_raw(),
+    };
+    for y in 0..5 {
+        for x in 0..21 {
+            let hole = y == 1 && (x == 3 || x == 13);
+            let expected = if x < 20 && y < 4 && !hole { RED } else { BLACK };
+            shot.expect(x, y, expected, "the masks' coverage")?;
+        }
+    }
     Ok(Verdict::Passed)
 }

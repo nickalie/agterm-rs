@@ -27,7 +27,7 @@ use gpui_kit::{
 };
 
 use super::colors::{self, Mark, Palette, Pick};
-use super::element::{cursor_alpha, cursor_colors, cursor_shape};
+use super::element::{cursor_alpha, cursor_colors, cursor_shape, lock_cursor};
 use super::font::{self, Fonts};
 use super::metrics::{self, CellMetrics, FaceMetrics, Geometry, Padding};
 use super::row_cache::{Cluster, Line, RowCache, RowMarks, Span, layout_row, search_marks};
@@ -225,19 +225,22 @@ fn a_known_font_measures_as_ghostty_measures_it() {
 
 #[test]
 fn the_first_installed_family_wins_and_the_rest_fall_back() {
-    let installed = |family: &str| ["DejaVu Sans Mono", "Liberation Mono", "Hack"].contains(&family);
+    let installed =
+        |family: &str| ["DejaVu Sans Mono", "Liberation Mono", "Hack", font::SYMBOLS_FAMILY].contains(&family);
     let config = agterm_core::ghostty_config::Font {
-        family: vec!["Missing Mono".into(), "Hack".into()],
+        family: vec!["Missing Mono".into(), "Hack".into(), "DejaVu Sans Mono".into()],
         family_bold: vec!["Liberation Mono".into()],
         feature: vec!["-calt".into(), "ss01, liga=0".into(), "zero on".into(), "bogus".into()],
         ..agterm_core::ghostty_config::Font::default()
     };
     let fonts = Fonts::resolve(&config, &installed);
     assert_eq!(fonts.regular.family.as_ref(), "Hack");
+    // the configured families after the primary, then the default family where installed (not here), then the
+    // symbols font
     let fallbacks = fonts.regular.fallbacks.as_ref().map(|f| f.fallback_list().to_vec());
     assert_eq!(
         fallbacks,
-        Some(vec!["DejaVu Sans Mono".to_owned(), "Liberation Mono".to_owned()])
+        Some(vec!["DejaVu Sans Mono".to_owned(), font::SYMBOLS_FAMILY.to_owned()])
     );
     assert_eq!(fonts.bold.family.as_ref(), "Liberation Mono");
     assert_eq!(fonts.bold.weight, gpui_kit::FontWeight::BOLD);
@@ -253,10 +256,10 @@ fn the_first_installed_family_wins_and_the_rest_fall_back() {
             ("zero".to_owned(), 1)
         ]
     );
-    // nothing configured: Ghostty's default if installed, else the next monospace family
+    // nothing configured: Ghostty's default, which the app embeds
     let unset = Fonts::resolve(&agterm_core::ghostty_config::Font::default(), &installed);
-    assert_eq!(unset.regular.family.as_ref(), "DejaVu Sans Mono");
-    assert_eq!(font::DEFAULT_FAMILIES[0], "JetBrains Mono");
+    assert_eq!(unset.regular.family.as_ref(), "JetBrains Mono");
+    assert_eq!(font::DEFAULT_FAMILIES, ["JetBrains Mono"]);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -575,6 +578,36 @@ fn the_cursor_shape_follows_focus_blink_and_visibility() {
     assert_eq!(cursor_shape(&cursor, true, true), None, "scrolled out of the viewport");
 }
 
+#[test]
+fn a_password_prompt_shows_the_lock_whatever_the_cursor() {
+    let mut cursor = agterm_term::Cursor {
+        position: Some(CursorPosition {
+            column: 3,
+            row: 1,
+            wide_tail: false,
+        }),
+        visible: false,
+        blinking: true,
+        password_input: false,
+        style: CursorStyle::Bar,
+    };
+    assert_eq!(lock_cursor(&cursor), None, "no password, no lock");
+    cursor.password_input = true;
+    assert_eq!(
+        lock_cursor(&cursor),
+        Some((3, 1)),
+        "hidden, blinking, a bar: the lock all the same"
+    );
+    cursor.position = Some(CursorPosition {
+        column: 3,
+        row: 1,
+        wide_tail: true,
+    });
+    assert_eq!(lock_cursor(&cursor), Some((2, 1)), "on a wide character's head");
+    cursor.position = None;
+    assert_eq!(lock_cursor(&cursor), None, "scrolled out of the viewport");
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // the element over a real pane
 
@@ -660,6 +693,37 @@ fn glyphs_sit_at_their_clusters_columns(cx: &mut TestAppContext) {
             glyphs.iter().all(|glyph| glyph.x == px(0.)),
             "each glyph starts its cluster"
         );
+    });
+}
+
+#[gpui_kit::test]
+fn sprite_characters_leave_the_font_and_split_the_runs(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    // a ─ ┼ b, a space, a powerline arrow and a braille cell, a space, then a stylized powerline glyph (U+E0C0) the
+    // sprites leave to the font
+    let script = r"printf 'a\342\224\200\342\224\274b \356\202\260\342\243\277 \356\203\200'; exec sleep 5";
+    let terminal = terminal(cx, script, dir.path());
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(&terminal, ViewRole::Owner, cx));
+    wait_painted(&view, cx, "a─┼b");
+    view.read_with(cx, |view, _| {
+        let sprites: Vec<(u16, u32, u16)> = view
+            .row_sprites(0)
+            .expect("row 0 is laid out")
+            .iter()
+            .map(|cell| (cell.col, cell.codepoint, cell.cells))
+            .collect();
+        assert_eq!(
+            sprites,
+            [(1, 0x2500, 1), (2, 0x253c, 1), (5, 0xe0b0, 1), (6, 0x28ff, 1)]
+        );
+        let glyph_cols: Vec<u16> = view
+            .row_glyphs(0)
+            .expect("row 0 is shaped")
+            .glyphs
+            .iter()
+            .map(|glyph| glyph.col)
+            .collect();
+        assert_eq!(glyph_cols, [0, 3, 8], "only a, b and U+E0C0 are shaped");
     });
 }
 
