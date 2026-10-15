@@ -71,6 +71,8 @@ jobs:
         run: scripts/check-tracing-features.sh
       - name: vendored calloop
         run: scripts/vendor-calloop.sh --check
+      - name: vendored GPUI (external surfaces patch)
+        run: scripts/vendor-gpui.sh --check
       # the workspace without the WPE WebKit -sys crates, which the wpe job checks
       - name: clippy
         shell: bash

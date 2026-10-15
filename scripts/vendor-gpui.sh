@@ -9,8 +9,8 @@
 #
 # Each source is the crates.io archive of GPUI_VERSION, verified against the checksum Cargo.lock records for it,
 # unpacked verbatim apart from its Cargo.lock (which pins nothing for a dependency) and, for gpui-pre, its examples/
-# directory (5 MB of demo programs and images no build of ours compiles; the patch drops their [[example]] entries),
-# then patched. Bump GPUI_VERSION and the sums together with gpui-kit's `gpui-pre` pin, run this, and check that the
+# directory (5 MB of demo programs and images no build of ours compiles; Cargo reads a dependency's [[example]]
+# entries without looking for their files), then patched. Bump GPUI_VERSION and the sums together with gpui-kit's `gpui-pre` pin, run this, and check that the
 # patches still apply.
 #
 # Usage: scripts/vendor-gpui.sh           (re)create vendor/gpui-pre and vendor/gpui-pre-wgpu

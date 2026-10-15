@@ -23,8 +23,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use gpui_kit::{
-    DmaBufFrame, DmaBufImportCaps, DmaBuffer, ExternalSurface, FrameCompletion, FrameOutcome, IntoElement,
-    PixelFrame, PixelRect, PixelSurface, Styled, Window, canvas,
+    DmaBufFrame, DmaBufImportCaps, DmaBuffer, ExternalSurface, FrameCompletion, FrameOutcome, IntoElement, PixelFrame,
+    PixelRect, PixelSurface, Styled, Window, canvas,
 };
 
 /// `fourcc_code` of `drm_fourcc.h`: `fourcc(b"XR24")` is XRGB8888.
@@ -55,7 +55,10 @@ pub struct OfferedFormat {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FrameSource {
     /// Dmabufs allocated on `render_node`, GPUI's own GPU, in one of `formats`.
-    DmaBuf { render_node: PathBuf, formats: Vec<OfferedFormat> },
+    DmaBuf {
+        render_node: PathBuf,
+        formats: Vec<OfferedFormat>,
+    },
     /// CPU pixels: dmabuf import cannot work on this device, for `reason`. Documents only (Task 2: 80–115 % CPU on
     /// 1080p video, 2.5 fps on `YouTube`).
     Shm { reason: String },
@@ -334,11 +337,7 @@ impl ExternalTexture {
             return false;
         };
         let ready = match &pending.acquire {
-            Acquire::Implicit => pending
-                .buffer
-                .planes
-                .first()
-                .is_none_or(|plane| fd_signaled(&plane.fd)),
+            Acquire::Implicit => pending.buffer.planes.first().is_none_or(|plane| fd_signaled(&plane.fd)),
             Acquire::SyncFile(fence) => fd_signaled(fence),
         };
         if ready {
@@ -437,7 +436,12 @@ fn copy_region(pixels: &mut [u8], width: u32, height: u32, region: ShmRegion<'_>
     let rect = region.rect;
     let source_stride = rect.width as usize * 4;
     if region.pixels.len() < source_stride * rect.height as usize {
-        tracing::warn!("an SHM region of {}x{} came with {} bytes", rect.width, rect.height, region.pixels.len());
+        tracing::warn!(
+            "an SHM region of {}x{} came with {} bytes",
+            rect.width,
+            rect.height,
+            region.pixels.len()
+        );
         return None;
     }
     let x = rect.x.min(width);

@@ -78,10 +78,16 @@ fn buffer(fourcc: u32, modifier: u64, planes: usize) -> Arc<DmaBuffer> {
     })
 }
 
-/// An outcome callback and where its outcome lands.
+/// An outcome callback and where its outcome lands (nowhere once the test dropped the receiver: a texture dropped at
+/// the end of a test reports its frames discarded).
 fn listener() -> (impl FnOnce(FrameOutcome) + Send + 'static, mpsc::Receiver<FrameOutcome>) {
     let (sender, receiver) = mpsc::channel();
-    (move |outcome| sender.send(outcome).expect("the test listens"), receiver)
+    (
+        move |outcome| {
+            let _ = sender.send(outcome);
+        },
+        receiver,
+    )
 }
 
 // MARK: - negotiation
@@ -188,7 +194,9 @@ fn every_buffer_is_refused_by_a_device_that_imports_none() {
         unsupported: Some("not Vulkan".to_owned()),
         ..intel_caps()
     };
-    assert!(import_refusal(&caps, &buffer(XR24, MODIFIER_LINEAR, 1)).is_some_and(|reason| reason.contains("not Vulkan")));
+    assert!(
+        import_refusal(&caps, &buffer(XR24, MODIFIER_LINEAR, 1)).is_some_and(|reason| reason.contains("not Vulkan"))
+    );
 }
 
 // MARK: - frames, fences and the fall-back
@@ -202,7 +210,11 @@ fn a_frame_shows_only_once_its_sync_file_signals() {
     let mut texture = texture();
     let (reader, mut writer) = std::io::pipe().expect("a pipe");
     let (done, _outcome) = listener();
-    texture.push_dmabuf(buffer(XR24, MODIFIER_LINEAR, 1), Acquire::SyncFile(OwnedFd::from(reader)), done);
+    texture.push_dmabuf(
+        buffer(XR24, MODIFIER_LINEAR, 1),
+        Acquire::SyncFile(OwnedFd::from(reader)),
+        done,
+    );
     assert!(texture.promote_ready(), "still waiting");
     assert!(texture.shown().is_none());
     writer.write_all(b"x").expect("signal");
@@ -224,12 +236,19 @@ fn a_waiting_frame_replaced_by_a_newer_one_is_discarded() {
     let mut texture = texture();
     let (reader, _writer) = std::io::pipe().expect("a pipe");
     let (first, first_outcome) = listener();
-    texture.push_dmabuf(buffer(XR24, MODIFIER_LINEAR, 1), Acquire::SyncFile(OwnedFd::from(reader)), first);
+    texture.push_dmabuf(
+        buffer(XR24, MODIFIER_LINEAR, 1),
+        Acquire::SyncFile(OwnedFd::from(reader)),
+        first,
+    );
     let (second, second_outcome) = listener();
     texture.push_dmabuf(buffer(XR24, MODIFIER_LINEAR, 1), Acquire::Implicit, second);
     assert_eq!(first_outcome.try_recv(), Ok(FrameOutcome::Discarded));
     assert!(!texture.promote_ready());
-    assert!(second_outcome.try_recv().is_err(), "the shown frame waits for the renderer");
+    assert!(
+        second_outcome.try_recv().is_err(),
+        "the shown frame waits for the renderer"
+    );
     texture.clear();
     assert_eq!(second_outcome.try_recv(), Ok(FrameOutcome::Discarded));
 }
@@ -254,7 +273,11 @@ fn a_refused_buffer_fails_its_frame_and_requests_the_fallback_once() {
     texture.push_dmabuf(buffer(XR24, NV_BLOCK_LINEAR, 1), Acquire::Implicit, done);
     assert!(matches!(outcome.try_recv(), Ok(FrameOutcome::Failed(_))));
     assert!(texture.shown().is_none());
-    assert!(texture.take_fallback().is_some_and(|reason| reason.contains("modifier")));
+    assert!(
+        texture
+            .take_fallback()
+            .is_some_and(|reason| reason.contains("modifier"))
+    );
     assert_eq!(texture.take_fallback(), None);
     assert_eq!(texture.fallback(), &Fallback::Taken);
     // The producer is switching to SHM: dmabuf frames still in flight are discarded, SHM frames shown.
@@ -274,11 +297,15 @@ fn a_frame_the_renderer_fails_requests_the_fallback() {
     texture.promote_ready();
     assert_eq!(texture.take_fallback(), None);
     let shown = texture.shown().expect("shown").clone();
-    shown
-        .completion()
-        .complete(FrameOutcome::Failed("vkCreateImage: ERROR_INVALID_DRM_FORMAT_MODIFIER".to_owned()));
+    shown.completion().complete(FrameOutcome::Failed(
+        "vkCreateImage: ERROR_INVALID_DRM_FORMAT_MODIFIER".to_owned(),
+    ));
     assert!(matches!(outcome.try_recv(), Ok(FrameOutcome::Failed(_))));
-    assert!(texture.take_fallback().is_some_and(|reason| reason.contains("vkCreateImage")));
+    assert!(
+        texture
+            .take_fallback()
+            .is_some_and(|reason| reason.contains("vkCreateImage"))
+    );
 }
 
 #[test]
@@ -311,21 +338,40 @@ fn shm_regions_compose_into_the_frame_with_their_damage() {
     let mut texture = texture();
     let (first_rect, first_pixels) = region(rect(0, 0, 4, 2), 1);
     let (done, _outcome) = listener();
-    texture.push_shm(4, 2, [ShmRegion { rect: first_rect, pixels: &first_pixels }], done);
+    texture.push_shm(
+        4,
+        2,
+        [ShmRegion {
+            rect: first_rect,
+            pixels: &first_pixels,
+        }],
+        done,
+    );
     let (first, _) = pixels(texture.shown().expect("shown"));
     assert_eq!(first.serial, 1);
     assert_eq!(first.damage, vec![first_rect]);
 
     let (second_rect, second_pixels) = region(rect(1, 1, 2, 1), 9);
     let (done, _outcome) = listener();
-    texture.push_shm(4, 2, [ShmRegion { rect: second_rect, pixels: &second_pixels }], done);
+    texture.push_shm(
+        4,
+        2,
+        [ShmRegion {
+            rect: second_rect,
+            pixels: &second_pixels,
+        }],
+        done,
+    );
     let (second, bytes) = pixels(texture.shown().expect("shown"));
     assert_eq!(second.serial, 2);
     assert_eq!(second.damage, vec![second_rect]);
     assert!(Arc::ptr_eq(&first.surface, &second.surface), "one texture per surface");
     let row1: Vec<u8> = bytes[16..32].to_vec();
     assert_eq!(row1, [[1u8; 4], [9; 4], [9; 4], [1; 4]].concat());
-    assert!(first.pixels.iter().all(|&byte| byte == 1), "the frame the renderer may still read is untouched");
+    assert!(
+        first.pixels.iter().all(|&byte| byte == 1),
+        "the frame the renderer may still read is untouched"
+    );
 }
 
 #[test]
@@ -338,9 +384,18 @@ fn shm_regions_are_clipped_to_the_frame_and_short_ones_ignored() {
         4,
         2,
         [
-            ShmRegion { rect: overhang, pixels: &overhang_pixels },
-            ShmRegion { rect: rect(0, 0, 2, 2), pixels: &short },
-            ShmRegion { rect: rect(9, 9, 1, 1), pixels: &[0; 4] },
+            ShmRegion {
+                rect: overhang,
+                pixels: &overhang_pixels,
+            },
+            ShmRegion {
+                rect: rect(0, 0, 2, 2),
+                pixels: &short,
+            },
+            ShmRegion {
+                rect: rect(9, 9, 1, 1),
+                pixels: &[0; 4],
+            },
         ],
         done,
     );
@@ -357,7 +412,15 @@ fn a_new_shm_size_starts_a_new_frame() {
     texture.push_shm(4, 2, [], done);
     let (done, _outcome) = listener();
     let (whole, whole_pixels) = region(rect(0, 0, 2, 2), 5);
-    texture.push_shm(2, 2, [ShmRegion { rect: whole, pixels: &whole_pixels }], done);
+    texture.push_shm(
+        2,
+        2,
+        [ShmRegion {
+            rect: whole,
+            pixels: &whole_pixels,
+        }],
+        done,
+    );
     let (frame, bytes) = pixels(texture.shown().expect("shown"));
     assert_eq!((frame.width, frame.height, frame.serial), (2, 2, 1));
     assert_eq!(bytes, vec![5; 16]);

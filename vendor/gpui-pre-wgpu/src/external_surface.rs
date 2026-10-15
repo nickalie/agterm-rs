@@ -404,6 +404,8 @@ pub(crate) struct ExternalSurfaces {
     /// By `Arc::as_ptr` of the buffer: the weak reference keeps the allocation, so the address is not reused while
     /// the entry exists.
     imports: FxHashMap<usize, Import>,
+    /// Buffers that did not import, keyed as `imports`, with why: a frame shown again is not imported again.
+    failed: FxHashMap<usize, (Weak<DmaBuffer>, String)>,
     pixels: FxHashMap<usize, PixelTexture>,
     /// One bind group per `scene.surfaces` entry, in scene order; `None` when that frame is not drawn.
     draws: Vec<Option<wgpu::BindGroup>>,
@@ -511,6 +513,7 @@ impl ExternalSurfaces {
         let before = self.imports.len();
         self.imports.retain(|_, import| import.buffer.strong_count() > 0);
         counters::add(&counters::IMPORTS_RELEASED, (before - self.imports.len()) as u64);
+        self.failed.retain(|_, (buffer, _)| buffer.strong_count() > 0);
         self.pixels.retain(|_, texture| texture.surface.strong_count() > 0);
     }
 
@@ -518,6 +521,9 @@ impl ExternalSurfaces {
         let key = Arc::as_ptr(buffer) as usize;
         if let Some(import) = self.imports.get(&key) {
             return Ok((import.view.clone(), import.opaque));
+        }
+        if let Some((_, reason)) = self.failed.get(&key) {
+            bail!("{reason}");
         }
         let caps = gpui::dmabuf_import_caps().ok_or_else(|| anyhow!("the renderer has no device yet"))?;
         let imported = check_buffer(&caps, buffer).and_then(|format| {
@@ -528,14 +534,17 @@ impl ExternalSurfaces {
             Ok(imported) => imported,
             Err(error) => {
                 counters::add(&counters::IMPORT_FAILURES, 1);
-                return Err(error.context(format!(
+                let error = error.context(format!(
                     "dmabuf {}x{} {} modifier {:#018x} ({} planes) does not import",
                     buffer.width,
                     buffer.height,
                     fourcc_name(buffer.fourcc),
                     buffer.modifier,
                     buffer.planes.len()
-                )));
+                ));
+                log::warn!("external surfaces: {error:#}");
+                self.failed.insert(key, (Arc::downgrade(buffer), format!("{error:#}")));
+                return Err(error);
             }
         };
         counters::add(&counters::IMPORTS, 1);

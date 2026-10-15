@@ -2,7 +2,7 @@
 //! driver) and GBM buffer objects with the device's own modifiers (tiled, compressed: Intel's CCS has three memory
 //! planes in one object), allocated on the render node through a `libgbm` loaded at run time.
 
-use std::ffi::{CStr, c_char, c_int, c_void};
+use std::ffi::{CStr, c_int, c_void};
 use std::fs::File;
 use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::os::unix::fs::FileExt as _;
@@ -166,32 +166,45 @@ impl Gbm {
         if library.is_null() {
             return Err("libgbm.so.1 is not installed".to_owned());
         }
-        let symbol = |name: &CStr| -> Result<*mut c_void, String> {
-            // SAFETY: `library` is the handle dlopen returned and `name` is NUL-terminated.
-            let address = unsafe { libc::dlsym(library, name.as_ptr()) };
-            if address.is_null() {
-                Err(format!("libgbm has no {}", name.to_string_lossy()))
-            } else {
-                Ok(address)
-            }
-        };
-        // SAFETY (every transmute below): each symbol is the libgbm function of that name, whose C signature
-        // (gbm.h) is the function pointer type it becomes.
         Ok(Self {
-            create_device: unsafe { std::mem::transmute::<*mut c_void, CreateDevice>(symbol(c"gbm_create_device")?) },
-            destroy_device: unsafe { std::mem::transmute::<*mut c_void, DestroyDevice>(symbol(c"gbm_device_destroy")?) },
-            create_with_modifiers2: unsafe {
-                std::mem::transmute::<*mut c_void, CreateWithModifiers2>(symbol(c"gbm_bo_create_with_modifiers2")?)
-            },
-            destroy_bo: unsafe { std::mem::transmute::<*mut c_void, DestroyBo>(symbol(c"gbm_bo_destroy")?) },
-            plane_count: unsafe { std::mem::transmute::<*mut c_void, PlaneCount>(symbol(c"gbm_bo_get_plane_count")?) },
-            fd_for_plane: unsafe { std::mem::transmute::<*mut c_void, FdForPlane>(symbol(c"gbm_bo_get_fd_for_plane")?) },
-            offset: unsafe { std::mem::transmute::<*mut c_void, U32ForPlane>(symbol(c"gbm_bo_get_offset")?) },
-            stride: unsafe { std::mem::transmute::<*mut c_void, U32ForPlane>(symbol(c"gbm_bo_get_stride_for_plane")?) },
-            modifier: unsafe { std::mem::transmute::<*mut c_void, Modifier>(symbol(c"gbm_bo_get_modifier")?) },
+            // SAFETY: gbm.h: struct gbm_device *gbm_create_device(int fd).
+            create_device: unsafe { function(library, c"gbm_create_device")? },
+            // SAFETY: gbm.h: void gbm_device_destroy(struct gbm_device *).
+            destroy_device: unsafe { function(library, c"gbm_device_destroy")? },
+            // SAFETY: gbm.h: struct gbm_bo *gbm_bo_create_with_modifiers2(struct gbm_device *, uint32_t width,
+            // uint32_t height, uint32_t format, const uint64_t *modifiers, unsigned int count, uint32_t flags).
+            create_with_modifiers2: unsafe { function(library, c"gbm_bo_create_with_modifiers2")? },
+            // SAFETY: gbm.h: void gbm_bo_destroy(struct gbm_bo *).
+            destroy_bo: unsafe { function(library, c"gbm_bo_destroy")? },
+            // SAFETY: gbm.h: int gbm_bo_get_plane_count(struct gbm_bo *).
+            plane_count: unsafe { function(library, c"gbm_bo_get_plane_count")? },
+            // SAFETY: gbm.h: int gbm_bo_get_fd_for_plane(struct gbm_bo *, int plane).
+            fd_for_plane: unsafe { function(library, c"gbm_bo_get_fd_for_plane")? },
+            // SAFETY: gbm.h: uint32_t gbm_bo_get_offset(struct gbm_bo *, int plane).
+            offset: unsafe { function(library, c"gbm_bo_get_offset")? },
+            // SAFETY: gbm.h: uint32_t gbm_bo_get_stride_for_plane(struct gbm_bo *, int plane).
+            stride: unsafe { function(library, c"gbm_bo_get_stride_for_plane")? },
+            // SAFETY: gbm.h: uint64_t gbm_bo_get_modifier(struct gbm_bo *).
+            modifier: unsafe { function(library, c"gbm_bo_get_modifier")? },
             library,
         })
     }
+}
+
+/// The function `name` of `library` as `T`.
+///
+/// # Safety
+///
+/// `T` is the function pointer type of the C signature the library declares for `name`.
+unsafe fn function<T: Copy>(library: *mut c_void, name: &CStr) -> Result<T, String> {
+    // SAFETY: `library` is a handle from dlopen and `name` is NUL-terminated.
+    let address = unsafe { libc::dlsym(library, name.as_ptr()) };
+    if address.is_null() {
+        return Err(format!("libgbm has no {}", name.to_string_lossy()));
+    }
+    assert_eq!(size_of::<T>(), size_of::<*mut c_void>(), "a function pointer");
+    // SAFETY: the caller guarantees `T` is the symbol's function pointer type, as large as a data pointer (asserted).
+    Ok(unsafe { std::mem::transmute_copy::<*mut c_void, T>(&address) })
 }
 
 /// A buffer object GBM allocated on a render node with one of a device's modifiers, exported plane by plane.
@@ -216,7 +229,15 @@ impl GbmBuffer {
         }
         // SAFETY: `device` is live, `modifiers` holds `count` values for the call.
         let bo = unsafe {
-            (gbm.create_with_modifiers2)(device, width, height, fourcc, modifiers.as_ptr(), count, GBM_BO_USE_RENDERING)
+            (gbm.create_with_modifiers2)(
+                device,
+                width,
+                height,
+                fourcc,
+                modifiers.as_ptr(),
+                count,
+                GBM_BO_USE_RENDERING,
+            )
         };
         let exported = if bo.is_null() {
             Err("gbm_bo_create_with_modifiers2 failed".to_owned())
@@ -263,7 +284,3 @@ fn export(gbm: &Gbm, bo: *mut c_void, width: u32, height: u32, fourcc: u32) -> R
         planes: exported,
     }))
 }
-
-/// The name a C string pointer would print, for messages (unused C type kept for the signatures above).
-#[expect(dead_code, reason = "the signatures above name c_char only through CStr")]
-type CChar = c_char;
