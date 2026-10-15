@@ -41,7 +41,7 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.cache/agterm-rs/vendor
-          key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
+          key: vendor-${{ runner.os }}-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
       - name: pinned Zig toolchains (sha256 from build/pins.env)
         shell: bash
         run: |
@@ -185,7 +185,7 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.cache/agterm-rs/vendor
-          key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
+          key: vendor-${{ runner.os }}-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
       - name: libghostty prefix
         run: scripts/build-ghostty.sh
       # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds
@@ -306,7 +306,7 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.cache/agterm-rs/vendor
-          key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
+          key: vendor-${{ runner.os }}-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
       - name: libghostty prefix
         run: scripts/build-ghostty.sh
       # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds
@@ -381,7 +381,7 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.cache/agterm-rs/vendor
-          key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
+          key: vendor-${{ runner.os }}-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
       - name: libghostty prefix
         run: scripts/build-ghostty.sh
       # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds
@@ -453,7 +453,7 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.cache/agterm-rs/vendor
-          key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
+          key: vendor-${{ runner.os }}-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
       # the stage's terminfo, themes and shell integration still come from the libghostty prefix
       - name: libghostty prefix
         run: scripts/build-ghostty.sh
