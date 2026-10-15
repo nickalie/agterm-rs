@@ -276,24 +276,45 @@ fn status_from_raw(raw: ffi::GhosttySearchStatus) -> SearchStatus {
 
 /// A match snapshot (valid: the caller read it under the borrow that caught the search up) in viewport coordinates;
 /// an end outside the viewport is clamped to its edge, a match wholly outside is `None`.
+///
+/// The conversion fails only above the viewport: a cell below it (on a page the viewport shares, which the viewport
+/// match list may include, `search.h`) converts to a row past the last, so the bottom is bounded here.
 fn clip(terminal: &Terminal, selection: &ffi::GhosttySelection) -> Option<Match> {
     let tag = PointTag::Viewport;
-    let start = terminal.point_of(&selection.start, tag);
-    let end = terminal.point_of(&selection.end, tag);
     let last = Point::new(
         tag,
         terminal.cols().saturating_sub(1),
         u32::from(terminal.rows().saturating_sub(1)),
     );
-    match (start, end) {
-        (Some(start), Some(end)) => Some(Match { start, end }),
-        (None, Some(end)) => Some(Match {
-            start: Point::new(tag, 0, 0),
-            end,
-        }),
-        (Some(start), None) => Some(Match { start, end: last }),
-        (None, None) => None,
-    }
+    let start = terminal.point_of(&selection.start, tag);
+    let end = terminal.point_of(&selection.end, tag);
+    clip_points(start, end, last)
+}
+
+/// Where a match end lies relative to the viewport.
+enum Place {
+    Above,
+    In(Point),
+    Below,
+}
+
+/// [`clip`] on converted ends (`None`: the conversion failed, above the viewport); `last` is the viewport's
+/// bottom-right cell.
+fn clip_points(start: Option<Point>, end: Option<Point>, last: Point) -> Option<Match> {
+    let place = |point: Option<Point>| match point {
+        None => Place::Above,
+        Some(point) if point.y > last.y => Place::Below,
+        Some(point) => Place::In(point),
+    };
+    let first = Point::new(last.tag, 0, 0);
+    let (start, end) = match (place(start), place(end)) {
+        (Place::In(start), Place::In(end)) => (start, end),
+        (Place::Above, Place::In(end)) => (first, end),
+        (Place::In(start), Place::Below) => (start, last),
+        (Place::Above, Place::Below) => (first, last),
+        _ => return None,
+    };
+    Some(Match { start, end })
 }
 
 #[cfg(test)]
@@ -352,6 +373,52 @@ mod tests {
         let mut other = Terminal::new(20, 3).unwrap();
         assert_eq!(search.feed(&mut other).err(), Some(Error::InvalidValue));
         assert_eq!(search.close(&mut other), Err(Error::InvalidValue));
+    }
+
+    #[test]
+    fn matches_below_a_scrolled_back_viewport_are_dropped_or_clamped() {
+        let mut terminal = Terminal::new(20, 3).unwrap();
+        for line in 0..10 {
+            terminal.vt_write(format!("x{line}\r\n").as_bytes());
+        }
+        terminal.scroll_viewport(crate::Scroll::Rows(-4));
+        let (search, results) = searched(&mut terminal, "x");
+        assert_eq!(results.total, 10);
+        assert!(!results.viewport_matches.is_empty());
+        for found in &results.viewport_matches {
+            assert!(found.start.y < 3 && found.end.y < 3, "{found:?} past the viewport");
+        }
+        search.close(&mut terminal).unwrap();
+
+        let tag = PointTag::Viewport;
+        let last = Point::new(tag, 19, 2);
+        let at = |x, y| Some(Point::new(tag, x, y));
+        assert_eq!(clip_points(at(1, 3), at(4, 3), last), None, "wholly below");
+        assert_eq!(
+            clip_points(at(5, 2), at(2, 3), last),
+            Some(Match {
+                start: Point::new(tag, 5, 2),
+                end: last
+            }),
+            "running off the bottom"
+        );
+        assert_eq!(
+            clip_points(None, at(2, 0), last),
+            Some(Match {
+                start: Point::new(tag, 0, 0),
+                end: Point::new(tag, 2, 0)
+            }),
+            "running off the top"
+        );
+        assert_eq!(
+            clip_points(None, at(2, 4), last),
+            Some(Match {
+                start: Point::new(tag, 0, 0),
+                end: last
+            }),
+            "across the whole viewport"
+        );
+        assert_eq!(clip_points(None, None, last), None, "wholly above");
     }
 
     #[test]

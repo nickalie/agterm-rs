@@ -194,7 +194,12 @@ impl MouseButton {
         }
     }
 
+    /// The button's bit in the held set; none for a wheel step (buttons four to seven), which is never released, as
+    /// Ghostty keeps wheel reports out of its click state.
     fn bit(self) -> u16 {
+        if matches!(self, Self::Four | Self::Five | Self::Six | Self::Seven) {
+            return 0;
+        }
         let index = Self::ALL.iter().position(|button| *button == self).unwrap_or(0);
         1 << index
     }
@@ -258,9 +263,11 @@ pub enum Scroll {
 pub(crate) struct InputState {
     keys: vt::KeyEncoder,
     mouse: vt::MouseEncoder,
-    /// The buttons held, one bit per [`MouseButton`].
+    /// The buttons held, one bit per [`MouseButton`] (wheel steps never count).
     pressed: u16,
     padding: Padding,
+    /// The config's `mouse-reporting`: whether a program may have the mouse at all.
+    reporting: bool,
 }
 
 impl InputState {
@@ -270,7 +277,37 @@ impl InputState {
             mouse: vt::MouseEncoder::new()?,
             pressed: 0,
             padding: Padding::default(),
+            reporting: true,
         })
+    }
+
+    /// Whether pointer events go to the program: it turned a tracking mode on and the config lets it
+    /// (Ghostty's `isMouseReporting`).
+    pub(crate) fn reporting(&self, terminal: &vt::Terminal) -> bool {
+        self.reporting && terminal.mouse_tracking()
+    }
+
+    /// Encode one pointer event for the program (the held-button set already updated).
+    pub(crate) fn encode_mouse(
+        &mut self,
+        terminal: &mut vt::Terminal,
+        size: GridSize,
+        input: &MouseInput,
+    ) -> Result<Vec<u8>, vt::Error> {
+        let event = vt::MouseEvent {
+            action: match input.action {
+                MouseAction::Press => vt::MouseAction::Press,
+                MouseAction::Release => vt::MouseAction::Release,
+                MouseAction::Motion => vt::MouseAction::Motion,
+            },
+            button: input.button.map(MouseButton::engine),
+            mods: engine_mods(input.mods, ModSides::empty()),
+            x: input.x,
+            y: input.y,
+        };
+        let geometry = self.geometry(size);
+        let pressed = self.pressed != 0;
+        self.mouse.encode(terminal, &geometry, pressed, &event)
     }
 
     fn geometry(&self, size: GridSize) -> vt::MouseGeometry {
@@ -309,7 +346,8 @@ impl Pane {
     }
 
     /// Report a pointer event to the program, as the mouse mode it turned on asks; whether anything was reported
-    /// (nothing while no program asked, see [`Pane::mouse_tracking`]).
+    /// (nothing while no program asked or `mouse-reporting` is off, see [`Pane::mouse_tracking`]). A wheel goes
+    /// through [`Pane::wheel`] instead.
     ///
     /// # Errors
     ///
@@ -328,30 +366,24 @@ impl Pane {
                 MouseAction::Motion => {}
             }
         }
-        let event = vt::MouseEvent {
-            action: match input.action {
-                MouseAction::Press => vt::MouseAction::Press,
-                MouseAction::Release => vt::MouseAction::Release,
-                MouseAction::Motion => vt::MouseAction::Motion,
-            },
-            button: input.button.map(MouseButton::engine),
-            mods: engine_mods(input.mods, ModSides::empty()),
-            x: input.x,
-            y: input.y,
-        };
-        let geometry = state.geometry(size);
-        let pressed = state.pressed != 0;
-        let bytes = state
-            .mouse
-            .encode(terminal, &geometry, pressed, &event)
-            .map_err(PaneError::terminal)?;
+        if !state.reporting(terminal) {
+            return Ok(false);
+        }
+        let bytes = state.encode_mouse(terminal, size, input).map_err(PaneError::terminal)?;
         self.queue(&bytes)
     }
 
-    /// Whether the program turned on mouse reporting; the frontend selects text with the mouse only while it has not.
+    /// Whether pointer events go to the program (it turned mouse reporting on and `mouse-reporting` allows it); the
+    /// frontend selects text with the mouse only while they do not.
     #[must_use]
     pub fn mouse_tracking(&self) -> bool {
-        lock(&self.shared().vt).terminal.mouse_tracking()
+        let vt = lock(&self.shared().vt);
+        vt.input.reporting(&vt.terminal)
+    }
+
+    /// The config's `mouse-reporting` (on by default): off, programs never get the mouse.
+    pub fn set_mouse_reporting(&self, enabled: bool) {
+        lock(&self.shared().vt).input.reporting = enabled;
     }
 
     /// The padding around the grid inside the surface the mouse positions are measured in.
@@ -421,7 +453,7 @@ impl Pane {
     }
 
     /// Queue encoded input (the caller holds the VT lock); whether there was any.
-    fn queue(&self, bytes: &[u8]) -> Result<bool, PaneError> {
+    pub(crate) fn queue(&self, bytes: &[u8]) -> Result<bool, PaneError> {
         if bytes.is_empty() {
             return Ok(false);
         }
@@ -474,11 +506,22 @@ mod tests {
     }
 
     #[test]
-    fn buttons_have_distinct_bits() {
-        let bits: Vec<u16> = MouseButton::ALL.iter().map(|button| button.bit()).collect();
+    fn buttons_have_distinct_bits_and_wheel_steps_none() {
+        let wheel = [
+            MouseButton::Four,
+            MouseButton::Five,
+            MouseButton::Six,
+            MouseButton::Seven,
+        ];
+        let bits: Vec<u16> = MouseButton::ALL
+            .iter()
+            .filter(|button| !wheel.contains(button))
+            .map(|button| button.bit())
+            .collect();
         for (index, bit) in bits.iter().enumerate() {
             assert_eq!(bit.count_ones(), 1);
             assert!(!bits[..index].contains(bit));
         }
+        assert!(wheel.iter().all(|button| button.bit() == 0));
     }
 }

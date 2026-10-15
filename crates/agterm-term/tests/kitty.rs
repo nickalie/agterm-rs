@@ -95,6 +95,18 @@ fn raw_pixels_scroll_with_the_text_and_a_deletion_is_reported() -> TestResult {
 }
 
 #[test]
+fn a_held_frame_carries_the_images_sent_before_the_hold() -> TestResult {
+    // one write: the image, then synchronized output on, so no paint can come between them
+    let fixture =
+        spawn("printf 'text\\033_Ga=T,f=32,s=2,v=1,i=7,q=2;AQIDBAUGBwg=\\033\\\\\\033[?2026h'; exec sleep 30")?;
+    let held = wait_frame(&fixture.pane, |frame| frame.held);
+    assert_eq!(held.lines()[0], "text");
+    assert_eq!(held.kitty.placements.len(), 1, "the held frame shows the image");
+    assert_eq!(&*held.kitty.images[0].pixels, &[1, 2, 3, 4, 5, 6, 7, 8]);
+    Ok(())
+}
+
+#[test]
 fn a_zero_storage_limit_turns_kitty_graphics_off() -> TestResult {
     let config = PaneConfig {
         kitty_image_limit: 0,

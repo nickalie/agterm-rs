@@ -131,6 +131,8 @@ pub(crate) struct Vt {
     pub(crate) input: InputState,
     /// The grid and cell size the terminal was last resized to.
     pub(crate) size: GridSize,
+    /// A wheel's routing cleared the selection (taken before the lock is let go, to wake the frontend).
+    pub(crate) cleared_selection: bool,
     /// The colors last reported with [`PaneEvent::Colors`].
     colors: vt::TerminalColors,
 }
@@ -431,6 +433,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
             terminal,
             input,
             size,
+            cleared_selection: false,
             colors,
         }),
         capture,
@@ -497,12 +500,11 @@ fn capture(shared: &Shared) -> Option<Arc<Frame>> {
     let mut capture = try_lock(&shared.capture)?;
     end_expired_hold(&mut vt, &mut capture);
     let mouse_shape = MouseShape::from_engine(vt.terminal.mouse_shape());
-    let mut kitty = None;
     if capture.held() {
         drop(vt);
     } else {
-        // VT → capture → published: the Kitty view is read against the last published one while the terminal is held
-        kitty = crate::kitty::capture(&mut vt.terminal, &lock(&shared.published).kitty);
+        // the Kitty view is read while the terminal is held, with the state
+        capture.capture_kitty(vt.terminal.kitty_graphics());
         let pending = capture.state.begin_update(&mut vt.terminal);
         // only the begin phase reads the terminal
         drop(vt);
@@ -511,7 +513,7 @@ fn capture(shared: &Shared) -> Option<Arc<Frame>> {
         }
     }
     let mut published = lock(&shared.published);
-    match capture.convert(&published, mouse_shape, kitty) {
+    match capture.convert(&published, mouse_shape) {
         Ok(Some(frame)) => *published = Arc::new(frame),
         Ok(None) => {}
         Err(err) => tracing::warn!(%err, "converting the capture failed"),

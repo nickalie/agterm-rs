@@ -4,7 +4,8 @@
 //! - [`Pane::spawn`] starts a [`PaneCommand`] on a PTY; [`Pane::write`] queues input, [`Pane::resize`] resizes the VT
 //!   and the PTY, [`Pane::frame`] captures the screen for painting, [`Pane::take_events`] drains the effects.
 //! - Input: [`Pane::key`] (a toolkit-neutral [`KeyInput`], encoded for the terminal's keyboard modes),
-//!   [`Pane::mouse`], [`Pane::focus`], [`Pane::paste`], [`Pane::scroll`].
+//!   [`Pane::mouse`], [`Pane::wheel`] (routed as Ghostty routes the wheel), [`Pane::focus`], [`Pane::paste`],
+//!   [`Pane::scroll`].
 //! - Selection and read-back: [`Pane::select`], [`Pane::select_word`],
 //!   [`Pane::select_line`], [`Pane::select_all`], [`Pane::selection_text`], [`Pane::read_text`],
 //!   [`Pane::cursor_column`]; a frame's rows carry their selected columns.
@@ -33,6 +34,7 @@ mod scan;
 mod search;
 mod selection;
 mod text;
+mod wheel;
 
 pub use effects::{
     ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardReadRequest, ClipboardWrite, ExitStatus, PaneEvent,
@@ -52,6 +54,7 @@ pub use scan::ReadScope;
 pub use search::{Highlight, SearchState, SearchStep};
 pub use selection::{GridPoint, PointSpace, SelectionRange, SelectionText};
 pub use text::TextRegion;
+pub use wheel::{Wheel, WheelInput};
 
 use agterm_ghostty_vt as vt;
 

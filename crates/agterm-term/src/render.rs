@@ -387,6 +387,10 @@ pub(crate) struct Capture {
     /// The hold callback captured a frame that is not converted yet.
     fresh: bool,
     seq: u64,
+    /// The Kitty view of the last frame made.
+    kitty: Arc<KittyView>,
+    /// A Kitty view captured with the state and not converted yet (`None`: unchanged since `kitty`).
+    pending_kitty: Option<KittyView>,
 }
 
 impl Capture {
@@ -396,16 +400,26 @@ impl Capture {
             held_since: None,
             fresh: false,
             seq: 0,
+            kitty: Arc::default(),
+            pending_kitty: None,
         })
     }
 
-    /// A hold began: capture the frame the program left on screen, from inside the callback (VT already held).
+    /// A hold began: capture the frame the program left on screen, its Kitty graphics included, from inside the
+    /// callback (VT already held).
     pub(crate) fn begin_hold(&mut self, terminal: &mut vt::HeldTerminal<'_>) {
         if let Err(err) = self.state.update_held(terminal) {
             tracing::warn!(%err, "capturing the held frame failed");
         }
+        self.capture_kitty(terminal.kitty_graphics());
         self.held_since = Some(Instant::now());
         self.fresh = true;
+    }
+
+    /// Capture the Kitty graphics with the state (the terminal held, as for the state's update); the next conversion
+    /// carries them.
+    pub(crate) fn capture_kitty(&mut self, graphics: Option<vt::KittyGraphics<'_>>) {
+        self.pending_kitty = crate::kitty::capture(graphics, &self.kitty);
     }
 
     /// Something the dirty flags do not track changed (the selection): the next conversion makes a frame and checks
@@ -441,14 +455,9 @@ impl Capture {
     /// Turn the state into the next frame after `previous`, or `None` when nothing changed; marks the state clean.
     ///
     /// The cursor, the colors and the mouse shape are compared with `previous` as well: the capture's dirty flags
-    /// track cell content, and a cursor that only moved or changed style leaves them clean. `kitty` is a new Kitty
-    /// view, `None` when it did not change.
-    pub(crate) fn convert(
-        &mut self,
-        previous: &Frame,
-        mouse_shape: MouseShape,
-        kitty: Option<KittyView>,
-    ) -> Result<Option<Frame>, vt::Error> {
+    /// track cell content, and a cursor that only moved or changed style leaves them clean. The Kitty view is the one
+    /// captured with the state ([`Capture::capture_kitty`], or the hold's).
+    pub(crate) fn convert(&mut self, previous: &Frame, mouse_shape: MouseShape) -> Result<Option<Frame>, vt::Error> {
         let held = self.held();
         let cursor = self.state.cursor().map(cursor).unwrap_or_default();
         let colors = match self.state.colors().as_ref().map(colors) {
@@ -460,11 +469,15 @@ impl Capture {
             && held == previous.held
             && cursor == previous.cursor
             && Arc::ptr_eq(&colors, &previous.colors)
-            && kitty.is_none();
+            && self.pending_kitty.is_none();
         if unchanged {
             return Ok(None);
         }
-        let kitty = kitty.map_or_else(|| Arc::clone(&previous.kitty), Arc::new);
+        let kitty = self
+            .pending_kitty
+            .take()
+            .map_or_else(|| Arc::clone(&previous.kitty), Arc::new);
+        self.kitty = Arc::clone(&kitty);
         let seq = self.seq + 1;
         let full = self.state.dirty() == vt::Dirty::Full;
         let (cols, _) = self.state.size();
@@ -616,7 +629,7 @@ mod tests {
 
     fn capture(terminal: &mut vt::Terminal, capture: &mut Capture, previous: &Frame) -> Option<Frame> {
         capture.state.update(terminal).unwrap();
-        capture.convert(previous, MouseShape::Default, None).unwrap()
+        capture.convert(previous, MouseShape::Default).unwrap()
     }
 
     #[test]
@@ -702,7 +715,7 @@ mod tests {
         let mut state = Capture::new().unwrap();
         let first = capture(&mut terminal, &mut state, &Frame::default()).unwrap();
         state.state.update(&mut terminal).unwrap();
-        let next = state.convert(&first, MouseShape::Pointer, None).unwrap().unwrap();
+        let next = state.convert(&first, MouseShape::Pointer).unwrap().unwrap();
         assert_eq!(next.mouse_shape, MouseShape::Pointer);
         assert!(Arc::ptr_eq(&first.rows[0], &next.rows[0]));
     }

@@ -12,6 +12,7 @@ use std::fmt::Write as _;
 use agterm_core::ghostty_config::binds::{KeyAction, Mods, PhysicalKey};
 use agterm_term::{
     ClipboardLocation, KeyInput, MouseAction, MouseButton, MouseInput, Padding, PaneError, Paste, PasteSource,
+    TextRegion, Wheel, WheelInput,
 };
 use support::{Fixture, TestResult, spawn, wait_file, wait_text};
 
@@ -156,6 +157,106 @@ fn the_mouse_reports_only_once_a_program_asks() -> TestResult {
     assert!(!fixture.pane.mouse(&hover)?, "but not motion with no button held");
     let expected = b"\x1b[<0;3;2M\x1b[<32;4;2M\x1b[<0;4;2m";
     assert_eq!(received(&fixture, expected), expected);
+    Ok(())
+}
+
+/// A wheel turn of `rows` steps at cell (2, 1) of the unpadded 8x16 grid.
+fn wheel(rows: isize) -> WheelInput {
+    WheelInput {
+        rows,
+        columns: 0,
+        mods: Mods::empty(),
+        x: 8.0 * 2.0 + 1.0,
+        y: 16.0 + 1.0,
+    }
+}
+
+#[test]
+fn a_wheel_step_is_reported_and_never_counts_as_a_held_button() -> TestResult {
+    // button-event tracking: motion is reported only while a button is held
+    let fixture = recorder("\\033[?1002h\\033[?1006h")?;
+    assert_eq!(fixture.pane.wheel(&wheel(1))?, Wheel::Reported);
+    assert_eq!(fixture.pane.wheel(&wheel(-2))?, Wheel::Reported);
+    let sideways = WheelInput {
+        rows: 0,
+        columns: 1,
+        ..wheel(0)
+    };
+    assert_eq!(fixture.pane.wheel(&sideways)?, Wheel::Reported);
+    // a wheel button pressed through the plain mouse path is not held either
+    let step = MouseInput {
+        action: MouseAction::Press,
+        button: Some(MouseButton::Four),
+        mods: Mods::empty(),
+        x: 17.0,
+        y: 17.0,
+    };
+    assert!(fixture.pane.mouse(&step)?);
+    let hover = MouseInput {
+        action: MouseAction::Motion,
+        button: None,
+        x: 40.0,
+        ..step
+    };
+    assert!(!fixture.pane.mouse(&hover)?, "a hover after wheel steps is no drag");
+    let expected = b"\x1b[<64;3;2M\x1b[<65;3;2M\x1b[<65;3;2M\x1b[<66;3;2M\x1b[<64;3;2M";
+    assert_eq!(received(&fixture, expected), expected);
+    Ok(())
+}
+
+#[test]
+fn the_wheel_sends_cursor_keys_on_the_alternate_screen_without_mouse_tracking() -> TestResult {
+    let normal = recorder("\\033[?1049h")?;
+    assert_eq!(normal.pane.wheel(&wheel(2))?, Wheel::CursorKeys);
+    assert_eq!(normal.pane.wheel(&wheel(0))?, Wheel::Nothing);
+    assert_eq!(normal.pane.wheel(&wheel(-1))?, Wheel::CursorKeys);
+    assert_eq!(received(&normal, b"\x1b[A\x1b[A\x1b[B"), b"\x1b[A\x1b[A\x1b[B");
+
+    let application = recorder("\\033[?1049h\\033[?1h")?;
+    assert_eq!(application.pane.wheel(&wheel(-1))?, Wheel::CursorKeys);
+    assert_eq!(received(&application, b"\x1bOB"), b"\x1bOB");
+
+    // alternate scroll off (mode 1007 reset): the viewport scrolls instead
+    let off = recorder("\\033[?1049h\\033[?1007l")?;
+    assert_eq!(off.pane.wheel(&wheel(1))?, Wheel::Scrolled);
+    Ok(())
+}
+
+#[test]
+fn the_wheel_scrolls_the_viewport_when_no_program_takes_it() -> TestResult {
+    let fixture = spawn("for i in $(seq 1 40); do printf 'row %s\\r\\n' $i; done; printf end; exec sleep 30")?;
+    let pane = &fixture.pane;
+    wait_text(pane, "end");
+    assert_eq!(pane.wheel(&wheel(3))?, Wheel::Scrolled);
+    let scrolled = pane.read_text(TextRegion::Viewport)?;
+    assert!(
+        scrolled.starts_with("row 15\n") && scrolled.ends_with("row 38"),
+        "{scrolled}"
+    );
+    assert_eq!(pane.wheel(&wheel(-3))?, Wheel::Scrolled);
+    assert!(pane.read_text(TextRegion::Viewport)?.ends_with("row 40\nend"));
+    Ok(())
+}
+
+#[test]
+fn mouse_reporting_off_keeps_the_mouse_from_programs() -> TestResult {
+    let fixture = recorder("\\033[?1000h\\033[?1006h")?;
+    let pane = &fixture.pane;
+    pane.set_mouse_reporting(false);
+    assert!(!pane.mouse_tracking());
+    let click = MouseInput {
+        action: MouseAction::Press,
+        button: Some(MouseButton::Left),
+        mods: Mods::empty(),
+        x: 1.0,
+        y: 1.0,
+    };
+    assert!(!pane.mouse(&click)?);
+    assert_eq!(pane.wheel(&wheel(1))?, Wheel::Scrolled);
+    pane.set_mouse_reporting(true);
+    assert!(pane.mouse_tracking());
+    assert!(pane.mouse(&click)?);
+    assert_eq!(received(&fixture, b"\x1b[<0;1;1M"), b"\x1b[<0;1;1M");
     Ok(())
 }
 

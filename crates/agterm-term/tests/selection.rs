@@ -207,8 +207,14 @@ fn search_follows_new_output_restarts_and_ends() -> TestResult {
     // a new needle restarts; an empty one ends the search
     assert!(pane.search("line 3"));
     wait_total(pane, 2);
+    assert!(pane.navigate_search(SearchStep::Next));
+    pane.take_events();
     assert!(pane.search(""));
     assert_eq!(pane.search_state(), SearchState::default());
+    // the end is reported, so a counter showing "k of n" clears
+    let ended = pane.take_events();
+    assert_eq!(totals(&ended), [None]);
+    assert_eq!(selections(&ended), [None]);
     assert!(!pane.navigate_search(SearchStep::Next));
     Ok(())
 }

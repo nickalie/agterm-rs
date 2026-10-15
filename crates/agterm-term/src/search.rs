@@ -94,7 +94,8 @@ impl Pane {
             }
             slot.epoch += 1;
             slot.state = SearchState::default();
-            slot.reported = (None, None);
+            // `SearchTotal(None)` (and `SearchSelected(None)` after a selection), as libghostty reported the end
+            report(shared, &mut slot);
             shared.search_wake.notify_all();
             drop(slot);
             drop(vt);

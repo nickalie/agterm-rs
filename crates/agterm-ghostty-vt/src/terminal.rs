@@ -368,6 +368,21 @@ impl Terminal {
         self.get_bool(ffi::GHOSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE, true)
     }
 
+    /// Whether the alternate screen is active (a full-screen program such as `less` or `vim`).
+    #[must_use]
+    pub fn alternate_screen(&self) -> bool {
+        let mut screen: ffi::GhosttyTerminalScreen = ffi::GHOSTTY_TERMINAL_SCREEN_PRIMARY;
+        // SAFETY: the terminal is live; `DATA_ACTIVE_SCREEN` writes a `GhosttyTerminalScreen`.
+        unsafe {
+            ffi::ghostty_terminal_get(
+                self.raw.ptr(),
+                ffi::GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN,
+                (&raw mut screen).cast(),
+            )
+        };
+        screen == ffi::GHOSTTY_TERMINAL_SCREEN_ALTERNATE
+    }
+
     /// Whether a program turned on mouse reporting (any tracking mode).
     #[must_use]
     pub fn mouse_tracking(&self) -> bool {
@@ -479,6 +494,16 @@ mod tests {
         let terminal = Terminal::new(80, 24).unwrap();
         assert_eq!((terminal.cols(), terminal.rows()), (80, 24));
         assert_eq!(terminal.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn the_alternate_screen_is_reported() {
+        let mut terminal = Terminal::new(80, 24).unwrap();
+        assert!(!terminal.alternate_screen());
+        terminal.vt_write(b"\x1b[?1049h");
+        assert!(terminal.alternate_screen());
+        terminal.vt_write(b"\x1b[?1049l");
+        assert!(!terminal.alternate_screen());
     }
 
     #[test]

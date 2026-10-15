@@ -109,9 +109,10 @@ impl KittyView {
     }
 }
 
-/// Capture the terminal's Kitty graphics after `previous`; `None` when nothing changed (draw `previous`).
-pub(crate) fn capture(terminal: &mut vt::Terminal, previous: &KittyView) -> Option<KittyView> {
-    let Some(graphics) = terminal.kitty_graphics() else {
+/// Capture the Kitty graphics of `graphics` (a terminal's storage, or the one a synchronized-output hold is captured
+/// from) after `previous`; `None` when nothing changed (draw `previous`).
+pub(crate) fn capture(graphics: Option<vt::KittyGraphics<'_>>, previous: &KittyView) -> Option<KittyView> {
+    let Some(graphics) = graphics else {
         return (!previous.is_empty()).then(|| removed_all(previous));
     };
     let generation = graphics.generation();
@@ -236,14 +237,14 @@ mod tests {
     #[test]
     fn nothing_stored_makes_no_view() {
         let mut terminal = terminal();
-        assert!(capture(&mut terminal, &KittyView::default()).is_none());
+        assert!(capture(terminal.kitty_graphics(), &KittyView::default()).is_none());
     }
 
     #[test]
     fn an_image_is_copied_once_and_shared_while_it_stays() {
         let mut terminal = terminal();
         terminal.vt_write(CHUNKED);
-        let first = capture(&mut terminal, &KittyView::default()).unwrap();
+        let first = capture(terminal.kitty_graphics(), &KittyView::default()).unwrap();
         assert_eq!(first.images.len(), 1);
         let image = &first.images[0];
         assert_eq!((image.key.id, image.width, image.height), (7, 2, 1));
@@ -252,10 +253,10 @@ mod tests {
         assert_eq!(placement.image, image.key);
         assert_eq!(placement.layer, KittyLayer::AboveText);
         assert_eq!(placement.rect.map(|rect| (rect.column, rect.row)), Some((0, 0)));
-        assert!(capture(&mut terminal, &first).is_none(), "unchanged");
+        assert!(capture(terminal.kitty_graphics(), &first).is_none(), "unchanged");
         // a scroll moves the placement but keeps the pixels
         terminal.vt_write(b"\r\n\r\n\r\n\r\n\r\n");
-        let moved = capture(&mut terminal, &first).unwrap();
+        let moved = capture(terminal.kitty_graphics(), &first).unwrap();
         assert!(Arc::ptr_eq(&moved.images[0], &first.images[0]));
         assert_ne!(moved.placements[0].rect, first.placements[0].rect);
         assert!(moved.removed.is_empty());
@@ -265,9 +266,9 @@ mod tests {
     fn a_deleted_image_is_reported_removed() {
         let mut terminal = terminal();
         terminal.vt_write(CHUNKED);
-        let first = capture(&mut terminal, &KittyView::default()).unwrap();
+        let first = capture(terminal.kitty_graphics(), &KittyView::default()).unwrap();
         terminal.vt_write(b"\x1b_Ga=d,d=I,i=7\x1b\\");
-        let after = capture(&mut terminal, &first).unwrap();
+        let after = capture(terminal.kitty_graphics(), &first).unwrap();
         assert!(after.images.is_empty() && after.placements.is_empty());
         assert_eq!(after.removed, [first.images[0].key]);
     }

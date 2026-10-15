@@ -6,7 +6,7 @@
 
 use std::marker::PhantomData;
 
-use crate::{Error, Handle, Terminal, ffi};
+use crate::{Error, Handle, HeldTerminal, Terminal, ffi};
 
 /// A stored image's pixel layout (always decoded and decompressed: never PNG).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -118,10 +118,31 @@ pub struct KittyGraphics<'t> {
 impl Terminal {
     /// The Kitty image storage; `None` when the library was built without Kitty graphics.
     pub fn kitty_graphics(&mut self) -> Option<KittyGraphics<'_>> {
-        let terminal = self.as_raw();
+        // SAFETY: the terminal is live and the result borrows `self` mutably, so no mutating call runs while it lives.
+        unsafe { KittyGraphics::of(self.as_raw()) }
+    }
+}
+
+impl HeldTerminal<'_> {
+    /// The Kitty image storage of the terminal running the synchronized-output callback, read as the frame it holds is
+    /// captured; `None` when the library was built without Kitty graphics.
+    pub fn kitty_graphics(&mut self) -> Option<KittyGraphics<'_>> {
+        // SAFETY: the callback's terminal is live for the call, its caller holds what serializes it, and the result
+        // borrows `self` (so the callback) mutably: the terminal is not mutated while it lives.
+        unsafe { KittyGraphics::of(self.as_raw()) }
+    }
+}
+
+impl KittyGraphics<'_> {
+    /// The storage of `terminal`.
+    ///
+    /// # Safety
+    ///
+    /// `terminal` must be live and not mutated while the result lives.
+    unsafe fn of(terminal: ffi::GhosttyTerminal) -> Option<Self> {
         let mut raw: ffi::GhosttyKittyGraphics = std::ptr::null_mut();
-        // SAFETY: the terminal is live; `DATA_KITTY_GRAPHICS` writes a handle borrowed until the next mutating call,
-        // which the returned value's mutable borrow of `self` rules out.
+        // SAFETY: the terminal is live (the caller's contract); `DATA_KITTY_GRAPHICS` writes a handle borrowed until
+        // the next mutating call, which the caller rules out while the result lives.
         let result = unsafe {
             ffi::ghostty_terminal_get(
                 terminal,
@@ -129,7 +150,7 @@ impl Terminal {
                 (&raw mut raw).cast(),
             )
         };
-        (result == ffi::GHOSTTY_SUCCESS && !raw.is_null()).then_some(KittyGraphics {
+        (result == ffi::GHOSTTY_SUCCESS && !raw.is_null()).then_some(Self {
             raw,
             terminal,
             borrow: PhantomData,
