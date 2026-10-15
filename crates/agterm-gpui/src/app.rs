@@ -37,6 +37,7 @@ pub const CAPABILITIES: &[&str] = &[
     "type-rejects-nul",
     "resize-echoes-ratio",
     "hidden-split-holds-focus",
+    "config-reload-counts",
 ];
 
 /// The capabilities this host claims: the profile's, and the `live` ones by host

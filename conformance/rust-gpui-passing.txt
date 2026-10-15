@@ -86,6 +86,7 @@ tests/protocol/test_config_browser.py::test_links_refuses_an_unknown_mode[Overla
 tests/protocol/test_config_browser.py::test_links_refuses_an_unknown_mode[]
 tests/protocol/test_config_browser.py::test_links_refuses_an_unknown_mode[bogus]
 tests/protocol/test_config_browser.py::test_links_sets_and_reads_the_link_open_mode
+tests/protocol/test_config_browser.py::test_reload_applies_the_edited_config_to_open_and_new_sessions
 tests/protocol/test_dashboard_quick.py::test_dashboard_and_terminal_zoom_replace_each_other
 tests/protocol/test_dashboard_quick.py::test_dashboard_font_modes
 tests/protocol/test_dashboard_quick.py::test_dashboard_pane_refs_pick_one_pane
