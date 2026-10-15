@@ -5,7 +5,10 @@ Reads the JSON lines `pytest --nodeid-report PATH` writes and the ratchet list (
 verbatim and sorted, `#` header comments first). A listed id that failed, errored, skipped, xfailed or did not
 run breaks the ratchet, except a skip for a host-dependent capability the host lacks (counted as not run); a
 collection error or a `--must-pass` problem breaks the run. Prints the breaks, the ids that pass but are not
-listed yet, and a verdict; `--add` merges those ids into the list when the ratchet holds. Appends a markdown
+listed yet, and a verdict; `--add` merges those ids into the list when the ratchet holds, and never removes one.
+The report's run header names its mode: `full` and `ratchet-only` (`--ratchet-only`: the listed ids plus a task's
+extras ran) judge every listed id and warn about one not collected; `partial` (a narrower selection) judges only
+the listed ids that ran, so it can neither break nor shrink the list through what it left out. Appends a markdown
 summary to `$GITHUB_STEP_SUMMARY` when it is set. Exit 0: holds, 1: broken, 2: usage error or a bad input file.
 """
 
@@ -24,6 +27,8 @@ DEFAULT_LIST = Path(__file__).resolve().parents[1] / "rust-passing.txt"
 OUTCOMES = frozenset({"passed", "failed", "error", "skipped", "xfailed", "xpassed", "not-run"})
 PASSING = frozenset({"passed", "xpassed"})
 SKIP_CATEGORIES = frozenset({"unsupported", "not-yet-at-level", "other"})
+# The run header's `mode` (agterm_conformance.selection.MODES): full, ratchet-only (`--ratchet-only`) or partial.
+MODES = frozenset({"full", "ratchet-only", "partial"})
 # Capabilities a build has or lacks depending on the host it runs on, not on the build.
 HOST_DEPENDENT = frozenset({"live-sessions", "live-any-shell"})
 _CAPABILITY = re.compile(r"unsupported: \S+ lacks ([A-Za-z0-9-]+)")
@@ -48,6 +53,8 @@ class TestRecord:
 @dataclass
 class Report:
     partial: bool
+    # full, ratchet-only (the list's ids and a task's extras ran: every listed id is judged) or partial
+    mode: str = "full"
     tests: dict[str, TestRecord] = field(default_factory=dict)
     collection_errors: list[tuple[str, str]] = field(default_factory=list)
     must_pass: list[str] = field(default_factory=list)
@@ -63,6 +70,7 @@ class RatchetList:
 class Verdict:
     partial: bool
     listed: int
+    mode: str = "full"
     breaks: list[str] = field(default_factory=list)
     not_run: list[str] = field(default_factory=list)
     not_collected: list[str] = field(default_factory=list)
@@ -79,7 +87,7 @@ class Verdict:
         if self.not_collected:
             notes.append(f"{len(self.not_collected)} not collected")
         suffix = f" ({', '.join(notes)})" if notes else ""
-        return f"ratchet holds: {self.listed} listed id(s){suffix}, {'partial' if self.partial else 'full'} run"
+        return f"ratchet holds: {self.listed} listed id(s){suffix}, {self.mode} run"
 
 
 def _field(record: dict[str, Any], key: str, types: tuple[type, ...], where: str) -> Any:
@@ -110,7 +118,12 @@ def read_report(path: Path) -> Report:
         if kind == "run":
             if report is not None:
                 raise InputError(f"{where}: a second run header")
-            report = Report(partial=_field(record, "partial", (bool,), where))
+            partial = _field(record, "partial", (bool,), where)
+            # a report from before the mode field: its partial flag says it all
+            mode = record.get("mode", "partial" if partial else "full")
+            if mode not in MODES or (mode == "full") == partial:
+                raise InputError(f"{where}: run mode {mode!r} does not fit partial={partial}")
+            report = Report(partial=partial, mode=mode)
             continue
         if report is None:
             raise InputError(f"{where}: a {kind!r} record before the run header")
@@ -191,11 +204,13 @@ def host_dependent_skip(test: TestRecord) -> bool:
 
 
 def judge(report: Report, ratchet: RatchetList) -> Verdict:
-    verdict = Verdict(partial=report.partial, listed=len(ratchet.ids))
+    verdict = Verdict(partial=report.partial, listed=len(ratchet.ids), mode=report.mode)
     for nodeid in ratchet.ids:
         test = report.tests.get(nodeid)
         if test is None:
-            if not report.partial:
+            # A ratchet-only run selected every listed id, so one it lacks is gone, as in a full run. A narrower
+            # selection leaves the unselected ids unjudged: such a run neither breaks nor shrinks the list.
+            if report.mode != "partial":
                 verdict.not_collected.append(nodeid)
         elif host_dependent_skip(test):
             verdict.not_run.append(f"{test.describe()}: {nodeid}")

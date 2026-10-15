@@ -126,6 +126,8 @@ conformance/tools/run-rust-linux.sh                          # full run
 conformance/tools/run-rust-linux.sh -- -k test_version       # partial run: listed ids not selected are not judged
 .venv/bin/python conformance/tools/check_ratchet.py \
   --report conformance/reports/rust-linux/nodeids.jsonl --add  # merge the newly green ids into rust-passing.txt
+conformance/tools/run-rust-linux.sh --ratchet-only \
+  --also tests/protocol/test_split.py --also-k sidebar       # the listed ids plus what a task works on
 conformance/tools/run-rust-linux.sh --frontend gpui          # the GPUI build, held by rust-gpui-passing.txt
 .venv/bin/python conformance/tools/check_ratchet.py --report conformance/reports/rust-gpui-linux/nodeids.jsonl \
   --list conformance/rust-gpui-passing.txt --add
@@ -148,8 +150,21 @@ the same pointer. The ICD manifest must name a driver that is there.
 `rust-passing.txt` holds one pytest node id per line, verbatim (an id may end in spaces) and sorted, after its `#`
 header.
 `check_ratchet.py` prints the breaks and the newly passing ids (into the job summary in CI); `--add` writes only when
-the ratchet holds.
+the ratchet holds, and never removes an id.
 What breaks it is listed in [docs/rust-build.md](docs/rust-build.md) > Ratchet.
+
+A full run waits out the read-back of every red test (a GPUI run short of parity: ~47 min, almost all of it in tests
+that cannot pass yet), so `--ratchet-only` (either frontend) runs just the ids the frontend's list holds, plus each
+`--also` directory, file or node-id prefix (a path outside the protocol, cli and behaviors layers is collected too)
+and each `--also-k` `-k` expression, repeatable: a task names what it is working on. The plugin options behind it are
+`--ratchet-only LIST`, `--also` and `--also-k`. The nodeid report's run header then says `"mode": "ratchet-only"`, and
+`check_ratchet.py` judges it as a full run: every listed id must pass, a listed id that was not collected is warned
+about, and `--add` adds only ids that ran and passed. A narrower selection (`-k`, `-m` or node ids after `--`) makes
+the mode `partial`: the listed ids that did not run are not judged, so a partial run can neither break nor shrink
+the list through what it left out. The report names the mode and the suite time.
+A full run stays the default and is required at milestones: the GPUI switch (the plan's Task 34), and whenever a
+change touches the harness or shared crates broadly (agterm-core, -proto, -host, -server, -ctl, -zmx, -app or
+-term). Between them a task's routine run is ratchet-only.
 `--nodeid-report` cannot be combined with `--coverage-gate`.
 
 ## Catalog and coverage gate

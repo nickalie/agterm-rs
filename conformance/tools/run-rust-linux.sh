@@ -5,8 +5,14 @@
 # parent, its own headless weston and session bus); no window, notification or a11y object reaches the desktop.
 #
 #   conformance/tools/run-rust-linux.sh [--frontend gtk|gpui] [--stage DIR] [--out DIR] [--tests DIR]
-#                                       [--ratchet FILE] [-- PYTEST_ARGS...]
+#                                       [--ratchet FILE] [--ratchet-only [--also SELECTOR]... [--also-k EXPR]...]
+#                                       [-- PYTEST_ARGS...]
 #
+# --ratchet-only runs only the ids the ratchet list holds, plus each --also directory, file or node-id prefix (a
+# path outside the layers is collected too) and each --also-k -k expression, and judges the ratchet as a full run
+# does: every listed id must pass, and newly passing ids come only from what ran. The red tests a build short of
+# parity has wait out their read-backs, so this is a task's routine run; a full run (the default) stays required at
+# milestones (conformance/README.md > Rust runner and ratchet).
 # --frontend picks the build while both coexist: gtk (default; bin/agterm, conformance/rust-passing.txt, stage
 # target/conformance-stage, reports conformance/reports/rust-linux) or gpui (bin/agterm-gpui,
 # conformance/rust-gpui-passing.txt, target/conformance-stage-gpui, conformance/reports/rust-gpui-linux). A GPUI run
@@ -34,6 +40,9 @@ stage=""
 out=""
 tests="$repo/conformance/tests"
 ratchet=""
+ratchet_only=""
+also=()
+also_k=()
 extra=()
 
 while (($#)); do
@@ -43,11 +52,18 @@ while (($#)); do
         --out) out="$2"; shift 2 ;;
         --tests) tests="$2"; shift 2 ;;
         --ratchet) ratchet="$2"; shift 2 ;;
+        --ratchet-only) ratchet_only=1; shift ;;
+        --also) also+=("$2"); shift 2 ;;
+        --also-k) also_k+=("$2"); shift 2 ;;
         --) shift; extra=("$@"); break ;;
-        -h|--help) sed -n '2,22s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,28s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
+if [[ -z "$ratchet_only" ]] && ((${#also[@]} + ${#also_k[@]})); then
+    echo "--also and --also-k need --ratchet-only" >&2
+    exit 2
+fi
 
 # The frontend's app binary in the stage, and its defaults.
 case "$frontend" in
@@ -86,6 +102,26 @@ for layer in protocol cli behaviors; do
     if [[ -d "$tests/$layer" ]]; then layers+=("$tests/$layer"); fi
 done
 ((${#layers[@]})) || { echo "no protocol, cli or behaviors layer under $tests" >&2; exit 2; }
+
+# --ratchet-only: the plugin keeps the listed ids and the extras. An --also path outside the layers (tests/ui, say) is
+# collected as well; selectors are spelled like the list's ids, relative to the suite's root (the tests dir's parent).
+selection=()
+if [[ -n "$ratchet_only" ]]; then
+    selection=(--ratchet-only "$ratchet")
+    for selector in "${also[@]}"; do
+        selection+=(--also "$selector")
+        path="${selector#conformance/}"
+        path="$(dirname "$tests")/${path%%::*}"
+        path="${path%/}"
+        inside=""
+        for layer in "${layers[@]}"; do
+            if [[ "$path" == "$layer" || "$path" == "$layer"/* ]]; then inside=1; fi
+        done
+        [[ -e "$path" ]] || { echo "--also $selector: no $path" >&2; exit 2; }
+        if [[ -z "$inside" ]]; then layers+=("$path"); fi
+    done
+    for expression in "${also_k[@]}"; do selection+=(--also-k "$expression"); done
+fi
 
 [[ -z "$stage" || -d "$stage" ]] || { echo "no staged tree at $stage" >&2; exit 2; }
 
@@ -164,11 +200,13 @@ trap 'rmdir "$parent" 2>/dev/null || true' EXIT
 export CONFORMANCE_TMP="$parent"
 
 set +e
+started=$SECONDS
 # -rfE: the hundreds of skips of a build short of parity would bury the failures; the summary line counts them.
 "$python" -m pytest "${layers[@]}" --impl rust --rust-frontend "$frontend" "${bin_args[@]}" -rfE \
-    --junitxml "$out/junit.xml" \
-    --nodeid-report "$out/nodeids.jsonl" "${extra[@]}" 2>&1 | tee "$out/pytest.log"
+    --junitxml "$out/junit.xml" --nodeid-report "$out/nodeids.jsonl" "${selection[@]}" "${extra[@]}" 2>&1 \
+    | tee "$out/pytest.log"
 pytest_status=${PIPESTATUS[0]}
+elapsed=$((SECONDS - started))
 ratchet_log="$("$python" "$here/check_ratchet.py" --report "$out/nodeids.jsonl" --list "$ratchet" 2>&1)"
 status=$?
 set -e
@@ -187,6 +225,13 @@ if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)
     echo
     echo "- build: $build_commit, \`$stage\`"
     echo "- frontend: $frontend"
+    if [[ -n "$ratchet_only" ]]; then
+        echo "- mode: ratchet-only, the ids of \`$ratchet\`$( ((${#also[@]})) && printf ' + --also %s' "${also[@]}")$( \
+            ((${#also_k[@]})) && printf ' + --also-k %s' "${also_k[@]}")"
+    else
+        echo "- mode: full"
+    fi
+    echo "- suite time: ${elapsed}s"
     if ((${#bin_args[@]})); then echo "- agterm: \`$stage/bin/$app\`"; else echo "- agterm: not staged"; fi
     if [[ -n "$lavapipe" ]]; then echo "- Vulkan: lavapipe only, \`$lavapipe\`"; fi
     echo "- host: $(uname -sr), $(date -u +%Y-%m-%dT%H:%M:%SZ)"

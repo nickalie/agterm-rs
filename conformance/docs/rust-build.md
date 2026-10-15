@@ -140,6 +140,11 @@ for a host-dependent capability (`live-sessions`, `live-any-shell`), which count
 A collection error or a `--must-pass` problem breaks it too.
 When pytest refuses its arguments (a mistyped path after `--`) no report is written and the checker exits 2.
 The checker prints the newly passing ids not yet listed; `--add` writes them into the list.
+The report's run header names its mode: `full`; `ratchet-only` (`run-rust-linux.sh --ratchet-only`, the listed ids
+plus a task's `--also`/`--also-k` selections), judged like a full run, a listed id not collected warned about; or
+`partial` (any narrower selection), where only the listed ids that ran are judged. No mode removes an id.
+A ratchet-only run is a task's routine check; a full run is required at milestones: the GPUI switch, and any change to
+the harness or, broadly, to the shared crates (conformance/README.md > Rust runner and ratchet).
 The script exits with the ratchet's status, or 1 when an instance root was left behind, whatever pytest's own status.
 
 ## GPUI build

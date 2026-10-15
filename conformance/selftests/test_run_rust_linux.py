@@ -331,6 +331,71 @@ def test_a_gpui_run_takes_the_vendored_weston_over_an_old_one(
     assert prefix.is_dir()
 
 
+def test_a_ratchet_only_run_runs_the_listed_ids_and_judges_them(tmp_path: Path, stage: Path, layers: Path) -> None:
+    """The unlisted red test is left out, so it costs nothing; the report names the mode and the suite time."""
+    (layers / "protocol" / "test_other.py").write_text(FAILING_TEST)
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--ratchet-only")
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "- mode: ratchet-only, the ids of" in report and "rust-passing.txt`\n" in report
+    assert re.search(r"^- suite time: \d+s$", report, re.MULTILINE)
+    assert "rust: 1 pass, 0 fail" in report
+    assert "ratchet holds: 1 listed id(s), ratchet-only run" in report
+    header = json.loads((tmp_path / "report" / "nodeids.jsonl").read_text().splitlines()[0])
+    assert header == {"kind": "run", "partial": True, "mode": "ratchet-only"}
+
+
+def test_a_ratchet_only_run_breaks_on_a_red_listed_id(tmp_path: Path, stage: Path, layers: Path) -> None:
+    (layers / "protocol" / "test_other.py").write_text(FAILING_TEST)
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, OTHER_ID, PROBE_ID), "--ratchet-only")
+    assert completed.returncode == 1
+    assert f"BROKEN failed: {OTHER_ID}" in report
+
+
+def test_a_ratchet_only_run_adds_the_tasks_extras(tmp_path: Path, stage: Path, layers: Path) -> None:
+    (layers / "protocol" / "test_other.py").write_text(OTHER_TEST)
+    (layers / "ui").mkdir()
+    (layers / "ui" / "test_extra.py").write_text("def test_extra(ctl):\n    pass\n")
+    (layers / "protocol" / "test_skipped.py").write_text("def test_never(ctl):\n    assert False\n")
+    completed, report = run(
+        tmp_path,
+        stage,
+        layers,
+        ratchet(tmp_path, PROBE_ID),
+        "--ratchet-only",
+        "--also",
+        "tests/ui/test_extra.py",
+        "--also-k",
+        "test_other",
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "--also tests/ui/test_extra.py + --also-k test_other" in report
+    assert "rust: 3 pass, 0 fail" in report
+    assert re.search(rf"^{re.escape(OTHER_ID)}$", completed.stdout, re.MULTILINE)
+    assert re.search(r"^tests/ui/test_extra.py::test_extra$", completed.stdout, re.MULTILINE)
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (("--also", "tests/protocol"), "--also and --also-k need --ratchet-only"),
+        (("--ratchet-only", "--also", "tests/nowhere.py"), "--also tests/nowhere.py: no "),
+    ],
+)
+def test_ratchet_only_usage_errors_exit_2(
+    tmp_path: Path, stage: Path, layers: Path, args: tuple[str, ...], message: str
+) -> None:
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), *args)
+    assert completed.returncode == 2
+    assert message in completed.stderr
+    assert report == ""
+
+
+def test_a_full_run_says_so(tmp_path: Path, stage: Path, layers: Path) -> None:
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID))
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "- mode: full\n" in report and "ratchet holds: 1 listed id(s), full run" in report
+
+
 def test_an_unknown_frontend_exits_2(tmp_path: Path, stage: Path, layers: Path) -> None:
     completed, report = run(tmp_path, stage, layers, ratchet(tmp_path), "--frontend", "qt")
     assert completed.returncode == 2

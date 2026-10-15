@@ -34,8 +34,11 @@ def rec(nodeid: str, outcome: str = "passed", skip: str | None = None, reason: s
     return {"kind": "test", "nodeid": nodeid, "outcome": outcome, "skip": skip, "reason": reason}
 
 
-def write_report(path: Path, *records: dict[str, Any], partial: bool = False) -> Path:
-    lines = [{"kind": "run", "partial": partial}, *records]
+def write_report(path: Path, *records: dict[str, Any], partial: bool = False, mode: str | None = None) -> Path:
+    header: dict[str, Any] = {"kind": "run", "partial": partial}
+    if mode is not None:
+        header["mode"] = mode
+    lines = [header, *records]
     path.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
     return path
 
@@ -190,6 +193,60 @@ def test_not_collected_on_a_full_run_warns(files: tuple[Path, Path], capsys: pyt
         f"warning: listed but not collected: {B}",
         "ratchet holds: 2 listed id(s) (1 not collected), full run",
     ]
+
+
+def test_a_ratchet_only_run_judges_every_listed_id(
+    files: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """It selected every listed id: one it lacks is gone, a warning as in a full run, never silently dropped."""
+    report, ratchet = files
+    write_report(report, rec(A), partial=True, mode="ratchet-only")
+    write_list(ratchet, A, B)
+    code, out, _ = check(capsys, report, ratchet)
+    assert code == 0
+    assert out == [
+        f"warning: listed but not collected: {B}",
+        "ratchet holds: 2 listed id(s) (1 not collected), ratchet-only run",
+    ]
+
+
+def test_a_ratchet_only_run_breaks_on_a_listed_failure(
+    files: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    report, ratchet = files
+    write_report(report, rec(A, "failed"), rec(B), partial=True, mode="ratchet-only")
+    write_list(ratchet, A, B)
+    code, out, _ = check(capsys, report, ratchet, "--add")
+    assert code == 1
+    assert out == [f"BROKEN failed: {A}", "ratchet broken: 1 break(s) over 2 listed id(s)"]
+
+
+@pytest.mark.parametrize("mode", ["ratchet-only", "partial"])
+def test_a_narrower_run_adds_only_what_ran_and_removes_nothing(
+    files: tuple[Path, Path], capsys: pytest.CaptureFixture[str], mode: str
+) -> None:
+    report, ratchet = files
+    # B listed but not in the report, C ran and passed, a failing unlisted id is neither added nor a break
+    write_report(report, rec(A), rec(C), rec(THREE_SPACES, "failed"), partial=True, mode=mode)
+    write_list(ratchet, A, B)
+    code, out, _ = check(capsys, report, ratchet, "--add")
+    assert code == 0
+    assert out[-1] == f"added 1 id(s) to {ratchet}"
+    assert ratchet.read_text() == HEADER + f"{A}\n{B}\n{C}\n"
+
+
+@pytest.mark.parametrize(
+    ("partial", "mode"),
+    [(False, "ratchet-only"), (False, "partial"), (True, "full"), (False, "fast")],
+)
+def test_a_run_mode_that_contradicts_its_partial_flag_is_refused(
+    files: tuple[Path, Path], capsys: pytest.CaptureFixture[str], partial: bool, mode: str
+) -> None:
+    report, ratchet = files
+    write_report(report, rec(A), partial=partial, mode=mode)
+    write_list(ratchet, A)
+    code, _, err = check(capsys, report, ratchet)
+    assert code == 2 and "run mode" in err
 
 
 def test_ids_with_spaces_match_verbatim(files: tuple[Path, Path], capsys: pytest.CaptureFixture[str]) -> None:

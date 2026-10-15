@@ -290,7 +290,7 @@ def test_nodeid_report_merges_phases(pytester: pytest.Pytester) -> None:
     )
     result, records = run_nodeid_report(pytester)
     assert result.ret == pytest.ExitCode.TESTS_FAILED
-    assert records[0] == {"kind": "run", "partial": False}
+    assert records[0] == {"kind": "run", "partial": False, "mode": "full"}
     unsupported = "unsupported: rust lacks posix-shell on this host: no zsh (needs zsh)"
     not_yet = "not-yet-at-level: since 0.40.0, rust is at 0.36.0"
     assert outcomes(records) == [
@@ -387,7 +387,7 @@ def test_nodeid_report_collection_error(pytester: pytest.Pytester) -> None:
     pytester.makepyfile(test_ok="def test_ok():\n    pass\n", test_broken="import no_such_module_xyz\n")
     result, records = run_nodeid_report(pytester)
     assert result.ret == pytest.ExitCode.INTERRUPTED
-    assert records[0] == {"kind": "run", "partial": False}
+    assert records[0] == {"kind": "run", "partial": False, "mode": "full"}
     # A collection error stops the session before any test runs.
     assert outcomes(records) == [("test_ok.py::test_ok", "not-run", None, None)]
     (error,) = [r for r in records if r["kind"] == "collection-error"]
@@ -402,9 +402,92 @@ def test_nodeid_report_collection_error(pytester: pytest.Pytester) -> None:
 def test_nodeid_report_partial(pytester: pytest.Pytester, args: tuple[str, ...], partial: bool) -> None:
     pytester.makepyfile(test_partial="def test_one():\n    pass\n\ndef test_two():\n    pass\n")
     _, records = run_nodeid_report(pytester, *args)
-    assert records[0] == {"kind": "run", "partial": partial}
+    assert records[0] == {"kind": "run", "partial": partial, "mode": "partial" if partial else "full"}
     expected = ["test_partial.py::test_one"] + ([] if partial else ["test_partial.py::test_two"])
     assert [nodeid for nodeid, *_ in outcomes(records)] == expected
+
+
+RATCHET_ONLY_TESTS = """
+import pytest
+
+def test_one():
+    pass
+
+def test_two():
+    pass
+
+@pytest.mark.parametrize("name", ["alpha", "beta"])
+def test_three(name):
+    pass
+"""
+
+
+def ratchet_list(pytester: pytest.Pytester, *ids: str) -> str:
+    (pytester.path / "list.txt").write_text("# header\n" + "".join(f"{nodeid}\n" for nodeid in ids))
+    return "list.txt"
+
+
+def ran(records: list[dict[str, Any]]) -> list[str]:
+    return [nodeid for nodeid, *_ in outcomes(records)]
+
+
+def test_ratchet_only_runs_the_listed_ids(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile(test_r=RATCHET_ONLY_TESTS)
+    listed = ratchet_list(pytester, "test_r.py::test_three[beta]", "test_r.py::test_two", "test_r.py::test_gone")
+    result, records = run_nodeid_report(pytester, "--ratchet-only", listed)
+    assert result.ret == pytest.ExitCode.OK
+    assert records[0] == {"kind": "run", "partial": True, "mode": "ratchet-only"}
+    assert ran(records) == ["test_r.py::test_two", "test_r.py::test_three[beta]"]
+
+
+ONE, TWO = "test_r.py::test_one", "test_r.py::test_two"
+ALPHA, BETA = "test_r.py::test_three[alpha]", "test_r.py::test_three[beta]"
+
+
+@pytest.mark.parametrize(
+    ("extra", "added"),
+    [
+        (("--also", ONE), [ONE]),
+        (("--also", "test_r.py::test_three"), [ALPHA, BETA]),
+        (("--also", "test_r.py"), [ONE, ALPHA, BETA]),
+        (("--also-k", "one or alpha"), [ONE, ALPHA]),
+        (("--also", ONE, "--also-k", "three and beta"), [ONE, BETA]),
+    ],
+)
+def test_ratchet_only_adds_the_extra_selections(
+    pytester: pytest.Pytester, extra: tuple[str, ...], added: list[str]
+) -> None:
+    pytester.makepyfile(test_r=RATCHET_ONLY_TESTS)
+    listed = ratchet_list(pytester, TWO)
+    _, records = run_nodeid_report(pytester, "--ratchet-only", listed, *extra)
+    assert records[0]["mode"] == "ratchet-only"
+    assert ran(records) == [nodeid for nodeid in (ONE, TWO, ALPHA, BETA) if nodeid in {TWO, *added}]
+
+
+@pytest.mark.parametrize("narrowing", [("-k", "not two"), ("test_r.py::test_two",)])
+def test_ratchet_only_narrowed_further_is_a_partial_run(pytester: pytest.Pytester, narrowing: tuple[str, ...]) -> None:
+    """Some listed ids did not run on purpose: the report must not claim every listed id was selected."""
+    pytester.makepyfile(test_r=RATCHET_ONLY_TESTS)
+    listed = ratchet_list(pytester, "test_r.py::test_one", "test_r.py::test_two")
+    _, records = run_nodeid_report(pytester, "--ratchet-only", listed, *narrowing)
+    assert records[0] == {"kind": "run", "partial": True, "mode": "partial"}
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (("--also", "test_r.py"), "--also and --also-k need --ratchet-only"),
+        (("--also-k", "one"), "--also and --also-k need --ratchet-only"),
+        (("--ratchet-only", "absent.txt"), "--ratchet-only: cannot read"),
+        (("--ratchet-only", "list.txt", "--also-k", "one and"), "--also-k: bad expression"),
+    ],
+)
+def test_ratchet_only_usage_errors(pytester: pytest.Pytester, args: tuple[str, ...], message: str) -> None:
+    pytester.makepyfile(test_r=RATCHET_ONLY_TESTS)
+    ratchet_list(pytester, "test_r.py::test_one")
+    result = pytester.runpytest(*args)
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines([f"*{message}*"])
 
 
 def test_nodeid_report_must_pass_problems(pytester: pytest.Pytester) -> None:
@@ -425,7 +508,7 @@ def test_nodeid_report_not_run(pytester: pytest.Pytester, body: str, stopped: st
     pytester.makepyfile(test_stop=f"def test_stop():\n    {body}\n\ndef test_after():\n    pass\n")
     # A subprocess: in-process pytester re-raises a KeyboardInterrupt into this session.
     _, records = run_nodeid_report(pytester, "-x", subprocess=True)
-    assert records[0] == {"kind": "run", "partial": False}
+    assert records[0] == {"kind": "run", "partial": False, "mode": "full"}
     assert outcomes(records) == [
         ("test_stop.py::test_stop", stopped, None, None),
         ("test_stop.py::test_after", "not-run", None, None),
