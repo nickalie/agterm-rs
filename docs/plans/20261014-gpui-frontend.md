@@ -733,16 +733,23 @@ Built on `agterm-ghostty-vt` (Task 5), with the thread protocol of Technical Det
     is followed by the daemon parser's unfinished sequence (Ghostty's stream continuation tracking, limit as
     libghostty's snapshots), so a sequence cut at the attach continues identically in the client; and a client the
     accept already put among the broadcast's receivers (output sent between its connect and its Init, first attach or
-    re-attach) gets `CAN ESC[?6l ESC[r ESC[H ESC[J` ahead of the snapshot that repeats that output (review fix: the
-    first version reset with `ESC[H ESC[2J` on first attach only, which homed into an origin-mode margin and left
-    re-attach unprotected). zig tests: 110/110, convergence tests feeding a client terminal across CSI/OSC/DCS/APC/
-    UTF-8 cuts before connect, and in the connect→Init broadcast with scrollback, origin mode and the alternate screen,
-    first and re-attach (a broadcast client must end as one that connected after it; without the reset 12/14 cases
-    differ, with the old one the origin cases). Re-attach scrollback replay is unchanged (a snapshot's history rows
-    that never scrolled off are erased by its own `ESC[2J`: the serializer's, before and after). Residue: a string
-    sequence (OSC/DCS/APC) cut in
-    that broadcast window is dispatched early by a Ghostty client (any exit from a string state dispatches), with
-    whatever external effect it has. Results: repro 60/60 painted (was 20/20 blank); `tests/launch.rs` through the
+    re-attach) gets a reset ahead of the snapshot that repeats that output: CAN, SGR 0, OSC 8 closed, G0–G3 ASCII
+    and SI, DECSCA off, IRM off, `?69l`, `?6l`, `ESC[r`, `ESC[H`, ED 0 — everything the cursor carries into the
+    snapshot's text (an erase paints with the pen's background; the snapshot writes default-style text without an
+    SGR and restores the cursor's style, link and charsets only after its text). Review fixes: the first version reset
+    with `ESC[H ESC[2J` on first attach only (homed into an origin-mode margin, left re-attach unprotected), the second
+    left the pen, link and charsets. Not taken: holding output from a client until its Init (no reset needed at all)
+    — `zmx tail` connects and only reads, never sending an Init or anything else, so that needs a client protocol
+    change or a timer. zig tests: 110/110, convergence tests feeding a client terminal across CSI/OSC/DCS/APC/UTF-8
+    cuts before connect, and in the connect→Init broadcast with 20 lines of scrollback, origin mode, the alternate
+    screen, a colored pen, an open hyperlink, DEC graphics in G0 and shifted G1, protection, insert mode and left/right
+    margins, first and re-attach (a broadcast client must end as one that connected after it; without any reset 12
+    cases differ, with the previous reset 8). Re-attach scrollback replay is unchanged (a snapshot's history rows that
+    never scrolled off are erased by its own `ESC[2J`: the serializer's, before and after). Residues: a string
+    sequence (OSC/DCS/APC) cut in that broadcast window is dispatched early by a Ghostty client (any exit from a
+    string state dispatches), with whatever external effect it has; tab stops, Kitty images and a saved cursor the
+    broadcast set stay; a broadcast that scrolled is in the client's scrollback and comes again with the snapshot's
+    history (the screen and title still match; ED 3 would also erase a plain `zmx attach`'s outer history). Results: repro 60/60 painted (was 20/20 blank); `tests/launch.rs` through the
     real Pane: 50 sequential + 54 parallel (6 at a time) fresh launches all painted, prompt within ≤ 263 ms (old zmx:
     the first launch already blank); 30 consecutive runs of agterm-term's tests (each 20 + 24 fresh live launches,
     1 320 in all, alongside a full GTK conformance run) all painted and passed. The bench's resize nudges are gone. The zmx build id changes, so
