@@ -386,14 +386,10 @@ impl Shared {
     }
 
     /// An appearance flip's reload of font size `configured`: it is what `reset_font_size` returns to from now on; the
-    /// live size stays, marked as stepped when it is apart from `configured` (the GTK build restores it through
-    /// libghostty's `set_font_size` action, which marks it so).
+    /// live size stays, stepped or not as before, so a size the user never stepped (a restored or replacement
+    /// terminal's start size) still takes the configured one on a later explicit reload.
     fn keep_live_points(&self, configured: f32) {
-        let configured = configured.clamp(1.0, 255.0);
-        self.original_points.set(configured);
-        if (configured - self.points.get()).abs() >= f32::EPSILON {
-            self.font_adjusted.set(true);
-        }
+        self.original_points.set(configured.clamp(1.0, 255.0));
     }
 
     /// The owner view's scale factor, as last laid out (1 before).
@@ -817,7 +813,8 @@ impl Terminal {
 
     /// Takes the config an appearance flip reloaded, keeping the live font size (upstream's
     /// `reloadConfigPreservingSessionZoom`, the GTK build's `keep_zoom`): the configured size is what a reset returns
-    /// to from now on, and a live size apart from it is kept as one the user stepped, so a later reload keeps it too.
+    /// to from now on, and the live size keeps whether the user stepped it, so a later reload follows the config unless
+    /// the user did.
     pub fn flip_config(&mut self, config: TerminalConfig, cx: &mut Context<Self>) {
         self.apply_config(config, ConfigChange::Flip, cx);
     }

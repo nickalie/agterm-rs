@@ -1025,7 +1025,7 @@ fn a_config_reload_resizes_a_restored_size_the_user_did_not_step() {
 #[test]
 fn an_appearance_flip_keeps_a_restored_or_replacement_size() {
     // upstream's `reloadConfigPreservingSessionZoom`, the GTK build's `keep_zoom`: the flip's reload keeps the live
-    // size, and keeps it as stepped, so a later explicit reload keeps it too
+    // size without marking it stepped, so a later explicit reload still takes the configured one
     let mut cx = real_fonts();
     let (terminal, events) = unstarted_at(&mut cx, "DejaVu Sans Mono", Some(18.0));
     let shared = terminal.read_with(&cx, |terminal, _| Rc::clone(terminal.shared()));
@@ -1036,7 +1036,20 @@ fn an_appearance_flip_keeps_a_restored_or_replacement_size() {
     // the configured size is what a reset returns to
     assert_points(shared.original_font_points(), 13.0);
     terminal.update(&mut cx, |terminal, cx| terminal.reload_config(sized(13.0), cx));
+    assert_points(shared.font_points(), 13.0);
+}
+
+#[test]
+fn an_appearance_flip_and_a_reload_keep_the_size_the_user_zoomed_to() {
+    let mut cx = real_fonts();
+    let (terminal, _events) = unstarted(&mut cx, "DejaVu Sans Mono");
+    let shared = terminal.read_with(&cx, |terminal, _| Rc::clone(terminal.shared()));
+    shared.adjust_font_points(18.0, false);
+    terminal.update(&mut cx, |terminal, cx| terminal.flip_config(sized(13.0), cx));
     assert_points(shared.font_points(), 18.0);
+    terminal.update(&mut cx, |terminal, cx| terminal.reload_config(sized(13.0), cx));
+    assert_points(shared.font_points(), 18.0);
+    assert_points(shared.original_font_points(), 13.0);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
