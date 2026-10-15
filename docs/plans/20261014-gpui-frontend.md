@@ -734,17 +734,18 @@ Built on `agterm-ghostty-vt` (Task 5), with the thread protocol of Technical Det
     libghostty's snapshots), so a sequence cut at the attach continues identically in the client; and a client the
     accept already put among the broadcast's receivers (output sent between its connect and its Init, first attach or
     re-attach) gets a reset ahead of the snapshot that repeats that output: CAN, SGR 0, OSC 8 closed, G0–G3 ASCII
-    and SI, DECSCA off, IRM off, `?69l`, `?6l`, `ESC[r`, `ESC[H`, ED 0 — everything the cursor carries into the
-    snapshot's text (an erase paints with the pen's background; the snapshot writes default-style text without an
-    SGR and restores the cursor's style, link and charsets only after its text). Review fixes: the first version reset
-    with `ESC[H ESC[2J` on first attach only (homed into an origin-mode margin, left re-attach unprotected), the second
-    left the pen, link and charsets. Not taken: holding output from a client until its Init (no reset needed at all)
+    and SI, DECSCA 1 then 0 (the 1 leaves ISO protection, which SPA sets and every erase honors), IRM off, `?69l`,
+    `?6l`, `ESC[r`, `ESC[H`, ED 0 — everything the cursor carries into the snapshot's text (an erase paints with the
+    pen's background; the snapshot writes default-style text without an SGR and restores the cursor's style, link
+    and charsets only after its text). Review fixes: the first version reset with `ESC[H ESC[2J` on first attach
+    only (homed into an origin-mode margin, left re-attach unprotected), the second left the pen, link and charsets,
+    the third left SPA-protected cells standing (DECSCA 0 alone keeps ISO protection on). Not taken: holding output from a client until its Init (no reset needed at all)
     — `zmx tail` connects and only reads, never sending an Init or anything else, so that needs a client protocol
     change or a timer. zig tests: 110/110, convergence tests feeding a client terminal across CSI/OSC/DCS/APC/UTF-8
     cuts before connect, and in the connect→Init broadcast with 20 lines of scrollback, origin mode, the alternate
-    screen, a colored pen, an open hyperlink, DEC graphics in G0 and shifted G1, protection, insert mode and left/right
-    margins, first and re-attach (a broadcast client must end as one that connected after it; without any reset 12
-    cases differ, with the previous reset 8). Re-attach scrollback replay is unchanged (a snapshot's history rows that
+    screen, a colored pen, an open hyperlink, DEC graphics in G0 and shifted G1, cells written under DECSCA and under
+    SPA, insert mode and left/right margins, first and re-attach (a broadcast client must end as one that connected
+    after it; without any reset 12 cases differ, with the second reset 8, with the third the 4 SPA ones). Re-attach scrollback replay is unchanged (a snapshot's history rows that
     never scrolled off are erased by its own `ESC[2J`: the serializer's, before and after). Residues: a string
     sequence (OSC/DCS/APC) cut in that broadcast window is dispatched early by a Ghostty client (any exit from a
     string state dispatches), with whatever external effect it has; tab stops, Kitty images and a saved cursor the

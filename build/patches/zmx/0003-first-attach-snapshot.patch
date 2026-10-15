@@ -1,6 +1,6 @@
 diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
---- zmx-orig/src/loop.zig	2026-10-15 07:10:28.808686736 +0300
-+++ zmx/src/loop.zig	2026-10-15 07:10:28.809686741 +0300
+--- zmx-orig/src/loop.zig	2026-10-15 07:31:58.602456741 +0300
++++ zmx/src/loop.zig	2026-10-15 07:31:58.603456747 +0300
 @@ -241,6 +241,17 @@
      });
  }
@@ -48,7 +48,7 @@ diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
      /// sent .Manage: leads only by claiming, never by typing, and is told its role
      managed: bool = false,
      claim_on_init: bool = false,
-@@ -588,6 +604,23 @@
+@@ -588,6 +604,25 @@
      }
  };
  
@@ -59,7 +59,9 @@ diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
 +/// sequence the output was cut in; SGR 0 the pen (an erase paints with its
 +/// background, and the snapshot writes default-style text without an SGR);
 +/// OSC 8 closes a hyperlink; G0–G3 designate ASCII and SI shifts G0 in;
-+/// DECSCA drops protection; IRM goes; left/right margin mode, origin mode and
++/// DECSCA 1 then 0 drops protection (the 1 switches the screen from ISO
++/// protection, which SPA sets and which even unprotected erases honor, to
++/// DEC, which they do not); IRM goes; left/right margin mode, origin mode and
 +/// the scrolling region go so the cursor homes to the top left; and the screen
 +/// below it is erased (ED 0, not ED 2, which a Ghostty client would push into
 +/// its scrollback). The snapshot then restores the daemon's own state.
@@ -67,12 +69,12 @@ diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
 +/// by a Ghostty client, with whatever external effect it has; tab stops,
 +/// Kitty images and a saved cursor the output set stay; output that scrolled
 +/// is in the client's scrollback and comes again with the snapshot's history.
-+const ATTACH_RESET = "\x18\x1b[0m\x1b]8;;\x1b\\\x1b(B\x1b)B\x1b*B\x1b+B\x0f\x1b[0\"q\x1b[4l\x1b[?69l\x1b[?6l\x1b[r\x1b[H\x1b[J";
++const ATTACH_RESET = "\x18\x1b[0m\x1b]8;;\x1b\\\x1b(B\x1b)B\x1b*B\x1b+B\x0f\x1b[1\"q\x1b[0\"q\x1b[4l\x1b[?69l\x1b[?6l\x1b[r\x1b[H\x1b[J";
 +
  /// Daemon is responsible for managing a zmx session.
  ///
  /// It holds all the state for a running session.  Instead of a single daemon for all sessions, we
-@@ -635,6 +668,9 @@
+@@ -635,6 +670,9 @@
      task_ended_at: ?u64 = null, // timestamp when task exited
      pty_fd: i32 = -1, // set by daemonLoop so handleRun can probe the foreground process
      shell: []const u8 = "/bin/sh",
@@ -82,7 +84,7 @@ diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
  
      /// Create a Daemon. Caller is responsible for freeing all variables passed
      /// into the init fn.
-@@ -1047,6 +1083,53 @@
+@@ -1047,6 +1085,53 @@
          return error.NoLeaderFound;
      }
  
@@ -136,7 +138,7 @@ diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
      pub fn handleInit(
          self: *Daemon,
          gpa: std.mem.Allocator,
-@@ -1078,30 +1161,13 @@
+@@ -1078,30 +1163,13 @@
              self.screen_revision +%= 1;
          }
  
@@ -174,7 +176,7 @@ diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
  
          // only resize if leader
          if (is_leader) {
-@@ -1699,6 +1765,288 @@
+@@ -1699,6 +1767,292 @@
      _ = daemon.closeClient(alloc, origin, 0, false);
  }
  
@@ -430,12 +432,16 @@ diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
 +        .{ "\x1b[2;5r\x1b[?6hX", " $ " },
 +        .{ "\x1b[?1049halt", " $ " },
 +        // what the cursor carries into the snapshot's text: a pen with a background (which an erase also paints),
-+        // an open hyperlink, DEC graphics in G0, and G1 shifted in, protection, insert mode, left and right margins
++        // an open hyperlink, DEC graphics in G0, and G1 shifted in, DEC and ISO (SPA) protection of the cells it
++        // wrote, insert mode, left and right margins
 +        .{ "seen \x1b[1;4;44m", "x\x1b[0m $ " },
 +        .{ "seen \x1b]8;;http://example.com\x1b\\link", "\x1b]8;;\x1b\\ $ " },
 +        .{ "seen \x1b(0qq", "q\x1b(B $ " },
 +        .{ "seen \x1b)0\x0eqq", "\x0f $ " },
 +        .{ "seen \x1b[1\"q", "\x1b[0\"q $ " },
++        .{ "seen \x1b[1\"qSECRET", "\x1b[0\"q $ " },
++        .{ "seen \x1bVSECRET", "\x1bW $ " },
++        .{ "seen \x1bVSECRET\x1bW", " $ " },
 +        .{ "seen \x1b[4h", "\x1b[4l $ " },
 +        .{ "\x1b[?69h\x1b[5;20sseen", "\x1b[?69l $ " },
 +    };
