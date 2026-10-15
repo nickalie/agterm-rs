@@ -1176,22 +1176,94 @@ Productionizes Task 2's prototype.
 - Create: `vendor/gpui-pre/` (patched copy) or a pinned git fork; `Cargo.toml` `[patch.crates-io]`
 - Create: `crates/agterm-gpui/src/external_texture.rs`
 
-- [ ] wgpu-hal Vulkan import of dmabuf (fourcc, modifier, planes), fence/sync_file handling, buffer release callback
-- [ ] ➕ (Task 2) the patch has three parts (GPUI patch 1): the scene primitive + `Window::paint_external_surface`
+- [x] wgpu-hal Vulkan import of dmabuf (fourcc, modifier, planes), fence/sync_file handling, buffer release callback
+- [x] ➕ (Task 2) the patch has three parts (GPUI patch 1): the scene primitive + `Window::paint_external_surface`
       (`PaintSurface` Linux payload), the renderer draw, and device creation through wgpu-hal `open_with_callback` +
       `create_device_from_hal` adding `VK_EXT_image_drm_format_modifier` (wgpu enables only the external-memory
       extensions)
-- [ ] ➕ (Task 2) every memory plane's layout passed (Intel CCS: 3 planes in one BO, non-disjoint image); the import
+- [x] ➕ (Task 2) every memory plane's layout passed (Intel CCS: 3 planes in one BO, non-disjoint image); the import
       cache keyed per buffer and invalidated only when the buffer leaves the producer's current set
-- [ ] ➕ (Task 2) expose the wgpu adapter's DRM render node (`VK_EXT_physical_device_drm`) and the modifiers it imports,
+- [x] ➕ (Task 2) expose the wgpu adapter's DRM render node (`VK_EXT_physical_device_drm`) and the modifiers it imports,
       for Task 31 (cross-GPU dmabufs fail in `vkCreateImage`)
-- [ ] GPUI element drawing the imported texture with clipping and content mask, so overlays above it work
-- [ ] SHM-with-damage fallback behind the same element when import fails — a **last-resort correctness fallback**
+- [x] GPUI element drawing the imported texture with clipping and content mask, so overlays above it work
+- [x] SHM-with-damage fallback behind the same element when import fails — a **last-resort correctness fallback**
       for documents only (Task 2: 80–115 % CPU on 1080p video, 2.5 fps on YouTube), logged as a warning when chosen,
       never selected while dmabuf import works
-- [ ] tests: format/modifier negotiation, fallback selection, lifetime (no use after release) with a synthetic dmabuf
+- [x] tests: format/modifier negotiation, fallback selection, lifetime (no use after release) with a synthetic dmabuf
       (GBM/udmabuf) under Mesa where available
-- [ ] gates — must pass before Task 30
+- [x] gates — must pass before Task 30
+- result (2026-10-15):
+  - **Vendoring**: `vendor/gpui-pre` and `vendor/gpui-pre-wgpu` are the sha256-verified crates.io 0.3.9 sources (minus
+    gpui-pre's `examples/` and `Cargo.lock`) plus `build/patches/gpui-pre/0001-external-surfaces.patch` and
+    `build/patches/gpui-pre-wgpu/0001-dmabuf-external-surfaces.patch`, wired by `[patch.crates-io]`;
+    `scripts/vendor-gpui.sh [--check|--diff]` (the calloop pattern of Task 12; `--diff` turns edits under `vendor/`
+    back into the patches), checked in CI. No pinned git fork: offline, reviewable as two patch files.
+  - **gpui-pre** (scene/window half): `PaintSurface.source: ExternalSurface` on Linux — `DmaBuf(Arc<DmaBufFrame>)`
+    (an `Arc<DmaBuffer>`: fourcc, modifier, every plane's fd/offset/stride) or `Pixels(Arc<PixelFrame>)` (premultiplied
+    BGRA, a serial, damage rects, one renderer texture per `PixelSurface`); every frame carries a `FrameCompletion`
+    reporting once `Presented` / `Discarded` (dropped undrawn) / `Failed(reason)`.
+    `Window::paint_external_surface(bounds, source)`; `dmabuf_import_caps()` (adapter, render node, formats with
+    modifiers and plane counts, or the reason it imports none) and `external_surface_stats()`.
+  - **gpui-pre-wgpu** (renderer half): `create_device` opens a Vulkan adapter through `open_with_callback` adding
+    `VK_EXT_image_drm_format_modifier` (+ the external-memory extensions if wgpu left them out) when the adapter has
+    them and Vulkan 1.2 timeline semaphores, else as before (caps then say why); caps from
+    `VK_EXT_physical_device_drm` (the `/dev/dri` node with that rdev) and the AR24/XR24/AB24/XB24 modifiers whose
+    tiling features sample linearly and whose image format properties import a dmabuf. Import: checked against the caps
+    first (format, modifier, its plane count, one buffer object for all planes), then `VkImage` with
+    DRM-modifier tiling and every plane's layout, a dedicated allocation importing a dup of plane 0's fd,
+    `texture_from_raw` (wgpu-hal frees image and memory when wgpu drops the texture after the GPU is done) →
+    `create_texture_from_hal`; cached per `Arc<DmaBuffer>` with a `Weak` (dropped at the first frame after the producer
+    and every scene let the buffer go), failures cached the same way so a failed buffer is not re-imported each frame.
+    A pipeline of its own (group 1 bindings 4–6) draws within the content mask, padding alpha opaque, premultiplied
+    texels for either target alpha mode. **Release**: every submission drawing a frame for the first time signals a
+    timeline semaphore of the renderer's (`Queue::add_signal_semaphore`) and a thread reports those frames `Presented`
+    after `vkWaitSemaphores` on it — outside wgpu's locks, since `Device::poll(Wait)` holds the fence lock that
+    `Queue::submit` needs.
+  - ➕ (review) **acquire from the foreign queue family — a GPU copy, not direct sampling**: wgpu-core 29 enters
+    every texture from hal as UNINITIALIZED, so its first use was an UNDEFINED → SHADER_READ_ONLY transition (Mesa ANV
+    gen12 re-initialises fast-clear state there, and CC modifiers keep the clear colour in the dmabuf), and wgpu never
+    acquires from `VK_QUEUE_FAMILY_FOREIGN_EXT`; no wgpu 29 API seeds a tracked state, and raw and wgpu commands may
+    not share an encoder. So the import stays a raw `VkImage` wgpu never sees (`VK_EXT_queue_family_foreign` now
+    required, modifiers filtered for TRANSFER_SRC): per new frame a wgpu command buffer clears the buffer's snapshot
+    texture once and moves it to COPY_DST (`transition_resources`), a raw-only one acquires the image (FOREIGN →
+    queue family, GENERAL → TRANSFER_SRC), `vkCmdCopyImage`s it into the snapshot and releases it, then the frame
+    samples the snapshot; redraws copy nothing. `Presented` means the copy finished; imported images are destroyed
+    once their buffer left and the timeline passed their last copy. Deviation from "zero-copy into a wgpu texture":
+    no CPU copy, one GPU copy per new frame (1080p60 ≈ 1 GB/s of read+write bandwidth, nominal). Codex-reviewed
+    (agreed), transcript
+    `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/fixer-task-29-foreign-acquire/transcript.md`. Also:
+    `FrameOutcome::Lost` (device lost, renderer shut down; a slow GPU is waited for, logged after 10 s) never requests
+    the SHM fall-back, only `Failed` (import) does; frames of an abandoned submission report `Discarded`; no timeline
+    on GL renderers (CPU pixels only there); the SHM canvas alternates two copies, catching up on the previous
+    frame's damage, so a frame no longer clones the whole canvas. Tests: the hardware case renders through EGL/GLES
+    on GBM buffers of each non-linear XR24 modifier (Intel X/Y tiled, CCS 2-plane, CCS_CC 3-plane), GL clears red then
+    blue in the same buffer, both read back, then a redraw after GL cleared green without handing over still shows
+    blue with no new copy; under `AGTERM_REQUIRE_DISPLAY_TESTS` a skipped case fails (CI loads `udmabuf`).
+  - **agterm-gpui `external_texture`**: `negotiate(caps) -> FrameSource::{DmaBuf { render_node, formats }, Shm {
+    reason }}` (the drawn formats preferred AR24, XR24, AB24, XB24, `DRM_FORMAT_MOD_INVALID` dropped, LINEAR last; SHM
+    only without a device, without dmabuf import, without a render node or drawn format — logged as a warning);
+    `import_refusal(caps, buffer)` (the NVIDIA case: a modifier outside the device's set); `ExternalTexture`:
+    `push_dmabuf(buffer, Acquire::{Implicit, SyncFile(fd)}, on_done)` shows a frame once its fence polls readable (the
+    dmabuf's implicit fence or a sync_file; `prepare(window)` asks for another frame while one waits),
+    `push_shm(width, height, regions, on_done)` composes damaged regions into a CPU copy (copy-on-write while the
+    renderer still reads the last one), `take_fallback()` once when a buffer was refused or failed in the renderer
+    (warning logged; dmabuf frames are then discarded); `external_texture(surface)` is the element (a canvas painting
+    `paint_external_surface` over its bounds).
+  - Tests: 21 unit tests (negotiation, the per-buffer check, sync_file gating, discard on replace/clear, outcomes and
+    the fall-back, the SHM canvas) and `tests/external_texture` (custom harness, a child per Vulkan driver, no display:
+    GPUI's `HeadlessAppContext` + its headless wgpu renderer read back): 11 cases on lavapipe and on the Intel iGPU
+    (ANV, `renderD128`) — caps (render node and non-linear modifiers on Intel), udmabuf dmabufs drawn zero-copy with
+    padding alpha opaque, one import per buffer (new pixels in the same buffer show without a re-import), release (a
+    reused buffer never reaches the screen, the import goes once the buffer left the set), sync_file gating, AR24
+    alpha blending, a refused modifier (never reaches the renderer), a failed import (outcome, fall-back, not
+    retried), an Intel 3-plane CCS buffer from GBM (modifier `0x0100000000000008`) imported and presented, SHM damage
+    uploads (only the damaged bytes), clipping by an `overflow_hidden` parent and an overlay painted above.
+  - ⚠️ Not tested headlessly: NVIDIA's own driver (no Mesa, no headless path here) — Task 33 walks it on the real
+    screen; the element's `Acquire::Implicit` there relies on NVIDIA attaching implicit fences to its dmabufs.
+  - For Task 32: map `agterm_wpe::DmaBuf` to one `gpui::DmaBuffer` per `BufferId` (dup the fds once), drop it on
+    `BuffersRemoved`; `Presented`/`Discarded`/`Failed` all answer `Host::frame_presented`, and `take_fallback()` →
+    `Host::fall_back_to_shm(view)`; `negotiate(dmabuf_import_caps())` → `FrameMode` (caps exist only once a window drew
+    its first frame); WPE hands no rendering fence, so `Acquire::Implicit`.
 
 ### Task 30: agterm-wpe-sys — gir bindings
 
