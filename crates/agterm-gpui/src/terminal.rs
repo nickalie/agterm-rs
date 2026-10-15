@@ -101,9 +101,16 @@ pub struct TerminalSpec {
     pub font_size: Option<f32>,
 }
 
-/// Starts the pane (Task 18 passes `Pane::launch` with the session's launch); called once, with the size of the grid
+/// Starts the pane (the deck passes `Pane::launch` with the pane's launch); called once, with the size of the grid
 /// the owner view first laid out and the wake that reaches this terminal's pump.
 pub type Spawn = Box<dyn FnOnce(PaneConfig) -> Result<Pane, PaneError>>;
+
+/// What a gated terminal calls once, when its owner view first has a size: it asks for its launch, which comes later
+/// through [`Shared::launch_with`] (a session pane waits for the core's seed and its paced launch turn).
+pub type AskLaunch = Box<dyn FnOnce()>;
+
+/// What a key press on a terminal that holds its keys does instead of reaching the program ([`Shared::hold_keys`]).
+pub type KeyHold = Rc<dyn Fn()>;
 
 /// What a terminal tells its frontend.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +143,8 @@ enum Effect {
     Paste(ClipboardLocation),
     Copy(String, ClipboardLocation),
     Emit(TerminalEvent),
+    /// A gated terminal's launch arrived after its owner laid it out: start it now.
+    Spawn,
 }
 
 /// Where a terminal is in its life.
@@ -143,6 +152,8 @@ enum Effect {
 enum Status {
     /// Waiting for the owner view's first grid.
     Pending,
+    /// Laid out, a gated terminal waits for its launch ([`Shared::launch_with`]).
+    Waiting,
     /// The spawn is queued.
     Spawning,
     Live,
@@ -190,6 +201,12 @@ pub struct Shared {
     readonly: Cell<bool>,
     /// The URL of the link under the pointer (`copy_url_to_clipboard`; Task 14's hover sets it).
     hovered_url: RefCell<Option<String>>,
+    /// A gated terminal's ask for its launch, until it is made.
+    ask: RefCell<Option<AskLaunch>>,
+    /// The terminal is a client of its pane's live-session daemon: from the spec, or from the launch it started with.
+    live: Cell<bool>,
+    /// While set, a key press runs this instead of reaching the program (a lead cover, a held exit).
+    key_hold: RefCell<Option<KeyHold>>,
 }
 
 impl std::fmt::Debug for Shared {
@@ -365,6 +382,58 @@ impl Shared {
         }
     }
 
+    /// Whether the terminal is a client of its pane's live-session daemon.
+    #[must_use]
+    pub fn is_live(&self) -> bool {
+        self.live.get()
+    }
+
+    /// Hands a gated terminal its launch: it starts at once when its owner already laid it out (on the pump's next
+    /// tick), else at its first layout. Ignored once the terminal started, failed or was torn down, and for a second
+    /// launch. `live`: the launch attaches to a live-session daemon.
+    pub fn launch_with(&self, spawn: Spawn, live: bool) {
+        if !matches!(self.status.get(), Status::Pending | Status::Waiting) || self.spawn.borrow().is_some() {
+            return;
+        }
+        self.live.set(live);
+        self.ask.borrow_mut().take();
+        *self.spawn.borrow_mut() = Some(spawn);
+        if self.status.get() == Status::Waiting {
+            self.status.set(Status::Spawning);
+            self.queue(Effect::Spawn);
+        }
+    }
+
+    /// Whether the terminal waits for its launch (gated, laid out, not handed one yet).
+    #[must_use]
+    pub fn is_waiting(&self) -> bool {
+        self.status.get() == Status::Waiting
+    }
+
+    /// While `hold` is set a key press runs it instead of reaching the program; `None` gives the keys back.
+    pub fn hold_keys(&self, hold: Option<KeyHold>) {
+        *self.key_hold.borrow_mut() = hold;
+    }
+
+    /// Whether the terminal holds its keys.
+    #[must_use]
+    pub fn holds_keys(&self) -> bool {
+        self.key_hold.borrow().is_some()
+    }
+
+    /// A key press reached the terminal: while it holds its keys, the hold runs and the key is consumed (`true`); the
+    /// keyboard path sends the key to the program only otherwise.
+    pub fn held_key(&self) -> bool {
+        let hold = self.key_hold.borrow().clone();
+        match hold {
+            Some(hold) => {
+                hold();
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Wakes the pump: the queued work runs and the views redraw.
     pub fn poke(&self) {
         let _ = self.wake.try_send(());
@@ -405,9 +474,18 @@ impl Shared {
         }
         self.laid.set(Some(laid));
         match self.status.get() {
-            Status::Pending => {
+            Status::Pending if self.spawn.borrow().is_some() => {
                 self.status.set(Status::Spawning);
                 true
+            }
+            Status::Pending => {
+                // gated: ask for the launch once, which may come back later
+                self.status.set(Status::Waiting);
+                let ask = self.ask.borrow_mut().take();
+                if let Some(ask) = ask {
+                    ask();
+                }
+                false
             }
             Status::Live => {
                 if let Some(pane) = self.pane()
@@ -417,7 +495,7 @@ impl Shared {
                 }
                 false
             }
-            Status::Spawning | Status::Failed | Status::TornDown => false,
+            Status::Waiting | Status::Spawning | Status::Failed | Status::TornDown => false,
         }
     }
 
@@ -462,6 +540,8 @@ impl Shared {
             return;
         }
         self.spawn.borrow_mut().take();
+        self.ask.borrow_mut().take();
+        self.key_hold.borrow_mut().take();
         self.effects.borrow_mut().clear();
         let pane = self.pane.borrow_mut().take();
         drop(pane);
@@ -504,7 +584,24 @@ impl EventEmitter<TerminalEvent> for Terminal {}
 impl Terminal {
     /// A terminal that starts its pane with `spawn` once its owner view has a size.
     pub fn new(spec: TerminalSpec, config: TerminalConfig, spawn: Spawn, cx: &mut Context<Self>) -> Self {
+        Self::build(spec, config, Some(spawn), None, cx)
+    }
+
+    /// A terminal that calls `ask` once its owner view has a size, and starts its pane only once
+    /// [`Shared::launch_with`] hands it a launch (the GTK build's gated surface).
+    pub fn gated(spec: TerminalSpec, config: TerminalConfig, ask: AskLaunch, cx: &mut Context<Self>) -> Self {
+        Self::build(spec, config, None, Some(ask), cx)
+    }
+
+    fn build(
+        spec: TerminalSpec,
+        config: TerminalConfig,
+        spawn: Option<Spawn>,
+        ask: Option<AskLaunch>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let (wake, woken) = async_channel::bounded::<()>(1);
+        let live = spec.live;
         let points = spec.font_size.unwrap_or(config.font.size).clamp(1.0, 255.0);
         let shared = Rc::new(Shared {
             key: NEXT_KEY.fetch_add(1, Ordering::Relaxed),
@@ -514,7 +611,7 @@ impl Terminal {
             fonts: RefCell::new(None),
             font_generation: Cell::new(0),
             pane: RefCell::new(None),
-            spawn: RefCell::new(Some(spawn)),
+            spawn: RefCell::new(spawn),
             status: Cell::new(Status::Pending),
             points: Cell::new(points),
             original_points: points,
@@ -527,6 +624,9 @@ impl Terminal {
             preedit: RefCell::new(None),
             readonly: Cell::new(false),
             hovered_url: RefCell::new(None),
+            ask: RefCell::new(ask),
+            live: Cell::new(live),
+            key_hold: RefCell::new(None),
         });
         let pump = cx.spawn(async move |this, cx| {
             while woken.recv().await.is_ok() {
@@ -595,6 +695,7 @@ impl Terminal {
 fn run_effect(shared: &Shared, effect: Effect, cx: &mut Context<Terminal>) {
     match effect {
         Effect::Emit(event) => cx.emit(event),
+        Effect::Spawn => shared.spawn(),
         Effect::Copy(text, location) => {
             let item = ClipboardItem::new_string(text);
             match location {
@@ -651,6 +752,9 @@ pub struct TerminalView {
     blink: Option<Task<()>>,
     /// The frame drawn last.
     painted: Option<Arc<Frame>>,
+    /// The view is on screen. A hidden one (a deck page or pane not shown) still lays its grid out, so its pane
+    /// starts and follows the size, but captures no frame and redraws for nothing its terminal does.
+    shown: bool,
     _observe: Subscription,
 }
 
@@ -668,7 +772,12 @@ impl TerminalView {
             blink_on: true,
             blink: None,
             painted: None,
-            _observe: cx.observe(terminal, |_, _, cx| cx.notify()),
+            shown: true,
+            _observe: cx.observe(terminal, |view: &mut Self, _, cx| {
+                if view.shown {
+                    cx.notify();
+                }
+            }),
         }
     }
 
@@ -685,6 +794,20 @@ impl TerminalView {
     #[must_use]
     pub fn role(&self) -> ViewRole {
         self.role
+    }
+
+    /// Shows or hides the view (module docs of `TerminalView::shown`); a view shown again redraws.
+    pub fn set_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
+        if self.shown != shown {
+            self.shown = shown;
+            cx.notify();
+        }
+    }
+
+    /// Whether the view is on screen.
+    #[must_use]
+    pub fn is_shown(&self) -> bool {
+        self.shown
     }
 
     /// Draws at `points` instead of the terminal's size (a viewer: the dashboard's cells); `None` follows the terminal.

@@ -1,11 +1,12 @@
-//! The main loop's state: the core, and the tasks that change it. Ported from `agterm-gtk/src/state.rs` as a skeleton
-//! that grows task by task (the deck in Task 18, the windows in Task 26).
+//! The main loop's state: the core, and the tasks that change it. Ported from `agterm-gtk/src/state.rs`; it grows task
+//! by task (the windows and their decks since Task 18).
 //!
 //! RULE: every mutation runs as a main-loop task and ends with [`AppState::settle`], which lands the model's side
 //! effects (the immediate saves and the events in the ring; the debounced saves, the soft closes' grace timers and the
 //! windows' `tree.changed` debounces armed on the loop) and records what the frontend must do with the app context
 //! ([`FrontendWork`]). Handlers never touch the state in place: they [`post`] a task. The loop's consumer runs each
-//! task with the state, then lands its frontend work with the state released (`app.rs`).
+//! task with the state, then brings the windows in line with the model (`windows.rs`, the GTK build's settle-time
+//! windows sync) and lands the frontend work (`app.rs`).
 
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Weak;
@@ -14,10 +15,11 @@ use std::time::{Duration, Instant};
 use agterm_app::remote::{InboundGate, PresentationViewer, ProcessTransport};
 use agterm_core::auto_follow::AutoFollowTimer;
 use agterm_core::events::{TREE_CHANGED_DEBOUNCE, TreeChangedTimer};
+use agterm_core::link_policy::{self, ClickOrigin, Route};
 use agterm_core::model::PendingCloseTimer;
 use agterm_core::persist::{DebouncedSave, arm_debounced_saves};
 use agterm_core::sidebar_actions::SidebarAction;
-use agterm_core::{CommitTimers, ControlError, Core, Dispatched, PaneReport, Resume};
+use agterm_core::{CommitTimers, ControlError, Core, Dispatched, PaneReport, PaneSpawn, Resume};
 use agterm_host::MainLoop;
 use agterm_proto::command::{SessionCmd, ZmxCmd};
 use agterm_proto::{Command, Request};
@@ -113,8 +115,20 @@ const APP_TIMERS: TimerHandlers<AppState> = TimerHandlers {
 pub struct FrontendWork {
     /// Raise the frontmost window, with what each launch that asked handed over.
     pub activations: Vec<Activation>,
+    /// Open these with the desktop's handler (a followed link).
+    pub open_urls: Vec<String>,
+    /// Reveal these in the file manager (a followed `file://` link).
+    pub reveals: Vec<std::path::PathBuf>,
     /// Quit the app: the orderly shutdown, then GPUI's quit.
     pub quit: bool,
+}
+
+/// Whether a terminal's desktop notification fired while its pane held its window's keyboard (upstream's first
+/// responder check) and its window was the active one (`NSApp.isActive`), sampled when it fired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NotifyFocus {
+    pub pane: bool,
+    pub active: bool,
 }
 
 /// What the main loop owns.
@@ -131,6 +145,8 @@ pub struct AppState {
     heartbeat_armed: bool,
     /// The remote tick (the attached rows' clients, reconnects and attaches) is armed on the loop.
     remote_tick_armed: bool,
+    /// Panes the core seeded at their ask, waiting for the frontend to hand them the seed.
+    seeded: Vec<PaneSpawn>,
 }
 
 /// The presentation bridges' reports ([`agterm_app::remote`]).
@@ -161,6 +177,7 @@ impl AppState {
             frontend: FrontendWork::default(),
             heartbeat_armed: false,
             remote_tick_armed: false,
+            seeded: Vec::new(),
         }
     }
 
@@ -208,6 +225,115 @@ impl AppState {
         self.key_window = window;
     }
 
+    /// Window `window` lost the keyboard: no window of the app holds it, unless another took it already.
+    pub fn key_window_lost(&mut self, window: Uuid) {
+        if self.key_window == Some(window) {
+            self.key_window = None;
+        }
+    }
+
+    /// The window holding the keyboard, as the frontend reported it.
+    #[must_use]
+    pub fn key_window(&self) -> Option<Uuid> {
+        self.key_window
+    }
+
+    /// Window `window`'s on-screen state changed (full screen, maximized, its display): recorded for `window.list`.
+    pub fn window_state_changed(&mut self, window: Uuid, state: agterm_core::WindowState) {
+        if !self.quitting {
+            self.core.set_window_state(window, Some(state));
+        }
+    }
+
+    /// A session pane's terminal is ready to spawn: it spawns now with its seed, or once its paced launch turn comes
+    /// (see [`Core::request_pane_spawn`]).
+    pub fn pane_spawn_ready(&mut self, session: Uuid, token: &str) {
+        if self.quitting {
+            return;
+        }
+        if let Some(seed) = self.core.request_pane_spawn(session, token, Instant::now()) {
+            self.seeded.push(PaneSpawn {
+                session,
+                token: token.to_owned(),
+                seed,
+            });
+        }
+        self.settle();
+    }
+
+    /// The panes to spawn now (the GTK build's `spawn_paced_panes`): those seeded at their ask, then the launch's paced
+    /// grants, every window's selected session jumping the queue (it is on screen); one timer is armed for the next
+    /// paced grant.
+    pub fn take_spawns(&mut self) -> Vec<PaneSpawn> {
+        let mut spawns = std::mem::take(&mut self.seeded);
+        if self.quitting {
+            return spawns;
+        }
+        let now = Instant::now();
+        let library = self.core.library();
+        let selected: Vec<Uuid> = library
+            .open_ids()
+            .into_iter()
+            .filter_map(|id| {
+                library
+                    .store(id)
+                    .and_then(agterm_core::model::AppStore::selected_session_id)
+            })
+            .collect();
+        for session in selected {
+            self.core.expedite_pane_spawns(session, now);
+        }
+        spawns.extend(self.core.take_spawn_grants());
+        if let Some(delay) = self.core.take_spawn_wake(now)
+            && let Some(main_loop) = self.poster.upgrade()
+        {
+            let task = Box::new(|state: &mut Self| {
+                if !state.quitting {
+                    state.core.spawn_wake(Instant::now());
+                    state.settle();
+                }
+            });
+            if main_loop.post_after(delay, task).is_err() {
+                tracing::debug!("launch spawn wake dropped: the loop is closed");
+            }
+        }
+        spawns
+    }
+
+    /// A link clicked in a terminal (the GTK build's `follow_link_in`): through the link policy as a click from
+    /// `origin`, under the link-open setting; a session overlay opens over its session, the rest goes to the desktop.
+    pub fn follow_link(&mut self, raw: &str, origin: ClickOrigin) {
+        let mode = self.core.settings().effective_link_open_mode();
+        match link_policy::route(raw, mode, origin) {
+            Route::Overlay { url, session } => {
+                let shown = url::Url::parse(&url).is_ok_and(|parsed| self.core.open_link_overlay(parsed, session));
+                if shown {
+                    self.settle();
+                } else {
+                    self.frontend.open_urls.push(url);
+                }
+            }
+            Route::Browser(url) => self.frontend.open_urls.push(url),
+            Route::Reveal(path) => self.frontend.reveals.push(path),
+            Route::Ignore => tracing::debug!(raw, "link click ignored by the link policy"),
+        }
+    }
+
+    /// A terminal's desktop notification, suppressed while its pane holds the keyboard of the active window
+    /// (upstream's `NotificationManager.notify`).
+    pub fn terminal_notification(&mut self, session: Uuid, token: &str, title: &str, body: &str, focus: NotifyFocus) {
+        if self.quitting {
+            return;
+        }
+        if !agterm_core::should_deliver(focus.pane, focus.active) {
+            tracing::info!(%session, "notify: the firing pane is focused; suppressed");
+            return;
+        }
+        if self.core.terminal_notification(session, token, title, body) {
+            self.settle();
+        }
+    }
+
     /// The end of every mutation (module docs): commit, arm the loop's timers, record the frontend's work.
     pub fn settle(&mut self) {
         if self.quitting {
@@ -220,9 +346,7 @@ impl AppState {
         if let Some(quit) = self.core.take_live_quit() {
             self.schedule_live_quit(quit);
         }
-        // no windows yet to ask (Task 26)
-        drop(self.core.take_window_requests());
-        self.core.clear_pane_focus_requests();
+        // the window requests and pane focus requests wait for the windows' sync after the task (`windows.rs`)
         self.arm_auto_follow();
         self.arm_hud_timers();
         self.arm_job_expiries();

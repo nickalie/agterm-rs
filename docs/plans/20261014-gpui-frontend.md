@@ -1132,13 +1132,75 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 
 **Files:**
 - Create: `crates/agterm-gpui/src/{window,deck,pane,split,session_host,pane_lead,mute}.rs`
+- ➕ Create: `crates/agterm-gpui/src/{windows,watermark}.rs`, `src/{deck,pane,split,mute,window,watermark}/tests.rs`,
+  `crates/agterm-term/src/pwd.rs`; Modify: `crates/agterm-gpui/src/{app,lib,state,state/tests,terminal,
+  terminal/element,terminal/surface}.rs`, `crates/agterm-gpui/Cargo.toml`, `crates/agterm-term/src/lib.rs`,
+  `Cargo.toml` (`cosmic-text`), `Cargo.lock`
 
-- [ ] window shell (port of `window.rs`): window composition, frontmost tracking and `window.list` reporting, the
+- [x] window shell (port of `window.rs`): window composition, frontmost tracking and `window.list` reporting, the
       modal layers overlays attach to
-- [ ] deck of sessions with panes and splits, wired to `SessionHost`/`ProcessLauncher`/process table like GTK
-- [ ] lead cover/takeover (`pane_lead.rs`), inactive-pane and backdrop wash (`mute.rs`)
-- [ ] tests (headless): split layout math, focus moves, lead takeover, wash on focus change
+- [x] deck of sessions with panes and splits, wired to `SessionHost`/`ProcessLauncher`/process table like GTK
+- [x] lead cover/takeover (`pane_lead.rs`), inactive-pane and backdrop wash (`mute.rs`)
+- [x] ➕ (Task 16) session and pane backgrounds on the terminals (port of GTK `background.rs` `sync_page`): each
+      pane's effective `BackgroundWatermark` through `watermark::overlay_text` into its terminal's config overlay
+      (`load_app_config(.., Some(overlay))` → `Terminal::set_config`; the terminal draws `background-image*` since Task
+      16 and re-reads a file re-rendered at the same path on every `set_config`), a color watermark's `background`, and
+      the text watermark rasterized to its PNG under `<state dir>/watermarks` in place of GTK's pango (GPUI exposes no
+      offscreen text rasterizer: `cosmic-text`, which GPUI's Linux text system already links, or GPUI's headless
+      `render_to_image`); stale text files removed as GTK does
+- [x] tests (headless): split layout math, focus moves, lead takeover, wash on focus change
 - [ ] gates + conformance (both ratchets) — must pass before Task 19
+- result (2026-10-15, first part; Tasks 14, 16 and 17 not merged yet):
+  - **Shape**: the windows follow the model after every main-loop task: `app.rs` `land` runs `Windows::sync` inside
+    the `AppState` update (the GTK build's settle-time windows sync; `settle` stays context-free), which reloads the
+    config when asked, puts replacement panes in, opens a window per newly open store and closes the gone ones
+    (`windows.rs`, the GTK `windows.rs` registry pulled forward from Task 26: the shell needs a window per store),
+    syncs each window, applies the window commands' requests, reports each window's state for `window.list`, lands
+    the pane focus requests and hands the granted panes their seeds (`AppState::take_spawns`, the GTK
+    `spawn_paced_panes`); no open window quits. `window.rs` `WindowView`: the deck under the places of the title bar
+    and the sidebar, the modal layers (`Layer`: search, ask, picker, palette, switcher, back to front) later tasks
+    attach views to, the title, frontmost/key-window tracking through `observe_window_activation`
+    (`AppState::set_key_window`, `key_window_lost`), the close request, full screen/maximized reported once a frame in
+    that state is drawn (`Painted`, `on_next_frame`), minimized never read (GPUI has no read-back), raise/resize/zoom/
+    full screen/minimize requests; a new window is focused but not activated (the window manager's, as the GTK build).
+  - **Deck** (`deck.rs`, `pane.rs`, `split.rs`): every session's page mounted at once; a hidden page and a pane the
+    layout does not show are laid out at the page size but not drawn (`TerminalView::set_shown`: no frame capture, no
+    redraw for its output, the wrapper `invisible`), so their shells start and follow the size. Session panes are
+    gated (`Terminal::gated`, `Shared::launch_with`): the first layout asks the core (`pane_spawn_ready`), the seed
+    arrives through the sync; the scratch and replacements start from their spec. `PageElement` lays the children out
+    at the GTK `PaneStack`'s rectangles (`Place`), reports the page geometry (`report_hud_frames`), and follows a
+    divider drag (window mouse listeners while it runs; a double click on an unmoved divider resets). Focus: the
+    deck focuses the model's pane (`window.focus`), reports given focus, and the user's focus comes back through
+    `on_focus`. Terminal events are routed as the GTK build's `connect_*`: title, pwd (OSC 7 decoded as Ghostty's
+    `reportPwd`, `agterm-term` `pwd.rs`), search reports, font size, notifications (focus sampled), links
+    (`AppState::follow_link`: the session-overlay route, else the desktop through `FrontendWork`), exits (held ones
+    close on the next key, a held command reports `remote_pane_held`). Panes launch through `agterm-term`'s
+    `Pane::launch` under a `Host` from Ghostty's resources (`session_host.rs`): the config's `command` in place of the
+    login shell when set (libghostty's rule, which the harness's `command = /bin/sh` relies on), live sessions installed
+    over the staged zmx (`session_host::install`, the GTK `zmx_runtime::install`), `live-sessions`/`live-any-shell`
+    claimed by host. The config (theme, settings lines written first) loads at launch on the light side (Task 20 brings
+    the desktop's), and `config.reload` rebuilds it into every terminal with its diagnostic count.
+  - **Lead and mute**: `pane_lead.rs` (upstream's cover: terminal colors, the drawn `rectangle.on.rectangle.slash`,
+    title, hint, the yellow `ssh:` note; element ids `pane-lead-cover-left|right`, `remote-reconnect-note-*`), a
+    covered or reconnect-waiting pane holds its keys (`Shared::hold_keys`/`held_key`: a press asks the core to take
+    the lead); `mute.rs` (GTK's `muted`/`backdrop`, the backdrop's regions flattened into disjoint rectangles because
+    GPUI fades each primitive, not a group).
+  - **Watermarks** (`watermark.rs`, the Task 16 ➕ item): each pane's effective background into its terminal's config
+    overlay (`DeckEnv::config_for`: `load_app_config(.., Some(overlay))`), text rendered bold sans-serif at 256 px with
+    `cosmic-text` 0.19 (GPUI's own) into a PNG, stale files removed; applied on change only, kept over a config reload.
+  - Tests: 71 in `deck/`, `window/`, `split/`, `mute/`, `pane/`, `watermark/` tests and the module tests (the GTK
+    plan, geometry, mute and spec tests ported; in GPUI's test window over real panes: every session mounted and
+    started with only the selected one drawn, the split at its ratio and focus following `session.focus`, the wash
+    following the focus, a covered live pane taken over by a key press into a fresh terminal, a held exit closed by a
+    key, backgrounds reaching the terminals), `agterm-term` `pwd` tests. Gates: fmt, clippy (workspace, all targets
+    and features), lint-report, check-tracing-features, `vendor-gpui.sh --check`, `vendor-calloop.sh --check`,
+    `cargo test --workspace` under Xvfb (3810 passed, 0 failed), the new tests 10 times in a row. A smoke run of the
+    real binary on a private headless weston with lavapipe: sessions, splits, typing and read-back, shells exiting,
+    window commands, SIGTERM.
+  - Remaining before the gates box: wire Task 14 (window registration with `keymap_dispatch`, `capture_key_up`,
+    `Shared::set_owner`, the key holds and the status keystroke inside its interceptor path), Task 16 (a test of
+    `background_image` from the overlays), Task 17 (the GPUI conformance run, the ratchet, the capability claims).
+    The full GTK run is not needed: the GTK binary links none of the changed crates.
 
 ### Stage 3 — UI groups
 

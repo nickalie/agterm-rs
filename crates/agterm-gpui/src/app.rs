@@ -1,6 +1,6 @@
-//! The app shell: who this build is, the core and its control server on the main loop, the frontend's work landed
-//! with the app context, and the quit path. Ported from `agterm-gtk/src/app.rs` as a skeleton: one placeholder window
-//! stands for the windows Task 18 and Task 26 bring.
+//! The app shell: who this build is, the core and its control server on the main loop, the windows brought in line
+//! with the model after every task (`windows.rs`), the frontend's work landed with the app context, and the quit path.
+//! Ported from `agterm-gtk/src/app.rs`.
 //!
 //! Order on launch follows the GTK build (and upstream's `agtermApp`): the control server settles socket ownership
 //! before anything could spawn a shell, so a shell's `AGTERM_SOCKET` is right from the start (`<socket>.unavailable`
@@ -17,26 +17,25 @@ use agterm_core::{Core, CoreConfig, CoreState};
 use agterm_host::MainLoop;
 use agterm_proto::{AppIdentity, Request};
 use agterm_server::ControlServer;
-use gpui_kit::{
-    AnyWindowHandle, App, AppContext, Bounds, Context, Entity, IntoElement, ParentElement as _, QuitMode, Render,
-    Styled, TitlebarOptions, Window, WindowBounds, WindowOptions, div, px, size,
-};
+use gpui_kit::{App, AppContext, Entity, QuitMode};
 
+use crate::deck::{DeckEnv, Watermarks};
 use crate::instance::{Activation, BusRequest};
 use crate::main_loop::{self, GpuiMainLoop};
+use crate::pane::PaneContext;
+use crate::session_host::{self, AppConfig};
 use crate::state::{AppState, Poster, post};
+use crate::windows::{ConfigHost, Windows};
 
-/// The capabilities of the Rust target profile this build implements (`conformance/docs/rust-build.md`): none yet.
-/// Each is claimed once its commands work in this frontend (plan > Development Approach), toward the GTK build's set.
+/// The capabilities of the Rust target profile this build implements (`conformance/docs/rust-build.md`). Each is
+/// claimed once its commands work in this frontend (plan > Development Approach), toward the GTK build's set.
 pub const CAPABILITIES: &[&str] = &[];
 
-/// The window placeholder's title, until the window shell (Task 18) names windows after their stores.
-const PLACEHOLDER_TITLE: &str = "agterm";
-
-/// The capabilities this host claims.
+/// The capabilities this host claims: the profile's, and the `live` ones by host
+/// ([`session_host::live_capabilities`]).
 #[must_use]
-pub fn capabilities() -> Vec<String> {
-    CAPABILITIES.iter().copied().map(str::to_owned).collect()
+pub fn capabilities(live: &[&str]) -> Vec<String> {
+    CAPABILITIES.iter().chain(live).copied().map(str::to_owned).collect()
 }
 
 /// The serving build, projected into `version`, `tree.app` and every shell's `TERM_PROGRAM_VERSION`.
@@ -106,6 +105,10 @@ fn install_launch_hosts(core: &mut Core, poster: &Poster, socket: String) {
         agterm_app::restore_launch::shell_basename(&ProcessEnv),
     );
     core.set_process_host(process_host(poster, socket));
+    // the launch reap and a pending live sessions reset finish before any window mounts, and the launch spawn order is
+    // armed before any window shows (upstream's `GhosttyApp.restoreLaunchDecision` and the pacer's arm at app init)
+    session_host::install(core, &ProcessEnv);
+    core.arm_launch_spawns(std::time::Instant::now());
     // read at launch: a file edited later takes effect only on reload
     core.load_keymap_at_launch();
     core.load_hooks_at_launch();
@@ -114,7 +117,7 @@ fn install_launch_hosts(core: &mut Core, poster: &Poster, socket: String) {
 
 /// What a primary launch runs with.
 pub struct Launch {
-    /// The application id, which the placeholder window carries as its Wayland app id / X11 class.
+    /// The application id, which every window carries as its Wayland app id / X11 class.
     pub app_id: String,
     /// The bus requests other launches send (`instance.rs`), fed into the main loop once the app runs.
     pub requests: async_channel::Receiver<BusRequest>,
@@ -146,7 +149,7 @@ struct Shell {
     posting: Arc<dyn MainLoop<AppState>>,
     server: RefCell<ControlServer>,
     state: Entity<AppState>,
-    window: Cell<Option<AnyWindowHandle>>,
+    windows: RefCell<Windows>,
     /// The orderly shutdown ran.
     shut_down: Cell<bool>,
 }
@@ -156,14 +159,27 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
     crate::terminal::register_embedded_fonts(cx.text_system());
     let poster: Poster = Arc::downgrade(&posting);
     let server = ControlServer::new(control_socket(&ProcessEnv));
+    let identity = identity();
+    let context = PaneContext {
+        socket: advertised_socket(&server),
+        program_version: identity.version.clone(),
+    };
     let mut core = Core::new(
         CoreConfig {
-            app: identity(),
-            capabilities: capabilities(),
+            app: identity,
+            capabilities: capabilities(&session_host::live_capabilities(&ProcessEnv)),
         },
         load_state(&ProcessEnv),
     );
-    install_launch_hosts(&mut core, &poster, advertised_socket(&server));
+    // the settings' ghostty config goes out before the config loads, so the first terminal has the theme
+    let resources = session_host::resources();
+    core.set_theme_paths(
+        session_host::themes_dir(resources.as_deref()),
+        Some(session_host::settings_config_path(&ProcessEnv)),
+    );
+    core.write_settings_config();
+    install_launch_hosts(&mut core, &poster, context.socket.clone());
+    let windows = windows(context, resources, &poster, &launch);
     let state = cx.new(|_| AppState::new(core));
     let tasks = main_loop.tasks();
     let shell = Rc::new(Shell {
@@ -171,7 +187,7 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
         posting,
         server: RefCell::new(server),
         state: state.clone(),
-        window: Cell::new(None),
+        windows: RefCell::new(windows),
         shut_down: Cell::new(false),
     });
     let landing = Rc::clone(&shell);
@@ -187,16 +203,6 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
         })
     {
         tracing::error!(%error, "the control server is not serving");
-    }
-    open_placeholder(&shell, &launch.app_id, cx);
-    if let Some(window) = shell.window.get()
-        && window
-            .update(cx, |_, window, cx| {
-                crate::activation::launched(window, cx, &launch.activation);
-            })
-            .is_err()
-    {
-        tracing::debug!("activation: the first window is gone");
     }
     forward_bus_requests(launch.requests, poster.clone(), cx);
     // the last window closing quits, as in the GTK build
@@ -216,16 +222,72 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
     .detach();
 }
 
-/// Lands what the last task left to the frontend, with the state released.
+/// The windows' registry: the config the terminals draw with, the host they launch under, what their shells are told
+/// (`context`), Ghostty's `resources`.
+fn windows(context: PaneContext, resources: Option<PathBuf>, poster: &Poster, launch: &Launch) -> Windows {
+    let config = AppConfig::load(&ProcessEnv, resources.as_deref(), false);
+    let host = Rc::new(RefCell::new(session_host::launch_host(
+        &config,
+        resources.clone(),
+        &ProcessEnv,
+    )));
+    let overlay_resources = resources.clone();
+    let watermarks = Watermarks {
+        state_dir: paths::state_dir(&ProcessEnv),
+        config_with: Rc::new(move |overlay: &str| {
+            AppConfig::load_with(&ProcessEnv, overlay_resources.as_deref(), false, Some(overlay)).terminal()
+        }),
+    };
+    let env = Rc::new(DeckEnv::new(
+        context,
+        session_host::launcher(Rc::clone(&host)),
+        config.terminal(),
+        poster.clone(),
+        watermarks,
+    ));
+    Windows::new(
+        env,
+        launch.app_id.clone(),
+        Some(ConfigHost { resources, host }),
+        Some(launch.activation.clone()),
+    )
+}
+
+/// Brings the windows in line with the model, then lands what the last task left to the frontend.
 fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
+    let resettle = state.update(cx, |state, cx| {
+        if state.is_quitting() {
+            return false;
+        }
+        shell.windows.borrow_mut().sync(state, cx)
+    });
+    if resettle {
+        // a dropped replacement closed its pane: committed by the next settle
+        let poster: Poster = Arc::downgrade(&shell.posting);
+        post(&poster, AppState::settle);
+    }
     let work = state.update(cx, |state, _| state.take_frontend_work());
     for activation in &work.activations {
-        if let Some(window) = shell.window.get() {
-            let raised = window.update(cx, |_, window, cx| crate::activation::activate(window, cx, activation));
+        let frontmost = shell
+            .windows
+            .borrow()
+            .frontmost(&state.read(cx).core)
+            .map(|ui| ui.handle);
+        if let Some(handle) = frontmost {
+            let raised = handle.update(cx, |view, window, cx| {
+                crate::activation::activate(window, cx, activation);
+                view.present(window, cx);
+            });
             if raised.is_err() {
                 tracing::debug!("activation: the window is gone");
             }
         }
+    }
+    for url in &work.open_urls {
+        cx.open_url(url);
+    }
+    for path in &work.reveals {
+        cx.reveal_path(path);
     }
     if work.quit {
         shut_down(shell, cx);
@@ -250,6 +312,7 @@ fn shut_down(shell: &Shell, cx: &mut App) {
     tracing::info!("quit: the main loop is closed");
     shell.server.borrow_mut().stop();
     tracing::info!("quit: the control server is stopped");
+    shell.windows.borrow().teardown_all(cx);
 }
 
 /// The bus requests become main-loop tasks, in arrival order.
@@ -268,36 +331,6 @@ fn forward_bus_requests(requests: async_channel::Receiver<BusRequest>, poster: P
     .detach();
 }
 
-/// The one window of the skeleton: the app id names it for the compositor and the window manager.
-fn open_placeholder(shell: &Shell, app_id: &str, cx: &mut App) {
-    let options = WindowOptions {
-        titlebar: Some(TitlebarOptions {
-            title: Some(PLACEHOLDER_TITLE.into()),
-            ..TitlebarOptions::default()
-        }),
-        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-            None,
-            size(px(960.), px(640.)),
-            cx,
-        ))),
-        app_id: Some(app_id.to_owned()),
-        ..WindowOptions::default()
-    };
-    match gpui_kit::open_window(options, cx, |_, cx| cx.new(|_| Placeholder)) {
-        Ok((window, _)) => shell.window.set(Some(window)),
-        Err(error) => tracing::error!(%error, "the window did not open"),
-    }
-}
-
-/// An empty view where the window shell will be.
-struct Placeholder;
-
-impl Render for Placeholder {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().child(div())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use agterm_core::paths::MapEnv;
@@ -305,9 +338,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_capability_is_claimed_before_its_commands_work() {
-        assert!(CAPABILITIES.is_empty());
-        assert!(capabilities().is_empty());
+    fn the_live_capabilities_join_the_profile() {
+        assert_eq!(capabilities(&[]), CAPABILITIES);
+        let live = capabilities(&[session_host::LIVE_ANY_SHELL]);
+        assert_eq!(live.last().map(String::as_str), Some(session_host::LIVE_ANY_SHELL));
     }
 
     #[test]

@@ -87,6 +87,9 @@ gpui-pre-wgpu = "=0.3.9"
 # agterm-gpui's procedural sprites (box drawing, blocks, powerline, braille) fill and stroke their paths with it, as
 # Ghostty's sprite font does with z2d. No PNG codec (`png-format`): the sprites only rasterize.
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
+# agterm-gpui's text watermarks: the text shaped and rasterized off screen with the cosmic-text GPUI's Linux text system
+# already links (its default features: system fonts through fontconfig, swash rasterization), written as a PNG.
+cosmic-text = "0.19"
 # agterm-gpui's single instance: GApplication's own D-Bus protocol (`org.gtk.Application`, `org.gtk.Actions`) on the
 # app id's bus name, so GTK and GPUI launches forward to each other.
 zbus = "5.19"

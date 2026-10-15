@@ -7,9 +7,18 @@
 
 pub mod activation;
 pub mod app;
+pub mod deck;
 pub mod external_texture;
 pub mod instance;
 pub mod main_loop;
+pub mod mute;
+pub mod pane;
+pub mod pane_lead;
+pub mod session_host;
 pub mod signals;
+pub mod split;
 pub mod state;
 pub mod terminal;
+pub mod watermark;
+pub mod window;
+pub mod windows;
