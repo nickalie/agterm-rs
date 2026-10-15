@@ -1,5 +1,5 @@
 # Shared helpers of the native build scripts (build-ghostty.sh, build-ghostty-vt.sh, build-layer-shell.sh, build-zmx.sh,
-# fetch-wpe.sh, gen-wpe-bindings.sh, pkg-config.sh, stage.sh, run-dev.sh). Sourced, not run.
+# fetch-wpe.sh, fetch-lavapipe.sh, gen-wpe-bindings.sh, pkg-config.sh, stage.sh, run-dev.sh). Sourced, not run.
 #
 # Each native dependency lives in its own vendored prefix, ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/<name>-<key>/,
 # where <key> hashes that dependency's pins and patches only. Cargo never runs zig: agterm-ghostty-sys asks
@@ -105,6 +105,24 @@ wpe_prefix_is_complete() {
     && -s "$prefix/include/wpe-webkit-2.0/wpe/webkit.h" && -s "$prefix/lib/pkgconfig/wpe-webkit-2.0.pc" \
     && -s "$prefix/share/gir-1.0/WPEWebKit-2.0.gir" && -s "$prefix/share/agterm/wpe-PINS" ]] \
     && pin_lines WPE | cmp -s - "$prefix/share/agterm/wpe-PINS"
+}
+
+# The lavapipe package carries no patches: its key hashes the LAVAPIPE_ pins only.
+lavapipe_prefix() {
+  echo "$VENDOR_ROOT/lavapipe-$(prefix_key LAVAPIPE /nonexistent)"
+}
+
+# A lavapipe prefix is complete when the driver, its ICD manifest (at the prefix's top, naming the driver by absolute
+# path) and the pin manifest are there and the manifest matches the LAVAPIPE_ pins.
+lavapipe_prefix_is_complete() {
+  local prefix="$1"
+  [[ -s "$prefix/lib/libvulkan_lvp.so" && -s "$prefix/lvp_icd.json" && -s "$prefix/share/agterm/lavapipe-PINS" ]] \
+    && pin_lines LAVAPIPE | cmp -s - "$prefix/share/agterm/lavapipe-PINS"
+}
+
+# The libraries a shared object needs that this host cannot resolve, space-separated (empty when all resolve).
+unresolved_libraries() {
+  ldd "$1" 2>&1 | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ' | sed 's/ $//'
 }
 
 # The gir binary's key hashes the GIR_ pins and build/patches/gir/.

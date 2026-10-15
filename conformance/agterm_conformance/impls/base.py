@@ -85,6 +85,17 @@ WESTON_RENDERER = "gl"
 # NVIDIA's EGL GDK settles on a GLES context while the fork's GtkGLArea allows desktop GL only, so no pane realizes.
 GLVND_VENDOR_DIRS = ("/usr/share/glvnd/egl_vendor.d", "/etc/glvnd/egl_vendor.d")
 EGL_VENDOR_VARIABLE = "__EGL_VENDOR_LIBRARY_FILENAMES"
+# GPUI (the Rust build's second frontend) renders through wgpu on Vulkan, with GL beside it, and in this harness on
+# Mesa's lavapipe and llvmpipe only, never on the machine's GPU driver: the Vulkan loader gets lavapipe's ICD manifest
+# as its one driver (run-rust-linux.sh resolves it through scripts/fetch-lavapipe.sh into this variable, which is not
+# AGTERM_-prefixed so the plugin keeps it), GL is forced onto llvmpipe, and every inherited loader or driver selection
+# is dropped. No lavapipe fails the launch; there is no fallback.
+LAVAPIPE_ICD_VARIABLE = "CONFORMANCE_LAVAPIPE_ICD"
+LAVAPIPE_LIBRARY_PREFIX = "libvulkan_lvp"
+# Inherited selections that would steer the loader, GL or wgpu onto another device or add layers to the process.
+GPU_SELECTION_PREFIXES = ("VK_", "WGPU_", "__NV_", "__GLX_", "DRI_PRIME", "MESA_VK_DEVICE_SELECT", "MESA_LOADER_")
+# GPUI panics on a Wayland compositor without a `wl_seat`, which headless weston offers only with this flag.
+FAKE_SEAT_ARG = "--fake-seat"
 WESTON_SIZE = (1920, 1080)
 # No idle lock, no panel, and no `weston-keyboard` input-method client: the desktop shell's own helper is its only one.
 WESTON_CONFIG = "[core]\nidle-time=0\n\n[shell]\npanel-position=none\nlocking=false\n\n[input-method]\npath=\n"
@@ -379,7 +390,7 @@ class Adapter:
     # A Linux desktop app: its runtime dir is the live session's, so the instance gets a private one.
     needs_runtime_dir: ClassVar[bool] = False
     # Arguments appended to the headless weston's command line, set only by tools/chrome_probe.py (`--debug`, which
-    # lets weston-screenshooter read the output).
+    # lets weston-screenshooter read the output); `weston_args` adds an adapter's own.
     compositor_args: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self, bin: Path | None, ctl: Path | None = None) -> None:
@@ -430,6 +441,10 @@ class Adapter:
     @property
     def headless(self) -> bool:
         return self.needs_runtime_dir and display_mode() == "headless"
+
+    def weston_args(self) -> tuple[str, ...]:
+        """What the headless weston's command line gets appended: `compositor_args`, and an adapter's own."""
+        return self.compositor_args
 
     def platform_env(self, env: dict[str, str]) -> None:
         """Hook for adapter-specific variables; `env` is already isolated."""
@@ -505,7 +520,7 @@ class Adapter:
                 write_noop_launchers(Path(env["XDG_CONFIG_HOME"]), Path(env["XDG_DATA_HOME"]))
             if headless:
                 session_bus = start_session_bus(root, env, timeout)
-                compositor = start_compositor(root, env, timeout, self.compositor_args)
+                compositor = start_compositor(root, env, timeout, self.weston_args())
             if app_id is not None:
                 _claim_app_id(app_id)
         except BaseException as error:
@@ -707,6 +722,38 @@ def mesa_egl_vendor() -> str | None:
         if found := sorted(Path(directory).glob("*mesa*.json")):
             return os.fspath(found[0])
     return None
+
+
+def lavapipe_icd(environ: Mapping[str, str] | None = None) -> str:
+    """The lavapipe ICD manifest `CONFORMANCE_LAVAPIPE_ICD` names, checked to load lavapipe and nothing else."""
+    path = (os.environ if environ is None else environ).get(LAVAPIPE_ICD_VARIABLE)
+    hint = (
+        f"set {LAVAPIPE_ICD_VARIABLE} to lavapipe's ICD manifest (`scripts/fetch-lavapipe.sh` prints it; "
+        "run-rust-linux.sh --frontend gpui sets it): the GPUI build renders on lavapipe only, "
+        "never on a hardware driver"
+    )
+    if not path:
+        raise LaunchError(f"no lavapipe: {hint}")
+    try:
+        manifest = json.loads(Path(path).read_text())
+        library = manifest["ICD"]["library_path"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise LaunchError(f"{LAVAPIPE_ICD_VARIABLE}={path} is no readable ICD manifest ({error}): {hint}") from None
+    if not isinstance(library, str) or not os.path.basename(library).startswith(LAVAPIPE_LIBRARY_PREFIX):
+        raise LaunchError(f"{LAVAPIPE_ICD_VARIABLE}={path} loads {library!r}, not lavapipe: {hint}")
+    return os.path.abspath(path)
+
+
+def software_rendering_env(env: dict[str, str], icd: str) -> None:
+    """Make lavapipe the process's only Vulkan driver and llvmpipe its GL, dropping any inherited device selection."""
+    for name in [name for name in env if name.startswith(GPU_SELECTION_PREFIXES)]:
+        del env[name]
+    env.pop(LAVAPIPE_ICD_VARIABLE, None)  # the harness's, not the instance's
+    env["VK_DRIVER_FILES"] = icd
+    env["VK_ICD_FILENAMES"] = icd  # the loader's name for it before 1.3.234
+    env["LIBGL_ALWAYS_SOFTWARE"] = "1"
+    if vendor := mesa_egl_vendor():
+        env[EGL_VENDOR_VARIABLE] = vendor
 
 
 def wait_for_unix_socket(

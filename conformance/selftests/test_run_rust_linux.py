@@ -60,6 +60,18 @@ def test_reports_version(ctl):
 """
 
 
+# What the GPUI frontend's instance was started with, written where the test runner says.
+GPUI_PROBE_TEST = """
+import json
+import os
+
+def test_reports_version(app):
+    weston = json.loads((app.root / "fake-compositor.json").read_text())["argv"]
+    with open(os.environ["LAUNCH_PROBE"], "w") as sink:
+        json.dump({"env": app.env, "weston": weston}, sink)
+"""
+
+
 @pytest.fixture
 def layers(tmp_path: Path) -> Path:
     tests = tmp_path / "tests"
@@ -75,6 +87,23 @@ def stage(tmp_path: Path, fake_bin: Path) -> Path:
     app.parent.mkdir(parents=True)
     shutil.copy2(fake_bin, app)
     return app.parent.parent
+
+
+@pytest.fixture
+def gpui_stage(tmp_path: Path, fake_bin: Path) -> Path:
+    """A GPUI stage (`scripts/stage.sh --frontend gpui`): the fake app as bin/agterm-gpui, no bin/agterm."""
+    app = tmp_path / "gpui-stage" / "bin" / "agterm-gpui"
+    app.parent.mkdir(parents=True)
+    shutil.copy2(fake_bin, app)
+    return app.parent.parent
+
+
+@pytest.fixture
+def lavapipe_icd(tmp_path: Path) -> Path:
+    """A lavapipe ICD manifest, handed to scripts/fetch-lavapipe.sh as AGTERM_LAVAPIPE_ICD."""
+    path = tmp_path / "lvp_icd.json"
+    path.write_text(json.dumps({"ICD": {"library_path": "/vendor/lavapipe/lib/libvulkan_lvp.so"}}))
+    return path
 
 
 @pytest.fixture(autouse=True)
@@ -160,6 +189,97 @@ def test_a_holding_run_writes_the_report(tmp_path: Path, stage: Path, layers: Pa
     assert {"kind": "test", "nodeid": PROBE_ID, "outcome": "passed"}.items() <= records[1].items()
     assert "scrubbed from env" not in (out / "pytest.log").read_text()
     assert (out / "keep.txt").read_text() == "mine"
+
+
+def test_a_gtk_run_reports_its_frontend_and_no_lavapipe(tmp_path: Path, stage: Path, layers: Path) -> None:
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID))
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert report.startswith("## rust-linux conformance\n")
+    assert "- frontend: gtk\n" in report and "lavapipe" not in report
+    assert "rust frontend: gtk" in (tmp_path / "report" / "pytest.log").read_text()
+
+
+def test_a_gpui_run_launches_its_binary_on_lavapipe_with_a_seat(
+    tmp_path: Path, gpui_stage: Path, layers: Path, lavapipe_icd: Path
+) -> None:
+    (layers / "protocol" / "test_probe.py").write_text(GPUI_PROBE_TEST)
+    probe = tmp_path / "launch.json"
+    completed, report = run(
+        tmp_path,
+        gpui_stage,
+        layers,
+        ratchet(tmp_path, PROBE_ID),
+        "--frontend",
+        "gpui",
+        AGTERM_LAVAPIPE_ICD=str(lavapipe_icd),
+        LAUNCH_PROBE=str(probe),
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert report.startswith("## rust-linux conformance, GPUI\n")
+    assert "- frontend: gpui\n" in report
+    assert f"agterm: `{gpui_stage}/bin/agterm-gpui`" in report
+    assert f"Vulkan: lavapipe only, `{lavapipe_icd}`" in report
+    assert "rust: 1 pass, 0 fail" in report and "ratchet holds" in report
+    assert "rust frontend: gpui" in (tmp_path / "report" / "pytest.log").read_text()
+    launched = json.loads(probe.read_text())
+    assert launched["weston"][-1] == "--fake-seat"
+    env = launched["env"]
+    assert env["VK_DRIVER_FILES"] == env["VK_ICD_FILENAMES"] == str(lavapipe_icd)
+    assert env["LIBGL_ALWAYS_SOFTWARE"] == "1"
+    # the override reached the script, never the instance
+    assert not {"AGTERM_LAVAPIPE_ICD", "CONFORMANCE_LAVAPIPE_ICD"} & env.keys()
+
+
+def test_a_gpui_run_without_its_binary_skips_everything(
+    tmp_path: Path, stage: Path, layers: Path, lavapipe_icd: Path
+) -> None:
+    """A GTK stage holds no bin/agterm-gpui: nothing launches, as before the GPUI crate existed."""
+    completed, report = run(
+        tmp_path, stage, layers, ratchet(tmp_path), "--frontend", "gpui", AGTERM_LAVAPIPE_ICD=str(lavapipe_icd)
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "agterm: not staged" in report
+    assert "rust: 0 pass, 0 fail, 0 skip(unsupported), 1 skip(not-yet-at-level)" in report
+
+
+def test_a_gpui_run_without_lavapipe_stops_before_anything_runs(
+    tmp_path: Path, gpui_stage: Path, layers: Path, lock: Path
+) -> None:
+    with open(lock, "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)  # refused before queueing
+        completed, report = run(
+            tmp_path,
+            gpui_stage,
+            layers,
+            ratchet(tmp_path, PROBE_ID),
+            "--frontend",
+            "gpui",
+            AGTERM_LAVAPIPE_ICD=str(tmp_path / "absent.json"),
+        )
+    assert completed.returncode == 2
+    assert "AGTERM_LAVAPIPE_ICD names no ICD manifest" in completed.stderr
+    assert "no lavapipe for the GPUI build" in completed.stderr
+    assert "waiting for another conformance run" not in completed.stdout
+    assert report == ""
+
+
+def test_an_unknown_frontend_exits_2(tmp_path: Path, stage: Path, layers: Path) -> None:
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path), "--frontend", "qt")
+    assert completed.returncode == 2
+    assert "unknown frontend: qt" in completed.stderr
+    assert report == ""
+
+
+def test_the_frontends_keep_their_own_ratchets() -> None:
+    """Both lists exist with their `#` headers; the GPUI one starts from what the skeleton passed."""
+    conformance = SCRIPT.parents[1]
+    for name in ("rust-passing.txt", "rust-gpui-passing.txt"):
+        text = (conformance / name).read_text()
+        assert text.startswith("#"), name
+        ids = [line for line in text.splitlines() if line and not line.startswith("#")]
+        assert ids == sorted(ids), name
+    help_text = subprocess.run([str(SCRIPT), "--help"], capture_output=True, text=True, check=True).stdout
+    assert "conformance/rust-gpui-passing.txt" in help_text and "--frontend gtk|gpui" in help_text
 
 
 def test_a_red_unlisted_test_does_not_fail_the_run(tmp_path: Path, stage: Path, layers: Path) -> None:

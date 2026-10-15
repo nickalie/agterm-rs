@@ -1528,3 +1528,166 @@ def test_a_daemon_exiting_within_the_grace_is_not_a_leftover(
     adapter.stop(instance)
     timer.join()
     assert exiting.wait(timeout=5) == 0
+
+
+# -- the Rust build's GPUI frontend: lavapipe only, a seat on its weston
+
+
+def write_icd(path: Path, library: str = "/vendor/lavapipe/lib/libvulkan_lvp.so") -> Path:
+    manifest = {"ICD": {"api_version": "1.4.354", "library_path": library}, "file_format_version": "1.0.1"}
+    path.write_text(json.dumps(manifest))
+    return path
+
+
+@pytest.fixture
+def lavapipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A lavapipe ICD manifest the harness is pointed at, as run-rust-linux.sh --frontend gpui does."""
+    icd = write_icd(tmp_path / "lvp_icd.json")
+    monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, str(icd))
+    return icd
+
+
+@pytest.fixture
+def mesa_vendor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    vendors = tmp_path / "egl_vendor.d"
+    vendors.mkdir()
+    (vendors / "10_nvidia.json").write_text("{}")
+    (vendors / "50_mesa.json").write_text("{}")
+    monkeypatch.setattr(base, "GLVND_VENDOR_DIRS", (str(vendors),))
+    return vendors / "50_mesa.json"
+
+
+def test_the_rust_frontend_defaults_to_gtk_and_refuses_an_unknown_one() -> None:
+    assert RustAdapter(None).frontend == "gtk"
+    assert RustAdapter(None, frontend="gpui").frontend == "gpui"
+    with pytest.raises(ValueError, match="frontend"):
+        RustAdapter(None, frontend="qt")
+
+
+@pytest.mark.parametrize("frontend", ["gtk", "gpui"])
+def test_make_adapter_passes_the_rust_frontend(frontend: str) -> None:
+    options = ImplOptions(impl="rust", bin=None, ctl=None, coverage_gate=False, rust_frontend=frontend)
+    adapter = make_adapter(options)
+    assert isinstance(adapter, RustAdapter) and adapter.frontend == frontend
+
+
+def test_the_plugin_offers_the_adapters_frontends() -> None:
+    from agterm_conformance import plugin
+    from agterm_conformance.impls import rust
+
+    assert plugin.RUST_FRONTENDS == rust.FRONTENDS and plugin.RUST_FRONTENDS[0] == rust.DEFAULT_FRONTEND
+
+
+def test_only_the_gpui_frontend_gets_a_fake_seat(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert RustAdapter(None).weston_args() == ()
+    assert RustAdapter(None, frontend="gpui").weston_args() == ("--fake-seat",)
+    # after an adapter's own compositor arguments (chrome_probe.py's --debug)
+    monkeypatch.setattr(RustAdapter, "compositor_args", ("--debug",))
+    assert RustAdapter(None, frontend="gpui").weston_args() == ("--debug", "--fake-seat")
+    assert RustAdapter(None).weston_args() == ("--debug",)
+    assert SwiftLinuxAdapter(None).weston_args() == ()
+
+
+def test_gpui_renders_on_lavapipe_alone(
+    tmp_path: Path, lavapipe: Path, mesa_vendor: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inherited = {
+        "VK_ADD_DRIVER_FILES": "/usr/share/vulkan/icd.d/nvidia_icd.json",
+        "VK_ICD_FILENAMES": "/usr/share/vulkan/icd.d/nvidia_icd.json",
+        "VK_LOADER_DRIVERS_SELECT": "*nvidia*",
+        "VK_INSTANCE_LAYERS": "VK_LAYER_MANGOHUD_overlay",
+        "__NV_PRIME_RENDER_OFFLOAD": "1",
+        "__GLX_VENDOR_LIBRARY_NAME": "nvidia",
+        "DRI_PRIME": "1",
+        "MESA_VK_DEVICE_SELECT": "10de:2684",
+        "WGPU_BACKEND": "gl",
+        "WGPU_ADAPTER_NAME": "NVIDIA",
+    }
+    for name, value in inherited.items():
+        monkeypatch.setenv(name, value)
+    env = RustAdapter(None, frontend="gpui").build_env(tmp_path)
+    assert env["VK_DRIVER_FILES"] == env["VK_ICD_FILENAMES"] == str(lavapipe)
+    assert env["LIBGL_ALWAYS_SOFTWARE"] == "1"
+    assert env["__EGL_VENDOR_LIBRARY_FILENAMES"] == str(mesa_vendor)
+    assert not (set(inherited) - {"VK_ICD_FILENAMES"}) & env.keys()
+
+
+def test_the_gtk_frontend_keeps_its_environment(
+    tmp_path: Path, lavapipe: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VK_ICD_FILENAMES", "/somewhere/icd.json")
+    env = RustAdapter(None).build_env(tmp_path)
+    assert env["VK_ICD_FILENAMES"] == "/somewhere/icd.json"
+    assert not {"VK_DRIVER_FILES", "LIBGL_ALWAYS_SOFTWARE"} & env.keys()
+
+
+def test_gpui_without_lavapipe_spawns_nothing(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(base.LAVAPIPE_ICD_VARIABLE, raising=False)
+    with pytest.raises(LaunchError, match="no lavapipe.*fetch-lavapipe.sh.*never on a hardware driver"):
+        RustAdapter(fake_bin, frontend="gpui").launch()
+    assert len(roots) == 1 and not roots[0].exists()
+
+
+@pytest.mark.parametrize(
+    ("manifest", "message"),
+    [
+        (None, "no readable ICD manifest"),
+        ("not json", "no readable ICD manifest"),
+        (json.dumps({"ICD": {}}), "no readable ICD manifest"),
+        (json.dumps({"ICD": {"library_path": "libGLX_nvidia.so.0"}}), "not lavapipe"),
+        (json.dumps({"ICD": {"library_path": "/usr/lib/libvulkan_intel.so"}}), "not lavapipe"),
+    ],
+)
+def test_a_manifest_that_is_not_lavapipe_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, manifest: str | None, message: str
+) -> None:
+    icd = tmp_path / "icd.json"
+    if manifest is not None:
+        icd.write_text(manifest)
+    monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, str(icd))
+    with pytest.raises(LaunchError, match=message):
+        RustAdapter(None, frontend="gpui").build_env(tmp_path / "root")
+
+
+def test_a_relative_lavapipe_manifest_is_made_absolute(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    write_icd(tmp_path / "lvp_icd.json", "libvulkan_lvp.so")
+    monkeypatch.chdir(tmp_path)
+    assert base.lavapipe_icd({base.LAVAPIPE_ICD_VARIABLE: "lvp_icd.json"}) == str(tmp_path / "lvp_icd.json")
+
+
+def test_a_headless_gpui_launch_gets_a_seat_and_lavapipe(
+    roots: list[Path], fake_bin: Path, fake_compositor: Path, lavapipe: Path
+) -> None:
+    adapter = RustAdapter(fake_bin, frontend="gpui")
+    instance = adapter.launch()
+    try:
+        record = compositor_record(instance)
+        assert record["argv"] == [*base.weston_argv(str(fake_compositor), instance.root)[1:], "--fake-seat"]
+        seen = json.loads((instance.state_dir / "fake-env.json").read_text())
+        assert seen["VK_DRIVER_FILES"] == str(lavapipe) and seen["LIBGL_ALWAYS_SOFTWARE"] == "1"
+        # isolation unchanged: its own weston and bus, a unique app id, no display of the user's
+        assert seen["WAYLAND_DISPLAY"] == str(instance.root / "run" / "wayland-0") and "DISPLAY" not in seen
+        assert seen["DBUS_SESSION_BUS_ADDRESS"] == f"unix:path={instance.root / 'run' / 'bus'}"
+        assert seen["AGTERM_APP_ID"] != DEFAULT_APP_ID
+    finally:
+        adapter.stop(instance)
+    assert not instance.root.exists()
+
+
+def test_a_gpui_relaunch_keeps_lavapipe(roots: list[Path], fake_bin: Path, lavapipe: Path) -> None:
+    adapter = RustAdapter(fake_bin, frontend="gpui")
+    instance = adapter.relaunch(adapter.launch())
+    try:
+        assert json.loads((instance.state_dir / "fake-env.json").read_text())["VK_DRIVER_FILES"] == str(lavapipe)
+    finally:
+        adapter.stop(instance)
+
+
+def test_a_session_display_gpui_launch_still_renders_on_lavapipe(
+    roots: list[Path], fake_bin: Path, lavapipe: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(base.DISPLAY_MODE_VARIABLE, "session")
+    env = RustAdapter(fake_bin, frontend="gpui").build_env(Path("/tmp/agt-x"))
+    assert env["VK_DRIVER_FILES"] == str(lavapipe)

@@ -74,8 +74,8 @@ scripts/install-apparmor-profile.sh --uninstall           # unloads and removes 
 scripts/install-apparmor-profile.sh --print [--gpui GPUI_BINARY] [BINARY]   # shows the profiles, changes nothing
 ```
 
-Without paths it covers the conformance stage's `target/conformance-stage/bin/agterm` and `bin/agterm-gpui`. A moved
-binary needs the profile installed again for its new path. On a host without AppArmor, or one that does not restrict
+Without paths it covers the conformance stages' `target/conformance-stage/bin/agterm` and
+`target/conformance-stage-gpui/bin/agterm-gpui`. A moved binary needs the profile installed again for its new path. On a host without AppArmor, or one that does not restrict
 user namespaces, the script installs nothing.
 
 ## Native dependencies
@@ -90,7 +90,15 @@ scripts/build-ghostty-vt.sh    # the pinned static libghostty-vt (Ghostty's vt C
 scripts/build-layer-shell.sh   # gtk4-layer-shell 1.3.0; skip it when the distribution's package is installed
 scripts/build-zmx.sh           # the pinned, patched zmx behind Live sessions
 scripts/fetch-wpe.sh           # the pinned WPE WebKit binary package, only where the system has none (below)
+scripts/fetch-lavapipe.sh      # Mesa's lavapipe for headless GPUI runs: the system's, else the pinned Arch package
 ```
+
+The GPUI build's headless runs (the conformance suite with `--frontend gpui`, `agterm-gpui`'s process tests) render on
+Mesa's software Vulkan driver lavapipe only, never on the machine's GPU. `scripts/fetch-lavapipe.sh` prints its ICD
+manifest: `AGTERM_LAVAPIPE_ICD` when set, else the distribution's (Ubuntu/Debian/Fedora `mesa-vulkan-drivers`, Arch
+`vulkan-swrast`), else it verifies the pinned Arch `vulkan-swrast` package (`LAVAPIPE_*` in `build/pins.env`) and
+unpacks it into the vendored prefix, refusing a host whose libLLVM or glibc it cannot load (`--print-icd` finds without
+fetching).
 
 Each script also takes `--print-prefix` and `--verify`. Cargo never runs zig: `agterm-ghostty-sys` fails with "run
 scripts/build-ghostty.sh" when the prefix is missing, `agterm-ghostty-vt-sys` with "run scripts/build-ghostty-vt.sh".
@@ -146,6 +154,7 @@ scripts/run-dev.sh [--release] [--state DIR] [-- AGTERM_ARGS...]
 
 `stage.sh` (into a new or empty directory; `--profile debug` for a debug build) assembles the layout the suite,
 `run-dev.sh` and an install run from; the staged binaries find `lib/` through their `$ORIGIN/../lib` rpath.
+`--frontend gpui` stages the GPUI build instead (`bin/agterm-gpui`, no `lib/`).
 `run-dev.sh` builds and stages into a fresh `/tmp/agterm-dev-*` root and launches an isolated instance: a unique
 `AGTERM_APP_ID`, its own `AGTERM_STATE_DIR` and `AGTERM_CONTROL_SOCKET`, and `AGTERM_*`/`ZMX_*` inherited from a live
 agterm session dropped (all but `AGTERM_LOG`). It prints the `agtermctl <command> --socket ...` line that drives the
@@ -163,7 +172,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 scripts/lint-report.sh                      # complexity #[expect]s with their reasons; refuses inner #![allow]
 GDK_BACKEND=x11 xvfb-run -a cargo test --workspace
-conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
+conformance/tools/run-rust-linux.sh [--frontend gtk|gpui] [--stage DIR] [-- PYTEST_ARGS...]
 ```
 
 - The GTK unit tests need a display and skip without one (as in CI, which runs plain `cargo test`); under `xvfb-run`
@@ -176,6 +185,8 @@ conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
   `.venv/bin/python`, else `python3`, with the suite installed:
   `python3 -m venv .venv && .venv/bin/pip install -e conformance`. See
   [conformance/README.md](conformance/README.md) and [conformance/docs/rust-build.md](conformance/docs/rust-build.md).
+  `--frontend gpui` runs the GPUI build instead (stage `target/conformance-stage-gpui`, ratchet
+  `conformance/rust-gpui-passing.txt`), on lavapipe from `scripts/fetch-lavapipe.sh`.
 - Lint rules: `[workspace.lints]` in `Cargo.toml` (clippy `all` + `pedantic`, the complexity and robustness lints
   denied) with the thresholds in `clippy.toml`; the only exception is a reasoned outer `#[expect]` on one item.
 
@@ -186,7 +197,8 @@ conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
   Arch's `wpewebkit`, see [WPE WebKit](#wpe-webkit)), then the staged build under the suite, once per login shell:
   `conformance` (bash), `conformance-fish` and `conformance-zsh`, each with `--must-pass live-any-shell`, the zsh job
   with `--must-pass live-sessions` too. Each installs agterm's AppArmor profile for the staged binary and keeps the
-  runner's user-namespace restriction on, so the HTML tests prove it.
+  runner's user-namespace restriction on, so the HTML tests prove it. `conformance-gpui` runs the GPUI build under the
+  suite, on Ubuntu's lavapipe, held by `rust-gpui-passing.txt`.
 - `conformance-gate.yml`: the suite's self-tests and catalog coverage gate.
 - `reference-macos.yml`, `spike-macos.yml`: the suite against upstream's macOS release.
 

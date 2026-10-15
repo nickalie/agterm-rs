@@ -36,6 +36,13 @@ The harness execs the binary with:
   `copy-on-select = false` and `clipboard-write = deny`;
 - `<state>/windows` present, which skips the first-run welcome, and `<state>/settings.json` when a test seeds settings.
 
+The GPUI frontend (`--rust-frontend gpui`) gets, on top of that:
+
+- `VK_DRIVER_FILES` (and `VK_ICD_FILENAMES`) naming lavapipe's ICD manifest alone, `LIBGL_ALWAYS_SOFTWARE=1`,
+  Mesa's EGL vendor, and no inherited `VK_*`, `WGPU_*`, `__NV_*`, `__GLX_*`, `DRI_PRIME` or `MESA_LOADER_*`: it renders
+  on lavapipe and llvmpipe only, never on the machine's GPU driver, and a launch without lavapipe fails;
+- a headless weston started with `--fake-seat`, since GPUI needs a `wl_seat`.
+
 SIGTERM must quit without a prompt within 10 seconds.
 Live sessions keep their zmx sockets in `/tmp/agterm-zmx-%016x` (lowercase hex) of the FNV-1a 64 hash over the UTF-8
 bytes of the state dir's realpath, with a leading `/private` dropped on macOS when the shorter path exists
@@ -133,3 +140,18 @@ A collection error or a `--must-pass` problem breaks it too.
 When pytest refuses its arguments (a mistyped path after `--`) no report is written and the checker exits 2.
 The checker prints the newly passing ids not yet listed; `--add` writes them into the list.
 The script exits with the ratchet's status, or 1 when an instance root was left behind, whatever pytest's own status.
+
+## GPUI build
+
+While the GTK and the GPUI frontends coexist, each is held by a ratchet of its own: `rust-passing.txt` for the GTK
+build, `rust-gpui-passing.txt` for the GPUI one, which `run-rust-linux.sh --frontend gpui` builds, stages
+(`scripts/stage.sh --frontend gpui`: `bin/agterm-gpui`, `agtermctl`, `zmx` and the same `share/`, no `lib/`) and holds.
+The GPUI build claims its capabilities task by task from none; its ratchet grows with `check_ratchet.py --add` and must
+cover the GTK one before the switch replaces the GTK build.
+
+GPUI renders through Vulkan, so its runs need Mesa's lavapipe, from `scripts/fetch-lavapipe.sh`: `AGTERM_LAVAPIPE_ICD`
+when set; the distribution's package where one is installed (Ubuntu/Debian/Fedora `mesa-vulkan-drivers`, Arch
+`vulkan-swrast`; the CI's source); else, on a rootless host with an Arch-compatible userland, the pinned Arch
+`vulkan-swrast` package (`LAVAPIPE_*` in `build/pins.env`), checked against its sha256 and unpacked into
+`${AGTERM_VENDOR}/lavapipe-<key>/`, refused where its libraries (libLLVM, glibc) do not resolve. No lavapipe is an
+error, never a fallback to a hardware driver.

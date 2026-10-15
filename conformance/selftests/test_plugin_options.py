@@ -39,6 +39,14 @@ def test_macos_launch_mode_option(pytester: pytest.Pytester) -> None:
     result.stderr.fnmatch_lines(["*--macos-launch-mode: invalid choice: 'open'*"])
 
 
+def test_rust_frontend_option(pytester: pytest.Pytester) -> None:
+    assert get_impl_options(pytester.parseconfigure()).rust_frontend == "gtk"
+    assert get_impl_options(pytester.parseconfigure("--rust-frontend", "gpui")).rust_frontend == "gpui"
+    result = pytester.runpytest("--rust-frontend", "qt")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*--rust-frontend: invalid choice: 'qt'*"])
+
+
 def test_options_reach_fixture(pytester: pytest.Pytester, bin_path: Path) -> None:
     pytester.makepyfile(
         f"""
