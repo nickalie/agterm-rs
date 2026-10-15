@@ -144,8 +144,14 @@ pub(crate) struct Vt {
     pub(crate) cleared_selection: bool,
     /// The colors last reported with [`PaneEvent::Colors`].
     colors: vt::TerminalColors,
+    /// The pointer's selection gesture, created at the first press ([`crate::gesture`]).
+    pub(crate) gesture: Option<vt::SelectionGesture>,
+    /// The word boundaries of word selections (`selection-word-chars`); `None` is Ghostty's default set.
+    pub(crate) word_boundaries: Option<Vec<u32>>,
     /// A `clear_screen` waits for the program's output to reach a ground point ([`crate::actions`]).
     pub(crate) pending_clear: bool,
+    /// The placed Kitty images' pixels, copied on the IO thread after each batch (`kitty::Prefetch`).
+    pub(crate) kitty: crate::kitty::Prefetch,
 }
 
 impl Vt {
@@ -490,6 +496,11 @@ impl Drop for Pane {
             let _ = io.join();
         }
         crate::search::shut_down(&self.shared);
+        let mut vt = lock(&self.shared.vt);
+        let Vt { terminal, gesture, .. } = &mut *vt;
+        if let Some(gesture) = gesture.take() {
+            gesture.close(terminal);
+        }
     }
 }
 
@@ -530,7 +541,10 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
             size,
             cleared_selection: false,
             colors,
+            gesture: None,
+            word_boundaries: None,
             pending_clear: false,
+            kitty: crate::kitty::Prefetch::default(),
         }),
         capture,
         published: Mutex::new(Arc::new(Frame::default())),
@@ -602,7 +616,8 @@ fn capture(shared: &Shared) -> Option<Arc<Frame>> {
         drop(vt);
     } else {
         // the Kitty view is read while the terminal is held, with the state
-        capture.capture_kitty(vt.terminal.kitty_graphics());
+        let held = &mut *vt;
+        capture.capture_kitty(held.terminal.kitty_graphics(), &held.kitty);
         let pending = capture.state.begin_update(&mut vt.terminal);
         // only the begin phase reads the terminal
         drop(vt);
@@ -990,6 +1005,9 @@ impl Io {
     fn after_batch(&self, filled: usize) {
         if filled > 0 {
             let mut vt = lock(&self.shared.vt);
+            // a new Kitty image's pixels are copied here, not on the thread that paints
+            let held = &mut *vt;
+            held.kitty.update(held.terminal.kitty_graphics());
             let colors = vt.terminal.colors();
             if colors != vt.colors {
                 vt.colors = colors.clone();

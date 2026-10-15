@@ -29,7 +29,16 @@ use crate::windows::{ConfigHost, Windows};
 
 /// The capabilities of the Rust target profile this build implements (`conformance/docs/rust-build.md`). Each is
 /// claimed once its commands work in this frontend (plan > Development Approach), toward the GTK build's set.
-pub const CAPABILITIES: &[&str] = &[];
+/// `posix-shell` waits for the quick terminal: `test_quick_terminal` types into it under that claim.
+pub const CAPABILITIES: &[&str] = &[
+    "drop-placement",
+    "select-takes-frontmost",
+    "status-shape",
+    "type-rejects-nul",
+    "resize-echoes-ratio",
+    "hidden-split-holds-focus",
+    "config-reload-counts",
+];
 
 /// The capabilities this host claims: the profile's, and the `live` ones by host
 /// ([`session_host::live_capabilities`]).
@@ -156,6 +165,7 @@ struct Shell {
 
 fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, posting: Arc<dyn MainLoop<AppState>>) {
     gpui_kit::init(cx);
+    crate::keymap_dispatch::init(cx);
     crate::terminal::register_embedded_fonts(cx.text_system());
     let poster: Poster = Arc::downgrade(&posting);
     let server = ControlServer::new(control_socket(&ProcessEnv));
@@ -262,7 +272,8 @@ fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
         shell.windows.borrow_mut().sync(state, cx)
     });
     if resettle {
-        // a dropped replacement closed its pane: committed by the next settle
+        // a dropped replacement closed its pane, or a pane the deck focused cleared its badge: committed by the next
+        // settle
         let poster: Poster = Arc::downgrade(&shell.posting);
         post(&poster, AppState::settle);
     }
@@ -288,6 +299,10 @@ fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
     }
     for path in &work.reveals {
         cx.reveal_path(path);
+    }
+    let poster: Poster = Arc::downgrade(&shell.posting);
+    for (action, close_grace) in work.actions {
+        crate::keymap_actions::perform(&poster, action, close_grace, cx);
     }
     if work.quit {
         shut_down(shell, cx);

@@ -120,6 +120,8 @@ pub struct Core {
     pub(crate) persistence: Option<LibraryPersistence>,
     /// The app run's event ring, fed by every commit.
     pub(crate) events: ControlEvents,
+    /// How many times a command took frontmost ([`Core::frontmost_takes`]).
+    frontmost_takes: u64,
     /// The frontend's on-screen windows, by window id.
     window_states: HashMap<Uuid, WindowState>,
     /// What window commands left for the frontend's windows, in order, until it takes them.
@@ -222,6 +224,7 @@ impl Core {
             settings: state.settings,
             persistence: state.persistence,
             events: ControlEvents::default(),
+            frontmost_takes: 0,
             window_states: HashMap::new(),
             window_requests: Vec::new(),
             reveal_handler: None,
@@ -336,9 +339,10 @@ impl Core {
         }
     }
 
-    /// A control command made window `id` frontmost (upstream's `ControlServer.takeFrontmost`): recorded and, with
-    /// auto-hide on, the sidebars reconciled, only when it changed.
+    /// A control command made window `id` frontmost (upstream's `ControlServer.takeFrontmost`): counted, then recorded
+    /// and, with auto-hide on, the sidebars reconciled, only when it changed.
     pub(crate) fn take_frontmost(&mut self, id: Uuid) {
+        self.frontmost_takes += 1;
         if self.library.frontmost_window_id == Some(id) {
             return;
         }
@@ -346,6 +350,13 @@ impl Core {
         if self.auto_hide_inactive_sidebars() {
             self.library.apply_inactive_window_sidebar_hiding();
         }
+    }
+
+    /// How many times a command took frontmost so far, the same window again included: a frontend tells a frontmost a
+    /// command set apart from one the user or the model's own changes (a new window, a restore, a reopen) set.
+    #[must_use]
+    pub fn frontmost_takes(&self) -> u64 {
+        self.frontmost_takes
     }
 
     fn auto_hide_inactive_sidebars(&self) -> bool {

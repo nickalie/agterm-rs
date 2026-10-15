@@ -6,6 +6,7 @@ guards refuse a launch env that points anywhere else before anything is spawned.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import pwd
@@ -85,6 +86,17 @@ WESTON_RENDERER = "gl"
 # NVIDIA's EGL GDK settles on a GLES context while the fork's GtkGLArea allows desktop GL only, so no pane realizes.
 GLVND_VENDOR_DIRS = ("/usr/share/glvnd/egl_vendor.d", "/etc/glvnd/egl_vendor.d")
 EGL_VENDOR_VARIABLE = "__EGL_VENDOR_LIBRARY_FILENAMES"
+# GPUI (the Rust build's second frontend) renders through wgpu on Vulkan, with GL beside it, and in this harness on
+# Mesa's lavapipe and llvmpipe only, never on the machine's GPU driver: the Vulkan loader gets lavapipe's ICD manifest
+# as its one driver (run-rust-linux.sh resolves it through scripts/fetch-lavapipe.sh into this variable, which is not
+# AGTERM_-prefixed so the plugin keeps it), GL is forced onto llvmpipe, and every inherited loader or driver selection
+# is dropped. No lavapipe fails the launch; there is no fallback.
+LAVAPIPE_ICD_VARIABLE = "CONFORMANCE_LAVAPIPE_ICD"
+LAVAPIPE_LIBRARY_PREFIX = "libvulkan_lvp"
+# Inherited selections that would steer the loader, GL or wgpu onto another device or add layers to the process.
+GPU_SELECTION_PREFIXES = ("VK_", "WGPU_", "__NV_", "__GLX_", "DRI_PRIME", "MESA_VK_DEVICE_SELECT", "MESA_LOADER_")
+# GPUI panics on a Wayland compositor without a `wl_seat`, which headless weston offers only with this flag.
+FAKE_SEAT_ARG = "--fake-seat"
 WESTON_SIZE = (1920, 1080)
 # No idle lock, no panel, and no `weston-keyboard` input-method client: the desktop shell's own helper is its only one.
 WESTON_CONFIG = "[core]\nidle-time=0\n\n[shell]\npanel-position=none\nlocking=false\n\n[input-method]\npath=\n"
@@ -379,7 +391,7 @@ class Adapter:
     # A Linux desktop app: its runtime dir is the live session's, so the instance gets a private one.
     needs_runtime_dir: ClassVar[bool] = False
     # Arguments appended to the headless weston's command line, set only by tools/chrome_probe.py (`--debug`, which
-    # lets weston-screenshooter read the output).
+    # lets weston-screenshooter read the output); `weston_args` adds an adapter's own.
     compositor_args: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self, bin: Path | None, ctl: Path | None = None) -> None:
@@ -430,6 +442,10 @@ class Adapter:
     @property
     def headless(self) -> bool:
         return self.needs_runtime_dir and display_mode() == "headless"
+
+    def weston_args(self) -> tuple[str, ...]:
+        """What the headless weston's command line gets appended: `compositor_args`, and an adapter's own."""
+        return self.compositor_args
 
     def platform_env(self, env: dict[str, str]) -> None:
         """Hook for adapter-specific variables; `env` is already isolated."""
@@ -505,7 +521,7 @@ class Adapter:
                 write_noop_launchers(Path(env["XDG_CONFIG_HOME"]), Path(env["XDG_DATA_HOME"]))
             if headless:
                 session_bus = start_session_bus(root, env, timeout)
-                compositor = start_compositor(root, env, timeout, self.compositor_args)
+                compositor = start_compositor(root, env, timeout, self.weston_args())
             if app_id is not None:
                 _claim_app_id(app_id)
         except BaseException as error:
@@ -638,6 +654,28 @@ def compositor_program() -> str:
     raise LaunchError(f"no weston on PATH: install it, or set {DISPLAY_MODE_VARIABLE}=session to draw on this desktop")
 
 
+@functools.cache
+def weston_takes_fake_seat(program: str) -> bool:
+    """Whether `program --help` lists `--fake-seat` (weston 15.0 and later); asked once per program."""
+    env = {name: value for name, value in os.environ.items() if name not in ("WAYLAND_DISPLAY", "DISPLAY")}
+    try:
+        shown = subprocess.run(
+            [program, "--help"], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return FAKE_SEAT_ARG in shown.stdout + shown.stderr
+
+
+def require_fake_seat(program: str) -> None:
+    """Refuse a weston without `--fake-seat`: older ones exit on the unknown option, and GPUI panics without a seat."""
+    if not weston_takes_fake_seat(program):
+        raise LaunchError(
+            f"{program} does not take {FAKE_SEAT_ARG}, which the GPUI build needs (weston 15.0 or later; Ubuntu 24.04 "
+            "ships 13): build one with scripts/build-weston.sh and put its bin/ first on PATH"
+        )
+
+
 def weston_argv(program: str, root: Path, extra: Sequence[str] = ()) -> list[str]:
     """The headless weston's command line; `extra` comes last, so an option there overrides the one before it."""
     width, height = WESTON_SIZE
@@ -707,6 +745,69 @@ def mesa_egl_vendor() -> str | None:
         if found := sorted(Path(directory).glob("*mesa*.json")):
             return os.fspath(found[0])
     return None
+
+
+def lavapipe_icd(environ: Mapping[str, str] | None = None) -> str:
+    """The lavapipe ICD manifest `CONFORMANCE_LAVAPIPE_ICD` names, checked to load lavapipe and nothing else."""
+    path = (os.environ if environ is None else environ).get(LAVAPIPE_ICD_VARIABLE)
+    hint = (
+        f"set {LAVAPIPE_ICD_VARIABLE} to lavapipe's ICD manifest (`scripts/fetch-lavapipe.sh` prints it; "
+        "run-rust-linux.sh --frontend gpui sets it): the GPUI build renders on lavapipe only, "
+        "never on a hardware driver"
+    )
+    if not path:
+        raise LaunchError(f"no lavapipe: {hint}")
+    try:
+        manifest = json.loads(Path(path).read_text())
+        library = manifest["ICD"]["library_path"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise LaunchError(f"{LAVAPIPE_ICD_VARIABLE}={path} is no readable ICD manifest ({error}): {hint}") from None
+    if not isinstance(library, str) or not os.path.basename(library).startswith(LAVAPIPE_LIBRARY_PREFIX):
+        raise LaunchError(f"{LAVAPIPE_ICD_VARIABLE}={path} loads {library!r}, not lavapipe: {hint}")
+    # A missing driver would leave wgpu no Vulkan device, and it would quietly render through GL instead.
+    if icd_library(path, library) is None:
+        raise LaunchError(f"{LAVAPIPE_ICD_VARIABLE}={path} names {library!r}, which is not there: {hint}")
+    return os.path.abspath(path)
+
+
+# Where the loader's dlopen finds a driver named without a slash, beyond LD_LIBRARY_PATH and the ldconfig cache.
+LIBRARY_DIRS = ("/usr/local/lib", "/usr/lib64", "/usr/lib", "/lib64", "/lib")
+
+
+def icd_library(manifest: str | os.PathLike[str], library: str) -> str | None:
+    """The file an ICD manifest's `library_path` loads, by the Vulkan loader's rules, or None when there is none:
+    absolute as is, with a slash relative to the manifest's directory, a bare name through the library search path."""
+    if "/" in library:
+        found = os.path.join(os.path.dirname(os.path.abspath(manifest)), library)
+        return found if os.path.isfile(found) else None
+    dirs = [d for d in os.environ.get("LD_LIBRARY_PATH", "").split(":") if d]
+    dirs += sorted(str(d) for d in Path("/usr/lib").glob("*-linux-gnu*")) + list(LIBRARY_DIRS)
+    for directory in dirs:
+        if os.path.isfile(candidate := os.path.join(directory, library)):
+            return candidate
+    for program in ("ldconfig", "/sbin/ldconfig", "/usr/sbin/ldconfig"):
+        try:
+            cache = subprocess.run([program, "-p"], capture_output=True, text=True, timeout=10, check=False).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        for line in cache.splitlines():
+            name, _, target = line.strip().partition(" => ")
+            if name.split(" ", 1)[0] == library and os.path.isfile(target):
+                return target
+        break
+    return None
+
+
+def software_rendering_env(env: dict[str, str], icd: str) -> None:
+    """Make lavapipe the process's only Vulkan driver and llvmpipe its GL, dropping any inherited device selection."""
+    for name in [name for name in env if name.startswith(GPU_SELECTION_PREFIXES)]:
+        del env[name]
+    env.pop(LAVAPIPE_ICD_VARIABLE, None)  # the harness's, not the instance's
+    env["VK_DRIVER_FILES"] = icd
+    env["VK_ICD_FILENAMES"] = icd  # the loader's name for it before 1.3.234
+    env["LIBGL_ALWAYS_SOFTWARE"] = "1"
+    if vendor := mesa_egl_vendor():
+        env[EGL_VENDOR_VARIABLE] = vendor
 
 
 def wait_for_unix_socket(

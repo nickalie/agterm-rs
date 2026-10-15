@@ -374,6 +374,35 @@ fn runs_split_by_style_and_keep_wide_characters_on_their_columns() {
 }
 
 #[test]
+fn kitty_placeholder_cells_shape_no_text_but_keep_their_background() {
+    let dir = tempfile::tempdir().unwrap();
+    // a, then two placeholder cells (U+10EEEE U+0305 U+0305, image id 1 in the foreground) on a red background, b
+    let script = concat!(
+        r"printf 'a\033[38;2;0;0;1;41m\364\216\273\256\314\205\314\205\364\216\273\256\314\205\314\215",
+        r"\033[0mb'; exec sleep 5"
+    );
+    let pane = pane(script, dir.path());
+    let frame = wait_text(&pane, "b");
+    assert_eq!(frame.rows[0].placeholders().len(), 2);
+    let layout = layout_row(&frame.rows[0], &frame.colors, &Palette::default(), &RowMarks::default());
+    let texts: Vec<(&str, u16)> = layout
+        .runs
+        .iter()
+        .map(|run| (run.text.as_str(), run.clusters[0].col))
+        .collect();
+    // nothing drawn over the image: the placeholders split the runs and shape no glyph (Ghostty shapes a space)
+    assert_eq!(texts, [("a", 0), ("b", 3)]);
+    assert_eq!(
+        layout.backgrounds,
+        [Span {
+            start: 1,
+            len: 2,
+            value: frame.colors.palette[1]
+        }]
+    );
+}
+
+#[test]
 fn backgrounds_merge_and_decorations_span_their_cells() {
     let dir = tempfile::tempdir().unwrap();
     let pane = pane(
@@ -873,10 +902,16 @@ fn a_cell_change_without_a_font_action_is_reported(cx: &mut TestAppContext) {
 
 /// A terminal that never starts its pane (no view lays it out), with `family` as its font.
 fn unstarted(cx: &mut TestAppContext, family: &str) -> (Entity<Terminal>, Events) {
+    unstarted_at(cx, family, None)
+}
+
+/// [`unstarted`] starting at `font_size` (a restored session's, or the size a replacement carries over).
+fn unstarted_at(cx: &mut TestAppContext, family: &str, font_size: Option<f32>) -> (Entity<Terminal>, Events) {
     let mut config = TerminalConfig::default();
     config.font.family = vec![family.to_owned()];
     let spawn: Spawn = Box::new(|_| Err(agterm_term::PaneError::Spawn("never started".into())));
-    let terminal = cx.new(|cx| Terminal::new(spec(), config, spawn, cx));
+    let spec = TerminalSpec { font_size, ..spec() };
+    let terminal = cx.new(|cx| Terminal::new(spec, config, spawn, cx));
     let events: Events = Rc::default();
     let seen = Rc::clone(&events);
     cx.update(|cx| {
@@ -907,6 +942,84 @@ fn a_config_whose_fonts_change_the_cell_reports_it() {
     terminal.update(&mut cx, |terminal, cx| terminal.set_config(config, cx));
     cx.run_until_parked();
     assert_eq!(events.borrow().len(), 1);
+}
+
+/// `unstarted`'s config at `points`.
+fn sized(points: f32) -> TerminalConfig {
+    let mut config = TerminalConfig::default();
+    config.font.family = vec!["DejaVu Sans Mono".into()];
+    config.font.size = points;
+    config
+}
+
+fn assert_points(actual: f32, expected: f32) {
+    assert!((actual - expected).abs() < f32::EPSILON, "{actual} != {expected}");
+}
+
+#[test]
+fn a_config_reload_resizes_a_terminal_whose_size_the_user_kept() {
+    let mut cx = real_fonts();
+    let (terminal, events) = unstarted(&mut cx, "DejaVu Sans Mono");
+    let shared = terminal.read_with(&cx, |terminal, _| Rc::clone(terminal.shared()));
+    let cell = shared.cell_size();
+    terminal.update(&mut cx, |terminal, cx| terminal.reload_config(sized(24.0), cx));
+    cx.run_until_parked();
+    assert_points(shared.font_points(), 24.0);
+    assert!(shared.cell_size().0 > cell.0, "{:?}", shared.cell_size());
+    assert_eq!(*events.borrow(), [TerminalEvent::FontSize]);
+    assert_points(shared.original_font_points(), 24.0);
+    // a reset gives the reload the size back
+    shared.adjust_font_points(30.0, false);
+    shared.adjust_font_points(shared.original_font_points(), true);
+    terminal.update(&mut cx, |terminal, cx| terminal.reload_config(sized(16.0), cx));
+    assert_points(shared.font_points(), 16.0);
+}
+
+#[test]
+fn a_config_reload_keeps_the_size_the_user_zoomed_to() {
+    let mut cx = real_fonts();
+    let (terminal, events) = unstarted(&mut cx, "DejaVu Sans Mono");
+    let shared = terminal.read_with(&cx, |terminal, _| Rc::clone(terminal.shared()));
+    shared.adjust_font_points(18.0, false);
+    cx.run_until_parked();
+    events.borrow_mut().clear();
+    terminal.update(&mut cx, |terminal, cx| terminal.reload_config(sized(24.0), cx));
+    cx.run_until_parked();
+    assert_points(shared.font_points(), 18.0);
+    assert!(events.borrow().is_empty(), "{:?}", events.borrow());
+    // the configured size is what a reset returns to
+    assert_points(shared.original_font_points(), 24.0);
+}
+
+#[test]
+fn a_watermark_change_keeps_a_restored_or_replacement_size() {
+    // a restored session's persisted size, and the size a takeover or restart replacement carries over
+    for start in [18.0, 20.0] {
+        let mut cx = real_fonts();
+        let (terminal, events) = unstarted_at(&mut cx, "DejaVu Sans Mono", Some(start));
+        let shared = terminal.read_with(&cx, |terminal, _| Rc::clone(terminal.shared()));
+        // the app config's size (13) comes with the overlay config a background change applies
+        let mut config = sized(13.0);
+        config.theme.background = Rgb::new(1, 2, 3);
+        terminal.update(&mut cx, |terminal, cx| terminal.set_config(config, cx));
+        cx.run_until_parked();
+        assert_points(shared.font_points(), start);
+        assert_points(shared.original_font_points(), start);
+        // no font size change, so nothing is written back into the session
+        assert!(events.borrow().is_empty(), "{:?}", events.borrow());
+    }
+}
+
+#[test]
+fn a_config_reload_resizes_a_restored_size_the_user_did_not_step() {
+    // the GTK build's explicit reload: libghostty's re-feed resets a start size the user did not step
+    let mut cx = real_fonts();
+    let (terminal, events) = unstarted_at(&mut cx, "DejaVu Sans Mono", Some(18.0));
+    let shared = terminal.read_with(&cx, |terminal, _| Rc::clone(terminal.shared()));
+    terminal.update(&mut cx, |terminal, cx| terminal.reload_config(sized(13.0), cx));
+    cx.run_until_parked();
+    assert_points(shared.font_points(), 13.0);
+    assert_eq!(*events.borrow(), [TerminalEvent::FontSize]);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1124,8 +1237,10 @@ fn copy_actions_follow_their_formats(cx: &mut TestAppContext) {
         copied(&terminal, cx, "copy_to_clipboard:mixed").starts_with("ready red"),
         "its plain text"
     );
-    // HTML has no text/html offer to go to: performed, the clipboard left alone
-    assert!(copied(&terminal, cx, "copy_to_clipboard:html").starts_with("ready red"));
+    // HTML is offered as text/html alone (the Linux platform's patch); GPUI's test platform keeps the item's text,
+    // which is the markup then
+    let html = copied(&terminal, cx, "copy_to_clipboard:html");
+    assert!(html.contains('<') && html.contains("red"), "{html}");
 }
 
 /// Takes `copy-on-select` and the trim, runs `select_all`, and reads both clipboards back.
@@ -1351,12 +1466,11 @@ fn paste_and_copy_go_through_the_clipboard(cx: &mut TestAppContext) {
         .and_then(|item| item.text())
         .unwrap_or_default();
     assert!(copied.contains("ready") && copied.contains("pasted"), "{copied:?}");
-    // a paste that could run a command is refused and reported for confirmation
+    // a paste that could run a command goes through as confirmed, as upstream and the GTK build complete it
     events.borrow_mut().clear();
-    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("rm -rf x\n".into()));
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("echo unsafe-pasted\n".into()));
     assert!(surface.binding_action("paste_from_clipboard"));
-    cx.run_until_parked();
-    assert_eq!(*events.borrow(), [TerminalEvent::UnsafePaste("rm -rf x\n".into())]);
+    wait_painted(&view, cx, "unsafe-pasted");
 }
 
 #[gpui_kit::test]

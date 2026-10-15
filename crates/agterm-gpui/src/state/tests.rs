@@ -4,13 +4,15 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use agterm_core::PaneRole;
 use agterm_core::events::{EventCursor, ReadOptions};
 use agterm_core::model::{NewSession, WindowLibrary};
 use agterm_core::persist::{LibraryPersistence, SAVE_DEBOUNCE};
 use agterm_core::{CoreConfig, CoreState};
 use agterm_host::fakes::FakeSurface;
 use agterm_host::{MainLoopClosed, MainTask};
-use agterm_proto::{AppIdentity, EventKind};
+use agterm_proto::command::WindowCmd;
+use agterm_proto::{AppIdentity, Args, Command, EventKind, Request};
 
 use super::*;
 
@@ -497,6 +499,123 @@ fn an_activated_window_becomes_frontmost_unless_quitting() {
     state.save_on_quit();
     state.report_frontmost(second);
     assert_eq!(state.core.library().active_window_id(), Some(first));
+}
+
+/// What a window built now hands its first activation.
+fn built(state: &AppState) -> FirstFocus {
+    FirstFocus::Built {
+        frontmost_takes: state.core.frontmost_takes(),
+    }
+}
+
+/// `window.<cmd>` with `args`, untargeted.
+fn window_command(state: &mut AppState, cmd: WindowCmd, args: Args) {
+    let response = state.core.dispatch(&Request {
+        cmd: Command::Window(cmd),
+        target: None,
+        args: Some(args),
+    });
+    assert!(response.ok, "{:?}", response.error);
+}
+
+#[test]
+fn a_new_windows_first_focus_leaves_frontmost_to_a_later_command() {
+    let mut library = WindowLibrary::seeded("/home/u");
+    let first = library.active_window_id().unwrap();
+    // `window.new` made the second window frontmost
+    let second = library.new_window(None);
+    let mut state = AppState::new(core(library, None));
+    let first_focus = Some(built(&state));
+    // `window.select` took frontmost back before the window manager focused the newly mapped second window
+    let select = crate::keymap_actions::window_request(WindowCmd::Select, first, None);
+    assert!(state.core.dispatch(&select).ok);
+    state.window_activated(second, first_focus);
+    assert_eq!(state.key_window(), Some(second), "it holds the keyboard");
+    assert_eq!(
+        state.core.library().frontmost_window_id,
+        Some(first),
+        "the later command keeps frontmost"
+    );
+    // any later activation is the user's
+    state.window_activated(second, None);
+    assert_eq!(state.core.library().frontmost_window_id, Some(second));
+}
+
+#[test]
+fn a_new_windows_first_focus_leaves_frontmost_to_a_later_new_window() {
+    let library = WindowLibrary::seeded("/home/u");
+    let first = library.active_window_id().unwrap();
+    let mut state = AppState::new(core(library, None));
+    let new_window = |state: &mut AppState| {
+        window_command(state, WindowCmd::New, Args::default());
+        let library = state.core.library();
+        library.frontmost_window_id.unwrap()
+    };
+    let earlier = new_window(&mut state);
+    let earlier_focus = Some(built(&state));
+    let later = new_window(&mut state);
+    assert!(![first, earlier].contains(&later));
+    // the window manager focuses the earlier window after the later `window.new`
+    state.window_activated(earlier, earlier_focus);
+    assert_eq!(state.core.library().frontmost_window_id, Some(later));
+}
+
+#[test]
+fn a_new_windows_first_focus_counts_without_a_command_since() {
+    let mut library = WindowLibrary::seeded("/home/u");
+    let first = library.active_window_id().unwrap();
+    let second = library.new_window(None);
+    let mut state = AppState::new(core(library, None));
+    let first_focus = Some(built(&state));
+    // the user went to the first window, then into the second one the window manager left unfocused
+    state.window_activated(first, None);
+    state.window_activated(second, first_focus);
+    assert_eq!(state.core.library().frontmost_window_id, Some(second));
+}
+
+#[test]
+fn a_reopened_windows_first_focus_counts() {
+    let mut library = WindowLibrary::seeded("/home/u");
+    let first = library.active_window_id().unwrap();
+    let second = library.new_window(None);
+    library.close_window(second);
+    library.set_frontmost(Some(first));
+    let mut state = AppState::new(core(library, None));
+    // a notification's click reopens its closed window, its session gone: no command took frontmost
+    assert!(state.core.reveal_notification(second, Uuid::new_v4(), PaneRole::Main));
+    assert!(state.core.library().is_open(second));
+    assert_eq!(state.core.library().frontmost_window_id, Some(first));
+    state.window_activated(second, Some(built(&state)));
+    assert_eq!(state.core.library().frontmost_window_id, Some(second));
+}
+
+#[test]
+fn a_restored_windows_first_focus_counts_over_the_saved_frontmost() {
+    let mut library = WindowLibrary::seeded("/home/u");
+    let first = library.active_window_id().unwrap();
+    let saved = library.new_window(None);
+    let mut state = AppState::new(core(library, None));
+    assert_eq!(state.core.library().frontmost_window_id, Some(saved));
+    // the window manager kept the keyboard on the first window mapped
+    state.window_activated(first, Some(built(&state)));
+    assert_eq!(state.core.library().frontmost_window_id, Some(first));
+}
+
+#[test]
+fn a_parked_new_windows_first_focus_leaves_frontmost_where_its_command_handed_it() {
+    let library = WindowLibrary::seeded("/home/u");
+    let first = library.active_window_id().unwrap();
+    let mut state = AppState::new(core(library, None));
+    let args = Args {
+        minimized: Some(true),
+        ..Args::default()
+    };
+    window_command(&mut state, WindowCmd::New, args);
+    let library = state.core.library();
+    let second = library.open_ids().into_iter().find(|id| *id != first).unwrap();
+    assert_eq!(library.frontmost_window_id, Some(first), "handed off");
+    state.window_activated(second, Some(FirstFocus::Parked));
+    assert_eq!(state.core.library().frontmost_window_id, Some(first));
 }
 
 #[test]

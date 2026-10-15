@@ -89,6 +89,9 @@ pub struct KittyPlacement {
     /// The pixel offset inside the top-left cell.
     pub x_offset: u32,
     pub y_offset: u32,
+    /// The cells asked for (`c=`, `r=`; 0: from the image's size); a virtual placement's grid.
+    pub columns: u32,
+    pub rows: u32,
     /// `None` when the placement is off the viewport or virtual.
     pub render: Option<KittyRenderInfo>,
 }
@@ -253,6 +256,8 @@ impl KittyGraphics<'_> {
             z: placement_value::<i32>(iterator, ffi::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_Z).unwrap_or(0),
             x_offset: u32_of(ffi::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_X_OFFSET),
             y_offset: u32_of(ffi::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_Y_OFFSET),
+            columns: u32_of(ffi::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_COLUMNS),
+            rows: u32_of(ffi::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_ROWS),
             render: self.render_info(iterator, image_id),
         }
     }
@@ -381,6 +386,20 @@ mod tests {
         assert!(graphics.generation() > before);
         assert!(graphics.placements().unwrap().is_empty());
         assert!(graphics.image(7).is_none());
+    }
+
+    #[test]
+    fn a_virtual_placement_has_its_grid_but_no_position() {
+        let mut terminal = terminal();
+        terminal.vt_write(b"\x1b_Ga=T,U=1,q=2,f=32,s=2,v=1,i=9,p=4,c=3,r=2;AQIDBAUGBwg=\x1b\\");
+        let graphics = terminal.kitty_graphics().unwrap();
+        let placements = graphics.placements().unwrap();
+        assert_eq!(placements.len(), 1);
+        let placement = placements[0];
+        assert!(placement.is_virtual);
+        assert_eq!((placement.image_id, placement.placement_id), (9, 4));
+        assert_eq!((placement.columns, placement.rows), (3, 2));
+        assert!(placement.render.is_none());
     }
 
     #[test]

@@ -20,4 +20,6 @@ def make_adapter(options: ImplOptions) -> Adapter:
         raise ValueError(f"unknown implementation {options.impl!r}")
     if options.impl == SwiftMacosAdapter.name:
         return SwiftMacosAdapter(options.bin, options.ctl, launch_mode=options.macos_launch_mode)
+    if options.impl == RustAdapter.name:
+        return RustAdapter(options.bin, options.ctl, frontend=options.rust_frontend)
     return ADAPTERS[options.impl](options.bin, options.ctl)

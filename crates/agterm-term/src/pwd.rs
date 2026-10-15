@@ -3,8 +3,9 @@
 //! stream_handler.zig` at `LIBGHOSTTY_VT_REV`) reported as `pwd_change`.
 //!
 //! - An empty value resets the pwd: the report is the empty path.
-//! - Otherwise the value must parse as a `file://` or `kitty-shell-cwd://` URI with a host (Ghostty parses with
-//!   `mac_address` on Linux, so a MAC address host is a host, not a host and a port), and the host must be local:
+//! - Otherwise the value must parse as a `file://` or `kitty-shell-cwd://` URI (the scheme as written, case and all)
+//!   with a host (Ghostty parses with `mac_address` on Linux, so a MAC address host is a host, not a host and a
+//!   port), and the host must be local:
 //!   `localhost` or this machine's hostname exactly (`os/hostname.zig` `isLocal`). An empty host (`file:///tmp`) is
 //!   no match for either, so Ghostty ignores it, and so does this.
 //! - The path is percent-decoded and ends at a query or fragment, except for `kitty-shell-cwd://`, whose path is
@@ -24,7 +25,7 @@ pub fn reported_path(raw: &str, hostname: &str) -> Option<String> {
         return Some(String::new());
     }
     let (scheme, rest) = raw.split_once("://")?;
-    if !scheme.eq_ignore_ascii_case(FILE) && !scheme.eq_ignore_ascii_case(KITTY) {
+    if scheme != FILE && scheme != KITTY {
         tracing::debug!(scheme, "OSC 7 scheme must be file or kitty-shell-cwd");
         return None;
     }
@@ -35,7 +36,7 @@ pub fn reported_path(raw: &str, hostname: &str) -> Option<String> {
         tracing::debug!(host, "OSC 7 host must be local");
         return None;
     }
-    if scheme.eq_ignore_ascii_case(KITTY) {
+    if scheme == KITTY {
         return Some(path.to_owned());
     }
     let end = path.find(['?', '#']).unwrap_or(path.len());
@@ -116,10 +117,13 @@ mod tests {
         );
         assert_eq!(reported_path("file://localhost/tmp", HOST).as_deref(), Some("/tmp"));
         assert_eq!(
-            reported_path("FILE://box/tmp?x=1#top", HOST).as_deref(),
+            reported_path("file://box/tmp?x=1#top", HOST).as_deref(),
             Some("/tmp"),
             "a query and a fragment end the path"
         );
+        // Ghostty compares the scheme as written (`std.mem.eql`, a case-sensitive `startsWith` for kitty's)
+        assert_eq!(reported_path("FILE://box/tmp", HOST), None);
+        assert_eq!(reported_path("KITTY-SHELL-CWD://box/tmp", HOST), None);
         assert_eq!(
             reported_path("file://user@box:22/srv", HOST).as_deref(),
             Some("/srv"),

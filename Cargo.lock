@@ -209,10 +209,13 @@ dependencies = [
  "cosmic-text",
  "futures-util",
  "gpui-kit",
+ "gpui-pre-linux",
  "gpui-pre-wgpu",
+ "image",
  "libc",
  "png 0.18.1",
  "raw-window-handle",
+ "regex",
  "serde_json",
  "signal-hook",
  "tempfile",
@@ -3342,8 +3345,6 @@ dependencies = [
 [[package]]
 name = "gpui-pre-linux"
 version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e28213c3fde6f13e91ba0b74b90cbaadec9373e36a031eda98561d31059870f3"
 dependencies = [
  "accesskit",
  "accesskit_unix",

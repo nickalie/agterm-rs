@@ -214,6 +214,9 @@ fn harness(cx: &mut TestAppContext, core: Core, window: Uuid) -> Harness<'_> {
     let (deck, cx) = cx.add_window_view(|_, _| Deck::new(window, env));
     cx.simulate_scale_factor_change(1.0);
     cx.simulate_resize(size(px(803.), px(600.)));
+    // an active window, so focus moves reach the focus listeners as on a desktop
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
     Harness {
         state,
         posted,
@@ -247,11 +250,11 @@ impl Harness<'_> {
             }
         }
         let (deck, state) = (self.deck.clone(), &mut self.state);
-        self.cx
+        let focused = self
+            .cx
             .update(|window, cx| deck.update(cx, |deck, cx| deck.reconcile(&mut state.core, false, window, cx)));
-        let given = self.deck.update(self.cx, |deck, _| deck.take_given_focus());
-        for (session, token) in given {
-            self.state.pane_focused(session, &token);
+        if focused {
+            self.state.settle();
         }
         self.state.core.clear_pane_focus_requests();
         for grant in self.state.take_spawns() {
@@ -448,6 +451,82 @@ fn a_shown_split_lays_both_panes_out_at_the_ratio_and_focus_follows_the_model(cx
 }
 
 #[gpui_kit::test]
+fn queued_focus_moves_settle_on_the_last_one(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    let session = ids[0];
+    h.dispatch(Command::Session(SessionCmd::Split), session, |_| {});
+    h.until("both panes to start", |h| {
+        h.realized(session, StatusPane::Left) && h.realized(session, StatusPane::Right)
+    });
+    let (primary, split) = (h.token(session, StatusPane::Left), h.token(session, StatusPane::Right));
+
+    // the deck's own focus moves reach the model as they happen: none waits in the queue to undo a later one
+    for _ in 0..3 {
+        for (pane, token) in [("left", &primary), ("right", &split)] {
+            h.dispatch(Command::Session(SessionCmd::Focus), session, |args| {
+                args.pane = Some(pane.to_owned());
+            });
+            h.turn();
+            assert!(h.focused(session, token), "{pane} holds the keyboard");
+        }
+    }
+    h.turn();
+    h.turn();
+    assert!(h.focused(session, &split), "the last move holds the keyboard");
+    assert!(h.session(session).split.focused, "the model's focus is the last move's");
+}
+
+/// Gives the terminal carrying `token` the keyboard as a click would, and lets its focus listeners run.
+fn click_focus(h: &mut Harness<'_>, session: Uuid, token: &str) {
+    let deck = h.deck.clone();
+    h.cx.update(|window, cx| {
+        let handle = deck.read(cx).terminal(session, token).unwrap().focus_handle(cx);
+        window.focus(&handle, cx);
+    });
+    h.cx.run_until_parked();
+}
+
+/// Reconciles the deck without running the queued tasks first: a sync that comes before them.
+fn reconcile_only(h: &mut Harness<'_>) -> bool {
+    let (deck, state) = (h.deck.clone(), &mut h.state);
+    h.cx.update(|window, cx| deck.update(cx, |deck, cx| deck.reconcile(&mut state.core, false, window, cx)))
+}
+
+#[gpui_kit::test]
+fn a_users_focus_move_outlasts_a_sync_before_its_report(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    let session = ids[0];
+    h.dispatch(Command::Session(SessionCmd::Split), session, |_| {});
+    h.until("both panes to start", |h| {
+        h.realized(session, StatusPane::Left) && h.realized(session, StatusPane::Right)
+    });
+    let (primary, split) = (h.token(session, StatusPane::Left), h.token(session, StatusPane::Right));
+    assert!(h.session(session).split.focused, "the new split's pane has the focus");
+
+    // a click's report is queued behind whatever the main loop runs first; a sync before it keeps the user's pane
+    click_focus(&mut h, session, &primary);
+    assert!(!reconcile_only(&mut h), "the deck gave no focus of its own");
+    assert!(h.focused(session, &primary), "the sync did not take the click back");
+    h.turn();
+    assert!(!h.session(session).split.focused, "the click's report landed");
+    assert!(h.focused(session, &primary));
+
+    // a report a later move overtook is dropped when it runs
+    click_focus(&mut h, session, &split);
+    h.store().select_session(Some(ids[1]));
+    h.state.settle();
+    let _gave = reconcile_only(&mut h);
+    assert_eq!(h.deck.read_with(h.cx, |deck, _| deck.shown()), Some(ids[1]));
+    h.turn();
+    assert!(
+        !h.session(session).split.focused,
+        "the overtaken report changed nothing"
+    );
+}
+
+#[gpui_kit::test]
 fn the_inactive_pane_wash_follows_the_focus(cx: &mut TestAppContext) {
     let (library, window, ids) = three_sessions();
     let mut h = harness(cx, core_of(library), window);
@@ -628,6 +707,64 @@ fn a_held_exit_closes_its_pane_on_the_next_key(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_pane_terminal_is_owned_by_its_pane_and_its_keys_clear_the_status(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    let session = ids[0];
+    h.until("the pane to start", |h| h.realized(session, StatusPane::Left));
+    let token = h.token(session, StatusPane::Left);
+    assert_eq!(
+        h.shared(session, &token).owner(),
+        Some(agterm_core::keymap::SurfaceOwner::Pane {
+            session,
+            token: token.clone()
+        }),
+        "a custom command typed here names this pane"
+    );
+    assert!(h.focused(session, &token));
+    let status = |h: &Harness<'_>| h.session(session).agent_indicator.status;
+    h.dispatch(Command::Session(SessionCmd::Status), session, |args| {
+        args.status = Some("active".to_owned());
+    });
+    h.turn();
+    h.cx.simulate_keystrokes("a enter");
+    h.turn();
+    assert_eq!(
+        status(&h),
+        agterm_core::model::AgentStatus::Active,
+        "typing and a submit keep an active glyph"
+    );
+    h.cx.simulate_keystrokes("escape");
+    h.turn();
+    assert_ne!(
+        status(&h),
+        agterm_core::model::AgentStatus::Active,
+        "an interrupt clears it"
+    );
+}
+
+#[gpui_kit::test]
+fn focus_follows_the_mouse_into_a_pane_as_a_click_would(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    let session = ids[0];
+    h.dispatch(Command::Session(SessionCmd::Split), session, |_| {});
+    h.until("both panes to start", |h| {
+        h.realized(session, StatusPane::Left) && h.realized(session, StatusPane::Right)
+    });
+    let primary = h.token(session, StatusPane::Left);
+    assert!(h.session(session).split.focused);
+    let terminal = h.deck.read_with(h.cx, |deck, _| {
+        deck.terminal(session, &primary).unwrap().terminal.clone()
+    });
+    terminal.update(h.cx, |_, cx| cx.emit(TerminalEvent::FocusFollowsMouse));
+    h.cx.run_until_parked();
+    assert!(h.focused(session, &primary), "the pointer's pane took the keyboard");
+    h.turn();
+    assert!(!h.session(session).split.focused, "the model's focus followed");
+}
+
+#[gpui_kit::test]
 fn a_session_background_reaches_its_terminals_and_a_pane_override_wins(cx: &mut TestAppContext) {
     use agterm_core::model::{BackgroundWatermark, WatermarkKind};
     let (library, window, ids) = three_sessions();
@@ -681,6 +818,32 @@ fn a_session_background_reaches_its_terminals_and_a_pane_override_wins(cx: &mut 
         default,
         "an image leaves the background color alone"
     );
+    let image = |h: &mut Harness<'_>, token: &str| {
+        h.shared(session, token)
+            .config()
+            .background_image
+            .path
+            .as_ref()
+            .map(|path| path.path.clone())
+    };
+    assert_eq!(
+        image(&mut h, &left).as_deref(),
+        Some(file.as_path()),
+        "the terminal draws the text's file"
+    );
+
+    // an image background reaches the terminal's `background-image`
+    let picture = h.state_dir.path().join("picture.png");
+    std::fs::write(&picture, b"not decoded here").unwrap();
+    h.store().session_mut(session).unwrap().pane_backgrounds.right = Some(BackgroundWatermark {
+        kind: WatermarkKind::Image,
+        image_path: Some(picture.display().to_string()),
+        color_hex: None,
+        ..color("#000000")
+    });
+    h.turn();
+    assert_eq!(image(&mut h, &right).as_deref(), Some(picture.as_path()));
+    assert_eq!(image(&mut h, &left).as_deref(), Some(file.as_path()));
 
     // cleared: the overlay goes, and so does the text file no terminal draws any more
     h.store().session_mut(session).unwrap().background_watermark = None;

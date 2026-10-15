@@ -1,7 +1,8 @@
 """A stand-in weston for adapter self-tests: listens on `$XDG_RUNTIME_DIR/<--socket>` until SIGTERM.
 
 FAKE_COMPOSITOR_MODE: serve (default), exit (exit 4 before binding), silent (never binds). It records its argv and
-environment in `fake-compositor.json` beside its `--log`.
+environment in `fake-compositor.json` beside its `--log`. `--help` lists the options as weston 15 does, `--fake-seat`
+among them, unless FAKE_COMPOSITOR_HELP=old (a weston 13 or 14, which has none).
 """
 
 import json
@@ -9,6 +10,12 @@ import os
 import socket
 import sys
 import threading
+
+if "--help" in sys.argv[1:]:
+    print("Usage: weston [OPTIONS]\n\n  --backend=BACKEND\tBackend module\n  --socket=NAME\t\tName of socket")
+    if os.environ.get("FAKE_COMPOSITOR_HELP") != "old":
+        print("  --fake-seat\t\tUse a fake seat for compatibility")
+    sys.exit(0)
 
 options = dict(arg.removeprefix("--").partition("=")[::2] for arg in sys.argv[1:])
 with open(os.path.join(os.path.dirname(options["log"]), "fake-compositor.json"), "w") as sink:

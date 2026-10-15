@@ -1,0 +1,458 @@
+# The GPUI frontend's conformance ratchet: pytest node ids the GPUI build passes, one per line, verbatim and sorted.
+# tools/check_ratchet.py fails a run in which a listed id fails, errors or skips (a host-dependent skip excepted).
+# Run with `tools/run-rust-linux.sh --frontend gpui`; add newly passing ids with
+# `tools/check_ratchet.py --report reports/rust-gpui-linux/nodeids.jsonl --list rust-gpui-passing.txt --add`.
+# Kept beside rust-passing.txt (the GTK build's) until the switch, which needs this list to cover that one.
+tests/behaviors/test_hooks.py::test_a_hook_runs_once_per_event_in_event_order
+tests/behaviors/test_hooks.py::test_an_edit_takes_effect_only_on_reload
+tests/behaviors/test_hooks.py::test_hooks_file_is_read_at_launch
+tests/behaviors/test_keymap.py::test_an_edit_takes_effect_only_on_reload
+tests/behaviors/test_keymap.py::test_keymap_file_is_read_at_launch
+tests/cli/test_cli_only.py::test_clipboard_set_checks_the_text_before_the_pane
+tests/cli/test_cli_only.py::test_clipboard_set_refuses_outside_a_live_pane
+tests/cli/test_cli_only.py::test_terminfo_install_compiles_the_entry_into_the_remote_home
+tests/cli/test_cli_only.py::test_terminfo_install_refuses_a_destination_ssh_would_misread[-oProxyCommand=x]
+tests/cli/test_cli_only.py::test_terminfo_install_refuses_a_destination_ssh_would_misread[]
+tests/cli/test_cli_only.py::test_terminfo_install_refuses_a_destination_ssh_would_misread[two words]
+tests/cli/test_cli_only.py::test_terminfo_install_reports_how_ssh_ended
+tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args0-event limit must be between 1 and 1000]
+tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args1-events.read requires --run and --after together]
+tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args2-invalid event run id]
+tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args3-invalid event cursor]
+tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args4-None]
+tests/cli/test_cli_output.py::test_font
+tests/cli/test_cli_output.py::test_hooks
+tests/cli/test_cli_output.py::test_notify_raises_the_unseen_count
+tests/cli/test_cli_output.py::test_pick_blocks_until_cancelled
+tests/cli/test_cli_output.py::test_pick_without_blocking
+tests/cli/test_cli_output.py::test_quick_terminal
+tests/cli/test_cli_output.py::test_restore
+tests/cli/test_cli_output.py::test_session_background
+tests/cli/test_cli_output.py::test_session_panes
+tests/cli/test_cli_output.py::test_sidebar
+tests/cli/test_cli_output.py::test_version
+tests/cli/test_cli_output.py::test_workspace_focus_and_filter
+tests/cli/test_cli_output.py::test_workspace_go_and_move
+tests/cli/test_cli_output.py::test_workspace_lifecycle
+tests/cli/test_cli_output.py::test_zmx_commands_refused_before_acting
+tests/cli/test_socket_resolution.py::test_agterm_socket_variable_is_not_read
+tests/cli/test_socket_resolution.py::test_default_socket_without_a_state_dir
+tests/cli/test_socket_resolution.py::test_socket_option_wins_over_the_state_dir
+tests/cli/test_socket_resolution.py::test_state_dir_names_the_socket
+tests/protocol/test_addressing.py::test_active_and_omitted_targets_name_the_current_workspace
+tests/protocol/test_addressing.py::test_active_and_omitted_targets_name_the_selected_session
+tests/protocol/test_addressing.py::test_ambiguous_prefix_lists_the_matches
+tests/protocol/test_addressing.py::test_session_target_by_id[exact]
+tests/protocol/test_addressing.py::test_session_target_by_id[lowercase]
+tests/protocol/test_addressing.py::test_session_target_by_id[unique-prefix]
+tests/protocol/test_addressing.py::test_tree_window_argument
+tests/protocol/test_addressing.py::test_undecodable_request_is_refused[arg-type]
+tests/protocol/test_addressing.py::test_undecodable_request_is_refused[no-cmd]
+tests/protocol/test_addressing.py::test_undecodable_request_is_refused[not-an-object]
+tests/protocol/test_addressing.py::test_undecodable_request_is_refused[not-json]
+tests/protocol/test_addressing.py::test_undecodable_request_is_refused[target-type]
+tests/protocol/test_addressing.py::test_undecodable_request_is_refused[unknown-command]
+tests/protocol/test_addressing.py::test_unresolved_target[session.select--no such session: ]
+tests/protocol/test_addressing.py::test_unresolved_target[session.select-zzz-no such session: zzz]
+tests/protocol/test_addressing.py::test_unresolved_target[workspace.select-zzz-no such workspace: zzz]
+tests/protocol/test_ask_pick.py::test_ask_refusals[blank-title]
+tests/protocol/test_ask_pick.py::test_ask_refusals[no-title]
+tests/protocol/test_ask_pick.py::test_ask_refusals[pane]
+tests/protocol/test_ask_pick.py::test_ask_refusals[title-control]
+tests/protocol/test_ask_pick.py::test_pick_refusals[empty]
+tests/protocol/test_ask_pick.py::test_pick_refusals[ids]
+tests/protocol/test_ask_pick.py::test_pick_refusals[label-bell]
+tests/protocol/test_ask_pick.py::test_pick_refusals[label]
+tests/protocol/test_ask_pick.py::test_pick_refusals[many]
+tests/protocol/test_ask_pick.py::test_pick_refusals[no-items]
+tests/protocol/test_ask_pick.py::test_pick_refusals[prompt-select]
+tests/protocol/test_ask_pick.py::test_pick_refusals[selection]
+tests/protocol/test_ask_pick.py::test_pick_refusals[subtitle-newline]
+tests/protocol/test_ask_pick.py::test_pick_waits_in_the_window_slot
+tests/protocol/test_ask_pick.py::test_pick_with_no_items_is_a_text_prompt
+tests/protocol/test_ask_pick.py::test_result_and_cancel_need_a_known_id[ask.cancel]
+tests/protocol/test_ask_pick.py::test_result_and_cancel_need_a_known_id[ask.result]
+tests/protocol/test_ask_pick.py::test_result_and_cancel_need_a_known_id[pick.cancel]
+tests/protocol/test_ask_pick.py::test_result_and_cancel_need_a_known_id[pick.result]
+tests/protocol/test_ask_pick.py::test_terminal_ask_on_one_pane
+tests/protocol/test_ask_pick.py::test_terminal_ask_pane_must_be_laid_out
+tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[None-args2-browser.clear]
+tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[None-args2-browser.links]
+tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[active-args0-browser.clear]
+tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[active-args0-browser.links]
+tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[zzz-args1-browser.clear]
+tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[zzz-args1-browser.links]
+tests/protocol/test_config_browser.py::test_links_refuses_an_unknown_mode[Overlay]
+tests/protocol/test_config_browser.py::test_links_refuses_an_unknown_mode[]
+tests/protocol/test_config_browser.py::test_links_refuses_an_unknown_mode[bogus]
+tests/protocol/test_config_browser.py::test_links_sets_and_reads_the_link_open_mode
+tests/protocol/test_config_browser.py::test_reload_applies_the_edited_config_to_open_and_new_sessions
+tests/protocol/test_dashboard_quick.py::test_dashboard_and_terminal_zoom_replace_each_other
+tests/protocol/test_dashboard_quick.py::test_dashboard_font_modes
+tests/protocol/test_dashboard_quick.py::test_dashboard_pane_refs_pick_one_pane
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[bad-pane-ref]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[both-font-modes]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[close-with-font-size]
+tests/protocol/test_dashboard_quick.py::test_dashboard_shows_each_pane_of_the_given_sessions
+tests/protocol/test_dashboard_quick.py::test_quick_commands_need_a_shown_terminal
+tests/protocol/test_dashboard_quick.py::test_quick_show_hide_toggle
+tests/protocol/test_dashboard_quick.py::test_quick_zoom_ends_with_the_panel
+tests/protocol/test_events.py::test_cursor_expires_past_the_ring_capacity
+tests/protocol/test_events.py::test_cursor_failure_carries_the_anchor[ahead]
+tests/protocol/test_events.py::test_cursor_failure_carries_the_anchor[other-run]
+tests/protocol/test_events.py::test_cursor_pages_through_the_ring
+tests/protocol/test_events.py::test_invalid_read_request[after-alone]
+tests/protocol/test_events.py::test_invalid_read_request[bad-after]
+tests/protocol/test_events.py::test_invalid_read_request[bad-run]
+tests/protocol/test_events.py::test_invalid_read_request[empty-kind]
+tests/protocol/test_events.py::test_invalid_read_request[limit-0]
+tests/protocol/test_events.py::test_invalid_read_request[limit-1001]
+tests/protocol/test_events.py::test_invalid_read_request[negative-after]
+tests/protocol/test_events.py::test_invalid_read_request[run-alone]
+tests/protocol/test_events.py::test_invalid_read_request[unknown-kind]
+tests/protocol/test_events.py::test_kinds_filter[comma-joined]
+tests/protocol/test_events.py::test_kinds_filter[list]
+tests/protocol/test_events.py::test_kinds_filter[padded]
+tests/protocol/test_events.py::test_next_advances_past_filtered_out_events
+tests/protocol/test_events.py::test_read_without_a_cursor_subscribes_from_now
+tests/protocol/test_events.py::test_run_id_is_case_insensitive
+tests/protocol/test_events.py::test_session_lifecycle_events
+tests/protocol/test_font_theme.py::test_font_pane_right_steps_the_split_alone
+tests/protocol/test_font_theme.py::test_font_pane_scratch_steps_the_scratch_terminal_alone
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-middle-invalid pane: middle-font.dec]
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-middle-invalid pane: middle-font.inc]
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-middle-invalid pane: middle-font.reset]
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-right-session has no split pane-font.dec]
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-right-session has no split pane-font.inc]
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-right-session has no split pane-font.reset]
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-scratch-session has no scratch terminal-font.dec]
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-scratch-session has no scratch terminal-font.inc]
+tests/protocol/test_font_theme.py::test_font_refusals[fresh-scratch-session has no scratch terminal-font.reset]
+tests/protocol/test_font_theme.py::test_font_refusals[zzz-None-no such session: zzz-font.dec]
+tests/protocol/test_font_theme.py::test_font_refusals[zzz-None-no such session: zzz-font.inc]
+tests/protocol/test_font_theme.py::test_font_refusals[zzz-None-no such session: zzz-font.reset]
+tests/protocol/test_font_theme.py::test_font_steps_the_main_pane_by_one_point_and_resets
+tests/protocol/test_font_theme.py::test_font_without_a_target_steps_the_active_session_alone
+tests/protocol/test_font_theme.py::test_list_names_the_bundled_themes
+tests/protocol/test_hud.py::test_hud_font_size_range[font-high]
+tests/protocol/test_hud.py::test_hud_font_size_range[font-low]
+tests/protocol/test_hud.py::test_hud_refusals[pane-session.hud.open]
+tests/protocol/test_hud.py::test_unknown_session_target[session.hud.close-args2]
+tests/protocol/test_hud.py::test_unknown_session_target[session.hud.open-args0]
+tests/protocol/test_hud.py::test_unknown_session_target[session.hud.update-args1]
+tests/protocol/test_keymap_hooks.py::test_a_running_hook_queues_its_events_and_survives_its_removal
+tests/protocol/test_keymap_hooks.py::test_attach_remote_ships_a_default_that_an_existing_binding_keeps
+tests/protocol/test_keymap_hooks.py::test_hook_gets_its_event_on_stdin_and_in_its_environment
+tests/protocol/test_keymap_hooks.py::test_hooks_take_no_target_or_window[None-args2-hooks.list]
+tests/protocol/test_keymap_hooks.py::test_hooks_take_no_target_or_window[None-args2-hooks.reload]
+tests/protocol/test_keymap_hooks.py::test_hooks_take_no_target_or_window[active-args0-hooks.list]
+tests/protocol/test_keymap_hooks.py::test_hooks_take_no_target_or_window[active-args0-hooks.reload]
+tests/protocol/test_keymap_hooks.py::test_hooks_take_no_target_or_window[zzz-args1-hooks.list]
+tests/protocol/test_keymap_hooks.py::test_hooks_take_no_target_or_window[zzz-args1-hooks.reload]
+tests/protocol/test_keymap_hooks.py::test_list_without_a_file_has_no_hooks
+tests/protocol/test_keymap_hooks.py::test_list_without_a_file_reports_the_builtins_alone
+tests/protocol/test_keymap_hooks.py::test_reload_applies_the_edited_file
+tests/protocol/test_keymap_hooks.py::test_reload_reaches_every_window
+tests/protocol/test_keymap_hooks.py::test_reload_reports_each_bad_line_and_keeps_the_good_ones
+tests/protocol/test_keymap_hooks.py::test_run_refusals[None-args0-keymap.run requires a command name]
+tests/protocol/test_keymap_hooks.py::test_run_refusals[None-args1-keymap.run requires a command name]
+tests/protocol/test_keymap_hooks.py::test_run_refusals[None-args2-no custom command named nope]
+tests/protocol/test_keymap_hooks.py::test_run_refusals[None-args3-no custom command named  plain]
+tests/protocol/test_keymap_hooks.py::test_run_refusals[zzz-args4-no such session: zzz]
+tests/protocol/test_live_any_shell.py::test_a_live_pane_in_the_login_shell_reports_its_cwd_and_survives_the_relaunch
+tests/protocol/test_notify.py::test_notify_raises_the_badge_and_emits_the_event
+tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args0-notify requires a body]
+tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args1-notify requires a body]
+tests/protocol/test_notify.py::test_notify_refusals_post_nothing[zzz-args2-no such session: zzz]
+tests/protocol/test_overlay.py::test_open_refusals[cwd-is-file]
+tests/protocol/test_overlay.py::test_open_refusals[cwd-url]
+tests/protocol/test_overlay.py::test_open_refusals[outside-cwd]
+tests/protocol/test_overlay.py::test_open_refusals[pane-size]
+tests/protocol/test_overlay.py::test_open_refusals[pane]
+tests/protocol/test_overlay.py::test_open_refusals[relative-cwd]
+tests/protocol/test_overlay.py::test_open_refusals[root-cwd]
+tests/protocol/test_overlay.py::test_overlay_opens_in_the_background_unless_it_follows
+tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.close-args0]
+tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.reload-args3]
+tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.result-args1]
+tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.submit-args4]
+tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.text-args2]
+tests/protocol/test_overlay.py::test_overlay_size_and_resize
+tests/protocol/test_overlay.py::test_page_result_needs_a_known_page[invalid]
+tests/protocol/test_overlay.py::test_page_result_needs_a_known_page[unknown]
+tests/protocol/test_overlay.py::test_pane_overlay_needs_a_rendered_pane[hidden-split]
+tests/protocol/test_overlay.py::test_pane_overlay_needs_a_rendered_pane[unsplit]
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.close-args1]
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.open-args0]
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.reload-args6]
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.resize-args2]
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.result-args3]
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.submit-args5]
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.text-args4]
+tests/protocol/test_overlay.py::test_unsplit_session_takes_a_left_pane_overlay
+tests/protocol/test_restore.py::test_capture_needs_rerun_mode
+tests/protocol/test_restore.py::test_mode_reads_the_launch_policy
+tests/protocol/test_restore.py::test_mode_rejects_an_unknown_mode
+tests/protocol/test_restore.py::test_mode_set_applies_to_the_next_launch
+tests/protocol/test_restore.py::test_panes_are_not_zmx_backed_outside_live_mode
+tests/protocol/test_restore.py::test_split_restore_pin_reads_back
+tests/protocol/test_session.py::test_close_removes_the_session_and_reselects
+tests/protocol/test_session.py::test_close_requires_a_target
+tests/protocol/test_session.py::test_close_several_targets_at_once
+tests/protocol/test_session.py::test_close_several_targets_is_atomic
+tests/protocol/test_session.py::test_context_rejects_and_keeps_the_previous_value[blank]
+tests/protocol/test_session.py::test_context_rejects_and_keeps_the_previous_value[clear-with-text]
+tests/protocol/test_session.py::test_context_rejects_and_keeps_the_previous_value[line-break]
+tests/protocol/test_session.py::test_context_rejects_and_keeps_the_previous_value[no-mode]
+tests/protocol/test_session.py::test_context_rejects_and_keeps_the_previous_value[set-without-text]
+tests/protocol/test_session.py::test_context_rejects_and_keeps_the_previous_value[too-long]
+tests/protocol/test_session.py::test_context_rejects_and_keeps_the_previous_value[unknown-mode]
+tests/protocol/test_session.py::test_context_set_and_clear
+tests/protocol/test_session.py::test_duplicate_inserts_a_plain_copy_after_the_source
+tests/protocol/test_session.py::test_flag_clear_unflags_every_session
+tests/protocol/test_session.py::test_flag_modes
+tests/protocol/test_session.py::test_flag_rejects_an_unknown_mode
+tests/protocol/test_session.py::test_go_requires_a_direction[None]
+tests/protocol/test_session.py::test_go_requires_a_direction[sideways]
+tests/protocol/test_session.py::test_go_steps_through_sessions_and_wraps
+tests/protocol/test_session.py::test_move_after_an_anchor_below_it
+tests/protocol/test_session.py::test_move_next_to_an_anchor
+tests/protocol/test_session.py::test_move_rejects[anchor-and-to]
+tests/protocol/test_session.py::test_move_rejects[anchor-and-workspace]
+tests/protocol/test_session.py::test_move_rejects[batch-reorder]
+tests/protocol/test_session.py::test_move_rejects[both-anchors]
+tests/protocol/test_session.py::test_move_rejects[empty-batch]
+tests/protocol/test_session.py::test_move_rejects[nothing]
+tests/protocol/test_session.py::test_move_rejects[to-and-ws]
+tests/protocol/test_session.py::test_move_rejects[unknown-anchor]
+tests/protocol/test_session.py::test_move_rejects[unknown-direction]
+tests/protocol/test_session.py::test_move_rejects[unknown-workspace]
+tests/protocol/test_session.py::test_move_reorders_within_the_workspace
+tests/protocol/test_session.py::test_move_several_targets
+tests/protocol/test_session.py::test_move_to_another_workspace_appends
+tests/protocol/test_session.py::test_new_appends_a_selected_session_to_the_current_workspace
+tests/protocol/test_session.py::test_new_into_a_workspace_by_id
+tests/protocol/test_session.py::test_new_into_a_workspace_by_name
+tests/protocol/test_session.py::test_new_places_next_to_an_anchor
+tests/protocol/test_session.py::test_new_rejects[anchor-and-workspace-name]
+tests/protocol/test_session.py::test_new_rejects[anchor-and-workspace]
+tests/protocol/test_session.py::test_new_rejects[both-anchors]
+tests/protocol/test_session.py::test_new_rejects[create-alone]
+tests/protocol/test_session.py::test_new_rejects[unknown-anchor]
+tests/protocol/test_session.py::test_new_rejects[unknown-workspace]
+tests/protocol/test_session.py::test_new_rejects[wait-alone]
+tests/protocol/test_session.py::test_new_rejects[workspace-and-name]
+tests/protocol/test_session.py::test_new_without_selecting_keeps_the_selection
+tests/protocol/test_session.py::test_rename_and_blank_restores_the_automatic_name
+tests/protocol/test_session.py::test_rename_requires_a_name
+tests/protocol/test_session.py::test_restore_pins_read_back_without_touching_the_shell
+tests/protocol/test_session.py::test_restore_rejects[bad-pane]
+tests/protocol/test_session.py::test_restore_rejects[control-character]
+tests/protocol/test_session.py::test_restore_rejects[no-mode]
+tests/protocol/test_session.py::test_restore_rejects[right-without-split]
+tests/protocol/test_session.py::test_restore_rejects[scratch]
+tests/protocol/test_session.py::test_restore_rejects[set-without-command]
+tests/protocol/test_session.py::test_restore_rejects[too-long]
+tests/protocol/test_session.py::test_restore_rejects[unknown-mode]
+tests/protocol/test_session.py::test_restore_rejects[unknown-pane-id]
+tests/protocol/test_session.py::test_reveal_answers_with_the_session
+tests/protocol/test_session.py::test_seen_clears_the_unseen_count
+tests/protocol/test_session.py::test_select_moves_the_selection_across_workspaces
+tests/protocol/test_session.py::test_status_records_the_pane
+tests/protocol/test_session.py::test_status_rejects[color]
+tests/protocol/test_session.py::test_status_rejects[missing]
+tests/protocol/test_session.py::test_status_rejects[pane]
+tests/protocol/test_session.py::test_status_rejects[unknown]
+tests/protocol/test_session.py::test_status_sets_the_indicator_and_idle_clears_it
+tests/protocol/test_session.py::test_status_shape
+tests/protocol/test_session.py::test_unknown_session_target[session.close-args0]
+tests/protocol/test_session.py::test_unknown_session_target[session.context-args8]
+tests/protocol/test_session.py::test_unknown_session_target[session.duplicate-args4]
+tests/protocol/test_session.py::test_unknown_session_target[session.flag-args5]
+tests/protocol/test_session.py::test_unknown_session_target[session.rename-args2]
+tests/protocol/test_session.py::test_unknown_session_target[session.restore-args9]
+tests/protocol/test_session.py::test_unknown_session_target[session.reveal-args3]
+tests/protocol/test_session.py::test_unknown_session_target[session.seen-args6]
+tests/protocol/test_session.py::test_unknown_session_target[session.select-args1]
+tests/protocol/test_session.py::test_unknown_session_target[session.status-args7]
+tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[right-session has no split pane-session.text]
+tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[right-session has no split pane-session.type]
+tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[scratch-session has no scratch terminal-session.text]
+tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[scratch-session has no scratch terminal-session.type]
+tests/protocol/test_session_text.py::test_text_rejects[all-and-lines]
+tests/protocol/test_session_text.py::test_text_rejects[negative-lines]
+tests/protocol/test_session_text.py::test_text_rejects[pane-id]
+tests/protocol/test_session_text.py::test_text_rejects[pane]
+tests/protocol/test_session_text.py::test_text_rejects[zero-lines]
+tests/protocol/test_session_text.py::test_type_rejects[no-text]
+tests/protocol/test_session_text.py::test_type_rejects[pane-id]
+tests/protocol/test_session_text.py::test_type_rejects[pane]
+tests/protocol/test_session_text.py::test_type_text_carrying_a_nul
+tests/protocol/test_session_text.py::test_unknown_session_target[session.search-args2]
+tests/protocol/test_session_text.py::test_unknown_session_target[session.text-args1]
+tests/protocol/test_session_text.py::test_unknown_session_target[session.type-args0]
+tests/protocol/test_sidebar.py::test_collapse_is_a_no_op_under_the_flat_flagged_list
+tests/protocol/test_sidebar.py::test_collapse_keeps_the_current_workspace_open_and_expand_opens_all
+tests/protocol/test_sidebar.py::test_flagged_layout_echoes_the_layout_it_set
+tests/protocol/test_sidebar.py::test_flagged_layout_is_app_wide
+tests/protocol/test_sidebar.py::test_mode_switches_between_the_tree_and_the_flagged_view
+tests/protocol/test_sidebar.py::test_sidebar_shows_hides_and_toggles
+tests/protocol/test_sidebar.py::test_unknown_mode_is_refused[sidebar-sidebarVisible-invalid sidebar mode: sideways]
+tests/protocol/test_sidebar.py::test_unknown_mode_is_refused[sidebar.flagged-layout-sidebarFlaggedLayout-invalid flagged layout: sideways]
+tests/protocol/test_sidebar.py::test_unknown_mode_is_refused[sidebar.mode-sidebarMode-invalid sidebar mode: sideways]
+tests/protocol/test_sidebar.py::test_unknown_window_is_refused[sidebar.collapse-args2]
+tests/protocol/test_sidebar.py::test_unknown_window_is_refused[sidebar.expand-args1]
+tests/protocol/test_sidebar.py::test_unknown_window_is_refused[sidebar.width-args0]
+tests/protocol/test_sidebar.py::test_width_below_the_floor_is_clamped
+tests/protocol/test_sidebar.py::test_width_is_clamped_and_read_back[250-250]
+tests/protocol/test_sidebar.py::test_width_is_clamped_and_read_back[300.5-300.5]
+tests/protocol/test_sidebar.py::test_width_is_clamped_and_read_back[99999-560]
+tests/protocol/test_sidebar.py::test_width_is_required
+tests/protocol/test_sidebar.py::test_width_window_option_sets_that_window_alone
+tests/protocol/test_sidebar.py::test_window_option_collapses_that_window_alone
+tests/protocol/test_split.py::test_background_default_and_pane_override
+tests/protocol/test_split.py::test_background_rejects[color]
+tests/protocol/test_split.py::test_background_rejects[fit]
+tests/protocol/test_split.py::test_background_rejects[mode]
+tests/protocol/test_split.py::test_background_rejects[no-color]
+tests/protocol/test_split.py::test_background_rejects[opacity]
+tests/protocol/test_split.py::test_background_rejects[position]
+tests/protocol/test_split.py::test_background_rejects[right]
+tests/protocol/test_split.py::test_focus_names_a_pane_by_role_or_position
+tests/protocol/test_split.py::test_focus_reaches_a_hidden_split
+tests/protocol/test_split.py::test_focus_rejects_an_unknown_pane
+tests/protocol/test_split.py::test_pane_commands_need_a_split[session.focus-args0-session has no split]
+tests/protocol/test_split.py::test_pane_commands_need_a_split[session.resize-args1-session has no split]
+tests/protocol/test_split.py::test_pane_commands_need_a_split[session.swap-args2-session has no split pane]
+tests/protocol/test_split.py::test_resize_a_hidden_split_applies_when_shown
+tests/protocol/test_split.py::test_resize_by_a_delta
+tests/protocol/test_split.py::test_resize_rejects[both]
+tests/protocol/test_split.py::test_resize_rejects[nothing]
+tests/protocol/test_split.py::test_resize_sets_and_clamps_the_ratio
+tests/protocol/test_split.py::test_scratch_rejects_an_unknown_mode
+tests/protocol/test_split.py::test_scratch_shows_and_hides
+tests/protocol/test_split.py::test_split_axis
+tests/protocol/test_split.py::test_split_close_tears_the_pane_down
+tests/protocol/test_split.py::test_split_rejects[axis]
+tests/protocol/test_split.py::test_split_rejects[mode]
+tests/protocol/test_split.py::test_split_shows_hides_and_keeps_the_pane
+tests/protocol/test_split.py::test_swap_exchanges_the_panes_and_focus_follows_the_terminal
+tests/protocol/test_split.py::test_swap_reaches_a_hidden_split
+tests/protocol/test_split.py::test_unknown_session_target[session.background-args6]
+tests/protocol/test_split.py::test_unknown_session_target[session.focus-args4]
+tests/protocol/test_split.py::test_unknown_session_target[session.resize-args5]
+tests/protocol/test_split.py::test_unknown_session_target[session.scratch-args3]
+tests/protocol/test_split.py::test_unknown_session_target[session.split-args0]
+tests/protocol/test_split.py::test_unknown_session_target[session.split.close-args1]
+tests/protocol/test_split.py::test_unknown_session_target[session.swap-args2]
+tests/protocol/test_split.py::test_zoom_one_surface_and_back
+tests/protocol/test_split.py::test_zoom_rejects_an_unknown_mode
+tests/protocol/test_split.py::test_zoom_rejects_an_unknown_surface[surface:zzz:left]
+tests/protocol/test_split.py::test_zoom_rejects_an_unknown_surface[zzz]
+tests/protocol/test_surface.py::test_cursor_refusals[bogus-kind-args2-invalid surface: surface:{sid}:bogus]
+tests/protocol/test_surface.py::test_cursor_refusals[left-args6-surface.cursor: --pane-id takes a session target]
+tests/protocol/test_surface.py::test_cursor_refusals[quick-args7-surface.cursor: --pane-id takes a session target]
+tests/protocol/test_surface.py::test_cursor_refusals[right-args3-surface not available: surface:{sid}:right]
+tests/protocol/test_surface.py::test_cursor_refusals[scratch-args4-surface not available: surface:{sid}:scratch]
+tests/protocol/test_surface.py::test_cursor_refusals[session-args1-invalid surface: {sid}]
+tests/protocol/test_surface.py::test_cursor_refusals[session-args5-unknown pane id: nope]
+tests/protocol/test_surface.py::test_cursor_refusals[zzz-args0-invalid surface: zzz]
+tests/protocol/test_surface.py::test_paste_refuses_a_pane_it_cannot_reach[middle---pane must be left, right, or scratch]
+tests/protocol/test_surface.py::test_paste_refuses_a_pane_it_cannot_reach[right-session has no split pane]
+tests/protocol/test_surface.py::test_paste_refuses_a_pane_it_cannot_reach[scratch-session has no scratch terminal]
+tests/protocol/test_surface.py::test_paste_refuses_a_pane_it_cannot_reach[split-session has no split pane]
+tests/protocol/test_surface.py::test_selection_commands_refuse_an_unknown_session[session.copy]
+tests/protocol/test_surface.py::test_selection_commands_refuse_an_unknown_session[session.paste]
+tests/protocol/test_surface.py::test_selection_commands_refuse_an_unknown_session[session.selectall]
+tests/protocol/test_tree.py::test_auto_follow_timeout_reads_back_from_settings
+tests/protocol/test_tree.py::test_fresh_session_node
+tests/protocol/test_tree.py::test_fresh_tree_omits_unset_top_level_fields
+tests/protocol/test_tree.py::test_fresh_tree_top_level
+tests/protocol/test_tree.py::test_fresh_window_node
+tests/protocol/test_tree.py::test_fresh_workspace_node
+tests/protocol/test_tree.py::test_idle_ms_stays_off_for_control_input
+tests/protocol/test_tree.py::test_index_unsaved_while_windows_json_cannot_be_written
+tests/protocol/test_version.py::test_tree_app_is_the_version_identity
+tests/protocol/test_version.py::test_version_reports_the_app_version
+tests/protocol/test_window.py::test_close_keeps_the_window_and_select_reopens_it
+tests/protocol/test_window.py::test_delete_removes_the_window_but_never_the_last
+tests/protocol/test_window.py::test_fullscreen_toggles
+tests/protocol/test_window.py::test_go_needs_another_open_window
+tests/protocol/test_window.py::test_minimize_on_and_off
+tests/protocol/test_window.py::test_move_places_the_window
+tests/protocol/test_window.py::test_new_can_start_minimized
+tests/protocol/test_window.py::test_new_opens_a_window_with_its_own_workspace
+tests/protocol/test_window.py::test_refusals[close-unknown]
+tests/protocol/test_window.py::test_refusals[delete-unknown]
+tests/protocol/test_window.py::test_refusals[fullscreen-unknown]
+tests/protocol/test_window.py::test_refusals[go-bad-direction]
+tests/protocol/test_window.py::test_refusals[go-no-direction]
+tests/protocol/test_window.py::test_refusals[minimize-unknown]
+tests/protocol/test_window.py::test_refusals[move-half]
+tests/protocol/test_window.py::test_refusals[rename-blank]
+tests/protocol/test_window.py::test_refusals[rename-no-name]
+tests/protocol/test_window.py::test_refusals[rename-unknown]
+tests/protocol/test_window.py::test_refusals[resize-half]
+tests/protocol/test_window.py::test_refusals[resize-negative]
+tests/protocol/test_window.py::test_refusals[resize-unknown]
+tests/protocol/test_window.py::test_refusals[resize-zero]
+tests/protocol/test_window.py::test_refusals[select-unknown]
+tests/protocol/test_window.py::test_refusals[zoom-unknown]
+tests/protocol/test_window.py::test_rename_trims_the_name
+tests/protocol/test_window.py::test_resize_echoes_the_applied_size
+tests/protocol/test_window.py::test_select_and_go_move_the_active_window
+tests/protocol/test_window.py::test_window_option_addresses_that_windows_store
+tests/protocol/test_window.py::test_zoom_toggles
+tests/protocol/test_workspace.py::test_a_lone_workspace_has_nowhere_to_go_and_cannot_be_deleted
+tests/protocol/test_workspace.py::test_background_create_keeps_the_current_workspace[collapsed]
+tests/protocol/test_workspace.py::test_background_create_keeps_the_current_workspace[session-no-select]
+tests/protocol/test_workspace.py::test_collapse_and_expand
+tests/protocol/test_workspace.py::test_delete_closes_the_workspace_sessions
+tests/protocol/test_workspace.py::test_delete_empty_workspace
+tests/protocol/test_workspace.py::test_filter_rejects_an_unknown_mode
+tests/protocol/test_workspace.py::test_filter_switches_the_view_without_touching_the_marks
+tests/protocol/test_workspace.py::test_focus_modes
+tests/protocol/test_workspace.py::test_focus_rejects_an_unknown_mode
+tests/protocol/test_workspace.py::test_go_requires_a_direction[None]
+tests/protocol/test_workspace.py::test_go_requires_a_direction[first]
+tests/protocol/test_workspace.py::test_go_requires_a_direction[sideways]
+tests/protocol/test_workspace.py::test_go_stays_inside_the_focus_filter
+tests/protocol/test_workspace.py::test_go_steps_through_workspaces_and_wraps
+tests/protocol/test_workspace.py::test_move_reorders_among_siblings
+tests/protocol/test_workspace.py::test_move_requires_a_direction[missing]
+tests/protocol/test_workspace.py::test_move_requires_a_direction[unknown]
+tests/protocol/test_workspace.py::test_new_appends_an_empty_current_workspace
+tests/protocol/test_workspace.py::test_new_collapsed_workspace
+tests/protocol/test_workspace.py::test_new_workspace_name[blank]
+tests/protocol/test_workspace.py::test_new_workspace_name[omitted]
+tests/protocol/test_workspace.py::test_new_workspace_name[padded]
+tests/protocol/test_workspace.py::test_rename
+tests/protocol/test_workspace.py::test_rename_requires_a_name[   ]
+tests/protocol/test_workspace.py::test_rename_requires_a_name[None]
+tests/protocol/test_workspace.py::test_select_empty_workspace_keeps_the_selection
+tests/protocol/test_workspace.py::test_select_moves_to_the_first_session
+tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.collapse-args5]
+tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.delete-args2]
+tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.expand-args6]
+tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.focus-args4]
+tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.move-args3]
+tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.rename-args1]
+tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.select-args0]
+tests/protocol/test_zmx.py::test_kill_rejects[no-pane]
+tests/protocol/test_zmx.py::test_kill_rejects[no-split]
+tests/protocol/test_zmx.py::test_lead_rejects[no-split]
+tests/protocol/test_zmx.py::test_lead_rejects[not-live]
+tests/protocol/test_zmx.py::test_lead_rejects[scratch]
+tests/protocol/test_zmx.py::test_list_joins_each_pane_claim
+tests/protocol/test_zmx.py::test_present_refuses_without_a_session
+tests/protocol/test_zmx.py::test_reset_requires_force
+tests/protocol/test_zmx.py::test_restart_rejects[no-pane]
+tests/protocol/test_zmx.py::test_restart_rejects[no-split]
+tests/protocol/test_zmx.py::test_restart_rejects[unknown-pane-id]
+tests/protocol/test_zmx.py::test_screen_rejects[both]
+tests/protocol/test_zmx.py::test_screen_rejects[no-name]
+tests/protocol/test_zmx.py::test_screen_rejects[not-plain]
+tests/protocol/test_zmx.py::test_screen_rejects[zero-lines]
+tests/protocol/test_zmx.py::test_stream_commands_refuse_before_streaming[job-invalid]
+tests/protocol/test_zmx.py::test_stream_commands_refuse_before_streaming[job-no-id]
+tests/protocol/test_zmx.py::test_stream_commands_refuse_before_streaming[job-unknown]

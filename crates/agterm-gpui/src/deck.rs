@@ -24,9 +24,12 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use agterm_core::Core;
 use agterm_core::chrome::Rgb;
+use agterm_core::keymap::SurfaceOwner;
 use agterm_core::model::pane::SPLIT_RATIO_DEFAULT;
 use agterm_core::model::{Session, StatusPane, WindowLibrary, Workspace};
 use agterm_core::restore::spawn_plan::LaunchSeed;
@@ -35,8 +38,8 @@ use agterm_core::{PaneReplacement, PaneSpawn};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, CursorStyle, Entity, FocusHandle, Focusable as _,
-    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, ParentElement as _, Render,
-    SharedString, Styled, Subscription, Window, canvas, div, px,
+    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Render, SharedString,
+    Styled, Subscription, Window, canvas, div, px,
 };
 use uuid::Uuid;
 
@@ -303,10 +306,18 @@ pub struct Deck {
     shown: Option<Uuid>,
     /// The page and pane token keyboard focus was last moved to.
     focused: Option<(Uuid, String)>,
-    /// The panes this deck gave focus to since the last [`Deck::take_given_focus`], reported as focus moves even when
-    /// the terminal held the keyboard already and GPUI reports no focus change.
-    given_focus: Vec<(Uuid, String)>,
+    /// Counts the changes of `focused` and whether the user's last focus move awaits its report.
+    focus_moves: Arc<FocusMoves>,
     look: Look,
+}
+
+/// The deck's focus moves as its posted focus reports see them. A user focus report posted before a later move is
+/// stale when it runs, and is dropped: two queued reports would otherwise hand the model's focus back and forth. While
+/// the user's last move awaits its report, the deck keeps it over the model's older focus.
+#[derive(Default)]
+struct FocusMoves {
+    count: AtomicU64,
+    reporting: AtomicBool,
 }
 
 /// What every page's reconcile shares.
@@ -333,7 +344,7 @@ impl Deck {
             order: Vec::new(),
             shown: None,
             focused: None,
-            given_focus: Vec::new(),
+            focus_moves: Arc::default(),
             look,
         }
     }
@@ -385,20 +396,18 @@ impl Deck {
         self.shown_terminal().map(|pane| pane.focus_handle(cx))
     }
 
-    /// The panes given focus since the last take, as (session, pane token), in order: the frontend's own focus moves,
-    /// which the window reports as [`AppState::pane_focused`] (upstream's `becomeFirstResponder` fires for a
-    /// programmatic focus as for a click, and an explicit refocus of the terminal that holds the keyboard changes no
-    /// GPUI focus).
-    pub fn take_given_focus(&mut self) -> Vec<(Uuid, String)> {
-        std::mem::take(&mut self.given_focus)
-    }
-
     /// Brings the deck in line with its window's sessions: pages for new sessions, gone sessions' pages removed, every
     /// page's panes synced with its session, the selected session's page shown and its focused pane given the keyboard
     /// when that changed. While the window is zoomed into one of its terminals, that session's page shows instead,
     /// selected or not, with that terminal alone (upstream's zoom layer). `modal`: the window's picker or GUI ask (or
     /// the palette) holds the keyboard.
-    pub fn reconcile(&mut self, core: &mut Core, modal: bool, window: &mut Window, cx: &mut Context<Self>) {
+    ///
+    /// A pane the deck gives the keyboard is reported to the core at once (upstream's `becomeFirstResponder` fires for
+    /// a programmatic focus as for a click, and an explicit refocus of the terminal that holds the keyboard changes no
+    /// GPUI focus); a report queued behind later commands would hand the model a stale focus. Whether the core needs a
+    /// settle for it.
+    #[must_use = "a focus report the core took needs a settle"]
+    pub fn reconcile(&mut self, core: &mut Core, modal: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let mounted: HashSet<Uuid> = self.pages.keys().copied().collect();
         let plan = plan(core.library(), Some(self.window), &mounted);
         for id in &plan.remove {
@@ -426,8 +435,9 @@ impl Deck {
         // a zoom keeps the keyboard on its terminal (upstream's `focusSplitPane` steps aside while zoomed)
         let refocus = zoom.is_none() && shown.is_some_and(|id| core.pane_focus_requested(id));
         let modal = modal || core.quick_visible();
-        self.show(shown, refocus, modal, window, cx);
+        let given = self.show(shown, refocus, modal, window, cx);
         cx.notify();
+        given.is_some_and(|(session, token)| core.pane_focused(session, &token))
     }
 
     fn add_page(&mut self, core: &mut Core, spec: &PaneSpec, window: &mut Window, cx: &mut Context<Self>) {
@@ -512,7 +522,8 @@ impl Deck {
     pub fn apply_config(&self, cx: &mut Context<Self>) {
         for pane in self.terminals() {
             let config = self.env.config_for(pane.overlay.borrow().as_deref());
-            pane.terminal.update(cx, |terminal, cx| terminal.set_config(config, cx));
+            pane.terminal
+                .update(cx, |terminal, cx| terminal.reload_config(config, cx));
         }
         cx.notify();
     }
@@ -521,36 +532,48 @@ impl Deck {
     /// (upstream focuses the active session after a select or a create, and the focused pane within it), or when
     /// `refocus` (a `session.focus` asked for it, wherever focus sits now); with none shown the focus leaves the
     /// hidden terminals. While a modal holds the keyboard nothing is focused or unfocused, and the next show after it
-    /// focuses again.
-    fn show(&mut self, shown: Option<Uuid>, refocus: bool, modal: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// focuses again. The pane given the keyboard, as (session, pane token).
+    fn show(
+        &mut self,
+        shown: Option<Uuid>,
+        refocus: bool,
+        modal: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(Uuid, String)> {
         let changed = self.shown != shown;
         self.shown = shown;
         let Some(id) = shown else {
-            self.focused = None;
+            self.set_focused(None);
             if changed && !modal {
                 window.blur(cx);
             }
-            return;
+            return None;
         };
         if modal {
-            self.focused = None;
-            return;
+            self.set_focused(None);
+            return None;
         }
         let focus = self.pages.get(&id).and_then(Page::focus);
         let desired = focus.map(|pane| (id, pane.token().to_owned()));
-        if desired == self.focused && !refocus {
-            return;
+        let reporting = !changed && self.focus_moves.reporting.load(Ordering::Relaxed);
+        if (desired == self.focused || reporting) && !refocus {
+            return None;
         }
-        match focus {
-            Some(pane) => {
-                let handle = pane.focus_handle(cx);
-                window.focus(&handle, cx);
-                if let Some(given) = &desired {
-                    self.given_focus.push(given.clone());
-                }
-                self.focused = desired;
-            }
-            None => self.focused = None,
+        let handle = focus.map(|pane| pane.focus_handle(cx));
+        if let Some(handle) = handle {
+            window.focus(&handle, cx);
+        }
+        self.set_focused(desired.clone());
+        desired
+    }
+
+    /// Records where keyboard focus went, counting a move; a user move's report still queued is overtaken.
+    fn set_focused(&mut self, focused: Option<(Uuid, String)>) {
+        if self.focused != focused {
+            self.focused = focused;
+            self.focus_moves.count.fetch_add(1, Ordering::Relaxed);
+            self.focus_moves.reporting.store(false, Ordering::Relaxed);
         }
     }
 
@@ -638,6 +661,12 @@ impl Deck {
         let Some(pane) = self.terminal(session, token) else {
             return;
         };
+        if matches!(event, TerminalEvent::FocusFollowsMouse) {
+            // as a click would: the focus listener reports it (Ghostty's `moveFocus`)
+            let handle = pane.focus_handle(cx);
+            window.focus(&handle, cx);
+            return;
+        }
         let points = pane.shared.font_points();
         if let TerminalEvent::Pane(agterm_term::PaneEvent::Exited(status)) = event
             && status.held
@@ -651,23 +680,33 @@ impl Deck {
             active: window.is_window_active(),
         };
         let ran = pane.ran.get();
-        for report in pane::report(event, ran, &self.env.hostname, points) {
+        // the cover lasts until the takeover's sync, which runs after this event: the key asking for it is not reported
+        let covered = pane.cover_holds.get();
+        for report in pane::report(event, ran, &self.env.hostname, points, covered) {
             pane::post_report(&self.env.poster, session, token, report, focus);
         }
     }
 
-    /// The user focused the terminal carrying `token`: the model's split focus follows, when it still shows.
+    /// The user focused the terminal carrying `token`: the model's split focus follows, when it still shows and no
+    /// later focus move overtook the report before it ran. A focus the deck gave itself was reported already.
     fn terminal_focused(&mut self, session: Uuid, token: &str, cx: &mut Context<Self>) {
         let shown = self
             .terminal(session, token)
             .is_some_and(|pane| pane.view.read(cx).is_shown());
-        if !shown {
+        let focused = Some((session, token.to_owned()));
+        if !shown || self.focused == focused {
             return;
         }
-        self.focused = Some((session, token.to_owned()));
+        self.set_focused(focused);
+        let moves = Arc::clone(&self.focus_moves);
+        moves.reporting.store(true, Ordering::Relaxed);
+        let at = moves.count.load(Ordering::Relaxed);
         let token = token.to_owned();
         post(&self.env.poster, move |state: &mut AppState| {
-            state.pane_focused(session, &token);
+            if moves.count.load(Ordering::Relaxed) == at {
+                moves.reporting.store(false, Ordering::Relaxed);
+                state.pane_focused(session, &token);
+            }
         });
     }
 
@@ -818,18 +857,12 @@ fn terminal_place(plan: &PanePlan, token: &str) -> Place {
     }
 }
 
-/// A pane's terminal view inside a wrapper that is drawn only while the view shows; a key press on a terminal holding
-/// its keys (a lead cover, a held exit) runs its hold instead of reaching the program.
+/// A pane's terminal view inside a wrapper that is drawn only while the view shows. A key press on a terminal
+/// holding its keys (a lead cover, a held exit) runs its hold in the terminal's key path (`Shared::held_key`).
 fn terminal_wrapper(pane: &PaneTerminal, shown: bool) -> impl IntoElement {
-    let shared = Rc::clone(&pane.shared);
     div()
         .size_full()
         .when(!shown, Styled::invisible)
-        .capture_key_down(move |_: &KeyDownEvent, _, cx| {
-            if shared.held_key() {
-                cx.stop_propagation();
-            }
-        })
         .child(pane.view.clone())
 }
 
@@ -919,6 +952,10 @@ fn mount_with(
         cx.new(|cx| Terminal::gated(terminal_spec, config, ask, cx))
     };
     let shared = Rc::clone(terminal.read(cx).shared());
+    shared.set_owner(Some(SurfaceOwner::Pane {
+        session: spec.session,
+        token: spec.token.clone(),
+    }));
     let view = cx.new(|cx| {
         let mut view = TerminalView::new(&terminal, ViewRole::Owner, cx);
         view.set_shown(false, cx);
