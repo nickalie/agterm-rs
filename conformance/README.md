@@ -144,7 +144,7 @@ run exits 2.
 The adapter makes it the instance's only Vulkan driver (`VK_DRIVER_FILES`), forces GL onto llvmpipe, drops every
 inherited device selection, refuses a manifest that does not load lavapipe, and starts the instance's weston with
 `--fake-seat` (GPUI panics on a compositor without a `wl_seat`); the GTK frontend keeps its weston and environment.
-`--fake-seat` needs weston 15.0 or later: where the weston on PATH lacks it (Ubuntu 24.04 ships 13), the runner takes
+`--fake-seat` needs weston 15.0 or later: where the weston on PATH lacks it (Ubuntu 26.04 ships 14), the runner takes
 the one `scripts/build-weston.sh` vendors, else exits 2 naming that script, and the adapter refuses such a weston with
 the same pointer. The ICD manifest must name a driver that is there.
 
@@ -226,7 +226,7 @@ These runs share a machine with a live agterm, so the harness refuses a launch t
 - `conformance-gate` (ubuntu): self-tests and the coverage gate on every PR and on `main`.
 - `reference-macos` (`macos-26`): protocol, cli and behaviors with `--must-pass live-sessions`, then the ui layer
   with `--reruns 1`, against the release named by the catalog's `upstream`.
-- `rust-linux` (`ubuntu-24.04`): the Rust workspace's format check, strict clippy, lint report (in the job summary)
+- `rust-linux` (`ubuntu-26.04`): the Rust workspace's format check, strict clippy, lint report (in the job summary)
   and `cargo test`, over the vendored libghostty and gtk4-layer-shell prefixes; then the staged build under the suite,
   held by the ratchet, once per login shell, each with `--must-pass live-any-shell`: bash (`conformance`), fish
   (`conformance-fish`) and zsh (`conformance-zsh`, with `--must-pass live-sessions` too); and the GPUI build
