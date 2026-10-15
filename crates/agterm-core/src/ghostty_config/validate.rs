@@ -862,6 +862,35 @@ pub fn decode_string(text: &str) -> Option<Vec<u8>> {
     Some(decoded)
 }
 
+/// `config/string.zig`'s `codepointIterator`: a Zig string literal's characters, its escapes decoded (`\xNN` the
+/// character U+00NN here, not a byte; any other escape its character); `None` for a malformed escape or invalid UTF-8
+/// (`selection-word-chars`, `SelectionWordChars.parseCLI`).
+#[must_use]
+pub fn decode_codepoints(text: &str) -> Option<Vec<char>> {
+    let bytes = text.as_bytes();
+    let mut decoded = Vec::with_capacity(text.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'\\' {
+            if bytes.get(at + 1) == Some(&b'x') {
+                let hex = |index: usize| bytes.get(index).and_then(|byte| char::from(*byte).to_digit(16));
+                let value = hex(at + 2)? * 16 + hex(at + 3)?;
+                decoded.push(char::from_u32(value)?);
+                at += 4;
+                continue;
+            }
+            let mut out = Vec::new();
+            at = decode_escape(bytes, at + 1, &mut out).ok()?;
+            decoded.extend(std::str::from_utf8(&out).ok()?.chars());
+        } else {
+            let character = text.get(at..)?.chars().next()?;
+            decoded.push(character);
+            at += character.len_utf8();
+        }
+    }
+    Some(decoded)
+}
+
 /// `parseEscapeSequence` for the escape whose character is at `at`: its bytes appended to `out`, the index past it
 /// returned. `\u{...}` takes any number of hex digits up to U+10FFFF and must name a scalar value.
 fn decode_escape(bytes: &[u8], at: usize, out: &mut Vec<u8>) -> Result<usize, ValueError> {

@@ -200,12 +200,40 @@ impl SelectionGesture {
     ///
     /// [`Error::InvalidValue`] for a point outside its space, or the library's result.
     pub fn apply(&mut self, terminal: &mut Terminal, input: &GestureInput) -> Result<Option<Selection>, Error> {
+        self.apply_with(terminal, input, None)
+    }
+
+    /// [`SelectionGesture::apply`] with `boundaries` (Unicode scalar values, Ghostty's `selection-word-chars`) as the
+    /// word boundaries of word clicks and word-granular drags; `None` keeps Ghostty's defaults.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidValue`] for a point outside its space, or the library's result.
+    pub fn apply_with(
+        &mut self,
+        terminal: &mut Terminal,
+        input: &GestureInput,
+        boundaries: Option<&[u32]>,
+    ) -> Result<Option<Selection>, Error> {
         let event = match input {
             GestureInput::Press(press) => press_event(terminal, press)?,
             GestureInput::Drag(drag) => drag_event(terminal, drag)?,
             GestureInput::Release(at) => release_event(terminal, *at)?,
             GestureInput::Tick(tick) => tick_event(tick)?,
         };
+        // releases take no boundaries (the option is not valid for them)
+        if let Some(boundaries) = boundaries
+            && !matches!(input, GestureInput::Release(_))
+        {
+            let codepoints = ffi::GhosttyCodepoints {
+                ptr: boundaries.as_ptr(),
+                len: boundaries.len(),
+            };
+            event.set(
+                ffi::GHOSTTY_SELECTION_GESTURE_EVENT_OPT_WORD_BOUNDARY_CODEPOINTS,
+                &codepoints,
+            )?;
+        }
         let mut selection = crate::selection::empty_selection();
         let raw_terminal = terminal.as_raw();
         // SAFETY: gesture, terminal (borrowed mutably) and event are live; `selection` is a sized out-struct.
@@ -409,6 +437,35 @@ mod tests {
         gesture.apply(&mut terminal, &GestureInput::Release(None)).unwrap();
         assert_eq!(gesture.apply(&mut terminal, &press(5, 0, 2_000 * MS)).unwrap(), None);
         assert_eq!(gesture.state(&terminal).click_count, 1);
+        gesture.close(&mut terminal);
+    }
+
+    #[test]
+    fn word_clicks_take_the_given_boundaries() {
+        let mut terminal = Terminal::new(20, 3).unwrap();
+        terminal.vt_write(b"one;two three");
+        let mut gesture = SelectionGesture::new().unwrap();
+        gesture.apply(&mut terminal, &press(1, 0, 0)).unwrap();
+        gesture
+            .apply(&mut terminal, &GestureInput::Release(Some(viewport(1, 0))))
+            .unwrap();
+        // `;` is a default boundary; with only a space as one, `one;two` is a word
+        let boundaries = [0, u32::from(' ')];
+        let word = gesture
+            .apply_with(&mut terminal, &press(1, 0, 100 * MS), Some(&boundaries))
+            .unwrap();
+        assert_eq!(xs(word), Some((0, 6)));
+        assert!(
+            terminal
+                .select_word_with(viewport(11, 0), Some(&[0, u32::from('h')]))
+                .unwrap()
+        );
+        let selection = terminal.selection(PointTag::Viewport).unwrap();
+        assert_eq!(
+            (selection.start.x, selection.end.x),
+            (10, 12),
+            "`h` and the line's end bound `ree`"
+        );
         gesture.close(&mut terminal);
     }
 

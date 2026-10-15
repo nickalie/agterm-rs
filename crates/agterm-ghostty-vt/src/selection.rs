@@ -199,11 +199,22 @@ impl Terminal {
     ///
     /// [`Error::InvalidValue`] for a point outside its space.
     pub fn select_word(&mut self, at: Point) -> Result<bool, Error> {
+        self.select_word_with(at, None)
+    }
+
+    /// [`Terminal::select_word`] with `boundaries` (Unicode scalar values, Ghostty's `selection-word-chars`) in place
+    /// of Ghostty's default word boundaries; `None` keeps the defaults.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidValue`] for a point outside its space.
+    pub fn select_word_with(&mut self, at: Point, boundaries: Option<&[u32]>) -> Result<bool, Error> {
+        let (codepoints, len) = boundaries.map_or((std::ptr::null(), 0), |list| (list.as_ptr(), list.len()));
         let options = ffi::GhosttyTerminalSelectWordOptions {
             size: std::mem::size_of::<ffi::GhosttyTerminalSelectWordOptions>(),
             ref_: self.grid_ref(at)?,
-            boundary_codepoints: std::ptr::null(),
-            boundary_codepoints_len: 0,
+            boundary_codepoints: codepoints,
+            boundary_codepoints_len: len,
         };
         self.derive(|terminal, out| {
             // SAFETY: the terminal is live and the reference is fresh (no mutation since); `out` is a valid sized

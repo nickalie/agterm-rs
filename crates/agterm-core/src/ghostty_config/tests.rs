@@ -531,14 +531,16 @@ fn the_pointer_keys_load_with_ghosttys_defaults() {
     assert_eq!(defaults.right_click_action, RightClickAction::ContextMenu);
     assert_eq!(defaults.middle_click_action, MiddleClickAction::PrimaryPaste);
     assert_eq!(defaults.click_repeat_interval, 0);
-    assert!(defaults.link_url);
+    assert!(load("").config.link.url);
     let set = load("right-click-action = copy-or-paste\nmiddle-click-action = ignore\nclick-repeat-interval = 300\nlink-url = false\n")
         .config
         .mouse;
     assert_eq!(set.right_click_action, RightClickAction::CopyOrPaste);
     assert_eq!(set.middle_click_action, MiddleClickAction::Ignore);
     assert_eq!(set.click_repeat_interval, 300);
-    assert!(!set.link_url);
+    assert!(!load("link-url = false\n").config.link.url);
+    assert!(!defaults.focus_follows_mouse);
+    assert!(load("focus-follows-mouse = true\n").config.mouse.focus_follows_mouse);
     // an empty value restores the default
     let reset = load("right-click-action = paste\nright-click-action =\n").config.mouse;
     assert_eq!(reset.right_click_action, RightClickAction::ContextMenu);
@@ -698,7 +700,7 @@ fn cursor_and_selection_keys() {
     );
     assert!(!config.selection.clear_on_typing);
     assert!(config.selection.clear_on_copy);
-    assert_eq!(config.selection.word_chars.as_deref(), Some(" ()"));
+    assert_eq!(config.selection.word_chars.as_deref(), Some(&[' ', '(', ')'][..]));
     let unset = load("cursor-style-blink = false\ncursor-style-blink =\ncursor-color = red\ncursor-color =\n").config;
     assert_eq!(unset.cursor.style_blink, None);
     assert_eq!(unset.cursor.color, None);
@@ -1143,4 +1145,26 @@ fn theme_dirs_are_the_users_then_the_bundled_ones() {
 fn accepted_lines_name_their_key() {
     assert!(matches!(check("font-size", Some("12")), Ok(Accepted::Field(spec)) if spec.name == "font-size"));
     assert_eq!(check("bold-is-bright", None), Ok(Accepted::Compat(Compat::Bool)));
+}
+
+#[test]
+fn selection_word_chars_decode_as_ghostty_parses_them() {
+    assert_eq!(load("").config.selection.word_chars, None);
+    let chars = |text: &str| {
+        load(&format!("selection-word-chars = {text}\n"))
+            .config
+            .selection
+            .word_chars
+    };
+    assert_eq!(chars(r#"" \t;""#).as_deref(), Some(&[' ', '\t', ';'][..]));
+    // `\xNN` is the character U+00NN, `\u{...}` any scalar, UTF-8 as it is
+    assert_eq!(chars(r#""\x41\u{2502}│""#).as_deref(), Some(&['A', '│', '│'][..]));
+    // a malformed escape is refused: the value before it stays
+    let kept = load("selection-word-chars = \";\"\nselection-word-chars = \"\\q\"\n")
+        .config
+        .selection
+        .word_chars;
+    assert_eq!(kept.as_deref(), Some(&[';'][..]));
+    assert_eq!(validate::decode_codepoints("a\\nb"), Some(vec!['a', '\n', 'b']));
+    assert_eq!(validate::decode_codepoints("\\x4"), None);
 }

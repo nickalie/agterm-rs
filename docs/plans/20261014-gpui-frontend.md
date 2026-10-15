@@ -1086,7 +1086,7 @@ headers, rebuilt on `agterm-term` and current GPUI.
     under Xvfb (3746 passed, 0 failed); the new tests and the terminal module 20 times in a row, no failure; full GTK
     conformance: 653 passed, 14 skipped, ratchet holds (665 ids).
   - Review round 1 (fixes): the pointer's Ghostty keys are typed config now (`Mouse::{right_click_action,
-    middle_click_action, click_repeat_interval, link_url}` in core, ghostty's names, values and defaults at
+    middle_click_action, click_repeat_interval}` and `Link::url` in core, ghostty's names, values and defaults at
     `GHOSTTY_REV`): right clicks follow `right-click-action` (agterm's settings write `paste`/`ignore`), middle clicks
     `middle-click-action` (reading the clipboard under `copy-on-select = clipboard`, as Ghostty does), clicks count
     within `click-repeat-interval`, URLs only with `link-url`; selections are copied by Task 13's
@@ -1097,10 +1097,20 @@ headers, rebuilt on `agterm-term` and current GPUI.
     never reaches the program. `all:` key-table and `end_key_sequence` actions reach every terminal's keyboard. Native
     keys carry Caps Lock and Num Lock, and X11 autorepeats are repeats. The unsafe-paste decision was re-checked: the
     GTK build's `clipboard.rs` completes libghostty's paste confirmation unasked (`clipboard-paste-protection` on by
-    default only raises that request), so no prompt here either. ⚠️ Residuals: `cursor-click-to-move = true` is not
-    carried out (the C API has no prompt-click state; agterm's default is `false`); `focus-follows-mouse` and
-    `selection-word-chars` are not wired (neither does the GTK build's apprt follow the mouse; word boundaries stay
-    Ghostty's defaults); the X11 autorepeat flag has no end-to-end test. Gates on the tree merged with gpui-frontend
+    default only raises that request), so no prompt here either. The X11 autorepeat flag has no end-to-end test.
+  - Review follow-ups: `selection-word-chars` is typed (`Selection::word_chars`, decoded like Ghostty's
+    `codepointIterator`, `\xNN` the character U+00NN) and reaches every word selection: the gesture's word clicks
+    and drags (`SelectionGesture::apply_with`, `GHOSTTY_SELECTION_GESTURE_EVENT_OPT_WORD_BOUNDARY_CODEPOINTS`) and
+    `Pane::select_word` (`Terminal::select_word_with`), through `Pane::set_word_boundaries`, U+0000 always a boundary.
+    `focus-follows-mouse` is typed (`Mouse::focus_follows_mouse`): the owner view emits
+    `TerminalEvent::FocusFollowsMouse` when the pointer moves over it while it does not hold the keyboard, its window
+    is active and no button is held, once until it leaves or the focus changes. ➕ Task 18 follow-up: the deck
+    subscribes to it and focuses that pane as a click would (`window.focus(&view.focus_handle(cx), cx)` on the pane's
+    owner `TerminalView`, then the core's pane focus as the GTK build's focus-in path reports it). ⚠️
+    `cursor-click-to-move = true` stays a residual: libghostty-vt at `LIBGHOSTTY_VT_REV` exposes no OSC 133
+    prompt-click mode (`cl`/`click_events`) and no cursor pen content, so Ghostty's `promptClickMove` has nothing
+    to read (`docs/backlog/cursor-click-to-move-needs-prompt-click-state.md`); agterm's default is `false`.
+    Gates of round 1, on the tree merged with gpui-frontend
     (Tasks 13 and 15): `cargo test --workspace` under Xvfb 3781 passed, 0 failed; the terminal, router and pointer
     tests 20 times in a row, no failure; GTK conformance not needed (the core change only adds typed-model fields
     the GTK build never reads: it takes ghostty_config's defaults text and file list only).

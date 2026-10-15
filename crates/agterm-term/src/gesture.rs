@@ -174,11 +174,18 @@ impl Pane {
         if vt.gesture.is_none() {
             vt.gesture = Some(vt::SelectionGesture::new().map_err(PaneError::terminal)?);
         }
-        let Vt { terminal, gesture, .. } = &mut *vt;
+        let Vt {
+            terminal,
+            gesture,
+            word_boundaries,
+            ..
+        } = &mut *vt;
         let Some(gesture) = gesture.as_mut() else {
             return Ok(Gesture::default());
         };
-        let selection = gesture.apply(terminal, &input).map_err(PaneError::terminal)?;
+        let selection = gesture
+            .apply_with(terminal, &input, word_boundaries.as_deref())
+            .map_err(PaneError::terminal)?;
         let state = gesture.state(terminal);
         let had = terminal.selection(vt::PointTag::Screen).is_some();
         let install = match event {

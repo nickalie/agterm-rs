@@ -312,6 +312,9 @@ impl TerminalView {
     /// Reports a focus change to a program in focus-reporting mode; the state the pane starts in is no change.
     fn sync_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let focused = self.focus.is_focused(window) && window.is_window_active();
+        if self.keys.reported != Some(focused) {
+            self.focus_changed();
+        }
         let Some(pane) = self.shared.pane().filter(|_| self.shared.is_realized()) else {
             return;
         };

@@ -72,9 +72,9 @@ impl TerminalView {
             }
         });
         let target = view.downgrade();
-        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
             if phase == DispatchPhase::Bubble {
-                let _ = target.update(cx, |view, cx| view.mouse_move(event, bounds, cx));
+                let _ = target.update(cx, |view, cx| view.mouse_move(event, bounds, window, cx));
             }
         });
         let target = view.downgrade();
@@ -109,6 +109,8 @@ pub(super) struct PointerState {
     wheel: (f64, f64),
     /// When the left button last went down for a selection.
     last_click: Option<Instant>,
+    /// `focus-follows-mouse` asked for focus since the pointer entered or the focus changed.
+    focus_asked: bool,
     autoscroll: Option<Task<()>>,
 }
 
@@ -436,7 +438,7 @@ impl TerminalView {
 
     /// `link-url`: URLs in the text are links.
     fn link_url(&self) -> bool {
-        self.shared.config().mouse.link_url
+        self.shared.config().link.url
     }
 
     pub(super) fn mouse_up(&mut self, event: &MouseUpEvent, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
@@ -483,10 +485,17 @@ impl TerminalView {
         true
     }
 
-    pub(super) fn mouse_move(&mut self, event: &MouseMoveEvent, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
+    pub(super) fn mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        bounds: Bounds<Pixels>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         let position = self.surface_position(event.position, bounds);
         self.pointer.last = Some(position);
         self.pointer.mods = mods(&event.modifiers);
+        self.follow_focus(bounds.contains(&event.position), window, cx);
         let Some(pane) = self.live_pane() else {
             return;
         };
@@ -508,6 +517,29 @@ impl TerminalView {
         if self.pointer.held[0] {
             self.drag_selection(&pane, position, cx);
         }
+    }
+
+    /// `focus-follows-mouse` (Ghostty's `mouseMoved`): the pointer over this view, which does not hold the keyboard,
+    /// in the active window, with no button held, asks the frontend for focus once
+    /// ([`TerminalEvent::FocusFollowsMouse`]); leaving the view lets it ask again.
+    fn follow_focus(&mut self, inside: bool, window: &Window, cx: &mut Context<Self>) {
+        if !inside {
+            self.pointer.focus_asked = false;
+            return;
+        }
+        let wanted = self.shared.config().mouse.focus_follows_mouse
+            && window.is_window_active()
+            && !self.focus.is_focused(window)
+            && !self.pointer.held.iter().any(|held| *held);
+        if wanted && !std::mem::replace(&mut self.pointer.focus_asked, true) {
+            self.terminal
+                .update(cx, |_, cx| cx.emit(TerminalEvent::FocusFollowsMouse));
+        }
+    }
+
+    /// The view's focus changed: the pointer may ask for focus again.
+    pub(super) fn focus_changed(&mut self) {
+        self.pointer.focus_asked = false;
     }
 
     /// A drag with the left button: the gesture's selection, and autoscroll past an edge.

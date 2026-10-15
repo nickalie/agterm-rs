@@ -123,3 +123,24 @@ fn a_soft_wrapped_row_says_so() -> TestResult {
     assert!(!frame.rows[2].wrapped());
     Ok(())
 }
+
+#[test]
+fn word_selections_take_the_configured_boundaries() -> TestResult {
+    let fixture = spawn("printf 'one;two three'; exec sleep 30")?;
+    let pane = &fixture.pane;
+    wait_text(pane, "three");
+    assert!(pane.select_word(GridPoint::viewport(1, 0))?);
+    assert_eq!(raw(pane).as_deref(), Some("one"), "`;` is one of Ghostty's boundaries");
+    pane.set_word_boundaries(Some(&[' ']));
+    assert!(pane.select_word(GridPoint::viewport(1, 0))?);
+    assert_eq!(raw(pane).as_deref(), Some("one;two"));
+    // a double click takes them too
+    let start = Instant::now();
+    click(pane, 5, 0, start)?;
+    click(pane, 5, 0, start + Duration::from_millis(100))?;
+    assert_eq!(raw(pane).as_deref(), Some("one;two"));
+    pane.set_word_boundaries(None);
+    assert!(pane.select_word(GridPoint::viewport(5, 0))?);
+    assert_eq!(raw(pane).as_deref(), Some("two"));
+    Ok(())
+}

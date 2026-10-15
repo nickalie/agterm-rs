@@ -268,8 +268,9 @@ pub struct Selection {
     pub background: Option<TerminalColor>,
     pub clear_on_typing: bool,
     pub clear_on_copy: bool,
-    /// `selection-word-chars` as written (Zig string escapes undecoded); unset keeps ghostty's boundaries.
-    pub word_chars: Option<String>,
+    /// `selection-word-chars`: the word boundaries, decoded (Zig string escapes); `None` is ghostty's default
+    /// (`` \t '"│`|:;,()[]{}<>$``). U+0000 is always a boundary too and is not listed.
+    pub word_chars: Option<Vec<char>>,
 }
 
 impl Default for Selection {
@@ -373,7 +374,7 @@ impl Default for Clipboard {
 }
 
 /// `mouse-*` and the other keys of the pointer: `right-click-action`, `middle-click-action`,
-/// `click-repeat-interval`, `link-url`.
+/// `click-repeat-interval`, `focus-follows-mouse`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mouse {
     pub hide_while_typing: bool,
@@ -385,8 +386,8 @@ pub struct Mouse {
     pub middle_click_action: MiddleClickAction,
     /// `click-repeat-interval` in milliseconds; 0 is the platform's default (500 ms off macOS).
     pub click_repeat_interval: u32,
-    /// `link-url`: URLs in the text are links.
-    pub link_url: bool,
+    /// `focus-follows-mouse`: the pointer moving over a split pane focuses it.
+    pub focus_follows_mouse: bool,
 }
 
 impl Default for Mouse {
@@ -399,8 +400,21 @@ impl Default for Mouse {
             right_click_action: RightClickAction::ContextMenu,
             middle_click_action: MiddleClickAction::PrimaryPaste,
             click_repeat_interval: 0,
-            link_url: true,
+            focus_follows_mouse: false,
         }
+    }
+}
+
+/// `link-*`: what counts as a link besides OSC 8.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Link {
+    /// `link-url`: URLs in the text are links.
+    pub url: bool,
+}
+
+impl Default for Link {
+    fn default() -> Self {
+        Self { url: true }
     }
 }
 
@@ -420,6 +434,7 @@ pub struct GhosttyConfig {
     pub clipboard: Clipboard,
     pub copy_on_select: CopyOnSelect,
     pub mouse: Mouse,
+    pub link: Link,
     pub shell_integration_features: ShellIntegrationFeatures,
     /// The child's `TERM`.
     pub term: String,
@@ -447,6 +462,7 @@ impl Default for GhosttyConfig {
             clipboard: Clipboard::default(),
             copy_on_select: CopyOnSelect::default(),
             mouse: Mouse::default(),
+            link: Link::default(),
             shell_integration_features: ShellIntegrationFeatures::DEFAULT,
             term: DEFAULT_TERM.to_owned(),
             keybind: Keybinds::defaults(),
@@ -590,6 +606,7 @@ impl GhosttyConfig {
             "term" => value.unwrap_or(DEFAULT_TERM).clone_into(&mut self.term),
             "copy-on-select" => self.copy_on_select = enum_or(value, CopyOnSelect::default()),
             "title" => self.title = value.map(str::to_owned),
+            "link-url" => self.link.url = bool_or(value, true),
             _ => return false,
         }
         true
@@ -640,7 +657,15 @@ impl Selection {
             "background" => self.background = value.and_then(|value| parse_terminal_color(value).ok()),
             "clear-on-typing" => self.clear_on_typing = bool_or(value, true),
             "clear-on-copy" => self.clear_on_copy = bool_or(value, false),
-            "word-chars" => self.word_chars = value.map(str::to_owned),
+            "word-chars" => match value {
+                // a value that does not decode is refused, as `parseCLI` refuses it
+                Some(value) => {
+                    if let Some(chars) = validate::decode_codepoints(value) {
+                        self.word_chars = Some(chars);
+                    }
+                }
+                None => self.word_chars = None,
+            },
             _ => return false,
         }
         true
@@ -719,7 +744,7 @@ impl Mouse {
             "click-repeat-interval" => {
                 self.click_repeat_interval = value.and_then(|value| value.parse().ok()).unwrap_or(0);
             }
-            "link-url" => self.link_url = bool_or(value, true),
+            "focus-follows-mouse" => self.focus_follows_mouse = bool_or(value, false),
             _ => return false,
         }
         true

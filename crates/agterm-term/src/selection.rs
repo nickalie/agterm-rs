@@ -108,7 +108,18 @@ impl Pane {
     ///
     /// [`PaneError::Terminal`] for a point outside its space.
     pub fn select_word(&self, at: GridPoint) -> Result<bool, PaneError> {
-        self.change_selection(|terminal| terminal.select_word(at.engine()))
+        let boundaries = lock(&self.shared().vt).word_boundaries.clone();
+        self.change_selection(|terminal| terminal.select_word_with(at.engine(), boundaries.as_deref()))
+    }
+
+    /// The word boundaries of word selections (Ghostty's `selection-word-chars`: the characters, U+0000 always among
+    /// them); `None` restores Ghostty's default set.
+    pub fn set_word_boundaries(&self, boundaries: Option<&[char]>) {
+        lock(&self.shared().vt).word_boundaries = boundaries.map(|chars| {
+            std::iter::once(0)
+                .chain(chars.iter().map(|ch| u32::from(*ch)))
+                .collect()
+        });
     }
 
     /// Select the line under `at`, across soft wraps, without surrounding blanks (Ghostty's triple click); `false`,

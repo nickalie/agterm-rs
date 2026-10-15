@@ -146,6 +146,8 @@ pub(crate) struct Vt {
     colors: vt::TerminalColors,
     /// The pointer's selection gesture, created at the first press ([`crate::gesture`]).
     pub(crate) gesture: Option<vt::SelectionGesture>,
+    /// The word boundaries of word selections (`selection-word-chars`); `None` is Ghostty's default set.
+    pub(crate) word_boundaries: Option<Vec<u32>>,
     /// A `clear_screen` waits for the program's output to reach a ground point ([`crate::actions`]).
     pub(crate) pending_clear: bool,
 }
@@ -538,6 +540,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
             cleared_selection: false,
             colors,
             gesture: None,
+            word_boundaries: None,
             pending_clear: false,
         }),
         capture,

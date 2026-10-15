@@ -84,6 +84,7 @@ pub struct TerminalConfig {
     /// `selection-clear-on-typing`.
     pub selection_clear_on_typing: bool,
     pub mouse: ghostty_config::Mouse,
+    pub link: ghostty_config::Link,
     pub clipboard: ghostty_config::Clipboard,
     /// `clipboard-trim-trailing-spaces`: copies drop trailing whitespace.
     pub copy_trim: bool,
@@ -91,6 +92,8 @@ pub struct TerminalConfig {
     pub clear_selection_on_copy: bool,
     /// `copy-on-select`: where a selection made is copied ([`Shared::copy_on_select`]).
     pub copy_on_select: CopyOnSelect,
+    /// `selection-word-chars`: the word boundaries of word selections; `None` is Ghostty's default set.
+    pub word_chars: Option<Vec<char>>,
 }
 
 /// The keybinds a config loaded, shared by every terminal of it (equal when they are the same load).
@@ -124,10 +127,12 @@ impl TerminalConfig {
             keybinds: SharedKeybinds(Arc::new(config.keybind.clone())),
             selection_clear_on_typing: config.selection.clear_on_typing,
             mouse: config.mouse.clone(),
+            link: config.link,
             clipboard: config.clipboard.clone(),
             copy_trim: config.clipboard.trim_trailing_spaces,
             clear_selection_on_copy: config.selection.clear_on_copy,
             copy_on_select: config.copy_on_select,
+            word_chars: config.selection.word_chars.clone(),
         }
     }
 }
@@ -175,6 +180,10 @@ pub enum TerminalEvent {
     OpenUrl(String),
     /// `toggle_readonly` turned read-only mode on or off: the frontend shows it.
     Readonly(bool),
+    /// `focus-follows-mouse`: the pointer moved over this terminal's owner view, which does not hold the keyboard,
+    /// in the active window, with no button held. The frontend focuses the pane (Ghostty's `moveFocus`; the deck owns
+    /// pane focus); emitted once until the view's focus changes or the pointer leaves it.
+    FocusFollowsMouse,
 }
 
 /// Work that needs the app, queued by the Surface for the pump.
@@ -510,6 +519,7 @@ impl Shared {
                 pane.set_padding(engine_padding(laid.padding));
                 // the pane's reporting setting starts from the config; `toggle_mouse_reporting` flips it from there
                 pane.set_mouse_reporting(config.mouse.reporting);
+                pane.set_word_boundaries(config.word_chars.as_deref());
                 *self.pane.borrow_mut() = Some(Rc::new(pane));
                 self.status.set(Status::Live);
                 tracing::debug!(target: "agterm::surface", key = self.key, scale = self.scale.get(), "terminal surface created");
@@ -623,6 +633,7 @@ impl Terminal {
         let shared = &self.shared;
         if let Some(pane) = shared.pane() {
             pane.set_mouse_reporting(config.mouse.reporting);
+            pane.set_word_boundaries(config.word_chars.as_deref());
             let applied = pane
                 .set_colors(&config.theme)
                 .and_then(|()| pane.set_cursor_defaults(config.cursor))

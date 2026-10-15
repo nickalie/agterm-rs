@@ -291,8 +291,16 @@ fn the_foreground_pid_is_the_terminals_foreground_group() -> TestResult {
         assert!(Instant::now() < deadline, "the job never took the foreground");
         std::thread::sleep(Duration::from_millis(10));
     };
-    let cmdline = std::fs::read(format!("/proc/{job}/cmdline"))?;
-    assert_eq!(cmdline, b"sleep\x0030\x00");
+    // the job's process group leads before its `exec`: until then its command line is the forked shell's (or
+    // empty), so wait for the `exec` to land
+    loop {
+        let cmdline = std::fs::read(format!("/proc/{job}/cmdline"))?;
+        if cmdline == b"sleep\x0030\x00" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the job never ran `sleep 30`: {cmdline:?}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     Ok(())
 }
 

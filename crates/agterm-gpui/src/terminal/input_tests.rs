@@ -925,3 +925,39 @@ fn a_native_key_carries_the_lock_keys() {
         agterm_core::ghostty_config::binds::KeyAction::Repeat
     );
 }
+
+#[gpui_kit::test]
+fn the_pointer_asks_for_focus_under_focus_follows_mouse(cx: &mut TestAppContext) {
+    let script = "printf 'ready\\r\\none;two'; exec sleep 30";
+    let mut f = fixture(
+        cx,
+        script,
+        config("focus-follows-mouse = true\nselection-word-chars = \" \"\n"),
+    );
+    f.wait_painted("one;two");
+    let asked = |f: &Fixture<'_>| {
+        f.events
+            .borrow()
+            .iter()
+            .filter(|event| **event == TerminalEvent::FocusFollowsMouse)
+            .count()
+    };
+    // an inactive window asks for nothing
+    f.cx.simulate_mouse_move(Fixture::at(2, 1), None, Modifiers::default());
+    f.cx.run_until_parked();
+    assert_eq!(asked(&f), 0);
+    f.activate();
+    f.cx.simulate_mouse_move(Fixture::at(3, 1), None, Modifiers::default());
+    f.cx.simulate_mouse_move(Fixture::at(4, 1), None, Modifiers::default());
+    f.cx.run_until_parked();
+    assert_eq!(asked(&f), 1, "once per entry");
+    // focused, it asks no more
+    f.focus();
+    f.cx.simulate_mouse_move(Fixture::at(5, 1), None, Modifiers::default());
+    f.cx.run_until_parked();
+    assert_eq!(asked(&f), 1);
+    // selection-word-chars reaches the double click
+    f.click(1, 1, Modifiers::default());
+    f.click(1, 1, Modifiers::default());
+    assert_eq!(f.selection().as_deref(), Some("one;two"));
+}
