@@ -3,9 +3,9 @@
 //! `agterm-gtk/src/keymap_actions.rs`).
 //!
 //! Each needs the window, the sidebar or a dialog: full screen and the delete confirmation are carried out here on the
-//! registered window ([`crate::keymap_dispatch::register_window`]); the window close, the session close confirmation,
-//! the renames, Delete Workspace and Open Directory wait for the window shell, the sidebar and the dialogs that carry
-//! them (plan Tasks 18, 19, 21, 26), and are logged until then.
+//! registered window ([`crate::keymap_dispatch::register_window`]); the window close goes to the model; the session
+//! close confirmation, the session and workspace renames, Delete Workspace and Open Directory… go to the window's
+//! sidebar ([`WindowView::sidebar`]); Rename Window waits for its dialog (plan Tasks 21, 26), logged until then.
 
 use agterm_core::app_actions::FrontendAction;
 use agterm_core::pane_env::uuid_string;
@@ -15,7 +15,9 @@ use gpui_kit::{App, PromptButton, PromptLevel};
 use uuid::Uuid;
 
 use crate::keymap_dispatch::{self, KeyOrigin};
+use crate::sidebar::Sidebar;
 use crate::state::{self, AppState, Poster};
+use crate::window::WindowView;
 
 /// Runs `action` in its window; `close_grace` is the soft-close setting a delete confirmation names.
 pub fn perform(poster: &Poster, action: FrontendAction, close_grace: bool, cx: &mut App) {
@@ -28,10 +30,50 @@ pub fn perform(poster: &Poster, action: FrontendAction, close_grace: bool, cx: &
         FrontendAction::DeleteWindow { window, name, sessions } => {
             delete_window(poster, window, &name, sessions, close_grace, cx);
         }
-        other => tracing::info!(
-            ?other,
-            "this action waits for the window shell, the sidebar or its dialog"
-        ),
+        FrontendAction::CloseWindow(window) => {
+            state::post(poster, move |state: &mut AppState| state.close_requested(window));
+        }
+        FrontendAction::ConfirmCloseSession { window, session } => {
+            with_sidebar(window, cx, |sidebar, root, cx| {
+                sidebar.close_sessions(vec![session], root, cx)
+            });
+        }
+        FrontendAction::RenameSession { window, session: id }
+        | FrontendAction::RenameWorkspace { window, workspace: id } => {
+            with_sidebar(window, cx, |sidebar, root, cx| sidebar.begin_rename(id, root, cx));
+        }
+        FrontendAction::DeleteWorkspace { window, workspace } => {
+            with_sidebar(window, cx, |sidebar, root, cx| {
+                sidebar.delete_workspace(workspace, root, cx)
+            });
+        }
+        FrontendAction::OpenDirectory { window, workspace } => {
+            with_sidebar(window, cx, |sidebar, root, cx| {
+                sidebar.open_directory(workspace, root, cx)
+            });
+        }
+        other @ FrontendAction::RenameWindow { .. } => {
+            tracing::info!(?other, "this action waits for its dialog");
+        }
+    }
+}
+
+/// Runs `run` on the sidebar of model window `window`, when that window is open.
+fn with_sidebar(
+    window: Uuid,
+    cx: &mut App,
+    run: impl FnOnce(&mut Sidebar, &mut gpui_kit::Window, &mut gpui_kit::Context<Sidebar>),
+) {
+    let Some(handle) =
+        keymap_dispatch::window_of(KeyOrigin::Window(window)).and_then(|handle| handle.downcast::<WindowView>())
+    else {
+        return;
+    };
+    let ran = handle.update(cx, |view, root, cx| {
+        view.sidebar().clone().update(cx, |sidebar, cx| run(sidebar, root, cx));
+    });
+    if ran.is_err() {
+        tracing::debug!(%window, "the window closed before its sidebar action ran");
     }
 }
 

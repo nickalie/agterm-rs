@@ -1,6 +1,7 @@
 //! The window shell: its title (ported from the GTK build's `window.rs` tests), the state `window.list` reads, and the
 //! shell over a deck in GPUI's test window.
 
+use agterm_core::app_actions::FrontendAction;
 use agterm_core::model::WindowLibrary;
 use agterm_core::{CoreConfig, CoreState};
 use agterm_proto::AppIdentity;
@@ -109,6 +110,7 @@ fn the_shell_titles_its_window_and_keeps_its_modal_layers_in_order(cx: &mut Test
         },
     ));
     let poster = env.poster.clone();
+    let keys = poster.clone();
     let (view, cx) = cx.add_window_view(move |root, cx| {
         let deck = cx.new(|_| Deck::new(window, env));
         WindowView::new(window, deck, poster, 0, root, cx)
@@ -145,6 +147,42 @@ fn the_shell_titles_its_window_and_keeps_its_modal_layers_in_order(cx: &mut Test
     assert_eq!(crate::keymap_dispatch::window_of(origin), Some(handle));
     assert!(crate::keymap_dispatch::holds_keyboard(Some(handle)));
     assert!(!crate::keymap_dispatch::holds_keyboard(None));
+
+    // the keymap's Rename Session reaches the window's sidebar, and its field keeps the keys the monitor sees
+    cx.update(|_, cx| crate::keymap_dispatch::init(cx));
+    let session = session.unwrap();
+    let rename = FrontendAction::RenameSession { window, session };
+    // from the app, as the landing runs it: the window is not being updated
+    cx.cx
+        .update(|cx| crate::keymap_actions::perform(&keys, rename, false, cx));
+    cx.run_until_parked();
+    let sidebar = view.read_with(cx, |view, _| view.sidebar().clone());
+    assert_eq!(sidebar.read_with(cx, |sidebar, _| sidebar.editing()), Some(session));
+    cx.simulate_keystrokes("o p s backspace");
+    assert_eq!(
+        sidebar.read_with(cx, |sidebar, cx| sidebar.edited_text(cx)).as_deref(),
+        Some("op")
+    );
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        sidebar.read_with(cx, |sidebar, _| sidebar.editing()),
+        None,
+        "Enter committed"
+    );
+    let rename = FrontendAction::RenameWorkspace {
+        window,
+        workspace: core.library().store(window).unwrap().workspaces()[0].id(),
+    };
+    cx.cx
+        .update(|cx| crate::keymap_actions::perform(&keys, rename, false, cx));
+    cx.run_until_parked();
+    assert!(sidebar.read_with(cx, |sidebar, _| sidebar.editing()).is_some());
+    cx.simulate_keystrokes("escape");
+    assert_eq!(
+        sidebar.read_with(cx, |sidebar, _| sidebar.editing()),
+        None,
+        "Escape cancelled"
+    );
     view.update_in(cx, |view, root, _| view.close(root));
     assert_eq!(crate::keymap_dispatch::window_of(origin), None);
     assert!(!crate::keymap_dispatch::holds_keyboard(Some(handle)));
