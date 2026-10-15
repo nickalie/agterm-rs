@@ -98,6 +98,18 @@ if [[ "$frontend" == gpui ]]; then
         exit 2
     fi
     export CONFORMANCE_LAVAPIPE_ICD="$lavapipe"
+    # GPUI panics without a wl_seat, which headless weston offers only with --fake-seat (weston 15.0 and later): a
+    # system weston without it gives way to the one scripts/build-weston.sh vendors.
+    if [[ "$display" == headless ]] && ! env -u WAYLAND_DISPLAY -u DISPLAY weston --help 2>/dev/null \
+        | grep -q -- --fake-seat; then
+        if ! "$repo/scripts/build-weston.sh" --verify; then
+            echo "$(command -v weston) has no --fake-seat, which the GPUI build needs (weston 15.0 or later):" \
+                "run scripts/build-weston.sh" >&2
+            exit 2
+        fi
+        PATH="$("$repo/scripts/build-weston.sh" --print-prefix)/bin:$PATH"
+        export PATH
+    fi
 fi
 
 # Concurrent suites starve each other's software-rendered pane mounts past their deadlines: queue instead. This shell

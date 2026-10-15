@@ -6,6 +6,7 @@ guards refuse a launch env that points anywhere else before anything is spawned.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import pwd
@@ -653,6 +654,28 @@ def compositor_program() -> str:
     raise LaunchError(f"no weston on PATH: install it, or set {DISPLAY_MODE_VARIABLE}=session to draw on this desktop")
 
 
+@functools.cache
+def weston_takes_fake_seat(program: str) -> bool:
+    """Whether `program --help` lists `--fake-seat` (weston 15.0 and later); asked once per program."""
+    env = {name: value for name, value in os.environ.items() if name not in ("WAYLAND_DISPLAY", "DISPLAY")}
+    try:
+        shown = subprocess.run(
+            [program, "--help"], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return FAKE_SEAT_ARG in shown.stdout + shown.stderr
+
+
+def require_fake_seat(program: str) -> None:
+    """Refuse a weston without `--fake-seat`: older ones exit on the unknown option, and GPUI panics without a seat."""
+    if not weston_takes_fake_seat(program):
+        raise LaunchError(
+            f"{program} does not take {FAKE_SEAT_ARG}, which the GPUI build needs (weston 15.0 or later; Ubuntu 24.04 "
+            "ships 13): build one with scripts/build-weston.sh and put its bin/ first on PATH"
+        )
+
+
 def weston_argv(program: str, root: Path, extra: Sequence[str] = ()) -> list[str]:
     """The headless weston's command line; `extra` comes last, so an option there overrides the one before it."""
     width, height = WESTON_SIZE
@@ -741,7 +764,38 @@ def lavapipe_icd(environ: Mapping[str, str] | None = None) -> str:
         raise LaunchError(f"{LAVAPIPE_ICD_VARIABLE}={path} is no readable ICD manifest ({error}): {hint}") from None
     if not isinstance(library, str) or not os.path.basename(library).startswith(LAVAPIPE_LIBRARY_PREFIX):
         raise LaunchError(f"{LAVAPIPE_ICD_VARIABLE}={path} loads {library!r}, not lavapipe: {hint}")
+    # A missing driver would leave wgpu no Vulkan device, and it would quietly render through GL instead.
+    if icd_library(path, library) is None:
+        raise LaunchError(f"{LAVAPIPE_ICD_VARIABLE}={path} names {library!r}, which is not there: {hint}")
     return os.path.abspath(path)
+
+
+# Where the loader's dlopen finds a driver named without a slash, beyond LD_LIBRARY_PATH and the ldconfig cache.
+LIBRARY_DIRS = ("/usr/local/lib", "/usr/lib64", "/usr/lib", "/lib64", "/lib")
+
+
+def icd_library(manifest: str | os.PathLike[str], library: str) -> str | None:
+    """The file an ICD manifest's `library_path` loads, by the Vulkan loader's rules, or None when there is none:
+    absolute as is, with a slash relative to the manifest's directory, a bare name through the library search path."""
+    if "/" in library:
+        found = os.path.join(os.path.dirname(os.path.abspath(manifest)), library)
+        return found if os.path.isfile(found) else None
+    dirs = [d for d in os.environ.get("LD_LIBRARY_PATH", "").split(":") if d]
+    dirs += sorted(str(d) for d in Path("/usr/lib").glob("*-linux-gnu*")) + list(LIBRARY_DIRS)
+    for directory in dirs:
+        if os.path.isfile(candidate := os.path.join(directory, library)):
+            return candidate
+    for program in ("ldconfig", "/sbin/ldconfig", "/usr/sbin/ldconfig"):
+        try:
+            cache = subprocess.run([program, "-p"], capture_output=True, text=True, timeout=10, check=False).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        for line in cache.splitlines():
+            name, _, target = line.strip().partition(" => ")
+            if name.split(" ", 1)[0] == library and os.path.isfile(target):
+                return target
+        break
+    return None
 
 
 def software_rendering_env(env: dict[str, str], icd: str) -> None:

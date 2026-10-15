@@ -29,7 +29,30 @@ PREFIX="$(lavapipe_prefix)"
 HINT="install the distribution's lavapipe (Ubuntu/Debian/Fedora: mesa-vulkan-drivers, Arch: vulkan-swrast), run"
 HINT+=" scripts/fetch-lavapipe.sh, or set AGTERM_LAVAPIPE_ICD; the GPUI build never renders on a hardware driver here"
 
-# The distribution's lavapipe ICD manifest, if one is installed.
+# Whether the driver an ICD manifest names is there, by the Vulkan loader's rules: an absolute library_path as is, one
+# with a slash relative to the manifest's directory, a bare name on the library search path. A manifest without its
+# driver would leave the GPUI build no Vulkan device, and wgpu would quietly render through GL instead.
+icd_library_exists() {
+  local manifest="$1" library dir dirs
+  library="$(sed -n 's/.*"library_path": *"\([^"]*\)".*/\1/p' "$manifest" | head -n1)"
+  case "$library" in
+    "") return 1 ;;
+    /*) [[ -f "$library" ]] ;;
+    */*) [[ -f "$(dirname "$manifest")/$library" ]] ;;
+    *)
+      local search="${LD_LIBRARY_PATH:-}"
+      for dir in /usr/lib/*-linux-gnu*; do search+=":$dir"; done
+      search+=":/usr/local/lib:/usr/lib64:/usr/lib:/lib64:/lib"
+      IFS=: read -r -a dirs <<<"$search"
+      for dir in "${dirs[@]}"; do
+        [[ -n "$dir" && -f "$dir/$library" ]] && return 0
+      done
+      { ldconfig -p || /sbin/ldconfig -p || /usr/sbin/ldconfig -p; } 2>/dev/null | grep -qE "^\s*$library .*=> /"
+      ;;
+  esac
+}
+
+# The distribution's lavapipe ICD manifest, if one is installed with its driver.
 system_icd() {
   local dirs dir candidate
   local default=/etc/vulkan/icd.d:/usr/local/share/vulkan/icd.d:/usr/share/vulkan/icd.d
@@ -37,10 +60,12 @@ system_icd() {
   for dir in "${dirs[@]}"; do
     [[ -n "$dir" ]] || continue
     for candidate in "$dir/lvp_icd.$(uname -m).json" "$dir/lvp_icd.json"; do
-      if [[ -s "$candidate" ]]; then
+      [[ -s "$candidate" ]] || continue
+      if icd_library_exists "$candidate"; then
         echo "$candidate"
         return 0
       fi
+      echo "skipping $candidate: the driver it names is not installed" >&2
     done
   done
   return 1
@@ -59,6 +84,8 @@ vendored_icd() {
 find_icd() {
   if [[ -n "${AGTERM_LAVAPIPE_ICD:-}" ]]; then
     [[ -s "$AGTERM_LAVAPIPE_ICD" ]] || die "AGTERM_LAVAPIPE_ICD names no ICD manifest: $AGTERM_LAVAPIPE_ICD"
+    icd_library_exists "$AGTERM_LAVAPIPE_ICD" \
+      || die "AGTERM_LAVAPIPE_ICD=$AGTERM_LAVAPIPE_ICD names a driver that is not there"
     echo "$AGTERM_LAVAPIPE_ICD"
     return 0
   fi

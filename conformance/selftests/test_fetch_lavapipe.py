@@ -2,6 +2,7 @@
 the vendored prefix's key and completeness. Each case runs the real script over a copy of the scripts and pins, with
 its vendor root and the loader's ICD directories private to the test; nothing is fetched."""
 
+import json
 import os
 import platform
 import re
@@ -86,29 +87,65 @@ def test_the_prefix_is_keyed_by_the_lavapipe_pins_alone(checkout: Path, icd_dirs
     assert prefix(checkout, icd_dirs) != base
 
 
-def test_the_override_wins(checkout: Path, icd_dirs: Path, tmp_path: Path) -> None:
-    (icd_dirs / "lvp_icd.json").write_text("{}")
-    mine = tmp_path / "mine.json"
-    mine.write_text("{}")
+def manifest(path: Path, library: str) -> Path:
+    path.write_text(json.dumps({"ICD": {"api_version": "1.4.354", "library_path": library}}))
+    return path
+
+
+def system_lavapipe(icd_dirs: Path, name: str = "lvp_icd.json") -> Path:
+    """A distribution's manifest naming its driver as Arch's and Ubuntu's do, here relative to the manifest."""
+    driver = icd_dirs.parent / "lib" / "libvulkan_lvp.so"
+    driver.parent.mkdir(exist_ok=True)
+    driver.write_text("stand-in")
+    return manifest(icd_dirs / name, "../lib/libvulkan_lvp.so")
+
+
+def test_the_override_wins(checkout: Path, icd_dirs: Path, make_icd) -> None:
+    system_lavapipe(icd_dirs)
+    mine = make_icd()
     for args in (["--print-icd"], []):
         found = fetch(checkout, icd_dirs, *args, AGTERM_LAVAPIPE_ICD=str(mine))
         assert found.returncode == 0 and found.stdout == f"{mine}\n", found.stderr
 
 
 def test_an_override_naming_nothing_is_an_error(checkout: Path, icd_dirs: Path, tmp_path: Path) -> None:
-    (icd_dirs / "lvp_icd.json").write_text("{}")
+    system_lavapipe(icd_dirs)
     found = fetch(checkout, icd_dirs, AGTERM_LAVAPIPE_ICD=str(tmp_path / "absent.json"))
     assert found.returncode == 1 and "AGTERM_LAVAPIPE_ICD names no ICD manifest" in found.stderr
 
 
+def test_an_override_whose_driver_is_missing_is_an_error(checkout: Path, icd_dirs: Path, tmp_path: Path) -> None:
+    system_lavapipe(icd_dirs)
+    mine = manifest(tmp_path / "mine.json", str(tmp_path / "absent" / "libvulkan_lvp.so"))
+    found = fetch(checkout, icd_dirs, "--print-icd", AGTERM_LAVAPIPE_ICD=str(mine))
+    assert found.returncode == 1 and "names a driver that is not there" in found.stderr
+
+
 def test_the_distributions_lavapipe_for_this_arch_comes_next(checkout: Path, icd_dirs: Path) -> None:
-    for name in ("nvidia_icd.json", "lvp_icd.i686.json", f"lvp_icd.{platform.machine()}.json", "lvp_icd.json"):
-        (icd_dirs / name).write_text("{}")
+    (icd_dirs / "nvidia_icd.json").write_text("{}")
+    for name in ("lvp_icd.i686.json", f"lvp_icd.{platform.machine()}.json", "lvp_icd.json"):
+        system_lavapipe(icd_dirs, name)
     fill_prefix(prefix(checkout, icd_dirs), pin_lines(checkout))
     found = fetch(checkout, icd_dirs, "--print-icd")
     assert found.stdout == f"{icd_dirs / f'lvp_icd.{platform.machine()}.json'}\n", found.stderr
     (icd_dirs / f"lvp_icd.{platform.machine()}.json").unlink()
     assert fetch(checkout, icd_dirs, "--print-icd").stdout == f"{icd_dirs / 'lvp_icd.json'}\n"
+
+
+def test_a_distribution_manifest_without_its_driver_is_skipped(checkout: Path, icd_dirs: Path, tmp_path: Path) -> None:
+    """A half-removed package: its manifest would give the GPUI build no Vulkan device, so the next source is taken."""
+    absent = "libvulkan_lvp_conformance_absent.so"
+    manifest(icd_dirs / "lvp_icd.json", absent)
+    vendored = prefix(checkout, icd_dirs)
+    fill_prefix(vendored, pin_lines(checkout))
+    found = fetch(checkout, icd_dirs, "--print-icd")
+    assert found.stdout == f"{vendored / 'lvp_icd.json'}\n", found.stderr
+    assert f"skipping {icd_dirs / 'lvp_icd.json'}: the driver it names is not installed" in found.stderr
+    # a bare name is looked up on the library search path, LD_LIBRARY_PATH first
+    (tmp_path / "libs").mkdir()
+    (tmp_path / "libs" / absent).write_text("stand-in")
+    found = fetch(checkout, icd_dirs, "--print-icd", LD_LIBRARY_PATH=str(tmp_path / "libs"))
+    assert found.stdout == f"{icd_dirs / 'lvp_icd.json'}\n", found.stderr
 
 
 def test_a_complete_vendored_prefix_comes_last(checkout: Path, icd_dirs: Path) -> None:

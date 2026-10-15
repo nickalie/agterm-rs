@@ -78,8 +78,8 @@ scripts/install-apparmor-profile.sh --print [--gpui GPUI_BINARY] [BINARY]   # sh
 ```
 
 Without paths it covers the conformance stages' `target/conformance-stage/bin/agterm` and
-`target/conformance-stage-gpui/bin/agterm-gpui`. A moved binary needs the profile installed again for its new path. On a host without AppArmor, or one that does not restrict
-user namespaces, the script installs nothing.
+`target/conformance-stage-gpui/bin/agterm-gpui`. A moved binary needs the profile installed again for its new path. On
+a host without AppArmor, or one that does not restrict user namespaces, the script installs nothing.
 
 ## Native dependencies
 
@@ -94,6 +94,7 @@ scripts/build-layer-shell.sh   # gtk4-layer-shell 1.3.0; skip it when the distri
 scripts/build-zmx.sh           # the pinned, patched zmx behind Live sessions
 scripts/fetch-wpe.sh           # the pinned WPE WebKit binary package, only where the system has none (below)
 scripts/fetch-lavapipe.sh      # Mesa's lavapipe for headless GPUI runs: the system's, else the pinned Arch package
+scripts/build-weston.sh        # weston 15 for headless GPUI runs where the system's is older (Ubuntu 24.04: 13)
 ```
 
 The GPUI build's headless runs (the conformance suite with `--frontend gpui`, `agterm-gpui`'s process tests) render on
@@ -101,7 +102,13 @@ Mesa's software Vulkan driver lavapipe only, never on the machine's GPU. `script
 manifest: `AGTERM_LAVAPIPE_ICD` when set, else the distribution's (Ubuntu/Debian/Fedora `mesa-vulkan-drivers`, Arch
 `vulkan-swrast`), else it verifies the pinned Arch `vulkan-swrast` package (`LAVAPIPE_*` in `build/pins.env`) and
 unpacks it into the vendored prefix, refusing a host whose libLLVM or glibc it cannot load (`--print-icd` finds without
-fetching).
+fetching); a manifest whose driver is missing is never used. Both the suite and the process tests ask it
+(`tests/support/lavapipe.rs`), so they share one rule.
+They also need a headless weston with a seat, which only `--fake-seat` gives (weston 15.0 and later): where the system's
+is older, `scripts/build-weston.sh` builds the pinned weston (`WESTON_*`, with the wayland-protocols and
+libdisplay-info it needs as subprojects) into the vendored prefix; `run-rust-linux.sh --frontend gpui` takes it when
+the weston on PATH has no `--fake-seat`, and the process tests take the first weston on PATH that has it (put the
+prefix's `bin/` first, as CI does).
 
 Each script also takes `--print-prefix` and `--verify`. Cargo never runs zig: `agterm-ghostty-sys` fails with "run
 scripts/build-ghostty.sh" when the prefix is missing, `agterm-ghostty-vt-sys` with "run scripts/build-ghostty-vt.sh".

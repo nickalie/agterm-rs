@@ -99,11 +99,9 @@ def gpui_stage(tmp_path: Path, fake_bin: Path) -> Path:
 
 
 @pytest.fixture
-def lavapipe_icd(tmp_path: Path) -> Path:
+def lavapipe_icd(make_icd) -> Path:
     """A lavapipe ICD manifest, handed to scripts/fetch-lavapipe.sh as AGTERM_LAVAPIPE_ICD."""
-    path = tmp_path / "lvp_icd.json"
-    path.write_text(json.dumps({"ICD": {"library_path": "/vendor/lavapipe/lib/libvulkan_lvp.so"}}))
-    return path
+    return make_icd()
 
 
 @pytest.fixture(autouse=True)
@@ -261,6 +259,76 @@ def test_a_gpui_run_without_lavapipe_stops_before_anything_runs(
     assert "no lavapipe for the GPUI build" in completed.stderr
     assert "waiting for another conformance run" not in completed.stdout
     assert report == ""
+
+
+def vendored_weston(vendor: Path, fake_compositor_bin: Path) -> Path:
+    """A complete scripts/build-weston.sh prefix under `vendor` whose weston is the fake one, with a seat."""
+    repo = SCRIPT.parents[2]
+    found = subprocess.run(
+        [str(repo / "scripts/build-weston.sh"), "--print-prefix"],
+        env={**os.environ, "AGTERM_VENDOR": str(vendor)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    prefix = Path(found.stdout.strip())
+    modules = ("lib/libweston-15/headless-backend.so", "lib/libweston-15/gl-renderer.so", "lib/weston/desktop-shell.so")
+    for path in modules:
+        (prefix / path).parent.mkdir(parents=True, exist_ok=True)
+        (prefix / path).write_text("stand-in")
+    for path in ("bin/weston", "libexec/weston-desktop-shell"):
+        (prefix / path).parent.mkdir(parents=True, exist_ok=True)
+        (prefix / path).write_text(f'#!/bin/sh\nexec env -u FAKE_COMPOSITOR_HELP "{fake_compositor_bin}" "$@"\n')
+        (prefix / path).chmod(0o755)
+    pins = (repo / "build/pins.env").read_text().splitlines()
+    (prefix / "share/agterm").mkdir(parents=True)
+    manifest = "".join(f"{line}\n" for line in pins if line.startswith("WESTON_"))
+    (prefix / "share/agterm/weston-PINS").write_text(manifest)
+    return prefix
+
+
+def test_a_gpui_run_on_a_weston_without_a_seat_stops_naming_the_fix(
+    tmp_path: Path, gpui_stage: Path, layers: Path, lavapipe_icd: Path
+) -> None:
+    completed, report = run(
+        tmp_path,
+        gpui_stage,
+        layers,
+        ratchet(tmp_path, PROBE_ID),
+        "--frontend",
+        "gpui",
+        AGTERM_LAVAPIPE_ICD=str(lavapipe_icd),
+        AGTERM_VENDOR=str(tmp_path / "vendor"),
+        FAKE_COMPOSITOR_HELP="old",
+    )
+    assert completed.returncode == 2
+    assert "has no --fake-seat" in completed.stderr and "scripts/build-weston.sh" in completed.stderr
+    assert report == ""
+
+
+def test_a_gpui_run_takes_the_vendored_weston_over_an_old_one(
+    tmp_path: Path, gpui_stage: Path, layers: Path, lavapipe_icd: Path, fake_compositor_bin: Path
+) -> None:
+    prefix = vendored_weston(tmp_path / "vendor", fake_compositor_bin)
+    (layers / "protocol" / "test_probe.py").write_text(GPUI_PROBE_TEST)
+    probe = tmp_path / "launch.json"
+    completed, report = run(
+        tmp_path,
+        gpui_stage,
+        layers,
+        ratchet(tmp_path, PROBE_ID),
+        "--frontend",
+        "gpui",
+        AGTERM_LAVAPIPE_ICD=str(lavapipe_icd),
+        AGTERM_VENDOR=str(tmp_path / "vendor"),
+        FAKE_COMPOSITOR_HELP="old",
+        LAUNCH_PROBE=str(probe),
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "rust: 1 pass, 0 fail" in report
+    # the old weston on PATH would have refused the launch: the vendored one served it
+    assert json.loads(probe.read_text())["weston"][-1] == "--fake-seat"
+    assert prefix.is_dir()
 
 
 def test_an_unknown_frontend_exits_2(tmp_path: Path, stage: Path, layers: Path) -> None:

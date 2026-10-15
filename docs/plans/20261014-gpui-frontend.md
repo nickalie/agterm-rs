@@ -997,6 +997,17 @@ Port the placement rendering from qwertty-term (MIT, attribution).
     conformance/rust-gpui-passing.txt --add` after their GPUI run.
   - Deferred: the CLAUDE.md note on the GPUI conformance run (Task 36); the GPUI ghostty-probe CI step comes with
     Task 13's terminal; HTML/AppArmor for the GPUI stage with Task 32.
+  - ⚠️ review round 1: `--fake-seat` is new in weston 15.0; Ubuntu 24.04's weston 13 exits on it (and has no seat
+    without it), so CI could launch no GPUI instance, nor could Task 12's process tests. `scripts/build-weston.sh`
+    builds the pinned weston 15.0.1 (`WESTON_*`; headless + GL + desktop shell only; wayland-protocols 1.49 and
+    libdisplay-info 0.3.0 as pinned subprojects, no download during the build) into the vendored prefix, checked in
+    an `ubuntu:24.04` container (rootless podman: builds, takes `--fake-seat`, the harness's real-weston GPUI test
+    passes with it). CI puts its `bin/` first on PATH in `rust-linux` and `conformance-gpui`; `run-rust-linux.sh
+    --frontend gpui` takes it when the weston on PATH lacks the option, the adapter refuses such a weston naming the
+    script, and `tests/support` uses the first weston on PATH that takes it. Also: a lavapipe manifest whose driver is
+    missing is refused (harness) or skipped (script, system manifests); `tests/support/lavapipe.rs` asks
+    `fetch-lavapipe.sh --print-icd`, so the process tests and the external-texture test share the harness's rule;
+    `ghostty_probe.py` finds lavapipe before the harness import scrubs `AGTERM_*` and reports the script's reason.
 
 ### Task 18: Deck, panes, splits, pane lead, mute
 

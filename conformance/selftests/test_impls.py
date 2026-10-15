@@ -620,6 +620,30 @@ def test_real_weston_serves_and_leaves_nothing(roots: list[Path], fake_bin: Path
     assert not base.find_headless_leftovers(runtime_dir)
 
 
+@pytest.mark.skipif(not (shutil.which("weston") and shutil.which("dbus-daemon")), reason="weston or dbus is missing")
+def test_real_weston_gives_gpui_a_seat_or_a_clear_refusal(
+    roots: list[Path], fake_bin: Path, real_compositor: None, make_icd, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The weston on PATH serves a GPUI instance with --fake-seat (15.0 and later), or the launch names the fix."""
+    monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, str(make_icd()))
+    adapter = RustAdapter(fake_bin, frontend="gpui")
+    if not base.weston_takes_fake_seat(base.compositor_program()):
+        with pytest.raises(LaunchError, match="scripts/build-weston.sh"):
+            adapter.launch()
+        return
+    instance = adapter.launch()
+    compositor = instance.compositor
+    assert compositor is not None
+    try:
+        identity = process_identity(compositor.pid)
+        assert identity is not None and "--fake-seat" in identity.words
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.connect(instance.env["WAYLAND_DISPLAY"])
+    finally:
+        adapter.stop(instance)
+    assert compositor.returncode == 0 and not instance.root.exists()
+
+
 @pytest.mark.parametrize("adapter_class", [SwiftLinuxAdapter, RustAdapter])
 def test_launch_seeds_settings(roots: list[Path], fake_bin: Path, adapter_class: type[Adapter]) -> None:
     adapter = adapter_class(fake_bin)
@@ -1533,16 +1557,10 @@ def test_a_daemon_exiting_within_the_grace_is_not_a_leftover(
 # -- the Rust build's GPUI frontend: lavapipe only, a seat on its weston
 
 
-def write_icd(path: Path, library: str = "/vendor/lavapipe/lib/libvulkan_lvp.so") -> Path:
-    manifest = {"ICD": {"api_version": "1.4.354", "library_path": library}, "file_format_version": "1.0.1"}
-    path.write_text(json.dumps(manifest))
-    return path
-
-
 @pytest.fixture
-def lavapipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def lavapipe(make_icd, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A lavapipe ICD manifest the harness is pointed at, as run-rust-linux.sh --frontend gpui does."""
-    icd = write_icd(tmp_path / "lvp_icd.json")
+    icd = make_icd()
     monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, str(icd))
     return icd
 
@@ -1651,10 +1669,61 @@ def test_a_manifest_that_is_not_lavapipe_is_refused(
         RustAdapter(None, frontend="gpui").build_env(tmp_path / "root")
 
 
-def test_a_relative_lavapipe_manifest_is_made_absolute(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    write_icd(tmp_path / "lvp_icd.json", "libvulkan_lvp.so")
-    monkeypatch.chdir(tmp_path)
-    assert base.lavapipe_icd({base.LAVAPIPE_ICD_VARIABLE: "lvp_icd.json"}) == str(tmp_path / "lvp_icd.json")
+def test_a_relative_lavapipe_manifest_is_made_absolute(
+    make_icd, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    icd = make_icd(tmp_path / "here")
+    monkeypatch.chdir(tmp_path / "here")
+    assert base.lavapipe_icd({base.LAVAPIPE_ICD_VARIABLE: "lvp_icd.json"}) == str(icd)
+
+
+def test_a_manifest_whose_driver_is_missing_is_refused(tmp_path: Path) -> None:
+    """Without its driver wgpu gets no Vulkan device and would quietly render through GL."""
+    icd = tmp_path / "lvp_icd.json"
+    icd.write_text(json.dumps({"ICD": {"library_path": str(tmp_path / "lib" / "libvulkan_lvp.so")}}))
+    with pytest.raises(LaunchError, match="which is not there"):
+        base.lavapipe_icd({base.LAVAPIPE_ICD_VARIABLE: str(icd)})
+
+
+def test_the_driver_is_found_by_the_loaders_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "icd.d").mkdir()
+    (tmp_path / "lib").mkdir()
+    driver = tmp_path / "lib" / "libvulkan_lvp.so"
+    manifest = tmp_path / "icd.d" / "lvp_icd.json"
+    # absolute as is
+    assert base.icd_library(manifest, str(driver)) is None
+    driver.write_text("stand-in")
+    assert base.icd_library(manifest, str(driver)) == str(driver)
+    # with a slash: relative to the manifest's directory
+    assert base.icd_library(manifest, "../lib/libvulkan_lvp.so") == str(tmp_path / "icd.d" / "../lib/libvulkan_lvp.so")
+    assert base.icd_library(manifest, "./libvulkan_lvp.so") is None
+    # a bare name: on the library search path
+    absent = "libvulkan_lvp_conformance_absent.so"
+    assert base.icd_library(manifest, absent) is None
+    (tmp_path / "lib" / absent).write_text("stand-in")
+    monkeypatch.setenv("LD_LIBRARY_PATH", str(tmp_path / "lib"))
+    assert base.icd_library(manifest, absent) == str(tmp_path / "lib" / absent)
+
+
+def test_gpui_on_a_weston_without_a_fake_seat_spawns_nothing(
+    roots: list[Path], fake_bin: Path, lavapipe: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Weston 13 and 14 (Ubuntu 24.04's) exit on --fake-seat, and GPUI panics without a seat: a clear refusal."""
+    monkeypatch.setenv("FAKE_COMPOSITOR_HELP", "old")
+    base.weston_takes_fake_seat.cache_clear()
+    try:
+        with pytest.raises(LaunchError, match=r"does not take --fake-seat.*weston 15\.0.*scripts/build-weston\.sh"):
+            RustAdapter(fake_bin, frontend="gpui").launch()
+        # the GTK frontend needs no seat
+        adapter = RustAdapter(fake_bin)
+        adapter.stop(adapter.launch())
+    finally:
+        base.weston_takes_fake_seat.cache_clear()
+    assert len(roots) == 2 and not any(root.exists() for root in roots)
+
+
+def test_a_weston_that_cannot_run_takes_no_fake_seat(tmp_path: Path) -> None:
+    assert base.weston_takes_fake_seat(str(tmp_path / "absent-weston")) is False
 
 
 def test_a_headless_gpui_launch_gets_a_seat_and_lavapipe(

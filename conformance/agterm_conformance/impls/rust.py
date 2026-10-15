@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from agterm_conformance.impls import base
 from agterm_conformance.impls.base import (
     FAKE_SEAT_ARG,
     LAUNCH_TIMEOUT,
@@ -69,6 +70,8 @@ class RustAdapter(Adapter):
 
     def weston_args(self) -> tuple[str, ...]:
         if self.frontend == GPUI:
+            # through the module: the self-tests swap in their fake weston there
+            base.require_fake_seat(base.compositor_program())
             return (*super().weston_args(), FAKE_SEAT_ARG)
         return super().weston_args()
 

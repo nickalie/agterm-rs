@@ -31,7 +31,9 @@ jobs:
             pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
             meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
             curl xz-utils patch ncurses-bin fish \
-            dbus-daemon weston xvfb libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers
+            dbus-daemon weston xvfb libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers \
+            g++ libpixman-1-dev libinput-dev libevdev-dev libudev-dev libdrm-dev libegl-dev libgles-dev libgbm-dev \
+            libcairo2-dev libpango1.0-dev libpng-dev hwdata
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -64,6 +66,11 @@ jobs:
       # built here so the vendor cache this job saves holds it; the conformance job only restores that cache
       - name: zmx prefix
         run: scripts/build-zmx.sh
+      # GPUI needs a seat on its headless weston, which only --fake-seat gives (weston 15.0+; Ubuntu 24.04 ships 13):
+      # the pinned weston, first on PATH, where agterm-gpui's process tests look for one taking it. Built here so the
+      # vendor cache this job saves holds it for conformance-gpui.
+      - name: weston prefix (--fake-seat)
+        run: echo "$(scripts/build-weston.sh)/bin" >> "$GITHUB_PATH"
       - name: format
         run: cargo fmt --all --check
       # before clippy: a dependency turning on tracing's `log` would put dozens of functions over the complexity limit
@@ -407,7 +414,8 @@ jobs:
 
   # The GPUI frontend's build under the suite, held by its own ratchet (conformance/rust-gpui-passing.txt) while both
   # frontends coexist. It renders on lavapipe only: scripts/fetch-lavapipe.sh finds the distribution's
-  # (mesa-vulkan-drivers) and the harness makes it the only Vulkan driver; its weston gets --fake-seat.
+  # (mesa-vulkan-drivers) and the harness makes it the only Vulkan driver; its weston gets --fake-seat, which takes the
+  # pinned weston 15 (scripts/build-weston.sh; Ubuntu's 13 has no such option), first on PATH.
   conformance-gpui:
     needs: rust-linux
     runs-on: ubuntu-24.04
@@ -423,7 +431,9 @@ jobs:
             pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
             meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
             curl xz-utils patch ncurses-bin \
-            weston dbus-daemon libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers
+            weston dbus-daemon libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers \
+            g++ libpixman-1-dev libinput-dev libevdev-dev libudev-dev libdrm-dev libegl-dev libgles-dev libgbm-dev \
+            libcairo2-dev libpango1.0-dev libpng-dev hwdata
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -440,6 +450,9 @@ jobs:
         run: scripts/build-layer-shell.sh
       - name: zmx prefix
         run: scripts/build-zmx.sh
+      # restored from the cache the rust-linux job saved, else built here
+      - name: weston prefix (--fake-seat)
+        run: echo "$(scripts/build-weston.sh)/bin" >> "$GITHUB_PATH"
       - name: lavapipe (the distribution's)
         run: scripts/fetch-lavapipe.sh
       - uses: actions/setup-python@v7

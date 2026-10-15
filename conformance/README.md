@@ -141,6 +141,9 @@ run exits 2.
 The adapter makes it the instance's only Vulkan driver (`VK_DRIVER_FILES`), forces GL onto llvmpipe, drops every
 inherited device selection, refuses a manifest that does not load lavapipe, and starts the instance's weston with
 `--fake-seat` (GPUI panics on a compositor without a `wl_seat`); the GTK frontend keeps its weston and environment.
+`--fake-seat` needs weston 15.0 or later: where the weston on PATH lacks it (Ubuntu 24.04 ships 13), the runner takes
+the one `scripts/build-weston.sh` vendors, else exits 2 naming that script, and the adapter refuses such a weston with
+the same pointer. The ICD manifest must name a driver that is there.
 
 `rust-passing.txt` holds one pytest node id per line, verbatim (an id may end in spaces) and sorted, after its `#`
 header.

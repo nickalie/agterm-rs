@@ -35,8 +35,10 @@ DEFAULT_BINS = {
     "gtk": REPO / "target" / "conformance-stage" / "bin" / "agterm",
     "gpui": REPO / "target" / "conformance-stage-gpui" / "bin" / "agterm-gpui",
 }
-DEFAULT_BIN = DEFAULT_BINS["gtk"]
 FETCH_LAVAPIPE = REPO / "scripts" / "fetch-lavapipe.sh"
+# `impls.base.LAVAPIPE_ICD_VARIABLE`, spelled here: importing the harness runs the plugin's scrub of every AGTERM_*
+# variable, which the script still needs (AGTERM_LAVAPIPE_ICD, AGTERM_VENDOR), so lavapipe is found before that.
+LAVAPIPE_ICD_VARIABLE = "CONFORMANCE_LAVAPIPE_ICD"
 # The surface's lines, at debug under the `agterm::surface` target (the GTK binary's module, the GPUI build's explicit
 # target); the rest of the app stays at info.
 LOG_FILTER = "info,agterm::surface=debug"
@@ -58,18 +60,25 @@ def read_log(text: str) -> dict[str, Any]:
     return {"created": CREATED in text, "drew": DREW in text, "error": error}
 
 
-def lavapipe_from_script(script: Path = FETCH_LAVAPIPE) -> str | None:
-    """The lavapipe ICD the repository's script finds without fetching anything, or None."""
+def lavapipe_from_script(script: Path = FETCH_LAVAPIPE) -> tuple[str | None, str]:
+    """The lavapipe ICD the repository's script finds without fetching anything, else None and the script's reason."""
     try:
         found = subprocess.run([str(script), "--print-icd"], capture_output=True, text=True, check=False, timeout=60)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return (found.stdout.strip() or None) if found.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return None, f"{script}: {error}"
+    if found.returncode == 0 and (icd := found.stdout.strip()):
+        return icd, ""
+    return None, found.stderr.strip() or f"{script} --print-icd exited with {found.returncode}"
 
 
 def probe(bin: Path, timeout: float, args: Sequence[str] = (), frontend: str = "gtk") -> dict[str, Any]:
-    from agterm_conformance.impls.base import LAVAPIPE_ICD_VARIABLE
-    from agterm_conformance.impls.rust import GPUI, RustAdapter
+    lavapipe_problem = ""
+    if frontend == "gpui" and not os.environ.get(LAVAPIPE_ICD_VARIABLE):
+        icd, lavapipe_problem = lavapipe_from_script()
+        if icd is not None:
+            os.environ[LAVAPIPE_ICD_VARIABLE] = icd
+    # only now: importing the harness scrubs AGTERM_* from this process
+    from agterm_conformance.impls.rust import RustAdapter
 
     class LoggingAdapter(RustAdapter):
         def platform_env(self, env: dict[str, str]) -> None:
@@ -81,16 +90,17 @@ def probe(bin: Path, timeout: float, args: Sequence[str] = (), frontend: str = "
 
     if not bin.is_file():
         return {"ok": False, "error": f"no agterm at {bin}"}
-    if frontend == GPUI and not os.environ.get(LAVAPIPE_ICD_VARIABLE) and (icd := lavapipe_from_script()):
-        os.environ[LAVAPIPE_ICD_VARIABLE] = icd
     adapter = LoggingAdapter(bin, frontend=frontend)
     report: dict[str, Any] = {"bin": str(bin), "frontend": frontend}
     if args:
         report["args"] = list(args)
+    if lavapipe_problem:
+        report["lavapipe"] = lavapipe_problem
     try:
         instance = adapter.launch()
     except Exception as error:  # noqa: BLE001 - the report names whatever stopped the probe
-        return {**report, "ok": False, "error": f"launch: {type(error).__name__}: {error}"}
+        reason = f" (fetch-lavapipe.sh: {lavapipe_problem})" if lavapipe_problem else ""
+        return {**report, "ok": False, "error": f"launch: {type(error).__name__}: {error}{reason}"}
     try:
         deadline = time.monotonic() + timeout
         while True:

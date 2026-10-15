@@ -120,6 +120,28 @@ lavapipe_prefix_is_complete() {
     && pin_lines LAVAPIPE | cmp -s - "$prefix/share/agterm/lavapipe-PINS"
 }
 
+# weston carries no patches: its key hashes the WESTON_ pins only.
+weston_prefix() {
+  echo "$VENDOR_ROOT/weston-$(prefix_key WESTON /nonexistent)"
+}
+
+# Whether the weston at PATH takes --fake-seat (weston 15.0 and later): the seat the GPUI build needs.
+weston_has_fake_seat() {
+  env -u WAYLAND_DISPLAY -u DISPLAY "$1" --help 2>/dev/null | grep -q -- '--fake-seat'
+}
+
+# A weston prefix is complete when the compositor, its headless backend, GL renderer and desktop shell (module and
+# helper client) are there, the pin manifest matches the WESTON_ pins, and the compositor runs and takes --fake-seat.
+weston_prefix_is_complete() {
+  local prefix="$1"
+  [[ -x "$prefix/bin/weston" && -x "$prefix/libexec/weston-desktop-shell" && -s "$prefix/share/agterm/weston-PINS" ]] \
+    && compgen -G "$prefix/lib/libweston-*/headless-backend.so" >/dev/null \
+    && compgen -G "$prefix/lib/libweston-*/gl-renderer.so" >/dev/null \
+    && [[ -s "$prefix/lib/weston/desktop-shell.so" ]] \
+    && pin_lines WESTON | cmp -s - "$prefix/share/agterm/weston-PINS" \
+    && weston_has_fake_seat "$prefix/bin/weston"
+}
+
 # The libraries a shared object needs that this host cannot resolve, space-separated (empty when all resolve).
 unresolved_libraries() {
   ldd "$1" 2>&1 | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ' | sed 's/ $//'

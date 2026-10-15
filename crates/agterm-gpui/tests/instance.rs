@@ -14,7 +14,10 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use support::{DEADLINE, Display, Sandbox, TestResult, have, lavapipe_icd, wait_for, wait_for_socket};
+use support::{
+    DEADLINE, Display, NO_SEATED_WESTON, Sandbox, TestResult, have, lavapipe_icd, seated_weston, wait_for,
+    wait_for_socket,
+};
 
 /// The token and startup id a forwarding launch is handed in these tests.
 const TOKEN: &str = "agterm-test-token";
@@ -132,11 +135,11 @@ fn the_launchs_token_and_startup_id_reach_no_child() -> TestResult {
 /// needs NVIDIA's EGL (`docs/upstream-issues/gpui-wgpu-gles-exit-segfault.md`), and these tests render on Mesa only.
 #[test]
 fn sigterm_quits_a_windowed_primary_with_status_0() -> TestResult {
-    if !have("weston") {
-        skip!("no weston");
+    if seated_weston().is_none() {
+        skip!("{NO_SEATED_WESTON}");
     }
     let Some(lavapipe) = lavapipe_icd() else {
-        skip!("no lavapipe ICD (set AGTERM_LAVAPIPE_ICD)");
+        skip!("no lavapipe ICD (scripts/fetch-lavapipe.sh)");
     };
     let mut sandbox = Sandbox::new()?;
     sandbox.start_weston()?;
@@ -205,8 +208,8 @@ fn a_gpui_launch_forwards_to_a_gtk_primary() -> TestResult {
     let Some(gtk) = gtk_build() else {
         skip!("no GTK build beside {} (cargo build -p agterm-gtk)", support::GPUI);
     };
-    if !have("weston") {
-        skip!("no weston for the GTK primary");
+    if seated_weston().is_none() {
+        skip!("{NO_SEATED_WESTON}, for the GTK primary");
     }
     let mut sandbox = Sandbox::new()?;
     sandbox.start_weston()?;
@@ -365,7 +368,7 @@ fn x11_launches_carry_their_startup_time_and_end_their_sequences() -> TestResult
         skip!("no Xvfb");
     }
     let Some(lavapipe) = lavapipe_icd() else {
-        skip!("no lavapipe ICD (set AGTERM_LAVAPIPE_ICD)");
+        skip!("no lavapipe ICD (scripts/fetch-lavapipe.sh)");
     };
     let mut sandbox = Sandbox::new()?;
     sandbox.start_xvfb()?;
@@ -457,11 +460,11 @@ fn niri_spawn(sandbox: &Sandbox, argv: &[&str]) -> TestResult {
 #[test]
 #[ignore = "needs niri (none in CI): niri nested in a private headless weston; run with --ignored"]
 fn a_launchers_token_raises_the_primary_under_a_nested_niri() -> TestResult {
-    if !have("niri") || !have("weston") {
-        skip!("no niri or weston: the nested-niri activation check needs both");
+    if !have("niri") || seated_weston().is_none() {
+        skip!("no niri, or {NO_SEATED_WESTON}: the nested-niri activation check needs both");
     }
     let Some(lavapipe) = lavapipe_icd() else {
-        skip!("no lavapipe ICD (set AGTERM_LAVAPIPE_ICD)");
+        skip!("no lavapipe ICD (scripts/fetch-lavapipe.sh)");
     };
     let mut sandbox = Sandbox::new()?;
     sandbox.use_software_rendering(&lavapipe);

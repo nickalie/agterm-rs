@@ -41,7 +41,8 @@ The GPUI frontend (`--rust-frontend gpui`) gets, on top of that:
 - `VK_DRIVER_FILES` (and `VK_ICD_FILENAMES`) naming lavapipe's ICD manifest alone, `LIBGL_ALWAYS_SOFTWARE=1`,
   Mesa's EGL vendor, and no inherited `VK_*`, `WGPU_*`, `__NV_*`, `__GLX_*`, `DRI_PRIME` or `MESA_LOADER_*`: it renders
   on lavapipe and llvmpipe only, never on the machine's GPU driver, and a launch without lavapipe fails;
-- a headless weston started with `--fake-seat`, since GPUI needs a `wl_seat`.
+- a headless weston started with `--fake-seat`, since GPUI needs a `wl_seat`: weston 15.0 or later (the system's, or
+  the one `scripts/build-weston.sh` vendors where the system's is older).
 
 SIGTERM must quit without a prompt within 10 seconds.
 Live sessions keep their zmx sockets in `/tmp/agterm-zmx-%016x` (lowercase hex) of the FNV-1a 64 hash over the UTF-8

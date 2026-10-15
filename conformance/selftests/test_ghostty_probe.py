@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -115,37 +116,82 @@ def test_the_gpui_frontend_defaults_to_its_own_stage(monkeypatch) -> None:
     assert seen["bin"] == (ghostty_probe.REPO / "target/conformance-stage/bin/agterm").resolve()
 
 
+def test_the_probe_spells_the_harness_variable() -> None:
+    assert ghostty_probe.LAVAPIPE_ICD_VARIABLE == LAVAPIPE_ICD_VARIABLE
+
+
 def test_lavapipe_comes_from_the_script_without_fetching(tmp_path: Path) -> None:
     script = tmp_path / "fetch-lavapipe.sh"
     script.write_text('#!/bin/sh\n[ "$1" = --print-icd ] || exit 9\necho /vendor/lavapipe/lvp_icd.json\n')
     script.chmod(0o755)
-    assert ghostty_probe.lavapipe_from_script(script) == "/vendor/lavapipe/lvp_icd.json"
-    script.write_text("#!/bin/sh\necho 'no lavapipe ICD found' >&2\nexit 1\n")
-    assert ghostty_probe.lavapipe_from_script(script) is None
-    assert ghostty_probe.lavapipe_from_script(tmp_path / "absent.sh") is None
+    assert ghostty_probe.lavapipe_from_script(script) == ("/vendor/lavapipe/lvp_icd.json", "")
 
 
-def test_a_gpui_probe_without_lavapipe_fails_before_launching(
+def test_the_scripts_reason_is_kept(tmp_path: Path) -> None:
+    script = tmp_path / "fetch-lavapipe.sh"
+    script.write_text("#!/bin/sh\necho 'no lavapipe ICD found: install mesa-vulkan-drivers' >&2\nexit 1\n")
+    script.chmod(0o755)
+    assert ghostty_probe.lavapipe_from_script(script) == (None, "no lavapipe ICD found: install mesa-vulkan-drivers")
+    icd, reason = ghostty_probe.lavapipe_from_script(tmp_path / "absent.sh")
+    assert icd is None and "absent.sh" in reason
+
+
+def test_a_gpui_probe_without_lavapipe_fails_naming_why(
     monkeypatch: pytest.MonkeyPatch, roots: list[Path], fake_bin: Path
 ) -> None:
     monkeypatch.setenv(LAVAPIPE_ICD_VARIABLE, "unset by the test")
     monkeypatch.delenv(LAVAPIPE_ICD_VARIABLE)
-    monkeypatch.setattr(ghostty_probe, "lavapipe_from_script", lambda: None)
+    monkeypatch.setattr(ghostty_probe, "lavapipe_from_script", lambda: (None, "no lavapipe ICD found: because"))
     report = ghostty_probe.probe(fake_bin, 1.0, frontend="gpui")
     assert report["ok"] is False and report["frontend"] == "gpui"
-    assert "no lavapipe" in report["error"] and "fetch-lavapipe.sh" in report["error"]
+    assert report["lavapipe"] == "no lavapipe ICD found: because"
+    assert "no lavapipe" in report["error"]
+    assert report["error"].endswith("(fetch-lavapipe.sh: no lavapipe ICD found: because)")
     assert all(not root.exists() for root in roots)
 
 
 def test_a_gpui_probe_takes_the_scripts_lavapipe(
-    monkeypatch: pytest.MonkeyPatch, roots: list[Path], fake_bin: Path, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, roots: list[Path], fake_bin: Path, make_icd
 ) -> None:
-    icd = tmp_path / "lvp_icd.json"
-    icd.write_text(json.dumps({"ICD": {"library_path": "/vendor/lib/libvulkan_lvp.so"}}))
+    icd = make_icd()
     monkeypatch.setenv(LAVAPIPE_ICD_VARIABLE, "unset by the test")
     monkeypatch.delenv(LAVAPIPE_ICD_VARIABLE)
-    monkeypatch.setattr(ghostty_probe, "lavapipe_from_script", lambda: str(icd))
+    monkeypatch.setattr(ghostty_probe, "lavapipe_from_script", lambda: (str(icd), ""))
     report = ghostty_probe.probe(fake_bin, 0.3, frontend="gpui")
     # the fake app serves but draws nothing: launched on lavapipe, then no first frame
-    assert report["ok"] is False and report["error"] == "no first frame within 0.3s"
+    assert report["ok"] is False and report["error"] == "no first frame within 0.3s" and "lavapipe" not in report
     assert os.environ[LAVAPIPE_ICD_VARIABLE] == str(icd)
+
+
+def test_the_cli_finds_lavapipe_before_the_harness_scrubs_agterm_variables(
+    tmp_path: Path, fake_bin: Path, fake_compositor_bin: Path, fake_session_bus_bin: Path, make_icd
+) -> None:
+    """Run as a program: AGTERM_LAVAPIPE_ICD reaches scripts/fetch-lavapipe.sh, though the harness's import drops it."""
+    helpers = tmp_path / "helpers"
+    helpers.mkdir()
+    (helpers / "weston").symlink_to(fake_compositor_bin)
+    (helpers / "dbus-daemon").symlink_to(fake_session_bus_bin)
+    env = {name: value for name, value in os.environ.items() if name != LAVAPIPE_ICD_VARIABLE}
+    env.update(
+        AGTERM_LAVAPIPE_ICD=str(make_icd()),
+        # no vendored lavapipe to fall back on, should the override be lost
+        AGTERM_VENDOR=str(tmp_path / "vendor"),
+        HOME=str(tmp_path / "home"),
+        PATH=f"{helpers}{os.pathsep}{os.environ['PATH']}",
+        PYTHONPATH=str(Path(__file__).resolve().parents[1]),
+        CONFORMANCE_TMP=str(tmp_path),
+    )
+    env.pop("CONFORMANCE_LINUX_DISPLAY", None)
+    completed = subprocess.run(
+        [sys.executable, str(ghostty_probe.__file__), "--frontend", "gpui", "--bin", str(fake_bin), "--timeout", "0.5"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    report = json.loads(completed.stdout)
+    assert report["error"] == "no first frame within 0.5s", report
+    assert "lavapipe" not in report and "cleanup" not in report
+
+
