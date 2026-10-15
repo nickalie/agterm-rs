@@ -23,6 +23,7 @@
 //! (`mouse.rs`, `links.rs`), and the pump answers a program's clipboard access under `clipboard-read`/`-write` and
 //! the prompt (`clipboard.rs`).
 
+pub mod background;
 mod clipboard;
 mod colors;
 mod element;
@@ -30,6 +31,7 @@ mod font;
 pub mod input;
 mod keyboard;
 mod keycodes;
+pub mod kitty;
 pub mod links;
 mod metrics;
 mod mouse;
@@ -39,6 +41,8 @@ mod surface;
 
 #[cfg(test)]
 mod input_tests;
+#[cfg(test)]
+mod kitty_tests;
 #[cfg(test)]
 mod tests;
 
@@ -61,7 +65,7 @@ use gpui_kit::{
 
 pub use clipboard::{ClipboardPrompts, prompt_text};
 pub use colors::{CellPaint, Mark, Palette, Pick};
-pub use element::{PlacedGlyph, ShapedRow, TerminalElement};
+pub use element::{Layer as PaintLayer, PlacedGlyph, ShapedRow, TerminalElement};
 pub use font::{DEFAULT_FAMILIES, DEFAULT_FAMILY, Fonts, SYMBOLS_FAMILY, register_embedded as register_embedded_fonts};
 pub use keyboard::{key_down, typing_surface};
 pub use links::{Link, LinkKind, follow_link};
@@ -86,6 +90,8 @@ pub struct TerminalConfig {
     pub mouse: ghostty_config::Mouse,
     pub link: ghostty_config::Link,
     pub clipboard: ghostty_config::Clipboard,
+    /// `background-image*`, drawn behind the grid.
+    pub background_image: ghostty_config::BackgroundImage,
     /// `clipboard-trim-trailing-spaces`: copies drop trailing whitespace.
     pub copy_trim: bool,
     /// `selection-clear-on-copy`.
@@ -129,6 +135,7 @@ impl TerminalConfig {
             mouse: config.mouse.clone(),
             link: config.link,
             clipboard: config.clipboard.clone(),
+            background_image: config.background_image.clone(),
             copy_trim: config.clipboard.trim_trailing_spaces,
             clear_selection_on_copy: config.selection.clear_on_copy,
             copy_on_select: config.copy_on_select,
@@ -249,6 +256,10 @@ pub struct Shared {
     preedit: RefCell<Option<String>>,
     /// Whose terminal this is, for a custom command's typing surface (the frontend sets it).
     owner: RefCell<Option<SurfaceOwner>>,
+    /// The `background-image` every view draws, loaded once per terminal.
+    background: RefCell<background::Loader>,
+    /// The Kitty images as textures, converted off the main thread for every view.
+    kitty: RefCell<kitty::KittyStore>,
     /// Ghostty's read-only mode (`toggle_readonly`): the user's input does not reach the program.
     readonly: Cell<bool>,
     /// The URL of the link under the pointer (`copy_url_to_clipboard`; Task 14's hover sets it).
@@ -540,6 +551,7 @@ impl Shared {
         }
         self.spawn.borrow_mut().take();
         self.effects.borrow_mut().clear();
+        self.kitty.borrow_mut().clear();
         let pane = self.pane.borrow_mut().take();
         drop(pane);
         // one last pass lets the views drop what they drew, then the channel ends the pump
@@ -603,6 +615,8 @@ impl Terminal {
             drew: Cell::new(false),
             preedit: RefCell::new(None),
             owner: RefCell::new(None),
+            background: RefCell::new(background::Loader::default()),
+            kitty: RefCell::new(kitty::KittyStore::default()),
             readonly: Cell::new(false),
             hovered_url: RefCell::new(None),
         });
@@ -645,6 +659,8 @@ impl Terminal {
         let fonts_changed = shared.config.borrow().font != config.font;
         let cell = shared.metrics_at(shared.font_points(), shared.scale());
         *shared.config.borrow_mut() = Rc::new(config);
+        // the background image's file is looked at again (a watermark rendered anew into the same file)
+        shared.background.borrow_mut().invalidate();
         if fonts_changed {
             shared.fonts.borrow_mut().take();
             shared.font_generation.set(shared.font_generation.get() + 1);
@@ -755,6 +771,10 @@ pub struct TerminalView {
     blink: Option<Task<()>>,
     /// The frame drawn last.
     painted: Option<Arc<Frame>>,
+    /// The Kitty images and the background image this view put into its window's atlas.
+    images: kitty::ViewImages,
+    /// The layers the last paint drew, in order, with how many Kitty placements each Kitty layer had.
+    painted_layers: Vec<(element::Layer, usize)>,
     _observe: Subscription,
 }
 
@@ -779,6 +799,8 @@ impl TerminalView {
             blink_on: true,
             blink: None,
             painted: None,
+            images: kitty::ViewImages::default(),
+            painted_layers: Vec::new(),
             _observe: cx.observe(terminal, |_, _, cx| cx.notify()),
         }
     }

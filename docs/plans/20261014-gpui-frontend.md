@@ -1213,12 +1213,99 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 
 **Files:**
 - Create: `crates/agterm-gpui/src/terminal/{kitty,background}.rs`, `terminal/kitty_tests.rs`
+- ➕ Create: `terminal/background/tests.rs`, `terminal/kitty/{textures,placeholder}.rs`,
+  `crates/agterm-term/src/placeholder.rs`, `docs/backlog/kitty-virtual-placement-c-api-gaps.md`; Modify:
+  `terminal/{element.rs,terminal.rs}` (the module root), `tests/external_texture/cases.rs`,
+  `crates/agterm-gpui/Cargo.toml`, `Cargo.toml` (`image`), `crates/agterm-term/src/{render,kitty,lib}.rs`,
+  `crates/agterm-ghostty-vt/src/kitty.rs`
 
-- [ ] image data from `agterm-term`'s kitty view → GPUI images cached by id/generation; placements by z-layer, source
+- [x] image data from `agterm-term`'s kitty view → GPUI images cached by id/generation; placements by z-layer, source
       rects, scaling, scrolling with the viewport, deletion
-- [ ] `background-image*` (agterm's watermark lines, `background.rs` + core `watermark`) drawn behind the grid
-- [ ] tests: placement geometry, layer ordering, cache eviction on delete, background image fit/position modes
-- [ ] gates — must pass before Task 17 (the `show-image.sh` end-to-end check is in Task 23)
+- [x] `background-image*` (agterm's watermark lines, `background.rs` + core `watermark`) drawn behind the grid
+- [x] tests: placement geometry, layer ordering, cache eviction on delete, background image fit/position modes
+- [x] gates — must pass before Task 17 (the `show-image.sh` end-to-end check is in Task 23)
+- result (2026-10-15):
+  - **Kitty** (`terminal/kitty.rs`, from Ghostty's `image.zig`/`image.v.glsl` by way of qwertty-term's renderer, MIT,
+    attribution in the header): a placement lands at its viewport cell times the cell plus its offset inside the cell
+    (clamped to the cell, Ghostty's `cellOffset`), at the pixel size and source rectangle libghostty-vt resolved; a
+    negative row (scrolled partly off the top) is clipped by the element; a viewer at its own font size scales the
+    terminal's pixels by its cell over the owner's (`Cells { engine, view }`). Sorted by `z`, then image id
+    (stable), drawn in Ghostty's three layers: below the cell backgrounds (after the default background and the
+    background image), between the cell backgrounds and the underlines/text, above the text (the cursor and the
+    preedit stay on top, as Technical Details > Frame orders them; Ghostty draws its cursor with the text, so an
+    above-text image covers it there). No GPUI patch: GPUI's own `paint_image` draws a source rectangle when the
+    whole image is painted scaled so the rectangle covers the placement, clipped to it (`kitty::image_bounds`; GPUI
+    then samples only that part of the tile) — checked on real renderers by the external texture harness's
+    `image_source_rects_fill_their_placement` (lavapipe and Intel). Images become BGRA straight-alpha `RenderImage`s
+    once per `(id, generation)` (RGB opaque, gray to gray RGB, Ghostty's `convertReplace`), scaled down past 8192 px
+    a side (wgpu's default texture limit; Ghostty allows 10000); per view, because the sprite atlas is per window.
+    `ViewImages` keeps what a view painted into its window's atlas and `drop_image`s what it stops drawing (deleted,
+    new generation, scrolled out, background changed), and everything on teardown and on the view's release
+    (`on_release_in`, registered at its first paint). The view compares against its own cache, not
+    `KittyView::removed`, so skipped frames cannot leak a texture.
+  - **Background image** (`terminal/background.rs`, Ghostty's `prepBackgroundImage`/`bg_image.{v,f}.glsl`):
+    `TerminalConfig::background_image` from the config (so the watermark overlay lines `watermark::overlay_text`
+    writes reach it: tested end to end through `load_app_config`), drawn over the whole surface after the default
+    background: `contain`/`cover`/`stretch`/`none`, the nine positions (`center` = `center-center`), `repeat` tiling
+    from the offset both ways (a repeated image under 256 px a side is repeated into one larger texture first; at most
+    4096 tiles). Opacity: Ghostty's `min(opacity, 1 / bg alpha) * bg alpha`, baked into the texture's alpha (no GPUI
+    patch for an image opacity); exact at `background-opacity = 1`, which the watermark overlay sets. PNG or JPEG by
+    content, then extension (the `image` crate, `png`+`jpeg` features only, the version GPUI links), decoded on the
+    background executor; the old image stays up while its replacement loads and when a new file fails, as in Ghostty.
+    Loads are keyed by path, mtime, length, baked alpha and repeat, shared (loaded or in flight) by every terminal on
+    the main thread, and the file is looked at again on each `Terminal::set_config`, never per frame: a text watermark
+    re-rendered into the same file reloads without the GTK build's two-overlay trick.
+  - **Review round 1** (supersedes the above where they differ): (1) Kitty textures are converted on the background
+    executor (`kitty/textures.rs` `KittyStore` in `Shared`, shared by the terminal's views; a placement draws nothing
+    until its texture arrives, then the pump redraws), bounded to 8192 px a side and 16 Mpx (64 MB of BGRA) and
+    sampled straight from the stored pixels into one buffer of that size — no `image::imageops::resize` and its f32
+    intermediate (the background image's downscale uses the same sampler); the store follows only newer frames and
+    drops results for images it no longer follows. (2) Unicode placeholders (virtual placements, `U=1`) are drawn, as
+    the GTK build's libghostty draws them: `agterm-term` keeps each U+10EEEE cell's ids from its raw style colors (a
+    palette index or 24-bit color, which the frame's resolved colors lose) and its row/column/high-byte diacritics
+    (`Row::placeholders`, `KittyPlaceholder`) and joins them into runs as Ghostty's `PlacementIterator` does
+    (`virtual_placements`, Kitty's diacritics table); `agterm-ghostty-vt`/`agterm-term` expose a placement's
+    `columns`/`rows`; the element ports `renderPlacement` and `placeholderTarget` (`kitty/placeholder.rs`) and draws
+    each run at `z = -1`, below the text. (3) Under a translucent `background-opacity` the background texture is
+    Ghostty's finished blend (the background color baked in, every texel at the background alpha) and the
+    background color is painted only around the image (snapped to device pixels), so the surface is exactly as
+    translucent as Ghostty's; over an opaque background GPUI's own blend already equals it. (4) A config change to a
+    file that cannot be looked at drops the association with a load still running for an earlier spec, so that load
+    cannot replace the image on screen. (5) The element records the layers it paints (`PaintLayer`,
+    `TerminalView::painted_layers`), and a test over a real pane checks each Kitty layer's stage.
+  - **Review round 2** (supersedes the above where they differ): (1) Ghostty's translucent blend with an image
+    opacity over 1: `k = max(1, a * opacity)`, color `(img * a * opacity + bg * max(0, 1 - a * opacity)) / k`,
+    alpha `background alpha * k` (Ghostty's 0.5 x 1.5 = 0.75), where round 1 pinned every texel to the background
+    alpha. (2) Placeholder cells shape no glyph (Ghostty shapes a space), so nothing is drawn over their image; their
+    backgrounds stay. (3) The background loads in two steps (`terminal/background/load.rs`): the file decoded once
+    into unbaked pixels (keyed by the file), then baked off the main thread per opacity and translucent background
+    color, so an OSC 11 color change re-bakes without reading the file, at most one bake in flight per terminal (a
+    newer one waits); paint pairs the background color with the texture's own bake, so no seam shows while a bake
+    runs. (4) A config change forgets the decode and bake in flight at once (not at the next paint), and a file that
+    cannot be looked at forgets them too; both tested through `Shared::background_image`. (5) The element paints from
+    one table, `PAINT_ORDER`, each stage dispatched and recorded by the same call, Kitty stages with the placements
+    `paint_image` actually drew. (6) `agterm-term` copies a new Kitty image's pixels on the pane's IO thread after the
+    batch that completed it (`kitty::Prefetch`, kept with the terminal); the paint's capture shares that copy instead of
+    copying under the VT lock on the main thread. Every new test was run against its fix reverted and fails there.
+  - ⚠️ Residuals: two parity gaps libghostty-vt's C API leaves (it reports a placement id without its namespace, and
+    gives relative placements rooted at a virtual placement no position, root or offsets): ids resolve by number, and
+    such relative placements are not drawn — `docs/backlog/kitty-virtual-placement-c-api-gaps.md`, a Task 34
+    precondition (Codex-reviewed: an APC pre-scan cannot recover the committed state; upstream API or a local patch;
+    transcript `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/fixer-task-16-kitty-c-api-gaps/transcript.md`).
+    Kitty animation frames are not drawn (not in the view).
+  - Tests: `terminal/kitty_tests.rs` (11: cell + offset and its clamp, a negative row, a viewer's scale, what is not
+    drawn, z/id order and the three layers, the source-rect bounds, BGRA conversion per format, the atlas limit, the
+    cache converting once and evicting; over a real pane in GPUI's test app, a chunked `a=T` image drawn from the
+    window's atlas and dropped from it on `a=d`, and on teardown), `terminal/background/tests.rs` (10: fit, position,
+    tiling, the tile bound, small-image repetition, the capped and baked opacity, decoding by content and refusing
+    other types, the watermark overlay lines into `TerminalConfig`; in GPUI's test app, one load shared by two
+    terminals, a re-rendered file reloaded on a config change, the image dropped from the atlas with the config, a
+    missing file), and the harness case above. Round 1 adds: Ghostty's placeholder tests (`agterm-term`
+    `placeholder.rs`: decode by palette index, 24-bit color and high byte, continuation, breaks, runs per row; a real
+    terminal's frame in `render.rs`), its `renderPlacement` tests (dog 4x2, 2x2 with blank cells, 1x1) and target
+    lookup, the texture budget and sampler, the store's async lifecycle, placeholder cells drawing two images (RGB
+    and palette ids) over a real pane, the layer stages, Ghostty's translucent blend and the bands around the image,
+    the stale-load case, and the vt wrapper's virtual placement `columns`/`rows`.
 
 ### Task 17: Conformance harness for the GPUI build
 
@@ -1251,6 +1338,13 @@ Port the placement rendering from qwertty-term (MIT, attribution).
       modal layers overlays attach to
 - [ ] deck of sessions with panes and splits, wired to `SessionHost`/`ProcessLauncher`/process table like GTK
 - [ ] lead cover/takeover (`pane_lead.rs`), inactive-pane and backdrop wash (`mute.rs`)
+- [ ] ➕ (Task 16) session and pane backgrounds on the terminals (port of GTK `background.rs` `sync_page`): each
+      pane's effective `BackgroundWatermark` through `watermark::overlay_text` into its terminal's config overlay
+      (`load_app_config(.., Some(overlay))` → `Terminal::set_config`; the terminal draws `background-image*` since Task
+      16 and re-reads a file re-rendered at the same path on every `set_config`), a color watermark's `background`, and
+      the text watermark rasterized to its PNG under `<state dir>/watermarks` in place of GTK's pango (GPUI exposes no
+      offscreen text rasterizer: `cosmic-text`, which GPUI's Linux text system already links, or GPUI's headless
+      `render_to_image`); stale text files removed as GTK does
 - [ ] tests (headless): split layout math, focus moves, lead takeover, wash on focus change
 - [ ] gates + conformance (both ratchets) — must pass before Task 19
 
@@ -1652,6 +1746,9 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
       memory measurements show the same need
 - [ ] ➕ (Task 4) the two Ghostty pins become one: the `GHOSTTY_` libghostty lines go, `LIBGHOSTTY_VT_REV` is the only
       Ghostty pin; `gen-ghostty-config-keys.sh` and the config-diagnostics residual list move to it
+- [ ] ➕ (Task 16 review) precondition: `docs/backlog/kitty-virtual-placement-c-api-gaps.md` closed — the Kitty
+      placement-id namespace and relative placements rooted at virtual ones drawn as libghostty draws them (upstream
+      API + pin bump, or a local libghostty-vt patch), or the user's explicit scope exception
 - [ ] full conformance on the switched build; ratchet unchanged or grown; gates
 
 ### Task 35: Verify acceptance criteria

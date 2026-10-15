@@ -374,6 +374,35 @@ fn runs_split_by_style_and_keep_wide_characters_on_their_columns() {
 }
 
 #[test]
+fn kitty_placeholder_cells_shape_no_text_but_keep_their_background() {
+    let dir = tempfile::tempdir().unwrap();
+    // a, then two placeholder cells (U+10EEEE U+0305 U+0305, image id 1 in the foreground) on a red background, b
+    let script = concat!(
+        r"printf 'a\033[38;2;0;0;1;41m\364\216\273\256\314\205\314\205\364\216\273\256\314\205\314\215",
+        r"\033[0mb'; exec sleep 5"
+    );
+    let pane = pane(script, dir.path());
+    let frame = wait_text(&pane, "b");
+    assert_eq!(frame.rows[0].placeholders().len(), 2);
+    let layout = layout_row(&frame.rows[0], &frame.colors, &Palette::default(), &RowMarks::default());
+    let texts: Vec<(&str, u16)> = layout
+        .runs
+        .iter()
+        .map(|run| (run.text.as_str(), run.clusters[0].col))
+        .collect();
+    // nothing drawn over the image: the placeholders split the runs and shape no glyph (Ghostty shapes a space)
+    assert_eq!(texts, [("a", 0), ("b", 3)]);
+    assert_eq!(
+        layout.backgrounds,
+        [Span {
+            start: 1,
+            len: 2,
+            value: frame.colors.palette[1]
+        }]
+    );
+}
+
+#[test]
 fn backgrounds_merge_and_decorations_span_their_cells() {
     let dir = tempfile::tempdir().unwrap();
     let pane = pane(

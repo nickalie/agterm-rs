@@ -207,6 +207,7 @@ dependencies = [
  "gpui-kit",
  "gpui-pre-linux",
  "gpui-pre-wgpu",
+ "image",
  "libc",
  "png 0.18.1",
  "raw-window-handle",
