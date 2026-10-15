@@ -235,7 +235,8 @@ impl Actions<'_> {
         Some(match action {
             Action::Search(needle) => pane.search(needle),
             Action::StartSearch => self.queue(Effect::Emit(TerminalEvent::StartSearch(String::new()))),
-            Action::SearchSelection => match pane.selection_text(SelectionText::Copy) {
+            // Ghostty's `selectionString`: untrimmed; an existing selection counts even when its text is empty
+            Action::SearchSelection => match pane.format(FormatRegion::Selection, TextFormat::Plain, false) {
                 Some(needle) => self.queue(Effect::Emit(TerminalEvent::StartSearch(needle))),
                 None => false,
             },
@@ -346,11 +347,9 @@ impl Actions<'_> {
             }
             Action::ClearScreen => pane.clear_screen(),
             Action::SelectAll => {
-                // Ghostty selects and copies to the selection clipboard (`copy-on-select`, on by default)
-                if pane.select_all().unwrap_or(false)
-                    && let Some(text) = pane.selection_text(SelectionText::Copy)
-                {
-                    self.queue(Effect::Copy(text, ClipboardLocation::Selection));
+                // Ghostty's `setSelectionAndCopy`: a selection made is copied per `copy-on-select`
+                if pane.select_all().unwrap_or(false) {
+                    self.shared.copy_on_select();
                 }
                 true
             }

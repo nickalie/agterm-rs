@@ -47,11 +47,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use agterm_core::ghostty_config::binds::Keybinds;
-use agterm_core::ghostty_config::{self, GhosttyConfig};
+use agterm_core::ghostty_config::{self, CopyOnSelect, GhosttyConfig};
 use agterm_core::keymap::SurfaceOwner;
 use agterm_term::{
-    ClipboardLocation, CursorDefaults, Frame, GridSize, Pane, PaneConfig, PaneError, PaneEvent, PasteSource,
-    ScrollbackLimits, ThemeColors,
+    ClipboardLocation, CursorDefaults, FormatRegion, Frame, GridSize, Pane, PaneConfig, PaneError, PaneEvent,
+    PasteSource, ScrollbackLimits, TextFormat, ThemeColors,
 };
 use gpui_kit::{
     App, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
@@ -88,6 +88,8 @@ pub struct TerminalConfig {
     pub copy_trim: bool,
     /// `selection-clear-on-copy`.
     pub clear_selection_on_copy: bool,
+    /// `copy-on-select`: where a selection made is copied ([`Shared::copy_on_select`]).
+    pub copy_on_select: CopyOnSelect,
 }
 
 /// The keybinds a config loaded, shared by every terminal of it (equal when they are the same load).
@@ -124,6 +126,7 @@ impl TerminalConfig {
             clipboard: config.clipboard.clone(),
             copy_trim: config.clipboard.trim_trailing_spaces,
             clear_selection_on_copy: config.selection.clear_on_copy,
+            copy_on_select: config.copy_on_select,
         }
     }
 }
@@ -399,6 +402,31 @@ impl Shared {
     /// Sets or clears the hovered link's URL (Task 14's hover tracking).
     pub fn set_hovered_url(&self, url: Option<String>) {
         *self.hovered_url.borrow_mut() = url;
+    }
+
+    /// A selection was made (`select_all`, and the mouse's selection in Task 14): Ghostty's `setSelectionAndCopy`
+    /// copies it per `copy-on-select`: not at all, to the selection clipboard, or to it and the system clipboard; the
+    /// text as `copy_to_clipboard` formats it (`clipboard-trim-trailing-spaces`; the plain part of Ghostty's mixed
+    /// copy, GPUI's clipboard taking text only). An empty selection copies nothing.
+    pub fn copy_on_select(&self) {
+        let config = self.config();
+        let locations: &[ClipboardLocation] = match config.copy_on_select {
+            CopyOnSelect::False => return,
+            CopyOnSelect::True => &[ClipboardLocation::Selection],
+            CopyOnSelect::Clipboard => &[ClipboardLocation::Standard, ClipboardLocation::Selection],
+        };
+        let Some(pane) = self.pane() else {
+            return;
+        };
+        let Some(text) = pane
+            .format(FormatRegion::Selection, TextFormat::Plain, config.copy_trim)
+            .filter(|text| !text.is_empty())
+        else {
+            return;
+        };
+        for location in locations {
+            self.queue(Effect::Copy(text.clone(), *location));
+        }
     }
 
     /// Wakes the pump: the queued work runs and the views redraw.

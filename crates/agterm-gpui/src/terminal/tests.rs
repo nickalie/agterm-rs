@@ -15,11 +15,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use agterm_core::ghostty_config::binds::Action;
-use agterm_core::ghostty_config::{GhosttyConfig, PaddingBalance, TerminalColor, WindowPadding};
+use agterm_core::ghostty_config::{CopyOnSelect, GhosttyConfig, PaddingBalance, TerminalColor, WindowPadding};
 use agterm_host::{Surface, TextScope};
 use agterm_term::{
-    Cell, CellFlags, Colors, CursorPosition, CursorStyle, Frame, GridSize, Pane, PaneCommand, PaneConfig, Rgb,
-    Underline,
+    Cell, CellFlags, Colors, CursorPosition, CursorStyle, Frame, GridPoint, GridSize, Pane, PaneCommand, PaneConfig,
+    Rgb, Underline,
 };
 use gpui_kit::{
     AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _, TestAppContext,
@@ -169,18 +169,38 @@ fn the_cell_comes_from_the_text_systems_face(cx: &mut TestAppContext) {
     assert_eq!((hidpi.cell_width, hidpi.cell_height), (19, 42));
 }
 
-/// `DejaVu Sans Mono`'s file, as fontconfig finds it.
-fn dejavu_sans_mono() -> Vec<u8> {
+/// The file of `family` (whose file name holds `file`), as fontconfig finds it.
+fn font_file(family: &str, file: &str) -> Vec<u8> {
     let output = std::process::Command::new("fc-match")
-        .args(["-f", "%{file}", "DejaVu Sans Mono:style=Book"])
+        .args(["-f", "%{file}", &format!("{family}:style=Book")])
         .output()
         .expect("fc-match runs (fontconfig is installed)");
     let path = String::from_utf8_lossy(&output.stdout).into_owned();
     assert!(
-        path.contains("DejaVuSansMono"),
-        "DejaVu Sans Mono is not installed (fonts-dejavu-core); fontconfig gave {path:?}"
+        path.contains(file),
+        "{family} is not installed (fonts-dejavu-core); fontconfig gave {path:?}"
     );
     std::fs::read(&path).expect("the font file reads")
+}
+
+/// `DejaVu Sans Mono`'s file, as fontconfig finds it.
+fn dejavu_sans_mono() -> Vec<u8> {
+    font_file("DejaVu Sans Mono", "DejaVuSansMono")
+}
+
+/// A test app measuring with GPUI's Linux text system, `DejaVu Sans Mono` and the proportional `DejaVu Sans` loaded.
+fn real_fonts() -> TestAppContext {
+    let text_system = Arc::new(gpui_wgpu::CosmicTextSystem::new_without_system_fonts(
+        "DejaVu Sans Mono",
+    ));
+    let cx = TestAppContext::build_with_text_system(TestDispatcher::new(0), None, text_system);
+    cx.text_system()
+        .add_fonts(vec![
+            dejavu_sans_mono().into(),
+            font_file("DejaVu Sans", "DejaVuSans.").into(),
+        ])
+        .expect("the fonts load");
+    cx
 }
 
 #[test]
@@ -783,21 +803,46 @@ fn a_cell_change_without_a_font_action_is_reported(cx: &mut TestAppContext) {
     // a display of another scale
     cx.simulate_scale_factor_change(2.0);
     settle(cx, |_| events.borrow().contains(&TerminalEvent::FontSize));
-    events.borrow_mut().clear();
-    // fonts whose cell differs: the test platform measures every face alike, so a new size stands in for it
-    let mut config = TerminalConfig::default();
-    config.font.size = 20.0;
-    config.font.family = vec!["Another Mono".into()];
     let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
-    shared.set_font_points(20.0);
+    assert!((shared.scale() - 2.0).abs() < f32::EPSILON);
+}
+
+/// A terminal that never starts its pane (no view lays it out), with `family` as its font.
+fn unstarted(cx: &mut TestAppContext, family: &str) -> (Entity<Terminal>, Events) {
+    let mut config = TerminalConfig::default();
+    config.font.family = vec![family.to_owned()];
+    let spawn: Spawn = Box::new(|_| Err(agterm_term::PaneError::Spawn("never started".into())));
+    let terminal = cx.new(|cx| Terminal::new(spec(), config, spawn, cx));
+    let events: Events = Rc::default();
+    let seen = Rc::clone(&events);
+    cx.update(|cx| {
+        cx.subscribe(&terminal, move |_, event: &TerminalEvent, _| {
+            seen.borrow_mut().push(event.clone());
+        })
+        .detach();
+    });
+    (terminal, events)
+}
+
+#[test]
+fn a_config_whose_fonts_change_the_cell_reports_it() {
+    let mut cx = real_fonts();
+    let (terminal, events) = unstarted(&mut cx, "DejaVu Sans Mono");
+    let shared = terminal.read_with(&cx, |terminal, _| Rc::clone(terminal.shared()));
+    let mono = shared.cell_size();
+    assert_eq!(mono, (10.0, 19.0));
+    // the proportional face's widest ASCII advance makes a wider cell
+    let mut config = TerminalConfig::default();
+    config.font.family = vec!["DejaVu Sans".into()];
+    terminal.update(&mut cx, |terminal, cx| terminal.set_config(config.clone(), cx));
     cx.run_until_parked();
-    events.borrow_mut().clear();
-    terminal.update(cx, |terminal, cx| terminal.set_config(config, cx));
+    assert!(shared.cell_size().0 > mono.0, "{:?}", shared.cell_size());
+    assert_eq!(*events.borrow(), [TerminalEvent::FontSize]);
+    // a reload that keeps the cell (another background) reports nothing
+    config.theme.background = Rgb::new(1, 2, 3);
+    terminal.update(&mut cx, |terminal, cx| terminal.set_config(config, cx));
     cx.run_until_parked();
-    assert!(
-        !events.borrow().contains(&TerminalEvent::FontSize),
-        "the same cell: nothing to report"
-    );
+    assert_eq!(events.borrow().len(), 1);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1019,6 +1064,58 @@ fn copy_actions_follow_their_formats(cx: &mut TestAppContext) {
     // which is the markup then
     let html = copied(&terminal, cx, "copy_to_clipboard:html");
     assert!(html.contains('<') && html.contains("red"), "{html}");
+}
+
+/// Takes `copy-on-select` and the trim, runs `select_all`, and reads both clipboards back.
+fn select_all_copies(
+    terminal: &Entity<Terminal>,
+    cx: &mut VisualTestContext,
+    copy_on_select: CopyOnSelect,
+    trim: bool,
+) -> (String, String) {
+    let config = TerminalConfig {
+        copy_on_select,
+        copy_trim: trim,
+        ..TerminalConfig::default()
+    };
+    terminal.update(cx, |terminal, cx| terminal.set_config(config, cx));
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("standard".into()));
+    cx.update(|_, cx| cx.write_to_primary(gpui_kit::ClipboardItem::new_string("primary".into())));
+    assert!(perform(terminal, cx, "select_all"));
+    cx.run_until_parked();
+    (clipboard_text(cx), primary_text(cx))
+}
+
+#[gpui_kit::test]
+fn select_all_copies_per_copy_on_select(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (terminal, _view, _events, cx) = realized(cx, "printf 'ready  \\r\\nnext'; exec cat", dir.path());
+    assert_eq!(
+        select_all_copies(&terminal, cx, CopyOnSelect::False, true),
+        ("standard".to_owned(), "primary".to_owned())
+    );
+    assert_eq!(
+        select_all_copies(&terminal, cx, CopyOnSelect::True, true),
+        ("standard".to_owned(), "ready\nnext".to_owned())
+    );
+    // `clipboard` copies to both; without the trim the trailing blanks stay
+    assert_eq!(
+        select_all_copies(&terminal, cx, CopyOnSelect::Clipboard, false),
+        ("ready  \nnext".to_owned(), "ready  \nnext".to_owned())
+    );
+}
+
+#[gpui_kit::test]
+fn search_selection_takes_the_selection_untrimmed(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (terminal, _view, events, cx) = realized(cx, "printf 'ready  x'; exec cat", dir.path());
+    let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
+    let pane = shared.pane().unwrap();
+    pane.select(GridPoint::viewport(0, 0), GridPoint::viewport(6, 0), false)
+        .unwrap();
+    assert!(perform(&terminal, cx, "search_selection"));
+    cx.run_until_parked();
+    assert!(events.borrow().contains(&TerminalEvent::StartSearch("ready  ".into())));
 }
 
 #[gpui_kit::test]
