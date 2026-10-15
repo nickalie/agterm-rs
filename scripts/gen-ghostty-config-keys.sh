@@ -61,13 +61,15 @@ PORTED = {
     "RepeatablePath": "RepeatablePath",
     # ghostty_config/binds.rs: the trigger, flag, table and action grammar of Binding.zig and Keybinds.parseCLI
     "Keybinds": "Keybind",
+    # validate.rs's decode_codepoints: SelectionWordChars.parseCLI's codepointIterator
+    "SelectionWordChars": "SelectionWordChars",
 }
 # Types with a parseCLI validate.rs does not port (by their declaration's name): their values are accepted as is, the
 # residual differences ghostty_config/mod.rs lists. Any other unported parseCLI type stops the script.
 OPAQUE = {
     "Modifier", "Command", "RepeatableReadableIO", "RepeatableStringMap", "RemapSet", "RepeatableFontVariation",
     "RepeatableCodepointMap", "RepeatableClipboardCodepointMap", "FontStyle", "RepeatableLink", "RepeatableCommand",
-    "QuickTerminalSize", "BackgroundBlur", "SelectionWordChars", "MouseScrollMultiplier", "WorkingDirectory",
+    "QuickTerminalSize", "BackgroundBlur", "MouseScrollMultiplier", "WorkingDirectory",
     "ColorList",
 }
 PATHS = {"Path": "src/config/path.zig", "RepeatablePath": "src/config/path.zig"}

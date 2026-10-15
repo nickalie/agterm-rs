@@ -21,8 +21,9 @@ use agterm_core::ghostty_config::PaddingColor;
 use agterm_term::{CellWidth, Colors, Cursor, CursorStyle, Frame, Row, Underline};
 use gpui_kit::{
     App, BorderStyle, Bounds, ContentMask, Context, DevicePixels, Element, ElementId, Entity, FontId, GlobalElementId,
-    GlyphId, Hsla, InspectorElementId, IntoElement, LayoutId, PathBuilder, Pixels, Point, RenderAlphaMaskParams, Style,
-    TextRun as GpuiRun, Window, WindowTextSystem, fill, outline, point, px, relative, size,
+    GlyphId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, PathBuilder, Pixels, Point,
+    RenderAlphaMaskParams, Style, TextRun as GpuiRun, Window, WindowTextSystem, fill, outline, point, px, relative,
+    size,
 };
 
 use super::colors::{self, Palette, hsla};
@@ -121,7 +122,8 @@ impl Plan {
 
 impl Element for TerminalElement {
     type RequestLayoutState = ();
-    type PrepaintState = Option<Plan>;
+    /// The plan, and the owner's hitbox for the pointer (plan > Task 14).
+    type PrepaintState = (Option<Plan>, Option<Hitbox>);
 
     fn id(&self) -> Option<ElementId> {
         None
@@ -154,8 +156,12 @@ impl Element for TerminalElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let focused = self.focused;
-        self.view
-            .update(cx, |view, cx| view.prepaint(bounds, focused, window, cx))
+        let plan = self
+            .view
+            .update(cx, |view, cx| view.prepaint(bounds, focused, window, cx));
+        let owner = self.view.read(cx).role() == ViewRole::Owner;
+        let hitbox = owner.then(|| window.insert_hitbox(bounds, HitboxBehavior::Normal));
+        (plan, hitbox)
     }
 
     fn paint(
@@ -164,10 +170,16 @@ impl Element for TerminalElement {
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
-        plan: &mut Self::PrepaintState,
+        (plan, hitbox): &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
+        if let Some(hitbox) = hitbox.as_ref() {
+            let view = self.view.clone();
+            self.view.update(cx, |terminal, cx| {
+                terminal.paint_input(&view, bounds, hitbox, window, cx);
+            });
+        }
         let Some(plan) = plan.as_ref() else {
             return;
         };
@@ -253,8 +265,9 @@ impl TerminalView {
                 search: std::mem::take(&mut search[index]),
                 link: self
                     .link
-                    .filter(|(link_row, _, _)| usize::from(*link_row) == index)
-                    .map(|(_, start, end)| (start, end)),
+                    .iter()
+                    .find(|(link_row, _, _)| usize::from(*link_row) == index)
+                    .map(|(_, start, end)| (*start, *end)),
             })
             .collect()
     }

@@ -107,6 +107,32 @@ pub enum ClipboardAccess {
     Ask,
 }
 
+/// `right-click-action`: what a right click does when no program has the mouse.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, EnumIter, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+pub enum RightClickAction {
+    Ignore,
+    /// Paste the clipboard (the selection dropped first).
+    Paste,
+    /// Copy the selection to the clipboard and drop it.
+    Copy,
+    /// Copy when there is a selection, else paste.
+    CopyOrPaste,
+    /// Select the word or link under the pointer for a context menu (ghostty's default).
+    #[default]
+    ContextMenu,
+}
+
+/// `middle-click-action`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, EnumIter, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+pub enum MiddleClickAction {
+    /// Paste the primary selection (ghostty's default).
+    #[default]
+    PrimaryPaste,
+    Ignore,
+}
+
 /// `mouse-shift-capture`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, EnumIter, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
@@ -242,8 +268,9 @@ pub struct Selection {
     pub background: Option<TerminalColor>,
     pub clear_on_typing: bool,
     pub clear_on_copy: bool,
-    /// `selection-word-chars` as written (Zig string escapes undecoded); unset keeps ghostty's boundaries.
-    pub word_chars: Option<String>,
+    /// `selection-word-chars`: the word boundaries, decoded (Zig string escapes); `None` is ghostty's default
+    /// (`` \t '"│`|:;,()[]{}<>$``). U+0000 is always a boundary too and is not listed.
+    pub word_chars: Option<Vec<char>>,
 }
 
 impl Default for Selection {
@@ -346,7 +373,8 @@ impl Default for Clipboard {
     }
 }
 
-/// `mouse-*`.
+/// `mouse-*` and the other keys of the pointer: `right-click-action`, `middle-click-action`,
+/// `click-repeat-interval`, `focus-follows-mouse`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mouse {
     pub hide_while_typing: bool,
@@ -354,6 +382,12 @@ pub struct Mouse {
     pub reporting: bool,
     /// `mouse-scroll-multiplier` as written; unset is ghostty's `precision:1,discrete:3`.
     pub scroll_multiplier: Option<String>,
+    pub right_click_action: RightClickAction,
+    pub middle_click_action: MiddleClickAction,
+    /// `click-repeat-interval` in milliseconds; 0 is the platform's default (500 ms off macOS).
+    pub click_repeat_interval: u32,
+    /// `focus-follows-mouse`: the pointer moving over a split pane focuses it.
+    pub focus_follows_mouse: bool,
 }
 
 impl Default for Mouse {
@@ -363,7 +397,24 @@ impl Default for Mouse {
             shift_capture: MouseShiftCapture::False,
             reporting: true,
             scroll_multiplier: None,
+            right_click_action: RightClickAction::ContextMenu,
+            middle_click_action: MiddleClickAction::PrimaryPaste,
+            click_repeat_interval: 0,
+            focus_follows_mouse: false,
         }
+    }
+}
+
+/// `link-*`: what counts as a link besides OSC 8.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Link {
+    /// `link-url`: URLs in the text are links.
+    pub url: bool,
+}
+
+impl Default for Link {
+    fn default() -> Self {
+        Self { url: true }
     }
 }
 
@@ -383,6 +434,7 @@ pub struct GhosttyConfig {
     pub clipboard: Clipboard,
     pub copy_on_select: CopyOnSelect,
     pub mouse: Mouse,
+    pub link: Link,
     pub shell_integration_features: ShellIntegrationFeatures,
     /// The child's `TERM`.
     pub term: String,
@@ -410,6 +462,7 @@ impl Default for GhosttyConfig {
             clipboard: Clipboard::default(),
             copy_on_select: CopyOnSelect::default(),
             mouse: Mouse::default(),
+            link: Link::default(),
             shell_integration_features: ShellIntegrationFeatures::DEFAULT,
             term: DEFAULT_TERM.to_owned(),
             keybind: Keybinds::defaults(),
@@ -526,6 +579,9 @@ impl GhosttyConfig {
         if let Some(rest) = key.strip_prefix("mouse-") {
             return self.mouse.apply(rest, value);
         }
+        if self.mouse.apply_pointer_key(key, value) {
+            return true;
+        }
         self.apply_other(key, value)
     }
 
@@ -550,6 +606,7 @@ impl GhosttyConfig {
             "term" => value.unwrap_or(DEFAULT_TERM).clone_into(&mut self.term),
             "copy-on-select" => self.copy_on_select = enum_or(value, CopyOnSelect::default()),
             "title" => self.title = value.map(str::to_owned),
+            "link-url" => self.link.url = bool_or(value, true),
             _ => return false,
         }
         true
@@ -600,7 +657,8 @@ impl Selection {
             "background" => self.background = value.and_then(|value| parse_terminal_color(value).ok()),
             "clear-on-typing" => self.clear_on_typing = bool_or(value, true),
             "clear-on-copy" => self.clear_on_copy = bool_or(value, false),
-            "word-chars" => self.word_chars = value.map(str::to_owned),
+            // an accepted value decodes (`Kind::SelectionWordChars`)
+            "word-chars" => self.word_chars = value.and_then(validate::decode_codepoints),
             _ => return false,
         }
         true
@@ -666,6 +724,24 @@ impl Mouse {
             "shift-capture" => self.shift_capture = enum_or(value, MouseShiftCapture::False),
             "reporting" => self.reporting = bool_or(value, true),
             "scroll-multiplier" => self.scroll_multiplier = value.map(str::to_owned),
+            _ => return false,
+        }
+        true
+    }
+
+    /// The pointer's keys outside `mouse-*`.
+    fn apply_pointer_key(&mut self, key: &str, value: Option<&str>) -> bool {
+        match key {
+            "right-click-action" => self.right_click_action = enum_or(value, RightClickAction::ContextMenu),
+            "middle-click-action" => self.middle_click_action = enum_or(value, MiddleClickAction::PrimaryPaste),
+            "click-repeat-interval" => {
+                // Zig's base-0 integer, as `Kind::Int` checks it: `0x`/`0o`/`0b` prefixes and `_` separators
+                self.click_repeat_interval = value
+                    .and_then(|value| validate::parse_int(value, 0, false, 32).ok())
+                    .and_then(|number| u32::try_from(number).ok())
+                    .unwrap_or(0);
+            }
+            "focus-follows-mouse" => self.focus_follows_mouse = bool_or(value, false),
             _ => return false,
         }
         true

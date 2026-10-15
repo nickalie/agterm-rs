@@ -16,15 +16,29 @@
 //!   rendering) only draws, at its own font size, and never spawns, resizes or takes input.
 //!
 //! Teardown drops the pane (its child gets `SIGHUP`) and closes the pump, whatever views still hold the state.
+//!
+//! Input (plan > Task 14) is the owner view's: keys reach it from the app's keystroke interceptor
+//! (`crate::keymap_dispatch`, after the window's keymap) and go through ghostty's binds to the encoder
+//! (`keyboard.rs`, `input.rs`), the input method composes at the cursor, the mouse selects, reports or opens links
+//! (`mouse.rs`, `links.rs`), and the pump answers a program's clipboard access under `clipboard-read`/`-write` and
+//! the prompt (`clipboard.rs`).
 
+mod clipboard;
 mod colors;
 mod element;
 mod font;
+pub mod input;
+mod keyboard;
+mod keycodes;
+pub mod links;
 mod metrics;
+mod mouse;
 mod row_cache;
 pub mod sprite;
 mod surface;
 
+#[cfg(test)]
+mod input_tests;
 #[cfg(test)]
 mod tests;
 
@@ -33,20 +47,26 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use agterm_core::ghostty_config::binds::Keybinds;
 use agterm_core::ghostty_config::{self, CopyOnSelect, GhosttyConfig};
+use agterm_core::keymap::SurfaceOwner;
 use agterm_term::{
-    ClipboardLocation, CursorDefaults, FormatRegion, Frame, GridSize, Pane, PaneConfig, PaneError, PaneEvent, Paste,
+    ClipboardLocation, CursorDefaults, FormatRegion, Frame, GridSize, Pane, PaneConfig, PaneError, PaneEvent,
     PasteSource, ScrollbackLimits, TextFormat, ThemeColors,
 };
 use gpui_kit::{
     App, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Styled as _, Subscription, Task, TextSystem, Window, div, px,
+    ModifiersChangedEvent, ParentElement as _, Render, Styled as _, Subscription, Task, TextSystem, Window, div, px,
 };
 
+pub use clipboard::{ClipboardPrompts, prompt_text};
 pub use colors::{CellPaint, Mark, Palette, Pick};
 pub use element::{PlacedGlyph, ShapedRow, TerminalElement};
 pub use font::{DEFAULT_FAMILIES, DEFAULT_FAMILY, Fonts, SYMBOLS_FAMILY, register_embedded as register_embedded_fonts};
+pub use keyboard::{key_down, typing_surface};
+pub use links::{Link, LinkKind, follow_link};
 pub use metrics::{CellMetrics, DEFAULT_DPI, FaceMetrics, Geometry, Padding, points_to_px};
+pub use mouse::{cursor_style, scroll_multiplier};
 pub use row_cache::{Cluster, Decoration, Line, RowCache, RowLayout, RowMarks, Span, SpriteCell, TextRun, TextStyle};
 pub use surface::TerminalSurface;
 
@@ -59,12 +79,39 @@ pub struct TerminalConfig {
     pub theme: ThemeColors,
     pub cursor: CursorDefaults,
     pub scrollback: ScrollbackLimits,
+    /// ghostty's `keybind`s.
+    pub keybinds: SharedKeybinds,
+    /// `selection-clear-on-typing`.
+    pub selection_clear_on_typing: bool,
+    pub mouse: ghostty_config::Mouse,
+    pub link: ghostty_config::Link,
+    pub clipboard: ghostty_config::Clipboard,
     /// `clipboard-trim-trailing-spaces`: copies drop trailing whitespace.
     pub copy_trim: bool,
     /// `selection-clear-on-copy`.
     pub clear_selection_on_copy: bool,
     /// `copy-on-select`: where a selection made is copied ([`Shared::copy_on_select`]).
     pub copy_on_select: CopyOnSelect,
+    /// `selection-word-chars`: the word boundaries of word selections; `None` is Ghostty's default set.
+    pub word_chars: Option<Vec<char>>,
+}
+
+/// The keybinds a config loaded, shared by every terminal of it (equal when they are the same load).
+#[derive(Debug, Clone)]
+pub struct SharedKeybinds(Arc<Keybinds>);
+
+impl std::ops::Deref for SharedKeybinds {
+    type Target = Keybinds;
+
+    fn deref(&self) -> &Keybinds {
+        &self.0
+    }
+}
+
+impl PartialEq for SharedKeybinds {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 impl TerminalConfig {
@@ -77,9 +124,15 @@ impl TerminalConfig {
             theme: ThemeColors::from_config(&config.colors, &config.cursor),
             cursor: CursorDefaults::from_config(&config.cursor),
             scrollback: config.scrollback.into(),
+            keybinds: SharedKeybinds(Arc::new(config.keybind.clone())),
+            selection_clear_on_typing: config.selection.clear_on_typing,
+            mouse: config.mouse.clone(),
+            link: config.link,
+            clipboard: config.clipboard.clone(),
             copy_trim: config.clipboard.trim_trailing_spaces,
             clear_selection_on_copy: config.selection.clear_on_copy,
             copy_on_select: config.copy_on_select,
+            word_chars: config.selection.word_chars.clone(),
         }
     }
 }
@@ -122,12 +175,15 @@ pub enum TerminalEvent {
     StartSearch(String),
     /// An `end_search` binding ended the search.
     EndSearch,
-    /// A paste was refused as unsafe (it could run a command): the frontend confirms and pastes it again.
-    UnsafePaste(String),
-    /// `write_*_file:open`: the frontend opens the file (its open-url path), as libghostty's `OPEN_URL` asked.
+    /// A link was clicked, or `write_*_file:open` asked for its file: the frontend opens it through the link
+    /// policy ([`follow_link`] is the default route), as libghostty's `OPEN_URL` asked.
     OpenUrl(String),
     /// `toggle_readonly` turned read-only mode on or off: the frontend shows it.
     Readonly(bool),
+    /// `focus-follows-mouse`: the pointer moved over this terminal's owner view, which does not hold the keyboard,
+    /// in the active window, with no button held. The frontend focuses the pane (Ghostty's `moveFocus`; the deck owns
+    /// pane focus); emitted once until the view's focus changes or the pointer leaves it.
+    FocusFollowsMouse,
 }
 
 /// Work that needs the app, queued by the Surface for the pump.
@@ -135,6 +191,11 @@ pub enum TerminalEvent {
 enum Effect {
     Paste(ClipboardLocation),
     Copy(String, ClipboardLocation),
+    /// A copy with an HTML representation (`copy_to_clipboard:html` alone, `:mixed` with its plain text).
+    CopyHtml {
+        text: Option<String>,
+        html: String,
+    },
     Emit(TerminalEvent),
 }
 
@@ -184,8 +245,10 @@ pub struct Shared {
     wake: async_channel::Sender<()>,
     /// The first frame was drawn (logged once).
     drew: Cell<bool>,
-    /// The owner view's input-method composition, shown at the cursor (Task 14 drives it).
+    /// The owner view's input-method composition, shown at the cursor.
     preedit: RefCell<Option<String>>,
+    /// Whose terminal this is, for a custom command's typing surface (the frontend sets it).
+    owner: RefCell<Option<SurfaceOwner>>,
     /// Ghostty's read-only mode (`toggle_readonly`): the user's input does not reach the program.
     readonly: Cell<bool>,
     /// The URL of the link under the pointer (`copy_url_to_clipboard`; Task 14's hover sets it).
@@ -304,6 +367,17 @@ impl Shared {
             f64::from(metrics.cell_width) / scale,
             f64::from(metrics.cell_height) / scale,
         )
+    }
+
+    /// Whose terminal this is.
+    #[must_use]
+    pub fn owner(&self) -> Option<SurfaceOwner> {
+        self.owner.borrow().clone()
+    }
+
+    /// Sets whose terminal this is (a session pane's, an overlay's).
+    pub fn set_owner(&self, owner: Option<SurfaceOwner>) {
+        *self.owner.borrow_mut() = owner;
     }
 
     /// The composition shown at the cursor.
@@ -443,6 +517,9 @@ impl Shared {
         match spawn(pane_config) {
             Ok(pane) => {
                 pane.set_padding(engine_padding(laid.padding));
+                // the pane's reporting setting starts from the config; `toggle_mouse_reporting` flips it from there
+                pane.set_mouse_reporting(config.mouse.reporting);
+                pane.set_word_boundaries(config.word_chars.as_deref());
                 *self.pane.borrow_mut() = Some(Rc::new(pane));
                 self.status.set(Status::Live);
                 tracing::debug!(target: "agterm::surface", key = self.key, scale = self.scale.get(), "terminal surface created");
@@ -525,6 +602,7 @@ impl Terminal {
             wake,
             drew: Cell::new(false),
             preedit: RefCell::new(None),
+            owner: RefCell::new(None),
             readonly: Cell::new(false),
             hovered_url: RefCell::new(None),
         });
@@ -554,6 +632,8 @@ impl Terminal {
     pub fn set_config(&mut self, config: TerminalConfig, cx: &mut Context<Self>) {
         let shared = &self.shared;
         if let Some(pane) = shared.pane() {
+            pane.set_mouse_reporting(config.mouse.reporting);
+            pane.set_word_boundaries(config.word_chars.as_deref());
             let applied = pane
                 .set_colors(&config.theme)
                 .and_then(|()| pane.set_cursor_defaults(config.cursor))
@@ -581,7 +661,9 @@ impl Terminal {
         let shared = Rc::clone(&self.shared);
         if let Some(pane) = shared.pane() {
             for event in pane.take_events() {
-                cx.emit(TerminalEvent::Pane(event));
+                if !clipboard::handle(&shared, &event, cx) {
+                    cx.emit(TerminalEvent::Pane(event));
+                }
             }
         }
         let effects = std::mem::take(&mut *shared.effects.borrow_mut());
@@ -595,6 +677,7 @@ impl Terminal {
 fn run_effect(shared: &Shared, effect: Effect, cx: &mut Context<Terminal>) {
     match effect {
         Effect::Emit(event) => cx.emit(event),
+        Effect::CopyHtml { text, html } => copy_html(text, html, cx),
         Effect::Copy(text, location) => {
             let item = ClipboardItem::new_string(text);
             match location {
@@ -614,12 +697,29 @@ fn run_effect(shared: &Shared, effect: Effect, cx: &mut Context<Terminal>) {
             if shared.is_readonly() {
                 return;
             }
-            match pane.paste(&text, PasteSource::Clipboard, location, false) {
-                Ok(Paste::Unsafe) => cx.emit(TerminalEvent::UnsafePaste(text)),
-                Ok(Paste::Written | Paste::Empty) => {}
-                Err(err) => tracing::warn!(target: "agterm::surface", key = shared.key, %err, "paste failed"),
+            // pasted as confirmed, as upstream and the GTK build complete libghostty's unsafe-paste confirmation
+            if let Err(err) = pane.paste(&text, PasteSource::Clipboard, location, true) {
+                tracing::warn!(target: "agterm::surface", key = shared.key, %err, "paste failed");
             }
         }
+    }
+}
+
+/// Writes the clipboard with `html` offered as `text/html`, beside `text` or alone (Ghostty's `copy_to_clipboard:mixed`
+/// and `:html`): GPUI's Linux clipboard offers it through our `gpui-pre-linux` patch (`with_clipboard_html`); a
+/// platform without one gets the text (or the markup) as plain text.
+fn copy_html(text: Option<String>, html: String, cx: &mut App) {
+    let with_text = text.is_some();
+    let item = ClipboardItem::new_string(text.unwrap_or_else(|| html.clone()));
+    #[cfg(target_os = "linux")]
+    {
+        let offer = gpui_linux::ClipboardHtml { html, with_text };
+        gpui_linux::with_clipboard_html(offer, || cx.write_to_clipboard(item));
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (html, with_text);
+        cx.write_to_clipboard(item);
     }
 }
 
@@ -644,8 +744,12 @@ pub struct TerminalView {
     cache: RowCache<ShapedRow, (u32, u32, u64)>,
     /// A viewer's own font size; `None` draws at the terminal's.
     font_override: Option<f32>,
-    /// The hovered link: viewport row and inclusive columns (Task 14 sets it).
-    link: Option<(u16, u16, u16)>,
+    /// The hovered link's cells: viewport row and inclusive columns, per row.
+    link: Vec<(u16, u16, u16)>,
+    /// The keyboard's state (owner only).
+    keys: keyboard::KeyState,
+    /// The pointer's state (owner only).
+    pointer: mouse::PointerState,
     /// The cursor's blink phase; on while not blinking.
     blink_on: bool,
     blink: Option<Task<()>>,
@@ -657,14 +761,21 @@ pub struct TerminalView {
 impl TerminalView {
     pub fn new(terminal: &Entity<Terminal>, role: ViewRole, cx: &mut Context<Self>) -> Self {
         let shared = Rc::clone(terminal.read(cx).shared());
+        let focus = cx.focus_handle();
+        if role == ViewRole::Owner {
+            crate::keymap_dispatch::init(cx);
+            keyboard::register(&focus, cx.weak_entity(), &shared);
+        }
         Self {
             terminal: terminal.clone(),
             shared,
             role,
-            focus: cx.focus_handle(),
+            focus,
             cache: RowCache::default(),
             font_override: None,
-            link: None,
+            link: Vec::new(),
+            keys: keyboard::KeyState::default(),
+            pointer: mouse::PointerState::default(),
             blink_on: true,
             blink: None,
             painted: None,
@@ -693,12 +804,18 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// Underlines a hovered link: viewport `row`, columns `start..=end`; `None` clears it.
-    pub fn set_hovered_link(&mut self, link: Option<(u16, u16, u16)>, cx: &mut Context<Self>) {
-        if self.link != link {
-            self.link = link;
+    /// Underlines a hovered link that may run over several rows: (viewport row, first column, last column) each.
+    pub fn set_hovered_links(&mut self, cells: Vec<(u16, u16, u16)>, cx: &mut Context<Self>) {
+        if self.link != cells {
+            self.link = cells;
             cx.notify();
         }
+    }
+
+    /// The live link under the pointer.
+    #[must_use]
+    pub fn hovered_link(&self) -> Option<&Link> {
+        self.pointer.link.as_ref()
     }
 
     /// The frame this view drew last.
@@ -790,7 +907,15 @@ impl Render for TerminalView {
         let element = TerminalElement::new(cx.entity(), focused);
         let root = div().size_full().min_w(px(0.)).min_h(px(0.));
         match self.role {
-            ViewRole::Owner => root.track_focus(&self.focus).child(element),
+            ViewRole::Owner => {
+                self.watch_input(window, cx);
+                root.track_focus(&self.focus)
+                    .on_key_up(cx.listener(Self::key_up))
+                    .on_modifiers_changed(cx.listener(|view, event: &ModifiersChangedEvent, _, cx| {
+                        view.modifiers_changed(event.modifiers, cx);
+                    }))
+                    .child(element)
+            }
             ViewRole::Viewer => root.child(element),
         }
     }

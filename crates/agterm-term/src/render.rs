@@ -97,9 +97,16 @@ pub struct Row {
     cells: Vec<Cell>,
     text: String,
     selection: Option<(u16, u16)>,
+    wrapped: bool,
 }
 
 impl Row {
+    /// Whether the row soft-wraps: its text continues on the next row.
+    #[must_use]
+    pub fn wrapped(&self) -> bool {
+        self.wrapped
+    }
+
     /// The selected columns of the row, first and last inclusive; `None` when the selection misses it.
     #[must_use]
     pub fn selection(&self) -> Option<(u16, u16)> {
@@ -596,6 +603,7 @@ fn cursor(cursor: vt::RenderCursor) -> Cursor {
 
 fn build_row(row: &mut vt::RowRef<'_>, id: [u64; 2], seq: u64, palette: &[Rgb; 256]) -> Result<Row, vt::Error> {
     let selection = row.selection();
+    let wrapped = row.wrapped();
     let mut text = Vec::new();
     let mut cells = Vec::new();
     let mut walk = row.cells()?;
@@ -624,6 +632,7 @@ fn build_row(row: &mut vt::RowRef<'_>, id: [u64; 2], seq: u64, palette: &[Rgb; 2
         // the library writes UTF-8; a lossy copy can only differ on bytes it never produces
         text: String::from_utf8(text).unwrap_or_else(|err| String::from_utf8_lossy(err.as_bytes()).into_owned()),
         selection,
+        wrapped,
     })
 }
 

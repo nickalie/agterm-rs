@@ -1124,8 +1124,10 @@ fn copy_actions_follow_their_formats(cx: &mut TestAppContext) {
         copied(&terminal, cx, "copy_to_clipboard:mixed").starts_with("ready red"),
         "its plain text"
     );
-    // HTML has no text/html offer to go to: performed, the clipboard left alone
-    assert!(copied(&terminal, cx, "copy_to_clipboard:html").starts_with("ready red"));
+    // HTML is offered as text/html alone (the Linux platform's patch); GPUI's test platform keeps the item's text,
+    // which is the markup then
+    let html = copied(&terminal, cx, "copy_to_clipboard:html");
+    assert!(html.contains('<') && html.contains("red"), "{html}");
 }
 
 /// Takes `copy-on-select` and the trim, runs `select_all`, and reads both clipboards back.
@@ -1351,12 +1353,11 @@ fn paste_and_copy_go_through_the_clipboard(cx: &mut TestAppContext) {
         .and_then(|item| item.text())
         .unwrap_or_default();
     assert!(copied.contains("ready") && copied.contains("pasted"), "{copied:?}");
-    // a paste that could run a command is refused and reported for confirmation
+    // a paste that could run a command goes through as confirmed, as upstream and the GTK build complete it
     events.borrow_mut().clear();
-    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("rm -rf x\n".into()));
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("echo unsafe-pasted\n".into()));
     assert!(surface.binding_action("paste_from_clipboard"));
-    cx.run_until_parked();
-    assert_eq!(*events.borrow(), [TerminalEvent::UnsafePaste("rm -rf x\n".into())]);
+    wait_painted(&view, cx, "unsafe-pasted");
 }
 
 #[gpui_kit::test]

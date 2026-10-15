@@ -9,6 +9,8 @@
 //! - Selection and read-back: [`Pane::select`], [`Pane::select_word`],
 //!   [`Pane::select_line`], [`Pane::select_all`], [`Pane::selection_text`], [`Pane::read_text`],
 //!   [`Pane::cursor_column`]; a frame's rows carry their selected columns.
+//! - The pointer: [`Pane::gesture`] runs Ghostty's selection gesture (click counts, drags, autoscroll),
+//!   [`Pane::cell_at`] and [`Pane::hyperlink`] say what lies under it.
 //! - Search: [`Pane::search`], [`Pane::navigate_search`], [`Pane::search_state`], with
 //!   [`PaneEvent::SearchTotal`] and [`PaneEvent::SearchSelected`] as libghostty reported them.
 //! - Kitty graphics: every [`Frame`] carries a [`KittyView`] of its images and placements.
@@ -29,6 +31,7 @@ mod actions;
 mod bench;
 mod effects;
 mod exit;
+mod gesture;
 mod input;
 mod kitty;
 mod launch;
@@ -48,6 +51,7 @@ pub use effects::{
     ProgramNeed, ProgramState, ProgramStatus, Progress, TerminalColors,
 };
 pub use exit::{ABNORMAL_EXIT_RUNTIME, ExitPolicy};
+pub use gesture::{Autoscroll, CLICK_REPEAT_INTERVAL, Gesture, GestureEvent};
 pub use input::{
     KeyInput, ModSides, MouseAction, MouseButton, MouseInput, Padding, Paste, PasteSource, Scroll, Typing,
 };

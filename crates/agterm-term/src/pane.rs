@@ -144,6 +144,10 @@ pub(crate) struct Vt {
     pub(crate) cleared_selection: bool,
     /// The colors last reported with [`PaneEvent::Colors`].
     colors: vt::TerminalColors,
+    /// The pointer's selection gesture, created at the first press ([`crate::gesture`]).
+    pub(crate) gesture: Option<vt::SelectionGesture>,
+    /// The word boundaries of word selections (`selection-word-chars`); `None` is Ghostty's default set.
+    pub(crate) word_boundaries: Option<Vec<u32>>,
     /// A `clear_screen` waits for the program's output to reach a ground point ([`crate::actions`]).
     pub(crate) pending_clear: bool,
 }
@@ -490,6 +494,11 @@ impl Drop for Pane {
             let _ = io.join();
         }
         crate::search::shut_down(&self.shared);
+        let mut vt = lock(&self.shared.vt);
+        let Vt { terminal, gesture, .. } = &mut *vt;
+        if let Some(gesture) = gesture.take() {
+            gesture.close(terminal);
+        }
     }
 }
 
@@ -530,6 +539,8 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
             size,
             cleared_selection: false,
             colors,
+            gesture: None,
+            word_boundaries: None,
             pending_clear: false,
         }),
         capture,

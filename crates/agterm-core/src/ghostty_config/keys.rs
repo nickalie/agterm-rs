@@ -910,7 +910,7 @@ pub static KEYS: &[KeySpec] = &[
     KeySpec {
         name: "selection-word-chars",
         zig: "SelectionWordChars",
-        kind: Kind::Opaque { needs_value: true },
+        kind: Kind::SelectionWordChars,
     },
     KeySpec {
         name: "shell-integration",
