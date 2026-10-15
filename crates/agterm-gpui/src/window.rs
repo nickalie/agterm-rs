@@ -3,8 +3,9 @@
 //! `window.list`, its activation as frontmost (upstream's `WindowAccessor.reportFrontmost`) and its close (upstream's
 //! window `willClose`), and applying the window commands' requests. [`crate::windows`] owns the set of them.
 //!
-//! The window's content is a column: the title bar's place (Task 20), then the sidebar's place (Task 19) beside the
-//! deck. Over it sit the window's modal layers ([`Layer`]), in the GTK build's order: the scrollback search bar, the
+//! The window's content is a column: the title bar (`titlebar.rs`), then the sidebar's place (Task 19) beside the
+//! deck, all on the chrome's background (`chrome.rs`); a window the client decorates gets resize handles along its
+//! free edges. Over it sit the window's modal layers ([`Layer`]), in the GTK build's order: the scrollback search bar, the
 //! GUI ask, the native picker, the command palette and the Ctrl-Tab switcher; each later task attaches its view to its
 //! layer ([`WindowView::set_layer`]), drawn over the whole window while attached.
 
@@ -22,6 +23,7 @@ use uuid::Uuid;
 
 use crate::deck::Deck;
 use crate::state::{AppState, Poster, post};
+use crate::titlebar::{Cover, Titlebar};
 
 /// The window title: the active session's display name, then the window's custom name when it has one (upstream's
 /// `WindowTitleSync.title`).
@@ -121,6 +123,7 @@ fn display_size(window: &Window, cx: &App) -> Option<WindowSize> {
 pub struct WindowView {
     id: Uuid,
     deck: Entity<Deck>,
+    titlebar: Entity<Titlebar>,
     layers: Vec<(Layer, AnyView)>,
     title: String,
     /// Set once the model closed the window, so its close request goes through.
@@ -154,9 +157,11 @@ impl WindowView {
             }
         });
         let bounds = cx.observe_window_bounds(window, |_, _, cx| cx.notify());
+        let titlebar = cx.new(|_| Titlebar::new(id, poster.clone()));
         Self {
             id,
             deck,
+            titlebar,
             layers: Vec::new(),
             title: UNTITLED.to_owned(),
             closing,
@@ -175,6 +180,11 @@ impl WindowView {
     #[must_use]
     pub fn deck(&self) -> &Entity<Deck> {
         &self.deck
+    }
+
+    #[must_use]
+    pub fn titlebar(&self) -> &Entity<Titlebar> {
+        &self.titlebar
     }
 
     /// The title set last.
@@ -240,11 +250,22 @@ impl WindowView {
                 state.pane_focused(session, &token);
             });
         }
-        let title = if core.dashboard(id).is_some() {
+        let dashboard = core.dashboard(id).is_some();
+        let title = if dashboard {
             dashboard_title(core.library(), id)
         } else {
             window_title(core.library(), Some(id))
         };
+        let cover = if dashboard {
+            Cover::Dashboard(title.clone())
+        } else if core.zoom_target(id).is_some() {
+            Cover::Zoom
+        } else {
+            Cover::None
+        };
+        let colors = crate::chrome::current(cx);
+        self.titlebar
+            .update(cx, |bar, cx| bar.sync(core, cover, modal, colors, cx));
         if title != self.title {
             window.set_window_title(&title);
             self.title = title;
@@ -300,7 +321,7 @@ impl WindowView {
 impl Render for WindowView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.track_painted(window);
-        let background = crate::mute::color(self.deck.read(cx).look().background, 1.0);
+        let background = crate::chrome::color(crate::chrome::current(cx).background, 1.0);
         let layers = self
             .layers
             .iter()
@@ -312,6 +333,7 @@ impl Render for WindowView {
             .flex()
             .flex_col()
             .bg(background)
+            .child(self.titlebar.clone())
             .child(
                 div()
                     .flex_1()
@@ -321,6 +343,7 @@ impl Render for WindowView {
                     .child(div().flex_1().min_w(px(0.)).h_full().child(self.deck.clone())),
             )
             .children(layers)
+            .child(crate::chrome::resize_edges(window))
     }
 }
 
@@ -343,6 +366,9 @@ pub fn open(
             cx,
         ))),
         app_id: Some(app_id.to_owned()),
+        // the title bar is the app's own (`titlebar.rs`): the window manager's decorations only where the compositor
+        // insists (GPUI falls back to them on X11 without a compositing manager, and a Wayland compositor may refuse)
+        window_decorations: Some(gpui_kit::WindowDecorations::Client),
         ..gpui_kit::WindowOptions::default()
     };
     let env = Rc::clone(env);

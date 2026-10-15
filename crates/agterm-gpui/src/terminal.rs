@@ -35,8 +35,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use agterm_core::ghostty_config::{self, CopyOnSelect, GhosttyConfig};
 use agterm_term::{
-    ClipboardLocation, CursorDefaults, FormatRegion, Frame, GridSize, Pane, PaneConfig, PaneError, PaneEvent, Paste,
-    PasteSource, ScrollbackLimits, TextFormat, ThemeColors,
+    ClipboardLocation, ColorScheme, CursorDefaults, FormatRegion, Frame, GridSize, Pane, PaneConfig, PaneError,
+    PaneEvent, Paste, PasteSource, ScrollbackLimits, TextFormat, ThemeColors,
 };
 use gpui_kit::{
     App, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
@@ -65,6 +65,9 @@ pub struct TerminalConfig {
     pub clear_selection_on_copy: bool,
     /// `copy-on-select`: where a selection made is copied ([`Shared::copy_on_select`]).
     pub copy_on_select: CopyOnSelect,
+    /// The desktop's appearance the config was loaded on, which the terminal answers color scheme queries with and
+    /// reports to a program that asked (mode 2031), as libghostty's surface color scheme did.
+    pub color_scheme: ColorScheme,
 }
 
 impl TerminalConfig {
@@ -80,7 +83,15 @@ impl TerminalConfig {
             copy_trim: config.clipboard.trim_trailing_spaces,
             clear_selection_on_copy: config.selection.clear_on_copy,
             copy_on_select: config.copy_on_select,
+            color_scheme: ColorScheme::Light,
         }
+    }
+
+    /// This config on the `dark` side of the desktop's appearance, or the light one.
+    #[must_use]
+    pub fn on_side(mut self, dark: bool) -> Self {
+        self.color_scheme = if dark { ColorScheme::Dark } else { ColorScheme::Light };
+        self
     }
 }
 
@@ -513,6 +524,7 @@ impl Shared {
             scrollback: config.scrollback,
             colors: config.theme.clone(),
             cursor: config.cursor,
+            color_scheme: config.color_scheme,
             wake: Some(Arc::new(move || {
                 let _ = wake.try_send(());
             })),
@@ -661,6 +673,7 @@ impl Terminal {
             if let Err(err) = applied {
                 tracing::warn!(target: "agterm::surface", key = shared.key, %err, "the terminal refused the config");
             }
+            pane.set_color_scheme(config.color_scheme);
         }
         let fonts_changed = shared.config.borrow().font != config.font;
         let cell = shared.metrics_at(shared.font_points(), shared.scale());

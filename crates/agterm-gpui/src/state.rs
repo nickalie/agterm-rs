@@ -147,6 +147,8 @@ pub struct AppState {
     remote_tick_armed: bool,
     /// Panes the core seeded at their ask, waiting for the frontend to hand them the seed.
     seeded: Vec<PaneSpawn>,
+    /// The terminal theme's side as last applied, and the desktop's (`appearance.rs`).
+    pub(crate) appearance: crate::appearance::Appearance,
 }
 
 /// The presentation bridges' reports ([`agterm_app::remote`]).
@@ -178,6 +180,7 @@ impl AppState {
             heartbeat_armed: false,
             remote_tick_armed: false,
             seeded: Vec::new(),
+            appearance: crate::appearance::Appearance::default(),
         }
     }
 

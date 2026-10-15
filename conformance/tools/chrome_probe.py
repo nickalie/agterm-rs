@@ -3,7 +3,7 @@
 terminal theme's background, as upstream's window does (`WindowAppearance.sync`), and that a non-neutral sidebar tint
 washes the sidebar alone. A Rust-build check outside the catalog: no reference runs it.
 
-  python conformance/tools/chrome_probe.py [--bin PATH] [--timeout SECONDS] [--keep DIR]
+  python conformance/tools/chrome_probe.py [--frontend gtk|gpui] [--bin PATH] [--timeout SECONDS] [--keep DIR]
 
 The staged build runs under the suite's isolation (tools/run-rust-linux.sh's: a private headless weston and session
 bus, a fresh root), the weston started with its debug protocol so `weston-screenshooter` may read the output. Each
@@ -18,14 +18,20 @@ rows, the terminal below its prompt.
 - `tint`: relaunched with the normal toolbar and the sidebar tint at Darker 5, the title bar and the terminal keep
   the background and the sidebar shows it under a 0.30 black wash.
 
---bin defaults to the stage run-rust-linux.sh builds (target/conformance-stage/bin/agterm); the themes are read from
-its share/ghostty/themes. --keep saves every screenshot taken there. Prints a JSON report; exits 0 when every check
-holds.
+--frontend picks the Rust build's frontend while both coexist: the GTK one (default) or the GPUI one, which renders
+on lavapipe only: $CONFORMANCE_LAVAPIPE_ICD, else the ICD `scripts/fetch-lavapipe.sh --print-icd` finds (nothing is
+fetched here). Both log their terminal's first frame under the target `agterm::surface` and draw the same three
+regions, so the checks are one; a harness without the GPUI frontend (`RustAdapter(frontend=...)`) is reported as such.
+
+--bin defaults to the frontend's stage run-rust-linux.sh builds (target/conformance-stage/bin/agterm,
+target/conformance-stage-gpui/bin/agterm-gpui); the themes are read from its share/ghostty/themes. --keep saves every
+screenshot taken there. Prints a JSON report; exits 0 when every check holds.
 """
 
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import re
@@ -42,7 +48,15 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
-DEFAULT_BIN = REPO / "target" / "conformance-stage" / "bin" / "agterm"
+GTK, GPUI = "gtk", "gpui"
+DEFAULT_BINS = {
+    GTK: REPO / "target" / "conformance-stage" / "bin" / "agterm",
+    GPUI: REPO / "target" / "conformance-stage-gpui" / "bin" / "agterm-gpui",
+}
+FETCH_LAVAPIPE = REPO / "scripts" / "fetch-lavapipe.sh"
+# The harness's lavapipe variable (`impls.base.LAVAPIPE_ICD_VARIABLE`), spelled here: importing the harness scrubs every
+# AGTERM_* variable, which the script still needs, so lavapipe is found before that import.
+LAVAPIPE_ICD_VARIABLE = "CONFORMANCE_LAVAPIPE_ICD"
 # The output the window is maximized into: smaller than the suite's, so a screenshot decodes quickly in pure Python.
 OUTPUT_SIZE = (1280, 800)
 # Two bundled themes with clearly different backgrounds, the first dark, the second light.
@@ -321,8 +335,32 @@ def same_as(sampled: Mapping[str, Rgb], expected: Mapping[str, Rgb]) -> dict[str
     return result
 
 
-def make_adapter(bin: Path) -> Any:
+def find_lavapipe(environ: Mapping[str, str], script: Path = FETCH_LAVAPIPE) -> tuple[str | None, str]:
+    """The lavapipe ICD for a GPUI launch: the harness's variable, else what the repository's script finds without
+    fetching; otherwise None and why."""
+    if icd := environ.get(LAVAPIPE_ICD_VARIABLE):
+        return icd, ""
+    if not script.is_file():
+        return None, f"no {script.name} in this tree and no ${LAVAPIPE_ICD_VARIABLE}"
+    try:
+        found = subprocess.run([str(script), "--print-icd"], capture_output=True, text=True, check=False, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return None, f"{script}: {error}"
+    if found.returncode == 0 and (icd := found.stdout.strip()):
+        return icd, ""
+    return None, found.stderr.strip() or f"{script} --print-icd exited with {found.returncode}"
+
+
+def takes_frontend(adapter_class: type) -> bool:
+    """Whether the harness's Rust adapter launches either frontend (Task 17's `frontend` argument)."""
+    return "frontend" in inspect.signature(adapter_class.__init__).parameters
+
+
+def make_adapter(bin: Path, frontend: str = GTK) -> Any:
     from agterm_conformance.impls.rust import RustAdapter
+
+    if frontend != GTK and not takes_frontend(RustAdapter):
+        raise ProbeError(f"this tree's harness launches no {frontend} build: its RustAdapter takes no frontend")
 
     class ChromeAdapter(RustAdapter):
         compositor_args = ("--debug", f"--width={OUTPUT_SIZE[0]}", f"--height={OUTPUT_SIZE[1]}")
@@ -334,7 +372,7 @@ def make_adapter(bin: Path) -> Any:
         def ghostty_config(self) -> str:
             return super().ghostty_config() + f"cursor-color = {hex_rgb(CURSOR)}\ncursor-style-blink = false\n"
 
-    return ChromeAdapter(bin)
+    return ChromeAdapter(bin, frontend=frontend) if takes_frontend(RustAdapter) else ChromeAdapter(bin)
 
 
 def run_launch(adapter: Any, settings: dict[str, Any], label: str, keep: Path | None, timeout: float,
@@ -347,9 +385,14 @@ def run_launch(adapter: Any, settings: dict[str, Any], label: str, keep: Path | 
         adapter.stop(instance)
 
 
-def probe(bin: Path, timeout: float, keep: Path | None) -> dict[str, Any]:
+def probe(bin: Path, timeout: float, keep: Path | None, frontend: str = GTK) -> dict[str, Any]:
     themes = bin.parent.parent / "share" / "ghostty" / "themes"
-    report: dict[str, Any] = {"bin": str(bin), "checks": {}}
+    report: dict[str, Any] = {"bin": str(bin), "frontend": frontend, "checks": {}}
+    if frontend == GPUI:
+        icd, problem = find_lavapipe(os.environ)
+        if icd is None:
+            return {**report, "ok": False, "error": f"lavapipe: {problem}"}
+        os.environ[LAVAPIPE_ICD_VARIABLE] = icd
     if not bin.is_file():
         return {**report, "ok": False, "error": f"no agterm at {bin}"}
     try:
@@ -357,7 +400,10 @@ def probe(bin: Path, timeout: float, keep: Path | None) -> dict[str, Any]:
         changed = theme_background(themes, CHANGED_THEME)
     except (OSError, ProbeError) as error:
         return {**report, "ok": False, "error": f"themes: {error}"}
-    adapter = make_adapter(bin)
+    try:
+        adapter = make_adapter(bin, frontend)
+    except ProbeError as error:
+        return {**report, "ok": False, "error": str(error)}
     checks = report["checks"]
 
     def themed(session: Session, layout: Layout) -> dict[str, Any]:
@@ -388,11 +434,13 @@ def probe(bin: Path, timeout: float, keep: Path | None) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--bin", type=Path, default=DEFAULT_BIN, help="the staged agterm binary")
+    parser.add_argument("--frontend", choices=tuple(DEFAULT_BINS), default=GTK, help="the Rust build's frontend")
+    parser.add_argument("--bin", type=Path, default=None, help="the staged app binary (default: the frontend's stage)")
     parser.add_argument("--timeout", type=float, default=30.0, help="seconds each wait may take")
     parser.add_argument("--keep", type=Path, help="a directory to save the screenshots in")
     args = parser.parse_args(argv)
-    report = probe(args.bin.resolve(), args.timeout, args.keep)
+    bin = args.bin if args.bin is not None else DEFAULT_BINS[args.frontend]
+    report = probe(bin.resolve(), args.timeout, args.keep, args.frontend)
     print(json.dumps(report, indent=2))
     return 0 if report.get("ok") else 1
 

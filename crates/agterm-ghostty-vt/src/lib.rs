@@ -68,7 +68,7 @@ mod terminal;
 pub use cell::{CellRef, CellWidth, Cells, Style, StyleColor, StyleFlags, Underline};
 pub use effects::{
     ClipboardContent, ClipboardData, ClipboardLocation, ClipboardReadReply, ClipboardReadRequest,
-    ClipboardWriteRequest, ClipboardWriteResult, DeviceAttributes, Effects, HeldTerminal, ProgramStatus,
+    ClipboardWriteRequest, ClipboardWriteResult, ColorScheme, DeviceAttributes, Effects, HeldTerminal, ProgramStatus,
     ProgramStatusKind, ProgramStatusState, ProgressReport, ProgressState, SizeReport,
 };
 pub use format::{Format, FormatOptions, Region};

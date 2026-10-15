@@ -16,6 +16,8 @@ pub struct Mode(pub(crate) ffi::GhosttyMode);
 impl Mode {
     /// Synchronized output (DEC private mode 2026).
     pub const SYNC_OUTPUT: Self = Self::dec(2026);
+    /// Color scheme reports (DEC private mode 2031): the program wants a report on every light/dark change.
+    pub const COLOR_SCHEME_REPORT: Self = Self::dec(2031);
 
     /// A DEC private mode (`CSI ? n h`).
     #[must_use]

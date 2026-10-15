@@ -1219,12 +1219,49 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 **Files:**
 - Create: `crates/agterm-gpui/src/{titlebar,chrome,appearance}.rs`
 - Modify: `conformance/tools/chrome_probe.py` (GPUI build)
+- ➕ Create: `crates/agterm-gpui/src/{titlebar,chrome,appearance}/tests.rs`, `crates/agterm-gpui/tests/appearance.rs`;
+  Modify: `crates/agterm-gpui/src/{app,lib,state,session_host,terminal,window,windows}.rs`,
+  `crates/agterm-term/src/{effects,lib,pane}.rs`, `crates/agterm-term/tests/pane.rs`,
+  `crates/agterm-ghostty-vt/src/{effects,lib,shape}.rs`, `crates/agterm-ghostty-vt/tests/effects.rs`,
+  `conformance/selftests/test_chrome_probe.py`, `conformance/README.md`, `docs/linux-ui-checklist.md`
 
-- [ ] title bar and chrome painted in the terminal's colors (parity with `fd5349f`)
-- [ ] follow the desktop light/dark (`org.freedesktop.appearance color-scheme` through the settings portal, `zbus`),
+- [x] title bar and chrome painted in the terminal's colors (parity with `fd5349f`)
+- [x] follow the desktop light/dark (`org.freedesktop.appearance color-scheme` through the settings portal, `zbus`),
       replacing `adw::StyleManager`; feeds core's `light:/dark:` resolution
-- [ ] tests: appearance switch re-resolves the theme; `chrome_probe.py` pixel check passes on GPUI
-- [ ] gates + conformance — must pass before Task 21
+- [ ] tests: appearance switch re-resolves the theme; `chrome_probe.py` pixel check passes on GPUI — the appearance
+      tests pass; the pixel check is ready for GPUI (probe ready; GPUI run after Task 17 merges, and Task 19 for the
+      sidebar boxes)
+- [ ] gates + conformance — must pass before Task 21 — gates pass; conformance after Task 17 merges
+- result (2026-10-15; Tasks 17 and 19 not merged yet):
+  - **Chrome** (`chrome.rs`): `agterm_core::chrome`'s colors resolved from the terminals' config and the sidebar
+    tint into one `Chrome` GPUI global, re-synced in `Windows::sync` after any config reload and replaced only when a
+    color changed; the window body and the title bar paint its background, the bar its foreground (0.6 for the
+    subtitle and the host) and the hairline its separator; the sidebar color, divider and selected-row pill wait for
+    Task 19's sidebar. Client-side decorations (`WindowDecorations::Client`; the window manager's where the
+    compositor insists) with resize handles on the free edges (`resize_edges`).
+  - **Title bar** (`titlebar.rs`, port of the GTK `titlebar.rs` over `agterm_core::titlebar::compose`): the sidebar
+    toggle at the sidebar's edge, the title's lines, the trailing cluster per Interface toggle with dividers between
+    groups, Lucide glyphs (gpui-kit's catalog served as the app's assets) with the split and scratch glyphs traced,
+    hover texts naming the chords, upstream's ids as element ids, the zoom/dashboard cover with its exit button,
+    window controls per the desktop's button layout and what the window manager supports, drag to move, double click
+    to maximize, secondary click for the window menu. The recent, attention and custom-commands buttons emit
+    `TitlebarEvent::Popover` for Task 21's popovers.
+  - **Appearance** (`appearance.rs`): the portal read before the first config load (no bus or portal reads as
+    light; `ReadOne`, `Read` for a portal before version 2), `SettingChanged` followed on a thread of its own and
+    debounced 0.05 s onto the main loop; a flip reloads only while following with both theme slots set and on a new
+    side; every reload (a flip, `config.reload`, a settings change) loads `Appearance::side`, overlays included;
+    `debug.appearance` forces a side. Each terminal takes the side as its color scheme: `Pane::set_color_scheme`
+    answers queries with it and sends a mode 2031 report on a change (`vt::ColorScheme`, `Mode::COLOR_SCHEME_REPORT`
+    in `agterm-ghostty-vt`).
+  - **Probe**: `chrome_probe.py --frontend gtk|gpui` (Task 17's stage and lavapipe lookup, `RustAdapter(frontend=)`);
+    on a harness without the GPUI frontend it says so instead of launching. Its selftests cover the stage paths, the
+    lavapipe lookup and that refusal.
+  - **Gates**: fmt; `cargo clippy --workspace --all-targets --all-features -D warnings`; `lint-report.sh`;
+    `check-tracing-features.sh`; `vendor-gpui.sh --check`; `xvfb-run cargo test --workspace` 3841 passed, 0 failed,
+    5 ignored (78 binaries); the new tests 10 rounds in a row without a failure or skip (the gpui `appearance`,
+    `chrome` and `titlebar` units, `tests/appearance.rs` with its weston/lavapipe flip, `agterm-term`'s pane tests
+    and effects units, `agterm-ghostty-vt`'s effects tests); `chrome_probe` selftests 13 passed. Not run: the
+    conformance suite and the GPUI pixel check (Task 17's harness).
 
 ### Task 21: HUD, ask dialog, modal, popovers
 

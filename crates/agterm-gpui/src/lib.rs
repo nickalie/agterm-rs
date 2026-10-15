@@ -7,6 +7,8 @@
 
 pub mod activation;
 pub mod app;
+pub mod appearance;
+pub mod chrome;
 pub mod deck;
 pub mod external_texture;
 pub mod instance;
@@ -19,6 +21,7 @@ pub mod signals;
 pub mod split;
 pub mod state;
 pub mod terminal;
+pub mod titlebar;
 pub mod watermark;
 pub mod window;
 pub mod windows;

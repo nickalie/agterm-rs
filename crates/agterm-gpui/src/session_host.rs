@@ -7,8 +7,8 @@
 //!   sessions reset; [`live_capabilities`] claims `live-sessions` (a zsh login shell, as upstream) and
 //!   `live-any-shell` (zsh, bash or fish) where zmx and the shell's integration are staged.
 //! - **Config**: [`AppConfig::load`] loads the ghostty config as libghostty did for the GTK build (defaults, the
-//!   user's files, their includes; the theme under them), on the light side of a dual theme until the frontend follows
-//!   the desktop's appearance (Task 20); its diagnostic count is what `config.reload` answers.
+//!   user's files, their includes; the theme under them), on the side of a dual theme the desktop's appearance picks
+//!   (`appearance.rs`); its diagnostic count is what `config.reload` answers.
 //! - **Launch host**: Ghostty's resources (staged beside the binary, else a system package) give the terminal its
 //!   identity and shell integration. A pane without a command runs the config's `command` when one is set (libghostty
 //!   ran a surface's command from the config, which the conformance harness's `command = /bin/sh` relies on), else the
@@ -122,6 +122,8 @@ pub struct AppConfig {
     pub command: Option<String>,
     /// How many diagnostics loading it gave (`config.reload`'s answer).
     pub diagnostics: usize,
+    /// The side of the desktop's appearance it was loaded on.
+    pub dark: bool,
 }
 
 impl AppConfig {
@@ -154,13 +156,14 @@ impl AppConfig {
             command: command_of(&loaded),
             config,
             diagnostics: diagnostics.len(),
+            dark,
         }
     }
 
-    /// The terminals' share of the config.
+    /// The terminals' share of the config, on the side it was loaded on.
     #[must_use]
     pub fn terminal(&self) -> TerminalConfig {
-        TerminalConfig::from_ghostty(&self.config)
+        TerminalConfig::from_ghostty(&self.config).on_side(self.dark)
     }
 }
 
@@ -250,6 +253,7 @@ mod tests {
             config: GhosttyConfig::default(),
             command: Some("/bin/sh".to_owned()),
             diagnostics: 0,
+            dark: false,
         };
         let env = MapEnv::new().with("HOME", "/home/u");
         let host = launch_host(&app, None, &env);

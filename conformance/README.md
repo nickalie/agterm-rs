@@ -40,8 +40,9 @@ conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
 
 # whether the staged Rust build's title bar, sidebar and terminal draw one color, the terminal theme's background, and
 # a sidebar tint washes the sidebar alone: screenshots of the maximized window from the same isolation, its weston
-# started with --debug for weston-screenshooter (a Rust-build check outside the catalog); defaults to the same stage
-.venv/bin/python conformance/tools/chrome_probe.py [--bin PATH] [--keep DIR]
+# started with --debug for weston-screenshooter (a Rust-build check outside the catalog); defaults to the same stage,
+# --frontend gpui to the GPUI build's (on lavapipe, through the harness's GPUI frontend)
+.venv/bin/python conformance/tools/chrome_probe.py [--frontend gtk|gpui] [--bin PATH] [--keep DIR]
 ```
 
 `--macos-launch-mode plain` replaces the default `uitest` launch (XCUITest sentinel with zmx on).

@@ -201,6 +201,33 @@ pub struct DeviceAttributes {
     pub unit_id: u32,
 }
 
+/// The desktop's light or dark appearance, as a color scheme query (`CSI ? 996 n`) and a color scheme report (mode
+/// 2031, `CSI ? 997 ; 1|2 n`) tell it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ColorScheme {
+    Light,
+    Dark,
+}
+
+impl ColorScheme {
+    fn raw(self) -> ffi::GhosttyColorScheme {
+        match self {
+            Self::Light => ffi::GHOSTTY_COLOR_SCHEME_LIGHT,
+            Self::Dark => ffi::GHOSTTY_COLOR_SCHEME_DARK,
+        }
+    }
+
+    /// The color scheme report a program asked for with mode 2031 (`color_scheme.h`): `CSI ? 997 ; 1 n` dark,
+    /// `CSI ? 997 ; 2 n` light, the bytes the terminal answers a `CSI ? 996 n` query with.
+    #[must_use]
+    pub fn report(self) -> &'static [u8] {
+        match self {
+            Self::Dark => b"\x1b[?997;1n",
+            Self::Light => b"\x1b[?997;2n",
+        }
+    }
+}
+
 /// The terminal as [`Effects::render_hold`] sees it: only a render state can be captured from it
 /// ([`RenderState::update_held`](crate::RenderState::update_held)).
 #[derive(Debug)]
@@ -281,6 +308,11 @@ pub trait Effects: Send {
         None
     }
 
+    /// A color scheme query (`CSI ? 996 n`); `None` leaves it unanswered.
+    fn color_scheme(&mut self) -> Option<ColorScheme> {
+        None
+    }
+
     /// The XTVERSION answer; `None` reports the library's default.
     fn xtversion(&mut self) -> Option<&str> {
         None
@@ -357,6 +389,7 @@ pub(crate) const CALLBACKS: &[(ffi::GhosttyTerminalOption, *const c_void)] = &[
         device_attributes as *const c_void,
     ),
     (ffi::GHOSTTY_TERMINAL_OPT_XTVERSION, xtversion as *const c_void),
+    (ffi::GHOSTTY_TERMINAL_OPT_COLOR_SCHEME, color_scheme as *const c_void),
     (ffi::GHOSTTY_TERMINAL_OPT_RESET, reset as *const c_void),
 ];
 
@@ -721,6 +754,23 @@ unsafe extern "C" fn xtversion(_terminal: ffi::GhosttyTerminal, userdata: *mut c
     // requires ("must remain valid until the callback returns").
     let version = unsafe { handler(userdata) }.xtversion().unwrap_or_default();
     library_string(version.as_bytes())
+}
+
+unsafe extern "C" fn color_scheme(
+    _terminal: ffi::GhosttyTerminal,
+    userdata: *mut c_void,
+    out: *mut ffi::GhosttyColorScheme,
+) -> bool {
+    // SAFETY: as in `write_pty`.
+    let Some(scheme) = unsafe { handler(userdata) }.color_scheme() else {
+        return false;
+    };
+    // SAFETY: the library passes a valid out-pointer for the call.
+    let Some(out) = (unsafe { out.as_mut() }) else {
+        return false;
+    };
+    *out = scheme.raw();
+    true
 }
 
 unsafe extern "C" fn reset(_terminal: ffi::GhosttyTerminal, userdata: *mut c_void) {

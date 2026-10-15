@@ -45,8 +45,8 @@ mod wheel;
 
 pub use actions::{FormatRegion, SelectionAdjust, TextFormat};
 pub use effects::{
-    ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardReadRequest, ClipboardWrite, ExitStatus, PaneEvent,
-    ProgramNeed, ProgramState, ProgramStatus, Progress, TerminalColors,
+    ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardReadRequest, ClipboardWrite, ColorScheme,
+    ExitStatus, PaneEvent, ProgramNeed, ProgramState, ProgramStatus, Progress, TerminalColors,
 };
 pub use exit::{ABNORMAL_EXIT_RUNTIME, ExitPolicy};
 pub use input::{
