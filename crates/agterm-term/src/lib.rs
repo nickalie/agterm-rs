@@ -24,6 +24,7 @@
 //! [`init`] installs libghostty-vt's process-global hooks (the PNG decoder for Kitty graphics, the log sink into
 //! `tracing`); [`Pane::spawn`] calls it, so a frontend need not.
 
+mod actions;
 #[cfg(test)]
 mod bench;
 mod effects;
@@ -41,6 +42,7 @@ mod selection;
 mod text;
 mod wheel;
 
+pub use actions::{FormatRegion, SelectionAdjust, TextFormat};
 pub use effects::{
     ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardReadRequest, ClipboardWrite, ExitStatus, PaneEvent,
     ProgramNeed, ProgramState, ProgramStatus, Progress, TerminalColors,
@@ -56,8 +58,8 @@ pub use launch::{COMMAND_SHELL, FALLBACK_TERM, Host, Launch, Prepared, resolve_r
 pub use pane::{DEFAULT_KITTY_IMAGE_LIMIT, DEFAULT_WRITE_LIMIT, FrameSnapshot, Pane, PaneConfig, PaneStats, Wake};
 pub use pty::{GridSize, PaneCommand};
 pub use render::{
-    Cell, CellFlags, CellWidth, Colors, Cursor, CursorPosition, CursorStyle, Frame, MouseShape, Rgb, Row, ThemeColors,
-    Underline,
+    Cell, CellFlags, CellWidth, Colors, Cursor, CursorDefaults, CursorPosition, CursorStyle, Frame, MouseShape, Rgb,
+    Row, ThemeColors, Underline,
 };
 pub use scan::ReadScope;
 pub use search::{Highlight, SearchState, SearchStep};

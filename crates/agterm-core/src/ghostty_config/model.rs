@@ -79,6 +79,25 @@ pub enum PaddingColor {
     ExtendAlways,
 }
 
+/// `copy-on-select`: where a selection made with the mouse or `select_all` is copied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+pub enum CopyOnSelect {
+    /// Not copied.
+    False,
+    /// To the selection clipboard (the primary selection on Linux).
+    True,
+    /// To the selection clipboard and the system clipboard.
+    Clipboard,
+}
+
+impl Default for CopyOnSelect {
+    /// Ghostty's default on Linux and macOS.
+    fn default() -> Self {
+        Self::True
+    }
+}
+
 /// `clipboard-read` and `clipboard-write`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
@@ -362,6 +381,7 @@ pub struct GhosttyConfig {
     pub window_padding: WindowPadding,
     pub scrollback: Scrollback,
     pub clipboard: Clipboard,
+    pub copy_on_select: CopyOnSelect,
     pub mouse: Mouse,
     pub shell_integration_features: ShellIntegrationFeatures,
     /// The child's `TERM`.
@@ -388,6 +408,7 @@ impl Default for GhosttyConfig {
             window_padding: WindowPadding::default(),
             scrollback: Scrollback::default(),
             clipboard: Clipboard::default(),
+            copy_on_select: CopyOnSelect::default(),
             mouse: Mouse::default(),
             shell_integration_features: ShellIntegrationFeatures::DEFAULT,
             term: DEFAULT_TERM.to_owned(),
@@ -527,6 +548,7 @@ impl GhosttyConfig {
             "scrollback-limit-lines" => self.scrollback.limit_lines = limit_or(value, None),
             "shell-integration-features" => self.shell_integration_features = shell_features(value),
             "term" => value.unwrap_or(DEFAULT_TERM).clone_into(&mut self.term),
+            "copy-on-select" => self.copy_on_select = enum_or(value, CopyOnSelect::default()),
             "title" => self.title = value.map(str::to_owned),
             _ => return false,
         }

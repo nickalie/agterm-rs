@@ -155,6 +155,53 @@ pub enum CursorStyle {
     BlockHollow,
 }
 
+impl CursorStyle {
+    pub(crate) fn engine(self) -> vt::CursorStyle {
+        match self {
+            Self::Bar => vt::CursorStyle::Bar,
+            Self::Block => vt::CursorStyle::Block,
+            Self::Underline => vt::CursorStyle::Underline,
+            Self::BlockHollow => vt::CursorStyle::BlockHollow,
+        }
+    }
+}
+
+/// The cursor a pane's terminal starts with and returns to (`CSI 0 q`, a full reset) while no program chose another:
+/// Ghostty's `cursor-style` and `cursor-style-blink`, which its termio sets on every terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CursorDefaults {
+    pub style: CursorStyle,
+    pub blink: bool,
+}
+
+impl Default for CursorDefaults {
+    /// Ghostty's: a block that blinks (`cursor-style-blink` unset counts as on).
+    fn default() -> Self {
+        Self::from_config(&agterm_core::ghostty_config::Cursor::default())
+    }
+}
+
+impl CursorDefaults {
+    /// From the ghostty config's `cursor-style` and `cursor-style-blink` (unset blinks, as in Ghostty).
+    #[must_use]
+    pub fn from_config(cursor: &agterm_core::ghostty_config::Cursor) -> Self {
+        use agterm_core::ghostty_config::CursorStyle as Config;
+        Self {
+            style: match cursor.style {
+                Config::Bar => CursorStyle::Bar,
+                Config::Block => CursorStyle::Block,
+                Config::Underline => CursorStyle::Underline,
+                Config::BlockHollow => CursorStyle::BlockHollow,
+            },
+            blink: cursor.style_blink.unwrap_or(true),
+        }
+    }
+
+    pub(crate) fn apply(self, terminal: &mut vt::Terminal) -> Result<(), vt::Error> {
+        terminal.set_default_cursor(self.style.engine(), self.blink)
+    }
+}
+
 /// Where the cursor sits in the viewport.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct CursorPosition {

@@ -1,7 +1,9 @@
 //! [`Terminal`]: an owned `GhosttyTerminal`.
 
 use crate::effects::{CALLBACKS, EffectsSlot};
-use crate::{Effects, Error, Handle, Mode, MouseShape, Rgb, ScrollbackLimits, TerminalColors, ffi, string_bytes};
+use crate::{
+    CursorStyle, Effects, Error, Handle, Mode, MouseShape, Rgb, ScrollbackLimits, TerminalColors, ffi, string_bytes,
+};
 
 /// A viewport scroll.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -14,6 +16,9 @@ pub enum Scroll {
     Rows(isize),
     /// By shell prompts (needs the shell's semantic prompt marks); negative is back.
     Prompts(isize),
+    /// To the absolute row (0 is the top of the scrollback), which becomes the first visible row; clamped to the
+    /// active area.
+    Row(usize),
 }
 
 /// One VT: parser, screens and scrollback, owned and freed on drop.
@@ -255,6 +260,41 @@ impl Terminal {
         Error::check(result)
     }
 
+    /// Set the cursor the terminal starts with and returns to on `CSI 0 q` (Ghostty's `cursor-style` and
+    /// `cursor-style-blink`, which Ghostty's termio applies to every terminal); the current cursor takes it too while
+    /// no program chose one. The library's own default is a steady block.
+    ///
+    /// # Errors
+    ///
+    /// The library's result when a value is refused.
+    pub fn set_default_cursor(&mut self, style: CursorStyle, blink: bool) -> Result<(), Error> {
+        let style: ffi::GhosttyTerminalCursorStyle = match style {
+            CursorStyle::Bar => ffi::GHOSTTY_TERMINAL_CURSOR_STYLE_BAR,
+            CursorStyle::Block => ffi::GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK,
+            CursorStyle::Underline => ffi::GHOSTTY_TERMINAL_CURSOR_STYLE_UNDERLINE,
+            CursorStyle::BlockHollow => ffi::GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK_HOLLOW,
+        };
+        // SAFETY: `self.raw` is live; `OPT_DEFAULT_CURSOR_STYLE` takes a `GhosttyTerminalCursorStyle *` read during the
+        // call.
+        let result = unsafe {
+            ffi::ghostty_terminal_set(
+                self.raw.ptr(),
+                ffi::GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE,
+                (&raw const style).cast(),
+            )
+        };
+        Error::check(result)?;
+        // SAFETY: `self.raw` is live; `OPT_DEFAULT_CURSOR_BLINK` takes a `bool *` read during the call.
+        let result = unsafe {
+            ffi::ghostty_terminal_set(
+                self.raw.ptr(),
+                ffi::GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK,
+                (&raw const blink).cast(),
+            )
+        };
+        Error::check(result)
+    }
+
     /// The default palette (the built-in one unless [`Terminal::set_default_palette`] replaced it), OSC 4 overrides
     /// ignored.
     #[must_use]
@@ -312,6 +352,32 @@ impl Terminal {
         // SAFETY: `self.raw` is a live terminal owned by `self`, `&mut self` makes this the only call on it, and the
         // pointer and length describe the borrowed slice for the duration of the call.
         unsafe { ffi::ghostty_terminal_vt_write(self.raw.ptr(), bytes.as_ptr(), bytes.len()) };
+    }
+
+    /// Feed only the shortest prefix of `bytes` that brings the parser to ground (no sequence or UTF-8 character
+    /// in progress), the point where out-of-band VT sequences can go in safely; the bytes consumed, or `None` when all
+    /// of them were and the parser is still not at ground. Already at ground, nothing is consumed (`Some(0)`).
+    pub fn vt_write_until_ground(&mut self, bytes: &[u8]) -> Option<usize> {
+        let mut consumed = 0;
+        // SAFETY: `self.raw` is live and `&mut self` serializes the call; the pointer and length describe the borrowed
+        // slice, and `consumed` is a valid out-pointer.
+        let result = unsafe {
+            ffi::ghostty_terminal_vt_write_until_ground(self.raw.ptr(), bytes.as_ptr(), bytes.len(), &raw mut consumed)
+        };
+        (result == ffi::GHOSTTY_SUCCESS).then_some(consumed)
+    }
+
+    /// Whether the parser is at ground (see [`Terminal::vt_write_until_ground`]).
+    #[must_use]
+    pub fn at_ground(&self) -> bool {
+        self.get_bool(ffi::GHOSTTY_TERMINAL_DATA_VT_GROUND, true)
+    }
+
+    /// Whether the cursor is at a shell prompt or its input (semantic prompt marks, OSC 133); false on the alternate
+    /// screen or without marks.
+    #[must_use]
+    pub fn cursor_at_prompt(&self) -> bool {
+        self.get_bool(ffi::GHOSTTY_TERMINAL_DATA_CURSOR_AT_PROMPT, false)
     }
 
     /// Resize to `cols` x `rows` cells of `cell_width_px` x `cell_height_px` pixels: the primary screen reflows,
@@ -407,6 +473,10 @@ impl Terminal {
             Scroll::Prompts(delta) => (
                 ffi::GHOSTTY_SCROLL_VIEWPORT_DELTA_PROMPT,
                 ffi::GhosttyTerminalScrollViewportValue { delta_prompt: delta },
+            ),
+            Scroll::Row(row) => (
+                ffi::GHOSTTY_SCROLL_VIEWPORT_ROW,
+                ffi::GhosttyTerminalScrollViewportValue { row },
             ),
         };
         let behavior = ffi::GhosttyTerminalScrollViewport { tag, value };

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use agterm_term::{CellFlags, CellWidth, PaneConfig, Rgb, Underline};
+use agterm_term::{CellFlags, CellWidth, CursorDefaults, CursorStyle, PaneConfig, Rgb, Underline};
 use support::{SIZE, spawn, spawn_with, wait_file, wait_frame, wait_text};
 
 #[test]
@@ -156,4 +156,30 @@ fn an_expired_hold_wakes_the_frontend_without_a_paint() {
             break;
         }
     }
+}
+
+#[test]
+fn the_configured_cursor_is_the_terminals_default() {
+    let config = PaneConfig {
+        cursor: CursorDefaults {
+            style: CursorStyle::Bar,
+            blink: false,
+        },
+        ..PaneConfig::new(SIZE)
+    };
+    let fixture = spawn_with(
+        "printf 'ready'; read _; printf '\\033[4 q'; read _; printf '\\033[0 q'; exec sleep 5",
+        &config,
+    )
+    .unwrap();
+    let frame = wait_text(&fixture.pane, "ready");
+    assert_eq!((frame.cursor.style, frame.cursor.blinking), (CursorStyle::Bar, false));
+    fixture.pane.write(b"\n").unwrap();
+    wait_frame(&fixture.pane, |frame| frame.cursor.style == CursorStyle::Underline);
+    fixture.pane.write(b"\n").unwrap();
+    wait_frame(&fixture.pane, |frame| frame.cursor.style == CursorStyle::Bar);
+    // a reload changes the default, and the cursor follows while no program chose one
+    fixture.pane.set_cursor_defaults(CursorDefaults::default()).unwrap();
+    let frame = wait_frame(&fixture.pane, |frame| frame.cursor.style == CursorStyle::Block);
+    assert!(frame.cursor.blinking, "Ghostty's default blinks");
 }
