@@ -188,32 +188,7 @@ impl Sidebar {
         }
         let sidebar = cx.entity().downgrade();
         element
-            .context_menu(move |popup, window, cx| {
-                let Some(entity) = sidebar.upgrade() else {
-                    return popup;
-                };
-                let entries = entity.update(cx, |this, _| {
-                    this.menu_opened();
-                    this.menu_entries(id)
-                });
-                // the subscription needs the menu built; it lives as long as the menu
-                let closing = sidebar.clone();
-                cx.defer_in(window, move |_, _, cx| {
-                    cx.subscribe_self(move |_, _: &DismissEvent, cx| {
-                        if let Some(entity) = closing.upgrade() {
-                            entity.update(cx, |this, _| this.menu_closed());
-                        }
-                    })
-                    .detach();
-                });
-                let target = sidebar.clone();
-                let perform: menu::Perform = Rc::new(move |action, window, cx| {
-                    if let Some(entity) = target.upgrade() {
-                        entity.update(cx, |this, cx| this.perform(action, window, cx));
-                    }
-                });
-                menu::build(popup, entries, &perform, window, cx)
-            })
+            .context_menu(move |popup, window, cx| row_menu(&sidebar, id, popup, window, cx))
             .into_any_element()
     }
 
@@ -475,6 +450,42 @@ impl Sidebar {
                 )
                 .with_priority(1),
             )
+    }
+}
+
+/// Row `id`'s context menu, built as it opens: the sidebar holds the keyboard for it until it closes.
+fn row_menu(
+    sidebar: &WeakEntity<Sidebar>,
+    id: Uuid,
+    popup: PopupMenu,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let Some(entity) = sidebar.upgrade() else {
+        return popup;
+    };
+    let entries = entity.update(cx, |this, _| {
+        this.menu_opened();
+        this.menu_entries(id)
+    });
+    // the subscription needs the menu built; it lives as long as the menu
+    let closing = sidebar.clone();
+    cx.defer_in(window, move |_, _, cx| {
+        cx.subscribe_self(move |_, _: &DismissEvent, cx| menu_closed(&closing, cx))
+            .detach();
+    });
+    let target = sidebar.clone();
+    let perform: menu::Perform = Rc::new(move |action, window, cx| {
+        if let Some(entity) = target.upgrade() {
+            entity.update(cx, |this, cx| this.perform(action, window, cx));
+        }
+    });
+    menu::build(popup, entries, &perform, window, cx)
+}
+
+fn menu_closed(sidebar: &WeakEntity<Sidebar>, cx: &mut App) {
+    if let Some(entity) = sidebar.upgrade() {
+        entity.update(cx, |this, _| this.menu_closed());
     }
 }
 
