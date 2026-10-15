@@ -5,7 +5,9 @@
 //! the cell metrics and the padding, and paint draws, in Ghostty's layer order: the default background, the cell
 //! backgrounds (selection and search marks included), underlines and overlines, the text, strikethroughs, the cursor
 //! (block, bar, underline, hollow when unfocused; the text under a block in the cursor-text color) and the input
-//! method's composition. Kitty images and the background image join in Task 16. Box drawing, block, braille,
+//! method's composition. The `background-image` (`background.rs`) lies over the default background, and the Kitty
+//! placements (`kitty.rs`) in Ghostty's three layers: below the cell backgrounds, between the backgrounds and the
+//! underlines and text, and above the text (under the cursor and the composition). Box drawing, block, braille,
 //! powerline and legacy computing characters are not shaped: the procedural sprites (`sprite.rs`) draw them with the
 //! text, as Ghostty's sprite font does. At a password prompt the cursor is Ghostty's lock.
 //!
@@ -18,7 +20,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use agterm_core::ghostty_config::PaddingColor;
-use agterm_term::{CellWidth, Colors, Cursor, CursorStyle, Frame, Row, Underline};
+use agterm_term::{CellWidth, Colors, Cursor, CursorStyle, Frame, KittyLayer, Row, Underline};
 use gpui_kit::{
     App, BorderStyle, Bounds, ContentMask, Context, DevicePixels, Element, ElementId, Entity, FontId, GlobalElementId,
     GlyphId, Hsla, InspectorElementId, IntoElement, LayoutId, PathBuilder, Pixels, Point, RenderAlphaMaskParams, Style,
@@ -27,6 +29,7 @@ use gpui_kit::{
 
 use super::colors::{self, Palette, hsla};
 use super::font::Fonts;
+use super::kitty::Images;
 use super::metrics::{CellMetrics, Geometry, Padding, points_to_px};
 use super::row_cache::{Decoration, Line, RowLayout, RowMarks, SpriteCell, search_marks};
 use super::sprite;
@@ -90,6 +93,8 @@ pub struct Plan {
     preedit: Option<String>,
     /// The program on the PTY reads a password (`Pane::password_input`): the cursor is the lock.
     password_input: bool,
+    /// The background image and the Kitty placements.
+    images: Images,
 }
 
 impl Plan {
@@ -185,6 +190,7 @@ impl TerminalView {
         if shared.is_torn_down() {
             self.cache.clear();
             self.painted = None;
+            self.release_images(window);
             return None;
         }
         let scale = window.scale_factor();
@@ -215,6 +221,7 @@ impl TerminalView {
             snapshot.frame
         });
         self.painted.clone_from(&frame);
+        let images = self.prepare_images(frame.as_deref(), &metrics, window, cx);
         let origin = bounds.origin + point(px(device_to(padding.left, scale)), px(device_to(padding.top, scale)));
         Some(Plan {
             origin,
@@ -228,6 +235,7 @@ impl TerminalView {
             frame,
             preedit: shared.preedit(),
             password_input: shared.pane().is_some_and(|pane| pane.password_input()),
+            images,
         })
     }
 
@@ -250,12 +258,19 @@ impl TerminalView {
     }
 
     fn paint(&mut self, bounds: Bounds<Pixels>, plan: &Plan, focused: bool, window: &mut Window) {
+        let background = plan
+            .frame
+            .as_ref()
+            .map_or(plan.background, |frame| frame.colors.background);
+        window.paint_quad(fill(bounds, hsla(background, plan.palette.background_alpha)));
+        if let Some(image) = plan.images.background.as_ref() {
+            image.paint(window, bounds, plan.scale);
+        }
         let Some(frame) = plan.frame.as_ref() else {
-            window.paint_quad(fill(bounds, hsla(plan.background, plan.palette.background_alpha)));
             return;
         };
-        let colors = &frame.colors;
-        window.paint_quad(fill(bounds, hsla(colors.background, plan.palette.background_alpha)));
+        let kitty = &plan.images.kitty;
+        kitty.paint(window, KittyLayer::BelowBackground, plan.origin, plan.scale);
         let extend = Extend::new(plan.padding_color, frame);
         for (index, row) in self.cache.rows().enumerate() {
             paint_backgrounds(
@@ -266,6 +281,9 @@ impl TerminalView {
                 &row.layout,
                 extend.for_row(index, frame.rows.len()),
             );
+        }
+        kitty.paint(window, KittyLayer::BelowText, plan.origin, plan.scale);
+        for (index, row) in self.cache.rows().enumerate() {
             paint_decorations(window, plan, index, &row.layout, |line| {
                 !matches!(line, Line::Strikethrough)
             });
@@ -279,6 +297,7 @@ impl TerminalView {
                 matches!(line, Line::Strikethrough)
             });
         }
+        kitty.paint(window, KittyLayer::AboveText, plan.origin, plan.scale);
         if plan.preedit.is_none() {
             self.paint_cursor(window, plan, frame, focused);
         }

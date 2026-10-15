@@ -17,14 +17,18 @@
 //!
 //! Teardown drops the pane (its child gets `SIGHUP`) and closes the pump, whatever views still hold the state.
 
+pub mod background;
 mod colors;
 mod element;
 mod font;
+pub mod kitty;
 mod metrics;
 mod row_cache;
 pub mod sprite;
 mod surface;
 
+#[cfg(test)]
+mod kitty_tests;
 #[cfg(test)]
 mod tests;
 
@@ -59,6 +63,8 @@ pub struct TerminalConfig {
     pub theme: ThemeColors,
     pub cursor: CursorDefaults,
     pub scrollback: ScrollbackLimits,
+    /// `background-image*`, drawn behind the grid.
+    pub background_image: ghostty_config::BackgroundImage,
 }
 
 impl TerminalConfig {
@@ -71,6 +77,7 @@ impl TerminalConfig {
             theme: ThemeColors::from_config(&config.colors, &config.cursor),
             cursor: CursorDefaults::from_config(&config.cursor),
             scrollback: config.scrollback.into(),
+            background_image: config.background_image.clone(),
         }
     }
 }
@@ -172,6 +179,8 @@ pub struct Shared {
     drew: Cell<bool>,
     /// The owner view's input-method composition, shown at the cursor (Task 14 drives it).
     preedit: RefCell<Option<String>>,
+    /// The `background-image` every view draws, loaded once per terminal.
+    background: RefCell<background::Loader>,
 }
 
 impl std::fmt::Debug for Shared {
@@ -455,6 +464,7 @@ impl Terminal {
             wake,
             drew: Cell::new(false),
             preedit: RefCell::new(None),
+            background: RefCell::new(background::Loader::default()),
         });
         let pump = cx.spawn(async move |this, cx| {
             while woken.recv().await.is_ok() {
@@ -492,6 +502,8 @@ impl Terminal {
         }
         let fonts_changed = shared.config.borrow().font != config.font;
         *shared.config.borrow_mut() = Rc::new(config);
+        // the background image's file is looked at again (a watermark rendered anew into the same file)
+        shared.background.borrow_mut().invalidate();
         if fonts_changed {
             shared.fonts.borrow_mut().take();
             shared.font_generation.set(shared.font_generation.get() + 1);
@@ -571,6 +583,8 @@ pub struct TerminalView {
     blink: Option<Task<()>>,
     /// The frame drawn last.
     painted: Option<Arc<Frame>>,
+    /// The Kitty images and the background image this view put into its window's atlas.
+    images: kitty::ViewImages,
     _observe: Subscription,
 }
 
@@ -588,6 +602,7 @@ impl TerminalView {
             blink_on: true,
             blink: None,
             painted: None,
+            images: kitty::ViewImages::default(),
             _observe: cx.observe(terminal, |_, _, cx| cx.notify()),
         }
     }

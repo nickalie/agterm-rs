@@ -1065,12 +1065,59 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 
 **Files:**
 - Create: `crates/agterm-gpui/src/terminal/{kitty,background}.rs`, `terminal/kitty_tests.rs`
+- ➕ Create: `terminal/background/tests.rs`; Modify: `terminal/{element.rs,terminal.rs}` (the module root),
+  `tests/external_texture/cases.rs`, `crates/agterm-gpui/Cargo.toml`, `Cargo.toml` (`image`)
 
-- [ ] image data from `agterm-term`'s kitty view → GPUI images cached by id/generation; placements by z-layer, source
+- [x] image data from `agterm-term`'s kitty view → GPUI images cached by id/generation; placements by z-layer, source
       rects, scaling, scrolling with the viewport, deletion
-- [ ] `background-image*` (agterm's watermark lines, `background.rs` + core `watermark`) drawn behind the grid
-- [ ] tests: placement geometry, layer ordering, cache eviction on delete, background image fit/position modes
-- [ ] gates — must pass before Task 17 (the `show-image.sh` end-to-end check is in Task 23)
+- [x] `background-image*` (agterm's watermark lines, `background.rs` + core `watermark`) drawn behind the grid
+- [x] tests: placement geometry, layer ordering, cache eviction on delete, background image fit/position modes
+- [x] gates — must pass before Task 17 (the `show-image.sh` end-to-end check is in Task 23)
+- result (2026-10-15):
+  - **Kitty** (`terminal/kitty.rs`, from Ghostty's `image.zig`/`image.v.glsl` by way of qwertty-term's renderer, MIT,
+    attribution in the header): a placement lands at its viewport cell times the cell plus its offset inside the cell
+    (clamped to the cell, Ghostty's `cellOffset`), at the pixel size and source rectangle libghostty-vt resolved; a
+    negative row (scrolled partly off the top) is clipped by the element; a viewer at its own font size scales the
+    terminal's pixels by its cell over the owner's (`Cells { engine, view }`). Sorted by `z`, then image id
+    (stable), drawn in Ghostty's three layers: below the cell backgrounds (after the default background and the
+    background image), between the cell backgrounds and the underlines/text, above the text (the cursor and the
+    preedit stay on top, as Technical Details > Frame orders them; Ghostty draws its cursor with the text, so an
+    above-text image covers it there). No GPUI patch: GPUI's own `paint_image` draws a source rectangle when the
+    whole image is painted scaled so the rectangle covers the placement, clipped to it (`kitty::image_bounds`; GPUI
+    then samples only that part of the tile) — checked on real renderers by the external texture harness's
+    `image_source_rects_fill_their_placement` (lavapipe and Intel). Images become BGRA straight-alpha `RenderImage`s
+    once per `(id, generation)` (RGB opaque, gray to gray RGB, Ghostty's `convertReplace`), scaled down past 8192 px
+    a side (wgpu's default texture limit; Ghostty allows 10000); per view, because the sprite atlas is per window.
+    `ViewImages` keeps what a view painted into its window's atlas and `drop_image`s what it stops drawing (deleted,
+    new generation, scrolled out, background changed), and everything on teardown and on the view's release
+    (`on_release_in`, registered at its first paint). The view compares against its own cache, not
+    `KittyView::removed`, so skipped frames cannot leak a texture.
+  - **Background image** (`terminal/background.rs`, Ghostty's `prepBackgroundImage`/`bg_image.{v,f}.glsl`):
+    `TerminalConfig::background_image` from the config (so the watermark overlay lines `watermark::overlay_text`
+    writes reach it: tested end to end through `load_app_config`), drawn over the whole surface after the default
+    background: `contain`/`cover`/`stretch`/`none`, the nine positions (`center` = `center-center`), `repeat` tiling
+    from the offset both ways (a repeated image under 256 px a side is repeated into one larger texture first; at most
+    4096 tiles). Opacity: Ghostty's `min(opacity, 1 / bg alpha) * bg alpha`, baked into the texture's alpha (no GPUI
+    patch for an image opacity); exact at `background-opacity = 1`, which the watermark overlay sets. PNG or JPEG by
+    content, then extension (the `image` crate, `png`+`jpeg` features only, the version GPUI links), decoded on the
+    background executor; the old image stays up while its replacement loads and when a new file fails, as in Ghostty.
+    Loads are keyed by path, mtime, length, baked alpha and repeat, shared (loaded or in flight) by every terminal on
+    the main thread, and the file is looked at again on each `Terminal::set_config`, never per frame: a text watermark
+    re-rendered into the same file reloads without the GTK build's two-overlay trick.
+  - ⚠️ Residuals: virtual placements (Unicode placeholders, `U=1`) are not drawn — the C API returns no position for
+    them at `LIBGHOSTTY_VT_REV` and drawing them means porting Ghostty's placeholder scan (`kitty/unicode.zig`); the
+    plan scopes Kitty to `show-image.sh` parity (`a=T` with `c=`/`r=`), which does not use them. Kitty animation frames
+    are not drawn either (not in the view). Under a translucent `background-opacity` the image's blend only
+    approximates Ghostty's (straight alpha, no custom shader). Large Kitty images are converted on the main thread at
+    their first paint (a 4K RGBA swizzle, ~10–20 ms once per image).
+  - Tests: `terminal/kitty_tests.rs` (11: cell + offset and its clamp, a negative row, a viewer's scale, what is not
+    drawn, z/id order and the three layers, the source-rect bounds, BGRA conversion per format, the atlas limit, the
+    cache converting once and evicting; over a real pane in GPUI's test app, a chunked `a=T` image drawn from the
+    window's atlas and dropped from it on `a=d`, and on teardown), `terminal/background/tests.rs` (10: fit, position,
+    tiling, the tile bound, small-image repetition, the capped and baked opacity, decoding by content and refusing
+    other types, the watermark overlay lines into `TerminalConfig`; in GPUI's test app, one load shared by two
+    terminals, a re-rendered file reloaded on a config change, the image dropped from the atlas with the config, a
+    missing file), and the harness case above.
 
 ### Task 17: Conformance harness for the GPUI build
 
@@ -1103,6 +1150,13 @@ Port the placement rendering from qwertty-term (MIT, attribution).
       modal layers overlays attach to
 - [ ] deck of sessions with panes and splits, wired to `SessionHost`/`ProcessLauncher`/process table like GTK
 - [ ] lead cover/takeover (`pane_lead.rs`), inactive-pane and backdrop wash (`mute.rs`)
+- [ ] ➕ (Task 16) session and pane backgrounds on the terminals (port of GTK `background.rs` `sync_page`): each
+      pane's effective `BackgroundWatermark` through `watermark::overlay_text` into its terminal's config overlay
+      (`load_app_config(.., Some(overlay))` → `Terminal::set_config`; the terminal draws `background-image*` since Task
+      16 and re-reads a file re-rendered at the same path on every `set_config`), a color watermark's `background`, and
+      the text watermark rasterized to its PNG under `<state dir>/watermarks` in place of GTK's pango (GPUI exposes no
+      offscreen text rasterizer: `cosmic-text`, which GPUI's Linux text system already links, or GPUI's headless
+      `render_to_image`); stale text files removed as GTK does
 - [ ] tests (headless): split layout math, focus moves, lead takeover, wash on focus change
 - [ ] gates + conformance (both ratchets) — must pass before Task 19
 
