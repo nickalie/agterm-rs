@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 use agterm_ghostty_vt as vt;
 use bitflags::bitflags;
 
+use crate::kitty::KittyView;
+
 /// A 24-bit color.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Rgb {
@@ -87,16 +89,23 @@ pub struct Cell {
     text_len: u32,
 }
 
-/// One row of a [`Frame`]: its cells and their text.
+/// One row of a [`Frame`]: its cells, their text, and the selected columns.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Row {
     changed: u64,
     id: [u64; 2],
     cells: Vec<Cell>,
     text: String,
+    selection: Option<(u16, u16)>,
 }
 
 impl Row {
+    /// The selected columns of the row, first and last inclusive; `None` when the selection misses it.
+    #[must_use]
+    pub fn selection(&self) -> Option<(u16, u16)> {
+        self.selection
+    }
+
     /// The frame sequence number this row's content was captured in; a view that last drew frame `n` redraws the
     /// row when `changed > n`.
     #[must_use]
@@ -349,6 +358,8 @@ pub struct Frame {
     /// Captured at the start of a synchronized-output hold (mode 2026): the screen the program wants left up while it
     /// draws the next one.
     pub held: bool,
+    /// The Kitty images and their placements on this screen.
+    pub kitty: Arc<KittyView>,
 }
 
 impl Frame {
@@ -397,6 +408,12 @@ impl Capture {
         self.fresh = true;
     }
 
+    /// Something the dirty flags do not track changed (the selection): the next conversion makes a frame and checks
+    /// every row.
+    pub(crate) fn touch(&mut self) {
+        self.fresh = true;
+    }
+
     pub(crate) fn end_hold(&mut self) {
         self.held_since = None;
     }
@@ -424,8 +441,14 @@ impl Capture {
     /// Turn the state into the next frame after `previous`, or `None` when nothing changed; marks the state clean.
     ///
     /// The cursor, the colors and the mouse shape are compared with `previous` as well: the capture's dirty flags
-    /// track cell content, and a cursor that only moved or changed style leaves them clean.
-    pub(crate) fn convert(&mut self, previous: &Frame, mouse_shape: MouseShape) -> Result<Option<Frame>, vt::Error> {
+    /// track cell content, and a cursor that only moved or changed style leaves them clean. `kitty` is a new Kitty
+    /// view, `None` when it did not change.
+    pub(crate) fn convert(
+        &mut self,
+        previous: &Frame,
+        mouse_shape: MouseShape,
+        kitty: Option<KittyView>,
+    ) -> Result<Option<Frame>, vt::Error> {
         let held = self.held();
         let cursor = self.state.cursor().map(cursor).unwrap_or_default();
         let colors = match self.state.colors().as_ref().map(colors) {
@@ -436,10 +459,12 @@ impl Capture {
             && mouse_shape == previous.mouse_shape
             && held == previous.held
             && cursor == previous.cursor
-            && Arc::ptr_eq(&colors, &previous.colors);
+            && Arc::ptr_eq(&colors, &previous.colors)
+            && kitty.is_none();
         if unchanged {
             return Ok(None);
         }
+        let kitty = kitty.map_or_else(|| Arc::clone(&previous.kitty), Arc::new);
         let seq = self.seq + 1;
         let full = self.state.dirty() == vt::Dirty::Full;
         let (cols, _) = self.state.size();
@@ -452,9 +477,16 @@ impl Capture {
         let mut walk = self.state.rows()?;
         while let Some(mut row) = walk.next_row() {
             let id = row.id().0;
+            let selection = row.selection();
             let kept = (!row.is_dirty()).then(|| reuse.get(&id)).flatten();
             rows.push(match kept {
-                Some(kept) => Arc::clone(kept),
+                Some(kept) if kept.selection == selection => Arc::clone(kept),
+                // the same cells under a changed selection
+                Some(kept) => Arc::new(Row {
+                    changed: seq,
+                    selection,
+                    ..Row::clone(kept)
+                }),
                 None => Arc::new(build_row(&mut row, id, seq, &colors.palette)?),
             });
         }
@@ -469,6 +501,7 @@ impl Capture {
             colors,
             mouse_shape,
             held,
+            kitty,
         }))
     }
 }
@@ -502,6 +535,7 @@ fn cursor(cursor: vt::RenderCursor) -> Cursor {
 }
 
 fn build_row(row: &mut vt::RowRef<'_>, id: [u64; 2], seq: u64, palette: &[Rgb; 256]) -> Result<Row, vt::Error> {
+    let selection = row.selection();
     let mut text = Vec::new();
     let mut cells = Vec::new();
     let mut walk = row.cells()?;
@@ -529,6 +563,7 @@ fn build_row(row: &mut vt::RowRef<'_>, id: [u64; 2], seq: u64, palette: &[Rgb; 2
         cells,
         // the library writes UTF-8; a lossy copy can only differ on bytes it never produces
         text: String::from_utf8(text).unwrap_or_else(|err| String::from_utf8_lossy(err.as_bytes()).into_owned()),
+        selection,
     })
 }
 
@@ -581,7 +616,7 @@ mod tests {
 
     fn capture(terminal: &mut vt::Terminal, capture: &mut Capture, previous: &Frame) -> Option<Frame> {
         capture.state.update(terminal).unwrap();
-        capture.convert(previous, MouseShape::Default).unwrap()
+        capture.convert(previous, MouseShape::Default, None).unwrap()
     }
 
     #[test]
@@ -667,7 +702,7 @@ mod tests {
         let mut state = Capture::new().unwrap();
         let first = capture(&mut terminal, &mut state, &Frame::default()).unwrap();
         state.state.update(&mut terminal).unwrap();
-        let next = state.convert(&first, MouseShape::Pointer).unwrap().unwrap();
+        let next = state.convert(&first, MouseShape::Pointer, None).unwrap().unwrap();
         assert_eq!(next.mouse_shape, MouseShape::Pointer);
         assert!(Arc::ptr_eq(&first.rows[0], &next.rows[0]));
     }

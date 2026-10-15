@@ -405,6 +405,26 @@ impl RowRef<'_> {
         RowId(id.bits)
     }
 
+    /// The selected columns of the row (first and last, inclusive); `None` when the selection misses the row.
+    #[must_use]
+    pub fn selection(&self) -> Option<(u16, u16)> {
+        let mut selection = ffi::GhosttyRenderStateRowSelection {
+            size: std::mem::size_of::<ffi::GhosttyRenderStateRowSelection>(),
+            start_x: 0,
+            end_x: 0,
+        };
+        // SAFETY: the iterator is positioned on this row; `ROW_DATA_SELECTION` fills a sized
+        // `GhosttyRenderStateRowSelection`, or reports no value for a row the selection misses.
+        let result = unsafe {
+            ffi::ghostty_render_state_row_get(
+                self.iterator.as_ptr(),
+                ffi::GHOSTTY_RENDER_STATE_ROW_DATA_SELECTION,
+                (&raw mut selection).cast(),
+            )
+        };
+        (result == ffi::GHOSTTY_SUCCESS).then_some((selection.start_x, selection.end_x))
+    }
+
     /// The row's cells, left to right.
     ///
     /// # Errors

@@ -641,21 +641,55 @@ Built on `agterm-ghostty-vt` (Task 5), with the thread protocol of Technical Det
   `tests/kitty.rs`
 - Modify: `crates/agterm-ghostty-vt/src/` (key/mouse encoders, selection, formatter, paste, search, kitty graphics)
 
-- [ ] toolkit-neutral key struct (physical key, text, modifiers, action) → the C API's key encoder (`vt/key/`) per
+- [x] toolkit-neutral key struct (physical key, text, modifiers, action) → the C API's key encoder (`vt/key/`) per
       terminal modes (legacy, kitty), encoded under the VT lock (the encoder reads modes); mouse → `vt/mouse/` encoder;
       focus events (`focus.h`); bracketed paste via `paste.h`
-- [ ] selection (cell ranges, word/line, select all) via `selection.h`; selected text via `formatter.h`, created and
+- [x] selection (cell ranges, word/line, select all) via `selection.h`; selected text via `formatter.h`, created and
       run under the VT lock
-- [ ] scrollback search via `search.h` (matches, selected index, next/prev) — replaces the search actions;
+- [x] scrollback search via `search.h` (matches, selected index, next/prev) — replaces the search actions;
       `GhosttySearch` in its own mutex, terminal-touching calls under the VT lock, `tick`/`get` on a worker
-- [ ] screen/scrollback read-back via `formatter.h` matching what `ghostty_surface_read_text` returned; cursor column
-- [ ] kitty view in `agterm-term` types (`kitty.rs`) from `kitty_graphics.h`: images (id, generation, format, pixels —
+- [x] screen/scrollback read-back via `formatter.h` matching what `ghostty_surface_read_text` returned; cursor column
+- [x] kitty view in `agterm-term` types (`kitty.rs`) from `kitty_graphics.h`: images (id, generation, format, pixels —
       copied under the VT lock, handles die on mutation), placements (layer, cell rect, source rect, pixel size),
       deletions
-- [ ] the safe API for each of these lands in `agterm-ghostty-vt` with its own unit tests; `agterm-term` wraps it
-- [ ] tests: legacy and kitty encodings (arrows, F-keys, ctrl/alt), bracketed paste, selection text, search counts and
+- [x] the safe API for each of these lands in `agterm-ghostty-vt` with its own unit tests; `agterm-term` wraps it
+- [x] tests: legacy and kitty encodings (arrows, F-keys, ctrl/alt), bracketed paste, selection text, search counts and
       navigation, read-back of wide chars and wrapped lines, kitty APC (chunked) → image and placement in the view
-- [ ] gates — must pass before Task 11
+- [x] gates — must pass before Task 11
+- result (2026-10-15):
+  - `agterm-ghostty-vt` gains `key` (`KeyEncoder`, `encode_focus`), `mouse` (`MouseEncoder`), `paste`
+    (`Terminal::paste`), `selection` (`Point`, set/clear/word/line/all, read back in any space), `format`
+    (`Terminal::format` of a `Region`: viewport, screen, range, selection), `search` and `kitty` (`KittyGraphics`
+    borrows the terminal mutably, so no lent handle outlives a mutation), plus `Terminal::{scroll_viewport,
+    total_rows, mouse_tracking, set_kitty_image_media}` and `RowRef::selection`. The library's match snapshots die on
+    the next mutation, so `Search::{feed, run, select}` return owned `SearchResults` read inside the call; `tick` and
+    the counters need no terminal; `Search::close(&mut Terminal)` frees, and a search dropped unclosed is leaked
+    rather than race a terminal another thread writes.
+  - Keys: `KeyInput` carries core's `PhysicalKey`/`Mods`/`KeyAction`, so one event serves the binds stage
+    (`binds_event`) and the encoder; ghostty's key names and the C key enum list the keys in one order, so the engine
+    key is the name's index (tested). Mouse: `setopt_from_terminal` and a size change reset motion de-duplication, so
+    the encoder re-reads the terminal only when one of the eight mouse-mode bits flips (⚠️ residual: re-setting a
+    mode that is already set does not switch Ghostty's "last one set wins"). Focus reports only in mode 1004.
+  - Paste: `ghostty_terminal_paste` (mode 2004 framing, unsafe text → `Paste::Unsafe` for confirm-and-retry, a Kitty
+    paste event under mode 5522) with its PTY writes diverted into one input chunk, so a paste is queued whole on the
+    bounded input queue instead of the capped reply queue.
+  - Selection: the terminal owns and tracks it; frame rows carry their selected columns (`Row::selection`), and every
+    change marks the capture so the next frame re-checks each row. The selection gesture state machine
+    (`ghostty_selection_gesture_*`, drag and multi-click timing) is bound but not wrapped: Task 14's.
+  - Read-back: plain, unwrapped, untrimmed, viewport or screen top-left to bottom-right, as `dumpTextLocked` read it;
+    neither formatter emits trailing blank rows. ⚠️ Residual: the libghostty formatter moves a range ending on a
+    wide character's spacer head to the next row, the one at `LIBGHOSTTY_VT_REV` does not. `SelectionText::Raw` is
+    `read_selection`, `SelectionText::Copy` trims as `copy_to_clipboard` does.
+  - Search: `Pane::search` (`search:NEEDLE`, empty = `end_search`), `navigate_search` (`next` toward older output),
+    `search_state` (counts, highlights in viewport cells); a worker feeds every 24 ms (Ghostty's `REFRESH_INTERVAL`)
+    under the VT lock and ticks under the search mutex alone. `PaneEvent::SearchTotal`/`SearchSelected` carry what
+    libghostty reported: the selected index is 0-based newest-first, as `SEARCH_SELECTED` delivered it (upstream and
+    core pass it through as is), so the control API's output stays the GTK build's.
+  - Kitty: 320 MB storage and file, temp-file and shared-memory media, as Ghostty's termio sets them; the view is
+    captured with the frame under the VT lock, pixels copied only for a new `(id, generation)` and shared by `Arc`
+    otherwise; only images a placement shows are listed; a pending payload waits; `removed` is against the previous
+    frame.
+  - 40 consecutive runs of both crates' tests: no failures.
 
 ### Task 11: agterm-term — launch, terminal identity, foreground process
 

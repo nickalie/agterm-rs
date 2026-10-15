@@ -29,6 +29,14 @@ impl ClipboardLocation {
             _ => Self::Standard,
         }
     }
+
+    pub(crate) fn raw(self) -> ffi::GhosttyClipboardLocation {
+        match self {
+            Self::Standard => ffi::GHOSTTY_CLIPBOARD_LOCATION_STANDARD,
+            Self::Selection => ffi::GHOSTTY_CLIPBOARD_LOCATION_SELECTION,
+            Self::Primary => ffi::GHOSTTY_CLIPBOARD_LOCATION_PRIMARY,
+        }
+    }
 }
 
 /// One representation of a clipboard write, borrowed for the callback.

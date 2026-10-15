@@ -2,8 +2,10 @@
 //! (reads the PTY and feeds the VT), the writer (drains the bounded write queue into the PTY), and the waiter (reports
 //! the child's exit).
 //!
-//! Locks (Technical Details > Threads): `vt` → `capture` → leaves (`armed`, `published`), never the reverse. The IO
-//! thread holds `vt` for one bounded slice of `vt_write` at a time. Painting ([`Pane::frame`]) `try_lock`s `vt` and
+//! Locks (Technical Details > Threads): `vt` → `capture` → leaves (`armed`, `published`, `divert`), and `vt` →
+//! `search`, never the reverse. The IO thread holds `vt` for one bounded slice of `vt_write` at a time; input
+//! ([`crate::input`]), selection and read-back hold it for one encode or format; the search worker
+//! ([`crate::search`]) for one feed, and ticks with `search` alone. Painting ([`Pane::frame`]) `try_lock`s `vt` and
 //! then `capture`, keeps `vt` only for the begin phase of the capture, and draws the previous frame when either is
 //! busy. Effect callbacks run under `vt` and copy into channels, except the render-hold callback, which takes `capture`
 //! (VT → capture, the one order) and captures the held frame there; nothing may take `vt` while holding `capture`.
@@ -23,11 +25,13 @@ use agterm_ghostty_vt as vt;
 use portable_pty::{Child, MasterPty, native_pty_system};
 
 use crate::effects::{
-    ArmedRead, ArmedSlot, ClipboardAnswer, ClipboardReadRequest, PaneEffects, PaneEvent, TerminalColors,
+    ArmedRead, ArmedSlot, ClipboardAnswer, ClipboardReadRequest, DivertSlot, PaneEffects, PaneEvent, TerminalColors,
 };
+use crate::input::InputState;
 use crate::pty::{self, GridSize, PaneCommand, Ready, WakePipe, WriteQueue};
 use crate::render::{Capture, Frame, MouseShape, ThemeColors};
 use crate::scan::{ReadCandidate, Scanner};
+use crate::search::SearchSlot;
 use crate::{PaneError, ScrollbackLimits};
 
 /// The most bytes one read batch gathers before the VT sees them.
@@ -38,6 +42,8 @@ const VT_SLICE: usize = 64 * 1024;
 const EXIT_GRACE: Duration = Duration::from_secs(1);
 /// The default limit of the write queue (input waiting for the child).
 pub const DEFAULT_WRITE_LIMIT: usize = 1024 * 1024;
+/// Ghostty's default Kitty image storage per screen (`image-storage-limit = 320000000`).
+pub const DEFAULT_KITTY_IMAGE_LIMIT: u64 = 320_000_000;
 
 /// Called from the pane's threads when it has news (a frame to draw or events to drain); coalesced until the frontend
 /// calls [`Pane::frame`] or [`Pane::take_events`].
@@ -51,6 +57,8 @@ pub struct PaneConfig {
     pub colors: ThemeColors,
     /// The most input bytes queued for the child before [`Pane::write`] refuses more.
     pub write_limit: usize,
+    /// The Kitty image storage per screen in bytes; zero turns the Kitty graphics protocol off.
+    pub kitty_image_limit: u64,
     pub wake: Option<Wake>,
 }
 
@@ -62,6 +70,7 @@ impl PaneConfig {
             scrollback: ScrollbackLimits::default(),
             colors: ThemeColors::default(),
             write_limit: DEFAULT_WRITE_LIMIT,
+            kitty_image_limit: DEFAULT_KITTY_IMAGE_LIMIT,
             wake: None,
         }
     }
@@ -74,6 +83,7 @@ impl std::fmt::Debug for PaneConfig {
             .field("scrollback", &self.scrollback)
             .field("colors", &self.colors)
             .field("write_limit", &self.write_limit)
+            .field("kitty_image_limit", &self.kitty_image_limit)
             .field("wake", &self.wake.is_some())
             .finish()
     }
@@ -117,6 +127,10 @@ struct Counters {
 /// What the VT lock guards.
 pub(crate) struct Vt {
     pub(crate) terminal: vt::Terminal,
+    /// The key and mouse encoders.
+    pub(crate) input: InputState,
+    /// The grid and cell size the terminal was last resized to.
+    pub(crate) size: GridSize,
     /// The colors last reported with [`PaneEvent::Colors`].
     colors: vt::TerminalColors,
 }
@@ -135,6 +149,11 @@ pub(crate) struct Shared {
     capture: Arc<Mutex<Capture>>,
     published: Mutex<Arc<Frame>>,
     armed: ArmedSlot,
+    /// Where the terminal's PTY writes go instead of the reply queue while a paste runs.
+    pub(crate) divert: DivertSlot,
+    pub(crate) search: Mutex<SearchSlot>,
+    /// Wakes the search worker early (a new needle, the pane going away).
+    pub(crate) search_wake: Condvar,
     writer: Arc<WriteQueue>,
     events: Sender<PaneEvent>,
     wake: Option<Wake>,
@@ -162,7 +181,7 @@ fn try_lock<T>(mutex: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
 
 impl Shared {
     /// Tell the frontend there is news, once until it looks.
-    fn wake(&self) {
+    pub(crate) fn wake(&self) {
         if !self.wake_pending.swap(true, Ordering::AcqRel)
             && let Some(wake) = &self.wake
         {
@@ -171,8 +190,13 @@ impl Shared {
         }
     }
 
-    fn send(&self, event: PaneEvent) {
+    pub(crate) fn send(&self, event: PaneEvent) {
         let _ = self.events.send(event);
+    }
+
+    /// Make the next paint convert (and re-check every row's selection); the caller holds the VT lock.
+    pub(crate) fn touch_capture(&self) {
+        lock(&self.capture).touch();
     }
 
     /// The frame last published by a paint.
@@ -259,8 +283,7 @@ impl Pane {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn shared(&self) -> &Shared {
+    pub(crate) fn shared(&self) -> &Arc<Shared> {
         &self.shared
     }
 
@@ -286,10 +309,12 @@ impl Pane {
     ///
     /// [`PaneError::Terminal`] for a zero size or a failed reflow, [`PaneError::Pty`] when the PTY refuses it.
     pub fn resize(&self, size: GridSize) -> Result<(), PaneError> {
-        lock(&self.shared.vt)
-            .terminal
+        let mut vt = lock(&self.shared.vt);
+        vt.terminal
             .resize(size.cols, size.rows, size.cell_width, size.cell_height)
             .map_err(PaneError::terminal)?;
+        vt.size = size;
+        drop(vt);
         lock(&self.master)
             .resize(size.pty())
             .map_err(|err| PaneError::Pty(err.to_string()))?;
@@ -368,6 +393,7 @@ impl Drop for Pane {
         if let Some(io) = self.io.take() {
             let _ = io.join();
         }
+        crate::search::shut_down(&self.shared);
     }
 }
 
@@ -383,8 +409,10 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
         .set_scrollback_limits(config.scrollback.engine())
         .map_err(PaneError::terminal)?;
     config.colors.apply(&mut terminal).map_err(PaneError::terminal)?;
+    kitty_graphics(&mut terminal, config.kitty_image_limit).map_err(PaneError::terminal)?;
     let capture = Arc::new(Mutex::new(Capture::new().map_err(PaneError::terminal)?));
     let armed: ArmedSlot = Arc::default();
+    let divert: DivertSlot = Arc::default();
     let writer = Arc::new(WriteQueue::new(config.write_limit));
     terminal
         .set_effects(Box::new(PaneEffects {
@@ -392,15 +420,25 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
             writer: Arc::clone(&writer),
             capture: Arc::clone(&capture),
             armed: Arc::clone(&armed),
+            divert: Arc::clone(&divert),
             xtversion: format!("ghostty {}", vt::version()),
         }))
         .map_err(PaneError::terminal)?;
     let colors = terminal.colors();
+    let input = InputState::new().map_err(PaneError::terminal)?;
     Ok(Shared {
-        vt: Mutex::new(Vt { terminal, colors }),
+        vt: Mutex::new(Vt {
+            terminal,
+            input,
+            size,
+            colors,
+        }),
         capture,
         published: Mutex::new(Arc::new(Frame::default())),
         armed,
+        divert,
+        search: Mutex::new(SearchSlot::default()),
+        search_wake: Condvar::new(),
         writer,
         events,
         wake: config.wake.clone(),
@@ -410,6 +448,14 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
         #[cfg(test)]
         before_paint: Mutex::new(None),
     })
+}
+
+/// Kitty graphics as Ghostty sets them up: `limit` bytes of storage, and images loadable from files, temporary files
+/// (in the system's temporary directory) and shared memory besides the escape sequence itself.
+fn kitty_graphics(terminal: &mut vt::Terminal, limit: u64) -> Result<(), vt::Error> {
+    terminal.set_kitty_image_storage_limit(limit)?;
+    let temp = std::env::temp_dir();
+    terminal.set_kitty_image_media(true, temp.to_str(), true)
 }
 
 fn spawn_thread(name: &str, body: impl FnOnce() + Send + 'static) -> Result<JoinHandle<()>, PaneError> {
@@ -451,9 +497,12 @@ fn capture(shared: &Shared) -> Option<Arc<Frame>> {
     let mut capture = try_lock(&shared.capture)?;
     end_expired_hold(&mut vt, &mut capture);
     let mouse_shape = MouseShape::from_engine(vt.terminal.mouse_shape());
+    let mut kitty = None;
     if capture.held() {
         drop(vt);
     } else {
+        // VT → capture → published: the Kitty view is read against the last published one while the terminal is held
+        kitty = crate::kitty::capture(&mut vt.terminal, &lock(&shared.published).kitty);
         let pending = capture.state.begin_update(&mut vt.terminal);
         // only the begin phase reads the terminal
         drop(vt);
@@ -462,7 +511,7 @@ fn capture(shared: &Shared) -> Option<Arc<Frame>> {
         }
     }
     let mut published = lock(&shared.published);
-    match capture.convert(&published, mouse_shape) {
+    match capture.convert(&published, mouse_shape, kitty) {
         Ok(Some(frame)) => *published = Arc::new(frame),
         Ok(None) => {}
         Err(err) => tracing::warn!(%err, "converting the capture failed"),

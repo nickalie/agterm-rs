@@ -45,6 +45,14 @@ impl ClipboardLocation {
             vt::ClipboardLocation::Primary => Self::Primary,
         }
     }
+
+    pub(crate) fn engine(self) -> vt::ClipboardLocation {
+        match self {
+            Self::Standard => vt::ClipboardLocation::Standard,
+            Self::Selection => vt::ClipboardLocation::Selection,
+            Self::Primary => vt::ClipboardLocation::Primary,
+        }
+    }
 }
 
 /// One representation of a clipboard value.
@@ -171,6 +179,10 @@ pub enum PaneEvent {
     ClipboardWrite(ClipboardWrite),
     ClipboardRead(ClipboardReadRequest),
     Colors(TerminalColors),
+    /// The search's match count changed (libghostty's `SEARCH_TOTAL`); `None` once the search ended.
+    SearchTotal(Option<usize>),
+    /// The selected match changed (`SEARCH_SELECTED`): its index, newest first; `None` with none selected.
+    SearchSelected(Option<usize>),
     /// The program exited. Its output has been processed first, unless the PTY stays open after the exit (a background
     /// process holding it) for longer than a second; a clipboard read still waiting for its answer is denied then.
     Exited(ExitStatus),
@@ -187,6 +199,10 @@ pub(crate) struct ArmedRead {
 /// The armed answer, shared by the IO thread (arms and clears it around the dispatch byte, under the VT lock) and
 /// the callback (inside that same `vt_write`).
 pub(crate) type ArmedSlot = Arc<Mutex<Option<ArmedRead>>>;
+
+/// While `Some`, the terminal's PTY writes collect here instead of the reply queue (a paste, queued whole as input).
+/// Set and taken under the VT lock, around the one call that writes.
+pub(crate) type DivertSlot = Arc<Mutex<Option<Vec<u8>>>>;
 
 /// The MIME type served (as the GTK build serves it: text only).
 const TEXT: &str = "text/plain";
@@ -210,6 +226,7 @@ pub(crate) struct PaneEffects {
     pub writer: Arc<WriteQueue>,
     pub capture: Arc<Mutex<Capture>>,
     pub armed: ArmedSlot,
+    pub divert: DivertSlot,
     pub xtversion: String,
 }
 
@@ -289,7 +306,11 @@ fn program_status(status: vt::ProgramStatus) -> ProgramStatus {
 
 impl vt::Effects for PaneEffects {
     fn write_pty(&mut self, data: &[u8]) {
-        self.writer.push_reply(data);
+        let mut divert = self.divert.lock().unwrap_or_else(PoisonError::into_inner);
+        match divert.as_mut() {
+            Some(diverted) => diverted.extend_from_slice(data),
+            None => self.writer.push_reply(data),
+        }
     }
 
     fn bell(&mut self) {
@@ -379,6 +400,7 @@ mod tests {
             writer: Arc::new(WriteQueue::new(1024)),
             capture: Arc::new(Mutex::new(Capture::new().unwrap())),
             armed: Arc::new(Mutex::new(armed)),
+            divert: Arc::default(),
             xtversion: String::new(),
         }
     }

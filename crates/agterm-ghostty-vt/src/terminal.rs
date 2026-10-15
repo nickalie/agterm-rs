@@ -3,6 +3,19 @@
 use crate::effects::{CALLBACKS, EffectsSlot};
 use crate::{Effects, Error, Handle, Mode, MouseShape, Rgb, ScrollbackLimits, TerminalColors, ffi, string_bytes};
 
+/// A viewport scroll.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Scroll {
+    /// To the top of the scrollback.
+    Top,
+    /// To the active area.
+    Bottom,
+    /// By rows; negative is up.
+    Rows(isize),
+    /// By shell prompts (needs the shell's semantic prompt marks); negative is back.
+    Prompts(isize),
+}
+
 /// One VT: parser, screens and scrollback, owned and freed on drop.
 ///
 /// Mutating calls take `&mut self`, which serializes them as the C API asks; the handle is `Send` and not `Sync`
@@ -334,9 +347,110 @@ impl Terminal {
         )
     }
 
+    /// The total rows of the active screen, scrollback included.
+    #[must_use]
+    pub fn total_rows(&self) -> usize {
+        let mut value: usize = 0;
+        // SAFETY: the terminal is live; `DATA_TOTAL_ROWS` writes a `size_t`.
+        unsafe {
+            ffi::ghostty_terminal_get(
+                self.raw.ptr(),
+                ffi::GHOSTTY_TERMINAL_DATA_TOTAL_ROWS,
+                (&raw mut value).cast(),
+            )
+        };
+        value
+    }
+
+    /// Whether the viewport follows the active area (not scrolled back).
+    #[must_use]
+    pub fn viewport_at_bottom(&self) -> bool {
+        self.get_bool(ffi::GHOSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE, true)
+    }
+
+    /// Whether a program turned on mouse reporting (any tracking mode).
+    #[must_use]
+    pub fn mouse_tracking(&self) -> bool {
+        self.get_bool(ffi::GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, false)
+    }
+
+    /// Scroll the viewport.
+    pub fn scroll_viewport(&mut self, scroll: Scroll) {
+        let (tag, value) = match scroll {
+            Scroll::Top => (
+                ffi::GHOSTTY_SCROLL_VIEWPORT_TOP,
+                ffi::GhosttyTerminalScrollViewportValue { delta: 0 },
+            ),
+            Scroll::Bottom => (
+                ffi::GHOSTTY_SCROLL_VIEWPORT_BOTTOM,
+                ffi::GhosttyTerminalScrollViewportValue { delta: 0 },
+            ),
+            Scroll::Rows(delta) => (
+                ffi::GHOSTTY_SCROLL_VIEWPORT_DELTA,
+                ffi::GhosttyTerminalScrollViewportValue { delta },
+            ),
+            Scroll::Prompts(delta) => (
+                ffi::GHOSTTY_SCROLL_VIEWPORT_DELTA_PROMPT,
+                ffi::GhosttyTerminalScrollViewportValue { delta_prompt: delta },
+            ),
+        };
+        let behavior = ffi::GhosttyTerminalScrollViewport { tag, value };
+        // SAFETY: the terminal is live and `&mut self` serializes the call; the tag selects the union member set.
+        unsafe { ffi::ghostty_terminal_scroll_viewport(self.raw.ptr(), behavior) };
+    }
+
+    /// Allow or forbid loading Kitty images from files, from temporary files under `temp_dir` (`None` forbids) and
+    /// from shared memory; Ghostty allows all three, temporary files in the system's temporary directory.
+    ///
+    /// # Errors
+    ///
+    /// The library's result when an option is refused.
+    pub fn set_kitty_image_media(
+        &mut self,
+        file: bool,
+        temp_dir: Option<&str>,
+        shared_memory: bool,
+    ) -> Result<(), Error> {
+        for (option, value) in [
+            (ffi::GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_FILE, file),
+            (ffi::GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_SHARED_MEM, shared_memory),
+        ] {
+            // SAFETY: the terminal is live; both options read a `bool` during the call.
+            Error::check(unsafe { ffi::ghostty_terminal_set(self.raw.ptr(), option, (&raw const value).cast()) })?;
+        }
+        let dir = temp_dir.map(|dir| ffi::GhosttyString {
+            ptr: dir.as_ptr(),
+            len: dir.len(),
+        });
+        let value = dir
+            .as_ref()
+            .map_or(std::ptr::null(), |dir| std::ptr::from_ref(dir).cast());
+        // SAFETY: the terminal is live; `MEDIUM_TEMP_FILE` copies the string during the call, null disables.
+        Error::check(unsafe {
+            ffi::ghostty_terminal_set(
+                self.raw.ptr(),
+                ffi::GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_TEMP_FILE,
+                value,
+            )
+        })
+    }
+
     /// The raw handle, for the wrapper's other types; it stays owned by `self`.
     pub(crate) fn as_raw(&mut self) -> ffi::GhosttyTerminal {
         self.raw.ptr()
+    }
+
+    /// The raw handle for a call that only reads the terminal (`&self` keeps mutating calls out meanwhile).
+    pub(crate) fn raw_shared(&self) -> ffi::GhosttyTerminal {
+        self.raw.ptr()
+    }
+
+    /// A `bool` datum, or `default` when the library has none.
+    fn get_bool(&self, data: ffi::GhosttyTerminalData, default: bool) -> bool {
+        let mut value = default;
+        // SAFETY: the terminal is live; the keys passed here write a `bool`.
+        unsafe { ffi::ghostty_terminal_get(self.raw.ptr(), data, (&raw mut value).cast()) };
+        value
     }
 
     /// A `uint16_t` datum (`terminal.h` documents the output type of each key read through here).
