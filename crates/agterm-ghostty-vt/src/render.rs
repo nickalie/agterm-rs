@@ -136,12 +136,14 @@ impl RenderState {
     pub fn begin_update(&mut self, terminal: &mut Terminal) -> Result<PendingUpdate<'_>, Error> {
         // SAFETY: both handles are live and owned by their `&mut` borrowers, so no other call runs on either.
         let result = unsafe { ffi::ghostty_render_state_begin_update(self.raw.ptr(), terminal.as_raw()) };
-        let result = self.record(Error::check(result));
-        let pending = PendingUpdate {
+        // Invalid until the end phase ran: the begin phase only queues the per-cell styles that end writes, so a
+        // forgotten guard must not leave the half-built capture readable.
+        self.valid = false;
+        Error::check(result)?;
+        Ok(PendingUpdate {
             state: self,
             ended: false,
-        };
-        result.map(|()| pending)
+        })
     }
 
     /// Keep the outcome of an update: a failure invalidates the capture until the next success.
@@ -318,17 +320,23 @@ impl PendingUpdate<'_> {
     ///
     /// The library's result; it fails only for a null state, which this type cannot hold.
     pub fn end(mut self) -> Result<(), Error> {
+        self.finish()
+    }
+
+    /// Run the end phase once; the capture is readable again only if it succeeded.
+    fn finish(&mut self) -> Result<(), Error> {
         self.ended = true;
         // SAFETY: the state is live and borrowed mutably by `self`; end touches only memory the state owns.
-        Error::check(unsafe { ffi::ghostty_render_state_end_update(self.state.raw.ptr()) })
+        let result = Error::check(unsafe { ffi::ghostty_render_state_end_update(self.state.raw.ptr()) });
+        self.state.record(result)
     }
 }
 
 impl Drop for PendingUpdate<'_> {
     fn drop(&mut self) {
         if !self.ended {
-            // SAFETY: as in `end`; a begun update must always be ended before the state is read again.
-            unsafe { ffi::ghostty_render_state_end_update(self.state.raw.ptr()) };
+            // a begun update must always be ended before the state is read again
+            let _ = self.finish();
         }
     }
 }
@@ -490,6 +498,26 @@ mod tests {
         assert_ne!(state.dirty(), Dirty::Clean);
         state.clean();
         assert_eq!(state.dirty(), Dirty::Clean);
+    }
+
+    #[test]
+    fn a_forgotten_update_guard_leaves_the_capture_unreadable_until_the_next_update() {
+        let mut terminal = Terminal::new(10, 2).unwrap();
+        terminal.vt_write(b"\x1b[1;31mred\x1b[0m");
+        let mut state = RenderState::new().unwrap();
+        state.update(&mut terminal).unwrap();
+        assert!(state.colors().is_some());
+        // the begin phase queued styles only the end phase writes: nothing may read the half-built capture
+        std::mem::forget(state.begin_update(&mut terminal).unwrap());
+        assert_eq!(state.size(), (0, 0));
+        assert_eq!(state.rows().err(), Some(Error::NoValue));
+        assert!(state.colors().is_none());
+        assert!(state.cursor().is_none());
+        // a complete update (two-phase, ended by dropping the guard) makes it readable again
+        drop(state.begin_update(&mut terminal).unwrap());
+        assert_eq!(screen(&mut state), ["red", ""]);
+        state.begin_update(&mut terminal).unwrap().end().unwrap();
+        assert!(state.colors().is_some());
     }
 
     #[test]

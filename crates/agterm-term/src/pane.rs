@@ -238,8 +238,10 @@ impl Pane {
         let parts = match parts {
             Ok(parts) => parts,
             Err(err) => {
-                // nothing started yet: only the child to stop and reap
+                // nothing started yet: only the child to stop and reap. Killed through the owned child too, which
+                // needs no pidfd (portable-pty sends SIGHUP and escalates to SIGKILL), so the wait cannot hang.
                 signal.kill();
+                let _ = child.kill();
                 let _ = child.wait();
                 return Err(err);
             }
@@ -493,6 +495,10 @@ impl Signaller {
     #[cfg(target_os = "linux")]
     fn new(pid: Option<u32>) -> Self {
         use std::os::fd::FromRawFd;
+        #[cfg(test)]
+        if tests::NO_PIDFD.with(std::cell::Cell::get) {
+            return Self { pidfd: None };
+        }
         let pidfd = pid.and_then(|pid| {
             // SAFETY: `pidfd_open` takes a pid and flags and returns a new descriptor or -1; no memory is touched. The
             // child is not reaped yet (its waiter starts after this), so the pid is still the child's.
@@ -577,6 +583,8 @@ impl Parts {
             wake.wake();
             shared.writer.close();
             signal.kill();
+            // the pidfd may be missing (pidfd_open failed): the owned child kills without one
+            let _ = child.kill();
             if let Some(io) = io {
                 let _ = io.join();
             }
@@ -851,6 +859,8 @@ mod tests {
         pub(super) static LAST_CHILD: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
         /// A thread name whose start `spawn_thread` fails on this thread (fault injection).
         pub(super) static FAIL_THREAD: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+        /// Whether `Signaller::new` acts as if `pidfd_open` failed, on this thread.
+        pub(super) static NO_PIDFD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
 
     const fn assert_send_sync<T: Send + Sync>() {}
@@ -877,7 +887,7 @@ mod tests {
             .cwd(dir.path());
         let pane = Pane::spawn(&command, &PaneConfig::new(SIZE)).unwrap();
         let first = wait_for(&pane, "first");
-        pane.write(b"\n").unwrap();
+        // the child now waits in `read`: nothing else takes the locks while this test holds them
         {
             let _vt = lock(&pane.shared.vt);
             let snapshot = pane.frame();
@@ -889,9 +899,15 @@ mod tests {
             let snapshot = pane.frame();
             assert!(snapshot.stale);
             assert!(Arc::ptr_eq(&snapshot.frame, &first));
-            // the VT lock was released on the way out
-            assert!(pane.shared.vt.try_lock().is_ok());
         }
+        // with both free again a paint is fresh (once the IO thread's post-batch check, if it was waiting on the
+        // lock, is done), and new output reaches the screen
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while pane.frame().stale {
+            assert!(Instant::now() < deadline, "paints stayed stale");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        pane.write(b"\n").unwrap();
         wait_for(&pane, "second");
     }
 
@@ -919,26 +935,36 @@ mod tests {
         assert_eq!(pane.frame().frame.lines()[0], "XYZ", "older rows were published");
     }
 
+    /// `Pane::spawn` of `script` on a worker thread whose thread `fail` cannot start (and, with `no_pidfd`, whose
+    /// pidfd could not be opened): the error and the child's pid, or a panic when the cleanup hangs.
+    fn failed_start(script: &'static str, fail: &'static str, no_pidfd: bool) -> (PaneError, u32) {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let dir = tempfile::tempdir().unwrap();
+            let command = PaneCommand::new("/bin/sh").arg("-c").arg(script).cwd(dir.path());
+            FAIL_THREAD.with(|cell| cell.set(Some(fail)));
+            NO_PIDFD.with(|cell| cell.set(no_pidfd));
+            let error = Pane::spawn(&command, &PaneConfig::new(SIZE)).unwrap_err();
+            let pid = LAST_CHILD.with(std::cell::Cell::get).unwrap();
+            let _ = tx.send((error, pid));
+        });
+        rx.recv_timeout(Duration::from_secs(20))
+            .unwrap_or_else(|_| panic!("{fail} (no pidfd: {no_pidfd}): the failed start hung"))
+    }
+
     #[test]
     fn a_pane_that_fails_to_start_a_thread_stops_its_child_and_workers() {
-        let dir = tempfile::tempdir().unwrap();
-        let command = PaneCommand::new("/bin/sh")
-            .arg("-c")
-            .arg("exec sleep 30")
-            .cwd(dir.path());
-        for thread in ["pane-write", "pane-io", "pane-wait"] {
-            FAIL_THREAD.with(|fail| fail.set(Some(thread)));
-            let started = Instant::now();
-            let error = Pane::spawn(&command, &PaneConfig::new(SIZE)).unwrap_err();
-            FAIL_THREAD.with(|fail| fail.set(None));
-            assert!(matches!(error, PaneError::Pty(_)), "{thread}: {error:?}");
-            assert!(started.elapsed() < Duration::from_secs(5), "{thread}: the cleanup hung");
-            // killed and reaped: not even a zombie is left
-            let pid = LAST_CHILD.with(std::cell::Cell::get).unwrap();
-            assert!(
-                !std::path::Path::new(&format!("/proc/{pid}")).exists(),
-                "{thread}: child {pid} is left"
-            );
+        // a child that ignores SIGHUP too: without a pidfd only the owned child's SIGKILL escalation ends it
+        for (script, no_pidfd) in [("exec sleep 30", false), ("trap '' HUP; exec sleep 30", true)] {
+            for thread in ["pane-write", "pane-io", "pane-wait"] {
+                let (error, pid) = failed_start(script, thread, no_pidfd);
+                assert!(matches!(error, PaneError::Pty(_)), "{thread}: {error:?}");
+                // killed and reaped: not even a zombie is left
+                assert!(
+                    !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+                    "{thread} (no pidfd: {no_pidfd}): child {pid} is left"
+                );
+            }
         }
     }
 

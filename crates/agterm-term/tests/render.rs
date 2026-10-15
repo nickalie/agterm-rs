@@ -141,6 +141,9 @@ fn an_expired_hold_wakes_the_frontend_without_a_paint() {
     // the hold expires after a second; the child stays, so its exit cannot be what wakes the frontend
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut seen = wakes.load(Ordering::SeqCst);
+    // a wake already counted may have left the coalescing flag set; clear it without painting, as a frontend
+    // draining events does, so the expiry's wake can fire
+    let _ = fixture.pane.take_events();
     loop {
         while wakes.load(Ordering::SeqCst) == seen {
             assert!(Instant::now() < deadline, "no wake came for the expired hold");
