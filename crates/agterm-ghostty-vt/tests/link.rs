@@ -1,7 +1,7 @@
 //! Links the vendored static libghostty-vt through the wrapper: VT bytes in, the screen read back out.
 //! `Send` is checked at compile time below; `!Sync` is pinned by the crate docs' `compile_fail` examples.
 
-use agterm_ghostty_vt::{Dirty, Error, RenderState, Terminal};
+use agterm_ghostty_vt::{CursorStyle, Dirty, Error, RenderState, Terminal};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -62,5 +62,40 @@ fn a_terminal_and_its_capture_move_to_another_thread() -> TestResult {
     });
     let lines = worker.join().map_err(|_| "the worker panicked")??;
     assert_eq!(lines, ["from main", "from worker"]);
+    Ok(())
+}
+
+fn cursor(terminal: &mut Terminal, state: &mut RenderState) -> Result<(CursorStyle, bool), Error> {
+    state.update(terminal)?;
+    let cursor = state.cursor().unwrap_or_default();
+    Ok((cursor.style, cursor.blinking))
+}
+
+#[test]
+fn the_default_cursor_applies_now_and_on_a_decscusr_reset() -> TestResult {
+    let mut terminal = Terminal::new(8, 2)?;
+    let mut state = RenderState::new()?;
+    assert_eq!(
+        cursor(&mut terminal, &mut state)?,
+        (CursorStyle::Block, false),
+        "the library's default"
+    );
+    terminal.set_default_cursor(CursorStyle::Bar, true)?;
+    assert_eq!(
+        cursor(&mut terminal, &mut state)?,
+        (CursorStyle::Bar, true),
+        "no program chose one yet"
+    );
+    // a program's choice wins until it asks for the default again
+    terminal.vt_write(b"\x1b[4 q");
+    assert_eq!(cursor(&mut terminal, &mut state)?, (CursorStyle::Underline, false));
+    terminal.vt_write(b"\x1b[0 q");
+    assert_eq!(cursor(&mut terminal, &mut state)?, (CursorStyle::Bar, true));
+    terminal.vt_write(b"\x1b[2 q\x1bc");
+    assert_eq!(
+        cursor(&mut terminal, &mut state)?,
+        (CursorStyle::Bar, true),
+        "a full reset"
+    );
     Ok(())
 }

@@ -81,6 +81,9 @@ gio = "0.22"
 # The GPUI frontend (agterm-gpui): Zed's GPUI through gpui-kit, which pins the `gpui-pre` snapshot it re-exports
 # (`=0.3.9`, wgpu 29.0.4). Default features: its components and assets, never `gpui-fast` (longbridge's own backend).
 gpui-kit = "=0.7.3"
+# agterm-gpui's tests measure a real font through GPUI's Linux text system (`CosmicTextSystem`), the crate gpui-kit
+# already links at the version its `gpui-pre` pins.
+gpui-pre-wgpu = "=0.3.9"
 # agterm-gpui's single instance: GApplication's own D-Bus protocol (`org.gtk.Application`, `org.gtk.Actions`) on the
 # app id's bus name, so GTK and GPUI launches forward to each other.
 zbus = "5.19"

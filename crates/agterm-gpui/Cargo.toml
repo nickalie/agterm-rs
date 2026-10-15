@@ -16,6 +16,7 @@ agterm-core.workspace = true
 agterm-host.workspace = true
 agterm-proto.workspace = true
 agterm-server.workspace = true
+agterm-term.workspace = true
 async-channel.workspace = true
 gpui-kit.workspace = true
 libc.workspace = true
@@ -34,6 +35,7 @@ zbus.workspace = true
 [dev-dependencies]
 agterm-host = { workspace = true, features = ["fakes"] }
 gpui-kit = { workspace = true, features = ["test-support"] }
+gpui-pre-wgpu.workspace = true
 tempfile.workspace = true
 
 [lints]

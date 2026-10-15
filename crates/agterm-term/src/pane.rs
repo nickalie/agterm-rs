@@ -30,7 +30,7 @@ use crate::effects::{
 use crate::exit::{ExitPolicy, Layout};
 use crate::input::InputState;
 use crate::pty::{self, GridSize, PaneCommand, Ready, WakePipe, WriteQueue};
-use crate::render::{Capture, Frame, MouseShape, ThemeColors};
+use crate::render::{Capture, CursorDefaults, Frame, MouseShape, ThemeColors};
 use crate::scan::{ReadCandidate, Scanner};
 use crate::search::SearchSlot;
 use crate::{PaneError, ScrollbackLimits};
@@ -56,6 +56,8 @@ pub struct PaneConfig {
     pub size: GridSize,
     pub scrollback: ScrollbackLimits,
     pub colors: ThemeColors,
+    /// The cursor the terminal starts with and returns to.
+    pub cursor: CursorDefaults,
     /// The most input bytes queued for the child before [`Pane::write`] refuses more.
     pub write_limit: usize,
     /// The Kitty image storage per screen in bytes; zero turns the Kitty graphics protocol off.
@@ -72,6 +74,7 @@ impl PaneConfig {
             size,
             scrollback: ScrollbackLimits::default(),
             colors: ThemeColors::default(),
+            cursor: CursorDefaults::default(),
             write_limit: DEFAULT_WRITE_LIMIT,
             kitty_image_limit: DEFAULT_KITTY_IMAGE_LIMIT,
             exit: ExitPolicy::default(),
@@ -86,6 +89,7 @@ impl std::fmt::Debug for PaneConfig {
             .field("size", &self.size)
             .field("scrollback", &self.scrollback)
             .field("colors", &self.colors)
+            .field("cursor", &self.cursor)
             .field("write_limit", &self.write_limit)
             .field("kitty_image_limit", &self.kitty_image_limit)
             .field("exit", &self.exit)
@@ -383,6 +387,20 @@ impl Pane {
         Ok(())
     }
 
+    /// Change the cursor the terminal returns to (a config reload); the current cursor follows while no program chose
+    /// one.
+    ///
+    /// # Errors
+    ///
+    /// [`PaneError::Terminal`] when the library refuses a value.
+    pub fn set_cursor_defaults(&self, cursor: CursorDefaults) -> Result<(), PaneError> {
+        cursor
+            .apply(&mut lock(&self.shared.vt).terminal)
+            .map_err(PaneError::terminal)?;
+        self.shared.wake();
+        Ok(())
+    }
+
     /// The frame to draw now. Captures the terminal when both locks are free (`try_lock`: paint never waits on the
     /// IO thread), otherwise returns the previous frame marked stale. Every view of the pane shares the result.
     pub fn frame(&self) -> FrameSnapshot {
@@ -445,6 +463,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
         .set_scrollback_limits(config.scrollback.engine())
         .map_err(PaneError::terminal)?;
     config.colors.apply(&mut terminal).map_err(PaneError::terminal)?;
+    config.cursor.apply(&mut terminal).map_err(PaneError::terminal)?;
     kitty_graphics(&mut terminal, config.kitty_image_limit).map_err(PaneError::terminal)?;
     let capture = Arc::new(Mutex::new(Capture::new().map_err(PaneError::terminal)?));
     let armed: ArmedSlot = Arc::default();

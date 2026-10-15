@@ -56,8 +56,8 @@ pub use launch::{COMMAND_SHELL, FALLBACK_TERM, Host, Launch, Prepared, resolve_r
 pub use pane::{DEFAULT_KITTY_IMAGE_LIMIT, DEFAULT_WRITE_LIMIT, FrameSnapshot, Pane, PaneConfig, PaneStats, Wake};
 pub use pty::{GridSize, PaneCommand};
 pub use render::{
-    Cell, CellFlags, CellWidth, Colors, Cursor, CursorPosition, CursorStyle, Frame, MouseShape, Rgb, Row, ThemeColors,
-    Underline,
+    Cell, CellFlags, CellWidth, Colors, Cursor, CursorDefaults, CursorPosition, CursorStyle, Frame, MouseShape, Rgb,
+    Row, ThemeColors, Underline,
 };
 pub use scan::ReadScope;
 pub use search::{Highlight, SearchState, SearchStep};

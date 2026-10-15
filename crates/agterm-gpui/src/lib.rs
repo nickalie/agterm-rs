@@ -11,3 +11,4 @@ pub mod instance;
 pub mod main_loop;
 pub mod signals;
 pub mod state;
+pub mod terminal;

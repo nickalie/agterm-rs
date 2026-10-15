@@ -880,20 +880,75 @@ headers, rebuilt on `agterm-term` and current GPUI.
 
 **Files:**
 - Create: `crates/agterm-gpui/src/terminal/{element,metrics,row_cache,colors,surface}.rs`, `terminal/tests.rs`
+- ➕ Create: `crates/agterm-gpui/src/terminal.rs` (module root: `Terminal`, `Shared`, `TerminalView`),
+  `terminal/font.rs`; Modify: `crates/agterm-gpui/{Cargo.toml,src/lib.rs}`, `Cargo.toml` (dep `agterm-term`, dev-dep
+  `gpui-pre-wgpu =0.3.9`), `crates/agterm-term/src/{render,pane,lib}.rs` + `tests/render.rs` (`CursorDefaults`),
+  `crates/agterm-ghostty-vt/src/terminal.rs` + `tests/link.rs` (`set_default_cursor`), `.github/workflows/rust-linux.yml`
+  (`fontconfig`, `fonts-dejavu-core`)
 
-- [ ] cell metrics from the configured font; padding incl. `window-padding-balance`; resize → pane resize
-- [ ] frame per Technical Details > Frame: merged background quads, shaped runs with a row cache over dirty rows,
+- [x] cell metrics from the configured font; padding incl. `window-padding-balance`; resize → pane resize
+- [x] frame per Technical Details > Frame: merged background quads, shaped runs with a row cache over dirty rows,
       decorations, cursor styles, focus state; colors from config/theme and OSC overrides; wide chars and graphemes
-- [ ] several views of one pane (the dashboard draws a second, view-only one): render state per view, input only on
+- [x] several views of one pane (the dashboard draws a second, view-only one): render state per view, input only on
       the owning view
-- [ ] `agterm_host::Surface` impl over the pane — every method GTK's `surface.rs` implements: `pane_token`,
+- [x] `agterm_host::Surface` impl over the pane — every method GTK's `surface.rs` implements: `pane_token`,
       `is_realized`, `is_live_session`, `promote_to_primary`, `type_text` (keystroke path with `SUBMIT_GAP`),
       `read_text`, `read_selection`, `cursor_column`, `binding_action` (Task 8), `foreground_pid`, `font_size`,
       `cell_size`, `teardown`
-- [ ] "first frame drawn" debug log line under `agterm::surface` (what `ghostty_probe.py` reads)
-- [ ] tests (headless): metrics for a known font, dirty-row cache invalidation, run splitting by style, cursor styles,
+- [x] "first frame drawn" debug log line under `agterm::surface` (what `ghostty_probe.py` reads)
+- [x] tests (headless): metrics for a known font, dirty-row cache invalidation, run splitting by style, cursor styles,
       wide-char placement, two views of one pane, `Surface` methods against the fakes' contract
-- [ ] gates — must pass before Task 14
+- [x] gates — must pass before Task 14
+- result (2026-10-15):
+  - **Shape** (Codex-reviewed, transcript
+    `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/task-13-terminal-design/transcript.md`): `Terminal` (a
+    GPUI entity, `EventEmitter<TerminalEvent>`) owns one foreground pump per pane, woken through a one-token channel by
+    the pane's `PaneConfig::wake` and by the Surface; each wake drains the pane's events (`TerminalEvent::Pane`), runs
+    the queued app work (clipboard read/write, events) and notifies the views. `Shared` (`Rc`, main thread) holds the
+    pane, the live font size, the cell metrics (computed synchronously through the app's `Arc<TextSystem>` at the
+    owner's last scale, so `font_size`/`cell_size` are right right after a font action), the owner's grid and the
+    queue. `TerminalSurface` implements `agterm_host::Surface` over `Shared` with no GPUI context: binding actions are
+    accepted for a realized terminal (as the GTK build's were) and parsed through Task 8's `Action`; the performer
+    (`TerminalSurface::perform`, `binds::Performer`) does `csi:/esc:/text:`, copy/paste (standard and primary),
+    `select_all`, font size (Ghostty's clamps; reset to the spec's or config's start size), `search:`/`start_search`/
+    `end_search`/`navigate_search`, the `scroll_*` actions and `jump_to_prompt`; other actions return false (Task 14
+    routes app, window and split actions). `TerminalView` (one entity per view, `ViewRole::Owner | Viewer`) keeps its
+    own row cache over the pane's shared frame; only the owner lays the grid out, starts the pane (`Spawn`, a boxed
+    `FnOnce(PaneConfig) -> Result<Pane, PaneError>`, deferred out of prepaint with `cx.defer`) at its first nonzero size
+    and resizes it; a viewer draws at its own font size and never spawns, resizes or takes focus. Teardown drops the
+    pane (SIGHUP to the child) and closes the pump's channel. Events: `Spawned`, `SpawnFailed`, `FontSize`,
+    `StartSearch`, `EndSearch`, `UnsafePaste` (a refused paste; its confirmation prompt is Task 14's/21's).
+  - **Metrics**: Ghostty's `Metrics.calc` (via qwertty-term-font) in device pixels (a point is 96/72 px, as Ghostty's
+    Linux default DPI), the cell width the widest printable-ASCII advance (Ghostty's rule, which equals the
+    Technical Details' "advance of M" for monospace fonts), reported in logical pixels; geometry and
+    `window-padding-balance` (`false`/`true`/`equal`) from Ghostty's `size.zig`. ⚠️ Residual (correctness gap until the
+    Task 15 ➕ item): GPUI's public text system exposes neither `line_gap` nor the underline metrics, so the line gap
+    counts 0 (cells are shorter than libghostty's for a font with a nonzero `hhea` line gap; DejaVu Sans Mono, JetBrains
+    Mono and most monospace fonts have none: DejaVu measures 10x19 at 12 pt as in Ghostty) and underline/strikethrough
+    use Ghostty's own estimates.
+  - **Frame**: rows planned per view and cached by the frame's `Arc<Row>` identity, the colors' `Arc`, the palette and
+    the row's marks (selection, search highlights incl. the selected match, hovered link); shaping redone only for
+    rebuilt rows or a font/size/scale change. Cell colors follow Ghostty's `rebuildRow` (inverse, covering full block,
+    selection/search colors incl. `cell-foreground`/`cell-background`, faint at Ghostty's 0.5); runs break at style
+    changes and blank cells only and are shaped without forced widths, each glyph placed at its cluster's column with
+    its offset from the cluster's first glyph (across fallback runs), emoji through `paint_emoji`. Layers: default
+    background (`background-opacity` alpha), cell backgrounds with `window-padding-color = extend/extend-always`
+    (Ghostty's `neverExtendBg` without the prompt-row check: frames do not mark prompt rows), underlines (single,
+    double, curly, dotted, dashed as Ghostty's sprites, hovered links underlined, double over an underline) and
+    overlines, text, strikethroughs, cursor (block/bar/underline, hollow when unfocused or in a viewer, Ghostty's 600 ms
+    blink while focused, the text under a block in `cursor-text`), the IME preedit at the cursor (`Shared::set_preedit`,
+    driven by Task 14). Fonts: `font-family*` (first installed family primary, the others fallbacks; unset or none
+    installed → `JetBrains Mono`, `DejaVu Sans Mono`, `Liberation Mono`, …), style families, `font-feature`.
+  - **Cursor defaults** (shared crates): `agterm-ghostty-vt` `Terminal::set_default_cursor` (the C API's
+    `DEFAULT_CURSOR_STYLE/BLINK`), `agterm-term` `CursorDefaults` in `PaneConfig::cursor` and
+    `Pane::set_cursor_defaults`: the terminal starts with and returns (`CSI 0 q`, RIS) to `cursor-style` /
+    `cursor-style-blink` (unset blinks, as Ghostty's termio sets it; libghostty-vt's own default is a steady block).
+  - "first frame drawn": `terminal surface created` / `terminal drew its first frame` / `could not create the terminal
+    surface` at target `agterm::surface` with the surface key, as `ghostty_probe.py` reads them.
+  - Tests: 32 in `terminal/tests.rs` (GPUI's test app: its fixed fake face, and GPUI's Linux `CosmicTextSystem` with
+    DejaVu Sans Mono found through fontconfig for the known-font metrics; real panes under `/bin/sh` with `AGTERM_*`/
+    `ZMX_*` removed; `allow_parking` because the panes' IO threads wake the pump from outside the test scheduler) plus
+    the cursor-default tests in `agterm-ghostty-vt` and `agterm-term`.
 
 ### Task 14: TerminalElement — keyboard routing, IME, mouse, selection, links, clipboard
 
@@ -922,6 +977,18 @@ Port from `qwertty-term-sprite` (MIT, attribution), adapted to GPUI paths/quads.
 
 - [ ] box drawing U+2500–257F, blocks U+2580–259F, powerline U+E0B0–E0BF, braille U+2800–28FF, the legacy computing
       ranges Ghostty draws — to cell bounds without gaps; the element routes these code points away from the font
+- [ ] ➕ (Task 13) Ghostty's embedded default fonts, deterministically: `JetBrains Mono` (Ghostty's variable faces) as
+      the default face when `font-family` is unset (a configured family keeps system selection, even one named
+      JetBrains Mono), and `Symbols Nerd Font Mono` as a symbol fallback for every family; from the pinned Ghostty's
+      package deps (`build.zig.zon`: `JetBrainsMono-2.304.tar.gz`, `NerdFontsSymbolsOnly-3.4.0.tar.gz`) with their
+      licenses, fetched and verified like the other native inputs (`scripts/lib/native.sh`), registered through
+      `TextSystem::add_fonts`; Task 13's `terminal/font.rs` default list stands until then (Codex-reviewed, transcript
+      `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/task-13-terminal-design/transcript.md`)
+- [ ] ➕ (Task 13) a public font-metrics accessor in the vendored GPUI patch series (Task 29's tree): `line_gap` and
+      the underline position/thickness of the resolved face feed `terminal/metrics.rs` (`FaceMetrics`), closing Task
+      13's line-gap residual; `box_thickness` (= the underline thickness) is what the sprites draw with. Strikethrough
+      keeps Ghostty's estimate unless the face's strike metrics are exposed too
+- [ ] ➕ (Task 13) the lock cursor Ghostty draws at a password prompt (`Cursor::password_input`)
 - [ ] golden tests: each family at two cell sizes against goldens derived from upstream's
 - [ ] gates — must pass before Task 16
 

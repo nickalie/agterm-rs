@@ -1,7 +1,9 @@
 //! [`Terminal`]: an owned `GhosttyTerminal`.
 
 use crate::effects::{CALLBACKS, EffectsSlot};
-use crate::{Effects, Error, Handle, Mode, MouseShape, Rgb, ScrollbackLimits, TerminalColors, ffi, string_bytes};
+use crate::{
+    CursorStyle, Effects, Error, Handle, Mode, MouseShape, Rgb, ScrollbackLimits, TerminalColors, ffi, string_bytes,
+};
 
 /// A viewport scroll.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -252,6 +254,41 @@ impl Terminal {
         // call, or null.
         let result =
             unsafe { ffi::ghostty_terminal_set(self.raw.ptr(), ffi::GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, value) };
+        Error::check(result)
+    }
+
+    /// Set the cursor the terminal starts with and returns to on `CSI 0 q` (Ghostty's `cursor-style` and
+    /// `cursor-style-blink`, which Ghostty's termio applies to every terminal); the current cursor takes it too while
+    /// no program chose one. The library's own default is a steady block.
+    ///
+    /// # Errors
+    ///
+    /// The library's result when a value is refused.
+    pub fn set_default_cursor(&mut self, style: CursorStyle, blink: bool) -> Result<(), Error> {
+        let style: ffi::GhosttyTerminalCursorStyle = match style {
+            CursorStyle::Bar => ffi::GHOSTTY_TERMINAL_CURSOR_STYLE_BAR,
+            CursorStyle::Block => ffi::GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK,
+            CursorStyle::Underline => ffi::GHOSTTY_TERMINAL_CURSOR_STYLE_UNDERLINE,
+            CursorStyle::BlockHollow => ffi::GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK_HOLLOW,
+        };
+        // SAFETY: `self.raw` is live; `OPT_DEFAULT_CURSOR_STYLE` takes a `GhosttyTerminalCursorStyle *` read during the
+        // call.
+        let result = unsafe {
+            ffi::ghostty_terminal_set(
+                self.raw.ptr(),
+                ffi::GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE,
+                (&raw const style).cast(),
+            )
+        };
+        Error::check(result)?;
+        // SAFETY: `self.raw` is live; `OPT_DEFAULT_CURSOR_BLINK` takes a `bool *` read during the call.
+        let result = unsafe {
+            ffi::ghostty_terminal_set(
+                self.raw.ptr(),
+                ffi::GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK,
+                (&raw const blink).cast(),
+            )
+        };
         Error::check(result)
     }
 
