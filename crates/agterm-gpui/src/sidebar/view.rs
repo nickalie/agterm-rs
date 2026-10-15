@@ -18,9 +18,9 @@ use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMen
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, App, AppContext as _, ClickEvent, Context, CursorStyle, DismissEvent, DragMoveEvent, ElementId,
-    EmptyView, ExternalPaths, FontWeight, Hsla, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, Window, deferred, div,
-    prelude::FluentBuilder as _, px, rgb,
+    EmptyView, EntityId, ExternalPaths, FontWeight, Hsla, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, Window,
+    deferred, div, prelude::FluentBuilder as _, px, rgb,
 };
 use uuid::Uuid;
 
@@ -464,14 +464,20 @@ fn row_menu(
     let Some(entity) = sidebar.upgrade() else {
         return popup;
     };
-    let entries = entity.update(cx, |this, _| {
-        this.menu_opened();
-        this.menu_entries(id)
-    });
+    let entries = entity.read(cx).menu_entries(id);
+    if entries.is_empty() {
+        // never drawn, so never dismissed: it holds nothing
+        return popup;
+    }
+    let (menu, weak) = (cx.entity_id(), cx.weak_entity());
+    entity.update(cx, |this, _| this.menu_opened(weak));
+    // a menu dropped undismissed (its row gone, the sidebar hidden) closes too
+    let released = sidebar.clone();
+    cx.on_release(move |_, cx| menu_closed(&released, menu, cx)).detach();
     // the subscription needs the menu built; it lives as long as the menu
     let closing = sidebar.clone();
     cx.defer_in(window, move |_, _, cx| {
-        cx.subscribe_self(move |_, _: &DismissEvent, cx| menu_closed(&closing, cx))
+        cx.subscribe_self(move |_, _: &DismissEvent, cx| menu_closed(&closing, menu, cx))
             .detach();
     });
     let target = sidebar.clone();
@@ -483,9 +489,9 @@ fn row_menu(
     menu::build(popup, entries, &perform, window, cx)
 }
 
-fn menu_closed(sidebar: &WeakEntity<Sidebar>, cx: &mut App) {
+fn menu_closed(sidebar: &WeakEntity<Sidebar>, menu: EntityId, cx: &mut App) {
     if let Some(entity) = sidebar.upgrade() {
-        entity.update(cx, |this, _| this.menu_closed());
+        entity.update(cx, |this, _| this.menu_closed(menu));
     }
 }
 

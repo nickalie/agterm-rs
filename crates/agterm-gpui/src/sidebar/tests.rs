@@ -531,6 +531,55 @@ fn a_row_menu_holds_the_keyboard_until_it_closes(cx: &mut TestAppContext) {
     );
 }
 
+fn right_click(cx: &mut VisualTestContext, row: &'static str) {
+    let at = bounds(cx, row).center();
+    cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::default());
+    cx.run_until_parked();
+}
+
+fn menu_open(h: &Harness, cx: &mut VisualTestContext) -> bool {
+    h.view.read_with(cx, |sidebar, _| sidebar.menu_open())
+}
+
+#[gpui_kit::test]
+fn a_row_menu_dropped_without_a_dismiss_stops_holding_the_keyboard(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    // its row goes (closed through agtermctl, its shell exited) while the menu is open
+    right_click(cx, "row:var");
+    assert!(menu_open(&h, cx), "open");
+    let var = h.id_of("var", cx);
+    h.store_mut().close_session(var);
+    let core = &mut h.state.core;
+    h.view.update(cx, |sidebar, cx| sidebar.sync(core, cx));
+    cx.run_until_parked();
+    assert!(!menu_open(&h, cx), "the dropped menu holds nothing");
+    assert!(
+        !h.posted.0.lock().unwrap().is_empty(),
+        "the drop asks for a sync, which lands the focus the deck held"
+    );
+    h.settle(cx);
+
+    // the sidebar hides while the menu is open
+    right_click(cx, "row:u");
+    assert!(menu_open(&h, cx), "open again");
+    h.store_mut().set_sidebar_visible(false);
+    h.settle(cx);
+    assert!(!menu_open(&h, cx), "a hidden sidebar's menu holds nothing");
+
+    // a second menu replaces the first: the first's going leaves the second holding the keyboard
+    h.store_mut().set_sidebar_visible(true);
+    h.settle(cx);
+    right_click(cx, "row:u");
+    right_click(cx, "row:srv");
+    h.settle(cx);
+    assert!(menu_open(&h, cx), "the second menu holds it");
+    cx.simulate_keystrokes("escape");
+    h.settle(cx);
+    assert!(!menu_open(&h, cx), "closed");
+}
+
 #[gpui_kit::test]
 fn sessions_and_workspaces_reorder_by_drag(cx: &mut TestAppContext) {
     let (library, _) = library();

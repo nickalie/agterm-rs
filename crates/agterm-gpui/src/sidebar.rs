@@ -30,9 +30,10 @@ use agterm_core::Core;
 use agterm_core::model::{SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN};
 use agterm_core::sidebar_actions::SidebarAction;
 use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{
-    App, AppContext as _, ClipboardItem, Context, Entity, ExternalPaths, Modifiers, PromptButton, PromptLevel,
-    ScrollHandle, Subscription, Task, Window,
+    App, AppContext as _, ClipboardItem, Context, Entity, EntityId, ExternalPaths, FocusHandle, Focusable as _,
+    Modifiers, PromptButton, PromptLevel, ScrollHandle, Subscription, Task, WeakEntity, Window,
 };
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use uuid::Uuid;
@@ -134,8 +135,9 @@ pub struct Sidebar {
     /// Where a Shift-click extends the selection from: the session row clicked last without Shift, or the model's
     /// selected session once a selection made elsewhere leaves that row out.
     anchor: Option<Uuid>,
-    /// A row menu holds the keyboard.
-    menu_open: bool,
+    /// The row menu holding the keyboard, while it lives: its entity goes with the trigger's element state, so a
+    /// menu dropped without a dismiss (its row gone, the sidebar hidden) stops holding it.
+    menu: Option<WeakEntity<PopupMenu>>,
     editing: Option<Editing>,
     pending_toggle: Option<Task<()>>,
     /// The workspace row under the pointer, which shows its "+".
@@ -164,7 +166,7 @@ impl Sidebar {
             look: Look::default(),
             revealed: None,
             anchor: None,
-            menu_open: false,
+            menu: None,
             editing: None,
             pending_toggle: None,
             hovered: None,
@@ -202,20 +204,27 @@ impl Sidebar {
     /// Whether a row menu holds the keyboard: the window's deck moves no focus until it closes.
     #[must_use]
     pub fn menu_open(&self) -> bool {
-        self.menu_open
+        self.menu.as_ref().is_some_and(|menu| menu.upgrade().is_some())
     }
 
-    /// A row menu opened.
-    fn menu_opened(&mut self) {
-        self.menu_open = true;
+    /// Row menu `menu` opened, replacing any other.
+    fn menu_opened(&mut self, menu: WeakEntity<PopupMenu>) {
+        self.menu = Some(menu);
     }
 
-    /// The row menu closed: a sync lands the focus move the deck held for it (a right-click's narrowed selection
-    /// shows another session).
-    fn menu_closed(&mut self) {
-        if std::mem::take(&mut self.menu_open) {
+    /// Row menu `menu` closed, dismissed or dropped: a sync lands the focus move the deck held for it (a
+    /// right-click's narrowed selection shows another session). A menu another one replaced changes nothing.
+    fn menu_closed(&mut self, menu: EntityId) {
+        if self.menu.as_ref().is_some_and(|open| open.entity_id() == menu) {
+            self.menu = None;
             self.post(|_| {});
         }
+    }
+
+    /// The live rename field's focus, which keeps the keyboard a row menu's Rename gave it.
+    #[must_use]
+    pub fn keyboard_owner(&self, cx: &App) -> Option<FocusHandle> {
+        self.editing.as_ref().map(|editing| editing.input.focus_handle(cx))
     }
 
     /// The row being renamed.

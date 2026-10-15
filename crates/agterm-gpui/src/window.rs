@@ -270,9 +270,10 @@ impl WindowView {
     pub fn sync(&mut self, core: &mut Core, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let id = self.id;
         let modal = core.modal_pending(id) || core.palette_holds(id);
-        let held = self.sidebar.read(cx).menu_open();
+        let sidebar = self.sidebar.read(cx);
+        let (held, owner) = (sidebar.menu_open(), sidebar.keyboard_owner(cx));
         let focused = self.deck.update(cx, |deck, cx| {
-            deck.hold_keyboard(held);
+            deck.hold_keyboard(held, owner);
             deck.reconcile(core, modal, window, cx)
         });
         self.sidebar.update(cx, |sidebar, cx| sidebar.sync(core, cx));

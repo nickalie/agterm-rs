@@ -537,8 +537,8 @@ fn focus_elsewhere(h: &mut Harness<'_>) -> gpui_kit::FocusHandle {
     handle
 }
 
-fn hold(h: &mut Harness<'_>, held: bool) {
-    h.deck.update(h.cx, |deck, _| deck.hold_keyboard(held));
+fn hold(h: &mut Harness<'_>, held: bool, owner: Option<&gpui_kit::FocusHandle>) {
+    h.deck.update(h.cx, |deck, _| deck.hold_keyboard(held, owner.cloned()));
 }
 
 #[gpui_kit::test]
@@ -554,7 +554,7 @@ fn a_held_keyboard_stays_with_its_popup_until_it_closes(cx: &mut TestAppContext)
 
     // the sidebar's row menu holds the keyboard while the selection a right-click narrowed lands
     let menu = focus_elsewhere(&mut h);
-    hold(&mut h, true);
+    hold(&mut h, true, None);
     h.store().select_session(Some(second));
     h.state.settle();
     h.turn();
@@ -565,22 +565,34 @@ fn a_held_keyboard_stays_with_its_popup_until_it_closes(cx: &mut TestAppContext)
     );
     // it closes, handing the keyboard back to the terminal it took it from: the shown one takes it
     click_focus(&mut h, first, &tokens[0]);
-    hold(&mut h, false);
+    hold(&mut h, false, None);
     h.turn();
     assert!(h.focused(second, &tokens[1]), "the shown terminal takes the keyboard");
 
     // an item that gave the keyboard to a field of its own (Rename) keeps it there
     let _menu = focus_elsewhere(&mut h);
-    hold(&mut h, true);
+    hold(&mut h, true, None);
     h.store().select_session(Some(third));
     h.state.settle();
     h.turn();
     let field = focus_elsewhere(&mut h);
-    hold(&mut h, false);
+    hold(&mut h, false, Some(&field));
     h.turn();
     h.turn();
     assert!(h.cx.update(|window, _| field.is_focused(window)), "the field keeps it");
     assert!(!h.focused(third, &tokens[2]));
+
+    // the popup hands the keyboard back to a field gone meanwhile (a rename the outside press committed): the
+    // shown terminal still takes it
+    let _menu = focus_elsewhere(&mut h);
+    hold(&mut h, true, None);
+    h.store().select_session(Some(first));
+    h.state.settle();
+    h.turn();
+    let _stale = focus_elsewhere(&mut h);
+    hold(&mut h, false, None);
+    h.turn();
+    assert!(h.focused(first, &tokens[0]), "a focus no live owner holds yields");
 }
 
 #[gpui_kit::test]
