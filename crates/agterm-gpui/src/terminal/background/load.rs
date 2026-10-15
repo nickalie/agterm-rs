@@ -205,17 +205,19 @@ pub struct Loader {
     current: Option<(TextureKey, Arc<Decoded>)>,
     pending_source: Option<FileKey>,
     pending_bake: Option<TextureKey>,
-    /// The file as it was when it last failed to decode: not decoded again until it changes.
+    /// The file as it was when it last failed to decode: not decoded again until it changes or the config reloads.
     failed: Option<FileKey>,
 }
 
 impl Loader {
-    /// The config changed: look at the file again at the next paint, and let no load started for the config before
-    /// replace the image on screen.
+    /// The config changed: look at the file again at the next paint, decode it again even if it failed unchanged (the
+    /// failure may not be about its contents: permissions, a transient I/O error), and let no load started for the
+    /// config before replace the image on screen.
     pub fn invalidate(&mut self) {
         self.checked = false;
         self.pending_source = None;
         self.pending_bake = None;
+        self.failed = None;
     }
 
     /// The image loaded for the current spec (or the one it replaces while loading).

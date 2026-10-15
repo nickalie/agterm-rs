@@ -513,7 +513,7 @@ fn a_file_the_config_moved_to_that_cannot_be_read_keeps_the_image_on_screen(cx: 
 }
 
 #[gpui_kit::test]
-fn a_file_that_does_not_decode_is_tried_once_and_keeps_the_image_on_screen(cx: &mut TestAppContext) {
+fn a_file_that_does_not_decode_is_tried_once_per_config_and_keeps_the_image_on_screen(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (c, bad) = (dir.path().join("c.png"), dir.path().join("bad.png"));
     write_png(&c, 4, 1);
@@ -530,12 +530,21 @@ fn a_file_that_does_not_decode_is_tried_once_and_keeps_the_image_on_screen(cx: &
     assert!(!shared.background_loader().is_loading(), "nothing in flight");
     let current = shared.background_loader().current().unwrap();
     assert!(Arc::ptr_eq(&current.texture, &on_screen), "C stays");
+    // a config reload with the file unchanged (a failure not about its contents, say) tries once more, then paints
+    // skip it again
+    terminal.update(cx, |terminal, cx| terminal.set_config(TerminalConfig::default(), cx));
+    for _ in 0..8 {
+        show(&shared, &spec_of(&bad, None), cx);
+        cx.run_until_parked();
+    }
+    assert_eq!(super::load::decodes_started() - before, 2, "the reload retried once");
+    assert!(!shared.background_loader().is_loading(), "nothing in flight");
     // the file replaced with a valid image: the next config change looks at it again and loads it
     write_png(&bad, 8, 1);
     terminal.update(cx, |terminal, cx| terminal.set_config(TerminalConfig::default(), cx));
     let replaced = shown(&shared, &spec_of(&bad, None), cx);
     assert_eq!(replaced.size, (8, 1));
-    assert_eq!(super::load::decodes_started() - before, 2);
+    assert_eq!(super::load::decodes_started() - before, 3);
 }
 
 #[gpui_kit::test]
