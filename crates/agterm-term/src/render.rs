@@ -476,15 +476,20 @@ impl Capture {
         if let Err(err) = self.state.update_held(terminal) {
             tracing::warn!(%err, "capturing the held frame failed");
         }
-        self.capture_kitty(terminal.kitty_graphics());
+        // on the IO thread already, inside the batch: nothing to share
+        self.capture_kitty(terminal.kitty_graphics(), &crate::kitty::Prefetch::default());
         self.held_since = Some(Instant::now());
         self.fresh = true;
     }
 
     /// Capture the Kitty graphics with the state (the terminal held, as for the state's update); the next conversion
     /// carries them.
-    pub(crate) fn capture_kitty(&mut self, graphics: Option<vt::KittyGraphics<'_>>) {
-        self.pending_kitty = crate::kitty::capture(graphics, &self.kitty);
+    pub(crate) fn capture_kitty(
+        &mut self,
+        graphics: Option<vt::KittyGraphics<'_>>,
+        prefetched: &crate::kitty::Prefetch,
+    ) {
+        self.pending_kitty = crate::kitty::capture(graphics, &self.kitty, prefetched);
     }
 
     /// Something the dirty flags do not track changed (the selection): the next conversion makes a frame and checks

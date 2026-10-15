@@ -4,7 +4,10 @@
 //! A program can transmit a 10000 px image (libghostty-vt's limit), so nothing about an image's size is paid on the
 //! main thread: a new `(id, generation)` is converted on the background executor while placements of it draw nothing,
 //! and its texture is at most [`MAX_TEXTURE_SIDE`] a side and [`MAX_TEXTURE_PIXELS`] in all, sampled straight from the
-//! stored pixels into one buffer of that size (no full-size intermediate).
+//! stored pixels into one buffer of that size (no full-size intermediate). The stored pixels themselves reach the
+//! frame without a copy on the main thread too: `agterm-term` copies a new image out of the terminal on the pane's IO
+//! thread after the batch that completed it, and the paint's capture only shares that copy (an image a paint catches
+//! in the middle of a batch is the exception, copied at that capture).
 
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};

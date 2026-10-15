@@ -56,6 +56,35 @@ pub enum Layer {
     Preedit,
 }
 
+/// The stages of a paint, bottom to top: [`Layer::Background`] stands for the background with or without its image,
+/// [`Layer::Cursor`] for the cursor or the composition.
+pub const PAINT_ORDER: [Layer; 8] = [
+    Layer::Background,
+    Layer::KittyBelowBackground,
+    Layer::CellBackgrounds,
+    Layer::KittyBelowText,
+    Layer::Underlines,
+    Layer::Text,
+    Layer::KittyAboveText,
+    Layer::Cursor,
+];
+
+/// The default background color, and the background image over it when there is one.
+fn paint_background(window: &mut Window, plan: &Plan, bounds: Bounds<Pixels>) -> (Layer, usize) {
+    let background = plan
+        .frame
+        .as_ref()
+        .map_or(plan.background, |frame| frame.colors.background);
+    let color = hsla(background, plan.palette.background_alpha);
+    if let Some(image) = plan.images.background.as_ref() {
+        image.paint(window, bounds, plan.scale, color);
+        (Layer::BackgroundImage, 0)
+    } else {
+        window.paint_quad(fill(bounds, color));
+        (Layer::Background, 0)
+    }
+}
+
 /// One glyph of a row, placed on the grid.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlacedGlyph {
@@ -290,41 +319,80 @@ impl TerminalView {
 
     fn paint(&mut self, bounds: Bounds<Pixels>, plan: &Plan, focused: bool, window: &mut Window) {
         self.painted_layers.clear();
-        let background = plan
-            .frame
-            .as_ref()
-            .map_or(plan.background, |frame| frame.colors.background);
-        let color = hsla(background, plan.palette.background_alpha);
-        if let Some(image) = plan.images.background.as_ref() {
-            image.paint(window, bounds, plan.scale, color);
-            self.painted_layers.push((Layer::BackgroundImage, 0));
-        } else {
-            window.paint_quad(fill(bounds, color));
-            self.painted_layers.push((Layer::Background, 0));
+        for stage in PAINT_ORDER {
+            if let Some(painted) = self.paint_stage(stage, bounds, plan, focused, window) {
+                self.painted_layers.push(painted);
+            }
         }
-        let Some(frame) = plan.frame.as_ref() else {
-            return;
+        if plan.frame.is_some() {
+            self.shared.drew();
+        }
+    }
+
+    /// Paints one stage of [`PAINT_ORDER`]: what it drew (the background with or without its image, the cursor or the
+    /// composition) and how many Kitty placements a Kitty stage drew; `None` for a stage with nothing to draw before
+    /// the pane has a frame.
+    fn paint_stage(
+        &self,
+        stage: Layer,
+        bounds: Bounds<Pixels>,
+        plan: &Plan,
+        focused: bool,
+        window: &mut Window,
+    ) -> Option<(Layer, usize)> {
+        if stage == Layer::Background {
+            return Some(paint_background(window, plan, bounds));
+        }
+        let frame = plan.frame.as_ref()?;
+        let kitty = &plan.images.kitty;
+        let painted = match stage {
+            Layer::KittyBelowBackground => (
+                stage,
+                kitty.paint(window, KittyLayer::BelowBackground, plan.origin, plan.scale),
+            ),
+            Layer::KittyBelowText => (
+                stage,
+                kitty.paint(window, KittyLayer::BelowText, plan.origin, plan.scale),
+            ),
+            Layer::KittyAboveText => (
+                stage,
+                kitty.paint(window, KittyLayer::AboveText, plan.origin, plan.scale),
+            ),
+            Layer::CellBackgrounds => {
+                let extend = Extend::new(plan.padding_color, frame);
+                for (index, row) in self.cache.rows().enumerate() {
+                    let edges = extend.for_row(index, frame.rows.len());
+                    paint_backgrounds(window, plan, bounds, index, &row.layout, edges);
+                }
+                (stage, 0)
+            }
+            Layer::Underlines => {
+                for (index, row) in self.cache.rows().enumerate() {
+                    paint_decorations(window, plan, index, &row.layout, |line| {
+                        !matches!(line, Line::Strikethrough)
+                    });
+                }
+                (stage, 0)
+            }
+            Layer::Text => {
+                self.paint_text(window, plan);
+                (stage, 0)
+            }
+            Layer::Background | Layer::BackgroundImage | Layer::Cursor | Layer::Preedit => {
+                if let Some(preedit) = plan.preedit.as_deref() {
+                    paint_preedit(window, plan, frame, preedit);
+                    (Layer::Preedit, 0)
+                } else {
+                    self.paint_cursor(window, plan, frame, focused);
+                    (Layer::Cursor, 0)
+                }
+            }
         };
-        self.paint_kitty(window, plan, KittyLayer::BelowBackground);
-        let extend = Extend::new(plan.padding_color, frame);
-        for (index, row) in self.cache.rows().enumerate() {
-            paint_backgrounds(
-                window,
-                plan,
-                bounds,
-                index,
-                &row.layout,
-                extend.for_row(index, frame.rows.len()),
-            );
-        }
-        self.painted_layers.push((Layer::CellBackgrounds, 0));
-        self.paint_kitty(window, plan, KittyLayer::BelowText);
-        for (index, row) in self.cache.rows().enumerate() {
-            paint_decorations(window, plan, index, &row.layout, |line| {
-                !matches!(line, Line::Strikethrough)
-            });
-        }
-        self.painted_layers.push((Layer::Underlines, 0));
+        Some(painted)
+    }
+
+    /// The glyphs, sprites and strikethroughs of every row.
+    fn paint_text(&self, window: &mut Window, plan: &Plan) {
         for (index, row) in self.cache.rows().enumerate() {
             if let Some(shaped) = row.shaped.as_ref() {
                 paint_glyphs(window, plan, index, &shaped.glyphs, None);
@@ -334,28 +402,6 @@ impl TerminalView {
                 matches!(line, Line::Strikethrough)
             });
         }
-        self.painted_layers.push((Layer::Text, 0));
-        self.paint_kitty(window, plan, KittyLayer::AboveText);
-        if let Some(preedit) = plan.preedit.as_deref() {
-            paint_preedit(window, plan, frame, preedit);
-            self.painted_layers.push((Layer::Preedit, 0));
-        } else {
-            self.paint_cursor(window, plan, frame, focused);
-            self.painted_layers.push((Layer::Cursor, 0));
-        }
-        self.shared.drew();
-    }
-
-    /// The Kitty placements of `layer`, recorded with their count.
-    fn paint_kitty(&mut self, window: &mut Window, plan: &Plan, layer: KittyLayer) {
-        let kitty = &plan.images.kitty;
-        kitty.paint(window, layer, plan.origin, plan.scale);
-        let recorded = match layer {
-            KittyLayer::BelowBackground => Layer::KittyBelowBackground,
-            KittyLayer::BelowText => Layer::KittyBelowText,
-            KittyLayer::AboveText => Layer::KittyAboveText,
-        };
-        self.painted_layers.push((recorded, kitty.count(layer)));
     }
 
     /// The layers the last paint drew, bottom to top, with how many placements each Kitty layer drew.

@@ -1,8 +1,9 @@
 //! The background image (plan > Task 16): Ghostty's fit and position math, tiling, the opacity and Ghostty's blend
-//! onto a translucent background baked into the texture, the background color painted only around such an image,
-//! decoding by content, the watermark overlay lines reaching a terminal's config, a load the config moved away from,
-//! and the load in GPUI's test app (off the main thread, shared between terminals, reloaded when the file changes,
-//! dropped with the config).
+//! onto a translucent background baked into the texture (an opacity over 1 included), the background color painted
+//! only around such an image and paired with the texture's own bake, decoding by content, the watermark overlay lines
+//! reaching a terminal's config, and the loader in GPUI's test app: loads the config moved away from never land, a
+//! background color change re-bakes without the file and one bake at a time, one load shared between terminals,
+//! reloaded when the file changes, dropped with the config.
 
 use std::path::Path;
 use std::rc::Rc;
@@ -18,10 +19,10 @@ use agterm_term::{Pane, PaneCommand, PaneConfig, Rgb};
 use gpui_kit::{AppContext as _, Entity, RenderImage, TestAppContext, VisualTestContext, px, size};
 
 use super::{
-    BackgroundPaint, Decoded, DeviceRect, LoadKey, Loader, MAX_TILES, MIN_REPEAT_SIDE, Spec, bake, decode, dest_size,
-    layout, offset, repeated, snapped, uncovered,
+    BackgroundPaint, Bake, Decoded, DeviceRect, MAX_TILES, MIN_REPEAT_SIDE, Source, Spec, bake, decode, dest_size,
+    layout, offset, repeated, snapped, texture as baked, uncovered,
 };
-use crate::terminal::{Terminal, TerminalConfig, TerminalSpec, TerminalView, ViewRole};
+use crate::terminal::{Shared, Terminal, TerminalConfig, TerminalSpec, TerminalView, ViewRole};
 
 const SCREEN: (f64, f64) = (1000.0, 500.0);
 
@@ -164,23 +165,34 @@ fn the_texture_carries_ghosttys_blend() {
     let mut clear = image::RgbaImage::from_raw(1, 1, vec![255, 0, 0, 0]).unwrap();
     bake(&mut clear, 1.0, Some(half));
     assert_eq!(clear.into_raw(), [100, 100, 100, 128]);
-    // half coverage: half image, half background; an opacity over 1 saturates instead
+    // half coverage: half image, half background
     let mut mixed = image::RgbaImage::from_raw(1, 1, vec![200, 0, 0, 255]).unwrap();
     bake(&mut mixed, 0.5, Some(half));
     assert_eq!(mixed.into_raw(), [50, 50, 150, 128]);
-    let mut over = image::RgbaImage::from_raw(1, 1, vec![200, 0, 0, 128]).unwrap();
-    bake(&mut over, 2.0, Some(half));
-    assert_eq!(over.into_raw(), [0, 0, 201, 128]);
+}
+
+#[test]
+fn an_image_opacity_over_one_makes_a_translucent_surface_more_opaque_as_in_ghostty() {
+    // Ghostty's Config.zig: background-opacity 0.5 with background-image-opacity 1.5 gives 0.75, the image's own
+    // color (not overexposed, not at the background's 0.5)
+    let spec = Spec::from_config(&config(1.5), 128, GRAY).unwrap();
+    let mut opaque = image::RgbaImage::from_raw(1, 1, vec![200, 100, 50, 255]).unwrap();
+    bake(&mut opaque, spec.alpha, spec.composite);
+    assert_eq!(opaque.into_raw(), [50, 100, 200, 192]);
+    // a texel at half alpha reaches only 0.75 coverage: blended with the background, at the background alpha
+    let mut half = image::RgbaImage::from_raw(1, 1, vec![200, 100, 52, 128]).unwrap();
+    bake(&mut half, spec.alpha, spec.composite);
+    assert_eq!(half.into_raw(), [64, 100, 175, 128]);
 }
 
 fn painted(spec: Spec, size: (u32, u32)) -> BackgroundPaint {
-    let texture = image::RgbaImage::new(size.0, size.1);
+    let source = Source {
+        pixels: image::RgbaImage::new(size.0, size.1),
+        size,
+        tiles: (1, 1),
+    };
     BackgroundPaint {
-        decoded: Arc::new(Decoded {
-            texture: Arc::new(RenderImage::new(vec![image::Frame::new(texture)])),
-            size,
-            tiles: (1, 1),
-        }),
+        decoded: Arc::new(baked(&source, Bake::of(&spec))),
         spec,
     }
 }
@@ -217,9 +229,21 @@ fn a_translucent_background_is_painted_only_around_the_image() {
     assert_eq!(painted(contain, (200, 50)).color_areas(SCREEN).len(), 2);
     let tiled = Spec {
         repeat: true,
-        ..translucent
+        ..translucent.clone()
     };
     assert!(painted(tiled, (300, 200)).color_areas(SCREEN).is_empty());
+    // the color follows the texture, not a newer spec: a texture baked for an opaque background under a spec that
+    // turned translucent is still painted over the whole color, and the other way round
+    let opaque_texture = BackgroundPaint {
+        spec: translucent.clone(),
+        ..painted(spec(Fit::None, Pos::Center, false), (300, 200))
+    };
+    assert_eq!(opaque_texture.color_areas(SCREEN), [whole]);
+    let translucent_texture = BackgroundPaint {
+        spec: spec(Fit::None, Pos::Center, false),
+        ..painted(translucent, (300, 200))
+    };
+    assert_eq!(translucent_texture.color_areas(SCREEN).len(), 4);
 }
 
 #[test]
@@ -247,36 +271,6 @@ fn image_edges_land_on_whole_device_pixels() {
     );
 }
 
-#[test]
-fn a_load_the_config_moved_away_from_never_replaces_the_image_on_screen() {
-    let key = |name: &str| LoadKey {
-        path: name.into(),
-        modified: None,
-        len: 1,
-        alpha: 0,
-        composite: None,
-        repeat: false,
-    };
-    let decoded = || {
-        Arc::new(Decoded {
-            texture: Arc::new(RenderImage::new(vec![image::Frame::new(image::RgbaImage::new(1, 1))])),
-            size: (1, 1),
-            tiles: (1, 1),
-        })
-    };
-    let shown = decoded();
-    let mut loader = Loader {
-        current: Some((key("C"), Arc::clone(&shown))),
-        loading: Some(key("A")),
-        ..Loader::default()
-    };
-    // the config names B, whose file cannot be looked at, while A still decodes
-    loader.lookup_failed();
-    loader.finish(&key("A"), Some(&decoded()));
-    assert!(Arc::ptr_eq(&loader.current().unwrap(), &shown), "C stays");
-    assert!(!loader.is_loading());
-}
-
 fn write_png(path: &Path, width: u32, height: u32) {
     let pixels = image::RgbaImage::from_pixel(width, height, image::Rgba([255, 0, 0, 255]));
     pixels.save_with_format(path, image::ImageFormat::Png).unwrap();
@@ -288,23 +282,15 @@ fn files_are_decoded_by_content_png_and_jpeg_only() {
     // a PNG named .jpg: the content wins
     let misnamed = dir.path().join("w.jpg");
     write_png(&misnamed, 3, 2);
-    let decoded = decode(&Spec {
-        path: misnamed,
-        ..spec(Fit::Contain, Pos::Center, false)
-    })
-    .unwrap();
-    assert_eq!((decoded.size, decoded.tiles), ((3, 2), (1, 1)));
+    let source = decode(&misnamed, false).unwrap();
+    assert_eq!((source.size, source.tiles), ((3, 2), (1, 1)));
+    let decoded = baked(&source, Bake::of(&spec(Fit::Contain, Pos::Center, false)));
     assert_eq!(&decoded.texture.as_bytes(0).unwrap()[..4], &[0, 0, 255, 255], "BGRA");
 
     let gif = dir.path().join("w.png");
     std::fs::write(&gif, b"GIF89a\x01\x00\x01\x00\x00\x00\x00;").unwrap();
-    let refused = decode(&Spec {
-        path: gif,
-        ..spec(Fit::Contain, Pos::Center, false)
-    });
-    assert!(refused.unwrap_err().contains("unsupported"));
-    let missing = decode(&spec(Fit::Contain, Pos::Center, false));
-    assert!(missing.is_err());
+    assert!(decode(&gif, false).unwrap_err().contains("unsupported"));
+    assert!(decode(Path::new("/nonexistent.png"), false).is_err());
 }
 
 #[test]
@@ -468,4 +454,125 @@ fn a_missing_file_draws_no_image(cx: &mut TestAppContext) {
     let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
     assert!(!shared.background_loader().is_loading(), "nothing to load");
     assert!(view.read_with(cx, |view, _| view.images().drawn().is_empty()));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// the loader, driven through `Shared::background_image` in GPUI's test app (its background executor runs only when
+// the test parks, so what is in flight is under the test's control)
+
+fn spec_of(path: &Path, composite: Option<(Rgb, u8)>) -> Spec {
+    Spec {
+        path: path.to_path_buf(),
+        composite,
+        ..spec(Fit::Contain, Pos::Center, false)
+    }
+}
+
+/// A terminal with no view (no pane): only its background loader is used.
+fn idle_terminal(cx: &mut TestAppContext) -> (Entity<Terminal>, Rc<Shared>) {
+    let spawn =
+        Box::new(|_: PaneConfig| -> Result<Pane, agterm_term::PaneError> { unreachable!("no view lays it out") });
+    let terminal = cx.new(|cx| Terminal::new(TerminalSpec::default(), TerminalConfig::default(), spawn, cx));
+    let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
+    (terminal, shared)
+}
+
+fn show(shared: &Rc<Shared>, spec: &Spec, cx: &mut TestAppContext) -> Option<Arc<Decoded>> {
+    cx.update(|cx| shared.background_image(Some(spec.clone()), cx))
+}
+
+/// Shows `spec` until its texture is on screen (a decode, then a bake).
+fn shown(shared: &Rc<Shared>, spec: &Spec, cx: &mut TestAppContext) -> Arc<Decoded> {
+    for _ in 0..4 {
+        show(shared, spec, cx);
+        cx.run_until_parked();
+    }
+    show(shared, spec, cx).expect("the background loaded")
+}
+
+#[gpui_kit::test]
+fn a_file_the_config_moved_to_that_cannot_be_read_keeps_the_image_on_screen(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (c, a) = (dir.path().join("c.png"), dir.path().join("a.png"));
+    write_png(&c, 4, 1);
+    write_png(&a, 8, 1);
+    let (_terminal, shared) = idle_terminal(cx);
+    let on_screen = shared_texture(&shown(&shared, &spec_of(&c, None), cx));
+    // A decoded, its bake in flight, when the config moves on to B, whose file is missing
+    show(&shared, &spec_of(&a, None), cx);
+    cx.run_until_parked();
+    show(&shared, &spec_of(&a, None), cx);
+    assert!(
+        shared.background_loader().pending_bake().is_some(),
+        "A's bake is in flight"
+    );
+    show(&shared, &spec_of(&dir.path().join("b.png"), None), cx);
+    cx.run_until_parked();
+    let current = shared.background_loader().current().unwrap();
+    assert!(Arc::ptr_eq(&current.texture, &on_screen), "C stays, A never lands");
+}
+
+#[gpui_kit::test]
+fn a_config_change_forgets_the_loads_in_flight_at_once(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (c, a) = (dir.path().join("c.png"), dir.path().join("a.png"));
+    write_png(&c, 4, 1);
+    write_png(&a, 8, 1);
+    let (terminal, shared) = idle_terminal(cx);
+    let on_screen = shared_texture(&shown(&shared, &spec_of(&c, None), cx));
+    show(&shared, &spec_of(&a, None), cx);
+    cx.run_until_parked();
+    show(&shared, &spec_of(&a, None), cx);
+    // a new config (another image, say) before any paint: A's bake finishes after it and must not land
+    terminal.update(cx, |terminal, cx| terminal.set_config(TerminalConfig::default(), cx));
+    cx.run_until_parked();
+    let current = shared.background_loader().current().unwrap();
+    assert!(
+        Arc::ptr_eq(&current.texture, &on_screen),
+        "C stays until the next paint asks for more"
+    );
+    assert!(!shared.background_loader().is_loading());
+}
+
+#[gpui_kit::test]
+fn a_background_color_change_rebakes_without_reading_the_file(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("w.png");
+    write_png(&file, 4, 1);
+    let (_terminal, shared) = idle_terminal(cx);
+    let red = Rgb { r: 255, g: 0, b: 0 };
+    let blue = Rgb { r: 0, g: 0, b: 255 };
+    let green = Rgb { r: 0, g: 255, b: 0 };
+    let first = shown(&shared, &spec_of(&file, Some((red, 128))), cx);
+    assert_eq!(first.bake.composite, Some((red, 128)));
+    let source = shared.background_loader().source().unwrap();
+    // the file is gone: a re-bake must not need it
+    std::fs::remove_file(&file).unwrap();
+    show(&shared, &spec_of(&file, Some((blue, 128))), cx);
+    assert_eq!(
+        shared.background_loader().pending_bake().map(|bake| bake.composite),
+        Some(Some((blue, 128)))
+    );
+    // a program cycling colors: one bake in flight, the newest waits for it
+    show(&shared, &spec_of(&file, Some((green, 128))), cx);
+    assert_eq!(super::load::bakes_in_flight(), 1);
+    assert_eq!(
+        shared.background_loader().pending_bake().map(|bake| bake.composite),
+        Some(Some((blue, 128)))
+    );
+    cx.run_until_parked();
+    assert_eq!(
+        shared.background_loader().current().unwrap().bake.composite,
+        Some((blue, 128))
+    );
+    let last = shown(&shared, &spec_of(&file, Some((green, 128))), cx);
+    assert_eq!(last.bake.composite, Some((green, 128)));
+    assert!(
+        Arc::ptr_eq(&shared.background_loader().source().unwrap(), &source),
+        "decoded once"
+    );
+}
+
+fn shared_texture(decoded: &Arc<Decoded>) -> Arc<RenderImage> {
+    Arc::clone(&decoded.texture)
 }

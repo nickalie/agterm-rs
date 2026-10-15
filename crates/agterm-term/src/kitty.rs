@@ -2,8 +2,11 @@
 //!
 //! The view is captured with the frame, under the VT lock (the library's image handles die on the terminal's next
 //! mutation): the placements and where they land on the viewport every time, the pixels of an image only when its
-//! `(id, generation)` is new — an unchanged image is shared with the previous view.
+//! `(id, generation)` is new — an unchanged image is shared with the previous view. A new image's pixels are copied
+//! on the pane's IO thread after the batch that completed it ([`Prefetch`]), so the paint that captures it (on the
+//! frontend's main thread) only shares them; only an image a paint catches in the middle of a batch is copied there.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use agterm_ghostty_vt as vt;
@@ -113,9 +116,61 @@ impl KittyView {
     }
 }
 
+/// The pixels of the placed images, copied on the pane's IO thread after each batch that changed the storage (kept
+/// with the terminal, under the VT lock): what a capture shares instead of copying on the thread that paints.
+#[derive(Debug, Default)]
+pub(crate) struct Prefetch {
+    generation: u64,
+    images: HashMap<KittyImageKey, Arc<KittyImage>>,
+}
+
+impl Prefetch {
+    /// Copies the placed images it does not hold yet and forgets the ones no longer placed, when the storage changed.
+    pub(crate) fn update(&mut self, graphics: Option<vt::KittyGraphics<'_>>) {
+        let Some(graphics) = graphics else {
+            *self = Self::default();
+            return;
+        };
+        let generation = graphics.generation();
+        if generation == self.generation {
+            return;
+        }
+        let Ok(placements) = graphics.placements() else {
+            return;
+        };
+        self.generation = generation;
+        let mut kept = HashMap::new();
+        for placement in placements {
+            let Some(image) = graphics.image(placement.image_id) else {
+                continue;
+            };
+            let key = KittyImageKey {
+                id: image.id,
+                generation: image.generation,
+            };
+            if kept.contains_key(&key) {
+                continue;
+            }
+            // a pending payload has no pixels yet: the batch that completes it changes the storage again
+            if let Some(copied) = self.images.remove(&key).or_else(|| copy(&image, key).map(Arc::new)) {
+                kept.insert(key, copied);
+            }
+        }
+        self.images = kept;
+    }
+
+    fn get(&self, key: KittyImageKey) -> Option<&Arc<KittyImage>> {
+        self.images.get(&key)
+    }
+}
+
 /// Capture the Kitty graphics of `graphics` (a terminal's storage, or the one a synchronized-output hold is captured
-/// from) after `previous`; `None` when nothing changed (draw `previous`).
-pub(crate) fn capture(graphics: Option<vt::KittyGraphics<'_>>, previous: &KittyView) -> Option<KittyView> {
+/// from) after `previous`, sharing the pixels `prefetched` holds; `None` when nothing changed (draw `previous`).
+pub(crate) fn capture(
+    graphics: Option<vt::KittyGraphics<'_>>,
+    previous: &KittyView,
+    prefetched: &Prefetch,
+) -> Option<KittyView> {
     let Some(graphics) = graphics else {
         return (!previous.is_empty()).then(|| removed_all(previous));
     };
@@ -141,7 +196,7 @@ pub(crate) fn capture(graphics: Option<vt::KittyGraphics<'_>>, previous: &KittyV
             generation: image.generation,
         };
         if images.iter().all(|known| known.key != key) {
-            match previous.image(key) {
+            match previous.image(key).or_else(|| prefetched.get(key)) {
                 Some(kept) => images.push(Arc::clone(kept)),
                 // a pending payload has no pixels yet: its placements wait for them
                 None => match copy(&image, key) {
@@ -243,14 +298,14 @@ mod tests {
     #[test]
     fn nothing_stored_makes_no_view() {
         let mut terminal = terminal();
-        assert!(capture(terminal.kitty_graphics(), &KittyView::default()).is_none());
+        assert!(capture(terminal.kitty_graphics(), &KittyView::default(), &Prefetch::default()).is_none());
     }
 
     #[test]
     fn an_image_is_copied_once_and_shared_while_it_stays() {
         let mut terminal = terminal();
         terminal.vt_write(CHUNKED);
-        let first = capture(terminal.kitty_graphics(), &KittyView::default()).unwrap();
+        let first = capture(terminal.kitty_graphics(), &KittyView::default(), &Prefetch::default()).unwrap();
         assert_eq!(first.images.len(), 1);
         let image = &first.images[0];
         assert_eq!((image.key.id, image.width, image.height), (7, 2, 1));
@@ -259,22 +314,43 @@ mod tests {
         assert_eq!(placement.image, image.key);
         assert_eq!(placement.layer, KittyLayer::AboveText);
         assert_eq!(placement.rect.map(|rect| (rect.column, rect.row)), Some((0, 0)));
-        assert!(capture(terminal.kitty_graphics(), &first).is_none(), "unchanged");
+        assert!(
+            capture(terminal.kitty_graphics(), &first, &Prefetch::default()).is_none(),
+            "unchanged"
+        );
         // a scroll moves the placement but keeps the pixels
         terminal.vt_write(b"\r\n\r\n\r\n\r\n\r\n");
-        let moved = capture(terminal.kitty_graphics(), &first).unwrap();
+        let moved = capture(terminal.kitty_graphics(), &first, &Prefetch::default()).unwrap();
         assert!(Arc::ptr_eq(&moved.images[0], &first.images[0]));
         assert_ne!(moved.placements[0].rect, first.placements[0].rect);
         assert!(moved.removed.is_empty());
     }
 
     #[test]
+    fn a_capture_shares_the_pixels_the_io_thread_copied() {
+        let mut terminal = terminal();
+        terminal.vt_write(CHUNKED);
+        let mut prefetched = Prefetch::default();
+        prefetched.update(terminal.kitty_graphics());
+        assert_eq!(prefetched.images.len(), 1);
+        let view = capture(terminal.kitty_graphics(), &KittyView::default(), &prefetched).unwrap();
+        let copied = Arc::clone(prefetched.get(view.images[0].key).unwrap());
+        assert!(Arc::ptr_eq(&view.images[0], &copied), "shared, not copied again");
+        // an unchanged storage copies nothing; a deleted image is let go
+        prefetched.update(terminal.kitty_graphics());
+        assert!(Arc::ptr_eq(prefetched.get(view.images[0].key).unwrap(), &copied));
+        terminal.vt_write(b"\x1b_Ga=d,d=I,i=7\x1b\\");
+        prefetched.update(terminal.kitty_graphics());
+        assert!(prefetched.images.is_empty());
+    }
+
+    #[test]
     fn a_deleted_image_is_reported_removed() {
         let mut terminal = terminal();
         terminal.vt_write(CHUNKED);
-        let first = capture(terminal.kitty_graphics(), &KittyView::default()).unwrap();
+        let first = capture(terminal.kitty_graphics(), &KittyView::default(), &Prefetch::default()).unwrap();
         terminal.vt_write(b"\x1b_Ga=d,d=I,i=7\x1b\\");
-        let after = capture(terminal.kitty_graphics(), &first).unwrap();
+        let after = capture(terminal.kitty_graphics(), &first, &Prefetch::default()).unwrap();
         assert!(after.images.is_empty() && after.placements.is_empty());
         assert_eq!(after.removed, [first.images[0].key]);
     }

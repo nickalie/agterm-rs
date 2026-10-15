@@ -146,6 +146,8 @@ pub(crate) struct Vt {
     colors: vt::TerminalColors,
     /// A `clear_screen` waits for the program's output to reach a ground point ([`crate::actions`]).
     pub(crate) pending_clear: bool,
+    /// The placed Kitty images' pixels, copied on the IO thread after each batch (`kitty::Prefetch`).
+    pub(crate) kitty: crate::kitty::Prefetch,
 }
 
 impl Vt {
@@ -531,6 +533,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
             cleared_selection: false,
             colors,
             pending_clear: false,
+            kitty: crate::kitty::Prefetch::default(),
         }),
         capture,
         published: Mutex::new(Arc::new(Frame::default())),
@@ -602,7 +605,8 @@ fn capture(shared: &Shared) -> Option<Arc<Frame>> {
         drop(vt);
     } else {
         // the Kitty view is read while the terminal is held, with the state
-        capture.capture_kitty(vt.terminal.kitty_graphics());
+        let held = &mut *vt;
+        capture.capture_kitty(held.terminal.kitty_graphics(), &held.kitty);
         let pending = capture.state.begin_update(&mut vt.terminal);
         // only the begin phase reads the terminal
         drop(vt);
@@ -990,6 +994,9 @@ impl Io {
     fn after_batch(&self, filled: usize) {
         if filled > 0 {
             let mut vt = lock(&self.shared.vt);
+            // a new Kitty image's pixels are copied here, not on the thread that paints
+            let held = &mut *vt;
+            held.kitty.update(held.terminal.kitty_graphics());
             let colors = vt.terminal.colors();
             if colors != vt.colors {
                 vt.colors = colors.clone();

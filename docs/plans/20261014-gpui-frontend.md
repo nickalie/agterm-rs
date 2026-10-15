@@ -1159,6 +1159,20 @@ Port the placement rendering from qwertty-term (MIT, attribution).
     file that cannot be looked at drops the association with a load still running for an earlier spec, so that load
     cannot replace the image on screen. (5) The element records the layers it paints (`PaintLayer`,
     `TerminalView::painted_layers`), and a test over a real pane checks each Kitty layer's stage.
+  - **Review round 2** (supersedes the above where they differ): (1) Ghostty's translucent blend with an image
+    opacity over 1: `k = max(1, a * opacity)`, color `(img * a * opacity + bg * max(0, 1 - a * opacity)) / k`,
+    alpha `background alpha * k` (Ghostty's 0.5 x 1.5 = 0.75), where round 1 pinned every texel to the background
+    alpha. (2) Placeholder cells shape no glyph (Ghostty shapes a space), so nothing is drawn over their image; their
+    backgrounds stay. (3) The background loads in two steps (`terminal/background/load.rs`): the file decoded once
+    into unbaked pixels (keyed by the file), then baked off the main thread per opacity and translucent background
+    color, so an OSC 11 color change re-bakes without reading the file, at most one bake in flight per terminal (a
+    newer one waits); paint pairs the background color with the texture's own bake, so no seam shows while a bake
+    runs. (4) A config change forgets the decode and bake in flight at once (not at the next paint), and a file that
+    cannot be looked at forgets them too; both tested through `Shared::background_image`. (5) The element paints from
+    one table, `PAINT_ORDER`, each stage dispatched and recorded by the same call, Kitty stages with the placements
+    `paint_image` actually drew. (6) `agterm-term` copies a new Kitty image's pixels on the pane's IO thread after the
+    batch that completed it (`kitty::Prefetch`, kept with the terminal); the paint's capture shares that copy instead of
+    copying under the VT lock on the main thread. Every new test was run against its fix reverted and fails there.
   - ⚠️ Residuals: two parity gaps libghostty-vt's C API leaves (it reports a placement id without its namespace, and
     gives relative placements rooted at a virtual placement no position, root or offsets): ids resolve by number, and
     such relative placements are not drawn — `docs/backlog/kitty-virtual-placement-c-api-gaps.md`, a Task 34

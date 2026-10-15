@@ -14,31 +14,29 @@
 //!   `1 / background alpha`, onto an opaque copy of the background color and scales the result by the background
 //!   alpha. Over an opaque background GPUI's own blending of the image (its alpha scaled by the opacity, baked into the
 //!   texture) over the background color is exactly that. Under a translucent `background-opacity` the texture is the
-//!   finished blend instead — the background color baked in and every texel at the background alpha — and the
-//!   background color is painted only where no image is, so the surface stays as translucent as Ghostty's. Either
-//!   way a change of opacity (or of the background color, when translucent) loads the image again.
-//! - **Loading**: PNG or JPEG, told by the content first and the extension second, decoded off the main thread; the
-//!   image shown stays up until its replacement is ready, and a file that fails to load keeps it too, as Ghostty
-//!   does. A load is keyed by the file's path, modification time and length (a text watermark rendered again into
-//!   the same file reloads; the GTK build had to clear the path once for libghostty to notice) and the baked
-//!   factor; terminals showing the same one share its texture. The file is looked at again on every config change,
-//!   never per frame.
+//!   finished blend instead ([`bake`]: the background color baked in, at the background alpha, more where an opacity
+//!   over 1 makes the image more opaque than that), and the background color is painted only where no image is, so
+//!   the surface is exactly as translucent as Ghostty's. Paint pairs the color with the texture it was baked for.
+//! - **Loading** ([`load`]): PNG or JPEG, told by the content first and the extension second, decoded off the main
+//!   thread into unbaked pixels, then baked off the main thread; a change of opacity or (when translucent) of the
+//!   background color re-bakes the pixels in memory. Decodes are keyed by the file's path, modification time and
+//!   length (a text watermark rendered again into the same file reloads; the GTK build had to clear the path once for
+//!   libghostty to notice); terminals showing the same one share it. The file is looked at again on a config change
+//!   or when the spec names another file, never per frame.
 //! - Small images are repeated into a texture of at least [`MIN_REPEAT_SIDE`] pixels when `repeat` is set, so a tiny
 //!   pattern does not cost a sprite per copy; a tiled surface draws at most [`MAX_TILES`] textures.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
+pub mod load;
+
 use std::path::PathBuf;
-use std::rc::{Rc, Weak};
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use agterm_core::ghostty_config::{BackgroundImage, BackgroundImageFit, BackgroundImagePosition};
 use agterm_term::Rgb;
-use gpui_kit::{App, Bounds, Corners, Hsla, Pixels, RenderImage, Task, Window, fill, point, px, size};
+use gpui_kit::{Bounds, Corners, Hsla, Pixels, Window, fill, point, px, size};
 
-use super::Shared;
-use super::kitty::textures::{MAX_TEXTURE_SIDE, resample, texture_size};
+pub use self::load::{Bake, Decoded, FileKey, Loader, Source, bake, decode, repeated, texture};
+use super::colors::hsla;
 use super::kitty::{DeviceRect, narrow};
 
 /// A repeated image narrower or shorter than this is repeated into one texture at least this large.
@@ -88,306 +86,6 @@ impl Spec {
             repeat: config.repeat,
         })
     }
-
-    fn load_key(&self) -> std::io::Result<LoadKey> {
-        let metadata = std::fs::metadata(&self.path)?;
-        Ok(LoadKey {
-            path: self.path.clone(),
-            modified: metadata.modified().ok(),
-            len: metadata.len(),
-            alpha: self.alpha.to_bits(),
-            composite: self.composite.map(|(color, alpha)| [color.r, color.g, color.b, alpha]),
-            repeat: self.repeat,
-        })
-    }
-}
-
-/// A decoded background: the file as it was on disk and how it was baked.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct LoadKey {
-    pub path: PathBuf,
-    pub modified: Option<SystemTime>,
-    pub len: u64,
-    alpha: u32,
-    composite: Option<[u8; 4]>,
-    repeat: bool,
-}
-
-/// A background image ready to draw.
-pub struct Decoded {
-    pub texture: Arc<RenderImage>,
-    /// The image's own size, which the fit works from.
-    pub size: (u32, u32),
-    /// How many copies of the image across and down the texture holds.
-    pub tiles: (u32, u32),
-}
-
-impl std::fmt::Debug for Decoded {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Decoded")
-            .field("size", &self.size)
-            .field("tiles", &self.tiles)
-            .finish_non_exhaustive()
-    }
-}
-
-/// The backgrounds of this (the main) thread, shared by every terminal showing one: loaded, or loading for the
-/// terminals waiting on them.
-#[derive(Default)]
-struct Registry {
-    loaded: HashMap<LoadKey, std::sync::Weak<Decoded>>,
-    loading: HashMap<LoadKey, Load>,
-}
-
-/// A load in flight (detached: it finishes even when no terminal waits any more) and the terminals waiting for it.
-struct Load {
-    waiters: Vec<Weak<Shared>>,
-}
-
-thread_local! {
-    static REGISTRY: RefCell<Registry> = RefCell::new(Registry::default());
-}
-
-/// A terminal's background image: what the config asks for and what is loaded (module docs).
-#[derive(Default)]
-pub struct Loader {
-    spec: Option<Spec>,
-    /// The file was looked at for the current spec and config.
-    checked: bool,
-    current: Option<(LoadKey, Arc<Decoded>)>,
-    loading: Option<LoadKey>,
-}
-
-impl Loader {
-    /// The config changed: look at the file again at the next paint.
-    pub fn invalidate(&mut self) {
-        self.checked = false;
-    }
-
-    /// The image loaded for the current spec (or the one it replaces while loading).
-    #[must_use]
-    pub fn current(&self) -> Option<Arc<Decoded>> {
-        self.current.as_ref().map(|(_, decoded)| Arc::clone(decoded))
-    }
-
-    /// The file of the current spec could not be looked at: whatever was loading for an earlier spec must not
-    /// replace the image on screen when it finishes.
-    fn lookup_failed(&mut self) {
-        self.loading = None;
-    }
-
-    /// Whether this terminal waits for a load (tests).
-    #[must_use]
-    pub fn is_loading(&self) -> bool {
-        self.loading.is_some()
-    }
-
-    fn finish(&mut self, key: &LoadKey, decoded: Option<&Arc<Decoded>>) {
-        if self.loading.as_ref() == Some(key) {
-            self.loading = None;
-            if let Some(decoded) = decoded {
-                self.current = Some((key.clone(), Arc::clone(decoded)));
-            }
-        }
-    }
-}
-
-impl Shared {
-    /// The background image to draw for `spec`, starting a load when the file (or how it is baked) changed; `None`
-    /// before the first one loads.
-    pub(super) fn background_image(self: &Rc<Self>, spec: Option<Spec>, cx: &App) -> Option<Arc<Decoded>> {
-        let mut loader = self.background.borrow_mut();
-        if loader.spec != spec {
-            loader.spec.clone_from(&spec);
-            loader.checked = false;
-        }
-        let Some(spec) = spec else {
-            loader.current = None;
-            loader.loading = None;
-            return None;
-        };
-        if !loader.checked {
-            loader.checked = true;
-            match spec.load_key() {
-                Ok(key) => request(&mut loader, self, spec, key, cx),
-                Err(err) => {
-                    loader.lookup_failed();
-                    tracing::warn!(path = %spec.path.display(), %err, "error opening the background image file");
-                }
-            }
-        }
-        loader.current()
-    }
-
-    /// The background loader (tests).
-    #[must_use]
-    pub fn background_loader(&self) -> std::cell::Ref<'_, Loader> {
-        self.background.borrow()
-    }
-}
-
-/// Points `loader` at `key`: the image already loaded, a load in flight it joins, or a new load.
-fn request(loader: &mut Loader, shared: &Rc<Shared>, spec: Spec, key: LoadKey, cx: &App) {
-    if loader.current.as_ref().is_some_and(|(current, _)| *current == key) {
-        loader.loading = None;
-        return;
-    }
-    REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        if let Some(decoded) = registry.loaded.get(&key).and_then(std::sync::Weak::upgrade) {
-            loader.loading = None;
-            loader.current = Some((key, decoded));
-            return;
-        }
-        loader.loading = Some(key.clone());
-        if let Some(load) = registry.loading.get_mut(&key) {
-            load.waiters.push(Rc::downgrade(shared));
-            return;
-        }
-        spawn_load(spec, key.clone(), cx).detach();
-        registry.loading.insert(
-            key,
-            Load {
-                waiters: vec![Rc::downgrade(shared)],
-            },
-        );
-    });
-}
-
-/// Decodes off the main thread, then hands the image to every terminal waiting for it.
-fn spawn_load(spec: Spec, key: LoadKey, cx: &App) -> Task<()> {
-    let decoding = cx.background_executor().spawn(async move { decode(&spec) });
-    cx.foreground_executor().spawn(async move {
-        let decoded = match decoding.await {
-            Ok(decoded) => Some(Arc::new(decoded)),
-            Err(err) => {
-                tracing::warn!(path = %key.path.display(), %err, "error loading the background image");
-                None
-            }
-        };
-        let waiters = REGISTRY.with(|registry| {
-            let mut registry = registry.borrow_mut();
-            if let Some(decoded) = decoded.as_ref() {
-                registry.loaded.retain(|_, loaded| loaded.strong_count() > 0);
-                registry.loaded.insert(key.clone(), Arc::downgrade(decoded));
-            }
-            registry
-                .loading
-                .remove(&key)
-                .map(|load| load.waiters)
-                .unwrap_or_default()
-        });
-        for shared in waiters.iter().filter_map(Weak::upgrade) {
-            shared.background.borrow_mut().finish(&key, decoded.as_ref());
-            shared.poke();
-        }
-    })
-}
-
-/// Reads and decodes `spec`'s file into a texture: PNG or JPEG only (Ghostty's), the alpha baked in, scaled down to
-/// fit the atlas, a small repeated image repeated into a larger texture.
-///
-/// # Errors
-///
-/// Why the file could not be read or decoded, or that its type is not PNG or JPEG.
-pub fn decode(spec: &Spec) -> Result<Decoded, String> {
-    let reader = image::ImageReader::open(&spec.path)
-        .map_err(|err| err.to_string())?
-        .with_guessed_format()
-        .map_err(|err| err.to_string())?;
-    match reader.format() {
-        Some(image::ImageFormat::Png | image::ImageFormat::Jpeg) => {}
-        Some(format) => return Err(format!("unsupported file type {format:?}")),
-        None => return Err("cannot determine the file type".to_owned()),
-    }
-    let pixels = reader.decode().map_err(|err| err.to_string())?.into_rgba8();
-    let size = pixels.dimensions();
-    let mut texture = fit(pixels).ok_or_else(|| "the decoded image has no pixels".to_owned())?;
-    bake(&mut texture, spec.alpha, spec.composite);
-    let (texture, tiles) = if spec.repeat {
-        repeated(&texture)
-    } else {
-        (texture, (1, 1))
-    };
-    Ok(Decoded {
-        texture: Arc::new(RenderImage::new(vec![image::Frame::new(texture)])),
-        size,
-        tiles,
-    })
-}
-
-/// `pixels` at their texture size (scaled down, without a full-size intermediate, past the atlas's limits).
-fn fit(pixels: image::RgbaImage) -> Option<image::RgbaImage> {
-    let size = pixels.dimensions();
-    let target = texture_size(size.0, size.1);
-    if target == size {
-        return Some(pixels);
-    }
-    let scaled = resample(pixels.as_raw(), 4, size, target, |pixel| {
-        [pixel[0], pixel[1], pixel[2], pixel[3]]
-    })?;
-    image::RgbaImage::from_raw(target.0, target.1, scaled)
-}
-
-/// A color channel or alpha in `0..=1` as a byte.
-fn byte(value: f32) -> u8 {
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "clamped to 0..=255 first"
-    )]
-    let byte = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
-    byte
-}
-
-/// RGBA to GPUI's straight-alpha BGRA as the image is drawn at `alpha`: over an opaque background its alpha scaled;
-/// with a translucent `composite` background, Ghostty's blend onto that color (`img * a * alpha + bg * (1 - a *
-/// alpha)`, clamped), every texel at the background's alpha.
-pub fn bake(pixels: &mut image::RgbaImage, alpha: f32, composite: Option<(Rgb, u8)>) {
-    let unit = |byte: u8| f32::from(byte) / 255.0;
-    for pixel in pixels.as_chunks_mut::<4>().0 {
-        let [r, g, b, a] = *pixel;
-        let coverage = unit(a) * alpha;
-        *pixel = match composite {
-            None => [b, g, r, byte(coverage)],
-            Some((background, background_alpha)) => {
-                let blend = |image: u8, background: u8| {
-                    byte(unit(image) * coverage + unit(background) * (1.0 - coverage).max(0.0))
-                };
-                [
-                    blend(b, background.b),
-                    blend(g, background.g),
-                    blend(r, background.r),
-                    background_alpha,
-                ]
-            }
-        };
-    }
-}
-
-/// `texture` repeated across and down until each side is at least [`MIN_REPEAT_SIDE`] (and at most
-/// [`MAX_TEXTURE_SIDE`]), with the copies in each direction.
-#[must_use]
-pub fn repeated(texture: &image::RgbaImage) -> (image::RgbaImage, (u32, u32)) {
-    let (width, height) = texture.dimensions();
-    let copies = |side: u32| {
-        if side == 0 || side >= MIN_REPEAT_SIDE {
-            1
-        } else {
-            MIN_REPEAT_SIDE.div_ceil(side).min(MAX_TEXTURE_SIDE / side).max(1)
-        }
-    };
-    let (across, down) = (copies(width), copies(height));
-    if (across, down) == (1, 1) {
-        return (texture.clone(), (1, 1));
-    }
-    let mut out = image::RgbaImage::new(width * across, height * down);
-    for row in 0..down {
-        for col in 0..across {
-            image::imageops::replace(&mut out, texture, i64::from(col * width), i64::from(row * height));
-        }
-    }
-    (out, (across, down))
 }
 
 /// The size the image is drawn at on a `screen` (device pixels), Ghostty's `bg_image.v.glsl`.
@@ -512,8 +210,9 @@ pub struct BackgroundPaint {
 }
 
 impl BackgroundPaint {
-    /// The rectangles the background color is painted in on a `screen` (device pixels): all of it over an opaque
-    /// background; under a translucent one only where no image is (the texture carries the color, module docs).
+    /// The rectangles the background color is painted in on a `screen` (device pixels): all of it when the texture
+    /// was baked for an opaque background; only where no image is when it carries a translucent background's color
+    /// (module docs).
     #[must_use]
     pub fn color_areas(&self, screen: (f64, f64)) -> Vec<DeviceRect> {
         let whole = DeviceRect {
@@ -522,7 +221,7 @@ impl BackgroundPaint {
             width: screen.0,
             height: screen.1,
         };
-        if self.spec.composite.is_none() {
+        if self.decoded.bake.composite.is_none() {
             return vec![whole];
         }
         if self.spec.repeat {
@@ -534,9 +233,15 @@ impl BackgroundPaint {
             .map_or_else(|| vec![whole], |rect| uncovered(screen, snapped(*rect)))
     }
 
-    /// Paints the background `color` and the image over the element's `bounds` at `scale` device pixels per logical
-    /// pixel.
+    /// Paints the background color and the image over the element's `bounds` at `scale` device pixels per logical
+    /// pixel: `color` around a texture baked for an opaque background, the color a translucent one was baked with
+    /// otherwise (until the texture for a new color is ready, the two never disagree).
     pub fn paint(&self, window: &mut Window, bounds: Bounds<Pixels>, scale: f32, color: Hsla) {
+        let color = self
+            .decoded
+            .bake
+            .composite
+            .map_or(color, |(background, alpha)| hsla(background, alpha));
         let device = |logical: Pixels| f64::from(f32::from(logical)) * f64::from(scale);
         let logical = |device: f64| px(narrow(device / f64::from(scale)));
         let at = |rect: DeviceRect| {

@@ -266,19 +266,11 @@ impl KittyPaint {
         self.placements.iter().map(|(_, texture)| Arc::clone(&texture.image))
     }
 
-    /// How many placements `layer` draws.
-    #[must_use]
-    pub fn count(&self, layer: KittyLayer) -> usize {
-        self.placements
-            .iter()
-            .filter(|(geometry, _)| geometry.layer == layer)
-            .count()
-    }
-
     /// Paints the placements of `layer`, the grid's top-left corner at `origin`, at `scale` device pixels per
-    /// logical pixel (clipped by the element's content mask).
-    pub fn paint(&self, window: &mut Window, layer: KittyLayer, origin: gpui_kit::Point<Pixels>, scale: f32) {
+    /// logical pixel (clipped by the element's content mask); how many were painted.
+    pub fn paint(&self, window: &mut Window, layer: KittyLayer, origin: gpui_kit::Point<Pixels>, scale: f32) -> usize {
         let logical = |device: f64| px(narrow(device / f64::from(scale)));
+        let mut painted = 0;
         for (geometry, texture) in self.placements.iter().filter(|(geometry, _)| geometry.layer == layer) {
             let dest = Bounds::new(
                 point(origin.x + logical(geometry.dest.x), origin.y + logical(geometry.dest.y)),
@@ -286,10 +278,12 @@ impl KittyPaint {
             );
             let whole = image_bounds(dest, geometry.source, texture.size);
             let image = Arc::clone(&texture.image);
-            if let Err(err) = window.paint_image(dest, whole, Corners::default(), image, 0, false) {
-                tracing::debug!(%err, id = geometry.image.id, "a Kitty placement was not painted");
+            match window.paint_image(dest, whole, Corners::default(), image, 0, false) {
+                Ok(()) => painted += 1,
+                Err(err) => tracing::debug!(%err, id = geometry.image.id, "a Kitty placement was not painted"),
             }
         }
+        painted
     }
 }
 
