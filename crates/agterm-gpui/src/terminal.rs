@@ -22,6 +22,7 @@ mod element;
 mod font;
 mod metrics;
 mod row_cache;
+pub mod sprite;
 mod surface;
 
 #[cfg(test)]
@@ -44,9 +45,9 @@ use gpui_kit::{
 
 pub use colors::{CellPaint, Mark, Palette, Pick};
 pub use element::{PlacedGlyph, ShapedRow, TerminalElement};
-pub use font::{DEFAULT_FAMILIES, Fonts};
+pub use font::{DEFAULT_FAMILIES, DEFAULT_FAMILY, Fonts, SYMBOLS_FAMILY, register_embedded as register_embedded_fonts};
 pub use metrics::{CellMetrics, DEFAULT_DPI, FaceMetrics, Geometry, Padding, points_to_px};
-pub use row_cache::{Cluster, Decoration, Line, RowCache, RowLayout, RowMarks, Span, TextRun, TextStyle};
+pub use row_cache::{Cluster, Decoration, Line, RowCache, RowLayout, RowMarks, Span, SpriteCell, TextRun, TextStyle};
 pub use surface::TerminalSurface;
 
 /// What a terminal draws and starts with, from the ghostty config.
@@ -642,6 +643,12 @@ impl TerminalView {
     #[must_use]
     pub fn row_glyphs(&self, index: usize) -> Option<&ShapedRow> {
         self.cache.row(index).and_then(|row| row.shaped.as_ref())
+    }
+
+    /// The cells of viewport row `index` the sprites drew at the last paint.
+    #[must_use]
+    pub fn row_sprites(&self, index: usize) -> Option<&[SpriteCell]> {
+        self.cache.row(index).map(|row| row.layout.sprites.as_slice())
     }
 
     /// The font size this view draws at.

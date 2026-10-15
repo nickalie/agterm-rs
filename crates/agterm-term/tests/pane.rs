@@ -1,6 +1,7 @@
 //! The pane against real PTYs and real children: output reaches the screen, effects become events in stream order,
 //! clipboard reads are answered through the PTY, the exit status and resizes reach their ends, and the error paths
-//! (spawn failure, a closed PTY, a full input queue) report instead of hanging.
+//! (spawn failure, a closed PTY, a full input queue) report instead of hanging; a password prompt shows in the PTY's
+//! modes.
 
 mod support;
 
@@ -279,4 +280,40 @@ fn input_beyond_the_queue_limit_is_refused_while_the_child_does_not_read() {
         assert!(Instant::now() < deadline, "the queue never filled");
     }
     assert!(fixture.pane.queued_input() <= 4096);
+}
+
+/// Polls `password_input` until it is `expected`.
+fn wait_password_input(fixture: &support::Fixture, expected: bool) {
+    let deadline = Instant::now() + support::DEADLINE;
+    while fixture.pane.password_input() != expected {
+        assert!(Instant::now() < deadline, "password_input never became {expected}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn a_canonical_read_without_echo_is_password_input() {
+    let fixture = spawn(concat!(
+        "printf 'user:'; read user; stty -echo; printf 'pw:'; read pw; stty echo; printf done; ",
+        "exec sleep 5"
+    ))
+    .unwrap();
+    wait_text(&fixture.pane, "user:");
+    assert!(!fixture.pane.password_input(), "an echoed line is not a password");
+    fixture.pane.write(b"me\n").unwrap();
+    wait_text(&fixture.pane, "pw:");
+    wait_password_input(&fixture, true);
+    fixture.pane.write(b"secret\n").unwrap();
+    wait_text(&fixture.pane, "done");
+    wait_password_input(&fixture, false);
+}
+
+#[test]
+fn raw_input_without_echo_is_not_password_input() {
+    let fixture = spawn("stty raw -echo; printf ready; exec sleep 5").unwrap();
+    wait_text(&fixture.pane, "ready");
+    assert!(
+        !fixture.pane.password_input(),
+        "a full-screen program reads raw keys, not a password"
+    );
 }

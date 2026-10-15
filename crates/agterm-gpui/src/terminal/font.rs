@@ -1,26 +1,75 @@
 //! The terminal's fonts from `font-family*` and `font-feature`, as GPUI fonts for the four text styles.
 //!
-//! Ghostty's own default (its embedded `JetBrains Mono` and `Symbols Nerd Font Mono`, used when `font-family` is unset)
-//! is not embedded in this build yet (plan > Task 15): with no family configured, or none of the configured ones
-//! installed, the first installed family of [`DEFAULT_FAMILIES`] is the grid's font. The other families follow as
-//! fallbacks for glyphs the primary lacks; GPUI's text system falls back further on its own.
+//! Ghostty's embedded fonts are embedded here too (plan > Task 15; `scripts/fetch-fonts.sh` fetches the package deps
+//! of the Ghostty at `LIBGHOSTTY_VT_REV`, the build script points `include_bytes!` at them) and registered with the
+//! app's text system at start ([`register_embedded`]): `JetBrains Mono`, the grid's font when `font-family` is unset or
+//! none of its families is installed, and `Symbols Nerd Font Mono`, every family's symbol fallback (Nerd Font icons,
+//! the lock cursor). The configured families after the first installed one are fallbacks too; GPUI's text system
+//! falls back further on its own.
+//!
+//! Ghostty embeds the variable `JetBrains Mono` faces and sets the bold weight as a variation; GPUI loads every face at
+//! its default instance (`get_font(id, Weight::NORMAL)`), so this build embeds the same release's static Regular,
+//! Bold, Italic and Bold Italic faces instead (the same design at the same weights). It embeds the one-cell `Mono`
+//! variant of the symbols font, where Ghostty scales the wide one into the cell with its Nerd Font constraints, which
+//! GPUI has not. A configured family is looked up among the installed ones, as Ghostty's discovery does, so the
+//! embedded `JetBrains Mono` is registered only where none is installed: a configured `font-family = JetBrains Mono`
+//! keeps the system's.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use agterm_core::ghostty_config;
-use gpui_kit::{Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, font};
+use gpui_kit::{Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, TextSystem, font};
 
-/// The monospace families tried, in order, when no configured family is installed: Ghostty's default first.
-pub const DEFAULT_FAMILIES: &[&str] = &[
-    "JetBrains Mono",
-    "DejaVu Sans Mono",
-    "Liberation Mono",
-    "Noto Sans Mono",
-    "Adwaita Mono",
-    "Ubuntu Mono",
-    "Bitstream Vera Sans Mono",
-    "monospace",
+#[cfg(test)]
+mod tests;
+
+/// Ghostty's default face, embedded.
+pub const DEFAULT_FAMILY: &str = "JetBrains Mono";
+
+/// Ghostty's symbol fallback, embedded; every family falls back to it.
+pub const SYMBOLS_FAMILY: &str = "Symbols Nerd Font Mono";
+
+/// The families tried, in order, when no configured family is installed.
+pub const DEFAULT_FAMILIES: &[&str] = &[DEFAULT_FAMILY];
+
+macro_rules! embedded_font {
+    ($file:literal) => {
+        include_bytes!(concat!(env!("AGTERM_GPUI_FONTS"), "/", $file)).as_slice()
+    };
+}
+
+/// `JetBrains Mono` 2.304's static faces: regular, bold, italic, bold italic.
+const JETBRAINS_MONO: [&[u8]; 4] = [
+    embedded_font!("JetBrainsMono-Regular.ttf"),
+    embedded_font!("JetBrainsMono-Bold.ttf"),
+    embedded_font!("JetBrainsMono-Italic.ttf"),
+    embedded_font!("JetBrainsMono-BoldItalic.ttf"),
 ];
+
+/// Symbols Nerd Font Mono 3.4.0.
+const SYMBOLS: &[u8] = embedded_font!("SymbolsNerdFontMono-Regular.ttf");
+
+/// The embedded faces to register when `installed` lists the families the system has: the symbols font always,
+/// `JetBrains Mono` unless the system has its own.
+#[must_use]
+pub fn embedded_faces(installed: &[String]) -> Vec<&'static [u8]> {
+    let mut faces = vec![SYMBOLS];
+    if !installed.iter().any(|family| family == DEFAULT_FAMILY) {
+        faces.extend(JETBRAINS_MONO);
+    }
+    faces
+}
+
+/// Registers the embedded fonts with the app's text system; call once, before the first terminal resolves its fonts.
+pub fn register_embedded(text: &TextSystem) {
+    let faces = embedded_faces(&text.all_font_names());
+    let count = faces.len();
+    match text.add_fonts(faces.into_iter().map(Cow::Borrowed).collect()) {
+        Ok(()) => tracing::debug!(target: "agterm::surface", count, "registered the embedded terminal fonts"),
+        Err(error) => tracing::warn!(%error, "the embedded terminal fonts are not registered"),
+    }
+}
 
 /// The fonts of the four text styles.
 #[derive(Debug, Clone, PartialEq)]
@@ -66,7 +115,8 @@ impl Fonts {
     }
 }
 
-/// The first installed of `families` (else of [`DEFAULT_FAMILIES`]) with every other family as a fallback.
+/// The first installed of `families` (else of [`DEFAULT_FAMILIES`]) with every other installed family and then the
+/// symbols font as fallbacks.
 fn family_font(families: &[String], installed: &dyn Fn(&str) -> bool, features: &FontFeatures) -> Font {
     let candidates: Vec<String> = families
         .iter()
@@ -74,9 +124,13 @@ fn family_font(families: &[String], installed: &dyn Fn(&str) -> bool, features: 
         .chain(DEFAULT_FAMILIES.iter().map(|family| (*family).to_owned()))
         .collect();
     let primary = candidates.iter().position(|family| installed(family)).unwrap_or(0);
-    let mut fallbacks = candidates.clone();
-    let family = fallbacks.remove(primary);
-    fallbacks.retain(|fallback| *fallback != family && installed(fallback));
+    let family = candidates[primary].clone();
+    let mut fallbacks: Vec<String> = Vec::new();
+    for fallback in candidates.into_iter().chain([SYMBOLS_FAMILY.to_owned()]) {
+        if fallback != family && installed(&fallback) && !fallbacks.contains(&fallback) {
+            fallbacks.push(fallback);
+        }
+    }
     tracing::debug!(target: "agterm::surface", %family, ?fallbacks, "terminal font");
     Font {
         features: features.clone(),
