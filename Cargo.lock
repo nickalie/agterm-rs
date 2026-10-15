@@ -171,13 +171,13 @@ dependencies = [
  "agterm-wpe-platform-sys",
  "agterm-wpe-sys",
  "async-channel",
- "bitflags",
+ "bitflags 2.13.2",
  "gio",
  "glib",
  "libc",
  "pkg-config",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.20",
  "tracing",
 ]
 
