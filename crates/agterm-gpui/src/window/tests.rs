@@ -148,44 +148,42 @@ fn the_shell_titles_its_window_and_keeps_its_modal_layers_in_order(cx: &mut Test
     assert!(crate::keymap_dispatch::holds_keyboard(Some(handle)));
     assert!(!crate::keymap_dispatch::holds_keyboard(None));
 
-    // the keymap's Rename Session reaches the window's sidebar, and its field keeps the keys the monitor sees
-    cx.update(|_, cx| crate::keymap_dispatch::init(cx));
-    let session = session.unwrap();
-    let rename = FrontendAction::RenameSession { window, session };
-    // from the app, as the landing runs it: the window is not being updated
-    cx.cx
-        .update(|cx| crate::keymap_actions::perform(&keys, rename, false, cx));
-    cx.run_until_parked();
-    let sidebar = view.read_with(cx, |view, _| view.sidebar().clone());
-    assert_eq!(sidebar.read_with(cx, |sidebar, _| sidebar.editing()), Some(session));
-    cx.simulate_keystrokes("o p s backspace");
-    assert_eq!(
-        sidebar.read_with(cx, |sidebar, cx| sidebar.edited_text(cx)).as_deref(),
-        Some("op")
-    );
-    cx.simulate_keystrokes("enter");
-    assert_eq!(
-        sidebar.read_with(cx, |sidebar, _| sidebar.editing()),
-        None,
-        "Enter committed"
-    );
-    let rename = FrontendAction::RenameWorkspace {
-        window,
-        workspace: core.library().store(window).unwrap().workspaces()[0].id(),
-    };
-    cx.cx
-        .update(|cx| crate::keymap_actions::perform(&keys, rename, false, cx));
-    cx.run_until_parked();
-    assert!(sidebar.read_with(cx, |sidebar, _| sidebar.editing()).is_some());
-    cx.simulate_keystrokes("escape");
-    assert_eq!(
-        sidebar.read_with(cx, |sidebar, _| sidebar.editing()),
-        None,
-        "Escape cancelled"
-    );
+    let workspace = core.library().store(window).unwrap().workspaces()[0].id();
+    keymap_renames_reach_the_sidebar(cx, &view, &keys, (window, session.unwrap(), workspace));
     view.update_in(cx, |view, root, _| view.close(root));
     assert_eq!(crate::keymap_dispatch::window_of(origin), None);
     assert!(!crate::keymap_dispatch::holds_keyboard(Some(handle)));
+}
+
+/// The keymap's Rename Session and Rename Workspace reach the window's sidebar, and its field keeps the keys the key
+/// monitor sees: editing keys, Enter and Escape. `(window, session, workspace)`: the model window and its rows.
+fn keymap_renames_reach_the_sidebar(
+    cx: &mut gpui_kit::VisualTestContext,
+    view: &Entity<WindowView>,
+    keys: &Poster,
+    (window, session, workspace): (Uuid, Uuid, Uuid),
+) {
+    cx.update(|_, cx| crate::keymap_dispatch::init(cx));
+    let sidebar = view.read_with(cx, |view, _| view.sidebar().clone());
+    let editing = |cx: &mut gpui_kit::VisualTestContext| sidebar.read_with(cx, |sidebar, _| sidebar.editing());
+    // from the app, as the landing runs it: the window is not being updated
+    let rename = FrontendAction::RenameSession { window, session };
+    cx.cx
+        .update(|cx| crate::keymap_actions::perform(keys, rename, false, cx));
+    cx.run_until_parked();
+    assert_eq!(editing(cx), Some(session));
+    cx.simulate_keystrokes("o p s backspace");
+    let text = sidebar.read_with(cx, Sidebar::edited_text);
+    assert_eq!(text.as_deref(), Some("op"));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(editing(cx), None, "Enter committed");
+    let rename = FrontendAction::RenameWorkspace { window, workspace };
+    cx.cx
+        .update(|cx| crate::keymap_actions::perform(keys, rename, false, cx));
+    cx.run_until_parked();
+    assert_eq!(editing(cx), Some(workspace));
+    cx.simulate_keystrokes("escape");
+    assert_eq!(editing(cx), None, "Escape cancelled");
 }
 
 /// A layer view that draws nothing.

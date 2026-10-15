@@ -35,7 +35,7 @@ pub fn perform(poster: &Poster, action: FrontendAction, close_grace: bool, cx: &
         }
         FrontendAction::ConfirmCloseSession { window, session } => {
             with_sidebar(window, cx, |sidebar, root, cx| {
-                sidebar.close_sessions(vec![session], root, cx)
+                sidebar.close_sessions(vec![session], root, cx);
             });
         }
         FrontendAction::RenameSession { window, session: id }
@@ -44,12 +44,12 @@ pub fn perform(poster: &Poster, action: FrontendAction, close_grace: bool, cx: &
         }
         FrontendAction::DeleteWorkspace { window, workspace } => {
             with_sidebar(window, cx, |sidebar, root, cx| {
-                sidebar.delete_workspace(workspace, root, cx)
+                sidebar.delete_workspace(workspace, root, cx);
             });
         }
         FrontendAction::OpenDirectory { window, workspace } => {
             with_sidebar(window, cx, |sidebar, root, cx| {
-                sidebar.open_directory(workspace, root, cx)
+                sidebar.open_directory(workspace, root, cx);
             });
         }
         other @ FrontendAction::RenameWindow { .. } => {
