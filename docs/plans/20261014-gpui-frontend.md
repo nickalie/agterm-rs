@@ -1364,6 +1364,17 @@ Port the placement rendering from qwertty-term (MIT, attribution).
     (unsupported), 47 min, no instance root or process left; 339 ids seeded. A second full GPUI run against the seeded list gave the same 339/292/36 (47 min), ratchet holds.
     Later tasks grow it with `check_ratchet.py --report conformance/reports/rust-gpui-linux/nodeids.jsonl --list
     conformance/rust-gpui-passing.txt --add` after their GPUI run.
+  - **Ratchet-only mode** (2026-10-15): `run-rust-linux.sh --ratchet-only [--also SELECTOR]... [--also-k EXPR]...`
+    runs a frontend's ratchet ids plus a task's extras and is judged like a full run (every listed id must pass;
+    `--add` adds only ids that ran and passed; a `partial` report neither breaks nor removes the ids it left out).
+    A full run is still required for the GPUI switch (Task 34) and for harness or broad shared-crate changes. Self-tests
+    803 pass. On the tree with Tasks 13–16 merged: GPUI ratchet-only 339/339 pass, suite time 27 s (vs 47 min for a full run),
+    638 s wall time including a fresh release build. A ratchet-only run with the terminal tests
+    (`--also` test_session_text, test_surface, test_font_theme, test_events; `--also-k "clipboard or terminfo or font
+    or type_text or quick_type or title or selectall or paste or cwd or notify"`) gave 339 pass, 67 fail, 17 skip,
+    620 s, and no new ids: 58 of the failures wait for a mounted `left` pane, which the GPUI window gets with Task 18;
+    7 are `unknown theme` (no bundled themes in the GPUI stage). Growing the ratchet after Tasks 13–16 waits for the
+    first full GPUI run after Task 18. That run also catches unrelated ids that started passing as a side effect.
   - Deferred: the CLAUDE.md note on the GPUI conformance run (Task 36); the GPUI ghostty-probe CI step comes with
     Task 13's terminal; HTML/AppArmor for the GPUI stage with Task 32.
   - ⚠️ review round 1: `--fake-seat` is new in weston 15.0; Ubuntu 24.04's weston 13 exits on it (and has no seat
