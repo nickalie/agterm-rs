@@ -187,7 +187,11 @@ fn the_exit_status_is_reported_after_the_last_output() {
     let events = wait_events(&fixture.pane, exited);
     assert_eq!(
         events.last(),
-        Some(&PaneEvent::Exited(agterm_term::ExitStatus { code: 3, signal: None }))
+        Some(&PaneEvent::Exited(agterm_term::ExitStatus {
+            code: 3,
+            signal: None,
+            held: false,
+        }))
     );
     wait_text(&fixture.pane, "last words");
 
