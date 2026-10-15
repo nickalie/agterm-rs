@@ -84,6 +84,10 @@ pub struct TerminalConfig {
     pub selection_clear_on_typing: bool,
     pub mouse: ghostty_config::Mouse,
     pub clipboard: ghostty_config::Clipboard,
+    /// `clipboard-trim-trailing-spaces`: copies drop trailing whitespace.
+    pub copy_trim: bool,
+    /// `selection-clear-on-copy`.
+    pub clear_selection_on_copy: bool,
 }
 
 /// The keybinds a config loaded, shared by every terminal of it (equal when they are the same load).
@@ -118,6 +122,8 @@ impl TerminalConfig {
             selection_clear_on_typing: config.selection.clear_on_typing,
             mouse: config.mouse.clone(),
             clipboard: config.clipboard.clone(),
+            copy_trim: config.clipboard.trim_trailing_spaces,
+            clear_selection_on_copy: config.selection.clear_on_copy,
         }
     }
 }
@@ -155,12 +161,16 @@ pub enum TerminalEvent {
     /// The live font size changed, and the cell with it (GTK's font-size and cell-size reports): read them from
     /// [`Shared::font_points`] and [`Shared::cell_size`].
     FontSize,
-    /// A `start_search` binding: the frontend opens its search UI.
-    StartSearch,
+    /// A `start_search` binding (an empty needle) or `search_selection` (the selection as the needle): the frontend
+    /// opens its search UI with the needle.
+    StartSearch(String),
     /// An `end_search` binding ended the search.
     EndSearch,
-    /// A live link was clicked: the frontend opens it through the link policy ([`follow_link`] is the default route).
+    /// A link was clicked, or `write_*_file:open` asked for its file: the frontend opens it through the link
+    /// policy ([`follow_link`] is the default route), as libghostty's `OPEN_URL` asked.
     OpenUrl(String),
+    /// `toggle_readonly` turned read-only mode on or off: the frontend shows it.
+    Readonly(bool),
 }
 
 /// Work that needs the app, queued by the Surface for the pump.
@@ -221,6 +231,10 @@ pub struct Shared {
     preedit: RefCell<Option<String>>,
     /// Whose terminal this is, for a custom command's typing surface (the frontend sets it).
     owner: RefCell<Option<SurfaceOwner>>,
+    /// Ghostty's read-only mode (`toggle_readonly`): the user's input does not reach the program.
+    readonly: Cell<bool>,
+    /// The URL of the link under the pointer (`copy_url_to_clipboard`; Task 14's hover sets it).
+    hovered_url: RefCell<Option<String>>,
 }
 
 impl std::fmt::Debug for Shared {
@@ -360,6 +374,28 @@ impl Shared {
         self.poke();
     }
 
+    /// Read-only (`toggle_readonly`): the user's input paths (keys, typing, pastes, mouse reports) leave the program
+    /// alone; the terminal's own replies still go.
+    #[must_use]
+    pub fn is_readonly(&self) -> bool {
+        self.readonly.get()
+    }
+
+    pub fn set_readonly(&self, readonly: bool) {
+        self.readonly.set(readonly);
+    }
+
+    /// The URL of the hovered link, which `copy_url_to_clipboard` copies.
+    #[must_use]
+    pub fn hovered_url(&self) -> Option<String> {
+        self.hovered_url.borrow().clone()
+    }
+
+    /// Sets or clears the hovered link's URL (Task 14's hover tracking).
+    pub fn set_hovered_url(&self, url: Option<String>) {
+        *self.hovered_url.borrow_mut() = url;
+    }
+
     /// Wakes the pump: the queued work runs and the views redraw.
     pub fn poke(&self) {
         let _ = self.wake.try_send(());
@@ -389,7 +425,12 @@ impl Shared {
     /// The owner view laid the grid out at `scale`: record it, resize a live pane, and report whether the pane waits
     /// for its first size (the caller defers [`Shared::spawn`]).
     fn lay_out(&self, scale: f32, laid: Laid) -> bool {
+        let cell = self.cell_size();
         self.scale.set(scale);
+        if self.cell_size() != cell {
+            // a display of another scale: the cell changed as a font change changes it (libghostty's `CELL_SIZE`)
+            self.queue(Effect::Emit(TerminalEvent::FontSize));
+        }
         if self.laid.get() == Some(laid) {
             return false;
         }
@@ -516,6 +557,8 @@ impl Terminal {
             drew: Cell::new(false),
             preedit: RefCell::new(None),
             owner: RefCell::new(None),
+            readonly: Cell::new(false),
+            hovered_url: RefCell::new(None),
         });
         let pump = cx.spawn(async move |this, cx| {
             while woken.recv().await.is_ok() {
@@ -552,10 +595,15 @@ impl Terminal {
             }
         }
         let fonts_changed = shared.config.borrow().font != config.font;
+        let cell = shared.metrics_at(shared.font_points(), shared.scale());
         *shared.config.borrow_mut() = Rc::new(config);
         if fonts_changed {
             shared.fonts.borrow_mut().take();
             shared.font_generation.set(shared.font_generation.get() + 1);
+            // the cell follows the fonts: report it as a font size change does
+            if shared.metrics_at(shared.font_points(), shared.scale()) != cell {
+                cx.emit(TerminalEvent::FontSize);
+            }
         }
         cx.notify();
     }
@@ -597,6 +645,9 @@ fn run_effect(shared: &Shared, effect: Effect, cx: &mut Context<Terminal>) {
             let (Some(text), Some(pane)) = (item.and_then(|item| item.text()), shared.pane()) else {
                 return;
             };
+            if shared.is_readonly() {
+                return;
+            }
             // pasted as confirmed, as upstream and the GTK build complete libghostty's unsafe-paste confirmation
             if let Err(err) = pane.paste(&text, PasteSource::Clipboard, location, true) {
                 tracing::warn!(target: "agterm::surface", key = shared.key, %err, "paste failed");
@@ -743,8 +794,9 @@ impl TerminalView {
         self.blink_on
     }
 
-    /// Runs the blink timer while the owner is focused and the cursor blinks; stops it (cursor shown) otherwise.
-    fn sync_blink(&mut self, focused: bool, cx: &mut Context<Self>) {
+    /// Runs the blink timer while the owner is focused and the cursor blinks; stops it (cursor shown) otherwise. Called
+    /// by prepaint once the frame it draws is current.
+    pub(crate) fn sync_blink(&mut self, focused: bool, cx: &mut Context<Self>) {
         let blinking = focused
             && self.role == ViewRole::Owner
             && self
@@ -784,7 +836,6 @@ impl Focusable for TerminalView {
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.role == ViewRole::Owner && self.focus.is_focused(window);
-        self.sync_blink(focused, cx);
         let element = TerminalElement::new(cx.entity(), focused);
         let root = div().size_full().min_w(px(0.)).min_h(px(0.));
         match self.role {

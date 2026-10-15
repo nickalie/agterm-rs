@@ -24,6 +24,8 @@ raw-window-handle.workspace = true
 regex.workspace = true
 serde_json.workspace = true
 signal-hook.workspace = true
+# write_*_file: the screen file goes into a temporary directory of its own, as Ghostty's does
+tempfile.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
@@ -40,7 +42,6 @@ gpui-pre-linux.workspace = true
 agterm-host = { workspace = true, features = ["fakes"] }
 gpui-kit = { workspace = true, features = ["test-support"] }
 gpui-pre-wgpu.workspace = true
-tempfile.workspace = true
 
 # GPUI's headless renderer opens one GPU device per process, so the external texture cases run in a child process per
 # Vulkan driver, which this harness starts (tests/external_texture/main.rs).

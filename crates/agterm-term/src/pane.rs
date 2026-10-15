@@ -146,6 +146,8 @@ pub(crate) struct Vt {
     colors: vt::TerminalColors,
     /// The pointer's selection gesture, created at the first press ([`crate::gesture`]).
     pub(crate) gesture: Option<vt::SelectionGesture>,
+    /// A `clear_screen` waits for the program's output to reach a ground point ([`crate::actions`]).
+    pub(crate) pending_clear: bool,
 }
 
 impl Vt {
@@ -161,6 +163,20 @@ impl Vt {
         }
         self.terminal.scroll_viewport(vt::Scroll::Bottom);
         true
+    }
+}
+
+/// `vt_write` of one slice of the program's output; a pending `clear_screen` goes in at the slice's first ground
+/// point ([`crate::actions`]).
+fn write_slice(shared: &Shared, vt: &mut Vt, slice: &[u8]) {
+    if !vt.pending_clear {
+        vt.terminal.vt_write(slice);
+        return;
+    }
+    // without a ground point the whole slice was in the middle of something: the clear waits for the next one
+    if let Some(consumed) = vt.terminal.vt_write_until_ground(slice) {
+        crate::actions::apply_clear(shared, vt);
+        vt.terminal.vt_write(&slice[consumed..]);
     }
 }
 
@@ -227,6 +243,11 @@ impl Shared {
     }
 
     /// Make the next paint convert (and re-check every row's selection); the caller holds the VT lock.
+    /// Queue bytes the terminal answers the program with (never refused; see [`WriteQueue`]).
+    pub(crate) fn push_reply(&self, bytes: &[u8]) {
+        self.writer.push_reply(bytes);
+    }
+
     pub(crate) fn touch_capture(&self) {
         lock(&self.capture).touch();
     }
@@ -496,6 +517,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
             cleared_selection: false,
             colors,
             gesture: None,
+            pending_clear: false,
         }),
         capture,
         published: Mutex::new(Arc::new(Frame::default())),
@@ -906,7 +928,7 @@ impl Io {
         for slice in bytes.chunks(VT_SLICE) {
             let mut vt = lock(&self.shared.vt);
             let started = Instant::now();
-            vt.terminal.vt_write(slice);
+            write_slice(&self.shared, &mut vt, slice);
             let held = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
             drop(vt);
             let counters = &self.shared.counters;
@@ -1050,7 +1072,14 @@ mod tests {
         let shared = Arc::clone(&pane.shared);
         *lock(&pane.shared.before_paint) = Some(Box::new(move || {
             lock(&shared.vt).terminal.vt_write(b"\x1b[1;1HXYZ\x1b[3;5H");
-            let a = frame(&shared);
+            // view A paints until it gets the terminal (the IO thread may hold a lock for a moment on a loaded machine)
+            let a = loop {
+                let a = frame(&shared);
+                if !a.stale {
+                    break a;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            };
             assert_eq!(a.frame.lines()[0], "XYZ");
         }));
         let b = pane.frame();
