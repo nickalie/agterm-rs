@@ -228,11 +228,29 @@ fn the_glyph_keeps_its_slot_and_blinks_only_while_animations_run(cx: &mut TestAp
     cx.run_until_parked();
     let bounds = cx.debug_bounds("agent-status").expect("the glyph is laid out");
     assert_eq!(bounds.size, gpui_kit::size(px(SLOT), px(SLOT)));
+    assert!(
+        cx.debug_bounds("agent-status-blinking").is_some(),
+        "a blinking status blinks"
+    );
+    assert!(cx.debug_bounds("agent-status-still").is_none());
     view.update(cx, |view, cx| {
         view.animate = false;
         cx.notify();
     });
     cx.run_until_parked();
+    assert!(cx.debug_bounds("agent-status-still").is_some(), "no animations: still");
+    assert!(cx.debug_bounds("agent-status-blinking").is_none());
+    let bounds = cx.debug_bounds("agent-status").expect("the glyph is laid out");
+    assert_eq!(bounds.size, gpui_kit::size(px(SLOT), px(SLOT)), "the same slot");
+
+    // a status that does not blink stays still with animations on
+    view.update(cx, |view, cx| {
+        view.animate = true;
+        view.look.blink = false;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("agent-status-still").is_some());
     cx.update(|_, cx| {
         cx.set_global(Motion { animations: false });
         assert!(!animations_enabled(cx));

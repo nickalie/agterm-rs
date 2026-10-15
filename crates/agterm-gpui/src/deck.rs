@@ -308,6 +308,10 @@ pub struct Deck {
     focused: Option<(Uuid, String)>,
     /// Counts the changes of `focused` and whether the user's last focus move awaits its report.
     focus_moves: Arc<FocusMoves>,
+    /// A popup of the window's (the sidebar's row menu) holds the keyboard: the deck moves no focus meanwhile.
+    held: bool,
+    /// A focus move waited for the popup to close.
+    held_move: bool,
     look: Look,
 }
 
@@ -345,8 +349,17 @@ impl Deck {
             shown: None,
             focused: None,
             focus_moves: Arc::default(),
+            held: false,
+            held_move: false,
             look,
         }
+    }
+
+    /// Whether a popup of the window's holds the keyboard (the sidebar's row menu, which a right-click opens while
+    /// the selection it narrowed is still on its way): until it closes the deck moves no focus, then it gives the
+    /// shown terminal the keyboard the popup handed back, unless the popup's item took it elsewhere (a rename field).
+    pub fn hold_keyboard(&mut self, held: bool) {
+        self.held = held;
     }
 
     /// The page of session `session`.
@@ -545,7 +558,7 @@ impl Deck {
         self.shown = shown;
         let Some(id) = shown else {
             self.set_focused(None);
-            if changed && !modal {
+            if changed && !modal && !self.held {
                 window.blur(cx);
             }
             return None;
@@ -556,6 +569,15 @@ impl Deck {
         }
         let focus = self.pages.get(&id).and_then(Page::focus);
         let desired = focus.map(|pane| (id, pane.token().to_owned()));
+        if self.held {
+            self.held_move |= changed || refocus || desired != self.focused;
+            return None;
+        }
+        if std::mem::take(&mut self.held_move) && self.keyboard_elsewhere(window, cx) {
+            // the popup's item gave the keyboard to a field of its own: the move it waited for is moot
+            self.set_focused(desired);
+            return None;
+        }
         let reporting = !changed && self.focus_moves.reporting.load(Ordering::Relaxed);
         if (desired == self.focused || reporting) && !refocus {
             return None;
@@ -566,6 +588,13 @@ impl Deck {
         }
         self.set_focused(desired.clone());
         desired
+    }
+
+    /// Whether something outside the deck's terminals holds the window's keyboard.
+    fn keyboard_elsewhere(&self, window: &Window, cx: &App) -> bool {
+        window
+            .focused(cx)
+            .is_some_and(|focused| !self.terminals().any(|pane| pane.focus_handle(cx) == focused))
     }
 
     /// Records where keyboard focus went, counting a move; a user move's report still queued is overtaken.

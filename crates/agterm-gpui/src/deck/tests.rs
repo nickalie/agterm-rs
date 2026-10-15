@@ -526,6 +526,63 @@ fn a_users_focus_move_outlasts_a_sync_before_its_report(cx: &mut TestAppContext)
     );
 }
 
+/// Gives a focus handle outside the deck the keyboard, as a popup or a text field takes it.
+fn focus_elsewhere(h: &mut Harness<'_>) -> gpui_kit::FocusHandle {
+    let handle = h.cx.update(|window, cx| {
+        let handle = cx.focus_handle();
+        window.focus(&handle, cx);
+        handle
+    });
+    h.cx.run_until_parked();
+    handle
+}
+
+fn hold(h: &mut Harness<'_>, held: bool) {
+    h.deck.update(h.cx, |deck, _| deck.hold_keyboard(held));
+}
+
+#[gpui_kit::test]
+fn a_held_keyboard_stays_with_its_popup_until_it_closes(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    let (first, second, third) = (ids[0], ids[1], ids[2]);
+    h.until("the panes to start", |h| {
+        ids.iter().all(|id| h.realized(*id, StatusPane::Left))
+    });
+    let tokens: Vec<String> = ids.iter().map(|id| h.token(*id, StatusPane::Left)).collect();
+    assert!(h.focused(first, &tokens[0]));
+
+    // the sidebar's row menu holds the keyboard while the selection a right-click narrowed lands
+    let menu = focus_elsewhere(&mut h);
+    hold(&mut h, true);
+    h.store().select_session(Some(second));
+    h.state.settle();
+    h.turn();
+    assert_eq!(h.deck.read_with(h.cx, |deck, _| deck.shown()), Some(second));
+    assert!(
+        h.cx.update(|window, _| menu.is_focused(window)),
+        "the menu keeps the keyboard"
+    );
+    // it closes, handing the keyboard back to the terminal it took it from: the shown one takes it
+    click_focus(&mut h, first, &tokens[0]);
+    hold(&mut h, false);
+    h.turn();
+    assert!(h.focused(second, &tokens[1]), "the shown terminal takes the keyboard");
+
+    // an item that gave the keyboard to a field of its own (Rename) keeps it there
+    let _menu = focus_elsewhere(&mut h);
+    hold(&mut h, true);
+    h.store().select_session(Some(third));
+    h.state.settle();
+    h.turn();
+    let field = focus_elsewhere(&mut h);
+    hold(&mut h, false);
+    h.turn();
+    h.turn();
+    assert!(h.cx.update(|window, _| field.is_focused(window)), "the field keeps it");
+    assert!(!h.focused(third, &tokens[2]));
+}
+
 #[gpui_kit::test]
 fn the_inactive_pane_wash_follows_the_focus(cx: &mut TestAppContext) {
     let (library, window, ids) = three_sessions();

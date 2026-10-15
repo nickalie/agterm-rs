@@ -264,13 +264,17 @@ impl WindowView {
     }
 
     /// Renders the model: the deck's pages, the sidebar and the title. Whether a modal holds the keyboard is the
-    /// model's: the window's picker or GUI ask, or its palette. Whether the core needs a settle for the focus the deck
-    /// gave.
+    /// model's: the window's picker or GUI ask, or its palette; while the sidebar's row menu holds it the deck moves
+    /// no focus. Whether the core needs a settle for the focus the deck gave.
     #[must_use = "a focus report the core took needs a settle"]
     pub fn sync(&mut self, core: &mut Core, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let id = self.id;
         let modal = core.modal_pending(id) || core.palette_holds(id);
-        let focused = self.deck.update(cx, |deck, cx| deck.reconcile(core, modal, window, cx));
+        let held = self.sidebar.read(cx).menu_open();
+        let focused = self.deck.update(cx, |deck, cx| {
+            deck.hold_keyboard(held);
+            deck.reconcile(core, modal, window, cx)
+        });
         self.sidebar.update(cx, |sidebar, cx| sidebar.sync(core, cx));
         let title = if core.dashboard(id).is_some() {
             dashboard_title(core.library(), id)

@@ -34,6 +34,7 @@ use gpui_kit::{
     App, AppContext as _, ClipboardItem, Context, Entity, ExternalPaths, Modifiers, PromptButton, PromptLevel,
     ScrollHandle, Subscription, Task, Window,
 };
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use uuid::Uuid;
 
 pub use self::look::Look;
@@ -130,8 +131,11 @@ pub struct Sidebar {
     look: Look,
     /// The selected session the list last scrolled to.
     revealed: Option<Uuid>,
-    /// Where a Shift-click extends the selection from: the session row clicked last without Shift.
+    /// Where a Shift-click extends the selection from: the session row clicked last without Shift, or the model's
+    /// selected session once a selection made elsewhere leaves that row out.
     anchor: Option<Uuid>,
+    /// A row menu holds the keyboard.
+    menu_open: bool,
     editing: Option<Editing>,
     pending_toggle: Option<Task<()>>,
     /// The workspace row under the pointer, which shows its "+".
@@ -160,6 +164,7 @@ impl Sidebar {
             look: Look::default(),
             revealed: None,
             anchor: None,
+            menu_open: false,
             editing: None,
             pending_toggle: None,
             hovered: None,
@@ -184,6 +189,33 @@ impl Sidebar {
     #[must_use]
     pub fn width(&self) -> f64 {
         self.resizing.unwrap_or(self.width)
+    }
+
+    /// The rename field's text.
+    #[cfg(test)]
+    pub(crate) fn edited_text(&self, cx: &App) -> Option<String> {
+        self.editing
+            .as_ref()
+            .map(|editing| editing.input.read(cx).value().to_string())
+    }
+
+    /// Whether a row menu holds the keyboard: the window's deck moves no focus until it closes.
+    #[must_use]
+    pub fn menu_open(&self) -> bool {
+        self.menu_open
+    }
+
+    /// A row menu opened.
+    fn menu_opened(&mut self) {
+        self.menu_open = true;
+    }
+
+    /// The row menu closed: a sync lands the focus move the deck held for it (a right-click's narrowed selection
+    /// shows another session).
+    fn menu_closed(&mut self) {
+        if std::mem::take(&mut self.menu_open) {
+            self.post(|_| {});
+        }
     }
 
     /// The row being renamed.
@@ -220,13 +252,19 @@ impl Sidebar {
     /// Shows `rows`. A change of the list's shape (a row added, removed or moved) closes a rename in progress, as the
     /// row it edits may be gone; a content change keeps it, so the row being renamed updates too (its glyph and badge
     /// live, its name behind the field) and is current when the field closes. The list scrolls to a newly selected
-    /// session.
+    /// session. A selection made elsewhere (the keymap, `agtermctl`, auto-follow) that leaves the Shift-click anchor
+    /// out moves the anchor to the selected session, as GTK's list moves its range anchor with each row it selects;
+    /// the sidebar's own Shift-click keeps it.
     fn show(&mut self, rows: Vec<SidebarRow>, selected: Option<Uuid>, cx: &mut Context<Self>) {
         let reshaped =
             self.rows.len() != rows.len() || self.rows.iter().zip(&rows).any(|(old, new)| old.shape() != new.shape());
         self.rows = rows;
         if reshaped && self.editing.is_some() {
             self.finish_rename(false, cx);
+        }
+        let selection = self.selected_ids();
+        if self.anchor.is_none_or(|anchor| !selection.contains(&anchor)) {
+            self.anchor = selected;
         }
         if selected != self.revealed {
             self.revealed = selected;
@@ -470,7 +508,7 @@ impl Sidebar {
             MenuAction::Reveal(cwd) => cx.reveal_path(Path::new(&cwd)),
             MenuAction::Close(ids) => self.close_sessions(ids, window, cx),
             MenuAction::NewSession(workspace) => self.act(SidebarAction::NewSession { workspace }),
-            MenuAction::OpenDirectory(workspace) => self.open_directory(workspace, cx),
+            MenuAction::OpenDirectory(workspace) => self.open_directory(workspace, window, cx),
             MenuAction::ToggleFocus(id) => self.act(SidebarAction::ToggleFocus(id)),
             MenuAction::FocusMembership { workspace, member } => {
                 self.act(SidebarAction::SetFocusMembership { workspace, member });
@@ -480,13 +518,13 @@ impl Sidebar {
     }
 
     /// Runs a footer control.
-    fn footer_action(&mut self, action: FooterAction, cx: &mut Context<Self>) {
+    fn footer_action(&mut self, action: FooterAction, window: &Window, cx: &mut Context<Self>) {
         match action {
             FooterAction::NewWorkspace => self.act(SidebarAction::NewWorkspace),
             FooterAction::NewSession => self.act(SidebarAction::NewSessionInCurrent),
             FooterAction::OpenDirectory => {
                 if let Some(workspace) = self.context.drop.current_workspace {
-                    self.open_directory(workspace, cx);
+                    self.open_directory(workspace, window, cx);
                 }
             }
             FooterAction::ToggleFocusFilter => self.act(SidebarAction::ToggleFocusFilter),
@@ -550,13 +588,23 @@ impl Sidebar {
         .detach();
     }
 
-    /// Open Directory…: a folder chooser starting in the active session's directory, then a session there in
-    /// `workspace`.
-    pub fn open_directory(&self, workspace: Uuid, cx: &mut Context<Self>) {
+    /// Open Directory…: a folder chooser over `window`, starting in the active session's directory, then a session
+    /// there in `workspace`.
+    pub fn open_directory(&self, workspace: Uuid, window: &Window, cx: &mut Context<Self>) {
         let start = self.context.chooser_folder().map(PathBuf::from);
+        let parent = window.window_handle();
         let (poster, window) = (self.poster.clone(), self.window);
-        cx.spawn(async move |_, _| {
-            let Some(path) = pick_directory(start).await else {
+        cx.spawn(async move |_, cx| {
+            // read from the live window as the chooser opens, so the handles never outlive it
+            let handles = cx
+                .update_window(parent, |_, window, _| raw_handles(window))
+                .ok()
+                .flatten();
+            let parent = match handles {
+                Some((window, display)) => ashpd::WindowIdentifier::from_raw_handle(&window, Some(&display)).await,
+                None => None,
+            };
+            let Some(path) = pick_directory(start, parent).await else {
                 return;
             };
             let directories = vec![path.to_string_lossy().into_owned()];
@@ -841,9 +889,18 @@ fn too_many_folders(window: &mut Window, cx: &mut App) {
     ));
 }
 
-/// The desktop's folder chooser (the file chooser portal, as GTK's `FileDialog` and GPUI's own prompt use it), titled
-/// and starting in `start`; the folder picked, `None` when cancelled or without a portal (logged).
-async fn pick_directory(start: Option<PathBuf>) -> Option<PathBuf> {
+/// `window`'s raw window and display handles (an X11 window id, or a Wayland surface and display), which the portal
+/// names its parent by; `None` when the platform has none.
+fn raw_handles(window: &Window) -> Option<(RawWindowHandle, RawDisplayHandle)> {
+    let raw = HasWindowHandle::window_handle(window).ok()?.as_raw();
+    let display = HasDisplayHandle::display_handle(window).ok()?.as_raw();
+    Some((raw, display))
+}
+
+/// The desktop's folder chooser (the file chooser portal, as GTK's `FileDialog` and GPUI's own prompt use it), modal
+/// over `parent` (the window as the portal names it: an X11 id or an `xdg-foreign` export), titled and starting in
+/// `start`; the folder picked, `None` when cancelled or without a portal (logged).
+async fn pick_directory(start: Option<PathBuf>, parent: Option<ashpd::WindowIdentifier>) -> Option<PathBuf> {
     use ashpd::desktop::file_chooser::OpenFileRequest;
     let base = || {
         OpenFileRequest::default()
@@ -857,7 +914,7 @@ async fn pick_directory(start: Option<PathBuf>) -> Option<PathBuf> {
         Some(folder) => base().current_folder(folder).unwrap_or_else(|_| base()),
         None => base(),
     };
-    let request = match request.send().await {
+    let request = match request.identifier(parent).send().await {
         Ok(request) => request,
         Err(err) => {
             tracing::warn!(%err, "the folder chooser did not open");

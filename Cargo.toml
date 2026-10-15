@@ -103,8 +103,15 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 zbus = "5.19"
 # agterm-gpui's sidebar: the folder chooser of Open Directory… (a title and a starting folder, which GPUI's own
 # `prompt_for_paths` does not take) and the desktop's `enable-animations` setting the status glyph's blink obeys, through
-# the xdg-desktop-portal crate GPUI's Linux platform already links (0.13, `async-io`; no tokio).
-ashpd = { version = "0.13", default-features = false, features = ["async-io", "file_chooser", "settings"] }
+# the xdg-desktop-portal crate GPUI's Linux platform already links (0.13, `async-io`; no tokio). `raw_handle` and
+# `wayland` name the chooser's parent window from GPUI's raw window handle (an X11 id, an `xdg-foreign` export).
+ashpd = { version = "0.13", default-features = false, features = [
+    "async-io",
+    "file_chooser",
+    "settings",
+    "raw_handle",
+    "wayland",
+] }
 # The `StreamExt` the portal's setting-changed stream is read with (the futures family zbus and ashpd link).
 futures-util = "0.3"
 # agterm-gpui activates its window with a token another launch handed over, on GPUI's own connection: xdg-activation

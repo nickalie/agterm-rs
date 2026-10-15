@@ -578,6 +578,7 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "getrandom 0.4.3",
+ "raw-window-handle",
  "serde",
  "serde_repr",
  "wayland-backend",

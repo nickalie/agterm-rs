@@ -448,6 +448,90 @@ fn a_double_click_renames_enter_commits_and_escape_cancels(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
+fn a_press_outside_the_rename_field_commits_it(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let u = h.id_of("u", cx);
+    let two = h.id_of("two", cx);
+    h.view
+        .update_in(cx, |sidebar, window, cx| sidebar.begin_rename(u, window, cx));
+    h.settle(cx);
+    cx.simulate_input("build");
+    // the disclosure takes no focus, and the fold it makes reshapes the list
+    let disclosure: &'static str = Box::leak(format!("disclosure:{two}").into_boxed_str());
+    let at = bounds(cx, disclosure).center();
+    cx.simulate_click(at, Modifiers::default());
+    h.settle(cx);
+    assert_eq!(h.store().session(u).unwrap().display_name(), "build", "committed");
+    assert_eq!(h.view.read_with(cx, |sidebar, _| sidebar.editing()), None);
+    assert!(
+        !h.store().workspace(two).unwrap().is_expanded,
+        "the click still folded two"
+    );
+
+    // another workspace row's click commits too
+    h.view
+        .update_in(cx, |sidebar, window, cx| sidebar.begin_rename(two, window, cx));
+    h.settle(cx);
+    cx.simulate_input("ops");
+    let at = bounds(cx, "row:workspace 1").center();
+    cx.simulate_click(at, Modifiers::default());
+    cx.executor().advance_clock(DOUBLE_CLICK);
+    h.settle(cx);
+    assert_eq!(h.store().workspace(two).unwrap().name, "ops");
+}
+
+#[gpui_kit::test]
+fn shift_extends_from_a_selection_made_elsewhere(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let at = bounds(cx, "row:u").center();
+    cx.simulate_click(at, Modifiers::default());
+    h.settle(cx);
+    // the keymap, agtermctl or auto-follow moves the selection to var
+    let var = h.id_of("var", cx);
+    h.store_mut().select_session(Some(var));
+    h.settle(cx);
+    let at = bounds(cx, "row:srv").center();
+    cx.simulate_click(at, shift());
+    h.settle(cx);
+    assert_eq!(
+        h.names(cx),
+        ["w:workspace 1", "s:u", "s:srv*", "w:two", "s:var*"],
+        "from var, not from u"
+    );
+    // the sidebar's own Shift-click keeps the anchor
+    let at = bounds(cx, "row:u").center();
+    cx.simulate_click(at, shift());
+    h.settle(cx);
+    assert_eq!(h.names(cx), ["w:workspace 1", "s:u*", "s:srv*", "w:two", "s:var*"]);
+}
+
+#[gpui_kit::test]
+fn a_row_menu_holds_the_keyboard_until_it_closes(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    assert!(!h.view.read_with(cx, |sidebar, _| sidebar.menu_open()));
+    let at = bounds(cx, "row:var").center();
+    cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::default());
+    cx.run_until_parked();
+    assert!(h.view.read_with(cx, |sidebar, _| sidebar.menu_open()), "open");
+    h.settle(cx);
+    assert!(
+        h.view.read_with(cx, |sidebar, _| sidebar.menu_open()),
+        "a sync keeps it"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(!h.view.read_with(cx, |sidebar, _| sidebar.menu_open()), "closed");
+    assert!(
+        !h.posted.0.lock().unwrap().is_empty(),
+        "the close asks for a sync, which lands the focus the deck held"
+    );
+}
+
+#[gpui_kit::test]
 fn sessions_and_workspaces_reorder_by_drag(cx: &mut TestAppContext) {
     let (library, _) = library();
     let (mut h, cx) = harness(cx, library, AppSettings::default());
@@ -578,6 +662,24 @@ fn the_divider_resizes_and_a_hidden_or_covered_sidebar_steps_aside(cx: &mut Test
     h.settle(cx);
     assert!(!h.view.read_with(cx, |sidebar, _| sidebar.is_shown()));
     assert!(cx.debug_bounds("sidebar-divider").is_none());
+
+    // the dashboard covers it without hiding it
+    h.store_mut().set_sidebar_visible(true);
+    h.settle(cx);
+    assert!(h.view.read_with(cx, |sidebar, _| sidebar.is_shown()));
+    let window = h.window;
+    h.state.core.toggle_dashboard(window);
+    assert!(h.state.core.dashboard(window).is_some(), "the dashboard opened");
+    h.settle(cx);
+    assert!(h.store().sidebar().visible, "still visible in the model");
+    assert!(!h.view.read_with(cx, |sidebar, _| sidebar.is_shown()), "covered");
+    assert!(cx.debug_bounds("sidebar-divider").is_none());
+    h.state.core.toggle_dashboard(window);
+    h.settle(cx);
+    assert!(
+        h.view.read_with(cx, |sidebar, _| sidebar.is_shown()),
+        "back once uncovered"
+    );
 }
 
 #[gpui_kit::test]
@@ -603,6 +705,15 @@ fn status_glyphs_show_for_a_status_and_go_when_idle(cx: &mut TestAppContext) {
     let glyph = bounds(cx, "agent-status");
     let row_bounds = bounds(cx, "row:srv");
     assert!(row_bounds.contains(&glyph.center()), "the glyph sits in its row");
+    assert!(cx.debug_bounds("agent-status-blinking").is_some(), "it blinks");
+    // the desktop's reduced motion stills it
+    cx.update(|_, cx| cx.set_global(crate::status_glyph::Motion { animations: false }));
+    h.settle(cx);
+    assert!(cx.debug_bounds("agent-status-blinking").is_none());
+    assert!(cx.debug_bounds("agent-status-still").is_some(), "reduced motion: still");
+    cx.update(|_, cx| cx.set_global(crate::status_glyph::Motion { animations: true }));
+    h.settle(cx);
+    assert!(cx.debug_bounds("agent-status-blinking").is_some(), "it blinks again");
     h.store_mut().set_agent_indicator(AgentIndicator::default(), srv);
     h.settle(cx);
     assert!(cx.debug_bounds("agent-status").is_none());

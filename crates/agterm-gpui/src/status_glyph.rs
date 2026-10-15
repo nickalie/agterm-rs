@@ -255,13 +255,25 @@ pub fn glyph(look: &GlyphLook, animate: bool) -> impl IntoElement {
     let shape = look.shape;
     let color = hsla(look.rgb);
     let tooltip = SharedString::from(look.tooltip.clone());
-    let silhouette = canvas(
-        |_, _, _| {},
-        move |bounds: Bounds<Pixels>, (), window: &mut Window, _: &mut App| {
-            paint_mask(window, bounds, color, Mask::Status(shape));
-        },
-    )
-    .size(px(SLOT));
+    let blinking = look.blink && animate;
+    let silhouette = div()
+        .debug_selector(move || {
+            if blinking {
+                "agent-status-blinking".to_owned()
+            } else {
+                "agent-status-still".to_owned()
+            }
+        })
+        .size(px(SLOT))
+        .child(
+            canvas(
+                |_, _, _| {},
+                move |bounds: Bounds<Pixels>, (), window: &mut Window, _: &mut App| {
+                    paint_mask(window, bounds, color, Mask::Status(shape));
+                },
+            )
+            .size(px(SLOT)),
+        );
     let slot = div()
         .id("agent-status")
         .debug_selector(|| "agent-status".to_owned())
@@ -269,7 +281,7 @@ pub fn glyph(look: &GlyphLook, animate: bool) -> impl IntoElement {
         .size(px(SLOT))
         .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx))
         .child(silhouette);
-    if look.blink && animate {
+    if blinking {
         let period = Duration::from_micros(u64::from(2 * BLINK_HALF_US.unsigned_abs()));
         slot.with_animation(
             "agent-status-blink",

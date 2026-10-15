@@ -17,9 +17,9 @@ use gpui_kit::component::input::{Escape, Input};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, AppContext as _, ClickEvent, Context, CursorStyle, DragMoveEvent, ElementId, EmptyView,
-    ExternalPaths, FontWeight, Hsla, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, Window, deferred, div,
+    AnyElement, App, AppContext as _, ClickEvent, Context, CursorStyle, DismissEvent, DragMoveEvent, ElementId,
+    EmptyView, ExternalPaths, FontWeight, Hsla, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
+    Render, SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, Window, deferred, div,
     prelude::FluentBuilder as _, px, rgb,
 };
 use uuid::Uuid;
@@ -192,7 +192,20 @@ impl Sidebar {
                 let Some(entity) = sidebar.upgrade() else {
                     return popup;
                 };
-                let entries = entity.read(cx).menu_entries(id);
+                let entries = entity.update(cx, |this, _| {
+                    this.menu_opened();
+                    this.menu_entries(id)
+                });
+                // the subscription needs the menu built; it lives as long as the menu
+                let closing = sidebar.clone();
+                cx.defer_in(window, move |_, _, cx| {
+                    cx.subscribe_self(move |_, _: &DismissEvent, cx| {
+                        if let Some(entity) = closing.upgrade() {
+                            entity.update(cx, |this, _| this.menu_closed());
+                        }
+                    })
+                    .detach();
+                });
                 let target = sidebar.clone();
                 let perform: menu::Perform = Rc::new(move |action, window, cx| {
                     if let Some(entity) = target.upgrade() {
@@ -250,6 +263,9 @@ impl Sidebar {
                 .min_w(px(0.))
                 .debug_selector(|| "edit-field".to_owned())
                 .on_action(cx.listener(|this, _: &Escape, _, cx| this.finish_rename(false, cx)))
+                // a press anywhere else commits, as the field losing the keyboard does: the disclosure, the hover "+"
+                // and the rows take no focus, and the list they reshape would otherwise cancel the edit
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| this.finish_rename(true, cx)))
                 .child(
                     Input::new(&editing.input)
                         .id("edit-field")
@@ -348,9 +364,9 @@ impl Sidebar {
         let sidebar = cx.entity().downgrade();
         let run = move |action: FooterAction, _: &mut Context<Self>| {
             let sidebar = sidebar.clone();
-            move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                 if let Some(entity) = sidebar.upgrade() {
-                    entity.update(cx, |this, cx| this.footer_action(action, cx));
+                    entity.update(cx, |this, cx| this.footer_action(action, window, cx));
                 }
             }
         };
@@ -465,9 +481,9 @@ impl Sidebar {
 /// An item of the footer's add-session menu, running `action`.
 fn footer_item(sidebar: &WeakEntity<Sidebar>, label: &'static str, action: FooterAction) -> PopupMenuItem {
     let sidebar = sidebar.clone();
-    PopupMenuItem::new(label).on_click(move |_, _, cx| {
+    PopupMenuItem::new(label).on_click(move |_, window, cx| {
         if let Some(entity) = sidebar.upgrade() {
-            entity.update(cx, |this, cx| this.footer_action(action, cx));
+            entity.update(cx, |this, cx| this.footer_action(action, window, cx));
         }
     })
 }

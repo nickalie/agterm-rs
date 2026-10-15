@@ -378,14 +378,7 @@ fn new_workspace(ink: &mut Ink) {
 
 /// `plus.rectangle`: the frame with a `+` inside.
 fn add_session(ink: &mut Ink) {
-    let (left, top, width, height, radius) = FRAME;
-    let inset = REGULAR / 2.0;
-    let mut trace = Trace::new();
-    trace.rounded_rect(
-        (left + inset, top + inset, width - 2.0 * inset, height - 2.0 * inset),
-        radius - inset,
-    );
-    ink.stroke(trace, REGULAR);
+    frame(ink, false);
     let mut cross = Trace::new();
     cross.polyline(&[(5.0, 8.0), (11.0, 8.0)]);
     cross.polyline(&[(8.0, 5.0), (8.0, 11.0)]);
