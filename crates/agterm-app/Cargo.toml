@@ -19,6 +19,8 @@ uuid.workspace = true
 
 [dev-dependencies]
 agterm-host = { workspace = true, features = ["fakes"] }
+# a launched pane's foreground read through the process table (tests/pane_foreground.rs)
+agterm-term.workspace = true
 tempfile.workspace = true
 
 [lints]

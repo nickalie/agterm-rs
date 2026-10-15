@@ -172,6 +172,84 @@ pub fn inject(shell: LoginShell, resources: &Path, inherited: &Inherited, enviro
     }
 }
 
+/// What libghostty's automatic integration (`shell_integration.setup`, `shell-integration = detect`) makes of a plain
+/// pane's command line, a shell line its terminal runs through `/bin/sh -c`: when its program is a zsh, bash or fish
+/// whose integration `resources` bundles, that shell's variables are set in `environment` and the line to run comes
+/// back — bash's in POSIX mode (`<exe> --posix <args>`), its `--norc`/`--noprofile` handed to the integration through
+/// `GHOSTTY_BASH_INJECT` and its `--rcfile`/`--init-file` through `GHOSTTY_BASH_RCFILE`, the others unchanged.
+/// `None`, with `environment` untouched, for any other program, an integration that is not bundled, a bash given
+/// `--posix` or `-c` (no interactive start to hook), and a line with quotes or escapes, which this split does not parse
+/// (Ghostty's does; such a line runs without the integration). Ghostty's elvish and nushell integrations are not
+/// ported.
+#[must_use]
+pub fn setup(
+    command: &str,
+    resources: &Path,
+    inherited: &Inherited,
+    environment: &mut BTreeMap<String, String>,
+) -> Option<String> {
+    if command.contains(['\'', '"', '\\']) {
+        return None;
+    }
+    let mut words = command.split_whitespace();
+    let exe = words.next()?;
+    let shell = LoginShell::of(exe).filter(|shell| shell.is_bundled(resources))?;
+    let (line, flags) = match shell {
+        LoginShell::Bash => {
+            let (line, flags) = bash_command(exe, words)?;
+            (line, Some(flags))
+        }
+        LoginShell::Zsh | LoginShell::Fish => (command.to_owned(), None),
+    };
+    inject(shell, resources, inherited, environment);
+    if let Some(BashFlags { inject, rcfile }) = flags {
+        environment.insert("GHOSTTY_BASH_INJECT".to_owned(), inject);
+        if let Some(rcfile) = rcfile {
+            environment.insert("GHOSTTY_BASH_RCFILE".to_owned(), rcfile);
+        }
+    }
+    Some(line)
+}
+
+/// What a bash command line's own flags hand to the integration.
+struct BashFlags {
+    /// `GHOSTTY_BASH_INJECT`: `1`, then the startup files the user turned off.
+    inject: String,
+    rcfile: Option<String>,
+}
+
+/// Ghostty's `setupBash` walk over bash's arguments after `exe`: the POSIX-mode line and the flags for the
+/// integration, `None` when `--posix` or a short option with `c` rules the integration out.
+fn bash_command<'a>(exe: &'a str, mut words: impl Iterator<Item = &'a str>) -> Option<(String, BashFlags)> {
+    let mut line = vec![exe, "--posix"];
+    let mut flags = BashFlags {
+        inject: "1".to_owned(),
+        rcfile: None,
+    };
+    while let Some(word) = words.next() {
+        match word {
+            "--posix" => return None,
+            "--norc" | "--noprofile" => {
+                flags.inject.push(' ');
+                flags.inject.push_str(word);
+            }
+            "--rcfile" | "--init-file" => flags.rcfile = words.next().map(str::to_owned),
+            "-" | "--" => {
+                line.push(word);
+                line.extend(words.by_ref());
+            }
+            short if short.len() > 1 && short.starts_with('-') && !short.starts_with("--") => {
+                if short.contains('c') {
+                    return None;
+                }
+                line.push(short);
+            }
+            other => line.push(other),
+        }
+    }
+    Some((line.join(" "), flags))
+}
+
 /// One step of re-arming the integration before a replay's final shell: export the variable with this value, or
 /// unset it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -401,6 +479,83 @@ mod tests {
         for shell in [LoginShell::Zsh, LoginShell::Bash, LoginShell::Fish] {
             assert_eq!(rearm(shell, &BTreeMap::new()), None, "{}", shell.name());
         }
+    }
+
+    /// A resources directory bundling every integration.
+    fn bundled() -> tempfile::TempDir {
+        let resources = tempfile::tempdir().unwrap();
+        for shell in [LoginShell::Zsh, LoginShell::Bash, LoginShell::Fish] {
+            let path = resources.path().join(shell.loader());
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "").unwrap();
+        }
+        resources
+    }
+
+    /// [`setup`] of `command` over a bundled integration and a home: the line, and the variables it set.
+    fn set_up(resources: &Path, command: &str) -> (Option<String>, BTreeMap<String, String>) {
+        let inherited = Inherited {
+            home: Some("/home/u".to_owned()),
+            ..Inherited::default()
+        };
+        let mut environment = BTreeMap::new();
+        let line = setup(command, resources, &inherited, &mut environment);
+        (line, environment)
+    }
+
+    #[test]
+    fn a_plain_panes_zsh_and_fish_run_as_given_with_their_integration() {
+        let resources = bundled();
+        let (line, environment) = set_up(resources.path(), "/usr/bin/zsh");
+        assert_eq!(line.as_deref(), Some("/usr/bin/zsh"));
+        assert!(environment["ZDOTDIR"].ends_with("shell-integration/zsh"));
+        let (line, environment) = set_up(resources.path(), "fish -l");
+        assert_eq!(line.as_deref(), Some("fish -l"));
+        assert!(environment.contains_key("GHOSTTY_SHELL_INTEGRATION_XDG_DIR"));
+    }
+
+    #[test]
+    fn a_plain_panes_bash_goes_to_posix_mode_its_startup_flags_to_the_integration() {
+        // Ghostty's `setupBash` cases
+        let resources = bundled();
+        let (line, environment) = set_up(resources.path(), "/bin/bash");
+        assert_eq!(line.as_deref(), Some("/bin/bash --posix"));
+        assert_eq!(
+            (
+                environment["GHOSTTY_BASH_INJECT"].as_str(),
+                environment["HISTFILE"].as_str()
+            ),
+            ("1", "/home/u/.bash_history")
+        );
+        assert!(environment["ENV"].ends_with("shell-integration/bash/ghostty.bash"));
+        let (line, environment) = set_up(resources.path(), "bash --norc --noprofile -i");
+        assert_eq!(line.as_deref(), Some("bash --posix -i"));
+        assert_eq!(environment["GHOSTTY_BASH_INJECT"], "1 --norc --noprofile");
+        let (line, environment) = set_up(resources.path(), "bash --rcfile script.sh -l");
+        assert_eq!(line.as_deref(), Some("bash --posix -l"));
+        assert_eq!(environment["GHOSTTY_BASH_RCFILE"], "script.sh");
+        let (line, _) = set_up(resources.path(), "bash - --arg file1 --posix");
+        assert_eq!(line.as_deref(), Some("bash --posix - --arg file1 --posix"));
+    }
+
+    #[test]
+    fn a_plain_pane_without_an_integrated_shell_runs_as_given() {
+        // bash that cannot start interactively, other programs, quoting, nothing bundled
+        let resources = bundled();
+        let run = |command: &str| set_up(resources.path(), command);
+        for command in [
+            "bash --posix",
+            "bash -c 'ls'",
+            "bash -lc ls",
+            "vim notes",
+            "sh",
+            "\"/a b/bash\"",
+            "",
+        ] {
+            assert_eq!(run(command), (None, BTreeMap::new()), "{command}");
+        }
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(set_up(empty.path(), "zsh"), (None, BTreeMap::new()));
     }
 
     #[test]
