@@ -1,5 +1,6 @@
 # Shared helpers of the native build scripts (build-ghostty.sh, build-ghostty-vt.sh, build-layer-shell.sh, build-zmx.sh,
-# fetch-wpe.sh, fetch-lavapipe.sh, gen-wpe-bindings.sh, pkg-config.sh, stage.sh, run-dev.sh). Sourced, not run.
+# build-weston.sh, fetch-wpe.sh, fetch-lavapipe.sh, fetch-fonts.sh, gen-wpe-bindings.sh, pkg-config.sh, stage.sh,
+# run-dev.sh). Sourced, not run.
 #
 # Each native dependency lives in its own vendored prefix, ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/<name>-<key>/,
 # where <key> hashes that dependency's pins and patches only. Cargo never runs zig: agterm-ghostty-sys asks
@@ -145,6 +146,27 @@ weston_prefix_is_complete() {
 # The libraries a shared object needs that this host cannot resolve, space-separated (empty when all resolve).
 unresolved_libraries() {
   ldd "$1" 2>&1 | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+
+# The terminal fonts carry no patches: their key hashes the FONTS_ pins only.
+fonts_prefix() {
+  echo "$VENDOR_ROOT/fonts-$(prefix_key FONTS /nonexistent)"
+}
+
+# The faces agterm-gpui embeds, under the prefix's share/fonts/ (its build script reads the same list).
+FONT_FILES=(JetBrainsMono-Regular.ttf JetBrainsMono-Bold.ttf JetBrainsMono-Italic.ttf JetBrainsMono-BoldItalic.ttf
+  SymbolsNerdFontMono-Regular.ttf)
+
+# A fonts prefix is complete when every face, both licenses and the pin manifest are there and the manifest matches
+# the FONTS_ pins.
+fonts_prefix_is_complete() {
+  local prefix="$1" file
+  for file in "${FONT_FILES[@]}"; do
+    [[ -s "$prefix/share/fonts/$file" ]] || return 1
+  done
+  [[ -s "$prefix/share/doc/fonts/JetBrainsMono-OFL.txt" && -s "$prefix/share/doc/fonts/SymbolsNerdFont-LICENSE" \
+    && -s "$prefix/share/agterm/fonts-PINS" ]] \
+    && pin_lines FONTS | cmp -s - "$prefix/share/agterm/fonts-PINS"
 }
 
 # The gir binary's key hashes the GIR_ pins and build/patches/gir/.

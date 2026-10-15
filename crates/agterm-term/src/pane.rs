@@ -30,7 +30,7 @@ use crate::effects::{
 use crate::exit::{ExitPolicy, Layout};
 use crate::input::InputState;
 use crate::pty::{self, GridSize, PaneCommand, Ready, WakePipe, WriteQueue};
-use crate::render::{Capture, Frame, MouseShape, ThemeColors};
+use crate::render::{Capture, CursorDefaults, Frame, MouseShape, ThemeColors};
 use crate::scan::{ReadCandidate, Scanner};
 use crate::search::SearchSlot;
 use crate::{PaneError, ScrollbackLimits};
@@ -56,6 +56,8 @@ pub struct PaneConfig {
     pub size: GridSize,
     pub scrollback: ScrollbackLimits,
     pub colors: ThemeColors,
+    /// The cursor the terminal starts with and returns to.
+    pub cursor: CursorDefaults,
     /// The most input bytes queued for the child before [`Pane::write`] refuses more.
     pub write_limit: usize,
     /// The Kitty image storage per screen in bytes; zero turns the Kitty graphics protocol off.
@@ -72,6 +74,7 @@ impl PaneConfig {
             size,
             scrollback: ScrollbackLimits::default(),
             colors: ThemeColors::default(),
+            cursor: CursorDefaults::default(),
             write_limit: DEFAULT_WRITE_LIMIT,
             kitty_image_limit: DEFAULT_KITTY_IMAGE_LIMIT,
             exit: ExitPolicy::default(),
@@ -86,6 +89,7 @@ impl std::fmt::Debug for PaneConfig {
             .field("size", &self.size)
             .field("scrollback", &self.scrollback)
             .field("colors", &self.colors)
+            .field("cursor", &self.cursor)
             .field("write_limit", &self.write_limit)
             .field("kitty_image_limit", &self.kitty_image_limit)
             .field("exit", &self.exit)
@@ -140,6 +144,8 @@ pub(crate) struct Vt {
     pub(crate) cleared_selection: bool,
     /// The colors last reported with [`PaneEvent::Colors`].
     colors: vt::TerminalColors,
+    /// A `clear_screen` waits for the program's output to reach a ground point ([`crate::actions`]).
+    pub(crate) pending_clear: bool,
 }
 
 impl Vt {
@@ -155,6 +161,20 @@ impl Vt {
         }
         self.terminal.scroll_viewport(vt::Scroll::Bottom);
         true
+    }
+}
+
+/// `vt_write` of one slice of the program's output; a pending `clear_screen` goes in at the slice's first ground
+/// point ([`crate::actions`]).
+fn write_slice(shared: &Shared, vt: &mut Vt, slice: &[u8]) {
+    if !vt.pending_clear {
+        vt.terminal.vt_write(slice);
+        return;
+    }
+    // without a ground point the whole slice was in the middle of something: the clear waits for the next one
+    if let Some(consumed) = vt.terminal.vt_write_until_ground(slice) {
+        crate::actions::apply_clear(shared, vt);
+        vt.terminal.vt_write(&slice[consumed..]);
     }
 }
 
@@ -218,6 +238,11 @@ impl Shared {
 
     pub(crate) fn send(&self, event: PaneEvent) {
         let _ = self.events.send(event);
+    }
+
+    /// Queue bytes the terminal answers the program with (never refused; see [`WriteQueue`]).
+    pub(crate) fn push_reply(&self, bytes: &[u8]) {
+        self.writer.push_reply(bytes);
     }
 
     /// Make the next paint convert (and re-check every row's selection); the caller holds the VT lock.
@@ -329,6 +354,27 @@ impl Pane {
             .filter(|pgrp| *pgrp > 0)
     }
 
+    /// Whether the program on the PTY is reading a password: canonical input with echo off, the heuristic Ghostty's
+    /// termio applies to the PTY's modes (polling them every 200 ms) to set the terminal's `password_input`, which
+    /// libghostty-vt leaves to its embedder. `false` once the PTY cannot say.
+    #[must_use]
+    pub fn password_input(&self) -> bool {
+        let master = lock(&self.master);
+        let Some(fd) = master.as_raw_fd() else {
+            return false;
+        };
+        let mut termios = std::mem::MaybeUninit::<libc::termios>::zeroed();
+        // SAFETY: `fd` is the master's descriptor, open while the lock holds the master; `tcgetattr` only writes a
+        // `termios` into the buffer, which is large enough and zeroed (a valid `termios`) whether or not it succeeds.
+        let read = unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) };
+        if read != 0 {
+            return false;
+        }
+        // SAFETY: zero-initialized above and filled by the successful `tcgetattr`.
+        let modes = unsafe { termios.assume_init() }.c_lflag;
+        modes & libc::ICANON != 0 && modes & libc::ECHO == 0
+    }
+
     /// Queue input for the child (keys, pastes). Never blocks.
     ///
     /// # Errors
@@ -377,6 +423,20 @@ impl Pane {
     /// [`PaneError::Terminal`] when the library refuses a color.
     pub fn set_colors(&self, colors: &ThemeColors) -> Result<(), PaneError> {
         colors
+            .apply(&mut lock(&self.shared.vt).terminal)
+            .map_err(PaneError::terminal)?;
+        self.shared.wake();
+        Ok(())
+    }
+
+    /// Change the cursor the terminal returns to (a config reload); the current cursor follows while no program chose
+    /// one.
+    ///
+    /// # Errors
+    ///
+    /// [`PaneError::Terminal`] when the library refuses a value.
+    pub fn set_cursor_defaults(&self, cursor: CursorDefaults) -> Result<(), PaneError> {
+        cursor
             .apply(&mut lock(&self.shared.vt).terminal)
             .map_err(PaneError::terminal)?;
         self.shared.wake();
@@ -445,6 +505,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
         .set_scrollback_limits(config.scrollback.engine())
         .map_err(PaneError::terminal)?;
     config.colors.apply(&mut terminal).map_err(PaneError::terminal)?;
+    config.cursor.apply(&mut terminal).map_err(PaneError::terminal)?;
     kitty_graphics(&mut terminal, config.kitty_image_limit).map_err(PaneError::terminal)?;
     let capture = Arc::new(Mutex::new(Capture::new().map_err(PaneError::terminal)?));
     let armed: ArmedSlot = Arc::default();
@@ -469,6 +530,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
             size,
             cleared_selection: false,
             colors,
+            pending_clear: false,
         }),
         capture,
         published: Mutex::new(Arc::new(Frame::default())),
@@ -773,6 +835,10 @@ fn dispatch(shared: &Shared, byte: u8, read: ReadCandidate, answer: ClipboardAns
     if lock(&shared.armed).take().is_some() {
         tracing::debug!("a clipboard read candidate was not dispatched by the terminal; its answer is dropped");
     }
+    // the dispatch byte ends a sequence: a clear waiting for ground goes in now, not with the program's next output
+    if vt.pending_clear && vt.terminal.at_ground() {
+        crate::actions::apply_clear(shared, &mut vt);
+    }
     shared.counters.bytes.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -879,7 +945,7 @@ impl Io {
         for slice in bytes.chunks(VT_SLICE) {
             let mut vt = lock(&self.shared.vt);
             let started = Instant::now();
-            vt.terminal.vt_write(slice);
+            write_slice(&self.shared, &mut vt, slice);
             let held = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
             drop(vt);
             let counters = &self.shared.counters;
@@ -1023,7 +1089,16 @@ mod tests {
         let shared = Arc::clone(&pane.shared);
         *lock(&pane.shared.before_paint) = Some(Box::new(move || {
             lock(&shared.vt).terminal.vt_write(b"\x1b[1;1HXYZ\x1b[3;5H");
-            let a = frame(&shared);
+            // view A paints until it gets the terminal (the IO thread may hold a lock for a moment on a loaded machine)
+            let deadline = Instant::now() + Duration::from_secs(20);
+            let a = loop {
+                let a = frame(&shared);
+                if !a.stale {
+                    break a;
+                }
+                assert!(Instant::now() < deadline, "view A never got the terminal");
+                std::thread::sleep(Duration::from_millis(1));
+            };
             assert_eq!(a.frame.lines()[0], "XYZ");
         }));
         let b = pane.frame();

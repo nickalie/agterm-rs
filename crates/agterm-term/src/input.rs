@@ -276,6 +276,8 @@ pub enum Scroll {
     Rows(isize),
     /// By shell prompts (semantic prompt marks); negative is back.
     Prompts(isize),
+    /// To the absolute row (0 is the top of the scrollback), which becomes the first visible one (`scroll_to_row`).
+    Row(usize),
 }
 
 /// The input side of the VT lock: the encoders and what the mouse encoder needs to know.
@@ -439,6 +441,12 @@ impl Pane {
         vt.input.reporting(&vt.terminal)
     }
 
+    /// The config's `mouse-reporting` as set now (`toggle_mouse_reporting` flips it).
+    #[must_use]
+    pub fn mouse_reporting(&self) -> bool {
+        lock(&self.shared().vt).input.reporting
+    }
+
     /// The config's `mouse-reporting` (on by default): off, programs never get the mouse.
     pub fn set_mouse_reporting(&self, enabled: bool) {
         lock(&self.shared().vt).input.reporting = enabled;
@@ -510,6 +518,7 @@ impl Pane {
             Scroll::Bottom => vt::Scroll::Bottom,
             Scroll::Rows(rows) => vt::Scroll::Rows(rows),
             Scroll::Prompts(prompts) => vt::Scroll::Prompts(prompts),
+            Scroll::Row(row) => vt::Scroll::Row(row),
         };
         lock(&self.shared().vt).terminal.scroll_viewport(engine);
         self.shared().wake();

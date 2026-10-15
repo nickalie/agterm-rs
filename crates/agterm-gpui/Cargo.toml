@@ -16,13 +16,17 @@ agterm-core.workspace = true
 agterm-host.workspace = true
 agterm-proto.workspace = true
 agterm-server.workspace = true
+agterm-term.workspace = true
 async-channel.workspace = true
 gpui-kit.workspace = true
 libc.workspace = true
 raw-window-handle.workspace = true
 serde_json.workspace = true
 signal-hook.workspace = true
+# write_*_file: the screen file goes into a temporary directory of its own, as Ghostty's does
+tempfile.workspace = true
 thiserror.workspace = true
+tiny-skia.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 wayland-backend.workspace = true
@@ -34,7 +38,8 @@ zbus.workspace = true
 [dev-dependencies]
 agterm-host = { workspace = true, features = ["fakes"] }
 gpui-kit = { workspace = true, features = ["test-support"] }
-tempfile.workspace = true
+gpui-pre-wgpu.workspace = true
+png.workspace = true
 
 # GPUI's headless renderer opens one GPU device per process, so the external texture cases run in a child process per
 # Vulkan driver, which this harness starts (tests/external_texture/main.rs).

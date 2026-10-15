@@ -30,7 +30,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
             meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
-            curl xz-utils patch ncurses-bin fish \
+            curl xz-utils patch ncurses-bin fish fontconfig fonts-dejavu-core \
             dbus-daemon weston xvfb libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers \
             g++ libpixman-1-dev libinput-dev libevdev-dev libudev-dev libdrm-dev libegl-dev libgles-dev libgbm-dev \
             libcairo2-dev libpango1.0-dev libpng-dev hwdata
@@ -60,6 +60,9 @@ jobs:
       # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds
       - name: libghostty-vt prefix
         run: scripts/build-ghostty-vt.sh
+      # the fonts Ghostty embeds, which agterm-gpui (built with the workspace) embeds too
+      - name: terminal fonts
+        run: scripts/fetch-fonts.sh
       # Ubuntu 24.04 has no gtk4-layer-shell package; cargo finds the prefix through scripts/pkg-config.sh.
       - name: gtk4-layer-shell prefix
         run: scripts/build-layer-shell.sh
@@ -187,6 +190,9 @@ jobs:
       # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds
       - name: libghostty-vt prefix
         run: scripts/build-ghostty-vt.sh
+      # the fonts Ghostty embeds, which agterm-gpui (built with the workspace) embeds too
+      - name: terminal fonts
+        run: scripts/fetch-fonts.sh
       - name: gtk4-layer-shell prefix
         run: scripts/build-layer-shell.sh
       # stage.sh stages bin/zmx from this prefix, restored from the cache the rust-linux job saved
@@ -305,6 +311,9 @@ jobs:
       # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds
       - name: libghostty-vt prefix
         run: scripts/build-ghostty-vt.sh
+      # the fonts Ghostty embeds, which agterm-gpui (built with the workspace) embeds too
+      - name: terminal fonts
+        run: scripts/fetch-fonts.sh
       - name: gtk4-layer-shell prefix
         run: scripts/build-layer-shell.sh
       # stage.sh stages bin/zmx from this prefix, restored from the cache the rust-linux job saved
@@ -377,6 +386,9 @@ jobs:
       # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds
       - name: libghostty-vt prefix
         run: scripts/build-ghostty-vt.sh
+      # the fonts Ghostty embeds, which agterm-gpui (built with the workspace) embeds too
+      - name: terminal fonts
+        run: scripts/fetch-fonts.sh
       - name: gtk4-layer-shell prefix
         run: scripts/build-layer-shell.sh
       # stage.sh stages bin/zmx from this prefix, restored from the cache the rust-linux job saved
@@ -430,7 +442,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
             meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
-            curl xz-utils patch ncurses-bin \
+            curl xz-utils patch ncurses-bin fontconfig fonts-dejavu-core \
             weston dbus-daemon libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers \
             g++ libpixman-1-dev libinput-dev libevdev-dev libudev-dev libdrm-dev libegl-dev libgles-dev libgbm-dev \
             libcairo2-dev libpango1.0-dev libpng-dev hwdata
@@ -446,6 +458,9 @@ jobs:
         run: scripts/build-ghostty.sh
       - name: libghostty-vt prefix
         run: scripts/build-ghostty-vt.sh
+      # the fonts Ghostty embeds, which agterm-gpui (built with the workspace) embeds too
+      - name: terminal fonts
+        run: scripts/fetch-fonts.sh
       - name: gtk4-layer-shell prefix
         run: scripts/build-layer-shell.sh
       - name: zmx prefix

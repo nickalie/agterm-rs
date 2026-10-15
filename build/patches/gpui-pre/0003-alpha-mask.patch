@@ -1,0 +1,120 @@
+Coverage masks a caller rasterizes itself (GPUI patch for docs/plans/20261014-gpui-frontend.md Task 15):
+`Window::paint_alpha_mask` paints one byte of coverage per device pixel, tinted with a color as a monochrome glyph is
+(a `MonochromeSprite`), at a whole device pixel, from the sprite atlas under a new key, `AtlasKey::AlphaMask`
+(`RenderAlphaMaskParams`: the caller's name and an id it keeps unique per mask), rasterized only on an atlas miss.
+GPUI could tint only glyphs its text system rasterized and SVGs its renderer rasterized; agterm's terminal draws box
+drawing, block, braille, powerline and legacy computing characters procedurally, as Ghostty's sprite font does, and
+needs them pixel for pixel in the cell. Every platform atlas takes the key unchanged (they allocate by
+`AtlasKey::texture_kind`). An upstream candidate (Zed). scripts/vendor-gpui.sh applies this after 0002.
+
+diff -ruN a/src/platform.rs b/src/platform.rs
+--- a/src/platform.rs
++++ b/src/platform.rs
+@@ -1700,6 +1700,16 @@
+     Glyph(RenderGlyphParams),
+     Svg(RenderSvgParams),
+     Image(RenderImageParams),
++    AlphaMask(RenderAlphaMaskParams),
++}
++
++/// The atlas key of a coverage mask its caller rasterized (`Window::paint_alpha_mask`).
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub struct RenderAlphaMaskParams {
++    /// Who paints the mask, keeping callers' ids apart.
++    pub owner: &'static str,
++    /// Unique per mask content within `owner`: masks painted under one key share the first one's tile.
++    pub id: u64,
+ }
+ 
+ impl AtlasKey {
+@@ -1715,7 +1725,7 @@
+                     AtlasTextureKind::Monochrome
+                 }
+             }
+-            AtlasKey::Svg(_) => AtlasTextureKind::Monochrome,
++            AtlasKey::Svg(_) | AtlasKey::AlphaMask(_) => AtlasTextureKind::Monochrome,
+             AtlasKey::Image(_) => AtlasTextureKind::Polychrome,
+         }
+     }
+@@ -1739,6 +1749,12 @@
+     }
+ }
+ 
++impl From<RenderAlphaMaskParams> for AtlasKey {
++    fn from(params: RenderAlphaMaskParams) -> Self {
++        Self::AlphaMask(params)
++    }
++}
++
+ #[expect(missing_docs)]
+ pub trait PlatformAtlas {
+     /// The builder runs with the atlas locked and must not re-enter the same atlas.
+diff -ruN a/src/window.rs b/src/window.rs
+--- a/src/window.rs
++++ b/src/window.rs
+@@ -15,7 +15,7 @@
+     MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels,
+     PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
+     PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
+-    RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
++    RenderAlphaMaskParams, RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
+     SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
+     StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab,
+     SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextInputConfiguration,
+@@ -4896,6 +4896,56 @@
+         Ok(())
+     }
+ 
++    /// Paints a coverage mask the caller rasterized itself (one byte per device pixel, row-major), tinted with
++    /// `color` as a monochrome glyph is: its top-left corner at `origin`, rounded to a whole device pixel, and one
++    /// texel per device pixel. The atlas keeps the mask under `params` once uploaded, so `render` (the mask's size
++    /// and bytes, `None` when there is nothing to draw) runs only while the atlas lacks it.
++    ///
++    /// This method should only be called as part of the paint phase of element drawing.
++    pub fn paint_alpha_mask(
++        &mut self,
++        origin: Point<Pixels>,
++        params: RenderAlphaMaskParams,
++        color: Hsla,
++        render: impl FnOnce() -> Option<(Size<DevicePixels>, Vec<u8>)>,
++    ) -> Result<()> {
++        self.invalidator.debug_assert_paint();
++
++        let element_opacity = self.element_opacity();
++        let scale_factor = self.scale_factor();
++        let mut render = Some(render);
++        let Some(tile) = self
++            .sprite_atlas
++            .get_or_insert_with(params.into(), &mut || {
++                Ok(render
++                    .take()
++                    .and_then(|render| render())
++                    .map(|(size, bytes)| (size, Cow::Owned(bytes))))
++            })?
++        else {
++            return Ok(());
++        };
++        let origin = origin.scale(scale_factor);
++        let bounds = Bounds {
++            origin: point(
++                ScaledPixels(round_half_toward_zero(origin.x.0)),
++                ScaledPixels(round_half_toward_zero(origin.y.0)),
++            ),
++            size: tile.bounds.size.map(Into::into),
++        };
++        let content_mask = self.snapped_content_mask();
++        self.next_frame.scene.insert_primitive(MonochromeSprite {
++            order: 0,
++            pad: 0,
++            bounds,
++            content_mask,
++            color: color.opacity(element_opacity),
++            tile,
++            transformation: TransformationMatrix::unit(),
++        });
++        Ok(())
++    }
++
+     fn should_use_subpixel_rendering(&self, font_id: FontId, font_size: Pixels) -> bool {
+         if self.platform_window.background_appearance() != WindowBackgroundAppearance::Opaque {
+             return false;

@@ -153,6 +153,7 @@ struct Shell {
 
 fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, posting: Arc<dyn MainLoop<AppState>>) {
     gpui_kit::init(cx);
+    crate::terminal::register_embedded_fonts(cx.text_system());
     let poster: Poster = Arc::downgrade(&posting);
     let server = ControlServer::new(control_socket(&ProcessEnv));
     let mut core = Core::new(
