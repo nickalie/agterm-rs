@@ -7,7 +7,8 @@
 //!
 //! The image on screen stays up until its replacement is ready. A config change forgets the loads in flight for the
 //! config before it at once, so none of them can replace the image on screen when it finishes; a file that cannot be
-//! looked at keeps the image on screen too, as Ghostty does.
+//! looked at, or that does not decode, keeps the image on screen too, as Ghostty does; a file that does not decode
+//! is not tried again until the file is looked at again (the config changed) and has changed.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -172,6 +173,8 @@ impl<K: Eq + Hash + Clone, V> Flights<K, V> {
 struct Registry {
     sources: Flights<FileKey, Source>,
     textures: Flights<TextureKey, Decoded>,
+    /// How many decodes were started (tests).
+    decodes: usize,
 }
 
 thread_local! {
@@ -182,6 +185,12 @@ thread_local! {
 #[must_use]
 pub fn bakes_in_flight() -> usize {
     REGISTRY.with(|registry| registry.borrow().textures.in_flight())
+}
+
+/// How many decodes were started on this thread (tests).
+#[must_use]
+pub fn decodes_started() -> usize {
+    REGISTRY.with(|registry| registry.borrow().decodes)
 }
 
 /// A terminal's background image: what the config asks for and what is loaded (module docs).
@@ -196,6 +205,8 @@ pub struct Loader {
     current: Option<(TextureKey, Arc<Decoded>)>,
     pending_source: Option<FileKey>,
     pending_bake: Option<TextureKey>,
+    /// The file as it was when it last failed to decode: not decoded again until it changes.
+    failed: Option<FileKey>,
 }
 
 impl Loader {
@@ -256,6 +267,8 @@ impl Loader {
             // a bake of the previous source must not land over the new one
             self.pending_bake = None;
             self.source = Some((key.clone(), Arc::clone(source)));
+        } else {
+            self.failed = Some(key.clone());
         }
     }
 
@@ -292,7 +305,8 @@ impl Shared {
         }
         let file = loader.file.clone()?;
         let decoded = loader.source.as_ref().is_some_and(|(source, _)| *source == file);
-        if !decoded && loader.pending_source.as_ref() != Some(&file) {
+        let failed = loader.failed.as_ref() == Some(&file);
+        if !decoded && !failed && loader.pending_source.as_ref() != Some(&file) {
             request_source(&mut loader, self, &spec, file.clone(), cx);
         }
         if let Some((source_key, source)) = loader.source.clone()
@@ -325,6 +339,7 @@ fn request_source(loader: &mut Loader, shared: &Rc<Shared>, spec: &Spec, key: Fi
         Joined::Waiting => loader.pending_source = Some(key),
         Joined::Start => {
             loader.pending_source = Some(key.clone());
+            REGISTRY.with(|registry| registry.borrow_mut().decodes += 1);
             let path = spec.path.clone();
             let decoding = cx.background_executor().spawn(async move { decode(&path, key.repeat) });
             cx.foreground_executor()

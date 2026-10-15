@@ -513,6 +513,32 @@ fn a_file_the_config_moved_to_that_cannot_be_read_keeps_the_image_on_screen(cx: 
 }
 
 #[gpui_kit::test]
+fn a_file_that_does_not_decode_is_tried_once_and_keeps_the_image_on_screen(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (c, bad) = (dir.path().join("c.png"), dir.path().join("bad.png"));
+    write_png(&c, 4, 1);
+    std::fs::write(&bad, b"GIF89a\x01\x00\x01\x00\x00\x00\x00;").unwrap();
+    let (terminal, shared) = idle_terminal(cx);
+    let on_screen = shared_texture(&shown(&shared, &spec_of(&c, None), cx));
+    let before = super::load::decodes_started();
+    // every paint asks again, and the failure pokes the next one: no decode after the first
+    for _ in 0..8 {
+        show(&shared, &spec_of(&bad, None), cx);
+        cx.run_until_parked();
+    }
+    assert_eq!(super::load::decodes_started() - before, 1, "decoded once");
+    assert!(!shared.background_loader().is_loading(), "nothing in flight");
+    let current = shared.background_loader().current().unwrap();
+    assert!(Arc::ptr_eq(&current.texture, &on_screen), "C stays");
+    // the file replaced with a valid image: the next config change looks at it again and loads it
+    write_png(&bad, 8, 1);
+    terminal.update(cx, |terminal, cx| terminal.set_config(TerminalConfig::default(), cx));
+    let replaced = shown(&shared, &spec_of(&bad, None), cx);
+    assert_eq!(replaced.size, (8, 1));
+    assert_eq!(super::load::decodes_started() - before, 2);
+}
+
+#[gpui_kit::test]
 fn a_config_change_forgets_the_loads_in_flight_at_once(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (c, a) = (dir.path().join("c.png"), dir.path().join("a.png"));
