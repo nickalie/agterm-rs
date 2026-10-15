@@ -162,6 +162,31 @@ fn a_plain_pane_runs_its_command_in_its_directory_with_its_environment() -> Test
 }
 
 #[test]
+fn the_exit_message_shows_after_a_program_cut_off_mid_sequence() -> TestResult {
+    // libghostty wrote the message on the terminal directly; through the parser it must first end the sequence the
+    // program left unfinished (a CSI would take the message's `P` as its final byte, a string would swallow it all)
+    for (cut, rest) in [
+        ("printf 'before \\033[3'", "before"),
+        ("printf 'before \\033]2;unfinished'", "before"),
+        ("printf 'before \\033P$q'", "before"),
+        ("printf 'before \\342'", "before"),
+    ] {
+        let mut waited = launch(Some(&format!("{cut}; sleep 0.3")));
+        waited.wait_after_command = true;
+        let pane = Pane::launch(&waited, &host("/bin/sh", None), &PaneConfig::new(SIZE))?;
+        let status = exit_of(&pane);
+        assert_eq!((status.code, status.held), (0, true), "{cut}");
+        let text = screen(&pane);
+        assert!(text.contains(rest), "{cut}: {text}");
+        assert!(
+            text.contains("Process exited. Press any key to close the terminal."),
+            "{cut}: {text}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn a_command_not_waited_for_ends_its_pane() -> TestResult {
     let pane = Pane::launch(
         &launch(Some("sleep 0.3; exit 4")),

@@ -1,6 +1,6 @@
 diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
---- zmx-orig/src/loop.zig	2026-10-15 05:50:17.018579548 +0300
-+++ zmx/src/loop.zig	2026-10-15 05:50:17.019579553 +0300
+--- zmx-orig/src/loop.zig	2026-10-15 06:46:30.850390742 +0300
++++ zmx/src/loop.zig	2026-10-15 06:46:30.851390748 +0300
 @@ -241,6 +241,17 @@
      });
  }
@@ -31,22 +31,41 @@ diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
  
      // Carries the tail of the previous PTY read so the task-exit marker
      // search below can see across a read() boundary. Sized to comfortably
-@@ -588,6 +601,14 @@
+@@ -429,6 +442,7 @@
+                             continue;
+                         };
+                         client.has_pending_output = true;
++                        client.sent_output = true;
+                     }
+                 }
+             }
+@@ -567,6 +581,8 @@
+     socket_fd: i32,
+     has_pending_output: bool = false,
+     is_terminal: bool = false, // sent .Init (a `zmx attach`), not a run/send/tail client
++    /// was sent the program's output: before its Init, a snapshot repeats it (`ATTACH_RESET`)
++    sent_output: bool = false,
+     /// sent .Manage: leads only by claiming, never by typing, and is told its role
+     managed: bool = false,
+     claim_on_init: bool = false,
+@@ -588,6 +604,16 @@
      }
  };
  
-+/// What a first attach is sent ahead of its snapshot: cursor home and erase
-+/// the display. Its ESC also ends any sequence the output the client was sent
-+/// before its Init was cut in (a CAN would too, but logs a warning in a
-+/// Ghostty client at ground, the common case). A string sequence (OSC, DCS,
-+/// APC) cut there is dispatched early by a Ghostty client, with whatever
++/// What a client that was sent the program's output before its Init (the
++/// accept puts it among the clients a PTY read is broadcast to) gets ahead of
++/// its snapshot, which repeats that output: CAN ends any sequence the output
++/// was cut in, origin mode and the scrolling region go so the cursor homes to
++/// the top left, and the screen below it is erased (ED 0, not ED 2, which a
++/// Ghostty client would push into its scrollback). A string sequence (OSC,
++/// DCS, APC) cut there is dispatched early by a Ghostty client, with whatever
 +/// external effect it has; the snapshot restores the screen and title only.
-+const FIRST_ATTACH_RESET = "\x1b[H\x1b[2J";
++const ATTACH_RESET = "\x18\x1b[?6l\x1b[r\x1b[H\x1b[J";
 +
  /// Daemon is responsible for managing a zmx session.
  ///
  /// It holds all the state for a running session.  Instead of a single daemon for all sessions, we
-@@ -635,6 +656,9 @@
+@@ -635,6 +661,9 @@
      task_ended_at: ?u64 = null, // timestamp when task exited
      pty_fd: i32 = -1, // set by daemonLoop so handleRun can probe the foreground process
      shell: []const u8 = "/bin/sh",
@@ -56,19 +75,19 @@ diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
  
      /// Create a Daemon. Caller is responsible for freeing all variables passed
      /// into the init fn.
-@@ -1047,6 +1071,53 @@
+@@ -1047,6 +1076,53 @@
          return error.NoLeaderFound;
      }
  
-+    /// Queue the terminal's state for an attaching `client`: on a first attach
-+    /// a reset first (`FIRST_ATTACH_RESET`: output it may have been sent
-+    /// between its connect and its Init is in the snapshot too), then the
-+    /// snapshot, then the unfinished sequence the daemon's parser is in, so the
-+    /// client's parser continues the next output where the daemon's does.
++    /// Queue the terminal's state for an attaching `client`: a reset first when
++    /// it was already sent output (`ATTACH_RESET`: that output is in the
++    /// snapshot too), then the snapshot, then the unfinished sequence the
++    /// daemon's parser is in, so the client's parser continues the next output
++    /// where the daemon's does.
 +    fn queueSnapshot(self: *Daemon, gpa: std.mem.Allocator, client: *Client, term: *ghostty_vt.Terminal) void {
-+        if (!self.has_had_client) {
-+            ipc.appendMessage(gpa, &client.write_buf, .Output, FIRST_ATTACH_RESET) catch |err| {
-+                std.log.warn("failed to buffer the first attach reset for client err={s}", .{@errorName(err)});
++        if (client.sent_output) {
++            ipc.appendMessage(gpa, &client.write_buf, .Output, ATTACH_RESET) catch |err| {
++                std.log.warn("failed to buffer the attach reset for client err={s}", .{@errorName(err)});
 +            };
 +            client.has_pending_output = true;
 +        }
@@ -110,7 +129,7 @@ diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
      pub fn handleInit(
          self: *Daemon,
          gpa: std.mem.Allocator,
-@@ -1078,30 +1149,13 @@
+@@ -1078,30 +1154,13 @@
              self.screen_revision +%= 1;
          }
  
@@ -148,7 +167,7 @@ diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
  
          // only resize if leader
          if (is_leader) {
-@@ -1699,6 +1753,145 @@
+@@ -1699,6 +1758,234 @@
      _ = daemon.closeClient(alloc, origin, 0, false);
  }
  
@@ -202,20 +221,22 @@ diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
 +    try daemon.handleInit(alloc, first, pty, &term, size);
 +    const replay = try queuedOutput(alloc, first);
 +    defer alloc.free(replay);
-+    try std.testing.expect(std.mem.startsWith(u8, replay, FIRST_ATTACH_RESET));
++    // a client sent nothing yet needs no reset: it cleared its own screen
++    try std.testing.expect(!std.mem.startsWith(u8, replay, ATTACH_RESET));
 +    try std.testing.expect(std.mem.indexOf(u8, replay, "READY$ ") != null);
 +    try std.testing.expect(daemon.has_had_client);
 +    _ = daemon.closeClient(alloc, first, 0, false);
 +
-+    // a re-attach keeps its plain snapshot
++    // a re-attach sent output before its Init gets the reset ahead of its snapshot
 +    const c = try lib_posix.pipe2(.{});
 +    defer lib_posix.close(c[1]);
 +    const again = try testClient(alloc, c[0], false);
++    again.sent_output = true;
 +    try daemon.clients.append(alloc, again);
 +    try daemon.handleInit(alloc, again, pty, &term, size);
 +    const snapshot = try queuedOutput(alloc, again);
 +    defer alloc.free(snapshot);
-+    try std.testing.expect(!std.mem.startsWith(u8, snapshot, FIRST_ATTACH_RESET));
++    try std.testing.expect(std.mem.startsWith(u8, snapshot, ATTACH_RESET));
 +    try std.testing.expect(std.mem.indexOf(u8, snapshot, "READY$ ") != null);
 +    _ = daemon.closeClient(alloc, again, 0, false);
 +}
@@ -252,6 +273,8 @@ diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
 +    daemon.has_pty_output = lost.len + seen.len > 0;
 +    daemon.has_had_client = reattach;
 +    const client = try testClient(alloc, a[0], false);
++    // the broadcast of `seen` marks it as the daemon loop does
++    client.sent_output = seen.len > 0;
 +    try daemon.clients.append(alloc, client);
 +    try daemon.handleInit(alloc, client, b[0], &term, std.mem.asBytes(&ipc.Resize{ .rows = 6, .cols = 40 }));
 +    const replay = try queuedOutput(alloc, client);
@@ -289,6 +312,91 @@ diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
 +    try expectAttachConverges("lost line\r\n", "seen \x1b_Ga=d,", "d=A\x1b\\ $ ", false);
 +    // the cut sequence began before the connect and continues across it
 +    try expectAttachConverges("lost \x1b[1;", "3", "4mBLUE\x1b[0m $ ", false);
++}
++
++/// The screen (with scrollback) and title of a client attaching to a daemon whose program wrote `lost` and then
++/// `seen`, and `after` once attached; with `broadcast` the client was already connected for `seen` (sent it between
++/// its connect and its Init), without it the client connected after it.
++fn attachedScreen(
++    alloc: std.mem.Allocator,
++    lost: []const u8,
++    seen: []const u8,
++    after: []const u8,
++    reattach: bool,
++    broadcast: bool,
++) ![]u8 {
++    const cfg = Cfg{ .socket_dir = "", .log_dir = "" };
++    var term = try initTerminal(alloc, std.testing.io, .{ .cols = 40, .rows = 6 }, &cfg);
++    defer term.deinit(alloc);
++    var stream = continuationStream(&term);
++    defer stream.deinit();
++    var client_term = try initTerminal(alloc, std.testing.io, .{ .cols = 40, .rows = 6 }, &cfg);
++    defer client_term.deinit(alloc);
++    var client_stream = client_term.vtStream();
++    defer client_stream.deinit();
++    var daemon = testDaemon();
++    daemon.vt_stream = &stream;
++    defer daemon.clients.deinit(alloc);
++    defer daemon.pty_write_buf.deinit(alloc);
++    const a = try lib_posix.pipe2(.{});
++    defer lib_posix.close(a[1]);
++    const b = try lib_posix.pipe2(.{});
++    defer lib_posix.close(b[1]);
++    defer lib_posix.close(b[0]);
++
++    stream.nextSlice(lost);
++    stream.nextSlice(seen);
++    // what `zmx attach` writes before it connects
++    client_stream.nextSlice("\x1b[2J\x1b[H");
++    if (broadcast) client_stream.nextSlice(seen);
++    daemon.has_pty_output = true;
++    daemon.has_had_client = reattach;
++    const client = try testClient(alloc, a[0], false);
++    client.sent_output = broadcast;
++    try daemon.clients.append(alloc, client);
++    defer _ = daemon.closeClient(alloc, client, 0, false);
++    try daemon.handleInit(alloc, client, b[0], &term, std.mem.asBytes(&ipc.Resize{ .rows = 6, .cols = 40 }));
++    const replay = try queuedOutput(alloc, client);
++    defer alloc.free(replay);
++    client_stream.nextSlice(replay);
++    stream.nextSlice(after);
++    client_stream.nextSlice(after);
++    const screen = util.serializeTerminal(alloc, &client_term, .vt) orelse return error.TestUnexpectedNull;
++    defer alloc.free(screen);
++    return std.fmt.allocPrint(alloc, "{s}\ntitle={s}", .{ screen, client_term.getTitle() orelse "" });
++}
++
++test "a client sent output before its Init ends as one that connected after it, first attach or re-attach" {
++    // The snapshot repeats what the broadcast sent, so the reset must leave no trace of it: the client ends exactly
++    // as one that was sent nothing before its Init. (Against the daemon itself the scrollback can differ: a
++    // snapshot's history rows that never scrolled off are erased by its own `ESC[2J`, a re-attach property of the
++    // serializer this does not change.)
++    const alloc = std.testing.allocator;
++    // more history than three screens, so the snapshot's history rows scroll into the client's scrollback
++    const history = "line 1\r\nline 2\r\nline 3\r\nline 4\r\nline 5\r\nline 6\r\nline 7\r\nline 8\r\nline 9\r\n" ++
++        "line 10\r\nline 11\r\nline 12\r\nline 13\r\nline 14\r\nline 15\r\nline 16\r\nline 17\r\nline 18\r\n" ++
++        "line 19\r\nline 20\r\n";
++    // a CSI, an OSC, a DCS, an APC and a UTF-8 character cut in the broadcast; origin mode in a scrolling region and
++    // the alternate screen entered by it
++    const cases = [_][2][]const u8{
++        .{ "seen \x1b[3", "2mGREEN\x1b[0m $ " },
++        .{ "seen \x1b]2;par", "tial\x07 $ " },
++        .{ "seen \x1bP$q", "m\x1b\\ $ " },
++        .{ "seen \x1b_Ga=d,", "d=A\x1b\\ $ " },
++        .{ "seen \xe2", "\x82\xac $ " },
++        .{ "\x1b[2;5r\x1b[?6hX", " $ " },
++        .{ "\x1b[?1049halt", " $ " },
++    };
++    for ([_]bool{ false, true }) |reattach| {
++        for (cases) |case| {
++            const clean = try attachedScreen(alloc, history, case[0], case[1], reattach, false);
++            defer alloc.free(clean);
++            const dirty = try attachedScreen(alloc, history, case[0], case[1], reattach, true);
++            defer alloc.free(dirty);
++            errdefer std.debug.print("case {any} reattach={}\n", .{ case[0], reattach });
++            try std.testing.expectEqualStrings(clean, dirty);
++        }
++    }
 +}
 +
  test "switch moves a stock leader and leaves a managed one bound to its session" {

@@ -77,9 +77,11 @@ impl ExitPolicy {
     }
 
     /// The bytes `outcome` writes into the terminal: `viewport_used` (the screen shows text) puts a rule above a
-    /// failure report, `cols` is its width.
+    /// failure report, `cols` is its width. libghostty wrote the message on the terminal directly; written through the
+    /// parser it starts with CAN, which ends whatever sequence the program left unfinished (a CSI would otherwise take
+    /// the message's first letter as its final byte, a string would swallow the message).
     pub(crate) fn message(&self, outcome: Outcome, code: u32, runtime: Duration, layout: Layout) -> Vec<u8> {
-        let mut out = String::new();
+        let mut out = String::from("\x18");
         match outcome {
             Outcome::Close => return Vec::new(),
             Outcome::Prompt => out.push_str("\r\nProcess exited. Press any key to close the terminal."),
@@ -185,11 +187,11 @@ mod tests {
         let prompt = String::from_utf8(policy.message(Outcome::Prompt, 0, Duration::ZERO, layout)).unwrap();
         assert_eq!(
             prompt,
-            "\r\nProcess exited. Press any key to close the terminal.\x1b[?25l\x1b[2l\x1b[=0;1u"
+            "\x18\r\nProcess exited. Press any key to close the terminal.\x1b[?25l\x1b[2l\x1b[=0;1u"
         );
         let failed =
             String::from_utf8(policy.message(Outcome::Failed, 127, Duration::from_millis(12), layout)).unwrap();
-        assert!(failed.starts_with("\r\x1b[0m\x1b[91m\x1b[1mGhostty failed to launch the requested command:"));
+        assert!(failed.starts_with("\x18\r\x1b[0m\x1b[91m\x1b[1mGhostty failed to launch the requested command:"));
         assert!(
             failed.contains("/bin/sh -c nope") && failed.contains("12 ms") && failed.contains("Exit Code: \x1b[31m127")
         );

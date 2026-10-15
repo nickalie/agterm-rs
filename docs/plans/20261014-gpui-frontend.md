@@ -729,11 +729,18 @@ Built on `agterm-ghostty-vt` (Task 5), with the thread protocol of Technical Det
     sends no SIGWINCH, so nothing repaints. Without any frontend, `zmx attach s /bin/sh -c "printf READY; exec sleep
     30"` in an 80x24 pty stayed blank 20/20 times. A launch-side wait and resize cannot fix it (only programs that
     repaint on SIGWINCH would recover). Fix: `build/patches/zmx/0003-first-attach-snapshot.patch` (this repository's
-    own): the first attach is sent `ESC[H ESC[2J` and the snapshot when the program already wrote, and every snapshot
-    (first and re-attach) is followed by the daemon parser's unfinished sequence (Ghostty's stream continuation
-    tracking, limit as libghostty's snapshots), so a sequence cut at the attach continues identically in the client.
-    zig tests: 109/109, a convergence test feeding a client terminal across CSI/OSC/DCS/APC/UTF-8 cuts, before
-    connect and in the connect→Init broadcast, first and re-attach. Residue: a string sequence (OSC/DCS/APC) cut in
+    own): the first attach is sent the snapshot when the program already wrote; every snapshot (first and re-attach)
+    is followed by the daemon parser's unfinished sequence (Ghostty's stream continuation tracking, limit as
+    libghostty's snapshots), so a sequence cut at the attach continues identically in the client; and a client the
+    accept already put among the broadcast's receivers (output sent between its connect and its Init, first attach or
+    re-attach) gets `CAN ESC[?6l ESC[r ESC[H ESC[J` ahead of the snapshot that repeats that output (review fix: the
+    first version reset with `ESC[H ESC[2J` on first attach only, which homed into an origin-mode margin and left
+    re-attach unprotected). zig tests: 110/110, convergence tests feeding a client terminal across CSI/OSC/DCS/APC/
+    UTF-8 cuts before connect, and in the connect→Init broadcast with scrollback, origin mode and the alternate screen,
+    first and re-attach (a broadcast client must end as one that connected after it; without the reset 12/14 cases
+    differ, with the old one the origin cases). Re-attach scrollback replay is unchanged (a snapshot's history rows
+    that never scrolled off are erased by its own `ESC[2J`: the serializer's, before and after). Residue: a string
+    sequence (OSC/DCS/APC) cut in
     that broadcast window is dispatched early by a Ghostty client (any exit from a string state dispatches), with
     whatever external effect it has. Results: repro 60/60 painted (was 20/20 blank); `tests/launch.rs` through the
     real Pane: 50 sequential + 54 parallel (6 at a time) fresh launches all painted, prompt within ≤ 263 ms (old zmx:
@@ -755,7 +762,9 @@ Built on `agterm-ghostty-vt` (Task 5), with the thread protocol of Technical Det
   - **Exit** (`exit.rs`, `ExitPolicy`, `ExitStatus::held`): a command not waited for ends its pane; a nonzero exit
     within 250 ms holds on libghostty's failure report ("Ghostty failed to launch the requested command", rule,
     runtime, exit code); a waited command holds on "Process exited. Press any key to close the terminal."; otherwise
-    the pane ends. A held terminal hides the cursor and turns KAM and Kitty keyboard flags off, so the frontend closes
+    the pane ends. The message goes through the parser, so it starts with CAN (a program that died mid-sequence
+    would otherwise eat it; libghostty wrote it on the terminal directly). A held terminal hides the cursor and turns
+    KAM and Kitty keyboard flags off, so the frontend closes
     on any key that encodes (Task 14). `Pane::spawn` alone keeps `ExitPolicy::Report`.
   - **Foreground**: `Pane::foreground_pid` = `tcgetpgrp` on the PTY; `agterm-app/tests/pane_foreground.rs` reads it
     through `ProcTable` + core's `ForegroundReader` (a command pane's program past `/bin/sh -c`, a job typed into the

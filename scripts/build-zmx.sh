@@ -9,8 +9,10 @@
 #
 # The patches are upstream's (scripts/zmx-patches), except 0003-first-attach-snapshot.patch, this build's own: a new
 # daemon's first attach is sent the screen the program drew before the client connected (zmx sends a snapshot on a
-# re-attach only, so a prompt printed in that window never reached the first client), and every snapshot carries
-# the sequence the daemon's parser is in the middle of, so the client continues where the daemon does.
+# re-attach only, so a prompt printed in that window never reached the first client), every snapshot carries the
+# sequence the daemon's parser is in the middle of, so the client continues where the daemon does, and a client sent
+# output between its connect and its Init (first attach or re-attach) gets a reset ahead of the snapshot that repeats
+# it (CAN, origin mode and scrolling region off, home, erase below).
 #
 # Usage: scripts/build-zmx.sh                 build the prefix unless it is complete, then print its path
 #        scripts/build-zmx.sh --print-prefix  print the prefix path only (scripts/stage.sh)
