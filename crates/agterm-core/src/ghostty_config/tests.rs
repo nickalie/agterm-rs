@@ -527,7 +527,8 @@ fn enum_names<T: IntoEnumIterator + Into<&'static str>>() -> Vec<&'static str> {
 
 #[test]
 fn the_model_enums_spell_ghosttys_values() {
-    let cases: [(&str, Vec<&str>); 8] = [
+    let cases: [(&str, Vec<&str>); 9] = [
+        ("copy-on-select", enum_names::<CopyOnSelect>()),
         ("cursor-style", enum_names::<CursorStyle>()),
         ("background-image-position", enum_names::<BackgroundImagePosition>()),
         ("background-image-fit", enum_names::<BackgroundImageFit>()),
@@ -738,6 +739,28 @@ fn scrollback_clipboard_and_mouse_keys() {
     assert_eq!(config.mouse.shift_capture, MouseShiftCapture::Always);
     assert!(!config.mouse.reporting);
     assert_eq!(config.mouse.scroll_multiplier.as_deref(), Some("2"));
+}
+
+#[test]
+fn copy_on_select_key() {
+    assert_eq!(
+        GhosttyConfig::default().copy_on_select,
+        CopyOnSelect::True,
+        "Ghostty's Linux default"
+    );
+    assert_eq!(
+        load("copy-on-select = clipboard\n").config.copy_on_select,
+        CopyOnSelect::Clipboard
+    );
+    assert_eq!(
+        load("copy-on-select = false\n").config.copy_on_select,
+        CopyOnSelect::False
+    );
+    assert_eq!(
+        load("copy-on-select = false\ncopy-on-select =\n").config.copy_on_select,
+        CopyOnSelect::True,
+        "an empty value restores the default"
+    );
 }
 
 #[test]

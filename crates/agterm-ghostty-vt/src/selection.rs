@@ -65,6 +65,38 @@ pub struct Selection {
     pub rectangle: bool,
 }
 
+/// How [`Terminal::adjust_selection`] moves the selection's end (Ghostty's `adjust_selection` directions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SelectionAdjust {
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    BeginningOfLine,
+    EndOfLine,
+}
+
+impl SelectionAdjust {
+    fn raw(self) -> ffi::GhosttySelectionAdjust {
+        match self {
+            Self::Left => ffi::GHOSTTY_SELECTION_ADJUST_LEFT,
+            Self::Right => ffi::GHOSTTY_SELECTION_ADJUST_RIGHT,
+            Self::Up => ffi::GHOSTTY_SELECTION_ADJUST_UP,
+            Self::Down => ffi::GHOSTTY_SELECTION_ADJUST_DOWN,
+            Self::Home => ffi::GHOSTTY_SELECTION_ADJUST_HOME,
+            Self::End => ffi::GHOSTTY_SELECTION_ADJUST_END,
+            Self::PageUp => ffi::GHOSTTY_SELECTION_ADJUST_PAGE_UP,
+            Self::PageDown => ffi::GHOSTTY_SELECTION_ADJUST_PAGE_DOWN,
+            Self::BeginningOfLine => ffi::GHOSTTY_SELECTION_ADJUST_BEGINNING_OF_LINE,
+            Self::EndOfLine => ffi::GHOSTTY_SELECTION_ADJUST_END_OF_LINE,
+        }
+    }
+}
+
 pub(crate) fn empty_ref() -> ffi::GhosttyGridRef {
     ffi::GhosttyGridRef {
         size: std::mem::size_of::<ffi::GhosttyGridRef>(),
@@ -224,6 +256,33 @@ impl Terminal {
             Err(Error::NoValue) => Ok(false),
             Err(err) => Err(err),
         }
+    }
+
+    /// The screen row (0 is the top of the scrollback) the viewport starts at.
+    #[must_use]
+    pub fn viewport_top(&self) -> u32 {
+        self.grid_ref(Point::new(PointTag::Viewport, 0, 0))
+            .ok()
+            .and_then(|top| self.point_of(&top, PointTag::Screen))
+            .map_or(0, |top| top.y)
+    }
+
+    /// Move the selection's logical end as Ghostty's `adjust_selection` does (`Selection.adjust`); `false`, nothing
+    /// changed, with no selection.
+    ///
+    /// # Errors
+    ///
+    /// The library's result when it refuses.
+    pub fn adjust_selection(&mut self, adjust: SelectionAdjust) -> Result<bool, Error> {
+        let Some(mut selection) = self.selection_snapshot() else {
+            return Ok(false);
+        };
+        // SAFETY: the terminal is live and borrowed mutably; the snapshot came from it with no mutation since and is
+        // adjusted in place.
+        Error::check(unsafe {
+            ffi::ghostty_terminal_selection_adjust(self.as_raw(), &raw mut selection, adjust.raw())
+        })?;
+        self.install(Some(&selection)).map(|()| true)
     }
 
     /// Install `selection` (a fresh snapshot of this terminal) as the terminal's own, tracked selection; `None`

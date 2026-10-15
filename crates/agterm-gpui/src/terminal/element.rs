@@ -179,7 +179,9 @@ impl Element for TerminalElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        self.view.update(cx, |view, cx| view.prepaint(bounds, window, cx))
+        let focused = self.focused;
+        self.view
+            .update(cx, |view, cx| view.prepaint(bounds, focused, window, cx))
     }
 
     fn paint(
@@ -206,7 +208,13 @@ impl Element for TerminalElement {
 
 /// The view's side of the element.
 impl TerminalView {
-    fn prepaint(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> Option<Plan> {
+    fn prepaint(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        focused: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Plan> {
         let shared = Rc::clone(&self.shared);
         if shared.is_torn_down() {
             self.cache.clear();
@@ -243,6 +251,8 @@ impl TerminalView {
         });
         self.painted.clone_from(&frame);
         let images = self.prepare_images(frame.as_deref(), &metrics, window, cx);
+        // the blink follows the frame being drawn, not the one drawn before (a program may just have asked for it)
+        self.sync_blink(focused, cx);
         let origin = bounds.origin + point(px(device_to(padding.left, scale)), px(device_to(padding.top, scale)));
         Some(Plan {
             origin,
@@ -368,12 +378,9 @@ impl TerminalView {
             };
             (Some(style), col, row)
         };
-        let cells = frame.rows.get(usize::from(row)).map(|row| row.cells());
-        let cell = cells.and_then(|cells| cells.get(usize::from(col)));
-        let wide = cell.is_some_and(|cell| cell.width == CellWidth::Wide);
-        let under = cell.filter(|_| !frame.rows[usize::from(row)].text(usize::from(col)).is_empty());
-        let color = colors::cursor_color(under, &frame.colors, &plan.palette);
-        let alpha = plan.palette.cursor_alpha;
+        let wide = cursor_cell(frame, col, row).is_some_and(|cell| cell.width == CellWidth::Wide);
+        let (color, text) = cursor_colors(frame, col, row, &plan.palette);
+        let alpha = cursor_alpha(focused, &plan.palette);
         let Some(style) = style else {
             paint_lock(window, plan, (col, usize::from(row)), wide, hsla(color, alpha));
             return;
@@ -382,16 +389,39 @@ impl TerminalView {
         if style == CursorStyle::Block
             && let Some(cached) = self.cache.row(usize::from(row))
         {
-            let text = Some((
-                col,
-                hsla(colors::cursor_text(under, &frame.colors, &plan.palette), u8::MAX),
-            ));
+            let text = Some((col, hsla(text, u8::MAX)));
             if let Some(shaped) = cached.shaped.as_ref() {
                 paint_glyphs(window, plan, usize::from(row), &shaped.glyphs, text);
             }
             paint_sprites(window, plan, usize::from(row), &cached.layout.sprites, text);
         }
     }
+}
+
+/// The cursor's alpha: `cursor-opacity` while focused; the unfocused (hollow) cursor is drawn opaque, as Ghostty's
+/// `addCursor` does.
+pub(super) fn cursor_alpha(focused: bool, palette: &Palette) -> u8 {
+    if focused { palette.cursor_alpha } else { u8::MAX }
+}
+
+/// The cell under the cursor.
+fn cursor_cell(frame: &Frame, col: u16, row: u16) -> Option<&agterm_term::Cell> {
+    frame.rows.get(usize::from(row))?.cells().get(usize::from(col))
+}
+
+/// The cursor's color and the color of the text under a block cursor, from the cell under it whether or not it holds
+/// text: a cell erased with a background (`ESC[44m ESC[K`) keeps that background, as Ghostty's cursor style reads it.
+pub(super) fn cursor_colors(
+    frame: &Frame,
+    col: u16,
+    row: u16,
+    palette: &Palette,
+) -> (agterm_term::Rgb, agterm_term::Rgb) {
+    let cell = cursor_cell(frame, col, row);
+    (
+        colors::cursor_color(cell, &frame.colors, palette),
+        colors::cursor_text(cell, &frame.colors, palette),
+    )
 }
 
 /// The owner sizes the grid to its `screen` (device pixels) and gives the pane that size, starting it the first time
@@ -590,14 +620,31 @@ fn paint_glyphs(window: &mut Window, plan: &Plan, row: usize, glyphs: &[PlacedGl
         };
         let cell = plan.cell(glyph.col, row);
         let origin = point(cell.x + glyph.x, cell.y + baseline + glyph.y);
-        let painted = if glyph.emoji {
-            window.paint_emoji(origin, glyph.font_id, glyph.glyph_id, plan.font_size)
-        } else {
-            window.paint_glyph(origin, glyph.font_id, glyph.glyph_id, plan.font_size, color)
-        };
-        if let Err(err) = painted {
-            tracing::debug!(%err, "a terminal glyph was not painted");
-        }
+        paint_one(
+            window,
+            plan,
+            origin,
+            (glyph.font_id, glyph.glyph_id, glyph.emoji),
+            color,
+        );
+    }
+}
+
+/// One glyph (font, glyph, emoji) at its baseline `origin`: an emoji in its own colors, anything else in `color`.
+fn paint_one(
+    window: &mut Window,
+    plan: &Plan,
+    origin: Point<Pixels>,
+    (font_id, glyph_id, emoji): (FontId, GlyphId, bool),
+    color: Hsla,
+) {
+    let painted = if emoji {
+        window.paint_emoji(origin, font_id, glyph_id, plan.font_size)
+    } else {
+        window.paint_glyph(origin, font_id, glyph_id, plan.font_size, color)
+    };
+    if let Err(err) = painted {
+        tracing::debug!(%err, "a terminal glyph was not painted");
     }
 }
 
@@ -867,17 +914,8 @@ fn paint_preedit(window: &mut Window, plan: &Plan, frame: &Frame, preedit: &str)
     for shaped in &line.runs {
         for glyph in &shaped.glyphs {
             let origin = point(cell.x + glyph.position.x, cell.y + baseline + glyph.position.y);
-            let _ = if glyph.is_emoji {
-                window.paint_emoji(origin, shaped.font_id, glyph.id, plan.font_size)
-            } else {
-                window.paint_glyph(
-                    origin,
-                    shaped.font_id,
-                    glyph.id,
-                    plan.font_size,
-                    hsla(colors.foreground, u8::MAX),
-                )
-            };
+            let color = hsla(colors.foreground, u8::MAX);
+            paint_one(window, plan, origin, (shaped.font_id, glyph.id, glyph.is_emoji), color);
         }
     }
     let underline = plan.px(f64::from(plan.metrics.underline_thickness));

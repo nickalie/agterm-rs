@@ -6,13 +6,19 @@
 //! terminal's pump (module docs of [`super`]), and a binding action is accepted for a realized terminal whatever it
 //! then does, as the GTK build's `binding_action` returned.
 
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr as _;
 
-use agterm_core::ghostty_config::binds::{Action, CopyFormat, Direction, Mods, Performer, PhysicalKey};
+use agterm_core::ghostty_config::binds::{
+    self, Action, CopyFormat, Direction, Mods, Performer, PhysicalKey, WriteAction, WriteFormat, WriteScreen,
+};
 use agterm_core::keystrokes::{self, KeystrokeSegment, SUBMIT_GAP};
 use agterm_host::{Surface, TextScope};
-use agterm_term::{ClipboardLocation, KeyInput, Pane, Scroll, SearchStep, SelectionText, TextRegion};
+use agterm_term::{
+    ClipboardLocation, FormatRegion, KeyInput, Pane, Scroll, SearchStep, SelectionAdjust, SelectionText, TextFormat,
+    TextRegion,
+};
 
 use super::{Effect, Shared, TerminalEvent};
 
@@ -91,10 +97,15 @@ impl Surface for TerminalSurface {
     /// As in the GTK build: the reports of every pane already reach the session.
     fn promote_to_primary(&mut self) {}
 
+    /// Read-only (`toggle_readonly`), nothing is typed and the call still succeeds, as libghostty's key path drops
+    /// the input of a read-only surface.
     fn type_text(&mut self, text: &str) -> bool {
         let Some(pane) = self.pane() else {
             return false;
         };
+        if self.shared.is_readonly() {
+            return true;
+        }
         // a live composition goes in first, as typed, or the injected text would land before it
         if let Some(preedit) = self.shared.preedit() {
             type_run(&pane, &preedit);
@@ -165,9 +176,11 @@ impl Surface for TerminalSurface {
     }
 }
 
-/// The terminal side of ghostty's `performBindingAction` (Task 8's action table): what the GTK build's libghostty did
-/// for each terminal-scoped action this build supports. App-scoped actions and the window, tab and split actions are
-/// the frontend's (Task 14 routes them); anything not performed here returns false.
+/// The terminal side of Ghostty's `performBindingAction` at `GHOSTTY_REV` (Task 8's action table): every
+/// terminal-scoped action, with libghostty's performed/not-performed answer, which decides whether a `performable:`
+/// binding lets its key through. App-scoped actions and the window, tab and split actions are the frontend's (Task 14
+/// routes them) and are not performed here; so is `copy_title_to_clipboard`, which libghostty hands to the apprt and
+/// neither the GTK build's nor upstream's handles.
 struct Actions<'a> {
     shared: &'a Shared,
 }
@@ -178,32 +191,18 @@ impl Performer for Actions<'_> {
             return false;
         };
         if let Some(bytes) = action.pty_bytes() {
-            return pane.send(&bytes).is_ok();
-        }
-        match action {
-            Action::CopyToClipboard(format) => self.copy(&pane, *format),
-            Action::PasteFromClipboard => self.queue(Effect::Paste(ClipboardLocation::Standard)),
-            Action::PasteFromSelection => self.queue(Effect::Paste(ClipboardLocation::Selection)),
-            Action::SelectAll => pane.select_all().unwrap_or(false),
-            Action::IncreaseFontSize(delta) => self.font(self.shared.font_points() + delta.clamp(0.0, 255.0)),
-            Action::DecreaseFontSize(delta) => self.font(self.shared.font_points() - delta.clamp(0.0, 255.0)),
-            Action::ResetFontSize => self.font(self.shared.original_font_points()),
-            Action::SetFontSize(points) => self.font(*points),
-            Action::Search(needle) => {
-                pane.search(needle);
-                true
+            // a read-only terminal writes nothing for the user, and the action still counts as performed
+            if !self.shared.is_readonly() && pane.send(&bytes).is_err() {
+                tracing::debug!(target: "agterm::surface", "the terminal's input queue refused a binding's bytes");
             }
-            Action::StartSearch => self.queue(Effect::Emit(TerminalEvent::StartSearch)),
-            Action::EndSearch => {
-                pane.search("");
-                self.queue(Effect::Emit(TerminalEvent::EndSearch))
-            }
-            Action::NavigateSearch(direction) => pane.navigate_search(match direction {
-                Direction::Next => SearchStep::Next,
-                Direction::Previous => SearchStep::Previous,
-            }),
-            _ => scroll(&pane, action, self.page()),
+            return true;
         }
+        self.font(action)
+            .or_else(|| self.search(&pane, action))
+            .or_else(|| self.clipboard(&pane, action))
+            .or_else(|| self.screen_file(&pane, action))
+            .or_else(|| self.terminal(&pane, action))
+            .unwrap_or_else(|| scroll(&pane, action, self.page()))
     }
 
     /// The sequence keys belong to the keyboard (Task 14); nothing is queued here.
@@ -216,19 +215,159 @@ impl Actions<'_> {
         true
     }
 
-    /// A font size change (the views follow on the next frame); performed even when the size stays (Ghostty's
-    /// actions always are).
-    fn font(&self, points: f32) -> bool {
+    /// The font size actions (Ghostty's clamps); the views follow on the next frame. Always performed.
+    fn font(&self, action: &Action) -> Option<bool> {
+        let points = self.shared.font_points();
+        let points = match action {
+            Action::IncreaseFontSize(delta) => points + delta.clamp(0.0, 255.0),
+            Action::DecreaseFontSize(delta) => points - delta.clamp(0.0, 255.0),
+            Action::ResetFontSize => self.shared.original_font_points(),
+            Action::SetFontSize(points) => *points,
+            _ => return None,
+        };
         self.shared.set_font_points(points);
+        Some(true)
+    }
+
+    /// The search actions: `end_search` and an empty `search:` are performed only when a search was open (so the
+    /// default `performable:escape=end_search` lets Escape through otherwise), the UI is told of both ends anyway.
+    fn search(&self, pane: &Pane, action: &Action) -> Option<bool> {
+        Some(match action {
+            Action::Search(needle) => pane.search(needle),
+            Action::StartSearch => self.queue(Effect::Emit(TerminalEvent::StartSearch(String::new()))),
+            // Ghostty's `selectionString`: untrimmed; an existing selection counts even when its text is empty
+            Action::SearchSelection => match pane.format(FormatRegion::Selection, TextFormat::Plain, false) {
+                Some(needle) => self.queue(Effect::Emit(TerminalEvent::StartSearch(needle))),
+                None => false,
+            },
+            Action::EndSearch => {
+                let performed = pane.search("");
+                self.queue(Effect::Emit(TerminalEvent::EndSearch));
+                performed
+            }
+            Action::NavigateSearch(direction) => pane.navigate_search(match direction {
+                Direction::Next => SearchStep::Next,
+                Direction::Previous => SearchStep::Previous,
+            }),
+            _ => return None,
+        })
+    }
+
+    fn clipboard(&self, pane: &Pane, action: &Action) -> Option<bool> {
+        Some(match action {
+            Action::CopyToClipboard(format) => self.copy(pane, *format),
+            Action::CopyUrlToClipboard => match self.shared.hovered_url() {
+                Some(url) => self.queue(Effect::Copy(url, ClipboardLocation::Standard)),
+                None => false,
+            },
+            Action::CopyTitleToClipboard => false,
+            Action::PasteFromClipboard => self.queue(Effect::Paste(ClipboardLocation::Standard)),
+            Action::PasteFromSelection => self.queue(Effect::Paste(ClipboardLocation::Selection)),
+            _ => return None,
+        })
+    }
+
+    /// `copy_to_clipboard`: Ghostty's `copySelectionToClipboards`, performed whenever there is a selection. GPUI's
+    /// Linux clipboard offers text only: plain and VT text are written as Ghostty writes them, `mixed` its plain text
+    /// part, and `html` (Ghostty offers it as `text/html` alone) leaves the clipboard as it is (plan > Task 14 ➕ MIME
+    /// transport).
+    fn copy(&self, pane: &Pane, format: CopyFormat) -> bool {
+        let trim = self.shared.config().copy_trim;
+        let text_format = match format {
+            CopyFormat::Plain | CopyFormat::Mixed => TextFormat::Plain,
+            CopyFormat::Vt => TextFormat::Vt,
+            CopyFormat::Html => TextFormat::Html,
+        };
+        let Some(text) = pane.format(FormatRegion::Selection, text_format, trim) else {
+            return false;
+        };
+        if format == CopyFormat::Html {
+            tracing::warn!(target: "agterm::surface", "copying as HTML needs a text/html clipboard offer GPUI lacks");
+        } else {
+            self.queue(Effect::Copy(text, ClipboardLocation::Standard));
+        }
+        if self.shared.config().clear_selection_on_copy
+            && let Err(err) = pane.clear_selection()
+        {
+            tracing::warn!(target: "agterm::surface", %err, "clearing the selection after a copy failed");
+        }
         true
     }
 
-    /// `copy_to_clipboard`: the selection's text, trimmed as Ghostty copies it; nothing without a selection.
-    fn copy(&self, pane: &Pane, _format: CopyFormat) -> bool {
-        match pane.selection_text(SelectionText::Copy) {
-            Some(text) if !text.is_empty() => self.queue(Effect::Copy(text, ClipboardLocation::Standard)),
-            _ => false,
+    /// `write_screen_file`, `write_scrollback_file`, `write_selection_file`: Ghostty's `writeScreenFile`.
+    fn screen_file(&self, pane: &Pane, action: &Action) -> Option<bool> {
+        let (region, write) = match action {
+            Action::WriteScreenFile(write) => (FormatRegion::Screen, write),
+            Action::WriteScrollbackFile(write) => (FormatRegion::History, write),
+            Action::WriteSelectionFile(write) => (FormatRegion::Selection, write),
+            _ => return None,
+        };
+        Some(self.write_screen_file(pane, region, *write))
+    }
+
+    /// Writes `region` into a new file of its own temporary directory and copies, pastes (the path typed into the
+    /// program) or opens it. With no such region (no selection, no scrollback) nothing happens, and the action still
+    /// counts as performed, as in Ghostty; `false` only when the file cannot be written.
+    fn write_screen_file(&self, pane: &Pane, region: FormatRegion, write: WriteScreen) -> bool {
+        let format = match write.format {
+            WriteFormat::Plain => TextFormat::Plain,
+            WriteFormat::Vt => TextFormat::Vt,
+            WriteFormat::Html => TextFormat::Html,
+        };
+        let Some(text) = pane.format(region, format, false) else {
+            return true;
+        };
+        let path = match screen_file(region, format, &text) {
+            Ok(path) => path.to_string_lossy().into_owned(),
+            Err(err) => {
+                tracing::warn!(target: "agterm::surface", %err, "writing the screen file failed");
+                return false;
+            }
+        };
+        match write.action {
+            WriteAction::Copy => self.queue(Effect::Copy(path, ClipboardLocation::Standard)),
+            WriteAction::Open => self.queue(Effect::Emit(TerminalEvent::OpenUrl(path))),
+            WriteAction::Paste => {
+                if !self.shared.is_readonly() && pane.write(path.as_bytes()).is_err() {
+                    tracing::debug!(target: "agterm::surface", "the terminal's input queue refused the file's path");
+                }
+                true
+            }
         }
+    }
+
+    /// The actions on the terminal's screen, selection and modes.
+    fn terminal(&self, pane: &Pane, action: &Action) -> Option<bool> {
+        Some(match action {
+            Action::Reset => {
+                pane.reset();
+                true
+            }
+            Action::ClearScreen => pane.clear_screen(),
+            Action::SelectAll => {
+                // Ghostty's `setSelectionAndCopy`: a selection made is copied per `copy-on-select`
+                if pane.select_all().unwrap_or(false) {
+                    self.shared.copy_on_select();
+                }
+                true
+            }
+            Action::AdjustSelection(adjust) => pane.adjust_selection(selection_adjust(*adjust)),
+            Action::ScrollToSelection => pane.scroll_to_selection(),
+            Action::ScrollToRow(row) => {
+                pane.scroll(Scroll::Row(usize::try_from(*row).unwrap_or(usize::MAX)));
+                true
+            }
+            Action::ToggleMouseReporting => {
+                pane.set_mouse_reporting(!pane.mouse_reporting());
+                true
+            }
+            Action::ToggleReadonly => {
+                let readonly = !self.shared.is_readonly();
+                self.shared.set_readonly(readonly);
+                self.queue(Effect::Emit(TerminalEvent::Readonly(readonly)))
+            }
+            _ => return None,
+        })
     }
 
     /// The viewport's height in rows.
@@ -238,6 +377,44 @@ impl Actions<'_> {
             .get()
             .map_or(1, |laid| isize::try_from(laid.grid.rows).unwrap_or(isize::MAX))
     }
+}
+
+fn selection_adjust(adjust: binds::SelectionAdjust) -> SelectionAdjust {
+    use binds::SelectionAdjust as Core;
+    match adjust {
+        Core::Left => SelectionAdjust::Left,
+        Core::Right => SelectionAdjust::Right,
+        Core::Up => SelectionAdjust::Up,
+        Core::Down => SelectionAdjust::Down,
+        Core::PageUp => SelectionAdjust::PageUp,
+        Core::PageDown => SelectionAdjust::PageDown,
+        Core::Home => SelectionAdjust::Home,
+        Core::End => SelectionAdjust::End,
+        Core::BeginningOfLine => SelectionAdjust::BeginningOfLine,
+        Core::EndOfLine => SelectionAdjust::EndOfLine,
+    }
+}
+
+/// `<region>.<txt|html>` in a new temporary directory of its own, readable by the user only; the directory is kept
+/// for whoever the path goes to (Ghostty's `TempDir` retained).
+fn screen_file(region: FormatRegion, format: TextFormat, text: &str) -> std::io::Result<PathBuf> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let dir = tempfile::Builder::new().prefix("agterm-").tempdir()?.keep();
+    let name = match region {
+        FormatRegion::Screen => "screen",
+        FormatRegion::History => "history",
+        FormatRegion::Selection => "selection",
+    };
+    let extension = if format == TextFormat::Html { "html" } else { "txt" };
+    let path = dir.join(format!("{name}.{extension}"));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?
+        .write_all(text.as_bytes())?;
+    Ok(path)
 }
 
 /// The viewport scrolls of ghostty's action table.

@@ -887,7 +887,9 @@ headers, rebuilt on `agterm-term` and current GPUI.
   `terminal/font.rs`; Modify: `crates/agterm-gpui/{Cargo.toml,src/lib.rs}`, `Cargo.toml` (dep `agterm-term`, dev-dep
   `gpui-pre-wgpu =0.3.9`), `crates/agterm-term/src/{render,pane,lib}.rs` + `tests/render.rs` (`CursorDefaults`),
   `crates/agterm-ghostty-vt/src/terminal.rs` + `tests/link.rs` (`set_default_cursor`), `.github/workflows/rust-linux.yml`
-  (`fontconfig`, `fonts-dejavu-core`)
+  (`fontconfig`, `fonts-dejavu-core`); review fixes: Create `crates/agterm-term/src/actions.rs`,
+  `crates/agterm-term/tests/actions.rs`; Modify `crates/agterm-term/src/input.rs`, `crates/agterm-ghostty-vt/src/
+  selection.rs` (terminal-scoped actions), `crates/agterm-gpui/Cargo.toml` (`tempfile` a dependency)
 
 - [x] cell metrics from the configured font; padding incl. `window-padding-balance`; resize → pane resize
 - [x] frame per Technical Details > Frame: merged background quads, shaped runs with a row cache over dirty rows,
@@ -948,10 +950,42 @@ headers, rebuilt on `agterm-term` and current GPUI.
     `cursor-style-blink` (unset blinks, as Ghostty's termio sets it; libghostty-vt's own default is a steady block).
   - "first frame drawn": `terminal surface created` / `terminal drew its first frame` / `could not create the terminal
     surface` at target `agterm::surface` with the surface key, as `ghostty_probe.py` reads them.
-  - Tests: 32 in `terminal/tests.rs` (GPUI's test app: its fixed fake face, and GPUI's Linux `CosmicTextSystem` with
+  - Tests: 42 in `terminal/tests.rs` (GPUI's test app: its fixed fake face, and GPUI's Linux `CosmicTextSystem` with
     DejaVu Sans Mono found through fontconfig for the known-font metrics; real panes under `/bin/sh` with `AGTERM_*`/
     `ZMX_*` removed; `allow_parking` because the panes' IO threads wake the pump from outside the test scheduler) plus
-    the cursor-default tests in `agterm-ghostty-vt` and `agterm-term`.
+    the cursor-default and action tests in `agterm-ghostty-vt` and `agterm-term` (`tests/actions.rs`).
+  - Review fixes (round 1; Codex-reviewed, transcript
+    `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/fixer-task-13-terminal-actions/transcript.md`): every
+    terminal-scoped action of Ghostty's `performBindingAction` at `GHOSTTY_REV` is performed with libghostty's
+    performed/not-performed answer: `end_search` and an empty `search:` only with a search open (so the default
+    `performable:escape=end_search` lets Escape through), `search_selection` (the selection untrimmed, an empty one
+    counting), `reset`, `clear_screen` (not performed on the alternate screen), `select_all` (always performed; the
+    selection copied per `copy-on-select`, now in core's config model, through `Shared::copy_on_select`, Ghostty's
+    `setSelectionAndCopy` with `clipboard-trim-trailing-spaces`),
+    `adjust_selection` and `scroll_to_selection` (not performed without a selection), `scroll_to_row`,
+    `toggle_mouse_reporting`, `toggle_readonly` (`Shared::is_readonly`; typing, binding text and pastes are dropped,
+    the terminal's replies are not), `write_screen_file`/`write_scrollback_file`/`write_selection_file` (a 0600 file
+    in a temporary directory of its own, then copy, paste the path, or open through `TerminalEvent::OpenUrl`; performed
+    without a region too, writing nothing), `copy_to_clipboard:{plain,vt,html,mixed}` (performed whenever a selection
+    exists), `copy_url_to_clipboard` (the URL `Shared::set_hovered_url` holds, not performed without one),
+    `copy_title_to_clipboard` not performed (neither the GTK build's nor upstream's embedded apprt handles it).
+    `agterm-term` gained `Pane::{reset, clear_screen, adjust_selection, scroll_to_selection, format, mouse_reporting}`,
+    `Scroll::Row`, `FormatRegion`, `TextFormat`; `agterm-ghostty-vt` `vt_write_until_ground`, `at_ground`,
+    `cursor_at_prompt`, `viewport_top`, `adjust_selection`, `Scroll::Row`. Also: the cell-size report on a config font
+    change and a scale change, the blink timer synced after prepaint installs the frame, the cursor colors from a blank
+    cell's erased background, an unfocused (hollow) cursor drawn opaque whatever `cursor-opacity` (Ghostty's
+    `addCursor`), one glyph-painting helper.
+  - ⚠️ `clear_screen` is a documented approximation, not exact parity: libghostty-vt has no erase API (and the vt pin
+    takes no patches), so the clear is VT sequences written into the terminal at a parser ground point (at once, or by
+    the IO thread at the next ground point of the program's output through `vt_write_until_ground`): at a prompt
+    (`OSC 133`) `CSI 3 J` + `CSI 2 J` (Ghostty's own complete erase) and a form feed to the shell; else `CSI n S`,
+    `CSI 3 J`, `CSI n A` and a Kitty delete-all, which equals Ghostty's `eraseActive` + `cursorReload` except that a
+    pending wrap ends, a scroll region the program set limits the scroll, and the new rows take the pen's background.
+  - ⚠️ For Task 14 (it owns the clipboard, keys and links): GPUI's Linux clipboard offers text only, so
+    `copy_to_clipboard:html` leaves the clipboard unchanged (logged) and `mixed` writes only its plain text, until a
+    text/html offer is added to the clipboard transport (a vendored `gpui-pre-linux` patch); the key and mouse paths
+    must honor `Shared::is_readonly`; the link hover sets `Shared::set_hovered_url`; a mouse selection made copies
+    through `Shared::copy_on_select`.
 
 ### Task 14: TerminalElement — keyboard routing, IME, mouse, selection, links, clipboard
 
