@@ -1512,11 +1512,90 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 
 **Files:**
 - Create: `crates/agterm-gpui/src/sidebar/`, `src/{status_glyph,row_icon}.rs`
+- ➕ Create: `crates/agterm-gpui/src/sidebar.rs` (module root), `sidebar/{rows,context,drag,menu,look,view,tests}.rs`,
+  `src/row_icon/{ink,tests}.rs`, `src/status_glyph/tests.rs`; Modify: `crates/agterm-gpui/src/{lib,window,deck,state,
+  window/tests}.rs`, `crates/agterm-gpui/Cargo.toml`, `Cargo.toml` (`ashpd`, `futures-util`), `Cargo.lock`
 
-- [ ] workspaces, sessions, status glyphs, row icons, drag reorder, collapse per upstream `agterm/Views` and the
+- [x] workspaces, sessions, status glyphs, row icons, drag reorder, collapse per upstream `agterm/Views` and the
       checklist; gpui-kit list components
-- [ ] tests (headless): selection, reorder, collapse, glyph states
-- [ ] gates + conformance — must pass before Task 20
+- [x] tests (headless): selection, reorder, collapse, glyph states
+- [x] gates + conformance — must pass before Task 20
+- result (2026-10-15, Task 17 not merged yet: the GPUI conformance run and ratchet wait for it):
+  - **Shape**: `sidebar.rs` `Sidebar`, a GPUI entity per window mounted in `WindowView`'s row before the deck (the
+    window's only change: the entity, its `sync` after the deck's, `WindowView::sidebar()`; `Deck::env()` hands it the
+    terminals' config). As in the GTK build the handlers never touch the model: `sync` (from the window's sync after
+    every main-loop task) takes the rows (`rows.rs`, ported unchanged), the handlers' snapshot (`context.rs`) and the
+    look, and every gesture posts a `SidebarAction`. The GTK pure modules (`rows`, `context`, `drag` math, the `menu`
+    model) are ported with their tests; `view.rs` draws: rows in a scroll container tracked by a `ScrollHandle` (its
+    child bounds are the drop math's row spans; it scrolls a newly selected row into view), the selection pill
+    (upstream's 8/1.5 inset, radius 7, the theme's selection colors, dimmed outside the key window, else the white
+    wash), the disclosure, the leading glyph, the name (tooltip only while truncated, measured with the text system),
+    the rename field, the hover "+", the status glyph and the red unseen badge (upstream's `BadgeView` metrics), the
+    drop line/frame, the empty flagged hint, the footer (gpui-kit ghost buttons that never take the keyboard, the
+    add-session `DropdownMenu` opening upward) and the 1-point divider with a 12-point grab handle `deferred` over the
+    terminal's edge. Element ids are upstream's accessibility ids (`session-row`, `workspace-row`, `session-icon`,
+    `workspace-icon`, `edit-field`, `workspace-add-session`, `notify-badge`, `agent-status`, `add-session`,
+    `focus-filter-toggle`, `flagged-view-toggle`). Colors: `agterm_core::chrome::ChromeColors` from the terminals'
+    config (`sidebar/look.rs`, the theme's background, foreground and selection colors and the Settings tint), the
+    rows' text size from `sidebarFontSize` (9...20, upstream's 13 points by default).
+  - **Behavior** (GTK parity): a click selects; Ctrl toggles and Shift extends from the anchor (GTK's multiple
+    selection; the clicked row, else the still-selected active session, else the last becomes active); a right-click
+    outside the selection narrows it; row menus are gpui-kit `context_menu`s built from the ported model (submenu Move
+    to, disabled Reveal for a missing directory, Copy Name to the clipboard, Reveal through GPUI's `reveal_path`); a
+    workspace-row click toggles after 400 ms (GTK's double-click time) unless a double-click renames, re-reading
+    `workspaceRowClickExpands` when it fires; the disclosure toggles at once; rename is a gpui-kit `Input` (Enter or
+    losing the keyboard commits, Escape cancels, a reshape of the list cancels; auto-follow held meanwhile); drags of
+    rows (`on_drag`/`on_drag_move`/`on_drop`, a session drag carries the selection when the row is in it) and of the
+    file manager's folders (`ExternalPaths`, "Too Many Folders" past the cap) use the ported drop math, spring-load a
+    folded workspace after 650 ms and fold it back unless the drop lands; Close and Delete confirm through GPUI's
+    prompt; Open Directory… uses the file chooser portal (`ashpd`, titled, starting in the active session's directory);
+    the divider follows the pointer's absolute position, clamped, coalesced into `AppState::sidebar_resized`; a hidden
+    sidebar, a zoom or the dashboard hide it. `AppState::sidebar_toggle_workspace` now also queues the store's outline
+    request (`set_workspace_expanded_in_outline`), which is how a fold reaches the sidebar's expansion (the GTK build
+    set it on its window directly).
+  - **Glyphs**: `row_icon.rs` traces the GTK build's cairo glyphs with a small cairo-model painter over tiny-skia
+    (`row_icon/ink.rs`: current point, `arc`, `new_sub_path`, knock-outs as `BlendMode::Clear`) into a coverage mask
+    painted through `Window::paint_alpha_mask` (GPUI patch 0003) in the row's color, cached in the sprite atlas per
+    glyph and device size; added the disclosure chevron, the "+" and the footer's `rectangle.stack.badge.plus` and
+    `plus.rectangle`, which GTK took from its icon theme. `status_glyph.rs` ports the resolver and draws the six
+    silhouettes the same way; the blink is a 1 s autoreversing opacity animation, off while the desktop's
+    `enable-animations` (settings portal, followed live; on when unknown) is off.
+  - Tests: 55 new (the GTK `rows`, `drag`, `menu`, `context`, `row_icon` and `status_glyph` tests ported onto the
+    GPUI code, the pure click-selection, confirmation and look tests, and 10 in GPUI's test window over a real core:
+    clicks with Ctrl/Shift and the right-click narrowing, the fold after the double-click interval and through the
+    disclosure with the whole-row setting off, rename committed by Enter and cancelled by Escape, session and
+    workspace drag reorder, spring-loading folded back unlanded, the hover "+", the flagged-view toggle and its hint,
+    the confirmed and cancelled close, the divider resize clamped at the floor and the hidden sidebar, the status
+    glyph's states, the row menu's and the footer menu's items). Gates: fmt, clippy (workspace, all targets and
+    features), lint-report, check-tracing-features, `vendor-gpui.sh --check`, `vendor-calloop.sh --check`,
+    `cargo test --workspace` under Xvfb (3865 passed, 0 failed), the new tests 10 times in a row. A smoke run of the
+    real binary on a private Xvfb with lavapipe (sessions, workspaces, a blocked star status and a truncated name made
+    over the control socket, screenshot checked).
+  - Remaining before the gates box: the GPUI conformance run and its ratchet (Task 17); for Task 14: the keymap's
+    Rename Session/Workspace, Close Session, Delete Workspace and Open Directory… reach `WindowView::sidebar()`
+    (`begin_rename`, `close_sessions`, `delete_workspace`, `open_directory`), and the window's key capture must let
+    the rename field's keys (Enter, Escape, editing) through while it holds the keyboard. The GTK conformance run is not
+    needed: the GTK binary links none of the changed crates.
+  - Review round 1 (merged with gpui-frontend at Tasks 13–18): a right-click's row menu holds the keyboard
+    (`Sidebar::menu_open`, set as the menu builds, cleared on its `DismissEvent`, which posts a sync): meanwhile the
+    deck moves no focus (`Deck::hold_keyboard`, from `WindowView::sync`), then gives the shown terminal the keyboard the
+    menu handed back, or leaves it with a field the menu's item focused (Rename); a press outside the rename field
+    commits it (`on_mouse_down_out`: the disclosure, the hover "+" and the rows take no focus); a selection made
+    elsewhere that leaves the Shift anchor out moves it to the selected session; Open Directory…'s chooser is parented
+    to the window (`ashpd::WindowIdentifier::from_raw_handle` over GPUI's raw window and display handles, read from the
+    live window as the chooser opens; ashpd `raw_handle` + `wayland`); `add_session` reuses `frame`; the divider test
+    covers the dashboard, the glyph tests check the blink (`agent-status-blinking`/`-still`) and the reduced-motion
+    switch through the sidebar. The duplicated GTK-free sidebar logic (`rows`, `context`, the `drag` math, the `menu`
+    model, the glyph resolver) stays duplicated on purpose: Task 34 deletes the GTK frontend and its copy.
+  - Task 14 wired: the keymap's Close Window posts the close; Close Session's confirmation, Rename Session/Workspace,
+    Delete Workspace and Open Directory… run on `WindowView::sidebar()` (`keymap_actions::with_sidebar`); Rename
+    Window waits for its dialog. The key monitor already leaves every key to a focused `Input` (the rename field):
+    tested through the window with the monitor installed (editing keys, Enter, Escape). Gates: fmt, clippy, lint-report,
+    `cargo test --workspace` under Xvfb 3981 passed, 0 failed, 6 ignored; GPUI conformance ratchet-only with `--also-k
+    "sidebar or workspace or rename or reorder or collapse or flag"`: 455 pass, 1 fail (an HTML overlay test, not
+    listed), ratchet held (453 ids) and grew by 2 (relaunch keeps workspaces and sessions, `agtermctl tree`). No
+    capability claimed; `sidebar-min-width` is the next candidate (the GPUI sidebar takes the model's width with no
+    floor of its own), unverified under the claim.
 
 ### Task 20: Title bar, chrome, appearance
 

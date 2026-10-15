@@ -308,6 +308,12 @@ pub struct Deck {
     focused: Option<(Uuid, String)>,
     /// Counts the changes of `focused` and whether the user's last focus move awaits its report.
     focus_moves: Arc<FocusMoves>,
+    /// A popup of the window's (the sidebar's row menu) holds the keyboard: the deck moves no focus meanwhile.
+    held: bool,
+    /// A focus move waited for the popup to close.
+    held_move: bool,
+    /// What may keep the keyboard a held move waited on: the sidebar's live rename field.
+    owner: Option<FocusHandle>,
     look: Look,
 }
 
@@ -345,8 +351,21 @@ impl Deck {
             shown: None,
             focused: None,
             focus_moves: Arc::default(),
+            held: false,
+            held_move: false,
+            owner: None,
             look,
         }
+    }
+
+    /// Whether a popup of the window's holds the keyboard (the sidebar's row menu, which a right-click opens while
+    /// the selection it narrowed is still on its way): until it closes the deck moves no focus, then it gives the
+    /// shown terminal the keyboard the popup handed back, unless the popup's item gave it to `owner` (the sidebar's
+    /// live rename field) or a prompt. Any other focus outside the terminals (a handle the popup restored to a field
+    /// gone meanwhile) does not keep it.
+    pub fn hold_keyboard(&mut self, held: bool, owner: Option<FocusHandle>) {
+        self.held = held;
+        self.owner = owner;
     }
 
     /// The page of session `session`.
@@ -359,6 +378,12 @@ impl Deck {
     #[must_use]
     pub fn shown(&self) -> Option<Uuid> {
         self.shown
+    }
+
+    /// What the deck's terminals share: the config, the launcher, the poster.
+    #[must_use]
+    pub fn env(&self) -> &Rc<DeckEnv> {
+        &self.env
     }
 
     /// The colors the deck draws with.
@@ -539,7 +564,7 @@ impl Deck {
         self.shown = shown;
         let Some(id) = shown else {
             self.set_focused(None);
-            if changed && !modal {
+            if changed && !modal && !self.held {
                 window.blur(cx);
             }
             return None;
@@ -550,6 +575,15 @@ impl Deck {
         }
         let focus = self.pages.get(&id).and_then(Page::focus);
         let desired = focus.map(|pane| (id, pane.token().to_owned()));
+        if self.held {
+            self.held_move |= changed || refocus || desired != self.focused;
+            return None;
+        }
+        if std::mem::take(&mut self.held_move) && self.keyboard_owned(window) {
+            // the popup's item gave the keyboard to a field of its own: the move it waited for is moot
+            self.set_focused(desired);
+            return None;
+        }
         let reporting = !changed && self.focus_moves.reporting.load(Ordering::Relaxed);
         if (desired == self.focused || reporting) && !refocus {
             return None;
@@ -560,6 +594,12 @@ impl Deck {
         }
         self.set_focused(desired.clone());
         desired
+    }
+
+    /// Whether a live keyboard owner outside the deck's terminals holds the window's keyboard: the owner the last
+    /// hold named, or a prompt.
+    fn keyboard_owned(&self, window: &Window) -> bool {
+        window.has_active_prompt() || self.owner.as_ref().is_some_and(|owner| owner.is_focused(window))
     }
 
     /// Records where keyboard focus went, counting a move; a user move's report still queued is overtaken.

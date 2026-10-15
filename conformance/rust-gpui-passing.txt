@@ -8,6 +8,7 @@ tests/behaviors/test_hooks.py::test_an_edit_takes_effect_only_on_reload
 tests/behaviors/test_hooks.py::test_hooks_file_is_read_at_launch
 tests/behaviors/test_keymap.py::test_an_edit_takes_effect_only_on_reload
 tests/behaviors/test_keymap.py::test_keymap_file_is_read_at_launch
+tests/behaviors/test_relaunch.py::test_relaunch_keeps_workspaces_sessions_and_their_metadata
 tests/cli/test_cli_only.py::test_clipboard_set_checks_the_text_before_the_pane
 tests/cli/test_cli_only.py::test_clipboard_set_refuses_outside_a_live_pane
 tests/cli/test_cli_only.py::test_terminfo_install_compiles_the_entry_into_the_remote_home
@@ -30,6 +31,7 @@ tests/cli/test_cli_output.py::test_restore
 tests/cli/test_cli_output.py::test_session_background
 tests/cli/test_cli_output.py::test_session_panes
 tests/cli/test_cli_output.py::test_sidebar
+tests/cli/test_cli_output.py::test_tree_lists_workspaces_and_tagged_sessions
 tests/cli/test_cli_output.py::test_version
 tests/cli/test_cli_output.py::test_workspace_focus_and_filter
 tests/cli/test_cli_output.py::test_workspace_go_and_move

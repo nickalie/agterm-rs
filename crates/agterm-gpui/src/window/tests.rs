@@ -1,6 +1,7 @@
 //! The window shell: its title (ported from the GTK build's `window.rs` tests), the state `window.list` reads, and the
 //! shell over a deck in GPUI's test window.
 
+use agterm_core::app_actions::FrontendAction;
 use agterm_core::model::WindowLibrary;
 use agterm_core::{CoreConfig, CoreState};
 use agterm_proto::AppIdentity;
@@ -85,6 +86,8 @@ fn the_terminal_area_starts_past_a_shown_sidebar() {
 
 #[gpui_kit::test]
 fn the_shell_titles_its_window_and_keeps_its_modal_layers_in_order(cx: &mut TestAppContext) {
+    // the sidebar's footer draws gpui-kit buttons, which read its theme
+    cx.update(gpui_kit::init);
     let mut library = WindowLibrary::seeded("/home/u");
     let window = library.active_window_id().unwrap();
     library.rename_window(window, "work");
@@ -107,6 +110,7 @@ fn the_shell_titles_its_window_and_keeps_its_modal_layers_in_order(cx: &mut Test
         },
     ));
     let poster = env.poster.clone();
+    let keys = poster.clone();
     let (view, cx) = cx.add_window_view(move |root, cx| {
         let deck = cx.new(|_| Deck::new(window, env));
         WindowView::new(window, deck, poster, 0, root, cx)
@@ -143,9 +147,43 @@ fn the_shell_titles_its_window_and_keeps_its_modal_layers_in_order(cx: &mut Test
     assert_eq!(crate::keymap_dispatch::window_of(origin), Some(handle));
     assert!(crate::keymap_dispatch::holds_keyboard(Some(handle)));
     assert!(!crate::keymap_dispatch::holds_keyboard(None));
+
+    let workspace = core.library().store(window).unwrap().workspaces()[0].id();
+    keymap_renames_reach_the_sidebar(cx, &view, &keys, (window, session.unwrap(), workspace));
     view.update_in(cx, |view, root, _| view.close(root));
     assert_eq!(crate::keymap_dispatch::window_of(origin), None);
     assert!(!crate::keymap_dispatch::holds_keyboard(Some(handle)));
+}
+
+/// The keymap's Rename Session and Rename Workspace reach the window's sidebar, and its field keeps the keys the key
+/// monitor sees: editing keys, Enter and Escape. `(window, session, workspace)`: the model window and its rows.
+fn keymap_renames_reach_the_sidebar(
+    cx: &mut gpui_kit::VisualTestContext,
+    view: &Entity<WindowView>,
+    keys: &Poster,
+    (window, session, workspace): (Uuid, Uuid, Uuid),
+) {
+    cx.update(|_, cx| crate::keymap_dispatch::init(cx));
+    let sidebar = view.read_with(cx, |view, _| view.sidebar().clone());
+    let editing = |cx: &mut gpui_kit::VisualTestContext| sidebar.read_with(cx, |sidebar, _| sidebar.editing());
+    // from the app, as the landing runs it: the window is not being updated
+    let rename = FrontendAction::RenameSession { window, session };
+    cx.cx
+        .update(|cx| crate::keymap_actions::perform(keys, rename, false, cx));
+    cx.run_until_parked();
+    assert_eq!(editing(cx), Some(session));
+    cx.simulate_keystrokes("o p s backspace");
+    let text = sidebar.read_with(cx, Sidebar::edited_text);
+    assert_eq!(text.as_deref(), Some("op"));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(editing(cx), None, "Enter committed");
+    let rename = FrontendAction::RenameWorkspace { window, workspace };
+    cx.cx
+        .update(|cx| crate::keymap_actions::perform(keys, rename, false, cx));
+    cx.run_until_parked();
+    assert_eq!(editing(cx), Some(workspace));
+    cx.simulate_keystrokes("escape");
+    assert_eq!(editing(cx), None, "Escape cancelled");
 }
 
 /// A layer view that draws nothing.
