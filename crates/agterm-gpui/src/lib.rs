@@ -10,6 +10,8 @@ pub mod app;
 pub mod deck;
 pub mod external_texture;
 pub mod instance;
+pub mod keymap_actions;
+pub mod keymap_dispatch;
 pub mod main_loop;
 pub mod mute;
 pub mod pane;

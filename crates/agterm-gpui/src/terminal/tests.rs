@@ -374,6 +374,35 @@ fn runs_split_by_style_and_keep_wide_characters_on_their_columns() {
 }
 
 #[test]
+fn kitty_placeholder_cells_shape_no_text_but_keep_their_background() {
+    let dir = tempfile::tempdir().unwrap();
+    // a, then two placeholder cells (U+10EEEE U+0305 U+0305, image id 1 in the foreground) on a red background, b
+    let script = concat!(
+        r"printf 'a\033[38;2;0;0;1;41m\364\216\273\256\314\205\314\205\364\216\273\256\314\205\314\215",
+        r"\033[0mb'; exec sleep 5"
+    );
+    let pane = pane(script, dir.path());
+    let frame = wait_text(&pane, "b");
+    assert_eq!(frame.rows[0].placeholders().len(), 2);
+    let layout = layout_row(&frame.rows[0], &frame.colors, &Palette::default(), &RowMarks::default());
+    let texts: Vec<(&str, u16)> = layout
+        .runs
+        .iter()
+        .map(|run| (run.text.as_str(), run.clusters[0].col))
+        .collect();
+    // nothing drawn over the image: the placeholders split the runs and shape no glyph (Ghostty shapes a space)
+    assert_eq!(texts, [("a", 0), ("b", 3)]);
+    assert_eq!(
+        layout.backgrounds,
+        [Span {
+            start: 1,
+            len: 2,
+            value: frame.colors.palette[1]
+        }]
+    );
+}
+
+#[test]
 fn backgrounds_merge_and_decorations_span_their_cells() {
     let dir = tempfile::tempdir().unwrap();
     let pane = pane(
@@ -1124,8 +1153,10 @@ fn copy_actions_follow_their_formats(cx: &mut TestAppContext) {
         copied(&terminal, cx, "copy_to_clipboard:mixed").starts_with("ready red"),
         "its plain text"
     );
-    // HTML has no text/html offer to go to: performed, the clipboard left alone
-    assert!(copied(&terminal, cx, "copy_to_clipboard:html").starts_with("ready red"));
+    // HTML is offered as text/html alone (the Linux platform's patch); GPUI's test platform keeps the item's text,
+    // which is the markup then
+    let html = copied(&terminal, cx, "copy_to_clipboard:html");
+    assert!(html.contains('<') && html.contains("red"), "{html}");
 }
 
 /// Takes `copy-on-select` and the trim, runs `select_all`, and reads both clipboards back.
@@ -1351,12 +1382,11 @@ fn paste_and_copy_go_through_the_clipboard(cx: &mut TestAppContext) {
         .and_then(|item| item.text())
         .unwrap_or_default();
     assert!(copied.contains("ready") && copied.contains("pasted"), "{copied:?}");
-    // a paste that could run a command is refused and reported for confirmation
+    // a paste that could run a command goes through as confirmed, as upstream and the GTK build complete it
     events.borrow_mut().clear();
-    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("rm -rf x\n".into()));
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("echo unsafe-pasted\n".into()));
     assert!(surface.binding_action("paste_from_clipboard"));
-    cx.run_until_parked();
-    assert_eq!(*events.borrow(), [TerminalEvent::UnsafePaste("rm -rf x\n".into())]);
+    wait_painted(&view, cx, "unsafe-pasted");
 }
 
 #[gpui_kit::test]

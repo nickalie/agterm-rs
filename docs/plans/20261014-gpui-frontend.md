@@ -270,6 +270,9 @@ gpui-pre patch         wgpu external-texture element importing dmabuf (zero-copy
   7. ➕ `TextSystem::font_metrics` (the line gap and underline of a face) — Task 15, `gpui-pre` 0002;
   8. ➕ `Window::paint_alpha_mask` (a caller-rasterized coverage mask from the sprite atlas, tinted like a glyph) —
      Task 15, `gpui-pre` 0003.
+  9. ➕ (Task 14) the native key behind a key event on Linux (`gpui-pre-linux`: XKB keycode, layout character,
+     modifiers with Shift, for physical-key binds and the Kitty protocol), installed for one dispatch, and a
+     `text/html` clipboard offer (Wayland and X11) — Task 14, `gpui-pre-linux` 0001.
 - **Cell metrics**: advance of `M` for width; ascent + descent + line gap for height; `window-padding-x/y` around the
   grid; resize → `Terminal::resize` + PTY `TIOCSWINSZ` + cell size reported where `CELL_SIZE` was used.
 - **Threads** (decided in Task 4 from the C API's contract at `LIBGHOSTTY_VT_REV`, Codex-reviewed). Evidence: the
@@ -991,18 +994,129 @@ headers, rebuilt on `agterm-term` and current GPUI.
 
 **Files:**
 - Create: `crates/agterm-gpui/src/terminal/{input,mouse,links}.rs`, `src/keymap_dispatch.rs`, `src/keymap_actions.rs`
+- ➕ Create: `crates/agterm-gpui/src/terminal/{keyboard,keycodes,clipboard,input_tests}.rs`,
+  `src/keymap_dispatch/tests.rs`, `crates/agterm-ghostty-vt/src/gesture.rs`, `crates/agterm-term/src/gesture.rs`,
+  `crates/agterm-term/tests/pointer.rs`, `crates/agterm-gpui/tests/clipboard_html.rs`,
+  `build/patches/gpui-pre-linux/0001-native-key-events.patch`, `vendor/gpui-pre-linux/`; Modify:
+  `crates/agterm-gpui/src/{terminal,terminal/element,terminal/surface,terminal/tests,state,state/tests,app,lib}.rs`,
+  `crates/agterm-gpui/Cargo.toml`, `crates/agterm-ghostty-vt/src/{lib,render,selection}.rs`,
+  `crates/agterm-term/src/{lib,pane,input,render}.rs`, `Cargo.toml` (`regex`, `gpui-pre-linux` dep and
+  `[patch.crates-io]`), `Cargo.lock`, `scripts/vendor-gpui.sh`
 
-- [ ] window-level keymap capture before the terminal (port of `keymap_dispatch.rs`/`keymap_actions.rs`), then ghostty
+- [x] window-level keymap capture before the terminal (port of `keymap_dispatch.rs`/`keymap_actions.rs`), then ghostty
       binds, then `agterm-term` encoding; physical-key copy/paste/select-all
-- [ ] IME via GPUI's input handler (commit, preedit at the cursor, candidate position)
-- [ ] mouse: reporting modes, selection (drag, double/triple click, `cursor-click-to-move = false`), wheel scroll,
+- [x] IME via GPUI's input handler (commit, preedit at the cursor, candidate position)
+- [x] mouse: reporting modes, selection (drag, double/triple click, `cursor-click-to-move = false`), wheel scroll,
       mouse shape, hide-while-typing
-- [ ] OSC 8 and detected URLs: hover underline, open through the existing open-url path
-- [ ] clipboard: system and primary; OSC 52 through `ClipboardPromptPolicy` with a minimal confirm prompt (the full
+- [x] OSC 8 and detected URLs: hover underline, open through the existing open-url path
+- [x] clipboard: system and primary; OSC 52 through `ClipboardPromptPolicy` with a minimal confirm prompt (the full
       dialog comes with Task 21)
-- [ ] tests (headless): routing order (keymap capture wins), preedit lifecycle, drag and multi-click selection, link
+- [x] tests (headless): routing order (keymap capture wins), preedit lifecycle, drag and multi-click selection, link
       hit testing, OSC 52 allow/deny/remember
-- [ ] gates — must pass before Task 15
+- [x] ➕ GPUI patch 9 (Technical Details > GPUI patches): the native key behind a key event on Linux (GPUI's
+      `Keystroke` keeps no position, no layout character, and drops Shift from symbols)
+- [x] gates — must pass before Task 15
+- result (2026-10-15):
+  - **Keys** (Codex-reviewed, transcript
+    `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/task-14-physical-keys/transcript.md`): one GPUI
+    keystroke interceptor for the app (`keymap_dispatch::init`) runs agterm's order before GPUI's binding matcher and
+    pending-keystroke buffering: the keymap router (the GTK `Router` port: custom commands, `map` alternatives, leaders
+    and `--repeat` windows as deadlines checked at the next key, the menu chords, consumed keys' autorepeats and
+    releases) in a window registered with `register_window(handle, KeyOrigin)`, then, when a terminal owner view holds
+    the keyboard, ghostty's binds (`binds::Keyboard`, actions through `TerminalSurface::perform`, `all:` on every
+    terminal, sequences queued and flushed) and the encoder; whatever it handles stops there (GPUI's input handler does
+    not type it again; an `ignore`d key is the terminal's too). A text field (`Input` key context) or a prompt keeps
+    every key. Releases come through the owner view's key-up listener (`keymap_dispatch::key_up`, the binds' consumed
+    release, Kitty release events). Ghostty's app/window/tab/split binding actions stay unperformed, as libghostty's
+    apprt callbacks left them in the GTK build.
+  - **Native keys** (GPUI patch 9, `vendor/gpui-pre-linux` + `build/patches/gpui-pre-linux`, `scripts/vendor-gpui.sh`):
+    the Wayland and X11 clients install a `NativeInput` for exactly one key dispatch (an RAII scope: a press, each
+    Wayland autorepeat with the press's own record, the release; text-input-v3's one-character commit as `Text`), read
+    with `gpui_linux::current_native_input()` and checked against the event's keystroke: XKB keycode (→ the physical
+    key through Ghostty's keycode table, `terminal/keycodes.rs`), modifiers with Shift, consumed modifiers, the layout's
+    level-0 character and whether it types ASCII (the keymap's `chordKey`), the text before Ctrl transformations,
+    composition and repeat. Linux-only and additive (no GPUI type changes: gpui-kit/gpui-component and the other
+    platforms build unchanged). Without a record (GPUI's test platform, a replayed keystroke, other platforms) the key
+    is read off a US keyboard with Shift restored for its symbols; committed input-method text is a key with no
+    position. ⚠️ Residual: the native path is unit-tested through its translation and compiled; a real key on a real
+    seat is exercised at the checklist walk (Task 33) and by the window shell's own tests (Task 18).
+  - **IME**: the owner view is GPUI's `EntityInputHandler` while focused: a mark is the terminal's preedit (drawn at
+    the cursor, never sent), a commit is sent as text (Ghostty's `textCallback`: `PasteSource::Text`), the candidate
+    window sits at the cursor's cell; a key while composing goes back to the platform.
+  - **Mouse** (Ghostty's `Surface` callbacks): reporting (Shift keeps the mouse for selecting unless
+    `mouse-shift-capture`), Ghostty's own selection gesture (`selection.h`, wrapped in `agterm-ghostty-vt`
+    `SelectionGesture` and `Pane::gesture`: click counts by 500 ms and a cell's width, word/line/output clicks,
+    Ctrl+Alt blocks, half-cell drags, 15 ms autoscroll past an edge), Shift-click extension, copy-on-select to the
+    primary selection, middle-click primary paste, right-click word/link selection (no menu, as in the GTK build),
+    `cursor-click-to-move = false` (no prompt click), the wheel (`Pane::wheel`, precise deltas per cell,
+    `mouse-scroll-multiplier`, GPUI's ×3 undone), the pointer shape from OSC 22 (a hand over a live link), and
+    `mouse-hide-while-typing` as GPUI's app-wide cursor hide mode. Positions are device pixels.
+  - **Links**: OSC 8 (`Pane::hyperlink`, `Terminal::hyperlink_uri`) and Ghostty's scheme URL matcher over the
+    soft-wrapped line (`Row::wrapped`), live with Ctrl or Super alone; hovered cells underlined across rows
+    (`TerminalView::set_hovered_links`); a click without a drag emits `TerminalEvent::OpenUrl`, and
+    `terminal::follow_link` is the default route through the link policy (`cx.open_url` / `cx.reveal_path`; the
+    frontend's session-overlay route is Task 18's). A double click on a URL selects the URL.
+  - **Clipboard**: OSC 52/Kitty reads and writes are answered in the pump under `clipboard-read`/`clipboard-write`
+    (`ask` → the GTK build's `Prompts` port as a GPUI `Global`: one prompt per terminal and direction, a session choice
+    remembered for every terminal); the minimal prompt is GPUI's window prompt with Allow, Deny, Always Allow This
+    Session, Always Deny This Session. **Unsafe pastes are pasted as confirmed** (`TerminalEvent::UnsafePaste` is
+    gone): upstream (`confirmReadClipboard`) and the GTK build complete libghostty's paste confirmation unasked.
+  - Task 13's follow-ups (merged its review fixes): read-only mode (`Shared::is_readonly`) drops keys, sequence
+    flushes, input-method text, mouse reports (the mouse selects instead), the middle-click paste and the wheel's
+    program routes (the viewport still scrolls); terminal replies still go. The link hover sets
+    `Shared::set_hovered_url` (`copy_url_to_clipboard`). `copy_to_clipboard:html` offers `text/html` alone and
+    `:mixed` text plus `text/html`, through a second part of GPUI patch 9 (`gpui_linux::with_clipboard_html`, the
+    Wayland data source's and the X11 selection owner's offers); a process test reads both selections' targets and
+    data from another client on a private Xvfb (`tests/clipboard_html.rs`). ⚠️ Residual: the Wayland side is not
+    exercised by a test (a Wayland client owns a selection only with an input serial, which a headless compositor
+    never delivers).
+  - Focus reports (mode 1004) on each change of view focus and window activation, the start state reported as no
+    change. `Shared::{owner, set_owner}` carry a custom command's typing surface (`terminal::typing_surface`).
+  - `keymap_actions`: Toggle Full Screen and the Delete Window confirmation on the registered window,
+    `AppState::{keymap_fired, window_command}`, `FrontendWork::actions`; the window close, the session-close
+    confirmation, the renames, Delete Workspace and Open Directory wait for the window shell, sidebar and dialogs
+    (Tasks 18, 19, 21, 26) and are logged until then.
+  - Tests: 14 in `terminal/input_tests.rs` (GPUI's test app, real panes under `/bin/sh`: key translation and chords,
+    the routing order with the keymap first, the preedit lifecycle, drag/double/triple/Shift selection, mouse reports
+    and Shift, the wheel, Ctrl-click links and the default route, focus reports, OSC 52 writes and reads under the
+    prompt with a session choice, read-only mode), 8 router tests (`keymap_dispatch/tests.rs`), link and
+    `keymap_actions` unit tests, `agterm-term` `tests/pointer.rs` (gesture, cell, OSC 8, soft wraps),
+    `agterm-ghostty-vt` gesture tests, and the X11 `text/html` process test. Gates: fmt, clippy (workspace, all
+    targets and features), lint-report, check-tracing-features, `vendor-gpui.sh --check`, `cargo test --workspace`
+    under Xvfb (3746 passed, 0 failed); the new tests and the terminal module 20 times in a row, no failure; full GTK
+    conformance: 653 passed, 14 skipped, ratchet holds (665 ids).
+  - Review round 1 (fixes): the pointer's Ghostty keys are typed config now (`Mouse::{right_click_action,
+    middle_click_action, click_repeat_interval}` and `Link::url` in core, ghostty's names, values and defaults at
+    `GHOSTTY_REV`): right clicks follow `right-click-action` (agterm's settings write `paste`/`ignore`), middle clicks
+    `middle-click-action` (reading the clipboard under `copy-on-select = clipboard`, as Ghostty does), clicks count
+    within `click-repeat-interval`, URLs only with `link-url`; selections are copied by Task 13's
+    `Shared::copy_on_select`. Links drop Shift while the program has the mouse (`mouseModsWithCapture`); OSC 8 runs
+    stop at a different link; GPUI's synthetic lone-modifier keystroke goes on to the modifier listeners (a lit link
+    goes dark) and a click refreshes the link with its own modifiers. `toggle_mouse_reporting` lasts (the config is
+    applied when the pane starts or the config changes, not on each event). The release of a press the keymap took
+    never reaches the program. `all:` key-table and `end_key_sequence` actions reach every terminal's keyboard. Native
+    keys carry Caps Lock and Num Lock, and X11 autorepeats are repeats. The unsafe-paste decision was re-checked: the
+    GTK build's `clipboard.rs` completes libghostty's paste confirmation unasked (`clipboard-paste-protection` on by
+    default only raises that request), so no prompt here either. The X11 autorepeat flag has no end-to-end test.
+  - Review follow-ups: `selection-word-chars` is typed (`Selection::word_chars`, decoded like Ghostty's
+    `codepointIterator`, `\xNN` the character U+00NN) and reaches every word selection: the gesture's word clicks
+    and drags (`SelectionGesture::apply_with`, `GHOSTTY_SELECTION_GESTURE_EVENT_OPT_WORD_BOUNDARY_CODEPOINTS`) and
+    `Pane::select_word` (`Terminal::select_word_with`), through `Pane::set_word_boundaries`, U+0000 always a boundary.
+    `focus-follows-mouse` is typed (`Mouse::focus_follows_mouse`): the owner view emits
+    `TerminalEvent::FocusFollowsMouse` when the pointer moves over it while it does not hold the keyboard, its window
+    is active and no button is held, once until it leaves or the focus changes. ➕ Task 18 follow-up: the deck
+    subscribes to it and focuses that pane as a click would (`window.focus(&view.focus_handle(cx), cx)` on the pane's
+    owner `TerminalView`, then the core's pane focus as the GTK build's focus-in path reports it). ⚠️
+    `cursor-click-to-move = true` stays a residual: libghostty-vt at `LIBGHOSTTY_VT_REV` exposes no OSC 133
+    prompt-click mode (`cl`/`click_events`) and no cursor pen content, so Ghostty's `promptClickMove` has nothing
+    to read (`docs/backlog/cursor-click-to-move-needs-prompt-click-state.md`); agterm's default is `false`.
+    Gates of round 1, on the tree merged with gpui-frontend
+    (Tasks 13 and 15): `cargo test --workspace` under Xvfb 3781 passed, 0 failed; the terminal, router and pointer
+    tests 20 times in a row, no failure; GTK conformance not needed (the core change only adds typed-model fields
+    the GTK build never reads: it takes ghostty_config's defaults text and file list only).
+  - Later tasks build on: `keymap_dispatch::{register_window, unregister_window, keyboard_left}` and a window-root
+    `capture_key_up` calling `keymap_dispatch::key_up` (Task 18/24/26), `Shared::set_owner`, `TerminalEvent::OpenUrl`
+    → the link-open route (Task 18), the full OSC 52 dialog replacing `terminal/clipboard.rs`'s prompt (Task 21).
 
 ### Task 15: Procedural sprites for box drawing, blocks, powerline, braille
 
@@ -1099,12 +1213,99 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 
 **Files:**
 - Create: `crates/agterm-gpui/src/terminal/{kitty,background}.rs`, `terminal/kitty_tests.rs`
+- ➕ Create: `terminal/background/tests.rs`, `terminal/kitty/{textures,placeholder}.rs`,
+  `crates/agterm-term/src/placeholder.rs`, `docs/backlog/kitty-virtual-placement-c-api-gaps.md`; Modify:
+  `terminal/{element.rs,terminal.rs}` (the module root), `tests/external_texture/cases.rs`,
+  `crates/agterm-gpui/Cargo.toml`, `Cargo.toml` (`image`), `crates/agterm-term/src/{render,kitty,lib}.rs`,
+  `crates/agterm-ghostty-vt/src/kitty.rs`
 
-- [ ] image data from `agterm-term`'s kitty view → GPUI images cached by id/generation; placements by z-layer, source
+- [x] image data from `agterm-term`'s kitty view → GPUI images cached by id/generation; placements by z-layer, source
       rects, scaling, scrolling with the viewport, deletion
-- [ ] `background-image*` (agterm's watermark lines, `background.rs` + core `watermark`) drawn behind the grid
-- [ ] tests: placement geometry, layer ordering, cache eviction on delete, background image fit/position modes
-- [ ] gates — must pass before Task 17 (the `show-image.sh` end-to-end check is in Task 23)
+- [x] `background-image*` (agterm's watermark lines, `background.rs` + core `watermark`) drawn behind the grid
+- [x] tests: placement geometry, layer ordering, cache eviction on delete, background image fit/position modes
+- [x] gates — must pass before Task 17 (the `show-image.sh` end-to-end check is in Task 23)
+- result (2026-10-15):
+  - **Kitty** (`terminal/kitty.rs`, from Ghostty's `image.zig`/`image.v.glsl` by way of qwertty-term's renderer, MIT,
+    attribution in the header): a placement lands at its viewport cell times the cell plus its offset inside the cell
+    (clamped to the cell, Ghostty's `cellOffset`), at the pixel size and source rectangle libghostty-vt resolved; a
+    negative row (scrolled partly off the top) is clipped by the element; a viewer at its own font size scales the
+    terminal's pixels by its cell over the owner's (`Cells { engine, view }`). Sorted by `z`, then image id
+    (stable), drawn in Ghostty's three layers: below the cell backgrounds (after the default background and the
+    background image), between the cell backgrounds and the underlines/text, above the text (the cursor and the
+    preedit stay on top, as Technical Details > Frame orders them; Ghostty draws its cursor with the text, so an
+    above-text image covers it there). No GPUI patch: GPUI's own `paint_image` draws a source rectangle when the
+    whole image is painted scaled so the rectangle covers the placement, clipped to it (`kitty::image_bounds`; GPUI
+    then samples only that part of the tile) — checked on real renderers by the external texture harness's
+    `image_source_rects_fill_their_placement` (lavapipe and Intel). Images become BGRA straight-alpha `RenderImage`s
+    once per `(id, generation)` (RGB opaque, gray to gray RGB, Ghostty's `convertReplace`), scaled down past 8192 px
+    a side (wgpu's default texture limit; Ghostty allows 10000); per view, because the sprite atlas is per window.
+    `ViewImages` keeps what a view painted into its window's atlas and `drop_image`s what it stops drawing (deleted,
+    new generation, scrolled out, background changed), and everything on teardown and on the view's release
+    (`on_release_in`, registered at its first paint). The view compares against its own cache, not
+    `KittyView::removed`, so skipped frames cannot leak a texture.
+  - **Background image** (`terminal/background.rs`, Ghostty's `prepBackgroundImage`/`bg_image.{v,f}.glsl`):
+    `TerminalConfig::background_image` from the config (so the watermark overlay lines `watermark::overlay_text`
+    writes reach it: tested end to end through `load_app_config`), drawn over the whole surface after the default
+    background: `contain`/`cover`/`stretch`/`none`, the nine positions (`center` = `center-center`), `repeat` tiling
+    from the offset both ways (a repeated image under 256 px a side is repeated into one larger texture first; at most
+    4096 tiles). Opacity: Ghostty's `min(opacity, 1 / bg alpha) * bg alpha`, baked into the texture's alpha (no GPUI
+    patch for an image opacity); exact at `background-opacity = 1`, which the watermark overlay sets. PNG or JPEG by
+    content, then extension (the `image` crate, `png`+`jpeg` features only, the version GPUI links), decoded on the
+    background executor; the old image stays up while its replacement loads and when a new file fails, as in Ghostty.
+    Loads are keyed by path, mtime, length, baked alpha and repeat, shared (loaded or in flight) by every terminal on
+    the main thread, and the file is looked at again on each `Terminal::set_config`, never per frame: a text watermark
+    re-rendered into the same file reloads without the GTK build's two-overlay trick.
+  - **Review round 1** (supersedes the above where they differ): (1) Kitty textures are converted on the background
+    executor (`kitty/textures.rs` `KittyStore` in `Shared`, shared by the terminal's views; a placement draws nothing
+    until its texture arrives, then the pump redraws), bounded to 8192 px a side and 16 Mpx (64 MB of BGRA) and
+    sampled straight from the stored pixels into one buffer of that size — no `image::imageops::resize` and its f32
+    intermediate (the background image's downscale uses the same sampler); the store follows only newer frames and
+    drops results for images it no longer follows. (2) Unicode placeholders (virtual placements, `U=1`) are drawn, as
+    the GTK build's libghostty draws them: `agterm-term` keeps each U+10EEEE cell's ids from its raw style colors (a
+    palette index or 24-bit color, which the frame's resolved colors lose) and its row/column/high-byte diacritics
+    (`Row::placeholders`, `KittyPlaceholder`) and joins them into runs as Ghostty's `PlacementIterator` does
+    (`virtual_placements`, Kitty's diacritics table); `agterm-ghostty-vt`/`agterm-term` expose a placement's
+    `columns`/`rows`; the element ports `renderPlacement` and `placeholderTarget` (`kitty/placeholder.rs`) and draws
+    each run at `z = -1`, below the text. (3) Under a translucent `background-opacity` the background texture is
+    Ghostty's finished blend (the background color baked in, every texel at the background alpha) and the
+    background color is painted only around the image (snapped to device pixels), so the surface is exactly as
+    translucent as Ghostty's; over an opaque background GPUI's own blend already equals it. (4) A config change to a
+    file that cannot be looked at drops the association with a load still running for an earlier spec, so that load
+    cannot replace the image on screen. (5) The element records the layers it paints (`PaintLayer`,
+    `TerminalView::painted_layers`), and a test over a real pane checks each Kitty layer's stage.
+  - **Review round 2** (supersedes the above where they differ): (1) Ghostty's translucent blend with an image
+    opacity over 1: `k = max(1, a * opacity)`, color `(img * a * opacity + bg * max(0, 1 - a * opacity)) / k`,
+    alpha `background alpha * k` (Ghostty's 0.5 x 1.5 = 0.75), where round 1 pinned every texel to the background
+    alpha. (2) Placeholder cells shape no glyph (Ghostty shapes a space), so nothing is drawn over their image; their
+    backgrounds stay. (3) The background loads in two steps (`terminal/background/load.rs`): the file decoded once
+    into unbaked pixels (keyed by the file), then baked off the main thread per opacity and translucent background
+    color, so an OSC 11 color change re-bakes without reading the file, at most one bake in flight per terminal (a
+    newer one waits); paint pairs the background color with the texture's own bake, so no seam shows while a bake
+    runs. (4) A config change forgets the decode and bake in flight at once (not at the next paint), and a file that
+    cannot be looked at forgets them too; both tested through `Shared::background_image`. (5) The element paints from
+    one table, `PAINT_ORDER`, each stage dispatched and recorded by the same call, Kitty stages with the placements
+    `paint_image` actually drew. (6) `agterm-term` copies a new Kitty image's pixels on the pane's IO thread after the
+    batch that completed it (`kitty::Prefetch`, kept with the terminal); the paint's capture shares that copy instead of
+    copying under the VT lock on the main thread. Every new test was run against its fix reverted and fails there.
+  - ⚠️ Residuals: two parity gaps libghostty-vt's C API leaves (it reports a placement id without its namespace, and
+    gives relative placements rooted at a virtual placement no position, root or offsets): ids resolve by number, and
+    such relative placements are not drawn — `docs/backlog/kitty-virtual-placement-c-api-gaps.md`, a Task 34
+    precondition (Codex-reviewed: an APC pre-scan cannot recover the committed state; upstream API or a local patch;
+    transcript `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/fixer-task-16-kitty-c-api-gaps/transcript.md`).
+    Kitty animation frames are not drawn (not in the view).
+  - Tests: `terminal/kitty_tests.rs` (11: cell + offset and its clamp, a negative row, a viewer's scale, what is not
+    drawn, z/id order and the three layers, the source-rect bounds, BGRA conversion per format, the atlas limit, the
+    cache converting once and evicting; over a real pane in GPUI's test app, a chunked `a=T` image drawn from the
+    window's atlas and dropped from it on `a=d`, and on teardown), `terminal/background/tests.rs` (10: fit, position,
+    tiling, the tile bound, small-image repetition, the capped and baked opacity, decoding by content and refusing
+    other types, the watermark overlay lines into `TerminalConfig`; in GPUI's test app, one load shared by two
+    terminals, a re-rendered file reloaded on a config change, the image dropped from the atlas with the config, a
+    missing file), and the harness case above. Round 1 adds: Ghostty's placeholder tests (`agterm-term`
+    `placeholder.rs`: decode by palette index, 24-bit color and high byte, continuation, breaks, runs per row; a real
+    terminal's frame in `render.rs`), its `renderPlacement` tests (dog 4x2, 2x2 with blank cells, 1x1) and target
+    lookup, the texture budget and sampler, the store's async lifecycle, placeholder cells drawing two images (RGB
+    and palette ids) over a real pane, the layer stages, Ghostty's translucent blend and the bands around the image,
+    the stale-load case, and the vt wrapper's virtual placement `columns`/`rows`.
 
 ### Task 17: Conformance harness for the GPUI build
 
@@ -1115,18 +1316,78 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 - Modify: `conformance/tools/ghostty_probe.py` (GPUI first-frame line)
 - Create: `conformance/rust-gpui-passing.txt`
 
-- [ ] staged GPUI build runs under the harness's weston with lavapipe; isolation unchanged
-- [ ] ➕ (Task 1) the harness's weston gets `--fake-seat` for GPUI runs (GPUI panics without `wl_seat`); check the GTK
+- [x] staged GPUI build runs under the harness's weston with lavapipe; isolation unchanged
+- [x] ➕ (Task 1) the harness's weston gets `--fake-seat` for GPUI runs (GPUI panics without `wl_seat`); check the GTK
       ratchet stays green with it, or pass it for the GPUI frontend only
-- [ ] ➕ (Task 1) provide lavapipe: it is not installed on the user's machine (the spike unpacked the signed
+- [x] ➕ (Task 1) provide lavapipe: it is not installed on the user's machine (the spike unpacked the signed
       `vulkan-swrast` package into the vendor dir); pick a documented source per environment (distro package on CI,
       a verified unpack into `${AGTERM_VENDOR}` otherwise) and point `VK_DRIVER_FILES` at it; a missing lavapipe is a
       clear harness error, never a fallback to a hardware driver
-- [ ] first full run on GPUI; seed `rust-gpui-passing.txt` with `check_ratchet.py --add`
-- [ ] harness self-tests in `conformance/selftests` (`test_run_rust_linux`, `test_ghostty_probe`, `test_impls`) and
+- [x] first full run on GPUI; seed `rust-gpui-passing.txt` with `check_ratchet.py --add`
+- [x] harness self-tests in `conformance/selftests` (`test_run_rust_linux`, `test_ghostty_probe`, `test_impls`) and
       `test_docs.py` (capability table in rust-build.md vs `CAPABILITIES` in `base.py`) updated and green; both ratchets
       green
-- [ ] gates — must pass before Task 18
+- [x] gates — must pass before Task 18
+- ➕ also touched: `scripts/fetch-lavapipe.sh`, `scripts/lib/native.sh`, `build/pins.env` (`LAVAPIPE_*`),
+  `conformance/agterm_conformance/{plugin.py,impls/rust.py,impls/__init__.py}`, `conformance/selftests/
+  {test_fetch_lavapipe,test_plugin_options}.py`, `scripts/install-apparmor-profile.sh` (GPUI default path),
+  `.github/workflows/rust-linux.yml` (`conformance-gpui` job), README.md, conformance/README.md, rust-build.md
+- result (2026-10-15):
+  - **Frontend switch**: `stage.sh --frontend gpui` stages `bin/agterm-gpui`, `agtermctl`, `zmx` and the same `share/`
+    (no `lib/`: libghostty-vt is static, GPUI loads neither libghostty nor gtk4-layer-shell) into
+    `target/conformance-stage-gpui`; `run-rust-linux.sh --frontend gpui` builds the same workspace, stages it, runs
+    pytest with the new plugin option `--rust-frontend gpui` and holds `rust-gpui-passing.txt`, reporting into
+    `conformance/reports/rust-gpui-linux/`. Separate stage dir (not one stage holding both binaries), so the GTK probes'
+    default `target/conformance-stage/bin/agterm` never vanishes under a GPUI run; the AppArmor installer's GPUI default
+    follows it.
+  - **Seat and lavapipe for GPUI only**: `RustAdapter(frontend=gpui)` appends `--fake-seat` to its weston and makes
+    lavapipe the instance's only Vulkan driver (`VK_DRIVER_FILES` + `VK_ICD_FILENAMES`), `LIBGL_ALWAYS_SOFTWARE=1`
+    (wgpu's GL backend, as Task 12 found), Mesa's EGL vendor, and drops inherited `VK_*`, `WGPU_*`, `__NV_*`,
+    `__GLX_*`, `DRI_PRIME`, `MESA_LOADER_*`, `MESA_VK_DEVICE_SELECT`; it refuses a launch (before anything spawns)
+    without `CONFORMANCE_LAVAPIPE_ICD` or with a manifest that does not load `libvulkan_lvp`. The GTK frontend's
+    weston and environment are untouched, so its ratchet carries no new risk. A launched GPUI instance mapped only
+    `libvulkan_lvp.so` + Mesa's EGL/gallium (no NVIDIA library), checked through `/proc/<pid>/maps`.
+  - **lavapipe source**: `scripts/fetch-lavapipe.sh` — `AGTERM_LAVAPIPE_ICD`, else the distribution's
+    (`lvp_icd.<arch>.json`/`lvp_icd.json`; CI: Ubuntu's `mesa-vulkan-drivers`), else the pinned Arch package
+    `vulkan-swrast 1:26.2.4-1` (`LAVAPIPE_*` pins, sha256; its pacman signature checked good when pinned, Arch's mesa
+    packager's key) unpacked into `${AGTERM_VENDOR}/lavapipe-<key>/` with an absolute-path ICD manifest at the prefix
+    top (where Task 12's `tests/support` already looks); glibc 2.38 checked before download, every library checked by
+    `ldd` after unpack and on each later use (a host whose libLLVM moved on gets an error naming the library, never a
+    fallback). `--print-icd` resolves without fetching. The runner resolves it before taking the lock (exit 2 without
+    one) and hands it over as `CONFORMANCE_LAVAPIPE_ICD` (not `AGTERM_`-prefixed: the plugin scrubs those).
+  - **ghostty_probe.py**: `--frontend gpui` (default bin from the GPUI stage, lavapipe from the env or
+    `fetch-lavapipe.sh --print-icd`); Task 13's lines (`terminal surface created` / `terminal drew its first frame` /
+    `could not create the terminal surface` under target `agterm::surface`) are read as the GTK build's, with tests.
+  - **CI**: a `conformance-gpui` job (Ubuntu, `mesa-vulkan-drivers`) runs `run-rust-linux.sh --frontend gpui`.
+  - **Runs**: self-tests 763 pass; GTK full run 653 pass, 0 fail, 14 skip, ratchet holds (665 ids); GPUI first full
+    run 339 pass, 292 fail (262 failed + 30 setup errors waiting for a pane mount: no terminal before Task 13), 36 skip
+    (unsupported), 47 min, no instance root or process left; 339 ids seeded. A second full GPUI run against the seeded list gave the same 339/292/36 (47 min), ratchet holds.
+    Later tasks grow it with `check_ratchet.py --report conformance/reports/rust-gpui-linux/nodeids.jsonl --list
+    conformance/rust-gpui-passing.txt --add` after their GPUI run.
+  - **Ratchet-only mode** (2026-10-15): `run-rust-linux.sh --ratchet-only [--also SELECTOR]... [--also-k EXPR]...`
+    runs a frontend's ratchet ids plus a task's extras and is judged like a full run (every listed id must pass;
+    `--add` adds only ids that ran and passed; a `partial` report neither breaks nor removes the ids it left out).
+    A full run is still required for the GPUI switch (Task 34) and for harness or broad shared-crate changes. Self-tests
+    803 pass. On the tree with Tasks 13–16 merged: GPUI ratchet-only 339/339 pass, suite time 27 s (vs 47 min for a full run),
+    638 s wall time including a fresh release build. A ratchet-only run with the terminal tests
+    (`--also` test_session_text, test_surface, test_font_theme, test_events; `--also-k "clipboard or terminfo or font
+    or type_text or quick_type or title or selectall or paste or cwd or notify"`) gave 339 pass, 67 fail, 17 skip,
+    620 s, and no new ids: 58 of the failures wait for a mounted `left` pane, which the GPUI window gets with Task 18;
+    7 are `unknown theme` (no bundled themes in the GPUI stage). Growing the ratchet after Tasks 13–16 waits for the
+    first full GPUI run after Task 18. That run also catches unrelated ids that started passing as a side effect.
+  - Deferred: the CLAUDE.md note on the GPUI conformance run (Task 36); the GPUI ghostty-probe CI step comes with
+    Task 13's terminal; HTML/AppArmor for the GPUI stage with Task 32.
+  - ⚠️ review round 1: `--fake-seat` is new in weston 15.0; Ubuntu 24.04's weston 13 exits on it (and has no seat
+    without it), so CI could launch no GPUI instance, nor could Task 12's process tests. `scripts/build-weston.sh`
+    builds the pinned weston 15.0.1 (`WESTON_*`; headless + GL + desktop shell only; wayland-protocols 1.49 and
+    libdisplay-info 0.3.0 as pinned subprojects, no download during the build) into the vendored prefix, checked in
+    an `ubuntu:24.04` container (rootless podman: builds, takes `--fake-seat`, the harness's real-weston GPUI test
+    passes with it). CI puts its `bin/` first on PATH in `rust-linux` and `conformance-gpui`; `run-rust-linux.sh
+    --frontend gpui` takes it when the weston on PATH lacks the option, the adapter refuses such a weston naming the
+    script, and `tests/support` uses the first weston on PATH that takes it. Also: a lavapipe manifest whose driver is
+    missing is refused (harness) or skipped (script, system manifests); `tests/support/lavapipe.rs` asks
+    `fetch-lavapipe.sh --print-icd`, so the process tests and the external-texture test share the harness's rule;
+    `ghostty_probe.py` finds lavapipe before the harness import scrubs `AGTERM_*` and reports the script's reason.
 
 ### Task 18: Deck, panes, splits, pane lead, mute
 
@@ -1600,6 +1861,9 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
       memory measurements show the same need
 - [ ] ➕ (Task 4) the two Ghostty pins become one: the `GHOSTTY_` libghostty lines go, `LIBGHOSTTY_VT_REV` is the only
       Ghostty pin; `gen-ghostty-config-keys.sh` and the config-diagnostics residual list move to it
+- [ ] ➕ (Task 16 review) precondition: `docs/backlog/kitty-virtual-placement-c-api-gaps.md` closed — the Kitty
+      placement-id namespace and relative placements rooted at virtual ones drawn as libghostty draws them (upstream
+      API + pin bump, or a local libghostty-vt patch), or the user's explicit scope exception
 - [ ] full conformance on the switched build; ratchet unchanged or grown; gates
 
 ### Task 35: Verify acceptance criteria

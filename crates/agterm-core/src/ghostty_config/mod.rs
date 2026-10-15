@@ -20,10 +20,10 @@
 //! - count: keys whose type has a `parseCLI` agterm does not port ([`validate::Kind::Opaque`]: `font-style*`,
 //!   `font-variation*`, `font-codepoint-map`, `clipboard-codepoint-map`, `adjust-*`, `command`, `initial-command`,
 //!   `env`, `input`, `working-directory`, `quick-terminal-size`, `background-blur`, `mouse-scroll-multiplier`,
-//!   `selection-word-chars`, `macos-icon-screen-color`, `command-palette-entry`, `key-remap`) take any value: a
-//!   malformed one counts 0 here, 1 in libghostty (a bare key still counts when the type needs a value). `keybind` is
-//!   ported ([`binds`]) and counts as libghostty counts it (a `chain=` with nothing before it to extend counts when
-//!   the line is applied, [`GhosttyConfig::apply`]);
+//!   `macos-icon-screen-color`, `command-palette-entry`, `key-remap`) take any value: a malformed one counts 0 here,
+//!   1 in libghostty (a bare key still counts when the type needs a value). `keybind` is ported ([`binds`]) and
+//!   counts as libghostty counts it (a `chain=` with nothing before it to extend counts when the line is applied,
+//!   [`GhosttyConfig::apply`]);
 //! - message only: an include, theme or path that cannot be read for a reason other than its absence counts once as
 //!   in libghostty, its I/O error named after the closest Zig error;
 //! - value only: a relative path set by a theme file stays relative (libghostty makes it absolute against the first
@@ -45,8 +45,8 @@ use std::path::{Path, PathBuf};
 pub use keys::GHOSTTY_REV;
 pub use model::{
     BackgroundImage, BackgroundImageFit, BackgroundImagePosition, Clipboard, ClipboardAccess, Colors, CopyOnSelect,
-    Cursor, CursorStyle, DEFAULT_TERM, Font, GhosttyConfig, Mouse, MouseShiftCapture, PaddingBalance, PaddingColor,
-    Scrollback, Selection, ShellIntegrationFeatures, WindowPadding,
+    Cursor, CursorStyle, DEFAULT_TERM, Font, GhosttyConfig, Link, MiddleClickAction, Mouse, MouseShiftCapture,
+    PaddingBalance, PaddingColor, RightClickAction, Scrollback, Selection, ShellIntegrationFeatures, WindowPadding,
 };
 pub use parse::{Diagnostic, Loader, Location, Setting, Step, lines};
 pub use validate::{ConfigPath, KeySpec, Padding, TerminalColor, ThemeName};
