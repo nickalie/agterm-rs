@@ -915,6 +915,7 @@ impl Render for Titlebar {
         let uncovered = bar.cover == Cover::None;
         div()
             .id("titlebar")
+            .debug_selector(|| "titlebar".to_owned())
             .flex()
             .flex_row()
             .flex_shrink_0()

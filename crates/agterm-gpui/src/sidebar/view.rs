@@ -47,7 +47,11 @@ const HINT_ALPHA: f64 = 0.55;
 impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.settle_drags(cx);
-        let root = div().id("sidebar").flex_none().h_full();
+        let root = div()
+            .id("sidebar")
+            .debug_selector(|| "sidebar".to_owned())
+            .flex_none()
+            .h_full();
         if !self.shown {
             return root.into_any_element();
         }

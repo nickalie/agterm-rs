@@ -16,8 +16,6 @@ use gpui_kit::{
 };
 
 use super::*;
-use crate::deck::{DeckEnv, Watermarks};
-use crate::pane::PaneContext;
 use crate::terminal::TerminalConfig;
 
 /// The main loop the sidebar posts to: tasks wait for the test to run them; timers are not exercised.
@@ -41,8 +39,6 @@ struct Harness {
     posted: Arc<Posted>,
     view: Entity<Sidebar>,
     window: Uuid,
-    /// Kept for the watermark directory the deck environment names.
-    _state_dir: tempfile::TempDir,
 }
 
 /// Workspace "workspace 1" with sessions "u" and "srv" (selected), workspace "two" with "var".
@@ -80,31 +76,13 @@ fn harness(
     let weak_loop: Poster = Arc::downgrade(&posted) as Poster;
     let mut state = AppState::new(core);
     state.attach(weak_loop.clone());
-    let state_dir = tempfile::tempdir().unwrap();
-    let launcher: crate::pane::Launcher = Rc::new(|_: &agterm_term::Launch| -> crate::terminal::Spawn {
-        Box::new(|_| Err(agterm_term::PaneError::Closed))
-    });
-    let env = Rc::new(DeckEnv::new(
-        PaneContext {
-            socket: "/tmp/agterm-test.sock".to_owned(),
-            program_version: "1.2.3".to_owned(),
-        },
-        launcher,
-        TerminalConfig::default(),
-        weak_loop,
-        Watermarks {
-            state_dir: state_dir.path().to_path_buf(),
-            config_with: Rc::new(|_: &str| TerminalConfig::default()),
-        },
-    ));
-    let (view, cx) = cx.add_window_view(move |_, _| Sidebar::new(window, env));
+    let (view, cx) = cx.add_window_view(move |_, _| Sidebar::new(window, weak_loop));
     cx.simulate_resize(size(px(640.), px(480.)));
     let mut harness = Harness {
         state,
         posted,
         view,
         window,
-        _state_dir: state_dir,
     };
     harness.settle(cx);
     (harness, cx)
@@ -321,22 +299,53 @@ fn confirmations_use_upstreams_words() {
 }
 
 #[test]
-fn the_look_follows_the_theme_the_tint_and_the_font_setting() {
-    let config = TerminalConfig::default();
-    let plain = Look::of(&config, &AppSettings::default());
+fn the_look_paints_the_chromes_colors_in_the_font_setting() {
+    let plain = Look::of(crate::chrome::default_colors(), &AppSettings::default());
+    assert_eq!(plain, Look::default());
     assert!((plain.font_size - look::DEFAULT_FONT_SIZE).abs() < f32::EPSILON);
     assert_eq!(plain.colors.sidebar, plain.colors.background, "the neutral tint");
-    let tinted = Look::of(
-        &config,
-        &AppSettings {
-            sidebar_background_shift: Some(10),
-            sidebar_font_size: Some(42.0),
-            ..AppSettings::default()
-        },
-    );
+    let settings = AppSettings {
+        sidebar_background_shift: Some(10),
+        sidebar_font_size: Some(42.0),
+        ..AppSettings::default()
+    };
+    let colors = crate::chrome::colors(&TerminalConfig::default(), &settings);
+    let tinted = Look::of(colors, &settings);
     assert_ne!(tinted.colors.sidebar, tinted.colors.background, "a darker wash");
     assert!((tinted.font_size - 20.0).abs() < f32::EPSILON, "clamped to 20");
     assert!(tinted.row_height() > plain.row_height());
+    // the divider, the pill and the selected text are the chrome's, as the title-bar hairline is
+    assert_eq!(tinted.separator(), crate::chrome::separator(&colors));
+    for key in [true, false] {
+        let (pill, text) = crate::chrome::selected_row(&colors, key);
+        assert_eq!((tinted.pill(key), tinted.text(true)), (pill, text));
+    }
+}
+
+#[gpui_kit::test]
+fn the_sidebar_paints_the_chrome_the_window_shows(cx: &mut TestAppContext) {
+    let (mut h, cx) = harness(cx, library().0, AppSettings::default());
+    let shown = h.view.read_with(cx, |sidebar, _| sidebar.look);
+    assert_eq!(
+        shown.colors,
+        crate::chrome::default_colors(),
+        "the default before the first chrome sync"
+    );
+    let mut config = TerminalConfig::default();
+    config.theme.background = agterm_term::Rgb::new(0x10, 0x20, 0x30);
+    config.theme.foreground = agterm_term::Rgb::new(0xe0, 0xe0, 0xe0);
+    let settings = AppSettings {
+        sidebar_background_shift: Some(10),
+        ..AppSettings::default()
+    };
+    let chrome = crate::chrome::colors(&config, &settings);
+    cx.update(|_, cx| cx.set_global(crate::chrome::Chrome(chrome)));
+    h.settle(cx);
+    let shown = h.view.read_with(cx, |sidebar, _| sidebar.look);
+    assert_eq!(
+        shown.colors, chrome,
+        "the tint, the divider and the pill follow the chrome"
+    );
 }
 
 // MARK: - in the window

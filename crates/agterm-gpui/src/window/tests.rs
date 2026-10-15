@@ -117,6 +117,13 @@ fn the_shell_titles_its_window_and_keeps_its_modal_layers_in_order(cx: &mut Test
     });
     cx.simulate_resize(size(px(640.), px(480.)));
     let _ = view.update_in(cx, |view, window, cx| view.sync(&mut core, window, cx));
+    cx.run_until_parked();
+    // the title bar, its hairline along its bottom edge, spans the window over the sidebar's column too
+    let bar = cx.debug_bounds("titlebar").expect("the title bar is laid out");
+    let sidebar = cx.debug_bounds("sidebar").expect("the sidebar shows");
+    assert_eq!((bar.left(), bar.size.width), (px(0.), px(640.)));
+    assert!(sidebar.left() >= bar.left() && sidebar.right() <= bar.right());
+    assert!(sidebar.top() >= bar.bottom(), "the sidebar starts under the hairline");
     view.read_with(cx, |view, _| {
         assert_eq!(view.title(), "u — work");
         assert!(!view.has_layer(Layer::Ask));

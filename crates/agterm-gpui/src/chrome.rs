@@ -5,7 +5,9 @@
 //! the theme's foreground, the title-bar hairline (not in the hidden mode) and the sidebar divider that foreground at
 //! low opacity, and a selected sidebar row the theme's selection colors. [`agterm_core::chrome`] resolves the colors.
 //!
-//! The resolved colors are one GPUI global ([`Chrome`]) every window, its title bar and its sidebar paint from.
+//! The resolved colors are one GPUI global ([`Chrome`]) every window, its title bar and its sidebar paint from: the
+//! sidebar's tint, divider and selected-row pill go through [`separator`] and [`selected_row`] here
+//! (`sidebar::Look`), the title-bar hairline spans the window, over the sidebar's column too.
 //! [`sync`] runs on every windows sync after any config reload, so every appearance change upstream re-applies on (a
 //! theme set or previewed, a config reload, a settings change, a desktop light/dark flip) reaches it; it replaces the
 //! global only when a color changed.
@@ -73,13 +75,16 @@ pub fn sync(core: &Core, config: &TerminalConfig, cx: &mut App) -> bool {
     true
 }
 
-/// The chrome's colors now; the default config's before the first sync.
+/// The chrome's colors before the first sync: the default config's under the default settings.
+#[must_use]
+pub fn default_colors() -> ChromeColors {
+    colors(&TerminalConfig::default(), &AppSettings::default())
+}
+
+/// The chrome's colors now; [`default_colors`] before the first sync.
 #[must_use]
 pub fn current(cx: &App) -> ChromeColors {
-    cx.try_global::<Chrome>().map_or_else(
-        || colors(&TerminalConfig::default(), &AppSettings::default()),
-        |chrome| chrome.0,
-    )
+    cx.try_global::<Chrome>().map_or_else(default_colors, |chrome| chrome.0)
 }
 
 /// The title-bar hairline and the sidebar divider: the chrome text at 0.1.

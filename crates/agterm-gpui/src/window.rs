@@ -184,8 +184,7 @@ impl WindowView {
         });
         let bounds = cx.observe_window_bounds(window, |_, _, cx| cx.notify());
         let titlebar = cx.new(|_| Titlebar::new(id, poster.clone()));
-        let env = std::rc::Rc::clone(deck.read(cx).env());
-        let sidebar = cx.new(|_| Sidebar::new(id, env));
+        let sidebar = cx.new(|_| Sidebar::new(id, poster.clone()));
         Self {
             id,
             deck,
