@@ -29,8 +29,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
-            meson ninja-build libwayland-dev wayland-protocols \
-            curl xz-utils patch ncurses-bin fish
+            meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
+            curl xz-utils patch ncurses-bin fish dbus-daemon
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -65,6 +65,11 @@ jobs:
         run: scripts/build-zmx.sh
       - name: format
         run: cargo fmt --all --check
+      # before clippy: a dependency turning on tracing's `log` would put dozens of functions over the complexity limit
+      - name: tracing features
+        run: scripts/check-tracing-features.sh
+      - name: vendored calloop
+        run: scripts/vendor-calloop.sh --check
       # the workspace without the WPE WebKit -sys crates, which the wpe job checks
       - name: clippy
         shell: bash
@@ -144,7 +149,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
-            meson ninja-build libwayland-dev wayland-protocols \
+            meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
             curl xz-utils patch ncurses-bin \
             weston dbus-daemon libgl1-mesa-dri libegl-mesa0
       - name: rust toolchain (rust-toolchain.toml)
@@ -250,7 +255,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
-            meson ninja-build libwayland-dev wayland-protocols \
+            meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
             curl xz-utils patch ncurses-bin \
             weston dbus-daemon libgl1-mesa-dri libegl-mesa0 zsh
       # the app and the harness read the password database, never $SHELL
@@ -330,7 +335,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
-            meson ninja-build libwayland-dev wayland-protocols \
+            meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
             curl xz-utils patch ncurses-bin \
             weston dbus-daemon libgl1-mesa-dri libegl-mesa0 fish
       # the app and the harness read the password database, never $SHELL

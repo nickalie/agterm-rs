@@ -1,0 +1,18 @@
+calloop requests tracing's `log` feature unconditionally. In a workspace build that feature is unified into every
+crate's `tracing`, whose macros then expand with the subscriber-free `log` fallback, and clippy's cognitive_complexity
+counts those generated branches (about 10 per call site): 29 functions of the existing crates went over the limit
+when agterm-gpui brought GPUI (and calloop) in. Without the feature the graph is configured as it was before;
+agterm's subscriber is installed first thing in main, and `log` records still reach it through tracing-subscriber's
+LogTracer bridge. scripts/vendor-calloop.sh applies this to the verified crates.io archive.
+
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -114,7 +114,7 @@
+
+ [dependencies.tracing]
+ version = "0.1.40"
+-features = ["log"]
++features = []
+ default-features = false
+
+ [dev-dependencies.criterion]
