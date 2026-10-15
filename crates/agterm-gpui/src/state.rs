@@ -18,7 +18,7 @@ use agterm_core::auto_follow::AutoFollowTimer;
 use agterm_core::events::{TREE_CHANGED_DEBOUNCE, TreeChangedTimer};
 use agterm_core::keymap::TypingSurface;
 use agterm_core::link_policy::{self, ClickOrigin, Route};
-use agterm_core::model::PendingCloseTimer;
+use agterm_core::model::{PendingCloseTimer, StatusKeystroke};
 use agterm_core::persist::{DebouncedSave, arm_debounced_saves};
 use agterm_core::sidebar_actions::SidebarAction;
 use agterm_core::{CommitTimers, ControlError, Core, Dispatched, PaneReport, PaneSpawn, Resume};
@@ -322,6 +322,16 @@ impl AppState {
             Route::Browser(url) => self.frontend.open_urls.push(url),
             Route::Reveal(path) => self.frontend.reveals.push(path),
             Route::Ignore => tracing::debug!(raw, "link click ignored by the link policy"),
+        }
+    }
+
+    /// A key the user pressed in the pane carrying `token` (the GTK build's `connect_keystroke`): the session saw
+    /// user activity, and the keystroke clears its status glyph when the glyph's rule says so.
+    pub fn pane_keystroke(&mut self, session: Uuid, token: &str, keystroke: StatusKeystroke) {
+        self.core.note_user_activity(session);
+        self.arm_auto_follow();
+        if self.core.clear_status_on_keystroke(session, token, keystroke) {
+            self.settle();
         }
     }
 

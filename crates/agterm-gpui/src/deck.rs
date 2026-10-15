@@ -29,6 +29,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use agterm_core::Core;
 use agterm_core::chrome::Rgb;
+use agterm_core::keymap::SurfaceOwner;
 use agterm_core::model::pane::SPLIT_RATIO_DEFAULT;
 use agterm_core::model::{Session, StatusPane, WindowLibrary, Workspace};
 use agterm_core::restore::spawn_plan::LaunchSeed;
@@ -37,8 +38,8 @@ use agterm_core::{PaneReplacement, PaneSpawn};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, CursorStyle, Entity, FocusHandle, Focusable as _,
-    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, ParentElement as _, Render,
-    SharedString, Styled, Subscription, Window, canvas, div, px,
+    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Render, SharedString,
+    Styled, Subscription, Window, canvas, div, px,
 };
 use uuid::Uuid;
 
@@ -653,6 +654,12 @@ impl Deck {
         let Some(pane) = self.terminal(session, token) else {
             return;
         };
+        if matches!(event, TerminalEvent::FocusFollowsMouse) {
+            // as a click would: the focus listener reports it (Ghostty's `moveFocus`)
+            let handle = pane.focus_handle(cx);
+            window.focus(&handle, cx);
+            return;
+        }
         let points = pane.shared.font_points();
         if let TerminalEvent::Pane(agterm_term::PaneEvent::Exited(status)) = event
             && status.held
@@ -841,18 +848,12 @@ fn terminal_place(plan: &PanePlan, token: &str) -> Place {
     }
 }
 
-/// A pane's terminal view inside a wrapper that is drawn only while the view shows; a key press on a terminal holding
-/// its keys (a lead cover, a held exit) runs its hold instead of reaching the program.
+/// A pane's terminal view inside a wrapper that is drawn only while the view shows. A key press on a terminal
+/// holding its keys (a lead cover, a held exit) runs its hold in the terminal's key path (`Shared::held_key`).
 fn terminal_wrapper(pane: &PaneTerminal, shown: bool) -> impl IntoElement {
-    let shared = Rc::clone(&pane.shared);
     div()
         .size_full()
         .when(!shown, Styled::invisible)
-        .capture_key_down(move |_: &KeyDownEvent, _, cx| {
-            if shared.held_key() {
-                cx.stop_propagation();
-            }
-        })
         .child(pane.view.clone())
 }
 
@@ -942,6 +943,10 @@ fn mount_with(
         cx.new(|cx| Terminal::gated(terminal_spec, config, ask, cx))
     };
     let shared = Rc::clone(terminal.read(cx).shared());
+    shared.set_owner(Some(SurfaceOwner::Pane {
+        session: spec.session,
+        token: spec.token.clone(),
+    }));
     let view = cx.new(|cx| {
         let mut view = TerminalView::new(&terminal, ViewRole::Owner, cx);
         view.set_shown(false, cx);

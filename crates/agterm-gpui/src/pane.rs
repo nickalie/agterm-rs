@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use agterm_core::PaneReport;
 use agterm_core::link_policy::ClickOrigin;
-use agterm_core::model::{AppStore, SearchReport, Session};
+use agterm_core::model::{AppStore, SearchReport, Session, StatusKeystroke};
 use agterm_core::pane_env::{self, PaneEnv, SessionPane, StatusPane};
 use agterm_core::restore::spawn_plan::LaunchSeed;
 use agterm_term::{Launch, PaneEvent};
@@ -208,6 +208,8 @@ pub enum Report {
     /// The live font size changed.
     FontSize(f64),
     OpenUrl(String),
+    /// A key the user pressed in the pane: user activity, and the status glyph it clears.
+    Keystroke(StatusKeystroke),
     /// OSC 9/777; the focus sample travels beside it (`post_report`'s `focus`).
     Notification {
         title: String,
@@ -226,6 +228,7 @@ pub fn report(event: &TerminalEvent, ran: Ran, hostname: &str, points: f32) -> V
         TerminalEvent::EndSearch => vec![Report::Search(SearchReport::Ended)],
         TerminalEvent::FontSize => vec![Report::FontSize(f64::from(points))],
         TerminalEvent::OpenUrl(url) => vec![Report::OpenUrl(url.clone())],
+        TerminalEvent::Keystroke(keystroke) => vec![Report::Keystroke(*keystroke)],
         _ => Vec::new(),
     }
 }
@@ -270,6 +273,7 @@ pub fn post_report(poster: &Poster, session: Uuid, token: &str, report: Report, 
             }
         }
         Report::OpenUrl(url) => state.follow_link(&url, ClickOrigin::Pane(session)),
+        Report::Keystroke(keystroke) => state.pane_keystroke(session, &token, keystroke),
         Report::Notification { title, body } => state.terminal_notification(session, &token, &title, &body, focus),
     });
 }

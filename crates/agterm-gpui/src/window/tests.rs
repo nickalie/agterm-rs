@@ -136,6 +136,16 @@ fn the_shell_titles_its_window_and_keeps_its_modal_layers_in_order(cx: &mut Test
     view.read_with(cx, |view, _| {
         assert!(!view.has_layer(Layer::Ask) && view.has_layer(Layer::Picker));
     });
+
+    // the key monitor watches the window while it is open
+    let handle = cx.update(|root, _| root.window_handle());
+    let origin = crate::keymap_dispatch::KeyOrigin::Window(window);
+    assert_eq!(crate::keymap_dispatch::window_of(origin), Some(handle));
+    assert!(crate::keymap_dispatch::holds_keyboard(Some(handle)));
+    assert!(!crate::keymap_dispatch::holds_keyboard(None));
+    view.update_in(cx, |view, root, _| view.close(root));
+    assert_eq!(crate::keymap_dispatch::window_of(origin), None);
+    assert!(!crate::keymap_dispatch::holds_keyboard(Some(handle)));
 }
 
 /// A layer view that draws nothing.

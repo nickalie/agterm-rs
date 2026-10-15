@@ -198,6 +198,10 @@ pub enum TerminalEvent {
     /// in the active window, with no button held. The frontend focuses the pane (Ghostty's `moveFocus`; the deck owns
     /// pane focus); emitted once until the view's focus changes or the pointer leaves it.
     FocusFollowsMouse,
+    /// A key press or repeat reached the terminal's keyboard, classified for the status glyph (the GTK build's
+    /// `connect_keystroke`, upstream's `onUserInputClearsStatus` from `keyDown`): before its hold, ghostty's binds or
+    /// the program see it.
+    Keystroke(agterm_core::model::StatusKeystroke),
 }
 
 /// Work that needs the app, queued by the Surface for the pump.

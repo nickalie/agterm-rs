@@ -10,17 +10,19 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use agterm_core::model::{AppStore, Session, WindowLibrary};
 use agterm_core::titlebar::UNTITLED;
 use agterm_core::{Core, WindowRequest, WindowSize, WindowState};
 use gpui_kit::{
-    AnyView, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    Styled as _, Subscription, Window, div, px, size,
+    AnyView, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, KeyUpEvent,
+    ParentElement as _, Render, Styled as _, Subscription, Window, div, px, size,
 };
 use uuid::Uuid;
 
 use crate::deck::Deck;
+use crate::keymap_dispatch::KeyOrigin;
 use crate::state::{AppState, Poster, post};
 
 /// The window title: the active session's display name, then the window's custom name when it has one (upstream's
@@ -142,8 +144,12 @@ impl WindowView {
             post(&posting, move |state: &mut AppState| state.close_requested(id));
             false
         });
+        crate::keymap_dispatch::register_window(window.window_handle(), KeyOrigin::Window(id));
         let posting = poster.clone();
-        let activation = cx.observe_window_activation(window, move |_, window, _| {
+        let activation = cx.observe_window_activation(window, move |_, window, cx| {
+            if !window.is_window_active() {
+                check_keyboard_left(cx);
+            }
             if window.is_window_active() {
                 post(&posting, move |state: &mut AppState| {
                     state.set_key_window(Some(id));
@@ -201,6 +207,7 @@ impl WindowView {
 
     /// Closes the window for good: the model closed it, and its terminals with it.
     pub fn close(&self, window: &mut Window) {
+        crate::keymap_dispatch::unregister_window(window.window_handle());
         self.closing.set(true);
         window.remove_window();
     }
@@ -301,6 +308,12 @@ impl Render for WindowView {
             .map(|(_, view)| div().absolute().inset_0().child(view.clone()));
         div()
             .id("window")
+            .capture_key_up(|event: &KeyUpEvent, window, cx| {
+                // a release of a press the keymap took is the keymap's: no terminal reports it
+                if crate::keymap_dispatch::key_up(event, window, cx) {
+                    cx.stop_propagation();
+                }
+            })
             .relative()
             .size_full()
             .flex()
@@ -316,6 +329,24 @@ impl Render for WindowView {
             )
             .children(layers)
     }
+}
+
+/// How long after a window loses the keyboard the monitor checks whether another agterm window took it (the GTK
+/// build's `LEAVE_CHECK_DELAY`): the next window's activation comes after this one's deactivation.
+const LEAVE_CHECK_DELAY: Duration = Duration::from_millis(150);
+
+/// A window lost the keyboard: once the next activation had its chance, the key monitor forgets its consumed keys
+/// when no agterm window holds the keyboard.
+fn check_keyboard_left(cx: &mut Context<WindowView>) {
+    cx.spawn(async move |_, cx| {
+        cx.background_executor().timer(LEAVE_CHECK_DELAY).await;
+        cx.update(|cx| {
+            if !crate::keymap_dispatch::holds_keyboard(cx.active_window()) {
+                crate::keymap_dispatch::keyboard_left();
+            }
+        });
+    })
+    .detach();
 }
 
 /// Opens the window of model window `id` with `app_id` as its Wayland app id / X11 class; its handle, `None` (logged)

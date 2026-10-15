@@ -67,6 +67,39 @@ fn a_native_key_is_its_physical_key_with_the_layouts_character() {
 }
 
 #[test]
+fn a_key_press_is_classified_for_the_status_glyph_as_the_gtk_build_does() {
+    use agterm_core::model::StatusKeystroke::{Interrupt, Other, Submit};
+    let classify = |text: &str| input::status_keystroke(&KeyStroke::new(&keystroke(text), &Source::Keystroke, false));
+    for (text, expected) in [
+        ("escape", Interrupt),
+        ("shift-escape", Interrupt),
+        ("ctrl-c", Interrupt),
+        ("ctrl-shift-c", Other),
+        ("enter", Submit),
+        ("shift-enter", Other),
+        ("alt-enter", Other),
+        ("a", Other),
+    ] {
+        assert_eq!(classify(text), expected, "{text}");
+    }
+    // the Russian layout's С key with Ctrl is a bare Ctrl-C; Dvorak's `j` on the physical C key is not
+    let native = |text: &str, unshifted: char| NativeKey {
+        keycode: 54,
+        modifiers: Modifiers {
+            control: true,
+            ..Modifiers::default()
+        },
+        unshifted: Some(unshifted),
+        text: text.into(),
+        ..NativeKey::default()
+    };
+    let at_c =
+        |key: NativeKey| input::status_keystroke(&KeyStroke::new(&keystroke("ctrl-c"), &Source::Native(key), false));
+    assert_eq!(at_c(native("с", 'с')), Interrupt);
+    assert_eq!(at_c(native("j", 'j')), Other);
+}
+
+#[test]
 fn without_a_native_key_the_key_is_read_off_a_us_keyboard() {
     let bang = KeyStroke::new(&keystroke("!"), &Source::Keystroke, false);
     assert_eq!(
