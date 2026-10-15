@@ -1100,7 +1100,10 @@ headers, rebuilt on `agterm-term` and current GPUI.
     default only raises that request), so no prompt here either. ⚠️ Residuals: `cursor-click-to-move = true` is not
     carried out (the C API has no prompt-click state; agterm's default is `false`); `focus-follows-mouse` and
     `selection-word-chars` are not wired (neither does the GTK build's apprt follow the mouse; word boundaries stay
-    Ghostty's defaults); the X11 autorepeat flag has no end-to-end test.
+    Ghostty's defaults); the X11 autorepeat flag has no end-to-end test. Gates on the tree merged with gpui-frontend
+    (Tasks 13 and 15): `cargo test --workspace` under Xvfb 3781 passed, 0 failed; the terminal, router and pointer
+    tests 20 times in a row, no failure; GTK conformance not needed (the core change only adds typed-model fields
+    the GTK build never reads: it takes ghostty_config's defaults text and file list only).
   - Later tasks build on: `keymap_dispatch::{register_window, unregister_window, keyboard_left}` and a window-root
     `capture_key_up` calling `keymap_dispatch::key_up` (Task 18/24/26), `Shared::set_owner`, `TerminalEvent::OpenUrl`
     → the link-open route (Task 18), the full OSC 52 dialog replacing `terminal/clipboard.rs`'s prompt (Task 21).
