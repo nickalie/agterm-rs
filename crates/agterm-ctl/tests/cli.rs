@@ -879,10 +879,12 @@ fn zmx_tree_and_present_send_their_args_and_print_the_sessions() -> TestResult {
     for (index, (args, expected, result, printed)) in cases.into_iter().enumerate() {
         let socket = dir.path().join(format!("{index}.sock"));
         let _server = scripted(&socket, expected, result)?;
+        let output = run_on(dir.path(), &socket, args)?;
         assert_eq!(
-            outcome(&run_on(dir.path(), &socket, args)?),
+            outcome(&output),
             (Some(0), printed, String::new()),
-            "{args:?}"
+            "{args:?}, killed by signal {:?}",
+            output.status.signal()
         );
     }
     Ok(())
