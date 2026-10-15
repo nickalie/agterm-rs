@@ -16,6 +16,10 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod lavapipe;
+
+pub use lavapipe::lavapipe_icd;
+
 /// How long any wait in these tests may take before it fails.
 pub const DEADLINE: Duration = Duration::from_secs(30);
 
@@ -180,11 +184,13 @@ impl Sandbox {
         wait_for_socket(socket)
     }
 
-    /// A private headless weston (with a seat GPUI needs); clients get its socket as `WAYLAND_DISPLAY`.
+    /// A private headless weston (with a seat GPUI needs, [`seated_weston`]); clients get its socket as
+    /// `WAYLAND_DISPLAY`.
     pub fn start_weston(&mut self) -> TestResult<PathBuf> {
+        let weston = seated_weston().ok_or(NO_SEATED_WESTON)?;
         let ini = self.path("weston.ini");
         std::fs::write(&ini, WESTON_CONFIG)?;
-        let mut command = self.command("weston");
+        let mut command = self.command(weston);
         command
             .args([
                 "--backend=headless",
@@ -524,29 +530,26 @@ pub fn mesa_egl_vendor() -> Option<String> {
         .map(|path| path.to_string_lossy().into_owned())
 }
 
-/// Mesa's lavapipe ICD: `AGTERM_LAVAPIPE_ICD`, a distribution's, or the unpacked one in the vendor dir (Task 17
-/// makes this the harness's rule).
-pub fn lavapipe_icd() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("AGTERM_LAVAPIPE_ICD") {
-        return Some(PathBuf::from(path)).filter(|path| path.is_file());
-    }
-    let system = ["/usr/share/vulkan/icd.d"]
-        .iter()
-        .find_map(|dir| first_match(Path::new(dir), |name| name.starts_with("lvp_icd")));
-    if system.is_some() {
-        return system;
-    }
-    let vendor = std::env::var_os("AGTERM_VENDOR")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache/agterm-rs/vendor")))?;
-    let mut found: Vec<PathBuf> = std::fs::read_dir(vendor)
-        .ok()?
-        .flatten()
-        .map(|entry| entry.path().join("lvp_icd.json"))
-        .filter(|path| path.is_file() && path.to_string_lossy().contains("lavapipe-"))
-        .collect();
-    found.sort();
-    found.pop()
+/// What a test lacking a seat-capable weston says when it skips.
+pub const NO_SEATED_WESTON: &str = "no weston with --fake-seat on PATH (weston 15.0 or later: scripts/build-weston.sh)";
+
+/// The first weston on the test process's PATH that takes `--fake-seat` (weston 15.0 and later): headless weston has
+/// a `wl_seat`, which GPUI panics without, only with it, and an older one exits on the option.
+pub fn seated_weston() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join("weston"))
+        .filter(|weston| weston.is_file())
+        .find(|weston| {
+            Command::new(weston)
+                .arg("--help")
+                .env_remove("WAYLAND_DISPLAY")
+                .env_remove("DISPLAY")
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+                .is_ok_and(|help| String::from_utf8_lossy(&help.stdout).contains("--fake-seat"))
+        })
 }
 
 /// Whether `program` is on the test process's PATH.

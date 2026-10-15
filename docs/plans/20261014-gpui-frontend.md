@@ -1316,18 +1316,78 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 - Modify: `conformance/tools/ghostty_probe.py` (GPUI first-frame line)
 - Create: `conformance/rust-gpui-passing.txt`
 
-- [ ] staged GPUI build runs under the harness's weston with lavapipe; isolation unchanged
-- [ ] ➕ (Task 1) the harness's weston gets `--fake-seat` for GPUI runs (GPUI panics without `wl_seat`); check the GTK
+- [x] staged GPUI build runs under the harness's weston with lavapipe; isolation unchanged
+- [x] ➕ (Task 1) the harness's weston gets `--fake-seat` for GPUI runs (GPUI panics without `wl_seat`); check the GTK
       ratchet stays green with it, or pass it for the GPUI frontend only
-- [ ] ➕ (Task 1) provide lavapipe: it is not installed on the user's machine (the spike unpacked the signed
+- [x] ➕ (Task 1) provide lavapipe: it is not installed on the user's machine (the spike unpacked the signed
       `vulkan-swrast` package into the vendor dir); pick a documented source per environment (distro package on CI,
       a verified unpack into `${AGTERM_VENDOR}` otherwise) and point `VK_DRIVER_FILES` at it; a missing lavapipe is a
       clear harness error, never a fallback to a hardware driver
-- [ ] first full run on GPUI; seed `rust-gpui-passing.txt` with `check_ratchet.py --add`
-- [ ] harness self-tests in `conformance/selftests` (`test_run_rust_linux`, `test_ghostty_probe`, `test_impls`) and
+- [x] first full run on GPUI; seed `rust-gpui-passing.txt` with `check_ratchet.py --add`
+- [x] harness self-tests in `conformance/selftests` (`test_run_rust_linux`, `test_ghostty_probe`, `test_impls`) and
       `test_docs.py` (capability table in rust-build.md vs `CAPABILITIES` in `base.py`) updated and green; both ratchets
       green
-- [ ] gates — must pass before Task 18
+- [x] gates — must pass before Task 18
+- ➕ also touched: `scripts/fetch-lavapipe.sh`, `scripts/lib/native.sh`, `build/pins.env` (`LAVAPIPE_*`),
+  `conformance/agterm_conformance/{plugin.py,impls/rust.py,impls/__init__.py}`, `conformance/selftests/
+  {test_fetch_lavapipe,test_plugin_options}.py`, `scripts/install-apparmor-profile.sh` (GPUI default path),
+  `.github/workflows/rust-linux.yml` (`conformance-gpui` job), README.md, conformance/README.md, rust-build.md
+- result (2026-10-15):
+  - **Frontend switch**: `stage.sh --frontend gpui` stages `bin/agterm-gpui`, `agtermctl`, `zmx` and the same `share/`
+    (no `lib/`: libghostty-vt is static, GPUI loads neither libghostty nor gtk4-layer-shell) into
+    `target/conformance-stage-gpui`; `run-rust-linux.sh --frontend gpui` builds the same workspace, stages it, runs
+    pytest with the new plugin option `--rust-frontend gpui` and holds `rust-gpui-passing.txt`, reporting into
+    `conformance/reports/rust-gpui-linux/`. Separate stage dir (not one stage holding both binaries), so the GTK probes'
+    default `target/conformance-stage/bin/agterm` never vanishes under a GPUI run; the AppArmor installer's GPUI default
+    follows it.
+  - **Seat and lavapipe for GPUI only**: `RustAdapter(frontend=gpui)` appends `--fake-seat` to its weston and makes
+    lavapipe the instance's only Vulkan driver (`VK_DRIVER_FILES` + `VK_ICD_FILENAMES`), `LIBGL_ALWAYS_SOFTWARE=1`
+    (wgpu's GL backend, as Task 12 found), Mesa's EGL vendor, and drops inherited `VK_*`, `WGPU_*`, `__NV_*`,
+    `__GLX_*`, `DRI_PRIME`, `MESA_LOADER_*`, `MESA_VK_DEVICE_SELECT`; it refuses a launch (before anything spawns)
+    without `CONFORMANCE_LAVAPIPE_ICD` or with a manifest that does not load `libvulkan_lvp`. The GTK frontend's
+    weston and environment are untouched, so its ratchet carries no new risk. A launched GPUI instance mapped only
+    `libvulkan_lvp.so` + Mesa's EGL/gallium (no NVIDIA library), checked through `/proc/<pid>/maps`.
+  - **lavapipe source**: `scripts/fetch-lavapipe.sh` — `AGTERM_LAVAPIPE_ICD`, else the distribution's
+    (`lvp_icd.<arch>.json`/`lvp_icd.json`; CI: Ubuntu's `mesa-vulkan-drivers`), else the pinned Arch package
+    `vulkan-swrast 1:26.2.4-1` (`LAVAPIPE_*` pins, sha256; its pacman signature checked good when pinned, Arch's mesa
+    packager's key) unpacked into `${AGTERM_VENDOR}/lavapipe-<key>/` with an absolute-path ICD manifest at the prefix
+    top (where Task 12's `tests/support` already looks); glibc 2.38 checked before download, every library checked by
+    `ldd` after unpack and on each later use (a host whose libLLVM moved on gets an error naming the library, never a
+    fallback). `--print-icd` resolves without fetching. The runner resolves it before taking the lock (exit 2 without
+    one) and hands it over as `CONFORMANCE_LAVAPIPE_ICD` (not `AGTERM_`-prefixed: the plugin scrubs those).
+  - **ghostty_probe.py**: `--frontend gpui` (default bin from the GPUI stage, lavapipe from the env or
+    `fetch-lavapipe.sh --print-icd`); Task 13's lines (`terminal surface created` / `terminal drew its first frame` /
+    `could not create the terminal surface` under target `agterm::surface`) are read as the GTK build's, with tests.
+  - **CI**: a `conformance-gpui` job (Ubuntu, `mesa-vulkan-drivers`) runs `run-rust-linux.sh --frontend gpui`.
+  - **Runs**: self-tests 763 pass; GTK full run 653 pass, 0 fail, 14 skip, ratchet holds (665 ids); GPUI first full
+    run 339 pass, 292 fail (262 failed + 30 setup errors waiting for a pane mount: no terminal before Task 13), 36 skip
+    (unsupported), 47 min, no instance root or process left; 339 ids seeded. A second full GPUI run against the seeded list gave the same 339/292/36 (47 min), ratchet holds.
+    Later tasks grow it with `check_ratchet.py --report conformance/reports/rust-gpui-linux/nodeids.jsonl --list
+    conformance/rust-gpui-passing.txt --add` after their GPUI run.
+  - **Ratchet-only mode** (2026-10-15): `run-rust-linux.sh --ratchet-only [--also SELECTOR]... [--also-k EXPR]...`
+    runs a frontend's ratchet ids plus a task's extras and is judged like a full run (every listed id must pass;
+    `--add` adds only ids that ran and passed; a `partial` report neither breaks nor removes the ids it left out).
+    A full run is still required for the GPUI switch (Task 34) and for harness or broad shared-crate changes. Self-tests
+    803 pass. On the tree with Tasks 13–16 merged: GPUI ratchet-only 339/339 pass, suite time 27 s (vs 47 min for a full run),
+    638 s wall time including a fresh release build. A ratchet-only run with the terminal tests
+    (`--also` test_session_text, test_surface, test_font_theme, test_events; `--also-k "clipboard or terminfo or font
+    or type_text or quick_type or title or selectall or paste or cwd or notify"`) gave 339 pass, 67 fail, 17 skip,
+    620 s, and no new ids: 58 of the failures wait for a mounted `left` pane, which the GPUI window gets with Task 18;
+    7 are `unknown theme` (no bundled themes in the GPUI stage). Growing the ratchet after Tasks 13–16 waits for the
+    first full GPUI run after Task 18. That run also catches unrelated ids that started passing as a side effect.
+  - Deferred: the CLAUDE.md note on the GPUI conformance run (Task 36); the GPUI ghostty-probe CI step comes with
+    Task 13's terminal; HTML/AppArmor for the GPUI stage with Task 32.
+  - ⚠️ review round 1: `--fake-seat` is new in weston 15.0; Ubuntu 24.04's weston 13 exits on it (and has no seat
+    without it), so CI could launch no GPUI instance, nor could Task 12's process tests. `scripts/build-weston.sh`
+    builds the pinned weston 15.0.1 (`WESTON_*`; headless + GL + desktop shell only; wayland-protocols 1.49 and
+    libdisplay-info 0.3.0 as pinned subprojects, no download during the build) into the vendored prefix, checked in
+    an `ubuntu:24.04` container (rootless podman: builds, takes `--fake-seat`, the harness's real-weston GPUI test
+    passes with it). CI puts its `bin/` first on PATH in `rust-linux` and `conformance-gpui`; `run-rust-linux.sh
+    --frontend gpui` takes it when the weston on PATH lacks the option, the adapter refuses such a weston naming the
+    script, and `tests/support` uses the first weston on PATH that takes it. Also: a lavapipe manifest whose driver is
+    missing is refused (harness) or skipped (script, system manifests); `tests/support/lavapipe.rs` asks
+    `fetch-lavapipe.sh --print-icd`, so the process tests and the external-texture test share the harness's rule;
+    `ghostty_probe.py` finds lavapipe before the harness import scrubs `AGTERM_*` and reports the script's reason.
 
 ### Task 18: Deck, panes, splits, pane lead, mute
 

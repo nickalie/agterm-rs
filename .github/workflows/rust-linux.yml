@@ -31,7 +31,9 @@ jobs:
             pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
             meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
             curl xz-utils patch ncurses-bin fish fontconfig fonts-dejavu-core \
-            dbus-daemon weston xvfb libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers
+            dbus-daemon weston xvfb libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers \
+            g++ libpixman-1-dev libinput-dev libevdev-dev libudev-dev libdrm-dev libegl-dev libgles-dev libgbm-dev \
+            libcairo2-dev libpango1.0-dev libpng-dev hwdata
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -67,6 +69,11 @@ jobs:
       # built here so the vendor cache this job saves holds it; the conformance job only restores that cache
       - name: zmx prefix
         run: scripts/build-zmx.sh
+      # GPUI needs a seat on its headless weston, which only --fake-seat gives (weston 15.0+; Ubuntu 24.04 ships 13):
+      # the pinned weston, first on PATH, where agterm-gpui's process tests look for one taking it. Built here so the
+      # vendor cache this job saves holds it for conformance-gpui.
+      - name: weston prefix (--fake-seat)
+        run: echo "$(scripts/build-weston.sh)/bin" >> "$GITHUB_PATH"
       - name: format
         run: cargo fmt --all --check
       # before clippy: a dependency turning on tracing's `log` would put dozens of functions over the complexity limit
@@ -415,4 +422,72 @@ jobs:
         with:
           name: rust-linux-conformance-fish
           path: conformance/reports/rust-linux-fish/
+          if-no-files-found: warn
+
+  # The GPUI frontend's build under the suite, held by its own ratchet (conformance/rust-gpui-passing.txt) while both
+  # frontends coexist. It renders on lavapipe only: scripts/fetch-lavapipe.sh finds the distribution's
+  # (mesa-vulkan-drivers) and the harness makes it the only Vulkan driver; its weston gets --fake-seat, which takes the
+  # pinned weston 15 (scripts/build-weston.sh; Ubuntu's 13 has no such option), first on PATH.
+  conformance-gpui:
+    needs: rust-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+      - name: system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
+            meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
+            curl xz-utils patch ncurses-bin fontconfig fonts-dejavu-core \
+            weston dbus-daemon libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers \
+            g++ libpixman-1-dev libinput-dev libevdev-dev libudev-dev libdrm-dev libegl-dev libgles-dev libgbm-dev \
+            libcairo2-dev libpango1.0-dev libpng-dev hwdata
+      - name: rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/agterm-rs/vendor
+          key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
+      # the stage's terminfo, themes and shell integration still come from the libghostty prefix
+      - name: libghostty prefix
+        run: scripts/build-ghostty.sh
+      - name: libghostty-vt prefix
+        run: scripts/build-ghostty-vt.sh
+      # the fonts Ghostty embeds, which agterm-gpui (built with the workspace) embeds too
+      - name: terminal fonts
+        run: scripts/fetch-fonts.sh
+      - name: gtk4-layer-shell prefix
+        run: scripts/build-layer-shell.sh
+      - name: zmx prefix
+        run: scripts/build-zmx.sh
+      # restored from the cache the rust-linux job saved, else built here
+      - name: weston prefix (--fake-seat)
+        run: echo "$(scripts/build-weston.sh)/bin" >> "$GITHUB_PATH"
+      - name: lavapipe (the distribution's)
+        run: scripts/fetch-lavapipe.sh
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: install the suite
+        run: python -m pip install -e conformance
+      # Exits with the ratchet's status; check_ratchet.py lists the newly green ids in the job summary.
+      - name: full suite on the GPUI build (protocol, cli, behaviors)
+        run: conformance/tools/run-rust-linux.sh --frontend gpui
+      - name: report into the summary
+        if: always()
+        shell: bash
+        run: |
+          report=conformance/reports/rust-gpui-linux/report.md
+          if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: upload the report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-gpui-linux-conformance
+          path: conformance/reports/rust-gpui-linux/
           if-no-files-found: warn

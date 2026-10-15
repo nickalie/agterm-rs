@@ -21,6 +21,10 @@
 mod buffers;
 mod cases;
 mod gl;
+#[path = "../support/lavapipe.rs"]
+mod lavapipe;
+
+use lavapipe::lavapipe_icd;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
@@ -71,7 +75,7 @@ fn parent(args: &[String]) -> ExitCode {
             println!("gpu lavapipe: FAILED (no lavapipe ICD, and {REQUIRE_ENV} is set)");
             failed.push("lavapipe");
         }
-        None => println!("gpu lavapipe: skipped (no lavapipe ICD; AGTERM_LAVAPIPE_ICD names one)"),
+        None => println!("gpu lavapipe: skipped (no lavapipe ICD: scripts/fetch-lavapipe.sh)"),
     }
     match mesa_gpu() {
         Some(gpu) => gpus.push(gpu),
@@ -91,29 +95,6 @@ fn parent(args: &[String]) -> ExitCode {
         println!("test result: FAILED on {}", failed.join(", "));
         ExitCode::FAILURE
     }
-}
-
-/// Mesa's lavapipe ICD: `AGTERM_LAVAPIPE_ICD`, a distribution's, or the one unpacked into the vendor dir.
-fn lavapipe_icd() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("AGTERM_LAVAPIPE_ICD") {
-        return Some(PathBuf::from(path)).filter(|path| path.is_file());
-    }
-    let system = icd_named(|name| name.starts_with("lvp_icd"));
-    if system.is_some() {
-        return system;
-    }
-    let vendor = std::env::var_os("AGTERM_VENDOR")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache/agterm-rs/vendor")))?;
-    let mut found: Vec<PathBuf> = std::fs::read_dir(vendor)
-        .ok()?
-        .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with("lavapipe-"))
-        .map(|entry| entry.path().join("lvp_icd.json"))
-        .filter(|path| path.is_file())
-        .collect();
-    found.sort();
-    found.pop()
 }
 
 /// The system ICD manifest whose file name `wanted` accepts.
