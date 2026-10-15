@@ -17,8 +17,9 @@ use agterm_core::link_policy::ClickOrigin;
 use agterm_core::persist::settings::LinkOpenMode;
 use agterm_term::{GridPoint, Pane, PaneCommand, PaneConfig, SelectionText};
 use gpui_kit::{
-    AppContext as _, ClipboardItem, Entity, EntityInputHandler as _, Keystroke, Modifiers, MouseButton, Pixels, Point,
-    ScrollDelta, ScrollWheelEvent, TestAppContext, VisualTestContext, Window, point, px, size,
+    AppContext as _, ClipboardItem, Context, Entity, EntityInputHandler as _, InteractiveElement as _, IntoElement,
+    Keystroke, Modifiers, MouseButton, ParentElement as _, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent,
+    Styled as _, TestAppContext, VisualTestContext, Window, div, point, px, size,
 };
 
 use super::input::{self, KeyStroke, NativeKey, Source};
@@ -466,6 +467,23 @@ fn drags_and_double_and_triple_clicks_select_and_copy_to_primary(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
+fn a_double_click_selects_a_whole_url_only_while_urls_are_links(cx: &mut TestAppContext) {
+    let script = "printf 'ready\\r\\nsee https://example.com/p\\r\\n'; exec sleep 30";
+    let mut f = fixture(cx, script, config("link-url = false\n"));
+    f.wait_painted("example.com");
+    // `link-url = false`: the word under the pointer, as Ghostty's double click finds no link
+    f.click(14, 1, Modifiers::default());
+    f.click(14, 1, Modifiers::default());
+    assert_eq!(f.selection().as_deref(), Some("//example.com/p"));
+    f.terminal
+        .update(f.cx, |terminal, cx| terminal.set_config(config(""), cx));
+    std::thread::sleep(Duration::from_millis(600));
+    f.click(14, 1, Modifiers::default());
+    f.click(14, 1, Modifiers::default());
+    assert_eq!(f.selection().as_deref(), Some("https://example.com/p"));
+}
+
+#[gpui_kit::test]
 fn a_program_with_the_mouse_gets_clicks_and_shift_keeps_the_mouse_for_selecting(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf '\\033[?1000hready\\r\\nhello\\r\\n'; exec cat -v";
     let mut f = fixture(cx, script, config(""));
@@ -798,6 +816,13 @@ fn middle_click_follows_its_action_and_copy_on_select(cx: &mut TestAppContext) {
         .update(f.cx, |terminal, cx| terminal.set_config(config(""), cx));
     middle(&mut f);
     f.wait_painted("clipboard-textprimary-text");
+    // the first click, under `ignore`, pasted nothing
+    let painted = f.painted();
+    assert_eq!(
+        painted.lines().nth(1).map(str::trim_end),
+        Some("clipboard-textprimary-text"),
+        "{painted}"
+    );
 }
 
 #[gpui_kit::test]
@@ -880,6 +905,154 @@ fn an_all_binding_changes_every_terminals_key_tables(cx: &mut TestAppContext) {
     assert_eq!(tables(&other, &mut f), ["vim"], "the other terminal's keyboard too");
 }
 
+/// A terminal with `config` running `script`, for a window of its own making.
+fn new_terminal(
+    cx: &mut TestAppContext,
+    token: &str,
+    script: &str,
+    dir: &Path,
+    config: TerminalConfig,
+) -> Entity<Terminal> {
+    let command = command(script, dir);
+    let spawn: super::Spawn = Box::new(move |config: PaneConfig| Pane::spawn(&command, &config));
+    let spec = TerminalSpec {
+        token: token.into(),
+        live: false,
+        font_size: None,
+    };
+    cx.new(|cx| Terminal::new(spec, config, spawn, cx))
+}
+
+/// Runs the app until `view` paints `needle` (the pane's threads run meanwhile), or fails; what it painted.
+fn wait_view(view: &Entity<TerminalView>, needle: &str, cx: &mut VisualTestContext) -> String {
+    let deadline = Instant::now() + DEADLINE;
+    loop {
+        cx.run_until_parked();
+        let text = view.read_with(cx, |view, _| {
+            view.painted().map(|frame| frame.lines().join("\n")).unwrap_or_default()
+        });
+        if text.contains(needle) {
+            return text;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {needle}:\n{text}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Two terminals' owner views side by side in one window.
+struct Pair {
+    left: Entity<TerminalView>,
+    right: Entity<TerminalView>,
+}
+
+impl Render for Pair {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .flex()
+            .child(div().w(px(300.)).h(px(200.)).child(self.left.clone()))
+            .child(div().w(px(300.)).h(px(200.)).child(self.right.clone()))
+    }
+}
+
+#[gpui_kit::test]
+fn an_all_end_key_sequence_flushes_each_terminals_keys_before_its_chained_action(cx: &mut TestAppContext) {
+    let binds = "keybind = a>b=ignore\nkeybind = all:ctrl+t=end_key_sequence\nkeybind = chain=text:X\n";
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    let mut terminal = |token: &str| {
+        let script = format!("stty -echo -icanon; printf '{token}\\r\\n'; exec cat");
+        new_terminal(cx, token, &script, dir.path(), config(binds))
+    };
+    let (first, second) = (terminal("first"), terminal("second"));
+    let (pair, cx) = cx.add_window_view(|_, cx| Pair {
+        left: cx.new(|cx| TerminalView::new(&first, ViewRole::Owner, cx)),
+        right: cx.new(|cx| TerminalView::new(&second, ViewRole::Owner, cx)),
+    });
+    cx.simulate_scale_factor_change(1.0);
+    cx.simulate_resize(size(px(640.), px(480.)));
+    let (left, right) = pair.read_with(cx, |pair, _| (pair.left.clone(), pair.right.clone()));
+    wait_view(&left, "first", cx);
+    wait_view(&right, "second", cx);
+    let press = |view: &Entity<TerminalView>, key: &str, cx: &mut VisualTestContext| {
+        let view = view.clone();
+        let keystroke = keystroke(key);
+        cx.update(|window, cx| {
+            let focus = view.read(cx).focus.clone();
+            window.focus(&focus, cx);
+            window.dispatch_keystroke(keystroke.clone(), cx);
+        });
+        cx.simulate_event(gpui_kit::KeyUpEvent { keystroke });
+        cx.run_until_parked();
+    };
+    // `a` starts a sequence in the right terminal and waits there
+    press(&right, "a", cx);
+    // Ctrl+T in the left one ends every sequence, then types X everywhere: the held `a` comes first, as in Ghostty
+    press(&left, "ctrl-t", cx);
+    wait_view(&left, "X", cx);
+    let text = wait_view(&right, "X", cx);
+    assert!(text.contains("aX"), "{text}");
+}
+
+/// A terminal with an opaque panel drawn over its top left corner, as an overlay covers it.
+struct Covered {
+    view: Entity<TerminalView>,
+}
+
+impl Render for Covered {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .relative()
+            .child(self.view.clone())
+            .child(div().absolute().top_0().left_0().w(px(200.)).h(px(100.)).occlude())
+    }
+}
+
+#[gpui_kit::test]
+fn focus_follows_mouse_asks_nothing_through_an_overlay(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    let terminal = new_terminal(
+        cx,
+        "covered",
+        "printf 'ready'; exec sleep 30",
+        dir.path(),
+        config("focus-follows-mouse = true\n"),
+    );
+    let events: Events = Rc::default();
+    let seen = Rc::clone(&events);
+    cx.update(|cx| {
+        cx.subscribe(&terminal, move |_, event: &TerminalEvent, _| {
+            seen.borrow_mut().push(event.clone());
+        })
+        .detach();
+    });
+    let (covered, cx) = cx.add_window_view(|_, cx| Covered {
+        view: cx.new(|cx| TerminalView::new(&terminal, ViewRole::Owner, cx)),
+    });
+    cx.simulate_scale_factor_change(1.0);
+    cx.simulate_resize(size(px(640.), px(480.)));
+    let view = covered.read_with(cx, |covered, _| covered.view.clone());
+    wait_view(&view, "ready", cx);
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    let asked = || {
+        events
+            .borrow()
+            .iter()
+            .filter(|event| **event == TerminalEvent::FocusFollowsMouse)
+            .count()
+    };
+    // under the overlay, over the terminal's grid
+    cx.simulate_mouse_move(point(px(50.), px(50.)), None, Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(asked(), 0, "the overlay holds the pointer");
+    cx.simulate_mouse_move(point(px(300.), px(300.)), None, Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(asked(), 1, "the terminal itself asks");
+}
+
 #[gpui_kit::test]
 fn adjacent_hyperlinks_stay_apart_and_a_short_repeat_interval_counts_no_double_click(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\n\\033]8;;https://a.test\\033\\\\aaa\\033]8;;https://b.test\\033\\\\bbb\\033]8;;\\033\\\\ x y'; \
@@ -947,6 +1120,10 @@ fn the_pointer_asks_for_focus_under_focus_follows_mouse(cx: &mut TestAppContext)
     f.cx.run_until_parked();
     assert_eq!(asked(&f), 0);
     f.activate();
+    // a button held down (a drag begun in another view) asks for nothing
+    f.cx.simulate_mouse_move(Fixture::at(2, 1), Some(MouseButton::Left), Modifiers::default());
+    f.cx.run_until_parked();
+    assert_eq!(asked(&f), 0);
     f.cx.simulate_mouse_move(Fixture::at(3, 1), None, Modifiers::default());
     f.cx.simulate_mouse_move(Fixture::at(4, 1), None, Modifiers::default());
     f.cx.run_until_parked();

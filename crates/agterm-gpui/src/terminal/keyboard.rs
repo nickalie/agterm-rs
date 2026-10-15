@@ -137,12 +137,13 @@ pub(super) struct KeyState {
 
 /// The binds' performer: actions on this terminal ([`TerminalSurface::perform`]), `all:` actions on every terminal,
 /// the sequence's held keys sent on `end_key_sequence`. An `all:` action of the keyboard itself (the key tables,
-/// `end_key_sequence`) is collected in `broadcast`, for the other terminals' keyboards once the key is handled.
+/// `end_key_sequence`) goes to the other terminals' keyboards right away, so a chained action after it reaches each
+/// terminal after the keys it flushed, as Ghostty runs each action on every surface in turn.
 struct KeyPerformer<'a> {
     surface: &'a TerminalSurface,
     pane: &'a Pane,
     queued: &'a mut Vec<KeyStroke>,
-    broadcast: Vec<Action>,
+    app: &'a mut App,
 }
 
 /// Whether `action` belongs to a terminal's keyboard (`Keyboard::apply`), not to the terminal.
@@ -163,12 +164,14 @@ impl Performer for KeyPerformer<'_> {
     }
 
     fn perform_all(&mut self, action: &Action) {
+        let this = self.surface.shared().key();
         if keyboard_action(action) {
-            // this keyboard already applied it (`Keyboard::fire`); the others take it after the key
-            self.broadcast.push(action.clone());
+            // this keyboard already applied it (`Keyboard::fire`)
+            for view in other_views(this) {
+                let _ = view.update(self.app, |view, cx| view.apply_broadcast(action, cx));
+            }
             return;
         }
-        let this = self.surface.shared().key();
         let _ = self.surface.perform(action);
         for shared in all_terminals().into_iter().filter(|shared| shared.key() != this) {
             let _ = TerminalSurface::new(shared).perform(action);
@@ -216,10 +219,9 @@ impl TerminalView {
             surface: &surface,
             pane: &pane,
             queued,
-            broadcast: Vec::new(),
+            app: cx,
         };
         let result = keyboard.handle(&config.keybinds, &stroke.input().binds_event(), &mut performer);
-        let broadcast = std::mem::take(&mut performer.broadcast);
         match result.queued {
             Queued::Keep => {}
             Queued::Flush => send(&self.shared, &pane, queued.drain(..)),
@@ -230,28 +232,19 @@ impl TerminalView {
             KeyEffect::Queue => queued.push(stroke.clone()),
             KeyEffect::Consumed | KeyEffect::Closed | KeyEffect::Ignored => {}
         }
-        for view in other_views(self.shared.key()) {
-            let _ = view.update(cx, |view, cx| view.apply_broadcast(&broadcast, cx));
-        }
         cx.notify();
         true
     }
 
     /// Another terminal's `all:` binding changed every keyboard: the key tables, or `end_key_sequence` (this
     /// keyboard's held keys sent).
-    fn apply_broadcast(&mut self, actions: &[Action], cx: &mut Context<Self>) {
-        if actions.is_empty() {
-            return;
-        }
+    fn apply_broadcast(&mut self, action: &Action, cx: &mut Context<Self>) {
         let config = self.shared.config();
-        let pane = self.shared.pane().filter(|_| self.shared.is_realized());
-        for action in actions {
-            if self.keys.keyboard.apply(&config.keybinds, action).is_some()
-                && *action == Action::EndKeySequence
-                && let Some(pane) = pane.as_ref()
-            {
-                send(&self.shared, pane, self.keys.queued.drain(..));
-            }
+        if self.keys.keyboard.apply(&config.keybinds, action).is_some()
+            && *action == Action::EndKeySequence
+            && let Some(pane) = self.shared.pane().filter(|_| self.shared.is_realized())
+        {
+            send(&self.shared, &pane, self.keys.queued.drain(..));
         }
         cx.notify();
     }
@@ -273,7 +266,7 @@ impl TerminalView {
             surface: &surface,
             pane: &pane,
             queued,
-            broadcast: Vec::new(),
+            app: cx,
         };
         let result = keyboard.handle(&config.keybinds, &stroke.input().binds_event(), &mut performer);
         if result.effect == KeyEffect::Encode {

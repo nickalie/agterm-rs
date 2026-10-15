@@ -192,23 +192,14 @@ impl Terminal {
         self.install(None)
     }
 
-    /// Select the word under `at` (Ghostty's word boundaries); `false`, with the selection unchanged, when there is
-    /// no word there.
+    /// Select the word under `at`; `false`, with the selection unchanged, when there is no word there. `boundaries`
+    /// (Unicode scalar values, Ghostty's `selection-word-chars`) replace Ghostty's default word boundaries; `None`
+    /// keeps the defaults.
     ///
     /// # Errors
     ///
     /// [`Error::InvalidValue`] for a point outside its space.
-    pub fn select_word(&mut self, at: Point) -> Result<bool, Error> {
-        self.select_word_with(at, None)
-    }
-
-    /// [`Terminal::select_word`] with `boundaries` (Unicode scalar values, Ghostty's `selection-word-chars`) in place
-    /// of Ghostty's default word boundaries; `None` keeps the defaults.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::InvalidValue`] for a point outside its space.
-    pub fn select_word_with(&mut self, at: Point, boundaries: Option<&[u32]>) -> Result<bool, Error> {
+    pub fn select_word(&mut self, at: Point, boundaries: Option<&[u32]>) -> Result<bool, Error> {
         let (codepoints, len) = boundaries.map_or((std::ptr::null(), 0), |list| (list.as_ptr(), list.len()));
         let options = ffi::GhosttyTerminalSelectWordOptions {
             size: std::mem::size_of::<ffi::GhosttyTerminalSelectWordOptions>(),
@@ -377,14 +368,14 @@ mod tests {
         let mut terminal = Terminal::new(20, 3).unwrap();
         terminal.vt_write(b"  hello world  \r\nnext");
         let viewport = |x, y| Point::new(PointTag::Viewport, x, y);
-        assert!(terminal.select_word(viewport(4, 0)).unwrap());
+        assert!(terminal.select_word(viewport(4, 0), None).unwrap());
         let word = terminal.selection(PointTag::Viewport).unwrap();
         assert_eq!((word.start.x, word.end.x), (2, 6));
         assert!(terminal.select_line(viewport(9, 0)).unwrap());
         let line = terminal.selection(PointTag::Viewport).unwrap();
         assert_eq!((line.start.x, line.end.x), (2, 12));
         // a blank row has no word and no line: the selection stays
-        assert!(!terminal.select_word(viewport(0, 2)).unwrap());
+        assert!(!terminal.select_word(viewport(0, 2), None).unwrap());
         assert!(!terminal.select_line(viewport(0, 2)).unwrap());
         assert_eq!(terminal.selection(PointTag::Viewport), Some(line));
         assert!(terminal.select_all().unwrap());

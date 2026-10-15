@@ -72,9 +72,11 @@ impl TerminalView {
             }
         });
         let target = view.downgrade();
+        let over = hitbox.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
             if phase == DispatchPhase::Bubble {
-                let _ = target.update(cx, |view, cx| view.mouse_move(event, bounds, window, cx));
+                let hovered = over.is_hovered(window);
+                let _ = target.update(cx, |view, cx| view.mouse_move(event, bounds, hovered, window, cx));
             }
         });
         let target = view.downgrade();
@@ -299,7 +301,7 @@ impl TerminalView {
         match index {
             0 => self.left_press(pane, (x, y)),
             1 => self.middle_press(pane, cx),
-            _ => self.right_press(pane, (x, y), cx),
+            _ => self.right_press(pane, (x, y)),
         }
     }
 
@@ -326,8 +328,8 @@ impl TerminalView {
         let Ok(gesture) = gesture else {
             return;
         };
-        // a double click on a URL selects the whole URL, not the word
-        if gesture.click_count == 2 {
+        // a double click on a URL selects the whole URL, not the word (no URL is a link under `link-url = false`)
+        if gesture.click_count == 2 && self.link_url() {
             let at = pane.cell_at(x, y);
             let url = self.painted.as_ref().and_then(|frame| {
                 let row = u16::try_from(at.y).ok()?;
@@ -366,7 +368,7 @@ impl TerminalView {
     /// `right-click-action` (Ghostty's `mouseButtonCallback`): `copy` copies the selection (plain and HTML) to the
     /// clipboard and drops it, `paste` drops the selection and pastes the clipboard, `copy-or-paste` copies with a
     /// selection and pastes without one, `context-menu` selects what is under the pointer, `ignore` does nothing.
-    fn right_press(&self, pane: &Pane, (x, y): (f32, f32), cx: &mut Context<Self>) {
+    fn right_press(&self, pane: &Pane, (x, y): (f32, f32)) {
         let has_selection = pane.selection().is_some();
         let copy = |view: &Self| {
             let _ = view.perform(&Action::CopyToClipboard(CopyFormat::Mixed));
@@ -377,7 +379,7 @@ impl TerminalView {
         };
         match self.shared.config().mouse.right_click_action {
             RightClickAction::Ignore => {}
-            RightClickAction::ContextMenu => self.context_menu_select(pane, (x, y), cx),
+            RightClickAction::ContextMenu => self.context_menu_select(pane, (x, y)),
             RightClickAction::Copy => {
                 if has_selection {
                     copy(self);
@@ -395,7 +397,7 @@ impl TerminalView {
 
     /// `right-click-action = context-menu`: the word (or link) under the pointer selected and copied per
     /// `copy-on-select`, unless the selection holds it.
-    fn context_menu_select(&self, pane: &Pane, (x, y): (f32, f32), _cx: &mut Context<Self>) {
+    fn context_menu_select(&self, pane: &Pane, (x, y): (f32, f32)) {
         let at = pane.cell_at(x, y);
         let Some(frame) = self.painted.as_ref() else {
             return;
@@ -485,17 +487,19 @@ impl TerminalView {
         true
     }
 
+    /// The pointer moved anywhere in the window; `hovered`: over this view's grid, not under anything drawn on top.
     pub(super) fn mouse_move(
         &mut self,
         event: &MouseMoveEvent,
         bounds: Bounds<Pixels>,
+        hovered: bool,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
         let position = self.surface_position(event.position, bounds);
         self.pointer.last = Some(position);
         self.pointer.mods = mods(&event.modifiers);
-        self.follow_focus(bounds.contains(&event.position), window, cx);
+        self.follow_focus(hovered, event.pressed_button.is_none(), window, cx);
         let Some(pane) = self.live_pane() else {
             return;
         };
@@ -519,18 +523,19 @@ impl TerminalView {
         }
     }
 
-    /// `focus-follows-mouse` (Ghostty's `mouseMoved`): the pointer over this view, which does not hold the keyboard,
-    /// in the active window, with no button held, asks the frontend for focus once
+    /// `focus-follows-mouse` (Ghostty's `mouseMoved`): the pointer over this view (`hovered`: not under an overlay),
+    /// which does not hold the keyboard, in the active window, with no button held anywhere (`buttons_up`: a drag
+    /// begun in another view does not move focus), asks the frontend for focus once
     /// ([`TerminalEvent::FocusFollowsMouse`]); leaving the view lets it ask again.
-    fn follow_focus(&mut self, inside: bool, window: &Window, cx: &mut Context<Self>) {
-        if !inside {
+    fn follow_focus(&mut self, hovered: bool, buttons_up: bool, window: &Window, cx: &mut Context<Self>) {
+        if !hovered {
             self.pointer.focus_asked = false;
             return;
         }
         let wanted = self.shared.config().mouse.focus_follows_mouse
             && window.is_window_active()
             && !self.focus.is_focused(window)
-            && !self.pointer.held.iter().any(|held| *held);
+            && buttons_up;
         if wanted && !std::mem::replace(&mut self.pointer.focus_asked, true) {
             self.terminal
                 .update(cx, |_, cx| cx.emit(TerminalEvent::FocusFollowsMouse));

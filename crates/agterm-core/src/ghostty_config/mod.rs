@@ -20,10 +20,10 @@
 //! - count: keys whose type has a `parseCLI` agterm does not port ([`validate::Kind::Opaque`]: `font-style*`,
 //!   `font-variation*`, `font-codepoint-map`, `clipboard-codepoint-map`, `adjust-*`, `command`, `initial-command`,
 //!   `env`, `input`, `working-directory`, `quick-terminal-size`, `background-blur`, `mouse-scroll-multiplier`,
-//!   `selection-word-chars`, `macos-icon-screen-color`, `command-palette-entry`, `key-remap`) take any value: a
-//!   malformed one counts 0 here, 1 in libghostty (a bare key still counts when the type needs a value). `keybind` is
-//!   ported ([`binds`]) and counts as libghostty counts it (a `chain=` with nothing before it to extend counts when
-//!   the line is applied, [`GhosttyConfig::apply`]);
+//!   `macos-icon-screen-color`, `command-palette-entry`, `key-remap`) take any value: a malformed one counts 0 here,
+//!   1 in libghostty (a bare key still counts when the type needs a value). `keybind` is ported ([`binds`]) and
+//!   counts as libghostty counts it (a `chain=` with nothing before it to extend counts when the line is applied,
+//!   [`GhosttyConfig::apply`]);
 //! - message only: an include, theme or path that cannot be read for a reason other than its absence counts once as
 //!   in libghostty, its I/O error named after the closest Zig error;
 //! - value only: a relative path set by a theme file stays relative (libghostty makes it absolute against the first

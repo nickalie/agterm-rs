@@ -278,7 +278,12 @@ impl Router {
             if armed || engine.is_repeating() {
                 self.reset();
             }
-            return if armed { Press::Consumed } else { Press::Passed };
+            if !armed {
+                return Press::Passed;
+            }
+            // the cancelling press is the keymap's: its autorepeats and its release stay off the terminal
+            self.consumed.insert(stroke.identity);
+            return Press::Consumed;
         }
         // a bare modifier is the next chord being typed: the leader keeps waiting
         let Some(chord) = chord else {

@@ -109,7 +109,7 @@ impl Pane {
     /// [`PaneError::Terminal`] for a point outside its space.
     pub fn select_word(&self, at: GridPoint) -> Result<bool, PaneError> {
         let boundaries = lock(&self.shared().vt).word_boundaries.clone();
-        self.change_selection(|terminal| terminal.select_word_with(at.engine(), boundaries.as_deref()))
+        self.change_selection(|terminal| terminal.select_word(at.engine(), boundaries.as_deref()))
     }
 
     /// The word boundaries of word selections (Ghostty's `selection-word-chars`: the characters, U+0000 always among

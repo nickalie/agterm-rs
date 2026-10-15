@@ -153,7 +153,16 @@ fn escape_cancels_an_armed_leader_and_is_consumed_only_then() {
     assert!(press(&mut router, "ctrl-a", now));
     release(&mut router, "ctrl-a", now);
     assert!(press(&mut router, "escape", now));
+    assert!(press(&mut router, "escape", now), "its autorepeat is the keymap's too");
+    assert!(
+        release(&mut router, "escape", now),
+        "the keymap owns the release of the cancelling press"
+    );
     assert!(!press(&mut router, "g", now));
+    assert!(
+        !press(&mut router, "escape", now),
+        "a fresh Escape is the terminal's again"
+    );
     assert!(router.fired.is_empty());
 }
 

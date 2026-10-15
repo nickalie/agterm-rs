@@ -184,7 +184,7 @@ impl Pane {
             return Ok(Gesture::default());
         };
         let selection = gesture
-            .apply_with(terminal, &input, word_boundaries.as_deref())
+            .apply(terminal, &input, word_boundaries.as_deref())
             .map_err(PaneError::terminal)?;
         let state = gesture.state(terminal);
         let had = terminal.selection(vt::PointTag::Screen).is_some();

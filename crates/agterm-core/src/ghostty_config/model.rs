@@ -657,15 +657,8 @@ impl Selection {
             "background" => self.background = value.and_then(|value| parse_terminal_color(value).ok()),
             "clear-on-typing" => self.clear_on_typing = bool_or(value, true),
             "clear-on-copy" => self.clear_on_copy = bool_or(value, false),
-            "word-chars" => match value {
-                // a value that does not decode is refused, as `parseCLI` refuses it
-                Some(value) => {
-                    if let Some(chars) = validate::decode_codepoints(value) {
-                        self.word_chars = Some(chars);
-                    }
-                }
-                None => self.word_chars = None,
-            },
+            // an accepted value decodes (`Kind::SelectionWordChars`)
+            "word-chars" => self.word_chars = value.and_then(validate::decode_codepoints),
             _ => return false,
         }
         true
@@ -742,7 +735,11 @@ impl Mouse {
             "right-click-action" => self.right_click_action = enum_or(value, RightClickAction::ContextMenu),
             "middle-click-action" => self.middle_click_action = enum_or(value, MiddleClickAction::PrimaryPaste),
             "click-repeat-interval" => {
-                self.click_repeat_interval = value.and_then(|value| value.parse().ok()).unwrap_or(0);
+                // Zig's base-0 integer, as `Kind::Int` checks it: `0x`/`0o`/`0b` prefixes and `_` separators
+                self.click_repeat_interval = value
+                    .and_then(|value| validate::parse_int(value, 0, false, 32).ok())
+                    .and_then(|number| u32::try_from(number).ok())
+                    .unwrap_or(0);
             }
             "focus-follows-mouse" => self.focus_follows_mouse = bool_or(value, false),
             _ => return false,

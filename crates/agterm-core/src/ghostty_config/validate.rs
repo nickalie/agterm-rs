@@ -50,6 +50,8 @@ pub enum Kind {
     RepeatableString,
     /// `Keybinds`: a `keybind` line ([`super::binds::check`]).
     Keybind,
+    /// `SelectionWordChars`: a Zig string literal's characters ([`decode_codepoints`]).
+    SelectionWordChars,
     /// A type with a `parseCLI` agterm does not port: every value is accepted, a bare key too unless `needs_value`.
     Opaque { needs_value: bool },
     /// A type whose `parseCLI` refuses every value (`error.NotImplemented`).
@@ -212,6 +214,7 @@ fn check_value(kind: Kind, value: &str) -> Result<(), ValueError> {
         Kind::Palette => parse_palette_entry(value).map(drop),
         Kind::Limit => parse_limit(value).map(drop),
         Kind::Keybind => super::binds::check(value).map_err(|error| ValueError::Other(error.zig_name())),
+        Kind::SelectionWordChars => decode_codepoints(value).map(drop).ok_or(ValueError::Invalid),
         Kind::Bool
         | Kind::String
         | Kind::Path

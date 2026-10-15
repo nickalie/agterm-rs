@@ -194,22 +194,14 @@ impl SelectionGesture {
     }
 
     /// Apply one pointer event; the selection it produces, in screen coordinates (`None` when it produces none: a
-    /// release, a single click, a drag still inside its first cell).
+    /// release, a single click, a drag still inside its first cell). `boundaries` (Unicode scalar values, Ghostty's
+    /// `selection-word-chars`) are the word boundaries of word clicks and word-granular drags; `None` keeps Ghostty's
+    /// defaults.
     ///
     /// # Errors
     ///
     /// [`Error::InvalidValue`] for a point outside its space, or the library's result.
-    pub fn apply(&mut self, terminal: &mut Terminal, input: &GestureInput) -> Result<Option<Selection>, Error> {
-        self.apply_with(terminal, input, None)
-    }
-
-    /// [`SelectionGesture::apply`] with `boundaries` (Unicode scalar values, Ghostty's `selection-word-chars`) as the
-    /// word boundaries of word clicks and word-granular drags; `None` keeps Ghostty's defaults.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::InvalidValue`] for a point outside its space, or the library's result.
-    pub fn apply_with(
+    pub fn apply(
         &mut self,
         terminal: &mut Terminal,
         input: &GestureInput,
@@ -419,23 +411,28 @@ mod tests {
         let mut terminal = Terminal::new(20, 3).unwrap();
         terminal.vt_write(b"one two three");
         let mut gesture = SelectionGesture::new().unwrap();
-        assert_eq!(gesture.apply(&mut terminal, &press(5, 0, 0)).unwrap(), None);
+        assert_eq!(gesture.apply(&mut terminal, &press(5, 0, 0), None).unwrap(), None);
         assert_eq!(gesture.state(&terminal).click_count, 1);
         gesture
-            .apply(&mut terminal, &GestureInput::Release(Some(viewport(5, 0))))
+            .apply(&mut terminal, &GestureInput::Release(Some(viewport(5, 0))), None)
             .unwrap();
-        let word = gesture.apply(&mut terminal, &press(5, 0, 100 * MS)).unwrap();
+        let word = gesture.apply(&mut terminal, &press(5, 0, 100 * MS), None).unwrap();
         assert_eq!(gesture.state(&terminal).click_count, 2);
         assert_eq!(xs(word), Some((4, 6)));
         gesture
-            .apply(&mut terminal, &GestureInput::Release(Some(viewport(5, 0))))
+            .apply(&mut terminal, &GestureInput::Release(Some(viewport(5, 0))), None)
             .unwrap();
-        let line = gesture.apply(&mut terminal, &press(5, 0, 200 * MS)).unwrap();
+        let line = gesture.apply(&mut terminal, &press(5, 0, 200 * MS), None).unwrap();
         assert_eq!(gesture.state(&terminal).click_count, 3);
         assert_eq!(xs(line), Some((0, 12)));
         // a press long after starts over
-        gesture.apply(&mut terminal, &GestureInput::Release(None)).unwrap();
-        assert_eq!(gesture.apply(&mut terminal, &press(5, 0, 2_000 * MS)).unwrap(), None);
+        gesture
+            .apply(&mut terminal, &GestureInput::Release(None), None)
+            .unwrap();
+        assert_eq!(
+            gesture.apply(&mut terminal, &press(5, 0, 2_000 * MS), None).unwrap(),
+            None
+        );
         assert_eq!(gesture.state(&terminal).click_count, 1);
         gesture.close(&mut terminal);
     }
@@ -445,19 +442,19 @@ mod tests {
         let mut terminal = Terminal::new(20, 3).unwrap();
         terminal.vt_write(b"one;two three");
         let mut gesture = SelectionGesture::new().unwrap();
-        gesture.apply(&mut terminal, &press(1, 0, 0)).unwrap();
+        gesture.apply(&mut terminal, &press(1, 0, 0), None).unwrap();
         gesture
-            .apply(&mut terminal, &GestureInput::Release(Some(viewport(1, 0))))
+            .apply(&mut terminal, &GestureInput::Release(Some(viewport(1, 0))), None)
             .unwrap();
         // `;` is a default boundary; with only a space as one, `one;two` is a word
         let boundaries = [0, u32::from(' ')];
         let word = gesture
-            .apply_with(&mut terminal, &press(1, 0, 100 * MS), Some(&boundaries))
+            .apply(&mut terminal, &press(1, 0, 100 * MS), Some(&boundaries))
             .unwrap();
         assert_eq!(xs(word), Some((0, 6)));
         assert!(
             terminal
-                .select_word_with(viewport(11, 0), Some(&[0, u32::from('h')]))
+                .select_word(viewport(11, 0), Some(&[0, u32::from('h')]))
                 .unwrap()
         );
         let selection = terminal.selection(PointTag::Viewport).unwrap();
@@ -474,11 +471,11 @@ mod tests {
         let mut terminal = Terminal::new(20, 3).unwrap();
         terminal.vt_write(b"hello world");
         let mut gesture = SelectionGesture::new().unwrap();
-        gesture.apply(&mut terminal, &press(1, 0, 0)).unwrap();
-        let dragged = gesture.apply(&mut terminal, &drag(7, 0)).unwrap();
+        gesture.apply(&mut terminal, &press(1, 0, 0), None).unwrap();
+        let dragged = gesture.apply(&mut terminal, &drag(7, 0), None).unwrap();
         assert_eq!(xs(dragged), Some((1, 7)));
         gesture
-            .apply(&mut terminal, &GestureInput::Release(Some(viewport(7, 0))))
+            .apply(&mut terminal, &GestureInput::Release(Some(viewport(7, 0))), None)
             .unwrap();
         assert!(gesture.state(&terminal).dragged);
         gesture.reset(&mut terminal);
