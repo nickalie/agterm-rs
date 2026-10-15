@@ -113,13 +113,15 @@ impl Windows {
         }
         // a dashboard follows the model before anything renders it
         state.core.reconcile_dashboards();
-        let resettle = self.replace_panes(&mut state.core, cx);
+        let mut resettle = self.replace_panes(&mut state.core, cx);
         let built = self.open_and_close(&mut state.core, cx);
         for ui in self.shown.values() {
             let synced = ui
                 .handle
                 .update(cx, |view, window, cx| view.sync(&mut state.core, window, cx));
-            if synced.is_err() {
+            if let Ok(focused) = synced {
+                resettle |= focused;
+            } else {
                 tracing::debug!("a window is gone before its sync");
             }
         }
@@ -212,20 +214,6 @@ impl Windows {
             if applied.is_err() {
                 tracing::debug!("a window request found its window gone");
             }
-        }
-    }
-
-    /// Raises the frontmost window with what a launch handed over.
-    pub fn activate(&self, core: &Core, activation: &Activation, cx: &mut App) {
-        let Some(ui) = self.frontmost(core) else {
-            return;
-        };
-        let raised = ui.handle.update(cx, |view, window, cx| {
-            crate::activation::activate(window, cx, activation);
-            view.present(window, cx);
-        });
-        if raised.is_err() {
-            tracing::debug!("activation: the window is gone");
         }
     }
 

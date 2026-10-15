@@ -112,7 +112,7 @@ fn the_shell_titles_its_window_and_keeps_its_modal_layers_in_order(cx: &mut Test
         WindowView::new(window, deck, poster, root, cx)
     });
     cx.simulate_resize(size(px(640.), px(480.)));
-    view.update_in(cx, |view, window, cx| view.sync(&mut core, window, cx));
+    let _ = view.update_in(cx, |view, window, cx| view.sync(&mut core, window, cx));
     view.read_with(cx, |view, _| {
         assert_eq!(view.title(), "u — work");
         assert!(!view.has_layer(Layer::Ask));

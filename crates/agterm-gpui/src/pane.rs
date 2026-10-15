@@ -208,7 +208,7 @@ pub enum Report {
     /// The live font size changed.
     FontSize(f64),
     OpenUrl(String),
-    /// OSC 9/777, with whether the pane held the keyboard and its window was active when it fired.
+    /// OSC 9/777; the focus sample travels beside it (`post_report`'s `focus`).
     Notification {
         title: String,
         body: String,

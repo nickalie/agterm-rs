@@ -227,19 +227,12 @@ impl WindowView {
     }
 
     /// Renders the model: the deck's pages and the title. Whether a modal holds the keyboard is the model's: the
-    /// window's picker or GUI ask, or its palette.
-    pub fn sync(&mut self, core: &mut Core, window: &mut Window, cx: &mut Context<Self>) {
+    /// window's picker or GUI ask, or its palette. Whether the core needs a settle for the focus the deck gave.
+    #[must_use = "a focus report the core took needs a settle"]
+    pub fn sync(&mut self, core: &mut Core, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let id = self.id;
         let modal = core.modal_pending(id) || core.palette_holds(id);
-        let given = self.deck.update(cx, |deck, cx| {
-            deck.reconcile(core, modal, window, cx);
-            deck.take_given_focus()
-        });
-        for (session, token) in given {
-            post(&self.poster, move |state: &mut AppState| {
-                state.pane_focused(session, &token);
-            });
-        }
+        let focused = self.deck.update(cx, |deck, cx| deck.reconcile(core, modal, window, cx));
         let title = if core.dashboard(id).is_some() {
             dashboard_title(core.library(), id)
         } else {
@@ -250,6 +243,7 @@ impl WindowView {
             self.title = title;
         }
         cx.notify();
+        focused
     }
 
     /// Applies a window command's request (upstream's `WindowRegistry` actions). GPUI has no client positioning on

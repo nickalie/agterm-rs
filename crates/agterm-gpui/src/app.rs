@@ -263,7 +263,8 @@ fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
         shell.windows.borrow_mut().sync(state, cx)
     });
     if resettle {
-        // a dropped replacement closed its pane: committed by the next settle
+        // a dropped replacement closed its pane, or a pane the deck focused cleared its badge: committed by the next
+        // settle
         let poster: Poster = Arc::downgrade(&shell.posting);
         post(&poster, AppState::settle);
     }

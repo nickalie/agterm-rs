@@ -1,7 +1,7 @@
 //! Session and pane backgrounds on the terminals (upstream's `GhosttySurfaceView.applyWatermarkFromSession`,
 //! `Ghostty/WatermarkRenderer.swift`; ported from the GTK build's `background.rs`): each terminal renders its pane's
 //! effective background (the pane's override, else the session default) through its own config overlay
-//! ([`agterm_core::watermark::overlay_text`], loaded over the app's config, [`crate::deck::DeckEnv::config_with`]).
+//! ([`agterm_core::watermark::overlay_text`], loaded over the app's config, [`crate::deck::DeckEnv::config_for`]).
 //! A color sets the terminal's `background`; an image or a text its `background-image*` lines, which the terminal draws
 //! behind its grid. A text background is rasterized to a PNG under `<state dir>/watermarks` (cosmic-text, the shaping
 //! and rasterizing GPUI's Linux text system links, in place of the GTK build's pango), bold sans-serif at 256 px on a
@@ -234,7 +234,7 @@ fn blend(alpha: &mut [u8], size: (u32, u32), at: (i32, i32), coverage: u8) {
 }
 
 /// What the terminal of `shared` should take now for `desired`, given what it took last: `None` when nothing changed
-/// (or nothing was ever set and nothing is wanted), else the overlay and the stale text file it leaves behind.
+/// (or nothing was ever set and nothing is wanted), else `Some` with the stale text file it leaves behind, if any.
 #[must_use]
 pub fn change(shared: &Rc<Shared>, desired: &Applied) -> Option<Option<PathBuf>> {
     let previous = APPLIED.with_borrow(|applied| applied.get(&shared.key()).map(|(_, applied)| applied.clone()));
