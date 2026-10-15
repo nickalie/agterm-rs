@@ -696,25 +696,75 @@ Built on `agterm-ghostty-vt` (Task 5), with the thread protocol of Technical Det
 **Files:**
 - Create: `crates/agterm-term/src/launch.rs`, `tests/launch.rs`
 - Modify: `crates/agterm-term/Cargo.toml` (dep `agterm-zmx`)
+- ➕ Create: `build/patches/zmx/0003-first-attach-snapshot.patch`, `crates/agterm-term/src/exit.rs`,
+  `crates/agterm-app/tests/pane_foreground.rs`; Modify: `crates/agterm-term/src/{pane,effects,lib,bench}.rs`,
+  `crates/agterm-core/src/zmx/shell_integration.rs` (`setup`), `crates/agterm-core/src/ghostty_config/model.rs`
+  (`ShellIntegrationFeatures::{UNSUPPORTED, env_value}`), `crates/agterm-app/Cargo.toml` (dev-dep `agterm-term`),
+  `scripts/build-zmx.sh` (header), `.claude/skills/agterm-upstream-sync/references/areas.md`
 
-- [ ] live panes: launch from `agterm-zmx` launch inputs (`zmx attach`, shell-integration env from core)
-- [ ] ➕ (Task 4) fix the zmx first-paint race (Task 1: `zmx attach` paints nothing until it sees a real size change
+- [x] live panes: launch from `agterm-zmx` launch inputs (`zmx attach`, shell-integration env from core)
+- [x] ➕ (Task 4) fix the zmx first-paint race (Task 1: `zmx attach` paints nothing until it sees a real size change
       after its attach handshake; a prompt printed between the client's attach and its first snapshot is held by the
       daemon, a resize before the handshake is lost; 1–4 of every 6 launches stayed blank): the real fix goes into
       the zmx patch (`build/patches/zmx`) if the race is in zmx, otherwise the launch code waits for the handshake and
       then resizes once; the spike's timed resize nudge is not the fix. Test: 50 consecutive launches all paint the
       prompt
-- [ ] plain panes (no live capability), as libghostty spawned them (`agterm-gtk/src/surface.rs` ~675–710): `command`,
+- [x] plain panes (no live capability), as libghostty spawned them (`agterm-gtk/src/surface.rs` ~675–710): `command`,
       `initial_input`, `wait_after_command` (the child-exited state that `SHOW_CHILD_EXITED` drove), working
       directory, env merge, shell-integration injection
-- [ ] terminal identity per Technical Details (`TERM`, `TERMINFO`, `COLORTERM`, fallback, `term` override), terminfo
+- [x] terminal identity per Technical Details (`TERM`, `TERMINFO`, `COLORTERM`, fallback, `term` override), terminfo
       from the existing stage
-- [ ] foreground pid exposed by the pane; `agterm-app`'s process table consumes it (no dependency of `agterm-term` on
+- [x] foreground pid exposed by the pane; `agterm-app`'s process table consumes it (no dependency of `agterm-term` on
       `agterm-app`)
-- [ ] tests: `TERM`/`TERMINFO`/`COLORTERM` reach the shell (`env` in the pane), fallback without terminfo, plain pane
+- [x] tests: `TERM`/`TERMINFO`/`COLORTERM` reach the shell (`env` in the pane), fallback without terminfo, plain pane
       `command`/`initial_input`/`wait_after_command`/cwd/env, real zmx under a private `ZMX_DIR` (reaped by that dir
       only); errors: zmx missing, attach failure, session gone, command not found
-- [ ] gates — must pass before Task 12
+- [x] gates — must pass before Task 12
+- result (2026-10-15):
+  - **zmx first-paint race — in zmx** (Codex-reviewed, transcript
+    `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/task-11-zmx-first-paint/transcript.md`): `zmx attach`
+    of a new session forks the daemon, which starts the program at once, and connects 10+ ms later; output read
+    before the daemon accepts the client reaches no client (it is broadcast to connected clients only), the first
+    `Init` sends no snapshot (`handleInit` serialized on re-attach only) and its `TIOCSWINSZ` at an unchanged size
+    sends no SIGWINCH, so nothing repaints. Without any frontend, `zmx attach s /bin/sh -c "printf READY; exec sleep
+    30"` in an 80x24 pty stayed blank 20/20 times. A launch-side wait and resize cannot fix it (only programs that
+    repaint on SIGWINCH would recover). Fix: `build/patches/zmx/0003-first-attach-snapshot.patch` (this repository's
+    own): the first attach is sent `ESC[H ESC[2J` and the snapshot when the program already wrote, and every snapshot
+    (first and re-attach) is followed by the daemon parser's unfinished sequence (Ghostty's stream continuation
+    tracking, limit as libghostty's snapshots), so a sequence cut at the attach continues identically in the client.
+    zig tests: 109/109, a convergence test feeding a client terminal across CSI/OSC/DCS/APC/UTF-8 cuts, before
+    connect and in the connect→Init broadcast, first and re-attach. Residue: a string sequence (OSC/DCS/APC) cut in
+    that broadcast window is dispatched early by a Ghostty client (any exit from a string state dispatches), with
+    whatever external effect it has. Results: repro 60/60 painted (was 20/20 blank); `tests/launch.rs` through the
+    real Pane: 50 sequential + 54 parallel (6 at a time) fresh launches all painted, prompt within ≤ 263 ms (old zmx:
+    the first launch already blank); 30 consecutive runs of agterm-term's tests (each 20 + 24 fresh live launches,
+    1 320 in all, alongside a full GTK conformance run) all painted and passed. The bench's resize nudges are gone. The zmx build id changes, so
+    daemons of the previous build read as outdated (the existing reset path).
+  - **Launch** (`launch.rs`): `Pane::launch(&Launch, &Host, &PaneConfig)`. `Launch` = a session pane's seed
+    (`Launch::from_seed` of core's `LaunchSeed`, the seed's variables over the pane's, the GTK `merged_env`) plus
+    `env_remove`; `Host` = login shell, resolved resources (`resolve_resources`/`resource_candidates`: staged
+    `share/ghostty` with `../terminfo/x/xterm-ghostty` beside it, then `/usr/share/ghostty`), config `term`,
+    `shell-integration-features` minus the ssh wrappers, `cursor-style-blink`, bin dir; `Host::from_runtime` takes an
+    `agterm_zmx::Runtime`. Everything runs as `/bin/sh -c <line>` (core's foreground reader looks past exactly that).
+    Environment in libghostty's order: `GHOSTTY_LOG`/`VTE_VERSION` removed; identity (`TERM` = `term` + `TERMINFO` +
+    `GHOSTTY_RESOURCES_DIR` when resolved, else `xterm-256color` and both removed, `COLORTERM=truecolor`,
+    `TERM_PROGRAM=ghostty`, `TERM_PROGRAM_VERSION` = libghostty-vt's, `GHOSTTY_BIN_DIR` appended to `PATH`);
+    `GHOSTTY_SHELL_FEATURES`; the shell integration of a zsh/bash/fish line (core `shell_integration::setup`, a port
+    of `setup`/`setupBash`: bash → `--posix`, `GHOSTTY_BASH_INJECT` flags, `GHOSTTY_BASH_RCFILE`); the launch's
+    variables; `PWD`. A working directory that is not one is ignored. `initial_input` is queued at spawn.
+  - **Exit** (`exit.rs`, `ExitPolicy`, `ExitStatus::held`): a command not waited for ends its pane; a nonzero exit
+    within 250 ms holds on libghostty's failure report ("Ghostty failed to launch the requested command", rule,
+    runtime, exit code); a waited command holds on "Process exited. Press any key to close the terminal."; otherwise
+    the pane ends. A held terminal hides the cursor and turns KAM and Kitty keyboard flags off, so the frontend closes
+    on any key that encodes (Task 14). `Pane::spawn` alone keeps `ExitPolicy::Report`.
+  - **Foreground**: `Pane::foreground_pid` = `tcgetpgrp` on the PTY; `agterm-app/tests/pane_foreground.rs` reads it
+    through `ProcTable` + core's `ForegroundReader` (a command pane's program past `/bin/sh -c`, a job typed into the
+    shell).
+  - ⚠️ Not carried over: the config keys `command`, `env`, `input`, `working-directory`, `shell-integration`,
+    `wait-after-command`, `abnormal-command-exit-runtime` (outside Task 7's model; the launch's values and Ghostty's
+    defaults stand), the elvish/nushell integrations, `GHOSTTY_SURFACE_ID`. A live seed's `settled` prefix (a GTK
+    adaptation: it waits up to 200 ms for a resize libghostty made after spawn) still runs; a GPUI pane spawned at its
+    final size can drop it (Tasks 18/27).
 
 ### Stage 2 — GPUI frontend core
 

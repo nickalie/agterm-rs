@@ -159,6 +159,8 @@ pub struct ExitStatus {
     pub code: u32,
     /// The signal's name when a signal ended it.
     pub signal: Option<String>,
+    /// The terminal holds on an exit message until a key ([`crate::ExitPolicy`]); otherwise the pane is done.
+    pub held: bool,
 }
 
 /// What a pane reports to its frontend, in stream order (drained on the main thread).

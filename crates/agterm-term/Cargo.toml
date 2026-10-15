@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 agterm-core.workspace = true
 agterm-ghostty-vt.workspace = true
+agterm-zmx.workspace = true
 # the OSC 5522 classifier decodes metadata and MIME lists as Ghostty does (strict, padded)
 base64.workspace = true
 bitflags.workspace = true
@@ -19,7 +20,10 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# the real zmx tests kill a daemon through its SessionHost
+agterm-host.workspace = true
 tempfile.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

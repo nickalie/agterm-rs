@@ -27,6 +27,7 @@ use portable_pty::{Child, MasterPty, native_pty_system};
 use crate::effects::{
     ArmedRead, ArmedSlot, ClipboardAnswer, ClipboardReadRequest, DivertSlot, PaneEffects, PaneEvent, TerminalColors,
 };
+use crate::exit::{ExitPolicy, Layout};
 use crate::input::InputState;
 use crate::pty::{self, GridSize, PaneCommand, Ready, WakePipe, WriteQueue};
 use crate::render::{Capture, Frame, MouseShape, ThemeColors};
@@ -59,6 +60,8 @@ pub struct PaneConfig {
     pub write_limit: usize,
     /// The Kitty image storage per screen in bytes; zero turns the Kitty graphics protocol off.
     pub kitty_image_limit: u64,
+    /// What the end of the program leaves on screen.
+    pub exit: ExitPolicy,
     pub wake: Option<Wake>,
 }
 
@@ -71,6 +74,7 @@ impl PaneConfig {
             colors: ThemeColors::default(),
             write_limit: DEFAULT_WRITE_LIMIT,
             kitty_image_limit: DEFAULT_KITTY_IMAGE_LIMIT,
+            exit: ExitPolicy::default(),
             wake: None,
         }
     }
@@ -84,6 +88,7 @@ impl std::fmt::Debug for PaneConfig {
             .field("colors", &self.colors)
             .field("write_limit", &self.write_limit)
             .field("kitty_image_limit", &self.kitty_image_limit)
+            .field("exit", &self.exit)
             .field("wake", &self.wake.is_some())
             .finish()
     }
@@ -177,6 +182,9 @@ pub(crate) struct Shared {
     wake: Option<Wake>,
     wake_pending: AtomicBool,
     counters: Counters,
+    /// How the program's end is handled, and when the program started (an early failure is reported as one).
+    exit: ExitPolicy,
+    started: Instant,
     /// Set once the IO thread saw the PTY's end (or stopped).
     eof: (Mutex<bool>, Condvar),
     /// Runs once at the start of the next paint, before it takes any lock (tests interleave a second view there).
@@ -309,6 +317,16 @@ impl Pane {
     #[must_use]
     pub fn pid(&self) -> Option<u32> {
         self.pid
+    }
+
+    /// The terminal's foreground process group (`tcgetpgrp` on the PTY, as libghostty's `foreground_pid` read it): the
+    /// pid of the group's leader; `None` once the PTY cannot say (the child side closed).
+    #[must_use]
+    pub fn foreground_pid(&self) -> Option<u32> {
+        lock(&self.master)
+            .process_group_leader()
+            .and_then(|pgrp| u32::try_from(pgrp).ok())
+            .filter(|pgrp| *pgrp > 0)
     }
 
     /// Queue input for the child (keys, pastes). Never blocks.
@@ -463,6 +481,8 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
         wake: config.wake.clone(),
         wake_pending: AtomicBool::new(false),
         counters: Counters::default(),
+        exit: config.exit.clone(),
+        started: Instant::now(),
         eof: (Mutex::new(false), Condvar::new()),
         #[cfg(test)]
         before_paint: Mutex::new(None),
@@ -713,21 +733,30 @@ struct Started {
 }
 
 /// The waiter thread: reap the child, release a clipboard read the IO thread may be parked on, give it a moment to
-/// process the last output, report the exit.
+/// process the last output, put the exit message on screen ([`ExitPolicy`]), report the exit.
 fn wait_child(mut child: Box<dyn Child + Send + Sync>, shared: &Shared, control: &Sender<Control>) {
-    let status = match child.wait() {
-        Ok(status) => crate::ExitStatus {
-            code: status.exit_code(),
-            signal: status.signal().map(str::to_owned),
-        },
+    let (code, signal) = match child.wait() {
+        Ok(status) => (status.exit_code(), status.signal().map(str::to_owned)),
         Err(err) => {
             tracing::warn!(%err, "waiting for the pane's child failed");
-            crate::ExitStatus { code: 1, signal: None }
+            (1, None)
         }
     };
+    let runtime = shared.started.elapsed();
     let _ = control.send(Control::ChildExited);
     shared.wait_eof(EXIT_GRACE);
-    shared.send(PaneEvent::Exited(status));
+    let outcome = shared.exit.outcome(code, runtime);
+    if outcome.held() {
+        let mut vt = lock(&shared.vt);
+        let layout = Layout::of(&mut vt.terminal);
+        let message = shared.exit.message(outcome, code, runtime, layout);
+        vt.terminal.vt_write(&message);
+    }
+    shared.send(PaneEvent::Exited(crate::ExitStatus {
+        code,
+        signal,
+        held: outcome.held(),
+    }));
     shared.wake();
 }
 

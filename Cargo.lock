@@ -14,6 +14,7 @@ version = "0.1.0"
 dependencies = [
  "agterm-core",
  "agterm-host",
+ "agterm-term",
  "agterm-zmx",
  "libc",
  "serde_json",
@@ -153,6 +154,8 @@ version = "0.1.0"
 dependencies = [
  "agterm-core",
  "agterm-ghostty-vt",
+ "agterm-host",
+ "agterm-zmx",
  "base64",
  "bitflags 2.13.2",
  "libc",
@@ -161,6 +164,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

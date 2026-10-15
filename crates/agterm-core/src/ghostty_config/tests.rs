@@ -549,6 +549,25 @@ fn the_model_enums_spell_ghosttys_values() {
     assert_eq!(flags, ShellIntegrationFeatures::NAMES);
 }
 
+#[test]
+fn shell_features_reach_the_shell_as_libghostty_spells_them() {
+    // Ghostty's `setup features` cases: sorted by name, the cursor's blink spelled out, nothing when all are off
+    assert_eq!(
+        ShellIntegrationFeatures::all().env_value(true).as_deref(),
+        Some("cursor:blink,path,ssh-env,ssh-terminfo,sudo,title")
+    );
+    assert_eq!(ShellIntegrationFeatures::empty().env_value(true), None);
+    let ssh_sudo = ShellIntegrationFeatures::SSH_ENV | ShellIntegrationFeatures::SUDO;
+    assert_eq!(ssh_sudo.env_value(false).as_deref(), Some("ssh-env,sudo"));
+    assert_eq!(
+        ShellIntegrationFeatures::CURSOR.env_value(false).as_deref(),
+        Some("cursor:steady")
+    );
+    // agterm's defaults leave only `path`, and never the ssh wrappers
+    let defaults = load(DEFAULTS).config.shell_integration_features - ShellIntegrationFeatures::UNSUPPORTED;
+    assert_eq!(defaults.env_value(true).as_deref(), Some("path"));
+}
+
 // -- the typed model
 
 #[test]

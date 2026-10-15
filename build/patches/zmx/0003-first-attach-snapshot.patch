@@ -1,0 +1,296 @@
+diff -ruN zmx-orig/src/loop.zig zmx/src/loop.zig
+--- zmx-orig/src/loop.zig	2026-10-15 05:50:17.018579548 +0300
++++ zmx/src/loop.zig	2026-10-15 05:50:17.019579553 +0300
+@@ -241,6 +241,17 @@
+     });
+ }
+ 
++/// The daemon's parser over `term`, tracking the unfinished sequence a PTY read
++/// may end in, so a snapshot can hand it on (`Daemon.queueSnapshot`); the limit
++/// is the one libghostty's own snapshots use.
++fn continuationStream(term: *ghostty_vt.Terminal) ghostty_vt.TerminalStream {
++    return ghostty_vt.TerminalStream.init(.{
++        .allocator = term.gpa(),
++        .handler = term.vtHandler(),
++        .continuation_max_bytes = ghostty_vt.apc.Protocol.maxDefaultBytes(),
++    });
++}
++
+ /// dameonLoop is what the daemon runs to send and receive ipc commands from its corresponding
+ /// clients.  It uses poll() as its non-blocking mechanism.
+ fn daemonLoop(daemon: *Daemon, gpa: std.mem.Allocator, io: std.Io, server_sock_fd: lib_posix.socket_t, pty_fd: i32) !void {
+@@ -254,8 +265,10 @@
+     const init_size = ipc.getTerminalSize(pty_fd);
+     var term = try initTerminal(gpa, io, init_size, daemon.cfg);
+     defer term.deinit(gpa);
+-    var vt_stream = term.vtStream();
++    var vt_stream = continuationStream(&term);
+     defer vt_stream.deinit();
++    daemon.vt_stream = &vt_stream;
++    defer daemon.vt_stream = null;
+ 
+     // Carries the tail of the previous PTY read so the task-exit marker
+     // search below can see across a read() boundary. Sized to comfortably
+@@ -588,6 +601,14 @@
+     }
+ };
+ 
++/// What a first attach is sent ahead of its snapshot: cursor home and erase
++/// the display. Its ESC also ends any sequence the output the client was sent
++/// before its Init was cut in (a CAN would too, but logs a warning in a
++/// Ghostty client at ground, the common case). A string sequence (OSC, DCS,
++/// APC) cut there is dispatched early by a Ghostty client, with whatever
++/// external effect it has; the snapshot restores the screen and title only.
++const FIRST_ATTACH_RESET = "\x1b[H\x1b[2J";
++
+ /// Daemon is responsible for managing a zmx session.
+ ///
+ /// It holds all the state for a running session.  Instead of a single daemon for all sessions, we
+@@ -635,6 +656,9 @@
+     task_ended_at: ?u64 = null, // timestamp when task exited
+     pty_fd: i32 = -1, // set by daemonLoop so handleRun can probe the foreground process
+     shell: []const u8 = "/bin/sh",
++    /// The daemon loop's parser while it runs: the unfinished sequence a
++    /// snapshot hands on with it.
++    vt_stream: ?*const ghostty_vt.TerminalStream = null,
+ 
+     /// Create a Daemon. Caller is responsible for freeing all variables passed
+     /// into the init fn.
+@@ -1047,6 +1071,53 @@
+         return error.NoLeaderFound;
+     }
+ 
++    /// Queue the terminal's state for an attaching `client`: on a first attach
++    /// a reset first (`FIRST_ATTACH_RESET`: output it may have been sent
++    /// between its connect and its Init is in the snapshot too), then the
++    /// snapshot, then the unfinished sequence the daemon's parser is in, so the
++    /// client's parser continues the next output where the daemon's does.
++    fn queueSnapshot(self: *Daemon, gpa: std.mem.Allocator, client: *Client, term: *ghostty_vt.Terminal) void {
++        if (!self.has_had_client) {
++            ipc.appendMessage(gpa, &client.write_buf, .Output, FIRST_ATTACH_RESET) catch |err| {
++                std.log.warn("failed to buffer the first attach reset for client err={s}", .{@errorName(err)});
++            };
++            client.has_pending_output = true;
++        }
++        const cursor = &term.screens.active.cursor;
++        std.log.debug(
++            "cursor before serialize: x={d} y={d} pending_wrap={}",
++            .{ cursor.x, cursor.y, cursor.pending_wrap },
++        );
++        if (util.serializeTerminalState(gpa, term)) |term_output| {
++            std.log.debug("serialize terminal state", .{});
++            // Rewrite OSC 133;A to include redraw=0 so the outer terminal
++            // does not clear prompt lines on resize (issue #111).
++            const restore_data = util.rewritePromptRedraw(gpa, term_output) orelse term_output;
++            defer gpa.free(term_output);
++            defer if (restore_data.ptr != term_output.ptr) gpa.free(restore_data);
++            ipc.appendMessage(gpa, &client.write_buf, .Output, restore_data) catch |err| {
++                std.log.warn(
++                    "failed to buffer terminal state for client err={s}",
++                    .{@errorName(err)},
++                );
++            };
++            client.has_pending_output = true;
++        }
++        const stream = self.vt_stream orelse return;
++        if (stream.ground()) return;
++        var continuation: std.Io.Writer.Allocating = .init(gpa);
++        defer continuation.deinit();
++        stream.writeContinuation(&continuation.writer) catch |err| {
++            // longer than the tracker keeps, or its allocation failed: the
++            // rest of that sequence reaches the client without its start
++            std.log.warn("no continuation for the snapshot err={s}", .{@errorName(err)});
++            return;
++        };
++        ipc.appendMessage(gpa, &client.write_buf, .Output, continuation.writer.buffered()) catch |err| {
++            std.log.warn("failed to buffer the continuation for client err={s}", .{@errorName(err)});
++        };
++    }
++
+     pub fn handleInit(
+         self: *Daemon,
+         gpa: std.mem.Allocator,
+@@ -1078,30 +1149,13 @@
+             self.screen_revision +%= 1;
+         }
+ 
+-        // Only serialize on re-attach (has_had_client), not first attach, to avoid
+-        // interfering with shell initialization (DA1 queries, etc.)
+-        if (self.has_pty_output and self.has_had_client) {
+-            const cursor = &term.screens.active.cursor;
+-            std.log.debug(
+-                "cursor before serialize: x={d} y={d} pending_wrap={}",
+-                .{ cursor.x, cursor.y, cursor.pending_wrap },
+-            );
+-            if (util.serializeTerminalState(gpa, term)) |term_output| {
+-                std.log.debug("serialize terminal state", .{});
+-                // Rewrite OSC 133;A to include redraw=0 so the outer terminal
+-                // does not clear prompt lines on resize (issue #111).
+-                const restore_data = util.rewritePromptRedraw(gpa, term_output) orelse term_output;
+-                defer gpa.free(term_output);
+-                defer if (restore_data.ptr != term_output.ptr) gpa.free(restore_data);
+-                ipc.appendMessage(gpa, &client.write_buf, .Output, restore_data) catch |err| {
+-                    std.log.warn(
+-                        "failed to buffer terminal state for client err={s}",
+-                        .{@errorName(err)},
+-                    );
+-                };
+-                client.has_pending_output = true;
+-            }
+-        }
++        // Serialize on re-attach, and on the first attach once the program has
++        // written anything: the client connects only after the daemon started
++        // the program, so what it wrote before the accept reached no client,
++        // and an Init at an unchanged size sends no SIGWINCH to repaint it. The
++        // snapshot carries state, never the queries the daemon answered while
++        // no terminal client was attached.
++        if (self.has_pty_output) self.queueSnapshot(gpa, client, term);
+ 
+         // only resize if leader
+         if (is_leader) {
+@@ -1699,6 +1753,145 @@
+     _ = daemon.closeClient(alloc, origin, 0, false);
+ }
+ 
++/// The payloads of every Output message queued for `client`, concatenated.
++fn queuedOutput(alloc: std.mem.Allocator, client: *const Client) ![]u8 {
++    var out: std.ArrayList(u8) = .empty;
++    var rest: []const u8 = client.write_buf.items;
++    while (rest.len >= @sizeOf(ipc.Header)) {
++        const header = std.mem.bytesToValue(ipc.Header, rest[0..@sizeOf(ipc.Header)]);
++        const body = rest[@sizeOf(ipc.Header)..][0..header.len];
++        if (header.tag == .Output) try out.appendSlice(alloc, body);
++        rest = rest[@sizeOf(ipc.Header) + header.len ..];
++    }
++    return out.toOwnedSlice(alloc);
++}
++
++test "the first attach is sent what the program wrote before it connected" {
++    const alloc = std.testing.allocator;
++    const cfg = Cfg{ .socket_dir = "", .log_dir = "" };
++    var term = try initTerminal(alloc, std.testing.io, .{ .cols = 80, .rows = 24 }, &cfg);
++    defer term.deinit(alloc);
++    var stream = continuationStream(&term);
++    defer stream.deinit();
++    var daemon = testDaemon();
++    daemon.vt_stream = &stream;
++    defer daemon.clients.deinit(alloc);
++    defer daemon.pty_write_buf.deinit(alloc);
++
++    const a = try lib_posix.pipe2(.{});
++    const b = try lib_posix.pipe2(.{});
++    defer lib_posix.close(b[1]);
++    const pty = b[0];
++    defer lib_posix.close(pty);
++    const size = std.mem.asBytes(&ipc.Resize{ .rows = 24, .cols = 80 });
++
++    // a program with nothing written yet: the first attach is sent nothing
++    const quiet = try testClient(alloc, a[0], false);
++    try daemon.clients.append(alloc, quiet);
++    try daemon.handleInit(alloc, quiet, pty, &term, size);
++    const nothing = try queuedOutput(alloc, quiet);
++    defer alloc.free(nothing);
++    try std.testing.expectEqualStrings("", nothing);
++    _ = daemon.closeClient(alloc, quiet, 0, false);
++
++    // the prompt went out before any client connected
++    daemon.has_had_client = false;
++    stream.nextSlice("READY$ ");
++    daemon.has_pty_output = true;
++    const first = try testClient(alloc, a[1], false);
++    try daemon.clients.append(alloc, first);
++    try daemon.handleInit(alloc, first, pty, &term, size);
++    const replay = try queuedOutput(alloc, first);
++    defer alloc.free(replay);
++    try std.testing.expect(std.mem.startsWith(u8, replay, FIRST_ATTACH_RESET));
++    try std.testing.expect(std.mem.indexOf(u8, replay, "READY$ ") != null);
++    try std.testing.expect(daemon.has_had_client);
++    _ = daemon.closeClient(alloc, first, 0, false);
++
++    // a re-attach keeps its plain snapshot
++    const c = try lib_posix.pipe2(.{});
++    defer lib_posix.close(c[1]);
++    const again = try testClient(alloc, c[0], false);
++    try daemon.clients.append(alloc, again);
++    try daemon.handleInit(alloc, again, pty, &term, size);
++    const snapshot = try queuedOutput(alloc, again);
++    defer alloc.free(snapshot);
++    try std.testing.expect(!std.mem.startsWith(u8, snapshot, FIRST_ATTACH_RESET));
++    try std.testing.expect(std.mem.indexOf(u8, snapshot, "READY$ ") != null);
++    _ = daemon.closeClient(alloc, again, 0, false);
++}
++
++/// One attach: the program writes `lost` before the client connects, `seen` between its connect and its Init
++/// (broadcast to it), and `after` once attached; `reattach` makes it a session a terminal was attached to before.
++/// The client's terminal must end exactly where the daemon's does: same screen, styles and title.
++fn expectAttachConverges(lost: []const u8, seen: []const u8, after: []const u8, reattach: bool) !void {
++    const alloc = std.testing.allocator;
++    const cfg = Cfg{ .socket_dir = "", .log_dir = "" };
++    var term = try initTerminal(alloc, std.testing.io, .{ .cols = 40, .rows = 6 }, &cfg);
++    defer term.deinit(alloc);
++    var stream = continuationStream(&term);
++    defer stream.deinit();
++    var client_term = try initTerminal(alloc, std.testing.io, .{ .cols = 40, .rows = 6 }, &cfg);
++    defer client_term.deinit(alloc);
++    var client_stream = client_term.vtStream();
++    defer client_stream.deinit();
++    var daemon = testDaemon();
++    daemon.vt_stream = &stream;
++    defer daemon.clients.deinit(alloc);
++    defer daemon.pty_write_buf.deinit(alloc);
++    const a = try lib_posix.pipe2(.{});
++    defer lib_posix.close(a[1]);
++    const b = try lib_posix.pipe2(.{});
++    defer lib_posix.close(b[1]);
++    defer lib_posix.close(b[0]);
++
++    stream.nextSlice(lost);
++    // what `zmx attach` writes before it connects
++    client_stream.nextSlice("\x1b[2J\x1b[H");
++    stream.nextSlice(seen);
++    client_stream.nextSlice(seen);
++    daemon.has_pty_output = lost.len + seen.len > 0;
++    daemon.has_had_client = reattach;
++    const client = try testClient(alloc, a[0], false);
++    try daemon.clients.append(alloc, client);
++    try daemon.handleInit(alloc, client, b[0], &term, std.mem.asBytes(&ipc.Resize{ .rows = 6, .cols = 40 }));
++    const replay = try queuedOutput(alloc, client);
++    defer alloc.free(replay);
++    client_stream.nextSlice(replay);
++    stream.nextSlice(after);
++    client_stream.nextSlice(after);
++
++    const want = util.serializeTerminal(alloc, &term, .vt) orelse return error.TestUnexpectedNull;
++    defer alloc.free(want);
++    const got = util.serializeTerminal(alloc, &client_term, .vt) orelse return error.TestUnexpectedNull;
++    defer alloc.free(got);
++    try std.testing.expectEqualStrings(want, got);
++    try std.testing.expectEqualStrings(term.getTitle() orelse "", client_term.getTitle() orelse "");
++    _ = daemon.closeClient(alloc, client, 0, false);
++}
++
++test "an attaching client ends in the daemon's state whatever sequence the attach cut" {
++    for ([_]bool{ false, true }) |reattach| {
++        // nothing in flight
++        try expectAttachConverges("READY$ ", "", "ls\r\n", reattach);
++        // a CSI, an OSC, a DCS, an APC and a UTF-8 character cut before the connect
++        try expectAttachConverges("plain \x1b[3", "", "1mRED\x1b[0m $ ", reattach);
++        try expectAttachConverges("\x1b]2;my ti", "", "tle\x07READY $ ", reattach);
++        try expectAttachConverges("dcs \x1bP$q", "", "m\x1b\\ $ ", reattach);
++        try expectAttachConverges("apc \x1b_Ga=d,", "", "d=A\x1b\\ $ ", reattach);
++        try expectAttachConverges("price \xe2\x82", "", "\xac $ ", reattach);
++    }
++    // a first attach also sent output between its connect and its Init, ending inside a CSI, a UTF-8 character, an
++    // OSC, a DCS and an APC (the reset's ESC dispatches a cut string early; the end state still converges)
++    try expectAttachConverges("lost line\r\n", "seen \x1b[3", "2mGREEN\x1b[0m $ ", false);
++    try expectAttachConverges("lost line\r\n", "seen \xe2", "\x82\xac $ ", false);
++    try expectAttachConverges("lost line\r\n", "seen \x1b]2;par", "tial\x07 $ ", false);
++    try expectAttachConverges("lost line\r\n", "seen \x1bP$q", "m\x1b\\ $ ", false);
++    try expectAttachConverges("lost line\r\n", "seen \x1b_Ga=d,", "d=A\x1b\\ $ ", false);
++    // the cut sequence began before the connect and continues across it
++    try expectAttachConverges("lost \x1b[1;", "3", "4mBLUE\x1b[0m $ ", false);
++}
++
+ test "switch moves a stock leader and leaves a managed one bound to its session" {
+     const alloc = std.testing.allocator;
+     var daemon = testDaemon();

@@ -61,7 +61,7 @@ the Linux equivalent, or a recorded "no Linux counterpart" in the checklist.
 | `agterm/Resources/hud/` | `crates/agterm-gtk/resources/hud/` | `hud.sh`, included with `include_str!` |
 | `agterm/Resources/custom-themes/` | `build/themes/` | agterm's own themes |
 | `agterm/Resources/ghostty-defaults.conf` | `crates/agterm-core/src/ghostty_config/ghostty-defaults.conf` | adapted (Linux chords, comments): usually a conflict, merge the setting, keep the Linux binds |
-| `scripts/zmx-patches/*.patch` (+ `ghostty/`) | `build/patches/zmx/` | upstream's own zmx patches; a change rebuilds zmx |
+| `scripts/zmx-patches/*.patch` (+ `ghostty/`) | `build/patches/zmx/` | upstream's own zmx patches; a change rebuilds zmx. `0003-first-attach-snapshot.patch` is this repository's own (no upstream counterpart): keep it, and re-check that it applies after upstream's |
 | `LICENSE` | `resources/LICENSE.upstream` | |
 | `scripts/setup.sh` (`GHOSTTY_REV`, `ZMX_REV`) | `build/pins.env` | via `pins-delta.sh`; Zig version from each rev's `build.zig.zon`, sums from ziglang.org |
 
