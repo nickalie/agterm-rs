@@ -1,0 +1,25 @@
+[package]
+name = "agterm-term"
+description = "agterm's terminal pane core: libghostty-vt behind a lock, a PTY and an IO thread per pane, frames and events in its own types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+agterm-core.workspace = true
+agterm-ghostty-vt.workspace = true
+# the OSC 5522 classifier decodes metadata and MIME lists as Ghostty does (strict, padded)
+base64.workspace = true
+bitflags.workspace = true
+libc.workspace = true
+png.workspace = true
+portable-pty.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

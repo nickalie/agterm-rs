@@ -3,7 +3,7 @@
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
-use crate::{Error, Handle, Terminal, sys};
+use crate::{CellWidth, Cells, Error, Handle, HeldTerminal, Rgb, Terminal, ffi};
 
 /// How much of the capture changed since the last [`RenderState::clean`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,6 +14,53 @@ pub enum Dirty {
     Partial,
     /// Global state changed; every row is redrawn.
     Full,
+}
+
+/// A row's identity across captures ([`RowRef::id`]); compare for equality only.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct RowId(pub [u64; 2]);
+
+/// The cursor's visual style in a capture.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum CursorStyle {
+    Bar,
+    #[default]
+    Block,
+    Underline,
+    BlockHollow,
+}
+
+/// Where the cursor sits in the viewport.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct CursorPosition {
+    pub x: u16,
+    pub y: u16,
+    /// On the tail of a wide character.
+    pub wide_tail: bool,
+}
+
+/// The cursor in a capture.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct RenderCursor {
+    /// The cursor's viewport cell when it is inside the viewport.
+    pub position: Option<CursorPosition>,
+    /// Visible per the terminal's modes (DECTCEM).
+    pub visible: bool,
+    /// Blinking per the terminal's modes.
+    pub blinking: bool,
+    /// At a password prompt.
+    pub password_input: bool,
+    pub style: CursorStyle,
+}
+
+/// The colors of a capture: effective defaults (OSC overrides applied) and the 256-color palette.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderColors {
+    pub background: Rgb,
+    pub foreground: Rgb,
+    /// The cursor color when one is set explicitly.
+    pub cursor: Option<Rgb>,
+    pub palette: Box<[Rgb; 256]>,
 }
 
 /// The capture a renderer draws from: the viewport's rows, cells, colors and cursor as of the last update.
@@ -27,9 +74,9 @@ pub enum Dirty {
 pub struct RenderState {
     // Allocated once and refilled on every read, as `render.h` suggests, rather than per frame or per row. Fields drop
     // in declaration order: the cells and the iterator go before the state they read.
-    cells: Handle<sys::GhosttyRenderStateRowCellsImpl>,
-    rows: Handle<sys::GhosttyRenderStateRowIteratorImpl>,
-    raw: Handle<sys::GhosttyRenderStateImpl>,
+    cells: Handle<ffi::GhosttyRenderStateRowCellsImpl>,
+    rows: Handle<ffi::GhosttyRenderStateRowIteratorImpl>,
+    raw: Handle<ffi::GhosttyRenderStateImpl>,
     // False after a failed update or begin: the C capture may claim rows its storage does not hold.
     valid: bool,
 }
@@ -47,19 +94,19 @@ impl RenderState {
     ///
     /// [`Error::OutOfMemory`] when an allocation fails.
     pub fn new() -> Result<Self, Error> {
-        let mut raw: sys::GhosttyRenderState = std::ptr::null_mut();
+        let mut raw: ffi::GhosttyRenderState = std::ptr::null_mut();
         // SAFETY: a null allocator selects the default one; `raw` is a valid out-pointer filled on success only.
-        Error::check(unsafe { sys::ghostty_render_state_new(std::ptr::null(), &raw mut raw) })?;
+        Error::check(unsafe { ffi::ghostty_render_state_new(std::ptr::null(), &raw mut raw) })?;
         // Owned from here on, so an early return below frees what was already allocated.
-        let raw = Handle::new(raw, sys::ghostty_render_state_free)?;
-        let mut rows: sys::GhosttyRenderStateRowIterator = std::ptr::null_mut();
+        let raw = Handle::new(raw, ffi::ghostty_render_state_free)?;
+        let mut rows: ffi::GhosttyRenderStateRowIterator = std::ptr::null_mut();
         // SAFETY: as above, for the row iterator.
-        Error::check(unsafe { sys::ghostty_render_state_row_iterator_new(std::ptr::null(), &raw mut rows) })?;
-        let rows = Handle::new(rows, sys::ghostty_render_state_row_iterator_free)?;
-        let mut cells: sys::GhosttyRenderStateRowCells = std::ptr::null_mut();
+        Error::check(unsafe { ffi::ghostty_render_state_row_iterator_new(std::ptr::null(), &raw mut rows) })?;
+        let rows = Handle::new(rows, ffi::ghostty_render_state_row_iterator_free)?;
+        let mut cells: ffi::GhosttyRenderStateRowCells = std::ptr::null_mut();
         // SAFETY: as above, for the row cells.
-        Error::check(unsafe { sys::ghostty_render_state_row_cells_new(std::ptr::null(), &raw mut cells) })?;
-        let cells = Handle::new(cells, sys::ghostty_render_state_row_cells_free)?;
+        Error::check(unsafe { ffi::ghostty_render_state_row_cells_new(std::ptr::null(), &raw mut cells) })?;
+        let cells = Handle::new(cells, ffi::ghostty_render_state_row_cells_free)?;
         Ok(Self {
             cells,
             rows,
@@ -75,7 +122,7 @@ impl RenderState {
     /// [`Error::OutOfMemory`] when the capture cannot allocate.
     pub fn update(&mut self, terminal: &mut Terminal) -> Result<(), Error> {
         // SAFETY: both handles are live and owned by their `&mut` borrowers, so no other call runs on either.
-        let result = unsafe { sys::ghostty_render_state_update(self.raw.ptr(), terminal.as_raw()) };
+        let result = unsafe { ffi::ghostty_render_state_update(self.raw.ptr(), terminal.as_raw()) };
         self.record(Error::check(result))
     }
 
@@ -88,13 +135,15 @@ impl RenderState {
     /// [`Error::OutOfMemory`] when the capture cannot allocate.
     pub fn begin_update(&mut self, terminal: &mut Terminal) -> Result<PendingUpdate<'_>, Error> {
         // SAFETY: both handles are live and owned by their `&mut` borrowers, so no other call runs on either.
-        let result = unsafe { sys::ghostty_render_state_begin_update(self.raw.ptr(), terminal.as_raw()) };
-        let result = self.record(Error::check(result));
-        let pending = PendingUpdate {
+        let result = unsafe { ffi::ghostty_render_state_begin_update(self.raw.ptr(), terminal.as_raw()) };
+        // Invalid until the end phase ran: the begin phase only queues the per-cell styles that end writes, so a
+        // forgotten guard must not leave the half-built capture readable.
+        self.valid = false;
+        Error::check(result)?;
+        Ok(PendingUpdate {
             state: self,
             ended: false,
-        };
-        result.map(|()| pending)
+        })
     }
 
     /// Keep the outcome of an update: a failure invalidates the capture until the next success.
@@ -106,19 +155,19 @@ impl RenderState {
     /// How much changed since the last [`RenderState::clean`].
     #[must_use]
     pub fn dirty(&self) -> Dirty {
-        let mut value: sys::GhosttyRenderStateDirty = sys::GHOSTTY_RENDER_STATE_DIRTY_FULL;
+        let mut value: ffi::GhosttyRenderStateDirty = ffi::GHOSTTY_RENDER_STATE_DIRTY_FULL;
         // SAFETY: the state is live; `GHOSTTY_RENDER_STATE_DATA_DIRTY` writes a `GhosttyRenderStateDirty`, the type
         // of `value`. A failure leaves `FULL` in place, the safe answer.
         unsafe {
-            sys::ghostty_render_state_get(
+            ffi::ghostty_render_state_get(
                 self.raw.ptr(),
-                sys::GHOSTTY_RENDER_STATE_DATA_DIRTY,
+                ffi::GHOSTTY_RENDER_STATE_DATA_DIRTY,
                 (&raw mut value).cast(),
             )
         };
         match value {
-            sys::GHOSTTY_RENDER_STATE_DIRTY_FALSE => Dirty::Clean,
-            sys::GHOSTTY_RENDER_STATE_DIRTY_PARTIAL => Dirty::Partial,
+            ffi::GHOSTTY_RENDER_STATE_DIRTY_FALSE => Dirty::Clean,
+            ffi::GHOSTTY_RENDER_STATE_DIRTY_PARTIAL => Dirty::Partial,
             _ => Dirty::Full,
         }
     }
@@ -126,7 +175,7 @@ impl RenderState {
     /// Mark the whole capture drawn: the global and every row's dirty flag.
     pub fn clean(&mut self) {
         // SAFETY: the state is live and `&mut self` makes this the only call on it; it cannot fail for a live state.
-        unsafe { sys::ghostty_render_state_clean(self.raw.ptr()) };
+        unsafe { ffi::ghostty_render_state_clean(self.raw.ptr()) };
     }
 
     /// The captured viewport's width and height in cells; (0, 0) after a failed update.
@@ -136,8 +185,8 @@ impl RenderState {
             return (0, 0);
         }
         (
-            self.get_u16(sys::GHOSTTY_RENDER_STATE_DATA_COLS),
-            self.get_u16(sys::GHOSTTY_RENDER_STATE_DATA_ROWS),
+            self.get_u16(ffi::GHOSTTY_RENDER_STATE_DATA_COLS),
+            self.get_u16(ffi::GHOSTTY_RENDER_STATE_DATA_ROWS),
         )
     }
 
@@ -155,9 +204,9 @@ impl RenderState {
         // SAFETY: the state and its iterator are live and owned by `self`; `GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR`
         // takes a pointer to the pre-allocated iterator handle and refills that iterator.
         let result = unsafe {
-            sys::ghostty_render_state_get(
+            ffi::ghostty_render_state_get(
                 self.raw.ptr(),
-                sys::GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
+                ffi::GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
                 (&raw mut iterator).cast(),
             )
         };
@@ -169,10 +218,90 @@ impl RenderState {
         })
     }
 
-    fn get_u16(&self, data: sys::GhosttyRenderStateData) -> u16 {
+    /// Capture the terminal from inside [`Effects::render_hold`](crate::Effects::render_hold) (both phases), as
+    /// `terminal.h` asks when a hold begins.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::OutOfMemory`] when the capture cannot allocate.
+    pub fn update_held(&mut self, terminal: &mut HeldTerminal<'_>) -> Result<(), Error> {
+        // SAFETY: the state is live and owned by `&mut self`; `terminal` is the terminal running the hold callback,
+        // whose caller holds whatever serializes it, and capturing from there is what the C API documents.
+        let result = unsafe { ffi::ghostty_render_state_update(self.raw.ptr(), terminal.as_raw()) };
+        self.record(Error::check(result))
+    }
+
+    /// The captured colors, or `None` after a failed update or before the first one.
+    #[must_use]
+    pub fn colors(&self) -> Option<RenderColors> {
+        if !self.valid {
+            return None;
+        }
+        // SAFETY: an all-zero `GhosttyRenderStateColors` is a valid value (plain integers and a bool), sized below.
+        let mut raw: ffi::GhosttyRenderStateColors = unsafe { std::mem::zeroed() };
+        raw.size = std::mem::size_of::<ffi::GhosttyRenderStateColors>();
+        // SAFETY: the state is live; `DATA_COLORS` writes a sized `GhosttyRenderStateColors`.
+        let result = unsafe {
+            ffi::ghostty_render_state_get(
+                self.raw.ptr(),
+                ffi::GHOSTTY_RENDER_STATE_DATA_COLORS,
+                (&raw mut raw).cast(),
+            )
+        };
+        if result != ffi::GHOSTTY_SUCCESS {
+            return None;
+        }
+        Some(RenderColors {
+            background: raw.background.into(),
+            foreground: raw.foreground.into(),
+            cursor: raw.cursor_has_value.then(|| raw.cursor.into()),
+            palette: Box::new(raw.palette.map(Rgb::from)),
+        })
+    }
+
+    /// The captured cursor, or `None` after a failed update or before the first one.
+    #[must_use]
+    pub fn cursor(&self) -> Option<RenderCursor> {
+        if !self.valid {
+            return None;
+        }
+        // SAFETY: an all-zero `GhosttyRenderStateCursor` is a valid value, sized below.
+        let mut raw: ffi::GhosttyRenderStateCursor = unsafe { std::mem::zeroed() };
+        raw.size = std::mem::size_of::<ffi::GhosttyRenderStateCursor>();
+        // SAFETY: the state is live; `DATA_CURSOR` writes a sized `GhosttyRenderStateCursor`.
+        let result = unsafe {
+            ffi::ghostty_render_state_get(
+                self.raw.ptr(),
+                ffi::GHOSTTY_RENDER_STATE_DATA_CURSOR,
+                (&raw mut raw).cast(),
+            )
+        };
+        if result != ffi::GHOSTTY_SUCCESS {
+            return None;
+        }
+        let style = match raw.visual_style {
+            ffi::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR => CursorStyle::Bar,
+            ffi::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE => CursorStyle::Underline,
+            ffi::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW => CursorStyle::BlockHollow,
+            _ => CursorStyle::Block,
+        };
+        Some(RenderCursor {
+            position: raw.viewport_has_value.then_some(CursorPosition {
+                x: raw.viewport_x,
+                y: raw.viewport_y,
+                wide_tail: raw.wide_tail,
+            }),
+            visible: raw.visible,
+            blinking: raw.blinking,
+            password_input: raw.password_input,
+            style,
+        })
+    }
+
+    fn get_u16(&self, data: ffi::GhosttyRenderStateData) -> u16 {
         let mut value: u16 = 0;
         // SAFETY: the state is live; the keys passed here write a `uint16_t`, the type of `value`.
-        unsafe { sys::ghostty_render_state_get(self.raw.ptr(), data, (&raw mut value).cast()) };
+        unsafe { ffi::ghostty_render_state_get(self.raw.ptr(), data, (&raw mut value).cast()) };
         value
     }
 }
@@ -191,17 +320,23 @@ impl PendingUpdate<'_> {
     ///
     /// The library's result; it fails only for a null state, which this type cannot hold.
     pub fn end(mut self) -> Result<(), Error> {
+        self.finish()
+    }
+
+    /// Run the end phase once; the capture is readable again only if it succeeded.
+    fn finish(&mut self) -> Result<(), Error> {
         self.ended = true;
         // SAFETY: the state is live and borrowed mutably by `self`; end touches only memory the state owns.
-        Error::check(unsafe { sys::ghostty_render_state_end_update(self.state.raw.ptr()) })
+        let result = Error::check(unsafe { ffi::ghostty_render_state_end_update(self.state.raw.ptr()) });
+        self.state.record(result)
     }
 }
 
 impl Drop for PendingUpdate<'_> {
     fn drop(&mut self) {
         if !self.ended {
-            // SAFETY: as in `end`; a begun update must always be ended before the state is read again.
-            unsafe { sys::ghostty_render_state_end_update(self.state.raw.ptr()) };
+            // a begun update must always be ended before the state is read again
+            let _ = self.finish();
         }
     }
 }
@@ -209,8 +344,8 @@ impl Drop for PendingUpdate<'_> {
 /// The captured rows of a [`RenderState`], walked with [`Rows::next_row`] (each row borrows the walk).
 #[derive(Debug)]
 pub struct Rows<'a> {
-    iterator: NonNull<sys::GhosttyRenderStateRowIteratorImpl>,
-    cells: NonNull<sys::GhosttyRenderStateRowCellsImpl>,
+    iterator: NonNull<ffi::GhosttyRenderStateRowIteratorImpl>,
+    cells: NonNull<ffi::GhosttyRenderStateRowCellsImpl>,
     state: PhantomData<&'a mut RenderState>,
 }
 
@@ -219,7 +354,7 @@ impl Rows<'_> {
     pub fn next_row(&mut self) -> Option<RowRef<'_>> {
         // SAFETY: the iterator is live, owned by the borrowed state, and was filled by `RenderState::rows` from a
         // state that cannot be updated while `self` borrows it.
-        let moved = unsafe { sys::ghostty_render_state_row_iterator_next(self.iterator.as_ptr()) };
+        let moved = unsafe { ffi::ghostty_render_state_row_iterator_next(self.iterator.as_ptr()) };
         moved.then_some(RowRef {
             iterator: self.iterator,
             cells: self.cells,
@@ -231,8 +366,8 @@ impl Rows<'_> {
 /// One captured row.
 #[derive(Debug)]
 pub struct RowRef<'a> {
-    iterator: NonNull<sys::GhosttyRenderStateRowIteratorImpl>,
-    cells: NonNull<sys::GhosttyRenderStateRowCellsImpl>,
+    iterator: NonNull<ffi::GhosttyRenderStateRowIteratorImpl>,
+    cells: NonNull<ffi::GhosttyRenderStateRowCellsImpl>,
     rows: PhantomData<&'a mut ()>,
 }
 
@@ -244,13 +379,51 @@ impl RowRef<'_> {
         // SAFETY: the iterator is positioned on this row (`next_row` returned it); `ROW_DATA_DIRTY` writes a `bool`.
         // A failure leaves `true`, the safe answer.
         unsafe {
-            sys::ghostty_render_state_row_get(
+            ffi::ghostty_render_state_row_get(
                 self.iterator.as_ptr(),
-                sys::GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY,
+                ffi::GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY,
                 (&raw mut dirty).cast(),
             )
         };
         dirty
+    }
+
+    /// The row's identity across updates (`render.h` "Row Identity"): a row keeps its id while it moves, loses it
+    /// when changed in place, and ids are never reused.
+    #[must_use]
+    pub fn id(&self) -> RowId {
+        let mut id = ffi::GhosttyRenderStateRowId { bits: [0, 0] };
+        // SAFETY: the iterator is positioned on this row; `ROW_DATA_ID` writes a `GhosttyRenderStateRowId`. A failure
+        // leaves the all-zero id, which is never valid and so never matches a cached row.
+        unsafe {
+            ffi::ghostty_render_state_row_get(
+                self.iterator.as_ptr(),
+                ffi::GHOSTTY_RENDER_STATE_ROW_DATA_ID,
+                (&raw mut id).cast(),
+            )
+        };
+        RowId(id.bits)
+    }
+
+    /// The row's cells, left to right.
+    ///
+    /// # Errors
+    ///
+    /// The library's result when the row's cells cannot be read.
+    pub fn cells(&mut self) -> Result<Cells<'_>, Error> {
+        let mut cells = self.cells.as_ptr();
+        // SAFETY: the iterator is positioned on this row; `ROW_DATA_CELLS` refills the pre-allocated cells handle
+        // through a pointer to it.
+        let result = unsafe {
+            ffi::ghostty_render_state_row_get(
+                self.iterator.as_ptr(),
+                ffi::GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
+                (&raw mut cells).cast(),
+            )
+        };
+        Error::check(result)?;
+        // SAFETY: just filled for this row; `&mut self` keeps the row (and so the state) borrowed while it lives.
+        Ok(unsafe { Cells::new(self.cells) })
     }
 
     /// The row's text: each cell's grapheme cluster, a blank cell as one space and the spacer cell of a wide
@@ -259,96 +432,21 @@ impl RowRef<'_> {
     /// # Errors
     ///
     /// The library's result when the row's cells cannot be read.
-    pub fn text(&self) -> Result<String, Error> {
-        let mut cells = self.cells.as_ptr();
-        // SAFETY: the iterator is positioned on this row; `ROW_DATA_CELLS` refills the pre-allocated cells handle
-        // through a pointer to it.
-        let result = unsafe {
-            sys::ghostty_render_state_row_get(
-                self.iterator.as_ptr(),
-                sys::GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
-                (&raw mut cells).cast(),
-            )
-        };
-        Error::check(result)?;
+    pub fn text(&mut self) -> Result<String, Error> {
+        let mut cells = self.cells()?;
         let mut text = Vec::new();
-        // SAFETY: the cells handle was just filled for this row and stays valid while the state is borrowed.
-        while unsafe { sys::ghostty_render_state_row_cells_next(self.cells.as_ptr()) } {
-            if !is_spacer(self.cells)? {
-                push_grapheme(self.cells, &mut text)?;
+        while let Some(cell) = cells.next_cell() {
+            let cell = cell?;
+            if matches!(cell.width(), CellWidth::SpacerTail | CellWidth::SpacerHead) {
+                continue;
+            }
+            let before = text.len();
+            cell.grapheme(&mut text)?;
+            if text.len() == before {
+                text.push(b' ');
             }
         }
         Ok(String::from_utf8_lossy(&text).into_owned())
-    }
-}
-
-/// Whether the current cell is the spacer half of a wide character (or the head spacer a wrapped one leaves).
-fn is_spacer(cells: NonNull<sys::GhosttyRenderStateRowCellsImpl>) -> Result<bool, Error> {
-    let mut raw: sys::GhosttyCell = 0;
-    // SAFETY: the cells handle is positioned on a cell; `ROW_CELLS_DATA_RAW` writes a `GhosttyCell`.
-    let result = unsafe {
-        sys::ghostty_render_state_row_cells_get(
-            cells.as_ptr(),
-            sys::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW,
-            (&raw mut raw).cast(),
-        )
-    };
-    Error::check(result)?;
-    let mut wide: sys::GhosttyCellWide = sys::GHOSTTY_CELL_WIDE_NARROW;
-    // SAFETY: `raw` is a cell value; `GHOSTTY_CELL_DATA_WIDE` writes a `GhosttyCellWide`.
-    Error::check(unsafe { sys::ghostty_cell_get(raw, sys::GHOSTTY_CELL_DATA_WIDE, (&raw mut wide).cast()) })?;
-    Ok(matches!(
-        wide,
-        sys::GHOSTTY_CELL_WIDE_SPACER_TAIL | sys::GHOSTTY_CELL_WIDE_SPACER_HEAD
-    ))
-}
-
-/// Append the current cell's grapheme cluster as UTF-8, or a space for a cell without text.
-fn push_grapheme(cells: NonNull<sys::GhosttyRenderStateRowCellsImpl>, text: &mut Vec<u8>) -> Result<(), Error> {
-    let mut stack = [0_u8; 32];
-    let mut buffer = sys::GhosttyBuffer {
-        ptr: stack.as_mut_ptr(),
-        cap: stack.len(),
-        len: 0,
-    };
-    // SAFETY: the cells handle is positioned on a cell; `GRAPHEMES_UTF8` writes at most `cap` bytes to `ptr` (a live
-    // stack buffer of that size) and sets `len`, or sets `len` to the size it needs and writes nothing.
-    let result = unsafe { read_grapheme(cells, &mut buffer) };
-    if result == sys::GHOSTTY_OUT_OF_SPACE {
-        let mut heap = vec![0_u8; buffer.len];
-        buffer = sys::GhosttyBuffer {
-            ptr: heap.as_mut_ptr(),
-            cap: heap.len(),
-            len: 0,
-        };
-        // SAFETY: as above, with a heap buffer of the size the library asked for.
-        Error::check(unsafe { read_grapheme(cells, &mut buffer) })?;
-        text.extend_from_slice(&heap[..buffer.len.min(heap.len())]);
-        return Ok(());
-    }
-    Error::check(result)?;
-    if buffer.len == 0 {
-        text.push(b' ');
-    } else {
-        text.extend_from_slice(&stack[..buffer.len.min(stack.len())]);
-    }
-    Ok(())
-}
-
-/// # Safety
-///
-/// `cells` must be positioned on a cell and `buffer.ptr` must be valid for `buffer.cap` bytes of writes.
-unsafe fn read_grapheme(
-    cells: NonNull<sys::GhosttyRenderStateRowCellsImpl>,
-    buffer: &mut sys::GhosttyBuffer,
-) -> sys::GhosttyResult {
-    // SAFETY: the caller's contract; `GRAPHEMES_UTF8` takes a `GhosttyBuffer *`.
-    unsafe {
-        sys::ghostty_render_state_row_cells_get(
-            cells.as_ptr(),
-            sys::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8,
-            std::ptr::from_mut(buffer).cast(),
-        )
     }
 }
 
@@ -359,7 +457,7 @@ mod tests {
     fn screen(state: &mut RenderState) -> Vec<String> {
         let mut rows = state.rows().unwrap();
         let mut lines = Vec::new();
-        while let Some(row) = rows.next_row() {
+        while let Some(mut row) = rows.next_row() {
             lines.push(row.text().unwrap().trim_end().to_owned());
         }
         lines
@@ -400,6 +498,26 @@ mod tests {
         assert_ne!(state.dirty(), Dirty::Clean);
         state.clean();
         assert_eq!(state.dirty(), Dirty::Clean);
+    }
+
+    #[test]
+    fn a_forgotten_update_guard_leaves_the_capture_unreadable_until_the_next_update() {
+        let mut terminal = Terminal::new(10, 2).unwrap();
+        terminal.vt_write(b"\x1b[1;31mred\x1b[0m");
+        let mut state = RenderState::new().unwrap();
+        state.update(&mut terminal).unwrap();
+        assert!(state.colors().is_some());
+        // the begin phase queued styles only the end phase writes: nothing may read the half-built capture
+        std::mem::forget(state.begin_update(&mut terminal).unwrap());
+        assert_eq!(state.size(), (0, 0));
+        assert_eq!(state.rows().err(), Some(Error::NoValue));
+        assert!(state.colors().is_none());
+        assert!(state.cursor().is_none());
+        // a complete update (two-phase, ended by dropping the guard) makes it readable again
+        drop(state.begin_update(&mut terminal).unwrap());
+        assert_eq!(screen(&mut state), ["red", ""]);
+        state.begin_update(&mut terminal).unwrap().end().unwrap();
+        assert!(state.colors().is_some());
     }
 
     #[test]
