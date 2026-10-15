@@ -77,7 +77,7 @@ x11rb::atom_manager! {
         TEXT,
         TEXT_MIME_UNKNOWN: b"text/plain",
 
-        // HTML: b"text/html",
+        HTML: b"text/html",
         // URI_LIST: b"text/uri-list",
 
         PNG__MIME: ImageFormat::mime_type(ImageFormat::Png ).as_bytes(),
@@ -991,6 +991,32 @@ impl Clipboard {
             bytes: message.into_owned().into_bytes(),
             format: self.inner.atoms.UTF8_STRING,
         }];
+        self.inner.write(data, selection, wait)
+    }
+
+    /// `message`, with an HTML representation offered as `text/html` beside it or instead of it (agterm-rs:
+    /// `with_clipboard_html`).
+    pub(crate) fn set_text_with_html(
+        &self,
+        message: Cow<'_, str>,
+        html: Option<crate::linux::ClipboardHtml>,
+        selection: ClipboardKind,
+        wait: WaitConfig,
+    ) -> Result<()> {
+        let Some(html) = html else {
+            return self.set_text(message, selection, wait);
+        };
+        let mut data = Vec::with_capacity(2);
+        if html.with_text {
+            data.push(ClipboardData {
+                bytes: message.into_owned().into_bytes(),
+                format: self.inner.atoms.UTF8_STRING,
+            });
+        }
+        data.push(ClipboardData {
+            bytes: html.html.into_bytes(),
+            format: self.inner.atoms.HTML,
+        });
         self.inner.write(data, selection, wait)
     }
 

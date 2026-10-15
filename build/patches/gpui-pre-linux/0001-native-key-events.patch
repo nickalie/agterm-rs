@@ -5,19 +5,67 @@ the dispatch of one key event (an RAII scope): a press, each of its Wayland auto
 and its release carry `NativeInput::Key` (XKB keycode, modifiers with Shift, consumed modifiers, the layout's level-0
 character and whether that layout types ASCII, the text before Ctrl transformations, composition and repeat flags, the
 keystroke GPUI built); text-input-v3's one-character commit, dispatched as a synthetic key, carries
-`NativeInput::Text`. `current_native_input()` reads it during the dispatch. Linux only and additive: no GPUI type
-changes, so gpui-kit, gpui-component and the other platforms build unchanged. scripts/vendor-gpui.sh applies this to
-the verified crates.io archive.
+`NativeInput::Text`. `current_native_input()` reads it during the dispatch. And a `text/html` clipboard offer:
+`with_clipboard_html(ClipboardHtml { html, with_text }, write)` makes the clipboard writes inside `write` offer the
+HTML as `text/html` beside the item's text, or alone (Ghostty's `copy_to_clipboard:mixed` and `:html`), from the
+Wayland data source and the X11 selection owner. Linux only and additive: no GPUI type changes, so gpui-kit,
+gpui-component and the other platforms build unchanged. scripts/vendor-gpui.sh applies this to the verified
+crates.io archive.
 
 diff -ruN a/src/gpui_linux.rs b/src/gpui_linux.rs
 --- a/src/gpui_linux.rs
 +++ b/src/gpui_linux.rs
-@@ -1,4 +1,4 @@
+@@ -1,4 +1,7 @@
  #![cfg(any(target_os = "linux", target_os = "freebsd"))]
  mod linux;
  
 -pub use linux::{current_platform, linux_platform};
-+pub use linux::{NativeInput, NativeKey, current_native_input, current_platform, linux_platform};
++pub use linux::{
++    ClipboardHtml, HTML_MIME_TYPE, NativeInput, NativeKey, current_native_input, current_platform, linux_platform,
++    with_clipboard_html,
++};
+diff -ruN a/src/linux/clipboard_html.rs b/src/linux/clipboard_html.rs
+--- a/src/linux/clipboard_html.rs
++++ b/src/linux/clipboard_html.rs
+@@ -0,0 +1,38 @@
++//! An HTML representation of a clipboard write (an agterm-rs patch): GPUI's `ClipboardItem` carries text and images
++//! only, while a terminal copies a selection as `text/html` too (Ghostty's `copy_to_clipboard:html` and `:mixed`).
++//!
++//! [`with_clipboard_html`] installs the HTML for the clipboard writes its closure makes on this thread (the platform's
++//! `write_to_clipboard` / `write_to_primary` take it): the Wayland data source and the X11 selection owner then offer
++//! `text/html` beside the item's text, or instead of it. Nothing changes for a write outside the closure.
++
++use std::cell::RefCell;
++
++/// The MIME type (and X11 target) the HTML is offered under.
++pub const HTML_MIME_TYPE: &str = "text/html";
++
++/// The HTML a clipboard write offers.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct ClipboardHtml {
++    /// The `text/html` data.
++    pub html: String,
++    /// Whether the item's text is offered too (`false`: `text/html` alone).
++    pub with_text: bool,
++}
++
++thread_local! {
++    static PENDING: RefCell<Option<ClipboardHtml>> = const { RefCell::new(None) };
++}
++
++/// Runs `write` (a `write_to_clipboard` or `write_to_primary`) with `html` offered beside, or instead of, its text.
++pub fn with_clipboard_html<R>(html: ClipboardHtml, write: impl FnOnce() -> R) -> R {
++    let previous = PENDING.replace(Some(html));
++    let result = write();
++    PENDING.set(previous);
++    result
++}
++
++/// The HTML the clipboard write being made offers, taken once.
++#[cfg_attr(not(any(feature = "wayland", feature = "x11")), allow(dead_code))]
++pub(crate) fn take_clipboard_html() -> Option<ClipboardHtml> {
++    PENDING.take()
++}
 diff -ruN a/src/linux/native_key.rs b/src/linux/native_key.rs
 --- a/src/linux/native_key.rs
 +++ b/src/linux/native_key.rs
@@ -159,7 +207,7 @@ diff -ruN a/src/linux/native_key.rs b/src/linux/native_key.rs
 diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
 --- a/src/linux/wayland/client.rs
 +++ b/src/linux/wayland/client.rs
-@@ -87,8 +87,9 @@
+@@ -87,10 +87,11 @@
  use crate::linux::{
      DOUBLE_CLICK_INTERVAL, LinuxCommon, LinuxKeyboardLayout, PIPE_READ_TIMEOUT, SCROLL_LINES,
      capslock_from_xkb, cursor_style_to_icon_names, get_xkb_compose_state, is_within_click_distance,
@@ -169,8 +217,29 @@ diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
 +    modifiers_from_xkb, native_key, new_xkb_context, open_uri_internal, read_fd_with_timeout,
 +    reveal_path_internal,
      wayland::{
-         clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE, TEXT_MIME_TYPES},
+-        clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE, TEXT_MIME_TYPES},
++        clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE},
          cursor::Cursor,
+         serial::{Serial, SerialKind, SerialTracker},
+         to_shape,
+@@ -1446,7 +1447,7 @@
+                 return;
+             };
+             let data_source = primary_selection_manager.create_source(&state.globals.qh, ());
+-            for mime_type in TEXT_MIME_TYPES {
++            for mime_type in state.clipboard.offered(true) {
+                 data_source.offer(mime_type.to_string());
+             }
+             data_source.offer(state.clipboard.self_mime());
+@@ -1472,7 +1473,7 @@
+             };
+             let data_source = data_device_manager
+                 .create_data_source(&state.globals.qh, DataSourceKind::Clipboard);
+-            for mime_type in TEXT_MIME_TYPES {
++            for mime_type in state.clipboard.offered(false) {
+                 data_source.offer(mime_type.to_string());
+             }
+             data_source.offer(state.clipboard.self_mime());
 @@ -2166,10 +2167,12 @@
                      wl_keyboard::KeyState::Pressed if !keysym.is_modifier_key() => {
                          let mut keystroke =
@@ -252,6 +321,88 @@ diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
                          window.handle_input(PlatformInput::KeyDown(KeyDownEvent {
                              keystroke: Keystroke {
                                  modifiers: Modifiers::default(),
+diff -ruN a/src/linux/wayland/clipboard.rs b/src/linux/wayland/clipboard.rs
+--- a/src/linux/wayland/clipboard.rs
++++ b/src/linux/wayland/clipboard.rs
+@@ -11,6 +11,7 @@
+ use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1;
+ 
+ use crate::linux::platform::{PIPE_READ_TIMEOUT, read_fd_with_timeout};
++use crate::linux::{ClipboardHtml, HTML_MIME_TYPE, take_clipboard_html};
+ use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat, hash};
+ 
+ /// Text mime types that we'll offer to other programs.
+@@ -29,6 +30,9 @@
+     // Internal clipboard
+     contents: Option<ClipboardItem>,
+     primary_contents: Option<ClipboardItem>,
++    // The HTML offered with them (agterm-rs: `with_clipboard_html`)
++    html: Option<ClipboardHtml>,
++    primary_html: Option<ClipboardHtml>,
+ 
+     // External clipboard
+     cached_read: Option<ClipboardItem>,
+@@ -144,6 +148,8 @@
+ 
+             contents: None,
+             primary_contents: None,
++            html: None,
++            primary_html: None,
+ 
+             cached_read: None,
+             current_offer: None,
+@@ -154,10 +160,23 @@
+ 
+     pub fn set(&mut self, item: ClipboardItem) {
+         self.contents = Some(item);
++        self.html = take_clipboard_html();
+     }
+ 
+     pub fn set_primary(&mut self, item: ClipboardItem) {
+         self.primary_contents = Some(item);
++        self.primary_html = take_clipboard_html();
++    }
++
++    /// The MIME types the clipboard (`primary`: the primary selection) offers: the text types, `text/html` with an
++    /// HTML representation, or `text/html` alone.
++    pub fn offered(&self, primary: bool) -> Vec<&'static str> {
++        let html = if primary { &self.primary_html } else { &self.html };
++        match html {
++            Some(html) if html.with_text => TEXT_MIME_TYPES.into_iter().chain([HTML_MIME_TYPE]).collect(),
++            Some(_) => vec![HTML_MIME_TYPE],
++            None => TEXT_MIME_TYPES.to_vec(),
++        }
+     }
+ 
+     pub fn set_offer(&mut self, data_offer: Option<DataOffer<WlDataOffer>>) {
+@@ -174,13 +193,25 @@
+         self.self_mime.clone()
+     }
+ 
+-    pub fn send(&self, _mime_type: String, fd: OwnedFd) {
++    pub fn send(&self, mime_type: String, fd: OwnedFd) {
++        if mime_type == HTML_MIME_TYPE
++            && let Some(html) = &self.html
++        {
++            self.send_bytes(fd, html.html.as_bytes().to_owned());
++            return;
++        }
+         if let Some(text) = self.contents.as_ref().and_then(|contents| contents.text()) {
+             self.send_bytes(fd, text.as_bytes().to_owned());
+         }
+     }
+ 
+-    pub fn send_primary(&self, _mime_type: String, fd: OwnedFd) {
++    pub fn send_primary(&self, mime_type: String, fd: OwnedFd) {
++        if mime_type == HTML_MIME_TYPE
++            && let Some(html) = &self.primary_html
++        {
++            self.send_bytes(fd, html.html.as_bytes().to_owned());
++            return;
++        }
+         if let Some(text) = self
+             .primary_contents
+             .as_ref()
 diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
 --- a/src/linux/x11/client.rs
 +++ b/src/linux/x11/client.rs
@@ -316,10 +467,79 @@ diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
                  window.handle_input(PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
              }
              Event::XinputButtonPress(event) => {
+@@ -1827,8 +1836,9 @@
+         let state = self.0.borrow_mut();
+         state
+             .clipboard
+-            .set_text(
++            .set_text_with_html(
+                 std::borrow::Cow::Owned(item.text().unwrap_or_default()),
++                crate::linux::take_clipboard_html(),
+                 clipboard::ClipboardKind::Primary,
+                 clipboard::WaitConfig::None,
+             )
+@@ -1840,8 +1850,9 @@
+         let mut state = self.0.borrow_mut();
+         state
+             .clipboard
+-            .set_text(
++            .set_text_with_html(
+                 std::borrow::Cow::Owned(item.text().unwrap_or_default()),
++                crate::linux::take_clipboard_html(),
+                 clipboard::ClipboardKind::Clipboard,
+                 clipboard::WaitConfig::None,
+             )
+diff -ruN a/src/linux/x11/clipboard.rs b/src/linux/x11/clipboard.rs
+--- a/src/linux/x11/clipboard.rs
++++ b/src/linux/x11/clipboard.rs
+@@ -77,7 +77,7 @@
+         TEXT,
+         TEXT_MIME_UNKNOWN: b"text/plain",
+ 
+-        // HTML: b"text/html",
++        HTML: b"text/html",
+         // URI_LIST: b"text/uri-list",
+ 
+         PNG__MIME: ImageFormat::mime_type(ImageFormat::Png ).as_bytes(),
+@@ -994,6 +994,32 @@
+         self.inner.write(data, selection, wait)
+     }
+ 
++    /// `message`, with an HTML representation offered as `text/html` beside it or instead of it (agterm-rs:
++    /// `with_clipboard_html`).
++    pub(crate) fn set_text_with_html(
++        &self,
++        message: Cow<'_, str>,
++        html: Option<crate::linux::ClipboardHtml>,
++        selection: ClipboardKind,
++        wait: WaitConfig,
++    ) -> Result<()> {
++        let Some(html) = html else {
++            return self.set_text(message, selection, wait);
++        };
++        let mut data = Vec::with_capacity(2);
++        if html.with_text {
++            data.push(ClipboardData {
++                bytes: message.into_owned().into_bytes(),
++                format: self.inner.atoms.UTF8_STRING,
++            });
++        }
++        data.push(ClipboardData {
++            bytes: html.html.into_bytes(),
++            format: self.inner.atoms.HTML,
++        });
++        self.inner.write(data, selection, wait)
++    }
++
+     fn image_format_atom(&self, format: ImageFormat) -> Atom {
+         match format {
+             ImageFormat::Png => self.inner.atoms.PNG__MIME,
 diff -ruN a/src/linux.rs b/src/linux.rs
 --- a/src/linux.rs
 +++ b/src/linux.rs
-@@ -2,6 +2,7 @@
+@@ -1,7 +1,9 @@
++mod clipboard_html;
+ mod dispatcher;
  mod display_connection;
  mod headless;
  mod keyboard;
@@ -327,9 +547,13 @@ diff -ruN a/src/linux.rs b/src/linux.rs
  mod platform;
  mod system_notifications;
  #[cfg(any(feature = "wayland", feature = "x11"))]
-@@ -15,6 +16,10 @@
+@@ -14,7 +16,14 @@
+ #[cfg(any(feature = "wayland", feature = "x11"))]
  mod xdg_desktop_portal;
  
++pub use clipboard_html::{ClipboardHtml, HTML_MIME_TYPE, with_clipboard_html};
++#[cfg(any(feature = "wayland", feature = "x11"))]
++pub(crate) use clipboard_html::take_clipboard_html;
  pub use dispatcher::*;
 +pub use native_key::{NativeInput, NativeKey, current_native_input};
 +pub(crate) use native_key::NativeScope;

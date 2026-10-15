@@ -198,6 +198,9 @@ impl TerminalView {
 
     /// Whether pointer events go to the program now, Shift's override considered.
     fn reporting(&self, pane: &Pane, mods: Mods) -> bool {
+        if self.shared.is_readonly() {
+            return false;
+        }
         pane.set_mouse_reporting(self.shared.config().mouse.reporting);
         let shift_override = mods.contains(Mods::SHIFT) && !self.shift_capture();
         pane.mouse_tracking() && !shift_override
@@ -255,7 +258,7 @@ impl TerminalView {
         }
         match index {
             0 => self.left_press(pane, (x, y)),
-            1 => Self::paste_primary(pane, cx),
+            1 => self.paste_primary(pane, cx),
             _ => self.right_press(pane, (x, y), cx),
         }
     }
@@ -300,7 +303,10 @@ impl TerminalView {
     }
 
     /// `middle-click-action = primary-paste`.
-    fn paste_primary(pane: &Pane, cx: &mut Context<Self>) {
+    fn paste_primary(&self, pane: &Pane, cx: &mut Context<Self>) {
+        if self.shared.is_readonly() {
+            return;
+        }
         let Some(text) = cx.read_from_primary().and_then(|item| item.text()) else {
             return;
         };
@@ -396,7 +402,8 @@ impl TerminalView {
             return;
         };
         pane.set_mouse_reporting(self.shared.config().mouse.reporting);
-        let tracking = pane.mouse_tracking();
+        // read-only: the program never gets the mouse, which selects as it would without reporting
+        let tracking = !self.shared.is_readonly() && pane.mouse_tracking();
         let shift_override = self.pointer.mods.contains(Mods::SHIFT) && !self.shift_capture();
         let inside = bounds.contains(&event.position);
         if !tracking || shift_override {
@@ -499,6 +506,7 @@ impl TerminalView {
         });
         if link != self.pointer.link {
             let cells = link.as_ref().map(|link| link.cells.clone()).unwrap_or_default();
+            self.shared.set_hovered_url(link.as_ref().map(|link| link.url.clone()));
             self.pointer.link = link;
             self.set_hovered_links(cells, cx);
         }
@@ -558,6 +566,14 @@ impl TerminalView {
             x,
             y,
         };
+        if self.shared.is_readonly() {
+            // read-only: no report, no cursor keys; the viewport still scrolls
+            if rows != 0 {
+                pane.scroll(agterm_term::Scroll::Rows(-rows));
+            }
+            cx.notify();
+            return;
+        }
         if let Err(err) = pane.wheel(&wheel) {
             tracing::debug!(target: "agterm::surface", %err, "wheel failed");
         }

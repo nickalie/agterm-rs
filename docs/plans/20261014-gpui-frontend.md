@@ -268,7 +268,8 @@ gpui-pre patch         wgpu external-texture element importing dmabuf (zero-copy
   6. the exit SIGSEGV (wgpu's GLES instance runs `eglTerminate` in a TLS destructor after the Wayland connection is
      gone, on every exit, Task 2 quirk 12) — reported upstream; Task 12 keeps the exit status clean meanwhile.
   7. ➕ (Task 14) the native key behind a key event on Linux (`gpui-pre-linux`: XKB keycode, layout character,
-     modifiers with Shift, for physical-key binds and the Kitty protocol), installed for one dispatch — Task 14.
+     modifiers with Shift, for physical-key binds and the Kitty protocol), installed for one dispatch, and a
+     `text/html` clipboard offer (Wayland and X11) — Task 14.
 - **Cell metrics**: advance of `M` for width; ascent + descent + line gap for height; `window-padding-x/y` around the
   grid; resize → `Terminal::resize` + PTY `TIOCSWINSZ` + cell size reported where `CELL_SIZE` was used.
 - **Threads** (decided in Task 4 from the C API's contract at `LIBGHOSTTY_VT_REV`, Codex-reviewed). Evidence: the
@@ -989,9 +990,10 @@ headers, rebuilt on `agterm-term` and current GPUI.
 - Create: `crates/agterm-gpui/src/terminal/{input,mouse,links}.rs`, `src/keymap_dispatch.rs`, `src/keymap_actions.rs`
 - ➕ Create: `crates/agterm-gpui/src/terminal/{keyboard,keycodes,clipboard,input_tests}.rs`,
   `src/keymap_dispatch/tests.rs`, `crates/agterm-ghostty-vt/src/gesture.rs`, `crates/agterm-term/src/gesture.rs`,
-  `crates/agterm-term/tests/pointer.rs`, `build/patches/gpui-pre-linux/0001-native-key-events.patch`,
-  `vendor/gpui-pre-linux/`; Modify: `crates/agterm-gpui/src/{terminal,terminal/element,terminal/tests,state,
-  state/tests,app,lib}.rs`, `crates/agterm-gpui/Cargo.toml`, `crates/agterm-ghostty-vt/src/{lib,render,selection}.rs`,
+  `crates/agterm-term/tests/pointer.rs`, `crates/agterm-gpui/tests/clipboard_html.rs`,
+  `build/patches/gpui-pre-linux/0001-native-key-events.patch`, `vendor/gpui-pre-linux/`; Modify:
+  `crates/agterm-gpui/src/{terminal,terminal/element,terminal/surface,terminal/tests,state,state/tests,app,lib}.rs`,
+  `crates/agterm-gpui/Cargo.toml`, `crates/agterm-ghostty-vt/src/{lib,render,selection}.rs`,
   `crates/agterm-term/src/{lib,pane,input,render}.rs`, `Cargo.toml` (`regex`, `gpui-pre-linux` dep and
   `[patch.crates-io]`), `Cargo.lock`, `scripts/vendor-gpui.sh`
 
@@ -1053,12 +1055,30 @@ headers, rebuilt on `agterm-term` and current GPUI.
     remembered for every terminal); the minimal prompt is GPUI's window prompt with Allow, Deny, Always Allow This
     Session, Always Deny This Session. **Unsafe pastes are pasted as confirmed** (`TerminalEvent::UnsafePaste` is
     gone): upstream (`confirmReadClipboard`) and the GTK build complete libghostty's paste confirmation unasked.
+  - Task 13's follow-ups (merged its review fixes): read-only mode (`Shared::is_readonly`) drops keys, sequence
+    flushes, input-method text, mouse reports (the mouse selects instead), the middle-click paste and the wheel's
+    program routes (the viewport still scrolls); terminal replies still go. The link hover sets
+    `Shared::set_hovered_url` (`copy_url_to_clipboard`). `copy_to_clipboard:html` offers `text/html` alone and
+    `:mixed` text plus `text/html`, through a second part of GPUI patch 7 (`gpui_linux::with_clipboard_html`, the
+    Wayland data source's and the X11 selection owner's offers); a process test reads both selections' targets and
+    data from another client on a private Xvfb (`tests/clipboard_html.rs`). ⚠️ Residual: the Wayland side is not
+    exercised by a test (a Wayland client owns a selection only with an input serial, which a headless compositor
+    never delivers).
   - Focus reports (mode 1004) on each change of view focus and window activation, the start state reported as no
     change. `Shared::{owner, set_owner}` carry a custom command's typing surface (`terminal::typing_surface`).
   - `keymap_actions`: Toggle Full Screen and the Delete Window confirmation on the registered window,
     `AppState::{keymap_fired, window_command}`, `FrontendWork::actions`; the window close, the session-close
     confirmation, the renames, Delete Workspace and Open Directory wait for the window shell, sidebar and dialogs
     (Tasks 18, 19, 21, 26) and are logged until then.
+  - Tests: 14 in `terminal/input_tests.rs` (GPUI's test app, real panes under `/bin/sh`: key translation and chords,
+    the routing order with the keymap first, the preedit lifecycle, drag/double/triple/Shift selection, mouse reports
+    and Shift, the wheel, Ctrl-click links and the default route, focus reports, OSC 52 writes and reads under the
+    prompt with a session choice, read-only mode), 8 router tests (`keymap_dispatch/tests.rs`), link and
+    `keymap_actions` unit tests, `agterm-term` `tests/pointer.rs` (gesture, cell, OSC 8, soft wraps),
+    `agterm-ghostty-vt` gesture tests, and the X11 `text/html` process test. Gates: fmt, clippy (workspace, all
+    targets and features), lint-report, check-tracing-features, `vendor-gpui.sh --check`, `cargo test --workspace`
+    under Xvfb (3746 passed, 0 failed); the new tests and the terminal module 20 times in a row, no failure; full GTK
+    conformance: 653 passed, 14 skipped, ratchet holds (665 ids).
   - Later tasks build on: `keymap_dispatch::{register_window, unregister_window, keyboard_left}` and a window-root
     `capture_key_up` calling `keymap_dispatch::key_up` (Task 18/24/26), `Shared::set_owner`, `TerminalEvent::OpenUrl`
     → the link-open route (Task 18), the full OSC 52 dialog replacing `terminal/clipboard.rs`'s prompt (Task 21).

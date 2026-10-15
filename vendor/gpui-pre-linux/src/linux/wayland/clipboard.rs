@@ -11,6 +11,7 @@ use wayland_client::{Connection, protocol::wl_data_offer::WlDataOffer};
 use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1;
 
 use crate::linux::platform::{PIPE_READ_TIMEOUT, read_fd_with_timeout};
+use crate::linux::{ClipboardHtml, HTML_MIME_TYPE, take_clipboard_html};
 use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat, hash};
 
 /// Text mime types that we'll offer to other programs.
@@ -29,6 +30,9 @@ pub(crate) struct Clipboard {
     // Internal clipboard
     contents: Option<ClipboardItem>,
     primary_contents: Option<ClipboardItem>,
+    // The HTML offered with them (agterm-rs: `with_clipboard_html`)
+    html: Option<ClipboardHtml>,
+    primary_html: Option<ClipboardHtml>,
 
     // External clipboard
     cached_read: Option<ClipboardItem>,
@@ -144,6 +148,8 @@ impl Clipboard {
 
             contents: None,
             primary_contents: None,
+            html: None,
+            primary_html: None,
 
             cached_read: None,
             current_offer: None,
@@ -154,10 +160,23 @@ impl Clipboard {
 
     pub fn set(&mut self, item: ClipboardItem) {
         self.contents = Some(item);
+        self.html = take_clipboard_html();
     }
 
     pub fn set_primary(&mut self, item: ClipboardItem) {
         self.primary_contents = Some(item);
+        self.primary_html = take_clipboard_html();
+    }
+
+    /// The MIME types the clipboard (`primary`: the primary selection) offers: the text types, `text/html` with an
+    /// HTML representation, or `text/html` alone.
+    pub fn offered(&self, primary: bool) -> Vec<&'static str> {
+        let html = if primary { &self.primary_html } else { &self.html };
+        match html {
+            Some(html) if html.with_text => TEXT_MIME_TYPES.into_iter().chain([HTML_MIME_TYPE]).collect(),
+            Some(_) => vec![HTML_MIME_TYPE],
+            None => TEXT_MIME_TYPES.to_vec(),
+        }
     }
 
     pub fn set_offer(&mut self, data_offer: Option<DataOffer<WlDataOffer>>) {
@@ -174,13 +193,25 @@ impl Clipboard {
         self.self_mime.clone()
     }
 
-    pub fn send(&self, _mime_type: String, fd: OwnedFd) {
+    pub fn send(&self, mime_type: String, fd: OwnedFd) {
+        if mime_type == HTML_MIME_TYPE
+            && let Some(html) = &self.html
+        {
+            self.send_bytes(fd, html.html.as_bytes().to_owned());
+            return;
+        }
         if let Some(text) = self.contents.as_ref().and_then(|contents| contents.text()) {
             self.send_bytes(fd, text.as_bytes().to_owned());
         }
     }
 
-    pub fn send_primary(&self, _mime_type: String, fd: OwnedFd) {
+    pub fn send_primary(&self, mime_type: String, fd: OwnedFd) {
+        if mime_type == HTML_MIME_TYPE
+            && let Some(html) = &self.primary_html
+        {
+            self.send_bytes(fd, html.html.as_bytes().to_owned());
+            return;
+        }
         if let Some(text) = self
             .primary_contents
             .as_ref()

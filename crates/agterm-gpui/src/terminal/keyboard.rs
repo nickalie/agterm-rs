@@ -146,12 +146,15 @@ impl Performer for KeyPerformer<'_> {
     }
 
     fn flush_sequence(&mut self) {
-        send(self.pane, self.queued.drain(..));
+        send(self.surface.shared(), self.pane, self.queued.drain(..));
     }
 }
 
-/// Encodes keys to the pane, in order.
-fn send(pane: &Pane, keys: impl IntoIterator<Item = KeyStroke>) {
+/// Encodes keys to the pane, in order; dropped in read-only mode (`toggle_readonly`).
+fn send(shared: &Shared, pane: &Pane, keys: impl IntoIterator<Item = KeyStroke>) {
+    if shared.is_readonly() {
+        return;
+    }
     for key in keys {
         if let Err(err) = pane.key(&key.input()) {
             tracing::warn!(target: "agterm::surface", %err, "a key did not reach the terminal");
@@ -187,11 +190,11 @@ impl TerminalView {
         let result = keyboard.handle(&config.keybinds, &stroke.input().binds_event(), &mut performer);
         match result.queued {
             Queued::Keep => {}
-            Queued::Flush => send(&pane, queued.drain(..)),
+            Queued::Flush => send(&self.shared, &pane, queued.drain(..)),
             Queued::Drop => queued.clear(),
         }
         match result.effect {
-            KeyEffect::Encode => send(&pane, [stroke.clone()]),
+            KeyEffect::Encode => send(&self.shared, &pane, [stroke.clone()]),
             KeyEffect::Queue => queued.push(stroke.clone()),
             KeyEffect::Consumed | KeyEffect::Closed | KeyEffect::Ignored => {}
         }
@@ -216,7 +219,7 @@ impl TerminalView {
         };
         let result = keyboard.handle(&config.keybinds, &stroke.input().binds_event(), &mut performer);
         if result.effect == KeyEffect::Encode {
-            send(&pane, [stroke]);
+            send(&self.shared, &pane, [stroke]);
         }
     }
 
@@ -269,7 +272,7 @@ impl TerminalView {
     /// Text an input method committed: sent as text, the composition ended.
     fn commit(&mut self, text: &str) {
         self.shared.set_preedit(None);
-        if text.is_empty() {
+        if text.is_empty() || self.shared.is_readonly() {
             return;
         }
         let Some(pane) = self.shared.pane().filter(|_| self.shared.is_realized()) else {

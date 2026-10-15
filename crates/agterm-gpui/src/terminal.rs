@@ -178,6 +178,11 @@ pub enum TerminalEvent {
 enum Effect {
     Paste(ClipboardLocation),
     Copy(String, ClipboardLocation),
+    /// A copy with an HTML representation (`copy_to_clipboard:html` alone, `:mixed` with its plain text).
+    CopyHtml {
+        text: Option<String>,
+        html: String,
+    },
     Emit(TerminalEvent),
 }
 
@@ -629,6 +634,7 @@ impl Terminal {
 fn run_effect(shared: &Shared, effect: Effect, cx: &mut Context<Terminal>) {
     match effect {
         Effect::Emit(event) => cx.emit(event),
+        Effect::CopyHtml { text, html } => copy_html(text, html, cx),
         Effect::Copy(text, location) => {
             let item = ClipboardItem::new_string(text);
             match location {
@@ -653,6 +659,24 @@ fn run_effect(shared: &Shared, effect: Effect, cx: &mut Context<Terminal>) {
                 tracing::warn!(target: "agterm::surface", key = shared.key, %err, "paste failed");
             }
         }
+    }
+}
+
+/// Writes the clipboard with `html` offered as `text/html`, beside `text` or alone (Ghostty's `copy_to_clipboard:mixed`
+/// and `:html`): GPUI's Linux clipboard offers it through our `gpui-pre-linux` patch (`with_clipboard_html`); a
+/// platform without one gets the text (or the markup) as plain text.
+fn copy_html(text: Option<String>, html: String, cx: &mut App) {
+    let with_text = text.is_some();
+    let item = ClipboardItem::new_string(text.unwrap_or_else(|| html.clone()));
+    #[cfg(target_os = "linux")]
+    {
+        let offer = gpui_linux::ClipboardHtml { html, with_text };
+        gpui_linux::with_clipboard_html(offer, || cx.write_to_clipboard(item));
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (html, with_text);
+        cx.write_to_clipboard(item);
     }
 }
 

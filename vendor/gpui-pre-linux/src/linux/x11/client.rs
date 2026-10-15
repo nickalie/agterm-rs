@@ -1836,8 +1836,9 @@ impl X11Client {
         let state = self.0.borrow_mut();
         state
             .clipboard
-            .set_text(
+            .set_text_with_html(
                 std::borrow::Cow::Owned(item.text().unwrap_or_default()),
+                crate::linux::take_clipboard_html(),
                 clipboard::ClipboardKind::Primary,
                 clipboard::WaitConfig::None,
             )
@@ -1849,8 +1850,9 @@ impl X11Client {
         let mut state = self.0.borrow_mut();
         state
             .clipboard
-            .set_text(
+            .set_text_with_html(
                 std::borrow::Cow::Owned(item.text().unwrap_or_default()),
+                crate::linux::take_clipboard_html(),
                 clipboard::ClipboardKind::Clipboard,
                 clipboard::WaitConfig::None,
             )

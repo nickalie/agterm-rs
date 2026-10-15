@@ -510,6 +510,17 @@ fn a_ctrl_click_on_a_link_opens_it_through_the_link_route(cx: &mut TestAppContex
         ("https://osc8.test/x", &[(1, 4, 7)][..])
     );
     assert_eq!(f.view.read_with(f.cx, |view, _| view.link.clone()), [(1, 4, 7)]);
+    // the hovered link is what `copy_url_to_clipboard` copies
+    let shared = f.view.read_with(f.cx, |view, _| Rc::clone(view.shared()));
+    assert_eq!(shared.hovered_url().as_deref(), Some("https://osc8.test/x"));
+    let mut surface = super::TerminalSurface::new(Rc::clone(&shared));
+    assert!(agterm_host::Surface::binding_action(
+        &mut surface,
+        "copy_url_to_clipboard"
+    ));
+    f.cx.run_until_parked();
+    let copied = f.cx.read_from_clipboard().and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("https://osc8.test/x"));
     f.click(5, 1, Modifiers::control());
     f.cx.run_until_parked();
     assert!(
@@ -532,6 +543,32 @@ fn a_ctrl_click_on_a_link_opens_it_through_the_link_route(cx: &mut TestAppContex
         links::follow_link("javascript:alert(1)", LinkOpenMode::Browser, ClickOrigin::Quick, cx);
     });
     assert_eq!(f.cx.opened_url().as_deref(), Some("https://example.com/p"));
+}
+
+#[gpui_kit::test]
+fn read_only_mode_keeps_the_users_input_from_the_program(cx: &mut TestAppContext) {
+    let script = "stty -echo -icanon; printf '\\033[?1000hready\\r\\nhello\\r\\n'; exec cat -v";
+    let mut f = fixture(cx, script, config(""));
+    f.focus();
+    let shared = f.view.read_with(f.cx, |view, _| Rc::clone(view.shared()));
+    shared.set_readonly(true);
+    // keys, input-method text and the primary selection's paste stay out; a click selects instead of reporting
+    f.type_keys("x");
+    let view = f.view.clone();
+    f.cx.update(|window, cx| view.update(cx, |view, cx| view.replace_text_in_range(None, "y", window, cx)));
+    f.cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("p".into())));
+    f.cx.simulate_mouse_down(Fixture::at(1, 1), MouseButton::Middle, Modifiers::default());
+    f.cx.simulate_mouse_up(Fixture::at(1, 1), MouseButton::Middle, Modifiers::default());
+    f.click(1, 1, Modifiers::default());
+    f.click(1, 1, Modifiers::default());
+    assert_eq!(f.selection().as_deref(), Some("hello"));
+    shared.set_readonly(false);
+    f.type_keys("z");
+    f.wait_painted("z");
+    let painted = f.painted();
+    // only the key typed after read-only mode ended reached `cat -v`
+    assert!(painted.trim_end().ends_with("hello\nz"), "{painted}");
+    assert!(!painted.contains("^[[M"), "no mouse report: {painted}");
 }
 
 #[gpui_kit::test]

@@ -9,7 +9,8 @@
 #                  VK_EXT_queue_family_foreign, which wgpu does not enable itself
 #   gpui-pre-linux the native key behind each key event GPUI dispatches on Wayland and X11 (its XKB keycode, layout
 #                  character and modifiers), which GPUI's `Keystroke` drops, for the terminal's physical-key bindings
-#                  and the Kitty keyboard protocol (Task 14 of the plan)
+#                  and the Kitty keyboard protocol, and a text/html clipboard offer beside or instead of the text
+#                  (Task 14 of the plan)
 #
 # Each source is the crates.io archive of GPUI_VERSION, verified against SHA256 below: the release's crates.io
 # checksum (the `cksum` of its version's line in the crates.io index, https://index.crates.io/gp/ui/<crate>, also what

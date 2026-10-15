@@ -1015,8 +1015,10 @@ fn copy_actions_follow_their_formats(cx: &mut TestAppContext) {
         copied(&terminal, cx, "copy_to_clipboard:mixed").starts_with("ready red"),
         "its plain text"
     );
-    // HTML has no text/html offer to go to: performed, the clipboard left alone
-    assert!(copied(&terminal, cx, "copy_to_clipboard:html").starts_with("ready red"));
+    // HTML is offered as text/html alone (the Linux platform's patch); GPUI's test platform keeps the item's text,
+    // which is the markup then
+    let html = copied(&terminal, cx, "copy_to_clipboard:html");
+    assert!(html.contains('<') && html.contains("red"), "{html}");
 }
 
 #[gpui_kit::test]

@@ -1,3 +1,4 @@
+mod clipboard_html;
 mod dispatcher;
 mod display_connection;
 mod headless;
@@ -15,6 +16,9 @@ mod x11;
 #[cfg(any(feature = "wayland", feature = "x11"))]
 mod xdg_desktop_portal;
 
+pub use clipboard_html::{ClipboardHtml, HTML_MIME_TYPE, with_clipboard_html};
+#[cfg(any(feature = "wayland", feature = "x11"))]
+pub(crate) use clipboard_html::take_clipboard_html;
 pub use dispatcher::*;
 pub use native_key::{NativeInput, NativeKey, current_native_input};
 pub(crate) use native_key::NativeScope;
