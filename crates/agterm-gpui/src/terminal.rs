@@ -257,8 +257,11 @@ pub struct Shared {
     status: Cell<Status>,
     /// The live font size in points.
     points: Cell<f32>,
-    /// What `reset_font_size` returns to.
-    original_points: f32,
+    /// What `reset_font_size` returns to: the size the terminal started at, then the config's after a reload.
+    original_points: Cell<f32>,
+    /// A font size action changed the size (`reset_font_size` clears it): a config reload keeps the live size then,
+    /// and takes the configured one otherwise (Ghostty's `font_size_adjusted`).
+    font_adjusted: Cell<bool>,
     /// The owner view's scale factor, last seen.
     scale: Cell<f32>,
     metrics: Cell<Option<(u32, u32, u64, CellMetrics)>>,
@@ -339,7 +342,25 @@ impl Shared {
     /// The size `reset_font_size` returns to.
     #[must_use]
     pub fn original_font_points(&self) -> f32 {
-        self.original_points
+        self.original_points.get()
+    }
+
+    /// A font size action set `points`; `reset` (`reset_font_size`) gives a config reload the size back.
+    fn adjust_font_points(&self, points: f32, reset: bool) {
+        self.set_font_points(points);
+        self.font_adjusted.set(!reset);
+    }
+
+    /// A config reload of font size `configured`: it is what `reset_font_size` returns to from now on, and the live size
+    /// unless a font size action changed it (Ghostty's `changeConfig`). Whether the live size changed.
+    fn follow_config_points(&self, configured: f32) -> bool {
+        let configured = configured.clamp(1.0, 255.0);
+        self.original_points.set(configured);
+        if self.font_adjusted.get() || (configured - self.points.get()).abs() < f32::EPSILON {
+            return false;
+        }
+        self.points.set(configured);
+        true
     }
 
     /// The owner view's scale factor, as last laid out (1 before).
@@ -707,7 +728,8 @@ impl Terminal {
             spawn: RefCell::new(spawn),
             status: Cell::new(Status::Pending),
             points: Cell::new(points),
-            original_points: points,
+            original_points: Cell::new(points),
+            font_adjusted: Cell::new(false),
             scale: Cell::new(1.0),
             metrics: Cell::new(None),
             laid: Cell::new(None),
@@ -762,16 +784,17 @@ impl Terminal {
         }
         let fonts_changed = shared.config.borrow().font != config.font;
         let cell = shared.metrics_at(shared.font_points(), shared.scale());
+        let resized = shared.follow_config_points(config.font.size);
         *shared.config.borrow_mut() = Rc::new(config);
         // the background image's file is looked at again (a watermark rendered anew into the same file)
         shared.background.borrow_mut().invalidate();
         if fonts_changed {
             shared.fonts.borrow_mut().take();
             shared.font_generation.set(shared.font_generation.get() + 1);
-            // the cell follows the fonts: report it as a font size change does
-            if shared.metrics_at(shared.font_points(), shared.scale()) != cell {
-                cx.emit(TerminalEvent::FontSize);
-            }
+        }
+        // the cell follows the fonts and the size: report it as a font size change does
+        if (fonts_changed || resized) && shared.metrics_at(shared.font_points(), shared.scale()) != cell {
+            cx.emit(TerminalEvent::FontSize);
         }
         cx.notify();
     }

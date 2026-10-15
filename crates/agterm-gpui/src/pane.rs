@@ -217,9 +217,11 @@ pub enum Report {
     },
 }
 
-/// What `event` reports, for a terminal that ran `ran`, on a machine named `hostname`.
+/// What `event` reports, for a terminal that ran `ran`, on a machine named `hostname`. A key pressed on a lead-covered
+/// pane (`covered`) only asks for the takeover: it is neither user activity nor a status keystroke, as in the GTK
+/// build and upstream (`PaneLead.consumes` runs before `onUserInput`).
 #[must_use]
-pub fn report(event: &TerminalEvent, ran: Ran, hostname: &str, points: f32) -> Vec<Report> {
+pub fn report(event: &TerminalEvent, ran: Ran, hostname: &str, points: f32, covered: bool) -> Vec<Report> {
     match event {
         TerminalEvent::Pane(event) => pane_report(event, ran, hostname),
         TerminalEvent::StartSearch(needle) => vec![Report::Search(SearchReport::Started(
@@ -228,6 +230,7 @@ pub fn report(event: &TerminalEvent, ran: Ran, hostname: &str, points: f32) -> V
         TerminalEvent::EndSearch => vec![Report::Search(SearchReport::Ended)],
         TerminalEvent::FontSize => vec![Report::FontSize(f64::from(points))],
         TerminalEvent::OpenUrl(url) => vec![Report::OpenUrl(url.clone())],
+        TerminalEvent::Keystroke(_) if covered => Vec::new(),
         TerminalEvent::Keystroke(keystroke) => vec![Report::Keystroke(*keystroke)],
         _ => Vec::new(),
     }

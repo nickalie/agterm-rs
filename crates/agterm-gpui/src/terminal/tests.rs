@@ -938,6 +938,53 @@ fn a_config_whose_fonts_change_the_cell_reports_it() {
     assert_eq!(events.borrow().len(), 1);
 }
 
+/// `unstarted`'s config at `points`.
+fn sized(points: f32) -> TerminalConfig {
+    let mut config = TerminalConfig::default();
+    config.font.family = vec!["DejaVu Sans Mono".into()];
+    config.font.size = points;
+    config
+}
+
+fn assert_points(actual: f32, expected: f32) {
+    assert!((actual - expected).abs() < f32::EPSILON, "{actual} != {expected}");
+}
+
+#[test]
+fn a_config_reload_resizes_a_terminal_whose_size_the_user_kept() {
+    let mut cx = real_fonts();
+    let (terminal, events) = unstarted(&mut cx, "DejaVu Sans Mono");
+    let shared = terminal.read_with(&cx, |terminal, _| Rc::clone(terminal.shared()));
+    let cell = shared.cell_size();
+    terminal.update(&mut cx, |terminal, cx| terminal.set_config(sized(24.0), cx));
+    cx.run_until_parked();
+    assert_points(shared.font_points(), 24.0);
+    assert!(shared.cell_size().0 > cell.0, "{:?}", shared.cell_size());
+    assert_eq!(*events.borrow(), [TerminalEvent::FontSize]);
+    assert_points(shared.original_font_points(), 24.0);
+    // a reset gives the reload the size back
+    shared.adjust_font_points(30.0, false);
+    shared.adjust_font_points(shared.original_font_points(), true);
+    terminal.update(&mut cx, |terminal, cx| terminal.set_config(sized(16.0), cx));
+    assert_points(shared.font_points(), 16.0);
+}
+
+#[test]
+fn a_config_reload_keeps_the_size_the_user_zoomed_to() {
+    let mut cx = real_fonts();
+    let (terminal, events) = unstarted(&mut cx, "DejaVu Sans Mono");
+    let shared = terminal.read_with(&cx, |terminal, _| Rc::clone(terminal.shared()));
+    shared.adjust_font_points(18.0, false);
+    cx.run_until_parked();
+    events.borrow_mut().clear();
+    terminal.update(&mut cx, |terminal, cx| terminal.set_config(sized(24.0), cx));
+    cx.run_until_parked();
+    assert_points(shared.font_points(), 18.0);
+    assert!(events.borrow().is_empty(), "{:?}", events.borrow());
+    // the configured size is what a reset returns to
+    assert_points(shared.original_font_points(), 24.0);
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // the Surface
 

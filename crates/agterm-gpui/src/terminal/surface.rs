@@ -225,7 +225,8 @@ impl Actions<'_> {
             Action::SetFontSize(points) => *points,
             _ => return None,
         };
-        self.shared.set_font_points(points);
+        self.shared
+            .adjust_font_points(points, matches!(action, Action::ResetFontSize));
         Some(true)
     }
 

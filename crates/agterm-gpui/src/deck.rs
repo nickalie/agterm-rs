@@ -673,7 +673,9 @@ impl Deck {
             active: window.is_window_active(),
         };
         let ran = pane.ran.get();
-        for report in pane::report(event, ran, &self.env.hostname, points) {
+        // the cover lasts until the takeover's sync, which runs after this event: the key asking for it is not reported
+        let covered = pane.cover_holds.get();
+        for report in pane::report(event, ran, &self.env.hostname, points, covered) {
             pane::post_report(&self.env.poster, session, token, report, focus);
         }
     }
