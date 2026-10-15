@@ -131,3 +131,8 @@ allow_attributes_without_reason = "deny"
 # scripts/check-tracing-features.sh keeps the feature out of the graph).
 [patch.crates-io]
 calloop = { path = "vendor/calloop" }
+# GPUI patch 1 (docs/plans/20261014-gpui-frontend.md, Technical Details > GPUI patches): external surfaces on Linux,
+# dmabufs imported zero-copy into the renderer's Vulkan device (agterm-gpui's external_texture). vendor/gpui-pre and
+# vendor/gpui-pre-wgpu are the verified crates.io sources plus build/patches/gpui-pre{,-wgpu} (scripts/vendor-gpui.sh).
+gpui-pre = { path = "vendor/gpui-pre" }
+gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }

@@ -30,7 +30,10 @@ agterm in Rust, Linux first: a GTK4/libadwaita terminal over libghostty, driven 
   dir, or `AGTERM_LAVAPIPE_ICD`), and the GTK build's `agterm` beside the binary (`cargo build -p agterm-gtk`). A
   missing one skips the test (`SKIPPED:`, shown with `--nocapture`) unless `AGTERM_REQUIRE_DISPLAY_TESTS` is set, as
   CI sets it, which fails it instead. The nested-niri activation check (niri inside a headless weston) is
-  `#[ignore]`d, since CI has no niri: `cargo test -p agterm-gpui --test instance -- --ignored`.
+  `#[ignore]`d, since CI has no niri: `cargo test -p agterm-gpui --test instance -- --ignored`. The external texture
+  test (`--test external_texture`, dmabufs drawn by GPUI's headless renderer) runs on lavapipe and on the first render
+  node a Mesa Vulkan driver runs; its synthetic dmabufs need read-write access to `/dev/udmabuf` (`modprobe udmabuf`;
+  skipped without, failed under `AGTERM_REQUIRE_DISPLAY_TESTS`), its hardware case GBM and EGL.
 - For the conformance suite: Python 3.11+ with venv, weston and dbus-daemon (each instance gets its own headless
   weston and bus); zsh or fish as the login shell for the Live tests of that shell.
 
@@ -103,6 +106,11 @@ prefix.
 `scripts/gen-ghostty-vt-bindings.sh` those of `agterm-ghostty-vt-sys` after a `LIBGHOSTTY_VT_REV` bump,
 `scripts/gen-wpe-bindings.sh` the gir crates `agterm-wpe-sys`, `agterm-wpe-platform-sys` and
 `agterm-wpe-javascriptcore-sys` after a `WPE_*` or `GIR_*` bump (`--check` compares instead of writing).
+
+Some GPUI dependencies are patched in the tree rather than built: `vendor/calloop` and `vendor/gpui-pre{,-wgpu}`
+(GPUI's dmabuf external surfaces for the HTML overlays) are verified crates.io sources plus `build/patches/<crate>`,
+recreated by `scripts/vendor-calloop.sh` and `scripts/vendor-gpui.sh` (`--check` compares, as CI does;
+`vendor-gpui.sh --diff` turns edits under `vendor/` back into the patch files).
 
 ### WPE WebKit
 
