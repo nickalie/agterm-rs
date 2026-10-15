@@ -405,6 +405,11 @@ impl Capture {
         self.held_since.is_some()
     }
 
+    /// When the current hold expires, if one is on.
+    pub(crate) fn hold_deadline(&self) -> Option<Instant> {
+        self.held_since.map(|since| since + HOLD_TIMEOUT)
+    }
+
     /// Whether a hold has lasted longer than [`HOLD_TIMEOUT`].
     pub(crate) fn hold_expired(&self, now: Instant) -> bool {
         self.held_since
@@ -568,6 +573,12 @@ fn apply_style(cell: &mut Cell, style: vt::Style, palette: &[Rgb; 256]) {
 mod tests {
     use super::*;
 
+    /// A terminal as the crate makes one: the process-global hooks are installed before it seals them.
+    fn terminal(cols: u16, rows: u16) -> vt::Terminal {
+        crate::init();
+        vt::Terminal::new(cols, rows).unwrap()
+    }
+
     fn capture(terminal: &mut vt::Terminal, capture: &mut Capture, previous: &Frame) -> Option<Frame> {
         capture.state.update(terminal).unwrap();
         capture.convert(previous, MouseShape::Default).unwrap()
@@ -575,7 +586,7 @@ mod tests {
 
     #[test]
     fn an_unchanged_screen_makes_no_new_frame_and_clean_rows_are_shared() {
-        let mut terminal = vt::Terminal::new(10, 3).unwrap();
+        let mut terminal = terminal(10, 3);
         terminal.vt_write(b"one\r\ntwo\r\n");
         let mut state = Capture::new().unwrap();
         let first = capture(&mut terminal, &mut state, &Frame::default()).unwrap();
@@ -595,7 +606,7 @@ mod tests {
 
     #[test]
     fn cells_carry_styles_colors_and_widths() {
-        let mut terminal = vt::Terminal::new(12, 2).unwrap();
+        let mut terminal = terminal(12, 2);
         terminal.vt_write(
             "\x1b[1;3;4:3;38;2;1;2;3;48;5;1;58;5;2mA\x1b[0m日\x1b]8;;https://x\x1b\\L\x1b]8;;\x1b\\".as_bytes(),
         );
@@ -620,7 +631,7 @@ mod tests {
 
     #[test]
     fn the_cursor_and_colors_are_captured() {
-        let mut terminal = vt::Terminal::new(10, 3).unwrap();
+        let mut terminal = terminal(10, 3);
         let theme = ThemeColors {
             cursor: Some(Rgb::new(1, 2, 3)),
             palette: [(5, Rgb::new(5, 5, 5))].into(),
@@ -652,7 +663,7 @@ mod tests {
 
     #[test]
     fn a_mouse_shape_change_alone_makes_a_new_frame() {
-        let mut terminal = vt::Terminal::new(4, 1).unwrap();
+        let mut terminal = terminal(4, 1);
         let mut state = Capture::new().unwrap();
         let first = capture(&mut terminal, &mut state, &Frame::default()).unwrap();
         state.state.update(&mut terminal).unwrap();

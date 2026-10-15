@@ -5,7 +5,8 @@
 mod support;
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use agterm_term::{CellFlags, CellWidth, PaneConfig, Rgb, Underline};
 use support::{SIZE, spawn, spawn_with, wait_file, wait_frame, wait_text};
@@ -94,17 +95,13 @@ fn styles_colors_and_wide_cells_come_through() {
 }
 
 #[test]
-fn the_theme_and_scrollback_limits_reach_the_terminal() {
+fn the_theme_reaches_the_frame_and_can_change() {
     let theme = agterm_term::ThemeColors {
         background: Rgb::new(1, 2, 3),
         ..agterm_term::ThemeColors::default()
     };
     let config = PaneConfig {
         colors: theme.clone(),
-        scrollback: agterm_term::ScrollbackLimits {
-            max_bytes: None,
-            max_lines: Some(100),
-        },
         ..PaneConfig::new(SIZE)
     };
     let fixture = spawn_with("seq 1 5000 > \"$DIR/done\"; seq 1 5000; exec sleep 5", &config).unwrap();
@@ -120,8 +117,40 @@ fn the_theme_and_scrollback_limits_reach_the_terminal() {
         frame.colors.background == Rgb::new(250, 250, 250)
     });
     assert_eq!(frame.colors.foreground, light.foreground);
-    fixture
-        .pane
-        .set_scrollback(agterm_term::ScrollbackLimits::default())
-        .unwrap();
+}
+
+#[test]
+fn an_expired_hold_wakes_the_frontend_without_a_paint() {
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let config = PaneConfig {
+        wake: Some({
+            let wakes = Arc::clone(&wakes);
+            Arc::new(move || {
+                wakes.fetch_add(1, Ordering::SeqCst);
+            })
+        }),
+        ..PaneConfig::new(SIZE)
+    };
+    let fixture = spawn_with(
+        "printf 'stuck'; printf '\\033[?2026h'; printf ' anyway'; exec sleep 30",
+        &config,
+    )
+    .unwrap();
+    wait_frame(&fixture.pane, |frame| frame.held);
+    // from here on the test paints only when woken, as a frontend does: the pane must wake it to end the hold
+    // the hold expires after a second; the child stays, so its exit cannot be what wakes the frontend
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut seen = wakes.load(Ordering::SeqCst);
+    loop {
+        while wakes.load(Ordering::SeqCst) == seen {
+            assert!(Instant::now() < deadline, "no wake came for the expired hold");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        seen = wakes.load(Ordering::SeqCst);
+        let frame = fixture.pane.frame().frame;
+        if !frame.held {
+            assert_eq!(frame.lines()[0], "stuck anyway");
+            break;
+        }
+    }
 }

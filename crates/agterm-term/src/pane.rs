@@ -5,7 +5,11 @@
 //! Locks (Technical Details > Threads): `vt` → `capture` → leaves (`armed`, `published`), never the reverse. The IO
 //! thread holds `vt` for one bounded slice of `vt_write` at a time. Painting ([`Pane::frame`]) `try_lock`s `vt` and
 //! then `capture`, keeps `vt` only for the begin phase of the capture, and draws the previous frame when either is
-//! busy. Effect callbacks run under `vt` and only copy into channels.
+//! busy. Effect callbacks run under `vt` and copy into channels, except the render-hold callback, which takes `capture`
+//! (VT → capture, the one order) and captures the held frame there; nothing may take `vt` while holding `capture`.
+//!
+//! A synchronized-output hold the program never ends is ended after a second by whichever comes first: a paint, or
+//! the IO thread, which `poll`s with that deadline while a hold is on and wakes the frontend.
 
 use std::fs::File;
 use std::io::Read;
@@ -120,6 +124,8 @@ pub(crate) struct Vt {
 /// Messages to the IO thread while it waits on a clipboard answer.
 enum Control {
     Answer(u64, ClipboardAnswer),
+    /// The child exited: a read it asked for can no longer be answered to anyone; deny it and every later one.
+    ChildExited,
     Shutdown,
 }
 
@@ -136,6 +142,9 @@ pub(crate) struct Shared {
     counters: Counters,
     /// Set once the IO thread saw the PTY's end (or stopped).
     eof: (Mutex<bool>, Condvar),
+    /// Runs once at the start of the next paint, before it takes any lock (tests interleave a second view there).
+    #[cfg(test)]
+    before_paint: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -213,54 +222,38 @@ impl Pane {
     /// [`PaneError::Spawn`] when the program cannot be started (not found, not executable); [`PaneError::Pty`] when
     /// no PTY can be opened; [`PaneError::Terminal`] when libghostty-vt refuses the size or cannot allocate.
     pub fn spawn(command: &PaneCommand, config: &PaneConfig) -> Result<Self, PaneError> {
-        crate::init();
         let pair = native_pty_system()
             .openpty(config.size.pty())
             .map_err(|err| PaneError::Pty(err.to_string()))?;
-        let child = pair
+        let mut child = pair
             .slave
             .spawn_command(command.builder())
             .map_err(|err| PaneError::Spawn(err.to_string()))?;
         drop(pair.slave);
         let pid = child.process_id();
-        let reader = pty::reader(pair.master.as_ref())?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|err| PaneError::Pty(err.to_string()))?;
-        let (events_tx, events) = mpsc::channel();
-        let shared = Arc::new(shared(config, events_tx)?);
-        let (control, control_rx) = mpsc::channel();
-        let wake_pipe = Arc::new(WakePipe::new()?);
+        #[cfg(test)]
+        tests::LAST_CHILD.with(|last| last.set(pid));
         let signal = Signaller::new(pid);
-        {
-            let queue = Arc::clone(&shared.writer);
-            spawn_thread("pane-write", move || pty::write_loop(&queue, writer))?;
-        }
-        let io = {
-            let io = Io {
-                shared: Arc::clone(&shared),
-                reader,
-                wake: Arc::clone(&wake_pipe),
-                control: control_rx,
-                scanner: Scanner::default(),
-                next_read: 0,
-            };
-            spawn_thread("pane-io", move || io.run())?
+        let parts = Parts::new(pair.master.as_ref(), config);
+        let parts = match parts {
+            Ok(parts) => parts,
+            Err(err) => {
+                // nothing started yet: only the child to stop and reap
+                signal.kill();
+                let _ = child.wait();
+                return Err(err);
+            }
         };
-        {
-            let shared = Arc::clone(&shared);
-            spawn_thread("pane-wait", move || wait_child(child, &shared))?;
-        }
+        let started = parts.start(child, &signal)?;
         Ok(Self {
-            shared,
+            shared: started.shared,
             master: Mutex::new(pair.master),
-            events: Mutex::new(events),
-            control,
-            wake_pipe,
+            events: Mutex::new(started.events),
+            control: started.control,
+            wake_pipe: started.wake,
             pid,
             signal,
-            io: Some(io),
+            io: Some(started.io),
         })
     }
 
@@ -330,23 +323,7 @@ impl Pane {
     /// The frame to draw now. Captures the terminal when both locks are free (`try_lock`: paint never waits on the
     /// IO thread), otherwise returns the previous frame marked stale. Every view of the pane shares the result.
     pub fn frame(&self) -> FrameSnapshot {
-        self.shared.wake_pending.store(false, Ordering::Release);
-        let previous = Arc::clone(&lock(&self.shared.published));
-        match capture(&self.shared, &previous) {
-            Captured::New(frame) => {
-                let frame = Arc::new(frame);
-                *lock(&self.shared.published) = Arc::clone(&frame);
-                FrameSnapshot { frame, stale: false }
-            }
-            Captured::Unchanged => FrameSnapshot {
-                frame: previous,
-                stale: false,
-            },
-            Captured::Busy => FrameSnapshot {
-                frame: previous,
-                stale: true,
-            },
-        }
+        frame(&self.shared)
     }
 
     /// Every event reported since the last call, in order.
@@ -394,6 +371,8 @@ impl Drop for Pane {
 
 fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, PaneError> {
     let size = config.size;
+    // the process-global hooks go in before the first terminal seals them
+    crate::init();
     let mut terminal = vt::Terminal::new(size.cols, size.rows).map_err(PaneError::terminal)?;
     terminal
         .resize(size.cols, size.rows, size.cell_width, size.cell_height)
@@ -426,40 +405,49 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
         wake_pending: AtomicBool::new(false),
         counters: Counters::default(),
         eof: (Mutex::new(false), Condvar::new()),
+        #[cfg(test)]
+        before_paint: Mutex::new(None),
     })
 }
 
 fn spawn_thread(name: &str, body: impl FnOnce() + Send + 'static) -> Result<JoinHandle<()>, PaneError> {
+    #[cfg(test)]
+    if tests::FAIL_THREAD.with(std::cell::Cell::get) == Some(name) {
+        return Err(PaneError::Pty(format!("cannot start the {name} thread: injected")));
+    }
     std::thread::Builder::new()
         .name(name.to_owned())
         .spawn(body)
         .map_err(|err| PaneError::Pty(format!("cannot start the {name} thread: {err}")))
 }
 
-/// What a paint-side capture produced.
-enum Captured {
-    /// A lock was busy: draw the previous frame and ask again.
-    Busy,
-    Unchanged,
-    New(Frame),
+/// One paint. The frame it starts from is read, and its successor published, under the capture lock (VT → capture →
+/// published): two views painting at once can then never convert against an older frame than the state was last
+/// cleaned for, which would publish rows the capture already reported clean.
+fn frame(shared: &Shared) -> FrameSnapshot {
+    shared.wake_pending.store(false, Ordering::Release);
+    #[cfg(test)]
+    {
+        let hook = lock(&shared.before_paint).take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+    match capture(shared) {
+        Some(frame) => FrameSnapshot { frame, stale: false },
+        None => FrameSnapshot {
+            frame: Arc::clone(&lock(&shared.published)),
+            stale: true,
+        },
+    }
 }
 
-/// The paint-side capture.
-fn capture(shared: &Shared, previous: &Frame) -> Captured {
-    let Some(mut vt) = try_lock(&shared.vt) else {
-        return Captured::Busy;
-    };
+/// The paint-side capture: the frame to draw (new or unchanged), or `None` when a lock was busy.
+fn capture(shared: &Shared) -> Option<Arc<Frame>> {
+    let mut vt = try_lock(&shared.vt)?;
     // VT → capture; on a busy capture the VT guard drops on return
-    let Some(mut capture) = try_lock(&shared.capture) else {
-        return Captured::Busy;
-    };
-    if capture.hold_expired(Instant::now()) {
-        // a program that never ends its hold must not freeze the pane; setting the mode runs no callback
-        if let Err(err) = vt.terminal.set_mode(vt::Mode::SYNC_OUTPUT, false) {
-            tracing::warn!(%err, "ending a synchronized-output hold failed");
-        }
-        capture.end_hold();
-    }
+    let mut capture = try_lock(&shared.capture)?;
+    end_expired_hold(&mut vt, &mut capture);
     let mouse_shape = MouseShape::from_engine(vt.terminal.mouse_shape());
     if capture.held() {
         drop(vt);
@@ -471,17 +459,29 @@ fn capture(shared: &Shared, previous: &Frame) -> Captured {
             tracing::warn!(%err, "capturing the terminal failed");
         }
     }
-    match capture.convert(previous, mouse_shape) {
-        Ok(Some(frame)) => Captured::New(frame),
-        Ok(None) => Captured::Unchanged,
-        Err(err) => {
-            tracing::warn!(%err, "converting the capture failed");
-            Captured::Unchanged
-        }
+    let mut published = lock(&shared.published);
+    match capture.convert(&published, mouse_shape) {
+        Ok(Some(frame)) => *published = Arc::new(frame),
+        Ok(None) => {}
+        Err(err) => tracing::warn!(%err, "converting the capture failed"),
     }
+    Some(Arc::clone(&published))
 }
 
-/// Sends `SIGHUP` to the child on drop, race-free against its reaping where the platform allows (a pidfd on Linux).
+/// End a synchronized-output hold that lasted past its timeout (a program that never ends its hold must not freeze
+/// the pane); setting the mode runs no callback. Whether one ended.
+fn end_expired_hold(vt: &mut Vt, capture: &mut Capture) -> bool {
+    if !capture.hold_expired(Instant::now()) {
+        return false;
+    }
+    if let Err(err) = vt.terminal.set_mode(vt::Mode::SYNC_OUTPUT, false) {
+        tracing::warn!(%err, "ending a synchronized-output hold failed");
+    }
+    capture.end_hold();
+    true
+}
+
+/// Signals the child (`SIGHUP` on drop), race-free against its reaping where the platform allows (a pidfd on Linux).
 struct Signaller {
     #[cfg(target_os = "linux")]
     pidfd: Option<std::os::fd::OwnedFd>,
@@ -505,12 +505,12 @@ impl Signaller {
     }
 
     #[cfg(target_os = "linux")]
-    fn hang_up(&self) {
+    fn send(&self, signal: libc::c_int) {
         use std::os::fd::AsRawFd;
         if let Some(pidfd) = &self.pidfd {
             // SAFETY: signals the process the pidfd refers to (ESRCH once it is gone, never another process); no
             // memory is passed.
-            unsafe { libc::syscall(libc::SYS_pidfd_send_signal, pidfd.as_raw_fd(), libc::SIGHUP, 0, 0) };
+            unsafe { libc::syscall(libc::SYS_pidfd_send_signal, pidfd.as_raw_fd(), signal, 0, 0) };
         }
     }
 
@@ -520,16 +520,126 @@ impl Signaller {
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn hang_up(&self) {
+    fn send(&self, signal: libc::c_int) {
         if let Some(pid) = self.pid.and_then(|pid| libc::pid_t::try_from(pid).ok()) {
             // SAFETY: plain `kill(2)`; no memory is passed.
-            unsafe { libc::kill(pid, libc::SIGHUP) };
+            unsafe { libc::kill(pid, signal) };
         }
+    }
+
+    /// `SIGHUP`, as a terminal closing does.
+    fn hang_up(&self) {
+        self.send(libc::SIGHUP);
+    }
+
+    /// `SIGKILL`, for a pane that never finished starting (the child is reaped right after).
+    fn kill(&self) {
+        self.send(libc::SIGKILL);
     }
 }
 
-/// The waiter thread: reap the child, give the IO thread a moment to process its last output, report the exit.
-fn wait_child(mut child: Box<dyn Child + Send + Sync>, shared: &Shared) {
+/// What a pane needs before its threads start.
+struct Parts {
+    shared: Arc<Shared>,
+    wake: Arc<WakePipe>,
+    reader: File,
+    writer: Box<dyn std::io::Write + Send>,
+    events: Receiver<PaneEvent>,
+}
+
+impl Parts {
+    fn new(master: &dyn MasterPty, config: &PaneConfig) -> Result<Self, PaneError> {
+        let reader = pty::reader(master)?;
+        let writer = master.take_writer().map_err(|err| PaneError::Pty(err.to_string()))?;
+        let (events_tx, events) = mpsc::channel();
+        Ok(Self {
+            shared: Arc::new(shared(config, events_tx)?),
+            wake: Arc::new(WakePipe::new()?),
+            reader,
+            writer,
+            events,
+        })
+    }
+
+    /// Start the writer, IO and waiter threads. On a failure every thread already running is stopped (and the IO
+    /// thread joined), and the child is killed and reaped, so nothing outlives the error.
+    fn start(self, mut child: Box<dyn Child + Send + Sync>, signal: &Signaller) -> Result<Started, PaneError> {
+        let Self {
+            shared,
+            wake,
+            reader,
+            writer,
+            events,
+        } = self;
+        let (control, control_rx) = mpsc::channel();
+        let stop = |err: PaneError, io: Option<JoinHandle<()>>, child: &mut Box<dyn Child + Send + Sync>| {
+            let _ = control.send(Control::Shutdown);
+            wake.wake();
+            shared.writer.close();
+            signal.kill();
+            if let Some(io) = io {
+                let _ = io.join();
+            }
+            let _ = child.wait();
+            err
+        };
+        let queue = Arc::clone(&shared.writer);
+        if let Err(err) = spawn_thread("pane-write", move || pty::write_loop(&queue, writer)) {
+            return Err(stop(err, None, &mut child));
+        }
+        let io = Io {
+            shared: Arc::clone(&shared),
+            reader,
+            wake: Arc::clone(&wake),
+            control: control_rx,
+            scanner: Scanner::default(),
+            next_read: 0,
+            child_exited: false,
+        };
+        let io = match spawn_thread("pane-io", move || io.run()) {
+            Ok(io) => io,
+            Err(err) => return Err(stop(err, None, &mut child)),
+        };
+        // the child goes to the waiter only once it runs, so a failed start still holds it to reap
+        let (hand, handed) = mpsc::sync_channel::<Box<dyn Child + Send + Sync>>(1);
+        let waiter = {
+            let shared = Arc::clone(&shared);
+            let control = control.clone();
+            spawn_thread("pane-wait", move || {
+                if let Ok(child) = handed.recv() {
+                    wait_child(child, &shared, &control);
+                }
+            })
+        };
+        if let Err(err) = waiter {
+            return Err(stop(err, Some(io), &mut child));
+        }
+        if let Err(mpsc::SendError(mut child)) = hand.send(child) {
+            let err = PaneError::Pty("the pane-wait thread is gone".to_owned());
+            return Err(stop(err, Some(io), &mut child));
+        }
+        Ok(Started {
+            shared,
+            wake,
+            events,
+            io,
+            control,
+        })
+    }
+}
+
+/// A pane's running parts.
+struct Started {
+    shared: Arc<Shared>,
+    wake: Arc<WakePipe>,
+    events: Receiver<PaneEvent>,
+    io: JoinHandle<()>,
+    control: Sender<Control>,
+}
+
+/// The waiter thread: reap the child, release a clipboard read the IO thread may be parked on, give it a moment to
+/// process the last output, report the exit.
+fn wait_child(mut child: Box<dyn Child + Send + Sync>, shared: &Shared, control: &Sender<Control>) {
     let status = match child.wait() {
         Ok(status) => crate::ExitStatus {
             code: status.exit_code(),
@@ -540,6 +650,7 @@ fn wait_child(mut child: Box<dyn Child + Send + Sync>, shared: &Shared) {
             crate::ExitStatus { code: 1, signal: None }
         }
     };
+    let _ = control.send(Control::ChildExited);
     shared.wait_eof(EXIT_GRACE);
     shared.send(PaneEvent::Exited(status));
     shared.wake();
@@ -569,15 +680,20 @@ struct Io {
     control: Receiver<Control>,
     scanner: Scanner,
     next_read: u64,
+    /// The waiter reported the child's exit: clipboard reads are denied without asking.
+    child_exited: bool,
 }
 
 impl Io {
     fn run(mut self) {
         let mut buffer = vec![0_u8; READ_BATCH];
         loop {
-            match pty::poll(&self.reader, &self.wake, -1) {
+            match pty::poll(&self.reader, &self.wake, self.hold_timeout_ms()) {
                 Ok(Ready::Pty) => {}
-                Ok(Ready::Idle) => continue,
+                Ok(Ready::Idle) => {
+                    self.expire_hold();
+                    continue;
+                }
                 Ok(Ready::Woken) | Err(_) => break,
             }
             let (filled, eof) = self.read_batch(&mut buffer);
@@ -593,6 +709,27 @@ impl Io {
         }
         self.shared.mark_eof();
         self.shared.wake();
+    }
+
+    /// How long `poll` may wait: until a synchronized-output hold expires, else forever (-1).
+    fn hold_timeout_ms(&self) -> i32 {
+        let deadline = lock(&self.shared.capture).hold_deadline();
+        deadline.map_or(-1, |deadline| {
+            let left = deadline.saturating_duration_since(Instant::now());
+            // round up, so the wake lands after the deadline, not just before it
+            i32::try_from(left.as_millis() + 1).unwrap_or(i32::MAX)
+        })
+    }
+
+    /// End a hold that outlived its deadline and wake the frontend to draw the live screen.
+    fn expire_hold(&self) {
+        let mut vt = lock(&self.shared.vt);
+        let mut capture = lock(&self.shared.capture);
+        if end_expired_hold(&mut vt, &mut capture) {
+            drop(capture);
+            drop(vt);
+            self.shared.wake();
+        }
     }
 
     /// Read what the PTY has, up to the buffer: one read, then more while `poll` says more is there right away.
@@ -650,6 +787,9 @@ impl Io {
 
     /// Ask the frontend about a clipboard read and wait for its answer without the VT lock; `None` on shutdown.
     fn park(&mut self, read: ReadCandidate) -> Option<ClipboardAnswer> {
+        if self.child_exited {
+            return Some(ClipboardAnswer::Denied);
+        }
         self.next_read += 1;
         let id = self.next_read;
         self.shared.send(PaneEvent::ClipboardRead(ClipboardReadRequest {
@@ -662,6 +802,11 @@ impl Io {
             match self.control.recv() {
                 Ok(Control::Answer(answered, answer)) if answered == id => return Some(answer),
                 Ok(Control::Answer(..)) => {}
+                Ok(Control::ChildExited) => {
+                    // nobody is left to read the answer; keep processing the output instead of waiting on a prompt
+                    self.child_exited = true;
+                    return Some(ClipboardAnswer::Denied);
+                }
                 Ok(Control::Shutdown) | Err(_) => return None,
             }
         }
@@ -700,6 +845,13 @@ mod tests {
         cell_width: 8,
         cell_height: 16,
     };
+
+    thread_local! {
+        /// The pid of the last child `Pane::spawn` started on this thread.
+        pub(super) static LAST_CHILD: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+        /// A thread name whose start `spawn_thread` fails on this thread (fault injection).
+        pub(super) static FAIL_THREAD: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+    }
 
     const fn assert_send_sync<T: Send + Sync>() {}
     const _: () = assert_send_sync::<Pane>();
@@ -741,6 +893,86 @@ mod tests {
             assert!(pane.shared.vt.try_lock().is_ok());
         }
         wait_for(&pane, "second");
+    }
+
+    #[test]
+    fn a_view_that_paints_while_another_does_never_publishes_older_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let command = PaneCommand::new("/bin/sh")
+            .arg("-c")
+            .arg("exec sleep 30")
+            .cwd(dir.path());
+        let pane = Pane::spawn(&command, &PaneConfig::new(SIZE)).unwrap();
+        lock(&pane.shared.vt).terminal.vt_write(b"abc");
+        let first = pane.frame().frame;
+        assert_eq!(first.lines()[0], "abc");
+        // view B starts painting; before it looks at the terminal, the row changes in place (the cursor moves too)
+        // and view A paints the change completely
+        let shared = Arc::clone(&pane.shared);
+        *lock(&pane.shared.before_paint) = Some(Box::new(move || {
+            lock(&shared.vt).terminal.vt_write(b"\x1b[1;1HXYZ\x1b[3;5H");
+            let a = frame(&shared);
+            assert_eq!(a.frame.lines()[0], "XYZ");
+        }));
+        let b = pane.frame();
+        assert_eq!(b.frame.lines()[0], "XYZ", "view B drew older rows");
+        assert_eq!(pane.frame().frame.lines()[0], "XYZ", "older rows were published");
+    }
+
+    #[test]
+    fn a_pane_that_fails_to_start_a_thread_stops_its_child_and_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let command = PaneCommand::new("/bin/sh")
+            .arg("-c")
+            .arg("exec sleep 30")
+            .cwd(dir.path());
+        for thread in ["pane-write", "pane-io", "pane-wait"] {
+            FAIL_THREAD.with(|fail| fail.set(Some(thread)));
+            let started = Instant::now();
+            let error = Pane::spawn(&command, &PaneConfig::new(SIZE)).unwrap_err();
+            FAIL_THREAD.with(|fail| fail.set(None));
+            assert!(matches!(error, PaneError::Pty(_)), "{thread}: {error:?}");
+            assert!(started.elapsed() < Duration::from_secs(5), "{thread}: the cleanup hung");
+            // killed and reaped: not even a zombie is left
+            let pid = LAST_CHILD.with(std::cell::Cell::get).unwrap();
+            assert!(
+                !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+                "{thread}: child {pid} is left"
+            );
+        }
+    }
+
+    #[test]
+    fn the_scrollback_limits_reach_the_terminal() {
+        let dir = tempfile::tempdir().unwrap();
+        let command = PaneCommand::new("/bin/sh")
+            .arg("-c")
+            .arg("exec sleep 30")
+            .cwd(dir.path());
+        let config = PaneConfig {
+            scrollback: ScrollbackLimits {
+                max_bytes: None,
+                max_lines: Some(100),
+            },
+            ..PaneConfig::new(SIZE)
+        };
+        let pane = Pane::spawn(&command, &config).unwrap();
+        let limits = || lock(&pane.shared.vt).terminal.scrollback_limits();
+        assert_eq!(
+            limits(),
+            vt::ScrollbackLimits {
+                max_bytes: None,
+                max_lines: Some(100),
+            }
+        );
+        pane.set_scrollback(ScrollbackLimits::default()).unwrap();
+        assert_eq!(
+            limits(),
+            vt::ScrollbackLimits {
+                max_bytes: Some(50_000_000),
+                max_lines: None,
+            }
+        );
     }
 
     #[test]

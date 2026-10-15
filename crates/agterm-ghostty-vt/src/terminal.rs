@@ -27,6 +27,8 @@ impl Terminal {
     ///
     /// [`Error::InvalidValue`] for a zero dimension, [`Error::OutOfMemory`] when the allocation fails.
     pub fn new(cols: u16, rows: u16) -> Result<Self, Error> {
+        // the process-global hooks must be final before any terminal can read them (`sys` docs)
+        crate::sys::seal();
         let mut raw: ffi::GhosttyTerminal = std::ptr::null_mut();
         // SAFETY: a null allocator selects the library's default one; `raw` is a valid out-pointer that the call
         // fills on success only.
@@ -271,7 +273,9 @@ impl Terminal {
         MouseShape::from_raw(value)
     }
 
-    /// Full reset (RIS) from the embedder's side; the [`Effects::reset`] and render-hold callbacks run.
+    /// Full reset (RIS) from the embedder's side. Only the render-hold callback runs (when a hold was on): unlike a
+    /// program's RIS, this reports no [`Effects::reset`], progress removal or status clear, so the embedder reports the
+    /// cleared title, pwd, progress and status itself.
     pub fn reset(&mut self) {
         // SAFETY: `self.raw` is live and `&mut self` serializes the call.
         unsafe { ffi::ghostty_terminal_reset(self.raw.ptr()) };

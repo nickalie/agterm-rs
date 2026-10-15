@@ -1,8 +1,10 @@
 //! The library's process-global hooks (`sys.h`): a PNG decoder for Kitty graphics and a log sink.
 //!
-//! They are plain global variables in the library, read by every terminal on any thread, so they are installed once
-//! per process before any terminal uses them: [`install`] runs at most once (later calls are no-ops) and other
-//! callers of [`install`] wait until the first finished. Code that creates terminals calls [`install`] first.
+//! They are plain global variables in the library, read by every terminal on any thread, so `sys.h` asks for them to
+//! be set once at startup, before any terminal uses them. The wrapper enforces that order: the first of [`install`]
+//! and [`Terminal::new`](crate::Terminal::new) seals the hooks (a terminal created first seals them empty, and a later
+//! [`install`] changes nothing), and either waits while the other is sealing them. No native write of a hook can
+//! therefore overlap a terminal's read of it. Code that wants the hooks calls [`install`] before its first terminal.
 
 use std::ffi::c_void;
 use std::sync::OnceLock;
@@ -43,7 +45,7 @@ pub struct Hooks {
 static HOOKS: OnceLock<Hooks> = OnceLock::new();
 
 /// Install `hooks` for the whole process, once. Returns whether this call installed them (`false`: an earlier call
-/// did, and its hooks stay).
+/// did, and its hooks stay, or a terminal was created first and sealed them empty).
 pub fn install(hooks: Hooks) -> bool {
     let mut installed = false;
     HOOKS.get_or_init(|| {
@@ -62,7 +64,12 @@ pub fn install(hooks: Hooks) -> bool {
     installed
 }
 
-/// The installed hooks, if any.
+/// Seal the hooks before the first terminal exists: empty unless [`install`] ran first (waits while it runs).
+pub(crate) fn seal() {
+    HOOKS.get_or_init(|| Hooks { png: None, log: None });
+}
+
+/// The installed hooks, if any (empty ones when a terminal sealed them first).
 #[must_use]
 pub fn installed() -> Option<Hooks> {
     HOOKS.get().copied()

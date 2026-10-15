@@ -208,8 +208,9 @@ impl HeldTerminal<'_> {
 }
 
 /// The callbacks a terminal runs synchronously inside its mutating calls (`vt_write`, `resize`, `reset`), on the
-/// calling thread and with whatever lock the caller holds. Each must return quickly and never block; data passed in is
-/// borrowed for the call only. The defaults ignore the effect or decline the query.
+/// calling thread and with whatever lock the caller holds. Each must return quickly and must not wait on anything that
+/// could be waiting on the caller's lock (a lock taken in the same order as the caller's is fine, as a render-hold
+/// capture needs); data passed in is borrowed for the call only. The defaults ignore the effect or decline the query.
 pub trait Effects: Send {
     /// Bytes to send back to the program (query and mode reports, clipboard replies).
     fn write_pty(&mut self, data: &[u8]) {

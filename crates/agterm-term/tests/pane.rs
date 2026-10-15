@@ -10,7 +10,7 @@ use agterm_term::{
     ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardWrite, GridSize, PaneCommand, PaneConfig, PaneError,
     PaneEvent, Progress, ReadScope, Rgb,
 };
-use support::{SIZE, TestResult, spawn, spawn_with, wait_events, wait_file, wait_text};
+use support::{SIZE, TestResult, spawn, spawn_with, wait_events, wait_file, wait_file_containing, wait_text};
 
 fn exited(events: &[PaneEvent]) -> bool {
     events.iter().any(|event| matches!(event, PaneEvent::Exited(_)))
@@ -122,15 +122,40 @@ fn a_denied_or_empty_osc_52_read_answers_an_empty_clipboard() {
 
 #[test]
 fn a_kitty_listing_needs_no_consent_and_is_answered() {
-    // "." in base64: the available types only
-    let (scope, reply) = clipboard_round_trip(
-        "\\033]5522;type=read;Lg==\\033\\\\",
-        ClipboardAnswer::Text(Some("abc".to_owned())),
-        7,
-    )
+    // "." in base64: the available types only; the reply is the whole OK, listing, DONE sequence
+    let fixture = spawn(concat!(
+        "stty raw -echo; printf '\\033]5522;type=read;Lg==\\033\\\\'; ",
+        "timeout --foreground 10 cat > \"$DIR/reply\"; exec sleep 5"
+    ))
     .unwrap();
-    assert_eq!(scope, ReadScope::ListOnly);
-    assert_eq!(reply, b"\x1b]5522;");
+    let events = wait_events(&fixture.pane, |events| {
+        events.iter().any(|event| matches!(event, PaneEvent::ClipboardRead(_)))
+    });
+    let Some(PaneEvent::ClipboardRead(read)) = events.last() else {
+        unreachable!("waited for it")
+    };
+    assert_eq!(read.scope, ReadScope::ListOnly);
+    fixture
+        .pane
+        .answer_clipboard_read(read.id, ClipboardAnswer::Text(Some("abc".to_owned())));
+    let reply = wait_file_containing(&fixture.path("reply"), b"status=DONE");
+    let reply = String::from_utf8_lossy(&reply);
+    assert!(reply.starts_with("\x1b]5522;"), "{reply:?}");
+    assert!(reply.contains("status=OK"), "{reply:?}");
+    // the listing: "text/plain\n" in base64
+    assert!(reply.contains("dGV4dC9wbGFpbgo="), "{reply:?}");
+    // no data was served to a listing, and nothing was refused
+    assert!(!reply.contains("YWJj") && !reply.contains("EPERM"), "{reply:?}");
+}
+
+#[test]
+fn a_read_still_waiting_when_the_child_exits_is_denied_and_the_output_after_it_shown() {
+    let fixture = spawn("printf '\\033]52;c;?\\007'; printf 'after the read'; exit 0").unwrap();
+    // nobody answers the read: the exit releases it
+    let events = wait_events(&fixture.pane, exited);
+    assert!(events.iter().any(|event| matches!(event, PaneEvent::ClipboardRead(_))));
+    let frame = fixture.pane.frame().frame;
+    assert!(frame.lines()[0].contains("after the read"), "{:?}", frame.lines());
 }
 
 #[test]

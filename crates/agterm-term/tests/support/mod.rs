@@ -93,6 +93,25 @@ pub fn wait_events(pane: &Pane, mut done: impl FnMut(&[PaneEvent]) -> bool) -> V
     }
 }
 
+/// Wait until the contents of `path` contain `needle`, then the contents.
+pub fn wait_file_containing(path: &Path, needle: &[u8]) -> Vec<u8> {
+    let deadline = Instant::now() + DEADLINE;
+    loop {
+        let bytes = std::fs::read(path).unwrap_or_default();
+        if bytes.windows(needle.len()).any(|window| window == needle) {
+            return bytes;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {:?} in {}: {:?}",
+            String::from_utf8_lossy(needle),
+            path.display(),
+            String::from_utf8_lossy(&bytes)
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// Wait until `path` exists with at least `len` bytes, then its contents.
 pub fn wait_file(path: &Path, len: usize) -> Vec<u8> {
     let deadline = Instant::now() + DEADLINE;

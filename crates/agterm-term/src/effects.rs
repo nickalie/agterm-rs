@@ -2,7 +2,9 @@
 //!
 //! Every callback runs on the IO thread inside `vt_write`, with the pane's VT lock held. They copy what they need into
 //! the event channel (unbounded: a send never blocks) and return; replies to the program go to the PTY writer's queue,
-//! never a blocking write under the lock.
+//! never a blocking write under the lock. The one exception is the render-hold callback: it takes the capture lock
+//! (VT → capture, the pane's only lock order, so it can wait only for a paint's conversion, never deadlock) and
+//! captures the held frame there, as `terminal.h` asks.
 //!
 //! ## Clipboard reads
 //!
@@ -169,7 +171,8 @@ pub enum PaneEvent {
     ClipboardWrite(ClipboardWrite),
     ClipboardRead(ClipboardReadRequest),
     Colors(TerminalColors),
-    /// The program exited; its output up to the exit has been processed.
+    /// The program exited. Its output has been processed first, unless the PTY stays open after the exit (a background
+    /// process holding it) for longer than a second; a clipboard read still waiting for its answer is denied then.
     Exited(ExitStatus),
 }
 
