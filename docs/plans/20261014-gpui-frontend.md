@@ -1611,10 +1611,9 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 - [x] title bar and chrome painted in the terminal's colors (parity with `fd5349f`)
 - [x] follow the desktop light/dark (`org.freedesktop.appearance color-scheme` through the settings portal, `zbus`),
       replacing `adw::StyleManager`; feeds core's `light:/dark:` resolution
-- [ ] tests: appearance switch re-resolves the theme; `chrome_probe.py` pixel check passes on GPUI — the appearance
-      tests pass; the pixel check is ready for GPUI (probe ready; GPUI run after Task 17 merges, and Task 19 for the
-      sidebar boxes)
-- [ ] gates + conformance — must pass before Task 21 — gates pass; conformance after Task 17 merges
+- [x] tests: appearance switch re-resolves the theme; `chrome_probe.py` pixel check passes on GPUI — the appearance
+      tests pass; the pixel check passes on GPUI (theme, theme-change, tint)
+- [x] gates + conformance — must pass before Task 21
 - result (2026-10-15; Tasks 17 and 19 not merged yet):
   - **Chrome** (`chrome.rs`): `agterm_core::chrome`'s colors resolved from the terminals' config and the sidebar
     tint into one `Chrome` GPUI global, re-synced in `Windows::sync` after any config reload and replaced only when a
@@ -1645,6 +1644,26 @@ Port the placement rendering from qwertty-term (MIT, attribution).
     `chrome` and `titlebar` units, `tests/appearance.rs` with its weston/lavapipe flip, `agterm-term`'s pane tests
     and effects units, `agterm-ghostty-vt`'s effects tests); `chrome_probe` selftests 13 passed. Not run: the
     conformance suite and the GPUI pixel check (Task 17's harness).
+  - Merged with gpui-frontend at Tasks 13–19 (2026-10-15): `window.rs` keeps the title bar and the sidebar side by
+    side (the bar over the whole window, the sidebar and the deck in the row under it) and Task 18's focus settle
+    (`sync` returns it; the bar's cover and colors sync after the sidebar); `terminal.rs` keeps both the color scheme
+    and `selection-word-chars`. One source for the chrome colors: `chrome.rs` resolves them into the `Chrome` global
+    (`chrome::colors`, `default_colors` before the first sync); the sidebar's `Look::of` now takes those colors
+    (`chrome::current`) and only adds the font size, its divider, selected-row pill and selected text go through
+    `chrome::separator` and `chrome::selected_row` (the duplicated resolution in `sidebar/look.rs` is gone, and with
+    it the sidebar's `DeckEnv`: `Sidebar::new` takes the poster). The title-bar hairline is the bar's bottom border,
+    spanning the window over the sidebar's column (tested through the window: `debug_selector`s `titlebar` and
+    `sidebar`), as the GTK header bar's inset shadow does. Tests: the look paints the chrome's colors, the sidebar
+    follows the `Chrome` global, the hairline spans the sidebar's column.
+  - Gates: fmt; clippy (workspace, all targets and features, `-D warnings`); `lint-report.sh`;
+    `check-tracing-features.sh`; `vendor-gpui.sh --check`; `xvfb-run cargo test --workspace` 4014 passed, 0 failed,
+    6 ignored (80 binaries). `chrome_probe.py --frontend gpui` (the probe unchanged): theme, theme-change and tint
+    hold (#282a36 / #ffffff everywhere, the tinted sidebar #1c1d26). GPUI conformance ratchet-only with `--also-k
+    "chrome or titlebar or appearance or theme or toolbar or dark or light"`: 467 passed, 0 failed, ratchet held (455
+    ids) and grew by 12 (the `theme.set`/`theme` cli tests, the chromeless overlay refusals). Claimed
+    `theme-slots-by-sync` (its branching theme tests pass on upstream's side). The themes need no stage change: the
+    GPUI stage already installs `share/ghostty/themes` with `build/themes` like the GTK one, and the binary finds them
+    through `resource_candidates`; the theme tests pass on it.
 
 ### Task 21: HUD, ask dialog, modal, popovers
 
