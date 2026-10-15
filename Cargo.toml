@@ -19,6 +19,7 @@ agterm-core = { path = "crates/agterm-core" }
 agterm-server = { path = "crates/agterm-server" }
 agterm-zmx = { path = "crates/agterm-zmx" }
 agterm-app = { path = "crates/agterm-app" }
+agterm-term = { path = "crates/agterm-term" }
 agterm-wpe-javascriptcore-sys = { path = "crates/agterm-wpe-javascriptcore-sys" }
 agterm-wpe-platform-sys = { path = "crates/agterm-wpe-platform-sys" }
 agterm-wpe-sys = { path = "crates/agterm-wpe-sys" }
@@ -31,6 +32,10 @@ clap = { version = "4.6", features = ["derive"] }
 libc = "0.2"
 # `default-features = false` drops the `html` renderer and the CLI's `getopts`: the HUD walks the events itself.
 pulldown-cmark = { version = "0.13", default-features = false }
+# Kitty graphics PNG transmissions, decoded for libghostty-vt's process-global PNG hook (agterm-term).
+png = "0.18"
+# A pane's PTY and child (agterm-term), as Zed and WezTerm use it.
+portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }
 # `preserve_order`: a result built as a `Value` keeps its fields in upstream's order on the wire (the catalog's
 # `fields` order) instead of sorting them.

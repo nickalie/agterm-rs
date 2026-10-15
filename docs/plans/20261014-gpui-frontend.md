@@ -559,36 +559,80 @@ Built on `agterm-ghostty-vt` (Task 5), with the thread protocol of Technical Det
 **Files:**
 - Create: `crates/agterm-term/src/{lib,pane,pty,effects,render}.rs`, `tests/pane.rs`, `tests/render.rs`
 - Modify: `crates/agterm-ghostty-vt/src/` (effect callbacks, render-state iterators, as the pane needs them)
+- ➕ Create: `crates/agterm-term/src/{scan,png,bench}.rs`, `tests/support/mod.rs`; `crates/agterm-ghostty-vt/src/
+  {effects,cell,shape,sys}.rs`, `tests/{effects,sys}.rs`; Modify: `Cargo.toml` (workspace deps `portable-pty` 0.9,
+  `png` 0.18)
 
-- [ ] `Pane`: `Mutex<Vt>` (terminal, encoders, selection), `portable-pty` child, IO thread reading the PTY into
+- [x] `Pane`: `Mutex<Vt>` (terminal, encoders, selection), `portable-pty` child, IO thread reading the PTY into
       `vt_write` in bounded slices, `WRITE_PTY` replies into a PTY writer queue (never a blocking write under the
       lock), bounded write queue (backpressure)
-- [ ] effects → `PaneEvent` (title, pwd, bell, desktop notification, progress, program status, clipboard write, color
+- [x] effects → `PaneEvent` (title, pwd, bell, desktop notification, progress, program status, clipboard write, color
       changes, child exited with status): callbacks copy into a channel the frontend drains on its main thread, never
       block and never re-enter `vt_write`; the wrapper reaches callback userdata without aliased `&mut`
-- [ ] clipboard read (OSC 52 / 5522): pick and implement the mechanism of Technical Details > Threads (synchronous
+- [x] clipboard read (OSC 52 / 5522): pick and implement the mechanism of Technical Details > Threads (synchronous
       reply from a main-thread-maintained snapshot, or interception with `ghostty_osc_*` and a PTY reply after the
       prompt, or an upstream deferred reply); never wait for the UI under the VT lock; parity with the GTK prompt
-- [ ] resize (cells + pixels) to VT and PTY; scrollback limit from Task 7's config
-- [ ] render capture in `agterm-term` types (`render.rs`): **one** capture render state per pane (dirty flags have one
+- [x] resize (cells + pixels) to VT and PTY; scrollback limit from Task 7's config
+- [x] render capture in `agterm-term` types (`render.rs`): **one** capture render state per pane (dirty flags have one
       consumer), lock order VT → capture, `try_lock` on paint, two-phase update with only `begin_update` under the VT
       lock, frame = rows shared as `Arc` with dirty flags, cells (graphemes, width, style, colors, hyperlink id), cursor
       (position, style, visibility), mouse shape, palette and default colors; every view draws that frame
-- [ ] synchronized output: the `RENDER_HOLD` callback captures the held frame under the capture lock; paint publishes
+- [x] synchronized output: the `RENDER_HOLD` callback captures the held frame under the capture lock; paint publishes
       that frame and does not update until the hold ends
-- [ ] process-global setup once: PNG decoder (`ghostty_sys_set`, `png` crate), log callback into `tracing`
-- [ ] public API exposes only `agterm-term` types (Technical Details > Engine boundary)
-- [ ] profile the read path through zmx (Task 1: `cat` of 50 MiB took ~1.45 s behind zmx vs 0.41–0.51 s for the GTK
+- [x] process-global setup once: PNG decoder (`ghostty_sys_set`, `png` crate), log callback into `tracing`
+- [x] public API exposes only `agterm-term` types (Technical Details > Engine boundary)
+- [x] profile the read path through zmx (Task 1: `cat` of 50 MiB took ~1.45 s behind zmx vs 0.41–0.51 s for the GTK
       build behind the same zmx, while plain-shell runs were within 1.0–1.7×): read sizes, per-read wakes, slicing;
       target within 1.5× of the GTK build through zmx
-- [ ] measure the lock: worst-case paint wait and key-to-PTY latency under a 50 MiB `cat`, a kitty PNG burst and a
+- [x] measure the lock: worst-case paint wait and key-to-PTY latency under a 50 MiB `cat`, a kitty PNG burst and a
       resize/reflow of a full scrollback; if either exceeds one frame (16.7 ms), switch `agterm-term` internally to the
       spike's actor-per-pane model (same public API) and record it here
-- [ ] tests (real PTY): `printf` output on screen; OSC 0/2, 7, 9/777, 9;4, BEL, 52 write and read produce events or
+- [x] tests (real PTY): `printf` output on screen; OSC 0/2, 7, 9/777, 9;4, BEL, 52 write and read produce events or
       replies; exit status; resize reaches the child (`stty size`); frame dirty flags after partial updates, two views
       of one pane drawing one frame, a mode 2026 hold publishing the held frame, styles and wide cells; errors: spawn
       failure, PTY closed mid-write, backpressure limit, `try_lock` contention keeps the previous frame
-- [ ] gates — must pass before Task 10
+- [x] gates — must pass before Task 10
+- result (2026-10-15):
+  - **Clipboard read** (Codex-reviewed, transcript
+    `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/task-9-osc52-read/transcript.md`): "park before the
+    dispatch byte". The IO thread runs `scan.rs`, a mirror of Ghostty's parse table (`parse_table.zig`: anywhere/C1
+    transitions, escape intermediates, DCS/APC/SOS strings ended by ESC or CAN/SUB) with the OSC 52 (`52;<0–1 byte
+    selector>;?`) and OSC 5522 (`type=read`, last duplicate wins, padded base64, invalid metadata values dropped)
+    classifiers; it feeds everything before the byte Ghostty dispatches the OSC on (BEL, or the **ESC** of ST — Ghostty
+    dispatches there, not on `\`), releases the VT lock, emits `PaneEvent::ClipboardRead { id, location, scope }`
+    and waits for `Pane::answer_clipboard_read` (or shutdown) with no lock held; then arms the answer, feeds the
+    dispatch byte alone, so libghostty's own callback validates and serializes the reply (OSC 52 and 5522 statuses,
+    ids, terminators, ordered with its other replies), and disarms what was not taken. The callback denies when
+    nothing is armed, the clipboard differs, or a list-only answer meets a data request. The frontend applies
+    `clipboard-read` and the app-wide `ClipboardPromptPolicy` as GTK does (a listing needs no consent). ⚠️ Difference
+    from GTK: while a read waits for its answer the pane reads no output (libghostty-vt's synchronous model,
+    `terminal.h:1043-1048`); full libghostty keeps streaming. A deferred-read API upstream would lift it. Kitty
+    session grants (`remember`) are never set; OSC 5522 writes are acknowledged before the frontend's `clipboard-write`
+    decision.
+  - **Thread model**: the mutex protocol stands; no actor fallback. Release build, 141×41 cells, a UI stand-in
+    painting every 16 ms (`try_lock`, never waits) and taking the VT lock every 4 ms as key encoding will
+    (`src/bench.rs`, `cargo test --release -p agterm-term --lib bench -- --ignored`): longest IO-thread hold of the VT
+    lock 0.5–0.8 ms during a 50 MiB `cat` (64 KiB slices), **7.1 ms** during 10 Kitty PNG transmissions of 1080p
+    (decode under the lock); a resize reflowing a full 50 MB scrollback takes 7–10 ms on the caller; key-path lock
+    wait max 1.5 ms (`cat`), 6.4 ms (PNG burst), 7.8 ms (reflow) — all under 16.7 ms. Paint is stale (previous frame
+    drawn) in 3–15 % of frames under the `cat`, never more than two in a row.
+  - **zmx read path**: the IO thread `poll`s, reads, and drains whatever is ready right away into one batch (up to
+    256 KiB), feeds the VT in 64 KiB slices, then wakes the frontend once (coalesced until it paints). Through zmx the
+    client writes ~3.6 KiB at a time, so batches stay ~9 KiB (≈6 000 per 50 MiB vs ≈550 on a plain shell). `cat` of
+    50 MiB: **0.73–1.0 s through zmx** (spike: 1.45–1.55 s), 0.49–0.53 s plain; a reader doing no VT work at all needs
+    0.69–0.83 s through the same zmx, so the pane is at zmx's own ceiling. ⚠️ The spike's GTK baseline "behind the same
+    zmx" was not behind zmx: the conformance harness launches without `restoreMode: live` (its pane's parent is
+    `agterm`, no `ZMX_*`). Re-measured back to back at the harness's 71×27 grid: GTK through live zmx 2.8–3.6 s (17 s
+    in a run under load 35–96), GTK plain 0.63–0.92 s, the pane through zmx 0.73–0.76 s and plain 0.49–0.51 s — within
+    the target by a wide margin.
+  - Also in this task: theme colors (`ThemeColors` from the config's `background`/`foreground`/`palette`/
+    `cursor-color`) are set on the terminal, since a render state reports default colors only when both are set;
+    `Pane::set_colors`/`set_scrollback`; DA1/DA2 answered as Ghostty does (`62;22;52`, `1;10;0`), XTVERSION
+    `ghostty <libghostty-vt version>`; a full reset reports an empty title and pwd. Cells carry a hyperlink flag (the
+    C API has no per-cell link id; the URI is read through grid refs with links in Task 14). The IO thread never
+    stops reading output for queued replies (a child blocked on output while we wait for it to read would deadlock);
+    replies past 16 MiB queued are dropped instead. The PTY end closes the write queue (`PaneError::Closed`); the
+    child gets `SIGHUP` through a pidfd on drop. 50 repeated runs of the two crates' tests: no failures.
 
 ### Task 10: agterm-term — input, selection, search, read-back
 

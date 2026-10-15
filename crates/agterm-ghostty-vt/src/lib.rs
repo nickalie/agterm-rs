@@ -5,10 +5,15 @@
 //! - [`RenderState`]: the capture a renderer draws from, updated from a terminal in one call or in two phases, read
 //!   row by row through [`RenderState::rows`].
 //!
+//! - [`Effects`]: the callbacks a terminal runs synchronously inside [`Terminal::vt_write`] (replies to the PTY,
+//!   title, pwd, bell, notifications, progress, program status, clipboard, synchronized output), installed with
+//!   [`Terminal::set_effects`].
+//! - [`sys`]: the process-global hooks (PNG decoder, log), installed once at startup.
+//!
 //! Every handle is `Send` and not `Sync`: the library creates no threads and keeps no thread-local state, and asks
 //! callers to serialize access to a terminal from any thread (`render.h`, `terminal.h`). A handle may move to another
-//! thread; sharing one takes a lock around it. The rest of the API (effects, encoders, selection, formatter, search,
-//! kitty graphics) grows with the pane core.
+//! thread; sharing one takes a lock around it. The rest of the API (encoders, selection, formatter, search, kitty
+//! graphics) grows with the pane core.
 //!
 //! ```
 //! fn moved<T: Send>() {}
@@ -26,15 +31,89 @@
 //! shared::<agterm_ghostty_vt::RenderState>();
 //! ```
 
+mod cell;
+mod effects;
 mod render;
+mod shape;
+pub mod sys;
 mod terminal;
 
-pub use render::{Dirty, PendingUpdate, RenderState, RowRef, Rows};
+pub use cell::{CellRef, CellWidth, Cells, Style, StyleColor, StyleFlags, Underline};
+pub use effects::{
+    ClipboardContent, ClipboardData, ClipboardLocation, ClipboardReadReply, ClipboardReadRequest,
+    ClipboardWriteRequest, ClipboardWriteResult, DeviceAttributes, Effects, HeldTerminal, ProgramStatus,
+    ProgramStatusKind, ProgramStatusState, ProgressReport, ProgressState, SizeReport,
+};
+pub use render::{
+    CursorPosition, CursorStyle, Dirty, PendingUpdate, RenderColors, RenderCursor, RenderState, RowId, RowRef, Rows,
+};
+pub use shape::{Mode, MouseShape, ScrollbackLimits, TerminalColors};
 pub use terminal::Terminal;
 
 use std::ptr::NonNull;
 
-use agterm_ghostty_vt_sys as sys;
+use agterm_ghostty_vt_sys as ffi;
+
+/// A 24-bit color.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Rgb {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+impl Rgb {
+    #[must_use]
+    pub const fn new(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b }
+    }
+}
+
+impl From<ffi::GhosttyColorRgb> for Rgb {
+    fn from(color: ffi::GhosttyColorRgb) -> Self {
+        Self::new(color.r, color.g, color.b)
+    }
+}
+
+/// The library's version string (e.g. `1.2.3` or `1.2.3-dev+abcdef`).
+#[must_use]
+pub fn version() -> String {
+    let mut value = ffi::GhosttyString {
+        ptr: std::ptr::null(),
+        len: 0,
+    };
+    // SAFETY: `VERSION_STRING` writes a `GhosttyString` pointing at static library data; on failure it stays empty.
+    unsafe { ffi::ghostty_build_info(ffi::GHOSTTY_BUILD_INFO_VERSION_STRING, (&raw mut value).cast()) };
+    // SAFETY: the string is static in the library.
+    String::from_utf8_lossy(unsafe { string_bytes(value) }).into_owned()
+}
+
+/// The bytes a library string points at, borrowed for as long as the library keeps them (a callback's duration, or
+/// until the next mutating call on the owner).
+///
+/// # Safety
+///
+/// `string.ptr` must be valid for `string.len` bytes of reads for `'a`, or `string.len` must be zero.
+unsafe fn string_bytes<'a>(string: ffi::GhosttyString) -> &'a [u8] {
+    if string.ptr.is_null() || string.len == 0 {
+        return &[];
+    }
+    // SAFETY: non-null, and the caller guarantees `len` readable bytes for `'a`.
+    unsafe { std::slice::from_raw_parts(string.ptr, string.len) }
+}
+
+/// A slice of `len` values at `ptr`, empty for a null pointer or a zero length.
+///
+/// # Safety
+///
+/// `ptr` must be valid for `len` reads of `T` for `'a`, or `len` must be zero or `ptr` null.
+unsafe fn raw_slice<'a, T>(ptr: *const T, len: usize) -> &'a [T] {
+    if ptr.is_null() || len == 0 {
+        return &[];
+    }
+    // SAFETY: non-null, and the caller guarantees `len` readable values for `'a`.
+    unsafe { std::slice::from_raw_parts(ptr, len) }
+}
 
 /// A libghostty-vt call that returned a `GhosttyResult` other than `GHOSTTY_SUCCESS`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,16 +138,16 @@ pub enum Error {
 
 impl Error {
     /// `Ok` for `GHOSTTY_SUCCESS`, the matching error otherwise.
-    pub(crate) fn check(result: sys::GhosttyResult) -> Result<(), Self> {
+    pub(crate) fn check(result: ffi::GhosttyResult) -> Result<(), Self> {
         match result {
-            sys::GHOSTTY_SUCCESS => Ok(()),
-            sys::GHOSTTY_OUT_OF_MEMORY => Err(Self::OutOfMemory),
-            sys::GHOSTTY_INVALID_VALUE => Err(Self::InvalidValue),
-            sys::GHOSTTY_OUT_OF_SPACE => Err(Self::OutOfSpace),
-            sys::GHOSTTY_NO_VALUE => Err(Self::NoValue),
-            sys::GHOSTTY_IO_ERROR => Err(Self::Io),
-            sys::GHOSTTY_LIMIT_EXCEEDED => Err(Self::LimitExceeded),
-            sys::GHOSTTY_REJECTED => Err(Self::Rejected),
+            ffi::GHOSTTY_SUCCESS => Ok(()),
+            ffi::GHOSTTY_OUT_OF_MEMORY => Err(Self::OutOfMemory),
+            ffi::GHOSTTY_INVALID_VALUE => Err(Self::InvalidValue),
+            ffi::GHOSTTY_OUT_OF_SPACE => Err(Self::OutOfSpace),
+            ffi::GHOSTTY_NO_VALUE => Err(Self::NoValue),
+            ffi::GHOSTTY_IO_ERROR => Err(Self::Io),
+            ffi::GHOSTTY_LIMIT_EXCEEDED => Err(Self::LimitExceeded),
+            ffi::GHOSTTY_REJECTED => Err(Self::Rejected),
             other => Err(Self::Unknown(other)),
         }
     }
@@ -137,15 +216,15 @@ mod tests {
 
     #[test]
     fn success_is_ok_and_every_known_code_maps_to_its_error() {
-        assert_eq!(Error::check(sys::GHOSTTY_SUCCESS), Ok(()));
+        assert_eq!(Error::check(ffi::GHOSTTY_SUCCESS), Ok(()));
         for (code, error) in [
-            (sys::GHOSTTY_OUT_OF_MEMORY, Error::OutOfMemory),
-            (sys::GHOSTTY_INVALID_VALUE, Error::InvalidValue),
-            (sys::GHOSTTY_OUT_OF_SPACE, Error::OutOfSpace),
-            (sys::GHOSTTY_NO_VALUE, Error::NoValue),
-            (sys::GHOSTTY_IO_ERROR, Error::Io),
-            (sys::GHOSTTY_LIMIT_EXCEEDED, Error::LimitExceeded),
-            (sys::GHOSTTY_REJECTED, Error::Rejected),
+            (ffi::GHOSTTY_OUT_OF_MEMORY, Error::OutOfMemory),
+            (ffi::GHOSTTY_INVALID_VALUE, Error::InvalidValue),
+            (ffi::GHOSTTY_OUT_OF_SPACE, Error::OutOfSpace),
+            (ffi::GHOSTTY_NO_VALUE, Error::NoValue),
+            (ffi::GHOSTTY_IO_ERROR, Error::Io),
+            (ffi::GHOSTTY_LIMIT_EXCEEDED, Error::LimitExceeded),
+            (ffi::GHOSTTY_REJECTED, Error::Rejected),
         ] {
             assert_eq!(Error::check(code), Err(error));
         }

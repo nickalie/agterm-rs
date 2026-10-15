@@ -1,14 +1,17 @@
 //! [`Terminal`]: an owned `GhosttyTerminal`.
 
-use crate::{Error, Handle, sys};
+use crate::effects::{CALLBACKS, EffectsSlot};
+use crate::{Effects, Error, Handle, Mode, MouseShape, Rgb, ScrollbackLimits, TerminalColors, ffi, string_bytes};
 
 /// One VT: parser, screens and scrollback, owned and freed on drop.
 ///
 /// Mutating calls take `&mut self`, which serializes them as the C API asks; the handle is `Send` and not `Sync`
-/// (crate docs).
+/// (crate docs). Installed [`Effects`] run inside those calls.
 #[derive(Debug)]
 pub struct Terminal {
-    raw: Handle<sys::GhosttyTerminalImpl>,
+    // Fields drop in declaration order: the terminal (which can call the effects) goes before the effects.
+    raw: Handle<ffi::GhosttyTerminalImpl>,
+    effects: Option<EffectsSlot>,
 }
 
 // SAFETY: libghostty-vt creates no threads and keeps no thread-local state (`grep threadlocal src/terminal` is empty
@@ -24,14 +27,266 @@ impl Terminal {
     ///
     /// [`Error::InvalidValue`] for a zero dimension, [`Error::OutOfMemory`] when the allocation fails.
     pub fn new(cols: u16, rows: u16) -> Result<Self, Error> {
-        let mut raw: sys::GhosttyTerminal = std::ptr::null_mut();
+        let mut raw: ffi::GhosttyTerminal = std::ptr::null_mut();
         // SAFETY: a null allocator selects the library's default one; `raw` is a valid out-pointer that the call
         // fills on success only.
-        let result = unsafe { sys::ghostty_terminal_new(std::ptr::null(), &raw mut raw, cols, rows) };
+        let result = unsafe { ffi::ghostty_terminal_new(std::ptr::null(), &raw mut raw, cols, rows) };
         Error::check(result)?;
         Ok(Self {
-            raw: Handle::new(raw, sys::ghostty_terminal_free)?,
+            raw: Handle::new(raw, ffi::ghostty_terminal_free)?,
+            effects: None,
         })
+    }
+
+    /// Install `effects`: every callback of [`Effects`] is registered, replacing any earlier handler (dropped after
+    /// the switch).
+    ///
+    /// # Errors
+    ///
+    /// The library's result when an option is refused (a library without one of the bound options).
+    pub fn set_effects(&mut self, effects: Box<dyn Effects>) -> Result<(), Error> {
+        let slot = EffectsSlot::new(effects);
+        // SAFETY: `self.raw` is live and `&mut self` serializes the call; the userdata is the slot's heap pointer,
+        // which stays valid until the slot is replaced or dropped after the terminal (field order).
+        let result =
+            unsafe { ffi::ghostty_terminal_set(self.raw.ptr(), ffi::GHOSTTY_TERMINAL_OPT_USERDATA, slot.userdata()) };
+        Error::check(result)?;
+        let previous = self.effects.replace(slot);
+        for &(option, callback) in CALLBACKS {
+            // SAFETY: each option takes its callback's function pointer itself, and `CALLBACKS` pairs every option
+            // with a trampoline of exactly that option's C signature.
+            Error::check(unsafe { ffi::ghostty_terminal_set(self.raw.ptr(), option, callback) })?;
+        }
+        drop(previous);
+        Ok(())
+    }
+
+    /// Set the scrollback limits; lowering one prunes history right away.
+    ///
+    /// # Errors
+    ///
+    /// The library's result when a value is refused.
+    pub fn set_scrollback_limits(&mut self, limits: ScrollbackLimits) -> Result<(), Error> {
+        for (option, limit) in [
+            (ffi::GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, limits.max_bytes),
+            (ffi::GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, limits.max_lines),
+        ] {
+            let value = limit
+                .as_ref()
+                .map_or(std::ptr::null(), |limit| std::ptr::from_ref(limit).cast());
+            // SAFETY: `self.raw` is live; both options take a `size_t *`, or null to remove the limit.
+            Error::check(unsafe { ffi::ghostty_terminal_set(self.raw.ptr(), option, value) })?;
+        }
+        Ok(())
+    }
+
+    /// Set the Kitty image storage limit in bytes on every screen; zero disables the Kitty graphics protocol and
+    /// deletes every image.
+    ///
+    /// # Errors
+    ///
+    /// The library's result when the value is refused.
+    pub fn set_kitty_image_storage_limit(&mut self, bytes: u64) -> Result<(), Error> {
+        // SAFETY: `self.raw` is live; the option takes a `uint64_t *` read during the call.
+        let result = unsafe {
+            ffi::ghostty_terminal_set(
+                self.raw.ptr(),
+                ffi::GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT,
+                (&raw const bytes).cast(),
+            )
+        };
+        Error::check(result)
+    }
+
+    /// The current scrollback limits.
+    #[must_use]
+    pub fn scrollback_limits(&self) -> ScrollbackLimits {
+        let limit = |data| {
+            let mut value: usize = 0;
+            // SAFETY: `self.raw` is live; both keys write a `size_t`, and fail with `NO_VALUE` when unlimited.
+            let result = unsafe { ffi::ghostty_terminal_get(self.raw.ptr(), data, (&raw mut value).cast()) };
+            (result == ffi::GHOSTTY_SUCCESS).then_some(value)
+        };
+        ScrollbackLimits {
+            max_bytes: limit(ffi::GHOSTTY_TERMINAL_DATA_SCROLLBACK_MAX_BYTES),
+            max_lines: limit(ffi::GHOSTTY_TERMINAL_DATA_SCROLLBACK_MAX_LINES),
+        }
+    }
+
+    /// Set or reset a mode directly (no render-hold callback runs for [`Mode::SYNC_OUTPUT`]).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidValue`] for a mode the library does not know.
+    pub fn set_mode(&mut self, mode: Mode, value: bool) -> Result<(), Error> {
+        let config = ffi::GhosttyTerminalModeConfig { mode: mode.0, value };
+        // SAFETY: `self.raw` is live; `OPT_MODE` takes a `GhosttyTerminalModeConfig *` read during the call.
+        let result = unsafe {
+            ffi::ghostty_terminal_set(
+                self.raw.ptr(),
+                ffi::GHOSTTY_TERMINAL_OPT_MODE,
+                (&raw const config).cast(),
+            )
+        };
+        Error::check(result)
+    }
+
+    /// Whether a mode is set (`false` for a mode the library does not know).
+    #[must_use]
+    pub fn mode(&self, mode: Mode) -> bool {
+        let mut config = ffi::GhosttyTerminalModeConfig {
+            mode: mode.0,
+            value: false,
+        };
+        // SAFETY: `self.raw` is live; `DATA_MODE` reads `mode` and writes `value` of the config.
+        unsafe {
+            ffi::ghostty_terminal_get(
+                self.raw.ptr(),
+                ffi::GHOSTTY_TERMINAL_DATA_MODE,
+                (&raw mut config).cast(),
+            )
+        };
+        config.value
+    }
+
+    /// The window title (OSC 0/2), empty when none was set.
+    #[must_use]
+    pub fn title(&self) -> String {
+        self.get_string(ffi::GHOSTTY_TERMINAL_DATA_TITLE)
+    }
+
+    /// The working directory a program reported (OSC 7/9/1337), raw; empty when none.
+    #[must_use]
+    pub fn pwd(&self) -> String {
+        self.get_string(ffi::GHOSTTY_TERMINAL_DATA_PWD)
+    }
+
+    /// The effective colors.
+    #[must_use]
+    pub fn colors(&self) -> TerminalColors {
+        let color = |data| {
+            let mut value = ffi::GhosttyColorRgb { r: 0, g: 0, b: 0 };
+            // SAFETY: `self.raw` is live; the color keys write a `GhosttyColorRgb`, or fail when unset.
+            let result = unsafe { ffi::ghostty_terminal_get(self.raw.ptr(), data, (&raw mut value).cast()) };
+            (result == ffi::GHOSTTY_SUCCESS).then(|| Rgb::from(value))
+        };
+        let mut palette = [ffi::GhosttyColorRgb { r: 0, g: 0, b: 0 }; 256];
+        // SAFETY: `self.raw` is live; `DATA_COLOR_PALETTE` writes 256 `GhosttyColorRgb` (it always has a value).
+        unsafe {
+            ffi::ghostty_terminal_get(
+                self.raw.ptr(),
+                ffi::GHOSTTY_TERMINAL_DATA_COLOR_PALETTE,
+                palette.as_mut_ptr().cast(),
+            )
+        };
+        TerminalColors {
+            foreground: color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_FOREGROUND),
+            background: color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND),
+            cursor: color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_CURSOR),
+            palette: Box::new(palette.map(Rgb::from)),
+        }
+    }
+
+    /// Set the default foreground, background and cursor colors (the theme; programs override them with OSC 10/11/12).
+    /// `None` unsets one. A render state reports its default colors only while both foreground and background are set.
+    ///
+    /// # Errors
+    ///
+    /// The library's result when a value is refused.
+    pub fn set_default_colors(
+        &mut self,
+        foreground: Option<Rgb>,
+        background: Option<Rgb>,
+        cursor: Option<Rgb>,
+    ) -> Result<(), Error> {
+        for (option, color) in [
+            (ffi::GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, foreground),
+            (ffi::GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, background),
+            (ffi::GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, cursor),
+        ] {
+            let color = color.map(|color| ffi::GhosttyColorRgb {
+                r: color.r,
+                g: color.g,
+                b: color.b,
+            });
+            let value = color
+                .as_ref()
+                .map_or(std::ptr::null(), |color| std::ptr::from_ref(color).cast());
+            // SAFETY: `self.raw` is live; the color options take a `GhosttyColorRgb *` read during the call, or null.
+            Error::check(unsafe { ffi::ghostty_terminal_set(self.raw.ptr(), option, value) })?;
+        }
+        Ok(())
+    }
+
+    /// Set the default 256-color palette, keeping the slots programs overrode (OSC 4); `None` restores the library's
+    /// built-in palette.
+    ///
+    /// # Errors
+    ///
+    /// The library's result when the value is refused.
+    pub fn set_default_palette(&mut self, palette: Option<&[Rgb; 256]>) -> Result<(), Error> {
+        let raw = palette.map(|palette| {
+            palette.map(|color| ffi::GhosttyColorRgb {
+                r: color.r,
+                g: color.g,
+                b: color.b,
+            })
+        });
+        let value = raw.as_ref().map_or(std::ptr::null(), |raw| raw.as_ptr().cast());
+        // SAFETY: `self.raw` is live; `OPT_COLOR_PALETTE` takes a pointer to 256 `GhosttyColorRgb` read during the
+        // call, or null.
+        let result =
+            unsafe { ffi::ghostty_terminal_set(self.raw.ptr(), ffi::GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, value) };
+        Error::check(result)
+    }
+
+    /// The default palette (the built-in one unless [`Terminal::set_default_palette`] replaced it), OSC 4 overrides
+    /// ignored.
+    #[must_use]
+    pub fn default_palette(&self) -> Box<[Rgb; 256]> {
+        let mut palette = [ffi::GhosttyColorRgb { r: 0, g: 0, b: 0 }; 256];
+        // SAFETY: `self.raw` is live; `DATA_COLOR_PALETTE_DEFAULT` writes 256 `GhosttyColorRgb` (it always has one).
+        unsafe {
+            ffi::ghostty_terminal_get(
+                self.raw.ptr(),
+                ffi::GHOSTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT,
+                palette.as_mut_ptr().cast(),
+            )
+        };
+        Box::new(palette.map(Rgb::from))
+    }
+
+    /// The mouse pointer shape the program asked for (OSC 22).
+    #[must_use]
+    pub fn mouse_shape(&self) -> MouseShape {
+        let mut value: ffi::GhosttyMouseShape = ffi::GHOSTTY_MOUSE_SHAPE_DEFAULT;
+        // SAFETY: `self.raw` is live; `DATA_MOUSE_SHAPE` writes a `GhosttyMouseShape`.
+        unsafe {
+            ffi::ghostty_terminal_get(
+                self.raw.ptr(),
+                ffi::GHOSTTY_TERMINAL_DATA_MOUSE_SHAPE,
+                (&raw mut value).cast(),
+            )
+        };
+        MouseShape::from_raw(value)
+    }
+
+    /// Full reset (RIS) from the embedder's side; the [`Effects::reset`] and render-hold callbacks run.
+    pub fn reset(&mut self) {
+        // SAFETY: `self.raw` is live and `&mut self` serializes the call.
+        unsafe { ffi::ghostty_terminal_reset(self.raw.ptr()) };
+    }
+
+    /// A `GhosttyString` datum, copied (lossy UTF-8).
+    fn get_string(&self, data: ffi::GhosttyTerminalData) -> String {
+        let mut value = ffi::GhosttyString {
+            ptr: std::ptr::null(),
+            len: 0,
+        };
+        // SAFETY: `self.raw` is live; the keys passed here write a `GhosttyString`. On failure it stays empty.
+        unsafe { ffi::ghostty_terminal_get(self.raw.ptr(), data, (&raw mut value).cast()) };
+        // SAFETY: the bytes stay valid until the next mutating call, and `&self` excludes one during this copy.
+        String::from_utf8_lossy(unsafe { string_bytes(value) }).into_owned()
     }
 
     /// Feed bytes from the PTY through the VT parser. Malformed input never fails: the library logs it and keeps the
@@ -39,7 +294,7 @@ impl Terminal {
     pub fn vt_write(&mut self, bytes: &[u8]) {
         // SAFETY: `self.raw` is a live terminal owned by `self`, `&mut self` makes this the only call on it, and the
         // pointer and length describe the borrowed slice for the duration of the call.
-        unsafe { sys::ghostty_terminal_vt_write(self.raw.ptr(), bytes.as_ptr(), bytes.len()) };
+        unsafe { ffi::ghostty_terminal_vt_write(self.raw.ptr(), bytes.as_ptr(), bytes.len()) };
     }
 
     /// Resize to `cols` x `rows` cells of `cell_width_px` x `cell_height_px` pixels: the primary screen reflows,
@@ -50,43 +305,43 @@ impl Terminal {
     /// [`Error::InvalidValue`] for a zero dimension, [`Error::OutOfMemory`] when reflow cannot allocate.
     pub fn resize(&mut self, cols: u16, rows: u16, cell_width_px: u32, cell_height_px: u32) -> Result<(), Error> {
         // SAFETY: `self.raw` is a live terminal owned by `self` and `&mut self` makes this the only call on it.
-        let result = unsafe { sys::ghostty_terminal_resize(self.raw.ptr(), cols, rows, cell_width_px, cell_height_px) };
+        let result = unsafe { ffi::ghostty_terminal_resize(self.raw.ptr(), cols, rows, cell_width_px, cell_height_px) };
         Error::check(result)
     }
 
     /// The width in cells.
     #[must_use]
     pub fn cols(&self) -> u16 {
-        self.get_u16(sys::GHOSTTY_TERMINAL_DATA_COLS)
+        self.get_u16(ffi::GHOSTTY_TERMINAL_DATA_COLS)
     }
 
     /// The height in cells.
     #[must_use]
     pub fn rows(&self) -> u16 {
-        self.get_u16(sys::GHOSTTY_TERMINAL_DATA_ROWS)
+        self.get_u16(ffi::GHOSTTY_TERMINAL_DATA_ROWS)
     }
 
     /// The cursor's column and row in the active area, zero-based.
     #[must_use]
     pub fn cursor(&self) -> (u16, u16) {
         (
-            self.get_u16(sys::GHOSTTY_TERMINAL_DATA_CURSOR_X),
-            self.get_u16(sys::GHOSTTY_TERMINAL_DATA_CURSOR_Y),
+            self.get_u16(ffi::GHOSTTY_TERMINAL_DATA_CURSOR_X),
+            self.get_u16(ffi::GHOSTTY_TERMINAL_DATA_CURSOR_Y),
         )
     }
 
     /// The raw handle, for the wrapper's other types; it stays owned by `self`.
-    pub(crate) fn as_raw(&mut self) -> sys::GhosttyTerminal {
+    pub(crate) fn as_raw(&mut self) -> ffi::GhosttyTerminal {
         self.raw.ptr()
     }
 
     /// A `uint16_t` datum (`terminal.h` documents the output type of each key read through here).
-    fn get_u16(&self, data: sys::GhosttyTerminalData) -> u16 {
+    fn get_u16(&self, data: ffi::GhosttyTerminalData) -> u16 {
         let mut value: u16 = 0;
         // SAFETY: `self.raw` is a live terminal owned by `self`; every key passed here has `uint16_t *` as its output
         // type, so `value` is a valid, correctly sized out-pointer. The keys are always set, so the result is ignored
         // and a failure would leave the zero in place.
-        unsafe { sys::ghostty_terminal_get(self.raw.ptr(), data, (&raw mut value).cast()) };
+        unsafe { ffi::ghostty_terminal_get(self.raw.ptr(), data, (&raw mut value).cast()) };
         value
     }
 }

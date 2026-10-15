@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 agterm-ghostty-vt-sys.workspace = true
+bitflags.workspace = true
 
 [lints]
 workspace = true

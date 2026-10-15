@@ -1,0 +1,127 @@
+//! Frames from real PTY output: dirty rows after partial updates, one frame shared by two views, a synchronized-output
+//! hold publishing the held frame (and timing out), styles and wide cells.
+
+#[expect(dead_code, reason = "the event helpers serve tests/pane.rs")]
+mod support;
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use agterm_term::{CellFlags, CellWidth, PaneConfig, Rgb, Underline};
+use support::{SIZE, spawn, spawn_with, wait_file, wait_frame, wait_text};
+
+#[test]
+fn only_rows_written_since_a_frame_are_marked_changed() {
+    let fixture = spawn("printf 'one\\r\\ntwo\\r\\nthree'; read _; printf '\\033[2;1Hdeux'; exec sleep 5").unwrap();
+    let first = wait_text(&fixture.pane, "three");
+    fixture.pane.write(b"\n").unwrap();
+    let second = wait_text(&fixture.pane, "deux");
+    assert_eq!(second.lines()[..3], ["one", "deux", "three"]);
+    assert!(second.seq > first.seq);
+    assert!(!second.row_changed_since(0, first.seq));
+    assert!(second.row_changed_since(1, first.seq));
+    assert!(Arc::ptr_eq(&first.rows[0], &second.rows[0]));
+}
+
+#[test]
+fn two_views_of_one_pane_draw_one_frame() {
+    let fixture = spawn("printf 'shared'; exec sleep 5").unwrap();
+    wait_text(&fixture.pane, "shared");
+    let pane = &fixture.pane;
+    let (a, b) = std::thread::scope(|scope| {
+        let a = scope.spawn(|| pane.frame());
+        let b = scope.spawn(|| pane.frame());
+        (a.join().unwrap(), b.join().unwrap())
+    });
+    let current = pane.frame();
+    assert!(!current.stale);
+    for view in [&a, &b] {
+        assert_eq!(view.frame.seq, current.frame.seq);
+        assert!(Arc::ptr_eq(&view.frame, &current.frame));
+    }
+}
+
+#[test]
+fn a_synchronized_output_hold_publishes_the_held_frame_until_it_ends() {
+    let fixture = spawn(concat!(
+        "printf 'before'; printf '\\033[?2026h'; printf ' during'; ",
+        "read _; printf '\\033[?2026l'; exec sleep 5"
+    ))
+    .unwrap();
+    // the hold began with "before" on screen; " during" was drawn under it and must not show
+    let held = wait_frame(&fixture.pane, |frame| frame.held);
+    assert_eq!(held.lines()[0], "before");
+    std::thread::sleep(Duration::from_millis(100));
+    let still = fixture.pane.frame().frame;
+    assert!(still.held);
+    assert_eq!(still.lines()[0], "before");
+    fixture.pane.write(b"\n").unwrap();
+    let after = wait_frame(&fixture.pane, |frame| !frame.held);
+    assert_eq!(after.lines()[0], "before during");
+}
+
+#[test]
+fn a_hold_that_never_ends_times_out() {
+    let fixture = spawn("printf 'stuck'; printf '\\033[?2026h'; printf ' anyway'; exec sleep 10").unwrap();
+    wait_frame(&fixture.pane, |frame| frame.held);
+    // after a second the pane ends the hold itself and shows the live screen
+    let live = wait_frame(&fixture.pane, |frame| !frame.held && frame.lines()[0] == "stuck anyway");
+    assert!(!live.held);
+}
+
+#[test]
+fn styles_colors_and_wide_cells_come_through() {
+    let fixture = spawn(concat!(
+        "printf '\\033[1;4;38;2;10;20;30mB\\033[0m\\033[3;9;48;5;2mI\\033[0m'; ",
+        "printf '\\346\\227\\245\\346\\234\\254 ok'; exec sleep 5"
+    ))
+    .unwrap();
+    let frame = wait_text(&fixture.pane, "ok");
+    let row = &frame.rows[0];
+    let cells = row.cells();
+    assert_eq!(row.text(0), "B");
+    assert!(cells[0].flags.contains(CellFlags::BOLD));
+    assert_eq!(cells[0].underline, Underline::Single);
+    assert_eq!(cells[0].foreground, Some(Rgb::new(10, 20, 30)));
+    assert_eq!(row.text(1), "I");
+    assert!(cells[1].flags.contains(CellFlags::ITALIC | CellFlags::STRIKETHROUGH));
+    assert_eq!(cells[1].background, Some(frame.colors.palette[2]));
+    assert_eq!(row.text(2), "日");
+    assert_eq!(cells[2].width, CellWidth::Wide);
+    assert_eq!(cells[3].width, CellWidth::SpacerTail);
+    assert_eq!(row.text(3), "");
+    assert_eq!(row.line(), "BI日本 ok");
+}
+
+#[test]
+fn the_theme_and_scrollback_limits_reach_the_terminal() {
+    let theme = agterm_term::ThemeColors {
+        background: Rgb::new(1, 2, 3),
+        ..agterm_term::ThemeColors::default()
+    };
+    let config = PaneConfig {
+        colors: theme.clone(),
+        scrollback: agterm_term::ScrollbackLimits {
+            max_bytes: None,
+            max_lines: Some(100),
+        },
+        ..PaneConfig::new(SIZE)
+    };
+    let fixture = spawn_with("seq 1 5000 > \"$DIR/done\"; seq 1 5000; exec sleep 5", &config).unwrap();
+    wait_file(&fixture.path("done"), 1);
+    let frame = wait_text(&fixture.pane, "5000");
+    assert_eq!(frame.colors.background, Rgb::new(1, 2, 3));
+    let light = agterm_term::ThemeColors {
+        background: Rgb::new(250, 250, 250),
+        ..theme
+    };
+    fixture.pane.set_colors(&light).unwrap();
+    let frame = wait_frame(&fixture.pane, |frame| {
+        frame.colors.background == Rgb::new(250, 250, 250)
+    });
+    assert_eq!(frame.colors.foreground, light.foreground);
+    fixture
+        .pane
+        .set_scrollback(agterm_term::ScrollbackLimits::default())
+        .unwrap();
+}

@@ -12,7 +12,7 @@ const _: () = assert_send::<RenderState>();
 fn screen(state: &mut RenderState) -> Result<Vec<String>, Error> {
     let mut rows = state.rows()?;
     let mut lines = Vec::new();
-    while let Some(row) = rows.next_row() {
+    while let Some(mut row) = rows.next_row() {
         lines.push(row.text()?.trim_end().to_owned());
     }
     Ok(lines)
