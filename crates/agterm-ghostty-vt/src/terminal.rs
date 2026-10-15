@@ -16,6 +16,9 @@ pub enum Scroll {
     Rows(isize),
     /// By shell prompts (needs the shell's semantic prompt marks); negative is back.
     Prompts(isize),
+    /// To the absolute row (0 is the top of the scrollback), which becomes the first visible row; clamped to the
+    /// active area.
+    Row(usize),
 }
 
 /// One VT: parser, screens and scrollback, owned and freed on drop.
@@ -351,6 +354,32 @@ impl Terminal {
         unsafe { ffi::ghostty_terminal_vt_write(self.raw.ptr(), bytes.as_ptr(), bytes.len()) };
     }
 
+    /// Feed only the shortest prefix of `bytes` that brings the parser to ground (no sequence or UTF-8 character
+    /// in progress), the point where out-of-band VT sequences can go in safely; the bytes consumed, or `None` when all
+    /// of them were and the parser is still not at ground. Already at ground, nothing is consumed (`Some(0)`).
+    pub fn vt_write_until_ground(&mut self, bytes: &[u8]) -> Option<usize> {
+        let mut consumed = 0;
+        // SAFETY: `self.raw` is live and `&mut self` serializes the call; the pointer and length describe the borrowed
+        // slice, and `consumed` is a valid out-pointer.
+        let result = unsafe {
+            ffi::ghostty_terminal_vt_write_until_ground(self.raw.ptr(), bytes.as_ptr(), bytes.len(), &raw mut consumed)
+        };
+        (result == ffi::GHOSTTY_SUCCESS).then_some(consumed)
+    }
+
+    /// Whether the parser is at ground (see [`Terminal::vt_write_until_ground`]).
+    #[must_use]
+    pub fn at_ground(&self) -> bool {
+        self.get_bool(ffi::GHOSTTY_TERMINAL_DATA_VT_GROUND, true)
+    }
+
+    /// Whether the cursor is at a shell prompt or its input (semantic prompt marks, OSC 133); false on the alternate
+    /// screen or without marks.
+    #[must_use]
+    pub fn cursor_at_prompt(&self) -> bool {
+        self.get_bool(ffi::GHOSTTY_TERMINAL_DATA_CURSOR_AT_PROMPT, false)
+    }
+
     /// Resize to `cols` x `rows` cells of `cell_width_px` x `cell_height_px` pixels: the primary screen reflows,
     /// synchronized output ends, and an in-band size report goes out when mode 2048 is on.
     ///
@@ -444,6 +473,10 @@ impl Terminal {
             Scroll::Prompts(delta) => (
                 ffi::GHOSTTY_SCROLL_VIEWPORT_DELTA_PROMPT,
                 ffi::GhosttyTerminalScrollViewportValue { delta_prompt: delta },
+            ),
+            Scroll::Row(row) => (
+                ffi::GHOSTTY_SCROLL_VIEWPORT_ROW,
+                ffi::GhosttyTerminalScrollViewportValue { row },
             ),
         };
         let behavior = ffi::GhosttyTerminalScrollViewport { tag, value };
