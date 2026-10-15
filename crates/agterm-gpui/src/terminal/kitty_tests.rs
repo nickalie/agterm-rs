@@ -1,7 +1,9 @@
 //! Kitty graphics in the terminal element (plan > Task 16): placement geometry (cells, offsets, scrolling, a viewer's
-//! own cells, source rectangles), the layer order, pixel conversion, the per-view image cache and its eviction, and
-//! over a real pane in GPUI's test app: an image transmitted and placed is drawn from the window's atlas and leaves it
-//! when deleted or when the terminal goes.
+//! own cells, source rectangles), virtual placements through Unicode placeholders (Ghostty's render tests, the
+//! placement a run names), the layer order, pixel conversion within the texture budget, the terminal's texture store
+//! and its eviction, and over a real pane in GPUI's test app: an image transmitted and placed is drawn from the
+//! window's atlas and leaves it when deleted or when the terminal goes, placeholder cells draw their images, and each
+//! Kitty layer is painted at its stage.
 
 use std::path::Path;
 use std::rc::Rc;
@@ -10,14 +12,17 @@ use std::time::{Duration, Instant};
 
 use agterm_term::{
     KittyFormat, KittyImage, KittyImageKey, KittyLayer, KittyPlacement, KittyView, Pane, PaneCommand, PaneConfig,
-    PlacementRect, SourceRect,
+    PlacementRect, SourceRect, VirtualPlacement,
 };
 use gpui_kit::{AppContext as _, Bounds, Entity, TestAppContext, VisualTestContext, point, px, size};
 
+use super::kitty::placeholder::{self, VirtualRender};
+use super::kitty::textures;
 use super::kitty::{
-    Cells, DeviceRect, KittyTextures, MAX_TEXTURE_SIDE, bgra, fit_texture, image_bounds, placements, render_image,
+    Cells, DeviceRect, KittyStore, MAX_TEXTURE_PIXELS, MAX_TEXTURE_SIDE, Texture, image_bounds, placements,
+    texture_size,
 };
-use super::{Terminal, TerminalConfig, TerminalSpec, TerminalView, ViewRole};
+use super::{PaintLayer, Terminal, TerminalConfig, TerminalSpec, TerminalView, ViewRole};
 
 fn key(id: u32, generation: u64) -> KittyImageKey {
     KittyImageKey { id, generation }
@@ -50,6 +55,8 @@ fn placed(image: KittyImageKey, z: i32, column: i32, row: i32) -> KittyPlacement
         is_virtual: false,
         x_offset: 0,
         y_offset: 0,
+        columns: 0,
+        rows: 0,
         rect: Some(PlacementRect {
             column,
             row,
@@ -87,7 +94,7 @@ fn a_placement_lands_at_its_cell_plus_its_offset_inside_the_cell() {
     let mut placement = placed(a, 0, 3, 2);
     placement.x_offset = 4;
     placement.y_offset = 7;
-    let drawn = placements(&view(vec![image(a, 4, 4)], vec![placement]), CELLS);
+    let drawn = placements(&view(vec![image(a, 4, 4)], vec![placement]), &[], CELLS);
     assert_eq!(
         drawn[0].dest,
         DeviceRect {
@@ -100,14 +107,14 @@ fn a_placement_lands_at_its_cell_plus_its_offset_inside_the_cell() {
     // Ghostty's cellOffset: an offset past the cell stays inside it
     placement.x_offset = 500;
     placement.y_offset = 500;
-    let clamped = placements(&view(vec![image(a, 4, 4)], vec![placement]), CELLS);
+    let clamped = placements(&view(vec![image(a, 4, 4)], vec![placement]), &[], CELLS);
     assert_eq!((clamped[0].dest.x, clamped[0].dest.y), (39.0, 59.0));
 }
 
 #[test]
 fn a_placement_scrolled_partly_off_the_top_keeps_its_negative_row() {
     let a = key(1, 1);
-    let drawn = placements(&view(vec![image(a, 4, 4)], vec![placed(a, 0, 0, -3)]), CELLS);
+    let drawn = placements(&view(vec![image(a, 4, 4)], vec![placed(a, 0, 0, -3)]), &[], CELLS);
     assert_eq!((drawn[0].dest.y, drawn[0].dest.height), (-60.0, 20.0));
 }
 
@@ -120,7 +127,7 @@ fn a_viewer_scales_the_terminals_pixels_by_its_own_cell() {
         engine: (10, 20),
         view: (5, 10),
     };
-    let drawn = placements(&view(vec![image(a, 4, 4)], vec![placement]), half);
+    let drawn = placements(&view(vec![image(a, 4, 4)], vec![placement]), &[], half);
     assert_eq!(
         drawn[0].dest,
         DeviceRect {
@@ -145,7 +152,7 @@ fn virtual_offscreen_imageless_and_empty_placements_are_not_drawn() {
     }
     let shown = placed(a, 5, 1, 1);
     let all = vec![virtual_placement, offscreen, empty, placed(gone, 0, 0, 0), shown];
-    let drawn = placements(&view(vec![image(a, 4, 4)], all), CELLS);
+    let drawn = placements(&view(vec![image(a, 4, 4)], all), &[], CELLS);
     assert_eq!(drawn.len(), 1);
     assert_eq!(drawn[0].z, 5);
 }
@@ -164,7 +171,7 @@ fn placements_draw_by_z_then_image_id_in_three_layers() {
         placed(one, -1, 2, 0),
         placed(three, 7, 0, 0),
     ];
-    let drawn = placements(&view(images, all), CELLS);
+    let drawn = placements(&view(images, all), &[], CELLS);
     let order: Vec<(i32, u32, f64)> = drawn
         .iter()
         .map(|placement| (placement.z, placement.image.id, placement.dest.x))
@@ -218,8 +225,21 @@ fn the_whole_image_is_scaled_so_its_source_rect_covers_the_placement() {
     assert_eq!(image_bounds(dest, full, (4, 2)), dest);
 }
 
+fn with_pixels(format: KittyFormat, pixels: &[u8], width: u32, height: u32) -> KittyImage {
+    KittyImage {
+        format,
+        pixels: pixels.into(),
+        width,
+        height,
+        ..(*image(key(1, 1), 1, 1)).clone()
+    }
+}
+
 #[test]
 fn pixels_become_bgra_with_straight_alpha() {
+    let bgra = |format, pixels: &[u8], width, height| {
+        textures::bgra(&with_pixels(format, pixels, width, height)).map(|(pixels, _)| pixels)
+    };
     assert_eq!(bgra(KittyFormat::Rgba, &[1, 2, 3, 4], 1, 1), Some(vec![3, 2, 1, 4]));
     assert_eq!(bgra(KittyFormat::Rgb, &[1, 2, 3], 1, 1), Some(vec![3, 2, 1, 255]));
     assert_eq!(
@@ -229,45 +249,207 @@ fn pixels_become_bgra_with_straight_alpha() {
     assert_eq!(bgra(KittyFormat::GrayAlpha, &[9, 7], 1, 1), Some(vec![9, 9, 9, 7]));
     assert_eq!(bgra(KittyFormat::Rgba, &[1, 2, 3], 1, 1), None, "short");
     assert_eq!(bgra(KittyFormat::Rgb, &[], 0, 0), None, "empty");
-    let rendered = render_image(&image(key(1, 1), 3, 2)).unwrap();
+    let rendered = textures::render_image(&image(key(1, 1), 3, 2)).unwrap();
     assert_eq!((rendered.size(0).width.0, rendered.size(0).height.0), (3, 2));
 }
 
 #[test]
-fn an_image_larger_than_the_atlas_takes_is_scaled_down() {
-    let wide = image::RgbaImage::new(MAX_TEXTURE_SIDE * 2, 4);
-    assert_eq!(fit_texture(wide).dimensions(), (MAX_TEXTURE_SIDE, 2));
-    let fits = image::RgbaImage::new(MAX_TEXTURE_SIDE, 1);
-    assert_eq!(fit_texture(fits).dimensions(), (MAX_TEXTURE_SIDE, 1));
+fn a_texture_stays_within_the_atlas_side_and_the_pixel_budget() {
+    // libghostty-vt takes up to 10000 px a side
+    assert_eq!(texture_size(10_000, 10), (MAX_TEXTURE_SIDE, 8));
+    let (width, height) = texture_size(10_000, 6400);
+    assert!(u64::from(width) * u64::from(height) <= MAX_TEXTURE_PIXELS);
+    assert_eq!((width, height), (5120, 3276));
+    assert_eq!(texture_size(3840, 2160), (3840, 2160), "a 4K image keeps its size");
+    // a 10000x10000 RGB image (300 MB stored) becomes one 64 MB buffer, sampled straight from the stored pixels
+    assert_eq!(texture_size(10_000, 10_000), (4096, 4096));
+    // sampling picks the source pixel under each target pixel's center
+    let wide = with_pixels(KittyFormat::Gray, &(0..8).collect::<Vec<u8>>(), 8, 1);
+    let sampled = textures::resample(&wide.pixels, 1, (8, 1), (4, 1), |pixel| [pixel[0]; 4]).unwrap();
+    assert_eq!(
+        sampled.chunks(4).map(|pixel| pixel[0]).collect::<Vec<_>>(),
+        [1, 3, 5, 7]
+    );
 }
 
 #[test]
-fn the_cache_converts_an_image_once_and_forgets_it_with_the_view() {
+fn a_large_image_converts_into_a_bounded_texture() {
+    // 6000x3000 gray: 18 Mpx, over the budget
+    let large = with_pixels(KittyFormat::Gray, &vec![200; 6000 * 3000], 6000, 3000);
+    let (pixels, (width, height)) = textures::bgra(&large).unwrap();
+    assert!(u64::from(width) * u64::from(height) <= MAX_TEXTURE_PIXELS);
+    assert_eq!(pixels.len(), usize::try_from(width * height * 4).unwrap());
+    assert_eq!(&pixels[..4], &[200, 200, 200, 255]);
+}
+
+#[test]
+fn the_store_converts_an_image_once_and_forgets_it_with_the_view() {
     let (a, b) = (key(1, 1), key(2, 1));
-    let mut cache = KittyTextures::default();
+    let mut store = KittyStore::default();
     let both = view(
         vec![image(a, 4, 4), image(b, 2, 2)],
         vec![placed(a, 0, 0, 0), placed(b, 0, 0, 1)],
     );
-    cache.sync(&both);
-    let first = Arc::clone(&cache.get(a).unwrap().image);
-    assert_eq!(cache.get(b).unwrap().size, (2, 2));
-    cache.sync(&both);
-    assert!(Arc::ptr_eq(&first, &cache.get(a).unwrap().image), "converted once");
+    // new images go to the caller to convert (off the main thread) and draw nothing until they arrive
+    let new: Vec<KittyImageKey> = store.follow(1, &both).iter().map(|image| image.key).collect();
+    assert_eq!(new, [a, b]);
+    assert!(store.is_converting(a) && store.get(a).is_none());
+    let texture = |image: &Arc<KittyImage>| Texture {
+        image: Arc::new(textures::render_image(image).unwrap()),
+        size: (image.width, image.height),
+    };
+    store.finish(a, Some(texture(&both.images[0])));
+    store.finish(b, Some(texture(&both.images[1])));
+    let first = Arc::clone(&store.get(a).unwrap().image);
+    assert_eq!(store.get(b).unwrap().size, (2, 2));
+    assert!(store.follow(2, &both).is_empty(), "converted once");
+    assert!(
+        store.follow(1, &KittyView::default()).is_empty(),
+        "an older frame changes nothing"
+    );
+    assert!(Arc::ptr_eq(&first, &store.get(a).unwrap().image));
     // `a` deleted
-    cache.sync(&view(vec![image(b, 2, 2)], vec![placed(b, 0, 0, 1)]));
-    assert_eq!(cache.keys(), [b]);
+    assert!(
+        store
+            .follow(3, &view(vec![image(b, 2, 2)], vec![placed(b, 0, 0, 1)]))
+            .is_empty()
+    );
+    assert_eq!(store.keys(), [b]);
+    // a conversion that ends after its image went is dropped
+    store.finish(a, Some(texture(&both.images[0])));
+    assert!(store.get(a).is_none());
     // `b` transmitted again under its id: a new generation, a new texture
     let again = key(2, 2);
-    cache.sync(&view(vec![image(again, 2, 2)], vec![placed(again, 0, 0, 1)]));
-    assert_eq!(cache.keys(), [again]);
-    // pixels that do not match the size are left out
-    let broken = Arc::new(KittyImage {
-        pixels: vec![0; 3].into(),
-        ..(*image(key(3, 1), 4, 4)).clone()
-    });
-    cache.sync(&view(vec![broken], Vec::new()));
-    assert!(cache.keys().is_empty());
+    let new = store.follow(4, &view(vec![image(again, 2, 2)], vec![placed(again, 0, 0, 1)]));
+    assert_eq!(new.len(), 1);
+    assert_eq!(store.keys(), [again]);
+    // pixels that do not match the size are never drawn
+    store.finish(again, None);
+    assert!(store.get(again).is_none() && !store.is_converting(again));
+}
+
+fn virtual_placement(image: KittyImageKey, placement_id: u32, columns: u32, rows: u32) -> KittyPlacement {
+    KittyPlacement {
+        placement_id,
+        is_virtual: true,
+        columns,
+        rows,
+        rect: None,
+        ..placed(image, 0, 0, 0)
+    }
+}
+
+fn run(row: u32, col: u32, width: u32) -> VirtualPlacement {
+    VirtualPlacement {
+        viewport_row: 0,
+        viewport_col: 0,
+        image_id: 1,
+        placement_id: 0,
+        row,
+        col,
+        width,
+        height: 1,
+    }
+}
+
+/// Ghostty's "unicode render placement" tests: a 500x306 image at 36x80 cells.
+#[test]
+fn a_run_draws_its_slice_of_the_image_fitted_into_the_grid() {
+    let dog = key(1, 1);
+    let cell = (36, 80);
+    let render = |columns, rows, run: VirtualPlacement| {
+        placeholder::render(&run, &virtual_placement(dog, 0, columns, rows), (500, 306), cell).unwrap()
+    };
+    let source = |y, height| SourceRect {
+        x: 0,
+        y,
+        width: 500,
+        height,
+    };
+    // dog 4x2
+    assert_eq!(
+        render(4, 2, run(0, 0, 4)),
+        VirtualRender {
+            offset_x: 0,
+            offset_y: 36,
+            source: source(0, 153),
+            width: 144,
+            height: 44
+        }
+    );
+    assert_eq!(
+        render(4, 2, run(1, 0, 4)),
+        VirtualRender {
+            offset_x: 0,
+            offset_y: 0,
+            source: source(153, 153),
+            width: 144,
+            height: 44
+        }
+    );
+    // dog 2x2 with blank cells: a run wider than the grid
+    let wide = render(2, 2, run(0, 0, 4));
+    assert_eq!(
+        (wide.offset_y, wide.source, wide.width, wide.height),
+        (58, source(0, 153), 72, 22)
+    );
+    assert_eq!(render(2, 2, run(1, 0, 4)).source, source(153, 153));
+    // dog 1x1
+    let one = render(1, 1, run(0, 0, 4));
+    assert_eq!(
+        (one.offset_y, one.source, one.width, one.height),
+        (29, source(0, 306), 36, 22)
+    );
+    // a run past the image draws nothing
+    assert_eq!(
+        placeholder::render(&run(5, 0, 1), &virtual_placement(dog, 0, 4, 2), (500, 306), cell),
+        None
+    );
+}
+
+#[test]
+fn a_run_shows_the_virtual_placement_its_ids_name() {
+    let dog = key(1, 1);
+    let kitty = view(
+        vec![image(dog, 4, 4)],
+        vec![
+            virtual_placement(dog, 7, 2, 2),
+            virtual_placement(dog, 3, 1, 1),
+            KittyPlacement {
+                placement_id: 5,
+                ..placed(dog, 0, 0, 0)
+            },
+        ],
+    );
+    // a named id is looked up wherever that placement is (Ghostty's `placeholderTarget`)
+    let positioned = VirtualPlacement {
+        placement_id: 5,
+        ..run(0, 0, 1)
+    };
+    assert_eq!(
+        placeholder::target(&kitty, &positioned).map(|p| (p.placement_id, p.is_virtual)),
+        Some((5, false))
+    );
+    let named = VirtualPlacement {
+        placement_id: 7,
+        ..run(0, 0, 1)
+    };
+    assert_eq!(placeholder::target(&kitty, &named).map(|p| p.placement_id), Some(7));
+    // no id: the image's virtual placement with the lowest id
+    assert_eq!(
+        placeholder::target(&kitty, &run(0, 0, 1)).map(|p| p.placement_id),
+        Some(3)
+    );
+    let missing = VirtualPlacement {
+        placement_id: 9,
+        ..run(0, 0, 1)
+    };
+    assert!(placeholder::target(&kitty, &missing).is_none());
+    let other = VirtualPlacement {
+        image_id: 2,
+        ..run(0, 0, 1)
+    };
+    assert!(placeholder::target(&kitty, &other).is_none());
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -324,14 +506,15 @@ fn a_placed_image_is_drawn_from_the_atlas_and_leaves_it_when_deleted(cx: &mut Te
     view.read_with(cx, |view, _| {
         let frame = view.painted().expect("a frame");
         assert_eq!(frame.kitty.placements[0].layer, KittyLayer::BelowText);
-        assert_eq!(view.images().kitty.keys(), [frame.kitty.images[0].key]);
     });
-
     let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
+    let painted = view.read_with(cx, |view, _| view.painted().expect("a frame").kitty.images[0].key);
+    assert_eq!(shared.kitty_store().keys(), [painted]);
+
     shared.pane().unwrap().write(b"\n").unwrap();
     settle(cx, |cx| drawn(&view, cx).is_empty());
     assert!(!cx.update(|window, _| window.has_image_atlas_entry(&image)));
-    assert!(view.read_with(cx, |view, _| view.images().kitty.keys().is_empty()));
+    assert!(shared.kitty_store().keys().is_empty());
 }
 
 #[gpui_kit::test]
@@ -345,4 +528,96 @@ fn a_torn_down_terminal_drops_its_images_from_the_atlas(cx: &mut TestAppContext)
     terminal.read_with(cx, |terminal, _| terminal.shared().teardown());
     settle(cx, |cx| drawn(&view, cx).is_empty());
     assert!(!cx.update(|window, _| window.has_image_atlas_entry(&image)));
+}
+
+/// Images 1 and 2 (2x1 RGBA) transmitted with virtual placements of one cell (`U=1,c=1,r=1`), then shown through
+/// placeholder cells: image 1 named by a 24-bit foreground (0,0,1), image 2 by a palette index (`38;5;2`), each cell
+/// U+10EEEE with the row and column diacritics U+0305 U+0305 (0, 0).
+const PLACEHOLDERS: &str = concat!(
+    r"printf '\033_Ga=T,U=1,q=2,f=32,s=2,v=1,i=1,c=1,r=1;AQIDBAUGBwg=\033\\'; ",
+    r"printf '\033_Ga=T,U=1,q=2,f=32,s=2,v=1,i=2,c=1,r=1;AQIDBAUGBwg=\033\\'; ",
+    r"printf 'a\033[38;2;0;0;1m\364\216\273\256\314\205\314\205\033[0m\r\n';",
+    r"printf 'bc\033[38;5;2m\364\216\273\256\314\205\314\205\033[0m'; exec sleep 5",
+);
+
+#[gpui_kit::test]
+fn placeholder_cells_draw_their_virtual_placements(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let terminal = terminal(cx, PLACEHOLDERS, dir.path());
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(&terminal, ViewRole::Owner, cx));
+    cx.simulate_scale_factor_change(1.0);
+    cx.simulate_resize(size(px(320.), px(200.)));
+    settle(cx, |cx| drawn(&view, cx).len() == 2);
+    let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
+    let laid = shared.laid.get().expect("laid out");
+    let (cell_width, cell_height) = (laid.grid.cell_width, laid.grid.cell_height);
+    view.read_with(cx, |view, _| {
+        let frame = view.painted().expect("a frame");
+        let cells = Cells {
+            engine: (cell_width, cell_height),
+            view: (cell_width, cell_height),
+        };
+        let mut drawn = placements(&frame.kitty, &frame.rows, cells);
+        drawn.sort_by_key(|placement| placement.image.id);
+        let at: Vec<(u32, KittyLayer, i32, f64, f64)> = drawn
+            .iter()
+            .map(|placement| {
+                (
+                    placement.image.id,
+                    placement.layer,
+                    placement.z,
+                    placement.dest.x,
+                    placement.dest.y,
+                )
+            })
+            .collect();
+        // the 2x1 image fitted into one cell, centered down it: the run's cell plus the vertical offset
+        let width = f64::from(cell_width);
+        let offset = ((f64::from(cell_height) - width / 2.0) / 2.0).round();
+        let row = f64::from(cell_height);
+        assert_eq!(
+            at,
+            [
+                (1, KittyLayer::BelowText, -1, width, offset),
+                (2, KittyLayer::BelowText, -1, 2.0 * width, row + offset),
+            ]
+        );
+        assert!(
+            drawn
+                .iter()
+                .all(|placement| (placement.dest.width - width).abs() < 1e-9)
+        );
+        let layers = view.painted_layers();
+        assert!(layers.contains(&(PaintLayer::KittyBelowText, 2)), "{layers:?}");
+    });
+}
+
+/// Image 7 below the text (`z=-1`) and image 8 above it (`z=1`), over some text.
+const LAYERS: &str = concat!(
+    r"printf 'text\r\n'; ",
+    r"printf '\033_Ga=T,q=2,f=32,s=2,v=1,i=7,z=-1,C=1;AQIDBAUGBwg=\033\\'; ",
+    r"printf '\033_Ga=T,q=2,f=32,s=2,v=1,i=8,z=1,C=1;AQIDBAUGBwg=\033\\'; exec sleep 5",
+);
+
+#[gpui_kit::test]
+fn each_kitty_layer_is_painted_at_its_stage(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let terminal = terminal(cx, LAYERS, dir.path());
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(&terminal, ViewRole::Owner, cx));
+    cx.simulate_resize(size(px(320.), px(200.)));
+    settle(cx, |cx| drawn(&view, cx).len() == 2);
+    let layers = view.read_with(cx, |view, _| view.painted_layers().to_vec());
+    assert_eq!(
+        layers,
+        [
+            (PaintLayer::Background, 0),
+            (PaintLayer::KittyBelowBackground, 0),
+            (PaintLayer::CellBackgrounds, 0),
+            (PaintLayer::KittyBelowText, 1),
+            (PaintLayer::Underlines, 0),
+            (PaintLayer::Text, 0),
+            (PaintLayer::KittyAboveText, 1),
+            (PaintLayer::Cursor, 0),
+        ]
+    );
 }

@@ -35,6 +35,27 @@ use super::row_cache::{Decoration, Line, RowLayout, RowMarks, SpriteCell, search
 use super::sprite;
 use super::{Laid, Shared, TerminalView, ViewRole};
 
+/// A layer of the paint, bottom to top (Ghostty's order; Technical Details > Frame).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layer {
+    /// The default background color, no background image.
+    Background,
+    /// The background color and the `background-image` over it.
+    BackgroundImage,
+    KittyBelowBackground,
+    /// The cells' own backgrounds, selection and search marks included.
+    CellBackgrounds,
+    KittyBelowText,
+    /// Underlines and overlines.
+    Underlines,
+    /// Text, sprites and strikethroughs.
+    Text,
+    KittyAboveText,
+    Cursor,
+    /// The input method's composition (in place of the cursor).
+    Preedit,
+}
+
 /// One glyph of a row, placed on the grid.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlacedGlyph {
@@ -258,19 +279,23 @@ impl TerminalView {
     }
 
     fn paint(&mut self, bounds: Bounds<Pixels>, plan: &Plan, focused: bool, window: &mut Window) {
+        self.painted_layers.clear();
         let background = plan
             .frame
             .as_ref()
             .map_or(plan.background, |frame| frame.colors.background);
-        window.paint_quad(fill(bounds, hsla(background, plan.palette.background_alpha)));
+        let color = hsla(background, plan.palette.background_alpha);
         if let Some(image) = plan.images.background.as_ref() {
-            image.paint(window, bounds, plan.scale);
+            image.paint(window, bounds, plan.scale, color);
+            self.painted_layers.push((Layer::BackgroundImage, 0));
+        } else {
+            window.paint_quad(fill(bounds, color));
+            self.painted_layers.push((Layer::Background, 0));
         }
         let Some(frame) = plan.frame.as_ref() else {
             return;
         };
-        let kitty = &plan.images.kitty;
-        kitty.paint(window, KittyLayer::BelowBackground, plan.origin, plan.scale);
+        self.paint_kitty(window, plan, KittyLayer::BelowBackground);
         let extend = Extend::new(plan.padding_color, frame);
         for (index, row) in self.cache.rows().enumerate() {
             paint_backgrounds(
@@ -282,12 +307,14 @@ impl TerminalView {
                 extend.for_row(index, frame.rows.len()),
             );
         }
-        kitty.paint(window, KittyLayer::BelowText, plan.origin, plan.scale);
+        self.painted_layers.push((Layer::CellBackgrounds, 0));
+        self.paint_kitty(window, plan, KittyLayer::BelowText);
         for (index, row) in self.cache.rows().enumerate() {
             paint_decorations(window, plan, index, &row.layout, |line| {
                 !matches!(line, Line::Strikethrough)
             });
         }
+        self.painted_layers.push((Layer::Underlines, 0));
         for (index, row) in self.cache.rows().enumerate() {
             if let Some(shaped) = row.shaped.as_ref() {
                 paint_glyphs(window, plan, index, &shaped.glyphs, None);
@@ -297,14 +324,34 @@ impl TerminalView {
                 matches!(line, Line::Strikethrough)
             });
         }
-        kitty.paint(window, KittyLayer::AboveText, plan.origin, plan.scale);
-        if plan.preedit.is_none() {
-            self.paint_cursor(window, plan, frame, focused);
-        }
+        self.painted_layers.push((Layer::Text, 0));
+        self.paint_kitty(window, plan, KittyLayer::AboveText);
         if let Some(preedit) = plan.preedit.as_deref() {
             paint_preedit(window, plan, frame, preedit);
+            self.painted_layers.push((Layer::Preedit, 0));
+        } else {
+            self.paint_cursor(window, plan, frame, focused);
+            self.painted_layers.push((Layer::Cursor, 0));
         }
         self.shared.drew();
+    }
+
+    /// The Kitty placements of `layer`, recorded with their count.
+    fn paint_kitty(&mut self, window: &mut Window, plan: &Plan, layer: KittyLayer) {
+        let kitty = &plan.images.kitty;
+        kitty.paint(window, layer, plan.origin, plan.scale);
+        let recorded = match layer {
+            KittyLayer::BelowBackground => Layer::KittyBelowBackground,
+            KittyLayer::BelowText => Layer::KittyBelowText,
+            KittyLayer::AboveText => Layer::KittyAboveText,
+        };
+        self.painted_layers.push((recorded, kitty.count(layer)));
+    }
+
+    /// The layers the last paint drew, bottom to top, with how many placements each Kitty layer drew.
+    #[must_use]
+    pub fn painted_layers(&self) -> &[(Layer, usize)] {
+        &self.painted_layers
     }
 
     fn paint_cursor(&self, window: &mut Window, plan: &Plan, frame: &Frame, focused: bool) {

@@ -48,7 +48,7 @@ use gpui_kit::{
 };
 
 pub use colors::{CellPaint, Mark, Palette, Pick};
-pub use element::{PlacedGlyph, ShapedRow, TerminalElement};
+pub use element::{Layer as PaintLayer, PlacedGlyph, ShapedRow, TerminalElement};
 pub use font::{DEFAULT_FAMILIES, DEFAULT_FAMILY, Fonts, SYMBOLS_FAMILY, register_embedded as register_embedded_fonts};
 pub use metrics::{CellMetrics, DEFAULT_DPI, FaceMetrics, Geometry, Padding, points_to_px};
 pub use row_cache::{Cluster, Decoration, Line, RowCache, RowLayout, RowMarks, Span, SpriteCell, TextRun, TextStyle};
@@ -181,6 +181,8 @@ pub struct Shared {
     preedit: RefCell<Option<String>>,
     /// The `background-image` every view draws, loaded once per terminal.
     background: RefCell<background::Loader>,
+    /// The Kitty images as textures, converted off the main thread for every view.
+    kitty: RefCell<kitty::KittyStore>,
 }
 
 impl std::fmt::Debug for Shared {
@@ -402,6 +404,7 @@ impl Shared {
         }
         self.spawn.borrow_mut().take();
         self.effects.borrow_mut().clear();
+        self.kitty.borrow_mut().clear();
         let pane = self.pane.borrow_mut().take();
         drop(pane);
         // one last pass lets the views drop what they drew, then the channel ends the pump
@@ -465,6 +468,7 @@ impl Terminal {
             drew: Cell::new(false),
             preedit: RefCell::new(None),
             background: RefCell::new(background::Loader::default()),
+            kitty: RefCell::new(kitty::KittyStore::default()),
         });
         let pump = cx.spawn(async move |this, cx| {
             while woken.recv().await.is_ok() {
@@ -585,6 +589,8 @@ pub struct TerminalView {
     painted: Option<Arc<Frame>>,
     /// The Kitty images and the background image this view put into its window's atlas.
     images: kitty::ViewImages,
+    /// The layers the last paint drew, in order, with how many Kitty placements each Kitty layer had.
+    painted_layers: Vec<(element::Layer, usize)>,
     _observe: Subscription,
 }
 
@@ -603,6 +609,7 @@ impl TerminalView {
             blink: None,
             painted: None,
             images: kitty::ViewImages::default(),
+            painted_layers: Vec::new(),
             _observe: cx.observe(terminal, |_, _, cx| cx.notify()),
         }
     }

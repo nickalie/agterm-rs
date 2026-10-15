@@ -12,6 +12,7 @@ use agterm_ghostty_vt as vt;
 use bitflags::bitflags;
 
 use crate::kitty::KittyView;
+use crate::placeholder::{self, IdColor, KittyPlaceholder};
 
 /// A 24-bit color.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -97,6 +98,8 @@ pub struct Row {
     cells: Vec<Cell>,
     text: String,
     selection: Option<(u16, u16)>,
+    /// The Kitty Unicode placeholder cells, left to right (most rows have none).
+    placeholders: Vec<KittyPlaceholder>,
 }
 
 impl Row {
@@ -116,6 +119,21 @@ impl Row {
     #[must_use]
     pub fn cells(&self) -> &[Cell] {
         &self.cells
+    }
+
+    /// The Kitty Unicode placeholder cells of the row, left to right, with the ids their raw colors carry
+    /// ([`crate::virtual_placements`] joins them into runs).
+    #[must_use]
+    pub fn placeholders(&self) -> &[KittyPlaceholder] {
+        &self.placeholders
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_placeholders(placeholders: Vec<KittyPlaceholder>) -> Self {
+        Self {
+            placeholders,
+            ..Self::default()
+        }
     }
 
     /// The grapheme cluster of the cell at `column`; empty for a blank or spacer cell or past the end.
@@ -598,11 +616,15 @@ fn build_row(row: &mut vt::RowRef<'_>, id: [u64; 2], seq: u64, palette: &[Rgb; 2
     let selection = row.selection();
     let mut text = Vec::new();
     let mut cells = Vec::new();
+    let mut placeholders = Vec::new();
     let mut walk = row.cells()?;
     while let Some(cell) = walk.next_cell() {
         let cell = cell?;
         let start = text.len();
         cell.grapheme(&mut text)?;
+        if text[start..].starts_with(PLACEHOLDER_UTF8) {
+            placeholders.extend(placeholder(&cell, cells.len(), &text[start..]));
+        }
         let mut built = Cell {
             width: width(cell.width()),
             foreground: cell.foreground().map(rgb),
@@ -624,7 +646,32 @@ fn build_row(row: &mut vt::RowRef<'_>, id: [u64; 2], seq: u64, palette: &[Rgb; 2
         // the library writes UTF-8; a lossy copy can only differ on bytes it never produces
         text: String::from_utf8(text).unwrap_or_else(|err| String::from_utf8_lossy(err.as_bytes()).into_owned()),
         selection,
+        placeholders,
     })
+}
+
+/// U+10EEEE in UTF-8, what a placeholder cell's grapheme starts with.
+const PLACEHOLDER_UTF8: &[u8] = "\u{10EEEE}".as_bytes();
+
+/// The Kitty placeholder at column `col`, its ids read from the cell's raw style colors (a palette index is an id,
+/// not the color it resolves to).
+fn placeholder(cell: &vt::CellRef<'_>, col: usize, grapheme: &[u8]) -> Option<KittyPlaceholder> {
+    let (foreground, underline) = if cell.has_styling() {
+        let style = cell.style();
+        (id_color(style.foreground), id_color(style.underline_color))
+    } else {
+        (IdColor::None, IdColor::None)
+    };
+    let text = std::str::from_utf8(grapheme).ok()?;
+    placeholder::decode(u16::try_from(col).ok()?, text, foreground, underline)
+}
+
+fn id_color(color: vt::StyleColor) -> IdColor {
+    match color {
+        vt::StyleColor::None => IdColor::None,
+        vt::StyleColor::Palette(index) => IdColor::Palette(index),
+        vt::StyleColor::Rgb(color) => IdColor::Rgb(color.r, color.g, color.b),
+    }
 }
 
 fn width(width: vt::CellWidth) -> CellWidth {
@@ -722,6 +769,45 @@ mod tests {
         assert_eq!(row.cells()[1].foreground, None);
         assert!(row.cells()[3].flags.contains(CellFlags::HYPERLINK));
         assert_eq!(row.line(), "A日L");
+    }
+
+    #[test]
+    fn placeholder_cells_keep_the_ids_their_raw_colors_carry() {
+        let mut terminal = terminal(12, 3);
+        // image 42 (a palette index, not the color it resolves to), placement 21, image row 0 columns 0 and 1; then
+        // image 1 as 24-bit 0,0,1 on the next line, row 1, after a plain cell
+        terminal.vt_write(
+            "\x1b[38;5;42;58;5;21m\u{10EEEE}\u{0305}\u{0305}\u{10EEEE}\u{0305}\u{030D}\x1b[0m\r\n\
+             x\x1b[38;2;0;0;1m\u{10EEEE}\u{030D}\x1b[0m"
+                .as_bytes(),
+        );
+        let mut state = Capture::new().unwrap();
+        let frame = capture(&mut terminal, &mut state, &Frame::default()).unwrap();
+        let first = frame.rows[0].placeholders();
+        assert_eq!(first.len(), 2);
+        assert_eq!(
+            (first[0].col, first[0].image_id_low, first[0].placement_id),
+            (0, 42, Some(21))
+        );
+        assert_eq!((first[1].col, first[1].row, first[1].column), (1, Some(0), Some(1)));
+        let second = frame.rows[1].placeholders();
+        assert_eq!(second.len(), 1);
+        assert_eq!(
+            (
+                second[0].col,
+                second[0].image_id_low,
+                second[0].placement_id,
+                second[0].row
+            ),
+            (1, 1, None, Some(1))
+        );
+        assert!(frame.rows[2].placeholders().is_empty());
+        let placed = crate::virtual_placements(&frame.rows);
+        let runs: Vec<(u16, u16, u32, u32, u32)> = placed
+            .iter()
+            .map(|p| (p.viewport_row, p.viewport_col, p.image_id, p.row, p.width))
+            .collect();
+        assert_eq!(runs, [(0, 0, 42, 0, 2), (1, 1, 1, 1, 1)]);
     }
 
     #[test]

@@ -80,6 +80,10 @@ pub struct KittyPlacement {
     /// The pixel offset inside the top-left cell.
     pub x_offset: u32,
     pub y_offset: u32,
+    /// The cells asked for (`c=`, `r=`; 0: from the image's size): a virtual placement's grid, which its placeholder
+    /// cells ([`crate::virtual_placements`]) show parts of.
+    pub columns: u32,
+    pub rows: u32,
     /// `None` when off the viewport (or virtual).
     pub rect: Option<PlacementRect>,
 }
@@ -202,6 +206,8 @@ fn convert(placement: &vt::KittyPlacement, image: KittyImageKey) -> KittyPlaceme
         is_virtual: placement.is_virtual,
         x_offset: placement.x_offset,
         y_offset: placement.y_offset,
+        columns: placement.columns,
+        rows: placement.rows,
         rect: placement.render.map(|render| PlacementRect {
             column: render.viewport_col,
             row: render.viewport_row,

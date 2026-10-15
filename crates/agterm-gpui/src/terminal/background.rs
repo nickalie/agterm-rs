@@ -10,11 +10,13 @@
 //!   larger of the surface-to-image ratios, `stretch` takes the surface's size, `none` the image's own (one texel per
 //!   device pixel); the position puts it at the start, middle or end of each axis (`center` is `center-center`);
 //!   `repeat` tiles it from there both ways, otherwise the rest stays the background color.
-//! - **Opacity**: the image is drawn over the background color at `background-image-opacity`, capped so it is never
-//!   more opaque than fully opaque against a translucent background (`min(opacity, 1 / background alpha)`), and the
-//!   whole scaled by the background alpha — exact for `background-opacity = 1` (what the watermark overlay sets),
-//!   GPUI's straight-alpha blending only approximates it under a translucent background. The factor is baked into
-//!   the texture's alpha, so a change of opacity loads the image again.
+//! - **Opacity**: Ghostty's `bg_image.f.glsl` blends the image at `background-image-opacity`, capped at
+//!   `1 / background alpha`, onto an opaque copy of the background color and scales the result by the background
+//!   alpha. Over an opaque background GPUI's own blending of the image (its alpha scaled by the opacity, baked into the
+//!   texture) over the background color is exactly that. Under a translucent `background-opacity` the texture is the
+//!   finished blend instead — the background color baked in and every texel at the background alpha — and the
+//!   background color is painted only where no image is, so the surface stays as translucent as Ghostty's. Either
+//!   way a change of opacity (or of the background color, when translucent) loads the image again.
 //! - **Loading**: PNG or JPEG, told by the content first and the extension second, decoded off the main thread; the
 //!   image shown stays up until its replacement is ready, and a file that fails to load keeps it too, as Ghostty
 //!   does. A load is keyed by the file's path, modification time and length (a text watermark rendered again into
@@ -32,10 +34,12 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use agterm_core::ghostty_config::{BackgroundImage, BackgroundImageFit, BackgroundImagePosition};
-use gpui_kit::{App, Bounds, Corners, Pixels, RenderImage, Task, Window, point, px, size};
+use agterm_term::Rgb;
+use gpui_kit::{App, Bounds, Corners, Hsla, Pixels, RenderImage, Task, Window, fill, point, px, size};
 
 use super::Shared;
-use super::kitty::{DeviceRect, MAX_TEXTURE_SIDE, fit_texture, narrow};
+use super::kitty::textures::{MAX_TEXTURE_SIDE, resample, texture_size};
+use super::kitty::{DeviceRect, narrow};
 
 /// A repeated image narrower or shorter than this is repeated into one texture at least this large.
 pub const MIN_REPEAT_SIDE: u32 = 256;
@@ -47,26 +51,38 @@ pub const MAX_TILES: usize = 4096;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Spec {
     pub path: PathBuf,
-    /// The alpha the image is drawn at, background alpha included (module docs).
+    /// The image opacity, capped as Ghostty caps it (module docs).
     pub alpha: f32,
+    /// Under a translucent background: its color and alpha, baked into the texture (module docs).
+    pub composite: Option<(Rgb, u8)>,
     pub fit: BackgroundImageFit,
     pub position: BackgroundImagePosition,
     pub repeat: bool,
 }
 
 impl Spec {
-    /// The config's background image over a background of `background_alpha`; `None` when no image is set.
+    /// The config's background image over a background of `background` color at `background_alpha`; `None` when
+    /// no image is set.
     #[must_use]
-    pub fn from_config(config: &BackgroundImage, background_alpha: u8) -> Option<Self> {
+    pub fn from_config(config: &BackgroundImage, background_alpha: u8, background: Rgb) -> Option<Self> {
         let path = config.path.as_ref()?.path.clone();
         let opacity = if config.opacity.is_finite() {
             config.opacity.max(0.0)
         } else {
             1.0
         };
+        let (alpha, composite) = match background_alpha {
+            u8::MAX => (opacity.min(1.0), None),
+            0 => (opacity, Some((background, 0))),
+            translucent => (
+                opacity.min(255.0 / f32::from(translucent)),
+                Some((background, translucent)),
+            ),
+        };
         Some(Self {
             path,
-            alpha: (opacity * f32::from(background_alpha) / 255.0).min(1.0),
+            alpha,
+            composite,
             fit: config.fit,
             position: config.position,
             repeat: config.repeat,
@@ -80,6 +96,7 @@ impl Spec {
             modified: metadata.modified().ok(),
             len: metadata.len(),
             alpha: self.alpha.to_bits(),
+            composite: self.composite.map(|(color, alpha)| [color.r, color.g, color.b, alpha]),
             repeat: self.repeat,
         })
     }
@@ -92,6 +109,7 @@ pub struct LoadKey {
     pub modified: Option<SystemTime>,
     pub len: u64,
     alpha: u32,
+    composite: Option<[u8; 4]>,
     repeat: bool,
 }
 
@@ -152,6 +170,12 @@ impl Loader {
         self.current.as_ref().map(|(_, decoded)| Arc::clone(decoded))
     }
 
+    /// The file of the current spec could not be looked at: whatever was loading for an earlier spec must not
+    /// replace the image on screen when it finishes.
+    fn lookup_failed(&mut self) {
+        self.loading = None;
+    }
+
     /// Whether this terminal waits for a load (tests).
     #[must_use]
     pub fn is_loading(&self) -> bool {
@@ -187,6 +211,7 @@ impl Shared {
             match spec.load_key() {
                 Ok(key) => request(&mut loader, self, spec, key, cx),
                 Err(err) => {
+                    loader.lookup_failed();
                     tracing::warn!(path = %spec.path.display(), %err, "error opening the background image file");
                 }
             }
@@ -275,10 +300,10 @@ pub fn decode(spec: &Spec) -> Result<Decoded, String> {
         Some(format) => return Err(format!("unsupported file type {format:?}")),
         None => return Err("cannot determine the file type".to_owned()),
     }
-    let mut pixels = reader.decode().map_err(|err| err.to_string())?.into_rgba8();
+    let pixels = reader.decode().map_err(|err| err.to_string())?.into_rgba8();
     let size = pixels.dimensions();
-    bake(&mut pixels, spec.alpha);
-    let texture = fit_texture(pixels);
+    let mut texture = fit(pixels).ok_or_else(|| "the decoded image has no pixels".to_owned())?;
+    bake(&mut texture, spec.alpha, spec.composite);
     let (texture, tiles) = if spec.repeat {
         repeated(&texture)
     } else {
@@ -291,20 +316,52 @@ pub fn decode(spec: &Spec) -> Result<Decoded, String> {
     })
 }
 
-/// RGBA to GPUI's BGRA, the alpha scaled by `alpha`.
-pub fn bake(pixels: &mut image::RgbaImage, alpha: f32) {
-    let alpha = alpha.clamp(0.0, 1.0);
+/// `pixels` at their texture size (scaled down, without a full-size intermediate, past the atlas's limits).
+fn fit(pixels: image::RgbaImage) -> Option<image::RgbaImage> {
+    let size = pixels.dimensions();
+    let target = texture_size(size.0, size.1);
+    if target == size {
+        return Some(pixels);
+    }
+    let scaled = resample(pixels.as_raw(), 4, size, target, |pixel| {
+        [pixel[0], pixel[1], pixel[2], pixel[3]]
+    })?;
+    image::RgbaImage::from_raw(target.0, target.1, scaled)
+}
+
+/// A color channel or alpha in `0..=1` as a byte.
+fn byte(value: f32) -> u8 {
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "clamped to 0..=255 first"
+    )]
+    let byte = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+    byte
+}
+
+/// RGBA to GPUI's straight-alpha BGRA as the image is drawn at `alpha`: over an opaque background its alpha scaled;
+/// with a translucent `composite` background, Ghostty's blend onto that color (`img * a * alpha + bg * (1 - a *
+/// alpha)`, clamped), every texel at the background's alpha.
+pub fn bake(pixels: &mut image::RgbaImage, alpha: f32, composite: Option<(Rgb, u8)>) {
+    let unit = |byte: u8| f32::from(byte) / 255.0;
     for pixel in pixels.as_chunks_mut::<4>().0 {
-        pixel.swap(0, 2);
-        if alpha < 1.0 {
-            #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "an alpha byte scaled by a factor in 0..=1"
-            )]
-            let scaled = (f32::from(pixel[3]) * alpha).round() as u8;
-            pixel[3] = scaled;
-        }
+        let [r, g, b, a] = *pixel;
+        let coverage = unit(a) * alpha;
+        *pixel = match composite {
+            None => [b, g, r, byte(coverage)],
+            Some((background, background_alpha)) => {
+                let blend = |image: u8, background: u8| {
+                    byte(unit(image) * coverage + unit(background) * (1.0 - coverage).max(0.0))
+                };
+                [
+                    blend(b, background.b),
+                    blend(g, background.g),
+                    blend(r, background.r),
+                    background_alpha,
+                ]
+            }
+        };
     }
 }
 
@@ -409,6 +466,45 @@ pub fn layout(screen: (f64, f64), decoded_size: (u32, u32), tiles: (u32, u32), s
     rects
 }
 
+/// `rect` with its edges on whole device pixels, so neighbouring tiles and the bands around an image meet exactly.
+#[must_use]
+pub fn snapped(rect: DeviceRect) -> DeviceRect {
+    let (left, top) = (rect.x.round(), rect.y.round());
+    DeviceRect {
+        x: left,
+        y: top,
+        width: (rect.x + rect.width).round() - left,
+        height: (rect.y + rect.height).round() - top,
+    }
+}
+
+/// The parts of a `screen` (device pixels) outside `covered`: up to four bands, above, below, left and right of it.
+#[must_use]
+pub fn uncovered(screen: (f64, f64), covered: DeviceRect) -> Vec<DeviceRect> {
+    let left = covered.x.clamp(0.0, screen.0);
+    let right = (covered.x + covered.width).clamp(left, screen.0);
+    let top = covered.y.clamp(0.0, screen.1);
+    let bottom = (covered.y + covered.height).clamp(top, screen.1);
+    let band = |x: f64, y: f64, right: f64, bottom: f64| DeviceRect {
+        x,
+        y,
+        width: right - x,
+        height: bottom - y,
+    };
+    if right <= left || bottom <= top {
+        return vec![band(0.0, 0.0, screen.0, screen.1)];
+    }
+    [
+        band(0.0, 0.0, screen.0, top),
+        band(0.0, bottom, screen.0, screen.1),
+        band(0.0, top, left, bottom),
+        band(right, top, screen.0, bottom),
+    ]
+    .into_iter()
+    .filter(|band| band.width > 0.0 && band.height > 0.0)
+    .collect()
+}
+
 /// What paint needs to draw the background image.
 pub struct BackgroundPaint {
     pub decoded: Arc<Decoded>,
@@ -416,18 +512,47 @@ pub struct BackgroundPaint {
 }
 
 impl BackgroundPaint {
-    /// Paints the image over the element's `bounds` at `scale` device pixels per logical pixel.
-    pub fn paint(&self, window: &mut Window, bounds: Bounds<Pixels>, scale: f32) {
+    /// The rectangles the background color is painted in on a `screen` (device pixels): all of it over an opaque
+    /// background; under a translucent one only where no image is (the texture carries the color, module docs).
+    #[must_use]
+    pub fn color_areas(&self, screen: (f64, f64)) -> Vec<DeviceRect> {
+        let whole = DeviceRect {
+            x: 0.0,
+            y: 0.0,
+            width: screen.0,
+            height: screen.1,
+        };
+        if self.spec.composite.is_none() {
+            return vec![whole];
+        }
+        if self.spec.repeat {
+            return Vec::new();
+        }
+        let image = layout(screen, self.decoded.size, self.decoded.tiles, &self.spec);
+        image
+            .first()
+            .map_or_else(|| vec![whole], |rect| uncovered(screen, snapped(*rect)))
+    }
+
+    /// Paints the background `color` and the image over the element's `bounds` at `scale` device pixels per logical
+    /// pixel.
+    pub fn paint(&self, window: &mut Window, bounds: Bounds<Pixels>, scale: f32, color: Hsla) {
         let device = |logical: Pixels| f64::from(f32::from(logical)) * f64::from(scale);
         let logical = |device: f64| px(narrow(device / f64::from(scale)));
-        let screen = (device(bounds.size.width), device(bounds.size.height));
-        for rect in layout(screen, self.decoded.size, self.decoded.tiles, &self.spec) {
-            let at = Bounds::new(
+        let at = |rect: DeviceRect| {
+            Bounds::new(
                 point(bounds.origin.x + logical(rect.x), bounds.origin.y + logical(rect.y)),
                 size(logical(rect.width), logical(rect.height)),
-            );
+            )
+        };
+        let screen = (device(bounds.size.width), device(bounds.size.height));
+        for area in self.color_areas(screen) {
+            window.paint_quad(fill(at(area), color));
+        }
+        for rect in layout(screen, self.decoded.size, self.decoded.tiles, &self.spec) {
             let texture = Arc::clone(&self.decoded.texture);
-            if let Err(err) = window.paint_image(bounds, at, Corners::default(), texture, 0, false) {
+            let painted = window.paint_image(bounds, at(snapped(rect)), Corners::default(), texture, 0, false);
+            if let Err(err) = painted {
                 tracing::debug!(%err, "the background image was not painted");
                 return;
             }

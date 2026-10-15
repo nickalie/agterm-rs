@@ -32,6 +32,7 @@ mod input;
 mod kitty;
 mod launch;
 mod pane;
+mod placeholder;
 mod png;
 mod pty;
 mod render;
@@ -54,6 +55,7 @@ pub use kitty::{
 };
 pub use launch::{COMMAND_SHELL, FALLBACK_TERM, Host, Launch, Prepared, resolve_resources, resource_candidates};
 pub use pane::{DEFAULT_KITTY_IMAGE_LIMIT, DEFAULT_WRITE_LIMIT, FrameSnapshot, Pane, PaneConfig, PaneStats, Wake};
+pub use placeholder::{KittyPlaceholder, PLACEHOLDER, VirtualPlacement, virtual_placements};
 pub use pty::{GridSize, PaneCommand};
 pub use render::{
     Cell, CellFlags, CellWidth, Colors, Cursor, CursorDefaults, CursorPosition, CursorStyle, Frame, MouseShape, Rgb,

@@ -1,6 +1,8 @@
-//! The background image (plan > Task 16): Ghostty's fit and position math, tiling, the baked opacity, decoding by
-//! content, the watermark overlay lines reaching a terminal's config, and the load in GPUI's test app (off the main
-//! thread, shared between terminals, reloaded when the file changes, dropped with the config).
+//! The background image (plan > Task 16): Ghostty's fit and position math, tiling, the opacity and Ghostty's blend
+//! onto a translucent background baked into the texture, the background color painted only around such an image,
+//! decoding by content, the watermark overlay lines reaching a terminal's config, a load the config moved away from,
+//! and the load in GPUI's test app (off the main thread, shared between terminals, reloaded when the file changes,
+//! dropped with the config).
 
 use std::path::Path;
 use std::rc::Rc;
@@ -12,10 +14,13 @@ use agterm_core::ghostty_config::{
 };
 use agterm_core::model::{BackgroundWatermark, WatermarkFit, WatermarkKind, WatermarkPosition};
 use agterm_core::{paths, watermark};
-use agterm_term::{Pane, PaneCommand, PaneConfig};
-use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext, px, size};
+use agterm_term::{Pane, PaneCommand, PaneConfig, Rgb};
+use gpui_kit::{AppContext as _, Entity, RenderImage, TestAppContext, VisualTestContext, px, size};
 
-use super::{DeviceRect, MAX_TILES, MIN_REPEAT_SIDE, Spec, bake, decode, dest_size, layout, offset, repeated};
+use super::{
+    BackgroundPaint, Decoded, DeviceRect, LoadKey, Loader, MAX_TILES, MIN_REPEAT_SIDE, Spec, bake, decode, dest_size,
+    layout, offset, repeated, snapped, uncovered,
+};
 use crate::terminal::{Terminal, TerminalConfig, TerminalSpec, TerminalView, ViewRole};
 
 const SCREEN: (f64, f64) = (1000.0, 500.0);
@@ -24,6 +29,7 @@ fn spec(fit: Fit, position: Pos, repeat: bool) -> Spec {
     Spec {
         path: "/nonexistent.png".into(),
         alpha: 1.0,
+        composite: None,
         fit,
         position,
         repeat,
@@ -111,31 +117,164 @@ fn small_repeated_images_become_one_larger_texture() {
     assert_eq!((same.dimensions(), one), ((300, 300), (1, 1)));
 }
 
-#[test]
-fn the_opacity_is_capped_against_the_background_and_baked_into_the_alpha() {
-    let config = |opacity| BackgroundImage {
+const GRAY: Rgb = Rgb { r: 100, g: 100, b: 100 };
+
+fn config(opacity: f32) -> BackgroundImage {
+    BackgroundImage {
         path: Some(ConfigPath {
             path: "/w.png".into(),
             optional: false,
         }),
         opacity,
         ..BackgroundImage::default()
+    }
+}
+
+#[test]
+fn the_opacity_is_capped_against_the_background() {
+    let of = |opacity, background| {
+        Spec::from_config(&config(opacity), background, GRAY).map(|spec| (spec.alpha, spec.composite))
     };
-    let alpha = |opacity, background| Spec::from_config(&config(opacity), background).map(|spec| spec.alpha);
-    assert_eq!(alpha(0.5, 255), Some(0.5));
-    // Ghostty: min(opacity, 1 / background alpha) * background alpha
-    assert_eq!(alpha(2.0, 51), Some(0.4));
-    assert_eq!(alpha(20.0, 51), Some(1.0));
-    assert_eq!(alpha(-1.0, 255), Some(0.0));
+    assert_eq!(of(0.5, 255), Some((0.5, None)));
+    assert_eq!(of(3.0, 255), Some((1.0, None)), "never more than opaque");
+    assert_eq!(of(-1.0, 255), Some((0.0, None)));
+    // translucent: Ghostty's min(opacity, 1 / background alpha), the background color baked in
+    assert_eq!(of(0.5, 51), Some((0.5, Some((GRAY, 51)))));
+    assert_eq!(of(20.0, 51), Some((5.0, Some((GRAY, 51)))));
     assert_eq!(
-        Spec::from_config(&BackgroundImage::default(), 255),
+        Spec::from_config(&BackgroundImage::default(), 255, GRAY),
         None,
         "no path, no image"
     );
+}
 
+#[test]
+fn the_texture_carries_ghosttys_blend() {
+    // opaque background: GPUI blends the image, its alpha scaled, over the background color
     let mut pixels = image::RgbaImage::from_raw(1, 1, vec![10, 20, 30, 200]).unwrap();
-    bake(&mut pixels, 0.5);
+    bake(&mut pixels, 0.5, None);
     assert_eq!(pixels.into_raw(), [30, 20, 10, 100], "BGRA, alpha halved");
+    // background-opacity 0.5, image opacity 1, an opaque red pixel: the pure image color at the background alpha
+    // (where blending it over the color would give alpha 0.75 with the background bleeding in)
+    let half = (GRAY, 128);
+    let mut opaque = image::RgbaImage::from_raw(1, 1, vec![255, 0, 0, 255]).unwrap();
+    bake(&mut opaque, 1.0, Some(half));
+    assert_eq!(opaque.into_raw(), [0, 0, 255, 128]);
+    // a transparent texel is the background color at its alpha
+    let mut clear = image::RgbaImage::from_raw(1, 1, vec![255, 0, 0, 0]).unwrap();
+    bake(&mut clear, 1.0, Some(half));
+    assert_eq!(clear.into_raw(), [100, 100, 100, 128]);
+    // half coverage: half image, half background; an opacity over 1 saturates instead
+    let mut mixed = image::RgbaImage::from_raw(1, 1, vec![200, 0, 0, 255]).unwrap();
+    bake(&mut mixed, 0.5, Some(half));
+    assert_eq!(mixed.into_raw(), [50, 50, 150, 128]);
+    let mut over = image::RgbaImage::from_raw(1, 1, vec![200, 0, 0, 128]).unwrap();
+    bake(&mut over, 2.0, Some(half));
+    assert_eq!(over.into_raw(), [0, 0, 201, 128]);
+}
+
+fn painted(spec: Spec, size: (u32, u32)) -> BackgroundPaint {
+    let texture = image::RgbaImage::new(size.0, size.1);
+    BackgroundPaint {
+        decoded: Arc::new(Decoded {
+            texture: Arc::new(RenderImage::new(vec![image::Frame::new(texture)])),
+            size,
+            tiles: (1, 1),
+        }),
+        spec,
+    }
+}
+
+#[test]
+fn a_translucent_background_is_painted_only_around_the_image() {
+    let whole = DeviceRect {
+        x: 0.0,
+        y: 0.0,
+        width: SCREEN.0,
+        height: SCREEN.1,
+    };
+    let opaque = painted(spec(Fit::None, Pos::Center, false), (300, 200));
+    assert_eq!(opaque.color_areas(SCREEN), [whole]);
+    let translucent = Spec {
+        composite: Some((GRAY, 128)),
+        ..spec(Fit::None, Pos::Center, false)
+    };
+    let band = |x, y, width, height| DeviceRect { x, y, width, height };
+    assert_eq!(
+        painted(translucent.clone(), (300, 200)).color_areas(SCREEN),
+        [
+            band(0.0, 0.0, 1000.0, 150.0),
+            band(0.0, 350.0, 1000.0, 150.0),
+            band(0.0, 150.0, 350.0, 200.0),
+            band(650.0, 150.0, 350.0, 200.0),
+        ]
+    );
+    // a contain-fitted image filling the width leaves bands above and below only; tiles leave nothing
+    let contain = Spec {
+        fit: Fit::Contain,
+        ..translucent.clone()
+    };
+    assert_eq!(painted(contain, (200, 50)).color_areas(SCREEN).len(), 2);
+    let tiled = Spec {
+        repeat: true,
+        ..translucent
+    };
+    assert!(painted(tiled, (300, 200)).color_areas(SCREEN).is_empty());
+}
+
+#[test]
+fn image_edges_land_on_whole_device_pixels() {
+    let rect = DeviceRect {
+        x: 10.4,
+        y: -0.6,
+        width: 20.3,
+        height: 5.2,
+    };
+    assert_eq!(
+        snapped(rect),
+        DeviceRect {
+            x: 10.0,
+            y: -1.0,
+            width: 21.0,
+            height: 6.0
+        }
+    );
+    let outside = DeviceRect { x: 2000.0, ..rect };
+    assert_eq!(
+        uncovered(SCREEN, outside).len(),
+        1,
+        "an image off the surface leaves all of it"
+    );
+}
+
+#[test]
+fn a_load_the_config_moved_away_from_never_replaces_the_image_on_screen() {
+    let key = |name: &str| LoadKey {
+        path: name.into(),
+        modified: None,
+        len: 1,
+        alpha: 0,
+        composite: None,
+        repeat: false,
+    };
+    let decoded = || {
+        Arc::new(Decoded {
+            texture: Arc::new(RenderImage::new(vec![image::Frame::new(image::RgbaImage::new(1, 1))])),
+            size: (1, 1),
+            tiles: (1, 1),
+        })
+    };
+    let shown = decoded();
+    let mut loader = Loader {
+        current: Some((key("C"), Arc::clone(&shown))),
+        loading: Some(key("A")),
+        ..Loader::default()
+    };
+    // the config names B, whose file cannot be looked at, while A still decodes
+    loader.lookup_failed();
+    loader.finish(&key("A"), Some(&decoded()));
+    assert!(Arc::ptr_eq(&loader.current().unwrap(), &shown), "C stays");
+    assert!(!loader.is_loading());
 }
 
 fn write_png(path: &Path, width: u32, height: u32) {
@@ -187,12 +326,18 @@ fn the_watermark_overlay_lines_reach_the_terminal_config() {
     let overlay = watermark::overlay_text(Some(&mark), mark.image_path.as_deref(), None, 1.0);
     let config = ghostty_config::load_app_config(&env, true, Some(&overlay)).finalize(false, &[]);
     let terminal = TerminalConfig::from_ghostty(&config.config);
-    let spec = Spec::from_config(&terminal.background_image, terminal.palette.background_alpha).unwrap();
+    let spec = Spec::from_config(
+        &terminal.background_image,
+        terminal.palette.background_alpha,
+        terminal.theme.background,
+    )
+    .unwrap();
     assert_eq!(
         spec,
         Spec {
             path: "/pictures/prod.png".into(),
             alpha: 0.25,
+            composite: None,
             fit: Fit::Cover,
             position: Pos::BottomRight,
             repeat: true,

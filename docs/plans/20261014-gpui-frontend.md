@@ -1065,8 +1065,11 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 
 **Files:**
 - Create: `crates/agterm-gpui/src/terminal/{kitty,background}.rs`, `terminal/kitty_tests.rs`
-- ➕ Create: `terminal/background/tests.rs`; Modify: `terminal/{element.rs,terminal.rs}` (the module root),
-  `tests/external_texture/cases.rs`, `crates/agterm-gpui/Cargo.toml`, `Cargo.toml` (`image`)
+- ➕ Create: `terminal/background/tests.rs`, `terminal/kitty/{textures,placeholder}.rs`,
+  `crates/agterm-term/src/placeholder.rs`, `docs/backlog/kitty-virtual-placement-c-api-gaps.md`; Modify:
+  `terminal/{element.rs,terminal.rs}` (the module root), `tests/external_texture/cases.rs`,
+  `crates/agterm-gpui/Cargo.toml`, `Cargo.toml` (`image`), `crates/agterm-term/src/{render,kitty,lib}.rs`,
+  `crates/agterm-ghostty-vt/src/kitty.rs`
 
 - [x] image data from `agterm-term`'s kitty view → GPUI images cached by id/generation; placements by z-layer, source
       rects, scaling, scrolling with the viewport, deletion
@@ -1104,12 +1107,30 @@ Port the placement rendering from qwertty-term (MIT, attribution).
     Loads are keyed by path, mtime, length, baked alpha and repeat, shared (loaded or in flight) by every terminal on
     the main thread, and the file is looked at again on each `Terminal::set_config`, never per frame: a text watermark
     re-rendered into the same file reloads without the GTK build's two-overlay trick.
-  - ⚠️ Residuals: virtual placements (Unicode placeholders, `U=1`) are not drawn — the C API returns no position for
-    them at `LIBGHOSTTY_VT_REV` and drawing them means porting Ghostty's placeholder scan (`kitty/unicode.zig`); the
-    plan scopes Kitty to `show-image.sh` parity (`a=T` with `c=`/`r=`), which does not use them. Kitty animation frames
-    are not drawn either (not in the view). Under a translucent `background-opacity` the image's blend only
-    approximates Ghostty's (straight alpha, no custom shader). Large Kitty images are converted on the main thread at
-    their first paint (a 4K RGBA swizzle, ~10–20 ms once per image).
+  - **Review round 1** (supersedes the above where they differ): (1) Kitty textures are converted on the background
+    executor (`kitty/textures.rs` `KittyStore` in `Shared`, shared by the terminal's views; a placement draws nothing
+    until its texture arrives, then the pump redraws), bounded to 8192 px a side and 16 Mpx (64 MB of BGRA) and
+    sampled straight from the stored pixels into one buffer of that size — no `image::imageops::resize` and its f32
+    intermediate (the background image's downscale uses the same sampler); the store follows only newer frames and
+    drops results for images it no longer follows. (2) Unicode placeholders (virtual placements, `U=1`) are drawn, as
+    the GTK build's libghostty draws them: `agterm-term` keeps each U+10EEEE cell's ids from its raw style colors (a
+    palette index or 24-bit color, which the frame's resolved colors lose) and its row/column/high-byte diacritics
+    (`Row::placeholders`, `KittyPlaceholder`) and joins them into runs as Ghostty's `PlacementIterator` does
+    (`virtual_placements`, Kitty's diacritics table); `agterm-ghostty-vt`/`agterm-term` expose a placement's
+    `columns`/`rows`; the element ports `renderPlacement` and `placeholderTarget` (`kitty/placeholder.rs`) and draws
+    each run at `z = -1`, below the text. (3) Under a translucent `background-opacity` the background texture is
+    Ghostty's finished blend (the background color baked in, every texel at the background alpha) and the
+    background color is painted only around the image (snapped to device pixels), so the surface is exactly as
+    translucent as Ghostty's; over an opaque background GPUI's own blend already equals it. (4) A config change to a
+    file that cannot be looked at drops the association with a load still running for an earlier spec, so that load
+    cannot replace the image on screen. (5) The element records the layers it paints (`PaintLayer`,
+    `TerminalView::painted_layers`), and a test over a real pane checks each Kitty layer's stage.
+  - ⚠️ Residuals: two parity gaps libghostty-vt's C API leaves (it reports a placement id without its namespace, and
+    gives relative placements rooted at a virtual placement no position, root or offsets): ids resolve by number, and
+    such relative placements are not drawn — `docs/backlog/kitty-virtual-placement-c-api-gaps.md`, a Task 34
+    precondition (Codex-reviewed: an APC pre-scan cannot recover the committed state; upstream API or a local patch;
+    transcript `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/fixer-task-16-kitty-c-api-gaps/transcript.md`).
+    Kitty animation frames are not drawn (not in the view).
   - Tests: `terminal/kitty_tests.rs` (11: cell + offset and its clamp, a negative row, a viewer's scale, what is not
     drawn, z/id order and the three layers, the source-rect bounds, BGRA conversion per format, the atlas limit, the
     cache converting once and evicting; over a real pane in GPUI's test app, a chunked `a=T` image drawn from the
@@ -1117,7 +1138,12 @@ Port the placement rendering from qwertty-term (MIT, attribution).
     tiling, the tile bound, small-image repetition, the capped and baked opacity, decoding by content and refusing
     other types, the watermark overlay lines into `TerminalConfig`; in GPUI's test app, one load shared by two
     terminals, a re-rendered file reloaded on a config change, the image dropped from the atlas with the config, a
-    missing file), and the harness case above.
+    missing file), and the harness case above. Round 1 adds: Ghostty's placeholder tests (`agterm-term`
+    `placeholder.rs`: decode by palette index, 24-bit color and high byte, continuation, breaks, runs per row; a real
+    terminal's frame in `render.rs`), its `renderPlacement` tests (dog 4x2, 2x2 with blank cells, 1x1) and target
+    lookup, the texture budget and sampler, the store's async lifecycle, placeholder cells drawing two images (RGB
+    and palette ids) over a real pane, the layer stages, Ghostty's translucent blend and the bands around the image,
+    the stale-load case, and the vt wrapper's virtual placement `columns`/`rows`.
 
 ### Task 17: Conformance harness for the GPUI build
 
@@ -1558,6 +1584,9 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
       memory measurements show the same need
 - [ ] ➕ (Task 4) the two Ghostty pins become one: the `GHOSTTY_` libghostty lines go, `LIBGHOSTTY_VT_REV` is the only
       Ghostty pin; `gen-ghostty-config-keys.sh` and the config-diagnostics residual list move to it
+- [ ] ➕ (Task 16 review) precondition: `docs/backlog/kitty-virtual-placement-c-api-gaps.md` closed — the Kitty
+      placement-id namespace and relative placements rooted at virtual ones drawn as libghostty draws them (upstream
+      API + pin bump, or a local libghostty-vt patch), or the user's explicit scope exception
 - [ ] full conformance on the switched build; ratchet unchanged or grown; gates
 
 ### Task 35: Verify acceptance criteria
