@@ -2,8 +2,9 @@
 //!
 //! A [`Fixture`] is a headless GPUI app with one 64x32 window (128x64 device pixels at the test window's scale of 2)
 //! showing an [`ExternalTexture`]; every frame is rendered and read back. Counters come from
-//! `gpui::external_surface_stats`, process-wide, so cases compare before and after. The last case paints the coverage
-//! masks of GPUI patch 0003 (the terminal's sprites) in a window of its own, on the same renderer.
+//! `gpui::external_surface_stats`, process-wide, so cases compare before and after. The last two cases paint, each in
+//! a window of its own on the same renderer, the coverage masks of GPUI patch 0003 (the terminal's sprites) and a
+//! Kitty placement's source rectangle (the terminal's images, through GPUI's own `paint_image`).
 
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
@@ -14,11 +15,13 @@ use std::time::Duration;
 use agterm_gpui::external_texture::{
     Acquire, ExternalTexture, Fallback, FrameSource, ShmRegion, external_texture, negotiate,
 };
+use agterm_gpui::terminal::kitty;
+use agterm_term::SourceRect;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    App, AppContext as _, Bounds, Context, DevicePixels, DmaBufImportCaps, ExternalSurfaceStats, FrameOutcome,
+    App, AppContext as _, Bounds, Context, Corners, DevicePixels, DmaBufImportCaps, ExternalSurfaceStats, FrameOutcome,
     HeadlessAppContext, Hsla, IntoElement, NoopTextSystem, ParentElement as _, PixelRect, Pixels, Render,
-    RenderAlphaMaskParams, Styled as _, Window, WindowBounds, WindowHandle, WindowOptions, canvas, div,
+    RenderAlphaMaskParams, RenderImage, Styled as _, Window, WindowBounds, WindowHandle, WindowOptions, canvas, div,
     external_surface_stats, point, px, size,
 };
 
@@ -45,7 +48,7 @@ pub struct Gpu {
 
 pub type Case = fn(&Gpu) -> Outcome;
 
-pub const CASES: [(&str, Case); 12] = [
+pub const CASES: [(&str, Case); 13] = [
     ("caps", caps),
     ("dmabuf_draws", dmabuf_draws),
     ("dmabuf_import_is_kept_per_buffer", dmabuf_import_is_kept_per_buffer),
@@ -66,6 +69,10 @@ pub const CASES: [(&str, Case); 12] = [
     (
         "alpha_masks_cover_whole_device_pixels",
         alpha_masks_cover_whole_device_pixels,
+    ),
+    (
+        "image_source_rects_fill_their_placement",
+        image_source_rects_fill_their_placement,
     ),
 ];
 
@@ -824,6 +831,100 @@ fn alpha_masks_cover_whole_device_pixels(_: &Gpu) -> Outcome {
             let expected = if x < 20 && y < 4 && !hole { RED } else { BLACK };
             shot.expect(x, y, expected, "the masks' coverage")?;
         }
+    }
+    Ok(Verdict::Passed)
+}
+
+// MARK: - Kitty placements (the terminal's images)
+
+/// An 8x8 image, its left half red and its right half blue.
+fn halves() -> Arc<RenderImage> {
+    let mut bgra = Vec::with_capacity(8 * 8 * 4);
+    for _ in 0..8 {
+        for x in 0..8 {
+            // BGRA
+            bgra.extend_from_slice(if x < 4 { &[0, 0, 255, 255] } else { &[255, 0, 0, 255] });
+        }
+    }
+    let buffer = image::RgbaImage::from_raw(8, 8, bgra).unwrap_or_default();
+    Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]))
+}
+
+/// The blue half of [`halves`] placed over device pixels 8..24 both ways, as the terminal draws a placement's source
+/// rectangle.
+struct Placement(Arc<RenderImage>);
+
+impl Render for Placement {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let image = Arc::clone(&self.0);
+        let paint = move |_: Bounds<Pixels>, (): (), window: &mut Window, _: &mut App| {
+            let scale = window.scale_factor();
+            let dest = Bounds::new(
+                point(px(8. / scale), px(8. / scale)),
+                size(px(16. / scale), px(16. / scale)),
+            );
+            let source = SourceRect {
+                x: 4,
+                y: 0,
+                width: 4,
+                height: 8,
+            };
+            let whole = kitty::image_bounds(dest, source, (8, 8));
+            if let Err(error) = window.paint_image(dest, whole, Corners::default(), Arc::clone(&image), 0, false) {
+                eprintln!("the image was not painted: {error:#}");
+            }
+        };
+        div()
+            .size_full()
+            .bg(black())
+            .child(canvas(|_, _, _| {}, paint).size_full())
+    }
+}
+
+/// The source rectangle fills the placement and nothing of the image outside it shows (the whole image is painted
+/// scaled, clipped to the placement).
+fn image_source_rects_fill_their_placement(_: &Gpu) -> Outcome {
+    let mut cx = HeadlessAppContext::with_platform(
+        Arc::new(NoopTextSystem),
+        Arc::new(()),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    let image = halves();
+    let window = cx
+        .update(|cx| {
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(gpui_kit::Bounds {
+                        origin: point(px(0.), px(0.)),
+                        size: size(px(32.), px(32.)),
+                    })),
+                    focus: false,
+                    show: false,
+                    ..Default::default()
+                },
+                |_, cx| cx.new(|_| Placement(image)),
+            )
+        })
+        .map_err(|error| format!("the window did not open: {error:#}"))?;
+    let handle = window.into();
+    cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+        .map_err(|error| format!("rendering: {error:#}"))?;
+    let shot = cx
+        .capture_screenshot(handle)
+        .map_err(|error| format!("reading back: {error:#}"))?;
+    let shot = Shot {
+        width: shot.width(),
+        raw: shot.into_raw(),
+    };
+    // inside, away from the edges where linear sampling blends in the neighbouring texel
+    for y in [10, 16, 21] {
+        for x in [10, 16, 21] {
+            shot.expect(x, y, BLUE, "the source rectangle")?;
+        }
+    }
+    // the red half would land left of the placement: clipped
+    for (x, y) in [(2, 16), (6, 16), (16, 4), (28, 16), (16, 28)] {
+        shot.expect(x, y, BLACK, "outside the placement")?;
     }
     Ok(Verdict::Passed)
 }

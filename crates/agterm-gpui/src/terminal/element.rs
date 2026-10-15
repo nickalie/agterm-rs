@@ -5,7 +5,9 @@
 //! the cell metrics and the padding, and paint draws, in Ghostty's layer order: the default background, the cell
 //! backgrounds (selection and search marks included), underlines and overlines, the text, strikethroughs, the cursor
 //! (block, bar, underline, hollow when unfocused; the text under a block in the cursor-text color) and the input
-//! method's composition. Kitty images and the background image join in Task 16. Box drawing, block, braille,
+//! method's composition. The `background-image` (`background.rs`) lies over the default background, and the Kitty
+//! placements (`kitty.rs`) in Ghostty's three layers: below the cell backgrounds, between the backgrounds and the
+//! underlines and text, and above the text (under the cursor and the composition). Box drawing, block, braille,
 //! powerline and legacy computing characters are not shaped: the procedural sprites (`sprite.rs`) draw them with the
 //! text, as Ghostty's sprite font does. At a password prompt the cursor is Ghostty's lock.
 //!
@@ -18,19 +20,71 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use agterm_core::ghostty_config::PaddingColor;
-use agterm_term::{CellWidth, Colors, Cursor, CursorStyle, Frame, Row, Underline};
+use agterm_term::{CellWidth, Colors, Cursor, CursorStyle, Frame, KittyLayer, Row, Underline};
 use gpui_kit::{
     App, BorderStyle, Bounds, ContentMask, Context, DevicePixels, Element, ElementId, Entity, FontId, GlobalElementId,
-    GlyphId, Hsla, InspectorElementId, IntoElement, LayoutId, PathBuilder, Pixels, Point, RenderAlphaMaskParams, Style,
-    TextRun as GpuiRun, Window, WindowTextSystem, fill, outline, point, px, relative, size,
+    GlyphId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, PathBuilder, Pixels, Point,
+    RenderAlphaMaskParams, Style, TextRun as GpuiRun, Window, WindowTextSystem, fill, outline, point, px, relative,
+    size,
 };
 
 use super::colors::{self, Palette, hsla};
 use super::font::Fonts;
+use super::kitty::Images;
 use super::metrics::{CellMetrics, Geometry, Padding, points_to_px};
 use super::row_cache::{Decoration, Line, RowLayout, RowMarks, SpriteCell, search_marks};
 use super::sprite;
 use super::{Laid, Shared, TerminalView, ViewRole};
+
+/// A layer of the paint, bottom to top (Ghostty's order; Technical Details > Frame).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layer {
+    /// The default background color, no background image.
+    Background,
+    /// The background color and the `background-image` over it.
+    BackgroundImage,
+    KittyBelowBackground,
+    /// The cells' own backgrounds, selection and search marks included.
+    CellBackgrounds,
+    KittyBelowText,
+    /// Underlines and overlines.
+    Underlines,
+    /// Text, sprites and strikethroughs.
+    Text,
+    KittyAboveText,
+    Cursor,
+    /// The input method's composition (in place of the cursor).
+    Preedit,
+}
+
+/// The stages of a paint, bottom to top: [`Layer::Background`] stands for the background with or without its image,
+/// [`Layer::Cursor`] for the cursor or the composition.
+pub const PAINT_ORDER: [Layer; 8] = [
+    Layer::Background,
+    Layer::KittyBelowBackground,
+    Layer::CellBackgrounds,
+    Layer::KittyBelowText,
+    Layer::Underlines,
+    Layer::Text,
+    Layer::KittyAboveText,
+    Layer::Cursor,
+];
+
+/// The default background color, and the background image over it when there is one.
+fn paint_background(window: &mut Window, plan: &Plan, bounds: Bounds<Pixels>) -> (Layer, usize) {
+    let background = plan
+        .frame
+        .as_ref()
+        .map_or(plan.background, |frame| frame.colors.background);
+    let color = hsla(background, plan.palette.background_alpha);
+    if let Some(image) = plan.images.background.as_ref() {
+        image.paint(window, bounds, plan.scale, color);
+        (Layer::BackgroundImage, 0)
+    } else {
+        window.paint_quad(fill(bounds, color));
+        (Layer::Background, 0)
+    }
+}
 
 /// One glyph of a row, placed on the grid.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -90,6 +144,8 @@ pub struct Plan {
     preedit: Option<String>,
     /// The program on the PTY reads a password (`Pane::password_input`): the cursor is the lock.
     password_input: bool,
+    /// The background image and the Kitty placements.
+    images: Images,
 }
 
 impl Plan {
@@ -121,7 +177,8 @@ impl Plan {
 
 impl Element for TerminalElement {
     type RequestLayoutState = ();
-    type PrepaintState = Option<Plan>;
+    /// The plan, and the owner's hitbox for the pointer (plan > Task 14).
+    type PrepaintState = (Option<Plan>, Option<Hitbox>);
 
     fn id(&self) -> Option<ElementId> {
         None
@@ -154,8 +211,12 @@ impl Element for TerminalElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let focused = self.focused;
-        self.view
-            .update(cx, |view, cx| view.prepaint(bounds, focused, window, cx))
+        let plan = self
+            .view
+            .update(cx, |view, cx| view.prepaint(bounds, focused, window, cx));
+        let owner = self.view.read(cx).role() == ViewRole::Owner;
+        let hitbox = owner.then(|| window.insert_hitbox(bounds, HitboxBehavior::Normal));
+        (plan, hitbox)
     }
 
     fn paint(
@@ -164,10 +225,16 @@ impl Element for TerminalElement {
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
-        plan: &mut Self::PrepaintState,
+        (plan, hitbox): &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
+        if let Some(hitbox) = hitbox.as_ref() {
+            let view = self.view.clone();
+            self.view.update(cx, |terminal, cx| {
+                terminal.paint_input(&view, bounds, hitbox, window, cx);
+            });
+        }
         let Some(plan) = plan.as_ref() else {
             return;
         };
@@ -193,6 +260,7 @@ impl TerminalView {
         if shared.is_torn_down() {
             self.cache.clear();
             self.painted = None;
+            self.release_images(window);
             return None;
         }
         let scale = window.scale_factor();
@@ -223,6 +291,7 @@ impl TerminalView {
             snapshot.frame
         });
         self.painted.clone_from(&frame);
+        let images = self.prepare_images(frame.as_deref(), &metrics, window, cx);
         // the blink follows the frame being drawn, not the one drawn before (a program may just have asked for it)
         self.sync_blink(focused, cx);
         let origin = bounds.origin + point(px(device_to(padding.left, scale)), px(device_to(padding.top, scale)));
@@ -238,6 +307,7 @@ impl TerminalView {
             frame,
             preedit: shared.preedit(),
             password_input: shared.pane().is_some_and(|pane| pane.password_input()),
+            images,
         })
     }
 
@@ -253,33 +323,89 @@ impl TerminalView {
                 search: std::mem::take(&mut search[index]),
                 link: self
                     .link
-                    .filter(|(link_row, _, _)| usize::from(*link_row) == index)
-                    .map(|(_, start, end)| (start, end)),
+                    .iter()
+                    .find(|(link_row, _, _)| usize::from(*link_row) == index)
+                    .map(|(_, start, end)| (*start, *end)),
             })
             .collect()
     }
 
     fn paint(&mut self, bounds: Bounds<Pixels>, plan: &Plan, focused: bool, window: &mut Window) {
-        let Some(frame) = plan.frame.as_ref() else {
-            window.paint_quad(fill(bounds, hsla(plan.background, plan.palette.background_alpha)));
-            return;
-        };
-        let colors = &frame.colors;
-        window.paint_quad(fill(bounds, hsla(colors.background, plan.palette.background_alpha)));
-        let extend = Extend::new(plan.padding_color, frame);
-        for (index, row) in self.cache.rows().enumerate() {
-            paint_backgrounds(
-                window,
-                plan,
-                bounds,
-                index,
-                &row.layout,
-                extend.for_row(index, frame.rows.len()),
-            );
-            paint_decorations(window, plan, index, &row.layout, |line| {
-                !matches!(line, Line::Strikethrough)
-            });
+        self.painted_layers.clear();
+        for stage in PAINT_ORDER {
+            if let Some(painted) = self.paint_stage(stage, bounds, plan, focused, window) {
+                self.painted_layers.push(painted);
+            }
         }
+        if plan.frame.is_some() {
+            self.shared.drew();
+        }
+    }
+
+    /// Paints one stage of [`PAINT_ORDER`]: what it drew (the background with or without its image, the cursor or the
+    /// composition) and how many Kitty placements a Kitty stage drew; `None` for a stage with nothing to draw before
+    /// the pane has a frame.
+    fn paint_stage(
+        &self,
+        stage: Layer,
+        bounds: Bounds<Pixels>,
+        plan: &Plan,
+        focused: bool,
+        window: &mut Window,
+    ) -> Option<(Layer, usize)> {
+        if stage == Layer::Background {
+            return Some(paint_background(window, plan, bounds));
+        }
+        let frame = plan.frame.as_ref()?;
+        let kitty = &plan.images.kitty;
+        let painted = match stage {
+            Layer::KittyBelowBackground => (
+                stage,
+                kitty.paint(window, KittyLayer::BelowBackground, plan.origin, plan.scale),
+            ),
+            Layer::KittyBelowText => (
+                stage,
+                kitty.paint(window, KittyLayer::BelowText, plan.origin, plan.scale),
+            ),
+            Layer::KittyAboveText => (
+                stage,
+                kitty.paint(window, KittyLayer::AboveText, plan.origin, plan.scale),
+            ),
+            Layer::CellBackgrounds => {
+                let extend = Extend::new(plan.padding_color, frame);
+                for (index, row) in self.cache.rows().enumerate() {
+                    let edges = extend.for_row(index, frame.rows.len());
+                    paint_backgrounds(window, plan, bounds, index, &row.layout, edges);
+                }
+                (stage, 0)
+            }
+            Layer::Underlines => {
+                for (index, row) in self.cache.rows().enumerate() {
+                    paint_decorations(window, plan, index, &row.layout, |line| {
+                        !matches!(line, Line::Strikethrough)
+                    });
+                }
+                (stage, 0)
+            }
+            Layer::Text => {
+                self.paint_text(window, plan);
+                (stage, 0)
+            }
+            Layer::Background | Layer::BackgroundImage | Layer::Cursor | Layer::Preedit => {
+                if let Some(preedit) = plan.preedit.as_deref() {
+                    paint_preedit(window, plan, frame, preedit);
+                    (Layer::Preedit, 0)
+                } else {
+                    self.paint_cursor(window, plan, frame, focused);
+                    (Layer::Cursor, 0)
+                }
+            }
+        };
+        Some(painted)
+    }
+
+    /// The glyphs, sprites and strikethroughs of every row.
+    fn paint_text(&self, window: &mut Window, plan: &Plan) {
         for (index, row) in self.cache.rows().enumerate() {
             if let Some(shaped) = row.shaped.as_ref() {
                 paint_glyphs(window, plan, index, &shaped.glyphs, None);
@@ -289,13 +415,12 @@ impl TerminalView {
                 matches!(line, Line::Strikethrough)
             });
         }
-        if plan.preedit.is_none() {
-            self.paint_cursor(window, plan, frame, focused);
-        }
-        if let Some(preedit) = plan.preedit.as_deref() {
-            paint_preedit(window, plan, frame, preedit);
-        }
-        self.shared.drew();
+    }
+
+    /// The layers the last paint drew, bottom to top, with how many placements each Kitty layer drew.
+    #[must_use]
+    pub fn painted_layers(&self) -> &[(Layer, usize)] {
+        &self.painted_layers
     }
 
     fn paint_cursor(&self, window: &mut Window, plan: &Plan, frame: &Frame, focused: bool) {

@@ -192,18 +192,20 @@ impl Terminal {
         self.install(None)
     }
 
-    /// Select the word under `at` (Ghostty's word boundaries); `false`, with the selection unchanged, when there is
-    /// no word there.
+    /// Select the word under `at`; `false`, with the selection unchanged, when there is no word there. `boundaries`
+    /// (Unicode scalar values, Ghostty's `selection-word-chars`) replace Ghostty's default word boundaries; `None`
+    /// keeps the defaults.
     ///
     /// # Errors
     ///
     /// [`Error::InvalidValue`] for a point outside its space.
-    pub fn select_word(&mut self, at: Point) -> Result<bool, Error> {
+    pub fn select_word(&mut self, at: Point, boundaries: Option<&[u32]>) -> Result<bool, Error> {
+        let (codepoints, len) = boundaries.map_or((std::ptr::null(), 0), |list| (list.as_ptr(), list.len()));
         let options = ffi::GhosttyTerminalSelectWordOptions {
             size: std::mem::size_of::<ffi::GhosttyTerminalSelectWordOptions>(),
             ref_: self.grid_ref(at)?,
-            boundary_codepoints: std::ptr::null(),
-            boundary_codepoints_len: 0,
+            boundary_codepoints: codepoints,
+            boundary_codepoints_len: len,
         };
         self.derive(|terminal, out| {
             // SAFETY: the terminal is live and the reference is fresh (no mutation since); `out` is a valid sized
@@ -243,6 +245,33 @@ impl Terminal {
             // SAFETY: the terminal is live; `out` is a valid sized out-struct.
             unsafe { ffi::ghostty_terminal_select_all(terminal, out) }
         })
+    }
+
+    /// The URI of the OSC 8 hyperlink on the cell at `at`; `None` for a cell without one.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidValue`] for a point outside its space.
+    pub fn hyperlink_uri(&self, at: Point) -> Result<Option<String>, Error> {
+        let grid_ref = self.grid_ref(at)?;
+        let mut len = 0usize;
+        // SAFETY: the reference is fresh (`&self` keeps mutations out); a null buffer of zero length asks for the
+        // length, written to `len`.
+        let probe =
+            unsafe { ffi::ghostty_grid_ref_hyperlink_uri(&raw const grid_ref, std::ptr::null_mut(), 0, &raw mut len) };
+        match Error::check(probe) {
+            Ok(()) if len == 0 => return Ok(None),
+            Ok(()) | Err(Error::OutOfSpace) => {}
+            Err(Error::NoValue) => return Ok(None),
+            Err(err) => return Err(err),
+        }
+        let mut buffer = vec![0u8; len];
+        // SAFETY: as above; `buffer` holds `len` writable bytes.
+        Error::check(unsafe {
+            ffi::ghostty_grid_ref_hyperlink_uri(&raw const grid_ref, buffer.as_mut_ptr(), buffer.len(), &raw mut len)
+        })?;
+        buffer.truncate(len);
+        Ok((!buffer.is_empty()).then(|| String::from_utf8_lossy(&buffer).into_owned()))
     }
 
     /// Run a `select_*` derivation and install what it found; `false` when it found nothing.
@@ -339,14 +368,14 @@ mod tests {
         let mut terminal = Terminal::new(20, 3).unwrap();
         terminal.vt_write(b"  hello world  \r\nnext");
         let viewport = |x, y| Point::new(PointTag::Viewport, x, y);
-        assert!(terminal.select_word(viewport(4, 0)).unwrap());
+        assert!(terminal.select_word(viewport(4, 0), None).unwrap());
         let word = terminal.selection(PointTag::Viewport).unwrap();
         assert_eq!((word.start.x, word.end.x), (2, 6));
         assert!(terminal.select_line(viewport(9, 0)).unwrap());
         let line = terminal.selection(PointTag::Viewport).unwrap();
         assert_eq!((line.start.x, line.end.x), (2, 12));
         // a blank row has no word and no line: the selection stays
-        assert!(!terminal.select_word(viewport(0, 2)).unwrap());
+        assert!(!terminal.select_word(viewport(0, 2), None).unwrap());
         assert!(!terminal.select_line(viewport(0, 2)).unwrap());
         assert_eq!(terminal.selection(PointTag::Viewport), Some(line));
         assert!(terminal.select_all().unwrap());
