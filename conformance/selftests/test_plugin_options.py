@@ -452,6 +452,7 @@ ALPHA, BETA = "test_r.py::test_three[alpha]", "test_r.py::test_three[beta]"
         (("--also", "test_r.py"), [ONE, ALPHA, BETA]),
         (("--also-k", "one or alpha"), [ONE, ALPHA]),
         (("--also", ONE, "--also-k", "three and beta"), [ONE, BETA]),
+        (("--also", f"./{ONE}"), [ONE]),
     ],
 )
 def test_ratchet_only_adds_the_extra_selections(
@@ -481,6 +482,11 @@ def test_ratchet_only_narrowed_further_is_a_partial_run(pytester: pytest.Pyteste
         (("--ratchet-only", "absent.txt"), "--ratchet-only: cannot read"),
         (("--ratchet-only", "list.txt", "--also-k", "one and"), "--also-k: bad expression"),
         (("--ratchet-only", "list.txt", "--coverage-gate"), "--ratchet-only cannot be combined with --coverage-gate"),
+        (
+            ("--ratchet-only", "list.txt", "--also", "test_r.py::test_twoo"),
+            "--also 'test_r.py::test_twoo': matches no collected test",
+        ),
+        (("--ratchet-only", "list.txt", "--also-k", "sidbar"), "--also-k 'sidbar': matches no collected test"),
     ],
 )
 def test_ratchet_only_usage_errors(pytester: pytest.Pytester, args: tuple[str, ...], message: str) -> None:

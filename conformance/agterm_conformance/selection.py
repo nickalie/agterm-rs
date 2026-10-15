@@ -38,7 +38,7 @@ def listed_ids(path: Path) -> frozenset[str]:
 
 def selector_matches(nodeid: str, selector: str) -> bool:
     """Whether `selector` (a directory, a file, or a node-id prefix, as pytest spells them) names `nodeid`."""
-    selector = selector.removeprefix("conformance/").rstrip("/")
+    selector = selector.removeprefix("./").removeprefix("conformance/").rstrip("/")
     return (
         nodeid == selector
         or nodeid.startswith((f"{selector}::", f"{selector}/"))
@@ -62,7 +62,19 @@ class RatchetOnly:
     def __init__(self, listed: Iterable[str], also: Sequence[str] = (), also_k: Sequence[str] = ()) -> None:
         self.listed = frozenset(listed)
         self.also = list(also)
+        self.also_k = list(also_k)
         self.keywords = compile_keywords(also_k)
+
+    def unmatched(self, items: Sequence[pytest.Item]) -> list[str]:
+        """The `--also`/`--also-k` selections no collected test matches: a typo would silently skip a task's extras."""
+        matchers = [KeywordMatcher.from_item(item) for item in items] if self.keywords else []
+        also = [s for s in self.also if not any(selector_matches(item.nodeid, s) for item in items)]
+        also_k = [
+            text
+            for text, expression in zip(self.also_k, self.keywords, strict=True)
+            if not any(expression.evaluate(matcher) for matcher in matchers)
+        ]
+        return [f"--also {s!r}" for s in also] + [f"--also-k {text!r}" for text in also_k]
 
     def wanted(self, item: pytest.Item) -> bool:
         if item.nodeid in self.listed or any(selector_matches(item.nodeid, s) for s in self.also):
@@ -76,6 +88,10 @@ class RatchetOnly:
     # trylast hook, which then sees only what runs.
     @pytest.hookimpl(trylast=True)
     def pytest_collection_modifyitems(self, config: pytest.Config, items: list[pytest.Item]) -> None:
+        narrowed = bool(config.option.keyword or config.option.markexpr or any("::" in arg for arg in config.args))
+        # a narrower selection (-k, -m, node ids) may leave an extra out on purpose
+        if not narrowed and (unmatched := self.unmatched(items)):
+            raise pytest.UsageError(f"{', '.join(unmatched)}: matches no collected test")
         report = config.pluginmanager.get_plugin("agterm-nodeid-report")
         if report is not None and not report.partial and not any("::" in arg for arg in config.args):
             # nothing narrowed the collection before: every listed id that exists is about to run

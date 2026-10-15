@@ -390,6 +390,21 @@ def test_ratchet_only_usage_errors_exit_2(
     assert report == ""
 
 
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        (("--also", "tests/protocol/test_probe.py::test_typo"), "--also 'tests/protocol/test_probe.py::test_typo'"),
+        (("--also-k", "sidbar"), "--also-k 'sidbar'"),
+    ],
+)
+def test_an_extra_that_matches_no_test_exits_2(
+    tmp_path: Path, stage: Path, layers: Path, extra: tuple[str, ...], message: str
+) -> None:
+    completed, _ = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--ratchet-only", *extra)
+    assert completed.returncode == 2
+    assert f"{message}: matches no collected test" in completed.stdout + completed.stderr
+
+
 def test_a_full_run_says_so(tmp_path: Path, stage: Path, layers: Path) -> None:
     completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID))
     assert completed.returncode == 0, completed.stdout + completed.stderr

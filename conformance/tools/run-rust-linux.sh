@@ -110,7 +110,8 @@ if [[ -n "$ratchet_only" ]]; then
     selection=(--ratchet-only "$ratchet")
     for selector in "${also[@]}"; do
         selection+=(--also "$selector")
-        path="${selector#conformance/}"
+        path="${selector#./}"
+        path="${path#conformance/}"
         path="$(dirname "$tests")/${path%%::*}"
         path="${path%/}"
         inside=""
