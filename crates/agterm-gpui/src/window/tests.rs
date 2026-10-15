@@ -109,7 +109,7 @@ fn the_shell_titles_its_window_and_keeps_its_modal_layers_in_order(cx: &mut Test
     let poster = env.poster.clone();
     let (view, cx) = cx.add_window_view(move |root, cx| {
         let deck = cx.new(|_| Deck::new(window, env));
-        WindowView::new(window, deck, poster, root, cx)
+        WindowView::new(window, deck, poster, 0, root, cx)
     });
     cx.simulate_resize(size(px(640.), px(480.)));
     let _ = view.update_in(cx, |view, window, cx| view.sync(&mut core, window, cx));

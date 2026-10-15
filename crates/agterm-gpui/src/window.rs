@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::deck::Deck;
 use crate::keymap_dispatch::KeyOrigin;
-use crate::state::{AppState, Poster, post};
+use crate::state::{AppState, FirstFocus, Poster, post};
 
 /// The window title: the active session's display name, then the window's custom name when it has one (upstream's
 /// `WindowTitleSync.title`).
@@ -128,13 +128,24 @@ pub struct WindowView {
     /// Set once the model closed the window, so its close request goes through.
     closing: Rc<Cell<bool>>,
     painted: Rc<Cell<Painted>>,
+    /// What the window's first activation knows of its build, until that activation or [`FIRST_FOCUS_GRACE`] after
+    /// its first frame.
+    first_focus: Rc<Cell<Option<FirstFocus>>>,
     poster: Poster,
     _subscriptions: Vec<Subscription>,
 }
 
 impl WindowView {
-    /// The root of model window `id`, over `deck`; its handlers post through `poster`.
-    pub fn new(id: Uuid, deck: Entity<Deck>, poster: Poster, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// The root of model window `id`, over `deck`, built when the core's frontmost takes stood at `frontmost_takes`;
+    /// its handlers post through `poster`.
+    pub fn new(
+        id: Uuid,
+        deck: Entity<Deck>,
+        poster: Poster,
+        frontmost_takes: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let closing = Rc::new(Cell::new(false));
         let (posting, closed) = (poster.clone(), Rc::clone(&closing));
         window.on_window_should_close(cx, move |_, _| {
@@ -146,12 +157,12 @@ impl WindowView {
         });
         crate::keymap_dispatch::register_window(window.window_handle(), KeyOrigin::Window(id));
         let posting = poster.clone();
-        let fresh = Rc::new(Cell::new(true));
-        let expiring = Rc::clone(&fresh);
+        let first_focus = Rc::new(Cell::new(Some(FirstFocus::Built { frontmost_takes })));
+        let (fresh, expiring) = (Rc::clone(&first_focus), Rc::clone(&first_focus));
         window.on_next_frame(move |_, cx| {
             cx.spawn(async move |cx| {
                 cx.background_executor().timer(FIRST_FOCUS_GRACE).await;
-                expiring.set(false);
+                expiring.set(None);
             })
             .detach();
         });
@@ -160,7 +171,7 @@ impl WindowView {
                 check_keyboard_left(cx);
             }
             if window.is_window_active() {
-                let first = fresh.replace(false);
+                let first = fresh.take();
                 post(&posting, move |state: &mut AppState| state.window_activated(id, first));
             } else {
                 post(&posting, move |state: &mut AppState| state.key_window_lost(id));
@@ -174,6 +185,7 @@ impl WindowView {
             title: UNTITLED.to_owned(),
             closing,
             painted: Rc::new(Cell::new(Painted::default())),
+            first_focus,
             poster,
             _subscriptions: vec![activation, bounds],
         }
@@ -279,6 +291,10 @@ impl WindowView {
             WindowRequest::ToggleFullscreen(_) => window.toggle_fullscreen(),
             WindowRequest::Minimize { minimized, .. } => {
                 if minimized {
+                    // a new window parked by its own command leaves frontmost where that command handed it
+                    if self.first_focus.get().is_some() {
+                        self.first_focus.set(Some(FirstFocus::Parked));
+                    }
                     window.minimize_window();
                 } else {
                     window.activate_window();
@@ -344,7 +360,7 @@ const LEAVE_CHECK_DELAY: Duration = Duration::from_millis(150);
 
 /// How long after its first frame a new window's first activation still counts as the focus the window manager grants
 /// on mapping it ([`AppState::window_activated`]): that one follows the map at once, while a window left unfocused then
-/// is activated later only by the user, whose activation always counts.
+/// is activated later only by the user, whose activation always counts, whatever commands took frontmost before.
 const FIRST_FOCUS_GRACE: Duration = Duration::from_secs(1);
 
 /// A window lost the keyboard: once the next activation had its chance, the key monitor forgets its consumed keys
@@ -361,10 +377,11 @@ fn check_keyboard_left(cx: &mut Context<WindowView>) {
     .detach();
 }
 
-/// Opens the window of model window `id` with `app_id` as its Wayland app id / X11 class; its handle, `None` (logged)
-/// when the platform could not open one.
+/// Opens the window of model window `id` with `app_id` as its Wayland app id / X11 class, when the core's frontmost
+/// takes stand at `frontmost_takes`; its handle, `None` (logged) when the platform could not open one.
 pub fn open(
     id: Uuid,
+    frontmost_takes: u64,
     app_id: &str,
     env: &Rc<crate::deck::DeckEnv>,
     cx: &mut App,
@@ -386,7 +403,7 @@ pub fn open(
     let poster = env.poster.clone();
     let opened = cx.open_window(options, move |window, cx| {
         let deck = cx.new(|_| Deck::new(id, env));
-        cx.new(|cx| WindowView::new(id, deck, poster, window, cx))
+        cx.new(|cx| WindowView::new(id, deck, poster, frontmost_takes, window, cx))
     });
     match opened {
         Ok(handle) => Some(handle),

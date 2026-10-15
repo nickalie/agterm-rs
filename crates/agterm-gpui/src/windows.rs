@@ -152,8 +152,9 @@ impl Windows {
                 }
             }
         }
+        let frontmost_takes = core.frontmost_takes();
         for id in &plan.build {
-            let Some(handle) = crate::window::open(*id, &self.app_id, &self.env, cx) else {
+            let Some(handle) = crate::window::open(*id, frontmost_takes, &self.app_id, &self.env, cx) else {
                 continue;
             };
             if let Ok(deck) = handle.update(cx, |view, _, _| view.deck().clone()) {

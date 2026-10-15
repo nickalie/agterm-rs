@@ -32,6 +32,17 @@ use crate::instance::Activation;
 use crate::keymap_dispatch::{Fired, KeyOrigin};
 use crate::main_loop::GpuiMainLoop;
 
+/// What a new window's first activation, while it may still be the focus the window manager grants on mapping it,
+/// knows of the window's build ([`AppState::window_activated`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirstFocus {
+    /// Built when the core's [`frontmost_takes`](agterm_core::Core::frontmost_takes) stood at this count.
+    Built { frontmost_takes: u64 },
+    /// Built and then minimized by its own command (`window.new --minimized`), which handed frontmost to a window in
+    /// view.
+    Parked,
+}
+
 /// How long a quit a command asked for waits, so the command's reply is written first.
 pub const LIVE_QUIT_DELAY: Duration = Duration::from_millis(250);
 
@@ -832,18 +843,24 @@ impl AppState {
     }
 
     /// Window `window` took the keyboard: it is the key window and becomes frontmost, except on the focus the window
-    /// manager grants a new window when it maps it (`first`), which arrives after the open, so after any command that
-    /// took frontmost since: that later command keeps it, as on macOS, where a new window is key before the open
-    /// returns.
-    pub fn window_activated(&mut self, window: Uuid, first: bool) {
+    /// manager grants a new window when it maps it (`first`, [`FirstFocus`]) while another open window is frontmost
+    /// and either a command took frontmost since the window was built or the window was built parked: that focus
+    /// arrives after the open, so after such a command, which keeps frontmost, as on macOS, where a new window is key
+    /// before the open returns. Frontmost the model set itself (a restore, a reopen) does not hold the window back.
+    pub fn window_activated(&mut self, window: Uuid, first: Option<FirstFocus>) {
         self.set_key_window(Some(window));
+        let held_back = match first {
+            Some(FirstFocus::Built { frontmost_takes }) => self.core.frontmost_takes() != frontmost_takes,
+            Some(FirstFocus::Parked) => true,
+            None => false,
+        };
         let library = self.core.library();
-        if first
+        if held_back
             && let Some(frontmost) = library.frontmost_window_id
             && frontmost != window
             && library.is_open(frontmost)
         {
-            tracing::debug!(%window, %frontmost, "a new window's first focus came after frontmost moved on");
+            tracing::debug!(%window, %frontmost, "a new window's first focus came after a command took frontmost");
             return;
         }
         self.report_frontmost(window);
