@@ -767,9 +767,21 @@ impl Terminal {
         TerminalSurface::new(Rc::clone(&self.shared))
     }
 
-    /// Takes a new config (a reload): the pane's theme, cursor and scrollback, the views' fonts and colors. The live
-    /// font size is kept.
+    /// Takes a new config of the same app config (its own overlay changed: a background watermark): the pane's theme,
+    /// cursor and scrollback, the views' fonts and colors. The live font size and the size a reset returns to are
+    /// kept, as the GTK build's overlay restates the live size.
     pub fn set_config(&mut self, config: TerminalConfig, cx: &mut Context<Self>) {
+        self.apply_config(config, false, cx);
+    }
+
+    /// Takes a reloaded app config as [`Self::set_config`] does, and its font size too: what a reset returns to from
+    /// now on, and the live size unless a font size action changed it. A restored or replacement terminal's start size
+    /// was not stepped, so it takes the configured one, as libghostty's re-feed does in the GTK build.
+    pub fn reload_config(&mut self, config: TerminalConfig, cx: &mut Context<Self>) {
+        self.apply_config(config, true, cx);
+    }
+
+    fn apply_config(&mut self, config: TerminalConfig, reload: bool, cx: &mut Context<Self>) {
         let shared = &self.shared;
         if let Some(pane) = shared.pane() {
             pane.set_mouse_reporting(config.mouse.reporting);
@@ -784,7 +796,7 @@ impl Terminal {
         }
         let fonts_changed = shared.config.borrow().font != config.font;
         let cell = shared.metrics_at(shared.font_points(), shared.scale());
-        let resized = shared.follow_config_points(config.font.size);
+        let resized = reload && shared.follow_config_points(config.font.size);
         *shared.config.borrow_mut() = Rc::new(config);
         // the background image's file is looked at again (a watermark rendered anew into the same file)
         shared.background.borrow_mut().invalidate();

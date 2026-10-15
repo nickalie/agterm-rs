@@ -516,7 +516,8 @@ impl Deck {
     pub fn apply_config(&self, cx: &mut Context<Self>) {
         for pane in self.terminals() {
             let config = self.env.config_for(pane.overlay.borrow().as_deref());
-            pane.terminal.update(cx, |terminal, cx| terminal.set_config(config, cx));
+            pane.terminal
+                .update(cx, |terminal, cx| terminal.reload_config(config, cx));
         }
         cx.notify();
     }
