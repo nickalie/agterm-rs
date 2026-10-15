@@ -542,6 +542,25 @@ fn a_new_windows_first_focus_leaves_frontmost_to_a_later_command() {
 }
 
 #[test]
+fn a_new_windows_first_focus_leaves_frontmost_to_a_later_new_window() {
+    let library = WindowLibrary::seeded("/home/u");
+    let first = library.active_window_id().unwrap();
+    let mut state = AppState::new(core(library, None));
+    let new_window = |state: &mut AppState| {
+        window_command(state, WindowCmd::New, Args::default());
+        let library = state.core.library();
+        library.frontmost_window_id.unwrap()
+    };
+    let earlier = new_window(&mut state);
+    let earlier_focus = Some(built(&state));
+    let later = new_window(&mut state);
+    assert!(![first, earlier].contains(&later));
+    // the window manager focuses the earlier window after the later `window.new`
+    state.window_activated(earlier, earlier_focus);
+    assert_eq!(state.core.library().frontmost_window_id, Some(later));
+}
+
+#[test]
 fn a_new_windows_first_focus_counts_without_a_command_since() {
     let mut library = WindowLibrary::seeded("/home/u");
     let first = library.active_window_id().unwrap();
