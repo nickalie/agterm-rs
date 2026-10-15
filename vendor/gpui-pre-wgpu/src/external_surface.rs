@@ -103,9 +103,8 @@ struct Import {
     snapshot: wgpu::Texture,
     view: wgpu::TextureView,
     opaque: bool,
-    /// The snapshot's initializing clear was submitted.
-    initialized: bool,
-    /// The frame whose pixels the snapshot holds (its copy was submitted); weak, so its address stays its own.
+    /// The frame whose pixels the snapshot holds (its copy, and before the first one the snapshot's initializing
+    /// clear, was submitted); weak, so its address stays its own.
     copied: Option<Weak<DmaBufFrame>>,
     /// The timeline value of the last submission that copied from `source` (0: none, or known finished).
     last_use: u64,
@@ -284,20 +283,18 @@ impl ExternalSurfaces {
         }
         for (key, frame) in copies {
             if let Some(import) = self.imports.get_mut(&key) {
-                import.initialized = true;
                 import.copied = Some(frame);
                 import.last_use = last_use;
             }
         }
     }
 
-    /// The frame was not submitted (recording it failed): its copies are forgotten and its frames discarded.
+    /// The frame was not submitted (recording it failed): its copies are forgotten. Its frames are still shown and the
+    /// next frame copies them again, so their completions stay pending and that frame's submission reports them: the
+    /// producer gets its buffer back only after a copy the GPU finished (or once nothing reads it at all).
     pub(crate) fn abort_frame(&mut self) {
         self.pending.copies.clear();
         self.pending.command_buffers.clear();
-        for callback in self.pending.completing.drain(..) {
-            callback(FrameOutcome::Discarded);
-        }
     }
 
     /// Forgets what producers dropped; destroys imported images the GPU is done with.
@@ -355,7 +352,7 @@ impl ExternalSurfaces {
             .iter()
             .any(|job| job.key == key && job.frame.as_ptr() == frame_ptr);
         if !copied && !queued {
-            let clear = !import.initialized && !jobs.iter().any(|job| job.key == key);
+            let clear = import.copied.is_none() && !jobs.iter().any(|job| job.key == key);
             jobs.push(CopyJob {
                 key,
                 frame: Arc::downgrade(frame),
@@ -409,7 +406,6 @@ impl ExternalSurfaces {
                 snapshot,
                 view,
                 opaque: format.opaque,
-                initialized: false,
                 copied: None,
                 last_use: 0,
             },
@@ -474,7 +470,11 @@ impl ExternalSurfaces {
 
 impl Drop for ExternalSurfaces {
     fn drop(&mut self) {
+        // Frames bound for a submission that will never happen: nothing reads their buffers any more.
         self.abort_frame();
+        for callback in self.pending.completing.drain(..) {
+            callback(FrameOutcome::Discarded);
+        }
         counters::add(&counters::IMPORTS_RELEASED, self.imports.len() as u64);
         // Every submission that copied from an imported image must be finished before the image goes.
         let settled = self.timeline.as_ref().is_none_or(Timeline::settle);
