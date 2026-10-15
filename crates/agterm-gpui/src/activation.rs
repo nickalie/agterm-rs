@@ -43,6 +43,22 @@ pub fn activate(window: &mut Window, cx: &App, activation: &Activation) {
     }
 }
 
+/// This process's own launch opened `window`, its first: on X11 the launch's startup sequence ends here (GPUI handles
+/// neither `DESKTOP_STARTUP_ID` nor startup notification); on Wayland GPUI has already activated its first toplevel
+/// with the launch's token.
+pub fn launched(window: &mut Window, cx: &App, activation: &Activation) {
+    let Some(startup_id) = activation.startup_id.as_deref() else {
+        return;
+    };
+    if cx.compositor_name() != "X11" {
+        return;
+    }
+    match x11::complete_startup(window, startup_id) {
+        Ok(()) => tracing::info!("activation: the launch's startup sequence ended"),
+        Err(error) => tracing::warn!(%error, "activation: the launch's startup sequence did not end"),
+    }
+}
+
 /// Raises `window` with what the launch `handed` over through `with`, or GPUI's own request without it.
 fn raise(
     window: &mut Window,
@@ -150,6 +166,9 @@ mod wayland {
         activation.activate(token.to_owned(), &surface);
         activation.destroy();
         queue.roundtrip(&mut Queue)?;
+        // a registry has no destructor request: without this one more stays on the compositor per activation (where
+        // the compositor has `wl_fixes`; GPUI patch 2 replaces this whole binding)
+        globals.destroy();
         Ok(())
     }
 }
@@ -159,6 +178,7 @@ mod x11 {
     use x11rb::protocol::xproto::{
         AtomEnum, ClientMessageEvent, ConnectionExt as _, CreateWindowAux, EventMask, PropMode, WindowClass,
     };
+    use x11rb::rust_connection::RustConnection;
     use x11rb::wrapper::ConnectionExt as _;
     use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT};
 
@@ -167,58 +187,102 @@ mod x11 {
     /// `_NET_ACTIVE_WINDOW`'s source indication for an application.
     const SOURCE_APPLICATION: u32 = 1;
 
+    /// A connection of its own to GPUI's X display, aimed at one of GPUI's windows.
+    struct Target {
+        conn: RustConnection,
+        root: u32,
+        window: u32,
+    }
+
+    impl Target {
+        fn of(window: &Window) -> Result<Self, Failure> {
+            let window = match HasWindowHandle::window_handle(window)?.as_raw() {
+                RawWindowHandle::Xcb(handle) => handle.window.get(),
+                RawWindowHandle::Xlib(handle) => u32::try_from(handle.window)?,
+                _ => return Err("not an X11 window".into()),
+            };
+            let (conn, screen) = x11rb::connect(None)?;
+            let root = conn
+                .setup()
+                .roots
+                .get(screen)
+                .ok_or("the display has no such screen")?
+                .root;
+            Ok(Self { conn, root, window })
+        }
+
+        fn atom(&self, name: &str) -> Result<u32, Failure> {
+            Ok(self.conn.intern_atom(false, name.as_bytes())?.reply()?.atom)
+        }
+
+        /// `_NET_WM_USER_TIME`: the launch's event time, which a window manager weighs against focus stealing.
+        fn set_user_time(&self, time: u32) -> Result<(), Failure> {
+            let user_time = self.atom("_NET_WM_USER_TIME")?;
+            self.conn
+                .change_property32(PropMode::REPLACE, self.window, user_time, AtomEnum::CARDINAL, &[time])?;
+            Ok(())
+        }
+
+        /// Asks the window manager to raise and focus the window (`_NET_ACTIVE_WINDOW`, from an application).
+        fn request_active(&self, time: u32) -> Result<(), Failure> {
+            let message = self.atom("_NET_ACTIVE_WINDOW")?;
+            let active = ClientMessageEvent::new(32, self.window, message, [SOURCE_APPLICATION, time, 0, 0, 0]);
+            let to_window_manager = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
+            self.conn.send_event(false, self.root, to_window_manager, active)?;
+            Ok(())
+        }
+
+        /// Ends the startup sequence `startup_id`, from a window of its own as libstartup-notification sends it.
+        fn end_sequence(&self, startup_id: &str) -> Result<(), Failure> {
+            let (begin, more) = (self.atom("_NET_STARTUP_INFO_BEGIN")?, self.atom("_NET_STARTUP_INFO")?);
+            let messenger = self.conn.generate_id()?;
+            let aux = CreateWindowAux::new().override_redirect(1);
+            self.conn.create_window(
+                COPY_DEPTH_FROM_PARENT,
+                messenger,
+                self.root,
+                -100,
+                -100,
+                1,
+                1,
+                0,
+                WindowClass::INPUT_ONLY,
+                COPY_FROM_PARENT,
+                &aux,
+            )?;
+            for (index, payload) in message_chunks(&remove_message(startup_id)).into_iter().enumerate() {
+                let kind = if index == 0 { begin } else { more };
+                let event = ClientMessageEvent::new(8, messenger, kind, payload);
+                self.conn
+                    .send_event(false, self.root, EventMask::PROPERTY_CHANGE, event)?;
+            }
+            self.conn.destroy_window(messenger)?;
+            Ok(())
+        }
+    }
+
     /// Raises `window` for the launch `startup_id` names and ends its startup sequence (see the module docs).
     pub(super) fn activate(window: &Window, startup_id: &str) -> Result<(), Failure> {
-        let target = match HasWindowHandle::window_handle(window)?.as_raw() {
-            RawWindowHandle::Xcb(handle) => handle.window.get(),
-            RawWindowHandle::Xlib(handle) => u32::try_from(handle.window)?,
-            _ => return Err("not an X11 window".into()),
-        };
-        let (conn, screen) = x11rb::connect(None)?;
-        let root = conn
-            .setup()
-            .roots
-            .get(screen)
-            .ok_or("the display has no such screen")?
-            .root;
-        let atom = |name: &str| -> Result<u32, Failure> { Ok(conn.intern_atom(false, name.as_bytes())?.reply()?.atom) };
+        let target = Target::of(window)?;
         let time = startup_time(startup_id);
         if let Some(time) = time {
-            let user_time = atom("_NET_WM_USER_TIME")?;
-            conn.change_property32(PropMode::REPLACE, target, user_time, AtomEnum::CARDINAL, &[time])?;
+            target.set_user_time(time)?;
         }
-        let active = ClientMessageEvent::new(
-            32,
-            target,
-            atom("_NET_ACTIVE_WINDOW")?,
-            [SOURCE_APPLICATION, time.unwrap_or(0), 0, 0, 0],
-        );
-        let to_window_manager = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
-        conn.send_event(false, root, to_window_manager, active)?;
-        // the startup sequence ends from a window of its own, as libstartup-notification sends it
-        let (begin, more) = (atom("_NET_STARTUP_INFO_BEGIN")?, atom("_NET_STARTUP_INFO")?);
-        let messenger = conn.generate_id()?;
-        let aux = CreateWindowAux::new().override_redirect(1);
-        conn.create_window(
-            COPY_DEPTH_FROM_PARENT,
-            messenger,
-            root,
-            -100,
-            -100,
-            1,
-            1,
-            0,
-            WindowClass::INPUT_ONLY,
-            COPY_FROM_PARENT,
-            &aux,
-        )?;
-        for (index, payload) in message_chunks(&remove_message(startup_id)).into_iter().enumerate() {
-            let kind = if index == 0 { begin } else { more };
-            let event = ClientMessageEvent::new(8, messenger, kind, payload);
-            conn.send_event(false, root, EventMask::PROPERTY_CHANGE, event)?;
+        target.request_active(time.unwrap_or(0))?;
+        target.end_sequence(startup_id)?;
+        target.conn.sync()?;
+        Ok(())
+    }
+
+    /// This launch's own first window exists: its user time is the launch's, and the sequence ends (what GDK does
+    /// when a GTK app maps its first window; a window manager focuses a new window by itself).
+    pub(super) fn complete_startup(window: &Window, startup_id: &str) -> Result<(), Failure> {
+        let target = Target::of(window)?;
+        if let Some(time) = startup_time(startup_id) {
+            target.set_user_time(time)?;
         }
-        conn.destroy_window(messenger)?;
-        conn.sync()?;
+        target.end_sequence(startup_id)?;
+        target.conn.sync()?;
         Ok(())
     }
 }

@@ -22,7 +22,7 @@ use gpui_kit::{
     Styled, TitlebarOptions, Window, WindowBounds, WindowOptions, div, px, size,
 };
 
-use crate::instance::BusRequest;
+use crate::instance::{Activation, BusRequest};
 use crate::main_loop::{self, GpuiMainLoop};
 use crate::state::{AppState, Poster, post};
 
@@ -118,6 +118,8 @@ pub struct Launch {
     pub app_id: String,
     /// The bus requests other launches send (`instance.rs`), fed into the main loop once the app runs.
     pub requests: async_channel::Receiver<BusRequest>,
+    /// What this launch was handed (read before GPUI started): its own X11 startup sequence ends on the first window.
+    pub activation: Activation,
 }
 
 /// Runs the app until it quits; the exit status.
@@ -186,6 +188,15 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
         tracing::error!(%error, "the control server is not serving");
     }
     open_placeholder(&shell, &launch.app_id, cx);
+    if let Some(window) = shell.window.get()
+        && window
+            .update(cx, |_, window, cx| {
+                crate::activation::launched(window, cx, &launch.activation);
+            })
+            .is_err()
+    {
+        tracing::debug!("activation: the first window is gone");
+    }
     forward_bus_requests(launch.requests, poster.clone(), cx);
     // the last window closing quits, as in the GTK build
     let closing = poster;

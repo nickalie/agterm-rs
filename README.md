@@ -26,8 +26,11 @@ agterm in Rust, Linux first: a GTK4/libadwaita terminal over libghostty, driven 
 - For the native builds: curl, tar, xz, patch, sha256sum and ncurses' `tic`/`infocmp`.
 - For the GTK unit tests: Xvfb's `xvfb-run`, so they get a display of their own instead of the desktop.
 - For the GPUI frontend's process tests (`crates/agterm-gpui/tests`): dbus-daemon, a private bus per test; the ones
-  with a display also need weston, Xvfb, niri (nested in a headless weston) and Mesa's lavapipe (a distribution's
-  `lvp_icd`, an unpacked one under the vendor dir, or `AGTERM_LAVAPIPE_ICD`), and print `SKIPPED:` without them.
+  with a display also need weston, Xvfb and Mesa's lavapipe (`mesa-vulkan-drivers`, an unpacked one under the vendor
+  dir, or `AGTERM_LAVAPIPE_ICD`), and the GTK build's `agterm` beside the binary (`cargo build -p agterm-gtk`). A
+  missing one skips the test (`SKIPPED:`, shown with `--nocapture`) unless `AGTERM_REQUIRE_DISPLAY_TESTS` is set, as
+  CI sets it, which fails it instead. The nested-niri activation check (niri inside a headless weston) is
+  `#[ignore]`d, since CI has no niri: `cargo test -p agterm-gpui --test instance -- --ignored`.
 - For the conformance suite: Python 3.11+ with venv, weston and dbus-daemon (each instance gets its own headless
   weston and bus); zsh or fish as the login shell for the Live tests of that shell.
 
@@ -37,7 +40,7 @@ On Ubuntu 24.04, the CI image's packages plus `xvfb` and `python3-venv` for loca
 sudo apt-get install pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
   meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
   curl xz-utils patch ncurses-bin \
-  weston dbus-daemon libgl1-mesa-dri libegl-mesa0 xvfb python3-venv
+  weston dbus-daemon libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers xvfb python3-venv
 ```
 
 Run-time dependencies of every `agterm` binary:
