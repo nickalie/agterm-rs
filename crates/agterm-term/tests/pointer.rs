@@ -26,6 +26,7 @@ fn click(pane: &Pane, col: u16, row: u16, time: Instant) -> TestResult<Gesture> 
         y,
         time,
         output: false,
+        repeat_interval: agterm_term::CLICK_REPEAT_INTERVAL,
     })?;
     pane.gesture(GestureEvent::Release { x, y })?;
     Ok(gesture)
@@ -61,6 +62,7 @@ fn a_drag_selects_cells_and_past_the_bottom_asks_for_autoscroll() -> TestResult 
         y,
         time: Instant::now(),
         output: false,
+        repeat_interval: agterm_term::CLICK_REPEAT_INTERVAL,
     })?;
     // Ghostty's half-cell rule: a cell joins once the pointer passes its middle
     let (x, y) = at(4, 0);
@@ -76,6 +78,7 @@ fn a_drag_selects_cells_and_past_the_bottom_asks_for_autoscroll() -> TestResult 
         y,
         time: Instant::now() + Duration::from_secs(5),
         output: false,
+        repeat_interval: agterm_term::CLICK_REPEAT_INTERVAL,
     })?;
     let below = f32::from(SIZE.rows) * 16.0 + 40.0;
     let state = pane.gesture(GestureEvent::Drag {

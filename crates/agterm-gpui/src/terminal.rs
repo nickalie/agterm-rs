@@ -507,6 +507,8 @@ impl Shared {
         match spawn(pane_config) {
             Ok(pane) => {
                 pane.set_padding(engine_padding(laid.padding));
+                // the pane's reporting setting starts from the config; `toggle_mouse_reporting` flips it from there
+                pane.set_mouse_reporting(config.mouse.reporting);
                 *self.pane.borrow_mut() = Some(Rc::new(pane));
                 self.status.set(Status::Live);
                 tracing::debug!(target: "agterm::surface", key = self.key, scale = self.scale.get(), "terminal surface created");
@@ -619,6 +621,7 @@ impl Terminal {
     pub fn set_config(&mut self, config: TerminalConfig, cx: &mut Context<Self>) {
         let shared = &self.shared;
         if let Some(pane) = shared.pane() {
+            pane.set_mouse_reporting(config.mouse.reporting);
             let applied = pane
                 .set_colors(&config.theme)
                 .and_then(|()| pane.set_cursor_defaults(config.cursor))
@@ -787,11 +790,6 @@ impl TerminalView {
     pub fn set_font_override(&mut self, points: Option<f32>, cx: &mut Context<Self>) {
         self.font_override = points.map(|points| points.clamp(1.0, 255.0));
         cx.notify();
-    }
-
-    /// Underlines a hovered link: viewport `row`, columns `start..=end`; `None` clears it.
-    pub fn set_hovered_link(&mut self, link: Option<(u16, u16, u16)>, cx: &mut Context<Self>) {
-        self.set_hovered_links(link.into_iter().collect(), cx);
     }
 
     /// Underlines a hovered link that may run over several rows: (viewport row, first column, last column) each.

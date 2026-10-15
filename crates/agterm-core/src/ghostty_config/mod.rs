@@ -45,8 +45,8 @@ use std::path::{Path, PathBuf};
 pub use keys::GHOSTTY_REV;
 pub use model::{
     BackgroundImage, BackgroundImageFit, BackgroundImagePosition, Clipboard, ClipboardAccess, Colors, CopyOnSelect,
-    Cursor, CursorStyle, DEFAULT_TERM, Font, GhosttyConfig, Mouse, MouseShiftCapture, PaddingBalance, PaddingColor,
-    Scrollback, Selection, ShellIntegrationFeatures, WindowPadding,
+    Cursor, CursorStyle, DEFAULT_TERM, Font, GhosttyConfig, MiddleClickAction, Mouse, MouseShiftCapture,
+    PaddingBalance, PaddingColor, RightClickAction, Scrollback, Selection, ShellIntegrationFeatures, WindowPadding,
 };
 pub use parse::{Diagnostic, Loader, Location, Setting, Step, lines};
 pub use validate::{ConfigPath, KeySpec, Padding, TerminalColor, ThemeName};

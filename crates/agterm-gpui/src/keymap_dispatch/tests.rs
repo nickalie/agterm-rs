@@ -33,8 +33,8 @@ fn press(router: &mut Router, text: &str, now: Instant) -> bool {
     }
 }
 
-fn release(router: &mut Router, text: &str, now: Instant) {
-    router.release(stroke(text).identity, now);
+fn release(router: &mut Router, text: &str, now: Instant) -> bool {
+    router.release(stroke(text).identity, now)
 }
 
 fn names(router: &Router) -> Vec<String> {
@@ -56,8 +56,19 @@ fn menu_chords_and_commands_are_consumed_and_others_pass() {
     assert!(press(&mut router, "ctrl-shift-t", now));
     assert!(!press(&mut router, "a", now));
     assert_eq!(names(&router), ["x", "new_session"]);
-    release(&mut router, "ctrl-shift-t", now);
+    assert!(
+        release(&mut router, "ctrl-shift-t", now),
+        "the keymap owns the release of its press"
+    );
+    assert!(
+        release(&mut router, "ctrl-shift-t", now),
+        "told twice (the window's and the terminal's listener)"
+    );
     assert!(!router.consumed.contains(&stroke("t").identity));
+    assert!(
+        !release(&mut router, "a", now),
+        "a passed press's release is the terminal's"
+    );
 }
 
 #[test]

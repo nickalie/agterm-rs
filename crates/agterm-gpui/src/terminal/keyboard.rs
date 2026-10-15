@@ -77,6 +77,17 @@ pub(super) fn window_of(key: u64) -> Option<AnyWindowHandle> {
     })
 }
 
+/// The owner views of every other live terminal than `key`.
+fn other_views(key: u64) -> Vec<WeakEntity<TerminalView>> {
+    OWNERS.with_borrow(|owners| {
+        owners
+            .iter()
+            .filter(|owner| owner.shared.upgrade().is_some_and(|shared| shared.key() != key))
+            .map(|owner| owner.view.clone())
+            .collect()
+    })
+}
+
 /// Every live terminal with an owner view.
 fn all_terminals() -> Vec<Rc<Shared>> {
     OWNERS.with_borrow(|owners| owners.iter().filter_map(|owner| owner.shared.upgrade()).collect())
@@ -116,7 +127,7 @@ pub fn typing_surface(window: &Window, _cx: &App) -> Option<TypingSurface> {
 #[derive(Default)]
 pub(super) struct KeyState {
     /// ghostty's half-typed sequence and active key tables.
-    keyboard: Keyboard,
+    pub(super) keyboard: Keyboard,
     /// The keys a half-typed sequence held back, in order.
     queued: Vec<KeyStroke>,
     /// The focus last reported to the program; `None` before the first report.
@@ -125,11 +136,25 @@ pub(super) struct KeyState {
 }
 
 /// The binds' performer: actions on this terminal ([`TerminalSurface::perform`]), `all:` actions on every terminal,
-/// the sequence's held keys sent on `end_key_sequence`.
+/// the sequence's held keys sent on `end_key_sequence`. An `all:` action of the keyboard itself (the key tables,
+/// `end_key_sequence`) is collected in `broadcast`, for the other terminals' keyboards once the key is handled.
 struct KeyPerformer<'a> {
     surface: &'a TerminalSurface,
     pane: &'a Pane,
     queued: &'a mut Vec<KeyStroke>,
+    broadcast: Vec<Action>,
+}
+
+/// Whether `action` belongs to a terminal's keyboard (`Keyboard::apply`), not to the terminal.
+fn keyboard_action(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::ActivateKeyTable(_)
+            | Action::ActivateKeyTableOnce(_)
+            | Action::DeactivateKeyTable
+            | Action::DeactivateAllKeyTables
+            | Action::EndKeySequence
+    )
 }
 
 impl Performer for KeyPerformer<'_> {
@@ -138,6 +163,11 @@ impl Performer for KeyPerformer<'_> {
     }
 
     fn perform_all(&mut self, action: &Action) {
+        if keyboard_action(action) {
+            // this keyboard already applied it (`Keyboard::fire`); the others take it after the key
+            self.broadcast.push(action.clone());
+            return;
+        }
         let this = self.surface.shared().key();
         let _ = self.surface.perform(action);
         for shared in all_terminals().into_iter().filter(|shared| shared.key() != this) {
@@ -186,8 +216,10 @@ impl TerminalView {
             surface: &surface,
             pane: &pane,
             queued,
+            broadcast: Vec::new(),
         };
         let result = keyboard.handle(&config.keybinds, &stroke.input().binds_event(), &mut performer);
+        let broadcast = std::mem::take(&mut performer.broadcast);
         match result.queued {
             Queued::Keep => {}
             Queued::Flush => send(&self.shared, &pane, queued.drain(..)),
@@ -198,13 +230,38 @@ impl TerminalView {
             KeyEffect::Queue => queued.push(stroke.clone()),
             KeyEffect::Consumed | KeyEffect::Closed | KeyEffect::Ignored => {}
         }
+        for view in other_views(self.shared.key()) {
+            let _ = view.update(cx, |view, cx| view.apply_broadcast(&broadcast, cx));
+        }
         cx.notify();
         true
     }
 
+    /// Another terminal's `all:` binding changed every keyboard: the key tables, or `end_key_sequence` (this
+    /// keyboard's held keys sent).
+    fn apply_broadcast(&mut self, actions: &[Action], cx: &mut Context<Self>) {
+        if actions.is_empty() {
+            return;
+        }
+        let config = self.shared.config();
+        let pane = self.shared.pane().filter(|_| self.shared.is_realized());
+        for action in actions {
+            if self.keys.keyboard.apply(&config.keybinds, action).is_some()
+                && *action == Action::EndKeySequence
+                && let Some(pane) = pane.as_ref()
+            {
+                send(&self.shared, pane, self.keys.queued.drain(..));
+            }
+        }
+        cx.notify();
+    }
+
     /// A key went up while this view held the keyboard.
     pub(super) fn key_up(&mut self, event: &KeyUpEvent, window: &mut Window, cx: &mut Context<Self>) {
-        crate::keymap_dispatch::key_up(event, window, cx);
+        if crate::keymap_dispatch::key_up(event, window, cx) {
+            // the keymap took the press: its release never reaches the program
+            return;
+        }
         let Some(pane) = self.shared.pane().filter(|_| self.shared.is_realized()) else {
             return;
         };
@@ -216,6 +273,7 @@ impl TerminalView {
             surface: &surface,
             pane: &pane,
             queued,
+            broadcast: Vec::new(),
         };
         let result = keyboard.handle(&config.keybinds, &stroke.input().binds_event(), &mut performer);
         if result.effect == KeyEffect::Encode {

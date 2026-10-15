@@ -185,11 +185,14 @@ fn urls_are_found_across_soft_wraps_and_osc8_links_by_their_cells() {
     // Ctrl (or Super) alone makes them live; the hyperlink wins over a URL under it
     let mods = agterm_core::ghostty_config::binds::Mods::CTRL;
     assert_eq!(
-        links::link_at(&pane, &frame, GridPoint::viewport(16, 1), mods).map(|link| link.kind),
+        links::link_at(&pane, &frame, GridPoint::viewport(16, 1), mods, true).map(|link| link.kind),
         Some(LinkKind::Osc8)
     );
     let none = agterm_core::ghostty_config::binds::Mods::empty();
-    assert_eq!(links::link_at(&pane, &frame, GridPoint::viewport(16, 1), none), None);
+    assert_eq!(
+        links::link_at(&pane, &frame, GridPoint::viewport(16, 1), none, true),
+        None
+    );
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -355,13 +358,17 @@ fn the_keymap_takes_its_chords_before_the_binds_and_the_binds_before_the_encoder
     // the encoder: everything else, legacy encoded (`cat -v` shows Ctrl+B's 0x02 as ^B)
     f.type_keys("x ctrl-b enter");
     f.wait_painted("x^B");
+    // nothing the keymap or the binds took reached the program: the line holds exactly what was encoded
     let painted = f.painted();
-    assert!(!painted.contains("^T") && !painted.contains("^A"), "{painted}");
+    assert_eq!(painted.lines().nth(1), Some("x^B"), "{painted}");
     keymap_dispatch::unregister_window(window);
     // an unregistered window has no keymap: the chord is the terminal's
     f.type_keys("ctrl-e enter ctrl-shift-b enter");
     // Ghostty encodes Ctrl+Shift+letter unambiguously, as CSI 98;6u
     f.wait_painted("x^B\n^E\n^[[98;6u");
+    let painted = f.painted();
+    let lines: Vec<&str> = painted.lines().skip(1).take(3).collect();
+    assert_eq!(lines, ["x^B", "^E", "^[[98;6u"]);
     assert!(keymap_dispatch::take_fired().is_empty());
 }
 
@@ -410,7 +417,11 @@ fn a_composition_shows_at_the_cursor_and_its_commit_is_typed(cx: &mut TestAppCon
         });
     });
     assert_eq!(shared.preedit(), None);
-    assert!(!f.painted().contains('x'), "an abandoned composition is never sent");
+    // a key after it reaches the program right behind the committed text: the abandoned `x` never went
+    f.type_keys("z");
+    f.wait_painted("z");
+    let painted = f.painted();
+    assert!(painted.contains("日本z"), "{painted}");
 }
 
 #[gpui_kit::test]
@@ -662,4 +673,255 @@ fn clipboard_reads_ask_by_default_and_are_answered_either_way(cx: &mut TestAppCo
     f.cx.run_until_parked();
     let painted = f.painted();
     assert!(!painted.contains("aGk="), "{painted}");
+}
+
+#[gpui_kit::test]
+fn releasing_a_lone_modifier_puts_out_the_link_it_lit(cx: &mut TestAppContext) {
+    let script = "printf 'ready\\r\\nsee https://example.com/p'; exec sleep 30";
+    let mut f = fixture(cx, script, config(""));
+    f.wait_painted("example.com/p");
+    f.focus();
+    f.cx.simulate_mouse_move(Fixture::at(8, 1), None, Modifiers::default());
+    f.cx.simulate_modifiers_change(Modifiers::control());
+    assert!(
+        f.view.read_with(f.cx, |view, _| view.hovered_link().is_some()),
+        "Ctrl lit it"
+    );
+    // GPUI hands the lone Ctrl's release out as a `control` keystroke: it must reach the modifier listeners
+    f.cx.simulate_modifiers_change(Modifiers::default());
+    assert!(
+        f.view.read_with(f.cx, |view, _| view.hovered_link().is_none()),
+        "released"
+    );
+    f.click(8, 1, Modifiers::default());
+    f.cx.run_until_parked();
+    assert!(
+        !f.events
+            .borrow()
+            .iter()
+            .any(|event| matches!(event, TerminalEvent::OpenUrl(_))),
+        "a plain click opens nothing"
+    );
+}
+
+#[gpui_kit::test]
+fn links_open_with_ctrl_shift_while_the_program_has_the_mouse(cx: &mut TestAppContext) {
+    let script = "stty -echo -icanon; printf '\\033[?1000hready\\r\\nsee https://example.com/p\\r\\n'; exec cat -v";
+    let mut f = fixture(cx, script, config(""));
+    let ctrl_shift = Modifiers {
+        control: true,
+        shift: true,
+        ..Modifiers::default()
+    };
+    f.cx.simulate_mouse_move(Fixture::at(8, 1), None, ctrl_shift);
+    let hovered = f
+        .view
+        .read_with(f.cx, |view, _| view.hovered_link().map(|link| link.url.clone()));
+    assert_eq!(hovered.as_deref(), Some("https://example.com/p"));
+    f.click(8, 1, ctrl_shift);
+    f.cx.run_until_parked();
+    assert!(
+        f.events
+            .borrow()
+            .contains(&TerminalEvent::OpenUrl("https://example.com/p".into()))
+    );
+    assert!(!f.painted().contains("^[[M"), "Shift kept the click from the program");
+}
+
+#[gpui_kit::test]
+fn right_click_follows_right_click_action(cx: &mut TestAppContext) {
+    let script = "stty -echo -icanon; printf 'ready\\r\\nhello world\\r\\n'; exec cat";
+    // paste (agterm's default setting writes it): the selection goes, the clipboard is pasted
+    let mut f = fixture(cx, script, config("right-click-action = paste\n"));
+    f.cx.write_to_clipboard(ClipboardItem::new_string("from-clipboard".into()));
+    f.click(1, 1, Modifiers::default());
+    f.click(1, 1, Modifiers::default());
+    assert_eq!(f.selection().as_deref(), Some("hello"));
+    f.cx.simulate_mouse_down(Fixture::at(1, 1), MouseButton::Right, Modifiers::default());
+    f.cx.simulate_mouse_up(Fixture::at(1, 1), MouseButton::Right, Modifiers::default());
+    f.wait_painted("from-clipboard");
+    assert_eq!(f.selection(), None);
+}
+
+#[gpui_kit::test]
+fn right_click_copy_and_ignore(cx: &mut TestAppContext) {
+    let script = "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30";
+    let mut f = fixture(cx, script, config("right-click-action = copy\n"));
+    f.click(7, 1, Modifiers::default());
+    f.click(7, 1, Modifiers::default());
+    f.cx.simulate_mouse_down(Fixture::at(1, 1), MouseButton::Right, Modifiers::default());
+    f.cx.simulate_mouse_up(Fixture::at(1, 1), MouseButton::Right, Modifiers::default());
+    f.cx.run_until_parked();
+    let copied = f.cx.read_from_clipboard().and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("world"));
+    assert_eq!(f.selection(), None, "copied and dropped");
+}
+
+#[gpui_kit::test]
+fn right_click_ignore_and_context_menu(cx: &mut TestAppContext) {
+    let script = "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30";
+    let f = fixture(cx, script, config("right-click-action = ignore\n"));
+    f.cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("untouched".into())));
+    f.cx.simulate_mouse_down(Fixture::at(1, 1), MouseButton::Right, Modifiers::default());
+    f.cx.simulate_mouse_up(Fixture::at(1, 1), MouseButton::Right, Modifiers::default());
+    assert_eq!(f.selection(), None);
+    // context-menu (Ghostty's default): the word, copied per copy-on-select (the primary selection by default)
+    f.terminal.update(f.cx, |terminal, cx| {
+        terminal.set_config(config("right-click-action = context-menu\n"), cx);
+    });
+    f.cx.simulate_mouse_down(Fixture::at(8, 1), MouseButton::Right, Modifiers::default());
+    f.cx.simulate_mouse_up(Fixture::at(8, 1), MouseButton::Right, Modifiers::default());
+    f.cx.run_until_parked();
+    assert_eq!(f.selection().as_deref(), Some("world"));
+    let primary = f.cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text()));
+    assert_eq!(primary.as_deref(), Some("world"));
+}
+
+#[gpui_kit::test]
+fn middle_click_follows_its_action_and_copy_on_select(cx: &mut TestAppContext) {
+    let script = "stty -echo -icanon; printf 'ready\\r\\n'; exec cat";
+    let mut f = fixture(cx, script, config("middle-click-action = ignore\n"));
+    f.cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("primary-text".into())));
+    f.cx.write_to_clipboard(ClipboardItem::new_string("clipboard-text".into()));
+    let middle = |f: &mut Fixture<'_>| {
+        f.cx.simulate_mouse_down(Fixture::at(1, 1), MouseButton::Middle, Modifiers::default());
+        f.cx.simulate_mouse_up(Fixture::at(1, 1), MouseButton::Middle, Modifiers::default());
+    };
+    middle(&mut f);
+    // under copy-on-select = clipboard, primary-paste reads the clipboard (Ghostty at GHOSTTY_REV)
+    f.terminal.update(f.cx, |terminal, cx| {
+        terminal.set_config(config("copy-on-select = clipboard\n"), cx);
+    });
+    middle(&mut f);
+    f.wait_painted("clipboard-text");
+    f.terminal
+        .update(f.cx, |terminal, cx| terminal.set_config(config(""), cx));
+    middle(&mut f);
+    f.wait_painted("clipboard-textprimary-text");
+}
+
+#[gpui_kit::test]
+fn copy_on_select_false_leaves_the_primary_selection_alone(cx: &mut TestAppContext) {
+    let script = "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30";
+    let mut f = fixture(cx, script, config("copy-on-select = false\n"));
+    f.cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("untouched".into())));
+    f.click(1, 1, Modifiers::default());
+    f.click(1, 1, Modifiers::default());
+    f.cx.run_until_parked();
+    assert_eq!(f.selection().as_deref(), Some("hello"));
+    let primary = f.cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text()));
+    assert_eq!(primary.as_deref(), Some("untouched"));
+}
+
+#[gpui_kit::test]
+fn toggling_mouse_reporting_lasts_past_the_next_event(cx: &mut TestAppContext) {
+    let script = "stty -echo -icanon; printf '\\033[?1000hready\\r\\nhello\\r\\n'; exec cat -v";
+    let mut f = fixture(cx, script, config(""));
+    let shared = f.view.read_with(f.cx, |view, _| Rc::clone(view.shared()));
+    let mut surface = super::TerminalSurface::new(Rc::clone(&shared));
+    assert!(agterm_host::Surface::binding_action(
+        &mut surface,
+        "toggle_mouse_reporting"
+    ));
+    f.click(1, 1, Modifiers::default());
+    f.click(1, 1, Modifiers::default());
+    assert_eq!(f.selection().as_deref(), Some("hello"), "the mouse selects");
+    assert!(!f.painted().contains("^[[M"), "nothing reported");
+}
+
+#[gpui_kit::test]
+fn the_keymaps_chords_release_never_reaches_a_kitty_program(cx: &mut TestAppContext) {
+    // Kitty flags 3: disambiguate and report event types (releases too)
+    let script = "stty -echo -icanon; printf '\\033[>3uready\\r\\n'; exec cat -v";
+    let mut f = fixture(cx, script, config(""));
+    let (keymap, _) = parse_keymap("command \"e\" ctrl+e true\n", &linux_defaults());
+    keymap_dispatch::load_keymap(&keymap);
+    let window = f.cx.update(|window, _| window.window_handle());
+    keymap_dispatch::register_window(window, KeyOrigin::Window(uuid::Uuid::from_u128(2)));
+    f.focus();
+    f.type_keys("ctrl-e x");
+    // x's press and its release (event type 3) arrive; nothing of Ctrl+E (code 101)
+    f.wait_painted("120;1:3u");
+    let painted = f.painted();
+    assert!(!painted.contains("101"), "{painted}");
+    keymap_dispatch::unregister_window(window);
+}
+
+#[gpui_kit::test]
+fn an_all_binding_changes_every_terminals_key_tables(cx: &mut TestAppContext) {
+    let binds = "keybind = vim/j=text:J\nkeybind = all:ctrl+t=activate_key_table:vim\n";
+    let mut f = fixture(cx, "printf 'ready'; exec sleep 30", config(binds));
+    // a second terminal with an owner view in the same app
+    let dir = tempfile::tempdir().unwrap();
+    let command = command("printf 'second'; exec sleep 30", dir.path());
+    let spawn: super::Spawn = Box::new(move |config: PaneConfig| Pane::spawn(&command, &config));
+    let spec = TerminalSpec {
+        token: "second".into(),
+        live: false,
+        font_size: None,
+    };
+    let second =
+        f.cx.update(|_, cx| cx.new(|cx| Terminal::new(spec, config(binds), spawn, cx)));
+    let other =
+        f.cx.update(|_, cx| cx.new(|cx| TerminalView::new(&second, ViewRole::Owner, cx)));
+    f.focus();
+    f.type_keys("ctrl-t");
+    let tables = |view: &Entity<TerminalView>, f: &mut Fixture<'_>| {
+        view.read_with(f.cx, |view, _| {
+            view.keys
+                .keyboard
+                .active_tables()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+    };
+    let own = f.view.clone();
+    assert_eq!(tables(&own, &mut f), ["vim"]);
+    assert_eq!(tables(&other, &mut f), ["vim"], "the other terminal's keyboard too");
+}
+
+#[gpui_kit::test]
+fn adjacent_hyperlinks_stay_apart_and_a_short_repeat_interval_counts_no_double_click(cx: &mut TestAppContext) {
+    let script = "printf 'ready\\r\\n\\033]8;;https://a.test\\033\\\\aaa\\033]8;;https://b.test\\033\\\\bbb\\033]8;;\\033\\\\ x y'; \
+                  exec sleep 30";
+    let mut f = fixture(cx, script, config("click-repeat-interval = 1\n"));
+    f.wait_painted("aaabbb");
+    f.cx.simulate_mouse_move(Fixture::at(4, 1), None, Modifiers::control());
+    let link = f
+        .view
+        .read_with(f.cx, |view, _| view.hovered_link().cloned())
+        .expect("a link");
+    assert_eq!(
+        (link.url.as_str(), link.cells.as_slice()),
+        ("https://b.test", &[(1, 3, 5)][..])
+    );
+    // two clicks 50 ms apart are two single clicks under a 1 ms repeat interval
+    f.click(7, 1, Modifiers::default());
+    std::thread::sleep(Duration::from_millis(50));
+    f.click(7, 1, Modifiers::default());
+    assert_eq!(f.selection(), None, "no word selected");
+}
+
+#[test]
+fn a_native_key_carries_the_lock_keys() {
+    let native = NativeKey {
+        keycode: 44,
+        locks: agterm_core::ghostty_config::binds::Mods::CAPS_LOCK | agterm_core::ghostty_config::binds::Mods::NUM_LOCK,
+        text: "J".into(),
+        unshifted: Some('j'),
+        ascii_layout: true,
+        ..NativeKey::default()
+    };
+    let stroke = KeyStroke::new(&keystroke("j"), &Source::Native(native), false);
+    let mods = agterm_core::ghostty_config::binds::Mods::CAPS_LOCK | agterm_core::ghostty_config::binds::Mods::NUM_LOCK;
+    assert!(stroke.mods.contains(mods));
+    let repeat = NativeKey {
+        keycode: 44,
+        repeat: true,
+        ..NativeKey::default()
+    };
+    assert_eq!(
+        KeyStroke::new(&keystroke("j"), &Source::Native(repeat), false).action,
+        agterm_core::ghostty_config::binds::KeyAction::Repeat
+    );
 }

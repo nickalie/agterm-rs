@@ -60,6 +60,9 @@ struct Router {
     generation: Option<u64>,
     /// Keys whose press was consumed: their autorepeats and release stay consumed.
     consumed: HashSet<u32>,
+    /// Consumed keys already released, until they are pressed again: a second key-up listener (the window's and the
+    /// terminal's both report a release) still learns the release was the keymap's.
+    released: HashSet<u32>,
     /// The fired `--repeat` tail still held down.
     held_repeat: Option<u32>,
     /// When the armed leader or the open repeat window lapses.
@@ -128,10 +131,11 @@ pub fn window_of(origin: KeyOrigin) -> Option<AnyWindowHandle> {
     })
 }
 
-/// A key went up in an agterm window: its consumed press and an open repeat window let go.
-pub fn key_up(event: &KeyUpEvent, _window: &mut Window, _cx: &mut App) {
+/// A key went up in an agterm window: its consumed press and an open repeat window let go. Whether the keymap took
+/// the press, so its release is the keymap's too (the terminal must not report it).
+pub fn key_up(event: &KeyUpEvent, _window: &mut Window, _cx: &mut App) -> bool {
     let stroke = KeyStroke::new(&event.keystroke, &input::current_source(&event.keystroke), true);
-    ROUTER.with_borrow_mut(|router| router.release(stroke.identity, Instant::now()));
+    ROUTER.with_borrow_mut(|router| router.release(stroke.identity, Instant::now()))
 }
 
 /// No agterm window holds the keyboard: releases now land elsewhere, so the consumed keys are forgotten and a repeat
@@ -157,6 +161,11 @@ pub(crate) fn load_keymap(keymap: &agterm_core::keymap::Keymap) {
 
 /// The interceptor (module docs).
 fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
+    // GPUI's keystroke for a lone modifier pressed and released: the modifier change it stands for goes on to the
+    // listeners (a link under the pointer goes dark), never to the keymap or the terminal
+    if is_modifier_release(&event.keystroke) {
+        return;
+    }
     let source = input::current_source(&event.keystroke);
     let stroke = KeyStroke::new(&event.keystroke, &source, false);
     if keeps_keys(event) {
@@ -189,6 +198,17 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
     if crate::terminal::key_down(&stroke, window, cx) {
         cx.stop_propagation();
     }
+}
+
+/// Whether `keystroke` is the one GPUI synthesizes when a lone modifier is released (`shift`, `control`, `alt`,
+/// `platform` or `function`, with no modifier held and no text); a modifier key itself never comes as a key on Linux.
+fn is_modifier_release(keystroke: &gpui_kit::Keystroke) -> bool {
+    keystroke.key_char.is_none()
+        && keystroke.modifiers == gpui_kit::Modifiers::default()
+        && matches!(
+            keystroke.key.as_str(),
+            "shift" | "control" | "alt" | "platform" | "function"
+        )
 }
 
 /// Whether the focused element keeps every key: a text field (an `Input` key context) or a prompt.
@@ -235,6 +255,7 @@ impl Router {
 
     /// One press: whether it is consumed, and what it fired.
     fn press(&mut self, stroke: &KeyStroke, now: Instant) -> Press {
+        self.released.remove(&stroke.identity);
         if self.deadline.is_some_and(|deadline| now >= deadline) {
             self.lapse();
         }
@@ -302,14 +323,19 @@ impl Router {
         }
     }
 
-    fn release(&mut self, identity: u32, now: Instant) {
+    /// A key went up; whether its press was consumed.
+    fn release(&mut self, identity: u32, now: Instant) -> bool {
         if self.held_repeat == Some(identity) {
             self.held_repeat = None;
             if self.engine.as_ref().is_some_and(CustomCommandEngine::is_repeating) {
                 self.deadline = Some(now + REPEAT_TIMEOUT);
             }
         }
-        self.consumed.remove(&identity);
+        if self.consumed.remove(&identity) {
+            self.released.insert(identity);
+            return true;
+        }
+        self.released.contains(&identity)
     }
 
     fn hold_repeat_or_cancel(&mut self, identity: u32) {
@@ -320,6 +346,7 @@ impl Router {
 
     fn keyboard_left(&mut self) {
         self.consumed.clear();
+        self.released.clear();
         self.held_repeat = None;
         if self.engine.as_ref().is_some_and(CustomCommandEngine::is_repeating) {
             self.reset();

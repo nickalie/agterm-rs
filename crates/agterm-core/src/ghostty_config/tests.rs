@@ -526,8 +526,27 @@ fn enum_names<T: IntoEnumIterator + Into<&'static str>>() -> Vec<&'static str> {
 }
 
 #[test]
+fn the_pointer_keys_load_with_ghosttys_defaults() {
+    let defaults = load("").config.mouse;
+    assert_eq!(defaults.right_click_action, RightClickAction::ContextMenu);
+    assert_eq!(defaults.middle_click_action, MiddleClickAction::PrimaryPaste);
+    assert_eq!(defaults.click_repeat_interval, 0);
+    assert!(defaults.link_url);
+    let set = load("right-click-action = copy-or-paste\nmiddle-click-action = ignore\nclick-repeat-interval = 300\nlink-url = false\n")
+        .config
+        .mouse;
+    assert_eq!(set.right_click_action, RightClickAction::CopyOrPaste);
+    assert_eq!(set.middle_click_action, MiddleClickAction::Ignore);
+    assert_eq!(set.click_repeat_interval, 300);
+    assert!(!set.link_url);
+    // an empty value restores the default
+    let reset = load("right-click-action = paste\nright-click-action =\n").config.mouse;
+    assert_eq!(reset.right_click_action, RightClickAction::ContextMenu);
+}
+
+#[test]
 fn the_model_enums_spell_ghosttys_values() {
-    let cases: [(&str, Vec<&str>); 9] = [
+    let cases: [(&str, Vec<&str>); 11] = [
         ("copy-on-select", enum_names::<CopyOnSelect>()),
         ("cursor-style", enum_names::<CursorStyle>()),
         ("background-image-position", enum_names::<BackgroundImagePosition>()),
@@ -537,6 +556,8 @@ fn the_model_enums_spell_ghosttys_values() {
         ("clipboard-read", enum_names::<ClipboardAccess>()),
         ("clipboard-write", enum_names::<ClipboardAccess>()),
         ("mouse-shift-capture", enum_names::<MouseShiftCapture>()),
+        ("right-click-action", enum_names::<RightClickAction>()),
+        ("middle-click-action", enum_names::<MiddleClickAction>()),
     ];
     for (key, names) in cases {
         let Kind::Enum(expected) = kind(key) else {

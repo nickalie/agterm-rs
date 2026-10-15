@@ -59,38 +59,47 @@ impl Link {
     }
 }
 
-/// Whether `mods` make links live: Ctrl or Super alone (Ghostty's `ctrlOrSuper`), Shift ignored while the program
-/// has the mouse and may not capture it.
+/// Whether `mods` make links live: Ctrl or Super alone (Ghostty's `ctrlOrSuper`). The caller drops Shift first while
+/// the program has the mouse and may not capture it (Ghostty's `mouseModsWithCapture`).
 #[must_use]
 pub fn activates(mods: Mods) -> bool {
     let mods = mods.binding();
     mods == Mods::CTRL || mods == Mods::SUPER
 }
 
-/// The link under viewport cell `at` while `mods` make links live: an OSC 8 hyperlink first, then a URL.
+/// The link under viewport cell `at` while `mods` make links live: an OSC 8 hyperlink first, then a URL when `urls`
+/// (`link-url`).
 #[must_use]
-pub fn link_at(pane: &Pane, frame: &Frame, at: GridPoint, mods: Mods) -> Option<Link> {
+pub fn link_at(pane: &Pane, frame: &Frame, at: GridPoint, mods: Mods, urls: bool) -> Option<Link> {
     if !activates(mods) {
         return None;
     }
     let (col, row) = (at.x, u16::try_from(at.y).ok()?);
-    osc8_at(pane, frame, col, row).or_else(|| url_at(frame, col, row))
+    osc8_at(pane, frame, col, row).or_else(|| if urls { url_at(frame, col, row) } else { None })
 }
 
-/// The OSC 8 hyperlink on viewport cell (`col`, `row`).
+/// The OSC 8 hyperlink on viewport cell (`col`, `row`): the run of cells around it carrying the same link.
 #[must_use]
 pub fn osc8_at(pane: &Pane, frame: &Frame, col: u16, row: u16) -> Option<Link> {
     let cells = frame.rows.get(usize::from(row))?.cells();
+    let at = usize::from(col);
+    if !cells
+        .get(at)
+        .is_some_and(|cell| cell.flags.contains(CellFlags::HYPERLINK))
+    {
+        return None;
+    }
+    let url = pane.hyperlink(GridPoint::viewport(col, u32::from(row)))?;
+    // a neighbour of another link (or none) ends the run
     let linked = |index: usize| {
         cells
             .get(index)
             .is_some_and(|cell| cell.flags.contains(CellFlags::HYPERLINK))
+            && u16::try_from(index)
+                .ok()
+                .and_then(|x| pane.hyperlink(GridPoint::viewport(x, u32::from(row))))
+                == Some(url.clone())
     };
-    let at = usize::from(col);
-    if !linked(at) {
-        return None;
-    }
-    let url = pane.hyperlink(GridPoint::viewport(col, u32::from(row)))?;
     let start = (0..=at).rev().take_while(|index| linked(*index)).last().unwrap_or(at);
     let end = (at..cells.len())
         .take_while(|index| linked(*index))

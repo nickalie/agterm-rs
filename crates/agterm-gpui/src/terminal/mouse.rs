@@ -3,14 +3,20 @@
 //!
 //! - A program that turned mouse reporting on gets presses, releases and motion (Shift held keeps the mouse for
 //!   selecting unless `mouse-shift-capture` lets the program have Shift too); the selection then goes.
-//! - Otherwise the left button selects through Ghostty's gesture (`Pane::gesture`: click counts, word and line clicks,
-//!   Ctrl/Super triple-click for command output, Ctrl+Alt for a block, autoscroll every 15 ms past an edge); Shift
-//!   extends the selection; the release copies it to the primary selection (`copy-on-select`'s Linux default);
-//!   `cursor-click-to-move = false` (agterm's default) leaves the shell cursor alone.
-//! - The middle button pastes the primary selection (`middle-click-action = primary-paste`); the right button selects
-//!   the word (or link) under it unless the selection holds that cell (`right-click-action = context-menu`, with no menu
-//!   to show, as in the GTK build).
-//! - Links ([`super::links`]) are refreshed on every move and modifier change, opened on a click.
+//!   Read-only mode (`toggle_readonly`) keeps the mouse from the program; `toggle_mouse_reporting` and
+//!   `mouse-reporting` decide whether it may have it (the config applied when the pane starts or the config changes,
+//!   the pane's current setting read on each event).
+//! - Otherwise the left button selects through Ghostty's gesture (`Pane::gesture`: clicks counted within
+//!   `click-repeat-interval` and a cell's width, word and line clicks, Ctrl/Super triple-click for command output,
+//!   Ctrl+Alt for a block, autoscroll every 15 ms past an edge); Shift extends the selection; the release copies it
+//!   per `copy-on-select` (`Shared::copy_on_select`). ⚠️ `cursor-click-to-move = true` is not carried out (the C API
+//!   has no prompt-click state); agterm's default is `false`.
+//! - The middle button follows `middle-click-action` (`primary-paste`: the primary selection, or the clipboard under
+//!   `copy-on-select = clipboard`, as Ghostty reads it); the right button follows `right-click-action` (`paste`,
+//!   `copy`, `copy-or-paste`, `ignore`, or `context-menu`: the word or link under it selected and copied per
+//!   `copy-on-select`, with no menu to show).
+//! - Links ([`super::links`]) are refreshed on every move and modifier change, opened on a click; while the program
+//!   has the mouse, Shift is not counted (Ghostty's `mouseModsWithCapture`).
 //! - The wheel goes to `Pane::wheel` (alternate scroll, a report, or the viewport) in whole steps: precise deltas
 //!   accumulate per cell height, `mouse-scroll-multiplier` (default `precision:1,discrete:3`) applies.
 //! - The pointer's shape is the program's (OSC 22; the I-beam by default), a hand over a live link. Hiding it while
@@ -20,15 +26,15 @@
 
 use std::time::{Duration, Instant};
 
-use agterm_core::ghostty_config::MouseShiftCapture;
-use agterm_core::ghostty_config::binds::Mods;
+use agterm_core::ghostty_config::binds::{Action, CopyFormat, Mods};
+use agterm_core::ghostty_config::{CopyOnSelect, MiddleClickAction, MouseShiftCapture, RightClickAction};
 use agterm_term::{
     Autoscroll, ClipboardLocation, GestureEvent, GridPoint, MouseAction, MouseButton as PaneButton, MouseInput,
-    MouseShape, Pane, PasteSource, SelectionText, WheelInput,
+    MouseShape, Pane, PasteSource, WheelInput,
 };
 use gpui_kit::{
-    Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase, ElementInputHandler, Entity, Hitbox, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollDelta, ScrollWheelEvent, Task, Window,
+    Bounds, Context, CursorStyle, DispatchPhase, ElementInputHandler, Entity, Hitbox, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollDelta, ScrollWheelEvent, Task, Window,
 };
 
 use super::input::mods;
@@ -198,12 +204,37 @@ impl TerminalView {
 
     /// Whether pointer events go to the program now, Shift's override considered.
     fn reporting(&self, pane: &Pane, mods: Mods) -> bool {
-        if self.shared.is_readonly() {
-            return false;
-        }
-        pane.set_mouse_reporting(self.shared.config().mouse.reporting);
         let shift_override = mods.contains(Mods::SHIFT) && !self.shift_capture();
-        pane.mouse_tracking() && !shift_override
+        self.tracking(pane) && !shift_override
+    }
+
+    /// Whether the program has the mouse: it asked for reports, the pane's reporting setting lets it, and the
+    /// terminal is not read-only.
+    fn tracking(&self, pane: &Pane) -> bool {
+        !self.shared.is_readonly() && pane.mouse_tracking()
+    }
+
+    /// The modifiers links are looked up with: Shift dropped while the program has the mouse and may not capture
+    /// Shift (Ghostty's `mouseModsWithCapture`), since Shift then only takes the mouse back.
+    fn link_mods(&self, pane: &Pane, mods: Mods) -> Mods {
+        if mods.contains(Mods::SHIFT) && !self.shift_capture() && self.tracking(pane) {
+            mods - Mods::SHIFT
+        } else {
+            mods
+        }
+    }
+
+    /// `click-repeat-interval` (0: 500 ms, Ghostty's default off macOS).
+    fn repeat_interval(&self) -> Duration {
+        match self.shared.config().mouse.click_repeat_interval {
+            0 => agterm_term::CLICK_REPEAT_INTERVAL,
+            ms => Duration::from_millis(u64::from(ms)),
+        }
+    }
+
+    /// Performs a binding action on this terminal (the right-click actions are Ghostty's copy and paste).
+    fn perform(&self, action: &Action) -> bool {
+        super::TerminalSurface::new(std::rc::Rc::clone(&self.shared)).perform(action)
     }
 
     /// The cursor the pointer shows over the grid.
@@ -233,10 +264,17 @@ impl TerminalView {
         let position = self.surface_position(event.position, bounds);
         self.pointer.held[index] = true;
         self.pointer.last = Some(position);
-        self.pointer.mods = mods(&event.modifiers);
+        let held = mods(&event.modifiers);
+        let changed = held != self.pointer.mods;
+        self.pointer.mods = held;
         let Some(pane) = self.live_pane() else {
             return;
         };
+        if changed {
+            // the click's own modifiers decide the link under it (a modifier released unseen leaves no live link)
+            let inside = bounds.contains(&event.position);
+            self.refresh_link(&pane, inside.then_some(position), cx);
+        }
         self.press(&pane, index, position, cx);
         cx.notify();
     }
@@ -258,7 +296,7 @@ impl TerminalView {
         }
         match index {
             0 => self.left_press(pane, (x, y)),
-            1 => self.paste_primary(pane, cx),
+            1 => self.middle_press(pane, cx),
             _ => self.right_press(pane, (x, y), cx),
         }
     }
@@ -269,7 +307,7 @@ impl TerminalView {
         let since = self.pointer.last_click.map(|at| at.elapsed());
         pane.gesture_state().click_count > 0
             && pane.selection().is_some()
-            && since.is_some_and(|since| since > agterm_term::CLICK_REPEAT_INTERVAL)
+            && since.is_some_and(|since| since > self.repeat_interval())
     }
 
     fn left_press(&mut self, pane: &Pane, (x, y): (f32, f32)) {
@@ -281,6 +319,7 @@ impl TerminalView {
             y,
             time: now,
             output,
+            repeat_interval: self.repeat_interval(),
         });
         let Ok(gesture) = gesture else {
             return;
@@ -302,21 +341,59 @@ impl TerminalView {
         }
     }
 
-    /// `middle-click-action = primary-paste`.
-    fn paste_primary(&self, pane: &Pane, cx: &mut Context<Self>) {
-        if self.shared.is_readonly() {
+    /// `middle-click-action`: `primary-paste` pastes the primary selection, or the clipboard under
+    /// `copy-on-select = clipboard` (Ghostty's choice at `GHOSTTY_REV`); `ignore` touches nothing.
+    fn middle_press(&self, pane: &Pane, cx: &mut Context<Self>) {
+        let config = self.shared.config();
+        if config.mouse.middle_click_action == MiddleClickAction::Ignore || self.shared.is_readonly() {
             return;
         }
-        let Some(text) = cx.read_from_primary().and_then(|item| item.text()) else {
+        let (item, location) = if config.copy_on_select == CopyOnSelect::Clipboard {
+            (cx.read_from_clipboard(), ClipboardLocation::Standard)
+        } else {
+            (cx.read_from_primary(), ClipboardLocation::Selection)
+        };
+        let Some(text) = item.and_then(|item| item.text()) else {
             return;
         };
-        if let Err(err) = pane.paste(&text, PasteSource::Clipboard, ClipboardLocation::Selection, true) {
-            tracing::warn!(target: "agterm::surface", %err, "the primary selection did not paste");
+        if let Err(err) = pane.paste(&text, PasteSource::Clipboard, location, true) {
+            tracing::warn!(target: "agterm::surface", %err, "the middle-click paste failed");
         }
     }
 
-    /// `right-click-action = context-menu`: the word (or link) under the pointer, unless the selection holds it.
+    /// `right-click-action` (Ghostty's `mouseButtonCallback`): `copy` copies the selection (plain and HTML) to the
+    /// clipboard and drops it, `paste` drops the selection and pastes the clipboard, `copy-or-paste` copies with a
+    /// selection and pastes without one, `context-menu` selects what is under the pointer, `ignore` does nothing.
     fn right_press(&self, pane: &Pane, (x, y): (f32, f32), cx: &mut Context<Self>) {
+        let has_selection = pane.selection().is_some();
+        let copy = |view: &Self| {
+            let _ = view.perform(&Action::CopyToClipboard(CopyFormat::Mixed));
+            let _ = pane.clear_selection();
+        };
+        let paste = |view: &Self| {
+            let _ = view.perform(&Action::PasteFromClipboard);
+        };
+        match self.shared.config().mouse.right_click_action {
+            RightClickAction::Ignore => {}
+            RightClickAction::ContextMenu => self.context_menu_select(pane, (x, y), cx),
+            RightClickAction::Copy => {
+                if has_selection {
+                    copy(self);
+                }
+                let _ = pane.clear_selection();
+            }
+            RightClickAction::CopyOrPaste if has_selection => copy(self),
+            RightClickAction::CopyOrPaste => paste(self),
+            RightClickAction::Paste => {
+                let _ = pane.clear_selection();
+                paste(self);
+            }
+        }
+    }
+
+    /// `right-click-action = context-menu`: the word (or link) under the pointer selected and copied per
+    /// `copy-on-select`, unless the selection holds it.
+    fn context_menu_select(&self, pane: &Pane, (x, y): (f32, f32), _cx: &mut Context<Self>) {
         let at = pane.cell_at(x, y);
         let Some(frame) = self.painted.as_ref() else {
             return;
@@ -332,7 +409,13 @@ impl TerminalView {
         if selected {
             return;
         }
-        let link = links::link_at(pane, frame, at, self.pointer.mods);
+        let link = links::link_at(
+            pane,
+            frame,
+            at,
+            self.link_mods(pane, self.pointer.mods),
+            self.link_url(),
+        );
         let selected = match link
             .as_ref()
             .and_then(|link| Some((link.cells.first()?, link.cells.last()?)))
@@ -347,8 +430,13 @@ impl TerminalView {
             None => pane.select_word(at).unwrap_or(false),
         };
         if selected {
-            copy_to_primary(pane, cx);
+            self.shared.copy_on_select();
         }
+    }
+
+    /// `link-url`: URLs in the text are links.
+    fn link_url(&self) -> bool {
+        self.shared.config().mouse.link_url
     }
 
     pub(super) fn mouse_up(&mut self, event: &MouseUpEvent, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
@@ -380,7 +468,8 @@ impl TerminalView {
     fn left_release(&mut self, pane: &Pane, (x, y): (f32, f32), cx: &mut Context<Self>) -> bool {
         let released = pane.gesture(GestureEvent::Release { x, y });
         self.pointer.autoscroll = None;
-        copy_to_primary(pane, cx);
+        // the selection is copied once the drag ends, not on every move (Ghostty)
+        self.shared.copy_on_select();
         let dragged = released.is_ok_and(|gesture| gesture.dragged);
         let Some(link) = self.pointer.link.clone().filter(|_| !dragged) else {
             return false;
@@ -401,9 +490,8 @@ impl TerminalView {
         let Some(pane) = self.live_pane() else {
             return;
         };
-        pane.set_mouse_reporting(self.shared.config().mouse.reporting);
         // read-only: the program never gets the mouse, which selects as it would without reporting
-        let tracking = !self.shared.is_readonly() && pane.mouse_tracking();
+        let tracking = self.tracking(&pane);
         let shift_override = self.pointer.mods.contains(Mods::SHIFT) && !self.shift_capture();
         let inside = bounds.contains(&event.position);
         if !tracking || shift_override {
@@ -500,9 +588,10 @@ impl TerminalView {
         self.pointer.link_key = key;
         // a drag that left its first cell shows no link until the button is up
         let dragging = self.pointer.held[0] && pane.gesture_state().dragged;
+        let link_mods = self.link_mods(pane, mods);
         let link = at.filter(|_| !dragging).and_then(|at| {
             let frame = self.painted.as_ref()?;
-            links::link_at(pane, frame, at, mods)
+            links::link_at(pane, frame, at, link_mods, self.link_url())
         });
         if link != self.pointer.link {
             let cells = link.as_ref().map(|link| link.cells.clone()).unwrap_or_default();
@@ -558,7 +647,6 @@ impl TerminalView {
         if rows == 0 && columns == 0 {
             return;
         }
-        pane.set_mouse_reporting(self.shared.config().mouse.reporting);
         let wheel = WheelInput {
             rows,
             columns,
@@ -578,12 +666,5 @@ impl TerminalView {
             tracing::debug!(target: "agterm::surface", %err, "wheel failed");
         }
         cx.notify();
-    }
-}
-
-/// `copy-on-select = true` (Ghostty's Linux default): the selection to the primary selection.
-fn copy_to_primary(pane: &Pane, cx: &mut Context<TerminalView>) {
-    if let Some(text) = pane.selection_text(SelectionText::Copy) {
-        cx.write_to_primary(ClipboardItem::new_string(text));
     }
 }

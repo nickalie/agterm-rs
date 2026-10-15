@@ -37,6 +37,8 @@ pub struct NativeKey {
     pub text: String,
     pub composing: bool,
     pub repeat: bool,
+    /// The lock keys on: [`Mods::CAPS_LOCK`] and [`Mods::NUM_LOCK`].
+    pub locks: Mods,
 }
 
 /// Where a key event came from.
@@ -64,6 +66,12 @@ pub fn current_source(keystroke: &Keystroke) -> Source {
             text: native.text,
             composing: native.composing,
             repeat: native.repeat,
+            locks: {
+                let mut locks = Mods::empty();
+                locks.set(Mods::CAPS_LOCK, native.caps_lock);
+                locks.set(Mods::NUM_LOCK, native.num_lock);
+                locks
+            },
         }),
         Some(gpui_linux::NativeInput::Text) => Source::Text,
         _ => Source::Keystroke,
@@ -170,7 +178,7 @@ fn from_native(keystroke: &Keystroke, native: &NativeKey) -> KeyStroke {
             KeyAction::Press
         },
         key: physical_key(native.keycode),
-        mods: mods(&native.modifiers),
+        mods: mods(&native.modifiers) | (native.locks & (Mods::CAPS_LOCK | Mods::NUM_LOCK)),
         consumed: mods(&native.consumed),
         composing: native.composing,
         text: native.text.clone(),

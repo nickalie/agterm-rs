@@ -17,19 +17,21 @@ use crate::PaneError;
 use crate::pane::{Pane, Vt, lock};
 use crate::selection::GridPoint;
 
-/// Ghostty's `click-repeat-interval` on Linux (0 = the platform default, 500 ms off macOS).
+/// Ghostty's `click-repeat-interval` when it is 0 (the platform default, 500 ms off macOS).
 pub const CLICK_REPEAT_INTERVAL: Duration = Duration::from_millis(500);
 
 /// A pointer event for the selection gesture.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GestureEvent {
     /// The left button went down at (`x`, `y`) at `time`; a triple click selects the command output instead of the
-    /// line when `output` (Ghostty: Ctrl or Super held).
+    /// line when `output` (Ghostty: Ctrl or Super held); a press within `repeat_interval` of the last one (and within
+    /// a cell's width) counts as a repeat (`click-repeat-interval`).
     Press {
         x: f32,
         y: f32,
         time: Instant,
         output: bool,
+        repeat_interval: Duration,
     },
     /// The pointer moved with the left button down; `rectangle` selects a block (Ghostty: Ctrl+Alt on Linux).
     Drag { x: f32, y: f32, rectangle: bool },
@@ -105,12 +107,18 @@ impl Vt {
             vt::Point::new(vt::PointTag::Viewport, col, row)
         };
         match event {
-            GestureEvent::Press { x, y, time, output } => vt::GestureInput::Press(vt::GesturePress {
+            GestureEvent::Press {
+                x,
+                y,
+                time,
+                output,
+                repeat_interval,
+            } => vt::GestureInput::Press(vt::GesturePress {
                 at: viewport(x, y),
                 x: f64::from(x),
                 y: f64::from(y),
                 time_ns: time_ns(time),
-                repeat_interval_ns: u64::try_from(CLICK_REPEAT_INTERVAL.as_nanos()).unwrap_or(u64::MAX),
+                repeat_interval_ns: u64::try_from(repeat_interval.as_nanos()).unwrap_or(u64::MAX),
                 repeat_distance: f64::from(self.size.cell_width),
                 behaviors: [
                     vt::GestureBehavior::Cell,

@@ -32,6 +32,10 @@ pub struct NativeKey {
     pub composing: bool,
     /// An autorepeat of a held key.
     pub repeat: bool,
+    /// Caps Lock is on (effective state).
+    pub caps_lock: bool,
+    /// Num Lock is on (effective state).
+    pub num_lock: bool,
     /// The keystroke GPUI dispatched for it.
     pub keystroke: Keystroke,
 }
@@ -116,7 +120,10 @@ mod xkb_key {
                     .unwrap_or_default()
             })
         };
+        let locked = |name: &str| state.mod_name_is_active(name, xkb::STATE_MODS_EFFECTIVE);
         NativeKey {
+            caps_lock: locked(xkb::MOD_NAME_CAPS),
+            num_lock: locked(xkb::MOD_NAME_NUM),
             keycode: keycode.raw(),
             modifiers,
             consumed,

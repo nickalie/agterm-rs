@@ -107,6 +107,32 @@ pub enum ClipboardAccess {
     Ask,
 }
 
+/// `right-click-action`: what a right click does when no program has the mouse.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, EnumIter, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+pub enum RightClickAction {
+    Ignore,
+    /// Paste the clipboard (the selection dropped first).
+    Paste,
+    /// Copy the selection to the clipboard and drop it.
+    Copy,
+    /// Copy when there is a selection, else paste.
+    CopyOrPaste,
+    /// Select the word or link under the pointer for a context menu (ghostty's default).
+    #[default]
+    ContextMenu,
+}
+
+/// `middle-click-action`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, EnumIter, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+pub enum MiddleClickAction {
+    /// Paste the primary selection (ghostty's default).
+    #[default]
+    PrimaryPaste,
+    Ignore,
+}
+
 /// `mouse-shift-capture`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, EnumIter, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
@@ -346,7 +372,8 @@ impl Default for Clipboard {
     }
 }
 
-/// `mouse-*`.
+/// `mouse-*` and the other keys of the pointer: `right-click-action`, `middle-click-action`,
+/// `click-repeat-interval`, `link-url`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mouse {
     pub hide_while_typing: bool,
@@ -354,6 +381,12 @@ pub struct Mouse {
     pub reporting: bool,
     /// `mouse-scroll-multiplier` as written; unset is ghostty's `precision:1,discrete:3`.
     pub scroll_multiplier: Option<String>,
+    pub right_click_action: RightClickAction,
+    pub middle_click_action: MiddleClickAction,
+    /// `click-repeat-interval` in milliseconds; 0 is the platform's default (500 ms off macOS).
+    pub click_repeat_interval: u32,
+    /// `link-url`: URLs in the text are links.
+    pub link_url: bool,
 }
 
 impl Default for Mouse {
@@ -363,6 +396,10 @@ impl Default for Mouse {
             shift_capture: MouseShiftCapture::False,
             reporting: true,
             scroll_multiplier: None,
+            right_click_action: RightClickAction::ContextMenu,
+            middle_click_action: MiddleClickAction::PrimaryPaste,
+            click_repeat_interval: 0,
+            link_url: true,
         }
     }
 }
@@ -526,6 +563,9 @@ impl GhosttyConfig {
         if let Some(rest) = key.strip_prefix("mouse-") {
             return self.mouse.apply(rest, value);
         }
+        if self.mouse.apply_pointer_key(key, value) {
+            return true;
+        }
         self.apply_other(key, value)
     }
 
@@ -666,6 +706,20 @@ impl Mouse {
             "shift-capture" => self.shift_capture = enum_or(value, MouseShiftCapture::False),
             "reporting" => self.reporting = bool_or(value, true),
             "scroll-multiplier" => self.scroll_multiplier = value.map(str::to_owned),
+            _ => return false,
+        }
+        true
+    }
+
+    /// The pointer's keys outside `mouse-*`.
+    fn apply_pointer_key(&mut self, key: &str, value: Option<&str>) -> bool {
+        match key {
+            "right-click-action" => self.right_click_action = enum_or(value, RightClickAction::ContextMenu),
+            "middle-click-action" => self.middle_click_action = enum_or(value, MiddleClickAction::PrimaryPaste),
+            "click-repeat-interval" => {
+                self.click_repeat_interval = value.and_then(|value| value.parse().ok()).unwrap_or(0);
+            }
+            "link-url" => self.link_url = bool_or(value, true),
             _ => return false,
         }
         true

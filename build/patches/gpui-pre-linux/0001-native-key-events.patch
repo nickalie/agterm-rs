@@ -1,10 +1,10 @@
 The native key behind each key event (Task 14 of docs/plans/20261014-gpui-frontend.md): GPUI's `Keystroke` keeps
 neither a key's position nor its layout's unshifted character and drops Shift from symbols, which a terminal needs for
 physical-key bindings and the Kitty keyboard protocol. The Wayland and X11 clients install a `NativeInput` for exactly
-the dispatch of one key event (an RAII scope): a press, each of its Wayland autorepeats (with the press's own record)
-and its release carry `NativeInput::Key` (XKB keycode, modifiers with Shift, consumed modifiers, the layout's level-0
-character and whether that layout types ASCII, the text before Ctrl transformations, composition and repeat flags, the
-keystroke GPUI built); text-input-v3's one-character commit, dispatched as a synthetic key, carries
+the dispatch of one key event (an RAII scope): a press, each of its autorepeats (Wayland's timer with the press's own
+record; on X11 a press of the key still held) and its release carry `NativeInput::Key` (XKB keycode, modifiers with
+Shift, consumed modifiers, Caps Lock and Num Lock, the layout's level-0 character and whether that layout types ASCII,
+the text before Ctrl transformations, composition and repeat flags, the keystroke GPUI built); text-input-v3's one-character commit, dispatched as a synthetic key, carries
 `NativeInput::Text`. `current_native_input()` reads it during the dispatch. And a `text/html` clipboard offer:
 `with_clipboard_html(ClipboardHtml { html, with_text }, write)` makes the clipboard writes inside `write` offer the
 HTML as `text/html` beside the item's text, or alone (Ghostty's `copy_to_clipboard:mixed` and `:html`), from the
@@ -69,7 +69,7 @@ diff -ruN a/src/linux/clipboard_html.rs b/src/linux/clipboard_html.rs
 diff -ruN a/src/linux/native_key.rs b/src/linux/native_key.rs
 --- a/src/linux/native_key.rs
 +++ b/src/linux/native_key.rs
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,141 @@
 +//! The native key behind a key event (an agterm-rs patch): what XKB said about the key GPUI turned into the
 +//! [`gpui::Keystroke`] it dispatches, which keeps neither the key's position nor the layout's unshifted character, and
 +//! drops Shift from symbols. A terminal needs both for physical-key bindings and the Kitty keyboard protocol.
@@ -104,6 +104,10 @@ diff -ruN a/src/linux/native_key.rs b/src/linux/native_key.rs
 +    pub composing: bool,
 +    /// An autorepeat of a held key.
 +    pub repeat: bool,
++    /// Caps Lock is on (effective state).
++    pub caps_lock: bool,
++    /// Num Lock is on (effective state).
++    pub num_lock: bool,
 +    /// The keystroke GPUI dispatched for it.
 +    pub keystroke: Keystroke,
 +}
@@ -188,7 +192,10 @@ diff -ruN a/src/linux/native_key.rs b/src/linux/native_key.rs
 +                    .unwrap_or_default()
 +            })
 +        };
++        let locked = |name: &str| state.mod_name_is_active(name, xkb::STATE_MODS_EFFECTIVE);
 +        NativeKey {
++            caps_lock: locked(xkb::MOD_NAME_CAPS),
++            num_lock: locked(xkb::MOD_NAME_NUM),
 +            keycode: keycode.raw(),
 +            modifiers,
 +            consumed,
@@ -418,7 +425,33 @@ diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
  
  use gpui::{
      AnyWindowHandle, Bounds, ClipboardItem, CursorStyle, FileDropEvent, FrameRequestSource,
-@@ -1151,8 +1154,9 @@
+@@ -225,6 +228,9 @@
+     pub(crate) pre_edit_text: Option<String>,
+     pub(crate) composing: bool,
+     pub(crate) pre_key_char_down: Option<Keystroke>,
++    // The key pressed last and not released since (agterm-rs: the event pump drops the releases between X11's
++    // autorepeats, so a press of this key again is an autorepeat)
++    pub(crate) held_key: Option<u32>,
+     pub(crate) cursor_handle: cursor::Handle,
+     pub(crate) cursor_styles: HashMap<xproto::Window, CursorStyle>,
+     pub(crate) cursor_cache: HashMap<CursorStyle, Option<xproto::Cursor>>,
+@@ -539,6 +545,7 @@
+                 compose_state,
+                 pre_edit_text: None,
+                 pre_key_char_down: None,
++                held_key: None,
+                 composing: false,
+ 
+                 cursor_handle,
+@@ -1075,6 +1082,7 @@
+                 // Set last scroll values to `None` so that a large delta isn't created if scrolling is done outside the window (the valuator is global)
+                 reset_all_pointer_device_scroll_positions(&mut state.pointer_device_states);
+                 state.keyboard_focused_window = None;
++                state.held_key = None;
+                 if let Some(compose_state) = state.compose_state.as_mut() {
+                     compose_state.reset();
+                 }
+@@ -1151,8 +1159,9 @@
                  state.pre_key_char_down.take();
                  let key_event_state = xkb_state_for_key_event(&state.xkb, event.state);
  
@@ -429,7 +462,7 @@ diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
                      let mut keystroke = keystroke_from_xkb(&key_event_state, modifiers, code);
                      let keysym = key_event_state.key_get_one_sym(code);
  
-@@ -1171,6 +1175,7 @@
+@@ -1171,6 +1180,7 @@
                                  }
                              }
                              xkbc::Status::Composing => {
@@ -437,17 +470,18 @@ diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
                                  keystroke.key_char = None;
                                  state.pre_edit_text = compose_state
                                      .utf8()
-@@ -1199,7 +1204,9 @@
+@@ -1199,7 +1209,10 @@
                      }
                      keystroke
                  };
-+                let native = native_key(&key_event_state, modifiers, code, &keystroke, composing);
++                let mut native = native_key(&key_event_state, modifiers, code, &keystroke, composing);
++                native.repeat = state.held_key.replace(code.raw()) == Some(code.raw());
                  drop(state);
 +                let _native = NativeScope::enter(Some(NativeInput::Key(native)));
                  window.handle_input(PlatformInput::KeyDown(gpui::KeyDownEvent {
                      keystroke,
                      is_held: false,
-@@ -1214,8 +1221,8 @@
+@@ -1214,8 +1227,8 @@
                  state.modifiers = modifiers;
                  let key_event_state = xkb_state_for_key_event(&state.xkb, event.state);
  
@@ -457,17 +491,28 @@ diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
                      let keystroke = keystroke_from_xkb(&key_event_state, modifiers, code);
                      let keysym = key_event_state.key_get_one_sym(code);
  
-@@ -1225,7 +1232,9 @@
+@@ -1225,7 +1238,12 @@
  
                      keystroke
                  };
 +                let native = native_key(&key_event_state, modifiers, code, &keystroke, false);
++                if state.held_key == Some(code.raw()) {
++                    state.held_key = None;
++                }
                  drop(state);
 +                let _native = NativeScope::enter(Some(NativeInput::Key(native)));
                  window.handle_input(PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
              }
              Event::XinputButtonPress(event) => {
-@@ -1827,8 +1836,9 @@
+@@ -1606,6 +1624,7 @@
+ 
+     fn handle_keyboard_layout_change(&self) {
+         let mut state = self.0.borrow_mut();
++        state.held_key = None;
+         let layout_idx = state.xkb.serialize_layout(STATE_LAYOUT_EFFECTIVE);
+         let keymap = state.xkb.get_keymap();
+         let layout_name = keymap.layout_get_name(layout_idx);
+@@ -1827,8 +1846,9 @@
          let state = self.0.borrow_mut();
          state
              .clipboard
@@ -478,7 +523,7 @@ diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
                  clipboard::ClipboardKind::Primary,
                  clipboard::WaitConfig::None,
              )
-@@ -1840,8 +1850,9 @@
+@@ -1840,8 +1860,9 @@
          let mut state = self.0.borrow_mut();
          state
              .clipboard

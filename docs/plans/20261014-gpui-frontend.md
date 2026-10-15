@@ -1082,6 +1082,22 @@ headers, rebuilt on `agterm-term` and current GPUI.
     targets and features), lint-report, check-tracing-features, `vendor-gpui.sh --check`, `cargo test --workspace`
     under Xvfb (3746 passed, 0 failed); the new tests and the terminal module 20 times in a row, no failure; full GTK
     conformance: 653 passed, 14 skipped, ratchet holds (665 ids).
+  - Review round 1 (fixes): the pointer's Ghostty keys are typed config now (`Mouse::{right_click_action,
+    middle_click_action, click_repeat_interval, link_url}` in core, ghostty's names, values and defaults at
+    `GHOSTTY_REV`): right clicks follow `right-click-action` (agterm's settings write `paste`/`ignore`), middle clicks
+    `middle-click-action` (reading the clipboard under `copy-on-select = clipboard`, as Ghostty does), clicks count
+    within `click-repeat-interval`, URLs only with `link-url`; selections are copied by Task 13's
+    `Shared::copy_on_select`. Links drop Shift while the program has the mouse (`mouseModsWithCapture`); OSC 8 runs
+    stop at a different link; GPUI's synthetic lone-modifier keystroke goes on to the modifier listeners (a lit link
+    goes dark) and a click refreshes the link with its own modifiers. `toggle_mouse_reporting` lasts (the config is
+    applied when the pane starts or the config changes, not on each event). The release of a press the keymap took
+    never reaches the program. `all:` key-table and `end_key_sequence` actions reach every terminal's keyboard. Native
+    keys carry Caps Lock and Num Lock, and X11 autorepeats are repeats. The unsafe-paste decision was re-checked: the
+    GTK build's `clipboard.rs` completes libghostty's paste confirmation unasked (`clipboard-paste-protection` on by
+    default only raises that request), so no prompt here either. ⚠️ Residuals: `cursor-click-to-move = true` is not
+    carried out (the C API has no prompt-click state; agterm's default is `false`); `focus-follows-mouse` and
+    `selection-word-chars` are not wired (neither does the GTK build's apprt follow the mouse; word boundaries stay
+    Ghostty's defaults); the X11 autorepeat flag has no end-to-end test.
   - Later tasks build on: `keymap_dispatch::{register_window, unregister_window, keyboard_left}` and a window-root
     `capture_key_up` calling `keymap_dispatch::key_up` (Task 18/24/26), `Shared::set_owner`, `TerminalEvent::OpenUrl`
     → the link-open route (Task 18), the full OSC 52 dialog replacing `terminal/clipboard.rs`'s prompt (Task 21).

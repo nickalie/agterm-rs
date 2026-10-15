@@ -228,6 +228,9 @@ pub struct X11ClientState {
     pub(crate) pre_edit_text: Option<String>,
     pub(crate) composing: bool,
     pub(crate) pre_key_char_down: Option<Keystroke>,
+    // The key pressed last and not released since (agterm-rs: the event pump drops the releases between X11's
+    // autorepeats, so a press of this key again is an autorepeat)
+    pub(crate) held_key: Option<u32>,
     pub(crate) cursor_handle: cursor::Handle,
     pub(crate) cursor_styles: HashMap<xproto::Window, CursorStyle>,
     pub(crate) cursor_cache: HashMap<CursorStyle, Option<xproto::Cursor>>,
@@ -542,6 +545,7 @@ impl X11Connection {
                 compose_state,
                 pre_edit_text: None,
                 pre_key_char_down: None,
+                held_key: None,
                 composing: false,
 
                 cursor_handle,
@@ -1078,6 +1082,7 @@ impl X11Client {
                 // Set last scroll values to `None` so that a large delta isn't created if scrolling is done outside the window (the valuator is global)
                 reset_all_pointer_device_scroll_positions(&mut state.pointer_device_states);
                 state.keyboard_focused_window = None;
+                state.held_key = None;
                 if let Some(compose_state) = state.compose_state.as_mut() {
                     compose_state.reset();
                 }
@@ -1204,7 +1209,8 @@ impl X11Client {
                     }
                     keystroke
                 };
-                let native = native_key(&key_event_state, modifiers, code, &keystroke, composing);
+                let mut native = native_key(&key_event_state, modifiers, code, &keystroke, composing);
+                native.repeat = state.held_key.replace(code.raw()) == Some(code.raw());
                 drop(state);
                 let _native = NativeScope::enter(Some(NativeInput::Key(native)));
                 window.handle_input(PlatformInput::KeyDown(gpui::KeyDownEvent {
@@ -1233,6 +1239,9 @@ impl X11Client {
                     keystroke
                 };
                 let native = native_key(&key_event_state, modifiers, code, &keystroke, false);
+                if state.held_key == Some(code.raw()) {
+                    state.held_key = None;
+                }
                 drop(state);
                 let _native = NativeScope::enter(Some(NativeInput::Key(native)));
                 window.handle_input(PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
@@ -1615,6 +1624,7 @@ impl X11Client {
 
     fn handle_keyboard_layout_change(&self) {
         let mut state = self.0.borrow_mut();
+        state.held_key = None;
         let layout_idx = state.xkb.serialize_layout(STATE_LAYOUT_EFFECTIVE);
         let keymap = state.xkb.get_keymap();
         let layout_name = keymap.layout_get_name(layout_idx);
