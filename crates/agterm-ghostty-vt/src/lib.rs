@@ -80,7 +80,7 @@ pub use render::{
     CursorPosition, CursorStyle, Dirty, PendingUpdate, RenderColors, RenderCursor, RenderState, RowId, RowRef, Rows,
 };
 pub use search::{Match, Search, SearchDirection, SearchResults, SearchStatus};
-pub use selection::{Point, PointTag, Selection};
+pub use selection::{Point, PointTag, Selection, SelectionAdjust};
 pub use shape::{Mode, MouseShape, ScrollbackLimits, TerminalColors};
 pub use terminal::{Scroll, Terminal};
 

@@ -24,6 +24,7 @@
 //! [`init`] installs libghostty-vt's process-global hooks (the PNG decoder for Kitty graphics, the log sink into
 //! `tracing`); [`Pane::spawn`] calls it, so a frontend need not.
 
+mod actions;
 #[cfg(test)]
 mod bench;
 mod effects;
@@ -41,6 +42,7 @@ mod selection;
 mod text;
 mod wheel;
 
+pub use actions::{FormatRegion, SelectionAdjust, TextFormat};
 pub use effects::{
     ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardReadRequest, ClipboardWrite, ExitStatus, PaneEvent,
     ProgramNeed, ProgramState, ProgramStatus, Progress, TerminalColors,

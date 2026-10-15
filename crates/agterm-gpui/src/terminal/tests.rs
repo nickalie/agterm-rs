@@ -7,16 +7,19 @@
 //! running agterm). GPUI's test platform draws nothing to a screen; its default text system is a fixed fake (1000
 //! units per em, every ASCII advance 600, ascent 1025, descent -275), the real-font test uses GPUI's Linux text system.
 
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::rc::Rc;
+use std::str::FromStr as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agterm_core::ghostty_config::{GhosttyConfig, PaddingBalance, TerminalColor, WindowPadding};
+use agterm_core::ghostty_config::binds::Action;
+use agterm_core::ghostty_config::{CopyOnSelect, GhosttyConfig, PaddingBalance, TerminalColor, WindowPadding};
 use agterm_host::{Surface, TextScope};
 use agterm_term::{
-    Cell, CellFlags, Colors, CursorPosition, CursorStyle, Frame, GridSize, Pane, PaneCommand, PaneConfig, Rgb,
-    Underline,
+    Cell, CellFlags, Colors, CursorPosition, CursorStyle, Frame, GridPoint, GridSize, Pane, PaneCommand, PaneConfig,
+    Rgb, Underline,
 };
 use gpui_kit::{
     AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _, TestAppContext,
@@ -24,7 +27,7 @@ use gpui_kit::{
 };
 
 use super::colors::{self, Mark, Palette, Pick};
-use super::element::{cursor_shape, lock_cursor};
+use super::element::{cursor_alpha, cursor_colors, cursor_shape, lock_cursor};
 use super::font::{self, Fonts};
 use super::metrics::{self, CellMetrics, FaceMetrics, Geometry, Padding};
 use super::row_cache::{Cluster, Line, RowCache, RowMarks, Span, layout_row, search_marks};
@@ -166,18 +169,38 @@ fn the_cell_comes_from_the_text_systems_face(cx: &mut TestAppContext) {
     assert_eq!((hidpi.cell_width, hidpi.cell_height), (19, 42));
 }
 
-/// `DejaVu Sans Mono`'s file, as fontconfig finds it.
-fn dejavu_sans_mono() -> Vec<u8> {
+/// The file of `family` (whose file name holds `file`), as fontconfig finds it.
+fn font_file(family: &str, file: &str) -> Vec<u8> {
     let output = std::process::Command::new("fc-match")
-        .args(["-f", "%{file}", "DejaVu Sans Mono:style=Book"])
+        .args(["-f", "%{file}", &format!("{family}:style=Book")])
         .output()
         .expect("fc-match runs (fontconfig is installed)");
     let path = String::from_utf8_lossy(&output.stdout).into_owned();
     assert!(
-        path.contains("DejaVuSansMono"),
-        "DejaVu Sans Mono is not installed (fonts-dejavu-core); fontconfig gave {path:?}"
+        path.contains(file),
+        "{family} is not installed (fonts-dejavu-core); fontconfig gave {path:?}"
     );
     std::fs::read(&path).expect("the font file reads")
+}
+
+/// `DejaVu Sans Mono`'s file, as fontconfig finds it.
+fn dejavu_sans_mono() -> Vec<u8> {
+    font_file("DejaVu Sans Mono", "DejaVuSansMono")
+}
+
+/// A test app measuring with GPUI's Linux text system, `DejaVu Sans Mono` and the proportional `DejaVu Sans` loaded.
+fn real_fonts() -> TestAppContext {
+    let text_system = Arc::new(gpui_wgpu::CosmicTextSystem::new_without_system_fonts(
+        "DejaVu Sans Mono",
+    ));
+    let cx = TestAppContext::build_with_text_system(TestDispatcher::new(0), None, text_system);
+    cx.text_system()
+        .add_fonts(vec![
+            dejavu_sans_mono().into(),
+            font_file("DejaVu Sans", "DejaVuSans.").into(),
+        ])
+        .expect("the fonts load");
+    cx
 }
 
 #[test]
@@ -506,6 +529,19 @@ fn the_row_cache_rebuilds_only_rows_that_changed() {
 // cursor
 
 #[test]
+fn cursor_opacity_applies_only_to_a_focused_cursor() {
+    let mut config = GhosttyConfig::default();
+    config.cursor.opacity = 0.5;
+    let palette = Palette::from_config(&config);
+    assert_eq!(cursor_alpha(true, &palette), 128);
+    assert_eq!(
+        cursor_alpha(false, &palette),
+        255,
+        "the hollow cursor of an unfocused view is opaque"
+    );
+}
+
+#[test]
 fn the_cursor_shape_follows_focus_blink_and_visibility() {
     let mut cursor = agterm_term::Cursor {
         position: Some(CursorPosition {
@@ -616,7 +652,8 @@ fn wait_painted(view: &Entity<TerminalView>, cx: &mut VisualTestContext, needle:
 #[gpui_kit::test]
 fn the_owner_starts_the_pane_at_its_grid_and_resizes_it(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
-    let terminal = terminal(cx, "printf 'ready'; read _; stty size; exec cat", dir.path());
+    let script = "printf 'ready'; read _; stty size; read _; stty size; exec cat";
+    let terminal = terminal(cx, script, dir.path());
     let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
     assert!(!shared.is_realized(), "no pane before a view lays it out");
     let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(&terminal, ViewRole::Owner, cx));
@@ -634,10 +671,11 @@ fn the_owner_starts_the_pane_at_its_grid_and_resizes_it(cx: &mut TestAppContext)
     wait_painted(&view, cx, "22 63");
     cx.simulate_resize(size(px(320.), px(240.)));
     settle(cx, |_| shared.laid.get().is_some_and(|laid| laid.grid.cols == 31));
-    shared.pane().unwrap().write(b"stty size\n").unwrap();
-    wait_painted(&view, cx, "stty size");
-    let painted = painted_text(&view, cx);
-    assert!(painted.contains("ready"), "{painted}");
+    // the pane itself was resized: its program sees the new size
+    shared.pane().unwrap().write(b"\n").unwrap();
+    wait_painted(&view, cx, "11 31");
+    let frame = view.read_with(cx, |view, _| view.painted().cloned()).unwrap();
+    assert_eq!((frame.cols, frame.rows.len()), (31, 11));
 }
 
 #[gpui_kit::test]
@@ -777,6 +815,100 @@ fn the_focused_cursor_blinks_and_an_unfocused_one_does_not(cx: &mut TestAppConte
     );
 }
 
+#[gpui_kit::test]
+fn a_cursor_a_program_starts_blinking_while_idle_blinks(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    // a steady cursor, then the program asks for a blinking one and goes quiet
+    let script = "stty -echo; printf '\\033[2 qsteady'; read _; printf '\\033[1 q'; exec sleep 5";
+    let terminal = terminal(cx, script, dir.path());
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(&terminal, ViewRole::Owner, cx));
+    cx.update(|window, cx| {
+        let focus = view.read(cx).focus.clone();
+        window.focus(&focus, cx);
+    });
+    wait_painted(&view, cx, "steady");
+    cx.executor().advance_clock(super::BLINK_INTERVAL);
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.blink_on()), "steady: no blink");
+    let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
+    shared.pane().unwrap().write(b"\n").unwrap();
+    settle(cx, |cx| {
+        view.read_with(cx, |view, _| view.painted().is_some_and(|frame| frame.cursor.blinking))
+    });
+    // no render follows the frame that turned blinking on: prepaint started the timer itself
+    cx.executor().advance_clock(super::BLINK_INTERVAL);
+    cx.run_until_parked();
+    assert!(!view.read_with(cx, |view, _| view.blink_on()), "the off phase");
+}
+
+#[gpui_kit::test]
+fn the_cursor_takes_the_background_of_an_erased_cell(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    // the cursor's cell is blank but erased with a blue background
+    let script = "printf 'ready\\r\\n\\033[44m\\033[K'; exec sleep 5";
+    let (_terminal, view, _events, cx) = realized(cx, script, dir.path());
+    let frame = view.read_with(cx, |view, _| view.painted().cloned()).unwrap();
+    let cursor = frame.cursor.position.unwrap();
+    let blue = frame.colors.palette[4];
+    let palette = Palette {
+        cursor_color: Some(Pick::CellBackground),
+        cursor_text: Some(Pick::CellBackground),
+        ..Palette::default()
+    };
+    let (color, text) = cursor_colors(&frame, cursor.column, cursor.row, &palette);
+    assert_eq!((color, text), (blue, blue));
+}
+
+#[gpui_kit::test]
+fn a_cell_change_without_a_font_action_is_reported(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (terminal, _view, events, cx) = realized(cx, "printf 'ready'; exec sleep 5", dir.path());
+    events.borrow_mut().clear();
+    // a display of another scale
+    cx.simulate_scale_factor_change(2.0);
+    settle(cx, |_| events.borrow().contains(&TerminalEvent::FontSize));
+    let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
+    assert!((shared.scale() - 2.0).abs() < f32::EPSILON);
+}
+
+/// A terminal that never starts its pane (no view lays it out), with `family` as its font.
+fn unstarted(cx: &mut TestAppContext, family: &str) -> (Entity<Terminal>, Events) {
+    let mut config = TerminalConfig::default();
+    config.font.family = vec![family.to_owned()];
+    let spawn: Spawn = Box::new(|_| Err(agterm_term::PaneError::Spawn("never started".into())));
+    let terminal = cx.new(|cx| Terminal::new(spec(), config, spawn, cx));
+    let events: Events = Rc::default();
+    let seen = Rc::clone(&events);
+    cx.update(|cx| {
+        cx.subscribe(&terminal, move |_, event: &TerminalEvent, _| {
+            seen.borrow_mut().push(event.clone());
+        })
+        .detach();
+    });
+    (terminal, events)
+}
+
+#[test]
+fn a_config_whose_fonts_change_the_cell_reports_it() {
+    let mut cx = real_fonts();
+    let (terminal, events) = unstarted(&mut cx, "DejaVu Sans Mono");
+    let shared = terminal.read_with(&cx, |terminal, _| Rc::clone(terminal.shared()));
+    let mono = shared.cell_size();
+    assert_eq!(mono, (10.0, 19.0));
+    // the proportional face's widest ASCII advance makes a wider cell
+    let mut config = TerminalConfig::default();
+    config.font.family = vec!["DejaVu Sans".into()];
+    terminal.update(&mut cx, |terminal, cx| terminal.set_config(config.clone(), cx));
+    cx.run_until_parked();
+    assert!(shared.cell_size().0 > mono.0, "{:?}", shared.cell_size());
+    assert_eq!(*events.borrow(), [TerminalEvent::FontSize]);
+    // a reload that keeps the cell (another background) reports nothing
+    config.theme.background = Rgb::new(1, 2, 3);
+    terminal.update(&mut cx, |terminal, cx| terminal.set_config(config, cx));
+    cx.run_until_parked();
+    assert_eq!(events.borrow().len(), 1);
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // the Surface
 
@@ -879,18 +1011,76 @@ fn font_actions_change_the_size_and_the_cell_at_once(cx: &mut TestAppContext) {
     settle(cx, |_| shared.laid.get().is_some_and(|laid| laid.grid.cell_width == 19));
 }
 
+fn perform(terminal: &Entity<Terminal>, cx: &mut VisualTestContext, action: &str) -> bool {
+    let action = Action::from_str(action).expect("a valid action");
+    terminal
+        .read_with(cx, |terminal, _| terminal.surface())
+        .perform(&action)
+}
+
+/// Each action and whether it must be performed, in order.
+fn expect_performed(terminal: &Entity<Terminal>, cx: &mut VisualTestContext, cases: &[(&str, bool)]) {
+    for (action, performed) in cases {
+        assert_eq!(perform(terminal, cx, action), *performed, "{action}");
+    }
+}
+
+fn clipboard_text(cx: &mut VisualTestContext) -> String {
+    cx.read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap_or_default()
+}
+
+fn primary_text(cx: &mut VisualTestContext) -> String {
+    cx.update(|_, cx| cx.read_from_primary())
+        .and_then(|item| item.text())
+        .unwrap_or_default()
+}
+
 #[gpui_kit::test]
-fn search_actions_and_teardown(cx: &mut TestAppContext) {
+fn search_actions_report_performed_as_libghostty_did(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, view, events, cx) = realized(cx, "printf 'ready'; exec cat", dir.path());
+    // nothing open: neither is performed, so the default `performable:escape=end_search` lets Escape through
+    expect_performed(
+        &terminal,
+        cx,
+        &[
+            ("end_search", false),
+            ("search:", false),
+            ("search:ready", true),
+            ("navigate_search:next", true),
+            ("end_search", true),
+            ("end_search", false),
+            ("navigate_search:next", false),
+            ("search_selection", false),
+            ("select_all", true),
+            ("search_selection", true),
+        ],
+    );
+    // the Surface accepts any action of a realized terminal, an unknown one too
     let mut surface = surface(&terminal, cx);
-    // an unknown action is still accepted, as libghostty's were
-    for action in ["search:ready", "start_search", "end_search", "not_an_action"] {
+    for action in ["start_search", "end_search", "not_an_action"] {
         assert!(surface.binding_action(action), "{action}");
     }
     cx.run_until_parked();
-    assert!(events.borrow().contains(&TerminalEvent::StartSearch));
-    assert!(events.borrow().contains(&TerminalEvent::EndSearch));
+    let seen = events.borrow().clone();
+    for event in [
+        TerminalEvent::StartSearch("ready".into()),
+        TerminalEvent::StartSearch(String::new()),
+        TerminalEvent::EndSearch,
+    ] {
+        assert!(seen.contains(&event), "{event:?} in {seen:?}");
+    }
+    teardown_kills_the_shell(&terminal, &view, surface, cx);
+}
+
+fn teardown_kills_the_shell(
+    terminal: &Entity<Terminal>,
+    view: &Entity<TerminalView>,
+    surface: Box<dyn Surface>,
+    cx: &mut VisualTestContext,
+) {
     let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
     let pid = shared.pane().and_then(|pane| pane.pid()).unwrap();
     surface.teardown();
@@ -907,6 +1097,242 @@ fn search_actions_and_teardown(cx: &mut TestAppContext) {
         view.read_with(cx, |view, _| view.painted().is_none()),
         "a torn-down terminal draws nothing"
     );
+}
+
+/// Performs `action`, then the clipboard's text.
+fn copied(terminal: &Entity<Terminal>, cx: &mut VisualTestContext, action: &str) -> String {
+    assert!(perform(terminal, cx, action), "{action}");
+    cx.run_until_parked();
+    clipboard_text(cx)
+}
+
+#[gpui_kit::test]
+fn copy_actions_follow_their_formats(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (terminal, _view, _events, cx) = realized(cx, "printf 'ready \\033[31mred\\033[0m'; exec cat", dir.path());
+    assert!(!perform(&terminal, cx, "copy_to_clipboard"), "no selection");
+    assert!(perform(&terminal, cx, "select_all"));
+    cx.run_until_parked();
+    // select_all copies to the selection clipboard, as copy-on-select does
+    assert!(primary_text(cx).starts_with("ready red"));
+    assert!(copied(&terminal, cx, "copy_to_clipboard:plain").starts_with("ready red"));
+    assert!(
+        copied(&terminal, cx, "copy_to_clipboard:vt").contains("\x1b["),
+        "VT sequences kept"
+    );
+    assert!(
+        copied(&terminal, cx, "copy_to_clipboard:mixed").starts_with("ready red"),
+        "its plain text"
+    );
+    // HTML has no text/html offer to go to: performed, the clipboard left alone
+    assert!(copied(&terminal, cx, "copy_to_clipboard:html").starts_with("ready red"));
+}
+
+/// Takes `copy-on-select` and the trim, runs `select_all`, and reads both clipboards back.
+fn select_all_copies(
+    terminal: &Entity<Terminal>,
+    cx: &mut VisualTestContext,
+    copy_on_select: CopyOnSelect,
+    trim: bool,
+) -> (String, String) {
+    let config = TerminalConfig {
+        copy_on_select,
+        copy_trim: trim,
+        ..TerminalConfig::default()
+    };
+    terminal.update(cx, |terminal, cx| terminal.set_config(config, cx));
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("standard".into()));
+    cx.update(|_, cx| cx.write_to_primary(gpui_kit::ClipboardItem::new_string("primary".into())));
+    assert!(perform(terminal, cx, "select_all"));
+    cx.run_until_parked();
+    (clipboard_text(cx), primary_text(cx))
+}
+
+#[gpui_kit::test]
+fn select_all_copies_per_copy_on_select(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (terminal, _view, _events, cx) = realized(cx, "printf 'ready  \\r\\nnext'; exec cat", dir.path());
+    assert_eq!(
+        select_all_copies(&terminal, cx, CopyOnSelect::False, true),
+        ("standard".to_owned(), "primary".to_owned())
+    );
+    assert_eq!(
+        select_all_copies(&terminal, cx, CopyOnSelect::True, true),
+        ("standard".to_owned(), "ready\nnext".to_owned())
+    );
+    // `clipboard` copies to both; without the trim the trailing blanks stay
+    assert_eq!(
+        select_all_copies(&terminal, cx, CopyOnSelect::Clipboard, false),
+        ("ready  \nnext".to_owned(), "ready  \nnext".to_owned())
+    );
+}
+
+#[gpui_kit::test]
+fn search_selection_takes_the_selection_untrimmed(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (terminal, _view, events, cx) = realized(cx, "printf 'ready  x'; exec cat", dir.path());
+    let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
+    let pane = shared.pane().unwrap();
+    pane.select(GridPoint::viewport(0, 0), GridPoint::viewport(6, 0), false)
+        .unwrap();
+    assert!(perform(&terminal, cx, "search_selection"));
+    cx.run_until_parked();
+    assert!(events.borrow().contains(&TerminalEvent::StartSearch("ready  ".into())));
+}
+
+#[gpui_kit::test]
+fn the_url_and_title_copies_follow_the_gtk_build(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (terminal, _view, _events, cx) = realized(cx, "printf 'ready'; exec cat", dir.path());
+    // neither the GTK build nor upstream copies the title; a URL only with a link under the pointer
+    assert!(!perform(&terminal, cx, "copy_title_to_clipboard"));
+    assert!(!perform(&terminal, cx, "copy_url_to_clipboard"));
+    let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
+    shared.set_hovered_url(Some("https://example.org/".into()));
+    assert_eq!(copied(&terminal, cx, "copy_url_to_clipboard"), "https://example.org/");
+}
+
+/// The screen file a `write_*_file:copy` put its path of on the clipboard, by name, with its text; its directory is
+/// removed.
+fn take_screen_file(cx: &mut VisualTestContext) -> (String, String) {
+    cx.run_until_parked();
+    let path = std::path::PathBuf::from(clipboard_text(cx));
+    let text = std::fs::read_to_string(&path).expect("the screen file exists");
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "readable by the user only");
+    let name = path.file_name().unwrap().to_string_lossy().into_owned();
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    (name, text)
+}
+
+/// The path of the first `OpenUrl` event.
+fn opened(events: &Events) -> Option<std::path::PathBuf> {
+    events.borrow().iter().find_map(|event| match event {
+        TerminalEvent::OpenUrl(path) => Some(std::path::PathBuf::from(path)),
+        _ => None,
+    })
+}
+
+#[gpui_kit::test]
+fn screen_files_are_written_and_copied(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (terminal, _view, events, cx) = realized(cx, "printf 'ready \\033[31mred\\033[0m'; exec cat", dir.path());
+    assert!(perform(&terminal, cx, "write_screen_file:copy"));
+    let (name, text) = take_screen_file(cx);
+    assert_eq!(name, "screen.txt");
+    assert!(text.starts_with("ready red"), "{text:?}");
+    assert!(perform(&terminal, cx, "write_screen_file:copy,html"));
+    let (name, text) = take_screen_file(cx);
+    assert_eq!(name, "screen.html");
+    assert!(text.contains('<'));
+    // no scrollback and no selection: nothing to write, performed all the same
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("kept".into()));
+    assert!(perform(&terminal, cx, "write_scrollback_file:copy"));
+    assert!(perform(&terminal, cx, "write_selection_file:open"));
+    cx.run_until_parked();
+    assert_eq!(clipboard_text(cx), "kept");
+    assert_eq!(opened(&events), None);
+}
+
+#[gpui_kit::test]
+fn screen_files_are_opened_and_pasted(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (terminal, view, events, cx) = realized(cx, "printf 'ready'; exec cat", dir.path());
+    // open hands the file to the frontend's opener; paste types its path into the program (shown by the tty's echo:
+    // with no newline after it, `cat` has not read it yet)
+    assert!(perform(&terminal, cx, "select_all"));
+    assert!(perform(&terminal, cx, "write_selection_file:open"));
+    cx.run_until_parked();
+    let path = opened(&events).expect("an open request");
+    assert_eq!(path.file_name().unwrap(), "selection.txt");
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    assert!(perform(&terminal, cx, "write_screen_file:paste"));
+    wait_painted(&view, cx, "screen.txt");
+    let painted = painted_text(&view, cx);
+    // typed right after the program's "ready"
+    let word = painted
+        .split_whitespace()
+        .find(|word| word.ends_with("screen.txt"))
+        .unwrap();
+    let pasted = Path::new(&word[word.find('/').unwrap()..]);
+    assert!(std::fs::read_to_string(pasted).unwrap().starts_with("ready"));
+    std::fs::remove_dir_all(pasted.parent().unwrap()).unwrap();
+}
+
+#[gpui_kit::test]
+fn scroll_selection_and_mouse_actions(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (terminal, view, _events, cx) = realized(cx, "seq 1 40; printf 'ready'; exec cat", dir.path());
+    expect_performed(
+        &terminal,
+        cx,
+        &[
+            ("adjust_selection:left", false),
+            ("scroll_to_selection", false),
+            ("scroll_to_row:0", true),
+        ],
+    );
+    settle(cx, |cx| painted_text(&view, cx).starts_with("1\n2"));
+    expect_performed(
+        &terminal,
+        cx,
+        &[
+            ("scroll_to_bottom", true),
+            ("select_all", true),
+            ("adjust_selection:left", true),
+            ("scroll_to_selection", true),
+            ("toggle_mouse_reporting", true),
+        ],
+    );
+    settle(cx, |cx| painted_text(&view, cx).starts_with("1\n2"));
+    let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
+    assert!(!shared.pane().unwrap().mouse_reporting());
+}
+
+#[gpui_kit::test]
+fn read_only_keeps_the_users_input_from_the_program(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (terminal, view, events, cx) = realized(cx, "stty -echo; printf 'ready'; exec cat", dir.path());
+    let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
+    assert!(perform(&terminal, cx, "toggle_readonly"));
+    assert!(shared.is_readonly());
+    let mut surface = surface(&terminal, cx);
+    assert!(surface.type_text("typed\n"), "accepted, as libghostty's key path was");
+    assert!(perform(&terminal, cx, "text:bound"), "performed, its bytes dropped");
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("pasted".into()));
+    assert!(perform(&terminal, cx, "paste_from_clipboard"));
+    cx.run_until_parked();
+    assert!(perform(&terminal, cx, "toggle_readonly"));
+    assert!(surface.type_text("after\n"));
+    wait_painted(&view, cx, "after");
+    let painted = painted_text(&view, cx);
+    assert!(
+        !["typed", "bound", "pasted"].iter().any(|text| painted.contains(text)),
+        "{painted}"
+    );
+    let seen = events.borrow().clone();
+    assert!(seen.contains(&TerminalEvent::Readonly(true)) && seen.contains(&TerminalEvent::Readonly(false)));
+}
+
+#[gpui_kit::test]
+fn clear_screen_and_reset(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (terminal, view, _events, cx) = realized(cx, "seq 1 40; printf 'ready'; exec cat", dir.path());
+    // clear_screen drops the scrollback and the rows above the cursor; reset wipes the terminal
+    assert!(perform(&terminal, cx, "clear_screen"));
+    settle(cx, |cx| painted_text(&view, cx).trim_end() == "ready");
+    let surface = surface(&terminal, cx);
+    let all = surface.read_text(TextScope::All).unwrap_or_default();
+    assert_eq!(all.trim_end(), "ready");
+    assert!(perform(&terminal, cx, "reset"));
+    settle(cx, |cx| painted_text(&view, cx).trim().is_empty());
+}
+
+#[gpui_kit::test]
+fn clear_screen_is_not_performed_on_the_alternate_screen(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (terminal, _view, _events, cx) = realized(cx, "printf '\\033[?1049hready'; exec cat", dir.path());
+    assert!(!perform(&terminal, cx, "clear_screen"));
 }
 
 #[gpui_kit::test]

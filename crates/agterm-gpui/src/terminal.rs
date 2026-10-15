@@ -33,10 +33,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use agterm_core::ghostty_config::{self, GhosttyConfig};
+use agterm_core::ghostty_config::{self, CopyOnSelect, GhosttyConfig};
 use agterm_term::{
-    ClipboardLocation, CursorDefaults, Frame, GridSize, Pane, PaneConfig, PaneError, PaneEvent, Paste, PasteSource,
-    ScrollbackLimits, ThemeColors,
+    ClipboardLocation, CursorDefaults, FormatRegion, Frame, GridSize, Pane, PaneConfig, PaneError, PaneEvent, Paste,
+    PasteSource, ScrollbackLimits, TextFormat, ThemeColors,
 };
 use gpui_kit::{
     App, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
@@ -59,6 +59,12 @@ pub struct TerminalConfig {
     pub theme: ThemeColors,
     pub cursor: CursorDefaults,
     pub scrollback: ScrollbackLimits,
+    /// `clipboard-trim-trailing-spaces`: copies drop trailing whitespace.
+    pub copy_trim: bool,
+    /// `selection-clear-on-copy`.
+    pub clear_selection_on_copy: bool,
+    /// `copy-on-select`: where a selection made is copied ([`Shared::copy_on_select`]).
+    pub copy_on_select: CopyOnSelect,
 }
 
 impl TerminalConfig {
@@ -71,6 +77,9 @@ impl TerminalConfig {
             theme: ThemeColors::from_config(&config.colors, &config.cursor),
             cursor: CursorDefaults::from_config(&config.cursor),
             scrollback: config.scrollback.into(),
+            copy_trim: config.clipboard.trim_trailing_spaces,
+            clear_selection_on_copy: config.selection.clear_on_copy,
+            copy_on_select: config.copy_on_select,
         }
     }
 }
@@ -108,12 +117,17 @@ pub enum TerminalEvent {
     /// The live font size changed, and the cell with it (GTK's font-size and cell-size reports): read them from
     /// [`Shared::font_points`] and [`Shared::cell_size`].
     FontSize,
-    /// A `start_search` binding: the frontend opens its search UI.
-    StartSearch,
+    /// A `start_search` binding (an empty needle) or `search_selection` (the selection as the needle): the frontend
+    /// opens its search UI with the needle.
+    StartSearch(String),
     /// An `end_search` binding ended the search.
     EndSearch,
     /// A paste was refused as unsafe (it could run a command): the frontend confirms and pastes it again.
     UnsafePaste(String),
+    /// `write_*_file:open`: the frontend opens the file (its open-url path), as libghostty's `OPEN_URL` asked.
+    OpenUrl(String),
+    /// `toggle_readonly` turned read-only mode on or off: the frontend shows it.
+    Readonly(bool),
 }
 
 /// Work that needs the app, queued by the Surface for the pump.
@@ -172,6 +186,10 @@ pub struct Shared {
     drew: Cell<bool>,
     /// The owner view's input-method composition, shown at the cursor (Task 14 drives it).
     preedit: RefCell<Option<String>>,
+    /// Ghostty's read-only mode (`toggle_readonly`): the user's input does not reach the program.
+    readonly: Cell<bool>,
+    /// The URL of the link under the pointer (`copy_url_to_clipboard`; Task 14's hover sets it).
+    hovered_url: RefCell<Option<String>>,
 }
 
 impl std::fmt::Debug for Shared {
@@ -300,6 +318,53 @@ impl Shared {
         self.poke();
     }
 
+    /// Read-only (`toggle_readonly`): the user's input paths (keys, typing, pastes, mouse reports) leave the program
+    /// alone; the terminal's own replies still go.
+    #[must_use]
+    pub fn is_readonly(&self) -> bool {
+        self.readonly.get()
+    }
+
+    pub fn set_readonly(&self, readonly: bool) {
+        self.readonly.set(readonly);
+    }
+
+    /// The URL of the hovered link, which `copy_url_to_clipboard` copies.
+    #[must_use]
+    pub fn hovered_url(&self) -> Option<String> {
+        self.hovered_url.borrow().clone()
+    }
+
+    /// Sets or clears the hovered link's URL (Task 14's hover tracking).
+    pub fn set_hovered_url(&self, url: Option<String>) {
+        *self.hovered_url.borrow_mut() = url;
+    }
+
+    /// A selection was made (`select_all`, and the mouse's selection in Task 14): Ghostty's `setSelectionAndCopy`
+    /// copies it per `copy-on-select`: not at all, to the selection clipboard, or to it and the system clipboard; the
+    /// text as `copy_to_clipboard` formats it (`clipboard-trim-trailing-spaces`; the plain part of Ghostty's mixed
+    /// copy, GPUI's clipboard taking text only). An empty selection copies nothing.
+    pub fn copy_on_select(&self) {
+        let config = self.config();
+        let locations: &[ClipboardLocation] = match config.copy_on_select {
+            CopyOnSelect::False => return,
+            CopyOnSelect::True => &[ClipboardLocation::Selection],
+            CopyOnSelect::Clipboard => &[ClipboardLocation::Standard, ClipboardLocation::Selection],
+        };
+        let Some(pane) = self.pane() else {
+            return;
+        };
+        let Some(text) = pane
+            .format(FormatRegion::Selection, TextFormat::Plain, config.copy_trim)
+            .filter(|text| !text.is_empty())
+        else {
+            return;
+        };
+        for location in locations {
+            self.queue(Effect::Copy(text.clone(), *location));
+        }
+    }
+
     /// Wakes the pump: the queued work runs and the views redraw.
     pub fn poke(&self) {
         let _ = self.wake.try_send(());
@@ -329,7 +394,12 @@ impl Shared {
     /// The owner view laid the grid out at `scale`: record it, resize a live pane, and report whether the pane waits
     /// for its first size (the caller defers [`Shared::spawn`]).
     fn lay_out(&self, scale: f32, laid: Laid) -> bool {
+        let cell = self.cell_size();
         self.scale.set(scale);
+        if self.cell_size() != cell {
+            // a display of another scale: the cell changed as a font change changes it (libghostty's `CELL_SIZE`)
+            self.queue(Effect::Emit(TerminalEvent::FontSize));
+        }
         if self.laid.get() == Some(laid) {
             return false;
         }
@@ -455,6 +525,8 @@ impl Terminal {
             wake,
             drew: Cell::new(false),
             preedit: RefCell::new(None),
+            readonly: Cell::new(false),
+            hovered_url: RefCell::new(None),
         });
         let pump = cx.spawn(async move |this, cx| {
             while woken.recv().await.is_ok() {
@@ -491,10 +563,15 @@ impl Terminal {
             }
         }
         let fonts_changed = shared.config.borrow().font != config.font;
+        let cell = shared.metrics_at(shared.font_points(), shared.scale());
         *shared.config.borrow_mut() = Rc::new(config);
         if fonts_changed {
             shared.fonts.borrow_mut().take();
             shared.font_generation.set(shared.font_generation.get() + 1);
+            // the cell follows the fonts: report it as a font size change does
+            if shared.metrics_at(shared.font_points(), shared.scale()) != cell {
+                cx.emit(TerminalEvent::FontSize);
+            }
         }
         cx.notify();
     }
@@ -534,6 +611,9 @@ fn run_effect(shared: &Shared, effect: Effect, cx: &mut Context<Terminal>) {
             let (Some(text), Some(pane)) = (item.and_then(|item| item.text()), shared.pane()) else {
                 return;
             };
+            if shared.is_readonly() {
+                return;
+            }
             match pane.paste(&text, PasteSource::Clipboard, location, false) {
                 Ok(Paste::Unsafe) => cx.emit(TerminalEvent::UnsafePaste(text)),
                 Ok(Paste::Written | Paste::Empty) => {}
@@ -665,8 +745,9 @@ impl TerminalView {
         self.blink_on
     }
 
-    /// Runs the blink timer while the owner is focused and the cursor blinks; stops it (cursor shown) otherwise.
-    fn sync_blink(&mut self, focused: bool, cx: &mut Context<Self>) {
+    /// Runs the blink timer while the owner is focused and the cursor blinks; stops it (cursor shown) otherwise. Called
+    /// by prepaint once the frame it draws is current.
+    pub(crate) fn sync_blink(&mut self, focused: bool, cx: &mut Context<Self>) {
         let blinking = focused
             && self.role == ViewRole::Owner
             && self
@@ -706,7 +787,6 @@ impl Focusable for TerminalView {
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.role == ViewRole::Owner && self.focus.is_focused(window);
-        self.sync_blink(focused, cx);
         let element = TerminalElement::new(cx.entity(), focused);
         let root = div().size_full().min_w(px(0.)).min_h(px(0.));
         match self.role {
