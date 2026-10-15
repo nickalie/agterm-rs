@@ -10,6 +10,11 @@ pub(super) fn int(value: u32) -> i32 {
     i32::try_from(value).unwrap_or(i32::MAX)
 }
 
+/// `cp - base` as a table index (0 below `base`).
+pub(super) fn index(cp: u32, base: u32) -> usize {
+    usize::try_from(cp.saturating_sub(base)).unwrap_or(0)
+}
+
 /// A signed coordinate as a pixel count, negatives as 0.
 pub(super) fn count(value: i32) -> u32 {
     u32::try_from(value).unwrap_or(0)

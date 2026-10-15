@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 use super::super::metrics::CellMetrics;
 use super::box_drawing::{Style, arms, lines_char};
 use super::canvas::{Canvas, Path};
-use super::common::{Alignment, Corner, Fraction, ON, fill, int};
+use super::common::{Alignment, Corner, Fraction, ON, fill, index, int};
 use super::legacy::circle;
 
 pub(super) fn draw(cp: u32, canvas: &mut Canvas, m: &CellMetrics) {
@@ -42,10 +42,6 @@ pub(super) fn draw(cp: u32, canvas: &mut Canvas, m: &CellMetrics) {
         }
         _ => {}
     }
-}
-
-fn index(cp: u32, base: u32) -> usize {
-    usize::try_from(cp.saturating_sub(base)).unwrap_or(0)
 }
 
 /// 𜰛 𜰜 𜰝 𜰞 light lines along an edge with a stub down a side.

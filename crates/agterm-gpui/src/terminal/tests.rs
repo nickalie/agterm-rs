@@ -202,17 +202,23 @@ fn a_known_font_measures_as_ghostty_measures_it() {
 
 #[test]
 fn the_first_installed_family_wins_and_the_rest_fall_back() {
-    let installed = |family: &str| ["DejaVu Sans Mono", "Liberation Mono", "Hack"].contains(&family);
+    let installed =
+        |family: &str| ["DejaVu Sans Mono", "Liberation Mono", "Hack", font::SYMBOLS_FAMILY].contains(&family);
     let config = agterm_core::ghostty_config::Font {
-        family: vec!["Missing Mono".into(), "Hack".into()],
+        family: vec!["Missing Mono".into(), "Hack".into(), "DejaVu Sans Mono".into()],
         family_bold: vec!["Liberation Mono".into()],
         feature: vec!["-calt".into(), "ss01, liga=0".into(), "zero on".into(), "bogus".into()],
         ..agterm_core::ghostty_config::Font::default()
     };
     let fonts = Fonts::resolve(&config, &installed);
     assert_eq!(fonts.regular.family.as_ref(), "Hack");
-    // the default family and the symbols font fall back where installed (embedded in the app, not here)
-    assert!(fonts.regular.fallbacks.is_none());
+    // the configured families after the primary, then the default family where installed (not here), then the
+    // symbols font
+    let fallbacks = fonts.regular.fallbacks.as_ref().map(|f| f.fallback_list().to_vec());
+    assert_eq!(
+        fallbacks,
+        Some(vec!["DejaVu Sans Mono".to_owned(), font::SYMBOLS_FAMILY.to_owned()])
+    );
     assert_eq!(fonts.bold.family.as_ref(), "Liberation Mono");
     assert_eq!(fonts.bold.weight, gpui_kit::FontWeight::BOLD);
     // no italic family: the regular one, italic

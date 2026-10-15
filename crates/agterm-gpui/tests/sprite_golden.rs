@@ -8,10 +8,11 @@
 //! underline `thickness` thick (the box lines' thickness).
 //!
 //! Each family's cells are rebuilt from this build's masks and compared pixel by pixel at all four sizes (even and odd
-//! cells, even and odd lines). Families drawn from rectangles (blocks, braille, octants, ...) must match exactly.
-//! Families with paths may differ where tiny-skia's anti-aliasing differs from z2d's, within budgets measured at this
-//! revision: the mean coverage difference over the family's pixels, and the share of pixels off by more than
-//! [`STRAY`] (a figure in the wrong place rather than a softer edge).
+//! cells, even and odd lines). Families drawn from rectangles and pixels (box drawing lines, blocks, braille, sextants,
+//! octants, separated mosaics, ...) must match exactly. Families with paths may differ where tiny-skia's anti-aliasing
+//! differs from z2d's, within budgets measured at this revision: per size, the mean coverage difference over the
+//! family's pixels; per glyph, the pixels off by more than [`STRAY`] (a figure in the wrong place rather than a softer
+//! edge), none except the few glyphs [`ALLOWED_STRAYS`] lists at the smallest size.
 
 use agterm_gpui::terminal::sprite::{self, Mask};
 use agterm_gpui::terminal::{CellMetrics, FaceMetrics};
@@ -93,72 +94,215 @@ const STRAY: u8 = 96;
 struct Family {
     name: &'static str,
     ranges: &'static [(u32, u32)],
-    /// The mean coverage difference allowed over the family's pixels, as a share of full coverage (0: exact).
-    mean: f64,
-    /// The share of the family's pixels allowed to be strays.
-    strays: f64,
+    /// The mean coverage difference allowed over the family's pixels at each size (in [`SIZES`] order), as a share of
+    /// full coverage; all zero for a family drawn from rectangles and pixels, which must match exactly.
+    mean: [f64; 4],
 }
 
 const fn exact(name: &'static str, ranges: &'static [(u32, u32)]) -> Family {
     Family {
         name,
         ranges,
-        mean: 0.0,
-        strays: 0.0,
+        mean: [0.0; 4],
     }
 }
 
-/// The budgets are about twice the worst measured at `LIBGHOSTTY_VT_REV` (the 9x17+1 cell, thickness 1, is the worst
-/// for every family with paths: there a pixel of anti-aliasing is most of a line).
+/// About twice the worst measured at `LIBGHOSTTY_VT_REV`, per size: the 9x17+1 cell (thickness 1) is the worst for
+/// every family with paths, a pixel of anti-aliasing being most of a line there.
 const FAMILIES: &[Family] = &[
     exact("box drawing lines", &[(0x2500, 0x256c), (0x2574, 0x257f)]),
     Family {
         name: "box drawing arcs, diagonals",
         ranges: &[(0x256d, 0x2573)],
-        mean: 0.012,
-        strays: 0.0,
+        mean: MEAN_BOX,
     },
     exact("blocks", &[(0x2580, 0x259f)]),
     Family {
         name: "geometric shapes",
         ranges: &[(0x25e2, 0x25e5), (0x25f8, 0x25fa), (0x25ff, 0x25ff)],
-        mean: 0.0025,
-        strays: 0.0,
+        mean: MEAN_GEOMETRIC,
     },
     exact("braille", &[(0x2800, 0x28ff)]),
     Family {
         name: "powerline",
         ranges: &[(0xe0b0, 0xe0bf), (0xe0d2, 0xe0d2), (0xe0d4, 0xe0d4)],
-        mean: 0.01,
-        strays: 0.0,
+        mean: MEAN_POWERLINE,
     },
+    exact("branch lines, fades", &[(0xf5d0, 0xf5d5)]),
     Family {
-        name: "branch",
-        ranges: &[(0xf5d0, 0xf60d)],
-        mean: 0.012,
-        strays: 0.005,
+        name: "branch arcs, nodes",
+        ranges: &[(0xf5d6, 0xf60d)],
+        mean: MEAN_BRANCH,
     },
+    exact(
+        "legacy computing blocks",
+        &[
+            (0x1fb00, 0x1fb3b),
+            (0x1fb70, 0x1fb97),
+            (0x1fbaf, 0x1fbaf),
+            (0x1fbce, 0x1fbcf),
+            (0x1fbe4, 0x1fbe7),
+        ],
+    ),
     Family {
-        name: "legacy computing",
-        ranges: &[(0x1fb00, 0x1fbaf), (0x1fbbd, 0x1fbbf), (0x1fbce, 0x1fbef)],
-        mean: 0.004,
-        strays: 0.001,
+        name: "legacy computing paths",
+        ranges: &[
+            (0x1fb3c, 0x1fb6f),
+            (0x1fb98, 0x1fbae),
+            (0x1fbbd, 0x1fbbf),
+            (0x1fbd0, 0x1fbe3),
+            (0x1fbe8, 0x1fbef),
+        ],
+        mean: MEAN_LEGACY,
     },
     exact("octants", &[(0x1cd00, 0x1cde5)]),
-    Family {
-        name: "legacy computing supplement",
-        ranges: &[
+    exact(
+        "legacy supplement blocks",
+        &[
             (0x1cc1b, 0x1cc1e),
-            (0x1cc21, 0x1cc3f),
-            (0x1ce00, 0x1ce01),
-            (0x1ce0b, 0x1ce0c),
+            (0x1cc21, 0x1cc2f),
             (0x1ce16, 0x1ce19),
             (0x1ce51, 0x1ceaf),
         ],
-        mean: 0.003,
-        strays: 0.0003,
+    ),
+    Family {
+        name: "legacy supplement circles",
+        ranges: &[(0x1cc30, 0x1cc3f), (0x1ce00, 0x1ce01), (0x1ce0b, 0x1ce0c)],
+        mean: MEAN_SUPPLEMENT,
     },
 ];
+
+const MEAN_BOX: [f64; 4] = [0.0015, 0.005, 0.0065, 0.0135];
+const MEAN_GEOMETRIC: [f64; 4] = [0.0002, 0.0003, 0.0015, 0.0021];
+const MEAN_POWERLINE: [f64; 4] = [0.0015, 0.0011, 0.0022, 0.011];
+const MEAN_BRANCH: [f64; 4] = [0.0045, 0.0063, 0.0093, 0.0143];
+const MEAN_LEGACY: [f64; 4] = [0.0007, 0.0008, 0.0014, 0.0082];
+const MEAN_SUPPLEMENT: [f64; 4] = [0.0047, 0.0061, 0.0072, 0.0175];
+
+/// The glyphs whose anti-aliasing differs from z2d's by more than [`STRAY`] somewhere, all at the 9x17+1 size, and
+/// how many such pixels each has at most; every other glyph at every size has none (a misplaced figure strays far
+/// more).
+const ALLOWED_STRAYS: &[(u32, usize)] = &[
+    // the hollow branch nodes, their circles one pixel thick
+    (0xf5ef, 3),
+    (0xf5f1, 3),
+    (0xf5f3, 3),
+    (0xf5f5, 3),
+    (0xf5f7, 3),
+    (0xf5f9, 3),
+    (0xf5fb, 3),
+    (0xf5fd, 3),
+    (0xf5ff, 3),
+    (0xf601, 3),
+    (0xf603, 3),
+    (0xf605, 3),
+    (0xf607, 3),
+    (0xf609, 3),
+    (0xf60b, 3),
+    (0xf60d, 3),
+    // U+1FB98, whose hatch lines Ghostty itself notes do not quite align
+    (0x1fb98, 22),
+    // the half ellipses
+    (0x1ce0b, 2),
+    (0x1ce0c, 2),
+];
+
+/// Strays allowed for `cp` at `size`.
+fn allowed_strays(cp: u32, size: &Size) -> usize {
+    if size.thickness != 1 {
+        return 0;
+    }
+    ALLOWED_STRAYS
+        .iter()
+        .find(|(allowed, _)| *allowed == cp)
+        .map_or(0, |(_, strays)| *strays)
+}
+
+/// How far a family is from the goldens at one size.
+#[derive(Debug, Default)]
+struct Diff {
+    pixels: usize,
+    /// The sum of the coverage differences.
+    total: u64,
+    /// The glyphs with more strays than [`allowed_strays`], and how many (code points in hex, counts in decimal).
+    strays: Vec<String>,
+    /// The code points with the largest differences, and theirs.
+    worst: Vec<(u32, u64)>,
+}
+
+impl Diff {
+    #[expect(clippy::cast_precision_loss, reason = "pixel counts and sums are far below 2^52")]
+    fn mean(&self) -> f64 {
+        self.total as f64 / 255.0 / self.pixels as f64
+    }
+}
+
+fn compare(family: &Family, size: &Size) -> TestResult<Diff> {
+    let metrics = size.metrics();
+    let mut diff = Diff::default();
+    let mut sheets: Vec<(u32, Sheet)> = Vec::new();
+    for &(min, max) in family.ranges {
+        for cp in min..=max {
+            let base = cp & !0xff;
+            let loaded = if let Some(index) = sheets.iter().position(|(sheet_base, _)| *sheet_base == base) {
+                index
+            } else {
+                sheets.push((base, sheet(base, size)?));
+                sheets.len() - 1
+            };
+            let golden = golden_cell(&sheets[loaded].1, cp, size);
+            let ours = cell(cp, size, &metrics);
+            let deltas: Vec<u8> = ours.iter().zip(&golden).map(|(a, b)| a.abs_diff(*b)).collect();
+            let total: u64 = deltas.iter().map(|delta| u64::from(*delta)).sum();
+            diff.pixels += deltas.len();
+            diff.total += total;
+            let strays = deltas.iter().filter(|delta| **delta > STRAY).count();
+            if strays > allowed_strays(cp, size) {
+                diff.strays.push(format!("U+{cp:X}: {strays}"));
+            }
+            if total > 0 {
+                diff.worst.push((cp, total));
+            }
+        }
+    }
+    diff.worst.sort_by_key(|(_, total)| std::cmp::Reverse(*total));
+    diff.worst.truncate(6);
+    Ok(diff)
+}
+
+#[test]
+fn every_family_matches_ghosttys_goldens_at_every_size() -> TestResult {
+    let mut failures = Vec::new();
+    for family in FAMILIES {
+        for (size, budget) in SIZES.iter().zip(family.mean) {
+            let diff = compare(family, size)?;
+            let mean = diff.mean();
+            println!(
+                "{:<28} {:<9} mean {:>7.4}% (budget {:.2}%), strays {:?}, worst {:X?}",
+                family.name,
+                size.label(),
+                mean * 100.0,
+                budget * 100.0,
+                diff.strays,
+                diff.worst
+            );
+            if mean > budget || !diff.strays.is_empty() {
+                failures.push(format!(
+                    "{} at {}: mean {:.4}%, strays {:?}",
+                    family.name,
+                    size.label(),
+                    mean * 100.0,
+                    diff.strays
+                ));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "sprites strayed from Ghostty's goldens: {failures:#?}"
+    );
+    Ok(())
+}
 
 /// A decoded golden sheet: 8-bit coverage, row-major.
 struct Sheet {
@@ -214,95 +358,6 @@ fn golden_cell(sheet: &Sheet, cp: u32, size: &Size) -> Vec<u8> {
             sheet.pixels[start..start + stride_x].iter().copied()
         })
         .collect()
-}
-
-/// How far a family is from the goldens at one size.
-#[derive(Debug, Default)]
-struct Diff {
-    pixels: usize,
-    /// The sum of the coverage differences.
-    total: u64,
-    strays: usize,
-    /// The code points with the largest differences, and theirs.
-    worst: Vec<(u32, u64)>,
-}
-
-impl Diff {
-    #[expect(clippy::cast_precision_loss, reason = "pixel counts and sums are far below 2^52")]
-    fn mean(&self) -> f64 {
-        self.total as f64 / 255.0 / self.pixels as f64
-    }
-
-    #[expect(clippy::cast_precision_loss, reason = "pixel counts are far below 2^52")]
-    fn stray_share(&self) -> f64 {
-        self.strays as f64 / self.pixels as f64
-    }
-}
-
-fn compare(family: &Family, size: &Size) -> TestResult<Diff> {
-    let metrics = size.metrics();
-    let mut diff = Diff::default();
-    let mut sheets: Vec<(u32, Sheet)> = Vec::new();
-    for &(min, max) in family.ranges {
-        for cp in min..=max {
-            let base = cp & !0xff;
-            let loaded = if let Some(index) = sheets.iter().position(|(sheet_base, _)| *sheet_base == base) {
-                index
-            } else {
-                sheets.push((base, sheet(base, size)?));
-                sheets.len() - 1
-            };
-            let golden = golden_cell(&sheets[loaded].1, cp, size);
-            let ours = cell(cp, size, &metrics);
-            let deltas: Vec<u8> = ours.iter().zip(&golden).map(|(a, b)| a.abs_diff(*b)).collect();
-            let total: u64 = deltas.iter().map(|delta| u64::from(*delta)).sum();
-            diff.pixels += deltas.len();
-            diff.total += total;
-            diff.strays += deltas.iter().filter(|delta| **delta > STRAY).count();
-            if total > 0 {
-                diff.worst.push((cp, total));
-            }
-        }
-    }
-    diff.worst.sort_by_key(|(_, total)| std::cmp::Reverse(*total));
-    diff.worst.truncate(6);
-    Ok(diff)
-}
-
-#[test]
-fn every_family_matches_ghosttys_goldens_at_every_size() -> TestResult {
-    let mut failures = Vec::new();
-    for family in FAMILIES {
-        for size in &SIZES {
-            let diff = compare(family, size)?;
-            let (mean, strays) = (diff.mean(), diff.stray_share());
-            println!(
-                "{:<28} {:<9} mean {:>7.4}% (budget {:.2}%), strays {:>7.4}% (budget {:.2}%) of {} pixels, worst {:X?}",
-                family.name,
-                size.label(),
-                mean * 100.0,
-                family.mean * 100.0,
-                strays * 100.0,
-                family.strays * 100.0,
-                diff.pixels,
-                diff.worst
-            );
-            if mean > family.mean || strays > family.strays {
-                failures.push(format!(
-                    "{} at {}: mean {:.4}%, strays {:.4}%",
-                    family.name,
-                    size.label(),
-                    mean * 100.0,
-                    strays * 100.0
-                ));
-            }
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "sprites strayed from Ghostty's goldens: {failures:#?}"
-    );
-    Ok(())
 }
 
 #[test]
