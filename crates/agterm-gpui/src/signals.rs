@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::thread;
 
+use signal_hook::SigId;
 use signal_hook::consts::SIGTERM;
 use signal_hook::iterator::Signals;
 
@@ -17,20 +18,41 @@ use crate::state::{AppState, Poster, post};
 ///
 /// # Errors
 ///
-/// The handler could not be registered or its thread not started.
+/// The handler could not be registered or its thread not started; nothing of it stays installed then, so SIGTERM
+/// keeps its default action.
 pub fn quit_on_sigterm(poster: Poster) -> io::Result<()> {
-    // registered first, so it sees the flag the next registration sets on the first signal
-    let seen = Arc::new(AtomicBool::new(false));
-    signal_hook::flag::register_conditional_default(SIGTERM, Arc::clone(&seen))?;
-    signal_hook::flag::register(SIGTERM, seen)?;
     let mut signals = Signals::new([SIGTERM])?;
-    thread::Builder::new()
-        .name("agterm-sigterm".to_owned())
-        .spawn(move || {
-            if signals.forever().next().is_some() {
-                tracing::info!("SIGTERM: quitting");
-                post(&poster, AppState::request_quit);
-            }
-        })?;
+    let flags = second_sigterm_terminates()?;
+    let spawned = thread::Builder::new().name("agterm-sigterm".to_owned()).spawn(move || {
+        if signals.forever().next().is_some() {
+            tracing::info!("SIGTERM: quitting");
+            post(&poster, AppState::request_quit);
+        }
+    });
+    if let Err(error) = spawned {
+        // the closure, and with it the iterator's registration, was dropped with the failed spawn
+        unregister(&flags);
+        return Err(error);
+    }
     Ok(())
+}
+
+/// The first SIGTERM sets a flag, and a SIGTERM finding it set gets the default action. The conditional default is
+/// registered first, so it sees the flag the next registration sets on the first signal.
+fn second_sigterm_terminates() -> io::Result<[SigId; 2]> {
+    let seen = Arc::new(AtomicBool::new(false));
+    let default = signal_hook::flag::register_conditional_default(SIGTERM, Arc::clone(&seen))?;
+    match signal_hook::flag::register(SIGTERM, seen) {
+        Ok(flag) => Ok([default, flag]),
+        Err(error) => {
+            unregister(&[default]);
+            Err(error)
+        }
+    }
+}
+
+fn unregister(ids: &[SigId]) {
+    for id in ids {
+        signal_hook::low_level::unregister(*id);
+    }
 }

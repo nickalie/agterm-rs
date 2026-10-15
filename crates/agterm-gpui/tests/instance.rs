@@ -3,8 +3,9 @@
 //! a headless weston), the SIGTERM quit and its exit status, and the app id fallback. Every process runs in a
 //! [`Sandbox`]: nothing here can reach the user's session bus, desktop or live agterm.
 //!
-//! Tests that need a tool this machine lacks (weston, Xvfb, niri, lavapipe, the GTK build) print `SKIPPED:` with the
-//! reason and pass.
+//! A test that needs a tool this machine lacks (weston, Xvfb, lavapipe, the GTK build's `agterm` beside this binary)
+//! prints `SKIPPED:` with the reason (seen with `--nocapture`) and passes, unless `AGTERM_REQUIRE_DISPLAY_TESTS` is set,
+//! as CI sets it: then it fails. The nested-niri check is `#[ignore]`d (CI has no niri): run it with `--ignored`.
 
 #[macro_use]
 mod support;
@@ -18,6 +19,8 @@ use support::{DEADLINE, Display, Sandbox, TestResult, have, lavapipe_icd, wait_f
 /// The token and startup id a forwarding launch is handed in these tests.
 const TOKEN: &str = "agterm-test-token";
 const STARTUP_ID: &str = "agterm-test-launch_TIME4242";
+/// The startup id of a primary's own launch.
+const PRIMARY_STARTUP_ID: &str = "agterm-test-primary_TIME777";
 
 /// The GTK build's binary beside this one (`cargo build -p agterm-gtk`), or `AGTERM_GTK_BIN`.
 fn gtk_build() -> Option<PathBuf> {
@@ -93,7 +96,42 @@ fn sigterm_quits_a_headless_primary_with_status_0_within_10_s() -> TestResult {
 }
 
 #[test]
-fn sigterm_quits_a_windowed_primary_without_the_exit_crash() -> TestResult {
+fn the_launchs_token_and_startup_id_reach_no_child() -> TestResult {
+    let mut sandbox = Sandbox::new()?;
+    let seen = sandbox.path("hook-env");
+    let config = sandbox.path("state/config");
+    std::fs::create_dir_all(&config)?;
+    std::fs::write(
+        config.join("hooks.conf"),
+        format!("on tree.changed env > {}\n", seen.display()),
+    )?;
+    let primary = sandbox.spawn_gpui(
+        &[("XDG_ACTIVATION_TOKEN", TOKEN), ("DESKTOP_STARTUP_ID", STARTUP_ID)],
+        "primary.log",
+    )?;
+    wait_for_socket(&sandbox.path("state/agterm.sock"))?;
+    let reply = sandbox.request("session.new")?;
+    assert!(reply.contains("\"ok\":true"), "{reply}");
+    let env = wait_for(|| {
+        std::fs::read_to_string(&seen)
+            .ok()
+            .filter(|text| text.contains("AGT_EVENT_KIND=tree.changed"))
+    })?;
+    assert!(
+        env.contains(&format!("AGTERM_APP_ID={}", sandbox.app_id)),
+        "the app's environment: {env}"
+    );
+    assert!(!env.contains("XDG_ACTIVATION_TOKEN"), "{env}");
+    assert!(!env.contains("DESKTOP_STARTUP_ID"), "{env}");
+    sandbox.terminate(primary)?;
+    assert_eq!(sandbox.wait_exit(primary, Duration::from_secs(10))?.0.code(), Some(0));
+    Ok(())
+}
+
+/// The status of a quit with a wgpu device. It cannot catch the exit crash `main`'s `_exit` guards against: that one
+/// needs NVIDIA's EGL (`docs/upstream-issues/gpui-wgpu-gles-exit-segfault.md`), and these tests render on Mesa only.
+#[test]
+fn sigterm_quits_a_windowed_primary_with_status_0() -> TestResult {
     if !have("weston") {
         skip!("no weston");
     }
@@ -104,9 +142,9 @@ fn sigterm_quits_a_windowed_primary_without_the_exit_crash() -> TestResult {
     sandbox.start_weston()?;
     sandbox.use_software_rendering(&lavapipe);
     let primary = start_primary(&mut sandbox)?;
-    // wgpu's instance and device exist (on lavapipe, never a hardware driver) before the quit
+    // GPUI logs the adapter once its device is created and the surface configured with it (`select_adapter_and_device`
+    // tests each adapter that way): on lavapipe, never a hardware driver
     sandbox.wait_log("primary.log", "Selected GPU adapter: \"llvmpipe")?;
-    std::thread::sleep(Duration::from_millis(300));
     sandbox.terminate(primary)?;
     let (status, _) = sandbox.wait_exit(primary, Duration::from_secs(10))?;
     assert_eq!(status.code(), Some(0), "{status:?}\n{}", sandbox.log("primary.log"));
@@ -240,8 +278,9 @@ mod x11 {
             Ok(self.conn.intern_atom(false, name.as_bytes())?.reply()?.atom)
         }
 
-        /// Collects until the activation and a NUL-terminated startup message arrived, or the deadline.
-        pub fn collect(&self) -> TestResult<Seen> {
+        /// Collects until a NUL-terminated startup message (and, `with_active`, the activation) arrived, or the
+        /// deadline.
+        pub fn collect(&self, with_active: bool) -> TestResult<Seen> {
             let (active, begin, more) = (
                 self.atom("_NET_ACTIVE_WINDOW")?,
                 self.atom("_NET_STARTUP_INFO_BEGIN")?,
@@ -250,7 +289,7 @@ mod x11 {
             let mut seen = Seen::default();
             let mut bytes = Vec::new();
             let started = std::time::Instant::now();
-            while started.elapsed() < DEADLINE && (seen.active.is_none() || !bytes.contains(&0)) {
+            while started.elapsed() < DEADLINE && ((with_active && seen.active.is_none()) || !bytes.contains(&0)) {
                 let Some(Event::ClientMessage(event)) = self.conn.poll_for_event()? else {
                     std::thread::sleep(std::time::Duration::from_millis(10));
                     continue;
@@ -290,12 +329,23 @@ mod x11 {
         pub fn root(&self) -> u32 {
             self.root
         }
+
+        /// The top-level window whose `WM_CLASS` names `app_id`.
+        pub fn window_of(&self, app_id: &str) -> TestResult<u32> {
+            let tree = self.conn.query_tree(self.root)?.reply()?;
+            for window in tree.children {
+                if self.class(window)?.contains(app_id) {
+                    return Ok(window);
+                }
+            }
+            Err(format!("no window of {app_id}").into())
+        }
     }
 }
 
 /// Asserts what a forwarded launch with [`STARTUP_ID`] did on X11.
 fn assert_x11_activation(root: &x11::Root, app_id: &str) -> TestResult {
-    let seen = root.collect()?;
+    let seen = root.collect(true)?;
     let (window, source, time) = seen.active.ok_or("no _NET_ACTIVE_WINDOW reached the root")?;
     assert_ne!(window, root.root());
     assert!(root.class(window)?.contains(app_id), "the primary's window");
@@ -310,7 +360,7 @@ fn assert_x11_activation(root: &x11::Root, app_id: &str) -> TestResult {
 }
 
 #[test]
-fn x11_activation_carries_the_startup_time_and_ends_the_sequence() -> TestResult {
+fn x11_launches_carry_their_startup_time_and_end_their_sequences() -> TestResult {
     if !have("Xvfb") {
         skip!("no Xvfb");
     }
@@ -321,9 +371,21 @@ fn x11_activation_carries_the_startup_time_and_ends_the_sequence() -> TestResult
     sandbox.start_xvfb()?;
     sandbox.use_software_rendering(&lavapipe);
     let app_id = sandbox.app_id.clone();
-    let primary = start_primary(&mut sandbox)?;
-    sandbox.wait_log("primary.log", "instance: primary")?;
-    std::thread::sleep(Duration::from_millis(300));
+    // the primary's own launch: its sequence ends once its window exists, with the launch's time on the window
+    let root = x11::Root::watch(&sandbox)?;
+    let primary = sandbox.spawn_gpui(&[("DESKTOP_STARTUP_ID", PRIMARY_STARTUP_ID)], "primary.log")?;
+    let seen = root.collect(false)?;
+    assert_eq!(
+        seen.startup,
+        format!("remove: ID={PRIMARY_STARTUP_ID}"),
+        "{}",
+        sandbox.log("primary.log")
+    );
+    assert!(seen.active.is_none(), "a new window is the window manager's to focus");
+    let window = root.window_of(&app_id)?;
+    assert_eq!(root.cardinal(window, "_NET_WM_USER_TIME")?, Some(777));
+    wait_for_socket(&sandbox.path("state/agterm.sock"))?;
+    sandbox.wait_owner(&app_id)?;
 
     let root = x11::Root::watch(&sandbox)?;
     let second = sandbox.spawn_gpui(&[("DESKTOP_STARTUP_ID", STARTUP_ID)], "second.log")?;
@@ -342,7 +404,7 @@ fn x11_activation_carries_the_startup_time_and_ends_the_sequence() -> TestResult
         );
         assert_x11_activation(&root, &app_id)?;
     } else {
-        eprintln!("SKIPPED (GTK launch part): no GTK build beside {}", support::GPUI);
+        support::skip_part(&format!("no GTK build beside {}", support::GPUI));
     }
     sandbox.terminate(primary)?;
     assert_eq!(sandbox.wait_exit(primary, Duration::from_secs(10))?.0.code(), Some(0));
@@ -393,6 +455,7 @@ fn niri_spawn(sandbox: &Sandbox, argv: &[&str]) -> TestResult {
 }
 
 #[test]
+#[ignore = "needs niri (none in CI): niri nested in a private headless weston; run with --ignored"]
 fn a_launchers_token_raises_the_primary_under_a_nested_niri() -> TestResult {
     if !have("niri") || !have("weston") {
         skip!("no niri or weston: the nested-niri activation check needs both");
@@ -437,7 +500,7 @@ fn a_launchers_token_raises_the_primary_under_a_nested_niri() -> TestResult {
         niri_spawn(&sandbox, &["/usr/bin/env", "GDK_BACKEND=wayland", &gtk])?;
         wait_focused(&sandbox, &app_id)?;
     } else {
-        eprintln!("SKIPPED (GTK launch part): no GTK build beside {}", support::GPUI);
+        support::skip_part(&format!("no GTK build beside {}", support::GPUI));
     }
     Ok(())
 }

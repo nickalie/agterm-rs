@@ -5,6 +5,8 @@
 //! Xvfb, or a niri nested in that weston; GPUI on them renders through Mesa's lavapipe only.
 //!
 //! [`Sandbox::command`] refuses an environment whose bus, runtime dir or display is not the sandbox's own.
+//!
+//! A test whose tool is missing skips (`skip!`), unless [`REQUIRE_ENV`] is set, as CI sets it: then it fails.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
@@ -354,6 +356,17 @@ impl Sandbox {
         Ok(index)
     }
 
+    /// Sends one control request (`{"cmd": cmd}`) to the sandbox's socket; the reply line.
+    pub fn request(&self, cmd: &str) -> TestResult<String> {
+        use std::io::Write as _;
+        let mut socket = std::os::unix::net::UnixStream::connect(self.path("state/agterm.sock"))?;
+        socket.set_read_timeout(Some(DEADLINE))?;
+        writeln!(socket, "{}", serde_json::json!({ "cmd": cmd }))?;
+        let mut reply = String::new();
+        BufReader::new(socket).read_line(&mut reply)?;
+        Ok(reply)
+    }
+
     /// A connection to the private bus.
     pub fn bus(&self) -> TestResult<zbus::blocking::Connection> {
         Ok(zbus::blocking::connection::Builder::address(self.bus_address())?.build()?)
@@ -577,10 +590,27 @@ pub fn wait_for_socket(path: &Path) -> TestResult {
     Ok(())
 }
 
-/// Prints why a test did not run and returns, so a missing tool is visible rather than silently green.
+/// Set (to anything) where the tools must be there, as in CI: a test missing one fails instead of skipping.
+pub const REQUIRE_ENV: &str = "AGTERM_REQUIRE_DISPLAY_TESTS";
+
+/// Whether a missing tool fails the test ([`REQUIRE_ENV`]).
+pub fn tools_required() -> bool {
+    std::env::var_os(REQUIRE_ENV).is_some()
+}
+
+/// The part of a test that needs a missing tool is left out: as `skip!`, failing under [`REQUIRE_ENV`].
+pub fn skip_part(reason: &str) {
+    assert!(!tools_required(), "required by {REQUIRE_ENV}: {reason}");
+    eprintln!("SKIPPED (part): {reason}");
+}
+
+/// A test that cannot run without a missing tool: it fails under [`REQUIRE_ENV`], otherwise it says why on stderr
+/// (shown with `--nocapture`) and returns, passing.
 macro_rules! skip {
     ($($reason:tt)*) => {{
-        eprintln!("SKIPPED: {}", format!($($reason)*));
+        let reason = format!($($reason)*);
+        assert!(!support::tools_required(), "required by {}: {reason}", support::REQUIRE_ENV);
+        eprintln!("SKIPPED: {reason}");
         return Ok(());
     }};
 }

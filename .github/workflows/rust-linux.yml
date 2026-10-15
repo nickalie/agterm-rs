@@ -30,7 +30,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
             meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
-            curl xz-utils patch ncurses-bin fish dbus-daemon
+            curl xz-utils patch ncurses-bin fish \
+            dbus-daemon weston xvfb libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -80,10 +81,16 @@ jobs:
         shell: bash
         run: scripts/lint-report.sh | tee -a "$GITHUB_STEP_SUMMARY"
       # fish is installed above so the fish replay script's unit test runs against a real fish parser
+      # agterm-gpui's process tests run on their own private bus, headless weston and Xvfb, rendering on lavapipe
+      # (mesa-vulkan-drivers), and forward to and from the GTK build's binary: none may skip here (only the nested-niri
+      # check is #[ignore]d, no niri on Ubuntu)
       - name: test
         shell: bash
+        env:
+          AGTERM_REQUIRE_DISPLAY_TESTS: "1"
         run: |
           source scripts/lib/native.sh
+          cargo build -p agterm-gtk
           cargo test "${WORKSPACE_WITHOUT_WPE[@]}"
 
   # The WPE WebKit -sys crates (gir bindings of the GPUI frontend's HTML engine) against the distro package they are
