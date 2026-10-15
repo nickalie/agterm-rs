@@ -791,34 +791,87 @@ Built on `agterm-ghostty-vt` (Task 5), with the thread protocol of Technical Det
 - Create: `crates/agterm-gpui/Cargo.toml` (bin `agterm-gpui` until the switch), `src/{main,app,state,main_loop,
   signals,instance}.rs`, `src/state/tests.rs`
 - Modify: `Cargo.toml` (workspace deps `gpui-kit`, `zbus`)
+- ➕ Create: `crates/agterm-gpui/src/{lib,activation}.rs`, `src/main_loop/tests.rs`, `tests/instance.rs`,
+  `tests/support/mod.rs`; `vendor/calloop/`, `build/patches/calloop/0001-tracing-without-log.patch`,
+  `scripts/vendor-calloop.sh`, `scripts/check-tracing-features.sh`,
+  `docs/upstream-issues/gpui-wgpu-gles-exit-segfault.md`; Modify: `Cargo.toml` (also `raw-window-handle`,
+  `wayland-*`, `x11rb`, `signal-hook`, `exclude = ["vendor"]`, `[patch.crates-io] calloop`), `Cargo.lock`,
+  `.github/workflows/rust-linux.yml`, `README.md`
 
-- [ ] gpui-kit app on the main thread; `MainLoop` over the foreground executor; `AppState` and its `settle` ported from
+- [x] gpui-kit app on the main thread; `MainLoop` over the foreground executor; `AppState` and its `settle` ported from
       `agterm-gtk/src/state.rs` as a skeleton here — it grows task by task as deck (Task 18) and windows (Task 26) land
-- [ ] `version` capabilities start empty and are claimed task by task (Development Approach)
-- [ ] `agterm-server` started as in GTK `main.rs`; state dir, logging (`agterm-app`), app id kept
-- [ ] single instance per Solution Overview: `AGTERM_APP_ID` with GApplication's validity rule and object-path
+- [x] `version` capabilities start empty and are claimed task by task (Development Approach)
+- [x] `agterm-server` started as in GTK `main.rs`; state dir, logging (`agterm-app`), app id kept
+- [x] single instance per Solution Overview: `AGTERM_APP_ID` with GApplication's validity rule and object-path
       derivation, bus name, `org.gtk.Application` + `org.gtk.Actions` via `zbus`, both forwarding directions,
       activation token (per Task 3)
-- [ ] SIGTERM → orderly quit within 10 s (rust-build.md contract), installed only once this process is the primary
-- [ ] ➕ (Task 3) `Application::with_quit_mode(QuitMode::Explicit)`: GPUI's Linux default quits when the last window
+- [x] SIGTERM → orderly quit within 10 s (rust-build.md contract), installed only once this process is the primary
+- [x] ➕ (Task 3) `Application::with_quit_mode(QuitMode::Explicit)`: GPUI's Linux default quits when the last window
       closes, which hiding the quick terminal (a `remove_window`) triggers
-- [ ] ➕ (Task 3) activation per Solution Overview > Single instance: read `XDG_ACTIVATION_TOKEN` and
+- [x] ➕ (Task 3) activation per Solution Overview > Single instance: read `XDG_ACTIVATION_TOKEN` and
       `DESKTOP_STARTUP_ID` before GPUI's platform is created (GPUI removes the variable); a forwarding launch sends them
       as `activation-token` / `desktop-startup-id`; the primary activates its window with a received token by binding
       `xdg_activation_v1` on GPUI's `wl_display` through raw-window-handle (Task 3's ~20-line workaround, until GPUI
       patch 2), and on X11 by `_NET_ACTIVE_WINDOW` with the startup id's `_TIME`, `_NET_WM_USER_TIME` and the
       startup-notification `remove` through x11rb on the raw handle (until GPUI patch 3)
-- [ ] ➕ (Task 2) the GPUI exit SIGSEGV (wgpu's GLES instance tears down EGL in a TLS destructor after the Wayland
+- [x] ➕ (Task 2) the GPUI exit SIGSEGV (wgpu's GLES instance tears down EGL in a TLS destructor after the Wayland
       connection is gone): find what creates the GLES instance under a Vulkan renderer and avoid it, or end the
       process after the orderly shutdown before TLS destructors run, so a quit exits 0; file the upstream issue
-      (gpui/wgpu) with the stack from `docs/spikes/20261014-wpe-dmabuf.md` quirk 12
-- [ ] tests: `MainLoop` hop ordering and shutdown, `settle` cases carried over from GTK, SIGTERM deadline and exit
+      (gpui/wgpu) with the stack from `docs/spikes/20261014-wpe-dmabuf.md` quirk 12 (drafted in
+      `docs/upstream-issues/gpui-wgpu-gles-exit-segfault.md`, not posted: the run never posts externally)
+- [x] tests: `MainLoop` hop ordering and shutdown, `settle` cases carried over from GTK, SIGTERM deadline and exit
       status 0, forwarding of a second GPUI launch and of a GTK-build launch to the GPUI instance, and of a GPUI launch
       to a GTK primary (private bus); the activation token reaches the primary's platform data from a GPUI and from a
       GTK launch, under a nested niri where installed (stock config, no `honor-xdg-activation-with-invalid-serial`;
       skipped with a message otherwise) and under Xvfb; invalid
       `AGTERM_APP_ID` falls back; never two writers of `windows.json`
-- [ ] gates — must pass before Task 13
+- [x] ➕ calloop's `tracing/log` (see the result): vendored calloop without it, a guard script before clippy
+- [x] gates — must pass before Task 13
+- result (2026-10-15):
+  - **Shape** (Codex-reviewed, transcript
+    `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/task-12-app-state-loop/transcript.md`): `AppState` is a
+    GPUI `Entity` in the app and a plain struct in its tests; `settle` stays context-free and records `FrontendWork`
+    (activations, quit) that the loop's consumer lands with `&mut App` after each task, the state released.
+    `GpuiMainLoop` = an `async_channel` queue + GPUI's background executor for `post_after` timers; delayed tasks wait
+    in a registry, so `close` drops them (and their reply senders) at once, not at their deadline; one foreground task
+    (`main_loop::drive`) runs them in order. The bus and SIGTERM enter as ordinary main-loop tasks (the bus handlers
+    buffer in a channel created before GPUI exists, drained into the loop at launch). The crate is a library plus the
+    thin binary, so its integration tests and later tasks reach the modules (a binary-only crate would flag every
+    not-yet-wired method as dead code).
+  - **Single instance**: interfaces exported before `RequestName(DO_NOT_QUEUE)` (zbus reports `Exists` as
+    `Error::NameTaken`); a forwarding launch sends `Activate` with no reply expected (GApplication's fire-and-forget)
+    carrying `cwd` (`ay`), `activation-token` and `desktop-startup-id`, and exits before GPUI or the state dir; no
+    session bus = a primary of its own, as GApplication. Activation: Wayland per Task 3 (xdg-activation on GPUI's
+    `wl_display`), X11 on a connection of its own to the same display with the raw handle's window id
+    (`_NET_ACTIVE_WINDOW` source 1 + the `_TIME`, `_NET_WM_USER_TIME`, startup `remove` from an InputOnly messenger
+    window). A placeholder window (the app id as its Wayland app id / X11 class) stands for the window shell of
+    Tasks 18/26; the last window closing quits.
+  - **Exit**: GPUI creates its wgpu instance with `Backends::VULKAN | Backends::GL` (`gpui-pre-wgpu`
+    `wgpu_context.rs:473`), which no app setting removes, so `main` ends with `libc::_exit(status)` after the orderly
+    shutdown (`std::process::exit` would not help: glibc's `exit` runs `__call_tls_dtors` first). The crash did not
+    reproduce on Mesa (a windowed primary on headless weston exited 0 with plain `exit`, on Intel GL and on
+    lavapipe): it may need NVIDIA's EGL (quirk 12's machine); the `_exit` stays until a fixed GPUI is vendored.
+  - ⚠️ **calloop's `tracing/log`** (Codex-reviewed, transcript
+    `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/task-12-tracing-log-complexity/transcript.md`): calloop
+    (GPUI's Linux event loop) requests tracing's `log` feature unconditionally; workspace feature unification spread it
+    to every crate, whose tracing macros then expand with the `log` fallback that clippy's `cognitive_complexity`
+    counts (~10 points per call site): 29 existing functions in core, server, app, term and gtk went over 15 (e.g.
+    `ControlServer::new` 28, a three-arm match with two warns). Splitting would only have wrapped log calls in
+    helpers, so `vendor/calloop` is the verified crates.io 0.14.5 source plus one manifest patch dropping the feature
+    (`[patch.crates-io]`, `scripts/vendor-calloop.sh [--check]`); `scripts/check-tracing-features.sh` (CI, before
+    clippy) fails if any crate asks for `log`/`log-always` again, naming it. LogTracer still bridges `log` records
+    into agterm's subscriber.
+  - Tests: 41 unit tests (main loop on GPUI's test executor, the GTK settle cases, instance, activation helpers) and
+    9 process tests in private sandboxes (`tests/support`: fresh root, private dbus-daemon, env built from scratch,
+    an isolation check on every command; displays only private: headless weston + lavapipe, Xvfb, niri nested in
+    headless weston, all rendering through Mesa software): forwarding with token and startup id and no state written
+    by the forwarding launch, GTK build → GPUI primary and GPUI → GTK primary (the GTK build's `agterm` beside the
+    binary, else skipped), X11 activation with the startup time for a GPUI and a GTK launch, nested-niri focus by a
+    launcher's token for a GPUI and a GTK launch, SIGTERM headless and windowed (status 0, < 10 s), invalid app id,
+    no bus. CI installs the GPUI build's xkbcommon/xcb dev packages and dbus-daemon. 20 consecutive runs of the
+    crate's tests: no failures. Gates green; full GTK conformance: 653 pass, 0 fail, ratchet holds (665 ids).
+  - Deferred: the CLAUDE.md crate-map row for `agterm-gpui` (Task 36); `AppState::set_key_window` is wired by the
+    window shell (Task 18); the live sessions reset's relaunch (Task 27) only logs here.
 
 ### Task 13: TerminalElement — grid rendering and the Surface impl
 

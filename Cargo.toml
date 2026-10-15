@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# Patched third-party sources ([patch.crates-io] below) are dependencies, never members.
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.1.0"
@@ -76,6 +78,21 @@ soup-sys = { package = "soup3-sys", version = "0.9" }
 # uses, so one GLib binding is linked.
 glib = "0.22"
 gio = "0.22"
+# The GPUI frontend (agterm-gpui): Zed's GPUI through gpui-kit, which pins the `gpui-pre` snapshot it re-exports
+# (`=0.3.9`, wgpu 29.0.4). Default features: its components and assets, never `gpui-fast` (longbridge's own backend).
+gpui-kit = "=0.7.3"
+# agterm-gpui's single instance: GApplication's own D-Bus protocol (`org.gtk.Application`, `org.gtk.Actions`) on the
+# app id's bus name, so GTK and GPUI launches forward to each other.
+zbus = "5.19"
+# agterm-gpui activates its window with a token another launch handed over, on GPUI's own connection: xdg-activation
+# on the Wayland display (the wayland-rs family GPUI links), `_NET_ACTIVE_WINDOW` on X11 (the x11rb major GPUI links).
+raw-window-handle = "0.6"
+wayland-backend = { version = "0.3.17", features = ["client_system"] }
+wayland-client = "0.31.15"
+wayland-protocols = { version = "0.32.13", features = ["client", "staging"] }
+x11rb = "0.13.2"
+# agterm-gpui's SIGTERM quit on a thread of its own (GPUI installs no signal handling; the GTK build's is GLib's).
+signal-hook = "0.4"
 
 # Inherited by every crate (`[lints] workspace = true`) except the generated -sys crates: `agterm-ghostty-sys` and
 # `agterm-ghostty-vt-sys` (bindgen), `agterm-wpe-sys`, `agterm-wpe-platform-sys` and `agterm-wpe-javascriptcore-sys`
@@ -107,3 +124,10 @@ multiple_unsafe_ops_per_block = "deny"
 # exceptions
 allow_attributes = "deny"
 allow_attributes_without_reason = "deny"
+
+# calloop (GPUI's Linux event loop) without its unconditional request for tracing's `log` feature, which workspace
+# feature unification spread to every crate and clippy's cognitive_complexity then counted in every tracing macro:
+# vendor/calloop is the verified crates.io source plus build/patches/calloop (scripts/vendor-calloop.sh;
+# scripts/check-tracing-features.sh keeps the feature out of the graph).
+[patch.crates-io]
+calloop = { path = "vendor/calloop" }
