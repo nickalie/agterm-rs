@@ -7,6 +7,7 @@
 
 pub mod activation;
 pub mod app;
+pub mod external_texture;
 pub mod instance;
 pub mod main_loop;
 pub mod signals;
