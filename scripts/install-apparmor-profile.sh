@@ -12,9 +12,10 @@
 #   scripts/install-apparmor-profile.sh --print [--gpui GPUI_BINARY] [BINARY]  print the profiles, change nothing
 #
 # BINARY is the GTK build's agterm executable that is launched and GPUI_BINARY the GPUI build's, symlinks resolved
-# (AppArmor attaches by the real path); defaults: the conformance stage's bin/agterm and bin/agterm-gpui under
-# ${CARGO_TARGET_DIR:-target}/conformance-stage. Neither need exist yet. Where AppArmor is off or does not restrict user
-# namespaces, nothing is installed. Root is gained through sudo; running it again with the same binaries changes
+# (AppArmor attaches by the real path); defaults: the conformance stages' binaries, bin/agterm under
+# ${CARGO_TARGET_DIR:-target}/conformance-stage and bin/agterm-gpui under conformance-stage-gpui beside it
+# (conformance/tools/run-rust-linux.sh --frontend). Neither need exist yet. Where AppArmor is off or does not restrict
+# user namespaces, nothing is installed. Root is gained through sudo; running it again with the same binaries changes
 # nothing.
 set -euo pipefail
 
@@ -137,7 +138,7 @@ fi
 target="${CARGO_TARGET_DIR:-$NATIVE_ROOT/target}"
 [[ "$target" == /* ]] || target="$NATIVE_ROOT/$target"
 binary="$(realpath -m -- "${binary:-$target/conformance-stage/bin/agterm}")"
-gpui="$(realpath -m -- "${gpui:-$target/conformance-stage/bin/agterm-gpui}")"
+gpui="$(realpath -m -- "${gpui:-$target/conformance-stage-gpui/bin/agterm-gpui}")"
 if [[ "$mode" == print ]]; then
   render "$binary" "$gpui"
 else

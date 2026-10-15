@@ -405,6 +405,27 @@ impl RowRef<'_> {
         RowId(id.bits)
     }
 
+    /// Whether the row soft-wraps into the next one (its text continues there).
+    #[must_use]
+    pub fn wrapped(&self) -> bool {
+        let mut raw: ffi::GhosttyRow = 0;
+        // SAFETY: the iterator is positioned on this row; `ROW_DATA_RAW` writes a `GhosttyRow` value.
+        let result = unsafe {
+            ffi::ghostty_render_state_row_get(
+                self.iterator.as_ptr(),
+                ffi::GHOSTTY_RENDER_STATE_ROW_DATA_RAW,
+                (&raw mut raw).cast(),
+            )
+        };
+        if result != ffi::GHOSTTY_SUCCESS {
+            return false;
+        }
+        let mut wrap = false;
+        // SAFETY: `raw` is this row's value; `ROW_DATA_WRAP` writes a `bool`.
+        unsafe { ffi::ghostty_row_get(raw, ffi::GHOSTTY_ROW_DATA_WRAP, (&raw mut wrap).cast()) };
+        wrap
+    }
+
     /// The selected columns of the row (first and last, inclusive); `None` when the selection misses the row.
     #[must_use]
     pub fn selection(&self) -> Option<(u16, u16)> {

@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use agterm_core::PaneReport;
 use agterm_core::link_policy::ClickOrigin;
-use agterm_core::model::{AppStore, SearchReport, Session};
+use agterm_core::model::{AppStore, SearchReport, Session, StatusKeystroke};
 use agterm_core::pane_env::{self, PaneEnv, SessionPane, StatusPane};
 use agterm_core::restore::spawn_plan::LaunchSeed;
 use agterm_term::{Launch, PaneEvent};
@@ -208,16 +208,20 @@ pub enum Report {
     /// The live font size changed.
     FontSize(f64),
     OpenUrl(String),
-    /// OSC 9/777, with whether the pane held the keyboard and its window was active when it fired.
+    /// A key the user pressed in the pane: user activity, and the status glyph it clears.
+    Keystroke(StatusKeystroke),
+    /// OSC 9/777; the focus sample travels beside it (`post_report`'s `focus`).
     Notification {
         title: String,
         body: String,
     },
 }
 
-/// What `event` reports, for a terminal that ran `ran`, on a machine named `hostname`.
+/// What `event` reports, for a terminal that ran `ran`, on a machine named `hostname`. A key pressed on a lead-covered
+/// pane (`covered`) only asks for the takeover: it is neither user activity nor a status keystroke, as in the GTK
+/// build and upstream (`PaneLead.consumes` runs before `onUserInput`).
 #[must_use]
-pub fn report(event: &TerminalEvent, ran: Ran, hostname: &str, points: f32) -> Vec<Report> {
+pub fn report(event: &TerminalEvent, ran: Ran, hostname: &str, points: f32, covered: bool) -> Vec<Report> {
     match event {
         TerminalEvent::Pane(event) => pane_report(event, ran, hostname),
         TerminalEvent::StartSearch(needle) => vec![Report::Search(SearchReport::Started(
@@ -226,6 +230,8 @@ pub fn report(event: &TerminalEvent, ran: Ran, hostname: &str, points: f32) -> V
         TerminalEvent::EndSearch => vec![Report::Search(SearchReport::Ended)],
         TerminalEvent::FontSize => vec![Report::FontSize(f64::from(points))],
         TerminalEvent::OpenUrl(url) => vec![Report::OpenUrl(url.clone())],
+        TerminalEvent::Keystroke(_) if covered => Vec::new(),
+        TerminalEvent::Keystroke(keystroke) => vec![Report::Keystroke(*keystroke)],
         _ => Vec::new(),
     }
 }
@@ -270,6 +276,7 @@ pub fn post_report(poster: &Poster, session: Uuid, token: &str, report: Report, 
             }
         }
         Report::OpenUrl(url) => state.follow_link(&url, ClickOrigin::Pane(session)),
+        Report::Keystroke(keystroke) => state.pane_keystroke(session, &token, keystroke),
         Report::Notification { title, body } => state.terminal_notification(session, &token, &title, &body, focus),
     });
 }

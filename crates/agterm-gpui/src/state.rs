@@ -13,10 +13,12 @@ use std::sync::Weak;
 use std::time::{Duration, Instant};
 
 use agterm_app::remote::{InboundGate, PresentationViewer, ProcessTransport};
+use agterm_core::app_actions::{ActionEffect, ActionOrigin, FrontendAction};
 use agterm_core::auto_follow::AutoFollowTimer;
 use agterm_core::events::{TREE_CHANGED_DEBOUNCE, TreeChangedTimer};
+use agterm_core::keymap::TypingSurface;
 use agterm_core::link_policy::{self, ClickOrigin, Route};
-use agterm_core::model::PendingCloseTimer;
+use agterm_core::model::{PendingCloseTimer, StatusKeystroke};
 use agterm_core::persist::{DebouncedSave, arm_debounced_saves};
 use agterm_core::sidebar_actions::SidebarAction;
 use agterm_core::{CommitTimers, ControlError, Core, Dispatched, PaneReport, PaneSpawn, Resume};
@@ -27,7 +29,19 @@ use agterm_server::{LineStream, LineStreamLimits, LineStreamOwner, Reply, ReplyS
 use uuid::Uuid;
 
 use crate::instance::Activation;
+use crate::keymap_dispatch::{Fired, KeyOrigin};
 use crate::main_loop::GpuiMainLoop;
+
+/// What a new window's first activation, while it may still be the focus the window manager grants on mapping it,
+/// knows of the window's build ([`AppState::window_activated`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirstFocus {
+    /// Built when the core's [`frontmost_takes`](agterm_core::Core::frontmost_takes) stood at this count.
+    Built { frontmost_takes: u64 },
+    /// Built and then minimized by its own command (`window.new --minimized`), which handed frontmost to a window in
+    /// view.
+    Parked,
+}
 
 /// How long a quit a command asked for waits, so the command's reply is written first.
 pub const LIVE_QUIT_DELAY: Duration = Duration::from_millis(250);
@@ -121,6 +135,9 @@ pub struct FrontendWork {
     pub reveals: Vec<std::path::PathBuf>,
     /// Quit the app: the orderly shutdown, then GPUI's quit.
     pub quit: bool,
+    /// What built-in actions left to the frontend (`keymap_actions`), each with the soft-close setting a delete
+    /// confirmation names.
+    pub actions: Vec<(FrontendAction, bool)>,
 }
 
 /// Whether a terminal's desktop notification fired while its pane held its window's keyboard (upstream's first
@@ -322,6 +339,16 @@ impl AppState {
         }
     }
 
+    /// A key the user pressed in the pane carrying `token` (the GTK build's `connect_keystroke`): the session saw
+    /// user activity, and the keystroke clears its status glyph when the glyph's rule says so.
+    pub fn pane_keystroke(&mut self, session: Uuid, token: &str, keystroke: StatusKeystroke) {
+        self.core.note_user_activity(session);
+        self.arm_auto_follow();
+        if self.core.clear_status_on_keystroke(session, token, keystroke) {
+            self.settle();
+        }
+    }
+
     /// A terminal's desktop notification, suppressed while its pane holds the keyboard of the active window
     /// (upstream's `NotificationManager.notify`).
     pub fn terminal_notification(&mut self, session: Uuid, token: &str, title: &str, body: &str, focus: NotifyFocus) {
@@ -349,6 +376,7 @@ impl AppState {
         if let Some(quit) = self.core.take_live_quit() {
             self.schedule_live_quit(quit);
         }
+        crate::keymap_dispatch::sync(&self.core, &self.poster);
         // the window requests and pane focus requests wait for the windows' sync after the task (`windows.rs`)
         self.arm_auto_follow();
         self.arm_hud_timers();
@@ -498,6 +526,48 @@ impl AppState {
         if store.set_split_focus(session, pane == agterm_core::model::OverlayPane::Right) {
             self.settle();
         }
+    }
+
+    /// A keymap chord fired in a window (or the quick terminal's panel, which acts on the frontmost window): a built-in
+    /// runs through the core, its frontend half lands with the app ([`FrontendWork::actions`]); a custom command runs
+    /// in the terminal typed in.
+    pub fn keymap_fired(&mut self, origin: KeyOrigin, fired: Fired, typing: Option<TypingSurface>) {
+        if self.quitting {
+            return;
+        }
+        let window = match origin {
+            KeyOrigin::Window(window) => Some(window),
+            KeyOrigin::Quick => self.core.library().active_window_id(),
+        };
+        match fired {
+            Fired::Builtin(action) => {
+                let Some(window) = window else { return };
+                let origin = ActionOrigin {
+                    window,
+                    quick: origin == KeyOrigin::Quick,
+                };
+                if let ActionEffect::Frontend(action) = self.core.perform_builtin(origin, action) {
+                    let close_grace = self.core.settings().close_grace_undo_enabled.unwrap_or(true);
+                    self.frontend.actions.push((action, close_grace));
+                }
+            }
+            Fired::Command(command) => self.core.run_custom_command_from_keybind(&command, window, typing),
+        }
+        self.settle();
+    }
+
+    /// A window dialog committed: `window.rename` or `window.delete` for window `window`.
+    pub fn window_command(&mut self, cmd: agterm_proto::command::WindowCmd, window: Uuid, name: Option<String>) {
+        if self.quitting {
+            return;
+        }
+        let response = self
+            .core
+            .dispatch(&crate::keymap_actions::window_request(cmd, window, name));
+        if !response.ok {
+            tracing::info!(error = ?response.error, "window dialog refused");
+        }
+        self.settle();
     }
 
     /// Answers one control request and settles what it changed. A command waiting on the frontend (a terminal coming
@@ -750,13 +820,33 @@ impl AppState {
         }
     }
 
-    /// The user opened or folded workspace `workspace`'s row in window `window`: the model persists it (upstream's
-    /// outline expand and collapse callbacks, a genuine user toggle).
+    /// The user opened or folded workspace `workspace`'s row in window `window`: the outline follows and the model
+    /// persists it (upstream's outline expand and collapse callbacks, a genuine user toggle). The outline follows
+    /// through the store's per-row request, which the sidebar takes on its next sync (the GTK build set the row on its
+    /// window directly).
     pub fn sidebar_toggle_workspace(&mut self, window: Uuid, workspace: Uuid, expanded: bool) {
         let action = SidebarAction::SetWorkspaceExpanded { workspace, expanded };
-        if self.core.sidebar_action(window, action) {
-            self.settle();
+        if !self.core.sidebar_action(window, action) {
+            return;
         }
+        if let Some(store) = self.core.library_mut().store_mut(window) {
+            store.set_workspace_expanded_in_outline(workspace, expanded);
+        }
+        self.settle();
+    }
+
+    /// The user dragged window `window`'s sidebar divider to `width`: its sidebar takes it, clamped, and saves. The
+    /// divider sits on whole pixels: a width the stored one rounds to is the model's own, not a move.
+    pub fn sidebar_resized(&mut self, window: Uuid, width: f64) {
+        let Some(store) = self.core.library_mut().store_mut(window) else {
+            return;
+        };
+        let width = width.round();
+        if (store.sidebar().width.round() - width).abs() < f64::EPSILON {
+            return;
+        }
+        store.set_sidebar_width(width);
+        self.settle();
     }
 
     /// An inline rename began in window `window`'s sidebar: auto-follow waits until it ends.
@@ -773,6 +863,30 @@ impl AppState {
         }
         self.core.sidebar_action(window, SidebarAction::FocusActiveTerminal);
         self.settle();
+    }
+
+    /// Window `window` took the keyboard: it is the key window and becomes frontmost, except on the focus the window
+    /// manager grants a new window when it maps it (`first`, [`FirstFocus`]) while another open window is frontmost
+    /// and either a command took frontmost since the window was built or the window was built parked: that focus
+    /// arrives after the open, so after such a command, which keeps frontmost, as on macOS, where a new window is key
+    /// before the open returns. Frontmost the model set itself (a restore, a reopen) does not hold the window back.
+    pub fn window_activated(&mut self, window: Uuid, first: Option<FirstFocus>) {
+        self.set_key_window(Some(window));
+        let held_back = match first {
+            Some(FirstFocus::Built { frontmost_takes }) => self.core.frontmost_takes() != frontmost_takes,
+            Some(FirstFocus::Parked) => true,
+            None => false,
+        };
+        let library = self.core.library();
+        if held_back
+            && let Some(frontmost) = library.frontmost_window_id
+            && frontmost != window
+            && library.is_open(frontmost)
+        {
+            tracing::debug!(%window, %frontmost, "a new window's first focus came after a command took frontmost");
+            return;
+        }
+        self.report_frontmost(window);
     }
 
     /// The user activated window `window`: it becomes frontmost (upstream's `WindowAccessor.reportFrontmost`).

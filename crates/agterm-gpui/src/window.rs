@@ -11,18 +11,21 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use agterm_core::model::{AppStore, Session, WindowLibrary};
 use agterm_core::titlebar::UNTITLED;
 use agterm_core::{Core, WindowRequest, WindowSize, WindowState};
 use gpui_kit::{
-    AnyView, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    Styled as _, Subscription, Window, div, px, size,
+    AnyView, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, KeyUpEvent,
+    ParentElement as _, Render, Styled as _, Subscription, Window, div, px, size,
 };
 use uuid::Uuid;
 
 use crate::deck::Deck;
-use crate::state::{AppState, Poster, post};
+use crate::keymap_dispatch::KeyOrigin;
+use crate::sidebar::Sidebar;
+use crate::state::{AppState, FirstFocus, Poster, post};
 use crate::titlebar::{Cover, Titlebar};
 
 /// The window title: the active session's display name, then the window's custom name when it has one (upstream's
@@ -124,18 +127,30 @@ pub struct WindowView {
     id: Uuid,
     deck: Entity<Deck>,
     titlebar: Entity<Titlebar>,
+    sidebar: Entity<Sidebar>,
     layers: Vec<(Layer, AnyView)>,
     title: String,
     /// Set once the model closed the window, so its close request goes through.
     closing: Rc<Cell<bool>>,
     painted: Rc<Cell<Painted>>,
+    /// What the window's first activation knows of its build, until that activation or [`FIRST_FOCUS_GRACE`] after
+    /// its first frame.
+    first_focus: Rc<Cell<Option<FirstFocus>>>,
     poster: Poster,
     _subscriptions: Vec<Subscription>,
 }
 
 impl WindowView {
-    /// The root of model window `id`, over `deck`; its handlers post through `poster`.
-    pub fn new(id: Uuid, deck: Entity<Deck>, poster: Poster, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// The root of model window `id`, over `deck`, built when the core's frontmost takes stood at `frontmost_takes`;
+    /// its handlers post through `poster`.
+    pub fn new(
+        id: Uuid,
+        deck: Entity<Deck>,
+        poster: Poster,
+        frontmost_takes: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let closing = Rc::new(Cell::new(false));
         let (posting, closed) = (poster.clone(), Rc::clone(&closing));
         window.on_window_should_close(cx, move |_, _| {
@@ -145,27 +160,42 @@ impl WindowView {
             post(&posting, move |state: &mut AppState| state.close_requested(id));
             false
         });
+        crate::keymap_dispatch::register_window(window.window_handle(), KeyOrigin::Window(id));
         let posting = poster.clone();
-        let activation = cx.observe_window_activation(window, move |_, window, _| {
+        let first_focus = Rc::new(Cell::new(Some(FirstFocus::Built { frontmost_takes })));
+        let (fresh, expiring) = (Rc::clone(&first_focus), Rc::clone(&first_focus));
+        window.on_next_frame(move |_, cx| {
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(FIRST_FOCUS_GRACE).await;
+                expiring.set(None);
+            })
+            .detach();
+        });
+        let activation = cx.observe_window_activation(window, move |_, window, cx| {
+            if !window.is_window_active() {
+                check_keyboard_left(cx);
+            }
             if window.is_window_active() {
-                post(&posting, move |state: &mut AppState| {
-                    state.set_key_window(Some(id));
-                    state.report_frontmost(id);
-                });
+                let first = fresh.take();
+                post(&posting, move |state: &mut AppState| state.window_activated(id, first));
             } else {
                 post(&posting, move |state: &mut AppState| state.key_window_lost(id));
             }
         });
         let bounds = cx.observe_window_bounds(window, |_, _, cx| cx.notify());
         let titlebar = cx.new(|_| Titlebar::new(id, poster.clone()));
+        let env = std::rc::Rc::clone(deck.read(cx).env());
+        let sidebar = cx.new(|_| Sidebar::new(id, env));
         Self {
             id,
             deck,
             titlebar,
+            sidebar,
             layers: Vec::new(),
             title: UNTITLED.to_owned(),
             closing,
             painted: Rc::new(Cell::new(Painted::default())),
+            first_focus,
             poster,
             _subscriptions: vec![activation, bounds],
         }
@@ -182,9 +212,16 @@ impl WindowView {
         &self.deck
     }
 
+    /// The window's title bar.
     #[must_use]
     pub fn titlebar(&self) -> &Entity<Titlebar> {
         &self.titlebar
+    }
+
+    /// The window's sidebar.
+    #[must_use]
+    pub fn sidebar(&self) -> &Entity<Sidebar> {
+        &self.sidebar
     }
 
     /// The title set last.
@@ -211,6 +248,7 @@ impl WindowView {
 
     /// Closes the window for good: the model closed it, and its terminals with it.
     pub fn close(&self, window: &mut Window) {
+        crate::keymap_dispatch::unregister_window(window.window_handle());
         self.closing.set(true);
         window.remove_window();
     }
@@ -236,20 +274,20 @@ impl WindowView {
         self.painted.get().state(display_size(window, cx))
     }
 
-    /// Renders the model: the deck's pages and the title. Whether a modal holds the keyboard is the model's: the
-    /// window's picker or GUI ask, or its palette.
-    pub fn sync(&mut self, core: &mut Core, window: &mut Window, cx: &mut Context<Self>) {
+    /// Renders the model: the deck's pages, the sidebar and the title. Whether a modal holds the keyboard is the
+    /// model's: the window's picker or GUI ask, or its palette; while the sidebar's row menu holds it the deck moves
+    /// no focus. Whether the core needs a settle for the focus the deck gave.
+    #[must_use = "a focus report the core took needs a settle"]
+    pub fn sync(&mut self, core: &mut Core, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let id = self.id;
         let modal = core.modal_pending(id) || core.palette_holds(id);
-        let given = self.deck.update(cx, |deck, cx| {
-            deck.reconcile(core, modal, window, cx);
-            deck.take_given_focus()
+        let sidebar = self.sidebar.read(cx);
+        let (held, owner) = (sidebar.menu_open(), sidebar.keyboard_owner(cx));
+        let focused = self.deck.update(cx, |deck, cx| {
+            deck.hold_keyboard(held, owner);
+            deck.reconcile(core, modal, window, cx)
         });
-        for (session, token) in given {
-            post(&self.poster, move |state: &mut AppState| {
-                state.pane_focused(session, &token);
-            });
-        }
+        self.sidebar.update(cx, |sidebar, cx| sidebar.sync(core, cx));
         let dashboard = core.dashboard(id).is_some();
         let title = if dashboard {
             dashboard_title(core.library(), id)
@@ -271,6 +309,7 @@ impl WindowView {
             self.title = title;
         }
         cx.notify();
+        focused
     }
 
     /// Applies a window command's request (upstream's `WindowRegistry` actions). GPUI has no client positioning on
@@ -292,6 +331,10 @@ impl WindowView {
             WindowRequest::ToggleFullscreen(_) => window.toggle_fullscreen(),
             WindowRequest::Minimize { minimized, .. } => {
                 if minimized {
+                    // a new window parked by its own command leaves frontmost where that command handed it
+                    if self.first_focus.get().is_some() {
+                        self.first_focus.set(Some(FirstFocus::Parked));
+                    }
                     window.minimize_window();
                 } else {
                     window.activate_window();
@@ -328,6 +371,12 @@ impl Render for WindowView {
             .map(|(_, view)| div().absolute().inset_0().child(view.clone()));
         div()
             .id("window")
+            .capture_key_up(|event: &KeyUpEvent, window, cx| {
+                // a release of a press the keymap took is the keymap's: no terminal reports it
+                if crate::keymap_dispatch::key_up(event, window, cx) {
+                    cx.stop_propagation();
+                }
+            })
             .relative()
             .size_full()
             .flex()
@@ -340,6 +389,7 @@ impl Render for WindowView {
                     .min_h(px(0.))
                     .flex()
                     .flex_row()
+                    .child(self.sidebar.clone())
                     .child(div().flex_1().min_w(px(0.)).h_full().child(self.deck.clone())),
             )
             .children(layers)
@@ -347,10 +397,34 @@ impl Render for WindowView {
     }
 }
 
-/// Opens the window of model window `id` with `app_id` as its Wayland app id / X11 class; its handle, `None` (logged)
-/// when the platform could not open one.
+/// How long after a window loses the keyboard the monitor checks whether another agterm window took it (the GTK
+/// build's `LEAVE_CHECK_DELAY`): the next window's activation comes after this one's deactivation.
+const LEAVE_CHECK_DELAY: Duration = Duration::from_millis(150);
+
+/// How long after its first frame a new window's first activation still counts as the focus the window manager grants
+/// on mapping it ([`AppState::window_activated`]): that one follows the map at once, while a window left unfocused then
+/// is activated later only by the user, whose activation always counts, whatever commands took frontmost before.
+const FIRST_FOCUS_GRACE: Duration = Duration::from_secs(1);
+
+/// A window lost the keyboard: once the next activation had its chance, the key monitor forgets its consumed keys
+/// when no agterm window holds the keyboard.
+fn check_keyboard_left(cx: &mut Context<WindowView>) {
+    cx.spawn(async move |_, cx| {
+        cx.background_executor().timer(LEAVE_CHECK_DELAY).await;
+        cx.update(|cx| {
+            if !crate::keymap_dispatch::holds_keyboard(cx.active_window()) {
+                crate::keymap_dispatch::keyboard_left();
+            }
+        });
+    })
+    .detach();
+}
+
+/// Opens the window of model window `id` with `app_id` as its Wayland app id / X11 class, when the core's frontmost
+/// takes stand at `frontmost_takes`; its handle, `None` (logged) when the platform could not open one.
 pub fn open(
     id: Uuid,
+    frontmost_takes: u64,
     app_id: &str,
     env: &Rc<crate::deck::DeckEnv>,
     cx: &mut App,
@@ -373,9 +447,10 @@ pub fn open(
     };
     let env = Rc::clone(env);
     let poster = env.poster.clone();
+    crate::status_glyph::watch_motion(cx);
     let opened = cx.open_window(options, move |window, cx| {
         let deck = cx.new(|_| Deck::new(id, env));
-        cx.new(|cx| WindowView::new(id, deck, poster, window, cx))
+        cx.new(|cx| WindowView::new(id, deck, poster, frontmost_takes, window, cx))
     });
     match opened {
         Ok(handle) => Some(handle),

@@ -172,8 +172,10 @@ fn plan_cell<'a>(row: &'a Row, col: u16, colors: &Colors, palette: &Palette, mar
     let paint = cell_paint(&cell, text, marks.at(mark_col), colors, palette);
     let visible = !cell.flags.contains(CellFlags::INVISIBLE);
     let width = cell_width(cell.width);
-    // a blank or a space has no glyph to shape
-    let style = (visible && !text.trim().is_empty() && width > 0).then_some(TextStyle {
+    // a blank or a space has no glyph to shape, nor has a Kitty placeholder cell: its image is drawn there, and
+    // Ghostty shapes it as a space (`font/shaper/run.zig`)
+    let placeholder = text.starts_with(agterm_term::PLACEHOLDER);
+    let style = (visible && !placeholder && !text.trim().is_empty() && width > 0).then_some(TextStyle {
         bold: cell.flags.contains(CellFlags::BOLD),
         italic: cell.flags.contains(CellFlags::ITALIC),
         color: paint.foreground,

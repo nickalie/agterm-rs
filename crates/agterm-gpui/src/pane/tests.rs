@@ -202,39 +202,39 @@ fn a_pane_events_report_what_the_gtk_build_routed() {
     };
     let title = TerminalEvent::Pane(PaneEvent::Title("vim".to_owned()));
     assert_eq!(
-        report(&title, shell, "box", 12.0),
+        report(&title, shell, "box", 12.0, false),
         [Report::Pane(PaneReport::Title("vim".to_owned()))]
     );
     let pwd = TerminalEvent::Pane(PaneEvent::Pwd("file://box/srv/a%20b".to_owned()));
     assert_eq!(
-        report(&pwd, shell, "box", 12.0),
+        report(&pwd, shell, "box", 12.0, false),
         [Report::Pane(PaneReport::Pwd("/srv/a b".to_owned()))]
     );
     let foreign = TerminalEvent::Pane(PaneEvent::Pwd("file://elsewhere/srv".to_owned()));
     assert!(
-        report(&foreign, shell, "box", 12.0).is_empty(),
+        report(&foreign, shell, "box", 12.0, false).is_empty(),
         "a foreign host is ignored"
     );
-    assert_eq!(report(&exited(false), shell, "box", 12.0), [Report::Exited]);
+    assert_eq!(report(&exited(false), shell, "box", 12.0, false), [Report::Exited]);
     assert!(
-        report(&exited(true), shell, "box", 12.0).is_empty(),
+        report(&exited(true), shell, "box", 12.0, false).is_empty(),
         "a held login shell waits for a key"
     );
     assert_eq!(
-        report(&exited(true), waited, "box", 12.0),
+        report(&exited(true), waited, "box", 12.0, false),
         [Report::Held],
         "a held command is reported held"
     );
     assert_eq!(
-        report(&TerminalEvent::FontSize, shell, "box", 13.5),
+        report(&TerminalEvent::FontSize, shell, "box", 13.5, false),
         [Report::FontSize(13.5)]
     );
     assert_eq!(
-        report(&TerminalEvent::StartSearch(String::new()), shell, "box", 12.0),
+        report(&TerminalEvent::StartSearch(String::new()), shell, "box", 12.0, false),
         [Report::Search(SearchReport::Started(None))]
     );
     assert_eq!(
-        report(&TerminalEvent::StartSearch("x".to_owned()), shell, "box", 12.0),
+        report(&TerminalEvent::StartSearch("x".to_owned()), shell, "box", 12.0, false),
         [Report::Search(SearchReport::Started(Some("x".to_owned())))]
     );
     assert_eq!(
@@ -242,13 +242,36 @@ fn a_pane_events_report_what_the_gtk_build_routed() {
             &TerminalEvent::Pane(PaneEvent::SearchTotal(Some(3))),
             shell,
             "box",
-            12.0
+            12.0,
+            false
         ),
         [Report::Search(SearchReport::Total(Some(3)))]
     );
     assert_eq!(
-        report(&TerminalEvent::OpenUrl("https://x.dev".to_owned()), shell, "box", 12.0),
+        report(
+            &TerminalEvent::OpenUrl("https://x.dev".to_owned()),
+            shell,
+            "box",
+            12.0,
+            false
+        ),
         [Report::OpenUrl("https://x.dev".to_owned())]
     );
-    assert!(report(&TerminalEvent::Pane(PaneEvent::Bell), shell, "box", 12.0).is_empty());
+    assert!(report(&TerminalEvent::Pane(PaneEvent::Bell), shell, "box", 12.0, false).is_empty());
+}
+
+#[test]
+fn a_key_on_a_lead_covered_pane_is_not_a_keystroke() {
+    let shell = Ran::default();
+    let key = TerminalEvent::Keystroke(StatusKeystroke::Interrupt);
+    assert_eq!(
+        report(&key, shell, "box", 12.0, false),
+        [Report::Keystroke(StatusKeystroke::Interrupt)]
+    );
+    assert!(
+        report(&key, shell, "box", 12.0, true).is_empty(),
+        "the takeover key is neither user activity nor a status clear"
+    );
+    // a cover hides only the takeover key: the pane's other events still report
+    assert_eq!(report(&exited(false), shell, "box", 12.0, true), [Report::Exited]);
 }

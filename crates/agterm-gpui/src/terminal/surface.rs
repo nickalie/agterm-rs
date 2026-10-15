@@ -225,7 +225,8 @@ impl Actions<'_> {
             Action::SetFontSize(points) => *points,
             _ => return None,
         };
-        self.shared.set_font_points(points);
+        self.shared
+            .adjust_font_points(points, matches!(action, Action::ResetFontSize));
         Some(true)
     }
 
@@ -267,10 +268,8 @@ impl Actions<'_> {
         })
     }
 
-    /// `copy_to_clipboard`: Ghostty's `copySelectionToClipboards`, performed whenever there is a selection. GPUI's
-    /// Linux clipboard offers text only: plain and VT text are written as Ghostty writes them, `mixed` its plain text
-    /// part, and `html` (Ghostty offers it as `text/html` alone) leaves the clipboard as it is (plan > Task 14 ➕ MIME
-    /// transport).
+    /// `copy_to_clipboard`: Ghostty's `copySelectionToClipboards`, performed whenever there is a selection: plain and
+    /// VT text as text, `html` as `text/html` alone, `mixed` as both (the HTML offer is our `gpui-pre-linux` patch).
     fn copy(&self, pane: &Pane, format: CopyFormat) -> bool {
         let trim = self.shared.config().copy_trim;
         let text_format = match format {
@@ -281,11 +280,15 @@ impl Actions<'_> {
         let Some(text) = pane.format(FormatRegion::Selection, text_format, trim) else {
             return false;
         };
-        if format == CopyFormat::Html {
-            tracing::warn!(target: "agterm::surface", "copying as HTML needs a text/html clipboard offer GPUI lacks");
-        } else {
-            self.queue(Effect::Copy(text, ClipboardLocation::Standard));
-        }
+        let effect = match format {
+            CopyFormat::Html => Effect::CopyHtml { text: None, html: text },
+            CopyFormat::Mixed => match pane.format(FormatRegion::Selection, TextFormat::Html, trim) {
+                Some(html) => Effect::CopyHtml { text: Some(text), html },
+                None => Effect::Copy(text, ClipboardLocation::Standard),
+            },
+            CopyFormat::Plain | CopyFormat::Vt => Effect::Copy(text, ClipboardLocation::Standard),
+        };
+        self.queue(effect);
         if self.shared.config().clear_selection_on_copy
             && let Err(err) = pane.clear_selection()
         {

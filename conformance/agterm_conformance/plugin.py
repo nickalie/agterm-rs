@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Self
 
 import pytest
 
-from agterm_conformance import coverage, wait
+from agterm_conformance import coverage, selection, wait
 from agterm_conformance.client import Response, SocketOutsideRoot, Stream, check_under_root
 from agterm_conformance.match import assert_ok
 
@@ -24,6 +24,8 @@ if TYPE_CHECKING:
     from agterm_conformance.impls.base import Adapter, Instance
 
 IMPLS = ("swift-macos", "swift-linux", "rust")
+# `impls.rust.FRONTENDS`, default first; spelled here because the adapters import this module.
+RUST_FRONTENDS = ("gtk", "gpui")
 # A rust run without a binary is legal: the adapter reports nothing and every test skips.
 BIN_REQUIRED = frozenset({"swift-macos", "swift-linux"})
 SCRUB_PREFIXES = ("AGTERM_", "ZMX_")
@@ -68,6 +70,7 @@ class ImplOptions:
     ctl: Path | None
     coverage_gate: bool
     macos_launch_mode: str = "uitest"
+    rust_frontend: str = "gtk"
     catalog: Path | None = None
     ui_ids: Path | None = None
     coverage_baseline: Path | None = None
@@ -103,6 +106,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="swift-macos: XCUITest sentinel with zmx (default) or a bare exec",
     )
     group.addoption(
+        "--rust-frontend",
+        choices=RUST_FRONTENDS,
+        default=RUST_FRONTENDS[0],
+        help="rust: the GTK build (default) or the GPUI one, which renders on lavapipe ($CONFORMANCE_LAVAPIPE_ICD)",
+    )
+    group.addoption(
         "--coverage-gate", action="store_true", default=False, help="check catalog coverage without launching anything"
     )
     group.addoption(
@@ -132,6 +141,27 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         metavar="PATH",
         help="write each selected test's merged outcome as JSON lines to PATH, for the ratchet",
     )
+    group.addoption(
+        "--ratchet-only",
+        type=Path,
+        default=None,
+        metavar="LIST",
+        help="run only the ids the ratchet LIST holds (plus --also/--also-k); the nodeid report says ratchet-only",
+    )
+    group.addoption(
+        "--also",
+        action="append",
+        default=[],
+        metavar="SELECTOR",
+        help="with --ratchet-only: also run the tests under this directory, file or node-id prefix (repeatable)",
+    )
+    group.addoption(
+        "--also-k",
+        action="append",
+        default=[],
+        metavar="EXPRESSION",
+        help="with --ratchet-only: also run the tests this -k expression matches (repeatable)",
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -143,6 +173,7 @@ def pytest_configure(config: pytest.Config) -> None:
         ctl=config.getoption("ctl"),
         coverage_gate=config.getoption("coverage_gate"),
         macos_launch_mode=config.getoption("macos_launch_mode"),
+        rust_frontend=config.getoption("rust_frontend"),
         catalog=config.getoption("catalog"),
         ui_ids=config.getoption("ui_ids"),
         coverage_baseline=config.getoption("coverage_baseline"),
@@ -156,6 +187,15 @@ def pytest_configure(config: pytest.Config) -> None:
             raise pytest.UsageError("--nodeid-report cannot be combined with --coverage-gate")
         report_path = config.invocation_params.dir / nodeid_report
         config.pluginmanager.register(NodeidReport(report_path), "agterm-nodeid-report")
+    ratchet_only = config.getoption("ratchet_only")
+    if ratchet_only is None and (config.getoption("also") or config.getoption("also_k")):
+        raise pytest.UsageError("--also and --also-k need --ratchet-only")
+    if ratchet_only is not None:
+        if options.coverage_gate:
+            raise pytest.UsageError("--ratchet-only cannot be combined with --coverage-gate")
+        listed = selection.listed_ids(config.invocation_params.dir / ratchet_only)
+        selector = selection.RatchetOnly(listed, config.getoption("also"), config.getoption("also_k"))
+        config.pluginmanager.register(selector, "agterm-ratchet-only")
     if options.coverage_gate:
         config.pluginmanager.register(_GateCollector(), "agterm-coverage-gate-collector")
     elif must_pass := config.getoption("must_pass"):
@@ -248,6 +288,8 @@ class NodeidReport:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.partial = False
+        # set by `--ratchet-only` when nothing else narrowed the collection (selection.RatchetOnly)
+        self.mode: str | None = None
         self.merged: dict[str, dict[str, Any]] = {}
         self.collection_errors: list[dict[str, Any]] = []
 
@@ -290,8 +332,10 @@ class NodeidReport:
             # and a header-only report would read as an empty run that holds the ratchet. No file instead, so
             # check_ratchet.py exits 2.
             return
-        partial = self.partial or any("::" in arg for arg in session.config.args)
-        lines: list[dict[str, Any]] = [{"kind": "run", "partial": partial}]
+        # a ratchet-only run is narrowed by design, even when the list happens to hold every collected test
+        partial = self.partial or self.mode is not None or any("::" in arg for arg in session.config.args)
+        mode = self.mode or (selection.PARTIAL if partial else selection.FULL)
+        lines: list[dict[str, Any]] = [{"kind": "run", "partial": partial, "mode": mode}]
         for item in getattr(session, "items", []):
             lines.append({"kind": "test", "nodeid": item.nodeid, **self.merged.get(item.nodeid, _not_run())})
         lines += self.collection_errors
@@ -537,6 +581,8 @@ def _skip_category(report: Any) -> str:
 def pytest_report_header(config: pytest.Config) -> list[str]:
     options = get_impl_options(config)
     lines = [f"agterm impl: {options.impl or '-'}, bin: {options.bin or '-'}, ctl: {options.ctl or '-'}"]
+    if options.impl == "rust":
+        lines.append(f"rust frontend: {options.rust_frontend}")
     if SCRUBBED:
         lines.append(f"scrubbed from env: {', '.join(SCRUBBED)}")
     return lines
