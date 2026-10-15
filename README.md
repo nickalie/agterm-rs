@@ -37,7 +37,7 @@ agterm in Rust, Linux first: a GTK4/libadwaita terminal over libghostty, driven 
 - For the conformance suite: Python 3.11+ with venv, weston and dbus-daemon (each instance gets its own headless
   weston and bus); zsh or fish as the login shell for the Live tests of that shell.
 
-On Ubuntu 24.04, the CI image's packages plus `xvfb` and `python3-venv` for local runs:
+On Ubuntu 26.04, the CI image's packages plus `xvfb` and `python3-venv` for local runs:
 
 ```sh
 sudo apt-get install pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
@@ -95,7 +95,7 @@ scripts/build-zmx.sh           # the pinned, patched zmx behind Live sessions
 scripts/fetch-wpe.sh           # the pinned WPE WebKit binary package, only where the system has none (below)
 scripts/fetch-fonts.sh         # the fonts Ghostty embeds, which the GPUI frontend embeds too (below)
 scripts/fetch-lavapipe.sh      # Mesa's lavapipe for headless GPUI runs: the system's, else the pinned Arch package
-scripts/build-weston.sh        # weston 15 for headless GPUI runs where the system's is older (Ubuntu 24.04: 13)
+scripts/build-weston.sh        # weston 15 for headless GPUI runs where the system's is older (Ubuntu 26.04: 14)
 ```
 
 The GPUI build's headless runs (the conformance suite with `--frontend gpui`, `agterm-gpui`'s process tests) render on
@@ -152,11 +152,11 @@ need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through p
   from that prefix needs the helper path overlaid (`bwrap --ro-overlay /usr/lib` with the prefix's `lib/` on top),
   since nothing relocates it: `agterm_wpe::launcher::command` builds that launch, and `agterm-wpe`'s engine tests
   (`cargo test -p agterm-wpe`) run their pages through it. Pick the distribution package whenever you can.
-- Ubuntu 24.04 packages no `wpewebkit` at all (none since 22.04's 2.36) and cannot load the Arch package (glibc 2.39):
-  it builds the GTK app without the WPE crates (`WORKSPACE_WITHOUT_WPE` in `scripts/lib/native.sh`, which
-  `scripts/run-dev.sh`, `run-rust-linux.sh` and the Ubuntu CI jobs use). Before the GPUI frontend makes WPE a
-  dependency of what Ubuntu builds, it needs a provider there (a source build into the vendored prefix) or the GPUI
-  checks move to the Arch CI job.
+- Ubuntu packages no `wpewebkit` at all (none since 22.04's 2.36, 26.04 included), and 24.04 cannot load the Arch
+  package (glibc 2.39): Ubuntu builds the GTK app without the WPE crates (`WORKSPACE_WITHOUT_WPE` in
+  `scripts/lib/native.sh`, which `scripts/run-dev.sh`, `run-rust-linux.sh` and the Ubuntu CI jobs use). Before the
+  GPUI frontend makes WPE a dependency of what Ubuntu builds, it needs a provider there (a source build into the
+  vendored prefix) or the GPUI checks move to the Arch CI job.
 - CI: the `wpe` job installs `wpewebkit` from a date-pinned Arch Linux Archive snapshot in a digest-pinned `archlinux`
   container, checks the WPE crates there and that the checked-in bindings equal a regeneration.
 

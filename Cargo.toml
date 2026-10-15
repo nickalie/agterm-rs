@@ -59,7 +59,7 @@ unicase = "2.10"
 unicode-normalization = "0.1"
 url = "2.5"
 uuid = { version = "1", features = ["v4", "serde"] }
-# GTK 4.14 and libadwaita 1.5 are Ubuntu 24.04's, the oldest platform CI builds on.
+# GTK 4.14 and libadwaita 1.5 are Ubuntu 24.04's, the oldest platform the build targets (CI runs 26.04).
 gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
 # The quick terminal's layer-shell panel. No version feature: the 1.0 API is enough. It links the C library, built by
