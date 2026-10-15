@@ -85,6 +85,8 @@ fn the_terminal_area_starts_past_a_shown_sidebar() {
 
 #[gpui_kit::test]
 fn the_shell_titles_its_window_and_keeps_its_modal_layers_in_order(cx: &mut TestAppContext) {
+    // the sidebar's footer draws gpui-kit buttons, which read its theme
+    cx.update(gpui_kit::init);
     let mut library = WindowLibrary::seeded("/home/u");
     let window = library.active_window_id().unwrap();
     library.rename_window(window, "work");

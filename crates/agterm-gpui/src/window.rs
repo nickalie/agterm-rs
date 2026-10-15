@@ -21,6 +21,7 @@ use gpui_kit::{
 use uuid::Uuid;
 
 use crate::deck::Deck;
+use crate::sidebar::Sidebar;
 use crate::state::{AppState, Poster, post};
 
 /// The window title: the active session's display name, then the window's custom name when it has one (upstream's
@@ -121,6 +122,7 @@ fn display_size(window: &Window, cx: &App) -> Option<WindowSize> {
 pub struct WindowView {
     id: Uuid,
     deck: Entity<Deck>,
+    sidebar: Entity<Sidebar>,
     layers: Vec<(Layer, AnyView)>,
     title: String,
     /// Set once the model closed the window, so its close request goes through.
@@ -154,9 +156,12 @@ impl WindowView {
             }
         });
         let bounds = cx.observe_window_bounds(window, |_, _, cx| cx.notify());
+        let env = std::rc::Rc::clone(deck.read(cx).env());
+        let sidebar = cx.new(|_| Sidebar::new(id, env));
         Self {
             id,
             deck,
+            sidebar,
             layers: Vec::new(),
             title: UNTITLED.to_owned(),
             closing,
@@ -175,6 +180,12 @@ impl WindowView {
     #[must_use]
     pub fn deck(&self) -> &Entity<Deck> {
         &self.deck
+    }
+
+    /// The window's sidebar.
+    #[must_use]
+    pub fn sidebar(&self) -> &Entity<Sidebar> {
+        &self.sidebar
     }
 
     /// The title set last.
@@ -226,8 +237,8 @@ impl WindowView {
         self.painted.get().state(display_size(window, cx))
     }
 
-    /// Renders the model: the deck's pages and the title. Whether a modal holds the keyboard is the model's: the
-    /// window's picker or GUI ask, or its palette.
+    /// Renders the model: the deck's pages, the sidebar and the title. Whether a modal holds the keyboard is the
+    /// model's: the window's picker or GUI ask, or its palette.
     pub fn sync(&mut self, core: &mut Core, window: &mut Window, cx: &mut Context<Self>) {
         let id = self.id;
         let modal = core.modal_pending(id) || core.palette_holds(id);
@@ -240,6 +251,7 @@ impl WindowView {
                 state.pane_focused(session, &token);
             });
         }
+        self.sidebar.update(cx, |sidebar, cx| sidebar.sync(core, cx));
         let title = if core.dashboard(id).is_some() {
             dashboard_title(core.library(), id)
         } else {
@@ -318,6 +330,7 @@ impl Render for WindowView {
                     .min_h(px(0.))
                     .flex()
                     .flex_row()
+                    .child(self.sidebar.clone())
                     .child(div().flex_1().min_w(px(0.)).h_full().child(self.deck.clone())),
             )
             .children(layers)
@@ -347,6 +360,7 @@ pub fn open(
     };
     let env = Rc::clone(env);
     let poster = env.poster.clone();
+    crate::status_glyph::watch_motion(cx);
     let opened = cx.open_window(options, move |window, cx| {
         let deck = cx.new(|_| Deck::new(id, env));
         cx.new(|cx| WindowView::new(id, deck, poster, window, cx))

@@ -747,13 +747,33 @@ impl AppState {
         }
     }
 
-    /// The user opened or folded workspace `workspace`'s row in window `window`: the model persists it (upstream's
-    /// outline expand and collapse callbacks, a genuine user toggle).
+    /// The user opened or folded workspace `workspace`'s row in window `window`: the outline follows and the model
+    /// persists it (upstream's outline expand and collapse callbacks, a genuine user toggle). The outline follows
+    /// through the store's per-row request, which the sidebar takes on its next sync (the GTK build set the row on its
+    /// window directly).
     pub fn sidebar_toggle_workspace(&mut self, window: Uuid, workspace: Uuid, expanded: bool) {
         let action = SidebarAction::SetWorkspaceExpanded { workspace, expanded };
-        if self.core.sidebar_action(window, action) {
-            self.settle();
+        if !self.core.sidebar_action(window, action) {
+            return;
         }
+        if let Some(store) = self.core.library_mut().store_mut(window) {
+            store.set_workspace_expanded_in_outline(workspace, expanded);
+        }
+        self.settle();
+    }
+
+    /// The user dragged window `window`'s sidebar divider to `width`: its sidebar takes it, clamped, and saves. The
+    /// divider sits on whole pixels: a width the stored one rounds to is the model's own, not a move.
+    pub fn sidebar_resized(&mut self, window: Uuid, width: f64) {
+        let Some(store) = self.core.library_mut().store_mut(window) else {
+            return;
+        };
+        let width = width.round();
+        if (store.sidebar().width.round() - width).abs() < f64::EPSILON {
+            return;
+        }
+        store.set_sidebar_width(width);
+        self.settle();
     }
 
     /// An inline rename began in window `window`'s sidebar: auto-follow waits until it ends.

@@ -350,6 +350,12 @@ impl Deck {
         self.shown
     }
 
+    /// What the deck's terminals share: the config, the launcher, the poster.
+    #[must_use]
+    pub fn env(&self) -> &Rc<DeckEnv> {
+        &self.env
+    }
+
     /// The colors the deck draws with.
     #[must_use]
     pub fn look(&self) -> Look {
