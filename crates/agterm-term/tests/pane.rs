@@ -338,18 +338,18 @@ fn color_scheme_queries_are_answered_and_mode_2031_gets_a_report_on_a_change_onl
         "the query answers dark"
     );
     assert_eq!(fixture.pane.color_scheme(), ColorScheme::Dark);
-    // without mode 2031 a change is only remembered
-    fixture.pane.set_color_scheme(ColorScheme::Light);
-    fixture.pane.set_color_scheme(ColorScheme::Dark);
-    std::fs::write(fixture.path("go"), b"").unwrap();
-    wait_text(&fixture.pane, "ready");
-    // the same scheme again is no change
-    fixture.pane.set_color_scheme(ColorScheme::Dark);
+    // without mode 2031 a change is only remembered: a report of it would read light, not the dark one expected
     fixture.pane.set_color_scheme(ColorScheme::Light);
     assert_eq!(fixture.pane.color_scheme(), ColorScheme::Light);
+    std::fs::write(fixture.path("go"), b"").unwrap();
+    wait_text(&fixture.pane, "ready");
+    // the same scheme again is no change (a report of it would read light too)
+    fixture.pane.set_color_scheme(ColorScheme::Light);
+    fixture.pane.set_color_scheme(ColorScheme::Dark);
+    assert_eq!(fixture.pane.color_scheme(), ColorScheme::Dark);
     assert_eq!(
         wait_file(&fixture.path("report"), 9),
-        b"\x1b[?997;2n",
+        b"\x1b[?997;1n",
         "one report, for the change made with mode 2031 on"
     );
     wait_text(&fixture.pane, "done");

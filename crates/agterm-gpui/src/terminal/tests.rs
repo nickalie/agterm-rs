@@ -1022,6 +1022,23 @@ fn a_config_reload_resizes_a_restored_size_the_user_did_not_step() {
     assert_eq!(*events.borrow(), [TerminalEvent::FontSize]);
 }
 
+#[test]
+fn an_appearance_flip_keeps_a_restored_or_replacement_size() {
+    // upstream's `reloadConfigPreservingSessionZoom`, the GTK build's `keep_zoom`: the flip's reload keeps the live
+    // size, and keeps it as stepped, so a later explicit reload keeps it too
+    let mut cx = real_fonts();
+    let (terminal, events) = unstarted_at(&mut cx, "DejaVu Sans Mono", Some(18.0));
+    let shared = terminal.read_with(&cx, |terminal, _| Rc::clone(terminal.shared()));
+    terminal.update(&mut cx, |terminal, cx| terminal.flip_config(sized(13.0), cx));
+    cx.run_until_parked();
+    assert_points(shared.font_points(), 18.0);
+    assert!(events.borrow().is_empty(), "{:?}", events.borrow());
+    // the configured size is what a reset returns to
+    assert_points(shared.original_font_points(), 13.0);
+    terminal.update(&mut cx, |terminal, cx| terminal.reload_config(sized(13.0), cx));
+    assert_points(shared.font_points(), 18.0);
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // the Surface
 

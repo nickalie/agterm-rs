@@ -16,6 +16,18 @@ fn hover_texts_name_the_chord_when_bound() {
 }
 
 #[test]
+fn only_a_held_press_moves_the_window() {
+    let mut pressed = true;
+    assert!(starts_move(&mut pressed, Some(MouseButton::Left)));
+    assert!(!pressed, "the move takes the press");
+    // a press whose release landed past the bar: the next hover ends it rather than moving the window
+    let mut pressed = true;
+    assert!(!starts_move(&mut pressed, None));
+    assert!(!pressed);
+    assert!(!starts_move(&mut pressed, Some(MouseButton::Left)), "no press, no move");
+}
+
+#[test]
 fn chords_read_as_gtk_labels_them() {
     let chord = |mods, key: &str| Chord::new(mods, key);
     assert_eq!(

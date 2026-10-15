@@ -34,8 +34,8 @@ use agterm_core::titlebar::{AttentionBell, SplitGlyph, Titlebar as Model, Titleb
 use gpui_kit::assets::IconName;
 use gpui_kit::{
     AnyElement, AppContext as _, AssetSource, Context, Decorations, Div, ElementId, EventEmitter, FontWeight, Hsla,
-    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowButton, WindowButtonLayout,
+    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels,
+    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowButton, WindowButtonLayout,
     WindowControls, div, prelude::FluentBuilder as _, px, svg,
 };
 use uuid::Uuid;
@@ -146,6 +146,12 @@ pub enum PopoverKind {
 pub enum TitlebarEvent {
     /// A popover button was clicked.
     Popover(PopoverKind),
+}
+
+/// A motion over the bar with `held` down after a press on it (`pressed`, taken): whether it starts a window move. Only
+/// a motion with the primary button still held does; a press whose release the bar missed ends at the next motion.
+fn starts_move(pressed: &mut bool, held: Option<MouseButton>) -> bool {
+    std::mem::take(pressed) && held == Some(MouseButton::Left)
 }
 
 /// The hover text `base`, followed by `chord_label` in parentheses when there is one (upstream's `helpHint`).
@@ -928,8 +934,11 @@ impl Render for Titlebar {
             .on_mouse_down(MouseButton::Left, cx.listener(Self::pressed))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::pressed))
             .on_mouse_up(MouseButton::Left, cx.listener(|bar, _, _, _| bar.pressed = false))
-            .on_mouse_move(cx.listener(|bar, _, window, _| {
-                if std::mem::take(&mut bar.pressed) {
+            // the bar sees no release past its edge, nor a press elsewhere: either ends a press it saw
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|bar, _, _, _| bar.pressed = false))
+            .on_mouse_down_out(cx.listener(|bar, _, _, _| bar.pressed = false))
+            .on_mouse_move(cx.listener(|bar, event: &MouseMoveEvent, window, _| {
+                if starts_move(&mut bar.pressed, event.pressed_button) {
                     window.start_window_move();
                 }
             }))

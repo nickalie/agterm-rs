@@ -75,15 +75,21 @@ fn serve<I: zbus::object_server::Interface>(sandbox: &Sandbox, iface: I) -> Test
     Ok(connection)
 }
 
-/// The portal announces `scheme` (and, first, a change of another setting nobody follows).
-fn announce(portal: &Connection, scheme: u32) -> TestResult {
+/// The portal announces a change of another setting of the same namespace nobody follows: a u32 (`contrast` on),
+/// which would read as `PreferDark` if it were taken for the color scheme.
+fn announce_contrast(portal: &Connection) -> TestResult {
     portal.emit_signal(
         None::<()>,
         PORTAL_PATH,
         SETTINGS_INTERFACE,
         "SettingChanged",
-        &(NAMESPACE, "accent-color", Value::from((0.1_f64, 0.2_f64, 0.3_f64))),
+        &(NAMESPACE, "contrast", Value::U32(1)),
     )?;
+    Ok(())
+}
+
+/// The portal announces `scheme`.
+fn announce(portal: &Connection, scheme: u32) -> TestResult {
     portal.emit_signal(
         None::<()>,
         PORTAL_PATH,
@@ -118,10 +124,13 @@ fn the_portals_scheme_is_read_and_followed() -> TestResult {
     // the read made once subscribed
     assert_eq!(received.recv_timeout(DEADLINE)?, ColorScheme::PreferDark);
     *scheme.lock().unwrap() = 2;
+    // another setting's change ahead of the scheme's would be received first
+    announce_contrast(&portal)?;
     announce(&portal, 2)?;
     assert_eq!(received.recv_timeout(DEADLINE)?, ColorScheme::PreferLight);
     announce(&portal, 0)?;
     assert_eq!(received.recv_timeout(DEADLINE)?, ColorScheme::NoPreference);
+    announce_contrast(&portal)?;
     assert!(
         received.recv_timeout(Duration::from_millis(200)).is_err(),
         "another setting's change is not followed"

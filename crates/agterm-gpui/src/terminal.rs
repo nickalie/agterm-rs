@@ -230,6 +230,17 @@ enum Effect {
     Spawn,
 }
 
+/// How a new config reached a terminal, which decides what its font size does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigChange {
+    /// Its own overlay changed ([`Terminal::set_config`]).
+    Overlay,
+    /// An explicit reload ([`Terminal::reload_config`]).
+    Reload,
+    /// An appearance flip's reload ([`Terminal::flip_config`]).
+    Flip,
+}
+
 /// Where a terminal is in its life.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Status {
@@ -372,6 +383,17 @@ impl Shared {
         }
         self.points.set(configured);
         true
+    }
+
+    /// An appearance flip's reload of font size `configured`: it is what `reset_font_size` returns to from now on; the
+    /// live size stays, marked as stepped when it is apart from `configured` (the GTK build restores it through
+    /// libghostty's `set_font_size` action, which marks it so).
+    fn keep_live_points(&self, configured: f32) {
+        let configured = configured.clamp(1.0, 255.0);
+        self.original_points.set(configured);
+        if (configured - self.points.get()).abs() >= f32::EPSILON {
+            self.font_adjusted.set(true);
+        }
     }
 
     /// The owner view's scale factor, as last laid out (1 before).
@@ -783,17 +805,24 @@ impl Terminal {
     /// cursor and scrollback, the views' fonts and colors. The live font size and the size a reset returns to are
     /// kept, as the GTK build's overlay restates the live size.
     pub fn set_config(&mut self, config: TerminalConfig, cx: &mut Context<Self>) {
-        self.apply_config(config, false, cx);
+        self.apply_config(config, ConfigChange::Overlay, cx);
     }
 
     /// Takes a reloaded app config as [`Self::set_config`] does, and its font size too: what a reset returns to from
     /// now on, and the live size unless a font size action changed it. A restored or replacement terminal's start size
     /// was not stepped, so it takes the configured one, as libghostty's re-feed does in the GTK build.
     pub fn reload_config(&mut self, config: TerminalConfig, cx: &mut Context<Self>) {
-        self.apply_config(config, true, cx);
+        self.apply_config(config, ConfigChange::Reload, cx);
     }
 
-    fn apply_config(&mut self, config: TerminalConfig, reload: bool, cx: &mut Context<Self>) {
+    /// Takes the config an appearance flip reloaded, keeping the live font size (upstream's
+    /// `reloadConfigPreservingSessionZoom`, the GTK build's `keep_zoom`): the configured size is what a reset returns
+    /// to from now on, and a live size apart from it is kept as one the user stepped, so a later reload keeps it too.
+    pub fn flip_config(&mut self, config: TerminalConfig, cx: &mut Context<Self>) {
+        self.apply_config(config, ConfigChange::Flip, cx);
+    }
+
+    fn apply_config(&mut self, config: TerminalConfig, change: ConfigChange, cx: &mut Context<Self>) {
         let shared = &self.shared;
         if let Some(pane) = shared.pane() {
             pane.set_mouse_reporting(config.mouse.reporting);
@@ -809,7 +838,14 @@ impl Terminal {
         }
         let fonts_changed = shared.config.borrow().font != config.font;
         let cell = shared.metrics_at(shared.font_points(), shared.scale());
-        let resized = reload && shared.follow_config_points(config.font.size);
+        let resized = match change {
+            ConfigChange::Overlay => false,
+            ConfigChange::Reload => shared.follow_config_points(config.font.size),
+            ConfigChange::Flip => {
+                shared.keep_live_points(config.font.size);
+                false
+            }
+        };
         *shared.config.borrow_mut() = Rc::new(config);
         // the background image's file is looked at again (a watermark rendered anew into the same file)
         shared.background.borrow_mut().invalidate();

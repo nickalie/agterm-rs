@@ -31,7 +31,6 @@ screenshot taken there. Prints a JSON report; exits 0 when every check holds.
 from __future__ import annotations
 
 import argparse
-import inspect
 import json
 import os
 import re
@@ -351,16 +350,8 @@ def find_lavapipe(environ: Mapping[str, str], script: Path = FETCH_LAVAPIPE) -> 
     return None, found.stderr.strip() or f"{script} --print-icd exited with {found.returncode}"
 
 
-def takes_frontend(adapter_class: type) -> bool:
-    """Whether the harness's Rust adapter launches either frontend (Task 17's `frontend` argument)."""
-    return "frontend" in inspect.signature(adapter_class.__init__).parameters
-
-
 def make_adapter(bin: Path, frontend: str = GTK) -> Any:
     from agterm_conformance.impls.rust import RustAdapter
-
-    if frontend != GTK and not takes_frontend(RustAdapter):
-        raise ProbeError(f"this tree's harness launches no {frontend} build: its RustAdapter takes no frontend")
 
     class ChromeAdapter(RustAdapter):
         compositor_args = ("--debug", f"--width={OUTPUT_SIZE[0]}", f"--height={OUTPUT_SIZE[1]}")
@@ -372,7 +363,7 @@ def make_adapter(bin: Path, frontend: str = GTK) -> Any:
         def ghostty_config(self) -> str:
             return super().ghostty_config() + f"cursor-color = {hex_rgb(CURSOR)}\ncursor-style-blink = false\n"
 
-    return ChromeAdapter(bin, frontend=frontend) if takes_frontend(RustAdapter) else ChromeAdapter(bin)
+    return ChromeAdapter(bin, frontend=frontend)
 
 
 def run_launch(adapter: Any, settings: dict[str, Any], label: str, keep: Path | None, timeout: float,

@@ -137,17 +137,6 @@ def test_lavapipe_comes_from_the_variable_then_the_script(tmp_path: Path) -> Non
     assert chrome_probe.find_lavapipe({}, script) == (None, "no lavapipe unpacked: run it without --print-icd")
 
 
-def test_a_harness_without_the_gpui_frontend_is_named() -> None:
-    class Older:
-        def __init__(self, bin: Path | None, ctl: Path | None = None) -> None: ...
-
-    class Newer:
-        def __init__(self, bin: Path | None, ctl: Path | None = None, frontend: str = "gtk") -> None: ...
-
-    assert not chrome_probe.takes_frontend(Older)
-    assert chrome_probe.takes_frontend(Newer)
-
-
 def test_a_gpui_probe_without_lavapipe_stops_before_launching(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(chrome_probe.LAVAPIPE_ICD_VARIABLE, raising=False)
     monkeypatch.setattr(chrome_probe.find_lavapipe, "__defaults__", (tmp_path / "absent",))

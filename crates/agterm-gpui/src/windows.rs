@@ -110,7 +110,8 @@ impl Windows {
     /// the pane focus requests and the spawn grants. Whether the model changed so that it needs another settle.
     pub fn sync(&mut self, state: &mut AppState, cx: &mut App) -> bool {
         if let Some(reload) = state.take_config_reload() {
-            let count = self.reload_config(reload.dark, cx);
+            // a flip alone keeps every terminal's font size, as upstream's `reloadConfigPreservingSessionZoom` does
+            let count = self.reload_config(reload.dark, !reload.asked, cx);
             state.config_applied(reload.dark);
             if reload.asked {
                 state.core.report_config_reload(count);
@@ -254,22 +255,24 @@ impl Windows {
 
     /// Rebuilds the ghostty config on the `dark` side of the desktop's appearance (upstream's
     /// `GhosttyApp.reloadConfig`) and feeds it to every terminal, their overlays (backgrounds) loaded on that side too;
-    /// its diagnostic count, `None` when there is no config host (tests).
-    fn reload_config(&self, dark: bool, cx: &mut App) -> Option<usize> {
+    /// its diagnostic count, `None` when there is no config host (tests). With `keep_zoom` (an appearance flip) the
+    /// terminals keep their live font sizes.
+    fn reload_config(&self, dark: bool, keep_zoom: bool, cx: &mut App) -> Option<usize> {
         let config = self.config.as_ref()?;
         config.dark.set(dark);
         let app = AppConfig::load(&agterm_core::paths::ProcessEnv, config.resources.as_deref(), dark);
         *config.host.borrow_mut() =
             crate::session_host::launch_host(&app, config.resources.clone(), &agterm_core::paths::ProcessEnv);
-        self.set_config(&app.terminal(), cx);
+        self.set_config(&app.terminal(), keep_zoom, cx);
         Some(app.diagnostics)
     }
 
-    /// Every terminal takes `config` (over its own overlay), and so does every terminal created from now on.
-    pub fn set_config(&self, config: &TerminalConfig, cx: &mut App) {
+    /// Every terminal takes `config` (over its own overlay), keeping its live font size with `keep_zoom`, and so does
+    /// every terminal created from now on.
+    pub fn set_config(&self, config: &TerminalConfig, keep_zoom: bool, cx: &mut App) {
         *self.env.config.borrow_mut() = Rc::new(config.clone());
         for ui in self.shown.values() {
-            ui.deck.update(cx, |deck, cx| deck.apply_config(cx));
+            ui.deck.update(cx, |deck, cx| deck.apply_config(keep_zoom, cx));
         }
     }
 
