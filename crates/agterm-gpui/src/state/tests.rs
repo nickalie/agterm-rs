@@ -650,6 +650,7 @@ fn quit_and_activation_requests_wait_for_the_frontend_in_order() {
         FrontendWork {
             activations: vec![first, second],
             quit: true,
+            ..FrontendWork::default()
         }
     );
     assert_eq!(state.take_frontend_work(), FrontendWork::default(), "taken once");
@@ -666,6 +667,7 @@ fn no_window_is_raised_once_the_quit_save_ran() {
         FrontendWork {
             activations: Vec::new(),
             quit: true,
+            ..FrontendWork::default()
         }
     );
 }

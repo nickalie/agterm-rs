@@ -861,12 +861,11 @@ fn paste_and_copy_go_through_the_clipboard(cx: &mut TestAppContext) {
         .and_then(|item| item.text())
         .unwrap_or_default();
     assert!(copied.contains("ready") && copied.contains("pasted"), "{copied:?}");
-    // a paste that could run a command is refused and reported for confirmation
+    // a paste that could run a command goes through as confirmed, as upstream and the GTK build complete it
     events.borrow_mut().clear();
-    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("rm -rf x\n".into()));
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("echo unsafe-pasted\n".into()));
     assert!(surface.binding_action("paste_from_clipboard"));
-    cx.run_until_parked();
-    assert_eq!(*events.borrow(), [TerminalEvent::UnsafePaste("rm -rf x\n".into())]);
+    wait_painted(&view, cx, "unsafe-pasted");
 }
 
 #[gpui_kit::test]

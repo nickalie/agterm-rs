@@ -7,6 +7,9 @@
 #                  the foreign queue family and copied on the GPU into a texture of its own; CPU pixels uploaded by
 #                  damaged rectangles) and the Vulkan device opened with VK_EXT_image_drm_format_modifier and
 #                  VK_EXT_queue_family_foreign, which wgpu does not enable itself
+#   gpui-pre-linux the native key behind each key event GPUI dispatches on Wayland and X11 (its XKB keycode, layout
+#                  character and modifiers), which GPUI's `Keystroke` drops, for the terminal's physical-key bindings
+#                  and the Kitty keyboard protocol (Task 14 of the plan)
 #
 # Each source is the crates.io archive of GPUI_VERSION, verified against SHA256 below: the release's crates.io
 # checksum (the `cksum` of its version's line in the crates.io index, https://index.crates.io/gp/ui/<crate>, also what
@@ -16,7 +19,7 @@
 # Bump GPUI_VERSION and the sums together with gpui-kit's `gpui-pre` pin, run this, and check that the patches still
 # apply.
 #
-# Usage: scripts/vendor-gpui.sh           (re)create vendor/gpui-pre and vendor/gpui-pre-wgpu
+# Usage: scripts/vendor-gpui.sh           (re)create vendor/gpui-pre, vendor/gpui-pre-wgpu and vendor/gpui-pre-linux
 #        scripts/vendor-gpui.sh --check   rebuild into a scratch dir and fail if a vendored crate differs
 #        scripts/vendor-gpui.sh --diff    regenerate build/patches/<crate>/0001-*.patch from the vendored trees
 #                                         (after editing vendor/; the patch's leading description is kept)
@@ -27,8 +30,9 @@ GPUI_VERSION="0.3.9"
 declare -A SHA256=(
   [gpui-pre]="34f61c1cfd36fc9c436af09308c963822ae27a45a84feb21a77ba5c9e051f1c0"
   [gpui-pre-wgpu]="5b1cdb26c1503bf9662ee8fbc5ab0b44b2deeee4b5c12dc67491ba6fb5fc544b"
+  [gpui-pre-linux]="e28213c3fde6f13e91ba0b74b90cbaadec9373e36a031eda98561d31059870f3"
 )
-CRATES=(gpui-pre gpui-pre-wgpu)
+CRATES=(gpui-pre gpui-pre-wgpu gpui-pre-linux)
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 

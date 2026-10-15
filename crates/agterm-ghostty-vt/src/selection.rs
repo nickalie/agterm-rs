@@ -213,6 +213,33 @@ impl Terminal {
         })
     }
 
+    /// The URI of the OSC 8 hyperlink on the cell at `at`; `None` for a cell without one.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidValue`] for a point outside its space.
+    pub fn hyperlink_uri(&self, at: Point) -> Result<Option<String>, Error> {
+        let grid_ref = self.grid_ref(at)?;
+        let mut len = 0usize;
+        // SAFETY: the reference is fresh (`&self` keeps mutations out); a null buffer of zero length asks for the
+        // length, written to `len`.
+        let probe =
+            unsafe { ffi::ghostty_grid_ref_hyperlink_uri(&raw const grid_ref, std::ptr::null_mut(), 0, &raw mut len) };
+        match Error::check(probe) {
+            Ok(()) if len == 0 => return Ok(None),
+            Ok(()) | Err(Error::OutOfSpace) => {}
+            Err(Error::NoValue) => return Ok(None),
+            Err(err) => return Err(err),
+        }
+        let mut buffer = vec![0u8; len];
+        // SAFETY: as above; `buffer` holds `len` writable bytes.
+        Error::check(unsafe {
+            ffi::ghostty_grid_ref_hyperlink_uri(&raw const grid_ref, buffer.as_mut_ptr(), buffer.len(), &raw mut len)
+        })?;
+        buffer.truncate(len);
+        Ok((!buffer.is_empty()).then(|| String::from_utf8_lossy(&buffer).into_owned()))
+    }
+
     /// Run a `select_*` derivation and install what it found; `false` when it found nothing.
     fn derive(
         &mut self,

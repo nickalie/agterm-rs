@@ -39,6 +39,8 @@ pulldown-cmark = { version = "0.13", default-features = false }
 png = "0.18"
 # A pane's PTY and child (agterm-term), as Zed and WezTerm use it.
 portable-pty = "0.9"
+# agterm-gpui's link detection: Ghostty's default URL matcher (`link-url`) over the terminal's rows.
+regex = "1"
 serde = { version = "1", features = ["derive"] }
 # `preserve_order`: a result built as a `Value` keeps its fields in upstream's order on the wire (the catalog's
 # `fields` order) instead of sorting them.
@@ -84,6 +86,9 @@ gpui-kit = "=0.7.3"
 # agterm-gpui's tests measure a real font through GPUI's Linux text system (`CosmicTextSystem`), the crate gpui-kit
 # already links at the version its `gpui-pre` pins.
 gpui-pre-wgpu = "=0.3.9"
+# agterm-gpui reads the native key behind a key event (`current_native_input`, a patch of ours) from GPUI's Linux
+# platform, the crate gpui-kit already links.
+gpui-pre-linux = { version = "=0.3.9", default-features = false }
 # agterm-gpui's single instance: GApplication's own D-Bus protocol (`org.gtk.Application`, `org.gtk.Actions`) on the
 # app id's bus name, so GTK and GPUI launches forward to each other.
 zbus = "5.19"
@@ -139,3 +144,7 @@ calloop = { path = "vendor/calloop" }
 # vendor/gpui-pre-wgpu are the verified crates.io sources plus build/patches/gpui-pre{,-wgpu} (scripts/vendor-gpui.sh).
 gpui-pre = { path = "vendor/gpui-pre" }
 gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
+# Task 14: the native key behind each key event GPUI dispatches on Wayland and X11 (its XKB keycode, layout character
+# and modifiers, which GPUI's `Keystroke` drops), for the terminal's physical-key bindings and the Kitty keyboard
+# protocol: vendor/gpui-pre-linux is the verified crates.io source plus build/patches/gpui-pre-linux.
+gpui-pre-linux = { path = "vendor/gpui-pre-linux" }

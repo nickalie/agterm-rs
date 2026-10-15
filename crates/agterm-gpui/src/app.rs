@@ -153,6 +153,7 @@ struct Shell {
 
 fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, posting: Arc<dyn MainLoop<AppState>>) {
     gpui_kit::init(cx);
+    crate::keymap_dispatch::init(cx);
     let poster: Poster = Arc::downgrade(&posting);
     let server = ControlServer::new(control_socket(&ProcessEnv));
     let mut core = Core::new(
@@ -225,6 +226,10 @@ fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
                 tracing::debug!("activation: the window is gone");
             }
         }
+    }
+    let poster: Poster = Arc::downgrade(&shell.posting);
+    for (action, close_grace) in work.actions {
+        crate::keymap_actions::perform(&poster, action, close_grace, cx);
     }
     if work.quit {
         shut_down(shell, cx);

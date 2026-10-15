@@ -302,6 +302,11 @@ impl InputState {
         })
     }
 
+    /// The padding around the grid the pointer positions are measured with.
+    pub(crate) fn padding(&self) -> Padding {
+        self.padding
+    }
+
     /// Whether pointer events go to the program: it turned a tracking mode on and the config lets it
     /// (Ghostty's `isMouseReporting`).
     pub(crate) fn reporting(&self, terminal: &vt::Terminal) -> bool {

@@ -12,8 +12,10 @@ use std::sync::Weak;
 use std::time::{Duration, Instant};
 
 use agterm_app::remote::{InboundGate, PresentationViewer, ProcessTransport};
+use agterm_core::app_actions::{ActionEffect, ActionOrigin, FrontendAction};
 use agterm_core::auto_follow::AutoFollowTimer;
 use agterm_core::events::{TREE_CHANGED_DEBOUNCE, TreeChangedTimer};
+use agterm_core::keymap::TypingSurface;
 use agterm_core::model::PendingCloseTimer;
 use agterm_core::persist::{DebouncedSave, arm_debounced_saves};
 use agterm_core::sidebar_actions::SidebarAction;
@@ -25,6 +27,7 @@ use agterm_server::{LineStream, LineStreamLimits, LineStreamOwner, Reply, ReplyS
 use uuid::Uuid;
 
 use crate::instance::Activation;
+use crate::keymap_dispatch::{Fired, KeyOrigin};
 use crate::main_loop::GpuiMainLoop;
 
 /// How long a quit a command asked for waits, so the command's reply is written first.
@@ -115,6 +118,9 @@ pub struct FrontendWork {
     pub activations: Vec<Activation>,
     /// Quit the app: the orderly shutdown, then GPUI's quit.
     pub quit: bool,
+    /// What built-in actions left to the frontend (`keymap_actions`), each with the soft-close setting a delete
+    /// confirmation names.
+    pub actions: Vec<(FrontendAction, bool)>,
 }
 
 /// What the main loop owns.
@@ -220,6 +226,7 @@ impl AppState {
         if let Some(quit) = self.core.take_live_quit() {
             self.schedule_live_quit(quit);
         }
+        crate::keymap_dispatch::sync(&self.core, &self.poster);
         // no windows yet to ask (Task 26)
         drop(self.core.take_window_requests());
         self.core.clear_pane_focus_requests();
@@ -371,6 +378,48 @@ impl AppState {
         if store.set_split_focus(session, pane == agterm_core::model::OverlayPane::Right) {
             self.settle();
         }
+    }
+
+    /// A keymap chord fired in a window (or the quick terminal's panel, which acts on the frontmost window): a built-in
+    /// runs through the core, its frontend half lands with the app ([`FrontendWork::actions`]); a custom command runs
+    /// in the terminal typed in.
+    pub fn keymap_fired(&mut self, origin: KeyOrigin, fired: Fired, typing: Option<TypingSurface>) {
+        if self.quitting {
+            return;
+        }
+        let window = match origin {
+            KeyOrigin::Window(window) => Some(window),
+            KeyOrigin::Quick => self.core.library().active_window_id(),
+        };
+        match fired {
+            Fired::Builtin(action) => {
+                let Some(window) = window else { return };
+                let origin = ActionOrigin {
+                    window,
+                    quick: origin == KeyOrigin::Quick,
+                };
+                if let ActionEffect::Frontend(action) = self.core.perform_builtin(origin, action) {
+                    let close_grace = self.core.settings().close_grace_undo_enabled.unwrap_or(true);
+                    self.frontend.actions.push((action, close_grace));
+                }
+            }
+            Fired::Command(command) => self.core.run_custom_command_from_keybind(&command, window, typing),
+        }
+        self.settle();
+    }
+
+    /// A window dialog committed: `window.rename` or `window.delete` for window `window`.
+    pub fn window_command(&mut self, cmd: agterm_proto::command::WindowCmd, window: Uuid, name: Option<String>) {
+        if self.quitting {
+            return;
+        }
+        let response = self
+            .core
+            .dispatch(&crate::keymap_actions::window_request(cmd, window, name));
+        if !response.ok {
+            tracing::info!(error = ?response.error, "window dialog refused");
+        }
+        self.settle();
     }
 
     /// Answers one control request and settles what it changed. A command waiting on the frontend (a terminal coming

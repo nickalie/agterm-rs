@@ -267,6 +267,8 @@ gpui-pre patch         wgpu external-texture element importing dmabuf (zero-copy
      reopens the surface instead;
   6. the exit SIGSEGV (wgpu's GLES instance runs `eglTerminate` in a TLS destructor after the Wayland connection is
      gone, on every exit, Task 2 quirk 12) — reported upstream; Task 12 keeps the exit status clean meanwhile.
+  7. ➕ (Task 14) the native key behind a key event on Linux (`gpui-pre-linux`: XKB keycode, layout character,
+     modifiers with Shift, for physical-key binds and the Kitty protocol), installed for one dispatch — Task 14.
 - **Cell metrics**: advance of `M` for width; ascent + descent + line gap for height; `window-padding-x/y` around the
   grid; resize → `Terminal::resize` + PTY `TIOCSWINSZ` + cell size reported where `CELL_SIZE` was used.
 - **Threads** (decided in Task 4 from the C API's contract at `LIBGHOSTTY_VT_REV`, Codex-reviewed). Evidence: the
@@ -954,18 +956,81 @@ headers, rebuilt on `agterm-term` and current GPUI.
 
 **Files:**
 - Create: `crates/agterm-gpui/src/terminal/{input,mouse,links}.rs`, `src/keymap_dispatch.rs`, `src/keymap_actions.rs`
+- ➕ Create: `crates/agterm-gpui/src/terminal/{keyboard,keycodes,clipboard,input_tests}.rs`,
+  `src/keymap_dispatch/tests.rs`, `crates/agterm-ghostty-vt/src/gesture.rs`, `crates/agterm-term/src/gesture.rs`,
+  `crates/agterm-term/tests/pointer.rs`, `build/patches/gpui-pre-linux/0001-native-key-events.patch`,
+  `vendor/gpui-pre-linux/`; Modify: `crates/agterm-gpui/src/{terminal,terminal/element,terminal/tests,state,
+  state/tests,app,lib}.rs`, `crates/agterm-gpui/Cargo.toml`, `crates/agterm-ghostty-vt/src/{lib,render,selection}.rs`,
+  `crates/agterm-term/src/{lib,pane,input,render}.rs`, `Cargo.toml` (`regex`, `gpui-pre-linux` dep and
+  `[patch.crates-io]`), `Cargo.lock`, `scripts/vendor-gpui.sh`
 
-- [ ] window-level keymap capture before the terminal (port of `keymap_dispatch.rs`/`keymap_actions.rs`), then ghostty
+- [x] window-level keymap capture before the terminal (port of `keymap_dispatch.rs`/`keymap_actions.rs`), then ghostty
       binds, then `agterm-term` encoding; physical-key copy/paste/select-all
-- [ ] IME via GPUI's input handler (commit, preedit at the cursor, candidate position)
-- [ ] mouse: reporting modes, selection (drag, double/triple click, `cursor-click-to-move = false`), wheel scroll,
+- [x] IME via GPUI's input handler (commit, preedit at the cursor, candidate position)
+- [x] mouse: reporting modes, selection (drag, double/triple click, `cursor-click-to-move = false`), wheel scroll,
       mouse shape, hide-while-typing
-- [ ] OSC 8 and detected URLs: hover underline, open through the existing open-url path
-- [ ] clipboard: system and primary; OSC 52 through `ClipboardPromptPolicy` with a minimal confirm prompt (the full
+- [x] OSC 8 and detected URLs: hover underline, open through the existing open-url path
+- [x] clipboard: system and primary; OSC 52 through `ClipboardPromptPolicy` with a minimal confirm prompt (the full
       dialog comes with Task 21)
-- [ ] tests (headless): routing order (keymap capture wins), preedit lifecycle, drag and multi-click selection, link
+- [x] tests (headless): routing order (keymap capture wins), preedit lifecycle, drag and multi-click selection, link
       hit testing, OSC 52 allow/deny/remember
-- [ ] gates — must pass before Task 15
+- [x] ➕ GPUI patch 7 (Technical Details > GPUI patches): the native key behind a key event on Linux (GPUI's
+      `Keystroke` keeps no position, no layout character, and drops Shift from symbols)
+- [x] gates — must pass before Task 15
+- result (2026-10-15):
+  - **Keys** (Codex-reviewed, transcript
+    `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/task-14-physical-keys/transcript.md`): one GPUI
+    keystroke interceptor for the app (`keymap_dispatch::init`) runs agterm's order before GPUI's binding matcher and
+    pending-keystroke buffering: the keymap router (the GTK `Router` port: custom commands, `map` alternatives, leaders
+    and `--repeat` windows as deadlines checked at the next key, the menu chords, consumed keys' autorepeats and
+    releases) in a window registered with `register_window(handle, KeyOrigin)`, then, when a terminal owner view holds
+    the keyboard, ghostty's binds (`binds::Keyboard`, actions through `TerminalSurface::perform`, `all:` on every
+    terminal, sequences queued and flushed) and the encoder; whatever it handles stops there (GPUI's input handler does
+    not type it again; an `ignore`d key is the terminal's too). A text field (`Input` key context) or a prompt keeps
+    every key. Releases come through the owner view's key-up listener (`keymap_dispatch::key_up`, the binds' consumed
+    release, Kitty release events). Ghostty's app/window/tab/split binding actions stay unperformed, as libghostty's
+    apprt callbacks left them in the GTK build.
+  - **Native keys** (GPUI patch 7, `vendor/gpui-pre-linux` + `build/patches/gpui-pre-linux`, `scripts/vendor-gpui.sh`):
+    the Wayland and X11 clients install a `NativeInput` for exactly one key dispatch (an RAII scope: a press, each
+    Wayland autorepeat with the press's own record, the release; text-input-v3's one-character commit as `Text`), read
+    with `gpui_linux::current_native_input()` and checked against the event's keystroke: XKB keycode (→ the physical
+    key through Ghostty's keycode table, `terminal/keycodes.rs`), modifiers with Shift, consumed modifiers, the layout's
+    level-0 character and whether it types ASCII (the keymap's `chordKey`), the text before Ctrl transformations,
+    composition and repeat. Linux-only and additive (no GPUI type changes: gpui-kit/gpui-component and the other
+    platforms build unchanged). Without a record (GPUI's test platform, a replayed keystroke, other platforms) the key
+    is read off a US keyboard with Shift restored for its symbols; committed input-method text is a key with no
+    position. ⚠️ Residual: the native path is unit-tested through its translation and compiled; a real key on a real
+    seat is exercised at the checklist walk (Task 33) and by the window shell's own tests (Task 18).
+  - **IME**: the owner view is GPUI's `EntityInputHandler` while focused: a mark is the terminal's preedit (drawn at
+    the cursor, never sent), a commit is sent as text (Ghostty's `textCallback`: `PasteSource::Text`), the candidate
+    window sits at the cursor's cell; a key while composing goes back to the platform.
+  - **Mouse** (Ghostty's `Surface` callbacks): reporting (Shift keeps the mouse for selecting unless
+    `mouse-shift-capture`), Ghostty's own selection gesture (`selection.h`, wrapped in `agterm-ghostty-vt`
+    `SelectionGesture` and `Pane::gesture`: click counts by 500 ms and a cell's width, word/line/output clicks,
+    Ctrl+Alt blocks, half-cell drags, 15 ms autoscroll past an edge), Shift-click extension, copy-on-select to the
+    primary selection, middle-click primary paste, right-click word/link selection (no menu, as in the GTK build),
+    `cursor-click-to-move = false` (no prompt click), the wheel (`Pane::wheel`, precise deltas per cell,
+    `mouse-scroll-multiplier`, GPUI's ×3 undone), the pointer shape from OSC 22 (a hand over a live link), and
+    `mouse-hide-while-typing` as GPUI's app-wide cursor hide mode. Positions are device pixels.
+  - **Links**: OSC 8 (`Pane::hyperlink`, `Terminal::hyperlink_uri`) and Ghostty's scheme URL matcher over the
+    soft-wrapped line (`Row::wrapped`), live with Ctrl or Super alone; hovered cells underlined across rows
+    (`TerminalView::set_hovered_links`); a click without a drag emits `TerminalEvent::OpenUrl`, and
+    `terminal::follow_link` is the default route through the link policy (`cx.open_url` / `cx.reveal_path`; the
+    frontend's session-overlay route is Task 18's). A double click on a URL selects the URL.
+  - **Clipboard**: OSC 52/Kitty reads and writes are answered in the pump under `clipboard-read`/`clipboard-write`
+    (`ask` → the GTK build's `Prompts` port as a GPUI `Global`: one prompt per terminal and direction, a session choice
+    remembered for every terminal); the minimal prompt is GPUI's window prompt with Allow, Deny, Always Allow This
+    Session, Always Deny This Session. **Unsafe pastes are pasted as confirmed** (`TerminalEvent::UnsafePaste` is
+    gone): upstream (`confirmReadClipboard`) and the GTK build complete libghostty's paste confirmation unasked.
+  - Focus reports (mode 1004) on each change of view focus and window activation, the start state reported as no
+    change. `Shared::{owner, set_owner}` carry a custom command's typing surface (`terminal::typing_surface`).
+  - `keymap_actions`: Toggle Full Screen and the Delete Window confirmation on the registered window,
+    `AppState::{keymap_fired, window_command}`, `FrontendWork::actions`; the window close, the session-close
+    confirmation, the renames, Delete Workspace and Open Directory wait for the window shell, sidebar and dialogs
+    (Tasks 18, 19, 21, 26) and are logged until then.
+  - Later tasks build on: `keymap_dispatch::{register_window, unregister_window, keyboard_left}` and a window-root
+    `capture_key_up` calling `keymap_dispatch::key_up` (Task 18/24/26), `Shared::set_owner`, `TerminalEvent::OpenUrl`
+    → the link-open route (Task 18), the full OSC 52 dialog replacing `terminal/clipboard.rs`'s prompt (Task 21).
 
 ### Task 15: Procedural sprites for box drawing, blocks, powerline, braille
 

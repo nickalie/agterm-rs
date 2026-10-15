@@ -144,6 +144,8 @@ pub(crate) struct Vt {
     pub(crate) cleared_selection: bool,
     /// The colors last reported with [`PaneEvent::Colors`].
     colors: vt::TerminalColors,
+    /// The pointer's selection gesture, created at the first press ([`crate::gesture`]).
+    pub(crate) gesture: Option<vt::SelectionGesture>,
 }
 
 impl Vt {
@@ -448,6 +450,11 @@ impl Drop for Pane {
             let _ = io.join();
         }
         crate::search::shut_down(&self.shared);
+        let mut vt = lock(&self.shared.vt);
+        let Vt { terminal, gesture, .. } = &mut *vt;
+        if let Some(gesture) = gesture.take() {
+            gesture.close(terminal);
+        }
     }
 }
 
@@ -488,6 +495,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
             size,
             cleared_selection: false,
             colors,
+            gesture: None,
         }),
         capture,
         published: Mutex::new(Arc::new(Frame::default())),

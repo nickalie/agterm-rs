@@ -16,14 +16,28 @@
 //!   rendering) only draws, at its own font size, and never spawns, resizes or takes input.
 //!
 //! Teardown drops the pane (its child gets `SIGHUP`) and closes the pump, whatever views still hold the state.
+//!
+//! Input (plan > Task 14) is the owner view's: keys reach it from the app's keystroke interceptor
+//! (`crate::keymap_dispatch`, after the window's keymap) and go through ghostty's binds to the encoder
+//! (`keyboard.rs`, `input.rs`), the input method composes at the cursor, the mouse selects, reports or opens links
+//! (`mouse.rs`, `links.rs`), and the pump answers a program's clipboard access under `clipboard-read`/`-write` and
+//! the prompt (`clipboard.rs`).
 
+mod clipboard;
 mod colors;
 mod element;
 mod font;
+pub mod input;
+mod keyboard;
+mod keycodes;
+pub mod links;
 mod metrics;
+mod mouse;
 mod row_cache;
 mod surface;
 
+#[cfg(test)]
+mod input_tests;
 #[cfg(test)]
 mod tests;
 
@@ -32,20 +46,26 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use agterm_core::ghostty_config::binds::Keybinds;
 use agterm_core::ghostty_config::{self, GhosttyConfig};
+use agterm_core::keymap::SurfaceOwner;
 use agterm_term::{
-    ClipboardLocation, CursorDefaults, Frame, GridSize, Pane, PaneConfig, PaneError, PaneEvent, Paste, PasteSource,
+    ClipboardLocation, CursorDefaults, Frame, GridSize, Pane, PaneConfig, PaneError, PaneEvent, PasteSource,
     ScrollbackLimits, ThemeColors,
 };
 use gpui_kit::{
     App, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Styled as _, Subscription, Task, TextSystem, Window, div, px,
+    ModifiersChangedEvent, ParentElement as _, Render, Styled as _, Subscription, Task, TextSystem, Window, div, px,
 };
 
+pub use clipboard::{ClipboardPrompts, prompt_text};
 pub use colors::{CellPaint, Mark, Palette, Pick};
 pub use element::{PlacedGlyph, ShapedRow, TerminalElement};
 pub use font::{DEFAULT_FAMILIES, Fonts};
+pub use keyboard::{key_down, typing_surface};
+pub use links::{Link, LinkKind, follow_link};
 pub use metrics::{CellMetrics, DEFAULT_DPI, FaceMetrics, Geometry, Padding, points_to_px};
+pub use mouse::{cursor_style, scroll_multiplier};
 pub use row_cache::{Cluster, Decoration, Line, RowCache, RowLayout, RowMarks, Span, TextRun, TextStyle};
 pub use surface::TerminalSurface;
 
@@ -58,6 +78,30 @@ pub struct TerminalConfig {
     pub theme: ThemeColors,
     pub cursor: CursorDefaults,
     pub scrollback: ScrollbackLimits,
+    /// ghostty's `keybind`s.
+    pub keybinds: SharedKeybinds,
+    /// `selection-clear-on-typing`.
+    pub selection_clear_on_typing: bool,
+    pub mouse: ghostty_config::Mouse,
+    pub clipboard: ghostty_config::Clipboard,
+}
+
+/// The keybinds a config loaded, shared by every terminal of it (equal when they are the same load).
+#[derive(Debug, Clone)]
+pub struct SharedKeybinds(Arc<Keybinds>);
+
+impl std::ops::Deref for SharedKeybinds {
+    type Target = Keybinds;
+
+    fn deref(&self) -> &Keybinds {
+        &self.0
+    }
+}
+
+impl PartialEq for SharedKeybinds {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 impl TerminalConfig {
@@ -70,6 +114,10 @@ impl TerminalConfig {
             theme: ThemeColors::from_config(&config.colors, &config.cursor),
             cursor: CursorDefaults::from_config(&config.cursor),
             scrollback: config.scrollback.into(),
+            keybinds: SharedKeybinds(Arc::new(config.keybind.clone())),
+            selection_clear_on_typing: config.selection.clear_on_typing,
+            mouse: config.mouse.clone(),
+            clipboard: config.clipboard.clone(),
         }
     }
 }
@@ -111,8 +159,8 @@ pub enum TerminalEvent {
     StartSearch,
     /// An `end_search` binding ended the search.
     EndSearch,
-    /// A paste was refused as unsafe (it could run a command): the frontend confirms and pastes it again.
-    UnsafePaste(String),
+    /// A live link was clicked: the frontend opens it through the link policy ([`follow_link`] is the default route).
+    OpenUrl(String),
 }
 
 /// Work that needs the app, queued by the Surface for the pump.
@@ -169,8 +217,10 @@ pub struct Shared {
     wake: async_channel::Sender<()>,
     /// The first frame was drawn (logged once).
     drew: Cell<bool>,
-    /// The owner view's input-method composition, shown at the cursor (Task 14 drives it).
+    /// The owner view's input-method composition, shown at the cursor.
     preedit: RefCell<Option<String>>,
+    /// Whose terminal this is, for a custom command's typing surface (the frontend sets it).
+    owner: RefCell<Option<SurfaceOwner>>,
 }
 
 impl std::fmt::Debug for Shared {
@@ -285,6 +335,17 @@ impl Shared {
             f64::from(metrics.cell_width) / scale,
             f64::from(metrics.cell_height) / scale,
         )
+    }
+
+    /// Whose terminal this is.
+    #[must_use]
+    pub fn owner(&self) -> Option<SurfaceOwner> {
+        self.owner.borrow().clone()
+    }
+
+    /// Sets whose terminal this is (a session pane's, an overlay's).
+    pub fn set_owner(&self, owner: Option<SurfaceOwner>) {
+        *self.owner.borrow_mut() = owner;
     }
 
     /// The composition shown at the cursor.
@@ -454,6 +515,7 @@ impl Terminal {
             wake,
             drew: Cell::new(false),
             preedit: RefCell::new(None),
+            owner: RefCell::new(None),
         });
         let pump = cx.spawn(async move |this, cx| {
             while woken.recv().await.is_ok() {
@@ -503,7 +565,9 @@ impl Terminal {
         let shared = Rc::clone(&self.shared);
         if let Some(pane) = shared.pane() {
             for event in pane.take_events() {
-                cx.emit(TerminalEvent::Pane(event));
+                if !clipboard::handle(&shared, &event, cx) {
+                    cx.emit(TerminalEvent::Pane(event));
+                }
             }
         }
         let effects = std::mem::take(&mut *shared.effects.borrow_mut());
@@ -533,10 +597,9 @@ fn run_effect(shared: &Shared, effect: Effect, cx: &mut Context<Terminal>) {
             let (Some(text), Some(pane)) = (item.and_then(|item| item.text()), shared.pane()) else {
                 return;
             };
-            match pane.paste(&text, PasteSource::Clipboard, location, false) {
-                Ok(Paste::Unsafe) => cx.emit(TerminalEvent::UnsafePaste(text)),
-                Ok(Paste::Written | Paste::Empty) => {}
-                Err(err) => tracing::warn!(target: "agterm::surface", key = shared.key, %err, "paste failed"),
+            // pasted as confirmed, as upstream and the GTK build complete libghostty's unsafe-paste confirmation
+            if let Err(err) = pane.paste(&text, PasteSource::Clipboard, location, true) {
+                tracing::warn!(target: "agterm::surface", key = shared.key, %err, "paste failed");
             }
         }
     }
@@ -563,8 +626,12 @@ pub struct TerminalView {
     cache: RowCache<ShapedRow, (u32, u32, u64)>,
     /// A viewer's own font size; `None` draws at the terminal's.
     font_override: Option<f32>,
-    /// The hovered link: viewport row and inclusive columns (Task 14 sets it).
-    link: Option<(u16, u16, u16)>,
+    /// The hovered link's cells: viewport row and inclusive columns, per row.
+    link: Vec<(u16, u16, u16)>,
+    /// The keyboard's state (owner only).
+    keys: keyboard::KeyState,
+    /// The pointer's state (owner only).
+    pointer: mouse::PointerState,
     /// The cursor's blink phase; on while not blinking.
     blink_on: bool,
     blink: Option<Task<()>>,
@@ -576,14 +643,21 @@ pub struct TerminalView {
 impl TerminalView {
     pub fn new(terminal: &Entity<Terminal>, role: ViewRole, cx: &mut Context<Self>) -> Self {
         let shared = Rc::clone(terminal.read(cx).shared());
+        let focus = cx.focus_handle();
+        if role == ViewRole::Owner {
+            crate::keymap_dispatch::init(cx);
+            keyboard::register(&focus, cx.weak_entity(), &shared);
+        }
         Self {
             terminal: terminal.clone(),
             shared,
             role,
-            focus: cx.focus_handle(),
+            focus,
             cache: RowCache::default(),
             font_override: None,
-            link: None,
+            link: Vec::new(),
+            keys: keyboard::KeyState::default(),
+            pointer: mouse::PointerState::default(),
             blink_on: true,
             blink: None,
             painted: None,
@@ -614,10 +688,21 @@ impl TerminalView {
 
     /// Underlines a hovered link: viewport `row`, columns `start..=end`; `None` clears it.
     pub fn set_hovered_link(&mut self, link: Option<(u16, u16, u16)>, cx: &mut Context<Self>) {
-        if self.link != link {
-            self.link = link;
+        self.set_hovered_links(link.into_iter().collect(), cx);
+    }
+
+    /// Underlines a hovered link that may run over several rows: (viewport row, first column, last column) each.
+    pub fn set_hovered_links(&mut self, cells: Vec<(u16, u16, u16)>, cx: &mut Context<Self>) {
+        if self.link != cells {
+            self.link = cells;
             cx.notify();
         }
+    }
+
+    /// The live link under the pointer.
+    #[must_use]
+    pub fn hovered_link(&self) -> Option<&Link> {
+        self.pointer.link.as_ref()
     }
 
     /// The frame this view drew last.
@@ -703,7 +788,15 @@ impl Render for TerminalView {
         let element = TerminalElement::new(cx.entity(), focused);
         let root = div().size_full().min_w(px(0.)).min_h(px(0.));
         match self.role {
-            ViewRole::Owner => root.track_focus(&self.focus).child(element),
+            ViewRole::Owner => {
+                self.watch_input(window, cx);
+                root.track_focus(&self.focus)
+                    .on_key_up(cx.listener(Self::key_up))
+                    .on_modifiers_changed(cx.listener(|view, event: &ModifiersChangedEvent, _, cx| {
+                        view.modifiers_changed(event.modifiers, cx);
+                    }))
+                    .child(element)
+            }
             ViewRole::Viewer => root.child(element),
         }
     }

@@ -1,0 +1,340 @@
+The native key behind each key event (Task 14 of docs/plans/20261014-gpui-frontend.md): GPUI's `Keystroke` keeps
+neither a key's position nor its layout's unshifted character and drops Shift from symbols, which a terminal needs for
+physical-key bindings and the Kitty keyboard protocol. The Wayland and X11 clients install a `NativeInput` for exactly
+the dispatch of one key event (an RAII scope): a press, each of its Wayland autorepeats (with the press's own record)
+and its release carry `NativeInput::Key` (XKB keycode, modifiers with Shift, consumed modifiers, the layout's level-0
+character and whether that layout types ASCII, the text before Ctrl transformations, composition and repeat flags, the
+keystroke GPUI built); text-input-v3's one-character commit, dispatched as a synthetic key, carries
+`NativeInput::Text`. `current_native_input()` reads it during the dispatch. Linux only and additive: no GPUI type
+changes, so gpui-kit, gpui-component and the other platforms build unchanged. scripts/vendor-gpui.sh applies this to
+the verified crates.io archive.
+
+diff -ruN a/src/gpui_linux.rs b/src/gpui_linux.rs
+--- a/src/gpui_linux.rs
++++ b/src/gpui_linux.rs
+@@ -1,4 +1,4 @@
+ #![cfg(any(target_os = "linux", target_os = "freebsd"))]
+ mod linux;
+ 
+-pub use linux::{current_platform, linux_platform};
++pub use linux::{NativeInput, NativeKey, current_native_input, current_platform, linux_platform};
+diff -ruN a/src/linux/native_key.rs b/src/linux/native_key.rs
+--- a/src/linux/native_key.rs
++++ b/src/linux/native_key.rs
+@@ -0,0 +1,134 @@
++//! The native key behind a key event (an agterm-rs patch): what XKB said about the key GPUI turned into the
++//! [`gpui::Keystroke`] it dispatches, which keeps neither the key's position nor the layout's unshifted character, and
++//! drops Shift from symbols. A terminal needs both for physical-key bindings and the Kitty keyboard protocol.
++//!
++//! The platform installs it for exactly the dispatch of one event ([`NativeScope`]): a press, its autorepeats (each
++//! with the press's own record) and its release carry [`NativeInput::Key`]; text an input method committed as a
++//! synthetic key carries [`NativeInput::Text`]; anything else (a test's simulated key, a replayed pending keystroke)
++//! carries nothing. A listener reads it with [`current_native_input`] while handling the event, and should check that
++//! the record's keystroke is the event's.
++
++use std::cell::RefCell;
++
++use gpui::{Keystroke, Modifiers};
++
++/// What the platform knew about a key event.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct NativeKey {
++    /// The XKB keycode (the evdev code plus 8).
++    pub keycode: u32,
++    /// The modifiers held, Shift included.
++    pub modifiers: Modifiers,
++    /// The modifiers XKB used up producing the key's symbol (Shift for `A`).
++    pub consumed: Modifiers,
++    /// The character the key types at level 0 of its layout (no modifier).
++    pub unshifted: Option<char>,
++    /// Whether that layout types ASCII letters, judged over the Latin key positions (keycodes 10 to 61).
++    pub ascii_layout: bool,
++    /// What the key types under the layout before Ctrl transformations; the composed text when a dead key or a
++    /// compose sequence completes; empty while composing.
++    pub text: String,
++    /// The key is part of an unfinished composition.
++    pub composing: bool,
++    /// An autorepeat of a held key.
++    pub repeat: bool,
++    /// The keystroke GPUI dispatched for it.
++    pub keystroke: Keystroke,
++}
++
++/// What is behind the key event being dispatched.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub enum NativeInput {
++    /// A key of the keyboard.
++    Key(NativeKey),
++    /// Text an input method committed, dispatched as a key.
++    Text,
++}
++
++thread_local! {
++    static CURRENT: RefCell<Option<NativeInput>> = const { RefCell::new(None) };
++}
++
++/// The native input behind the key event being dispatched on this thread; `None` outside a platform key dispatch.
++pub fn current_native_input() -> Option<NativeInput> {
++    CURRENT.with_borrow(Clone::clone)
++}
++
++/// Installs a native input for one dispatch and restores the previous one when dropped.
++pub(crate) struct NativeScope(Option<NativeInput>);
++
++impl NativeScope {
++    pub(crate) fn enter(input: Option<NativeInput>) -> Self {
++        Self(CURRENT.replace(input))
++    }
++}
++
++impl Drop for NativeScope {
++    fn drop(&mut self) {
++        CURRENT.set(self.0.take());
++    }
++}
++
++#[cfg(any(feature = "wayland", feature = "x11"))]
++mod xkb_key {
++    use gpui::{Keystroke, Modifiers};
++    use xkbcommon::xkb::{self, Keycode, State};
++
++    use super::NativeKey;
++
++    /// The record of `keycode` under `state`, for the `keystroke` GPUI built from it.
++    pub(crate) fn native_key(
++        state: &State,
++        modifiers: Modifiers,
++        keycode: Keycode,
++        keystroke: &Keystroke,
++        composing: bool,
++    ) -> NativeKey {
++        let keymap = state.get_keymap();
++        let layout = state.key_get_layout(keycode);
++        let level0 = |code: Keycode| {
++            keymap
++                .key_get_syms_by_level(code, layout, 0)
++                .first()
++                .and_then(|sym| char::from_u32(xkb::keysym_to_utf32(*sym)))
++                .filter(|ch| !ch.is_control() && *ch != '\0')
++        };
++        let ascii_layout = (10..=61).any(|code| level0(Keycode::new(code)).is_some_and(|ch| ch.is_ascii_alphabetic()));
++        let consumed_by = |name: &str| {
++            let index = keymap.mod_get_index(name);
++            index != xkb::MOD_INVALID && state.mod_index_is_consumed(keycode, index)
++        };
++        let consumed = Modifiers {
++            shift: consumed_by(xkb::MOD_NAME_SHIFT),
++            control: consumed_by(xkb::MOD_NAME_CTRL),
++            alt: consumed_by(xkb::MOD_NAME_ALT),
++            platform: consumed_by(xkb::MOD_NAME_LOGO),
++            function: false,
++        };
++        let text = if composing {
++            String::new()
++        } else {
++            keystroke.key_char.clone().unwrap_or_else(|| {
++                let sym = state.key_get_one_sym(keycode);
++                char::from_u32(xkb::keysym_to_utf32(sym))
++                    .filter(|ch| !ch.is_control() && *ch != '\0')
++                    .map(String::from)
++                    .unwrap_or_default()
++            })
++        };
++        NativeKey {
++            keycode: keycode.raw(),
++            modifiers,
++            consumed,
++            unshifted: level0(keycode),
++            ascii_layout,
++            text,
++            composing,
++            repeat: false,
++            keystroke: keystroke.clone(),
++        }
++    }
++}
++
++#[cfg(any(feature = "wayland", feature = "x11"))]
++pub(crate) use xkb_key::native_key;
+diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
+--- a/src/linux/wayland/client.rs
++++ b/src/linux/wayland/client.rs
+@@ -87,8 +87,9 @@
+ use crate::linux::{
+     DOUBLE_CLICK_INTERVAL, LinuxCommon, LinuxKeyboardLayout, PIPE_READ_TIMEOUT, SCROLL_LINES,
+     capslock_from_xkb, cursor_style_to_icon_names, get_xkb_compose_state, is_within_click_distance,
+-    keystroke_from_xkb, keystroke_underlying_dead_key, modifiers_from_xkb, new_xkb_context,
+-    open_uri_internal, read_fd_with_timeout, reveal_path_internal,
++    NativeInput, NativeKey, NativeScope, keystroke_from_xkb, keystroke_underlying_dead_key,
++    modifiers_from_xkb, native_key, new_xkb_context, open_uri_internal, read_fd_with_timeout,
++    reveal_path_internal,
+     wayland::{
+         clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE, TEXT_MIME_TYPES},
+         cursor::Cursor,
+@@ -2166,10 +2167,12 @@
+                     wl_keyboard::KeyState::Pressed if !keysym.is_modifier_key() => {
+                         let mut keystroke =
+                             keystroke_from_xkb(keymap_state, state.modifiers, keycode);
++                        let mut composing = false;
+                         if let Some(mut compose) = state.compose_state.take() {
+                             compose.feed(keysym);
+                             match compose.status() {
+                                 xkb::Status::Composing => {
++                                    composing = true;
+                                     keystroke.key_char = None;
+                                     state.pre_edit_text =
+                                         compose.utf8().or(keystroke_underlying_dead_key(keysym));
+@@ -2206,6 +2209,13 @@
+                             }
+                             state.compose_state = Some(compose);
+                         }
++                        let native = native_key(
++                            state.keymap_state.as_ref().unwrap(),
++                            state.modifiers,
++                            keycode,
++                            &keystroke,
++                            composing,
++                        );
+                         let input = PlatformInput::KeyDown(KeyDownEvent {
+                             keystroke: keystroke.clone(),
+                             is_held: false,
+@@ -2226,6 +2236,10 @@
+                                     is_held: true,
+                                     prefer_character_input: false,
+                                 });
++                                let repeated = NativeKey {
++                                    repeat: true,
++                                    ..native.clone()
++                                };
+                                 let this = this.clone();
+                                 move |event_timestamp, _metadata, _| {
+                                     let Some(client) = this.0.upgrade() else {
+@@ -2244,6 +2258,9 @@
+                                         state.keyboard_focused_window.as_ref().unwrap().clone();
+ 
+                                     drop(state);
++                                    let _native = NativeScope::enter(Some(NativeInput::Key(
++                                        repeated.clone(),
++                                    )));
+                                     focused_window.handle_input(input.clone());
+ 
+                                     // If the new scheduled time is in the past the event will repeat as soon as possible
+@@ -2253,18 +2270,21 @@
+                             .unwrap();
+ 
+                         drop(state);
++                        let _native = NativeScope::enter(Some(NativeInput::Key(native)));
+                         focused_window.handle_input(input);
+                     }
+                     wl_keyboard::KeyState::Released if !keysym.is_modifier_key() => {
+-                        let input = PlatformInput::KeyUp(KeyUpEvent {
+-                            keystroke: keystroke_from_xkb(keymap_state, state.modifiers, keycode),
+-                        });
++                        let keystroke = keystroke_from_xkb(keymap_state, state.modifiers, keycode);
++                        let native =
++                            native_key(keymap_state, state.modifiers, keycode, &keystroke, false);
++                        let input = PlatformInput::KeyUp(KeyUpEvent { keystroke });
+ 
+                         if state.repeat.current_keycode == Some(keycode) {
+                             state.repeat.current_keycode = None;
+                         }
+ 
+                         drop(state);
++                        let _native = NativeScope::enter(Some(NativeInput::Key(native)));
+                         focused_window.handle_input(input);
+                     }
+                     _ => {}
+@@ -2306,6 +2326,7 @@
+                     // IBus Intercepts keys like `a`, `b`, but those keys are needed for vim mode.
+                     // We should only send ASCII characters to Zed, otherwise a user could remap a letter like `か` or `相`.
+                     if commit_text.len() == 1 {
++                        let _native = NativeScope::enter(Some(NativeInput::Text));
+                         window.handle_input(PlatformInput::KeyDown(KeyDownEvent {
+                             keystroke: Keystroke {
+                                 modifiers: Modifiers::default(),
+diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
+--- a/src/linux/x11/client.rs
++++ b/src/linux/x11/client.rs
+@@ -56,7 +56,10 @@
+     reveal_path_internal,
+     xdg_desktop_portal::{Event as XDPEvent, XDPEventSource},
+ };
+-use crate::linux::{LinuxCommon, LinuxKeyboardLayout, X11Window, modifiers_from_xinput_info};
++use crate::linux::{
++    LinuxCommon, LinuxKeyboardLayout, NativeInput, NativeScope, X11Window, modifiers_from_xinput_info,
++    native_key,
++};
+ 
+ use gpui::{
+     AnyWindowHandle, Bounds, ClipboardItem, CursorStyle, FileDropEvent, FrameRequestSource,
+@@ -1151,8 +1154,9 @@
+                 state.pre_key_char_down.take();
+                 let key_event_state = xkb_state_for_key_event(&state.xkb, event.state);
+ 
++                let mut composing = false;
++                let code = event.detail.into();
+                 let keystroke = {
+-                    let code = event.detail.into();
+                     let mut keystroke = keystroke_from_xkb(&key_event_state, modifiers, code);
+                     let keysym = key_event_state.key_get_one_sym(code);
+ 
+@@ -1171,6 +1175,7 @@
+                                 }
+                             }
+                             xkbc::Status::Composing => {
++                                composing = true;
+                                 keystroke.key_char = None;
+                                 state.pre_edit_text = compose_state
+                                     .utf8()
+@@ -1199,7 +1204,9 @@
+                     }
+                     keystroke
+                 };
++                let native = native_key(&key_event_state, modifiers, code, &keystroke, composing);
+                 drop(state);
++                let _native = NativeScope::enter(Some(NativeInput::Key(native)));
+                 window.handle_input(PlatformInput::KeyDown(gpui::KeyDownEvent {
+                     keystroke,
+                     is_held: false,
+@@ -1214,8 +1221,8 @@
+                 state.modifiers = modifiers;
+                 let key_event_state = xkb_state_for_key_event(&state.xkb, event.state);
+ 
++                let code = event.detail.into();
+                 let keystroke = {
+-                    let code = event.detail.into();
+                     let keystroke = keystroke_from_xkb(&key_event_state, modifiers, code);
+                     let keysym = key_event_state.key_get_one_sym(code);
+ 
+@@ -1225,7 +1232,9 @@
+ 
+                     keystroke
+                 };
++                let native = native_key(&key_event_state, modifiers, code, &keystroke, false);
+                 drop(state);
++                let _native = NativeScope::enter(Some(NativeInput::Key(native)));
+                 window.handle_input(PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
+             }
+             Event::XinputButtonPress(event) => {
+diff -ruN a/src/linux.rs b/src/linux.rs
+--- a/src/linux.rs
++++ b/src/linux.rs
+@@ -2,6 +2,7 @@
+ mod display_connection;
+ mod headless;
+ mod keyboard;
++mod native_key;
+ mod platform;
+ mod system_notifications;
+ #[cfg(any(feature = "wayland", feature = "x11"))]
+@@ -15,6 +16,10 @@
+ mod xdg_desktop_portal;
+ 
+ pub use dispatcher::*;
++pub use native_key::{NativeInput, NativeKey, current_native_input};
++pub(crate) use native_key::NativeScope;
++#[cfg(any(feature = "wayland", feature = "x11"))]
++pub(crate) use native_key::native_key;
+ pub(crate) use display_connection::{Backend, DisplayConnection, select_backend};
+ pub(crate) use headless::*;
+ pub(crate) use keyboard::*;
