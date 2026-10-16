@@ -138,6 +138,12 @@ pub struct FrontendWork {
     /// What built-in actions left to the frontend (`keymap_actions`), each with the soft-close setting a delete
     /// confirmation names.
     pub actions: Vec<(FrontendAction, bool)>,
+    /// The banners to post and withdraw, in the core's order ([`crate::notifications`]).
+    pub banners: Vec<agterm_core::NotificationEffect>,
+    /// The status sounds to play, and a posted batch's notification sound ([`crate::status_sound`]).
+    pub sounds: Vec<String>,
+    /// Show the first-launch welcome over the frontmost window ([`crate::welcome`]).
+    pub welcome: bool,
 }
 
 /// Whether a terminal's desktop notification fired while its pane held its window's keyboard (upstream's first
@@ -349,6 +355,13 @@ impl AppState {
         }
     }
 
+    /// A key the user pressed in one of `session`'s overlay terminals (the GTK build's overlay `connect_keystroke`):
+    /// user activity for auto-follow.
+    pub fn overlay_keystroke(&mut self, session: Uuid) {
+        self.core.note_user_activity(session);
+        self.arm_auto_follow();
+    }
+
     /// A terminal's desktop notification, suppressed while its pane holds the keyboard of the active window
     /// (upstream's `NotificationManager.notify`).
     pub fn terminal_notification(&mut self, session: Uuid, token: &str, title: &str, body: &str, focus: NotifyFocus) {
@@ -377,11 +390,28 @@ impl AppState {
             self.schedule_live_quit(quit);
         }
         crate::keymap_dispatch::sync(&self.core, &self.poster);
+        self.take_alerts();
         // the window requests and pane focus requests wait for the windows' sync after the task (`windows.rs`)
         self.arm_auto_follow();
         self.arm_hud_timers();
         self.arm_job_expiries();
         self.arm_remote_tick();
+    }
+
+    /// Hands the frontend the status sounds and the banners the core queued; a batch posting banners sounds the
+    /// configured notification sound after the status sounds, through the same throttled bell.
+    fn take_alerts(&mut self) {
+        self.frontend.sounds.extend(self.core.take_status_sounds());
+        let banners = self.core.take_notifications();
+        if let Some(sound) = crate::notifications::banner_sound(&banners, self.core.settings()) {
+            self.frontend.sounds.push(sound.to_owned());
+        }
+        self.frontend.banners.extend(banners);
+    }
+
+    /// Asks the frontend to show the first-launch welcome.
+    pub(crate) fn show_welcome(&mut self) {
+        self.frontend.welcome = true;
     }
 
     /// Arms the remote tick when the core asks for one and none is armed (upstream's `startRemoteTick`); it runs

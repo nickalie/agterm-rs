@@ -1806,14 +1806,75 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 **Files:**
 - Create: `crates/agterm-gpui/src/{overlay,notifications,status_sound,welcome}.rs`
 
-- [ ] caller programs over a page or pane (port of `overlay.rs`), exit status read-back
-- [ ] `show-image.sh` end to end: chunked kitty APC in a PTY overlay renders the image (Task 16)
-- [ ] desktop notifications via `notify-rust` with today's semantics (`notifications.rs`): one banner per identity
+- [x] caller programs over a page or pane (port of `overlay.rs`), exit status read-back
+- [x] `show-image.sh` end to end: chunked kitty APC in a PTY overlay renders the image (Task 16)
+- [x] desktop notifications via `notify-rust` with today's semantics (`notifications.rs`): one banner per identity
       (a repeat replaces it through `replaces_id`), a click reveals its pane (`ActionInvoked` → `notification-reveal`),
       clears withdraw banners (`CloseNotification`); status sound; bell; welcome
-- [ ] tests: overlay lifecycle and exit status, show-image end to end (headless); notifications on a private session
+- [x] tests: overlay lifecycle and exit status, show-image end to end (headless); notifications on a private session
       bus: replace per identity, click reveals the pane, clear withdraws
-- [ ] gates + conformance — must pass before Task 24
+- [x] gates + conformance — must pass before Task 24
+- result (2026-10-16):
+  - ➕ Files: `src/integrations.rs` (the welcome's installers; Task 28 extends it), `src/{overlay,notifications,welcome}/
+    tests.rs`, `src/deck/tests/overlay.rs`, `tests/notifications.rs`; Modify: `src/{app,deck,deck/tests,lib,modal,
+    modal/tests,split,state,state/tests,windows,keymap_actions,terminal/clipboard}.rs`, `Cargo.toml` (`notify-rust`
+    4.18.2, the version GPUI's Linux platform already links), `docs/linux-ui-checklist.md`.
+  - **Overlays** (`overlay.rs`, the GTK port): each page keeps an `OverlayLayer` (the program's terminal and the pane
+    overlays' by generation), synced after the HUD: a program or pane overlay without a terminal gets one (installed
+    in its slot; a pane overlay once its pane is laid out), a closed or replaced one goes. The terminal runs upstream's
+    wrapper (`overlay_capture::surface_command`) in the caller's directory (else the session's) with the session's
+    environment, the command and the status file, at the session's font size, on the overlay's own background
+    (`config_overlay`), owned as `SurfaceOwner::Overlay`. Laid out by `Place::Program` (the page, or centered at its
+    share: 12 px radius, white 0.18 edge, 24 px shadow, over the existing backdrop wash) and `Place::Over(slot)` for a
+    pane overlay (after the divider, under the overlay washes and the scratch). Its exit closes the slot by generation
+    (`overlay_exited` / `pane_overlay_exited`, the core reads the status file); a held (`--wait`) end reports
+    `replica_overlay_held` and closes on the next key; keystrokes are user activity (`AppState::overlay_keystroke`);
+    links route as `ClickOrigin::ProgramOverlay`; a click into a pane overlay posts `pane_overlay_focused`.
+  - **Focus**: `Page::keyboard` picks the terminal ask, else the overlay the plan focuses (`OverlayFocus`), else the
+    pane; `Deck::show`/`focus_target` use it, an overlay key (`overlay#g`, `overlay-pane#g`) is never reported as a
+    pane focus, and once the overlay goes the changed target gives the pane the keyboard back. Config reloads and the
+    quit's teardown include the overlay terminals.
+  - **Notifications** (`notifications.rs`): the core's banners and status sounds land through `FrontendWork`
+    (`banners`, `sounds`, taken in `settle`); `deliver`/`banner_sound` as GTK; the `Desktop` sink queues them for one
+    task on GPUI's background executor (`run`): `notify-rust` banners (`appname` agterm, `desktop-entry` hint = the app
+    id, a `default` action), a repeat per identity sent with the previous id (`replaces_id`), each banner's
+    `ActionInvoked`/`NotificationClosed` waited for on its own connection (aborted on replace/withdraw), a click posting
+    `AppState::reveal_notification`, a withdraw sending `CloseNotification`, a server-closed banner forgotten.
+  - **Status sound and bell** (`status_sound.rs`): one throttle over every name as GTK; the bell rung as GDK's
+    `Display::beep` was: Wayland `xdg_system_bell_v1` on GPUI's connection for the frontmost window, X11 `Bell`;
+    headless nothing.
+  - **Welcome** (`welcome.rs`): due as GTK computes it (prior state read before the launch writes), `welcomeShown`
+    set before it opens, suppressed on a UI-test launch; an alert with both checks checked and upstream's ids as
+    element ids; Install runs the skill then the hooks installer (`integrations.rs`, the OpenCode version chooser and
+    result alerts included). The alert gained several checks with initial state and element ids (`AlertCheck`,
+    `AlertAnswer::checks`).
+  - Tests: overlay (rect, config, keys); deck over real panes (program covering, keyboard, exit 7 read back, pane gets
+    the keyboard back; floating at 50% over the backdrop, hidden with its page and refocused; pane overlay over its
+    pane with its owner, closed with the keyboard back; held end closing on a key; `show-image.sh --emit` drawing a
+    4x2 PNG from the window's atlas through chunked APC in the PTY overlay, Enter closing it with exit 0);
+    notifications (order, sound, sink queue; a `dbus-daemon` of the test's own with a fake
+    `org.freedesktop.Notifications` server, the scenario in a child whose bus is only that one: replace per identity,
+    a second pane's own banner, `ActionInvoked` revealing the identity, a clear withdrawing only the banner still up);
+    state (a `notify` lands its banner and sound once); status sound (throttle, burst); welcome (spec, keys dropping a
+    check, Later, marked shown); integrations (alerts). Gates: fmt, clippy (workspace, all targets and features),
+    lint-report (9 expects, unchanged), check-tracing-features, `vendor-gpui.sh --check`, `cargo test --workspace`
+    under Xvfb 4118 passed, 0 failed, 7 ignored (the private-bus child is one); the new tests 5 times in a row.
+    GPUI conformance ratchet-only with `--also tests/protocol/test_overlay.py` and `--also-k "overlay or notify or
+    notification or bell or welcome or image or exit_status or sound"`: 571 passed, 17 failed (15 HTML page tests,
+    Task 32; `test_overlay_open_size_outside_its_range[0-1|101-100]`, which expect the fork's clamp without the
+    capability), 1 skipped; ratchet held (545) and grew by 26 (the program/pane overlay tests, `test_open_refusals`,
+    `test_overlay_program`, `test_zoom_the_pane_under_a_running_overlay`,
+    `test_cursor_reads_a_program_overlay_but_not_a_hud`) to 571. Claimed `overlay-size-validated` (the core refuses
+    the range exactly as the claimed branch asserts, seen in that run's failure); its two ids were not added (not seen
+    passing). No GTK conformance run: no crate the GTK binary links changed.
+  - Decisions: a terminal BEL rings nothing (upstream's rule: `RING_BELL` is no notification source; neither upstream
+    nor the GTK build sounds it); the welcome's Install runs real installers here rather than waiting for Task 28;
+    the quit confirmation of the GTK `welcome.rs` waits for the app menu's Quit (Task 26).
+  - Deviations: the server's `ActivationToken` is not passed on (`notify-rust` does not expose it), so on Wayland a
+    click's raise may be refused by the compositor; each banner holds a session-bus connection of its own while it is
+    up (`notify-rust`'s handle), where `GNotification` used the app's one.
+  - Later tasks build on: `OverlayLayer` and `Place::Program` (Task 32 mounts HTML pages in the same places),
+    `FrontendWork::{banners, sounds, welcome}`, `status_sound::ring`, `integrations.rs` (Task 28), `AlertCheck`.
 
 ### Task 24: Quick terminal on layer-shell
 

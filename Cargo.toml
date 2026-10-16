@@ -112,6 +112,9 @@ ashpd = { version = "0.13", default-features = false, features = [
     "raw_handle",
     "wayland",
 ] }
+# agterm-gpui's desktop notifications: banners on the freedesktop notification server over the session bus (zbus, as
+# GPUI's Linux platform already links it), replaced per identity, clicked and withdrawn.
+notify-rust = "4.18.2"
 # The `StreamExt` the portal's setting-changed stream is read with (the futures family zbus and ashpd link).
 futures-util = "0.3"
 # agterm-gpui activates its window with a token another launch handed over, on GPUI's own connection: xdg-activation

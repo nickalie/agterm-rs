@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use agterm_core::first_run::FirstRunWelcome;
 use agterm_core::paths::{self, Env, ProcessEnv};
 use agterm_core::persist::{LibraryPersistence, SettingsStore};
 use agterm_core::{Core, CoreConfig, CoreState};
@@ -164,11 +165,15 @@ struct Shell {
     server: RefCell<ControlServer>,
     state: Entity<AppState>,
     windows: RefCell<Windows>,
+    /// Where the core's banners go: the desktop's notification server.
+    banners: crate::notifications::Desktop,
     /// The orderly shutdown ran.
     shut_down: Cell<bool>,
 }
 
 fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, posting: Arc<dyn MainLoop<AppState>>) {
+    // before this launch writes anything: the first launch seeds a window and saves it at once
+    let had_prior_state = FirstRunWelcome::has_prior_state(&paths::state_dir(&ProcessEnv));
     gpui_kit::init(cx);
     crate::keymap_dispatch::init(cx);
     crate::terminal::register_embedded_fonts(cx.text_system());
@@ -179,30 +184,14 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
         socket: advertised_socket(&server),
         program_version: identity.version.clone(),
     };
-    let mut core = Core::new(
-        CoreConfig {
-            app: identity,
-            capabilities: capabilities(&session_host::live_capabilities(&ProcessEnv)),
-        },
-        load_state(&ProcessEnv),
-    );
-    // the settings' ghostty config goes out before the config loads, so the first terminal has the theme
     let resources = session_host::resources();
-    core.set_theme_paths(
-        session_host::themes_dir(resources.as_deref()),
-        Some(session_host::settings_config_path(&ProcessEnv)),
-    );
-    core.write_settings_config();
-    install_launch_hosts(&mut core, &poster, context.socket.clone());
-    // the HUD's painter and the cell a HUD over a session no terminal draws yet is sized with
-    if let Some(helper) = crate::hud::install_helper(&paths::state_dir(&ProcessEnv)) {
-        core.set_hud_helper(helper, paths::hud_body_dir(&ProcessEnv));
-    }
-    core.set_cell_estimator(crate::hud::cell_estimator(Arc::clone(cx.text_system())));
+    let core = launch_core(identity, resources.as_deref(), &poster, context.socket.clone(), cx);
     // the desktop's side before the config loads, so the first terminal starts on it (`appearance.rs`)
     let portal = crate::appearance::Portal::session();
     let dark = portal.as_ref().is_some_and(crate::appearance::Portal::is_dark);
     let windows = windows(context, resources, dark, &poster, &launch);
+    let welcome_due = FirstRunWelcome::is_due(core.settings().welcome_shown, had_prior_state);
+    let banners = crate::notifications::Desktop::start(launch.app_id.clone(), poster.clone(), cx.background_executor());
     let state = cx.new(|_| {
         let mut state = AppState::new(core);
         state.launched_on(dark);
@@ -215,6 +204,7 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
         server: RefCell::new(server),
         state: state.clone(),
         windows: RefCell::new(windows),
+        banners,
         shut_down: Cell::new(false),
     });
     let landing = Rc::clone(&shell);
@@ -230,6 +220,10 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
         })
     {
         tracing::error!(%error, "the control server is not serving");
+    }
+    // last, once the windows are presented: the dialog opens over the frontmost one
+    if welcome_due {
+        post(&poster, AppState::request_welcome);
     }
     forward_bus_requests(launch.requests, poster.clone(), cx);
     if let Some(portal) = portal
@@ -252,6 +246,30 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
         async {}
     })
     .detach();
+}
+
+/// The core over the state the last run left, with what it reaches the host through: the theme paths and the settings'
+/// ghostty config (written before the config loads, so the first terminal has the theme), the launch hosts, the HUD's
+/// painter and the cell a HUD over a session no terminal draws yet is sized with.
+fn launch_core(identity: AppIdentity, resources: Option<&Path>, poster: &Poster, socket: String, cx: &App) -> Core {
+    let mut core = Core::new(
+        CoreConfig {
+            app: identity,
+            capabilities: capabilities(&session_host::live_capabilities(&ProcessEnv)),
+        },
+        load_state(&ProcessEnv),
+    );
+    core.set_theme_paths(
+        session_host::themes_dir(resources),
+        Some(session_host::settings_config_path(&ProcessEnv)),
+    );
+    core.write_settings_config();
+    install_launch_hosts(&mut core, poster, socket);
+    if let Some(helper) = crate::hud::install_helper(&paths::state_dir(&ProcessEnv)) {
+        core.set_hud_helper(helper, paths::hud_body_dir(&ProcessEnv));
+    }
+    core.set_cell_estimator(crate::hud::cell_estimator(Arc::clone(cx.text_system())));
+    core
 }
 
 /// The windows' registry: the config the terminals draw with (on the `dark` side of the desktop's appearance), the
@@ -328,6 +346,7 @@ fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
             }
         }
     }
+    land_alerts(shell, state, &work, cx);
     for url in &work.open_urls {
         cx.open_url(url);
     }
@@ -341,6 +360,35 @@ fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
     if work.quit {
         shut_down(shell, cx);
         cx.quit();
+    }
+}
+
+/// Lands the status sounds and the banner posts and withdrawals the last tasks queued, and the welcome: the bell and
+/// the welcome go to the frontmost window.
+fn land_alerts(shell: &Shell, state: &Entity<AppState>, work: &crate::state::FrontendWork, cx: &mut App) {
+    if work.sounds.is_empty() && work.banners.is_empty() && !work.welcome {
+        return;
+    }
+    let frontmost = shell
+        .windows
+        .borrow()
+        .frontmost(&state.read(cx).core)
+        .map(|ui| ui.handle);
+    for name in &work.sounds {
+        crate::status_sound::play(name, || {
+            if let Some(handle) = frontmost {
+                let _ = handle.update(cx, |_, window, cx| crate::status_sound::ring(window, cx));
+            }
+        });
+    }
+    crate::notifications::deliver(&shell.banners, &work.banners);
+    if work.welcome
+        && let Some(handle) = frontmost
+        && handle
+            .update(cx, |_, window, cx| crate::welcome::present(window, cx))
+            .is_err()
+    {
+        tracing::debug!("welcome: the window is gone");
     }
 }
 

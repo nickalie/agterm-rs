@@ -123,7 +123,7 @@ pub fn rename_alert(name: &str) -> crate::modal::AlertSpec {
             crate::modal::AlertButton::cancel("Cancel"),
             crate::modal::AlertButton::plain("OK").as_default().suggested(),
         ],
-        check: None,
+        checks: Vec::new(),
         field: Some(name.to_owned()),
     }
 }

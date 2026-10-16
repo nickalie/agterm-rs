@@ -16,7 +16,9 @@
 //! the keyboard, and the shown terminal gets it back once it closes. A session's terminal ask that wants the keyboard
 //! takes it in place of the terminal it covers ([`crate::ask_dialog`]), and gives it back once it ends.
 //!
-//! Over a page's panes lie its HUD ([`crate::hud`]) and, above that, its terminal ask.
+//! Over a page's panes lie its pane overlays and its program overlay ([`crate::overlay`]), then its HUD
+//! ([`crate::hud`]) and, above that, its terminal ask. An overlay the layout gives the keyboard takes it in place of
+//! the pane it covers, and gives it back once it goes.
 //!
 //! The plan of what to add, remove and show is a pure function of the model ([`plan`]), so it is testable without a
 //! window.
@@ -49,6 +51,7 @@ use uuid::Uuid;
 use crate::ask_dialog::{self, AskDialog, AskOwner};
 use crate::hud::{self, HudLayer};
 use crate::mute::{self, Washes};
+use crate::overlay::{self, OverlayLayer};
 use crate::pane::{self, PaneContext, PaneSpec, Ran, RanCell};
 use crate::pane_lead::{self, PaneCover};
 use crate::split::{self, AskScope, PageElement, PageState, PanePlan, Place, Slot};
@@ -260,6 +263,7 @@ pub struct Page {
     washes: Washes,
     state: Rc<PageState>,
     hud: HudLayer,
+    overlays: OverlayLayer,
     ask: Option<PageAsk>,
 }
 
@@ -273,6 +277,7 @@ impl Page {
             washes: Washes::default(),
             state: Rc::new(PageState::default()),
             hud: HudLayer::default(),
+            overlays: OverlayLayer::default(),
             ask: None,
         }
     }
@@ -281,6 +286,25 @@ impl Page {
     #[must_use]
     pub fn hud(&self) -> &HudLayer {
         &self.hud
+    }
+
+    /// The page's overlay terminals.
+    #[must_use]
+    pub fn overlays(&self) -> &OverlayLayer {
+        &self.overlays
+    }
+
+    /// What takes the keyboard on this page by the last plan, with its focus key: the terminal ask that wants it, the
+    /// overlay the plan focuses, else the focused pane's terminal.
+    fn keyboard(&self, cx: &App) -> Option<(String, FocusHandle)> {
+        if let Some(ask) = self.ask_focus(cx) {
+            return Some(ask);
+        }
+        if let Some(overlay) = self.plan.as_ref().and_then(|plan| self.overlays.focus(plan, cx)) {
+            return Some(overlay);
+        }
+        self.focus()
+            .map(|pane| (pane.token().to_owned(), pane.focus_handle(cx)))
     }
 
     /// The page's terminal ask while it shows.
@@ -344,7 +368,6 @@ impl Page {
     #[must_use]
     pub fn focus(&self) -> Option<&PaneTerminal> {
         let plan = self.plan.as_ref()?;
-        // a program or pane overlay holding the keyboard is drawn by the overlays (Task 23): until then the pane does
         self.terminal(plan.focus_token()?)
     }
 
@@ -353,6 +376,7 @@ impl Page {
         for pane in &self.panes {
             pane.view.update(cx, |view, cx| view.set_shown(false, cx));
         }
+        self.overlays.hide(cx);
         self.washes = Washes::default();
     }
 
@@ -495,14 +519,18 @@ impl Deck {
     }
 
     /// What should hold the keyboard while the window has it: the shown page's terminal ask while it takes the
-    /// keyboard, else the shown terminal.
+    /// keyboard, the overlay its layout focuses, else the shown terminal.
     #[must_use]
     pub fn focus_target(&self, cx: &App) -> Option<FocusHandle> {
-        let page = self.shown.and_then(|id| self.pages.get(&id));
-        if let Some((_, handle)) = page.and_then(|page| page.ask_focus(cx)) {
-            return Some(handle);
-        }
-        self.shown_terminal().map(|pane| pane.focus_handle(cx))
+        let page = self.shown.and_then(|id| self.pages.get(&id))?;
+        page.keyboard(cx).map(|(_, handle)| handle)
+    }
+
+    /// Every overlay terminal's shared state, for the quit's teardown.
+    pub fn overlay_terminals(&self) -> impl Iterator<Item = &Rc<Shared>> {
+        self.pages
+            .values()
+            .flat_map(|page| page.overlays.terminals().map(overlay::OverlayTerminal::shared))
     }
 
     /// Where a GUI ask anchored to `target` is in the window as last laid out (upstream's `askAnchorFrame`); `None`
@@ -648,6 +676,8 @@ impl Deck {
             env: &self.env,
         };
         hud::sync_page(&mut page.hud, session, &context, Some(&layout), shown, cx);
+        let mut mount = overlay::Mount { hud: &context, window };
+        overlay::sync_page(&mut page.overlays, session, &mut mount, &layout, shown, cx);
         page.plan = Some(layout);
         page.covers = covers;
         page.show(shown, cx);
@@ -671,6 +701,9 @@ impl Deck {
         }
         for panel in self.pages.values().filter_map(|page| page.hud.panel()) {
             panel.apply_config(&self.env, cx);
+        }
+        for overlay in self.pages.values().flat_map(|page| page.overlays.terminals()) {
+            overlay.apply_config(&self.env, keep_zoom, cx);
         }
         cx.notify();
     }
@@ -701,13 +734,8 @@ impl Deck {
             self.set_focused(None);
             return None;
         }
-        let page = self.pages.get(&id);
-        let ask = page.and_then(|page| page.ask_focus(cx));
-        let focus = page.and_then(Page::focus);
-        let desired = match &ask {
-            Some((key, _)) => Some((id, key.clone())),
-            None => focus.map(|pane| (id, pane.token().to_owned())),
-        };
+        let target = self.pages.get(&id).and_then(|page| page.keyboard(cx));
+        let desired = target.as_ref().map(|(key, _)| (id, key.clone()));
         if self.held {
             self.held_move |= changed || refocus || desired != self.focused;
             return None;
@@ -721,16 +749,12 @@ impl Deck {
         if (desired == self.focused || reporting) && !refocus {
             return None;
         }
-        let handle = match ask {
-            Some((_, handle)) => Some(handle),
-            None => focus.map(|pane| pane.focus_handle(cx)),
-        };
-        if let Some(handle) = handle {
+        if let Some((_, handle)) = target {
             window.focus(&handle, cx);
         }
         self.set_focused(desired.clone());
-        // a dialog the deck gave the keyboard is no pane focus the model hears of
-        desired.filter(|(_, key)| !key.starts_with("ask:"))
+        // a dialog or an overlay the deck gave the keyboard is no pane focus the model hears of
+        desired.filter(|(_, key)| !key.starts_with("ask:") && !overlay::is_overlay_key(key))
     }
 
     /// Whether a live keyboard owner outside the deck's terminals holds the window's keyboard: the owner the last
@@ -881,6 +905,30 @@ impl Deck {
         });
     }
 
+    /// The user focused the overlay terminal keyed `key` of `session` (a click into it): the deck keeps it as its
+    /// focus, and a pane overlay's (`pane_generation`) moves the split's focus to the pane it covers (upstream's pane
+    /// overlay `onFocusChange`). A focus the deck gave itself was recorded already.
+    pub fn overlay_focused(&mut self, session: Uuid, key: &str, pane_generation: Option<u64>, cx: &mut Context<Self>) {
+        let shown = self.pages.get(&session).is_some_and(|page| {
+            page.overlays
+                .terminals()
+                .any(|overlay| overlay.key() == key && overlay.view().read(cx).is_shown())
+        });
+        let focused = Some((session, key.to_owned()));
+        if !shown || self.focused == focused {
+            return;
+        }
+        self.set_focused(focused);
+        let Some(generation) = pane_generation else {
+            return;
+        };
+        post(&self.env.poster, move |state: &mut AppState| {
+            if state.core.pane_overlay_focused(session, generation) {
+                state.settle();
+            }
+        });
+    }
+
     /// A press on the divider of `session`'s page: a double-click on an unmoved divider resets the even split, any
     /// other press starts a drag.
     fn divider_pressed(&mut self, session: Uuid, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -936,6 +984,7 @@ impl Deck {
                 .child(separator(self.look.foreground), Place::Separator)
                 .child(Self::divider(session, plan.axis, cx), Place::Divider);
         }
+        element = with_pane_overlays(element, page, plan, cx);
         for slot in [Slot::Primary, Slot::Split] {
             if let Some((color, opacity)) = page.washes.wash(slot, true) {
                 element = element.child(wash(color, opacity), Place::Over(slot));
@@ -948,6 +997,7 @@ impl Deck {
         if let Some((regions, opacity)) = page.washes.backdrop.clone() {
             element = element.child(backdrop(regions, opacity, plan, Rc::clone(&page.state)), Place::Full);
         }
+        element = with_program(element, page);
         if let (Some(panel), Some(placement)) = (hud::element(&page.hud), page.hud.placement()) {
             element = element.child(panel, Place::Hud(placement));
         }
@@ -1040,6 +1090,27 @@ impl Render for Deck {
             })
             .children(pages)
     }
+}
+
+/// `element` with `page`'s pane overlays over the panes `plan` puts them on (hidden ones at the full page, undrawn).
+fn with_pane_overlays(mut element: PageElement, page: &Page, plan: &PanePlan, cx: &App) -> PageElement {
+    for pane_overlay in page.overlays.panes() {
+        let place = overlay::slot_of(plan, pane_overlay.generation()).map_or(Place::Full, Place::Over);
+        element = element.child(overlay::pane_element(pane_overlay, cx), place);
+    }
+    element
+}
+
+/// `element` with `page`'s program panel, where it shows.
+fn with_program(element: PageElement, page: &Page) -> PageElement {
+    let Some(program) = overlay::program_element(&page.overlays) else {
+        return element;
+    };
+    let placement = page
+        .overlays
+        .placement()
+        .unwrap_or(overlay::ProgramPlacement { fraction: None });
+    element.child(program, Place::Program(placement))
 }
 
 /// Where a page lays the terminal carrying `token` out: at its slot while the plan draws it, else at the full page,

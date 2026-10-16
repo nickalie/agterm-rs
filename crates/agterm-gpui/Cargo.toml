@@ -25,6 +25,7 @@ futures-util.workspace = true
 gpui-kit.workspace = true
 image.workspace = true
 libc.workspace = true
+notify-rust.workspace = true
 # text watermarks are written as PNG files the terminals' `background-image` reads
 png.workspace = true
 raw-window-handle.workspace = true

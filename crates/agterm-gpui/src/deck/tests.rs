@@ -190,20 +190,32 @@ fn core_of(library: WindowLibrary) -> Core {
 }
 
 fn harness(cx: &mut TestAppContext, core: Core, window: Uuid) -> Harness<'_> {
+    let recorded = Arc::new(Mutex::new(Vec::new()));
+    let spawner = test_launcher(Arc::clone(&recorded));
+    harness_with(cx, core, window, recorded, spawner)
+}
+
+/// [`harness`] with its terminals launched by `launcher`, which records into `launches`.
+fn harness_with(
+    cx: &mut TestAppContext,
+    core: Core,
+    window: Uuid,
+    launches: Arc<Mutex<Vec<Launch>>>,
+    spawner: pane::Launcher,
+) -> Harness<'_> {
     // the panes' threads wake their pumps from outside the test scheduler
     cx.executor().allow_parking();
     let posted = Arc::new(Posted::default());
     let main_loop: Arc<dyn MainLoop<AppState>> = Arc::clone(&posted) as _;
     let mut state = AppState::new(core);
     state.attach(Arc::downgrade(&main_loop));
-    let launches = Arc::new(Mutex::new(Vec::new()));
     let state_dir = tempfile::tempdir().unwrap();
     let env = Rc::new(DeckEnv::new(
         PaneContext {
             socket: "/tmp/agterm-test.sock".to_owned(),
             program_version: "1.2.3".to_owned(),
         },
-        test_launcher(Arc::clone(&launches)),
+        spawner,
         TerminalConfig::default(),
         Arc::downgrade(&main_loop),
         Watermarks {
@@ -1230,3 +1242,5 @@ fn a_ctrl_click_on_the_hud_opens_its_link_and_a_plain_click_reaches_the_pane(cx:
     assert!(!h.cx.update(|window, _| elsewhere.is_focused(window)));
     assert!(h.state.take_frontend_work().open_urls.is_empty());
 }
+
+mod overlay;
