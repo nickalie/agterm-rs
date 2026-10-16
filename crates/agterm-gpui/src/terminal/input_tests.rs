@@ -1102,6 +1102,57 @@ fn focus_follows_mouse_asks_nothing_through_an_overlay(cx: &mut TestAppContext) 
     assert_eq!(asked(), 1, "the terminal itself asks");
 }
 
+/// A terminal running `script` (which prints `ready`) under [`Covered`]'s overlay in a 640x480 test window.
+fn covered<'a>(
+    cx: &'a mut TestAppContext,
+    script: &str,
+    dir: &Path,
+) -> (Entity<TerminalView>, &'a mut VisualTestContext) {
+    cx.executor().allow_parking();
+    let terminal = new_terminal(cx, "covered", script, dir, config(""));
+    let (covered, cx) = cx.add_window_view(|_, cx| Covered {
+        view: cx.new(|cx| TerminalView::new(&terminal, ViewRole::Owner, cx)),
+    });
+    cx.simulate_scale_factor_change(1.0);
+    cx.simulate_resize(size(px(640.), px(480.)));
+    let view = covered.read_with(cx, |covered, _| covered.view.clone());
+    wait_view(&view, "ready", cx);
+    (view, cx)
+}
+
+#[gpui_kit::test]
+fn a_program_tracking_every_motion_hears_none_through_an_overlay(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let script = "stty -echo -icanon; printf '\\033[?1003hready\\r\\n'; exec cat -v";
+    let (view, cx) = covered(cx, script, dir.path());
+    // under the overlay, over the terminal's grid; then over the terminal itself
+    cx.simulate_mouse_move(Fixture::at(5, 1), None, Modifiers::default());
+    cx.run_until_parked();
+    cx.simulate_mouse_move(Fixture::at(30, 10), None, Modifiers::default());
+    let painted = wait_view(&view, "^[[M", cx);
+    // the pty keeps the order: a report of the covered move would show before the uncovered one's
+    assert_eq!(painted.matches("^[[M").count(), 1, "{painted}");
+    assert!(painted.contains("^[[MC?+"), "the uncovered cell's motion:\n{painted}");
+}
+
+#[gpui_kit::test]
+fn a_link_under_an_overlay_is_not_hovered(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let script = "printf 'ready\\r\\nsee https://example.com/a-long-path-past-it'; exec sleep 30";
+    let (view, cx) = covered(cx, script, dir.path());
+    wait_view(&view, "past-it", cx);
+    cx.simulate_mouse_move(Fixture::at(10, 1), None, Modifiers::control());
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |view, _| view.hovered_link().is_none()),
+        "the overlay holds the pointer"
+    );
+    cx.simulate_mouse_move(Fixture::at(30, 1), None, Modifiers::control());
+    cx.run_until_parked();
+    let hovered = view.read_with(cx, |view, _| view.hovered_link().map(|link| link.url.clone()));
+    assert_eq!(hovered.as_deref(), Some("https://example.com/a-long-path-past-it"));
+}
+
 #[gpui_kit::test]
 fn adjacent_hyperlinks_stay_apart_and_a_short_repeat_interval_counts_no_double_click(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\n\\033]8;;https://a.test\\033\\\\aaa\\033]8;;https://b.test\\033\\\\bbb\\033]8;;\\033\\\\ x y'; \

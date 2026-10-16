@@ -488,6 +488,9 @@ impl TerminalView {
     }
 
     /// The pointer moved anywhere in the window; `hovered`: over this view's grid, not under anything drawn on top.
+    /// Only a hovered grid reports the motion to a program tracking the mouse or looks for a link under the pointer: a
+    /// view under an overlay, or hosted in a dashboard cell under its click layer, takes no hover (a drag the view
+    /// began still reports past its edge).
     pub(super) fn mouse_move(
         &mut self,
         event: &MouseMoveEvent,
@@ -506,7 +509,7 @@ impl TerminalView {
         // read-only: the program never gets the mouse, which selects as it would without reporting
         let tracking = self.tracking(&pane);
         let shift_override = self.pointer.mods.contains(Mods::SHIFT) && !self.shift_capture();
-        let inside = bounds.contains(&event.position);
+        let inside = hovered && bounds.contains(&event.position);
         if !tracking || shift_override {
             self.refresh_link(&pane, inside.then_some(position), cx);
         }

@@ -2106,9 +2106,10 @@ Port the placement rendering from qwertty-term (MIT, attribution).
     menu belongs to its window; a click makes it frontmost anyway); Reset Live Sessions… stays out of the menu until
     its dialog and relaunch land (Task 27).
   - Deviations: no `zoom.rs` (see Files); the idle chip's fill is the foreground at 0.16 (the GPUI theme carries no
-    selection color); under the window manager's decorations the Hidden toolbar mode draws no bar, so the menu has no
-    mouse path there (the keymap and the palettes still reach every item); window frames are still not restored (the
-    GTK build's gap, checklist row).
+    selection color); window frames are still not restored (the GTK build's gap, checklist row). (Corrected by the
+    review fixer: the Hidden toolbar mode first drew no bar under the window manager's decorations, which left
+    Settings…, Quit and the Help items, which no keymap action or palette row reaches, with no path at all; it now
+    keeps the GTK build's minimal bar with the app menu's button whoever decorates the window.)
   - Later tasks build on: `AppMenu` (Task 27's Reset Live Sessions… item, Task 28's installers), `FrontendWork::
     quit_prompt`, the dashboard's `FontOverrides` on `Shared`.
 

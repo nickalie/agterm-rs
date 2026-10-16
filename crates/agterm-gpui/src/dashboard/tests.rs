@@ -5,7 +5,7 @@ use agterm_core::model::{AgentIndicator, AgentStatus, NewSession, SessionSeed, S
 use gpui_kit::{Keystroke, Modifiers};
 
 use super::*;
-use crate::terminal::{font_report, pending_restore};
+use crate::terminal::font_report;
 
 fn key(name: &str, modifiers: Modifiers) -> Keystroke {
     Keystroke {
@@ -111,12 +111,10 @@ fn contrast_picks_dark_text_over_a_light_fill() {
 fn an_override_reports_nothing_and_its_revert_is_dropped_once() {
     // while overridden, nothing is the pane's
     assert_eq!(font_report(Some(9.0), None, 9.0), (false, None));
-    // the revert to the pending size is dropped, and the next report is the pane's again
-    let pending = pending_restore(9.0, 13.0);
-    assert_eq!(pending, Some(13.0));
-    assert_eq!(font_report(None, pending, 13.0), (false, None));
+    // the revert to the pending size is dropped (within half a point), and the next report is the pane's again
+    assert_eq!(font_report(None, Some(13.0), 13.0), (false, None));
+    assert_eq!(font_report(None, Some(13.0), 13.4), (false, None));
     assert_eq!(font_report(None, None, 14.0), (true, None));
-    // a revert to the same size arms nothing, so a later zoom is not swallowed
-    assert_eq!(pending_restore(13.0, 13.2), None);
+    // a report that is not the revert is the pane's, and ends the wait for it
     assert_eq!(font_report(None, Some(13.0), 16.0), (true, None));
 }

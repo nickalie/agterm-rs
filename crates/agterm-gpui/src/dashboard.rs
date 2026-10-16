@@ -197,18 +197,17 @@ pub fn grid_key(stroke: &Keystroke) -> Option<GridKey> {
 
 // MARK: - fonts
 
-/// One terminal's transient grid font size and the size it had before.
+/// One terminal's transient grid font size.
 struct FontOverride {
     shared: Rc<Shared>,
-    original: f32,
     applied: f32,
 }
 
 /// The transient font sizes the grid gives its member terminals (upstream's `dashboardFontOverride`): set while a
-/// terminal sits in a cell under a fixed or auto mode, re-asserted when something else moved it (a config reload), and
-/// put back to the size it had when it leaves the grid or the grid closes. A terminal not started yet gets its size on
-/// a later sync. While overridden a terminal's size reports are not the pane's, nor is the revert's
-/// ([`Shared::set_font_override`]).
+/// terminal sits in a cell under a fixed or auto mode, re-asserted when something else moved it, and put back when it
+/// leaves the grid or the grid closes: to the size it had, or to the configured one a reload gave it meanwhile
+/// ([`Shared::clear_font_override`]). A terminal not started yet gets its size on a later sync. While overridden a
+/// terminal's size reports are not the pane's, nor is the revert's ([`Shared::set_font_override`]).
 #[derive(Default)]
 pub struct FontOverrides {
     by_token: HashMap<String, FontOverride>,
@@ -229,7 +228,7 @@ impl FontOverrides {
                 .iter()
                 .any(|(known, shared)| known == token && Rc::ptr_eq(shared, &entry.shared));
             if !stays {
-                entry.shared.clear_font_override(entry.original);
+                entry.shared.clear_font_override();
             }
             stays
         });
@@ -237,7 +236,6 @@ impl FontOverrides {
         for (token, shared) in wanted {
             let entry = self.by_token.entry(token.clone()).or_insert_with(|| FontOverride {
                 shared: Rc::clone(shared),
-                original: shared.font_points(),
                 applied: size,
             });
             entry.applied = size;

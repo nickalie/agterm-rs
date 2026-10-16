@@ -213,6 +213,84 @@ fn a_fixed_font_is_transient_and_never_the_sessions(cx: &mut TestAppContext) {
     });
 }
 
+fn close_dashboard(h: &mut Harness<'_>) {
+    let response = h.state.core.dispatch(&Request {
+        cmd: Command::Dashboard,
+        target: None,
+        args: Some(Args {
+            close: Some(true),
+            ..Args::default()
+        }),
+    });
+    assert!(response.ok, "{response:?}");
+    h.state.settle();
+    h.turn();
+    h.turn();
+}
+
+#[gpui_kit::test]
+fn a_grid_font_a_fraction_off_is_not_the_sessions_when_put_back(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    h.until("the pane to start", |h| h.realized(ids[0], StatusPane::Left));
+    let token = h.token(ids[0], StatusPane::Left);
+    let shared = h.shared(ids[0], &token);
+    let before = shared.font_points();
+    let stored = h.session(ids[0]).font_size;
+    // a fifth of a point: within the half-point tolerance a revert's report is matched by, still a step that reports
+    let targets = vec![uuid_string(ids[0])];
+    open_dashboard(&mut h, |args| {
+        args.targets = Some(targets);
+        args.font_size = Some(f64::from(before) + 0.2);
+    });
+    assert!(
+        shared
+            .font_override()
+            .is_some_and(|size| (size - before - 0.2).abs() < 1e-3)
+    );
+    close_dashboard(&mut h);
+    assert!((shared.font_points() - before).abs() < f32::EPSILON, "put back");
+    for _ in 0..5 {
+        h.turn();
+    }
+    assert_eq!(h.session(ids[0]).font_size, stored, "the revert is not the session's");
+}
+
+#[gpui_kit::test]
+fn a_reload_under_the_grid_font_is_what_the_terminal_gets_back(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    h.until("the pane to start", |h| h.realized(ids[0], StatusPane::Left));
+    let token = h.token(ids[0], StatusPane::Left);
+    let shared = h.shared(ids[0], &token);
+    assert!((shared.font_points() - 17.0).abs() > 1.0, "a size the reload changes");
+    let stored = h.session(ids[0]).font_size;
+    let targets = vec![uuid_string(ids[0])];
+    open_dashboard(&mut h, |args| {
+        args.targets = Some(targets);
+        args.font_size = Some(9.0);
+    });
+    // Settings changes the font size while the grid shows: the grid keeps its size
+    let terminal = h
+        .deck
+        .read_with(h.cx, |deck, _| deck.terminal(ids[0], &token).unwrap().terminal.clone());
+    terminal.update(h.cx, |terminal, cx| {
+        terminal.reload_config(config_with("font-size = 17\n"), cx);
+    });
+    h.turn();
+    assert!((shared.font_points() - 9.0).abs() < f32::EPSILON, "the grid's size");
+    close_dashboard(&mut h);
+    assert!(
+        (shared.font_points() - 17.0).abs() < f32::EPSILON,
+        "the size the reload configured, not the one before the grid: {}",
+        shared.font_points()
+    );
+    for _ in 0..5 {
+        h.turn();
+    }
+    assert_eq!(h.session(ids[0]).font_size, stored, "nor is that revert the session's");
+}
+
 fn zoom(h: &mut Harness<'_>, target: String, mode: &str) {
     let response = h.state.core.dispatch(&Request {
         cmd: Command::Surface(agterm_proto::command::SurfaceCmd::Zoom),
