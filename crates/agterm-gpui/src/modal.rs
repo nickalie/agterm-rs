@@ -7,9 +7,9 @@
 //!   top of the window over a scrim covering all of it (upstream's `CommandPalette` in `Palette.swift`), a pure
 //!   function of the sizes ([`palette_rect`]).
 //! - Alerts ([`open_alert`]): the confirmations, Rename Window and the clipboard prompt (upstream's `NSAlert` sheets,
-//!   the GTK build's `adw::AlertDialog`): a heading, a body, an optional text field (which takes the keyboard) or check
-//!   ("Don't ask again this session"), and a row of buttons, one the default (Return) and one the cancel (Escape); Tab
-//!   and the arrows move the keyboard's ring between the check and the buttons. An alert is modal over its whole window: it dims the window,
+//!   the GTK build's `adw::AlertDialog`): a heading, a body, an optional text field (which takes the keyboard) or
+//!   checks ("Don't ask again this session", the welcome's installs), and a row of buttons, one the default (Return)
+//!   and one the cancel (Escape); Tab and the arrows move the keyboard's ring between the checks and the buttons. An alert is modal over its whole window: it dims the window,
 //!   takes every click and keeps every key while it is up (the key monitor leaves an `AgtermAlert` context alone).
 //!   Alerts of one window queue: the next comes up once the front one is answered. The window's view draws the front
 //!   one ([`alert_layer`]); the [`Alerts`] registry tells observers when one opens or closes, which is how the window
@@ -289,6 +289,8 @@ pub enum Appearance {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AlertButton {
     pub label: SharedString,
+    /// Its element id (upstream's accessibility identifier); `alert-button-<index>` without one.
+    pub id: Option<SharedString>,
     /// Return answers with it (the alert's default response), and the keyboard starts on it.
     pub default: bool,
     /// Escape answers with it (the close response).
@@ -301,6 +303,7 @@ impl AlertButton {
     pub fn plain(label: impl Into<SharedString>) -> Self {
         Self {
             label: label.into(),
+            id: None,
             default: false,
             cancel: false,
             appearance: Appearance::Plain,
@@ -320,6 +323,13 @@ impl AlertButton {
     #[must_use]
     pub fn as_default(mut self) -> Self {
         self.default = true;
+        self
+    }
+
+    /// Gives it an element id.
+    #[must_use]
+    pub fn with_id(mut self, id: impl Into<SharedString>) -> Self {
+        self.id = Some(id.into());
         self
     }
 
@@ -344,6 +354,42 @@ impl AlertButton {
     }
 }
 
+/// One check of an alert.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlertCheck {
+    pub label: String,
+    /// Checked at first.
+    pub checked: bool,
+    /// Its element id (upstream's accessibility identifier); `alert-check-<index>` without one.
+    pub id: Option<SharedString>,
+}
+
+impl AlertCheck {
+    /// A check unchecked at first.
+    #[must_use]
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            checked: false,
+            id: None,
+        }
+    }
+
+    /// Checked at first.
+    #[must_use]
+    pub fn checked(mut self) -> Self {
+        self.checked = true;
+        self
+    }
+
+    /// Gives it an element id.
+    #[must_use]
+    pub fn with_id(mut self, id: impl Into<SharedString>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+}
+
 /// What an alert shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AlertSpec {
@@ -351,8 +397,8 @@ pub struct AlertSpec {
     pub body: String,
     /// The buttons left to right.
     pub buttons: Vec<AlertButton>,
-    /// A check under the body, unchecked at first ("Don't ask again this session").
-    pub check: Option<String>,
+    /// The checks under the body, top to bottom ("Don't ask again this session", the welcome's installs).
+    pub checks: Vec<AlertCheck>,
     /// A text field under the body holding this text, all of it selected, which takes the keyboard (Rename Window).
     pub field: Option<String>,
 }
@@ -369,7 +415,7 @@ impl AlertSpec {
                 AlertButton::cancel("Cancel").as_default(),
                 AlertButton::plain(verb).destructive(),
             ],
-            check: None,
+            checks: Vec::new(),
             field: None,
         }
     }
@@ -381,7 +427,7 @@ impl AlertSpec {
             heading: heading.into(),
             body: body.into(),
             buttons: vec![AlertButton::cancel("OK").as_default().suggested()],
-            check: None,
+            checks: Vec::new(),
             field: None,
         }
     }
@@ -407,8 +453,10 @@ impl AlertSpec {
 pub struct AlertAnswer {
     /// The button's index in the spec.
     pub button: usize,
-    /// Whether the check was checked.
+    /// Whether the first check was checked.
     pub checked: bool,
+    /// Whether each check was checked, in the spec's order.
+    pub checks: Vec<bool>,
     /// The field's text, with a field.
     pub text: Option<String>,
 }
@@ -422,16 +470,17 @@ pub struct Alert {
     window: AnyWindowHandle,
     focus: FocusHandle,
     field: Option<Entity<InputState>>,
-    /// The keyboard's place: the check (0, when there is one), then the buttons.
+    /// The keyboard's place: the checks, then the buttons.
     highlighted: usize,
-    checked: bool,
+    checked: Vec<bool>,
     done: Option<AlertDone>,
     _field_events: Option<Subscription>,
 }
 
 impl Alert {
     fn new(spec: AlertSpec, done: AlertDone, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let offset = usize::from(spec.check.is_some());
+        let offset = spec.checks.len();
+        let checked = spec.checks.iter().map(|check| check.checked).collect();
         let highlighted = spec.default_button().map_or(0, |index| index + offset);
         let field = spec.field.clone().map(|text| {
             let input = cx.new(|cx| InputState::new(window, cx).default_value(text));
@@ -453,7 +502,7 @@ impl Alert {
             focus: cx.focus_handle(),
             field,
             highlighted,
-            checked: false,
+            checked,
             done: Some(done),
             _field_events: field_events,
         }
@@ -480,26 +529,34 @@ impl Alert {
         self.focus.contains_focused(window, cx) || self.focus_handle(cx).is_focused(window)
     }
 
-    /// Whether the check is checked.
+    /// Whether the first check is checked.
     #[must_use]
     pub fn checked(&self) -> bool {
-        self.checked
+        self.checked.first().copied().unwrap_or(false)
     }
 
-    /// Checks or unchecks the check.
+    /// Whether each check is checked.
+    #[must_use]
+    pub fn checks(&self) -> &[bool] {
+        &self.checked
+    }
+
+    /// Checks or unchecks the first check.
     pub fn set_checked(&mut self, checked: bool, cx: &mut Context<Self>) {
-        self.checked = checked;
+        if let Some(first) = self.checked.first_mut() {
+            *first = checked;
+        }
         cx.notify();
     }
 
-    /// The highlighted button's index; `None` while the check is highlighted.
+    /// The highlighted button's index; `None` while a check is highlighted.
     #[must_use]
     pub fn highlighted_button(&self) -> Option<usize> {
         self.highlighted.checked_sub(self.offset())
     }
 
     fn offset(&self) -> usize {
-        usize::from(self.spec.check.is_some())
+        self.spec.checks.len()
     }
 
     fn stops(&self) -> usize {
@@ -543,7 +600,7 @@ impl Alert {
             NavKey::Backward => self.highlighted = (self.highlighted + stops - 1) % stops,
             NavKey::Activate | NavKey::Space => match self.highlighted_button() {
                 Some(button) => self.answer(button, window, cx),
-                None => self.checked = !self.checked,
+                None => self.toggle(self.highlighted),
             },
             NavKey::Cancel => {
                 if let Some(button) = self.spec.cancel_button() {
@@ -563,7 +620,8 @@ impl Alert {
         };
         let answer = AlertAnswer {
             button,
-            checked: self.checked,
+            checked: self.checked(),
+            checks: self.checked.clone(),
             text: self.field.as_ref().map(|field| field.read(cx).value().to_string()),
         };
         let id = cx.entity_id();
@@ -577,16 +635,28 @@ impl Alert {
         done(answer, window, cx);
     }
 
-    fn render_check(&self, label: &str, colors: ChromeColors, cx: &mut Context<Self>) -> impl IntoElement {
+    fn toggle(&mut self, index: usize) {
+        if let Some(check) = self.checked.get_mut(index) {
+            *check = !*check;
+        }
+    }
+
+    fn render_check(&self, index: usize, colors: ChromeColors, cx: &mut Context<Self>) -> impl IntoElement {
+        let spec = &self.spec.checks[index];
+        let checked = self.checked.get(index).copied().unwrap_or(false);
         let ink = crate::chrome::color(colors.foreground, 1.0);
-        let ring = self.highlighted == 0;
-        let fill = if self.checked {
+        let ring = self.highlighted == index;
+        let id: gpui_kit::ElementId = match &spec.id {
+            Some(id) => id.clone().into(),
+            None => ("alert-check", index).into(),
+        };
+        let fill = if checked {
             crate::chrome::color(ACCENT, 1.0)
         } else {
             crate::chrome::color(colors.foreground, 0.1)
         };
         div()
-            .id("alert-check")
+            .id(id)
             .flex()
             .items_center()
             .gap_2()
@@ -607,12 +677,12 @@ impl Alert {
                     .justify_center()
                     .text_size(px(11.))
                     .text_color(crate::chrome::color(Rgb::WHITE, 1.0))
-                    .when(self.checked, |mark| mark.child("✓")),
+                    .when(checked, |mark| mark.child("✓")),
             )
-            .child(div().text_color(ink).child(SharedString::from(label.to_owned())))
-            .on_click(cx.listener(|alert, _, _, cx| {
-                alert.checked = !alert.checked;
-                alert.highlighted = 0;
+            .child(div().text_color(ink).child(SharedString::from(spec.label.clone())))
+            .on_click(cx.listener(move |alert, _, _, cx| {
+                alert.toggle(index);
+                alert.highlighted = index;
                 cx.notify();
             }))
     }
@@ -621,8 +691,12 @@ impl Alert {
         let button = &self.spec.buttons[index];
         let highlighted = self.highlighted_button() == Some(index);
         let (fill, ink) = button_colors(button.look(), colors);
+        let id: gpui_kit::ElementId = match &button.id {
+            Some(id) => id.clone().into(),
+            None => ("alert-button", index).into(),
+        };
         div()
-            .id(("alert-button", index))
+            .id(id)
             .flex_1()
             .flex()
             .justify_center()
@@ -649,11 +723,9 @@ impl Render for Alert {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = crate::chrome::current(cx);
         let dim_ink = crate::chrome::color(colors.foreground, crate::chrome::DIM_ALPHA);
-        let check = self
-            .spec
-            .check
-            .clone()
-            .map(|label| self.render_check(&label, colors, cx).into_any_element());
+        let checks: Vec<AnyElement> = (0..self.spec.checks.len())
+            .map(|index| self.render_check(index, colors, cx).into_any_element())
+            .collect();
         let field = self
             .field
             .as_ref()
@@ -689,7 +761,7 @@ impl Render for Alert {
                 )
             })
             .children(field)
-            .children(check)
+            .children(checks)
             .child(div().mt_2().flex().flex_row().gap_2().children(buttons))
     }
 }
@@ -822,4 +894,4 @@ pub fn answer_front_alert(window: &mut Window, label: &str, cx: &mut App) -> boo
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

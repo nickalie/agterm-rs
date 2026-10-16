@@ -590,6 +590,28 @@ fn a_reopened_windows_first_focus_counts() {
 }
 
 #[test]
+fn a_clicked_banner_raises_its_window_with_the_servers_token() {
+    let (mut state, window, session) = state_with_terminal();
+    let identity = agterm_core::notification_identity(window, session, PaneRole::Main);
+    state.reveal_notification(&identity, Some("token".to_owned()));
+    assert_eq!(
+        state.take_frontend_work().activations,
+        [Activation {
+            token: Some("token".to_owned()),
+            startup_id: None,
+        }],
+        "the server's token raises the window"
+    );
+    state.reveal_notification(&identity, None);
+    assert!(
+        state.take_frontend_work().activations.is_empty(),
+        "without a token the window request raises it"
+    );
+    state.reveal_notification("not an identity", Some("token".to_owned()));
+    assert!(state.take_frontend_work().activations.is_empty(), "nothing to reveal");
+}
+
+#[test]
 fn a_restored_windows_first_focus_counts_over_the_saved_frontmost() {
     let mut library = WindowLibrary::seeded("/home/u");
     let first = library.active_window_id().unwrap();
@@ -815,4 +837,34 @@ fn attaching_settles_and_arms_on_the_loop() {
     );
     drop((as_dyn, main_loop));
     assert!(state.poster().upgrade().is_none(), "held weakly");
+}
+
+#[test]
+fn a_notify_lands_its_banner_and_its_sound_with_the_frontend() {
+    let (mut state, window, session) = state_with_terminal();
+    state
+        .core
+        .change_settings(agterm_core::settings_model::SettingsChange::Notifications(
+            agterm_core::settings_model::NotificationsChange::Sound(Some("Glass".to_owned())),
+        ));
+    let response = state.core.dispatch(&Request {
+        cmd: Command::Notify,
+        target: Some(agterm_core::pane_env::uuid_string(session)),
+        args: Some(Args {
+            title: Some("t".to_owned()),
+            body: Some("done".to_owned()),
+            ..Args::default()
+        }),
+    });
+    assert!(response.ok, "{response:?}");
+    state.settle();
+    let work = state.take_frontend_work();
+    assert_eq!(work.banners.len(), 1, "{:?}", work.banners);
+    assert!(matches!(
+        &work.banners[0],
+        agterm_core::NotificationEffect::Post(post) if post.window == window && post.body == "done"
+    ));
+    assert_eq!(work.sounds, ["Glass"], "a posted batch sounds the notification sound");
+    state.settle();
+    assert_eq!(state.take_frontend_work(), FrontendWork::default(), "landed once");
 }

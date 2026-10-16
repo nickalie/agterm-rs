@@ -282,10 +282,10 @@ impl Windows {
             .shown
             .values()
             .flat_map(|ui| {
-                ui.deck
-                    .read(cx)
-                    .terminals()
+                let deck = ui.deck.read(cx);
+                deck.terminals()
                     .map(|pane| Rc::clone(pane.shared()))
+                    .chain(deck.overlay_terminals().map(Rc::clone))
                     .collect::<Vec<_>>()
             })
             .collect();

@@ -99,7 +99,8 @@ cosmic-text = "0.19"
 # `background-image` file decoded as Ghostty reads it (PNG or JPEG only). The version GPUI already links.
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 # agterm-gpui's single instance: GApplication's own D-Bus protocol (`org.gtk.Application`, `org.gtk.Actions`) on the
-# app id's bus name, so GTK and GPUI launches forward to each other.
+# app id's bus name, so GTK and GPUI launches forward to each other; its desktop notifications, banners on the
+# freedesktop notification server posted, clicked (with the server's activation token) and withdrawn on one connection.
 zbus = "5.19"
 # agterm-gpui's sidebar: the folder chooser of Open Directory… (a title and a starting folder, which GPUI's own
 # `prompt_for_paths` does not take) and the desktop's `enable-animations` setting the status glyph's blink obeys, through
@@ -112,7 +113,7 @@ ashpd = { version = "0.13", default-features = false, features = [
     "raw_handle",
     "wayland",
 ] }
-# The `StreamExt` the portal's setting-changed stream is read with (the futures family zbus and ashpd link).
+# The `StreamExt` the portal's setting-changed stream and the notification server's signals are read with (the futures family zbus and ashpd link).
 futures-util = "0.3"
 # agterm-gpui activates its window with a token another launch handed over, on GPUI's own connection: xdg-activation
 # on the Wayland display (the wayland-rs family GPUI links), `_NET_ACTIVE_WINDOW` on X11 (the x11rb major GPUI links).

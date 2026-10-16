@@ -583,6 +583,8 @@ pub enum Place {
     Separator,
     /// The HUD's panel, placed by its style in its scoped pane (nothing while that pane is not laid out) or the page.
     Hud(crate::hud::HudPlacement),
+    /// The program overlay's panel: the page, or centered at its share of the page while it floats.
+    Program(crate::overlay::ProgramPlacement),
 }
 
 impl Place {
@@ -601,6 +603,7 @@ impl Place {
                     .unwrap_or_default(),
                 None => placement.style.panel_frame(full),
             },
+            Self::Program(placement) => program_rect(placement.fraction, width, height),
         }
     }
 }

@@ -95,7 +95,8 @@ impl Render for Host {
 
 type Answers = Rc<RefCell<Vec<AlertAnswer>>>;
 
-fn host(cx: &mut TestAppContext) -> &mut VisualTestContext {
+/// A test window drawing the alert layer, active.
+pub(crate) fn host(cx: &mut TestAppContext) -> &mut VisualTestContext {
     cx.update(gpui_kit::init);
     let (_, cx) = cx.add_window_view(|_, _| Host);
     cx.update(|window, _| window.activate_window());
@@ -135,6 +136,7 @@ fn an_alert_takes_the_keyboard_and_answers_by_its_keys(cx: &mut TestAppContext) 
         [AlertAnswer {
             button: 1,
             checked: false,
+            checks: Vec::new(),
             text: None
         }]
     );
@@ -172,7 +174,7 @@ fn the_check_rides_on_the_answer(cx: &mut TestAppContext) {
     let cx = host(cx);
     let answers = Answers::default();
     let spec = crate::terminal::prompt_alert(agterm_core::clipboard_policy::ClipboardAccess::Read);
-    assert_eq!(spec.check.as_deref(), Some(crate::terminal::REMEMBER));
+    assert_eq!(spec.checks[0].label, crate::terminal::REMEMBER);
     let alert = open(cx, spec, &answers);
     assert_eq!(
         alert.read_with(cx, |alert, _| alert.highlighted_button()),
@@ -188,6 +190,7 @@ fn the_check_rides_on_the_answer(cx: &mut TestAppContext) {
         [AlertAnswer {
             button: 1,
             checked: true,
+            checks: vec![true],
             text: None
         }]
     );
@@ -207,6 +210,7 @@ fn a_field_takes_the_keyboard_and_returns_its_text(cx: &mut TestAppContext) {
         [AlertAnswer {
             button: 1,
             checked: false,
+            checks: Vec::new(),
             text: Some("play".to_owned())
         }]
     );

@@ -43,7 +43,7 @@ pub fn prompt_alert(access: ClipboardAccess) -> crate::modal::AlertSpec {
             crate::modal::AlertButton::cancel(DENY),
             crate::modal::AlertButton::plain(ALLOW).as_default().suggested(),
         ],
-        check: Some(REMEMBER.to_owned()),
+        checks: vec![crate::modal::AlertCheck::new(REMEMBER)],
         field: None,
     }
 }

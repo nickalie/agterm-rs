@@ -347,6 +347,11 @@ fn a_floating_panel_is_centered_at_its_share() {
         }
     );
     assert_eq!(program_rect(None, 10, 20), Rect::full(10, 20));
+    assert_eq!(
+        program_rect(Some(1.5), 800, 600),
+        Rect::full(800, 600),
+        "a share past the page is the page"
+    );
 }
 
 #[test]
