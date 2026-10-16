@@ -361,9 +361,10 @@ fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
     if let Some(alert) = &work.live_reset {
         land_live_reset(shell, state, alert, cx);
     }
-    if work.settings {
+    if let Some(host) = work.settings {
         let opening = crate::settings::Opening::of(state.read(cx));
-        shell.windows.borrow_mut().present_settings(opening, cx);
+        let frontmost = state.read(cx).core.library().active_window_id();
+        shell.windows.borrow().present_settings(opening, host, frontmost, cx);
     }
     for url in &work.open_urls {
         cx.open_url(url);

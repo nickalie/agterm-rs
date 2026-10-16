@@ -2022,6 +2022,10 @@ Port the placement rendering from qwertty-term (MIT, attribution).
     than search (the GTK combo rows searched past ten entries).
   - Later tasks build on: `AppState::open_settings` (Task 26's Settings… item), `folder_chooser::choose`,
     `settings::SettingsIcons` in `titlebar::Icons`.
+- note (2026-10-16, side fix outside the task list, branch `gpui-ui-fixes`): at the user's request Settings became a
+  modal popup inside the agterm window it was opened from (a window of its own drifted off to niri's next column),
+  overriding the window-of-its-own decision above; `SettingsWindow` is gone, `WindowView` hosts the popup
+  (`Layer::Settings`) and `Windows::present_settings` keeps one in the app.
 
 ### Task 26: App menu, dashboard, zoom, windows and restore
 

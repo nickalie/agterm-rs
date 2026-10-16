@@ -12,6 +12,10 @@
 //! theme set or previewed, a config reload, a settings change, a desktop light/dark flip) reaches it; it replaces the
 //! global only when a color changed.
 //!
+//! gpui-kit's widgets (the menus, the buttons' hover, the tooltips, the fields, the switches, the sliders, the color
+//! pickers) paint from the library's own theme, which [`kit`] keeps on the chrome's light or dark side and colors:
+//! [`sync`] brings it along on every run, whether the chrome changed or not.
+//!
 //! The windows draw their own decorations where the compositor lets them (client-side decorations, Wayland and X11):
 //! [`resize_edges`] gives such a window its resize handles along the edges it may be resized at.
 
@@ -24,6 +28,8 @@ use gpui_kit::{
 };
 
 use crate::terminal::{Pick, TerminalConfig};
+
+pub mod kit;
 
 /// The opacity of the chrome text the title bar's group dividers draw with (upstream's `chromeText.opacity(0.25)`).
 pub const DIVIDER_ALPHA: f64 = 0.25;
@@ -64,9 +70,11 @@ pub fn colors(config: &TerminalConfig, settings: &AppSettings) -> ChromeColors {
     )
 }
 
-/// Paints the chrome in the colors the terminals and the settings resolve to now; whether they changed.
+/// Paints the chrome in the colors the terminals and the settings resolve to now, the library's widgets too
+/// ([`kit::sync`]); whether the chrome's colors changed.
 pub fn sync(core: &Core, config: &TerminalConfig, cx: &mut App) -> bool {
     let colors = colors(config, core.settings());
+    kit::sync(&colors, cx);
     if cx.try_global::<Chrome>().is_some_and(|shown| shown.0 == colors) {
         return false;
     }

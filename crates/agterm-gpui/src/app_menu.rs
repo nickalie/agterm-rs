@@ -590,15 +590,17 @@ pub fn perform(poster: &Poster, id: Uuid) -> Perform {
     Rc::new(move |action, window, cx| match action {
         MenuAction::Command(item) => post(&poster, move |state: &mut AppState| state.menu_activated(id, item)),
         MenuAction::List(list) => post(&poster, move |state: &mut AppState| state.menu_list_activated(id, list)),
-        MenuAction::App(app) => run_app(app, &poster, window, cx),
+        MenuAction::App(app) => run_app(app, &poster, id, window, cx),
     })
 }
 
-/// Runs one of the app's or Help's items over `window`.
-fn run_app(action: AppAction, poster: &Poster, window: &mut Window, cx: &mut App) {
+/// Runs one of the app's or Help's items over `window`, model window `id`'s.
+fn run_app(action: AppAction, poster: &Poster, id: Uuid, window: &mut Window, cx: &mut App) {
     let handle = window.window_handle();
     match action {
-        AppAction::Settings => post(poster, AppState::open_settings),
+        AppAction::Settings => post(poster, move |state: &mut AppState| {
+            state.open_settings(id);
+        }),
         AppAction::ResetLiveSessions => post(poster, AppState::reset_live_sessions),
         AppAction::Quit => post(poster, AppState::quit_from_menu),
         AppAction::DeveloperDocs => cx.open_url(DEVELOPER_DOCS_URL),
