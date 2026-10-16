@@ -171,6 +171,11 @@ fn the_opencode_chooser_skips_first_then_offers_each_version() {
     );
     assert_eq!(labels(&alert), ["Skip OpenCode", "OpenCode v1", "OpenCode v2"]);
     assert_eq!(alert.cancel_button(), Some(0), "Escape skips");
+    assert_eq!(
+        alert.default_button(),
+        Some(0),
+        "Return skips, as upstream's first button"
+    );
     assert_eq!(chosen_version(0), None);
     assert_eq!(chosen_version(1), Some(Version::V1));
     assert_eq!(chosen_version(2), Some(Version::V2));
@@ -380,6 +385,40 @@ fn opencode_v2_takes_over(cx: &mut VisualTestContext, home: &Home) {
     assert!(!files::entry_exists(&v1), "the managed v1 plugin is removed");
 }
 
+#[gpui_kit::test]
+fn return_on_the_opencode_chooser_skips_opencode(cx: &mut TestAppContext) {
+    let home = Home::new();
+    home.mkdir(".config/opencode");
+    let cx = host(cx);
+    home.serve(cx);
+
+    start(cx, run_hooks);
+    let chooser = cx.update(|window, cx| front_alert(window.window_handle(), cx).expect("the chooser is up"));
+    assert_eq!(
+        chooser.read_with(cx, |alert, _| alert.spec().clone()),
+        opencode_chooser()
+    );
+    assert_eq!(
+        chooser.read_with(cx, |alert, _| alert.highlighted_button()),
+        Some(0),
+        "the keyboard starts on Skip OpenCode"
+    );
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let alert = shown(cx);
+    assert_eq!(alert.heading, "Agent Status Hooks Installed");
+    assert!(
+        alert.body.contains("OpenCode status plugin installation was skipped."),
+        "{}",
+        alert.body
+    );
+    press(cx, "OK");
+    assert!(
+        !home.path(".config/opencode/plugins").exists(),
+        "no OpenCode plugin of either version is written"
+    );
+}
+
 /// Escape skips `OpenCode` and leaves its plugin alone; the same version again is already current.
 fn opencode_skipped_and_current(cx: &mut VisualTestContext, home: &Home) {
     let v2 = home.path(".config/opencode/plugins/agterm-v2/tui.js");
@@ -504,31 +543,23 @@ fn the_welcome_runs_the_skill_then_the_hooks_after_its_alert(cx: &mut TestAppCon
 #[gpui_kit::test]
 fn a_failed_or_panicking_install_says_so_and_frees_the_hooks(cx: &mut TestAppContext) {
     let cx = host(cx);
-    cx.update(|_, cx| Source::new(|| None).install(cx));
-    start(cx, run_skill);
-    let alert = shown(cx);
-    assert_eq!(
-        (alert.heading.as_str(), alert.body.as_str()),
-        ("Install Failed", NO_HOME)
-    );
-    press(cx, "OK");
-
-    cx.update(|_, cx| Source::new(|| panic!("the install's work panicked")).install(cx));
-    for run in [run_skill, run_cli, run_hooks] {
-        start(cx, run);
-        let alert = shown(cx);
-        assert_eq!(
-            (alert.heading.as_str(), alert.body.as_str()),
-            ("Install Failed", STOPPED)
-        );
+    let no_home = Source::new(|| None);
+    let panicking = Source::new(|| panic!("the install's work panicked"));
+    for (source, text) in [(no_home, NO_HOME), (panicking, STOPPED)] {
+        cx.update(|_, cx| source.install(cx));
+        for run in [run_skill, run_cli, run_hooks] {
+            start(cx, run);
+            let alert = shown(cx);
+            assert_eq!((alert.heading.as_str(), alert.body.as_str()), ("Install Failed", text));
+            press(cx, "OK");
+        }
+        // the failed hooks install no longer counts as running
+        let home = Home::new();
+        home.serve(cx);
+        start(cx, run_hooks);
+        assert_eq!(shown(cx).heading, "Agent Status Hooks Installed", "after {text}");
         press(cx, "OK");
     }
-    // the panicked hooks install no longer counts as running
-    let home = Home::new();
-    home.serve(cx);
-    start(cx, run_hooks);
-    assert_eq!(shown(cx).heading, "Agent Status Hooks Installed");
-    press(cx, "OK");
 }
 
 #[gpui_kit::test]

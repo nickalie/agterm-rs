@@ -214,10 +214,11 @@ pub fn chosen_version(index: usize) -> Option<Version> {
     index.checked_sub(1).and_then(|index| Version::ALL.get(index).copied())
 }
 
-/// The `OpenCode` version chooser's alert: Skip `OpenCode` (also Escape), then each version.
+/// The `OpenCode` version chooser's alert: Skip `OpenCode`, the default (Return, as the first button of upstream's
+/// `NSAlert`) and Escape, then each version.
 #[must_use]
 pub fn opencode_chooser() -> AlertSpec {
-    let mut buttons = vec![AlertButton::cancel("Skip OpenCode")];
+    let mut buttons = vec![AlertButton::cancel("Skip OpenCode").as_default().suggested()];
     buttons.extend(
         Version::ALL
             .into_iter()
