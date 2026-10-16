@@ -510,7 +510,7 @@ fn moved(item: &Item, dir: &Path) -> Option<(SettingsChange, Shown)> {
             Some((set(to), Shown::Value(to)))
         }
         Control::Slider { key, value, .. } => {
-            let to = if *value >= f64::from(key.bounds().1) {
+            let to = if *value >= key.bounds().1 {
                 value - 1.0
             } else {
                 value + 1.0
@@ -786,9 +786,23 @@ fn a_stepper_steps_through_the_core_and_greys_at_its_bound(cx: &mut TestAppConte
         .core
         .change_settings(SettingsChange::Appearance(AppearanceChange::FontSize(32.0)));
     h.settle(cx);
+    // a greyed button posts nothing (the core would clamp a 33 back to 32, so the stored value cannot show it)
     click(cx, "settings-font-size-increment");
+    cx.run_until_parked();
+    assert!(h.posted.0.lock().unwrap().is_empty(), "+ is greyed at 32");
+    click(cx, "settings-font-size-decrement");
+    cx.run_until_parked();
+    assert!(!h.posted.0.lock().unwrap().is_empty(), "- still steps at 32");
     h.settle(cx);
-    assert_eq!(h.settings().font_size, Some(32.0), "the bound greys the button out");
+    assert_eq!(h.settings().font_size, Some(31.0));
+    // and at the lower bound the - is greyed
+    h.state
+        .core
+        .change_settings(SettingsChange::Appearance(AppearanceChange::FontSize(8.0)));
+    h.settle(cx);
+    click(cx, "settings-font-size-decrement");
+    cx.run_until_parked();
+    assert!(h.posted.0.lock().unwrap().is_empty(), "- is greyed at 8");
 }
 
 #[gpui_kit::test]
@@ -888,6 +902,80 @@ fn a_picked_color_writes_the_glyphs_hex_and_reset_restores_the_default(cx: &mut 
     let default = crate::status_glyph::default_rgb(AgentStatus::Blocked).unwrap();
     let shown = well.read_with(cx, |state, _| state.value()).map(hex_of);
     assert_eq!(shown, Some(hex_of(crate::status_glyph::hsla(default))));
+}
+
+/// The color well of `status`, on the Agent Status tab.
+fn well(h: &mut Harness, cx: &mut VisualTestContext, status: AgentStatus) -> Entity<ColorPickerState> {
+    h.tab(cx, Tab::AgentStatus);
+    h.view.read_with(cx, |view, _| view.well(status).cloned()).unwrap()
+}
+
+/// A well whose color the core stores as it was committed is left alone: a drag's grey keeps its hue (`#rrggbb` has
+/// none) and a preview shown in it survives an unrelated change.
+#[gpui_kit::test]
+fn a_color_well_the_core_agrees_with_is_not_rewritten(cx: &mut TestAppContext) {
+    let (mut h, cx) = harness(cx, AppSettings::default());
+    let well = well(&mut h, cx, AgentStatus::Active);
+    // a saturation dragged to 0 over a blue hue, committed as a slider drag commits it
+    let grey = gpui_kit::hsla(0.6, 0.0, 0.5, 1.0);
+    h.view.update_in(cx, |_, window, cx| {
+        well.update(cx, |state, cx| state.update_color(grey, window, cx));
+    });
+    h.settle(cx);
+    assert_eq!(
+        h.settings().active_status_color_hex.as_deref(),
+        Some(hex_of(grey).as_str())
+    );
+    assert_eq!(
+        well.read_with(cx, |state, _| state.value()),
+        Some(grey),
+        "the hue survives"
+    );
+    // a preview (a color being picked) survives a change to another setting
+    let preview = gpui_kit::hsla(0.3, 0.8, 0.4, 1.0);
+    h.view.update_in(cx, |_, window, cx| {
+        well.update(cx, |state, cx| state.preview_color(preview, window, cx));
+    });
+    h.state
+        .core
+        .change_settings(SettingsChange::General(GeneralChange::RightClickPaste(false)));
+    h.settle(cx);
+    assert_eq!(h.settings().right_click_paste, Some(false));
+    assert_eq!(well.read_with(cx, |state, _| state.preview()), Some(preview));
+}
+
+/// A well showing another color than the core holds is rewritten: a change made elsewhere, an edit the core refused.
+#[gpui_kit::test]
+fn a_color_well_the_core_disagrees_with_is_rewritten(cx: &mut TestAppContext) {
+    let (mut h, cx) = harness(cx, AppSettings::default());
+    let well = well(&mut h, cx, AgentStatus::Completed);
+    h.state
+        .core
+        .change_settings(agent_status::color_change(AgentStatus::Completed, "#123456".to_owned()));
+    h.settle(cx);
+    assert_eq!(
+        well.read_with(cx, |state, _| state.value()).map(hex_of).as_deref(),
+        Some("#123456")
+    );
+    // the well shows a color, but the edit that goes out is refused (an invalid hex clears the slot to the default)
+    h.view.update_in(cx, |_, window, cx| {
+        well.update(cx, |state, cx| {
+            state.set_value(gpui_kit::hsla(0.0, 1.0, 0.5, 1.0), window, cx);
+        });
+    });
+    h.view
+        .read_with(cx, |view, _| view.edits().clone())
+        .send(agent_status::color_change(
+            AgentStatus::Completed,
+            "nonsense".to_owned(),
+        ));
+    h.settle(cx);
+    assert_eq!(h.settings().completed_status_color_hex, None);
+    let default = crate::status_glyph::default_rgb(AgentStatus::Completed).unwrap();
+    assert_eq!(
+        well.read_with(cx, |state, _| state.value()).map(hex_of),
+        Some(hex_of(crate::status_glyph::hsla(default)))
+    );
 }
 
 #[gpui_kit::test]

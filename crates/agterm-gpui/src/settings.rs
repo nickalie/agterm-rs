@@ -317,8 +317,8 @@ impl SettingsView {
                 let (min, max) = key.bounds();
                 let state = cx.new(|_| {
                     SliderState::new()
-                        .min(min)
-                        .max(max)
+                        .min(narrow(min))
+                        .max(narrow(max))
                         .step(1.0)
                         .default_value(narrow(key.value(&snapshot.settings)))
                 });
@@ -430,9 +430,14 @@ impl SettingsView {
             let value = narrow(key.value(settings));
             state.update(cx, |state, cx| state.set_value(value, window, cx));
         }
+        // a well is rewritten only when the core holds another color than it committed (a change made elsewhere, an
+        // edit the core refused): rewriting it with its own color would round its sliders through `#rrggbb` mid-drag
+        // (a grey loses its hue) and drop a preview or hex the user is still typing
         for (status, state) in &self.wells {
             let color = hsla(agent_status::glyph_rgb(settings, *status));
-            state.update(cx, |state, cx| state.set_value(color, window, cx));
+            if state.read(cx).value().map(hex_of) != Some(hex_of(color)) {
+                state.update(cx, |state, cx| state.set_value(color, window, cx));
+            }
         }
         cx.notify();
     }

@@ -9,7 +9,10 @@ use std::rc::Rc;
 
 use agterm_core::model::AgentStatus;
 use agterm_core::persist::AppSettings;
-use agterm_core::settings_model::{AppearanceChange, GeneralChange, SettingsChange, sidebar_shift_label};
+use agterm_core::settings_model::{
+    AppearanceChange, BLUR_RANGE, GeneralChange, SCROLL_SPEED_RANGE, STRENGTH_RANGE, SettingsChange,
+    sidebar_shift_label,
+};
 
 use crate::folder_chooser::FolderRequest;
 
@@ -106,18 +109,16 @@ pub enum Control {
         value: f64,
         readout: String,
     },
-    /// A selectable path (upstream's monospaced `Text`), dimmed when nothing is set, with buttons after it.
+    /// A path (upstream's monospaced, selectable `Text`; not selectable here), dimmed when nothing is set, with buttons
+    /// after it.
     Path {
         text: String,
         unset: bool,
         buttons: Vec<Action>,
     },
     /// An agent status's glyph row: its color well and its shape picker (upstream's `glyphRow`).
-    Glyph {
-        status: AgentStatus,
-        rgb: crate::status_glyph::Rgb,
-        shape: Picker,
-    },
+    /// The well's color lives in the window's color picker state, the shapes' tint in [`Picker::shapes`].
+    Glyph { status: AgentStatus, shape: Picker },
     /// A file's diagnostics, one line each, "No issues." when there are none.
     Diagnostics { lines: Vec<String> },
     /// A push button.
@@ -224,13 +225,15 @@ impl SliderKey {
         }
     }
 
-    /// The slider's bounds: whole steps, the opacity in percent.
+    /// The slider's bounds, the core's ranges its edits are clamped to: whole steps, the opacity in percent.
     #[must_use]
-    pub fn bounds(self) -> (f32, f32) {
+    pub fn bounds(self) -> (f64, f64) {
+        let whole = |range: &RangeInclusive<i64>| (whole_f64(*range.start()), whole_f64(*range.end()));
         match self {
-            Self::ScrollSpeed => (1.0, 10.0),
-            Self::BackgroundOpacity | Self::BackgroundBlur => (0.0, 100.0),
-            Self::SidebarShift | Self::InactivePaneMute => (0.0, 10.0),
+            Self::ScrollSpeed => (*SCROLL_SPEED_RANGE.start(), *SCROLL_SPEED_RANGE.end()),
+            Self::BackgroundOpacity => (0.0, 100.0),
+            Self::BackgroundBlur => whole(&BLUR_RANGE),
+            Self::SidebarShift | Self::InactivePaneMute => whole(&STRENGTH_RANGE),
         }
     }
 

@@ -72,11 +72,7 @@ fn glyph_row(settings: &AppSettings, status: AgentStatus) -> Item {
     Item::new(
         format!("settings-status-shape-{}", status.wire_name()),
         title_case(status.wire_name()),
-        Control::Glyph {
-            status,
-            rgb,
-            shape: picker,
-        },
+        Control::Glyph { status, shape: picker },
     )
 }
 
