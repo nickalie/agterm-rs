@@ -8,9 +8,10 @@
 //!   function of the sizes ([`palette_rect`]).
 //! - Alerts ([`open_alert`]): the confirmations, Rename Window and the clipboard prompt (upstream's `NSAlert` sheets,
 //!   the GTK build's `adw::AlertDialog`): a heading, a body, an optional text field (which takes the keyboard) or
-//!   checks ("Don't ask again this session", the welcome's installs), and a row of buttons, one the default (Return)
-//!   and one the cancel (Escape); Tab and the arrows move the keyboard's ring between the checks and the buttons. An alert is modal over its whole window: it dims the window,
-//!   takes every click and keeps every key while it is up (the key monitor leaves an `AgtermAlert` context alone).
+//!   checks ("Don't ask again this session", the welcome's installs), and a row of buttons (stacked from three on), one
+//!   the default (Return) and one the cancel (Escape); a body taller than the window scrolls under the buttons; Tab
+//!   and the arrows move the keyboard's ring between the checks and the buttons. An alert is modal over its whole
+//!   window: it dims the window, takes every click and keeps every key while it is up (the key monitor leaves an `AgtermAlert` context alone).
 //!   Alerts of one window queue: the next comes up once the front one is answered. The window's view draws the front
 //!   one ([`alert_layer`]); the [`Alerts`] registry tells observers when one opens or closes, which is how the window
 //!   gives the keyboard back to the shown terminal once the last one is answered. A window that closes cancels its
@@ -276,6 +277,10 @@ pub fn nav_key(keystroke: &Keystroke) -> Option<NavKey> {
 }
 
 // MARK: - alerts
+
+/// Up to this many buttons share one row; more stack full width, first on top, as an `NSAlert` with three or more
+/// buttons lays them out (the `OpenCode` version chooser), so no label is squeezed into a third of the panel.
+const STACK_FROM: usize = 2;
 
 /// How an alert's button draws (libadwaita's response appearances).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -687,17 +692,25 @@ impl Alert {
             }))
     }
 
-    fn render_button(&self, index: usize, colors: ChromeColors, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Button `index`, sharing its row with the others, or `stacked` full width under the one before it.
+    fn render_button(
+        &self,
+        index: usize,
+        stacked: bool,
+        colors: ChromeColors,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let button = &self.spec.buttons[index];
         let highlighted = self.highlighted_button() == Some(index);
         let (fill, ink) = button_colors(button.look(), colors);
-        let id: gpui_kit::ElementId = match &button.id {
-            Some(id) => id.clone().into(),
-            None => ("alert-button", index).into(),
+        let (id, selector): (gpui_kit::ElementId, String) = match &button.id {
+            Some(id) => (id.clone().into(), id.to_string()),
+            None => (("alert-button", index).into(), format!("alert-button-{index}")),
         };
         div()
             .id(id)
-            .flex_1()
+            .debug_selector(move || selector)
+            .when(!stacked, gpui_kit::Styled::flex_1)
             .flex()
             .justify_center()
             .px_3()
@@ -730,8 +743,9 @@ impl Render for Alert {
             .field
             .as_ref()
             .map(|field| Input::new(field).id("alert-field").into_any_element());
+        let stacked = self.spec.buttons.len() > STACK_FROM;
         let buttons: Vec<AnyElement> = (0..self.spec.buttons.len())
-            .map(|index| self.render_button(index, colors, cx).into_any_element())
+            .map(|index| self.render_button(index, stacked, colors, cx).into_any_element())
             .collect();
         panel(colors)
             .id("alert-dialog")
@@ -742,19 +756,26 @@ impl Render for Alert {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .w(px(372.))
             .max_w_full()
+            .max_h_full()
             .p_6()
             .flex()
             .flex_col()
             .gap_3()
             .child(
                 div()
+                    .flex_shrink_0()
                     .text_size(px(15.))
                     .font_weight(FontWeight::BOLD)
                     .child(SharedString::from(self.spec.heading.clone())),
             )
             .when(!self.spec.body.is_empty(), |content| {
+                // a body taller than the window (the hooks install's report) scrolls; the buttons stay in view
                 content.child(
                     div()
+                        .id("alert-body")
+                        .debug_selector(|| "alert-body".to_owned())
+                        .min_h(px(0.))
+                        .overflow_y_scroll()
                         .text_size(px(13.))
                         .text_color(dim_ink)
                         .child(SharedString::from(self.spec.body.clone())),
@@ -762,7 +783,16 @@ impl Render for Alert {
             })
             .children(field)
             .children(checks)
-            .child(div().mt_2().flex().flex_row().gap_2().children(buttons))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .mt_2()
+                    .flex()
+                    .when(stacked, gpui_kit::Styled::flex_col)
+                    .when(!stacked, gpui_kit::Styled::flex_row)
+                    .gap_2()
+                    .children(buttons),
+            )
     }
 }
 
