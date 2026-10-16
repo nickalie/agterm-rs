@@ -128,3 +128,121 @@ fn the_global_follows_the_config_and_the_tint(cx: &mut TestAppContext) {
         assert_eq!(current(cx).sidebar, Rgb::new(0x0b, 0x16, 0x22));
     });
 }
+
+// MARK: - the library's theme
+
+/// A light theme's config: a near-white background under dark text.
+fn light_config() -> TerminalConfig {
+    let mut config = TerminalConfig::default();
+    config.theme.background = agterm_term::Rgb::new(0xfa, 0xfa, 0xf5);
+    config.theme.foreground = agterm_term::Rgb::new(0x20, 0x20, 0x28);
+    config
+}
+
+/// `foreground` at `alpha` over `background`, flattened: what a hovered row or a menu's wash shows.
+fn washed(background: Rgb, foreground: Rgb, alpha: f64) -> Hsla {
+    color(background, 1.0).blend(color(foreground, alpha))
+}
+
+fn core_seeded() -> agterm_core::Core {
+    agterm_core::Core::new(
+        CoreConfig {
+            app: AppIdentity::from_recorded("1.2.3", None),
+            capabilities: Vec::new(),
+        },
+        CoreState {
+            library: WindowLibrary::seeded("/home/u"),
+            ..CoreState::default()
+        },
+    )
+}
+
+/// What the library's widgets paint with now: its side, its window, popup, hover, pressed, border and dim-text colors,
+/// and the side of its base layer (the scrollbars).
+fn kit_shows(cx: &App) -> (bool, [Hsla; 10], bool) {
+    use gpui_kit::component::ActiveTheme as _;
+    let theme = cx.theme();
+    let base = cx.global::<gpui_kit::base::Theme>().appearance == gpui_kit::base::ThemeAppearance::Dark;
+    let colors = [
+        theme.background,
+        theme.popover,
+        theme.popover_foreground,
+        theme.accent,
+        theme.list_hover,
+        theme.secondary_hover,
+        theme.button_active,
+        theme.border,
+        theme.muted_foreground,
+        theme.accent_foreground,
+    ];
+    (theme.mode.is_dark(), colors, base)
+}
+
+/// What the library should paint with over a chrome of `background` and `foreground` text.
+fn kit_expected(background: Rgb, foreground: Rgb) -> [Hsla; 10] {
+    [
+        color(background, 1.0),
+        color(background, 1.0),
+        color(foreground, 1.0),
+        washed(background, foreground, 0.12),
+        washed(background, foreground, 0.12),
+        washed(background, foreground, 0.12),
+        washed(background, foreground, 0.18),
+        washed(background, foreground, 0.15),
+        washed(background, foreground, DIM_ALPHA),
+        color(foreground, 1.0),
+    ]
+}
+
+#[test]
+fn the_library_side_is_the_washed_sidebar_brightness() {
+    use gpui_kit::component::ThemeMode;
+    assert_eq!(kit::mode(&colors_of(&config((None, None)))), ThemeMode::Dark);
+    assert_eq!(kit::mode(&colors_of(&light_config())), ThemeMode::Light);
+    // upstream's `terminalThemeIsDark` reads the sidebar under its tint: a full lighten over a mid grey reads light
+    let mut grey = TerminalConfig::default();
+    grey.theme.background = agterm_term::Rgb::new(0x70, 0x70, 0x70);
+    assert_eq!(kit::mode(&colors(&grey, &tint(5))), ThemeMode::Dark);
+    assert_eq!(kit::mode(&colors(&grey, &tint(0))), ThemeMode::Light);
+}
+
+/// The library's colors in `cx` are the dark or light side's chrome colors `expected`, never its own white in the
+/// dark nor its black in the light.
+fn check_kit(cx: &App, dark: bool, expected: [Hsla; 10], when: &str) {
+    let (side, shown, base) = kit_shows(cx);
+    assert_eq!(side, dark, "{when}: the library's side");
+    assert_eq!(base, dark, "{when}: the scrollbars' side");
+    assert_eq!(
+        shown, expected,
+        "{when}: window, popup, hover, pressed, border and dim text"
+    );
+    for fill in &shown[..2] {
+        assert_eq!(fill.l < 0.5, dark, "{when}: {fill:?}");
+    }
+}
+
+#[gpui_kit::test]
+fn the_library_theme_follows_the_chrome_through_every_flip(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let core = core_seeded();
+    let (dark, light) = (config((None, None)), light_config());
+    let dark_kit = kit_expected(Rgb::new(0x10, 0x20, 0x30), Rgb::new(0xe0, 0xe0, 0xe0));
+    let light_kit = kit_expected(Rgb::new(0xfa, 0xfa, 0xf5), Rgb::new(0x20, 0x20, 0x28));
+    cx.update(|cx| {
+        sync(&core, &dark, cx);
+        check_kit(cx, true, dark_kit, "dark");
+        assert!(
+            !kit::sync(&current(cx), cx),
+            "an unchanged chrome leaves the theme alone"
+        );
+        sync(&core, &light, cx);
+        check_kit(cx, false, light_kit, "dark to light");
+        sync(&core, &dark, cx);
+        check_kit(cx, true, dark_kit, "light to dark");
+        // whatever puts the library back on its light palette, the next sync puts it on the chrome again, though the
+        // chrome itself did not change
+        gpui_kit::init(cx);
+        assert!(!sync(&core, &dark, cx), "the chrome is unchanged");
+        check_kit(cx, true, dark_kit, "after a reset");
+    });
+}

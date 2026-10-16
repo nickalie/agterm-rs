@@ -887,3 +887,135 @@ fn the_menus_settings_and_quit_reach_the_frontend(cx: &mut TestAppContext) {
         );
     }
 }
+
+// MARK: - the library's widgets in the chrome's colors
+
+/// A fill as painted: its bounds in logical pixels and its color.
+type Fill = (gpui_kit::Bounds<gpui_kit::Pixels>, gpui_kit::Hsla);
+
+/// A terminal theme of `background` under `foreground` text.
+fn themed(background: (u8, u8, u8), foreground: (u8, u8, u8)) -> TerminalConfig {
+    let mut config = TerminalConfig::default();
+    config.theme.background = agterm_term::Rgb::new(background.0, background.1, background.2);
+    config.theme.foreground = agterm_term::Rgb::new(foreground.0, foreground.1, foreground.2);
+    config
+}
+
+impl Shell<'_> {
+    /// Paints the chrome, and the library's theme with it, in `config`'s colors, as the windows' sync does after a
+    /// reload or an appearance flip; its colors.
+    fn paint_chrome(&mut self, config: &TerminalConfig) -> agterm_core::chrome::ChromeColors {
+        let core = &self.state.core;
+        let colors = self.cx.cx.update(|cx| {
+            crate::chrome::sync(core, config, cx);
+            crate::chrome::current(cx)
+        });
+        self.settle();
+        colors
+    }
+
+    /// Every fill the last frame painted, back to front.
+    fn fills(&mut self) -> Vec<Fill> {
+        self.cx.update(|window, _| {
+            let scale = window.scale_factor();
+            let logical = |value: gpui_kit::ScaledPixels| px(value.0 / scale);
+            window
+                .painted_quads()
+                .into_iter()
+                .filter_map(|quad| {
+                    let fill = quad.background.as_solid().filter(|fill| fill.a > 0.0)?;
+                    let bounds = gpui_kit::Bounds {
+                        origin: gpui_kit::point(logical(quad.bounds.origin.x), logical(quad.bounds.origin.y)),
+                        size: size(logical(quad.bounds.size.width), logical(quad.bounds.size.height)),
+                    };
+                    Some((bounds, fill))
+                })
+                .collect()
+        })
+    }
+
+    /// The fills `act` brings up: those painted after it that were not before.
+    fn new_fills(&mut self, act: impl FnOnce(&mut Self)) -> Vec<Fill> {
+        let before = self.fills();
+        act(self);
+        self.cx.run_until_parked();
+        self.fills().into_iter().filter(|fill| !before.contains(fill)).collect()
+    }
+
+    /// The color element `selector` shows under the pointer, over the chrome color `under`: the front fill hovering
+    /// brings up over its center.
+    fn hovered(&mut self, selector: &'static str, under: agterm_core::chrome::Rgb) -> gpui_kit::Hsla {
+        let at = self
+            .cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is drawn"))
+            .center();
+        let fills = self.new_fills(|s| s.cx.simulate_mouse_move(at, None, gpui_kit::Modifiers::default()));
+        let (_, fill) = fills
+            .into_iter()
+            .rfind(|(bounds, _)| bounds.contains(&at))
+            .unwrap_or_else(|| panic!("hovering {selector} paints a fill"));
+        // the pointer leaves for the terminal area, so the next hover starts from nothing
+        self.cx.simulate_mouse_move(
+            gpui_kit::point(px(700.), px(400.)),
+            None,
+            gpui_kit::Modifiers::default(),
+        );
+        self.cx.run_until_parked();
+        crate::chrome::color(under, 1.0).blend(fill)
+    }
+
+    /// The panel a menu `open` brings up: the largest fill it paints.
+    fn menu_panel(&mut self, open: impl FnOnce(&mut Self)) -> gpui_kit::Hsla {
+        let area = |(bounds, _): &Fill| f32::from(bounds.size.width) * f32::from(bounds.size.height);
+        let fills = self.new_fills(open);
+        fills
+            .into_iter()
+            .max_by(|a, b| area(a).total_cmp(&area(b)))
+            .expect("the menu paints its panel")
+            .1
+    }
+}
+
+/// The library's widgets (the ghost buttons' hover, the dropdown and context menus) paint in the chrome's colors on
+/// its dark and light sides and after a flip either way, never the library's own light palette over a dark chrome.
+#[gpui_kit::test]
+fn the_librarys_hovers_and_menus_paint_in_the_chromes_dark_and_light(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    let dark = themed((0x10, 0x20, 0x30), (0xe0, 0xe0, 0xe0));
+    let light = themed((0xfa, 0xfa, 0xf5), (0x20, 0x20, 0x28));
+    for (config, dark, when) in [
+        (&dark, true, "dark"),
+        (&light, false, "to light"),
+        (&dark, true, "to dark"),
+    ] {
+        let colors = s.paint_chrome(config);
+        let background = crate::chrome::color(colors.background, 1.0);
+        for (selector, under) in [("add-session", colors.sidebar), ("app-menu-button", colors.background)] {
+            let shown = s.hovered(selector, under);
+            assert_eq!(shown.l < 0.5, dark, "{when}: {selector} hovered shows {shown:?}");
+            assert_ne!(
+                shown,
+                crate::chrome::color(under, 1.0),
+                "{when}: {selector}'s hover shows"
+            );
+        }
+        // the app menu's dropdown, and a row under the pointer in it
+        let panel = s.menu_panel(|s| s.click("app-menu-button"));
+        assert_eq!(panel, background, "{when}: the app menu's panel");
+        let shown = s.hovered("app-menu-item-settings", colors.background);
+        assert_eq!(shown.l < 0.5, dark, "{when}: a menu row hovered shows {shown:?}");
+        s.cx.simulate_keystrokes("escape");
+        s.settle();
+        assert!(!s.menu_open());
+        // a sidebar row's context menu
+        let row = s.cx.debug_bounds("row:var").expect("the row is laid out").center();
+        let panel = s.menu_panel(|s| {
+            s.cx.simulate_mouse_down(row, gpui_kit::MouseButton::Right, gpui_kit::Modifiers::default());
+            s.cx.simulate_mouse_up(row, gpui_kit::MouseButton::Right, gpui_kit::Modifiers::default());
+        });
+        assert_eq!(panel, background, "{when}: the row's context menu");
+        s.cx.simulate_keystrokes("escape");
+        s.settle();
+    }
+}
