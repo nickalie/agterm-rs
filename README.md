@@ -154,9 +154,9 @@ need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through p
   (`cargo test -p agterm-wpe`) run their pages through it. Pick the distribution package whenever you can.
 - Ubuntu packages no `wpewebkit` at all (none since 22.04's 2.36, 26.04 included), and 24.04 cannot load the Arch
   package (glibc 2.39): Ubuntu builds the GTK app without the WPE crates (`WORKSPACE_WITHOUT_WPE` in
-  `scripts/lib/native.sh`, which `scripts/run-dev.sh`, `run-rust-linux.sh` and the Ubuntu CI jobs use). Before the
-  GPUI frontend makes WPE a dependency of what Ubuntu builds, it needs a provider there (a source build into the
-  vendored prefix) or the GPUI checks move to the Arch CI job.
+  `scripts/lib/native.sh`, which `scripts/run-gtk-dev.sh`, `scripts/run-gpui-dev.sh`, `run-rust-linux.sh` and the
+  Ubuntu CI jobs use). Before the GPUI frontend makes WPE a dependency of what Ubuntu builds, it needs a provider there
+  (a source build into the vendored prefix) or the GPUI checks move to the Arch CI job.
 - CI: the `wpe` job installs `wpewebkit` from a date-pinned Arch Linux Archive snapshot in a digest-pinned `archlinux`
   container, checks the WPE crates there and that the checked-in bindings equal a regeneration.
 
@@ -174,19 +174,22 @@ Cargo does not notice the provider changing: after installing or removing either
 ```sh
 cargo build --workspace --release      # without WPE WebKit: "${WORKSPACE_WITHOUT_WPE[@]}" instead of --workspace
 scripts/stage.sh /tmp/agterm-stage     # bin/{agterm,agtermctl,zmx}, lib/, share/{ghostty,terminfo,agterm}
-scripts/run-dev.sh [--release] [--state DIR] [-- AGTERM_ARGS...]
+scripts/run-gtk-dev.sh [--release] [--state DIR] [-- AGTERM_ARGS...]    # the GTK build
+scripts/run-gpui-dev.sh [--release] [--state DIR] [-- AGTERM_ARGS...]   # the GPUI build
 ```
 
-`stage.sh` (into a new or empty directory; `--profile debug` for a debug build) assembles the layout the suite,
-`run-dev.sh` and an install run from; the staged binaries find `lib/` through their `$ORIGIN/../lib` rpath.
+`stage.sh` (into a new or empty directory; `--profile debug` for a debug build) assembles the layout the suite, the
+dev scripts and an install run from; the staged binaries find `lib/` through their `$ORIGIN/../lib` rpath.
 `--frontend gpui` stages the GPUI build instead (`bin/agterm-gpui`, no `lib/`).
-`run-dev.sh` builds and stages into a fresh `/tmp/agterm-dev-*` root and launches an isolated instance: a unique
+`run-gtk-dev.sh` and `run-gpui-dev.sh` (one implementation, `scripts/lib/dev-instance.sh`) build and stage their
+frontend into a fresh `/tmp/agterm-dev-*` root and launch an isolated instance: a unique
 `AGTERM_APP_ID`, its own `AGTERM_STATE_DIR` and `AGTERM_CONTROL_SOCKET`, and `AGTERM_*`/`ZMX_*` inherited from a live
 agterm session dropped (all but `AGTERM_LOG`). It prints the `agtermctl <command> --socket ...` line that drives the
 instance.
 
 The build uses the fork's app id, state dir and socket: while an installed agterm runs, launch a checkout's build only
-through `run-dev.sh`. A plain launch is forwarded to the running instance, or shares its `windows.json`.
+through `run-gtk-dev.sh` / `run-gpui-dev.sh`. A plain launch is forwarded to the running instance, or shares its
+`windows.json`.
 
 `AGTERM_LOG` sets the log level (`tracing` filter syntax); the log is `agterm.log` in the state dir.
 
@@ -232,7 +235,8 @@ conformance/tools/run-rust-linux.sh [--frontend gtk|gpui] [--stage DIR] [-- PYTE
 - `crates/`: the Cargo workspace (crate map in [CLAUDE.md](CLAUDE.md)).
 - `conformance/`: the suite, its catalog of upstream's commands, the ratchet list `rust-passing.txt`.
 - `build/`: `pins.env`, the ghostty, zmx and gir patches, agterm's own themes.
-- `scripts/`: native builds, staging, `run-dev.sh`, the lint report, the AppArmor profile installer.
+- `scripts/`: native builds, staging, `run-gtk-dev.sh` / `run-gpui-dev.sh`, the lint report, the AppArmor profile
+  installer.
 - `packaging/linux/apparmor/`: agterm's AppArmor profile (WebKit's sandbox on Ubuntu).
 - `resources/`: the agent-status hooks and agent skill the app installs.
 - `docs/linux-ui-checklist.md`: every upstream UI feature with its GTK form and manual check (no Linux UI driver

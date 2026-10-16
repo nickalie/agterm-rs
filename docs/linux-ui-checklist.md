@@ -20,7 +20,8 @@ How to read it:
   check as far as the code shows (the hands-on check still wants a desktop session), 🔧 a gap Task 36 fixed, ⚠️ a gap
   or exception recorded and left open, "pending Task N" a feature another task builds. The walk ran before Tasks 26.1,
   34 and 35 merged; their rows were read again against the merged code when Task 36 merged.
-- Launch for a walk with `scripts/run-dev.sh` (never by hand while the installed fork runs).
+- Launch for a walk with `scripts/run-gtk-dev.sh`, the GPUI build with `scripts/run-gpui-dev.sh` (never by hand while
+  the installed fork runs).
 - ⚠️ Across rows: upstream's accessibility ids are set as widget names on the sidebar, the settings, the welcome, the
   title bar's buttons and popover rows, and the zoom and dashboard exit buttons, but not yet on the ask dialog, the
   picker, the dashboard grid, the zoomed terminal, the HTML overlay, the search bar, the palettes or the Ctrl-Tab

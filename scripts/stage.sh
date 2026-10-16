@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Assemble the staging layout the conformance runner, scripts/run-dev.sh and the install check run from. The GTK
-# frontend's (the default):
+# Assemble the staging layout the conformance runner, scripts/run-{gtk,gpui}-dev.sh and the install check run from.
+# The GTK frontend's (the default):
 #
 #   bin/{agterm,agtermctl,zmx}  lib/{libghostty.so,libgtk4-layer-shell.so.*}  share/ghostty/{themes,shell-integration}
 #   share/terminfo  share/agterm/zmx-BUILD (the staged zmx's build id, with bin/zmx)  share/agterm/{agent-status,skills/agterm}

@@ -1,6 +1,6 @@
 # Shared helpers of the native build scripts (build-ghostty.sh, build-ghostty-vt.sh, build-layer-shell.sh, build-zmx.sh,
 # build-weston.sh, fetch-wpe.sh, fetch-lavapipe.sh, fetch-fonts.sh, gen-wpe-bindings.sh, pkg-config.sh, stage.sh,
-# run-dev.sh). Sourced, not run.
+# lib/dev-instance.sh). Sourced, not run.
 #
 # Each native dependency lives in its own vendored prefix, ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/<name>-<key>/,
 # where <key> hashes that dependency's pins and patches only. Cargo never runs zig: agterm-ghostty-sys asks
@@ -17,7 +17,7 @@ VENDOR_ROOT="${AGTERM_VENDOR:-$HOME/.cache/agterm-rs/vendor}"
 source "$PINS"
 
 # The workspace minus the WPE WebKit crates (the -sys crates and the agterm-wpe host over them), as cargo arguments:
-# what the GTK build's entry points build (scripts/run-dev.sh, conformance/tools/run-rust-linux.sh, the Ubuntu CI
+# what the entry points build (scripts/lib/dev-instance.sh, conformance/tools/run-rust-linux.sh, the Ubuntu CI
 # jobs), so a machine without WPE WebKit (Ubuntu 24.04 packages none) still builds, tests and stages the GTK app.
 # Nothing else depends on these crates yet; they build wherever WPE WebKit is (README > WPE WebKit), and CI checks them
 # in its Arch job.

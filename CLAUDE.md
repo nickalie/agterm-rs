@@ -66,16 +66,17 @@ native pins in `build/pins.env` together.
 
 The build keeps the fork's application id `io.github.melonamin.agterm`, state dir (`$XDG_DATA_HOME/agterm`) and socket
 (`<state dir>/agterm.sock`), so it can replace the fork installed on this machine with its state. While an installed
-agterm runs, launch a checkout's build only through `scripts/run-dev.sh` (or the suite): a plain launch is forwarded
-to the running instance through its app id, or both write one `windows.json`. The socket's `flock` keeps a second
-instance from unlinking the live socket, not from sharing its state.
+agterm runs, launch a checkout's build only through `scripts/run-gtk-dev.sh` / `scripts/run-gpui-dev.sh` (or the
+suite): a plain launch is forwarded to the running instance through its app id, or both write one `windows.json`.
+The socket's `flock` keeps a second instance from unlinking the live socket, not from sharing its state.
 
 ## Never touch the user's running agterm
 
 Agents here usually run inside a pane of the user's live agterm, whose `AGTERM_*` and `ZMX_*` variables point at it.
 Every dev instance, probe or `agtermctl` call stays off it:
 
-- Strip `AGTERM_*` and `ZMX_*` from the environment before launching anything (`run-dev.sh` and the harness do).
+- Strip `AGTERM_*` and `ZMX_*` from the environment before launching anything (`run-gtk-dev.sh`, `run-gpui-dev.sh`
+  and the harness do).
 - Give every `agtermctl` call an explicit `--socket` (a per-subcommand option, after the subcommand name). Without it
   the CLI resolves `<state dir>/agterm.sock`, which is the live instance's.
 - Use a private state dir, so the instance's zmx dir (`/tmp/agterm-zmx-<FNV-1a 64 of the state dir>`) is private

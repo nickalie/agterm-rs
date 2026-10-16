@@ -27,7 +27,8 @@ use zbus::zvariant::{OwnedValue, Signature, Value};
 
 /// The application id the Linux fork registered, kept so this build can take over its state and its launches.
 pub const DEFAULT_APP_ID: &str = "io.github.melonamin.agterm";
-/// The variable that gives a dev or test instance an id of its own (`scripts/run-dev.sh`, the conformance harness).
+/// The variable that gives a dev or test instance an id of its own (`scripts/run-gpui-dev.sh`, the conformance
+/// harness).
 pub const APP_ID_ENV: &str = "AGTERM_APP_ID";
 /// The xdg-activation token a launcher hands a Wayland launch.
 pub const ACTIVATION_TOKEN_ENV: &str = "XDG_ACTIVATION_TOKEN";
