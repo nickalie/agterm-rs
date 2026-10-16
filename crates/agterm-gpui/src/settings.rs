@@ -11,7 +11,8 @@
 //! leaves its [`KEY_CONTEXT`] alone, as it does an alert's); Escape, its close button and a click outside it close it,
 //! and the keyboard goes back to the window's terminal. There is one at a time in the app, as there is one Settings
 //! window upstream: asking for it again while it is up brings its window to the front with the popup holding the
-//! keyboard ([`SettingsHost`] names where a new one opens). It goes with its window.
+//! keyboard; a new one opens over the window whose app menu asked (the frontmost one when that window is no longer
+//! on screen). It goes with its window.
 //!
 //! The core owns every setting: a control's edit is one [`SettingsChange`] (or a core call, the two Reloads) posted to
 //! the main loop through [`Edits`], which the core validates, writes to `settings.json` and applies. The windows' sync
@@ -49,7 +50,6 @@ use gpui_kit::{
     App, AppContext as _, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
     Pixels, Render, Rgba, ScrollHandle, Size, Subscription, WeakEntity, Window, px, size,
 };
-use uuid::Uuid;
 
 pub use self::form::{Action, Control, Item, Picker, Run, Section, SliderKey};
 use crate::state::{self, AppState, Poster};
@@ -70,15 +70,6 @@ pub fn panel_size(viewport: Size<Pixels>) -> Size<Pixels> {
     let (width, height) = PANEL_SIZE;
     let fit = |ideal: f32, room: Pixels| px(ideal.min(f32::from(room) - 2.0 * PANEL_MARGIN).max(0.0));
     size(fit(width, viewport.width), fit(height, viewport.height))
-}
-
-/// Where Settings… opens the popup when none is up.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SettingsHost {
-    /// Over this model window (the app menu's), the frontmost one when it is not on screen.
-    Window(Uuid),
-    /// Over the frontmost window (a keymap or a control command, which have no window of their own).
-    Frontmost,
 }
 
 /// One tab, in upstream's order.

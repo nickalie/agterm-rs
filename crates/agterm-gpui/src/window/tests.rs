@@ -871,7 +871,7 @@ fn the_menus_settings_and_quit_reach_the_frontend(cx: &mut TestAppContext) {
     s.settle();
     assert_eq!(
         s.state.take_frontend_work().settings,
-        Some(crate::settings::SettingsHost::Window(s.window)),
+        Some(s.window),
         "Settings… opens the Settings popup over the menu's window"
     );
     s.click("app-menu-button");
@@ -1209,4 +1209,104 @@ fn the_settings_popups_menus_are_dark_over_a_dark_chrome(cx: &mut TestAppContext
         agterm_core::persist::settings::LinkOpenMode::Overlay
     );
     assert!(s.settings().is_some(), "a pick leaves the popup up");
+}
+
+impl Shell<'_> {
+    /// The popup holds the keyboard and keeps every key: no Ctrl-Tab walk, no keymap chord; Escape is left to close it.
+    fn settings_keeps_the_keys(&mut self, after: &str) {
+        assert!(self.settings_held(), "{after}: the popup has the keyboard back");
+        assert!(!self.terminal_focused(), "{after}: not the terminal under it");
+        let switcher = self.view.read_with(self.cx, |view, _| view.switcher().clone());
+        self.cx.simulate_keystrokes("ctrl-tab");
+        assert!(
+            !switcher.read_with(self.cx, |switcher, _| switcher.is_active()),
+            "{after}: Ctrl-Tab walks nothing"
+        );
+        let chord = self
+            .state
+            .core
+            .keymap()
+            .equivalent(agterm_core::keymap::BuiltinAction::CommandPalette)
+            .cloned()
+            .expect("Command Palette has a chord");
+        let _ = crate::keymap_dispatch::take_fired();
+        self.cx.simulate_keystrokes(&keystroke(&chord));
+        self.settle();
+        assert!(
+            crate::keymap_dispatch::take_fired().is_empty(),
+            "{after}: the keymap is not reached"
+        );
+        assert!(self.state.core.palette_mode().is_none(), "{after}: no palette opened");
+        assert!(self.settings_held(), "{after}: still held");
+    }
+}
+
+/// A picker, a GUI ask and the palette over the popup take the keyboard and, once answered or closed, hand it back to
+/// the popup (never to nothing): its keys stay its own and Escape still closes it.
+#[gpui_kit::test]
+fn a_picker_an_ask_and_the_palette_over_the_settings_popup_give_it_the_keyboard_back(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    s.with_keys();
+    s.open_settings();
+    let id = open_pick(&mut s);
+    assert!(s.holds(|view, cx| view.picker().map(|picker| picker.read(cx).focus_handle(cx))));
+    s.cx.simulate_keystrokes("down enter");
+    // the picker's Enter is released, as a real key is (else the next Enter counts as its autorepeat)
+    assert!(crate::keymap_dispatch::release_simulated("enter"));
+    s.settle();
+    assert!(pick_result(&mut s, &id).contains("beta"), "the picker answered");
+    s.settings_keeps_the_keys("a picker answered");
+
+    let dialog = open_gui_ask(&mut s);
+    assert!(ask_held(&mut s, &dialog));
+    s.cx.simulate_keystrokes("right enter");
+    s.settle();
+    assert!(!s.state.core.modal_pending(s.window), "the ask answered");
+    s.settings_keeps_the_keys("an ask answered");
+
+    open_palette(&mut s, agterm_core::palette::PaletteMode::Actions);
+    assert!(s.holds(|view, cx| view.palette().map(|palette| palette.read(cx).focus_handle(cx))));
+    s.cx.simulate_keystrokes("escape");
+    s.settle();
+    assert!(s.state.core.palette_mode().is_none(), "the palette closed");
+    assert!(s.settings().is_some(), "the palette's Escape is its own");
+    s.settings_keeps_the_keys("the palette closed");
+
+    s.cx.simulate_keystrokes("escape");
+    s.settle();
+    assert!(s.settings_closed(), "Escape closes the popup");
+    assert!(s.terminal_focused());
+}
+
+/// A control that took the keyboard (a switch clicked) and is no longer drawn (another tab shown) leaves it on the
+/// popup, and so does a picker's menu that closed.
+#[gpui_kit::test]
+fn a_control_gone_with_its_page_leaves_the_keyboard_on_the_settings_popup(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    s.with_keys();
+    s.open_settings();
+    let panel = s
+        .settings()
+        .expect("up")
+        .read_with(s.cx, gpui_kit::Focusable::focus_handle);
+    s.click("settings-right-click-paste");
+    s.settle();
+    assert!(
+        s.settings_held() && !s.cx.update(|window, _| panel.is_focused(window)),
+        "the switch took the keyboard inside the popup"
+    );
+    s.click("settings-tab-appearance");
+    s.settle();
+    s.settings_keeps_the_keys("the switch's page went away");
+
+    s.click("settings-tab-general");
+    s.click("settings-link-open-mode");
+    s.cx.simulate_keystrokes("down enter");
+    s.settle();
+    s.settings_keeps_the_keys("the picker's menu closed");
+
+    s.cx.simulate_keystrokes("escape");
+    s.settle();
+    assert!(s.settings_closed(), "Escape closes the popup");
+    assert!(s.terminal_focused());
 }

@@ -23,7 +23,7 @@ use crate::deck::{Deck, DeckEnv};
 use crate::instance::Activation;
 use crate::quick::{QuickEnv, QuickPanel};
 use crate::session_host::AppConfig;
-use crate::settings::{Opening, SettingsHost, Snapshot};
+use crate::settings::{Opening, Snapshot};
 use crate::state::AppState;
 use crate::terminal::TerminalConfig;
 use crate::window::WindowView;
@@ -181,10 +181,10 @@ impl Windows {
         resettle
     }
 
-    /// Opens the Settings popup over what the core held (`opening`), over `host`'s window, the `frontmost` one when
-    /// that is not on screen; while one is up anywhere, brings its window to the front with the popup holding the
-    /// keyboard instead: there is one at a time (`crate::settings`).
-    pub fn present_settings(&self, opening: Opening, host: SettingsHost, frontmost: Option<Uuid>, cx: &mut App) {
+    /// Opens the Settings popup over what the core held (`opening`), over model window `host`, the `frontmost` one
+    /// when `host` is not on screen (it closed after its menu asked); while one is up anywhere, brings its window to
+    /// the front with the popup holding the keyboard instead: there is one at a time (`crate::settings`).
+    pub fn present_settings(&self, opening: Opening, host: Uuid, frontmost: Option<Uuid>, cx: &mut App) {
         if let Some((_, ui)) = self.settings_ui(cx) {
             let raised = ui.handle.update(cx, |view, window, cx| {
                 window.activate_window();
@@ -195,12 +195,9 @@ impl Windows {
             }
             return;
         }
-        let asked = match host {
-            SettingsHost::Window(id) => Some(id),
-            SettingsHost::Frontmost => None,
-        };
-        let Some(ui) = asked
-            .and_then(|id| self.shown.get(&id))
+        let Some(ui) = self
+            .shown
+            .get(&host)
             .or_else(|| frontmost.and_then(|id| self.shown.get(&id)))
         else {
             tracing::debug!("Settings: no window to open it over");
@@ -216,6 +213,7 @@ impl Windows {
     }
 
     /// The model window the Settings popup is up over.
+    #[cfg(test)]
     #[must_use]
     pub fn settings_host(&self, cx: &App) -> Option<Uuid> {
         self.settings_ui(cx).map(|(id, _)| id)
@@ -548,7 +546,7 @@ mod tests {
     /// core through the windows' sync, and it goes with its window.
     #[gpui_kit::test]
     fn settings_is_one_popup_over_the_window_it_was_asked_from(cx: &mut gpui_kit::TestAppContext) {
-        use crate::settings::{Opening, SettingsHost};
+        use crate::settings::Opening;
 
         cx.update(|cx| {
             gpui_kit::init(cx);
@@ -580,13 +578,13 @@ mod tests {
                     .count()
             })
         };
-        present(&windows, &state, SettingsHost::Window(work), cx);
+        present(&windows, &state, work, cx);
         assert_eq!(
             cx.update(|cx| windows.settings_host(cx)),
             Some(work),
             "over the menu's window"
         );
-        present(&windows, &state, SettingsHost::Window(first), cx);
+        present(&windows, &state, first, cx);
         assert_eq!(
             cx.update(|cx| windows.settings_host(cx)),
             Some(work),
@@ -616,16 +614,16 @@ mod tests {
         });
         cx.run_until_parked();
         assert_eq!(cx.update(|cx| windows.settings_host(cx)), None, "gone with its window");
-        present(&windows, &state, SettingsHost::Window(work), cx);
+        present(&windows, &state, work, cx);
         let frontmost = state.core.library().active_window_id();
         assert_eq!(cx.update(|cx| windows.settings_host(cx)), frontmost);
         assert_eq!(frontmost, Some(first));
-        // closed, it opens again over the frontmost window when asked from no window
+        // closed, it opens again over the window asked for
         let handle = windows.get(first).unwrap().handle;
         cx.update(|cx| handle.update(cx, crate::window::WindowView::close_settings))
             .unwrap();
         assert_eq!(cx.update(|cx| windows.settings_host(cx)), None);
-        present(&windows, &state, SettingsHost::Frontmost, cx);
+        present(&windows, &state, first, cx);
         assert_eq!(cx.update(|cx| windows.settings_host(cx)), Some(first));
         cx.update(|cx| windows.teardown_all(cx));
     }

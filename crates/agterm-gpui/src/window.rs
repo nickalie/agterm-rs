@@ -12,8 +12,9 @@
 //!
 //! The Settings popup ([`crate::settings`]) comes up over the window Settings… was asked from: centered over a dimmed
 //! layer that takes every click, a click outside the panel closing it as Escape and its close button do. It takes the
-//! keyboard when it opens and keeps it as a modal does (a GUI ask or a picker arriving over it takes it, and gives it
-//! back to it when answered; so does an alert); once it closes the shown terminal has the keyboard back.
+//! keyboard when it opens and keeps it as a modal does (a GUI ask, a picker or the palette arriving over it takes it,
+//! and gives it back to it once it goes; so does an alert, and so does a control inside it that held the keyboard and
+//! is no longer drawn); once it closes the shown terminal has the keyboard back.
 //!
 //! The GUI ask ([`crate::ask_dialog`]) is the window's own: one comes up with the model's modal slot, takes the
 //! keyboard, and is drawn over its anchor while the rest of the window takes no clicks. So is the native picker
@@ -173,8 +174,9 @@ pub struct WindowView {
     picker: Option<Entity<Picker>>,
     /// The command palette while this window draws it.
     palette: Option<Entity<Palette>>,
-    /// The Settings popup while it is up, and the subscription that takes it down when it asks.
-    settings: Option<(Entity<SettingsView>, Subscription)>,
+    /// The Settings popup while it is up, with the subscriptions that take it down when it asks and give it the
+    /// keyboard back when what held it went away.
+    settings: Option<(Entity<SettingsView>, [Subscription; 2])>,
     search: Entity<SearchBar>,
     switcher: Entity<SessionSwitcher>,
     /// Whether an alert was up at the last sync: the GUI ask it covered takes the keyboard back once it goes.
@@ -445,8 +447,16 @@ impl WindowView {
             let closing = cx.subscribe_in(&view, window, |this, _, _: &DismissEvent, window, cx| {
                 this.close_settings(window, cx);
             });
+            // whatever held the keyboard over the popup and left the window with nothing focused (a GUI ask, a
+            // picker or the palette that closed, a control of a page no longer drawn, a menu that closed) hands it
+            // back to the front holder, at worst the popup: never the terminal under it, never nothing
+            let lost = cx.on_focus_lost(window, |this, window, cx| {
+                if this.settings.is_some() {
+                    this.focus_terminal(window, cx);
+                }
+            });
             self.set_layer(Layer::Settings, Some(view.clone().into()), cx);
-            self.settings = Some((view, closing));
+            self.settings = Some((view, [closing, lost]));
             // the deck stands its focus down while the popup holds the keyboard
             post(&self.poster, |_| {});
         }

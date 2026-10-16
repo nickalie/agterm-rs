@@ -599,7 +599,7 @@ fn run_app(action: AppAction, poster: &Poster, id: Uuid, window: &mut Window, cx
     let handle = window.window_handle();
     match action {
         AppAction::Settings => post(poster, move |state: &mut AppState| {
-            state.open_settings(crate::settings::SettingsHost::Window(id));
+            state.open_settings(id);
         }),
         AppAction::ResetLiveSessions => post(poster, AppState::reset_live_sessions),
         AppAction::Quit => post(poster, AppState::quit_from_menu),
