@@ -77,6 +77,28 @@ fn the_menus_come_in_upstreams_order_with_the_app_items_last() {
 }
 
 #[test]
+fn reset_live_sessions_sits_between_settings_and_quit_only_while_live_runs() {
+    let (core, window) = seeded();
+    assert!(
+        AppMenu::of(&core, window)
+            .items()
+            .iter()
+            .all(|(_, item)| item.id != RESET_LIVE_SESSIONS),
+        "outside Live"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let core = crate::zmx_runtime::tests::live_core(dir.path());
+    let window = core.library().active_window_id().unwrap();
+    let menu = AppMenu::of(&core, window);
+    let app: Vec<&str> = menu.app.iter().map(|item| item.title.as_str()).collect();
+    assert_eq!(app, ["Settings…", "Reset Live Sessions…", "Quit"]);
+    let item = find(&menu, RESET_LIVE_SESSIONS);
+    assert_eq!(item.action, MenuAction::App(AppAction::ResetLiveSessions));
+    assert!(item.enabled);
+    assert_eq!(item.chord, None, "no keymap action runs it");
+}
+
+#[test]
 fn every_built_in_action_has_a_menu_item() {
     let items: Vec<Item> = MENUS
         .iter()

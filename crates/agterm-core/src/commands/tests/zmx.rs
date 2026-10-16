@@ -1114,6 +1114,21 @@ fn a_confirmed_reset_holds_the_outdated_panes_quits_and_arms_the_marker() {
     assert_eq!(next.core().zmx.reset.last.clone().unwrap().panes.skipped, 1);
 }
 
+#[test]
+fn a_relauncher_that_did_not_start_disarms_the_reset() {
+    let mut live = live();
+    live.core().save_restore_mode(RestoreMode::Live);
+    live.core().zmx.outdated_before = Some(100);
+    live.host
+        .set_record(&daemon_name(live.left), Some(1), Some(100), Some(50));
+    assert!(live.zmx(ZmxCmd::Reset, None, |a| a.force = Some(true)).ok);
+    assert!(live.core().arm_live_reset_on_quit());
+    let marker = live.resources.path().join(crate::zmx::reset::MARKER_FILE_NAME);
+    assert!(marker.exists());
+    live.core().disarm_live_reset();
+    assert!(!marker.exists(), "the next launch resets nothing");
+}
+
 /// Arms a reset of the live pane's outdated daemon (leader 100) and consumes it in the same model, whose process
 /// table holds the processes `alive`.
 fn consume_reset(alive: &[i32]) -> (Live, Arc<FakeSessionHost>) {

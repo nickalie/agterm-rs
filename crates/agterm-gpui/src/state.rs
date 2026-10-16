@@ -150,6 +150,8 @@ pub struct FrontendWork {
     pub settings: bool,
     /// Ask over the frontmost window whether to quit, with this message ([`crate::welcome::present_quit`]).
     pub quit_prompt: Option<String>,
+    /// Show Reset Live Sessions…'s confirmation or refusal over the frontmost window ([`crate::zmx_runtime`]).
+    pub live_reset: Option<crate::zmx_runtime::ResetAlert>,
 }
 
 /// Whether a terminal's desktop notification fired while its pane held its window's keyboard (upstream's first
@@ -180,6 +182,8 @@ pub struct AppState {
     pub(crate) appearance: crate::appearance::Appearance,
     /// The directories the core asked to reveal (`session.reveal`, Reveal in Files), for the frontend.
     revealed: Rc<RefCell<Vec<std::path::PathBuf>>>,
+    /// The watch on `remotes.conf`; `None` until the launch starts it (and in tests).
+    remotes_watcher: Option<crate::remotes_watcher::RemotesWatcher>,
 }
 
 /// The presentation bridges' reports ([`agterm_app::remote`]).
@@ -216,6 +220,29 @@ impl AppState {
             remote_tick_armed: false,
             seeded: Vec::new(),
             appearance: crate::appearance::Appearance::default(),
+            remotes_watcher: None,
+        }
+    }
+
+    /// Starts following `remotes.conf` on disk (upstream's `RemotesWatcher`): every settled change reads it again,
+    /// which enables or disables File ▸ Attach Remote and may post its problems banner. The watch moves with the config
+    /// directory at the next settle. Once, at launch.
+    pub fn watch_remotes(&mut self) {
+        let poster = self.poster.clone();
+        let watcher = crate::remotes_watcher::RemotesWatcher::new(move || {
+            post(&poster, |state: &mut Self| {
+                if !state.quitting {
+                    state.core.refresh_remotes(true);
+                    state.settle();
+                }
+            });
+        });
+        match watcher {
+            Ok(mut watcher) => {
+                watcher.follow(self.core.watched_remotes_path());
+                self.remotes_watcher = Some(watcher);
+            }
+            Err(error) => tracing::error!(%error, "remotes.conf: not followed; edits are seen at the next launch"),
         }
     }
 
@@ -250,6 +277,11 @@ impl AppState {
     /// Asks the frontend to confirm a user's quit with `message` (the app menu's Quit).
     pub(crate) fn ask_quit(&mut self, message: String) {
         self.frontend.quit_prompt = Some(message);
+    }
+
+    /// Asks the frontend to show Reset Live Sessions…'s `alert` over the frontmost window.
+    pub(crate) fn ask_live_reset(&mut self, alert: crate::zmx_runtime::ResetAlert) {
+        self.frontend.live_reset = Some(alert);
     }
 
     /// Asks the frontend to quit: SIGTERM, the last window closing, a command's quit.
@@ -417,6 +449,9 @@ impl AppState {
         }
         crate::keymap_dispatch::sync(&self.core, &self.poster);
         self.take_alerts();
+        if let Some(watcher) = &mut self.remotes_watcher {
+            watcher.follow(self.core.watched_remotes_path());
+        }
         // the window requests and pane focus requests wait for the windows' sync after the task (`windows.rs`)
         self.arm_auto_follow();
         self.arm_hud_timers();
@@ -472,8 +507,8 @@ impl AppState {
         }
     }
 
-    /// The network came back or the machine woke: every waiting remote pane and dropped stream retries now, not on
-    /// its backoff.
+    /// The network came back or the machine woke ([`crate::remote::observe_links`]): every waiting remote pane and
+    /// dropped stream retries now, not on its backoff.
     pub fn retry_remote_links(&mut self) {
         if !self.quitting {
             self.core.retry_remote_links_now(Instant::now());

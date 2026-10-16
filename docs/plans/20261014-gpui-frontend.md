@@ -2119,12 +2119,88 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 - Create: `crates/agterm-gpui/src/{remote,remotes_watcher,zmx_runtime}.rs`
 - Modify: `Cargo.toml` (workspace dep `notify`)
 
-- [ ] network reachability and resume from sleep over `zbus` (NetworkManager / portal network monitor, logind
+- [x] network reachability and resume from sleep over `zbus` (NetworkManager / portal network monitor, logind
       `PrepareForSleep`), replacing gio `NetworkMonitor` and the system-bus signal
-- [ ] remotes file watching with `notify`, replacing gio `FileMonitor`
-- [ ] zmx reset dialog and relaunch (port of `zmx_runtime.rs`)
-- [ ] tests: reconnect on network/resume events (private bus), watcher debounce, reset flow
-- [ ] gates + conformance — must pass before Task 28
+- [x] remotes file watching with `notify`, replacing gio `FileMonitor`
+- [x] zmx reset dialog and relaunch (port of `zmx_runtime.rs`)
+- [x] tests: reconnect on network/resume events (private bus), watcher debounce, reset flow
+- [x] gates + conformance — must pass before Task 28
+- result (2026-10-16):
+  - ➕ Files: `src/remote/{dbus,routes,tests}.rs`, `src/remote/{dbus,routes}/tests.rs`, `src/remotes_watcher/tests.rs`,
+    `src/zmx_runtime/tests.rs`, `tests/{remote_links,remote_routes}.rs`; Modify: `src/{app,app_menu,app_menu/tests,lib,state}.rs`,
+    `tests/support/mod.rs`, `crates/agterm-gpui/Cargo.toml`, `Cargo.lock` (`notify` 8.2.0, the latest stable on
+    crates.io and already in the lock), `docs/linux-ui-checklist.md`. No core change: the reconnect backoff, the
+    remotes state and its banner, and the reset selection/marker were all core's already.
+  - **Remote links** (`remote.rs`): a platform-neutral seam (`LinkEvent::{Network, Resumed}` from any thread,
+    `LinkRetries` folding them with the core's `NetworkReports`: the first network report is the state at start, a
+    later available one retries, every resume retries), each retry posting `AppState::retry_remote_links`; no GPUI or
+    D-Bus type in it, so macOS/Windows plug in their own sources (none yet: logged). Linux (`remote/dbus.rs`, behind
+    `cfg(target_os = "linux")`, blocking `zbus` on two threads of their own that connect, pick and follow):
+    NetworkManager when it owns its name on the system bus (`PropertiesChanged` re-reads `Connectivity`, `State`,
+    `PrimaryConnection`; a change of reachability, of the connectivity as gio derives it from `State` and
+    `Connectivity`, or of the primary connection reports: connectivity none is down, portal/limited/full up, unknown up
+    with a default route), else the portal's `NetworkMonitor` on the session bus (`GetAvailable` at start and on each
+    `changed`), else the kernel's default routes over rtnetlink (`remote/routes.rs`, gio's netlink monitor: an IPv4 or
+    IPv6 default route reaching a nexthop, keyed by table/metric/interface, each family's flip reported, a dump again
+    after an overflow), else the network reads as always reachable (logged); logind's
+    `PrepareForSleep(false)` for the resume, none without logind (logged). Sources subscribe before they read and never
+    activate a service. Started once at launch from `app.rs`.
+  - **`remotes.conf` watch** (`remotes_watcher.rs`): the GTK build's paths (the file, its nearest existing directory,
+    each symlink hop's) through `notify`'s recommended watcher, on one thread that owns it; a burst of changes settles
+    50 ms after its last event (500 ms at most after its first), then the watch re-arms and the handler runs once
+    (`core.refresh_remotes(true)` + settle); opens, reads and no-write closes are ignored (inotify reports the core's
+    own read, which would loop); following a path arms and then reads once, so a change between the core's launch read
+    and the watch's start is not lost (the core's once-per-episode rule keeps it from repeating a banner). Started at
+    launch (`AppState::watch_remotes`), moved with the config directory at each settle.
+  - **Reset Live Sessions…** (`zmx_runtime.rs`, the carried Task 26 item): the app menu's item between Settings… and
+    Quit (`app-menu-item-reset-live-sessions`), only while `live_reset_menu_visible`; `AppState::reset_live_sessions`
+    queues `FrontendWork::live_reset` (the confirmation or the refusal), shown over the frontmost window as the
+    window's alert: "Reset Live Sessions" + the reason + OK, or the core's title/body with Cancel (default, Escape) /
+    Reset (destructive); Reset runs `AppState::confirm_live_reset` (the core selects again; a refusal now shows) and
+    quits at once without the quit prompt. The quit's shutdown (`app.rs`) arms the marker and starts the relauncher
+    (the GTK build's detached `/bin/sh` waiter, 300 polls of 0.2 s, then `exec` of the same executable with the app's
+    environment), also after `zmx.reset --force`, which used to log "does not relaunch itself yet".
+  - Tests: link retries (state at start, down/up, resumes, any thread); NetworkManager reachability rule, the sleep
+    signal, absent buses ending at once; the watcher on real files (the GTK build's cases: created, appended, replaced
+    twice, appended after a replace, deleted, a directory created later, symlink targets appearing, recreated and
+    chained, unnormalized paths) plus the debounce (a burst of 20 appends read once, the cap), reads and listings being
+    no change, following the same path again keeping one read and a new one moving it; the reset (alerts, refused
+    outside Live without quitting, a Live core over `FakeSessionHost` confirming, quitting without the prompt and arming
+    the marker, the alert's Escape/Return cancelling and Reset posting the confirmation in a test window, the refusal's
+    OK, the relauncher waiting for the pid and giving up); the menu item's place and visibility.
+    `tests/remote_links.rs` on the sandbox's private buses (every `Sandbox` now has a private "system" bus too,
+    `DBUS_SYSTEM_BUS_ADDRESS`, checked by `check_isolated`, so no process test reaches the machine's): a fake
+    NetworkManager and logind (each change and wake reported, limited turning full on the same connection too, nothing
+    for a no-op change or sleep), a fake portal monitor without NetworkManager, none at all;
+    `tests/remote_routes.rs`: the routes source on a real rtnetlink socket in a user+network namespace of the test's
+    own (`unshare -rn`, skipped where refused), `ip` adding and deleting its loopback's default routes; then the GPUI
+    build on weston retrying
+    its links on the network coming back and on a wake (from its log), and posting the "Remotes" / "1 issue in
+    remotes.conf" banner to a fake notification server once `remotes.conf` turns unreadable on disk.
+  - Gates: fmt, clippy (workspace, all targets and features), lint-report (10 expects, none added),
+    check-tracing-features, `vendor-gpui.sh --check`, `cargo test --workspace` under Xvfb 4244 passed, 0 failed, 8
+    ignored; the new tests 5 times in a row. GPUI conformance ratchet-only with `--also` `test_zmx.py`,
+    `test_relaunch.py`, `test_live_any_shell.py` and `--also-k "remote or zmx or live or reset or relaunch"`: 626
+    passed, 0 failed, 13 skipped (live-sessions, zsh-only, on this fish host); ratchet held (613) and grew by 13 (the
+    non-live `zmx` refusals of `test_zmx.py` and `test_cli_output.py::test_zmx_reads_outside_live`, which the selector
+    brought in) to 626. No capability claimed (none is this task's). No GTK conformance run: no crate the
+    GTK binary links changed (`notify` is a new workspace dependency only `agterm-gpui` uses).
+  - Decisions: the D-Bus sources live in `agterm-gpui` (`remote/dbus.rs`, the crate's `appearance.rs`/
+    `notifications.rs` pattern) behind the neutral seam rather than in `agterm-app`; the watcher debounces (the plan's
+    "watcher debounce"; upstream and the GTK build re-read per event, which the burst's last read equals); a read on
+    every follow; the conformance harness's GPUI instance reads the machine's system bus for NetworkManager and logind
+    read-only, as the GTK build's gio monitor always has (the cargo process tests use a private one).
+  - Deviations: none of substance; the live-sessions conformance ids (`test_zmx.py`'s live cases, the relaunch
+    survival) still skip on this host (fish login shell: `live-sessions` is zsh-only), so the reset/relaunch flow is
+    covered by the unit tests here, never against a real zmx.
+  - (Round 1 review fixer: NetworkManager's state compared reachability and the primary connection only, so limited or
+    portal connectivity turning full on the same connection, which gio reports and the GTK build retried on, retried
+    nothing; the connectivity as gio derives it is now part of the state (an unknown connectivity check on a global
+    route now reports too, as gio's does). Without NetworkManager and the portal there was no source at all where
+    gio falls back to netlink; `remote/routes.rs` is that fallback (`netlink-sys` 0.9, `netlink-packet-route` 0.33,
+    `netlink-packet-core` 0.9, the rust-netlink crates; Linux only). `dbus::Buses` became `Endpoints` with the routes'
+    place, so the bus tests leave the kernel's routes out. The watcher's move test now edits the old file alone
+    before the new one. `cargo test --workspace` under Xvfb 4253 passed, 0 failed, 8 ignored.)
 
 ### Task 28: Integrations UI
 
