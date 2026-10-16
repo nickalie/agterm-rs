@@ -30,14 +30,15 @@ use crate::windows::{ConfigHost, Windows};
 
 /// The capabilities of the Rust target profile this build implements (`conformance/docs/rust-build.md`). Each is
 /// claimed once its commands work in this frontend (plan > Development Approach), toward the GTK build's set.
-/// `posix-shell` waits for the quick terminal: `test_quick_terminal` types into it under that claim.
 pub const CAPABILITIES: &[&str] = &[
+    "posix-shell",
     "drop-placement",
     "select-takes-frontmost",
     "status-shape",
     "type-rejects-nul",
     "resize-echoes-ratio",
     "hidden-split-holds-focus",
+    "quick-validates-input",
     "modal-blocks-covers",
     "pick-names-pending-ask",
     "overlay-size-validated",

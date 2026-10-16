@@ -10,7 +10,10 @@
 //! shell exiting drops the terminal, and the next show spawns a fresh one.
 //!
 //! A control `quick show` pins the panel: losing the keyboard dismisses only a panel the user summoned, because a
-//! script's next command runs while focus is still settling (upstream's `dismissOnFocusLoss: false`).
+//! script's next command runs while focus is still settling (upstream's `dismissOnFocusLoss: false`). A user's toggle
+//! right after such a dismissal does not show the panel again ([`RESHOW_SUPPRESSION`]).
+
+use std::time::{Duration, Instant};
 
 use agterm_host::{Surface, TextScope};
 use agterm_proto::command::QuickCmd;
@@ -27,6 +30,11 @@ use crate::model::SurfaceSlot;
 /// The quick terminal's id among the `surface.*` targets and in `tree.zoomedSurface`.
 pub(crate) const QUICK: &str = "quick";
 
+/// How long after losing the keyboard dismissed the panel a user's toggle does not show it again (upstream's
+/// `reshowSuppression`): a click on the toolbar button takes the keyboard from the panel before the click's action
+/// arrives, which would otherwise show again the panel that click just dismissed.
+pub const RESHOW_SUPPRESSION: Duration = Duration::from_millis(300);
+
 /// The quick terminal's state, app-wide.
 #[derive(Debug, Default)]
 pub struct QuickState {
@@ -38,6 +46,8 @@ pub struct QuickState {
     pinned: bool,
     /// The long-lived terminal, created by the frontend on the first show and kept across hide and show.
     surface: SurfaceSlot,
+    /// When losing the keyboard last dismissed the panel (upstream's `autoHiddenAt`); a show clears it.
+    auto_hidden_at: Option<Instant>,
 }
 
 impl QuickState {
@@ -46,6 +56,7 @@ impl QuickState {
     fn show(&mut self, pinned: bool) {
         self.pinned |= pinned;
         self.visible = true;
+        self.auto_hidden_at = None;
     }
 
     /// Hides the panel, ending its zoom and pin; the terminal stays.
@@ -87,10 +98,25 @@ impl Core {
     /// The user's toggle (a keybinding or a titlebar button, upstream's `toggle()`): hides a shown panel, else shows
     /// one that dismisses itself when it loses focus. Refused with no open window, as upstream's `canShow`, or while
     /// the frontmost window's modal slot is held. Commit afterwards.
+    ///
+    /// Within [`RESHOW_SUPPRESSION`] of losing the keyboard dismissing the panel, a toggle that would show it only
+    /// ends that window (upstream's `toggle`).
     pub fn toggle_quick_terminal(&mut self) {
+        self.toggle_quick_terminal_at(Instant::now());
+    }
+
+    /// [`Core::toggle_quick_terminal`] at `now`.
+    pub(crate) fn toggle_quick_terminal_at(&mut self, now: Instant) {
         if self.quick.visible {
             self.quick.hide();
-        } else if !self.library().open_ids().is_empty() && !self.active_window_modal_pending() {
+            return;
+        }
+        if let Some(hidden) = self.quick.auto_hidden_at.take()
+            && now.saturating_duration_since(hidden) < RESHOW_SUPPRESSION
+        {
+            return;
+        }
+        if !self.library().open_ids().is_empty() && !self.active_window_modal_pending() {
             self.quick.show(false);
         }
     }
@@ -98,8 +124,14 @@ impl Core {
     /// The panel lost the keyboard: a panel the user summoned hides, a pinned one stays (upstream's
     /// `handleResignKey`). Commit afterwards.
     pub fn quick_lost_focus(&mut self) {
+        self.quick_lost_focus_at(Instant::now());
+    }
+
+    /// [`Core::quick_lost_focus`] at `now`.
+    pub(crate) fn quick_lost_focus_at(&mut self, now: Instant) {
         if self.quick.visible && !self.quick.pinned {
             self.quick.hide();
+            self.quick.auto_hidden_at = Some(now);
         }
     }
 
@@ -113,6 +145,7 @@ impl Core {
     /// (upstream's `handleShellExit`). Commit afterwards.
     pub fn quick_shell_exited(&mut self) {
         self.quick.hide();
+        self.quick.auto_hidden_at = None;
         self.quick.surface.teardown();
     }
 

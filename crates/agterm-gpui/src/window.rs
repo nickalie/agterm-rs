@@ -801,9 +801,9 @@ const LEAVE_CHECK_DELAY: Duration = Duration::from_millis(150);
 /// is activated later only by the user, whose activation always counts, whatever commands took frontmost before.
 const FIRST_FOCUS_GRACE: Duration = Duration::from_secs(1);
 
-/// A window lost the keyboard: once the next activation had its chance, the key monitor forgets its consumed keys
-/// when no agterm window holds the keyboard.
-fn check_keyboard_left(cx: &mut Context<WindowView>) {
+/// A window (an agterm window, the quick terminal's panel) lost the keyboard: once the next activation had its chance,
+/// the key monitor forgets its consumed keys when no window of the app holds the keyboard.
+pub(crate) fn check_keyboard_left<T: 'static>(cx: &mut Context<T>) {
     cx.spawn(async move |_, cx| {
         cx.background_executor().timer(LEAVE_CHECK_DELAY).await;
         cx.update(|cx| {

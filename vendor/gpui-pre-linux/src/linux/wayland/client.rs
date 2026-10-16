@@ -66,6 +66,7 @@ use wayland_protocols::xdg::shell::client::{
     xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
 };
 use wayland_protocols::xdg::system_bell::v1::client::xdg_system_bell_v1;
+use wayland_protocols::xdg::xdg_output::zv1::client::{zxdg_output_manager_v1, zxdg_output_v1};
 use wayland_protocols::{
     wp::cursor_shape::v1::client::{wp_cursor_shape_device_v1, wp_cursor_shape_manager_v1},
     xdg::dialog::v1::client::xdg_wm_dialog_v1::{self, XdgWmDialogV1},
@@ -259,6 +260,8 @@ pub struct Globals {
     pub gesture_manager: Option<zwp_pointer_gestures_v1::ZwpPointerGesturesV1>,
     pub dialog: Option<xdg_wm_dialog_v1::XdgWmDialogV1>,
     pub system_bell: Option<xdg_system_bell_v1::XdgSystemBellV1>,
+    /// The outputs' logical geometry, where the compositor offers it.
+    pub xdg_output_manager: Option<zxdg_output_manager_v1::ZxdgOutputManagerV1>,
     pub executor: ForegroundExecutor,
     pub frame_ping: Ping,
 }
@@ -309,6 +312,7 @@ impl Globals {
             gesture_manager: globals.bind(&qh, 1..=3, ()).ok(),
             dialog: globals.bind(&qh, dialog_v..=dialog_v, ()).ok(),
             system_bell: globals.bind(&qh, 1..=1, ()).ok(),
+            xdg_output_manager: globals.bind(&qh, 1..=3, ()).ok(),
             executor,
             qh,
             frame_ping,
@@ -324,6 +328,9 @@ pub struct InProgressOutput {
     size: Option<Size<DevicePixels>>,
     subpixel: Option<wl_output::Subpixel>,
     refresh_interval: Option<Duration>,
+    /// xdg-output's logical position and size, in the compositor's logical pixels.
+    logical_position: Option<Point<DevicePixels>>,
+    logical_size: Option<Size<DevicePixels>>,
 }
 
 impl InProgressOutput {
@@ -336,6 +343,10 @@ impl InProgressOutput {
                 bounds: Bounds::new(position, size),
                 subpixel: self.subpixel,
                 refresh_interval: self.refresh_interval,
+                logical: self
+                    .logical_position
+                    .zip(self.logical_size)
+                    .map(|(position, size)| Bounds::new(position, size)),
             })
         } else {
             None
@@ -350,6 +361,19 @@ pub struct Output {
     pub bounds: Bounds<DevicePixels>,
     pub subpixel: Option<wl_output::Subpixel>,
     pub refresh_interval: Option<Duration>,
+    /// The output's place in the compositor's logical space, as xdg-output reports it.
+    pub logical: Option<Bounds<DevicePixels>>,
+}
+
+impl Output {
+    /// The output's bounds in the compositor's logical space: xdg-output's geometry where the compositor sends it
+    /// (right at a fractional scale or a rotation), else the current mode over the integer `wl_output.scale`.
+    pub fn logical_bounds(&self) -> Bounds<Pixels> {
+        match self.logical {
+            Some(logical) => logical.to_pixels(1.0),
+            None => self.bounds.to_pixels(self.scale as f32),
+        }
+    }
 }
 
 pub(crate) struct WaylandClientState {
@@ -380,6 +404,8 @@ pub(crate) struct WaylandClientState {
     wl_outputs: HashMap<ObjectId, wl_output::WlOutput>,
     // Registry global names of the outputs, for `global_remove`.
     output_globals: HashMap<u32, ObjectId>,
+    // Each output's xdg-output, where the compositor offers them.
+    xdg_outputs: HashMap<ObjectId, zxdg_output_v1::ZxdgOutputV1>,
     keyboard_layout: LinuxKeyboardLayout,
     keymap_state: Option<xkb::State>,
     compose_state: Option<xkb::compose::State>,
@@ -1043,6 +1069,17 @@ impl WaylandConnection {
             frame_ping,
         )
         .context("failed to bind required Wayland globals")?;
+        #[allow(clippy::mutable_key_type)]
+        let xdg_outputs: HashMap<ObjectId, zxdg_output_v1::ZxdgOutputV1> = globals
+            .xdg_output_manager
+            .as_ref()
+            .map(|manager| {
+                wl_outputs
+                    .iter()
+                    .map(|(id, output)| (id.clone(), manager.get_xdg_output(output, &qh, id.clone())))
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let data_device = globals
             .data_device_manager
@@ -1078,6 +1115,7 @@ impl WaylandConnection {
             in_progress_outputs,
             output_globals,
             wl_outputs,
+            xdg_outputs,
             windows: HashMap::default(),
             common,
             keyboard_layout: LinuxKeyboardLayout::new(UNKNOWN_KEYBOARD_LAYOUT_NAME),
@@ -1247,7 +1285,7 @@ impl WaylandConnection {
                 Rc::new(WaylandDisplay {
                     id: id.clone(),
                     name: output.name.clone(),
-                    bounds: output.bounds.to_pixels(output.scale as f32),
+                    bounds: output.logical_bounds(),
                     refresh_interval: output.refresh_interval,
                 }) as Rc<dyn PlatformDisplay>
             })
@@ -1629,6 +1667,10 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                         .in_progress_outputs
                         .insert(output.id(), InProgressOutput::default());
                     state.output_globals.insert(name, output.id());
+                    if let Some(manager) = state.globals.xdg_output_manager.as_ref() {
+                        let xdg_output = manager.get_xdg_output(&output, qh, output.id());
+                        state.xdg_outputs.insert(output.id(), xdg_output);
+                    }
                     state.wl_outputs.insert(output.id(), output);
                 }
                 _ => {}
@@ -1639,6 +1681,9 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                 };
                 let was_complete = state.outputs.remove(&id).is_some();
                 state.in_progress_outputs.remove(&id);
+                if let Some(xdg_output) = state.xdg_outputs.remove(&id) {
+                    xdg_output.destroy();
+                }
                 if let Some(output) = state.wl_outputs.remove(&id)
                     && output.version() >= wl_output::REQ_RELEASE_SINCE
                 {
@@ -1668,6 +1713,7 @@ delegate_noop!(WaylandClientStatePtr: ignore wl_region::WlRegion);
 delegate_noop!(WaylandClientStatePtr: ignore wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1);
 delegate_noop!(WaylandClientStatePtr: ignore zxdg_decoration_manager_v1::ZxdgDecorationManagerV1);
 delegate_noop!(WaylandClientStatePtr: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
+delegate_noop!(WaylandClientStatePtr: ignore zxdg_output_manager_v1::ZxdgOutputManagerV1);
 delegate_noop!(WaylandClientStatePtr: ignore xdg_positioner::XdgPositioner);
 delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur_manager::OrgKdeKwinBlurManager);
 delegate_noop!(WaylandClientStatePtr: ignore zwp_text_input_manager_v3::ZwpTextInputManagerV3);
@@ -1816,6 +1862,49 @@ impl Dispatch<wl_output::WlOutput, ()> for WaylandClientStatePtr {
                 drop(state);
                 for window in windows {
                     window.handle_output_changed(&id, &complete);
+                }
+                this.report_displays_changed();
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<zxdg_output_v1::ZxdgOutputV1, ObjectId> for WaylandClientStatePtr {
+    fn event(
+        this: &mut Self,
+        _: &zxdg_output_v1::ZxdgOutputV1,
+        event: zxdg_output_v1::Event,
+        output_id: &ObjectId,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let client = this.get_client();
+        let mut state = client.borrow_mut();
+        let Some(in_progress_output) = state.in_progress_outputs.get_mut(output_id) else {
+            return;
+        };
+        match event {
+            zxdg_output_v1::Event::LogicalPosition { x, y } => {
+                in_progress_output.logical_position = Some(point(DevicePixels(x), DevicePixels(y)));
+            }
+            zxdg_output_v1::Event::LogicalSize { width, height } => {
+                in_progress_output.logical_size = Some(size(DevicePixels(width), DevicePixels(height)));
+            }
+            // before version 3 the logical geometry ends with xdg-output's own `done`; from version 3 the output's
+            // `done` follows it
+            zxdg_output_v1::Event::Done => {
+                let Some(complete) = in_progress_output.complete() else {
+                    return;
+                };
+                if state.outputs.get(output_id) == Some(&complete) {
+                    return;
+                }
+                state.outputs.insert(output_id.clone(), complete.clone());
+                let windows = state.windows.values().cloned().collect::<Vec<_>>();
+                drop(state);
+                for window in windows {
+                    window.handle_output_changed(output_id, &complete);
                 }
                 this.report_displays_changed();
             }
@@ -3211,6 +3300,35 @@ mod tests {
     use std::cell::Cell;
 
     use super::*;
+
+    #[test]
+    fn displays_take_the_logical_geometry_over_the_integer_scale() {
+        let mut output = InProgressOutput {
+            scale: Some(2),
+            position: Some(point(DevicePixels(3440), DevicePixels(0))),
+            size: Some(size(DevicePixels(2880), DevicePixels(1800))),
+            ..InProgressOutput::default()
+        };
+        let integer = output.complete().expect("a complete output");
+        assert_eq!(
+            integer.logical_bounds(),
+            Bounds::new(point(px(1720.), px(0.)), size(px(1440.), px(900.)))
+        );
+        // niri's eDP-1 at scale 1.75 beside a 3440-wide output: 2880x1800 / 1.75
+        output.logical_position = Some(point(DevicePixels(3440), DevicePixels(206)));
+        output.logical_size = Some(size(DevicePixels(1645), DevicePixels(1028)));
+        let logical = output.complete().expect("a complete output");
+        assert_eq!(
+            logical.logical_bounds(),
+            Bounds::new(point(px(3440.), px(206.)), size(px(1645.), px(1028.)))
+        );
+        // a size without its position is no geometry yet
+        output.logical_position = None;
+        assert_eq!(
+            output.complete().expect("a complete output").logical_bounds(),
+            integer.logical_bounds()
+        );
+    }
 
     #[test]
     fn rejects_required_globals_below_supported_versions() {

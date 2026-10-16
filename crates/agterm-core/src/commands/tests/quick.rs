@@ -1,6 +1,8 @@
 //! `quick`, `quick.type` and `quick.text` (upstream's quick-terminal dispatcher tests and the app-side behavior of
 //! `ControlServer+AppCommands.swift` > Quick terminal), plus the `quick` target of `surface.cursor` and `surface.zoom`.
 
+use std::time::{Duration, Instant};
+
 use agterm_host::fakes::{FakeSurface, FakeSurfaceProbe};
 use agterm_proto::command::{QuickCmd, SurfaceCmd};
 use agterm_proto::{Args, Command, Request, Response};
@@ -8,6 +10,7 @@ use serde_json::json;
 
 use super::{Fixture, args, failure};
 use crate::Dispatched;
+use crate::commands::quick::RESHOW_SUPPRESSION;
 use crate::commands::typing::ATTEMPTS;
 
 fn quick(fixture: &mut Fixture, mode: Option<&str>) -> Response {
@@ -316,15 +319,56 @@ fn only_a_panel_the_user_summoned_hides_when_it_loses_focus() {
     assert!(!fixture.core.quick_visible());
     fixture.core.toggle_quick_terminal();
     assert!(fixture.core.quick_visible());
-    fixture.core.quick_lost_focus();
+    let blurred = Instant::now();
+    fixture.core.quick_lost_focus_at(blurred);
     assert!(!fixture.core.quick_visible());
     // a control show over a panel the user summoned pins it too
-    fixture.core.toggle_quick_terminal();
+    fixture.core.toggle_quick_terminal_at(blurred + RESHOW_SUPPRESSION);
     assert!(quick(&mut fixture, Some("show")).ok);
     fixture.core.quick_lost_focus();
     assert!(fixture.core.quick_visible());
     fixture.core.dismiss_quick_terminal();
     assert!(!fixture.core.quick_visible());
+}
+
+#[test]
+fn a_toggle_right_after_a_focus_loss_dismissal_does_not_show_the_panel_again() {
+    let mut fixture = Fixture::new(0);
+    fixture.core.toggle_quick_terminal();
+    let blurred = Instant::now();
+    fixture.core.quick_lost_focus_at(blurred);
+    assert!(!fixture.core.quick_visible());
+    // the click on the toggle that took the keyboard away arrives within the window: it only ends it
+    fixture
+        .core
+        .toggle_quick_terminal_at(blurred + Duration::from_millis(299));
+    assert!(!fixture.core.quick_visible());
+    fixture
+        .core
+        .toggle_quick_terminal_at(blurred + Duration::from_millis(10));
+    assert!(fixture.core.quick_visible(), "the window ends with the first toggle");
+
+    // after the window a toggle shows the panel
+    fixture.core.quick_lost_focus_at(blurred);
+    fixture.core.toggle_quick_terminal_at(blurred + RESHOW_SUPPRESSION);
+    assert!(fixture.core.quick_visible());
+
+    // a control show or a hide that was no focus loss arms nothing
+    fixture.core.quick_lost_focus_at(blurred);
+    assert!(quick(&mut fixture, Some("show")).ok);
+    assert!(quick(&mut fixture, Some("hide")).ok);
+    fixture.core.toggle_quick_terminal_at(blurred);
+    assert!(fixture.core.quick_visible());
+    fixture.core.toggle_quick_terminal_at(blurred);
+    assert!(!fixture.core.quick_visible());
+    fixture.core.toggle_quick_terminal_at(blurred);
+    assert!(fixture.core.quick_visible());
+
+    // a shell exit ends the window too
+    fixture.core.quick_lost_focus_at(blurred);
+    fixture.core.quick_shell_exited();
+    fixture.core.toggle_quick_terminal_at(blurred);
+    assert!(fixture.core.quick_visible());
 }
 
 #[test]

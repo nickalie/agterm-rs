@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use crate::deck::{Deck, DeckEnv};
 use crate::instance::Activation;
+use crate::quick::{QuickEnv, QuickPanel};
 use crate::session_host::AppConfig;
 use crate::state::AppState;
 use crate::terminal::TerminalConfig;
@@ -70,6 +71,8 @@ pub struct Windows {
     shown: HashMap<Uuid, WindowUi>,
     /// What this launch was handed, for the first window to open.
     launched: Option<Activation>,
+    /// The app's quick terminal panel, which belongs to no window.
+    quick: QuickPanel,
 }
 
 impl Windows {
@@ -81,7 +84,14 @@ impl Windows {
             config,
             shown: HashMap::new(),
             launched,
+            quick: QuickPanel::default(),
         }
+    }
+
+    /// The quick terminal's panel.
+    #[must_use]
+    pub fn quick(&self) -> &QuickPanel {
+        &self.quick
     }
 
     /// The panes' shared environment.
@@ -138,6 +148,15 @@ impl Windows {
         for request in state.core.take_window_requests() {
             self.apply(request, cx);
         }
+        let quick = QuickEnv {
+            env: &self.env,
+            app_id: &self.app_id,
+            frontmost: self.frontmost(&state.core).map(|ui| ui.handle.into()),
+        };
+        let held = crate::quick::holds_keyboard(cx);
+        self.quick.sync(&mut state.core, &quick, cx);
+        // the panel went with the keyboard: the decks, which stepped aside for it, focus their terminals again
+        resettle |= held && !crate::quick::holds_keyboard(cx);
         self.report_states(&mut state.core, cx);
         state.core.clear_pane_focus_requests();
         self.launch(state, cx);
@@ -274,6 +293,7 @@ impl Windows {
         for ui in self.shown.values() {
             ui.deck.update(cx, |deck, cx| deck.apply_config(keep_zoom, cx));
         }
+        self.quick.apply_config(&self.env, keep_zoom, cx);
     }
 
     /// Tears every terminal down, ending their programs: the quit path, after the quit save.
@@ -288,6 +308,7 @@ impl Windows {
                     .chain(deck.overlay_terminals().map(Rc::clone))
                     .collect::<Vec<_>>()
             })
+            .chain(self.quick.shared().map(Rc::clone))
             .collect();
         if shared.is_empty() {
             return;
