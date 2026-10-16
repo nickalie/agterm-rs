@@ -547,13 +547,19 @@ impl AppState {
                     quick: origin == KeyOrigin::Quick,
                 };
                 if let ActionEffect::Frontend(action) = self.core.perform_builtin(origin, action) {
-                    let close_grace = self.core.settings().close_grace_undo_enabled.unwrap_or(true);
-                    self.frontend.actions.push((action, close_grace));
+                    self.frontend_action(action);
                 }
             }
             Fired::Command(command) => self.core.run_custom_command_from_keybind(&command, window, typing),
         }
         self.settle();
+    }
+
+    /// Leaves the frontend half of a built-in action (a palette row's, a chord's) to the landing
+    /// ([`FrontendWork::actions`]), with the soft-close setting a delete confirmation names.
+    pub fn frontend_action(&mut self, action: FrontendAction) {
+        let close_grace = self.core.settings().close_grace_undo_enabled.unwrap_or(true);
+        self.frontend.actions.push((action, close_grace));
     }
 
     /// A window dialog committed: `window.rename` or `window.delete` for window `window`.

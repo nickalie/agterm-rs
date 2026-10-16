@@ -139,8 +139,8 @@ fn the_shell_titles_its_window_and_keeps_its_modal_layers_in_order(cx: &mut Test
         let order: Vec<Layer> = view.layers.iter().map(|(layer, _)| *layer).collect();
         assert_eq!(
             order,
-            [Layer::Ask, Layer::Picker],
-            "back to front, whatever the attach order"
+            [Layer::Search, Layer::Ask, Layer::Picker, Layer::Switcher],
+            "back to front, whatever the attach order (the search bar and the switcher for good)"
         );
     });
     view.update(cx, |view, cx| view.set_layer(Layer::Ask, None, cx));
@@ -547,4 +547,264 @@ fn a_popover_and_rename_window_give_the_keyboard_back(cx: &mut TestAppContext) {
         .map(ToString::to_string);
     assert_eq!(name.as_deref(), Some("play"));
     assert!(s.terminal_focused(), "renamed, the terminal has the keyboard back");
+}
+
+// MARK: - picker, palette, switcher and search bar (Task 22)
+
+impl Shell<'_> {
+    /// Puts the key monitor on the app and loads the core's keymap, as the app's launch does.
+    fn with_keys(&mut self) {
+        let poster = self.state.poster().clone();
+        self.cx.update(|_, cx| crate::keymap_dispatch::init(cx));
+        crate::keymap_dispatch::sync(&self.state.core, &poster);
+    }
+
+    /// Whether `handle` of the window's views holds the keyboard.
+    fn holds(&mut self, handle: impl FnOnce(&WindowView, &App) -> Option<gpui_kit::FocusHandle>) -> bool {
+        let view = self.view.clone();
+        self.cx
+            .update(|window, cx| handle(view.read(cx), cx).is_some_and(|handle| handle.is_focused(window)))
+    }
+
+    fn active(&self) -> Option<Uuid> {
+        self.state
+            .core
+            .library()
+            .store(self.window)
+            .and_then(AppStore::active_session)
+            .map(Session::id)
+    }
+
+    /// Runs `apply` on the active session's search, then lands it.
+    fn search(&mut self, apply: impl FnOnce(&mut agterm_core::model::SearchState)) {
+        let (window, session) = (self.window, self.active().unwrap());
+        let session = self
+            .state
+            .core
+            .library_mut()
+            .store_mut(window)
+            .and_then(|store| store.session_mut(session))
+            .unwrap();
+        apply(&mut session.search);
+        self.state.settle();
+        self.settle();
+    }
+}
+
+/// Opens a picker of Alpha and Beta; its id.
+fn open_pick(s: &mut Shell<'_>) -> String {
+    let item = |id: &str, label: &str| agterm_proto::PickItem {
+        id: id.to_owned(),
+        label: label.to_owned(),
+        subtitle: None,
+    };
+    let response = s.state.core.dispatch(&agterm_proto::Request {
+        cmd: agterm_proto::Command::Pick(agterm_proto::command::PickCmd::Open),
+        target: None,
+        args: Some(agterm_proto::Args {
+            items: Some(vec![item("alpha", "Alpha"), item("beta", "Beta")]),
+            ..agterm_proto::Args::default()
+        }),
+    });
+    assert!(response.ok, "{response:?}");
+    s.state.settle();
+    s.settle();
+    let picker = s.view.read_with(s.cx, |view, _| view.picker().cloned());
+    picker
+        .expect("the picker is up")
+        .read_with(s.cx, |picker, _| picker.id().to_owned())
+}
+
+fn pick_result(s: &mut Shell<'_>, id: &str) -> String {
+    let result = s.state.core.dispatch(&agterm_proto::Request {
+        cmd: agterm_proto::Command::Pick(agterm_proto::command::PickCmd::Result),
+        target: Some(id.to_owned()),
+        args: None,
+    });
+    format!("{:?}", result.result)
+}
+
+#[gpui_kit::test]
+fn a_picker_takes_the_keyboard_answers_by_its_keys_and_gives_it_back(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    s.with_keys();
+    let id = open_pick(&mut s);
+    assert!(s.view.read_with(s.cx, |view, _| view.has_layer(Layer::Picker)));
+    assert!(
+        s.holds(|view, cx| view.picker().map(|picker| picker.read(cx).focus_handle(cx))),
+        "its field holds the keyboard"
+    );
+    assert!(!s.terminal_focused());
+    s.cx.simulate_keystrokes("down enter");
+    s.settle();
+    assert!(!s.state.core.modal_pending(s.window), "answered");
+    assert!(pick_result(&mut s, &id).contains("beta"));
+    assert!(s.view.read_with(s.cx, |view, _| view.picker().is_none()
+        && !view.has_layer(Layer::Picker)));
+    assert!(s.terminal_focused(), "the terminal has the keyboard back");
+
+    // Ctrl+J moves too, typing filters in the field, Escape cancels
+    let id = open_pick(&mut s);
+    s.cx.simulate_keystrokes("ctrl-j ctrl-k b");
+    let rows = s
+        .view
+        .read_with(s.cx, |view, cx| view.picker().unwrap().read(cx).rows().to_vec());
+    assert_eq!(rows, [crate::picker::PickRow::Item(1)], "typed into the field");
+    s.cx.simulate_keystrokes("escape");
+    s.settle();
+    let result = pick_result(&mut s, &id);
+    assert!(result.to_lowercase().contains("cancelled"), "{result}");
+    assert!(s.terminal_focused());
+}
+
+/// Opens the palette of `mode` in the shell's window.
+fn open_palette(s: &mut Shell<'_>, mode: agterm_core::palette::PaletteMode) {
+    s.state.core.open_palette(s.window, mode);
+    s.state.settle();
+    s.settle();
+}
+
+#[gpui_kit::test]
+fn a_palette_takes_the_keyboard_runs_a_row_and_its_launcher_closes_it(cx: &mut TestAppContext) {
+    use agterm_core::palette::PaletteMode;
+
+    let mut s = shell(cx);
+    s.with_keys();
+    open_palette(&mut s, PaletteMode::Sessions);
+    assert!(s.view.read_with(s.cx, |view, _| view.has_layer(Layer::Palette)));
+    assert!(s.holds(|view, cx| view.palette().map(|palette| palette.read(cx).focus_handle(cx))));
+    s.cx.simulate_keystrokes("u");
+    let titles = s
+        .view
+        .read_with(s.cx, |view, cx| view.palette().unwrap().read(cx).titles());
+    assert_eq!(titles, ["u"]);
+    s.cx.simulate_keystrokes("enter");
+    s.settle();
+    assert_eq!(s.active(), s.session("u"), "the row ran");
+    assert!(s.view.read_with(s.cx, |view, _| view.palette().is_none()));
+    assert!(s.terminal_focused(), "the terminal has the keyboard back");
+
+    // the launcher's chord, typed in the field, closes it as the menu item toggles it
+    let chord = s
+        .state
+        .core
+        .keymap()
+        .equivalent(agterm_core::keymap::BuiltinAction::CommandPalette)
+        .cloned()
+        .expect("Command Palette has a chord");
+    open_palette(&mut s, PaletteMode::Actions);
+    assert!(s.view.read_with(s.cx, |view, _| view.palette().is_some()));
+    s.cx.simulate_keystrokes(&keystroke(&chord));
+    s.settle();
+    assert!(s.state.core.palette_mode().is_none(), "closed by its launcher");
+    assert!(s.terminal_focused());
+
+    // Escape closes it too
+    open_palette(&mut s, PaletteMode::Actions);
+    s.cx.simulate_keystrokes("escape");
+    s.settle();
+    assert!(s.state.core.palette_mode().is_none());
+    assert!(s.terminal_focused());
+}
+
+/// `chord` in GPUI's keystroke syntax.
+fn keystroke(chord: &agterm_core::keymap::Chord) -> String {
+    use agterm_core::keymap::Modifiers;
+    let mut text = String::new();
+    for (bit, word) in [
+        (Modifiers::CONTROL, "ctrl-"),
+        (Modifiers::OPTION, "alt-"),
+        (Modifiers::SHIFT, "shift-"),
+        (Modifiers::COMMAND, "super-"),
+    ] {
+        if chord.mods.contains(bit) {
+            text.push_str(word);
+        }
+    }
+    text.push_str(&chord.key);
+    text
+}
+
+#[gpui_kit::test]
+fn ctrl_tab_walks_the_recent_sessions_and_releasing_control_selects(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    s.with_keys();
+    let switcher = s.view.read_with(s.cx, |view, _| view.switcher().clone());
+    assert_eq!(s.active(), s.session("var"));
+    s.cx.simulate_keystrokes("ctrl-tab");
+    switcher.read_with(s.cx, |switcher, _| {
+        assert!(switcher.is_active());
+        assert_eq!(switcher.titles(), ["var", "u"], "most recent first");
+        assert_eq!(switcher.index(), 1, "on the previous session");
+    });
+    s.cx.run_until_parked();
+    assert!(s.cx.debug_bounds("session-switcher").is_some());
+    assert!(s.terminal_focused(), "the terminal keeps the keyboard");
+    s.cx.simulate_keystrokes("escape");
+    assert!(
+        !switcher.read_with(s.cx, |switcher, _| switcher.is_active()),
+        "Escape gives up"
+    );
+    s.settle();
+    assert_eq!(s.active(), s.session("var"));
+
+    s.cx.simulate_keystrokes("ctrl-tab ctrl-tab ctrl-shift-tab");
+    assert_eq!(
+        switcher.read_with(s.cx, |switcher, _| switcher.index()),
+        1,
+        "wrapped and back"
+    );
+    s.cx.simulate_modifiers_change(gpui_kit::Modifiers::default());
+    s.settle();
+    assert!(!switcher.read_with(s.cx, |switcher, _| switcher.is_active()));
+    assert_eq!(s.active(), s.session("u"), "Control's release selected it");
+    assert!(s.terminal_focused(), "the session shown now has the keyboard");
+}
+
+#[gpui_kit::test]
+fn the_search_bar_takes_the_keyboard_keeps_what_is_typed_and_gives_it_back(cx: &mut TestAppContext) {
+    use agterm_core::model::{SearchReport, StatusPane};
+
+    let mut s = shell(cx);
+    s.with_keys();
+    let session = s.active().unwrap();
+    s.search(|search| {
+        search.apply(StatusPane::Left, SearchReport::Started(Some("err".to_owned())));
+    });
+    let bar = s.view.read_with(s.cx, |view, _| view.search_bar().clone());
+    assert!(bar.read_with(s.cx, |bar, _| bar.is_shown()));
+    assert!(s.cx.debug_bounds("search-field").is_some() && s.cx.debug_bounds("search-counter").is_some());
+    assert!(
+        s.holds(|view, cx| Some(view.search_bar().read(cx).focus_handle(cx))),
+        "the bar takes the keyboard"
+    );
+    let text = |s: &mut Shell<'_>| bar.read_with(s.cx, |bar, cx| bar.field().read(cx).value().to_string());
+    assert_eq!(text(&mut s), "err", "the seed shows");
+    s.cx.simulate_keystrokes("x");
+    s.settle();
+    let mut needle = String::new();
+    s.search(|search| needle.clone_from(&search.needle));
+    assert_eq!(needle, "errx", "typing sends the needle");
+    assert_eq!(text(&mut s), "errx", "a settle does not rewind the field");
+    let mut shown = String::new();
+    s.search(|search| {
+        search.apply(StatusPane::Left, SearchReport::Total(Some(7)));
+        search.apply(StatusPane::Left, SearchReport::Selected(Some(2)));
+        shown = search.display_text();
+    });
+    let counter = bar.read_with(s.cx, |bar, _| bar.counter().to_owned());
+    assert!(!counter.is_empty());
+    assert_eq!(counter, shown);
+
+    // Escape asks the pane to end its search, whose end report gives the terminal the keyboard back
+    s.cx.simulate_keystrokes("escape");
+    s.settle();
+    let token = s.view.read_with(s.cx, |view, cx| {
+        view.deck().read(cx).shown_terminal().unwrap().token().to_owned()
+    });
+    s.state.core.report_search(session, &token, SearchReport::Ended);
+    s.state.settle();
+    s.settle();
+    assert!(!bar.read_with(s.cx, |bar, _| bar.is_shown()));
+    assert!(s.terminal_focused(), "the terminal has the keyboard back");
 }

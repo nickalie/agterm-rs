@@ -411,10 +411,10 @@ struct Button {
     hint: String,
 }
 
-/// A hover text, in the chrome's colors.
-struct Hint {
-    text: SharedString,
-    colors: ChromeColors,
+/// A hover text, in the chrome's colors (the search bar's buttons' too).
+pub(crate) struct Hint {
+    pub(crate) text: SharedString,
+    pub(crate) colors: ChromeColors,
 }
 
 impl Render for Hint {
