@@ -740,10 +740,18 @@ fn ctrl_tab_walks_the_recent_sessions_and_releasing_control_selects(cx: &mut Tes
     s.cx.run_until_parked();
     assert!(s.cx.debug_bounds("session-switcher").is_some());
     assert!(s.terminal_focused(), "the terminal keeps the keyboard");
+    assert!(
+        crate::keymap_dispatch::release_simulated("ctrl-tab"),
+        "the walk's Tab release stays off the terminal"
+    );
     s.cx.simulate_keystrokes("escape");
     assert!(
         !switcher.read_with(s.cx, |switcher, _| switcher.is_active()),
         "Escape gives up"
+    );
+    assert!(
+        crate::keymap_dispatch::release_simulated("escape"),
+        "the cancelling Escape's release stays off the terminal"
     );
     s.settle();
     assert_eq!(s.active(), s.session("var"));

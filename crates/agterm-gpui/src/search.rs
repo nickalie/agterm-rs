@@ -161,14 +161,14 @@ impl SearchBar {
         self.landed.load(Ordering::Acquire) == self.sent
     }
 
-    /// Brings the bar in line with the window's active search; whether it came up for a session just now, which the
-    /// caller gives the keyboard when `focus` (no modal holds it), the field's cursor at the needle's end.
-    pub fn sync(&mut self, core: &Core, focus: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    /// Brings the bar in line with the window's active search. When it comes up for a session just now and `focus`
+    /// allows it (no modal holds the keyboard), the field takes the keyboard itself, its cursor at the needle's end.
+    pub fn sync(&mut self, core: &Core, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some((session, search)) = shown_search(core, self.window) else {
             if self.shown.take().is_some() {
                 cx.notify();
             }
-            return false;
+            return;
         };
         let fresh = self
             .shown
@@ -196,7 +196,6 @@ impl SearchBar {
             window.focus(&handle, cx);
         }
         cx.notify();
-        fresh
     }
 
     fn button(

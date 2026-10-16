@@ -140,6 +140,31 @@ fn keys_move_run_cancel_and_stay_in_the_picker() {
     assert_eq!(key("left"), None);
 }
 
+// the keypad's 8 and 2 (XKB 80 and 88) are its Up and Down with NumLock off, digits for the field with it on
+#[test]
+fn keypad_arrows_move_only_with_num_lock_off() {
+    use agterm_core::ghostty_config::binds::Mods;
+
+    use crate::terminal::input::NativeKey;
+    let keypad = |keycode: u32, name: &str, locks: Mods, text: &str| {
+        let native = NativeKey {
+            keycode,
+            text: text.into(),
+            locks,
+            ..NativeKey::default()
+        };
+        pick_key(&KeyStroke::new(
+            &Keystroke::parse(name).unwrap(),
+            &Source::Native(native),
+            false,
+        ))
+    };
+    assert_eq!(keypad(80, "up", Mods::empty(), ""), Some(PickKey::Move(-1)));
+    assert_eq!(keypad(88, "down", Mods::empty(), ""), Some(PickKey::Move(1)));
+    assert_eq!(keypad(80, "8", Mods::NUM_LOCK, "8"), None, "typed text");
+    assert_eq!(keypad(88, "2", Mods::NUM_LOCK, "2"), None, "typed text");
+}
+
 // upstream's PaletteTests, by XKB keycodes (J 44, K 45, Dvorak's j on C 54 and k on V 55, A 38)
 const KEYCODE_J: u32 = 44;
 const KEYCODE_K: u32 = 45;

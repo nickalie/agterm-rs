@@ -175,6 +175,15 @@ pub(crate) fn load_keymap(keymap: &agterm_core::keymap::Keymap) {
     });
 }
 
+/// Releases `text`, a simulated keystroke, as the window's key-up listener would; whether the press was consumed
+/// (tests).
+#[cfg(test)]
+pub(crate) fn release_simulated(text: &str) -> bool {
+    let keystroke = gpui_kit::Keystroke::parse(text).unwrap().with_simulated_ime();
+    let stroke = KeyStroke::new(&keystroke, &input::current_source(&keystroke), true);
+    ROUTER.with_borrow_mut(|router| router.release(stroke.identity, Instant::now()))
+}
+
 /// The interceptor (module docs).
 fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
     // GPUI's keystroke for a lone modifier pressed and released: the modifier change it stands for goes on to the
@@ -184,8 +193,10 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
     }
     let source = input::current_source(&event.keystroke);
     let stroke = KeyStroke::new(&event.keystroke, &source, false);
-    // the window's own keys first: Ctrl+Tab's switcher, the picker's, palette's and search bar's fields
+    // the window's own keys first: Ctrl+Tab's switcher, the picker's, palette's and search bar's fields; their release
+    // is theirs too (the switcher's walk leaves the terminal the keyboard, so its key-up listener must not report it)
     if crate::window::intercept_key(&stroke, window, cx) {
+        ROUTER.with_borrow_mut(|router| router.consume(stroke.identity));
         cx.stop_propagation();
         return;
     }
@@ -347,6 +358,12 @@ impl Router {
                 Press::Fired(Fired::Builtin(action))
             }
         }
+    }
+
+    /// A press taken outside the keymap (the window's own keys): its autorepeats and release stay off the terminal.
+    fn consume(&mut self, identity: u32) {
+        self.released.remove(&identity);
+        self.consumed.insert(identity);
     }
 
     /// A key went up; whether its press was consumed.

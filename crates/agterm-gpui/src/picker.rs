@@ -21,6 +21,7 @@ use std::rc::Rc;
 
 use agterm_core::chrome::ChromeColors;
 use agterm_core::fuzzy::fuzzy_rank;
+use agterm_core::ghostty_config::binds::Mods;
 use agterm_core::modal::PendingPick;
 use agterm_core::palette::{palette_search_keys, pick_custom_row_label};
 use agterm_proto::{ControlPickOutcome, ControlPickResult, PickItem};
@@ -119,13 +120,17 @@ pub enum PickKey {
     Swallow,
 }
 
-/// The field's key handling (upstream's `onKeyPress` handlers): Up and Down move, Ctrl+J and Ctrl+K move (with exactly
-/// Control held, the key resolved by [`selection_step`]), Return runs, Escape cancels, and Tab stays in the panel.
+/// The field's key handling (upstream's `onKeyPress` handlers): Up and Down move (the keypad's too, its 8 and 2 with
+/// `NumLock` off, as the GTK build's `KP_Up` and `KP_Down`), Ctrl+J and Ctrl+K move (with exactly Control held, the key
+/// resolved by [`selection_step`]), Return runs, Escape cancels, and Tab stays in the panel.
 #[must_use]
 pub fn pick_key(stroke: &KeyStroke) -> Option<PickKey> {
+    let keypad_arrows = !stroke.mods.contains(Mods::NUM_LOCK);
     match stroke.key.name() {
-        "arrow_up" | "numpad_up" => return Some(PickKey::Move(-1)),
-        "arrow_down" | "numpad_down" => return Some(PickKey::Move(1)),
+        "arrow_up" => return Some(PickKey::Move(-1)),
+        "arrow_down" => return Some(PickKey::Move(1)),
+        "numpad_8" if keypad_arrows => return Some(PickKey::Move(-1)),
+        "numpad_2" if keypad_arrows => return Some(PickKey::Move(1)),
         "enter" | "numpad_enter" => return Some(PickKey::Run),
         "escape" => return Some(PickKey::Cancel),
         "tab" => return Some(PickKey::Swallow),
