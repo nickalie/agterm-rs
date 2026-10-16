@@ -300,3 +300,26 @@ fn the_keyboard_brings_the_highlighted_button_into_view(cx: &mut gpui_kit::TestA
     press(cx, "tab");
     assert!(shown(cx, "ask-button-b0"), "wrapped to the first, scrolled back up");
 }
+
+#[gpui_kit::test]
+fn a_new_ask_draws_its_panel_on_the_next_frame(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let pending = ask(AskStyle::Gui);
+    let look = Look {
+        family: None,
+        size: 13.0,
+        foreground: Rgb::WHITE,
+        background: Rgb::BLACK,
+    };
+    let owner = AskOwner::Session(Uuid::new_v4());
+    let (_dialog, cx) =
+        cx.add_window_view(|_, cx| AskDialog::new(&pending, owner, look, crate::state::detached_poster(), cx));
+    cx.run_until_parked();
+    // no other event: only the frame the measured anchor asked for
+    cx.update(gpui_kit::Window::simulate_next_frame);
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("ask-content").is_some(),
+        "the panel is drawn on the frame after the ask opens"
+    );
+}

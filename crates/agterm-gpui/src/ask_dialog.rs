@@ -678,11 +678,13 @@ impl AskDialog {
 impl Render for AskDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let anchor = Rc::clone(&self.anchor);
+        // the panel is counted from the anchor measured here, so a new size is drawn on the next frame (a frame being
+        // drawn takes no refresh)
         let measure = canvas(
             move |bounds, window, _| {
                 if anchor.get() != Some(bounds.size) {
                     anchor.set(Some(bounds.size));
-                    window.refresh();
+                    window.on_next_frame(|window, _| window.refresh());
                 }
             },
             |_, (), _, _| {},
