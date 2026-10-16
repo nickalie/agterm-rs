@@ -12,8 +12,8 @@
 //!   resume always does), each posting [`AppState::retry_remote_links`]. Nothing in the seam names GPUI or D-Bus, so
 //!   macOS (`NWPathMonitor`, the wake notification) and Windows plug their own sources in beside Linux's.
 //! - **Linux** ([`dbus`]): `NetworkManager` on the system bus, else the desktop portal's network monitor on the session
-//!   bus, else neither, and the network reads as always reachable (logged): the links then retry on their backoff
-//!   alone. The resume is logind's `PrepareForSleep(false)`; without logind there is none (logged).
+//!   bus, else the kernel's default routes over rtnetlink ([`routes`], gio's netlink monitor), else none, and the
+//!   network reads as always reachable (logged): the links then retry on their backoff alone. The resume is logind's `PrepareForSleep(false)`; without logind there is none (logged).
 //! - **Elsewhere**: no source yet; the network reads as always reachable and no resume is reported (logged).
 
 use std::sync::{Arc, Mutex, PoisonError};
@@ -24,6 +24,8 @@ use crate::state::{AppState, Poster, post};
 
 #[cfg(target_os = "linux")]
 pub mod dbus;
+#[cfg(target_os = "linux")]
+pub mod routes;
 
 /// What a platform's source reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +78,7 @@ pub fn observe_links(poster: Poster) {
 
 #[cfg(target_os = "linux")]
 fn start_sources(report: &Report) {
-    dbus::start(&dbus::Buses::desktop(), report);
+    dbus::start(&dbus::Endpoints::desktop(), report);
 }
 
 #[cfg(not(target_os = "linux"))]

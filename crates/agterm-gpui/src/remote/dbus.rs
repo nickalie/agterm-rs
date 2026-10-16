@@ -3,10 +3,13 @@
 //!
 //! - **Network**: `NetworkManager` on the system bus when it owns its name (what gio's `NetworkMonitor` reads on a
 //!   desktop): every `PropertiesChanged` of its manager re-reads `Connectivity`, `State` and `PrimaryConnection`, and a
-//!   change of the reachability or of the primary connection (a path change while up, as upstream's path monitor
-//!   reports one) is reported. Without it, the desktop portal's `org.freedesktop.portal.NetworkMonitor` on the session
-//!   bus (`GetAvailable` at start and on each `changed`), which works on any desktop running xdg-desktop-portal.
-//!   Without either the network reads as always reachable: nothing is reported (logged).
+//!   change of the reachability, of the connectivity as gio derives it (a portal or a limited connectivity turning full
+//!   on the same connection, which gio reports as `network-changed` and the GTK build retried on) or of the primary
+//!   connection (a path change while up, as upstream's path monitor reports one) is reported. Without it, the desktop
+//!   portal's `org.freedesktop.portal.NetworkMonitor` on the session bus (`GetAvailable` at start and on each
+//!   `changed`), which works on any desktop running xdg-desktop-portal. Without either, the kernel's default routes
+//!   over rtnetlink ([`super::routes`], gio's own last fallback). Without those the network reads as always reachable:
+//!   nothing is reported (logged).
 //! - **Resume**: logind's `PrepareForSleep(false)` on the system bus; without logind (or elogind) owning
 //!   `org.freedesktop.login1` no resume is reported (logged).
 //!
@@ -19,7 +22,8 @@ use zbus::blocking::{Connection, Proxy};
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::OwnedObjectPath;
 
-use super::{LinkEvent, Report};
+pub use super::routes::Routes;
+use super::{LinkEvent, Report, routes};
 
 /// `NetworkManager`'s bus name and manager interface, and its object.
 pub const NETWORK_MANAGER: &str = "org.freedesktop.NetworkManager";
@@ -40,6 +44,11 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 /// `NMConnectivityState`.
 const CONNECTIVITY_UNKNOWN: u32 = 0;
 const CONNECTIVITY_NONE: u32 = 1;
+const CONNECTIVITY_PORTAL: u32 = 2;
+const CONNECTIVITY_LIMITED: u32 = 3;
+const CONNECTIVITY_FULL: u32 = 4;
+/// `NMState`'s `NM_STATE_CONNECTED_LOCAL`: no default route.
+const STATE_CONNECTED_LOCAL: u32 = 50;
 /// `NMState`'s `NM_STATE_CONNECTED_SITE`: a default route, whatever lies past it.
 const STATE_CONNECTED_SITE: u32 = 60;
 
@@ -54,20 +63,22 @@ pub enum Endpoint {
     Absent,
 }
 
-/// The system bus and the session bus the sources connect to.
+/// Where the sources read: the system bus and the session bus they connect to, and the default routes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Buses {
+pub struct Endpoints {
     pub system: Endpoint,
     pub session: Endpoint,
+    pub routes: Routes,
 }
 
-impl Buses {
-    /// The desktop's buses.
+impl Endpoints {
+    /// The desktop's buses and the kernel's routes.
     #[must_use]
     pub fn desktop() -> Self {
         Self {
             system: Endpoint::Desktop,
             session: Endpoint::Desktop,
+            routes: Routes::Kernel,
         }
     }
 }
@@ -77,11 +88,13 @@ impl Buses {
 pub enum NetworkSource {
     NetworkManager,
     Portal,
-    /// Neither: the network reads as always reachable.
+    /// The kernel's default routes ([`super::routes`]).
+    Routes,
+    /// None of them: the network reads as always reachable.
     None,
 }
 
-/// The sources' threads: each ends with its bus and says what it followed.
+/// The sources' threads: each ends with its bus (the routes' with their socket) and says what it followed.
 pub struct Sources {
     /// The network's source, once its bus closed (or at once, without one).
     pub network: Option<std::thread::JoinHandle<NetworkSource>>,
@@ -89,13 +102,13 @@ pub struct Sources {
     pub resume: Option<std::thread::JoinHandle<bool>>,
 }
 
-/// Starts the network and the resume sources on `buses`, each reporting to `report`.
-pub fn start(buses: &Buses, report: &Report) -> Sources {
-    let (system, session, network_report) = (buses.system.clone(), buses.session.clone(), report.clone());
+/// Starts the network and the resume sources on `endpoints`, each reporting to `report`.
+pub fn start(endpoints: &Endpoints, report: &Report) -> Sources {
+    let (network_endpoints, network_report) = (endpoints.clone(), report.clone());
     let network = spawn("agterm-network", move || {
-        follow_network(&system, &session, &*network_report)
+        follow_network(&network_endpoints, &*network_report)
     });
-    let (system, resume_report) = (buses.system.clone(), report.clone());
+    let (system, resume_report) = (endpoints.system.clone(), report.clone());
     let resume = spawn("agterm-resume", move || follow_resume(&system, &*resume_report));
     Sources { network, resume }
 }
@@ -159,30 +172,66 @@ fn proxy(
 }
 
 /// Picks the network's source and follows it until its bus closes.
-fn follow_network(system: &Endpoint, session: &Endpoint, report: &dyn Fn(LinkEvent)) -> NetworkSource {
-    if let Some(bus) = connect(system, "system").filter(|bus| has_owner(bus, NETWORK_MANAGER)) {
+fn follow_network(endpoints: &Endpoints, report: &dyn Fn(LinkEvent)) -> NetworkSource {
+    if let Some(bus) = connect(&endpoints.system, "system").filter(|bus| has_owner(bus, NETWORK_MANAGER)) {
         if let Err(error) = follow_network_manager(&bus, report) {
             tracing::warn!(%error, "remote links: cannot follow NetworkManager");
         }
         return NetworkSource::NetworkManager;
     }
-    if let Some(bus) = connect(session, "session").filter(|bus| has_owner(bus, PORTAL)) {
+    if let Some(bus) = connect(&endpoints.session, "session").filter(|bus| has_owner(bus, PORTAL)) {
         match follow_portal(&bus, report) {
             Ok(()) => return NetworkSource::Portal,
             Err(error) => tracing::info!(%error, "remote links: the portal has no network monitor"),
         }
     }
+    if endpoints.routes == Routes::Kernel {
+        match routes::Watch::start() {
+            Ok(watch) => {
+                let error = watch.follow(report);
+                tracing::warn!(%error, "remote links: the kernel's routes stopped answering");
+                return NetworkSource::Routes;
+            }
+            Err(error) => tracing::info!(%error, "remote links: cannot read the kernel's routes"),
+        }
+    }
     tracing::info!(
-        "remote links: neither NetworkManager nor the portal's network monitor; the network reads as always \
-         reachable and the links retry on their backoff alone"
+        "remote links: neither NetworkManager, the portal's network monitor nor the kernel's routes; the network \
+         reads as always reachable and the links retry on their backoff alone"
     );
     NetworkSource::None
 }
 
-/// `NetworkManager`'s state as far as the links care.
+/// gio's `GNetworkConnectivity`, as its `NetworkManager` monitor derives it from `State` and `Connectivity`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Connectivity {
+    Local,
+    Limited,
+    Portal,
+    Full,
+}
+
+/// The connectivity gio reads off `NetworkManager`'s `connectivity` and `state` (`gnetworkmonitornm.c`): a change of
+/// it is a change gio reports (`network-changed`), the GTK build's retry.
+#[must_use]
+pub fn connectivity(connectivity: u32, state: u32) -> Connectivity {
+    match connectivity {
+        _ if state <= STATE_CONNECTED_LOCAL => Connectivity::Local,
+        CONNECTIVITY_PORTAL => Connectivity::Portal,
+        CONNECTIVITY_FULL if state > STATE_CONNECTED_SITE => Connectivity::Full,
+        // a site only (whatever the check says), or the check's limited
+        _ if state <= STATE_CONNECTED_SITE || connectivity == CONNECTIVITY_LIMITED => Connectivity::Limited,
+        // the check unknown or none on a global route
+        _ => Connectivity::Local,
+    }
+}
+
+/// `NetworkManager`'s state as far as the links care: the reachability, the connectivity behind it (a portal or a
+/// limited one turning full on the same connection is the network coming back) and the primary connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ManagerState {
     available: bool,
+    connectivity: Connectivity,
     primary: OwnedObjectPath,
 }
 
@@ -204,6 +253,7 @@ fn manager_state(manager: &Proxy<'_>) -> zbus::Result<ManagerState> {
     let primary: OwnedObjectPath = manager.get_property("PrimaryConnection")?;
     Ok(ManagerState {
         available: reachable(connectivity, state),
+        connectivity: self::connectivity(connectivity, state),
         primary,
     })
 }

@@ -15,6 +15,35 @@ fn network_managers_connectivity_decides_and_an_unknown_one_reads_the_state() {
     assert!(!reachable(CONNECTIVITY_UNKNOWN, 20), "disconnected");
 }
 
+#[test]
+fn the_connectivity_is_gios_reading_of_the_state_and_networkmanagers_check() {
+    assert_eq!(connectivity(CONNECTIVITY_FULL, 50), Connectivity::Local, "local only");
+    assert_eq!(connectivity(CONNECTIVITY_FULL, 20), Connectivity::Local, "disconnected");
+    assert_eq!(
+        connectivity(CONNECTIVITY_PORTAL, 60),
+        Connectivity::Portal,
+        "a site behind a portal"
+    );
+    assert_eq!(
+        connectivity(CONNECTIVITY_FULL, 60),
+        Connectivity::Limited,
+        "a site only"
+    );
+    assert_eq!(connectivity(CONNECTIVITY_PORTAL, 70), Connectivity::Portal);
+    assert_eq!(connectivity(CONNECTIVITY_LIMITED, 70), Connectivity::Limited);
+    assert_eq!(connectivity(CONNECTIVITY_FULL, 70), Connectivity::Full);
+    assert_eq!(
+        connectivity(CONNECTIVITY_UNKNOWN, 70),
+        Connectivity::Local,
+        "the check off"
+    );
+    assert_ne!(
+        connectivity(CONNECTIVITY_LIMITED, 70),
+        connectivity(CONNECTIVITY_FULL, 70),
+        "limited turning full is a change, both reachable"
+    );
+}
+
 fn sleep_signal(start: bool) -> zbus::Message {
     zbus::Message::signal(LOGIND_PATH, LOGIND_MANAGER, "PrepareForSleep")
         .unwrap()
@@ -35,12 +64,13 @@ fn only_a_wake_is_a_resume() {
 
 #[test]
 fn absent_buses_follow_nothing_and_end_at_once() {
-    let buses = Buses {
+    let endpoints = Endpoints {
         system: Endpoint::Absent,
         session: Endpoint::Absent,
+        routes: Routes::Absent,
     };
     let report: Report = std::sync::Arc::new(|event| panic!("nothing to report: {event:?}"));
-    let sources = start(&buses, &report);
+    let sources = start(&endpoints, &report);
     assert_eq!(sources.network.unwrap().join().unwrap(), NetworkSource::None);
     assert!(!sources.resume.unwrap().join().unwrap());
 }

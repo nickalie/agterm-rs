@@ -329,9 +329,12 @@ fn following_the_same_path_again_keeps_the_watch_and_a_new_one_moves_it() {
     wait("the read for following the second", || {
         count.load(Ordering::SeqCst) == 3
     });
+    // the first file alone, settled apart: a watch left on it would read once more
     std::fs::write(&first, "mini\n").unwrap();
+    std::thread::sleep(DEBOUNCE * 4);
+    assert_eq!(count.load(Ordering::SeqCst), 3, "the first file is no longer followed");
     std::fs::write(&second, "mini\n").unwrap();
     wait("the second file's edit", || count.load(Ordering::SeqCst) == 4);
     std::thread::sleep(DEBOUNCE * 4);
-    assert_eq!(count.load(Ordering::SeqCst), 4, "the first file is no longer followed");
+    assert_eq!(count.load(Ordering::SeqCst), 4, "one read for one edit");
 }

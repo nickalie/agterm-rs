@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use agterm_gpui::remote::dbus::{
-    Buses, Endpoint, LOGIND, LOGIND_MANAGER, LOGIND_PATH, NETWORK_MANAGER, NETWORK_MANAGER_PATH, NETWORK_MONITOR,
-    NetworkSource, PORTAL, PORTAL_PATH, Sources, start,
+    Endpoint, Endpoints, LOGIND, LOGIND_MANAGER, LOGIND_PATH, NETWORK_MANAGER, NETWORK_MANAGER_PATH, NETWORK_MONITOR,
+    NetworkSource, PORTAL, PORTAL_PATH, Routes, Sources, start,
 };
 use agterm_gpui::remote::{LinkEvent, Report};
 use support::{DEADLINE, Sandbox, TestResult, have, lavapipe_icd};
@@ -124,21 +124,22 @@ fn prepare_for_sleep(logind: &Connection, start: bool) -> TestResult {
     Ok(())
 }
 
-/// The sandbox's two buses.
-fn buses(sandbox: &Sandbox) -> Buses {
-    Buses {
+/// The sandbox's two buses, and no routes.
+fn endpoints(sandbox: &Sandbox) -> Endpoints {
+    Endpoints {
         system: Endpoint::Address(sandbox.system_bus_address().to_owned()),
         session: Endpoint::Address(sandbox.bus_address().to_owned()),
+        routes: Routes::Absent,
     }
 }
 
-/// The sources started on `buses`, their reports arriving on the receiver.
-fn started(buses: &Buses) -> (Sources, mpsc::Receiver<LinkEvent>) {
+/// The sources started on `endpoints`, their reports arriving on the receiver.
+fn started(endpoints: &Endpoints) -> (Sources, mpsc::Receiver<LinkEvent>) {
     let (sender, reports) = mpsc::channel();
     let report: Report = Arc::new(move |event| {
         let _ = sender.send(event);
     });
-    (start(buses, &report), reports)
+    (start(endpoints, &report), reports)
 }
 
 fn next(reports: &mpsc::Receiver<LinkEvent>) -> TestResult<LinkEvent> {
@@ -184,7 +185,7 @@ fn network_manager_reports_each_change_and_logind_each_wake() -> TestResult {
     let sandbox = Sandbox::new()?;
     let (manager, state) = network_manager(&sandbox)?;
     let logind = logind(&sandbox)?;
-    let (sources, reports) = started(&buses(&sandbox));
+    let (sources, reports) = started(&endpoints(&sandbox));
     assert_eq!(
         next(&reports)?,
         LinkEvent::Network { available: false },
@@ -193,9 +194,23 @@ fn network_manager_reports_each_change_and_logind_each_wake() -> TestResult {
     set_manager(
         &manager,
         &state,
+        (3, 70, "/org/freedesktop/NetworkManager/ActiveConnection/1"),
+    )?;
+    assert_eq!(
+        next(&reports)?,
+        LinkEvent::Network { available: true },
+        "back up, limited"
+    );
+    set_manager(
+        &manager,
+        &state,
         (4, 70, "/org/freedesktop/NetworkManager/ActiveConnection/1"),
     )?;
-    assert_eq!(next(&reports)?, LinkEvent::Network { available: true }, "back up");
+    assert_eq!(
+        next(&reports)?,
+        LinkEvent::Network { available: true },
+        "limited turning full on the same connection: the Internet came back"
+    );
     set_manager(
         &manager,
         &state,
@@ -217,7 +232,17 @@ fn network_manager_reports_each_change_and_logind_each_wake() -> TestResult {
         &state,
         (0, 70, "/org/freedesktop/NetworkManager/ActiveConnection/2"),
     )?;
-    quiet(&reports, "connectivity unknown with a global route is still up");
+    assert_eq!(
+        next(&reports)?,
+        LinkEvent::Network { available: true },
+        "connectivity unknown with a global route is still up, and gio's connectivity changed"
+    );
+    set_manager(
+        &manager,
+        &state,
+        (0, 70, "/org/freedesktop/NetworkManager/ActiveConnection/2"),
+    )?;
+    quiet(&reports, "nothing changed");
     set_manager(&manager, &state, (0, 20, "/"))?;
     assert_eq!(next(&reports)?, LinkEvent::Network { available: false }, "disconnected");
     wait_resume_ready(&logind, &reports)?;
@@ -257,7 +282,7 @@ fn without_network_manager_the_portals_monitor_reports() -> TestResult {
         )?;
         Ok(())
     };
-    let (sources, reports) = started(&buses(&sandbox));
+    let (sources, reports) = started(&endpoints(&sandbox));
     assert_eq!(
         next(&reports)?,
         LinkEvent::Network { available: true },
@@ -281,7 +306,7 @@ fn without_a_service_the_network_reads_as_always_reachable() -> TestResult {
     let portal = zbus::blocking::connection::Builder::address(sandbox.bus_address())?
         .name(PORTAL)?
         .build()?;
-    let (sources, reports) = started(&buses(&sandbox));
+    let (sources, reports) = started(&endpoints(&sandbox));
     assert_eq!(ended(sources.network)?, NetworkSource::None);
     assert!(!ended(sources.resume)?);
     quiet(&reports, "nothing to report");

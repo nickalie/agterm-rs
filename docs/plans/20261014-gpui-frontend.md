@@ -2126,8 +2126,8 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 - [x] tests: reconnect on network/resume events (private bus), watcher debounce, reset flow
 - [x] gates + conformance — must pass before Task 28
 - result (2026-10-16):
-  - ➕ Files: `src/remote/{dbus,tests}.rs`, `src/remote/dbus/tests.rs`, `src/remotes_watcher/tests.rs`,
-    `src/zmx_runtime/tests.rs`, `tests/remote_links.rs`; Modify: `src/{app,app_menu,app_menu/tests,lib,state}.rs`,
+  - ➕ Files: `src/remote/{dbus,routes,tests}.rs`, `src/remote/{dbus,routes}/tests.rs`, `src/remotes_watcher/tests.rs`,
+    `src/zmx_runtime/tests.rs`, `tests/{remote_links,remote_routes}.rs`; Modify: `src/{app,app_menu,app_menu/tests,lib,state}.rs`,
     `tests/support/mod.rs`, `crates/agterm-gpui/Cargo.toml`, `Cargo.lock` (`notify` 8.2.0, the latest stable on
     crates.io and already in the lock), `docs/linux-ui-checklist.md`. No core change: the reconnect backoff, the
     remotes state and its banner, and the reset selection/marker were all core's already.
@@ -2137,9 +2137,12 @@ Port the placement rendering from qwertty-term (MIT, attribution).
     D-Bus type in it, so macOS/Windows plug in their own sources (none yet: logged). Linux (`remote/dbus.rs`, behind
     `cfg(target_os = "linux")`, blocking `zbus` on two threads of their own that connect, pick and follow):
     NetworkManager when it owns its name on the system bus (`PropertiesChanged` re-reads `Connectivity`, `State`,
-    `PrimaryConnection`; a change of reachability or primary connection reports: connectivity none is down,
-    portal/limited/full up, unknown up with a default route), else the portal's `NetworkMonitor` on the session bus
-    (`GetAvailable` at start and on each `changed`), else the network reads as always reachable (logged); logind's
+    `PrimaryConnection`; a change of reachability, of the connectivity as gio derives it from `State` and
+    `Connectivity`, or of the primary connection reports: connectivity none is down, portal/limited/full up, unknown up
+    with a default route), else the portal's `NetworkMonitor` on the session bus (`GetAvailable` at start and on each
+    `changed`), else the kernel's default routes over rtnetlink (`remote/routes.rs`, gio's netlink monitor: an IPv4 or
+    IPv6 default route reaching a nexthop, keyed by table/metric/interface, each family's flip reported, a dump again
+    after an overflow), else the network reads as always reachable (logged); logind's
     `PrepareForSleep(false)` for the resume, none without logind (logged). Sources subscribe before they read and never
     activate a service. Started once at launch from `app.rs`.
   - **`remotes.conf` watch** (`remotes_watcher.rs`): the GTK build's paths (the file, its nearest existing directory,
@@ -2167,8 +2170,11 @@ Port the placement rendering from qwertty-term (MIT, attribution).
     OK, the relauncher waiting for the pid and giving up); the menu item's place and visibility.
     `tests/remote_links.rs` on the sandbox's private buses (every `Sandbox` now has a private "system" bus too,
     `DBUS_SYSTEM_BUS_ADDRESS`, checked by `check_isolated`, so no process test reaches the machine's): a fake
-    NetworkManager and logind (each change and wake reported, nothing for a no-op change, sleep or a still-up unknown
-    connectivity), a fake portal monitor without NetworkManager, none at all; then the GPUI build on weston retrying
+    NetworkManager and logind (each change and wake reported, limited turning full on the same connection too, nothing
+    for a no-op change or sleep), a fake portal monitor without NetworkManager, none at all;
+    `tests/remote_routes.rs`: the routes source on a real rtnetlink socket in a user+network namespace of the test's
+    own (`unshare -rn`, skipped where refused), `ip` adding and deleting its loopback's default routes; then the GPUI
+    build on weston retrying
     its links on the network coming back and on a wake (from its log), and posting the "Remotes" / "1 issue in
     remotes.conf" banner to a fake notification server once `remotes.conf` turns unreadable on disk.
   - Gates: fmt, clippy (workspace, all targets and features), lint-report (10 expects, none added),
@@ -2187,6 +2193,14 @@ Port the placement rendering from qwertty-term (MIT, attribution).
   - Deviations: none of substance; the live-sessions conformance ids (`test_zmx.py`'s live cases, the relaunch
     survival) still skip on this host (fish login shell: `live-sessions` is zsh-only), so the reset/relaunch flow is
     covered by the unit tests here, never against a real zmx.
+  - (Round 1 review fixer: NetworkManager's state compared reachability and the primary connection only, so limited or
+    portal connectivity turning full on the same connection, which gio reports and the GTK build retried on, retried
+    nothing; the connectivity as gio derives it is now part of the state (an unknown connectivity check on a global
+    route now reports too, as gio's does). Without NetworkManager and the portal there was no source at all where
+    gio falls back to netlink; `remote/routes.rs` is that fallback (`netlink-sys` 0.9, `netlink-packet-route` 0.33,
+    `netlink-packet-core` 0.9, the rust-netlink crates; Linux only). `dbus::Buses` became `Endpoints` with the routes'
+    place, so the bus tests leave the kernel's routes out. The watcher's move test now edits the old file alone
+    before the new one. `cargo test --workspace` under Xvfb 4253 passed, 0 failed, 8 ignored.)
 
 ### Task 28: Integrations UI
 
