@@ -121,8 +121,8 @@
   - `AGTERM_*`/`ZMX_*` are stripped from every child environment.
 - Windows and macOS code is compiled and tested on CI from Task 2 on (`windows-latest`, a macOS runner), not only
   cross-checked; Linux runs locally and on CI.
-- Herdr-derived files keep herdr's Apache-2.0 header and a line naming the source file; the workspace gets a
-  `NOTICE` (Task 1 settles the licence question this raises).
+- Herdr-derived files keep herdr's Apache-2.0 header and a line naming the source file; the MIT workspace gets a
+  `NOTICE` for them (Task 1).
 
 ## Testing Strategy
 
@@ -289,7 +289,8 @@ agterm-term  Pane IO backend: PTY (plain panes) │ session stream (live panes, 
 - [ ] decide the Windows namespace directory and confirm the versioned daemon copy scheme (a running `.exe` cannot
       be replaced)
 - [ ] baselines on the dev box: 50 MiB `cat` through a live zmx pane in the GPUI build, idle zmx daemon RSS
-- [ ] settle the licence: the workspace licence (upstream is MIT) and the `NOTICE` text for herdr-derived code
+- [ ] the workspace is MIT like upstream (user, 2026-10-16; `LICENSE`, `license.workspace`); write the `NOTICE`
+      for herdr's Apache-2.0 code and check that every crate the GPUI merge added inherits `license.workspace`
 - [ ] write the spike note with go/no-go per item; a no-go stops the plan with a ⚠️ and a codex-discussion
 
 ### Task 2: `agterm-session` crate, the wire codec, core on Windows, CI
