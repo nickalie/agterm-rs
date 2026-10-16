@@ -7,9 +7,11 @@
 
 pub mod activation;
 pub mod app;
+pub mod app_menu;
 pub mod appearance;
 pub mod ask_dialog;
 pub mod chrome;
+pub mod dashboard;
 pub mod deck;
 pub mod external_texture;
 pub mod folder_chooser;

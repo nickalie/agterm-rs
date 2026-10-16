@@ -1243,4 +1243,5 @@ fn a_ctrl_click_on_the_hud_opens_its_link_and_a_plain_click_reaches_the_pane(cx:
     assert!(h.state.take_frontend_work().open_urls.is_empty());
 }
 
+mod dashboard;
 mod overlay;

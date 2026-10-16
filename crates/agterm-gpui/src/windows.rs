@@ -14,6 +14,7 @@ use std::hash::BuildHasher;
 use std::rc::Rc;
 
 use agterm_core::{Core, WindowRequest};
+use agterm_proto::ControlKeymapMenuItem;
 use agterm_term::Host;
 use gpui_kit::{App, Entity, WindowHandle};
 use uuid::Uuid;
@@ -76,6 +77,8 @@ pub struct Windows {
     quick: QuickPanel,
     /// The Settings window, which belongs to no agterm window either.
     settings: SettingsWindow,
+    /// The frontmost window's app menu chords as last synced, which `keymap.list` reads ([`Windows::menu_reader`]).
+    menu_items: Rc<RefCell<Vec<ControlKeymapMenuItem>>>,
 }
 
 impl Windows {
@@ -89,7 +92,16 @@ impl Windows {
             launched,
             quick: QuickPanel::default(),
             settings: SettingsWindow::default(),
+            menu_items: Rc::default(),
         }
+    }
+
+    /// What `keymap.list` reads the app menu's live chords with: the frontmost window's menu as the last sync left it
+    /// (the GTK build reads its menu model the same way).
+    #[must_use]
+    pub fn menu_reader(&self) -> agterm_core::MenuReader {
+        let items = Rc::clone(&self.menu_items);
+        Box::new(move || items.borrow().clone())
     }
 
     /// The panes' shared environment.
@@ -156,6 +168,12 @@ impl Windows {
         // the panel went with the keyboard: the decks, which stepped aside for it, focus their terminals again
         resettle |= held && !crate::quick::holds_keyboard(cx);
         self.settings.sync(state, cx);
+        *self.menu_items.borrow_mut() = state
+            .core
+            .library()
+            .active_window_id()
+            .map(|id| crate::app_menu::AppMenu::of(&state.core, id).keymap_items())
+            .unwrap_or_default();
         self.report_states(&mut state.core, cx);
         state.core.clear_pane_focus_requests();
         self.launch(state, cx);
@@ -355,6 +373,125 @@ mod tests {
         let plan = plan(&open, &shown, Some(open[0]));
         assert_eq!(plan.build, vec![open[2]], "only the newly opened one");
         assert_eq!(plan.close, vec![gone]);
+    }
+
+    /// A saved window set in `dir`: the seeded window and "work" open, "parked" closed, the seeded one frontmost; their
+    /// ids in that order.
+    fn saved_set(dir: &std::path::Path) -> [Uuid; 3] {
+        let mut persistence = agterm_core::persist::LibraryPersistence::new(dir);
+        let mut library = persistence.bootstrap("/home/u");
+        let first = library.active_window_id().unwrap();
+        let work = library.new_window(Some("work"));
+        let parked = library.new_window(Some("parked"));
+        assert!(persistence.save_all_checked(&library));
+        library.close_window(parked);
+        library.frontmost_window_id = Some(first);
+        let _ = library.drain_effects();
+        assert!(persistence.save_index(&library));
+        [first, work, parked]
+    }
+
+    fn core_over(library: agterm_core::model::WindowLibrary) -> Core {
+        Core::new(
+            agterm_core::CoreConfig {
+                app: agterm_proto::AppIdentity::from_recorded("1.2.3", None),
+                capabilities: Vec::new(),
+            },
+            agterm_core::CoreState {
+                library,
+                ..agterm_core::CoreState::default()
+            },
+        )
+    }
+
+    /// A windows registry whose terminals never start (no process runs in this test).
+    fn registry(state_dir: &std::path::Path, poster: crate::state::Poster) -> Windows {
+        let launcher: crate::pane::Launcher = Rc::new(|_: &agterm_term::Launch| -> crate::terminal::Spawn {
+            Box::new(|_| Err(agterm_term::PaneError::Closed))
+        });
+        let env = Rc::new(DeckEnv::new(
+            crate::pane::PaneContext {
+                socket: "/tmp/agterm-test.sock".to_owned(),
+                program_version: "1.2.3".to_owned(),
+            },
+            launcher,
+            TerminalConfig::default(),
+            poster,
+            crate::deck::Watermarks {
+                state_dir: state_dir.to_path_buf(),
+                config_with: Rc::new(|_: &str| TerminalConfig::default()),
+            },
+        ));
+        Windows::new(env, "io.github.melonamin.agterm.test".to_owned(), None, None)
+    }
+
+    fn shown_ids(windows: &Windows) -> Vec<Uuid> {
+        let mut ids: Vec<Uuid> = windows.iter().map(|(id, _)| *id).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    #[gpui_kit::test]
+    fn a_saved_window_set_reopens_its_open_windows_and_keeps_the_closed_one(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            // the desktop's animation switch is not followed here: no portal is asked
+            cx.set_global(crate::status_glyph::Motion::default());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let [first, work, parked] = saved_set(dir.path());
+        // the next launch's bootstrap from the same state dir, as `app.rs` `load_state` runs it
+        let restored = agterm_core::persist::LibraryPersistence::new(dir.path()).bootstrap("/home/u");
+        assert_eq!(restored.windows().len(), 3, "the library keeps every window");
+        assert_eq!(restored.active_window_id(), Some(first), "frontmost as saved");
+        let mut state = AppState::new(core_over(restored));
+        let mut windows = registry(dir.path(), crate::state::detached_poster());
+
+        cx.update(|cx| {
+            let _ = windows.sync(&mut state, cx);
+        });
+        cx.run_until_parked();
+        let mut open = vec![first, work];
+        open.sort_unstable();
+        assert_eq!(
+            shown_ids(&windows),
+            open,
+            "one window per open store, the closed one not opened"
+        );
+        assert!(windows.get(parked).is_none());
+        for id in [first, work] {
+            assert!(
+                state.core.window_state(id).is_some(),
+                "window.list reads every shown window"
+            );
+        }
+        let title = windows
+            .get(work)
+            .unwrap()
+            .handle
+            .read_with(cx, |view, _| view.title().to_owned());
+        assert_eq!(title.unwrap(), "u — work", "titled after its session and its name");
+
+        // the closed one reopens from its file through File ▸ Open Window
+        state.menu_list_activated(first, agterm_core::menu_lists::MenuListAction::OpenWindow(parked));
+        cx.update(|cx| {
+            let _ = windows.sync(&mut state, cx);
+        });
+        assert!(windows.get(parked).is_some(), "reopened");
+        assert_eq!(state.core.library().active_window_id(), Some(parked), "and frontmost");
+
+        // the user closes one: its window goes, the others stay
+        state.close_requested(work);
+        cx.update(|cx| {
+            let _ = windows.sync(&mut state, cx);
+        });
+        cx.run_until_parked();
+        let mut left = vec![first, parked];
+        left.sort_unstable();
+        assert_eq!(shown_ids(&windows), left);
+        assert!(!state.core.library().is_open(work));
+        assert!(!state.take_frontend_work().quit, "windows are still open");
+        cx.update(|cx| windows.teardown_all(cx));
     }
 
     #[test]

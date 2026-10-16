@@ -43,6 +43,7 @@ pub const CAPABILITIES: &[&str] = &[
     "pick-names-pending-ask",
     "overlay-size-validated",
     "theme-slots-by-sync",
+    "keymap-menu",
     "config-reload-counts",
 ];
 
@@ -187,11 +188,12 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
         program_version: identity.version.clone(),
     };
     let resources = session_host::resources();
-    let core = launch_core(identity, resources.as_deref(), &poster, context.socket.clone(), cx);
+    let mut core = launch_core(identity, resources.as_deref(), &poster, context.socket.clone(), cx);
     // the desktop's side before the config loads, so the first terminal starts on it (`appearance.rs`)
     let portal = crate::appearance::Portal::session();
     let dark = portal.as_ref().is_some_and(crate::appearance::Portal::is_dark);
     let windows = windows(context, resources, dark, &poster, &launch);
+    core.set_menu_reader(windows.menu_reader());
     let welcome_due = FirstRunWelcome::is_due(core.settings().welcome_shown, had_prior_state);
     let banners = crate::notifications::Desktop::start(launch.app_id.clone(), poster.clone(), cx.background_executor());
     let state = cx.new(|_| {
@@ -349,6 +351,9 @@ fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
         }
     }
     land_alerts(shell, state, &work, cx);
+    if let Some(message) = work.quit_prompt.as_deref() {
+        land_quit_prompt(shell, state, message, cx);
+    }
     if work.settings {
         let opening = crate::settings::Opening::of(state.read(cx));
         shell.windows.borrow_mut().present_settings(opening, cx);
@@ -395,6 +400,26 @@ fn land_alerts(shell: &Shell, state: &Entity<AppState>, work: &crate::state::Fro
             .is_err()
     {
         tracing::debug!("welcome: the window is gone");
+    }
+}
+
+/// Asks over the frontmost window whether to quit (the app menu's Quit); with no window to ask over, quits.
+fn land_quit_prompt(shell: &Shell, state: &Entity<AppState>, message: &str, cx: &mut App) {
+    let poster: Poster = Arc::downgrade(&shell.posting);
+    let frontmost = shell
+        .windows
+        .borrow()
+        .frontmost(&state.read(cx).core)
+        .map(|ui| ui.handle);
+    let asked = frontmost.is_some_and(|handle| {
+        handle
+            .update(cx, |_, window, cx| {
+                crate::welcome::present_quit(message, poster.clone(), window, cx);
+            })
+            .is_ok()
+    });
+    if !asked {
+        post(&poster, AppState::request_quit);
     }
 }
 

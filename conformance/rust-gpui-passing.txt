@@ -41,10 +41,13 @@ tests/cli/test_cli_output.py::test_quick_terminal
 tests/cli/test_cli_output.py::test_restore
 tests/cli/test_cli_output.py::test_session_background
 tests/cli/test_cli_output.py::test_session_panes
+tests/cli/test_cli_output.py::test_session_restore_prints_the_note_or_ok
 tests/cli/test_cli_output.py::test_sidebar
+tests/cli/test_cli_output.py::test_surface_and_dashboard
 tests/cli/test_cli_output.py::test_theme
 tests/cli/test_cli_output.py::test_tree_lists_workspaces_and_tagged_sessions
 tests/cli/test_cli_output.py::test_version
+tests/cli/test_cli_output.py::test_window_commands
 tests/cli/test_cli_output.py::test_workspace_focus_and_filter
 tests/cli/test_cli_output.py::test_workspace_go_and_move
 tests/cli/test_cli_output.py::test_workspace_lifecycle

@@ -5,7 +5,7 @@
 use agterm_core::model::WindowLibrary;
 use agterm_core::{CoreConfig, CoreState};
 use agterm_proto::AppIdentity;
-use gpui_kit::{TestAppContext, Tiling, px, size};
+use gpui_kit::{Entity, TestAppContext, Tiling, VisualTestContext, px, size};
 
 use super::*;
 
@@ -44,18 +44,13 @@ fn chords_read_as_gtk_labels_them() {
 }
 
 #[test]
-fn the_row_follows_the_mode_and_the_decorations() {
-    assert_eq!(height(ToolbarMode::Normal, false), NORMAL_HEIGHT);
-    assert_eq!(height(ToolbarMode::Compact, true), COMPACT_HEIGHT);
+fn the_row_follows_the_mode() {
+    assert_eq!(height(ToolbarMode::Normal), NORMAL_HEIGHT);
+    assert_eq!(height(ToolbarMode::Compact), COMPACT_HEIGHT);
     assert_eq!(
-        height(ToolbarMode::Hidden, true),
+        height(ToolbarMode::Hidden),
         COMPACT_HEIGHT,
-        "the minimal bar carries the controls"
-    );
-    assert_eq!(
-        height(ToolbarMode::Hidden, false),
-        px(0.),
-        "the window manager's bar is enough"
+        "the minimal bar carries the app menu and the controls"
     );
 }
 
@@ -184,6 +179,8 @@ fn colors() -> ChromeColors {
 
 /// The bar of `window` in a fresh test window, synced once over `core` under `cover`.
 fn synced(cx: &mut TestAppContext, core: &Core, window: Uuid, cover: Cover) -> Bar {
+    // the app menu's button is gpui-kit's, which reads its theme
+    cx.update(gpui_kit::init);
     let (bar, cx) = cx.add_window_view(move |_, _| Titlebar::new(window, crate::state::detached_poster()));
     cx.simulate_resize(size(px(900.), px(600.)));
     bar.update(cx, |bar, cx| bar.sync(core, cover, false, colors(), cx));
@@ -246,6 +243,62 @@ fn the_hidden_and_compact_modes_and_the_interface_toggles(cx: &mut TestAppContex
     assert!(compact.model.recent.is_none());
     assert!(!compact.model.dividers.after_jump, "one jump button left");
     assert!(compact.model.label.subtitle.is_empty(), "compact: one line");
+}
+
+/// A bar of `window` over `core` in a fresh 900x600 test window (server-decorated, as GPUI's test platform reports).
+fn shown_bar<'a>(
+    cx: &'a mut TestAppContext,
+    core: &Core,
+    window: Uuid,
+) -> (Entity<Titlebar>, &'a mut VisualTestContext) {
+    cx.update(gpui_kit::init);
+    let (bar, cx) = cx.add_window_view(move |_, _| Titlebar::new(window, crate::state::detached_poster()));
+    cx.simulate_resize(size(px(900.), px(600.)));
+    bar.update(cx, |bar, cx| bar.sync(core, Cover::None, false, colors(), cx));
+    cx.run_until_parked();
+    (bar, cx)
+}
+
+#[gpui_kit::test]
+fn the_hidden_mode_keeps_the_app_menu_under_the_window_managers_decorations(cx: &mut TestAppContext) {
+    let (mut core, window) = core(normal_mode());
+    core.update_settings(|settings| settings.toolbar_mode = Some("hidden".into()));
+    let (_bar, cx) = shown_bar(cx, &core, window);
+    assert_eq!(cx.update(|window, _| window.window_decorations()), Decorations::Server);
+    let button = cx
+        .debug_bounds("app-menu-button")
+        .expect("the app menu's only path stays");
+    let row = cx.debug_bounds("titlebar").expect("a minimal bar");
+    assert_eq!(row.size.height, COMPACT_HEIGHT);
+    assert!(row.contains(&button.center()));
+}
+
+#[gpui_kit::test]
+fn a_menu_whose_button_is_no_longer_drawn_is_closed(cx: &mut TestAppContext) {
+    let (core, window) = core(normal_mode());
+    let (bar, cx) = shown_bar(cx, &core, window);
+    let at = cx.debug_bounds("app-menu-button").expect("drawn").center();
+    cx.simulate_click(at, gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(bar.read_with(cx, |bar, _| bar.menu_open()), "the menu opened");
+    // the button goes undismissed: no open-change callback runs for it
+    bar.update(cx, |bar, cx| {
+        bar.shown = None;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("app-menu-button").is_none());
+    assert!(
+        !bar.read_with(cx, |bar, _| bar.menu_open()),
+        "the dropped menu holds the keyboard no longer"
+    );
+    // drawn again, the button opens a fresh menu
+    bar.update(cx, |bar, cx| bar.sync(&core, Cover::None, false, colors(), cx));
+    cx.run_until_parked();
+    let at = cx.debug_bounds("app-menu-button").expect("drawn again").center();
+    cx.simulate_click(at, gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(bar.read_with(cx, |bar, _| bar.menu_open()));
 }
 
 #[gpui_kit::test]

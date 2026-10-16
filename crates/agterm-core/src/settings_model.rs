@@ -636,6 +636,9 @@ impl Core {
             let changed = self.settings().restore_mode != Some(mode);
             return self.save_restore_mode(mode) && changed;
         }
+        if change.writes_theme_slots() && self.previewed_slots_to_persist().is_some() {
+            return self.change_theme_mid_preview(change);
+        }
         let mut effect = Effect::Live;
         let changed = self.update_settings(|settings| effect = change.apply_to(settings));
         match effect {
@@ -659,6 +662,38 @@ impl Core {
             }
         }
         changed
+    }
+
+    /// A theme slot edit while the theme palette previews: an explicit change as `theme.set` is, so it lands over the
+    /// slots the palette found, saves as asked, and the preview starts over from it, so neither the save nor the
+    /// palette's later Escape undoes it (upstream's `persistAndApply` moves `committedTheme`). Whether the settings on
+    /// screen changed.
+    fn change_theme_mid_preview(&mut self, change: SettingsChange) -> bool {
+        let before = self.settings().clone();
+        self.with_theme_preview_rebased(|core| {
+            core.update_settings(|settings| {
+                change.apply_to(settings);
+            });
+            // the preview's slot went back under the edit: the terminals follow whether or not the edit changed it
+            core.apply_settings();
+        });
+        *self.settings() != before
+    }
+}
+
+impl SettingsChange {
+    /// Whether the change writes the theme slots (the Appearance page's theme pickers and the follow toggle), which an
+    /// open theme preview holds.
+    #[must_use]
+    pub fn writes_theme_slots(&self) -> bool {
+        matches!(
+            self,
+            Self::Appearance(
+                AppearanceChange::ThemeForCurrentAppearance { .. }
+                    | AppearanceChange::AlternateTheme { .. }
+                    | AppearanceChange::FollowSystemAppearance { .. }
+            )
+        )
     }
 }
 

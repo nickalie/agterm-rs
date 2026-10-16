@@ -677,6 +677,136 @@ fn an_explicit_theme_set_mid_preview_sticks_past_the_palettes_escape() {
     assert_eq!(saved(&dir).theme.as_deref(), Some("Builtin Light"));
 }
 
+fn theme_pick(theme: &str, dark: bool) -> crate::settings_model::SettingsChange {
+    crate::settings_model::SettingsChange::Appearance(
+        crate::settings_model::AppearanceChange::ThemeForCurrentAppearance {
+            theme: Some(theme.to_owned()),
+            dark,
+        },
+    )
+}
+
+#[test]
+fn a_settings_theme_pick_mid_preview_is_saved_and_kept_past_the_palettes_escape() {
+    let (mut core, window, dir) = themed(AppSettings {
+        theme: Some("Nord".to_owned()),
+        ..AppSettings::default()
+    });
+    core.open_palette(window, PaletteMode::Themes);
+    core.preview_palette_theme(Some("Dracula"));
+    let _ = core.take_config_reload();
+    assert!(core.change_settings(theme_pick("Builtin Light", false)));
+    assert_eq!(core.settings().theme.as_deref(), Some("Builtin Light"), "live");
+    assert_eq!(saved(&dir).theme.as_deref(), Some("Builtin Light"), "saved as asked");
+    assert!(core.take_config_reload(), "the terminals take it");
+    assert_eq!(core.palette_mode(), Some(PaletteMode::Themes), "the palette stays open");
+    // the palette keeps browsing from the new theme, and its Escape goes back to it
+    core.preview_palette_theme(Some("Dracula"));
+    assert_eq!(core.settings().theme.as_deref(), Some("Dracula"));
+    assert_eq!(
+        saved(&dir).theme.as_deref(),
+        Some("Builtin Light"),
+        "the preview stays unsaved"
+    );
+    core.close_palette();
+    assert_eq!(core.settings().theme.as_deref(), Some("Builtin Light"));
+    assert_eq!(saved(&dir).theme.as_deref(), Some("Builtin Light"));
+}
+
+#[test]
+fn a_settings_pick_of_the_theme_the_palette_found_ends_the_preview_on_screen() {
+    let (mut core, window, dir) = themed(AppSettings {
+        theme: Some("Nord".to_owned()),
+        ..AppSettings::default()
+    });
+    core.open_palette(window, PaletteMode::Themes);
+    core.preview_palette_theme(Some("Dracula"));
+    let _ = core.take_config_reload();
+    assert!(
+        core.change_settings(theme_pick("Nord", false)),
+        "the theme on screen changed"
+    );
+    assert_eq!(core.settings().theme.as_deref(), Some("Nord"));
+    assert!(core.take_config_reload(), "the previewed theme leaves the terminals");
+    core.close_palette();
+    assert_eq!(core.settings().theme.as_deref(), Some("Nord"));
+    assert_ne!(
+        saved(&dir).theme.as_deref(),
+        Some("Dracula"),
+        "the preview never reaches the disk"
+    );
+}
+
+#[test]
+fn the_follow_toggle_and_the_alternate_picker_mid_preview_land_over_the_found_slots() {
+    use crate::settings_model::{AppearanceChange, SettingsChange};
+
+    let (mut core, window, dir) = themed(AppSettings {
+        theme: Some("Nord".to_owned()),
+        ..AppSettings::default()
+    });
+    core.open_palette(window, PaletteMode::Themes);
+    core.preview_palette_theme(Some("Dracula"));
+    let follow = SettingsChange::Appearance(AppearanceChange::FollowSystemAppearance { on: true, dark: false });
+    assert!(core.change_settings(follow));
+    let settings = saved(&dir);
+    assert_eq!(
+        (settings.theme.as_deref(), settings.dark_theme.as_deref()),
+        (Some("Nord"), Some("Nord")),
+        "seeded from the found theme, never the preview"
+    );
+    core.preview_palette_theme(Some("Dracula"));
+    let alternate = SettingsChange::Appearance(AppearanceChange::AlternateTheme {
+        theme: Some("Builtin Light".to_owned()),
+        dark: false,
+    });
+    assert!(core.change_settings(alternate));
+    core.close_palette();
+    let live = core.settings();
+    assert_eq!(
+        (live.theme.as_deref(), live.dark_theme.as_deref()),
+        (Some("Nord"), Some("Builtin Light"))
+    );
+    let settings = saved(&dir);
+    assert_eq!(
+        (settings.theme.as_deref(), settings.dark_theme.as_deref()),
+        (Some("Nord"), Some("Builtin Light"))
+    );
+}
+
+#[test]
+fn another_settings_edit_mid_preview_keeps_the_preview_and_saves_the_found_theme() {
+    use crate::settings_model::{AppearanceChange, SettingsChange};
+
+    let (mut core, window, dir) = themed(AppSettings {
+        theme: Some("Nord".to_owned()),
+        ..AppSettings::default()
+    });
+    core.open_palette(window, PaletteMode::Themes);
+    core.preview_palette_theme(Some("Dracula"));
+    assert!(core.change_settings(SettingsChange::Appearance(AppearanceChange::SidebarFontSize(15.0))));
+    assert_eq!(
+        core.settings().theme.as_deref(),
+        Some("Dracula"),
+        "the preview stays on screen"
+    );
+    assert_eq!(saved(&dir).theme.as_deref(), Some("Nord"));
+    assert_eq!(saved(&dir).sidebar_font_size, Some(15.0));
+    core.close_palette();
+    assert_eq!(core.settings().theme.as_deref(), Some("Nord"));
+}
+
+#[test]
+fn a_settings_theme_pick_without_a_preview_is_an_ordinary_edit() {
+    let (mut core, _window, dir) = themed(AppSettings {
+        theme: Some("Nord".to_owned()),
+        ..AppSettings::default()
+    });
+    assert!(core.change_settings(theme_pick("Dracula", false)));
+    assert!(!core.change_settings(theme_pick("Dracula", false)), "unchanged");
+    assert_eq!(saved(&dir).theme.as_deref(), Some("Dracula"));
+}
+
 // MARK: - the Ctrl-Tab switcher
 
 #[test]

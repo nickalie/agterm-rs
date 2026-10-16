@@ -3,7 +3,10 @@
 //! the title's two lines at the terminal's leading edge ([`agterm_core::titlebar::compose`]), and the trailing cluster
 //! of recent-sessions and attention buttons, scratch and split toggles, the dashboard, the quick terminal and the
 //! custom-commands button, each gated by its Settings ▸ Interface toggle, with a divider only between two groups of two
-//! or more. A terminal zoom or an open dashboard strips the bar to its title and an exit button.
+//! or more. A terminal zoom or an open dashboard strips the bar to its title and an exit button. The app menu's button
+//! ([`crate::app_menu`], the GTK header bar's primary menu) sits at the trailing end in every mode and under every
+//! cover: Linux has no global menu bar, and Settings…, Quit and the Help items have no keymap action or palette row, so
+//! the button is their only path.
 //!
 //! The bar is painted in the terminal's colors ([`crate::chrome`]): the theme's background, its foreground for the
 //! text and the glyphs (dimmed to 0.6 for the subtitle and the remote host), a hairline under it in the foreground at
@@ -14,8 +17,8 @@
 //! decorations, Wayland and X11): the bar then carries the window controls the window manager supports, on the sides
 //! the desktop's button layout puts them. Under server-side decorations the window manager draws its own title bar
 //! above this one, as with a GTK header bar. The hidden toolbar mode, upstream a bare drag strip under the macOS menu
-//! bar, keeps a minimal bar with the window controls and the drag surface while the client decorates (the window has
-//! no other way to be moved or closed with the mouse), and no bar at all under the window manager's decorations.
+//! bar, keeps a minimal bar here, as the GTK build does: the drag surface and the app menu's button, with the window
+//! controls while the client decorates, and no title, toggle or trailing cluster.
 //!
 //! Every button posts a [`TitlebarAction`] the core runs ([`agterm_core::Core::titlebar_action`]); the
 //! recent-sessions, attention and custom-commands buttons emit [`TitlebarEvent::Popover`] for the window's popovers
@@ -23,6 +26,8 @@
 //! the GTK build's are, with their halves filled for the panes on screen.
 
 use std::borrow::Cow;
+use std::cell::Cell;
+use std::rc::Rc;
 
 use agterm_core::Core;
 use agterm_core::app_actions::ActionEffect;
@@ -32,14 +37,17 @@ use agterm_core::model::AgentStatus;
 use agterm_core::persist::settings::ToolbarMode;
 use agterm_core::titlebar::{AttentionBell, SplitGlyph, Titlebar as Model, TitlebarAction, TitlebarComposition};
 use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button as KitButton, ButtonVariants as _};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu};
 use gpui_kit::{
-    AnyElement, AppContext as _, AssetSource, Context, Decorations, Div, ElementId, EventEmitter, FontWeight, Hsla,
-    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowButton, WindowButtonLayout,
-    WindowControls, div, prelude::FluentBuilder as _, px, svg,
+    AnyElement, AppContext as _, AssetSource, Context, Decorations, Div, ElementId, EntityId, EventEmitter, FontWeight,
+    Hsla, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _,
+    Pixels, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowButton,
+    WindowButtonLayout, WindowControls, div, prelude::FluentBuilder as _, px, svg,
 };
 use uuid::Uuid;
 
+use crate::app_menu::AppMenu;
 use crate::chrome::{self, DIM_ALPHA, DIVIDER_ALPHA};
 use crate::state::{AppState, Poster, post};
 
@@ -67,7 +75,7 @@ const CONTROL: Pixels = px(30.);
 
 /// The glyphs the bar draws from gpui-kit's Lucide catalog, served to the app with gpui-kit's own component icons
 /// ([`Icons`]).
-pub const GLYPHS: [IconName; 13] = [
+pub const GLYPHS: [IconName; 14] = [
     IconName::PanelLeft,
     IconName::RotateCcwClock,
     IconName::Bell,
@@ -81,6 +89,7 @@ pub const GLYPHS: [IconName; 13] = [
     IconName::WindowMaximize,
     IconName::WindowRestore,
     IconName::WindowClose,
+    IconName::Menu,
 ];
 
 gpui_kit::assets::icon_assets!(
@@ -99,6 +108,7 @@ gpui_kit::assets::icon_assets!(
         WindowMaximize,
         WindowRestore,
         WindowClose,
+        Menu,
     ]
 );
 
@@ -158,11 +168,10 @@ pub enum TitlebarEvent {
 
 /// Where a popover opened by a click on the bar hangs from: the pointer's x at the bar's bottom edge.
 fn popover_anchor(bar: &Titlebar, window: &Window) -> gpui_kit::Point<Pixels> {
-    let client = matches!(window.window_decorations(), Decorations::Client { .. });
     let bottom = bar
         .shown
         .as_ref()
-        .map_or(NORMAL_HEIGHT, |shown| height(shown.model.mode, client));
+        .map_or(NORMAL_HEIGHT, |shown| height(shown.model.mode));
     gpui_kit::point(window.mouse_position().x, bottom)
 }
 
@@ -270,16 +279,17 @@ pub struct Bar {
     /// The blocked bell's color.
     pub blocked: Rgb,
     pub colors: ChromeColors,
+    /// The window's app menu, which the menu button opens.
+    pub menu: AppMenu,
 }
 
-/// The bar's row height for `mode`; zero for a hidden bar under the window manager's decorations.
+/// The bar's row height for `mode`: the hidden mode's minimal bar, which carries the app menu's button whoever
+/// decorates the window, takes the compact one.
 #[must_use]
-pub fn height(mode: ToolbarMode, client_decorated: bool) -> Pixels {
+pub fn height(mode: ToolbarMode) -> Pixels {
     match mode {
         ToolbarMode::Normal => NORMAL_HEIGHT,
-        ToolbarMode::Compact => COMPACT_HEIGHT,
-        ToolbarMode::Hidden if client_decorated => COMPACT_HEIGHT,
-        ToolbarMode::Hidden => px(0.),
+        ToolbarMode::Compact | ToolbarMode::Hidden => COMPACT_HEIGHT,
     }
 }
 
@@ -459,6 +469,41 @@ pub struct Titlebar {
     shown: Option<Bar>,
     /// A press on the bar that may become a window move.
     pressed: bool,
+    /// The app menu while it is open: it holds the keyboard, which the deck moves none under.
+    menu: Rc<MenuTrack>,
+}
+
+/// Whether the app menu is open, and the popup showing it. The popup's own open-change callback runs only for a toggle,
+/// so a popup dropped undismissed (its button no longer drawn) closes the menu through its release.
+#[derive(Default)]
+struct MenuTrack {
+    open: Cell<bool>,
+    popup: Cell<Option<EntityId>>,
+}
+
+impl MenuTrack {
+    /// The menu opened or closed (`open`); a change posts a sync through `poster`, which holds the keyboard for the
+    /// menu or gives it back. Either way a popup shown before is not this opening's, so its later release changes
+    /// nothing.
+    fn set_open(&self, open: bool, poster: &Poster) {
+        if self.open.replace(open) != open {
+            self.popup.set(None);
+            post(poster, |_| {});
+        }
+    }
+
+    /// Popup `popup` now shows the menu.
+    fn built(&self, popup: EntityId) {
+        self.popup.set(Some(popup));
+    }
+
+    /// Popup `popup` was released: the menu it showed is closed, unless another popup shows it by now.
+    fn released(&self, popup: EntityId, poster: &Poster) {
+        if self.popup.get() == Some(popup) {
+            self.popup.set(None);
+            self.set_open(false, poster);
+        }
+    }
 }
 
 impl EventEmitter<TitlebarEvent> for Titlebar {}
@@ -472,7 +517,14 @@ impl Titlebar {
             poster,
             shown: None,
             pressed: false,
+            menu: Rc::default(),
         }
+    }
+
+    /// Whether the app menu is open.
+    #[must_use]
+    pub fn menu_open(&self) -> bool {
+        self.menu.open.get()
     }
 
     /// What the bar shows, as last synced.
@@ -481,8 +533,8 @@ impl Titlebar {
         self.shown.as_ref()
     }
 
-    /// Renders the window's bar: under `cover` stripped to the title and its exit; `dialog_up` while a dialog holds
-    /// the window, which stands the exits down. An unchanged bar is not redrawn.
+    /// Renders the window's bar: under `cover` stripped to the title, its exit and the app menu; `dialog_up` while a
+    /// dialog holds the window, which stands the exits down. An unchanged bar is not redrawn.
     pub fn sync(&mut self, core: &Core, cover: Cover, dialog_up: bool, colors: ChromeColors, cx: &mut Context<Self>) {
         let model = core.titlebar(self.window);
         let sidebar = core
@@ -508,6 +560,7 @@ impl Titlebar {
             sidebar,
             blocked,
             colors,
+            menu: AppMenu::of(core, self.window),
         };
         if self.shown.as_ref() != Some(&bar) {
             self.shown = Some(bar);
@@ -882,6 +935,47 @@ impl Titlebar {
         )
     }
 
+    /// The app menu's button (the GTK header bar's primary menu): the menu opens under it, built from the bar's model
+    /// as it opens; its closing, or its popup dropped undismissed, posts a sync, which gives the keyboard back to the
+    /// shown terminal.
+    fn menu_button(&self, bar: &Bar, glyph: Pixels, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = bar.colors;
+        let ink = chrome::color(colors.foreground, 1.0);
+        let perform = crate::app_menu::perform(&self.poster, self.window);
+        let titlebar = cx.entity().downgrade();
+        let menu_ink = crate::app_menu::Ink {
+            chord: chrome::color(colors.foreground, DIM_ALPHA),
+        };
+        let (track, poster) = (Rc::clone(&self.menu), self.poster.clone());
+        let (built, released) = (Rc::clone(&track), poster.clone());
+        KitButton::new("app-menu-button")
+            .debug_selector(|| "app-menu-button".to_owned())
+            .ghost()
+            .tab_stop(false)
+            .p_0()
+            .size(BUTTON)
+            .tooltip("Main Menu")
+            .child(icon(IconName::Menu, ink, glyph))
+            .dropdown_menu_with_anchor(
+                gpui_kit::Anchor::TopRight,
+                move |popup: PopupMenu, window: &mut Window, cx: &mut Context<PopupMenu>| {
+                    let id = cx.entity_id();
+                    built.built(id);
+                    let (track, poster) = (Rc::clone(&built), released.clone());
+                    cx.on_release(move |_, _| track.released(id, &poster)).detach();
+                    let menu = titlebar
+                        .upgrade()
+                        .and_then(|bar| bar.read(cx).shown.as_ref().map(|shown| shown.menu.clone()));
+                    let Some(menu) = menu else {
+                        return popup;
+                    };
+                    crate::app_menu::build(popup, &menu, &perform, menu_ink, window, cx)
+                },
+            )
+            // a sync either way: the deck holds the keyboard while it is open and gives it back once it closes
+            .on_open_change(move |opened, _, _| track.set_open(*opened, &poster))
+    }
+
     /// The window controls of one side.
     fn window_controls(&self, buttons: Vec<WindowButton>, colors: ChromeColors, window: &Window) -> Div {
         let ink = chrome::color(colors.foreground, 1.0);
@@ -927,12 +1021,8 @@ impl Render for Titlebar {
             return div().id("titlebar");
         };
         let decorations = window.window_decorations();
-        let client = matches!(decorations, Decorations::Client { .. });
         let mode = bar.model.mode;
-        let height = height(mode, client);
-        if height == px(0.) {
-            return div().id("titlebar");
-        }
+        let height = height(mode);
         let glyph = if mode == ToolbarMode::Normal {
             GLYPH_NORMAL
         } else {
@@ -984,6 +1074,7 @@ impl Render for Titlebar {
                     .children(self.exit(&bar, glyph, cx))
             })
             .when(hidden, |row| row.child(div().flex_1()))
+            .child(div().pr(px(8.)).child(self.menu_button(&bar, glyph, cx)))
             .child(trailing)
     }
 }

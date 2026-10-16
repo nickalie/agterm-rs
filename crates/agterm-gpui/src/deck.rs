@@ -20,6 +20,11 @@
 //! ([`crate::hud`]) and, above that, its terminal ask. An overlay the layout gives the keyboard takes it in place of
 //! the pane it covers, and gives it back once it goes.
 //!
+//! While the window's dashboard is open no page shows: the grid ([`crate::dashboard`]) covers the deck and hosts each
+//! member pane's own terminal view in its cell, which its page then does not draw, and the grid's focus holds the
+//! keyboard. Once it closes the member terminals go back to their pages at their own font size, and the shown page's
+//! terminal takes the keyboard again.
+//!
 //! The plan of what to add, remove and show is a pure function of the model ([`plan`]), so it is testable without a
 //! window.
 //!
@@ -417,6 +422,19 @@ pub struct Deck {
     look: Look,
     /// The deck's bounds in the window at the last layout, which a GUI ask is anchored in.
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The window's open dashboard, as last reconciled.
+    grid: Option<Grid>,
+    /// The keyboard's holder while the dashboard is open (upstream's key catcher), made once.
+    grid_focus: Option<FocusHandle>,
+    /// The dashboard's transient font sizes on its member terminals.
+    fonts: crate::dashboard::FontOverrides,
+}
+
+/// An open dashboard as the deck draws it: the cells and the terminal each hosts.
+struct Grid {
+    cells: Vec<crate::dashboard::ChromeCell>,
+    /// The (session, token) of each cell's terminal, in cell order.
+    terminals: Vec<Option<(Uuid, String)>>,
 }
 
 /// The deck's focus moves as its posted focus reports see them. A user focus report posted before a later move is
@@ -462,7 +480,37 @@ impl Deck {
             owner: None,
             look,
             bounds: Rc::default(),
+            grid: None,
+            grid_focus: None,
+            fonts: crate::dashboard::FontOverrides::default(),
         }
+    }
+
+    /// Whether the window's dashboard is open.
+    #[must_use]
+    pub fn grid_open(&self) -> bool {
+        self.grid.is_some()
+    }
+
+    /// The (session, token) of each open dashboard cell's terminal, in cell order.
+    #[must_use]
+    pub fn grid_terminals(&self) -> Vec<Option<(Uuid, String)>> {
+        self.grid
+            .as_ref()
+            .map(|grid| grid.terminals.clone())
+            .unwrap_or_default()
+    }
+
+    /// The dashboard's keyboard holder, once it has been open.
+    #[must_use]
+    pub fn grid_focus(&self) -> Option<&FocusHandle> {
+        self.grid_focus.as_ref()
+    }
+
+    /// The dashboard's font overrides.
+    #[must_use]
+    pub fn font_overrides(&self) -> &crate::dashboard::FontOverrides {
+        &self.fonts
     }
 
     /// Whether a popup of the window's holds the keyboard (the sidebar's row menu, which a right-click opens while
@@ -523,6 +571,9 @@ impl Deck {
     /// keyboard, the overlay its layout focuses, else the shown terminal.
     #[must_use]
     pub fn focus_target(&self, cx: &App) -> Option<FocusHandle> {
+        if self.grid.is_some() {
+            return self.grid_focus.clone();
+        }
         let page = self.shown.and_then(|id| self.pages.get(&id))?;
         page.keyboard(cx).map(|(_, handle)| handle)
     }
@@ -579,7 +630,9 @@ impl Deck {
         let zoom = core
             .zoom_target(self.window)
             .filter(|zoom| self.pages.contains_key(&zoom.session));
-        let shown = zoom.map(|zoom| zoom.session).or(plan.shown);
+        let grid = crate::dashboard::GridModel::of(core, self.window);
+        // under the grid no page shows: it hosts its members' terminals itself
+        let shown = zoom.map(|zoom| zoom.session).or(plan.shown).filter(|_| grid.is_none());
         let modal = modal || crate::quick::holds_keyboard(cx);
         let sync = PageSync {
             window: self.window,
@@ -593,11 +646,110 @@ impl Deck {
         for id in ids {
             self.sync_page(core, &sync, id, window, cx);
         }
+        if let Some(grid) = grid {
+            self.show_grid(core, &grid, modal, window, cx);
+            cx.notify();
+            return false;
+        }
+        if self.grid.is_some() {
+            self.leave_grid();
+        }
         // a zoom keeps the keyboard on its terminal (upstream's `focusSplitPane` steps aside while zoomed)
         let refocus = zoom.is_none() && shown.is_some_and(|id| core.pane_focus_requested(id));
         let given = self.show(shown, refocus, modal, window, cx);
         cx.notify();
         given.is_some_and(|(session, token)| core.pane_focused(session, &token))
+    }
+
+    /// Shows the dashboard (the GTK build's `show_grid`): its member terminals drawn in their cells at the grid's font
+    /// size, the rest hidden with their pages, and the grid's focus holding the keyboard unless a modal or a popup
+    /// does.
+    fn show_grid(
+        &mut self,
+        core: &Core,
+        grid: &crate::dashboard::GridModel,
+        modal: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let store = core.library().store(self.window);
+        let terminals: Vec<Option<(Uuid, String)>> = grid
+            .members
+            .iter()
+            .zip(grid.tokens(store))
+            .map(|(member, token)| token.map(|token| (member.session, token)))
+            .collect();
+        let mut members = Vec::new();
+        for (session, token) in terminals.iter().flatten() {
+            if let Some(pane) = self.terminal(*session, token) {
+                pane.view.update(cx, |view, cx| view.set_shown(true, cx));
+                members.push((token.clone(), Rc::clone(&pane.shared)));
+            }
+        }
+        self.fonts.sync(&members, grid.font_size);
+        self.grid = Some(Grid {
+            cells: grid.cells(store, core.settings()),
+            terminals,
+        });
+        self.shown = None;
+        self.set_focused(None);
+        let focus = self.grid_focus.get_or_insert_with(|| cx.focus_handle()).clone();
+        // upstream's key catcher takes the keyboard back on every render, unless a dialog or a popup holds it
+        if !modal && !self.held && !focus.is_focused(window) {
+            window.focus(&focus, cx);
+        }
+    }
+
+    /// The dashboard closed: the member terminals get their own font back and go back to their pages, and the next
+    /// show gives the keyboard to the shown page's focused pane again.
+    fn leave_grid(&mut self) {
+        self.grid = None;
+        self.fonts.sync(&[], None);
+        self.set_focused(None);
+    }
+
+    /// The tokens the grid hosts on `session`'s page, which the page does not draw meanwhile.
+    fn hosted(&self, session: Uuid) -> Vec<&str> {
+        self.grid
+            .iter()
+            .flat_map(|grid| grid.terminals.iter().flatten())
+            .filter(|(owner, _)| *owner == session)
+            .map(|(_, token)| token.as_str())
+            .collect()
+    }
+
+    /// The open dashboard over the deck.
+    fn render_grid(&self, grid: &Grid, cx: &App) -> AnyElement {
+        let cells = grid
+            .cells
+            .iter()
+            .zip(&grid.terminals)
+            .enumerate()
+            .map(|(index, (chrome, terminal))| {
+                let pane = terminal
+                    .as_ref()
+                    .and_then(|(session, token)| Some((self.pages.get(session)?, token)))
+                    .and_then(|(page, token)| Some((page, page.terminal(token)?)));
+                let lead = pane.and_then(|(page, pane)| {
+                    let cover = page.cover(pane.token())?;
+                    let slot = page.plan.as_ref()?.slot_of(pane.token()).unwrap_or(Slot::Primary);
+                    let handle = pane.focus_handle(cx);
+                    pane_lead::element(cover, slot, self.look.background, self.look.foreground, &handle)
+                });
+                crate::dashboard::CellParts {
+                    index,
+                    chrome: chrome.clone(),
+                    terminal: pane.map(|(_, pane)| pane.view.clone().into_any_element()),
+                    lead,
+                }
+            })
+            .collect();
+        let look = crate::dashboard::Look {
+            background: self.look.background,
+            foreground: self.look.foreground,
+        };
+        let animate = crate::status_glyph::animations_enabled(cx);
+        crate::dashboard::grid(self.window, cells, look, &self.env.poster, animate)
     }
 
     fn add_page(&mut self, core: &mut Core, spec: &PaneSpec, window: &mut Window, cx: &mut Context<Self>) {
@@ -864,6 +1016,10 @@ impl Deck {
             return;
         }
         let points = pane.shared.font_points();
+        if matches!(event, TerminalEvent::FontSize) && !pane.shared.take_font_report(points) {
+            // the dashboard's transient size, or the revert from it: not the pane's own size
+            return;
+        }
         if let TerminalEvent::Pane(agterm_term::PaneEvent::Exited(status)) = event
             && status.held
         {
@@ -954,9 +1110,14 @@ impl Deck {
             return div().into_any_element();
         };
         let session = page.session;
+        let hosted = self.hosted(session);
         let mut element = PageElement::new(plan.panes, plan.axis, plan.ratio, Rc::clone(&page.state));
-        // the terminals, hidden ones under the page at full size
-        for pane in page.panes.iter().filter(|pane| pane.spec.pane != StatusPane::Scratch) {
+        // the terminals, hidden ones under the page at full size; the grid draws the ones it hosts
+        for pane in page
+            .panes
+            .iter()
+            .filter(|pane| pane.spec.pane != StatusPane::Scratch && !hosted.contains(&pane.token()))
+        {
             let shown = pane.view.read(cx).is_shown();
             element = element.child(terminal_wrapper(pane, shown), terminal_place(plan, pane.token()));
         }
@@ -1069,6 +1230,7 @@ impl Render for Deck {
         )
         .absolute()
         .size_full();
+        let grid = self.grid.as_ref().map(|grid| self.grid_layer(grid, cx));
         div()
             .id("deck")
             .relative()
@@ -1077,7 +1239,7 @@ impl Render for Deck {
             .min_h(px(0.))
             .bg(background)
             .child(anchor)
-            .when(self.shown.is_none(), |deck| {
+            .when(self.shown.is_none() && self.grid.is_none(), |deck| {
                 deck.child(
                     div()
                         .absolute()
@@ -1090,6 +1252,26 @@ impl Render for Deck {
                 )
             })
             .children(pages)
+            .children(grid)
+    }
+}
+
+impl Deck {
+    /// The grid's layer: the grid, and its focus holding the keyboard, which reads the grid's keys and swallows every
+    /// other one so nothing reaches a terminal behind.
+    fn grid_layer(&self, grid: &Grid, cx: &App) -> impl IntoElement {
+        let (focus, poster, window) = (self.grid_focus.clone(), self.env.poster.clone(), self.window);
+        div()
+            .absolute()
+            .inset_0()
+            .when_some(focus, |layer, focus| layer.track_focus(&focus))
+            .on_key_down(move |event: &gpui_kit::KeyDownEvent, _, cx| {
+                if let Some(key) = crate::dashboard::grid_key(&event.keystroke) {
+                    post(&poster, move |state: &mut AppState| state.dashboard_key(window, key));
+                }
+                cx.stop_propagation();
+            })
+            .child(self.render_grid(grid, cx))
     }
 }
 

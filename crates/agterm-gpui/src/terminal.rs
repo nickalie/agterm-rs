@@ -310,6 +310,31 @@ pub struct Shared {
     live: Cell<bool>,
     /// While set, a key press runs this instead of reaching the program (a lead cover, a held exit).
     key_hold: RefCell<Option<KeyHold>>,
+    /// The dashboard's transient font size while the terminal sits in a grid cell: its size reports are not the
+    /// pane's meanwhile.
+    font_override: Cell<Option<f32>>,
+    /// The size the terminal goes back to once the override clears: the live size it had when the override began, or
+    /// the configured one a reload gave an unstepped terminal meanwhile (what the live size would be without the
+    /// override; upstream resolves it from the session and config when clearing).
+    font_underneath: Cell<f32>,
+    /// The size a cleared override reverts to, whose report is dropped (upstream's `pendingFontRestore`).
+    pending_font_restore: Cell<Option<f32>>,
+}
+
+/// How far apart two font sizes may be and still count as the same report (upstream's half-point tolerance).
+const FONT_REPORT_TOLERANCE: f32 = 0.5;
+
+/// What a font size report does under the dashboard's font override (upstream's `reportFontSize`, the GTK build's
+/// `font_report`): whether the live `size` is reported as the pane's own, and the pending restore left. Nothing is
+/// reported while an override is on (its size is transient); the first report after the override cleared is the
+/// revert to `pending`, dropped when it matches, so restoring the grid's font never pins a session to it.
+#[must_use]
+pub fn font_report(override_size: Option<f32>, pending: Option<f32>, size: f32) -> (bool, Option<f32>) {
+    if override_size.is_some() {
+        return (false, pending);
+    }
+    let revert = pending.is_some_and(|pending| (size - pending).abs() <= FONT_REPORT_TOLERANCE);
+    (!revert, None)
 }
 
 impl std::fmt::Debug for Shared {
@@ -374,11 +399,19 @@ impl Shared {
     }
 
     /// A config reload of font size `configured`: it is what `reset_font_size` returns to from now on, and the live size
-    /// unless a font size action changed it (Ghostty's `changeConfig`). Whether the live size changed.
+    /// unless a font size action changed it (Ghostty's `changeConfig`). Whether the live size changed. Under the
+    /// dashboard's override the live size stays the grid's, and the configured one is what the override gives back.
     fn follow_config_points(&self, configured: f32) -> bool {
         let configured = configured.clamp(1.0, 255.0);
         self.original_points.set(configured);
-        if self.font_adjusted.get() || (configured - self.points.get()).abs() < f32::EPSILON {
+        if self.font_adjusted.get() {
+            return false;
+        }
+        if self.font_override.get().is_some() {
+            self.font_underneath.set(configured);
+            return false;
+        }
+        if (configured - self.points.get()).abs() < f32::EPSILON {
             return false;
         }
         self.points.set(configured);
@@ -586,6 +619,40 @@ impl Shared {
         self.poke();
     }
 
+    /// The dashboard sets this terminal's font to its transient `points` (again after something else moved it): its
+    /// size reports stop being the pane's, and the live size it had is what clearing the override gives back.
+    pub fn set_font_override(&self, points: f32) {
+        if self.font_override.replace(Some(points)).is_none() {
+            self.pending_font_restore.set(None);
+            self.font_underneath.set(self.points.get());
+        }
+        self.set_font_points(points);
+    }
+
+    /// The dashboard gives the terminal back its own size (the one it had, or the one a reload configured meanwhile):
+    /// the report of that revert is dropped. A revert arms the drop whenever it emits a report, however small the
+    /// step; one to the override's own size emits none and arms nothing, so a later zoom is not swallowed.
+    pub fn clear_font_override(&self) {
+        if self.font_override.take().is_some() {
+            let reverted = self.set_font_points(self.font_underneath.get());
+            self.pending_font_restore.set(reverted.then(|| self.points.get()));
+        }
+    }
+
+    /// Whether a font size report of `points` is the pane's own ([`font_report`]); consumes a matching revert.
+    #[must_use]
+    pub fn take_font_report(&self, points: f32) -> bool {
+        let (report, pending) = font_report(self.font_override.get(), self.pending_font_restore.get(), points);
+        self.pending_font_restore.set(pending);
+        report
+    }
+
+    /// The dashboard's transient size, while one is set.
+    #[must_use]
+    pub fn font_override(&self) -> Option<f32> {
+        self.font_override.get()
+    }
+
     /// Changes the live font size (clamped to Ghostty's 1–255 points): the metrics follow now, the views on the next
     /// frame. Whether it changed.
     pub fn set_font_points(&self, points: f32) -> bool {
@@ -775,6 +842,9 @@ impl Terminal {
             ask: RefCell::new(ask),
             live: Cell::new(live),
             key_hold: RefCell::new(None),
+            font_override: Cell::new(None),
+            font_underneath: Cell::new(points),
+            pending_font_restore: Cell::new(None),
         });
         let pump = cx.spawn(async move |this, cx| {
             while woken.recv().await.is_ok() {

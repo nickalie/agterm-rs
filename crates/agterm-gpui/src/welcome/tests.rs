@@ -80,3 +80,100 @@ fn the_welcome_is_marked_shown_before_it_opens() {
     assert_eq!(state.core.settings().welcome_shown, Some(true));
     assert!(state.take_frontend_work().welcome);
 }
+
+// MARK: - the quit confirmation
+
+fn seeded_core(sessions: usize) -> agterm_core::Core {
+    let mut library = agterm_core::model::WindowLibrary::seeded("/home/u");
+    let window = library.active_window_id().unwrap();
+    let store = library.store_mut(window).unwrap();
+    let workspace = store.current_workspace_id().unwrap();
+    for _ in 1..sessions {
+        store
+            .add_session(workspace, agterm_core::model::NewSession::at_cwd("/home/u"))
+            .unwrap();
+    }
+    agterm_core::Core::new(
+        agterm_core::CoreConfig {
+            app: agterm_proto::AppIdentity::from_recorded("1.2.3", None),
+            capabilities: Vec::new(),
+        },
+        agterm_core::CoreState {
+            library,
+            ..agterm_core::CoreState::default()
+        },
+    )
+}
+
+#[test]
+fn a_users_quit_names_what_it_closes_unless_a_ui_test_launched() {
+    let core = seeded_core(2);
+    assert_eq!(
+        quit_prompt(&core, false).as_deref(),
+        Some("This closes 1 window and 2 sessions, ending all running shells.")
+    );
+    assert_eq!(quit_prompt(&core, true), None, "a UI-test launch quits at once");
+    let spec = quit_alert("This closes 1 window and 1 session.");
+    assert_eq!(spec.heading, "Quit Agterm?");
+    assert_eq!(spec.buttons[QUIT].label.as_ref(), "Quit");
+    assert_eq!(spec.default_button(), Some(QUIT), "Return quits");
+    assert_eq!(spec.buttons[spec.cancel_button().unwrap()].label.as_ref(), "Cancel");
+}
+
+#[test]
+fn the_menus_quit_asks_first_and_quits_only_once_confirmed() {
+    let mut state = AppState::new(seeded_core(1));
+    state.quit_from_menu();
+    let work = state.take_frontend_work();
+    if agterm_core::is_ui_test_launch(&ProcessEnv) {
+        assert!(work.quit, "a UI-test launch quits at once");
+        return;
+    }
+    assert!(!work.quit, "nothing quits before the answer");
+    assert_eq!(
+        work.quit_prompt.as_deref(),
+        Some("This closes 1 window and 1 session, ending all running shells.")
+    );
+}
+
+/// A loop that keeps what is posted.
+#[derive(Default)]
+struct Posted(std::sync::Mutex<Vec<agterm_host::MainTask<AppState>>>);
+
+impl agterm_host::MainLoop<AppState> for Posted {
+    fn post(&self, task: agterm_host::MainTask<AppState>) -> Result<(), agterm_host::MainLoopClosed> {
+        self.0.lock().unwrap().push(task);
+        Ok(())
+    }
+
+    fn post_after(
+        &self,
+        _: std::time::Duration,
+        task: agterm_host::MainTask<AppState>,
+    ) -> Result<(), agterm_host::MainLoopClosed> {
+        self.post(task)
+    }
+}
+
+#[gpui_kit::test]
+fn cancel_keeps_the_app_and_quit_posts_the_quit(cx: &mut TestAppContext) {
+    let posted = std::sync::Arc::new(Posted::default());
+    let main_loop: std::sync::Arc<dyn agterm_host::MainLoop<AppState>> = std::sync::Arc::clone(&posted) as _;
+    let answers = std::sync::Arc::downgrade(&main_loop);
+    let cx = host(cx);
+    let asking = answers.clone();
+    cx.update(move |window, cx| present_quit("This closes 1 window and 1 session.", asking, window, cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    assert!(posted.0.lock().unwrap().is_empty(), "Cancel quits nothing");
+    cx.update(move |window, cx| present_quit("This closes 1 window and 1 session.", answers, window, cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    let tasks = std::mem::take(&mut *posted.0.lock().unwrap());
+    assert_eq!(tasks.len(), 1, "Quit posts the quit");
+    let mut state = AppState::new(seeded_core(1));
+    for task in tasks {
+        task(&mut state);
+    }
+    assert!(state.take_frontend_work().quit);
+}
