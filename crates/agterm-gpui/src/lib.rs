@@ -27,6 +27,7 @@ pub mod pane;
 pub mod pane_lead;
 pub mod picker;
 pub mod popovers;
+pub mod quick;
 pub mod row_icon;
 pub mod search;
 pub mod session_host;

@@ -436,7 +436,7 @@ struct PageSync {
     /// The session whose page shows.
     shown: Option<Uuid>,
     /// Something else holds the keyboard: the window's picker, GUI ask, palette, an alert or a popover, or the quick
-    /// terminal.
+    /// terminal's panel.
     focus_blocked: bool,
     ask_look: ask_dialog::Look,
 }
@@ -580,7 +580,7 @@ impl Deck {
             .zoom_target(self.window)
             .filter(|zoom| self.pages.contains_key(&zoom.session));
         let shown = zoom.map(|zoom| zoom.session).or(plan.shown);
-        let modal = modal || core.quick_visible();
+        let modal = modal || crate::quick::holds_keyboard(cx);
         let sync = PageSync {
             window: self.window,
             zoom,

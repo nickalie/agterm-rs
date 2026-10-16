@@ -355,6 +355,13 @@ impl AppState {
         }
     }
 
+    /// A key the user pressed in the quick terminal: user activity in the active window (upstream's quick-terminal
+    /// `onUserInput`), so an idle auto-follow cannot reshuffle the selection behind the panel while the user types.
+    pub fn quick_keystroke(&mut self) {
+        self.core.note_quick_input();
+        self.arm_auto_follow();
+    }
+
     /// A key the user pressed in one of `session`'s overlay terminals (the GTK build's overlay `connect_keystroke`):
     /// user activity for auto-follow.
     pub fn overlay_keystroke(&mut self, session: Uuid) {

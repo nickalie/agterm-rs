@@ -1813,10 +1813,14 @@ impl PlatformWindow for WaylandWindow {
             .display
             .clone()
             .or_else(|| state.client.sole_output())?;
+        let bounds = match display.logical {
+            Some(logical) => logical.to_pixels(1.0),
+            None => display.bounds.to_pixels(state.scale),
+        };
         Some(Rc::new(WaylandDisplay {
             id,
             name: display.name.clone(),
-            bounds: display.bounds.to_pixels(state.scale),
+            bounds,
             refresh_interval: display.refresh_interval,
         }))
     }

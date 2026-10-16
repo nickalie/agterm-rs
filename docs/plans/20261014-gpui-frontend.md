@@ -1883,28 +1883,86 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 **Files:**
 - Create: `crates/agterm-gpui/src/quick/` (placement from `agterm-app`)
 
-- [ ] quick terminal on `WindowKind::LayerShell` per Task 3; fallback window where the protocol is missing
-- [ ] ➕ (Task 3) host chosen by `cx.compositor_name()` ("Wayland" → layer surface, falling back on
+- [x] quick terminal on `WindowKind::LayerShell` per Task 3; fallback window where the protocol is missing
+- [x] ➕ (Task 3) host chosen by `cx.compositor_name()` ("Wayland" → layer surface, falling back on
       `LayerShellNotSupportedError`; X11 → the window host directly, since GPUI opens `LayerShell` on X11 as a plain
       window): it must work in every environment (user, 2026-10-14) — layer-shell compositors, GNOME/weston (no
       layer-shell) and X11. Fallback window: undecorated (`WindowDecorations::Client`, no titlebar, transparent
       background), zoom = maximize
-- [ ] ➕ (Task 3) the GTK build's surface attributes: overlay layer, namespace, keyboard on demand, exclusive zone 0,
+- [x] ➕ (Task 3) the GTK build's surface attributes: overlay layer, namespace, keyboard on demand, exclusive zone 0,
       top anchor + centering margin; **name no output on show** (niri gives no keyboard to an on-demand surface on an
       unfocused output), then refit by reopening named on the output it landed on (`observe_window_display`)
-- [ ] ➕ (Task 3) hide = `remove_window`, show = a new layer surface (GPUI cannot hide a window on Linux); zoom and the
+- [x] ➕ (Task 3) hide = `remove_window`, show = a new layer surface (GPUI cannot hide a window on Linux); zoom and the
       refit reopen the surface (no runtime anchor/margin/layer setters — GPUI patch 5 optional); focus loss via
       `observe_window_activation` dismisses a summoned panel; `zwlr_layer_surface_v1.closed` (output gone) maps to the
       GTK build's dismissal
-- [ ] ➕ (Task 3) fractional-scale outputs: GPUI's display bounds use the integer `wl_output.scale` (eDP at 1.75 reports
+- [x] ➕ (Task 3) fractional-scale outputs: GPUI's display bounds use the integer `wl_output.scale` (eDP at 1.75 reports
       1440x900 instead of 1645x1028, the panel 64 px off): land GPUI patch 4 (`zxdg_output_v1` logical geometry) or
       compute placement from the output's logical size another way; test the placement math against both sizes
-- [ ] toggle via keymap and control commands; focus and hide behavior as upstream
-- [ ] tests (headless, fallback path); quick-terminal conformance tests green
-- [ ] ➕ (Task 3) fallback tests on both backends: weston (`--fake-seat`, no layer-shell) and **X11 under a private
+- [x] toggle via keymap and control commands; focus and hide behavior as upstream
+- [x] tests (headless, fallback path); quick-terminal conformance tests green
+- [x] ➕ (Task 3) fallback tests on both backends: weston (`--fake-seat`, no layer-shell) and **X11 under a private
       Xvfb** (open, size, resize, hide/show, placement; focus and maximize are the window manager's on X11 and are not
       asserted without one); a nested niri run for the layer-shell path where niri is installed
-- [ ] gates + conformance — must pass before Task 25
+- [x] gates + conformance — must pass before Task 25
+- result (2026-10-16):
+  - ➕ Files: `src/quick.rs` (the panel, its sync and terminal), `src/quick/{host,view,tests}.rs`, `tests/quick_terminal.rs`,
+    `build/patches/gpui-pre-linux/0002-xdg-output-logical-geometry.patch` (vendored into `vendor/gpui-pre-linux`);
+    Modify: `src/{windows,deck,state,window,app,lib}.rs`, `agterm-core/src/commands/quick.rs` (+ tests),
+    `agterm-app/src/quick_placement.rs` (tests), `scripts/vendor-gpui.sh` (header), `docs/linux-ui-checklist.md`.
+  - **Panel** (`quick.rs`, owned by `Windows`, synced after the windows each turn): the terminal is created on the
+    first show (login shell in `Core::quick_terminal_cwd`, `pane_env::quick_terminal`, the app's config) and installed
+    in the core; it lives app-wide, so a hide removes only the window (`remove_window`) and the shell stays typable and
+    readable; a show opens a new window with a fresh owner view of the same terminal. Its exit (or a failed spawn)
+    posts `quick_shell_exited`; keystrokes are user activity (`AppState::quick_keystroke`); links route as
+    `ClickOrigin::Quick`. Config reloads and the quit's teardown include it.
+  - **Host** (`quick/host.rs`): `first_host(cx.compositor_name())`: "Wayland" → `WindowKind::LayerShell` (overlay
+    layer, namespace `agterm-quick-terminal`, keyboard on demand, exclusive zone 0, top anchor + centering margin,
+    `display_id: None` on show), a `LayerShellNotSupportedError` moving the run to the window host for good; X11 and
+    every other platform → the window host directly (undecorated `WindowDecorations::Client`, transparent background,
+    title "Quick Terminal", centered on the frontmost agterm window's display, `Maximized` for the zoom, maximized in
+    place via `zoom_window` when the zoom changes while shown). The Wayland/layer-shell code is behind
+    `cfg(target_os = "linux")`. `step` decides keep / open / reopen / zoom: the layer surface reopens for a zoom
+    (anchored to every edge at size 0) and once for the refit to the display it landed on (`observe_window_display`,
+    `refits_on_enter`), named on that output.
+  - **View** (`quick/view.rs`): rounded 12 px frame with upstream's white 0.18 edge on the terminal's background,
+    element id `quick-terminal`; `observe_window_activation` → holding the keyboard (a GPUI global the decks read in
+    place of `quick_visible`, upstream's `holdsKey`) and a focus loss → `quick_lost_focus`; the window manager's close
+    request and the window going without the panel closing it (`zwlr_layer_surface_v1.closed`) → the GTK build's
+    dismissal; a window the panel itself closes reports nothing (a reopen's new window takes the keyboard). A removed
+    window reports no blur or deactivation, so the panel's own removal settles both (review fix): a hide sends the
+    terminal's program its focus-out report and the next window's view continues the reports from there
+    (`TerminalView::{release,continue}_focus_reports`), and every removal runs the key monitor's delayed
+    keyboard-left check, so a key the keymap consumed in the panel (Ctrl+` hiding it) is forgotten.
+  - **Fractional scale**: GPUI patch 4 landed as `gpui-pre-linux` 0002: `zxdg_output_manager_v1` (v1–3) bound, each
+    output's xdg-output logical position/size complete it, `cx.displays()` and a window's display report them (the old
+    mode-over-scale bounds where the compositor sends none); unit-tested in the vendored crate, and the placement math
+    tested at 1645x1028 (margin 164) and 1440x900 (margin 100) in `agterm-app` and the GPUI host.
+  - **Re-show suppression** (core, both frontends): upstream's `reshowSuppression` — a user toggle within 0.3 s of a
+    focus-loss dismissal only ends that window (`RESHOW_SUPPRESSION`, `toggle_quick_terminal_at`,
+    `quick_lost_focus_at`), so a click on the toggle that blurred the panel does not show it again.
+  - Tests: host/step/options decisions (layer attributes, zoom fill, fractional placement, window host centering and
+    maximize, the layer-shell refusal), the launch; the panel in GPUI's test platform over a real pane (shown and
+    focused, hidden with the shell typable, shown again in a new window over the same shell, gone with its shell (EOT
+    to `cat`) and a fresh one next, focus loss dismissing a summoned panel but not a pinned one, the window manager's
+    close, a hide forgetting the keymap's consumed keys, a hide's focus-out and the next show's focus-in reports, a
+    window being closed losing the keyboard without a dismissal); core re-show suppression; `tests/quick_terminal.rs` on real displays in the sandbox: weston (`--fake-seat`:
+    the layer surface refused, window 1100x700, zoom 1280x800 and back, hide/show with the shell kept, quick.type and
+    quick.text round trips), a private Xvfb (window mapped 1100x700 at (90..92, 50) — GPUI's X11 `CreateWindow` adds 2
+    px — gone on hide, back on show) and a niri nested in weston (`#[ignore]`d, run with `--ignored`: an `Overlay`,
+    `OnDemand` layer surface 1100x700 holding the keyboard, the zoom's reopen 1280x800 taking it with no focus loss
+    logged, gone on hide; the panel there is pinned by the control show, so a dismissal could not show a focus loss
+    and the run never checked one: corrected in review to the log's count, the closing guard unit-tested). Gates: fmt, clippy (workspace, all targets and features), lint-report (10 expects, none added),
+    check-tracing-features, `vendor-gpui.sh --check`, `cargo test --workspace` under Xvfb 4139 passed, 0 failed, 8
+    ignored; the three display tests incl. nested niri pass. GPUI conformance ratchet-only with `--also` the
+    dashboard/quick, session-text, surface, restore and relaunch files and `--also-k quick`: 608 passed, 0 failed, 1
+    skipped (`test_live_session_survives_the_relaunch`, live-sessions); ratchet held (573) and grew by 35 to 608.
+    Claimed `posix-shell` and `quick-validates-input`. GTK conformance ratchet-only with `--also-k quick` for the core
+    change: 653 passed, 0 failed, 12 skipped (not run on this host); ratchet held (665), nothing new.
+  - Decisions: the re-show suppression lives in core (GTK gains it too); the decks gate on the panel holding the
+    keyboard rather than on its visibility (upstream's `holdsKey`: a pinned panel the user clicked away from leaves
+    the windows their terminals); a fresh owner view per panel window (a view keeps its window's atlas images).
+  - Later tasks build on: `QuickPanel` in `Windows`, `quick::holds_keyboard`, the xdg-output display bounds.
 
 ### Task 25: Settings window
 

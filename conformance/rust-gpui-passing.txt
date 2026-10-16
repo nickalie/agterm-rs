@@ -8,7 +8,11 @@ tests/behaviors/test_hooks.py::test_an_edit_takes_effect_only_on_reload
 tests/behaviors/test_hooks.py::test_hooks_file_is_read_at_launch
 tests/behaviors/test_keymap.py::test_an_edit_takes_effect_only_on_reload
 tests/behaviors/test_keymap.py::test_keymap_file_is_read_at_launch
+tests/behaviors/test_relaunch.py::test_fresh_shells_do_not_run_the_pin
+tests/behaviors/test_relaunch.py::test_relaunch_forgets_what_is_not_persisted
 tests/behaviors/test_relaunch.py::test_relaunch_keeps_workspaces_sessions_and_their_metadata
+tests/behaviors/test_relaunch.py::test_rerun_replays_the_captured_foreground_program
+tests/behaviors/test_relaunch.py::test_rerun_types_the_pinned_line_at_the_next_launch
 tests/cli/test_cli_only.py::test_clipboard_set_checks_the_text_before_the_pane
 tests/cli/test_cli_only.py::test_clipboard_set_refuses_outside_a_live_pane
 tests/cli/test_cli_only.py::test_terminfo_install_compiles_the_entry_into_the_remote_home
@@ -121,13 +125,26 @@ tests/protocol/test_config_browser.py::test_links_sets_and_reads_the_link_open_m
 tests/protocol/test_config_browser.py::test_reload_applies_the_edited_config_to_open_and_new_sessions
 tests/protocol/test_dashboard_quick.py::test_dashboard_and_terminal_zoom_replace_each_other
 tests/protocol/test_dashboard_quick.py::test_dashboard_font_modes
+tests/protocol/test_dashboard_quick.py::test_dashboard_mru_takes_the_recent_sessions
+tests/protocol/test_dashboard_quick.py::test_dashboard_names_what_it_left_out
 tests/protocol/test_dashboard_quick.py::test_dashboard_pane_refs_pick_one_pane
 tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[bad-pane-ref]
 tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[both-font-modes]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[close-with-auto-size]
 tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[close-with-font-size]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[close-with-ids]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[close-with-mru]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[mru-with-ids]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[negative]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[none-resolved]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[nothing]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[unknown-window]
+tests/protocol/test_dashboard_quick.py::test_dashboard_refusals[zero]
 tests/protocol/test_dashboard_quick.py::test_dashboard_shows_each_pane_of_the_given_sessions
 tests/protocol/test_dashboard_quick.py::test_quick_commands_need_a_shown_terminal
+tests/protocol/test_dashboard_quick.py::test_quick_input_validation
 tests/protocol/test_dashboard_quick.py::test_quick_show_hide_toggle
+tests/protocol/test_dashboard_quick.py::test_quick_type_then_read_the_marker_back
 tests/protocol/test_dashboard_quick.py::test_quick_zoom_ends_with_the_panel
 tests/protocol/test_events.py::test_cursor_expires_past_the_ring_capacity
 tests/protocol/test_events.py::test_cursor_failure_carries_the_anchor[ahead]
@@ -307,11 +324,15 @@ tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.resu
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.submit-args5]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.text-args4]
 tests/protocol/test_overlay.py::test_unsplit_session_takes_a_left_pane_overlay
+tests/protocol/test_restore.py::test_a_held_command_moves_to_the_split_with_a_swap
+tests/protocol/test_restore.py::test_capture_counts_the_panes_running_a_program_and_clear_drops_them
 tests/protocol/test_restore.py::test_capture_needs_rerun_mode
+tests/protocol/test_restore.py::test_foreground_names_the_program_or_the_shell
 tests/protocol/test_restore.py::test_mode_reads_the_launch_policy
 tests/protocol/test_restore.py::test_mode_rejects_an_unknown_mode
 tests/protocol/test_restore.py::test_mode_set_applies_to_the_next_launch
 tests/protocol/test_restore.py::test_panes_are_not_zmx_backed_outside_live_mode
+tests/protocol/test_restore.py::test_seeded_live_mode_is_requested_at_launch
 tests/protocol/test_restore.py::test_split_restore_pin_reads_back
 tests/protocol/test_session.py::test_close_removes_the_session_and_reselects
 tests/protocol/test_session.py::test_close_requires_a_target
@@ -396,15 +417,23 @@ tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[right-sessio
 tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[right-session has no split pane-session.type]
 tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[scratch-session has no scratch terminal-session.text]
 tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[scratch-session has no scratch terminal-session.type]
+tests/protocol/test_session_text.py::test_search_counts_the_matches
+tests/protocol/test_session_text.py::test_text_all_includes_the_scrollback
+tests/protocol/test_session_text.py::test_text_defaults_to_the_pane_on_screen
+tests/protocol/test_session_text.py::test_text_lines_returns_the_last_content_lines
 tests/protocol/test_session_text.py::test_text_rejects[all-and-lines]
 tests/protocol/test_session_text.py::test_text_rejects[negative-lines]
 tests/protocol/test_session_text.py::test_text_rejects[pane-id]
 tests/protocol/test_session_text.py::test_text_rejects[pane]
 tests/protocol/test_session_text.py::test_text_rejects[zero-lines]
+tests/protocol/test_session_text.py::test_title_reads_the_terminal_title_a_program_set
+tests/protocol/test_session_text.py::test_type_and_text_address_a_pane
+tests/protocol/test_session_text.py::test_type_and_text_address_a_pane_by_token
 tests/protocol/test_session_text.py::test_type_rejects[no-text]
 tests/protocol/test_session_text.py::test_type_rejects[pane-id]
 tests/protocol/test_session_text.py::test_type_rejects[pane]
 tests/protocol/test_session_text.py::test_type_text_carrying_a_nul
+tests/protocol/test_session_text.py::test_type_then_read_the_marker_back
 tests/protocol/test_session_text.py::test_unknown_session_target[session.search-args2]
 tests/protocol/test_session_text.py::test_unknown_session_target[session.text-args1]
 tests/protocol/test_session_text.py::test_unknown_session_target[session.type-args0]
@@ -468,6 +497,8 @@ tests/protocol/test_split.py::test_zoom_rejects_an_unknown_surface[surface:zzz:l
 tests/protocol/test_split.py::test_zoom_rejects_an_unknown_surface[zzz]
 tests/protocol/test_split.py::test_zoom_the_pane_under_a_running_overlay
 tests/protocol/test_surface.py::test_cursor_reads_a_program_overlay_but_not_a_hud
+tests/protocol/test_surface.py::test_cursor_reads_each_pane_by_surface_id_or_pane_id
+tests/protocol/test_surface.py::test_cursor_reads_the_quick_terminal_only_while_shown
 tests/protocol/test_surface.py::test_cursor_refusals[bogus-kind-args2-invalid surface: surface:{sid}:bogus]
 tests/protocol/test_surface.py::test_cursor_refusals[left-args6-surface.cursor: --pane-id takes a session target]
 tests/protocol/test_surface.py::test_cursor_refusals[quick-args7-surface.cursor: --pane-id takes a session target]
@@ -476,13 +507,17 @@ tests/protocol/test_surface.py::test_cursor_refusals[scratch-args4-surface not a
 tests/protocol/test_surface.py::test_cursor_refusals[session-args1-invalid surface: {sid}]
 tests/protocol/test_surface.py::test_cursor_refusals[session-args5-unknown pane id: nope]
 tests/protocol/test_surface.py::test_cursor_refusals[zzz-args0-invalid surface: zzz]
+tests/protocol/test_surface.py::test_cursor_reports_the_column_and_follows_input
+tests/protocol/test_surface.py::test_cursor_without_a_target_reads_the_active_surface
 tests/protocol/test_surface.py::test_paste_refuses_a_pane_it_cannot_reach[middle---pane must be left, right, or scratch]
 tests/protocol/test_surface.py::test_paste_refuses_a_pane_it_cannot_reach[right-session has no split pane]
 tests/protocol/test_surface.py::test_paste_refuses_a_pane_it_cannot_reach[scratch-session has no scratch terminal]
 tests/protocol/test_surface.py::test_paste_refuses_a_pane_it_cannot_reach[split-session has no split pane]
+tests/protocol/test_surface.py::test_selectall_selects_the_buffer_for_copy
 tests/protocol/test_surface.py::test_selection_commands_refuse_an_unknown_session[session.copy]
 tests/protocol/test_surface.py::test_selection_commands_refuse_an_unknown_session[session.paste]
 tests/protocol/test_surface.py::test_selection_commands_refuse_an_unknown_session[session.selectall]
+tests/protocol/test_surface.py::test_selection_commands_without_a_target_use_the_active_session
 tests/protocol/test_tree.py::test_auto_follow_timeout_reads_back_from_settings
 tests/protocol/test_tree.py::test_fresh_session_node
 tests/protocol/test_tree.py::test_fresh_tree_omits_unset_top_level_fields

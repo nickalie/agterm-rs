@@ -186,6 +186,38 @@ mod tests {
     }
 
     #[test]
+    fn a_fractional_outputs_logical_size_centers_the_panel() {
+        // eDP-1 at scale 1.75 (2880x1800): its logical size, and the integer scale's 1440x900 a toolkit may report
+        let logical = PanelSize {
+            width: 1645.0,
+            height: 1028.0,
+        };
+        let integer = PanelSize {
+            width: 1440.0,
+            height: 900.0,
+        };
+        assert_eq!(
+            layer_placement(Some(logical), None, false),
+            Some(LayerPlacement::Centered {
+                width: 1100,
+                height: 700,
+                top_margin: 164
+            })
+        );
+        assert_eq!(
+            layer_placement(Some(integer), None, false),
+            Some(LayerPlacement::Centered {
+                width: 1100,
+                height: 700,
+                top_margin: 100
+            }),
+            "64 px off center on the logical output"
+        );
+        assert_eq!(panel_pixels(logical, Some(50)), (823, 514));
+        assert_eq!(panel_pixels(integer, Some(50)), (720, 450));
+    }
+
+    #[test]
     fn an_unzoomed_panel_without_a_monitor_keeps_its_frame() {
         assert_eq!(layer_placement(None, None, false), None);
     }

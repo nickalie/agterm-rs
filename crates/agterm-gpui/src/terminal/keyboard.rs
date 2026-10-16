@@ -315,19 +315,44 @@ impl TerminalView {
         if self.keys.reported != Some(focused) {
             self.focus_changed();
         }
+        if self.report_focus(focused) {
+            cx.notify();
+        }
+    }
+
+    /// Reports `focused` to a program in focus-reporting mode when it differs from the last report; whether it did.
+    /// The first state seen is recorded, not reported (the state the pane starts in is no change).
+    fn report_focus(&mut self, focused: bool) -> bool {
         let Some(pane) = self.shared.pane().filter(|_| self.shared.is_realized()) else {
-            return;
+            return false;
         };
         let Some(reported) = self.keys.reported.replace(focused) else {
-            return;
+            return false;
         };
         if reported == focused {
-            return;
+            return false;
         }
         if let Err(err) = pane.focus(focused) {
             tracing::debug!(target: "agterm::surface", %err, "focus report failed");
         }
-        cx.notify();
+        true
+    }
+
+    /// The view's window is going with the view still holding the focus the program was told of, while the terminal
+    /// lives on (the quick terminal's hide: a removed window reports no blur or deactivation): the program is told the
+    /// focus left, as a deactivation would. What the program was told last, for the view that takes over
+    /// ([`Self::continue_focus_reports`]).
+    pub(crate) fn release_focus_reports(&mut self) -> Option<bool> {
+        if self.keys.reported == Some(true) {
+            self.report_focus(false);
+        }
+        self.keys.reported
+    }
+
+    /// A new view of a terminal another view reported focus for: its reports continue from `reported`, what the
+    /// program was told last ([`Self::release_focus_reports`]), so its first focus is reported as a change.
+    pub(crate) fn continue_focus_reports(&mut self, reported: Option<bool>) {
+        self.keys.reported = reported;
     }
 
     /// Text an input method committed: sent as text, the composition ended.
