@@ -625,7 +625,9 @@ impl WindowView {
         self.sync_modals(core, alert_closed, window, cx);
         let modal = dialog || alert || self.popovers.read(cx).is_open();
         let sidebar = self.sidebar.read(cx);
-        let (held, owner) = (sidebar.menu_open(), sidebar.keyboard_owner(cx));
+        // the sidebar's row menu or the app menu holds the keyboard while it is open
+        let held = sidebar.menu_open() || self.titlebar.read(cx).menu_open();
+        let owner = sidebar.keyboard_owner(cx);
         let focused = self.deck.update(cx, |deck, cx| {
             deck.hold_keyboard(held, owner);
             deck.reconcile(core, modal, window, cx)

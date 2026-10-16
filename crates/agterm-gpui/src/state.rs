@@ -8,7 +8,9 @@
 //! task with the state, then brings the windows in line with the model (`windows.rs`, the GTK build's settle-time
 //! windows sync) and lands the frontend work (`app.rs`).
 
+use std::cell::RefCell;
 use std::panic::{self, AssertUnwindSafe};
+use std::rc::Rc;
 use std::sync::Weak;
 use std::time::{Duration, Instant};
 
@@ -131,7 +133,7 @@ pub struct FrontendWork {
     pub activations: Vec<Activation>,
     /// Open these with the desktop's handler (a followed link).
     pub open_urls: Vec<String>,
-    /// Reveal these in the file manager (a followed `file://` link).
+    /// Reveal these in the file manager (a followed `file://` link, `session.reveal`, Reveal in Files).
     pub reveals: Vec<std::path::PathBuf>,
     /// Quit the app: the orderly shutdown, then GPUI's quit.
     pub quit: bool,
@@ -146,6 +148,8 @@ pub struct FrontendWork {
     pub welcome: bool,
     /// Open the Settings window, or raise the open one ([`crate::settings`]).
     pub settings: bool,
+    /// Ask over the frontmost window whether to quit, with this message ([`crate::welcome::present_quit`]).
+    pub quit_prompt: Option<String>,
 }
 
 /// Whether a terminal's desktop notification fired while its pane held its window's keyboard (upstream's first
@@ -174,6 +178,8 @@ pub struct AppState {
     seeded: Vec<PaneSpawn>,
     /// The terminal theme's side as last applied, and the desktop's (`appearance.rs`).
     pub(crate) appearance: crate::appearance::Appearance,
+    /// The directories the core asked to reveal (`session.reveal`, Reveal in Files), for the frontend.
+    revealed: Rc<RefCell<Vec<std::path::PathBuf>>>,
 }
 
 /// The presentation bridges' reports ([`agterm_app::remote`]).
@@ -195,9 +201,13 @@ impl PresentationViewer for AppState {
 
 impl AppState {
     #[must_use]
-    pub fn new(core: Core) -> Self {
+    pub fn new(mut core: Core) -> Self {
+        let revealed: Rc<RefCell<Vec<std::path::PathBuf>>> = Rc::default();
+        let sink = Rc::clone(&revealed);
+        core.set_reveal_handler(Box::new(move |path| sink.borrow_mut().push(path.to_owned())));
         Self {
             core,
+            revealed,
             poster: detached_poster(),
             quitting: false,
             key_window: None,
@@ -232,7 +242,14 @@ impl AppState {
 
     /// What the tasks since the last call left to the frontend.
     pub fn take_frontend_work(&mut self) -> FrontendWork {
+        let revealed = std::mem::take(&mut *self.revealed.borrow_mut());
+        self.frontend.reveals.extend(revealed);
         std::mem::take(&mut self.frontend)
+    }
+
+    /// Asks the frontend to confirm a user's quit with `message` (the app menu's Quit).
+    pub(crate) fn ask_quit(&mut self, message: String) {
+        self.frontend.quit_prompt = Some(message);
     }
 
     /// Asks the frontend to quit: SIGTERM, the last window closing, a command's quit.

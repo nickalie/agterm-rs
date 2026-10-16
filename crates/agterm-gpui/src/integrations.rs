@@ -1,14 +1,14 @@
 //! The installers' GPUI side (the GTK build's `integrations/ui.rs`, upstream's `run()` of each installer and the
 //! alerts they show), over `agterm-app`'s planners: the welcome's Install runs the checked ones. The filesystem work
 //! runs off the main thread, the result shows as an alert over the window the install started from; each installer's
-//! alert closes before the next one starts, as upstream's queue behind one another. (The Help menu's items, the CLI
-//! installer and the integrations' settings come with Task 28.)
+//! alert closes before the next one starts, as upstream's queue behind one another. The app menu's Help runs each on
+//! its own, and the command line tool's installer ([`run_cli`]). (The integrations' settings come with Task 28.)
 
 use std::cell::Cell;
 
 use agterm_app::integrations::hooks::{self, OpenCodeStart};
 use agterm_app::integrations::opencode::{self, Version};
-use agterm_app::integrations::{Environment, InstallError, skill};
+use agterm_app::integrations::{Environment, InstallError, cli, skill};
 use gpui_kit::{AnyWindowHandle, App, AppContext as _, AsyncApp};
 
 use crate::modal::{AlertButton, AlertSpec, open_alert};
@@ -29,6 +29,28 @@ pub fn run_picked(window: AnyWindowHandle, skill: bool, hooks: bool, cx: &mut Ap
         }
     })
     .detach();
+}
+
+/// Help's Install Command Line Tool…: links `agtermctl` onto the `PATH`, its result over `window`.
+pub fn run_cli(window: AnyWindowHandle, cx: &mut App) {
+    cx.spawn(async move |cx| install_cli(window, cx).await).detach();
+}
+
+async fn install_cli(window: AnyWindowHandle, cx: &mut AsyncApp) {
+    let result = cx
+        .background_spawn(async {
+            let env = Environment::process().ok_or_else(no_home)?;
+            let path = env.vars.get("PATH").cloned();
+            Ok::<_, InstallError>(cli::apply(&cli::plan(&env), path.as_deref()))
+        })
+        .await;
+    match result {
+        Ok(result) => {
+            log_result(result.is_warning(), "command line tool", &result);
+            present(window, result.title(), &result.text(), None, cx).await;
+        }
+        Err(error) => failed(window, &error, cx).await,
+    }
 }
 
 async fn install_skill(window: AnyWindowHandle, cx: &mut AsyncApp) {

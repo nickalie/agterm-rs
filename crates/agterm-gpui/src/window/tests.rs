@@ -816,3 +816,74 @@ fn the_search_bar_takes_the_keyboard_keeps_what_is_typed_and_gives_it_back(cx: &
     assert!(!bar.read_with(s.cx, |bar, _| bar.is_shown()));
     assert!(s.terminal_focused(), "the terminal has the keyboard back");
 }
+
+// MARK: - the app menu (Task 26)
+
+impl Shell<'_> {
+    fn click(&mut self, selector: &'static str) {
+        let at = self
+            .cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is drawn"))
+            .center();
+        self.cx.simulate_click(at, gpui_kit::Modifiers::default());
+        self.cx.run_until_parked();
+    }
+
+    fn menu_open(&mut self) -> bool {
+        let bar = self.view.read_with(self.cx, |view, _| view.titlebar().clone());
+        bar.read_with(self.cx, |bar, _| bar.menu_open())
+    }
+}
+
+#[gpui_kit::test]
+fn a_menu_item_runs_in_its_window_and_the_terminal_gets_the_keyboard_back(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    let before = s.state.core.library().store(s.window).unwrap().sessions().count();
+    s.click("app-menu-button");
+    s.settle();
+    assert!(s.menu_open(), "the menu holds the keyboard");
+    assert!(!s.terminal_focused());
+    // File is the first submenu: Down lands on it, Right opens it
+    s.cx.simulate_keystrokes("down right");
+    s.cx.run_until_parked();
+    assert!(
+        s.cx.debug_bounds("app-menu-item-editKeymap").is_some(),
+        "File lists Edit Keymap…"
+    );
+    assert!(
+        s.cx.debug_bounds("app-menu-item-editHooks").is_some(),
+        "and Edit Hooks…"
+    );
+    s.click("app-menu-item-newSession");
+    s.settle();
+    assert!(!s.menu_open(), "an item closes the menu");
+    let after = s.state.core.library().store(s.window).unwrap().sessions().count();
+    assert_eq!(after, before + 1, "New Session ran in the menu's window");
+    assert!(s.terminal_focused(), "the new session's terminal has the keyboard");
+}
+
+#[gpui_kit::test]
+fn the_menus_settings_and_quit_reach_the_frontend(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    s.click("app-menu-button");
+    s.click("app-menu-item-settings");
+    s.settle();
+    assert!(
+        s.state.take_frontend_work().settings,
+        "Settings… opens the Settings window"
+    );
+    s.click("app-menu-button");
+    s.click("app-menu-item-quit");
+    s.settle();
+    let work = s.state.take_frontend_work();
+    if agterm_core::is_ui_test_launch(&agterm_core::paths::ProcessEnv) {
+        assert!(work.quit);
+    } else {
+        assert!(!work.quit, "Quit asks first");
+        assert_eq!(
+            work.quit_prompt.as_deref(),
+            Some("This closes 1 window and 2 sessions, ending all running shells.")
+        );
+    }
+}

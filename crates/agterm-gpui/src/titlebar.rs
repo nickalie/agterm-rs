@@ -23,6 +23,8 @@
 //! the GTK build's are, with their halves filled for the panes on screen.
 
 use std::borrow::Cow;
+use std::cell::Cell;
+use std::rc::Rc;
 
 use agterm_core::Core;
 use agterm_core::app_actions::ActionEffect;
@@ -32,6 +34,8 @@ use agterm_core::model::AgentStatus;
 use agterm_core::persist::settings::ToolbarMode;
 use agterm_core::titlebar::{AttentionBell, SplitGlyph, Titlebar as Model, TitlebarAction, TitlebarComposition};
 use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button as KitButton, ButtonVariants as _};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu};
 use gpui_kit::{
     AnyElement, AppContext as _, AssetSource, Context, Decorations, Div, ElementId, EventEmitter, FontWeight, Hsla,
     InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels,
@@ -40,6 +44,7 @@ use gpui_kit::{
 };
 use uuid::Uuid;
 
+use crate::app_menu::AppMenu;
 use crate::chrome::{self, DIM_ALPHA, DIVIDER_ALPHA};
 use crate::state::{AppState, Poster, post};
 
@@ -67,7 +72,7 @@ const CONTROL: Pixels = px(30.);
 
 /// The glyphs the bar draws from gpui-kit's Lucide catalog, served to the app with gpui-kit's own component icons
 /// ([`Icons`]).
-pub const GLYPHS: [IconName; 13] = [
+pub const GLYPHS: [IconName; 14] = [
     IconName::PanelLeft,
     IconName::RotateCcwClock,
     IconName::Bell,
@@ -81,6 +86,7 @@ pub const GLYPHS: [IconName; 13] = [
     IconName::WindowMaximize,
     IconName::WindowRestore,
     IconName::WindowClose,
+    IconName::Menu,
 ];
 
 gpui_kit::assets::icon_assets!(
@@ -99,6 +105,7 @@ gpui_kit::assets::icon_assets!(
         WindowMaximize,
         WindowRestore,
         WindowClose,
+        Menu,
     ]
 );
 
@@ -270,6 +277,8 @@ pub struct Bar {
     /// The blocked bell's color.
     pub blocked: Rgb,
     pub colors: ChromeColors,
+    /// The window's app menu, which the menu button opens.
+    pub menu: AppMenu,
 }
 
 /// The bar's row height for `mode`; zero for a hidden bar under the window manager's decorations.
@@ -459,6 +468,8 @@ pub struct Titlebar {
     shown: Option<Bar>,
     /// A press on the bar that may become a window move.
     pressed: bool,
+    /// The app menu is open: it holds the keyboard, which the deck moves none under.
+    menu_open: Rc<Cell<bool>>,
 }
 
 impl EventEmitter<TitlebarEvent> for Titlebar {}
@@ -472,7 +483,14 @@ impl Titlebar {
             poster,
             shown: None,
             pressed: false,
+            menu_open: Rc::default(),
         }
+    }
+
+    /// Whether the app menu is open.
+    #[must_use]
+    pub fn menu_open(&self) -> bool {
+        self.menu_open.get()
     }
 
     /// What the bar shows, as last synced.
@@ -508,6 +526,7 @@ impl Titlebar {
             sidebar,
             blocked,
             colors,
+            menu: AppMenu::of(core, self.window),
         };
         if self.shown.as_ref() != Some(&bar) {
             self.shown = Some(bar);
@@ -882,6 +901,45 @@ impl Titlebar {
         )
     }
 
+    /// The app menu's button (the GTK header bar's primary menu): the menu opens under it, built from the bar's model
+    /// as it opens; its closing posts a sync, which gives the keyboard back to the shown terminal.
+    fn menu_button(&self, bar: &Bar, glyph: Pixels, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = bar.colors;
+        let ink = chrome::color(colors.foreground, 1.0);
+        let perform = crate::app_menu::perform(&self.poster, self.window);
+        let titlebar = cx.entity().downgrade();
+        let menu_ink = crate::app_menu::Ink {
+            chord: chrome::color(colors.foreground, DIM_ALPHA),
+        };
+        let (open, poster) = (Rc::clone(&self.menu_open), self.poster.clone());
+        KitButton::new("app-menu-button")
+            .debug_selector(|| "app-menu-button".to_owned())
+            .ghost()
+            .tab_stop(false)
+            .p_0()
+            .size(BUTTON)
+            .tooltip("Main Menu")
+            .child(icon(IconName::Menu, ink, glyph))
+            .dropdown_menu_with_anchor(
+                gpui_kit::Anchor::TopRight,
+                move |popup: PopupMenu, window: &mut Window, cx: &mut Context<PopupMenu>| {
+                    let menu = titlebar
+                        .upgrade()
+                        .and_then(|bar| bar.read(cx).shown.as_ref().map(|shown| shown.menu.clone()));
+                    let Some(menu) = menu else {
+                        return popup;
+                    };
+                    crate::app_menu::build(popup, &menu, &perform, menu_ink, window, cx)
+                },
+            )
+            .on_open_change(move |opened, _, _| {
+                // a sync either way: the deck holds the keyboard while it is open and gives it back once it closes
+                if open.replace(*opened) != *opened {
+                    post(&poster, |_| {});
+                }
+            })
+    }
+
     /// The window controls of one side.
     fn window_controls(&self, buttons: Vec<WindowButton>, colors: ChromeColors, window: &Window) -> Div {
         let ink = chrome::color(colors.foreground, 1.0);
@@ -984,6 +1042,7 @@ impl Render for Titlebar {
                     .children(self.exit(&bar, glyph, cx))
             })
             .when(hidden, |row| row.child(div().flex_1()))
+            .child(div().pr(px(8.)).child(self.menu_button(&bar, glyph, cx)))
             .child(trailing)
     }
 }

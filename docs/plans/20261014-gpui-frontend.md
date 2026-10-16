@@ -2028,10 +2028,89 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 **Files:**
 - Create: `crates/agterm-gpui/src/{app_menu,dashboard,zoom,windows}.rs`
 
-- [ ] in-window app menu (port of `app_menu.rs`), dashboard grid (view-only pane views from Task 13), zoom,
+- [x] in-window app menu (port of `app_menu.rs`), dashboard grid (view-only pane views from Task 13), zoom,
       multi-window registry and restore (`restore_launch` from `agterm-app`)
-- [ ] tests (headless): menu actions dispatch, dashboard layout, zoom in/out, restore of a saved window set
-- [ ] gates + conformance — must pass before Task 27
+- [x] tests (headless): menu actions dispatch, dashboard layout, zoom in/out, restore of a saved window set
+- [x] gates + conformance — must pass before Task 27
+- result (2026-10-16):
+  - ➕ Files: `src/app_menu.rs`, `src/app_menu/tests.rs`, `src/dashboard.rs`, `src/dashboard/tests.rs`,
+    `src/deck/tests/dashboard.rs`; Modify: `src/{app,deck,deck/tests,integrations,lib,state,terminal,titlebar,
+    titlebar/tests,welcome,welcome/tests,window,window/tests,windows}.rs`, `agterm-core/src/settings_model.rs`,
+    `agterm-core/src/commands/tests/palette.rs`, `docs/linux-ui-checklist.md`. No `zoom.rs`: the terminal zoom has
+    lived in `split.rs` (`PanePlan::layout`) and `deck.rs` since Task 18, and `windows.rs` (the registry) since Task 18
+    too; this task tests both and adds the dashboard's interplay.
+  - **App menu** (`app_menu.rs`): the window's menu button (`app-menu-button`, Lucide `menu`) at the title bar's
+    trailing end, before the window controls, in every mode with a bar and under a zoom or the dashboard, opens
+    gpui-kit's popup menu: File, View, Navigate and Help as submenus, then Settings… and Quit (upstream's titles; the
+    GTK build's "Preferences" is GNOME's word). The menu is a pure model per window (`AppMenu::of`: the GTK build's
+    items, titles and toggles, enabled by that window's palette context, keyed items showing their live chord as
+    `titlebar::chord_label` spells it), built into the popup each time it opens; Edit Keymap… / Edit Hooks… sit before
+    their Reloads; File's live parts as GTK (Open Window ▸ with the open windows checked, Open Recent ▸ with
+    Sessions / Workspaces headings, Clear Menu and the inert No Recent Items, Reveal in Files). An item runs in the
+    menu's own window (`AppState::menu_activated` / `menu_list_activated`; a built-in's frontend half lands as the
+    keymap's does); the menu holds the deck's keyboard while open and the shown terminal takes it back once it closes
+    (`Titlebar::menu_open`, a sync on each open change). `keymap.list` reads the frontmost window's model
+    (`Windows::menu_reader`, refreshed every sync): claimed `keymap-menu`. Help: Developer Documentation…, Install
+    Command Line Tool… (`integrations::run_cli`, new), the hooks and skill installers, and About Agterm (an alert with
+    the version and the build's commit, OK and an agterm.com button).
+  - **Reveal**: the GPUI build never set the core's reveal handler, so `session.reveal` and Reveal in Files did
+    nothing; `AppState` now queues the directories into `FrontendWork::reveals`, landed through GPUI's `reveal_path`.
+  - **Quit confirmation** (`welcome.rs`, the GTK module's home for it): the menu's Quit asks over the frontmost window
+    with the window's alert ("Quit Agterm?", the core's `QuitPrompt` message, Cancel / Quit, Quit the default and
+    destructive, ids `quit-cancel`/`quit-confirm`) through `FrontendWork::quit_prompt`; Quit posts the ordinary quit;
+    no window, a UI-test launch, SIGTERM or the last window closing never ask.
+  - **Dashboard** (`dashboard.rs`, the GTK `dashboard.rs` port plus upstream's status chip): Codex-reviewed against the
+    plan's "view-only pane views" (Task 13's `ViewRole::Viewer`), each cell hosts the member pane's **own** owner
+    view, which its page stops drawing while the grid is open, so the terminal is resized to its cell as upstream's
+    reparented surface is (a viewer would crop the page-sized grid to its top-left); input stays out by a transparent
+    occluding click layer per cell and the grid's own focus (arrows, Enter, Escape, every other key swallowed; the
+    keymap's chords still run first). Rows of upstream's `ceil(sqrt(n))` grid with 12 px gaps on the terminal's
+    background, 6 px frames (foreground at 0.12, the highlight ringed 1.5 px), the name chip on the bottom-right frame
+    line (status color with contrasting text and a pulsing wash while it blinks, the idle one a muted fill), the
+    overlay cover's kind / source / title and a lead cover; a click rings then enters after 180 ms (a delayed
+    main-loop task). The font modes give the member terminals a transient size (`Shared::set_font_override` /
+    `clear_font_override`, `font_report` / `pending_restore` ported from the GTK surface) whose reports, and the
+    revert's, are not the session's. Under a modal, a popup or the quick terminal the grid leaves the keyboard alone;
+    closing it lays the terminals out in their pages again and the shown pane takes the keyboard.
+  - **Carried core fix** (Task 25 review, MAJOR, both frontends): a Settings theme edit (the theme pickers or the
+    follow toggle) while the theme palette previews now lands like `theme.set`, through
+    `with_theme_preview_rebased`: saved as asked, kept on screen, and the palette's Escape returns to it
+    (`Core::change_theme_mid_preview`, `SettingsChange::writes_theme_slots`); any other Settings edit mid-preview keeps
+    the preview and saves the found theme, as before. The GTK build's settings dialog goes through the same
+    `Core::change_settings`, so it behaves the same: a theme picked there while the palette (opened before the dialog)
+    previews is saved and survives the palette's Escape.
+  - Tests: core (5 new palette tests: pick mid-preview saved and kept past Escape, the found theme ending the preview,
+    follow toggle and alternate picker over the found slots, another edit keeping the preview, an ordinary pick);
+    app menu (order, every built-in listed, Edit Keymap/Hooks, live lists and Help, Open Recent, toggles, live chords
+    and a keymap override, `keymap.list` read-back with enablement, a cover's disabling, items dispatched through the
+    core, Reveal in Files reaching the frontend, About); window (the menu opened by its button, File by the keyboard,
+    New Session clicked and run in the window with the keyboard back on the terminal; Settings… and Quit reaching the
+    frontend); dashboard (rows, markers, keys, cells and status, pulse, contrast, font report rules); deck over real
+    panes (the grid hosting each member terminal resized to its cell and giving it back, arrows/Enter entering the
+    exact pane, a click ringing then entering, a fixed font transient and never the session's, a picker keeping the
+    keyboard over the grid, a zoom filling the page and its end laying the split out at its ratio, the grid ending a
+    zoom); windows (a saved window set from a real state dir reopening its open windows with the closed one kept,
+    reopened through Open Window, a user close); quit (prompt, alert, Cancel / Quit in a test window).
+  - Gates: fmt, clippy (workspace, all targets and features), lint-report (10 expects, none added),
+    check-tracing-features, `vendor-gpui.sh --check`, `cargo test --workspace` under Xvfb 4206 passed, 0 failed, 8
+    ignored; the new tests 5 times in a row. GPUI conformance ratchet-only with `--also` the dashboard/quick, window,
+    restore, relaunch and keymap/hooks files and `--also-k "menu or dashboard or zoom or window or restore or relaunch
+    or reveal or quit"`: 613 passed, 2 failed (two HTML page tests the selector brought in: Task 32), 1 skipped
+    (live-sessions); ratchet held (610) and grew by 3 (`test_cli_output.py::test_session_restore_prints_the_note_or_ok`,
+    `test_surface_and_dashboard`, `test_window_commands`) to 613; `keymap-menu` claimed (its test passes on the
+    capability's branch). GTK conformance ratchet-only with `--also-k "theme or settings or palette"` for the core fix:
+    653 passed, 0 failed, 12 skipped (not run on this host); ratchet held (665).
+  - Decisions: the cells host the owner views, not Task 13's viewers (Codex agreed, transcript
+    `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/task-26-dashboard-cells/transcript.md`); Settings…
+    rather than Preferences (upstream wins); the menu acts on its own window rather than the frontmost (an in-window
+    menu belongs to its window; a click makes it frontmost anyway); Reset Live Sessions… stays out of the menu until
+    its dialog and relaunch land (Task 27).
+  - Deviations: no `zoom.rs` (see Files); the idle chip's fill is the foreground at 0.16 (the GPUI theme carries no
+    selection color); under the window manager's decorations the Hidden toolbar mode draws no bar, so the menu has no
+    mouse path there (the keymap and the palettes still reach every item); window frames are still not restored (the
+    GTK build's gap, checklist row).
+  - Later tasks build on: `AppMenu` (Task 27's Reset Live Sessions… item, Task 28's installers), `FrontendWork::
+    quit_prompt`, the dashboard's `FontOverrides` on `Shared`.
 
 ### Task 27: Remotes and zmx runtime
 

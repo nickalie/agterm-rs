@@ -184,6 +184,8 @@ fn colors() -> ChromeColors {
 
 /// The bar of `window` in a fresh test window, synced once over `core` under `cover`.
 fn synced(cx: &mut TestAppContext, core: &Core, window: Uuid, cover: Cover) -> Bar {
+    // the app menu's button is gpui-kit's, which reads its theme
+    cx.update(gpui_kit::init);
     let (bar, cx) = cx.add_window_view(move |_, _| Titlebar::new(window, crate::state::detached_poster()));
     cx.simulate_resize(size(px(900.), px(600.)));
     bar.update(cx, |bar, cx| bar.sync(core, cover, false, colors(), cx));

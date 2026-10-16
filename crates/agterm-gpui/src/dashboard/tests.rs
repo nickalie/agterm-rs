@@ -1,0 +1,122 @@
+//! The dashboard's grid shape, captions, keys, status chip and its pulse, and the font report rules (ported from the
+//! GTK build's `dashboard.rs` and `surface.rs` tests).
+
+use agterm_core::model::{AgentIndicator, AgentStatus, NewSession, SessionSeed, SplitLayout};
+use gpui_kit::{Keystroke, Modifiers};
+
+use super::*;
+use crate::terminal::{font_report, pending_restore};
+
+fn key(name: &str, modifiers: Modifiers) -> Keystroke {
+    Keystroke {
+        modifiers,
+        key: name.to_owned(),
+        key_char: None,
+    }
+}
+
+#[test]
+fn the_rows_fill_row_major_and_pad_a_ragged_last_row() {
+    assert_eq!(rows(1), vec![vec![Some(0)]]);
+    assert_eq!(rows(3), vec![vec![Some(0), Some(1)], vec![Some(2), None]]);
+    assert_eq!(
+        rows(5),
+        vec![vec![Some(0), Some(1), Some(2)], vec![Some(3), Some(4), None]]
+    );
+    assert_eq!(
+        rows(12).iter().flatten().flatten().count(),
+        agterm_core::dashboard::MAX_CELLS,
+        "capped"
+    );
+    assert!(rows(0).is_empty());
+}
+
+#[test]
+fn the_pane_marker_follows_the_split_axis() {
+    let mut session = Session::new(SessionSeed::default());
+    let id = session.id();
+    assert_eq!(pane_marker(DashboardMember::primary(id), &session), "");
+    session.split = SplitLayout {
+        exists: true,
+        ..SplitLayout::default()
+    };
+    assert_eq!(pane_marker(DashboardMember::primary(id), &session), " ◀");
+    assert_eq!(pane_marker(DashboardMember::split(id), &session), " ▶");
+    session.split.axis = SplitAxis::TopBottom;
+    assert_eq!(pane_marker(DashboardMember::primary(id), &session), " ▲");
+    assert_eq!(pane_marker(DashboardMember::split(id), &session), " ▼");
+}
+
+#[test]
+fn the_grid_reads_bare_arrows_enter_and_escape() {
+    let none = Modifiers::default();
+    assert_eq!(grid_key(&key("left", none)), Some(GridKey::Move(Direction::Left)));
+    assert_eq!(grid_key(&key("down", none)), Some(GridKey::Move(Direction::Down)));
+    assert_eq!(grid_key(&key("enter", none)), Some(GridKey::Enter));
+    assert_eq!(grid_key(&key("kp_enter", none)), Some(GridKey::Enter));
+    assert_eq!(grid_key(&key("escape", none)), Some(GridKey::Close));
+    assert_eq!(grid_key(&key("a", none)), None);
+    assert_eq!(
+        grid_key(&key("left", Modifiers::control())),
+        None,
+        "a chord is no grid key"
+    );
+}
+
+#[test]
+fn the_model_names_each_cell_marks_the_highlight_and_carries_the_status() {
+    let mut store = AppStore::new();
+    let workspace = store.add_workspace("work");
+    let id = store.add_session(workspace, NewSession::at_cwd("/srv/app")).unwrap();
+    store.set_split_visibility(id, true, None);
+    store.session_mut(id).unwrap().agent_indicator = AgentIndicator {
+        status: AgentStatus::Blocked,
+        blink: true,
+        ..AgentIndicator::default()
+    };
+    let model = GridModel {
+        members: vec![DashboardMember::primary(id), DashboardMember::split(id)],
+        highlighted: Some(DashboardMember::split(id)),
+        font_size: None,
+    };
+    let cells = model.cells(Some(&store), &AppSettings::default());
+    assert_eq!(cells[0].caption, "app ◀");
+    assert_eq!(cells[1].caption, "app ▶");
+    assert_eq!(
+        cells.iter().map(|cell| cell.highlighted).collect::<Vec<_>>(),
+        [false, true]
+    );
+    let status = cells[0].status.as_ref().expect("a blocked chip");
+    assert_eq!(status.status, AgentStatus::Blocked);
+    assert!(status.blink);
+    assert_eq!(model.tokens(Some(&store)), [None, None], "no terminals yet");
+    assert!(cells.iter().all(|cell| cell.cover.is_none()));
+}
+
+#[test]
+fn the_pulse_rises_to_its_peak_and_back() {
+    assert!(pulse_at(0.0).abs() < 1e-6);
+    assert!((pulse_at(0.5) - WASH_PEAK).abs() < 1e-6);
+    assert!(pulse_at(1.0).abs() < 1e-6);
+    assert!(pulse_at(0.25) > 0.0 && pulse_at(0.25) < WASH_PEAK);
+}
+
+#[test]
+fn contrast_picks_dark_text_over_a_light_fill() {
+    assert!(luminance((1.0, 0.584, 0.0)) > 0.5, "orange takes black text");
+    assert!(luminance((0.1, 0.1, 0.3)) < 0.5, "a dark fill takes white text");
+}
+
+#[test]
+fn an_override_reports_nothing_and_its_revert_is_dropped_once() {
+    // while overridden, nothing is the pane's
+    assert_eq!(font_report(Some(9.0), None, 9.0), (false, None));
+    // the revert to the pending size is dropped, and the next report is the pane's again
+    let pending = pending_restore(9.0, 13.0);
+    assert_eq!(pending, Some(13.0));
+    assert_eq!(font_report(None, pending, 13.0), (false, None));
+    assert_eq!(font_report(None, None, 14.0), (true, None));
+    // a revert to the same size arms nothing, so a later zoom is not swallowed
+    assert_eq!(pending_restore(13.0, 13.2), None);
+    assert_eq!(font_report(None, Some(13.0), 16.0), (true, None));
+}
