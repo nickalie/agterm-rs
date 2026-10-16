@@ -32,6 +32,7 @@ tests/cli/test_cli_output.py::test_font
 tests/cli/test_cli_output.py::test_hooks
 tests/cli/test_cli_output.py::test_hud
 tests/cli/test_cli_output.py::test_hud_sticky_and_no_frame
+tests/cli/test_cli_output.py::test_keymap
 tests/cli/test_cli_output.py::test_notify_raises_the_unseen_count
 tests/cli/test_cli_output.py::test_overlay_program
 tests/cli/test_cli_output.py::test_pick_blocks_until_cancelled
@@ -264,6 +265,7 @@ tests/protocol/test_keymap_hooks.py::test_run_refusals[None-args1-keymap.run req
 tests/protocol/test_keymap_hooks.py::test_run_refusals[None-args2-no custom command named nope]
 tests/protocol/test_keymap_hooks.py::test_run_refusals[None-args3-no custom command named  plain]
 tests/protocol/test_keymap_hooks.py::test_run_refusals[zzz-args4-no such session: zzz]
+tests/protocol/test_keymap_hooks.py::test_run_starts_the_command_for_the_addressed_session
 tests/protocol/test_live_any_shell.py::test_a_live_pane_in_the_login_shell_reports_its_cwd_and_survives_the_relaunch
 tests/protocol/test_notify.py::test_notify_raises_the_badge_and_emits_the_event
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args0-notify requires a body]

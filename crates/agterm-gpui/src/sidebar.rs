@@ -34,7 +34,6 @@ use gpui_kit::{
     App, AppContext as _, ClipboardItem, Context, Entity, EntityId, ExternalPaths, FocusHandle, Focusable as _,
     Modifiers, ScrollHandle, Subscription, Task, WeakEntity, Window,
 };
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use uuid::Uuid;
 
 pub use self::look::Look;
@@ -607,20 +606,15 @@ impl Sidebar {
     /// Open Directory…: a folder chooser over `window`, starting in the active session's directory, then a session
     /// there in `workspace`.
     pub fn open_directory(&self, workspace: Uuid, window: &Window, cx: &mut Context<Self>) {
-        let start = self.context.chooser_folder().map(PathBuf::from);
-        let parent = window.window_handle();
+        let request = crate::folder_chooser::FolderRequest {
+            title: "Choose a directory for the new session",
+            accept: "Open",
+            start: self.context.chooser_folder().map(PathBuf::from),
+        };
+        let picked = crate::folder_chooser::choose(window.window_handle(), request, cx);
         let (poster, window) = (self.poster.clone(), self.window);
-        cx.spawn(async move |_, cx| {
-            // read from the live window as the chooser opens, so the handles never outlive it
-            let handles = cx
-                .update_window(parent, |_, window, _| raw_handles(window))
-                .ok()
-                .flatten();
-            let parent = match handles {
-                Some((window, display)) => ashpd::WindowIdentifier::from_raw_handle(&window, Some(&display)).await,
-                None => None,
-            };
-            let Some(path) = pick_directory(start, parent).await else {
+        cx.spawn(async move |_, _| {
+            let Some(path) = picked.await else {
                 return;
             };
             let directories = vec![path.to_string_lossy().into_owned()];
@@ -902,44 +896,4 @@ fn too_many_folders(window: &mut Window, cx: &mut App) {
         |_, _, _| {},
         cx,
     );
-}
-
-/// `window`'s raw window and display handles (an X11 window id, or a Wayland surface and display), which the portal
-/// names its parent by; `None` when the platform has none.
-fn raw_handles(window: &Window) -> Option<(RawWindowHandle, RawDisplayHandle)> {
-    let raw = HasWindowHandle::window_handle(window).ok()?.as_raw();
-    let display = HasDisplayHandle::display_handle(window).ok()?.as_raw();
-    Some((raw, display))
-}
-
-/// The desktop's folder chooser (the file chooser portal, as GTK's `FileDialog` and GPUI's own prompt use it), modal
-/// over `parent` (the window as the portal names it: an X11 id or an `xdg-foreign` export), titled and starting in
-/// `start`; the folder picked, `None` when cancelled or without a portal (logged).
-async fn pick_directory(start: Option<PathBuf>, parent: Option<ashpd::WindowIdentifier>) -> Option<PathBuf> {
-    use ashpd::desktop::file_chooser::OpenFileRequest;
-    let base = || {
-        OpenFileRequest::default()
-            .title("Choose a directory for the new session")
-            .accept_label("Open")
-            .modal(true)
-            .multiple(false)
-            .directory(true)
-    };
-    let request = match start {
-        Some(folder) => base().current_folder(folder).unwrap_or_else(|_| base()),
-        None => base(),
-    };
-    let request = match request.identifier(parent).send().await {
-        Ok(request) => request,
-        Err(err) => {
-            tracing::warn!(%err, "the folder chooser did not open");
-            return None;
-        }
-    };
-    let selected = request.response().ok()?;
-    selected
-        .uris()
-        .first()
-        .and_then(|uri| url::Url::parse(uri.as_str()).ok())
-        .and_then(|url| url.to_file_path().ok())
 }

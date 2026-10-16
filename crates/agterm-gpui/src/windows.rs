@@ -22,6 +22,7 @@ use crate::deck::{Deck, DeckEnv};
 use crate::instance::Activation;
 use crate::quick::{QuickEnv, QuickPanel};
 use crate::session_host::AppConfig;
+use crate::settings::{Opening, SettingsWindow};
 use crate::state::AppState;
 use crate::terminal::TerminalConfig;
 use crate::window::WindowView;
@@ -73,6 +74,8 @@ pub struct Windows {
     launched: Option<Activation>,
     /// The app's quick terminal panel, which belongs to no window.
     quick: QuickPanel,
+    /// The Settings window, which belongs to no agterm window either.
+    settings: SettingsWindow,
 }
 
 impl Windows {
@@ -85,6 +88,7 @@ impl Windows {
             shown: HashMap::new(),
             launched,
             quick: QuickPanel::default(),
+            settings: SettingsWindow::default(),
         }
     }
 
@@ -151,6 +155,7 @@ impl Windows {
         self.quick.sync(&mut state.core, &quick, cx);
         // the panel went with the keyboard: the decks, which stepped aside for it, focus their terminals again
         resettle |= held && !crate::quick::holds_keyboard(cx);
+        self.settings.sync(state, cx);
         self.report_states(&mut state.core, cx);
         state.core.clear_pane_focus_requests();
         self.launch(state, cx);
@@ -159,6 +164,17 @@ impl Windows {
             state.request_quit();
         }
         resettle
+    }
+
+    /// Opens the Settings window over what the core held (`opening`), or raises the open one.
+    pub fn present_settings(&mut self, opening: Opening, cx: &mut App) {
+        self.settings.present(opening, &self.app_id, cx);
+    }
+
+    /// The Settings window.
+    #[must_use]
+    pub fn settings(&self) -> &SettingsWindow {
+        &self.settings
     }
 
     /// Closes the windows of closed stores and opens one for each newly opened store; the ones opened, in order.

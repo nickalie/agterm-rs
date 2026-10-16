@@ -144,6 +144,8 @@ pub struct FrontendWork {
     pub sounds: Vec<String>,
     /// Show the first-launch welcome over the frontmost window ([`crate::welcome`]).
     pub welcome: bool,
+    /// Open the Settings window, or raise the open one ([`crate::settings`]).
+    pub settings: bool,
 }
 
 /// Whether a terminal's desktop notification fired while its pane held its window's keyboard (upstream's first
@@ -419,6 +421,13 @@ impl AppState {
     /// Asks the frontend to show the first-launch welcome.
     pub(crate) fn show_welcome(&mut self) {
         self.frontend.welcome = true;
+    }
+
+    /// Asks the frontend to open the Settings window, or raise the open one (the app menu's Settings…).
+    pub fn open_settings(&mut self) {
+        if !self.quitting {
+            self.frontend.settings = true;
+        }
     }
 
     /// Arms the remote tick when the core asks for one and none is armed (upstream's `startRemoteTick`); it runs
