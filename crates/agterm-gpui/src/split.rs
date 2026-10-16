@@ -603,7 +603,7 @@ impl Place {
                     .unwrap_or_default(),
                 None => placement.style.panel_frame(full),
             },
-            Self::Program(placement) => crate::overlay::program_rect(placement, width, height),
+            Self::Program(placement) => program_rect(placement.fraction, width, height),
         }
     }
 }

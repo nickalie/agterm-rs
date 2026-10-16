@@ -1,11 +1,13 @@
 //! Desktop notifications on a private session bus: a `dbus-daemon` of the test's own (no service directories, so
 //! nothing on it can be activated) with a fake `org.freedesktop.Notifications` server, never the user's bus. The
-//! banner task reaches the bus `notify-rust` connects to, `DBUS_SESSION_BUS_ADDRESS`, so the scenario runs in a child
-//! of this test binary whose environment holds the private bus alone.
+//! banner task connects to the session bus, `DBUS_SESSION_BUS_ADDRESS`, so the scenario runs in a child of this test
+//! binary whose environment holds the private bus alone.
 //!
 //! The scenario: a repeat from one pane replaces its banner (`replaces_id`), another pane gets its own, a click on a
-//! banner (`ActionInvoked` with the `default` key) reveals its identity, and a clear withdraws the session's banners
-//! still on screen (`CloseNotification`).
+//! banner (`ActionInvoked` with the `default` key) reveals its identity with the activation token the server sent
+//! before it (`ActivationToken`), a banner the server closed (`NotificationClosed`) is forgotten, a failed repeat keeps
+//! the banner still on screen, signals from anyone but the server count for nothing, and a clear withdraws the
+//! session's banners still on screen (`CloseNotification`).
 
 use std::collections::HashMap;
 use std::io::{BufRead as _, BufReader};
@@ -15,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use agterm_core::{NotificationEffect, PaneRole, notification_identity};
-use agterm_gpui::notifications::{BannerSink as _, Desktop, deliver, run};
+use agterm_gpui::notifications::{BannerSink as _, Click, Desktop, deliver, run};
 use uuid::Uuid;
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::OwnedValue;
@@ -25,6 +27,8 @@ const PRIVATE_BUS: &str = "AGTERM_GPUI_TEST_PRIVATE_BUS";
 const PATH: &str = "/org/freedesktop/Notifications";
 const DEADLINE: Duration = Duration::from_secs(20);
 const APP_ID: &str = "io.github.melonamin.agterm.test";
+/// The body the fake server refuses to post.
+const FAILING: &str = "fail";
 
 /// A session bus that listens on `socket` only, activates nothing and lets every client talk to every other.
 fn bus_config(socket: &Path) -> String {
@@ -125,7 +129,10 @@ struct Notify {
 }
 
 impl Server {
-    fn notify(&mut self, request: Notify) -> u32 {
+    fn notify(&mut self, request: Notify) -> zbus::fdo::Result<u32> {
+        if request.body == FAILING {
+            return Err(zbus::fdo::Error::Failed("refused".to_owned()));
+        }
         let id = if request.replaces == 0 {
             self.last += 1;
             self.last
@@ -147,7 +154,7 @@ impl Server {
                 desktop_entry,
             },
         );
-        id
+        Ok(id)
     }
 }
 
@@ -174,7 +181,7 @@ impl Server {
         actions: Vec<String>,
         hints: HashMap<String, OwnedValue>,
         expire_timeout: i32,
-    ) -> u32 {
+    ) -> zbus::fdo::Result<u32> {
         drop((app_icon, summary, expire_timeout));
         self.notify(Notify {
             app: app_name,
@@ -191,6 +198,12 @@ impl Server {
 
     #[zbus(signal)]
     async fn action_invoked(emitter: &SignalEmitter<'_>, id: u32, action_key: &str) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn activation_token(emitter: &SignalEmitter<'_>, id: u32, activation_token: &str) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn notification_closed(emitter: &SignalEmitter<'_>, id: u32, reason: u32) -> zbus::Result<()>;
 }
 
 /// Waits until `done` holds of the recorded calls, or fails.
@@ -216,44 +229,120 @@ fn notifies(calls: &[Call]) -> Vec<(u32, u32, String)> {
         .collect()
 }
 
+/// What a scenario step returns: a failed bus call fails the scenario.
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+
+/// The scenario's parts: the fake server on the private bus, what it was asked, the banner task's sink and clicks, and
+/// the three panes' identities of one session.
+struct Scenario {
+    address: String,
+    calls: Arc<Mutex<Vec<Call>>>,
+    server: zbus::blocking::Connection,
+    sink: Desktop,
+    clicks: std::sync::mpsc::Receiver<Click>,
+    window: Uuid,
+    session: Uuid,
+    main: String,
+    split: String,
+    overlay: String,
+}
+
+impl Scenario {
+    /// The fake server serving on the bus at `address`, and the banner task running beside it.
+    fn start(address: String) -> TestResult<Self> {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let server = zbus::blocking::connection::Builder::address(address.as_str())?
+            .serve_at(
+                PATH,
+                Server {
+                    calls: Arc::clone(&calls),
+                    last: 0,
+                },
+            )?
+            .name("org.freedesktop.Notifications")?
+            .build()?;
+        let (sink, queue) = Desktop::new();
+        let (clicked, clicks) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            zbus::block_on(run(queue, APP_ID.to_owned(), move |click| {
+                let _ = clicked.send(click);
+            }));
+        });
+        let (window, session) = (Uuid::new_v4(), Uuid::new_v4());
+        Ok(Self {
+            address,
+            calls,
+            server,
+            sink,
+            clicks,
+            window,
+            session,
+            main: notification_identity(window, session, PaneRole::Main),
+            split: notification_identity(window, session, PaneRole::Split),
+            overlay: notification_identity(window, session, PaneRole::Overlay),
+        })
+    }
+
+    /// The fake server's interface, whose emitter sends its signals.
+    fn interface(&self) -> TestResult<zbus::blocking::object_server::InterfaceRef<Server>> {
+        Ok(self.server.object_server().interface::<_, Server>(PATH)?)
+    }
+
+    /// The next click, or a failure.
+    fn click(&self) -> TestResult<Click> {
+        Ok(self.clicks.recv_timeout(DEADLINE)?)
+    }
+}
+
+/// Sends a signal of the fake server's.
+fn emit(signal: impl std::future::Future<Output = zbus::Result<()>>) -> TestResult {
+    Ok(zbus::block_on(signal)?)
+}
+
 #[test]
 #[ignore = "run by banners_reach_a_private_bus_replace_click_and_withdraw, on its private bus"]
-fn on_the_private_bus() {
+fn on_the_private_bus() -> TestResult {
     let address = std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap_or_default();
     // only ever on the private bus the parent test started and named: never the user's
     if address.is_empty() || std::env::var(PRIVATE_BUS).ok().as_deref() != Some(address.as_str()) {
         eprintln!("skipped: not on the parent test's private bus");
-        return;
+        return Ok(());
     }
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    let server = zbus::blocking::connection::Builder::address(address.as_str())
-        .unwrap()
-        .serve_at(
-            PATH,
-            Server {
-                calls: Arc::clone(&calls),
-                last: 0,
-            },
-        )
-        .unwrap()
-        .name("org.freedesktop.Notifications")
-        .unwrap()
-        .build()
-        .unwrap();
+    let scenario = Scenario::start(address)?;
+    repeats_replace_their_banner(&scenario);
+    a_click_carries_the_servers_token(&scenario)?;
+    refused_and_closed_banners(&scenario)?;
 
-    let (sink, queue) = Desktop::new();
-    let (clicked, clicks) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        zbus::block_on(run(queue, APP_ID.to_owned(), move |identity| {
-            let _ = clicked.send(identity);
-        }));
+    let clear = NotificationEffect::Clear {
+        window: scenario.window,
+        session: scenario.session,
+    };
+    deliver(&scenario.sink, &[clear]);
+    let seen = wait_for(&scenario.calls, "the withdrawal", |calls| {
+        calls.contains(&Call::Close(2))
     });
-    let (window, session) = (Uuid::new_v4(), Uuid::new_v4());
-    let main = notification_identity(window, session, PaneRole::Main);
-    let split = notification_identity(window, session, PaneRole::Split);
+    let closes: Vec<_> = seen.iter().filter(|call| matches!(call, Call::Close(_))).collect();
+    assert_eq!(
+        closes,
+        [&Call::Close(2)],
+        "only the split's banner is still up, kept through its refused repeat"
+    );
+    assert_eq!(notifies(&seen).len(), 5, "a clear posts nothing");
+    Ok(())
+}
 
-    sink.send(&main, "t", "one");
-    let seen = wait_for(&calls, "the first banner", |calls| notifies(calls).len() == 1);
+/// A banner the server can click, under the app's desktop entry; a repeat from one pane replaces its banner, another
+/// pane gets its own.
+fn repeats_replace_their_banner(scenario: &Scenario) {
+    let Scenario {
+        calls,
+        sink,
+        main,
+        split,
+        ..
+    } = scenario;
+    sink.send(main, "t", "one");
+    let seen = wait_for(calls, "the first banner", |calls| notifies(calls).len() == 1);
     assert_eq!(
         seen[0],
         Call::Notify {
@@ -266,9 +355,9 @@ fn on_the_private_bus() {
         },
         "a banner the server can click, under the app's desktop entry"
     );
-    sink.send(&main, "t", "two");
-    sink.send(&split, "t", "three");
-    let seen = wait_for(&calls, "the repeat and the split's banner", |calls| {
+    sink.send(main, "t", "two");
+    sink.send(split, "t", "three");
+    let seen = wait_for(calls, "the repeat and the split's banner", |calls| {
         notifies(calls).len() == 3
     });
     assert_eq!(
@@ -280,20 +369,70 @@ fn on_the_private_bus() {
         ],
         "a repeat from one pane replaces its banner; another pane gets its own"
     );
+}
 
-    let interface = server.object_server().interface::<_, Server>(PATH).unwrap();
-    zbus::block_on(Server::action_invoked(interface.signal_emitter(), 1, "default")).unwrap();
+/// A click reveals the pane its banner names, with the activation token the server sent before it.
+fn a_click_carries_the_servers_token(scenario: &Scenario) -> TestResult {
+    let interface = scenario.interface()?;
+    let emitter = interface.signal_emitter();
+    emit(Server::activation_token(emitter, 1, "token-1"))?;
+    emit(Server::action_invoked(emitter, 1, "default"))?;
     assert_eq!(
-        clicks.recv_timeout(DEADLINE).unwrap(),
+        scenario.click()?,
+        Click {
+            identity: scenario.main.clone(),
+            token: Some("token-1".to_owned())
+        },
+        "a click reveals the pane its banner names, with the server's activation token"
+    );
+    Ok(())
+}
+
+/// A repeat the server refuses leaves the split's banner known; a clicked banner and one the server closed are
+/// forgotten; a signal from a peer that is not the server counts for nothing.
+fn refused_and_closed_banners(scenario: &Scenario) -> TestResult {
+    let Scenario {
+        calls,
+        sink,
         main,
-        "a click reveals the pane its banner names"
+        split,
+        overlay,
+        ..
+    } = scenario;
+    sink.send(split, "t", FAILING);
+    sink.send(main, "t", "four");
+    sink.send(overlay, "t", "five");
+    let seen = wait_for(calls, "the banners after the refused one", |calls| {
+        notifies(calls).len() == 5
+    });
+    assert_eq!(
+        notifies(&seen)[3..],
+        [(0, 3, "four".to_owned()), (0, 4, "five".to_owned())],
+        "a clicked banner is forgotten: its pane's next banner replaces nothing"
     );
 
-    deliver(&sink, &[NotificationEffect::Clear { window, session }]);
-    let seen = wait_for(&calls, "the withdrawal", |calls| calls.contains(&Call::Close(2)));
-    assert!(
-        !seen.contains(&Call::Close(1)),
-        "the clicked banner is gone already: {seen:?}"
+    // the server closed the main pane's banner: a click on it after reveals nothing; nor does a peer's signal; the
+    // overlay's click, sent last, is the next one seen
+    let interface = scenario.interface()?;
+    let emitter = interface.signal_emitter();
+    emit(Server::notification_closed(emitter, 3, 2))?;
+    emit(Server::action_invoked(emitter, 3, "default"))?;
+    let peer = zbus::blocking::connection::Builder::address(scenario.address.as_str())?.build()?;
+    peer.emit_signal(
+        None::<&str>,
+        PATH,
+        "org.freedesktop.Notifications",
+        "ActionInvoked",
+        &(2_u32, "default"),
+    )?;
+    emit(Server::action_invoked(emitter, 4, "default"))?;
+    assert_eq!(
+        scenario.click()?,
+        Click {
+            identity: overlay.clone(),
+            token: None
+        },
+        "a closed banner and a peer's signal reveal nothing; a click without a token carries none"
     );
-    assert_eq!(notifies(&seen).len(), 3, "a clear posts nothing");
+    Ok(())
 }

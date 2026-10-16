@@ -1870,9 +1870,11 @@ Port the placement rendering from qwertty-term (MIT, attribution).
   - Decisions: a terminal BEL rings nothing (upstream's rule: `RING_BELL` is no notification source; neither upstream
     nor the GTK build sounds it); the welcome's Install runs real installers here rather than waiting for Task 28;
     the quit confirmation of the GTK `welcome.rs` waits for the app menu's Quit (Task 26).
-  - Deviations: the server's `ActivationToken` is not passed on (`notify-rust` does not expose it), so on Wayland a
-    click's raise may be refused by the compositor; each banner holds a session-bus connection of its own while it is
-    up (`notify-rust`'s handle), where `GNotification` used the app's one.
+  - Deviations: banners go over `zbus` directly rather than `notify-rust` (review round 1: `notify-rust` neither
+    exposes the server's `ActivationToken` nor sends on a connection the app owns, which KDE targets that signal at),
+    so `notify-rust` is no dependency; one task-owned connection carries every banner and its signals, and a click
+    raises the window with the server's token through `activation::activate`. Review round 1 also saw the two
+    `test_overlay_open_size_outside_its_range` ids pass with the claim and added them (ratchet 573).
   - Later tasks build on: `OverlayLayer` and `Place::Program` (Task 32 mounts HTML pages in the same places),
     `FrontendWork::{banners, sounds, welcome}`, `status_sound::ring`, `integrations.rs` (Task 28), `AlertCheck`.
 

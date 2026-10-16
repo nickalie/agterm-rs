@@ -1,27 +1,7 @@
-//! The overlay's pure parts: the program panel's rectangle, its config, its focus keys. The overlays on a real page
-//! are tested with the deck (`deck/tests/overlay.rs`).
+//! The overlay's pure parts: its config and its focus keys (the program panel's rectangle is `split::program_rect`).
+//! The overlays on a real page are tested with the deck (`deck/tests/overlay.rs`).
 
 use super::*;
-
-#[test]
-fn a_covering_program_takes_the_page_and_a_floating_one_its_share_centered() {
-    let full = crate::split::Rect::full(800, 600);
-    assert_eq!(program_rect(ProgramPlacement { fraction: None }, 800, 600), full);
-    assert_eq!(
-        program_rect(ProgramPlacement { fraction: Some(0.5) }, 800, 600),
-        crate::split::Rect {
-            x: 200,
-            y: 150,
-            width: 400,
-            height: 300
-        }
-    );
-    assert_eq!(
-        program_rect(ProgramPlacement { fraction: Some(1.5) }, 800, 600),
-        full,
-        "a share past the page is the page"
-    );
-}
 
 #[test]
 fn the_config_paints_only_a_given_background() {

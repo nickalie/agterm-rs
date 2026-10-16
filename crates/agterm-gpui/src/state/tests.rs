@@ -590,6 +590,28 @@ fn a_reopened_windows_first_focus_counts() {
 }
 
 #[test]
+fn a_clicked_banner_raises_its_window_with_the_servers_token() {
+    let (mut state, window, session) = state_with_terminal();
+    let identity = agterm_core::notification_identity(window, session, PaneRole::Main);
+    state.reveal_notification(&identity, Some("token".to_owned()));
+    assert_eq!(
+        state.take_frontend_work().activations,
+        [Activation {
+            token: Some("token".to_owned()),
+            startup_id: None,
+        }],
+        "the server's token raises the window"
+    );
+    state.reveal_notification(&identity, None);
+    assert!(
+        state.take_frontend_work().activations.is_empty(),
+        "without a token the window request raises it"
+    );
+    state.reveal_notification("not an identity", Some("token".to_owned()));
+    assert!(state.take_frontend_work().activations.is_empty(), "nothing to reveal");
+}
+
+#[test]
 fn a_restored_windows_first_focus_counts_over_the_saved_frontmost() {
     let mut library = WindowLibrary::seeded("/home/u");
     let first = library.active_window_id().unwrap();

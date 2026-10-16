@@ -280,6 +280,8 @@ tests/protocol/test_overlay.py::test_open_refusals[relative-url]
 tests/protocol/test_overlay.py::test_open_refusals[root-cwd]
 tests/protocol/test_overlay.py::test_open_refusals[wait-html]
 tests/protocol/test_overlay.py::test_open_refusals[wait-url]
+tests/protocol/test_overlay.py::test_overlay_open_size_outside_its_range[0-1]
+tests/protocol/test_overlay.py::test_overlay_open_size_outside_its_range[101-100]
 tests/protocol/test_overlay.py::test_overlay_opens_in_the_background_unless_it_follows
 tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.close-args0]
 tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.reload-args3]

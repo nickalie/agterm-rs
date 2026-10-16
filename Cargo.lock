@@ -213,7 +213,6 @@ dependencies = [
  "gpui-pre-wgpu",
  "image",
  "libc",
- "notify-rust",
  "png 0.18.1",
  "raw-window-handle",
  "regex",

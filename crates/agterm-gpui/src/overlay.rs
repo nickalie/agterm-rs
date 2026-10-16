@@ -54,23 +54,6 @@ pub struct ProgramPlacement {
     pub fraction: Option<f64>,
 }
 
-/// The program panel's rectangle: centered at its share of the page across and down while it floats, else the page
-/// (upstream's program `OverlayPanelStyle`, always centered).
-#[must_use]
-pub fn program_rect(placement: ProgramPlacement, width: i32, height: i32) -> crate::split::Rect {
-    let Some(fraction) = placement.fraction else {
-        return crate::split::Rect::full(width, height);
-    };
-    let scaled = |extent: i32| crate::modal::pixels(f64::from(extent) * fraction.clamp(0.0, 1.0));
-    let (panel_width, panel_height) = (scaled(width), scaled(height));
-    crate::split::Rect {
-        x: (width - panel_width) / 2,
-        y: (height - panel_height) / 2,
-        width: panel_width,
-        height: panel_height,
-    }
-}
-
 /// The overlay terminal's own config: its `#rrggbb` background, else nothing (the theme's).
 #[must_use]
 pub fn config_overlay(background: Option<&str>) -> String {

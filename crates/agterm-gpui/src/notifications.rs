@@ -1,12 +1,13 @@
 //! Desktop notifications (upstream's `Notifications/NotificationManager.swift`, `notifications.md`; port of the GTK
 //! build's `notifications.rs`, which posted through `GNotification`) over the freedesktop notification server
-//! (`org.freedesktop.Notifications` on the session bus) through `notify-rust`.
+//! (`org.freedesktop.Notifications` on the session bus) through `zbus`.
 //!
 //! The core records each notification (the badge and the `notify` event) and queues its banner; this posts the queued
 //! banners, each under its identity `<windowID>:<sessionID>:<pane>`: a repeat from one pane replaces the last one
-//! (`replaces_id`), and a click on a banner (its `default` action, `ActionInvoked`) reveals the pane that fired.
-//! Withdrawals are the core's explicit clears, queued with the posts and applied in that order
-//! (`CloseNotification`): when a pane of the session takes focus and after a successful swap, as upstream's
+//! (`replaces_id`), and a click on a banner (its `default` action, `ActionInvoked`) reveals the pane that fired and
+//! raises its window with the activation token the server sent just before (`ActivationToken`), as `GNotification`'s
+//! `activate-action` carries it. Withdrawals are the core's explicit clears, queued with the posts and applied in that
+//! order (`CloseNotification`): when a pane of the session takes focus and after a successful swap, as upstream's
 //! `clearDelivered` call sites. A clear withdraws every pane's identity of that window and session; a session no open
 //! window holds gets none, so a closed window's banners stay clickable and reopen it. A banner the server closes (it
 //! expired, the user dismissed it) is forgotten. The badge clears on its own path and leaves the banners.
@@ -15,26 +16,36 @@
 //! alert (Linux has none of upstream's named sounds), through the status sounds' throttled bell
 //! ([`crate::status_sound`]); the badge and the event never depend on it.
 //!
-//! The banners go out in order on one task ([`run`]), each in its own `notify-rust` handle (a connection of its own,
-//! which is where the server's signals for that banner arrive), and each delivered banner's click is waited for
-//! beside it.
+//! The banners go out in order on one task ([`run`]) over one session-bus connection of its own, which is also where
+//! the server's signals arrive (a server may send `ActivationToken` to the connection that posted the banner alone);
+//! the task routes them to their banners by server id.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
 
+use crate::instance::Activation;
 use crate::state::{AppState, Poster, post};
 use agterm_core::{NotificationEffect, parse_notification_identity};
-use futures_util::future::{AbortHandle, Abortable, Either};
-use futures_util::stream::{FuturesUnordered, StreamExt as _};
-use notify_rust::{Hint, Notification, NotificationHandle, NotificationResponse};
+use futures_util::future::Either;
+use futures_util::stream::StreamExt as _;
+use zbus::message::Type as MessageType;
+use zbus::names::OwnedUniqueName;
+use zbus::zvariant::Value;
+use zbus::{Connection, MatchRule, Message, MessageStream};
 
 /// The application name banners carry (the server's grouping; GTK's `g_get_application_name`).
 pub const APP_NAME: &str = "agterm";
 
 /// The action key a click on a banner's body invokes.
 const DEFAULT_ACTION: &str = "default";
+
+/// The hint naming the desktop entry a banner belongs to.
+const DESKTOP_ENTRY_HINT: &str = "desktop-entry";
+
+/// The notification server's bus name, object and interface.
+const SERVER: &str = "org.freedesktop.Notifications";
+const PATH: &str = "/org/freedesktop/Notifications";
+const INTERFACE: &str = "org.freedesktop.Notifications";
 
 /// Where banners go: the notification server, or a recorder in tests.
 pub trait BannerSink {
@@ -112,9 +123,9 @@ impl Desktop {
     #[must_use]
     pub fn start(app_id: String, poster: Poster, executor: &gpui_kit::BackgroundExecutor) -> Self {
         let (sink, queue) = Self::new();
-        let clicked = move |identity: String| {
+        let clicked = move |click: Click| {
             post(&poster, move |state: &mut AppState| {
-                state.reveal_notification(&identity);
+                state.reveal_notification(&click.identity, click.token);
             });
         };
         executor.spawn(run(queue, app_id, clicked)).detach();
@@ -144,135 +155,315 @@ impl BannerSink for Desktop {
     }
 }
 
-/// A banner on screen: which delivery it is, its handle (its server id, the connection its signals reach) and the
-/// wait for its click, aborted when it is replaced or withdrawn.
-struct Delivered {
-    serial: u64,
-    handle: Arc<NotificationHandle>,
-    wait: AbortHandle,
+/// A click on a banner: the identity it was posted under, and the activation token the server sent with the click
+/// (`ActivationToken`: an xdg-activation token on Wayland, a startup id on X11), which raises the window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Click {
+    pub identity: String,
+    pub token: Option<String>,
 }
 
-/// How a banner's wait ended: clicked, or closed by the server (expired, dismissed), for delivery `serial` of
-/// `identity`.
-struct Ended {
-    identity: String,
-    serial: u64,
-    clicked: bool,
+/// What the server says of a banner it shows.
+#[derive(Debug, PartialEq, Eq)]
+enum Signal {
+    /// The token for the click that follows (`ActivationToken`).
+    Token { id: u32, token: String },
+    /// The user clicked the banner or one of its actions (`ActionInvoked`).
+    Invoked { id: u32 },
+    /// The banner is gone: it expired, the user dismissed it, or it was withdrawn (`NotificationClosed`).
+    Closed { id: u32 },
 }
 
-type Wait = Pin<Box<dyn Future<Output = Option<Ended>> + Send>>;
-
-/// The banner task: posts and withdraws `banners` in order, each identity's repeat replacing its banner, and calls
-/// `clicked` with the identity of a banner the user clicked. Ends when every sink is gone.
-pub async fn run(banners: async_channel::Receiver<Banner>, app_id: String, clicked: impl Fn(String) + Send + 'static) {
-    let mut delivered: HashMap<String, Delivered> = HashMap::new();
-    let mut waits: FuturesUnordered<Wait> = FuturesUnordered::new();
-    let mut serial = 0_u64;
-    loop {
-        // a wait that ended is handled before the next banner, so a click seen first forgets its banner first
-        let next = if waits.is_empty() {
-            Either::Right(banners.recv().await)
-        } else {
-            match futures_util::future::select(waits.next(), std::pin::pin!(banners.recv())).await {
-                Either::Left((ended, _)) => Either::Left(ended),
-                Either::Right((banner, _)) => Either::Right(banner),
-            }
-        };
-        match next {
-            Either::Left(Some(Some(ended))) => {
-                if delivered
-                    .get(&ended.identity)
-                    .is_some_and(|known| known.serial == ended.serial)
-                {
-                    delivered.remove(&ended.identity);
-                }
-                if ended.clicked {
-                    tracing::info!(identity = %ended.identity, "notify: banner clicked");
-                    clicked(ended.identity);
-                }
-            }
-            Either::Left(_) => {}
-            Either::Right(Ok(banner @ Banner::Send { .. })) => {
-                serial += 1;
-                if let Some(wait) = send(&banner, &app_id, serial, &mut delivered).await {
-                    waits.push(wait);
-                }
-            }
-            Either::Right(Ok(Banner::Withdraw { identity })) => {
-                if let Some(gone) = delivered.remove(&identity) {
-                    gone.wait.abort();
-                    gone.handle.close_async().await;
-                }
-            }
-            Either::Right(Err(_)) => return,
-        }
-    }
-}
-
-/// Posts `banner` (a send) as delivery `serial`, in place of its identity's banner on screen in `delivered`: its wait,
-/// which the task polls beside the next banners.
-async fn send(banner: &Banner, app_id: &str, serial: u64, delivered: &mut HashMap<String, Delivered>) -> Option<Wait> {
-    let Banner::Send { identity, title, body } = banner else {
-        return None;
-    };
-    let replaced = delivered.remove(identity);
-    let mut notification = Notification::new();
-    notification
-        .appname(APP_NAME)
-        .summary(title)
-        .body(body)
-        .action(DEFAULT_ACTION, "")
-        .hint(Hint::DesktopEntry(app_id.to_owned()));
-    if let Some(replaced) = replaced {
-        replaced.wait.abort();
-        notification.id(replaced.handle.id());
-    }
-    let handle = match notification.show_async().await {
-        Ok(handle) => Arc::new(handle),
-        Err(error) => {
-            tracing::warn!(%error, "notify: the banner was not posted");
+impl Signal {
+    /// The signal `message` carries when `server` sent it; `None` for anything else.
+    fn of(message: &Message, server: Option<&OwnedUniqueName>) -> Option<Self> {
+        let header = message.header();
+        let server = server?;
+        if header.message_type() != MessageType::Signal || header.sender() != Some(&**server) {
             return None;
         }
-    };
-    let (abort, registration) = AbortHandle::new_pair();
-    delivered.insert(
-        identity.to_owned(),
-        Delivered {
-            serial,
-            handle: Arc::clone(&handle),
-            wait: abort,
-        },
-    );
-    let identity = identity.to_owned();
-    let waiting = async move {
-        let mut clicked = false;
-        handle
-            .wait_for_action_async(|response| {
-                clicked = matches!(
-                    response,
-                    NotificationResponse::Default | NotificationResponse::Action(_)
-                );
-            })
-            .await;
-        Ended {
-            identity,
-            serial,
-            clicked,
+        let body = message.body();
+        match header.member()?.as_str() {
+            "ActivationToken" => {
+                let (id, token) = body.deserialize::<(u32, String)>().ok()?;
+                Some(Self::Token { id, token })
+            }
+            "ActionInvoked" => {
+                let (id, _key) = body.deserialize::<(u32, String)>().ok()?;
+                Some(Self::Invoked { id })
+            }
+            "NotificationClosed" => {
+                let (id, _reason) = body.deserialize::<(u32, u32)>().ok()?;
+                Some(Self::Closed { id })
+            }
+            _ => None,
         }
+    }
+}
+
+/// The banner task's session-bus connection: the server's signals it reads (`signals`) and those that arrived while a
+/// call waited for its reply (`early`), handled next.
+struct Bus {
+    connection: Connection,
+    signals: MessageStream,
+    early: VecDeque<Message>,
+}
+
+impl Bus {
+    async fn open() -> zbus::Result<Self> {
+        let connection = Connection::session().await?;
+        let rule = MatchRule::builder()
+            .msg_type(MessageType::Signal)
+            .interface(INTERFACE)?
+            .path(PATH)?
+            .build();
+        let signals = MessageStream::for_match_rule(rule, &connection, None).await?;
+        Ok(Self {
+            connection,
+            signals,
+            early: VecDeque::new(),
+        })
+    }
+
+    /// The next of the server's signals, `None` once the connection is gone.
+    async fn signal(&mut self) -> Option<Message> {
+        if let Some(early) = self.early.pop_front() {
+            return Some(early);
+        }
+        loop {
+            match self.signals.next().await? {
+                Ok(message) => return Some(message),
+                Err(error) => tracing::debug!(%error, "notify: an unreadable message on the bus"),
+            }
+        }
+    }
+
+    /// Waits for `reply` while still reading the signals into `early`: a connection whose signal queue fills stops
+    /// reading its socket, the reply included.
+    async fn reply(
+        signals: &mut MessageStream,
+        early: &mut VecDeque<Message>,
+        reply: impl Future<Output = zbus::Result<Message>>,
+    ) -> zbus::Result<Message> {
+        let mut reply = std::pin::pin!(reply);
+        loop {
+            match futures_util::future::select(reply.as_mut(), signals.next()).await {
+                Either::Left((reply, _)) => return reply,
+                Either::Right((Some(Ok(message)), _)) => early.push_back(message),
+                Either::Right((Some(Err(_)), _)) => {}
+                Either::Right((None, _)) => return reply.await,
+            }
+        }
+    }
+
+    /// Posts a banner in place of banner `replaces` (0 for none): its id, and the server's unique name.
+    async fn notify(
+        &mut self,
+        replaces: u32,
+        title: &str,
+        body: &str,
+        app_id: &str,
+    ) -> zbus::Result<(u32, Option<OwnedUniqueName>)> {
+        let Self {
+            connection,
+            signals,
+            early,
+        } = self;
+        let actions = vec![DEFAULT_ACTION, ""];
+        let hints = HashMap::from([(DESKTOP_ENTRY_HINT, Value::from(app_id))]);
+        // the server's own expiry
+        let expire_timeout = -1_i32;
+        let arguments = (APP_NAME, replaces, "", title, body, actions, hints, expire_timeout);
+        let call = connection.call_method(Some(SERVER), PATH, Some(INTERFACE), "Notify", &arguments);
+        let reply = Self::reply(signals, early, call).await?;
+        let server = reply
+            .header()
+            .sender()
+            .map(|name| OwnedUniqueName::from(name.to_owned()));
+        Ok((reply.body().deserialize::<u32>()?, server))
+    }
+
+    /// Withdraws banner `id`.
+    async fn close(&mut self, id: u32) -> zbus::Result<()> {
+        let Self {
+            connection,
+            signals,
+            early,
+        } = self;
+        let arguments = (id,);
+        let call = connection.call_method(Some(SERVER), PATH, Some(INTERFACE), "CloseNotification", &arguments);
+        Self::reply(signals, early, call).await.map(drop)
+    }
+}
+
+/// The banners on screen: their server ids by identity, the tokens the server sent for them, and the server that
+/// posted them (whose signals alone count).
+#[derive(Default)]
+struct Shown {
+    ids: HashMap<String, u32>,
+    tokens: HashMap<u32, String>,
+    server: Option<OwnedUniqueName>,
+}
+
+impl Shown {
+    /// Forgets banner `id`: the identity it was posted under, if it is still that identity's banner.
+    fn forget(&mut self, id: u32) -> Option<String> {
+        self.tokens.remove(&id);
+        let identity = self.ids.iter().find(|(_, known)| **known == id)?.0.clone();
+        self.ids.remove(&identity);
+        Some(identity)
+    }
+
+    /// Applies the server's signal `message`: the click it reports, if any.
+    fn signal(&mut self, message: &Message) -> Option<Click> {
+        match Signal::of(message, self.server.as_ref())? {
+            Signal::Token { id, token } => {
+                if self.ids.values().any(|known| *known == id) {
+                    self.tokens.insert(id, token);
+                }
+                None
+            }
+            Signal::Invoked { id } => {
+                let token = self.tokens.remove(&id);
+                let identity = self.forget(id)?;
+                Some(Click { identity, token })
+            }
+            Signal::Closed { id } => {
+                self.forget(id);
+                None
+            }
+        }
+    }
+
+    /// Posts `banner` (a send) on `bus`, in place of its identity's banner on screen. A post that fails leaves that
+    /// banner known, so a later clear still withdraws it and its click still reveals its pane.
+    async fn send(&mut self, bus: &mut Bus, banner: &Banner, app_id: &str) {
+        let Banner::Send { identity, title, body } = banner else {
+            return;
+        };
+        let replaces = self.ids.get(identity).copied().unwrap_or(0);
+        match bus.notify(replaces, title, body, app_id).await {
+            Ok((id, server)) => {
+                if replaces != 0 && replaces != id {
+                    self.tokens.remove(&replaces);
+                }
+                self.ids.insert(identity.clone(), id);
+                self.server = server;
+            }
+            Err(error) => tracing::warn!(%error, "notify: the banner was not posted"),
+        }
+    }
+
+    /// Withdraws banner `identity` from `bus`.
+    async fn withdraw(&mut self, bus: &mut Bus, identity: &str) {
+        let Some(id) = self.ids.remove(identity) else {
+            return;
+        };
+        self.tokens.remove(&id);
+        if let Err(error) = bus.close(id).await {
+            tracing::debug!(%error, "notify: the banner was not withdrawn");
+        }
+    }
+
+    /// Whether `banner` has anything to do on the server: every send, a withdrawal of a banner on screen.
+    fn reaches_server(&self, banner: &Banner) -> bool {
+        match banner {
+            Banner::Send { .. } => true,
+            Banner::Withdraw { identity } => self.ids.contains_key(identity),
+        }
+    }
+}
+
+/// What the banner task handles next.
+enum Next {
+    Banner(Banner),
+    Signal(Message),
+    /// The connection is gone: the next banner opens another.
+    Lost,
+    /// Every sink is gone.
+    Done,
+}
+
+/// The banner task: posts and withdraws `banners` in order on one session-bus connection (opened with the first
+/// banner, again after it drops), each identity's repeat replacing its banner, and calls `clicked` with each banner
+/// the user clicked. Ends when every sink is gone.
+pub async fn run(banners: async_channel::Receiver<Banner>, app_id: String, clicked: impl Fn(Click) + Send + 'static) {
+    let mut shown = Shown::default();
+    let mut bus: Option<Bus> = None;
+    loop {
+        match next(&mut bus, &banners).await {
+            Next::Signal(message) => {
+                if let Some(click) = shown.signal(&message) {
+                    tracing::info!(identity = %click.identity, token = click.token.is_some(), "notify: banner clicked");
+                    clicked(click);
+                }
+            }
+            Next::Lost => {
+                tracing::debug!("notify: the session-bus connection is gone");
+                bus = None;
+            }
+            Next::Banner(banner) => {
+                if !shown.reaches_server(&banner) {
+                    continue;
+                }
+                let Some(open) = connected(&mut bus).await else {
+                    continue;
+                };
+                match &banner {
+                    Banner::Send { .. } => shown.send(open, &banner, &app_id).await,
+                    Banner::Withdraw { identity } => shown.withdraw(open, identity).await,
+                }
+            }
+            Next::Done => return,
+        }
+    }
+}
+
+/// The next banner or server signal: a signal ready first is handled first, so a click seen before the next banner
+/// forgets its banner first.
+async fn next(bus: &mut Option<Bus>, banners: &async_channel::Receiver<Banner>) -> Next {
+    let Some(open) = bus.as_mut() else {
+        return banners.recv().await.map_or(Next::Done, Next::Banner);
     };
-    Some(Box::pin(
-        async move { Abortable::new(waiting, registration).await.ok() },
-    ))
+    let signal = std::pin::pin!(open.signal());
+    let banner = std::pin::pin!(banners.recv());
+    match futures_util::future::select(signal, banner).await {
+        Either::Left((Some(message), _)) => Next::Signal(message),
+        Either::Left((None, _)) => Next::Lost,
+        Either::Right((Ok(banner), _)) => Next::Banner(banner),
+        Either::Right((Err(_), _)) => Next::Done,
+    }
+}
+
+/// The task's connection, opened when there is none; `None` when the bus is out of reach (the banner is dropped).
+async fn connected(bus: &mut Option<Bus>) -> Option<&mut Bus> {
+    if bus.is_none() {
+        match Bus::open().await {
+            Ok(open) => *bus = Some(open),
+            Err(error) => {
+                tracing::warn!(%error, "notify: no session bus to post banners on");
+                return None;
+            }
+        }
+    }
+    bus.as_mut()
 }
 
 impl AppState {
-    /// A banner was clicked: its pane is revealed (its closed window reopened, even when the session turned out gone);
-    /// a malformed identity only leaves the app up.
-    pub fn reveal_notification(&mut self, identity: &str) {
+    /// A banner was clicked: its pane is revealed (its closed window reopened, even when the session turned out gone)
+    /// and its window raised with the server's activation `token` when it sent one (a compositor that prevents focus
+    /// stealing may refuse a raise without one); a malformed identity only leaves the app up.
+    pub fn reveal_notification(&mut self, identity: &str, token: Option<String>) {
         let Some((window, session, pane)) = parse_notification_identity(identity) else {
             return;
         };
         if self.core.reveal_notification(window, session, pane) {
+            if let Some(token) = token {
+                self.activation_requested(Activation {
+                    token: Some(token),
+                    startup_id: None,
+                });
+            }
             self.settle();
         }
     }

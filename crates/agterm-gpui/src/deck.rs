@@ -364,7 +364,8 @@ impl Page {
             .map(|(_, cover)| cover)
     }
 
-    /// The token and terminal that should hold keyboard focus by the last plan.
+    /// The focused pane's terminal by the last plan. A terminal ask or an overlay may hold the keyboard over it (see
+    /// `keyboard`).
     #[must_use]
     pub fn focus(&self) -> Option<&PaneTerminal> {
         let plan = self.plan.as_ref()?;
@@ -554,8 +555,8 @@ impl Deck {
     }
 
     /// Brings the deck in line with its window's sessions: pages for new sessions, gone sessions' pages removed, every
-    /// page's panes synced with its session, the selected session's page shown and its focused pane given the keyboard
-    /// when that changed. While the window is zoomed into one of its terminals, that session's page shows instead,
+    /// page's panes synced with its session, the selected session's page shown and the keyboard given to what takes it
+    /// there when that changed (its terminal ask, its focused overlay, else its focused pane). While the window is zoomed into one of its terminals, that session's page shows instead,
     /// selected or not, with that terminal alone (upstream's zoom layer). `modal`: the window's picker or GUI ask (or
     /// the palette) holds the keyboard.
     ///
