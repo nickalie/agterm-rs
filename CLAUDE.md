@@ -1,9 +1,22 @@
 # agterm-rs
 
-agterm in Rust, Linux first: upstream macOS agterm (`umputun/agterm` v0.36.0) is the parity target, the GTK4/libadwaita
-frontend runs libghostty in a `GtkGLArea`. Build, run and test commands are in [README.md](README.md); the suite and
-the ratchet in [conformance/README.md](conformance/README.md) and
+agterm in Rust for macOS, Linux and Windows as equal targets: upstream macOS agterm (`umputun/agterm` v0.36.0) is the
+parity target. The GTK4/libadwaita frontend (Linux only) runs libghostty in a `GtkGLArea`; the GPUI frontend, which
+renders libghostty-vt itself, is the cross-platform one that replaces it. Build, run and test commands are in
+[README.md](README.md); the suite and the ratchet in [conformance/README.md](conformance/README.md) and
 [conformance/docs/rust-build.md](conformance/docs/rust-build.md).
+
+## Platforms
+
+- macOS, Linux and Windows are equal targets. A feature is done when it works on all three, not when it works on the
+  dev box; nothing ships as "Linux now, the others later".
+- A platform-specific mechanism (PTY, IPC, process tables, daemon spawn, paths, notifications) comes with its
+  counterparts for the other two in the same change or the same plan. POSIX-only code sits behind `cfg` with its
+  Windows form beside it, never as the only path.
+- Prefer cross-platform crates over per-OS code (`portable-pty` with ConPTY, `interprocess`, `windows-sys` for what
+  remains). A crate marked `any` in the map below must build on all three.
+- Code for an OS the dev box is not runs on CI for that OS (macOS and Windows runners), not only through `cargo check`.
+- Within Linux, any desktop counts: wlroots, KDE, GNOME, weston, X11. Every compositor-specific path has a fallback.
 
 ## Crate map
 
@@ -63,7 +76,7 @@ native pins in `build/pins.env` together.
 
 ## Fork coexistence
 
-The build keeps the fork's application id `io.github.melonamin.agterm`, state dir (`$XDG_DATA_HOME/agterm`) and socket
+On Linux, the build keeps the fork's application id `io.github.melonamin.agterm`, state dir (`$XDG_DATA_HOME/agterm`) and socket
 (`<state dir>/agterm.sock`), so it can replace the fork installed on this machine with its state. While an installed
 agterm runs, launch a checkout's build only through `scripts/run-dev.sh` (or the suite): a plain launch is forwarded
 to the running instance through its app id, or both write one `windows.json`. The socket's `flock` keeps a second
