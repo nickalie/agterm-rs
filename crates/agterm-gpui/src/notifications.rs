@@ -18,7 +18,10 @@
 //!
 //! The banners go out in order on one task ([`run`]) over one session-bus connection of its own, which is also where
 //! the server's signals arrive (a server may send `ActivationToken` to the connection that posted the banner alone);
-//! the task routes them to their banners by server id.
+//! the task routes them to their banners by server id. Those ids are the server's own: before one is reused (a repeat's
+//! `replaces_id`, a withdrawal) the task asks the bus who owns the server's name now, and a reply from another server
+//! than the last one tells the same, so the ids a server that restarted handed out are forgotten, never sent to its
+//! successor (which numbers its banners afresh).
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -46,6 +49,11 @@ const DESKTOP_ENTRY_HINT: &str = "desktop-entry";
 const SERVER: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
 const INTERFACE: &str = "org.freedesktop.Notifications";
+
+/// The bus itself, which says who owns a name (`GetNameOwner`), and its answer when nobody does.
+const BUS: &str = "org.freedesktop.DBus";
+const BUS_PATH: &str = "/org/freedesktop/DBus";
+const NO_OWNER: &str = "org.freedesktop.DBus.Error.NameHasNoOwner";
 
 /// Where banners go: the notification server, or a recorder in tests.
 pub trait BannerSink {
@@ -283,6 +291,22 @@ impl Bus {
         Ok((reply.body().deserialize::<u32>()?, server))
     }
 
+    /// The unique name that owns the server's name now, `None` when nobody does.
+    async fn owner(&mut self) -> zbus::Result<Option<OwnedUniqueName>> {
+        let Self {
+            connection,
+            signals,
+            early,
+        } = self;
+        let arguments = (SERVER,);
+        let call = connection.call_method(Some(BUS), BUS_PATH, Some(BUS), "GetNameOwner", &arguments);
+        match Self::reply(signals, early, call).await {
+            Ok(reply) => Ok(Some(reply.body().deserialize::<OwnedUniqueName>()?)),
+            Err(zbus::Error::MethodError(name, ..)) if name.as_str() == NO_OWNER => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Withdraws banner `id`.
     async fn close(&mut self, id: u32) -> zbus::Result<()> {
         let Self {
@@ -335,20 +359,50 @@ impl Shown {
         }
     }
 
+    /// The banners are `server`'s: a server other than the one that posted the banners known forgets them all, since
+    /// their ids are that server's (one that restarted numbers its banners afresh, so they would name another's).
+    fn served_by(&mut self, server: Option<OwnedUniqueName>) {
+        if self.server == server {
+            return;
+        }
+        if !self.ids.is_empty() {
+            tracing::debug!(
+                banners = self.ids.len(),
+                "notify: the server changed; its banners are forgotten"
+            );
+        }
+        self.ids.clear();
+        self.tokens.clear();
+        self.server = server;
+    }
+
+    /// Makes sure the banner `identity` names, if any, is still the current server's before its id is reused: the
+    /// bus says who owns the server's name now. A bus that does not answer leaves the banners known.
+    async fn confirm(&mut self, bus: &mut Bus, identity: &str) {
+        if !self.ids.contains_key(identity) {
+            return;
+        }
+        match bus.owner().await {
+            Ok(owner) => self.served_by(owner),
+            Err(error) => tracing::debug!(%error, "notify: the server's owner is unknown"),
+        }
+    }
+
     /// Posts `banner` (a send) on `bus`, in place of its identity's banner on screen. A post that fails leaves that
     /// banner known, so a later clear still withdraws it and its click still reveals its pane.
     async fn send(&mut self, bus: &mut Bus, banner: &Banner, app_id: &str) {
         let Banner::Send { identity, title, body } = banner else {
             return;
         };
+        self.confirm(bus, identity).await;
         let replaces = self.ids.get(identity).copied().unwrap_or(0);
         match bus.notify(replaces, title, body, app_id).await {
             Ok((id, server)) => {
+                self.served_by(server);
                 if replaces != 0 && replaces != id {
                     self.tokens.remove(&replaces);
                 }
                 self.ids.insert(identity.clone(), id);
-                self.server = server;
             }
             Err(error) => tracing::warn!(%error, "notify: the banner was not posted"),
         }
@@ -356,6 +410,7 @@ impl Shown {
 
     /// Withdraws banner `identity` from `bus`.
     async fn withdraw(&mut self, bus: &mut Bus, identity: &str) {
+        self.confirm(bus, identity).await;
         let Some(id) = self.ids.remove(identity) else {
             return;
         };

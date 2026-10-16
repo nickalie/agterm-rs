@@ -6,8 +6,9 @@
 //! The scenario: a repeat from one pane replaces its banner (`replaces_id`), another pane gets its own, a click on a
 //! banner (`ActionInvoked` with the `default` key) reveals its identity with the activation token the server sent
 //! before it (`ActivationToken`), a banner the server closed (`NotificationClosed`) is forgotten, a failed repeat keeps
-//! the banner still on screen, signals from anyone but the server count for nothing, and a clear withdraws the
-//! session's banners still on screen (`CloseNotification`).
+//! the banner still on screen, signals from anyone but the server count for nothing, a clear withdraws the
+//! session's banners still on screen (`CloseNotification`), and a server that took over the name (the old one
+//! restarted) never gets the old one's ids: no `replaces_id` and no `CloseNotification` of them.
 
 use std::collections::HashMap;
 use std::io::{BufRead as _, BufReader};
@@ -117,6 +118,23 @@ enum Call {
 struct Server {
     calls: Arc<Mutex<Vec<Call>>>,
     last: u32,
+}
+
+/// The notification server's bus name.
+const SERVER_NAME: &str = "org.freedesktop.Notifications";
+
+/// A fake server recording into `calls`, serving on the bus at `address` under the server's name.
+fn serve(address: &str, calls: &Arc<Mutex<Vec<Call>>>) -> TestResult<zbus::blocking::Connection> {
+    Ok(zbus::blocking::connection::Builder::address(address)?
+        .serve_at(
+            PATH,
+            Server {
+                calls: Arc::clone(calls),
+                last: 0,
+            },
+        )?
+        .name(SERVER_NAME)?
+        .build()?)
 }
 
 /// The `Notify` call as the server reads it.
@@ -251,16 +269,7 @@ impl Scenario {
     /// The fake server serving on the bus at `address`, and the banner task running beside it.
     fn start(address: String) -> TestResult<Self> {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let server = zbus::blocking::connection::Builder::address(address.as_str())?
-            .serve_at(
-                PATH,
-                Server {
-                    calls: Arc::clone(&calls),
-                    last: 0,
-                },
-            )?
-            .name("org.freedesktop.Notifications")?
-            .build()?;
+        let server = serve(&address, &calls)?;
         let (sink, queue) = Desktop::new();
         let (clicked, clicks) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -328,6 +337,78 @@ fn on_the_private_bus() -> TestResult {
         "only the split's banner is still up, kept through its refused repeat"
     );
     assert_eq!(notifies(&seen).len(), 5, "a clear posts nothing");
+    a_restarted_server_gets_none_of_the_old_ids(&scenario)
+}
+
+/// The server's name passes to another server that numbers its banners from 1 again (the old one restarted without
+/// closing its banners): the new one gets none of the old one's ids, neither as a repeat's `replaces_id` nor in a
+/// withdrawal, and its signals are the ones that count.
+fn a_restarted_server_gets_none_of_the_old_ids(scenario: &Scenario) -> TestResult {
+    let Scenario {
+        calls,
+        sink,
+        main,
+        split,
+        overlay,
+        ..
+    } = scenario;
+    sink.send(main, "t", "six");
+    sink.send(split, "t", "seven");
+    let before = wait_for(calls, "the banners before the restart", |calls| {
+        notifies(calls).len() == 7
+    });
+    assert_eq!(
+        notifies(&before)[5..],
+        [(0, 5, "six".to_owned()), (0, 6, "seven".to_owned())]
+    );
+
+    scenario.server.release_name(SERVER_NAME)?;
+    let restarted = Arc::new(Mutex::new(Vec::new()));
+    let successor = serve(&scenario.address, &restarted)?;
+    sink.send(main, "t", "eight");
+    deliver(
+        sink,
+        &[NotificationEffect::Clear {
+            window: scenario.window,
+            session: scenario.session,
+        }],
+    );
+    sink.send(overlay, "t", "nine");
+    sink.send(split, "t", "ten");
+    let seen = wait_for(&restarted, "the banners after the restart", |calls| {
+        notifies(calls).len() == 3
+    });
+    let summary: Vec<_> = seen
+        .iter()
+        .map(|call| match call {
+            Call::Notify { replaces, id, body, .. } => format!("notify {replaces} {id} {body}"),
+            Call::Close(id) => format!("close {id}"),
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        ["notify 0 1 eight", "close 1", "notify 0 2 nine", "notify 0 3 ten"],
+        "the new server replaces and withdraws none of the old one's banners, only its own"
+    );
+    assert_eq!(
+        calls.lock().map(|calls| calls.len()).unwrap_or_default(),
+        before.len(),
+        "the old server gets nothing more"
+    );
+
+    // the old server's click counts for nothing now; the new one's does
+    let old = scenario.interface()?;
+    emit(Server::action_invoked(old.signal_emitter(), 3, "default"))?;
+    let new = successor.object_server().interface::<_, Server>(PATH)?;
+    emit(Server::action_invoked(new.signal_emitter(), 3, "default"))?;
+    assert_eq!(
+        scenario.click()?,
+        Click {
+            identity: split.clone(),
+            token: None
+        },
+        "the new server's click reveals its banner's pane; the old server's counts for nothing"
+    );
     Ok(())
 }
 
