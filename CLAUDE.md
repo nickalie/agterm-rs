@@ -76,11 +76,10 @@ native pins in `build/pins.env` together.
 
 ## Fork coexistence
 
-On Linux, the build keeps the fork's application id `io.github.melonamin.agterm`, state dir (`$XDG_DATA_HOME/agterm`) and socket
-(`<state dir>/agterm.sock`), so it can replace the fork installed on this machine with its state. While an installed
-agterm runs, launch a checkout's build only through `scripts/run-dev.sh` (or the suite): a plain launch is forwarded
-to the running instance through its app id, or both write one `windows.json`. The socket's `flock` keeps a second
-instance from unlinking the live socket, not from sharing its state.
+On Linux, the build shares the installed fork's application id, state dir and control socket, so it can replace the
+fork on this machine with its state. While an installed agterm runs, launch a checkout's build only through
+`scripts/run-dev.sh` (or the suite): a plain launch is forwarded to the running instance, or both write the same state.
+The socket lock keeps a second instance from taking over the live socket, not from sharing its state.
 
 ## Never touch the user's running agterm
 
@@ -89,11 +88,10 @@ Every dev instance, probe or `agtermctl` call stays off it:
 
 - Strip `AGTERM_*` and `ZMX_*` from the environment before launching anything (`run-dev.sh` and the harness do).
 - Give every `agtermctl` call an explicit `--socket` (a per-subcommand option, after the subcommand name). Without it
-  the CLI resolves `<state dir>/agterm.sock`, which is the live instance's.
-- Use a private state dir, so the instance's zmx dir (`/tmp/agterm-zmx-<FNV-1a 64 of the state dir>`) is private
-  too. Live sessions outlive the app by design: reap only the zmx processes carrying that instance's `ZMX_DIR`, never
-  `pkill zmx`, and never run `zmx` without that `ZMX_DIR`.
-- Run the GUI headless (the suite's private weston and dbus, or `GDK_BACKEND=x11 xvfb-run` for `cargo test`), never
-  on the user's desktop. A hand-started headless weston needs `--renderer=gl` and, on an NVIDIA machine, Mesa's EGL
-  vendor (`__EGL_VENDOR_LIBRARY_FILENAMES`), as `impls/base.py` sets up: without them GTK crashes realizing the
+  the CLI resolves the live instance's socket.
+- Use a private state dir, so the instance's live-session namespace is private too. Live sessions outlive the app by
+  design: reap only the session processes of that instance's namespace, never by name (`pkill zmx`), and never run
+  `zmx` outside that namespace.
+- Run the GUI headless (the suite's private compositor and dbus, or `xvfb-run` for `cargo test`), never on the user's
+  desktop. A compositor started by hand copies the setup in `impls/base.py`; without it GTK crashes realizing the
   window.
