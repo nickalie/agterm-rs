@@ -312,11 +312,11 @@ impl MainLoop<AppState> for Posted {
     }
 }
 
-/// `/bin/sh -c 'exec cat'` with the inherited `AGTERM_*`/`ZMX_*` variables removed, whatever the launch asked.
-fn quiet_launcher(launches: Arc<Mutex<Vec<Launch>>>) -> crate::pane::Launcher {
+/// `/bin/sh -c <script>` with the inherited `AGTERM_*`/`ZMX_*` variables removed, whatever the launch asked.
+fn quiet_launcher(launches: Arc<Mutex<Vec<Launch>>>, script: &'static str) -> crate::pane::Launcher {
     Rc::new(move |launch: &Launch| -> Spawn {
         launches.lock().unwrap().push(launch.clone());
-        let mut command = PaneCommand::new("/bin/sh").arg("-c").arg("exec cat");
+        let mut command = PaneCommand::new("/bin/sh").arg("-c").arg(script);
         for (key, _) in std::env::vars_os() {
             let name = key.to_string_lossy();
             if name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
@@ -339,6 +339,11 @@ struct Harness<'a> {
 }
 
 fn harness(cx: &mut TestAppContext) -> Harness<'_> {
+    harness_running(cx, "exec cat")
+}
+
+/// The harness with the quick terminal running `/bin/sh -c <script>`.
+fn harness_running<'a>(cx: &'a mut TestAppContext, script: &'static str) -> Harness<'a> {
     // the pane's thread wakes its pump from outside the test scheduler
     cx.executor().allow_parking();
     let (library, _, _) = crate::pane::tests::three_sessions();
@@ -363,7 +368,7 @@ fn harness(cx: &mut TestAppContext) -> Harness<'_> {
             socket: "/tmp/agterm-test.sock".to_owned(),
             program_version: "1.2.3".to_owned(),
         },
-        quiet_launcher(Arc::clone(&launches)),
+        quiet_launcher(Arc::clone(&launches), script),
         TerminalConfig::default(),
         Arc::downgrade(&main_loop),
         Watermarks {
@@ -443,6 +448,28 @@ impl Harness<'_> {
     fn quick_text(&self) -> Option<String> {
         let pane = self.panel.shared()?.pane()?;
         pane.read_text(agterm_term::TextRegion::Viewport).ok()
+    }
+
+    /// Gives the panel's window the keyboard.
+    fn activate(&mut self) {
+        let mut visual = self.visual();
+        visual.update(|window, _| window.activate_window());
+        visual.run_until_parked();
+        self.turn();
+    }
+
+    /// Lets the key monitor's delayed keyboard-left check run.
+    fn pass_leave_check(&mut self) {
+        self.cx.executor().advance_clock(Duration::from_millis(500));
+        self.turn();
+    }
+
+    /// The focus reports `cat -v` echoed after the program's `ready`.
+    fn reports(&self) -> String {
+        let text = self.quick_text().unwrap_or_default();
+        text.split_once("ready")
+            .map(|(_, after)| after.trim().to_owned())
+            .unwrap_or_default()
     }
 }
 
@@ -564,4 +591,72 @@ fn the_window_managers_close_hides_the_panel_with_its_shell_kept(cx: &mut TestAp
     assert!(!h.state.core.quick_visible());
     assert!(h.panel.window().is_none());
     assert!(h.state.core.quick_has_surface());
+}
+
+#[gpui_kit::test]
+fn a_hide_the_panel_starts_itself_forgets_the_keys_the_keymap_consumed(cx: &mut TestAppContext) {
+    let mut h = harness(cx);
+    crate::keymap_dispatch::sync(&h.state.core, &h.env.poster);
+    h.state.core.toggle_quick_terminal();
+    h.turn();
+    h.activate();
+    assert!(h.cx.update(|cx| holds_keyboard(cx)));
+    // the toggle's chord in the panel: the keymap consumes it and the panel hides itself
+    let mut visual = h.visual();
+    visual.simulate_keystrokes("ctrl-`");
+    h.turn();
+    assert!(!h.state.core.quick_visible(), "the chord hid the panel");
+    assert!(h.panel.window().is_none());
+    // the key-up goes to whatever takes the keyboard next, another application here: once no agterm window holds
+    // it the press is forgotten, so the key's next press is no autorepeat to swallow
+    h.pass_leave_check();
+    assert!(
+        !crate::keymap_dispatch::release_simulated("ctrl-`"),
+        "the consumed press was forgotten"
+    );
+}
+
+#[gpui_kit::test]
+fn a_hide_reports_the_focus_leaving_and_the_next_show_its_return(cx: &mut TestAppContext) {
+    let script = "stty -echo -icanon; printf '\\033[?1004hready\\r\\n'; exec cat -v";
+    let mut h = harness_running(cx, script);
+    h.state.core.toggle_quick_terminal();
+    h.turn();
+    h.activate();
+    h.until("the program to enable focus reports", |h| {
+        h.quick_text().is_some_and(|text| text.contains("ready"))
+    });
+    h.until("the view to take the keyboard", Harness::terminal_focused);
+    assert!(!h.reports().contains("^[[O"), "{}", h.reports());
+
+    // hidden: the window is removed with no blur or deactivation, and the program is told the focus left
+    h.state.core.toggle_quick_terminal();
+    h.turn();
+    assert!(h.panel.window().is_none());
+    h.until("the focus-out report", |h| h.reports().ends_with("^[[O"));
+
+    // shown again: the new window's view reports the focus coming back
+    h.state.core.toggle_quick_terminal();
+    h.turn();
+    h.activate();
+    h.until("the focus-in report", |h| h.reports().ends_with("^[[O^[[I"));
+    assert_eq!(h.reports().matches("^[[O").count(), 1, "{}", h.reports());
+}
+
+#[gpui_kit::test]
+fn a_window_the_panel_is_closing_loses_the_keyboard_without_a_dismissal(cx: &mut TestAppContext) {
+    let mut h = harness(cx);
+    // summoned, so a focus loss would dismiss it
+    h.state.core.toggle_quick_terminal();
+    h.turn();
+    h.activate();
+    assert!(h.cx.update(|cx| holds_keyboard(cx)));
+    // the keyboard leaving a window the panel closes for a reopen (the layer host's zoom or refit) is the reopen's,
+    // not a focus loss: the panel stays
+    h.panel.shown.as_ref().unwrap().links.closing.set(true);
+    let mut visual = h.visual();
+    visual.deactivate_window();
+    h.turn();
+    assert!(h.state.core.quick_visible(), "the reopen is no focus loss");
+    assert!(h.panel.window().is_some());
 }

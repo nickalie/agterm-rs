@@ -88,12 +88,6 @@ impl Windows {
         }
     }
 
-    /// The quick terminal's panel.
-    #[must_use]
-    pub fn quick(&self) -> &QuickPanel {
-        &self.quick
-    }
-
     /// The panes' shared environment.
     #[must_use]
     pub fn env(&self) -> &Rc<DeckEnv> {

@@ -297,15 +297,24 @@ fn the_panel_is_an_overlay_layer_surface_under_a_nested_niri() -> TestResult {
     wait_count(&sandbox, "quick terminal: holds the keyboard", 1)?;
     round_trip(&sandbox, "QNIR1")?;
 
-    // the zoom reopens the surface anchored to every edge, the unzoom back at the panel's size
+    // the zoom reopens the surface anchored to every edge, the unzoom back at the panel's size; the new surface takes
+    // the keyboard and neither surface reports losing it (the control show pinned the panel, so a focus loss would
+    // not hide it: the log is what shows one)
     zoom(&sandbox, "show")?;
     wait_count(&sandbox, "quick terminal: shown", 2)?;
     wait_count(&sandbox, "quick terminal: sized size=1280x800", 1)?;
     wait_count(&sandbox, "quick terminal: holds the keyboard", 2)?;
-    assert_eq!(quick_state(&sandbox)?, (true, true), "the reopen is no focus loss");
+    assert_eq!(quick_state(&sandbox)?, (true, true));
     zoom(&sandbox, "hide")?;
     wait_count(&sandbox, "quick terminal: shown", 3)?;
     wait_count(&sandbox, "quick terminal: sized size=1100x700", 2)?;
+    wait_count(&sandbox, "quick terminal: holds the keyboard", 3)?;
+    assert_eq!(
+        count(&sandbox, "quick terminal: lost the keyboard"),
+        0,
+        "the reopens are no focus loss:\n{}",
+        sandbox.log("primary.log")
+    );
 
     quick(&sandbox, "hide")?;
     wait_for(|| niri_layer(&sandbox, namespace).is_none().then_some(()))

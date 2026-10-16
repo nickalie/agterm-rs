@@ -28,7 +28,10 @@
 //!
 //! Losing the keyboard dismisses only a panel the user summoned ([`Core::quick_lost_focus`]); the window manager's
 //! close request hides the panel, its shell kept, and so does the compositor closing the layer surface (its output
-//! went away). While the panel holds the keyboard the decks keep their hands off focus ([`holds_keyboard`]).
+//! went away). While the panel holds the keyboard the decks keep their hands off focus ([`holds_keyboard`]). A removed
+//! window reports no blur or deactivation, so a hide tells the terminal's program the focus left itself (the next
+//! window's view continues its focus reports) and has the key monitor forget its consumed keys once no agterm window
+//! holds the keyboard.
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -127,6 +130,9 @@ pub struct QuickPanel {
 struct QuickTerminal {
     terminal: Entity<Terminal>,
     shared: Rc<Shared>,
+    /// The focus its program was told of when the panel hid it, which the next window's view continues from
+    /// (`None`: the next view starts afresh).
+    reported: Option<bool>,
     _events: Subscription,
 }
 
@@ -211,7 +217,7 @@ impl QuickPanel {
                 if on.is_some() && display.is_none() {
                     return;
                 }
-                self.close(cx);
+                self.remove(false, cx);
                 self.shown = self.open(fit, display, display.is_some(), quick, cx);
             }
             Step::Zoom(zoomed) => self.zoom_window(fit, zoomed, cx),
@@ -245,9 +251,11 @@ impl QuickPanel {
         quick: &QuickEnv<'_>,
         cx: &mut App,
     ) -> Option<Shown> {
-        let terminal = self.terminal.as_ref()?.terminal.clone();
+        let QuickTerminal { terminal, reported, .. } = self.terminal.as_ref()?;
+        let (terminal, reported) = (terminal.clone(), *reported);
         let attempt = Opener {
             terminal: &terminal,
+            reported,
             background: terminal_background(quick.env),
             poster: &quick.env.poster,
             app_id: quick.app_id,
@@ -306,15 +314,39 @@ impl QuickPanel {
 
     /// Hides the panel: its window goes, its terminal stays.
     fn close(&mut self, cx: &mut App) {
+        self.remove(true, cx);
+    }
+
+    /// Removes the panel's window, for a hide (`hiding`) or a reopen, whose new window follows at once. A removed
+    /// window reports neither a blur nor a deactivation (Wayland drops it before its keyboard leave arrives), so the
+    /// panel settles what they would: a hide tells the program in the terminal that the focus left, and the key
+    /// monitor forgets its consumed keys unless an agterm window takes the keyboard (their releases may land in
+    /// another application now).
+    fn remove(&mut self, hiding: bool, cx: &mut App) {
         let Some(shown) = self.shown.take() else {
             return;
         };
         shown.links.closing.set(true);
         // the window going takes the keyboard with it; a reopen's new window takes it back as it activates
         view::set_holds(false, cx);
-        if shown.handle.update(cx, |_, window, _| window.remove_window()).is_err() {
+        let removed = shown.handle.update(cx, |view, window, cx| {
+            let terminal = view.terminal();
+            let reported = if hiding {
+                terminal.update(cx, |terminal, _| terminal.release_focus_reports())
+            } else {
+                None
+            };
+            window.remove_window();
+            reported
+        });
+        if let Ok(reported) = removed {
+            if let Some(terminal) = self.terminal.as_mut() {
+                terminal.reported = reported;
+            }
+        } else {
             tracing::debug!("quick terminal: the window was gone already");
         }
+        crate::window::check_keyboard_left(cx);
         tracing::info!("quick terminal: hidden");
     }
 }
@@ -325,6 +357,8 @@ type Opened = Option<(WindowHandle<QuickView>, Rc<Links>)>;
 /// One attempt at the panel's window.
 struct Opener<'a> {
     terminal: &'a Entity<Terminal>,
+    /// The focus the terminal's program was told of last, which the window's view continues from.
+    reported: Option<bool>,
     background: Rgb,
     poster: &'a Poster,
     app_id: &'a str,
@@ -341,9 +375,14 @@ impl Opener<'_> {
         };
         let links = Rc::new(Links::default());
         let (terminal, background, poster) = (self.terminal.clone(), self.background, self.poster.clone());
-        let sharing = Rc::clone(&links);
+        let (sharing, reported) = (Rc::clone(&links), self.reported);
         let handle = cx.open_window(options, move |window, cx| {
-            cx.new(|cx| QuickView::new(&terminal, background, sharing, poster, window, cx))
+            cx.new(|cx| {
+                let view = QuickView::new(&terminal, background, sharing, poster, window, cx);
+                view.terminal()
+                    .update(cx, |terminal, _| terminal.continue_focus_reports(reported));
+                view
+            })
         })?;
         Ok(Some((handle, links)))
     }
@@ -362,6 +401,7 @@ impl QuickTerminal {
         Self {
             terminal,
             shared,
+            reported: None,
             _events: events,
         }
     }

@@ -1929,7 +1929,11 @@ Port the placement rendering from qwertty-term (MIT, attribution).
     element id `quick-terminal`; `observe_window_activation` → holding the keyboard (a GPUI global the decks read in
     place of `quick_visible`, upstream's `holdsKey`) and a focus loss → `quick_lost_focus`; the window manager's close
     request and the window going without the panel closing it (`zwlr_layer_surface_v1.closed`) → the GTK build's
-    dismissal; a window the panel itself closes reports nothing (a reopen's new window takes the keyboard).
+    dismissal; a window the panel itself closes reports nothing (a reopen's new window takes the keyboard). A removed
+    window reports no blur or deactivation, so the panel's own removal settles both (review fix): a hide sends the
+    terminal's program its focus-out report and the next window's view continues the reports from there
+    (`TerminalView::{release,continue}_focus_reports`), and every removal runs the key monitor's delayed
+    keyboard-left check, so a key the keymap consumed in the panel (Ctrl+` hiding it) is forgotten.
   - **Fractional scale**: GPUI patch 4 landed as `gpui-pre-linux` 0002: `zxdg_output_manager_v1` (v1–3) bound, each
     output's xdg-output logical position/size complete it, `cx.displays()` and a window's display report them (the old
     mode-over-scale bounds where the compositor sends none); unit-tested in the vendored crate, and the placement math
@@ -1941,12 +1945,14 @@ Port the placement rendering from qwertty-term (MIT, attribution).
     maximize, the layer-shell refusal), the launch; the panel in GPUI's test platform over a real pane (shown and
     focused, hidden with the shell typable, shown again in a new window over the same shell, gone with its shell (EOT
     to `cat`) and a fresh one next, focus loss dismissing a summoned panel but not a pinned one, the window manager's
-    close); core re-show suppression; `tests/quick_terminal.rs` on real displays in the sandbox: weston (`--fake-seat`:
+    close, a hide forgetting the keymap's consumed keys, a hide's focus-out and the next show's focus-in reports, a
+    window being closed losing the keyboard without a dismissal); core re-show suppression; `tests/quick_terminal.rs` on real displays in the sandbox: weston (`--fake-seat`:
     the layer surface refused, window 1100x700, zoom 1280x800 and back, hide/show with the shell kept, quick.type and
     quick.text round trips), a private Xvfb (window mapped 1100x700 at (90..92, 50) — GPUI's X11 `CreateWindow` adds 2
     px — gone on hide, back on show) and a niri nested in weston (`#[ignore]`d, run with `--ignored`: an `Overlay`,
-    `OnDemand` layer surface 1100x700 holding the keyboard, the zoom's reopen 1280x800 without a focus-loss dismissal,
-    gone on hide). Gates: fmt, clippy (workspace, all targets and features), lint-report (10 expects, none added),
+    `OnDemand` layer surface 1100x700 holding the keyboard, the zoom's reopen 1280x800 taking it with no focus loss
+    logged, gone on hide; the panel there is pinned by the control show, so a dismissal could not show a focus loss
+    and the run never checked one: corrected in review to the log's count, the closing guard unit-tested). Gates: fmt, clippy (workspace, all targets and features), lint-report (10 expects, none added),
     check-tracing-features, `vendor-gpui.sh --check`, `cargo test --workspace` under Xvfb 4139 passed, 0 failed, 8
     ignored; the three display tests incl. nested niri pass. GPUI conformance ratchet-only with `--also` the
     dashboard/quick, session-text, surface, restore and relaunch files and `--also-k quick`: 608 passed, 0 failed, 1
