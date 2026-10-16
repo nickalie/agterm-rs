@@ -37,6 +37,8 @@ pub const CAPABILITIES: &[&str] = &[
     "type-rejects-nul",
     "resize-echoes-ratio",
     "hidden-split-holds-focus",
+    "modal-blocks-covers",
+    "pick-names-pending-ask",
     "theme-slots-by-sync",
     "config-reload-counts",
 ];
