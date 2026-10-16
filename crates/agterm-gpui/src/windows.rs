@@ -183,12 +183,14 @@ impl Windows {
 
     /// Opens the Settings popup over what the core held (`opening`), over model window `host`, the `frontmost` one
     /// when `host` is not on screen (it closed after its menu asked); while one is up anywhere, brings its window to
-    /// the front with the popup holding the keyboard instead: there is one at a time (`crate::settings`).
+    /// the front with the popup holding the keyboard instead (unless a modal over it holds it): there is one at a time
+    /// (`crate::settings`).
     pub fn present_settings(&self, opening: Opening, host: Uuid, frontmost: Option<Uuid>, cx: &mut App) {
         if let Some((_, ui)) = self.settings_ui(cx) {
             let raised = ui.handle.update(cx, |view, window, cx| {
                 window.activate_window();
-                view.focus_settings(window, cx);
+                // the front holder takes the keyboard: the popup, or a picker, GUI ask, palette or alert over it
+                view.focus_terminal(window, cx);
             });
             if raised.is_err() {
                 tracing::debug!("the Settings popup's window is gone");
@@ -625,6 +627,77 @@ mod tests {
         assert_eq!(cx.update(|cx| windows.settings_host(cx)), None);
         present(&windows, &state, first, cx);
         assert_eq!(cx.update(|cx| windows.settings_host(cx)), Some(first));
+        cx.update(|cx| windows.teardown_all(cx));
+    }
+
+    /// Settings… asked again while a picker is up over the popup brings the popup's window up with the picker still
+    /// holding the keyboard: the popup under it does not take it.
+    #[gpui_kit::test]
+    fn settings_asked_again_leaves_the_keyboard_on_a_picker_over_the_popup(cx: &mut gpui_kit::TestAppContext) {
+        use crate::settings::Opening;
+
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(crate::status_glyph::Motion::default());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let [first, work, _] = saved_set(dir.path());
+        let restored = agterm_core::persist::LibraryPersistence::new(dir.path()).bootstrap("/home/u");
+        let mut state = AppState::new(core_over(restored));
+        let mut windows = registry(dir.path(), crate::state::detached_poster());
+        cx.update(|cx| {
+            let _ = windows.sync(&mut state, cx);
+        });
+        cx.run_until_parked();
+        let present = |windows: &Windows, state: &AppState, host, cx: &mut gpui_kit::TestAppContext| {
+            let frontmost = state.core.library().active_window_id();
+            cx.update(|cx| windows.present_settings(Opening::of(state), host, frontmost, cx));
+            cx.run_until_parked();
+        };
+        // who holds the keyboard of `first`'s window: (the picker, the popup)
+        let held = |windows: &Windows, cx: &mut gpui_kit::TestAppContext| {
+            let handle = windows.get(first).unwrap().handle;
+            cx.update(|cx| {
+                handle
+                    .update(cx, |view, window, cx| {
+                        let picker = view
+                            .picker()
+                            .is_some_and(|picker| picker.read(cx).focus_handle(cx).is_focused(window));
+                        let popup = view
+                            .settings()
+                            .is_some_and(|popup| popup.read(cx).holds_keyboard(window, cx));
+                        (picker, popup)
+                    })
+                    .unwrap()
+            })
+        };
+        present(&windows, &state, first, cx);
+        assert_eq!(cx.update(|cx| windows.settings_host(cx)), Some(first));
+        assert_eq!(held(&windows, cx), (false, true), "the popup holds the keyboard");
+        let item = |id: &str| agterm_proto::PickItem {
+            id: id.to_owned(),
+            label: id.to_owned(),
+            subtitle: None,
+        };
+        let response = state.core.dispatch(&agterm_proto::Request {
+            cmd: agterm_proto::Command::Pick(agterm_proto::command::PickCmd::Open),
+            target: None,
+            args: Some(agterm_proto::Args {
+                items: Some(vec![item("alpha"), item("beta")]),
+                ..agterm_proto::Args::default()
+            }),
+        });
+        assert!(response.ok, "{response:?}");
+        state.settle();
+        cx.update(|cx| {
+            let _ = windows.sync(&mut state, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(held(&windows, cx), (true, false), "the picker over the popup holds it");
+        // Settings… again, from the other window's menu
+        present(&windows, &state, work, cx);
+        assert_eq!(cx.update(|cx| windows.settings_host(cx)), Some(first), "the one popup");
+        assert_eq!(held(&windows, cx), (true, false), "the picker keeps the keyboard");
         cx.update(|cx| windows.teardown_all(cx));
     }
 

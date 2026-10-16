@@ -440,7 +440,7 @@ impl WindowView {
     }
 
     /// Opens the Settings popup over the window on what the core held (`opening`), taking the keyboard; one already up
-    /// takes the keyboard back instead.
+    /// takes the keyboard back instead. A modal drawn over the popup keeps the keyboard either way.
     pub fn open_settings(&mut self, opening: Opening, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.is_none() {
             let view = SettingsView::open(opening, window, cx);
@@ -460,7 +460,8 @@ impl WindowView {
             // the deck stands its focus down while the popup holds the keyboard
             post(&self.poster, |_| {});
         }
-        self.focus_settings(window, cx);
+        // the popup takes the keyboard unless a picker, GUI ask, palette, popover or alert drawn over it holds it
+        self.focus_terminal(window, cx);
     }
 
     /// Gives the keyboard to the Settings popup when it is up.

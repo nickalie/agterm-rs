@@ -1152,6 +1152,30 @@ fn opening_settings_again_while_it_is_up_focuses_the_one_popup(cx: &mut TestAppC
     assert!(s.settings_held(), "holding the keyboard again");
 }
 
+/// Settings… landing again while a picker or a GUI ask is up over the popup leaves the keyboard on that dialog.
+#[gpui_kit::test]
+fn opening_settings_again_under_a_picker_or_an_ask_leaves_them_the_keyboard(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    s.with_keys();
+    s.open_settings();
+    let id = open_pick(&mut s);
+    let picker = |s: &mut Shell<'_>| s.holds(|view, cx| view.picker().map(|picker| picker.read(cx).focus_handle(cx)));
+    assert!(picker(&mut s) && !s.settings_held());
+    s.open_settings();
+    assert!(picker(&mut s), "the picker keeps the keyboard");
+    assert!(!s.settings_held(), "not the popup under it");
+    s.cx.simulate_keystrokes("down enter");
+    assert!(crate::keymap_dispatch::release_simulated("enter"));
+    s.settle();
+    assert!(pick_result(&mut s, &id).contains("beta"), "the picker took the keys");
+    assert!(s.settings_held(), "the popup has the keyboard back");
+
+    let dialog = open_gui_ask(&mut s);
+    s.open_settings();
+    assert!(ask_held(&mut s, &dialog), "the ask keeps the keyboard");
+    assert!(!s.settings_held());
+}
+
 #[gpui_kit::test]
 fn the_settings_popup_follows_the_core_gives_way_to_an_alert_and_goes_with_its_window(cx: &mut TestAppContext) {
     use agterm_core::settings_model::{GeneralChange, SettingsChange};
