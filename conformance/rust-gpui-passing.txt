@@ -29,6 +29,7 @@ tests/cli/test_cli_output.py::test_hooks
 tests/cli/test_cli_output.py::test_hud
 tests/cli/test_cli_output.py::test_hud_sticky_and_no_frame
 tests/cli/test_cli_output.py::test_notify_raises_the_unseen_count
+tests/cli/test_cli_output.py::test_overlay_program
 tests/cli/test_cli_output.py::test_pick_blocks_until_cancelled
 tests/cli/test_cli_output.py::test_pick_without_blocking
 tests/cli/test_cli_output.py::test_quick_terminal
@@ -251,28 +252,51 @@ tests/protocol/test_notify.py::test_notify_raises_the_badge_and_emits_the_event
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args0-notify requires a body]
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args1-notify requires a body]
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[zzz-args2-no such session: zzz]
+tests/protocol/test_overlay.py::test_open_refusals[browse-html]
+tests/protocol/test_overlay.py::test_open_refusals[browse-program]
 tests/protocol/test_overlay.py::test_open_refusals[chromeless-browse-url]
 tests/protocol/test_overlay.py::test_open_refusals[chromeless-navigation]
 tests/protocol/test_overlay.py::test_open_refusals[chromeless-program]
 tests/protocol/test_overlay.py::test_open_refusals[chromeless-url]
+tests/protocol/test_overlay.py::test_open_refusals[cmd-html]
+tests/protocol/test_overlay.py::test_open_refusals[cmd-url]
+tests/protocol/test_overlay.py::test_open_refusals[color]
 tests/protocol/test_overlay.py::test_open_refusals[cwd-is-file]
 tests/protocol/test_overlay.py::test_open_refusals[cwd-url]
+tests/protocol/test_overlay.py::test_open_refusals[empty-command]
+tests/protocol/test_overlay.py::test_open_refusals[ftp-url]
+tests/protocol/test_overlay.py::test_open_refusals[html-url]
+tests/protocol/test_overlay.py::test_open_refusals[js-program]
+tests/protocol/test_overlay.py::test_open_refusals[navigation-program]
+tests/protocol/test_overlay.py::test_open_refusals[no-command]
 tests/protocol/test_overlay.py::test_open_refusals[outside-cwd]
 tests/protocol/test_overlay.py::test_open_refusals[pane-size]
 tests/protocol/test_overlay.py::test_open_refusals[pane]
+tests/protocol/test_overlay.py::test_open_refusals[persistent-html]
+tests/protocol/test_overlay.py::test_open_refusals[persistent-program]
 tests/protocol/test_overlay.py::test_open_refusals[relative-cwd]
+tests/protocol/test_overlay.py::test_open_refusals[relative-html]
+tests/protocol/test_overlay.py::test_open_refusals[relative-url]
 tests/protocol/test_overlay.py::test_open_refusals[root-cwd]
+tests/protocol/test_overlay.py::test_open_refusals[wait-html]
+tests/protocol/test_overlay.py::test_open_refusals[wait-url]
 tests/protocol/test_overlay.py::test_overlay_opens_in_the_background_unless_it_follows
 tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.close-args0]
 tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.reload-args3]
 tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.result-args1]
 tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.submit-args4]
 tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.text-args2]
+tests/protocol/test_overlay.py::test_overlay_result_reports_the_exit_status
+tests/protocol/test_overlay.py::test_overlay_runs_in_its_cwd
 tests/protocol/test_overlay.py::test_overlay_size_and_resize
+tests/protocol/test_overlay.py::test_overlay_text_reads_the_covering_program
+tests/protocol/test_overlay.py::test_page_commands_need_a_page
 tests/protocol/test_overlay.py::test_page_result_needs_a_known_page[invalid]
 tests/protocol/test_overlay.py::test_page_result_needs_a_known_page[unknown]
 tests/protocol/test_overlay.py::test_pane_overlay_needs_a_rendered_pane[hidden-split]
 tests/protocol/test_overlay.py::test_pane_overlay_needs_a_rendered_pane[unsplit]
+tests/protocol/test_overlay.py::test_pane_overlays_cover_one_pane_each
+tests/protocol/test_overlay.py::test_program_overlay_covers_the_session
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.close-args1]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.open-args0]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.reload-args6]
@@ -440,6 +464,8 @@ tests/protocol/test_split.py::test_zoom_one_surface_and_back
 tests/protocol/test_split.py::test_zoom_rejects_an_unknown_mode
 tests/protocol/test_split.py::test_zoom_rejects_an_unknown_surface[surface:zzz:left]
 tests/protocol/test_split.py::test_zoom_rejects_an_unknown_surface[zzz]
+tests/protocol/test_split.py::test_zoom_the_pane_under_a_running_overlay
+tests/protocol/test_surface.py::test_cursor_reads_a_program_overlay_but_not_a_hud
 tests/protocol/test_surface.py::test_cursor_refusals[bogus-kind-args2-invalid surface: surface:{sid}:bogus]
 tests/protocol/test_surface.py::test_cursor_refusals[left-args6-surface.cursor: --pane-id takes a session target]
 tests/protocol/test_surface.py::test_cursor_refusals[quick-args7-surface.cursor: --pane-id takes a session target]

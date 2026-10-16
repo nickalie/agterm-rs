@@ -40,6 +40,7 @@ pub const CAPABILITIES: &[&str] = &[
     "hidden-split-holds-focus",
     "modal-blocks-covers",
     "pick-names-pending-ask",
+    "overlay-size-validated",
     "theme-slots-by-sync",
     "config-reload-counts",
 ];
