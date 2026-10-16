@@ -145,6 +145,8 @@ pub struct WindowView {
     sidebar: Entity<Sidebar>,
     popovers: Entity<Popovers>,
     ask: Option<WindowAsk>,
+    /// Whether an alert was up at the last sync: the GUI ask it covered takes the keyboard back once it goes.
+    alert_up: bool,
     layers: Vec<(Layer, AnyView)>,
     title: String,
     /// Set once the model closed the window, so its close request goes through.
@@ -221,6 +223,7 @@ impl WindowView {
             sidebar,
             popovers,
             ask: None,
+            alert_up: false,
             layers: Vec::new(),
             title: UNTITLED.to_owned(),
             closing,
@@ -256,9 +259,9 @@ impl WindowView {
         }
     }
 
-    /// Brings the GUI ask in line with the model's modal slot: a dialog per ask (a new one takes the keyboard), what
-    /// it covers, and none once it ends.
-    fn sync_ask(&mut self, core: &Core, window: &mut Window, cx: &mut Context<Self>) {
+    /// Brings the GUI ask in line with the model's modal slot: a dialog per ask (a new one takes the keyboard, as
+    /// does the one shown when `refocus`, an alert over it having closed), what it covers, and none once it ends.
+    fn sync_ask(&mut self, core: &Core, refocus: bool, window: &mut Window, cx: &mut Context<Self>) {
         let id = self.id;
         let pending = core
             .modal_slot(id)
@@ -274,6 +277,10 @@ impl WindowView {
         if let Some(ask) = self.ask.as_mut().filter(|ask| ask.dialog.read(cx).id() == pending.id) {
             ask.target = target;
             ask.dialog.update(cx, |dialog, cx| dialog.set_look(look, cx));
+            if refocus {
+                let focus = ask.dialog.read(cx).focus_handle().clone();
+                window.focus(&focus, cx);
+            }
             return;
         }
         let poster = self.poster.clone();
@@ -353,10 +360,11 @@ impl WindowView {
         self.layers.iter().any(|(known, _)| *known == layer)
     }
 
-    /// Closes the window for good: the model closed it, and its terminals with it.
-    pub fn close(&self, window: &mut Window) {
+    /// Closes the window for good: the model closed it, and its terminals with it. Its alerts are cancelled.
+    pub fn close(&self, window: &mut Window, cx: &mut App) {
         crate::keymap_dispatch::unregister_window(window.window_handle());
         self.closing.set(true);
+        crate::modal::dismiss_alerts(window, cx);
         window.remove_window();
     }
 
@@ -403,7 +411,10 @@ impl WindowView {
         let id = self.id;
         let dialog = core.modal_pending(id) || core.palette_holds(id);
         let alert = crate::modal::alert_open(window.window_handle(), cx);
-        self.sync_ask(core, window, cx);
+        let alert_closed = std::mem::replace(&mut self.alert_up, alert) && !alert;
+        // the GUI ask takes the keyboard back from a closed alert unless a layer above it holds it
+        let refocus = alert_closed && !core.palette_holds(id) && !self.popovers.read(cx).is_open();
+        self.sync_ask(core, refocus, window, cx);
         self.popovers.update(cx, |popovers, cx| popovers.sync(core, cx));
         self.sync_popover_layer(cx);
         let modal = dialog || alert || self.popovers.read(cx).is_open();

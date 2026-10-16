@@ -13,7 +13,8 @@
 //! and a row of equal-width buttons that falls back to a column when the row does not fit, aligned as asked. The
 //! keyboard follows [`AskNavigation`]: Tab, Right and Down move forward, Shift+Tab, Left and Up back, Return answers
 //! with the highlighted button, a button's hotkey letter answers with it, Escape dismisses (`escaped`); a key with
-//! Ctrl, Alt or Super goes on to the window's key monitor. Answers go to the core as main-loop tasks; a stale id is
+//! Ctrl, Alt or Super goes on to the window's key monitor; content taller than its anchor scrolls, and the highlighted
+//! button is kept in view ([`reveal_offset`]). Answers go to the core as main-loop tasks; a stale id is
 //! ignored there. Element ids are upstream's accessibility ids: `ask-dialog`, `ask-title`, `ask-message`,
 //! `ask-button-<id>`.
 //!
@@ -33,8 +34,8 @@ use agterm_proto::{AskButton, ControlAskOutcome, ControlAskResult};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, FocusHandle, FontWeight, HighlightStyle, Hsla, InteractiveElement as _, IntoElement,
-    KeyDownEvent, MouseButton, ParentElement as _, Pixels, Render, SharedString, Size, StatefulInteractiveElement as _,
-    Styled as _, StyledText, UnderlineStyle, Window, canvas, div, px,
+    KeyDownEvent, MouseButton, ParentElement as _, Pixels, Render, ScrollHandle, SharedString, Size,
+    StatefulInteractiveElement as _, Styled as _, StyledText, UnderlineStyle, Window, canvas, div, point, px,
 };
 use uuid::Uuid;
 
@@ -288,6 +289,20 @@ pub fn wants_focus(session: &Session, focus_blocked: bool) -> bool {
 
 // MARK: - the dialog
 
+/// The scroll offset (GPUI's: negative going down) that brings a button spanning `item` (as drawn at `offset`) into
+/// the content's `viewport`, moving it the least (the GTK build's `clamp_page`, upstream's `scrollTo`): its top first
+/// when it is taller than the viewport; `offset` when it is in view already.
+#[must_use]
+pub fn reveal_offset(viewport: Range<Pixels>, item: Range<Pixels>, offset: Pixels) -> Pixels {
+    if item.start < viewport.start || item.end - item.start > viewport.end - viewport.start {
+        offset + (viewport.start - item.start)
+    } else if item.end > viewport.end {
+        offset - (item.end - viewport.end)
+    } else {
+        offset
+    }
+}
+
 /// Whose ask a dialog shows: a window's GUI ask, or a session's terminal ask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AskOwner {
@@ -305,6 +320,10 @@ pub struct AskDialog {
     focus: FocusHandle,
     /// The anchor's size at the last layout, which the panel's cap is counted from.
     anchor: Rc<Cell<Option<Size<Pixels>>>>,
+    /// The content's scroll, which keeps the highlighted button in view.
+    scroll: ScrollHandle,
+    /// The highlighted button is to be brought into view at the next layout (the dialog opened, the keyboard moved).
+    reveal: Rc<Cell<bool>>,
     /// An answer went out: later keys and clicks do nothing.
     done: bool,
     poster: Poster,
@@ -324,6 +343,8 @@ impl AskDialog {
             look,
             focus: cx.focus_handle(),
             anchor: Rc::default(),
+            scroll: ScrollHandle::new(),
+            reveal: Rc::new(Cell::new(true)),
             done: false,
             poster,
         }
@@ -377,8 +398,14 @@ impl AskDialog {
     /// One key's effect.
     pub fn handle(&mut self, key: AskKey) {
         match key {
-            AskKey::Forward => self.navigation.move_forward(),
-            AskKey::Backward => self.navigation.move_backward(),
+            AskKey::Forward => {
+                self.navigation.move_forward();
+                self.reveal.set(true);
+            }
+            AskKey::Backward => {
+                self.navigation.move_backward();
+                self.reveal.set(true);
+            }
             AskKey::Activate => {
                 if let Some(index) = self.navigation.activate() {
                     self.finish(Answer::Button(index));
@@ -488,8 +515,12 @@ impl AskDialog {
         let text = StyledText::new(label.text).with_highlights(highlights);
         let (fill, ink) = self.button_colors(button_look(self.ask.style, highlighted, destructive), colors);
         let cell = self.look.cell(self.ask.style);
+        let selector = format!("ask-button-{}", button.id);
+        let reveal = highlighted.then(|| self.reveal_canvas());
         div()
-            .id(SharedString::from(format!("ask-button-{}", button.id)))
+            .id(SharedString::from(selector.clone()))
+            .debug_selector(move || selector)
+            .relative()
             .when_some(width, |button, width| button.w(modal::logical(width)))
             .flex()
             .justify_center()
@@ -503,11 +534,45 @@ impl AskDialog {
             })
             .cursor_pointer()
             .child(text)
+            .children(reveal)
+            // a press on a button is the button's: it does not focus the dialog or select its pane
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |dialog, _, _, cx| {
                 dialog.finish(Answer::Button(index));
                 cx.notify();
             }))
             .into_any_element()
+    }
+
+    /// Over the highlighted button: once it is laid out, brings it into the content's view if asked to, on the next
+    /// frame (a frame being drawn takes no refresh).
+    fn reveal_canvas(&self) -> AnyElement {
+        let (scroll, reveal) = (self.scroll.clone(), Rc::clone(&self.reveal));
+        canvas(
+            move |bounds, window, _| {
+                let viewport = scroll.bounds();
+                if !reveal.get() || viewport.size.height <= px(0.) {
+                    return;
+                }
+                reveal.set(false);
+                let offset = scroll.offset();
+                let y = reveal_offset(
+                    viewport.top()..viewport.bottom(),
+                    bounds.top()..bounds.bottom(),
+                    offset.y,
+                );
+                if y != offset.y {
+                    window.on_next_frame(move |window, _| {
+                        scroll.set_offset(point(offset.x, y));
+                        window.refresh();
+                    });
+                }
+            },
+            |_, (), _, _| {},
+        )
+        .absolute()
+        .inset_0()
+        .into_any_element()
     }
 
     fn button_colors(&self, look: AskButtonLook, colors: ChromeColors) -> (Hsla, Hsla) {
@@ -574,11 +639,13 @@ impl AskDialog {
         let strip = self.render_strip(cap, window, colors, cx);
         let content = div()
             .id("ask-content")
+            .debug_selector(|| "ask-content".to_owned())
             .flex()
             .flex_col()
             .gap(modal::logical(cell * 1.5))
             .p(modal::logical(cell * 2.0))
             .overflow_y_scroll()
+            .track_scroll(&self.scroll)
             .max_h(modal::logical((anchor_height - 2.0 * cell).max(0.0)))
             .child(
                 div()

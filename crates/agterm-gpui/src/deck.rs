@@ -443,8 +443,8 @@ impl Deck {
     /// Whether a popup of the window's holds the keyboard (the sidebar's row menu, which a right-click opens while
     /// the selection it narrowed is still on its way): until it closes the deck moves no focus, then it gives the
     /// shown terminal the keyboard the popup handed back, unless the popup's item gave it to `owner` (the sidebar's
-    /// live rename field) or a prompt. Any other focus outside the terminals (a handle the popup restored to a field
-    /// gone meanwhile) does not keep it.
+    /// live rename field); an alert the item opened is a modal, which the deck waits on until it closes. Any other
+    /// focus outside the terminals (a handle the popup restored to a field gone meanwhile) does not keep it.
     pub fn hold_keyboard(&mut self, held: bool, owner: Option<FocusHandle>) {
         // a popup that closes hands the keyboard back to the shown terminal even when nothing moved meanwhile: the
         // popup may have kept it (a dismissed menu, a dialog its item opened)

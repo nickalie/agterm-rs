@@ -927,7 +927,13 @@ fn a_session_background_reaches_its_terminals_and_a_pane_override_wins(cx: &mut 
 
 /// Opens a terminal ask over `session` with buttons Yes (`y`) and No (`n`); its id.
 fn open_terminal_ask(h: &mut Harness<'_>, session: Uuid) -> String {
+    open_terminal_ask_over(h, session, None)
+}
+
+/// Opens a terminal ask over `session`, or its `pane`, with buttons Yes (`y`) and No (`n`); its id.
+fn open_terminal_ask_over(h: &mut Harness<'_>, session: Uuid, pane: Option<&str>) -> String {
     h.dispatch(Command::Ask(agterm_proto::command::AskCmd::Open), session, |args| {
+        args.pane = pane.map(str::to_owned);
         args.title = Some("Deploy?".to_owned());
         args.buttons = Some(vec![
             agterm_proto::AskButton {
@@ -1028,6 +1034,42 @@ fn a_terminal_ask_takes_the_keyboard_answers_by_its_keys_and_gives_it_back(cx: &
     h.turn();
     assert!(ask_result(&mut h, &id).contains("\"yes\""));
     assert!(h.focused(session, &token));
+}
+
+#[gpui_kit::test]
+fn a_click_on_a_pane_asks_button_answers_without_moving_the_keyboard(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    let session = ids[0];
+    h.dispatch(Command::Session(SessionCmd::Split), session, |_| {});
+    h.until("both panes to start", |h| {
+        h.realized(session, StatusPane::Left) && h.realized(session, StatusPane::Right)
+    });
+    let primary = h.token(session, StatusPane::Left);
+    h.dispatch(Command::Session(SessionCmd::Focus), session, |args| {
+        args.pane = Some("left".to_owned());
+    });
+    h.turn();
+    assert!(h.focused(session, &primary));
+
+    // an ask over the unfocused pane leaves the keyboard where it is
+    let id = open_terminal_ask_over(&mut h, session, Some("right"));
+    h.turn();
+    h.turn();
+    assert!(!ask_focused(&mut h, session) && h.focused(session, &primary));
+    // a click on its button answers; the press is the button's, not the dialog's (upstream's tap skips the buttons)
+    let yes =
+        h.cx.debug_bounds("ask-button-yes")
+            .expect("the button is laid out")
+            .center();
+    h.cx.simulate_click(yes, gpui_kit::Modifiers::default());
+    h.turn();
+    assert!(ask_result(&mut h, &id).contains("\"yes\""));
+    assert!(!h.session(session).split.focused, "the click selected no pane");
+    assert!(
+        h.focused(session, &primary),
+        "the keyboard stays with the pane that had it"
+    );
 }
 
 #[gpui_kit::test]

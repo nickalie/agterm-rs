@@ -2,9 +2,10 @@
 //! native panel's look, the keys a dialog navigates by, and the window's alerts.
 //!
 //! - Geometry: an ask's panel is centered in its anchor over a dim layer covering that anchor (upstream's
-//!   `AskDialogView`), a palette's panel sits near the top of the window over a scrim covering all of it (upstream's
-//!   `CommandPalette` in `Palette.swift`); both are pure functions of the sizes ([`ask_panel_width`],
-//!   [`ask_panel_rect`], [`palette_rect`]).
+//!   `AskDialogView`): the layout centers it, as wide as its content up to [`ask_panel_cap`] (or that percent of the
+//!   anchor), its content scrolling past the anchor's height less a cell each side. A palette's panel sits near the
+//!   top of the window over a scrim covering all of it (upstream's `CommandPalette` in `Palette.swift`), a pure
+//!   function of the sizes ([`palette_rect`]).
 //! - Alerts ([`open_alert`]): the confirmations, Rename Window and the clipboard prompt (upstream's `NSAlert` sheets,
 //!   the GTK build's `adw::AlertDialog`): a heading, a body, an optional text field (which takes the keyboard) or check
 //!   ("Don't ask again this session"), and a row of buttons, one the default (Return) and one the cancel (Escape); Tab
@@ -12,7 +13,8 @@
 //!   takes every click and keeps every key while it is up (the key monitor leaves an `AgtermAlert` context alone).
 //!   Alerts of one window queue: the next comes up once the front one is answered. The window's view draws the front
 //!   one ([`alert_layer`]); the [`Alerts`] registry tells observers when one opens or closes, which is how the window
-//!   gives the keyboard back to the shown terminal once the last one is answered.
+//!   gives the keyboard back to the shown terminal once the last one is answered. A window that closes cancels its
+//!   alerts ([`dismiss_alerts`]).
 
 use std::collections::HashMap;
 
@@ -53,39 +55,6 @@ pub fn ask_panel_cap(width_percent: Option<i64>, anchor_width: f64, terminal_cel
         #[expect(clippy::cast_precision_loss, reason = "a percent within 10...100")]
         Some(percent) => anchor_width * percent.clamp(10, 100) as f64 / 100.0,
         None => (anchor_width * 0.9).min(ASK_MAX_CELLS * terminal_cell),
-    }
-}
-
-/// A content-sized or fixed-percent ask panel's width in an anchor `anchor_width` wide (upstream's `panelWidth` and its
-/// `ViewThatFits`): a percent of the anchor, else the content's `natural` width up to the cap ([`ask_panel_cap`]), never
-/// below the content's `minimum`.
-#[must_use]
-pub fn ask_panel_width(
-    width_percent: Option<i64>,
-    anchor_width: f64,
-    natural: f64,
-    minimum: f64,
-    terminal_cell: f64,
-) -> f64 {
-    let cap = ask_panel_cap(width_percent, anchor_width, terminal_cell);
-    let width = match width_percent {
-        Some(_) => cap,
-        None => natural.min(cap),
-    };
-    width.max(minimum)
-}
-
-/// An ask panel `width` wide whose content wants `natural_height`, centered in `anchor` and kept a `cell` clear of its
-/// top and bottom (upstream's `panelHeight`), never below the content's `minimum_height`.
-#[must_use]
-pub fn ask_panel_rect(anchor: Rect, width: f64, natural_height: f64, minimum_height: f64, cell: f64) -> Rect {
-    let room = (f64::from(anchor.height) - 2.0 * cell).max(0.0);
-    let height = natural_height.min(room).max(minimum_height);
-    Rect {
-        x: anchor.x + pixels((f64::from(anchor.width) - width) / 2.0),
-        y: anchor.y + pixels((f64::from(anchor.height) - height) / 2.0),
-        width: pixels(width),
-        height: pixels(height),
     }
 }
 
@@ -698,6 +667,27 @@ pub fn open_alert(
     }
     window.refresh();
     alert
+}
+
+/// Answers every alert `window` shows or queues with its cancel button, as a dialog closed with its window responds
+/// with its close response (the GTK build's `adw::AlertDialog`): the window is going, and what waits on an answer (a
+/// clipboard prompt's program) is denied rather than left waiting. An alert without a cancel button goes unanswered.
+pub fn dismiss_alerts(window: &mut Window, cx: &mut App) {
+    let handle = window.window_handle();
+    if !cx
+        .try_global::<Alerts>()
+        .is_some_and(|alerts| alerts.queues.contains_key(&handle))
+    {
+        return;
+    }
+    let queue = cx
+        .update_default_global::<Alerts, _>(|alerts, _| alerts.queues.remove(&handle))
+        .unwrap_or_default();
+    for alert in queue {
+        if let Some(cancel) = alert.read(cx).spec.cancel_button() {
+            alert.update(cx, |alert, cx| alert.answer(cancel, window, cx));
+        }
+    }
 }
 
 /// The alert `window` shows in front.

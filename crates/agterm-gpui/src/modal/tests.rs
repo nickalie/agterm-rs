@@ -12,55 +12,15 @@ fn close(actual: f64, expected: f64) -> bool {
     (actual - expected).abs() < 1e-9
 }
 
-fn anchor(width: i32, height: i32) -> Rect {
-    Rect {
-        x: 10,
-        y: 20,
-        width,
-        height,
-    }
-}
-
 #[test]
-fn a_content_sized_ask_takes_its_natural_width_up_to_the_cap() {
+fn an_ask_panel_is_capped_by_its_anchor_or_its_percent() {
     // 90% of a 400-wide anchor is 360, under 72 cells of 8
-    assert!(close(ask_panel_width(None, 400.0, 200.0, 50.0, 8.0), 200.0));
-    assert!(close(ask_panel_width(None, 400.0, 900.0, 50.0, 8.0), 360.0));
+    assert!(close(ask_panel_cap(None, 400.0, 8.0), 360.0));
     // 72 cells of 8 = 576, under 90% of 2000
-    assert!(close(ask_panel_width(None, 2000.0, 900.0, 50.0, 8.0), 576.0));
-    assert!(
-        close(ask_panel_width(None, 100.0, 900.0, 150.0, 8.0), 150.0),
-        "never under its minimum"
-    );
     assert!(close(ask_panel_cap(None, 2000.0, 8.0), 576.0));
-}
-
-#[test]
-fn a_fixed_width_ask_is_a_clamped_percent_of_its_anchor() {
-    assert!(close(ask_panel_width(Some(50), 800.0, 100.0, 10.0, 8.0), 400.0));
-    assert!(close(ask_panel_width(Some(5), 800.0, 100.0, 10.0, 8.0), 80.0));
-    assert!(close(ask_panel_width(Some(150), 800.0, 100.0, 10.0, 8.0), 800.0));
     assert!(close(ask_panel_cap(Some(50), 800.0, 8.0), 400.0));
-}
-
-#[test]
-fn an_ask_panel_centers_in_its_anchor_a_cell_clear_of_its_edges() {
-    let rect = ask_panel_rect(anchor(400, 300), 200.0, 100.0, 20.0, 8.0);
-    assert_eq!(
-        rect,
-        Rect {
-            x: 110,
-            y: 120,
-            width: 200,
-            height: 100
-        }
-    );
-    let tall = ask_panel_rect(anchor(400, 300), 200.0, 900.0, 20.0, 8.0);
-    assert_eq!(
-        (tall.y, tall.height),
-        (28, 284),
-        "capped to the anchor less a cell each side"
-    );
+    assert!(close(ask_panel_cap(Some(5), 800.0, 8.0), 80.0));
+    assert!(close(ask_panel_cap(Some(150), 800.0, 8.0), 800.0));
 }
 
 #[test]

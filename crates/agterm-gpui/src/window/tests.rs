@@ -157,7 +157,7 @@ fn the_shell_titles_its_window_and_keeps_its_modal_layers_in_order(cx: &mut Test
 
     let workspace = core.library().store(window).unwrap().workspaces()[0].id();
     keymap_renames_reach_the_sidebar(cx, &view, &keys, (window, session.unwrap(), workspace));
-    view.update_in(cx, |view, root, _| view.close(root));
+    view.update_in(cx, |view, root, cx| view.close(root, cx));
     assert_eq!(crate::keymap_dispatch::window_of(origin), None);
     assert!(!crate::keymap_dispatch::holds_keyboard(Some(handle)));
 }
@@ -387,9 +387,8 @@ fn a_cancelled_confirmation_from_a_row_menu_gives_the_terminal_the_keyboard_back
     assert!(s.terminal_focused(), "the session shown now has the keyboard");
 }
 
-#[gpui_kit::test]
-fn a_gui_ask_holds_the_keyboard_until_answered(cx: &mut TestAppContext) {
-    let mut s = shell(cx);
+/// Opens a GUI ask "Ship it?" with buttons Ship and Hold; its dialog.
+fn open_gui_ask(s: &mut Shell<'_>) -> Entity<AskDialog> {
     let response = s.state.core.dispatch(&agterm_proto::Request {
         cmd: agterm_proto::Command::Ask(agterm_proto::command::AskCmd::Open),
         target: None,
@@ -414,14 +413,41 @@ fn a_gui_ask_holds_the_keyboard_until_answered(cx: &mut TestAppContext) {
     assert!(response.ok, "{response:?}");
     s.state.settle();
     s.settle();
-    let dialog = s
-        .view
+    s.view
         .read_with(s.cx, |view, _| view.ask_dialog().cloned())
-        .expect("the GUI ask is up");
+        .expect("the GUI ask is up")
+}
+
+/// Whether `dialog` holds the window's keyboard.
+fn ask_held(s: &mut Shell<'_>, dialog: &Entity<AskDialog>) -> bool {
+    s.cx.update(|window, cx| dialog.read(cx).focus_handle().is_focused(window))
+}
+
+/// Opens a clipboard prompt over the window, as a terminal's OSC 52 read does; the buttons it is answered with land
+/// in `answers`.
+fn open_prompt(s: &mut Shell<'_>, answers: &Rc<std::cell::RefCell<Vec<usize>>>) {
+    let answers = Rc::clone(answers);
+    let spec = crate::terminal::prompt_alert(agterm_core::clipboard_policy::ClipboardAccess::Read);
+    s.cx.update(|window, cx| {
+        crate::modal::open_alert(
+            window,
+            spec,
+            move |answer, _, _| answers.borrow_mut().push(answer.button),
+            cx,
+        );
+    });
+    s.settle();
+}
+
+#[gpui_kit::test]
+fn a_gui_ask_holds_the_keyboard_until_answered(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    let dialog = open_gui_ask(&mut s);
     assert!(s.view.read_with(s.cx, |view, _| view.has_layer(Layer::Ask)));
-    let held =
-        s.cx.update(|window, cx| dialog.read(cx).focus_handle().is_focused(window));
-    assert!(held && !s.terminal_focused(), "the dialog holds the keyboard");
+    assert!(
+        ask_held(&mut s, &dialog) && !s.terminal_focused(),
+        "the dialog holds the keyboard"
+    );
     let id = dialog.read_with(s.cx, |dialog, _| dialog.id().to_owned());
     s.cx.simulate_keystrokes("right enter");
     s.settle();
@@ -435,6 +461,47 @@ fn a_gui_ask_holds_the_keyboard_until_answered(cx: &mut TestAppContext) {
     });
     assert!(format!("{:?}", result.result).contains("\"hold\""), "{result:?}");
     assert!(s.terminal_focused(), "the terminal has the keyboard back");
+}
+
+#[gpui_kit::test]
+fn a_gui_ask_takes_the_keyboard_back_from_an_alert_over_it(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    let dialog = open_gui_ask(&mut s);
+    let answers = Rc::default();
+    open_prompt(&mut s, &answers);
+    assert!(
+        s.alert_open() && !ask_held(&mut s, &dialog),
+        "the prompt holds the keyboard"
+    );
+    s.cx.simulate_keystrokes("escape");
+    s.settle();
+    assert_eq!(answers.borrow().as_slice(), [0], "denied");
+    assert!(!s.alert_open());
+    assert!(ask_held(&mut s, &dialog), "the GUI ask has the keyboard back");
+    // so its keys reach it again
+    s.cx.simulate_keystrokes("enter");
+    s.settle();
+    assert!(!s.state.core.modal_pending(s.window), "the ask is answered");
+}
+
+#[gpui_kit::test]
+fn a_closing_window_cancels_its_alerts(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    let answers = Rc::default();
+    open_prompt(&mut s, &answers);
+    open_prompt(&mut s, &answers);
+    let handle = s.cx.update(|window, _| window.window_handle());
+    let view = s.view.clone();
+    view.update_in(s.cx, |view, window, cx| view.close(window, cx));
+    assert_eq!(
+        answers.borrow().as_slice(),
+        [0, 0],
+        "both prompts, the shown one and the queued one, are denied"
+    );
+    assert!(
+        !s.cx.cx.update(|cx| crate::modal::alert_open(handle, cx)),
+        "none is left"
+    );
 }
 
 #[gpui_kit::test]

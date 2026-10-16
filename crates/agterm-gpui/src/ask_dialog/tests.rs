@@ -225,3 +225,78 @@ fn the_navigation_answers_once() {
     assert_eq!(navigation.hotkey("x"), None, "no such hotkey");
     assert_eq!(navigation.hotkey("n"), Some(1));
 }
+
+#[test]
+fn a_button_out_of_view_is_scrolled_in_the_least() {
+    let viewport = px(10.)..px(110.);
+    assert_eq!(
+        reveal_offset(viewport.clone(), px(20.)..px(40.), px(-5.)),
+        px(-5.),
+        "in view"
+    );
+    assert_eq!(
+        reveal_offset(viewport.clone(), px(100.)..px(130.), px(0.)),
+        px(-20.),
+        "below: up to the bottom"
+    );
+    assert_eq!(
+        reveal_offset(viewport.clone(), px(0.)..px(20.), px(-30.)),
+        px(-20.),
+        "above: down to the top"
+    );
+    assert_eq!(
+        reveal_offset(viewport, px(50.)..px(300.), px(0.)),
+        px(-40.),
+        "taller: its top"
+    );
+}
+
+/// Presses `key` and lets the frames it asks for come.
+fn press(cx: &mut gpui_kit::VisualTestContext, key: &str) {
+    cx.simulate_keystrokes(key);
+    cx.run_until_parked();
+    cx.update(gpui_kit::Window::simulate_next_frame);
+    cx.run_until_parked();
+}
+
+/// Whether button `id` lies inside the content's viewport.
+fn shown(cx: &mut gpui_kit::VisualTestContext, id: &'static str) -> bool {
+    let content = cx.debug_bounds("ask-content").expect("the content is laid out");
+    let button = cx.debug_bounds(id).expect("the button is laid out");
+    content.top() <= button.top() && button.bottom() <= content.bottom()
+}
+
+#[gpui_kit::test]
+fn the_keyboard_brings_the_highlighted_button_into_view(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let mut pending = ask(AskStyle::Gui);
+    pending.destructive_id = None;
+    // a column of buttons far taller than the window
+    pending.buttons = (0..16)
+        .map(|index| button(&format!("b{index}"), &format!("Button {index}"), None))
+        .collect();
+    let look = Look {
+        family: None,
+        size: 13.0,
+        foreground: Rgb::WHITE,
+        background: Rgb::BLACK,
+    };
+    let owner = AskOwner::Session(Uuid::new_v4());
+    let (dialog, cx) =
+        cx.add_window_view(|_, cx| AskDialog::new(&pending, owner, look, crate::state::detached_poster(), cx));
+    cx.simulate_resize(gpui_kit::size(px(300.), px(240.)));
+    cx.update(|window, cx| {
+        window.activate_window();
+        let focus = dialog.read(cx).focus_handle().clone();
+        window.focus(&focus, cx);
+    });
+    cx.run_until_parked();
+    assert!(!shown(cx, "ask-button-b15"), "the last button starts out of view");
+    for _ in 0..15 {
+        press(cx, "tab");
+    }
+    assert_eq!(dialog.read_with(cx, |dialog, _| dialog.highlighted()), Some(15));
+    assert!(shown(cx, "ask-button-b15"), "Tab scrolled the highlighted button in");
+    press(cx, "tab");
+    assert!(shown(cx, "ask-button-b0"), "wrapped to the first, scrolled back up");
+}
