@@ -62,11 +62,29 @@ pub fn ask_panel_cap(width_percent: Option<i64>, anchor_width: f64, terminal_cel
 /// `fittedPanelWidth`): the ideal width, shrunk to what the terminal area leaves, never past the frame.
 #[must_use]
 pub fn palette_width(width: f64, inset: f64) -> f64 {
+    fitted_width(PALETTE_WIDTH, width, inset)
+}
+
+/// A panel `ideal` wide (already scaled to the interface size) fitted to a frame `width` wide with the terminal area
+/// `inset` from its left (upstream's `InterfaceMetrics.fittedPanelWidth`).
+#[must_use]
+pub fn fitted_width(ideal: f64, width: f64, inset: f64) -> f64 {
     let ceiling = (width - 2.0 * PANEL_MARGIN).max(0.0);
     let fits_terminal_area = width - inset - 2.0 * PANEL_MARGIN;
-    PALETTE_WIDTH
-        .min(MINIMUM_PANEL_WIDTH.max(fits_terminal_area))
-        .min(ceiling)
+    ideal.min(MINIMUM_PANEL_WIDTH.max(fits_terminal_area)).min(ceiling)
+}
+
+/// The tallest a palette panel grows in a frame `height` tall (upstream's `fittedPanelHeight`): what the frame leaves
+/// under the panel's top less a margin, never under the minimum.
+#[must_use]
+pub fn palette_cap(height: f64) -> f64 {
+    MINIMUM_PANEL_HEIGHT.max(height * (1.0 - PALETTE_TOP_FRACTION) - PANEL_MARGIN)
+}
+
+/// How far down a frame `height` tall a palette panel starts (upstream's `topInsetFraction`).
+#[must_use]
+pub fn palette_top(height: f64) -> f64 {
+    height * PALETTE_TOP_FRACTION
 }
 
 /// How far right of the frame's center a palette `panel` wide sits, so it centers over the terminal area without
@@ -80,10 +98,10 @@ pub fn palette_offset(panel: f64, width: f64, inset: f64) -> f64 {
 #[must_use]
 pub fn palette_rect(width: f64, height: f64, inset: f64, natural_height: f64, minimum_height: f64) -> Rect {
     let panel = palette_width(width, inset);
-    let cap = MINIMUM_PANEL_HEIGHT.max(height * (1.0 - PALETTE_TOP_FRACTION) - PANEL_MARGIN);
+    let cap = palette_cap(height);
     Rect {
         x: pixels((width - panel) / 2.0 + palette_offset(panel, width, inset)),
-        y: pixels(height * PALETTE_TOP_FRACTION),
+        y: pixels(palette_top(height)),
         width: pixels(panel),
         height: pixels(natural_height.min(cap).max(minimum_height)),
     }
@@ -104,6 +122,57 @@ pub fn logical(value: f64) -> gpui_kit::Pixels {
     #[expect(clippy::cast_possible_truncation, reason = "a window coordinate fits an f32")]
     let value = value as f32;
     px(value)
+}
+
+// MARK: - interface metrics
+
+/// The palettes' and the switcher's text sizes and scale (upstream's `InterfaceMetrics`), from the Interface font
+/// size setting.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Metrics {
+    /// Row titles and the search field.
+    pub base: f64,
+    /// Subtitles and badges.
+    pub secondary: f64,
+    /// Shortcut hints.
+    pub shortcut: f64,
+    /// `base` over the default, for the panels' lengths.
+    pub scale: f64,
+}
+
+impl Metrics {
+    /// The floor of the derived sizes (upstream's `minimumTextSize`).
+    const MINIMUM_TEXT: f64 = 8.0;
+
+    /// The metrics of the clamped Interface font size `base` (upstream's `InterfaceMetrics(fontSize:)`).
+    #[must_use]
+    pub fn new(base: f64) -> Self {
+        let scale = base / agterm_core::settings_model::DEFAULT_INTERFACE_FONT_SIZE;
+        Self {
+            base,
+            secondary: Self::MINIMUM_TEXT.max((10.0 * scale).round()),
+            shortcut: Self::MINIMUM_TEXT.max((12.0 * scale).round()),
+            scale,
+        }
+    }
+
+    /// The metrics `settings` asks for.
+    #[must_use]
+    pub fn of(settings: &agterm_core::persist::AppSettings) -> Self {
+        Self::new(settings.effective_interface_font_size())
+    }
+
+    /// A length given at the default size, at this one (upstream's `scaled`).
+    #[must_use]
+    pub fn scaled(&self, length: f64) -> f64 {
+        (length * self.scale).round()
+    }
+}
+
+impl Default for Metrics {
+    fn default() -> Self {
+        Self::new(agterm_core::settings_model::DEFAULT_INTERFACE_FONT_SIZE)
+    }
 }
 
 // MARK: - the look

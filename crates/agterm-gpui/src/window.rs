@@ -11,9 +11,19 @@
 //! ([`crate::modal`]) come above everything.
 //!
 //! The GUI ask ([`crate::ask_dialog`]) is the window's own: one comes up with the model's modal slot, takes the
-//! keyboard, and is drawn over its anchor while the rest of the window takes no clicks. While a GUI ask, a picker, the
-//! palette, an alert or a popover holds the keyboard the deck moves none; once it closes the window's sync gives the
-//! keyboard back to the shown terminal (an alert or a popover closing posts that sync).
+//! keyboard, and is drawn over its anchor while the rest of the window takes no clicks. So is the native picker
+//! ([`crate::picker`], the slot's other tenant) and, while this window draws it, the command palette
+//! ([`crate::palette`]): a new one takes the keyboard. While a GUI ask, a picker, the palette, an alert or a popover
+//! holds the keyboard the deck moves none; once it closes the window's sync gives the keyboard back to the shown
+//! terminal (an alert or a popover closing posts that sync), and an alert closing over a picker, a palette or a GUI ask
+//! gives it back to that. The scrollback search bar ([`crate::search`]) sits at the terminal area's top right and takes
+//! the keyboard when it comes up unless a modal holds it; the search's end gives it back to the terminal. The Ctrl-Tab
+//! switcher ([`crate::session_switcher`]) never takes it.
+//!
+//! The window's own keys come first ([`intercept_key`], which the key monitor runs ahead of the keymap, any field's
+//! bindings and the terminal): Ctrl+Tab and a walk's Escape are the switcher's, and the picker's, the palette's and
+//! the search bar's fields hand their navigation keys to their panel (upstream's `onKeyPress` handlers, the GTK
+//! build's capture-phase controllers). Control going up ends a walk (the root's modifier listener).
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -23,17 +33,23 @@ use agterm_core::model::{AppStore, Session, WindowLibrary};
 use agterm_core::titlebar::UNTITLED;
 use agterm_core::{Core, WindowRequest, WindowSize, WindowState};
 use gpui_kit::{
-    AnyElement, AnyView, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, KeyUpEvent,
-    ParentElement as _, Render, Styled as _, Subscription, Window, div, px, size,
+    AnyElement, AnyView, App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
+    KeyUpEvent, ModifiersChangedEvent, ParentElement as _, Render, Styled as _, Subscription, Window, div, px, size,
 };
 use uuid::Uuid;
 
 use crate::ask_dialog::{AskDialog, AskOwner};
 use crate::deck::{AnchorTarget, Deck};
 use crate::keymap_dispatch::KeyOrigin;
+use crate::modal::Metrics;
+use crate::palette::{Palette, PaletteView};
+use crate::picker::Picker;
 use crate::popovers::Popovers;
+use crate::search::SearchBar;
+use crate::session_switcher::SessionSwitcher;
 use crate::sidebar::Sidebar;
 use crate::state::{AppState, FirstFocus, Poster, post};
+use crate::terminal::input::KeyStroke;
 use crate::titlebar::{Cover, Titlebar, TitlebarEvent};
 
 /// The window title: the active session's display name, then the window's custom name when it has one (upstream's
@@ -145,6 +161,12 @@ pub struct WindowView {
     sidebar: Entity<Sidebar>,
     popovers: Entity<Popovers>,
     ask: Option<WindowAsk>,
+    /// The native picker while the modal slot holds a pick.
+    picker: Option<Entity<Picker>>,
+    /// The command palette while this window draws it.
+    palette: Option<Entity<Palette>>,
+    search: Entity<SearchBar>,
+    switcher: Entity<SessionSwitcher>,
     /// Whether an alert was up at the last sync: the GUI ask it covered takes the keyboard back once it goes.
     alert_up: bool,
     layers: Vec<(Layer, AnyView)>,
@@ -190,8 +212,10 @@ impl WindowView {
             })
             .detach();
         });
-        let activation = cx.observe_window_activation(window, move |_, window, cx| {
+        let activation = cx.observe_window_activation(window, move |view, window, cx| {
             if !window.is_window_active() {
+                // a walk ends when the window loses the keyboard
+                view.switcher.update(cx, SessionSwitcher::reset);
                 check_keyboard_left(cx);
             }
             if window.is_window_active() {
@@ -216,6 +240,13 @@ impl WindowView {
         // keyboard goes back to the shown terminal once the last one is answered
         let posting = poster.clone();
         let alerts = cx.observe_global::<crate::modal::Alerts>(move |_, _| post(&posting, |_| {}));
+        let search = cx.new(|cx| SearchBar::new(id, poster.clone(), window, cx));
+        let switcher = cx.new(|_| SessionSwitcher::new(id, poster.clone()));
+        // both draw nothing while hidden, and neither takes a click: attached for good
+        let layers = vec![
+            (Layer::Search, AnyView::from(search.clone())),
+            (Layer::Switcher, AnyView::from(switcher.clone())),
+        ];
         Self {
             id,
             deck,
@@ -223,8 +254,12 @@ impl WindowView {
             sidebar,
             popovers,
             ask: None,
+            picker: None,
+            palette: None,
+            search,
+            switcher,
             alert_up: false,
-            layers: Vec::new(),
+            layers,
             title: UNTITLED.to_owned(),
             closing,
             painted: Rc::new(Cell::new(Painted::default())),
@@ -289,6 +324,179 @@ impl WindowView {
         window.focus(&focus, cx);
         self.set_layer(Layer::Ask, Some(dialog.clone().into()), cx);
         self.ask = Some(WindowAsk { dialog, target });
+    }
+
+    /// Brings the native picker in line with the model's modal slot: a picker per pick (a new one takes the keyboard,
+    /// as does the one shown when `refocus`, an alert over it having closed), placed over the terminal area, and none
+    /// once the slot empties.
+    fn sync_picker(
+        &mut self,
+        core: &Core,
+        place: (f64, Metrics),
+        refocus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let id = self.id;
+        let pick = core
+            .modal_slot(id)
+            .and_then(agterm_core::modal::PickController::pending);
+        let Some(pick) = pick else {
+            if self.picker.take().is_some() {
+                self.set_layer(Layer::Picker, None, cx);
+            }
+            return;
+        };
+        let (inset, metrics) = place;
+        if let Some(picker) = self.picker.as_ref().filter(|picker| picker.read(cx).id() == pick.id) {
+            picker.update(cx, |picker, cx| picker.place(inset, metrics, cx));
+            if refocus {
+                let focus = picker.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+            }
+            return;
+        }
+        let (poster, pick_id) = (self.poster.clone(), pick.id.clone());
+        let resolve: crate::picker::Resolve = Rc::new(move |result| {
+            let pick_id = pick_id.clone();
+            post(&poster, move |state: &mut AppState| {
+                state.resolve_pick(id, &pick_id, result);
+            });
+        });
+        let picker = cx.new(|cx| Picker::new(pick, inset, metrics, resolve, window, cx));
+        let focus = picker.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+        self.set_layer(Layer::Picker, Some(picker.clone().into()), cx);
+        self.picker = Some(picker);
+    }
+
+    /// Brings the command palette in line with the core: a palette per generation this window draws (a new one takes
+    /// the keyboard, as does the one shown when `refocus`), refreshed while unchanged, and none once it closes.
+    fn sync_palette(
+        &mut self,
+        core: &Core,
+        place: (f64, Metrics),
+        refocus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = PaletteView::of(core, self.id) else {
+            if self.palette.take().is_some() {
+                self.set_layer(Layer::Palette, None, cx);
+            }
+            return;
+        };
+        let (inset, metrics) = place;
+        let generation = view.generation;
+        if let Some(palette) = self
+            .palette
+            .as_ref()
+            .filter(|palette| palette.read(cx).generation() == generation)
+        {
+            palette.update(cx, |palette, cx| palette.refresh(view, inset, metrics, cx));
+            if refocus {
+                let focus = palette.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+            }
+            return;
+        }
+        let sink = crate::palette::sink(self.id, generation, &self.poster);
+        let palette = cx.new(|cx| Palette::new(view, inset, metrics, sink, window, cx));
+        let focus = palette.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+        self.set_layer(Layer::Palette, Some(palette.clone().into()), cx);
+        self.palette = Some(palette);
+    }
+
+    /// The window's native picker while one is up.
+    #[must_use]
+    pub fn picker(&self) -> Option<&Entity<Picker>> {
+        self.picker.as_ref()
+    }
+
+    /// The window's command palette while it draws one.
+    #[must_use]
+    pub fn palette(&self) -> Option<&Entity<Palette>> {
+        self.palette.as_ref()
+    }
+
+    /// The window's scrollback search bar.
+    #[must_use]
+    pub fn search_bar(&self) -> &Entity<SearchBar> {
+        &self.search
+    }
+
+    /// The window's Ctrl-Tab switcher.
+    #[must_use]
+    pub fn switcher(&self) -> &Entity<SessionSwitcher> {
+        &self.switcher
+    }
+
+    /// The window's own key handling (module docs); whether it took the press.
+    fn key_down(&mut self, stroke: &KeyStroke, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if let Some(key) = crate::session_switcher::switch_key(stroke)
+            && self.switcher.update(cx, |switcher, cx| switcher.press(key, cx))
+        {
+            return true;
+        }
+        let focused = |handle: FocusHandle, window: &Window| handle.is_focused(window);
+        if let Some(picker) = self
+            .picker
+            .clone()
+            .filter(|picker| focused(picker.read(cx).focus_handle(cx), window))
+        {
+            let Some(key) = crate::picker::pick_key(stroke) else {
+                return false;
+            };
+            picker.update(cx, |picker, cx| picker.key(key, cx));
+            return true;
+        }
+        if let Some(palette) = self
+            .palette
+            .clone()
+            .filter(|palette| focused(palette.read(cx).focus_handle(cx), window))
+        {
+            if let Some(key) = crate::picker::pick_key(stroke) {
+                palette.update(cx, |palette, cx| palette.key(key, cx));
+                return true;
+            }
+            // a launcher's chord reaches its action from the field: the same chord closes or switches the palette
+            let Some(action) =
+                crate::keymap_dispatch::menu_action(stroke).filter(|action| crate::palette::LAUNCHERS.contains(action))
+            else {
+                return false;
+            };
+            palette.update(cx, |palette, cx| palette.launcher(action, cx));
+            return true;
+        }
+        if focused(self.search.read(cx).focus_handle(cx), window) {
+            // Find's own chord closes the bar from its field, as the menu item's toggle does
+            let find =
+                crate::keymap_dispatch::menu_action(stroke) == Some(agterm_core::keymap::BuiltinAction::ToggleSearch);
+            let Some(input) = crate::search::field_key(stroke).or(find.then_some(crate::search::SearchInput::Close))
+            else {
+                return false;
+            };
+            self.search.update(cx, |bar, _| bar.send(input));
+            return true;
+        }
+        false
+    }
+
+    /// The search bar at the terminal area's top right.
+    fn render_search(&self, view: &AnyView, window: &Window, cx: &App) -> AnyElement {
+        let viewport = window.viewport_size();
+        let area = self.deck.read(cx).anchor_bounds(AnchorTarget::Area);
+        let (top, right) = area.map_or((px(0.), px(0.)), |area| {
+            (area.top(), (viewport.width - area.right()).max(px(0.)))
+        });
+        let margin = px(crate::search::MARGIN);
+        div()
+            .absolute()
+            .top(top + margin)
+            .right(right + margin)
+            .child(view.clone())
+            .into_any_element()
     }
 
     /// The GUI ask over its anchor, the rest of the window taking no clicks.
@@ -374,8 +582,8 @@ impl WindowView {
         self.focus_terminal(window, cx);
     }
 
-    /// Gives the keyboard to what should hold it while the window has it: the window's alert, GUI ask or popover while
-    /// one is up, else the shown terminal (a new window's first focus, which the window manager gives the window itself:
+    /// Gives the keyboard to what should hold it while the window has it: the window's alert, picker, GUI ask, palette
+    /// or popover while one is up, else the shown terminal (a new window's first focus, which the window manager gives the window itself:
     /// a new window maps without an activation request of its own).
     pub fn focus_terminal(&self, window: &mut Window, cx: &mut App) {
         if crate::modal::alert_open(window.window_handle(), cx) {
@@ -383,9 +591,11 @@ impl WindowView {
             return;
         }
         let held = self
-            .ask
+            .picker
             .as_ref()
-            .map(|ask| ask.dialog.read(cx).focus_handle().clone())
+            .map(|picker| picker.read(cx).focus_handle(cx))
+            .or_else(|| self.ask.as_ref().map(|ask| ask.dialog.read(cx).focus_handle().clone()))
+            .or_else(|| self.palette.as_ref().map(|palette| palette.read(cx).focus_handle(cx)))
             .or_else(|| {
                 let popovers = self.popovers.read(cx);
                 popovers.is_open().then(|| popovers.focus_handle().clone())
@@ -402,21 +612,17 @@ impl WindowView {
         self.painted.get().state(display_size(window, cx))
     }
 
-    /// Renders the model: the deck's pages, the sidebar, the title, the GUI ask and the popovers' rows. A modal holds
-    /// the keyboard while the model's modal slot (the window's picker or GUI ask) or its palette is up, or one of the
-    /// window's alerts or popovers; while the sidebar's row menu holds it the deck moves no focus. Whether the core
-    /// needs a settle for the focus the deck gave.
+    /// Renders the model: the deck's pages, the sidebar, the title, the GUI ask, the picker, the palette, the search
+    /// bar, the switcher and the popovers' rows. A modal holds the keyboard while the model's modal slot (the window's
+    /// picker or GUI ask) or its palette is up, or one of the window's alerts or popovers; while the sidebar's row menu
+    /// holds it the deck moves no focus. Whether the core needs a settle for the focus the deck gave.
     #[must_use = "a focus report the core took needs a settle"]
     pub fn sync(&mut self, core: &mut Core, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let id = self.id;
         let dialog = core.modal_pending(id) || core.palette_holds(id);
         let alert = crate::modal::alert_open(window.window_handle(), cx);
         let alert_closed = std::mem::replace(&mut self.alert_up, alert) && !alert;
-        // the GUI ask takes the keyboard back from a closed alert unless a layer above it holds it
-        let refocus = alert_closed && !core.palette_holds(id) && !self.popovers.read(cx).is_open();
-        self.sync_ask(core, refocus, window, cx);
-        self.popovers.update(cx, |popovers, cx| popovers.sync(core, cx));
-        self.sync_popover_layer(cx);
+        self.sync_modals(core, alert_closed, window, cx);
         let modal = dialog || alert || self.popovers.read(cx).is_open();
         let sidebar = self.sidebar.read(cx);
         let (held, owner) = (sidebar.menu_open(), sidebar.keyboard_owner(cx));
@@ -428,7 +634,35 @@ impl WindowView {
             // a menu closing after its item opened the alert may have taken the keyboard back
             crate::modal::refocus_alert(window, cx);
         }
+        // after the deck, which may have given a terminal the keyboard: a bar that came up takes it unless a modal
+        // holds it
+        self.search.update(cx, |bar, cx| bar.sync(core, !modal, window, cx));
+        let inset = terminal_area_inset(core, id);
+        self.switcher.update(cx, |switcher, cx| switcher.sync(core, inset, cx));
         self.sidebar.update(cx, |sidebar, cx| sidebar.sync(core, cx));
+        self.sync_title(core, dialog || alert, window, cx);
+        cx.notify();
+        focused
+    }
+
+    /// The window's dialogs: the GUI ask, the picker, the palette and the popovers. The front one takes the keyboard
+    /// back from an alert that closed (`alert_closed`) unless a popover holds it.
+    fn sync_modals(&mut self, core: &Core, alert_closed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let id = self.id;
+        let refocus = alert_closed && !self.popovers.read(cx).is_open();
+        let palette = core.palette_holds(id);
+        let place = (terminal_area_inset(core, id), Metrics::of(core.settings()));
+        // the palette sits above the modal slot's picker or GUI ask
+        self.sync_ask(core, refocus && !palette, window, cx);
+        self.sync_picker(core, place, refocus && !palette, window, cx);
+        self.sync_palette(core, place, refocus, window, cx);
+        self.popovers.update(cx, |popovers, cx| popovers.sync(core, cx));
+        self.sync_popover_layer(cx);
+    }
+
+    /// The window title and the title bar.
+    fn sync_title(&mut self, core: &Core, dialog: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let id = self.id;
         let dashboard = core.dashboard(id).is_some();
         let title = if dashboard {
             dashboard_title(core.library(), id)
@@ -444,13 +678,11 @@ impl WindowView {
         };
         let colors = crate::chrome::current(cx);
         self.titlebar
-            .update(cx, |bar, cx| bar.sync(core, cover, dialog || alert, colors, cx));
+            .update(cx, |bar, cx| bar.sync(core, cover, dialog, colors, cx));
         if title != self.title {
             window.set_window_title(&title);
             self.title = title;
         }
-        cx.notify();
-        focused
     }
 
     /// Applies a window command's request (upstream's `WindowRegistry` actions). GPUI has no client positioning on
@@ -511,6 +743,7 @@ impl Render for WindowView {
             .iter()
             .map(|(layer, view)| match layer {
                 Layer::Ask => self.render_ask(view, cx),
+                Layer::Search => self.render_search(view, window, cx),
                 _ => div().absolute().inset_0().child(view.clone()).into_any_element(),
             })
             .collect();
@@ -523,6 +756,12 @@ impl Render for WindowView {
                     cx.stop_propagation();
                 }
             })
+            .on_modifiers_changed(cx.listener(|view, event: &ModifiersChangedEvent, _, cx| {
+                // Control went up: a Ctrl-Tab walk selects its highlighted session
+                if !event.modifiers.control {
+                    view.switcher.update(cx, SessionSwitcher::release);
+                }
+            }))
             .relative()
             .size_full()
             .flex()
@@ -542,6 +781,15 @@ impl Render for WindowView {
             .children(alert)
             .child(crate::chrome::resize_edges(window))
     }
+}
+
+/// The window's own keys (module docs), which the key monitor runs first: whether the agterm window `window` took the
+/// press. A window that is no agterm window (the quick terminal's panel) takes none.
+pub fn intercept_key(stroke: &KeyStroke, window: &mut Window, cx: &mut App) -> bool {
+    let Some(Some(view)) = window.root::<WindowView>() else {
+        return false;
+    };
+    view.update(cx, |view, cx| view.key_down(stroke, window, cx))
 }
 
 /// How long after a window loses the keyboard the monitor checks whether another agterm window took it (the GTK

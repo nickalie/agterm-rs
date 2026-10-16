@@ -536,6 +536,7 @@ tests/protocol/test_zmx.py::test_lead_rejects[not-live]
 tests/protocol/test_zmx.py::test_lead_rejects[scratch]
 tests/protocol/test_zmx.py::test_list_joins_each_pane_claim
 tests/protocol/test_zmx.py::test_present_refuses_without_a_session
+tests/protocol/test_zmx.py::test_prune_finds_no_orphans
 tests/protocol/test_zmx.py::test_reset_requires_force
 tests/protocol/test_zmx.py::test_restart_rejects[no-pane]
 tests/protocol/test_zmx.py::test_restart_rejects[no-split]

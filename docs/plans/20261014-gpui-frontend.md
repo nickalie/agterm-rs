@@ -1740,9 +1740,66 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 **Files:**
 - Create: `crates/agterm-gpui/src/{picker,palette,session_switcher,search}.rs`
 
-- [ ] picker, command palette, Ctrl-Tab switcher, search bar over Task 10's search
-- [ ] tests (headless): filtering, navigation, selection results, search next/prev and counts
-- [ ] gates + conformance — must pass before Task 23
+- [x] picker, command palette, Ctrl-Tab switcher, search bar over Task 10's search
+- [x] tests (headless): filtering, navigation, selection results, search next/prev and counts
+- [x] gates + conformance — must pass before Task 23
+- result (2026-10-16):
+  - ➕ Files: `src/{picker,palette,session_switcher,search}/tests.rs`; Modify: `src/{keymap_dispatch,lib,modal,state,
+    titlebar,window,window/tests}.rs`, `docs/linux-ui-checklist.md`.
+  - **Picker** (`picker.rs`, the GTK `picker.rs` port): `Picker` view per pick id in `Layer::Picker`, scrim `pick-scrim`
+    (a press cancels), panel `pick-palette` near the top over the terminal area, a gpui-kit `Input` field (the prompt
+    as placeholder, the query prefilled), rows `palette-item-<id>`; `filter_rows`/`initial_selection`/`moved`/`outcome`
+    as GTK, `pick_key` read off the key monitor's `KeyStroke` (Up/Down, Ctrl+J/K through `terminal::input::chord_key`,
+    Return, Escape, Tab kept), one answer posted as `resolve_pick`. The panel's frame, field and rows (`frame`,
+    `header`, `row`, `text_column`, `Placement`) are shared with the palettes.
+  - **Palettes** (`palette.rs`): `PaletteView::of` (rows, enablement, live chords as GTK accelerator labels through
+    `titlebar::chord_label`, attention glyphs), a `Palette` per generation in `Layer::Palette` (`command-palette`,
+    `palette-scrim`, `palette-subtitle`, `palette-badge`), refreshed in place while unchanged (`reselect`), the theme
+    preview debounced 70 ms by a GPUI timer that any other request drops; `AppState::palette_request` (stale
+    generations ignored; a run's frontend half through the new `AppState::frontend_action`, landed after the windows'
+    sync as GTK's settle-then-apply); a launcher's menu chord typed in the field reaches its action
+    (`keymap_dispatch::menu_action`).
+  - **Switcher** (`session_switcher.rs`): GTK's `Switcher` walk, a click-through `session-switcher` panel (no listener,
+    no focus) always attached in `Layer::Switcher`; Ctrl+Tab/Ctrl+Shift+Tab always consumed (only ending a walk while
+    the window takes no UI actions), Escape during a walk; Control's release through the window root's
+    `on_modifiers_changed`; a deactivation resets the walk; rows lead with the cloud for a remote session (upstream's
+    `SessionSwitcherRow`, which the GTK build lacked).
+  - **Search bar** (`search.rs`): always attached in `Layer::Search`, drawn at the terminal area's top right (the deck's
+    bounds); `search-field`, `search-counter` (`SearchState::display_text`), previous/next/close buttons with hover
+    texts; Return/Shift+Return step, Escape or Find's chord closes; the GTK sent/landed counter keeps a settle from
+    rewinding what is typed; input is dropped when another search shows by the time it lands (`shown_key`).
+  - **Keys**: the window's own keys run first in the key monitor (`window::intercept_key`, before the keymap, `keeps_keys`
+    and the terminal; the GTK capture-phase controllers): the switcher's, then the focused picker/palette/search field's
+    navigation keys; everything else types into the field (the `Input` context keeps it from the keymap).
+  - **Focus**: a new picker or palette takes the keyboard; an alert closing over a picker, palette or GUI ask gives it
+    back to the front one (palette above the slot); `focus_terminal`/`present` prefer picker, ask, palette, popover;
+    the search bar takes it when it comes up unless a modal holds it (synced after the deck); closing a picker or
+    palette hands it back through the deck's modal reconcile, the search's end through the core's `request_pane_focus`
+    on the `Ended` report. `WindowView::sync` split into `sync_modals` and `sync_title`.
+  - **Interface font size** (upstream's `InterfaceMetrics`, which the GTK build did not render): `modal::Metrics`
+    (base, secondary, shortcut, scale) from `effective_interface_font_size` scales the palettes' and switcher's text,
+    paddings, panel widths (520/460) and results height (320); `modal::{fitted_width, palette_cap, palette_top}`.
+  - Tests: picker (rows, keys incl. upstream's layout cases, placement and metrics, the view: prefill, caller's row,
+    typing, one answer), palette (reselect, labels, A→Z/filter/inert/run/close/launcher, theme open row and debounced
+    preview), switcher (walk, keys, frozen rows, the panel), search (keys, shown search, input never lands on another
+    search), window (picker answered by Down/Return and cancelled by Escape with Ctrl+J/K and typing; palette row run by
+    typing and Return, closed by its launcher's chord and Escape; Ctrl+Tab walk, Escape, Control release selecting;
+    search bar focus, typed needle kept, counter, end gives the terminal the keyboard back). Gates: fmt, clippy
+    (workspace, all targets and features), lint-report (9 expects, unchanged), check-tracing-features,
+    `vendor-gpui.sh --check`, `cargo test --workspace` under Xvfb 4095 passed, 0 failed, 6 ignored; the new tests 5
+    times in a row. GPUI conformance ratchet-only with `--also-k "picker or palette or switcher or search or find or
+    pick"`: 545 passed, 0 failed, 2 skipped (`test_search_counts_the_matches`, `test_session_type_text_search_and_copy`:
+    posix-shell, unclaimed until the quick terminal, Task 24); ratchet held (544) and grew by 1
+    (`test_zmx.py::test_prune_finds_no_orphans`) to 545. No capability claimed (the UI tests need a UI driver; the
+    search counts wait on posix-shell). No GTK conformance run: no crate the GTK binary links changed.
+  - Deviations: the palettes and switcher apply the Interface font size (upstream's; the GTK build kept GTK's size);
+    the switcher shows a remote session's cloud (upstream's); the search bar is placed over the deck's bounds rather
+    than the GTK content overlay; a real non-Latin layout for Ctrl+J/K is only unit-tested (`chord_key`), checked at
+    the Task 33 walk.
+  - Later tasks build on: `window::intercept_key` (Task 24's quick terminal is no `WindowView` and takes none),
+    `AppState::frontend_action`, `keymap_dispatch::menu_action`, `picker::{frame, header, row, Placement}` and
+    `modal::Metrics` for any other list panel, the posix-shell claim (Task 24) bringing the two search conformance
+    tests in.
 
 ### Task 23: PTY overlays, notifications, welcome
 
