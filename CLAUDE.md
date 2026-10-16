@@ -42,7 +42,7 @@ Work that needs no live terminal or widget belongs in `agterm-core`, unit-tested
   strings) in `.upstream/agterm`, a read-only clone git-ignored through `.git/info/exclude`; when it is missing:
   `git clone --depth 1 --branch v0.36.0 https://github.com/umputun/agterm .upstream/agterm`.
 - The Linux fork (`../agterm-linux`) is consulted only for Linux glue upstream has no counterpart for: `GtkGLArea`
-  hosting and the input handoff, XDG paths, the app id and state dir, the libghostty Linux build and its patches,
+  hosting and the input handoff, XDG paths, the libghostty Linux build and its patches,
   WebKitGTK. Never port from it.
 - Where upstream and the fork differ, upstream wins (`conformance/docs/fork-bugs.md` lists the cases the suite pins).
   A capability the fork claims is not a target by itself; the build claims the list in rust-build.md > Rust target
@@ -74,18 +74,13 @@ native pins in `build/pins.env` together.
   `#[expect(clippy::..., reason = "...")]` on that one item; `#[allow]` and inner `#![allow]`/`#![expect]` are refused.
 - Thresholds in `clippy.toml` are lowered, never raised. A `rust-toolchain.toml` bump is a change of its own.
 
-## Fork coexistence
-
-On Linux, the build shares the installed fork's application id, state dir and control socket, so it can replace the
-fork on this machine with its state. While an installed agterm runs, launch a checkout's build only through
-`scripts/run-dev.sh` (or the suite): a plain launch is forwarded to the running instance, or both write the same state.
-The socket lock keeps a second instance from taking over the live socket, not from sharing its state.
-
 ## Never touch the user's running agterm
 
 Agents here usually run inside a pane of the user's live agterm, whose `AGTERM_*` and `ZMX_*` variables point at it.
 Every dev instance, probe or `agtermctl` call stays off it:
 
+- Launch a checkout's build only through `scripts/run-dev.sh` (or the suite): a plain launch reaches the running
+  instance or shares its state.
 - Strip `AGTERM_*` and `ZMX_*` from the environment before launching anything (`run-dev.sh` and the harness do).
 - Give every `agtermctl` call an explicit `--socket` (a per-subcommand option, after the subcommand name). Without it
   the CLI resolves the live instance's socket.
