@@ -130,9 +130,16 @@ fn a_dump_replaces_the_routes_and_a_deletion_in_its_middle_counts() {
 }
 
 fn datagram(payloads: Vec<NetlinkPayload<RouteNetlinkMessage>>) -> Vec<u8> {
+    flagged_datagram(0, payloads)
+}
+
+/// A datagram of `payloads`, each message's header carrying `flags`.
+fn flagged_datagram(flags: u16, payloads: Vec<NetlinkPayload<RouteNetlinkMessage>>) -> Vec<u8> {
     let mut bytes = Vec::new();
     for payload in payloads {
-        let mut message = NetlinkMessage::new(NetlinkHeader::default(), payload);
+        let mut header = NetlinkHeader::default();
+        header.flags = flags;
+        let mut message = NetlinkMessage::new(header, payload);
         message.finalize();
         let mut buffer = vec![0; message.buffer_len()];
         message.serialize(&mut buffer);
@@ -209,4 +216,58 @@ fn an_ipv6_gateway_counts_too() {
         vec![RouteAttribute::Gateway(RouteAddress::Inet6(Ipv6Addr::LOCALHOST))],
     );
     assert_eq!(default_route(&via), Some((Family::V6, key(254, 0, 0))));
+}
+
+#[test]
+fn a_replaced_default_route_makes_a_dump_due_whose_routes_drop_the_replaced_key() {
+    let on = |oif| route(AddressFamily::Inet, 0, vec![RouteAttribute::Oif(oif)]);
+    let mut routes = DefaultRoutes::default();
+    assert!(read_datagram(&datagram(vec![new_route(on(2))]), &mut routes).flipped);
+    assert!(
+        !read_datagram(&datagram(vec![new_route(on(2))]), &mut routes).flipped && !routes.redump_due(),
+        "a plain addition makes no dump due"
+    );
+    let replace = flagged_datagram(NLM_F_REPLACE, vec![new_route(on(3))]);
+    assert!(
+        !read_datagram(&replace, &mut routes).flipped,
+        "a route was there before"
+    );
+    assert!(routes.redump_due(), "the kernel named no route it replaced");
+    routes.begin_dump();
+    assert!(!routes.redump_due(), "the dump asked for");
+    let dump = datagram(vec![new_route(on(3)), NetlinkPayload::Done(DoneMessage::default())]);
+    assert!(!read_datagram(&dump, &mut routes).flipped);
+    assert!(!routes.redump_due());
+    assert!(
+        read_datagram(&datagram(vec![del_route(on(3))]), &mut routes).flipped,
+        "the replacement was the last default route: the replaced one is no longer followed"
+    );
+    assert!(!routes.available());
+}
+
+#[test]
+fn a_route_replaced_while_a_dump_is_read_makes_another_due_after_it() {
+    let mut routes = DefaultRoutes::default();
+    routes.begin_dump();
+    let replace = flagged_datagram(
+        NLM_F_REPLACE,
+        vec![new_route(route(AddressFamily::Inet, 0, vec![RouteAttribute::Oif(3)]))],
+    );
+    read_datagram(&replace, &mut routes);
+    assert!(!routes.redump_due(), "the dump being read goes on");
+    assert!(
+        read_datagram(
+            &datagram(vec![NetlinkPayload::Done(DoneMessage::default())]),
+            &mut routes
+        )
+        .flipped
+    );
+    assert!(routes.redump_due(), "the dump may have listed the replaced route");
+    let subnet = flagged_datagram(
+        NLM_F_REPLACE,
+        vec![new_route(route(AddressFamily::Inet, 24, vec![RouteAttribute::Oif(3)]))],
+    );
+    let mut fresh = DefaultRoutes::default();
+    read_datagram(&subnet, &mut fresh);
+    assert!(!fresh.redump_due(), "a replaced subnet route is no default route");
 }

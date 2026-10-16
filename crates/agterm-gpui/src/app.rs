@@ -459,9 +459,10 @@ fn shut_down(shell: &Shell, cx: &mut App) {
     shell.state.update(cx, |state, _| {
         state.save_on_quit();
         tracing::info!("quit: the state is saved");
-        // a confirmed live sessions reset is armed for the next launch, which this app then opens itself
-        if state.core.arm_live_reset_on_quit() {
-            crate::zmx_runtime::spawn_relauncher();
+        // a confirmed live sessions reset is armed for the next launch, which this app then opens itself; without the
+        // relauncher nothing reopens it, so the reset is not armed (upstream's `armLiveReset`)
+        if state.core.arm_live_reset_on_quit() && !crate::zmx_runtime::spawn_relauncher() {
+            state.core.disarm_live_reset();
         }
     });
     shell.main_loop.close();

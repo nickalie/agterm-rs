@@ -1,7 +1,8 @@
 //! The kernel's default routes as the network's last source reads them, over a real rtnetlink socket in a network
 //! namespace of the test's own: the test runs itself again under `unshare --user --map-root-user --net`, and the copy
-//! inside adds and deletes routes on its own loopback with `ip`, never touching the machine's network. Skipped (with a
-//! note) where unprivileged user namespaces are refused.
+//! inside adds and deletes routes on its own loopback and dummy links with `ip`, never touching the machine's network.
+//! Skipped (with a note) where unprivileged user namespaces are refused; the dummy links' part where they cannot be
+//! made.
 
 #![cfg(target_os = "linux")]
 
@@ -118,5 +119,24 @@ fn inside(outer: &str) -> TestResult {
     quiet(&reports, "a blackhole reaches nothing");
     ip("route add 198.51.100.0/24 dev lo")?;
     quiet(&reports, "a subnet");
+    replaced_on_another_interface(&reports)
+}
+
+/// An IPv4 default route replaced in place on another interface: the kernel names no route it replaced, and deleting
+/// the replacement still leaves no default route.
+fn replaced_on_another_interface(reports: &mpsc::Receiver<LinkEvent>) -> TestResult {
+    if ip("link add d0 type dummy").is_err() {
+        eprintln!("skipped the replace on another interface: no dummy links here");
+        return Ok(());
+    }
+    for args in ["link add d1 type dummy", "link set d0 up", "link set d1 up"] {
+        ip(args)?;
+    }
+    ip("route add default dev d0 metric 50")?;
+    assert_eq!(next(reports, "a default route on d0")?, UP);
+    ip("route replace default dev d1 metric 50")?;
+    quiet(reports, "replaced on d1");
+    ip("route del default dev d1 metric 50")?;
+    assert_eq!(next(reports, "the replacement deleted")?, DOWN);
     Ok(())
 }

@@ -234,3 +234,46 @@ fn the_relauncher_gives_up_on_a_process_that_never_exits() {
     waited.kill().unwrap();
     waited.wait().unwrap();
 }
+
+/// Waits up to five seconds for `path` to appear.
+fn appears(path: &Path) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !path.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    path.exists()
+}
+
+#[test]
+fn a_binary_replaced_on_disk_reopens_as_its_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("started");
+    let app = dir.path().join("app");
+    let deleted = dir.path().join("app (deleted)");
+    assert_eq!(
+        reopen_target(&deleted),
+        None,
+        "neither the reported path nor a replacement"
+    );
+    agterm_host::fakes::write_executable(&app, &format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+    assert_eq!(reopen_target(&app), Some(app.clone()), "a binary still there");
+    assert_eq!(reopen_target(&deleted), Some(app.clone()), "the file now at the path");
+    assert_eq!(reopen_target(&dir.path().join("other")), None, "no suffix to strip");
+    let mut waited = std::process::Command::new("sleep").arg("0.1").spawn().unwrap();
+    assert!(spawn_relauncher_for(Ok(deleted), waited.id()));
+    waited.wait().unwrap();
+    assert!(appears(&marker), "the replacement never started");
+}
+
+#[test]
+fn a_binary_gone_from_disk_starts_no_relauncher() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut waited = std::process::Command::new("sleep").arg("0.1").spawn().unwrap();
+    assert!(!spawn_relauncher_for(Ok(dir.path().join("app (deleted)")), waited.id()));
+    assert!(!spawn_relauncher_for(Ok(dir.path().join("app")), waited.id()));
+    assert!(!spawn_relauncher_for(
+        Err(std::io::Error::other("no /proc")),
+        waited.id()
+    ));
+    waited.wait().unwrap();
+}

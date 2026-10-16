@@ -12,12 +12,15 @@
 //!   launch ([`Core::arm_live_reset_on_quit`], `app.rs`'s shutdown) and starts the relauncher ([`spawn_relauncher`]): a
 //!   detached `/bin/sh` that waits for this process to exit and starts the same executable with the app's environment,
 //!   so the new instance runs on the same state directory and socket and consumes the marker. Upstream opens its bundle
-//!   with `open -n`; Linux has no counterpart, and a launch before the exit would only forward to this instance.
+//!   with `open -n`; Linux has no counterpart, and a launch before the exit would only forward to this instance. A
+//!   binary replaced on disk while the app ran (an upgrade, a rebuild) reopens as the replacement ([`reopen_target`]);
+//!   a relauncher that cannot start leaves the reset unarmed, as upstream's `armLiveReset`.
 //!
 //! [`Core::live_reset_menu_visible`]: agterm_core::Core::live_reset_menu_visible
 //! [`Core::arm_live_reset_on_quit`]: agterm_core::Core::arm_live_reset_on_quit
 
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use agterm_core::{ResetPrompt, ResetRefusal};
@@ -116,12 +119,29 @@ impl AppState {
 
 /// Starts the waiter that reopens the app once this process exited, after a Live sessions reset quit; it inherits the
 /// app's environment, so the new instance runs on the same state directory and socket. Whether it started.
+#[must_use]
 pub fn spawn_relauncher() -> bool {
-    let Ok(executable) = std::env::current_exe() else {
-        tracing::error!("could not resolve the app executable to reopen after the live sessions reset");
+    spawn_relauncher_for(std::env::current_exe(), std::process::id())
+}
+
+/// [`spawn_relauncher`] for `executable`, this process's as resolved, reopened after process `pid` exits.
+#[must_use]
+pub fn spawn_relauncher_for(executable: io::Result<PathBuf>, pid: u32) -> bool {
+    let executable = match executable {
+        Ok(executable) => executable,
+        Err(error) => {
+            tracing::error!(%error, "could not resolve the app executable to reopen after the live sessions reset");
+            return false;
+        }
+    };
+    let Some(executable) = reopen_target(&executable) else {
+        tracing::error!(
+            executable = %executable.display(),
+            "the app executable to reopen after the live sessions reset is gone"
+        );
         return false;
     };
-    match relaunch_command(&executable, std::process::id()).spawn() {
+    match relaunch_command(&executable, pid).spawn() {
         Ok(_) => {
             tracing::info!(executable = %executable.display(), "the app reopens once this process exits");
             true
@@ -131,6 +151,32 @@ pub fn spawn_relauncher() -> bool {
             false
         }
     }
+}
+
+/// The binary that reopens `executable`, as `current_exe` names it: itself while it exists, else, for a file Linux
+/// reports deleted (`<path> (deleted)` once it was replaced or removed), the file now at `<path>`; `None` when neither
+/// exists.
+#[must_use]
+pub fn reopen_target(executable: &Path) -> Option<PathBuf> {
+    if executable.exists() {
+        return Some(executable.to_path_buf());
+    }
+    let replacement = without_deleted_suffix(executable)?;
+    replacement.exists().then_some(replacement)
+}
+
+#[cfg(unix)]
+fn without_deleted_suffix(executable: &Path) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt as _;
+    /// What Linux appends to `/proc/self/exe` once the running binary's file was unlinked or replaced.
+    const DELETED_SUFFIX: &[u8] = b" (deleted)";
+    let stripped = executable.as_os_str().as_bytes().strip_suffix(DELETED_SUFFIX)?;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(stripped)))
+}
+
+#[cfg(not(unix))]
+fn without_deleted_suffix(_: &Path) -> Option<PathBuf> {
+    None
 }
 
 /// The waiter's command for `executable` after process `pid` exits, detached from the app's process group.

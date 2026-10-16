@@ -11,12 +11,15 @@
 //!   notwithstanding.
 //! - **Overflow**: a socket that overflowed may have missed a change, so the routes are dumped again a second later and
 //!   the dump's routes replace the followed ones (a flip between the two reports).
+//! - **Replace**: the kernel replaces an IPv4 route in place (`ip route replace` on another interface) with one new
+//!   route message flagged replace and no deletion, so the replaced key would linger; the routes are dumped again a
+//!   second later too, once no dump is being read. gio keeps the stale key instead.
 
 use std::collections::HashSet;
 use std::io;
 use std::time::Duration;
 
-use netlink_packet_core::{NLM_F_DUMP, NLM_F_REQUEST, NetlinkHeader, NetlinkMessage, NetlinkPayload};
+use netlink_packet_core::{NLM_F_DUMP, NLM_F_REPLACE, NLM_F_REQUEST, NetlinkHeader, NetlinkMessage, NetlinkPayload};
 use netlink_packet_route::route::{RouteAttribute, RouteMessage, RouteType};
 use netlink_packet_route::{AddressFamily, RouteNetlinkMessage};
 use netlink_sys::protocols::NETLINK_ROUTE;
@@ -70,6 +73,8 @@ pub struct RouteKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouteChange {
     Added(Family, RouteKey),
+    /// Added in place of a route the kernel names nowhere, which may be another key.
+    Replaced(Family, RouteKey),
     Removed(Family, RouteKey),
 }
 
@@ -78,6 +83,8 @@ pub enum RouteChange {
 pub struct DefaultRoutes {
     live: [HashSet<RouteKey>; 2],
     dump: Option<[HashSet<RouteKey>; 2]>,
+    /// A default route was replaced since the last dump started: the key it replaced may still be followed.
+    stale: bool,
 }
 
 impl DefaultRoutes {
@@ -93,14 +100,25 @@ impl DefaultRoutes {
         self.dump.is_some()
     }
 
+    /// Whether a dump is due because a default route was replaced, none being read now.
+    #[must_use]
+    pub fn redump_due(&self) -> bool {
+        self.stale && !self.dumping()
+    }
+
     /// A dump starts: the routes it lists collect apart until it ends.
     pub fn begin_dump(&mut self) {
         self.dump = Some(Default::default());
+        self.stale = false;
     }
 
     /// Applies a route message; whether a family's default route came or went.
     pub fn apply(&mut self, change: RouteChange) -> bool {
         match change {
+            RouteChange::Replaced(family, key) => {
+                self.stale = true;
+                self.apply(RouteChange::Added(family, key))
+            }
             RouteChange::Added(family, key) => {
                 if let Some(dump) = &mut self.dump {
                     dump[family.index()].insert(key);
@@ -197,7 +215,7 @@ fn read_datagram(datagram: &[u8], routes: &mut DefaultRoutes) -> Read {
             break;
         }
         match NetlinkMessage::<RouteNetlinkMessage>::deserialize(&rest[..length]) {
-            Ok(message) => apply_message(message.payload, routes, &mut read),
+            Ok(message) => apply_message(message.header.flags, message.payload, routes, &mut read),
             Err(error) => tracing::debug!(%error, "remote links: an unreadable netlink message"),
         }
         rest = rest.get(length.next_multiple_of(4)..).unwrap_or_default();
@@ -205,10 +223,21 @@ fn read_datagram(datagram: &[u8], routes: &mut DefaultRoutes) -> Read {
     read
 }
 
-fn apply_message(payload: NetlinkPayload<RouteNetlinkMessage>, routes: &mut DefaultRoutes, read: &mut Read) {
+fn apply_message(
+    flags: u16,
+    payload: NetlinkPayload<RouteNetlinkMessage>,
+    routes: &mut DefaultRoutes,
+    read: &mut Read,
+) {
     let change = match payload {
         NetlinkPayload::InnerMessage(RouteNetlinkMessage::NewRoute(route)) => {
-            default_route(&route).map(|(family, key)| RouteChange::Added(family, key))
+            default_route(&route).map(|(family, key)| {
+                if flags & NLM_F_REPLACE == 0 {
+                    RouteChange::Added(family, key)
+                } else {
+                    RouteChange::Replaced(family, key)
+                }
+            })
         }
         NetlinkPayload::InnerMessage(RouteNetlinkMessage::DelRoute(route)) => {
             default_route(&route).map(|(family, key)| RouteChange::Removed(family, key))
@@ -298,7 +327,7 @@ impl Watch {
                 },
                 Err(error) => return error,
             };
-            if let Err(error) = self.after_overflow(&read) {
+            if let Err(error) = self.redump_if_due(&read) {
                 return error;
             }
             let at_start = !started && !self.routes.dumping();
@@ -311,11 +340,15 @@ impl Watch {
         }
     }
 
-    /// Dumps the routes again a while after an overflow, unless a dump is being read: that one goes on (the kernel
-    /// writes it as it is read) and lists the routes as they are now.
-    fn after_overflow(&mut self, read: &Read) -> io::Result<()> {
-        if read.overflowed && !self.routes.dumping() {
-            tracing::debug!("remote links: the route socket overflowed; dumping the routes again");
+    /// Dumps the routes again a while after an overflow or a replaced default route, unless a dump is being read: that
+    /// one goes on (the kernel writes it as it is read) and lists the routes as they are now; a route replaced while it
+    /// is read is dumped again after it.
+    fn redump_if_due(&mut self, read: &Read) -> io::Result<()> {
+        if (read.overflowed && !self.routes.dumping()) || self.routes.redump_due() {
+            tracing::debug!(
+                overflowed = read.overflowed,
+                "remote links: the routes may be stale; dumping them again"
+            );
             std::thread::sleep(REDUMP_AFTER);
             request_dump(&self.socket, &mut self.routes)?;
         }
