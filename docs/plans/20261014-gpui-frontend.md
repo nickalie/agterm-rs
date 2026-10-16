@@ -2211,9 +2211,62 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 **Files:**
 - Create: `crates/agterm-gpui/src/integrations/` (UI over `agterm-app`'s planners)
 
-- [ ] skill, hooks and CLI installers, opencode integration — the GTK `integrations/ui.rs` flows on gpui-kit
-- [ ] tests: planner calls from the UI, install/uninstall round-trip in a temp home
-- [ ] gates + conformance — must pass before Task 29
+- [x] skill, hooks and CLI installers, opencode integration — the GTK `integrations/ui.rs` flows on gpui-kit
+- [x] tests: planner calls from the UI, install/uninstall round-trip in a temp home
+- [x] gates + conformance — must pass before Task 29
+- result (2026-10-17):
+  - ➕ Files: `src/integrations/tests.rs`; Modify: `src/{integrations,modal,app_menu}.rs`, `docs/linux-ui-checklist.md`.
+    `src/integrations.rs` stays the module's file (the crate's `foo.rs` + `foo/tests.rs` shape), so the plan's
+    `integrations/` directory holds its tests. No `agterm-app` or core change: the planners were complete.
+  - **What existed** (Tasks 23 and 26): the welcome's Install and Help's three items already ran the planners with the
+    result alerts and the `OpenCode` chooser. This task completes the GTK `ui.rs` flows on top: Help's own entry
+    points (`run_skill`, `run_hooks`, `run_cli`, `run_picked` for the welcome), a panic in the off-main work now shows
+    "Install Failed" with the GTK build's "The install stopped unexpectedly." (GPUI's background executor would have
+    unwound its thread and left the alert never to come and the hooks install marked running forever; the GTK build's
+    `flatten`), a probe that panicked counts as one that found nothing (the GTK build's `.ok().flatten()`), and the
+    hooks' running mark is a guard cleared however the install ends.
+  - **Environment seam**: `integrations::Source` (a GPUI global) is what the installers read, at each install and off
+    the main thread: the process's own `Environment::process` (`$HOME`, the staged resources, the bundled
+    `agtermctl`, the process variables the `OpenCode` probe runs with) unless a test installs a temp home's.
+  - **Alerts** (`modal.rs`, shared): from three buttons on they stack full width, first on top, as an `NSAlert` with
+    three or more buttons lays them out (only the `OpenCode` chooser has three; in one row "Skip OpenCode" was
+    squeezed into a third of the panel); a body taller than the window scrolls with the heading and the buttons kept in
+    view (the hooks report is the longest alert; upstream's #430 was that report growing past the screen). Both look
+    right in light and dark: nothing new is colored, the chrome's tokens draw them.
+  - Tests (`integrations/tests.rs`, GPUI's test window over a temp home whose `PATH` holds only a fake login shell and,
+    where a test wants one, a fake `opencode`, so the machine's shell, `OpenCode` and home stay out): the skill (both
+    agents' copies, the fresh-directory note, the planner reading back agterm's own copies, a copy the user removed
+    reinstalled without the note, a user's same-named skill skipped and untouched); the CLI (upstream's text plus the
+    not-on-PATH note, then upstream's alone once on the `PATH`, the link read back current, removed and relinked, an
+    earlier build's link replaced, a real file refused with its text and left alone); the hooks (the chooser when the
+    probe cannot tell, nothing written before the answer, v1 installed with the scripts, the Claude Code merge and the
+    rc block, every step read back current; v2 taking over and removing agterm's v1 plugin; Escape skipping and keeping
+    v2; v2 again already current); a detected `opencode 2.3.1` installing into `$XDG_CONFIG_HOME/opencode` without
+    asking; the user's own Codex hooks giving the warning title and Open Docs opening the manual-merge anchor; a second
+    hooks start while the chooser is up doing nothing (and a new start once it ended); the welcome's Install running
+    the hooks only after the skill's alert; no home and a panicking source showing their texts for each installer and
+    freeing the hooks; a 60-line report in a 420x320 window keeping OK in view and the chooser stacked; and a child of
+    the test binary with `HOME`/`XDG_CONFIG_HOME` set to temp directories and no `Source`, so the app's own process
+    environment is what lands the skill, the hooks, Codex's wiring and `OpenCode` 2's plugin there. Falsified one by
+    one by mutating the code (target/mutate.py, not committed): dropping the `catch_unwind`, the hooks guard, the
+    stacking, the panel's height cap, the welcome's ordering, the Open Docs action, the chooser's Skip offset, and
+    pointing the process source at another home each made its test fail. The guard test caught a real bug on the way
+    (`then_some(Self)` built and dropped a guard while another install ran, clearing its mark).
+  - Gates: fmt, clippy (workspace, all targets and features), lint-report (10 expects, none added),
+    check-tracing-features, `vendor-gpui.sh --check`, `cargo test --workspace` under Xvfb 4279 passed, 0 failed, 9
+    ignored (the child scenario is one); the new tests 5 times in a row. GPUI conformance ratchet-only with
+    `--also-k "integration or install or skill or hooks or opencode"`: 626 passed, 0 failed; ratchet held (626), no
+    newly green id (the suite has no installer test: the installers are UI-only, no wire command). No capability
+    claimed. No GTK conformance run: no crate the GTK binary links changed.
+  - Decisions: no uninstall command or menu item (neither upstream nor the GTK build has one; upstream is the UI
+    reference): the round trip is install → read-back → the user's removal → read-back absent → reinstall, plus the
+    one removal upstream's installers do (a v2 `OpenCode` install removing agterm's v1 plugin); the
+    `agterm-app/src/integrations/files.rs` dangling-symlink fallback (one hop) is left as is: it matters only for a
+    chain of two or more dangling links, which no install/uninstall round trip goes through, and fixing it would touch
+    a crate the GTK binary links; an install whose window closed shows no alert (logged), as before.
+  - Deviations: none.
+  - Later tasks build on: `integrations::Source` (a test home for any later installer flow), the stacked and scrolling
+    alert layout.
 
 ### Stage 3b — HTML overlays
 

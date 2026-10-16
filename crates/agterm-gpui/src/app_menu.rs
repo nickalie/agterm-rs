@@ -605,8 +605,8 @@ fn run_app(action: AppAction, poster: &Poster, id: Uuid, window: &mut Window, cx
         AppAction::Quit => post(poster, AppState::quit_from_menu),
         AppAction::DeveloperDocs => cx.open_url(DEVELOPER_DOCS_URL),
         AppAction::InstallCli => crate::integrations::run_cli(handle, cx),
-        AppAction::InstallHooks => crate::integrations::run_picked(handle, false, true, cx),
-        AppAction::InstallSkill => crate::integrations::run_picked(handle, true, false, cx),
+        AppAction::InstallHooks => crate::integrations::run_hooks(handle, cx),
+        AppAction::InstallSkill => crate::integrations::run_skill(handle, cx),
         AppAction::About => {
             open_alert(
                 window,
