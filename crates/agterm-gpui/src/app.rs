@@ -192,6 +192,11 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
     );
     core.write_settings_config();
     install_launch_hosts(&mut core, &poster, context.socket.clone());
+    // the HUD's painter and the cell a HUD over a session no terminal draws yet is sized with
+    if let Some(helper) = crate::hud::install_helper(&paths::state_dir(&ProcessEnv)) {
+        core.set_hud_helper(helper, paths::hud_body_dir(&ProcessEnv));
+    }
+    core.set_cell_estimator(crate::hud::cell_estimator(Arc::clone(cx.text_system())));
     // the desktop's side before the config loads, so the first terminal starts on it (`appearance.rs`)
     let portal = crate::appearance::Portal::session();
     let dark = portal.as_ref().is_some_and(crate::appearance::Portal::is_dark);

@@ -1,0 +1,766 @@
+//! What the window's dialogs share (the GTK build's `modal.rs`): the panel geometry, the dimming backdrop and the
+//! native panel's look, the keys a dialog navigates by, and the window's alerts.
+//!
+//! - Geometry: an ask's panel is centered in its anchor over a dim layer covering that anchor (upstream's
+//!   `AskDialogView`), a palette's panel sits near the top of the window over a scrim covering all of it (upstream's
+//!   `CommandPalette` in `Palette.swift`); both are pure functions of the sizes ([`ask_panel_width`],
+//!   [`ask_panel_rect`], [`palette_rect`]).
+//! - Alerts ([`open_alert`]): the confirmations, Rename Window and the clipboard prompt (upstream's `NSAlert` sheets,
+//!   the GTK build's `adw::AlertDialog`): a heading, a body, an optional text field (which takes the keyboard) or check
+//!   ("Don't ask again this session"), and a row of buttons, one the default (Return) and one the cancel (Escape); Tab
+//!   and the arrows move the keyboard's ring between the check and the buttons. An alert is modal over its whole window: it dims the window,
+//!   takes every click and keeps every key while it is up (the key monitor leaves an `AgtermAlert` context alone).
+//!   Alerts of one window queue: the next comes up once the front one is answered. The window's view draws the front
+//!   one ([`alert_layer`]); the [`Alerts`] registry tells observers when one opens or closes, which is how the window
+//!   gives the keyboard back to the shown terminal once the last one is answered.
+
+use std::collections::HashMap;
+
+use agterm_core::chrome::{ChromeColors, Rgb};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    AnyElement, AnyWindowHandle, App, AppContext as _, BorrowAppContext as _, Context, Entity, FocusHandle,
+    Focusable as _, FontWeight, Global, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke,
+    MouseButton, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
+    Window, div, px,
+};
+
+use crate::split::Rect;
+
+// MARK: - geometry
+
+/// Clearance kept between a panel edge and the window edge (upstream's `InterfaceMetrics.panelMargin`).
+const PANEL_MARGIN: f64 = 16.0;
+/// The width a palette prefers not to shrink below (upstream's `minimumPanelWidth`).
+const MINIMUM_PANEL_WIDTH: f64 = 280.0;
+/// The height below which a palette stops shrinking (upstream's `minimumPanelHeight`).
+const MINIMUM_PANEL_HEIGHT: f64 = 160.0;
+/// The palette's width at the default interface size (upstream's `panelWidthAtDefaultFontSize`).
+const PALETTE_WIDTH: f64 = 520.0;
+/// How far down the frame the palette starts (upstream's `topInsetFraction`).
+const PALETTE_TOP_FRACTION: f64 = 0.12;
+/// A content-sized ask's widest panel, in terminal cells (upstream's `72 * terminalCell`).
+pub const ASK_MAX_CELLS: f64 = 72.0;
+
+/// The widest a content-sized ask panel may grow in an anchor `anchor_width` wide: 90% of the anchor or 72 terminal
+/// cells, whichever is less (upstream's `ViewThatFits` cap); a fixed-width one is its clamped percent of the anchor.
+#[must_use]
+pub fn ask_panel_cap(width_percent: Option<i64>, anchor_width: f64, terminal_cell: f64) -> f64 {
+    let anchor_width = anchor_width.max(0.0);
+    match width_percent {
+        // a percent within 10...100, so the conversion is exact
+        #[expect(clippy::cast_precision_loss, reason = "a percent within 10...100")]
+        Some(percent) => anchor_width * percent.clamp(10, 100) as f64 / 100.0,
+        None => (anchor_width * 0.9).min(ASK_MAX_CELLS * terminal_cell),
+    }
+}
+
+/// A content-sized or fixed-percent ask panel's width in an anchor `anchor_width` wide (upstream's `panelWidth` and its
+/// `ViewThatFits`): a percent of the anchor, else the content's `natural` width up to the cap ([`ask_panel_cap`]), never
+/// below the content's `minimum`.
+#[must_use]
+pub fn ask_panel_width(
+    width_percent: Option<i64>,
+    anchor_width: f64,
+    natural: f64,
+    minimum: f64,
+    terminal_cell: f64,
+) -> f64 {
+    let cap = ask_panel_cap(width_percent, anchor_width, terminal_cell);
+    let width = match width_percent {
+        Some(_) => cap,
+        None => natural.min(cap),
+    };
+    width.max(minimum)
+}
+
+/// An ask panel `width` wide whose content wants `natural_height`, centered in `anchor` and kept a `cell` clear of its
+/// top and bottom (upstream's `panelHeight`), never below the content's `minimum_height`.
+#[must_use]
+pub fn ask_panel_rect(anchor: Rect, width: f64, natural_height: f64, minimum_height: f64, cell: f64) -> Rect {
+    let room = (f64::from(anchor.height) - 2.0 * cell).max(0.0);
+    let height = natural_height.min(room).max(minimum_height);
+    Rect {
+        x: anchor.x + pixels((f64::from(anchor.width) - width) / 2.0),
+        y: anchor.y + pixels((f64::from(anchor.height) - height) / 2.0),
+        width: pixels(width),
+        height: pixels(height),
+    }
+}
+
+/// The palette's width in a frame `width` wide with the terminal area `inset` from its left (upstream's
+/// `fittedPanelWidth`): the ideal width, shrunk to what the terminal area leaves, never past the frame.
+#[must_use]
+pub fn palette_width(width: f64, inset: f64) -> f64 {
+    let ceiling = (width - 2.0 * PANEL_MARGIN).max(0.0);
+    let fits_terminal_area = width - inset - 2.0 * PANEL_MARGIN;
+    PALETTE_WIDTH
+        .min(MINIMUM_PANEL_WIDTH.max(fits_terminal_area))
+        .min(ceiling)
+}
+
+/// How far right of the frame's center a palette `panel` wide sits, so it centers over the terminal area without
+/// leaving the frame (upstream's `panelOffset`).
+#[must_use]
+pub fn palette_offset(panel: f64, width: f64, inset: f64) -> f64 {
+    (inset / 2.0).min((width - panel) / 2.0).max(0.0)
+}
+
+/// The palette panel's rectangle in a `width`×`height` frame, for content wanting `natural_height` at that width.
+#[must_use]
+pub fn palette_rect(width: f64, height: f64, inset: f64, natural_height: f64, minimum_height: f64) -> Rect {
+    let panel = palette_width(width, inset);
+    let cap = MINIMUM_PANEL_HEIGHT.max(height * (1.0 - PALETTE_TOP_FRACTION) - PANEL_MARGIN);
+    Rect {
+        x: pixels((width - panel) / 2.0 + palette_offset(panel, width, inset)),
+        y: pixels(height * PALETTE_TOP_FRACTION),
+        width: pixels(panel),
+        height: pixels(natural_height.min(cap).max(minimum_height)),
+    }
+}
+
+/// `value` rounded to whole pixels, saturating.
+#[must_use]
+pub fn pixels(value: f64) -> i32 {
+    let value = value.round().clamp(f64::from(i32::MIN), f64::from(i32::MAX));
+    #[expect(clippy::cast_possible_truncation, reason = "rounded and clamped into i32")]
+    let pixels = value as i32;
+    pixels
+}
+
+/// `value` as GPUI pixels.
+#[must_use]
+pub fn logical(value: f64) -> gpui_kit::Pixels {
+    #[expect(clippy::cast_possible_truncation, reason = "a window coordinate fits an f32")]
+    let value = value as f32;
+    px(value)
+}
+
+// MARK: - the look
+
+/// The dim layer's opacity over what a dialog covers (the GTK build's `alpha(black, 0.2)`).
+pub const DIM_ALPHA: f64 = 0.2;
+/// The suggested action's fill (libadwaita's accent).
+pub const ACCENT: Rgb = Rgb::new(0x35, 0x84, 0xe4);
+/// A destructive action's color (libadwaita's destructive).
+pub const DESTRUCTIVE: Rgb = Rgb::new(0xe0, 0x1b, 0x24);
+/// The native panel's corner radius.
+pub const PANEL_RADIUS: f32 = 12.;
+
+/// The dim layer's color.
+#[must_use]
+pub fn dim() -> Hsla {
+    crate::chrome::color(Rgb::BLACK, DIM_ALPHA)
+}
+
+/// The native (rounded) panel (upstream's material panel, the GTK build's popover-backed panel) in the chrome's
+/// colors: the terminal background, a hairline and a shadow.
+#[must_use]
+pub fn panel(colors: ChromeColors) -> gpui_kit::Div {
+    div()
+        .bg(crate::chrome::color(colors.background, 1.0))
+        .text_color(crate::chrome::color(colors.foreground, 1.0))
+        .rounded(px(PANEL_RADIUS))
+        .border_1()
+        .border_color(crate::chrome::color(Rgb::WHITE, 0.1))
+        .shadow_lg()
+        .overflow_hidden()
+}
+
+/// How a native button draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonLook {
+    Plain,
+    /// The prominent default (libadwaita's `suggested-action`).
+    Suggested,
+    /// The prominent destructive default (`destructive-action`).
+    Destructive,
+    /// A destructive button that is not the default: red text.
+    DestructiveText,
+}
+
+/// A native button's fill and text color in `colors`.
+#[must_use]
+pub fn button_colors(look: ButtonLook, colors: ChromeColors) -> (Hsla, Hsla) {
+    let fg = colors.foreground;
+    match look {
+        ButtonLook::Plain => (crate::chrome::color(fg, 0.1), crate::chrome::color(fg, 1.0)),
+        ButtonLook::Suggested => (crate::chrome::color(ACCENT, 1.0), crate::chrome::color(Rgb::WHITE, 1.0)),
+        ButtonLook::Destructive => (
+            crate::chrome::color(DESTRUCTIVE, 1.0),
+            crate::chrome::color(Rgb::WHITE, 1.0),
+        ),
+        ButtonLook::DestructiveText => (crate::chrome::color(fg, 0.1), crate::chrome::color(DESTRUCTIVE, 1.0)),
+    }
+}
+
+// MARK: - keys
+
+/// What a key does to a dialog or a popover list (upstream's `AskKey`, plus Space for a check).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NavKey {
+    Forward,
+    Backward,
+    Activate,
+    Cancel,
+    Space,
+    /// A letter, lower-cased.
+    Letter(String),
+}
+
+/// The navigation a key press asks for (upstream's `AskKeyCatcher.key(for:)`): Tab, Right and Down forward, Shift+Tab,
+/// Left and Up back, Return activates, Escape cancels, an ASCII letter is a hotkey; `None` for any other key and for
+/// any key with Ctrl, Alt or Super held, which goes on to the window.
+#[must_use]
+pub fn nav_key(keystroke: &Keystroke) -> Option<NavKey> {
+    let modifiers = &keystroke.modifiers;
+    if modifiers.control || modifiers.alt || modifiers.platform {
+        return None;
+    }
+    match keystroke.key.as_str() {
+        "tab" if modifiers.shift => Some(NavKey::Backward),
+        "tab" | "right" | "down" => Some(NavKey::Forward),
+        "left" | "up" => Some(NavKey::Backward),
+        "enter" | "kp_enter" => Some(NavKey::Activate),
+        "escape" => Some(NavKey::Cancel),
+        "space" => Some(NavKey::Space),
+        key => {
+            let mut chars = key.chars();
+            match (chars.next(), chars.next()) {
+                (Some(letter), None) if letter.is_ascii_alphabetic() => {
+                    Some(NavKey::Letter(letter.to_ascii_lowercase().to_string()))
+                }
+                _ => None,
+            }
+        }
+    }
+}
+
+// MARK: - alerts
+
+/// How an alert's button draws (libadwaita's response appearances).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Appearance {
+    Plain,
+    Suggested,
+    Destructive,
+}
+
+/// One button of an alert.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlertButton {
+    pub label: SharedString,
+    /// Return answers with it (the alert's default response), and the keyboard starts on it.
+    pub default: bool,
+    /// Escape answers with it (the close response).
+    pub cancel: bool,
+    pub appearance: Appearance,
+}
+
+impl AlertButton {
+    #[must_use]
+    pub fn plain(label: impl Into<SharedString>) -> Self {
+        Self {
+            label: label.into(),
+            default: false,
+            cancel: false,
+            appearance: Appearance::Plain,
+        }
+    }
+
+    /// The button Escape answers with.
+    #[must_use]
+    pub fn cancel(label: impl Into<SharedString>) -> Self {
+        Self {
+            cancel: true,
+            ..Self::plain(label)
+        }
+    }
+
+    /// Makes Return answer with it.
+    #[must_use]
+    pub fn as_default(mut self) -> Self {
+        self.default = true;
+        self
+    }
+
+    #[must_use]
+    pub fn suggested(mut self) -> Self {
+        self.appearance = Appearance::Suggested;
+        self
+    }
+
+    #[must_use]
+    pub fn destructive(mut self) -> Self {
+        self.appearance = Appearance::Destructive;
+        self
+    }
+
+    fn look(&self) -> ButtonLook {
+        match self.appearance {
+            Appearance::Plain => ButtonLook::Plain,
+            Appearance::Suggested => ButtonLook::Suggested,
+            Appearance::Destructive => ButtonLook::Destructive,
+        }
+    }
+}
+
+/// What an alert shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlertSpec {
+    pub heading: String,
+    pub body: String,
+    /// The buttons left to right.
+    pub buttons: Vec<AlertButton>,
+    /// A check under the body, unchecked at first ("Don't ask again this session").
+    pub check: Option<String>,
+    /// A text field under the body holding this text, all of it selected, which takes the keyboard (Rename Window).
+    pub field: Option<String>,
+}
+
+impl AlertSpec {
+    /// A destructive confirmation (upstream's `confirmDelete` and `confirmCloseSession` sheets, the GTK build's
+    /// alerts): Cancel, the default and the close response, then `verb` drawn destructive.
+    #[must_use]
+    pub fn confirm(heading: impl Into<String>, body: impl Into<String>, verb: impl Into<SharedString>) -> Self {
+        Self {
+            heading: heading.into(),
+            body: body.into(),
+            buttons: vec![
+                AlertButton::cancel("Cancel").as_default(),
+                AlertButton::plain(verb).destructive(),
+            ],
+            check: None,
+            field: None,
+        }
+    }
+
+    /// An information with an OK alone.
+    #[must_use]
+    pub fn info(heading: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            heading: heading.into(),
+            body: body.into(),
+            buttons: vec![AlertButton::cancel("OK").as_default().suggested()],
+            check: None,
+            field: None,
+        }
+    }
+
+    /// The button Return answers with: the default, else the last.
+    #[must_use]
+    pub fn default_button(&self) -> Option<usize> {
+        self.buttons
+            .iter()
+            .position(|button| button.default)
+            .or_else(|| self.buttons.len().checked_sub(1))
+    }
+
+    /// The button Escape answers with: the cancel one; none without one.
+    #[must_use]
+    pub fn cancel_button(&self) -> Option<usize> {
+        self.buttons.iter().position(|button| button.cancel)
+    }
+}
+
+/// How the user ended an alert.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlertAnswer {
+    /// The button's index in the spec.
+    pub button: usize,
+    /// Whether the check was checked.
+    pub checked: bool,
+    /// The field's text, with a field.
+    pub text: Option<String>,
+}
+
+/// What runs once with the answer.
+pub type AlertDone = Box<dyn FnOnce(AlertAnswer, &mut Window, &mut App)>;
+
+/// One alert (module docs).
+pub struct Alert {
+    spec: AlertSpec,
+    window: AnyWindowHandle,
+    focus: FocusHandle,
+    field: Option<Entity<InputState>>,
+    /// The keyboard's place: the check (0, when there is one), then the buttons.
+    highlighted: usize,
+    checked: bool,
+    done: Option<AlertDone>,
+    _field_events: Option<Subscription>,
+}
+
+impl Alert {
+    fn new(spec: AlertSpec, done: AlertDone, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let offset = usize::from(spec.check.is_some());
+        let highlighted = spec.default_button().map_or(0, |index| index + offset);
+        let field = spec.field.clone().map(|text| {
+            let input = cx.new(|cx| InputState::new(window, cx).default_value(text));
+            input.update(cx, |input, cx| input.select_all(window, cx));
+            input
+        });
+        let field_events = field.as_ref().map(|input| {
+            cx.subscribe_in(input, window, |alert, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. })
+                    && let Some(button) = alert.spec.default_button()
+                {
+                    alert.answer(button, window, cx);
+                }
+            })
+        });
+        Self {
+            spec,
+            window: window.window_handle(),
+            focus: cx.focus_handle(),
+            field,
+            highlighted,
+            checked: false,
+            done: Some(done),
+            _field_events: field_events,
+        }
+    }
+
+    /// What the alert shows.
+    #[must_use]
+    pub fn spec(&self) -> &AlertSpec {
+        &self.spec
+    }
+
+    /// What takes the keyboard while the alert is in front: its field, else the alert.
+    #[must_use]
+    pub fn focus_handle(&self, cx: &App) -> FocusHandle {
+        match &self.field {
+            Some(field) => field.read(cx).focus_handle(cx),
+            None => self.focus.clone(),
+        }
+    }
+
+    /// Whether the alert, or its field, holds `window`'s keyboard.
+    #[must_use]
+    pub fn holds_keyboard(&self, window: &Window, cx: &App) -> bool {
+        self.focus.contains_focused(window, cx) || self.focus_handle(cx).is_focused(window)
+    }
+
+    /// Whether the check is checked.
+    #[must_use]
+    pub fn checked(&self) -> bool {
+        self.checked
+    }
+
+    /// Checks or unchecks the check.
+    pub fn set_checked(&mut self, checked: bool, cx: &mut Context<Self>) {
+        self.checked = checked;
+        cx.notify();
+    }
+
+    /// The highlighted button's index; `None` while the check is highlighted.
+    #[must_use]
+    pub fn highlighted_button(&self) -> Option<usize> {
+        self.highlighted.checked_sub(self.offset())
+    }
+
+    fn offset(&self) -> usize {
+        usize::from(self.spec.check.is_some())
+    }
+
+    fn stops(&self) -> usize {
+        self.spec.buttons.len() + self.offset()
+    }
+
+    /// Return and Escape answer even from the field, which would otherwise keep them.
+    fn capture_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.field.is_none() {
+            return;
+        }
+        match nav_key(&event.keystroke) {
+            Some(NavKey::Activate) => {
+                if let Some(button) = self.spec.default_button() {
+                    cx.stop_propagation();
+                    self.answer(button, window, cx);
+                }
+            }
+            Some(NavKey::Cancel) => {
+                if let Some(button) = self.spec.cancel_button() {
+                    cx.stop_propagation();
+                    self.answer(button, window, cx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.field.is_some() {
+            // the field types every other key (Return and Escape were taken on the way down)
+            return;
+        }
+        cx.stop_propagation();
+        let Some(key) = nav_key(&event.keystroke) else {
+            return;
+        };
+        let stops = self.stops().max(1);
+        match key {
+            NavKey::Forward => self.highlighted = (self.highlighted + 1) % stops,
+            NavKey::Backward => self.highlighted = (self.highlighted + stops - 1) % stops,
+            NavKey::Activate | NavKey::Space => match self.highlighted_button() {
+                Some(button) => self.answer(button, window, cx),
+                None => self.checked = !self.checked,
+            },
+            NavKey::Cancel => {
+                if let Some(button) = self.spec.cancel_button() {
+                    self.answer(button, window, cx);
+                }
+            }
+            NavKey::Letter(_) => {}
+        }
+        cx.notify();
+    }
+
+    /// Ends the alert with `button`: it leaves the window's queue (the next one takes the keyboard) and the answer
+    /// runs. A second answer does nothing.
+    pub fn answer(&mut self, button: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(done) = self.done.take() else {
+            return;
+        };
+        let answer = AlertAnswer {
+            button,
+            checked: self.checked,
+            text: self.field.as_ref().map(|field| field.read(cx).value().to_string()),
+        };
+        let id = cx.entity_id();
+        let handle = self.window;
+        let next = cx.update_default_global::<Alerts, _>(|alerts, _| alerts.remove(handle, id));
+        if let Some(next) = next {
+            let focus = next.read(cx).focus_handle(cx);
+            window.focus(&focus, cx);
+        }
+        window.refresh();
+        done(answer, window, cx);
+    }
+
+    fn render_check(&self, label: &str, colors: ChromeColors, cx: &mut Context<Self>) -> impl IntoElement {
+        let ink = crate::chrome::color(colors.foreground, 1.0);
+        let ring = self.highlighted == 0;
+        let fill = if self.checked {
+            crate::chrome::color(ACCENT, 1.0)
+        } else {
+            crate::chrome::color(colors.foreground, 0.1)
+        };
+        div()
+            .id("alert-check")
+            .flex()
+            .items_center()
+            .gap_2()
+            .cursor_pointer()
+            .child(
+                div()
+                    .size(px(16.))
+                    .rounded(px(4.))
+                    .bg(fill)
+                    .border_1()
+                    .border_color(if ring {
+                        crate::chrome::color(ACCENT, 1.0)
+                    } else {
+                        crate::chrome::color(colors.foreground, 0.3)
+                    })
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(11.))
+                    .text_color(crate::chrome::color(Rgb::WHITE, 1.0))
+                    .when(self.checked, |mark| mark.child("✓")),
+            )
+            .child(div().text_color(ink).child(SharedString::from(label.to_owned())))
+            .on_click(cx.listener(|alert, _, _, cx| {
+                alert.checked = !alert.checked;
+                alert.highlighted = 0;
+                cx.notify();
+            }))
+    }
+
+    fn render_button(&self, index: usize, colors: ChromeColors, cx: &mut Context<Self>) -> impl IntoElement {
+        let button = &self.spec.buttons[index];
+        let highlighted = self.highlighted_button() == Some(index);
+        let (fill, ink) = button_colors(button.look(), colors);
+        div()
+            .id(("alert-button", index))
+            .flex_1()
+            .flex()
+            .justify_center()
+            .px_3()
+            .py(px(7.))
+            .rounded(px(8.))
+            .bg(fill)
+            .text_color(ink)
+            .font_weight(FontWeight::MEDIUM)
+            .border_2()
+            .border_color(if highlighted && self.field.is_none() {
+                crate::chrome::color(ACCENT, 0.6)
+            } else {
+                gpui_kit::transparent_black()
+            })
+            .cursor_pointer()
+            .child(button.label.clone())
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |alert, _, window, cx| alert.answer(index, window, cx)))
+    }
+}
+
+impl Render for Alert {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = crate::chrome::current(cx);
+        let dim_ink = crate::chrome::color(colors.foreground, crate::chrome::DIM_ALPHA);
+        let check = self
+            .spec
+            .check
+            .clone()
+            .map(|label| self.render_check(&label, colors, cx).into_any_element());
+        let field = self
+            .field
+            .as_ref()
+            .map(|field| Input::new(field).id("alert-field").into_any_element());
+        let buttons: Vec<AnyElement> = (0..self.spec.buttons.len())
+            .map(|index| self.render_button(index, colors, cx).into_any_element())
+            .collect();
+        panel(colors)
+            .id("alert-dialog")
+            .key_context("AgtermAlert")
+            .track_focus(&self.focus)
+            .capture_key_down(cx.listener(Self::capture_key))
+            .on_key_down(cx.listener(Self::key_down))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .w(px(372.))
+            .max_w_full()
+            .p_6()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .text_size(px(15.))
+                    .font_weight(FontWeight::BOLD)
+                    .child(SharedString::from(self.spec.heading.clone())),
+            )
+            .when(!self.spec.body.is_empty(), |content| {
+                content.child(
+                    div()
+                        .text_size(px(13.))
+                        .text_color(dim_ink)
+                        .child(SharedString::from(self.spec.body.clone())),
+                )
+            })
+            .children(field)
+            .children(check)
+            .child(div().mt_2().flex().flex_row().gap_2().children(buttons))
+    }
+}
+
+/// The alerts of every window, front first (module docs).
+#[derive(Default)]
+pub struct Alerts {
+    queues: HashMap<AnyWindowHandle, Vec<Entity<Alert>>>,
+}
+
+impl Global for Alerts {}
+
+impl Alerts {
+    /// Drops alert `id` from `window`'s queue; the alert now in front.
+    fn remove(&mut self, window: AnyWindowHandle, id: gpui_kit::EntityId) -> Option<Entity<Alert>> {
+        let queue = self.queues.get_mut(&window)?;
+        queue.retain(|alert| alert.entity_id() != id);
+        let front = queue.first().cloned();
+        if queue.is_empty() {
+            self.queues.remove(&window);
+        }
+        front
+    }
+}
+
+/// Opens an alert over `window`, behind any it already shows; `done` runs once with the answer. The alert in front
+/// takes the keyboard.
+pub fn open_alert(
+    window: &mut Window,
+    spec: AlertSpec,
+    done: impl FnOnce(AlertAnswer, &mut Window, &mut App) + 'static,
+    cx: &mut App,
+) -> Entity<Alert> {
+    let handle = window.window_handle();
+    let alert = cx.new(|cx| Alert::new(spec, Box::new(done), window, cx));
+    let front = cx.update_default_global::<Alerts, _>(|alerts, _| {
+        let queue = alerts.queues.entry(handle).or_default();
+        queue.push(alert.clone());
+        queue.len() == 1
+    });
+    if front {
+        let focus = alert.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+    }
+    window.refresh();
+    alert
+}
+
+/// The alert `window` shows in front.
+#[must_use]
+pub fn front_alert(window: AnyWindowHandle, cx: &App) -> Option<Entity<Alert>> {
+    cx.try_global::<Alerts>()
+        .and_then(|alerts| alerts.queues.get(&window))
+        .and_then(|queue| queue.first().cloned())
+}
+
+/// Whether `window` shows an alert.
+#[must_use]
+pub fn alert_open(window: AnyWindowHandle, cx: &App) -> bool {
+    front_alert(window, cx).is_some()
+}
+
+/// The front alert of `window` over a dimmed window that takes every click; `None` without one.
+#[must_use]
+pub fn alert_layer(window: AnyWindowHandle, cx: &App) -> Option<AnyElement> {
+    let alert = front_alert(window, cx)?;
+    Some(
+        div()
+            .id("alert-layer")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .bg(dim())
+            .flex()
+            .items_center()
+            .justify_center()
+            .p_4()
+            .child(alert)
+            .into_any_element(),
+    )
+}
+
+/// Keeps the keyboard on `window`'s front alert (a menu that closed after its item opened one may have taken it back).
+pub fn refocus_alert(window: &mut Window, cx: &mut App) {
+    if let Some(alert) = front_alert(window.window_handle(), cx)
+        && !alert.read(cx).holds_keyboard(window, cx)
+    {
+        let focus = alert.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+    }
+}
+
+/// Answers `window`'s front alert with the button labelled `label`, as a click on it; whether one was there.
+pub fn answer_front_alert(window: &mut Window, label: &str, cx: &mut App) -> bool {
+    let Some(alert) = front_alert(window.window_handle(), cx) else {
+        return false;
+    };
+    let Some(index) = alert
+        .read(cx)
+        .spec
+        .buttons
+        .iter()
+        .position(|button| button.label.as_ref() == label)
+    else {
+        return false;
+    };
+    alert.update(cx, |alert, cx| alert.answer(index, window, cx));
+    true
+}
+
+#[cfg(test)]
+mod tests;

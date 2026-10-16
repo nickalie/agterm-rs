@@ -63,13 +63,13 @@ use gpui_kit::{
     ModifiersChangedEvent, ParentElement as _, Render, Styled as _, Subscription, Task, TextSystem, Window, div, px,
 };
 
-pub use clipboard::{ClipboardPrompts, prompt_text};
+pub use clipboard::{ClipboardPrompts, REMEMBER, prompt_alert, prompt_text};
 pub use colors::{CellPaint, Mark, Palette, Pick};
 pub use element::{Layer as PaintLayer, PlacedGlyph, ShapedRow, TerminalElement};
 pub use font::{DEFAULT_FAMILIES, DEFAULT_FAMILY, Fonts, SYMBOLS_FAMILY, register_embedded as register_embedded_fonts};
 pub use keyboard::{key_down, typing_surface};
 pub use links::{Link, LinkKind, follow_link};
-pub use metrics::{CellMetrics, DEFAULT_DPI, FaceMetrics, Geometry, Padding, points_to_px};
+pub use metrics::{CellMetrics, DEFAULT_DPI, FaceMetrics, Geometry, Padding, cell_metrics, points_to_px};
 pub use mouse::{cursor_style, scroll_multiplier};
 pub use row_cache::{Cluster, Decoration, Line, RowCache, RowLayout, RowMarks, Span, SpriteCell, TextRun, TextStyle};
 pub use surface::TerminalSurface;
@@ -932,6 +932,17 @@ pub enum ViewRole {
     Owner,
     /// A second rendering (the dashboard): draws the pane's frame at its own font size.
     Viewer,
+    /// The only view of a terminal nobody types into or clicks (the HUD's panel): lays the grid out, starts and
+    /// resizes the pane like an owner, but takes no focus and no pointer.
+    Passive,
+}
+
+impl ViewRole {
+    /// Whether this view lays the grid out and sizes the pane.
+    #[must_use]
+    pub fn lays_out(self) -> bool {
+        matches!(self, Self::Owner | Self::Passive)
+    }
 }
 
 /// Ghostty's cursor blink interval.
@@ -1146,7 +1157,7 @@ impl Render for TerminalView {
                     }))
                     .child(element)
             }
-            ViewRole::Viewer => root.child(element),
+            ViewRole::Viewer | ViewRole::Passive => root.child(element),
         }
     }
 }

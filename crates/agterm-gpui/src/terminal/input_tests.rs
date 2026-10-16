@@ -281,6 +281,22 @@ impl Fixture<'_> {
         self.settle(|fixture| fixture.painted().contains(needle));
     }
 
+    /// Whether the window shows an alert (the clipboard prompt).
+    fn alert_open(&mut self) -> bool {
+        self.cx
+            .update(|window, cx| crate::modal::alert_open(window.window_handle(), cx))
+    }
+
+    /// Answers the front alert with `label`, its check set to `remember` first.
+    fn answer_alert(&mut self, label: &str, remember: bool) {
+        let label = label.to_owned();
+        self.cx.update(|window, cx| {
+            let alert = crate::modal::front_alert(window.window_handle(), cx).expect("an alert");
+            alert.update(cx, |alert, cx| alert.set_checked(remember, cx));
+            assert!(crate::modal::answer_front_alert(window, &label, cx));
+        });
+    }
+
     fn focus(&mut self) {
         let view = self.view.clone();
         self.cx.update(|window, cx| {
@@ -665,19 +681,19 @@ fn clipboard_writes_ask_and_a_session_choice_is_remembered(cx: &mut TestAppConte
     let clipboard = |f: &mut Fixture<'_>| f.cx.read_from_clipboard().and_then(|item| item.text());
 
     f.pane().write(b"\n").unwrap();
-    f.settle(|f| f.cx.has_pending_prompt());
-    f.cx.simulate_prompt_answer("Deny");
+    f.settle(Fixture::alert_open);
+    f.answer_alert("Deny", false);
     f.cx.run_until_parked();
     assert_eq!(clipboard(&mut f).as_deref(), Some("before"));
 
     f.pane().write(b"\n").unwrap();
-    f.settle(|f| f.cx.has_pending_prompt());
-    f.cx.simulate_prompt_answer("Always Allow This Session");
+    f.settle(Fixture::alert_open);
+    f.answer_alert("Allow", true);
     f.settle(|f| clipboard(f).as_deref() == Some("second"));
 
     f.pane().write(b"\n").unwrap();
     f.settle(|f| clipboard(f).as_deref() == Some("third"));
-    assert!(!f.cx.has_pending_prompt(), "remembered for the session");
+    assert!(!f.alert_open(), "remembered for the session");
     let decision =
         f.cx.update(|_, cx| cx.global::<super::ClipboardPrompts>().decision(ClipboardAccess::Write));
     assert_eq!(decision, ClipboardDecision::Allow);
@@ -706,19 +722,19 @@ fn clipboard_reads_ask_by_default_and_are_answered_either_way(cx: &mut TestAppCo
     let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap_or_default();
 
     f.pane().write(b"x").unwrap();
-    f.settle(|f| f.cx.has_pending_prompt());
+    f.settle(Fixture::alert_open);
     let (heading, _) = super::prompt_text(ClipboardAccess::Read);
-    assert_eq!(
-        f.cx.pending_prompt().map(|(message, _)| message).as_deref(),
-        Some(heading)
-    );
-    f.cx.simulate_prompt_answer("Allow");
+    let shown = f.cx.update(|window, cx| {
+        crate::modal::front_alert(window.window_handle(), cx).map(|alert| alert.read(cx).spec().heading.clone())
+    });
+    assert_eq!(shown.as_deref(), Some(heading));
+    f.answer_alert("Allow", false);
     f.settle(|_| read("allowed").ends_with('\u{7}'));
     assert!(read("allowed").contains("aGk="), "{:?}", read("allowed"));
 
     f.pane().write(b"x").unwrap();
-    f.settle(|f| f.cx.has_pending_prompt());
-    f.cx.simulate_prompt_answer("Deny");
+    f.settle(Fixture::alert_open);
+    f.answer_alert("Deny", false);
     f.wait_painted("done");
     std::thread::sleep(Duration::from_millis(200));
     f.cx.run_until_parked();

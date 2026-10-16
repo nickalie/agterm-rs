@@ -8,10 +8,11 @@
 //! - `allow` performs, `deny` refuses silently, `ask` (the default for reads) goes to the prompt. One app-run
 //!   [`ClipboardPromptPolicy`] remembers a "this session" choice per direction across every terminal. Requests from
 //!   the same terminal for the same direction wait behind its one open prompt, so a program looping OSC 52 cannot stack
-//!   prompts, while another terminal always gets its own.
-//! - The prompt is GPUI's window prompt over the terminal's window, a minimal stand-in for upstream's alert (Task 21
-//!   brings the full dialog): Allow, Deny, and the session-wide choices the alert's "Don't ask again this session"
-//!   check makes. A terminal with no window to ask in is refused.
+//!   prompts, while another terminal always gets its own (one Allow never authorizes another terminal's access).
+//! - The prompt is upstream's warning alert over the requesting terminal's window ([`crate::modal::open_alert`]):
+//!   the heading and message for the direction, Deny (Escape) and Allow (the default, Return), and the "Don't ask
+//!   again this session" check, which remembers the answer for the direction. A terminal with no window to ask in is
+//!   refused.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -19,19 +20,33 @@ use std::rc::Rc;
 use agterm_core::clipboard_policy::{ClipboardAccess, ClipboardDecision, ClipboardPromptPolicy};
 use agterm_core::ghostty_config::ClipboardAccess as ConfigAccess;
 use agterm_term::{ClipboardAnswer, ClipboardLocation, ClipboardReadRequest, ClipboardWrite, PaneEvent, ReadScope};
-use gpui_kit::{App, ClipboardItem, Context, Global, PromptButton, PromptLevel};
+use gpui_kit::{App, ClipboardItem, Context, Global};
 
 use super::{Shared, Terminal};
 
 const TEXT: &str = "text/plain";
 
-/// The prompt's buttons, in order: what each answers and whether it is remembered for the session.
-const ANSWERS: [(&str, bool, bool); 4] = [
-    ("Allow", true, false),
-    ("Deny", false, false),
-    ("Always Allow This Session", true, true),
-    ("Always Deny This Session", false, true),
-];
+/// The prompt's buttons, left to right: Deny, then Allow.
+const DENY: &str = "Deny";
+const ALLOW: &str = "Allow";
+/// The prompt's check, which remembers the answer for the session (upstream's suppression button).
+pub const REMEMBER: &str = "Don't ask again this session";
+
+/// The prompt for `access` (upstream's `presentPrompt`).
+#[must_use]
+pub fn prompt_alert(access: ClipboardAccess) -> crate::modal::AlertSpec {
+    let (heading, body) = prompt_text(access);
+    crate::modal::AlertSpec {
+        heading: heading.to_owned(),
+        body: body.to_owned(),
+        buttons: vec![
+            crate::modal::AlertButton::cancel(DENY),
+            crate::modal::AlertButton::plain(ALLOW).as_default().suggested(),
+        ],
+        check: Some(REMEMBER.to_owned()),
+        field: None,
+    }
+}
 
 /// Upstream's heading and message for a direction.
 #[must_use]
@@ -226,29 +241,22 @@ fn answer(key: PromptKey, id: u64, allowed: bool, remember: bool, cx: &mut App) 
 
 /// Shows the prompt over the requesting terminal's window; none to show it in refuses.
 fn present(key: PromptKey, id: u64, cx: &mut App) {
-    let (heading, body) = prompt_text(key.access);
-    let buttons = [
-        PromptButton::ok(ANSWERS[0].0),
-        PromptButton::cancel(ANSWERS[1].0),
-        PromptButton::new(ANSWERS[2].0),
-        PromptButton::new(ANSWERS[3].0),
-    ];
+    let spec = prompt_alert(key.access);
+    let allow = spec.buttons.iter().position(|button| button.label.as_ref() == ALLOW);
     let shown = super::keyboard::window_of(key.terminal).and_then(|handle| {
         handle
             .update(cx, |_, window, cx| {
-                window.prompt(PromptLevel::Warning, heading, Some(body), &buttons, cx)
+                crate::modal::open_alert(
+                    window,
+                    spec,
+                    move |reply, _, cx| answer(key, id, Some(reply.button) == allow, reply.checked, cx),
+                    cx,
+                );
             })
             .ok()
     });
-    let Some(choice) = shown else {
+    if shown.is_none() {
         tracing::info!(target: "agterm::surface", terminal = key.terminal, "no window to ask in: clipboard access refused");
         answer(key, id, false, false, cx);
-        return;
-    };
-    cx.spawn(async move |cx| {
-        let picked = choice.await.ok().and_then(|index| ANSWERS.get(index).copied());
-        let (_, allowed, remember) = picked.unwrap_or(ANSWERS[1]);
-        cx.update(|cx| answer(key, id, allowed, remember, cx));
-    })
-    .detach();
+    }
 }

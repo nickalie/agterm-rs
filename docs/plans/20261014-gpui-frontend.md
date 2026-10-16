@@ -1669,11 +1669,71 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 
 **Files:**
 - Create: `crates/agterm-gpui/src/{hud,ask_dialog,modal,popovers}.rs`
+- ➕ Create: `crates/agterm-gpui/src/{hud,ask_dialog,modal,popovers}/tests.rs`, `crates/agterm-gpui/resources/hud/hud.sh`
+  (a copy of the GTK build's painter; Task 34 deletes the GTK one); Modify: `crates/agterm-gpui/src/{app,deck,lib,
+  keymap_actions,keymap_dispatch,sidebar,split,terminal,titlebar,window}.rs`, `terminal/{clipboard,element,mouse}.rs`,
+  their tests, `docs/linux-ui-checklist.md`
 
-- [ ] HUD/captions, ask dialog, modal, popovers with upstream behavior; accessibility ids as element ids
-- [ ] full OSC 52 confirmation dialog replaces Task 14's minimal prompt
-- [ ] tests (headless): open/close, keyboard navigation, results returned to core
-- [ ] gates + conformance — must pass before Task 22
+- [x] HUD/captions, ask dialog, modal, popovers with upstream behavior; accessibility ids as element ids
+- [x] full OSC 52 confirmation dialog replaces Task 14's minimal prompt
+- [x] tests (headless): open/close, keyboard navigation, results returned to core
+- [x] gates + conformance — must pass before Task 22
+- result (2026-10-16):
+  - **Modal** (`modal.rs`): the GTK build's panel geometry (ask cap/width/rect, palette width/offset/rect, for Task 22
+    too), the dim layer and the native panel's look in the chrome's colors, the dialog keys (`nav_key`, upstream's
+    `AskKeyCatcher`), and the window's **alerts**: heading, body, an optional check or text field, buttons with a
+    default (Return) and a cancel (Escape), Tab/arrows moving a focus ring; modal over the whole window (dimmed,
+    occluding, the key monitor leaves an `AgtermAlert` context alone); queued per window in an `Alerts` global the
+    window observes. Every confirmation moved off GPUI's window prompt onto it: Close Session(s), Delete Workspace,
+    Too Many Folders, Delete Window, and Rename Window (a field prefilled and selected, OK commits `window.rename`;
+    it was logged as waiting for its dialog). Confirmations follow the GTK build: Cancel is the default, the verb
+    destructive.
+  - **Ask dialog** (`ask_dialog.rs`): one `AskDialog` view for both owners. A terminal ask is drawn on its page above
+    the HUD (`Place::Full` or `Place::Over(pane)`, `shown_scope`), in the terminal's font and colors with block
+    buttons; a GUI ask is the window's (`Layer::Ask`), placed over its anchor (the deck's bounds recorded each frame,
+    the page or its pane's rectangle) with the rest of the window click-blocked. Equal-width buttons in a row, a column
+    when the row does not fit the cap (labels shaped with GPUI's text system), aligned as asked; hotkeys underlined (or
+    ` (X)` appended), a terminal destructive button `! ` and bold; Tab/Right/Down, Shift+Tab/Left/Up, Return, the
+    hotkey letters, Escape (`escaped`); modified keys go on to the window. Answers post `answer_window_ask` /
+    `answer_session_ask`; a click on a terminal ask selects its pane. Ids `ask-dialog`, `ask-title`, `ask-message`,
+    `ask-button-<id>`.
+  - **HUD** (`hud.rs`): the painter written under the state dir and the cell estimator (the terminal's own face
+    metrics through GPUI's text system) installed at launch (`session.hud.open` was refused before); the panel is a
+    passive terminal view (`ViewRole::Passive`: lays out and starts its pane, no focus, no pointer) the deck mounts
+    per slot generation, installs in the slot and places through `Place::Hud` (`PanelStyle`, scoped to its pane while
+    that is laid out); frame hairline and radius unless frameless; its start and font changes post the remeasure, its
+    exit closes the slot, a reload keeps its measured size. Ctrl-click over it opens its link (`ClickOrigin::Hud`)
+    and goes no further; a Ctrl-hover underlines the link with the pointing hand; plain clicks pass through to the
+    pane; an ask above it occludes both gestures.
+  - **Popovers** (`popovers.rs`): recent sessions, attention (status glyph, remote cloud) and custom commands (most-run
+    above a separator) under the clicked title-bar button (`TitlebarEvent::Popover` now carries the anchor); one open
+    per window as `Layer::Popover`, holding the keyboard (Up/Down, Return, Escape), a press outside closes it and goes
+    no further, an emptied list or a button turned off closes it; `PopoverOpened`/`PopoverClosed` reach the core. Ids
+    `recent-session-row`, `attention-session-row`, `custom-command-top-row`, `custom-command-row`.
+  - **OSC 52** (`terminal/clipboard.rs`): upstream's alert (`prompt_alert`): the direction's heading and message,
+    Deny (Escape) / Allow (Return), the "Don't ask again this session" check remembering the answer per direction;
+    the one-prompt-per-terminal-and-direction queue is unchanged.
+  - **Focus return** (review finding at `deck.rs:582`): an alert, the GUI ask, a popover or the model's picker/palette
+    are modals the deck moves no keyboard under; an alert or popover closing posts a sync, and a released row-menu hold
+    always counts as a pending move, so after any dialog, popover or prompt the shown terminal (or the terminal ask that
+    wants the keyboard) takes it back. A sync re-focuses the front alert if a closing menu took the keyboard back. The
+    cancelled Close Session from a row menu is tested end to end through the window (right-click, alert, Return/Escape).
+  - Tests: modal (geometry, keys, alert ring/Return/Escape/check/field/queue/observers), ask dialog (labels, looks,
+    strip, answers, scopes, focus rules), HUD (placement incl. `Place::Hud`, config, helper, link modifier, cell
+    estimate), popovers (keyboard run, Escape, outside press, second click, button turned off), deck (terminal ask
+    keys → `ask.result` and the keyboard back, hidden-session ask, HUD mount/replace/close/hide, HUD Ctrl-click and a
+    plain click through it), window (row-menu confirmation cancelled/confirmed, GUI ask answered by keys, popover and
+    Rename Window give the keyboard back), clipboard tests on the alert. Gates: fmt, clippy (workspace, all targets
+    and features), lint-report (9 expects, unchanged), check-tracing-features, `vendor-gpui.sh --check`,
+    `cargo test --workspace` under Xvfb 4063 passed, 0 failed, 6 ignored; the new and changed tests 5 times in a row.
+    GPUI conformance ratchet-only with `--also-k "hud or caption or ask or modal or popover or clipboard or osc52 or
+    confirm or pick"`: 544 passed, 3 failed (two HUD-over-HTML-page tests: Task 32; a program overlay's cursor: Task
+    23), 1 skipped; ratchet held (467) and grew by 77 (49 `test_hud`, 23 `test_ask_pick`, 5 cli `hud`/`caption`/`ask`)
+    to 544. Claimed `modal-blocks-covers` and `pick-names-pending-ask` (their tests are among the new ids). No GTK
+    conformance run: no crate the GTK binary links changed.
+  - Deviations: a Ctrl-press opens the HUD's link on press (GTK forwarded press and release to libghostty, which
+    opened on release); a modifier change with the pointer still updates the HUD's hover on the next pointer move;
+    a GUI ask whose anchor is not on screen keeps the keyboard but draws nothing until it is.
 
 ### Task 22: Picker, palette, session switcher, search bar
 

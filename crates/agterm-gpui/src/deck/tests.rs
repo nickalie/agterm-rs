@@ -922,3 +922,269 @@ fn a_session_background_reaches_its_terminals_and_a_pane_override_wins(cx: &mut 
     assert_eq!(background(&mut h, &right), default);
     assert!(!file.exists(), "the stale text image is removed");
 }
+
+// MARK: - the terminal ask and the HUD (Task 21)
+
+/// Opens a terminal ask over `session` with buttons Yes (`y`) and No (`n`); its id.
+fn open_terminal_ask(h: &mut Harness<'_>, session: Uuid) -> String {
+    h.dispatch(Command::Ask(agterm_proto::command::AskCmd::Open), session, |args| {
+        args.title = Some("Deploy?".to_owned());
+        args.buttons = Some(vec![
+            agterm_proto::AskButton {
+                id: "yes".to_owned(),
+                label: "Yes".to_owned(),
+                hotkey: Some("y".to_owned()),
+            },
+            agterm_proto::AskButton {
+                id: "no".to_owned(),
+                label: "No".to_owned(),
+                hotkey: Some("n".to_owned()),
+            },
+        ]);
+    });
+    h.session(session).ask().expect("the ask waits").ask.id.clone()
+}
+
+/// Whether `session`'s terminal ask holds the window's keyboard.
+fn ask_focused(h: &mut Harness<'_>, session: Uuid) -> bool {
+    let deck = h.deck.clone();
+    h.cx.update(|window, cx| {
+        let handle = deck
+            .read(cx)
+            .page(session)
+            .and_then(Page::ask)
+            .map(|ask| ask.dialog.read(cx).focus_handle().clone());
+        handle.is_some_and(|handle| handle.is_focused(window))
+    })
+}
+
+/// The retained outcome of ask `id`, as `ask.result` reports it.
+fn ask_result(h: &mut Harness<'_>, id: &str) -> String {
+    let response = h.state.core.dispatch(&Request {
+        cmd: Command::Ask(agterm_proto::command::AskCmd::Result),
+        target: Some(id.to_owned()),
+        args: None,
+    });
+    assert!(response.ok, "{response:?}");
+    format!("{:?}", response.result)
+}
+
+#[gpui_kit::test]
+fn a_terminal_ask_takes_the_keyboard_answers_by_its_keys_and_gives_it_back(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    let session = ids[0];
+    h.until("the pane to start", |h| h.realized(session, StatusPane::Left));
+    let token = h.token(session, StatusPane::Left);
+    assert!(h.focused(session, &token));
+
+    let id = open_terminal_ask(&mut h, session);
+    h.turn();
+    assert!(
+        h.deck
+            .read_with(h.cx, |deck, _| deck.page(session).and_then(Page::ask).is_some())
+    );
+    assert!(
+        ask_focused(&mut h, session),
+        "the dialog takes the keyboard in place of the terminal"
+    );
+    assert!(!h.focused(session, &token));
+    let dialog = h.deck.read_with(h.cx, |deck, _| {
+        deck.page(session)
+            .and_then(Page::ask)
+            .map(|ask| ask.dialog.clone())
+            .unwrap()
+    });
+    assert_eq!(dialog.read_with(h.cx, |dialog, _| dialog.highlighted()), Some(0));
+    h.cx.simulate_keystrokes("tab");
+    assert_eq!(
+        dialog.read_with(h.cx, |dialog, _| dialog.highlighted()),
+        Some(1),
+        "Tab moves on"
+    );
+    h.cx.simulate_keystrokes("x");
+    h.turn();
+    assert!(h.session(session).ask().is_some(), "no such hotkey");
+    h.cx.simulate_keystrokes("enter");
+    h.turn();
+    assert!(h.session(session).ask().is_none(), "the answer reached the core");
+    let result = ask_result(&mut h, &id);
+    assert!(result.contains("\"no\""), "{result}");
+    assert!(
+        h.deck
+            .read_with(h.cx, |deck, _| deck.page(session).and_then(Page::ask).is_none())
+    );
+    assert!(h.focused(session, &token), "the terminal takes the keyboard back");
+
+    // Escape dismisses, the hotkey answers
+    let id = open_terminal_ask(&mut h, session);
+    h.turn();
+    h.cx.simulate_keystrokes("escape");
+    h.turn();
+    assert!(ask_result(&mut h, &id).to_lowercase().contains("escaped"));
+    let id = open_terminal_ask(&mut h, session);
+    h.turn();
+    h.cx.simulate_keystrokes("y");
+    h.turn();
+    assert!(ask_result(&mut h, &id).contains("\"yes\""));
+    assert!(h.focused(session, &token));
+}
+
+#[gpui_kit::test]
+fn a_terminal_ask_on_a_hidden_session_waits_and_shows_once_selected(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    h.until("the panes to start", |h| {
+        ids.iter().all(|id| h.realized(*id, StatusPane::Left))
+    });
+    open_terminal_ask(&mut h, ids[1]);
+    h.turn();
+    assert!(
+        h.deck
+            .read_with(h.cx, |deck, _| deck.page(ids[1]).and_then(Page::ask).is_none()),
+        "a hidden page draws no ask"
+    );
+    let first = h.token(ids[0], StatusPane::Left);
+    assert!(h.focused(ids[0], &first));
+    h.store().select_session(Some(ids[1]));
+    h.state.settle();
+    h.turn();
+    assert!(ask_focused(&mut h, ids[1]), "selected, its ask takes the keyboard");
+}
+
+/// Installs the HUD's painter and the cell estimate, as the app does at launch.
+fn install_hud(h: &mut Harness<'_>) {
+    let helper = crate::hud::install_helper(h.state_dir.path()).unwrap();
+    let body = h.state_dir.path().join("hud-bodies");
+    h.state.core.set_hud_helper(helper, body);
+    let text = h.cx.update(|_, cx| {
+        crate::terminal::register_embedded_fonts(cx.text_system());
+        Arc::clone(cx.text_system())
+    });
+    h.state.core.set_cell_estimator(crate::hud::cell_estimator(text));
+}
+
+fn hud_generation(h: &mut Harness<'_>, session: Uuid) -> Option<u64> {
+    h.deck.read_with(h.cx, |deck, _| {
+        deck.page(session)
+            .and_then(|page| page.hud().panel())
+            .map(crate::hud::HudPanel::generation)
+    })
+}
+
+#[gpui_kit::test]
+fn a_hud_panel_mounts_passive_is_replaced_and_goes_with_the_slot(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    let session = ids[0];
+    h.until("the pane to start", |h| h.realized(session, StatusPane::Left));
+    let token = h.token(session, StatusPane::Left);
+    install_hud(&mut h);
+    let open = |h: &mut Harness<'_>, message: &str| {
+        let message = message.to_owned();
+        h.dispatch(Command::Session(SessionCmd::HudOpen), session, |args| {
+            args.message = Some(message);
+        });
+        h.turn();
+    };
+    open(&mut h, "first");
+    let first = hud_generation(&mut h, session).expect("the panel mounts");
+    let (role, visible) = h.deck.read_with(h.cx, |deck, cx| {
+        let hud = deck.page(session).unwrap().hud();
+        (hud.panel().unwrap().view().read(cx).role(), hud.is_visible())
+    });
+    assert_eq!(role, crate::terminal::ViewRole::Passive);
+    assert!(visible, "it shows over the shown page");
+    assert!(h.focused(session, &token), "the pane keeps the keyboard");
+    h.until("the panel's painter to start", |h| {
+        h.deck.read_with(h.cx, |deck, cx| {
+            deck.page(session)
+                .and_then(|page| page.hud().panel())
+                .is_some_and(|panel| panel.terminal().read(cx).shared().is_realized())
+        })
+    });
+    assert!(h.session(session).overlay.surface.is_present(), "installed in the slot");
+
+    open(&mut h, "second");
+    let second = hud_generation(&mut h, session).expect("a fresh panel");
+    assert_ne!(first, second, "a replacement is a fresh terminal");
+
+    // a hidden page hides its panel; showing it again shows it
+    h.store().select_session(Some(ids[1]));
+    h.state.settle();
+    h.turn();
+    assert!(
+        !h.deck
+            .read_with(h.cx, |deck, _| deck.page(session).unwrap().hud().is_visible())
+    );
+    h.store().select_session(Some(session));
+    h.state.settle();
+    h.turn();
+    assert!(
+        h.deck
+            .read_with(h.cx, |deck, _| deck.page(session).unwrap().hud().is_visible())
+    );
+
+    h.dispatch(Command::Session(SessionCmd::HudClose), session, |_| {});
+    h.turn();
+    assert_eq!(hud_generation(&mut h, session), None, "a close drops it");
+}
+
+#[gpui_kit::test]
+fn a_ctrl_click_on_the_hud_opens_its_link_and_a_plain_click_reaches_the_pane(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    let session = ids[0];
+    h.until("the pane to start", |h| h.realized(session, StatusPane::Left));
+    install_hud(&mut h);
+    h.dispatch(Command::Session(SessionCmd::HudOpen), session, |args| {
+        // wide enough for the link on one row
+        args.message = Some("a panel as wide as this line of text, for its link".to_owned());
+        args.position = Some("center".to_owned());
+    });
+    h.turn();
+    h.until("the panel's terminal to start", |h| {
+        h.deck.read_with(h.cx, |deck, cx| {
+            deck.page(session)
+                .and_then(|page| page.hud().panel())
+                .is_some_and(|panel| panel.terminal().read(cx).shared().is_realized())
+        })
+    });
+    let (terminal, view) = h.deck.read_with(h.cx, |deck, _| {
+        let panel = deck.page(session).unwrap().hud().panel().unwrap();
+        (panel.terminal().clone(), panel.view().clone())
+    });
+    // the test launcher runs `cat`: the tty echoes what is written, on the panel's first row
+    let pane = terminal.read_with(h.cx, |terminal, _| terminal.shared().pane().unwrap());
+    pane.write(b"https://example.com/hud").unwrap();
+    h.until("the link to show on the panel", |h| {
+        view.read_with(h.cx, |view, _| {
+            view.painted()
+                .is_some_and(|frame| frame.lines().join("\n").contains("example.com/hud"))
+        })
+    });
+    let (placement, area) = h.deck.read_with(h.cx, |deck, _| {
+        let shown = deck.page(session).unwrap();
+        (shown.hud().placement().unwrap(), shown.rect(None).unwrap())
+    });
+    let rect = placement.style.panel_frame(area);
+    let (cell_x, cell_y) = terminal.read_with(h.cx, |terminal, _| terminal.shared().cell_size());
+    #[expect(clippy::cast_possible_truncation, reason = "test coordinates")]
+    let at = gpui_kit::point(
+        px((f64::from(rect.x) + 8.0 + 5.5 * cell_x) as f32),
+        px((f64::from(rect.y) + 6.0 + 0.75 * cell_y) as f32),
+    );
+    h.cx.simulate_click(at, gpui_kit::Modifiers::control());
+    h.turn();
+    let opened = h.state.take_frontend_work().open_urls;
+    assert_eq!(opened, ["https://example.com/hud"], "the panel's link opened");
+
+    // a plain click goes through the passive panel to the pane under it
+    let token = h.token(session, StatusPane::Left);
+    let elsewhere = focus_elsewhere(&mut h);
+    h.cx.simulate_click(at, gpui_kit::Modifiers::default());
+    h.turn();
+    assert!(h.focused(session, &token), "the pane under the panel took the click");
+    assert!(!h.cx.update(|window, _| elsewhere.is_focused(window)));
+    assert!(h.state.take_frontend_work().open_urls.is_empty());
+}

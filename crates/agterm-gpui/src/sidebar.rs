@@ -32,7 +32,7 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{
     App, AppContext as _, ClipboardItem, Context, Entity, EntityId, ExternalPaths, FocusHandle, Focusable as _,
-    Modifiers, PromptButton, PromptLevel, ScrollHandle, Subscription, Task, WeakEntity, Window,
+    Modifiers, ScrollHandle, Subscription, Task, WeakEntity, Window,
 };
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use uuid::Uuid;
@@ -213,6 +213,14 @@ impl Sidebar {
         if self.menu.as_ref().is_some_and(|open| open.entity_id() == menu) {
             self.menu = None;
             self.post(|_| {});
+        }
+    }
+
+    /// Dismisses the open row menu, as an item's click does after running it (tests).
+    #[cfg(test)]
+    pub(crate) fn dismiss_menu(&self, cx: &mut App) {
+        if let Some(menu) = self.menu.as_ref().and_then(WeakEntity::upgrade) {
+            menu.update(cx, |_, cx| cx.emit(gpui_kit::DismissEvent));
         }
     }
 
@@ -572,8 +580,9 @@ impl Sidebar {
         );
     }
 
-    /// A destructive confirmation over the window; `action` runs on the confirming answer.
-    /// `(heading, body, verb)`: the question, its detail and the confirming answer's label.
+    /// A destructive confirmation alert over the window ([`crate::modal`]); `action` runs on the confirming answer.
+    /// `(heading, body, verb)`: the question, its detail and the confirming answer's label. Answered either way, the
+    /// window's sync hands the keyboard back to the shown terminal.
     fn confirm(
         &self,
         (heading, body, verb): (&str, &str, &str),
@@ -581,15 +590,18 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let answers = [PromptButton::cancel("Cancel"), PromptButton::ok(verb.to_owned())];
-        let answer = window.prompt(PromptLevel::Warning, heading, Some(body), &answers, cx);
+        let spec = crate::modal::AlertSpec::confirm(heading, body, verb.to_owned());
         let (poster, id) = (self.poster.clone(), self.window);
-        cx.spawn(async move |_, _| {
-            if answer.await == Ok(1) {
-                state::post(&poster, move |state: &mut AppState| state.sidebar_action(id, action));
-            }
-        })
-        .detach();
+        crate::modal::open_alert(
+            window,
+            spec,
+            move |answer, _, _| {
+                if answer.button == 1 {
+                    state::post(&poster, move |state: &mut AppState| state.sidebar_action(id, action));
+                }
+            },
+            cx,
+        );
     }
 
     /// Open Directory…: a folder chooser over `window`, starting in the active session's directory, then a session
@@ -884,13 +896,12 @@ fn too_many_folders(window: &mut Window, cx: &mut App) {
         agterm_core::sidebar_drop::MAXIMUM_DIRECTORY_IMPORT_COUNT
     );
     // the only answer is OK: nothing waits on it
-    drop(window.prompt(
-        PromptLevel::Info,
-        "Too Many Folders",
-        Some(&body),
-        &[PromptButton::ok("OK")],
+    crate::modal::open_alert(
+        window,
+        crate::modal::AlertSpec::info("Too Many Folders", body),
+        |_, _, _| {},
         cx,
-    ));
+    );
 }
 
 /// `window`'s raw window and display handles (an X11 window id, or a Wayland surface and display), which the portal

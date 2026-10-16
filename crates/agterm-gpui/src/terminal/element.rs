@@ -272,9 +272,10 @@ impl TerminalView {
             device_from(f32::from(bounds.size.width), scale),
             device_from(f32::from(bounds.size.height), scale),
         );
-        let padding = match self.role {
-            ViewRole::Owner => lay_out(&shared, screen, scale, &metrics, explicit, cx),
-            ViewRole::Viewer => explicit,
+        let padding = if self.role.lays_out() {
+            lay_out(&shared, screen, scale, &metrics, explicit, cx)
+        } else {
+            explicit
         };
         if !self.shown {
             // laid out (the pane starts and follows the size) but not drawn
