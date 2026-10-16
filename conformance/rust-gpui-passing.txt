@@ -16,6 +16,9 @@ tests/cli/test_cli_only.py::test_terminfo_install_refuses_a_destination_ssh_woul
 tests/cli/test_cli_only.py::test_terminfo_install_refuses_a_destination_ssh_would_misread[]
 tests/cli/test_cli_only.py::test_terminfo_install_refuses_a_destination_ssh_would_misread[two words]
 tests/cli/test_cli_only.py::test_terminfo_install_reports_how_ssh_ended
+tests/cli/test_cli_output.py::test_ask_blocks_until_cancelled
+tests/cli/test_cli_output.py::test_ask_without_blocking
+tests/cli/test_cli_output.py::test_events_json_prints_each_event_object_of_the_asked_kinds
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args0-event limit must be between 1 and 1000]
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args1-events.read requires --run and --after together]
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args2-invalid event run id]
@@ -23,6 +26,8 @@ tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_re
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args4-None]
 tests/cli/test_cli_output.py::test_font
 tests/cli/test_cli_output.py::test_hooks
+tests/cli/test_cli_output.py::test_hud
+tests/cli/test_cli_output.py::test_hud_sticky_and_no_frame
 tests/cli/test_cli_output.py::test_notify_raises_the_unseen_count
 tests/cli/test_cli_output.py::test_pick_blocks_until_cancelled
 tests/cli/test_cli_output.py::test_pick_without_blocking
@@ -58,10 +63,30 @@ tests/protocol/test_addressing.py::test_undecodable_request_is_refused[unknown-c
 tests/protocol/test_addressing.py::test_unresolved_target[session.select--no such session: ]
 tests/protocol/test_addressing.py::test_unresolved_target[session.select-zzz-no such session: zzz]
 tests/protocol/test_addressing.py::test_unresolved_target[workspace.select-zzz-no such workspace: zzz]
+tests/protocol/test_ask_pick.py::test_ask_refusals[align]
 tests/protocol/test_ask_pick.py::test_ask_refusals[blank-title]
+tests/protocol/test_ask_pick.py::test_ask_refusals[default-destructive]
+tests/protocol/test_ask_pick.py::test_ask_refusals[default]
+tests/protocol/test_ask_pick.py::test_ask_refusals[destructive]
+tests/protocol/test_ask_pick.py::test_ask_refusals[empty-buttons]
+tests/protocol/test_ask_pick.py::test_ask_refusals[hotkey-digit]
+tests/protocol/test_ask_pick.py::test_ask_refusals[hotkey-long]
+tests/protocol/test_ask_pick.py::test_ask_refusals[hotkey-twice]
+tests/protocol/test_ask_pick.py::test_ask_refusals[ids]
+tests/protocol/test_ask_pick.py::test_ask_refusals[label]
+tests/protocol/test_ask_pick.py::test_ask_refusals[message-control]
+tests/protocol/test_ask_pick.py::test_ask_refusals[no-buttons]
 tests/protocol/test_ask_pick.py::test_ask_refusals[no-title]
 tests/protocol/test_ask_pick.py::test_ask_refusals[pane]
+tests/protocol/test_ask_pick.py::test_ask_refusals[seven-buttons]
+tests/protocol/test_ask_pick.py::test_ask_refusals[style]
 tests/protocol/test_ask_pick.py::test_ask_refusals[title-control]
+tests/protocol/test_ask_pick.py::test_ask_refusals[width-high]
+tests/protocol/test_ask_pick.py::test_ask_refusals[width-low]
+tests/protocol/test_ask_pick.py::test_closing_the_session_cancels_its_ask
+tests/protocol/test_ask_pick.py::test_gui_ask_and_control_driven_covers
+tests/protocol/test_ask_pick.py::test_gui_ask_holds_the_window_slot
+tests/protocol/test_ask_pick.py::test_gui_ask_target_must_be_on_screen
 tests/protocol/test_ask_pick.py::test_pick_refusals[empty]
 tests/protocol/test_ask_pick.py::test_pick_refusals[ids]
 tests/protocol/test_ask_pick.py::test_pick_refusals[label-bell]
@@ -79,6 +104,9 @@ tests/protocol/test_ask_pick.py::test_result_and_cancel_need_a_known_id[pick.can
 tests/protocol/test_ask_pick.py::test_result_and_cancel_need_a_known_id[pick.result]
 tests/protocol/test_ask_pick.py::test_terminal_ask_on_one_pane
 tests/protocol/test_ask_pick.py::test_terminal_ask_pane_must_be_laid_out
+tests/protocol/test_ask_pick.py::test_terminal_ask_waits_hidden_on_an_unselected_session
+tests/protocol/test_ask_pick.py::test_terminal_ask_waits_on_its_session
+tests/protocol/test_ask_pick.py::test_terminal_ask_without_a_target_lands_on_the_selected_session
 tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[None-args2-browser.clear]
 tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[None-args2-browser.links]
 tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[active-args0-browser.clear]
@@ -144,12 +172,61 @@ tests/protocol/test_font_theme.py::test_set_refusals_leave_the_slots_alone[args0
 tests/protocol/test_font_theme.py::test_set_refusals_leave_the_slots_alone[args1-unknown theme: No Such Theme]
 tests/protocol/test_font_theme.py::test_set_refusals_leave_the_slots_alone[args2-unknown theme: No Such Theme]
 tests/protocol/test_font_theme.py::test_set_refusals_leave_the_slots_alone[args3-unknown theme: dracula]
+tests/protocol/test_hud.py::test_hud_and_program_share_one_slot
 tests/protocol/test_hud.py::test_hud_font_size_range[font-high]
 tests/protocol/test_hud.py::test_hud_font_size_range[font-low]
+tests/protocol/test_hud.py::test_hud_hides_itself_after_its_interval
+tests/protocol/test_hud.py::test_hud_holds_the_slot_without_covering_the_session
+tests/protocol/test_hud.py::test_hud_over_one_pane
+tests/protocol/test_hud.py::test_hud_pane_must_exist
+tests/protocol/test_hud.py::test_hud_reads_back_every_option
+tests/protocol/test_hud.py::test_hud_refusals[blank-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[blank-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refusals[color-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[color-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refusals[detail-tab-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[detail-tab-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refusals[hide-high-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[hide-high-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refusals[hide-low-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[hide-low-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refusals[long-detail-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[long-detail-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refusals[long-markdown-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[long-markdown-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refusals[long-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[long-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refusals[markdown-escape-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[markdown-escape-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refusals[markdown-renders-nothing-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[markdown-renders-nothing-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refusals[newline-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[newline-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refusals[no-message-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[no-message-session.hud.update]
 tests/protocol/test_hud.py::test_hud_refusals[pane-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[pane-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refusals[position-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[position-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refusals[size-high-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[size-high-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refusals[size-low-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[size-low-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refusals[spinner-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[spinner-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refusals[text-color-session.hud.open]
+tests/protocol/test_hud.py::test_hud_refusals[text-color-session.hud.update]
+tests/protocol/test_hud.py::test_hud_width_is_clamped[max]
+tests/protocol/test_hud.py::test_hud_width_is_clamped[min]
+tests/protocol/test_hud.py::test_hud_width_is_clamped[sticky-center]
+tests/protocol/test_hud.py::test_hud_width_is_clamped[sticky-edge]
+tests/protocol/test_hud.py::test_resize_lets_a_sticky_hud_span_the_pane
+tests/protocol/test_hud.py::test_resize_sets_the_hud_width
 tests/protocol/test_hud.py::test_unknown_session_target[session.hud.close-args2]
 tests/protocol/test_hud.py::test_unknown_session_target[session.hud.open-args0]
 tests/protocol/test_hud.py::test_unknown_session_target[session.hud.update-args1]
+tests/protocol/test_hud.py::test_update_replaces_the_whole_spec
+tests/protocol/test_hud.py::test_update_sets_and_drops_sticky_and_frame
 tests/protocol/test_keymap_hooks.py::test_a_running_hook_queues_its_events_and_survives_its_removal
 tests/protocol/test_keymap_hooks.py::test_attach_remote_ships_a_default_that_an_existing_binding_keeps
 tests/protocol/test_keymap_hooks.py::test_hook_gets_its_event_on_stdin_and_in_its_environment

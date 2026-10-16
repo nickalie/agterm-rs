@@ -569,7 +569,7 @@ pub fn page_frames(panes: Panes, geometry: &Geometry, width: i32, height: i32) -
 // MARK: - the page's layout
 
 /// Where [`PageElement`] lays a child out.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Place {
     /// The whole page.
     Full,
@@ -581,10 +581,12 @@ pub enum Place {
     Divider,
     /// The separator line inside the band; nothing without one.
     Separator,
+    /// The HUD's panel, placed by its style in its scoped pane (nothing while that pane is not laid out) or the page.
+    Hud(crate::hud::HudPlacement),
 }
 
 impl Place {
-    fn rect(self, panes: Panes, geometry: &Geometry, axis: SplitAxis, width: i32, height: i32) -> Rect {
+    pub(crate) fn rect(self, panes: Panes, geometry: &Geometry, axis: SplitAxis, width: i32, height: i32) -> Rect {
         let full = Rect::full(width, height);
         match self {
             Self::Full | Self::Pane(Slot::Scratch) => full,
@@ -593,6 +595,12 @@ impl Place {
             Self::Over(slot) => pane_rect(panes, geometry, slot).unwrap_or(full),
             Self::Divider => geometry.divider.unwrap_or_default(),
             Self::Separator => separator_rect(geometry, axis).unwrap_or_default(),
+            Self::Hud(placement) => match placement.scope {
+                Some(slot) => pane_rect(panes, geometry, slot)
+                    .map(|pane| placement.style.panel_frame(pane))
+                    .unwrap_or_default(),
+                None => placement.style.panel_frame(full),
+            },
         }
     }
 }

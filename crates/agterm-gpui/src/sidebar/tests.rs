@@ -687,13 +687,13 @@ fn a_confirmed_close_closes_and_a_cancelled_one_does_not(cx: &mut TestAppContext
     h.view
         .update_in(cx, |sidebar, window, cx| sidebar.close_sessions(vec![var], window, cx));
     cx.run_until_parked();
-    cx.simulate_prompt_answer("Cancel");
+    assert!(cx.update(|window, cx| crate::modal::answer_front_alert(window, "Cancel", cx)));
     h.settle(cx);
     assert!(h.store().session(var).is_some());
     h.view
         .update_in(cx, |sidebar, window, cx| sidebar.close_sessions(vec![var], window, cx));
     cx.run_until_parked();
-    cx.simulate_prompt_answer("Close");
+    assert!(cx.update(|window, cx| crate::modal::answer_front_alert(window, "Close", cx)));
     h.settle(cx);
     assert!(h.store().session(var).is_none());
 }

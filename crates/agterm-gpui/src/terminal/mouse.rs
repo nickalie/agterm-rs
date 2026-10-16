@@ -705,3 +705,55 @@ impl TerminalView {
         cx.notify();
     }
 }
+
+/// A passive view's links (the HUD's panel, upstream's `HudLinkClick`): looked up under a pointer the view never
+/// receives itself.
+impl TerminalView {
+    /// The live link at `position` (window coordinates) over the view laid out in `bounds`, with `modifiers` held.
+    fn link_under(
+        &self,
+        position: Point<Pixels>,
+        bounds: Bounds<Pixels>,
+        modifiers: gpui_kit::Modifiers,
+    ) -> Option<Link> {
+        let pane = self.live_pane()?;
+        if !bounds.contains(&position) {
+            return None;
+        }
+        let (x, y) = self.surface_position(position, bounds);
+        let frame = self.painted.as_ref()?;
+        links::link_at(&pane, frame, pane.cell_at(x, y), mods(&modifiers), self.link_url())
+    }
+
+    /// A press with the link modifier at `position`: the link there opens (the frontend routes it as the HUD's).
+    pub fn open_link_under(
+        &mut self,
+        position: Point<Pixels>,
+        bounds: Bounds<Pixels>,
+        modifiers: gpui_kit::Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(link) = self.link_under(position, bounds, modifiers) {
+            self.terminal
+                .update(cx, |_, cx| cx.emit(TerminalEvent::OpenUrl(link.url)));
+        }
+    }
+
+    /// The pointer at `position` (`None`: gone, or the link modifier released) underlines the link under it; whether
+    /// one is live there.
+    pub fn hover_link_under(
+        &mut self,
+        position: Option<Point<Pixels>>,
+        bounds: Bounds<Pixels>,
+        modifiers: gpui_kit::Modifiers,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let link = position.and_then(|position| self.link_under(position, bounds, modifiers));
+        if link != self.pointer.link {
+            let cells = link.as_ref().map(|link| link.cells.clone()).unwrap_or_default();
+            self.pointer.link = link;
+            self.set_hovered_links(cells, cx);
+        }
+        self.pointer.link.is_some()
+    }
+}

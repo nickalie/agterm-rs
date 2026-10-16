@@ -12,8 +12,11 @@
 //! The model moves keyboard focus only by what it says should hold it: the deck focuses the shown page's focused pane
 //! whenever that pane (or the shown page) differs from what it last focused, which is how selecting a session,
 //! `session.focus`, a swap or the scratch move the input. A terminal the user focuses reports back through
-//! [`AppState::pane_focused`]. While the window's picker or GUI ask is up no terminal is given the keyboard, and the
-//! shown terminal gets it back once the slot frees.
+//! [`AppState::pane_focused`]. While the window's picker or GUI ask, an alert or a popover is up no terminal is given
+//! the keyboard, and the shown terminal gets it back once it closes. A session's terminal ask that wants the keyboard
+//! takes it in place of the terminal it covers ([`crate::ask_dialog`]), and gives it back once it ends.
+//!
+//! Over a page's panes lie its HUD ([`crate::hud`]) and, above that, its terminal ask.
 //!
 //! The plan of what to add, remove and show is a pure function of the model ([`plan`]), so it is testable without a
 //! window.
@@ -37,16 +40,18 @@ use agterm_core::zoom::SurfaceId;
 use agterm_core::{PaneReplacement, PaneSpawn};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Context, CursorStyle, Entity, FocusHandle, Focusable as _,
-    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Render, SharedString,
-    Styled, Subscription, Window, canvas, div, px,
+    AnyElement, App, AppContext as _, Bounds, Context, CursorStyle, Entity, FocusHandle, Focusable as _,
+    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels, Render,
+    SharedString, Styled, Subscription, Window, canvas, div, point, px, size,
 };
 use uuid::Uuid;
 
+use crate::ask_dialog::{self, AskDialog, AskOwner};
+use crate::hud::{self, HudLayer};
 use crate::mute::{self, Washes};
 use crate::pane::{self, PaneContext, PaneSpec, Ran, RanCell};
 use crate::pane_lead::{self, PaneCover};
-use crate::split::{self, PageElement, PageState, PanePlan, Place, Slot};
+use crate::split::{self, AskScope, PageElement, PageState, PanePlan, Place, Slot};
 use crate::state::{AppState, NotifyFocus, Poster, post};
 use crate::terminal::{KeyHold, Shared, Terminal, TerminalConfig, TerminalEvent, TerminalView, ViewRole};
 use crate::watermark;
@@ -95,6 +100,35 @@ pub fn plan<S: BuildHasher>(library: &WindowLibrary, window: Option<Uuid>, mount
         remove,
         shown: store.selected_session_id().filter(|id| store.session(*id).is_some()),
     }
+}
+
+/// What a GUI ask covers (upstream's `askAnchorFrame`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorTarget {
+    /// The terminal area: an ask with no anchor.
+    Area,
+    /// An anchored session's page, or its pane at the slot.
+    Page { session: Uuid, slot: Option<Slot> },
+}
+
+/// What GUI ask `ask` of window `window` covers: the terminal area without an anchor, else its session's page or that
+/// page's pane; `None` while the pane is gone (the core cancels the ask then).
+#[must_use]
+pub fn anchor_target(core: &Core, window: Uuid, ask: &agterm_core::model::PendingAsk) -> Option<AnchorTarget> {
+    let Some(anchor) = &ask.anchor else {
+        return Some(AnchorTarget::Area);
+    };
+    let slot = match anchor.pane_identity {
+        None => None,
+        Some(identity) => {
+            let session = core.library().store(window)?.session(anchor.session)?;
+            Some(Slot::of_overlay(session.pane_role_for_identity(identity)?))
+        }
+    };
+    Some(AnchorTarget::Page {
+        session: anchor.session,
+        slot,
+    })
 }
 
 /// The app's config with a terminal's own overlay loaded last (a session or pane background).
@@ -209,6 +243,13 @@ impl PaneTerminal {
     }
 }
 
+/// A page's terminal ask: its dialog, what it covers, and whether it takes the keyboard.
+pub struct PageAsk {
+    pub dialog: Entity<AskDialog>,
+    pub scope: AskScope,
+    pub wants_focus: bool,
+}
+
 /// One session's page: its terminals, their layout, and what lies over them.
 pub struct Page {
     session: Uuid,
@@ -218,6 +259,8 @@ pub struct Page {
     covers: Vec<(String, PaneCover)>,
     washes: Washes,
     state: Rc<PageState>,
+    hud: HudLayer,
+    ask: Option<PageAsk>,
 }
 
 impl Page {
@@ -229,7 +272,39 @@ impl Page {
             covers: Vec::new(),
             washes: Washes::default(),
             state: Rc::new(PageState::default()),
+            hud: HudLayer::default(),
+            ask: None,
         }
+    }
+
+    /// The page's HUD.
+    #[must_use]
+    pub fn hud(&self) -> &HudLayer {
+        &self.hud
+    }
+
+    /// The page's terminal ask while it shows.
+    #[must_use]
+    pub fn ask(&self) -> Option<&PageAsk> {
+        self.ask.as_ref()
+    }
+
+    /// The terminal ask that takes the keyboard in place of the terminal it covers, keyed by its ask.
+    fn ask_focus(&self, cx: &App) -> Option<(String, FocusHandle)> {
+        let ask = self.ask.as_ref().filter(|ask| ask.wants_focus)?;
+        let dialog = ask.dialog.read(cx);
+        Some((format!("ask:{}", dialog.id()), dialog.focus_handle().clone()))
+    }
+
+    /// The pane's rectangle at `slot` in the page as last laid out (the page itself for `None`).
+    fn rect(&self, slot: Option<Slot>) -> Option<split::Rect> {
+        let (width, height) = self.state.size.get();
+        let Some(slot) = slot else {
+            return Some(split::Rect::full(width, height));
+        };
+        let plan = self.plan.as_ref()?;
+        let geometry = split::geometry(plan.panes, plan.axis, self.state.ratio(plan.ratio), width, height);
+        split::pane_rect(plan.panes, &geometry, slot)
     }
 
     /// The terminal carrying `token`.
@@ -315,6 +390,8 @@ pub struct Deck {
     /// What may keep the keyboard a held move waited on: the sidebar's live rename field.
     owner: Option<FocusHandle>,
     look: Look,
+    /// The deck's bounds in the window at the last layout, which a GUI ask is anchored in.
+    bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 /// The deck's focus moves as its posted focus reports see them. A user focus report posted before a later move is
@@ -333,6 +410,10 @@ struct PageSync {
     look: Look,
     /// The session whose page shows.
     shown: Option<Uuid>,
+    /// Something else holds the keyboard: the window's picker, GUI ask, palette, an alert or a popover, or the quick
+    /// terminal.
+    focus_blocked: bool,
+    ask_look: ask_dialog::Look,
 }
 
 impl Deck {
@@ -355,15 +436,19 @@ impl Deck {
             held_move: false,
             owner: None,
             look,
+            bounds: Rc::default(),
         }
     }
 
     /// Whether a popup of the window's holds the keyboard (the sidebar's row menu, which a right-click opens while
     /// the selection it narrowed is still on its way): until it closes the deck moves no focus, then it gives the
     /// shown terminal the keyboard the popup handed back, unless the popup's item gave it to `owner` (the sidebar's
-    /// live rename field) or a prompt. Any other focus outside the terminals (a handle the popup restored to a field
-    /// gone meanwhile) does not keep it.
+    /// live rename field); an alert the item opened is a modal, which the deck waits on until it closes. Any other
+    /// focus outside the terminals (a handle the popup restored to a field gone meanwhile) does not keep it.
     pub fn hold_keyboard(&mut self, held: bool, owner: Option<FocusHandle>) {
+        // a popup that closes hands the keyboard back to the shown terminal even when nothing moved meanwhile: the
+        // popup may have kept it (a dismissed menu, a dialog its item opened)
+        self.held_move |= self.held && !held;
         self.held = held;
         self.owner = owner;
     }
@@ -409,10 +494,35 @@ impl Deck {
         self.pages.get(&session)?.terminal(token)
     }
 
-    /// What should hold the keyboard while the window has it: the shown terminal.
+    /// What should hold the keyboard while the window has it: the shown page's terminal ask while it takes the
+    /// keyboard, else the shown terminal.
     #[must_use]
     pub fn focus_target(&self, cx: &App) -> Option<FocusHandle> {
+        let page = self.shown.and_then(|id| self.pages.get(&id));
+        if let Some((_, handle)) = page.and_then(|page| page.ask_focus(cx)) {
+            return Some(handle);
+        }
         self.shown_terminal().map(|pane| pane.focus_handle(cx))
+    }
+
+    /// Where a GUI ask anchored to `target` is in the window as last laid out (upstream's `askAnchorFrame`); `None`
+    /// while it is not on screen.
+    #[must_use]
+    pub fn anchor_bounds(&self, target: AnchorTarget) -> Option<Bounds<Pixels>> {
+        let deck = self.bounds.get()?;
+        let AnchorTarget::Page { session, slot } = target else {
+            return Some(deck);
+        };
+        if self.shown != Some(session) {
+            return None;
+        }
+        let rect = self.pages.get(&session)?.rect(slot)?;
+        #[expect(clippy::cast_precision_loss, reason = "page coordinates are far below 2^24")]
+        let (x, y, width, height) = (rect.x as f32, rect.y as f32, rect.width as f32, rect.height as f32);
+        Some(Bounds {
+            origin: deck.origin + point(px(x), px(y)),
+            size: size(px(width), px(height)),
+        })
     }
 
     /// Brings the deck in line with its window's sessions: pages for new sessions, gone sessions' pages removed, every
@@ -441,11 +551,14 @@ impl Deck {
             .zoom_target(self.window)
             .filter(|zoom| self.pages.contains_key(&zoom.session));
         let shown = zoom.map(|zoom| zoom.session).or(plan.shown);
+        let modal = modal || core.quick_visible();
         let sync = PageSync {
             window: self.window,
             zoom,
             look: self.look,
             shown,
+            focus_blocked: modal,
+            ask_look: ask_dialog::Look::current(core, &self.env.config()),
         };
         let ids: Vec<Uuid> = self.order.clone();
         for id in ids {
@@ -453,7 +566,6 @@ impl Deck {
         }
         // a zoom keeps the keyboard on its terminal (upstream's `focusSplitPane` steps aside while zoomed)
         let refocus = zoom.is_none() && shown.is_some_and(|id| core.pane_focus_requested(id));
-        let modal = modal || core.quick_visible();
         let given = self.show(shown, refocus, modal, window, cx);
         cx.notify();
         given.is_some_and(|(session, token)| core.pane_focused(session, &token))
@@ -530,11 +642,18 @@ impl Deck {
             pane: mute::muted(session, on_screen, sync.look.mute, sync.look.background),
             backdrop: mute::backdrop(session, on_screen, sync.look.background).map(|regions| (regions, sync.look.mute)),
         };
+        let context = hud::HudContext {
+            window: sync.window,
+            workspace,
+            env: &self.env,
+        };
+        hud::sync_page(&mut page.hud, session, &context, Some(&layout), shown, cx);
         page.plan = Some(layout);
         page.covers = covers;
         page.show(shown, cx);
         hold_keys(page, &self.env.poster);
         sync_watermarks(&self.env, page, session, cx);
+        sync_ask(page, session, sync, shown && sync.zoom.is_none(), &self.env.poster, cx);
     }
 
     /// The app's config changed (a reload): every terminal takes it, over its own overlay; with `keep_zoom` (an
@@ -549,6 +668,9 @@ impl Deck {
                     terminal.reload_config(config, cx);
                 }
             });
+        }
+        for panel in self.pages.values().filter_map(|page| page.hud.panel()) {
+            panel.apply_config(&self.env, cx);
         }
         cx.notify();
     }
@@ -579,8 +701,13 @@ impl Deck {
             self.set_focused(None);
             return None;
         }
-        let focus = self.pages.get(&id).and_then(Page::focus);
-        let desired = focus.map(|pane| (id, pane.token().to_owned()));
+        let page = self.pages.get(&id);
+        let ask = page.and_then(|page| page.ask_focus(cx));
+        let focus = page.and_then(Page::focus);
+        let desired = match &ask {
+            Some((key, _)) => Some((id, key.clone())),
+            None => focus.map(|pane| (id, pane.token().to_owned())),
+        };
         if self.held {
             self.held_move |= changed || refocus || desired != self.focused;
             return None;
@@ -594,18 +721,22 @@ impl Deck {
         if (desired == self.focused || reporting) && !refocus {
             return None;
         }
-        let handle = focus.map(|pane| pane.focus_handle(cx));
+        let handle = match ask {
+            Some((_, handle)) => Some(handle),
+            None => focus.map(|pane| pane.focus_handle(cx)),
+        };
         if let Some(handle) = handle {
             window.focus(&handle, cx);
         }
         self.set_focused(desired.clone());
-        desired
+        // a dialog the deck gave the keyboard is no pane focus the model hears of
+        desired.filter(|(_, key)| !key.starts_with("ask:"))
     }
 
     /// Whether a live keyboard owner outside the deck's terminals holds the window's keyboard: the owner the last
-    /// hold named, or a prompt.
+    /// hold named (an alert or a popover holding it is a modal, which the deck never moves the keyboard under).
     fn keyboard_owned(&self, window: &Window) -> bool {
-        window.has_active_prompt() || self.owner.as_ref().is_some_and(|owner| owner.is_focused(window))
+        self.owner.as_ref().is_some_and(|owner| owner.is_focused(window))
     }
 
     /// Records where keyboard focus went, counting a move; a user move's report still queued is overtaken.
@@ -817,6 +948,16 @@ impl Deck {
         if let Some((regions, opacity)) = page.washes.backdrop.clone() {
             element = element.child(backdrop(regions, opacity, plan, Rc::clone(&page.state)), Place::Full);
         }
+        if let (Some(panel), Some(placement)) = (hud::element(&page.hud), page.hud.placement()) {
+            element = element.child(panel, Place::Hud(placement));
+        }
+        if let Some(ask) = page.ask.as_ref().filter(|_| visible) {
+            let place = match ask.scope {
+                AskScope::Session => Place::Full,
+                AskScope::Pane(slot) => Place::Over(slot),
+            };
+            element = element.child(ask.dialog.clone(), place);
+        }
         let poster = self.env.poster.clone();
         element = element.report_frames(Rc::new(move |frames| {
             post(&poster, move |state: &mut AppState| {
@@ -865,6 +1006,18 @@ impl Render for Deck {
                     .into_any_element()
             })
             .collect();
+        let recorded = Rc::clone(&self.bounds);
+        let anchor = canvas(
+            move |bounds, window, _| {
+                if recorded.replace(Some(bounds)) != Some(bounds) {
+                    // a GUI ask anchored here follows on the next frame
+                    window.refresh();
+                }
+            },
+            |_, (), _, _| {},
+        )
+        .absolute()
+        .size_full();
         div()
             .id("deck")
             .relative()
@@ -872,6 +1025,7 @@ impl Render for Deck {
             .min_w(px(0.))
             .min_h(px(0.))
             .bg(background)
+            .child(anchor)
             .when(self.shown.is_none(), |deck| {
                 deck.child(
                     div()
@@ -932,6 +1086,36 @@ fn backdrop(regions: mute::Regions, opacity: f64, plan: &PanePlan, state: Rc<Pag
         },
     )
     .size_full()
+}
+
+/// Brings `page`'s terminal ask in line with `session`'s: a dialog for the ask while it shows on the page (a new one
+/// per ask, as upstream's view is keyed by its id), taken down otherwise. `shown`: the page shows its session with
+/// nothing over it (selected, no zoom).
+fn sync_ask(page: &mut Page, session: &Session, sync: &PageSync, shown: bool, poster: &Poster, cx: &mut Context<Deck>) {
+    let scope = ask_dialog::shown_scope(session, shown);
+    let pending = session.ask().filter(|_| scope.is_some()).map(|ask| &ask.ask);
+    let (Some(scope), Some(pending)) = (scope, pending) else {
+        page.ask = None;
+        return;
+    };
+    let current = page
+        .ask
+        .as_ref()
+        .map(|ask| ask.dialog.clone())
+        .filter(|dialog| dialog.read(cx).id() == pending.id);
+    let look = sync.ask_look.clone();
+    let dialog = if let Some(dialog) = current {
+        dialog.update(cx, |dialog, cx| dialog.set_look(look, cx));
+        dialog
+    } else {
+        let (owner, poster) = (AskOwner::Session(session.id()), poster.clone());
+        cx.new(|cx| AskDialog::new(pending, owner, look, poster, cx))
+    };
+    page.ask = Some(PageAsk {
+        dialog,
+        scope,
+        wants_focus: ask_dialog::wants_focus(session, sync.focus_blocked),
+    });
 }
 
 /// Mounts `spec`'s terminal in `page` and installs it in `session`'s slot.

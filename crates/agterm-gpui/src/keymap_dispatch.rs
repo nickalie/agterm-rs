@@ -8,8 +8,8 @@
 //! (except `toggle_fullscreen`'s after a half-typed leader) — then, when a terminal's own view holds the keyboard,
 //! ghostty's binds and the key encoder (`crate::terminal`). A key either takes stops there: GPUI's binding matcher and
 //! pending-keystroke buffering never see it, and the platform's input handler does not type it again. A focused text
-//! field (an element in an `Input` key context) or an open prompt keeps every key, as the GTK build's text fields and
-//! dialogs did.
+//! field (an element in an `Input` key context), an open prompt or an alert (`crate::modal`) keeps every key, as the GTK
+//! build's text fields and dialogs did.
 //!
 //! A chord is the key's physical identity resolved per layout (`terminal::input::chord`). A consumed key's next press
 //! reads as its autorepeat until its release, which reaches [`key_up`] from the window's (and the terminal's) key-up
@@ -217,10 +217,10 @@ fn is_modifier_release(keystroke: &gpui_kit::Keystroke) -> bool {
         )
 }
 
-/// Whether the focused element keeps every key: a text field (an `Input` key context) or a prompt.
+/// Whether the focused element keeps every key: a text field (an `Input` key context), a prompt or an alert.
 fn keeps_keys(event: &KeystrokeEvent) -> bool {
     event.context_stack.iter().any(|context| {
-        ["Input", "Prompt", "PromptDialog"]
+        ["Input", "Prompt", "PromptDialog", "AgtermAlert"]
             .iter()
             .any(|name| context.contains(name))
     })

@@ -6,8 +6,14 @@
 //! The window's content is a column: the title bar (`titlebar.rs`), then the sidebar's place (Task 19) beside the
 //! deck, all on the chrome's background (`chrome.rs`); a window the client decorates gets resize handles along its
 //! free edges. Over it sit the window's modal layers ([`Layer`]), in the GTK build's order: the scrollback search bar, the
-//! GUI ask, the native picker, the command palette and the Ctrl-Tab switcher; each later task attaches its view to its
-//! layer ([`WindowView::set_layer`]), drawn over the whole window while attached.
+//! GUI ask, the native picker, the command palette, the Ctrl-Tab switcher and the title bar's popovers; each attaches its
+//! view to its layer ([`WindowView::set_layer`]), drawn over the whole window while attached. The window's alerts
+//! ([`crate::modal`]) come above everything.
+//!
+//! The GUI ask ([`crate::ask_dialog`]) is the window's own: one comes up with the model's modal slot, takes the
+//! keyboard, and is drawn over its anchor while the rest of the window takes no clicks. While a GUI ask, a picker, the
+//! palette, an alert or a popover holds the keyboard the deck moves none; once it closes the window's sync gives the
+//! keyboard back to the shown terminal (an alert or a popover closing posts that sync).
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -17,16 +23,18 @@ use agterm_core::model::{AppStore, Session, WindowLibrary};
 use agterm_core::titlebar::UNTITLED;
 use agterm_core::{Core, WindowRequest, WindowSize, WindowState};
 use gpui_kit::{
-    AnyView, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, KeyUpEvent,
+    AnyElement, AnyView, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, KeyUpEvent,
     ParentElement as _, Render, Styled as _, Subscription, Window, div, px, size,
 };
 use uuid::Uuid;
 
-use crate::deck::Deck;
+use crate::ask_dialog::{AskDialog, AskOwner};
+use crate::deck::{AnchorTarget, Deck};
 use crate::keymap_dispatch::KeyOrigin;
+use crate::popovers::Popovers;
 use crate::sidebar::Sidebar;
 use crate::state::{AppState, FirstFocus, Poster, post};
-use crate::titlebar::{Cover, Titlebar};
+use crate::titlebar::{Cover, Titlebar, TitlebarEvent};
 
 /// The window title: the active session's display name, then the window's custom name when it has one (upstream's
 /// `WindowTitleSync.title`).
@@ -74,6 +82,13 @@ pub enum Layer {
     Picker,
     Palette,
     Switcher,
+    Popover,
+}
+
+/// The window's GUI ask: its dialog and what it covers (`None`: nowhere on screen; the panel waits).
+struct WindowAsk {
+    dialog: Entity<AskDialog>,
+    target: Option<AnchorTarget>,
 }
 
 /// Full screen and maximized as last painted: `window.list` reports a state once a frame in it is drawn, so a caller
@@ -128,6 +143,10 @@ pub struct WindowView {
     deck: Entity<Deck>,
     titlebar: Entity<Titlebar>,
     sidebar: Entity<Sidebar>,
+    popovers: Entity<Popovers>,
+    ask: Option<WindowAsk>,
+    /// Whether an alert was up at the last sync: the GUI ask it covered takes the keyboard back once it goes.
+    alert_up: bool,
     layers: Vec<(Layer, AnyView)>,
     title: String,
     /// Set once the model closed the window, so its close request goes through.
@@ -185,19 +204,115 @@ impl WindowView {
         let bounds = cx.observe_window_bounds(window, |_, _, cx| cx.notify());
         let titlebar = cx.new(|_| Titlebar::new(id, poster.clone()));
         let sidebar = cx.new(|_| Sidebar::new(id, poster.clone()));
+        let popovers = cx.new(|cx| Popovers::new(id, poster.clone(), cx));
+        let opening = cx.subscribe_in(&titlebar, window, |view, _, event: &TitlebarEvent, window, cx| {
+            let TitlebarEvent::Popover { kind, anchor } = *event;
+            view.popovers
+                .update(cx, |popovers, cx| popovers.toggle(kind, anchor, window, cx));
+            view.sync_popover_layer(cx);
+        });
+        let popped = cx.observe(&popovers, |view, _, cx| view.sync_popover_layer(cx));
+        // an alert opening or closing (anywhere: the registry is the app's) is the window's to re-sync, so the
+        // keyboard goes back to the shown terminal once the last one is answered
+        let posting = poster.clone();
+        let alerts = cx.observe_global::<crate::modal::Alerts>(move |_, _| post(&posting, |_| {}));
         Self {
             id,
             deck,
             titlebar,
             sidebar,
+            popovers,
+            ask: None,
+            alert_up: false,
             layers: Vec::new(),
             title: UNTITLED.to_owned(),
             closing,
             painted: Rc::new(Cell::new(Painted::default())),
             first_focus,
             poster,
-            _subscriptions: vec![activation, bounds],
+            _subscriptions: vec![activation, bounds, opening, popped, alerts],
         }
+    }
+
+    /// The window's popovers.
+    #[must_use]
+    pub fn popovers(&self) -> &Entity<Popovers> {
+        &self.popovers
+    }
+
+    /// The window's GUI ask dialog while one is up.
+    #[must_use]
+    pub fn ask_dialog(&self) -> Option<&Entity<AskDialog>> {
+        self.ask.as_ref().map(|ask| &ask.dialog)
+    }
+
+    /// Attaches the popovers while one is open; a popover that closed posts the sync that hands the keyboard back.
+    fn sync_popover_layer(&mut self, cx: &mut Context<Self>) {
+        let open = self.popovers.read(cx).is_open();
+        if open == self.has_layer(Layer::Popover) {
+            return;
+        }
+        let view = open.then(|| AnyView::from(self.popovers.clone()));
+        self.set_layer(Layer::Popover, view, cx);
+        if !open {
+            post(&self.poster, |_| {});
+        }
+    }
+
+    /// Brings the GUI ask in line with the model's modal slot: a dialog per ask (a new one takes the keyboard, as
+    /// does the one shown when `refocus`, an alert over it having closed), what it covers, and none once it ends.
+    fn sync_ask(&mut self, core: &Core, refocus: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let id = self.id;
+        let pending = core
+            .modal_slot(id)
+            .and_then(agterm_core::modal::PickController::pending_ask);
+        let Some(pending) = pending else {
+            if self.ask.take().is_some() {
+                self.set_layer(Layer::Ask, None, cx);
+            }
+            return;
+        };
+        let target = crate::deck::anchor_target(core, id, pending);
+        let look = crate::ask_dialog::Look::current(core, &self.deck.read(cx).env().config());
+        if let Some(ask) = self.ask.as_mut().filter(|ask| ask.dialog.read(cx).id() == pending.id) {
+            ask.target = target;
+            ask.dialog.update(cx, |dialog, cx| dialog.set_look(look, cx));
+            if refocus {
+                let focus = ask.dialog.read(cx).focus_handle().clone();
+                window.focus(&focus, cx);
+            }
+            return;
+        }
+        let poster = self.poster.clone();
+        let dialog = cx.new(|cx| AskDialog::new(pending, AskOwner::Window(id), look, poster, cx));
+        let focus = dialog.read(cx).focus_handle().clone();
+        window.focus(&focus, cx);
+        self.set_layer(Layer::Ask, Some(dialog.clone().into()), cx);
+        self.ask = Some(WindowAsk { dialog, target });
+    }
+
+    /// The GUI ask over its anchor, the rest of the window taking no clicks.
+    fn render_ask(&self, view: &AnyView, cx: &App) -> AnyElement {
+        let anchor = self
+            .ask
+            .as_ref()
+            .and_then(|ask| ask.target)
+            .and_then(|target| self.deck.read(cx).anchor_bounds(target));
+        div()
+            .id("gui-ask-layer")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .children(anchor.map(|bounds| {
+                div()
+                    .absolute()
+                    .left(bounds.origin.x)
+                    .top(bounds.origin.y)
+                    .w(bounds.size.width)
+                    .h(bounds.size.height)
+                    .child(view.clone())
+            }))
+            .into_any_element()
     }
 
     /// The model window shown.
@@ -245,10 +360,11 @@ impl WindowView {
         self.layers.iter().any(|(known, _)| *known == layer)
     }
 
-    /// Closes the window for good: the model closed it, and its terminals with it.
-    pub fn close(&self, window: &mut Window) {
+    /// Closes the window for good: the model closed it, and its terminals with it. Its alerts are cancelled.
+    pub fn close(&self, window: &mut Window, cx: &mut App) {
         crate::keymap_dispatch::unregister_window(window.window_handle());
         self.closing.set(true);
+        crate::modal::dismiss_alerts(window, cx);
         window.remove_window();
     }
 
@@ -258,10 +374,23 @@ impl WindowView {
         self.focus_terminal(window, cx);
     }
 
-    /// Gives the keyboard to the shown terminal while the window has it: a new window's first focus, which the window
-    /// manager gives the window itself (a new window maps without an activation request of its own).
+    /// Gives the keyboard to what should hold it while the window has it: the window's alert, GUI ask or popover while
+    /// one is up, else the shown terminal (a new window's first focus, which the window manager gives the window itself:
+    /// a new window maps without an activation request of its own).
     pub fn focus_terminal(&self, window: &mut Window, cx: &mut App) {
-        if let Some(handle) = self.deck.read(cx).focus_target(cx) {
+        if crate::modal::alert_open(window.window_handle(), cx) {
+            crate::modal::refocus_alert(window, cx);
+            return;
+        }
+        let held = self
+            .ask
+            .as_ref()
+            .map(|ask| ask.dialog.read(cx).focus_handle().clone())
+            .or_else(|| {
+                let popovers = self.popovers.read(cx);
+                popovers.is_open().then(|| popovers.focus_handle().clone())
+            });
+        if let Some(handle) = held.or_else(|| self.deck.read(cx).focus_target(cx)) {
             window.focus(&handle, cx);
         }
     }
@@ -273,19 +402,32 @@ impl WindowView {
         self.painted.get().state(display_size(window, cx))
     }
 
-    /// Renders the model: the deck's pages, the sidebar and the title. Whether a modal holds the keyboard is the
-    /// model's: the window's picker or GUI ask, or its palette; while the sidebar's row menu holds it the deck moves
-    /// no focus. Whether the core needs a settle for the focus the deck gave.
+    /// Renders the model: the deck's pages, the sidebar, the title, the GUI ask and the popovers' rows. A modal holds
+    /// the keyboard while the model's modal slot (the window's picker or GUI ask) or its palette is up, or one of the
+    /// window's alerts or popovers; while the sidebar's row menu holds it the deck moves no focus. Whether the core
+    /// needs a settle for the focus the deck gave.
     #[must_use = "a focus report the core took needs a settle"]
     pub fn sync(&mut self, core: &mut Core, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let id = self.id;
-        let modal = core.modal_pending(id) || core.palette_holds(id);
+        let dialog = core.modal_pending(id) || core.palette_holds(id);
+        let alert = crate::modal::alert_open(window.window_handle(), cx);
+        let alert_closed = std::mem::replace(&mut self.alert_up, alert) && !alert;
+        // the GUI ask takes the keyboard back from a closed alert unless a layer above it holds it
+        let refocus = alert_closed && !core.palette_holds(id) && !self.popovers.read(cx).is_open();
+        self.sync_ask(core, refocus, window, cx);
+        self.popovers.update(cx, |popovers, cx| popovers.sync(core, cx));
+        self.sync_popover_layer(cx);
+        let modal = dialog || alert || self.popovers.read(cx).is_open();
         let sidebar = self.sidebar.read(cx);
         let (held, owner) = (sidebar.menu_open(), sidebar.keyboard_owner(cx));
         let focused = self.deck.update(cx, |deck, cx| {
             deck.hold_keyboard(held, owner);
             deck.reconcile(core, modal, window, cx)
         });
+        if alert {
+            // a menu closing after its item opened the alert may have taken the keyboard back
+            crate::modal::refocus_alert(window, cx);
+        }
         self.sidebar.update(cx, |sidebar, cx| sidebar.sync(core, cx));
         let dashboard = core.dashboard(id).is_some();
         let title = if dashboard {
@@ -302,7 +444,7 @@ impl WindowView {
         };
         let colors = crate::chrome::current(cx);
         self.titlebar
-            .update(cx, |bar, cx| bar.sync(core, cover, modal, colors, cx));
+            .update(cx, |bar, cx| bar.sync(core, cover, dialog || alert, colors, cx));
         if title != self.title {
             window.set_window_title(&title);
             self.title = title;
@@ -364,10 +506,15 @@ impl Render for WindowView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.track_painted(window);
         let background = crate::chrome::color(crate::chrome::current(cx).background, 1.0);
-        let layers = self
+        let layers: Vec<AnyElement> = self
             .layers
             .iter()
-            .map(|(_, view)| div().absolute().inset_0().child(view.clone()));
+            .map(|(layer, view)| match layer {
+                Layer::Ask => self.render_ask(view, cx),
+                _ => div().absolute().inset_0().child(view.clone()).into_any_element(),
+            })
+            .collect();
+        let alert = crate::modal::alert_layer(window.window_handle(), cx);
         div()
             .id("window")
             .capture_key_up(|event: &KeyUpEvent, window, cx| {
@@ -392,6 +539,7 @@ impl Render for WindowView {
                     .child(div().flex_1().min_w(px(0.)).h_full().child(self.deck.clone())),
             )
             .children(layers)
+            .children(alert)
             .child(crate::chrome::resize_edges(window))
     }
 }

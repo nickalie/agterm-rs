@@ -18,8 +18,8 @@
 //! no other way to be moved or closed with the mouse), and no bar at all under the window manager's decorations.
 //!
 //! Every button posts a [`TitlebarAction`] the core runs ([`agterm_core::Core::titlebar_action`]); the
-//! recent-sessions, attention and custom-commands buttons emit [`TitlebarEvent::Popover`] for the popovers to open
-//! from (Task 21). The glyphs are Lucide's (gpui-kit's catalog, [`Icons`]), the split and scratch glyphs traced, as
+//! recent-sessions, attention and custom-commands buttons emit [`TitlebarEvent::Popover`] for the window's popovers
+//! ([`crate::popovers`]) to open under the button. The glyphs are Lucide's (gpui-kit's catalog, [`Icons`]), the split and scratch glyphs traced, as
 //! the GTK build's are, with their halves filled for the panes on screen.
 
 use std::borrow::Cow;
@@ -133,7 +133,7 @@ pub enum Cover {
     Dashboard(String),
 }
 
-/// The popover a title-bar button opens (Task 21 attaches them).
+/// The popover a title-bar button opens ([`crate::popovers`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PopoverKind {
     Recent,
@@ -142,10 +142,24 @@ pub enum PopoverKind {
 }
 
 /// What the bar tells its window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TitlebarEvent {
-    /// A popover button was clicked.
-    Popover(PopoverKind),
+    /// A popover button was clicked: its popover hangs from `anchor` (window coordinates: under the pointer, at the
+    /// bar's bottom edge).
+    Popover {
+        kind: PopoverKind,
+        anchor: gpui_kit::Point<Pixels>,
+    },
+}
+
+/// Where a popover opened by a click on the bar hangs from: the pointer's x at the bar's bottom edge.
+fn popover_anchor(bar: &Titlebar, window: &Window) -> gpui_kit::Point<Pixels> {
+    let client = matches!(window.window_decorations(), Decorations::Client { .. });
+    let bottom = bar
+        .shown
+        .as_ref()
+        .map_or(NORMAL_HEIGHT, |shown| height(shown.model.mode, client));
+    gpui_kit::point(window.mouse_position().x, bottom)
 }
 
 /// A motion over the bar with `held` down after a press on it (`pressed`, taken): whether it starts a window move. Only
@@ -715,8 +729,12 @@ impl Titlebar {
                 enabled: recent.enabled,
                 hint: hints.recent.clone(),
             };
-            let open = |_: &mut Self, _: &mut Window, cx: &mut Context<Self>| {
-                cx.emit(TitlebarEvent::Popover(PopoverKind::Recent));
+            let open = |bar: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
+                let anchor = popover_anchor(bar, window);
+                cx.emit(TitlebarEvent::Popover {
+                    kind: PopoverKind::Recent,
+                    anchor,
+                });
             };
             row = row.child(Self::button(spec, colors, open, cx));
         }
@@ -732,8 +750,12 @@ impl Titlebar {
                 enabled: attention.enabled,
                 hint: hints.attention.clone(),
             };
-            let open = |_: &mut Self, _: &mut Window, cx: &mut Context<Self>| {
-                cx.emit(TitlebarEvent::Popover(PopoverKind::Attention));
+            let open = |bar: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
+                let anchor = popover_anchor(bar, window);
+                cx.emit(TitlebarEvent::Popover {
+                    kind: PopoverKind::Attention,
+                    anchor,
+                });
             };
             row = row.child(Self::button(spec, colors, open, cx));
         }
@@ -810,9 +832,16 @@ impl Titlebar {
                 enabled: state.enabled,
                 hint,
             };
-            let click = move |bar: &mut Self, _: &mut Window, cx: &mut Context<Self>| match action {
-                Some(action) => bar.action(action),
-                None => cx.emit(TitlebarEvent::Popover(PopoverKind::CustomCommands)),
+            let click = move |bar: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
+                if let Some(action) = action {
+                    bar.action(action);
+                } else {
+                    let anchor = popover_anchor(bar, window);
+                    cx.emit(TitlebarEvent::Popover {
+                        kind: PopoverKind::CustomCommands,
+                        anchor,
+                    });
+                }
             };
             row = row.child(Self::button(spec, colors, click, cx));
         }

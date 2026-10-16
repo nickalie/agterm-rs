@@ -156,7 +156,7 @@ impl Windows {
         for id in &plan.close {
             if let Some(ui) = self.shown.remove(id) {
                 core.set_window_state(*id, None);
-                if ui.handle.update(cx, |view, window, _| view.close(window)).is_err() {
+                if ui.handle.update(cx, |view, window, cx| view.close(window, cx)).is_err() {
                     tracing::debug!(window = %id, "the closed window was gone already");
                 }
             }

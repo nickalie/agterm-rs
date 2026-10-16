@@ -5,13 +5,13 @@
 //! Each needs the window, the sidebar or a dialog: full screen and the delete confirmation are carried out here on the
 //! registered window ([`crate::keymap_dispatch::register_window`]); the window close goes to the model; the session
 //! close confirmation, the session and workspace renames, Delete Workspace and Open Directory… go to the window's
-//! sidebar ([`WindowView::sidebar`]); Rename Window waits for its dialog (plan Tasks 21, 26), logged until then.
+//! sidebar ([`WindowView::sidebar`]); Rename Window and Delete Window are alerts over their window ([`crate::modal`]).
 
 use agterm_core::app_actions::FrontendAction;
 use agterm_core::pane_env::uuid_string;
 use agterm_proto::command::WindowCmd;
 use agterm_proto::{Args, Command, Request};
-use gpui_kit::{App, PromptButton, PromptLevel};
+use gpui_kit::App;
 use uuid::Uuid;
 
 use crate::keymap_dispatch::{self, KeyOrigin};
@@ -52,9 +52,7 @@ pub fn perform(poster: &Poster, action: FrontendAction, close_grace: bool, cx: &
                 sidebar.open_directory(workspace, root, cx);
             });
         }
-        other @ FrontendAction::RenameWindow { .. } => {
-            tracing::info!(?other, "this action waits for its dialog");
-        }
+        FrontendAction::RenameWindow { window, name } => rename_window(poster, window, &name, cx),
     }
 }
 
@@ -92,24 +90,69 @@ fn delete_window(poster: &Poster, window: Uuid, name: &str, sessions: usize, clo
     let Some(handle) = keymap_dispatch::window_of(KeyOrigin::Window(window)) else {
         return;
     };
-    let heading = format!("Delete “{name}”?");
-    let body = delete_body(sessions, close_grace);
-    let answer = handle.update(cx, |_, window, cx| {
-        window.prompt(
-            PromptLevel::Warning,
-            &heading,
-            Some(&body),
-            &[PromptButton::cancel("Cancel"), PromptButton::ok("Delete")],
+    let spec = crate::modal::AlertSpec::confirm(
+        format!("Delete “{name}”?"),
+        delete_body(sessions, close_grace),
+        "Delete",
+    );
+    let shown = handle.update(cx, |_, window, cx| {
+        crate::modal::open_alert(
+            window,
+            spec,
+            move |answer, _, _| {
+                if answer.button == 1 {
+                    delete();
+                }
+            },
             cx,
-        )
+        );
     });
-    let Ok(answer) = answer else { return };
-    cx.spawn(async move |_| {
-        if matches!(answer.await, Ok(1)) {
-            delete();
-        }
-    })
-    .detach();
+    if shown.is_err() {
+        tracing::debug!(%window, "the window closed before its delete confirmation");
+    }
+}
+
+/// Rename Window's alert (upstream's `renameActiveWindow`, the GTK build's dialog): a field holding the name, all of it
+/// selected; OK (Return) commits it through `window.rename`, Cancel (Escape) keeps the name.
+#[must_use]
+pub fn rename_alert(name: &str) -> crate::modal::AlertSpec {
+    crate::modal::AlertSpec {
+        heading: "Rename Window".to_owned(),
+        body: "Enter a new name for this window.".to_owned(),
+        buttons: vec![
+            crate::modal::AlertButton::cancel("Cancel"),
+            crate::modal::AlertButton::plain("OK").as_default().suggested(),
+        ],
+        check: None,
+        field: Some(name.to_owned()),
+    }
+}
+
+/// Rename Window: [`rename_alert`] over the window, committed through `window.rename`.
+fn rename_window(poster: &Poster, window: Uuid, name: &str, cx: &mut App) {
+    let Some(handle) = keymap_dispatch::window_of(KeyOrigin::Window(window)) else {
+        return;
+    };
+    let poster = poster.clone();
+    let spec = rename_alert(name);
+    let shown = handle.update(cx, |_, root, cx| {
+        crate::modal::open_alert(
+            root,
+            spec,
+            move |answer, _, _| {
+                let Some(name) = answer.text.filter(|_| answer.button == 1) else {
+                    return;
+                };
+                state::post(&poster, move |state: &mut AppState| {
+                    state.window_command(WindowCmd::Rename, window, Some(name));
+                });
+            },
+            cx,
+        );
+    });
+    if shown.is_err() {
+        tracing::debug!(%window, "the window closed before its rename");
+    }
 }
 
 /// Upstream's `confirmDelete` text.
