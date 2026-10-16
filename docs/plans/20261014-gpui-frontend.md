@@ -1969,10 +1969,59 @@ Port the placement rendering from qwertty-term (MIT, attribution).
 **Files:**
 - Create: `crates/agterm-gpui/src/settings/` (one module per page)
 
-- [ ] the six settings pages of the GTK build per upstream (theme picker with light/dark, fonts, keymap and hooks
+- [x] the six settings pages of the GTK build per upstream (theme picker with light/dark, fonts, keymap and hooks
       editors entry points, …), round-trips through core
-- [ ] tests (headless): each page's controls write and read back through core
-- [ ] gates + conformance — must pass before Task 26
+- [x] tests (headless): each page's controls write and read back through core
+- [x] gates + conformance — must pass before Task 26
+- result (2026-10-16):
+  - ➕ Files: `src/settings.rs` (the window, its view, snapshot, edits), `src/settings/{form,draw,general,appearance,
+    interface,notifications,agent_status,key_mapping,tests}.rs`, `src/folder_chooser.rs` (the sidebar's portal chooser
+    moved out and shared; GPUI's platform prompt off Linux); Modify: `src/{app,lib,sidebar,state,titlebar,windows}.rs`,
+    `docs/linux-ui-checklist.md`. No core change: every setting already goes through `Core::change_settings`.
+  - **Window** (`settings.rs`): upstream's Settings scene — a window of its own (`SettingsWindow`, owned by `Windows`
+    beside the quick terminal), 540x680, not resizable, titled Settings, client-decorated on Linux with gpui-kit's
+    `TitleBar` (the platform's title bar elsewhere), opening on General; a second open raises it. Opened through
+    `AppState::open_settings` → `FrontendWork::settings` → `Windows::present_settings` (Task 26's app menu item calls
+    it; there is no keymap action, as in the GTK build and upstream).
+  - **Pages** (one module each, upstream's order and labels): a page describes its sections and rows from a `Snapshot`
+    of the core (`form.rs`: `Section`, `Item`, `Control` — toggle, picker, stepper, slider, path, glyph, diagnostics,
+    button, hint), so a test reads the page as the window draws it; `draw.rs` turns them into elements in the chrome's
+    colors: a glyph-over-label tab strip, scrolling grouped boxes, gpui-kit switches, sliders, color pickers and popup
+    menus (the stored row checked; a menu past 12 rows scrolls), the app's native buttons and steppers (− / + greyed at
+    the bounds), upstream's ids as element ids. Interface lays its element toggles two per row as upstream; hints are
+    caption rows (`settings-restore-restart-hint` is now named, which the GTK build could not); the shape picker shows
+    each status's tinted silhouette in upstream's 80 px column; the font picker lists the system's monospaced families
+    (fontdb, read once per run off the main thread); a picked sound previews through the throttled bell.
+  - **Round trip**: an edit posts one `SettingsChange` (or a Reload, or a directory chooser whose pick is one) through
+    `Edits` to the core and settles; `Windows::sync` hands the open window a fresh snapshot after every task, so every
+    control reads back what the core holds and a change made elsewhere (a command, a config reload, a light/dark flip)
+    shows at once; the stateful controls (sliders, color wells) are reset from the snapshot after every edit, so one the
+    core leaves unchanged snaps back (the GTK build's `invalidate`).
+  - Tests (`settings/tests.rs`, 26): the tabs and every upstream control id; rows appearing with the settings that need
+    them; pickers, diagnostics, sliders, colors, chooser starts; **every editable row of every page, under default and
+    under everything-shown settings, edited through the core and read back** (and `settings.json` equal to the core's
+    settings); the buttons (Reset, Use Default, both Reloads over a broken file); in GPUI's test window over a real core
+    with its own state dir: tabs, a switch click, steppers and their bound, a popup menu pick by keyboard (and a sound
+    pick), a button, a slider moved and moved back by a change elsewhere, a slider snapping back after an unchanged
+    edit, a picked color and Reset, `browser.links` and a dark flip showing in the open window, the window opened once,
+    raised, followed and forgotten once closed. No test presses Choose… (the desktop's chooser).
+  - Gates: fmt, clippy (workspace, all targets and features), lint-report (10 expects, none added),
+    check-tracing-features, `vendor-gpui.sh --check`, `cargo test --workspace` under Xvfb 4168 passed, 0 failed, 8
+    ignored; the settings tests 5 times in a row. GPUI conformance ratchet-only with `--also
+    tests/protocol/test_font_theme.py --also-k "settings or theme or font or flagged or links or keymap or hooks"`: 610
+    passed, 0 failed, 0 skipped; ratchet held (608) and grew by 2 (`test_cli_output.py::test_keymap`,
+    `test_keymap_hooks.py::test_run_starts_the_command_for_the_addressed_session`, which the selector brought in) to
+    610. The Settings UI tests (`tests/ui/test_settings.py`) need a UI driver, which Linux has none of; no capability
+    claimed. No GTK conformance run: no crate the GTK binary links changed.
+  - Decisions: a window of its own rather than the GTK build's dialog over the frontmost window (upstream's scene); the
+    plan's "keymap and hooks editors entry points" read as upstream's Key Mapping page (directory, diagnostics,
+    Reloads) — upstream's page has no Edit buttons, Edit Keymap/Hooks stay the palette's (and Task 26's menu's) rows; no
+    search field (upstream's tabs and pickers have none; the GTK dialog's was libadwaita's); fixed text sizes as
+    upstream's form (the Interface font size is the palettes' only).
+  - Deviations: paths are not selectable text (GPUI text has no selection); the theme and font menus scroll rather
+    than search (the GTK combo rows searched past ten entries).
+  - Later tasks build on: `AppState::open_settings` (Task 26's Settings… item), `folder_chooser::choose`,
+    `settings::SettingsIcons` in `titlebar::Icons`.
 
 ### Task 26: App menu, dashboard, zoom, windows and restore
 

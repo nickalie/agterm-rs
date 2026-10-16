@@ -102,13 +102,16 @@ gpui_kit::assets::icon_assets!(
     ]
 );
 
-/// The app's assets: the bar's glyphs, then gpui-kit's component icons.
+/// The app's assets: the bar's glyphs, the Settings window's, then gpui-kit's component icons.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Icons;
 
 impl AssetSource for Icons {
     fn load(&self, path: &str) -> gpui_kit::Result<Option<Cow<'static, [u8]>>> {
-        match BarIcons.load(path)? {
+        if let Some(bytes) = BarIcons.load(path)? {
+            return Ok(Some(bytes));
+        }
+        match crate::settings::SettingsIcons.load(path)? {
             Some(bytes) => Ok(Some(bytes)),
             None => gpui_kit::assets::Assets::new("").load(path),
         }
@@ -116,6 +119,7 @@ impl AssetSource for Icons {
 
     fn list(&self, path: &str) -> gpui_kit::Result<Vec<SharedString>> {
         let mut listed = BarIcons.list(path)?;
+        listed.extend(crate::settings::SettingsIcons.list(path)?);
         listed.extend(gpui_kit::assets::Assets::new("").list(path)?);
         listed.sort();
         listed.dedup();

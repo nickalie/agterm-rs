@@ -349,6 +349,10 @@ fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
         }
     }
     land_alerts(shell, state, &work, cx);
+    if work.settings {
+        let opening = crate::settings::Opening::of(state.read(cx));
+        shell.windows.borrow_mut().present_settings(opening, cx);
+    }
     for url in &work.open_urls {
         cx.open_url(url);
     }
