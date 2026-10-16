@@ -1,5 +1,7 @@
 //! A sandbox per test, isolated from the user's desktop and live agterm (CLAUDE.md > Never touch the user's running
-//! agterm): a fresh root under `/tmp`, a private session bus, its own state dir, socket and application id, and
+//! agterm): a fresh root under `/tmp`, a private session bus and a private "system" bus (`DBUS_SYSTEM_BUS_ADDRESS`, so
+//! the app's `NetworkManager` and logind sources never reach the machine's), its own state dir, socket and application
+//! id, and
 //! every child's environment built from scratch, so no `AGTERM_*`, `ZMX_*`, `WAYLAND_DISPLAY`, `DISPLAY` or
 //! `NIRI_SOCKET` of the session the tests run in reaches it. Displays are private too: a headless weston, a private
 //! Xvfb, or a niri nested in that weston; GPUI on them renders through Mesa's lavapipe only.
@@ -103,6 +105,11 @@ impl Sandbox {
             "DBUS_SESSION_BUS_ADDRESS".to_owned(),
             format!("unix:path={}", bus.display()),
         );
+        let system_bus = path.join("run/system_bus");
+        env.insert(
+            "DBUS_SYSTEM_BUS_ADDRESS".to_owned(),
+            format!("unix:path={}", system_bus.display()),
+        );
         let mut sandbox = Self {
             root,
             app_id,
@@ -111,7 +118,8 @@ impl Sandbox {
             helpers: Vec::new(),
             children: Vec::new(),
         };
-        sandbox.start_bus(&bus)?;
+        sandbox.start_bus(&bus, "dbus.conf")?;
+        sandbox.start_bus(&system_bus, "system-dbus.conf")?;
         Ok(sandbox)
     }
 
@@ -125,6 +133,11 @@ impl Sandbox {
 
     pub fn bus_address(&self) -> &str {
         &self.env["DBUS_SESSION_BUS_ADDRESS"]
+    }
+
+    /// The private bus the app takes for the system bus.
+    pub fn system_bus_address(&self) -> &str {
+        &self.env["DBUS_SYSTEM_BUS_ADDRESS"]
     }
 
     pub fn display(&self) -> &Display {
@@ -146,6 +159,11 @@ impl Sandbox {
         assert!(
             bus.starts_with(&format!("unix:path={root}/")),
             "the bus {bus} is not the sandbox's"
+        );
+        let system = &env["DBUS_SYSTEM_BUS_ADDRESS"];
+        assert!(
+            system.starts_with(&format!("unix:path={root}/")) && system == self.system_bus_address(),
+            "the system bus {system} is not the sandbox's"
         );
         assert!(
             env["XDG_RUNTIME_DIR"].starts_with(&root),
@@ -170,8 +188,8 @@ impl Sandbox {
         assert_ne!(env["AGTERM_STATE_DIR"], "", "no state dir");
     }
 
-    fn start_bus(&mut self, socket: &Path) -> TestResult {
-        let config = self.path("dbus.conf");
+    fn start_bus(&mut self, socket: &Path, config: &str) -> TestResult {
+        let config = self.path(config);
         std::fs::write(&config, DBUS_CONFIG.replace("{path}", &socket.to_string_lossy()))?;
         let child = self
             .command("dbus-daemon")

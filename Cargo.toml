@@ -124,6 +124,9 @@ wayland-protocols = { version = "0.32.13", features = ["client", "staging"] }
 x11rb = "0.13.2"
 # agterm-gpui's SIGTERM quit on a thread of its own (GPUI installs no signal handling; the GTK build's is GLib's).
 signal-hook = "0.4"
+# agterm-gpui's watch on `remotes.conf` (the GTK build's is a `gio::FileMonitor`): the platform's recommended watcher,
+# inotify on Linux, FSEvents on macOS, ReadDirectoryChangesW on Windows. The version the lock already carries.
+notify = "8.2"
 
 # Inherited by every crate (`[lints] workspace = true`) except the generated -sys crates: `agterm-ghostty-sys` and
 # `agterm-ghostty-vt-sys` (bindgen), `agterm-wpe-sys`, `agterm-wpe-platform-sys` and `agterm-wpe-javascriptcore-sys`

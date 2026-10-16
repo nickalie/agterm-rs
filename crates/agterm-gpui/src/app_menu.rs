@@ -1,9 +1,9 @@
 //! The app menu (upstream's `agtermApp+Menus.swift`; port of the GTK build's `app_menu.rs`): File, View, Navigate and
 //! Help as submenus of the window's menu button at the title bar's trailing end, every item named after its palette
 //! row or built-in action, enabled by the window's palette context (the one predicate the palette and the keymap
-//! read), and every keyed item showing its resolved chord. The app's own items close the menu: Settings… and Quit
-//! (Linux has no global menu bar, so the in-window menu is their only mouse path). Reset Live Sessions… joins them with
-//! its dialog (Task 27).
+//! read), and every keyed item showing its resolved chord. The app's own items close the menu: Settings…, Reset Live
+//! Sessions… while live sessions are both configured and running (upstream's Quit group; its dialogs and the reopen
+//! are `zmx_runtime.rs`'s), and Quit (Linux has no global menu bar, so the in-window menu is their only mouse path).
 //!
 //! File also carries upstream's live parts ([`agterm_core::menu_lists`]): Open Window, listing the library with the open
 //! windows checked; Open Recent, the closed sessions and workspaces; and Reveal in Files. Help holds the developer
@@ -37,6 +37,9 @@ use crate::state::{AppState, Poster, post};
 pub const DEVELOPER_DOCS_URL: &str = "https://agterm.com/docs#agtermctl";
 /// The website the About alert links (upstream's About panel).
 pub const WEBSITE_URL: &str = "https://agterm.com";
+
+/// Reset Live Sessions…'s id (the GTK build's action name).
+pub const RESET_LIVE_SESSIONS: &str = "reset-live-sessions";
 
 /// One menu item: the palette row it runs, or a built-in with no palette row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,6 +220,7 @@ pub enum MenuAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppAction {
     Settings,
+    ResetLiveSessions,
     Quit,
     DeveloperDocs,
     InstallCli,
@@ -326,13 +330,21 @@ impl AppMenu {
             })
             .collect();
         menus.push(("Help".to_owned(), help()));
-        Self {
-            menus,
-            app: vec![
-                MenuItem::new("settings", "Settings…", MenuAction::App(AppAction::Settings)),
-                MenuItem::new("quit", "Quit", MenuAction::App(AppAction::Quit)),
-            ],
+        let mut app = vec![MenuItem::new(
+            "settings",
+            "Settings…",
+            MenuAction::App(AppAction::Settings),
+        )];
+        // shares Quit's section, as upstream's `CommandGroup(before: .appTermination)`: the reset quits and reopens
+        if core.live_reset_menu_visible() {
+            app.push(MenuItem::new(
+                RESET_LIVE_SESSIONS,
+                "Reset Live Sessions…",
+                MenuAction::App(AppAction::ResetLiveSessions),
+            ));
         }
+        app.push(MenuItem::new("quit", "Quit", MenuAction::App(AppAction::Quit)));
+        Self { menus, app }
     }
 
     /// Every item, the submenus' and the app's, in menu order with its top-level menu's title (`""` for the app's).
@@ -587,6 +599,7 @@ fn run_app(action: AppAction, poster: &Poster, window: &mut Window, cx: &mut App
     let handle = window.window_handle();
     match action {
         AppAction::Settings => post(poster, AppState::open_settings),
+        AppAction::ResetLiveSessions => post(poster, AppState::reset_live_sessions),
         AppAction::Quit => post(poster, AppState::quit_from_menu),
         AppAction::DeveloperDocs => cx.open_url(DEVELOPER_DOCS_URL),
         AppAction::InstallCli => crate::integrations::run_cli(handle, cx),

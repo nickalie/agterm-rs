@@ -230,6 +230,10 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
         post(&poster, AppState::request_welcome);
     }
     forward_bus_requests(launch.requests, poster.clone(), cx);
+    // `remotes.conf` is read at launch (`install_launch_hosts`); from here its edits are followed, and the remote links
+    // retried when the network comes back or the machine wakes
+    post(&poster, AppState::watch_remotes);
+    crate::remote::observe_links(poster.clone());
     if let Some(portal) = portal
         && let Err(error) = crate::appearance::follow_into(portal, poster.clone())
     {
@@ -354,6 +358,9 @@ fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
     if let Some(message) = work.quit_prompt.as_deref() {
         land_quit_prompt(shell, state, message, cx);
     }
+    if let Some(alert) = &work.live_reset {
+        land_live_reset(shell, state, alert, cx);
+    }
     if work.settings {
         let opening = crate::settings::Opening::of(state.read(cx));
         shell.windows.borrow_mut().present_settings(opening, cx);
@@ -423,6 +430,26 @@ fn land_quit_prompt(shell: &Shell, state: &Entity<AppState>, message: &str, cx: 
     }
 }
 
+/// Shows Reset Live Sessions…'s `alert` over the frontmost window (the menu that asked is in one).
+fn land_live_reset(shell: &Shell, state: &Entity<AppState>, alert: &crate::zmx_runtime::ResetAlert, cx: &mut App) {
+    let poster: Poster = Arc::downgrade(&shell.posting);
+    let frontmost = shell
+        .windows
+        .borrow()
+        .frontmost(&state.read(cx).core)
+        .map(|ui| ui.handle);
+    let shown = frontmost.is_some_and(|handle| {
+        handle
+            .update(cx, |_, window, cx| {
+                crate::zmx_runtime::present(alert, poster.clone(), window, cx);
+            })
+            .is_ok()
+    });
+    if !shown {
+        tracing::info!(?alert, "reset live sessions: no window to ask over");
+    }
+}
+
 /// Saves, then stops the main loop and the control channel; once. Requests already queued are answered as shutting
 /// down. The quit save runs first, while every terminal still lives (upstream's `applicationWillTerminate`).
 fn shut_down(shell: &Shell, cx: &mut App) {
@@ -432,8 +459,9 @@ fn shut_down(shell: &Shell, cx: &mut App) {
     shell.state.update(cx, |state, _| {
         state.save_on_quit();
         tracing::info!("quit: the state is saved");
+        // a confirmed live sessions reset is armed for the next launch, which this app then opens itself
         if state.core.arm_live_reset_on_quit() {
-            tracing::warn!("quit: the live sessions reset is armed; this build does not relaunch itself yet");
+            crate::zmx_runtime::spawn_relauncher();
         }
     });
     shell.main_loop.close();
