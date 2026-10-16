@@ -6,9 +6,14 @@
 //! The window's content is a column: the title bar (`titlebar.rs`), then the sidebar's place (Task 19) beside the
 //! deck, all on the chrome's background (`chrome.rs`); a window the client decorates gets resize handles along its
 //! free edges. Over it sit the window's modal layers ([`Layer`]), in the GTK build's order: the scrollback search bar, the
-//! GUI ask, the native picker, the command palette, the Ctrl-Tab switcher and the title bar's popovers; each attaches its
-//! view to its layer ([`WindowView::set_layer`]), drawn over the whole window while attached. The window's alerts
-//! ([`crate::modal`]) come above everything.
+//! Settings popup, the GUI ask, the native picker, the command palette, the Ctrl-Tab switcher and the title bar's
+//! popovers; each attaches its view to its layer ([`WindowView::set_layer`]), drawn over the whole window while
+//! attached. The window's alerts ([`crate::modal`]) come above everything.
+//!
+//! The Settings popup ([`crate::settings`]) comes up over the window Settings… was asked from: centered over a dimmed
+//! layer that takes every click, a click outside the panel closing it as Escape and its close button do. It takes the
+//! keyboard when it opens and keeps it as a modal does (a GUI ask or a picker arriving over it takes it, and gives it
+//! back to it when answered; so does an alert); once it closes the shown terminal has the keyboard back.
 //!
 //! The GUI ask ([`crate::ask_dialog`]) is the window's own: one comes up with the model's modal slot, takes the
 //! keyboard, and is drawn over its anchor while the rest of the window takes no clicks. So is the native picker
@@ -33,8 +38,9 @@ use agterm_core::model::{AppStore, Session, WindowLibrary};
 use agterm_core::titlebar::UNTITLED;
 use agterm_core::{Core, WindowRequest, WindowSize, WindowState};
 use gpui_kit::{
-    AnyElement, AnyView, App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    KeyUpEvent, ModifiersChangedEvent, ParentElement as _, Render, Styled as _, Subscription, Window, div, px, size,
+    AnyElement, AnyView, App, AppContext as _, Context, DismissEvent, Entity, FocusHandle, Focusable as _,
+    InteractiveElement as _, IntoElement, KeyUpEvent, ModifiersChangedEvent, MouseButton, ParentElement as _, Render,
+    Styled as _, Subscription, Window, div, px, size,
 };
 use uuid::Uuid;
 
@@ -47,6 +53,7 @@ use crate::picker::Picker;
 use crate::popovers::Popovers;
 use crate::search::SearchBar;
 use crate::session_switcher::SessionSwitcher;
+use crate::settings::{Opening, SettingsView};
 use crate::sidebar::Sidebar;
 use crate::state::{AppState, FirstFocus, Poster, post};
 use crate::terminal::input::KeyStroke;
@@ -94,6 +101,7 @@ pub fn terminal_area_inset(core: &Core, window: Uuid) -> f64 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Layer {
     Search,
+    Settings,
     Ask,
     Picker,
     Palette,
@@ -165,6 +173,8 @@ pub struct WindowView {
     picker: Option<Entity<Picker>>,
     /// The command palette while this window draws it.
     palette: Option<Entity<Palette>>,
+    /// The Settings popup while it is up, and the subscription that takes it down when it asks.
+    settings: Option<(Entity<SettingsView>, Subscription)>,
     search: Entity<SearchBar>,
     switcher: Entity<SessionSwitcher>,
     /// Whether an alert was up at the last sync: the GUI ask it covered takes the keyboard back once it goes.
@@ -256,6 +266,7 @@ impl WindowView {
             ask: None,
             picker: None,
             palette: None,
+            settings: None,
             search,
             switcher,
             alert_up: false,
@@ -420,6 +431,59 @@ impl WindowView {
         self.palette.as_ref()
     }
 
+    /// The Settings popup while it is up over this window.
+    #[must_use]
+    pub fn settings(&self) -> Option<&Entity<SettingsView>> {
+        self.settings.as_ref().map(|(view, _)| view)
+    }
+
+    /// Opens the Settings popup over the window on what the core held (`opening`), taking the keyboard; one already up
+    /// takes the keyboard back instead.
+    pub fn open_settings(&mut self, opening: Opening, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.is_none() {
+            let view = SettingsView::open(opening, window, cx);
+            let closing = cx.subscribe_in(&view, window, |this, _, _: &DismissEvent, window, cx| {
+                this.close_settings(window, cx);
+            });
+            self.set_layer(Layer::Settings, Some(view.clone().into()), cx);
+            self.settings = Some((view, closing));
+            // the deck stands its focus down while the popup holds the keyboard
+            post(&self.poster, |_| {});
+        }
+        self.focus_settings(window, cx);
+    }
+
+    /// Gives the keyboard to the Settings popup when it is up.
+    pub fn focus_settings(&self, window: &mut Window, cx: &mut App) {
+        if let Some(view) = self.settings() {
+            let focus = view.read(cx).focus_handle(cx);
+            window.focus(&focus, cx);
+        }
+    }
+
+    /// Takes the Settings popup down, giving the keyboard back to what holds it without it (the shown terminal).
+    pub fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.take().is_none() {
+            return;
+        }
+        self.set_layer(Layer::Settings, None, cx);
+        self.focus_terminal(window, cx);
+        post(&self.poster, |_| {});
+    }
+
+    /// Hands the Settings popup, while it is up, what the core holds now.
+    pub fn sync_settings(&self, snapshot: crate::settings::Snapshot, window: &mut Window, cx: &mut App) {
+        if let Some(view) = self.settings() {
+            view.update(cx, |view, cx| view.sync(snapshot, window, cx));
+        }
+    }
+
+    /// Whether the Settings popup holds the window's keyboard.
+    fn settings_holds_keyboard(&self, window: &Window, cx: &App) -> bool {
+        self.settings()
+            .is_some_and(|view| view.read(cx).holds_keyboard(window, cx))
+    }
+
     /// The window's scrollback search bar.
     #[must_use]
     pub fn search_bar(&self) -> &Entity<SearchBar> {
@@ -434,6 +498,10 @@ impl WindowView {
 
     /// The window's own key handling (module docs); whether it took the press.
     fn key_down(&mut self, stroke: &KeyStroke, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.settings_holds_keyboard(window, cx) {
+            // the popup keeps every key, Ctrl+Tab's too
+            return false;
+        }
         if let Some(key) = crate::session_switcher::switch_key(stroke)
             && self.switcher.update(cx, |switcher, cx| switcher.press(key, cx))
         {
@@ -568,10 +636,13 @@ impl WindowView {
         self.layers.iter().any(|(known, _)| *known == layer)
     }
 
-    /// Closes the window for good: the model closed it, and its terminals with it. Its alerts are cancelled.
-    pub fn close(&self, window: &mut Window, cx: &mut App) {
+    /// Closes the window for good: the model closed it, and its terminals with it. Its alerts are cancelled and its
+    /// Settings popup goes with it.
+    pub fn close(&mut self, window: &mut Window, cx: &mut App) {
         crate::keymap_dispatch::unregister_window(window.window_handle());
         self.closing.set(true);
+        self.settings = None;
+        self.layers.retain(|(layer, _)| *layer != Layer::Settings);
         crate::modal::dismiss_alerts(window, cx);
         window.remove_window();
     }
@@ -582,8 +653,8 @@ impl WindowView {
         self.focus_terminal(window, cx);
     }
 
-    /// Gives the keyboard to what should hold it while the window has it: the window's alert, picker, GUI ask, palette
-    /// or popover while one is up, else the shown terminal (a new window's first focus, which the window manager gives the window itself:
+    /// Gives the keyboard to what should hold it while the window has it: the window's alert, picker, GUI ask, palette,
+    /// popover or Settings popup while one is up, else the shown terminal (a new window's first focus, which the window manager gives the window itself:
     /// a new window maps without an activation request of its own).
     pub fn focus_terminal(&self, window: &mut Window, cx: &mut App) {
         if crate::modal::alert_open(window.window_handle(), cx) {
@@ -599,7 +670,8 @@ impl WindowView {
             .or_else(|| {
                 let popovers = self.popovers.read(cx);
                 popovers.is_open().then(|| popovers.focus_handle().clone())
-            });
+            })
+            .or_else(|| self.settings().map(|view| view.read(cx).focus_handle(cx)));
         if let Some(handle) = held.or_else(|| self.deck.read(cx).focus_target(cx)) {
             window.focus(&handle, cx);
         }
@@ -623,7 +695,12 @@ impl WindowView {
         let alert = crate::modal::alert_open(window.window_handle(), cx);
         let alert_closed = std::mem::replace(&mut self.alert_up, alert) && !alert;
         self.sync_modals(core, alert_closed, window, cx);
-        let modal = dialog || alert || self.popovers.read(cx).is_open();
+        let popover = self.popovers.read(cx).is_open();
+        if alert_closed && !dialog && !popover {
+            // an alert that closed over the Settings popup gives it the keyboard back
+            self.focus_settings(window, cx);
+        }
+        let modal = dialog || alert || popover || self.settings.is_some();
         let sidebar = self.sidebar.read(cx);
         // the sidebar's row menu or the app menu holds the keyboard while it is open
         let held = sidebar.menu_open() || self.titlebar.read(cx).menu_open();
@@ -746,6 +823,7 @@ impl Render for WindowView {
             .map(|(layer, view)| match layer {
                 Layer::Ask => self.render_ask(view, cx),
                 Layer::Search => self.render_search(view, window, cx),
+                Layer::Settings => render_settings(view, window, cx),
                 _ => div().absolute().inset_0().child(view.clone()).into_any_element(),
             })
             .collect();
@@ -783,6 +861,26 @@ impl Render for WindowView {
             .children(alert)
             .child(crate::chrome::resize_edges(window))
     }
+}
+
+/// The Settings popup centered over a dimmed layer that takes every click; one outside the panel closes it.
+fn render_settings(view: &AnyView, window: &Window, cx: &Context<WindowView>) -> AnyElement {
+    let panel = crate::settings::panel_size(window.viewport_size());
+    div()
+        .id("settings-layer")
+        .absolute()
+        .inset_0()
+        .occlude()
+        .bg(crate::modal::dim())
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, window, cx| this.close_settings(window, cx)),
+        )
+        .child(div().w(panel.width).h(panel.height).child(view.clone()))
+        .into_any_element()
 }
 
 /// The window's own keys (module docs), which the key monitor runs first: whether the agterm window `window` took the

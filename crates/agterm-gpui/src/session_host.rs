@@ -213,7 +213,7 @@ pub fn launcher(host: Rc<RefCell<Host>>) -> Launcher {
     })
 }
 
-/// The settings' ghostty config path, which the Settings window writes and the config loads last.
+/// The settings' ghostty config path, which the Settings popup writes and the config loads last.
 #[must_use]
 pub fn settings_config_path(env: &dyn Env) -> PathBuf {
     paths::ghostty_settings_config_path(env)

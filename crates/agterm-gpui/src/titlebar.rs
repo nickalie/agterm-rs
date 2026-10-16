@@ -112,7 +112,7 @@ gpui_kit::assets::icon_assets!(
     ]
 );
 
-/// The app's assets: the bar's glyphs, the Settings window's, then gpui-kit's component icons.
+/// The app's assets: the bar's glyphs, the Settings popup's, then gpui-kit's component icons.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Icons;
 

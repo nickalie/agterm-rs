@@ -1,7 +1,7 @@
 //! What a page is made of: a list of [`Section`]s (upstream's grouped `Form` sections), each a titled box of
 //! [`Item`]s, one control per row as in upstream's `SwiftUI` forms, the label leading and the control trailing; a hint
 //! is a caption row under the control it explains. A page describes its controls from the snapshot (what each shows,
-//! whether it takes input, the edit each new value makes), so a test reads the page as the window draws it
+//! whether it takes input, the edit each new value makes), so a test reads the page as the popup draws it
 //! (`super::draw`) and drives an edit without a pointer.
 
 use std::ops::RangeInclusive;
@@ -103,7 +103,7 @@ pub enum Control {
         range: RangeInclusive<f64>,
         set: Setter<f64>,
     },
-    /// A slider (upstream's `Slider` with its trailing readout); its position lives in the window's slider state.
+    /// A slider (upstream's `Slider` with its trailing readout); its position lives in the popup's slider state.
     Slider {
         key: SliderKey,
         value: f64,
@@ -117,7 +117,7 @@ pub enum Control {
         buttons: Vec<Action>,
     },
     /// An agent status's glyph row: its color well and its shape picker (upstream's `glyphRow`).
-    /// The well's color lives in the window's color picker state, the shapes' tint in [`Picker::shapes`].
+    /// The well's color lives in the popup's color picker state, the shapes' tint in [`Picker::shapes`].
     Glyph { status: AgentStatus, shape: Picker },
     /// A file's diagnostics, one line each, "No issues." when there are none.
     Diagnostics { lines: Vec<String> },
@@ -194,7 +194,7 @@ pub enum Run {
     },
 }
 
-/// The sliders, each with a state the window keeps.
+/// The sliders, each with a state the popup keeps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SliderKey {
     ScrollSpeed,

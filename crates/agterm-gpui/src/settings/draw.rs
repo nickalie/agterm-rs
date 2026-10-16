@@ -1,23 +1,23 @@
-//! How the window draws its pages ([`super::form`]): its own title bar where the client decorates, the tab strip
-//! (upstream's toolbar tabs: a glyph over a label, the shown one washed), and the shown page scrolling under it, each
-//! section a titled rounded box of rows separated by hairlines, in the chrome's colors.
+//! How the popup draws its pages ([`super::form`]): the native panel (`crate::modal::panel`) holding a title row with
+//! its close button, the tab strip (upstream's toolbar tabs: a glyph over a label, the shown one washed), and the shown
+//! page scrolling under it, each section a titled rounded box of rows separated by hairlines, in the chrome's colors.
 
 use std::rc::Rc;
 
 use agterm_core::chrome::Rgb;
 use agterm_core::model::StatusShape;
 use gpui_kit::assets::IconName;
+use gpui_kit::component::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::color_picker::ColorPicker;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::slider::Slider;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{Disableable as _, TitleBar};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, Bounds, Context, Decorations, Div, FontWeight, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, Pixels, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Window, canvas,
-    div, px, svg,
+    AnyElement, App, Bounds, Context, Div, FontWeight, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent,
+    MouseButton, ParentElement as _, Pixels, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
+    Window, canvas, div, px, svg,
 };
 
 use super::form::{Action, Control, Item, Picker, Section, SliderKey};
@@ -44,6 +44,10 @@ const MENU_HEIGHT: f32 = 380.;
 const LONG_MENU: usize = 12;
 /// A tab's glyph.
 const TAB_GLYPH: f32 = 20.;
+/// The title row's height.
+const HEADER_HEIGHT: f32 = 36.;
+/// The close button's side, and the space balancing it on the title's other side.
+const CLOSE_BUTTON: f32 = 24.;
 /// The opacity of secondary text: hints, a path not set, "No issues.", the labels of controls that take no input.
 const DIM: f64 = 0.55;
 /// A disabled control's opacity.
@@ -62,52 +66,75 @@ impl Look {
         crate::chrome::color(self.colors.foreground, alpha)
     }
 
-    fn background(&self) -> Hsla {
-        crate::chrome::color(self.colors.background, 1.0)
-    }
-
     /// The selected-state fill (libadwaita's accent, the app's suggested buttons').
     fn accent() -> Hsla {
         crate::chrome::color(modal::ACCENT, 1.0)
     }
 }
 
-/// The whole window.
-pub fn window(view: &SettingsView, window: &Window, cx: &mut Context<SettingsView>) -> impl IntoElement {
+/// The whole popup: the native panel, which holds the keyboard in the popup's key context (Escape closes it) and
+/// keeps its clicks from the layer around it (which closes it on one outside).
+pub fn panel(view: &SettingsView, cx: &mut Context<SettingsView>) -> impl IntoElement {
     let look = Look {
         colors: crate::chrome::current(cx),
         edits: view.edits.clone(),
     };
-    let client = matches!(window.window_decorations(), Decorations::Client { .. });
-    div()
+    modal::panel(look.colors)
         .id("settings")
         .debug_selector(|| "settings".to_owned())
+        .key_context(super::KEY_CONTEXT)
+        .track_focus(&view.focus)
+        .on_key_down(cx.listener(|view, event: &KeyDownEvent, _, cx| {
+            if modal::nav_key(&event.keystroke) == Some(modal::NavKey::Cancel) {
+                cx.stop_propagation();
+                view.dismiss(cx);
+            }
+        }))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .size_full()
         .flex()
         .flex_col()
-        .bg(look.background())
-        .text_color(look.ink(1.0))
         .text_size(px(TEXT))
-        .when(client, |root| root.child(title_bar(&look)))
+        .child(header(&look, cx))
         .child(tabs(view.tab, &look, cx))
         .child(page(view, &look))
 }
 
-/// The client-decorated window's title bar: the title and the window controls (gpui-kit's, which move the window and
-/// close it).
-fn title_bar(look: &Look) -> TitleBar {
-    TitleBar::new()
-        .bg(look.background())
-        .border_color(crate::chrome::separator(&look.colors))
+/// The title row: the title centered, the close button trailing.
+fn header(look: &Look, cx: &mut Context<SettingsView>) -> Div {
+    let close = div()
+        .id("settings-close")
+        .debug_selector(|| "settings-close".to_owned())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .size(px(CLOSE_BUTTON))
+        .rounded(px(6.))
+        .cursor_pointer()
+        .hover({
+            let hover = look.ink(0.12);
+            move |style| style.bg(hover)
+        })
+        .child(glyph(IconName::X, look.ink(0.75), px(14.)))
+        .on_click(cx.listener(|view, _, _, cx| view.dismiss(cx)));
+    div()
+        .flex()
+        .flex_row()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(HEADER_HEIGHT))
+        .px(px(8.))
+        .child(div().flex_shrink_0().w(px(CLOSE_BUTTON)))
         .child(
             div()
                 .flex_1()
                 .flex()
                 .justify_center()
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(look.ink(1.0))
                 .child(TITLE),
         )
+        .child(close)
 }
 
 /// The tab strip: every tab, the shown one washed.

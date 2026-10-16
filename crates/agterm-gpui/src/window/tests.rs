@@ -869,9 +869,10 @@ fn the_menus_settings_and_quit_reach_the_frontend(cx: &mut TestAppContext) {
     s.click("app-menu-button");
     s.click("app-menu-item-settings");
     s.settle();
-    assert!(
+    assert_eq!(
         s.state.take_frontend_work().settings,
-        "Settings… opens the Settings window"
+        Some(crate::settings::SettingsHost::Window(s.window)),
+        "Settings… opens the Settings popup over the menu's window"
     );
     s.click("app-menu-button");
     s.click("app-menu-item-quit");
@@ -1018,4 +1019,194 @@ fn the_librarys_hovers_and_menus_paint_in_the_chromes_dark_and_light(cx: &mut Te
         s.cx.simulate_keystrokes("escape");
         s.settle();
     }
+}
+
+// MARK: - the Settings popup
+
+impl Shell<'_> {
+    /// Opens the Settings popup over the window, as the landing of Settings… does.
+    fn open_settings(&mut self) {
+        let opening = crate::settings::Opening::of(&self.state);
+        self.view
+            .update_in(self.cx, |view, window, cx| view.open_settings(opening, window, cx));
+        self.settle();
+    }
+
+    fn settings(&mut self) -> Option<Entity<SettingsView>> {
+        self.view.read_with(self.cx, |view, _| view.settings().cloned())
+    }
+
+    /// Whether the Settings popup is up and holds the keyboard.
+    fn settings_held(&mut self) -> bool {
+        let Some(view) = self.settings() else {
+            return false;
+        };
+        self.cx.update(|window, cx| view.read(cx).holds_keyboard(window, cx))
+    }
+
+    fn settings_closed(&mut self) -> bool {
+        let layer = self.view.read_with(self.cx, |view, _| view.has_layer(Layer::Settings));
+        self.settings().is_none() && !layer && self.cx.debug_bounds("settings").is_none()
+    }
+}
+
+#[gpui_kit::test]
+fn the_settings_popup_opens_inside_its_window_holds_the_keyboard_and_escape_closes_it(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    s.with_keys();
+    assert!(s.terminal_focused());
+    s.click("app-menu-button");
+    s.click("app-menu-item-settings");
+    s.settle();
+    assert!(s.state.take_frontend_work().settings.is_some());
+    s.open_settings();
+    assert!(s.view.read_with(s.cx, |view, _| view.has_layer(Layer::Settings)));
+    // centered in the 800x500 window, upstream's 540 wide and shrunk to the window's height less the margins
+    let panel = s.cx.debug_bounds("settings").expect("the popup is drawn in the window");
+    assert_eq!((panel.size.width, panel.size.height), (px(540.), px(468.)));
+    assert_eq!(panel.center(), gpui_kit::point(px(400.), px(250.)));
+    assert!(s.cx.debug_bounds("settings-tab-general").is_some(), "its tabs");
+    assert!(
+        s.settings_held() && !s.terminal_focused(),
+        "the popup holds the keyboard"
+    );
+    // its keys are its own: no Ctrl-Tab walk, no keymap chord, nothing typed into the terminal
+    let switcher = s.view.read_with(s.cx, |view, _| view.switcher().clone());
+    s.cx.simulate_keystrokes("ctrl-tab");
+    assert!(!switcher.read_with(s.cx, |switcher, _| switcher.is_active()));
+    let chord = s
+        .state
+        .core
+        .keymap()
+        .equivalent(agterm_core::keymap::BuiltinAction::CommandPalette)
+        .cloned()
+        .expect("Command Palette has a chord");
+    let _ = crate::keymap_dispatch::take_fired();
+    s.cx.simulate_keystrokes(&keystroke(&chord));
+    s.settle();
+    assert!(
+        crate::keymap_dispatch::take_fired().is_empty(),
+        "the keymap is not reached"
+    );
+    assert!(s.state.core.palette_mode().is_none());
+    assert!(s.settings_held());
+    // the window's sync keeps the keyboard on it
+    s.settle();
+    assert!(s.settings_held() && !s.terminal_focused());
+    s.cx.simulate_keystrokes("escape");
+    s.settle();
+    assert!(s.settings_closed(), "Escape closed it");
+    assert!(s.terminal_focused(), "the terminal has the keyboard back");
+}
+
+#[gpui_kit::test]
+fn a_click_outside_the_settings_popup_closes_it_and_one_inside_does_not(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    s.open_settings();
+    s.click("settings-tab-appearance");
+    s.settle();
+    let view = s.settings().expect("a click inside keeps it up");
+    assert_eq!(
+        view.read_with(s.cx, |view, _| view.tab()),
+        crate::settings::Tab::Appearance
+    );
+    // nothing under the dimmed layer takes the click: the sidebar's row is not selected
+    let row = s.cx.debug_bounds("row:u").expect("the row is laid out").center();
+    s.cx.simulate_click(row, gpui_kit::Modifiers::default());
+    s.settle();
+    assert!(s.settings_closed(), "a click outside closed it");
+    assert_eq!(
+        s.active(),
+        s.session("var"),
+        "the click reached nothing under the layer"
+    );
+    assert!(s.terminal_focused());
+    // the close button closes it too
+    s.open_settings();
+    s.click("settings-close");
+    s.settle();
+    assert!(s.settings_closed() && s.terminal_focused());
+}
+
+#[gpui_kit::test]
+fn opening_settings_again_while_it_is_up_focuses_the_one_popup(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    s.open_settings();
+    let first = s.settings().expect("up").entity_id();
+    s.click("settings-tab-agent-status");
+    // the keyboard wandered off (to the terminal, as a pane's click would give it)
+    let deck = s.view.read_with(s.cx, |view, _| view.deck().clone());
+    s.cx.update(|window, cx| {
+        let target = deck.read(cx).focus_target(cx).expect("a terminal to focus");
+        window.focus(&target, cx);
+    });
+    assert!(!s.settings_held());
+    s.open_settings();
+    let again = s.settings().expect("still up");
+    assert_eq!(again.entity_id(), first, "the same popup");
+    assert_eq!(
+        again.read_with(s.cx, |view, _| view.tab()),
+        crate::settings::Tab::AgentStatus,
+        "on the tab it showed"
+    );
+    assert!(s.settings_held(), "holding the keyboard again");
+}
+
+#[gpui_kit::test]
+fn the_settings_popup_follows_the_core_gives_way_to_an_alert_and_goes_with_its_window(cx: &mut TestAppContext) {
+    use agterm_core::settings_model::{GeneralChange, SettingsChange};
+
+    let mut s = shell(cx);
+    s.open_settings();
+    s.state
+        .core
+        .change_settings(SettingsChange::General(GeneralChange::ConfirmCloseSession(false)));
+    let snapshot = crate::settings::Snapshot::of(&s.state.core, s.state.applied_dark());
+    s.view
+        .update_in(s.cx, |view, window, cx| view.sync_settings(snapshot, window, cx));
+    let shown = s
+        .settings()
+        .unwrap()
+        .read_with(s.cx, |view, _| view.snapshot().settings.confirm_close_session);
+    assert_ne!(shown, Some(true), "the popup no longer shows the seeded value");
+    assert_eq!(
+        shown,
+        s.state.core.settings().confirm_close_session,
+        "the popup shows what the core holds"
+    );
+    // an alert over it takes the keyboard, and gives it back once answered
+    let answers = Rc::default();
+    open_prompt(&mut s, &answers);
+    assert!(s.alert_open() && !s.settings_held());
+    s.cx.simulate_keystrokes("escape");
+    s.settle();
+    assert!(!s.alert_open());
+    assert!(
+        s.settings().is_some() && s.settings_held(),
+        "the popup has the keyboard back"
+    );
+    // the window closing takes it down
+    let popup = s.settings().unwrap().downgrade();
+    let view = s.view.clone();
+    view.update_in(s.cx, |view, window, cx| view.close(window, cx));
+    s.cx.run_until_parked();
+    assert!(popup.upgrade().is_none(), "gone with its window");
+}
+
+/// The library's widgets inside the popup paint in the chrome's colors: a picker's dropdown over a dark chrome is
+/// dark, and a pick in it leaves the popup up.
+#[gpui_kit::test]
+fn the_settings_popups_menus_are_dark_over_a_dark_chrome(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    let colors = s.paint_chrome(&themed((0x10, 0x20, 0x30), (0xe0, 0xe0, 0xe0)));
+    s.open_settings();
+    let panel = s.menu_panel(|s| s.click("settings-link-open-mode"));
+    assert_eq!(panel, crate::chrome::color(colors.background, 1.0), "the picker's menu");
+    s.cx.simulate_keystrokes("down down enter");
+    s.settle();
+    assert_eq!(
+        s.state.core.settings().effective_link_open_mode(),
+        agterm_core::persist::settings::LinkOpenMode::Overlay
+    );
+    assert!(s.settings().is_some(), "a pick leaves the popup up");
 }

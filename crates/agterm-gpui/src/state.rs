@@ -146,8 +146,8 @@ pub struct FrontendWork {
     pub sounds: Vec<String>,
     /// Show the first-launch welcome over the frontmost window ([`crate::welcome`]).
     pub welcome: bool,
-    /// Open the Settings window, or raise the open one ([`crate::settings`]).
-    pub settings: bool,
+    /// Open the Settings popup over this window, or bring the one up to the front ([`crate::settings`]).
+    pub settings: Option<crate::settings::SettingsHost>,
     /// Ask over the frontmost window whether to quit, with this message ([`crate::welcome::present_quit`]).
     pub quit_prompt: Option<String>,
     /// Show Reset Live Sessions…'s confirmation or refusal over the frontmost window ([`crate::zmx_runtime`]).
@@ -475,10 +475,11 @@ impl AppState {
         self.frontend.welcome = true;
     }
 
-    /// Asks the frontend to open the Settings window, or raise the open one (the app menu's Settings…).
-    pub fn open_settings(&mut self) {
+    /// Asks the frontend to open the Settings popup over `host`, or bring the one up to the front (the app menu's
+    /// Settings…).
+    pub fn open_settings(&mut self, host: crate::settings::SettingsHost) {
         if !self.quitting {
-            self.frontend.settings = true;
+            self.frontend.settings = Some(host);
         }
     }
 

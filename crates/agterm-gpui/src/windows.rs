@@ -23,7 +23,7 @@ use crate::deck::{Deck, DeckEnv};
 use crate::instance::Activation;
 use crate::quick::{QuickEnv, QuickPanel};
 use crate::session_host::AppConfig;
-use crate::settings::{Opening, SettingsWindow};
+use crate::settings::{Opening, SettingsHost, Snapshot};
 use crate::state::AppState;
 use crate::terminal::TerminalConfig;
 use crate::window::WindowView;
@@ -75,8 +75,6 @@ pub struct Windows {
     launched: Option<Activation>,
     /// The app's quick terminal panel, which belongs to no window.
     quick: QuickPanel,
-    /// The Settings window, which belongs to no agterm window either.
-    settings: SettingsWindow,
     /// The frontmost window's app menu chords as last synced, which `keymap.list` reads ([`Windows::menu_reader`]).
     menu_items: Rc<RefCell<Vec<ControlKeymapMenuItem>>>,
 }
@@ -91,7 +89,6 @@ impl Windows {
             shown: HashMap::new(),
             launched,
             quick: QuickPanel::default(),
-            settings: SettingsWindow::default(),
             menu_items: Rc::default(),
         }
     }
@@ -167,7 +164,7 @@ impl Windows {
         self.quick.sync(&mut state.core, &quick, cx);
         // the panel went with the keyboard: the decks, which stepped aside for it, focus their terminals again
         resettle |= held && !crate::quick::holds_keyboard(cx);
-        self.settings.sync(state, cx);
+        self.sync_settings(state, cx);
         *self.menu_items.borrow_mut() = state
             .core
             .library()
@@ -184,15 +181,67 @@ impl Windows {
         resettle
     }
 
-    /// Opens the Settings window over what the core held (`opening`), or raises the open one.
-    pub fn present_settings(&mut self, opening: Opening, cx: &mut App) {
-        self.settings.present(opening, &self.app_id, cx);
+    /// Opens the Settings popup over what the core held (`opening`), over `host`'s window, the `frontmost` one when
+    /// that is not on screen; while one is up anywhere, brings its window to the front with the popup holding the
+    /// keyboard instead: there is one at a time (`crate::settings`).
+    pub fn present_settings(&self, opening: Opening, host: SettingsHost, frontmost: Option<Uuid>, cx: &mut App) {
+        if let Some((_, ui)) = self.settings_ui(cx) {
+            let raised = ui.handle.update(cx, |view, window, cx| {
+                window.activate_window();
+                view.focus_settings(window, cx);
+            });
+            if raised.is_err() {
+                tracing::debug!("the Settings popup's window is gone");
+            }
+            return;
+        }
+        let asked = match host {
+            SettingsHost::Window(id) => Some(id),
+            SettingsHost::Frontmost => None,
+        };
+        let Some(ui) = asked
+            .and_then(|id| self.shown.get(&id))
+            .or_else(|| frontmost.and_then(|id| self.shown.get(&id)))
+        else {
+            tracing::debug!("Settings: no window to open it over");
+            return;
+        };
+        if ui
+            .handle
+            .update(cx, |view, window, cx| view.open_settings(opening, window, cx))
+            .is_err()
+        {
+            tracing::debug!("Settings: its window is gone");
+        }
     }
 
-    /// The Settings window.
+    /// The model window the Settings popup is up over.
     #[must_use]
-    pub fn settings(&self) -> &SettingsWindow {
-        &self.settings
+    pub fn settings_host(&self, cx: &App) -> Option<Uuid> {
+        self.settings_ui(cx).map(|(id, _)| id)
+    }
+
+    /// The window the Settings popup is up over.
+    fn settings_ui(&self, cx: &App) -> Option<(Uuid, &WindowUi)> {
+        self.shown.iter().find_map(|(id, ui)| {
+            let up = ui.handle.read_with(cx, |view, _| view.settings().is_some());
+            up.unwrap_or(false).then_some((*id, ui))
+        })
+    }
+
+    /// Hands the Settings popup, while it is up, what `state` holds now.
+    fn sync_settings(&self, state: &AppState, cx: &mut App) {
+        let Some((_, ui)) = self.settings_ui(cx) else {
+            return;
+        };
+        let snapshot = Snapshot::of(&state.core, state.applied_dark());
+        if ui
+            .handle
+            .update(cx, |view, window, cx| view.sync_settings(snapshot, window, cx))
+            .is_err()
+        {
+            tracing::debug!("the Settings popup's window is gone");
+        }
     }
 
     /// Closes the windows of closed stores and opens one for each newly opened store; the ones opened, in order.
@@ -491,6 +540,93 @@ mod tests {
         assert_eq!(shown_ids(&windows), left);
         assert!(!state.core.library().is_open(work));
         assert!(!state.take_frontend_work().quit, "windows are still open");
+        cx.update(|cx| windows.teardown_all(cx));
+    }
+
+    /// One Settings popup in the app: it opens over the window asked for (the frontmost one when that is not on
+    /// screen), asking again from another window brings its own window up instead of opening a second, it follows the
+    /// core through the windows' sync, and it goes with its window.
+    #[gpui_kit::test]
+    fn settings_is_one_popup_over_the_window_it_was_asked_from(cx: &mut gpui_kit::TestAppContext) {
+        use crate::settings::{Opening, SettingsHost};
+
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(crate::status_glyph::Motion::default());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let [first, work, _] = saved_set(dir.path());
+        let restored = agterm_core::persist::LibraryPersistence::new(dir.path()).bootstrap("/home/u");
+        let mut state = AppState::new(core_over(restored));
+        let mut windows = registry(dir.path(), crate::state::detached_poster());
+        cx.update(|cx| {
+            let _ = windows.sync(&mut state, cx);
+        });
+        cx.run_until_parked();
+        let present = |windows: &Windows, state: &AppState, host, cx: &mut gpui_kit::TestAppContext| {
+            let frontmost = state.core.library().active_window_id();
+            cx.update(|cx| windows.present_settings(Opening::of(state), host, frontmost, cx));
+            cx.run_until_parked();
+        };
+        let popups = |windows: &Windows, cx: &mut gpui_kit::TestAppContext| {
+            cx.update(|cx| {
+                windows
+                    .iter()
+                    .filter(|(_, ui)| {
+                        ui.handle
+                            .read_with(cx, |view, _| view.settings().is_some())
+                            .unwrap_or(false)
+                    })
+                    .count()
+            })
+        };
+        present(&windows, &state, SettingsHost::Window(work), cx);
+        assert_eq!(
+            cx.update(|cx| windows.settings_host(cx)),
+            Some(work),
+            "over the menu's window"
+        );
+        present(&windows, &state, SettingsHost::Window(first), cx);
+        assert_eq!(
+            cx.update(|cx| windows.settings_host(cx)),
+            Some(work),
+            "the one popup stays"
+        );
+        assert_eq!(popups(&windows, cx), 1, "never a second");
+        // the windows' sync hands it what the core holds
+        state
+            .core
+            .change_settings(agterm_core::settings_model::SettingsChange::General(
+                agterm_core::settings_model::GeneralChange::ConfirmCloseSession(true),
+            ));
+        cx.update(|cx| {
+            let _ = windows.sync(&mut state, cx);
+        });
+        let shown = cx.update(|cx| {
+            windows.get(work).unwrap().handle.read_with(cx, |view, cx| {
+                view.settings()
+                    .map(|popup| popup.read(cx).snapshot().settings.confirm_close_session)
+            })
+        });
+        assert_eq!(shown.unwrap(), Some(Some(true)));
+        // its window closing takes it down; a window not on screen falls back to the frontmost
+        state.close_requested(work);
+        cx.update(|cx| {
+            let _ = windows.sync(&mut state, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(cx.update(|cx| windows.settings_host(cx)), None, "gone with its window");
+        present(&windows, &state, SettingsHost::Window(work), cx);
+        let frontmost = state.core.library().active_window_id();
+        assert_eq!(cx.update(|cx| windows.settings_host(cx)), frontmost);
+        assert_eq!(frontmost, Some(first));
+        // closed, it opens again over the frontmost window when asked from no window
+        let handle = windows.get(first).unwrap().handle;
+        cx.update(|cx| handle.update(cx, crate::window::WindowView::close_settings))
+            .unwrap();
+        assert_eq!(cx.update(|cx| windows.settings_host(cx)), None);
+        present(&windows, &state, SettingsHost::Frontmost, cx);
+        assert_eq!(cx.update(|cx| windows.settings_host(cx)), Some(first));
         cx.update(|cx| windows.teardown_all(cx));
     }
 

@@ -1,9 +1,10 @@
-//! The Settings window: upstream's six tabs and their controls (ported from the GTK build's tests), every control on
-//! every page writing through the core and reading back what the core then holds, and the window in GPUI's test
+//! The Settings popup: upstream's six tabs and their controls (ported from the GTK build's tests), every control on
+//! every page writing through the core and reading back what the core then holds, and the popup's view in GPUI's test
 //! platform over a real core with a state directory of its own: the pointer on its tabs, toggles, steppers, picker
 //! menus and buttons, its sliders and color wells, a change made elsewhere showing in it, an edit the core leaves
-//! unchanged snapping a moved slider back, and the window opened once and raised after. No test presses a Choose…
-//! button: it opens the desktop's folder chooser.
+//! unchanged snapping a moved slider back, its size in a window, and Escape and its close button asking to close it.
+//! The popup over an agterm window (opening, closing, the keyboard, one at a time) is `crate::window`'s and
+//! `crate::windows`' to test. No test presses a Choose… button: it opens the desktop's folder chooser.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -656,7 +657,7 @@ fn harness(cx: &mut TestAppContext, settings: AppSettings) -> (Harness, &mut Vis
     let opening = Opening::of(&state);
     let (view, cx) = cx
         .add_window_view(move |window, cx| SettingsView::new(opening.poster, opening.snapshot, catalogs(), window, cx));
-    let (width, height) = WINDOW_SIZE;
+    let (width, height) = PANEL_SIZE;
     cx.simulate_resize(size(px(width), px(height)));
     let mut harness = Harness {
         state,
@@ -1012,40 +1013,42 @@ fn a_change_made_elsewhere_shows_in_the_open_window(cx: &mut TestAppContext) {
     assert_eq!(title.as_deref(), Some("Light theme"));
 }
 
+#[test]
+fn the_popup_takes_upstreams_window_size_and_shrinks_to_fit_a_small_window() {
+    let fits = |width: f32, height: f32| {
+        let panel = panel_size(size(px(width), px(height)));
+        (f32::from(panel.width), f32::from(panel.height))
+    };
+    assert_eq!(fits(1280., 800.), PANEL_SIZE, "upstream's 540x680");
+    assert_eq!(fits(800., 500.), (540., 468.), "the margin kept under and over it");
+    assert_eq!(fits(400., 300.), (368., 268.), "and beside it");
+    assert_eq!(fits(20., 10.), (0., 0.), "never negative");
+}
+
 #[gpui_kit::test]
-fn the_window_opens_once_raises_after_and_is_forgotten_once_closed(cx: &mut TestAppContext) {
-    cx.update(gpui_kit::init);
-    let dir = tempfile::tempdir().unwrap();
-    let mut state = AppState::new(core_in(dir.path(), AppSettings::default()));
-    state.open_settings();
-    assert!(state.take_frontend_work().settings, "the frontend opens it");
-    let mut window = SettingsWindow::default();
-    let before = cx.update(|cx| cx.windows().len());
-    cx.update(|cx| window.present(Opening::of(&state), "io.github.melonamin.agterm.test", cx));
-    cx.run_until_parked();
-    assert!(window.is_open());
-    cx.update(|cx| window.present(Opening::of(&state), "io.github.melonamin.agterm.test", cx));
-    cx.run_until_parked();
-    assert_eq!(
-        cx.update(|cx| cx.windows().len()),
-        before + 1,
-        "raised, not opened again"
-    );
-    let handle = window.handle().unwrap();
-    // the window follows the core
-    state
-        .core
-        .change_settings(SettingsChange::General(GeneralChange::ConfirmCloseSession(true)));
-    cx.update(|cx| window.sync(&state, cx));
-    let confirm = cx
-        .update(|cx| handle.update(cx, |view, _, _| view.snapshot().settings.confirm_close_session))
-        .unwrap();
-    assert_eq!(confirm, Some(true));
-    cx.update(|cx| handle.update(cx, |_, window, _| window.remove_window()))
-        .unwrap();
-    cx.run_until_parked();
-    cx.update(|cx| window.sync(&state, cx));
-    assert!(!window.is_open(), "a closed window is forgotten");
+fn escape_and_the_close_button_ask_to_close_the_popup(cx: &mut TestAppContext) {
+    let (mut h, cx) = harness(cx, AppSettings::default());
+    let asked = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&asked);
+    let _closing = cx.update(|_, cx| {
+        cx.subscribe(&h.view, move |_, _: &gpui_kit::DismissEvent, _| {
+            counted.set(counted.get() + 1);
+        })
+    });
+    let focus = h.view.read_with(cx, Focusable::focus_handle);
+    cx.update(|window, cx| window.focus(&focus, cx));
+    cx.simulate_keystrokes("escape");
+    assert_eq!(asked.get(), 1, "Escape");
+    click(cx, "settings-close");
+    assert_eq!(asked.get(), 2, "the close button");
+    // a picker's menu keeps its own Escape: it closes the menu, not the popup
+    click(cx, "settings-link-open-mode");
+    h.settle(cx);
+    cx.simulate_keystrokes("escape");
+    h.settle(cx);
+    assert_eq!(asked.get(), 2, "the menu closed, the popup stays");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(asked.get(), 3, "then Escape closes the popup");
 }
 
 #[gpui_kit::test]

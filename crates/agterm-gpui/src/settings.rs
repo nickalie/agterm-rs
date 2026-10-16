@@ -1,18 +1,27 @@
-//! The Settings window (upstream's `SettingsView.swift` over `SettingsModel.swift`; ported from the GTK build's
-//! `settings/`): a window of its own, 540x680 as upstream's Settings scene, opening on General, with upstream's six
-//! tabs in its order: General, Appearance, Interface, Notifications, Agent Status and Key Mapping. Each tab is a page
-//! module ([`general`], [`appearance`], [`interface`], [`notifications`], [`agent_status`], [`key_mapping`]) that
-//! describes its sections and controls from a [`Snapshot`] of what the core holds; [`form`] draws them.
+//! The Settings popup (upstream's `SettingsView.swift` over `SettingsModel.swift`; ported from the GTK build's
+//! `settings/`): upstream's six tabs in its order, General, Appearance, Interface, Notifications, Agent Status and Key
+//! Mapping, opening on General. Each tab is a page module ([`general`], [`appearance`], [`interface`],
+//! [`notifications`], [`agent_status`], [`key_mapping`]) that describes its sections and controls from a [`Snapshot`]
+//! of what the core holds; [`form`] draws them.
+//!
+//! Upstream's Settings scene is a window of its own; here, at the user's request, it is a modal popup inside the agterm
+//! window it was opened from (a separate window drifts off to a tiling compositor's next column): the window
+//! (`crate::window`) draws it centered over a dimmed layer that takes every click, sized like upstream's 540x680 window
+//! and shrinking to fit a smaller one ([`panel_size`]). It holds the window's keyboard while it is up (the key monitor
+//! leaves its [`KEY_CONTEXT`] alone, as it does an alert's); Escape, its close button and a click outside it close it,
+//! and the keyboard goes back to the window's terminal. There is one at a time in the app, as there is one Settings
+//! window upstream: asking for it again while it is up brings its window to the front with the popup holding the
+//! keyboard ([`SettingsHost`] names where a new one opens). It goes with its window.
 //!
 //! The core owns every setting: a control's edit is one [`SettingsChange`] (or a core call, the two Reloads) posted to
 //! the main loop through [`Edits`], which the core validates, writes to `settings.json` and applies. The windows' sync
-//! after every task hands the open window a fresh snapshot ([`SettingsWindow::sync`]), so a control always shows what
+//! after every task hands the open popup a fresh snapshot ([`SettingsView::sync`]), so a control always shows what
 //! the core holds after a write, and a change made elsewhere (`theme.set`, `sidebar.flagged-layout`,
-//! `browser.links`, a config reload, a desktop light/dark flip) shows in the open window too. The controls that keep
+//! `browser.links`, a config reload, a desktop light/dark flip) shows in the open popup too. The controls that keep
 //! state of their own (the sliders, the color wells) are set from the snapshot whenever it changes and after every
 //! edit, so an edit the core refused or normalised snaps back to the stored value.
 //!
-//! The window paints in the chrome's colors (`crate::chrome`), like the app's other surfaces; its text sizes are fixed,
+//! The popup paints in the chrome's colors (`crate::chrome`), like the app's other surfaces; its text sizes are fixed,
 //! as upstream's grouped form is (the Interface font size is the palettes' and the switcher's, not Settings').
 
 mod agent_status;
@@ -37,17 +46,40 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::slider::{SliderEvent, SliderState};
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, Hsla, IntoElement, Render, Rgba, ScrollHandle, Subscription, Window,
-    WindowHandle, px, size,
+    App, AppContext as _, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
+    Pixels, Render, Rgba, ScrollHandle, Size, Subscription, WeakEntity, Window, px, size,
 };
+use uuid::Uuid;
 
 pub use self::form::{Action, Control, Item, Picker, Run, Section, SliderKey};
 use crate::state::{self, AppState, Poster};
 
-/// The window's size (upstream's `.frame(width: 540, height: 680)`).
-pub const WINDOW_SIZE: (f32, f32) = (540.0, 680.0);
-/// The window's title.
+/// The popup's size (upstream's Settings window, `.frame(width: 540, height: 680)`).
+pub const PANEL_SIZE: (f32, f32) = (540.0, 680.0);
+/// The clearance the popup keeps from its window's edges (the palettes' `InterfaceMetrics.panelMargin`).
+pub const PANEL_MARGIN: f32 = 16.0;
+/// The popup's title.
 pub const TITLE: &str = "Settings";
+/// The key context the popup holds the keyboard in, which the key monitor leaves alone.
+pub const KEY_CONTEXT: &str = "AgtermSettings";
+
+/// The popup's size in a window whose content is `viewport`: upstream's window size, shrunk to leave the margin on
+/// every side of a smaller window.
+#[must_use]
+pub fn panel_size(viewport: Size<Pixels>) -> Size<Pixels> {
+    let (width, height) = PANEL_SIZE;
+    let fit = |ideal: f32, room: Pixels| px(ideal.min(f32::from(room) - 2.0 * PANEL_MARGIN).max(0.0));
+    size(fit(width, viewport.width), fit(height, viewport.height))
+}
+
+/// Where Settings… opens the popup when none is up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsHost {
+    /// Over this model window (the app menu's), the frontmost one when it is not on screen.
+    Window(Uuid),
+    /// Over the frontmost window (a keymap or a control command, which have no window of their own).
+    Frontmost,
+}
 
 /// One tab, in upstream's order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,7 +168,7 @@ pub const GLYPHS: [IconName; 4] = [
 
 gpui_kit::assets::icon_assets!(pub(crate) SettingsIcons, [Paintbrush, AppWindowMac, CircleDot, Keyboard]);
 
-/// What the window's controls show: the settings and the few facts beside them, read from the core.
+/// What the popup's controls show: the settings and the few facts beside them, read from the core.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Snapshot {
     pub settings: AppSettings,
@@ -226,7 +258,7 @@ pub fn monospace_families() -> Vec<String> {
         .clone()
 }
 
-/// Where the controls' edits go: the main loop, and the window's note that an edit is on its way (the next sync then
+/// Where the controls' edits go: the main loop, and the popup's note that an edit is on its way (the next sync then
 /// sets every stateful control from the snapshot, even an unchanged one).
 #[derive(Clone)]
 pub struct Edits {
@@ -288,8 +320,9 @@ impl Edits {
 /// The statuses that draw a glyph, in upstream's row order.
 pub const GLYPH_STATUSES: [AgentStatus; 3] = [AgentStatus::Active, AgentStatus::Blocked, AgentStatus::Completed];
 
-/// The window's view: the tabs and the shown page over the last snapshot.
+/// The popup's view: the tabs and the shown page over the last snapshot.
 pub struct SettingsView {
+    focus: FocusHandle,
     edits: Edits,
     snapshot: Snapshot,
     catalogs: Catalogs,
@@ -347,6 +380,7 @@ impl SettingsView {
             })
             .collect();
         Self {
+            focus: cx.focus_handle(),
             edits: Edits::new(poster),
             snapshot,
             catalogs,
@@ -356,6 +390,33 @@ impl SettingsView {
             scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// The popup over what the core held (`opening`), its font picker filled once the families are read.
+    pub fn open(opening: Opening, window: &mut Window, cx: &mut App) -> Entity<Self> {
+        let Opening {
+            snapshot,
+            themes,
+            poster,
+        } = opening;
+        let catalogs = Catalogs {
+            fonts: Rc::default(),
+            themes,
+        };
+        let view = cx.new(|cx| Self::new(poster, snapshot, catalogs, window, cx));
+        load_fonts(view.downgrade(), cx);
+        view
+    }
+
+    /// Closes the popup: whoever shows it takes it down ([`DismissEvent`]).
+    pub fn dismiss(&mut self, cx: &mut Context<Self>) {
+        cx.emit(DismissEvent);
+    }
+
+    /// Whether the popup, or a control in it, holds `window`'s keyboard.
+    #[must_use]
+    pub fn holds_keyboard(&self, window: &Window, cx: &App) -> bool {
+        self.focus.contains_focused(window, cx)
     }
 
     /// The snapshot the controls show.
@@ -443,9 +504,17 @@ impl SettingsView {
     }
 }
 
+impl EventEmitter<DismissEvent> for SettingsView {}
+
+impl Focusable for SettingsView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
 impl Render for SettingsView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        draw::window(self, window, cx)
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        draw::panel(self, cx)
     }
 }
 
@@ -476,7 +545,7 @@ pub fn hex_of(color: Hsla) -> String {
     format!("#{:02x}{:02x}{:02x}", channel(rgba.r), channel(rgba.g), channel(rgba.b))
 }
 
-/// What a window opens over, read from the state before the window opens.
+/// What a popup opens over, read from the state before it opens.
 pub struct Opening {
     pub snapshot: Snapshot,
     /// The bundled themes, read from their directory now.
@@ -495,109 +564,13 @@ impl Opening {
     }
 }
 
-/// The Settings window, which belongs to no agterm window: at most one, raised when asked for again.
-#[derive(Default)]
-pub struct SettingsWindow {
-    handle: Option<WindowHandle<SettingsView>>,
-}
-
-impl SettingsWindow {
-    /// Whether the window is open.
-    #[must_use]
-    pub fn is_open(&self) -> bool {
-        self.handle.is_some()
-    }
-
-    /// The open window.
-    #[must_use]
-    pub fn handle(&self) -> Option<WindowHandle<SettingsView>> {
-        self.handle
-    }
-
-    /// Opens the window over what the core held (`opening`), or raises the open one (upstream's Settings… / Cmd+,, the
-    /// GTK build's Preferences); it carries `app_id` as every agterm window does.
-    pub fn present(&mut self, opening: Opening, app_id: &str, cx: &mut App) {
-        if let Some(handle) = self.handle {
-            if handle.update(cx, |_, window, _| window.activate_window()).is_ok() {
-                return;
-            }
-            self.handle = None;
-        }
-        let Opening {
-            snapshot,
-            themes,
-            poster,
-        } = opening;
-        let catalogs = Catalogs {
-            fonts: Rc::default(),
-            themes,
-        };
-        let opened = cx.open_window(options(app_id, cx), move |window, cx| {
-            cx.new(|cx| SettingsView::new(poster, snapshot, catalogs, window, cx))
-        });
-        match opened {
-            Ok(handle) => {
-                self.handle = Some(handle);
-                load_fonts(handle, cx);
-            }
-            Err(error) => tracing::error!(%error, "the Settings window did not open"),
-        }
-    }
-
-    /// Hands the open window what `state` holds now; a window closed since is forgotten.
-    pub fn sync(&mut self, state: &AppState, cx: &mut App) {
-        let Some(handle) = self.handle else {
-            return;
-        };
-        let snapshot = Snapshot::of(&state.core, state.applied_dark());
-        if handle
-            .update(cx, |view, window, cx| view.sync(snapshot, window, cx))
-            .is_err()
-        {
-            tracing::debug!("the Settings window is closed");
-            self.handle = None;
-        }
-    }
-}
-
-/// The window's options: upstream's fixed size, centered, its own title bar where the client decorates (Linux).
-fn options(app_id: &str, cx: &App) -> gpui_kit::WindowOptions {
-    let (width, height) = WINDOW_SIZE;
-    gpui_kit::WindowOptions {
-        titlebar: Some(gpui_kit::TitlebarOptions {
-            title: Some(TITLE.into()),
-            ..gpui_kit::TitlebarOptions::default()
-        }),
-        window_bounds: Some(gpui_kit::WindowBounds::Windowed(gpui_kit::Bounds::centered(
-            None,
-            size(px(width), px(height)),
-            cx,
-        ))),
-        is_resizable: false,
-        is_minimizable: false,
-        app_id: Some(app_id.to_owned()),
-        window_decorations: decorations(),
-        ..gpui_kit::WindowOptions::default()
-    }
-}
-
-/// The decorations asked for: the client's on Linux (a Wayland compositor may have none of its own), the platform's
-/// title bar elsewhere.
-fn decorations() -> Option<gpui_kit::WindowDecorations> {
-    if cfg!(target_os = "linux") {
-        Some(gpui_kit::WindowDecorations::Client)
-    } else {
-        None
-    }
-}
-
-/// Reads the font families off the main thread and hands them to the window's font picker.
-fn load_fonts(handle: WindowHandle<SettingsView>, cx: &mut App) {
+/// Reads the font families off the main thread and hands them to the popup's font picker.
+fn load_fonts(view: WeakEntity<SettingsView>, cx: &mut App) {
     let families = cx.background_executor().spawn(async { monospace_families() });
     cx.spawn(async move |cx| {
         let fonts = families.await;
-        if handle.update(cx, |view, _, cx| view.set_fonts(fonts, cx)).is_err() {
-            tracing::debug!("the Settings window closed before its fonts were read");
+        if view.update(cx, |view, cx| view.set_fonts(fonts, cx)).is_err() {
+            tracing::debug!("the Settings popup closed before its fonts were read");
         }
     })
     .detach();

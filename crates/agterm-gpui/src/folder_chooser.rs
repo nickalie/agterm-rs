@@ -1,5 +1,5 @@
 //! The desktop's folder chooser (upstream's `NSOpenPanel` for directories, the GTK build's `GtkFileDialog`): the
-//! sidebar's Open Directory… and the Settings window's Choose… buttons. On Linux it is the file chooser portal, as
+//! sidebar's Open Directory… and the Settings popup's Choose… buttons. On Linux it is the file chooser portal, as
 //! GTK's `FileDialog` and GPUI's own prompt use it, modal over the asking window (an X11 id or an `xdg-foreign`
 //! export), titled and starting in a folder, which GPUI's prompt cannot do; elsewhere GPUI's platform prompt.
 
