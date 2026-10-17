@@ -2643,6 +2643,13 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
     packets and 64 MiB (one larger packet goes when nothing waits). Past either bound, or on a failed write, the
     transport is broken as if the worker had died: its socket shut, its pages failed, and the worker reaped. Nothing
     that queues ever waits, neither the main thread nor the reader holding the pages lock.
+    Round 4: the app's own traffic never breaks a worker that reads (a paste over 64 MiB followed by its key used to):
+    1024 packets / 64 MiB are now the queue's working set, past which it is only backlogged; the transport breaks
+    when a backlog goes 30 s without a completed send, past a hard bound of 16384 packets or 2 GiB + 64 MiB queued, or
+    past 1024 of the reader's own unseen-frame answers (an allowance the app's traffic never uses). One mutex holds the
+    queue, the writer drops what waits once it closes, and a command larger than the worker reads (1 GiB) is replaced
+    (empty clipboard, error answers), never sent. Codex discussion (signed off), transcript
+    `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/task-32-fixer4-outgoing-bounds/transcript.md`.
 
 ### Stage 4 — switch
 

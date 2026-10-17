@@ -42,6 +42,10 @@ pub const CASES: &[(&str, Case)] = &[
         crate::interaction::clipboard,
     ),
     (
+        "payloads_larger_than_the_worker_s_queue_leave_the_transport_up",
+        crate::interaction::large_payloads,
+    ),
+    (
         "select_popups_are_reported_and_answered",
         crate::interaction::option_menu,
     ),

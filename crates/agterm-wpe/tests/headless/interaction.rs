@@ -2,11 +2,12 @@
 //! clipboard in and out, `<select>` popups, the context menu's hit test, and an input method's composition.
 
 use agterm_wpe::{
-    Button, EditingCommand, Event, Input, Key, Modifiers, OptionKind, Pointer, PointerKind, Settings, ViewId,
+    Button, EditingCommand, Event, Input, Key, Modifiers, OptionKind, Pointer, PointerKind, SchemeResponse, Settings,
+    ViewId,
 };
 
 use crate::cases::Context;
-use crate::support::{Harness, Outcome, data_url, ensure};
+use crate::support::{Harness, Outcome, SCHEME, data_url, ensure};
 
 fn page(body: &str) -> agterm_wpe::Load {
     agterm_wpe::Load::Uri(data_url(&format!("<html><body style='margin:0'>{body}</body></html>")))
@@ -43,6 +44,63 @@ pub fn clipboard(h: &Harness, _: &Context) -> Outcome {
     h.host.input(view, Input::Key(v(true)));
     h.host.input(view, Input::Key(v(false)));
     value_is(h, view, "t.value", "pasted by key")?;
+    h.host.close_view(view);
+    Ok(())
+}
+
+/// Scheme answers and pastes larger than the worker's queue holds in its working set (64 MiB), each followed at once
+/// by more commands, leave the transport up: the page loads, takes the paste that follows them by key, and evaluates.
+pub fn large_payloads(h: &Harness, _: &Context) -> Outcome {
+    const LARGE: usize = (64 << 20) + (1 << 20);
+    let view = h.view(h.ephemeral(), Settings::overlay(true));
+    let uri = format!("{SCHEME}://large/index.html");
+    h.host.load(view, agterm_wpe::Load::Uri(uri.clone()));
+    let document = h.scheme_request(|request| request.uri == uri)?;
+    h.host.finish_scheme_request(
+        document.token,
+        SchemeResponse::Bytes {
+            data: b"<body style='margin:0'><textarea id=t></textarea><img src='a.bin'><img src='b.bin'></body>"
+                .to_vec(),
+            mime: "text/html".to_owned(),
+        },
+    );
+    let mut reads = Vec::new();
+    let reads = h.wait_for("both large reads", |event| {
+        if let Event::SchemeRequest(request) = event
+            && matches!(request.uri.rsplit('/').next(), Some("a.bin" | "b.bin"))
+        {
+            reads.push(request.token);
+        }
+        (reads.len() == 2).then(|| reads.clone())
+    })?;
+    // both answers at once (the second waits while the writer still copies the first), input right behind them
+    for token in reads {
+        h.host.finish_scheme_request(
+            token,
+            SchemeResponse::Bytes {
+                data: vec![0; LARGE],
+                mime: "application/octet-stream".to_owned(),
+            },
+        );
+    }
+    h.host.set_focused(view, true);
+    h.finished(view)?;
+    h.evaluate(view, "t.focus(); true", None)?;
+    let large = "l".repeat(LARGE);
+    for _ in 0..2 {
+        h.host.set_clipboard(large.clone());
+        h.host.set_clipboard("pasted after the large ones".to_owned());
+    }
+    drop(large);
+    let v = |pressed| Key {
+        pressed,
+        keyval: 0x76,
+        keycode: None,
+        modifiers: Modifiers::CONTROL,
+    };
+    h.host.input(view, Input::Key(v(true)));
+    h.host.input(view, Input::Key(v(false)));
+    value_is(h, view, "t.value", "pasted after the large ones")?;
     h.host.close_view(view);
     Ok(())
 }

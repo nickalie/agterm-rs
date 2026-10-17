@@ -49,6 +49,13 @@ impl Limits {
         body: 64 << 20,
         blob: super::message::MAX_FRAME_BYTES,
     };
+
+    /// Whether a receiver within these limits reads `packet`: its body and blob no larger than they allow (a sender
+    /// that sends a larger one breaks the transport).
+    pub(crate) fn admit(self, packet: &Packet) -> bool {
+        let within = |len: usize, max: u64| u64::try_from(len).is_ok_and(|len| len <= max.min(MEMFD_MAX));
+        within(packet.body.len(), self.body) && packet.blob.as_ref().is_none_or(|blob| within(blob.len(), self.blob))
+    }
 }
 /// kind (1), body length (8), blob length (8), the body's descriptor count (4).
 const HEADER: usize = 21;
@@ -364,6 +371,22 @@ mod tests {
         drop(ours);
         assert!(recv(theirs.as_fd(), Limits::FROM_APP).unwrap().is_none());
         assert!(open(theirs.as_raw_fd()));
+    }
+
+    #[test]
+    fn a_receiver_s_limits_say_which_packets_it_reads() {
+        // zeroed and never touched: no memory for the largest ones
+        let packet = |body: usize, blob: Option<usize>| Packet {
+            body: vec![0; body],
+            blob: blob.map(|len| vec![0; len]),
+            fds: Vec::new(),
+        };
+        let max = usize::try_from(MEMFD_MAX).unwrap();
+        assert!(Limits::FROM_APP.admit(&packet(max, Some(max))));
+        assert!(!Limits::FROM_APP.admit(&packet(max + 1, None)));
+        assert!(!Limits::FROM_APP.admit(&packet(2, Some(max + 1))));
+        assert!(Limits::FROM_WORKER.admit(&packet(64 << 20, None)));
+        assert!(!Limits::FROM_WORKER.admit(&packet((64 << 20) + 1, None)));
     }
 
     #[test]
