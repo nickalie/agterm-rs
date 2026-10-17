@@ -33,6 +33,8 @@ base64 = "0.23"
 bitflags = "2"
 clap = { version = "4.6", features = ["derive"] }
 libc = "0.2"
+# agterm-wpe's worker transport (socket pairs, SCM_RIGHTS, memfds), the version wayland and calloop already link.
+rustix = "1.1"
 # `default-features = false` drops the `html` renderer and the CLI's `getopts`: the HUD walks the events itself.
 pulldown-cmark = { version = "0.13", default-features = false }
 # Kitty graphics PNG transmissions, decoded for libghostty-vt's process-global PNG hook (agterm-term).

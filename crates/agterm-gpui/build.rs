@@ -32,8 +32,8 @@ fn main() -> ExitCode {
 }
 
 /// With the `html` feature, an rpath to the WPE `WebKit` the build linked (`agterm-wpe`'s `libdirs`): the vendored
-/// package of `scripts/fetch-wpe.sh` lies outside the loader's search path, and the binary must load before it can
-/// enter that package's overlay (`agterm_wpe::launcher::enter`).
+/// package of `scripts/fetch-wpe.sh` lies outside the loader's search path, and the app never enters that package's
+/// overlay (only its engine worker does, `agterm_wpe::worker`).
 fn wpe_rpath() {
     println!("cargo::rerun-if-env-changed=DEP_AGTERM_WPE_LIBDIRS");
     if std::env::var_os("CARGO_FEATURE_HTML").is_none() {

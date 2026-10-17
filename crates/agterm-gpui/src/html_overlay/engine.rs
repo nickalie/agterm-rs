@@ -1,5 +1,5 @@
 //! The web engine as the overlay drives it: [`Web`], the commands of `agterm_wpe::Host` the pages send, so the
-//! registry, the pages and the element run against a recording stand-in in the unit tests (`tests::Recorder`), where
+//! registry, the pages and the element run against a recording stand-in in the unit tests (`testing::Recorder`), where
 //! no `WebKit` can start (one engine per process, and it needs the overlay of a vendored package).
 
 use std::sync::Arc;

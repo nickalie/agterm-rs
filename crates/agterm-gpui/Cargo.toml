@@ -73,12 +73,18 @@ name = "external_texture"
 path = "tests/external_texture/main.rs"
 harness = false
 
-# HTML pages end to end on the real WPE WebKit, which runs once per process: a child per Vulkan driver, under the
-# vendored package's overlay where it needs one (tests/html_overlay/main.rs).
+# HTML pages end to end on the real WPE WebKit, which runs once per process: a child per Vulkan driver, each a plain
+# process whose engine runs in a worker where WPE WebKit is vendored (tests/html_overlay/main.rs).
 [[test]]
 name = "html_overlay"
 path = "tests/html_overlay/main.rs"
 harness = false
+required-features = ["html"]
+
+# The app, its Live panes and their sessions keep the user's privileges while pages run (tests/privileges.rs).
+[[test]]
+name = "privileges"
+path = "tests/privileges.rs"
 required-features = ["html"]
 
 [lints]

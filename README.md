@@ -150,12 +150,14 @@ need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through p
   pinned Arch package (`WPE_ARCH_PACKAGE_*`) and unpacks it into the vendored prefix, which `scripts/pkg-config.sh`
   offers when the system has no WPE WebKit of the bound API. Building and linking need nothing more; running pages
   from that prefix needs the helper path overlaid (`bwrap --ro-overlay /usr/lib` with the prefix's `lib/` on top),
-  since nothing relocates it: `agterm_wpe::launcher::command` builds that launch, and `agterm-wpe`'s engine tests
-  (`cargo test -p agterm-wpe`) run their pages through it. The GPUI build enters that overlay by itself
-  (`agterm_wpe::launcher::enter`, first thing in its `main`): the process it was started as stays a small supervisor
-  that relays SIGTERM, SIGINT, SIGHUP and SIGQUIT to the app inside and exits with its status, so a launch, its quit
-  save and its single-instance forwarding behave as with the distribution's package. Pick the distribution package
-  whenever you can.
+  since nothing relocates it. That overlay is a user namespace with `PR_SET_NO_NEW_PRIVS`, inherited by everything
+  started in it (no `sudo` or setuid program, root's files shown as `nobody`'s), so the app never enters it: the
+  engine runs in a worker process under it (`agterm_wpe::worker`: the app's own executable re-run, driven over a
+  socket; every `main` that may start an engine calls `agterm_wpe::worker::serve_if_asked` first), and the app, its
+  terminals, their zmx sessions and everything they start keep the user's privileges (`cargo test -p agterm-gpui --test
+  privileges`). `agterm-wpe`'s engine tests (`cargo test -p agterm-wpe`) run every case through a worker and again in
+  process inside the overlay (`agterm_wpe::launcher::command`). Pick the distribution package whenever you can: with
+  it the engine runs in the app's own process.
 - Ubuntu packages no `wpewebkit` at all (none since 22.04's 2.36, 26.04 included), and 24.04 cannot load the Arch
   package (glibc 2.39): Ubuntu builds the workspace without what links WPE (`WORKSPACE_WITHOUT_WPE` in
   `scripts/lib/native.sh`: the WPE crates and the GPUI frontend) and the GPUI frontend without its HTML overlays
@@ -170,9 +172,10 @@ need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through p
 `agterm-wpe` is the host over those bindings: WPE WebKit on an engine thread with its own `GMainContext`, a
 `WPEDisplay`/`WPEView` subclass rendering on the render node the GPUI side names with the formats it imports, frames
 out as dmabufs (SHM as a last-resort fallback), and the WebKit surface the HTML overlay uses: stores, scripts and the
-bridge, policies, schemes, the clipboard, `<select>` popups, the context menu's hit test and input methods. Its
+bridge, policies, schemes, the clipboard, `<select>` popups, the context menu's hit test and input methods; in this
+process or in a worker (`Host::start_worker` asks for one with the system's package too, as the engine tests do). Its
 engine tests render headless on this machine's first DRM render node (Mesa; `WPE_TEST_RENDER_NODE` picks another) and
-in shared memory, each frame mode in a child process of its own. The GPUI side (`agterm-gpui`'s `html_overlay`) has a
+in shared memory, each frame mode on each backend in a child process of its own. The GPUI side (`agterm-gpui`'s `html_overlay`) has a
 headless harness of its own (`cargo test -p agterm-gpui --test html_overlay`): the real engine on the GPU GPUI's
 headless renderer opened, its frames read back through the external texture element, on lavapipe (SHM) and on a Mesa
 render node (dmabufs).

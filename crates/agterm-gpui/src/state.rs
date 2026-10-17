@@ -866,7 +866,9 @@ impl AppState {
         }
     }
 
-    /// Runs `resume` after `after`; a closed loop drops it, and the dropped sender answers "shutting down".
+    /// Runs `resume` after `after`; a closed loop drops it. A socket waiter's dropped sender then answers "shutting
+    /// down"; a page's bridge request gets no answer here, and the engine answers it "page closed" when the quit closes
+    /// the page.
     fn schedule(&self, cmd: Command, after: Duration, resume: Resume, sender: Waiter) {
         let Some(main_loop) = self.poster.upgrade() else {
             return;

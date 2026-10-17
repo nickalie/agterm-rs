@@ -12,9 +12,10 @@ use agterm_wpe::{
     Area, BufferId, ContextMenu, DmaBuf, EditingCommand, Event, Frame, FrameContent, Geometry, Input, Load, MenuToken,
     OptionItem, OptionKind, OptionMenu, Plane, PointerKind, Rect, SessionSpec, ShmRegion, ViewId,
 };
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement, Modifiers, MouseButton, ParentElement as _,
-    Render, Styled as _, TestAppContext, VisualTestContext, Window, div, point, px, size,
+    AppContext as _, ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement, Modifiers, MouseButton,
+    ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, Window, div, point, px, size,
 };
 
 use super::PageView;
@@ -97,6 +98,14 @@ fn harness(cx: &mut TestAppContext) -> (Harness, &mut VisualTestContext) {
 }
 
 impl Harness {
+    /// Gives the page the keyboard, as a press or a key into it does.
+    fn focus_page(&self, cx: &mut VisualTestContext) {
+        let focus = self.element.read_with(cx, |element, _| element.focus().clone());
+        cx.update(|window, cx| window.focus(&focus, cx));
+        self.root.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+
     fn popover_open(&self, cx: &mut VisualTestContext) -> bool {
         self.root.read_with(cx, |root, _| root.popover_open.get())
     }
@@ -155,11 +164,19 @@ fn a_mounted_page_is_made_loaded_shown_and_laid_out_at_its_content(cx: &mut Test
         }),
         "the content's size, below the strip, at the window's scale"
     );
-    // off screen: the engine renders nothing
+    // off screen: the engine renders nothing, and gets no size while the page is out of sight
     cx.update(|_, cx| registry::apply(&harness.overlay, false, cx));
     assert!(harness.web.take().contains(&Call::Visible(false)));
-    // a new scale reaches the engine
     cx.simulate_scale_factor_change(1.5);
+    harness.root.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let hidden = harness.web.take();
+    assert!(
+        !hidden.iter().any(|call| matches!(call, Call::Geometry(_))),
+        "{hidden:?}"
+    );
+    // back on screen, the new scale reaches the engine
+    cx.update(|_, cx| registry::apply(&harness.overlay, true, cx));
     harness.root.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
     let rescaled = harness.web.take();
@@ -315,6 +332,7 @@ fn a_select_popup_is_drawn_and_answered_by_click_or_closed_by_escape(cx: &mut Te
             items: vec![item("one"), item("two"), item("three")],
         })
     };
+    harness.focus_page(cx);
     Harness::dispatch(&menu(7), cx);
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
@@ -325,8 +343,6 @@ fn a_select_popup_is_drawn_and_answered_by_click_or_closed_by_escape(cx: &mut Te
     assert_eq!(harness.web.take(), [Call::Choose(MenuToken::from_raw(7), Some(2))]);
 
     Harness::dispatch(&menu(8), cx);
-    let focus = harness.element.read_with(cx, |element, _| element.focus().clone());
-    cx.update(|window, cx| window.focus(&focus, cx));
     let escape = gpui_kit::Keystroke::parse("escape").unwrap();
     let stroke = crate::terminal::input::KeyStroke::new(&escape, &crate::terminal::input::Source::Keystroke, false);
     assert!(cx.update(|window, cx| registry::key_down(&escape, &stroke, window, cx)));
@@ -354,6 +370,7 @@ fn the_context_menu_copies_a_link_and_pastes_after_handing_the_clipboard_over(cx
             selection: false,
         })
     };
+    harness.focus_page(cx);
     Harness::dispatch(&hit(Some("https://link.invalid/x"), false), cx);
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
@@ -394,4 +411,272 @@ fn a_released_page_closes_its_engine_page(cx: &mut TestAppContext) {
     cx.update(|_, cx| registry::apply(&harness.overlay, false, cx));
     cx.update(|_, cx| registry::apply(&harness.overlay, true, cx));
     assert_eq!(harness.web.take(), [], "a released page sends nothing");
+}
+
+/// A focus handle of the window's own, standing in for a modal that takes the keyboard (Settings, an alert, a picker).
+struct Modal {
+    focus: gpui_kit::FocusHandle,
+}
+
+impl Render for Modal {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().track_focus(&self.focus)
+    }
+}
+
+fn context_hit(view: ViewId) -> Event {
+    Event::ContextMenu(ContextMenu {
+        view,
+        x: 20,
+        y: 20,
+        link: Some("https://link.invalid/x".to_owned()),
+        image: None,
+        media: None,
+        editable: false,
+        selection: false,
+    })
+}
+
+#[gpui_kit::test]
+fn a_page_popup_closes_when_a_modal_takes_the_keyboard_and_none_opens_without_it(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    let view = harness.view(cx);
+    let modal = cx.new(|cx| Modal {
+        focus: cx.focus_handle(),
+    });
+    harness.focus_page(cx);
+    Harness::dispatch(&context_hit(view), cx);
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("html-popup").is_some(), "the menu is drawn");
+    // a modal takes the keyboard: the page's popup goes with it, never drawn over the modal
+    let focus = modal.read_with(cx, |modal, _| modal.focus.clone());
+    cx.update(|window, cx| window.focus(&focus, cx));
+    harness.root.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("html-popup").is_none(),
+        "the menu closed with the focus"
+    );
+    // while the modal holds the keyboard, a popup the page asks for is refused, a select's answered unchanged
+    harness.web.take();
+    Harness::dispatch(
+        &Event::OptionMenu(OptionMenu {
+            token: MenuToken::from_raw(5),
+            view,
+            area: Area {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 20,
+            },
+            items: Vec::new(),
+        }),
+        cx,
+    );
+    Harness::dispatch(&context_hit(view), cx);
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("html-popup").is_none(), "no popup over the modal");
+    assert_eq!(harness.web.take(), [Call::Choose(MenuToken::from_raw(5), None)]);
+}
+
+#[gpui_kit::test]
+fn a_renderer_side_import_failure_falls_back_without_another_frame(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    let view = harness.view(cx);
+    // a device that imports the frame's format, so the import is left to the renderer
+    let caps = gpui_kit::DmaBufImportCaps {
+        adapter: "test".to_owned(),
+        render_node: None,
+        formats: vec![gpui_kit::DmaBufFormat {
+            fourcc: agterm_wpe::fourcc(b"XR24"),
+            modifiers: vec![gpui_kit::DmaBufModifier {
+                modifier: agterm_wpe::MODIFIER_LINEAR,
+                plane_count: 1,
+            }],
+        }],
+        unsupported: None,
+    };
+    harness
+        .element
+        .update(cx, |element, _| element.use_caps(Arc::new(caps)));
+    let file = tempfile::tempfile().unwrap();
+    let frame = Event::Frame(Frame {
+        view,
+        buffer: BufferId::from_raw(4),
+        width: 2,
+        height: 2,
+        damage: Vec::new(),
+        content: FrameContent::DmaBuf(Arc::new(DmaBuf {
+            width: 2,
+            height: 2,
+            fourcc: agterm_wpe::fourcc(b"XR24"),
+            modifier: agterm_wpe::MODIFIER_LINEAR,
+            planes: vec![Plane {
+                fd: file.into(),
+                offset: 0,
+                stride: 8,
+            }],
+        })),
+    });
+    Harness::dispatch(&frame, cx);
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(!harness.web.take().contains(&Call::FallBack), "nothing failed yet");
+    let surface = harness
+        .element
+        .read_with(cx, |element, _| element.shown_surface())
+        .expect("the frame is shown");
+    // the renderer fails it later (on a thread of its own in the app; GPUI's test scheduler takes wakes from its own
+    // thread only); the page sends no further frame
+    let gpui_kit::ExternalSurface::DmaBuf(shown) = surface else {
+        panic!("not a dmabuf frame");
+    };
+    shown
+        .completion
+        .complete(gpui_kit::FrameOutcome::Failed("vkCreateImage failed".to_owned()));
+    cx.run_until_parked();
+    assert!(
+        harness.web.take().contains(&Call::FallBack),
+        "the page falls back to SHM without waiting for a frame"
+    );
+    assert!(
+        harness.web.presented().contains(&BufferId::from_raw(4)),
+        "the frame was answered"
+    );
+}
+
+#[gpui_kit::test]
+fn a_key_release_carries_the_physical_key_its_press_had(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    harness.focus_page(cx);
+    harness.web.take();
+    // AZERTY's `a` sits on the US `q` key (XKB keycode 24)
+    let keystroke = gpui_kit::Keystroke::parse("a").unwrap();
+    let native = crate::terminal::input::Source::Native(crate::terminal::input::NativeKey {
+        keycode: 24,
+        ..Default::default()
+    });
+    let press = crate::terminal::input::KeyStroke::new(&keystroke, &native, false);
+    let release = crate::terminal::input::KeyStroke::new(&keystroke, &native, true);
+    harness.element.update(cx, |element, cx| {
+        assert!(element.key_down(&keystroke, &press, &native, cx));
+        assert!(element.key_released(&keystroke, &release));
+    });
+    let keys: Vec<(bool, Option<u32>)> = harness
+        .web
+        .take()
+        .iter()
+        .filter_map(|call| match call {
+            Call::Input(Input::Key(key)) => Some((key.pressed, key.keycode)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(keys, [(true, Some(24)), (false, Some(24))]);
+}
+
+/// The window's content for the hit test: a terminal's stand-in that counts its presses, and the page over it, hidden
+/// as the deck hides one (`Styled::invisible`) while its slot does not show.
+struct Stack {
+    element: Entity<PageView>,
+    shown: bool,
+    terminal_presses: Rc<Cell<u32>>,
+}
+
+impl Render for Stack {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let presses = Rc::clone(&self.terminal_presses);
+        div()
+            .size_full()
+            .relative()
+            .child(
+                div()
+                    .id("terminal")
+                    .absolute()
+                    .inset_0()
+                    .on_mouse_down(MouseButton::Left, move |_, _, _| presses.set(presses.get() + 1)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .when(!self.shown, gpui_kit::Styled::invisible)
+                    .child(self.element.clone()),
+            )
+    }
+}
+
+#[gpui_kit::test]
+fn the_terminal_under_a_hidden_page_gets_the_pointer(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let _web = testing::install();
+    let presses = Rc::new(Cell::new(0));
+    let overlay = page_overlay();
+    let counted = Rc::clone(&presses);
+    let mounted = overlay.clone();
+    let (stack, cx) = cx.add_window_view(move |window, cx| Stack {
+        element: registry::mount(&mounted, None, window, cx).unwrap(),
+        shown: true,
+        terminal_presses: counted,
+    });
+    cx.simulate_resize(size(px(800.), px(500.)));
+    cx.update(|window, _| window.activate_window());
+    cx.update(|_, cx| registry::apply(&overlay, true, cx));
+    cx.run_until_parked();
+    let at = point(px(300.), px(300.));
+    cx.simulate_click(at, Modifiers::none());
+    assert_eq!(presses.get(), 0, "a page on screen takes the press");
+    // the slot hides the page: the terminal under it gets the pointer back
+    cx.update(|_, cx| registry::apply(&overlay, false, cx));
+    stack.update(cx, |stack, cx| {
+        stack.shown = false;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.simulate_click(at, Modifiers::none());
+    assert_eq!(presses.get(), 1, "a hidden page leaves the press to the terminal");
+}
+
+#[gpui_kit::test]
+fn an_engine_that_ends_while_the_app_runs_fails_every_page_for_good(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    let page = harness.element.read_with(cx, |element, _| Rc::clone(element.page()));
+    assert_eq!(page.failure(), None);
+    cx.update(|_, _| registry::engine_ended());
+    let failure = page.failure().expect("the page failed");
+    assert!(failure.contains("restart agterm"), "{failure}");
+    assert_eq!(
+        registry::refusal().as_deref(),
+        Some(failure.as_str()),
+        "new pages are refused with it"
+    );
+}
+
+#[gpui_kit::test]
+fn a_start_off_the_main_thread_leaves_pages_waiting_and_its_failure_fails_them(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    let finish = registry::set_starting();
+    // a page mounted while the engine starts waits for it
+    let overlay = page_overlay();
+    let element = cx
+        .update(|window, cx| registry::mount(&overlay, None, window, cx))
+        .unwrap();
+    harness.root.update(cx, |root, cx| {
+        root.element = Some(element.clone());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let page = element.read_with(cx, |element, _| Rc::clone(element.page()));
+    assert!(page.web().is_none(), "not realized while the engine starts");
+    assert_eq!(page.failure(), None, "nor failed");
+    assert_eq!(registry::refusal(), None, "pages are still accepted");
+    finish(Err(agterm_wpe::StartError::Worker("no bwrap".to_owned())));
+    let failure = page.failure().expect("the waiting page failed");
+    assert!(
+        failure.contains("did not start") && failure.contains("no bwrap"),
+        "{failure}"
+    );
 }

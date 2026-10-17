@@ -12,15 +12,16 @@ use std::os::fd::OwnedFd;
 use std::sync::Arc;
 
 use crate::spec::ViewId;
+use serde::{Deserialize, Serialize};
 
 /// A buffer of a page's current set; ids are never reused, so an id names one buffer for good.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct BufferId(pub(crate) u64);
 
 crate::raw_ids!(BufferId);
 
 /// A rectangle in buffer pixels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rect {
     pub x: u32,
     pub y: u32,

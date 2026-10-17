@@ -2580,6 +2580,56 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
     `webkit_probe.py`'s WebKitGTK route go with the GTK build; Ubuntu has no WPE `WebKit` 2.54, so its jobs build GPUI
     without the overlays (`GPUI_WITHOUT_HTML`) and the GPUI checks with pages stay in the Arch jobs until an Ubuntu WPE
     provider appears.
+  - ➕ (review) **the app never enters the vendored package's overlay; its engine runs in a worker there.** With the
+    vendored WPE the whole app ran inside `bwrap`, so every pane shell, zmx daemon (which outlive the app), hook and
+    launched program inherited bwrap's user namespace and `PR_SET_NO_NEW_PRIVS`: no `sudo`, `su`, `pkexec`, `passwd`
+    or other setuid or file-capability program, root's files shown as `nobody`'s. A release WPE build has its
+    helpers' paths compiled in (`/usr/lib/wpe-webkit-2.0`, `/usr/bin/bwrap`; `WEBKIT_EXEC_PATH` and the process
+    prefixes exist only in DEVELOPER_MODE builds), and an unprivileged mount namespace always comes with a user
+    namespace, so only a process boundary keeps the app out: **`agterm_wpe::worker`**. With the vendored package
+    `Host::start` re-runs the app's own image (opened from `/proc/self/exe` and passed down as a descriptor, so a file
+    replaced since does not matter; `/proc/<pid>/exe` is unreachable from inside the user namespace) under the overlay
+    as the engine worker and drives it over an `AF_UNIX` `SOCK_SEQPACKET` pair, close-on-exec on both sides (the
+    worker's end kept open across its exec alone): serde_json messages, a dmabuf's planes passed by `SCM_RIGHTS`
+    (one `Arc<DmaBuf>` per buffer kept app-side as before), bodies over 32 KiB and SHM pixels and scheme bytes in
+    sealed memfds (size and seals checked before reading; a truncated packet, a wrong descriptor count or a bad size
+    is a broken transport). Every `Host` call only queues: a writer and a reader thread own the socket. The start is
+    the worker's hello (protocol, build, pid), the configuration, then the engine's start result (a missing render
+    node still fails as `StartError::Display`), within 20 s. The worker runs in a process group of its own and ends on
+    Quit (its `Stopped` flushed first, at most 2 s) or at the end of its socket, never through `--die-with-parent`
+    (PDEATHSIG follows the thread that started bwrap); `shutdown` waits at most 5 s, then `shutdown(2)`s the socket,
+    which frees a writer stuck on a worker that stopped reading, and reaps the worker, killing its group after 2 s.
+    A worker that dies unasked answers every waiting evaluation "the web engine ended" and closes the event channel;
+    the registry then fails every page with "the web engine ended unexpectedly; restart agterm to show pages again"
+    (no restart in process: the pages' engine state is gone with it). The system's package keeps the in-process
+    engine; `Host::start_worker` asks for a worker anywhere, and the headless suite runs every mode on both backends
+    (`worker`: a plain consumer outside any overlay; `direct`: the in-process engine, inside the overlay for the
+    vendored package) plus `worker-death`, so the Arch CI job exercises the transport with the system's package. The
+    registry now starts the engine on a thread of its own (`EngineState::Starting`, pages wait meanwhile), so a slow
+    worker start never holds the main thread and a SIGTERM quit waits on nothing. Every `main` that may start an
+    engine calls `agterm_wpe::worker::serve_if_asked` first (the app with its logging, the two custom harnesses).
+    Removed with the supervisor: `launcher::enter`/`supervise`, `OVERLAID_ENV`, `tests/supervisor.rs`, agterm-wpe's
+    `signal-hook`; `launcher::command` stays for the engine-only reference children. The earlier sign-off on the
+    supervisor is withdrawn; Codex discussion (agreed), transcript
+    `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/task-32-fixer-wpe-sandbox-scope/transcript.md`.
+    Also from the review: a dmabuf the renderer fails to import later wakes the element at once (an import-failure
+    channel from the frame's completion), so a still page falls back to SHM without another frame; a page's popups
+    exist only while it holds the keyboard and shows (refused otherwise, closed on blur or off screen), so a popup
+    never draws over Settings, an alert, a picker, an ask or the palette; an off-screen page inserts no hitbox and
+    sends no geometry, so the terminal under it keeps the pointer; key releases carry their press's XKB keycode;
+    `OverlayPage::id` is gone and `panel::strip` lost its unused `cx`. Tests: wire, message and client units (memfd
+    bodies and blobs, plane order by inode, a refused packet's descriptors closed, unsealed or resized memfds
+    refused, a non-reading worker's shutdown within bounds, a dead worker's evaluations answered, a silent worker's
+    start timing out and reaped; a 1920x1080 SHM frame crosses the transport in about 6 ms in a debug build); the
+    headless backends above; seven view and registry tests; and **`tests/privileges.rs`**: the built app in Live mode
+    on a private Xvfb, a page loaded, the app, the zmx daemon, the pane's shell and a command typed into it show
+    `NoNewPrivs: 0`, the test's own uid and gid maps and user namespace, and `/` owned by uid 0; under the vendored
+    package exactly one of the app's processes, the worker, sits in another user namespace with `NoNewPrivs: 1`;
+    SIGTERM ends the app with 0 and its quit save, and afterwards the surviving daemon and a command `zmx send` runs in
+    its session show the same (run in the Arch `conformance-gpui` job too, with the system's package). Each new test
+    fails with its fix reverted (`tests/privileges.rs` with the app re-executed under the overlay as before).
+    Conformance: GPUI `--ratchet-only --also-k "html or page or browser"` 645 passed, the 645 listed held (its pages
+    now run through the worker on this machine); no GTK run (nothing the GTK build links or its suite runs changed).
 
 ### Stage 4 — switch
 

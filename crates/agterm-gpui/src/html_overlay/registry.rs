@@ -4,8 +4,11 @@
 //!
 //! The engine (`agterm_wpe::Host`, one per process) starts with the first page once a window has drawn: it renders on
 //! the GPU that window's renderer opened, with the formats that device imports (`crate::external_texture::negotiate`),
-//! which exist only from then on. A page mounted before stays waiting and is realized at the next mount or draw. Its
-//! events come back on one channel the pump ([`init`]) dispatches on the main thread.
+//! which exist only from then on. The start runs on a thread of its own (a vendored WPE `WebKit`'s engine starts in a
+//! worker process, `agterm_wpe::worker`), so the main thread never waits on it and a quit meanwhile waits for nothing;
+//! a page mounted before it ends stays waiting and is realized once it does. Its events come back on one channel the
+//! pump ([`init`]) dispatches on the main thread; should they end while the app runs (the worker died), every page
+//! fails for the rest of the run.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -36,15 +39,25 @@ use crate::state::Poster;
 
 /// Why a page waits: no window has drawn yet, so the engine cannot know the GPU to render on.
 const NOT_READY: &str = "the web engine starts once a window has drawn";
+/// Why a page waits: the engine is starting.
+const STARTING: &str = "the web engine is starting";
+/// Why every page fails once the engine ended while the app ran (its worker died).
+const ENDED: &str = "the web engine ended unexpectedly; restart agterm to show pages again";
 
 /// Where the engine stands.
 enum EngineState {
     /// Not started yet.
     Idle,
+    /// Starting on a thread of its own, so a slow start (a worker's) never holds the main thread, and a quit meanwhile
+    /// waits for nothing.
+    Starting,
     Running(Rc<dyn Web>),
-    /// The start failed, for good (the engine starts once per process).
+    /// The start failed, or the engine ended, for good (the engine starts once per process).
     Failed(String),
 }
+
+/// What the start thread hands the pump.
+type Started = Result<(agterm_wpe::Host, async_channel::Receiver<Event>), agterm_wpe::StartError>;
 
 struct Registry {
     pages: HashMap<Uuid, Rc<Page>>,
@@ -69,8 +82,8 @@ struct Registry {
     /// The terminal's colors the pages are drawn in.
     colors: TerminalColors,
     poster: Option<Poster>,
-    /// Where the engine's event channel goes once it starts: the pump [`init`] spawned.
-    pump: Option<async_channel::Sender<async_channel::Receiver<Event>>>,
+    /// Where the engine's start goes from its thread: the pump [`init`] spawned.
+    pump: Option<async_channel::Sender<Started>>,
 }
 
 impl Default for Registry {
@@ -165,24 +178,31 @@ pub fn install(core: &mut Core, state_dir: PathBuf, poster: Poster) {
     core.set_html_host(Box::new(PageHost));
 }
 
-/// Spawns the pump that dispatches the engine's events on the main thread once it starts.
+/// Spawns the pump: it takes the engine's start from the start thread ([`engine`]), then dispatches the engine's events
+/// on the main thread, and fails every page when the engine ends while the app runs.
 pub fn init(cx: &mut App) {
-    let (pump, engines) = async_channel::bounded(1);
+    let (pump, starts) = async_channel::bounded::<Started>(1);
     with(|registry| registry.pump = Some(pump));
     cx.spawn(async move |cx| {
-        let Ok(events) = engines.recv().await else { return };
+        let Ok(started) = starts.recv().await else { return };
+        let Some(events) = cx.update(|_| started_engine(started)) else {
+            return;
+        };
         while let Ok(event) = events.recv().await {
             cx.update(|cx| dispatch(&event, cx));
         }
+        cx.update(|_| engine_ended());
     })
     .detach();
 }
 
-/// The engine, started when it can be (module docs).
+/// The engine once it runs; until then its start begins (once a window has drawn) on a thread of its own, and the
+/// pages wait (module docs).
 fn engine() -> Result<Rc<dyn Web>, String> {
     let current = with(|registry| match &registry.engine {
         EngineState::Running(web) => Some(Ok(Rc::clone(web))),
         EngineState::Failed(failure) => Some(Err(failure.clone())),
+        EngineState::Starting => Some(Err(STARTING.to_owned())),
         EngineState::Idle => None,
     });
     if let Some(current) = current {
@@ -210,28 +230,91 @@ fn engine() -> Result<Rc<dyn Web>, String> {
         frames,
         schemes: vec![GRANT_SCHEME.to_owned()],
     };
-    match agterm_wpe::Host::start(config) {
-        Ok((host, events)) => {
-            tracing::info!("the web engine started");
-            let web: Rc<dyn Web> = Rc::new(Engine(Arc::new(host)));
-            let pump = with(|registry| {
-                registry.engine = EngineState::Running(Rc::clone(&web));
-                registry.pump.clone()
-            });
-            if let Some(pump) = pump {
-                let _ = pump.try_send(events);
-            } else {
-                tracing::warn!("no pump for the web engine's events: pages get no answers");
-            }
-            Ok(web)
+    let failed = |failure: String| {
+        tracing::error!(failure);
+        with(|registry| registry.engine = EngineState::Failed(failure.clone()));
+        Err(failure)
+    };
+    let Some(pump) = with(|registry| registry.pump.clone()) else {
+        return failed("the web engine has no event pump (html_overlay::init was not called)".to_owned());
+    };
+    let spawned = std::thread::Builder::new().name("wpe-start".to_owned()).spawn(move || {
+        let _ = pump.send_blocking(agterm_wpe::Host::start(config));
+    });
+    match spawned {
+        Ok(_) => {
+            with(|registry| registry.engine = EngineState::Starting);
+            Err(STARTING.to_owned())
         }
-        Err(err) => {
+        Err(err) => failed(format!("the web engine did not start: {err}")),
+    }
+}
+
+/// The start thread's outcome, on the main thread: the engine runs and the waiting pages are realized on it, or they
+/// fail with its reason. A start that ends after the quit began is let go (its engine shut down off the main thread).
+/// The engine's events, when it runs.
+fn started_engine(started: Started) -> Option<async_channel::Receiver<Event>> {
+    let waited = with(|registry| matches!(registry.engine, EngineState::Starting));
+    match started {
+        Ok((host, events)) if waited => {
+            tracing::info!(backend = ?host.backend(), "the web engine started");
+            let web: Rc<dyn Web> = Rc::new(Engine(Arc::new(host)));
+            with(|registry| registry.engine = EngineState::Running(web));
+            realize_waiting();
+            Some(events)
+        }
+        Ok((host, _)) => {
+            let _ = std::thread::Builder::new()
+                .name("wpe-stop".to_owned())
+                .spawn(move || host.shutdown());
+            None
+        }
+        Err(err) if waited => {
             let failure = format!("the web engine did not start: {err}");
             tracing::error!(failure);
-            with(|registry| registry.engine = EngineState::Failed(failure.clone()));
-            Err(failure)
+            with(|registry| registry.engine = EngineState::Failed(failure));
+            // the waiting pages fail with it
+            realize_waiting();
+            None
         }
+        Err(_) => None,
     }
+}
+
+/// The engine's events ended. Past the quit's own shutdown nothing follows; while the app runs it means the engine is
+/// gone (its worker died): every page fails, for good, and a store clear in flight reports the failure.
+pub(super) fn engine_ended() {
+    let pages = with(|registry| {
+        if !matches!(registry.engine, EngineState::Running(_)) {
+            return None;
+        }
+        registry.engine = EngineState::Failed(ENDED.to_owned());
+        if registry.clearing {
+            registry.clearing = false;
+            registry.clear_failure = Some(ENDED.to_owned());
+        }
+        Some(registry.pages.values().cloned().collect::<Vec<_>>())
+    });
+    let Some(pages) = pages else { return };
+    tracing::error!("{ENDED}");
+    for page in pages {
+        page.engine_failed(ENDED);
+    }
+}
+
+/// Puts the engine back to starting, its start's outcome then given with [`started_engine`] (the unit tests).
+#[cfg(test)]
+pub(super) fn set_starting() -> impl FnOnce(Started) {
+    with(|registry| registry.engine = EngineState::Starting);
+    |started| {
+        let _ = started_engine(started);
+    }
+}
+
+/// Why pages are refused now, as the core is told (the unit tests).
+#[cfg(test)]
+pub(super) fn refusal() -> Option<String> {
+    PageHost.web_views_unavailable()
 }
 
 /// Runs the pages against `web` instead of starting the engine (the unit tests' recorder).
@@ -280,7 +363,7 @@ pub(super) fn realize_waiting() {
                 realize(&page, &web);
             }
         }
-        Err(failure) if failure != NOT_READY => {
+        Err(failure) if failure != NOT_READY && failure != STARTING => {
             for page in waiting {
                 page.engine_failed(&failure);
             }

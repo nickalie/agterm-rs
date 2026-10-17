@@ -7,7 +7,11 @@
 //!   leaves the page's set) and shown once its implicit fence signals (WPE hands no rendering fence); an SHM frame
 //!   updates its damage. Every outcome (presented, discarded, failed) tells the engine the buffer may be reused; a
 //!   buffer that does not import switches the page to SHM frames ([`agterm_wpe::Host::fall_back_to_shm`]), logged with
-//!   the note that video is not supported there. SHM is never chosen while dmabufs import.
+//!   the note that video is not supported there: refused at once by the device's caps, or failed later in the
+//!   renderer, whose report wakes the element at once (a still page sends no further frame to notice it by). SHM is
+//!   never chosen while dmabufs import.
+//! - Shown or not: a page off screen (its slot hidden, another pane zoomed) is laid out but takes no room in the
+//!   window's hit test, so the terminals under it keep the pointer, and sends the engine no geometry.
 //! - Geometry and scale: the content's bounds in logical pixels and the window's scale factor, sent when they change;
 //!   the engine renders at their product.
 //! - Input: presses, releases, motion (with enter and leave), the wheel and the touchpad go to the engine in the
@@ -18,6 +22,10 @@
 //!   files never reach a page); a middle click pastes the primary selection the same way.
 //! - The input method: the element is GPUI's input handler while focused; a composition goes to the engine as a
 //!   preedit, a commit as text, and the candidate window sits at the caret area the engine reports.
+//! - Popups (a `<select>`'s rows, the context menu) are drawn deferred, above the window's other layers, so they exist
+//!   only while the page holds the keyboard: one opening while it does not is refused, and the page losing it (a
+//!   modal opening: Settings, an alert, a picker, an ask, the palette) or leaving the screen closes it, so a popup is
+//!   never drawn over a modal.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -41,6 +49,7 @@ use super::menus::{self, Menu};
 use super::page::Page;
 use super::panel;
 use crate::external_texture::{Acquire, ExternalTexture, ShmRegion};
+use gpui_kit::FrameOutcome;
 
 /// What a page's element was handed so far (diagnostics, and the headless page tests).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -76,11 +85,15 @@ pub struct PageView {
     modifiers: gpui_kit::Modifiers,
     /// The page's popup: a `<select>`'s rows or the context menu.
     menu: Option<Menu>,
+    /// The page holds the keyboard: set by a press at once, by the focus listeners otherwise.
+    focused: bool,
     /// The input method's composition.
     preedit: Option<String>,
     /// Where the engine says the caret is, for the candidate window.
     caret: Option<Area>,
     released: bool,
+    /// Wakes the element from the renderer's threads when a dmabuf failed to import there.
+    import_failed: async_channel::Sender<()>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -88,9 +101,18 @@ impl PageView {
     /// The element of `page` in `window`.
     pub(super) fn new(page: Rc<Page>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
-        let focused = cx.on_focus(&focus, window, |view, _, _| view.focus_changed(true));
-        let blurred = cx.on_blur(&focus, window, |view, _, _| view.focus_changed(false));
+        let focused = cx.on_focus(&focus, window, |view, _, cx| view.focus_changed(true, cx));
+        let blurred = cx.on_blur(&focus, window, |view, _, cx| view.focus_changed(false, cx));
         page.set_element(cx.entity().downgrade(), window.window_handle());
+        let (import_failed, failures) = async_channel::unbounded();
+        cx.spawn(async move |view, cx| {
+            while failures.recv().await.is_ok() {
+                if view.update(cx, PageView::take_fallback).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         Self {
             stats: FrameStats::default(),
             answered: Arc::default(),
@@ -104,9 +126,11 @@ impl PageView {
             buttons: Modifiers::empty(),
             modifiers: gpui_kit::Modifiers::default(),
             menu: None,
+            focused: false,
             preedit: None,
             caret: None,
             released: false,
+            import_failed,
             _subscriptions: vec![focused, blurred],
         }
     }
@@ -130,6 +154,18 @@ impl PageView {
         }
     }
 
+    /// Checks dmabufs against `caps` instead of GPUI's device (the unit tests, whose renderer opens none).
+    #[cfg(test)]
+    pub(super) fn use_caps(&mut self, caps: Arc<gpui_kit::DmaBufImportCaps>) {
+        self.texture = ExternalTexture::with_caps(caps);
+    }
+
+    /// The frame shown now (the unit tests).
+    #[cfg(test)]
+    pub(super) fn shown_surface(&self) -> Option<gpui_kit::ExternalSurface> {
+        self.texture.shown().cloned()
+    }
+
     /// The engine closed popup `token` itself.
     pub(super) fn menu_closed(&mut self, token: agterm_wpe::MenuToken, cx: &mut Context<Self>) {
         if matches!(&self.menu, Some(Menu::Options { token: shown, .. }) if *shown == token) {
@@ -149,13 +185,21 @@ impl PageView {
         }
     }
 
-    fn focus_changed(&mut self, focused: bool) {
+    fn focus_changed(&mut self, focused: bool, cx: &mut Context<Self>) {
+        self.focused = focused;
         self.send(|web, view| web.set_focused(view, focused));
         if focused {
             self.page.focused();
-        } else if self.preedit.take().is_some() {
+            return;
+        }
+        if self.preedit.take().is_some() {
             // a composition the keyboard left is cancelled, as GTK's input method contexts do on focus out
             self.send(|web, view| web.ime_preedit(view, String::new(), 0));
+        }
+        // the keyboard went elsewhere (a modal, another pane): the popup goes, never left drawn over a modal
+        if self.menu.is_some() {
+            self.close_menu();
+            cx.notify();
         }
     }
 
@@ -219,12 +263,16 @@ impl PageView {
                         }
                     },
                 };
-                self.texture.push_dmabuf(imported, Acquire::Implicit, move |_| done());
+                let import_failed = self.import_failed.clone();
+                self.texture.push_dmabuf(imported, Acquire::Implicit, move |outcome| {
+                    if matches!(outcome, FrameOutcome::Failed(_)) {
+                        // the renderer's thread: the element takes the fall-back on the main thread
+                        let _ = import_failed.try_send(());
+                    }
+                    done();
+                });
                 self.stats.dmabuf += 1;
-                if self.texture.take_fallback().is_some() {
-                    self.stats.fell_back = true;
-                    web.fall_back_to_shm(view);
-                }
+                self.fall_back_if_failed(web.as_ref(), view);
             }
             FrameContent::Shm(regions) => {
                 let regions = regions.iter().map(|region| ShmRegion {
@@ -243,15 +291,52 @@ impl PageView {
         }
     }
 
+    /// A dmabuf that did not import (refused here, or failed in the renderer since): the page goes to SHM frames, once.
+    fn fall_back_if_failed(&mut self, web: &dyn super::engine::Web, view: ViewId) -> bool {
+        if self.texture.take_fallback().is_none() {
+            return false;
+        }
+        self.stats.fell_back = true;
+        web.fall_back_to_shm(view);
+        true
+    }
+
+    /// The renderer reported a failed import: the fall-back is taken now, not with a next frame a still page never
+    /// sends.
+    fn take_fallback(&mut self, cx: &mut Context<Self>) {
+        if self.released {
+            return;
+        }
+        if let (Some(web), Some(view)) = (self.page.web(), self.view_id())
+            && self.fall_back_if_failed(web.as_ref(), view)
+        {
+            cx.notify();
+        }
+    }
+
     // MARK: - popups
 
     fn option_menu(&mut self, menu: &OptionMenu) {
         self.close_menu();
+        if !self.may_pop_up() {
+            if let Some(web) = self.page.web() {
+                web.choose_option(menu.token, None);
+            }
+            return;
+        }
         self.menu = Some(Menu::options(menu));
+    }
+
+    /// Whether a popup may open: only while the page holds the keyboard and shows (module docs).
+    fn may_pop_up(&self) -> bool {
+        self.focused && self.page.on_screen()
     }
 
     fn context_menu(&mut self, menu: &ContextMenu) {
         self.close_menu();
+        if !self.may_pop_up() {
+            return;
+        }
         let can = self
             .page
             .overlay()
@@ -346,7 +431,7 @@ impl PageView {
         let key = Key {
             pressed: true,
             keyval,
-            keycode: (native.keycode != 0).then_some(native.keycode),
+            keycode: physical(native),
             modifiers: input::modifiers(keystroke.modifiers) | self.buttons,
         };
         self.send(|web, view| web.input(view, Input::Key(key)));
@@ -375,17 +460,26 @@ impl PageView {
     }
 
     fn key_up(&mut self, event: &KeyUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(keyval) = input::keysym(&event.keystroke) else {
-            return;
+        let source = crate::terminal::input::current_source(&event.keystroke);
+        let native = crate::terminal::input::KeyStroke::new(&event.keystroke, &source, true);
+        if self.key_released(&event.keystroke, &native) {
+            cx.stop_propagation();
+        }
+    }
+
+    /// A key went up: the engine gets its release with the physical key its press had. Whether the page took it.
+    fn key_released(&self, keystroke: &gpui_kit::Keystroke, native: &crate::terminal::input::KeyStroke) -> bool {
+        let Some(keyval) = input::keysym(keystroke) else {
+            return false;
         };
         let key = Key {
             pressed: false,
             keyval,
-            keycode: None,
-            modifiers: input::modifiers(event.keystroke.modifiers) | self.buttons,
+            keycode: physical(native),
+            modifiers: input::modifiers(keystroke.modifiers) | self.buttons,
         };
         self.send(|web, view| web.input(view, Input::Key(key)));
-        cx.stop_propagation();
+        true
     }
 
     /// A modifier went down or up: the engine gets its key, so a page's own Shift or Control handlers see it.
@@ -431,6 +525,8 @@ impl PageView {
         }
         self.close_menu();
         window.focus(&self.focus, cx);
+        // at once: a popup the press asks for may come back before the focus listeners run
+        self.focused = true;
         self.page.user_input(true);
         let button = input::button(event.button);
         if event.button == MouseButton::Middle {
@@ -511,7 +607,8 @@ impl PageView {
         });
     }
 
-    /// The content: the frames, drawn under the page's hitbox, with the pointer's listeners.
+    /// The content: the frames, drawn under the page's hitbox, with the pointer's listeners; off screen, nothing that
+    /// takes the pointer or tells the engine a size (module docs).
     fn content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let surface = self.texture.prepare(window);
         let view = cx.entity();
@@ -519,13 +616,18 @@ impl PageView {
         let paint_view = view.downgrade();
         let cursor = self.cursor;
         let focus = self.focus.clone();
+        let shown = self.page.on_screen();
         canvas(
             move |bounds, window, cx| {
+                if !shown {
+                    return None;
+                }
                 let scale = window.scale_factor();
                 let _ = prepaint_view.update(cx, |view, _| view.laid_out(bounds, scale));
-                window.insert_hitbox(bounds, HitboxBehavior::BlockMouse)
+                Some(window.insert_hitbox(bounds, HitboxBehavior::BlockMouse))
             },
             move |bounds, hitbox, window, cx| {
+                let Some(hitbox) = hitbox else { return };
                 if let Some(surface) = surface {
                     window.paint_external_surface(bounds, surface);
                 }
@@ -545,6 +647,12 @@ impl PageView {
 
 /// A page's point, in window coordinates.
 type Point = gpui_kit::Point<Pixels>;
+
+/// The key's XKB keycode, for the page's `KeyboardEvent.code`; `None` without a native record (the engine then reads
+/// the key's position from its keymap).
+fn physical(native: &crate::terminal::input::KeyStroke) -> Option<u32> {
+    (native.keycode != 0).then_some(native.keycode)
+}
 
 /// The pointer's listeners of `view` over `hitbox`: presses and the wheel over it; motion and releases anywhere, so a
 /// drag carries on past the edge. None stops the event: GPUI's own handlers (a popover's click outside) still see it.
@@ -607,6 +715,11 @@ impl Focusable for PageView {
 impl Render for PageView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.page.drawn_in(window.window_handle());
+        if !self.page.on_screen() {
+            // a deferred popup would still be drawn under a hidden parent
+            self.close_menu();
+        }
+        self.take_fallback(cx);
         let overlay = self.page.overlay();
         let colors = self.page.colors();
         let poster = self.page.poster().clone();
@@ -624,7 +737,7 @@ impl Render for PageView {
             .flex_col()
             .overflow_hidden()
             .bg(colors.background())
-            .children(panel::strip(&overlay, &colors, &poster, cx))
+            .children(panel::strip(&overlay, &colors, &poster))
             .child(
                 div()
                     .id("html-content")

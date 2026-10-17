@@ -190,6 +190,12 @@ impl Page {
         self.colors.borrow().clone()
     }
 
+    /// Why the page cannot load, for good (the unit tests).
+    #[cfg(test)]
+    pub(super) fn failure(&self) -> Option<String> {
+        self.state.borrow().storage_failure.clone()
+    }
+
     pub(super) fn on_screen(&self) -> bool {
         self.state.borrow().on_screen
     }

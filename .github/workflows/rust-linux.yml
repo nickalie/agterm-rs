@@ -158,7 +158,8 @@ jobs:
           cargo clippy -p agterm-wpe -p agterm-wpe-sys -p agterm-wpe-platform-sys -p agterm-wpe-javascriptcore-sys
           --all-targets --all-features -- -D warnings
       # agterm-wpe's engine tests run pages headless in SHM mode here (the runner has no DRM render node, so its
-      # dmabuf mode reports itself skipped)
+      # dmabuf mode reports itself skipped), in process and through a worker process (the system's package needs no
+      # worker; the vendored one always gets one, so its transport is tested here too)
       - name: test
         run: cargo test -p agterm-wpe -p agterm-wpe-sys -p agterm-wpe-platform-sys -p agterm-wpe-javascriptcore-sys
       - name: the bindings are a regeneration at the pins
@@ -506,12 +507,14 @@ jobs:
       # the app and the harness read the password database, never $SHELL
       - name: the login shell (bash)
         run: getent passwd "$(id -un)"
+      # instance: forwarding, activation and the SIGTERM quit; privileges: the app, a Live pane and its session keep
+      # the user's privileges while a page runs (with the system's wpewebkit the engine runs in process here)
       - name: the GPUI process tests with the HTML overlays
         env:
           AGTERM_REQUIRE_DISPLAY_TESTS: "1"
         run: |
           cargo build -p agterm-gtk
-          cargo test -p agterm-gpui --test instance
+          cargo test -p agterm-gpui --test instance --test privileges
       - name: install the suite
         run: |
           python -m venv /opt/suite

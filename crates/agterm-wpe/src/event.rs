@@ -10,23 +10,24 @@ use std::path::PathBuf;
 
 use crate::frames::{BufferId, Frame};
 use crate::spec::{SessionId, ViewId};
+use serde::{Deserialize, Serialize};
 
 /// A policy question's token.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PolicyToken(pub(crate) u64);
 
 /// A script message's token.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ReplyToken(pub(crate) u64);
 
 /// A scheme request's token.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SchemeToken(pub(crate) u64);
 
 crate::raw_ids!(PolicyToken, ReplyToken, SchemeToken);
 
 /// A main-frame load's progress (`WebKitLoadEvent`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LoadEvent {
     Started,
     Redirected,
@@ -35,7 +36,7 @@ pub enum LoadEvent {
 }
 
 /// How a load failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LoadErrorKind {
     /// Cancelled, typically superseded by the next load (`WEBKIT_NETWORK_ERROR_CANCELLED`).
     Cancelled,
@@ -45,14 +46,14 @@ pub enum LoadErrorKind {
     Failed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoadError {
     pub kind: LoadErrorKind,
     pub message: String,
 }
 
 /// Why a page's web process ended (`WebKitWebProcessTerminationReason`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Termination {
     Crashed,
     ExceededMemoryLimit,
@@ -60,7 +61,7 @@ pub enum Termination {
 }
 
 /// What a page shows and where its history can go, reported whenever any of it changes.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PageState {
     pub uri: Option<String>,
     pub title: Option<String>,
@@ -69,7 +70,7 @@ pub struct PageState {
 }
 
 /// Why a navigation started (`WebKitNavigationType`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NavigationType {
     LinkClicked,
     FormSubmitted,
@@ -80,7 +81,7 @@ pub enum NavigationType {
 }
 
 /// A policy question.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PolicyKind {
     /// A navigation in the page's frame, or one that would open a new window.
     Navigation {
@@ -96,7 +97,7 @@ pub enum PolicyKind {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyRequest {
     pub token: PolicyToken,
     pub view: ViewId,
@@ -104,7 +105,7 @@ pub struct PolicyRequest {
 }
 
 /// A message a page's script sent to a [`crate::MessageHandler`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScriptMessage {
     pub token: ReplyToken,
     pub view: ViewId,
@@ -114,7 +115,7 @@ pub struct ScriptMessage {
 }
 
 /// A read of one of the consumer's URI schemes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SchemeRequest {
     pub token: SchemeToken,
     /// The page that reads it, when it is one of the host's.
@@ -123,7 +124,7 @@ pub struct SchemeRequest {
 }
 
 /// Why a scheme request failed, as the page's load error reports it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SchemeError {
     NotFound,
     PermissionDenied,
@@ -132,7 +133,7 @@ pub enum SchemeError {
 }
 
 /// The answer to a [`SchemeRequest`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SchemeResponse {
     /// A file, streamed from disk with the type its name suggests.
     File(PathBuf),
@@ -147,9 +148,11 @@ pub enum SchemeResponse {
 }
 
 /// Something the engine reports.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Event {
-    /// A frame to show; answer with [`crate::Host::frame_presented`] once it is on screen.
+    /// A frame to show; answer with [`crate::Host::frame_presented`] once it is on screen. Never serialized: a worker
+    /// sends its content beside the message (crate `worker`).
+    #[serde(skip)]
     Frame(Frame),
     /// Buffers that left a page's set: forget what was imported from them.
     BuffersRemoved {
@@ -230,7 +233,7 @@ pub enum Event {
 }
 
 /// A rectangle in a page's logical pixels.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Area {
     pub x: i32,
     pub y: i32,
@@ -239,13 +242,13 @@ pub struct Area {
 }
 
 /// An option popup's token.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MenuToken(pub(crate) u64);
 
 crate::raw_ids!(MenuToken);
 
 /// What a row of a `<select>` popup is.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OptionKind {
     /// An option outside any group.
     #[default]
@@ -257,7 +260,7 @@ pub enum OptionKind {
 }
 
 /// One row of a `<select>` popup (`WebKitOptionMenuItem`).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OptionItem {
     pub label: String,
     pub tooltip: Option<String>,
@@ -267,7 +270,7 @@ pub struct OptionItem {
 }
 
 /// A `<select>` popup: its rows, and the select's area to place it by.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OptionMenu {
     pub token: MenuToken,
     pub view: ViewId,
@@ -276,7 +279,7 @@ pub struct OptionMenu {
 }
 
 /// What lies under a right-click (`WebKitHitTestResult`), from which the consumer builds its menu.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextMenu {
     pub view: ViewId,
     /// Where the menu was asked for, in the page's logical pixels.
@@ -292,7 +295,7 @@ pub struct ContextMenu {
 }
 
 /// An editing command a page runs on its focused content ([`crate::Host::editing_command`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EditingCommand {
     Copy,
     Cut,

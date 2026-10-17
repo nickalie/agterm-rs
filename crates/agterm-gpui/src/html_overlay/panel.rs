@@ -153,7 +153,7 @@ fn rgb(hex: &str) -> Option<(f64, f64, f64)> {
 
 /// The identity strip of `overlay` in `colors`, its buttons acting on page `id`; `None` for a chromeless page.
 #[must_use]
-pub fn strip(overlay: &HtmlOverlay, colors: &PanelColors, poster: &Poster, cx: &App) -> Option<AnyElement> {
+pub fn strip(overlay: &HtmlOverlay, colors: &PanelColors, poster: &Poster) -> Option<AnyElement> {
     let items = policy::strip_items(overlay)?;
     let current = overlay.current.as_ref();
     let mut bar = div()
@@ -188,7 +188,6 @@ pub fn strip(overlay: &HtmlOverlay, colors: &PanelColors, poster: &Poster, cx: &
             _ => bar.child(button(overlay.id, item, true, colors, poster)),
         };
     }
-    let _ = cx;
     Some(
         div()
             .flex_shrink_0()

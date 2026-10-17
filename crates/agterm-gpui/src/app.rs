@@ -475,8 +475,8 @@ fn shut_down(shell: &Shell, cx: &mut App) {
     shell.server.borrow_mut().stop();
     tracing::info!("quit: the control server is stopped");
     shell.windows.borrow().teardown_all(cx);
-    // the web engine's pages close and its thread idles; the process then ends without exit handlers (`main.rs`),
-    // which WebKit's static destructors need (they must run on its thread)
+    // the web engine's pages close and its thread idles (or its worker ends, a bounded wait); the process then ends
+    // without exit handlers (`main.rs`), which WebKit's static destructors need (they must run on its thread)
     crate::html_overlay::shutdown();
 }
 

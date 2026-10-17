@@ -157,12 +157,11 @@ impl OverlayTerminal {
     }
 }
 
-/// An HTML page over a deck page ([`crate::html_overlay`]): the slot generation it belongs to, its focus key, its id
-/// and its element, which the registry owns with the page.
+/// An HTML page over a deck page ([`crate::html_overlay`]): the slot generation it belongs to, its focus key and its
+/// element, which the registry owns with the page (by the page's id).
 pub struct OverlayPage {
     generation: u64,
     key: String,
-    id: Uuid,
     element: Entity<crate::html_overlay::PageView>,
     /// It shows where the plan puts it.
     shown: bool,
@@ -174,12 +173,6 @@ impl OverlayPage {
     #[must_use]
     pub fn element(&self) -> &Entity<crate::html_overlay::PageView> {
         &self.element
-    }
-
-    /// The page's id.
-    #[must_use]
-    pub fn id(&self) -> Uuid {
-        self.id
     }
 
     /// The slot generation it belongs to.
@@ -448,7 +441,6 @@ fn mount_page(
     Some(OverlayPage {
         generation,
         key,
-        id: html.id,
         element,
         shown: false,
         _focus: focus,

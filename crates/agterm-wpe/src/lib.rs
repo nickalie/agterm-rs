@@ -17,7 +17,10 @@
 //! - The `WebKit` surface the overlay uses: browser stores ([`SessionSpec`]: in memory, or on disk for saved logins;
 //!   downloads refused), [`Settings`], user scripts and script message handlers, navigation and response policy, URI
 //!   schemes, and what a page may not do (new windows, dialogs, file choosers, permissions, full screen) refused.
-//! - [`launcher`]: running a program against the vendored WPE `WebKit`, whose helpers sit at a compiled-in path.
+//! - [`worker`]: the engine in a process of its own, which the vendored WPE `WebKit` (its helpers at a compiled-in
+//!   path, reachable only inside an overlay of `/usr/lib`, [`launcher`]) always gets, so the consumer itself never runs
+//!   in that overlay's user namespace; [`Host::start_worker`] asks for one anywhere. Every program that may start an
+//!   engine calls [`worker::serve_if_asked`] first thing in its `main`.
 //!
 //! - What `WebKitGTK` draws itself and an offscreen page cannot (module `engine::interaction`): the clipboard
 //!   (`WPEPlatform`'s is the engine's own: a page's copy is reported, the desktop's text is handed in before a paste),
@@ -58,6 +61,7 @@ mod host;
 mod input;
 pub mod launcher;
 mod spec;
+pub mod worker;
 
 use agterm_wpe_javascriptcore_sys as jsc_sys;
 use agterm_wpe_platform_sys as platform_sys;
@@ -72,7 +76,7 @@ pub use event::{
     SchemeRequest, SchemeResponse, SchemeToken, ScriptMessage, Termination,
 };
 pub use frames::{BufferId, DmaBuf, Frame, FrameContent, Plane, Rect, ShmRegion};
-pub use host::{Evaluation, Host, Load, StartError, exit_process};
+pub use host::{Backend, Evaluation, Host, Load, StartError, exit_process};
 pub use input::{Button, Input, Key, Modifiers, Pointer, PointerKind, Scroll};
 pub use spec::{
     Geometry, InjectionTime, MessageHandler, Rgba, SessionId, SessionSpec, Settings, UserScript, ViewId, ViewSpec,

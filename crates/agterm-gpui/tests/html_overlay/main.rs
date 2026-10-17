@@ -4,8 +4,9 @@
 //! has no render node for the engine to render on. No display, no compositor, no session bus.
 //!
 //! `WebKit` and GPUI's headless renderer run once per process, so this harness (no libtest) runs each GPU in a child
-//! process of its own, with an environment built from scratch (no `AGTERM_*`/`ZMX_*`, private XDG directories), under
-//! the overlay a vendored WPE `WebKit` needs (`agterm_wpe::launcher::command`). Where a piece is missing (lavapipe, a
+//! process of its own, with an environment built from scratch (no `AGTERM_*`/`ZMX_*`, private XDG directories): a plain
+//! process, as the app is, whose registry starts the engine in a worker where WPE `WebKit` is vendored
+//! (`agterm_wpe::worker`, the reason `main` calls `serve_if_asked` first). Where a piece is missing (lavapipe, a
 //! Mesa render node) its child is skipped with a message; under `AGTERM_REQUIRE_DISPLAY_TESTS` a missing lavapipe
 //! fails.
 //!
@@ -29,6 +30,8 @@ const REQUIRE_ENV: &str = "AGTERM_REQUIRE_DISPLAY_TESTS";
 const CHILD_TIMEOUT: Duration = Duration::from_secs(300);
 
 fn main() -> ExitCode {
+    // SAFETY: first thing in main, while the process has one thread.
+    unsafe { agterm_wpe::worker::serve_if_asked(|| {}) };
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--list") {
         for (name, _) in cases::CASES {
@@ -88,7 +91,7 @@ fn parent(args: &[String]) -> ExitCode {
 
 fn run_child(exe: &Path, gpu: &Gpu, args: &[String]) -> Result<(), String> {
     let home = tempfile::tempdir().map_err(|err| err.to_string())?;
-    let mut command = agterm_wpe::launcher::command(exe);
+    let mut command = std::process::Command::new(exe);
     command.args(args).env_clear().stdin(Stdio::null());
     for kept in ["PATH", "RUST_BACKTRACE", "RUST_LOG", "TMPDIR", REQUIRE_ENV] {
         if let Some(value) = std::env::var_os(kept) {
