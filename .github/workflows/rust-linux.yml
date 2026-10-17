@@ -121,7 +121,8 @@ jobs:
 
   # The WPE WebKit -sys crates (gir bindings of the app's HTML engine) against the distro package they are generated
   # from: Arch's wpewebkit at WPE_VERSION (build/pins.env), installed from a date-pinned Arch Linux Archive snapshot in
-  # a digest-pinned archlinux container (Ubuntu packages no wpewebkit at all); then the checked-in bindings must equal a
+  # a digest-pinned archlinux container (Ubuntu packages no wpewebkit at all), privileged so WebKit's bubblewrap sandbox
+  # gets its user namespaces (without them no web process starts); then the checked-in bindings must equal a
   # regeneration at the pins. Bump ARCH_SNAPSHOT (a day whose extra repo carries the pinned wpewebkit) and the image
   # digest with the WPE_ pins.
   # archive.archlinux.org stalls now and then, which fails pacman's stall timeout: every sync from the snapshot goes
@@ -134,6 +135,7 @@ jobs:
     container:
       # archlinux:base-devel-20261011.0.609700
       image: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
+      options: --privileged
     env:
       CARGO_TERM_COLOR: always
       ARCH_SNAPSHOT: "2026/10/14"
@@ -159,7 +161,7 @@ jobs:
           exit 1
           EOF
           chmod +x /usr/local/bin/pacman-archive
-          pacman-archive git wpewebkit rustup
+          pacman-archive git wpewebkit bubblewrap rustup
       - uses: actions/checkout@v7
       - name: the snapshot's wpewebkit is the pinned one
         shell: bash
