@@ -449,6 +449,34 @@ fn the_dump_reaches_ssh_stdin_byte_for_byte_and_ends_in_eof() {
 }
 
 #[test]
+fn the_dump_names_the_database_by_argument_as_well_as_by_terminfo() {
+    // an ncurses built with `--disable-root-environ` ignores TERMINFO for root, so `-A` carries the database too
+    let fixture = Fixture::new();
+    let database = fixture.database("env", "x");
+    let infocmp = Fixture::script(
+        &fixture.path("infocmp"),
+        &format!(
+            "printf '%s\\n' \"$@\" \"$TERMINFO\" > '{}'",
+            fixture.path("infocmp.args").display()
+        ),
+    );
+    let ssh = fixture.fake_ssh(0, true, "");
+    let outcome = run(
+        &connection("buildbox"),
+        None,
+        &env(&[("TERMINFO", &database)]),
+        &ssh,
+        &infocmp,
+    );
+    assert_eq!(outcome, Ok(Outcome::Exited(0)));
+    let directory = database.display().to_string();
+    assert_eq!(
+        fixture.read("infocmp.args").lines().collect::<Vec<_>>(),
+        ["-x", "-A", directory.as_str(), ENTRY, directory.as_str()]
+    );
+}
+
+#[test]
 fn a_failed_dump_never_starts_ssh() {
     let fixture = Fixture::new();
     let database = fixture.database("env", "78");

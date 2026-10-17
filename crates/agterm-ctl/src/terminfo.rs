@@ -317,11 +317,16 @@ pub fn run(
 }
 
 /// `infocmp -x` so the entry's extended capabilities (the ones worth installing it for) come along, with `TERMINFO`
-/// the child's whole environment so it reads the chosen database and nothing else. Both pipes are drained before the
-/// wait, or a dump larger than the pipe buffer would deadlock.
+/// the child's whole environment so it reads the chosen database and nothing else. `-A` names the database too: an
+/// ncurses built with `--disable-root-environ` (Arch's) ignores `TERMINFO` for root, and upstream's environment alone
+/// would find no entry there. Both pipes are drained before the wait, or a dump larger than the pipe buffer would
+/// deadlock.
 fn dump(directory: &Path, infocmp: &Path) -> Result<Vec<u8>, InstallFailure> {
     let output = Command::new(infocmp)
-        .args(["-x", ENTRY])
+        .arg("-x")
+        .arg("-A")
+        .arg(directory)
+        .arg(ENTRY)
         .env_clear()
         .env("TERMINFO", directory)
         .stdin(Stdio::null())
