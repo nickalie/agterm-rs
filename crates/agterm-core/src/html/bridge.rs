@@ -93,10 +93,10 @@ pub const ADAPTER_SCRIPT: &str = r"(() => {
   }, true);
 })();";
 
-/// A `--js` page's relay in the bridge's world. `WebKitGTK` names no frame on a script message, so the handler is
-/// registered in agterm's world alone, which neither page scripts nor frames reach, and the page's own requests come
-/// through `window.postMessage`: this relay forwards only those whose source is the top window itself, as upstream
-/// refuses requests from frames. (The Linux fork's answer to the same gap.)
+/// A `--js` page's relay in the bridge's world. WPE (as `WebKitGTK`) names no frame on a script message, so the
+/// handler is registered in agterm's world alone, which neither page scripts nor frames reach, and the page's own
+/// requests come through `window.postMessage`: this relay forwards only those whose source is the top window itself,
+/// as upstream refuses requests from frames. (The Linux fork's answer to the same gap.)
 pub const RELAY_SCRIPT: &str = r"(() => {
   const handler = window.webkit.messageHandlers.agterm;
   window.addEventListener('message', (event) => {

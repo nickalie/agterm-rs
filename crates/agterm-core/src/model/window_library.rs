@@ -4,7 +4,7 @@
 //! A window is open iff its store is loaded. Loading a closed window's store from disk, the index file and the
 //! launch bootstrap (migration and recovery) live in [`crate::persist::library`], which performs the saves this
 //! library's effects ask for; the event ring comes with `events.read`.
-//! Upstream's claim queue, which hands `SwiftUI`'s id-less `WindowGroup` windows their ids, has no counterpart: the GTK
+//! Upstream's claim queue, which hands `SwiftUI`'s id-less `WindowGroup` windows their ids, has no counterpart: the
 //! frontend builds each window for a known id.
 
 use std::collections::{HashMap, HashSet};

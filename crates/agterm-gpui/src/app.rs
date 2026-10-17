@@ -29,7 +29,7 @@ use crate::state::{AppState, Poster, post};
 use crate::windows::{ConfigHost, Windows};
 
 /// The capabilities of the Rust target profile this build implements (`conformance/docs/rust-build.md`). Each is
-/// claimed once its commands work in this frontend (plan > Development Approach), toward the GTK build's set.
+/// claimed once its commands work in this frontend (plan > Development Approach).
 pub const CAPABILITIES: &[&str] = &[
     "posix-shell",
     "drop-placement",

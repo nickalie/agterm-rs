@@ -231,7 +231,7 @@ impl AppSettings {
     /// after the user's `ghostty.conf` so they win. Values are written raw: ghostty takes the rest of the line, so
     /// names with spaces are not quoted.
     ///
-    /// This build's GTK window has no translucency of its own, so the lines never carry upstream's translucency pins
+    /// The lines of a host without window translucency of its own, so they never carry upstream's translucency pins
     /// (see [`Self::ghostty_config_lines_for`]).
     #[must_use]
     pub fn ghostty_config_lines(&self) -> Vec<String> {

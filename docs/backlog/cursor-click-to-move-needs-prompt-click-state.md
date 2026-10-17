@@ -6,7 +6,7 @@ added: 2026-10-15
 # cursor-click-to-move needs the prompt-click state libghostty-vt does not expose
 
 `cursor-click-to-move = true` (Ghostty's `Surface.maybePromptClick`) is not carried out by the GPUI build; agterm's
-own default is `false` (`ghostty-defaults.conf`), so only a user who turns it on misses it. The GTK build has it
+own default is `false` (`ghostty-defaults.conf`), so only a user who turns it on misses it. The GTK build had it
 through full libghostty. Found in Task 14 of `docs/plans/20261014-gpui-frontend.md` (review round 2).
 
 Ghostty decides a prompt click from:

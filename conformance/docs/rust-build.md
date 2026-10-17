@@ -98,7 +98,7 @@ claims:
   effect;
 - `quick-validates-input`, `modal-blocks-covers`, `pick-names-pending-ask`, `overlay-size-validated`,
   `sidebar-min-width`, `theme-slots-by-sync`, `config-reload-counts`: upstream's validation and read-back;
-- `keymap-menu`: once a GTK menu carries the actions' live accelerators;
+- `keymap-menu`: the app menu (`agterm-gpui`'s `app_menu.rs`) carries the actions' live accelerators;
 - `live-sessions`: by host, where the login shell is zsh and zmx is staged;
 - `live-any-shell`: by host, live sessions for bash and fish login shells too, the one Rust-only extension (below):
   claimed together with `live-sessions` for a zsh login shell, alone for bash or fish.

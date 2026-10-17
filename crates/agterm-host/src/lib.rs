@@ -1,7 +1,7 @@
 //! Host seams of agterm: what the platform-neutral core and control server need from a frontend.
 //!
-//! - [`MainLoop`]: posts work to the thread that owns the app state (the GTK main thread on Linux).
-//! - [`Surface`]: one live terminal (libghostty in a widget), owned on the main thread.
+//! - [`MainLoop`]: posts work to the thread that owns the app state (the GPUI main thread in `agterm-gpui`).
+//! - [`Surface`]: one live terminal (libghostty-vt in the frontend's terminal element), owned on the main thread.
 //! - [`SessionHost`]: the daemons that keep live sessions alive across app restarts (zmx).
 //! - [`ProcessLauncher`]: starts helper processes (overlay programs, hooks, custom commands).
 //! - [`ProcessTable`]: reads the process table (a pane's foreground program for the tree and the restore capture).

@@ -20,8 +20,6 @@ run_dev_instance() {
     esac
   done
 
-  local app_name=agterm
-
   root="$(mktemp -d /tmp/agterm-dev-XXXXXX)"
   # Removed when the script fails before the app starts; exec drops the trap, so a launched instance keeps it.
   trap 'rm -rf "$root"' EXIT
@@ -41,14 +39,15 @@ run_dev_instance() {
   (cd "$NATIVE_ROOT" && cargo build "${profile_args[@]}" "${WORKSPACE_WITHOUT_WPE[@]}" \
     && cargo build "${profile_args[@]}" -p agterm-gpui)
   "$NATIVE_ROOT/scripts/stage.sh" "$root/stage" --profile "$profile"
-  local app="$root/stage/bin/$app_name"
-  [[ -x "$app" ]] || die "no $app_name binary staged in $root/stage: the app crate does not build one yet"
+  local app="$root/stage/bin/agterm"
+  [[ -x "$app" ]] || die "no bin/agterm staged in $root/stage"
 
   local name
   while IFS= read -r name; do
     unset "$name"
   done < <(compgen -e | grep -E '^(AGTERM_|ZMX_)' | grep -vx AGTERM_LOG || true)
-  export AGTERM_APP_ID="io.github.melonamin.agterm.dev.i$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+  AGTERM_APP_ID="io.github.melonamin.agterm.dev.i$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+  export AGTERM_APP_ID
   export AGTERM_STATE_DIR="$state"
   export AGTERM_CONTROL_SOCKET="$socket"
 
