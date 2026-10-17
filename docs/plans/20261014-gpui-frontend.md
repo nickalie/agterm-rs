@@ -2639,6 +2639,10 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
     already closed are dropped. A page keeps at most 8 buffers and 4 unanswered frames; extra frames are answered
     unseen. The event queue is bounded (256) and closed first by a shutdown. A page given the keyboard (or an input
     method's composition) while the engine starts gets it replayed when its engine page is made.
+    Round 3: the app's queue to the worker (its commands and the reader's own frame answers) is bounded at 1024
+    packets and 64 MiB (one larger packet goes when nothing waits). Past either bound, or on a failed write, the
+    transport is broken as if the worker had died: its socket shut, its pages failed, and the worker reaped. Nothing
+    that queues ever waits, neither the main thread nor the reader holding the pages lock.
 
 ### Stage 4 — switch
 

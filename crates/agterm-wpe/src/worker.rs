@@ -16,7 +16,8 @@
 //!   is kept open across its exec alone and made close-on-exec again first thing), one JSON message per packet
 //!   (`message`), large bodies and blobs in sealed `memfd`s, a dmabuf's planes passed as descriptors. A call on the
 //!   app's side only queues: a writer thread and a reader thread own the socket, so neither GPUI's main thread nor the
-//!   engine's ever blocks on it.
+//!   engine's ever blocks on it. The app's queue is bounded: a worker that stops reading breaks the transport, as its
+//!   death would.
 //! - The start: the worker says hello (protocol, build, pid) and the app hands it the configuration; the engine's start
 //!   comes back as the in-process one would (a missing render node fails as `StartError::Display`), all within
 //!   `START_TIMEOUT`, after which the worker is killed. The worker runs in a process group of its own, so a terminal's

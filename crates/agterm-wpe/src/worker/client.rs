@@ -8,12 +8,19 @@
 //! or the worker ends, at most [`MAX_BUFFERS`] of them; at most [`MAX_UNANSWERED`] of a page's frames wait for the
 //! app's answer, and one past them is answered here unseen. Events wait in a queue of [`EVENT_QUEUE`], which holds the
 //! reader (and so the worker, through the socket) while the app catches up; a shutdown closes it first.
+//!
+//! What goes the other way is bounded too ([`Outgoing`]): the app's commands and the reader's answers wait for the
+//! writer in one queue of at most [`OUTGOING_PACKETS`] packets and [`OUTGOING_BYTES`] bytes. A worker reads its socket
+//! all the time (its engine takes each command without waiting), so a queue past either bound means the worker stopped
+//! reading: the transport is broken then, as when the worker dies (its pages fail), and nothing that queues ever
+//! waits for the worker, neither GPUI's main thread nor the reader with the pages locked.
 
 use std::collections::{BTreeMap, HashMap};
 use std::os::fd::{AsFd as _, AsRawFd as _, BorrowedFd, OwnedFd};
 use std::os::unix::process::CommandExt as _;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -47,6 +54,81 @@ const MAX_UNANSWERED: u32 = 4;
 const MAX_BUFFERS: usize = 8;
 /// How many events wait for the app before the reader waits for it.
 const EVENT_QUEUE: usize = 256;
+/// The most packets waiting for the writer: seconds of a fast pointer's input and frame answers for several pages
+/// while the worker's socket buffer is full too, which a worker that reads never lets happen.
+const OUTGOING_PACKETS: usize = 1024;
+/// The most bytes waiting for the writer, past which nothing more is queued: as large as the largest body the app
+/// reads from the worker. One larger packet (the app's own data, a scheme answer's bytes) still goes when nothing waits.
+const OUTGOING_BYTES: usize = 64 << 20;
+
+/// What waits for the writer (module docs): a bounded queue of packets and the bytes they hold, and what a broken
+/// transport closes. Pushing never waits.
+#[derive(Clone)]
+struct Outgoing {
+    packets: Sender<Packet>,
+    /// The bytes of the packets in `packets` (counted down once the writer takes one).
+    bytes: Arc<AtomicUsize>,
+    socket: Arc<OwnedFd>,
+    events: Sender<Event>,
+}
+
+/// The bytes `packet` holds in memory.
+fn weight(packet: &Packet) -> usize {
+    packet.body.len() + packet.blob.as_ref().map_or(0, Vec::len)
+}
+
+impl Outgoing {
+    /// Queues `packet` for the writer; past either bound the transport breaks instead.
+    fn push(&self, packet: Packet) {
+        let weight = weight(&packet);
+        let before = self.bytes.fetch_add(weight, Ordering::AcqRel);
+        if before > 0 && before.saturating_add(weight) > OUTGOING_BYTES {
+            self.bytes.fetch_sub(weight, Ordering::AcqRel);
+            self.overflow(format_args!("{before} bytes"));
+            return;
+        }
+        match self.packets.try_send(packet) {
+            Ok(()) => {}
+            Err(async_channel::TrySendError::Full(_)) => {
+                self.bytes.fetch_sub(weight, Ordering::AcqRel);
+                self.overflow(format_args!("{OUTGOING_PACKETS} packets"));
+            }
+            Err(async_channel::TrySendError::Closed(_)) => {
+                self.bytes.fetch_sub(weight, Ordering::AcqRel);
+                tracing::debug!("the WPE worker has ended: command dropped");
+            }
+        }
+    }
+
+    fn overflow(&self, waiting: std::fmt::Arguments<'_>) {
+        if !self.packets.is_closed() {
+            tracing::error!("the WPE worker stopped reading its commands ({waiting} wait for it): its pages are gone");
+        }
+        self.sever();
+    }
+
+    /// The writer's next packet, `None` once the queue closed.
+    fn take(&self, queue: &Receiver<Packet>) -> Option<Packet> {
+        let packet = queue.recv_blocking().ok()?;
+        self.bytes.fetch_sub(weight(&packet), Ordering::AcqRel);
+        Some(packet)
+    }
+
+    /// Breaks the transport without waiting for anything: the queue closes, the socket shuts (a writer stuck on it and
+    /// the reader go on, the worker's sends fail), and so do the events, so the app fails the pages at once, even while
+    /// a full event queue holds the reader. The reader then ends as on the worker's death and reaps it.
+    fn sever(&self) {
+        self.packets.close();
+        let _ = rustix::net::shutdown(&*self.socket, Shutdown::Both);
+        self.events.close();
+    }
+
+    /// The packets and bytes waiting.
+    #[cfg(test)]
+    fn queued(&self) -> (usize, usize) {
+        (self.packets.len(), self.bytes.load(Ordering::Acquire))
+    }
+}
 
 /// The app's pages as the reader keeps them (module docs).
 #[derive(Debug, Default)]
@@ -124,7 +206,7 @@ impl Worker {
 
 /// The app's handle on a running worker.
 pub(crate) struct Client {
-    outgoing: Sender<Packet>,
+    outgoing: Outgoing,
     socket: Arc<OwnedFd>,
     evaluations: Arc<Mutex<Evaluations>>,
     worker: Arc<Worker>,
@@ -195,18 +277,26 @@ impl Client {
     /// The client of a worker past its handshake: the writer and the reader started.
     fn running(socket: OwnedFd, worker: Arc<Worker>, pid: u32, stop_timeout: Duration) -> (Self, Receiver<Event>) {
         let socket = Arc::new(socket);
-        let (outgoing, queue) = async_channel::unbounded::<Packet>();
+        let (packets, queue) = async_channel::bounded::<Packet>(OUTGOING_PACKETS);
         let (events, event_queue) = async_channel::bounded(EVENT_QUEUE);
+        let outgoing = Outgoing {
+            packets,
+            bytes: Arc::new(AtomicUsize::new(0)),
+            socket: Arc::clone(&socket),
+            events: events.clone(),
+        };
         let (stop, stopped) = std::sync::mpsc::sync_channel(1);
         let evaluations = Arc::new(Mutex::new(Evaluations::default()));
         let pages = Arc::new(Mutex::new(Pages::default()));
-        let writer_socket = Arc::clone(&socket);
+        let writer = outgoing.clone();
         let spawned = std::thread::Builder::new()
             .name("wpe-worker-out".to_owned())
             .spawn(move || {
-                while let Ok(packet) = queue.recv_blocking() {
-                    if let Err(err) = wire::send(writer_socket.as_fd(), &packet) {
+                while let Some(packet) = writer.take(&queue) {
+                    if let Err(err) = wire::send(writer.socket.as_fd(), &packet) {
                         tracing::debug!(%err, "the WPE worker's socket closed: commands dropped");
+                        // nothing more reaches the worker: the transport is broken, whatever the reader still reads
+                        writer.sever();
                         break;
                     }
                 }
@@ -250,11 +340,7 @@ impl Client {
 
     fn queue(&self, message: &ToWorker, blob: Option<Vec<u8>>) {
         match message.packet(blob) {
-            Ok(packet) => {
-                if self.outgoing.try_send(packet).is_err() {
-                    tracing::debug!("the WPE worker has ended: command dropped");
-                }
-            }
+            Ok(packet) => self.outgoing.push(packet),
             Err(err) => tracing::error!(%err, "a command for the WPE worker could not be written"),
         }
     }
@@ -308,7 +394,7 @@ impl Client {
         }
         // frees a writer stuck on a worker that stopped reading, and the reader
         let _ = rustix::net::shutdown(&*self.socket, Shutdown::Both);
-        self.outgoing.close();
+        self.outgoing.packets.close();
         self.worker.reap(REAP_GRACE);
         lock(&self.pages).0.clear();
     }
@@ -414,7 +500,7 @@ struct Reader {
     stop: std::sync::mpsc::SyncSender<()>,
     evaluations: Arc<Mutex<Evaluations>>,
     worker: Arc<Worker>,
-    outgoing: Sender<Packet>,
+    outgoing: Outgoing,
     /// The app's pages, their dmabufs and unanswered frames (module docs).
     pages: Arc<Mutex<Pages>>,
 }
@@ -451,7 +537,7 @@ impl Reader {
         for reply in waiting.into_values() {
             let _ = reply.try_send(Err(ENDED.to_owned()));
         }
-        self.outgoing.close();
+        self.outgoing.packets.close();
         let _ = rustix::net::shutdown(&*self.socket, Shutdown::Both);
         // the dmabufs go with the worker, and the consumer's events end at once, before the reaping's wait
         lock(&self.pages).0.clear();
@@ -533,7 +619,9 @@ impl Reader {
     }
 
     /// `frame` of `page` for the app, unless [`MAX_UNANSWERED`] of the page's frames already wait for its answer: then
-    /// it is answered here, unseen, so the page goes on drawing.
+    /// it is answered here, unseen, so the page goes on drawing. The answer joins the bounded queue of [`Outgoing`]
+    /// (never waiting, the pages locked): a worker that floods frames and reads none of the answers breaks the
+    /// transport.
     fn admit(&self, page: &mut PageFrames, frame: Frame) -> Option<Frame> {
         if page.unanswered < MAX_UNANSWERED {
             page.unanswered += 1;
@@ -548,7 +636,7 @@ impl Reader {
         let answer = EngineCommand::View(frame.view, ViewCommand::Presented(frame.buffer));
         let (message, blob) = ToWorker::command(answer);
         if let Ok(packet) = message.packet(blob) {
-            let _ = self.outgoing.try_send(packet);
+            self.outgoing.push(packet);
         }
         None
     }
@@ -884,6 +972,146 @@ mod tests {
         }
         assert_eq!(Arc::strong_count(&worker), 2, "the reader thread ended");
         drop(theirs);
+    }
+
+    /// Whether `events` ends (the transport broke) within `wait`; the events taken before the end.
+    fn ends_within(events: &Receiver<Event>, wait: Duration) -> (bool, usize) {
+        let deadline = Instant::now() + wait;
+        let mut taken = 0;
+        while Instant::now() < deadline {
+            match events.try_recv() {
+                Ok(_) => taken += 1,
+                Err(async_channel::TryRecvError::Closed) => return (true, taken),
+                Err(async_channel::TryRecvError::Empty) => std::thread::sleep(Duration::from_millis(5)),
+            }
+        }
+        (false, taken)
+    }
+
+    /// The client's queue for the worker within its bounds.
+    fn assert_bounded(client: &Client) {
+        let (packets, bytes) = client.outgoing.queued();
+        assert!(packets <= OUTGOING_PACKETS, "{packets} packets wait for the worker");
+        assert!(bytes <= OUTGOING_BYTES, "{bytes} bytes wait for the worker");
+    }
+
+    /// The transport of `client` broke: its events ended, an evaluation is answered at once, and a quit still ends the
+    /// worker `pid` in time.
+    fn assert_broken_and_quits(client: &Client, events: &Receiver<Event>, pid: i32) -> usize {
+        let (ended, taken) = ends_within(events, Duration::from_secs(10));
+        assert!(ended, "the transport broke and the pages' events ended");
+        assert_eq!(
+            client.evaluate(ViewId(5), "1".to_owned(), None).recv_blocking(),
+            Ok(Err(ENDED.to_owned()))
+        );
+        let started = Instant::now();
+        client.shutdown();
+        let took = started.elapsed();
+        assert!(took < Duration::from_secs(4), "the shutdown took {took:?}");
+        assert!(!alive(pid), "the worker was reaped");
+        taken
+    }
+
+    #[test]
+    fn a_worker_that_floods_frames_and_reads_no_answer_breaks_the_transport_within_bounds() {
+        let view = ViewId(5);
+        let (worker, ours, theirs) = sleeper();
+        let pid = worker.group;
+        let (client, events) = Client::running(ours, worker, 0, Duration::from_millis(200));
+        client.send(create_view(view));
+        // far more frames than the queue and the socket's buffer hold answers for; `theirs` reads nothing
+        let frame = shm_packet(view, 1);
+        let mut sent = 0;
+        while sent < 20_000 && wire::send(theirs.as_fd(), &frame).is_ok() {
+            sent += 1;
+            assert_bounded(&client);
+        }
+        assert!(sent < 20_000, "the app kept reading a worker that reads nothing");
+        let frames = assert_broken_and_quits(&client, &events, pid);
+        assert_eq!(
+            frames, MAX_UNANSWERED as usize,
+            "the frames up to the unanswered bound reached the app"
+        );
+    }
+
+    /// GPUI's main thread sending `count` of the commands `command` makes to a stand-in worker that never reads: each
+    /// send returns at once, the queue stays bounded, the transport breaks and a quit still completes in time.
+    fn flood_a_stalled_worker(count: usize, command: impl Fn(usize) -> EngineCommand) {
+        let (worker, ours, _unread) = sleeper();
+        let pid = worker.group;
+        let (client, events) = Client::running(ours, worker, 0, Duration::from_millis(200));
+        client.send(create_view(ViewId(5)));
+        let mut slowest = Duration::ZERO;
+        for at in 0..count {
+            let command = command(at);
+            let started = Instant::now();
+            client.send(command);
+            slowest = slowest.max(started.elapsed());
+            assert_bounded(&client);
+        }
+        assert!(slowest < Duration::from_millis(250), "a send took {slowest:?}");
+        assert_broken_and_quits(&client, &events, pid);
+    }
+
+    #[test]
+    fn a_stalled_worker_breaks_the_transport_before_many_small_commands_outgrow_the_queue() {
+        flood_a_stalled_worker(20_000, |at| {
+            let x = f64::from(u32::try_from(at % 1000).unwrap());
+            let motion = crate::input::Pointer {
+                kind: crate::input::PointerKind::Move,
+                x,
+                y: x,
+                modifiers: crate::input::Modifiers::empty(),
+            };
+            EngineCommand::View(ViewId(5), ViewCommand::Input(crate::input::Input::Pointer(motion)))
+        });
+    }
+
+    #[test]
+    fn a_stalled_worker_breaks_the_transport_before_large_commands_outgrow_the_queue_s_bytes() {
+        // a quarter MiB each, in memfds: the socket's buffer takes some, the bytes' bound trips before the count's
+        flood_a_stalled_worker(1000, |at| {
+            EngineCommand::Clipboard(
+                char::from(b'a' + u8::try_from(at % 26).unwrap())
+                    .to_string()
+                    .repeat(1 << 18),
+            )
+        });
+    }
+
+    #[test]
+    fn one_packet_larger_than_the_bytes_bound_goes_when_nothing_waits() {
+        let (ours, _theirs) =
+            rustix::net::socketpair(AddressFamily::UNIX, SocketType::SEQPACKET, SocketFlags::CLOEXEC, None).unwrap();
+        let (packets, queue) = async_channel::bounded(OUTGOING_PACKETS);
+        let (events, _event_queue) = async_channel::bounded(1);
+        let outgoing = Outgoing {
+            packets,
+            bytes: Arc::new(AtomicUsize::new(0)),
+            socket: Arc::new(ours),
+            events,
+        };
+        let big = || Packet {
+            body: b"{}".to_vec(),
+            blob: Some(vec![0; OUTGOING_BYTES + 1]),
+            fds: Vec::new(),
+        };
+        outgoing.push(big());
+        assert_eq!(outgoing.queued(), (1, OUTGOING_BYTES + 3), "an empty queue takes it");
+        outgoing.take(&queue).unwrap();
+        assert_eq!(outgoing.queued(), (0, 0), "the writer took it");
+        outgoing.push(big());
+        outgoing.push(Packet {
+            body: b"{}".to_vec(),
+            ..Packet::default()
+        });
+        assert!(outgoing.packets.is_closed(), "past the bound the transport broke");
+        assert!(outgoing.events.is_closed());
+        assert_eq!(
+            outgoing.queued(),
+            (1, OUTGOING_BYTES + 3),
+            "the refused packet is not counted"
+        );
     }
 
     #[test]
