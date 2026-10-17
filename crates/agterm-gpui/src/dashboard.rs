@@ -376,6 +376,10 @@ fn cell(window: Uuid, parts: CellParts, look: Look, poster: &Poster, animate: bo
         .when(chrome.highlighted, |cell| {
             cell.child(
                 div()
+                    .id("dashboard-highlighted")
+                    .accessibility_id("dashboard-highlighted")
+                    .role(gpui_kit::Role::Status)
+                    .aria_label("Highlighted")
                     .debug_selector(|| "dashboard-highlighted".to_owned())
                     .absolute()
                     .inset_0(),
@@ -481,6 +485,10 @@ fn overlay_cover(cover: &DashboardCover, look: Look) -> AnyElement {
     };
     let line = |text: String, id: &'static str| {
         div()
+            .id(id)
+            .accessibility_id(id)
+            .role(gpui_kit::Role::Label)
+            .aria_label(SharedString::from(text.clone()))
             .debug_selector(move || id.to_owned())
             .max_w_full()
             .whitespace_nowrap()

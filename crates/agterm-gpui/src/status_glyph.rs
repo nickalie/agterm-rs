@@ -276,6 +276,9 @@ pub fn glyph(look: &GlyphLook, animate: bool) -> impl IntoElement {
         );
     let slot = div()
         .id("agent-status")
+        .accessibility_id("agent-status")
+        .role(gpui_kit::Role::Image)
+        .aria_label(tooltip.clone())
         .debug_selector(|| "agent-status".to_owned())
         .flex_none()
         .size(px(SLOT))

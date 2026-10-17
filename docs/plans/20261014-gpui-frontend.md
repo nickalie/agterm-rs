@@ -2744,6 +2744,16 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
     653 passed, the 665 listed held (12 not run on this host, live sessions).
   - **For Task 34**: the checklist's GPUI column is the description of the UI that stays; the GTK columns go with the
     GTK build. The Kitty C API gaps stay its precondition.
+  - ➕ (review): a Wayland restore keeps the saved size up to the largest display, matched to no display by its
+    meaningless origin (`Placement::ByCompositor`); X11 restores onto the RandR monitors (`monitors.rs`); a window
+    minimized while maximized is saved maximized and a blurred X11 window asks KWin's blur
+    (`_KDE_NET_WM_BLUR_BEHIND_REGION`), both in `gpui-pre-linux` 0003 (now `0003-x11-window-state.patch`); path links
+    match url.zig at `LIBGHOSTTY_VT_REV` exactly (no trailing-blanks suffix), through an equivalent pattern that cannot
+    run away (`url_zig::bounded`, held to the literal one over url.zig's cases and 40 000 random lines), within 2 KB of
+    the pointer, a line the engine gives up on searched word by word; AccessKit ids on Settings, popover rows, the
+    status glyph, palette badge/subtitle/scrim, dashboard cover and highlight, sidebar icons and footer buttons; the
+    starter keymap says what each Linux build does with `global-hotkey`; checklist rows corrected (View ▸ Clear
+    Flagged, X11 blur, the AccessKit note).
 
 ### Task 34: Switch to GPUI and remove the GTK frontend
 

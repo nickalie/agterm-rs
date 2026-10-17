@@ -1,14 +1,14 @@
 //! keymap.conf's `global-hotkey <chord>` (upstream's `GlobalHotkey`): one chord, taken from every application on the
 //! desktop, that toggles the quick terminal, its press from another application never swallowed by the re-show
 //! suppression ([`agterm_core::Core::toggle_quick_terminal_from_global_hotkey`]). Upstream registers it with Carbon's
-//! `RegisterEventHotKey` by physical key position, so it survives a layout switch; here it goes by the same position
-//! ([`keycode`]: the US key the chord names):
+//! `RegisterEventHotKey` by physical key position, so it survives a layout switch:
 //!
-//! - X11: a passive grab of the key on the root window (`XGrabKey`, with Caps Lock and Num Lock either way), on a
-//!   connection of the app's own whose thread reads the presses; an autorepeat is no new press ([`x11`]).
+//! - X11: by the same position ([`keycode`]: the US key the chord names), a passive grab of the key on the root window
+//!   (`XGrabKey`, with Caps Lock and Num Lock either way), on a connection of the app's own whose thread reads the
+//!   presses; an autorepeat is no new press ([`x11`]).
 //! - Wayland: the desktop's global shortcuts portal (`org.freedesktop.portal.GlobalShortcuts`: KDE Plasma, GNOME 48 and
-//!   later, Hyprland), the chord offered as the shortcut's preferred trigger ([`portal_trigger`]), which the desktop
-//!   may let the user confirm or change ([`portal`]). A compositor without the portal (the wlroots ones, niri) gives a
+//!   later, Hyprland), the chord offered as the shortcut's preferred trigger, a key name ([`portal_trigger`]), so how
+//!   it fares across a layout switch is the desktop's; the desktop may let the user confirm or change it ([`portal`]). A compositor without the portal (the wlroots ones, niri) gives a
 //!   client no global hotkey at all: logged, and its own key bindings run `agtermctl quick toggle` instead.
 //!
 //! The chord is registered again whenever the keymap's changes (a reload); none is while the keymap names none

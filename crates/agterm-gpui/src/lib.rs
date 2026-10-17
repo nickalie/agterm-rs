@@ -24,6 +24,7 @@ pub mod keymap_actions;
 pub mod keymap_dispatch;
 pub mod main_loop;
 pub mod modal;
+pub mod monitors;
 pub mod mute;
 pub mod notifications;
 pub mod overlay;

@@ -8,7 +8,7 @@
 //!
 //! URLs and paths are found with Ghostty's default matcher (`src/config/url.zig` at `LIBGHOSTTY_VT_REV`, MIT: its
 //! scheme URL branch, its rooted or dot-relative path branch and its bare relative path branch) over the soft-wrapped
-//! line under the pointer, in the frame's rows. A path is underlined under the pointer as libghostty underlines it;
+//! line under the pointer, in the frame's rows (within [`REACH`] of the pointer). A path is underlined under the pointer as libghostty underlines it;
 //! its click goes to the link policy, which ignores a link with no scheme, as upstream's `LinkPolicy` does. An OSC 8
 //! link covers the run of hyperlinked cells around the pointer on its row.
 
@@ -27,46 +27,73 @@ use gpui_kit::App;
 mod url_zig {
     pub const SCHEMES: &str =
         r"https?://|mailto:|ftp://|file:|ssh:|git://|ssh://|tel:|magnet:|ipfs://|ipns://|gemini://|gopher://|news:";
-    pub const IPV6_URL: &str = r"(?:\[[:0-9a-fA-F]+(?:[:0-9a-fA-F]*)+\](?::[0-9]+)?)";
     pub const SCHEME_URL_CHARS: &str = r"[\w\-.~:/?#@!$&*+,;=%]";
     pub const PATH_CHARS: &str = r"[\w\-.~:/?#@!$&*+;=%]";
     pub const OPTIONAL_BRACKETED_WORD_SUFFIX: &str = r"(?:[\(\[]\w*[\)\]])?";
     pub const NO_TRAILING_PUNCTUATION: &str = r"(?<![,.])";
     pub const NO_TRAILING_COLON: &str = r"(?<!:)";
-    pub const TRAILING_SPACES_AT_EOL: &str = r"(?: +(?= *$))?";
     pub const DOTTED_PATH_LOOKAHEAD: &str = r"(?=[\w\-.~:/?#@!$&*+;=%]*\.)";
     pub const NON_DOTTED_PATH_LOOKAHEAD: &str = r"(?![\w\-.~:/?#@!$&*+;=%]*\.)";
     pub const DOTTED_PATH_SPACE_SEGMENTS: &str = r"(?:(?<!:) (?!\w+://)(?!\.{0,2}/)(?!~/)[\w\-.~:/?#@!$&*+;=%]*[/.])*";
     pub const ANY_PATH_SPACE_SEGMENTS: &str = r"(?:(?<!:) (?!\w+://)(?!\.{0,2}/)(?!~/)[\w\-.~:/?#@!$&*+;=%]+)*";
-    pub const ROOTED_OR_RELATIVE_PATH_PREFIX: &str =
-        r"(?:\.\./|\./|(?<!\w)~/|(?:[\w][\w\-.]*/)*(?<!\w)\$[A-Za-z_]\w*/|\.[\w][\w\-.]*/|(?<![\w~/])/(?!/))";
-    pub const BARE_RELATIVE_PATH_PREFIX: &str = r"(?<![$\w])[\w][\w\-.]*/";
+
+    /// Ghostty's matcher word for word (`scheme_url_branch | rooted_or_relative_path_branch |
+    /// bare_relative_path_branch`): the tests hold [`bounded`] to it.
+    #[cfg(test)]
+    pub fn literal() -> String {
+        const IPV6_URL: &str = r"(?:\[[:0-9a-fA-F]+(?:[:0-9a-fA-F]*)+\](?::[0-9]+)?)";
+        const ROOTED_OR_RELATIVE_PATH_PREFIX: &str =
+            r"(?:\.\./|\./|(?<!\w)~/|(?:[\w][\w\-.]*/)*(?<!\w)\$[A-Za-z_]\w*/|\.[\w][\w\-.]*/|(?<![\w~/])/(?!/))";
+        const BARE_RELATIVE_PATH_PREFIX: &str = r"(?<![$\w])[\w][\w\-.]*/";
+        let scheme = format!(
+            "(?:{SCHEMES})(?:{IPV6_URL}|{SCHEME_URL_CHARS}+{OPTIONAL_BRACKETED_WORD_SUFFIX})+{NO_TRAILING_PUNCTUATION}"
+        );
+        let bare = format!("{DOTTED_PATH_LOOKAHEAD}{BARE_RELATIVE_PATH_PREFIX}{PATH_CHARS}+{NO_TRAILING_COLON}");
+        format!("{scheme}|{}|{bare}", rooted(ROOTED_OR_RELATIVE_PATH_PREFIX))
+    }
+
+    /// The same matcher written so a backtracking engine cannot run away on it (Oniguruma and fancy-regex both
+    /// backtrack, and fancy-regex gives up past its backtracking limit): the same matches, every one (the tests hold
+    /// it to [`literal`] over url.zig's cases and many random lines), with each ambiguity that cost exponential or
+    /// quadratic backtracking taken out:
+    ///
+    /// - the IPv6 host's `[:0-9a-fA-F]+(?:[:0-9a-fA-F]*)+` is the `[:0-9a-fA-F]+` it spells;
+    /// - the scheme URL's `(?:… | chars+ suffix?)+` takes one character a round, `(?:… | chars suffix?)+`: the same
+    ///   strings, without the ways of splitting a run into rounds that the trailing-punctuation look-behind made the
+    ///   engine try one by one;
+    /// - a `[\w\-.]*` run before the `/` that ends it is atomic (`/` is not in it, so giving some back never helps),
+    ///   and so is the `$VAR` prefix's run of such segments (with fewer segments a word character follows, never the
+    ///   `$` it needs); that prefix starts only at a word's start (inside a word the word's own start matches first)
+    ///   and where a `$` follows the segments;
+    /// - the bare path's look-behind comes before its dotted look-ahead, so a start inside a word fails at once.
+    pub fn bounded() -> String {
+        const IPV6_URL: &str = r"(?:\[[:0-9a-fA-F]+\](?::[0-9]+)?)";
+        const ROOTED_OR_RELATIVE_PATH_PREFIX: &str = concat!(
+            r"(?:\.\./|\./|(?<!\w)~/|(?<!\w)(?=[\w\-./]*\$)(?>(?:\w(?>[\w\-.]*)/)*)(?<!\w)\$[A-Za-z_]\w*/",
+            r"|\.\w(?>[\w\-.]*)/|(?<![\w~/])/(?!/))"
+        );
+        let scheme = format!(
+            "(?:{SCHEMES})(?:{IPV6_URL}|{SCHEME_URL_CHARS}{OPTIONAL_BRACKETED_WORD_SUFFIX})+{NO_TRAILING_PUNCTUATION}"
+        );
+        let bare = format!(r"(?<![$\w]){DOTTED_PATH_LOOKAHEAD}\w(?>[\w\-.]*)/{PATH_CHARS}+{NO_TRAILING_COLON}");
+        format!("{scheme}|{}|{bare}", rooted(ROOTED_OR_RELATIVE_PATH_PREFIX))
+    }
+
+    /// The rooted or dot-relative path branch after its `prefix`: a dotted path, or an undotted one with spaces.
+    fn rooted(prefix: &str) -> String {
+        format!(
+            "{prefix}(?:{DOTTED_PATH_LOOKAHEAD}{PATH_CHARS}+{DOTTED_PATH_SPACE_SEGMENTS}{NO_TRAILING_COLON}\
+             |{NON_DOTTED_PATH_LOOKAHEAD}{PATH_CHARS}+{ANY_PATH_SPACE_SEGMENTS}{NO_TRAILING_COLON})"
+        )
+    }
 }
 
-/// Ghostty's whole matcher: `scheme_url_branch | rooted_or_relative_path_branch | bare_relative_path_branch`.
-fn url_pattern() -> String {
-    use url_zig::{
-        ANY_PATH_SPACE_SEGMENTS, BARE_RELATIVE_PATH_PREFIX, DOTTED_PATH_LOOKAHEAD, DOTTED_PATH_SPACE_SEGMENTS,
-        IPV6_URL, NO_TRAILING_COLON, NO_TRAILING_PUNCTUATION, NON_DOTTED_PATH_LOOKAHEAD,
-        OPTIONAL_BRACKETED_WORD_SUFFIX, PATH_CHARS, ROOTED_OR_RELATIVE_PATH_PREFIX, SCHEME_URL_CHARS, SCHEMES,
-        TRAILING_SPACES_AT_EOL,
-    };
-    let scheme = format!(
-        "(?:{SCHEMES})(?:{IPV6_URL}|{SCHEME_URL_CHARS}+{OPTIONAL_BRACKETED_WORD_SUFFIX})+{NO_TRAILING_PUNCTUATION}"
-    );
-    let rooted = format!(
-        "{ROOTED_OR_RELATIVE_PATH_PREFIX}(?:{DOTTED_PATH_LOOKAHEAD}{PATH_CHARS}+{DOTTED_PATH_SPACE_SEGMENTS}\
-         {NO_TRAILING_COLON}{TRAILING_SPACES_AT_EOL}|{NON_DOTTED_PATH_LOOKAHEAD}{PATH_CHARS}+\
-         {ANY_PATH_SPACE_SEGMENTS}{NO_TRAILING_COLON}{TRAILING_SPACES_AT_EOL})"
-    );
-    let bare = format!(
-        "{DOTTED_PATH_LOOKAHEAD}{BARE_RELATIVE_PATH_PREFIX}{PATH_CHARS}+{NO_TRAILING_COLON}{TRAILING_SPACES_AT_EOL}"
-    );
-    format!("{scheme}|{rooted}|{bare}")
-}
+/// How far from the pointer, in bytes of the line's text either way, a URL or path is looked for: a longer line is
+/// searched only around the pointer, cut at blanks, so its length costs nothing beyond this.
+const REACH: usize = 2048;
 
 static URL: LazyLock<Option<Regex>> = LazyLock::new(|| {
-    Regex::new(&url_pattern())
+    Regex::new(&url_zig::bounded())
         .map_err(|err| tracing::error!(%err, "the URL matcher does not compile"))
         .ok()
 });
@@ -200,20 +227,85 @@ pub fn url_at(frame: &Frame, col: u16, row: u16) -> Option<Link> {
         .filter(|(_, at_row, at_col)| *at_row == row && *at_col <= col)
         .map(|(offset, ..)| *offset)
         .next_back()?;
-    let regex = URL.as_ref()?;
-    regex.find_iter(&line.text).find_map(|found| {
-        // a match the backtracking engine gives up on (its limit) is no link
-        let found = found.ok()?;
-        let span = found.range();
-        if found.as_str().is_empty() || !span.contains(&pointed) {
-            return None;
-        }
-        Some(Link {
-            url: found.as_str().to_owned(),
-            kind: LinkKind::Url,
-            cells: cells_of(&line, span, frame),
-        })
+    let span = covering(URL.as_ref()?, &line.text, pointed)?;
+    Some(Link {
+        url: line.text[span.clone()].to_owned(),
+        kind: LinkKind::Url,
+        cells: cells_of(&line, span, frame),
     })
+}
+
+/// The span of `regex`'s match in `text` that covers byte `pointed`, the matches taken left to right as Ghostty takes
+/// them, within [`REACH`] of the pointer ([`reach`]). Should the engine give up on a search (its backtracking limit),
+/// the rest of the line is searched one word at a time, a word it gives up on skipped, so no link after it is lost.
+fn covering(regex: &Regex, text: &str, pointed: usize) -> Option<std::ops::Range<usize>> {
+    let (mut at, end) = reach(text, pointed)?;
+    let text = &text[..end];
+    let mut by_word = false;
+    while at <= pointed && at < text.len() {
+        let until = if by_word { word_end(text, at) } else { text.len() };
+        match regex.find_from_pos(&text[..until], at) {
+            Ok(Some(found)) => {
+                let span = found.range();
+                if span.start > pointed {
+                    return None;
+                }
+                if span.contains(&pointed) {
+                    return Some(span);
+                }
+                at = if span.is_empty() {
+                    text.ceil_char_boundary(span.end + 1)
+                } else {
+                    span.end
+                };
+            }
+            Ok(None) if !by_word => return None,
+            Err(err) if !by_word => {
+                tracing::debug!(%err, "the URL matcher gave up on a line; searching it word by word");
+                by_word = true;
+            }
+            // nothing in this word, or a word the engine gives up on: the next one
+            Ok(None) | Err(_) => at = until,
+        }
+    }
+    None
+}
+
+/// The byte range of `text` a link through byte `pointed` is looked for in: [`REACH`] either way, a cut end moved to a
+/// blank so no link is found cut short (`None` when the pointer's own run of text reaches past it).
+fn reach(text: &str, pointed: usize) -> Option<(usize, usize)> {
+    let start = match pointed.checked_sub(REACH) {
+        None => 0,
+        Some(cut) => {
+            let cut = text.floor_char_boundary(cut);
+            if text[..cut].ends_with(char::is_whitespace) {
+                cut
+            } else {
+                let blank = cut + text[cut..].find(char::is_whitespace)?;
+                blank + text[blank..].chars().next().map_or(0, char::len_utf8)
+            }
+        }
+    };
+    let end = if pointed + REACH >= text.len() {
+        text.len()
+    } else {
+        let cut = text.ceil_char_boundary(pointed + REACH);
+        if text[cut..].starts_with(char::is_whitespace) {
+            cut
+        } else {
+            text[..cut].rfind(char::is_whitespace)?
+        }
+    };
+    (start <= pointed && pointed < end).then_some((start, end))
+}
+
+/// Where the word at or after byte `at` of `text` ends (the blanks before it skipped): the next blank, else the end.
+fn word_end(text: &str, at: usize) -> usize {
+    let word = at
+        + text[at..]
+            .find(|ch: char| !ch.is_whitespace())
+            .unwrap_or(text.len() - at);
+    word + text[word..].find(char::is_whitespace).unwrap_or(text.len() - word)
 }
 
 /// The viewport cells a byte span of `line` covers, per row.
@@ -341,7 +433,7 @@ mod tests {
             "/Users/ghostty.user/code/../example.py",
         ),
         ("../example.py", "../example.py"),
-        ("../example.py ", "../example.py "),
+        ("../example.py ", "../example.py"),
         ("first time ../example.py contributor ", "../example.py"),
         (
             "[link](/home/user/ghostty.user/example)",
@@ -379,7 +471,7 @@ mod tests {
             "IPv6 in markdown [link](http://[2001:db8::1]/docs)",
             "http://[2001:db8::1]/docs",
         ),
-        ("./spaces-end.   ", "./spaces-end.   "),
+        ("./spaces-end.   ", "./spaces-end."),
         ("./space middle", "./space middle"),
         ("../test folder/file.txt", "../test folder/file.txt"),
         ("/tmp/test folder/file.txt", "/tmp/test folder/file.txt"),
@@ -445,6 +537,120 @@ mod tests {
         for input in NO_MATCH {
             assert_eq!(first_match(input), None, "in {input:?}");
         }
+    }
+
+    /// Every match in `text`, as Ghostty's search iterator finds them one after the other.
+    fn all_matches(regex: &Regex, text: &str) -> Vec<(usize, usize)> {
+        regex
+            .find_iter(text)
+            .map(|found| {
+                let found = found.unwrap_or_else(|err| panic!("{err} in {text:?}"));
+                (found.start(), found.end())
+            })
+            .collect()
+    }
+
+    /// Lines of `pieces` (url.zig's alphabet and the fragments its branches turn on), from a fixed seed.
+    fn random_lines(count: usize) -> Vec<String> {
+        const PIECES: &[&str] = &[
+            "a", "b", "1", "_", "-", ".", "/", "~", ":", "$", " ", ",", "(", ")", "[", "]", "?", "#", "@", "%", "f",
+            "\"", "é", "https://", "http://", "mailto:", "../", "./", "$H/", "::", "[::1]", "x.y", "//", "  ", "$PWD/",
+        ];
+        let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            usize::try_from(seed % 1_000_003).expect("fits")
+        };
+        (0..count)
+            .map(|_| {
+                let pieces = next() % 14 + 1;
+                (0..pieces).map(|_| PIECES[next() % PIECES.len()]).collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_bounded_matcher_matches_ghosttys_pattern_word_for_word() {
+        let literal = fancy_regex::RegexBuilder::new(&url_zig::literal())
+            .backtrack_limit(usize::MAX)
+            .build()
+            .expect("the literal pattern compiles");
+        let bounded = URL.as_ref().expect("the matcher compiles");
+        let cases = CASES.iter().map(|(input, _)| (*input).to_owned());
+        let lines = NO_MATCH.iter().map(|input| (*input).to_owned());
+        for text in cases.chain(lines).chain(random_lines(40_000)) {
+            assert_eq!(all_matches(bounded, &text), all_matches(&literal, &text), "in {text:?}");
+        }
+    }
+
+    #[test]
+    fn the_matcher_never_gives_up_on_a_line_within_reach() {
+        // runs of up to twice the reach, each of which takes Ghostty's pattern as written past fancy-regex's
+        // backtracking limit: a bearer token (a run tried at every byte), a scheme run of commas (once taken apart
+        // round by round), an unclosed IPv6 host, slash and dash segments
+        let token: String = "aZ9_-".repeat(400);
+        let lines = [
+            (
+                format!(
+                    "curl -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.{token}.{token}\" https://api.example.com/v1"
+                ),
+                "https://api.example.com/v1",
+            ),
+            (
+                format!("https://{} https://example.com", ",".repeat(64)),
+                "https://example.com",
+            ),
+            (format!("http://[{} /tmp/x.txt", ":".repeat(2 * REACH)), "/tmp/x.txt"),
+            (format!("{} ./notes.md", "a/".repeat(REACH)), "./notes.md"),
+            (format!("{} ./notes.md", "-a/".repeat(REACH / 2)), "./notes.md"),
+        ];
+        let regex = URL.as_ref().expect("the matcher compiles");
+        for (text, link) in &lines {
+            let found = all_matches(regex, text);
+            assert!(
+                found.iter().any(|(start, end)| &text[*start..*end] == *link),
+                "{link} in {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_line_the_engine_gives_up_on_is_searched_word_by_word() {
+        // Ghostty's pattern as written runs past fancy-regex's backtracking limit on the commas
+        let literal = Regex::new(&url_zig::literal()).expect("the literal pattern compiles");
+        let text = format!("https://{} https://example.com more", ",".repeat(64));
+        assert!(literal.find(&text).is_err(), "the engine gives up on the whole line");
+        let pointed = text.find("example").expect("in the text");
+        let span = covering(&literal, &text, pointed).expect("the URL after the run is found");
+        assert_eq!(&text[span], "https://example.com");
+    }
+
+    #[test]
+    fn a_link_is_looked_for_within_reach_of_the_pointer_cut_at_blanks() {
+        let url = format!("https://example.com/{}", "p".repeat(1500));
+        let words = "word ".repeat(1000);
+        let text = format!("{words}{url} {words}");
+        // the whole URL, wherever on it the pointer is
+        let start = text.find("https").expect("in the text");
+        for pointed in [start, start + 700, start + url.len() - 1] {
+            let span = covering(URL.as_ref().expect("compiles"), &text, pointed).expect("a link");
+            assert_eq!(&text[span], url, "with the pointer at {pointed}");
+        }
+        let (from, to) = reach(&text, start).expect("in reach");
+        assert!(from > 0 && to < text.len(), "a long line is cut: {from}..{to}");
+        assert!(
+            text[..from].ends_with(' ') && text[to..].starts_with(' '),
+            "cut at blanks"
+        );
+        // a run of text longer than the reach around the pointer is no link, never a piece of one
+        let run = format!("x https://example.com/{} y", "q".repeat(3 * REACH));
+        let middle = run.len() / 2;
+        assert_eq!(reach(&run, middle), None);
+        assert_eq!(covering(URL.as_ref().expect("compiles"), &run, middle), None);
+        // a short line is searched whole
+        assert_eq!(reach("see ./notes.md", 6), Some((0, 14)));
     }
 
     #[test]

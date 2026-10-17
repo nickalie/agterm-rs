@@ -170,13 +170,7 @@ pub fn reported_minimized(read: Option<bool>, pending: Option<bool>) -> (Option<
 pub fn read_minimized(window: &Window) -> Option<bool> {
     #[cfg(target_os = "linux")]
     {
-        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        let xid = match HasWindowHandle::window_handle(window).ok()?.as_raw() {
-            RawWindowHandle::Xcb(handle) => handle.window.get(),
-            RawWindowHandle::Xlib(handle) => u32::try_from(handle.window).ok()?,
-            _ => return None,
-        };
-        gpui_linux::x11_window_minimized(xid)
+        gpui_linux::x11_window_minimized(x11_id(window)?)
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -1083,6 +1077,7 @@ pub fn ask_clear_flags(id: Uuid, count: usize, poster: Poster, window: &mut Wind
 }
 
 /// `window`'s frame as it would be saved now: its bounds, or the ones it restores to while maximized or full screen.
+/// A minimized X11 window keeps its maximized state, which GPUI reads as not maximized while it is minimized.
 #[must_use]
 pub fn frame_of(window: &Window) -> crate::window_frames::Frame {
     let (bounds, maximized) = match window.window_bounds() {
@@ -1094,28 +1089,33 @@ pub fn frame_of(window: &Window) -> crate::window_frames::Frame {
         y: f64::from(f32::from(bounds.origin.y)),
         width: f64::from(f32::from(bounds.size.width)),
         height: f64::from(f32::from(bounds.size.height)),
-        maximized,
+        maximized: maximized || (read_minimized(window) == Some(true) && read_maximized(window) == Some(true)),
     }
 }
 
-/// The displays attached now, the primary one first, as [`crate::window_frames::Frame::constrained`] takes them.
-#[must_use]
-pub fn display_rects(cx: &App) -> Vec<agterm_core::window_geometry::Rect> {
-    let primary = cx.primary_display().map(|display| display.id());
-    let mut displays = cx.displays();
-    displays.sort_by_key(|display| Some(display.id()) != primary);
-    displays
-        .iter()
-        .map(|display| {
-            let bounds = display.bounds();
-            agterm_core::window_geometry::Rect::new(
-                f64::from(f32::from(bounds.origin.x)),
-                f64::from(f32::from(bounds.origin.y)),
-                f64::from(f32::from(bounds.size.width)),
-                f64::from(f32::from(bounds.size.height)),
-            )
-        })
-        .collect()
+/// `window`'s X11 id, `None` for a window of another platform.
+#[cfg(target_os = "linux")]
+fn x11_id(window: &Window) -> Option<u32> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+        RawWindowHandle::Xcb(handle) => Some(handle.window.get()),
+        RawWindowHandle::Xlib(handle) => u32::try_from(handle.window).ok(),
+        _ => None,
+    }
+}
+
+/// Whether the window manager keeps X11 window `window` maximized, minimized or not (GPUI patch `gpui-pre-linux`
+/// 0003); `None` elsewhere.
+fn read_maximized(window: &Window) -> Option<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        gpui_linux::x11_window_maximized(x11_id(window)?)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = window;
+        None
+    }
 }
 
 /// The bounds a window opens with: its saved `frame` (maximized again when it closed so), else upstream's default size

@@ -280,9 +280,12 @@ impl Windows {
             }
         }
         let frontmost_takes = core.frontmost_takes();
-        let displays = crate::window::display_rects(cx);
+        let (displays, placement) = (crate::monitors::display_rects(cx), crate::monitors::placement(cx));
         for id in &plan.build {
-            let frame = self.frames.get(*id).map(|frame| frame.constrained(&displays));
+            let frame = self
+                .frames
+                .get(*id)
+                .map(|frame| frame.constrained(&displays, placement));
             let Some(handle) = crate::window::open(*id, frontmost_takes, &self.app_id, &self.env, frame, cx) else {
                 continue;
             };

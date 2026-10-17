@@ -330,6 +330,9 @@ impl Palette {
         let badge = entry.badge.as_ref().map(|badge| {
             div()
                 .id("palette-badge")
+                .accessibility_id("palette-badge")
+                .role(gpui_kit::Role::Status)
+                .aria_label(SharedString::from(badge.clone()))
                 .flex_shrink_0()
                 .px(px(6.))
                 .py(px(2.))

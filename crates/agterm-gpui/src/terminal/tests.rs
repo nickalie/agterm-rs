@@ -443,6 +443,21 @@ fn backgrounds_merge_and_decorations_span_their_cells() {
 }
 
 #[test]
+fn a_path_link_ends_at_the_path_not_at_the_rows_blank_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let pane = pane("printf 'see ./notes.md'; exec sleep 5", dir.path());
+    let frame = wait_text(&pane, "./notes.md");
+    let link = super::links::url_at(&frame, 6, 0).expect("the path is a link");
+    assert_eq!(link.url, "./notes.md");
+    assert_eq!(
+        link.cells,
+        vec![(0, 4, 13)],
+        "the path's cells, none of the blank ones after it"
+    );
+    assert_eq!(super::links::url_at(&frame, 17, 0), None, "the blank tail is no link");
+}
+
+#[test]
 fn marks_color_the_selection_and_search_and_a_hovered_link_is_underlined() {
     let dir = tempfile::tempdir().unwrap();
     let pane = pane("printf 'hello world\\033[4m!\\033[0m'; exec sleep 5", dir.path());

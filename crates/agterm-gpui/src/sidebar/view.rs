@@ -523,6 +523,7 @@ fn footer_item(sidebar: &WeakEntity<Sidebar>, label: &'static str, action: Foote
 /// A footer control: a borderless 24x22 button with a glyph, which never takes the keyboard.
 fn footer_button(id: &'static str, glyph: Glyph, ink: Hsla, tooltip: &'static str) -> Button {
     Button::new(id)
+        .accessibility_id(id)
         .debug_selector(move || id.to_owned())
         .ghost()
         .tab_stop(false)
@@ -548,12 +549,16 @@ fn pill(fill: Hsla) -> impl IntoElement {
 /// A row's leading glyph, with a remote row's stream notice as its hover text.
 fn leading_icon(row: &SidebarRow, color: Hsla) -> impl IntoElement {
     let tooltip = row.icon_tooltip.clone().map(SharedString::from);
+    let (id, name) = if row.is_workspace() {
+        ("workspace-icon", "Workspace")
+    } else {
+        ("session-icon", "Session")
+    };
     div()
-        .id(if row.is_workspace() {
-            "workspace-icon"
-        } else {
-            "session-icon"
-        })
+        .id(id)
+        .accessibility_id(id)
+        .role(gpui_kit::Role::Image)
+        .aria_label(tooltip.clone().unwrap_or(SharedString::from(name)))
         .flex_none()
         .size(px(SLOT))
         .child(row_icon::icon(row.icon, color))

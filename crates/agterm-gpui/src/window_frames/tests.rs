@@ -60,12 +60,12 @@ fn a_frame_is_restored_onto_a_display_attached_now() {
     let second = Rect::new(1920.0, 0.0, 1280.0, 1024.0);
     // on its display, unchanged
     assert_eq!(
-        frame(100.0, 100.0, 900.0, 600.0).constrained(&[DISPLAY, second]),
+        frame(100.0, 100.0, 900.0, 600.0).constrained(&[DISPLAY, second], Placement::AtOrigin),
         frame(100.0, 100.0, 900.0, 600.0)
     );
     // mostly on the second display: kept there, shrunk to it
     assert_eq!(
-        frame(2000.0, 10.0, 1500.0, 900.0).constrained(&[DISPLAY, second]),
+        frame(2000.0, 10.0, 1500.0, 900.0).constrained(&[DISPLAY, second], Placement::AtOrigin),
         frame(1920.0, 10.0, 1280.0, 900.0)
     );
     // on a display gone since: the first (primary) one takes it, wholly on screen
@@ -74,7 +74,7 @@ fn a_frame_is_restored_onto_a_display_attached_now() {
         ..frame(5000.0, 3000.0, 800.0, 500.0)
     };
     assert_eq!(
-        gone.constrained(&[DISPLAY]),
+        gone.constrained(&[DISPLAY], Placement::AtOrigin),
         Frame {
             maximized: true,
             ..frame(1120.0, 580.0, 800.0, 500.0)
@@ -83,11 +83,47 @@ fn a_frame_is_restored_onto_a_display_attached_now() {
     );
     // below the least size it grows; with no display known it is left alone
     assert_eq!(
-        frame(0.0, 0.0, 200.0, 100.0).constrained(&[DISPLAY]),
+        frame(0.0, 0.0, 200.0, 100.0).constrained(&[DISPLAY], Placement::AtOrigin),
         frame(0.0, 0.0, 640.0, 400.0)
     );
     assert_eq!(
-        frame(0.0, 0.0, 200.0, 100.0).constrained(&[]),
+        frame(0.0, 0.0, 200.0, 100.0).constrained(&[], Placement::AtOrigin),
         frame(0.0, 0.0, 200.0, 100.0)
+    );
+}
+
+#[test]
+fn a_frame_the_compositor_places_keeps_its_size_up_to_the_largest_display() {
+    // Wayland: a laptop panel and a larger external monitor; the saved origin is no position, so the external
+    // monitor's window is not fitted to the panel its origin happens to fall on
+    let (panel, external) = (
+        Rect::new(0.0, 0.0, 1280.0, 800.0),
+        Rect::new(1280.0, 0.0, 2560.0, 1440.0),
+    );
+    let displays = [panel, external];
+    assert_eq!(
+        frame(0.0, 0.0, 2400.0, 1300.0).constrained(&displays, Placement::ByCompositor),
+        frame(0.0, 0.0, 2400.0, 1300.0),
+        "kept whole"
+    );
+    // larger than any display: the largest one's size; below the least size: grown
+    assert_eq!(
+        frame(0.0, 0.0, 3000.0, 2000.0).constrained(&displays, Placement::ByCompositor),
+        frame(0.0, 0.0, 2560.0, 1440.0)
+    );
+    let maximized = Frame {
+        maximized: true,
+        ..frame(10.0, 20.0, 200.0, 100.0)
+    };
+    assert_eq!(
+        maximized.constrained(&displays, Placement::ByCompositor),
+        Frame {
+            maximized: true,
+            ..frame(10.0, 20.0, 640.0, 400.0)
+        }
+    );
+    assert_eq!(
+        frame(0.0, 0.0, 2400.0, 1300.0).constrained(&[], Placement::ByCompositor),
+        frame(0.0, 0.0, 2400.0, 1300.0)
     );
 }

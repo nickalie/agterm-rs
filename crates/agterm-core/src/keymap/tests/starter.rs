@@ -67,11 +67,17 @@ fn the_starter_keymap_is_commented_and_documents_the_verbs() {
         );
     }
     assert!(starter.ends_with("# map cmd+shift+l toggle_split\n"));
-    // the global hotkey as this build registers it (an X11 grab, the Wayland portal), with upstream's examples, all
-    // commented out
-    assert!(
-        starter.contains("on X11 as a\n#       key grab, on Wayland through the desktop's global shortcuts portal")
-    );
+    // the global hotkey as each Linux build takes it (the file is shared): the GPUI build registers it (an X11 grab by
+    // key position, the Wayland portal by key name), the GTK build does not; upstream's examples, all commented out
+    let paragraph = starter.replace("\n#       ", " ");
+    for said in [
+        "The GPUI build (`agterm-gpui`) registers it: on X11 as a key grab by physical key position",
+        "on Wayland through the desktop's global shortcuts portal (KDE Plasma, GNOME 48 and later, Hyprland), which \
+         gets the chord by key name",
+        "The GTK build (`agterm`) accepts and checks the line but registers nothing",
+    ] {
+        assert!(paragraph.contains(said), "the starter says {said:?}");
+    }
     assert!(starter.contains("#           global-hotkey ctrl+`"));
     assert!(
         starter

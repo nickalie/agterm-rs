@@ -1,7 +1,9 @@
 //! The agterm window on a private Xvfb (GPUI's X11 backend, no window manager; CLAUDE.md > Never touch the user's
 //! running agterm): `window.list` reads its minimized state back from `_NET_WM_STATE_HIDDEN` as a window manager sets
-//! it (GPUI patch `gpui-pre-linux` 0003, the GTK build's GDK read-back), and the frame it had at the quit comes back
-//! at the next launch (upstream's `TitleProbeView`; `window_frames.rs`).
+//! it (GPUI patch `gpui-pre-linux` 0003, the GTK build's GDK read-back) and its frame is saved maximized while it is
+//! minimized maximized, the frame it had at the quit comes back at the next launch (upstream's `TitleProbeView`;
+//! `window_frames.rs`), on a `RandR` monitor attached now (`monitors.rs`), and a translucent blurred window asks
+//! `KWin`'s blur behind it (patch 0003).
 //!
 //! A test whose tool is missing prints `SKIPPED:` and passes, unless `AGTERM_REQUIRE_DISPLAY_TESTS` is set.
 
@@ -79,6 +81,44 @@ impl X11 {
         Ok(self.conn.intern_atom(false, name.as_bytes())?.reply()?.atom)
     }
 
+    /// Whether `window` carries property `name`.
+    fn has_property(&self, window: Window, name: &str) -> TestResult<bool> {
+        let reply = self
+            .conn
+            .get_property(false, window, self.atom(name)?, AtomEnum::ANY, 0, 0)?
+            .reply()?;
+        Ok(reply.type_ != u32::from(AtomEnum::NONE))
+    }
+
+    /// `window`'s position and size on the screen (no window manager: the root is its parent).
+    fn geometry(&self, window: Window) -> TestResult<(i16, i16, u16, u16)> {
+        let geometry = self.conn.get_geometry(window)?.reply()?;
+        Ok((geometry.x, geometry.y, geometry.width, geometry.height))
+    }
+
+    /// Lays the screen out as `RandR` monitors `(x, y, width, height, primary)`, the first one on the screen's output,
+    /// for as long as this connection stays open (`RandR` drops a client's monitors with it).
+    fn set_monitors(&self, monitors: &[(i16, i16, u16, u16, bool)]) -> TestResult {
+        use x11rb::protocol::randr::{ConnectionExt as _, MonitorInfo};
+        let outputs = self.conn.randr_get_screen_resources(self.root)?.reply()?.outputs;
+        for (index, (x, y, width, height, primary)) in monitors.iter().copied().enumerate() {
+            let info = MonitorInfo {
+                name: self.atom(&format!("monitor-{index}"))?,
+                primary,
+                automatic: false,
+                x,
+                y,
+                width,
+                height,
+                width_in_millimeters: 300,
+                height_in_millimeters: 200,
+                outputs: if index == 0 { outputs.clone() } else { Vec::new() },
+            };
+            self.conn.randr_set_monitor(self.root, info)?.check()?;
+        }
+        Ok(())
+    }
+
     /// Sets `window`'s `_NET_WM_STATE` to `states`, as a window manager does when it iconifies or restores it.
     fn set_states(&self, window: Window, states: &[&str]) -> TestResult {
         let property = self.atom("_NET_WM_STATE")?;
@@ -116,6 +156,11 @@ fn window_list_reads_the_window_managers_minimized_state() -> TestResult {
     let x11 = X11::connect(&sandbox)?;
     let (window, _, _) = x11.wait_mapped()?;
     wait_minimized(&sandbox, false)?;
+    assert!(
+        !x11.has_property(window, BLUR)?,
+        "an opaque window asks no blur behind it"
+    );
+    let id = listed(&sandbox)?["id"].as_str().ok_or("no window id")?.to_lowercase();
 
     // a window manager iconifies it, then restores it
     x11.set_states(window, &["_NET_WM_STATE_HIDDEN"])?;
@@ -135,6 +180,82 @@ fn window_list_reads_the_window_managers_minimized_state() -> TestResult {
 
     sandbox.terminate(primary)?;
     assert_eq!(sandbox.wait_exit(primary, Duration::from_secs(10))?.0.code(), Some(0));
+    // and its frame is saved maximized, as the window manager keeps it, for the next launch
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(sandbox.path("state/window-frames.json"))?)?;
+    assert_eq!(saved[&id]["maximized"], json!(true), "the saved frame: {saved}");
+    Ok(())
+}
+
+/// `KWin`'s blur-behind property (GPUI patch `gpui-pre-linux` 0003).
+const BLUR: &str = "_KDE_NET_WM_BLUR_BEHIND_REGION";
+
+#[test]
+fn a_translucent_blurred_window_asks_the_compositor_for_blur_behind_it() -> TestResult {
+    if !have("Xvfb") {
+        skip!("no Xvfb");
+    }
+    let Some(lavapipe) = lavapipe_icd() else {
+        skip!("no lavapipe ICD (scripts/fetch-lavapipe.sh)");
+    };
+    let mut sandbox = Sandbox::new()?;
+    std::fs::write(
+        sandbox.path("state/settings.json"),
+        r#"{"backgroundOpacity": 0.8, "backgroundBlur": 20}"#,
+    )?;
+    sandbox.start_xvfb()?;
+    sandbox.use_software_rendering(&lavapipe);
+    let primary = sandbox.start_gpui_primary("primary.log")?;
+    let x11 = X11::connect(&sandbox)?;
+    let (window, _, _) = x11.wait_mapped()?;
+    wait_for(|| x11.has_property(window, BLUR).ok().filter(|has| *has))
+        .map_err(|_| format!("no {BLUR} on the window"))?;
+    sandbox.terminate(primary)?;
+    assert_eq!(sandbox.wait_exit(primary, Duration::from_secs(10))?.0.code(), Some(0));
+    Ok(())
+}
+
+#[test]
+fn a_frame_saved_on_a_monitor_gone_since_comes_back_on_one_attached_now() -> TestResult {
+    if !have("Xvfb") {
+        skip!("no Xvfb");
+    }
+    let Some(lavapipe) = lavapipe_icd() else {
+        skip!("no lavapipe ICD (scripts/fetch-lavapipe.sh)");
+    };
+    let mut sandbox = Sandbox::new()?;
+    sandbox.start_xvfb()?;
+    sandbox.use_software_rendering(&lavapipe);
+    // a 1280×800 screen as a tall monitor and a short primary one beside it, the screen's lower right corner on none
+    let x11 = X11::connect(&sandbox)?;
+    let (tall, short) = ((0, 0, 640, 800, false), (640, 0, 640, 400, true));
+    x11.set_monitors(&[tall, short])?;
+    let first = sandbox.start_gpui_primary("first.log")?;
+    x11.wait_mapped()?;
+    let id = listed(&sandbox)?["id"].as_str().ok_or("no window id")?.to_lowercase();
+    sandbox.terminate(first)?;
+    assert_eq!(sandbox.wait_exit(first, Duration::from_secs(10))?.0.code(), Some(0));
+    // the frame of a window last seen in that corner, on a monitor detached since
+    std::fs::write(
+        sandbox.path("state/window-frames.json"),
+        json!({ id: { "x": 700.0, "y": 450.0, "width": 640.0, "height": 400.0 } }).to_string(),
+    )?;
+
+    let second = sandbox.start_gpui_primary("second.log")?;
+    let (window, _, _) = x11.wait_mapped()?;
+    let (x, y, width, height) = x11.geometry(window)?;
+    // nothing of it in the corner no monitor shows (GPUI may nudge a new window by a pixel or two, so the test asks
+    // for no overlap with the dead corner rather than an exact place)
+    let (right, bottom) = (i32::from(x) + i32::from(width), i32::from(y) + i32::from(height));
+    let dead_width = (right.min(1280) - i32::from(short.0).max(i32::from(x))).max(0);
+    let dead_height = (bottom.min(800) - i32::from(short.3).max(i32::from(y))).max(0);
+    assert_eq!(
+        dead_width * dead_height,
+        0,
+        "the window at {x},{y} {width}×{height} lies on the monitors, not in the corner below the short one"
+    );
+    assert_eq!((width, height), (640, 400), "fitted to the primary monitor");
+    sandbox.terminate(second)?;
+    assert_eq!(sandbox.wait_exit(second, Duration::from_secs(10))?.0.code(), Some(0));
     Ok(())
 }
 

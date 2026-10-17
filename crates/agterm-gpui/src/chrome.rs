@@ -112,7 +112,8 @@ impl Translucency {
     }
 
     /// The platform background a window asks for: transparent below full opacity, blurred behind when the blur is on
-    /// (the compositor's blur protocol, KDE's on Wayland and X11; nothing where it has none).
+    /// (the compositor's blur protocol, KDE's: `org_kde_kwin_blur` on Wayland, `_KDE_NET_WM_BLUR_BEHIND_REGION` on X11,
+    /// GPUI patch `gpui-pre-linux` 0003; nothing where the compositor has none).
     #[must_use]
     pub fn appearance(self, fullscreen: bool) -> gpui_kit::WindowBackgroundAppearance {
         if self.effective(fullscreen) >= 1.0 {

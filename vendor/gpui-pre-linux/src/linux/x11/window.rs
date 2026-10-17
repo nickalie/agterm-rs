@@ -78,6 +78,7 @@ x11rb::atom_manager! {
         _NET_WM_WINDOW_TYPE_DIALOG,
         _NET_WM_STATE_MODAL,
         _NET_WM_SYNC,
+        _KDE_NET_WM_BLUR_BEHIND_REGION,
         _NET_SUPPORTED,
         _MOTIF_WM_HINTS,
         _GTK_SHOW_WINDOW_MENU,
@@ -1141,7 +1142,11 @@ impl X11WindowStatePtr {
                 state.hidden = true;
             }
         }
-        crate::linux::note_x11_minimized(self.x_window, state.hidden);
+        crate::linux::note_x11_state(
+            self.x_window,
+            state.hidden,
+            state.maximized_vertical && state.maximized_horizontal,
+        );
 
         // The urgency hint has no withdrawal signal of its own; ICCCM leaves that to
         // the client, and focus is the conventional means for the user to zero it.
@@ -1628,6 +1633,22 @@ impl PlatformWindow for X11Window {
         let mut state = self.0.state.borrow_mut();
         state.background_appearance = background_appearance;
         state.update_transparency();
+        // The compositor's blur behind the window, as `org_kde_kwin_blur` asks it on Wayland (an agterm-rs patch):
+        // KWin's `_KDE_NET_WM_BLUR_BEHIND_REGION`, whose empty region blurs the whole window; a compositor without
+        // the effect ignores the property.
+        let blur = state.atoms._KDE_NET_WM_BLUR_BEHIND_REGION;
+        let request = if background_appearance == WindowBackgroundAppearance::Blurred {
+            self.0.xcb.change_property32(
+                xproto::PropMode::REPLACE,
+                self.0.x_window,
+                blur,
+                xproto::AtomEnum::CARDINAL,
+                &[],
+            )
+        } else {
+            self.0.xcb.delete_property(self.0.x_window, blur)
+        };
+        check_reply(|| "X11 ChangeProperty for _KDE_NET_WM_BLUR_BEHIND_REGION failed.", request).log_err();
     }
 
     fn background_appearance(&self) -> WindowBackgroundAppearance {

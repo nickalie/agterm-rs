@@ -274,6 +274,9 @@ pub fn text_column(
         .children(subtitle.map(|subtitle| {
             div()
                 .id("palette-subtitle")
+                .accessibility_id("palette-subtitle")
+                .role(gpui_kit::Role::Label)
+                .aria_label(SharedString::from(subtitle.to_owned()))
                 .truncate()
                 .text_size(modal::logical(metrics.secondary))
                 .text_color(dim)
@@ -309,6 +312,10 @@ pub fn frame(parts: Frame<'_>, dismiss: impl Fn(&MouseDownEvent, &mut Window, &m
     let separator = crate::chrome::separator(&colors);
     div()
         .id(ids.scrim)
+        // upstream's scrim is a dismiss button over the window
+        .accessibility_id(ids.scrim)
+        .role(gpui_kit::Role::Button)
+        .aria_label("Dismiss")
         .debug_selector(move || ids.scrim.to_owned())
         .absolute()
         .inset_0()
