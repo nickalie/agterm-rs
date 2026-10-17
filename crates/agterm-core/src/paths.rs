@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-/// Overrides the whole state directory (test isolation, `run-gtk-dev.sh`/`run-gpui-dev.sh`).
+/// Overrides the whole state directory (test isolation, `run-gpui-dev.sh`).
 pub const STATE_DIR_ENV: &str = "AGTERM_STATE_DIR";
 /// Overrides the app's control socket path. Only the app reads it: `agtermctl` resolves through the state dir.
 pub const CONTROL_SOCKET_ENV: &str = "AGTERM_CONTROL_SOCKET";

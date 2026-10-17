@@ -36,7 +36,7 @@ The harness execs the binary with:
   `copy-on-select = false` and `clipboard-write = deny`;
 - `<state>/windows` present, which skips the first-run welcome, and `<state>/settings.json` when a test seeds settings.
 
-The GPUI frontend (`--rust-frontend gpui`) gets, on top of that:
+The Rust build (GPUI) gets, on top of that:
 
 - `VK_DRIVER_FILES` (and `VK_ICD_FILENAMES`) naming lavapipe's ICD manifest alone, `LIBGL_ALWAYS_SOFTWARE=1`,
   Mesa's EGL vendor, and no inherited `VK_*`, `WGPU_*`, `__NV_*`, `__GLX_*`, `DRI_PRIME` or `MESA_LOADER_*`: it renders
@@ -149,11 +149,10 @@ The script exits with the ratchet's status, or 1 when an instance root was left 
 
 ## GPUI build
 
-While the GTK and the GPUI frontends coexist, each is held by a ratchet of its own: `rust-passing.txt` for the GTK
-build, `rust-gpui-passing.txt` for the GPUI one, which `run-rust-linux.sh --frontend gpui` builds, stages
-(`scripts/stage.sh --frontend gpui`: `bin/agterm-gpui`, `agtermctl`, `zmx` and the same `share/`, no `lib/`) and holds.
-The GPUI build claims its capabilities task by task from none; its ratchet grows with `check_ratchet.py --add` and must
-cover the GTK one before the switch replaces the GTK build.
+The Rust build is the GPUI one since the switch (the GPUI plan's Task 34), which removed the GTK frontend:
+`run-rust-linux.sh` builds it, stages it (`scripts/stage.sh`: `bin/agterm`, `agtermctl`, `zmx` and `share/`, Ghostty's
+resources at `LIBGHOSTTY_VT_REV` among it, no `lib/`) and holds `rust-passing.txt`, into which the GPUI build's own
+ratchet, kept beside the GTK one until the switch, was folded.
 
 GPUI renders through Vulkan, so its runs need Mesa's lavapipe, from `scripts/fetch-lavapipe.sh`: `AGTERM_LAVAPIPE_ICD`
 when set; the distribution's package where one is installed (Ubuntu/Debian/Fedora `mesa-vulkan-drivers`, Arch

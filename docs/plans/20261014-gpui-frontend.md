@@ -2775,16 +2775,16 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
 - Modify: `conformance/rust-passing.txt` (becomes the GPUI ratchet; `rust-gpui-passing.txt` folded in)
 
 - [x] precondition: `rust-gpui-passing.txt` ⊇ `rust-passing.txt`, no checklist row the GTK build passes is open on GPUI
-- [ ] binary rename; staging without `libghostty.so`/layer-shell libs; terminfo (`tic`), themes and shell integration
+- [x] binary rename; staging without `libghostty.so`/layer-shell libs; terminfo (`tic`), themes and shell integration
       from the Ghostty source at `LIBGHOSTTY_VT_REV` (Technical Details > Resources)
-- [ ] remove the GTK-era crates and scripts; `heap_trim.rs` is GTK-GL specific and does not carry over unless GPUI
+- [x] remove the GTK-era crates and scripts; `heap_trim.rs` is GTK-GL specific and does not carry over unless GPUI
       memory measurements show the same need
-- [ ] ➕ (Task 4) the two Ghostty pins become one: the `GHOSTTY_` libghostty lines go, `LIBGHOSTTY_VT_REV` is the only
+- [x] ➕ (Task 4) the two Ghostty pins become one: the `GHOSTTY_` libghostty lines go, `LIBGHOSTTY_VT_REV` is the only
       Ghostty pin; `gen-ghostty-config-keys.sh` and the config-diagnostics residual list move to it
 - [x] ➕ (Task 16 review) precondition: `docs/backlog/kitty-virtual-placement-c-api-gaps.md` closed — the Kitty
       placement-id namespace and relative placements rooted at virtual ones drawn as libghostty draws them (upstream
       API + pin bump, or a local libghostty-vt patch), or the user's explicit scope exception
-- [ ] full conformance on the switched build; ratchet unchanged or grown; gates
+- [x] full conformance on the switched build; ratchet unchanged or grown; gates
 - Task 34 preconditions (2026-10-17, at 8d5bf71):
   - **Ratchets**: the GPUI ratchet lacked 18 of the GTK ratchet's ids; none was a GPUI gap. Six
     (`test_cli_output.py`: `test_events_print_every_event_with_its_arguments`, `test_session_metadata`,
@@ -2844,6 +2844,90 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
     suite cannot see the terminal's drawing), so the run was ratchet-only. No GTK run: the GTK binary links neither
     `agterm-ghostty-vt` nor `agterm-term`, and the shared `native.sh` change leaves libghostty's prefix key as it was
     (`prefix_keys.rs`).
+- result (2026-10-17):
+  - **The switch** (`f710308`): `agterm-gpui`'s binary is `agterm`. Removed: `crates/agterm-gtk/` (with
+    `heap_trim.rs`, not carried over: no GPUI memory measurement asks for it), `crates/agterm-ghostty/`,
+    `crates/agterm-ghostty-sys/`, `scripts/build-layer-shell.sh`, `scripts/gen-ghostty-bindings.sh`,
+    `scripts/run-gtk-dev.sh`, the `LAYER_SHELL_` pins, the GTK-only workspace dependencies (`gtk4`, `libadwaita`,
+    `gtk4-layer-shell`, `webkit6`, `glib-unix`) and their `Cargo.lock` entries. Nothing of theirs was still used
+    (`cargo tree`, a grep of every symbol; the HUD's `hud.sh` already had its GPUI copy). `scripts/stage.sh` stages
+    `bin/{agterm,agtermctl,zmx}` and `share/` (Ghostty's resources, `agterm`'s theme, the agent payloads), no `lib/`
+    (`ldd`: no libghostty, GTK or layer-shell library); `scripts/run-gpui-dev.sh` (the user's name, kept) and
+    `scripts/lib/dev-instance.sh` launch it; the AppArmor profile is one (`agterm`) for the one binary. Harness:
+    `run-rust-linux.sh`, the plugin (`--rust-frontend`) and the `rust` adapter lost their frontend switch (the adapter
+    always hands lavapipe and `--fake-seat`; the selftests' conftest gives every Rust launch a stand-in lavapipe
+    manifest outside the tests' own tmp dirs); stage `target/conformance-stage`, reports `reports/rust-linux*`.
+    `webkit_probe.py` (the WebKitGTK view gone), `chrome_probe.py` and `ghostty_probe.py` keep only the GPUI/WPE path.
+    Ratchet: both lists held the same 665 ids, so `rust-gpui-passing.txt` folded into `rust-passing.txt` as is. The
+    libghostty `config_parity` test's cases moved into agterm-core as goldens (`ghostty_config/counts_tests.rs`: every
+    line, include and theme case at libghostty's count, every keybind line at its messages, every action's bare and
+    parameterized form, all captured from the passing test before its crate went). The GPUI process tests' GTK
+    forwarding checks stay, taking a GTK build of agterm only from `AGTERM_GTK_BIN` (the fork) and skipping without one
+    even under `AGTERM_REQUIRE_DISPLAY_TESTS`. CI: `rust-linux` (Ubuntu) without the GTK packages and prefixes, `wpe`
+    as it was, `conformance` a matrix over the login shell (bash, zsh, fish) on the GPUI build in the `wpe` job's Arch
+    container, the zsh leg with `--must-pass live-sessions`, the bash leg with the process tests (HTML overlays on)
+    before the suite and the three probes after it (they ran in the GTK `conformance` job before).
+  - **One Ghostty pin** (`73ab651`): the `GHOSTTY_` lines, `scripts/build-ghostty.sh` and `build/patches/ghostty/`
+    are gone; `LIBGHOSTTY_VT_REV` is the only Ghostty pin. `scripts/build-ghostty-vt.sh` vendors Ghostty's resources at
+    that revision beside the library, as Ghostty's own build installs them (`GhosttyResources.zig`): the shell
+    integration from the source; the themes from the `iterm2_themes` package its `build.zig.zon` declares
+    (`LIBGHOSTTY_VT_THEMES_*`: release 20261005, the archive's sha256 pinned and its `zig fetch` hash equal to the
+    zon's, 725 themes, the three known ones present); `xterm-ghostty` encoded by Ghostty's terminfo source
+    (`src/terminfo/ghostty.zig` run alone with `zig run`, what `main_build_data.zig +terminfo` does) and compiled with
+    `tic -x`. The prefix is complete only with them (`verify_ghostty_resources` against the vt pins); `stage.sh` takes
+    them from it. The compiled entry is identical to the one the libghostty prefix carried (`infocmp -x` diff empty);
+    the bash integration moved on. `gen-ghostty-config-keys.sh` reads `Config.zig` at `LIBGHOSTTY_VT_REV` (the archive's
+    sha256 checked) and generates multi-value compatibility handlers (`Compat::Values`); the regenerated table adds
+    `vt-window-resize-allowed`, `vt-xt-checksum-report`, `vt-xt-checksum-extension`, `middle-click-action =
+    clipboard-paste` and Ghostty 1.4's `copy-on-select` (`none`/`primary`/`clipboard`/`both`, `true`/`false` through
+    `compatCopyOnSelect`). The model and the terminal follow those two keys at the pin (`CopyOnSelect::from_compat`;
+    `clipboard` copies to the system clipboard alone, `both` to both; `primary-paste` pastes the primary selection
+    whatever `copy-on-select` is, `clipboard-paste` the clipboard), with tests; the new keys are known and ignored.
+    Every Ghostty-level port that cited `GHOSTTY_REV` (binds, defaults, parse, validate, the shell integration, the
+    terminal's actions, wheel and launch) was read against the Zig diff 683d8db..81598385: unchanged but for those two
+    keys, so they cite `LIBGHOSTTY_VT_REV`. The residual list (`ghostty_config` module docs) holds at the new revision;
+    the goldens gain the new keys' cases, read from `Config.zig` (no libghostty to compare against now). A test holds
+    the generated table's revision to `pins.env`'s. The upstream-sync skill reports upstream's `GHOSTTY_REV` instead of
+    pinning it (`pins-delta.sh`, SKILL.md step 2).
+  - **Docs** (committed with this note): README (prerequisites, run-time dependencies, AppArmor, native dependencies, build, test, CI,
+    layout), `conformance/README.md`, the stale sentences of `conformance/docs/rust-build.md`, the checklist's intro
+    (the GTK columns stay as the record of that build's walk), the starter keymap's `global-hotkey` paragraph (no GTK
+    build to describe) and the crate docs naming the binary.
+  - **Deviations**: the plan's `scripts/run-dev.sh` is `scripts/run-gpui-dev.sh` (the user's name).
+    `docs/backlog/sigterm-quit-stalls-after-control-stop.md` removed: its subject was the GTK crate's libghostty
+    surface teardown. Provenance comments citing the removed GTK files ("port of `agterm-gtk/src/...`") are left as
+    history. The Ghostty-level semantics moving to the one pin (the two keys above) is a behavior change against the
+    macOS reference, whose libghostty is still 683d8db; Ghostty's own 1.4 change, taken with the pin as the plan has it.
+  - **Conformance**: full `run-rust-linux.sh` (the switched build, built and staged by the runner) inside the zsh-login
+    mount namespace (`with-zsh-login.sh`, read first: a private `/etc/passwd` copy and a read-only `/usr` overlay, the
+    host's `/etc`, `/usr` and login shell untouched, `AGTERM_*`/`ZMX_*` stripped): 667 collected, 667 passed, 0
+    failed, 0 skipped, 0 reruns, parity 100% (suite 490 s); the 665 listed held, the 12 live-session ids among them;
+    2 newly green added (`test_zmx.py::test_restart_replay_refuses_a_shell_at_its_prompt`,
+    `test_restart_without_a_command_replays_the_foreground_program`, never selected by a zsh run before): 667 listed.
+    No instance root, zmx process or app left. Probes on that stage: `ghostty_probe.py` (first frame), `webkit_probe.py`
+    (the page loaded) and `chrome_probe.py` (theme, theme change, tint) all green.
+  - **Gates**: fmt, `cargo metadata --locked`, clippy (workspace, all targets and features; `agterm-gpui
+    --no-default-features`), `lint-report.sh` (8 complexity expects, none new: the GTK crate's 2 went),
+    `check-tracing-features.sh`, `vendor-gpui.sh --check`, `vendor-calloop.sh --check`, `cargo test --workspace
+    --no-fail-fast` under `GDK_BACKEND=x11 xvfb-run -a dbus-run-session` (4050 passed, 0 failed, 9 ignored; the first
+    run caught `agterm-wpe-sys`'s provider test still bumping `GHOSTTY_REV`, fixed), conformance selftests (808
+    passed).
+  - **Stale in CLAUDE.md, for Task 36** (left as is; the merge into main resolves CLAUDE.md): the intro ("the
+    GTK4/libadwaita frontend runs libghostty in a `GtkGLArea`"); the crate map (rows `agterm-ghostty-sys`,
+    `agterm-ghostty`, `agterm-gtk` → `agterm` gone; `agterm-app` "both frontends share"; rows missing for
+    `agterm-ghostty-vt-sys`, `agterm-ghostty-vt`, `agterm-term`, `agterm-gpui` → `agterm`, `agterm-wpe`,
+    `agterm-wpe-sys`, `agterm-wpe-platform-sys`, `agterm-wpe-javascriptcore-sys`); "The GTK main loop owns the main
+    thread"; the reference rule's fork glue (`GtkGLArea` hosting and the input handoff, the libghostty Linux build and
+    its patches, WebKitGTK); porting step 3 ("Wire the GTK side in `agterm-gtk` ... GTK4/libadwaita idioms"); "A new
+    upstream release moves ... the native pins in `build/pins.env` together" (only zmx's follows upstream now; the
+    Ghostty pin is `LIBGHOSTTY_VT_REV`, its bump a change of its own); fork coexistence and the never-touch list naming
+    `scripts/run-gtk-dev.sh`; the headless-weston note ("without them GTK crashes realizing the window"; GPUI needs
+    `--fake-seat` and lavapipe instead); the gate list lacks the GPUI ones (`--no-default-features` clippy, the vendor
+    checks, the tracing check).
+  - **For Task 35**: the CI matrix's first run on GitHub (the Arch zsh/fish legs, the Ubuntu job's trimmed package
+    list, the probes in the Arch container); single-instance forwarding with a GTK-build launch through
+    `AGTERM_GTK_BIN` (the installed fork's binary or a pre-switch build of this repository), never against the user's
+    running instance; the edge cases its list names; the sprite goldens (in `cargo test`, green here).
 
 ### Task 35: Verify acceptance criteria
 

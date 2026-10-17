@@ -655,6 +655,8 @@ tests/protocol/test_zmx.py::test_restart_rejects[not-live]
 tests/protocol/test_zmx.py::test_restart_rejects[scratch]
 tests/protocol/test_zmx.py::test_restart_rejects[unknown-pane-id]
 tests/protocol/test_zmx.py::test_restart_replaces_the_pane_shell
+tests/protocol/test_zmx.py::test_restart_replay_refuses_a_shell_at_its_prompt
+tests/protocol/test_zmx.py::test_restart_without_a_command_replays_the_foreground_program
 tests/protocol/test_zmx.py::test_screen_reads_the_daemon_grid
 tests/protocol/test_zmx.py::test_screen_rejects[both]
 tests/protocol/test_zmx.py::test_screen_rejects[no-daemon]

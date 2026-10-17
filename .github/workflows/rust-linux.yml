@@ -269,6 +269,24 @@ jobs:
         run: >-
           conformance/tools/run-rust-linux.sh --out conformance/reports/${{ matrix.out }} --
           ${{ matrix.must-pass }}
+      # On the stage the suite ran: the terminal surface draws its first frame, a page loads in WPE WebKit's sandbox,
+      # and the title bar, the sidebar and the terminal draw one color, the theme's background, with the sidebar tint
+      # washing the sidebar alone (screenshots of the maximized window, its weston started with --debug).
+      - name: probes (terminal frame, web process, window chrome)
+        if: matrix.shell == 'bash'
+        shell: bash
+        run: |
+          status=0
+          for probe in ghostty_probe webkit_probe chrome_probe; do
+            /opt/suite/bin/python "conformance/tools/$probe.py" > "$RUNNER_TEMP/$probe.json" || status=1
+            {
+              echo "### $probe"
+              echo '```json'
+              cat "$RUNNER_TEMP/$probe.json"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
+          exit "$status"
       - name: report into the summary
         if: always()
         shell: bash
