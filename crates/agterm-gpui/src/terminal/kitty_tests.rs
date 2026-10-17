@@ -577,7 +577,7 @@ fn a_relative_placement_lands_at_its_virtual_roots_first_cells_plus_its_offsets(
         }
     );
     // the origin is the minimum column and the minimum row over the runs, each on its own: (1, 1) from (3, 1) and
-    // (1, 2), and a negative offset may hang it partly off the left
+    // (1, 2); a negative offset counts back from it, here onto the first column
     let crossed = [run_at(3, 1, 0), run_at(1, 2, 0)];
     let kitty = view(
         vec![image(dog, 4, 4), image(child, 4, 4)],
@@ -585,6 +585,62 @@ fn a_relative_placement_lands_at_its_virtual_roots_first_cells_plus_its_offsets(
     );
     let drawn = rooted_at_virtual(&kitty, &crossed, VIEWPORT, CELLS);
     assert_eq!((drawn[0].dest.x, drawn[0].dest.y), (0.0, 20.0));
+}
+
+/// `placement` (a [`rooted`] one) covering `columns` x `rows` cells of the 10x20 cell, its whole 4x4 image.
+fn covering(mut placement: KittyPlacement, columns: u32, rows: u32) -> KittyPlacement {
+    if let Some(rooted) = placement.virtual_root.as_mut() {
+        (rooted.columns, rooted.rows) = (columns, rows);
+        (rooted.pixel_width, rooted.pixel_height) = (columns * 10, rows * 20);
+    }
+    placement
+}
+
+/// Ghostty's `kittyUpdate` culls a relative placement rooted at a virtual one only when it is wholly outside the
+/// viewport (`x + cols - 1 < 0`, `y + rows - 1 < 0`) and hands the rest to `appendKittyPlacement` at their signed
+/// cell, so one hanging partly off the left or the top draws whole at a negative cell (its full source rectangle,
+/// clipped by the grid), not moved onto the viewport and not trimmed.
+#[test]
+fn a_relative_placement_partly_off_the_left_or_top_draws_whole_at_a_negative_cell() {
+    let (dog, child) = (key(1, 1), key(2, 1));
+    let root = client(1, 1);
+    // a 3x2-cell child of the root shown at (2, 2)
+    let at = |offset: (i32, i32)| {
+        let kitty = view(
+            vec![image(dog, 4, 4), image(child, 4, 4)],
+            vec![
+                virtual_placement(dog, 1, 0, 0),
+                covering(rooted(child, root, offset), 3, 2),
+            ],
+        );
+        rooted_at_virtual(&kitty, &[run_at(2, 2, 0)], VIEWPORT, CELLS)
+            .iter()
+            .map(|placement| (placement.dest, placement.source))
+            .collect::<Vec<_>>()
+    };
+    let whole = SourceRect {
+        x: 0,
+        y: 0,
+        width: 4,
+        height: 4,
+    };
+    let rect = |x, y| DeviceRect {
+        x,
+        y,
+        width: 30.0,
+        height: 40.0,
+    };
+    // columns -1..=1: its first column off the left
+    assert_eq!(at((-3, 0)), [(rect(-10.0, 40.0), whole)]);
+    // columns -2..=0: only its last column on the viewport
+    assert_eq!(at((-4, 0)), [(rect(-20.0, 40.0), whole)]);
+    // rows -1..=0: its first row off the top
+    assert_eq!(at((0, -3)), [(rect(20.0, -20.0), whole)]);
+    // both: only its bottom-right cell on the viewport
+    assert_eq!(at((-4, -3)), [(rect(-20.0, -20.0), whole)]);
+    // columns -3..=-1 or rows -2..=-1: wholly off, culled
+    assert!(at((-5, 0)).is_empty());
+    assert!(at((0, -4)).is_empty());
 }
 
 #[test]
