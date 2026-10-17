@@ -2931,7 +2931,8 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
 
 ### Task 35: Verify acceptance criteria
 
-- [x] every Overview requirement implemented; GTK removed only after parity including HTML overlays
+- [x] every Overview requirement implemented; GTK removed only after parity including HTML overlays (parity except the
+      deferred Ghostty config keys, user-approved 2026-10-17: see the ➕ (review) line below)
 - [x] edge cases: kitty keyboard protocol apps, IME on a Cyrillic layout, wide/emoji text, huge output throughput,
       config diagnostics counts, single-instance forwarding (incl. a GTK-build launch), quick terminal on niri and the
       fallback, SIGTERM deadline
@@ -2987,6 +2988,19 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
     `scroll-to-bottom`, `bell-features`, `link-previews`, `scrollback-compression`, the `vt-xt-checksum-*` pair). Their
     defaults are what the GPUI build does; a user-set value is ignored (logged at debug) and counts as libghostty
     counted it. Closing them is per-key renderer and stream work beyond a verification task.
+  - ➕ (review) the plan did not authorize dropping these keys (Solution Overview > Config is a diagnostics-counting
+    rule, Task 7's subset a parser checklist), so the paragraph above was a deferral this run granted itself. **The
+    user approved the deferral on 2026-10-17** («Давай отложим эти ключи»), an explicit scope exception. Counted from
+    the key table: the GPUI model ignores 148 known keys (`keybind`, `config-file` and `command` are read elsewhere).
+    49 of them the GTK build honored through libghostty's core, renderer and termio: font metrics and styles (25),
+    colors and rendering (13), protocol responses (4), behavior (7). They are the deferred work. 31 are macOS only, 64
+    are Ghostty app-runtime keys the GTK build did not honor either (it ran libghostty's embedded runtime), 3 are newer
+    than the GTK build's Ghostty and 1 is CLI only. The per-key list, with each key's evidence:
+    `docs/ghostty-config-parity.md`; the work item: `docs/backlog/implement-deferred-ghostty-config-keys.md`. The
+    same review fixed the launch keys: `env` and `input` lines libghostty refuses now count, `env` trims around `=`,
+    `input` paths are decoded and read through one bounded read of a regular file, and a launch directory that is gone
+    falls back to `working-directory`. It also added a pane test for `image-storage-limit` (at start and on a reload)
+    and made the throughput sampler fail on a failed request.
   - **Edge cases**, each with its deterministic headless check:
     - Kitty keyboard protocol: the bytes a program in a real PTY receives under the flags it pushed
       (`agterm-term` `tests/input.rs` `kitty_encodings_follow_the_flags_the_program_pushed`: flags 1 and 3, Escape,
