@@ -2658,10 +2658,92 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
 **Files:**
 - Modify: `docs/linux-ui-checklist.md` (GPUI form column and walk status)
 
-- [ ] add the GPUI form per row; walk every row against upstream; fix gaps or record them with ⚠️
-- [ ] best effort: accessibility ids from `conformance/ui-ids.yaml` as element ids / AccessKit names (no Linux UI
+- [x] add the GPUI form per row; walk every row against upstream; fix gaps or record them with ⚠️
+- [x] best effort: accessibility ids from `conformance/ui-ids.yaml` as element ids / AccessKit names (no Linux UI
       driver exists, and GPUI's AccessKit on Linux is unverified)
-- [ ] tests for every gap fixed during the walk; gates + conformance
+- [x] tests for every gap fixed during the walk; gates + conformance
+- result (2026-10-17):
+  - **The walk**: `docs/linux-ui-checklist.md` has a `GPUI walk (Task 33)` column on every table: the GPUI form
+    (file and function) and the row read against upstream v0.36.0's sources (`agterm/Views`, `agterm/Ghostty`,
+    `.claude/rules`, `site/`) again. 75 rows (73 carried over, plus two for the GPUI build's own terminal, which the
+    GTK build left to libghostty: rendering, and mouse and keyboard): 48 read ✅ with nothing open, 19 carry a 🔧
+    fixed here, 14 a ⚠️ kept with its reason, 9 "needs the user's screen". The GTK columns stay as Task 36 wrote them.
+  - **Gaps fixed** (each with its tests):
+    - window frames: saved per window id in `window-frames.json` on every close and at quit, restored once on open,
+      constrained to the displays attached now (`window_frames.rs`; `agterm_core::window_geometry`, upstream's
+      `WindowGeometry` with its unit tests); a window with no frame opens at upstream's 900×600, never below
+      640×400; the origin only on X11 (Wayland gives a client none). Tests: `window_frames/tests.rs`, the core's
+      geometry tests, `windows.rs` `a_window_reopens_at_the_frame_it_closed_with`, `tests/x11_window.rs` (a size
+      survives a quit on a private Xvfb).
+    - `window.list` minimized on X11: `gpui-pre-linux` patch 0003 tracks `_NET_WM_STATE_HIDDEN` per window
+      (`gpui_linux::x11_window_minimized`), and a request's pending minimize reads minimized until the read-back
+      confirms it (`window.rs` `Painted::state`); `tests/x11_window.rs` sets the state on a private Xvfb.
+    - confirmations: every confirmation's Return default is upstream's first `NSAlert` button, the verb (Close,
+      Delete, Clear), drawn destructive; Reset Live Sessions keeps Cancel, upstream's own default there
+      (`modal::AlertSpec::confirm` / `confirm_cancelling`). New, as upstream: closing a window that holds sessions
+      asks "Close “name”?" (`windowShouldClose`; the window manager's close, the title bar's, the keymap's), and
+      Clear Flagged asks "Clear flagged sessions?" (`confirmClearFlags`, skipped on a UI-test launch as upstream's).
+    - window translucency (Settings ▸ Appearance ▸ Window opacity and blur): `chrome::Translucency`, the window body
+      painting the backing at the opacity with the chrome and the deck painting nothing over it, the terminals
+      rendering `background-opacity = 0` (`Core::set_translucent_host`), the mute and the overlay and HUD
+      backgrounds scaled, an OSC 11 background at the window opacity, full screen opaque, as upstream's
+      `WindowAppearance`; GPUI's blurred background stands in for the blur radius.
+    - `global-hotkey` registered: an X11 key grab on the root window, else the XDG GlobalShortcuts portal (ashpd's
+      `global_shortcuts`), toggling the quick terminal as upstream's Carbon hotkey; `tests/global_hotkey.rs` presses
+      the chord through XTEST on a private Xvfb and activates a fake portal on a private bus. The starter keymap's
+      text is upstream's.
+    - links: Ghostty's whole `url.zig` pattern, its file-path branches included (`fancy-regex` 0.19 for the
+      lookarounds, `regex` dropped), with url.zig's own cases as tests.
+    - strikethrough at the face's OS/2 strikeout metrics (`gpui-pre` 0004, `gpui-pre-wgpu` 0002), Ghostty's estimate
+      only without the table.
+    - selectable text as upstream's `.textSelection(.enabled)`: the Settings paths and diagnostics and an HTML page's
+      load error (`selectable.rs`).
+    - the dashboard's idle chip in the theme's selection colors, else the foreground at 0.22 (`chip_colors`).
+    - ids and accessibility: `terminal-zoom` on the zoomed terminal, `htmlOverlay.*` on the strip, the page and the
+      failure view; `ui_ids.rs` fails when any id of `conformance/ui-ids.yaml` is missing from the sources; the
+      controls carrying upstream's ids also carry them as AccessKit author ids with roles and labels (title bar,
+      alerts and their checks, ask dialog, picker, palettes, Ctrl-Tab switcher, sidebar rows and badges, search,
+      dashboard, quick terminal, pane covers), and the typing terminal is a multi-line text input labelled
+      Terminal, as upstream's `.textArea`.
+    - found by the walk's first conformance run (`test_reload_and_navigate_a_page` red once, green on its own): a
+      page's report was skipped when the model's value as last applied already held it, but that value lags the
+      reports posted and not yet applied, so a reload's title reported cleared and then back read as unchanged and
+      the title stayed cleared; a report now goes out unless both the model's value and the page's last post hold it
+      (`html_overlay/page.rs` `needs_report`, unit-tested on the stale case).
+  - **Known gaps revisited**: done in earlier tasks and confirmed in the code: the Hidden mode under server-side
+    decorations (Task 26's review), the folder chooser's parent window (Task 19's review), `focus-follows-mouse` and
+    `selection-word-chars` (Task 14's review), the read-only pane, the hovered URL and the text/html offer (Task 14),
+    the underline metrics and the lock cursor (Task 15); the unsafe paste completes unasked, which is upstream's own
+    behavior (its `confirmReadClipboard` completes paste requests confirmed); the long pickers have no search, as
+    upstream's. The GTK build's OpenCode chooser defaulting Return to v2 (upstream: Skip) is recorded only; GPUI's
+    defaults to Skip.
+  - **Kept with ⚠️**: `cursor-click-to-move` (libghostty-vt exposes no prompt-click state; backlog item); Kitty
+    relative virtual placements and animation frames (libghostty-vt's C API; backlog item, a Task 34 precondition);
+    the X11 autorepeat flag of a real held key (XTEST sends no repeats); a Wayland window's minimized state
+    (xdg-shell reports none) and position (none given); the blur radius (GPUI asks the compositor's blur protocol,
+    on or off); the HTML page's Copy Image, media and spelling items (WPE's items cannot be run, a scripted `play()`
+    is no gesture, no spell checker), drops onto a page (no WPE drop API) and the page's accessibility tree (no
+    bridge from WebKit's AT-SPI tree into AccessKit); the AccessKit tree itself is untested (GPUI's test platform
+    builds none) and unverified with a screen reader; the Dock menu, the named sounds and Reduce Transparency (Linux
+    exceptions, as in the GTK build); the static font faces (Task 13's deviation).
+  - **Needs the user's screen**: YouTube 1080p60 through dmabuf (no dropped frames, CPU against the GTK build's);
+    NVIDIA's own driver for the HTML frames; a CJK input method in a terminal and in a page; real keys on a real seat
+    and a real non-Latin layout in the picker; the `<select>` popup by hand; real multi-output layer-shell placement
+    of the quick terminal; the real portal dialogs (folder chooser, GlobalShortcuts on KDE / GNOME); the
+    translucency's look on a real compositor; the AppArmor profile on the GPUI binary.
+  - **Gates**: fmt, clippy (workspace all targets and features; `agterm-gpui --no-default-features`),
+    `lint-report.sh` (no new complexity expect, 10 as before; the new ones are no complexity lints:
+    `cast_possible_truncation` twice on a window's logical size, `dead_code` on the shared test `support` module in
+    a new test binary, as every other test binary carries it, `needless_pass_by_value` on the fake portal's zbus methods, which take their arguments owned),
+    `check-tracing-features.sh`, `vendor-gpui.sh
+    --check` (patches `gpui-pre` 0004, `gpui-pre-wgpu` 0002, `gpui-pre-linux` 0003), `cargo test --workspace` under
+    xvfb (4400 passed). Conformance: GPUI `--ratchet-only --also-k` over the areas touched (windows, quick terminal,
+    hotkey, theme, settings, dashboard, zoom, pages, keymap, HUD, overlays, backgrounds, flags, links): 647 passed,
+    the 645 listed held, 2 newly green added (`test_session_create_select_and_close`, `test_submit_refusals`; 647
+    listed); GTK `--ratchet-only` (the core changed: `window_geometry`, `set_translucent_host`, the hotkey toggle):
+    653 passed, the 665 listed held (12 not run on this host, live sessions).
+  - **For Task 34**: the checklist's GPUI column is the description of the UI that stays; the GTK columns go with the
+    GTK build. The Kitty C API gaps stay its precondition.
 
 ### Task 34: Switch to GPUI and remove the GTK frontend
 
