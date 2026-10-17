@@ -41,8 +41,9 @@ pulldown-cmark = { version = "0.13", default-features = false }
 png = "0.18"
 # A pane's PTY and child (agterm-term), as Zed and WezTerm use it.
 portable-pty = "0.9"
-# agterm-gpui's link detection: Ghostty's default URL matcher (`link-url`) over the terminal's rows.
-regex = "1"
+# agterm-gpui's link detection: Ghostty's default URL and path matcher (`link-url`) over the terminal's rows, whose
+# look-arounds (Oniguruma's, in Ghostty) need a backtracking engine; fancy-regex is the regex crate's own one.
+fancy-regex = "0.19"
 serde = { version = "1", features = ["derive"] }
 # `preserve_order`: a result built as a `Value` keeps its fields in upstream's order on the wire (the catalog's
 # `fields` order) instead of sorting them.
