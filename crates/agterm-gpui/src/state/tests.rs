@@ -476,7 +476,20 @@ fn closing_a_window_saves_it_closes_its_store_and_tears_its_terminals_down() {
     let probe = terminal.probe();
     store.session_mut(session).unwrap().surface.replace(Box::new(terminal));
     let mut state = AppState::new(core(library, Some(persistence)));
+    // upstream's `windowShouldClose`: a window running sessions asks first, once
     state.close_requested(second);
+    state.close_requested(second);
+    assert!(state.core.library().is_open(second), "nothing closes before the answer");
+    assert_eq!(probe.teardowns(), 0);
+    assert_eq!(
+        state.take_frontend_work().window_closes,
+        [crate::state::WindowClose {
+            window: second,
+            name: "second".to_owned(),
+            sessions: 1,
+        }]
+    );
+    state.close_confirmed(second);
     assert!(!state.core.library().is_open(second));
     assert_eq!(state.core.library().windows().len(), 2, "its bundle stays");
     assert_eq!(state.core.library().active_window_id(), Some(first));
@@ -486,6 +499,30 @@ fn closing_a_window_saves_it_closes_its_store_and_tears_its_terminals_down() {
         saved.contains(&agterm_core::pane_env::uuid_string(session)),
         "written before it closed"
     );
+}
+
+/// Upstream's `clearFlags`: nothing while no session is flagged, else the frontend asks first and only the
+/// confirmation unflags.
+#[test]
+fn clear_flagged_asks_first_and_only_the_confirmation_unflags() {
+    let library = WindowLibrary::seeded("/home/u");
+    let window = library.active_window_id().unwrap();
+    let mut state = AppState::new(core(library, None));
+    state.clear_flags_requested(window);
+    assert_eq!(
+        state.take_frontend_work().clear_flags,
+        None,
+        "nothing flagged: nothing to ask"
+    );
+    let flagged = |state: &AppState| state.core.library().store(window).unwrap().flagged_sessions().len();
+    let store = state.core.library_mut().store_mut(window).unwrap();
+    let session = store.sessions().next().unwrap().id();
+    store.set_flag(true, session);
+    state.clear_flags_requested(window);
+    assert_eq!(state.take_frontend_work().clear_flags, Some((window, 1)));
+    assert_eq!(flagged(&state), 1, "still flagged until confirmed");
+    state.clear_flags_confirmed(window);
+    assert_eq!(flagged(&state), 0);
 }
 
 #[test]

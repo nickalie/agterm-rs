@@ -167,6 +167,20 @@ pub struct FrontendWork {
     pub quit_prompt: Option<String>,
     /// Show Reset Live Sessions…'s confirmation or refusal over the frontmost window ([`crate::zmx_runtime`]).
     pub live_reset: Option<crate::zmx_runtime::ResetAlert>,
+    /// Ask over each of these windows whether to close it and end its sessions ([`WindowView::ask_close`]).
+    ///
+    /// [`WindowView::ask_close`]: crate::window::WindowView::ask_close
+    pub window_closes: Vec<WindowClose>,
+    /// Ask over this window whether to unflag its this many flagged sessions ([`crate::window::clear_flags_alert`]).
+    pub clear_flags: Option<(Uuid, usize)>,
+}
+
+/// A user's close of a window that still holds sessions, which asks first (upstream's `WindowCloseDelegateProxy`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowClose {
+    pub window: Uuid,
+    pub name: String,
+    pub sessions: usize,
 }
 
 /// Whether a terminal's desktop notification fired while its pane held its window's keyboard (upstream's first
@@ -1050,9 +1064,66 @@ impl AppState {
         self.settle();
     }
 
-    /// The user closed window `window` (upstream's window `willClose`): its snapshot is written and its store closed,
-    /// tearing its terminals down.
+    /// The user closed window `window` (the window manager's close, the title bar's, the keymap's Close Window). While
+    /// it holds sessions the frontend asks first ([`FrontendWork::window_closes`], upstream's `windowShouldClose`);
+    /// once confirmed, or with none, it closes (upstream's window `willClose`): its snapshot is written and its store
+    /// closed, tearing its terminals down.
     pub fn close_requested(&mut self, window: Uuid) {
+        if self.quitting {
+            return;
+        }
+        let library = self.core.library();
+        let sessions = library.store(window).map_or(0, |store| store.sessions().count());
+        if sessions > 0 {
+            // upstream's `windowShouldClose`: a window still running sessions asks first, once at a time
+            if !self.frontend.window_closes.iter().any(|close| close.window == window) {
+                let name = library
+                    .windows()
+                    .iter()
+                    .find(|info| info.id == window)
+                    .map_or_else(|| "window".to_owned(), |info| info.name.clone());
+                self.frontend.window_closes.push(WindowClose { window, name, sessions });
+            }
+            return;
+        }
+        self.close_confirmed(window);
+    }
+
+    /// Clear Flagged from window `window`'s palette or menu (upstream's `clearFlags`): nothing while no session is
+    /// flagged, else the frontend asks first (a bulk change), except on a UI-test launch, where a modal would hang the
+    /// test.
+    pub fn clear_flags_requested(&mut self, window: Uuid) {
+        if self.quitting {
+            return;
+        }
+        let flagged = self
+            .core
+            .library()
+            .store(window)
+            .map_or(0, |store| store.flagged_sessions().len());
+        if flagged == 0 {
+            return;
+        }
+        if agterm_core::is_ui_test_launch(&agterm_core::paths::ProcessEnv) {
+            self.clear_flags_confirmed(window);
+            return;
+        }
+        self.frontend.clear_flags = Some((window, flagged));
+    }
+
+    /// The user confirmed Clear Flagged in window `window`: every session there is unflagged.
+    pub fn clear_flags_confirmed(&mut self, window: Uuid) {
+        if self.quitting {
+            return;
+        }
+        self.core
+            .perform_menu_command(window, agterm_core::palette_catalog::PaletteCommand::ClearFlagged);
+        self.settle();
+    }
+
+    /// The user confirmed closing window `window` (or it held no session): it closes as
+    /// [`AppState::close_requested`] describes.
+    pub fn close_confirmed(&mut self, window: Uuid) {
         if self.quitting {
             return;
         }

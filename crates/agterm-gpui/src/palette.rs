@@ -25,6 +25,7 @@ use agterm_core::Core;
 use agterm_core::app_actions::ActionEffect;
 use agterm_core::keymap::BuiltinAction;
 use agterm_core::palette::{PaletteAction, PaletteEntry, PaletteMode, PaletteShortcut, filter_entries};
+use agterm_core::palette_catalog::PaletteCommand;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable as _, InteractiveElement as _,
@@ -411,6 +412,12 @@ impl AppState {
             return;
         }
         match request {
+            Request::Run(PaletteAction::Command(PaletteCommand::ClearFlagged)) => {
+                // upstream's `clearFlags` confirms first: the palette closes, then the window asks
+                self.core.close_palette();
+                self.settle();
+                self.clear_flags_requested(window);
+            }
             Request::Run(action) => {
                 let effect = self.core.run_palette_entry(window, &action);
                 // the frontend half lands after the windows' sync, so the terminal has the keyboard back before a

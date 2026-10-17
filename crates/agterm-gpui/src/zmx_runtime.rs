@@ -57,7 +57,7 @@ pub const RESET: usize = 1;
 /// Upstream's warning alert: Cancel first, the default and the close response, then Reset drawn destructive.
 #[must_use]
 pub fn confirm_alert(prompt: &ResetPrompt) -> AlertSpec {
-    AlertSpec::confirm(prompt.title.clone(), prompt.body.clone(), "Reset")
+    AlertSpec::confirm_cancelling(prompt.title.clone(), prompt.body.clone(), "Reset")
 }
 
 /// Upstream's informational alert for a refused reset.

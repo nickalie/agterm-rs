@@ -222,6 +222,7 @@ dependencies = [
  "png 0.18.1",
  "raw-window-handle",
  "regex",
+ "serde",
  "serde_json",
  "signal-hook",
  "tempfile",

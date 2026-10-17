@@ -185,6 +185,8 @@ pub struct WindowView {
     title: String,
     /// Set once the model closed the window, so its close request goes through.
     closing: Rc<Cell<bool>>,
+    /// The user's close is being confirmed: a second close meanwhile asks nothing (upstream's `sheetOpen`).
+    close_asked: Rc<Cell<bool>>,
     painted: Rc<Cell<Painted>>,
     /// What the window's first activation knows of its build, until that activation or [`FIRST_FOCUS_GRACE`] after
     /// its first frame.
@@ -275,6 +277,7 @@ impl WindowView {
             layers,
             title: UNTITLED.to_owned(),
             closing,
+            close_asked: Rc::new(Cell::new(false)),
             painted: Rc::new(Cell::new(Painted::default())),
             first_focus,
             poster,
@@ -658,6 +661,28 @@ impl WindowView {
         window.remove_window();
     }
 
+    /// Asks whether to close the window and end its sessions (upstream's `windowShouldClose` sheet): "Close “name”?",
+    /// Cancel (Escape) / Close (Return, destructive); Close posts [`AppState::close_confirmed`]. A close while it is
+    /// up asks nothing more.
+    pub fn ask_close(&self, close: &crate::state::WindowClose, poster: Poster, window: &mut Window, cx: &mut App) {
+        if self.close_asked.replace(true) {
+            return;
+        }
+        let asked = Rc::clone(&self.close_asked);
+        let id = close.window;
+        crate::modal::open_alert(
+            window,
+            close_alert(&close.name, close.sessions),
+            move |answer, _, _| {
+                asked.set(false);
+                if answer.button == CLOSE {
+                    post(&poster, move |state: &mut AppState| state.close_confirmed(id));
+                }
+            },
+            cx,
+        );
+    }
+
     /// Raises the window and gives the keyboard to the shown terminal.
     pub fn present(&self, window: &mut Window, cx: &mut App) {
         window.activate_window();
@@ -926,25 +951,131 @@ pub(crate) fn check_keyboard_left(cx: &mut App) {
     .detach();
 }
 
+/// The Close button's index in [`close_alert`].
+pub const CLOSE: usize = 1;
+
+/// The user's close of a window running `sessions` sessions (upstream's `WindowCloseDelegateProxy.windowShouldClose`).
+#[must_use]
+pub fn close_alert(name: &str, sessions: usize) -> crate::modal::AlertSpec {
+    let plural = if sessions == 1 { "" } else { "s" };
+    crate::modal::AlertSpec::confirm(
+        format!("Close \u{201c}{name}\u{201d}?"),
+        format!(
+            "This ends {sessions} running session{plural}. The window can be reopened from File \u{25b8} Open Window."
+        ),
+        "Close",
+    )
+}
+
+/// The Clear button's index in [`clear_flags_alert`].
+pub const CLEAR: usize = 1;
+
+/// Clear Flagged's confirmation over `count` flagged sessions (upstream's `confirmClearFlags`).
+#[must_use]
+pub fn clear_flags_alert(count: usize) -> crate::modal::AlertSpec {
+    let body = if count == 1 {
+        "This unflags 1 session. The session itself is not closed.".to_owned()
+    } else {
+        format!("This unflags {count} sessions. The sessions themselves are not closed.")
+    };
+    crate::modal::AlertSpec::confirm("Clear flagged sessions?", body, "Clear")
+}
+
+/// Asks over `window` whether to clear its `count` flagged sessions; Clear posts [`AppState::clear_flags_confirmed`].
+pub fn ask_clear_flags(id: Uuid, count: usize, poster: Poster, window: &mut Window, cx: &mut App) {
+    crate::modal::open_alert(
+        window,
+        clear_flags_alert(count),
+        move |answer, _, _| {
+            if answer.button == CLEAR {
+                post(&poster, move |state: &mut AppState| state.clear_flags_confirmed(id));
+            }
+        },
+        cx,
+    );
+}
+
+/// `window`'s frame as it would be saved now: its bounds, or the ones it restores to while maximized or full screen.
+#[must_use]
+pub fn frame_of(window: &Window) -> crate::window_frames::Frame {
+    let (bounds, maximized) = match window.window_bounds() {
+        gpui_kit::WindowBounds::Maximized(bounds) => (bounds, true),
+        gpui_kit::WindowBounds::Windowed(bounds) | gpui_kit::WindowBounds::Fullscreen(bounds) => (bounds, false),
+    };
+    crate::window_frames::Frame {
+        x: f64::from(f32::from(bounds.origin.x)),
+        y: f64::from(f32::from(bounds.origin.y)),
+        width: f64::from(f32::from(bounds.size.width)),
+        height: f64::from(f32::from(bounds.size.height)),
+        maximized,
+    }
+}
+
+/// The displays attached now, the primary one first, as [`crate::window_frames::Frame::constrained`] takes them.
+#[must_use]
+pub fn display_rects(cx: &App) -> Vec<agterm_core::window_geometry::Rect> {
+    let primary = cx.primary_display().map(|display| display.id());
+    let mut displays = cx.displays();
+    displays.sort_by_key(|display| Some(display.id()) != primary);
+    displays
+        .iter()
+        .map(|display| {
+            let bounds = display.bounds();
+            agterm_core::window_geometry::Rect::new(
+                f64::from(f32::from(bounds.origin.x)),
+                f64::from(f32::from(bounds.origin.y)),
+                f64::from(f32::from(bounds.size.width)),
+                f64::from(f32::from(bounds.size.height)),
+            )
+        })
+        .collect()
+}
+
+/// The bounds a window opens with: its saved `frame` (maximized again when it closed so), else upstream's default size
+/// centered.
+fn initial_bounds(frame: Option<crate::window_frames::Frame>, cx: &App) -> gpui_kit::WindowBounds {
+    #[expect(clippy::cast_possible_truncation, reason = "a window's logical size fits an f32")]
+    let pixels = |value: f64| px(value as f32);
+    let Some(frame) = frame else {
+        let default = crate::window_frames::DEFAULT_SIZE;
+        return gpui_kit::WindowBounds::Windowed(gpui_kit::Bounds::centered(
+            None,
+            size(pixels(default.width), pixels(default.height)),
+            cx,
+        ));
+    };
+    let bounds = gpui_kit::Bounds {
+        origin: gpui_kit::point(pixels(frame.x), pixels(frame.y)),
+        size: size(pixels(frame.width), pixels(frame.height)),
+    };
+    if frame.maximized {
+        gpui_kit::WindowBounds::Maximized(bounds)
+    } else {
+        gpui_kit::WindowBounds::Windowed(bounds)
+    }
+}
+
 /// Opens the window of model window `id` with `app_id` as its Wayland app id / X11 class, when the core's frontmost
-/// takes stand at `frontmost_takes`; its handle, `None` (logged) when the platform could not open one.
+/// takes stand at `frontmost_takes`, at its saved `frame` (already constrained to the displays) or upstream's default
+/// size; its handle, `None` (logged) when the platform could not open one.
 pub fn open(
     id: Uuid,
     frontmost_takes: u64,
     app_id: &str,
     env: &Rc<crate::deck::DeckEnv>,
+    frame: Option<crate::window_frames::Frame>,
     cx: &mut App,
 ) -> Option<gpui_kit::WindowHandle<WindowView>> {
+    let min = crate::window_frames::MIN_SIZE;
+    #[expect(clippy::cast_possible_truncation, reason = "a window's logical size fits an f32")]
+    let min_size = size(px(min.width as f32), px(min.height as f32));
     let options = gpui_kit::WindowOptions {
         titlebar: Some(gpui_kit::TitlebarOptions {
             title: Some(UNTITLED.into()),
             ..gpui_kit::TitlebarOptions::default()
         }),
-        window_bounds: Some(gpui_kit::WindowBounds::Windowed(gpui_kit::Bounds::centered(
-            None,
-            size(px(960.), px(640.)),
-            cx,
-        ))),
+        window_bounds: Some(initial_bounds(frame, cx)),
+        window_min_size: Some(min_size),
         app_id: Some(app_id.to_owned()),
         // the title bar is the app's own (`titlebar.rs`): the window manager's decorations only where the compositor
         // insists (GPUI falls back to them on X11 without a compositing manager, and a Wayland compositor may refuse)

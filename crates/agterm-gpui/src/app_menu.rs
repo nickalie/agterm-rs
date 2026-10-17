@@ -649,6 +649,11 @@ impl AppState {
         if self.is_quitting() {
             return;
         }
+        if matches!(item, Item::Row(PaletteCommand::ClearFlagged)) {
+            // upstream's `clearFlags` confirms first
+            self.clear_flags_requested(window);
+            return;
+        }
         let effect = match item {
             Item::Row(row) => self.core.perform_menu_command(window, row),
             Item::Builtin(action) => self.core.perform_builtin(ActionOrigin { window, quick: false }, action),

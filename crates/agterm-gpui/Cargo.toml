@@ -36,6 +36,8 @@ notify.workspace = true
 png.workspace = true
 raw-window-handle.workspace = true
 regex.workspace = true
+# the windows' saved frames (`window_frames.rs`)
+serde.workspace = true
 serde_json.workspace = true
 signal-hook.workspace = true
 # write_*_file: the screen file goes into a temporary directory of its own, as Ghostty's does

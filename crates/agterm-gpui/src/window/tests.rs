@@ -368,23 +368,85 @@ fn a_cancelled_confirmation_from_a_row_menu_gives_the_terminal_the_keyboard_back
     s.close_var_from_its_menu();
     assert!(s.alert_open(), "Close Session asks first");
     assert!(!s.terminal_focused(), "the alert holds the keyboard");
-    // Return answers with the default, Cancel
-    s.cx.simulate_keystrokes("enter");
+    // Escape answers with Cancel
+    s.cx.simulate_keystrokes("escape");
     s.settle();
     assert!(!s.alert_open());
     assert!(s.session("var").is_some(), "cancelled");
     assert!(s.terminal_focused(), "the terminal has the keyboard back");
 
-    // Escape cancels too; then the confirmed close moves the keyboard to the next shown terminal
-    s.close_var_from_its_menu();
-    s.cx.simulate_keystrokes("escape");
-    s.settle();
-    assert!(s.session("var").is_some() && s.terminal_focused());
+    // the keyboard starts on Close, upstream's default: Tab moves it to Cancel
     s.close_var_from_its_menu();
     s.cx.simulate_keystrokes("tab enter");
     s.settle();
+    assert!(s.session("var").is_some() && s.terminal_focused());
+    // Return closes; the confirmed close moves the keyboard to the next shown terminal
+    s.close_var_from_its_menu();
+    s.cx.simulate_keystrokes("enter");
+    s.settle();
     assert!(s.session("var").is_none(), "confirmed");
     assert!(s.terminal_focused(), "the session shown now has the keyboard");
+}
+
+/// Upstream's `windowShouldClose`: the user's close of a window running sessions asks "Close “name”?" over it,
+/// once at a time; Escape keeps the window, Return closes it.
+#[gpui_kit::test]
+fn closing_a_window_with_sessions_asks_over_it_first(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    let ask = |s: &mut Shell<'_>| {
+        let window = s.window;
+        s.state.close_requested(window);
+        let closes = s.state.take_frontend_work().window_closes;
+        assert_eq!(closes.len(), 1, "{closes:?}");
+        let poster = s.state.poster().clone();
+        let view = s.view.clone();
+        view.update_in(s.cx, |view, root, cx| {
+            view.ask_close(&closes[0], poster.clone(), root, cx);
+            view.ask_close(&closes[0], poster, root, cx);
+        });
+        s.cx.run_until_parked();
+    };
+    ask(&mut s);
+    assert!(s.alert_open(), "asked first");
+    assert!(s.state.core.library().is_open(s.window), "still open");
+    let heading = s.cx.update(|window, cx| {
+        crate::modal::front_alert(window.window_handle(), cx).map(|alert| alert.read(cx).spec().heading.clone())
+    });
+    assert_eq!(heading.as_deref(), Some("Close \u{201c}window 1\u{201d}?"));
+    s.cx.simulate_keystrokes("escape");
+    s.settle();
+    assert!(!s.alert_open(), "one alert, though asked twice");
+    assert!(s.state.core.library().is_open(s.window), "kept");
+    ask(&mut s);
+    s.cx.simulate_keystrokes("enter");
+    s.settle();
+    assert!(!s.state.core.library().is_open(s.window), "closed");
+}
+
+#[test]
+fn the_window_close_confirmation_counts_the_sessions_it_ends() {
+    let one = close_alert("work", 1);
+    assert_eq!(one.heading, "Close \u{201c}work\u{201d}?");
+    assert_eq!(
+        one.body,
+        "This ends 1 running session. The window can be reopened from File \u{25b8} Open Window."
+    );
+    assert_eq!(one.default_button(), Some(CLOSE), "Return closes");
+    assert_eq!(one.cancel_button(), Some(0));
+    assert!(close_alert("work", 3).body.starts_with("This ends 3 running sessions."));
+}
+
+#[test]
+fn clear_flaggeds_confirmation_reads_as_upstreams() {
+    let one = clear_flags_alert(1);
+    assert_eq!(one.heading, "Clear flagged sessions?");
+    assert_eq!(one.body, "This unflags 1 session. The session itself is not closed.");
+    assert_eq!(one.buttons[CLEAR].label.as_ref(), "Clear");
+    assert_eq!(one.default_button(), Some(CLEAR));
+    assert_eq!(
+        clear_flags_alert(4).body,
+        "This unflags 4 sessions. The sessions themselves are not closed."
+    );
 }
 
 /// Opens a GUI ask "Ship it?" with buttons Ship and Hold; its dialog.

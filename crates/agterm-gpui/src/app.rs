@@ -365,6 +365,7 @@ fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
     if let Some(alert) = &work.live_reset {
         land_live_reset(shell, state, alert, cx);
     }
+    land_window_prompts(shell, &work, cx);
     if let Some(host) = work.settings {
         let opening = crate::settings::Opening::of(state.read(cx));
         let frontmost = state.read(cx).core.library().active_window_id();
@@ -415,6 +416,35 @@ fn land_alerts(shell: &Shell, state: &Entity<AppState>, work: &crate::state::Fro
     }
 }
 
+/// Asks over their windows whether to close them (the user's close of a window running sessions) and whether to clear
+/// the flagged sessions; a window gone meanwhile asks nothing.
+fn land_window_prompts(shell: &Shell, work: &crate::state::FrontendWork, cx: &mut App) {
+    let poster: Poster = Arc::downgrade(&shell.posting);
+    let handle = |id: uuid::Uuid| shell.windows.borrow().get(id).map(|ui| ui.handle);
+    for close in &work.window_closes {
+        let asked = handle(close.window).is_some_and(|handle| {
+            handle
+                .update(cx, |view, window, cx| view.ask_close(close, poster.clone(), window, cx))
+                .is_ok()
+        });
+        if !asked {
+            tracing::debug!(window = %close.window, "the window closed before its close confirmation");
+        }
+    }
+    if let Some((id, count)) = work.clear_flags {
+        let asked = handle(id).is_some_and(|handle| {
+            handle
+                .update(cx, |_, window, cx| {
+                    crate::window::ask_clear_flags(id, count, poster.clone(), window, cx);
+                })
+                .is_ok()
+        });
+        if !asked {
+            tracing::debug!(window = %id, "the window closed before Clear Flagged's confirmation");
+        }
+    }
+}
+
 /// Asks over the frontmost window whether to quit (the app menu's Quit); with no window to ask over, quits.
 fn land_quit_prompt(shell: &Shell, state: &Entity<AppState>, message: &str, cx: &mut App) {
     let poster: Poster = Arc::downgrade(&shell.posting);
@@ -461,6 +491,17 @@ fn shut_down(shell: &Shell, cx: &mut App) {
     if shell.shut_down.replace(true) {
         return;
     }
+    // the open windows' frames, as each window's close saves its own
+    let known: Vec<uuid::Uuid> = shell
+        .state
+        .read(cx)
+        .core
+        .library()
+        .windows()
+        .iter()
+        .map(|info| info.id)
+        .collect();
+    shell.windows.borrow_mut().save_frames(&known, cx);
     shell.state.update(cx, |state, _| {
         state.save_on_quit();
         tracing::info!("quit: the state is saved");

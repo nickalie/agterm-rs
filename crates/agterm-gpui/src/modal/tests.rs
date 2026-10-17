@@ -75,11 +75,21 @@ fn keys_navigate_as_upstreams_key_catcher() {
 }
 
 #[test]
-fn a_confirmation_defaults_to_cancel_and_draws_its_verb_destructive() {
+fn a_confirmation_defaults_to_its_verb_as_upstream_and_draws_it_destructive() {
     let spec = AlertSpec::confirm("Close “u”?", "body", "Close");
-    assert_eq!(spec.default_button(), Some(0));
-    assert_eq!(spec.cancel_button(), Some(0));
+    assert_eq!(
+        spec.default_button(),
+        Some(1),
+        "Return closes, as upstream's first button"
+    );
+    assert_eq!(spec.cancel_button(), Some(0), "Escape cancels");
     assert_eq!(spec.buttons[1].look(), ButtonLook::Destructive);
+    let cautious = AlertSpec::confirm_cancelling("Reset Live Sessions?", "body", "Reset");
+    assert_eq!(
+        (cautious.default_button(), cautious.cancel_button()),
+        (Some(0), Some(0))
+    );
+    assert_eq!(cautious.buttons[1].look(), ButtonLook::Destructive);
     let info = AlertSpec::info("Too Many Folders", "body");
     assert_eq!((info.default_button(), info.cancel_button()), (Some(0), Some(0)));
 }
@@ -119,7 +129,11 @@ fn focused(cx: &mut VisualTestContext, alert: &Entity<Alert>) -> bool {
 fn an_alert_takes_the_keyboard_and_answers_by_its_keys(cx: &mut TestAppContext) {
     let cx = host(cx);
     let answers = Answers::default();
-    let alert = open(cx, AlertSpec::confirm("Delete “w”?", "body", "Delete"), &answers);
+    let alert = open(
+        cx,
+        AlertSpec::confirm_cancelling("Delete “w”?", "body", "Delete"),
+        &answers,
+    );
     assert!(focused(cx, &alert), "the alert takes the keyboard");
     assert_eq!(
         alert.read_with(cx, |alert, _| alert.highlighted_button()),

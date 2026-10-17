@@ -51,6 +51,7 @@ pub mod sound_throttle;
 pub mod theme;
 pub mod titlebar;
 pub mod watermark;
+pub mod window_geometry;
 pub mod windows;
 pub mod zmx;
 pub mod zoom;
