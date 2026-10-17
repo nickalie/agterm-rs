@@ -7,14 +7,20 @@
 //! Ghostty contributors: `src/renderer/image.zig` `kittyUpdate`/`prepKittyVirtualPlacement`/`draw`,
 //! `shaders/glsl/image.v.glsl`) by way of qwertty-term (<https://github.com/joshka/qwertty-term>, MIT, Copyright (c)
 //! 2026 Josh `McKinney`: the z sort and layer split of `qwertty-term-renderer`, and the eviction of images the
-//! terminal no longer holds in `prepare_image_frame`).
+//! terminal no longer holds in `prepare_image_frame`). The relative placements rooted at virtual ones
+//! ([`rooted_at_virtual`], `kittyUpdate`'s `pending_relative` and `virtual_origins`) are checked against rustty's port
+//! of `kittyUpdate` (<https://github.com/AirelyDev/rustty>, MIT, Copyright (c) 2026 Airely, Gael Hatchue, and rustty
+//! contributors: `crates/rustty-renderer/src/image/linux_impl.rs`).
 //!
 //! - **Geometry**: a placement lands at its viewport cell times the cell size plus its offset inside that cell
 //!   (clamped to the cell, Ghostty's `cellOffset`), at the pixel size and from the source rectangle libghostty-vt
 //!   resolved; a placement scrolled partly off the top has a negative row and is clipped by the element. A run of
 //!   placeholder cells ([`agterm_term::virtual_placements`]) draws its slice of the image fitted into its virtual
-//!   placement's grid ([`placeholder::render`]) at `z = -1`, as Ghostty does. The pixels are the terminal's (the
-//!   owner's cells): a viewer drawing at its own font size scales them by its cell over the terminal's.
+//!   placement's grid ([`placeholder::render`]) at `z = -1`, as Ghostty does. A relative placement (`P=`) rooted at
+//!   a virtual placement lands at the minimum column and the minimum row of the runs showing its root plus its chain's
+//!   offsets ([`agterm_term::VirtualRooted`], Ghostty's `pending_relative`), and is not drawn while none of those runs
+//!   is on the viewport. The pixels are the terminal's (the owner's cells): a viewer drawing at its own font size
+//!   scales them by its cell over the terminal's.
 //! - **Order**: by `z`, then image id (Ghostty's `zLessThan`), each layer drawn where Ghostty draws it.
 //! - **Images**: converted off the main thread, bounded and shared by the terminal's views ([`textures`]); a
 //!   placement whose image is still converting draws nothing yet. The source rectangle is drawn by painting the whole
@@ -30,7 +36,10 @@ pub mod textures;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use agterm_term::{Frame, KittyImageKey, KittyLayer, KittyView, Row, SourceRect, virtual_placements};
+use agterm_term::{
+    Frame, KittyImageKey, KittyLayer, KittyPlacement, KittyView, PlacementKey, Row, SourceRect, VirtualPlacement,
+    virtual_placements,
+};
 use gpui_kit::{Bounds, Context, Corners, ImageId, Pixels, RenderImage, Subscription, Window, point, px, size};
 
 pub use self::textures::{KittyStore, MAX_TEXTURE_PIXELS, MAX_TEXTURE_SIDE, Texture, texture_size};
@@ -97,12 +106,20 @@ impl Cells {
 }
 
 /// The placements a view draws for `view` over the viewport `rows`, in drawing order (by `z`, then image id): the
-/// positioned ones on the viewport, and the runs of placeholder cells in `rows`; placements without their image and
-/// empty ones are left out.
+/// positioned ones on the viewport, the runs of placeholder cells in `rows` and the relative placements rooted at the
+/// virtual placements those runs show; placements without their image and empty ones are left out.
 #[must_use]
 pub fn placements(view: &KittyView, rows: &[Arc<Row>], cells: Cells) -> Vec<PlacementGeometry> {
     let mut drawn = positioned(view, cells);
-    drawn.extend(placeholders(view, rows, cells));
+    // a relative placement rooted at a virtual placement implies that virtual placement
+    let runs = if view.placements.iter().any(|placement| placement.is_virtual) {
+        virtual_placements(rows)
+    } else {
+        Vec::new()
+    };
+    drawn.extend(placeholders(view, &runs, cells));
+    let columns = rows.first().map_or(0, |row| row.cells().len());
+    drawn.extend(rooted_at_virtual(view, &runs, (columns, rows.len()), cells));
     // stable: placements of one image at one z keep their order
     drawn.sort_by(|a, b| a.z.cmp(&b.z).then(a.image.id.cmp(&b.image.id)));
     drawn
@@ -110,7 +127,6 @@ pub fn placements(view: &KittyView, rows: &[Arc<Row>], cells: Cells) -> Vec<Plac
 
 /// The placements with a position of their own.
 fn positioned(view: &KittyView, cells: Cells) -> Vec<PlacementGeometry> {
-    let (engine_width, engine_height) = cells.engine;
     view.placements
         .iter()
         .filter(|placement| !placement.is_virtual && view.image(placement.image).is_some())
@@ -120,18 +136,13 @@ fn positioned(view: &KittyView, cells: Cells) -> Vec<PlacementGeometry> {
             if empty || rect.source.width == 0 || rect.source.height == 0 {
                 return None;
             }
-            // Ghostty's `cellOffset`: the offset stays inside the first cell
-            let offset = (
-                placement.x_offset.min(engine_width.saturating_sub(1)),
-                placement.y_offset.min(engine_height.saturating_sub(1)),
-            );
             Some(PlacementGeometry {
                 image: placement.image,
                 layer: placement.layer,
                 z: placement.z,
                 dest: cells.place(
                     (i64::from(rect.column), i64::from(rect.row)),
-                    offset,
+                    cell_offset(placement, cells),
                     (rect.pixel_width, rect.pixel_height),
                 ),
                 source: rect.source,
@@ -140,14 +151,19 @@ fn positioned(view: &KittyView, cells: Cells) -> Vec<PlacementGeometry> {
         .collect()
 }
 
-/// The runs of placeholder cells in `rows`, each drawing its slice of its virtual placement's image (Ghostty's
+/// Ghostty's `cellOffset`: the placement's offset inside its first cell, kept inside that cell.
+fn cell_offset(placement: &KittyPlacement, cells: Cells) -> (u32, u32) {
+    let (engine_width, engine_height) = cells.engine;
+    (
+        placement.x_offset.min(engine_width.saturating_sub(1)),
+        placement.y_offset.min(engine_height.saturating_sub(1)),
+    )
+}
+
+/// The runs of placeholder cells, each drawing its slice of its virtual placement's image (Ghostty's
 /// `prepKittyVirtualPlacement`).
-fn placeholders(view: &KittyView, rows: &[Arc<Row>], cells: Cells) -> Vec<PlacementGeometry> {
-    if !view.placements.iter().any(|placement| placement.is_virtual) {
-        return Vec::new();
-    }
-    virtual_placements(rows)
-        .iter()
+fn placeholders(view: &KittyView, runs: &[VirtualPlacement], cells: Cells) -> Vec<PlacementGeometry> {
+    runs.iter()
         .filter_map(|run| {
             let target = placeholder::target(view, run)?;
             let image = view.image(target.image)?;
@@ -165,6 +181,64 @@ fn placeholders(view: &KittyView, rows: &[Arc<Row>], cells: Cells) -> Vec<Placem
                     (render.width, render.height),
                 ),
                 source: render.source,
+            })
+        })
+        .collect()
+}
+
+/// The relative placements rooted at a virtual placement, each at the minimum column and the minimum row of the runs
+/// showing its root plus its chain's offsets (Ghostty's `pending_relative` in `kittyUpdate`); one whose root shows no
+/// run on the `viewport` (columns, rows), or that falls wholly outside it, is not drawn.
+pub(super) fn rooted_at_virtual(
+    view: &KittyView,
+    runs: &[VirtualPlacement],
+    viewport: (usize, usize),
+    cells: Cells,
+) -> Vec<PlacementGeometry> {
+    if view.placements.iter().all(|placement| placement.virtual_root.is_none()) {
+        return Vec::new();
+    }
+    let mut origins: HashMap<PlacementKey, (u16, u16)> = HashMap::new();
+    for run in runs {
+        let Some(target) = placeholder::target(view, run) else {
+            continue;
+        };
+        origins
+            .entry(target.key())
+            .and_modify(|(column, row)| {
+                *column = (*column).min(run.viewport_col);
+                *row = (*row).min(run.viewport_row);
+            })
+            .or_insert((run.viewport_col, run.viewport_row));
+    }
+    let fits = |count: usize| i64::try_from(count).unwrap_or(i64::MAX);
+    let (viewport_columns, viewport_rows) = (fits(viewport.0), fits(viewport.1));
+    view.placements
+        .iter()
+        .filter_map(|placement| {
+            let rooted = placement.virtual_root?;
+            let &(column, row) = origins.get(&rooted.root)?;
+            view.image(placement.image)?;
+            let empty = rooted.columns == 0 || rooted.rows == 0 || rooted.pixel_width == 0 || rooted.pixel_height == 0;
+            if empty || rooted.source.width == 0 || rooted.source.height == 0 {
+                return None;
+            }
+            let column = i64::from(column) + i64::from(rooted.horizontal_offset);
+            let row = i64::from(row) + i64::from(rooted.vertical_offset);
+            let off_rows = row >= viewport_rows || row + i64::from(rooted.rows) <= 0;
+            if off_rows || column >= viewport_columns || column + i64::from(rooted.columns) <= 0 {
+                return None;
+            }
+            Some(PlacementGeometry {
+                image: placement.image,
+                layer: placement.layer,
+                z: placement.z,
+                dest: cells.place(
+                    (column, row),
+                    cell_offset(placement, cells),
+                    (rooted.pixel_width, rooted.pixel_height),
+                ),
+                source: rooted.source,
             })
         })
         .collect()

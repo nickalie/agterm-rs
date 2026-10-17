@@ -79,7 +79,10 @@ pub use gesture::{
     SelectionGesture,
 };
 pub use key::{Key, KeyAction, KeyEncoder, KeyEvent, KeyMods, encode_focus};
-pub use kitty::{KittyFormat, KittyGraphics, KittyImage, KittyLayer, KittyPlacement, KittyRenderInfo, PixelRect};
+pub use kitty::{
+    KittyFormat, KittyGraphics, KittyIdNamespace, KittyImage, KittyLayer, KittyParent, KittyPlacement,
+    KittyPlacementKey, KittyRenderInfo, PixelRect,
+};
 pub use mouse::{MouseAction, MouseButton, MouseEncoder, MouseEvent, MouseGeometry};
 pub use paste::{PasteOutcome, PasteSource, paste_is_safe};
 pub use render::{

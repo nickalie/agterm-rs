@@ -69,9 +69,9 @@ ghostty_prefix() {
   echo "$VENDOR_ROOT/ghostty-$(prefix_key GHOSTTY "$NATIVE_ROOT/build/patches/ghostty")"
 }
 
-# libghostty-vt carries no patches: its key hashes the LIBGHOSTTY_VT_ pins only.
+# libghostty-vt's key hashes the LIBGHOSTTY_VT_ pins and build/patches/ghostty-vt/.
 ghostty_vt_prefix() {
-  echo "$VENDOR_ROOT/ghostty-vt-$(prefix_key LIBGHOSTTY_VT /nonexistent)"
+  echo "$VENDOR_ROOT/ghostty-vt-$(prefix_key LIBGHOSTTY_VT "$NATIVE_ROOT/build/patches/ghostty-vt")"
 }
 
 # A libghostty-vt prefix is complete when the static library, the umbrella header and the pin manifest are there and

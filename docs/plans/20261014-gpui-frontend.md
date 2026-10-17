@@ -1292,6 +1292,11 @@ Port the placement rendering from qwertty-term (MIT, attribution).
     such relative placements are not drawn — `docs/backlog/kitty-virtual-placement-c-api-gaps.md`, a Task 34
     precondition (Codex-reviewed: an APC pre-scan cannot recover the committed state; upstream API or a local patch;
     transcript `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/fixer-task-16-kitty-c-api-gaps/transcript.md`).
+    Closed by Task 34's preconditions (2026-10-17): the first libghostty-vt patch
+    (`build/patches/ghostty-vt/0001-kitty-placement-namespace-and-parent.patch`) reads out each placement's id
+    namespace and each relative placement's parent link as storage holds them; `agterm-term` resolves the chains
+    (`resolveChain`), ids resolve in their namespace as `placeholderTarget` does, and relative placements rooted at a
+    virtual placement are drawn as `pending_relative` draws them (Task 34 > Task 34 preconditions > Kitty).
     Kitty animation frames are not drawn (not in the view).
   - Tests: `terminal/kitty_tests.rs` (11: cell + offset and its clamp, a negative row, a viewer's scale, what is not
     drawn, z/id order and the three layers, the source-rect bounds, BGRA conversion per format, the atlas limit, the
@@ -2769,17 +2774,76 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
 - Modify: `build/pins.env`, `scripts/stage.sh`, `scripts/run-dev.sh`, `conformance/tools/run-rust-linux.sh`
 - Modify: `conformance/rust-passing.txt` (becomes the GPUI ratchet; `rust-gpui-passing.txt` folded in)
 
-- [ ] precondition: `rust-gpui-passing.txt` ⊇ `rust-passing.txt`, no checklist row the GTK build passes is open on GPUI
+- [x] precondition: `rust-gpui-passing.txt` ⊇ `rust-passing.txt`, no checklist row the GTK build passes is open on GPUI
 - [ ] binary rename; staging without `libghostty.so`/layer-shell libs; terminfo (`tic`), themes and shell integration
       from the Ghostty source at `LIBGHOSTTY_VT_REV` (Technical Details > Resources)
 - [ ] remove the GTK-era crates and scripts; `heap_trim.rs` is GTK-GL specific and does not carry over unless GPUI
       memory measurements show the same need
 - [ ] ➕ (Task 4) the two Ghostty pins become one: the `GHOSTTY_` libghostty lines go, `LIBGHOSTTY_VT_REV` is the only
       Ghostty pin; `gen-ghostty-config-keys.sh` and the config-diagnostics residual list move to it
-- [ ] ➕ (Task 16 review) precondition: `docs/backlog/kitty-virtual-placement-c-api-gaps.md` closed — the Kitty
+- [x] ➕ (Task 16 review) precondition: `docs/backlog/kitty-virtual-placement-c-api-gaps.md` closed — the Kitty
       placement-id namespace and relative placements rooted at virtual ones drawn as libghostty draws them (upstream
       API + pin bump, or a local libghostty-vt patch), or the user's explicit scope exception
 - [ ] full conformance on the switched build; ratchet unchanged or grown; gates
+- Task 34 preconditions (2026-10-17, at 8d5bf71):
+  - **Ratchets**: the GPUI ratchet lacked 18 of the GTK ratchet's ids; none was a GPUI gap. Six
+    (`test_cli_output.py`: `test_events_print_every_event_with_its_arguments`, `test_session_metadata`,
+    `test_session_status_carries_its_overrides`, `test_session_move_and_go`, `test_session_type_text_search_and_copy`,
+    `test_session_commands_refused_outside_their_state`) had never been selected by a GPUI ratchet-only run and pass
+    on this host as they are. Twelve need `live-sessions` (`test_zmx.py` 7, `test_cli_output.py` `test_live_*` 3,
+    `test_cli_only.py` `test_clipboard_set_reaches_every_terminal_attached_to_the_pane`, `test_relaunch.py`
+    `test_live_session_survives_the_relaunch`), which both builds claim only for a zsh password-database login shell
+    (rust-build.md > Rust target profile); this host's is fish and has no zsh, so they skip as unsupported on both
+    builds here, and the GTK ratchet holds them from a zsh host. They were run on this host in a private mount
+    namespace (bwrap, a scratch script, not checked in): `/etc/passwd` a private copy with the account's shell
+    `/usr/bin/zsh`, `/usr` a read-only overlay of the host's under Arch's zsh 5.9.2-1 package (its sha256 checked
+    against pacman's sync database), `AGTERM_*`/`ZMX_*` stripped; the account's real shell, `/etc` and `/usr`
+    untouched (the harness has no login-shell option: the build reads `getpwuid`). Ratchet-only runs of both staged
+    builds plus the 18 ids: GPUI under zsh 665 passed, GTK under zsh 665 passed (the 12 live ids included), GPUI on
+    the host 653 passed + 12 unsupported (the GTK build's host profile), no instance root or zmx process left. The 18
+    were added from the zsh run (`check_ratchet.py --add`): GPUI ratchet 647 → 665 ⊇ GTK's 665. ⚠️ Each later GPUI
+    run on a fish host skips the 12 as the GTK runs do; only a zsh host (CI's `conformance-zsh` job, or this sandbox)
+    holds them.
+  - **Checklist**: no row passes on the GTK build and is open on GPUI. The GPUI ⚠️s on GTK rows are the exceptions
+    the GTK build shares (no Dock bounce or named sounds); the rows marked "needs the user's screen" (9) are hands-on
+    checks the GTK build's walk left to a desktop session as well. Two GPUI-only rows (GTK column "—", libghostty
+    inside the `GtkGLArea`) keep gaps the GTK build does not have: `cursor-click-to-move`
+    (`docs/backlog/cursor-click-to-move-needs-prompt-click-state.md`, agterm's default is off) and Kitty animation
+    frames, beside the Kitty precondition below.
+  - **Kitty precondition**: closed with working support (2026-10-17), the backlog item removed. ghostty main's
+    `kitty_graphics.h` is still byte-identical to the pin's, so there is no upstream API to bump to; as the user
+    directed, the Zig side is the bare minimum and every rule is Rust's. The first libghostty-vt patch
+    (`build/patches/ghostty-vt/0001-kitty-placement-namespace-and-parent.patch`, additive, no logic of its own) adds
+    six `ghostty_kitty_graphics_placement_get` data that read storage as it holds it: `PLACEMENT_ID_NAMESPACE` (the
+    key's `PlacementId.tag`, `GhosttyKittyPlacementIdNamespace` INTERNAL/EXTERNAL, in the ABI manifest) and a
+    relative placement's `Placement.Relative` (`PARENT_IMAGE_ID`, `PARENT_PLACEMENT_ID`,
+    `PARENT_PLACEMENT_ID_NAMESPACE`, `RELATIVE_HORIZONTAL_OFFSET`/`_VERTICAL_OFFSET`, `GHOSTTY_NO_VALUE` for any
+    other placement), with Zig tests. `scripts/build-ghostty-vt.sh` applies `build/patches/ghostty-vt/*.patch` in name
+    order with no fuzz, `ghostty_vt_prefix` keys the vendored prefix over them (a vt patch moves only the vt prefix, a
+    libghostty one only libghostty's: `prefix_keys.rs`), `agterm-ghostty-vt-sys`'s build script reruns on the
+    directory, and the bindings are regenerated. In Rust: `agterm-term` `kitty.rs` resolves each chain
+    (`resolveChain`: `parent_chain_limit` 8, saturating sums, a broken or cyclic chain unresolved) into
+    `VirtualRooted` for chains rooted at a virtual placement (a pin-rooted chain stays the library's
+    `render_info`); `terminal/kitty/placeholder.rs` `target` is `placeholderTarget` over namespaced keys
+    (`preferredOver`); `terminal/kitty.rs` `rooted_at_virtual` is `pending_relative`/`virtual_origins` (the root's
+    minimum placeholder column and row, each on its own, plus the chain offsets, culled on all four sides, the
+    library's pixel size, source and `cellOffset`). References, read only, never built: Ghostty at
+    `LIBGHOSTTY_VT_REV` (the oracle), rustty (b57bcee, `graphics_storage.rs` `resolve_chain`/`placeholder_target`,
+    `placement.rs` `preferred_over`, `rustty-renderer` `image/linux_impl.rs` `kittyUpdate`) and qwertty-term (75d1e53,
+    whose port predates relative placements); attributions in the module docs. The cross-check found two
+    divergences, both fixed with tests: a placement wholly right of the viewport was not culled, and an empty source
+    rectangle was drawn; checked and unchanged: a pending image's placements leave the view, which libghostty-vt
+    cannot produce at the pin (`addPendingImage` has only test callers). Tests: Zig 3, `agterm-ghostty-vt` 2,
+    `agterm-term` 4, `agterm-gpui` 4 (one over a real pane) and 2 prefix-key tests; each was shown to fail with its
+    fix reverted (13 Rust and 3 Zig mutations, both prefix-key tests) and passed 5 runs in a row. Gates: fmt, clippy,
+    `lint-report.sh` (no new expect), `check-tracing-features.sh`, `vendor-gpui.sh --check`, `cargo test --workspace`
+    under xvfb (4423 passed), `zig build test-lib-vt test-lib-vt-schema` (the patch's tests pass; one failure,
+    `image load: temporary file outside directory prefix is rejected`, fails the same on the unpatched source when the
+    tree sits under `/tmp`). Conformance: GPUI `--ratchet-only` 653 passed + 12 unsupported (the live-session ids on
+    this fish host), the 665 listed held; `--also-k "kitty or image or graphics"` selects no collected test (the
+    suite cannot see the terminal's drawing), so the run was ratchet-only. No GTK run: the GTK binary links neither
+    `agterm-ghostty-vt` nor `agterm-term`, and the shared `native.sh` change leaves libghostty's prefix key as it was
+    (`prefix_keys.rs`).
 
 ### Task 35: Verify acceptance criteria
 

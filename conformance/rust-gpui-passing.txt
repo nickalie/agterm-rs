@@ -9,11 +9,13 @@ tests/behaviors/test_hooks.py::test_hooks_file_is_read_at_launch
 tests/behaviors/test_keymap.py::test_an_edit_takes_effect_only_on_reload
 tests/behaviors/test_keymap.py::test_keymap_file_is_read_at_launch
 tests/behaviors/test_relaunch.py::test_fresh_shells_do_not_run_the_pin
+tests/behaviors/test_relaunch.py::test_live_session_survives_the_relaunch
 tests/behaviors/test_relaunch.py::test_relaunch_forgets_what_is_not_persisted
 tests/behaviors/test_relaunch.py::test_relaunch_keeps_workspaces_sessions_and_their_metadata
 tests/behaviors/test_relaunch.py::test_rerun_replays_the_captured_foreground_program
 tests/behaviors/test_relaunch.py::test_rerun_types_the_pinned_line_at_the_next_launch
 tests/cli/test_cli_only.py::test_clipboard_set_checks_the_text_before_the_pane
+tests/cli/test_cli_only.py::test_clipboard_set_reaches_every_terminal_attached_to_the_pane
 tests/cli/test_cli_only.py::test_clipboard_set_refuses_outside_a_live_pane
 tests/cli/test_cli_only.py::test_terminfo_install_compiles_the_entry_into_the_remote_home
 tests/cli/test_cli_only.py::test_terminfo_install_refuses_a_destination_ssh_would_misread[-oProxyCommand=x]
@@ -24,6 +26,7 @@ tests/cli/test_cli_output.py::test_ask_blocks_until_cancelled
 tests/cli/test_cli_output.py::test_ask_without_blocking
 tests/cli/test_cli_output.py::test_browser_and_config
 tests/cli/test_cli_output.py::test_events_json_prints_each_event_object_of_the_asked_kinds
+tests/cli/test_cli_output.py::test_events_print_every_event_with_its_arguments
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args0-event limit must be between 1 and 1000]
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args1-events.read requires --run and --after together]
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args2-invalid event run id]
@@ -34,6 +37,9 @@ tests/cli/test_cli_output.py::test_hooks
 tests/cli/test_cli_output.py::test_hud
 tests/cli/test_cli_output.py::test_hud_sticky_and_no_frame
 tests/cli/test_cli_output.py::test_keymap
+tests/cli/test_cli_output.py::test_live_pane_commands
+tests/cli/test_cli_output.py::test_live_present_bridges_the_stream
+tests/cli/test_cli_output.py::test_live_run_job_runs_the_handed_over_program
 tests/cli/test_cli_output.py::test_notify_raises_the_unseen_count
 tests/cli/test_cli_output.py::test_overlay_page_blocks_until_submitted
 tests/cli/test_cli_output.py::test_overlay_page_dismissed_exits_2
@@ -43,9 +49,14 @@ tests/cli/test_cli_output.py::test_pick_without_blocking
 tests/cli/test_cli_output.py::test_quick_terminal
 tests/cli/test_cli_output.py::test_restore
 tests/cli/test_cli_output.py::test_session_background
+tests/cli/test_cli_output.py::test_session_commands_refused_outside_their_state
 tests/cli/test_cli_output.py::test_session_create_select_and_close
+tests/cli/test_cli_output.py::test_session_metadata
+tests/cli/test_cli_output.py::test_session_move_and_go
 tests/cli/test_cli_output.py::test_session_panes
 tests/cli/test_cli_output.py::test_session_restore_prints_the_note_or_ok
+tests/cli/test_cli_output.py::test_session_status_carries_its_overrides
+tests/cli/test_cli_output.py::test_session_type_text_search_and_copy
 tests/cli/test_cli_output.py::test_sidebar
 tests/cli/test_cli_output.py::test_surface_and_dashboard
 tests/cli/test_cli_output.py::test_theme
@@ -619,6 +630,8 @@ tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.focus-
 tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.move-args3]
 tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.rename-args1]
 tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.select-args0]
+tests/protocol/test_zmx.py::test_job_run_serves_an_overlay_a_presenter_shows
+tests/protocol/test_zmx.py::test_kill_ends_the_daemon_and_closes_its_pane
 tests/protocol/test_zmx.py::test_kill_refuses_a_daemon_that_is_not_running
 tests/protocol/test_zmx.py::test_kill_rejects[active]
 tests/protocol/test_zmx.py::test_kill_rejects[no-force]
@@ -627,10 +640,13 @@ tests/protocol/test_zmx.py::test_kill_rejects[no-split]
 tests/protocol/test_zmx.py::test_kill_rejects[no-target]
 tests/protocol/test_zmx.py::test_kill_rejects[scratch]
 tests/protocol/test_zmx.py::test_kill_rejects[unknown]
+tests/protocol/test_zmx.py::test_lead_on_a_pane_that_already_leads
 tests/protocol/test_zmx.py::test_lead_rejects[no-split]
 tests/protocol/test_zmx.py::test_lead_rejects[not-live]
 tests/protocol/test_zmx.py::test_lead_rejects[scratch]
 tests/protocol/test_zmx.py::test_list_joins_each_pane_claim
+tests/protocol/test_zmx.py::test_live_panes_run_in_claimed_daemons
+tests/protocol/test_zmx.py::test_present_mirrors_a_live_session
 tests/protocol/test_zmx.py::test_present_refuses_without_a_session
 tests/protocol/test_zmx.py::test_prune_finds_no_orphans
 tests/protocol/test_zmx.py::test_reset_requires_force
@@ -640,6 +656,8 @@ tests/protocol/test_zmx.py::test_restart_rejects[no-split]
 tests/protocol/test_zmx.py::test_restart_rejects[not-live]
 tests/protocol/test_zmx.py::test_restart_rejects[scratch]
 tests/protocol/test_zmx.py::test_restart_rejects[unknown-pane-id]
+tests/protocol/test_zmx.py::test_restart_replaces_the_pane_shell
+tests/protocol/test_zmx.py::test_screen_reads_the_daemon_grid
 tests/protocol/test_zmx.py::test_screen_rejects[both]
 tests/protocol/test_zmx.py::test_screen_rejects[no-daemon]
 tests/protocol/test_zmx.py::test_screen_rejects[no-name]
