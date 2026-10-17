@@ -53,12 +53,25 @@ const STARTER_HEAD: &str = r#"# agterm keymap — a kitty-flavored config for re
 #           command "Deploy"                    ./deploy.sh
 #
 #   global-hotkey <chord>
-#       On macOS this binds one system-wide chord that summons the quick terminal from any
-#       application. This Linux build accepts and validates the line (one chord, a modifier
-#       or a function key) but does NOT register it (Wayland gives an app no system-wide key
-#       grab), so the line has no effect. Bind the quick terminal to a chord in your
-#       desktop's own shortcut settings instead (a custom shortcut that runs a command such as
-#       `agtermctl quick toggle`), or use the in-app `quick_terminal` chord.
+#       Bind ONE system-wide chord that summons the quick terminal while any application has
+#       the keyboard — the only binding here that fires when agterm does not. Exactly one
+#       chord: no `|` alternatives, no leader sequence. A modifier is required except for
+#       function keys (f1 through f20). A second global-hotkey line replaces the first. It is
+#       registered by physical key position, so it works on a non-Latin layout: on X11 as a
+#       key grab, on Wayland through the desktop's global shortcuts portal (KDE Plasma,
+#       GNOME 48 and later, Hyprland), which may ask you to confirm or change the chord. A
+#       Wayland compositor without that portal gives an app no system-wide key at all: bind
+#       a custom shortcut in its own settings that runs `agtermctl quick toggle` instead. The
+#       desktop owns the chord, so it takes no part in the collision rules above, and it WINS,
+#       agterm included, so a chord shared with a menu action fires this and the menu binding
+#       never sees it. There is no default: registering a chord takes it from every other
+#       application. Spending it on the chord the in-app binding already uses is how to get
+#       ONE shortcut that works everywhere.
+#       Examples:
+#
+#           global-hotkey ctrl+opt+space
+#           global-hotkey f5  # takes F5 desktop-wide, including from local map/command bindings
+#           global-hotkey ctrl+`            # same chord as the in-app quick_terminal binding
 #
 # Built-in actions (raw name → shipped default chord):
 #

@@ -108,9 +108,11 @@ zbus = "5.19"
 # `prompt_for_paths` does not take) and the desktop's `enable-animations` setting the status glyph's blink obeys, through
 # the xdg-desktop-portal crate GPUI's Linux platform already links (0.13, `async-io`; no tokio). `raw_handle` and
 # `wayland` name the chooser's parent window from GPUI's raw window handle (an X11 id, an `xdg-foreign` export).
+# `global_shortcuts`: keymap.conf's `global-hotkey` on Wayland, through the desktop's global shortcuts portal.
 ashpd = { version = "0.13", default-features = false, features = [
     "async-io",
     "file_chooser",
+    "global_shortcuts",
     "settings",
     "raw_handle",
     "wayland",

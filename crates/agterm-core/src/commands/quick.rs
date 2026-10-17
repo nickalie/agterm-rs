@@ -121,6 +121,20 @@ impl Core {
         }
     }
 
+    /// The global hotkey's toggle (upstream's `toggle(fromGlobalHotkey: true)`): as [`Core::toggle_quick_terminal`],
+    /// but never swallowed by the re-show suppression, which exists for a click on the toggle that blurred the panel:
+    /// a key pressed in another application causes no such blur. Commit afterwards.
+    pub fn toggle_quick_terminal_from_global_hotkey(&mut self) {
+        if self.quick.visible {
+            self.quick.hide();
+            return;
+        }
+        self.quick.auto_hidden_at = None;
+        if !self.library().open_ids().is_empty() && !self.active_window_modal_pending() {
+            self.quick.show(false);
+        }
+    }
+
     /// The panel lost the keyboard: a panel the user summoned hides, a pinned one stays (upstream's
     /// `handleResignKey`). Commit afterwards.
     pub fn quick_lost_focus(&mut self) {

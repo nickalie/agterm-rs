@@ -67,6 +67,8 @@ netlink-sys.workspace = true
 agterm-host = { workspace = true, features = ["fakes"] }
 gpui-kit = { workspace = true, features = ["test-support"] }
 gpui-pre-wgpu.workspace = true
+# the global hotkey's test presses its keys on a private Xvfb through XTEST (tests/global_hotkey.rs)
+x11rb = { workspace = true, features = ["xtest"] }
 
 # GPUI's headless renderer opens one GPU device per process, so the external texture cases run in a child process per
 # Vulkan driver, which this harness starts (tests/external_texture/main.rs).

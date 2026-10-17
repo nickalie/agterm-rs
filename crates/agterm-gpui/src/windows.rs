@@ -80,6 +80,8 @@ pub struct Windows {
     menu_items: Rc<RefCell<Vec<ControlKeymapMenuItem>>>,
     /// The windows' saved frames, each given back once when its window opens ([`crate::window_frames`]).
     frames: WindowFrames,
+    /// The keymap's `global-hotkey`, as registered with the desktop ([`crate::global_hotkey`]).
+    hotkey: crate::global_hotkey::GlobalHotkey,
 }
 
 impl Windows {
@@ -95,6 +97,7 @@ impl Windows {
             quick: QuickPanel::default(),
             menu_items: Rc::default(),
             frames,
+            hotkey: crate::global_hotkey::GlobalHotkey::default(),
         }
     }
 
@@ -169,6 +172,9 @@ impl Windows {
         };
         let held = crate::quick::holds_keyboard(cx);
         self.quick.sync(&mut state.core, &quick, cx);
+        // a keymap reload moves the hotkey, as it moves every other binding
+        self.hotkey
+            .sync(state.core.keymap().global_hotkey(), &self.env.poster, cx);
         // the panel went with the keyboard: the decks, which stepped aside for it, focus their terminals again
         resettle |= held && !crate::quick::holds_keyboard(cx);
         self.sync_settings(state, cx);

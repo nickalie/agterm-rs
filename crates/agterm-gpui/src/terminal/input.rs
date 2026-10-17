@@ -191,6 +191,14 @@ pub fn physical_key(keycode: u32) -> PhysicalKey {
         .unwrap_or(PhysicalKey::UNIDENTIFIED)
 }
 
+/// The XKB keycode of the key at W3C position `code` (`KeyA`, `F5`; Ghostty's keycode table, read backwards).
+#[must_use]
+pub fn xkb_keycode(code: &str) -> Option<u32> {
+    XKB_CODES
+        .iter()
+        .find_map(|(keycode, known)| (*known == code).then_some(*keycode))
+}
+
 fn identity(name: &str) -> u32 {
     // FNV-1a, with the top bit set so it never collides with a keycode
     let hash = name.bytes().fold(0x811c_9dc5_u32, |hash, byte| {
