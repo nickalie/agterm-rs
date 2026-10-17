@@ -33,6 +33,7 @@
 
 pub mod binds;
 mod keys;
+mod launching;
 mod model;
 mod parse;
 pub mod validate;
@@ -47,6 +48,9 @@ mod tests;
 use std::path::{Path, PathBuf};
 
 pub use keys::LIBGHOSTTY_VT_REV;
+pub use launching::{
+    DEFAULT_ABNORMAL_COMMAND_EXIT_RUNTIME, InputSource, Launching, ShellIntegration, WorkingDirectory,
+};
 pub use model::{
     BackgroundImage, BackgroundImageFit, BackgroundImagePosition, Clipboard, ClipboardAccess, Colors, CopyOnSelect,
     Cursor, CursorStyle, DEFAULT_IMAGE_STORAGE_LIMIT, DEFAULT_TERM, Font, GhosttyConfig, GraphemeWidthMethod, Link,

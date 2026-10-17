@@ -188,12 +188,27 @@ pub fn setup(
     inherited: &Inherited,
     environment: &mut BTreeMap<String, String>,
 ) -> Option<String> {
+    setup_as(None, command, resources, inherited, environment)
+}
+
+/// [`setup`] with the shell `force`d (`shell-integration = bash`, `fish` or `zsh`): that shell's scheme whatever the
+/// program's name, as libghostty's `setup` takes a forced shell over the one it would detect.
+#[must_use]
+pub fn setup_as(
+    force: Option<LoginShell>,
+    command: &str,
+    resources: &Path,
+    inherited: &Inherited,
+    environment: &mut BTreeMap<String, String>,
+) -> Option<String> {
     if command.contains(['\'', '"', '\\']) {
         return None;
     }
     let mut words = command.split_whitespace();
     let exe = words.next()?;
-    let shell = LoginShell::of(exe).filter(|shell| shell.is_bundled(resources))?;
+    let shell = force
+        .or_else(|| LoginShell::of(exe))
+        .filter(|shell| shell.is_bundled(resources))?;
     let (line, flags) = match shell {
         LoginShell::Bash => {
             let (line, flags) = bash_command(exe, words)?;

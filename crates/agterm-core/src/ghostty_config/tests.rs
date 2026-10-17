@@ -559,8 +559,9 @@ fn the_pointer_keys_load_with_ghosttys_defaults() {
 
 #[test]
 fn the_model_enums_spell_ghosttys_values() {
-    let cases: [(&str, Vec<&str>); 12] = [
+    let cases: [(&str, Vec<&str>); 13] = [
         ("copy-on-select", enum_names::<CopyOnSelect>()),
+        ("shell-integration", enum_names::<ShellIntegration>()),
         ("grapheme-width-method", enum_names::<GraphemeWidthMethod>()),
         ("cursor-style", enum_names::<CursorStyle>()),
         ("background-image-position", enum_names::<BackgroundImagePosition>()),
@@ -822,6 +823,93 @@ fn copy_on_select_key() {
     assert_eq!(
         check("copy-on-select", Some("maybe")).map(drop),
         Err("invalid value \"maybe\", valid values are: none, primary, clipboard, both".to_owned())
+    );
+}
+
+/// The launch keys `text`'s lines leave, which must all be accepted.
+fn launch_of(text: &str) -> Launching {
+    let loaded = load(text);
+    assert!(loaded.diagnostics.is_empty(), "{text}: {:?}", loaded.diagnostics);
+    loaded.config.launch
+}
+
+#[test]
+fn the_launch_keys_keep_ghosttys_defaults_and_follow_their_lines() {
+    let defaults = GhosttyConfig::default().launch;
+    assert_eq!(defaults, Launching::default());
+    assert_eq!(
+        (
+            defaults.shell_integration,
+            defaults.wait_after_command,
+            defaults.abnormal_command_exit_runtime
+        ),
+        (ShellIntegration::Detect, false, 250)
+    );
+    assert_eq!(
+        launch_of("shell-integration = zsh\n").shell_integration,
+        ShellIntegration::Zsh
+    );
+    assert_eq!(
+        launch_of("shell-integration = none\nshell-integration =\n").shell_integration,
+        ShellIntegration::Detect
+    );
+    assert!(
+        launch_of("wait-after-command\n").wait_after_command,
+        "a bare bool key is true"
+    );
+    assert!(!launch_of("wait-after-command = true\nwait-after-command =\n").wait_after_command);
+    assert_eq!(
+        launch_of("abnormal-command-exit-runtime = 0x10\n").abnormal_command_exit_runtime,
+        16
+    );
+    // refused lines count and change nothing
+    let refused = load("wait-after-command = maybe\nabnormal-command-exit-runtime = -1\nshell-integration = tcsh\n");
+    assert_eq!(refused.diagnostics.len(), 3);
+    assert_eq!(refused.config.launch, Launching::default());
+}
+
+#[test]
+fn env_is_a_map_and_input_a_list_of_sources() {
+    // `env`: `key=` drops the key, an empty value the whole map, a value without `=` sets nothing
+    let env = launch_of("env = A=1\nenv = B=2\nenv = A=3\nenv = B=\nenv = C=x=y\nenv = junk\n").env;
+    assert_eq!(
+        env.into_iter().collect::<Vec<_>>(),
+        [("A".to_owned(), "3".to_owned()), ("C".to_owned(), "x=y".to_owned())]
+    );
+    assert!(launch_of("env = A=1\nenv =\n").env.is_empty());
+    // `input`: raw (tagged or not, its Zig escapes decoded) and path sources in order; an empty value clears them
+    assert_eq!(
+        launch_of("input = raw:a\\tb\ninput = path:/tmp/in\ninput = hello\\x00\n").input,
+        [
+            InputSource::Raw(b"a\tb".to_vec()),
+            InputSource::Path("/tmp/in".to_owned()),
+            InputSource::Raw(b"hello\0".to_vec()),
+        ]
+    );
+    assert!(launch_of("input = x\ninput =\n").input.is_empty());
+    assert!(
+        launch_of("input = bad\\q\n").input.is_empty(),
+        "a malformed escape is refused"
+    );
+}
+
+#[test]
+fn working_directory_takes_home_inherit_or_a_path() {
+    for (value, directory) in [
+        ("home", WorkingDirectory::Home),
+        ("inherit", WorkingDirectory::Inherit),
+        ("~/src", WorkingDirectory::Path("~/src".to_owned())),
+        ("\"/srv/a b\"", WorkingDirectory::Path("/srv/a b".to_owned())),
+    ] {
+        assert_eq!(
+            launch_of(&format!("working-directory = {value}\n")).working_directory,
+            Some(directory),
+            "{value}"
+        );
+    }
+    assert_eq!(
+        launch_of("working-directory = home\nworking-directory =\n").working_directory,
+        None
     );
 }
 

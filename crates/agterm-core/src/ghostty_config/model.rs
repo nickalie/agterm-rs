@@ -9,6 +9,7 @@ use bitflags::bitflags;
 use strum::{EnumIter, EnumString, IntoStaticStr};
 
 use super::binds::Keybinds;
+use super::launching::Launching;
 use super::parse::{Diagnostic, Setting};
 use super::validate::{
     self, Accepted, Compat, ConfigPath, Padding, TerminalColor, ThemeName, parse_bool, parse_color, parse_float,
@@ -471,6 +472,9 @@ pub struct GhosttyConfig {
     pub link: Link,
     pub shell_integration_features: ShellIntegrationFeatures,
     pub grapheme_width_method: GraphemeWidthMethod,
+    /// How a pane's program starts: `env`, `input`, `working-directory`, `shell-integration`, `wait-after-command`,
+    /// `abnormal-command-exit-runtime`.
+    pub launch: Launching,
     /// `image-storage-limit`: the Kitty image storage per screen in bytes; 0 turns the Kitty graphics protocol off.
     pub image_storage_limit: u32,
     /// The child's `TERM`.
@@ -505,6 +509,7 @@ impl Default for GhosttyConfig {
             link: Link::default(),
             shell_integration_features: ShellIntegrationFeatures::DEFAULT,
             grapheme_width_method: GraphemeWidthMethod::default(),
+            launch: Launching::default(),
             image_storage_limit: DEFAULT_IMAGE_STORAGE_LIMIT,
             term: DEFAULT_TERM.to_owned(),
             keybind: Keybinds::defaults(),
@@ -626,7 +631,7 @@ impl GhosttyConfig {
         if let Some(rest) = key.strip_prefix("mouse-") {
             return self.mouse.apply(rest, value);
         }
-        if self.mouse.apply_pointer_key(key, value) {
+        if self.mouse.apply_pointer_key(key, value) || self.launch.apply(key, value) {
             return true;
         }
         self.apply_other(key, value)
