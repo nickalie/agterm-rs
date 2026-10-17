@@ -2769,7 +2769,7 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
 - Modify: `build/pins.env`, `scripts/stage.sh`, `scripts/run-dev.sh`, `conformance/tools/run-rust-linux.sh`
 - Modify: `conformance/rust-passing.txt` (becomes the GPUI ratchet; `rust-gpui-passing.txt` folded in)
 
-- [ ] precondition: `rust-gpui-passing.txt` ⊇ `rust-passing.txt`, no checklist row the GTK build passes is open on GPUI
+- [x] precondition: `rust-gpui-passing.txt` ⊇ `rust-passing.txt`, no checklist row the GTK build passes is open on GPUI
 - [ ] binary rename; staging without `libghostty.so`/layer-shell libs; terminfo (`tic`), themes and shell integration
       from the Ghostty source at `LIBGHOSTTY_VT_REV` (Technical Details > Resources)
 - [ ] remove the GTK-era crates and scripts; `heap_trim.rs` is GTK-GL specific and does not carry over unless GPUI
@@ -2780,6 +2780,37 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
       placement-id namespace and relative placements rooted at virtual ones drawn as libghostty draws them (upstream
       API + pin bump, or a local libghostty-vt patch), or the user's explicit scope exception
 - [ ] full conformance on the switched build; ratchet unchanged or grown; gates
+- Task 34 preconditions (2026-10-17, at 8d5bf71):
+  - **Ratchets**: the GPUI ratchet lacked 18 of the GTK ratchet's ids; none was a GPUI gap. Six
+    (`test_cli_output.py`: `test_events_print_every_event_with_its_arguments`, `test_session_metadata`,
+    `test_session_status_carries_its_overrides`, `test_session_move_and_go`, `test_session_type_text_search_and_copy`,
+    `test_session_commands_refused_outside_their_state`) had never been selected by a GPUI ratchet-only run and pass
+    on this host as they are. Twelve need `live-sessions` (`test_zmx.py` 7, `test_cli_output.py` `test_live_*` 3,
+    `test_cli_only.py` `test_clipboard_set_reaches_every_terminal_attached_to_the_pane`, `test_relaunch.py`
+    `test_live_session_survives_the_relaunch`), which both builds claim only for a zsh password-database login shell
+    (rust-build.md > Rust target profile); this host's is fish and has no zsh, so they skip as unsupported on both
+    builds here, and the GTK ratchet holds them from a zsh host. They were run on this host in a private mount
+    namespace (bwrap, a scratch script, not checked in): `/etc/passwd` a private copy with the account's shell
+    `/usr/bin/zsh`, `/usr` a read-only overlay of the host's under Arch's zsh 5.9.2-1 package (its sha256 checked
+    against pacman's sync database), `AGTERM_*`/`ZMX_*` stripped; the account's real shell, `/etc` and `/usr`
+    untouched (the harness has no login-shell option: the build reads `getpwuid`). Ratchet-only runs of both staged
+    builds plus the 18 ids: GPUI under zsh 665 passed, GTK under zsh 665 passed (the 12 live ids included), GPUI on
+    the host 653 passed + 12 unsupported (the GTK build's host profile), no instance root or zmx process left. The 18
+    were added from the zsh run (`check_ratchet.py --add`): GPUI ratchet 647 → 665 ⊇ GTK's 665. ⚠️ Each later GPUI
+    run on a fish host skips the 12 as the GTK runs do; only a zsh host (CI's `conformance-zsh` job, or this sandbox)
+    holds them.
+  - **Checklist**: no row passes on the GTK build and is open on GPUI. The GPUI ⚠️s on GTK rows are the exceptions
+    the GTK build shares (no Dock bounce or named sounds); the rows marked "needs the user's screen" (9) are hands-on
+    checks the GTK build's walk left to a desktop session as well. Two GPUI-only rows (GTK column "—", libghostty
+    inside the `GtkGLArea`) keep gaps the GTK build does not have: `cursor-click-to-move`
+    (`docs/backlog/cursor-click-to-move-needs-prompt-click-state.md`, agterm's default is off) and Kitty animation
+    frames, beside the Kitty precondition below.
+  - **Kitty precondition**: held by the coordinator (the user is weighing a Rust implementation over a libghostty-vt
+    patch), box left unchecked. A local patch was written and tested but not committed: ghostty main's
+    `kitty_graphics.h` is still byte-identical to the pin's (2026-10-17), so there is no upstream API to bump to; the
+    data both gaps need lives only in storage (`PlacementId.tag`; `resolveChain`'s root key and summed `H=`/`V=`), and
+    with it the renderer side is small (`placeholderTarget` over namespaced keys; `pending_relative`: the root's
+    minimum placeholder column and row, each on its own, plus the chain offsets).
 
 ### Task 35: Verify acceptance criteria
 
