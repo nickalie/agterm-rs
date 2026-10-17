@@ -73,7 +73,20 @@ fn print_prefix(checkout: &Path, script: &str) -> String {
 }
 
 fn prefixes(edit: impl Fn(&str) -> String) -> Prefixes {
-    let dir = checkout(edit);
+    prefixes_of(&checkout(edit))
+}
+
+/// The prefixes after `patch` changed one file of the checkout's `build/patches/` (pins unedited).
+fn patched_prefixes(patch: &str) -> Prefixes {
+    let dir = checkout(str::to_owned);
+    let path = dir.path().join("build/patches").join(patch);
+    let mut text = fs::read_to_string(&path).unwrap();
+    text.push_str("\n# edited\n");
+    fs::write(&path, text).unwrap();
+    prefixes_of(&dir)
+}
+
+fn prefixes_of(dir: &tempfile::TempDir) -> Prefixes {
     Prefixes {
         ghostty: print_prefix(dir.path(), "build-ghostty.sh"),
         ghostty_vt: print_prefix(dir.path(), "build-ghostty-vt.sh"),
@@ -124,6 +137,23 @@ fn a_libghostty_vt_zig_bump_moves_only_the_vt_prefix() {
     assert_ne!(bumped.ghostty_vt, base.ghostty_vt);
     assert_eq!(bumped.ghostty, base.ghostty);
     assert_eq!(bumped.zmx, base.zmx);
+}
+
+#[test]
+fn a_libghostty_vt_patch_moves_only_the_vt_prefix() {
+    let base = prefixes(str::to_owned);
+    let patched = patched_prefixes("ghostty-vt/0001-kitty-placement-namespace-and-parent.patch");
+    assert_ne!(patched.ghostty_vt, base.ghostty_vt);
+    assert_eq!(patched.ghostty, base.ghostty);
+    assert_eq!(patched.zmx, base.zmx);
+}
+
+#[test]
+fn a_libghostty_patch_leaves_the_vt_prefix() {
+    let base = prefixes(str::to_owned);
+    let patched = patched_prefixes("ghostty/0001-embedded-opengl.patch");
+    assert_ne!(patched.ghostty, base.ghostty);
+    assert_eq!(patched.ghostty_vt, base.ghostty_vt);
 }
 
 #[test]

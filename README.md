@@ -89,7 +89,7 @@ its patches in `build/patches/`, so a complete prefix is reused as is and a pin 
 
 ```sh
 scripts/build-ghostty.sh       # the pinned, patched libghostty, its themes, shell integration and terminfo
-scripts/build-ghostty-vt.sh    # the pinned static libghostty-vt (Ghostty's vt C API) for the GPUI frontend
+scripts/build-ghostty-vt.sh    # the pinned, patched static libghostty-vt (Ghostty's vt C API) for the GPUI frontend
 scripts/build-layer-shell.sh   # gtk4-layer-shell 1.3.0; skip it when the distribution's package is installed
 scripts/build-zmx.sh           # the pinned, patched zmx behind Live sessions
 scripts/fetch-wpe.sh           # the pinned WPE WebKit binary package, only where the system has none (below)
@@ -120,8 +120,8 @@ coexist, and is linked statically, so staging gains nothing from it. `.cargo/con
 package. After bumping the `LAYER_SHELL_*` pins, run `cargo clean -p gtk4-layer-shell-sys` so the link follows the new
 prefix.
 `scripts/gen-ghostty-bindings.sh` regenerates the checked-in bindings after a `GHOSTTY_REV` or ghostty patch change,
-`scripts/gen-ghostty-vt-bindings.sh` those of `agterm-ghostty-vt-sys` after a `LIBGHOSTTY_VT_REV` bump,
-`scripts/gen-wpe-bindings.sh` the gir crates `agterm-wpe-sys`, `agterm-wpe-platform-sys` and
+`scripts/gen-ghostty-vt-bindings.sh` those of `agterm-ghostty-vt-sys` after a `LIBGHOSTTY_VT_REV` or ghostty-vt
+patch change, `scripts/gen-wpe-bindings.sh` the gir crates `agterm-wpe-sys`, `agterm-wpe-platform-sys` and
 `agterm-wpe-javascriptcore-sys` after a `WPE_*` or `GIR_*` bump (`--check` compares instead of writing).
 
 The GPUI frontend's terminal embeds the fonts Ghostty embeds, from the package deps of the Ghostty at

@@ -32,7 +32,12 @@ fn prefix() -> Result<PathBuf, String> {
     let manifest = std::env::var_os("CARGO_MANIFEST_DIR").ok_or("CARGO_MANIFEST_DIR is not set")?;
     let root = Path::new(&manifest).join("../..");
     let script = root.join("scripts/build-ghostty-vt.sh");
-    for input in ["build/pins.env", "scripts/build-ghostty-vt.sh", "scripts/lib/native.sh"] {
+    for input in [
+        "build/pins.env",
+        "build/patches/ghostty-vt",
+        "scripts/build-ghostty-vt.sh",
+        "scripts/lib/native.sh",
+    ] {
         println!("cargo::rerun-if-changed={}", root.join(input).display());
     }
     println!("cargo::rerun-if-env-changed=AGTERM_VENDOR");
