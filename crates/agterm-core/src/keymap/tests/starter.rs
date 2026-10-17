@@ -67,8 +67,18 @@ fn the_starter_keymap_is_commented_and_documents_the_verbs() {
         );
     }
     assert!(starter.ends_with("# map cmd+shift+l toggle_split\n"));
-    // Linux registers no global hotkey: the file says so and offers no global-hotkey line to uncomment.
-    assert!(starter.contains("does NOT register it"));
+    // the global hotkey as each Linux build takes it (the file is shared): the GPUI build registers it (an X11 grab by
+    // key position, the Wayland portal by key name), the GTK build does not; upstream's examples, all commented out
+    let paragraph = starter.replace("\n#       ", " ");
+    for said in [
+        "The GPUI build (`agterm-gpui`) registers it: on X11 as a key grab by physical key position",
+        "on Wayland through the desktop's global shortcuts portal (KDE Plasma, GNOME 48 and later, Hyprland), which \
+         gets the chord by key name",
+        "The GTK build (`agterm`) accepts and checks the line but registers nothing",
+    ] {
+        assert!(paragraph.contains(said), "the starter says {said:?}");
+    }
+    assert!(starter.contains("#           global-hotkey ctrl+`"));
     assert!(
         starter
             .lines()
@@ -119,9 +129,9 @@ fn assert_starter_examples_apply(defaults: &ShippedDefaults, expected_bound: usi
             (matches!(verb, "map" | "command" | "global-hotkey") && !text.contains('<')).then_some(text)
         })
         .collect();
-    // three `map`, three `command`, no `global-hotkey` (not registered on Linux): an example dropped from the filter
+    // three `map`, three `command`, three `global-hotkey` (upstream's examples): an example dropped from the filter
     // must fail here.
-    assert_eq!(examples.len(), 6, "{examples:?}");
+    assert_eq!(examples.len(), 9, "{examples:?}");
     let mut bound = 0;
     for example in examples {
         let (keymap, diagnostics) = parse_keymap(example, defaults);
@@ -140,14 +150,14 @@ fn assert_starter_examples_apply(defaults: &ShippedDefaults, expected_bound: usi
             + usize::from(keymap.global_hotkey().is_some());
     }
     // every `map` example (the alternatives one twice: menu chord and monitor half), the two chorded commands
-    // (`Deploy` is palette-only by design).
+    // (`Deploy` is palette-only by design), and each `global-hotkey` example's chord.
     assert_eq!(bound, expected_bound);
 }
 
 #[test]
 fn the_starter_examples_apply_when_uncommented() {
-    assert_starter_examples_apply(&ShippedDefaults::upstream(), 6);
-    assert_starter_examples_apply(&linux_defaults(), 6);
+    assert_starter_examples_apply(&ShippedDefaults::upstream(), 9);
+    assert_starter_examples_apply(&linux_defaults(), 9);
 }
 
 #[test]

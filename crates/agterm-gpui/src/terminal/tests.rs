@@ -443,6 +443,21 @@ fn backgrounds_merge_and_decorations_span_their_cells() {
 }
 
 #[test]
+fn a_path_link_ends_at_the_path_not_at_the_rows_blank_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let pane = pane("printf 'see ./notes.md'; exec sleep 5", dir.path());
+    let frame = wait_text(&pane, "./notes.md");
+    let link = super::links::url_at(&frame, 6, 0).expect("the path is a link");
+    assert_eq!(link.url, "./notes.md");
+    assert_eq!(
+        link.cells,
+        vec![(0, 4, 13)],
+        "the path's cells, none of the blank ones after it"
+    );
+    assert_eq!(super::links::url_at(&frame, 17, 0), None, "the blank tail is no link");
+}
+
+#[test]
 fn marks_color_the_selection_and_search_and_a_hovered_link_is_underlined() {
     let dir = tempfile::tempdir().unwrap();
     let pane = pane("printf 'hello world\\033[4m!\\033[0m'; exec sleep 5", dir.path());
@@ -1543,4 +1558,14 @@ fn a_config_reload_reaches_the_pane_and_the_views(cx: &mut TestAppContext) {
 fn a_surface_is_the_hosts_surface() {
     fn assert_surface<T: Surface>() {}
     assert_surface::<TerminalSurface>();
+}
+
+/// Ghostty's `FreeType` face: a zero `yStrikeoutSize` is a broken OS/2 table (the thickness estimated), and so is a zero
+/// position along with it; a nonzero position stands alone.
+#[test]
+fn a_broken_os2_strikeout_falls_back_to_ghosttys_estimates() {
+    let scaled = |units: f32| f64::from(units) / 64.0;
+    assert_eq!(metrics::strikethrough(320.0, 48.0, scaled), (Some(5.0), Some(0.75)));
+    assert_eq!(metrics::strikethrough(0.0, 0.0, scaled), (None, None));
+    assert_eq!(metrics::strikethrough(320.0, 0.0, scaled), (Some(5.0), None));
 }

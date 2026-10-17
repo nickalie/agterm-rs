@@ -34,7 +34,7 @@ fn the_dashboard_title_names_a_custom_window() {
 }
 
 #[test]
-fn maximized_is_zoomed_only_outside_full_screen_and_minimized_is_never_read() {
+fn maximized_is_zoomed_only_outside_full_screen_and_minimized_is_reported_as_read() {
     let display = Some(WindowSize {
         width: 1280,
         height: 800,
@@ -44,7 +44,7 @@ fn maximized_is_zoomed_only_outside_full_screen_and_minimized_is_never_read() {
         maximized: true,
     };
     assert_eq!(
-        maximized.state(display),
+        maximized.state(display, None),
         WindowState {
             fullscreen: false,
             zoomed: true,
@@ -52,12 +52,43 @@ fn maximized_is_zoomed_only_outside_full_screen_and_minimized_is_never_read() {
             display,
         }
     );
+    assert_eq!(
+        maximized.state(display, Some(true)).minimized,
+        Some(true),
+        "X11 reads it back"
+    );
     let both = Painted {
         fullscreen: true,
         maximized: true,
     };
-    assert!(both.state(None).fullscreen && !both.state(None).zoomed);
-    assert_eq!(Painted::default().state(None).display, None);
+    assert!(both.state(None, None).fullscreen && !both.state(None, None).zoomed);
+    assert_eq!(Painted::default().state(None, None).display, None);
+}
+
+/// The GTK build's `reported_minimized` tests.
+#[test]
+fn a_pending_minimize_is_reported_until_the_read_back_confirms_it() {
+    assert_eq!(
+        reported_minimized(Some(false), Some(true)),
+        (Some(true), true),
+        "iconify not confirmed yet"
+    );
+    assert_eq!(
+        reported_minimized(Some(true), Some(false)),
+        (Some(false), true),
+        "restore not confirmed yet"
+    );
+    assert_eq!(
+        reported_minimized(Some(true), Some(true)),
+        (Some(true), false),
+        "confirmed"
+    );
+    assert_eq!(reported_minimized(Some(false), None), (Some(false), false));
+    assert_eq!(
+        reported_minimized(None, Some(true)),
+        (None, false),
+        "no read-back (Wayland)"
+    );
 }
 
 fn core(library: WindowLibrary) -> Core {
@@ -368,23 +399,85 @@ fn a_cancelled_confirmation_from_a_row_menu_gives_the_terminal_the_keyboard_back
     s.close_var_from_its_menu();
     assert!(s.alert_open(), "Close Session asks first");
     assert!(!s.terminal_focused(), "the alert holds the keyboard");
-    // Return answers with the default, Cancel
-    s.cx.simulate_keystrokes("enter");
+    // Escape answers with Cancel
+    s.cx.simulate_keystrokes("escape");
     s.settle();
     assert!(!s.alert_open());
     assert!(s.session("var").is_some(), "cancelled");
     assert!(s.terminal_focused(), "the terminal has the keyboard back");
 
-    // Escape cancels too; then the confirmed close moves the keyboard to the next shown terminal
-    s.close_var_from_its_menu();
-    s.cx.simulate_keystrokes("escape");
-    s.settle();
-    assert!(s.session("var").is_some() && s.terminal_focused());
+    // the keyboard starts on Close, upstream's default: Tab moves it to Cancel
     s.close_var_from_its_menu();
     s.cx.simulate_keystrokes("tab enter");
     s.settle();
+    assert!(s.session("var").is_some() && s.terminal_focused());
+    // Return closes; the confirmed close moves the keyboard to the next shown terminal
+    s.close_var_from_its_menu();
+    s.cx.simulate_keystrokes("enter");
+    s.settle();
     assert!(s.session("var").is_none(), "confirmed");
     assert!(s.terminal_focused(), "the session shown now has the keyboard");
+}
+
+/// Upstream's `windowShouldClose`: the user's close of a window running sessions asks "Close “name”?" over it,
+/// once at a time; Escape keeps the window, Return closes it.
+#[gpui_kit::test]
+fn closing_a_window_with_sessions_asks_over_it_first(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    let ask = |s: &mut Shell<'_>| {
+        let window = s.window;
+        s.state.close_requested(window);
+        let closes = s.state.take_frontend_work().window_closes;
+        assert_eq!(closes.len(), 1, "{closes:?}");
+        let poster = s.state.poster().clone();
+        let view = s.view.clone();
+        view.update_in(s.cx, |view, root, cx| {
+            view.ask_close(&closes[0], poster.clone(), root, cx);
+            view.ask_close(&closes[0], poster, root, cx);
+        });
+        s.cx.run_until_parked();
+    };
+    ask(&mut s);
+    assert!(s.alert_open(), "asked first");
+    assert!(s.state.core.library().is_open(s.window), "still open");
+    let heading = s.cx.update(|window, cx| {
+        crate::modal::front_alert(window.window_handle(), cx).map(|alert| alert.read(cx).spec().heading.clone())
+    });
+    assert_eq!(heading.as_deref(), Some("Close \u{201c}window 1\u{201d}?"));
+    s.cx.simulate_keystrokes("escape");
+    s.settle();
+    assert!(!s.alert_open(), "one alert, though asked twice");
+    assert!(s.state.core.library().is_open(s.window), "kept");
+    ask(&mut s);
+    s.cx.simulate_keystrokes("enter");
+    s.settle();
+    assert!(!s.state.core.library().is_open(s.window), "closed");
+}
+
+#[test]
+fn the_window_close_confirmation_counts_the_sessions_it_ends() {
+    let one = close_alert("work", 1);
+    assert_eq!(one.heading, "Close \u{201c}work\u{201d}?");
+    assert_eq!(
+        one.body,
+        "This ends 1 running session. The window can be reopened from File \u{25b8} Open Window."
+    );
+    assert_eq!(one.default_button(), Some(CLOSE), "Return closes");
+    assert_eq!(one.cancel_button(), Some(0));
+    assert!(close_alert("work", 3).body.starts_with("This ends 3 running sessions."));
+}
+
+#[test]
+fn clear_flaggeds_confirmation_reads_as_upstreams() {
+    let one = clear_flags_alert(1);
+    assert_eq!(one.heading, "Clear flagged sessions?");
+    assert_eq!(one.body, "This unflags 1 session. The session itself is not closed.");
+    assert_eq!(one.buttons[CLEAR].label.as_ref(), "Clear");
+    assert_eq!(one.default_button(), Some(CLEAR));
+    assert_eq!(
+        clear_flags_alert(4).body,
+        "This unflags 4 sessions. The sessions themselves are not closed."
+    );
 }
 
 /// Opens a GUI ask "Ship it?" with buttons Ship and Hold; its dialog.
@@ -1019,6 +1112,65 @@ fn the_librarys_hovers_and_menus_paint_in_the_chromes_dark_and_light(cx: &mut Te
         s.cx.simulate_keystrokes("escape");
         s.settle();
     }
+}
+
+/// Settings ▸ Appearance ▸ Window's opacity below 1 (upstream's `WindowAppearance.sync`): the window asks for a
+/// transparent background (blurred behind with the blur on), its body paints the terminal background at that opacity,
+/// and the title bar and the sidebar paint nothing opaque over it (the sidebar only its tint's wash); back at full
+/// opacity everything is solid again.
+#[gpui_kit::test]
+fn a_translucent_window_paints_its_backing_at_the_opacity_and_no_opaque_chrome(cx: &mut TestAppContext) {
+    use agterm_core::settings_model::{AppearanceChange, SettingsChange};
+    use gpui_kit::WindowBackgroundAppearance as Appearance;
+
+    let mut s = shell(cx);
+    let config = themed((0x20, 0x30, 0x40), (0xee, 0xee, 0xee));
+    let requested = |s: &mut Shell<'_>| s.view.read_with(s.cx, |view, _| view.requested_appearance());
+    let colors = s.paint_chrome(&config);
+    assert_eq!(requested(&mut s), Appearance::Opaque);
+    let solid = crate::chrome::color(colors.background, 1.0);
+    let bar = s.cx.debug_bounds("titlebar").expect("the bar is drawn");
+    assert!(
+        s.fills()
+            .iter()
+            .any(|(bounds, fill)| *fill == solid && bounds.contains(&bar.center()))
+    );
+
+    let change = |s: &mut Shell<'_>, change: AppearanceChange| {
+        s.state.core.change_settings(SettingsChange::Appearance(change));
+        s.paint_chrome(&config)
+    };
+    let colors = change(&mut s, AppearanceChange::BackgroundOpacity(0.6));
+    assert_eq!(requested(&mut s), Appearance::Transparent);
+    let fills = s.fills();
+    let backing = crate::chrome::color(colors.background, 0.6);
+    assert!(
+        fills
+            .iter()
+            .any(|(bounds, fill)| *fill == backing && bounds.contains(&bar.center())),
+        "the body's backing at the opacity: {fills:?}"
+    );
+    let row = s.cx.debug_bounds("row:var").expect("the row is laid out");
+    let sidebar_point = gpui_kit::point(row.origin.x + px(4.), row.origin.y + row.size.height + px(40.));
+    assert!(
+        !fills
+            .iter()
+            .any(|(bounds, fill)| fill.a >= 1.0 && (bounds.contains(&bar.center()) || bounds.contains(&sidebar_point))),
+        "nothing opaque over the backing under the bar or the sidebar: {fills:?}"
+    );
+    change(&mut s, AppearanceChange::BackgroundBlur(12));
+    assert_eq!(requested(&mut s), Appearance::Blurred);
+    change(&mut s, AppearanceChange::BackgroundOpacity(1.0));
+    assert_eq!(
+        requested(&mut s),
+        Appearance::Opaque,
+        "opaque again, the blur kept for later"
+    );
+    assert!(
+        s.fills()
+            .iter()
+            .any(|(bounds, fill)| *fill == solid && bounds.contains(&bar.center()))
+    );
 }
 
 // MARK: - the Settings popup

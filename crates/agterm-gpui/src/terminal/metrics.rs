@@ -11,8 +11,9 @@
 //! scale), as Ghostty does, and converted back to logical pixels for GPUI.
 //!
 //! The face's line gap and underline come from the font through `TextSystem::font_metrics` (GPUI patch 0002, plan >
-//! Task 15); GPUI reads no strikeout metrics, so the strikethrough keeps Ghostty's estimates. The box thickness, which
-//! the procedural sprites draw their lines with, is the underline's, as in Ghostty.
+//! Task 15), its strikethrough from its OS/2 table through `TextSystem::font_strikeout` (GPUI patch 0004, Task 33),
+//! as Ghostty's `FreeType` face reads them, with Ghostty's estimates for a broken table. The box thickness, which the
+//! procedural sprites draw their lines with, is the underline's, as in Ghostty.
 
 use gpui_kit::{FontId, Pixels, TextSystem, px};
 
@@ -183,6 +184,11 @@ pub fn measure(text: &TextSystem, font_id: FontId, size: Pixels) -> FaceMetrics 
     let scaled = |units: f32| f64::from(units) / units_per_em * f64::from(f32::from(size));
     let (underline_position, underline_thickness) =
         underline(scaled(font.underline_position), scaled(font.underline_thickness));
+    let (strikethrough_position, strikethrough_thickness) = text
+        .font_strikeout(font_id)
+        .map_or((None, None), |(position, thickness)| {
+            strikethrough(position, thickness, scaled)
+        });
     FaceMetrics {
         cell_width,
         ascent: scaled(font.ascent),
@@ -191,9 +197,8 @@ pub fn measure(text: &TextSystem, font_id: FontId, size: Pixels) -> FaceMetrics 
         line_gap: scaled(font.line_gap).max(0.0),
         underline_position,
         underline_thickness,
-        // GPUI reads no strikeout metrics: Ghostty's estimates stand in
-        strikethrough_position: None,
-        strikethrough_thickness: None,
+        strikethrough_position,
+        strikethrough_thickness,
         cap_height: Some(scaled(font.cap_height)),
         ex_height: Some(scaled(font.x_height)),
     }
@@ -205,6 +210,15 @@ fn underline(position: f64, thickness: f64) -> (Option<f64>, Option<f64>) {
     let broken = thickness == 0.0;
     let position = (!broken || position != 0.0).then_some(position);
     (position, (!broken).then_some(thickness))
+}
+
+/// The strikethrough's position and thickness as Ghostty takes them from a font's OS/2 table (`yStrikeoutPosition`,
+/// `yStrikeoutSize`, in font units, scaled by `scaled`): a zero size is a broken table (Ghostty estimates the
+/// thickness), and so is a zero position along with it; a nonzero position stands alone.
+pub(crate) fn strikethrough(position: f32, size: f32, scaled: impl Fn(f32) -> f64) -> (Option<f64>, Option<f64>) {
+    let broken = size == 0.0;
+    let position = (!broken || position != 0.0).then(|| scaled(position));
+    (position, (!broken).then(|| scaled(size)))
 }
 
 /// The cell metrics of `font_id` at `points` on a display of `scale`.

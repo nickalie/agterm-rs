@@ -14,7 +14,8 @@ use std::rc::Rc;
 use agterm_core::chrome::Rgb;
 use gpui_kit::{
     AnyWindowHandle, AppContext as _, Context, DisplayId, Entity, Focusable as _, Global, InteractiveElement as _,
-    IntoElement, ParentElement as _, Pixels, Render, Size, Styled as _, Subscription, Window, div, px,
+    IntoElement, ParentElement as _, Pixels, Render, Size, StatefulInteractiveElement as _, Styled as _, Subscription,
+    Window, div, px,
 };
 
 use crate::keymap_dispatch::{self, KeyOrigin};
@@ -188,22 +189,28 @@ fn log_size(size: Size<Pixels>) {
 impl Render for QuickView {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let edge = crate::chrome::color(Rgb::WHITE, EDGE_OPACITY);
-        div().id("quick-terminal").size_full().child(
-            div()
-                .size_full()
-                .relative()
-                .rounded(px(RADIUS))
-                .overflow_hidden()
-                .bg(crate::chrome::color(self.background, 1.0))
-                .child(self.terminal.clone())
-                .child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .rounded(px(RADIUS))
-                        .border_1()
-                        .border_color(edge),
-                ),
-        )
+        div()
+            .id("quick-terminal")
+            .accessibility_id("quick-terminal")
+            .role(gpui_kit::Role::Group)
+            .aria_label("Quick Terminal")
+            .size_full()
+            .child(
+                div()
+                    .size_full()
+                    .relative()
+                    .rounded(px(RADIUS))
+                    .overflow_hidden()
+                    .bg(crate::chrome::color(self.background, 1.0))
+                    .child(self.terminal.clone())
+                    .child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .rounded(px(RADIUS))
+                            .border_1()
+                            .border_color(edge),
+                    ),
+            )
     }
 }

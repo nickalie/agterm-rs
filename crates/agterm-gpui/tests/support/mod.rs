@@ -276,11 +276,17 @@ impl Sandbox {
         self.display = Display::Wayland(socket);
     }
 
-    /// A private Xvfb (no TCP, a free display number of its choosing, no window manager).
+    /// A private Xvfb (no TCP, a free display number of its choosing, no window manager), its screen 1280×800.
     pub fn start_xvfb(&mut self) -> TestResult<u32> {
+        self.start_xvfb_sized(1280, 800)
+    }
+
+    /// [`Self::start_xvfb`] with a `width`×`height` screen, also the largest `RandR` can resize it to.
+    pub fn start_xvfb_sized(&mut self, width: u16, height: u16) -> TestResult<u32> {
+        let screen = format!("{width}x{height}x24");
         let mut child = self
             .command("Xvfb")
-            .args(["-displayfd", "1", "-nolisten", "tcp", "-screen", "0", "1280x800x24"])
+            .args(["-displayfd", "1", "-nolisten", "tcp", "-screen", "0", &screen])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()?;

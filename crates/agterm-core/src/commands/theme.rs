@@ -29,6 +29,9 @@ pub(crate) struct ThemeRuntime {
     written: Option<String>,
     /// A settings change rewrote the config: the frontend reloads it into every terminal, zoom cleared.
     pub(crate) reload_requested: bool,
+    /// The frontend composites window translucency itself, so a translucent opacity pins the terminals' renderer
+    /// transparent ([`AppSettings::ghostty_config_lines_for`]); off for a host without window translucency.
+    translucent_host: bool,
 }
 
 impl Core {
@@ -49,11 +52,19 @@ impl Core {
             .unwrap_or_default()
     }
 
+    /// Tells the core the frontend draws window translucency (Settings ▸ Appearance ▸ Window opacity) itself, as
+    /// upstream's `AppKit` window does: the settings' config then pins the terminals' renderer transparent while the
+    /// opacity is translucent. Off by default (a host without it). Call before the first [`Core::write_settings_config`].
+    pub fn set_translucent_host(&mut self, translucent: bool) {
+        self.themes.translucent_host = translucent;
+    }
+
     /// Writes the settings' ghostty config when its text changed (upstream's `writeGhosttyConfig`), whether it did.
     /// The launch calls it before libghostty loads its config, so the seeded default theme applies from the first
     /// terminal on; a failed write is logged and counts as unchanged.
     pub fn write_settings_config(&mut self) -> bool {
-        let text = theme::settings_config_text(&self.settings().ghostty_config_lines());
+        let lines = self.settings().ghostty_config_lines_for(self.themes.translucent_host);
+        let text = theme::settings_config_text(&lines);
         let changed = match self.themes.settings_conf.as_deref() {
             Some(path) => theme::write_settings_config(path, &text).unwrap_or_else(|err| {
                 tracing::warn!(%err, path = %path.display(), "could not write the ghostty settings config");

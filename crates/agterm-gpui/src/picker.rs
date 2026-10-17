@@ -232,6 +232,9 @@ pub fn row(id: SharedString, selected: bool, live: bool, metrics: Metrics, color
     let hover = crate::chrome::color(colors.foreground, 0.04);
     div()
         .id(id.clone())
+        .accessibility_id(id.clone())
+        .role(gpui_kit::Role::ListBoxOption)
+        .aria_selected(selected)
         .debug_selector(move || id.to_string())
         .flex()
         .flex_row()
@@ -271,6 +274,9 @@ pub fn text_column(
         .children(subtitle.map(|subtitle| {
             div()
                 .id("palette-subtitle")
+                .accessibility_id("palette-subtitle")
+                .role(gpui_kit::Role::Label)
+                .aria_label(SharedString::from(subtitle.to_owned()))
                 .truncate()
                 .text_size(modal::logical(metrics.secondary))
                 .text_color(dim)
@@ -306,6 +312,10 @@ pub fn frame(parts: Frame<'_>, dismiss: impl Fn(&MouseDownEvent, &mut Window, &m
     let separator = crate::chrome::separator(&colors);
     div()
         .id(ids.scrim)
+        // upstream's scrim is a dismiss button over the window
+        .accessibility_id(ids.scrim)
+        .role(gpui_kit::Role::Button)
+        .aria_label("Dismiss")
         .debug_selector(move || ids.scrim.to_owned())
         .absolute()
         .inset_0()
@@ -318,6 +328,8 @@ pub fn frame(parts: Frame<'_>, dismiss: impl Fn(&MouseDownEvent, &mut Window, &m
         .child(
             modal::panel(colors)
                 .id(ids.panel)
+                .accessibility_id(ids.panel)
+                .role(gpui_kit::Role::Dialog)
                 .debug_selector(move || ids.panel.to_owned())
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .absolute()

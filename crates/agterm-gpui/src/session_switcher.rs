@@ -332,6 +332,8 @@ impl Render for SessionSwitcher {
                 modal::panel(colors)
                     .id("session-switcher")
                     .debug_selector(|| "session-switcher".to_owned())
+                    .accessibility_id("session-switcher")
+                    .role(gpui_kit::Role::List)
                     .absolute()
                     .left(modal::logical(placement.left))
                     .top(modal::logical(placement.top))

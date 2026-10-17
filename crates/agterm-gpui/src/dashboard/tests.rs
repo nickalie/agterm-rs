@@ -101,6 +101,62 @@ fn the_pulse_rises_to_its_peak_and_back() {
     assert!(pulse_at(0.25) > 0.0 && pulse_at(0.25) < WASH_PEAK);
 }
 
+/// Upstream's `dashboardPillColor` / `dashboardPillTextColor`: an idle chip is the theme's selection pill (the selected
+/// sidebar row's colors), the foreground at 0.22 over the backdrop without one; a status chip is the status color.
+#[test]
+fn an_idle_chip_takes_the_themes_selection_colors_else_a_foreground_wash() {
+    let rgb = |r, g, b| agterm_core::chrome::Rgb::new(r, g, b);
+    let mut cell = ChromeCell {
+        member: DashboardMember::primary(uuid::Uuid::nil()),
+        caption: "app".to_owned(),
+        highlighted: false,
+        cover: None,
+        status: None,
+    };
+    let themed = Look {
+        background: rgb(0x10, 0x10, 0x10),
+        foreground: rgb(0xee, 0xee, 0xee),
+        selection: Some((rgb(0x44, 0x47, 0x5a), rgb(0xf8, 0xf8, 0xf2))),
+    };
+    let (fill, text, wash) = chip_colors(&cell, themed, true);
+    assert_eq!(fill, color(rgb(0x44, 0x47, 0x5a), 1.0), "the selection background");
+    assert_eq!(
+        text,
+        color(rgb(0xf8, 0xf8, 0xf2), UNSELECTED_CAPTION),
+        "the selection text, muted"
+    );
+    assert!(wash.is_none());
+    cell.highlighted = true;
+    let (_, text, _) = chip_colors(&cell, themed, true);
+    assert_eq!(text, color(rgb(0xf8, 0xf8, 0xf2), 1.0), "full on the highlighted cell");
+    let plain = Look {
+        selection: None,
+        ..themed
+    };
+    let (fill, text, _) = chip_colors(&cell, plain, true);
+    assert_eq!(fill, color(rgb(0xee, 0xee, 0xee), 0.22), "the foreground wash");
+    assert_eq!(text, color(rgb(0xee, 0xee, 0xee), 1.0));
+    cell.status = Some(crate::status_glyph::GlyphLook {
+        status: AgentStatus::Blocked,
+        shape: agterm_core::model::StatusShape::Circle,
+        rgb: (1.0, 0.584, 0.0),
+        blink: true,
+        tooltip: String::new(),
+    });
+    let (fill, text, wash) = chip_colors(&cell, themed, true);
+    assert_eq!(
+        fill,
+        crate::status_glyph::hsla((1.0, 0.584, 0.0)),
+        "the status color, not the selection"
+    );
+    assert_eq!(text, gpui_kit::black(), "contrasting text");
+    assert_eq!(wash, Some(gpui_kit::white()), "a blinking chip pulses");
+    assert!(
+        chip_colors(&cell, themed, false).2.is_none(),
+        "not while animations are off"
+    );
+}
+
 #[test]
 fn contrast_picks_dark_text_over_a_light_fill() {
     assert!(luminance((1.0, 0.584, 0.0)) > 0.5, "orange takes black text");

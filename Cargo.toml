@@ -41,8 +41,9 @@ pulldown-cmark = { version = "0.13", default-features = false }
 png = "0.18"
 # A pane's PTY and child (agterm-term), as Zed and WezTerm use it.
 portable-pty = "0.9"
-# agterm-gpui's link detection: Ghostty's default URL matcher (`link-url`) over the terminal's rows.
-regex = "1"
+# agterm-gpui's link detection: Ghostty's default URL and path matcher (`link-url`) over the terminal's rows, whose
+# look-arounds (Oniguruma's, in Ghostty) need a backtracking engine; fancy-regex is the regex crate's own one.
+fancy-regex = "0.19"
 serde = { version = "1", features = ["derive"] }
 # `preserve_order`: a result built as a `Value` keeps its fields in upstream's order on the wire (the catalog's
 # `fields` order) instead of sorting them.
@@ -108,9 +109,11 @@ zbus = "5.19"
 # `prompt_for_paths` does not take) and the desktop's `enable-animations` setting the status glyph's blink obeys, through
 # the xdg-desktop-portal crate GPUI's Linux platform already links (0.13, `async-io`; no tokio). `raw_handle` and
 # `wayland` name the chooser's parent window from GPUI's raw window handle (an X11 id, an `xdg-foreign` export).
+# `global_shortcuts`: keymap.conf's `global-hotkey` on Wayland, through the desktop's global shortcuts portal.
 ashpd = { version = "0.13", default-features = false, features = [
     "async-io",
     "file_chooser",
+    "global_shortcuts",
     "settings",
     "raw_handle",
     "wayland",

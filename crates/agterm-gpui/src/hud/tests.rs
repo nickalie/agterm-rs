@@ -217,12 +217,18 @@ fn the_page_places_a_scoped_panel_in_its_pane_and_nothing_while_it_is_not_laid_o
 
 #[test]
 fn the_config_pins_the_padding_and_paints_the_background() {
-    let plain = config_overlay(None);
+    let plain = config_overlay(None, 1.0);
     assert!(plain.contains("window-padding-x = 8\n") && plain.contains("window-padding-y = 6\n"));
     assert!(!plain.contains("background ="));
-    let colored = config_overlay(Some("#102030"));
+    let colored = config_overlay(Some("#102030"), 1.0);
     assert!(colored.contains("background = #102030\n"));
+    assert!(colored.contains("background-opacity = 1\n"));
     assert!(colored.contains("window-padding-balance = true"));
+    let translucent = config_overlay(Some("#102030"), 0.7);
+    assert!(
+        translucent.contains("background-opacity = 0.7\n"),
+        "the window's translucency baked in: {translucent}"
+    );
 }
 
 #[test]

@@ -16,8 +16,8 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, Bounds, Context, Div, FontWeight, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent,
-    MouseButton, ParentElement as _, Pixels, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
-    Window, canvas, div, px, svg,
+    MouseButton, ParentElement as _, Pixels, Role, SharedString, Stateful, StatefulInteractiveElement as _,
+    Styled as _, Window, canvas, div, px, svg,
 };
 
 use super::form::{Action, Control, Item, Picker, Section, SliderKey};
@@ -81,6 +81,9 @@ pub fn panel(view: &SettingsView, cx: &mut Context<SettingsView>) -> impl IntoEl
     };
     modal::panel(look.colors)
         .id("settings")
+        .accessibility_id("settings")
+        .role(Role::Dialog)
+        .aria_label(TITLE)
         .debug_selector(|| "settings".to_owned())
         .key_context(super::KEY_CONTEXT)
         .track_focus(&view.focus)
@@ -104,6 +107,9 @@ pub fn panel(view: &SettingsView, cx: &mut Context<SettingsView>) -> impl IntoEl
 fn header(look: &Look, cx: &mut Context<SettingsView>) -> Div {
     let close = div()
         .id("settings-close")
+        .accessibility_id("settings-close")
+        .role(Role::Button)
+        .aria_label("Close")
         .debug_selector(|| "settings-close".to_owned())
         .flex()
         .flex_shrink_0()
@@ -149,13 +155,17 @@ fn tabs(shown: Tab, look: &Look, cx: &mut Context<SettingsView>) -> Div {
         .border_b_1()
         .border_color(crate::chrome::separator(&look.colors))
         .children(Tab::ALL.into_iter().map(|tab| {
-            let id = format!("settings-tab-{}", tab.name());
-            let selector = id.clone();
+            let id = SharedString::from(format!("settings-tab-{}", tab.name()));
+            let selector = id.to_string();
             let selected = tab == shown;
             let wash = look.ink(0.1);
             let hover = look.ink(0.05);
             div()
-                .id(SharedString::from(id))
+                .id(id.clone())
+                .accessibility_id(id)
+                .role(Role::Tab)
+                .aria_selected(selected)
+                .aria_label(tab.title())
                 .debug_selector(move || selector.clone())
                 .flex()
                 .flex_col()
@@ -288,13 +298,18 @@ fn row(item: Item, view: &SettingsView, look: &Look) -> AnyElement {
         .child(title.clone());
     let control = match control {
         Control::Hint => return hint(id, title, look),
-        Control::Path { text, unset, buttons } => return path(&id, text, unset, buttons, look),
-        Control::Diagnostics { lines } => return diagnostics(id, lines, look),
+        Control::Path { text, unset, buttons } => {
+            return path(&id, text, unset, buttons, view.selectable(&id), look);
+        }
+        Control::Diagnostics { lines } => {
+            let selectable = view.selectable(&id).cloned();
+            return diagnostics(id, lines, selectable.as_ref(), look);
+        }
         Control::Button(action) => return frame(div().child(push_button(action, look))),
-        Control::Toggle { on, set } => toggle(&id, on, enabled, set, look),
-        Control::Picker(picker) => picker_button(&id, picker, look),
-        Control::Stepper { value, range, set } => stepper(&id, value, &range, enabled, &set, look),
-        Control::Slider { key, readout, .. } => slider(view, key, readout, enabled, look),
+        Control::Toggle { on, set } => toggle(&id, &title, on, enabled, set, look),
+        Control::Picker(picker) => picker_button(&id, &title, picker, look),
+        Control::Stepper { value, range, set } => stepper((&id, &title), value, &range, enabled, &set, look),
+        Control::Slider { key, readout, .. } => slider(view, key, &title, readout, enabled, look),
         Control::Glyph { status, shape, .. } => glyph_controls(view, status, &id, shape, look),
     };
     frame(
@@ -323,6 +338,9 @@ fn frame(content: Div) -> AnyElement {
 fn hint(id: String, text: String, look: &Look) -> AnyElement {
     div()
         .id(SharedString::from(id.clone()))
+        .accessibility_id(SharedString::from(id.clone()))
+        .role(Role::Label)
+        .aria_label(SharedString::from(text.clone()))
         .debug_selector(move || id.clone())
         .px(px(12.))
         .pb(px(6.))
@@ -332,9 +350,11 @@ fn hint(id: String, text: String, look: &Look) -> AnyElement {
         .into_any_element()
 }
 
-/// A switch, in the accent while on.
+/// A switch, in the accent while on, named `title`. A gpui-kit switch takes no accessibility id of its own, so the group
+/// around it carries the row's.
 fn toggle(
     id: &str,
+    title: &str,
     on: bool,
     enabled: bool,
     set: Rc<dyn Fn(bool) -> agterm_core::settings_model::SettingsChange>,
@@ -343,9 +363,14 @@ fn toggle(
     let edits = look.edits.clone();
     let selector = id.to_owned();
     div()
+        .id(SharedString::from(format!("{id}-group")))
+        .accessibility_id(SharedString::from(id.to_owned()))
+        .role(Role::Group)
+        .aria_label(SharedString::from(title.to_owned()))
         .debug_selector(move || selector.clone())
         .child(
             Switch::new(SharedString::from(id.to_owned()))
+                .accessibility_label(SharedString::from(title.to_owned()))
                 .checked(on)
                 .color(Look::accent())
                 .disabled(!enabled)
@@ -354,8 +379,9 @@ fn toggle(
         .into_any_element()
 }
 
-/// A picker's popup button: the shown row's label (a shape's silhouette) and a caret; its menu checks the shown row.
-fn picker_button(id: &str, picker: Picker, look: &Look) -> AnyElement {
+/// A picker's popup button, named `title`: the shown row's label (a shape's silhouette) and a caret; its menu checks the
+/// shown row.
+fn picker_button(id: &str, title: &str, picker: Picker, look: &Look) -> AnyElement {
     let picker = Rc::new(picker);
     let ink = look.ink(1.0);
     let face = match picker.shapes {
@@ -368,6 +394,8 @@ fn picker_button(id: &str, picker: Picker, look: &Look) -> AnyElement {
     let edits = look.edits.clone();
     let selector = id.to_owned();
     Button::new(SharedString::from(id.to_owned()))
+        .accessibility_id(SharedString::from(id.to_owned()))
+        .accessibility_label(SharedString::from(title.to_owned()))
         .debug_selector(move || selector.clone())
         .ghost()
         .h(px(24.))
@@ -454,9 +482,9 @@ fn picked(picker: &Picker, index: usize, edits: &Edits, window: &Window, cx: &Ap
     }
 }
 
-/// A stepper's two buttons, each greyed at its bound.
+/// A stepper's two buttons, each greyed at its bound, grouped under the row's id and title.
 fn stepper(
-    id: &str,
+    (id, title): (&str, &str),
     value: f64,
     range: &std::ops::RangeInclusive<f64>,
     enabled: bool,
@@ -466,13 +494,16 @@ fn stepper(
     let selector = id.to_owned();
     div()
         .id(SharedString::from(id.to_owned()))
+        .accessibility_id(SharedString::from(id.to_owned()))
+        .role(Role::Group)
+        .aria_label(SharedString::from(title.to_owned()))
         .debug_selector(move || selector.clone())
         .flex()
         .flex_row()
         .gap(px(4.))
         .child(step_button(
             format!("{id}-decrement"),
-            IconName::Minus,
+            (IconName::Minus, "Decrease"),
             enabled && value > *range.start(),
             value - 1.0,
             set,
@@ -480,7 +511,7 @@ fn stepper(
         ))
         .child(step_button(
             format!("{id}-increment"),
-            IconName::Plus,
+            (IconName::Plus, "Increase"),
             enabled && value < *range.end(),
             value + 1.0,
             set,
@@ -489,10 +520,10 @@ fn stepper(
         .into_any_element()
 }
 
-/// One stepper button, making `set`'s edit for `to`.
+/// One stepper button, its glyph and the name it is announced by, making `set`'s edit for `to`.
 fn step_button(
     id: String,
-    name: IconName,
+    (name, label): (IconName, &'static str),
     enabled: bool,
     to: f64,
     set: &Rc<dyn Fn(f64) -> agterm_core::settings_model::SettingsChange>,
@@ -502,8 +533,12 @@ fn step_button(
     let hover = look.ink(0.16);
     let selector = id.clone();
     let (edits, set) = (look.edits.clone(), Rc::clone(set));
+    let id = SharedString::from(id);
     div()
-        .id(SharedString::from(id))
+        .id(id.clone())
+        .accessibility_id(id)
+        .role(Role::Button)
+        .aria_label(label)
         .debug_selector(move || selector.clone())
         .flex()
         .items_center()
@@ -520,8 +555,8 @@ fn step_button(
         })
 }
 
-/// A slider in the accent with its readout.
-fn slider(view: &SettingsView, key: SliderKey, readout: String, enabled: bool, look: &Look) -> AnyElement {
+/// A slider in the accent with its readout, grouped under `title`.
+fn slider(view: &SettingsView, key: SliderKey, title: &str, readout: String, enabled: bool, look: &Look) -> AnyElement {
     let Some(state) = view.slider(key) else {
         return div().into_any_element();
     };
@@ -534,6 +569,9 @@ fn slider(view: &SettingsView, key: SliderKey, readout: String, enabled: bool, l
         .child(
             div()
                 .id(id)
+                .accessibility_id(id)
+                .role(Role::Group)
+                .aria_label(SharedString::from(title.to_owned()))
                 .debug_selector(move || id.to_owned())
                 .w(px(SLIDER_WIDTH))
                 .child(
@@ -555,8 +593,23 @@ fn slider(view: &SettingsView, key: SliderKey, readout: String, enabled: bool, l
 }
 
 /// A path taking the row, dimmed while unset, then its buttons.
-fn path(id: &str, text: String, unset: bool, buttons: Vec<Action>, look: &Look) -> AnyElement {
+fn path(
+    id: &str,
+    text: String,
+    unset: bool,
+    buttons: Vec<Action>,
+    selectable: Option<&crate::selectable::Selectable>,
+    look: &Look,
+) -> AnyElement {
     let selector = id.to_owned();
+    let color = look.ink(if unset { DIM } else { 1.0 });
+    // the selectable text carries the id for accessibility itself; the plain text's frame carries it
+    let plain = selectable.is_none().then(|| SharedString::from(text.clone()));
+    // upstream's monospaced, selectable `Text`; plain text until the popup made its field
+    let shown = match selectable {
+        Some(selectable) => selectable.element(id, color, px(MONO), true),
+        None => div().truncate().child(text).into_any_element(),
+    };
     frame(
         div()
             .flex()
@@ -566,34 +619,61 @@ fn path(id: &str, text: String, unset: bool, buttons: Vec<Action>, look: &Look) 
             .child(
                 div()
                     .id(SharedString::from(id.to_owned()))
+                    .when_some(plain, |frame, text| {
+                        frame
+                            .accessibility_id(SharedString::from(id.to_owned()))
+                            .role(Role::Label)
+                            .aria_label(text)
+                    })
                     .debug_selector(move || selector.clone())
                     .flex_1()
                     .min_w(px(0.))
-                    .truncate()
                     .font_family("monospace")
                     .text_size(px(MONO))
-                    .when(unset, |path| path.text_color(look.ink(DIM)))
-                    .child(text),
+                    .text_color(color)
+                    .child(shown),
             )
             .children(buttons.into_iter().map(|action| push_button(action, look))),
     )
 }
 
-/// A file's diagnostics, or "No issues.".
-fn diagnostics(id: String, lines: Vec<String>, look: &Look) -> AnyElement {
+/// A file's diagnostics as selectable lines (upstream's `.textSelection(.enabled)`), or "No issues.".
+fn diagnostics(
+    id: String,
+    lines: Vec<String>,
+    selectable: Option<&crate::selectable::Selectable>,
+    look: &Look,
+) -> AnyElement {
     let empty = lines.is_empty();
+    let shown = (!empty)
+        .then_some(selectable)
+        .flatten()
+        .map(|selectable| selectable.element(&id, look.ink(DIM), px(MONO), true));
     let selector = id.clone();
+    // the selectable lines carry the id for accessibility themselves; else the frame carries it
+    let plain = shown.is_none().then(|| {
+        SharedString::from(if empty {
+            "No issues.".to_owned()
+        } else {
+            lines.join("\n")
+        })
+    });
     let body = div()
-        .id(SharedString::from(id))
+        .id(SharedString::from(id.clone()))
+        .when_some(plain, |body, text| {
+            body.accessibility_id(SharedString::from(id))
+                .role(Role::Label)
+                .aria_label(text)
+        })
         .debug_selector(move || selector.clone())
         .flex()
         .flex_col()
         .gap(px(4.))
         .text_color(look.ink(DIM));
-    let body = if empty {
-        body.child("No issues.")
-    } else {
-        body.font_family("monospace").text_size(px(MONO)).children(lines)
+    let body = match (empty, shown) {
+        (true, _) => body.child("No issues."),
+        (false, Some(shown)) => body.font_family("monospace").text_size(px(MONO)).child(shown),
+        (false, None) => body.font_family("monospace").text_size(px(MONO)).children(lines),
     };
     frame(div().w_full().py(px(4.)).child(body))
 }
@@ -606,6 +686,9 @@ fn push_button(action: Action, look: &Look) -> Stateful<Div> {
     let edits = look.edits.clone();
     div()
         .id(id)
+        .accessibility_id(id)
+        .role(Role::Button)
+        .aria_label(label)
         .debug_selector(move || id.to_owned())
         .flex_shrink_0()
         .px(px(10.))
@@ -628,8 +711,14 @@ fn glyph_controls(
 ) -> AnyElement {
     let well = view.well(status).map(|state| {
         let id = format!("settings-status-{}", status.wire_name());
+        let selector = id.clone();
+        // the color picker takes no accessibility id of its own: the group around it carries it
         div()
-            .debug_selector(move || id.clone())
+            .id(SharedString::from(format!("{id}-group")))
+            .accessibility_id(SharedString::from(id))
+            .role(Role::Group)
+            .aria_label("Color")
+            .debug_selector(move || selector.clone())
             .child(ColorPicker::new(state).accessibility_label("Color"))
     });
     div()
@@ -643,7 +732,7 @@ fn glyph_controls(
                 .w(px(SHAPE_COLUMN))
                 .flex()
                 .justify_end()
-                .child(picker_button(id, shape, look)),
+                .child(picker_button(id, "Shape", shape, look)),
         )
         .into_any_element()
 }

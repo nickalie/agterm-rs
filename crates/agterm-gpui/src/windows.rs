@@ -27,6 +27,7 @@ use crate::settings::{Opening, Snapshot};
 use crate::state::AppState;
 use crate::terminal::TerminalConfig;
 use crate::window::WindowView;
+use crate::window_frames::WindowFrames;
 
 /// One reconcile of the on-screen windows against the open set.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -77,11 +78,16 @@ pub struct Windows {
     quick: QuickPanel,
     /// The frontmost window's app menu chords as last synced, which `keymap.list` reads ([`Windows::menu_reader`]).
     menu_items: Rc<RefCell<Vec<ControlKeymapMenuItem>>>,
+    /// The windows' saved frames, each given back once when its window opens ([`crate::window_frames`]).
+    frames: WindowFrames,
+    /// The keymap's `global-hotkey`, as registered with the desktop ([`crate::global_hotkey`]).
+    hotkey: crate::global_hotkey::GlobalHotkey,
 }
 
 impl Windows {
     #[must_use]
     pub fn new(env: Rc<DeckEnv>, app_id: String, config: Option<ConfigHost>, launched: Option<Activation>) -> Self {
+        let frames = WindowFrames::load(&env.watermarks.state_dir);
         Self {
             env,
             app_id,
@@ -90,6 +96,8 @@ impl Windows {
             launched,
             quick: QuickPanel::default(),
             menu_items: Rc::default(),
+            frames,
+            hotkey: crate::global_hotkey::GlobalHotkey::default(),
         }
     }
 
@@ -164,6 +172,9 @@ impl Windows {
         };
         let held = crate::quick::holds_keyboard(cx);
         self.quick.sync(&mut state.core, &quick, cx);
+        // a keymap reload moves the hotkey, as it moves every other binding
+        self.hotkey
+            .sync(state.core.keymap().global_hotkey(), &self.env.poster, cx);
         // the panel went with the keyboard: the decks, which stepped aside for it, focus their terminals again
         resettle |= held && !crate::quick::holds_keyboard(cx);
         self.sync_settings(state, cx);
@@ -251,17 +262,31 @@ impl Windows {
         let library = core.library();
         let shown: HashSet<Uuid> = self.shown.keys().copied().collect();
         let plan = plan(&library.open_ids(), &shown, library.active_window_id());
+        let known: Vec<Uuid> = library.windows().iter().map(|info| info.id).collect();
         for id in &plan.close {
             if let Some(ui) = self.shown.remove(id) {
                 core.set_window_state(*id, None);
-                if ui.handle.update(cx, |view, window, cx| view.close(window, cx)).is_err() {
+                let closed = ui.handle.update(cx, |view, window, cx| {
+                    let frame = crate::window::frame_of(window);
+                    view.close(window, cx);
+                    frame
+                });
+                if let Ok(frame) = closed {
+                    // upstream's `willClose` persists the final frame under the window's id
+                    self.frames.save(*id, frame, &known);
+                } else {
                     tracing::debug!(window = %id, "the closed window was gone already");
                 }
             }
         }
         let frontmost_takes = core.frontmost_takes();
+        let (displays, placement) = (crate::monitors::display_rects(cx), crate::monitors::placement(cx));
         for id in &plan.build {
-            let Some(handle) = crate::window::open(*id, frontmost_takes, &self.app_id, &self.env, cx) else {
+            let frame = self
+                .frames
+                .get(*id)
+                .map(|frame| frame.constrained(&displays, placement));
+            let Some(handle) = crate::window::open(*id, frontmost_takes, &self.app_id, &self.env, frame, cx) else {
                 continue;
             };
             if let Ok(deck) = handle.update(cx, |view, _, _| view.deck().clone()) {
@@ -377,6 +402,22 @@ impl Windows {
         crate::html_overlay::refresh_themes(&crate::html_overlay::colors_of(config), cx);
     }
 
+    /// Saves every open window's frame, keeping those of the library's `known` windows: the quit, which closes them all
+    /// (upstream's windows closing at termination).
+    pub fn save_frames(&mut self, known: &[Uuid], cx: &mut App) {
+        let frames: Vec<(Uuid, crate::window_frames::Frame)> = self
+            .shown
+            .iter()
+            .filter_map(|(id, ui)| {
+                let frame = ui.handle.update(cx, |_, window, _| crate::window::frame_of(window));
+                frame.ok().map(|frame| (*id, frame))
+            })
+            .collect();
+        for (id, frame) in frames {
+            self.frames.save(id, frame, known);
+        }
+    }
+
     /// Tears every terminal down, ending their programs: the quit path, after the quit save.
     pub fn teardown_all(&self, cx: &App) {
         let shared: Vec<_> = self
@@ -484,6 +525,72 @@ mod tests {
         ids
     }
 
+    /// Upstream's `TitleProbeView`: a window opens at the frame saved when it last closed, and its close saves the one
+    /// it has then; a window never closed opens at upstream's default size.
+    #[gpui_kit::test]
+    fn a_window_reopens_at_the_frame_it_closed_with(cx: &mut gpui_kit::TestAppContext) {
+        use crate::window_frames::Frame;
+        use gpui_kit::{px, size};
+
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(crate::status_glyph::Motion::default());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let [first, work, parked] = saved_set(dir.path());
+        let saved = Frame {
+            x: 120.0,
+            y: 80.0,
+            width: 1000.0,
+            height: 700.0,
+            maximized: false,
+        };
+        WindowFrames::load(dir.path()).save(parked, saved, &[first, work, parked]);
+        let restored = agterm_core::persist::LibraryPersistence::new(dir.path()).bootstrap("/home/u");
+        let mut state = AppState::new(core_over(restored));
+        let mut windows = registry(dir.path(), crate::state::detached_poster());
+        cx.update(|cx| {
+            let _ = windows.sync(&mut state, cx);
+        });
+        cx.run_until_parked();
+        let bounds = |windows: &Windows, id: Uuid, cx: &mut gpui_kit::TestAppContext| {
+            let handle = windows.get(id).unwrap().handle;
+            cx.update(|cx| handle.update(cx, |_, window, _| window.bounds()).unwrap())
+        };
+        assert_eq!(
+            bounds(&windows, first, cx).size,
+            size(px(900.), px(600.)),
+            "upstream's default"
+        );
+
+        // the closed one comes back at its saved frame
+        state.menu_list_activated(first, agterm_core::menu_lists::MenuListAction::OpenWindow(parked));
+        cx.update(|cx| {
+            let _ = windows.sync(&mut state, cx);
+        });
+        let reopened = bounds(&windows, parked, cx);
+        assert_eq!(reopened.size, size(px(1000.), px(700.)));
+        assert_eq!(reopened.origin, gpui_kit::point(px(120.), px(80.)));
+
+        // closing one saves the frame it has now, for its next opening
+        let handle = windows.get(work).unwrap().handle;
+        cx.update(|cx| handle.update(cx, |_, window, _| window.resize(size(px(820.), px(510.)))))
+            .unwrap();
+        state.close_confirmed(work);
+        cx.update(|cx| {
+            let _ = windows.sync(&mut state, cx);
+        });
+        cx.run_until_parked();
+        let frame = WindowFrames::load(dir.path()).get(work).expect("saved at its close");
+        assert_eq!((frame.width, frame.height), (820.0, 510.0));
+        assert!(!frame.maximized);
+        // the quit saves every open one
+        let known = [first, work, parked];
+        cx.update(|cx| windows.save_frames(&known, cx));
+        assert!(WindowFrames::load(dir.path()).get(first).is_some());
+        cx.update(|cx| windows.teardown_all(cx));
+    }
+
     #[gpui_kit::test]
     fn a_saved_window_set_reopens_its_open_windows_and_keeps_the_closed_one(cx: &mut gpui_kit::TestAppContext) {
         cx.update(|cx| {
@@ -534,7 +641,7 @@ mod tests {
         assert_eq!(state.core.library().active_window_id(), Some(parked), "and frontmost");
 
         // the user closes one: its window goes, the others stay
-        state.close_requested(work);
+        state.close_confirmed(work);
         cx.update(|cx| {
             let _ = windows.sync(&mut state, cx);
         });
@@ -614,7 +721,7 @@ mod tests {
         });
         assert_eq!(shown.unwrap(), Some(Some(true)));
         // its window closing takes it down; a window not on screen falls back to the frontmost
-        state.close_requested(work);
+        state.close_confirmed(work);
         cx.update(|cx| {
             let _ = windows.sync(&mut state, cx);
         });

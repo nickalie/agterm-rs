@@ -321,6 +321,9 @@ pub struct SettingsView {
     sliders: Vec<(SliderKey, Entity<SliderState>)>,
     /// The glyph rows' color wells, by [`GLYPH_STATUSES`].
     wells: Vec<(AgentStatus, Entity<ColorPickerState>)>,
+    /// The paths and the diagnostics as text the user selects and copies (upstream's `.textSelection(.enabled)`), by
+    /// their rows' ids.
+    selectables: std::collections::HashMap<String, crate::selectable::Selectable>,
     scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -378,6 +381,7 @@ impl SettingsView {
             tab: Tab::General,
             sliders,
             wells,
+            selectables: std::collections::HashMap::new(),
             scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
         }
@@ -452,6 +456,35 @@ impl SettingsView {
             .map(|(_, state)| state)
     }
 
+    /// The selectable text of row `id` (a path or the diagnostics), once the popup drew it.
+    #[must_use]
+    pub fn selectable(&self, id: &str) -> Option<&crate::selectable::Selectable> {
+        self.selectables.get(id)
+    }
+
+    /// Gives the shown page's paths and diagnostics their selectable texts, each holding what the row shows now.
+    fn sync_selectables(&mut self, window: &mut Window, cx: &mut App) {
+        use crate::selectable::Selectable;
+        use form::Control;
+        for item in self.sections().into_iter().flat_map(|section| section.items) {
+            let (text, line) = match &item.control {
+                Control::Path { text, .. } => (text.clone(), true),
+                Control::Diagnostics { lines } if !lines.is_empty() => (lines.join("\n"), false),
+                _ => continue,
+            };
+            if let Some(shown) = self.selectables.get(&item.id) {
+                shown.set(&text, window, cx);
+                continue;
+            }
+            let made = if line {
+                Selectable::line(&text, window, cx)
+            } else {
+                Selectable::lines(&text, window, cx)
+            };
+            self.selectables.insert(item.id, made);
+        }
+    }
+
     /// Shows `tab`, scrolled to its top.
     pub fn select(&mut self, tab: Tab, cx: &mut Context<Self>) {
         if self.tab != tab {
@@ -504,7 +537,8 @@ impl Focusable for SettingsView {
 }
 
 impl Render for SettingsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_selectables(window, cx);
         draw::panel(self, cx)
     }
 }

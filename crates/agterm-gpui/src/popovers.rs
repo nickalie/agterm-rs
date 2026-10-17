@@ -18,8 +18,8 @@ use agterm_core::titlebar::{CustomCommandRows, SessionRow, TitlebarAction};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, Div, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
-    ParentElement as _, Pixels, Point, Render, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
-    Window, div, px,
+    ParentElement as _, Pixels, Point, Render, Role, SharedString, Stateful, StatefulInteractiveElement as _,
+    Styled as _, Window, div, px,
 };
 use uuid::Uuid;
 
@@ -305,7 +305,12 @@ impl Popovers {
                     .as_ref()
                     .and_then(|indicator| status_glyph::resolve(indicator, &self.settings))
                     .map(|look| status_glyph::glyph(&look, status_glyph::animations_enabled(cx)).into_any_element());
-                session_line(base.id((id, index)).children(glyph), session, colors)
+                let row = base
+                    .id((id, index))
+                    .accessibility_id(id)
+                    .role(Role::MenuItem)
+                    .aria_label(SharedString::from(session.title.clone()));
+                session_line(row.children(glyph), session, colors)
             }
             Row::Command(command, top) => {
                 let id = if *top {
@@ -313,7 +318,12 @@ impl Popovers {
                 } else {
                     "custom-command-row"
                 };
-                command_line(base.id((id, index)), command, colors)
+                let row = base
+                    .id((id, index))
+                    .accessibility_id(id)
+                    .role(Role::MenuItem)
+                    .aria_label(SharedString::from(command.name.clone()));
+                command_line(row, command, colors)
             }
         };
         content

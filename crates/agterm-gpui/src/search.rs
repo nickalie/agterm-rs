@@ -279,12 +279,21 @@ impl Render for SearchBar {
                     .id("search-field")
                     .debug_selector(|| "search-field".to_owned())
                     .w(px(FIELD_WIDTH))
-                    .child(Input::new(&self.field).appearance(false).text_color(ink)),
+                    .child(
+                        Input::new(&self.field)
+                            .appearance(false)
+                            .accessibility_id("search-field")
+                            .aria_label("Find")
+                            .text_color(ink),
+                    ),
             )
             .child(
                 div()
                     .id("search-counter")
                     .debug_selector(|| "search-counter".to_owned())
+                    .accessibility_id("search-counter")
+                    .role(gpui_kit::Role::Status)
+                    .aria_label(SharedString::from(self.counter.clone()))
                     .flex_shrink_0()
                     .text_size(px(11.))
                     .text_color(soft)

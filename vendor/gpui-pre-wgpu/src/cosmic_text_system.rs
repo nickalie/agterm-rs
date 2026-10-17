@@ -237,6 +237,15 @@ impl PlatformTextSystem for CosmicTextSystem {
         }
     }
 
+    fn font_strikeout(&self, font_id: FontId) -> Option<(f32, f32)> {
+        let lock = self.0.read();
+        let font = lock.loaded_font(font_id).font.as_swash();
+        let os2 = font.table(swash::tag_from_bytes(b"OS/2"))?;
+        // yStrikeoutSize and yStrikeoutPosition, the fourteenth and fifteenth fields, both int16
+        let field = |at: usize| Some(f32::from(i16::from_be_bytes([*os2.get(at)?, *os2.get(at + 1)?])));
+        Some((field(28)?, field(26)?))
+    }
+
     fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
         let lock = self.0.read();
         let glyph_metrics = lock.loaded_font(font_id).font.as_swash().glyph_metrics(&[]);

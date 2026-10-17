@@ -247,3 +247,27 @@ fn the_launch_write_creates_the_config_once() {
         "the launch write asks for no reload"
     );
 }
+
+/// Upstream's `ghosttyConfigLines` on a host that draws window translucency itself: a translucent opacity pins the
+/// renderer transparent; a host without translucency (the default) never writes the pins.
+#[test]
+fn a_translucent_host_pins_the_renderer_transparent_under_a_translucent_opacity() {
+    let settings = AppSettings {
+        background_opacity: Some(0.8),
+        ..AppSettings::default()
+    };
+    let mut plain = Themes::new(settings.clone());
+    assert!(plain.fixture.core.write_settings_config());
+    assert!(!plain.config().contains("background-opacity"), "{}", plain.config());
+    let mut host = Themes::new(settings);
+    host.fixture.core.set_translucent_host(true);
+    assert!(host.fixture.core.write_settings_config());
+    assert_eq!(
+        host.config(),
+        "background-opacity = 0\nbackground-blur = 0\nmouse-scroll-multiplier = 3\nright-click-action = paste\n"
+    );
+    let mut opaque = Themes::new(AppSettings::default());
+    opaque.fixture.core.set_translucent_host(true);
+    assert!(opaque.fixture.core.write_settings_config());
+    assert!(!opaque.config().contains("background-opacity"), "opaque: no pins");
+}

@@ -4,16 +4,19 @@
 #   gpui-pre       the `ExternalSurface` payload of `PaintSurface` on Linux and `Window::paint_external_surface`, the
 #                  dmabuf import capabilities of the GPU GPUI renders with (0001); `TextSystem::font_metrics`, a face's
 #                  metrics as its font declares them (0002); `Window::paint_alpha_mask`, a coverage mask the caller
-#                  rasterized, tinted like a glyph (0003)
+#                  rasterized, tinted like a glyph (0003); `TextSystem::font_strikeout`, a face's OS/2 strikeout
+#                  metrics (0004)
 #   gpui-pre-wgpu  the renderer's side of external surfaces (dmabufs imported through wgpu-hal Vulkan, acquired from
 #                  the foreign queue family and copied on the GPU into a texture of its own; CPU pixels uploaded by
 #                  damaged rectangles) and the Vulkan device opened with VK_EXT_image_drm_format_modifier and
-#                  VK_EXT_queue_family_foreign, which wgpu does not enable itself
+#                  VK_EXT_queue_family_foreign, which wgpu does not enable itself (0001); the cosmic-text system's
+#                  strikeout metrics read from the face's OS/2 table (0002)
 #   gpui-pre-linux the native key behind each key event GPUI dispatches on Wayland and X11 (its XKB keycode, layout
 #                  character and modifiers), which GPUI's `Keystroke` drops, for the terminal's physical-key bindings
 #                  and the Kitty keyboard protocol, and a text/html clipboard offer beside or instead of the text
 #                  (Task 14 of the plan, 0001); the Wayland displays' logical geometry from xdg-output, right at a
-#                  fractional scale (Task 24, 0002)
+#                  fractional scale (Task 24, 0002); an X11 window's minimized and maximized state read back, and KWin's
+#                  blur behind a blurred X11 window (Task 33, 0003)
 #
 # Each source is the crates.io archive of GPUI_VERSION, verified against SHA256 below: the release's crates.io
 # checksum (the `cksum` of its version's line in the crates.io index, https://index.crates.io/gp/ui/<crate>, also what

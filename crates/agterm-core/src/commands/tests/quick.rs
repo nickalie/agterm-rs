@@ -331,6 +331,27 @@ fn only_a_panel_the_user_summoned_hides_when_it_loses_focus() {
     assert!(!fixture.core.quick_visible());
 }
 
+/// Upstream's `toggle(fromGlobalHotkey: true)`: a key pressed in another application right after the panel was
+/// dismissed by losing the keyboard still shows it, and a second press hides it; the panel it shows dismisses on blur.
+#[test]
+fn the_global_hotkey_shows_the_panel_right_after_a_focus_loss_dismissal() {
+    let mut fixture = Fixture::new(0);
+    fixture.core.toggle_quick_terminal();
+    let blurred = Instant::now();
+    fixture.core.quick_lost_focus_at(blurred);
+    assert!(!fixture.core.quick_visible());
+    fixture.core.toggle_quick_terminal_from_global_hotkey();
+    assert!(
+        fixture.core.quick_visible(),
+        "no re-show suppression from another application"
+    );
+    fixture.core.toggle_quick_terminal_from_global_hotkey();
+    assert!(!fixture.core.quick_visible());
+    fixture.core.toggle_quick_terminal_from_global_hotkey();
+    fixture.core.quick_lost_focus();
+    assert!(!fixture.core.quick_visible(), "a summoned panel, not a pinned one");
+}
+
 #[test]
 fn a_toggle_right_after_a_focus_loss_dismissal_does_not_show_the_panel_again() {
     let mut fixture = Fixture::new(0);

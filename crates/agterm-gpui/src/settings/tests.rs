@@ -1067,3 +1067,70 @@ fn a_restore_mode_pick_reads_back_the_configured_mode(cx: &mut TestAppContext) {
     assert_eq!(h.settings().effective_restore_mode(), RestoreMode::Rerun);
     assert_eq!(h.item(cx, "settings-restore-mode"), Some(Shown::Row(Some(1))));
 }
+
+/// Upstream's `.textSelection(.enabled)` on the config directory and the diagnostics: each row's text is a read-only
+/// field holding what the row shows, which a click focuses, Ctrl+A selects and Ctrl+C copies, typing leaves alone, and
+/// a change of what the core holds rewrites.
+#[gpui_kit::test]
+fn the_paths_and_diagnostics_are_selectable_text(cx: &mut TestAppContext) {
+    let (mut h, cx) = harness(cx, AppSettings::default());
+    h.tab(cx, Tab::KeyMapping);
+    let shown = |h: &Harness, cx: &mut VisualTestContext, id: &str| {
+        h.view.read_with(cx, |view, cx| {
+            view.selectable(id).map(|selectable| selectable.text(cx).to_string())
+        })
+    };
+    let directory = h.view.read_with(cx, |view, _| view.snapshot().config_dir.clone());
+    assert_eq!(
+        shown(&h, cx, "settings-keymap-directory").as_deref(),
+        Some(directory.as_str())
+    );
+    assert_eq!(
+        shown(&h, cx, "settings-keymap-diagnostics"),
+        None,
+        "No issues. is plain text"
+    );
+    click(cx, "settings-keymap-directory");
+    cx.simulate_keystrokes("ctrl-a ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+        Some(directory.as_str()),
+        "the path copies"
+    );
+    cx.simulate_keystrokes("x backspace");
+    assert_eq!(
+        shown(&h, cx, "settings-keymap-directory").as_deref(),
+        Some(directory.as_str()),
+        "typing changes nothing"
+    );
+
+    // a broken hooks file: its diagnostics become selectable lines, and a new directory rewrites the path
+    let other = h.dir.path().join("elsewhere");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("hooks.conf"), "nonsense\n").unwrap();
+    h.state
+        .core
+        .change_settings(SettingsChange::ConfigDirectory(Some(other.display().to_string())));
+    h.settle(cx);
+    assert_eq!(
+        shown(&h, cx, "settings-keymap-directory").as_deref(),
+        Some(other.display().to_string().as_str())
+    );
+    let lines = h.view.read_with(cx, |view, _| {
+        view.sections()
+            .into_iter()
+            .flat_map(|section| section.items)
+            .find_map(|item| match item.control {
+                crate::settings::form::Control::Diagnostics { lines } if item.id == "settings-hooks-diagnostics" => {
+                    Some(lines)
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    });
+    assert!(!lines.is_empty(), "the broken hooks file has a diagnostic");
+    assert_eq!(
+        shown(&h, cx, "settings-hooks-diagnostics").as_deref(),
+        Some(lines.join("\n").as_str())
+    );
+}

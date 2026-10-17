@@ -3,5 +3,5 @@ mod linux;
 
 pub use linux::{
     ClipboardHtml, HTML_MIME_TYPE, NativeInput, NativeKey, current_native_input, current_platform, linux_platform,
-    with_clipboard_html,
+    with_clipboard_html, x11_scale_factor, x11_window_maximized, x11_window_minimized,
 };

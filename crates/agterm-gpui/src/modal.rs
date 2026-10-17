@@ -409,10 +409,32 @@ pub struct AlertSpec {
 }
 
 impl AlertSpec {
-    /// A destructive confirmation (upstream's `confirmDelete` and `confirmCloseSession` sheets, the GTK build's
-    /// alerts): Cancel, the default and the close response, then `verb` drawn destructive.
+    /// A destructive confirmation (upstream's `confirmDelete`, `confirmCloseSession(s)`, `confirmClearFlags` and the
+    /// window close sheet): Cancel, the close response, then `verb`, the default and drawn destructive, as upstream's
+    /// `NSAlert` makes its first button, the verb, the Return default. (The GTK build kept Cancel the default:
+    /// libadwaita never makes a destructive response the default; upstream wins here.)
     #[must_use]
     pub fn confirm(heading: impl Into<String>, body: impl Into<String>, verb: impl Into<SharedString>) -> Self {
+        Self {
+            heading: heading.into(),
+            body: body.into(),
+            buttons: vec![
+                AlertButton::cancel("Cancel"),
+                AlertButton::plain(verb).as_default().destructive(),
+            ],
+            checks: Vec::new(),
+            field: None,
+        }
+    }
+
+    /// A destructive confirmation whose default is Cancel (upstream's Reset Live Sessions alert, whose first button is
+    /// Cancel): Cancel, the default and the close response, then `verb` drawn destructive.
+    #[must_use]
+    pub fn confirm_cancelling(
+        heading: impl Into<String>,
+        body: impl Into<String>,
+        verb: impl Into<SharedString>,
+    ) -> Self {
         Self {
             heading: heading.into(),
             body: body.into(),
@@ -662,6 +684,9 @@ impl Alert {
         };
         div()
             .id(id)
+            .when_some(spec.id.clone(), gpui_kit::StatefulInteractiveElement::accessibility_id)
+            .role(gpui_kit::Role::CheckBox)
+            .aria_label(SharedString::from(spec.label.clone()))
             .flex()
             .items_center()
             .gap_2()
@@ -710,6 +735,12 @@ impl Alert {
         div()
             .id(id)
             .debug_selector(move || selector)
+            .when_some(
+                button.id.clone(),
+                gpui_kit::StatefulInteractiveElement::accessibility_id,
+            )
+            .role(gpui_kit::Role::Button)
+            .aria_label(button.label.clone())
             .when(!stacked, gpui_kit::Styled::flex_1)
             .flex()
             .justify_center()

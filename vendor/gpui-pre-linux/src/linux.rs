@@ -8,6 +8,7 @@ mod platform;
 mod system_notifications;
 #[cfg(any(feature = "wayland", feature = "x11"))]
 mod text_system;
+mod window_state;
 #[cfg(feature = "wayland")]
 mod wayland;
 #[cfg(feature = "x11")]
@@ -21,6 +22,9 @@ pub use clipboard_html::{ClipboardHtml, HTML_MIME_TYPE, with_clipboard_html};
 pub(crate) use clipboard_html::take_clipboard_html;
 pub use dispatcher::*;
 pub use native_key::{NativeInput, NativeKey, current_native_input};
+pub use window_state::{x11_scale_factor, x11_window_maximized, x11_window_minimized};
+#[cfg(feature = "x11")]
+pub(crate) use window_state::{forget_x11_window, note_x11_scale_factor, note_x11_state};
 pub(crate) use native_key::NativeScope;
 #[cfg(any(feature = "wayland", feature = "x11"))]
 pub(crate) use native_key::native_key;

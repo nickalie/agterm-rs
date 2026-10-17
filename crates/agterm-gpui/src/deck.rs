@@ -49,7 +49,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Bounds, Context, CursorStyle, Entity, FocusHandle, Focusable as _,
     InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels, Render,
-    SharedString, Styled, Subscription, Window, canvas, div, point, px, size,
+    SharedString, StatefulInteractiveElement as _, Styled, Subscription, Window, canvas, div, point, px, size,
 };
 use uuid::Uuid;
 
@@ -206,13 +206,16 @@ pub struct Look {
 }
 
 impl Look {
+    /// The deck's colors in a window rendering at `window_opacity` (1, or the translucency's below it): the mute wash
+    /// is scaled by it, as upstream's `muteWashOpacity` is, so a muted pane over a translucent backing stays as see-through
+    /// as the title bar beside it.
     #[must_use]
-    pub fn of(config: &TerminalConfig, core: &Core) -> Self {
+    pub fn of(config: &TerminalConfig, core: &Core, window_opacity: f64) -> Self {
         let rgb = |color: agterm_term::Rgb| Rgb::new(color.r, color.g, color.b);
         Self {
             background: rgb(config.theme.background),
             foreground: rgb(config.theme.foreground),
-            mute: core.settings().inactive_pane_mute_opacity(),
+            mute: core.settings().inactive_pane_mute_opacity() * window_opacity,
         }
     }
 }
@@ -229,10 +232,22 @@ pub struct PaneTerminal {
     exit_held: Rc<Cell<bool>>,
     /// The terminal's own config overlay (its background), loaded over the app's config.
     overlay: RefCell<Option<String>>,
+    /// The background a program set with OSC 11 while it shows, and the window opacity its overlay lifts the
+    /// terminal's `background-opacity` to (upstream's `oscBackgroundColorHex` and `applyOSCBackground`): under window
+    /// translucency the terminals render transparent, which would hide it.
+    osc_background: RefCell<Option<(String, f64)>>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl PaneTerminal {
+    /// The overlay the terminal renders with: the OSC 11 lift while a program's background shows, else its own.
+    fn effective_overlay(&self) -> Option<String> {
+        match &*self.osc_background.borrow() {
+            Some((_, opacity)) => Some(agterm_core::watermark::osc_background_overlay_text(None, *opacity)),
+            None => self.overlay.borrow().clone(),
+        }
+    }
+
     #[must_use]
     pub fn token(&self) -> &str {
         &self.spec.token
@@ -428,6 +443,8 @@ pub struct Deck {
     grid_focus: Option<FocusHandle>,
     /// The dashboard's transient font sizes on its member terminals.
     fonts: crate::dashboard::FontOverrides,
+    /// The session whose terminal the window is zoomed into, as last reconciled.
+    zoomed: Option<Uuid>,
 }
 
 /// An open dashboard as the deck draws it: the cells and the terminal each hosts.
@@ -483,6 +500,7 @@ impl Deck {
             grid: None,
             grid_focus: None,
             fonts: crate::dashboard::FontOverrides::default(),
+            zoomed: None,
         }
     }
 
@@ -626,11 +644,13 @@ impl Deck {
         for spec in &plan.add {
             self.add_page(core, spec, window, cx);
         }
-        self.look = Look::of(&self.env.config(), core);
+        let window_opacity = crate::chrome::translucency(cx).effective(window.is_fullscreen());
+        self.look = Look::of(&self.env.config(), core, window_opacity);
         let zoom = core
             .zoom_target(self.window)
             .filter(|zoom| self.pages.contains_key(&zoom.session));
         let grid = crate::dashboard::GridModel::of(core, self.window);
+        self.zoomed = zoom.map(|zoom| zoom.session);
         // under the grid no page shows: it hosts its members' terminals itself
         let shown = zoom.map(|zoom| zoom.session).or(plan.shown).filter(|_| grid.is_none());
         let modal = modal || crate::quick::holds_keyboard(cx);
@@ -744,9 +764,13 @@ impl Deck {
                 }
             })
             .collect();
+        let chrome = crate::chrome::current(cx);
         let look = crate::dashboard::Look {
             background: self.look.background,
             foreground: self.look.foreground,
+            selection: chrome
+                .selection_background
+                .map(|fill| (fill, chrome.selection_foreground)),
         };
         let animate = crate::status_glyph::animations_enabled(cx);
         crate::dashboard::grid(self.window, cells, look, &self.env.poster, animate)
@@ -835,7 +859,8 @@ impl Deck {
         page.covers = covers;
         page.show(shown, cx);
         hold_keys(page, &self.env.poster);
-        sync_watermarks(&self.env, page, session, cx);
+        let opacity = crate::chrome::translucency(cx).opacity;
+        sync_watermarks(&self.env, page, session, opacity, cx);
         sync_ask(page, session, sync, shown && sync.zoom.is_none(), &self.env.poster, cx);
     }
 
@@ -843,7 +868,8 @@ impl Deck {
     /// appearance flip) each keeps its live font size.
     pub fn apply_config(&self, keep_zoom: bool, cx: &mut Context<Self>) {
         for pane in self.terminals() {
-            let config = self.env.config_for(pane.overlay.borrow().as_deref());
+            // a program's OSC 11 background survives the reload (upstream's `reapplySessionConfigIfNeeded`)
+            let config = self.env.config_for(pane.effective_overlay().as_deref());
             pane.terminal.update(cx, |terminal, cx| {
                 if keep_zoom {
                     terminal.flip_config(config, cx);
@@ -1020,6 +1046,10 @@ impl Deck {
             // the dashboard's transient size, or the revert from it: not the pane's own size
             return;
         }
+        if let TerminalEvent::Pane(agterm_term::PaneEvent::Colors(colors)) = event {
+            let opacity = crate::chrome::translucency(cx).opacity;
+            osc_background_changed(&self.env, pane, colors, opacity, cx);
+        }
         if let TerminalEvent::Pane(agterm_term::PaneEvent::Exited(status)) = event
             && status.held
         {
@@ -1110,6 +1140,8 @@ impl Deck {
         };
         let session = page.session;
         let hosted = self.hosted(session);
+        // a zoomed page shows its zoomed terminal alone (upstream's `terminal-zoom` layer)
+        let zoomed = visible && self.zoomed == Some(session);
         let mut element = PageElement::new(plan.panes, plan.axis, plan.ratio, Rc::clone(&page.state));
         // the terminals, hidden ones under the page at full size; the grid draws the ones it hosts
         for pane in page
@@ -1118,7 +1150,10 @@ impl Deck {
             .filter(|pane| pane.spec.pane != StatusPane::Scratch && !hosted.contains(&pane.token()))
         {
             let shown = pane.view.read(cx).is_shown();
-            element = element.child(terminal_wrapper(pane, shown), terminal_place(plan, pane.token()));
+            element = element.child(
+                terminal_wrapper(pane, shown, zoomed && shown),
+                terminal_place(plan, pane.token()),
+            );
         }
         for slot in [Slot::Primary, Slot::Split] {
             if let Some((color, opacity)) = page.washes.wash(slot, false) {
@@ -1153,7 +1188,10 @@ impl Deck {
         }
         if let Some(scratch) = page.panes.iter().find(|pane| pane.spec.pane == StatusPane::Scratch) {
             let shown = scratch.view.read(cx).is_shown();
-            element = element.child(terminal_wrapper(scratch, shown), Place::Pane(Slot::Scratch));
+            element = element.child(
+                terminal_wrapper(scratch, shown, zoomed && shown),
+                Place::Pane(Slot::Scratch),
+            );
         }
         if let Some((regions, opacity)) = page.washes.backdrop.clone() {
             element = element.child(backdrop(regions, opacity, plan, Rc::clone(&page.state)), Place::Full);
@@ -1201,8 +1239,10 @@ impl Deck {
 }
 
 impl Render for Deck {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let background = mute::color(self.look.background, 1.0);
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // a translucent window's backing shows through: the terminals draw no background of their own then
+        let see_through = crate::chrome::see_through(window, cx);
+        let background = mute::color(self.look.background, if see_through { 0.0 } else { 1.0 });
         let pages: Vec<AnyElement> = self
             .order
             .iter()
@@ -1232,6 +1272,7 @@ impl Render for Deck {
         let grid = self.grid.as_ref().map(|grid| self.grid_layer(grid, cx));
         div()
             .id("deck")
+            .debug_selector(|| "deck".to_owned())
             .relative()
             .size_full()
             .min_w(px(0.))
@@ -1310,11 +1351,21 @@ fn terminal_place(plan: &PanePlan, token: &str) -> Place {
 
 /// A pane's terminal view inside a wrapper that is drawn only while the view shows. A key press on a terminal
 /// holding its keys (a lead cover, a held exit) runs its hold in the terminal's key path (`Shared::held_key`).
-fn terminal_wrapper(pane: &PaneTerminal, shown: bool) -> impl IntoElement {
-    div()
+fn terminal_wrapper(pane: &PaneTerminal, shown: bool, zoomed: bool) -> AnyElement {
+    let wrapper = div()
         .size_full()
         .when(!shown, Styled::invisible)
-        .child(pane.view.clone())
+        .child(pane.view.clone());
+    if zoomed {
+        // the zoomed terminal: upstream's accessibility identifier as its element id
+        return wrapper
+            .id("terminal-zoom")
+            .debug_selector(|| "terminal-zoom".to_owned())
+            .accessibility_id("terminal-zoom")
+            .role(gpui_kit::Role::Group)
+            .into_any_element();
+    }
+    wrapper.into_any_element()
 }
 
 /// A solid wash at `opacity` over the area it is laid out on; it takes nothing.
@@ -1460,6 +1511,7 @@ fn mount_with(
         cover_holds: Rc::new(Cell::new(false)),
         exit_held: Rc::new(Cell::new(false)),
         overlay: RefCell::new(None),
+        osc_background: RefCell::new(None),
         _subscriptions: vec![events, focus],
     }
 }
@@ -1473,8 +1525,10 @@ fn launch_seeded(env: &DeckEnv, pane: &PaneTerminal, seed: &LaunchSeed) {
 }
 
 /// Applies `session`'s background (and its per-pane overrides) to the terminals of its page, on every page sync, each
-/// only when its own changed ([`crate::watermark`]).
-fn sync_watermarks(env: &DeckEnv, page: &Page, session: &Session, cx: &mut App) {
+/// only when its own changed ([`crate::watermark`]), a solid color at the window's `opacity`; a program's OSC 11
+/// background follows a change of the opacity too (upstream's `reapplyColorBackgroundIfNeeded`), and a background
+/// applied over it takes its place (upstream's `applyWatermarkFromSession` releases the OSC latch).
+fn sync_watermarks(env: &DeckEnv, page: &Page, session: &Session, opacity: f64, cx: &mut App) {
     let foreground = env.config().theme.foreground;
     let foreground = Rgb::new(foreground.r, foreground.g, foreground.b);
     let state_dir = env.watermarks.state_dir.as_path();
@@ -1482,17 +1536,57 @@ fn sync_watermarks(env: &DeckEnv, page: &Page, session: &Session, cx: &mut App) 
         let Some(role) = session.pane_role_for_token(pane.token()) else {
             continue;
         };
-        let desired = watermark::desired(session, role, foreground, state_dir);
+        let desired = watermark::desired(session, role, foreground, state_dir, opacity);
         let Some(stale) = watermark::change(&pane.shared, &desired) else {
+            let lifted = pane.osc_background.borrow().as_ref().map(|(_, lifted)| *lifted);
+            if lifted.is_some_and(|lifted| (lifted - opacity).abs() > f64::EPSILON) {
+                if let Some((_, lifted)) = &mut *pane.osc_background.borrow_mut() {
+                    *lifted = opacity;
+                }
+                let config = env.config_for(pane.effective_overlay().as_deref());
+                pane.terminal.update(cx, |terminal, cx| terminal.set_config(config, cx));
+            }
             continue;
         };
         let resolved = watermark::materialize(&desired, state_dir);
         let overlay = Some(watermark::overlay(&desired, resolved.as_deref())).filter(|overlay| !overlay.is_empty());
         let config = env.config_for(overlay.as_deref());
         *pane.overlay.borrow_mut() = overlay;
+        *pane.osc_background.borrow_mut() = None;
         pane.terminal.update(cx, |terminal, cx| terminal.set_config(config, cx));
         watermark::remember(&pane.shared, desired, stale);
     }
+}
+
+/// A program changed `pane`'s colors: its background goes through upstream's `OSCBackgroundPolicy` against the color
+/// the terminal's config seeded (its own color background, else the theme's). A set lifts the terminal's
+/// `background-opacity` to the window's `opacity` so the color shows over a translucent window; a reset (OSC 111)
+/// drops the lift, back to the terminal's own overlay.
+fn osc_background_changed(
+    env: &DeckEnv,
+    pane: &PaneTerminal,
+    colors: &agterm_term::TerminalColors,
+    opacity: f64,
+    cx: &mut App,
+) {
+    use agterm_core::osc_background::{self, Decision};
+    let Some(background) = colors.background else {
+        return;
+    };
+    let hex = |color: agterm_term::Rgb| format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b);
+    let incoming = hex(background);
+    let theme = hex(env.config().theme.background);
+    let own = watermark::own_color(&pane.shared);
+    let current = pane.osc_background.borrow().as_ref().map(|(color, _)| color.clone());
+    let baseline = osc_background::baseline(current.is_some(), own.as_deref(), Some(&theme));
+    let decision = osc_background::decide(&incoming, baseline, current.as_deref());
+    match decision {
+        Decision::Apply(color) => *pane.osc_background.borrow_mut() = Some((color, opacity)),
+        Decision::Reset => *pane.osc_background.borrow_mut() = None,
+        Decision::Ignore => return,
+    }
+    let config = env.config_for(pane.effective_overlay().as_deref());
+    pane.terminal.update(cx, |terminal, cx| terminal.set_config(config, cx));
 }
 
 /// Marks every terminal of `page` holding its keys or not: covered or waiting to be attached again (a key press asks

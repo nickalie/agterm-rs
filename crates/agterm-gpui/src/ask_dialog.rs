@@ -519,6 +519,8 @@ impl AskDialog {
         let reveal = highlighted.then(|| self.reveal_canvas());
         div()
             .id(SharedString::from(selector.clone()))
+            .accessibility_id(SharedString::from(selector.clone()))
+            .role(gpui_kit::Role::Button)
             .debug_selector(move || selector)
             .relative()
             .when_some(width, |button, width| button.w(modal::logical(width)))
@@ -650,6 +652,8 @@ impl AskDialog {
             .child(
                 div()
                     .id("ask-title")
+                    .accessibility_id("ask-title")
+                    .role(gpui_kit::Role::Heading)
                     .font_weight(FontWeight::BOLD)
                     .child(SharedString::from(self.ask.title.clone())),
             )
@@ -659,6 +663,8 @@ impl AskDialog {
                     content.child(
                         div()
                             .id("ask-message")
+                            .accessibility_id("ask-message")
+                            .role(gpui_kit::Role::Label)
                             .text_color(message_ink)
                             .child(SharedString::from(message)),
                     )
@@ -667,6 +673,8 @@ impl AskDialog {
             .child(strip);
         panel
             .id("ask-dialog")
+            .accessibility_id("ask-dialog")
+            .role(gpui_kit::Role::Dialog)
             .text_size(self.text_size())
             .max_w(modal::logical(cap))
             .when(self.ask.width.is_some(), |panel| panel.w(modal::logical(cap)))

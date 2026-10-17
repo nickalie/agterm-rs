@@ -27,6 +27,7 @@ agterm-zmx.workspace = true
 ashpd.workspace = true
 async-channel.workspace = true
 cosmic-text.workspace = true
+fancy-regex.workspace = true
 futures-util.workspace = true
 gpui-kit.workspace = true
 image.workspace = true
@@ -35,7 +36,8 @@ notify.workspace = true
 # text watermarks are written as PNG files the terminals' `background-image` reads
 png.workspace = true
 raw-window-handle.workspace = true
-regex.workspace = true
+# the windows' saved frames (`window_frames.rs`)
+serde.workspace = true
 serde_json.workspace = true
 signal-hook.workspace = true
 # write_*_file: the screen file goes into a temporary directory of its own, as Ghostty's does
@@ -48,7 +50,9 @@ uuid.workspace = true
 wayland-backend.workspace = true
 wayland-client.workspace = true
 wayland-protocols.workspace = true
-x11rb.workspace = true
+# RandR: the X11 monitors a restored window is kept on (`monitors.rs` `display_rects`), which GPUI's one display per X
+# screen spans
+x11rb = { workspace = true, features = ["randr"] }
 zbus.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -65,6 +69,9 @@ netlink-sys.workspace = true
 agterm-host = { workspace = true, features = ["fakes"] }
 gpui-kit = { workspace = true, features = ["test-support"] }
 gpui-pre-wgpu.workspace = true
+# the global hotkey's test presses its keys on a private Xvfb through XTEST (tests/global_hotkey.rs); the window test
+# lays monitors out on one through RandR (tests/x11_window.rs)
+x11rb = { workspace = true, features = ["randr", "xtest"] }
 
 # GPUI's headless renderer opens one GPU device per process, so the external texture cases run in a child process per
 # Vulkan driver, which this harness starts (tests/external_texture/main.rs).

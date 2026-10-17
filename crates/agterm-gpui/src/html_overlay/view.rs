@@ -40,8 +40,8 @@ use gpui_kit::{
     App, Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase, DmaBufPlane, DmaBuffer, ElementInputHandler,
     EntityInputHandler, FocusHandle, Focusable, HitboxBehavior, InteractiveElement as _, IntoElement, KeyUpEvent,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, PixelRect,
-    Pixels, Render, ScrollWheelEvent, SharedString, Styled as _, Subscription, UTF16Selection, Window, canvas, div,
-    point, px, size,
+    Pixels, Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
+    UTF16Selection, Window, canvas, div, point, px, size,
 };
 
 use super::input;
@@ -94,6 +94,8 @@ pub struct PageView {
     released: bool,
     /// Wakes the element from the renderer's threads when a dmabuf failed to import there.
     import_failed: async_channel::Sender<()>,
+    /// A failed load's error as selectable text (upstream's `.textSelection(.enabled)`).
+    error: Option<crate::selectable::Selectable>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -131,6 +133,7 @@ impl PageView {
             caret: None,
             released: false,
             import_failed,
+            error: None,
             _subscriptions: vec![focused, blurred],
         }
     }
@@ -729,6 +732,7 @@ impl Render for PageView {
             .zip(self.bounds)
             .map(|(menu, bounds)| menus::element(menu, bounds, &colors, cx));
         let content = self.content(window, cx);
+        let error = self.error_text(&overlay, window, cx);
         div()
             .id(SharedString::from(format!("html-page-{}", overlay.id)))
             .debug_selector(|| "html-page".to_owned())
@@ -740,7 +744,10 @@ impl Render for PageView {
             .children(panel::strip(&overlay, &colors, &poster))
             .child(
                 div()
-                    .id("html-content")
+                    .id("htmlOverlay.page")
+                    .debug_selector(|| "htmlOverlay.page".to_owned())
+                    .accessibility_id("htmlOverlay.page")
+                    .role(gpui_kit::Role::Document)
                     .relative()
                     .flex_1()
                     .min_h(px(0.))
@@ -748,9 +755,38 @@ impl Render for PageView {
                     .on_key_up(cx.listener(Self::key_up))
                     .on_modifiers_changed(cx.listener(Self::modifiers_changed))
                     .child(content)
-                    .children(panel::failure(&overlay, &colors)),
+                    .children(panel::failure(&overlay, &colors, error)),
             )
             .children(menu)
+    }
+}
+
+impl PageView {
+    /// The failed load's error the selectable text holds.
+    #[cfg(test)]
+    pub(super) fn error_shown(&self, cx: &App) -> Option<String> {
+        self.error.as_ref().map(|error| error.text(cx).to_string())
+    }
+
+    /// A failed load's error as selectable text, kept in step with the model's; `None` while the page did not fail.
+    fn error_text(
+        &mut self,
+        overlay: &agterm_core::html::HtmlOverlay,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<gpui_kit::AnyElement> {
+        let error = overlay
+            .load_error
+            .as_deref()
+            .filter(|_| overlay.load_state == agterm_core::html::HtmlLoadState::Failed)?;
+        match &self.error {
+            Some(shown) => shown.set(error, window, cx),
+            None => self.error = Some(crate::selectable::Selectable::lines(error, window, cx)),
+        }
+        let colors = self.page.colors();
+        self.error
+            .as_ref()
+            .map(|shown| shown.element("htmlOverlay.error-text", colors.ink(1.0), px(12.), false))
     }
 }
 

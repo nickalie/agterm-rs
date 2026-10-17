@@ -59,9 +59,10 @@ pub struct ProgramPlacement {
     pub fraction: Option<f64>,
 }
 
-/// The overlay terminal's own config: its `#rrggbb` background, else nothing (the theme's).
+/// The overlay terminal's own config: its `#rrggbb` background at the window's `opacity` (upstream's
+/// `applyOverlayBackgroundColor` bakes the translucency in at open time), else nothing (the theme's).
 #[must_use]
-pub fn config_overlay(background: Option<&str>) -> String {
+pub fn config_overlay(background: Option<&str>, opacity: f64) -> String {
     let color = background.map(|hex| BackgroundWatermark {
         kind: WatermarkKind::Color,
         image_path: None,
@@ -72,7 +73,7 @@ pub fn config_overlay(background: Option<&str>) -> String {
         position: None,
         repeats: None,
     });
-    watermark::overlay_text(color.as_ref(), None, None, 1.0)
+    watermark::overlay_text(color.as_ref(), None, None, opacity)
 }
 
 /// The focus key of the session-wide program's terminal of `generation`, or of pane overlay `generation`'s.
@@ -563,7 +564,7 @@ fn spawn(
     let env = mount.hud.env;
     let program = Program::of(session, pane);
     let launch = launch(session, &program, mount.hud);
-    let overlay = config_overlay(program.background.as_deref());
+    let overlay = config_overlay(program.background.as_deref(), crate::chrome::translucency(cx).opacity);
     let config = env.config_for(Some(&overlay));
     #[expect(clippy::cast_possible_truncation, reason = "a point size fits an f32")]
     let font_size = session.font_size.map(|size| size as f32);
