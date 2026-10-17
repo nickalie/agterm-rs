@@ -2931,12 +2931,147 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
 
 ### Task 35: Verify acceptance criteria
 
-- [ ] every Overview requirement implemented; GTK removed only after parity including HTML overlays
-- [ ] edge cases: kitty keyboard protocol apps, IME on a Cyrillic layout, wide/emoji text, huge output throughput,
+- [x] every Overview requirement implemented; GTK removed only after parity including HTML overlays (parity except the
+      deferred Ghostty config keys, user-approved 2026-10-17: see the ➕ (review) line below)
+- [x] edge cases: kitty keyboard protocol apps, IME on a Cyrillic layout, wide/emoji text, huge output throughput,
       config diagnostics counts, single-instance forwarding (incl. a GTK-build launch), quick terminal on niri and the
       fallback, SIGTERM deadline
-- [ ] `cargo fmt --all --check`, clippy `-D warnings`, `scripts/lint-report.sh`, `cargo test --workspace`
-- [ ] full `conformance/tools/run-rust-linux.sh` in the background; ratchet green; chrome probe and sprite goldens green
+- [x] `cargo fmt --all --check`, clippy `-D warnings`, `scripts/lint-report.sh`, `cargo test --workspace`
+- [x] full `conformance/tools/run-rust-linux.sh` in the background; ratchet green; chrome probe and sprite goldens green
+- result (2026-10-17):
+  - **Overview, walked against the code and the task notes**: the GTK frontend is gone and `agterm-gpui` is the
+    `agterm` binary (Task 34, `f710308`); the terminal is libghostty-vt through its official C API with our own
+    checked-in bindgen crate and safe wrapper (`agterm-ghostty-vt-sys`, `agterm-ghostty-vt`; no third-party
+    libghostty-vt crate in `Cargo.lock`), drawn by GPUI (`terminal/element.rs`); `agterm-proto` and `agterm-zmx` are
+    unchanged since the plan's base (`5a1fb9a`), `agterm-host`, `agterm-server` and `agterm-ctl` changed only in docs,
+    fakes and test fixes (the `/proc/locks` re-read and the SIGPIPE-free stream bridge are robustness fixes of their
+    own), `agterm-core`'s additions are the ghostty config parser and keybind actions plus frontend-neutral parity
+    ports (`window_geometry`, the quick terminal's and palette's model); everything without a window is tested
+    without one (`agterm-term`'s real-PTY tests, core on the host fakes). GTK went only after parity including HTML
+    overlays: the merges run Task 32 (HTML overlay on GPUI + WPE, `5357fdf`) → Task 33 (checklist walk, `8d5bf71`) →
+    Task 34's preconditions (GPUI ratchet ⊇ GTK's, Kitty gaps closed, `f3c0f93`) → the switch (`c1cef81`).
+    ⚠️ "Nothing may close the other platforms": kept by the design (GPUI, libghostty-vt, `portable-pty`, the
+    `agterm-term` engine boundary; the Linux pieces — WPE, layer-shell, X11/Wayland activation, zbus — sit in
+    `agterm-gpui`/`agterm-wpe`, partly behind `cfg(target_os = "linux")`), but not compile-checked: no macOS or
+    Windows target is installed here and installing one is outside this run; `agterm-gpui`'s Wayland, X11 and zbus
+    dependencies are unconditional in its manifest, a port gates them.
+  - **Gaps found and fixed** (each with tests):
+    - wide/emoji text: libghostty-vt leaves grapheme clustering (mode 2027) off, Ghostty's termio makes it every
+      terminal's default for `grapheme-width-method = unicode`, its default (at 683d8db and at the vt pin), so a ZWJ
+      family took six cells and a VS16 heart one, against two and two in upstream and the GTK build. Now the
+      pane sets it through `GHOSTTY_TERMINAL_OPT_MODE_DEFAULT` (`Terminal::set_mode_default`, so a RIS keeps it),
+      `legacy` leaves it off; `image-storage-limit` is applied too (to live panes on a reload, as Ghostty does)
+      (`e4cb829`). Tests: `agterm-ghostty-vt` `a_mode_default_holds_across_a_reset_and_a_plain_set_does_not`,
+      `agterm-term` `tests/graphemes.rs` (4: cells and widths of a ZWJ family, `e`+U+0301 and a VS16 heart, the
+      cursor past them, read-back; a selection over any cell of a cluster taking the whole cluster, copy and word
+      selection; the cursor on a wide tail; a RIS keeping clustering and `legacy` counting each codepoint), core
+      `grapheme_width_method_and_image_storage_limit_keys`, GPUI
+      `an_emoji_sequence_and_a_combining_mark_are_one_cluster_each_on_their_columns`,
+      `the_grapheme_width_method_reaches_a_new_terminal`. Three of the four `graphemes.rs` tests fail with the default
+      reverted.
+    - the launch keys libghostty applied to every surface it launched, which Task 11 left out (its ⚠️): `env` (over
+      the terminal's own variables, under the launch's), `input` (`raw:` with Zig escapes, `path:` up to 10 MB, none
+      sent when a source is missing; a launch's own initial input wins), `working-directory` (`home`, `inherit`, an
+      absolute or `~/` path, for a launch without its own), `shell-integration` (`none` injects nothing, a forced
+      `bash`/`fish`/`zsh` scheme for the login shell whatever its name, `elvish`/`nushell` nothing as before),
+      `wait-after-command` (every launch) and `abnormal-command-exit-runtime` (`3bdff67`; core `launching.rs`,
+      `agterm_term::Host`). Tests: core `the_launch_keys_keep_ghosttys_defaults_and_follow_their_lines`,
+      `env_is_a_map_and_input_a_list_of_sources`, `working_directory_takes_home_inherit_or_a_path`; `agterm-term`
+      launch tests (5 new); GPUI `the_configs_launch_keys_reach_every_pane_the_host_launches`.
+  - ⚠️ **Kept by the plan's design**: the other 140 known Ghostty keys outside the typed model stay "known, ignored
+    and logged" (Solution Overview > Config, Task 7's supported subset; the decision order for this run puts the
+    plan's stated intent first): macOS-, GTK- and window-level keys agterm owns itself, and terminal features the
+    GTK build got from libghostty's renderer and stream handler only when set (`adjust-*`, `font-thicken*`,
+    `font-style-*`, `font-variation*`, `font-synthetic-style`, `freetype-load-flags`, `minimum-contrast`,
+    `bold-color`, `faint-opacity`, `alpha-blending`, `background-opacity-cells`, `palette-generate`/`-harmonious`,
+    `search-*` colors, `osc-color-report-format`, `enquiry-response`, `title-report`, `vt-kam-allowed`,
+    `scroll-to-bottom`, `bell-features`, `link-previews`, `scrollback-compression`, the `vt-xt-checksum-*` pair). Their
+    defaults are what the GPUI build does; a user-set value is ignored (logged at debug) and counts as libghostty
+    counted it. Closing them is per-key renderer and stream work beyond a verification task.
+  - ➕ (review) the plan did not authorize dropping these keys (Solution Overview > Config is a diagnostics-counting
+    rule, Task 7's subset a parser checklist), so the paragraph above was a deferral this run granted itself. **The
+    user approved the deferral on 2026-10-17** («Давай отложим эти ключи»), an explicit scope exception. Counted from
+    the key table: the GPUI model ignores 148 known keys (`keybind`, `config-file` and `command` are read elsewhere).
+    49 of them the GTK build honored through libghostty's core, renderer and termio: font metrics and styles (25),
+    colors and rendering (13), protocol responses (4), behavior (7). They are the deferred work. 31 are macOS only, 64
+    are Ghostty app-runtime keys the GTK build did not honor either (it ran libghostty's embedded runtime), 3 are newer
+    than the GTK build's Ghostty and 1 is CLI only. The per-key list, with each key's evidence:
+    `docs/ghostty-config-parity.md`; the work item: `docs/backlog/implement-deferred-ghostty-config-keys.md`. The
+    same review fixed the launch keys: `env` and `input` lines libghostty refuses now count, `env` trims around `=`,
+    `input` paths are decoded and read through one bounded read of a regular file, and a launch directory that is gone
+    falls back to `working-directory`. It also added a pane test for `image-storage-limit` (at start and on a reload)
+    and made the throughput sampler fail on a failed request.
+  - **Edge cases**, each with its deterministic headless check:
+    - Kitty keyboard protocol: the bytes a program in a real PTY receives under the flags it pushed
+      (`agterm-term` `tests/input.rs` `kitty_encodings_follow_the_flags_the_program_pushed`: flags 1 and 3, Escape,
+      Ctrl-C, Alt-x, a release), the wrapper's `the_kitty_protocol_follows_the_terminal`, GPUI's key path with flags
+      3 (`the_keymaps_chords_release_never_reaches_a_kitty_program`), and new: report-alternate-keys on a real XKB
+      Cyrillic layout, Ctrl-С arriving as `CSI 1089::99;5u` (below), as Ghostty's encoder reports it.
+    - Cyrillic layout and IME: new `tests/keyboard_layout.rs` — a private Xvfb keyboard set to XKB's `ru`, keys
+      pressed through XTEST, the bytes the pane's program received: `с`/`С` on the C key, Ctrl there `^C`, the
+      keymap's `ctrl+e` firing on the У key by position (upstream's `chordKey`), ghostty's physical-key select all,
+      copy and paste (Ctrl+Shift+Ф/С/М) pasting the screen back, and under the Kitty flags 5 `с` and
+      `CSI 1089::99;5u`. (Found on the way: the X server resets its keymap when its last client disconnects, so the
+      test holds a connection across `setxkbmap`.) The preedit/commit path is GPUI's input handler:
+      `a_composition_shows_at_the_cursor_and_its_commit_is_typed`; the layout-independent chords and the
+      interrupt/status classification: `a_native_key_is_its_physical_key_with_the_layouts_character`,
+      `a_key_press_is_classified_for_the_status_glyph_as_the_gtk_build_does`, the picker's Cyrillic J/K regression,
+      core `binds_tests` on a Russian `с`.
+    - wide/emoji text: the tests of the fix above, with `glyphs_sit_at_their_clusters_columns`,
+      `runs_split_by_style_and_keep_wide_characters_on_their_columns`, `styles_colors_and_wide_cells_come_through`,
+      `read_back_joins_wrapped_lines_and_keeps_wide_characters`, the cursor's wide-tail cases in
+      `the_cursor_shape_follows_focus_blink_and_visibility` and `a_password_prompt_shows_the_lock_whatever_the_cursor`.
+    - huge output: new `tests/throughput.rs` — the app on a private Xvfb (lavapipe) and a pane program writing
+      mixed text (SGR, Cyrillic, CJK, emoji, wrapping lines) as fast as the pane takes it, a sampler asking the main
+      loop for the tree every 100 ms. Measured on this machine (lavapipe paints on the same CPU): 64 MiB at 23-42 MiB/s
+      (4 runs), 512 MiB in 12.0 s (42.7 MiB/s, app CPU 28 s), 1 GiB in 33.7 s (30.4 MiB/s, app CPU 92 s); resident
+      memory 278-280 MB before, 335-337 MB at the peak and after, the same for 64 MiB and 1 GiB (the scrollback limit
+      holds it); the main loop's control answers p50 1-10 ms, p95 18-37 ms, max 20-70 ms throughout; the end on screen
+      at once after the last byte. Bounds asserted (64 MiB by default, `AGTERM_TEST_THROUGHPUT_MB` for
+      more): ≥ 2 MiB/s, the end on screen within 10 s, control p95 < 500 ms and max < 2 s, RSS growth < 512 MB.
+    - config diagnostics counts: core `counts_tests.rs` (the libghostty goldens of every line, include, theme and
+      keybind case), `tests.rs` (every kind's refusals, the residual list), the new keys' refused-line counts, and
+      the suite's `test_reload_applies_the_edited_config_to_open_and_new_sessions` (`config-reload-counts`, 0/1/0).
+    - single-instance forwarding: `tests/instance.rs` all 10 green with a GTK build of this repository from
+      `f3c0f93` as `AGTERM_GTK_BIN` (built from a source export under `target/`, `cargo build -p agterm-gtk`, its own
+      target dir; every launch inside the tests' sandbox: private bus, XDG dirs, display): a GTK launch forwards to the
+      GPUI primary (`DescribeAll`, `Activate`), a GPUI launch forwards to a GTK primary on a private weston, token and
+      startup id forwarded, no state written, plus the nested-niri activation (`--include-ignored`) and X11's
+      `_NET_ACTIVE_WINDOW`/startup-sequence check.
+    - quick terminal: `tests/quick_terminal.rs` all 3 green — an `Overlay` layer surface under a niri nested in a
+      private headless weston (`--include-ignored`), the window fallback on weston without layer-shell and on a
+      private Xvfb (open, size, zoom, hide/show with the shell kept, placement); `tests/global_hotkey.rs` (X11 grab,
+      portal).
+    - SIGTERM deadline: new `tests/quit.rs` — Live mode, four zmx sessions (one flooding with `yes`), a quiet page and
+      a page spinning in `for (;;) {}` over two of them: status 0 in 81-91 ms (4 runs; deadline 10 s), "quit: the
+      state is saved", every session in the saved state, the socket removed, all four Live sessions alive after, and
+      the app's 19 other
+      processes (zmx clients, the `WebKit` worker and web processes) gone; with `instance.rs`'s headless and windowed
+      SIGTERM tests and `privileges.rs`.
+    Each new process test passed 3 runs in a row under `AGTERM_REQUIRE_DISPLAY_TESTS`; CI runs `quit` in the Arch bash
+    leg and the Ubuntu job gets `x11-xkb-utils` (`setxkbmap`) for `keyboard_layout` (`165a789`).
+  - **Gates**: `cargo fmt --all --check`, `cargo metadata --locked`, clippy `-D warnings` (workspace, all targets and
+    features; `agterm-gpui --no-default-features`), `lint-report.sh` (8 complexity expects, none new),
+    `check-tracing-features.sh`, `vendor-gpui.sh --check`, `vendor-calloop.sh --check`, `cargo test --workspace
+    --no-fail-fast` under `GDK_BACKEND=x11 xvfb-run -a dbus-run-session` with `AGTERM_REQUIRE_DISPLAY_TESTS=1` and the
+    `f3c0f93` GTK build as `AGTERM_GTK_BIN`: 4070 passed, 0 failed, 9 ignored (the nested-niri ones, run on their own
+    with `--include-ignored`: green), nothing skipped.
+  - **Conformance**: full `run-rust-linux.sh` (release build, staged into `target/conformance-stage`) inside the
+    zsh-login mount namespace (`with-zsh-login.sh`, read first: a private `/etc/passwd` copy and a read-only `/usr`
+    overlay, the host's untouched, `AGTERM_*`/`ZMX_*` stripped): 667 collected, 667 passed, 0 failed, 0 skipped, 0
+    reruns, parity 100% (suite 479 s); the 667 listed held, the 12 live-session ids among them; no newly green id
+    (`check_ratchet.py --add` added nothing).
+  - **Probes and goldens**: on that stage `chrome_probe.py` (theme, theme change, tint: title bar, sidebar and terminal
+    one color), `ghostty_probe.py` (first frame drawn) and `webkit_probe.py` (the page loaded in WPE's sandbox) all
+    green; the sprite goldens (`tests/sprite_golden.rs`, Ghostty's test images) green in the workspace run.
+  - **Needs the user's real screen** (no headless form): a real input method (IBus/Fcitx) composing in a terminal and
+    a page, real keys on a real seat with a non-Latin layout; YouTube 1080p60 through dmabuf and NVIDIA's own driver;
+    the real portal dialogs; multi-output layer-shell placement; the translucency's look; the AppArmor profile on the
+    GPUI binary (Task 33's list, unchanged).
+  - Nothing of this run is left running (no instance root, zmx session, display, bus or WebKit process of its own);
+    the scratch GTK build is removed.
+  - **Not done here**: the CI matrix's first run on GitHub (the Arch zsh/fish legs, the Ubuntu job's trimmed packages,
+    the probes in the Arch container) needs a push, which this run does not make.
 
 ### Task 36: [Final] Update documentation
 

@@ -65,11 +65,14 @@ PORTED = {
     "Keybinds": "Keybind",
     # validate.rs's decode_codepoints: SelectionWordChars.parseCLI's codepointIterator
     "SelectionWordChars": "SelectionWordChars",
+    # validate.rs: RepeatableStringMap.parseCLI's `=` and ReadableIO.parseCLI's string.parse (decode_zig_string)
+    "RepeatableStringMap": "StringMap",
+    "RepeatableReadableIO": "ReadableIo",
 }
 # Types with a parseCLI validate.rs does not port (by their declaration's name): their values are accepted as is, the
 # residual differences ghostty_config/mod.rs lists. Any other unported parseCLI type stops the script.
 OPAQUE = {
-    "Modifier", "Command", "RepeatableReadableIO", "RepeatableStringMap", "RemapSet", "RepeatableFontVariation",
+    "Modifier", "Command", "RemapSet", "RepeatableFontVariation",
     "RepeatableCodepointMap", "RepeatableClipboardCodepointMap", "FontStyle", "RepeatableLink", "RepeatableCommand",
     "QuickTerminalSize", "BackgroundBlur", "MouseScrollMultiplier", "WorkingDirectory",
     "ColorList",

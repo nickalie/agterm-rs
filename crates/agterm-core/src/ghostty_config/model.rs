@@ -9,6 +9,7 @@ use bitflags::bitflags;
 use strum::{EnumIter, EnumString, IntoStaticStr};
 
 use super::binds::Keybinds;
+use super::launching::Launching;
 use super::parse::{Diagnostic, Setting};
 use super::validate::{
     self, Accepted, Compat, ConfigPath, Padding, TerminalColor, ThemeName, parse_bool, parse_color, parse_float,
@@ -117,6 +118,17 @@ impl Default for CopyOnSelect {
             Self::None
         }
     }
+}
+
+/// `grapheme-width-method`: how wide a multi-codepoint grapheme cluster (an emoji ZWJ sequence, a flag, a base with
+/// a variation selector) is. Ghostty's termio makes grapheme clustering (mode 2027) every terminal's default for
+/// `unicode`; `legacy` leaves the mode off, each codepoint counted on its own (`wcswidth`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, EnumIter, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+pub enum GraphemeWidthMethod {
+    Legacy,
+    #[default]
+    Unicode,
 }
 
 /// `clipboard-read` and `clipboard-write`.
@@ -459,6 +471,12 @@ pub struct GhosttyConfig {
     pub mouse: Mouse,
     pub link: Link,
     pub shell_integration_features: ShellIntegrationFeatures,
+    pub grapheme_width_method: GraphemeWidthMethod,
+    /// How a pane's program starts: `env`, `input`, `working-directory`, `shell-integration`, `wait-after-command`,
+    /// `abnormal-command-exit-runtime`.
+    pub launch: Launching,
+    /// `image-storage-limit`: the Kitty image storage per screen in bytes; 0 turns the Kitty graphics protocol off.
+    pub image_storage_limit: u32,
     /// The child's `TERM`.
     pub term: String,
     /// `keybind`: ghostty's built-in binds with the lines over them.
@@ -466,6 +484,9 @@ pub struct GhosttyConfig {
     /// A static window title in place of the programs' own.
     pub title: Option<String>,
 }
+
+/// `image-storage-limit`'s default: 320 MB.
+pub const DEFAULT_IMAGE_STORAGE_LIMIT: u32 = 320_000_000;
 
 /// `term`'s default, which an empty value also restores.
 pub const DEFAULT_TERM: &str = "xterm-ghostty";
@@ -487,6 +508,9 @@ impl Default for GhosttyConfig {
             mouse: Mouse::default(),
             link: Link::default(),
             shell_integration_features: ShellIntegrationFeatures::DEFAULT,
+            grapheme_width_method: GraphemeWidthMethod::default(),
+            launch: Launching::default(),
+            image_storage_limit: DEFAULT_IMAGE_STORAGE_LIMIT,
             term: DEFAULT_TERM.to_owned(),
             keybind: Keybinds::defaults(),
             title: None,
@@ -607,7 +631,7 @@ impl GhosttyConfig {
         if let Some(rest) = key.strip_prefix("mouse-") {
             return self.mouse.apply(rest, value);
         }
-        if self.mouse.apply_pointer_key(key, value) {
+        if self.mouse.apply_pointer_key(key, value) || self.launch.apply(key, value) {
             return true;
         }
         self.apply_other(key, value)
@@ -633,6 +657,14 @@ impl GhosttyConfig {
             "shell-integration-features" => self.shell_integration_features = shell_features(value),
             "term" => value.unwrap_or(DEFAULT_TERM).clone_into(&mut self.term),
             "copy-on-select" => self.copy_on_select = enum_or(value, CopyOnSelect::default()),
+            "grapheme-width-method" => self.grapheme_width_method = enum_or(value, GraphemeWidthMethod::default()),
+            "image-storage-limit" => {
+                // Zig's base-0 integer, as `Kind::Int` checks it
+                self.image_storage_limit = value
+                    .and_then(|value| validate::parse_int(value, 0, false, 32).ok())
+                    .and_then(|number| u32::try_from(number).ok())
+                    .unwrap_or(DEFAULT_IMAGE_STORAGE_LIMIT);
+            }
             "title" => self.title = value.map(str::to_owned),
             "link-url" => self.link.url = bool_or(value, true),
             _ => return false,

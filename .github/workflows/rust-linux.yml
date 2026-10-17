@@ -32,7 +32,7 @@ jobs:
             pkg-config libfontconfig-dev libfreetype-dev \
             meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
             curl xz-utils patch ncurses-bin fish fontconfig fonts-dejavu-core \
-            dbus-daemon weston xvfb libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers \
+            dbus-daemon weston xvfb x11-xkb-utils libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers \
             g++ libpixman-1-dev libinput-dev libevdev-dev libudev-dev libdrm-dev libegl-dev libgles-dev libgbm-dev \
             libcairo2-dev libpango1.0-dev libpng-dev hwdata
       - name: rust toolchain (rust-toolchain.toml)
@@ -252,12 +252,13 @@ jobs:
           usermod --shell "$(command -v ${{ matrix.shell }})" "$(id -un)"
           getent passwd "$(id -un)"
       # instance: forwarding, activation and the SIGTERM quit; privileges: the app, a Live pane and its session keep
-      # the user's privileges while a page runs (with the system's wpewebkit the engine runs in process here)
+      # the user's privileges while a page runs (with the system's wpewebkit the engine runs in process here); quit:
+      # SIGTERM within its deadline with Live sessions busy and pages open
       - name: the process tests with the HTML overlays
         if: matrix.shell == 'bash'
         env:
           AGTERM_REQUIRE_DISPLAY_TESTS: "1"
-        run: cargo test -p agterm-gpui --test instance --test privileges
+        run: cargo test -p agterm-gpui --test instance --test privileges --test quit
       - name: install the suite
         run: |
           python -m venv /opt/suite

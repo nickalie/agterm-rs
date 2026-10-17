@@ -104,6 +104,11 @@ pub struct TerminalConfig {
     pub color_scheme: ColorScheme,
     /// `selection-word-chars`: the word boundaries of word selections; `None` is Ghostty's default set.
     pub word_chars: Option<Vec<char>>,
+    /// `grapheme-width-method`: `unicode` makes grapheme clustering (mode 2027) a new terminal's default; Ghostty
+    /// applies it to new terminals only.
+    pub grapheme_width_method: ghostty_config::GraphemeWidthMethod,
+    /// `image-storage-limit`, applied to live terminals on a reload too.
+    pub kitty_image_limit: u64,
 }
 
 /// The keybinds a config loaded, shared by every terminal of it (equal when they are the same load).
@@ -145,6 +150,8 @@ impl TerminalConfig {
             copy_on_select: config.copy_on_select,
             color_scheme: ColorScheme::Light,
             word_chars: config.selection.word_chars.clone(),
+            grapheme_width_method: config.grapheme_width_method,
+            kitty_image_limit: u64::from(config.image_storage_limit),
         }
     }
 
@@ -721,6 +728,8 @@ impl Shared {
             scrollback: config.scrollback,
             colors: config.theme.clone(),
             cursor: config.cursor,
+            kitty_image_limit: config.kitty_image_limit,
+            grapheme_clusters: config.grapheme_width_method == ghostty_config::GraphemeWidthMethod::Unicode,
             color_scheme: config.color_scheme,
             wake: Some(Arc::new(move || {
                 let _ = wake.try_send(());
@@ -899,7 +908,8 @@ impl Terminal {
             let applied = pane
                 .set_colors(&config.theme)
                 .and_then(|()| pane.set_cursor_defaults(config.cursor))
-                .and_then(|()| pane.set_scrollback(config.scrollback));
+                .and_then(|()| pane.set_scrollback(config.scrollback))
+                .and_then(|()| pane.set_kitty_image_limit(config.kitty_image_limit));
             if let Err(err) = applied {
                 tracing::warn!(target: "agterm::surface", key = shared.key, %err, "the terminal refused the config");
             }

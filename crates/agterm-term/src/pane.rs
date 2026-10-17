@@ -65,6 +65,9 @@ pub struct PaneConfig {
     pub kitty_image_limit: u64,
     /// What the end of the program leaves on screen.
     pub exit: ExitPolicy,
+    /// Grapheme clustering (mode 2027) as the terminal's default, which a reset restores: Ghostty's
+    /// `grapheme-width-method = unicode`, its default; `false` is `legacy`.
+    pub grapheme_clusters: bool,
     /// The desktop's appearance the terminal answers color scheme queries with ([`Pane::set_color_scheme`]).
     pub color_scheme: ColorScheme,
     pub wake: Option<Wake>,
@@ -81,6 +84,7 @@ impl PaneConfig {
             write_limit: DEFAULT_WRITE_LIMIT,
             kitty_image_limit: DEFAULT_KITTY_IMAGE_LIMIT,
             exit: ExitPolicy::default(),
+            grapheme_clusters: true,
             color_scheme: ColorScheme::default(),
             wake: None,
         }
@@ -97,6 +101,7 @@ impl std::fmt::Debug for PaneConfig {
             .field("write_limit", &self.write_limit)
             .field("kitty_image_limit", &self.kitty_image_limit)
             .field("exit", &self.exit)
+            .field("grapheme_clusters", &self.grapheme_clusters)
             .field("color_scheme", &self.color_scheme)
             .field("wake", &self.wake.is_some())
             .finish()
@@ -429,6 +434,19 @@ impl Pane {
             .map_err(PaneError::terminal)
     }
 
+    /// Change the Kitty image storage per screen (`image-storage-limit` on a config reload, as Ghostty's termio applies
+    /// it to a live terminal); a lower limit evicts images now, zero turns the protocol off.
+    ///
+    /// # Errors
+    ///
+    /// [`PaneError::Terminal`] when the library refuses the value.
+    pub fn set_kitty_image_limit(&self, limit: u64) -> Result<(), PaneError> {
+        lock(&self.shared.vt)
+            .terminal
+            .set_kitty_image_storage_limit(limit)
+            .map_err(PaneError::terminal)
+    }
+
     /// Switch the theme (a light/dark change, a config reload); colors programs set stay overridden.
     ///
     /// # Errors
@@ -544,6 +562,9 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>) -> Result<Shared, Pane
         .map_err(PaneError::terminal)?;
     config.colors.apply(&mut terminal).map_err(PaneError::terminal)?;
     config.cursor.apply(&mut terminal).map_err(PaneError::terminal)?;
+    terminal
+        .set_mode_default(vt::Mode::GRAPHEME_CLUSTER, config.grapheme_clusters)
+        .map_err(PaneError::terminal)?;
     kitty_graphics(&mut terminal, config.kitty_image_limit).map_err(PaneError::terminal)?;
     let capture = Arc::new(Mutex::new(Capture::new().map_err(PaneError::terminal)?));
     let armed: ArmedSlot = Arc::default();

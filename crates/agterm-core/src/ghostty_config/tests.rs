@@ -462,7 +462,6 @@ fn residual_differences_accept_any_value_of_an_opaque_key() {
         "clipboard-codepoint-map",
         "command",
         "command-palette-entry",
-        "env",
         "font-codepoint-map",
         "font-style",
         "font-style-bold",
@@ -473,7 +472,6 @@ fn residual_differences_accept_any_value_of_an_opaque_key() {
         "font-variation-bold-italic",
         "font-variation-italic",
         "initial-command",
-        "input",
         "key-remap",
         "macos-icon-screen-color",
         "mouse-scroll-multiplier",
@@ -559,8 +557,10 @@ fn the_pointer_keys_load_with_ghosttys_defaults() {
 
 #[test]
 fn the_model_enums_spell_ghosttys_values() {
-    let cases: [(&str, Vec<&str>); 11] = [
+    let cases: [(&str, Vec<&str>); 13] = [
         ("copy-on-select", enum_names::<CopyOnSelect>()),
+        ("shell-integration", enum_names::<ShellIntegration>()),
+        ("grapheme-width-method", enum_names::<GraphemeWidthMethod>()),
         ("cursor-style", enum_names::<CursorStyle>()),
         ("background-image-position", enum_names::<BackgroundImagePosition>()),
         ("background-image-fit", enum_names::<BackgroundImageFit>()),
@@ -822,6 +822,180 @@ fn copy_on_select_key() {
         check("copy-on-select", Some("maybe")).map(drop),
         Err("invalid value \"maybe\", valid values are: none, primary, clipboard, both".to_owned())
     );
+}
+
+/// The launch keys `text`'s lines leave, which must all be accepted.
+fn launch_of(text: &str) -> Launching {
+    let loaded = load(text);
+    assert!(loaded.diagnostics.is_empty(), "{text}: {:?}", loaded.diagnostics);
+    loaded.config.launch
+}
+
+#[test]
+fn the_launch_keys_keep_ghosttys_defaults_and_follow_their_lines() {
+    let defaults = GhosttyConfig::default().launch;
+    assert_eq!(defaults, Launching::default());
+    assert_eq!(
+        (
+            defaults.shell_integration,
+            defaults.wait_after_command,
+            defaults.abnormal_command_exit_runtime
+        ),
+        (ShellIntegration::Detect, false, 250)
+    );
+    assert_eq!(
+        launch_of("shell-integration = zsh\n").shell_integration,
+        ShellIntegration::Zsh
+    );
+    assert_eq!(
+        launch_of("shell-integration = none\nshell-integration =\n").shell_integration,
+        ShellIntegration::Detect
+    );
+    assert!(
+        launch_of("wait-after-command\n").wait_after_command,
+        "a bare bool key is true"
+    );
+    assert!(!launch_of("wait-after-command = true\nwait-after-command =\n").wait_after_command);
+    assert_eq!(
+        launch_of("abnormal-command-exit-runtime = 0x10\n").abnormal_command_exit_runtime,
+        16
+    );
+    // refused lines count and change nothing
+    let refused = load("wait-after-command = maybe\nabnormal-command-exit-runtime = -1\nshell-integration = tcsh\n");
+    assert_eq!(refused.diagnostics.len(), 3);
+    assert_eq!(refused.config.launch, Launching::default());
+}
+
+#[test]
+fn env_is_a_map_and_input_a_list_of_sources() {
+    // `env`: `key=` drops the key, an empty value the whole map; both sides of the first `=` trimmed of
+    // `std.ascii.whitespace` (`RepeatableStringMap.parseCLI`)
+    let env = launch_of(
+        "env = A=1\nenv = B=2\nenv = A=3\nenv = B=\nenv = C=x=y\nenv = EDITOR = nvim\nenv = D\u{0b}=\u{0b}v\u{0c}\n",
+    )
+    .env;
+    assert_eq!(
+        env.into_iter().collect::<Vec<_>>(),
+        [
+            ("A".to_owned(), "3".to_owned()),
+            ("C".to_owned(), "x=y".to_owned()),
+            ("D".to_owned(), "v".to_owned()),
+            ("EDITOR".to_owned(), "nvim".to_owned()),
+        ]
+    );
+    assert!(launch_of("env = A=1\nenv =\n").env.is_empty());
+    assert!(
+        launch_of("env = FOO=bar\nenv = FOO = \t\n").env.is_empty(),
+        "a value that trims to nothing drops the key"
+    );
+    // `input`: raw (tagged or not) and path sources in order, the escapes of both decoded (`cloneParsed`); an
+    // empty value clears them
+    assert_eq!(
+        launch_of(
+            "input = raw:a\\tb\ninput = path:/tmp/in\ninput = hello\\x00\ninput = path:/tmp/start\\x20up\n\
+             input = \\x20path :x\ninput = other:y\ninput = raw\n"
+        )
+        .input,
+        [
+            InputSource::Raw(b"a\tb".to_vec()),
+            InputSource::Path("/tmp/in".into()),
+            InputSource::Raw(b"hello\0".to_vec()),
+            InputSource::Path("/tmp/start up".into()),
+            InputSource::Raw(b" path :x".to_vec()),
+            InputSource::Raw(b"other:y".to_vec()),
+            InputSource::Raw(Vec::new()),
+        ]
+    );
+    assert_eq!(
+        launch_of("input = \t path\t:/a\n").input,
+        [InputSource::Path("/a".into())],
+        "the tag is trimmed of spaces and tabs (`parseTaggedUnion`)"
+    );
+    assert!(launch_of("input = x\ninput =\n").input.is_empty());
+}
+
+#[test]
+fn env_and_input_lines_libghostty_refuses_count() {
+    // `RepeatableStringMap.parseCLI`: no `=` is `error.ValueRequired`; `ReadableIO.parseCLI`: `string.parse`'s error
+    for (line, message) in [
+        ("env = junk", "value required"),
+        ("env", "value required"),
+        ("input", "value required"),
+        ("input = bad\\q", "unknown error error.InvalidString"),
+        ("input = path:/tmp/a\\x2", "unknown error error.InvalidString"),
+        (
+            "input = raw:\\u{d800}",
+            "unknown error error.Utf8CannotEncodeSurrogateHalf",
+        ),
+    ] {
+        let loaded = load(&format!("env = KEEP=1\n{line}\n"));
+        let messages: Vec<_> = loaded.diagnostics.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(messages.len(), 1, "{line}: {messages:?}");
+        assert!(messages[0].ends_with(message), "{line}: {messages:?}");
+        assert_eq!(
+            loaded.config.launch.env.get("KEEP").map(String::as_str),
+            Some("1"),
+            "{line}"
+        );
+        assert!(loaded.config.launch.input.is_empty(), "{line}");
+    }
+}
+
+#[test]
+fn working_directory_takes_home_inherit_or_a_path() {
+    for (value, directory) in [
+        ("home", WorkingDirectory::Home),
+        ("inherit", WorkingDirectory::Inherit),
+        ("~/src", WorkingDirectory::Path("~/src".to_owned())),
+        ("\"/srv/a b\"", WorkingDirectory::Path("/srv/a b".to_owned())),
+    ] {
+        assert_eq!(
+            launch_of(&format!("working-directory = {value}\n")).working_directory,
+            Some(directory),
+            "{value}"
+        );
+    }
+    assert_eq!(
+        launch_of("working-directory = home\nworking-directory =\n").working_directory,
+        None
+    );
+}
+
+#[test]
+fn grapheme_width_method_and_image_storage_limit_keys() {
+    let defaults = GhosttyConfig::default();
+    assert_eq!(
+        defaults.grapheme_width_method,
+        GraphemeWidthMethod::Unicode,
+        "Ghostty's default"
+    );
+    assert_eq!(defaults.image_storage_limit, 320_000_000, "Ghostty's default");
+    assert_eq!(
+        load("grapheme-width-method = legacy\n").config.grapheme_width_method,
+        GraphemeWidthMethod::Legacy
+    );
+    assert_eq!(
+        load("grapheme-width-method = legacy\ngrapheme-width-method =\n")
+            .config
+            .grapheme_width_method,
+        GraphemeWidthMethod::Unicode,
+        "an empty value restores the default"
+    );
+    for (text, limit) in [
+        ("image-storage-limit = 0\n", 0),
+        ("image-storage-limit = 1000\n", 1000),
+        ("image-storage-limit = 0x100\n", 256),
+        ("image-storage-limit = 4294967295\n", u32::MAX),
+        ("image-storage-limit = 5\nimage-storage-limit =\n", 320_000_000),
+    ] {
+        let loaded = load(text);
+        assert_eq!(loaded.config.image_storage_limit, limit, "{text}");
+        assert!(loaded.diagnostics.is_empty(), "{text}");
+    }
+    // a refused value counts and leaves the value before it, as in ghostty
+    let refused = load("image-storage-limit = 7\nimage-storage-limit = 4294967296\n");
+    assert_eq!((refused.config.image_storage_limit, refused.diagnostics.len()), (7, 1));
+    assert_eq!(count("grapheme-width-method = wide\n"), 1);
 }
 
 #[test]

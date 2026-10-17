@@ -21,7 +21,7 @@
 //! compare against since the GTK build went):
 //! - count: keys whose type has a `parseCLI` agterm does not port ([`validate::Kind::Opaque`]: `font-style*`,
 //!   `font-variation*`, `font-codepoint-map`, `clipboard-codepoint-map`, `adjust-*`, `command`, `initial-command`,
-//!   `env`, `input`, `working-directory`, `quick-terminal-size`, `background-blur`, `mouse-scroll-multiplier`,
+//!   `working-directory`, `quick-terminal-size`, `background-blur`, `mouse-scroll-multiplier`,
 //!   `macos-icon-screen-color`, `command-palette-entry`, `key-remap`) take any value: a malformed one counts 0 here,
 //!   1 in libghostty (a bare key still counts when the type needs a value). `keybind` is ported ([`binds`]) and
 //!   counts as libghostty counts it (a `chain=` with nothing before it to extend counts when the line is applied,
@@ -33,6 +33,7 @@
 
 pub mod binds;
 mod keys;
+mod launching;
 mod model;
 mod parse;
 pub mod validate;
@@ -47,10 +48,14 @@ mod tests;
 use std::path::{Path, PathBuf};
 
 pub use keys::LIBGHOSTTY_VT_REV;
+pub use launching::{
+    DEFAULT_ABNORMAL_COMMAND_EXIT_RUNTIME, InputSource, Launching, ShellIntegration, WorkingDirectory,
+};
 pub use model::{
     BackgroundImage, BackgroundImageFit, BackgroundImagePosition, Clipboard, ClipboardAccess, Colors, CopyOnSelect,
-    Cursor, CursorStyle, DEFAULT_TERM, Font, GhosttyConfig, Link, MiddleClickAction, Mouse, MouseShiftCapture,
-    PaddingBalance, PaddingColor, RightClickAction, Scrollback, Selection, ShellIntegrationFeatures, WindowPadding,
+    Cursor, CursorStyle, DEFAULT_IMAGE_STORAGE_LIMIT, DEFAULT_TERM, Font, GhosttyConfig, GraphemeWidthMethod, Link,
+    MiddleClickAction, Mouse, MouseShiftCapture, PaddingBalance, PaddingColor, RightClickAction, Scrollback, Selection,
+    ShellIntegrationFeatures, WindowPadding,
 };
 pub use parse::{Diagnostic, Loader, Location, Setting, Step, lines};
 pub use validate::{ConfigPath, KeySpec, Padding, TerminalColor, ThemeName};

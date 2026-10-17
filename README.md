@@ -26,7 +26,7 @@ socket.
 - For the app's tests: Xvfb's `xvfb-run`, so they get a display of their own instead of the desktop.
 - For the app's process tests (`crates/agterm-gpui/tests`): dbus-daemon, a private bus per test; the ones with a
   display also need weston, Xvfb and Mesa's lavapipe (`mesa-vulkan-drivers`, an unpacked one under the vendor dir, or
-  `AGTERM_LAVAPIPE_ICD`). A missing one skips the test (`SKIPPED:`, shown with `--nocapture`) unless
+  `AGTERM_LAVAPIPE_ICD`), the keyboard layout test `setxkbmap` (`x11-xkb-utils`). A missing one skips the test (`SKIPPED:`, shown with `--nocapture`) unless
   `AGTERM_REQUIRE_DISPLAY_TESTS` is set, as CI sets it, which fails it instead. The single-instance checks against a
   GTK build of agterm (the Linux fork) take its binary from `AGTERM_GTK_BIN` and skip without one, required or not.
   The nested-niri activation check (niri inside a headless weston) is
@@ -43,7 +43,7 @@ On Ubuntu 26.04, the CI image's packages plus `xvfb` and `python3-venv` for loca
 sudo apt-get install pkg-config libfontconfig-dev libfreetype-dev \
   meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
   curl xz-utils patch ncurses-bin \
-  weston dbus-daemon libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers xvfb python3-venv
+  weston dbus-daemon libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers xvfb x11-xkb-utils python3-venv
 ```
 
 Run-time dependencies of every `agterm` binary:

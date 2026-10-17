@@ -267,6 +267,37 @@ mod tests {
     }
 
     #[test]
+    fn the_configs_launch_keys_reach_every_pane_the_host_launches() {
+        let app = AppConfig {
+            config: loaded("env = AGTERM_TEST_VAR=1\ninput = raw:echo hi\\n\nwait-after-command = true\n")
+                .finalize(false, &[])
+                .config,
+            command: None,
+            diagnostics: 0,
+            dark: false,
+        };
+        let env = MapEnv::new().with("HOME", "/home/u");
+        let prepared = launch_host(&app, None, &env).prepare(&Launch::default(), &env);
+        assert!(
+            prepared
+                .command
+                .env
+                .iter()
+                .any(|(key, value)| key == "AGTERM_TEST_VAR" && value == "1"),
+            "{:?}",
+            prepared.command
+        );
+        assert_eq!(prepared.initial_input.as_deref(), Some(&b"echo hi\n"[..]));
+        assert!(matches!(
+            prepared.exit,
+            agterm_term::ExitPolicy::Launched {
+                wait_after_command: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn a_host_without_zmx_claims_no_live_capability() {
         let runtime = Runtime {
             zmx_executable: PathBuf::from("/nonexistent/zmx"),

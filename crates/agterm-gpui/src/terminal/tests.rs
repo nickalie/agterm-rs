@@ -15,7 +15,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use agterm_core::ghostty_config::binds::Action;
-use agterm_core::ghostty_config::{CopyOnSelect, GhosttyConfig, PaddingBalance, TerminalColor, WindowPadding};
+use agterm_core::ghostty_config::{
+    CopyOnSelect, GhosttyConfig, GraphemeWidthMethod, PaddingBalance, TerminalColor, WindowPadding,
+};
 use agterm_host::{Surface, TextScope};
 use agterm_term::{
     Cell, CellFlags, Colors, CursorPosition, CursorStyle, Frame, GridPoint, GridSize, Pane, PaneCommand, PaneConfig,
@@ -738,6 +740,115 @@ fn glyphs_sit_at_their_clusters_columns(cx: &mut TestAppContext) {
             "each glyph starts its cluster"
         );
     });
+}
+
+/// Man, ZWJ, woman, ZWJ, girl (one grapheme, two cells), `e` with a combining acute (one cell) and a heart with the
+/// emoji variation selector (two cells), between `a` and `x`.
+const CLUSTERS: &str = "a\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}e\u{301}\u{2764}\u{FE0F}x";
+
+#[test]
+fn an_emoji_sequence_and_a_combining_mark_are_one_cluster_each_on_their_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let pane = pane(&format!("printf '{CLUSTERS}'; exec sleep 5"), dir.path());
+    let frame = wait_text(&pane, "x");
+    let layout = layout_row(&frame.rows[0], &frame.colors, &Palette::default(), &RowMarks::default());
+    let text: String = layout.runs.iter().map(|run| run.text.as_str()).collect();
+    assert_eq!(text, CLUSTERS, "every codepoint reaches the shaper, none twice");
+    let clusters: Vec<(usize, u16)> = layout
+        .runs
+        .iter()
+        .scan(0, |offset, run| {
+            let base = *offset;
+            *offset += run.text.len();
+            Some(
+                run.clusters
+                    .iter()
+                    .map(move |cluster| (base + cluster.byte, cluster.col)),
+            )
+        })
+        .flatten()
+        .collect();
+    // the family's 18 bytes from column 1, é's 3 at column 3, the heart's 6 at 4, x at 6
+    assert_eq!(clusters, [(0, 0), (1, 1), (19, 3), (22, 4), (28, 6)]);
+}
+
+#[gpui_kit::test]
+fn the_grapheme_width_method_reaches_a_new_terminal(cx: &mut TestAppContext) {
+    let legacy = |text: &str| {
+        let mut loader = agterm_core::ghostty_config::Loader::new(None);
+        loader.load_text("test.conf", text);
+        TerminalConfig::from_ghostty(&loader.finish().finalize(false, &[]).config)
+    };
+    assert_eq!(
+        TerminalConfig::default().grapheme_width_method,
+        GraphemeWidthMethod::Unicode,
+        "Ghostty's default"
+    );
+    let config = legacy("grapheme-width-method = legacy\nimage-storage-limit = 1000\n");
+    assert_eq!(config.grapheme_width_method, GraphemeWidthMethod::Legacy);
+    assert_eq!(config.kitty_image_limit, 1000);
+    // the family and `x`: the cursor after one two-cell cluster, or after three wide emoji
+    cx.executor().allow_parking();
+    let script = "printf '\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}x'; exec sleep 5";
+    for (config, column) in [(TerminalConfig::default(), 3), (config, 7)] {
+        let dir = tempfile::tempdir().unwrap();
+        let spawn = spawn_script(script, dir.path());
+        let terminal = cx.new(|cx| Terminal::new(spec(), config, spawn, cx));
+        let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(&terminal, ViewRole::Owner, cx));
+        wait_painted(&view, cx, "x");
+        let cursor = view.read_with(cx, |view, _| view.painted().and_then(|frame| frame.cursor.position));
+        assert_eq!(cursor.map(|at| at.column), Some(column));
+    }
+}
+
+/// `image-storage-limit` reaches the pane when it starts and again on a reload (Ghostty applies it live): with the
+/// limit at 0 a Kitty transmission stores nothing.
+#[gpui_kit::test]
+fn the_image_storage_limit_reaches_the_pane_at_its_start_and_on_a_reload(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    // image N (2x1 RGBA, quiet) and `sentN` on each line of input, the first right away
+    let script = "n=0; while :; do n=$((n+1)); \
+                  printf '\\033_Ga=T,f=32,s=2,v=1,i=%d,q=2;AQIDBAUGBwg=\\033\\\\sent%d ' $n $n; read _; done";
+    let off = TerminalConfig {
+        kitty_image_limit: 0,
+        ..TerminalConfig::default()
+    };
+    let terminal = cx.new(|cx| Terminal::new(spec(), off.clone(), spawn_script(script, dir.path()), cx));
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(&terminal, ViewRole::Owner, cx));
+    let stored = |view: &Entity<TerminalView>, cx: &mut VisualTestContext| -> Vec<u32> {
+        view.read_with(cx, |view, _| {
+            view.painted()
+                .map(|frame| frame.kitty.images.iter().map(|image| image.key.id).collect())
+                .unwrap_or_default()
+        })
+    };
+    let send = |terminal: &Entity<Terminal>, cx: &mut VisualTestContext| {
+        let pane = terminal
+            .read_with(cx, |terminal, _| terminal.shared().pane())
+            .expect("a pane");
+        pane.write(b"\n").unwrap();
+    };
+    wait_painted(&view, cx, "sent1");
+    assert_eq!(
+        stored(&view, cx),
+        Vec::<u32>::new(),
+        "a pane started at 0 stores no image"
+    );
+
+    terminal.update(cx, |terminal, cx| terminal.reload_config(TerminalConfig::default(), cx));
+    send(&terminal, cx);
+    wait_painted(&view, cx, "sent2");
+    assert_eq!(
+        stored(&view, cx),
+        [2],
+        "the default limit, reloaded, stores the next one"
+    );
+
+    terminal.update(cx, |terminal, cx| terminal.reload_config(off, cx));
+    send(&terminal, cx);
+    wait_painted(&view, cx, "sent3");
+    assert!(!stored(&view, cx).contains(&3), "a reload to 0 stores no new image");
 }
 
 #[gpui_kit::test]

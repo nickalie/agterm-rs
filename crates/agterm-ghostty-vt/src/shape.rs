@@ -16,6 +16,9 @@ pub struct Mode(pub(crate) ffi::GhosttyMode);
 impl Mode {
     /// Synchronized output (DEC private mode 2026).
     pub const SYNC_OUTPUT: Self = Self::dec(2026);
+    /// Grapheme clustering (DEC private mode 2027): a multi-codepoint grapheme takes the cells of its cluster's width,
+    /// not the sum of its codepoints'.
+    pub const GRAPHEME_CLUSTER: Self = Self::dec(2027);
     /// Color scheme reports (DEC private mode 2031): the program wants a report on every light/dark change.
     pub const COLOR_SCHEME_REPORT: Self = Self::dec(2031);
 
