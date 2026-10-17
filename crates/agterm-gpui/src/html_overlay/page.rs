@@ -13,8 +13,8 @@ use std::rc::{Rc, Weak};
 
 use agterm_core::html::bridge::{ADAPTER_SCRIPT, HANDLER_NAME, HELPER_SCRIPT, RELAY_SCRIPT, WORLD};
 use agterm_core::html::{
-    HtmlLoadState, HtmlNavigation, HtmlNavigationDecision, HtmlOverlay, HtmlOverlayTheme, HtmlReloadTarget, HtmlSource,
-    decide, errors,
+    HtmlLoadState, HtmlNavigation, HtmlNavigationDecision, HtmlOverlay, HtmlOverlayTheme, HtmlPageInfo,
+    HtmlReloadTarget, HtmlSource, decide, errors,
 };
 use agterm_wpe::{
     Event, Geometry, InjectionTime, Load, MessageHandler, NavigationType, PageState as EngineState, PolicyKind,
@@ -71,6 +71,9 @@ struct PageState {
     life: Life,
     /// What the engine last reported the page shows.
     engine: EngineState,
+    /// What this page last posted to the model as its page info: a report goes out unless both it and the model's
+    /// value as last applied already hold it, since the model's value lags the posts it has not applied yet.
+    reported: Option<HtmlPageInfo>,
 }
 
 impl PageState {
@@ -152,6 +155,7 @@ impl Page {
                 on_screen: false,
                 life: Life::Active,
                 engine: EngineState::default(),
+                reported: None,
             }),
             view: Cell::new(None),
             web: RefCell::new(None),
@@ -548,7 +552,7 @@ impl Page {
         }
         let web = self.web_url();
         let info = {
-            let state = self.state.borrow();
+            let mut state = self.state.borrow_mut();
             if !state.active() {
                 return;
             }
@@ -561,9 +565,10 @@ impl Page {
                 state.engine.can_go_back,
                 state.engine.can_go_forward,
             );
-            if state.overlay.current.as_ref() == Some(&info) {
+            if !needs_report(state.overlay.current.as_ref(), state.reported.as_ref(), &info) {
                 return;
             }
+            state.reported = Some(info.clone());
             info
         };
         let id = self.id;
@@ -921,5 +926,40 @@ impl Page {
         if let Some(element) = self.element() {
             element.update(cx, PageView::release);
         }
+    }
+}
+
+/// Whether a page report of `info` goes out: unless the model's value as last applied (`model`) and the page's last
+/// post (`reported`) both hold it. The model alone lags: a report posted but not yet applied leaves it at the value
+/// before, so a reload's title reported cleared and then back would read as unchanged and the title stay cleared.
+fn needs_report(model: Option<&HtmlPageInfo>, reported: Option<&HtmlPageInfo>, info: &HtmlPageInfo) -> bool {
+    model != Some(info) || reported != Some(info)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(title: Option<&str>) -> HtmlPageInfo {
+        HtmlPageInfo {
+            page: "/tmp/page.html".to_owned(),
+            title: title.map(str::to_owned),
+            can_go_back: false,
+            can_go_forward: false,
+        }
+    }
+
+    #[test]
+    fn a_report_the_model_has_not_applied_yet_does_not_hide_the_next_one() {
+        let titled = info(Some("Page"));
+        let cleared = info(None);
+        // settled: the model and the last post hold it
+        assert!(!needs_report(Some(&titled), Some(&titled), &titled));
+        // a reload cleared the title (posted, not applied yet), then the title came back
+        assert!(needs_report(Some(&titled), Some(&cleared), &titled));
+        // the model moved on its own (a reload's reset) while the last post still holds it
+        assert!(needs_report(Some(&cleared), Some(&titled), &titled));
+        // the first report
+        assert!(needs_report(None, None, &titled));
     }
 }
