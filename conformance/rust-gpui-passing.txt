@@ -43,6 +43,7 @@ tests/cli/test_cli_output.py::test_pick_without_blocking
 tests/cli/test_cli_output.py::test_quick_terminal
 tests/cli/test_cli_output.py::test_restore
 tests/cli/test_cli_output.py::test_session_background
+tests/cli/test_cli_output.py::test_session_create_select_and_close
 tests/cli/test_cli_output.py::test_session_panes
 tests/cli/test_cli_output.py::test_session_restore_prints_the_note_or_ok
 tests/cli/test_cli_output.py::test_sidebar
@@ -337,6 +338,7 @@ tests/protocol/test_overlay.py::test_program_overlay_covers_the_session
 tests/protocol/test_overlay.py::test_reload_and_navigate_a_page
 tests/protocol/test_overlay.py::test_submit_answers_the_page_and_closes_it[empty]
 tests/protocol/test_overlay.py::test_submit_answers_the_page_and_closes_it[value]
+tests/protocol/test_overlay.py::test_submit_refusals
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.close-args1]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.open-args0]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.reload-args6]
