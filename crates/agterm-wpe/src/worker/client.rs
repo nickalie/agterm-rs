@@ -928,10 +928,13 @@ mod tests {
         )
     }
 
-    /// A dmabuf frame of `view` in `buffer`, its one plane a plain file whose inode comes back too.
-    fn dmabuf_frame(view: ViewId, buffer: u64) -> (Frame, (u64, u64)) {
-        let file = tempfile::tempfile().unwrap();
-        let stat = rustix::fs::fstat(&file).unwrap();
+    /// A dmabuf frame of `view` in `buffer`, its one plane an unlinked temporary file whose path comes back too: a
+    /// name no later file takes, unlike an inode number, which a filesystem such as ext4 hands out again once the file
+    /// closes.
+    fn dmabuf_frame(view: ViewId, buffer: u64) -> (Frame, PathBuf) {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_owned();
+        let file = file.into_file();
         let dmabuf = DmaBuf {
             width: 4,
             height: 4,
@@ -951,17 +954,19 @@ mod tests {
             damage: Vec::new(),
             content: FrameContent::DmaBuf(Arc::new(dmabuf)),
         };
-        (frame, (stat.st_dev, stat.st_ino))
+        (frame, path)
     }
 
-    /// The (device, inode) pairs this process's descriptors name.
-    fn open_inodes() -> Vec<(u64, u64)> {
-        use std::os::unix::fs::MetadataExt as _;
+    /// The paths this process's descriptors name, an unlinked file's without the ` (deleted)` the kernel adds.
+    fn open_paths() -> Vec<PathBuf> {
         std::fs::read_dir("/proc/self/fd")
             .unwrap()
             .flatten()
-            .filter_map(|entry| std::fs::metadata(entry.path()).ok())
-            .map(|metadata| (metadata.dev(), metadata.ino()))
+            .filter_map(|entry| std::fs::read_link(entry.path()).ok())
+            .map(|target| {
+                let target = target.into_os_string().into_string().unwrap_or_default();
+                PathBuf::from(target.strip_suffix(" (deleted)").unwrap_or(&target))
+            })
             .collect()
     }
 
@@ -971,11 +976,11 @@ mod tests {
         let mut pages = Pages::default();
         pages.track(&create_view(view));
         pages.track(&create_view(other));
-        let mut inodes = Vec::new();
+        let mut paths = Vec::new();
         let mut removed = Vec::new();
         for buffer in 1..=10 {
-            let (frame, inode) = dmabuf_frame(view, buffer);
-            inodes.push(inode);
+            let (frame, path) = dmabuf_frame(view, buffer);
+            paths.push(path);
             let page = pages.0.get_mut(&view).unwrap();
             if let Some(Event::BuffersRemoved { view: id, buffers }) = keep_buffer(page, &frame) {
                 assert_eq!(id, view);
@@ -990,13 +995,13 @@ mod tests {
             "past the bound the oldest go, said so"
         );
         assert_eq!(pages.0[&view].buffers.len(), MAX_BUFFERS);
-        let open = open_inodes();
+        let open = open_paths();
         assert!(
-            inodes[2..].iter().all(|inode| open.contains(inode)),
+            paths[2..].iter().all(|path| open.contains(path)),
             "the kept planes stay open"
         );
         assert!(
-            !inodes[..2].iter().any(|inode| open.contains(inode)),
+            !paths[..2].iter().any(|path| open.contains(path)),
             "the forgotten ones closed"
         );
         let (frame, kept) = dmabuf_frame(other, 1);
@@ -1004,9 +1009,9 @@ mod tests {
         drop(frame);
         pages.track(&EngineCommand::CloseView(view));
         assert!(!pages.0.contains_key(&view));
-        let open = open_inodes();
+        let open = open_paths();
         assert!(
-            !inodes.iter().any(|inode| open.contains(inode)),
+            !paths.iter().any(|path| open.contains(path)),
             "a closed page's planes closed"
         );
         assert!(open.contains(&kept), "another page keeps its own");
