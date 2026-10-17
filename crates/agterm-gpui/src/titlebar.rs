@@ -610,6 +610,10 @@ impl Titlebar {
         let text: SharedString = hint.into();
         div()
             .id(id)
+            // upstream's accessibility identifier, and the hover text as the button's name, for AccessKit
+            .accessibility_id(id)
+            .role(gpui_kit::Role::Button)
+            .aria_label(text.clone())
             .flex()
             .flex_shrink_0()
             .items_center()

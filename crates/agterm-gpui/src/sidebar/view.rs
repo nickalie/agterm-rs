@@ -265,8 +265,12 @@ impl Sidebar {
         };
         let label: SharedString = row.label.clone().into();
         let truncated = text_width(window, &label, self.look.font_size, weight) > available;
+        let row_id = if workspace { "workspace-row" } else { "session-row" };
         div()
-            .id(if workspace { "workspace-row" } else { "session-row" })
+            .id(row_id)
+            .accessibility_id(row_id)
+            .role(gpui_kit::Role::TreeItem)
+            .aria_label(label.clone())
             .flex_1()
             .min_w(px(0.))
             .overflow_hidden()
@@ -300,6 +304,9 @@ impl Sidebar {
     fn add_button(id: Uuid, color: Hsla, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("workspace-add-session")
+            .accessibility_id("workspace-add-session")
+            .role(gpui_kit::Role::Button)
+            .aria_label("New Session")
             .debug_selector(move || format!("workspace-add-session:{id}"))
             .flex_none()
             .size(px(SLOT))
@@ -557,21 +564,28 @@ fn leading_icon(row: &SidebarRow, color: Hsla) -> impl IntoElement {
 
 /// The unseen-notification badge: a red capsule with the count in white, a single digit a circle.
 fn badge(count: usize) -> impl IntoElement {
-    div().id("notify-badge").flex_none().pl(px(BADGE_GAP)).child(
-        div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(px(BADGE_HEIGHT))
-            .min_w(px(BADGE_HEIGHT))
-            .px(px(BADGE_TEXT_ROOM / 2.0))
-            .rounded(px(BADGE_HEIGHT / 2.0))
-            .bg(color(BADGE_RED, 1.0))
-            .text_color(gpui_kit::white())
-            .text_size(px(BADGE_FONT_SIZE))
-            .font_weight(FontWeight::BOLD)
-            .child(badge_text(count)),
-    )
+    div()
+        .id("notify-badge")
+        .accessibility_id("notify-badge")
+        .role(gpui_kit::Role::Status)
+        .aria_label(SharedString::from(badge_text(count)))
+        .flex_none()
+        .pl(px(BADGE_GAP))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .h(px(BADGE_HEIGHT))
+                .min_w(px(BADGE_HEIGHT))
+                .px(px(BADGE_TEXT_ROOM / 2.0))
+                .rounded(px(BADGE_HEIGHT / 2.0))
+                .bg(color(BADGE_RED, 1.0))
+                .text_color(gpui_kit::white())
+                .text_size(px(BADGE_FONT_SIZE))
+                .font_weight(FontWeight::BOLD)
+                .child(badge_text(count)),
+        )
 }
 
 /// The width of what trails a row's name: the gap, the hover "+", the status glyph and the badge.

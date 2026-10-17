@@ -30,7 +30,7 @@ use agterm_core::zoom::ZoomSurface;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Animation, AnimationExt as _, AnyElement, Hsla, InteractiveElement as _, IntoElement, Keystroke, MouseButton,
-    ParentElement as _, SharedString, Styled as _, div, px,
+    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, div, px,
 };
 use uuid::Uuid;
 
@@ -305,6 +305,8 @@ pub fn grid(window: Uuid, cells: Vec<CellParts>, look: Look, poster: &Poster, an
     div()
         .id("dashboard")
         .debug_selector(|| "dashboard".to_owned())
+        .accessibility_id("dashboard")
+        .role(gpui_kit::Role::Grid)
         .absolute()
         .inset_0()
         .flex()
@@ -335,6 +337,11 @@ fn cell(window: Uuid, parts: CellParts, look: Look, poster: &Poster, animate: bo
     div()
         .id(("dashboard-cell", index))
         .debug_selector(move || selector.clone())
+        // upstream's identifier, the same on every cell
+        .accessibility_id("dashboard-cell")
+        .role(gpui_kit::Role::GridCell)
+        .aria_label(SharedString::from(chrome.caption.clone()))
+        .aria_selected(chrome.highlighted)
         .relative()
         .flex_1()
         .min_w(px(0.))

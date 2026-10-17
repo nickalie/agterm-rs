@@ -13,7 +13,8 @@ use agterm_core::{Core, LeadCover};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, Bounds, FocusHandle, FontWeight, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement as _, PathBuilder, Pixels, SharedString, Styled as _, Window, canvas, div, point, px,
+    ParentElement as _, PathBuilder, Pixels, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    canvas, div, point, px,
 };
 
 use crate::mute::color;
@@ -74,8 +75,11 @@ pub fn element(
     if !cover.shows() {
         return None;
     }
+    let id = SharedString::from(format!("pane-lead-cover-{}", role(slot)));
     let mut root = div()
-        .id(SharedString::from(format!("pane-lead-cover-{}", role(slot))))
+        .id(id.clone())
+        .accessibility_id(id)
+        .role(gpui_kit::Role::Group)
         .size_full()
         .relative();
     if let Some(lead) = &cover.cover {
@@ -157,6 +161,8 @@ fn reconnect_note(reason: &str, slot: Slot) -> impl IntoElement {
     div().absolute().left_0().right_0().bottom_0().child(
         div()
             .id(SharedString::from(format!("remote-reconnect-note-{}", role(slot))))
+            .accessibility_id(SharedString::from(format!("remote-reconnect-note-{}", role(slot))))
+            .role(gpui_kit::Role::Status)
             .w_full()
             .px(px(8.))
             .py(px(2.))

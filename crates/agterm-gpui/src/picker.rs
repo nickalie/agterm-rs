@@ -232,6 +232,9 @@ pub fn row(id: SharedString, selected: bool, live: bool, metrics: Metrics, color
     let hover = crate::chrome::color(colors.foreground, 0.04);
     div()
         .id(id.clone())
+        .accessibility_id(id.clone())
+        .role(gpui_kit::Role::ListBoxOption)
+        .aria_selected(selected)
         .debug_selector(move || id.to_string())
         .flex()
         .flex_row()
@@ -318,6 +321,8 @@ pub fn frame(parts: Frame<'_>, dismiss: impl Fn(&MouseDownEvent, &mut Window, &m
         .child(
             modal::panel(colors)
                 .id(ids.panel)
+                .accessibility_id(ids.panel)
+                .role(gpui_kit::Role::Dialog)
                 .debug_selector(move || ids.panel.to_owned())
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .absolute()
