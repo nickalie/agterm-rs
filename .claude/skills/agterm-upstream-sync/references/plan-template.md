@@ -32,7 +32,8 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
   - `run-rust-linux.sh` (full): ratchet <holds | breaks: ids and cause>; newly green: <ids added | none>
 - Already in the Rust build (no task): <feature — evidence: file / ratchet id>, or "nothing".
 - Not run on this host: <the ratchet's `not run on this host` ids and why (no zsh login shell / no zmx)>, or "none".
-- Native pins: <unchanged | GHOSTTY_REV a -> b, patches apply | ...>.
+- Native pins: <unchanged | ZMX_REV a -> b, patches apply | ...>; upstream's GHOSTTY_REV <unchanged | a -> b, a task
+  reviews it against LIBGHOSTTY_VT_REV>.
 
 ## Safety rules
 

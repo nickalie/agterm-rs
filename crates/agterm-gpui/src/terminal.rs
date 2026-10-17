@@ -531,15 +531,16 @@ impl Shared {
     }
 
     /// A selection was made (`select_all`, and the mouse's selection in Task 14): Ghostty's `setSelectionAndCopy`
-    /// copies it per `copy-on-select`: not at all, to the selection clipboard, or to it and the system clipboard; the
+    /// copies it per `copy-on-select`: not at all, to the selection clipboard, to the system clipboard, or to both; the
     /// text as `copy_to_clipboard` formats it (`clipboard-trim-trailing-spaces`; the plain part of Ghostty's mixed
     /// copy, GPUI's clipboard taking text only). An empty selection copies nothing.
     pub fn copy_on_select(&self) {
         let config = self.config();
         let locations: &[ClipboardLocation] = match config.copy_on_select {
-            CopyOnSelect::False => return,
-            CopyOnSelect::True => &[ClipboardLocation::Selection],
-            CopyOnSelect::Clipboard => &[ClipboardLocation::Standard, ClipboardLocation::Selection],
+            CopyOnSelect::None => return,
+            CopyOnSelect::Primary => &[ClipboardLocation::Selection],
+            CopyOnSelect::Clipboard => &[ClipboardLocation::Standard],
+            CopyOnSelect::Both => &[ClipboardLocation::Standard, ClipboardLocation::Selection],
         };
         let Some(pane) = self.pane() else {
             return;

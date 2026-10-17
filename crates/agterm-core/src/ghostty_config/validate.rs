@@ -1,6 +1,6 @@
 //! Value checks by kind, ported from ghostty's `src/cli/args.zig` (`parse`, `parseIntoField`, `parseBool`,
-//! `parsePackedStruct`) and each config type's `parseCLI` at `GHOSTTY_REV`, so a value counts as malformed exactly
-//! when libghostty would count it: the same accepted spellings of booleans, Zig integers and floats, colors, durations,
+//! `parsePackedStruct`) and each config type's `parseCLI` at `LIBGHOSTTY_VT_REV`, so a value counts as malformed
+//! exactly when libghostty would count it: the same accepted spellings of booleans, Zig integers and floats, colors, durations,
 //! paddings, palette entries and themes. Kinds whose `parseCLI` is not ported ([`Kind::Opaque`]) accept any value;
 //! they are the residual differences listed in the module docs.
 
@@ -81,8 +81,8 @@ impl KeySpec {
 pub enum Compat {
     /// The key was renamed: the value is parsed as the new key's.
     Renamed(&'static str),
-    /// One old value of the key is still taken.
-    Value(&'static str),
+    /// Old values of the key are still taken.
+    Values(&'static [&'static str]),
     /// A removed boolean key is still taken when its value is a boolean.
     Bool,
 }
@@ -152,7 +152,7 @@ pub fn check(key: &str, value: Option<&str>) -> Result<Accepted, String> {
 fn compat_takes(handler: Compat, value: Option<&str>) -> bool {
     match handler {
         Compat::Renamed(to) => key_spec(to).is_some_and(|spec| check_kind(spec.kind, value).is_ok()),
-        Compat::Value(taken) => value.unwrap_or("") == taken,
+        Compat::Values(taken) => taken.contains(&value.unwrap_or("")),
         Compat::Bool => parse_bool(value.unwrap_or("t")).is_ok(),
     }
 }

@@ -7,7 +7,8 @@
 # from cargo's target dir and the vendored prefixes, plus agterm's own themes from build/themes and the agent
 # integrations' payloads from resources/. Binaries are staged when they exist (agterm and agtermctl appear with
 # their crates, zmx once scripts/build-zmx.sh filled its prefix); Ghostty's resources are required. There is no lib/:
-# libghostty-vt is linked statically. The terminfo, themes and shell integration come from the libghostty prefix.
+# libghostty-vt is linked statically. The terminfo, themes and shell integration are Ghostty's at LIBGHOSTTY_VT_REV,
+# from the libghostty-vt prefix (scripts/build-ghostty-vt.sh).
 #
 # Usage: scripts/stage.sh DESTINATION [--profile release|debug]   (default: release)
 set -euo pipefail
@@ -37,8 +38,9 @@ if [[ -d "$DEST" ]] && find "$DEST" -mindepth 1 -print -quit | grep -q .; then
   die "staging destination is not empty: $DEST"
 fi
 
-GHOSTTY="$(ghostty_prefix)"
-ghostty_prefix_is_complete "$GHOSTTY" || die "no complete libghostty prefix at $GHOSTTY: run scripts/build-ghostty.sh"
+GHOSTTY="$(ghostty_vt_prefix)"
+ghostty_vt_prefix_is_complete "$GHOSTTY" \
+  || die "no complete libghostty-vt prefix at $GHOSTTY: run scripts/build-ghostty-vt.sh"
 TARGET="${CARGO_TARGET_DIR:-$NATIVE_ROOT/target}/$PROFILE"
 
 mkdir -p "$DEST/bin" "$DEST/share/ghostty"

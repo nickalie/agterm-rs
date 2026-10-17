@@ -1313,16 +1313,21 @@ fn select_all_copies_per_copy_on_select(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, _view, _events, cx) = realized(cx, "printf 'ready  \\r\\nnext'; exec cat", dir.path());
     assert_eq!(
-        select_all_copies(&terminal, cx, CopyOnSelect::False, true),
+        select_all_copies(&terminal, cx, CopyOnSelect::None, true),
         ("standard".to_owned(), "primary".to_owned())
     );
     assert_eq!(
-        select_all_copies(&terminal, cx, CopyOnSelect::True, true),
+        select_all_copies(&terminal, cx, CopyOnSelect::Primary, true),
         ("standard".to_owned(), "ready\nnext".to_owned())
     );
-    // `clipboard` copies to both; without the trim the trailing blanks stay
+    // `clipboard` copies to the system clipboard alone (Ghostty 1.4)
     assert_eq!(
-        select_all_copies(&terminal, cx, CopyOnSelect::Clipboard, false),
+        select_all_copies(&terminal, cx, CopyOnSelect::Clipboard, true),
+        ("ready\nnext".to_owned(), "primary".to_owned())
+    );
+    // `both` copies to both; without the trim the trailing blanks stay
+    assert_eq!(
+        select_all_copies(&terminal, cx, CopyOnSelect::Both, false),
         ("ready  \nnext".to_owned(), "ready  \nnext".to_owned())
     );
 }

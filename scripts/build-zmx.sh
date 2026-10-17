@@ -99,7 +99,7 @@ fetch_package() {
   echo "$hash"
 }
 
-# zmx itself as the source archive of its full commit id, as build-ghostty.sh fetches libghostty: zig's package
+# zmx itself as the source archive of its full commit id, as build-ghostty-vt.sh fetches Ghostty: zig's package
 # fetcher keeps only the files a package's build.zig.zon lists, and zmx's leaves out its LICENSE.
 echo "fetching zmx $ZMX_REV..." >&2
 mkdir -p "$BUILD_DIR"

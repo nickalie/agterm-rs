@@ -137,14 +137,15 @@ because every plan task's subagent starts from this branch and must be able to r
    the catalog to a plan task (the generator itself needs work, `conformance/tools/gen_catalog.py`).
 2. **Native pins**: `bash SKILL_DIR/scripts/pins-delta.sh [--upstream DIR] TARGET`. `PINS=unchanged` → the revisions are TARGET's too: bump the tag in the
    comment above each pin and keep its date. Otherwise put the printed values into `build/pins.env`, and rewrite the comment above each moved pin
-   (`# libghostty at upstream agterm TARGET's GHOSTTY_REV (.upstream/agterm scripts/setup.sh, <date>)`, the zmx one
-   alike). Then, in the background: `scripts/build-ghostty.sh` when a `GHOSTTY_*` pin moved, `scripts/build-zmx.sh`
-   when a `ZMX_*` pin or `build/patches/zmx/` moved. They download, check every sha256, and apply the patches with
-   `--fuzz=0`; after a `GHOSTTY_REV` move also run `scripts/gen-ghostty-bindings.sh` and
-   `scripts/gen-ghostty-config-keys.sh`. A sum mismatch, a patch that
-   no longer applies, a failed build or bindings that no longer compile → `git checkout -- build/pins.env` (and the
-   bindings), save the log to `WORK/`, and record a plan task "move <pin> to <rev>: rebase <patch> / fix <error>"
-   with the log's key lines.
+   (`# zmx behind live sessions, upstream's ZMX_REV (.upstream/agterm scripts/setup.sh, <version>, <date>)`). Then,
+   in the background: `scripts/build-zmx.sh` when a `ZMX_*` pin or `build/patches/zmx/` moved. It downloads, checks
+   every sha256, and applies the patches with `--fuzz=0`. A sum mismatch, a patch that no longer applies or a failed
+   build → `git checkout -- build/pins.env`, save the log to `WORK/`, and record a plan task "move <pin> to <rev>:
+   rebase <patch> / fix <error>" with the log's key lines. Upstream's `GHOSTTY_REV` is not a pin here (the script
+   reports it): the Ghostty pin is `LIBGHOSTTY_VT_REV`, which follows ghostty main; when upstream's moved, record a
+   plan task to review the Ghostty-level changes it brings (config keys, binds, shell integration) against
+   `LIBGHOSTTY_VT_REV`, and leave any bump of that pin (`scripts/build-ghostty-vt.sh`,
+   `scripts/gen-ghostty-vt-bindings.sh`, `scripts/gen-ghostty-config-keys.sh`) to a change of its own.
 3. **Vendored copies**: `bash SKILL_DIR/scripts/sync-resources.sh [--upstream DIR] --patches WORK/patches CURRENT TARGET`.
    It applies upstream's own diff to each copy (`resources/agent-status`, `resources/skills/agterm`, `hud.sh`,
    themes, `ghostty-defaults.conf`, zmx patches, `LICENSE.upstream`) only where it applies cleanly, so the Linux glue

@@ -1,6 +1,6 @@
 //! A terminal's keyboard state over the binds, ported from `Surface.maybeHandleBinding`, `endKeySequence` and the
-//! key-table actions of `performBindingAction` at `GHOSTTY_REV`: which binding a key event fires, what the half-typed
-//! sequence and the active key tables become, and whether the key still goes to the encoder.
+//! key-table actions of `performBindingAction` at `LIBGHOSTTY_VT_REV`: which binding a key event fires, what the
+//! half-typed sequence and the active key tables become, and whether the key still goes to the encoder.
 
 use super::Keybinds;
 use super::action::Action;

@@ -63,11 +63,12 @@ the Linux equivalent, or a recorded "no Linux counterpart" in the checklist.
 | `agterm/Resources/ghostty-defaults.conf` | `crates/agterm-core/src/ghostty_config/ghostty-defaults.conf` | adapted (Linux chords, comments): usually a conflict, merge the setting, keep the Linux binds |
 | `scripts/zmx-patches/*.patch` (+ `ghostty/`) | `build/patches/zmx/` | upstream's own zmx patches; a change rebuilds zmx. `0003-first-attach-snapshot.patch` is this repository's own (no upstream counterpart): keep it, and re-check that it applies after upstream's |
 | `LICENSE` | `resources/LICENSE.upstream` | |
-| `scripts/setup.sh` (`GHOSTTY_REV`, `ZMX_REV`) | `build/pins.env` | via `pins-delta.sh`; Zig version from each rev's `build.zig.zon`, sums from ziglang.org |
+| `scripts/setup.sh` (`ZMX_REV`) | `build/pins.env` | via `pins-delta.sh`; Zig version from the rev's `build.zig.zon`, sums from ziglang.org |
+| `scripts/setup.sh` (`GHOSTTY_REV`) | none | not a pin here: the Ghostty pin is `LIBGHOSTTY_VT_REV` (ghostty main), `pins-delta.sh` reports upstream's move |
 
-`build/patches/ghostty/*.patch` are this repository's own Linux patches (embedded OpenGL, input handoff,
-resources, GPU release), not upstream's: a `GHOSTTY_REV` move must re-apply them (`scripts/build-ghostty.sh` does,
-with `--fuzz=0`), and `scripts/gen-ghostty-bindings.sh` regenerates the checked-in bindings afterwards,
+`build/patches/ghostty-vt/*.patch` are this repository's own libghostty-vt patches (C API the app needs), not
+upstream's: a `LIBGHOSTTY_VT_REV` bump, a change of its own, re-applies them (`scripts/build-ghostty-vt.sh` does, with
+`--fuzz=0`), and `scripts/gen-ghostty-vt-bindings.sh` regenerates the checked-in bindings afterwards,
 `scripts/gen-ghostty-config-keys.sh` agterm-core's ghostty config key table.
 
 A new entry under `agterm/Resources/` (reported `unmapped`) has no copy yet: deciding where it goes is a plan task.

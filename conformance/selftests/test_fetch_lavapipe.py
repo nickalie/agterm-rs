@@ -81,7 +81,7 @@ def test_the_pins_name_an_arch_package_with_its_sum() -> None:
 def test_the_prefix_is_keyed_by_the_lavapipe_pins_alone(checkout: Path, icd_dirs: Path) -> None:
     base = prefix(checkout, icd_dirs)
     assert base.parent == checkout.parent / "vendor" and re.fullmatch(r"lavapipe-[0-9a-f]{16}", base.name)
-    edit_pin(checkout, "GHOSTTY_REV", "0" * 40)
+    edit_pin(checkout, "LIBGHOSTTY_VT_REV", "0" * 40)
     assert prefix(checkout, icd_dirs) == base
     edit_pin(checkout, "LAVAPIPE_VERSION", "99.0.0")
     assert prefix(checkout, icd_dirs) != base

@@ -1,5 +1,5 @@
 //! Triggers, ported from `Binding.Trigger` (`src/input/Binding.zig`), the physical keys of `input/key.zig` and the
-//! modifiers of `input/key_mods.zig` at `GHOSTTY_REV`.
+//! modifiers of `input/key_mods.zig` at `LIBGHOSTTY_VT_REV`.
 
 use std::fmt;
 use std::hash::{Hash, Hasher};

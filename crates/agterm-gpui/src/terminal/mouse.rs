@@ -11,8 +11,8 @@
 //!   Ctrl+Alt for a block, autoscroll every 15 ms past an edge); Shift extends the selection; the release copies it
 //!   per `copy-on-select` (`Shared::copy_on_select`). ⚠️ `cursor-click-to-move = true` is not carried out (the C API
 //!   has no prompt-click state); agterm's default is `false`.
-//! - The middle button follows `middle-click-action` (`primary-paste`: the primary selection, or the clipboard under
-//!   `copy-on-select = clipboard`, as Ghostty reads it); the right button follows `right-click-action` (`paste`,
+//! - The middle button follows `middle-click-action` (`primary-paste`: the primary selection, `clipboard-paste`: the
+//!   clipboard, as Ghostty reads them); the right button follows `right-click-action` (`paste`,
 //!   `copy`, `copy-or-paste`, `ignore`, or `context-menu`: the word or link under it selected and copied per
 //!   `copy-on-select`, with no menu to show).
 //! - Links ([`super::links`]) are refreshed on every move and modifier change, opened on a click; while the program
@@ -27,7 +27,7 @@
 use std::time::{Duration, Instant};
 
 use agterm_core::ghostty_config::binds::{Action, CopyFormat, Mods};
-use agterm_core::ghostty_config::{CopyOnSelect, MiddleClickAction, MouseShiftCapture, RightClickAction};
+use agterm_core::ghostty_config::{MiddleClickAction, MouseShiftCapture, RightClickAction};
 use agterm_term::{
     Autoscroll, ClipboardLocation, GestureEvent, GridPoint, MouseAction, MouseButton as PaneButton, MouseInput,
     MouseShape, Pane, PasteSource, WheelInput,
@@ -345,17 +345,17 @@ impl TerminalView {
         }
     }
 
-    /// `middle-click-action`: `primary-paste` pastes the primary selection, or the clipboard under
-    /// `copy-on-select = clipboard` (Ghostty's choice at `GHOSTTY_REV`); `ignore` touches nothing.
+    /// `middle-click-action` (Ghostty's `mouseButtonCallback` at `LIBGHOSTTY_VT_REV`): `primary-paste` pastes the
+    /// primary selection, `clipboard-paste` the clipboard, whatever `copy-on-select` is; `ignore` touches nothing.
     fn middle_press(&self, pane: &Pane, cx: &mut Context<Self>) {
         let config = self.shared.config();
-        if config.mouse.middle_click_action == MiddleClickAction::Ignore || self.shared.is_readonly() {
+        if self.shared.is_readonly() {
             return;
         }
-        let (item, location) = if config.copy_on_select == CopyOnSelect::Clipboard {
-            (cx.read_from_clipboard(), ClipboardLocation::Standard)
-        } else {
-            (cx.read_from_primary(), ClipboardLocation::Selection)
+        let (item, location) = match config.mouse.middle_click_action {
+            MiddleClickAction::Ignore => return,
+            MiddleClickAction::PrimaryPaste => (cx.read_from_primary(), ClipboardLocation::Selection),
+            MiddleClickAction::ClipboardPaste => (cx.read_from_clipboard(), ClipboardLocation::Standard),
         };
         let Some(text) = item.and_then(|item| item.text()) else {
             return;

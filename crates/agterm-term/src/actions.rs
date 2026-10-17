@@ -1,5 +1,5 @@
 //! The terminal side of Ghostty's terminal-scoped binding actions that change or read the terminal itself
-//! (`Surface.performBindingAction` and `Termio.clearScreen` at `GHOSTTY_REV`): `reset`, `clear_screen`,
+//! (`Surface.performBindingAction` and `Termio.clearScreen` at `LIBGHOSTTY_VT_REV`): `reset`, `clear_screen`,
 //! `adjust_selection`, `scroll_to_selection`, and the text of `copy_to_clipboard` and `write_*_file`.
 //!
 //! `clear_screen` has no counterpart in libghostty-vt's API, so it is written as VT sequences into the terminal (not

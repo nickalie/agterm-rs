@@ -1,10 +1,10 @@
-//! The diagnostic counts libghostty gave, as goldens: the cases the GTK build's `config_parity` test checked agterm-core
-//! against the linked libghostty (at upstream agterm v0.36.0's Ghostty, 683d8db), with libghostty's counts and
-//! keybind messages as it reported them there. The parse code they exercise (`cli/args.zig`, `Binding.zig`,
+//! The diagnostic counts libghostty gave, as goldens: the cases the GTK build's `config_parity` test checked
+//! agterm-core against the linked libghostty (at upstream agterm v0.36.0's Ghostty, 683d8db), with libghostty's
+//! counts and keybind messages as it reported them there. The parse code they exercise (`cli/args.zig`, `Binding.zig`,
 //! `Config.zig`'s value types) is unchanged at `LIBGHOSTTY_VT_REV` but for `copy-on-select` and `middle-click-action`,
-//! which no case here sets, so the goldens stand for the one Ghostty pin; the cases those two keys gained are at the
-//! end, read from `Config.zig` at the pin. Since libghostty is no longer linked, these hold the counts in place of the
-//! comparison.
+//! which none of those cases sets, so the goldens stand for the one Ghostty pin; the cases Ghostty 1.4's keys and
+//! values add are at the end of [`LINES`], read from `Config.zig` at the pin. Since libghostty is no longer linked,
+//! these hold the counts in place of the comparison.
 
 use std::error::Error;
 use std::path::Path;
@@ -157,6 +157,18 @@ const LINES: &[(&str, usize)] = &[
     ("config-file = ?absent.conf", 0),
     ("config-file = absent.conf", 1),
     ("config-file =", 0),
+    // read from `Config.zig` at `LIBGHOSTTY_VT_REV` (no libghostty linked to check them against): the keys and values
+    // Ghostty 1.4 added, and the old `copy-on-select` values its compatibility handler still takes
+    ("copy-on-select = primary", 0),
+    ("copy-on-select = both", 0),
+    ("copy-on-select = true", 0),
+    ("copy-on-select = false", 0),
+    ("copy-on-select = maybe", 1),
+    ("middle-click-action = clipboard-paste", 0),
+    ("vt-window-resize-allowed = true", 0),
+    ("vt-xt-checksum-report", 0),
+    ("vt-xt-checksum-extension = no-negate,no-attributes,no-trim,full", 0),
+    ("vt-xt-checksum-extension = bogus", 1),
 ];
 
 /// `keybind` lines (Task 8's port of `Binding.zig`): triggers, flags, sequences, tables, chains and parameters, with

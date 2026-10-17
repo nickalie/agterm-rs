@@ -1,5 +1,6 @@
-//! The two Ghostty pins key their prefixes independently: bumping `LIBGHOSTTY_VT_REV` leaves the libghostty and zmx
-//! prefixes where they are, and a `GHOSTTY_` pin bump leaves the libghostty-vt prefix where it is.
+//! The Ghostty pin and zmx's key their prefixes independently: bumping a `LIBGHOSTTY_VT_` pin (the library, or the
+//! Ghostty resources vendored beside it) or a libghostty-vt patch leaves the zmx prefix where it is, and a `ZMX_` pin
+//! bump leaves the libghostty-vt prefix where it is.
 //!
 //! Each case runs the real `--print-prefix` of the build scripts over a copy of the repository's scripts, pins and
 //! patches with one pin line edited; nothing is fetched or built.
@@ -10,7 +11,6 @@ use std::process::Command;
 
 #[derive(Debug, PartialEq, Eq)]
 struct Prefixes {
-    ghostty: String,
     ghostty_vt: String,
     zmx: String,
 }
@@ -37,12 +37,7 @@ fn checkout(edit: impl Fn(&str) -> String) -> tempfile::TempDir {
     let root = repo_root();
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("scripts/lib")).unwrap();
-    for script in [
-        "lib/native.sh",
-        "build-ghostty.sh",
-        "build-ghostty-vt.sh",
-        "build-zmx.sh",
-    ] {
+    for script in ["lib/native.sh", "build-ghostty-vt.sh", "build-zmx.sh"] {
         fs::copy(
             root.join("scripts").join(script),
             dir.path().join("scripts").join(script),
@@ -88,7 +83,6 @@ fn patched_prefixes(patch: &str) -> Prefixes {
 
 fn prefixes_of(dir: &tempfile::TempDir) -> Prefixes {
     Prefixes {
-        ghostty: print_prefix(dir.path(), "build-ghostty.sh"),
         ghostty_vt: print_prefix(dir.path(), "build-ghostty-vt.sh"),
         zmx: print_prefix(dir.path(), "build-zmx.sh"),
     }
@@ -116,7 +110,6 @@ fn bump(pins: &str, name: &str, value: &str) -> String {
 #[test]
 fn the_prefixes_are_named_after_their_builds() {
     let base = prefixes(str::to_owned);
-    assert!(base.ghostty.starts_with("/agterm-vendor/ghostty-"), "{base:?}");
     assert!(base.ghostty_vt.starts_with("/agterm-vendor/ghostty-vt-"), "{base:?}");
     assert!(base.zmx.starts_with("/agterm-vendor/zmx-"), "{base:?}");
 }
@@ -126,7 +119,6 @@ fn a_libghostty_vt_bump_moves_only_the_vt_prefix() {
     let base = prefixes(str::to_owned);
     let bumped = prefixes(|pins| bump(pins, "LIBGHOSTTY_VT_REV", "0000000000000000000000000000000000000000"));
     assert_ne!(bumped.ghostty_vt, base.ghostty_vt);
-    assert_eq!(bumped.ghostty, base.ghostty);
     assert_eq!(bumped.zmx, base.zmx);
 }
 
@@ -135,7 +127,15 @@ fn a_libghostty_vt_zig_bump_moves_only_the_vt_prefix() {
     let base = prefixes(str::to_owned);
     let bumped = prefixes(|pins| bump(pins, "LIBGHOSTTY_VT_ZIG_VERSION", "0.16.1"));
     assert_ne!(bumped.ghostty_vt, base.ghostty_vt);
-    assert_eq!(bumped.ghostty, base.ghostty);
+    assert_eq!(bumped.zmx, base.zmx);
+}
+
+#[test]
+fn a_theme_package_bump_moves_only_the_vt_prefix() {
+    // the resources live in the vt prefix: a new theme package rebuilds it
+    let base = prefixes(str::to_owned);
+    let bumped = prefixes(|pins| bump(pins, "LIBGHOSTTY_VT_THEMES_SHA256", &"0".repeat(64)));
+    assert_ne!(bumped.ghostty_vt, base.ghostty_vt);
     assert_eq!(bumped.zmx, base.zmx);
 }
 
@@ -144,23 +144,16 @@ fn a_libghostty_vt_patch_moves_only_the_vt_prefix() {
     let base = prefixes(str::to_owned);
     let patched = patched_prefixes("ghostty-vt/0001-kitty-placement-namespace-and-parent.patch");
     assert_ne!(patched.ghostty_vt, base.ghostty_vt);
-    assert_eq!(patched.ghostty, base.ghostty);
     assert_eq!(patched.zmx, base.zmx);
 }
 
 #[test]
-fn a_libghostty_patch_leaves_the_vt_prefix() {
+fn a_zmx_bump_or_patch_leaves_the_vt_prefix() {
     let base = prefixes(str::to_owned);
-    let patched = patched_prefixes("ghostty/0001-embedded-opengl.patch");
-    assert_ne!(patched.ghostty, base.ghostty);
-    assert_eq!(patched.ghostty_vt, base.ghostty_vt);
-}
-
-#[test]
-fn a_ghostty_bump_leaves_the_vt_prefix() {
-    let base = prefixes(str::to_owned);
-    let bumped = prefixes(|pins| bump(pins, "GHOSTTY_REV", "0000000000000000000000000000000000000000"));
-    assert_ne!(bumped.ghostty, base.ghostty);
+    let bumped = prefixes(|pins| bump(pins, "ZMX_REV", "0000000000000000000000000000000000000000"));
+    assert_ne!(bumped.zmx, base.zmx);
     assert_eq!(bumped.ghostty_vt, base.ghostty_vt);
-    assert_eq!(bumped.zmx, base.zmx);
+    let patched = patched_prefixes("zmx/0001-explicit-leadership.patch");
+    assert_ne!(patched.zmx, base.zmx);
+    assert_eq!(patched.ghostty_vt, base.ghostty_vt);
 }

@@ -1,5 +1,5 @@
-//! The ghostty config parser against ghostty's own rules at `GHOSTTY_REV`; `counts_tests` holds the counts libghostty
-//! gave.
+//! The ghostty config parser against ghostty's own rules at `LIBGHOSTTY_VT_REV`; `counts_tests` holds the counts
+//! libghostty gave.
 
 use std::path::{Path, PathBuf};
 
@@ -489,7 +489,13 @@ fn residual_differences_accept_any_value_of_an_opaque_key() {
 fn the_key_table_is_sorted_and_carries_the_supported_keys() {
     let keys = known_keys();
     assert!(keys.windows(2).all(|pair| pair[0].name < pair[1].name));
-    assert_eq!(GHOSTTY_REV.len(), 40);
+    assert_eq!(LIBGHOSTTY_VT_REV.len(), 40);
+    // the one Ghostty pin: the key table is generated at the revision build/pins.env pins
+    let pins = include_str!("../../../../build/pins.env");
+    assert!(
+        pins.contains(&format!("\nLIBGHOSTTY_VT_REV=\"{LIBGHOSTTY_VT_REV}\"\n")),
+        "regenerate the keys (scripts/gen-ghostty-config-keys.sh) after a LIBGHOSTTY_VT_REV bump"
+    );
     for name in [
         "font-family",
         "font-family-bold",
@@ -770,24 +776,51 @@ fn scrollback_clipboard_and_mouse_keys() {
 }
 
 #[test]
+fn middle_click_takes_ghostty_1_4s_clipboard_paste() {
+    assert_eq!(
+        load("middle-click-action = clipboard-paste\n")
+            .config
+            .mouse
+            .middle_click_action,
+        MiddleClickAction::ClipboardPaste
+    );
+}
+
+#[test]
 fn copy_on_select_key() {
     assert_eq!(
         GhosttyConfig::default().copy_on_select,
-        CopyOnSelect::True,
+        CopyOnSelect::Primary,
         "Ghostty's Linux default"
     );
+    for (value, copy) in [
+        ("none", CopyOnSelect::None),
+        ("primary", CopyOnSelect::Primary),
+        ("clipboard", CopyOnSelect::Clipboard),
+        ("both", CopyOnSelect::Both),
+    ] {
+        assert_eq!(load(&format!("copy-on-select = {value}\n")).config.copy_on_select, copy);
+    }
+    // the values before Ghostty 1.4, through `compatCopyOnSelect`: `true` is `primary` on Linux, `false` `none`
+    assert_eq!(count("copy-on-select = true\ncopy-on-select = false\n"), 0);
     assert_eq!(
-        load("copy-on-select = clipboard\n").config.copy_on_select,
-        CopyOnSelect::Clipboard
+        load("copy-on-select = clipboard\ncopy-on-select = true\n")
+            .config
+            .copy_on_select,
+        CopyOnSelect::Primary
     );
     assert_eq!(
         load("copy-on-select = false\n").config.copy_on_select,
-        CopyOnSelect::False
+        CopyOnSelect::None
     );
     assert_eq!(
         load("copy-on-select = false\ncopy-on-select =\n").config.copy_on_select,
-        CopyOnSelect::True,
+        CopyOnSelect::Primary,
         "an empty value restores the default"
+    );
+    assert_eq!(
+        check("copy-on-select", Some("maybe")).map(drop),
+        Err("invalid value \"maybe\", valid values are: none, primary, clipboard, both".to_owned())
     );
 }
 
