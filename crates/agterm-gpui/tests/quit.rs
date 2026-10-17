@@ -237,6 +237,26 @@ fn texts(dir: &Path) -> String {
     all
 }
 
+/// The last lines of every `.log` file under `dir` (zmx's session logs), each under its path.
+fn logs(dir: &Path) -> String {
+    let mut all = String::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return all;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            all.push_str(&logs(&path));
+        } else if path.extension().is_some_and(|extension| extension == "log") {
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let lines: Vec<&str> = text.lines().collect();
+            let tail = lines[lines.len().saturating_sub(40)..].join("\n");
+            all.push_str(&format!("== {}\n{tail}\n", path.display()));
+        }
+    }
+    all
+}
+
 /// A primary in Live mode on a private Xvfb (lavapipe), its zmx sessions killed when the returned guard drops.
 fn start_live(lavapipe: &Path, zmx_bin: &Path, resources: &Path) -> TestResult<(Sandbox, usize, Sessions)> {
     let mut sandbox = Sandbox::new()?;
@@ -343,10 +363,17 @@ fn sigterm_saves_and_quits_within_its_deadline_with_live_sessions_busy_and_pages
     }
     // the Live sessions outlive the app; its own processes do not
     let listed = zmx(&zmx_bin, &sessions.dir, &["list", "--short"])?;
-    assert!(
-        listed.split_whitespace().count() == live.len() && live.iter().all(|daemon| running(*daemon)),
-        "every Live session survives: {listed}"
-    );
+    if listed.split_whitespace().count() != live.len() || !live.iter().all(|daemon| running(*daemon)) {
+        let daemons: Vec<String> = live
+            .iter()
+            .map(|daemon| format!("{daemon} {}", if running(*daemon) { "running" } else { "gone" }))
+            .collect();
+        return Err(format!(
+            "every Live session survives: listed {listed:?}, sessions {sids:?}, daemons {daemons:?}\n{}\n{log}",
+            logs(Path::new(&sessions.dir))
+        )
+        .into());
+    }
     wait_gone(&helpers)?;
     drop(sessions);
     Ok(())
