@@ -80,6 +80,25 @@ def make_icd(tmp_path: Path):
     return write
 
 
+@pytest.fixture(scope="session")
+def stand_in_lavapipe_icd(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A lavapipe ICD manifest beside the stand-in driver it names, outside every test's own tmp_path."""
+    directory = tmp_path_factory.mktemp("stand-in-lavapipe")
+    (directory / "lib").mkdir()
+    (directory / "lib" / "libvulkan_lvp.so").write_text("stand-in driver")
+    manifest = directory / "lvp_icd.json"
+    manifest.write_text(json.dumps({"ICD": {"library_path": str(directory / "lib" / "libvulkan_lvp.so")}}))
+    return manifest
+
+
+@pytest.fixture(autouse=True)
+def stand_in_lavapipe(stand_in_lavapipe_icd: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The Rust build renders on lavapipe only, so every Rust launch needs its manifest: a stand-in, as run-rust-linux.sh
+    hands the harness the real one. A test of a missing or wrong lavapipe removes or replaces it."""
+    monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, str(stand_in_lavapipe_icd))
+    return stand_in_lavapipe_icd
+
+
 @pytest.fixture(autouse=True)
 def short_leftover_grace(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fake daemons never exit on their own; the grace a real one gets would only slow every leftover test."""

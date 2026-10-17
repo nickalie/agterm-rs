@@ -60,8 +60,8 @@ def test_reports_version(ctl):
 """
 
 
-# What the GPUI frontend's instance was started with, written where the test runner says.
-GPUI_PROBE_TEST = """
+# What the instance was started with, written where the test runner says.
+LAUNCH_PROBE_TEST = """
 import json
 import os
 
@@ -89,19 +89,12 @@ def stage(tmp_path: Path, fake_bin: Path) -> Path:
     return app.parent.parent
 
 
-@pytest.fixture
-def gpui_stage(tmp_path: Path, fake_bin: Path) -> Path:
-    """A GPUI stage (`scripts/stage.sh --frontend gpui`): the fake app as bin/agterm-gpui, no bin/agterm."""
-    app = tmp_path / "gpui-stage" / "bin" / "agterm-gpui"
-    app.parent.mkdir(parents=True)
-    shutil.copy2(fake_bin, app)
-    return app.parent.parent
-
-
-@pytest.fixture
-def lavapipe_icd(make_icd) -> Path:
-    """A lavapipe ICD manifest, handed to scripts/fetch-lavapipe.sh as AGTERM_LAVAPIPE_ICD."""
-    return make_icd()
+@pytest.fixture(autouse=True)
+def lavapipe_icd(make_icd, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A lavapipe ICD manifest, handed to scripts/fetch-lavapipe.sh as AGTERM_LAVAPIPE_ICD by every run."""
+    icd = make_icd()
+    monkeypatch.setenv("AGTERM_LAVAPIPE_ICD", str(icd))
+    return icd
 
 
 @pytest.fixture(autouse=True)
@@ -189,36 +182,19 @@ def test_a_holding_run_writes_the_report(tmp_path: Path, stage: Path, layers: Pa
     assert (out / "keep.txt").read_text() == "mine"
 
 
-def test_a_gtk_run_reports_its_frontend_and_no_lavapipe(tmp_path: Path, stage: Path, layers: Path) -> None:
-    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID))
+def test_a_run_launches_its_binary_on_lavapipe_with_a_seat(
+    tmp_path: Path, stage: Path, layers: Path, lavapipe_icd: Path
+) -> None:
+    (layers / "protocol" / "test_probe.py").write_text(LAUNCH_PROBE_TEST)
+    probe = tmp_path / "launch.json"
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), LAUNCH_PROBE=str(probe))
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert report.startswith("## rust-linux conformance\n")
-    assert "- frontend: gtk\n" in report and "lavapipe" not in report
-    assert "rust frontend: gtk" in (tmp_path / "report" / "pytest.log").read_text()
-
-
-def test_a_gpui_run_launches_its_binary_on_lavapipe_with_a_seat(
-    tmp_path: Path, gpui_stage: Path, layers: Path, lavapipe_icd: Path
-) -> None:
-    (layers / "protocol" / "test_probe.py").write_text(GPUI_PROBE_TEST)
-    probe = tmp_path / "launch.json"
-    completed, report = run(
-        tmp_path,
-        gpui_stage,
-        layers,
-        ratchet(tmp_path, PROBE_ID),
-        "--frontend",
-        "gpui",
-        AGTERM_LAVAPIPE_ICD=str(lavapipe_icd),
-        LAUNCH_PROBE=str(probe),
-    )
-    assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert report.startswith("## rust-linux conformance, GPUI\n")
-    assert "- frontend: gpui\n" in report
-    assert f"agterm: `{gpui_stage}/bin/agterm-gpui`" in report
+    assert "frontend" not in report
+    assert f"agterm: `{stage}/bin/agterm`" in report
     assert f"Vulkan: lavapipe only, `{lavapipe_icd}`" in report
     assert "rust: 1 pass, 0 fail" in report and "ratchet holds" in report
-    assert "rust frontend: gpui" in (tmp_path / "report" / "pytest.log").read_text()
+    assert "rust frontend" not in (tmp_path / "report" / "pytest.log").read_text()
     launched = json.loads(probe.read_text())
     assert launched["weston"][-1] == "--fake-seat"
     env = launched["env"]
@@ -228,31 +204,23 @@ def test_a_gpui_run_launches_its_binary_on_lavapipe_with_a_seat(
     assert not {"AGTERM_LAVAPIPE_ICD", "CONFORMANCE_LAVAPIPE_ICD"} & env.keys()
 
 
-def test_a_gpui_run_without_its_binary_skips_everything(
-    tmp_path: Path, stage: Path, layers: Path, lavapipe_icd: Path
-) -> None:
-    """A GTK stage holds no bin/agterm-gpui: nothing launches, as before the GPUI crate existed."""
-    completed, report = run(
-        tmp_path, stage, layers, ratchet(tmp_path), "--frontend", "gpui", AGTERM_LAVAPIPE_ICD=str(lavapipe_icd)
-    )
+def test_a_run_without_the_binary_skips_everything(tmp_path: Path, layers: Path) -> None:
+    """A stage without bin/agterm (the app crate not built): nothing launches."""
+    empty = tmp_path / "empty-stage"
+    (empty / "bin").mkdir(parents=True)
+    completed, report = run(tmp_path, empty, layers, ratchet(tmp_path))
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "agterm: not staged" in report
     assert "rust: 0 pass, 0 fail, 0 skip(unsupported), 1 skip(not-yet-at-level)" in report
 
 
-def test_a_gpui_run_without_lavapipe_stops_before_anything_runs(
-    tmp_path: Path, gpui_stage: Path, layers: Path, lock: Path
+def test_a_run_without_lavapipe_stops_before_anything_runs(
+    tmp_path: Path, stage: Path, layers: Path, lock: Path
 ) -> None:
     with open(lock, "w") as held:
         fcntl.flock(held, fcntl.LOCK_EX)  # refused before queueing
         completed, report = run(
-            tmp_path,
-            gpui_stage,
-            layers,
-            ratchet(tmp_path, PROBE_ID),
-            "--frontend",
-            "gpui",
-            AGTERM_LAVAPIPE_ICD=str(tmp_path / "absent.json"),
+            tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), AGTERM_LAVAPIPE_ICD=str(tmp_path / "absent.json")
         )
     assert completed.returncode == 2
     assert "AGTERM_LAVAPIPE_ICD names no ICD manifest" in completed.stderr
@@ -287,17 +255,12 @@ def vendored_weston(vendor: Path, fake_compositor_bin: Path) -> Path:
     return prefix
 
 
-def test_a_gpui_run_on_a_weston_without_a_seat_stops_naming_the_fix(
-    tmp_path: Path, gpui_stage: Path, layers: Path, lavapipe_icd: Path
-) -> None:
+def test_a_run_on_a_weston_without_a_seat_stops_naming_the_fix(tmp_path: Path, stage: Path, layers: Path) -> None:
     completed, report = run(
         tmp_path,
-        gpui_stage,
+        stage,
         layers,
         ratchet(tmp_path, PROBE_ID),
-        "--frontend",
-        "gpui",
-        AGTERM_LAVAPIPE_ICD=str(lavapipe_icd),
         AGTERM_VENDOR=str(tmp_path / "vendor"),
         FAKE_COMPOSITOR_HELP="old",
     )
@@ -306,20 +269,17 @@ def test_a_gpui_run_on_a_weston_without_a_seat_stops_naming_the_fix(
     assert report == ""
 
 
-def test_a_gpui_run_takes_the_vendored_weston_over_an_old_one(
-    tmp_path: Path, gpui_stage: Path, layers: Path, lavapipe_icd: Path, fake_compositor_bin: Path
+def test_a_run_takes_the_vendored_weston_over_an_old_one(
+    tmp_path: Path, stage: Path, layers: Path, fake_compositor_bin: Path
 ) -> None:
     prefix = vendored_weston(tmp_path / "vendor", fake_compositor_bin)
-    (layers / "protocol" / "test_probe.py").write_text(GPUI_PROBE_TEST)
+    (layers / "protocol" / "test_probe.py").write_text(LAUNCH_PROBE_TEST)
     probe = tmp_path / "launch.json"
     completed, report = run(
         tmp_path,
-        gpui_stage,
+        stage,
         layers,
         ratchet(tmp_path, PROBE_ID),
-        "--frontend",
-        "gpui",
-        AGTERM_LAVAPIPE_ICD=str(lavapipe_icd),
         AGTERM_VENDOR=str(tmp_path / "vendor"),
         FAKE_COMPOSITOR_HELP="old",
         LAUNCH_PROBE=str(probe),
@@ -411,23 +371,24 @@ def test_a_full_run_says_so(tmp_path: Path, stage: Path, layers: Path) -> None:
     assert "- mode: full\n" in report and "ratchet holds: 1 listed id(s), full run" in report
 
 
-def test_an_unknown_frontend_exits_2(tmp_path: Path, stage: Path, layers: Path) -> None:
-    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path), "--frontend", "qt")
+def test_there_is_no_frontend_switch(tmp_path: Path, stage: Path, layers: Path) -> None:
+    """One Rust build since the GTK frontend went: `--frontend` is an unknown argument."""
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path), "--frontend", "gpui")
     assert completed.returncode == 2
-    assert "unknown frontend: qt" in completed.stderr
+    assert "unknown argument: --frontend" in completed.stderr
     assert report == ""
 
 
-def test_the_frontends_keep_their_own_ratchets() -> None:
-    """Both lists exist with their `#` headers; the GPUI one starts from what the skeleton passed."""
+def test_one_ratchet_list_holds_the_build() -> None:
+    """rust-passing.txt with its `#` header, sorted; the GPUI build's own list was folded into it."""
     conformance = SCRIPT.parents[1]
-    for name in ("rust-passing.txt", "rust-gpui-passing.txt"):
-        text = (conformance / name).read_text()
-        assert text.startswith("#"), name
-        ids = [line for line in text.splitlines() if line and not line.startswith("#")]
-        assert ids == sorted(ids), name
+    text = (conformance / "rust-passing.txt").read_text()
+    assert text.startswith("#")
+    ids = [line for line in text.splitlines() if line and not line.startswith("#")]
+    assert ids == sorted(ids) and len(ids) == len(set(ids))
+    assert not (conformance / "rust-gpui-passing.txt").exists()
     help_text = subprocess.run([str(SCRIPT), "--help"], capture_output=True, text=True, check=True).stdout
-    assert "conformance/rust-gpui-passing.txt" in help_text and "--frontend gtk|gpui" in help_text
+    assert "conformance/rust-passing.txt" in help_text and "--frontend" not in help_text
 
 
 def test_a_red_unlisted_test_does_not_fail_the_run(tmp_path: Path, stage: Path, layers: Path) -> None:

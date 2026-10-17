@@ -86,7 +86,7 @@ WESTON_RENDERER = "gl"
 # NVIDIA's EGL GDK settles on a GLES context while the fork's GtkGLArea allows desktop GL only, so no pane realizes.
 GLVND_VENDOR_DIRS = ("/usr/share/glvnd/egl_vendor.d", "/etc/glvnd/egl_vendor.d")
 EGL_VENDOR_VARIABLE = "__EGL_VENDOR_LIBRARY_FILENAMES"
-# GPUI (the Rust build's second frontend) renders through wgpu on Vulkan, with GL beside it, and in this harness on
+# The Rust build's GPUI frontend renders through wgpu on Vulkan, with GL beside it, and in this harness on
 # Mesa's lavapipe and llvmpipe only, never on the machine's GPU driver: the Vulkan loader gets lavapipe's ICD manifest
 # as its one driver (run-rust-linux.sh resolves it through scripts/fetch-lavapipe.sh into this variable, which is not
 # AGTERM_-prefixed so the plugin keeps it), GL is forced onto llvmpipe, and every inherited loader or driver selection
@@ -752,7 +752,7 @@ def lavapipe_icd(environ: Mapping[str, str] | None = None) -> str:
     path = (os.environ if environ is None else environ).get(LAVAPIPE_ICD_VARIABLE)
     hint = (
         f"set {LAVAPIPE_ICD_VARIABLE} to lavapipe's ICD manifest (`scripts/fetch-lavapipe.sh` prints it; "
-        "run-rust-linux.sh --frontend gpui sets it): the GPUI build renders on lavapipe only, "
+        "run-rust-linux.sh sets it): the GPUI build renders on lavapipe only, "
         "never on a hardware driver"
     )
     if not path:

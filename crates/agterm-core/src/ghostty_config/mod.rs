@@ -15,8 +15,8 @@
 //! directory tried, as libghostty counts them. A valid value of a key agterm does not support counts nothing; the key is ignored and logged. libghostty
 //! finalizes a fresh config on the light side of a dual theme, so [`LoadedConfig::diagnostic_count`] does too.
 //!
-//! **Residual differences** from libghostty (the count ones pinned by `agterm-ghostty`'s `config_parity` test, which
-//! checks every other case above against the linked libghostty):
+//! **Residual differences** from libghostty (the count ones pinned by [`counts_tests`], which holds every other case
+//! above at the counts libghostty gave for it):
 //! - count: keys whose type has a `parseCLI` agterm does not port ([`validate::Kind::Opaque`]: `font-style*`,
 //!   `font-variation*`, `font-codepoint-map`, `clipboard-codepoint-map`, `adjust-*`, `command`, `initial-command`,
 //!   `env`, `input`, `working-directory`, `quick-terminal-size`, `background-blur`, `mouse-scroll-multiplier`,
@@ -37,6 +37,8 @@ pub mod validate;
 
 #[cfg(test)]
 mod binds_tests;
+#[cfg(test)]
+mod counts_tests;
 #[cfg(test)]
 mod tests;
 

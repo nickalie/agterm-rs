@@ -1,15 +1,14 @@
-# The isolated dev instance of scripts/run-gtk-dev.sh and scripts/run-gpui-dev.sh: build, stage and launch this
-# checkout's agterm beside any installed agterm (the entry scripts' headers describe the instance). Sourced, not run.
+# The isolated dev instance of scripts/run-gpui-dev.sh: build, stage and launch this checkout's agterm beside any
+# installed agterm (the entry script's header describes the instance). Sourced, not run.
 
 # shellcheck source=native.sh
 source "$(dirname "${BASH_SOURCE[0]}")/native.sh"
 
-# run_dev_instance FRONTEND USAGE_SCRIPT [--release] [--state DIR] [-- AGTERM_ARGS...]
-#   FRONTEND      gtk or gpui: stage.sh's --frontend, which picks bin/agterm or bin/agterm-gpui
+# run_dev_instance USAGE_SCRIPT [--release] [--state DIR] [-- AGTERM_ARGS...]
 #   USAGE_SCRIPT  the entry script, whose header comment --help prints
 run_dev_instance() {
-  local frontend="$1" usage_script="$2"
-  shift 2
+  local usage_script="$1"
+  shift
   local profile=debug state="" args=()
   while (($#)); do
     case "$1" in
@@ -22,7 +21,6 @@ run_dev_instance() {
   done
 
   local app_name=agterm
-  [[ "$frontend" == gtk ]] || app_name=agterm-gpui
 
   root="$(mktemp -d /tmp/agterm-dev-XXXXXX)"
   # Removed when the script fails before the app starts; exec drops the trap, so a launched instance keeps it.
@@ -36,15 +34,13 @@ run_dev_instance() {
   # sun_path holds 108 bytes on Linux, but the app refuses 104 or more, as upstream's macOS limit.
   ((${#socket} < 104)) || die "socket path too long (${#socket} bytes, the limit is 103): $socket"
 
-  # both frontends' workspace without what links WPE WebKit, then the GPUI frontend: with its HTML overlays (which need
-  # a WPE WebKit, README > WPE WebKit) when it is the one launched, without them beside the GTK app
+  # the workspace without what links WPE WebKit (agtermctl among it), then the app with its HTML overlays (which need a
+  # WPE WebKit, README > WPE WebKit)
   local profile_args=()
   [[ "$profile" == release ]] && profile_args=(--release)
-  local gpui_args=("${GPUI_WITHOUT_HTML[@]}")
-  [[ "$frontend" == gtk ]] || gpui_args=(-p agterm-gpui)
   (cd "$NATIVE_ROOT" && cargo build "${profile_args[@]}" "${WORKSPACE_WITHOUT_WPE[@]}" \
-    && cargo build "${profile_args[@]}" "${gpui_args[@]}")
-  "$NATIVE_ROOT/scripts/stage.sh" "$root/stage" --profile "$profile" --frontend "$frontend"
+    && cargo build "${profile_args[@]}" -p agterm-gpui)
+  "$NATIVE_ROOT/scripts/stage.sh" "$root/stage" --profile "$profile"
   local app="$root/stage/bin/$app_name"
   [[ -x "$app" ]] || die "no $app_name binary staged in $root/stage: the app crate does not build one yet"
 
@@ -57,7 +53,7 @@ run_dev_instance() {
   export AGTERM_CONTROL_SOCKET="$socket"
 
   cat >&2 <<EOF
-→ agterm dev instance ($frontend, $profile)
+→ agterm dev instance ($profile)
   app id: $AGTERM_APP_ID
   state:  $state
   socket: $socket

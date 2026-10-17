@@ -1,11 +1,10 @@
-# Shared helpers of the native build scripts (build-ghostty.sh, build-ghostty-vt.sh, build-layer-shell.sh, build-zmx.sh,
-# build-weston.sh, fetch-wpe.sh, fetch-lavapipe.sh, fetch-fonts.sh, gen-wpe-bindings.sh, pkg-config.sh, stage.sh,
-# lib/dev-instance.sh). Sourced, not run.
+# Shared helpers of the native build scripts (build-ghostty.sh, build-ghostty-vt.sh, build-zmx.sh, build-weston.sh,
+# fetch-wpe.sh, fetch-lavapipe.sh, fetch-fonts.sh, gen-wpe-bindings.sh, pkg-config.sh, stage.sh, lib/dev-instance.sh).
+# Sourced, not run.
 #
 # Each native dependency lives in its own vendored prefix, ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/<name>-<key>/,
-# where <key> hashes that dependency's pins and patches only. Cargo never runs zig: agterm-ghostty-sys asks
-# `build-ghostty.sh --print-prefix` (agterm-ghostty-vt-sys `build-ghostty-vt.sh --print-prefix`) where the prefix is
-# and fails when it is missing. WPE WebKit is a binary package unpacked (fetch-wpe.sh) where the system has none, and
+# where <key> hashes that dependency's pins and patches only. Cargo never runs zig: agterm-ghostty-vt-sys asks
+# `build-ghostty-vt.sh --print-prefix` where the prefix is and fails when it is missing. WPE WebKit is a binary package unpacked (fetch-wpe.sh) where the system has none, and
 # reaches cargo through pkg-config.sh. A relative AGTERM_VENDOR is taken against the repository root, so every caller (and
 # cargo, which runs from a crate directory) sees one path.
 
@@ -18,10 +17,9 @@ source "$PINS"
 
 # The workspace minus everything that links WPE WebKit (the -sys crates, the agterm-wpe host over them, and the GPUI
 # frontend, whose default `html` feature runs its HTML overlays on it), as cargo arguments, so a machine without WPE
-# WebKit (Ubuntu packages none) still builds, tests and stages the GTK app; GPUI_WITHOUT_HTML adds the GPUI frontend
-# back without the feature (the core then refuses every page). The GPUI build with its pages, and its conformance,
-# need a WPE WebKit (README > WPE WebKit): run-rust-linux.sh --frontend gpui and run-gpui-dev.sh build it so, and CI
-# runs them in its Arch jobs.
+# WebKit (Ubuntu packages none) still builds and tests the rest; GPUI_WITHOUT_HTML adds the GPUI frontend back without
+# the feature (the core then refuses every page). The app with its pages, and its conformance, need a WPE WebKit
+# (README > WPE WebKit): run-rust-linux.sh and run-gpui-dev.sh build it so, and CI runs them in its Arch jobs.
 WORKSPACE_WITHOUT_WPE=(--workspace --exclude agterm-wpe --exclude agterm-wpe-sys --exclude agterm-wpe-platform-sys
   --exclude agterm-wpe-javascriptcore-sys --exclude agterm-gpui)
 GPUI_WITHOUT_HTML=(-p agterm-gpui --no-default-features)
@@ -81,18 +79,6 @@ ghostty_vt_prefix_is_complete() {
   [[ -s "$prefix/lib/libghostty-vt.a" && -s "$prefix/include/ghostty/vt.h" \
     && -s "$prefix/include/ghostty/vt/terminal.h" && -s "$prefix/share/agterm/ghostty-vt-PINS" ]] \
     && pin_lines LIBGHOSTTY_VT | cmp -s - "$prefix/share/agterm/ghostty-vt-PINS"
-}
-
-# gtk4-layer-shell carries no patches: its key hashes the LAYER_SHELL_ pins only.
-layer_shell_prefix() {
-  echo "$VENDOR_ROOT/gtk4-layer-shell-$(prefix_key LAYER_SHELL /nonexistent)"
-}
-
-# A gtk4-layer-shell prefix is complete when its library, header and pkg-config file are all there.
-layer_shell_prefix_is_complete() {
-  local prefix="$1"
-  [[ -s "$prefix/lib/libgtk4-layer-shell.so" && -s "$prefix/include/gtk4-layer-shell/gtk4-layer-shell.h" \
-    && -s "$prefix/lib/pkgconfig/gtk4-layer-shell-0.pc" ]]
 }
 
 # The WPE WebKit package carries no patches: its key hashes the WPE_ pins only.

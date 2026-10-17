@@ -1,5 +1,5 @@
-//! The ghostty config parser against ghostty's own rules at `GHOSTTY_REV`; `agterm-ghostty`'s `config_parity` test
-//! checks the same counts against the linked libghostty.
+//! The ghostty config parser against ghostty's own rules at `GHOSTTY_REV`; `counts_tests` holds the counts libghostty
+//! gave.
 
 use std::path::{Path, PathBuf};
 

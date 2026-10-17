@@ -16,37 +16,38 @@ ghostty_probe = importlib.util.module_from_spec(spec)
 sys.modules["ghostty_probe"] = ghostty_probe
 spec.loader.exec_module(ghostty_probe)
 
-CREATED = "2026-10-13T00:00:00Z DEBUG agterm::surface: terminal surface created key=1 scale=1.0"
-DREW = "2026-10-13T00:00:00Z DEBUG agterm::surface: terminal drew its first frame key=1"
-NO_GL = "2026-10-13T00:00:00Z ERROR agterm::surface: the terminal's GtkGLArea has no OpenGL context err=no backend"
+CREATED = "2026-10-15T00:00:00.000000Z DEBUG agterm::surface: terminal surface created key=1 scale=2"
+DREW = "2026-10-15T00:00:00.016000Z DEBUG agterm::surface: terminal drew its first frame key=1"
 
 
 def test_a_drawn_frame_is_seen() -> None:
-    assert ghostty_probe.read_log(f"{CREATED}\n{DREW}\n") == {"created": True, "drew": True, "error": None}
+    log = f"INFO agterm_gpui::app: serving\n{CREATED}\n{DREW}\n"
+    assert ghostty_probe.read_log(log) == {"created": True, "drew": True, "error": None}
 
 
-def test_a_serving_app_without_a_gl_context_is_a_failure() -> None:
-    # The case `version` misses: the app logs the GL error and keeps answering on its socket.
-    seen = ghostty_probe.read_log(f"INFO agterm: serving\n{NO_GL}\n")
-    assert seen == {"created": False, "drew": False, "error": NO_GL}
+def test_a_serving_app_whose_surface_cannot_be_created_is_a_failure() -> None:
+    # The case `version` misses: the app logs the failure and keeps answering on its socket.
+    line = "2026-10-15T00:00:00Z ERROR agterm::surface: could not create the terminal surface key=1 err=pty: boom"
+    assert ghostty_probe.read_log(f"INFO agterm_gpui::app: serving\n{CREATED}\n{line}\n") == {
+        "created": True,
+        "drew": False,
+        "error": line,
+    }
 
 
 def test_colour_codes_are_dropped_from_the_log() -> None:
     # tracing's writer colours a file too; the message itself is never split by a code
     coloured = (
-        "\x1b[2m2026-10-13T00:00:00Z\x1b[0m \x1b[31mERROR\x1b[0m \x1b[2magterm::surface\x1b[0m\x1b[2m:\x1b[0m "
-        "the terminal's GtkGLArea has no OpenGL context \x1b[3merr\x1b[0m\x1b[2m=\x1b[0mOpenGL support disabled"
+        "\x1b[2m2026-10-15T00:00:00Z\x1b[0m \x1b[31mERROR\x1b[0m \x1b[2magterm::surface\x1b[0m\x1b[2m:\x1b[0m "
+        "could not create the terminal surface \x1b[3merr\x1b[0m\x1b[2m=\x1b[0mboom"
     )
     seen = ghostty_probe.read_log(coloured)
-    assert seen["error"] == (
-        "2026-10-13T00:00:00Z ERROR agterm::surface: the terminal's GtkGLArea has no OpenGL context "
-        "err=OpenGL support disabled"
+    assert seen["error"] == "2026-10-15T00:00:00Z ERROR agterm::surface: could not create the terminal surface err=boom"
+    coloured = (
+        "\x1b[2m2026-10-15T00:00:00Z\x1b[0m \x1b[34mDEBUG\x1b[0m \x1b[2magterm::surface\x1b[0m\x1b[2m:\x1b[0m "
+        "terminal drew its first frame \x1b[3mkey\x1b[0m\x1b[2m=\x1b[0m1"
     )
-
-
-def test_a_failed_surface_creation_is_a_failure() -> None:
-    line = "ERROR agterm::surface: could not create the terminal surface err=boom"
-    assert ghostty_probe.read_log(line)["error"] == line
+    assert ghostty_probe.read_log(coloured)["drew"] is True
 
 
 def test_an_empty_log_is_neither_drawn_nor_failed() -> None:
@@ -66,8 +67,8 @@ def test_a_missing_binary_fails_without_launching(tmp_path: Path) -> None:
 def recording_probe(monkeypatch: pytest.MonkeyPatch) -> dict:
     seen: dict = {}
 
-    def fake_probe(bin: Path, timeout: float, args=(), frontend: str = "gtk") -> dict:
-        seen.update(bin=bin, timeout=timeout, args=list(args), frontend=frontend)
+    def fake_probe(bin: Path, timeout: float, args=()) -> dict:
+        seen.update(bin=bin, timeout=timeout, args=list(args))
         return {"ok": True}
 
     monkeypatch.setattr(ghostty_probe, "probe", fake_probe)
@@ -79,39 +80,10 @@ def test_extra_arguments_reach_the_probe_in_order(monkeypatch, tmp_path: Path) -
     status = ghostty_probe.main(["--bin", str(tmp_path / "agterm"), "--arg=--no-such-option", "--arg", "file.txt"])
     assert status == 0
     assert seen["args"] == ["--no-such-option", "file.txt"]
-    assert seen["frontend"] == "gtk"
 
 
-# -- the GPUI build (Task 13 of the GPUI plan logs these lines under the explicit target `agterm::surface`)
-
-GPUI_CREATED = "2026-10-15T00:00:00.000000Z DEBUG agterm::surface: terminal surface created key=1 scale=2"
-GPUI_DREW = "2026-10-15T00:00:00.016000Z DEBUG agterm::surface: terminal drew its first frame key=1"
-
-
-def test_the_gpui_builds_first_frame_is_seen() -> None:
-    log = f"INFO agterm_gpui::app: serving\n{GPUI_CREATED}\n{GPUI_DREW}\n"
-    assert ghostty_probe.read_log(log) == {"created": True, "drew": True, "error": None}
-
-
-def test_the_gpui_builds_coloured_first_frame_is_seen() -> None:
-    coloured = (
-        "\x1b[2m2026-10-15T00:00:00Z\x1b[0m \x1b[34mDEBUG\x1b[0m \x1b[2magterm::surface\x1b[0m\x1b[2m:\x1b[0m "
-        "terminal drew its first frame \x1b[3mkey\x1b[0m\x1b[2m=\x1b[0m1"
-    )
-    assert ghostty_probe.read_log(coloured)["drew"] is True
-
-
-def test_a_gpui_surface_that_cannot_be_created_is_a_failure() -> None:
-    line = "2026-10-15T00:00:00Z ERROR agterm::surface: could not create the terminal surface key=1 err=pty: boom"
-    assert ghostty_probe.read_log(f"{GPUI_CREATED}\n{line}\n")["error"] == line
-
-
-def test_the_gpui_frontend_defaults_to_its_own_stage(monkeypatch) -> None:
+def test_the_probe_defaults_to_the_runners_stage(monkeypatch) -> None:
     seen = recording_probe(monkeypatch)
-    assert ghostty_probe.main(["--frontend", "gpui"]) == 0
-    assert seen["frontend"] == "gpui"
-    assert seen["bin"] == (ghostty_probe.REPO / "target/conformance-stage-gpui/bin/agterm-gpui").resolve()
-    seen.clear()
     assert ghostty_probe.main([]) == 0
     assert seen["bin"] == (ghostty_probe.REPO / "target/conformance-stage/bin/agterm").resolve()
 
@@ -136,28 +108,28 @@ def test_the_scripts_reason_is_kept(tmp_path: Path) -> None:
     assert icd is None and "absent.sh" in reason
 
 
-def test_a_gpui_probe_without_lavapipe_fails_naming_why(
+def test_a_probe_without_lavapipe_fails_naming_why(
     monkeypatch: pytest.MonkeyPatch, roots: list[Path], fake_bin: Path
 ) -> None:
     monkeypatch.setenv(LAVAPIPE_ICD_VARIABLE, "unset by the test")
     monkeypatch.delenv(LAVAPIPE_ICD_VARIABLE)
     monkeypatch.setattr(ghostty_probe, "lavapipe_from_script", lambda: (None, "no lavapipe ICD found: because"))
-    report = ghostty_probe.probe(fake_bin, 1.0, frontend="gpui")
-    assert report["ok"] is False and report["frontend"] == "gpui"
+    report = ghostty_probe.probe(fake_bin, 1.0)
+    assert report["ok"] is False and "frontend" not in report
     assert report["lavapipe"] == "no lavapipe ICD found: because"
     assert "no lavapipe" in report["error"]
     assert report["error"].endswith("(fetch-lavapipe.sh: no lavapipe ICD found: because)")
     assert all(not root.exists() for root in roots)
 
 
-def test_a_gpui_probe_takes_the_scripts_lavapipe(
+def test_a_probe_takes_the_scripts_lavapipe(
     monkeypatch: pytest.MonkeyPatch, roots: list[Path], fake_bin: Path, make_icd
 ) -> None:
     icd = make_icd()
     monkeypatch.setenv(LAVAPIPE_ICD_VARIABLE, "unset by the test")
     monkeypatch.delenv(LAVAPIPE_ICD_VARIABLE)
     monkeypatch.setattr(ghostty_probe, "lavapipe_from_script", lambda: (str(icd), ""))
-    report = ghostty_probe.probe(fake_bin, 0.3, frontend="gpui")
+    report = ghostty_probe.probe(fake_bin, 0.3)
     # the fake app serves but draws nothing: launched on lavapipe, then no first frame
     assert report["ok"] is False and report["error"] == "no first frame within 0.3s" and "lavapipe" not in report
     assert os.environ[LAVAPIPE_ICD_VARIABLE] == str(icd)
@@ -183,7 +155,7 @@ def test_the_cli_finds_lavapipe_before_the_harness_scrubs_agterm_variables(
     )
     env.pop("CONFORMANCE_LINUX_DISPLAY", None)
     completed = subprocess.run(
-        [sys.executable, str(ghostty_probe.__file__), "--frontend", "gpui", "--bin", str(fake_bin), "--timeout", "0.5"],
+        [sys.executable, str(ghostty_probe.__file__), "--bin", str(fake_bin), "--timeout", "0.5"],
         env=env,
         capture_output=True,
         text=True,

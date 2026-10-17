@@ -24,8 +24,6 @@ if TYPE_CHECKING:
     from agterm_conformance.impls.base import Adapter, Instance
 
 IMPLS = ("swift-macos", "swift-linux", "rust")
-# `impls.rust.FRONTENDS`, default first; spelled here because the adapters import this module.
-RUST_FRONTENDS = ("gtk", "gpui")
 # A rust run without a binary is legal: the adapter reports nothing and every test skips.
 BIN_REQUIRED = frozenset({"swift-macos", "swift-linux"})
 SCRUB_PREFIXES = ("AGTERM_", "ZMX_")
@@ -70,7 +68,6 @@ class ImplOptions:
     ctl: Path | None
     coverage_gate: bool
     macos_launch_mode: str = "uitest"
-    rust_frontend: str = "gtk"
     catalog: Path | None = None
     ui_ids: Path | None = None
     coverage_baseline: Path | None = None
@@ -104,12 +101,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         choices=("uitest", "plain"),
         default="uitest",
         help="swift-macos: XCUITest sentinel with zmx (default) or a bare exec",
-    )
-    group.addoption(
-        "--rust-frontend",
-        choices=RUST_FRONTENDS,
-        default=RUST_FRONTENDS[0],
-        help="rust: the GTK build (default) or the GPUI one, which renders on lavapipe ($CONFORMANCE_LAVAPIPE_ICD)",
     )
     group.addoption(
         "--coverage-gate", action="store_true", default=False, help="check catalog coverage without launching anything"
@@ -173,7 +164,6 @@ def pytest_configure(config: pytest.Config) -> None:
         ctl=config.getoption("ctl"),
         coverage_gate=config.getoption("coverage_gate"),
         macos_launch_mode=config.getoption("macos_launch_mode"),
-        rust_frontend=config.getoption("rust_frontend"),
         catalog=config.getoption("catalog"),
         ui_ids=config.getoption("ui_ids"),
         coverage_baseline=config.getoption("coverage_baseline"),
@@ -581,8 +571,6 @@ def _skip_category(report: Any) -> str:
 def pytest_report_header(config: pytest.Config) -> list[str]:
     options = get_impl_options(config)
     lines = [f"agterm impl: {options.impl or '-'}, bin: {options.bin or '-'}, ctl: {options.ctl or '-'}"]
-    if options.impl == "rust":
-        lines.append(f"rust frontend: {options.rust_frontend}")
     if SCRUBBED:
         lines.append(f"scrubbed from env: {', '.join(SCRUBBED)}")
     return lines

@@ -1,5 +1,5 @@
 //! ghostty's keybinds against `Binding.zig`, `Config.Keybinds` and `Surface.maybeHandleBinding` at `GHOSTTY_REV`;
-//! `agterm-ghostty`'s `config_parity` test checks the lines' diagnostics against the linked libghostty.
+//! `counts_tests` holds the lines' diagnostics at the ones libghostty reported.
 
 use super::binds::{
     Action, BindError, BindFlags, BindingLine, CloseTabMode, CopyFormat, Direction, Entry, KeyAction, KeyEffect,

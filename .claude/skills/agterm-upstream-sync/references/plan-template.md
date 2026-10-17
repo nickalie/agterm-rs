@@ -43,7 +43,7 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 - Each task follows CLAUDE.md > "Porting a command group": read upstream's implementation, its Swift tests (exact
   strings, edge cases, field order), `site/commands.html` and the matching `.claude/rules/*.md`; implement in
   `agterm-core` against the `agterm-host` fakes with unit tests asserting upstream's full error string; wire the
-  GTK side; add the `agtermctl` part from `agtermctlKit`; claim a capability only once its commands implement it.
+  app side (`agterm-gpui`); add the `agtermctl` part from `agtermctlKit`; claim a capability only once its commands implement it.
 - New conformance tests follow conformance/README.md > Reference discipline: a test is accepted only when green on
   its references. reference-macos runs only in CI on macOS (`reference-macos.yml`), so a task that adds a suite test
   marks "green on reference-macos" as a manual check for the user, and runs `run-reference-linux.sh` locally when
@@ -58,7 +58,7 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 
 ## Testing Strategy
 
-- unit: `cargo test --workspace` on the `agterm-host` fakes; GTK tests under `xvfb-run`.
+- unit: `cargo test --workspace` on the `agterm-host` fakes; the app's tests under `xvfb-run`.
 - conformance: `run-rust-linux.sh` (protocol, cli, behaviors); `tests/ui` skips on Linux, so UI is checked against
   `docs/linux-ui-checklist.md`.
 
@@ -96,7 +96,7 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 
 ### Task <N-1>: Linux UI checklist and UI-only changes
 
-- [ ] <one item per UI change: the GTK form, or "no Linux counterpart" with the reason, as a checklist row>
+- [ ] <one item per UI change: the GPUI form, or "no Linux counterpart" with the reason, as a checklist row>
 - [ ] gate passes
 
 ### Task <N>: Claim <new tag> parity and update the docs

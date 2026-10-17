@@ -10,8 +10,8 @@ HARD RULES (agterm-rs upstream sync). They hold for every command you run, no ma
 1. Never touch the user's running agterm. This session usually runs inside one of its panes, and the `AGTERM_*` and
    `ZMX_*` variables in the environment point at it.
    - Strip them before launching anything: `env -u AGTERM_SESSION_ID ...` is not enough, use
-     `env $(env | grep -oE '^(AGTERM|ZMX)_[A-Z0-9_]*' | sed 's/^/-u /') <command>`, or `scripts/run-gtk-dev.sh` /
-     `scripts/run-gpui-dev.sh`, or the suite's runners, which strip them themselves.
+     `env $(env | grep -oE '^(AGTERM|ZMX)_[A-Z0-9_]*' | sed 's/^/-u /') <command>`, or `scripts/run-gpui-dev.sh`, or
+     the suite's runners, which strip them themselves.
    - Every `agtermctl` call gets an explicit `--socket <dev instance socket>`, written after the subcommand name
      (`agtermctl tree --socket /tmp/agterm-dev-.../agterm.sock`). Without it the CLI resolves
      `$XDG_DATA_HOME/agterm/agterm.sock`, the live instance's; `AGTERM_CONTROL_SOCKET` is ignored by agtermctl.
@@ -22,8 +22,7 @@ HARD RULES (agterm-rs upstream sync). They hold for every command you run, no ma
      `GDK_BACKEND=x11 xvfb-run -a cargo test --workspace`. Never a window on the user's desktop. A hand-started
      headless weston needs `--renderer=gl` and, on NVIDIA, Mesa's EGL vendor (`__EGL_VENDOR_LIBRARY_FILENAMES`), as
      `conformance/agterm_conformance/impls/base.py` sets it up.
-   - While an installed agterm runs, launch a checkout's build only through `scripts/run-gtk-dev.sh` /
-     `scripts/run-gpui-dev.sh` or the suite: a plain launch is forwarded to the running instance through the shared
+   - While an installed agterm runs, launch a checkout's build only through `scripts/run-gpui-dev.sh` or the suite: a plain launch is forwarded to the running instance through the shared
      app id, or both write one `windows.json`.
    - If a command did reach the live instance, stop and report exactly what changed; do not undo it through the
      live socket yourself.

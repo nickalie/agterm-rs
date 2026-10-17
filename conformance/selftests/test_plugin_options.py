@@ -39,12 +39,11 @@ def test_macos_launch_mode_option(pytester: pytest.Pytester) -> None:
     result.stderr.fnmatch_lines(["*--macos-launch-mode: invalid choice: 'open'*"])
 
 
-def test_rust_frontend_option(pytester: pytest.Pytester) -> None:
-    assert get_impl_options(pytester.parseconfigure()).rust_frontend == "gtk"
-    assert get_impl_options(pytester.parseconfigure("--rust-frontend", "gpui")).rust_frontend == "gpui"
-    result = pytester.runpytest("--rust-frontend", "qt")
+def test_there_is_no_rust_frontend_option(pytester: pytest.Pytester) -> None:
+    """One Rust build since the GTK frontend went: the option is refused as unknown."""
+    result = pytester.runpytest("--rust-frontend", "gpui")
     assert result.ret == pytest.ExitCode.USAGE_ERROR
-    result.stderr.fnmatch_lines(["*--rust-frontend: invalid choice: 'qt'*"])
+    result.stderr.fnmatch_lines(["*unrecognized arguments: --rust-frontend*"])
 
 
 def test_options_reach_fixture(pytester: pytest.Pytester, bin_path: Path) -> None:

@@ -3,7 +3,7 @@
 terminal theme's background, as upstream's window does (`WindowAppearance.sync`), and that a non-neutral sidebar tint
 washes the sidebar alone. A Rust-build check outside the catalog: no reference runs it.
 
-  python conformance/tools/chrome_probe.py [--frontend gtk|gpui] [--bin PATH] [--timeout SECONDS] [--keep DIR]
+  python conformance/tools/chrome_probe.py [--bin PATH] [--timeout SECONDS] [--keep DIR]
 
 The staged build runs under the suite's isolation (tools/run-rust-linux.sh's: a private headless weston and session
 bus, a fresh root), the weston started with its debug protocol so `weston-screenshooter` may read the output. Each
@@ -18,14 +18,12 @@ rows, the terminal below its prompt.
 - `tint`: relaunched with the normal toolbar and the sidebar tint at Darker 5, the title bar and the terminal keep
   the background and the sidebar shows it under a 0.30 black wash.
 
---frontend picks the Rust build's frontend while both coexist: the GTK one (default) or the GPUI one, which renders
-on lavapipe only: $CONFORMANCE_LAVAPIPE_ICD, else the ICD `scripts/fetch-lavapipe.sh --print-icd` finds (nothing is
-fetched here). Both log their terminal's first frame under the target `agterm::surface` and draw the same three
-regions, so the checks are one; a harness without the GPUI frontend (`RustAdapter(frontend=...)`) is reported as such.
+The build renders on lavapipe only: $CONFORMANCE_LAVAPIPE_ICD, else the ICD `scripts/fetch-lavapipe.sh --print-icd`
+finds (nothing is fetched here). It logs its terminal's first frame under the target `agterm::surface`.
 
---bin defaults to the frontend's stage run-rust-linux.sh builds (target/conformance-stage/bin/agterm,
-target/conformance-stage-gpui/bin/agterm-gpui); the themes are read from its share/ghostty/themes. --keep saves every
-screenshot taken there. Prints a JSON report; exits 0 when every check holds.
+--bin defaults to the stage run-rust-linux.sh builds (target/conformance-stage/bin/agterm); the themes are read from
+its share/ghostty/themes. --keep saves every screenshot taken there. Prints a JSON report; exits 0 when every check
+holds.
 """
 
 from __future__ import annotations
@@ -47,11 +45,7 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
-GTK, GPUI = "gtk", "gpui"
-DEFAULT_BINS = {
-    GTK: REPO / "target" / "conformance-stage" / "bin" / "agterm",
-    GPUI: REPO / "target" / "conformance-stage-gpui" / "bin" / "agterm-gpui",
-}
+DEFAULT_BIN = REPO / "target" / "conformance-stage" / "bin" / "agterm"
 FETCH_LAVAPIPE = REPO / "scripts" / "fetch-lavapipe.sh"
 # The harness's lavapipe variable (`impls.base.LAVAPIPE_ICD_VARIABLE`), spelled here: importing the harness scrubs every
 # AGTERM_* variable, which the script still needs, so lavapipe is found before that import.
@@ -335,7 +329,7 @@ def same_as(sampled: Mapping[str, Rgb], expected: Mapping[str, Rgb]) -> dict[str
 
 
 def find_lavapipe(environ: Mapping[str, str], script: Path = FETCH_LAVAPIPE) -> tuple[str | None, str]:
-    """The lavapipe ICD for a GPUI launch: the harness's variable, else what the repository's script finds without
+    """The lavapipe ICD for a launch: the harness's variable, else what the repository's script finds without
     fetching; otherwise None and why."""
     if icd := environ.get(LAVAPIPE_ICD_VARIABLE):
         return icd, ""
@@ -350,7 +344,7 @@ def find_lavapipe(environ: Mapping[str, str], script: Path = FETCH_LAVAPIPE) -> 
     return None, found.stderr.strip() or f"{script} --print-icd exited with {found.returncode}"
 
 
-def make_adapter(bin: Path, frontend: str = GTK) -> Any:
+def make_adapter(bin: Path) -> Any:
     from agterm_conformance.impls.rust import RustAdapter
 
     class ChromeAdapter(RustAdapter):
@@ -363,7 +357,7 @@ def make_adapter(bin: Path, frontend: str = GTK) -> Any:
         def ghostty_config(self) -> str:
             return super().ghostty_config() + f"cursor-color = {hex_rgb(CURSOR)}\ncursor-style-blink = false\n"
 
-    return ChromeAdapter(bin, frontend=frontend)
+    return ChromeAdapter(bin)
 
 
 def run_launch(adapter: Any, settings: dict[str, Any], label: str, keep: Path | None, timeout: float,
@@ -376,14 +370,13 @@ def run_launch(adapter: Any, settings: dict[str, Any], label: str, keep: Path | 
         adapter.stop(instance)
 
 
-def probe(bin: Path, timeout: float, keep: Path | None, frontend: str = GTK) -> dict[str, Any]:
+def probe(bin: Path, timeout: float, keep: Path | None) -> dict[str, Any]:
     themes = bin.parent.parent / "share" / "ghostty" / "themes"
-    report: dict[str, Any] = {"bin": str(bin), "frontend": frontend, "checks": {}}
-    if frontend == GPUI:
-        icd, problem = find_lavapipe(os.environ)
-        if icd is None:
-            return {**report, "ok": False, "error": f"lavapipe: {problem}"}
-        os.environ[LAVAPIPE_ICD_VARIABLE] = icd
+    report: dict[str, Any] = {"bin": str(bin), "checks": {}}
+    icd, problem = find_lavapipe(os.environ)
+    if icd is None:
+        return {**report, "ok": False, "error": f"lavapipe: {problem}"}
+    os.environ[LAVAPIPE_ICD_VARIABLE] = icd
     if not bin.is_file():
         return {**report, "ok": False, "error": f"no agterm at {bin}"}
     try:
@@ -392,7 +385,7 @@ def probe(bin: Path, timeout: float, keep: Path | None, frontend: str = GTK) -> 
     except (OSError, ProbeError) as error:
         return {**report, "ok": False, "error": f"themes: {error}"}
     try:
-        adapter = make_adapter(bin, frontend)
+        adapter = make_adapter(bin)
     except ProbeError as error:
         return {**report, "ok": False, "error": str(error)}
     checks = report["checks"]
@@ -425,13 +418,11 @@ def probe(bin: Path, timeout: float, keep: Path | None, frontend: str = GTK) -> 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--frontend", choices=tuple(DEFAULT_BINS), default=GTK, help="the Rust build's frontend")
-    parser.add_argument("--bin", type=Path, default=None, help="the staged app binary (default: the frontend's stage)")
+    parser.add_argument("--bin", type=Path, default=DEFAULT_BIN, help="the staged app binary (default: the stage's)")
     parser.add_argument("--timeout", type=float, default=30.0, help="seconds each wait may take")
     parser.add_argument("--keep", type=Path, help="a directory to save the screenshots in")
     args = parser.parse_args(argv)
-    bin = args.bin if args.bin is not None else DEFAULT_BINS[args.frontend]
-    report = probe(bin.resolve(), args.timeout, args.keep, args.frontend)
+    report = probe(args.bin.resolve(), args.timeout, args.keep)
     print(json.dumps(report, indent=2))
     return 0 if report.get("ok") else 1
 

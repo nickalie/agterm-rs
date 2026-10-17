@@ -16,7 +16,7 @@ def load(name: str):
     return module
 
 
-# the WPE route reads the GPUI build's launch and log helpers from its sibling
+# the probe reads the build's launch and log helpers from its sibling
 load("ghostty_probe")
 webkit_probe = load("webkit_probe")
 
@@ -52,17 +52,17 @@ def test_the_page_read_back_is_the_sessions_first() -> None:
     assert webkit_probe.page_state(tree, "B") is None
 
 
-def test_a_missing_gpui_build_fails_without_launching(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_a_missing_build_fails_without_launching(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CONFORMANCE_LAVAPIPE_ICD", str(tmp_path / "lvp_icd.json"))
-    report = webkit_probe.probe_wpe(tmp_path / "agterm-gpui", 1)
-    assert report["ok"] is False and "no agterm-gpui at" in report["error"]
+    report = webkit_probe.probe(tmp_path / "agterm", 1)
+    assert report["ok"] is False and "no agterm at" in report["error"]
     assert report["engine"] == "wpe"
 
 
-def test_the_engine_flag_picks_the_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    seen: list[str] = []
-    monkeypatch.setattr(webkit_probe, "probe_wpe", lambda bin, timeout: seen.append("wpe") or {"ok": True})
-    monkeypatch.setattr(webkit_probe, "probe", lambda python, timeout: seen.append("gtk") or {"ok": False})
-    assert webkit_probe.main(["--engine", "wpe", "--bin", str(tmp_path / "agterm-gpui")]) == 0
-    assert webkit_probe.main([]) == 1
-    assert seen == ["wpe", "gtk"], "WebKitGTK stays the default"
+def test_the_probe_defaults_to_the_runners_stage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    seen: list[Path] = []
+    monkeypatch.setattr(webkit_probe, "probe", lambda bin, timeout: seen.append(bin) or {"ok": True})
+    assert webkit_probe.main(["--bin", str(tmp_path / "agterm")]) == 0
+    assert webkit_probe.main([]) == 0
+    assert seen == [(tmp_path / "agterm").resolve(), webkit_probe.STAGE_BIN.resolve()]
+    assert webkit_probe.STAGE_BIN.parts[-3:] == ("conformance-stage", "bin", "agterm")

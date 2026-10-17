@@ -1,13 +1,13 @@
 [package]
 name = "agterm-gpui"
-description = "agterm's GPUI frontend: the agterm-gpui binary until it replaces the GTK one"
+description = "agterm's GPUI frontend: the agterm binary"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "agterm-gpui"
+name = "agterm"
 path = "src/main.rs"
 
 [features]
