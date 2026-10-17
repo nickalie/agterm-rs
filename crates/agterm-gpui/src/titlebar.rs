@@ -1042,6 +1042,8 @@ impl Render for Titlebar {
         let leading = self.window_controls(controls(decorations, supported, layout, true), colors, window);
         let trailing = self.window_controls(controls(decorations, supported, layout, false), colors, window);
         let uncovered = bar.cover == Cover::None;
+        // a translucent window's backing shows through the bar (upstream's chrome paints nothing below full opacity)
+        let see_through = chrome::see_through(window, cx);
         div()
             .id("titlebar")
             .debug_selector(|| "titlebar".to_owned())
@@ -1051,7 +1053,7 @@ impl Render for Titlebar {
             .items_center()
             .w_full()
             .h(height)
-            .bg(chrome::color(colors.background, 1.0))
+            .when(!see_through, |row| row.bg(chrome::color(colors.background, 1.0)))
             .text_color(chrome::color(colors.foreground, 1.0))
             .when(!hidden, |row| row.border_b_1().border_color(chrome::separator(&colors)))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::pressed))

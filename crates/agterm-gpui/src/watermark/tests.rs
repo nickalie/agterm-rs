@@ -28,21 +28,22 @@ fn a_pane_renders_its_override_or_the_default_into_the_matching_file() {
     });
     let foreground = Rgb::new(1, 2, 3);
     assert_eq!(
-        desired(&session, StatusPane::Left, foreground, state),
+        desired(&session, StatusPane::Left, foreground, state, 1.0),
         Applied {
             watermark: None,
             text_file: None,
-            foreground: None
+            foreground: None,
+            window_opacity: 1.0,
         }
     );
     session.background_watermark = Some(mark(WatermarkKind::Text, None));
-    let inherited = desired(&session, StatusPane::Scratch, foreground, state);
+    let inherited = desired(&session, StatusPane::Scratch, foreground, state, 1.0);
     let id = uuid_string(session.id());
     assert_eq!(inherited.text_file, Some(state.join(format!("watermarks/{id}.png"))));
     assert_eq!(inherited.foreground, Some(foreground));
 
     session.pane_backgrounds.left = Some(mark(WatermarkKind::Text, Some("#ff0000")));
-    let own = desired(&session, StatusPane::Left, foreground, state);
+    let own = desired(&session, StatusPane::Left, foreground, state, 1.0);
     let key = uuid_string(session.pane_identity);
     assert_eq!(own.text_file, Some(state.join(format!("watermarks/{id}-{key}.png"))));
     assert_eq!(
@@ -51,12 +52,38 @@ fn a_pane_renders_its_override_or_the_default_into_the_matching_file() {
     );
 
     session.pane_backgrounds.scratch = Some(mark(WatermarkKind::Color, Some("#102030")));
-    let color = desired(&session, StatusPane::Scratch, foreground, state);
+    let color = desired(&session, StatusPane::Scratch, foreground, state, 1.0);
     assert_eq!((color.text_file.clone(), color.foreground), (None, None));
     assert!(
         overlay(&color, None).contains("background = #102030"),
         "{}",
         overlay(&color, None)
+    );
+}
+
+/// Upstream's `.color` background bakes the window opacity into its `background-opacity`, so a change of the opacity
+/// re-applies it; an image or text keeps its own opacity and is not re-rendered on an opacity change.
+#[test]
+fn a_solid_color_takes_the_window_opacity_and_an_image_does_not() {
+    let state = Path::new("/state");
+    let mut session = Session::new(SessionSeed {
+        initial_cwd: "/tmp".to_owned(),
+        ..SessionSeed::default()
+    });
+    let foreground = Rgb::new(1, 2, 3);
+    session.background_watermark = Some(mark(WatermarkKind::Color, Some("#102030")));
+    let opaque = desired(&session, StatusPane::Left, foreground, state, 1.0);
+    let translucent = desired(&session, StatusPane::Left, foreground, state, 0.6);
+    assert_ne!(
+        opaque, translucent,
+        "an opacity change is a change of what the terminal renders"
+    );
+    assert!(overlay(&translucent, None).contains("background-opacity = 0.6"));
+    session.background_watermark = Some(mark(WatermarkKind::Text, None));
+    assert_eq!(
+        desired(&session, StatusPane::Left, foreground, state, 1.0),
+        desired(&session, StatusPane::Left, foreground, state, 0.6),
+        "a text background ignores the window opacity"
     );
 }
 
@@ -66,6 +93,7 @@ fn a_text_overlay_points_at_its_image_and_nothing_overrides_nothing() {
         watermark: Some(mark(WatermarkKind::Text, None)),
         text_file: Some(PathBuf::from("/state/watermarks/S.png")),
         foreground: None,
+        window_opacity: 1.0,
     };
     let text = overlay(&applied, Some("/state/watermarks/S.png"));
     assert!(text.contains("background-image = /state/watermarks/S.png"), "{text}");
@@ -75,6 +103,7 @@ fn a_text_overlay_points_at_its_image_and_nothing_overrides_nothing() {
         watermark: None,
         text_file: None,
         foreground: None,
+        window_opacity: 1.0,
     };
     assert_eq!(overlay(&none, None), "");
 }

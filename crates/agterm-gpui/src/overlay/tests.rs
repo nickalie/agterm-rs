@@ -5,8 +5,12 @@ use super::*;
 
 #[test]
 fn the_config_paints_only_a_given_background() {
-    assert!(config_overlay(None).is_empty());
-    assert!(config_overlay(Some("#203040")).contains("background = #203040"));
+    assert!(config_overlay(None, 1.0).is_empty());
+    assert!(config_overlay(Some("#203040"), 1.0).contains("background = #203040"));
+    assert!(
+        config_overlay(Some("#203040"), 0.5).contains("background-opacity = 0.5"),
+        "a translucent window's opacity baked in"
+    );
 }
 
 #[test]

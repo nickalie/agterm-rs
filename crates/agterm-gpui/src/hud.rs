@@ -167,10 +167,11 @@ pub struct HudPlacement {
     pub scope: Option<Slot>,
 }
 
-/// The panel's own config: its background, and the padding it was measured with, pinned against the user's
-/// `window-padding-*` (upstream's `hudPaddingConfig`).
+/// The panel's own config: its background at the window's `opacity` (baked in at open, upstream's
+/// `applyOverlayBackgroundColor`), and the padding it was measured with, pinned against the user's `window-padding-*`
+/// (upstream's `hudPaddingConfig`).
 #[must_use]
-pub fn config_overlay(background: Option<&str>) -> String {
+pub fn config_overlay(background: Option<&str>, opacity: f64) -> String {
     let color = background.map(|hex| BackgroundWatermark {
         kind: WatermarkKind::Color,
         image_path: None,
@@ -181,7 +182,7 @@ pub fn config_overlay(background: Option<&str>) -> String {
         position: None,
         repeats: None,
     });
-    let mut text = watermark::overlay_text(color.as_ref(), None, None, 1.0);
+    let mut text = watermark::overlay_text(color.as_ref(), None, None, opacity);
     if !text.is_empty() && !text.ends_with('\n') {
         text.push('\n');
     }
@@ -362,7 +363,10 @@ fn spawn(session: &Session, generation: u64, hud: &HudContext<'_>, cx: &mut Cont
         env,
         env_remove: Vec::new(),
     };
-    let overlay = config_overlay(slot.background_color.as_deref());
+    let overlay = config_overlay(
+        slot.background_color.as_deref(),
+        crate::chrome::translucency(cx).opacity,
+    );
     let config = hud.env.config_for(Some(&overlay));
     let spec = TerminalSpec {
         token: String::new(),

@@ -2,7 +2,9 @@
 //! `Ghostty/WatermarkRenderer.swift`; ported from the GTK build's `background.rs`): each terminal renders its pane's
 //! effective background (the pane's override, else the session default) through its own config overlay
 //! ([`agterm_core::watermark::overlay_text`], loaded over the app's config, [`crate::deck::DeckEnv::config_for`]).
-//! A color sets the terminal's `background`; an image or a text its `background-image*` lines, which the terminal draws
+//! A color sets the terminal's `background` at the window's opacity (Settings ▸ Appearance ▸ Window, under which the
+//! terminals otherwise render transparent: [`crate::chrome::Translucency`]); an image or a text its
+//! `background-image*` lines, which the terminal draws
 //! behind its grid. A text background is rasterized to a PNG under `<state dir>/watermarks` (cosmic-text, the shaping
 //! and rasterizing GPUI's Linux text system links, in place of the GTK build's pango), bold sans-serif at 256 px on a
 //! transparent canvas padded by 30 % of that, tinted with its color or the terminal foreground.
@@ -26,8 +28,6 @@ use cosmic_text::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, Sw
 
 use crate::terminal::Shared;
 
-/// The window opacity a solid color is drawn at: this build draws no window translucency, so solid.
-pub const WINDOW_OPACITY: f64 = 1.0;
 /// The pixel size a text watermark is rasterized at; `background-image-fit` scales the image to the terminal.
 pub const TEXT_FONT_PX: f32 = 256.0;
 /// The widest or tallest text image: past it the text is drawn smaller (wgpu's default texture limit is 8192).
@@ -41,12 +41,16 @@ pub struct Applied {
     pub text_file: Option<PathBuf>,
     /// The tint a text background without its own color takes.
     pub foreground: Option<Rgb>,
+    /// The window opacity a solid color is drawn at (Settings ▸ Appearance ▸ Window), baked into its
+    /// `background-opacity` as upstream's `.color` background is, so a change of it re-applies the color; 1 for an
+    /// image or text, whose opacity is their own.
+    pub window_opacity: f64,
 }
 
 /// What pane `pane` of `session` should render, its text drawn under `state_dir`, tinted `foreground` without a color
-/// of its own.
+/// of its own, a solid color at `window_opacity`.
 #[must_use]
-pub fn desired(session: &Session, pane: StatusPane, foreground: Rgb, state_dir: &Path) -> Applied {
+pub fn desired(session: &Session, pane: StatusPane, foreground: Rgb, state_dir: &Path, window_opacity: f64) -> Applied {
     let watermark = session.effective_background(pane).cloned();
     let text = watermark
         .as_ref()
@@ -58,10 +62,14 @@ pub fn desired(session: &Session, pane: StatusPane, foreground: Rgb, state_dir: 
         .and_then(|_| session.background_file_key(pane));
     let text_file = text.then(|| watermark::rendered_text_path(state_dir, session.id(), pane_key.as_deref()));
     let own_color = watermark.as_ref().is_some_and(|mark| mark.color_hex.is_some());
+    let color = watermark
+        .as_ref()
+        .is_some_and(|watermark| watermark.kind == WatermarkKind::Color);
     Applied {
         foreground: (text && !own_color).then_some(foreground),
         watermark,
         text_file,
+        window_opacity: if color { window_opacity } else { 1.0 },
     }
 }
 
@@ -69,7 +77,20 @@ pub fn desired(session: &Session, pane: StatusPane, foreground: Rgb, state_dir: 
 /// nothing for a color or a failure); `""` with nothing to override.
 #[must_use]
 pub fn overlay(applied: &Applied, resolved: Option<&str>) -> String {
-    watermark::overlay_text(applied.watermark.as_ref(), resolved, None, WINDOW_OPACITY)
+    watermark::overlay_text(applied.watermark.as_ref(), resolved, None, applied.window_opacity)
+}
+
+/// The solid color the terminal of `shared` renders as its own background (a color background), which an OSC 111
+/// reset reports (`agterm_core::osc_background::baseline`); `None` for any other.
+#[must_use]
+pub fn own_color(shared: &Rc<Shared>) -> Option<String> {
+    APPLIED.with_borrow(|applied| {
+        let (_, applied) = applied.get(&shared.key())?;
+        let watermark = applied.watermark.as_ref()?;
+        (watermark.kind == WatermarkKind::Color)
+            .then(|| watermark.color_hex.clone())
+            .flatten()
+    })
 }
 
 /// The image file a background draws (upstream's `WatermarkRenderer.materialize`): the user's image when it is a

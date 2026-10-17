@@ -935,6 +935,39 @@ fn a_session_background_reaches_its_terminals_and_a_pane_override_wins(cx: &mut 
     assert!(!file.exists(), "the stale text image is removed");
 }
 
+/// Upstream's `applyOSCBackground` under window translucency: the terminals render no background of their own then,
+/// so a program's OSC 11 background lifts its terminal's `background-opacity` to the window's, and its OSC 111 reset
+/// drops the lift; a change of the window opacity follows while the color shows.
+#[gpui_kit::test]
+fn a_programs_osc_background_shows_at_the_window_opacity_until_it_resets(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    let session = ids[0];
+    h.until("the pane to start", |h| h.realized(session, StatusPane::Left));
+    let left = h.token(session, StatusPane::Left);
+    let set_opacity = |h: &mut Harness<'_>, opacity: f64| {
+        h.cx.update(|_, cx| {
+            cx.set_global(crate::chrome::Translucency {
+                opacity,
+                blur: false,
+                sidebar_shift: 0.0,
+            });
+        });
+    };
+    set_opacity(&mut h, 0.5);
+    let alpha = |h: &mut Harness<'_>| h.shared(session, &left).config().palette.background_alpha;
+    // the harness's config carries no translucency pin: the terminal's own background is opaque
+    assert_eq!(alpha(&mut h), 255);
+    // the pane runs `cat`: the line it reads comes back raw, the escape sequences with it
+    let pane = h.shared(session, &left).pane().expect("the pane runs");
+    pane.write(b"\x1b]11;rgb:12/34/56\x07\n").unwrap();
+    h.until("the OSC 11 lift", |h| alpha(h) == 128);
+    set_opacity(&mut h, 0.25);
+    h.until("the lift following the opacity", |h| alpha(h) == 64);
+    pane.write(b"\x1b]111\x07\n").unwrap();
+    h.until("the reset dropping the lift", |h| alpha(h) == 255);
+}
+
 // MARK: - the terminal ask and the HUD (Task 21)
 
 /// Opens a terminal ask over `session` with buttons Yes (`y`) and No (`n`); its id.

@@ -225,6 +225,8 @@ pub struct WindowView {
     closing: Rc<Cell<bool>>,
     /// The user's close is being confirmed: a second close meanwhile asks nothing (upstream's `sheetOpen`).
     close_asked: Rc<Cell<bool>>,
+    /// The platform background last asked for (opaque, transparent or blurred: [`crate::chrome::Translucency`]).
+    appearance: Cell<gpui_kit::WindowBackgroundAppearance>,
     painted: Rc<Cell<Painted>>,
     /// The minimized state last asked of an X11 window and the request's number, until the window manager confirms it
     /// or [`MINIMIZE_SETTLE`] passes ([`reported_minimized`]).
@@ -321,6 +323,7 @@ impl WindowView {
             title: UNTITLED.to_owned(),
             closing,
             close_asked: Rc::new(Cell::new(false)),
+            appearance: Cell::new(gpui_kit::WindowBackgroundAppearance::Opaque),
             painted: Rc::new(Cell::new(Painted::default())),
             pending_minimized: Rc::new(Cell::new(None)),
             minimize_requests: Cell::new(0),
@@ -728,6 +731,12 @@ impl WindowView {
         );
     }
 
+    /// The platform background the window last asked for (opaque, transparent or blurred).
+    #[must_use]
+    pub fn requested_appearance(&self) -> gpui_kit::WindowBackgroundAppearance {
+        self.appearance.get()
+    }
+
     /// Raises the window and gives the keyboard to the shown terminal.
     pub fn present(&self, window: &mut Window, cx: &mut App) {
         window.activate_window();
@@ -925,7 +934,12 @@ impl WindowView {
 impl Render for WindowView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.track_painted(window);
-        let background = crate::chrome::color(crate::chrome::current(cx).background, 1.0);
+        let background = crate::chrome::backing(&crate::chrome::current(cx), window, cx);
+        let appearance = crate::chrome::translucency(cx).appearance(window.is_fullscreen());
+        if self.appearance.replace(appearance) != appearance {
+            // upstream's `window.isOpaque` and its CGS blur, as the compositor offers them
+            window.set_background_appearance(appearance);
+        }
         let layers: Vec<AnyElement> = self
             .layers
             .iter()

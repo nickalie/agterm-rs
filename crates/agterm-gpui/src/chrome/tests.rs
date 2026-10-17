@@ -246,3 +246,67 @@ fn the_library_theme_follows_the_chrome_through_every_flip(cx: &mut TestAppConte
         check_kit(cx, true, dark_kit, "after a reset");
     });
 }
+
+/// Upstream's `WindowAppearance.Chrome`: the opacity the settings hold, blurred only below full opacity, opaque in
+/// full screen whatever the setting, and a see-through sidebar painting its tint's wash alone.
+#[test]
+fn the_translucency_follows_the_settings_and_full_screen_is_opaque() {
+    use gpui_kit::WindowBackgroundAppearance as Appearance;
+
+    let opaque = Translucency::of(&AppSettings::default());
+    assert_eq!(opaque, Translucency::OPAQUE);
+    assert_eq!(opaque.appearance(false), Appearance::Opaque);
+    let blur_alone = Translucency::of(&AppSettings {
+        background_blur: Some(20),
+        ..AppSettings::default()
+    });
+    assert!(!blur_alone.blur, "no blur at full opacity");
+    let translucent = Translucency::of(&AppSettings {
+        background_opacity: Some(0.7),
+        background_blur: Some(20),
+        sidebar_background_shift: Some(10),
+        ..AppSettings::default()
+    });
+    assert!((translucent.opacity - 0.7).abs() < f64::EPSILON);
+    assert_eq!(translucent.appearance(false), Appearance::Blurred);
+    assert!(
+        (translucent.effective(true) - 1.0).abs() < f64::EPSILON,
+        "full screen is opaque"
+    );
+    assert_eq!(translucent.appearance(true), Appearance::Opaque);
+    let unblurred = Translucency {
+        blur: false,
+        ..translucent
+    };
+    assert_eq!(unblurred.appearance(false), Appearance::Transparent);
+    let odd = Translucency::of(&AppSettings {
+        background_opacity: Some(f64::NAN),
+        ..AppSettings::default()
+    });
+    assert!(
+        (odd.opacity - 1.0).abs() < f64::EPSILON,
+        "an unusable opacity is opaque"
+    );
+
+    let colors = colors(&config((None, None)), &tint(10));
+    assert_eq!(
+        sidebar_fill(&colors, false, translucent.sidebar_shift),
+        color(colors.sidebar, 1.0)
+    );
+    assert_eq!(
+        sidebar_fill(&colors, true, translucent.sidebar_shift),
+        color(Rgb::BLACK, translucent.sidebar_shift),
+        "the darker tint's black wash alone"
+    );
+    assert!(translucent.sidebar_shift > 0.0);
+    assert_eq!(
+        sidebar_fill(&colors, true, -0.2),
+        color(Rgb::WHITE, 0.2),
+        "a lighter tint washes white"
+    );
+    assert_eq!(
+        sidebar_fill(&colors, true, 0.0),
+        color(Rgb::BLACK, 0.0),
+        "neutral: nothing over the backing"
+    );
+}

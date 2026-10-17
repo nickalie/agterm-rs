@@ -118,7 +118,11 @@ impl Sidebar {
             .flex_none()
             .w(px(width))
             .h_full()
-            .bg(color(look.colors.sidebar, 1.0))
+            .bg(crate::chrome::sidebar_fill(
+                &look.colors,
+                crate::chrome::see_through(window, cx),
+                crate::chrome::translucency(cx).sidebar_shift,
+            ))
             .text_color(look.text(false))
             .text_size(px(look.font_size))
             .child(

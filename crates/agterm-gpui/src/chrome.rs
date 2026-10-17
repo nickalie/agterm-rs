@@ -70,9 +70,101 @@ pub fn colors(config: &TerminalConfig, settings: &AppSettings) -> ChromeColors {
     )
 }
 
+/// The window translucency Settings ▸ Appearance ▸ Window asks for (upstream's `WindowAppearance.Chrome`): the
+/// background opacity, whether to blur behind it, and the sidebar tint's signed wash
+/// ([`agterm_core::chrome::sidebar_shift_amount`]), which a see-through sidebar paints alone.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Translucency {
+    pub opacity: f64,
+    pub blur: bool,
+    pub sidebar_shift: f64,
+}
+
+impl Global for Translucency {}
+
+impl Translucency {
+    /// Opaque, unblurred: the default and anything the settings leave at full opacity.
+    pub const OPAQUE: Self = Self {
+        opacity: 1.0,
+        blur: false,
+        sidebar_shift: 0.0,
+    };
+
+    /// What `settings` ask for.
+    #[must_use]
+    pub fn of(settings: &AppSettings) -> Self {
+        let opacity = settings
+            .background_opacity
+            .filter(|opacity| opacity.is_finite())
+            .map_or(1.0, |opacity| opacity.clamp(0.0, 1.0));
+        Self {
+            opacity,
+            blur: opacity < 1.0 && settings.background_blur.is_some_and(|blur| blur > 0),
+            sidebar_shift: agterm_core::chrome::sidebar_shift_amount(settings.effective_sidebar_shift()),
+        }
+    }
+
+    /// The opacity a window renders at: the setting, except in full screen, which presents opaque (upstream's
+    /// `WindowAppearance.sync` forces native full screen opaque without touching the setting).
+    #[must_use]
+    pub fn effective(self, fullscreen: bool) -> f64 {
+        if fullscreen { 1.0 } else { self.opacity }
+    }
+
+    /// The platform background a window asks for: transparent below full opacity, blurred behind when the blur is on
+    /// (the compositor's blur protocol, KDE's on Wayland and X11; nothing where it has none).
+    #[must_use]
+    pub fn appearance(self, fullscreen: bool) -> gpui_kit::WindowBackgroundAppearance {
+        if self.effective(fullscreen) >= 1.0 {
+            gpui_kit::WindowBackgroundAppearance::Opaque
+        } else if self.blur {
+            gpui_kit::WindowBackgroundAppearance::Blurred
+        } else {
+            gpui_kit::WindowBackgroundAppearance::Transparent
+        }
+    }
+}
+
+/// The window translucency now; opaque before the first sync.
+#[must_use]
+pub fn translucency(cx: &App) -> Translucency {
+    cx.try_global::<Translucency>().copied().unwrap_or(Translucency::OPAQUE)
+}
+
+/// Whether `window` renders translucent now: then its body alone paints the backing ([`backing`]) and the title bar,
+/// the sidebar (its tint wash aside) and the deck paint nothing over it, as upstream's chrome paints nothing below
+/// full opacity and its terminals draw transparent (`AppSettings::ghostty_config_lines_for`).
+#[must_use]
+pub fn see_through(window: &Window, cx: &App) -> bool {
+    translucency(cx).effective(window.is_fullscreen()) < 1.0
+}
+
+/// The window body's backing: the terminal background at the window's effective opacity (upstream's
+/// `window.backgroundColor = background.withAlphaComponent(opacity)`).
+#[must_use]
+pub fn backing(colors: &ChromeColors, window: &Window, cx: &App) -> Hsla {
+    color(colors.background, translucency(cx).effective(window.is_fullscreen()))
+}
+
+/// The sidebar's paint: its washed background when opaque; see-through, only the tint's wash over the backing
+/// (upstream's `sidebarTintWash`), nothing at the neutral strength.
+#[must_use]
+pub fn sidebar_fill(colors: &ChromeColors, see_through: bool, shift: f64) -> Hsla {
+    if !see_through {
+        return color(colors.sidebar, 1.0);
+    }
+    let wash = if shift < 0.0 { Rgb::WHITE } else { Rgb::BLACK };
+    color(wash, shift.abs())
+}
+
 /// Paints the chrome in the colors the terminals and the settings resolve to now, the library's widgets too
-/// ([`kit::sync`]); whether the chrome's colors changed.
+/// ([`kit::sync`]), and keeps the window translucency the settings ask for; whether the chrome's colors changed.
 pub fn sync(core: &Core, config: &TerminalConfig, cx: &mut App) -> bool {
+    let translucency = Translucency::of(core.settings());
+    if cx.try_global::<Translucency>() != Some(&translucency) {
+        cx.set_global(translucency);
+        cx.refresh_windows();
+    }
     let colors = colors(config, core.settings());
     kit::sync(&colors, cx);
     if cx.try_global::<Chrome>().is_some_and(|shown| shown.0 == colors) {

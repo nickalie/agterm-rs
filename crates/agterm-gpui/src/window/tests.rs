@@ -1114,6 +1114,65 @@ fn the_librarys_hovers_and_menus_paint_in_the_chromes_dark_and_light(cx: &mut Te
     }
 }
 
+/// Settings ▸ Appearance ▸ Window's opacity below 1 (upstream's `WindowAppearance.sync`): the window asks for a
+/// transparent background (blurred behind with the blur on), its body paints the terminal background at that opacity,
+/// and the title bar and the sidebar paint nothing opaque over it (the sidebar only its tint's wash); back at full
+/// opacity everything is solid again.
+#[gpui_kit::test]
+fn a_translucent_window_paints_its_backing_at_the_opacity_and_no_opaque_chrome(cx: &mut TestAppContext) {
+    use agterm_core::settings_model::{AppearanceChange, SettingsChange};
+    use gpui_kit::WindowBackgroundAppearance as Appearance;
+
+    let mut s = shell(cx);
+    let config = themed((0x20, 0x30, 0x40), (0xee, 0xee, 0xee));
+    let requested = |s: &mut Shell<'_>| s.view.read_with(s.cx, |view, _| view.requested_appearance());
+    let colors = s.paint_chrome(&config);
+    assert_eq!(requested(&mut s), Appearance::Opaque);
+    let solid = crate::chrome::color(colors.background, 1.0);
+    let bar = s.cx.debug_bounds("titlebar").expect("the bar is drawn");
+    assert!(
+        s.fills()
+            .iter()
+            .any(|(bounds, fill)| *fill == solid && bounds.contains(&bar.center()))
+    );
+
+    let change = |s: &mut Shell<'_>, change: AppearanceChange| {
+        s.state.core.change_settings(SettingsChange::Appearance(change));
+        s.paint_chrome(&config)
+    };
+    let colors = change(&mut s, AppearanceChange::BackgroundOpacity(0.6));
+    assert_eq!(requested(&mut s), Appearance::Transparent);
+    let fills = s.fills();
+    let backing = crate::chrome::color(colors.background, 0.6);
+    assert!(
+        fills
+            .iter()
+            .any(|(bounds, fill)| *fill == backing && bounds.contains(&bar.center())),
+        "the body's backing at the opacity: {fills:?}"
+    );
+    let row = s.cx.debug_bounds("row:var").expect("the row is laid out");
+    let sidebar_point = gpui_kit::point(row.origin.x + px(4.), row.origin.y + row.size.height + px(40.));
+    assert!(
+        !fills
+            .iter()
+            .any(|(bounds, fill)| fill.a >= 1.0 && (bounds.contains(&bar.center()) || bounds.contains(&sidebar_point))),
+        "nothing opaque over the backing under the bar or the sidebar: {fills:?}"
+    );
+    change(&mut s, AppearanceChange::BackgroundBlur(12));
+    assert_eq!(requested(&mut s), Appearance::Blurred);
+    change(&mut s, AppearanceChange::BackgroundOpacity(1.0));
+    assert_eq!(
+        requested(&mut s),
+        Appearance::Opaque,
+        "opaque again, the blur kept for later"
+    );
+    assert!(
+        s.fills()
+            .iter()
+            .any(|(bounds, fill)| *fill == solid && bounds.contains(&bar.center()))
+    );
+}
+
 // MARK: - the Settings popup
 
 impl Shell<'_> {

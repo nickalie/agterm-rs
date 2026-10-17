@@ -275,6 +275,8 @@ fn launch_core(identity: AppIdentity, resources: Option<&Path>, poster: &Poster,
         session_host::themes_dir(resources),
         Some(session_host::settings_config_path(&ProcessEnv)),
     );
+    // the windows draw Settings ▸ Appearance ▸ Window's translucency themselves (`chrome::Translucency`)
+    core.set_translucent_host(true);
     core.write_settings_config();
     install_launch_hosts(&mut core, poster, socket);
     if let Some(helper) = crate::hud::install_helper(&paths::state_dir(&ProcessEnv)) {
