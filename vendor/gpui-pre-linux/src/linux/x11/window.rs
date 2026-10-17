@@ -886,6 +886,7 @@ impl Drop for X11Window {
         if let Some(parent) = state.parent.as_ref() {
             parent.state.borrow_mut().children.remove(&self.0.x_window);
         }
+        crate::linux::forget_x11_window(self.0.x_window);
 
         // The renderer's GPU objects use the X connection, and a display mode switch closes the
         // connection once no window is left in the client's window map, so both go now.
@@ -1140,6 +1141,7 @@ impl X11WindowStatePtr {
                 state.hidden = true;
             }
         }
+        crate::linux::note_x11_minimized(self.x_window, state.hidden);
 
         // The urgency hint has no withdrawal signal of its own; ICCCM leaves that to
         // the client, and focus is the conventional means for the user to zero it.

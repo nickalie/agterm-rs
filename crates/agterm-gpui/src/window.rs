@@ -133,17 +133,55 @@ impl Painted {
         }
     }
 
-    /// The model's state for this, on a display of `display`.
+    /// The model's state for this, on a display of `display`, `minimized` as [`reported_minimized`] has it (`None`
+    /// where the display reads no minimized state back).
     #[must_use]
-    pub fn state(self, display: Option<WindowSize>) -> WindowState {
+    pub fn state(self, display: Option<WindowSize>, minimized: Option<bool>) -> WindowState {
         WindowState {
             fullscreen: self.fullscreen,
             // maximized, not full screen (`WindowState::zoomed`)
             zoomed: self.maximized && !self.fullscreen,
-            // neither Wayland nor GPUI reads a minimized state back
-            minimized: None,
+            minimized,
             display,
         }
+    }
+}
+
+/// How long a minimize or restore asked of an X11 window is reported as done before the window manager confirms it
+/// (upstream's settle poll budget, 30 × 0.05 s, the GTK build's `MINIMIZE_SETTLE`); after it the state read back is
+/// reported again.
+pub const MINIMIZE_SETTLE: Duration = Duration::from_millis(1500);
+
+/// The minimized state to report, given the one `read` back and the one a request is `pending` on, and whether the
+/// request is still pending (the GTK build's `reported_minimized`). The window manager confirms an iconify a round
+/// trip after it is asked, so until the read back catches up the requested state is reported: a quick `off` or
+/// `toggle` then acts on the window's new state.
+#[must_use]
+pub fn reported_minimized(read: Option<bool>, pending: Option<bool>) -> (Option<bool>, bool) {
+    match pending {
+        Some(desired) if read.is_some() && read != Some(desired) => (Some(desired), true),
+        _ => (read, false),
+    }
+}
+
+/// `window`'s minimized state as the window manager reports it: X11's `_NET_WM_STATE_HIDDEN` (GPUI patch
+/// `gpui-pre-linux` 0003); `None` on Wayland, whose xdg-shell has no such state for a client, and elsewhere.
+#[must_use]
+pub fn read_minimized(window: &Window) -> Option<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let xid = match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+            RawWindowHandle::Xcb(handle) => handle.window.get(),
+            RawWindowHandle::Xlib(handle) => u32::try_from(handle.window).ok()?,
+            _ => return None,
+        };
+        gpui_linux::x11_window_minimized(xid)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = window;
+        None
     }
 }
 
@@ -188,6 +226,11 @@ pub struct WindowView {
     /// The user's close is being confirmed: a second close meanwhile asks nothing (upstream's `sheetOpen`).
     close_asked: Rc<Cell<bool>>,
     painted: Rc<Cell<Painted>>,
+    /// The minimized state last asked of an X11 window and the request's number, until the window manager confirms it
+    /// or [`MINIMIZE_SETTLE`] passes ([`reported_minimized`]).
+    pending_minimized: Rc<Cell<Option<(bool, u64)>>>,
+    /// Numbers the minimize requests, so only the latest one's settle clears the pending state.
+    minimize_requests: Cell<u64>,
     /// What the window's first activation knows of its build, until that activation or [`FIRST_FOCUS_GRACE`] after
     /// its first frame.
     first_focus: Rc<Cell<Option<FirstFocus>>>,
@@ -279,6 +322,8 @@ impl WindowView {
             closing,
             close_asked: Rc::new(Cell::new(false)),
             painted: Rc::new(Cell::new(Painted::default())),
+            pending_minimized: Rc::new(Cell::new(None)),
+            minimize_requests: Cell::new(0),
             first_focus,
             poster,
             _subscriptions: vec![activation, bounds, opening, popped, alerts],
@@ -717,7 +762,31 @@ impl WindowView {
     /// and the size of the display it is on.
     #[must_use]
     pub fn window_state(&self, window: &Window, cx: &App) -> WindowState {
-        self.painted.get().state(display_size(window, cx))
+        let pending = self.pending_minimized.get().map(|(desired, _)| desired);
+        let (minimized, still_pending) = reported_minimized(read_minimized(window), pending);
+        if !still_pending {
+            self.pending_minimized.set(None);
+        }
+        self.painted.get().state(display_size(window, cx), minimized)
+    }
+
+    /// On a display that reads the minimized state back, reports `minimized` until the window manager confirms it or
+    /// [`MINIMIZE_SETTLE`] passes (the GTK build's `expect_minimized`).
+    fn expect_minimized(&self, minimized: bool, window: &Window, cx: &mut App) {
+        if read_minimized(window).is_none() {
+            return;
+        }
+        let request = self.minimize_requests.get() + 1;
+        self.minimize_requests.set(request);
+        self.pending_minimized.set(Some((minimized, request)));
+        let pending = Rc::clone(&self.pending_minimized);
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(MINIMIZE_SETTLE).await;
+            if pending.get().is_some_and(|(_, number)| number == request) {
+                pending.set(None);
+            }
+        })
+        .detach();
     }
 
     /// Renders the model: the deck's pages, the sidebar, the title, the GUI ask, the picker, the palette, the search
@@ -827,6 +896,7 @@ impl WindowView {
                 } else {
                     window.activate_window();
                 }
+                self.expect_minimized(minimized, window, cx);
             }
             WindowRequest::Move { .. } => tracing::warn!("window.move reached a host that cannot place windows"),
         }
@@ -839,10 +909,13 @@ impl WindowView {
             return;
         }
         let (painted, poster, id) = (Rc::clone(&self.painted), self.poster.clone(), self.id);
+        let pending = Rc::clone(&self.pending_minimized);
         window.on_next_frame(move |window, cx| {
             let now = Painted::of(window);
             if painted.replace(now) != now {
-                let state = now.state(display_size(window, cx));
+                let pending = pending.get().map(|(desired, _)| desired);
+                let (minimized, _) = reported_minimized(read_minimized(window), pending);
+                let state = now.state(display_size(window, cx), minimized);
                 post(&poster, move |app: &mut AppState| app.window_state_changed(id, state));
             }
         });

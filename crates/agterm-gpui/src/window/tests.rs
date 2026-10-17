@@ -34,7 +34,7 @@ fn the_dashboard_title_names_a_custom_window() {
 }
 
 #[test]
-fn maximized_is_zoomed_only_outside_full_screen_and_minimized_is_never_read() {
+fn maximized_is_zoomed_only_outside_full_screen_and_minimized_is_reported_as_read() {
     let display = Some(WindowSize {
         width: 1280,
         height: 800,
@@ -44,7 +44,7 @@ fn maximized_is_zoomed_only_outside_full_screen_and_minimized_is_never_read() {
         maximized: true,
     };
     assert_eq!(
-        maximized.state(display),
+        maximized.state(display, None),
         WindowState {
             fullscreen: false,
             zoomed: true,
@@ -52,12 +52,43 @@ fn maximized_is_zoomed_only_outside_full_screen_and_minimized_is_never_read() {
             display,
         }
     );
+    assert_eq!(
+        maximized.state(display, Some(true)).minimized,
+        Some(true),
+        "X11 reads it back"
+    );
     let both = Painted {
         fullscreen: true,
         maximized: true,
     };
-    assert!(both.state(None).fullscreen && !both.state(None).zoomed);
-    assert_eq!(Painted::default().state(None).display, None);
+    assert!(both.state(None, None).fullscreen && !both.state(None, None).zoomed);
+    assert_eq!(Painted::default().state(None, None).display, None);
+}
+
+/// The GTK build's `reported_minimized` tests.
+#[test]
+fn a_pending_minimize_is_reported_until_the_read_back_confirms_it() {
+    assert_eq!(
+        reported_minimized(Some(false), Some(true)),
+        (Some(true), true),
+        "iconify not confirmed yet"
+    );
+    assert_eq!(
+        reported_minimized(Some(true), Some(false)),
+        (Some(false), true),
+        "restore not confirmed yet"
+    );
+    assert_eq!(
+        reported_minimized(Some(true), Some(true)),
+        (Some(true), false),
+        "confirmed"
+    );
+    assert_eq!(reported_minimized(Some(false), None), (Some(false), false));
+    assert_eq!(
+        reported_minimized(None, Some(true)),
+        (None, false),
+        "no read-back (Wayland)"
+    );
 }
 
 fn core(library: WindowLibrary) -> Core {
