@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Assemble the staging layout the conformance runner, scripts/run-dev.sh and the install check run from:
+# Assemble the staging layout the conformance runner, scripts/run-gpui-dev.sh and the install check run from:
 #
-#   bin/{agterm,agtermctl,zmx}  lib/{libghostty.so,libgtk4-layer-shell.so.*}  share/ghostty/{themes,shell-integration}
-#   share/terminfo  share/agterm/zmx-BUILD (the staged zmx's build id, with bin/zmx)  share/agterm/{agent-status,skills/agterm}
+#   bin/{agterm,agtermctl,zmx}  share/ghostty/{themes,shell-integration}  share/terminfo
+#   share/agterm/zmx-BUILD (the staged zmx's build id, with bin/zmx)  share/agterm/{agent-status,skills/agterm}
 #
 # from cargo's target dir and the vendored prefixes, plus agterm's own themes from build/themes and the agent
-# integrations' payloads from resources/. Binaries are staged when they exist (agterm and agtermctl appear with their
-# crates, zmx once scripts/build-zmx.sh filled its prefix); libghostty and its resources are required. gtk4-layer-shell
-# is staged from wherever the built agterm resolves it when that is a vendored prefix (scripts/build-layer-shell.sh); a
-# system package stays the system's. The binaries find lib/ through their $ORIGIN/../lib rpath.
+# integrations' payloads from resources/. Binaries are staged when they exist (agterm and agtermctl appear with
+# their crates, zmx once scripts/build-zmx.sh filled its prefix); Ghostty's resources are required. There is no lib/:
+# libghostty-vt is linked statically. The terminfo, themes and shell integration are Ghostty's at LIBGHOSTTY_VT_REV,
+# from the libghostty-vt prefix (scripts/build-ghostty-vt.sh).
 #
 # Usage: scripts/stage.sh DESTINATION [--profile release|debug]   (default: release)
 set -euo pipefail
@@ -18,24 +18,32 @@ source "$(dirname "$0")/lib/native.sh"
 
 usage() { die "usage: scripts/stage.sh DESTINATION [--profile release|debug]"; }
 
-(($# == 1 || $# == 3)) || usage
+(($# >= 1)) || usage
 DEST="$1"
+shift
 PROFILE=release
-if (($# == 3)); then
-  [[ "$2" == --profile && ("$3" == release || "$3" == debug) ]] || usage
-  PROFILE="$3"
-fi
+while (($#)); do
+  (($# >= 2)) || usage
+  case "$1" in
+    --profile)
+      [[ "$2" == release || "$2" == debug ]] || usage
+      PROFILE="$2"
+      ;;
+    *) usage ;;
+  esac
+  shift 2
+done
 [[ "$DEST" = /* ]] || DEST="$PWD/$DEST"
 if [[ -d "$DEST" ]] && find "$DEST" -mindepth 1 -print -quit | grep -q .; then
   die "staging destination is not empty: $DEST"
 fi
 
-GHOSTTY="$(ghostty_prefix)"
-ghostty_prefix_is_complete "$GHOSTTY" || die "no complete libghostty prefix at $GHOSTTY: run scripts/build-ghostty.sh"
+GHOSTTY="$(ghostty_vt_prefix)"
+ghostty_vt_prefix_is_complete "$GHOSTTY" \
+  || die "no complete libghostty-vt prefix at $GHOSTTY: run scripts/build-ghostty-vt.sh"
 TARGET="${CARGO_TARGET_DIR:-$NATIVE_ROOT/target}/$PROFILE"
 
-mkdir -p "$DEST/bin" "$DEST/lib" "$DEST/share/ghostty"
-install -m644 "$GHOSTTY/lib/libghostty.so" "$DEST/lib/libghostty.so"
+mkdir -p "$DEST/bin" "$DEST/share/ghostty"
 cp -R "$GHOSTTY/share/ghostty/themes" "$GHOSTTY/share/ghostty/shell-integration" "$DEST/share/ghostty/"
 cp -R "$GHOSTTY/share/terminfo" "$DEST/share/terminfo"
 
@@ -56,13 +64,6 @@ if [[ -x "$NATIVE_ROOT/scripts/build-zmx.sh" ]]; then
   fi
 fi
 
-if [[ -x "$DEST/bin/agterm" ]]; then
-  layer_shell="$(ldd "$DEST/bin/agterm" | awk '$1 ~ /^libgtk4-layer-shell\.so/ { print $3 }')" || layer_shell=""
-  if [[ "$layer_shell" == "$VENDOR_ROOT"/* ]]; then
-    cp -P "$(dirname "$layer_shell")"/libgtk4-layer-shell.so.* "$DEST/lib/"
-  fi
-fi
-
 verify_ghostty_resources "$DEST/share" >&2
 # after the check of Ghostty's own catalog: agterm's bundled theme(s), the seeded default `agterm` among them
 # (upstream's stage_custom_themes)
@@ -72,4 +73,4 @@ install -m644 "$NATIVE_ROOT"/build/themes/* "$DEST/share/ghostty/themes/"
 mkdir -p "$DEST/share/agterm/skills"
 cp -R "$NATIVE_ROOT/resources/agent-status" "$DEST/share/agterm/agent-status"
 cp -R "$NATIVE_ROOT/resources/skills/agterm" "$DEST/share/agterm/skills/agterm"
-echo "→ staged ${staged[*]:-no binaries} + libghostty ($PROFILE) into $DEST" >&2
+echo "→ staged ${staged[*]:-no binaries} ($PROFILE) into $DEST" >&2

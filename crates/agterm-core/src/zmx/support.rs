@@ -215,11 +215,11 @@ const SETTLE_PREFIX: &str = "s=$(stty size 2>/dev/null); i=0; \
     while [ \"$i\" -lt 20 ] && [ \"$(stty size 2>/dev/null)\" = \"$s\" ]; do sleep 0.01; i=$((i + 1)); done; ";
 
 /// `line` (an attach, run by the terminal through `/bin/sh -c`) started once the terminal has its size. A Linux
-/// adaptation: libghostty spawns a surface's program at its 800×600 px initial size and applies the widget's size a
-/// moment later. A GTK pane is often narrower than that, so a daemon the attach creates would start its shell at the
-/// initial width and reflow the first prompt row (zsh's `PROMPT_SP` spaces fill it) into soft-wrapped rows on the
-/// shrink, which every `zmx screen` read then joins to the next line. Upstream's macOS views only ever grow from that
-/// size, which reflows nothing. An attach to a daemon that exists waits the same, harmlessly.
+/// adaptation made for the GTK build: libghostty spawned a surface's program at its 800×600 px initial size and
+/// applied the widget's size a moment later. A GTK pane was often narrower than that, so a daemon the attach created
+/// would start its shell at the initial width and reflow the first prompt row (zsh's `PROMPT_SP` spaces fill it) into
+/// soft-wrapped rows on the shrink, which every `zmx screen` read then joins to the next line. Upstream's macOS views
+/// only ever grow from that size, which reflows nothing. An attach to a daemon that exists waits the same, harmlessly.
 #[must_use]
 pub fn settled(line: &str) -> String {
     format!("{SETTLE_PREFIX}exec {line}")

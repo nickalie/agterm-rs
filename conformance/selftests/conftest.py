@@ -1,3 +1,4 @@
+import json
 import shutil
 import sys
 from collections.abc import Iterator
@@ -62,6 +63,40 @@ def fake_bin(tmp_path: Path) -> Path:
     launcher.write_text(f"#!{sys.executable}\n" + FAKE_APP.read_text())
     launcher.chmod(0o755)
     return launcher
+
+
+@pytest.fixture
+def make_icd(tmp_path: Path):
+    """Writes an ICD manifest into a directory, next to the stand-in driver it names by absolute path."""
+
+    def write(directory: Path | None = None, name: str = "lvp_icd.json", library: str = "libvulkan_lvp.so") -> Path:
+        directory = directory or tmp_path / "lavapipe"
+        (directory / "lib").mkdir(parents=True, exist_ok=True)
+        (directory / "lib" / library).write_text("stand-in driver")
+        manifest = directory / name
+        manifest.write_text(json.dumps({"ICD": {"library_path": str(directory / "lib" / library)}}))
+        return manifest
+
+    return write
+
+
+@pytest.fixture(scope="session")
+def stand_in_lavapipe_icd(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A lavapipe ICD manifest beside the stand-in driver it names, outside every test's own tmp_path."""
+    directory = tmp_path_factory.mktemp("stand-in-lavapipe")
+    (directory / "lib").mkdir()
+    (directory / "lib" / "libvulkan_lvp.so").write_text("stand-in driver")
+    manifest = directory / "lvp_icd.json"
+    manifest.write_text(json.dumps({"ICD": {"library_path": str(directory / "lib" / "libvulkan_lvp.so")}}))
+    return manifest
+
+
+@pytest.fixture(autouse=True)
+def stand_in_lavapipe(stand_in_lavapipe_icd: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The Rust build renders on lavapipe only, so every Rust launch needs its manifest: a stand-in, as run-rust-linux.sh
+    hands the harness the real one. A test of a missing or wrong lavapipe removes or replaces it."""
+    monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, str(stand_in_lavapipe_icd))
+    return stand_in_lavapipe_icd
 
 
 @pytest.fixture(autouse=True)

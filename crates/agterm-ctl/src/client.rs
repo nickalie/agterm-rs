@@ -323,9 +323,12 @@ mod tests {
         let dir = tempfile::Builder::new().prefix("agc").tempdir_in("/tmp").unwrap();
         let missing = connect(&dir.path().join("missing.sock")).unwrap_err();
         assert_eq!(missing.connect_errno, Some(libc::ENOENT));
-        // a socket file nobody listens on any more refuses
+        // a socket file no socket is bound to refuses; `mknod`, as a listener bound and dropped stays open in a
+        // sibling test's child until its `exec`, which would accept the connect
         let stale = dir.path().join("stale.sock");
-        drop(std::os::unix::net::UnixListener::bind(&stale).unwrap());
+        let c_stale = std::ffi::CString::new(stale.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `c_stale` is a NUL-terminated string that outlives the call.
+        assert_eq!(unsafe { libc::mknod(c_stale.as_ptr(), libc::S_IFSOCK | 0o600, 0) }, 0);
         let refused = connect(&stale).unwrap_err();
         assert_eq!(refused.connect_errno, Some(libc::ECONNREFUSED), "{refused}");
         assert!(

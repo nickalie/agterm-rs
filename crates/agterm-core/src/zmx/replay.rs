@@ -73,7 +73,6 @@ pub fn fish_quoted(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::process::Command;
 
@@ -169,8 +168,7 @@ mod tests {
     }
 
     fn executable(path: &Path, contents: &str) {
-        fs::write(path, contents).unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        agterm_host::fakes::write_executable(path, contents).unwrap();
     }
 
     /// Runs `script` under bash: zsh is not on every CI host, and bash has the same quoted builtins, `eval --` and

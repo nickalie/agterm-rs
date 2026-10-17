@@ -1,4 +1,4 @@
-//! The control server over real sockets in a temp dir, with the fake main loop standing in for GTK.
+//! The control server over real sockets in a temp dir, with the fake main loop standing in for the frontend.
 
 use std::error::Error;
 use std::fs;

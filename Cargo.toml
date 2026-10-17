@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# Patched third-party sources ([patch.crates-io] below) are dependencies, never members.
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,21 +13,34 @@ license = "MIT"
 
 [workspace.dependencies]
 agterm-proto = { path = "crates/agterm-proto" }
-agterm-ghostty-sys = { path = "crates/agterm-ghostty-sys" }
-agterm-ghostty = { path = "crates/agterm-ghostty" }
+agterm-ghostty-vt-sys = { path = "crates/agterm-ghostty-vt-sys" }
+agterm-ghostty-vt = { path = "crates/agterm-ghostty-vt" }
 agterm-host = { path = "crates/agterm-host" }
 agterm-core = { path = "crates/agterm-core" }
 agterm-server = { path = "crates/agterm-server" }
 agterm-zmx = { path = "crates/agterm-zmx" }
+agterm-app = { path = "crates/agterm-app" }
+agterm-term = { path = "crates/agterm-term" }
+agterm-wpe-javascriptcore-sys = { path = "crates/agterm-wpe-javascriptcore-sys" }
+agterm-wpe-platform-sys = { path = "crates/agterm-wpe-platform-sys" }
+agterm-wpe-sys = { path = "crates/agterm-wpe-sys" }
+agterm-wpe = { path = "crates/agterm-wpe" }
 async-channel = "2"
-# glib's Unix-only API (SIGTERM on the main loop), a crate of its own; it follows the glib that gtk4 0.11 uses.
-glib-unix = "0.22"
 base64 = "0.23"
 bitflags = "2"
 clap = { version = "4.6", features = ["derive"] }
 libc = "0.2"
+# agterm-wpe's worker transport (socket pairs, SCM_RIGHTS, memfds), the version wayland and calloop already link.
+rustix = "1.1"
 # `default-features = false` drops the `html` renderer and the CLI's `getopts`: the HUD walks the events itself.
 pulldown-cmark = { version = "0.13", default-features = false }
+# Kitty graphics PNG transmissions, decoded for libghostty-vt's process-global PNG hook (agterm-term).
+png = "0.18"
+# A pane's PTY and child (agterm-term), as Zed and WezTerm use it.
+portable-pty = "0.9"
+# agterm-gpui's link detection: Ghostty's default URL and path matcher (`link-url`) over the terminal's rows, whose
+# look-arounds (Oniguruma's, in Ghostty) need a backtracking engine; fancy-regex is the regex crate's own one.
+fancy-regex = "0.19"
 serde = { version = "1", features = ["derive"] }
 # `preserve_order`: a result built as a `Value` keeps its fields in upstream's order on the wire (the catalog's
 # `fields` order) instead of sorting them.
@@ -39,22 +54,84 @@ thiserror = "2"
 toml = { version = "1.1", default-features = false, features = ["parse", "std", "serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Unicode full case folding: ghostty's keybind character triggers compare folded.
+unicase = "2.10"
 unicode-normalization = "0.1"
 url = "2.5"
 uuid = { version = "1", features = ["v4", "serde"] }
-# GTK 4.14 and libadwaita 1.5 are Ubuntu 24.04's, the oldest platform CI builds on.
-gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
-adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
-# The quick terminal's layer-shell panel. No version feature: the 1.0 API is enough. It links the C library, built by
-# scripts/build-layer-shell.sh or taken from a system package (scripts/pkg-config.sh picks).
-gtk4-layer-shell = "0.8"
-# agterm-gtk's build script asks the same pkg-config the link used where gtk4-layer-shell lives, for its rpath.
+# agterm-wpe's build script asks the pkg-config the link used where WPE WebKit lives (scripts/pkg-config.sh).
 pkg-config = "0.3"
-# WebKitGTK 6.0 for HTML overlays; no version feature: the 2.40 API is enough, and Ubuntu 24.04 ships 2.44.
-webkit6 = "0.6"
+# The GLib and libsoup -sys crates the gir-generated WPE WebKit bindings (agterm-wpe*-sys) build on: the gtk-rs 0.22
+# family, and soup3-sys under the name gir gives it.
+glib-sys = "0.22"
+gobject-sys = "0.22"
+gio-sys = "0.22"
+soup-sys = { package = "soup3-sys", version = "0.9" }
+# The safe GLib/Gio over the same -sys crates, for agterm-wpe: its engine thread's main context and loop, the
+# GObject subclasses of WPEPlatform's display, view and toplevel, signals and streams. The gtk-rs 0.22 family of the
+# -sys crates above, so one GLib binding is linked.
+glib = "0.22"
+gio = "0.22"
+# The GPUI frontend (agterm-gpui): Zed's GPUI through gpui-kit, which pins the `gpui-pre` snapshot it re-exports
+# (`=0.3.9`, wgpu 29.0.4). Default features: its components and assets, never `gpui-fast` (longbridge's own backend).
+gpui-kit = "=0.7.3"
+# agterm-gpui's tests measure a real font through GPUI's Linux text system (`CosmicTextSystem`), the crate gpui-kit
+# already links at the version its `gpui-pre` pins.
+gpui-pre-wgpu = "=0.3.9"
+# agterm-gpui reads the native key behind a key event (`current_native_input`, a patch of ours) from GPUI's Linux
+# platform, the crate gpui-kit already links.
+gpui-pre-linux = { version = "=0.3.9", default-features = false }
+# agterm-gpui's procedural sprites (box drawing, blocks, powerline, braille) fill and stroke their paths with it, as
+# Ghostty's sprite font does with z2d. No PNG codec (`png-format`): the sprites only rasterize.
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
+# agterm-gpui's text watermarks: the text shaped and rasterized off screen with the cosmic-text GPUI's Linux text system
+# already links (its default features: system fonts through fontconfig, swash rasterization), written as a PNG.
+cosmic-text = "0.19"
+# agterm-gpui's terminal images: the `image` buffers GPUI's `RenderImage` is made of (Kitty graphics), and the
+# `background-image` file decoded as Ghostty reads it (PNG or JPEG only). The version GPUI already links.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+# agterm-gpui's single instance: GApplication's own D-Bus protocol (`org.gtk.Application`, `org.gtk.Actions`) on the
+# app id's bus name, so a launch of the GTK Linux fork and one of this build forward to each other; its desktop
+# notifications, banners on the freedesktop notification server posted, clicked (with the server's activation token)
+# and withdrawn on one connection.
+zbus = "5.19"
+# agterm-gpui's sidebar: the folder chooser of Open Directory… (a title and a starting folder, which GPUI's own
+# `prompt_for_paths` does not take) and the desktop's `enable-animations` setting the status glyph's blink obeys, through
+# the xdg-desktop-portal crate GPUI's Linux platform already links (0.13, `async-io`; no tokio). `raw_handle` and
+# `wayland` name the chooser's parent window from GPUI's raw window handle (an X11 id, an `xdg-foreign` export).
+# `global_shortcuts`: keymap.conf's `global-hotkey` on Wayland, through the desktop's global shortcuts portal.
+ashpd = { version = "0.13", default-features = false, features = [
+    "async-io",
+    "file_chooser",
+    "global_shortcuts",
+    "settings",
+    "raw_handle",
+    "wayland",
+] }
+# The `StreamExt` the portal's setting-changed stream and the notification server's signals are read with (the futures family zbus and ashpd link).
+futures-util = "0.3"
+# agterm-gpui activates its window with a token another launch handed over, on GPUI's own connection: xdg-activation
+# on the Wayland display (the wayland-rs family GPUI links), `_NET_ACTIVE_WINDOW` on X11 (the x11rb major GPUI links).
+raw-window-handle = "0.6"
+wayland-backend = { version = "0.3.17", features = ["client_system"] }
+wayland-client = "0.31.15"
+wayland-protocols = { version = "0.32.13", features = ["client", "staging"] }
+x11rb = "0.13.2"
+# agterm-gpui's SIGTERM quit on a thread of its own (GPUI installs no signal handling).
+signal-hook = "0.4"
+# agterm-gpui's watch on `remotes.conf`: the platform's recommended watcher, inotify on Linux, FSEvents on macOS,
+# ReadDirectoryChangesW on Windows. The version the lock already carries.
+notify = "8.2"
+# agterm-gpui's last network source on Linux, as gio's netlink `NetworkMonitor` (GLib's fallback without
+# NetworkManager): the kernel's default routes over rtnetlink, the rust-netlink crates' blocking socket and their
+# route messages.
+netlink-sys = { version = "0.9", default-features = false }
+netlink-packet-core = "0.9"
+netlink-packet-route = "0.33"
 
-# Inherited by every crate except `agterm-ghostty-sys` (`[lints] workspace = true`). Only a reasoned outer
-# `#[expect(..., reason = "...")]` on the one item can lift a lint: `#[allow]` is refused.
+# Inherited by every crate (`[lints] workspace = true`) except the generated -sys crates: `agterm-ghostty-vt-sys`
+# (bindgen), `agterm-wpe-sys`, `agterm-wpe-platform-sys` and `agterm-wpe-javascriptcore-sys`
+# (gir). Only a reasoned outer `#[expect(..., reason = "...")]` on the one item can lift a lint: `#[allow]` is refused.
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 
@@ -82,3 +159,19 @@ multiple_unsafe_ops_per_block = "deny"
 # exceptions
 allow_attributes = "deny"
 allow_attributes_without_reason = "deny"
+
+# calloop (GPUI's Linux event loop) without its unconditional request for tracing's `log` feature, which workspace
+# feature unification spread to every crate and clippy's cognitive_complexity then counted in every tracing macro:
+# vendor/calloop is the verified crates.io source plus build/patches/calloop (scripts/vendor-calloop.sh;
+# scripts/check-tracing-features.sh keeps the feature out of the graph).
+[patch.crates-io]
+calloop = { path = "vendor/calloop" }
+# GPUI patch 1 (docs/plans/20261014-gpui-frontend.md, Technical Details > GPUI patches): external surfaces on Linux,
+# dmabufs imported zero-copy into the renderer's Vulkan device (agterm-gpui's external_texture). vendor/gpui-pre and
+# vendor/gpui-pre-wgpu are the verified crates.io sources plus build/patches/gpui-pre{,-wgpu} (scripts/vendor-gpui.sh).
+gpui-pre = { path = "vendor/gpui-pre" }
+gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
+# Task 14: the native key behind each key event GPUI dispatches on Wayland and X11 (its XKB keycode, layout character
+# and modifiers, which GPUI's `Keystroke` drops), for the terminal's physical-key bindings and the Kitty keyboard
+# protocol: vendor/gpui-pre-linux is the verified crates.io source plus build/patches/gpui-pre-linux.
+gpui-pre-linux = { path = "vendor/gpui-pre-linux" }

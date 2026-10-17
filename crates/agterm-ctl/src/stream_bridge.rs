@@ -68,10 +68,13 @@ impl StreamBridge {
             return;
         };
         let socket = &self.socket;
+        // the reader stays here, open until both directions stopped: the input side may finish first, and a wake
+        // written into a pipe with no reader left raises SIGPIPE, which main restored to its default
+        let cancel_fd = cancel.as_raw_fd();
         thread::scope(|scope| {
             let upstream = thread::Builder::new()
                 .name("agtermctl.stream.upstream".to_owned())
-                .spawn_scoped(scope, move || copy_until_cancelled(input, socket, cancel.as_raw_fd()));
+                .spawn_scoped(scope, move || copy_until_cancelled(input, socket, cancel_fd));
             copy(socket, output);
             let mut wake = wake;
             let _ = wake.write_all(&[1]);
@@ -264,6 +267,31 @@ mod tests {
         );
         drop(app);
         pumping.join().unwrap();
+    }
+
+    #[test]
+    fn the_viewer_leaving_first_ends_the_bridge_without_sigpipe() {
+        // with SIGPIPE at its default, as the real binary runs: the socket side ending after the input did wakes the
+        // finished input side's cancel pipe, which must still have its reader. Repeated, as which side of the bridge
+        // notices the end first is up to the scheduler.
+        crate::local::default_sigpipe::run(
+            "stream_bridge::tests::the_viewer_leaving_first_ends_the_bridge_without_sigpipe",
+            || {
+                for _ in 0..200 {
+                    let Rig {
+                        app,
+                        viewer_in,
+                        viewer_out: _viewer_out,
+                        bridge,
+                        _ends,
+                    } = rig();
+                    client::send_all(&app, b"{\"ok\":true}\n").unwrap();
+                    bridge.open(&present()).unwrap();
+                    drop(viewer_in);
+                    bridge.pump();
+                }
+            },
+        );
     }
 
     #[test]

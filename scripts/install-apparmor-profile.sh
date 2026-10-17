@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 # Install (or remove) the AppArmor profile that lets WebKit's bubblewrap sandbox run for agterm's HTML overlays on
 # Ubuntu 23.10+ and other hosts that restrict unprivileged user namespaces through AppArmor
-# (kernel.apparmor_restrict_unprivileged_userns=1). The profile (packaging/linux/apparmor/agterm) is Ubuntu's own shape
-# for its WebKitGTK apps: unconfined, plus `userns`, attached to one agterm binary by its absolute path. The sandbox
-# stays on; without the profile agterm refuses every HTML page there.
+# (kernel.apparmor_restrict_unprivileged_userns=1). The profile file (packaging/linux/apparmor/agterm) is Ubuntu's own
+# shape for its WebKit apps: unconfined, plus `userns`, attached to a binary by its absolute path. WPE WebKit starts
+# its web process in that sandbox; it stays on, and without the profile agterm refuses every HTML page there.
 #
-#   scripts/install-apparmor-profile.sh [BINARY]              install /etc/apparmor.d/agterm for BINARY and load it
-#   scripts/install-apparmor-profile.sh --uninstall           unload and remove it
-#   scripts/install-apparmor-profile.sh --print [BINARY]      print the profile for BINARY, change nothing
+#   scripts/install-apparmor-profile.sh [BINARY]          install /etc/apparmor.d/agterm and load it
+#   scripts/install-apparmor-profile.sh --uninstall       unload and remove it
+#   scripts/install-apparmor-profile.sh --print [BINARY]  print the profile, change nothing
 #
 # BINARY is the agterm executable that is launched, symlinks resolved (AppArmor attaches by the real path); default:
-# the conformance stage's, ${CARGO_TARGET_DIR:-target}/conformance-stage/bin/agterm. It need not exist yet. Where
-# AppArmor is off or does not restrict user namespaces, nothing is installed. Root is gained through sudo; running it
-# again with the same binary changes nothing.
+# the conformance stage's, bin/agterm under ${CARGO_TARGET_DIR:-target}/conformance-stage
+# (conformance/tools/run-rust-linux.sh). It need not exist yet. Where AppArmor is off or does not restrict user
+# namespaces, nothing is installed. Root is gained through sudo; running it again with the same binary changes
+# nothing.
 set -euo pipefail
 
 # shellcheck source=lib/native.sh
@@ -21,11 +22,15 @@ source "$(dirname "$0")/lib/native.sh"
 TEMPLATE="$NATIVE_ROOT/packaging/linux/apparmor/agterm"
 PROFILE_NAME=agterm
 PROFILE_FILE="/etc/apparmor.d/$PROFILE_NAME"
+# the profiles the file defines
+PROFILES=(agterm)
 APPARMOR_ENABLED=/sys/module/apparmor/parameters/enabled
 USERNS_RESTRICTION=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
 LOADED=/sys/kernel/security/apparmor/profiles
 
-usage() { die "usage: scripts/install-apparmor-profile.sh [--print] [BINARY] | --uninstall (see --help)"; }
+usage() {
+  die "usage: scripts/install-apparmor-profile.sh [--print] [BINARY] | --uninstall (see --help)"
+}
 
 as_root() {
   if ((EUID == 0)); then "$@"; else sudo "$@"; fi
@@ -39,16 +44,31 @@ userns_restricted() {
   [[ "$(cat "$USERNS_RESTRICTION" 2>/dev/null || echo 0)" != 0 ]]
 }
 
-loaded() {
-  as_root grep -qxF "$PROFILE_NAME (unconfined)" "$LOADED"
+# How many of the file's profiles are loaded.
+loaded_count() {
+  local listed name count=0
+  listed="$(as_root cat "$LOADED")"
+  for name in "${PROFILES[@]}"; do
+    if grep -qxF "$name (unconfined)" <<<"$listed"; then
+      count=$((count + 1))
+    fi
+  done
+  echo "$count"
 }
 
-# The profile for binary $1 (absolute, symlinks resolved).
+loaded() {
+  (($(loaded_count) == ${#PROFILES[@]}))
+}
+
+# Quoted in the profile: a space is fine, AppArmor's pattern characters and a quote are not.
+check_path() {
+  [[ "$1" != *[\"\\*?\[\]\{\}^]* ]] || die "the path has a character AppArmor reads as a pattern: $1"
+}
+
+# The profile for the binary $1 (absolute, symlinks resolved).
 render() {
-  local binary="$1"
-  # quoted in the profile: a space is fine, AppArmor's pattern characters and a quote are not
-  [[ "$binary" != *[\"\\*?\[\]\{\}^]* ]] || die "the path has a character AppArmor reads as a pattern: $binary"
-  local template
+  local binary="$1" template
+  check_path "$binary"
   template="$(<"$TEMPLATE")"
   printf '%s\n' "${template//@AGTERM_BIN@/"$binary"}"
 }
@@ -71,7 +91,7 @@ install_profile() {
   fi
   printf '%s\n' "$profile" | as_root tee "$PROFILE_FILE" >/dev/null
   as_root apparmor_parser -r "$PROFILE_FILE"
-  loaded || die "apparmor_parser loaded $PROFILE_FILE, but no $PROFILE_NAME profile is listed in $LOADED"
+  loaded || die "apparmor_parser loaded $PROFILE_FILE, but not every one of ${PROFILES[*]} is listed in $LOADED"
   echo "installed and loaded $PROFILE_FILE for $binary"
 }
 
@@ -80,7 +100,7 @@ uninstall_profile() {
     echo "no $PROFILE_FILE: nothing to remove"
     return
   fi
-  if apparmor_enabled && loaded; then
+  if apparmor_enabled && (($(loaded_count) > 0)); then
     as_root apparmor_parser -R "$PROFILE_FILE"
   fi
   as_root rm -f "$PROFILE_FILE"

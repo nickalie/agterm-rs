@@ -36,12 +36,12 @@ classify() {
     README.md|CLAUDE.md|conformance/README.md|.github/workflows/spike-macos.yml) echo bump ;;
     conformance/agterm_conformance/impls/swift_macos.py) echo reference ;;
     build/pins.env) echo pins ;;
-    crates/agterm-gtk/src/integrations/mod.rs) echo resources ;;
+    crates/agterm-app/src/integrations/mod.rs) echo resources ;;
     crates/agterm-proto/src/version.rs|crates/agterm-core/src/dispatch.rs|crates/agterm-server/tests/server.rs) echo claim ;;
     conformance/agterm_conformance/impls/rust.py|conformance/docs/rust-build.md|docs/linux-ui-checklist.md) echo claim ;;
     conformance/docs/fork-bugs.md) echo cite ;;
     conformance/docs/spike-macos.md|conformance/agterm_conformance/impls/swift_linux.py) echo keep ;;
-    conformance/selftests/*|conformance/tools/*.py|crates/agterm-gtk/src/quick.rs) echo keep ;;
+    conformance/selftests/*|conformance/tools/*.py|crates/agterm-gpui/src/quick/tests.rs) echo keep ;;
     *) echo review ;;
   esac
 }

@@ -18,6 +18,9 @@ rows, the terminal below its prompt.
 - `tint`: relaunched with the normal toolbar and the sidebar tint at Darker 5, the title bar and the terminal keep
   the background and the sidebar shows it under a 0.30 black wash.
 
+The build renders on lavapipe only: $CONFORMANCE_LAVAPIPE_ICD, else the ICD `scripts/fetch-lavapipe.sh --print-icd`
+finds (nothing is fetched here). It logs its terminal's first frame under the target `agterm::surface`.
+
 --bin defaults to the stage run-rust-linux.sh builds (target/conformance-stage/bin/agterm); the themes are read from
 its share/ghostty/themes. --keep saves every screenshot taken there. Prints a JSON report; exits 0 when every check
 holds.
@@ -43,6 +46,10 @@ from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_BIN = REPO / "target" / "conformance-stage" / "bin" / "agterm"
+FETCH_LAVAPIPE = REPO / "scripts" / "fetch-lavapipe.sh"
+# The harness's lavapipe variable (`impls.base.LAVAPIPE_ICD_VARIABLE`), spelled here: importing the harness scrubs every
+# AGTERM_* variable, which the script still needs, so lavapipe is found before that import.
+LAVAPIPE_ICD_VARIABLE = "CONFORMANCE_LAVAPIPE_ICD"
 # The output the window is maximized into: smaller than the suite's, so a screenshot decodes quickly in pure Python.
 OUTPUT_SIZE = (1280, 800)
 # Two bundled themes with clearly different backgrounds, the first dark, the second light.
@@ -321,6 +328,22 @@ def same_as(sampled: Mapping[str, Rgb], expected: Mapping[str, Rgb]) -> dict[str
     return result
 
 
+def find_lavapipe(environ: Mapping[str, str], script: Path = FETCH_LAVAPIPE) -> tuple[str | None, str]:
+    """The lavapipe ICD for a launch: the harness's variable, else what the repository's script finds without
+    fetching; otherwise None and why."""
+    if icd := environ.get(LAVAPIPE_ICD_VARIABLE):
+        return icd, ""
+    if not script.is_file():
+        return None, f"no {script.name} in this tree and no ${LAVAPIPE_ICD_VARIABLE}"
+    try:
+        found = subprocess.run([str(script), "--print-icd"], capture_output=True, text=True, check=False, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return None, f"{script}: {error}"
+    if found.returncode == 0 and (icd := found.stdout.strip()):
+        return icd, ""
+    return None, found.stderr.strip() or f"{script} --print-icd exited with {found.returncode}"
+
+
 def make_adapter(bin: Path) -> Any:
     from agterm_conformance.impls.rust import RustAdapter
 
@@ -350,6 +373,10 @@ def run_launch(adapter: Any, settings: dict[str, Any], label: str, keep: Path | 
 def probe(bin: Path, timeout: float, keep: Path | None) -> dict[str, Any]:
     themes = bin.parent.parent / "share" / "ghostty" / "themes"
     report: dict[str, Any] = {"bin": str(bin), "checks": {}}
+    icd, problem = find_lavapipe(os.environ)
+    if icd is None:
+        return {**report, "ok": False, "error": f"lavapipe: {problem}"}
+    os.environ[LAVAPIPE_ICD_VARIABLE] = icd
     if not bin.is_file():
         return {**report, "ok": False, "error": f"no agterm at {bin}"}
     try:
@@ -357,7 +384,10 @@ def probe(bin: Path, timeout: float, keep: Path | None) -> dict[str, Any]:
         changed = theme_background(themes, CHANGED_THEME)
     except (OSError, ProbeError) as error:
         return {**report, "ok": False, "error": f"themes: {error}"}
-    adapter = make_adapter(bin)
+    try:
+        adapter = make_adapter(bin)
+    except ProbeError as error:
+        return {**report, "ok": False, "error": str(error)}
     checks = report["checks"]
 
     def themed(session: Session, layout: Layout) -> dict[str, Any]:
@@ -388,7 +418,7 @@ def probe(bin: Path, timeout: float, keep: Path | None) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--bin", type=Path, default=DEFAULT_BIN, help="the staged agterm binary")
+    parser.add_argument("--bin", type=Path, default=DEFAULT_BIN, help="the staged app binary (default: the stage's)")
     parser.add_argument("--timeout", type=float, default=30.0, help="seconds each wait may take")
     parser.add_argument("--keep", type=Path, help="a directory to save the screenshots in")
     args = parser.parse_args(argv)

@@ -1,12 +1,13 @@
 # This profile allows everything and only exists to give the
 # application a name instead of having the label "unconfined"
 #
-# agterm's HTML overlays run in WebKitGTK, whose web process starts inside a
+# agterm's HTML overlays run in WPE WebKit, whose web process starts inside a
 # bubblewrap sandbox that needs an unprivileged user namespace. Ubuntu 23.10+
 # (kernel.apparmor_restrict_unprivileged_userns=1) grants one only to a program
-# whose profile carries `userns`, as the profiles it ships for its own WebKitGTK
+# whose profile carries `userns`, as the profiles it ships for its own WebKit
 # apps (epiphany, devhelp) do. bwrap, exec'd by agterm with no profile of its
-# own, stays in this one. scripts/install-apparmor-profile.sh fills in the path.
+# own, stays in the profile of the binary that started it.
+# scripts/install-apparmor-profile.sh fills in the path.
 
 abi <abi/4.0>,
 include <tunables/global>

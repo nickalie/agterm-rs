@@ -1,10 +1,12 @@
-# Shared helpers of the native build scripts (build-ghostty.sh, build-layer-shell.sh, build-zmx.sh, pkg-config.sh,
-# stage.sh). Sourced, not run.
+# Shared helpers of the native build scripts (build-ghostty-vt.sh, build-zmx.sh, build-weston.sh, fetch-wpe.sh,
+# fetch-lavapipe.sh, fetch-fonts.sh, gen-wpe-bindings.sh, gen-ghostty-config-keys.sh, pkg-config.sh, stage.sh,
+# lib/dev-instance.sh). Sourced, not run.
 #
 # Each native dependency lives in its own vendored prefix, ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/<name>-<key>/,
-# where <key> hashes that dependency's pins and patches only. Cargo never runs zig: agterm-ghostty-sys asks
-# `build-ghostty.sh --print-prefix` where the prefix is and fails when it is missing. A relative AGTERM_VENDOR is
-# taken against the repository root, so every caller (and cargo, which runs from a crate directory) sees one path.
+# where <key> hashes that dependency's pins and patches only. Cargo never runs zig: agterm-ghostty-vt-sys asks
+# `build-ghostty-vt.sh --print-prefix` where the prefix is and fails when it is missing. WPE WebKit is a binary package
+# unpacked (fetch-wpe.sh) where the system has none, and reaches cargo through pkg-config.sh. A relative AGTERM_VENDOR
+# is taken against the repository root, so every caller (and cargo, which runs from a crate directory) sees one path.
 
 NATIVE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PINS="$NATIVE_ROOT/build/pins.env"
@@ -12,6 +14,15 @@ VENDOR_ROOT="${AGTERM_VENDOR:-$HOME/.cache/agterm-rs/vendor}"
 [[ "$VENDOR_ROOT" == /* ]] || VENDOR_ROOT="$NATIVE_ROOT/$VENDOR_ROOT"
 # shellcheck source=../../build/pins.env
 source "$PINS"
+
+# The workspace minus everything that links WPE WebKit (the -sys crates, the agterm-wpe host over them, and the GPUI
+# frontend, whose default `html` feature runs its HTML overlays on it), as cargo arguments, so a machine without WPE
+# WebKit (Ubuntu packages none) still builds and tests the rest; GPUI_WITHOUT_HTML adds the GPUI frontend back without
+# the feature (the core then refuses every page). The app with its pages, and its conformance, need a WPE WebKit
+# (README > WPE WebKit): run-rust-linux.sh and run-gpui-dev.sh build it so, and CI runs them in its Arch jobs.
+WORKSPACE_WITHOUT_WPE=(--workspace --exclude agterm-wpe --exclude agterm-wpe-sys --exclude agterm-wpe-platform-sys
+  --exclude agterm-wpe-javascriptcore-sys --exclude agterm-gpui)
+GPUI_WITHOUT_HTML=(-p agterm-gpui --no-default-features)
 
 die() {
   echo "$*" >&2
@@ -52,20 +63,107 @@ prefix_key() {
   } | sha256_of | cut -c1-16
 }
 
-ghostty_prefix() {
-  echo "$VENDOR_ROOT/ghostty-$(prefix_key GHOSTTY "$NATIVE_ROOT/build/patches/ghostty")"
+# libghostty-vt's key hashes the LIBGHOSTTY_VT_ pins and build/patches/ghostty-vt/.
+ghostty_vt_prefix() {
+  echo "$VENDOR_ROOT/ghostty-vt-$(prefix_key LIBGHOSTTY_VT "$NATIVE_ROOT/build/patches/ghostty-vt")"
 }
 
-# gtk4-layer-shell carries no patches: its key hashes the LAYER_SHELL_ pins only.
-layer_shell_prefix() {
-  echo "$VENDOR_ROOT/gtk4-layer-shell-$(prefix_key LAYER_SHELL /nonexistent)"
-}
-
-# A gtk4-layer-shell prefix is complete when its library, header and pkg-config file are all there.
-layer_shell_prefix_is_complete() {
+# A libghostty-vt prefix is complete when the static library, the umbrella header and the pin manifest are there, the
+# manifest matches the LIBGHOSTTY_VT_ pins and Ghostty's resources verify.
+ghostty_vt_prefix_is_complete() {
   local prefix="$1"
-  [[ -s "$prefix/lib/libgtk4-layer-shell.so" && -s "$prefix/include/gtk4-layer-shell/gtk4-layer-shell.h" \
-    && -s "$prefix/lib/pkgconfig/gtk4-layer-shell-0.pc" ]]
+  [[ -s "$prefix/lib/libghostty-vt.a" && -s "$prefix/include/ghostty/vt.h" \
+    && -s "$prefix/include/ghostty/vt/terminal.h" && -s "$prefix/share/agterm/ghostty-vt-PINS" ]] \
+    && pin_lines LIBGHOSTTY_VT | cmp -s - "$prefix/share/agterm/ghostty-vt-PINS" \
+    && verify_ghostty_resources "$prefix/share" >/dev/null 2>&1
+}
+
+# The WPE WebKit package carries no patches: its key hashes the WPE_ pins only.
+wpe_prefix() {
+  echo "$VENDOR_ROOT/wpe-$(prefix_key WPE /nonexistent)"
+}
+
+# A WPE WebKit prefix is complete when the library, the web process, the headers, the pkg-config file, the .gir files
+# and the pin manifest are there and the manifest matches the WPE_ pins.
+wpe_prefix_is_complete() {
+  local prefix="$1"
+  [[ -s "$prefix/lib/libWPEWebKit-2.0.so.1" && -x "$prefix/lib/wpe-webkit-2.0/WPEWebProcess" \
+    && -s "$prefix/include/wpe-webkit-2.0/wpe/webkit.h" && -s "$prefix/lib/pkgconfig/wpe-webkit-2.0.pc" \
+    && -s "$prefix/share/gir-1.0/WPEWebKit-2.0.gir" && -s "$prefix/share/agterm/wpe-PINS" ]] \
+    && pin_lines WPE | cmp -s - "$prefix/share/agterm/wpe-PINS"
+}
+
+# The lavapipe package carries no patches: its key hashes the LAVAPIPE_ pins only.
+lavapipe_prefix() {
+  echo "$VENDOR_ROOT/lavapipe-$(prefix_key LAVAPIPE /nonexistent)"
+}
+
+# A lavapipe prefix is complete when the driver, its ICD manifest (at the prefix's top, naming the driver by absolute
+# path) and the pin manifest are there and the manifest matches the LAVAPIPE_ pins.
+lavapipe_prefix_is_complete() {
+  local prefix="$1"
+  [[ -s "$prefix/lib/libvulkan_lvp.so" && -s "$prefix/lvp_icd.json" && -s "$prefix/share/agterm/lavapipe-PINS" ]] \
+    && pin_lines LAVAPIPE | cmp -s - "$prefix/share/agterm/lavapipe-PINS"
+}
+
+# weston carries no patches: its key hashes the WESTON_ pins only.
+weston_prefix() {
+  echo "$VENDOR_ROOT/weston-$(prefix_key WESTON /nonexistent)"
+}
+
+# Whether the weston at PATH takes --fake-seat (weston 15.0 and later): the seat the GPUI build needs.
+weston_has_fake_seat() {
+  env -u WAYLAND_DISPLAY -u DISPLAY "$1" --help 2>/dev/null | grep -q -- '--fake-seat'
+}
+
+# A weston prefix is complete when the compositor, its headless backend, GL renderer and desktop shell (module and
+# helper client) are there, the pin manifest matches the WESTON_ pins, and the compositor runs and takes --fake-seat.
+weston_prefix_is_complete() {
+  local prefix="$1"
+  [[ -x "$prefix/bin/weston" && -x "$prefix/libexec/weston-desktop-shell" && -s "$prefix/share/agterm/weston-PINS" ]] \
+    && compgen -G "$prefix/lib/libweston-*/headless-backend.so" >/dev/null \
+    && compgen -G "$prefix/lib/libweston-*/gl-renderer.so" >/dev/null \
+    && [[ -s "$prefix/lib/weston/desktop-shell.so" ]] \
+    && pin_lines WESTON | cmp -s - "$prefix/share/agterm/weston-PINS" \
+    && weston_has_fake_seat "$prefix/bin/weston"
+}
+
+# The libraries a shared object needs that this host cannot resolve, space-separated (empty when all resolve).
+unresolved_libraries() {
+  ldd "$1" 2>&1 | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+
+# The terminal fonts carry no patches: their key hashes the FONTS_ pins only.
+fonts_prefix() {
+  echo "$VENDOR_ROOT/fonts-$(prefix_key FONTS /nonexistent)"
+}
+
+# The faces agterm-gpui embeds, under the prefix's share/fonts/ (its build script reads the same list).
+FONT_FILES=(JetBrainsMono-Regular.ttf JetBrainsMono-Bold.ttf JetBrainsMono-Italic.ttf JetBrainsMono-BoldItalic.ttf
+  SymbolsNerdFontMono-Regular.ttf)
+
+# A fonts prefix is complete when every face, both licenses and the pin manifest are there and the manifest matches
+# the FONTS_ pins.
+fonts_prefix_is_complete() {
+  local prefix="$1" file
+  for file in "${FONT_FILES[@]}"; do
+    [[ -s "$prefix/share/fonts/$file" ]] || return 1
+  done
+  [[ -s "$prefix/share/doc/fonts/JetBrainsMono-OFL.txt" && -s "$prefix/share/doc/fonts/SymbolsNerdFont-LICENSE" \
+    && -s "$prefix/share/agterm/fonts-PINS" ]] \
+    && pin_lines FONTS | cmp -s - "$prefix/share/agterm/fonts-PINS"
+}
+
+# The gir binary's key hashes the GIR_ pins and build/patches/gir/.
+gir_prefix() {
+  echo "$VENDOR_ROOT/gir-$(prefix_key GIR "$NATIVE_ROOT/build/patches/gir")"
+}
+
+# A gir prefix is complete when the binary runs and its pin manifest matches the GIR_ pins.
+gir_prefix_is_complete() {
+  local prefix="$1"
+  [[ -x "$prefix/bin/gir" && -s "$prefix/share/agterm/gir-PINS" ]] \
+    && pin_lines GIR | cmp -s - "$prefix/share/agterm/gir-PINS"
 }
 
 # The Zig triple arch and the matching pinned sha256 variable suffix for this host.
@@ -112,7 +210,8 @@ find_zig() {
   echo "$dir/zig"
 }
 
-# Verify the Ghostty resources below SHARE (port of ../agterm-linux scripts/verify-linux-resources.sh).
+# Verify the Ghostty resources below SHARE (port of ../agterm-linux scripts/verify-linux-resources.sh): the ones
+# build-ghostty-vt.sh vendors at LIBGHOSTTY_VT_REV.
 verify_ghostty_resources() {
   local share="$1" ghostty themes terminfo theme_count theme file
   command -v infocmp >/dev/null || { echo "infocmp is required to verify Ghostty resources" >&2; return 1; }
@@ -123,28 +222,21 @@ verify_ghostty_resources() {
     "$themes/.agterm-resource-manifest" "$terminfo/x/xterm-ghostty"; do
     [[ -s "$file" ]] || { echo "missing or empty Ghostty resource: $file" >&2; return 1; }
   done
-  pin_lines GHOSTTY | cmp -s - "$themes/.agterm-resource-manifest" || {
-    echo "Ghostty resource provenance does not match the GHOSTTY_ pins in $PINS" >&2
+  pin_lines LIBGHOSTTY_VT | cmp -s - "$themes/.agterm-resource-manifest" || {
+    echo "Ghostty resource provenance does not match the LIBGHOSTTY_VT_ pins in $PINS" >&2
     return 1
   }
   theme_count="$(find "$themes" -maxdepth 1 -type f ! -name '.agterm-resource-manifest' | wc -l)"
-  if ((theme_count != GHOSTTY_THEME_COUNT)); then
-    echo "Ghostty theme catalog has $theme_count files; expected $GHOSTTY_THEME_COUNT" >&2
+  if ((theme_count != LIBGHOSTTY_VT_THEME_COUNT)); then
+    echo "Ghostty theme catalog has $theme_count files; expected $LIBGHOSTTY_VT_THEME_COUNT" >&2
     return 1
   fi
-  for theme in "${GHOSTTY_KNOWN_THEMES[@]}"; do
+  for theme in "${LIBGHOSTTY_VT_KNOWN_THEMES[@]}"; do
     [[ -s "$themes/$theme" ]] || { echo "missing or empty Ghostty theme: $themes/$theme" >&2; return 1; }
   done
   infocmp -A "$terminfo" xterm-ghostty >/dev/null || {
     echo "xterm-ghostty is not readable from $terminfo" >&2
     return 1
   }
-  echo "→ verified Ghostty resources from $GHOSTTY_REV ($theme_count themes + xterm-ghostty)"
-}
-
-# A prefix is complete when the library, both headers and the resources are all there and verify.
-ghostty_prefix_is_complete() {
-  local prefix="$1"
-  [[ -s "$prefix/lib/libghostty.so" && -s "$prefix/include/ghostty.h" && -s "$prefix/include/ghostty/vt.h" ]] \
-    && verify_ghostty_resources "$prefix/share" >/dev/null 2>&1
+  echo "→ verified Ghostty resources from $LIBGHOSTTY_VT_REV ($theme_count themes + xterm-ghostty)"
 }

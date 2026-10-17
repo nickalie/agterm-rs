@@ -35,9 +35,9 @@ mkdir -p "$patches"
 MAPPINGS=(
   "agterm/Resources/agent-status|.|resources/agent-status"
   "plugins/agterm/skills/agterm|.|resources/skills/agterm"
-  "agterm/Resources/hud|.|crates/agterm-gtk/resources/hud"
+  "agterm/Resources/hud|.|crates/agterm-gpui/resources/hud"
   "agterm/Resources/custom-themes|.|build/themes"
-  "agterm/Resources|ghostty-defaults.conf|crates/agterm-gtk/src"
+  "agterm/Resources|ghostty-defaults.conf|crates/agterm-core/src/ghostty_config"
   "scripts/zmx-patches|*.patch|build/patches/zmx"
   ".|LICENSE|resources/LICENSE.upstream"
 )

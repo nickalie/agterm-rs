@@ -1,37 +1,45 @@
 #!/usr/bin/env python3
 """Launch the staged Rust build under a private headless weston and session bus, the isolation of the Linux runs,
-and report whether its libghostty surface was created and drew a frame: a `version` answer alone does not show it,
-since the app keeps serving when its GtkGLArea gets no OpenGL context.
+and report whether its terminal surface was created and drew a frame: a `version` answer alone does not show it,
+since the app keeps serving when its terminal cannot render (a terminal element without a frame).
 
   python conformance/tools/ghostty_probe.py [--bin PATH] [--timeout SECONDS] [--arg=ARG ...]
 
-Each --arg is appended to the app's command line (write `--arg=--flag` for one starting with a dash): agterm hands its
-whole argv to libghostty as upstream does, and a launch with arguments of its own must still start and serve.
+Each --arg is appended to the app's command line (write `--arg=--flag` for one starting with a dash): a launch with
+arguments of its own must still start and serve, as upstream's does.
 
---bin defaults to the stage run-rust-linux.sh builds (target/conformance-stage/bin/agterm). The instance logs the
-terminal surface at debug level (AGTERM_LOG); this reads its log. Prints a JSON report; exits 0 when the first frame
-was drawn.
+The build renders on lavapipe only: $CONFORMANCE_LAVAPIPE_ICD, else the ICD `scripts/fetch-lavapipe.sh --print-icd`
+finds (nothing is fetched here), else the launch fails naming the script. --bin defaults to the stage run-rust-linux.sh
+builds (target/conformance-stage/bin/agterm). The app logs its terminal surface at debug level under the target
+`agterm::surface` (AGTERM_LOG); this reads the instance's log. Prints a JSON report; exits 0 when the first frame was
+drawn.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import subprocess
 import sys
 import time
-from pathlib import Path
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_BIN = REPO / "target" / "conformance-stage" / "bin" / "agterm"
-# The surface's lines, at debug in the binary's `agterm::surface` module; the rest of the app stays at info.
+FETCH_LAVAPIPE = REPO / "scripts" / "fetch-lavapipe.sh"
+# `impls.base.LAVAPIPE_ICD_VARIABLE`, spelled here: importing the harness runs the plugin's scrub of every AGTERM_*
+# variable, which the script still needs (AGTERM_LAVAPIPE_ICD, AGTERM_VENDOR), so lavapipe is found before that.
+LAVAPIPE_ICD_VARIABLE = "CONFORMANCE_LAVAPIPE_ICD"
+# The surface's lines, at debug under the explicit `agterm::surface` target; the rest of the app stays at info.
 LOG_FILTER = "info,agterm::surface=debug"
 CREATED = "terminal surface created"
 DREW = "terminal drew its first frame"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
-FAILURES = ("the terminal's GtkGLArea has no OpenGL context", "could not create the terminal surface")
+FAILURES = ("could not create the terminal surface",)
 
 
 def plain(text: str) -> str:
@@ -40,13 +48,30 @@ def plain(text: str) -> str:
 
 
 def read_log(text: str) -> dict[str, Any]:
-    """What the instance log says about its surface: created, drew a frame, and the first GL or creation failure."""
+    """What the instance log says about its surface: created, drew a frame, and the first creation failure."""
     text = plain(text)
     error = next((line.strip() for line in text.splitlines() if any(f in line for f in FAILURES)), None)
     return {"created": CREATED in text, "drew": DREW in text, "error": error}
 
 
+def lavapipe_from_script(script: Path = FETCH_LAVAPIPE) -> tuple[str | None, str]:
+    """The lavapipe ICD the repository's script finds without fetching anything, else None and the script's reason."""
+    try:
+        found = subprocess.run([str(script), "--print-icd"], capture_output=True, text=True, check=False, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return None, f"{script}: {error}"
+    if found.returncode == 0 and (icd := found.stdout.strip()):
+        return icd, ""
+    return None, found.stderr.strip() or f"{script} --print-icd exited with {found.returncode}"
+
+
 def probe(bin: Path, timeout: float, args: Sequence[str] = ()) -> dict[str, Any]:
+    lavapipe_problem = ""
+    if not os.environ.get(LAVAPIPE_ICD_VARIABLE):
+        icd, lavapipe_problem = lavapipe_from_script()
+        if icd is not None:
+            os.environ[LAVAPIPE_ICD_VARIABLE] = icd
+    # only now: importing the harness scrubs AGTERM_* from this process
     from agterm_conformance.impls.rust import RustAdapter
 
     class LoggingAdapter(RustAdapter):
@@ -63,10 +88,13 @@ def probe(bin: Path, timeout: float, args: Sequence[str] = ()) -> dict[str, Any]
     report: dict[str, Any] = {"bin": str(bin)}
     if args:
         report["args"] = list(args)
+    if lavapipe_problem:
+        report["lavapipe"] = lavapipe_problem
     try:
         instance = adapter.launch()
     except Exception as error:  # noqa: BLE001 - the report names whatever stopped the probe
-        return {**report, "ok": False, "error": f"launch: {type(error).__name__}: {error}"}
+        reason = f" (fetch-lavapipe.sh: {lavapipe_problem})" if lavapipe_problem else ""
+        return {**report, "ok": False, "error": f"launch: {type(error).__name__}: {error}{reason}"}
     try:
         deadline = time.monotonic() + timeout
         while True:
@@ -92,7 +120,7 @@ def probe(bin: Path, timeout: float, args: Sequence[str] = ()) -> dict[str, Any]
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--bin", type=Path, default=DEFAULT_BIN, help="the staged agterm binary")
+    parser.add_argument("--bin", type=Path, default=DEFAULT_BIN, help="the staged app binary (default: the stage's)")
     parser.add_argument("--timeout", type=float, default=30.0, help="seconds the first frame may take")
     parser.add_argument("--arg", action="append", default=[], help="an argument appended to the app's command line")
     args = parser.parse_args(argv)

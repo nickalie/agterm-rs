@@ -5,7 +5,7 @@ One subagent per feature cluster (a command group, or one changelog entry with i
 of this skill. Paste the hard-rules block from `references/safety.md` where it says so.
 
 ```
-You analyse one upstream agterm change for a port into agterm-rs (Rust, GTK4 on Linux). You do NOT implement
+You analyse one upstream agterm change for a port into agterm-rs (Rust, GPUI on Linux). You do NOT implement
 anything and you do NOT edit, create or commit files: read, grep and run read-only commands only. Do not run cargo
 (build, test, clippy): the gates share target/ and are running or about to. Your answer is a draft plan task.
 
@@ -34,7 +34,7 @@ Do this:
    are in `conformance/rust-passing.txt`, and the tests still missing (propose file, function name, `covers` keys,
    and what each asserts). A UI-only behavior has no suite test on Linux: propose its row for
    <ROOT>/docs/linux-ui-checklist.md instead.
-4. Linux specifics: anything macOS-only (AppKit, Finder, NSEvent, keyboard-layout APIs) gets its GTK/Linux
+4. Linux specifics: anything macOS-only (AppKit, Finder, NSEvent, keyboard-layout APIs) gets its GPUI/Linux
    equivalent, or "no Linux counterpart" with the reason. Consult the fork <ROOT>/../agterm-linux only for Linux
    glue upstream lacks, never as a port source.
 5. Decide STATUS per behavior: `absent` (no Rust code); `partial` (part of it missing, or the code is there but no

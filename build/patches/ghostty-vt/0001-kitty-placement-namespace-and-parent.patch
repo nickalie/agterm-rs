@@ -1,0 +1,344 @@
+agterm-rs: Kitty placement-id namespaces and relative placements' parent links in the C API
+
+The C API at LIBGHOSTTY_VT_REV (and at ghostty main on 2026-10-17: kitty_graphics.h is byte-identical) reports a
+placement's id without its namespace and a relative placement (P=/Q=) without its parent, so an embedder cannot draw
+what Ghostty's renderer draws: placeholderTarget looks a named id up among the client's (external) ids only and, with
+none named, prefers a client's virtual placement (PlacementId.preferredOver); src/renderer/image.zig positions a
+relative placement whose chain roots at a virtual placement at the root's minimum placeholder cell plus the chain's
+summed offsets (pending_relative). This patch only reads out what storage holds, additively, with no logic of its own
+(the embedder resolves chains, targets and positions):
+
+- GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PLACEMENT_ID_NAMESPACE (GhosttyKittyPlacementIdNamespace: INTERNAL for a
+  terminal-numbered id, EXTERNAL for the client's p=), the placement key's tag;
+- GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PARENT_IMAGE_ID, _PARENT_PLACEMENT_ID, _PARENT_PLACEMENT_ID_NAMESPACE,
+  _RELATIVE_HORIZONTAL_OFFSET and _RELATIVE_VERTICAL_OFFSET: the fields of a relative placement's location
+  (Placement.Relative: the parent's key and H=/V=), GHOSTTY_NO_VALUE for a placement that is not relative;
+- the enum in the ABI type manifest (types.zig), and tests.
+
+Nothing existing changes. Applied by scripts/build-ghostty-vt.sh; the bindings are regenerated with
+scripts/gen-ghostty-vt-bindings.sh.
+
+--- a/include/ghostty/vt/kitty_graphics.h
++++ b/include/ghostty/vt/kitty_graphics.h
+@@ -260,10 +260,73 @@
+    */
+   GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_Z = 12,
+ 
++  /**
++   * The namespace of the placement ID. Storage keys a placement by its
++   * image ID, its placement ID and this namespace, so a placement the
++   * terminal numbered and one the client numbered can share a number.
++   *
++   * Output type: GhosttyKittyPlacementIdNamespace *
++   */
++  GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PLACEMENT_ID_NAMESPACE = 13,
++
++  /**
++   * The image ID of a relative placement's (P=) parent placement.
++   * GHOSTTY_NO_VALUE for a placement that is not relative.
++   *
++   * Output type: uint32_t *
++   */
++  GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PARENT_IMAGE_ID = 14,
++
++  /**
++   * The placement ID of a relative placement's parent placement (Q=, or
++   * the one storage picked when Q= was not given). GHOSTTY_NO_VALUE for a
++   * placement that is not relative.
++   *
++   * Output type: uint32_t *
++   */
++  GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PARENT_PLACEMENT_ID = 15,
++
++  /**
++   * The namespace of the parent placement ID. GHOSTTY_NO_VALUE for a
++   * placement that is not relative.
++   *
++   * Output type: GhosttyKittyPlacementIdNamespace *
++   */
++  GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PARENT_PLACEMENT_ID_NAMESPACE = 16,
++
++  /**
++   * A relative placement's offset in cell columns from its parent's
++   * origin (H=). GHOSTTY_NO_VALUE for a placement that is not relative.
++   *
++   * Output type: int32_t *
++   */
++  GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_RELATIVE_HORIZONTAL_OFFSET = 17,
++
++  /**
++   * A relative placement's offset in cell rows from its parent's origin
++   * (V=). GHOSTTY_NO_VALUE for a placement that is not relative.
++   *
++   * Output type: int32_t *
++   */
++  GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_RELATIVE_VERTICAL_OFFSET = 18,
++
+   GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+ } GhosttyKittyGraphicsPlacementData;
+ 
+ /**
++ * The namespace of a placement ID.
++ *
++ * @ingroup kitty_graphics
++ */
++typedef enum GHOSTTY_ENUM_TYPED {
++  /** Numbered by the terminal: a placement created without p=. */
++  GHOSTTY_KITTY_PLACEMENT_ID_NAMESPACE_INTERNAL = 0,
++  /** Numbered by the client (p=): the IDs placeholders and Q= name. */
++  GHOSTTY_KITTY_PLACEMENT_ID_NAMESPACE_EXTERNAL = 1,
++  GHOSTTY_KITTY_PLACEMENT_ID_NAMESPACE_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
++} GhosttyKittyPlacementIdNamespace;
++
++/**
+  * Z-layer classification for kitty graphics placements.
+  *
+  * Based on the kitty protocol z-index conventions:
+--- a/src/terminal/c/kitty_graphics.zig
++++ b/src/terminal/c/kitty_graphics.zig
+@@ -64,6 +64,19 @@
+     }
+ };
+ 
++/// C: GhosttyKittyPlacementIdNamespace
++pub const PlacementIdNamespace = enum(c_int) {
++    internal = 0,
++    external = 1,
++
++    fn of(id: kitty_storage.ImageStorage.PlacementId) PlacementIdNamespace {
++        return switch (id.tag) {
++            .internal => .internal,
++            .external => .external,
++        };
++    }
++};
++
+ /// C: GhosttyKittyGraphicsPlacementData
+ pub const PlacementData = enum(c_int) {
+     invalid = 0,
+@@ -79,6 +92,12 @@
+     columns = 10,
+     rows = 11,
+     z = 12,
++    placement_id_namespace = 13,
++    parent_image_id = 14,
++    parent_placement_id = 15,
++    parent_placement_id_namespace = 16,
++    relative_horizontal_offset = 17,
++    relative_vertical_offset = 18,
+ 
+     pub fn OutType(comptime self: PlacementData) type {
+         return switch (self) {
+@@ -95,6 +114,9 @@
+             .rows,
+             => u32,
+             .z => i32,
++            .placement_id_namespace, .parent_placement_id_namespace => PlacementIdNamespace,
++            .parent_image_id, .parent_placement_id => u32,
++            .relative_horizontal_offset, .relative_vertical_offset => i32,
+         };
+     }
+ };
+@@ -409,11 +431,27 @@
+         .columns => out.* = val.columns,
+         .rows => out.* = val.rows,
+         .z => out.* = val.z,
++        .placement_id_namespace => out.* = .of(key.placement_id),
++        .parent_image_id => out.* = (relativeOf(val) orelse return .no_value).parent.image_id,
++        .parent_placement_id => out.* = (relativeOf(val) orelse return .no_value).parent.placement_id.id,
++        .parent_placement_id_namespace => out.* = .of((relativeOf(val) orelse return .no_value).parent.placement_id),
++        .relative_horizontal_offset => out.* = (relativeOf(val) orelse return .no_value).horizontal_offset,
++        .relative_vertical_offset => out.* = (relativeOf(val) orelse return .no_value).vertical_offset,
+     }
+ 
+     return .success;
+ }
+ 
++/// The parent link of a relative placement (P=), null for the others.
++fn relativeOf(
++    val: *const kitty_storage.ImageStorage.Placement,
++) ?kitty_storage.ImageStorage.Placement.Relative {
++    return switch (val.location) {
++        .relative => |rel| rel,
++        .pin, .virtual => null,
++    };
++}
++
+ pub fn placement_rect(
+     iter_: PlacementIterator,
+     image_: ImageHandle,
+@@ -2136,3 +2174,164 @@
+     try testing.expectEqual(Result.success, get(graphics, .generation, @ptrCast(&gen)));
+     try testing.expect(gen > gen_alt);
+ }
++
++/// A placement's key as the C API reports it, for the tests below.
++const TestKey = struct {
++    image_id: u32,
++    placement_id: u32,
++    namespace: PlacementIdNamespace,
++};
++
++fn testIteratorKey(iter: PlacementIterator) !TestKey {
++    var key: TestKey = undefined;
++    try testing.expectEqual(Result.success, placement_get(iter, .image_id, @ptrCast(&key.image_id)));
++    try testing.expectEqual(Result.success, placement_get(iter, .placement_id, @ptrCast(&key.placement_id)));
++    try testing.expectEqual(Result.success, placement_get(iter, .placement_id_namespace, @ptrCast(&key.namespace)));
++    return key;
++}
++
++/// A relative placement's parent link as the C API reports it, null when
++/// every parent field reports no value.
++const TestParent = struct {
++    key: TestKey,
++    horizontal_offset: i32,
++    vertical_offset: i32,
++};
++
++fn testIteratorParent(iter: PlacementIterator) !?TestParent {
++    var parent: TestParent = undefined;
++    const first = placement_get(iter, .parent_image_id, @ptrCast(&parent.key.image_id));
++    const rest = [_]Result{
++        placement_get(iter, .parent_placement_id, @ptrCast(&parent.key.placement_id)),
++        placement_get(iter, .parent_placement_id_namespace, @ptrCast(&parent.key.namespace)),
++        placement_get(iter, .relative_horizontal_offset, @ptrCast(&parent.horizontal_offset)),
++        placement_get(iter, .relative_vertical_offset, @ptrCast(&parent.vertical_offset)),
++    };
++    for (rest) |result| try testing.expectEqual(first, result);
++    return switch (first) {
++        .success => parent,
++        .no_value => null,
++        else => error.UnexpectedResult,
++    };
++}
++
++test "placement_get placement_id_namespace tells colliding numbers apart" {
++    if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
++
++    var t: terminal_c.Terminal = null;
++    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &t, 80, 24));
++    defer terminal_c.free(t);
++
++    // Two terminal-numbered placements (internal 0 and 1) and a client's
++    // p=1 (external 1) of the same image.
++    const cmds = "\x1b_Ga=T,q=2,f=24,s=1,v=1,i=1,C=1;AAAA\x1b\\" ++
++        "\x1b_Ga=p,q=2,i=1,C=1\x1b\\" ++
++        "\x1b_Ga=p,q=2,i=1,p=1,C=1\x1b\\";
++    terminal_c.vt_write(t, cmds.ptr, cmds.len);
++
++    var graphics: KittyGraphics = undefined;
++    try testing.expectEqual(Result.success, terminal_c.get(t, .kitty_graphics, @ptrCast(&graphics)));
++    var iter: PlacementIterator = null;
++    try testing.expectEqual(Result.success, placement_iterator_new(&lib.alloc.test_allocator, &iter));
++    defer placement_iterator_free(iter);
++    try testing.expectEqual(Result.success, get(graphics, .placement_iterator, @ptrCast(&iter)));
++
++    var internal_ids: u32 = 0;
++    var external_one = false;
++    var count: usize = 0;
++    while (placement_iterator_next(iter)) {
++        count += 1;
++        const key = try testIteratorKey(iter);
++        try testing.expectEqual(1, key.image_id);
++        switch (key.namespace) {
++            .internal => internal_ids |= @as(u32, 1) << @intCast(key.placement_id),
++            .external => {
++                try testing.expectEqual(1, key.placement_id);
++                external_one = true;
++            },
++        }
++    }
++    try testing.expectEqual(3, count);
++    try testing.expectEqual(0b11, internal_ids);
++    try testing.expect(external_one);
++}
++
++test "placement_get reports a relative placement's parent link" {
++    if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
++
++    var t: terminal_c.Terminal = null;
++    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &t, 80, 24));
++    defer terminal_c.free(t);
++
++    // Image 1 placed virtually (external 1); image 2 relative to it at
++    // (2, -1) as external 1; image 3 relative to image 2 at (1, 3), with
++    // no p= of its own; image 4 on a pin (external 2) and image 5
++    // relative to it without Q=, at (-4, 0).
++    const cmds = "\x1b_Ga=T,U=1,q=2,f=24,s=1,v=1,i=1,p=1;AAAA\x1b\\" ++
++        "\x1b_Ga=t,q=2,f=24,s=1,v=1,i=2;AAAA\x1b\\" ++
++        "\x1b_Ga=p,q=2,i=2,p=1,P=1,Q=1,H=2,V=-1,C=1\x1b\\" ++
++        "\x1b_Ga=t,q=2,f=24,s=1,v=1,i=3;AAAA\x1b\\" ++
++        "\x1b_Ga=p,q=2,i=3,P=2,Q=1,H=1,V=3,C=1\x1b\\" ++
++        "\x1b_Ga=T,q=2,f=24,s=1,v=1,i=4,p=2,C=1;AAAA\x1b\\" ++
++        "\x1b_Ga=t,q=2,f=24,s=1,v=1,i=5;AAAA\x1b\\" ++
++        "\x1b_Ga=p,q=2,i=5,P=4,H=-4,C=1\x1b\\";
++    terminal_c.vt_write(t, cmds.ptr, cmds.len);
++
++    var graphics: KittyGraphics = undefined;
++    try testing.expectEqual(Result.success, terminal_c.get(t, .kitty_graphics, @ptrCast(&graphics)));
++    var iter: PlacementIterator = null;
++    try testing.expectEqual(Result.success, placement_iterator_new(&lib.alloc.test_allocator, &iter));
++    defer placement_iterator_free(iter);
++    try testing.expectEqual(Result.success, get(graphics, .placement_iterator, @ptrCast(&iter)));
++
++    var seen: u32 = 0;
++    while (placement_iterator_next(iter)) {
++        const key = try testIteratorKey(iter);
++        seen |= @as(u32, 1) << @intCast(key.image_id);
++        const parent = try testIteratorParent(iter);
++        switch (key.image_id) {
++            1, 4 => try testing.expectEqual(null, parent),
++            2 => try testing.expectEqual(TestParent{
++                .key = .{ .image_id = 1, .placement_id = 1, .namespace = .external },
++                .horizontal_offset = 2,
++                .vertical_offset = -1,
++            }, parent.?),
++            3 => {
++                try testing.expectEqual(PlacementIdNamespace.internal, key.namespace);
++                try testing.expectEqual(TestParent{
++                    .key = .{ .image_id = 2, .placement_id = 1, .namespace = .external },
++                    .horizontal_offset = 1,
++                    .vertical_offset = 3,
++                }, parent.?);
++            },
++            5 => try testing.expectEqual(TestParent{
++                .key = .{ .image_id = 4, .placement_id = 2, .namespace = .external },
++                .horizontal_offset = -4,
++                .vertical_offset = 0,
++            }, parent.?),
++            else => return error.UnexpectedPlacement,
++        }
++    }
++    try testing.expectEqual(0b111110, seen);
++}
++
++test "placement_get parent data on an unpositioned iterator returns invalid_value" {
++    if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
++
++    var t: terminal_c.Terminal = null;
++    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &t, 80, 24));
++    defer terminal_c.free(t);
++    var graphics: KittyGraphics = undefined;
++    try testing.expectEqual(Result.success, terminal_c.get(t, .kitty_graphics, @ptrCast(&graphics)));
++
++    var image_id: u32 = 0;
++    try testing.expectEqual(Result.invalid_value, placement_get(null, .parent_image_id, @ptrCast(&image_id)));
++    var iter: PlacementIterator = null;
++    try testing.expectEqual(Result.success, placement_iterator_new(&lib.alloc.test_allocator, &iter));
++    defer placement_iterator_free(iter);
++    try testing.expectEqual(Result.success, get(graphics, .placement_iterator, @ptrCast(&iter)));
++    // not positioned on a placement
++    try testing.expectEqual(Result.invalid_value, placement_get(iter, .parent_image_id, @ptrCast(&image_id)));
++    var namespace: PlacementIdNamespace = .internal;
++    try testing.expectEqual(Result.invalid_value, placement_get(iter, .placement_id_namespace, @ptrCast(&namespace)));
++}
+--- a/src/terminal/c/types.zig
++++ b/src/terminal/c/types.zig
+@@ -276,6 +276,7 @@
+     .initEnum("GhosttyKittyGraphicsPlacementIteratorOption", kitty_graphics.PlacementIteratorOption, "GHOSTTY_KITTY_GRAPHICS_PLACEMENT_ITERATOR_OPTION_"),
+     .initEnum("GhosttyKittyImageCompression", kitty_graphics.ImageCompression, "GHOSTTY_KITTY_IMAGE_COMPRESSION_"),
+     .initEnum("GhosttyKittyImageFormat", kitty_graphics.ImageFormat, "GHOSTTY_KITTY_IMAGE_FORMAT_"),
++    .initEnum("GhosttyKittyPlacementIdNamespace", kitty_graphics.PlacementIdNamespace, "GHOSTTY_KITTY_PLACEMENT_ID_NAMESPACE_"),
+     .initEnum("GhosttyKittyPlacementLayer", kitty_graphics.PlacementLayer, "GHOSTTY_KITTY_PLACEMENT_LAYER_"),
+     .initEnum("GhosttyModeReportState", modes_pkg.Report.State, "GHOSTTY_MODE_REPORT_"),
+     .initEnum("GhosttyMouseAction", input_mouse.Action, "GHOSTTY_MOUSE_ACTION_"),

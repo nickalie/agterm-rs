@@ -83,22 +83,9 @@ impl Sandbox {
         self.root.path().join(relative)
     }
 
-    /// Written by a child `install`, never through a descriptor of this process: a parallel test's fork would inherit
-    /// that descriptor until its exec, and running the script meanwhile fails with ETXTBSY.
     fn script(path: &Path, body: &str) -> io::Result<()> {
         fs::create_dir_all(path.parent().unwrap_or(Path::new("/")))?;
-        let source = tempfile::NamedTempFile::new()?;
-        fs::write(source.path(), format!("#!/bin/sh\n{body}\n"))?;
-        let status = Command::new("install")
-            .args(["-m", "755"])
-            .arg(source.path())
-            .arg(path)
-            .status()?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(io::Error::other(format!("install {}: {status}", path.display())))
-        }
+        agterm_host::fakes::write_executable(path, &format!("#!/bin/sh\n{body}\n"))
     }
 
     /// A `zmx` beside the CLI that records its arguments, its `ZMX_*` environment and its stdin, then exits `code`.

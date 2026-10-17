@@ -60,6 +60,18 @@ def test_reports_version(ctl):
 """
 
 
+# What the instance was started with, written where the test runner says.
+LAUNCH_PROBE_TEST = """
+import json
+import os
+
+def test_reports_version(app):
+    weston = json.loads((app.root / "fake-compositor.json").read_text())["argv"]
+    with open(os.environ["LAUNCH_PROBE"], "w") as sink:
+        json.dump({"env": app.env, "weston": weston}, sink)
+"""
+
+
 @pytest.fixture
 def layers(tmp_path: Path) -> Path:
     tests = tmp_path / "tests"
@@ -75,6 +87,14 @@ def stage(tmp_path: Path, fake_bin: Path) -> Path:
     app.parent.mkdir(parents=True)
     shutil.copy2(fake_bin, app)
     return app.parent.parent
+
+
+@pytest.fixture(autouse=True)
+def lavapipe_icd(make_icd, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A lavapipe ICD manifest, handed to scripts/fetch-lavapipe.sh as AGTERM_LAVAPIPE_ICD by every run."""
+    icd = make_icd()
+    monkeypatch.setenv("AGTERM_LAVAPIPE_ICD", str(icd))
+    return icd
 
 
 @pytest.fixture(autouse=True)
@@ -160,6 +180,215 @@ def test_a_holding_run_writes_the_report(tmp_path: Path, stage: Path, layers: Pa
     assert {"kind": "test", "nodeid": PROBE_ID, "outcome": "passed"}.items() <= records[1].items()
     assert "scrubbed from env" not in (out / "pytest.log").read_text()
     assert (out / "keep.txt").read_text() == "mine"
+
+
+def test_a_run_launches_its_binary_on_lavapipe_with_a_seat(
+    tmp_path: Path, stage: Path, layers: Path, lavapipe_icd: Path
+) -> None:
+    (layers / "protocol" / "test_probe.py").write_text(LAUNCH_PROBE_TEST)
+    probe = tmp_path / "launch.json"
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), LAUNCH_PROBE=str(probe))
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert report.startswith("## rust-linux conformance\n")
+    assert "frontend" not in report
+    assert f"agterm: `{stage}/bin/agterm`" in report
+    assert f"Vulkan: lavapipe only, `{lavapipe_icd}`" in report
+    assert "rust: 1 pass, 0 fail" in report and "ratchet holds" in report
+    assert "rust frontend" not in (tmp_path / "report" / "pytest.log").read_text()
+    launched = json.loads(probe.read_text())
+    assert launched["weston"][-1] == "--fake-seat"
+    env = launched["env"]
+    assert env["VK_DRIVER_FILES"] == env["VK_ICD_FILENAMES"] == str(lavapipe_icd)
+    assert env["LIBGL_ALWAYS_SOFTWARE"] == "1"
+    # the override reached the script, never the instance
+    assert not {"AGTERM_LAVAPIPE_ICD", "CONFORMANCE_LAVAPIPE_ICD"} & env.keys()
+
+
+def test_a_run_without_the_binary_skips_everything(tmp_path: Path, layers: Path) -> None:
+    """A stage without bin/agterm (the app crate not built): nothing launches."""
+    empty = tmp_path / "empty-stage"
+    (empty / "bin").mkdir(parents=True)
+    completed, report = run(tmp_path, empty, layers, ratchet(tmp_path))
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "agterm: not staged" in report
+    assert "rust: 0 pass, 0 fail, 0 skip(unsupported), 1 skip(not-yet-at-level)" in report
+
+
+def test_a_run_without_lavapipe_stops_before_anything_runs(
+    tmp_path: Path, stage: Path, layers: Path, lock: Path
+) -> None:
+    with open(lock, "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)  # refused before queueing
+        completed, report = run(
+            tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), AGTERM_LAVAPIPE_ICD=str(tmp_path / "absent.json")
+        )
+    assert completed.returncode == 2
+    assert "AGTERM_LAVAPIPE_ICD names no ICD manifest" in completed.stderr
+    assert "no lavapipe for the GPUI build" in completed.stderr
+    assert "waiting for another conformance run" not in completed.stdout
+    assert report == ""
+
+
+def vendored_weston(vendor: Path, fake_compositor_bin: Path) -> Path:
+    """A complete scripts/build-weston.sh prefix under `vendor` whose weston is the fake one, with a seat."""
+    repo = SCRIPT.parents[2]
+    found = subprocess.run(
+        [str(repo / "scripts/build-weston.sh"), "--print-prefix"],
+        env={**os.environ, "AGTERM_VENDOR": str(vendor)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    prefix = Path(found.stdout.strip())
+    modules = ("lib/libweston-15/headless-backend.so", "lib/libweston-15/gl-renderer.so", "lib/weston/desktop-shell.so")
+    for path in modules:
+        (prefix / path).parent.mkdir(parents=True, exist_ok=True)
+        (prefix / path).write_text("stand-in")
+    for path in ("bin/weston", "libexec/weston-desktop-shell"):
+        (prefix / path).parent.mkdir(parents=True, exist_ok=True)
+        (prefix / path).write_text(f'#!/bin/sh\nexec env -u FAKE_COMPOSITOR_HELP "{fake_compositor_bin}" "$@"\n')
+        (prefix / path).chmod(0o755)
+    pins = (repo / "build/pins.env").read_text().splitlines()
+    (prefix / "share/agterm").mkdir(parents=True)
+    manifest = "".join(f"{line}\n" for line in pins if line.startswith("WESTON_"))
+    (prefix / "share/agterm/weston-PINS").write_text(manifest)
+    return prefix
+
+
+def test_a_run_on_a_weston_without_a_seat_stops_naming_the_fix(tmp_path: Path, stage: Path, layers: Path) -> None:
+    completed, report = run(
+        tmp_path,
+        stage,
+        layers,
+        ratchet(tmp_path, PROBE_ID),
+        AGTERM_VENDOR=str(tmp_path / "vendor"),
+        FAKE_COMPOSITOR_HELP="old",
+    )
+    assert completed.returncode == 2
+    assert "has no --fake-seat" in completed.stderr and "scripts/build-weston.sh" in completed.stderr
+    assert report == ""
+
+
+def test_a_run_takes_the_vendored_weston_over_an_old_one(
+    tmp_path: Path, stage: Path, layers: Path, fake_compositor_bin: Path
+) -> None:
+    prefix = vendored_weston(tmp_path / "vendor", fake_compositor_bin)
+    (layers / "protocol" / "test_probe.py").write_text(LAUNCH_PROBE_TEST)
+    probe = tmp_path / "launch.json"
+    completed, report = run(
+        tmp_path,
+        stage,
+        layers,
+        ratchet(tmp_path, PROBE_ID),
+        AGTERM_VENDOR=str(tmp_path / "vendor"),
+        FAKE_COMPOSITOR_HELP="old",
+        LAUNCH_PROBE=str(probe),
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "rust: 1 pass, 0 fail" in report
+    # the old weston on PATH would have refused the launch: the vendored one served it
+    assert json.loads(probe.read_text())["weston"][-1] == "--fake-seat"
+    assert prefix.is_dir()
+
+
+def test_a_ratchet_only_run_runs_the_listed_ids_and_judges_them(tmp_path: Path, stage: Path, layers: Path) -> None:
+    """The unlisted red test is left out, so it costs nothing; the report names the mode and the suite time."""
+    (layers / "protocol" / "test_other.py").write_text(FAILING_TEST)
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--ratchet-only")
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "- mode: ratchet-only, the ids of" in report and "rust-passing.txt`\n" in report
+    assert re.search(r"^- suite time: \d+s$", report, re.MULTILINE)
+    assert "rust: 1 pass, 0 fail" in report
+    assert "ratchet holds: 1 listed id(s), ratchet-only run" in report
+    header = json.loads((tmp_path / "report" / "nodeids.jsonl").read_text().splitlines()[0])
+    assert header == {"kind": "run", "partial": True, "mode": "ratchet-only"}
+
+
+def test_a_ratchet_only_run_breaks_on_a_red_listed_id(tmp_path: Path, stage: Path, layers: Path) -> None:
+    (layers / "protocol" / "test_other.py").write_text(FAILING_TEST)
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, OTHER_ID, PROBE_ID), "--ratchet-only")
+    assert completed.returncode == 1
+    assert f"BROKEN failed: {OTHER_ID}" in report
+
+
+def test_a_ratchet_only_run_adds_the_tasks_extras(tmp_path: Path, stage: Path, layers: Path) -> None:
+    (layers / "protocol" / "test_other.py").write_text(OTHER_TEST)
+    (layers / "ui").mkdir()
+    (layers / "ui" / "test_extra.py").write_text("def test_extra(ctl):\n    pass\n")
+    (layers / "protocol" / "test_skipped.py").write_text("def test_never(ctl):\n    assert False\n")
+    completed, report = run(
+        tmp_path,
+        stage,
+        layers,
+        ratchet(tmp_path, PROBE_ID),
+        "--ratchet-only",
+        "--also",
+        "tests/ui/test_extra.py",
+        "--also-k",
+        "test_other",
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "--also tests/ui/test_extra.py + --also-k test_other" in report
+    assert "rust: 3 pass, 0 fail" in report
+    assert re.search(rf"^{re.escape(OTHER_ID)}$", completed.stdout, re.MULTILINE)
+    assert re.search(r"^tests/ui/test_extra.py::test_extra$", completed.stdout, re.MULTILINE)
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (("--also", "tests/protocol"), "--also and --also-k need --ratchet-only"),
+        (("--ratchet-only", "--also", "tests/nowhere.py"), "--also tests/nowhere.py: no "),
+    ],
+)
+def test_ratchet_only_usage_errors_exit_2(
+    tmp_path: Path, stage: Path, layers: Path, args: tuple[str, ...], message: str
+) -> None:
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), *args)
+    assert completed.returncode == 2
+    assert message in completed.stderr
+    assert report == ""
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        (("--also", "tests/protocol/test_probe.py::test_typo"), "--also 'tests/protocol/test_probe.py::test_typo'"),
+        (("--also-k", "sidbar"), "--also-k 'sidbar'"),
+    ],
+)
+def test_an_extra_that_matches_no_test_exits_2(
+    tmp_path: Path, stage: Path, layers: Path, extra: tuple[str, ...], message: str
+) -> None:
+    completed, _ = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--ratchet-only", *extra)
+    assert completed.returncode == 2
+    assert f"{message}: matches no collected test" in completed.stdout + completed.stderr
+
+
+def test_a_full_run_says_so(tmp_path: Path, stage: Path, layers: Path) -> None:
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID))
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "- mode: full\n" in report and "ratchet holds: 1 listed id(s), full run" in report
+
+
+def test_there_is_no_frontend_switch(tmp_path: Path, stage: Path, layers: Path) -> None:
+    """One Rust build since the GTK frontend went: `--frontend` is an unknown argument."""
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path), "--frontend", "gpui")
+    assert completed.returncode == 2
+    assert "unknown argument: --frontend" in completed.stderr
+    assert report == ""
+
+
+def test_one_ratchet_list_holds_the_build() -> None:
+    """rust-passing.txt with its `#` header, sorted; the GPUI build's own list was folded into it."""
+    conformance = SCRIPT.parents[1]
+    text = (conformance / "rust-passing.txt").read_text()
+    assert text.startswith("#")
+    ids = [line for line in text.splitlines() if line and not line.startswith("#")]
+    assert ids == sorted(ids) and len(ids) == len(set(ids))
+    assert not (conformance / "rust-gpui-passing.txt").exists()
+    help_text = subprocess.run([str(SCRIPT), "--help"], capture_output=True, text=True, check=True).stdout
+    assert "conformance/rust-passing.txt" in help_text and "--frontend" not in help_text
 
 
 def test_a_red_unlisted_test_does_not_fail_the_run(tmp_path: Path, stage: Path, layers: Path) -> None:

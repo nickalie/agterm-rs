@@ -178,6 +178,15 @@ impl Core {
         }
     }
 
+    /// The quit's relauncher did not start (upstream's `armLiveReset` after a failed spawn): the marker armed by
+    /// [`Self::arm_live_reset_on_quit`] is removed, so the next launch, started by hand, kills nothing.
+    pub fn disarm_live_reset(&self) {
+        if let Some(markers) = &self.zmx.markers {
+            markers.remove();
+        }
+        tracing::error!("live sessions reset not armed: the relauncher did not start");
+    }
+
     /// The launch half (upstream's `LiveResetConsumer.run`): no marker, or one that does not decode, kills nothing.
     pub(crate) fn consume_live_reset(&mut self, host: &dyn SessionHost) {
         let Some(markers) = self.zmx.markers.clone() else {
