@@ -85,7 +85,7 @@ Rust-only extensions below.
 
 The capabilities the Rust build claims are held to upstream's contract: the build takes upstream's branch of every
 capability whose behavior lives in upstream's own code, and claims each one in the task that implements its command,
-never ahead of it. By the end of the implementation plan (`docs/plans/20261012-rust-linux-implementation.md`) it
+never ahead of it. Since the implementation plan (`docs/plans/completed/20261012-rust-linux-implementation.md`) it
 claims:
 
 - `posix-shell`: panes run `/bin/sh` from the harness's ghostty config, as both references;
@@ -124,9 +124,9 @@ spawns itself (`ZDOTDIR` for zsh, `ENV` in POSIX mode for bash, `XDG_DATA_DIRS` 
 Its tests are in `tests/protocol/test_live_any_shell.py`; a test that branches on Live being active
 (`test_restore.py::test_seeded_live_mode_is_requested_at_launch`) takes the fallback branch only when the build has
 neither `live-sessions` nor `live-any-shell`.
-The jobs of `.github/workflows/rust-linux.yml` cover the three shells, each with `--must-pass live-any-shell`: the
-default job's login shell is bash, the `conformance-fish` job's fish, the `conformance-zsh` job's zsh. The zsh job,
-the one host where the build claims `live-sessions`, also runs with `--must-pass live-sessions`, as reference-macos.
+The `conformance` job of `.github/workflows/rust-linux.yml` is a matrix over the three login shells, each leg with
+`--must-pass live-any-shell`: bash, fish and zsh. The zsh leg, the one host where the build claims `live-sessions`,
+also runs with `--must-pass live-sessions`, as reference-macos.
 
 ## Ratchet
 
@@ -149,14 +149,39 @@ The script exits with the ratchet's status, or 1 when an instance root was left 
 
 ## GPUI build
 
-The Rust build is the GPUI one since the switch (the GPUI plan's Task 34), which removed the GTK frontend:
-`run-rust-linux.sh` builds it, stages it (`scripts/stage.sh`: `bin/agterm`, `agtermctl`, `zmx` and `share/`, Ghostty's
-resources at `LIBGHOSTTY_VT_REV` among it, no `lib/`) and holds `rust-passing.txt`, into which the GPUI build's own
-ratchet, kept beside the GTK one until the switch, was folded.
+The Rust build is the GPUI one since the switch (the GPUI plan's Task 34), which removed the GTK frontend: the binary
+is `agterm-gpui`'s `agterm`, and `rust-passing.txt` holds it (the GPUI build's own ratchet, kept beside the GTK one
+until the switch, was folded into it).
 
-GPUI renders through Vulkan, so its runs need Mesa's lavapipe, from `scripts/fetch-lavapipe.sh`: `AGTERM_LAVAPIPE_ICD`
-when set; the distribution's package where one is installed (Ubuntu/Debian/Fedora `mesa-vulkan-drivers`, Arch
-`vulkan-swrast`; the CI's source); else, on a rootless host with an Arch-compatible userland, the pinned Arch
-`vulkan-swrast` package (`LAVAPIPE_*` in `build/pins.env`), checked against its sha256 and unpacked into
-`${AGTERM_VENDOR}/lavapipe-<key>/`, refused where its libraries (libLLVM, glibc) do not resolve. No lavapipe is an
-error, never a fallback to a hardware driver.
+Build. Cargo never runs zig: the native inputs come first, each into its vendored prefix (README > Native
+dependencies): `scripts/build-ghostty-vt.sh` (the static libghostty-vt and Ghostty's resources at
+`LIBGHOSTTY_VT_REV`), `scripts/fetch-fonts.sh` (the fonts the terminal embeds) and `scripts/build-zmx.sh` (zmx, for
+`live-sessions` and `live-any-shell`). `run-rust-linux.sh` then builds the release workspace without what links WPE
+WebKit and `agterm-gpui` with its default `html` feature, so the staged app shows HTML overlays and needs a WPE WebKit
+(README > WPE WebKit; the CI's is Arch's `wpewebkit`). `--stage DIR` runs a tree staged elsewhere instead.
+
+Staging. `scripts/stage.sh` assembles the tree the harness launches, `target/conformance-stage` by default:
+`bin/agterm`, `bin/agtermctl` (the harness takes it from beside `--bin`) and `bin/zmx` with `share/agterm/zmx-BUILD`
+(the staged zmx's build id), Ghostty's `share/terminfo` (`xterm-ghostty`) and `share/ghostty` (themes, shell
+integration) from the libghostty-vt prefix, agterm's own themes beside Ghostty's, and the agent integrations' payloads
+under `share/agterm`. There is no `lib/`: libghostty-vt is linked statically, and nothing of GTK, libghostty or
+layer-shell is linked at all.
+
+Lavapipe. GPUI renders through Vulkan (wgpu), so every run renders on Mesa's lavapipe, from
+`scripts/fetch-lavapipe.sh`: `AGTERM_LAVAPIPE_ICD` when set; the distribution's package where one is installed
+(Ubuntu/Debian/Fedora `mesa-vulkan-drivers`, Arch `vulkan-swrast`; the CI's source); else, on a rootless host with an
+Arch-compatible userland, the pinned Arch `vulkan-swrast` package (`LAVAPIPE_*` in `build/pins.env`), checked against
+its sha256 and unpacked into `${AGTERM_VENDOR}/lavapipe-<key>/`, refused where its libraries (libLLVM, glibc) do not
+resolve. `run-rust-linux.sh` exits 2 without one and hands its manifest to the harness, which makes it the only Vulkan
+driver of every launch (Launch contract above). No lavapipe is an error, never a fallback to a hardware driver.
+`agterm-gpui`'s process tests take the same manifest from the same script (`tests/support/lavapipe.rs`).
+
+Seat. GPUI needs a `wl_seat`, which a headless weston offers only with `--fake-seat` (weston 15.0 and later):
+`run-rust-linux.sh` takes the system's weston when it has the flag, else the one `scripts/build-weston.sh` built into
+its vendored prefix (`WESTON_*` in `build/pins.env`; Ubuntu 26.04's is 14), and stops naming that script when there is
+neither.
+
+Probes. Three scripts beside the runner check what the suite cannot see, on the stage a run left (their `--bin`
+default; CI runs them after the bash leg): `ghostty_probe.py` (a terminal draws its first frame), `webkit_probe.py`
+(a page loads in WPE WebKit's sandbox) and `chrome_probe.py` (the title bar, the sidebar and the terminal draw the
+theme's background, the sidebar tint washing the sidebar alone).
