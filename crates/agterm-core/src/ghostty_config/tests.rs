@@ -559,8 +559,9 @@ fn the_pointer_keys_load_with_ghosttys_defaults() {
 
 #[test]
 fn the_model_enums_spell_ghosttys_values() {
-    let cases: [(&str, Vec<&str>); 11] = [
+    let cases: [(&str, Vec<&str>); 12] = [
         ("copy-on-select", enum_names::<CopyOnSelect>()),
+        ("grapheme-width-method", enum_names::<GraphemeWidthMethod>()),
         ("cursor-style", enum_names::<CursorStyle>()),
         ("background-image-position", enum_names::<BackgroundImagePosition>()),
         ("background-image-fit", enum_names::<BackgroundImageFit>()),
@@ -822,6 +823,43 @@ fn copy_on_select_key() {
         check("copy-on-select", Some("maybe")).map(drop),
         Err("invalid value \"maybe\", valid values are: none, primary, clipboard, both".to_owned())
     );
+}
+
+#[test]
+fn grapheme_width_method_and_image_storage_limit_keys() {
+    let defaults = GhosttyConfig::default();
+    assert_eq!(
+        defaults.grapheme_width_method,
+        GraphemeWidthMethod::Unicode,
+        "Ghostty's default"
+    );
+    assert_eq!(defaults.image_storage_limit, 320_000_000, "Ghostty's default");
+    assert_eq!(
+        load("grapheme-width-method = legacy\n").config.grapheme_width_method,
+        GraphemeWidthMethod::Legacy
+    );
+    assert_eq!(
+        load("grapheme-width-method = legacy\ngrapheme-width-method =\n")
+            .config
+            .grapheme_width_method,
+        GraphemeWidthMethod::Unicode,
+        "an empty value restores the default"
+    );
+    for (text, limit) in [
+        ("image-storage-limit = 0\n", 0),
+        ("image-storage-limit = 1000\n", 1000),
+        ("image-storage-limit = 0x100\n", 256),
+        ("image-storage-limit = 4294967295\n", u32::MAX),
+        ("image-storage-limit = 5\nimage-storage-limit =\n", 320_000_000),
+    ] {
+        let loaded = load(text);
+        assert_eq!(loaded.config.image_storage_limit, limit, "{text}");
+        assert!(loaded.diagnostics.is_empty(), "{text}");
+    }
+    // a refused value counts and leaves the value before it, as in ghostty
+    let refused = load("image-storage-limit = 7\nimage-storage-limit = 4294967296\n");
+    assert_eq!((refused.config.image_storage_limit, refused.diagnostics.len()), (7, 1));
+    assert_eq!(count("grapheme-width-method = wide\n"), 1);
 }
 
 #[test]

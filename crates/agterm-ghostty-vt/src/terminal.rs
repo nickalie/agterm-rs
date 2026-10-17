@@ -151,6 +151,26 @@ impl Terminal {
         Error::check(result)
     }
 
+    /// Set a mode's reset default: the current value and the one a reset (RIS; DECSTR for its subset) restores, as
+    /// Ghostty's termio sets its `default_modes` from the config.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidValue`] for a mode the library does not know or whose default cannot be configured (one that
+    /// mirrors other terminal state, as the alternate screen).
+    pub fn set_mode_default(&mut self, mode: Mode, value: bool) -> Result<(), Error> {
+        let config = ffi::GhosttyTerminalModeConfig { mode: mode.0, value };
+        // SAFETY: `self.raw` is live; `OPT_MODE_DEFAULT` takes a `GhosttyTerminalModeConfig *` read during the call.
+        let result = unsafe {
+            ffi::ghostty_terminal_set(
+                self.raw.ptr(),
+                ffi::GHOSTTY_TERMINAL_OPT_MODE_DEFAULT,
+                (&raw const config).cast(),
+            )
+        };
+        Error::check(result)
+    }
+
     /// Whether a mode is set (`false` for a mode the library does not know).
     #[must_use]
     pub fn mode(&self, mode: Mode) -> bool {
@@ -584,5 +604,41 @@ mod tests {
         terminal.resize(100, 30, 8, 16).unwrap();
         assert_eq!((terminal.cols(), terminal.rows()), (100, 30));
         assert_eq!(terminal.resize(0, 30, 8, 16), Err(Error::InvalidValue));
+    }
+
+    /// The family emoji: man, ZWJ, woman, ZWJ, girl; one grapheme of width 2.
+    const FAMILY: &[u8] = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}".as_bytes();
+
+    #[test]
+    fn a_mode_default_holds_across_a_reset_and_a_plain_set_does_not() {
+        let mut terminal = Terminal::new(80, 24).unwrap();
+        assert!(
+            !terminal.mode(Mode::GRAPHEME_CLUSTER),
+            "the library's own default is off"
+        );
+        terminal.vt_write(FAMILY);
+        assert_eq!(terminal.cursor(), (6, 0), "each codepoint counted: three wide emoji");
+
+        terminal.set_mode(Mode::GRAPHEME_CLUSTER, true).unwrap();
+        terminal.vt_write(b"\x1bc");
+        assert!(!terminal.mode(Mode::GRAPHEME_CLUSTER), "a reset restores the default");
+
+        terminal.set_mode_default(Mode::GRAPHEME_CLUSTER, true).unwrap();
+        assert!(terminal.mode(Mode::GRAPHEME_CLUSTER), "the current value too");
+        terminal.vt_write(b"\x1bc");
+        assert!(
+            terminal.mode(Mode::GRAPHEME_CLUSTER),
+            "a reset keeps the configured default"
+        );
+        terminal.vt_write(FAMILY);
+        assert_eq!(terminal.cursor(), (2, 0), "one cluster, two cells");
+        // a program may still turn it off for itself
+        terminal.vt_write(b"\x1b[?2027l");
+        assert!(!terminal.mode(Mode::GRAPHEME_CLUSTER));
+        // a mode mirroring other state has no configurable default
+        assert_eq!(
+            terminal.set_mode_default(Mode::dec(1049), true),
+            Err(Error::InvalidValue)
+        );
     }
 }
