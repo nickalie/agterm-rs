@@ -5,7 +5,13 @@
 //! for the system's `wpewebkit`. The vendored package of `scripts/fetch-wpe.sh` lives in a prefix of its own, and its
 //! pages run only with that prefix's `lib/` overlaid on `/usr/lib`, read-only, in a mount namespace of the program's
 //! own (`bwrap --ro-overlay`, no root; Task 2's spike launcher). [`command`] builds that launch for the WPE `WebKit`
-//! this crate was built against; for the system's it is the plain program.
+//! this crate was built against; for the system's it is the plain program. An app that must keep its own signals and
+//! exit status inside that overlay (the GPUI frontend: SIGTERM runs its quit save) enters it through [`enter`], which
+//! runs it under a supervisor that relays signals to it (`supervisor`).
+
+mod supervisor;
+
+pub use supervisor::{Entry, OVERLAID_ENV, enter, supervise};
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -52,14 +58,15 @@ pub fn command(program: &Path) -> Command {
         Provider::Vendored { libdir } => {
             let cwd = std::env::current_dir().ok();
             let mut command = Command::new("bwrap");
-            command.args(overlay_args(&libdir, cwd.as_deref(), program));
+            command.args(overlay_args(&libdir, cwd.as_deref(), &[], program));
             command
         }
     }
 }
 
-/// `bwrap`'s arguments for running `program` with `libdir` overlaid on `/usr/lib`.
-fn overlay_args(libdir: &Path, cwd: Option<&Path>, program: &Path) -> Vec<OsString> {
+/// `bwrap`'s arguments for running `program` with `libdir` overlaid on `/usr/lib`, bwrap's own `options` last before
+/// the program.
+fn overlay_args(libdir: &Path, cwd: Option<&Path>, options: &[OsString], program: &Path) -> Vec<OsString> {
     let mut args: Vec<OsString> = ["--dev-bind", "/", "/", "--die-with-parent", "--overlay-src"]
         .into_iter()
         .map(OsString::from)
@@ -70,6 +77,7 @@ fn overlay_args(libdir: &Path, cwd: Option<&Path>, program: &Path) -> Vec<OsStri
         args.push("--chdir".into());
         args.push(cwd.into());
     }
+    args.extend(options.iter().cloned());
     args.push("--".into());
     args.push(program.into());
     args
@@ -113,6 +121,7 @@ mod tests {
         let args = overlay_args(
             Path::new("/v/wpe/lib"),
             Some(Path::new("/work")),
+            &[OsString::from("--json-status-fd"), OsString::from("3")],
             Path::new("/bin/probe"),
         );
         let args: Vec<&str> = args.iter().map(|arg| arg.to_str().unwrap()).collect();
@@ -131,11 +140,13 @@ mod tests {
                 "/usr/lib",
                 "--chdir",
                 "/work",
+                "--json-status-fd",
+                "3",
                 "--",
                 "/bin/probe"
             ]
         );
-        let without_cwd = overlay_args(Path::new("/v/wpe/lib"), None, Path::new("/bin/probe"));
+        let without_cwd = overlay_args(Path::new("/v/wpe/lib"), None, &[], Path::new("/bin/probe"));
         assert!(!without_cwd.iter().any(|arg| arg == "--chdir"));
     }
 }

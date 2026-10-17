@@ -17,6 +17,8 @@ use crate::spec::ViewId;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BufferId(pub(crate) u64);
 
+crate::raw_ids!(BufferId);
+
 /// A rectangle in buffer pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {

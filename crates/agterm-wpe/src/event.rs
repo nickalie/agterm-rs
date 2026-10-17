@@ -23,6 +23,8 @@ pub struct ReplyToken(pub(crate) u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SchemeToken(pub(crate) u64);
 
+crate::raw_ids!(PolicyToken, ReplyToken, SchemeToken);
+
 /// A main-frame load's progress (`WebKitLoadEvent`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadEvent {
@@ -204,4 +206,99 @@ pub enum Event {
         session: SessionId,
         result: Result<(), String>,
     },
+    /// A page put text on the clipboard (a copy, a cut, Copy Link Address): `WPEPlatform`'s clipboard is the
+    /// engine's own, so the consumer puts it on the desktop's. The consumer hands the desktop's text to the page
+    /// before a paste ([`crate::Host::set_clipboard`]).
+    Clipboard {
+        text: String,
+        /// The HTML the page copied with it, if any.
+        html: Option<String>,
+    },
+    /// A `<select>` popup to show; answer with [`crate::Host::choose_option`].
+    OptionMenu(OptionMenu),
+    /// The page closed the popup of `token` itself (the select went away, lost focus).
+    OptionMenuClosed {
+        token: MenuToken,
+    },
+    /// A right-click asked for the page's context menu, which the consumer draws: what lies under the pointer.
+    ContextMenu(ContextMenu),
+    /// Where the page's caret is, for an input method's candidate window (logical pixels in the page).
+    ImeCursorArea {
+        view: ViewId,
+        area: Area,
+    },
+}
+
+/// A rectangle in a page's logical pixels.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Area {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+/// An option popup's token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MenuToken(pub(crate) u64);
+
+crate::raw_ids!(MenuToken);
+
+/// What a row of a `<select>` popup is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OptionKind {
+    /// An option outside any group.
+    #[default]
+    Option,
+    /// An `<optgroup>`'s label, not choosable.
+    GroupLabel,
+    /// An option inside an `<optgroup>`.
+    GroupChild,
+}
+
+/// One row of a `<select>` popup (`WebKitOptionMenuItem`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OptionItem {
+    pub label: String,
+    pub tooltip: Option<String>,
+    pub kind: OptionKind,
+    pub enabled: bool,
+    pub selected: bool,
+}
+
+/// A `<select>` popup: its rows, and the select's area to place it by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptionMenu {
+    pub token: MenuToken,
+    pub view: ViewId,
+    pub area: Area,
+    pub items: Vec<OptionItem>,
+}
+
+/// What lies under a right-click (`WebKitHitTestResult`), from which the consumer builds its menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextMenu {
+    pub view: ViewId,
+    /// Where the menu was asked for, in the page's logical pixels.
+    pub x: i32,
+    pub y: i32,
+    pub link: Option<String>,
+    pub image: Option<String>,
+    pub media: Option<String>,
+    /// An editable field.
+    pub editable: bool,
+    /// Over selected text.
+    pub selection: bool,
+}
+
+/// An editing command a page runs on its focused content ([`crate::Host::editing_command`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditingCommand {
+    Copy,
+    Cut,
+    Paste,
+    PasteAsPlainText,
+    SelectAll,
+    Undo,
+    Redo,
 }

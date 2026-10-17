@@ -9,7 +9,7 @@ use async_channel::{Receiver, Sender};
 
 use crate::config::{ConfigError, HostConfig};
 use crate::engine;
-use crate::event::{Event, PolicyToken, ReplyToken, SchemeResponse, SchemeToken};
+use crate::event::{EditingCommand, Event, MenuToken, PolicyToken, ReplyToken, SchemeResponse, SchemeToken};
 use crate::frames::BufferId;
 use crate::input::Input;
 use crate::spec::{Geometry, Rgba, SessionId, SessionSpec, UserScript, ViewId, ViewSpec};
@@ -41,6 +41,8 @@ pub(crate) enum Command {
     Policy(PolicyToken, bool),
     Reply(ReplyToken, Result<String, String>),
     Scheme(SchemeToken, SchemeResponse),
+    Clipboard(String),
+    OptionMenu(MenuToken, Option<u32>),
     Quit,
 }
 
@@ -61,6 +63,12 @@ pub(crate) enum ViewCommand {
     Input(Input),
     Presented(BufferId),
     FallBackToShm,
+    Editing(EditingCommand),
+    ImePreedit {
+        text: String,
+        cursor: u32,
+    },
+    ImeCommit(String),
     Evaluate {
         script: String,
         world: Option<String>,
@@ -110,11 +118,13 @@ pub fn exit_process(code: i32) -> ! {
 /// One per process. Dropping it shuts the engine down, as [`Host::shutdown`] does; the thread itself lives on, idle,
 /// until the process ends, since it is `WebKit`'s main thread, which must never end (its thread-local teardown waits
 /// forever on the run loop it tears down). The process then ends through [`exit_process`].
+///
+/// `Send` and `Sync`: every method posts a command, so a renderer thread may report a frame presented.
 #[derive(Debug)]
 pub struct Host {
     commands: Sender<Command>,
     /// Told once the engine has closed everything; `None` after a shutdown.
-    stopped: Option<std::sync::mpsc::Receiver<()>>,
+    stopped: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
 }
 
 impl Host {
@@ -140,7 +150,7 @@ impl Host {
             .map_err(StartError::Thread)?;
         let host = Self {
             commands,
-            stopped: Some(stopped),
+            stopped: std::sync::Mutex::new(Some(stopped)),
         };
         match started.recv() {
             Ok(Ok(())) => Ok((host, event_queue)),
@@ -283,14 +293,47 @@ impl Host {
         self.send(Command::Scheme(token, response));
     }
 
+    /// Puts `text` on the engine's clipboard, which every page pastes from: the consumer hands it the desktop's text
+    /// before a paste reaches a page. Only text: a page never gets files from the clipboard.
+    pub fn set_clipboard(&self, text: String) {
+        self.send(Command::Clipboard(text));
+    }
+
+    /// Answers a [`crate::OptionMenu`]: the row at `index` is chosen (the select changes, the popup closes), or with
+    /// `None` the popup closes unchanged.
+    pub fn choose_option(&self, token: MenuToken, index: Option<u32>) {
+        self.send(Command::OptionMenu(token, index));
+    }
+
+    /// Runs an editing command on the page's focused content (a context menu's Copy, Paste, Select All).
+    pub fn editing_command(&self, view: ViewId, command: EditingCommand) {
+        self.view(view, ViewCommand::Editing(command));
+    }
+
+    /// An input method's composition in the focused field: `text` (empty ends it) with the caret `cursor` characters
+    /// in.
+    pub fn ime_preedit(&self, view: ViewId, text: String, cursor: u32) {
+        self.view(view, ViewCommand::ImePreedit { text, cursor });
+    }
+
+    /// Text an input method committed, inserted into the focused field (ending a composition).
+    pub fn ime_commit(&self, view: ViewId, text: String) {
+        self.view(view, ViewCommand::ImeCommit(text));
+    }
+
     /// Closes every page and stops the engine, waiting (a bounded time) until it has. The engine cannot start again in
-    /// this process.
-    pub fn shutdown(mut self) {
+    /// this process; commands after it are dropped. Once is enough: a second call (or the drop after it) returns at once.
+    pub fn shutdown(&self) {
         self.stop_engine();
     }
 
-    fn stop_engine(&mut self) {
-        let Some(stopped) = self.stopped.take() else { return };
+    fn stop_engine(&self) {
+        let taken = self
+            .stopped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        let Some(stopped) = taken else { return };
         self.send(Command::Quit);
         match stopped.recv_timeout(STOP_TIMEOUT) {
             Ok(()) | Err(RecvTimeoutError::Disconnected) => {}

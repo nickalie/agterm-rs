@@ -33,6 +33,26 @@ pub const CASES: &[(&str, Case)] = &[
     ("closing_a_page_answers_what_it_left_open", closing),
     ("a_page_that_cannot_be_built_is_reported", unbuilt),
     ("the_engine_starts_once_per_process", once),
+    (
+        "the_clipboard_goes_out_on_a_copy_and_in_before_a_paste",
+        crate::interaction::clipboard,
+    ),
+    (
+        "select_popups_are_reported_and_answered",
+        crate::interaction::option_menu,
+    ),
+    (
+        "a_right_click_reports_what_lies_under_it",
+        crate::interaction::context_menu,
+    ),
+    (
+        "an_input_methods_composition_and_commit_reach_the_field",
+        crate::interaction::input_method,
+    ),
+    (
+        "animation_frames_run_at_a_displays_rate",
+        crate::interaction::animation_frames,
+    ),
 ];
 
 const RED: (u8, u8, u8) = (0xc0, 0x30, 0x30);

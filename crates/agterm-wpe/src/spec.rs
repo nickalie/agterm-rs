@@ -13,6 +13,8 @@ pub struct SessionId(pub(crate) u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ViewId(pub(crate) u64);
 
+crate::raw_ids!(SessionId, ViewId);
+
 /// A browser store (`WebKitNetworkSession`): cookies, local storage, caches. Downloads are refused in every one:
 /// nothing a page shows is saved to disk ([`crate::Event::DownloadRefused`]).
 #[derive(Debug, Clone, PartialEq, Eq)]

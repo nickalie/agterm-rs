@@ -12,6 +12,7 @@
 
 mod cases;
 mod dmabuf;
+mod interaction;
 mod support;
 
 use std::path::{Path, PathBuf};

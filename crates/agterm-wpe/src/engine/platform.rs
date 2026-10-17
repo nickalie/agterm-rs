@@ -97,8 +97,8 @@ mod display_imp {
     use glib::subclass::prelude::*;
 
     use super::{
-        DmaBufTarget, WpeDisplay, display_buffer_formats, display_connect, display_create_toplevel,
-        display_create_view, display_drm_device, display_egl_display,
+        DmaBufTarget, WpeDisplay, display_buffer_formats, display_connect, display_create_input_method,
+        display_create_toplevel, display_create_view, display_drm_device, display_egl_display,
     };
 
     /// The frame target (`None`: SHM) and the headless display the device and EGL display come from.
@@ -122,6 +122,7 @@ mod display_imp {
             class.get_egl_display = Some(display_egl_display);
             class.get_drm_device = Some(display_drm_device);
             class.get_preferred_buffer_formats = Some(display_buffer_formats);
+            class.create_input_method_context = Some(display_create_input_method);
         }
     }
 
@@ -331,6 +332,25 @@ unsafe extern "C" fn display_buffer_formats(display: *mut platform::WPEDisplay) 
     unsafe { display_of(display) }.map_or(ptr::null_mut(), |display| display.buffer_formats())
 }
 
+/// A view's input method: the engine's own, which takes the consumer's ([`super::ime`]); the view keeps a weak
+/// reference to reach it.
+unsafe extern "C" fn display_create_input_method(
+    _: *mut platform::WPEDisplay,
+    view: *mut platform::WPEView,
+) -> *mut platform::WPEInputMethodContext {
+    let context = super::ime::InputMethod::new_for(view);
+    // SAFETY: WPE passes one of its live views.
+    if let Some(view) = unsafe { view_of(view) } {
+        // SAFETY: `context` is the live context just made, a reference of which the caller takes over.
+        let object: glib::translate::Borrowed<glib::Object> =
+            unsafe { from_glib_borrow(context.cast::<glib::gobject_ffi::GObject>()) };
+        if let Some(method) = object.downcast_ref::<super::ime::InputMethod>() {
+            view.imp().ime.replace(Some(method.downgrade()));
+        }
+    }
+    context
+}
+
 // MARK: - toplevel
 
 mod toplevel_imp {
@@ -436,6 +456,8 @@ mod view_imp {
         pub(super) link: RefCell<Option<Link>>,
         pub(super) flow: RefCell<FrameFlow>,
         pub(super) held: RefCell<HashMap<BufferId, Held>>,
+        /// The view's input method, once `WebKit` asked the display for it.
+        pub(crate) ime: RefCell<Option<glib::WeakRef<crate::engine::ime::InputMethod>>>,
     }
 
     #[glib::object_subclass]
@@ -668,9 +690,19 @@ impl View {
     }
 
     fn set_cursor(&self, name: String) {
+        self.report(|view| Event::Cursor { view, name });
+    }
+
+    /// Sends the event `event` makes of the page's id, while the view belongs to a page.
+    pub(crate) fn report(&self, event: impl FnOnce(ViewId) -> Event) {
         if let Some(link) = self.imp().link.borrow().as_ref() {
-            send(&link.events, Event::Cursor { view: link.id, name });
+            send(&link.events, event(link.id));
         }
+    }
+
+    /// The view's input method, once `WebKit` asked for one.
+    pub(crate) fn input_method(&self) -> Option<crate::engine::ime::InputMethod> {
+        self.imp().ime.borrow().as_ref().and_then(glib::WeakRef::upgrade)
     }
 }
 

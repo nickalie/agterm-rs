@@ -5,7 +5,9 @@
 //!   is a vendored prefix, whose helper processes sit at a path compiled into the library;
 //! - an rpath to every library directory pkg-config reports, for this crate's own executables (its unit and
 //!   integration tests; a link argument does not reach dependents): a vendored prefix lies outside the loader's search
-//!   path, and pkg-config leaves the system ones out.
+//!   path, and pkg-config leaves the system ones out;
+//! - the same directories, `:`-separated, as the `libdirs` metadata a dependent's build script reads
+//!   (`DEP_AGTERM_WPE_LIBDIRS`, the `links` key's), to give its own executables the rpath.
 //!
 //! Linking itself is the -sys crates' business: nothing here adds a library.
 
@@ -26,6 +28,12 @@ fn main() {
             for path in &library.link_paths {
                 println!("cargo::rustc-link-arg=-Wl,-rpath,{}", path.display());
             }
+            let libdirs: Vec<String> = library
+                .link_paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect();
+            println!("cargo::metadata=libdirs={}", libdirs.join(":"));
             println!("cargo::rustc-env=AGTERM_WPE_LIBDIR={libdir}");
         }
         (Err(err), _) | (_, Err(err)) => println!(

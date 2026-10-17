@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+# no library of its own: the key that hands dependents' build scripts the library directories (DEP_AGTERM_WPE_LIBDIRS)
+links = "agterm-wpe"
 
 [dependencies]
 agterm-wpe-sys.workspace = true
@@ -15,6 +17,9 @@ bitflags.workspace = true
 gio.workspace = true
 glib.workspace = true
 libc.workspace = true
+# the overlay's supervisor (`launcher::supervise`): bwrap's JSON status lines, and the signals it relays
+serde_json.workspace = true
+signal-hook.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 

@@ -5,6 +5,8 @@
 //! Everything here lives on that thread. The state sits in a thread-local [`Engine`]; every borrow of it is short and
 //! never spans a `WebKit` call, since `WebKit` may emit signals from inside one.
 
+mod ime;
+mod interaction;
 mod page;
 mod platform;
 mod webkit;
@@ -23,7 +25,9 @@ use self::webkit::{
     Download, JscContext, NetworkSession, PolicyDecision, ScriptReply, UriSchemeRequest, WebContext, WebView,
 };
 use crate::config::{FrameMode, HostConfig};
-use crate::event::{Event, PolicyToken, ReplyToken, SchemeError, SchemeRequest, SchemeResponse, SchemeToken};
+use crate::event::{
+    Event, MenuToken, PolicyToken, ReplyToken, SchemeError, SchemeRequest, SchemeResponse, SchemeToken,
+};
 use crate::host::{Command, ViewCommand};
 use crate::spec::{SessionId, SessionSpec, ViewId, ViewSpec};
 
@@ -42,6 +46,8 @@ struct Engine {
     policies: HashMap<PolicyToken, (ViewId, PolicyDecision)>,
     replies: HashMap<ReplyToken, Parked>,
     schemes: HashMap<SchemeToken, (Option<ViewId>, UriSchemeRequest)>,
+    /// The `<select>` popups shown, until answered or closed.
+    menus: HashMap<MenuToken, interaction::OptionMenuObject>,
     next_token: u64,
 }
 
@@ -86,6 +92,7 @@ pub(crate) fn run(
                 return;
             }
         };
+        interaction::watch_clipboard(&display, events.clone());
         ENGINE.with(|engine| {
             engine.replace(Some(Engine {
                 display,
@@ -95,6 +102,7 @@ pub(crate) fn run(
                 policies: HashMap::new(),
                 replies: HashMap::new(),
                 schemes: HashMap::new(),
+                menus: HashMap::new(),
                 next_token: 0,
             }));
         });
@@ -148,6 +156,12 @@ fn apply(command: Command) {
         Command::Policy(token, allow) => decide_policy(token, allow),
         Command::Reply(token, reply) => reply_script_message(token, reply),
         Command::Scheme(token, response) => finish_scheme_request(token, &response),
+        Command::Clipboard(text) => {
+            if let Some(display) = with(|engine| engine.display.clone()) {
+                interaction::set_clipboard(&display, &text);
+            }
+        }
+        Command::OptionMenu(token, index) => interaction::choose_option(token, index),
         Command::Quit => {}
     }
 }

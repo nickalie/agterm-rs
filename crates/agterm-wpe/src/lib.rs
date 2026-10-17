@@ -19,8 +19,36 @@
 //!   schemes, and what a page may not do (new windows, dialogs, file choosers, permissions, full screen) refused.
 //! - [`launcher`]: running a program against the vendored WPE `WebKit`, whose helpers sit at a compiled-in path.
 //!
-//! Not here yet (Task 32 decides): IME, the clipboard (`WPEClipboard`), `<select>` popups (`show-option-menu`) and
-//! context menus, accessibility.
+//! - What `WebKitGTK` draws itself and an offscreen page cannot (module `engine::interaction`): the clipboard
+//!   (`WPEPlatform`'s is the engine's own: a page's copy is reported, the desktop's text is handed in before a paste),
+//!   `<select>` popups and the context menu (reported for the consumer to draw, answered by token or by editing
+//!   command), and input methods (an `WPEInputMethodContext` of the engine's that takes the consumer's composition and
+//!   commits and reports the caret's area).
+//!
+//! Not here: accessibility (an offscreen page has no AT-SPI bridge into the consumer's tree).
+
+/// `from_raw` and `raw` on the engine's id types: a consumer's stand-in for the engine in its own tests makes ids
+/// with them, and logs read them; the engine itself never takes an id it did not hand out.
+macro_rules! raw_ids {
+    ($($id:ident),+) => {
+        $(
+            impl $id {
+                /// The id numbered `raw` (crate docs: for a consumer's stand-in engine).
+                #[must_use]
+                pub const fn from_raw(raw: u64) -> Self {
+                    Self(raw)
+                }
+
+                /// The id's number.
+                #[must_use]
+                pub const fn raw(self) -> u64 {
+                    self.0
+                }
+            }
+        )+
+    };
+}
+pub(crate) use raw_ids;
 
 mod config;
 mod engine;
@@ -39,8 +67,9 @@ pub use config::{
     BufferFormat, ConfigError, DmaBufTarget, FrameMode, HostConfig, MODIFIER_INVALID, MODIFIER_LINEAR, fourcc,
 };
 pub use event::{
-    Event, LoadError, LoadErrorKind, LoadEvent, NavigationType, PageState, PolicyKind, PolicyRequest, PolicyToken,
-    ReplyToken, SchemeError, SchemeRequest, SchemeResponse, SchemeToken, ScriptMessage, Termination,
+    Area, ContextMenu, EditingCommand, Event, LoadError, LoadErrorKind, LoadEvent, MenuToken, NavigationType,
+    OptionItem, OptionKind, OptionMenu, PageState, PolicyKind, PolicyRequest, PolicyToken, ReplyToken, SchemeError,
+    SchemeRequest, SchemeResponse, SchemeToken, ScriptMessage, Termination,
 };
 pub use frames::{BufferId, DmaBuf, Frame, FrameContent, Plane, Rect, ShmRegion};
 pub use host::{Evaluation, Host, Load, StartError, exit_process};
