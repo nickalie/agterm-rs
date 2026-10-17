@@ -735,7 +735,10 @@ impl Alert {
         div()
             .id(id)
             .debug_selector(move || selector)
-            .when_some(button.id.clone(), gpui_kit::StatefulInteractiveElement::accessibility_id)
+            .when_some(
+                button.id.clone(),
+                gpui_kit::StatefulInteractiveElement::accessibility_id,
+            )
             .role(gpui_kit::Role::Button)
             .aria_label(button.label.clone())
             .when(!stacked, gpui_kit::Styled::flex_1)

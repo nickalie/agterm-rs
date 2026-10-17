@@ -60,7 +60,8 @@ use agterm_term::{
 };
 use gpui_kit::{
     App, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
-    ModifiersChangedEvent, ParentElement as _, Render, Styled as _, Subscription, Task, TextSystem, Window, div, px,
+    ModifiersChangedEvent, ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Subscription,
+    Task, TextSystem, Window, div, px,
 };
 
 pub use clipboard::{ClipboardPrompts, REMEMBER, prompt_alert, prompt_text};
@@ -1218,16 +1219,22 @@ impl Render for TerminalView {
         let element = TerminalElement::new(cx.entity(), focused);
         let root = div().size_full().min_w(px(0.)).min_h(px(0.));
         match self.role {
+            // The typing terminal is an editable text area to assistive tools, as upstream's surface view and the GTK
+            // build's text box labelled Terminal: dictation tools look for one to commit into.
             ViewRole::Owner => {
                 self.watch_input(window, cx);
-                root.track_focus(&self.focus)
+                root.id("terminal")
+                    .role(gpui_kit::Role::MultilineTextInput)
+                    .aria_label("Terminal")
+                    .track_focus(&self.focus)
                     .on_key_up(cx.listener(Self::key_up))
                     .on_modifiers_changed(cx.listener(|view, event: &ModifiersChangedEvent, _, cx| {
                         view.modifiers_changed(event.modifiers, cx);
                     }))
                     .child(element)
+                    .into_any_element()
             }
-            ViewRole::Viewer | ViewRole::Passive => root.child(element),
+            ViewRole::Viewer | ViewRole::Passive => root.child(element).into_any_element(),
         }
     }
 }
