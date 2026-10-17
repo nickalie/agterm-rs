@@ -74,7 +74,11 @@ impl Menu {
         Self::Options {
             token: menu.token,
             rows,
-            anchor: (menu.area.x, menu.area.y + menu.area.height, menu.area.width),
+            anchor: (
+                menu.area.x,
+                menu.area.y.saturating_add(menu.area.height),
+                menu.area.width,
+            ),
             highlighted,
         }
     }

@@ -258,9 +258,7 @@ fn started_engine(started: Started) -> Option<async_channel::Receiver<Event>> {
     match started {
         Ok((host, events)) if waited => {
             tracing::info!(backend = ?host.backend(), "the web engine started");
-            let web: Rc<dyn Web> = Rc::new(Engine(Arc::new(host)));
-            with(|registry| registry.engine = EngineState::Running(web));
-            realize_waiting();
+            run_on(Rc::new(Engine(Arc::new(host))));
             Some(events)
         }
         Ok((host, _)) => {
@@ -279,6 +277,18 @@ fn started_engine(started: Started) -> Option<async_channel::Receiver<Event>> {
         }
         Err(_) => None,
     }
+}
+
+/// The started engine `web` runs the pages: the ones waiting for it are realized on it.
+fn run_on(web: Rc<dyn Web>) {
+    with(|registry| registry.engine = EngineState::Running(web));
+    realize_waiting();
+}
+
+/// Ends a start [`set_starting`] began with `web` as the engine (the unit tests' recorder).
+#[cfg(test)]
+pub(super) fn finish_start(web: Rc<dyn Web>) {
+    run_on(web);
 }
 
 /// The engine's events ended. Past the quit's own shutdown nothing follows; while the app runs it means the engine is

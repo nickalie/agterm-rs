@@ -31,6 +31,10 @@ pub const CASES: &[(&str, Case)] = &[
     ("a_saved_profile_outlives_its_pages_and_its_session", profile),
     ("downloads_are_refused", downloads),
     ("closing_a_page_answers_what_it_left_open", closing),
+    (
+        "pages_opened_and_closed_leave_no_buffer_or_descriptor_behind",
+        open_and_close,
+    ),
     ("a_page_that_cannot_be_built_is_reported", unbuilt),
     ("the_engine_starts_once_per_process", once),
     (
@@ -553,6 +557,59 @@ fn closing(h: &Harness, _: &Context) -> Outcome {
     h.title(next, "after")?;
     h.host.close_view(next);
     Ok(())
+}
+
+/// The descriptors this process holds, but the `memfd`s a worker's packet is in transit in (the reader closes each
+/// once read; the frames of a page still open elsewhere keep arriving).
+fn open_descriptors() -> usize {
+    let Ok(entries) = std::fs::read_dir("/proc/self/fd") else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            std::fs::read_link(entry.path()).map_or(true, |target| !target.to_string_lossy().starts_with("/memfd:"))
+        })
+        .count()
+}
+
+/// One page made, drawn and closed: its buffers are reported gone with it, and nothing of it is held after.
+fn page_cycle(h: &Harness) -> Outcome {
+    let view = h.view(h.ephemeral(), Settings::overlay(true));
+    h.load(view, page("<style>body{background:#c03030}</style>"))?;
+    h.pixel_frame(view, 160, 120, RED)?;
+    h.host.close_view(view);
+    h.wait_for("the closed page's buffers reported gone", |event| match event {
+        Event::BuffersRemoved { view: id, buffers } if *id == view && !buffers.is_empty() => Some(()),
+        _ => None,
+    })?;
+    h.forget(view);
+    Ok(())
+}
+
+/// Pages opened and closed again and again (an agent's overlays): every buffer a page drew in goes with it, so the
+/// consumer's descriptors (a worker's client keeps each dmabuf's planes until its buffer goes) come back to where they
+/// were.
+fn open_and_close(h: &Harness, _: &Context) -> Outcome {
+    // the first page starts what every later one shares
+    page_cycle(h)?;
+    h.idle(Duration::from_millis(300), |_| None)?;
+    let baseline = open_descriptors();
+    for _ in 0..6 {
+        page_cycle(h)?;
+    }
+    h.idle(Duration::from_millis(300), |_| None)?;
+    let after = open_descriptors();
+    if h.host.backend() == agterm_wpe::Backend::InProcess {
+        // the engine's own descriptors (its web processes' sockets, its caches) share this process
+        return Ok(());
+    }
+    ensure(after <= baseline, || {
+        format!(
+            "six pages opened and closed left {} descriptors open ({baseline} before, {after} after)",
+            after.saturating_sub(baseline)
+        )
+    })
 }
 
 fn unbuilt(h: &Harness, _: &Context) -> Outcome {

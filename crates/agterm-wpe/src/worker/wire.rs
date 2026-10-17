@@ -6,7 +6,8 @@
 //! descriptors come in a fixed order: the body's `memfd`, the blob's, then the body's own (a dmabuf's planes). A
 //! receiver checks each `memfd`'s size and seals before it reads, and takes every descriptor into its ownership at once,
 //! so an error path closes them. A truncated packet (`MSG_TRUNC`, `MSG_CTRUNC`), a descriptor count other than the
-//! header's, or a size out of bounds is a broken transport, never something to read around.
+//! header's, or a size out of the receiver's [`Limits`] is a broken transport, never something to read around: the app
+//! reads what an untrusted worker sends within bounds of its own ([`Limits::FROM_WORKER`]).
 
 use std::fs::File;
 use std::io::{IoSlice, IoSliceMut, Write as _};
@@ -26,6 +27,29 @@ pub(crate) const INLINE_MAX: usize = 32 * 1024;
 pub(crate) const MAX_BODY_FDS: usize = 4;
 /// The largest body or blob a `memfd` may hold: far above an 8K frame's pixels, far below a size nobody means.
 const MEMFD_MAX: u64 = 1 << 30;
+
+/// The largest body and blob a receiver reads, in bytes: anything larger is a broken packet, refused before a byte of
+/// it is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Limits {
+    pub body: u64,
+    pub blob: u64,
+}
+
+impl Limits {
+    /// What the worker reads from the app, which it trusts: a scheme answer's bytes may be large.
+    pub(crate) const FROM_APP: Self = Self {
+        body: MEMFD_MAX,
+        blob: MEMFD_MAX,
+    };
+    /// What the app reads from the worker, which it does not trust: a body as large as a big clipboard or script
+    /// message, and a blob (only an SHM frame's pixels) as large as the largest frame
+    /// ([`super::message::MAX_FRAME_BYTES`]).
+    pub(crate) const FROM_WORKER: Self = Self {
+        body: 64 << 20,
+        blob: super::message::MAX_FRAME_BYTES,
+    };
+}
 /// kind (1), body length (8), blob length (8), the body's descriptor count (4).
 const HEADER: usize = 21;
 /// The body inline.
@@ -102,8 +126,8 @@ pub(crate) fn send(socket: BorrowedFd<'_>, packet: &Packet) -> Result<(), WireEr
     }
 }
 
-/// The next packet on `socket`, blocking until one arrives; `None` once the peer is gone.
-pub(crate) fn recv(socket: BorrowedFd<'_>) -> Result<Option<Packet>, WireError> {
+/// The next packet on `socket` within `limits`, blocking until one arrives; `None` once the peer is gone.
+pub(crate) fn recv(socket: BorrowedFd<'_>, limits: Limits) -> Result<Option<Packet>, WireError> {
     let mut buffer = vec![0u8; HEADER + INLINE_MAX];
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2 + MAX_BODY_FDS))];
     let mut control = RecvAncillaryBuffer::new(&mut space);
@@ -131,11 +155,11 @@ pub(crate) fn recv(socket: BorrowedFd<'_>) -> Result<Option<Packet>, WireError> 
     if received.bytes == 0 && fds.is_empty() {
         return Ok(None);
     }
-    decode(&buffer[..received.bytes], fds).map(Some)
+    decode(&buffer[..received.bytes], fds, limits).map(Some)
 }
 
-/// A received packet's bytes and descriptors as a [`Packet`].
-fn decode(bytes: &[u8], fds: Vec<OwnedFd>) -> Result<Packet, WireError> {
+/// A received packet's bytes and descriptors as a [`Packet`], its body and blob within `limits`.
+fn decode(bytes: &[u8], fds: Vec<OwnedFd>, limits: Limits) -> Result<Packet, WireError> {
     let Some((header, inline)) = bytes.split_first_chunk::<HEADER>() else {
         return Err(broken(format!("{} bytes, shorter than its header", bytes.len())));
     };
@@ -163,7 +187,7 @@ fn decode(bytes: &[u8], fds: Vec<OwnedFd>) -> Result<Packet, WireError> {
             return Err(broken("a body both inline and in a memfd"));
         }
         let fd = fds.next().ok_or_else(|| broken("no body memfd"))?;
-        read_memfd(fd, body_len)?
+        read_memfd(fd, body_len, limits.body)?
     } else {
         if inline.len() as u64 != body_len {
             return Err(broken(format!(
@@ -177,7 +201,7 @@ fn decode(bytes: &[u8], fds: Vec<OwnedFd>) -> Result<Packet, WireError> {
         None
     } else {
         let fd = fds.next().ok_or_else(|| broken("no blob memfd"))?;
-        Some(read_memfd(fd, blob_len)?)
+        Some(read_memfd(fd, blob_len, limits.blob)?)
     };
     Ok(Packet {
         body,
@@ -195,10 +219,12 @@ fn sealed_memfd(bytes: &[u8]) -> Result<OwnedFd, WireError> {
     Ok(file.into())
 }
 
-/// The `len` bytes of a received `memfd`, once its seals and size are what they must be.
-fn read_memfd(fd: OwnedFd, len: u64) -> Result<Vec<u8>, WireError> {
-    if len > MEMFD_MAX {
-        return Err(broken(format!("a memfd of {len} bytes")));
+/// The `len` bytes of a received `memfd`, once `len` is at most `max` and its seals and size are what they must be.
+fn read_memfd(fd: OwnedFd, len: u64, max: u64) -> Result<Vec<u8>, WireError> {
+    if len > max.min(MEMFD_MAX) {
+        return Err(broken(format!(
+            "a memfd of {len} bytes, more than the {max} this side reads"
+        )));
     }
     let seals = rustix::fs::fcntl_get_seals(&fd)?;
     if !seals.contains(SEALS) {
@@ -239,7 +265,7 @@ mod tests {
             ..Packet::default()
         };
         send(ours.as_fd(), &small).unwrap();
-        let got = recv(theirs.as_fd()).unwrap().unwrap();
+        let got = recv(theirs.as_fd(), Limits::FROM_APP).unwrap().unwrap();
         assert_eq!((got.body, got.blob, got.fds.len()), (small.body, None, 0));
 
         let large = Packet {
@@ -248,7 +274,7 @@ mod tests {
             fds: Vec::new(),
         };
         send(ours.as_fd(), &large).unwrap();
-        let got = recv(theirs.as_fd()).unwrap().unwrap();
+        let got = recv(theirs.as_fd(), Limits::FROM_APP).unwrap().unwrap();
         assert_eq!(got.body, large.body);
         assert_eq!(got.blob, large.blob);
         assert!(got.fds.is_empty(), "the memfds are the transport's, not the body's");
@@ -265,7 +291,7 @@ mod tests {
             blob: Some(pixels),
             fds: Vec::new(),
         };
-        let receiver = std::thread::spawn(move || recv(theirs.as_fd()).unwrap().unwrap());
+        let receiver = std::thread::spawn(move || recv(theirs.as_fd(), Limits::FROM_APP).unwrap().unwrap());
         let started = std::time::Instant::now();
         send(ours.as_fd(), &packet).unwrap();
         let got = receiver.join().unwrap();
@@ -285,7 +311,7 @@ mod tests {
             fds: files.into_iter().map(OwnedFd::from).collect(),
         };
         send(ours.as_fd(), &packet).unwrap();
-        let got = recv(theirs.as_fd()).unwrap().unwrap();
+        let got = recv(theirs.as_fd(), Limits::FROM_APP).unwrap().unwrap();
         assert_eq!(got.blob.as_deref(), Some(&[7u8; 16][..]));
         assert_eq!(
             got.fds.iter().map(inode).collect::<Vec<_>>(),
@@ -314,7 +340,7 @@ mod tests {
         assert!(control.push(SendAncillaryMessage::ScmRights(&fds)));
         rustix::net::sendmsg(&ours, &[IoSlice::new(&header)], &mut control, SendFlags::NOSIGNAL).unwrap();
         drop(stray);
-        let error = recv(theirs.as_fd()).unwrap_err();
+        let error = recv(theirs.as_fd(), Limits::FROM_APP).unwrap_err();
         assert!(matches!(error, WireError::Broken(_)), "{error}");
         // no descriptor of this process names the stray file any more (other tests open files meanwhile)
         let open_inodes: Vec<(u64, u64)> = std::fs::read_dir("/proc/self/fd")
@@ -330,10 +356,13 @@ mod tests {
 
         // a packet longer than any the wire makes
         rustix::net::send(&ours, &vec![0u8; HEADER + INLINE_MAX + 1], SendFlags::NOSIGNAL).unwrap();
-        assert!(matches!(recv(theirs.as_fd()), Err(WireError::Broken(_))));
+        assert!(matches!(
+            recv(theirs.as_fd(), Limits::FROM_APP),
+            Err(WireError::Broken(_))
+        ));
         // the peer gone: the end, not an error
         drop(ours);
-        assert!(recv(theirs.as_fd()).unwrap().is_none());
+        assert!(recv(theirs.as_fd(), Limits::FROM_APP).unwrap().is_none());
         assert!(open(theirs.as_raw_fd()));
     }
 
@@ -341,12 +370,16 @@ mod tests {
     fn an_unsealed_or_resized_memfd_is_refused() {
         let unsealed = rustix::fs::memfd_create("t", MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING).unwrap();
         File::from(unsealed.try_clone().unwrap()).write_all(b"abc").unwrap();
-        assert!(matches!(read_memfd(unsealed, 3), Err(WireError::Broken(_))));
+        assert!(matches!(read_memfd(unsealed, 3, MEMFD_MAX), Err(WireError::Broken(_))));
         let sealed = sealed_memfd(b"abc").unwrap();
         assert!(matches!(
-            read_memfd(sealed.try_clone().unwrap(), 4),
+            read_memfd(sealed.try_clone().unwrap(), 4, MEMFD_MAX),
             Err(WireError::Broken(_))
         ));
-        assert_eq!(read_memfd(sealed, 3).unwrap(), b"abc");
+        assert!(
+            matches!(read_memfd(sealed.try_clone().unwrap(), 3, 2), Err(WireError::Broken(_))),
+            "a memfd larger than the receiver reads"
+        );
+        assert_eq!(read_memfd(sealed, 3, MEMFD_MAX).unwrap(), b"abc");
     }
 }

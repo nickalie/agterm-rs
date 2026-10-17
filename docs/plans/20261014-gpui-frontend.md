@@ -2630,6 +2630,15 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
     fails with its fix reverted (`tests/privileges.rs` with the app re-executed under the overlay as before).
     Conformance: GPUI `--ratchet-only --also-k "html or page or browser"` 645 passed, the 645 listed held (its pages
     now run through the worker on this machine); no GTK run (nothing the GTK build links or its suite runs changed).
+    Round 2: the app treats the worker as untrusted. Its reads have bounds of their own (`wire::Limits::FROM_WORKER`:
+    a 64 MiB body, a blob no larger than the largest frame). Frames keep to 16384 px a side and 2^26 px; SHM regions
+    must be non-empty, inside the frame and match its pixels exactly; dmabufs need the frame's size, 1–4 planes, each a
+    dmabuf whose object holds the plane's offset and the main plane's rows. Damage is clipped, and popup and caret
+    coordinates are clamped to ±2^24. The client keeps dmabufs per page and drops them on `CloseView`, on worker death
+    and on `BuffersRemoved`, which the engine now also sends when a page closes. Frames of pages the app never made or
+    already closed are dropped. A page keeps at most 8 buffers and 4 unanswered frames; extra frames are answered
+    unseen. The event queue is bounded (256) and closed first by a shutdown. A page given the keyboard (or an input
+    method's composition) while the engine starts gets it replayed when its engine page is made.
 
 ### Stage 4 — switch
 

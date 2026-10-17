@@ -95,6 +95,15 @@ impl Harness {
         Ok(event)
     }
 
+    /// Forgets what `view` reported and drew (a closed page's frame holds its buffer's descriptors).
+    pub fn forget(&self, view: ViewId) {
+        self.pages.borrow_mut().remove(&view);
+        self.frames.borrow_mut().remove(&view);
+        self.pending
+            .borrow_mut()
+            .retain(|event| !matches!(event, Event::Frame(frame) if frame.view == view));
+    }
+
     /// The title `view` last reported.
     pub fn current_title(&self, view: ViewId) -> Option<String> {
         self.pages.borrow().get(&view).and_then(|page| page.title.clone())

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::message::{self, FromWorker, PROTOCOL, StartFailure, ToWorker};
-use super::wire::{self, Packet};
+use super::wire::{self, Limits, Packet};
 use crate::event::SchemeResponse;
 use crate::host::{Command, Local};
 
@@ -36,7 +36,7 @@ pub(super) fn serve(socket: OwnedFd) -> i32 {
     if send(&socket, &hello).is_err() {
         return 0;
     }
-    let first = match wire::recv(socket.as_fd()) {
+    let first = match wire::recv(socket.as_fd(), Limits::FROM_APP) {
         Ok(Some(packet)) => message::body::<ToWorker>(&packet),
         Ok(None) => return 0,
         Err(err) => {
@@ -93,7 +93,7 @@ pub(super) fn serve(socket: OwnedFd) -> i32 {
 /// the socket.
 fn serve_commands(socket: &OwnedFd, engine: &Local, outgoing: &async_channel::Sender<Outgoing>) -> i32 {
     loop {
-        let packet = match wire::recv(socket.as_fd()) {
+        let packet = match wire::recv(socket.as_fd(), Limits::FROM_APP) {
             Ok(Some(packet)) => packet,
             Ok(None) => return 0,
             Err(err) => {

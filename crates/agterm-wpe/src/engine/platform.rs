@@ -499,10 +499,17 @@ impl View {
         self.imp().link.replace(Some(link));
     }
 
-    /// Stops sending frames: the page is closing.
+    /// Stops sending frames: the page is closing. Its buffers leave with it, reported as [`Event::BuffersRemoved`] so
+    /// a consumer that kept them (a worker's client) lets them go.
     pub(crate) fn detach(&self) {
-        self.imp().link.replace(None);
-        self.imp().held.borrow_mut().clear();
+        let link = self.imp().link.replace(None);
+        let mut buffers: Vec<BufferId> = self.imp().held.borrow_mut().drain().map(|(id, _)| id).collect();
+        if let Some(link) = link
+            && !buffers.is_empty()
+        {
+            buffers.sort_unstable();
+            send(&link.events, Event::BuffersRemoved { view: link.id, buffers });
+        }
     }
 
     fn display(&self) -> Option<Display> {

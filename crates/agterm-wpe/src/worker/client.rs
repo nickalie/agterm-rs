@@ -1,7 +1,15 @@
 //! The app's side of the worker (module docs of `worker`): the start and its handshake, the writer and reader
 //! threads, evaluations by id, the shutdown and the reaping.
+//!
+//! The worker is not trusted (`message` checks what it sends), and what the app keeps for it stays bounded: the
+//! pages it knows are the ones the app made (`Command::CreateView`) and has not closed; a frame of any other page is
+//! dropped where it arrives, its planes closed. Each page's dmabufs are kept (one `Arc` per buffer, as the in-process
+//! engine hands them out) until they leave its set (`Event::BuffersRemoved`), the page closes (`Command::CloseView`)
+//! or the worker ends, at most [`MAX_BUFFERS`] of them; at most [`MAX_UNANSWERED`] of a page's frames wait for the
+//! app's answer, and one past them is answered here unseen. Events wait in a queue of [`EVENT_QUEUE`], which holds the
+//! reader (and so the worker, through the socket) while the app catches up; a shutdown closes it first.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::os::fd::{AsFd as _, AsRawFd as _, BorrowedFd, OwnedFd};
 use std::os::unix::process::CommandExt as _;
 use std::path::PathBuf;
@@ -14,12 +22,12 @@ use rustix::event::{PollFd, PollFlags, Timespec};
 use rustix::net::{AddressFamily, Shutdown, SocketFlags, SocketType};
 
 use super::message::{self, FromWorker, PROTOCOL, ToWorker};
-use super::wire::{self, Packet, WireError};
+use super::wire::{self, Limits, Packet, WireError};
 use super::{WORKER_FD_ENV, WORKER_IMAGE_ENV};
 use crate::config::HostConfig;
 use crate::event::Event;
-use crate::frames::{BufferId, DmaBuf};
-use crate::host::{Command as EngineCommand, Evaluation, StartError};
+use crate::frames::{BufferId, DmaBuf, Frame, FrameContent};
+use crate::host::{Command as EngineCommand, Evaluation, StartError, ViewCommand};
 use crate::launcher::{self, Provider};
 use crate::spec::ViewId;
 
@@ -31,6 +39,51 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const REAP_GRACE: Duration = Duration::from_secs(2);
 /// What an evaluation gets when the worker is gone.
 const ENDED: &str = "the web engine ended";
+/// The most frames of one page waiting for the app's answer (`Host::frame_presented`): the engine hands over a page's
+/// next frame once the one before was answered, so two at most are in flight while it keeps to that.
+const MAX_UNANSWERED: u32 = 4;
+/// The most dmabufs kept for one page: `WebKit`'s set holds two or three (and the set it replaces, for a moment); past
+/// them the oldest is forgotten, passed on as `Event::BuffersRemoved` (its next frame brings its planes again).
+const MAX_BUFFERS: usize = 8;
+/// How many events wait for the app before the reader waits for it.
+const EVENT_QUEUE: usize = 256;
+
+/// The app's pages as the reader keeps them (module docs).
+#[derive(Debug, Default)]
+struct Pages(HashMap<ViewId, PageFrames>);
+
+/// One page's dmabufs, by buffer (ids only grow, so the first is the oldest), and its frames not answered yet.
+#[derive(Debug, Default)]
+struct PageFrames {
+    buffers: BTreeMap<BufferId, Arc<DmaBuf>>,
+    unanswered: u32,
+    /// A frame past the unanswered ones was dropped (logged once).
+    dropped: bool,
+}
+
+impl Pages {
+    /// Follows a command the app sends: a page made, closed, or a frame of it answered.
+    fn track(&mut self, command: &EngineCommand) {
+        match command {
+            EngineCommand::CreateView(view, _) => {
+                self.0.entry(*view).or_default();
+            }
+            EngineCommand::CloseView(view) => {
+                self.0.remove(view);
+            }
+            EngineCommand::View(view, ViewCommand::Presented(_)) => {
+                if let Some(page) = self.0.get_mut(view) {
+                    page.unanswered = page.unanswered.saturating_sub(1);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// The evaluations waiting for the worker's answer.
 #[derive(Default)]
@@ -75,6 +128,10 @@ pub(crate) struct Client {
     socket: Arc<OwnedFd>,
     evaluations: Arc<Mutex<Evaluations>>,
     worker: Arc<Worker>,
+    /// The pages the app made, shared with the reader.
+    pages: Arc<Mutex<Pages>>,
+    /// The event queue's sending side, closed by a shutdown so a reader waiting on a full queue goes on.
+    events: Sender<Event>,
     /// Told once the worker's engine stopped; `None` after a shutdown.
     stopped: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     stop_timeout: Duration,
@@ -139,9 +196,10 @@ impl Client {
     fn running(socket: OwnedFd, worker: Arc<Worker>, pid: u32, stop_timeout: Duration) -> (Self, Receiver<Event>) {
         let socket = Arc::new(socket);
         let (outgoing, queue) = async_channel::unbounded::<Packet>();
-        let (events, event_queue) = async_channel::unbounded();
+        let (events, event_queue) = async_channel::bounded(EVENT_QUEUE);
         let (stop, stopped) = std::sync::mpsc::sync_channel(1);
         let evaluations = Arc::new(Mutex::new(Evaluations::default()));
+        let pages = Arc::new(Mutex::new(Pages::default()));
         let writer_socket = Arc::clone(&socket);
         let spawned = std::thread::Builder::new()
             .name("wpe-worker-out".to_owned())
@@ -158,12 +216,12 @@ impl Client {
         }
         let reader = Reader {
             socket: Arc::clone(&socket),
-            events,
+            events: events.clone(),
             stop,
             evaluations: Arc::clone(&evaluations),
             worker: Arc::clone(&worker),
             outgoing: outgoing.clone(),
-            buffers: HashMap::new(),
+            pages: Arc::clone(&pages),
         };
         let spawned = std::thread::Builder::new()
             .name("wpe-worker-in".to_owned())
@@ -176,6 +234,8 @@ impl Client {
             socket,
             evaluations,
             worker,
+            pages,
+            events,
             stopped: Mutex::new(Some(stopped)),
             stop_timeout,
             pid,
@@ -201,6 +261,7 @@ impl Client {
 
     /// Queues `command` for the worker.
     pub(crate) fn send(&self, command: EngineCommand) {
+        lock(&self.pages).track(&command);
         let (message, blob) = ToWorker::command(command);
         self.queue(&message, blob);
     }
@@ -236,6 +297,8 @@ impl Client {
     pub(crate) fn shutdown(&self) {
         let taken = self.stopped.lock().unwrap_or_else(PoisonError::into_inner).take();
         let Some(stopped) = taken else { return };
+        // nobody reads the events past here: a reader held by a full queue goes on to the worker's last word
+        self.events.close();
         self.send(EngineCommand::Quit);
         match stopped.recv_timeout(self.stop_timeout) {
             Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
@@ -247,6 +310,7 @@ impl Client {
         let _ = rustix::net::shutdown(&*self.socket, Shutdown::Both);
         self.outgoing.close();
         self.worker.reap(REAP_GRACE);
+        lock(&self.pages).0.clear();
     }
 }
 
@@ -307,7 +371,7 @@ fn recv_before(socket: BorrowedFd<'_>, deadline: Instant, timeout: Duration) -> 
             "the worker did not answer within {timeout:?}"
         )));
     }
-    match wire::recv(socket) {
+    match wire::recv(socket, Limits::FROM_WORKER) {
         Ok(Some(packet)) => Ok(packet),
         Ok(None) => Err(StartError::Worker("the worker ended while starting".to_owned())),
         Err(err) => Err(StartError::Worker(format!("the worker's socket: {err}"))),
@@ -351,15 +415,15 @@ struct Reader {
     evaluations: Arc<Mutex<Evaluations>>,
     worker: Arc<Worker>,
     outgoing: Sender<Packet>,
-    /// Each buffer's dmabuf as its first frame brought it.
-    buffers: HashMap<BufferId, Arc<DmaBuf>>,
+    /// The app's pages, their dmabufs and unanswered frames (module docs).
+    pages: Arc<Mutex<Pages>>,
 }
 
 impl Reader {
-    fn run(mut self) {
+    fn run(self) {
         let mut stopped = false;
         loop {
-            let packet = match wire::recv(self.socket.as_fd()) {
+            let packet = match wire::recv(self.socket.as_fd(), Limits::FROM_WORKER) {
                 Ok(Some(packet)) => packet,
                 Ok(None) => break,
                 Err(err) => {
@@ -389,30 +453,61 @@ impl Reader {
         }
         self.outgoing.close();
         let _ = rustix::net::shutdown(&*self.socket, Shutdown::Both);
+        // the dmabufs go with the worker, and the consumer's events end at once, before the reaping's wait
+        lock(&self.pages).0.clear();
+        self.events.close();
         self.worker.reap(REAP_GRACE);
-        // the event channel closes with `self.events`
+    }
+
+    /// Hands `event` to the app, waiting while its queue is full; dropped once a shutdown closed it.
+    fn forward(&self, event: Event) {
+        if self.events.send_blocking(event).is_err() {
+            tracing::debug!("nobody listens to the WPE engine's events any more");
+        }
     }
 
     /// Takes one packet; whether it was the worker's last word ([`FromWorker::Stopped`]).
-    fn take(&mut self, packet: Packet) -> Result<bool, WireError> {
+    fn take(&self, packet: Packet) -> Result<bool, WireError> {
         let event = match message::body::<FromWorker>(&packet)? {
             FromWorker::Event(event) => {
-                if let Event::BuffersRemoved { buffers, .. } = &event {
+                if let Event::BuffersRemoved { view, buffers } = &event
+                    && let Some(page) = lock(&self.pages).0.get_mut(view)
+                {
                     for buffer in buffers {
-                        self.buffers.remove(buffer);
+                        page.buffers.remove(buffer);
                     }
                 }
-                event
+                message::checked_event(event)
             }
             FromWorker::DmaBufFrame { frame, dmabuf } => {
-                let known = self.buffers.get(&frame.buffer()).cloned();
+                let mut pages = lock(&self.pages);
+                // a page the app closed (or never made): its frame goes, and its planes close, here
+                let Some(page) = pages.0.get_mut(&frame.view()) else {
+                    return Ok(false);
+                };
+                let known = page.buffers.get(&frame.buffer()).cloned();
                 let frame = message::dmabuf_frame(frame, dmabuf, packet.fds, known)?;
-                if let crate::frames::FrameContent::DmaBuf(dmabuf) = &frame.content {
-                    self.buffers.insert(frame.buffer, Arc::clone(dmabuf));
+                let Some(frame) = self.admit(page, frame) else {
+                    return Ok(false);
+                };
+                let removed = keep_buffer(page, &frame);
+                drop(pages);
+                if let Some(removed) = removed {
+                    self.forward(removed);
                 }
                 Event::Frame(frame)
             }
-            FromWorker::ShmFrame { frame, regions } => Event::Frame(message::shm_frame(frame, regions, packet.blob)?),
+            FromWorker::ShmFrame { frame, regions } => {
+                let mut pages = lock(&self.pages);
+                let Some(page) = pages.0.get_mut(&frame.view()) else {
+                    return Ok(false);
+                };
+                let frame = message::shm_frame(frame, &regions, packet.blob)?;
+                let Some(frame) = self.admit(page, frame) else {
+                    return Ok(false);
+                };
+                Event::Frame(frame)
+            }
             FromWorker::Evaluation { id, result } => {
                 let reply = self
                     .evaluations
@@ -433,11 +528,52 @@ impl Reader {
                 return Err(WireError::Broken(format!("{other:?} after the start")));
             }
         };
-        if self.events.try_send(event).is_err() {
-            tracing::debug!("nobody listens to the WPE engine's events any more");
-        }
+        self.forward(event);
         Ok(false)
     }
+
+    /// `frame` of `page` for the app, unless [`MAX_UNANSWERED`] of the page's frames already wait for its answer: then
+    /// it is answered here, unseen, so the page goes on drawing.
+    fn admit(&self, page: &mut PageFrames, frame: Frame) -> Option<Frame> {
+        if page.unanswered < MAX_UNANSWERED {
+            page.unanswered += 1;
+            return Some(frame);
+        }
+        if !std::mem::replace(&mut page.dropped, true) {
+            tracing::warn!(
+                view = ?frame.view,
+                "the WPE worker sends a page's frames faster than they are answered: the extra ones are dropped"
+            );
+        }
+        let answer = EngineCommand::View(frame.view, ViewCommand::Presented(frame.buffer));
+        let (message, blob) = ToWorker::command(answer);
+        if let Ok(packet) = message.packet(blob) {
+            let _ = self.outgoing.try_send(packet);
+        }
+        None
+    }
+}
+
+/// Keeps `frame`'s dmabuf for `page` when it is a buffer not seen yet; past [`MAX_BUFFERS`] the oldest is forgotten,
+/// and the event that tells the app so comes back.
+fn keep_buffer(page: &mut PageFrames, frame: &Frame) -> Option<Event> {
+    let FrameContent::DmaBuf(dmabuf) = &frame.content else {
+        return None;
+    };
+    if page.buffers.contains_key(&frame.buffer) {
+        return None;
+    }
+    page.buffers.insert(frame.buffer, Arc::clone(dmabuf));
+    let mut removed = Vec::new();
+    while page.buffers.len() > MAX_BUFFERS {
+        if let Some((oldest, _)) = page.buffers.pop_first() {
+            removed.push(oldest);
+        }
+    }
+    (!removed.is_empty()).then_some(Event::BuffersRemoved {
+        view: frame.view,
+        buffers: removed,
+    })
 }
 
 #[cfg(test)]
@@ -493,6 +629,261 @@ mod tests {
             Ok(Err(ENDED.to_owned())),
             "an evaluation after the end is answered at once"
         );
+    }
+
+    fn create_view(view: ViewId) -> EngineCommand {
+        EngineCommand::CreateView(
+            view,
+            Box::new(crate::spec::ViewSpec {
+                session: crate::spec::SessionId(1),
+                settings: crate::spec::Settings::overlay(true),
+                scripts: Vec::new(),
+                message_handlers: Vec::new(),
+                zoom: 1.0,
+                background: None,
+                geometry: crate::spec::Geometry {
+                    width: 4,
+                    height: 4,
+                    scale: 1.0,
+                },
+            }),
+        )
+    }
+
+    /// A dmabuf frame of `view` in `buffer`, its one plane a plain file whose inode comes back too.
+    fn dmabuf_frame(view: ViewId, buffer: u64) -> (Frame, (u64, u64)) {
+        let file = tempfile::tempfile().unwrap();
+        let stat = rustix::fs::fstat(&file).unwrap();
+        let dmabuf = DmaBuf {
+            width: 4,
+            height: 4,
+            fourcc: crate::fourcc(b"XR24"),
+            modifier: 0,
+            planes: vec![crate::frames::Plane {
+                fd: OwnedFd::from(file),
+                offset: 0,
+                stride: 16,
+            }],
+        };
+        let frame = Frame {
+            view,
+            buffer: BufferId(buffer),
+            width: 4,
+            height: 4,
+            damage: Vec::new(),
+            content: FrameContent::DmaBuf(Arc::new(dmabuf)),
+        };
+        (frame, (stat.st_dev, stat.st_ino))
+    }
+
+    /// The (device, inode) pairs this process's descriptors name.
+    fn open_inodes() -> Vec<(u64, u64)> {
+        use std::os::unix::fs::MetadataExt as _;
+        std::fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .flatten()
+            .filter_map(|entry| std::fs::metadata(entry.path()).ok())
+            .map(|metadata| (metadata.dev(), metadata.ino()))
+            .collect()
+    }
+
+    #[test]
+    fn a_page_s_dmabufs_go_when_it_closes_and_stay_bounded_while_it_runs() {
+        let (view, other) = (ViewId(7), ViewId(8));
+        let mut pages = Pages::default();
+        pages.track(&create_view(view));
+        pages.track(&create_view(other));
+        let mut inodes = Vec::new();
+        let mut removed = Vec::new();
+        for buffer in 1..=10 {
+            let (frame, inode) = dmabuf_frame(view, buffer);
+            inodes.push(inode);
+            let page = pages.0.get_mut(&view).unwrap();
+            if let Some(Event::BuffersRemoved { view: id, buffers }) = keep_buffer(page, &frame) {
+                assert_eq!(id, view);
+                removed.extend(buffers);
+            }
+            // a buffer seen again keeps its first dmabuf
+            assert!(keep_buffer(page, &frame).is_none());
+        }
+        assert_eq!(
+            removed,
+            [BufferId(1), BufferId(2)],
+            "past the bound the oldest go, said so"
+        );
+        assert_eq!(pages.0[&view].buffers.len(), MAX_BUFFERS);
+        let open = open_inodes();
+        assert!(
+            inodes[2..].iter().all(|inode| open.contains(inode)),
+            "the kept planes stay open"
+        );
+        assert!(
+            !inodes[..2].iter().any(|inode| open.contains(inode)),
+            "the forgotten ones closed"
+        );
+        let (frame, kept) = dmabuf_frame(other, 1);
+        keep_buffer(pages.0.get_mut(&other).unwrap(), &frame);
+        drop(frame);
+        pages.track(&EngineCommand::CloseView(view));
+        assert!(!pages.0.contains_key(&view));
+        let open = open_inodes();
+        assert!(
+            !inodes.iter().any(|inode| open.contains(inode)),
+            "a closed page's planes closed"
+        );
+        assert!(open.contains(&kept), "another page keeps its own");
+    }
+
+    #[test]
+    fn answers_count_down_a_page_s_unanswered_frames() {
+        let view = ViewId(3);
+        let mut pages = Pages::default();
+        pages.track(&create_view(view));
+        pages.0.get_mut(&view).unwrap().unanswered = 2;
+        let presented = || EngineCommand::View(view, ViewCommand::Presented(BufferId(1)));
+        pages.track(&presented());
+        assert_eq!(pages.0[&view].unanswered, 1);
+        pages.track(&presented());
+        pages.track(&presented());
+        assert_eq!(pages.0[&view].unanswered, 0, "never below none");
+        // an answer for a page the app does not have changes nothing
+        pages.track(&EngineCommand::View(ViewId(99), ViewCommand::Presented(BufferId(1))));
+        assert!(!pages.0.contains_key(&ViewId(99)));
+    }
+
+    /// An SHM frame packet of `view` in `buffer`: one 1x1 region of a 4x4 frame.
+    fn shm_packet(view: ViewId, buffer: u64) -> Packet {
+        let rect = crate::frames::Rect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        };
+        FromWorker::event_packet(Event::Frame(Frame {
+            view,
+            buffer: BufferId(buffer),
+            width: 4,
+            height: 4,
+            damage: Vec::new(),
+            content: FrameContent::Shm(vec![crate::frames::ShmRegion {
+                rect,
+                pixels: vec![1, 2, 3, 4],
+            }]),
+        }))
+        .unwrap()
+    }
+
+    /// The next command the client sent the stand-in worker on `theirs`.
+    fn next_command(theirs: &OwnedFd) -> ToWorker {
+        let packet = wire::recv(theirs.as_fd(), Limits::FROM_APP).unwrap().unwrap();
+        message::body(&packet).unwrap()
+    }
+
+    /// A client of a stand-in worker on `theirs` with page `view` made: the client, its events, the worker's end.
+    fn with_page(view: ViewId) -> (Client, Receiver<Event>, OwnedFd) {
+        let (worker, ours, theirs) = sleeper();
+        let (client, events) = Client::running(ours, worker, 0, Duration::from_millis(200));
+        client.send(create_view(view));
+        let made = next_command(&theirs);
+        assert!(matches!(made, ToWorker::Command(EngineCommand::CreateView(id, _)) if id == view));
+        (client, events, theirs)
+    }
+
+    /// An event packet that marks a place in the worker's stream.
+    fn marker(view: ViewId) -> Packet {
+        FromWorker::Event(Event::CloseRequested { view }).packet().unwrap()
+    }
+
+    #[test]
+    fn a_frame_of_a_page_the_app_never_made_is_dropped() {
+        let (client, events, theirs) = with_page(ViewId(5));
+        wire::send(theirs.as_fd(), &shm_packet(ViewId(6), 1)).unwrap();
+        wire::send(theirs.as_fd(), &marker(ViewId(6))).unwrap();
+        let next = events.recv_blocking();
+        assert!(
+            matches!(next, Ok(Event::CloseRequested { view }) if view == ViewId(6)),
+            "{next:?}"
+        );
+        drop(theirs);
+        client.shutdown();
+    }
+
+    #[test]
+    fn frames_past_the_unanswered_bound_are_answered_unseen() {
+        let view = ViewId(5);
+        let (client, events, theirs) = with_page(view);
+        let over = u64::from(MAX_UNANSWERED) + 1;
+        for buffer in 1..=over {
+            wire::send(theirs.as_fd(), &shm_packet(view, buffer)).unwrap();
+        }
+        wire::send(theirs.as_fd(), &marker(view)).unwrap();
+        let arrived: Vec<BufferId> = (0..=MAX_UNANSWERED)
+            .map_while(|_| match events.recv_blocking() {
+                Ok(Event::Frame(frame)) => Some(frame.buffer),
+                _ => None,
+            })
+            .collect();
+        let expected: Vec<BufferId> = (1..over).map(BufferId).collect();
+        assert_eq!(arrived, expected, "the frames up to the bound, not the one past it");
+        let answer = next_command(&theirs);
+        let answered = matches!(answer, ToWorker::Command(EngineCommand::View(id, ViewCommand::Presented(buffer))) if id == view && buffer == BufferId(over));
+        assert!(answered, "{answer:?}");
+        // once the app answers one, the next frame reaches it again
+        client.send(EngineCommand::View(view, ViewCommand::Presented(BufferId(1))));
+        wire::send(theirs.as_fd(), &shm_packet(view, 9)).unwrap();
+        let next = events.recv_blocking();
+        assert!(
+            matches!(next, Ok(Event::Frame(ref frame)) if frame.buffer == BufferId(9)),
+            "{next:?}"
+        );
+        drop(theirs);
+        client.shutdown();
+    }
+
+    #[test]
+    fn a_malformed_frame_breaks_the_transport() {
+        let view = ViewId(5);
+        let (client, events, theirs) = with_page(view);
+        let mut broken = shm_packet(view, 1);
+        broken.blob = Some(vec![0; 3]);
+        wire::send(theirs.as_fd(), &broken).unwrap();
+        assert!(events.recv_blocking().is_err(), "the reader ended on the broken frame");
+        drop(theirs);
+        client.shutdown();
+    }
+
+    #[test]
+    fn a_full_event_queue_holds_the_reader_and_a_shutdown_frees_it() {
+        let (worker, ours, theirs) = sleeper();
+        let pid = worker.group;
+        let (client, events) = Client::running(ours, Arc::clone(&worker), 0, Duration::from_millis(200));
+        // more events than the queue holds, nobody reading: the reader waits on the queue
+        let event = FromWorker::Event(Event::CloseRequested { view: ViewId(1) })
+            .packet()
+            .unwrap();
+        for _ in 0..EVENT_QUEUE + 10 {
+            wire::send(theirs.as_fd(), &event).unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while events.len() < EVENT_QUEUE && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(events.len(), EVENT_QUEUE, "the queue filled and stays bounded");
+        let started = Instant::now();
+        client.shutdown();
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "the shutdown took {:?}",
+            started.elapsed()
+        );
+        assert!(!alive(pid));
+        // the reader went on past the full queue and ended: only the test and the client hold the worker now
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Arc::strong_count(&worker) > 2 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(Arc::strong_count(&worker), 2, "the reader thread ended");
+        drop(theirs);
     }
 
     #[test]

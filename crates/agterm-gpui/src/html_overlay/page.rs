@@ -112,6 +112,11 @@ pub(super) struct Page {
     window: Cell<Option<AnyWindowHandle>>,
     /// The size and scale the element was last laid out at.
     geometry: Cell<Option<Geometry>>,
+    /// The element holds the keyboard: the engine's page is told so, also when it is made later.
+    focused: Cell<bool>,
+    /// The input method's composition in progress (its text and caret), given again to an engine page made after it
+    /// began.
+    preedit: RefCell<Option<(String, u32)>>,
     me: Weak<Page>,
 }
 
@@ -154,6 +159,8 @@ impl Page {
             element_window: Cell::new(None),
             window: Cell::new(None),
             geometry: Cell::new(None),
+            focused: Cell::new(false),
+            preedit: RefCell::new(None),
             me: me.clone(),
         })
     }
@@ -238,6 +245,32 @@ impl Page {
         }
     }
 
+    /// The element took or lost the keyboard: the engine's page follows, now or once it is made.
+    pub(super) fn set_focused(&self, focused: bool) {
+        self.focused.set(focused);
+        if let (Some(web), Some(view)) = (self.web(), self.view.get()) {
+            web.set_focused(view, focused);
+        }
+    }
+
+    /// The input method's composition is `text` with the caret `cursor` characters in (empty ends it): the engine's
+    /// page follows, now or once it is made.
+    pub(super) fn ime_preedit(&self, text: String, cursor: u32) {
+        self.preedit.replace((!text.is_empty()).then(|| (text.clone(), cursor)));
+        if let (Some(web), Some(view)) = (self.web(), self.view.get()) {
+            web.ime_preedit(view, text, cursor);
+        }
+    }
+
+    /// Text typed or committed by the input method goes in, ending a composition. Before the engine's page exists
+    /// there is nothing to type into, as for keys.
+    pub(super) fn ime_commit(&self, text: String) {
+        self.preedit.replace(None);
+        if let (Some(web), Some(view)) = (self.web(), self.view.get()) {
+            web.ime_commit(view, text);
+        }
+    }
+
     /// The element was laid out at `geometry`: the engine's page follows when it changed.
     pub(super) fn set_geometry(&self, geometry: Geometry) {
         if self.geometry.replace(Some(geometry)) == Some(geometry) {
@@ -271,7 +304,10 @@ impl Page {
     }
 
     /// Makes the engine's page on `web`, `session` its store (none: the store is unavailable, and the page loads
-    /// nothing), at `zoom`, and loads the source.
+    /// nothing), at `zoom`, and loads the source. What the page took on while it waited goes with it: the size and
+    /// scale, the theme and scripts, the zoom (in its spec), whether it shows, holds the keyboard and an input method
+    /// composes in it, and the load the model asks for last; input events before it are gone, as for a page that
+    /// does not exist.
     pub(super) fn realize(&self, web: &Rc<dyn Web>, session: Option<SessionId>, zoom: f64) {
         if self.view.get().is_some() || !self.active() {
             return;
@@ -305,6 +341,13 @@ impl Page {
         self.view.set(Some(view));
         registry::page_view_created(self.id, view);
         web.set_visible(view, self.on_screen());
+        // the element may have taken the keyboard while the engine started: GPUI tells it once, then never again
+        if self.focused.get() {
+            web.set_focused(view, true);
+            if let Some((text, cursor)) = self.preedit.borrow().clone() {
+                web.ime_preedit(view, text, cursor);
+            }
+        }
         self.load_original();
     }
 

@@ -187,14 +187,15 @@ impl PageView {
 
     fn focus_changed(&mut self, focused: bool, cx: &mut Context<Self>) {
         self.focused = focused;
-        self.send(|web, view| web.set_focused(view, focused));
+        // kept by the page too: GPUI says it once, maybe before the engine's page exists (the engine still starting)
+        self.page.set_focused(focused);
         if focused {
             self.page.focused();
             return;
         }
         if self.preedit.take().is_some() {
             // a composition the keyboard left is cancelled, as GTK's input method contexts do on focus out
-            self.send(|web, view| web.ime_preedit(view, String::new(), 0));
+            self.page.ime_preedit(String::new(), 0);
         }
         // the keyboard went elsewhere (a modal, another pane): the popup goes, never left drawn over a modal
         if self.menu.is_some() {
@@ -415,8 +416,7 @@ impl PageView {
         }
         self.page.user_input(false);
         if matches!(source, crate::terminal::input::Source::Text) {
-            let text = keystroke.key_char.clone().unwrap_or_default();
-            self.send(|web, view| web.ime_commit(view, text));
+            self.page.ime_commit(keystroke.key_char.clone().unwrap_or_default());
             return true;
         }
         if native.composing {
@@ -780,15 +780,14 @@ impl EntityInputHandler for PageView {
     /// The input method ended its composition keeping its text: it goes in.
     fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = self.preedit.take() {
-            self.send(|web, view| web.ime_commit(view, text));
+            self.page.ime_commit(text);
         }
         cx.notify();
     }
 
     fn replace_text_in_range(&mut self, _: Option<Range<usize>>, text: &str, _: &mut Window, cx: &mut Context<Self>) {
         self.preedit = None;
-        let text = text.to_owned();
-        self.send(|web, view| web.ime_commit(view, text));
+        self.page.ime_commit(text.to_owned());
         cx.notify();
     }
 
@@ -802,8 +801,7 @@ impl EntityInputHandler for PageView {
     ) {
         let cursor = u32::try_from(text.chars().count()).unwrap_or(u32::MAX);
         self.preedit = (!text.is_empty()).then(|| text.to_owned());
-        let text = text.to_owned();
-        self.send(|web, view| web.ime_preedit(view, text, cursor));
+        self.page.ime_preedit(text.to_owned(), cursor);
         cx.notify();
     }
 

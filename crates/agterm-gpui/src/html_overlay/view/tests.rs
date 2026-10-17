@@ -680,3 +680,64 @@ fn a_start_off_the_main_thread_leaves_pages_waiting_and_its_failure_fails_them(c
         "{failure}"
     );
 }
+
+#[gpui_kit::test]
+fn a_page_given_the_keyboard_while_the_engine_starts_holds_the_engine_s_once_realized(cx: &mut TestAppContext) {
+    use gpui_kit::EntityInputHandler as _;
+    let (harness, cx) = harness(cx);
+    // a start that takes its time (a worker's): the page mounted meanwhile waits for it
+    let _gated = registry::set_starting();
+    let overlay = page_overlay();
+    let element = cx
+        .update(|window, cx| registry::mount(&overlay, None, window, cx))
+        .unwrap();
+    harness.root.update(cx, |root, cx| {
+        root.element = Some(element.clone());
+        cx.notify();
+    });
+    cx.update(|_, cx| registry::apply(&overlay, true, cx));
+    cx.run_until_parked();
+    harness.web.take();
+    // the deck gives it the keyboard, and an input method starts composing in it, before the engine runs
+    let focus = element.read_with(cx, |element, _| element.focus().clone());
+    cx.update(|window, cx| window.focus(&focus, cx));
+    harness.root.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        element.update(cx, |element, cx| {
+            element.replace_and_mark_text_in_range(None, "かな", None, window, cx);
+        });
+    });
+    let page = element.read_with(cx, |element, _| Rc::clone(element.page()));
+    assert!(page.web().is_none(), "not realized while the engine starts");
+    assert!(
+        cx.update(|window, _| focus.is_focused(window)),
+        "GPUI holds the keyboard on the page"
+    );
+    assert_eq!(
+        harness.web.take(),
+        [],
+        "nothing reaches an engine that does not run yet"
+    );
+    // the engine runs: the page's engine page is made holding the keyboard, with the composition in it
+    let web: Rc<dyn crate::html_overlay::engine::Web> = Rc::clone(&harness.web) as _;
+    cx.update(|_, _| registry::finish_start(web));
+    cx.run_until_parked();
+    let calls = harness.web.take();
+    let at = |wanted: &Call| calls.iter().position(|call| call == wanted);
+    let created = calls
+        .iter()
+        .position(|call| matches!(call, Call::CreateView { .. }))
+        .unwrap_or_else(|| panic!("no page was made: {calls:?}"));
+    let focused =
+        at(&Call::Focused(true)).unwrap_or_else(|| panic!("the engine's page never got the keyboard: {calls:?}"));
+    let composing =
+        at(&Call::Preedit("かな".to_owned())).unwrap_or_else(|| panic!("the composition was lost: {calls:?}"));
+    assert!(created < focused && focused < composing, "{calls:?}");
+    // the keyboard leaving reaches the engine's page, as before
+    cx.update(Window::blur);
+    harness.root.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let calls = harness.web.take();
+    assert!(calls.contains(&Call::Focused(false)), "{calls:?}");
+}
