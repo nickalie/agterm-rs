@@ -97,11 +97,19 @@ jobs:
       # GTK forwarding checks, which need a GTK build of agterm that nothing here builds). They run without the HTML
       # overlays here; the bash conformance job runs the instance tests again with them, on Arch.
       # agterm-gpui's external texture test imports synthetic dmabufs from udmabuf on lavapipe; required here like
-      # the display tests, so the device must be there
+      # the display tests, so the device must be there. udmabuf is a bool in the kernel's Kconfig, built in or absent
+      # and never a module, so there is nothing to modprobe or install: the runner's kernel has it or the job fails.
+      # systemd's udev rules give the device to the kvm group, which the runner user is not in.
       - name: udmabuf for the external texture test
+        shell: bash
         run: |
-          sudo modprobe udmabuf
+          if [[ ! -c /dev/udmabuf ]]; then
+            config="$(grep -s '^CONFIG_UDMABUF=' "/boot/config-$(uname -r)" || echo 'no CONFIG_UDMABUF=y')"
+            echo "::error::no /dev/udmabuf on kernel $(uname -r) ($config): the external texture test needs it"
+            exit 1
+          fi
           sudo chmod a+rw /dev/udmabuf
+          ls -l /dev/udmabuf
       - name: test
         shell: bash
         env:
@@ -116,6 +124,10 @@ jobs:
   # a digest-pinned archlinux container (Ubuntu packages no wpewebkit at all); then the checked-in bindings must equal a
   # regeneration at the pins. Bump ARCH_SNAPSHOT (a day whose extra repo carries the pinned wpewebkit) and the image
   # digest with the WPE_ pins.
+  # archive.archlinux.org stalls now and then, which fails pacman's stall timeout: every sync from the snapshot goes
+  # through pacman-archive (written by the first step; the conformance jobs carry the same one), which downloads
+  # without that timeout, each attempt bounded by `timeout` instead, retries the whole download three times, then
+  # upgrades and installs from the cache.
   wpe:
     runs-on: ubuntu-26.04
     timeout-minutes: 90
@@ -129,8 +141,25 @@ jobs:
       - name: system packages from the Arch Linux Archive snapshot
         run: |
           echo "Server = https://archive.archlinux.org/repos/$ARCH_SNAPSHOT/\$repo/os/\$arch" > /etc/pacman.d/mirrorlist
-          pacman -Syyuu --noconfirm
-          pacman -S --noconfirm --needed git wpewebkit rustup
+          cat > /usr/local/bin/pacman-archive <<'EOF'
+          #!/bin/bash
+          # pacman-archive PKG...: the snapshot's upgrade and PKG..., downloaded with retries, installed from the cache
+          set -u
+          for attempt in 1 2 3; do
+            if timeout --kill-after=1m 15m pacman -Syyuuw --needed --noconfirm --disable-download-timeout "$@"; then
+              exec pacman -Suu --needed --noconfirm "$@"
+            fi
+            rm -f /var/lib/pacman/db.lck
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::download from the Arch Linux Archive failed (attempt $attempt of 3), retrying in 30s"
+              sleep 30
+            fi
+          done
+          echo "::error::download from the Arch Linux Archive failed 3 times: $*"
+          exit 1
+          EOF
+          chmod +x /usr/local/bin/pacman-archive
+          pacman-archive git wpewebkit rustup
       - uses: actions/checkout@v7
       - name: the snapshot's wpewebkit is the pinned one
         shell: bash
@@ -163,7 +192,7 @@ jobs:
       # embeds the terminal fonts, which the scripts build and fetch (their own pinned Zig).
       - name: what the app builds on
         run: |
-          pacman -S --noconfirm --needed curl xz patch vulkan-swrast mesa
+          pacman-archive curl xz patch vulkan-swrast mesa
           scripts/build-ghostty-vt.sh
           scripts/fetch-fonts.sh
           scripts/fetch-lavapipe.sh
@@ -217,8 +246,25 @@ jobs:
       - name: system packages from the Arch Linux Archive snapshot
         run: |
           echo "Server = https://archive.archlinux.org/repos/$ARCH_SNAPSHOT/\$repo/os/\$arch" > /etc/pacman.d/mirrorlist
-          pacman -Syyuu --noconfirm
-          pacman -S --noconfirm --needed git rustup wpewebkit bubblewrap \
+          cat > /usr/local/bin/pacman-archive <<'EOF'
+          #!/bin/bash
+          # pacman-archive PKG...: the snapshot's upgrade and PKG..., downloaded with retries, installed from the cache
+          set -u
+          for attempt in 1 2 3; do
+            if timeout --kill-after=1m 15m pacman -Syyuuw --needed --noconfirm --disable-download-timeout "$@"; then
+              exec pacman -Suu --needed --noconfirm "$@"
+            fi
+            rm -f /var/lib/pacman/db.lck
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::download from the Arch Linux Archive failed (attempt $attempt of 3), retrying in 30s"
+              sleep 30
+            fi
+          done
+          echo "::error::download from the Arch Linux Archive failed 3 times: $*"
+          exit 1
+          EOF
+          chmod +x /usr/local/bin/pacman-archive
+          pacman-archive git rustup wpewebkit bubblewrap \
             meson ninja wayland wayland-protocols libxkbcommon libxcb \
             curl xz patch ncurses fontconfig ttf-dejavu procps-ng \
             weston dbus xorg-server-xvfb mesa vulkan-swrast \
