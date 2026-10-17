@@ -191,10 +191,11 @@ jobs:
         run: scripts/gen-wpe-bindings.sh --check
       # The app with its HTML overlays (feature `html`, the default): its clippy, its unit tests and the headless page
       # harness (the real engine on lavapipe, in SHM: no render node here). It links the static libghostty-vt and
-      # embeds the terminal fonts, which the scripts build and fetch (their own pinned Zig).
+      # embeds the terminal fonts, which the scripts build and fetch (their own pinned Zig); its unit tests measure DejaVu
+      # Sans Mono through fontconfig.
       - name: what the app builds on
         run: |
-          pacman-archive curl xz patch vulkan-swrast mesa
+          pacman-archive curl xz patch vulkan-swrast mesa fontconfig ttf-dejavu
           scripts/build-ghostty-vt.sh
           scripts/fetch-fonts.sh
           scripts/fetch-lavapipe.sh
