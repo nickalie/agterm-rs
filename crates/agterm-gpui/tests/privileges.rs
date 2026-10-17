@@ -146,7 +146,7 @@ fn script(args: &[&str]) -> Option<String> {
 fn live_inputs() -> Option<(PathBuf, PathBuf)> {
     script(&["scripts/build-zmx.sh", "--verify"])?;
     let zmx = PathBuf::from(script(&["scripts/build-zmx.sh", "--print-prefix"])?).join("bin/zmx");
-    let ghostty = script(&["-c", "source scripts/lib/native.sh && ghostty_prefix"])?;
+    let ghostty = script(&["-c", "source scripts/lib/native.sh && ghostty_vt_prefix"])?;
     let resources = PathBuf::from(ghostty).join("share/ghostty");
     (zmx.is_file() && resources.join("shell-integration").is_dir()).then_some((zmx, resources))
 }

@@ -1,5 +1,5 @@
 //! A binding line and the set it goes into, ported from `Binding.Parser` and `Binding.Set` (`parseAndPut`,
-//! `putFlags`, `appendChain`, `remove`, `getEvent`) at `GHOSTTY_REV`.
+//! `putFlags`, `appendChain`, `remove`, `getEvent`) at `LIBGHOSTTY_VT_REV`.
 
 use std::collections::HashMap;
 

@@ -41,7 +41,7 @@ classify() {
     conformance/agterm_conformance/impls/rust.py|conformance/docs/rust-build.md|docs/linux-ui-checklist.md) echo claim ;;
     conformance/docs/fork-bugs.md) echo cite ;;
     conformance/docs/spike-macos.md|conformance/agterm_conformance/impls/swift_linux.py) echo keep ;;
-    conformance/selftests/*|conformance/tools/*.py|crates/agterm-gtk/src/quick.rs) echo keep ;;
+    conformance/selftests/*|conformance/tools/*.py|crates/agterm-gpui/src/quick/tests.rs) echo keep ;;
     *) echo review ;;
   esac
 }

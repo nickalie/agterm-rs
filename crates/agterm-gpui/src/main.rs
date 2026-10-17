@@ -1,4 +1,4 @@
-//! `agterm-gpui`, the GPUI frontend: one instance per application id (`instance.rs`), the core and its control
+//! `agterm`, the GPUI frontend: one instance per application id (`instance.rs`), the core and its control
 //! socket on GPUI's main thread (`app.rs`).
 //!
 //! Startup order matters: a process started as the HTML overlays' engine worker (`agterm_wpe::worker`, the vendored WPE

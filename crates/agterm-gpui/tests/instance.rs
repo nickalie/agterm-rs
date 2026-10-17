@@ -1,11 +1,13 @@
-//! The GPUI build as a process: single instance over a private session bus (both forwarding directions, with the GTK
-//! build where it is built), the activation token reaching the primary and raising its window (Xvfb; a niri nested in
-//! a headless weston), the SIGTERM quit and its exit status, and the app id fallback. Every process runs in a
+//! The GPUI build as a process: single instance over a private session bus (both forwarding directions, with a GTK
+//! build of agterm where one is given), the activation token reaching the primary and raising its window (Xvfb; a niri
+//! nested in a headless weston), the SIGTERM quit and its exit status, and the app id fallback. Every process runs in a
 //! [`Sandbox`]: nothing here can reach the user's session bus, desktop or live agterm.
 //!
-//! A test that needs a tool this machine lacks (weston, Xvfb, lavapipe, the GTK build's `agterm` beside this binary)
-//! prints `SKIPPED:` with the reason (seen with `--nocapture`) and passes, unless `AGTERM_REQUIRE_DISPLAY_TESTS` is set,
-//! as CI sets it: then it fails. The nested-niri check is `#[ignore]`d (CI has no niri): run it with `--ignored`.
+//! A test that needs a tool this machine lacks (weston, Xvfb, lavapipe) prints `SKIPPED:` with the reason (seen with
+//! `--nocapture`) and passes, unless `AGTERM_REQUIRE_DISPLAY_TESTS` is set, as CI sets it: then it fails. The GTK
+//! forwarding checks need a GTK build of agterm (the Linux fork, or this repository's before the switch to GPUI) named
+//! by `AGTERM_GTK_BIN`, which nothing here builds: without one they skip, required or not. The nested-niri check is
+//! `#[ignore]`d (CI has no niri): run it with `--ignored`.
 
 #[macro_use]
 mod support;
@@ -25,13 +27,16 @@ const STARTUP_ID: &str = "agterm-test-launch_TIME4242";
 /// The startup id of a primary's own launch.
 const PRIMARY_STARTUP_ID: &str = "agterm-test-primary_TIME777";
 
-/// The GTK build's binary beside this one (`cargo build -p agterm-gtk`), or `AGTERM_GTK_BIN`.
+/// A GTK build of agterm sharing the app id's protocol (`org.gtk.Application` on the bus name): `AGTERM_GTK_BIN`.
 fn gtk_build() -> Option<PathBuf> {
     std::env::var_os("AGTERM_GTK_BIN")
         .map(PathBuf::from)
-        .or_else(|| Some(PathBuf::from(support::GPUI).with_file_name("agterm")))
         .filter(|path| path.is_file())
 }
+
+/// Why a GTK forwarding check did not run: no GTK build is a choice of the run, never a missing tool, so it skips even
+/// where the display tests are required.
+const NO_GTK_BUILD: &str = "no GTK build of agterm (AGTERM_GTK_BIN)";
 
 /// Starts the primary on the sandbox's display (none: headless) and waits until it owns its name and serves.
 fn start_primary(sandbox: &mut Sandbox) -> TestResult<usize> {
@@ -183,7 +188,8 @@ fn without_a_session_bus_the_launch_runs_alone() -> TestResult {
 #[test]
 fn a_gtk_build_launch_forwards_to_the_gpui_primary() -> TestResult {
     let Some(gtk) = gtk_build() else {
-        skip!("no GTK build beside {} (cargo build -p agterm-gtk)", support::GPUI);
+        eprintln!("SKIPPED: {NO_GTK_BUILD}");
+        return Ok(());
     };
     let mut sandbox = Sandbox::new()?;
     let primary = start_primary(&mut sandbox)?;
@@ -206,7 +212,8 @@ fn a_gtk_build_launch_forwards_to_the_gpui_primary() -> TestResult {
 #[test]
 fn a_gpui_launch_forwards_to_a_gtk_primary() -> TestResult {
     let Some(gtk) = gtk_build() else {
-        skip!("no GTK build beside {} (cargo build -p agterm-gtk)", support::GPUI);
+        eprintln!("SKIPPED: {NO_GTK_BUILD}");
+        return Ok(());
     };
     if seated_weston().is_none() {
         skip!("{NO_SEATED_WESTON}, for the GTK primary");
@@ -407,7 +414,7 @@ fn x11_launches_carry_their_startup_time_and_end_their_sequences() -> TestResult
         );
         assert_x11_activation(&root, &app_id)?;
     } else {
-        support::skip_part(&format!("no GTK build beside {}", support::GPUI));
+        eprintln!("SKIPPED (part): {NO_GTK_BUILD}");
     }
     sandbox.terminate(primary)?;
     assert_eq!(sandbox.wait_exit(primary, Duration::from_secs(10))?.0.code(), Some(0));
@@ -503,7 +510,7 @@ fn a_launchers_token_raises_the_primary_under_a_nested_niri() -> TestResult {
         niri_spawn(&sandbox, &["/usr/bin/env", "GDK_BACKEND=wayland", &gtk])?;
         wait_focused(&sandbox, &app_id)?;
     } else {
-        support::skip_part(&format!("no GTK build beside {}", support::GPUI));
+        eprintln!("SKIPPED (part): {NO_GTK_BUILD}");
     }
     Ok(())
 }

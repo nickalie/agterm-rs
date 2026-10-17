@@ -1,8 +1,8 @@
-# The Rust workspace on Linux: format, strict clippy, the lint report and cargo test over the vendored libghostty.
-# Then the staged build under the conformance suite, once the cargo job passes. The WPE WebKit crates (the -sys crates
-# and agterm-wpe) and the GPUI frontend's HTML overlays over them need a WPE WebKit Ubuntu does not package: the Ubuntu
-# jobs build the workspace without them and the GPUI frontend without the overlays (WORKSPACE_WITHOUT_WPE and
-# GPUI_WITHOUT_HTML in scripts/lib/native.sh), the wpe job checks them on Arch, and conformance-gpui runs there too.
+# The Rust workspace on Linux: format, strict clippy, the lint report and cargo test. Then the staged build under the
+# conformance suite, once the cargo job passes. The WPE WebKit crates (the -sys crates and agterm-wpe) and the app's
+# HTML overlays over them need a WPE WebKit Ubuntu does not package: the Ubuntu job builds the workspace without them
+# and the app without the overlays (WORKSPACE_WITHOUT_WPE and GPUI_WITHOUT_HTML in scripts/lib/native.sh), the wpe job
+# checks them on Arch, and the conformance jobs run there too.
 name: rust-linux
 
 on:
@@ -29,7 +29,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
+            pkg-config libfontconfig-dev libfreetype-dev \
             meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
             curl xz-utils patch ncurses-bin fish fontconfig fonts-dejavu-core \
             dbus-daemon weston xvfb libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers \
@@ -48,7 +48,7 @@ jobs:
         run: |
           source scripts/lib/native.sh
           arch="$(host_zig_arch)"
-          for build in GHOSTTY LIBGHOSTTY_VT ZMX; do
+          for build in LIBGHOSTTY_VT ZMX; do
             version_var="${build}_ZIG_VERSION"
             sha_var="${build}_ZIG_SHA256_${arch^^}"
             mkdir -p "$VENDOR_ROOT"
@@ -56,24 +56,17 @@ jobs:
             zig="$(find_zig "${!version_var}" "${!sha_var}" "")"
             echo "$build: $zig"
           done
-      - name: libghostty prefix
-        run: scripts/build-ghostty.sh
-      # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds
+      # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds; Ghostty's resources beside it
       - name: libghostty-vt prefix
         run: scripts/build-ghostty-vt.sh
       # the fonts Ghostty embeds, which agterm-gpui (built with the workspace) embeds too
       - name: terminal fonts
         run: scripts/fetch-fonts.sh
-      # the pinned gtk4-layer-shell (Ubuntu 26.04's libgtk4-layer-shell-dev is the same 1.3.0, 24.04 has none); cargo
-      # finds the prefix through scripts/pkg-config.sh.
-      - name: gtk4-layer-shell prefix
-        run: scripts/build-layer-shell.sh
-      # built here so the vendor cache this job saves holds it; the conformance job only restores that cache
+      # built here so the vendor cache this job saves holds it
       - name: zmx prefix
         run: scripts/build-zmx.sh
       # GPUI needs a seat on its headless weston, which only --fake-seat gives (weston 15.0+; Ubuntu 26.04 ships 14):
-      # the pinned weston, first on PATH, where agterm-gpui's process tests look for one taking it. Built here so the
-      # vendor cache this job saves holds it for conformance-gpui.
+      # the pinned weston, first on PATH, where agterm-gpui's process tests look for one taking it.
       - name: weston prefix (--fake-seat)
         run: echo "$(scripts/build-weston.sh)/bin" >> "$GITHUB_PATH"
       - name: format
@@ -85,8 +78,8 @@ jobs:
         run: scripts/vendor-calloop.sh --check
       - name: vendored GPUI (external surfaces patch)
         run: scripts/vendor-gpui.sh --check
-      # the workspace without what links WPE WebKit, which the Arch jobs check, then the GPUI frontend without its HTML
-      # overlays (its own invocation: --all-features would turn them back on)
+      # the workspace without what links WPE WebKit, which the Arch jobs check, then the app without its HTML overlays
+      # (its own invocation: --all-features would turn them back on)
       - name: clippy
         shell: bash
         run: |
@@ -98,9 +91,9 @@ jobs:
         run: scripts/lint-report.sh | tee -a "$GITHUB_STEP_SUMMARY"
       # fish is installed above so the fish replay script's unit test runs against a real fish parser
       # agterm-gpui's process tests run on their own private bus, headless weston and Xvfb, rendering on lavapipe
-      # (mesa-vulkan-drivers), and forward to and from the GTK build's binary: none may skip here (only the nested-niri
-      # check is #[ignore]d, no niri on Ubuntu). They run without the HTML overlays here; the conformance-gpui job runs
-      # the instance tests again with them, on Arch.
+      # (mesa-vulkan-drivers): none may skip here (only the nested-niri check is #[ignore]d, no niri on Ubuntu, and the
+      # GTK forwarding checks, which need a GTK build of agterm that nothing here builds). They run without the HTML
+      # overlays here; the bash conformance job runs the instance tests again with them, on Arch.
       # agterm-gpui's external texture test imports synthetic dmabufs from udmabuf on lavapipe; required here like
       # the display tests, so the device must be there
       - name: udmabuf for the external texture test
@@ -113,15 +106,14 @@ jobs:
           AGTERM_REQUIRE_DISPLAY_TESTS: "1"
         run: |
           source scripts/lib/native.sh
-          cargo build -p agterm-gtk
           cargo test "${WORKSPACE_WITHOUT_WPE[@]}"
           cargo test "${GPUI_WITHOUT_HTML[@]}"
 
-  # The WPE WebKit -sys crates (gir bindings of the GPUI frontend's HTML engine) against the distro package they are
-  # generated from: Arch's wpewebkit at WPE_VERSION (build/pins.env), installed from a date-pinned Arch Linux Archive
-  # snapshot in a digest-pinned archlinux container (Ubuntu packages no wpewebkit at all); then the checked-in bindings
-  # must equal a regeneration at the pins. Bump ARCH_SNAPSHOT (a day whose extra repo carries the pinned wpewebkit) and
-  # the image digest with the WPE_ pins.
+  # The WPE WebKit -sys crates (gir bindings of the app's HTML engine) against the distro package they are generated
+  # from: Arch's wpewebkit at WPE_VERSION (build/pins.env), installed from a date-pinned Arch Linux Archive snapshot in
+  # a digest-pinned archlinux container (Ubuntu packages no wpewebkit at all); then the checked-in bindings must equal a
+  # regeneration at the pins. Bump ARCH_SNAPSHOT (a day whose extra repo carries the pinned wpewebkit) and the image
+  # digest with the WPE_ pins.
   wpe:
     runs-on: ubuntu-26.04
     timeout-minutes: 90
@@ -164,10 +156,10 @@ jobs:
         run: cargo test -p agterm-wpe -p agterm-wpe-sys -p agterm-wpe-platform-sys -p agterm-wpe-javascriptcore-sys
       - name: the bindings are a regeneration at the pins
         run: scripts/gen-wpe-bindings.sh --check
-      # The GPUI frontend with its HTML overlays (feature `html`, the default): its clippy, its unit tests and the
-      # headless page harness (the real engine on lavapipe, in SHM: no render node here). It links the static
-      # libghostty-vt and embeds the terminal fonts, which the scripts build and fetch (their own pinned Zig).
-      - name: what the GPUI frontend builds on
+      # The app with its HTML overlays (feature `html`, the default): its clippy, its unit tests and the headless page
+      # harness (the real engine on lavapipe, in SHM: no render node here). It links the static libghostty-vt and
+      # embeds the terminal fonts, which the scripts build and fetch (their own pinned Zig).
+      - name: what the app builds on
         run: |
           pacman -S --noconfirm --needed curl xz patch vulkan-swrast mesa
           scripts/build-ghostty-vt.sh
@@ -180,284 +172,38 @@ jobs:
           cargo test -p agterm-gpui --lib
           AGTERM_REQUIRE_DISPLAY_TESTS=1 cargo test -p agterm-gpui --test html_overlay
 
-  # The staged build under the suite, each instance on its own headless weston and session bus (run-rust-linux.sh).
-  # The runner's login shell is bash, so the build claims `live-any-shell` (Live sessions in bash, a Rust-only
-  # extension) and every test requiring it must pass.
+  # The staged build under the suite (run-rust-linux.sh: each instance on its own headless weston and session bus),
+  # held by conformance/rust-passing.txt, once per login shell. Its HTML overlays run on WPE WebKit, which Ubuntu does
+  # not package, so the jobs run in the wpe job's Arch container (the same digest and Arch Linux Archive snapshot),
+  # privileged so WebKit's bubblewrap sandbox gets its user namespaces, with an init that reaps what the suite's
+  # instances leave. The build renders on lavapipe only: scripts/fetch-lavapipe.sh finds the distribution's
+  # (vulkan-swrast) and the harness makes it the only Vulkan driver; its weston gets --fake-seat
+  # (scripts/build-weston.sh builds the pinned one where Arch's lacks it). The app and the harness read the password
+  # database's login shell, never $SHELL:
+  # - bash: the build claims `live-any-shell` (Live sessions in bash, a Rust-only extension) and every test requiring
+  #   it must pass; the process tests (single instance, activation, the quit save on SIGTERM, privileges) run here
+  #   again with the HTML overlays on.
+  # - zsh: Live sessions run only for a zsh login shell (the references wrap a pane in zmx only then), so the build
+  #   claims `live-sessions` too and the live tests run: `--must-pass live-sessions` (every test the references hold
+  #   to Live sessions) and `--must-pass live-any-shell`.
+  # - fish: the other half of the Rust-only `live-any-shell` extension.
   conformance:
     needs: rust-linux
     runs-on: ubuntu-26.04
-    timeout-minutes: 90
-    env:
-      CARGO_TERM_COLOR: always
-    steps:
-      - uses: actions/checkout@v7
-      - name: system packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
-            meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
-            curl xz-utils patch ncurses-bin \
-            weston dbus-daemon libgl1-mesa-dri libegl-mesa0
-      - name: rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-      # Saved by the rust-linux job; on a miss build-ghostty.sh fetches its pinned Zig itself.
-      - uses: actions/cache@v6
-        with:
-          path: ~/.cache/agterm-rs/vendor
-          key: vendor-${{ runner.os }}-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
-      - name: libghostty prefix
-        run: scripts/build-ghostty.sh
-      # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds
-      - name: libghostty-vt prefix
-        run: scripts/build-ghostty-vt.sh
-      # the fonts Ghostty embeds, which agterm-gpui (built with the workspace) embeds too
-      - name: terminal fonts
-        run: scripts/fetch-fonts.sh
-      - name: gtk4-layer-shell prefix
-        run: scripts/build-layer-shell.sh
-      # stage.sh stages bin/zmx from this prefix, restored from the cache the rust-linux job saved
-      - name: zmx prefix
-        run: scripts/build-zmx.sh
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.14"
-      - name: install the suite
-        run: python -m pip install -e conformance
-      # WebKit runs its web process inside bubblewrap, which needs an unprivileged user namespace; the runner's
-      # AppArmor (kernel.apparmor_restrict_unprivileged_userns=1, Ubuntu's default since 24.04, left on) grants one
-      # only under a profile with `userns`. The profile attaches to the binary the suite launches, which
-      # run-rust-linux.sh stages at this path; without it agterm refuses every HTML page and the HTML tests fail.
-      - name: AppArmor profile for WebKit's sandbox
-        run: |
-          sysctl kernel.apparmor_restrict_unprivileged_userns
-          scripts/install-apparmor-profile.sh "$GITHUB_WORKSPACE/target/conformance-stage/bin/agterm"
-      # Spike: can headless weston's GL backend host libghostty here? A failure stops the job before the full run.
-      # `version` answers without a GL context, so the probe then requires a created surface and its first frame.
-      - name: spike, version under headless weston
-        run: conformance/tools/run-rust-linux.sh --out conformance/reports/rust-linux-spike -- -k test_version
-      - name: spike, a libghostty surface draws under headless weston
-        shell: bash
-        run: |
-          status=0
-          python conformance/tools/ghostty_probe.py > "$RUNNER_TEMP/ghostty-probe.json" || status=$?
-          cat "$RUNNER_TEMP/ghostty-probe.json"
-          {
-            echo '### libghostty probe'
-            echo '```json'
-            cat "$RUNNER_TEMP/ghostty-probe.json"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit "$status"
-      # The title bar, the sidebar and the terminal draw one color, the theme's background, and the sidebar tint washes
-      # the sidebar alone: screenshots of the real app's maximized window (its weston started with --debug).
-      - name: the window chrome takes the terminal's colors
-        shell: bash
-        run: |
-          status=0
-          python conformance/tools/chrome_probe.py > "$RUNNER_TEMP/chrome-probe.json" || status=$?
-          cat "$RUNNER_TEMP/chrome-probe.json"
-          {
-            echo '### chrome probe'
-            echo '```json'
-            cat "$RUNNER_TEMP/chrome-probe.json"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit "$status"
-      # the app and the harness read the password database, never $SHELL
-      - name: the login shell (bash)
-        run: getent passwd "$USER"
-      # Exits with the ratchet's status; check_ratchet.py lists the newly green ids in the job summary.
-      - name: full suite (protocol, cli, behaviors)
-        run: conformance/tools/run-rust-linux.sh -- --must-pass live-any-shell
-      - name: reports into the summary
-        if: always()
-        shell: bash
-        run: |
-          for report in conformance/reports/rust-linux-spike/report.md conformance/reports/rust-linux/report.md; do
-            if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
-          done
-      - name: upload the reports
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: rust-linux-conformance
-          path: |
-            conformance/reports/rust-linux/
-            conformance/reports/rust-linux-spike/
-          if-no-files-found: warn
-
-  # Live sessions run only for a zsh password-database login shell (the references wrap a pane in zmx only then), so
-  # this is the suite again with the runner's login shell switched to zsh: the build claims `live-sessions` and the
-  # live tests run. `--must-pass live-sessions` (every test the references hold to Live sessions) and
-  # `--must-pass live-any-shell` (the Rust-only extension, claimed for zsh too).
-  conformance-zsh:
-    needs: rust-linux
-    runs-on: ubuntu-26.04
-    timeout-minutes: 90
-    env:
-      CARGO_TERM_COLOR: always
-    steps:
-      - uses: actions/checkout@v7
-      - name: system packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
-            meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
-            curl xz-utils patch ncurses-bin \
-            weston dbus-daemon libgl1-mesa-dri libegl-mesa0 zsh
-      # the app and the harness read the password database, never $SHELL
-      - name: zsh as the login shell
-        run: |
-          sudo chsh -s "$(command -v zsh)" "$USER"
-          getent passwd "$USER"
-      # Ubuntu's /etc/zsh/zshrc runs compinit in every interactive zsh, and compinit stops at "Ignore insecure
-      # directories and continue [y] or abort compinit [n]?" when compaudit finds a group- or world-writable directory
-      # in $fpath (or its parent) on the runner image: the prompt eats the first line a test types into a live pane.
-      # zsh's own remedy: take the write bits off what compaudit lists; the second compaudit fails the step on any left.
-      - name: zsh trusts its function directories
-        run: |
-          zsh -fc 'autoload -Uz compaudit; compaudit' | tee /dev/stderr | xargs -r sudo chmod g-w,o-w
-          zsh -fc 'autoload -Uz compaudit; compaudit'
-      - name: rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v6
-        with:
-          path: ~/.cache/agterm-rs/vendor
-          key: vendor-${{ runner.os }}-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
-      - name: libghostty prefix
-        run: scripts/build-ghostty.sh
-      # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds
-      - name: libghostty-vt prefix
-        run: scripts/build-ghostty-vt.sh
-      # the fonts Ghostty embeds, which agterm-gpui (built with the workspace) embeds too
-      - name: terminal fonts
-        run: scripts/fetch-fonts.sh
-      - name: gtk4-layer-shell prefix
-        run: scripts/build-layer-shell.sh
-      # stage.sh stages bin/zmx from this prefix, restored from the cache the rust-linux job saved
-      - name: zmx prefix
-        run: scripts/build-zmx.sh
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.14"
-      - name: install the suite
-        run: python -m pip install -e conformance
-      # WebKit runs its web process inside bubblewrap, which needs an unprivileged user namespace; the runner's
-      # AppArmor (kernel.apparmor_restrict_unprivileged_userns=1, Ubuntu's default since 24.04, left on) grants one
-      # only under a profile with `userns`. The profile attaches to the binary the suite launches, which
-      # run-rust-linux.sh stages at this path; without it agterm refuses every HTML page and the HTML tests fail.
-      - name: AppArmor profile for WebKit's sandbox
-        run: |
-          sysctl kernel.apparmor_restrict_unprivileged_userns
-          scripts/install-apparmor-profile.sh "$GITHUB_WORKSPACE/target/conformance-stage/bin/agterm"
-      # Exits with the ratchet's status; check_ratchet.py lists the newly green (live) ids in the job summary.
-      - name: full suite under a zsh login shell (protocol, cli, behaviors)
-        run: >-
-          conformance/tools/run-rust-linux.sh --out conformance/reports/rust-linux-zsh --
-          --must-pass live-sessions --must-pass live-any-shell
-      - name: report into the summary
-        if: always()
-        shell: bash
-        run: |
-          report=conformance/reports/rust-linux-zsh/report.md
-          if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
-      - name: upload the report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: rust-linux-conformance-zsh
-          path: conformance/reports/rust-linux-zsh/
-          if-no-files-found: warn
-
-  # The suite again under a fish login shell: Live sessions in fish are the other half of the Rust-only
-  # `live-any-shell` extension (bash is the default job's), so every test requiring it must pass here too.
-  conformance-fish:
-    needs: rust-linux
-    runs-on: ubuntu-26.04
-    timeout-minutes: 90
-    env:
-      CARGO_TERM_COLOR: always
-    steps:
-      - uses: actions/checkout@v7
-      - name: system packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
-            meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
-            curl xz-utils patch ncurses-bin \
-            weston dbus-daemon libgl1-mesa-dri libegl-mesa0 fish
-      # the app and the harness read the password database, never $SHELL
-      - name: fish as the login shell
-        run: |
-          sudo chsh -s "$(command -v fish)" "$USER"
-          getent passwd "$USER"
-      - name: rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v6
-        with:
-          path: ~/.cache/agterm-rs/vendor
-          key: vendor-${{ runner.os }}-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
-      - name: libghostty prefix
-        run: scripts/build-ghostty.sh
-      # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds
-      - name: libghostty-vt prefix
-        run: scripts/build-ghostty-vt.sh
-      # the fonts Ghostty embeds, which agterm-gpui (built with the workspace) embeds too
-      - name: terminal fonts
-        run: scripts/fetch-fonts.sh
-      - name: gtk4-layer-shell prefix
-        run: scripts/build-layer-shell.sh
-      # stage.sh stages bin/zmx from this prefix, restored from the cache the rust-linux job saved
-      - name: zmx prefix
-        run: scripts/build-zmx.sh
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.14"
-      - name: install the suite
-        run: python -m pip install -e conformance
-      # WebKit runs its web process inside bubblewrap, which needs an unprivileged user namespace; the runner's
-      # AppArmor (kernel.apparmor_restrict_unprivileged_userns=1, Ubuntu's default since 24.04, left on) grants one
-      # only under a profile with `userns`. The profile attaches to the binary the suite launches, which
-      # run-rust-linux.sh stages at this path; without it agterm refuses every HTML page and the HTML tests fail.
-      - name: AppArmor profile for WebKit's sandbox
-        run: |
-          sysctl kernel.apparmor_restrict_unprivileged_userns
-          scripts/install-apparmor-profile.sh "$GITHUB_WORKSPACE/target/conformance-stage/bin/agterm"
-      # Exits with the ratchet's status; check_ratchet.py lists the newly green ids in the job summary.
-      - name: full suite under a fish login shell (protocol, cli, behaviors)
-        run: conformance/tools/run-rust-linux.sh --out conformance/reports/rust-linux-fish -- --must-pass live-any-shell
-      - name: report into the summary
-        if: always()
-        shell: bash
-        run: |
-          report=conformance/reports/rust-linux-fish/report.md
-          if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
-      - name: upload the report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: rust-linux-conformance-fish
-          path: conformance/reports/rust-linux-fish/
-          if-no-files-found: warn
-
-  # The GPUI frontend's build under the suite, held by its own ratchet (conformance/rust-gpui-passing.txt) while both
-  # frontends coexist. Its HTML overlays run on WPE WebKit, which Ubuntu does not package, so the job runs in the wpe
-  # job's Arch container (the same digest and Arch Linux Archive snapshot), privileged so WebKit's bubblewrap sandbox
-  # gets its user namespaces, with an init that reaps what the suite's instances leave. It renders on lavapipe only:
-  # scripts/fetch-lavapipe.sh finds the distribution's (vulkan-swrast) and the harness makes it the only Vulkan driver;
-  # its weston gets --fake-seat (scripts/build-weston.sh builds the pinned one where Arch's lacks it). The GPUI process
-  # tests (single instance, activation, the quit save on SIGTERM) run here again with the HTML overlays on, beside the
-  # GTK build they forward to and from.
-  conformance-gpui:
-    needs: rust-linux
-    runs-on: ubuntu-26.04
     timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shell: bash
+            out: rust-linux
+            must-pass: --must-pass live-any-shell
+          - shell: zsh
+            out: rust-linux-zsh
+            must-pass: --must-pass live-sessions --must-pass live-any-shell
+          - shell: fish
+            out: rust-linux-fish
+            must-pass: --must-pass live-any-shell
     container:
       # archlinux:base-devel-20261011.0.609700
       image: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
@@ -471,11 +217,11 @@ jobs:
           echo "Server = https://archive.archlinux.org/repos/$ARCH_SNAPSHOT/\$repo/os/\$arch" > /etc/pacman.d/mirrorlist
           pacman -Syyuu --noconfirm
           pacman -S --noconfirm --needed git rustup wpewebkit bubblewrap \
-            gtk4 libadwaita webkitgtk-6.0 meson ninja wayland wayland-protocols libxkbcommon libxcb \
+            meson ninja wayland wayland-protocols libxkbcommon libxcb \
             curl xz patch ncurses fontconfig ttf-dejavu procps-ng \
             weston dbus xorg-server-xvfb mesa vulkan-swrast \
             pixman libinput libevdev libdrm cairo pango libpng hwdata seatd lcms2 \
-            python
+            python zsh fish
       - uses: actions/checkout@v7
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
@@ -484,16 +230,12 @@ jobs:
         with:
           path: ~/.cache/agterm-rs/vendor
           key: vendor-arch-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
-      # the stage's terminfo, themes and shell integration still come from the libghostty prefix; the GTK build the
-      # GPUI process tests forward to links it
-      - name: libghostty prefix
-        run: scripts/build-ghostty.sh
+      # with the stage's terminfo, themes and shell integration (Ghostty's at the same pin)
       - name: libghostty-vt prefix
         run: scripts/build-ghostty-vt.sh
       - name: terminal fonts
         run: scripts/fetch-fonts.sh
-      - name: gtk4-layer-shell prefix
-        run: scripts/build-layer-shell.sh
+      # stage.sh stages bin/zmx from this prefix
       - name: zmx prefix
         run: scripts/build-zmx.sh
       - name: weston with --fake-seat
@@ -504,36 +246,57 @@ jobs:
           fi
       - name: lavapipe (the distribution's)
         run: scripts/fetch-lavapipe.sh
-      # the app and the harness read the password database, never $SHELL
-      - name: the login shell (bash)
-        run: getent passwd "$(id -un)"
+      - name: ${{ matrix.shell }} as the login shell
+        shell: bash
+        run: |
+          usermod --shell "$(command -v ${{ matrix.shell }})" "$(id -un)"
+          getent passwd "$(id -un)"
       # instance: forwarding, activation and the SIGTERM quit; privileges: the app, a Live pane and its session keep
       # the user's privileges while a page runs (with the system's wpewebkit the engine runs in process here)
-      - name: the GPUI process tests with the HTML overlays
+      - name: the process tests with the HTML overlays
+        if: matrix.shell == 'bash'
         env:
           AGTERM_REQUIRE_DISPLAY_TESTS: "1"
-        run: |
-          cargo build -p agterm-gtk
-          cargo test -p agterm-gpui --test instance --test privileges
+        run: cargo test -p agterm-gpui --test instance --test privileges
       - name: install the suite
         run: |
           python -m venv /opt/suite
           /opt/suite/bin/pip install -e conformance
       # Exits with the ratchet's status; check_ratchet.py lists the newly green ids in the job summary.
-      - name: full suite on the GPUI build (protocol, cli, behaviors)
+      - name: full suite under a ${{ matrix.shell }} login shell (protocol, cli, behaviors)
         env:
           PYTHON: /opt/suite/bin/python
-        run: conformance/tools/run-rust-linux.sh --frontend gpui
+        run: >-
+          conformance/tools/run-rust-linux.sh --out conformance/reports/${{ matrix.out }} --
+          ${{ matrix.must-pass }}
+      # On the stage the suite ran: the terminal surface draws its first frame, a page loads in WPE WebKit's sandbox,
+      # and the title bar, the sidebar and the terminal draw one color, the theme's background, with the sidebar tint
+      # washing the sidebar alone (screenshots of the maximized window, its weston started with --debug).
+      - name: probes (terminal frame, web process, window chrome)
+        if: matrix.shell == 'bash'
+        shell: bash
+        run: |
+          status=0
+          for probe in ghostty_probe webkit_probe chrome_probe; do
+            /opt/suite/bin/python "conformance/tools/$probe.py" > "$RUNNER_TEMP/$probe.json" || status=1
+            {
+              echo "### $probe"
+              echo '```json'
+              cat "$RUNNER_TEMP/$probe.json"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
+          exit "$status"
       - name: report into the summary
         if: always()
         shell: bash
         run: |
-          report=conformance/reports/rust-gpui-linux/report.md
+          report=conformance/reports/${{ matrix.out }}/report.md
           if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
       - name: upload the report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: rust-gpui-linux-conformance
-          path: conformance/reports/rust-gpui-linux/
+          name: ${{ matrix.out }}-conformance
+          path: conformance/reports/${{ matrix.out }}/
           if-no-files-found: warn

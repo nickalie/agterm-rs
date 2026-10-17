@@ -1,4 +1,4 @@
-//! Reading config text and files as libghostty does at `GHOSTTY_REV`: `cli/args.zig`'s `LineIterator` (one
+//! Reading config text and files as libghostty does at `LIBGHOSTTY_VT_REV`: `cli/args.zig`'s `LineIterator` (one
 //! `key = value` per line, trimmed, `#` comments, surrounding quotes dropped from the value; a UTF-8 BOM skipped in
 //! config files and includes as `Config.loadReader` does, not in themes, which `loadTheme` reads without it), each
 //! line checked as it is read, path values made absolute against the file that sets them (`Config.expandPaths`),

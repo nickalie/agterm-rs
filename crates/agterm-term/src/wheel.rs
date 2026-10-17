@@ -1,4 +1,4 @@
-//! The mouse wheel, routed as Ghostty's `Surface.scrollCallback` routes it (`GHOSTTY_REV`), once the frontend has
+//! The mouse wheel, routed as Ghostty's `Surface.scrollCallback` routes it (`LIBGHOSTTY_VT_REV`), once the frontend has
 //! turned its scroll deltas into whole steps (Ghostty accumulates precise scrolling per cell and applies
 //! `mouse-scroll-multiplier` first):
 //!

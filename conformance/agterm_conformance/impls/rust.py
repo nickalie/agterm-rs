@@ -1,4 +1,5 @@
-"""The Rust build: it reports its own parity level and capabilities on `version`; GTK or GPUI frontend."""
+"""The Rust build: it reports its own parity level and capabilities on `version`; its GPUI frontend renders through
+Vulkan, on lavapipe only, and needs a seat on its compositor."""
 
 from __future__ import annotations
 
@@ -24,12 +25,6 @@ from agterm_conformance.impls.base import (
 # `version` -> result.conformance = {"parityLevel": "0.36.0", "capabilities": ["posix-shell", ...]}.
 # Optional: a build without it, like a run without a binary, is below every level.
 CONFORMANCE_FIELD = "conformance"
-# The Rust build's two frontends while both coexist (`--rust-frontend`): the GTK one (`agterm`) and the GPUI one
-# (`agterm-gpui`), which renders through Vulkan, on lavapipe only, and needs a seat on its compositor.
-GTK, GPUI = "gtk", "gpui"
-FRONTENDS = (GTK, GPUI)
-DEFAULT_FRONTEND = GTK
-
 
 class ProfileError(ValueError):
     pass
@@ -60,25 +55,19 @@ class RustAdapter(Adapter):
     needs_app_id = sys.platform.startswith("linux")
     needs_runtime_dir = sys.platform.startswith("linux")
 
-    def __init__(self, bin: Path | None, ctl: Path | None = None, frontend: str = DEFAULT_FRONTEND) -> None:
-        if frontend not in FRONTENDS:
-            raise ValueError(f"unknown Rust frontend {frontend!r} (one of: {', '.join(FRONTENDS)})")
+    def __init__(self, bin: Path | None, ctl: Path | None = None) -> None:
         super().__init__(bin, ctl)
-        self.frontend = frontend
         self._profile: Profile | None = None
         self._probe_error: Exception | None = None
 
     def weston_args(self) -> tuple[str, ...]:
-        if self.frontend == GPUI:
-            # through the module: the self-tests swap in their fake weston there
-            base.require_fake_seat(base.compositor_program())
-            return (*super().weston_args(), FAKE_SEAT_ARG)
-        return super().weston_args()
+        # through the module: the self-tests swap in their fake weston there
+        base.require_fake_seat(base.compositor_program())
+        return (*super().weston_args(), FAKE_SEAT_ARG)
 
     def platform_env(self, env: dict[str, str]) -> None:
         super().platform_env(env)
-        if self.frontend == GPUI:
-            software_rendering_env(env, lavapipe_icd())
+        software_rendering_env(env, lavapipe_icd())
 
     @property
     def profile(self) -> Profile:

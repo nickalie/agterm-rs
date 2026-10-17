@@ -20,7 +20,7 @@ disagree, the code wins: check with `ls`/`grep` before naming a Rust file in the
 |---|---|---|---|
 | protocol | `agtermCore/Sources/agtermCore/Control*.swift`, `ControlDispatcher.swift` | `agterm-proto` (`command.rs`, `request.rs`, `result.rs`, `events.rs`, `tree.rs`), `agterm-core/src/dispatch.rs`, `projection.rs` | new or renamed wire commands, args, result fields, tree fields, events, mode changes (`ControlModes.swift`: request vs stream), options parsing (`ControlDispatcherOptions.swift`) |
 | dispatcher | `ControlDispatcher+<Group>.swift` | `agterm-core/src/commands/<group>.rs` (+ `commands/tests/`) | validation order, refusal strings, defaults, read-back |
-| app-control | `agterm/Control/ControlServer+<Group>.swift`, `ControlServer.swift` | `agterm-gtk` (the GTK side of the group) and `agterm-server` (socket: listen backlog, connection handling) | what the app does once the dispatcher accepted a command; socket-level changes |
+| app-control | `agterm/Control/ControlServer+<Group>.swift`, `ControlServer.swift` | `agterm-gpui` (the app side of the group) and `agterm-server` (socket: listen backlog, connection handling) | what the app does once the dispatcher accepted a command; socket-level changes |
 | cli | `agtermCore/Sources/agtermctlKit/*` | `agterm-ctl/src/<group>.rs`, `usage.rs`, `output.rs`, `socket.rs`, `client.rs` | subcommands, flags, help text, output format, exit codes, retry/backoff, local (no-socket) commands |
 | core | other `agtermCore/Sources/agtermCore/*` | `agterm-core/src/*` (model, persist, keymap, hooks, settings_model, remote, hud, palette, ...) | model and store behavior, and every on-disk format (`settings.json`, `windows.json`, keymap/hooks files, `remotes.conf`, `restore-denylist.conf`, ...): the format is part of the contract, the suite reads it back |
 
@@ -44,8 +44,8 @@ that group's change touches. The per-commit block in the classify report ("Commi
 ## UI
 
 `agterm/Views/*`, `agterm/Ghostty/*`, `agterm/*.swift` (menus, app actions, settings model), `agterm/Commands/*`,
-`agterm/Notifications/*` map to `agterm-gtk` in GTK4/libadwaita idioms. The suite cannot see this UI on Linux, so
-each UI change becomes a row (new or updated) in `docs/linux-ui-checklist.md` with its GTK form and manual check,
+`agterm/Notifications/*` map to `agterm-gpui` in GPUI idioms. The suite cannot see this UI on Linux, so
+each UI change becomes a row (new or updated) in `docs/linux-ui-checklist.md` with its GPUI form and manual check,
 plus Rust unit tests where the logic lives in `agterm-core` (palette, keymap, settings model, link policy...).
 Platform-only changes (an AppKit workaround, Finder reveal, a macOS keyboard-layout API) still need a decision:
 the Linux equivalent, or a recorded "no Linux counterpart" in the checklist.
@@ -58,16 +58,17 @@ the Linux equivalent, or a recorded "no Linux counterpart" in the checklist.
 |---|---|---|
 | `agterm/Resources/agent-status/` | `resources/agent-status/` | carries Linux glue (the Codex adapter reads JSON with python3/jq); a conflict there is a manual merge keeping it |
 | `plugins/agterm/skills/agterm/` | `resources/skills/agterm/` | the agent skill the app installs |
-| `agterm/Resources/hud/` | `crates/agterm-gtk/resources/hud/` | `hud.sh`, included with `include_str!` |
+| `agterm/Resources/hud/` | `crates/agterm-gpui/resources/hud/` | `hud.sh`, included with `include_str!` |
 | `agterm/Resources/custom-themes/` | `build/themes/` | agterm's own themes |
 | `agterm/Resources/ghostty-defaults.conf` | `crates/agterm-core/src/ghostty_config/ghostty-defaults.conf` | adapted (Linux chords, comments): usually a conflict, merge the setting, keep the Linux binds |
 | `scripts/zmx-patches/*.patch` (+ `ghostty/`) | `build/patches/zmx/` | upstream's own zmx patches; a change rebuilds zmx. `0003-first-attach-snapshot.patch` is this repository's own (no upstream counterpart): keep it, and re-check that it applies after upstream's |
 | `LICENSE` | `resources/LICENSE.upstream` | |
-| `scripts/setup.sh` (`GHOSTTY_REV`, `ZMX_REV`) | `build/pins.env` | via `pins-delta.sh`; Zig version from each rev's `build.zig.zon`, sums from ziglang.org |
+| `scripts/setup.sh` (`ZMX_REV`) | `build/pins.env` | via `pins-delta.sh`; Zig version from the rev's `build.zig.zon`, sums from ziglang.org |
+| `scripts/setup.sh` (`GHOSTTY_REV`) | none | not a pin here: the Ghostty pin is `LIBGHOSTTY_VT_REV` (ghostty main), `pins-delta.sh` reports upstream's move |
 
-`build/patches/ghostty/*.patch` are this repository's own Linux patches (embedded OpenGL, input handoff,
-resources, GPU release), not upstream's: a `GHOSTTY_REV` move must re-apply them (`scripts/build-ghostty.sh` does,
-with `--fuzz=0`), and `scripts/gen-ghostty-bindings.sh` regenerates the checked-in bindings afterwards,
+`build/patches/ghostty-vt/*.patch` are this repository's own libghostty-vt patches (C API the app needs), not
+upstream's: a `LIBGHOSTTY_VT_REV` bump, a change of its own, re-applies them (`scripts/build-ghostty-vt.sh` does, with
+`--fuzz=0`), and `scripts/gen-ghostty-vt-bindings.sh` regenerates the checked-in bindings afterwards,
 `scripts/gen-ghostty-config-keys.sh` agterm-core's ghostty config key table.
 
 A new entry under `agterm/Resources/` (reported `unmapped`) has no copy yet: deciding where it goes is a plan task.

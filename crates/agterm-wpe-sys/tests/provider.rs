@@ -245,7 +245,7 @@ fn a_wpe_pin_bump_moves_only_the_wpe_prefix() {
 #[test]
 fn other_pin_bumps_leave_the_wpe_prefix() {
     let (wpe, _) = prefixes(str::to_owned);
-    for name in ["GIR_REV", "LIBGHOSTTY_VT_REV", "GHOSTTY_REV"] {
+    for name in ["GIR_REV", "LIBGHOSTTY_VT_REV", "ZMX_REV"] {
         let (bumped_wpe, _) = prefixes(|pins| bump(pins, name, &"0".repeat(40)));
         assert_eq!(bumped_wpe, wpe, "{name}");
     }

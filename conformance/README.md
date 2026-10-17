@@ -27,27 +27,26 @@ conformance/tools/run-reference-linux.sh [--bin PATH] [-- PYTEST_ARGS...]
 .venv/bin/python -m pytest conformance/tests --impl rust --bin <rust-binary>
 
 # the Rust build of this checkout: build, stage, protocol, cli and behaviors, then the ratchet;
-# report in conformance/reports/rust-linux/ (GTK) or conformance/reports/rust-gpui-linux/ (--frontend gpui)
-conformance/tools/run-rust-linux.sh [--frontend gtk|gpui] [--stage DIR] [-- PYTEST_ARGS...]
+# report in conformance/reports/rust-linux/
+conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
 
-# whether a WebKitGTK view's web process starts under the same headless isolation (a diagnosis; the view runs in
-# python, which agterm's AppArmor profile does not cover, so Ubuntu's userns restriction stops its sandbox); with
-# --engine wpe, whether the staged GPUI build's WPE WebKit loads a page there (its frame mode from the app's log)
-.venv/bin/python conformance/tools/webkit_probe.py [--engine webkitgtk|wpe] [--bin PATH]
+# whether the staged Rust build's WPE WebKit loads a page under the same headless isolation (a diagnosis of the web
+# process's bubblewrap sandbox; the report carries the frame mode from the app's log)
+.venv/bin/python conformance/tools/webkit_probe.py [--bin PATH]
 
-# whether the staged Rust build's terminal surface is created and draws a frame under the same isolation (a CI
-# spike; `version` alone answers without a GL context); defaults to run-rust-linux.sh's stage of the frontend
-.venv/bin/python conformance/tools/ghostty_probe.py [--frontend gtk|gpui] [--bin PATH]
+# whether the staged Rust build's terminal surface is created and draws a frame under the same isolation (`version`
+# alone answers while the terminal cannot render); defaults to run-rust-linux.sh's stage
+.venv/bin/python conformance/tools/ghostty_probe.py [--bin PATH]
 
 # whether the staged Rust build's title bar, sidebar and terminal draw one color, the terminal theme's background, and
 # a sidebar tint washes the sidebar alone: screenshots of the maximized window from the same isolation, its weston
-# started with --debug for weston-screenshooter (a Rust-build check outside the catalog); defaults to the same stage,
-# --frontend gpui to the GPUI build's (on lavapipe, through the harness's GPUI frontend)
-.venv/bin/python conformance/tools/chrome_probe.py [--frontend gtk|gpui] [--bin PATH] [--keep DIR]
+# started with --debug for weston-screenshooter (a Rust-build check outside the catalog); defaults to the same stage
+.venv/bin/python conformance/tools/chrome_probe.py [--bin PATH] [--keep DIR]
 ```
 
 `--macos-launch-mode plain` replaces the default `uitest` launch (XCUITest sentinel with zmx on).
-`--rust-frontend gpui` launches the Rust build's GPUI frontend instead of its GTK one (see Rust runner and ratchet).
+The Rust build renders on lavapipe only (see Rust runner and ratchet): its probes and the harness take the ICD manifest
+from `$CONFORMANCE_LAVAPIPE_ICD`, the probes else from `scripts/fetch-lavapipe.sh --print-icd`.
 The Rust build's side of the contract (the `version` extension, the launch environment, the capability
 vocabulary) is in [docs/rust-build.md](docs/rust-build.md).
 
@@ -130,21 +129,17 @@ conformance/tools/run-rust-linux.sh -- -k test_version       # partial run: list
   --report conformance/reports/rust-linux/nodeids.jsonl --add  # merge the newly green ids into rust-passing.txt
 conformance/tools/run-rust-linux.sh --ratchet-only \
   --also tests/protocol/test_split.py --also-k sidebar       # the listed ids plus what a task works on
-conformance/tools/run-rust-linux.sh --frontend gpui          # the GPUI build, held by rust-gpui-passing.txt
-.venv/bin/python conformance/tools/check_ratchet.py --report conformance/reports/rust-gpui-linux/nodeids.jsonl \
-  --list conformance/rust-gpui-passing.txt --add
 ```
 
-While both frontends coexist each has its own ratchet: `--frontend gpui` builds the same workspace, stages it with
-`scripts/stage.sh --frontend gpui` into `target/conformance-stage-gpui` (`bin/agterm-gpui`), runs pytest with
-`--rust-frontend gpui` and holds `rust-gpui-passing.txt`, reporting into `reports/rust-gpui-linux/`.
-The GPUI build renders through Vulkan, here on Mesa's lavapipe and nothing else: the runner takes its ICD manifest
+The build is the GPUI one (`bin/agterm`; the GTK frontend, and the GPUI ratchet kept beside its own while both
+coexisted, went with the plan's Task 34, the GPUI list folded into `rust-passing.txt`).
+It renders through Vulkan, here on Mesa's lavapipe and nothing else: the runner takes its ICD manifest
 from `scripts/fetch-lavapipe.sh` (`AGTERM_LAVAPIPE_ICD`, else the distribution's package, else the pinned Arch package
 verified and unpacked into the vendor dir) and hands it to the harness as `CONFORMANCE_LAVAPIPE_ICD`; without one the
 run exits 2.
 The adapter makes it the instance's only Vulkan driver (`VK_DRIVER_FILES`), forces GL onto llvmpipe, drops every
 inherited device selection, refuses a manifest that does not load lavapipe, and starts the instance's weston with
-`--fake-seat` (GPUI panics on a compositor without a `wl_seat`); the GTK frontend keeps its weston and environment.
+`--fake-seat` (GPUI panics on a compositor without a `wl_seat`); the fork's adapter keeps its weston and environment.
 `--fake-seat` needs weston 15.0 or later: where the weston on PATH lacks it (Ubuntu 26.04 ships 14), the runner takes
 the one `scripts/build-weston.sh` vendors, else exits 2 naming that script, and the adapter refuses such a weston with
 the same pointer. The ICD manifest must name a driver that is there.
@@ -156,7 +151,7 @@ the ratchet holds, and never removes an id.
 What breaks it is listed in [docs/rust-build.md](docs/rust-build.md) > Ratchet.
 
 A full run waits out the read-back of every red test (a GPUI run short of parity: ~47 min, almost all of it in tests
-that cannot pass yet), so `--ratchet-only` (either frontend) runs just the ids the frontend's list holds, plus each
+that cannot pass yet), so `--ratchet-only` runs just the ids the list holds, plus each
 `--also` directory, file or node-id prefix (a path outside the protocol, cli and behaviors layers is collected too)
 and each `--also-k` `-k` expression, repeatable: a task names what it is working on.
 An `--also` or `--also-k` that matches no collected test is a usage error (exit 2), unless `-k`, `-m` or node ids
@@ -165,7 +160,7 @@ narrowed the run. The plugin options behind it are `--ratchet-only LIST`, `--als
 about, and `--add` adds only ids that ran and passed. A narrower selection (`-k`, `-m` or node ids after `--`) makes
 the mode `partial`: the listed ids that did not run are not judged, so a partial run can neither break nor shrink
 the list through what it left out. The report names the mode and the suite time.
-A full run stays the default and is required at milestones: the GPUI switch (the plan's Task 34), and whenever a
+A full run stays the default and is required at milestones (the GPUI switch, the plan's Task 34, was one), and whenever a
 change touches the harness or shared crates broadly (agterm-core, -proto, -host, -server, -ctl, -zmx, -app or
 -term). Between them a task's routine run is ratchet-only; it finds newly passing ids only among its `--also`
 selections, so a task that turns on a broad area (the terminal, say) grows the list with a full run.
@@ -228,8 +223,8 @@ These runs share a machine with a live agterm, so the harness refuses a launch t
 - `reference-macos` (`macos-26`): protocol, cli and behaviors with `--must-pass live-sessions`, then the ui layer
   with `--reruns 1`, against the release named by the catalog's `upstream`.
 - `rust-linux` (`ubuntu-26.04`): the Rust workspace's format check, strict clippy, lint report (in the job summary)
-  and `cargo test`, over the vendored libghostty and gtk4-layer-shell prefixes; then the staged build under the suite,
-  held by the ratchet, once per login shell, each with `--must-pass live-any-shell`: bash (`conformance`), fish
-  (`conformance-fish`) and zsh (`conformance-zsh`, with `--must-pass live-sessions` too); and the GPUI build
-  (`conformance-gpui`, `--frontend gpui` on the distribution's lavapipe), held by `rust-gpui-passing.txt`.
+  and `cargo test`, over the vendored libghostty-vt prefix, without what links WPE WebKit; `wpe` (an Arch container):
+  the WPE crates and the app with its HTML overlays; then the staged build under the suite in the same Arch container,
+  on the distribution's lavapipe, held by the ratchet, once per login shell (`conformance`, a matrix), each with
+  `--must-pass live-any-shell`: bash, fish and zsh (with `--must-pass live-sessions` too).
 - `spike-macos` (`macos-26`): the launch and ax-driver spikes, when their tools change.

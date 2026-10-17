@@ -1,6 +1,6 @@
-//! Launching a pane's program as libghostty launched a surface's for the GTK build (`termio/Exec.zig`,
-//! `apprt/embedded.zig` and `Surface.zig` at `GHOSTTY_REV`; `agterm-gtk/src/surface.rs` for the seed): the terminal's
-//! identity, the shell integration and the exit handling every pane shares.
+//! Launching a pane's program as libghostty launches a surface's for an embedder (`termio/Exec.zig`,
+//! `apprt/embedded.zig` and `Surface.zig` at `LIBGHOSTTY_VT_REV`; the GTK build's `surface.rs` for the seed): the
+//! terminal's identity, the shell integration and the exit handling every pane shares.
 //!
 //! - **Program**: a [`Launch`]'s command line, or else the host's login shell, runs through `/bin/sh -c` (libghostty
 //!   ran a surface's command that way on Linux, and core's foreground reader looks past exactly that wrapper). A live

@@ -26,7 +26,7 @@ pub use lavapipe::lavapipe_icd;
 pub const DEADLINE: Duration = Duration::from_secs(30);
 
 /// The GPUI build under test.
-pub const GPUI: &str = env!("CARGO_BIN_EXE_agterm-gpui");
+pub const GPUI: &str = env!("CARGO_BIN_EXE_agterm");
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -623,12 +623,6 @@ pub const REQUIRE_ENV: &str = "AGTERM_REQUIRE_DISPLAY_TESTS";
 /// Whether a missing tool fails the test ([`REQUIRE_ENV`]).
 pub fn tools_required() -> bool {
     std::env::var_os(REQUIRE_ENV).is_some()
-}
-
-/// The part of a test that needs a missing tool is left out: as `skip!`, failing under [`REQUIRE_ENV`].
-pub fn skip_part(reason: &str) {
-    assert!(!tools_required(), "required by {REQUIRE_ENV}: {reason}");
-    eprintln!("SKIPPED (part): {reason}");
 }
 
 /// A test that cannot run without a missing tool: it fails under [`REQUIRE_ENV`], otherwise it says why on stderr

@@ -845,7 +845,7 @@ fn right_click_ignore_and_context_menu(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn middle_click_follows_its_action_and_copy_on_select(cx: &mut TestAppContext) {
+fn middle_click_follows_its_action_not_copy_on_select(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf 'ready\\r\\n'; exec cat";
     let mut f = fixture(cx, script, config("middle-click-action = ignore\n"));
     f.cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("primary-text".into())));
@@ -855,14 +855,16 @@ fn middle_click_follows_its_action_and_copy_on_select(cx: &mut TestAppContext) {
         f.cx.simulate_mouse_up(Fixture::at(1, 1), MouseButton::Middle, Modifiers::default());
     };
     middle(&mut f);
-    // under copy-on-select = clipboard, primary-paste reads the clipboard (Ghostty at GHOSTTY_REV)
+    // clipboard-paste reads the clipboard
     f.terminal.update(f.cx, |terminal, cx| {
-        terminal.set_config(config("copy-on-select = clipboard\n"), cx);
+        terminal.set_config(config("middle-click-action = clipboard-paste\n"), cx);
     });
     middle(&mut f);
     f.wait_painted("clipboard-text");
-    f.terminal
-        .update(f.cx, |terminal, cx| terminal.set_config(config(""), cx));
+    // primary-paste reads the primary selection, whatever copy-on-select is (Ghostty at LIBGHOSTTY_VT_REV)
+    f.terminal.update(f.cx, |terminal, cx| {
+        terminal.set_config(config("copy-on-select = clipboard\n"), cx);
+    });
     middle(&mut f);
     f.wait_painted("clipboard-textprimary-text");
     // the first click, under `ignore`, pasted nothing

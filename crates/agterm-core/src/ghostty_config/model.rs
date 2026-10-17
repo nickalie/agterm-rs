@@ -1,5 +1,5 @@
-//! The typed config for the subset of ghostty's keys the terminal honours, with ghostty's defaults at `GHOSTTY_REV`
-//! (Linux side). Lines apply in order, the last one winning; a repeatable key collects its lines; an empty value
+//! The typed config for the subset of ghostty's keys the terminal honours, with ghostty's defaults at
+//! `LIBGHOSTTY_VT_REV` (Linux side). Lines apply in order, the last one winning; a repeatable key collects its lines; an empty value
 //! resets a key to its default (a list to empty), as `parseIntoField` does. Every other known key is ignored, logged
 //! at debug.
 
@@ -79,22 +79,43 @@ pub enum PaddingColor {
     ExtendAlways,
 }
 
-/// `copy-on-select`: where a selection made with the mouse or `select_all` is copied.
+/// `copy-on-select`: where a selection made with the mouse or `select_all` is copied (Ghostty 1.4's values; the old
+/// `true` and `false` are taken by its compatibility handler, [`CopyOnSelect::from_compat`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
 pub enum CopyOnSelect {
     /// Not copied.
-    False,
-    /// To the selection clipboard (the primary selection on Linux).
-    True,
-    /// To the selection clipboard and the system clipboard.
+    None,
+    /// To the selection clipboard (the primary selection on Linux) only; nowhere where there is none.
+    Primary,
+    /// To the system clipboard only.
     Clipboard,
+    /// To the system clipboard and the selection clipboard.
+    Both,
+}
+
+impl CopyOnSelect {
+    /// What Ghostty's `compatCopyOnSelect` makes of an old value: `true` the selection clipboard on Linux and FreeBSD,
+    /// the system clipboard elsewhere; `false` nothing.
+    #[must_use]
+    pub fn from_compat(value: &str) -> Option<Self> {
+        match value {
+            "true" if cfg!(any(target_os = "linux", target_os = "freebsd")) => Some(Self::Primary),
+            "true" => Some(Self::Clipboard),
+            "false" => Some(Self::None),
+            _ => None,
+        }
+    }
 }
 
 impl Default for CopyOnSelect {
-    /// Ghostty's default on Linux and macOS.
+    /// Ghostty's default: the selection clipboard on Linux, nothing elsewhere.
     fn default() -> Self {
-        Self::True
+        if cfg!(target_os = "linux") {
+            Self::Primary
+        } else {
+            Self::None
+        }
     }
 }
 
@@ -127,9 +148,11 @@ pub enum RightClickAction {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, EnumIter, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
 pub enum MiddleClickAction {
-    /// Paste the primary selection (ghostty's default).
+    /// Paste the selection clipboard (the primary selection on Linux; nothing where there is none), ghostty's default.
     #[default]
     PrimaryPaste,
+    /// Paste the system clipboard.
+    ClipboardPaste,
     Ignore,
 }
 
@@ -549,6 +572,11 @@ impl GhosttyConfig {
                 if bool_of(setting) {
                     self.selection.foreground = Some(TerminalColor::CellBackground);
                     self.selection.background = Some(TerminalColor::CellForeground);
+                }
+            }
+            (Compat::Values(_), "copy-on-select") => {
+                if let Some(copy) = setting.value.as_deref().and_then(CopyOnSelect::from_compat) {
+                    self.copy_on_select = copy;
                 }
             }
             _ => tracing::debug!(key = setting.key, "ghostty config key not supported; ignored"),

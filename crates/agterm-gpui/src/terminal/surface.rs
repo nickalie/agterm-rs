@@ -176,7 +176,7 @@ impl Surface for TerminalSurface {
     }
 }
 
-/// The terminal side of Ghostty's `performBindingAction` at `GHOSTTY_REV` (Task 8's action table): every
+/// The terminal side of Ghostty's `performBindingAction` at `LIBGHOSTTY_VT_REV` (Task 8's action table): every
 /// terminal-scoped action, with libghostty's performed/not-performed answer, which decides whether a `performable:`
 /// binding lets its key through. App-scoped actions and the window, tab and split actions are the frontend's (Task 14
 /// routes them) and are not performed here; so is `copy_title_to_clipboard`, which libghostty hands to the apprt and

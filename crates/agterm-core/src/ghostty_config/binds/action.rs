@@ -1,4 +1,4 @@
-//! The action table: every `Binding.Action` of ghostty at `GHOSTTY_REV`, parsed as `Action.parse` parses it
+//! The action table: every `Binding.Action` of ghostty at `LIBGHOSTTY_VT_REV`, parsed as `Action.parse` parses it
 //! (`name` or `name:parameter`, a parameter optional only where the type has a default).
 
 use std::fmt;

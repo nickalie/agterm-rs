@@ -1,6 +1,6 @@
 //! ghostty's `keybind` config and its actions, ported from `src/input/Binding.zig`, `Config.Keybinds` and
-//! `Surface.maybeHandleBinding` at `GHOSTTY_REV`: what libghostty resolved inside `ghostty_surface_key` for the GTK
-//! build, for a frontend that encodes keys itself with libghostty-vt.
+//! `Surface.maybeHandleBinding` at `LIBGHOSTTY_VT_REV`: what libghostty resolves inside `ghostty_surface_key` for an
+//! embedder, for a frontend that encodes keys itself with libghostty-vt.
 //!
 //! **Lines** (`keybind = …`, [`Keybinds::parse_cli`]): `[flags:]trigger[>trigger…]=action`, the flags `all:`,
 //! `global:`, `unconsumed:` and `performable:`; a trigger is `+`-joined modifiers (`shift ctrl alt super`, the

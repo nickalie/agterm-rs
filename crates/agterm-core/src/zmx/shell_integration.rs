@@ -1,5 +1,5 @@
 //! The Ghostty shell integration a wrapped pane's login shell starts with, ported from Ghostty's
-//! `src/termio/shell_integration.zig` (at the pinned `GHOSTTY_REV`). libghostty injects it only into a shell it spawns
+//! `src/termio/shell_integration.zig` (at the pinned `LIBGHOSTTY_VT_REV`). libghostty injects it only into a shell it spawns
 //! itself; a live pane's shell is the zmx daemon's child, so the wrap injects it the same way:
 //!
 //! - zsh as upstream agterm: `ZDOTDIR` names the integration, the app's own one handed on as `GHOSTTY_ZSH_ZDOTDIR`;

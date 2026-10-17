@@ -1,4 +1,4 @@
-//! ghostty's built-in binds on Linux (`Keybinds.init` at `GHOSTTY_REV`, the non-macOS branches), in its order: a
+//! ghostty's built-in binds on Linux (`Keybinds.init` at `LIBGHOSTTY_VT_REV`, the non-macOS branches), in its order: a
 //! later bind of the same trigger replaces an earlier one, as there.
 
 use super::action::{

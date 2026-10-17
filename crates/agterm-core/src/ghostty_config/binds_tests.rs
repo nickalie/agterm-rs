@@ -1,5 +1,5 @@
-//! ghostty's keybinds against `Binding.zig`, `Config.Keybinds` and `Surface.maybeHandleBinding` at `GHOSTTY_REV`;
-//! `agterm-ghostty`'s `config_parity` test checks the lines' diagnostics against the linked libghostty.
+//! ghostty's keybinds against `Binding.zig`, `Config.Keybinds` and `Surface.maybeHandleBinding` at `LIBGHOSTTY_VT_REV`;
+//! `counts_tests` holds the lines' diagnostics at the ones libghostty reported.
 
 use super::binds::{
     Action, BindError, BindFlags, BindingLine, CloseTabMode, CopyFormat, Direction, Entry, KeyAction, KeyEffect,
@@ -9,7 +9,7 @@ use super::binds::{
 use super::{DEFAULTS, Loader};
 use crate::keymap::{Chord, CustomCommandEngine, EngineOutcome, Modifiers, ShippedDefaults, parse_keymap};
 
-/// Every action of `Binding.Action` at `GHOSTTY_REV`, in its order, but `cursor_key` (no config can set it).
+/// Every action of `Binding.Action` at `LIBGHOSTTY_VT_REV`, in its order, but `cursor_key` (no config can set it).
 const GHOSTTY_ACTIONS: &[&str] = &[
     "ignore",
     "unbind",

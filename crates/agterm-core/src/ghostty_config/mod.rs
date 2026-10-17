@@ -9,14 +9,16 @@
 //! every line on top, so any line beats the theme) and yields the typed [`GhosttyConfig`] with the diagnostics.
 //!
 //! **Diagnostics** (the count `config.reload` answers): every line is checked against the key table generated from
-//! ghostty's `Config.zig` at `GHOSTTY_REV` ([`known_keys`], `scripts/gen-ghostty-config-keys.sh`), the value by its
-//! key's type ([`validate`]), supported by agterm or not: an unknown key, a malformed value of any known key, an
-//! include that cannot be read or closes a cycle each count once, a theme that cannot be found once per theme
-//! directory tried, as libghostty counts them. A valid value of a key agterm does not support counts nothing; the key is ignored and logged. libghostty
-//! finalizes a fresh config on the light side of a dual theme, so [`LoadedConfig::diagnostic_count`] does too.
+//! ghostty's `Config.zig` at `LIBGHOSTTY_VT_REV`, the one Ghostty pin ([`known_keys`],
+//! `scripts/gen-ghostty-config-keys.sh`), the value by its key's type ([`validate`]), supported by agterm or not: an
+//! unknown key, a malformed value of any known key, an include that cannot be read or closes a cycle each count once, a
+//! theme that cannot be found once per theme directory tried, as libghostty counts them. A valid value of a key agterm
+//! does not support counts nothing; the key is ignored and logged. libghostty finalizes a fresh config on the light
+//! side of a dual theme, so [`LoadedConfig::diagnostic_count`] does too.
 //!
-//! **Residual differences** from libghostty (the count ones pinned by `agterm-ghostty`'s `config_parity` test, which
-//! checks every other case above against the linked libghostty):
+//! **Residual differences** from libghostty at `LIBGHOSTTY_VT_REV` (the count ones pinned by the `counts_tests`
+//! goldens, which hold every other case above at the counts libghostty gave for it; no libghostty is linked to
+//! compare against since the GTK build went):
 //! - count: keys whose type has a `parseCLI` agterm does not port ([`validate::Kind::Opaque`]: `font-style*`,
 //!   `font-variation*`, `font-codepoint-map`, `clipboard-codepoint-map`, `adjust-*`, `command`, `initial-command`,
 //!   `env`, `input`, `working-directory`, `quick-terminal-size`, `background-blur`, `mouse-scroll-multiplier`,
@@ -38,11 +40,13 @@ pub mod validate;
 #[cfg(test)]
 mod binds_tests;
 #[cfg(test)]
+mod counts_tests;
+#[cfg(test)]
 mod tests;
 
 use std::path::{Path, PathBuf};
 
-pub use keys::GHOSTTY_REV;
+pub use keys::LIBGHOSTTY_VT_REV;
 pub use model::{
     BackgroundImage, BackgroundImageFit, BackgroundImagePosition, Clipboard, ClipboardAccess, Colors, CopyOnSelect,
     Cursor, CursorStyle, DEFAULT_TERM, Font, GhosttyConfig, Link, MiddleClickAction, Mouse, MouseShiftCapture,
@@ -58,7 +62,7 @@ use crate::persist::SettingsStore;
 /// `agterm/Resources/ghostty-defaults.conf`, with the Linux Edit chords).
 pub const DEFAULTS: &str = include_str!("ghostty-defaults.conf");
 
-/// Every key ghostty's config knows at [`GHOSTTY_REV`], sorted by name.
+/// Every key ghostty's config knows at [`LIBGHOSTTY_VT_REV`], sorted by name.
 #[must_use]
 pub fn known_keys() -> &'static [KeySpec] {
     keys::KEYS

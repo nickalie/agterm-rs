@@ -626,7 +626,7 @@ def test_real_weston_gives_gpui_a_seat_or_a_clear_refusal(
 ) -> None:
     """The weston on PATH serves a GPUI instance with --fake-seat (15.0 and later), or the launch names the fix."""
     monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, str(make_icd()))
-    adapter = RustAdapter(fake_bin, frontend="gpui")
+    adapter = RustAdapter(fake_bin)
     if not base.weston_takes_fake_seat(base.compositor_program()):
         with pytest.raises(LaunchError, match="scripts/build-weston.sh"):
             adapter.launch()
@@ -1554,12 +1554,12 @@ def test_a_daemon_exiting_within_the_grace_is_not_a_leftover(
     assert exiting.wait(timeout=5) == 0
 
 
-# -- the Rust build's GPUI frontend: lavapipe only, a seat on its weston
+# -- the Rust build (GPUI): lavapipe only, a seat on its weston
 
 
 @pytest.fixture
 def lavapipe(make_icd, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A lavapipe ICD manifest the harness is pointed at, as run-rust-linux.sh --frontend gpui does."""
+    """A lavapipe ICD manifest the harness is pointed at, as run-rust-linux.sh does."""
     icd = make_icd()
     monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, str(icd))
     return icd
@@ -1575,34 +1575,16 @@ def mesa_vendor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return vendors / "50_mesa.json"
 
 
-def test_the_rust_frontend_defaults_to_gtk_and_refuses_an_unknown_one() -> None:
-    assert RustAdapter(None).frontend == "gtk"
-    assert RustAdapter(None, frontend="gpui").frontend == "gpui"
-    with pytest.raises(ValueError, match="frontend"):
-        RustAdapter(None, frontend="qt")
+def test_make_adapter_gives_the_rust_build_its_adapter() -> None:
+    options = ImplOptions(impl="rust", bin=None, ctl=None, coverage_gate=False)
+    assert isinstance(make_adapter(options), RustAdapter)
 
 
-@pytest.mark.parametrize("frontend", ["gtk", "gpui"])
-def test_make_adapter_passes_the_rust_frontend(frontend: str) -> None:
-    options = ImplOptions(impl="rust", bin=None, ctl=None, coverage_gate=False, rust_frontend=frontend)
-    adapter = make_adapter(options)
-    assert isinstance(adapter, RustAdapter) and adapter.frontend == frontend
-
-
-def test_the_plugin_offers_the_adapters_frontends() -> None:
-    from agterm_conformance import plugin
-    from agterm_conformance.impls import rust
-
-    assert plugin.RUST_FRONTENDS == rust.FRONTENDS and plugin.RUST_FRONTENDS[0] == rust.DEFAULT_FRONTEND
-
-
-def test_only_the_gpui_frontend_gets_a_fake_seat(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert RustAdapter(None).weston_args() == ()
-    assert RustAdapter(None, frontend="gpui").weston_args() == ("--fake-seat",)
+def test_only_the_rust_build_gets_a_fake_seat(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert RustAdapter(None).weston_args() == ("--fake-seat",)
     # after an adapter's own compositor arguments (chrome_probe.py's --debug)
     monkeypatch.setattr(RustAdapter, "compositor_args", ("--debug",))
-    assert RustAdapter(None, frontend="gpui").weston_args() == ("--debug", "--fake-seat")
-    assert RustAdapter(None).weston_args() == ("--debug",)
+    assert RustAdapter(None).weston_args() == ("--debug", "--fake-seat")
     assert SwiftLinuxAdapter(None).weston_args() == ()
 
 
@@ -1623,18 +1605,16 @@ def test_gpui_renders_on_lavapipe_alone(
     }
     for name, value in inherited.items():
         monkeypatch.setenv(name, value)
-    env = RustAdapter(None, frontend="gpui").build_env(tmp_path)
+    env = RustAdapter(None).build_env(tmp_path)
     assert env["VK_DRIVER_FILES"] == env["VK_ICD_FILENAMES"] == str(lavapipe)
     assert env["LIBGL_ALWAYS_SOFTWARE"] == "1"
     assert env["__EGL_VENDOR_LIBRARY_FILENAMES"] == str(mesa_vendor)
     assert not (set(inherited) - {"VK_ICD_FILENAMES"}) & env.keys()
 
 
-def test_the_gtk_frontend_keeps_its_environment(
-    tmp_path: Path, lavapipe: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_the_fork_keeps_its_environment(tmp_path: Path, lavapipe: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VK_ICD_FILENAMES", "/somewhere/icd.json")
-    env = RustAdapter(None).build_env(tmp_path)
+    env = SwiftLinuxAdapter(None).build_env(tmp_path)
     assert env["VK_ICD_FILENAMES"] == "/somewhere/icd.json"
     assert not {"VK_DRIVER_FILES", "LIBGL_ALWAYS_SOFTWARE"} & env.keys()
 
@@ -1644,7 +1624,7 @@ def test_gpui_without_lavapipe_spawns_nothing(
 ) -> None:
     monkeypatch.delenv(base.LAVAPIPE_ICD_VARIABLE, raising=False)
     with pytest.raises(LaunchError, match="no lavapipe.*fetch-lavapipe.sh.*never on a hardware driver"):
-        RustAdapter(fake_bin, frontend="gpui").launch()
+        RustAdapter(fake_bin).launch()
     assert len(roots) == 1 and not roots[0].exists()
 
 
@@ -1666,7 +1646,7 @@ def test_a_manifest_that_is_not_lavapipe_is_refused(
         icd.write_text(manifest)
     monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, str(icd))
     with pytest.raises(LaunchError, match=message):
-        RustAdapter(None, frontend="gpui").build_env(tmp_path / "root")
+        RustAdapter(None).build_env(tmp_path / "root")
 
 
 def test_a_relative_lavapipe_manifest_is_made_absolute(
@@ -1713,13 +1693,10 @@ def test_gpui_on_a_weston_without_a_fake_seat_spawns_nothing(
     base.weston_takes_fake_seat.cache_clear()
     try:
         with pytest.raises(LaunchError, match=r"does not take --fake-seat.*weston 15\.0.*scripts/build-weston\.sh"):
-            RustAdapter(fake_bin, frontend="gpui").launch()
-        # the GTK frontend needs no seat
-        adapter = RustAdapter(fake_bin)
-        adapter.stop(adapter.launch())
+            RustAdapter(fake_bin).launch()
     finally:
         base.weston_takes_fake_seat.cache_clear()
-    assert len(roots) == 2 and not any(root.exists() for root in roots)
+    assert len(roots) == 1 and not any(root.exists() for root in roots)
 
 
 def test_a_weston_that_cannot_run_takes_no_fake_seat(tmp_path: Path) -> None:
@@ -1729,7 +1706,7 @@ def test_a_weston_that_cannot_run_takes_no_fake_seat(tmp_path: Path) -> None:
 def test_a_headless_gpui_launch_gets_a_seat_and_lavapipe(
     roots: list[Path], fake_bin: Path, fake_compositor: Path, lavapipe: Path
 ) -> None:
-    adapter = RustAdapter(fake_bin, frontend="gpui")
+    adapter = RustAdapter(fake_bin)
     instance = adapter.launch()
     try:
         record = compositor_record(instance)
@@ -1746,7 +1723,7 @@ def test_a_headless_gpui_launch_gets_a_seat_and_lavapipe(
 
 
 def test_a_gpui_relaunch_keeps_lavapipe(roots: list[Path], fake_bin: Path, lavapipe: Path) -> None:
-    adapter = RustAdapter(fake_bin, frontend="gpui")
+    adapter = RustAdapter(fake_bin)
     instance = adapter.relaunch(adapter.launch())
     try:
         assert json.loads((instance.state_dir / "fake-env.json").read_text())["VK_DRIVER_FILES"] == str(lavapipe)
@@ -1758,5 +1735,5 @@ def test_a_session_display_gpui_launch_still_renders_on_lavapipe(
     roots: list[Path], fake_bin: Path, lavapipe: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv(base.DISPLAY_MODE_VARIABLE, "session")
-    env = RustAdapter(fake_bin, frontend="gpui").build_env(Path("/tmp/agt-x"))
+    env = RustAdapter(fake_bin).build_env(Path("/tmp/agt-x"))
     assert env["VK_DRIVER_FILES"] == str(lavapipe)
