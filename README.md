@@ -1,14 +1,16 @@
 # agterm-rs
 
-agterm in Rust, Linux first: a GPUI terminal over Ghostty's libghostty-vt, driven by `agtermctl` over a control
-socket.
+agterm in Rust: a GPUI terminal over Ghostty's libghostty-vt, driven by `agtermctl` over a control socket. macOS,
+Linux and Windows are equal targets; today it is built and tested on Linux, and everything below is the Linux build.
 
 - The parity target is upstream macOS agterm ([umputun/agterm](https://github.com/umputun/agterm) v0.36.0): its wire
   protocol, command semantics, error strings, `agtermctl`, on-disk formats, model and UI, the UI in GPUI idioms where
   AppKit has no direct equivalent.
 - The Linux build keeps the Swift/GTK fork's (`agterm-linux`) application id `io.github.melonamin.agterm`, state dir
   (`$XDG_DATA_HOME/agterm`, else `~/.local/share/agterm`) and control socket (`<state dir>/agterm.sock`), so it can
-  replace the installed fork with the existing state.
+  replace the installed fork with the existing state. One instance runs per application id: the first owns the id's
+  name on the session bus and serves `GApplication`'s D-Bus protocol there (through `zbus`), and a later launch,
+  of this build or of the fork's GTK one, forwards its activation to it and exits before touching the state.
 - One extension beyond upstream: Live sessions in bash and fish login shells too (upstream: zsh only), under the
   Rust-only capability `live-any-shell`.
 - Parity is measured by the black-box suite in [conformance/](conformance/README.md), held by a ratchet.
@@ -22,28 +24,46 @@ socket.
 - pkg-config, and the development files GPUI links: Wayland, xkbcommon, xcb, fontconfig and freetype.
 - WPE WebKit 2.54+ with its WPEPlatform API for the HTML overlays (feature `html`, the default; see
   [WPE WebKit](#wpe-webkit)).
-- For the native builds: curl, tar, xz, patch, sha256sum and ncurses' `tic`/`infocmp`.
-- For the app's tests: Xvfb's `xvfb-run`, so they get a display of their own instead of the desktop.
+- For the native builds: curl, tar, xz, zstd, patch, sha256sum and ncurses' `tic`/`infocmp`; for
+  `scripts/build-weston.sh` also meson, ninja, python3, a C++ compiler and weston's own development files (the Ubuntu
+  list below); for regenerating the libghostty-vt bindings `bindgen` (`cargo install bindgen-cli`).
+- A Vulkan loader and driver: GPUI renders through wgpu on Vulkan (Mesa's drivers, lavapipe for every headless app
+  instance).
+- For the app's tests: Xvfb's `xvfb-run` and dbus' `dbus-run-session`, so they get a display and a session bus of
+  their own instead of the desktop's.
 - For the app's process tests (`crates/agterm-gpui/tests`): dbus-daemon, a private bus per test; the ones with a
   display also need weston, Xvfb and Mesa's lavapipe (`mesa-vulkan-drivers`, an unpacked one under the vendor dir, or
-  `AGTERM_LAVAPIPE_ICD`), the keyboard layout test `setxkbmap` (`x11-xkb-utils`). A missing one skips the test (`SKIPPED:`, shown with `--nocapture`) unless
-  `AGTERM_REQUIRE_DISPLAY_TESTS` is set, as CI sets it, which fails it instead. The single-instance checks against a
-  GTK build of agterm (the Linux fork) take its binary from `AGTERM_GTK_BIN` and skip without one, required or not.
-  The nested-niri activation check (niri inside a headless weston) is
-  `#[ignore]`d, since CI has no niri: `cargo test -p agterm-gpui --test instance -- --ignored`. The external texture
+  `AGTERM_LAVAPIPE_ICD`), the keyboard layout test `setxkbmap` (`x11-xkb-utils`). A missing one skips the test
+  (`SKIPPED:`, shown with `--nocapture`) unless `AGTERM_REQUIRE_DISPLAY_TESTS` is set, as CI sets it, which fails it
+  instead. The single-instance checks against a GTK build of agterm (the Linux fork) take its binary from
+  `AGTERM_GTK_BIN` and skip without one, required or not. The nested-niri activation check (niri inside a headless
+  weston) is `#[ignore]`d, since CI has no niri: `cargo test -p agterm-gpui --test instance -- --ignored`. The external texture
   test (`--test external_texture`, dmabufs drawn by GPUI's headless renderer) runs on lavapipe and on the first render
   node a Mesa Vulkan driver runs; its synthetic dmabufs need read-write access to `/dev/udmabuf` (`modprobe udmabuf`;
   skipped without, failed under `AGTERM_REQUIRE_DISPLAY_TESTS`), its hardware case GBM and EGL.
 - For the conformance suite: Python 3.11+ with venv, weston and dbus-daemon (each instance gets its own headless
   weston and bus); zsh or fish as the login shell for the Live tests of that shell.
 
-On Ubuntu 26.04, the CI image's packages plus `xvfb` and `python3-venv` for local runs:
+On Ubuntu 26.04, the `rust-linux` CI job's packages (the last two lines, with meson and ninja, build weston 15, which
+the GPUI runs need and 26.04 lacks; fish runs the fish replay script's test) plus `zstd` and `python3-venv`. Ubuntu
+has no WPE WebKit, so the app builds there without its HTML overlays ([WPE WebKit](#wpe-webkit)):
 
 ```sh
 sudo apt-get install pkg-config libfontconfig-dev libfreetype-dev \
   meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
-  curl xz-utils patch ncurses-bin \
-  weston dbus-daemon libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers xvfb x11-xkb-utils python3-venv
+  curl xz-utils zstd patch ncurses-bin fish fontconfig fonts-dejavu-core \
+  dbus-daemon weston xvfb x11-xkb-utils libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers python3-venv \
+  g++ libpixman-1-dev libinput-dev libevdev-dev libudev-dev libdrm-dev libegl-dev libgles-dev libgbm-dev \
+  libcairo2-dev libpango1.0-dev libpng-dev hwdata
+```
+
+On Arch, the `conformance` CI container's packages but git and rustup (WPE WebKit and lavapipe from the distribution;
+zsh and fish for the Live tests of those login shells):
+
+```sh
+sudo pacman -S --needed wpewebkit bubblewrap meson ninja wayland wayland-protocols libxkbcommon libxcb \
+  curl xz zstd patch ncurses fontconfig ttf-dejavu procps-ng weston dbus xorg-server-xvfb mesa vulkan-swrast \
+  pixman libinput libevdev libdrm cairo pango libpng hwdata seatd lcms2 python zsh fish
 ```
 
 Run-time dependencies of every `agterm` binary:
@@ -92,8 +112,12 @@ scripts/fetch-lavapipe.sh      # Mesa's lavapipe for headless GPUI runs: the sys
 scripts/build-weston.sh        # weston 15 for headless GPUI runs where the system's is older (Ubuntu 26.04: 14)
 ```
 
-The app's headless runs (the conformance suite, `agterm-gpui`'s process tests) render on
-Mesa's software Vulkan driver lavapipe only, never on the machine's GPU. `scripts/fetch-lavapipe.sh` prints its ICD
+The app's headless instances (the conformance suite's, `agterm-gpui`'s window tests') render on Mesa's software
+Vulkan driver lavapipe only, never on the machine's GPU. The render-path harnesses also render offscreen on a hardware
+render node, each GPU in a child process of its own: `agterm-gpui`'s `external_texture` and `html_overlay` tests (on
+lavapipe and on the first render node a Mesa Vulkan driver runs) and `agterm-wpe`'s engine tests (on the first DRM
+render node and in shared memory, [WPE WebKit](#wpe-webkit)).
+`scripts/fetch-lavapipe.sh` prints its ICD
 manifest: `AGTERM_LAVAPIPE_ICD` when set, else the distribution's (Ubuntu/Debian/Fedora `mesa-vulkan-drivers`, Arch
 `vulkan-swrast`), else it verifies the pinned Arch `vulkan-swrast` package (`LAVAPIPE_*` in `build/pins.env`) and
 unpacks it into the vendored prefix, refusing a host whose libLLVM or glibc it cannot load (`--print-icd` finds without
@@ -123,11 +147,12 @@ family's symbol fallback. Their licenses are in the prefix's `share/doc/fonts/`;
 Ghostty's sprite font through qwertty-term (both MIT); `crates/agterm-gpui/tests/golden/` holds Ghostty's sprite test
 images with Ghostty's license.
 
-Some GPUI dependencies are patched in the tree rather than built: `vendor/calloop` and `vendor/gpui-pre{,-wgpu}`
-(GPUI's dmabuf external surfaces for the HTML overlays, the font metrics accessor and the coverage masks the terminal's
-sprites paint with) are verified crates.io sources plus `build/patches/<crate>`,
-recreated by `scripts/vendor-calloop.sh` and `scripts/vendor-gpui.sh` (`--check` compares, as CI does;
-`vendor-gpui.sh --diff` turns edits under `vendor/` back into the patch files).
+Some GPUI dependencies are patched in the tree rather than built: `vendor/calloop` and
+`vendor/gpui-pre{,-wgpu,-linux}` (GPUI's dmabuf external surfaces for the HTML overlays, the font metrics accessors and
+the coverage masks the terminal's sprites paint with, the native key behind each key event, the HTML clipboard offer,
+xdg-output geometry and X11 window state) are verified crates.io sources plus `build/patches/<crate>`, recreated by
+`scripts/vendor-calloop.sh` and `scripts/vendor-gpui.sh` (`--check` compares, as CI does; `vendor-gpui.sh --diff`
+turns edits under `vendor/` back into the patch files).
 
 ### WPE WebKit
 
@@ -192,22 +217,38 @@ agterm session dropped (all but `AGTERM_LOG`). It prints the `agtermctl <command
 instance.
 
 The build uses the fork's app id, state dir and socket: while an installed agterm runs, launch a checkout's build only
-through `run-gpui-dev.sh`. A plain launch is forwarded to the running instance, or shares its
-`windows.json`.
+through `run-gpui-dev.sh`. A plain launch is forwarded to the running instance over the session bus (the D-Bus name
+above), or, with no bus between them, shares its `windows.json`.
 
 `AGTERM_LOG` sets the log level (`tracing` filter syntax); the log is `agterm.log` in the state dir.
 
 ## Test
 
+The gates every change passes (CI runs the same checks):
+
 ```sh
 cargo fmt --all --check
+cargo metadata --locked --format-version 1 >/dev/null   # Cargo.lock is current
+scripts/check-tracing-features.sh           # no dependency turns on tracing's `log` fallback
+scripts/vendor-calloop.sh --check           # vendor/ equals its crates.io sources plus build/patches/
+scripts/vendor-gpui.sh --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo clippy -p agterm-gpui --no-default-features --all-targets -- -D warnings   # the app without HTML overlays
 scripts/lint-report.sh                      # complexity #[expect]s with their reasons; refuses inner #![allow]
-GDK_BACKEND=x11 xvfb-run -a cargo test --workspace
-conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
+GDK_BACKEND=x11 xvfb-run -a dbus-run-session cargo test --workspace
+.venv/bin/python -m pytest conformance/selftests   # the suite's own tests, host-free
+conformance/tools/run-rust-linux.sh [--ratchet-only] [--stage DIR] [-- PYTEST_ARGS...]
 ```
 
-- The app's window tests need a display; under `xvfb-run` they run without touching the desktop.
+A change to the WPE or gir pins also runs `scripts/gen-wpe-bindings.sh --check`, as the `wpe` CI job does.
+
+- The app's window tests need a display and a session bus; under `xvfb-run` and `dbus-run-session` they get their
+  own and never touch the desktop's. The process tests (`crates/agterm-gpui/tests`) start their own private weston,
+  Xvfb and bus besides, from an environment built from scratch, and render on lavapipe
+  (`tests/support/lavapipe.rs`).
+- The selftests, and the pytest runs some of them start, import the harness the venv's editable install points at: a
+  venv installed from another checkout (a worktree sharing the main checkout's) needs this checkout's `conformance/`
+  first on `PYTHONPATH` (`run-rust-linux.sh` puts it there itself).
 - `--workspace` includes the WPE crates (`agterm-wpe` and its -sys crates) and the GPUI frontend's HTML overlays,
   which need WPE WebKit ([WPE WebKit](#wpe-webkit)); without it, pass `"${WORKSPACE_WITHOUT_WPE[@]}"` and then
   `"${GPUI_WITHOUT_HTML[@]}"` (from `scripts/lib/native.sh`) instead, as the Ubuntu CI jobs do.
@@ -237,6 +278,8 @@ conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
 - `crates/`: the Cargo workspace (crate map in [CLAUDE.md](CLAUDE.md)).
 - `conformance/`: the suite, its catalog of upstream's commands, the ratchet list `rust-passing.txt`.
 - `build/`: `pins.env`, the ghostty-vt, zmx, gir, calloop and GPUI patches, agterm's own themes.
+- `vendor/`: the patched GPUI and calloop crates, recreated by the vendor scripts (an edit there goes back into its
+  patch).
 - `scripts/`: native builds, staging, `run-gpui-dev.sh`, the lint report, the AppArmor profile installer.
 - `packaging/linux/apparmor/`: agterm's AppArmor profile (WebKit's sandbox on Ubuntu).
 - `resources/`: the agent-status hooks and agent skill the app installs.

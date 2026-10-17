@@ -3075,12 +3075,69 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
 
 ### Task 36: [Final] Update documentation
 
-- [ ] README.md: build prerequisites (Zig for libghostty-vt and zmx, Vulkan, WPE WebKit), run and test commands
-- [ ] CLAUDE.md: crate map (`agterm-app`, `agterm-ghostty-vt-sys`, `agterm-ghostty-vt`, `agterm-term`, `agterm-gpui`,
+- [x] README.md: build prerequisites (Zig for libghostty-vt and zmx, Vulkan, WPE WebKit), run and test commands
+- [x] CLAUDE.md: crate map (`agterm-app`, `agterm-ghostty-vt-sys`, `agterm-ghostty-vt`, `agterm-term`, `agterm-gpui`,
       `agterm-wpe*`), terminal reference rule
       (libghostty-vt + references), fork coexistence via the D-Bus name served by `zbus`, headless Vulkan (lavapipe)
-- [ ] `conformance/docs/rust-build.md`: GPUI build, staging, lavapipe
-- [ ] move this plan to `docs/plans/completed/`
+- [x] `conformance/docs/rust-build.md`: GPUI build, staging, lavapipe
+- [x] move this plan to `docs/plans/completed/`
+- result (2026-10-17):
+  - **Merge of `main` first** (`4fd08e8`, the user's authorization): main's eight commits since the fork point
+    (`5a1fb9a`) came in. Conflicts: `CLAUDE.md` took main's version whole (the user's newest rules: the three
+    platforms as equal targets, no literal ids and paths, the fork-coexistence section gone), the GPUI update below
+    built on it; `agterm-ghostty-vt-sys/Cargo.toml` (git paired it with main's `agterm-ghostty-sys`) kept main's
+    `license.workspace` beside its own `links`; the GTK-era files main touched and this branch removed (`agterm-gtk`,
+    its `heap_trim.rs` offered under `agterm-app`, `agterm-ghostty`) stayed deleted. Main's MIT licensing reaches every
+    crate this branch added (`agterm-app`, `agterm-ghostty-vt`, `agterm-term`, `agterm-gpui`, `agterm-wpe`, and the
+    three gir crates as a `[package.license]` table that a regeneration keeps: `gen-wpe-bindings.sh --check` matched);
+    main has no LICENSE file, so none was added, and the vendored crates keep their own licenses. Main's two plans came
+    in untouched. The two GTK fixes: flat scratch and split header buttons (`8c02d66`) is the GPUI build's behavior
+    already, every title-bar button coming from one flat builder (`titlebar.rs`, a hover tint only); `malloc_trim`
+    after terminal bursts (`2d4badd`) stays out, as Task 34 decided, since no GPUI measurement asks for it (Task 35's
+    throughput run: resident memory 335-337 MB at the peak and after, the same for 64 MiB and 1 GiB).
+  - **CLAUDE.md** (main's text the base; every rule main has kept, the Platforms section verbatim; rules, not
+    details: no ids, flags or formulas, each pointing at the doc or script that holds them): the intro names GPUI as
+    the one frontend, built and tested on Linux today with its macOS and Windows forms open work under the platform
+    rules; the crate map loses the GTK, libghostty and `agterm-ghostty*` rows and gains `agterm-ghostty-vt-sys`,
+    `agterm-ghostty-vt`, `agterm-term`, the three WPE -sys crates, `agterm-wpe` and `agterm-gpui` → `agterm`
+    (`agterm-app` no longer "both frontends"), `agterm-core` with the Ghostty config parser and keybind actions;
+    GPUI owns the main thread, and `agterm-core` and `agterm-term` stay toolkit-neutral; a terminal reference rule
+    (Ghostty at the libghostty-vt pin as the oracle, not upstream's libghostty; qwertty-term, gpui-ghostty and rustty
+    as read-only references with attribution; Zed's GPL terminal for ideas only); the fork's glue down to XDG paths
+    and the single-instance forwarding its GTK build expects; porting step 3 wires `agterm-gpui` (terminal behavior
+    in `agterm-term`) in GPUI/gpui-kit idioms; step 6's gate is README > Test's list (the GPUI gates included); an
+    upstream release moves the zmx pin with the catalog, the Ghostty pin's bump being a change of its own; a gate on
+    generated and vendored sources; the never-touch list launches through `run-gpui-dev.sh`, names the D-Bus
+    forwarding (`zbus`) as the reason, and gives GPUI's headless needs (lavapipe alone, a seat on weston) in place of
+    the GTK crash note.
+  - **README.md**: the intro in main's framing; prerequisites with zstd, the weston build's tools, `bindgen` for the
+    vt bindings and the Vulkan loader and driver; the Ubuntu list synced with the `rust-linux` job (weston's build
+    dependencies, fish) and an Arch list from the `conformance` container; the single instance over the session bus;
+    the vendored `gpui-pre-linux` and what each GPUI patch carries; Test lists every gate (locked metadata, the
+    tracing and vendor checks, the no-HTML clippy, the tests under `dbus-run-session`, the selftests and the
+    `PYTHONPATH` a shared venv needs, `--ratchet-only`, the WPE regeneration check); Layout gains `vendor/`.
+  - **`conformance/docs/rust-build.md`**: the GPUI build section split into build (the native prefixes first, the
+    workspace without WPE then the app with its overlays), staging (the tree `stage.sh` lays out, no `lib/`), lavapipe
+    (the source order, the runner's exit and the harness making it the only driver, the process tests on the same
+    script), the seat (weston with `--fake-seat`) and the three probes; the Rust-only extensions name the CI's
+    `conformance` matrix instead of the old per-shell jobs; the implementation plan's path is its `completed/` one.
+  - **Plan move**: `git mv` to `docs/plans/completed/`, last. ⚠️ The 20 references to its old path outside
+    `docs/plans/` (crate and patch headers, `Cargo.toml`, `vendor-gpui.sh`, the spikes, backlog items and
+    `docs/ghostty-config-parity.md`) are left as they are, as the Rust Linux plan's move left its own: a path fix in
+    the GPUI patches' and the crates' headers is churn outside a docs task, and the name finds the file.
+  - **Gates after the merge**: fmt, `cargo metadata --locked`, clippy (workspace, all targets and features),
+    `lint-report.sh` (8 complexity expects, none new), `check-tracing-features.sh`, `vendor-gpui.sh --check`,
+    `gen-wpe-bindings.sh --check`, `cargo test --workspace --no-fail-fast` under `GDK_BACKEND=x11 xvfb-run -a
+    dbus-run-session` (4074 passed, 0 failed, 9 ignored), conformance selftests (808 passed with this checkout's
+    `conformance/` on `PYTHONPATH`: without it the selftests' own pytest runs imported the shared venv's older harness
+    and 3 failed). Conformance: `run-rust-linux.sh --ratchet-only` on the merged build (release, staged by the
+    runner): 667 collected, 653 passed, 0 failed, 14 unsupported (the live-session ids on this fish host), 0 reruns,
+    parity 100%; the 667 listed held, no instance root left.
+  - **Gates at the end** (docs only since the merge): fmt, `cargo metadata --locked`, `check-tracing-features.sh`,
+    `vendor-gpui.sh --check`, clippy (workspace, all targets and features), `lint-report.sh`, `cargo test --workspace
+    --no-fail-fast` under xvfb and a private bus (4074 passed, 0 failed, 9 ignored), conformance selftests (808
+    passed, `test_docs.py` holding `rust-build.md`'s capability table equal to the harness's).
+  - Nothing of this run is left running.
 
 ## Post-Completion
 

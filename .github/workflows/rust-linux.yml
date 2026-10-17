@@ -71,6 +71,8 @@ jobs:
         run: echo "$(scripts/build-weston.sh)/bin" >> "$GITHUB_PATH"
       - name: format
         run: cargo fmt --all --check
+      - name: Cargo.lock is current
+        run: cargo metadata --locked --format-version 1 >/dev/null
       # before clippy: a dependency turning on tracing's `log` would put dozens of functions over the complexity limit
       - name: tracing features
         run: scripts/check-tracing-features.sh
