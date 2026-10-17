@@ -1066,11 +1066,10 @@ impl Deck {
     /// focus, and a pane overlay's (`pane_generation`) moves the split's focus to the pane it covers (upstream's pane
     /// overlay `onFocusChange`). A focus the deck gave itself was recorded already.
     pub fn overlay_focused(&mut self, session: Uuid, key: &str, pane_generation: Option<u64>, cx: &mut Context<Self>) {
-        let shown = self.pages.get(&session).is_some_and(|page| {
-            page.overlays
-                .terminals()
-                .any(|overlay| overlay.key() == key && overlay.view().read(cx).is_shown())
-        });
+        let shown = self
+            .pages
+            .get(&session)
+            .is_some_and(|page| page.overlays.shows(key, cx));
         let focused = Some((session, key.to_owned()));
         if !shown || self.focused == focused {
             return;
@@ -1280,6 +1279,10 @@ fn with_pane_overlays(mut element: PageElement, page: &Page, plan: &PanePlan, cx
     for pane_overlay in page.overlays.panes() {
         let place = overlay::slot_of(plan, pane_overlay.generation()).map_or(Place::Full, Place::Over);
         element = element.child(overlay::pane_element(pane_overlay, cx), place);
+    }
+    for pane_page in page.overlays.pane_pages() {
+        let place = overlay::slot_of(plan, pane_page.generation()).map_or(Place::Full, Place::Over);
+        element = element.child(overlay::pane_page_element(pane_page), place);
     }
     element
 }

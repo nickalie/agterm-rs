@@ -12,13 +12,16 @@ use std::os::fd::OwnedFd;
 use std::sync::Arc;
 
 use crate::spec::ViewId;
+use serde::{Deserialize, Serialize};
 
 /// A buffer of a page's current set; ids are never reused, so an id names one buffer for good.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct BufferId(pub(crate) u64);
 
+crate::raw_ids!(BufferId);
+
 /// A rectangle in buffer pixels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rect {
     pub x: u32,
     pub y: u32,
@@ -181,7 +184,8 @@ pub(crate) fn copy_regions(data: &[u8], stride: usize, width: u32, height: u32, 
         .collect()
 }
 
-fn clip(rect: Rect, width: u32, height: u32) -> Option<Rect> {
+/// `rect` clipped to a `width` x `height` buffer; `None` when nothing of it is inside.
+pub(crate) fn clip(rect: Rect, width: u32, height: u32) -> Option<Rect> {
     let right = rect.x.saturating_add(rect.width).min(width);
     let bottom = rect.y.saturating_add(rect.height).min(height);
     (rect.x < right && rect.y < bottom).then(|| Rect {

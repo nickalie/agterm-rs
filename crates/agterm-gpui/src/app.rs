@@ -194,6 +194,10 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
     let dark = portal.as_ref().is_some_and(crate::appearance::Portal::is_dark);
     let windows = windows(context, resources, dark, &poster, &launch);
     core.set_menu_reader(windows.menu_reader());
+    // the HTML overlays: the core's page host, their engine's event pump, and the terminals' colors they are drawn in
+    crate::html_overlay::install(&mut core, paths::state_dir(&ProcessEnv), poster.clone());
+    crate::html_overlay::init(cx);
+    crate::html_overlay::refresh_themes(&crate::html_overlay::colors_of(&windows.env().config()), cx);
     let welcome_due = FirstRunWelcome::is_due(core.settings().welcome_shown, had_prior_state);
     let banners = crate::notifications::Desktop::start(launch.app_id.clone(), poster.clone(), cx.background_executor());
     let state = cx.new(|_| {
@@ -471,6 +475,9 @@ fn shut_down(shell: &Shell, cx: &mut App) {
     shell.server.borrow_mut().stop();
     tracing::info!("quit: the control server is stopped");
     shell.windows.borrow().teardown_all(cx);
+    // the web engine's pages close and its thread idles (or its worker ends, a bounded wait); the process then ends
+    // without exit handlers (`main.rs`), which WebKit's static destructors need (they must run on its thread)
+    crate::html_overlay::shutdown();
 }
 
 /// The bus requests become main-loop tasks, in arrival order.

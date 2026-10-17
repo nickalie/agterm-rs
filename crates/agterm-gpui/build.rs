@@ -1,5 +1,6 @@
 //! Points the terminal's embedded fonts (`terminal::font`) at the vendored fonts prefix: `AGTERM_GPUI_FONTS` is its
-//! `share/fonts`, which `include_bytes!` reads.
+//! `share/fonts`, which `include_bytes!` reads; with the `html` feature, gives the binaries an rpath to the WPE
+//! `WebKit` they link (`wpe_rpath`).
 //!
 //! The prefix path comes from `scripts/fetch-fonts.sh --print-prefix`, the one place that knows how it is keyed; this
 //! script never fetches. A missing or incomplete prefix fails the build with a pointer to the script.
@@ -17,6 +18,7 @@ const FONT_FILES: [&str; 5] = [
 ];
 
 fn main() -> ExitCode {
+    wpe_rpath();
     match fonts() {
         Ok(fonts) => {
             for file in FONT_FILES {
@@ -27,6 +29,22 @@ fn main() -> ExitCode {
         Err(message) => println!("cargo::error={message}"),
     }
     ExitCode::SUCCESS
+}
+
+/// With the `html` feature, an rpath to the WPE `WebKit` the build linked (`agterm-wpe`'s `libdirs`): the vendored
+/// package of `scripts/fetch-wpe.sh` lies outside the loader's search path, and the app never enters that package's
+/// overlay (only its engine worker does, `agterm_wpe::worker`).
+fn wpe_rpath() {
+    println!("cargo::rerun-if-env-changed=DEP_AGTERM_WPE_LIBDIRS");
+    if std::env::var_os("CARGO_FEATURE_HTML").is_none() {
+        return;
+    }
+    let Ok(libdirs) = std::env::var("DEP_AGTERM_WPE_LIBDIRS") else {
+        return;
+    };
+    for libdir in libdirs.split(':').filter(|dir| !dir.is_empty()) {
+        println!("cargo::rustc-link-arg=-Wl,-rpath,{libdir}");
+    }
 }
 
 fn fonts() -> Result<PathBuf, String> {

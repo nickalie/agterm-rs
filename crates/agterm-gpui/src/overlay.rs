@@ -15,6 +15,11 @@
 //! Every overlay terminal runs the program through upstream's wrapper (`agterm_core::overlay_capture`), which leaves
 //! the exit status in a file the core reads when the slot closes (`session.overlay.result`).
 //!
+//! A page (`--html`/`--url`) takes the same places by the same keys, its element from [`crate::html_overlay`] in place
+//! of a terminal: the session-wide page covering or floating as a program does, a pane page over its pane
+//! ([`OverlayPage`]). The registry owns the page; a close here only lets the element go, and every sync gives each page
+//! the model's value and whether it shows.
+//!
 //! [`Place::Program`]: crate::split::Place::Program
 //! [`Place::Over`]: crate::split::Place::Over
 
@@ -152,12 +157,50 @@ impl OverlayTerminal {
     }
 }
 
-/// A page's overlay terminals: the session-wide program's, where it shows, and the pane overlays'.
+/// An HTML page over a deck page ([`crate::html_overlay`]): the slot generation it belongs to, its focus key and its
+/// element, which the registry owns with the page (by the page's id).
+pub struct OverlayPage {
+    generation: u64,
+    key: String,
+    element: Entity<crate::html_overlay::PageView>,
+    /// It shows where the plan puts it.
+    shown: bool,
+    _focus: Subscription,
+}
+
+impl OverlayPage {
+    /// The page's element.
+    #[must_use]
+    pub fn element(&self) -> &Entity<crate::html_overlay::PageView> {
+        &self.element
+    }
+
+    /// The slot generation it belongs to.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Whether it shows.
+    #[must_use]
+    pub fn is_shown(&self) -> bool {
+        self.shown
+    }
+
+    fn focus_handle(&self, cx: &gpui_kit::App) -> FocusHandle {
+        self.element.read(cx).focus_handle(cx)
+    }
+}
+
+/// A page's overlays: the session-wide program's terminal or page, where it shows, and the pane overlays' terminals
+/// and pages.
 #[derive(Default)]
 pub struct OverlayLayer {
     program: Option<OverlayTerminal>,
     placement: Option<ProgramPlacement>,
     panes: Vec<OverlayTerminal>,
+    program_page: Option<OverlayPage>,
+    pane_pages: Vec<OverlayPage>,
 }
 
 impl OverlayLayer {
@@ -190,31 +233,79 @@ impl OverlayLayer {
         self.program.iter().chain(self.panes.iter())
     }
 
-    /// The overlay terminal `plan` gives the keyboard, if mounted: its focus key and handle.
+    /// The session-wide page.
     #[must_use]
-    pub fn focus(&self, plan: &PanePlan, cx: &gpui_kit::App) -> Option<(String, FocusHandle)> {
-        let overlay = match plan.overlays.focus? {
-            crate::split::OverlayFocus::Program => self.program.as_ref().filter(|program| {
-                plan.overlays
-                    .program
-                    .is_some_and(|show| show.generation == program.generation)
-            }),
-            crate::split::OverlayFocus::Pane(slot) => self.pane(plan.overlays.pane(slot)?),
-        }?;
-        Some((overlay.key.clone(), overlay.focus_handle(cx)))
+    pub fn program_page(&self) -> Option<&OverlayPage> {
+        self.program_page.as_ref()
     }
 
-    /// Hides every overlay terminal: the page is held out of the tree.
+    /// The page over pane overlay slot `generation`.
+    #[must_use]
+    pub fn pane_page(&self, generation: u64) -> Option<&OverlayPage> {
+        self.pane_pages.iter().find(|page| page.generation == generation)
+    }
+
+    /// The pane overlays' pages, in mount order.
+    #[must_use]
+    pub fn pane_pages(&self) -> &[OverlayPage] {
+        &self.pane_pages
+    }
+
+    /// Whether the overlay keyed `key` (a terminal or a page) shows.
+    #[must_use]
+    pub fn shows(&self, key: &str, cx: &gpui_kit::App) -> bool {
+        self.terminals()
+            .any(|overlay| overlay.key() == key && overlay.view().read(cx).is_shown())
+            || self
+                .program_page
+                .iter()
+                .chain(&self.pane_pages)
+                .any(|page| page.key == key && page.shown)
+    }
+
+    /// The overlay `plan` gives the keyboard, if mounted (a terminal or a page): its focus key and handle.
+    #[must_use]
+    pub fn focus(&self, plan: &PanePlan, cx: &gpui_kit::App) -> Option<(String, FocusHandle)> {
+        match plan.overlays.focus? {
+            crate::split::OverlayFocus::Program => {
+                let generation = plan.overlays.program?.generation;
+                if let Some(program) = self.program.as_ref().filter(|program| program.generation == generation) {
+                    return Some((program.key.clone(), program.focus_handle(cx)));
+                }
+                let page = self
+                    .program_page
+                    .as_ref()
+                    .filter(|page| page.generation == generation)?;
+                Some((page.key.clone(), page.focus_handle(cx)))
+            }
+            crate::split::OverlayFocus::Pane(slot) => {
+                let generation = plan.overlays.pane(slot)?;
+                if let Some(overlay) = self.pane(generation) {
+                    return Some((overlay.key.clone(), overlay.focus_handle(cx)));
+                }
+                let page = self.pane_page(generation)?;
+                Some((page.key.clone(), page.focus_handle(cx)))
+            }
+        }
+    }
+
+    /// Hides every overlay terminal and page: the page is held out of the tree (a page off screen asks nothing, and a
+    /// prompt it had goes, upstream's `setOnScreen(false)`).
     pub fn hide(&mut self, cx: &mut gpui_kit::App) {
         self.placement = None;
         for overlay in self.terminals() {
             overlay.show(false, cx);
         }
+        for page in self.program_page.iter_mut().chain(&mut self.pane_pages) {
+            page.shown = false;
+            crate::html_overlay::hide(&page.element, cx);
+        }
     }
 
-    /// Drops the program terminal unless its generation is `live`, and the pane overlays not in `open`: the model tore
-    /// their surfaces down already (a close, a replacement), so this only lets the entities go.
-    fn retain(&mut self, live: Option<u64>, open: &[u64]) {
+    /// Drops the program terminal unless its generation is `live`, the session-wide page unless its generation is
+    /// `page`, and the pane overlays and pages not in `open`: the model tore their surfaces down already (a close, a
+    /// replacement) and the registry releases the pages, so this only lets the entities go.
+    fn retain(&mut self, live: Option<u64>, page: Option<u64>, open: &[u64]) {
         if self
             .program
             .as_ref()
@@ -223,6 +314,13 @@ impl OverlayLayer {
         {
             program.shared.teardown();
         }
+        if self
+            .program_page
+            .as_ref()
+            .is_some_and(|shown| Some(shown.generation) != page)
+        {
+            self.program_page = None;
+        }
         let (kept, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.panes)
             .into_iter()
             .partition(|overlay| open.contains(&overlay.generation));
@@ -230,6 +328,7 @@ impl OverlayLayer {
         for overlay in gone {
             overlay.shared.teardown();
         }
+        self.pane_pages.retain(|page| open.contains(&page.generation));
     }
 }
 
@@ -252,11 +351,12 @@ pub fn sync_page(
 ) {
     let slot = &session.overlay;
     let live = slot.program_active().then_some(slot.generation);
+    let page = slot.page().map(|_| slot.generation);
     let open: Vec<u64> = [OverlayPane::Left, OverlayPane::Right]
         .into_iter()
         .filter_map(|pane| session.pane_overlay(pane).map(|overlay| overlay.generation))
         .collect();
-    layer.retain(live, &open);
+    layer.retain(live, page, &open);
     if let Some(generation) = live
         && layer.program.is_none()
         && !session.overlay.surface.is_present()
@@ -266,13 +366,17 @@ pub fn sync_page(
         layer.program = Some(program);
         session.overlay.surface.replace(Box::new(surface));
     }
+    if layer.program_page.is_none() {
+        layer.program_page = mount_page(session, None, mount, cx);
+    }
     for pane in [OverlayPane::Left, OverlayPane::Right] {
         mount_pane(layer, session, pane, mount, plan, cx);
     }
+    let cover = live.or(page);
     layer.placement = plan
         .overlays
         .program
-        .filter(|program| shown && Some(program.generation) == live)
+        .filter(|program| shown && Some(program.generation) == cover)
         .map(|program| ProgramPlacement {
             fraction: program.fraction,
         });
@@ -282,6 +386,65 @@ pub fn sync_page(
     for overlay in &layer.panes {
         overlay.show(shown && slot_of(plan, overlay.generation).is_some(), cx);
     }
+    apply_pages(layer, session, plan, shown, cx);
+}
+
+/// Gives every page of `session` the model's value and whether it shows where `plan` puts it (the GTK build's page
+/// `apply` at the end of its overlay sync).
+fn apply_pages(layer: &mut OverlayLayer, session: &Session, plan: &PanePlan, shown: bool, cx: &mut Context<Deck>) {
+    let placed = layer.placement.is_some();
+    if let Some(page) = &mut layer.program_page {
+        page.shown = placed;
+    }
+    for page in &mut layer.pane_pages {
+        page.shown = shown && slot_of(plan, page.generation).is_some();
+    }
+    for (pane, page) in session.html_overlays() {
+        let on_screen = match pane.and_then(|pane| session.pane_overlay(pane)) {
+            Some(overlay) => layer.pane_page(overlay.generation).is_some_and(OverlayPage::is_shown),
+            None => placed,
+        };
+        crate::html_overlay::apply(page, on_screen, cx);
+    }
+}
+
+/// The page of the session-wide slot (`pane` `None`) or of `pane`'s slot, mounted (its element, the registry's), with
+/// the deck following its focus; `None` while the slot holds no page.
+fn mount_page(
+    session: &Session,
+    pane: Option<OverlayPane>,
+    mount: &mut Mount<'_, '_>,
+    cx: &mut Context<Deck>,
+) -> Option<OverlayPage> {
+    let (generation, html, background) = match pane {
+        None => {
+            let slot = &session.overlay;
+            (slot.generation, slot.page()?, slot.background_color.as_deref())
+        }
+        Some(pane) => {
+            let overlay = session.pane_overlay(pane)?;
+            (
+                overlay.generation,
+                overlay.html.as_ref()?,
+                overlay.background_color.as_deref(),
+            )
+        }
+    };
+    let element = crate::html_overlay::mount(html, background, mount.window, cx)?;
+    let key = focus_key(generation, pane.is_some());
+    let handle = element.read(cx).focus_handle(cx);
+    let (id, focused_key) = (session.id(), key.clone());
+    // the deck records the page's focus; the page itself reports a pane page's split focus (`html_page_focused`)
+    let focus = cx.on_focus(&handle, mount.window, move |deck, _, cx| {
+        deck.overlay_focused(id, &focused_key, None, cx);
+    });
+    Some(OverlayPage {
+        generation,
+        key,
+        element,
+        shown: false,
+        _focus: focus,
+    })
 }
 
 /// The slot pane overlay `generation` shows over by `plan`.
@@ -293,7 +456,7 @@ pub fn slot_of(plan: &PanePlan, generation: u64) -> Option<Slot> {
 }
 
 /// Mounts `pane`'s overlay once `plan` lays that pane out (a pane no host lays out never gets one, as upstream's
-/// surfaces wait for a backing size). A page in the slot is the HTML overlay's (Task 32).
+/// surfaces wait for a backing size): a program's terminal, or a page's element.
 fn mount_pane(
     layer: &mut OverlayLayer,
     session: &mut Session,
@@ -307,11 +470,16 @@ fn mount_pane(
     };
     let generation = overlay.generation;
     let laid_out = plan.overlays.pane(Slot::of_overlay(pane)) == Some(generation);
-    if !laid_out
-        || overlay.html.is_some()
-        || layer.pane(generation).is_some()
-        || session.pane_overlays.slot(pane).surface.is_present()
-    {
+    if !laid_out || layer.pane(generation).is_some() || layer.pane_page(generation).is_some() {
+        return;
+    }
+    if overlay.html.is_some() {
+        if let Some(page) = mount_page(session, Some(pane), mount, cx) {
+            layer.pane_pages.push(page);
+        }
+        return;
+    }
+    if session.pane_overlays.slot(pane).surface.is_present() {
         return;
     }
     let terminal = spawn(session, Some(pane), generation, mount, cx);
@@ -520,7 +688,11 @@ fn post_exit(poster: &Poster, session: Uuid, generation: u64, pane: Option<Overl
 /// it floats; drawn only while it shows.
 #[must_use]
 pub fn program_element(layer: &OverlayLayer) -> Option<impl IntoElement> {
-    let program = layer.program.as_ref()?;
+    let content: gpui_kit::AnyElement = match (&layer.program, &layer.program_page) {
+        (Some(program), _) => program.view.clone().into_any_element(),
+        (None, Some(page)) => page.element.clone().into_any_element(),
+        (None, None) => return None,
+    };
     let floating = layer.placement.is_some_and(|placement| placement.fraction.is_some());
     let border = crate::chrome::color(agterm_core::chrome::Rgb::WHITE, FLOATING_BORDER_OPACITY);
     let shadow = BoxShadow {
@@ -543,7 +715,7 @@ pub fn program_element(layer: &OverlayLayer) -> Option<impl IntoElement> {
                     .size_full()
                     .overflow_hidden()
                     .when(floating, |panel| panel.rounded(px(FLOATING_RADIUS)))
-                    .child(program.view.clone()),
+                    .child(content),
             )
             .when(floating, |panel| {
                 panel.child(
@@ -566,6 +738,15 @@ pub fn pane_element(overlay: &OverlayTerminal, cx: &gpui_kit::App) -> impl IntoE
         .size_full()
         .when(!shown, Styled::invisible)
         .child(overlay.view.clone())
+}
+
+/// A pane page's element, drawn only while it shows.
+#[must_use]
+pub fn pane_page_element(page: &OverlayPage) -> impl IntoElement {
+    div()
+        .size_full()
+        .when(!page.shown, Styled::invisible)
+        .child(page.element.clone())
 }
 
 #[cfg(test)]

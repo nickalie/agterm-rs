@@ -4,18 +4,21 @@
 use std::path::PathBuf;
 
 use bitflags::bitflags;
+use serde::{Deserialize, Serialize};
 
 /// A browser store's id, chosen by [`crate::Host::create_session`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SessionId(pub(crate) u64);
 
 /// A page's id, chosen by [`crate::Host::create_view`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ViewId(pub(crate) u64);
+
+crate::raw_ids!(SessionId, ViewId);
 
 /// A browser store (`WebKitNetworkSession`): cookies, local storage, caches. Downloads are refused in every one:
 /// nothing a page shows is saved to disk ([`crate::Event::DownloadRefused`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionSpec {
     /// Kept in memory and gone with the session.
     Ephemeral,
@@ -25,7 +28,7 @@ pub enum SessionSpec {
 
 bitflags! {
     /// `WebKitSettings` a page is built with: each flag on sets its setting to true, off to false.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct Settings: u32 {
         /// `enable-javascript-markup`: the page's own scripts run (agterm's user scripts run regardless).
         const JAVASCRIPT_MARKUP = 1;
@@ -56,7 +59,7 @@ impl Settings {
 }
 
 /// When a user script runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InjectionTime {
     /// Before the document's own scripts.
     Start,
@@ -65,7 +68,7 @@ pub enum InjectionTime {
 }
 
 /// A script `WebKit` injects into every top-frame load (`WebKitUserScript`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserScript {
     pub source: String,
     pub time: InjectionTime,
@@ -75,14 +78,14 @@ pub struct UserScript {
 
 /// A script message handler (`window.webkit.messageHandlers.<name>.postMessage(body)`, which returns a promise of
 /// the reply) registered in `world` (`None`: the page's own).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessageHandler {
     pub name: String,
     pub world: Option<String>,
 }
 
 /// A color, each channel in 0..=1.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Rgba {
     pub red: f64,
     pub green: f64,
@@ -107,7 +110,7 @@ impl Rgba {
 }
 
 /// A page's size in logical pixels and its scale; buffers are `width * scale` by `height * scale`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Geometry {
     pub width: u32,
     pub height: u32,
@@ -115,7 +118,7 @@ pub struct Geometry {
 }
 
 /// A page (`WebKitWebView` over a `WPEView`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ViewSpec {
     /// The browser store, created first ([`crate::Host::create_session`]).
     pub session: SessionId,

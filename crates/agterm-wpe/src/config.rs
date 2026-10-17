@@ -5,6 +5,7 @@
 //! imports its buffers, since a dmabuf made on another GPU fails to import (`docs/spikes/20261014-wpe-dmabuf.md`,
 //! quirk 1), and offer only formats and modifiers that device imports.
 
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// `DRM_FORMAT_MOD_LINEAR`: plain row-major memory, which every device that imports dmabufs at all imports.
@@ -19,7 +20,7 @@ pub const fn fourcc(name: &[u8; 4]) -> u32 {
 }
 
 /// A format the consumer imports, with every modifier it imports it with.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BufferFormat {
     /// The DRM fourcc ([`fourcc`]).
     pub fourcc: u32,
@@ -28,7 +29,7 @@ pub struct BufferFormat {
 }
 
 /// The device `WebKit` renders on and what it may hand over.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DmaBufTarget {
     /// The DRM render node of the consumer's GPU (`/dev/dri/renderD128`).
     pub render_node: PathBuf,
@@ -37,7 +38,7 @@ pub struct DmaBufTarget {
 }
 
 /// How frames reach the consumer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FrameMode {
     /// Zero-copy GPU buffers on the consumer's device: the path for everything, video included.
     DmaBuf(DmaBufTarget),
@@ -48,7 +49,7 @@ pub enum FrameMode {
 }
 
 /// What the engine starts with.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostConfig {
     pub frames: FrameMode,
     /// URI schemes served by the consumer ([`crate::Event::SchemeRequest`]), registered before any page exists.

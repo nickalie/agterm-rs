@@ -9,9 +9,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use agterm_wpe::{
-    Event, Frame, FrameContent, Geometry, Host, HostConfig, Load, LoadEvent, MessageHandler, PageState, PolicyKind,
-    PolicyToken, SchemeError, SchemeRequest, SchemeResponse, ScriptMessage, SessionId, SessionSpec, Settings,
-    UserScript, ViewId, ViewSpec,
+    Backend, Event, Frame, FrameContent, Geometry, Host, HostConfig, Load, LoadEvent, MessageHandler, PageState,
+    PolicyKind, PolicyToken, SchemeError, SchemeRequest, SchemeResponse, ScriptMessage, SessionId, SessionSpec,
+    Settings, UserScript, ViewId, ViewSpec,
 };
 
 /// How long one wait may take: the first page of a process starts the web and network processes.
@@ -41,9 +41,18 @@ pub struct Harness {
 }
 
 impl Harness {
-    pub fn start(config: HostConfig) -> Result<Self, String> {
+    /// The engine started with `config` where `backend` says: [`Host::start`] in process, [`Host::start_worker`]
+    /// in a worker.
+    pub fn start(config: HostConfig, backend: Backend) -> Result<Self, String> {
         let shm = matches!(config.frames, agterm_wpe::FrameMode::Shm);
-        let (host, queue) = Host::start(config).map_err(|err| format!("the engine did not start: {err}"))?;
+        let started = match backend {
+            Backend::InProcess => Host::start(config),
+            Backend::Worker => Host::start_worker(config),
+        };
+        let (host, queue) = started.map_err(|err| format!("the engine did not start: {err}"))?;
+        if host.backend() != backend {
+            return Err(format!("the engine runs {:?}, not {backend:?}", host.backend()));
+        }
         let (forward, events) = mpsc::channel();
         std::thread::spawn(move || {
             while let Ok(event) = queue.recv_blocking() {
@@ -84,6 +93,15 @@ impl Harness {
             _ => {}
         }
         Ok(event)
+    }
+
+    /// Forgets what `view` reported and drew (a closed page's frame holds its buffer's descriptors).
+    pub fn forget(&self, view: ViewId) {
+        self.pages.borrow_mut().remove(&view);
+        self.frames.borrow_mut().remove(&view);
+        self.pending
+            .borrow_mut()
+            .retain(|event| !matches!(event, Event::Frame(frame) if frame.view == view));
     }
 
     /// The title `view` last reported.

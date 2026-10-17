@@ -2502,14 +2502,154 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
 - Modify: `crates/agterm-gpui/Cargo.toml` (feature `html`, default on)
 - Modify: `conformance/tools/webkit_probe.py` (GPUI/WPE counterpart)
 
-- [ ] element: bounds/visibility sync, hitbox, focus, scale factor, click forwarding so GPUI popovers close
-- [ ] port the overlay logic from GTK onto `agterm-wpe` (same policies, sessions, scheme, bridge, downloads)
-- [ ] tests: registry/policy/sandbox unit tests carried over; page lifecycle (headless)
-- [ ] HTML conformance tests green on GPUI
-- [ ] manual check on the real screen recorded in the checklist: YouTube 1080p60 via dmabuf
-- [ ] ➕ (Task 2) the overlay never selects SHM while dmabuf import works; when it does fall back (import failed), the
+- [x] element: bounds/visibility sync, hitbox, focus, scale factor, click forwarding so GPUI popovers close
+- [x] port the overlay logic from GTK onto `agterm-wpe` (same policies, sessions, scheme, bridge, downloads)
+- [x] tests: registry/policy/sandbox unit tests carried over; page lifecycle (headless)
+- [x] HTML conformance tests green on GPUI
+- [x] manual check on the real screen recorded in the checklist: YouTube 1080p60 via dmabuf (skipped here — needs the
+      user's real screen; the orchestrator hands it to the user on a dev instance, and Task 33 walks it)
+- [x] ➕ (Task 2) the overlay never selects SHM while dmabuf import works; when it does fall back (import failed), the
       checklist and the log say video is not supported in that mode (Task 2: 2.5 fps YouTube, 80–115 % CPU)
-- [ ] gates + conformance — must pass before Task 33
+- [x] gates + conformance — must pass before Task 33
+- result (2026-10-17):
+  - **`agterm-gpui` `html_overlay/`** (feature `html`, default on, Linux): the GTK build's `html_overlay*` ported
+    onto `agterm-wpe`, module for module. `policy.rs` and `sandbox.rs` carried over with their tests (plus the WPE
+    mappings: `failure_event` from `agterm_wpe::LoadError`, `serve_granted` for the grant scheme's reads);
+    `registry.rs` the core's `HtmlHost` (pages by id, the stores: one in-memory store per page, the saved store under
+    `<state>/browser/<profile>/` made on first use, `browser.clear` with its progress, the grant's `agterm-file`
+    scheme, the bridge's parked replies, zoom, theme refresh) and the engine: `Host::start` with the first page once a
+    window drew (its `FrameMode` from `negotiate(dmabuf_import_caps())`, the grant scheme registered), its events
+    pumped onto the main thread (`init`), one start per process (a failed start fails every page with its reason);
+    `page.rs` the page model of the GTK `page.rs` on the engine's events (load tracker, page reports, policy answers,
+    the hand-off prompt as an app alert withdrawn when the page leaves the screen, `window.close()`, the bridge
+    through `AppState::handle_page_request` with deferred answers through a `Waiter`); `panel.rs` the strip, the
+    separator and the failure view in GPUI (lucide icons, the terminal's colors from `ThemeColors::ansi`, a new
+    `agterm-term` helper); `view.rs` the element `PageView` (modeled on gpui-kit's `crates/webview`, Apache-2.0,
+    attributed in the module docs): bounds and scale sent from prepaint as `Geometry`, visibility from the model's
+    on-screen, a `BlockMouse` hitbox, presses/releases/motion/enter-leave/wheel/touchpad in the content's coordinates,
+    keys from the app's key interceptor after the window's keys, the keymap and the terminal (`key_down`), modifier
+    keys from `on_modifiers_changed`, a focus handle the deck's focus chain gives the page through
+    `OverlayLayer::focus` (so Settings, alerts, pickers, asks and the palette keep the keyboard and hand it back), an
+    `EntityInputHandler` for input methods; frames: one `gpui::DmaBuffer` per `BufferId` (fds duplicated once, dropped
+    on `BuffersRemoved`), `Acquire::Implicit`, every outcome answering `frame_presented`, `take_fallback()` →
+    `fall_back_to_shm`; `menus.rs` the `<select>` popup and the context menu drawn by the app; `input.rs` the pure
+    key/pointer/cursor mappings; `engine.rs` the `Web` trait over `Host` (a recording stand-in in `testing.rs`).
+    Files never reach a page: the engine's clipboard carries only text the app hands it, and nothing is dropped onto a
+    page (the GTK `files.rs` has no counterpart). `overlay.rs` mounts the session-wide page and pane pages
+    (`OverlayPage`) where the GTK build mounted panels; the deck draws them as programs; `windows.rs` settles the
+    registry before the decks and refreshes the themes on a config change; the quit shuts the engine down.
+  - **`agterm-wpe`** grew what WebKitGTK drew itself (`engine/interaction.rs`, `engine/ime.rs`): the clipboard
+    (`Event::Clipboard` on a page's copy, `Host::set_clipboard` before a paste), `<select>` popups
+    (`Event::OptionMenu`/`OptionMenuClosed`, `Host::choose_option`), the context menu as a hit test
+    (`Event::ContextMenu`, `Host::editing_command`: the WPE port's own menu draws nothing and its items run nothing),
+    input methods (the display's `create_input_method_context`: preedit and commit from the consumer, the caret area
+    out as `Event::ImeCursorArea`); `Host` is now `Sync` (frame answers come from the renderer's threads); ids and
+    tokens have `from_raw`/`raw` for a consumer's stand-in engine; a `links` key hands dependents the WPE library
+    directories (the GPUI binaries' rpath); **`launcher::enter`/`supervise`**: with the vendored package the GPUI
+    binary re-runs itself under the `bwrap` overlay as a supervisor (bwrap in a process group of its own,
+    `--json-status-fd` for the child's pid, TERM/INT/HUP/QUIT relayed, the child's exit status returned, a marker that
+    refuses a second attempt), so SIGTERM still runs the quit save.
+  - **Build and CI** (Codex discussion, agreed): `WORKSPACE_WITHOUT_WPE` also excludes `agterm-gpui`;
+    `GPUI_WITHOUT_HTML=(-p agterm-gpui --no-default-features)`; `run-rust-linux.sh --frontend gpui` and
+    `run-gpui-dev.sh` build the GPUI frontend with its pages, the GTK paths without; Ubuntu `rust-linux` runs GPUI's
+    clippy and tests without the overlays; the Arch `wpe` job adds GPUI's clippy, unit tests and the page harness;
+    `conformance-gpui` moved into the Arch container (privileged, `--init`) with the GPUI process tests run again
+    there with the overlays and the GTK build beside them. ⚠️ the Arch conformance job is unproven until CI runs it.
+  - **Tests**: the carried-over policy/sandbox/panel unit tests; `input.rs`, `menus.rs` units; the element against
+    the recording engine (`view/tests.rs`: made, loaded and shown at its mount, geometry and scale, a press focusing
+    the page in its content's coordinates while a popover elsewhere still closes, keys and the paste hand-over,
+    frames answered and the fall-back asked once, the popup and the context menu); the deck
+    (`a_page_takes_the_keyboard_from_its_pane_never_from_a_modal_and_hands_it_back`); `tests/html_overlay` (custom
+    harness, a child per GPU under the launcher, GPUI's headless renderer, the real engine): the frame mode per GPU
+    (dmabuf on the Intel render node, SHM on lavapipe), a page's color read back, a page moved to another window drawn
+    there, a 1080p canvas animation at 40–62 frames/s on dmabufs with no SHM frame and no fall-back (≥ 24 asserted);
+    `agterm-wpe` headless cases for the clipboard, popups, the hit test, the input method and `requestAnimationFrame`;
+    `tests/supervisor.rs` (TERM by pid and INT to the group reach the program's own traps through the supervisor; the
+    group case fails with 130 when bwrap shares the supervisor's group). `webkit_probe.py --engine wpe` launches the
+    staged GPUI build through the harness and opens a page (selftests in `test_webkit_probe.py`).
+  - Conformance: GPUI `--ratchet-only --also-k "html or page or browser"` 645 passed, the 626 listed held, 19 newly
+    green html/page/browser ids added (`rust-gpui-passing.txt` 645); GTK (WebKitGTK, the probe and build split it
+    shares) `--ratchet-only` with the same selection 653 passed, 12 skipped, its 665 held. Full runs were not made.
+  - Deviations: the context menu is the app's (no Copy Image, spelling or media items: WPE's items cannot run);
+    nothing can be dropped onto a page (GPUI on Linux takes only file drops, WPE has no drop API); a page has no
+    accessibility tree in GPUI's (no AT-SPI bridge from an offscreen page); no `html` capability exists in the
+    vocabulary to claim (the html tests are ungated), so none was added.
+  - For Task 33: walk the HTML rows on the real screen — YouTube 1080p60 via dmabuf (pending row), a `<select>`, the
+    context menu, an input method, NVIDIA's own driver (its modifier choice and implicit fences), the AppArmor profile
+    on the GPUI binary; `htmlOverlay.*` ids as element ids. For Task 34: the GTK `html_overlay*`, WebKitGTK and
+    `webkit_probe.py`'s WebKitGTK route go with the GTK build; Ubuntu has no WPE `WebKit` 2.54, so its jobs build GPUI
+    without the overlays (`GPUI_WITHOUT_HTML`) and the GPUI checks with pages stay in the Arch jobs until an Ubuntu WPE
+    provider appears.
+  - ➕ (review) **the app never enters the vendored package's overlay; its engine runs in a worker there.** With the
+    vendored WPE the whole app ran inside `bwrap`, so every pane shell, zmx daemon (which outlive the app), hook and
+    launched program inherited bwrap's user namespace and `PR_SET_NO_NEW_PRIVS`: no `sudo`, `su`, `pkexec`, `passwd`
+    or other setuid or file-capability program, root's files shown as `nobody`'s. A release WPE build has its
+    helpers' paths compiled in (`/usr/lib/wpe-webkit-2.0`, `/usr/bin/bwrap`; `WEBKIT_EXEC_PATH` and the process
+    prefixes exist only in DEVELOPER_MODE builds), and an unprivileged mount namespace always comes with a user
+    namespace, so only a process boundary keeps the app out: **`agterm_wpe::worker`**. With the vendored package
+    `Host::start` re-runs the app's own image (opened from `/proc/self/exe` and passed down as a descriptor, so a file
+    replaced since does not matter; `/proc/<pid>/exe` is unreachable from inside the user namespace) under the overlay
+    as the engine worker and drives it over an `AF_UNIX` `SOCK_SEQPACKET` pair, close-on-exec on both sides (the
+    worker's end kept open across its exec alone): serde_json messages, a dmabuf's planes passed by `SCM_RIGHTS`
+    (one `Arc<DmaBuf>` per buffer kept app-side as before), bodies over 32 KiB and SHM pixels and scheme bytes in
+    sealed memfds (size and seals checked before reading; a truncated packet, a wrong descriptor count or a bad size
+    is a broken transport). Every `Host` call only queues: a writer and a reader thread own the socket. The start is
+    the worker's hello (protocol, build, pid), the configuration, then the engine's start result (a missing render
+    node still fails as `StartError::Display`), within 20 s. The worker runs in a process group of its own and ends on
+    Quit (its `Stopped` flushed first, at most 2 s) or at the end of its socket, never through `--die-with-parent`
+    (PDEATHSIG follows the thread that started bwrap); `shutdown` waits at most 5 s, then `shutdown(2)`s the socket,
+    which frees a writer stuck on a worker that stopped reading, and reaps the worker, killing its group after 2 s.
+    A worker that dies unasked answers every waiting evaluation "the web engine ended" and closes the event channel;
+    the registry then fails every page with "the web engine ended unexpectedly; restart agterm to show pages again"
+    (no restart in process: the pages' engine state is gone with it). The system's package keeps the in-process
+    engine; `Host::start_worker` asks for a worker anywhere, and the headless suite runs every mode on both backends
+    (`worker`: a plain consumer outside any overlay; `direct`: the in-process engine, inside the overlay for the
+    vendored package) plus `worker-death`, so the Arch CI job exercises the transport with the system's package. The
+    registry now starts the engine on a thread of its own (`EngineState::Starting`, pages wait meanwhile), so a slow
+    worker start never holds the main thread and a SIGTERM quit waits on nothing. Every `main` that may start an
+    engine calls `agterm_wpe::worker::serve_if_asked` first (the app with its logging, the two custom harnesses).
+    Removed with the supervisor: `launcher::enter`/`supervise`, `OVERLAID_ENV`, `tests/supervisor.rs`, agterm-wpe's
+    `signal-hook`; `launcher::command` stays for the engine-only reference children. The earlier sign-off on the
+    supervisor is withdrawn; Codex discussion (agreed), transcript
+    `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/task-32-fixer-wpe-sandbox-scope/transcript.md`.
+    Also from the review: a dmabuf the renderer fails to import later wakes the element at once (an import-failure
+    channel from the frame's completion), so a still page falls back to SHM without another frame; a page's popups
+    exist only while it holds the keyboard and shows (refused otherwise, closed on blur or off screen), so a popup
+    never draws over Settings, an alert, a picker, an ask or the palette; an off-screen page inserts no hitbox and
+    sends no geometry, so the terminal under it keeps the pointer; key releases carry their press's XKB keycode;
+    `OverlayPage::id` is gone and `panel::strip` lost its unused `cx`. Tests: wire, message and client units (memfd
+    bodies and blobs, plane order by inode, a refused packet's descriptors closed, unsealed or resized memfds
+    refused, a non-reading worker's shutdown within bounds, a dead worker's evaluations answered, a silent worker's
+    start timing out and reaped; a 1920x1080 SHM frame crosses the transport in about 6 ms in a debug build); the
+    headless backends above; seven view and registry tests; and **`tests/privileges.rs`**: the built app in Live mode
+    on a private Xvfb, a page loaded, the app, the zmx daemon, the pane's shell and a command typed into it show
+    `NoNewPrivs: 0`, the test's own uid and gid maps and user namespace, and `/` owned by uid 0; under the vendored
+    package exactly one of the app's processes, the worker, sits in another user namespace with `NoNewPrivs: 1`;
+    SIGTERM ends the app with 0 and its quit save, and afterwards the surviving daemon and a command `zmx send` runs in
+    its session show the same (run in the Arch `conformance-gpui` job too, with the system's package). Each new test
+    fails with its fix reverted (`tests/privileges.rs` with the app re-executed under the overlay as before).
+    Conformance: GPUI `--ratchet-only --also-k "html or page or browser"` 645 passed, the 645 listed held (its pages
+    now run through the worker on this machine); no GTK run (nothing the GTK build links or its suite runs changed).
+    Round 2: the app treats the worker as untrusted. Its reads have bounds of their own (`wire::Limits::FROM_WORKER`:
+    a 64 MiB body, a blob no larger than the largest frame). Frames keep to 16384 px a side and 2^26 px; SHM regions
+    must be non-empty, inside the frame and match its pixels exactly; dmabufs need the frame's size, 1–4 planes, each a
+    dmabuf whose object holds the plane's offset and the main plane's rows. Damage is clipped, and popup and caret
+    coordinates are clamped to ±2^24. The client keeps dmabufs per page and drops them on `CloseView`, on worker death
+    and on `BuffersRemoved`, which the engine now also sends when a page closes. Frames of pages the app never made or
+    already closed are dropped. A page keeps at most 8 buffers and 4 unanswered frames; extra frames are answered
+    unseen. The event queue is bounded (256) and closed first by a shutdown. A page given the keyboard (or an input
+    method's composition) while the engine starts gets it replayed when its engine page is made.
+    Round 3: the app's queue to the worker (its commands and the reader's own frame answers) is bounded at 1024
+    packets and 64 MiB (one larger packet goes when nothing waits). Past either bound, or on a failed write, the
+    transport is broken as if the worker had died: its socket shut, its pages failed, and the worker reaped. Nothing
+    that queues ever waits, neither the main thread nor the reader holding the pages lock.
+    Round 4: the app's own traffic never breaks a worker that reads (a paste over 64 MiB followed by its key used to):
+    1024 packets / 64 MiB are now the queue's working set, past which it is only backlogged; the transport breaks
+    when a backlog goes 30 s without a completed send, past a hard bound of 16384 packets or 2 GiB + 64 MiB queued, or
+    past 1024 of the reader's own unseen-frame answers (an allowance the app's traffic never uses). One mutex holds the
+    queue, the writer drops what waits once it closes, and a command larger than the worker reads (1 GiB) is replaced
+    (empty clipboard, error answers), never sent. Codex discussion (signed off), transcript
+    `~/.local/state/plan-exec-revmux/gpui-frontend/discussions/task-32-fixer4-outgoing-bounds/transcript.md`.
 
 ### Stage 4 — switch
 

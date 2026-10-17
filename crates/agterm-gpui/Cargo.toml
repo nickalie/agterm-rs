@@ -10,6 +10,12 @@ publish.workspace = true
 name = "agterm-gpui"
 path = "src/main.rs"
 
+[features]
+default = ["html"]
+# HTML overlays on WPE WebKit (agterm-wpe, Linux), which needs a WPE WebKit at build and run time (README > WPE
+# WebKit). Without it the core refuses every page; the Ubuntu CI jobs build that way.
+html = ["dep:agterm-wpe", "dep:gio"]
+
 [dependencies]
 agterm-app.workspace = true
 agterm-core.workspace = true
@@ -46,6 +52,10 @@ x11rb.workspace = true
 zbus.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+agterm-wpe = { workspace = true, optional = true }
+# the default web browser a page hands off to, whatever the address's type (upstream's `SystemBrowser`): the gio the
+# WPE host already links
+gio = { workspace = true, optional = true }
 gpui-pre-linux.workspace = true
 netlink-packet-core.workspace = true
 netlink-packet-route.workspace = true
@@ -62,6 +72,20 @@ gpui-pre-wgpu.workspace = true
 name = "external_texture"
 path = "tests/external_texture/main.rs"
 harness = false
+
+# HTML pages end to end on the real WPE WebKit, which runs once per process: a child per Vulkan driver, each a plain
+# process whose engine runs in a worker where WPE WebKit is vendored (tests/html_overlay/main.rs).
+[[test]]
+name = "html_overlay"
+path = "tests/html_overlay/main.rs"
+harness = false
+required-features = ["html"]
+
+# The app, its Live panes and their sessions keep the user's privileges while pages run (tests/privileges.rs).
+[[test]]
+name = "privileges"
+path = "tests/privileges.rs"
+required-features = ["html"]
 
 [lints]
 workspace = true

@@ -3,8 +3,9 @@
 //!
 //! What a page may not do is refused here, as the HTML overlay refuses it (`agterm-gtk`'s `html_overlay/page.rs`): no
 //! new windows (`create` is left unconnected, so `WebKit` makes none), script dialogs answered silently, no file
-//! chooser, no permission, no full screen, no notification, no context menu (none is drawn offscreen, and its
-//! download items stay out of reach). Downloads are refused per store ([`super::create_session`]).
+//! chooser, no permission, no full screen, no notification. The context menu is the consumer's to draw
+//! ([`super::interaction`]), so its download and new-window items never exist. Downloads are refused per store
+//! ([`super::create_session`]).
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -41,6 +42,8 @@ pub(crate) struct Page {
     closed: Cell<bool>,
     /// The page renders dmabufs (the engine's mode, until [`Page::fall_back_to_shm`]).
     dmabuf: Cell<bool>,
+    /// Where the last pointer press was, in logical pixels: a context menu that names no position opens there.
+    pressed_at: Rc<Cell<(i32, i32)>>,
     /// The web process is being ended for the fall-back to SHM: its termination is not reported, and the page
     /// reloads.
     falling_back: Cell<bool>,
@@ -85,6 +88,7 @@ impl Page {
             reported: std::cell::RefCell::default(),
             closed: Cell::new(false),
             dmabuf: Cell::new(display.renders_dmabuf()),
+            pressed_at: Rc::new(Cell::new((0, 0))),
             falling_back: Cell::new(false),
         });
         if let Some(background) = spec.background {
@@ -97,6 +101,9 @@ impl Page {
         page.connect_policy();
         page.connect_messages();
         page.connect_refusals();
+        super::interaction::connect_option_menu(&page.web_view, id);
+        let pressed_at = Rc::clone(&page.pressed_at);
+        super::interaction::connect_context_menu(&page.web_view, id, events.clone(), move || pressed_at.get());
         Ok(page)
     }
 
@@ -126,7 +133,19 @@ impl Page {
             ViewCommand::Input(input) => self.input(input),
             ViewCommand::Presented(buffer) => self.view.presented(buffer),
             ViewCommand::FallBackToShm => self.fall_back_to_shm(),
+            ViewCommand::Editing(command) => super::interaction::editing_command(&self.web_view, command),
+            ViewCommand::ImePreedit { text, cursor } => self.with_input_method(|method| method.preedit(&text, cursor)),
+            ViewCommand::ImeCommit(text) => self.with_input_method(|method| method.commit(&text)),
             ViewCommand::Evaluate { script, world, reply } => self.evaluate(&script, world.as_deref(), reply),
+        }
+    }
+
+    /// Runs `change` on the view's input method; `WebKit` asks the display for one once a field takes the keyboard.
+    fn with_input_method(&self, change: impl FnOnce(&super::ime::InputMethod)) {
+        if let Some(method) = self.view.input_method() {
+            change(&method);
+        } else {
+            tracing::debug!("input method text for a page whose field has no input method yet");
         }
     }
 
@@ -214,6 +233,17 @@ impl Page {
     fn input(&self, input: Input) {
         let view = self.view.as_wpe();
         let time = event_time();
+        if let Input::Pointer(Pointer {
+            kind: PointerKind::Down(_),
+            x,
+            y,
+            ..
+        }) = input
+        {
+            #[expect(clippy::cast_possible_truncation, reason = "a position in a page fits an i32")]
+            let at = (x as i32, y as i32);
+            self.pressed_at.set(at);
+        }
         let event = match input {
             Input::Pointer(pointer) => pointer_event(view, time, pointer),
             Input::Scroll(scroll) => scroll_event(view, time, scroll),
@@ -457,7 +487,7 @@ impl Page {
             }
             handled(true)
         });
-        for signal in ["enter-fullscreen", "show-notification", "context-menu"] {
+        for signal in ["enter-fullscreen", "show-notification"] {
             self.web_view.connect_local(signal, false, |_| handled(true));
         }
     }

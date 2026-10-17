@@ -75,6 +75,21 @@ impl agterm_core::LineChannel for StreamLines {
     }
 }
 
+/// Who waits for a deferred answer: a control connection, or a page's bridge request (by its token).
+enum Waiter {
+    Socket(ReplySender),
+    Page(u64),
+}
+
+impl Waiter {
+    fn send(self, response: agterm_proto::Response) {
+        match self {
+            Self::Socket(sender) => sender.send(response),
+            Self::Page(token) => crate::html_overlay::answer(token, &response),
+        }
+    }
+}
+
 /// Where handlers post tasks: the main loop, held weakly so a handler outliving it posts nothing.
 pub type Poster = Weak<dyn MainLoop<AppState>>;
 
@@ -702,10 +717,40 @@ impl AppState {
             Dispatched::Done(response) => response.into(),
             Dispatched::Pending { after, resume } => {
                 let (reply, sender) = Reply::deferred();
-                self.schedule(request.cmd, after, resume, sender);
+                self.schedule(request.cmd, after, resume, Waiter::Socket(sender));
                 reply
             }
         }
+    }
+
+    /// Runs a request an HTML page sent through its bridge and answers the page's request `token`, as
+    /// [`AppState::handle_request`] answers the socket (upstream's `HtmlBridgeDispatch`, the socket's entry point).
+    pub fn handle_page_request(&mut self, request: &Request, token: u64) {
+        // a panic answers `ok:false` as the socket's handler does, rather than unwinding into the main loop
+        let dispatched = panic::catch_unwind(AssertUnwindSafe(|| self.core.begin(request)));
+        self.settle();
+        match dispatched {
+            Ok(Dispatched::Done(response)) => crate::html_overlay::answer(token, &response),
+            Ok(Dispatched::Pending { after, resume }) => {
+                self.schedule(request.cmd, after, resume, Waiter::Page(token));
+            }
+            Err(_) => {
+                tracing::error!(cmd = %request.cmd, "control handler panicked on a page's request");
+                crate::html_overlay::answer(token, &ControlError::HandlerPanicked(request.cmd).into());
+            }
+        }
+    }
+
+    /// Input reached a page: auto-follow waits for the user, as for typing in a terminal.
+    #[cfg(all(feature = "html", target_os = "linux"))]
+    pub(crate) fn page_input(&mut self) {
+        self.arm_auto_follow();
+    }
+
+    /// Asks the frontend to reveal `path` in the file manager (a page's Show in Files).
+    #[cfg(all(feature = "html", target_os = "linux"))]
+    pub(crate) fn reveal(&mut self, path: std::path::PathBuf) {
+        self.frontend.reveals.push(path);
     }
 
     /// The answer to a won overlay job claim, which keeps the connection (upstream's `adoptOverlayJobStream`): the
@@ -821,8 +866,10 @@ impl AppState {
         }
     }
 
-    /// Runs `resume` after `after`; a closed loop drops it, and the dropped sender answers "shutting down".
-    fn schedule(&self, cmd: Command, after: Duration, resume: Resume, sender: ReplySender) {
+    /// Runs `resume` after `after`; a closed loop drops it. A socket waiter's dropped sender then answers "shutting
+    /// down"; a page's bridge request gets no answer here, and the engine answers it "page closed" when the quit closes
+    /// the page.
+    fn schedule(&self, cmd: Command, after: Duration, resume: Resume, sender: Waiter) {
         let Some(main_loop) = self.poster.upgrade() else {
             return;
         };
@@ -833,7 +880,7 @@ impl AppState {
     }
 
     /// One step of a waiting command; a panic in it answers `ok:false` as a handler's panic does.
-    fn resume(&mut self, cmd: Command, resume: Resume, sender: ReplySender) {
+    fn resume(&mut self, cmd: Command, resume: Resume, sender: Waiter) {
         let step = panic::catch_unwind(AssertUnwindSafe(|| resume(&mut self.core)));
         self.settle();
         match step {

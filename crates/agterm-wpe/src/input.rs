@@ -4,10 +4,11 @@
 use bitflags::bitflags;
 
 use crate::platform_sys as platform;
+use serde::{Deserialize, Serialize};
 
 bitflags! {
     /// Keyboard modifiers and pressed pointer buttons (`WPEModifiers`).
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
     pub struct Modifiers: u32 {
         const CONTROL = platform::WPE_MODIFIER_KEYBOARD_CONTROL;
         const SHIFT = platform::WPE_MODIFIER_KEYBOARD_SHIFT;
@@ -23,7 +24,7 @@ bitflags! {
 }
 
 /// A pointer button, numbered as `WPEPlatform` (and X11/evdev order) numbers them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Button {
     Primary,
     Middle,
@@ -45,7 +46,7 @@ impl Button {
 }
 
 /// A pointer event at (`x`, `y`) in the view's logical pixels.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Pointer {
     pub kind: PointerKind,
     pub x: f64,
@@ -53,7 +54,7 @@ pub struct Pointer {
     pub modifiers: Modifiers,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PointerKind {
     /// The pointer entered the view.
     Enter,
@@ -66,7 +67,7 @@ pub enum PointerKind {
 }
 
 /// A wheel or touchpad scroll at (`x`, `y`).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Scroll {
     pub x: f64,
     pub y: f64,
@@ -81,7 +82,7 @@ pub struct Scroll {
 }
 
 /// A key press or release.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Key {
     pub pressed: bool,
     /// The XKB keyval (`XKB_KEY_*`).
@@ -92,7 +93,7 @@ pub struct Key {
 }
 
 /// Input for a page.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Input {
     Pointer(Pointer),
     Scroll(Scroll),

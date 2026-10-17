@@ -36,10 +36,14 @@ run_dev_instance() {
   # sun_path holds 108 bytes on Linux, but the app refuses 104 or more, as upstream's macOS limit.
   ((${#socket} < 104)) || die "socket path too long (${#socket} bytes, the limit is 103): $socket"
 
-  # both frontends' workspace: the WPE WebKit -sys crates need a WPE neither staged app links yet
-  local cargo_args=(build "${WORKSPACE_WITHOUT_WPE[@]}")
-  [[ "$profile" == release ]] && cargo_args+=(--release)
-  (cd "$NATIVE_ROOT" && cargo "${cargo_args[@]}")
+  # both frontends' workspace without what links WPE WebKit, then the GPUI frontend: with its HTML overlays (which need
+  # a WPE WebKit, README > WPE WebKit) when it is the one launched, without them beside the GTK app
+  local profile_args=()
+  [[ "$profile" == release ]] && profile_args=(--release)
+  local gpui_args=("${GPUI_WITHOUT_HTML[@]}")
+  [[ "$frontend" == gtk ]] || gpui_args=(-p agterm-gpui)
+  (cd "$NATIVE_ROOT" && cargo build "${profile_args[@]}" "${WORKSPACE_WITHOUT_WPE[@]}" \
+    && cargo build "${profile_args[@]}" "${gpui_args[@]}")
   "$NATIVE_ROOT/scripts/stage.sh" "$root/stage" --profile "$profile" --frontend "$frontend"
   local app="$root/stage/bin/$app_name"
   [[ -x "$app" ]] || die "no $app_name binary staged in $root/stage: the app crate does not build one yet"
