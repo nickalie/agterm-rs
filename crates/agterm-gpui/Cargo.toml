@@ -69,8 +69,9 @@ netlink-sys.workspace = true
 agterm-host = { workspace = true, features = ["fakes"] }
 gpui-kit = { workspace = true, features = ["test-support"] }
 gpui-pre-wgpu.workspace = true
-# the global hotkey's test presses its keys on a private Xvfb through XTEST (tests/global_hotkey.rs); the window test
-# lays monitors out on one through RandR (tests/x11_window.rs)
+# the global hotkey's and the keyboard layout's tests press their keys on a private Xvfb through XTEST
+# (tests/global_hotkey.rs, tests/keyboard_layout.rs); the window test lays monitors out on one through RandR
+# (tests/x11_window.rs)
 x11rb = { workspace = true, features = ["randr", "xtest"] }
 
 # GPUI's headless renderer opens one GPU device per process, so the external texture cases run in a child process per
@@ -92,6 +93,12 @@ required-features = ["html"]
 [[test]]
 name = "privileges"
 path = "tests/privileges.rs"
+required-features = ["html"]
+
+# SIGTERM quits within its deadline with Live sessions busy and HTML pages open (tests/quit.rs).
+[[test]]
+name = "quit"
+path = "tests/quit.rs"
 required-features = ["html"]
 
 [lints]
