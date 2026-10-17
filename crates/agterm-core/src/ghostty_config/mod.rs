@@ -21,7 +21,7 @@
 //! compare against since the GTK build went):
 //! - count: keys whose type has a `parseCLI` agterm does not port ([`validate::Kind::Opaque`]: `font-style*`,
 //!   `font-variation*`, `font-codepoint-map`, `clipboard-codepoint-map`, `adjust-*`, `command`, `initial-command`,
-//!   `env`, `input`, `working-directory`, `quick-terminal-size`, `background-blur`, `mouse-scroll-multiplier`,
+//!   `working-directory`, `quick-terminal-size`, `background-blur`, `mouse-scroll-multiplier`,
 //!   `macos-icon-screen-color`, `command-palette-entry`, `key-remap`) take any value: a malformed one counts 0 here,
 //!   1 in libghostty (a bare key still counts when the type needs a value). `keybind` is ported ([`binds`]) and
 //!   counts as libghostty counts it (a `chain=` with nothing before it to extend counts when the line is applied,

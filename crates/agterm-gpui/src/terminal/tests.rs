@@ -801,6 +801,56 @@ fn the_grapheme_width_method_reaches_a_new_terminal(cx: &mut TestAppContext) {
     }
 }
 
+/// `image-storage-limit` reaches the pane when it starts and again on a reload (Ghostty applies it live): with the
+/// limit at 0 a Kitty transmission stores nothing.
+#[gpui_kit::test]
+fn the_image_storage_limit_reaches_the_pane_at_its_start_and_on_a_reload(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    // image N (2x1 RGBA, quiet) and `sentN` on each line of input, the first right away
+    let script = "n=0; while :; do n=$((n+1)); \
+                  printf '\\033_Ga=T,f=32,s=2,v=1,i=%d,q=2;AQIDBAUGBwg=\\033\\\\sent%d ' $n $n; read _; done";
+    let off = TerminalConfig {
+        kitty_image_limit: 0,
+        ..TerminalConfig::default()
+    };
+    let terminal = cx.new(|cx| Terminal::new(spec(), off.clone(), spawn_script(script, dir.path()), cx));
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(&terminal, ViewRole::Owner, cx));
+    let stored = |view: &Entity<TerminalView>, cx: &mut VisualTestContext| -> Vec<u32> {
+        view.read_with(cx, |view, _| {
+            view.painted()
+                .map(|frame| frame.kitty.images.iter().map(|image| image.key.id).collect())
+                .unwrap_or_default()
+        })
+    };
+    let send = |terminal: &Entity<Terminal>, cx: &mut VisualTestContext| {
+        let pane = terminal
+            .read_with(cx, |terminal, _| terminal.shared().pane())
+            .expect("a pane");
+        pane.write(b"\n").unwrap();
+    };
+    wait_painted(&view, cx, "sent1");
+    assert_eq!(
+        stored(&view, cx),
+        Vec::<u32>::new(),
+        "a pane started at 0 stores no image"
+    );
+
+    terminal.update(cx, |terminal, cx| terminal.reload_config(TerminalConfig::default(), cx));
+    send(&terminal, cx);
+    wait_painted(&view, cx, "sent2");
+    assert_eq!(
+        stored(&view, cx),
+        [2],
+        "the default limit, reloaded, stores the next one"
+    );
+
+    terminal.update(cx, |terminal, cx| terminal.reload_config(off, cx));
+    send(&terminal, cx);
+    wait_painted(&view, cx, "sent3");
+    assert!(!stored(&view, cx).contains(&3), "a reload to 0 stores no new image");
+}
+
 #[gpui_kit::test]
 fn sprite_characters_leave_the_font_and_split_the_runs(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();

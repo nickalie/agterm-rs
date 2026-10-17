@@ -52,6 +52,11 @@ pub enum Kind {
     Keybind,
     /// `SelectionWordChars`: a Zig string literal's characters ([`decode_codepoints`]).
     SelectionWordChars,
+    /// `RepeatableStringMap`: `KEY=VALUE` (`env`); a value without `=` is `error.ValueRequired`.
+    StringMap,
+    /// `RepeatableReadableIO` (`input`): a Zig string literal's body ([`decode_zig_string`]), tagged `raw:`/`path:`
+    /// or not.
+    ReadableIo,
     /// A type with a `parseCLI` agterm does not port: every value is accepted, a bare key too unless `needs_value`.
     Opaque { needs_value: bool },
     /// A type whose `parseCLI` refuses every value (`error.NotImplemented`).
@@ -215,6 +220,8 @@ fn check_value(kind: Kind, value: &str) -> Result<(), ValueError> {
         Kind::Limit => parse_limit(value).map(drop),
         Kind::Keybind => super::binds::check(value).map_err(|error| ValueError::Other(error.zig_name())),
         Kind::SelectionWordChars => decode_codepoints(value).map(drop).ok_or(ValueError::Invalid),
+        Kind::StringMap => value.contains('=').then_some(()).ok_or(ValueError::Required),
+        Kind::ReadableIo => decode_zig_string(value).map(drop),
         Kind::Bool
         | Kind::String
         | Kind::Path
@@ -851,18 +858,31 @@ fn unquote(value: &str) -> Result<String, ValueError> {
 /// escape a character's UTF-8); `None` for a malformed escape.
 #[must_use]
 pub fn decode_string(text: &str) -> Option<Vec<u8>> {
+    decode_zig_string(text).ok()
+}
+
+/// [`decode_string`] with the error `string.parse` returns.
+///
+/// # Errors
+///
+/// [`ValueError::Other`]: `error.InvalidString` for a malformed escape, `error.Utf8CannotEncodeSurrogateHalf` for a
+/// `\u{...}` of a surrogate (Zig's escape parser takes it, the UTF-8 encoder refuses it).
+pub fn decode_zig_string(text: &str) -> Result<Vec<u8>, ValueError> {
     let bytes = text.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut at = 0;
     while let Some(byte) = bytes.get(at) {
         if *byte == b'\\' {
-            at = decode_escape(bytes, at + 1, &mut decoded).ok()?;
+            at = decode_escape(bytes, at + 1, &mut decoded).map_err(|error| match error {
+                ValueError::Other(name) => ValueError::Other(name),
+                ValueError::Required | ValueError::Invalid => ValueError::Other("error.InvalidString"),
+            })?;
         } else {
             decoded.push(*byte);
             at += 1;
         }
     }
-    Some(decoded)
+    Ok(decoded)
 }
 
 /// `config/string.zig`'s `codepointIterator`: a Zig string literal's characters, its escapes decoded (`\xNN` the
@@ -924,6 +944,9 @@ fn decode_escape(bytes: &[u8], at: usize, out: &mut Vec<u8>) -> Result<usize, Va
                     return Err(ValueError::Invalid);
                 }
                 index += 1;
+            }
+            if (0xd800..=0xdfff).contains(&value) {
+                return Err(ValueError::Other("error.Utf8CannotEncodeSurrogateHalf"));
             }
             let character = char::from_u32(value).ok_or(ValueError::Invalid)?;
             out.extend_from_slice(character.encode_utf8(&mut [0; 4]).as_bytes());

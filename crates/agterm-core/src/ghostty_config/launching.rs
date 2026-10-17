@@ -5,6 +5,9 @@
 //! libghostty's embedder options came first (an initial input, a working directory, extra variables).
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt;
+use std::path::PathBuf;
 
 use strum::{EnumIter, EnumString, IntoStaticStr};
 
@@ -58,22 +61,34 @@ impl WorkingDirectory {
 pub enum InputSource {
     /// `raw:<string>` (or a value with no known prefix), its Zig string escapes decoded.
     Raw(Vec<u8>),
-    /// `path:<path>`: the file's contents, read when the pane starts.
-    Path(String),
+    /// `path:<path>`: the file's contents, read when the pane starts; its Zig string escapes decoded too.
+    Path(PathBuf),
 }
 
 impl InputSource {
-    /// `ReadableIO.parseCLI`: `raw:` and `path:` tag the value, anything else is raw; `None` when the value's Zig
-    /// string escapes do not decode (libghostty refuses the line).
+    /// `ReadableIO.parseCLI` and `cloneParsed`: `cli.args.parseTaggedUnion` takes the tag before the first `:`
+    /// (spaces and tabs trimmed; no `:` leaves an empty value), `raw` and `path` tag the value, any other is raw as
+    /// a whole; the value's Zig string escapes decoded. `None` when they do not decode (validation refuses the line,
+    /// [`validate::Kind::ReadableIo`]).
     fn parse(value: &str) -> Option<Self> {
-        validate::decode_string(value)?;
-        if let Some(path) = value.strip_prefix("path:") {
-            return Some(Self::Path(path.to_owned()));
+        let (tag, tagged) = match value.split_once(':') {
+            Some((tag, tagged)) => (tag, tagged),
+            None => (value, ""),
+        };
+        match tag.trim_matches([' ', '\t']) {
+            "path" => {
+                let path = validate::decode_string(tagged)?;
+                Some(Self::Path(PathBuf::from(OsString::from_vec(path))))
+            }
+            "raw" => validate::decode_string(tagged).map(Self::Raw),
+            _ => validate::decode_string(value).map(Self::Raw),
         }
-        let raw = value.strip_prefix("raw:").unwrap_or(value);
-        validate::decode_string(raw).map(Self::Raw)
     }
 }
+
+/// `std.ascii.whitespace`, which `RepeatableStringMap.parseCLI` trims (vertical tab included, unlike
+/// [`char::is_ascii_whitespace`]).
+const ZIG_ASCII_WHITESPACE: [char; 6] = [' ', '\t', '\n', '\r', '\u{0b}', '\u{0c}'];
 
 /// libghostty's default `abnormal-command-exit-runtime`, in milliseconds.
 pub const DEFAULT_ABNORMAL_COMMAND_EXIT_RUNTIME: u32 = 250;
@@ -114,9 +129,12 @@ impl Launching {
         match key {
             "env" => match value {
                 None => self.env.clear(),
-                // `RepeatableStringMap.parseCLI`: `key=value` sets, `key=` drops the key
+                // `RepeatableStringMap.parseCLI`: `key=value` sets, `key=` drops the key, both sides of the first
+                // `=` trimmed; a value without `=` is refused before it gets here
                 Some(value) => {
                     if let Some((name, entry)) = value.split_once('=') {
+                        let name = name.trim_matches(ZIG_ASCII_WHITESPACE);
+                        let entry = entry.trim_matches(ZIG_ASCII_WHITESPACE);
                         if entry.is_empty() {
                             self.env.remove(name);
                         } else {

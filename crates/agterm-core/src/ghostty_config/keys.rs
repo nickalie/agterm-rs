@@ -320,7 +320,7 @@ pub static KEYS: &[KeySpec] = &[
     KeySpec {
         name: "env",
         zig: "RepeatableStringMap",
-        kind: Kind::Opaque { needs_value: true },
+        kind: Kind::StringMap,
     },
     KeySpec {
         name: "faint-opacity",
@@ -534,7 +534,7 @@ pub static KEYS: &[KeySpec] = &[
     KeySpec {
         name: "input",
         zig: "RepeatableReadableIO",
-        kind: Kind::Opaque { needs_value: true },
+        kind: Kind::ReadableIo,
     },
     KeySpec {
         name: "key-remap",

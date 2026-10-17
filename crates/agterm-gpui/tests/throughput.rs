@@ -140,7 +140,10 @@ fn screen_holds(sandbox: &Sandbox, needle: &str) -> bool {
 /// What the sampler saw while the output ran.
 #[derive(Debug, Default)]
 struct Samples {
+    /// Every request's time to its answer, a failed one's to its failure.
     latencies: Vec<Duration>,
+    /// The requests that got no answer (a timeout, a refused connection, an error reply), with their errors.
+    failures: Vec<String>,
     peak_rss_kb: u64,
 }
 
@@ -162,8 +165,10 @@ fn sample(sandbox: &Sandbox, pid: u32, done: &AtomicBool) -> Samples {
     let mut samples = Samples::default();
     while !done.load(Ordering::Acquire) {
         let started = Instant::now();
-        if request(sandbox, "tree", None).is_ok() {
-            samples.latencies.push(started.elapsed());
+        let answer = request(sandbox, "tree", None);
+        samples.latencies.push(started.elapsed());
+        if let Err(error) = answer {
+            samples.failures.push(format!("after {:?}: {error}", started.elapsed()));
         }
         samples.peak_rss_kb = samples.peak_rss_kb.max(status_kb(pid, "VmRSS:").unwrap_or(0));
         std::thread::sleep(Duration::from_millis(100));
@@ -265,12 +270,18 @@ fn a_flood_of_output_keeps_its_pace_its_memory_bounded_and_the_ui_answering() ->
             "rss_peak_mb": peak_kb / 1024,
             "rss_after_mb": status_kb(pid, "VmRSS:").unwrap_or(0) / 1024,
             "control_requests": samples.latencies.len(),
+            "control_failures": samples.failures.len(),
             "control_p50_ms": millis(p50),
             "control_p95_ms": millis(p95),
             "control_max_ms": millis(max),
         })
     );
     assert!(pace >= MIN_PACE, "{pace:.1} MiB/s");
+    assert!(
+        samples.failures.is_empty(),
+        "control requests failed: {:?}",
+        samples.failures
+    );
     assert!(max.is_some_and(|max| max < MAX_LATENCY), "{max:?}");
     assert!(p95.is_some_and(|p95| p95 < P95_LATENCY), "{p95:?}");
     let growth = peak_kb.saturating_sub(rss_before) / 1024;

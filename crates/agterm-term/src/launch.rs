@@ -12,7 +12,7 @@
 //!   ([`agterm_core::zmx::shell_integration::setup`], as `shell-integration` asks); the config's `env`; the launch's
 //!   own variables; `PWD` for a working directory.
 //! - **Config** (`Surface.zig` and `termio/Exec.zig`, the embedder's options winning as `apprt/embedded.zig` lets
-//!   them): the launch's working directory, else `working-directory`'s; the launch's initial input, else `input`'s;
+//!   them): the launch's working directory, else (none, or not a directory) `working-directory`'s; the launch's initial input, else `input`'s;
 //!   `wait-after-command` for every launch; `abnormal-command-exit-runtime`; `shell-integration`'s forced shell for the
 //!   login shell (a command line keeps its own program's scheme: a live pane's `zmx attach` is no shell).
 //! - **Identity** (Technical Details > Terminal identity): with Ghostty's resources and the compiled `xterm-ghostty`
@@ -172,11 +172,12 @@ impl Host {
         for (key, value) in &launch.env {
             vars.set(key, value.clone());
         }
+        // `apprt/embedded.zig`: the launch's own directory when it is one, else `working-directory`'s
         let cwd = launch
             .working_directory
             .clone()
-            .or_else(|| self.default_directory(env))
-            .filter(|dir| dir.is_dir());
+            .filter(|dir| dir.is_dir())
+            .or_else(|| self.default_directory(env).filter(|dir| dir.is_dir()));
         if let Some(cwd) = &cwd {
             vars.set("PWD", cwd.to_string_lossy().into_owned());
         }
@@ -236,22 +237,23 @@ impl Host {
     }
 
     /// `input`'s bytes, its sources concatenated; `None` when there are none, or when one cannot be read (a missing
-    /// file, one over 10 MB), as libghostty then sends none of them.
+    /// file, one over 10 MB, one that is not a regular file), as libghostty then sends none of them.
     fn config_input(&self) -> Option<Vec<u8>> {
         let mut bytes = Vec::new();
         for source in &self.input {
             match source {
                 InputSource::Raw(raw) => bytes.extend_from_slice(raw),
-                InputSource::Path(path) => {
-                    let file = std::fs::metadata(path)
-                        .ok()
-                        .filter(|meta| meta.len() <= INPUT_FILE_LIMIT);
-                    let Some(contents) = file.and_then(|_| std::fs::read(path).ok()) else {
-                        tracing::warn!(path, "input: the file cannot be read; none of the input is sent");
+                InputSource::Path(path) => match read_input_file(path) {
+                    Ok(contents) => bytes.extend_from_slice(&contents),
+                    Err(error) => {
+                        tracing::warn!(
+                            path = %path.display(),
+                            %error,
+                            "input: the file cannot be read; none of the input is sent"
+                        );
                         return None;
-                    };
-                    bytes.extend_from_slice(&contents);
-                }
+                    }
+                },
             }
         }
         (!bytes.is_empty()).then_some(bytes)
@@ -315,6 +317,42 @@ impl Vars {
             self.removed.push(key.to_owned());
         }
     }
+}
+
+/// An `input = path:` file's contents, read through one handle: `termio/Termio.zig` opens the file and reads at most
+/// 10 MB of it (`readToEndAlloc`, an error past that), on its own IO thread. A pane is prepared on the UI thread, so
+/// only a regular file is read (opened without blocking, so a FIFO cannot stall the open); a device or a FIFO, which
+/// libghostty would read there, is refused.
+fn read_input_file(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    read_bounded(file, INPUT_FILE_LIMIT)
+}
+
+/// At most `limit` bytes of `reader`, an error when it holds more (the read itself is bounded, so a file that grows
+/// while it is read cannot run past the limit).
+fn read_bounded(reader: impl std::io::Read, limit: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+
+    let mut contents = Vec::new();
+    reader.take(limit.saturating_add(1)).read_to_end(&mut contents)?;
+    if u64::try_from(contents.len()).unwrap_or(u64::MAX) > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::FileTooLarge,
+            format!("more than {limit} bytes"),
+        ));
+    }
+    Ok(contents)
 }
 
 /// What a pane runs (upstream's `LaunchSeed` on the pane's own surface spec).
@@ -541,6 +579,74 @@ mod tests {
             ..Launch::default()
         };
         assert_eq!(cwd("working-directory = home\n", &own), Some(home.path().join("work")));
+        // a launch's own directory that is gone falls back to the config's, as `apprt/embedded.zig` keeps
+        // `working-directory` when the embedder's cannot be opened
+        let gone = Launch {
+            working_directory: Some(home.path().join("deleted")),
+            ..Launch::default()
+        };
+        assert_eq!(cwd("working-directory = home\n", &gone).as_deref(), Some(home.path()));
+        assert_eq!(
+            cwd("working-directory = ~/work\n", &gone),
+            Some(home.path().join("work"))
+        );
+        assert_eq!(cwd("working-directory = inherit\n", &gone), None);
+        assert_eq!(cwd("", &gone), None);
+        let empty = Launch {
+            working_directory: Some(PathBuf::new()),
+            ..Launch::default()
+        };
+        assert_eq!(cwd("working-directory = home\n", &empty).as_deref(), Some(home.path()));
+    }
+
+    #[test]
+    fn an_input_file_is_read_through_one_bounded_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let at_limit = dir.path().join("at-limit");
+        let limit = usize::try_from(INPUT_FILE_LIMIT).unwrap();
+        std::fs::write(&at_limit, vec![b'a'; limit]).unwrap();
+        assert_eq!(read_input_file(&at_limit).unwrap().len(), limit);
+        let over = dir.path().join("over");
+        std::fs::write(&over, vec![b'a'; limit + 1]).unwrap();
+        assert!(read_input_file(&over).is_err(), "past 10 MB: refused");
+        // a device and a FIFO are refused, without blocking the open or the read
+        let fifo = dir.path().join("fifo");
+        let c_fifo = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: a valid NUL-terminated path
+        assert_eq!(unsafe { libc::mkfifo(c_fifo.as_ptr(), 0o600) }, 0);
+        for special in [Path::new("/dev/zero"), fifo.as_path()] {
+            let path = special.to_owned();
+            let (done, result) = std::sync::mpsc::channel();
+            std::thread::spawn(move || done.send(read_input_file(&path).map(|bytes| bytes.len())));
+            let read = result.recv_timeout(Duration::from_secs(10));
+            assert!(matches!(read, Ok(Err(_))), "{}: {read:?}", special.display());
+        }
+        let host = host_of(
+            &format!("input = raw:x\ninput = path:{}\n", Path::new("/dev/zero").display()),
+            None,
+        );
+        assert_eq!(host.prepare(&Launch::default(), &MapEnv::new()).initial_input, None);
+        // the read itself is bounded, so a source that keeps growing stops at the limit
+        let (done, result) = std::sync::mpsc::channel();
+        std::thread::spawn(move || done.send(read_bounded(std::io::repeat(b'x'), 1024).map(|bytes| bytes.len())));
+        assert!(matches!(
+            result.recv_timeout(Duration::from_secs(10)),
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::FileTooLarge
+        ));
+        assert_eq!(read_bounded(&b"abc"[..], 3).unwrap(), b"abc");
+    }
+
+    #[test]
+    fn an_input_path_with_escapes_reads_the_decoded_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("start up"), b"hi\n").unwrap();
+        let host = host_of(&format!("input = path:{}/start\\x20up\n", dir.path().display()), None);
+        assert_eq!(
+            host.prepare(&Launch::default(), &MapEnv::new())
+                .initial_input
+                .as_deref(),
+            Some(&b"hi\n"[..])
+        );
     }
 
     #[test]

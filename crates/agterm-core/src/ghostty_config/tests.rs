@@ -462,7 +462,6 @@ fn residual_differences_accept_any_value_of_an_opaque_key() {
         "clipboard-codepoint-map",
         "command",
         "command-palette-entry",
-        "env",
         "font-codepoint-map",
         "font-style",
         "font-style-bold",
@@ -473,7 +472,6 @@ fn residual_differences_accept_any_value_of_an_opaque_key() {
         "font-variation-bold-italic",
         "font-variation-italic",
         "initial-command",
-        "input",
         "key-remap",
         "macos-icon-screen-color",
         "mouse-scroll-multiplier",
@@ -870,27 +868,77 @@ fn the_launch_keys_keep_ghosttys_defaults_and_follow_their_lines() {
 
 #[test]
 fn env_is_a_map_and_input_a_list_of_sources() {
-    // `env`: `key=` drops the key, an empty value the whole map, a value without `=` sets nothing
-    let env = launch_of("env = A=1\nenv = B=2\nenv = A=3\nenv = B=\nenv = C=x=y\nenv = junk\n").env;
+    // `env`: `key=` drops the key, an empty value the whole map; both sides of the first `=` trimmed of
+    // `std.ascii.whitespace` (`RepeatableStringMap.parseCLI`)
+    let env = launch_of(
+        "env = A=1\nenv = B=2\nenv = A=3\nenv = B=\nenv = C=x=y\nenv = EDITOR = nvim\nenv = D\u{0b}=\u{0b}v\u{0c}\n",
+    )
+    .env;
     assert_eq!(
         env.into_iter().collect::<Vec<_>>(),
-        [("A".to_owned(), "3".to_owned()), ("C".to_owned(), "x=y".to_owned())]
-    );
-    assert!(launch_of("env = A=1\nenv =\n").env.is_empty());
-    // `input`: raw (tagged or not, its Zig escapes decoded) and path sources in order; an empty value clears them
-    assert_eq!(
-        launch_of("input = raw:a\\tb\ninput = path:/tmp/in\ninput = hello\\x00\n").input,
         [
-            InputSource::Raw(b"a\tb".to_vec()),
-            InputSource::Path("/tmp/in".to_owned()),
-            InputSource::Raw(b"hello\0".to_vec()),
+            ("A".to_owned(), "3".to_owned()),
+            ("C".to_owned(), "x=y".to_owned()),
+            ("D".to_owned(), "v".to_owned()),
+            ("EDITOR".to_owned(), "nvim".to_owned()),
         ]
     );
-    assert!(launch_of("input = x\ninput =\n").input.is_empty());
+    assert!(launch_of("env = A=1\nenv =\n").env.is_empty());
     assert!(
-        launch_of("input = bad\\q\n").input.is_empty(),
-        "a malformed escape is refused"
+        launch_of("env = FOO=bar\nenv = FOO = \t\n").env.is_empty(),
+        "a value that trims to nothing drops the key"
     );
+    // `input`: raw (tagged or not) and path sources in order, the escapes of both decoded (`cloneParsed`); an
+    // empty value clears them
+    assert_eq!(
+        launch_of(
+            "input = raw:a\\tb\ninput = path:/tmp/in\ninput = hello\\x00\ninput = path:/tmp/start\\x20up\n\
+             input = \\x20path :x\ninput = other:y\ninput = raw\n"
+        )
+        .input,
+        [
+            InputSource::Raw(b"a\tb".to_vec()),
+            InputSource::Path("/tmp/in".into()),
+            InputSource::Raw(b"hello\0".to_vec()),
+            InputSource::Path("/tmp/start up".into()),
+            InputSource::Raw(b" path :x".to_vec()),
+            InputSource::Raw(b"other:y".to_vec()),
+            InputSource::Raw(Vec::new()),
+        ]
+    );
+    assert_eq!(
+        launch_of("input = \t path\t:/a\n").input,
+        [InputSource::Path("/a".into())],
+        "the tag is trimmed of spaces and tabs (`parseTaggedUnion`)"
+    );
+    assert!(launch_of("input = x\ninput =\n").input.is_empty());
+}
+
+#[test]
+fn env_and_input_lines_libghostty_refuses_count() {
+    // `RepeatableStringMap.parseCLI`: no `=` is `error.ValueRequired`; `ReadableIO.parseCLI`: `string.parse`'s error
+    for (line, message) in [
+        ("env = junk", "value required"),
+        ("env", "value required"),
+        ("input", "value required"),
+        ("input = bad\\q", "unknown error error.InvalidString"),
+        ("input = path:/tmp/a\\x2", "unknown error error.InvalidString"),
+        (
+            "input = raw:\\u{d800}",
+            "unknown error error.Utf8CannotEncodeSurrogateHalf",
+        ),
+    ] {
+        let loaded = load(&format!("env = KEEP=1\n{line}\n"));
+        let messages: Vec<_> = loaded.diagnostics.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(messages.len(), 1, "{line}: {messages:?}");
+        assert!(messages[0].ends_with(message), "{line}: {messages:?}");
+        assert_eq!(
+            loaded.config.launch.env.get("KEEP").map(String::as_str),
+            Some("1"),
+            "{line}"
+        );
+        assert!(loaded.config.launch.input.is_empty(), "{line}");
+    }
 }
 
 #[test]
