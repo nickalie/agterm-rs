@@ -1,17 +1,15 @@
 //! Where a run of Kitty Unicode placeholder cells draws its part of the image: Ghostty's `Placement.renderPlacement`
 //! and `grid` (`src/terminal/kitty/graphics_unicode.zig` at `LIBGHOSTTY_VT_REV`, MIT, Copyright Mitchell Hashimoto and
-//! Ghostty contributors), and its `placeholderTarget` over the frame's virtual placements.
+//! Ghostty contributors), and its `placeholderTarget` (`graphics_storage.zig`) over the frame's placements.
 //!
 //! The image is fitted, aspect kept and centered, into the virtual placement's grid (`c=`/`r=`, or the image's own
-//! size in cells); each run draws the slice of that grid its cells name.
-//!
-//! ⚠️ libghostty-vt's C API reports a placement id without its namespace (a client's `p=` or one the terminal
-//! assigned), so ids resolve by number: a named id can match a terminal-assigned placement Ghostty would not match,
-//! and with none named the image's virtual placement with the lowest number wins where Ghostty prefers a client's
-//! first. Relative placements (`P=`) rooted at a virtual placement are not drawn: the C API gives them no position,
-//! root or chain offsets. Both are parity gaps tracked in `docs/backlog/kitty-virtual-placement-c-api-gaps.md`.
+//! size in cells); each run draws the slice of that grid its cells name. Ids resolve in their namespaces, which this
+//! build's libghostty-vt patch reports (`build/patches/ghostty-vt/`): a run's id names a client's (`p=`) placement
+//! only. [`target`] is checked against rustty's port (<https://github.com/AirelyDev/rustty>, MIT, Copyright (c) 2026
+//! Airely, Gael Hatchue, and rustty contributors: `placeholder_target` in `crates/rustty-vt/src/kitty/
+//! graphics_storage.rs`, `PlacementId::preferred_over` in `graphics_storage/placement.rs`).
 
-use agterm_term::{KittyPlacement, KittyView, SourceRect, VirtualPlacement};
+use agterm_term::{KittyPlacement, KittyView, PlacementNamespace, SourceRect, VirtualPlacement};
 
 /// What [`render`] places, in the terminal's pixels: offsets from the run's first cell, the source rectangle in the
 /// image's pixels, the drawn size.
@@ -24,8 +22,10 @@ pub struct VirtualRender {
     pub height: u32,
 }
 
-/// The placement a run of placeholders shows (Ghostty's `placeholderTarget`): the image's placement with the id the
-/// run names, wherever it is placed, or with none named its virtual placement with the lowest id.
+/// The placement a run of placeholders shows (Ghostty's `placeholderTarget`): the image's placement under the client's
+/// id the run names, wherever it is placed (a terminal-assigned placement with that number never matches), or with none
+/// named its preferred virtual placement (`PlacementId.preferredOver`: a client's id over a terminal-assigned one, then
+/// the lowest).
 #[must_use]
 pub fn target<'a>(view: &'a KittyView, run: &VirtualPlacement) -> Option<&'a KittyPlacement> {
     let mut of_image = view
@@ -33,11 +33,18 @@ pub fn target<'a>(view: &'a KittyView, run: &VirtualPlacement) -> Option<&'a Kit
         .iter()
         .filter(|placement| placement.image.id == run.image_id);
     if run.placement_id > 0 {
-        of_image.find(|placement| placement.placement_id == run.placement_id)
+        of_image.find(|placement| {
+            placement.namespace == PlacementNamespace::External && placement.placement_id == run.placement_id
+        })
     } else {
         of_image
             .filter(|placement| placement.is_virtual)
-            .min_by_key(|placement| placement.placement_id)
+            .min_by_key(|placement| {
+                (
+                    placement.namespace != PlacementNamespace::External,
+                    placement.placement_id,
+                )
+            })
     }
 }
 
