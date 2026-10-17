@@ -521,6 +521,12 @@ impl TextSystem {
         self.read_metrics(font_id, |metrics| *metrics)
     }
 
+    /// Get the strikeout's position (above the baseline) and thickness as the font's OS/2 table declares them, in
+    /// font units; `None` where the platform text system does not read them.
+    pub fn font_strikeout(&self, font_id: FontId) -> Option<(f32, f32)> {
+        self.platform_text_system.font_strikeout(font_id)
+    }
+
     /// Get the recommended baseline offset for the given font and line height.
     pub fn baseline_offset(
         &self,

@@ -78,6 +78,18 @@ fn jetbrains_mono_measures_as_ghostty_measures_it() {
         face.underline_position
             .is_some_and(|position| (position + 2.48).abs() < 1e-3)
     );
+    // OS/2 yStrikeoutPosition 320, yStrikeoutSize 50, read from the font as Ghostty's `FreeType` face reads them
+    // (GPUI patch 0004), not estimated: 5.12 up, 0.8 thick
+    assert!(
+        face.strikethrough_position
+            .is_some_and(|position| (position - 5.12).abs() < 1e-3),
+        "{face:?}"
+    );
+    assert!(
+        face.strikethrough_thickness
+            .is_some_and(|thickness| (thickness - 0.8).abs() < 1e-3)
+    );
+    assert_eq!((cell.strikethrough_position, cell.strikethrough_thickness), (11, 1));
     // at 2x the box lines thicken with the underline: 1.6 rounds up to 2
     let hidpi = metrics::cell_metrics(&text, id, 12.0, 2.0);
     assert_eq!((hidpi.cell_width, hidpi.cell_height, hidpi.box_thickness), (19, 42, 2));

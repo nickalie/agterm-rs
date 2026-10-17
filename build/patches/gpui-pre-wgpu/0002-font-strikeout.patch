@@ -1,0 +1,24 @@
+The cosmic-text system's side of `PlatformTextSystem::font_strikeout` (gpui-pre 0004, Task 33 of
+docs/plans/20261014-gpui-frontend.md): the face's OS/2 `yStrikeoutPosition` and `yStrikeoutSize`, read from the raw
+table swash hands out (swash's own metrics carry the strikeout offset but only the underline's thickness).
+scripts/vendor-gpui.sh applies this after 0001.
+
+diff -ruN a/src/cosmic_text_system.rs b/src/cosmic_text_system.rs
+--- a/src/cosmic_text_system.rs
++++ b/src/cosmic_text_system.rs
+@@ -237,6 +237,15 @@
+         }
+     }
+ 
++    fn font_strikeout(&self, font_id: FontId) -> Option<(f32, f32)> {
++        let lock = self.0.read();
++        let font = lock.loaded_font(font_id).font.as_swash();
++        let os2 = font.table(swash::tag_from_bytes(b"OS/2"))?;
++        // yStrikeoutSize and yStrikeoutPosition, the fourteenth and fifteenth fields, both int16
++        let field = |at: usize| Some(f32::from(i16::from_be_bytes([*os2.get(at)?, *os2.get(at + 1)?])));
++        Some((field(28)?, field(26)?))
++    }
++
+     fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
+         let lock = self.0.read();
+         let glyph_metrics = lock.loaded_font(font_id).font.as_swash().glyph_metrics(&[]);

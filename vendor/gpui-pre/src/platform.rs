@@ -1503,6 +1503,12 @@ pub trait PlatformTextSystem: Send + Sync {
     fn prewarm_fonts(&self, _font_ids: &[FontId]) {}
     /// Get metrics for a font.
     fn font_metrics(&self, font_id: FontId) -> FontMetrics;
+    /// Get the strikeout's position and thickness as the font's OS/2 table declares them
+    /// (`yStrikeoutPosition`, `yStrikeoutSize`), in font units; `None` where the platform does not read them or
+    /// the font has no OS/2 table.
+    fn font_strikeout(&self, _font_id: FontId) -> Option<(f32, f32)> {
+        None
+    }
     /// Get typographic bounds for a glyph.
     fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>>;
     /// Get the advance width for a glyph.
