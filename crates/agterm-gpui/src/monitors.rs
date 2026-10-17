@@ -2,7 +2,7 @@
 //! places a window at its frame's origin at all. GPUI's displays serve, except on X11: there GPUI has one display per
 //! X screen, the root window that spans every monitor, with dead areas where the monitors differ in size, so a frame
 //! saved on a monitor gone since could come back inside the root yet on no monitor. There the monitors are `RandR`'s
-//! (`RRGetMonitors`), read on a connection of the app's own, in GPUI's logical pixels.
+//! (`RRGetMonitors`), read now on a connection of the app's own, in GPUI's logical pixels at GPUI's own scale.
 
 use agterm_core::window_geometry::Rect;
 use gpui_kit::App;
@@ -24,7 +24,7 @@ pub fn placement(cx: &App) -> Placement {
 #[must_use]
 pub fn display_rects(cx: &App) -> Vec<Rect> {
     if cx.compositor_name() == "X11"
-        && let Some(monitors) = x11_monitors(cx)
+        && let Some(monitors) = x11_monitors()
     {
         return monitors;
     }
@@ -76,14 +76,14 @@ pub fn logical(monitors: &[Monitor], scale: f64) -> Vec<Rect> {
         .collect()
 }
 
-/// The X screen's monitors in GPUI's logical pixels; `None` (logged) when `RandR` reads none. The scale is GPUI's: its
-/// primary display (the X screen) in logical pixels against the screen's own width.
-fn x11_monitors(cx: &App) -> Option<Vec<Rect>> {
-    let logical_width = f64::from(f32::from(cx.primary_display()?.bounds().size.width));
+/// The X screen's monitors in GPUI's logical pixels; `None` (logged) when `RandR` reads none. The scale is GPUI's own
+/// X11 scale factor (GPUI patch `gpui-pre-linux` 0003), the one it places windows with: settled at its start, it holds
+/// through a later resize of the screen (a monitor docked or undocked), which GPUI's displays, read off its
+/// connection's setup, never see.
+fn x11_monitors() -> Option<Vec<Rect>> {
+    let scale = x11_scale_factor()?;
     match read_x11_monitors() {
-        Ok((monitors, screen_width)) if !monitors.is_empty() && logical_width > 0.0 => {
-            Some(logical(&monitors, f64::from(screen_width) / logical_width))
-        }
+        Ok(monitors) if !monitors.is_empty() => Some(logical(&monitors, scale)),
         Ok(_) => None,
         Err(err) => {
             tracing::debug!(%err, "the X11 monitors do not read; the X screen stands for them");
@@ -92,16 +92,32 @@ fn x11_monitors(cx: &App) -> Option<Vec<Rect>> {
     }
 }
 
-/// `RandR`'s active monitors of the default X screen and the screen's width in pixels.
-fn read_x11_monitors() -> Result<(Vec<Monitor>, u16), Box<dyn std::error::Error>> {
+/// GPUI's X11 scale factor; `None` without its X11 client.
+fn x11_scale_factor() -> Option<f64> {
+    #[cfg(target_os = "linux")]
+    {
+        gpui_linux::x11_scale_factor().map(f64::from)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// `RandR`'s active monitors of the default X screen, read now.
+fn read_x11_monitors() -> Result<Vec<Monitor>, Box<dyn std::error::Error>> {
     use x11rb::connection::Connection as _;
     use x11rb::protocol::randr::ConnectionExt as _;
 
     let (conn, screen) = x11rb::connect(None)?;
-    let root = conn.setup().roots.get(screen).ok_or("the display has no such screen")?;
-    let (window, width) = (root.root, root.width_in_pixels);
-    let reply = conn.randr_get_monitors(window, true)?.reply()?;
-    let monitors = reply
+    let root = conn
+        .setup()
+        .roots
+        .get(screen)
+        .ok_or("the display has no such screen")?
+        .root;
+    let reply = conn.randr_get_monitors(root, true)?.reply()?;
+    Ok(reply
         .monitors
         .iter()
         .map(|monitor| Monitor {
@@ -111,8 +127,7 @@ fn read_x11_monitors() -> Result<(Vec<Monitor>, u16), Box<dyn std::error::Error>
             height: monitor.height,
             primary: monitor.primary,
         })
-        .collect();
-    Ok((monitors, width))
+        .collect())
 }
 
 #[cfg(test)]

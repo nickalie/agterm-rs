@@ -3,7 +3,9 @@ An X11 window's state (Task 33 of docs/plans/20261014-gpui-frontend.md). GPUI re
 reports `minimized` from it as the GTK build reads GDK's minimized state there; GPUI's `is_maximized` reads false while
 the window is minimized, though the window manager keeps it maximized, and the frame saved at a quit needs that. The X11
 client notes both each time it reads the window's `_NET_WM_STATE` and forgets the window when it goes;
-`gpui_linux::x11_window_minimized` and `gpui_linux::x11_window_maximized` read them by the window's X id. And a
+`gpui_linux::x11_window_minimized` and `gpui_linux::x11_window_maximized` read them by the window's X id.
+`gpui_linux::x11_scale_factor` reads the scale the X11 client settled at its start and keeps through a later resize
+of the X screen, so the app's own `RandR` monitor reads come out in the logical pixels GPUI places windows in. And a
 `Blurred` background asks KWin's blur behind the window on X11 (`_KDE_NET_WM_BLUR_BEHIND_REGION`, an empty region:
 the whole window), as GPUI's Wayland backend asks `org_kde_kwin_blur`; before, X11 took `Blurred` as `Transparent`.
 Wayland (whose xdg-shell has no minimized state) and the other platforms are unchanged. scripts/vendor-gpui.sh applies
@@ -17,21 +19,23 @@ diff -ruN a/src/gpui_linux.rs b/src/gpui_linux.rs
  pub use linux::{
      ClipboardHtml, HTML_MIME_TYPE, NativeInput, NativeKey, current_native_input, current_platform, linux_platform,
 -    with_clipboard_html,
-+    with_clipboard_html, x11_window_maximized, x11_window_minimized,
++    with_clipboard_html, x11_scale_factor, x11_window_maximized, x11_window_minimized,
  };
 diff -ruN a/src/linux/window_state.rs b/src/linux/window_state.rs
 --- a/src/linux/window_state.rs
 +++ b/src/linux/window_state.rs
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,88 @@
 +//! A window's state as the window manager reports it (an agterm-rs patch): GPUI tracks an X11 window's
 +//! `_NET_WM_STATE` for itself but gives no read-back of its minimized state, which `window.list` needs, and while the
 +//! window is minimized it reads it as not maximized, though the window manager keeps it maximized, and the frame saved
 +//! for its next launch needs that. The X11 client notes both each time it reads the window's `_NET_WM_STATE` (at
 +//! creation and on every change of the property) and forgets the window when it goes; [`x11_window_minimized`] and
 +//! [`x11_window_maximized`] read them by the window's X id, which the app has from the window's raw handle. Wayland's
-+//! xdg-shell gives a client no minimized state, so a Wayland window reads `None`.
++//! xdg-shell gives a client no minimized state, so a Wayland window reads `None`. And [`x11_scale_factor`] reads the
++//! scale the X11 client converts between the X screen's pixels and logical ones, which it settles once at its start
++//! and keeps through any later change of the screen, for the app's own reads of the screen (its `RandR` monitors).
 +
-+use std::cell::RefCell;
++use std::cell::{Cell, RefCell};
 +use std::collections::HashMap;
 +
 +/// An X11 window's `_NET_WM_STATE`, as far as the patch reads it.
@@ -45,6 +49,13 @@ diff -ruN a/src/linux/window_state.rs b/src/linux/window_state.rs
 +
 +thread_local! {
 +    static STATES: RefCell<HashMap<u32, X11State>> = RefCell::new(HashMap::new());
++    static SCALE_FACTOR: Cell<Option<f32>> = const { Cell::new(None) };
++}
++
++/// The scale factor of this thread's X11 client, the X screen's pixels per logical pixel as GPUI places and reads its
++/// windows, settled at the client's start; `None` without an X11 client.
++pub fn x11_scale_factor() -> Option<f32> {
++    SCALE_FACTOR.get()
 +}
 +
 +/// Whether X11 window `window` of this thread's X11 client is minimized (`_NET_WM_STATE_HIDDEN`, which a window
@@ -63,6 +74,12 @@ diff -ruN a/src/linux/window_state.rs b/src/linux/window_state.rs
 +#[cfg(feature = "x11")]
 +pub(crate) fn note_x11_state(window: u32, hidden: bool, maximized: bool) {
 +    STATES.with_borrow_mut(|states| states.insert(window, X11State { hidden, maximized }));
++}
++
++/// Records the scale factor this thread's X11 client settled at its start.
++#[cfg(feature = "x11")]
++pub(crate) fn note_x11_scale_factor(scale_factor: f32) {
++    SCALE_FACTOR.set(Some(scale_factor));
 +}
 +
 +/// Forgets X11 window `window`, which is going.
@@ -88,7 +105,25 @@ diff -ruN a/src/linux/window_state.rs b/src/linux/window_state.rs
 +        assert_eq!(x11_window_minimized(7), None);
 +        assert_eq!(x11_window_maximized(7), None);
 +    }
++
++    #[test]
++    fn the_scale_factor_reads_back_once_noted() {
++        assert_eq!(x11_scale_factor(), None, "no X11 client yet");
++        note_x11_scale_factor(1.5);
++        assert_eq!(x11_scale_factor(), Some(1.5));
++    }
 +}
+diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
+--- a/src/linux/x11/client.rs
++++ b/src/linux/x11/client.rs
+@@ -484,6 +484,7 @@
+         let resource_database = x11rb::resource_manager::new_from_default(&xcb_connection)
+             .context("Failed to create resource database")?;
+         let scale_factor = get_scale_factor(&xcb_connection, &resource_database, x_root_index);
++        crate::linux::note_x11_scale_factor(scale_factor);
+         let cursor_handle = cursor::Handle::new(&xcb_connection, x_root_index, &resource_database)
+             .context("Failed to initialize cursor theme handler")?
+             .reply()
 diff -ruN a/src/linux/x11/window.rs b/src/linux/x11/window.rs
 --- a/src/linux/x11/window.rs
 +++ b/src/linux/x11/window.rs
@@ -158,9 +193,9 @@ diff -ruN a/src/linux.rs b/src/linux.rs
  pub(crate) use clipboard_html::take_clipboard_html;
  pub use dispatcher::*;
  pub use native_key::{NativeInput, NativeKey, current_native_input};
-+pub use window_state::{x11_window_maximized, x11_window_minimized};
++pub use window_state::{x11_scale_factor, x11_window_maximized, x11_window_minimized};
 +#[cfg(feature = "x11")]
-+pub(crate) use window_state::{forget_x11_window, note_x11_state};
++pub(crate) use window_state::{forget_x11_window, note_x11_scale_factor, note_x11_state};
  pub(crate) use native_key::NativeScope;
  #[cfg(any(feature = "wayland", feature = "x11"))]
  pub(crate) use native_key::native_key;

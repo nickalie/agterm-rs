@@ -50,7 +50,7 @@ uuid.workspace = true
 wayland-backend.workspace = true
 wayland-client.workspace = true
 wayland-protocols.workspace = true
-# RandR: the X11 monitors a restored window is kept on (`window.rs` `display_rects`), which GPUI's one display per X
+# RandR: the X11 monitors a restored window is kept on (`monitors.rs` `display_rects`), which GPUI's one display per X
 # screen spans
 x11rb = { workspace = true, features = ["randr"] }
 zbus.workspace = true

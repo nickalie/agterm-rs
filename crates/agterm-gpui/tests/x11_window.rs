@@ -2,8 +2,9 @@
 //! running agterm): `window.list` reads its minimized state back from `_NET_WM_STATE_HIDDEN` as a window manager sets
 //! it (GPUI patch `gpui-pre-linux` 0003, the GTK build's GDK read-back) and its frame is saved maximized while it is
 //! minimized maximized, the frame it had at the quit comes back at the next launch (upstream's `TitleProbeView`;
-//! `window_frames.rs`), on a `RandR` monitor attached now (`monitors.rs`), and a translucent blurred window asks
-//! `KWin`'s blur behind it (patch 0003).
+//! `window_frames.rs`), on a `RandR` monitor attached now (`monitors.rs`), also after one is docked or undocked while
+//! the app runs (the monitors read at GPUI's own X11 scale, patch 0003), and a translucent blurred window asks `KWin`'s
+//! blur behind it (patch 0003).
 //!
 //! A test whose tool is missing prints `SKIPPED:` and passes, unless `AGTERM_REQUIRE_DISPLAY_TESTS` is set.
 
@@ -117,6 +118,68 @@ impl X11 {
             self.conn.randr_set_monitor(self.root, info)?.check()?;
         }
         Ok(())
+    }
+
+    /// Resizes the screen to `width`×`height` with `RandR` monitors `(x, y, width, height, primary)` on it, as docking or
+    /// undocking a monitor does, for as long as this connection stays open. Xvfb's output has only the mode it started
+    /// with, so it goes dark and the monitors stand without one.
+    fn lay_out(&self, (width, height): (u16, u16), monitors: &[(i16, i16, u16, u16, bool)]) -> TestResult {
+        use x11rb::protocol::randr::{ConnectionExt as _, MonitorInfo, Rotation, SetConfig};
+        for monitor in self.conn.randr_get_monitors(self.root, false)?.reply()?.monitors {
+            if !monitor.automatic {
+                self.conn.randr_delete_monitor(self.root, monitor.name)?.check()?;
+            }
+        }
+        let resources = self.conn.randr_get_screen_resources(self.root)?.reply()?;
+        for crtc in resources.crtcs {
+            let reply = self
+                .conn
+                .randr_set_crtc_config(
+                    crtc,
+                    x11rb::CURRENT_TIME,
+                    resources.config_timestamp,
+                    0,
+                    0,
+                    0,
+                    Rotation::ROTATE0,
+                    &[],
+                )?
+                .reply()?;
+            if reply.status != SetConfig::SUCCESS {
+                return Err(format!("the output did not go dark: {:?}", reply.status).into());
+            }
+        }
+        let millimeters = |pixels: u16| u32::from(pixels) / 4;
+        self.conn
+            .randr_set_screen_size(self.root, width, height, millimeters(width), millimeters(height))?
+            .check()?;
+        for (index, (x, y, width, height, primary)) in monitors.iter().copied().enumerate() {
+            let info = MonitorInfo {
+                name: self.atom(&format!("monitor-{index}"))?,
+                primary,
+                automatic: false,
+                x,
+                y,
+                width,
+                height,
+                width_in_millimeters: millimeters(width),
+                height_in_millimeters: millimeters(height),
+                outputs: Vec::new(),
+            };
+            self.conn.randr_set_monitor(self.root, info)?.check()?;
+        }
+        Ok(())
+    }
+
+    /// The mapped top-level windows.
+    fn all_mapped(&self) -> TestResult<Vec<Window>> {
+        let mut mapped = Vec::new();
+        for window in self.conn.query_tree(self.root)?.reply()?.children {
+            if self.conn.get_window_attributes(window)?.reply()?.map_state == MapState::VIEWABLE {
+                mapped.push(window);
+            }
+        }
+        Ok(mapped)
     }
 
     /// Sets `window`'s `_NET_WM_STATE` to `states`, as a window manager does when it iconifies or restores it.
@@ -299,5 +362,102 @@ fn the_window_reopens_at_the_size_it_quit_with() -> TestResult {
     assert_eq!((width, height), (1000, 700), "the frame it quit with");
     sandbox.terminate(second)?;
     assert_eq!(sandbox.wait_exit(second, Duration::from_secs(10))?.0.code(), Some(0));
+    Ok(())
+}
+
+/// A screen's size and its `RandR` monitors `(x, y, width, height, primary)`, in the screen's pixels.
+type Layout = ((u16, u16), &'static [(i16, i16, u16, u16, bool)]);
+
+/// One 2560×1600 monitor, 1280×800 logical at GPUI's scale of 2.
+const UNDOCKED: Layout = ((2560, 1600), &[(0, 0, 2560, 1600, true)]);
+/// [`UNDOCKED`] with a second such monitor docked to its right.
+const DOCKED: Layout = ((5120, 1600), &[(0, 0, 2560, 1600, true), (2560, 0, 2560, 1600, false)]);
+
+/// Launches the app on `launch`, closed window `id`'s saved frame a 900×600 one at logical `origin`, lays the screen
+/// out as `later` while it runs, reopens `id` and reads its place on the screen; then closes it again and quits.
+fn reopened_after_a_layout_change(
+    sandbox: &mut Sandbox,
+    x11: &X11,
+    id: &str,
+    (launch, later): (Layout, Layout),
+    (x, y): (f64, f64),
+) -> TestResult<(i16, i16, u16, u16)> {
+    x11.lay_out(launch.0, launch.1)?;
+    std::fs::write(
+        sandbox.path("state/window-frames.json"),
+        json!({ id.to_lowercase(): { "x": x, "y": y, "width": 900.0, "height": 600.0 } }).to_string(),
+    )?;
+    let app = sandbox.start_gpui_primary(&format!("{id}-{x}.log"))?;
+    x11.wait_mapped()?;
+    let before = x11.all_mapped()?;
+    x11.lay_out(later.0, later.1)?;
+    request(sandbox, "window.select", Some(id), &json!({}))?;
+    let window = wait_for(|| {
+        x11.all_mapped()
+            .ok()?
+            .into_iter()
+            .find(|window| !before.contains(window))
+    })
+    .map_err(|_| "the closed window never reopened")?;
+    let geometry = x11.geometry(window)?;
+    request(sandbox, "window.close", Some(id), &json!({}))?;
+    wait_for(|| (!x11.all_mapped().ok()?.contains(&window)).then_some(()))
+        .map_err(|_| "the reopened window never closed")?;
+    sandbox.terminate(app)?;
+    assert_eq!(sandbox.wait_exit(app, Duration::from_secs(10))?.0.code(), Some(0));
+    Ok(geometry)
+}
+
+#[test]
+fn a_window_reopened_after_a_monitor_is_docked_or_undocked_lands_on_the_monitors_attached_now() -> TestResult {
+    if !have("Xvfb") {
+        skip!("no Xvfb");
+    }
+    let Some(lavapipe) = lavapipe_icd() else {
+        skip!("no lavapipe ICD (scripts/fetch-lavapipe.sh)");
+    };
+    let mut sandbox = Sandbox::new()?;
+    sandbox.start_xvfb_sized(DOCKED.0.0, DOCKED.0.1)?;
+    sandbox.use_software_rendering(&lavapipe);
+    // GPUI settles its X11 scale at its start and keeps it through a resize of the screen
+    sandbox.set_env("GPUI_X11_SCALE_FACTOR", "2");
+    let x11 = X11::connect(&sandbox)?;
+
+    // a second window, closed, for the launches below to reopen
+    let first = sandbox.start_gpui_primary("first.log")?;
+    x11.wait_mapped()?;
+    let created = request(&sandbox, "window.new", None, &json!({}))?;
+    let id = created["id"].as_str().ok_or("no new window id")?.to_owned();
+    request(&sandbox, "window.close", Some(&id), &json!({}))?;
+    sandbox.terminate(first)?;
+    assert_eq!(sandbox.wait_exit(first, Duration::from_secs(10))?.0.code(), Some(0));
+
+    // a monitor docked while the app runs: the frame fits the primary monitor as it is, 1280×800 logical (GPUI may
+    // nudge a new window by a pixel or two, so its place is asked for within a few)
+    let (x, y, width, height) =
+        reopened_after_a_layout_change(&mut sandbox, &x11, &id, (UNDOCKED, DOCKED), (100.0, 100.0))?;
+    assert_eq!(
+        (width, height),
+        (1800, 1200),
+        "the saved 900×600 at a scale of 2, not fitted to monitors read at a fraction of their size"
+    );
+    assert!(
+        (i32::from(x) - 200).abs() <= 4 && (i32::from(y) - 200).abs() <= 4,
+        "left at its saved place: {x},{y}"
+    );
+
+    // the monitor it was saved on undocked while the app runs: it comes back on the one left
+    let (x, _, width, height) =
+        reopened_after_a_layout_change(&mut sandbox, &x11, &id, (DOCKED, UNDOCKED), (1500.0, 100.0))?;
+    assert_eq!(
+        (width, height),
+        (1800, 1200),
+        "the saved size, which fits the monitor left"
+    );
+    // against its right edge, logical 380 (within GPUI's nudge), not left at 1500, off the screen
+    assert!(
+        (i32::from(x) - 760).abs() <= 4,
+        "moved onto the monitor left, against its right edge: x {x}, width {width}"
+    );
     Ok(())
 }

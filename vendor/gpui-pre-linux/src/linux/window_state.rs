@@ -4,9 +4,11 @@
 //! for its next launch needs that. The X11 client notes both each time it reads the window's `_NET_WM_STATE` (at
 //! creation and on every change of the property) and forgets the window when it goes; [`x11_window_minimized`] and
 //! [`x11_window_maximized`] read them by the window's X id, which the app has from the window's raw handle. Wayland's
-//! xdg-shell gives a client no minimized state, so a Wayland window reads `None`.
+//! xdg-shell gives a client no minimized state, so a Wayland window reads `None`. And [`x11_scale_factor`] reads the
+//! scale the X11 client converts between the X screen's pixels and logical ones, which it settles once at its start
+//! and keeps through any later change of the screen, for the app's own reads of the screen (its `RandR` monitors).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 /// An X11 window's `_NET_WM_STATE`, as far as the patch reads it.
@@ -20,6 +22,13 @@ struct X11State {
 
 thread_local! {
     static STATES: RefCell<HashMap<u32, X11State>> = RefCell::new(HashMap::new());
+    static SCALE_FACTOR: Cell<Option<f32>> = const { Cell::new(None) };
+}
+
+/// The scale factor of this thread's X11 client, the X screen's pixels per logical pixel as GPUI places and reads its
+/// windows, settled at the client's start; `None` without an X11 client.
+pub fn x11_scale_factor() -> Option<f32> {
+    SCALE_FACTOR.get()
 }
 
 /// Whether X11 window `window` of this thread's X11 client is minimized (`_NET_WM_STATE_HIDDEN`, which a window
@@ -38,6 +47,12 @@ pub fn x11_window_maximized(window: u32) -> Option<bool> {
 #[cfg(feature = "x11")]
 pub(crate) fn note_x11_state(window: u32, hidden: bool, maximized: bool) {
     STATES.with_borrow_mut(|states| states.insert(window, X11State { hidden, maximized }));
+}
+
+/// Records the scale factor this thread's X11 client settled at its start.
+#[cfg(feature = "x11")]
+pub(crate) fn note_x11_scale_factor(scale_factor: f32) {
+    SCALE_FACTOR.set(Some(scale_factor));
 }
 
 /// Forgets X11 window `window`, which is going.
@@ -62,5 +77,12 @@ mod tests {
         forget_x11_window(7);
         assert_eq!(x11_window_minimized(7), None);
         assert_eq!(x11_window_maximized(7), None);
+    }
+
+    #[test]
+    fn the_scale_factor_reads_back_once_noted() {
+        assert_eq!(x11_scale_factor(), None, "no X11 client yet");
+        note_x11_scale_factor(1.5);
+        assert_eq!(x11_scale_factor(), Some(1.5));
     }
 }

@@ -484,6 +484,7 @@ impl X11Connection {
         let resource_database = x11rb::resource_manager::new_from_default(&xcb_connection)
             .context("Failed to create resource database")?;
         let scale_factor = get_scale_factor(&xcb_connection, &resource_database, x_root_index);
+        crate::linux::note_x11_scale_factor(scale_factor);
         let cursor_handle = cursor::Handle::new(&xcb_connection, x_root_index, &resource_database)
             .context("Failed to initialize cursor theme handler")?
             .reply()

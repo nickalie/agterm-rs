@@ -2754,6 +2754,11 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
     status glyph, palette badge/subtitle/scrim, dashboard cover and highlight, sidebar icons and footer buttons; the
     starter keymap says what each Linux build does with `global-hotkey`; checklist rows corrected (View ▸ Clear
     Flagged, X11 blur, the AccessKit note).
+  - ➕ (review): the X11 monitors convert to logical pixels at GPUI's own X11 scale factor, which it settles at its
+    start (`gpui_linux::x11_scale_factor`, `gpui-pre-linux` 0003), not at the current root width over GPUI's display
+    width, which GPUI reads off its connection's setup and never updates: a monitor docked or undocked while the app
+    runs no longer halves or doubles the monitors a reopened window is fitted to (`tests/x11_window.rs`, both ways at
+    a scale of 2).
 
 ### Task 34: Switch to GPUI and remove the GTK frontend
 
