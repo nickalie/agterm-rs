@@ -349,6 +349,10 @@ fn the_window_reopens_at_the_size_it_quit_with() -> TestResult {
         (width == 1000 && height == 700).then_some(())
     })
     .map_err(|_| "the resize never reached the X server")?;
+    // GPUI learns the size from the ConfigureNotify, already queued on its connection once the server shows it; a
+    // request answered on the main thread lets that loop pass over the queued event before the SIGTERM's save, which
+    // could otherwise run first in the same pass and save the size before the resize
+    listed(&sandbox)?;
     sandbox.terminate(first)?;
     assert_eq!(sandbox.wait_exit(first, Duration::from_secs(10))?.0.code(), Some(0));
     let saved = std::fs::read_to_string(sandbox.path("state/window-frames.json"))?;
