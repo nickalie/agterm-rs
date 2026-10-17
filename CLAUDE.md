@@ -27,14 +27,19 @@ below, not a later phase. Build, run and test commands are in [README.md](README
 | `agterm-core` | model, target resolver, command dispatcher (`commands/`, one module per group), events, keymap and Ghostty's keybind actions, the Ghostty config parser and its diagnostics, hooks, persistence, settings, pane environment, zmx/restore logic | any |
 | `agterm-server` | AF_UNIX control server: socket ownership (`flock`), one thread per connection, main-loop hop, stream handoff | any |
 | `agterm-ctl` → `agtermctl` | clap CLI ported from upstream's `agtermctlKit`, socket resolution, output formatting | any |
-| `agterm-ghostty-vt-sys` | checked-in bindgen output over libghostty-vt's official C API (`scripts/gen-ghostty-vt-bindings.sh`), links the vendored static library; not under the workspace lints | any |
-| `agterm-ghostty-vt` | safe wrapper over the sys crate: terminal, render state, effects, key and mouse encoders, selection and its gesture, formatter, search, Kitty graphics | any |
+| `agterm-ghostty-vt-sys` | checked-in bindgen output over libghostty-vt's official C API (`scripts/gen-ghostty-vt-bindings.sh`), links the vendored static library; not under the workspace lints | Linux |
+| `agterm-ghostty-vt` | safe wrapper over the sys crate: terminal, render state, effects, key and mouse encoders, selection and its gesture, formatter, search, Kitty graphics | Linux |
 | `agterm-term` | the toolkit-neutral pane core: a libghostty-vt terminal fed from a PTY by an IO thread per pane, input, selection, search, read-back, launch and terminal identity, frames and events in its own types | Linux |
 | `agterm-zmx` | the `SessionHost` over the patched zmx: launch inputs, client, inventory, reaps | Linux, macOS |
 | `agterm-app` | frontend-neutral app services: the hooks' `ProcessLauncher`, the `/proc` `ProcessTable`, logging, the restore launch decision, quick-terminal placement, the agent integrations' installers, the remote presentation process | Linux |
 | `agterm-wpe-sys`, `agterm-wpe-platform-sys`, `agterm-wpe-javascriptcore-sys` | checked-in gir output over WPE WebKit, one crate per GObject namespace (`scripts/gen-wpe-bindings.sh`) | Linux |
 | `agterm-wpe` | WPE WebKit host for the HTML overlays: offscreen pages on an engine thread of their own (or in a worker process), frames out as dmabufs or SHM | Linux |
 | `agterm-gpui` → `agterm` | GPUI/gpui-kit frontend: windows, sidebar, deck, the terminal element (grid, sprites, Kitty graphics), overlays, quick terminal (layer-shell, a window where there is none), HTML overlays over `agterm-wpe` (feature `html`), single instance, agent integrations | Linux |
+
+The platform column is where a crate builds today. The libghostty-vt crates hold no OS-specific Rust, but the native
+library build behind them (`scripts/build-ghostty-vt.sh`, which the sys crate's build script calls) targets Linux
+only, so they are `Linux` until that build covers macOS and Windows, open work under the platform rules; an `any` crate
+does not depend on them.
 
 GPUI owns the main thread and the whole state; control connections, the single-instance bus and the signal thread hop
 onto it through `MainLoop`. Work that needs no live terminal or widget belongs in `agterm-core`, unit-tested against
@@ -107,7 +112,10 @@ Every dev instance, probe or `agtermctl` call stays off it:
   design: reap only the session processes of that instance's namespace, never by name (`pkill zmx`), and never run
   `zmx` outside that namespace.
 - Run the GUI headless (the suite's private compositor and dbus, or `xvfb-run` with a private bus for `cargo test`),
-  never on the user's desktop or GPU. GPUI renders through Vulkan, so a headless run renders on Mesa's lavapipe alone
+  never on the user's desktop: nothing a run starts draws on the user's display or joins its compositor or bus. GPUI
+  renders through Vulkan, so a headless app instance (the suite's, the window tests') renders on Mesa's lavapipe alone
   (`scripts/fetch-lavapipe.sh`), and on Wayland it needs a seat, which only a recent headless weston gives
   (`scripts/build-weston.sh` builds one where the system's is too old). A compositor started by hand copies the setup in
-  `impls/base.py`; without a seat GPUI panics, and without lavapipe it would reach the machine's GPU.
+  `impls/base.py`; without a seat GPUI panics, and without lavapipe it would reach the machine's GPU. The render-path
+  harnesses (README names them) also render offscreen on a hardware render node, each GPU in a child process of its
+  own: that headless use of the GPU is part of the gates.

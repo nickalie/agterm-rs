@@ -27,7 +27,8 @@ Linux and Windows are equal targets; today it is built and tested on Linux, and 
 - For the native builds: curl, tar, xz, zstd, patch, sha256sum and ncurses' `tic`/`infocmp`; for
   `scripts/build-weston.sh` also meson, ninja, python3, a C++ compiler and weston's own development files (the Ubuntu
   list below); for regenerating the libghostty-vt bindings `bindgen` (`cargo install bindgen-cli`).
-- A Vulkan loader and driver: GPUI renders through wgpu on Vulkan (Mesa's drivers, lavapipe for every headless run).
+- A Vulkan loader and driver: GPUI renders through wgpu on Vulkan (Mesa's drivers, lavapipe for every headless app
+  instance).
 - For the app's tests: Xvfb's `xvfb-run` and dbus' `dbus-run-session`, so they get a display and a session bus of
   their own instead of the desktop's.
 - For the app's process tests (`crates/agterm-gpui/tests`): dbus-daemon, a private bus per test; the ones with a
@@ -111,8 +112,12 @@ scripts/fetch-lavapipe.sh      # Mesa's lavapipe for headless GPUI runs: the sys
 scripts/build-weston.sh        # weston 15 for headless GPUI runs where the system's is older (Ubuntu 26.04: 14)
 ```
 
-The app's headless runs (the conformance suite, `agterm-gpui`'s process tests) render on
-Mesa's software Vulkan driver lavapipe only, never on the machine's GPU. `scripts/fetch-lavapipe.sh` prints its ICD
+The app's headless instances (the conformance suite's, `agterm-gpui`'s window tests') render on Mesa's software
+Vulkan driver lavapipe only, never on the machine's GPU. The render-path harnesses also render offscreen on a hardware
+render node, each GPU in a child process of its own: `agterm-gpui`'s `external_texture` and `html_overlay` tests (on
+lavapipe and on the first render node a Mesa Vulkan driver runs) and `agterm-wpe`'s engine tests (on the first DRM
+render node and in shared memory, [WPE WebKit](#wpe-webkit)).
+`scripts/fetch-lavapipe.sh` prints its ICD
 manifest: `AGTERM_LAVAPIPE_ICD` when set, else the distribution's (Ubuntu/Debian/Fedora `mesa-vulkan-drivers`, Arch
 `vulkan-swrast`), else it verifies the pinned Arch `vulkan-swrast` package (`LAVAPIPE_*` in `build/pins.env`) and
 unpacks it into the vendored prefix, refusing a host whose libLLVM or glibc it cannot load (`--print-icd` finds without
