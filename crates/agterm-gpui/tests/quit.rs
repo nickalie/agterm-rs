@@ -13,6 +13,7 @@
 #[expect(dead_code, reason = "the sandbox serves the process tests too")]
 mod support;
 
+use std::fmt::Write as _;
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -251,7 +252,7 @@ fn logs(dir: &Path) -> String {
             let text = std::fs::read_to_string(&path).unwrap_or_default();
             let lines: Vec<&str> = text.lines().collect();
             let tail = lines[lines.len().saturating_sub(40)..].join("\n");
-            all.push_str(&format!("== {}\n{tail}\n", path.display()));
+            let _ = writeln!(all, "== {}\n{tail}", path.display());
         }
     }
     all
