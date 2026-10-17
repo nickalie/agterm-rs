@@ -47,6 +47,8 @@ pub mod status_glyph;
 pub mod status_sound;
 pub mod terminal;
 pub mod titlebar;
+#[cfg(test)]
+mod ui_ids;
 pub mod watermark;
 pub mod welcome;
 pub mod window;

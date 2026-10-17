@@ -67,16 +67,12 @@ fn directory(snapshot: &Snapshot) -> Vec<Item> {
 
 /// One file's diagnostics (`<id>-diagnostics`) and its Reload (`<id>-reload`).
 fn diagnostics(id: &'static str, lines: &[String], reload: fn(&mut agterm_core::Core)) -> Vec<Item> {
-    let reload_id: &'static str = match id {
-        "settings-keymap" => "settings-keymap-reload",
-        _ => "settings-hooks-reload",
+    let (list_id, reload_id): (&'static str, &'static str) = match id {
+        "settings-keymap" => ("settings-keymap-diagnostics", "settings-keymap-reload"),
+        _ => ("settings-hooks-diagnostics", "settings-hooks-reload"),
     };
     vec![
-        Item::new(
-            format!("{id}-diagnostics"),
-            "",
-            Control::Diagnostics { lines: lines.to_vec() },
-        ),
+        Item::new(list_id, "", Control::Diagnostics { lines: lines.to_vec() }),
         Item::new(
             reload_id,
             "",

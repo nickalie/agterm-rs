@@ -317,6 +317,7 @@ fn a_zoom_fills_the_page_with_one_terminal_and_its_end_lays_the_split_out_again(
     h.until("the even split", |h| {
         h.cols(session, &left) == 39 && h.cols(session, &right) == 39
     });
+    assert!(h.cx.debug_bounds("terminal-zoom").is_none(), "no zoom yet");
 
     zoom(&mut h, format!("surface:{}:right", uuid_string(session)), "show");
     assert!(h.state.core.zoom_target(window).is_some());
@@ -325,6 +326,11 @@ fn a_zoom_fills_the_page_with_one_terminal_and_its_end_lays_the_split_out_again(
         "the zoomed terminal alone"
     );
     h.until("the zoomed terminal's full grid", |h| h.cols(session, &right) == 79);
+    let zoomed =
+        h.cx.debug_bounds("terminal-zoom")
+            .expect("upstream's `terminal-zoom` names the zoomed terminal");
+    let deck = h.cx.debug_bounds("deck").expect("the deck is laid out");
+    assert_eq!(zoomed, deck, "the zoomed terminal fills the page");
     assert!(
         h.focused(session, &right),
         "the zoom keeps the keyboard on its terminal"
@@ -333,6 +339,7 @@ fn a_zoom_fills_the_page_with_one_terminal_and_its_end_lays_the_split_out_again(
     zoom(&mut h, format!("surface:{}:right", uuid_string(session)), "hide");
     assert!(h.state.core.zoom_target(window).is_none());
     assert!(h.shown(session, &left) && h.shown(session, &right), "the split again");
+    assert!(h.cx.debug_bounds("terminal-zoom").is_none(), "the zoom ended");
     h.until("the split at its ratio", |h| {
         h.cols(session, &left) == 39 && h.cols(session, &right) == 39
     });

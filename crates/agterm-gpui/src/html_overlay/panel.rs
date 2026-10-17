@@ -8,7 +8,7 @@ use agterm_core::html::{HtmlLoadState, HtmlNavigation, HtmlOverlay, HtmlOverlayT
 use agterm_core::model::is_valid_color_hex;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, Hsla, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, SharedString,
+    AnyElement, App, Hsla, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Role, SharedString,
     StatefulInteractiveElement as _, Styled as _, div, px, svg,
 };
 use uuid::Uuid;
@@ -222,6 +222,10 @@ fn identity(overlay: &HtmlOverlay, colors: &PanelColors) -> AnyElement {
         })
         .child(
             div()
+                .id("htmlOverlay.identity")
+                .debug_selector(|| "htmlOverlay.identity".to_owned())
+                .accessibility_id("htmlOverlay.identity")
+                .role(Role::Label)
                 .min_w(px(reserved.min(160.)))
                 .overflow_hidden()
                 .text_ellipsis()
@@ -231,6 +235,10 @@ fn identity(overlay: &HtmlOverlay, colors: &PanelColors) -> AnyElement {
         .when_some(title, |row, title| {
             row.child(div().text_color(colors.ink(0.4)).child("·")).child(
                 div()
+                    .id("htmlOverlay.title")
+                    .debug_selector(|| "htmlOverlay.title".to_owned())
+                    .accessibility_id("htmlOverlay.title")
+                    .role(Role::Label)
                     .min_w(px(0.))
                     .overflow_hidden()
                     .text_ellipsis()
@@ -255,9 +263,13 @@ fn button(id: Uuid, item: StripItem, enabled: bool, colors: &PanelColors, poster
     };
     let ink = colors.ink(if enabled { 1.0 } else { 0.3 });
     let poster = poster.clone();
+    let element_id = accessibility_id(item);
     div()
-        .id(SharedString::from(format!("html-{tooltip}")))
-        .debug_selector(move || format!("html-strip-{tooltip}"))
+        .id(element_id)
+        .debug_selector(move || element_id.to_owned())
+        .accessibility_id(element_id)
+        .role(Role::Button)
+        .aria_label(tooltip)
         .flex_shrink_0()
         .w(px(22.))
         .h(px(20.))
@@ -279,6 +291,22 @@ fn button(id: Uuid, item: StripItem, enabled: bool, colors: &PanelColors, poster
             })
         })
         .into_any_element()
+}
+
+/// The strip item's element id, upstream's accessibility identifier (`HtmlOverlayView.strip`); the identity is its
+/// label's.
+#[must_use]
+pub fn accessibility_id(item: StripItem) -> &'static str {
+    match item {
+        StripItem::Back => "htmlOverlay.back",
+        StripItem::Forward => "htmlOverlay.forward",
+        StripItem::Reload => "htmlOverlay.reload",
+        StripItem::Browser => "htmlOverlay.browser",
+        StripItem::Files => "htmlOverlay.finder",
+        StripItem::CopyLink => "htmlOverlay.copy",
+        StripItem::Close => "htmlOverlay.close",
+        StripItem::Identity => "htmlOverlay.identity",
+    }
 }
 
 /// What a strip button does: history and hand-offs go to the page's engine page, reload and close to the model.
@@ -318,7 +346,10 @@ pub fn failure(overlay: &HtmlOverlay, colors: &PanelColors) -> Option<AnyElement
     }
     Some(
         div()
-            .id("html-failure")
+            .id("htmlOverlay.error")
+            .debug_selector(|| "htmlOverlay.error".to_owned())
+            .accessibility_id("htmlOverlay.error")
+            .role(Role::Alert)
             .absolute()
             .inset_0()
             .bg(colors.background())

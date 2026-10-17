@@ -49,7 +49,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Bounds, Context, CursorStyle, Entity, FocusHandle, Focusable as _,
     InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels, Render,
-    SharedString, Styled, Subscription, Window, canvas, div, point, px, size,
+    SharedString, StatefulInteractiveElement as _, Styled, Subscription, Window, canvas, div, point, px, size,
 };
 use uuid::Uuid;
 
@@ -428,6 +428,8 @@ pub struct Deck {
     grid_focus: Option<FocusHandle>,
     /// The dashboard's transient font sizes on its member terminals.
     fonts: crate::dashboard::FontOverrides,
+    /// The session whose terminal the window is zoomed into, as last reconciled.
+    zoomed: Option<Uuid>,
 }
 
 /// An open dashboard as the deck draws it: the cells and the terminal each hosts.
@@ -483,6 +485,7 @@ impl Deck {
             grid: None,
             grid_focus: None,
             fonts: crate::dashboard::FontOverrides::default(),
+            zoomed: None,
         }
     }
 
@@ -631,6 +634,7 @@ impl Deck {
             .zoom_target(self.window)
             .filter(|zoom| self.pages.contains_key(&zoom.session));
         let grid = crate::dashboard::GridModel::of(core, self.window);
+        self.zoomed = zoom.map(|zoom| zoom.session);
         // under the grid no page shows: it hosts its members' terminals itself
         let shown = zoom.map(|zoom| zoom.session).or(plan.shown).filter(|_| grid.is_none());
         let modal = modal || crate::quick::holds_keyboard(cx);
@@ -744,9 +748,13 @@ impl Deck {
                 }
             })
             .collect();
+        let chrome = crate::chrome::current(cx);
         let look = crate::dashboard::Look {
             background: self.look.background,
             foreground: self.look.foreground,
+            selection: chrome
+                .selection_background
+                .map(|fill| (fill, chrome.selection_foreground)),
         };
         let animate = crate::status_glyph::animations_enabled(cx);
         crate::dashboard::grid(self.window, cells, look, &self.env.poster, animate)
@@ -1110,6 +1118,8 @@ impl Deck {
         };
         let session = page.session;
         let hosted = self.hosted(session);
+        // a zoomed page shows its zoomed terminal alone (upstream's `terminal-zoom` layer)
+        let zoomed = visible && self.zoomed == Some(session);
         let mut element = PageElement::new(plan.panes, plan.axis, plan.ratio, Rc::clone(&page.state));
         // the terminals, hidden ones under the page at full size; the grid draws the ones it hosts
         for pane in page
@@ -1118,7 +1128,10 @@ impl Deck {
             .filter(|pane| pane.spec.pane != StatusPane::Scratch && !hosted.contains(&pane.token()))
         {
             let shown = pane.view.read(cx).is_shown();
-            element = element.child(terminal_wrapper(pane, shown), terminal_place(plan, pane.token()));
+            element = element.child(
+                terminal_wrapper(pane, shown, zoomed && shown),
+                terminal_place(plan, pane.token()),
+            );
         }
         for slot in [Slot::Primary, Slot::Split] {
             if let Some((color, opacity)) = page.washes.wash(slot, false) {
@@ -1153,7 +1166,10 @@ impl Deck {
         }
         if let Some(scratch) = page.panes.iter().find(|pane| pane.spec.pane == StatusPane::Scratch) {
             let shown = scratch.view.read(cx).is_shown();
-            element = element.child(terminal_wrapper(scratch, shown), Place::Pane(Slot::Scratch));
+            element = element.child(
+                terminal_wrapper(scratch, shown, zoomed && shown),
+                Place::Pane(Slot::Scratch),
+            );
         }
         if let Some((regions, opacity)) = page.washes.backdrop.clone() {
             element = element.child(backdrop(regions, opacity, plan, Rc::clone(&page.state)), Place::Full);
@@ -1232,6 +1248,7 @@ impl Render for Deck {
         let grid = self.grid.as_ref().map(|grid| self.grid_layer(grid, cx));
         div()
             .id("deck")
+            .debug_selector(|| "deck".to_owned())
             .relative()
             .size_full()
             .min_w(px(0.))
@@ -1310,11 +1327,21 @@ fn terminal_place(plan: &PanePlan, token: &str) -> Place {
 
 /// A pane's terminal view inside a wrapper that is drawn only while the view shows. A key press on a terminal
 /// holding its keys (a lead cover, a held exit) runs its hold in the terminal's key path (`Shared::held_key`).
-fn terminal_wrapper(pane: &PaneTerminal, shown: bool) -> impl IntoElement {
-    div()
+fn terminal_wrapper(pane: &PaneTerminal, shown: bool, zoomed: bool) -> AnyElement {
+    let wrapper = div()
         .size_full()
         .when(!shown, Styled::invisible)
-        .child(pane.view.clone())
+        .child(pane.view.clone());
+    if zoomed {
+        // the zoomed terminal: upstream's accessibility identifier as its element id
+        return wrapper
+            .id("terminal-zoom")
+            .debug_selector(|| "terminal-zoom".to_owned())
+            .accessibility_id("terminal-zoom")
+            .role(gpui_kit::Role::Group)
+            .into_any_element();
+    }
+    wrapper.into_any_element()
 }
 
 /// A solid wash at `opacity` over the area it is laid out on; it takes nothing.

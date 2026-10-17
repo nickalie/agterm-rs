@@ -67,6 +67,11 @@ fn page_overlay() -> HtmlOverlay {
 
 /// A page mounted and shown in an 800x500 test window.
 fn harness(cx: &mut TestAppContext) -> (Harness, &mut VisualTestContext) {
+    harness_of(page_overlay(), cx)
+}
+
+/// `overlay` mounted and shown in an 800x500 test window.
+fn harness_of(overlay: HtmlOverlay, cx: &mut TestAppContext) -> (Harness, &mut VisualTestContext) {
     cx.update(gpui_kit::init);
     let web = testing::install();
     let popover_open = Rc::new(Cell::new(true));
@@ -78,7 +83,6 @@ fn harness(cx: &mut TestAppContext) -> (Harness, &mut VisualTestContext) {
     cx.simulate_resize(size(px(800.), px(500.)));
     // focus changes reach their listeners in an active window
     cx.update(|window, _| window.activate_window());
-    let overlay = page_overlay();
     let element = cx
         .update(|window, cx| registry::mount(&overlay, None, window, cx))
         .unwrap();
@@ -185,6 +189,51 @@ fn a_mounted_page_is_made_loaded_shown_and_laid_out_at_its_content(cx: &mut Test
             .iter()
             .any(|call| matches!(call, Call::Geometry(geometry) if (geometry.scale - 1.5).abs() < f64::EPSILON)),
         "{rescaled:?}"
+    );
+}
+
+/// Upstream's accessibility identifiers (`conformance/ui-ids.yaml`, `htmlOverlay.*`) name the page's elements: the
+/// navigation strip of a URL page, then a file page's Show in Files, then the failure over a page that did not load.
+#[gpui_kit::test]
+fn the_page_and_its_strip_carry_upstreams_accessibility_ids(cx: &mut TestAppContext) {
+    let mut overlay = page_overlay();
+    overlay.flags.navigation = true;
+    let (harness, cx) = harness_of(overlay, cx);
+    for id in [
+        "htmlOverlay.back",
+        "htmlOverlay.forward",
+        "htmlOverlay.reload",
+        "htmlOverlay.identity",
+        "htmlOverlay.browser",
+        "htmlOverlay.copy",
+        "htmlOverlay.close",
+        "htmlOverlay.page",
+    ] {
+        assert!(cx.debug_bounds(id).is_some(), "{id} is drawn");
+    }
+    assert!(
+        cx.debug_bounds("htmlOverlay.finder").is_none(),
+        "a URL page copies its link"
+    );
+    assert!(cx.debug_bounds("htmlOverlay.error").is_none(), "the page did not fail");
+    let mut failed = harness.overlay.clone();
+    failed.source = HtmlSource::File {
+        path: "/nonexistent/page.html".to_owned(),
+        grant_root: None,
+    };
+    failed.load_state = agterm_core::html::HtmlLoadState::Failed;
+    failed.load_error = Some("not found".to_owned());
+    cx.update(|_, cx| registry::apply(&failed, true, cx));
+    harness.root.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("htmlOverlay.finder").is_some(),
+        "a file page shows its file"
+    );
+    assert!(cx.debug_bounds("htmlOverlay.copy").is_none());
+    assert!(
+        cx.debug_bounds("htmlOverlay.error").is_some(),
+        "the failure is drawn over the page"
     );
 }
 

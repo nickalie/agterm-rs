@@ -40,8 +40,8 @@ use gpui_kit::{
     App, Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase, DmaBufPlane, DmaBuffer, ElementInputHandler,
     EntityInputHandler, FocusHandle, Focusable, HitboxBehavior, InteractiveElement as _, IntoElement, KeyUpEvent,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, PixelRect,
-    Pixels, Render, ScrollWheelEvent, SharedString, Styled as _, Subscription, UTF16Selection, Window, canvas, div,
-    point, px, size,
+    Pixels, Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
+    UTF16Selection, Window, canvas, div, point, px, size,
 };
 
 use super::input;
@@ -740,7 +740,10 @@ impl Render for PageView {
             .children(panel::strip(&overlay, &colors, &poster))
             .child(
                 div()
-                    .id("html-content")
+                    .id("htmlOverlay.page")
+                    .debug_selector(|| "htmlOverlay.page".to_owned())
+                    .accessibility_id("htmlOverlay.page")
+                    .role(gpui_kit::Role::Document)
                     .relative()
                     .flex_1()
                     .min_h(px(0.))

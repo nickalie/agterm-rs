@@ -50,8 +50,9 @@ pub const CAPTION_DROP: f32 = 8.0;
 pub const CAPTION_INSET: f32 = 6.0;
 /// An unselected idle chip's text opacity (upstream's `unselectedCaptionTextOpacity`).
 pub const UNSELECTED_CAPTION: f64 = 0.55;
-/// An idle chip's fill: the foreground over the backdrop at this opacity (the theme carries no selection color here).
-pub const IDLE_FILL: f64 = 0.16;
+/// An idle chip's fill under a theme without a selection background: the foreground at this opacity over the backdrop
+/// (upstream's `dashboardPillColor` fallback, `chromeText.opacity(0.22)`).
+pub const IDLE_FILL: f64 = 0.22;
 /// The pulsing wash's peak and half period (upstream's `washPeakOpacity`, `pulseDuration`).
 pub const WASH_PEAK: f32 = 0.75;
 pub const PULSE_HALF: Duration = Duration::from_millis(450);
@@ -263,6 +264,9 @@ impl FontOverrides {
 pub struct Look {
     pub background: Rgb,
     pub foreground: Rgb,
+    /// An idle chip's fill and text: the theme's selection background and the selected sidebar row's text
+    /// ([`agterm_core::chrome::ChromeColors`]), `None` under a theme without a selection background.
+    pub selection: Option<(Rgb, Rgb)>,
 }
 
 fn color(rgb: Rgb, alpha: f64) -> Hsla {
@@ -374,21 +378,31 @@ fn cell(window: Uuid, parts: CellParts, look: Look, poster: &Poster, animate: bo
         .into_any_element()
 }
 
-/// The chip on the cell's bottom-right frame line: the name and pane marker, the status color with contrasting text
-/// while the session is not idle (pulsing while it blinks), else the muted idle fill.
-fn caption(chrome: &ChromeCell, look: Look, animate: bool) -> AnyElement {
-    let (fill, text, wash) = if let Some(status) = &chrome.status {
+/// A chip's fill, its text and the wash pulsing over a blinking one (upstream's `DashboardCaptionPill`): the status
+/// color with contrasting text while the session is not idle, else the theme's selection colors (the selected sidebar
+/// row's pill and text), falling back to the foreground over the backdrop; an idle chip's text is muted outside the
+/// highlighted cell.
+#[must_use]
+pub fn chip_colors(chrome: &ChromeCell, look: Look, animate: bool) -> (Hsla, Hsla, Option<Hsla>) {
+    if let Some(status) = &chrome.status {
         let fill = crate::status_glyph::hsla(status.rgb);
         let (text, wash) = if luminance(status.rgb) > 0.5 {
             (gpui_kit::black(), gpui_kit::white())
         } else {
             (gpui_kit::white(), gpui_kit::black())
         };
-        (fill, text, (status.blink && animate).then_some(wash))
-    } else {
-        let alpha = if chrome.highlighted { 1.0 } else { UNSELECTED_CAPTION };
-        (color(look.foreground, IDLE_FILL), color(look.foreground, alpha), None)
-    };
+        return (fill, text, (status.blink && animate).then_some(wash));
+    }
+    let alpha = if chrome.highlighted { 1.0 } else { UNSELECTED_CAPTION };
+    match look.selection {
+        Some((fill, text)) => (color(fill, 1.0), color(text, alpha), None),
+        None => (color(look.foreground, IDLE_FILL), color(look.foreground, alpha), None),
+    }
+}
+
+/// The chip on the cell's bottom-right frame line: the name and pane marker in [`chip_colors`].
+fn caption(chrome: &ChromeCell, look: Look, animate: bool) -> AnyElement {
+    let (fill, text, wash) = chip_colors(chrome, look, animate);
     let label = SharedString::from(chrome.caption.clone());
     let pill = div()
         .relative()
