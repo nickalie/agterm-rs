@@ -315,6 +315,25 @@ impl ThemeColors {
         }
     }
 
+    /// The 16 ANSI colors a terminal of this theme starts with: its own slots over the engine's built-in palette
+    /// (what libghostty's `palette` config read back for the GTK build's HTML pages); `None` when the engine cannot
+    /// make a terminal to read the built-in palette from.
+    #[must_use]
+    pub fn ansi(&self) -> Option<[Rgb; 16]> {
+        static BUILT_IN: std::sync::OnceLock<Option<[Rgb; 16]>> = std::sync::OnceLock::new();
+        let mut ansi = (*BUILT_IN.get_or_init(|| {
+            // the hooks before the first terminal seals them, as every terminal of the crate is made
+            crate::init();
+            let terminal = vt::Terminal::new(1, 1).ok()?;
+            let palette = terminal.default_palette();
+            Some(std::array::from_fn(|slot| rgb(palette[slot])))
+        }))?;
+        for (&slot, &color) in self.palette.range(..16) {
+            ansi[usize::from(slot)] = color;
+        }
+        Some(ansi)
+    }
+
     /// Apply to `terminal`: the defaults, and the palette slots over the built-in palette.
     pub(crate) fn apply(&self, terminal: &mut vt::Terminal) -> Result<(), vt::Error> {
         let vt_rgb = |color: Rgb| vt::Rgb::new(color.r, color.g, color.b);
@@ -738,6 +757,28 @@ mod tests {
     fn capture(terminal: &mut vt::Terminal, capture: &mut Capture, previous: &Frame) -> Option<Frame> {
         capture.state.update(terminal).unwrap();
         capture.convert(previous, MouseShape::Default).unwrap()
+    }
+
+    #[test]
+    fn the_ansi_colors_are_the_themes_slots_over_the_built_in_palette() {
+        let built_in = *terminal(1, 1).default_palette();
+        let plain = ThemeColors::default().ansi().unwrap();
+        assert_eq!(plain, std::array::from_fn(|slot| rgb(built_in[slot])));
+        let themed = ThemeColors {
+            palette: [
+                (1, Rgb::new(1, 2, 3)),
+                (15, Rgb::new(4, 5, 6)),
+                (200, Rgb::new(7, 8, 9)),
+            ]
+            .into(),
+            ..ThemeColors::default()
+        }
+        .ansi()
+        .unwrap();
+        assert_eq!(themed[1], Rgb::new(1, 2, 3));
+        assert_eq!(themed[15], Rgb::new(4, 5, 6));
+        assert_eq!(themed[2], plain[2], "an unset slot keeps the built-in color");
+        assert_ne!(plain[1], Rgb::new(1, 2, 3));
     }
 
     #[test]

@@ -137,6 +137,8 @@ impl Windows {
         // after any reload, so the chrome takes the colors the terminals now render; before the windows render, so a
         // new window's first frame has them
         crate::chrome::sync(&state.core, &self.env.config.borrow(), cx);
+        // before the decks: a released page's element leaves its slot first
+        crate::html_overlay::settle(&mut state.core, cx);
         // a dashboard follows the model before anything renders it
         state.core.reconcile_dashboards();
         let mut resettle = self.replace_panes(&mut state.core, cx);
@@ -371,6 +373,8 @@ impl Windows {
             ui.deck.update(cx, |deck, cx| deck.apply_config(keep_zoom, cx));
         }
         self.quick.apply_config(&self.env, keep_zoom, cx);
+        // the pages follow the terminals' colors (upstream's `refreshThemes` on `.agtermAppearanceChanged`)
+        crate::html_overlay::refresh_themes(&crate::html_overlay::colors_of(config), cx);
     }
 
     /// Tears every terminal down, ending their programs: the quit path, after the quit save.

@@ -861,6 +861,21 @@ pub fn dismiss_alerts(window: &mut Window, cx: &mut App) {
     }
 }
 
+/// Withdraws `alert` while `window` shows or queues it, answering it with its cancel button (an `adw::AlertDialog`'s
+/// `force_close` in the GTK build: a page's prompt goes with the page leaving the screen).
+pub fn withdraw_alert(alert: &Entity<Alert>, window: &mut Window, cx: &mut App) {
+    let queued = cx
+        .try_global::<Alerts>()
+        .and_then(|alerts| alerts.queues.get(&window.window_handle()))
+        .is_some_and(|queue| queue.contains(alert));
+    if !queued {
+        return;
+    }
+    if let Some(cancel) = alert.read(cx).spec.cancel_button() {
+        alert.update(cx, |alert, cx| alert.answer(cancel, window, cx));
+    }
+}
+
 /// The alert `window` shows in front.
 #[must_use]
 pub fn front_alert(window: AnyWindowHandle, cx: &App) -> Option<Entity<Alert>> {

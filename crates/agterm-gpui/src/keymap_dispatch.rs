@@ -8,7 +8,8 @@
 //! did), then the keymap in a registered window ([`register_window`]) — custom commands, the `map` alternatives,
 //! leaders timing out after 1.5 s, a `--repeat` tail live until 0.5 s after its release, then the built-in menu chords
 //! (except `toggle_fullscreen`'s after a half-typed leader) — then, when a terminal's own view holds the keyboard,
-//! ghostty's binds and the key encoder (`crate::terminal`). A key either takes stops there: GPUI's binding matcher and
+//! ghostty's binds and the key encoder (`crate::terminal`), or when an HTML page holds it, the page's engine
+//! (`crate::html_overlay`). A key either takes stops there: GPUI's binding matcher and
 //! pending-keystroke buffering never see it, and the platform's input handler does not type it again. A focused text
 //! field (an element in an `Input` key context), an open prompt, an alert (`crate::modal`) or the Settings popup
 //! (`crate::settings`) keeps every key, as the GTK build's text fields and dialogs did.
@@ -227,7 +228,10 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
             }
         }
     }
-    if crate::terminal::key_down(&stroke, window, cx) {
+    // then the terminal holding the keyboard, else the HTML page holding it (`crate::html_overlay`)
+    if crate::terminal::key_down(&stroke, window, cx)
+        || crate::html_overlay::key_down(&event.keystroke, &stroke, window, cx)
+    {
         cx.stop_propagation();
     }
 }

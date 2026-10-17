@@ -286,3 +286,82 @@ fn show_image_draws_its_image_in_a_pty_overlay_and_closes_on_enter(cx: &mut Test
     assert_eq!(exit_code(&result(&mut h, session, None)), Some(0));
     assert!(h.focused(session, &token));
 }
+
+// MARK: - HTML pages (`crate::html_overlay`, on its recording engine)
+
+/// Whether `session`'s session-wide page shows and holds the window's keyboard.
+#[cfg(all(feature = "html", target_os = "linux"))]
+fn program_page(h: &mut Harness<'_>, session: Uuid) -> Option<(bool, bool)> {
+    let deck = h.deck.clone();
+    h.cx.update(|window, cx| {
+        let page = deck.read(cx).page(session)?.overlays().program_page()?;
+        let handle = gpui_kit::Focusable::focus_handle(page.element().read(cx), cx);
+        Some((page.is_shown(), handle.is_focused(window)))
+    })
+}
+
+/// One reconcile of the deck with `modal` holding the window's keyboard (the window's picker, GUI ask, palette, an
+/// alert, a popover or the Settings popup).
+#[cfg(all(feature = "html", target_os = "linux"))]
+fn reconcile(h: &mut Harness<'_>, modal: bool) {
+    let (deck, state) = (h.deck.clone(), &mut h.state);
+    let focused =
+        h.cx.update(|window, cx| deck.update(cx, |deck, cx| deck.reconcile(&mut state.core, modal, window, cx)));
+    if focused {
+        h.state.settle();
+    }
+    h.cx.run_until_parked();
+}
+
+#[cfg(all(feature = "html", target_os = "linux"))]
+#[gpui_kit::test]
+fn a_page_takes_the_keyboard_from_its_pane_never_from_a_modal_and_hands_it_back(cx: &mut TestAppContext) {
+    use crate::html_overlay::testing::{self, Call};
+
+    let (mut h, session, token) = overlay_harness(cx);
+    let web = testing::install();
+    let poster = h.state.poster().clone();
+    crate::html_overlay::install(&mut h.state.core, h.state_dir.path().to_path_buf(), poster);
+    h.dispatch(Command::Session(SessionCmd::OverlayOpen), session, |args| {
+        args.url = Some("https://example.invalid/".to_owned());
+    });
+    h.turn();
+    assert_eq!(
+        program_page(&mut h, session),
+        Some((true, true)),
+        "it covers the page and takes the keyboard"
+    );
+    assert!(!h.focused(session, &token));
+    assert!(web.take().contains(&Call::Visible(true)));
+
+    // a modal comes up and takes the keyboard: the page leaves it there, and takes it back once the modal goes
+    let modal = h.cx.update(|window, cx| {
+        let handle = cx.focus_handle();
+        window.focus(&handle, cx);
+        handle
+    });
+    reconcile(&mut h, true);
+    assert_eq!(program_page(&mut h, session), Some((true, false)));
+    assert!(
+        h.cx.update(|window, _| modal.is_focused(window)),
+        "the modal keeps the keyboard"
+    );
+    reconcile(&mut h, false);
+    assert_eq!(
+        program_page(&mut h, session),
+        Some((true, true)),
+        "handed back once the modal went"
+    );
+
+    // the page closes: the pane gets the keyboard back, and the engine's page goes at the release
+    h.dispatch(Command::Session(SessionCmd::OverlayClose), session, |_| {});
+    let state = &mut h.state;
+    h.cx.update(|_, cx| crate::html_overlay::settle(&mut state.core, cx));
+    h.turn();
+    assert_eq!(program_page(&mut h, session), None);
+    assert!(h.focused(session, &token), "the pane holds the keyboard again");
+    assert!(
+        web.take().iter().any(|call| matches!(call, Call::CloseView(_))),
+        "the released page closed its engine page"
+    );
+}
