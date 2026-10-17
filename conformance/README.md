@@ -31,8 +31,9 @@ conformance/tools/run-reference-linux.sh [--bin PATH] [-- PYTEST_ARGS...]
 conformance/tools/run-rust-linux.sh [--frontend gtk|gpui] [--stage DIR] [-- PYTEST_ARGS...]
 
 # whether a WebKitGTK view's web process starts under the same headless isolation (a diagnosis; the view runs in
-# python, which agterm's AppArmor profile does not cover, so Ubuntu's userns restriction stops its sandbox)
-.venv/bin/python conformance/tools/webkit_probe.py
+# python, which agterm's AppArmor profile does not cover, so Ubuntu's userns restriction stops its sandbox); with
+# --engine wpe, whether the staged GPUI build's WPE WebKit loads a page there (its frame mode from the app's log)
+.venv/bin/python conformance/tools/webkit_probe.py [--engine webkitgtk|wpe] [--bin PATH]
 
 # whether the staged Rust build's terminal surface is created and draws a frame under the same isolation (a CI
 # spike; `version` alone answers without a GL context); defaults to run-rust-linux.sh's stage of the frontend

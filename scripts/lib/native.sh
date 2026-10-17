@@ -16,13 +16,15 @@ VENDOR_ROOT="${AGTERM_VENDOR:-$HOME/.cache/agterm-rs/vendor}"
 # shellcheck source=../../build/pins.env
 source "$PINS"
 
-# The workspace minus the WPE WebKit crates (the -sys crates and the agterm-wpe host over them), as cargo arguments:
-# what the entry points build (scripts/lib/dev-instance.sh, conformance/tools/run-rust-linux.sh, the Ubuntu CI
-# jobs), so a machine without WPE WebKit (Ubuntu 24.04 packages none) still builds, tests and stages the GTK app.
-# Nothing else depends on these crates yet; they build wherever WPE WebKit is (README > WPE WebKit), and CI checks them
-# in its Arch job.
+# The workspace minus everything that links WPE WebKit (the -sys crates, the agterm-wpe host over them, and the GPUI
+# frontend, whose default `html` feature runs its HTML overlays on it), as cargo arguments, so a machine without WPE
+# WebKit (Ubuntu packages none) still builds, tests and stages the GTK app; GPUI_WITHOUT_HTML adds the GPUI frontend
+# back without the feature (the core then refuses every page). The GPUI build with its pages, and its conformance,
+# need a WPE WebKit (README > WPE WebKit): run-rust-linux.sh --frontend gpui and run-gpui-dev.sh build it so, and CI
+# runs them in its Arch jobs.
 WORKSPACE_WITHOUT_WPE=(--workspace --exclude agterm-wpe --exclude agterm-wpe-sys --exclude agterm-wpe-platform-sys
-  --exclude agterm-wpe-javascriptcore-sys)
+  --exclude agterm-wpe-javascriptcore-sys --exclude agterm-gpui)
+GPUI_WITHOUT_HTML=(-p agterm-gpui --no-default-features)
 
 die() {
   echo "$*" >&2

@@ -2502,14 +2502,84 @@ GPUI-side element and API modeled on gpui-kit `crates/webview` (Apache-2.0, attr
 - Modify: `crates/agterm-gpui/Cargo.toml` (feature `html`, default on)
 - Modify: `conformance/tools/webkit_probe.py` (GPUI/WPE counterpart)
 
-- [ ] element: bounds/visibility sync, hitbox, focus, scale factor, click forwarding so GPUI popovers close
-- [ ] port the overlay logic from GTK onto `agterm-wpe` (same policies, sessions, scheme, bridge, downloads)
-- [ ] tests: registry/policy/sandbox unit tests carried over; page lifecycle (headless)
-- [ ] HTML conformance tests green on GPUI
-- [ ] manual check on the real screen recorded in the checklist: YouTube 1080p60 via dmabuf
-- [ ] ➕ (Task 2) the overlay never selects SHM while dmabuf import works; when it does fall back (import failed), the
+- [x] element: bounds/visibility sync, hitbox, focus, scale factor, click forwarding so GPUI popovers close
+- [x] port the overlay logic from GTK onto `agterm-wpe` (same policies, sessions, scheme, bridge, downloads)
+- [x] tests: registry/policy/sandbox unit tests carried over; page lifecycle (headless)
+- [x] HTML conformance tests green on GPUI
+- [x] manual check on the real screen recorded in the checklist: YouTube 1080p60 via dmabuf (skipped here — needs the
+      user's real screen; the orchestrator hands it to the user on a dev instance, and Task 33 walks it)
+- [x] ➕ (Task 2) the overlay never selects SHM while dmabuf import works; when it does fall back (import failed), the
       checklist and the log say video is not supported in that mode (Task 2: 2.5 fps YouTube, 80–115 % CPU)
-- [ ] gates + conformance — must pass before Task 33
+- [x] gates + conformance — must pass before Task 33
+- result (2026-10-17):
+  - **`agterm-gpui` `html_overlay/`** (feature `html`, default on, Linux): the GTK build's `html_overlay*` ported
+    onto `agterm-wpe`, module for module. `policy.rs` and `sandbox.rs` carried over with their tests (plus the WPE
+    mappings: `failure_event` from `agterm_wpe::LoadError`, `serve_granted` for the grant scheme's reads);
+    `registry.rs` the core's `HtmlHost` (pages by id, the stores: one in-memory store per page, the saved store under
+    `<state>/browser/<profile>/` made on first use, `browser.clear` with its progress, the grant's `agterm-file`
+    scheme, the bridge's parked replies, zoom, theme refresh) and the engine: `Host::start` with the first page once a
+    window drew (its `FrameMode` from `negotiate(dmabuf_import_caps())`, the grant scheme registered), its events
+    pumped onto the main thread (`init`), one start per process (a failed start fails every page with its reason);
+    `page.rs` the page model of the GTK `page.rs` on the engine's events (load tracker, page reports, policy answers,
+    the hand-off prompt as an app alert withdrawn when the page leaves the screen, `window.close()`, the bridge
+    through `AppState::handle_page_request` with deferred answers through a `Waiter`); `panel.rs` the strip, the
+    separator and the failure view in GPUI (lucide icons, the terminal's colors from `ThemeColors::ansi`, a new
+    `agterm-term` helper); `view.rs` the element `PageView` (modeled on gpui-kit's `crates/webview`, Apache-2.0,
+    attributed in the module docs): bounds and scale sent from prepaint as `Geometry`, visibility from the model's
+    on-screen, a `BlockMouse` hitbox, presses/releases/motion/enter-leave/wheel/touchpad in the content's coordinates,
+    keys from the app's key interceptor after the window's keys, the keymap and the terminal (`key_down`), modifier
+    keys from `on_modifiers_changed`, a focus handle the deck's focus chain gives the page through
+    `OverlayLayer::focus` (so Settings, alerts, pickers, asks and the palette keep the keyboard and hand it back), an
+    `EntityInputHandler` for input methods; frames: one `gpui::DmaBuffer` per `BufferId` (fds duplicated once, dropped
+    on `BuffersRemoved`), `Acquire::Implicit`, every outcome answering `frame_presented`, `take_fallback()` →
+    `fall_back_to_shm`; `menus.rs` the `<select>` popup and the context menu drawn by the app; `input.rs` the pure
+    key/pointer/cursor mappings; `engine.rs` the `Web` trait over `Host` (a recording stand-in in `testing.rs`).
+    Files never reach a page: the engine's clipboard carries only text the app hands it, and nothing is dropped onto a
+    page (the GTK `files.rs` has no counterpart). `overlay.rs` mounts the session-wide page and pane pages
+    (`OverlayPage`) where the GTK build mounted panels; the deck draws them as programs; `windows.rs` settles the
+    registry before the decks and refreshes the themes on a config change; the quit shuts the engine down.
+  - **`agterm-wpe`** grew what WebKitGTK drew itself (`engine/interaction.rs`, `engine/ime.rs`): the clipboard
+    (`Event::Clipboard` on a page's copy, `Host::set_clipboard` before a paste), `<select>` popups
+    (`Event::OptionMenu`/`OptionMenuClosed`, `Host::choose_option`), the context menu as a hit test
+    (`Event::ContextMenu`, `Host::editing_command`: the WPE port's own menu draws nothing and its items run nothing),
+    input methods (the display's `create_input_method_context`: preedit and commit from the consumer, the caret area
+    out as `Event::ImeCursorArea`); `Host` is now `Sync` (frame answers come from the renderer's threads); ids and
+    tokens have `from_raw`/`raw` for a consumer's stand-in engine; a `links` key hands dependents the WPE library
+    directories (the GPUI binaries' rpath); **`launcher::enter`/`supervise`**: with the vendored package the GPUI
+    binary re-runs itself under the `bwrap` overlay as a supervisor (bwrap in a process group of its own,
+    `--json-status-fd` for the child's pid, TERM/INT/HUP/QUIT relayed, the child's exit status returned, a marker that
+    refuses a second attempt), so SIGTERM still runs the quit save.
+  - **Build and CI** (Codex discussion, agreed): `WORKSPACE_WITHOUT_WPE` also excludes `agterm-gpui`;
+    `GPUI_WITHOUT_HTML=(-p agterm-gpui --no-default-features)`; `run-rust-linux.sh --frontend gpui` and
+    `run-gpui-dev.sh` build the GPUI frontend with its pages, the GTK paths without; Ubuntu `rust-linux` runs GPUI's
+    clippy and tests without the overlays; the Arch `wpe` job adds GPUI's clippy, unit tests and the page harness;
+    `conformance-gpui` moved into the Arch container (privileged, `--init`) with the GPUI process tests run again
+    there with the overlays and the GTK build beside them. ⚠️ the Arch conformance job is unproven until CI runs it.
+  - **Tests**: the carried-over policy/sandbox/panel unit tests; `input.rs`, `menus.rs` units; the element against
+    the recording engine (`view/tests.rs`: made, loaded and shown at its mount, geometry and scale, a press focusing
+    the page in its content's coordinates while a popover elsewhere still closes, keys and the paste hand-over,
+    frames answered and the fall-back asked once, the popup and the context menu); the deck
+    (`a_page_takes_the_keyboard_from_its_pane_never_from_a_modal_and_hands_it_back`); `tests/html_overlay` (custom
+    harness, a child per GPU under the launcher, GPUI's headless renderer, the real engine): the frame mode per GPU
+    (dmabuf on the Intel render node, SHM on lavapipe), a page's color read back, a page moved to another window drawn
+    there, a 1080p canvas animation at 40–62 frames/s on dmabufs with no SHM frame and no fall-back (≥ 24 asserted);
+    `agterm-wpe` headless cases for the clipboard, popups, the hit test, the input method and `requestAnimationFrame`;
+    `tests/supervisor.rs` (TERM by pid and INT to the group reach the program's own traps through the supervisor; the
+    group case fails with 130 when bwrap shares the supervisor's group). `webkit_probe.py --engine wpe` launches the
+    staged GPUI build through the harness and opens a page (selftests in `test_webkit_probe.py`).
+  - Conformance: GPUI `--ratchet-only --also-k "html or page or browser"` 645 passed, the 626 listed held, 19 newly
+    green html/page/browser ids added (`rust-gpui-passing.txt` 645); GTK (WebKitGTK, the probe and build split it
+    shares) `--ratchet-only` with the same selection 653 passed, 12 skipped, its 665 held. Full runs were not made.
+  - Deviations: the context menu is the app's (no Copy Image, spelling or media items: WPE's items cannot run);
+    nothing can be dropped onto a page (GPUI on Linux takes only file drops, WPE has no drop API); a page has no
+    accessibility tree in GPUI's (no AT-SPI bridge from an offscreen page); no `html` capability exists in the
+    vocabulary to claim (the html tests are ungated), so none was added.
+  - For Task 33: walk the HTML rows on the real screen — YouTube 1080p60 via dmabuf (pending row), a `<select>`, the
+    context menu, an input method, NVIDIA's own driver (its modifier choice and implicit fences), the AppArmor profile
+    on the GPUI binary; `htmlOverlay.*` ids as element ids. For Task 34: the GTK `html_overlay*`, WebKitGTK and
+    `webkit_probe.py`'s WebKitGTK route go with the GTK build; Ubuntu has no WPE `WebKit` 2.54, so its jobs build GPUI
+    without the overlays (`GPUI_WITHOUT_HTML`) and the GPUI checks with pages stay in the Arch jobs until an Ubuntu WPE
+    provider appears.
 
 ### Stage 4 — switch
 

@@ -22,6 +22,7 @@ tests/cli/test_cli_only.py::test_terminfo_install_refuses_a_destination_ssh_woul
 tests/cli/test_cli_only.py::test_terminfo_install_reports_how_ssh_ended
 tests/cli/test_cli_output.py::test_ask_blocks_until_cancelled
 tests/cli/test_cli_output.py::test_ask_without_blocking
+tests/cli/test_cli_output.py::test_browser_and_config
 tests/cli/test_cli_output.py::test_events_json_prints_each_event_object_of_the_asked_kinds
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args0-event limit must be between 1 and 1000]
 tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_reading[args1-events.read requires --run and --after together]
@@ -34,6 +35,8 @@ tests/cli/test_cli_output.py::test_hud
 tests/cli/test_cli_output.py::test_hud_sticky_and_no_frame
 tests/cli/test_cli_output.py::test_keymap
 tests/cli/test_cli_output.py::test_notify_raises_the_unseen_count
+tests/cli/test_cli_output.py::test_overlay_page_blocks_until_submitted
+tests/cli/test_cli_output.py::test_overlay_page_dismissed_exits_2
 tests/cli/test_cli_output.py::test_overlay_program
 tests/cli/test_cli_output.py::test_pick_blocks_until_cancelled
 tests/cli/test_cli_output.py::test_pick_without_blocking
@@ -123,6 +126,8 @@ tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_w
 tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[active-args0-browser.links]
 tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[zzz-args1-browser.clear]
 tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[zzz-args1-browser.links]
+tests/protocol/test_config_browser.py::test_clear_empties_the_store_persistent_pages_share
+tests/protocol/test_config_browser.py::test_clear_without_a_saved_store_creates_none
 tests/protocol/test_config_browser.py::test_links_refuses_an_unknown_mode[Overlay]
 tests/protocol/test_config_browser.py::test_links_refuses_an_unknown_mode[]
 tests/protocol/test_config_browser.py::test_links_refuses_an_unknown_mode[bogus]
@@ -239,10 +244,12 @@ tests/protocol/test_hud.py::test_hud_refusals[spinner-session.hud.open]
 tests/protocol/test_hud.py::test_hud_refusals[spinner-session.hud.update]
 tests/protocol/test_hud.py::test_hud_refusals[text-color-session.hud.open]
 tests/protocol/test_hud.py::test_hud_refusals[text-color-session.hud.update]
+tests/protocol/test_hud.py::test_hud_refused_over_a_page
 tests/protocol/test_hud.py::test_hud_width_is_clamped[max]
 tests/protocol/test_hud.py::test_hud_width_is_clamped[min]
 tests/protocol/test_hud.py::test_hud_width_is_clamped[sticky-center]
 tests/protocol/test_hud.py::test_hud_width_is_clamped[sticky-edge]
+tests/protocol/test_hud.py::test_page_replaces_a_hud
 tests/protocol/test_hud.py::test_resize_lets_a_sticky_hud_span_the_pane
 tests/protocol/test_hud.py::test_resize_sets_the_hud_width
 tests/protocol/test_hud.py::test_unknown_session_target[session.hud.close-args2]
@@ -275,6 +282,9 @@ tests/protocol/test_notify.py::test_notify_raises_the_badge_and_emits_the_event
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args0-notify requires a body]
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args1-notify requires a body]
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[zzz-args2-no such session: zzz]
+tests/protocol/test_overlay.py::test_a_page_without_script_cannot_close_its_window
+tests/protocol/test_overlay.py::test_a_script_page_closing_its_window_is_dismissed
+tests/protocol/test_overlay.py::test_html_page_occupies_the_slot
 tests/protocol/test_overlay.py::test_open_refusals[browse-html]
 tests/protocol/test_overlay.py::test_open_refusals[browse-program]
 tests/protocol/test_overlay.py::test_open_refusals[chromeless-browse-url]
@@ -316,12 +326,17 @@ tests/protocol/test_overlay.py::test_overlay_runs_in_its_cwd
 tests/protocol/test_overlay.py::test_overlay_size_and_resize
 tests/protocol/test_overlay.py::test_overlay_text_reads_the_covering_program
 tests/protocol/test_overlay.py::test_page_commands_need_a_page
+tests/protocol/test_overlay.py::test_page_flags_read_back
+tests/protocol/test_overlay.py::test_page_in_a_pane_slot
 tests/protocol/test_overlay.py::test_page_result_needs_a_known_page[invalid]
 tests/protocol/test_overlay.py::test_page_result_needs_a_known_page[unknown]
 tests/protocol/test_overlay.py::test_pane_overlay_needs_a_rendered_pane[hidden-split]
 tests/protocol/test_overlay.py::test_pane_overlay_needs_a_rendered_pane[unsplit]
 tests/protocol/test_overlay.py::test_pane_overlays_cover_one_pane_each
 tests/protocol/test_overlay.py::test_program_overlay_covers_the_session
+tests/protocol/test_overlay.py::test_reload_and_navigate_a_page
+tests/protocol/test_overlay.py::test_submit_answers_the_page_and_closes_it[empty]
+tests/protocol/test_overlay.py::test_submit_answers_the_page_and_closes_it[value]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.close-args1]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.open-args0]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.reload-args6]
@@ -330,6 +345,10 @@ tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.resu
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.submit-args5]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.text-args4]
 tests/protocol/test_overlay.py::test_unsplit_session_takes_a_left_pane_overlay
+tests/protocol/test_overlay.py::test_url_page_follows_a_cross_origin_redirect_only_when_browsing[browse]
+tests/protocol/test_overlay.py::test_url_page_follows_a_cross_origin_redirect_only_when_browsing[pinned]
+tests/protocol/test_overlay.py::test_url_page_reads_back_its_address[browse]
+tests/protocol/test_overlay.py::test_url_page_reads_back_its_address[pinned]
 tests/protocol/test_restore.py::test_a_held_command_moves_to_the_split_with_a_swap
 tests/protocol/test_restore.py::test_capture_counts_the_panes_running_a_program_and_clear_drops_them
 tests/protocol/test_restore.py::test_capture_needs_rerun_mode

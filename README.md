@@ -21,8 +21,8 @@ agterm in Rust, Linux first: a GTK4/libadwaita terminal over libghostty, driven 
 - GTK 4.14+, libadwaita 1.5+ and WebKitGTK 6.0 with their development files, and pkg-config.
 - gtk4-layer-shell: the distribution's package, or `scripts/build-layer-shell.sh` (below), which needs meson, ninja, a
   C compiler and the Wayland development files.
-- WPE WebKit 2.54+ with its WPEPlatform API for the WPE -sys crates of the GPUI frontend
-  (see [WPE WebKit](#wpe-webkit)); the GTK build does not need it.
+- WPE WebKit 2.54+ with its WPEPlatform API for the GPUI frontend's HTML overlays (feature `html`, the default; see
+  [WPE WebKit](#wpe-webkit)); the GTK build does not need it.
 - For the native builds: curl, tar, xz, patch, sha256sum and ncurses' `tic`/`infocmp`.
 - For the GTK unit tests: Xvfb's `xvfb-run`, so they get a display of their own instead of the desktop.
 - For the GPUI frontend's process tests (`crates/agterm-gpui/tests`): dbus-daemon, a private bus per test; the ones
@@ -151,20 +151,31 @@ need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through p
   offers when the system has no WPE WebKit of the bound API. Building and linking need nothing more; running pages
   from that prefix needs the helper path overlaid (`bwrap --ro-overlay /usr/lib` with the prefix's `lib/` on top),
   since nothing relocates it: `agterm_wpe::launcher::command` builds that launch, and `agterm-wpe`'s engine tests
-  (`cargo test -p agterm-wpe`) run their pages through it. Pick the distribution package whenever you can.
+  (`cargo test -p agterm-wpe`) run their pages through it. The GPUI build enters that overlay by itself
+  (`agterm_wpe::launcher::enter`, first thing in its `main`): the process it was started as stays a small supervisor
+  that relays SIGTERM, SIGINT, SIGHUP and SIGQUIT to the app inside and exits with its status, so a launch, its quit
+  save and its single-instance forwarding behave as with the distribution's package. Pick the distribution package
+  whenever you can.
 - Ubuntu packages no `wpewebkit` at all (none since 22.04's 2.36, 26.04 included), and 24.04 cannot load the Arch
-  package (glibc 2.39): Ubuntu builds the GTK app without the WPE crates (`WORKSPACE_WITHOUT_WPE` in
-  `scripts/lib/native.sh`, which `scripts/run-gtk-dev.sh`, `scripts/run-gpui-dev.sh`, `run-rust-linux.sh` and the
-  Ubuntu CI jobs use). Before the GPUI frontend makes WPE a dependency of what Ubuntu builds, it needs a provider there
-  (a source build into the vendored prefix) or the GPUI checks move to the Arch CI job.
+  package (glibc 2.39): Ubuntu builds the workspace without what links WPE (`WORKSPACE_WITHOUT_WPE` in
+  `scripts/lib/native.sh`: the WPE crates and the GPUI frontend) and the GPUI frontend without its HTML overlays
+  (`GPUI_WITHOUT_HTML`: `--no-default-features`, the core then refuses every page). The GPUI build with its pages
+  (feature `html`, the default) needs a WPE WebKit: `run-rust-linux.sh --frontend gpui` and `scripts/run-gpui-dev.sh`
+  build it so, and fail naming this section where there is none.
 - CI: the `wpe` job installs `wpewebkit` from a date-pinned Arch Linux Archive snapshot in a digest-pinned `archlinux`
-  container, checks the WPE crates there and that the checked-in bindings equal a regeneration.
+  container, checks the WPE crates there and that the checked-in bindings equal a regeneration, then the GPUI
+  frontend with its HTML overlays (clippy, unit tests, the headless page harness on lavapipe); `conformance-gpui` runs
+  in the same container.
 
 `agterm-wpe` is the host over those bindings: WPE WebKit on an engine thread with its own `GMainContext`, a
 `WPEDisplay`/`WPEView` subclass rendering on the render node the GPUI side names with the formats it imports, frames
-out as dmabufs (SHM as a last-resort fallback), and the WebKit surface the HTML overlay uses. Its engine tests render
-headless on this machine's first DRM render node (Mesa; `WPE_TEST_RENDER_NODE` picks another) and in shared
-memory, each frame mode in a child process of its own.
+out as dmabufs (SHM as a last-resort fallback), and the WebKit surface the HTML overlay uses: stores, scripts and the
+bridge, policies, schemes, the clipboard, `<select>` popups, the context menu's hit test and input methods. Its
+engine tests render headless on this machine's first DRM render node (Mesa; `WPE_TEST_RENDER_NODE` picks another) and
+in shared memory, each frame mode in a child process of its own. The GPUI side (`agterm-gpui`'s `html_overlay`) has a
+headless harness of its own (`cargo test -p agterm-gpui --test html_overlay`): the real engine on the GPU GPUI's
+headless renderer opened, its frames read back through the external texture element, on lavapipe (SHM) and on a Mesa
+render node (dmabufs).
 
 Cargo does not notice the provider changing: after installing or removing either, run
 `cargo clean -p agterm-wpe -p agterm-wpe-sys -p agterm-wpe-platform-sys -p agterm-wpe-javascriptcore-sys`.
@@ -172,7 +183,7 @@ Cargo does not notice the provider changing: after installing or removing either
 ## Build and run
 
 ```sh
-cargo build --workspace --release      # without WPE WebKit: "${WORKSPACE_WITHOUT_WPE[@]}" instead of --workspace
+cargo build --workspace --release      # without WPE WebKit: "${WORKSPACE_WITHOUT_WPE[@]}" and "${GPUI_WITHOUT_HTML[@]}"
 scripts/stage.sh /tmp/agterm-stage     # bin/{agterm,agtermctl,zmx}, lib/, share/{ghostty,terminfo,agterm}
 scripts/run-gtk-dev.sh [--release] [--state DIR] [-- AGTERM_ARGS...]    # the GTK build
 scripts/run-gpui-dev.sh [--release] [--state DIR] [-- AGTERM_ARGS...]   # the GPUI build
@@ -205,9 +216,9 @@ conformance/tools/run-rust-linux.sh [--frontend gtk|gpui] [--stage DIR] [-- PYTE
 
 - The GTK unit tests need a display and skip without one (as in CI, which runs plain `cargo test`); under `xvfb-run`
   they run without touching the desktop.
-- `--workspace` includes the WPE crates (`agterm-wpe` and its -sys crates), which need WPE WebKit
-  ([WPE WebKit](#wpe-webkit)); without it, pass `"${WORKSPACE_WITHOUT_WPE[@]}"` (from `scripts/lib/native.sh`)
-  instead, as the Ubuntu CI jobs do.
+- `--workspace` includes the WPE crates (`agterm-wpe` and its -sys crates) and the GPUI frontend's HTML overlays,
+  which need WPE WebKit ([WPE WebKit](#wpe-webkit)); without it, pass `"${WORKSPACE_WITHOUT_WPE[@]}"` and then
+  `"${GPUI_WITHOUT_HTML[@]}"` (from `scripts/lib/native.sh`) instead, as the Ubuntu CI jobs do.
 - `run-rust-linux.sh` builds the release workspace, stages it into `target/conformance-stage`, runs the protocol, cli
   and behaviors layers with `--impl rust` and exits with the ratchet's status. It runs the suite with `$PYTHON`, else
   `.venv/bin/python`, else `python3`, with the suite installed:
@@ -221,12 +232,14 @@ conformance/tools/run-rust-linux.sh [--frontend gtk|gpui] [--stage DIR] [-- PYTE
 ## CI
 
 - `rust-linux.yml`: `rust-linux` (format, clippy, the lint report into the job summary, `cargo test`, all on the
-  workspace without the WPE crates), `wpe` (clippy, tests and the bindings' regeneration check of the WPE crates on
-  Arch's `wpewebkit`, see [WPE WebKit](#wpe-webkit)), then the staged build under the suite, once per login shell:
-  `conformance` (bash), `conformance-fish` and `conformance-zsh`, each with `--must-pass live-any-shell`, the zsh job
-  with `--must-pass live-sessions` too. Each installs agterm's AppArmor profile for the staged binary and keeps the
-  runner's user-namespace restriction on, so the HTML tests prove it. `conformance-gpui` runs the GPUI build under the
-  suite, on Ubuntu's lavapipe, held by `rust-gpui-passing.txt`.
+  workspace without the WPE crates and the GPUI frontend without its HTML overlays), `wpe` (clippy, tests and the
+  bindings' regeneration check of the WPE crates on Arch's `wpewebkit`, then the GPUI frontend with its overlays, see
+  [WPE WebKit](#wpe-webkit)), then the staged build under the suite, once per login shell: `conformance` (bash),
+  `conformance-fish` and `conformance-zsh`, each with `--must-pass live-any-shell`, the zsh job with `--must-pass
+  live-sessions` too. Each installs agterm's AppArmor profile for the staged binary and keeps the runner's
+  user-namespace restriction on, so the HTML tests prove it. `conformance-gpui` runs the GPUI build (HTML overlays on)
+  under the suite in the `wpe` job's Arch container, on its lavapipe, held by `rust-gpui-passing.txt`, after its
+  process tests with the overlays on.
 - `conformance-gate.yml`: the suite's self-tests and catalog coverage gate.
 - `reference-macos.yml`, `spike-macos.yml`: the suite against upstream's macOS release.
 

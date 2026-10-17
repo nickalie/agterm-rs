@@ -177,10 +177,18 @@ fi
 
 if [[ -z "$stage" ]]; then
     stage="${CARGO_TARGET_DIR:-$repo/target}/$default_stage"
-    # the workspace without the WPE WebKit crates (WORKSPACE_WITHOUT_WPE), both frontends' binaries among it: the WPE
-    # crates need a WPE the GTK build does not, and nothing the GPUI build stages links them yet
+    # the workspace without what links WPE WebKit (WORKSPACE_WITHOUT_WPE), which the GTK build does not need, and the
+    # GPUI frontend: without its HTML overlays for a GTK run (GPUI_WITHOUT_HTML), with them for a GPUI run, which then
+    # needs a WPE WebKit (README > WPE WebKit)
     # shellcheck source=../../scripts/lib/native.sh
-    (cd "$repo" && source scripts/lib/native.sh && cargo build --release "${WORKSPACE_WITHOUT_WPE[@]}")
+    (
+        cd "$repo" && source scripts/lib/native.sh && cargo build --release "${WORKSPACE_WITHOUT_WPE[@]}" || exit
+        if [[ "$frontend" == gpui ]]; then
+            cargo build --release -p agterm-gpui
+        else
+            cargo build --release "${GPUI_WITHOUT_HTML[@]}"
+        fi
+    )
     rm -rf "$stage"
     "$repo/scripts/stage.sh" "$stage" --frontend "$frontend"
 fi
