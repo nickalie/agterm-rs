@@ -340,16 +340,25 @@ pub fn act(id: Uuid, item: StripItem, poster: &Poster, cx: &mut App) {
 /// The failure shown over a page that did not load, so a failed load never reads as a blank one; a reload replaces it
 /// with the loading state. `None` unless the page failed.
 #[must_use]
-pub fn failure(overlay: &HtmlOverlay, colors: &PanelColors) -> Option<AnyElement> {
+pub fn failure(overlay: &HtmlOverlay, colors: &PanelColors, error: Option<AnyElement>) -> Option<AnyElement> {
     if overlay.load_state != HtmlLoadState::Failed {
         return None;
     }
+    // the error as the element made it (selectable text), else as plain text
+    let error = error.or_else(|| {
+        overlay
+            .load_error
+            .clone()
+            .map(|error| SharedString::from(error).into_any_element())
+    });
     Some(
         div()
             .id("htmlOverlay.error")
             .debug_selector(|| "htmlOverlay.error".to_owned())
             .accessibility_id("htmlOverlay.error")
             .role(Role::Alert)
+            // the page under it takes no press: one here selects the error's text
+            .occlude()
             .absolute()
             .inset_0()
             .bg(colors.background())
@@ -371,13 +380,14 @@ pub fn failure(overlay: &HtmlOverlay, colors: &PanelColors) -> Option<AnyElement
                     .font_weight(gpui_kit::FontWeight::BOLD)
                     .child("The page could not be loaded"),
             )
-            .when_some(overlay.load_error.clone(), |column, error| {
+            .when_some(error, |column, error| {
                 column.child(
                     div()
                         .debug_selector(|| "html-failure-error".to_owned())
+                        .max_w_full()
                         .text_size(px(12.))
                         .text_center()
-                        .child(SharedString::from(error)),
+                        .child(error),
                 )
             })
             .into_any_element(),

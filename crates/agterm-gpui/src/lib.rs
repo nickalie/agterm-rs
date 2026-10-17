@@ -37,6 +37,7 @@ pub mod remote;
 pub mod remotes_watcher;
 pub mod row_icon;
 pub mod search;
+pub mod selectable;
 pub mod session_host;
 pub mod session_switcher;
 pub mod settings;

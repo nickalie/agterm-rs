@@ -235,6 +235,19 @@ fn the_page_and_its_strip_carry_upstreams_accessibility_ids(cx: &mut TestAppCont
         cx.debug_bounds("htmlOverlay.error").is_some(),
         "the failure is drawn over the page"
     );
+    // upstream's `.textSelection(.enabled)`: the error is text a click focuses and Ctrl+A, Ctrl+C copy
+    let shown = harness.element.read_with(cx, PageView::error_shown);
+    assert_eq!(shown.as_deref(), Some("not found"));
+    let at = cx
+        .debug_bounds("html-failure-error")
+        .expect("the error is drawn")
+        .center();
+    cx.simulate_click(at, Modifiers::default());
+    cx.simulate_keystrokes("ctrl-a ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+        Some("not found")
+    );
 }
 
 #[gpui_kit::test]

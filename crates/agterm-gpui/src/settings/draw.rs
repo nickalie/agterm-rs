@@ -288,8 +288,13 @@ fn row(item: Item, view: &SettingsView, look: &Look) -> AnyElement {
         .child(title.clone());
     let control = match control {
         Control::Hint => return hint(id, title, look),
-        Control::Path { text, unset, buttons } => return path(&id, text, unset, buttons, look),
-        Control::Diagnostics { lines } => return diagnostics(id, lines, look),
+        Control::Path { text, unset, buttons } => {
+            return path(&id, text, unset, buttons, view.selectable(&id), look);
+        }
+        Control::Diagnostics { lines } => {
+            let selectable = view.selectable(&id).cloned();
+            return diagnostics(id, lines, selectable.as_ref(), look);
+        }
         Control::Button(action) => return frame(div().child(push_button(action, look))),
         Control::Toggle { on, set } => toggle(&id, on, enabled, set, look),
         Control::Picker(picker) => picker_button(&id, picker, look),
@@ -555,8 +560,21 @@ fn slider(view: &SettingsView, key: SliderKey, readout: String, enabled: bool, l
 }
 
 /// A path taking the row, dimmed while unset, then its buttons.
-fn path(id: &str, text: String, unset: bool, buttons: Vec<Action>, look: &Look) -> AnyElement {
+fn path(
+    id: &str,
+    text: String,
+    unset: bool,
+    buttons: Vec<Action>,
+    selectable: Option<&crate::selectable::Selectable>,
+    look: &Look,
+) -> AnyElement {
     let selector = id.to_owned();
+    let color = look.ink(if unset { DIM } else { 1.0 });
+    // upstream's monospaced, selectable `Text`; plain text until the popup made its field
+    let shown = match selectable {
+        Some(selectable) => selectable.element(id, color, px(MONO), true),
+        None => div().truncate().child(text).into_any_element(),
+    };
     frame(
         div()
             .flex()
@@ -569,19 +587,27 @@ fn path(id: &str, text: String, unset: bool, buttons: Vec<Action>, look: &Look) 
                     .debug_selector(move || selector.clone())
                     .flex_1()
                     .min_w(px(0.))
-                    .truncate()
                     .font_family("monospace")
                     .text_size(px(MONO))
-                    .when(unset, |path| path.text_color(look.ink(DIM)))
-                    .child(text),
+                    .text_color(color)
+                    .child(shown),
             )
             .children(buttons.into_iter().map(|action| push_button(action, look))),
     )
 }
 
-/// A file's diagnostics, or "No issues.".
-fn diagnostics(id: String, lines: Vec<String>, look: &Look) -> AnyElement {
+/// A file's diagnostics as selectable lines (upstream's `.textSelection(.enabled)`), or "No issues.".
+fn diagnostics(
+    id: String,
+    lines: Vec<String>,
+    selectable: Option<&crate::selectable::Selectable>,
+    look: &Look,
+) -> AnyElement {
     let empty = lines.is_empty();
+    let shown = (!empty)
+        .then_some(selectable)
+        .flatten()
+        .map(|selectable| selectable.element(&id, look.ink(DIM), px(MONO), true));
     let selector = id.clone();
     let body = div()
         .id(SharedString::from(id))
@@ -590,10 +616,10 @@ fn diagnostics(id: String, lines: Vec<String>, look: &Look) -> AnyElement {
         .flex_col()
         .gap(px(4.))
         .text_color(look.ink(DIM));
-    let body = if empty {
-        body.child("No issues.")
-    } else {
-        body.font_family("monospace").text_size(px(MONO)).children(lines)
+    let body = match (empty, shown) {
+        (true, _) => body.child("No issues."),
+        (false, Some(shown)) => body.font_family("monospace").text_size(px(MONO)).child(shown),
+        (false, None) => body.font_family("monospace").text_size(px(MONO)).children(lines),
     };
     frame(div().w_full().py(px(4.)).child(body))
 }

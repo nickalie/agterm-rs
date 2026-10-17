@@ -109,7 +109,7 @@ pub enum Control {
         value: f64,
         readout: String,
     },
-    /// A path (upstream's monospaced, selectable `Text`; not selectable here), dimmed when nothing is set, with buttons
+    /// A path (upstream's monospaced, selectable `Text`: [`crate::selectable`]), dimmed when nothing is set, with buttons
     /// after it.
     Path {
         text: String,
