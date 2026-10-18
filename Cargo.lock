@@ -294,6 +294,7 @@ dependencies = [
  "bytemuck",
  "libc",
  "tempfile",
+ "tracing",
  "windows-sys 0.61.2",
 ]
 

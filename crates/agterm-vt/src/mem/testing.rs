@@ -303,6 +303,33 @@ pub(crate) fn with_counting<R>(f: impl FnOnce() -> R) -> (R, Counting) {
     (result, counted)
 }
 
+/// Restores a thread's failing and counting flags when a [`suspended`] scope ends, unwinding included.
+struct SuspendGuard {
+    saved: (bool, bool),
+}
+
+impl Drop for SuspendGuard {
+    fn drop(&mut self) {
+        let (failing, counting) = self.saved;
+        with_state(|s| {
+            s.failing.set(failing);
+            s.counting.set(counting);
+        });
+    }
+}
+
+/// Runs `f` with this thread's failure injection and counting suspended: for the test harness's own allocations
+/// inside an armed scope, such as a log capture recording an event the code under test emits, which are not the code
+/// under test's.
+pub(crate) fn suspended<R>(f: impl FnOnce() -> R) -> R {
+    let guard = with_state(|s| SuspendGuard {
+        saved: (s.failing.replace(false), s.counting.replace(false)),
+    });
+    let result = f();
+    drop(guard);
+    result
+}
+
 /// Restores a thread's previous page failure state when a scope ends.
 struct PagesGuard {
     saved: Option<usize>,

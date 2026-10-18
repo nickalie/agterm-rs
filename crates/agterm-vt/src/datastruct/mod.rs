@@ -4,4 +4,5 @@
 //! kept code reaches and re-based on `std` where its semantics allow; each module names the files it follows.
 
 pub(crate) mod array_hash_map;
+pub(crate) mod comptime_int_set;
 pub(crate) mod wyhash;

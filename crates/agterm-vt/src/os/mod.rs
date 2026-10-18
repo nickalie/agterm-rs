@@ -4,3 +4,4 @@
 //! follows.
 
 pub(crate) mod page_allocator;
+pub(crate) mod string_encoding;

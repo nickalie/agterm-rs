@@ -77,7 +77,14 @@ mod datastruct;
     not(test),
     expect(dead_code, reason = "used by the terminal modules, not ported yet")
 )]
+mod fmt;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the terminal modules, not ported yet")
+)]
 mod identity;
+#[cfg(test)]
+mod log_capture;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "used by the terminal modules, not ported yet")
@@ -93,6 +100,11 @@ mod options;
     expect(dead_code, reason = "used by the terminal modules, not ported yet")
 )]
 mod os;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the terminal modules, not ported yet")
+)]
+mod parse_int;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "used by the terminal modules, not ported yet")
