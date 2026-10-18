@@ -77,10 +77,12 @@ the Linux equivalent, or a recorded "no Linux counterpart" in the checklist.
 | `scripts/setup.sh` (`ZMX_REV`) | `build/pins.env` | via `pins-delta.sh`; Zig version from the rev's `build.zig.zon`, sums from ziglang.org |
 | `scripts/setup.sh` (`GHOSTTY_REV`) | none | not a pin here: the Ghostty pin is `LIBGHOSTTY_VT_REV` (ghostty main), `pins-delta.sh` reports upstream's move |
 
-`build/patches/ghostty-vt/*.patch` are this repository's own libghostty-vt patches (C API the app needs), not
-upstream's: a `LIBGHOSTTY_VT_REV` bump, a change of its own, re-applies them (`scripts/build-ghostty-vt.sh` does, with
-`--fuzz=0`), and `scripts/gen-ghostty-vt-bindings.sh` regenerates the checked-in bindings afterwards,
-`scripts/gen-ghostty-config-keys.sh` agterm-core's ghostty config key table.
+`build/patches/ghostty-vt/*.patch` are this repository's libghostty-vt patches (C API the app needs, and recorded fixes
+and parity behaviors; its `README.md` lists each with its origin): a `LIBGHOSTTY_VT_REV` bump, a change of its own,
+re-applies them (`scripts/build-ghostty-vt.sh` does, with `--fuzz=0`), and `scripts/gen-ghostty-vt-bindings.sh`
+regenerates the checked-in bindings afterwards, `scripts/gen-ghostty-config-keys.sh` agterm-core's ghostty config key
+table. One of them is upstream's: `scripts/zmx-patches/ghostty/0001-formatter-unstyled-blanks.patch`, rebased onto the
+Ghostty pin as `0004-formatter-unstyled-blanks.patch`, so an upstream change to it is ported into both copies.
 
 A new entry under `agterm/Resources/` (reported `unmapped`) has no copy yet: deciding where it goes is a plan task.
 

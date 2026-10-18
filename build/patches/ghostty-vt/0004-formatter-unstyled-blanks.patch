@@ -1,0 +1,50 @@
+agterm-rs: the formatter writes skipped cells unstyled (upstream agterm's zmx Ghostty patch, rebased onto
+LIBGHOSTTY_VT_REV)
+
+From upstream agterm v0.36.0 (https://github.com/umputun/agterm, MIT): scripts/zmx-patches/ghostty/
+0001-formatter-unstyled-blanks.patch, the patch upstream applies to the Ghostty zmx links, whose snapshot a re-attach
+replays. Rebased onto the pin's line numbers; the code is upstream's. Reason and remove-when:
+build/patches/ghostty-vt/README.md.
+
+src/terminal/formatter.zig: a cell with no text (one a program skipped with a cursor move) closes the open style
+before it is buffered as a blank, so the spaces it becomes are written unstyled, where they were written under the
+previous cell's style and a gap after a colored run came back painted. Cells the program wrote, spaces included, keep
+their style; plain output is unchanged. The pin's fast cell-run path buffers blanks only under the default style, so
+it needs no change. Every styled (VT, HTML) formatter output takes it: the session server's snapshot as zmx's did,
+and agterm's own copy and write-file actions.
+
+Applied by scripts/build-ghostty-vt.sh. No header changes.
+
+--- a/src/terminal/formatter.zig
++++ b/src/terminal/formatter.zig
+@@ -1372,6 +1372,7 @@
+ 
+                     // Cells with no text are blank
+                     if (!cell.hasText()) {
++                        try self.closeStyleForBlank(emit, writer, &style, &style_id);
+                         blank_cells += 1;
+                         continue;
+                     }
+@@ -2075,6 +2076,22 @@
+         }
+     }
+ 
++    /// closeStyleForBlank resets the style before a blank cell is buffered, so
++    /// both emission paths write the buffered blanks unstyled.
++    fn closeStyleForBlank(
++        self: PageFormatter,
++        comptime emit: Format,
++        writer: *std.Io.Writer,
++        style: *Style,
++        style_id: *u32,
++    ) std.Io.Writer.Error!void {
++        if (!comptime formatStyled(emit)) return;
++        if (style.default()) return;
++        try self.formatStyleClose(emit, writer);
++        style.* = .{};
++        style_id.* = 0;
++    }
++
+     fn formatStyleClose(
+         self: PageFormatter,
+         comptime emit: Format,

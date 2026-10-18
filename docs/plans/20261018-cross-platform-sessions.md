@@ -587,16 +587,16 @@ Order after Task 7, as two lanes that meet:
 - Create: `build/patches/ghostty-vt/README.md`, `build/patches/ghostty-vt/0002-…` onward
 - Modify: the patches' tests in `crates/agterm-ghostty-vt` (and `agterm-term` where a behavior shows there)
 
-- [ ] review `.upstream/herdr/vendor/libghostty-vt.patches.md` against the pin: carry 0004 (hosted Wuffs, MSVC libc)
+- [x] review `.upstream/herdr/vendor/libghostty-vt.patches.md` against the pin: carry 0004 (hosted Wuffs, MSVC libc)
       and 0008 (cursor hyperlink across page replacement); decide 0002, 0005, 0006 and 0007 against what agterm uses,
       each recorded with its reason
-- [ ] carry upstream's unstyled-blanks formatter patch (`.upstream/agterm/scripts/zmx-patches/`, the zmx patch
+- [x] carry upstream's unstyled-blanks formatter patch (`.upstream/agterm/scripts/zmx-patches/`, the zmx patch
       `ghostty/0001-formatter-unstyled-blanks`), rebased onto the pin
-- [ ] `README.md` lists every patch (0001 too) with its reason, upstream issue or PR, the base, the files, a
+- [x] `README.md` lists every patch (0001 too) with its reason, upstream issue or PR, the base, the files, a
       remove-when condition and its verification, as herdr's patches.md does; the script applies them in name order
-- [ ] tests: each patch's behavior through the wrapper (the hyperlink case that crashed, blank runs written unstyled,
+- [x] tests: each patch's behavior through the wrapper (the hyperlink case that crashed, blank runs written unstyled,
       what the carried others change); the bindings `--check` after any header change
-- [ ] run gates and the full conformance run in the background
+- [x] run gates and the full conformance run in the background
 
 ### Task 10: libghostty-vt on macOS and Windows
 

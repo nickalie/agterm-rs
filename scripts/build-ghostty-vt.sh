@@ -7,9 +7,10 @@
 # LIBGHOSTTY_VT_ pins of build/pins.env (the one Ghostty pin), build/patches/ghostty-vt/, the prefix layout and the
 # host arch, so a zmx pin never moves it and a complete prefix is reused as is.
 #
-# The patches (build/patches/ghostty-vt/*.patch, applied in name order with no fuzz) add what the app needs and the C
-# API at the pin lacks; each names what it adds in its header. A patch change regenerates the bindings
-# (scripts/gen-ghostty-vt-bindings.sh), like a pin bump.
+# The patches (build/patches/ghostty-vt/*.patch, applied in name order with no fuzz) add C API the app needs and the
+# pin lacks, and the recorded fixes and parity behaviors; build/patches/ghostty-vt/README.md lists each with its reason,
+# origin and remove-when condition. A patch change regenerates the bindings (scripts/gen-ghostty-vt-bindings.sh), like
+# a pin bump.
 #
 # The prefix holds:
 # - src/: the patched source tree, with the Zig packages a libghostty-vt build needs prefetched into its zig-pkg/ for
