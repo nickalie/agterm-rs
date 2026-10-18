@@ -38,11 +38,12 @@ jobs:
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      # The prefixes and the Zig toolchains they were built with; keyed like the prefixes themselves.
+      # The prefixes, the Zig toolchains they were built with and the Zig global cache of the libghostty-vt builds;
+      # keyed like the prefixes themselves (native.sh holds the libghostty-vt prefix's layout, part of its key).
       - uses: actions/cache@v6
         with:
           path: ~/.cache/agterm-rs/vendor
-          key: vendor-${{ runner.os }}-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
+          key: vendor-${{ runner.os }}-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**', 'scripts/lib/native.sh') }}
       - name: pinned Zig toolchains (sha256 from build/pins.env)
         shell: bash
         run: |
@@ -56,7 +57,8 @@ jobs:
             zig="$(find_zig "${!version_var}" "${!sha_var}" "")"
             echo "$build: $zig"
           done
-      # linked statically by agterm-ghostty-vt-sys, which `cargo build --workspace` builds; Ghostty's resources beside it
+      # the patched source agterm-ghostty-vt-sys builds the static libghostty-vt from (with zig, offline, when
+      # `cargo build --workspace` builds it); Ghostty's resources beside it
       - name: libghostty-vt prefix
         run: scripts/build-ghostty-vt.sh
       # the fonts Ghostty embeds, which agterm-gpui (built with the workspace) embeds too
@@ -171,11 +173,12 @@ jobs:
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      # the gir binary and the unpacked package the regeneration reads its .gir files from; keyed like the prefixes
+      # the gir binary and the unpacked package the regeneration reads its .gir files from, and the libghostty-vt
+      # source with its Zig global cache; keyed like the prefixes
       - uses: actions/cache@v6
         with:
           path: ~/.cache/agterm-rs/vendor
-          key: vendor-wpe-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
+          key: vendor-wpe-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**', 'scripts/lib/native.sh') }}
       - name: clippy
         run: >-
           cargo clippy -p agterm-wpe -p agterm-wpe-sys -p agterm-wpe-platform-sys -p agterm-wpe-javascriptcore-sys
@@ -188,8 +191,9 @@ jobs:
       - name: the bindings are a regeneration at the pins
         run: scripts/gen-wpe-bindings.sh --check
       # The app with its HTML overlays (feature `html`, the default): its clippy, its unit tests and the headless page
-      # harness (the real engine on lavapipe, in SHM: no render node here). It links the static libghostty-vt and
-      # embeds the terminal fonts, which the scripts build and fetch (their own pinned Zig).
+      # harness (the real engine on lavapipe, in SHM: no render node here). It links the static libghostty-vt, which
+      # agterm-ghostty-vt-sys builds from the source the script prepares (with its own pinned Zig), and embeds the
+      # terminal fonts the other script fetches.
       - name: what the app builds on
         run: |
           pacman-archive curl xz patch vulkan-swrast mesa
@@ -277,8 +281,9 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.cache/agterm-rs/vendor
-          key: vendor-arch-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
-      # with the stage's terminfo, themes and shell integration (Ghostty's at the same pin)
+          key: vendor-arch-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**', 'scripts/lib/native.sh') }}
+      # the source the app's libghostty-vt is built from, with the stage's terminfo, themes and shell integration
+      # (Ghostty's at the same pin)
       - name: libghostty-vt prefix
         run: scripts/build-ghostty-vt.sh
       - name: terminal fonts

@@ -3,10 +3,12 @@
 # lib/dev-instance.sh). Sourced, not run.
 #
 # Each native dependency lives in its own vendored prefix, ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/<name>-<key>/,
-# where <key> hashes that dependency's pins and patches only. Cargo never runs zig: agterm-ghostty-vt-sys asks
-# `build-ghostty-vt.sh --print-prefix` where the prefix is and fails when it is missing. WPE WebKit is a binary package
-# unpacked (fetch-wpe.sh) where the system has none, and reaches cargo through pkg-config.sh. A relative AGTERM_VENDOR
-# is taken against the repository root, so every caller (and cargo, which runs from a crate directory) sees one path.
+# where <key> hashes that dependency's pins and patches only. libghostty-vt's prefix holds a patched source tree, not
+# a library: agterm-ghostty-vt-sys asks `build-ghostty-vt.sh --print-prefix` where the prefix is, fails when it is
+# missing, and runs `zig build` over that tree itself, offline (the prefix carries the Zig packages). WPE WebKit is a
+# binary package unpacked (fetch-wpe.sh) where the system has none, and reaches cargo through pkg-config.sh. A
+# relative AGTERM_VENDOR is taken against the repository root, so every caller (and cargo, which runs from a crate
+# directory) sees one path.
 
 NATIVE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PINS="$NATIVE_ROOT/build/pins.env"
@@ -44,12 +46,21 @@ pin_lines() {
 
 # A key over the pin lines of one dependency, the patches of one or more directories (top level of each) and the host
 # arch. A patch of the first directory is named by its file name alone, one of a later directory by
-# `<directory name>/<file name>`, so a single-directory key is the same as it ever was.
+# `<directory name>/<file name>`, so a single-directory key is the same as it ever was. A leading `--layout N` adds the
+# layout of what the prefix holds, so a checkout expecting another layout (other branches share the vendor root) never
+# takes the prefix for its own; a key without it is the same as it ever was.
 prefix_key() {
-  local pins_prefix="$1" first="$2" patches patch label
+  local layout="" pins_prefix first patches patch label
+  if [[ "$1" == --layout ]]; then
+    layout="$2"
+    shift 2
+  fi
+  pins_prefix="$1"
+  first="$2"
   shift
   {
     echo "arch $(uname -m)"
+    [[ -z "$layout" ]] || echo "layout $layout"
     pin_lines "$pins_prefix"
     for patches in "$@"; do
       label=""
@@ -63,18 +74,36 @@ prefix_key() {
   } | sha256_of | cut -c1-16
 }
 
-# libghostty-vt's key hashes the LIBGHOSTTY_VT_ pins and build/patches/ghostty-vt/.
+# libghostty-vt's key hashes the LIBGHOSTTY_VT_ pins, build/patches/ghostty-vt/ and the prefix's layout: 2 is the
+# patched source tree agterm-ghostty-vt-sys/build.rs builds (the prebuilt library before it had no layout line).
+GHOSTTY_VT_PREFIX_LAYOUT=2
 ghostty_vt_prefix() {
-  echo "$VENDOR_ROOT/ghostty-vt-$(prefix_key LIBGHOSTTY_VT "$NATIVE_ROOT/build/patches/ghostty-vt")"
+  echo "$VENDOR_ROOT/ghostty-vt-$(prefix_key --layout "$GHOSTTY_VT_PREFIX_LAYOUT" LIBGHOSTTY_VT \
+    "$NATIVE_ROOT/build/patches/ghostty-vt")"
 }
 
-# A libghostty-vt prefix is complete when the static library, the umbrella header and the pin manifest are there, the
-# manifest matches the LIBGHOSTTY_VT_ pins and Ghostty's resources verify.
+# Zig's global cache of the libghostty-vt builds, one per Zig version, in the vendor root: never the user's own, and
+# shared by the script's package fetches and every cargo build (Zig's cache is safe for concurrent processes).
+ghostty_vt_zig_cache() {
+  echo "$VENDOR_ROOT/zig-cache-$LIBGHOSTTY_VT_ZIG_VERSION"
+}
+
+# The value of NAME in the stamp of the libghostty-vt prefix PREFIX (share/agterm/ghostty-vt-STAMP, `name=value`).
+ghostty_vt_stamp_value() {
+  sed -n "s/^$2=//p" "$1/share/agterm/ghostty-vt-STAMP" 2>/dev/null | head -n1
+}
+
+# A libghostty-vt prefix is complete when the patched tree with its prefetched packages, the headers, the pin manifest
+# and the stamp are there, the manifest matches the LIBGHOSTTY_VT_ pins, the stamp's zig (the one build.rs builds
+# with) still runs as the pinned version, and Ghostty's resources verify.
 ghostty_vt_prefix_is_complete() {
-  local prefix="$1"
-  [[ -s "$prefix/lib/libghostty-vt.a" && -s "$prefix/include/ghostty/vt.h" \
-    && -s "$prefix/include/ghostty/vt/terminal.h" && -s "$prefix/share/agterm/ghostty-vt-PINS" ]] \
+  local prefix="$1" zig
+  [[ -s "$prefix/src/build.zig" && -d "$prefix/src/zig-pkg" && -s "$prefix/include/ghostty/vt.h" \
+    && -s "$prefix/include/ghostty/vt/terminal.h" && -s "$prefix/share/agterm/ghostty-vt-PINS" \
+    && -s "$prefix/share/agterm/ghostty-vt-STAMP" ]] \
     && pin_lines LIBGHOSTTY_VT | cmp -s - "$prefix/share/agterm/ghostty-vt-PINS" \
+    && zig="$(ghostty_vt_stamp_value "$prefix" zig)" && [[ -n "$zig" && -x "$zig" ]] \
+    && [[ "$("$zig" version 2>/dev/null)" == "$LIBGHOSTTY_VT_ZIG_VERSION" ]] \
     && verify_ghostty_resources "$prefix/share" >/dev/null 2>&1
 }
 

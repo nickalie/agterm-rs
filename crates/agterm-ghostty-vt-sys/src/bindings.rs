@@ -99,6 +99,12 @@ pub struct GhosttyTerminalImpl {
 pub type GhosttyTerminal = *mut GhosttyTerminalImpl;
 #[repr(C)]
 #[derive(Debug)]
+pub struct GhosttySnapshotDecoderImpl {
+    _unused: [u8; 0],
+}
+pub type GhosttySnapshotDecoder = *mut GhosttySnapshotDecoderImpl;
+#[repr(C)]
+#[derive(Debug)]
 pub struct GhosttyTrackedGridRefImpl {
     _unused: [u8; 0],
 }
@@ -174,6 +180,13 @@ pub struct GhosttyString {
     pub ptr: *const u8,
     pub len: usize,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyString"][::std::mem::size_of::<GhosttyString>() - 16usize];
+    ["Alignment of GhosttyString"][::std::mem::align_of::<GhosttyString>() - 8usize];
+    ["Offset of field: GhosttyString::ptr"][::std::mem::offset_of!(GhosttyString, ptr) - 0usize];
+    ["Offset of field: GhosttyString::len"][::std::mem::offset_of!(GhosttyString, len) - 8usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyBuffer {
@@ -181,18 +194,40 @@ pub struct GhosttyBuffer {
     pub cap: usize,
     pub len: usize,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyBuffer"][::std::mem::size_of::<GhosttyBuffer>() - 24usize];
+    ["Alignment of GhosttyBuffer"][::std::mem::align_of::<GhosttyBuffer>() - 8usize];
+    ["Offset of field: GhosttyBuffer::ptr"][::std::mem::offset_of!(GhosttyBuffer, ptr) - 0usize];
+    ["Offset of field: GhosttyBuffer::cap"][::std::mem::offset_of!(GhosttyBuffer, cap) - 8usize];
+    ["Offset of field: GhosttyBuffer::len"][::std::mem::offset_of!(GhosttyBuffer, len) - 16usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttySurfacePosition {
     pub x: f64,
     pub y: f64,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttySurfacePosition"][::std::mem::size_of::<GhosttySurfacePosition>() - 16usize];
+    ["Alignment of GhosttySurfacePosition"][::std::mem::align_of::<GhosttySurfacePosition>() - 8usize];
+    ["Offset of field: GhosttySurfacePosition::x"][::std::mem::offset_of!(GhosttySurfacePosition, x) - 0usize];
+    ["Offset of field: GhosttySurfacePosition::y"][::std::mem::offset_of!(GhosttySurfacePosition, y) - 8usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyCodepoints {
     pub ptr: *const u32,
     pub len: usize,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyCodepoints"][::std::mem::size_of::<GhosttyCodepoints>() - 16usize];
+    ["Alignment of GhosttyCodepoints"][::std::mem::align_of::<GhosttyCodepoints>() - 8usize];
+    ["Offset of field: GhosttyCodepoints::ptr"][::std::mem::offset_of!(GhosttyCodepoints, ptr) - 0usize];
+    ["Offset of field: GhosttyCodepoints::len"][::std::mem::offset_of!(GhosttyCodepoints, len) - 8usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyAllocatorVtable {
@@ -234,12 +269,29 @@ pub struct GhosttyAllocatorVtable {
         ),
     >,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyAllocatorVtable"][::std::mem::size_of::<GhosttyAllocatorVtable>() - 32usize];
+    ["Alignment of GhosttyAllocatorVtable"][::std::mem::align_of::<GhosttyAllocatorVtable>() - 8usize];
+    ["Offset of field: GhosttyAllocatorVtable::alloc"][::std::mem::offset_of!(GhosttyAllocatorVtable, alloc) - 0usize];
+    ["Offset of field: GhosttyAllocatorVtable::resize"]
+        [::std::mem::offset_of!(GhosttyAllocatorVtable, resize) - 8usize];
+    ["Offset of field: GhosttyAllocatorVtable::remap"][::std::mem::offset_of!(GhosttyAllocatorVtable, remap) - 16usize];
+    ["Offset of field: GhosttyAllocatorVtable::free"][::std::mem::offset_of!(GhosttyAllocatorVtable, free) - 24usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyAllocator {
     pub ctx: *mut ::std::os::raw::c_void,
     pub vtable: *const GhosttyAllocatorVtable,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyAllocator"][::std::mem::size_of::<GhosttyAllocator>() - 16usize];
+    ["Alignment of GhosttyAllocator"][::std::mem::align_of::<GhosttyAllocator>() - 8usize];
+    ["Offset of field: GhosttyAllocator::ctx"][::std::mem::offset_of!(GhosttyAllocator, ctx) - 0usize];
+    ["Offset of field: GhosttyAllocator::vtable"][::std::mem::offset_of!(GhosttyAllocator, vtable) - 8usize];
+};
 unsafe extern "C" {
     pub fn ghostty_alloc(allocator: *const GhosttyAllocator, len: usize) -> *mut u8;
 }
@@ -275,18 +327,39 @@ pub struct GhosttyColorRgb {
     pub g: u8,
     pub b: u8,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyColorRgb"][::std::mem::size_of::<GhosttyColorRgb>() - 3usize];
+    ["Alignment of GhosttyColorRgb"][::std::mem::align_of::<GhosttyColorRgb>() - 1usize];
+    ["Offset of field: GhosttyColorRgb::r"][::std::mem::offset_of!(GhosttyColorRgb, r) - 0usize];
+    ["Offset of field: GhosttyColorRgb::g"][::std::mem::offset_of!(GhosttyColorRgb, g) - 1usize];
+    ["Offset of field: GhosttyColorRgb::b"][::std::mem::offset_of!(GhosttyColorRgb, b) - 2usize];
+};
 pub type GhosttyColorPaletteIndex = u8;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyColorPaletteMask {
     pub bits: [u64; 4usize],
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyColorPaletteMask"][::std::mem::size_of::<GhosttyColorPaletteMask>() - 32usize];
+    ["Alignment of GhosttyColorPaletteMask"][::std::mem::align_of::<GhosttyColorPaletteMask>() - 8usize];
+    ["Offset of field: GhosttyColorPaletteMask::bits"][::std::mem::offset_of!(GhosttyColorPaletteMask, bits) - 0usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyColorX11Entry {
     pub name: *const ::std::os::raw::c_char,
     pub color: GhosttyColorRgb,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyColorX11Entry"][::std::mem::size_of::<GhosttyColorX11Entry>() - 16usize];
+    ["Alignment of GhosttyColorX11Entry"][::std::mem::align_of::<GhosttyColorX11Entry>() - 8usize];
+    ["Offset of field: GhosttyColorX11Entry::name"][::std::mem::offset_of!(GhosttyColorX11Entry, name) - 0usize];
+    ["Offset of field: GhosttyColorX11Entry::color"][::std::mem::offset_of!(GhosttyColorX11Entry, color) - 8usize];
+};
 pub const GHOSTTY_COLOR_SCHEME_LIGHT: GhosttyColorScheme = 0;
 pub const GHOSTTY_COLOR_SCHEME_DARK: GhosttyColorScheme = 1;
 pub const GHOSTTY_COLOR_SCHEME_MAX_VALUE: GhosttyColorScheme = 2147483647;
@@ -298,6 +371,17 @@ pub struct GhosttyDeviceAttributesPrimary {
     pub features: [u16; 64usize],
     pub num_features: usize,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyDeviceAttributesPrimary"][::std::mem::size_of::<GhosttyDeviceAttributesPrimary>() - 144usize];
+    ["Alignment of GhosttyDeviceAttributesPrimary"][::std::mem::align_of::<GhosttyDeviceAttributesPrimary>() - 8usize];
+    ["Offset of field: GhosttyDeviceAttributesPrimary::conformance_level"]
+        [::std::mem::offset_of!(GhosttyDeviceAttributesPrimary, conformance_level) - 0usize];
+    ["Offset of field: GhosttyDeviceAttributesPrimary::features"]
+        [::std::mem::offset_of!(GhosttyDeviceAttributesPrimary, features) - 2usize];
+    ["Offset of field: GhosttyDeviceAttributesPrimary::num_features"]
+        [::std::mem::offset_of!(GhosttyDeviceAttributesPrimary, num_features) - 136usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyDeviceAttributesSecondary {
@@ -305,11 +389,31 @@ pub struct GhosttyDeviceAttributesSecondary {
     pub firmware_version: u16,
     pub rom_cartridge: u16,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyDeviceAttributesSecondary"][::std::mem::size_of::<GhosttyDeviceAttributesSecondary>() - 6usize];
+    ["Alignment of GhosttyDeviceAttributesSecondary"]
+        [::std::mem::align_of::<GhosttyDeviceAttributesSecondary>() - 2usize];
+    ["Offset of field: GhosttyDeviceAttributesSecondary::device_type"]
+        [::std::mem::offset_of!(GhosttyDeviceAttributesSecondary, device_type) - 0usize];
+    ["Offset of field: GhosttyDeviceAttributesSecondary::firmware_version"]
+        [::std::mem::offset_of!(GhosttyDeviceAttributesSecondary, firmware_version) - 2usize];
+    ["Offset of field: GhosttyDeviceAttributesSecondary::rom_cartridge"]
+        [::std::mem::offset_of!(GhosttyDeviceAttributesSecondary, rom_cartridge) - 4usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyDeviceAttributesTertiary {
     pub unit_id: u32,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyDeviceAttributesTertiary"][::std::mem::size_of::<GhosttyDeviceAttributesTertiary>() - 4usize];
+    ["Alignment of GhosttyDeviceAttributesTertiary"]
+        [::std::mem::align_of::<GhosttyDeviceAttributesTertiary>() - 4usize];
+    ["Offset of field: GhosttyDeviceAttributesTertiary::unit_id"]
+        [::std::mem::offset_of!(GhosttyDeviceAttributesTertiary, unit_id) - 0usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyDeviceAttributes {
@@ -317,6 +421,17 @@ pub struct GhosttyDeviceAttributes {
     pub secondary: GhosttyDeviceAttributesSecondary,
     pub tertiary: GhosttyDeviceAttributesTertiary,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyDeviceAttributes"][::std::mem::size_of::<GhosttyDeviceAttributes>() - 160usize];
+    ["Alignment of GhosttyDeviceAttributes"][::std::mem::align_of::<GhosttyDeviceAttributes>() - 8usize];
+    ["Offset of field: GhosttyDeviceAttributes::primary"]
+        [::std::mem::offset_of!(GhosttyDeviceAttributes, primary) - 0usize];
+    ["Offset of field: GhosttyDeviceAttributes::secondary"]
+        [::std::mem::offset_of!(GhosttyDeviceAttributes, secondary) - 144usize];
+    ["Offset of field: GhosttyDeviceAttributes::tertiary"]
+        [::std::mem::offset_of!(GhosttyDeviceAttributes, tertiary) - 152usize];
+};
 pub const GHOSTTY_FOCUS_GAINED: GhosttyFocusEvent = 0;
 pub const GHOSTTY_FOCUS_LOST: GhosttyFocusEvent = 1;
 pub const GHOSTTY_FOCUS_MAX_VALUE: GhosttyFocusEvent = 2147483647;
@@ -329,15 +444,43 @@ unsafe extern "C" {
         out_written: *mut usize,
     ) -> GhosttyResult;
 }
+pub type GhosttyReaderFn = ::std::option::Option<
+    unsafe extern "C" fn(
+        userdata: *mut ::std::os::raw::c_void,
+        buffer: *mut u8,
+        capacity: usize,
+        out_read: *mut usize,
+    ) -> bool,
+>;
 pub type GhosttyWriterFn = ::std::option::Option<
     unsafe extern "C" fn(userdata: *mut ::std::os::raw::c_void, data: *const u8, len: usize) -> bool,
 >;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyReader {
+    pub read: GhosttyReaderFn,
+    pub userdata: *mut ::std::os::raw::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyReader"][::std::mem::size_of::<GhosttyReader>() - 16usize];
+    ["Alignment of GhosttyReader"][::std::mem::align_of::<GhosttyReader>() - 8usize];
+    ["Offset of field: GhosttyReader::read"][::std::mem::offset_of!(GhosttyReader, read) - 0usize];
+    ["Offset of field: GhosttyReader::userdata"][::std::mem::offset_of!(GhosttyReader, userdata) - 8usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyWriter {
     pub write: GhosttyWriterFn,
     pub userdata: *mut ::std::os::raw::c_void,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyWriter"][::std::mem::size_of::<GhosttyWriter>() - 16usize];
+    ["Alignment of GhosttyWriter"][::std::mem::align_of::<GhosttyWriter>() - 8usize];
+    ["Offset of field: GhosttyWriter::write"][::std::mem::offset_of!(GhosttyWriter, write) - 0usize];
+    ["Offset of field: GhosttyWriter::userdata"][::std::mem::offset_of!(GhosttyWriter, userdata) - 8usize];
+};
 pub type GhosttyMimeReaderFn = ::std::option::Option<
     unsafe extern "C" fn(userdata: *mut ::std::os::raw::c_void, mime: GhosttyString, writer: GhosttyWriter) -> bool,
 >;
@@ -347,6 +490,13 @@ pub struct GhosttyMimeReader {
     pub read: GhosttyMimeReaderFn,
     pub userdata: *mut ::std::os::raw::c_void,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyMimeReader"][::std::mem::size_of::<GhosttyMimeReader>() - 16usize];
+    ["Alignment of GhosttyMimeReader"][::std::mem::align_of::<GhosttyMimeReader>() - 8usize];
+    ["Offset of field: GhosttyMimeReader::read"][::std::mem::offset_of!(GhosttyMimeReader, read) - 0usize];
+    ["Offset of field: GhosttyMimeReader::userdata"][::std::mem::offset_of!(GhosttyMimeReader, userdata) - 8usize];
+};
 pub type GhosttyCell = u64;
 pub type GhosttyRow = u64;
 #[repr(C)]
@@ -355,6 +505,13 @@ pub struct GhosttyCellsView {
     pub ptr: *const GhosttyCell,
     pub len: usize,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyCellsView"][::std::mem::size_of::<GhosttyCellsView>() - 16usize];
+    ["Alignment of GhosttyCellsView"][::std::mem::align_of::<GhosttyCellsView>() - 8usize];
+    ["Offset of field: GhosttyCellsView::ptr"][::std::mem::offset_of!(GhosttyCellsView, ptr) - 0usize];
+    ["Offset of field: GhosttyCellsView::len"][::std::mem::offset_of!(GhosttyCellsView, len) - 8usize];
+};
 pub const GHOSTTY_CELL_CONTENT_CODEPOINT: GhosttyCellContentTag = 0;
 pub const GHOSTTY_CELL_CONTENT_CODEPOINT_GRAPHEME: GhosttyCellContentTag = 1;
 pub const GHOSTTY_CELL_CONTENT_BG_COLOR_PALETTE: GhosttyCellContentTag = 2;
@@ -443,12 +600,29 @@ pub union GhosttyStyleColorValue {
     pub rgb: GhosttyColorRgb,
     pub _padding: u64,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyStyleColorValue"][::std::mem::size_of::<GhosttyStyleColorValue>() - 8usize];
+    ["Alignment of GhosttyStyleColorValue"][::std::mem::align_of::<GhosttyStyleColorValue>() - 8usize];
+    ["Offset of field: GhosttyStyleColorValue::palette"]
+        [::std::mem::offset_of!(GhosttyStyleColorValue, palette) - 0usize];
+    ["Offset of field: GhosttyStyleColorValue::rgb"][::std::mem::offset_of!(GhosttyStyleColorValue, rgb) - 0usize];
+    ["Offset of field: GhosttyStyleColorValue::_padding"]
+        [::std::mem::offset_of!(GhosttyStyleColorValue, _padding) - 0usize];
+};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct GhosttyStyleColor {
     pub tag: GhosttyStyleColorTag,
     pub value: GhosttyStyleColorValue,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyStyleColor"][::std::mem::size_of::<GhosttyStyleColor>() - 16usize];
+    ["Alignment of GhosttyStyleColor"][::std::mem::align_of::<GhosttyStyleColor>() - 8usize];
+    ["Offset of field: GhosttyStyleColor::tag"][::std::mem::offset_of!(GhosttyStyleColor, tag) - 0usize];
+    ["Offset of field: GhosttyStyleColor::value"][::std::mem::offset_of!(GhosttyStyleColor, value) - 8usize];
+};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct GhosttyStyle {
@@ -466,6 +640,24 @@ pub struct GhosttyStyle {
     pub overline: bool,
     pub underline: ::std::os::raw::c_int,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyStyle"][::std::mem::size_of::<GhosttyStyle>() - 72usize];
+    ["Alignment of GhosttyStyle"][::std::mem::align_of::<GhosttyStyle>() - 8usize];
+    ["Offset of field: GhosttyStyle::size"][::std::mem::offset_of!(GhosttyStyle, size) - 0usize];
+    ["Offset of field: GhosttyStyle::fg_color"][::std::mem::offset_of!(GhosttyStyle, fg_color) - 8usize];
+    ["Offset of field: GhosttyStyle::bg_color"][::std::mem::offset_of!(GhosttyStyle, bg_color) - 24usize];
+    ["Offset of field: GhosttyStyle::underline_color"][::std::mem::offset_of!(GhosttyStyle, underline_color) - 40usize];
+    ["Offset of field: GhosttyStyle::bold"][::std::mem::offset_of!(GhosttyStyle, bold) - 56usize];
+    ["Offset of field: GhosttyStyle::italic"][::std::mem::offset_of!(GhosttyStyle, italic) - 57usize];
+    ["Offset of field: GhosttyStyle::faint"][::std::mem::offset_of!(GhosttyStyle, faint) - 58usize];
+    ["Offset of field: GhosttyStyle::blink"][::std::mem::offset_of!(GhosttyStyle, blink) - 59usize];
+    ["Offset of field: GhosttyStyle::inverse"][::std::mem::offset_of!(GhosttyStyle, inverse) - 60usize];
+    ["Offset of field: GhosttyStyle::invisible"][::std::mem::offset_of!(GhosttyStyle, invisible) - 61usize];
+    ["Offset of field: GhosttyStyle::strikethrough"][::std::mem::offset_of!(GhosttyStyle, strikethrough) - 62usize];
+    ["Offset of field: GhosttyStyle::overline"][::std::mem::offset_of!(GhosttyStyle, overline) - 63usize];
+    ["Offset of field: GhosttyStyle::underline"][::std::mem::offset_of!(GhosttyStyle, underline) - 64usize];
+};
 unsafe extern "C" {
     pub fn ghostty_style_default(style: *mut GhosttyStyle);
 }
@@ -477,6 +669,15 @@ pub struct GhosttyGridRef {
     pub x: u16,
     pub y: u16,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyGridRef"][::std::mem::size_of::<GhosttyGridRef>() - 24usize];
+    ["Alignment of GhosttyGridRef"][::std::mem::align_of::<GhosttyGridRef>() - 8usize];
+    ["Offset of field: GhosttyGridRef::size"][::std::mem::offset_of!(GhosttyGridRef, size) - 0usize];
+    ["Offset of field: GhosttyGridRef::node"][::std::mem::offset_of!(GhosttyGridRef, node) - 8usize];
+    ["Offset of field: GhosttyGridRef::x"][::std::mem::offset_of!(GhosttyGridRef, x) - 16usize];
+    ["Offset of field: GhosttyGridRef::y"][::std::mem::offset_of!(GhosttyGridRef, y) - 18usize];
+};
 unsafe extern "C" {
     pub fn ghostty_grid_ref_cell(ref_: *const GhosttyGridRef, out_cell: *mut GhosttyCell) -> GhosttyResult;
 }
@@ -508,6 +709,13 @@ pub struct GhosttyPointCoordinate {
     pub x: u16,
     pub y: u32,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyPointCoordinate"][::std::mem::size_of::<GhosttyPointCoordinate>() - 8usize];
+    ["Alignment of GhosttyPointCoordinate"][::std::mem::align_of::<GhosttyPointCoordinate>() - 4usize];
+    ["Offset of field: GhosttyPointCoordinate::x"][::std::mem::offset_of!(GhosttyPointCoordinate, x) - 0usize];
+    ["Offset of field: GhosttyPointCoordinate::y"][::std::mem::offset_of!(GhosttyPointCoordinate, y) - 4usize];
+};
 pub const GHOSTTY_POINT_TAG_ACTIVE: GhosttyPointTag = 0;
 pub const GHOSTTY_POINT_TAG_VIEWPORT: GhosttyPointTag = 1;
 pub const GHOSTTY_POINT_TAG_SCREEN: GhosttyPointTag = 2;
@@ -520,12 +728,26 @@ pub union GhosttyPointValue {
     pub coordinate: GhosttyPointCoordinate,
     pub _padding: [u64; 2usize],
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyPointValue"][::std::mem::size_of::<GhosttyPointValue>() - 16usize];
+    ["Alignment of GhosttyPointValue"][::std::mem::align_of::<GhosttyPointValue>() - 8usize];
+    ["Offset of field: GhosttyPointValue::coordinate"][::std::mem::offset_of!(GhosttyPointValue, coordinate) - 0usize];
+    ["Offset of field: GhosttyPointValue::_padding"][::std::mem::offset_of!(GhosttyPointValue, _padding) - 0usize];
+};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct GhosttyPoint {
     pub tag: GhosttyPointTag,
     pub value: GhosttyPointValue,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyPoint"][::std::mem::size_of::<GhosttyPoint>() - 24usize];
+    ["Alignment of GhosttyPoint"][::std::mem::align_of::<GhosttyPoint>() - 8usize];
+    ["Offset of field: GhosttyPoint::tag"][::std::mem::offset_of!(GhosttyPoint, tag) - 0usize];
+    ["Offset of field: GhosttyPoint::value"][::std::mem::offset_of!(GhosttyPoint, value) - 8usize];
+};
 #[repr(C)]
 #[derive(Debug)]
 pub struct GhosttySelectionGestureImpl {
@@ -546,6 +768,15 @@ pub struct GhosttySelection {
     pub end: GhosttyGridRef,
     pub rectangle: bool,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttySelection"][::std::mem::size_of::<GhosttySelection>() - 64usize];
+    ["Alignment of GhosttySelection"][::std::mem::align_of::<GhosttySelection>() - 8usize];
+    ["Offset of field: GhosttySelection::size"][::std::mem::offset_of!(GhosttySelection, size) - 0usize];
+    ["Offset of field: GhosttySelection::start"][::std::mem::offset_of!(GhosttySelection, start) - 8usize];
+    ["Offset of field: GhosttySelection::end"][::std::mem::offset_of!(GhosttySelection, end) - 32usize];
+    ["Offset of field: GhosttySelection::rectangle"][::std::mem::offset_of!(GhosttySelection, rectangle) - 56usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttySelectionBuffer {
@@ -553,6 +784,14 @@ pub struct GhosttySelectionBuffer {
     pub cap: usize,
     pub len: usize,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttySelectionBuffer"][::std::mem::size_of::<GhosttySelectionBuffer>() - 24usize];
+    ["Alignment of GhosttySelectionBuffer"][::std::mem::align_of::<GhosttySelectionBuffer>() - 8usize];
+    ["Offset of field: GhosttySelectionBuffer::ptr"][::std::mem::offset_of!(GhosttySelectionBuffer, ptr) - 0usize];
+    ["Offset of field: GhosttySelectionBuffer::cap"][::std::mem::offset_of!(GhosttySelectionBuffer, cap) - 8usize];
+    ["Offset of field: GhosttySelectionBuffer::len"][::std::mem::offset_of!(GhosttySelectionBuffer, len) - 16usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyTerminalSelectWordOptions {
@@ -561,6 +800,20 @@ pub struct GhosttyTerminalSelectWordOptions {
     pub boundary_codepoints: *const u32,
     pub boundary_codepoints_len: usize,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalSelectWordOptions"][::std::mem::size_of::<GhosttyTerminalSelectWordOptions>() - 48usize];
+    ["Alignment of GhosttyTerminalSelectWordOptions"]
+        [::std::mem::align_of::<GhosttyTerminalSelectWordOptions>() - 8usize];
+    ["Offset of field: GhosttyTerminalSelectWordOptions::size"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectWordOptions, size) - 0usize];
+    ["Offset of field: GhosttyTerminalSelectWordOptions::ref_"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectWordOptions, ref_) - 8usize];
+    ["Offset of field: GhosttyTerminalSelectWordOptions::boundary_codepoints"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectWordOptions, boundary_codepoints) - 32usize];
+    ["Offset of field: GhosttyTerminalSelectWordOptions::boundary_codepoints_len"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectWordOptions, boundary_codepoints_len) - 40usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyTerminalSelectWordBetweenOptions {
@@ -570,6 +823,23 @@ pub struct GhosttyTerminalSelectWordBetweenOptions {
     pub boundary_codepoints: *const u32,
     pub boundary_codepoints_len: usize,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalSelectWordBetweenOptions"]
+        [::std::mem::size_of::<GhosttyTerminalSelectWordBetweenOptions>() - 72usize];
+    ["Alignment of GhosttyTerminalSelectWordBetweenOptions"]
+        [::std::mem::align_of::<GhosttyTerminalSelectWordBetweenOptions>() - 8usize];
+    ["Offset of field: GhosttyTerminalSelectWordBetweenOptions::size"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectWordBetweenOptions, size) - 0usize];
+    ["Offset of field: GhosttyTerminalSelectWordBetweenOptions::start"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectWordBetweenOptions, start) - 8usize];
+    ["Offset of field: GhosttyTerminalSelectWordBetweenOptions::end"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectWordBetweenOptions, end) - 32usize];
+    ["Offset of field: GhosttyTerminalSelectWordBetweenOptions::boundary_codepoints"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectWordBetweenOptions, boundary_codepoints) - 56usize];
+    ["Offset of field: GhosttyTerminalSelectWordBetweenOptions::boundary_codepoints_len"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectWordBetweenOptions, boundary_codepoints_len) - 64usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyTerminalSelectLineOptions {
@@ -579,6 +849,22 @@ pub struct GhosttyTerminalSelectLineOptions {
     pub whitespace_len: usize,
     pub semantic_prompt_boundary: bool,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalSelectLineOptions"][::std::mem::size_of::<GhosttyTerminalSelectLineOptions>() - 56usize];
+    ["Alignment of GhosttyTerminalSelectLineOptions"]
+        [::std::mem::align_of::<GhosttyTerminalSelectLineOptions>() - 8usize];
+    ["Offset of field: GhosttyTerminalSelectLineOptions::size"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectLineOptions, size) - 0usize];
+    ["Offset of field: GhosttyTerminalSelectLineOptions::ref_"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectLineOptions, ref_) - 8usize];
+    ["Offset of field: GhosttyTerminalSelectLineOptions::whitespace"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectLineOptions, whitespace) - 32usize];
+    ["Offset of field: GhosttyTerminalSelectLineOptions::whitespace_len"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectLineOptions, whitespace_len) - 40usize];
+    ["Offset of field: GhosttyTerminalSelectLineOptions::semantic_prompt_boundary"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectLineOptions, semantic_prompt_boundary) - 48usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyTerminalSelectionFormatOptions {
@@ -588,6 +874,23 @@ pub struct GhosttyTerminalSelectionFormatOptions {
     pub trim: bool,
     pub selection: *const GhosttySelection,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalSelectionFormatOptions"]
+        [::std::mem::size_of::<GhosttyTerminalSelectionFormatOptions>() - 24usize];
+    ["Alignment of GhosttyTerminalSelectionFormatOptions"]
+        [::std::mem::align_of::<GhosttyTerminalSelectionFormatOptions>() - 8usize];
+    ["Offset of field: GhosttyTerminalSelectionFormatOptions::size"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectionFormatOptions, size) - 0usize];
+    ["Offset of field: GhosttyTerminalSelectionFormatOptions::emit"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectionFormatOptions, emit) - 8usize];
+    ["Offset of field: GhosttyTerminalSelectionFormatOptions::unwrap"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectionFormatOptions, unwrap) - 12usize];
+    ["Offset of field: GhosttyTerminalSelectionFormatOptions::trim"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectionFormatOptions, trim) - 13usize];
+    ["Offset of field: GhosttyTerminalSelectionFormatOptions::selection"]
+        [::std::mem::offset_of!(GhosttyTerminalSelectionFormatOptions, selection) - 16usize];
+};
 pub const GHOSTTY_SELECTION_ORDER_FORWARD: GhosttySelectionOrder = 0;
 pub const GHOSTTY_SELECTION_ORDER_REVERSE: GhosttySelectionOrder = 1;
 pub const GHOSTTY_SELECTION_ORDER_MIRRORED_FORWARD: GhosttySelectionOrder = 2;
@@ -619,6 +922,18 @@ pub struct GhosttySelectionGestureBehaviors {
     pub double_click: GhosttySelectionGestureBehavior,
     pub triple_click: GhosttySelectionGestureBehavior,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttySelectionGestureBehaviors"][::std::mem::size_of::<GhosttySelectionGestureBehaviors>() - 12usize];
+    ["Alignment of GhosttySelectionGestureBehaviors"]
+        [::std::mem::align_of::<GhosttySelectionGestureBehaviors>() - 4usize];
+    ["Offset of field: GhosttySelectionGestureBehaviors::single_click"]
+        [::std::mem::offset_of!(GhosttySelectionGestureBehaviors, single_click) - 0usize];
+    ["Offset of field: GhosttySelectionGestureBehaviors::double_click"]
+        [::std::mem::offset_of!(GhosttySelectionGestureBehaviors, double_click) - 4usize];
+    ["Offset of field: GhosttySelectionGestureBehaviors::triple_click"]
+        [::std::mem::offset_of!(GhosttySelectionGestureBehaviors, triple_click) - 8usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttySelectionGestureGeometry {
@@ -627,6 +942,20 @@ pub struct GhosttySelectionGestureGeometry {
     pub padding_left: u32,
     pub screen_height: u32,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttySelectionGestureGeometry"][::std::mem::size_of::<GhosttySelectionGestureGeometry>() - 16usize];
+    ["Alignment of GhosttySelectionGestureGeometry"]
+        [::std::mem::align_of::<GhosttySelectionGestureGeometry>() - 4usize];
+    ["Offset of field: GhosttySelectionGestureGeometry::columns"]
+        [::std::mem::offset_of!(GhosttySelectionGestureGeometry, columns) - 0usize];
+    ["Offset of field: GhosttySelectionGestureGeometry::cell_width"]
+        [::std::mem::offset_of!(GhosttySelectionGestureGeometry, cell_width) - 4usize];
+    ["Offset of field: GhosttySelectionGestureGeometry::padding_left"]
+        [::std::mem::offset_of!(GhosttySelectionGestureGeometry, padding_left) - 8usize];
+    ["Offset of field: GhosttySelectionGestureGeometry::screen_height"]
+        [::std::mem::offset_of!(GhosttySelectionGestureGeometry, screen_height) - 12usize];
+};
 pub const GHOSTTY_SELECTION_GESTURE_AUTOSCROLL_NONE: GhosttySelectionGestureAutoscroll = 0;
 pub const GHOSTTY_SELECTION_GESTURE_AUTOSCROLL_UP: GhosttySelectionGestureAutoscroll = 1;
 pub const GHOSTTY_SELECTION_GESTURE_AUTOSCROLL_DOWN: GhosttySelectionGestureAutoscroll = 2;
@@ -905,6 +1234,18 @@ pub struct GhosttySizeReportSize {
     pub cell_width: u32,
     pub cell_height: u32,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttySizeReportSize"][::std::mem::size_of::<GhosttySizeReportSize>() - 12usize];
+    ["Alignment of GhosttySizeReportSize"][::std::mem::align_of::<GhosttySizeReportSize>() - 4usize];
+    ["Offset of field: GhosttySizeReportSize::rows"][::std::mem::offset_of!(GhosttySizeReportSize, rows) - 0usize];
+    ["Offset of field: GhosttySizeReportSize::columns"]
+        [::std::mem::offset_of!(GhosttySizeReportSize, columns) - 2usize];
+    ["Offset of field: GhosttySizeReportSize::cell_width"]
+        [::std::mem::offset_of!(GhosttySizeReportSize, cell_width) - 4usize];
+    ["Offset of field: GhosttySizeReportSize::cell_height"]
+        [::std::mem::offset_of!(GhosttySizeReportSize, cell_height) - 8usize];
+};
 pub const GHOSTTY_KITTY_GRAPHICS_DATA_INVALID: GhosttyKittyGraphicsData = 0;
 pub const GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR: GhosttyKittyGraphicsData = 1;
 pub const GHOSTTY_KITTY_GRAPHICS_DATA_GENERATION: GhosttyKittyGraphicsData = 2;
@@ -984,6 +1325,37 @@ pub struct GhosttyKittyGraphicsPlacementRenderInfo {
     pub source_width: u32,
     pub source_height: u32,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyKittyGraphicsPlacementRenderInfo"]
+        [::std::mem::size_of::<GhosttyKittyGraphicsPlacementRenderInfo>() - 56usize];
+    ["Alignment of GhosttyKittyGraphicsPlacementRenderInfo"]
+        [::std::mem::align_of::<GhosttyKittyGraphicsPlacementRenderInfo>() - 8usize];
+    ["Offset of field: GhosttyKittyGraphicsPlacementRenderInfo::size"]
+        [::std::mem::offset_of!(GhosttyKittyGraphicsPlacementRenderInfo, size) - 0usize];
+    ["Offset of field: GhosttyKittyGraphicsPlacementRenderInfo::pixel_width"]
+        [::std::mem::offset_of!(GhosttyKittyGraphicsPlacementRenderInfo, pixel_width) - 8usize];
+    ["Offset of field: GhosttyKittyGraphicsPlacementRenderInfo::pixel_height"]
+        [::std::mem::offset_of!(GhosttyKittyGraphicsPlacementRenderInfo, pixel_height) - 12usize];
+    ["Offset of field: GhosttyKittyGraphicsPlacementRenderInfo::grid_cols"]
+        [::std::mem::offset_of!(GhosttyKittyGraphicsPlacementRenderInfo, grid_cols) - 16usize];
+    ["Offset of field: GhosttyKittyGraphicsPlacementRenderInfo::grid_rows"]
+        [::std::mem::offset_of!(GhosttyKittyGraphicsPlacementRenderInfo, grid_rows) - 20usize];
+    ["Offset of field: GhosttyKittyGraphicsPlacementRenderInfo::viewport_col"]
+        [::std::mem::offset_of!(GhosttyKittyGraphicsPlacementRenderInfo, viewport_col) - 24usize];
+    ["Offset of field: GhosttyKittyGraphicsPlacementRenderInfo::viewport_row"]
+        [::std::mem::offset_of!(GhosttyKittyGraphicsPlacementRenderInfo, viewport_row) - 28usize];
+    ["Offset of field: GhosttyKittyGraphicsPlacementRenderInfo::viewport_visible"]
+        [::std::mem::offset_of!(GhosttyKittyGraphicsPlacementRenderInfo, viewport_visible) - 32usize];
+    ["Offset of field: GhosttyKittyGraphicsPlacementRenderInfo::source_x"]
+        [::std::mem::offset_of!(GhosttyKittyGraphicsPlacementRenderInfo, source_x) - 36usize];
+    ["Offset of field: GhosttyKittyGraphicsPlacementRenderInfo::source_y"]
+        [::std::mem::offset_of!(GhosttyKittyGraphicsPlacementRenderInfo, source_y) - 40usize];
+    ["Offset of field: GhosttyKittyGraphicsPlacementRenderInfo::source_width"]
+        [::std::mem::offset_of!(GhosttyKittyGraphicsPlacementRenderInfo, source_width) - 44usize];
+    ["Offset of field: GhosttyKittyGraphicsPlacementRenderInfo::source_height"]
+        [::std::mem::offset_of!(GhosttyKittyGraphicsPlacementRenderInfo, source_height) - 48usize];
+};
 unsafe extern "C" {
     pub fn ghostty_kitty_graphics_get(
         graphics: GhosttyKittyGraphics,
@@ -1122,12 +1494,36 @@ pub union GhosttyTerminalScrollViewportValue {
     pub delta_prompt: isize,
     pub _padding: [u64; 2usize],
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalScrollViewportValue"]
+        [::std::mem::size_of::<GhosttyTerminalScrollViewportValue>() - 16usize];
+    ["Alignment of GhosttyTerminalScrollViewportValue"]
+        [::std::mem::align_of::<GhosttyTerminalScrollViewportValue>() - 8usize];
+    ["Offset of field: GhosttyTerminalScrollViewportValue::delta"]
+        [::std::mem::offset_of!(GhosttyTerminalScrollViewportValue, delta) - 0usize];
+    ["Offset of field: GhosttyTerminalScrollViewportValue::row"]
+        [::std::mem::offset_of!(GhosttyTerminalScrollViewportValue, row) - 0usize];
+    ["Offset of field: GhosttyTerminalScrollViewportValue::delta_prompt"]
+        [::std::mem::offset_of!(GhosttyTerminalScrollViewportValue, delta_prompt) - 0usize];
+    ["Offset of field: GhosttyTerminalScrollViewportValue::_padding"]
+        [::std::mem::offset_of!(GhosttyTerminalScrollViewportValue, _padding) - 0usize];
+};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct GhosttyTerminalScrollViewport {
     pub tag: GhosttyTerminalScrollViewportTag,
     pub value: GhosttyTerminalScrollViewportValue,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalScrollViewport"][::std::mem::size_of::<GhosttyTerminalScrollViewport>() - 24usize];
+    ["Alignment of GhosttyTerminalScrollViewport"][::std::mem::align_of::<GhosttyTerminalScrollViewport>() - 8usize];
+    ["Offset of field: GhosttyTerminalScrollViewport::tag"]
+        [::std::mem::offset_of!(GhosttyTerminalScrollViewport, tag) - 0usize];
+    ["Offset of field: GhosttyTerminalScrollViewport::value"]
+        [::std::mem::offset_of!(GhosttyTerminalScrollViewport, value) - 8usize];
+};
 pub const GHOSTTY_TERMINAL_SCREEN_PRIMARY: GhosttyTerminalScreen = 0;
 pub const GHOSTTY_TERMINAL_SCREEN_ALTERNATE: GhosttyTerminalScreen = 1;
 pub const GHOSTTY_TERMINAL_SCREEN_MAX_VALUE: GhosttyTerminalScreen = 2147483647;
@@ -1145,6 +1541,16 @@ pub struct GhosttyTerminalScrollbar {
     pub offset: u64,
     pub len: u64,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalScrollbar"][::std::mem::size_of::<GhosttyTerminalScrollbar>() - 24usize];
+    ["Alignment of GhosttyTerminalScrollbar"][::std::mem::align_of::<GhosttyTerminalScrollbar>() - 8usize];
+    ["Offset of field: GhosttyTerminalScrollbar::total"]
+        [::std::mem::offset_of!(GhosttyTerminalScrollbar, total) - 0usize];
+    ["Offset of field: GhosttyTerminalScrollbar::offset"]
+        [::std::mem::offset_of!(GhosttyTerminalScrollbar, offset) - 8usize];
+    ["Offset of field: GhosttyTerminalScrollbar::len"][::std::mem::offset_of!(GhosttyTerminalScrollbar, len) - 16usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyTerminalMemoryUsage {
@@ -1163,6 +1569,39 @@ pub struct GhosttyTerminalMemoryUsage {
     pub alternate_compressed_bytes: u64,
     pub alternate_image_bytes: u64,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalMemoryUsage"][::std::mem::size_of::<GhosttyTerminalMemoryUsage>() - 112usize];
+    ["Alignment of GhosttyTerminalMemoryUsage"][::std::mem::align_of::<GhosttyTerminalMemoryUsage>() - 8usize];
+    ["Offset of field: GhosttyTerminalMemoryUsage::size"]
+        [::std::mem::offset_of!(GhosttyTerminalMemoryUsage, size) - 0usize];
+    ["Offset of field: GhosttyTerminalMemoryUsage::compression_supported"]
+        [::std::mem::offset_of!(GhosttyTerminalMemoryUsage, compression_supported) - 8usize];
+    ["Offset of field: GhosttyTerminalMemoryUsage::primary_pages"]
+        [::std::mem::offset_of!(GhosttyTerminalMemoryUsage, primary_pages) - 16usize];
+    ["Offset of field: GhosttyTerminalMemoryUsage::primary_virtual_bytes"]
+        [::std::mem::offset_of!(GhosttyTerminalMemoryUsage, primary_virtual_bytes) - 24usize];
+    ["Offset of field: GhosttyTerminalMemoryUsage::primary_resident_bytes"]
+        [::std::mem::offset_of!(GhosttyTerminalMemoryUsage, primary_resident_bytes) - 32usize];
+    ["Offset of field: GhosttyTerminalMemoryUsage::primary_compressed_pages"]
+        [::std::mem::offset_of!(GhosttyTerminalMemoryUsage, primary_compressed_pages) - 40usize];
+    ["Offset of field: GhosttyTerminalMemoryUsage::primary_compressed_bytes"]
+        [::std::mem::offset_of!(GhosttyTerminalMemoryUsage, primary_compressed_bytes) - 48usize];
+    ["Offset of field: GhosttyTerminalMemoryUsage::primary_image_bytes"]
+        [::std::mem::offset_of!(GhosttyTerminalMemoryUsage, primary_image_bytes) - 56usize];
+    ["Offset of field: GhosttyTerminalMemoryUsage::alternate_pages"]
+        [::std::mem::offset_of!(GhosttyTerminalMemoryUsage, alternate_pages) - 64usize];
+    ["Offset of field: GhosttyTerminalMemoryUsage::alternate_virtual_bytes"]
+        [::std::mem::offset_of!(GhosttyTerminalMemoryUsage, alternate_virtual_bytes) - 72usize];
+    ["Offset of field: GhosttyTerminalMemoryUsage::alternate_resident_bytes"]
+        [::std::mem::offset_of!(GhosttyTerminalMemoryUsage, alternate_resident_bytes) - 80usize];
+    ["Offset of field: GhosttyTerminalMemoryUsage::alternate_compressed_pages"]
+        [::std::mem::offset_of!(GhosttyTerminalMemoryUsage, alternate_compressed_pages) - 88usize];
+    ["Offset of field: GhosttyTerminalMemoryUsage::alternate_compressed_bytes"]
+        [::std::mem::offset_of!(GhosttyTerminalMemoryUsage, alternate_compressed_bytes) - 96usize];
+    ["Offset of field: GhosttyTerminalMemoryUsage::alternate_image_bytes"]
+        [::std::mem::offset_of!(GhosttyTerminalMemoryUsage, alternate_image_bytes) - 104usize];
+};
 pub type GhosttyTerminalBellFn =
     ::std::option::Option<unsafe extern "C" fn(terminal: GhosttyTerminal, userdata: *mut ::std::os::raw::c_void)>;
 pub const GHOSTTY_TERMINAL_UNKNOWN_SEQUENCE_APC: GhosttyTerminalUnknownSequenceTag = 0;
@@ -1175,6 +1614,17 @@ pub struct GhosttyTerminalUnknownStringSequence {
     pub truncated: bool,
     pub content: GhosttyString,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalUnknownStringSequence"]
+        [::std::mem::size_of::<GhosttyTerminalUnknownStringSequence>() - 24usize];
+    ["Alignment of GhosttyTerminalUnknownStringSequence"]
+        [::std::mem::align_of::<GhosttyTerminalUnknownStringSequence>() - 8usize];
+    ["Offset of field: GhosttyTerminalUnknownStringSequence::truncated"]
+        [::std::mem::offset_of!(GhosttyTerminalUnknownStringSequence, truncated) - 0usize];
+    ["Offset of field: GhosttyTerminalUnknownStringSequence::content"]
+        [::std::mem::offset_of!(GhosttyTerminalUnknownStringSequence, content) - 8usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyTerminalUnknownOscSequence {
@@ -1182,6 +1632,18 @@ pub struct GhosttyTerminalUnknownOscSequence {
     pub content: GhosttyString,
     pub terminator: GhosttyOscTerminator,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalUnknownOscSequence"][::std::mem::size_of::<GhosttyTerminalUnknownOscSequence>() - 32usize];
+    ["Alignment of GhosttyTerminalUnknownOscSequence"]
+        [::std::mem::align_of::<GhosttyTerminalUnknownOscSequence>() - 8usize];
+    ["Offset of field: GhosttyTerminalUnknownOscSequence::truncated"]
+        [::std::mem::offset_of!(GhosttyTerminalUnknownOscSequence, truncated) - 0usize];
+    ["Offset of field: GhosttyTerminalUnknownOscSequence::content"]
+        [::std::mem::offset_of!(GhosttyTerminalUnknownOscSequence, content) - 8usize];
+    ["Offset of field: GhosttyTerminalUnknownOscSequence::terminator"]
+        [::std::mem::offset_of!(GhosttyTerminalUnknownOscSequence, terminator) - 24usize];
+};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union GhosttyTerminalUnknownSequenceValue {
@@ -1189,12 +1651,34 @@ pub union GhosttyTerminalUnknownSequenceValue {
     pub osc: GhosttyTerminalUnknownOscSequence,
     pub _padding: [u64; 16usize],
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalUnknownSequenceValue"]
+        [::std::mem::size_of::<GhosttyTerminalUnknownSequenceValue>() - 128usize];
+    ["Alignment of GhosttyTerminalUnknownSequenceValue"]
+        [::std::mem::align_of::<GhosttyTerminalUnknownSequenceValue>() - 8usize];
+    ["Offset of field: GhosttyTerminalUnknownSequenceValue::apc"]
+        [::std::mem::offset_of!(GhosttyTerminalUnknownSequenceValue, apc) - 0usize];
+    ["Offset of field: GhosttyTerminalUnknownSequenceValue::osc"]
+        [::std::mem::offset_of!(GhosttyTerminalUnknownSequenceValue, osc) - 0usize];
+    ["Offset of field: GhosttyTerminalUnknownSequenceValue::_padding"]
+        [::std::mem::offset_of!(GhosttyTerminalUnknownSequenceValue, _padding) - 0usize];
+};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct GhosttyTerminalUnknownSequence {
     pub tag: GhosttyTerminalUnknownSequenceTag,
     pub value: GhosttyTerminalUnknownSequenceValue,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalUnknownSequence"][::std::mem::size_of::<GhosttyTerminalUnknownSequence>() - 136usize];
+    ["Alignment of GhosttyTerminalUnknownSequence"][::std::mem::align_of::<GhosttyTerminalUnknownSequence>() - 8usize];
+    ["Offset of field: GhosttyTerminalUnknownSequence::tag"]
+        [::std::mem::offset_of!(GhosttyTerminalUnknownSequence, tag) - 0usize];
+    ["Offset of field: GhosttyTerminalUnknownSequence::value"]
+        [::std::mem::offset_of!(GhosttyTerminalUnknownSequence, value) - 8usize];
+};
 pub type GhosttyTerminalUnknownSequenceFn = ::std::option::Option<
     unsafe extern "C" fn(
         terminal: GhosttyTerminal,
@@ -1213,6 +1697,13 @@ pub struct GhosttyClipboardContent {
     pub mime: GhosttyString,
     pub data: GhosttyString,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyClipboardContent"][::std::mem::size_of::<GhosttyClipboardContent>() - 32usize];
+    ["Alignment of GhosttyClipboardContent"][::std::mem::align_of::<GhosttyClipboardContent>() - 8usize];
+    ["Offset of field: GhosttyClipboardContent::mime"][::std::mem::offset_of!(GhosttyClipboardContent, mime) - 0usize];
+    ["Offset of field: GhosttyClipboardContent::data"][::std::mem::offset_of!(GhosttyClipboardContent, data) - 16usize];
+};
 pub const GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS: GhosttyClipboardWriteResult = 0;
 pub const GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED: GhosttyClipboardWriteResult = 1;
 pub const GHOSTTY_CLIPBOARD_WRITE_RESULT_UNSUPPORTED: GhosttyClipboardWriteResult = 2;
@@ -1228,6 +1719,17 @@ pub struct GhosttyClipboardWriteReply {
     pub result: GhosttyClipboardWriteResult,
     pub remember: bool,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyClipboardWriteReply"][::std::mem::size_of::<GhosttyClipboardWriteReply>() - 16usize];
+    ["Alignment of GhosttyClipboardWriteReply"][::std::mem::align_of::<GhosttyClipboardWriteReply>() - 8usize];
+    ["Offset of field: GhosttyClipboardWriteReply::size"]
+        [::std::mem::offset_of!(GhosttyClipboardWriteReply, size) - 0usize];
+    ["Offset of field: GhosttyClipboardWriteReply::result"]
+        [::std::mem::offset_of!(GhosttyClipboardWriteReply, result) - 8usize];
+    ["Offset of field: GhosttyClipboardWriteReply::remember"]
+        [::std::mem::offset_of!(GhosttyClipboardWriteReply, remember) - 12usize];
+};
 pub type GhosttyClipboardWriteReplyFn = ::std::option::Option<
     unsafe extern "C" fn(write: *const GhosttyClipboardWrite, reply: *const GhosttyClipboardWriteReply),
 >;
@@ -1244,6 +1746,25 @@ pub struct GhosttyClipboardWrite {
     pub ctx: *const ::std::os::raw::c_void,
     pub reply: GhosttyClipboardWriteReplyFn,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyClipboardWrite"][::std::mem::size_of::<GhosttyClipboardWrite>() - 72usize];
+    ["Alignment of GhosttyClipboardWrite"][::std::mem::align_of::<GhosttyClipboardWrite>() - 8usize];
+    ["Offset of field: GhosttyClipboardWrite::size"][::std::mem::offset_of!(GhosttyClipboardWrite, size) - 0usize];
+    ["Offset of field: GhosttyClipboardWrite::location"]
+        [::std::mem::offset_of!(GhosttyClipboardWrite, location) - 8usize];
+    ["Offset of field: GhosttyClipboardWrite::contents"]
+        [::std::mem::offset_of!(GhosttyClipboardWrite, contents) - 16usize];
+    ["Offset of field: GhosttyClipboardWrite::contents_len"]
+        [::std::mem::offset_of!(GhosttyClipboardWrite, contents_len) - 24usize];
+    ["Offset of field: GhosttyClipboardWrite::name"][::std::mem::offset_of!(GhosttyClipboardWrite, name) - 32usize];
+    ["Offset of field: GhosttyClipboardWrite::granted"]
+        [::std::mem::offset_of!(GhosttyClipboardWrite, granted) - 48usize];
+    ["Offset of field: GhosttyClipboardWrite::can_remember"]
+        [::std::mem::offset_of!(GhosttyClipboardWrite, can_remember) - 49usize];
+    ["Offset of field: GhosttyClipboardWrite::ctx"][::std::mem::offset_of!(GhosttyClipboardWrite, ctx) - 56usize];
+    ["Offset of field: GhosttyClipboardWrite::reply"][::std::mem::offset_of!(GhosttyClipboardWrite, reply) - 64usize];
+};
 pub type GhosttyTerminalClipboardWriteFn = ::std::option::Option<
     unsafe extern "C" fn(
         terminal: GhosttyTerminal,
@@ -1269,6 +1790,25 @@ pub struct GhosttyClipboardReadReply {
     pub available_len: usize,
     pub remember: bool,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyClipboardReadReply"][::std::mem::size_of::<GhosttyClipboardReadReply>() - 56usize];
+    ["Alignment of GhosttyClipboardReadReply"][::std::mem::align_of::<GhosttyClipboardReadReply>() - 8usize];
+    ["Offset of field: GhosttyClipboardReadReply::size"]
+        [::std::mem::offset_of!(GhosttyClipboardReadReply, size) - 0usize];
+    ["Offset of field: GhosttyClipboardReadReply::result"]
+        [::std::mem::offset_of!(GhosttyClipboardReadReply, result) - 8usize];
+    ["Offset of field: GhosttyClipboardReadReply::contents"]
+        [::std::mem::offset_of!(GhosttyClipboardReadReply, contents) - 16usize];
+    ["Offset of field: GhosttyClipboardReadReply::contents_len"]
+        [::std::mem::offset_of!(GhosttyClipboardReadReply, contents_len) - 24usize];
+    ["Offset of field: GhosttyClipboardReadReply::available"]
+        [::std::mem::offset_of!(GhosttyClipboardReadReply, available) - 32usize];
+    ["Offset of field: GhosttyClipboardReadReply::available_len"]
+        [::std::mem::offset_of!(GhosttyClipboardReadReply, available_len) - 40usize];
+    ["Offset of field: GhosttyClipboardReadReply::remember"]
+        [::std::mem::offset_of!(GhosttyClipboardReadReply, remember) - 48usize];
+};
 pub type GhosttyClipboardReadReplyFn = ::std::option::Option<
     unsafe extern "C" fn(read: *const GhosttyClipboardRead, reply: *const GhosttyClipboardReadReply),
 >;
@@ -1286,6 +1826,24 @@ pub struct GhosttyClipboardRead {
     pub ctx: *const ::std::os::raw::c_void,
     pub reply: GhosttyClipboardReadReplyFn,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyClipboardRead"][::std::mem::size_of::<GhosttyClipboardRead>() - 80usize];
+    ["Alignment of GhosttyClipboardRead"][::std::mem::align_of::<GhosttyClipboardRead>() - 8usize];
+    ["Offset of field: GhosttyClipboardRead::size"][::std::mem::offset_of!(GhosttyClipboardRead, size) - 0usize];
+    ["Offset of field: GhosttyClipboardRead::location"]
+        [::std::mem::offset_of!(GhosttyClipboardRead, location) - 8usize];
+    ["Offset of field: GhosttyClipboardRead::mimes"][::std::mem::offset_of!(GhosttyClipboardRead, mimes) - 16usize];
+    ["Offset of field: GhosttyClipboardRead::mimes_len"]
+        [::std::mem::offset_of!(GhosttyClipboardRead, mimes_len) - 24usize];
+    ["Offset of field: GhosttyClipboardRead::list"][::std::mem::offset_of!(GhosttyClipboardRead, list) - 32usize];
+    ["Offset of field: GhosttyClipboardRead::name"][::std::mem::offset_of!(GhosttyClipboardRead, name) - 40usize];
+    ["Offset of field: GhosttyClipboardRead::granted"][::std::mem::offset_of!(GhosttyClipboardRead, granted) - 56usize];
+    ["Offset of field: GhosttyClipboardRead::can_remember"]
+        [::std::mem::offset_of!(GhosttyClipboardRead, can_remember) - 57usize];
+    ["Offset of field: GhosttyClipboardRead::ctx"][::std::mem::offset_of!(GhosttyClipboardRead, ctx) - 64usize];
+    ["Offset of field: GhosttyClipboardRead::reply"][::std::mem::offset_of!(GhosttyClipboardRead, reply) - 72usize];
+};
 pub type GhosttyTerminalClipboardReadFn = ::std::option::Option<
     unsafe extern "C" fn(
         terminal: GhosttyTerminal,
@@ -1300,6 +1858,19 @@ pub struct GhosttyTerminalDesktopNotification {
     pub title: GhosttyString,
     pub body: GhosttyString,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalDesktopNotification"]
+        [::std::mem::size_of::<GhosttyTerminalDesktopNotification>() - 40usize];
+    ["Alignment of GhosttyTerminalDesktopNotification"]
+        [::std::mem::align_of::<GhosttyTerminalDesktopNotification>() - 8usize];
+    ["Offset of field: GhosttyTerminalDesktopNotification::size"]
+        [::std::mem::offset_of!(GhosttyTerminalDesktopNotification, size) - 0usize];
+    ["Offset of field: GhosttyTerminalDesktopNotification::title"]
+        [::std::mem::offset_of!(GhosttyTerminalDesktopNotification, title) - 8usize];
+    ["Offset of field: GhosttyTerminalDesktopNotification::body"]
+        [::std::mem::offset_of!(GhosttyTerminalDesktopNotification, body) - 24usize];
+};
 pub type GhosttyTerminalDesktopNotificationFn = ::std::option::Option<
     unsafe extern "C" fn(
         terminal: GhosttyTerminal,
@@ -1321,6 +1892,17 @@ pub struct GhosttyTerminalProgressReport {
     pub state: GhosttyTerminalProgressState,
     pub progress: i8,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalProgressReport"][::std::mem::size_of::<GhosttyTerminalProgressReport>() - 16usize];
+    ["Alignment of GhosttyTerminalProgressReport"][::std::mem::align_of::<GhosttyTerminalProgressReport>() - 8usize];
+    ["Offset of field: GhosttyTerminalProgressReport::size"]
+        [::std::mem::offset_of!(GhosttyTerminalProgressReport, size) - 0usize];
+    ["Offset of field: GhosttyTerminalProgressReport::state"]
+        [::std::mem::offset_of!(GhosttyTerminalProgressReport, state) - 8usize];
+    ["Offset of field: GhosttyTerminalProgressReport::progress"]
+        [::std::mem::offset_of!(GhosttyTerminalProgressReport, progress) - 12usize];
+};
 pub type GhosttyTerminalProgressReportFn = ::std::option::Option<
     unsafe extern "C" fn(
         terminal: GhosttyTerminal,
@@ -1354,6 +1936,27 @@ pub struct GhosttyTerminalProgramStatus {
     pub title: GhosttyString,
     pub message: GhosttyString,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalProgramStatus"][::std::mem::size_of::<GhosttyTerminalProgramStatus>() - 88usize];
+    ["Alignment of GhosttyTerminalProgramStatus"][::std::mem::align_of::<GhosttyTerminalProgramStatus>() - 8usize];
+    ["Offset of field: GhosttyTerminalProgramStatus::size"]
+        [::std::mem::offset_of!(GhosttyTerminalProgramStatus, size) - 0usize];
+    ["Offset of field: GhosttyTerminalProgramStatus::state"]
+        [::std::mem::offset_of!(GhosttyTerminalProgramStatus, state) - 8usize];
+    ["Offset of field: GhosttyTerminalProgramStatus::kind"]
+        [::std::mem::offset_of!(GhosttyTerminalProgramStatus, kind) - 12usize];
+    ["Offset of field: GhosttyTerminalProgramStatus::progress"]
+        [::std::mem::offset_of!(GhosttyTerminalProgramStatus, progress) - 16usize];
+    ["Offset of field: GhosttyTerminalProgramStatus::id"]
+        [::std::mem::offset_of!(GhosttyTerminalProgramStatus, id) - 24usize];
+    ["Offset of field: GhosttyTerminalProgramStatus::app"]
+        [::std::mem::offset_of!(GhosttyTerminalProgramStatus, app) - 40usize];
+    ["Offset of field: GhosttyTerminalProgramStatus::title"]
+        [::std::mem::offset_of!(GhosttyTerminalProgramStatus, title) - 56usize];
+    ["Offset of field: GhosttyTerminalProgramStatus::message"]
+        [::std::mem::offset_of!(GhosttyTerminalProgramStatus, message) - 72usize];
+};
 pub type GhosttyTerminalProgramStatusFn = ::std::option::Option<
     unsafe extern "C" fn(
         terminal: GhosttyTerminal,
@@ -1385,6 +1988,25 @@ pub struct GhosttyTerminalSemanticPrompt {
     pub command: GhosttyString,
     pub error: GhosttyString,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalSemanticPrompt"][::std::mem::size_of::<GhosttyTerminalSemanticPrompt>() - 56usize];
+    ["Alignment of GhosttyTerminalSemanticPrompt"][::std::mem::align_of::<GhosttyTerminalSemanticPrompt>() - 8usize];
+    ["Offset of field: GhosttyTerminalSemanticPrompt::size"]
+        [::std::mem::offset_of!(GhosttyTerminalSemanticPrompt, size) - 0usize];
+    ["Offset of field: GhosttyTerminalSemanticPrompt::kind"]
+        [::std::mem::offset_of!(GhosttyTerminalSemanticPrompt, kind) - 8usize];
+    ["Offset of field: GhosttyTerminalSemanticPrompt::prompt_kind"]
+        [::std::mem::offset_of!(GhosttyTerminalSemanticPrompt, prompt_kind) - 12usize];
+    ["Offset of field: GhosttyTerminalSemanticPrompt::has_exit_code"]
+        [::std::mem::offset_of!(GhosttyTerminalSemanticPrompt, has_exit_code) - 16usize];
+    ["Offset of field: GhosttyTerminalSemanticPrompt::exit_code"]
+        [::std::mem::offset_of!(GhosttyTerminalSemanticPrompt, exit_code) - 20usize];
+    ["Offset of field: GhosttyTerminalSemanticPrompt::command"]
+        [::std::mem::offset_of!(GhosttyTerminalSemanticPrompt, command) - 24usize];
+    ["Offset of field: GhosttyTerminalSemanticPrompt::error"]
+        [::std::mem::offset_of!(GhosttyTerminalSemanticPrompt, error) - 40usize];
+};
 pub type GhosttyTerminalSemanticPromptFn = ::std::option::Option<
     unsafe extern "C" fn(
         terminal: GhosttyTerminal,
@@ -1403,18 +2025,47 @@ pub struct GhosttyTerminalResizeWindowGrid {
     pub rows: u16,
     pub columns: u16,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalResizeWindowGrid"][::std::mem::size_of::<GhosttyTerminalResizeWindowGrid>() - 4usize];
+    ["Alignment of GhosttyTerminalResizeWindowGrid"]
+        [::std::mem::align_of::<GhosttyTerminalResizeWindowGrid>() - 2usize];
+    ["Offset of field: GhosttyTerminalResizeWindowGrid::rows"]
+        [::std::mem::offset_of!(GhosttyTerminalResizeWindowGrid, rows) - 0usize];
+    ["Offset of field: GhosttyTerminalResizeWindowGrid::columns"]
+        [::std::mem::offset_of!(GhosttyTerminalResizeWindowGrid, columns) - 2usize];
+};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union GhosttyTerminalResizeWindowValue {
     pub grid: GhosttyTerminalResizeWindowGrid,
     pub _padding: [u64; 2usize],
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalResizeWindowValue"][::std::mem::size_of::<GhosttyTerminalResizeWindowValue>() - 16usize];
+    ["Alignment of GhosttyTerminalResizeWindowValue"]
+        [::std::mem::align_of::<GhosttyTerminalResizeWindowValue>() - 8usize];
+    ["Offset of field: GhosttyTerminalResizeWindowValue::grid"]
+        [::std::mem::offset_of!(GhosttyTerminalResizeWindowValue, grid) - 0usize];
+    ["Offset of field: GhosttyTerminalResizeWindowValue::_padding"]
+        [::std::mem::offset_of!(GhosttyTerminalResizeWindowValue, _padding) - 0usize];
+};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct GhosttyTerminalResizeWindow {
     pub tag: GhosttyTerminalResizeWindowTag,
     pub value: GhosttyTerminalResizeWindowValue,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalResizeWindow"][::std::mem::size_of::<GhosttyTerminalResizeWindow>() - 24usize];
+    ["Alignment of GhosttyTerminalResizeWindow"][::std::mem::align_of::<GhosttyTerminalResizeWindow>() - 8usize];
+    ["Offset of field: GhosttyTerminalResizeWindow::tag"]
+        [::std::mem::offset_of!(GhosttyTerminalResizeWindow, tag) - 0usize];
+    ["Offset of field: GhosttyTerminalResizeWindow::value"]
+        [::std::mem::offset_of!(GhosttyTerminalResizeWindow, value) - 8usize];
+};
 pub type GhosttyTerminalResizeWindowFn = ::std::option::Option<
     unsafe extern "C" fn(
         terminal: GhosttyTerminal,
@@ -1465,6 +2116,15 @@ pub struct GhosttyTerminalModeConfig {
     pub mode: GhosttyMode,
     pub value: bool,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalModeConfig"][::std::mem::size_of::<GhosttyTerminalModeConfig>() - 4usize];
+    ["Alignment of GhosttyTerminalModeConfig"][::std::mem::align_of::<GhosttyTerminalModeConfig>() - 2usize];
+    ["Offset of field: GhosttyTerminalModeConfig::mode"]
+        [::std::mem::offset_of!(GhosttyTerminalModeConfig, mode) - 0usize];
+    ["Offset of field: GhosttyTerminalModeConfig::value"]
+        [::std::mem::offset_of!(GhosttyTerminalModeConfig, value) - 2usize];
+};
 pub const GHOSTTY_TERMINAL_OPT_USERDATA: GhosttyTerminalOption = 0;
 pub const GHOSTTY_TERMINAL_OPT_WRITE_PTY: GhosttyTerminalOption = 1;
 pub const GHOSTTY_TERMINAL_OPT_BELL: GhosttyTerminalOption = 2;
@@ -1682,6 +2342,25 @@ pub struct GhosttyFormatterScreenExtra {
     pub kitty_keyboard: bool,
     pub charsets: bool,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyFormatterScreenExtra"][::std::mem::size_of::<GhosttyFormatterScreenExtra>() - 16usize];
+    ["Alignment of GhosttyFormatterScreenExtra"][::std::mem::align_of::<GhosttyFormatterScreenExtra>() - 8usize];
+    ["Offset of field: GhosttyFormatterScreenExtra::size"]
+        [::std::mem::offset_of!(GhosttyFormatterScreenExtra, size) - 0usize];
+    ["Offset of field: GhosttyFormatterScreenExtra::cursor"]
+        [::std::mem::offset_of!(GhosttyFormatterScreenExtra, cursor) - 8usize];
+    ["Offset of field: GhosttyFormatterScreenExtra::style"]
+        [::std::mem::offset_of!(GhosttyFormatterScreenExtra, style) - 9usize];
+    ["Offset of field: GhosttyFormatterScreenExtra::hyperlink"]
+        [::std::mem::offset_of!(GhosttyFormatterScreenExtra, hyperlink) - 10usize];
+    ["Offset of field: GhosttyFormatterScreenExtra::protection"]
+        [::std::mem::offset_of!(GhosttyFormatterScreenExtra, protection) - 11usize];
+    ["Offset of field: GhosttyFormatterScreenExtra::kitty_keyboard"]
+        [::std::mem::offset_of!(GhosttyFormatterScreenExtra, kitty_keyboard) - 12usize];
+    ["Offset of field: GhosttyFormatterScreenExtra::charsets"]
+        [::std::mem::offset_of!(GhosttyFormatterScreenExtra, charsets) - 13usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyFormatterTerminalExtra {
@@ -1694,6 +2373,27 @@ pub struct GhosttyFormatterTerminalExtra {
     pub keyboard: bool,
     pub screen: GhosttyFormatterScreenExtra,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyFormatterTerminalExtra"][::std::mem::size_of::<GhosttyFormatterTerminalExtra>() - 32usize];
+    ["Alignment of GhosttyFormatterTerminalExtra"][::std::mem::align_of::<GhosttyFormatterTerminalExtra>() - 8usize];
+    ["Offset of field: GhosttyFormatterTerminalExtra::size"]
+        [::std::mem::offset_of!(GhosttyFormatterTerminalExtra, size) - 0usize];
+    ["Offset of field: GhosttyFormatterTerminalExtra::palette"]
+        [::std::mem::offset_of!(GhosttyFormatterTerminalExtra, palette) - 8usize];
+    ["Offset of field: GhosttyFormatterTerminalExtra::modes"]
+        [::std::mem::offset_of!(GhosttyFormatterTerminalExtra, modes) - 9usize];
+    ["Offset of field: GhosttyFormatterTerminalExtra::scrolling_region"]
+        [::std::mem::offset_of!(GhosttyFormatterTerminalExtra, scrolling_region) - 10usize];
+    ["Offset of field: GhosttyFormatterTerminalExtra::tabstops"]
+        [::std::mem::offset_of!(GhosttyFormatterTerminalExtra, tabstops) - 11usize];
+    ["Offset of field: GhosttyFormatterTerminalExtra::pwd"]
+        [::std::mem::offset_of!(GhosttyFormatterTerminalExtra, pwd) - 12usize];
+    ["Offset of field: GhosttyFormatterTerminalExtra::keyboard"]
+        [::std::mem::offset_of!(GhosttyFormatterTerminalExtra, keyboard) - 13usize];
+    ["Offset of field: GhosttyFormatterTerminalExtra::screen"]
+        [::std::mem::offset_of!(GhosttyFormatterTerminalExtra, screen) - 16usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyFormatterTerminalOptions {
@@ -1704,6 +2404,24 @@ pub struct GhosttyFormatterTerminalOptions {
     pub extra: GhosttyFormatterTerminalExtra,
     pub selection: *const GhosttySelection,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyFormatterTerminalOptions"][::std::mem::size_of::<GhosttyFormatterTerminalOptions>() - 56usize];
+    ["Alignment of GhosttyFormatterTerminalOptions"]
+        [::std::mem::align_of::<GhosttyFormatterTerminalOptions>() - 8usize];
+    ["Offset of field: GhosttyFormatterTerminalOptions::size"]
+        [::std::mem::offset_of!(GhosttyFormatterTerminalOptions, size) - 0usize];
+    ["Offset of field: GhosttyFormatterTerminalOptions::emit"]
+        [::std::mem::offset_of!(GhosttyFormatterTerminalOptions, emit) - 8usize];
+    ["Offset of field: GhosttyFormatterTerminalOptions::unwrap"]
+        [::std::mem::offset_of!(GhosttyFormatterTerminalOptions, unwrap) - 12usize];
+    ["Offset of field: GhosttyFormatterTerminalOptions::trim"]
+        [::std::mem::offset_of!(GhosttyFormatterTerminalOptions, trim) - 13usize];
+    ["Offset of field: GhosttyFormatterTerminalOptions::extra"]
+        [::std::mem::offset_of!(GhosttyFormatterTerminalOptions, extra) - 16usize];
+    ["Offset of field: GhosttyFormatterTerminalOptions::selection"]
+        [::std::mem::offset_of!(GhosttyFormatterTerminalOptions, selection) - 48usize];
+};
 unsafe extern "C" {
     pub fn ghostty_formatter_terminal_new(
         allocator: *const GhosttyAllocator,
@@ -1751,11 +2469,26 @@ pub struct GhosttyRenderStateOverscan {
     pub above: u16,
     pub below: u16,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyRenderStateOverscan"][::std::mem::size_of::<GhosttyRenderStateOverscan>() - 4usize];
+    ["Alignment of GhosttyRenderStateOverscan"][::std::mem::align_of::<GhosttyRenderStateOverscan>() - 2usize];
+    ["Offset of field: GhosttyRenderStateOverscan::above"]
+        [::std::mem::offset_of!(GhosttyRenderStateOverscan, above) - 0usize];
+    ["Offset of field: GhosttyRenderStateOverscan::below"]
+        [::std::mem::offset_of!(GhosttyRenderStateOverscan, below) - 2usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyRenderStateRowId {
     pub bits: [u64; 2usize],
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyRenderStateRowId"][::std::mem::size_of::<GhosttyRenderStateRowId>() - 16usize];
+    ["Alignment of GhosttyRenderStateRowId"][::std::mem::align_of::<GhosttyRenderStateRowId>() - 8usize];
+    ["Offset of field: GhosttyRenderStateRowId::bits"][::std::mem::offset_of!(GhosttyRenderStateRowId, bits) - 0usize];
+};
 pub const GHOSTTY_RENDER_STATE_DATA_INVALID: GhosttyRenderStateData = 0;
 pub const GHOSTTY_RENDER_STATE_DATA_COLS: GhosttyRenderStateData = 1;
 pub const GHOSTTY_RENDER_STATE_DATA_ROWS: GhosttyRenderStateData = 2;
@@ -1804,6 +2537,17 @@ pub struct GhosttyRenderStateRowSelection {
     pub start_x: u16,
     pub end_x: u16,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyRenderStateRowSelection"][::std::mem::size_of::<GhosttyRenderStateRowSelection>() - 16usize];
+    ["Alignment of GhosttyRenderStateRowSelection"][::std::mem::align_of::<GhosttyRenderStateRowSelection>() - 8usize];
+    ["Offset of field: GhosttyRenderStateRowSelection::size"]
+        [::std::mem::offset_of!(GhosttyRenderStateRowSelection, size) - 0usize];
+    ["Offset of field: GhosttyRenderStateRowSelection::start_x"]
+        [::std::mem::offset_of!(GhosttyRenderStateRowSelection, start_x) - 8usize];
+    ["Offset of field: GhosttyRenderStateRowSelection::end_x"]
+        [::std::mem::offset_of!(GhosttyRenderStateRowSelection, end_x) - 10usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyRenderStateCursor {
@@ -1817,6 +2561,29 @@ pub struct GhosttyRenderStateCursor {
     pub password_input: bool,
     pub visual_style: GhosttyRenderStateCursorVisualStyle,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyRenderStateCursor"][::std::mem::size_of::<GhosttyRenderStateCursor>() - 24usize];
+    ["Alignment of GhosttyRenderStateCursor"][::std::mem::align_of::<GhosttyRenderStateCursor>() - 8usize];
+    ["Offset of field: GhosttyRenderStateCursor::size"]
+        [::std::mem::offset_of!(GhosttyRenderStateCursor, size) - 0usize];
+    ["Offset of field: GhosttyRenderStateCursor::viewport_has_value"]
+        [::std::mem::offset_of!(GhosttyRenderStateCursor, viewport_has_value) - 8usize];
+    ["Offset of field: GhosttyRenderStateCursor::viewport_x"]
+        [::std::mem::offset_of!(GhosttyRenderStateCursor, viewport_x) - 10usize];
+    ["Offset of field: GhosttyRenderStateCursor::viewport_y"]
+        [::std::mem::offset_of!(GhosttyRenderStateCursor, viewport_y) - 12usize];
+    ["Offset of field: GhosttyRenderStateCursor::wide_tail"]
+        [::std::mem::offset_of!(GhosttyRenderStateCursor, wide_tail) - 14usize];
+    ["Offset of field: GhosttyRenderStateCursor::visible"]
+        [::std::mem::offset_of!(GhosttyRenderStateCursor, visible) - 15usize];
+    ["Offset of field: GhosttyRenderStateCursor::blinking"]
+        [::std::mem::offset_of!(GhosttyRenderStateCursor, blinking) - 16usize];
+    ["Offset of field: GhosttyRenderStateCursor::password_input"]
+        [::std::mem::offset_of!(GhosttyRenderStateCursor, password_input) - 17usize];
+    ["Offset of field: GhosttyRenderStateCursor::visual_style"]
+        [::std::mem::offset_of!(GhosttyRenderStateCursor, visual_style) - 20usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyRenderStateColors {
@@ -1827,6 +2594,23 @@ pub struct GhosttyRenderStateColors {
     pub cursor_has_value: bool,
     pub palette: [GhosttyColorRgb; 256usize],
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyRenderStateColors"][::std::mem::size_of::<GhosttyRenderStateColors>() - 792usize];
+    ["Alignment of GhosttyRenderStateColors"][::std::mem::align_of::<GhosttyRenderStateColors>() - 8usize];
+    ["Offset of field: GhosttyRenderStateColors::size"]
+        [::std::mem::offset_of!(GhosttyRenderStateColors, size) - 0usize];
+    ["Offset of field: GhosttyRenderStateColors::background"]
+        [::std::mem::offset_of!(GhosttyRenderStateColors, background) - 8usize];
+    ["Offset of field: GhosttyRenderStateColors::foreground"]
+        [::std::mem::offset_of!(GhosttyRenderStateColors, foreground) - 11usize];
+    ["Offset of field: GhosttyRenderStateColors::cursor"]
+        [::std::mem::offset_of!(GhosttyRenderStateColors, cursor) - 14usize];
+    ["Offset of field: GhosttyRenderStateColors::cursor_has_value"]
+        [::std::mem::offset_of!(GhosttyRenderStateColors, cursor_has_value) - 17usize];
+    ["Offset of field: GhosttyRenderStateColors::palette"]
+        [::std::mem::offset_of!(GhosttyRenderStateColors, palette) - 18usize];
+};
 unsafe extern "C" {
     pub fn ghostty_render_state_new(
         allocator: *const GhosttyAllocator,
@@ -1989,6 +2773,15 @@ pub struct GhosttySysImage {
     pub data: *mut u8,
     pub data_len: usize,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttySysImage"][::std::mem::size_of::<GhosttySysImage>() - 24usize];
+    ["Alignment of GhosttySysImage"][::std::mem::align_of::<GhosttySysImage>() - 8usize];
+    ["Offset of field: GhosttySysImage::width"][::std::mem::offset_of!(GhosttySysImage, width) - 0usize];
+    ["Offset of field: GhosttySysImage::height"][::std::mem::offset_of!(GhosttySysImage, height) - 4usize];
+    ["Offset of field: GhosttySysImage::data"][::std::mem::offset_of!(GhosttySysImage, data) - 8usize];
+    ["Offset of field: GhosttySysImage::data_len"][::std::mem::offset_of!(GhosttySysImage, data_len) - 16usize];
+};
 pub const GHOSTTY_SYS_LOG_LEVEL_ERROR: GhosttySysLogLevel = 0;
 pub const GHOSTTY_SYS_LOG_LEVEL_WARNING: GhosttySysLogLevel = 1;
 pub const GHOSTTY_SYS_LOG_LEVEL_INFO: GhosttySysLogLevel = 2;
@@ -2356,6 +3149,13 @@ pub struct GhosttyMousePosition {
     pub x: f32,
     pub y: f32,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyMousePosition"][::std::mem::size_of::<GhosttyMousePosition>() - 8usize];
+    ["Alignment of GhosttyMousePosition"][::std::mem::align_of::<GhosttyMousePosition>() - 4usize];
+    ["Offset of field: GhosttyMousePosition::x"][::std::mem::offset_of!(GhosttyMousePosition, x) - 0usize];
+    ["Offset of field: GhosttyMousePosition::y"][::std::mem::offset_of!(GhosttyMousePosition, y) - 4usize];
+};
 unsafe extern "C" {
     pub fn ghostty_mouse_event_new(allocator: *const GhosttyAllocator, event: *mut GhosttyMouseEvent) -> GhosttyResult;
 }
@@ -2422,6 +3222,28 @@ pub struct GhosttyMouseEncoderSize {
     pub padding_right: u32,
     pub padding_left: u32,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyMouseEncoderSize"][::std::mem::size_of::<GhosttyMouseEncoderSize>() - 40usize];
+    ["Alignment of GhosttyMouseEncoderSize"][::std::mem::align_of::<GhosttyMouseEncoderSize>() - 8usize];
+    ["Offset of field: GhosttyMouseEncoderSize::size"][::std::mem::offset_of!(GhosttyMouseEncoderSize, size) - 0usize];
+    ["Offset of field: GhosttyMouseEncoderSize::screen_width"]
+        [::std::mem::offset_of!(GhosttyMouseEncoderSize, screen_width) - 8usize];
+    ["Offset of field: GhosttyMouseEncoderSize::screen_height"]
+        [::std::mem::offset_of!(GhosttyMouseEncoderSize, screen_height) - 12usize];
+    ["Offset of field: GhosttyMouseEncoderSize::cell_width"]
+        [::std::mem::offset_of!(GhosttyMouseEncoderSize, cell_width) - 16usize];
+    ["Offset of field: GhosttyMouseEncoderSize::cell_height"]
+        [::std::mem::offset_of!(GhosttyMouseEncoderSize, cell_height) - 20usize];
+    ["Offset of field: GhosttyMouseEncoderSize::padding_top"]
+        [::std::mem::offset_of!(GhosttyMouseEncoderSize, padding_top) - 24usize];
+    ["Offset of field: GhosttyMouseEncoderSize::padding_bottom"]
+        [::std::mem::offset_of!(GhosttyMouseEncoderSize, padding_bottom) - 28usize];
+    ["Offset of field: GhosttyMouseEncoderSize::padding_right"]
+        [::std::mem::offset_of!(GhosttyMouseEncoderSize, padding_right) - 32usize];
+    ["Offset of field: GhosttyMouseEncoderSize::padding_left"]
+        [::std::mem::offset_of!(GhosttyMouseEncoderSize, padding_left) - 36usize];
+};
 pub const GHOSTTY_MOUSE_ENCODER_OPT_EVENT: GhosttyMouseEncoderOption = 0;
 pub const GHOSTTY_MOUSE_ENCODER_OPT_FORMAT: GhosttyMouseEncoderOption = 1;
 pub const GHOSTTY_MOUSE_ENCODER_OPT_SIZE: GhosttyMouseEncoderOption = 2;
@@ -2511,6 +3333,18 @@ pub struct GhosttyPaste {
     pub reader: GhosttyMimeReader,
     pub allow_unsafe: bool,
 }
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyPaste"][::std::mem::size_of::<GhosttyPaste>() - 56usize];
+    ["Alignment of GhosttyPaste"][::std::mem::align_of::<GhosttyPaste>() - 8usize];
+    ["Offset of field: GhosttyPaste::size"][::std::mem::offset_of!(GhosttyPaste, size) - 0usize];
+    ["Offset of field: GhosttyPaste::location"][::std::mem::offset_of!(GhosttyPaste, location) - 8usize];
+    ["Offset of field: GhosttyPaste::source"][::std::mem::offset_of!(GhosttyPaste, source) - 12usize];
+    ["Offset of field: GhosttyPaste::mimes"][::std::mem::offset_of!(GhosttyPaste, mimes) - 16usize];
+    ["Offset of field: GhosttyPaste::mimes_len"][::std::mem::offset_of!(GhosttyPaste, mimes_len) - 24usize];
+    ["Offset of field: GhosttyPaste::reader"][::std::mem::offset_of!(GhosttyPaste, reader) - 32usize];
+    ["Offset of field: GhosttyPaste::allow_unsafe"][::std::mem::offset_of!(GhosttyPaste, allow_unsafe) - 48usize];
+};
 unsafe extern "C" {
     pub fn ghostty_terminal_paste(
         terminal: GhosttyTerminal,
@@ -2594,6 +3428,98 @@ unsafe extern "C" {
         search: GhosttySearch,
         count: usize,
         keys: *const GhosttySearchData,
+        values: *mut *mut ::std::os::raw::c_void,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
+}
+pub const GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_CONTINUATION_BYTES: GhosttySnapshotDecoderOption = 0;
+pub const GHOSTTY_SNAPSHOT_DECODER_OPT_RETAIN_CONTINUATION: GhosttySnapshotDecoderOption = 1;
+pub const GHOSTTY_SNAPSHOT_DECODER_OPT_COMPRESS_HISTORY: GhosttySnapshotDecoderOption = 2;
+pub const GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_VALUE: GhosttySnapshotDecoderOption = 2147483647;
+pub type GhosttySnapshotDecoderOption = ::std::os::raw::c_int;
+pub const GHOSTTY_SNAPSHOT_DECODER_DATA_INVALID: GhosttySnapshotDecoderData = 0;
+pub const GHOSTTY_SNAPSHOT_DECODER_DATA_MAX_CONTINUATION_BYTES: GhosttySnapshotDecoderData = 1;
+pub const GHOSTTY_SNAPSHOT_DECODER_DATA_SOURCE_OFFSET: GhosttySnapshotDecoderData = 2;
+pub const GHOSTTY_SNAPSHOT_DECODER_DATA_HISTORY_ROWS_PRIMARY: GhosttySnapshotDecoderData = 3;
+pub const GHOSTTY_SNAPSHOT_DECODER_DATA_HISTORY_ROWS_ALTERNATE: GhosttySnapshotDecoderData = 4;
+pub const GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_SCREEN: GhosttySnapshotDecoderData = 5;
+pub const GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_ROWS: GhosttySnapshotDecoderData = 6;
+pub const GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_REMAINING: GhosttySnapshotDecoderData = 7;
+pub const GHOSTTY_SNAPSHOT_DECODER_DATA_RETAIN_CONTINUATION: GhosttySnapshotDecoderData = 8;
+pub const GHOSTTY_SNAPSHOT_DECODER_DATA_COMPRESS_HISTORY: GhosttySnapshotDecoderData = 9;
+pub const GHOSTTY_SNAPSHOT_DECODER_DATA_MAX_VALUE: GhosttySnapshotDecoderData = 2147483647;
+pub type GhosttySnapshotDecoderData = ::std::os::raw::c_int;
+unsafe extern "C" {
+    pub fn ghostty_snapshot_encode(terminal: GhosttyTerminal, writer: GhosttyWriter) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_snapshot_encode_buf(
+        terminal: GhosttyTerminal,
+        buf: *mut u8,
+        buf_len: usize,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_snapshot_encode_alloc(
+        terminal: GhosttyTerminal,
+        allocator: *const GhosttyAllocator,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_snapshot_decoder_new(
+        allocator: *const GhosttyAllocator,
+        decoder: *mut GhosttySnapshotDecoder,
+        reader: GhosttyReader,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_snapshot_decoder_new_buf(
+        allocator: *const GhosttyAllocator,
+        decoder: *mut GhosttySnapshotDecoder,
+        ptr: *const u8,
+        len: usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_snapshot_decoder_free(decoder: GhosttySnapshotDecoder);
+}
+unsafe extern "C" {
+    pub fn ghostty_snapshot_decoder_set(
+        decoder: GhosttySnapshotDecoder,
+        option: GhosttySnapshotDecoderOption,
+        value: *const ::std::os::raw::c_void,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_snapshot_decoder_ready(
+        decoder: GhosttySnapshotDecoder,
+        terminal: *mut GhosttyTerminal,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_snapshot_decoder_next(decoder: GhosttySnapshotDecoder) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_snapshot_decoder_decode(
+        decoder: GhosttySnapshotDecoder,
+        terminal: *mut GhosttyTerminal,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_snapshot_decoder_get(
+        decoder: GhosttySnapshotDecoder,
+        data: GhosttySnapshotDecoderData,
+        out: *mut ::std::os::raw::c_void,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_snapshot_decoder_get_multi(
+        decoder: GhosttySnapshotDecoder,
+        count: usize,
+        keys: *const GhosttySnapshotDecoderData,
         values: *mut *mut ::std::os::raw::c_void,
         out_written: *mut usize,
     ) -> GhosttyResult;

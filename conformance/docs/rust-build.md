@@ -208,12 +208,13 @@ The Rust build is the GPUI one since the switch (the GPUI plan's Task 34), which
 is `agterm-gpui`'s `agterm`, and `rust-passing.txt` holds it (the GPUI build's own ratchet, kept beside the GTK one
 until the switch, was folded into it).
 
-Build. Cargo never runs zig: the native inputs come first, each into its vendored prefix (README > Native
-dependencies): `scripts/build-ghostty-vt.sh` (the static libghostty-vt and Ghostty's resources at
-`LIBGHOSTTY_VT_REV`), `scripts/fetch-fonts.sh` (the fonts the terminal embeds) and `scripts/build-zmx.sh` (zmx, for
-`live-sessions` and `live-any-shell`). `run-rust-linux.sh` then builds the release workspace without what links WPE
-WebKit and `agterm-gpui` with its default `html` feature, so the staged app shows HTML overlays and needs a WPE WebKit
-(README > WPE WebKit; the CI's is Arch's `wpewebkit`). `--stage DIR` runs a tree staged elsewhere instead.
+Build. The native inputs come first, each into its vendored prefix (README > Native dependencies):
+`scripts/build-ghostty-vt.sh` (the patched libghostty-vt source, which `agterm-ghostty-vt-sys`'s build script builds
+with Zig, offline, and Ghostty's resources at `LIBGHOSTTY_VT_REV`), `scripts/fetch-fonts.sh` (the fonts the terminal
+embeds) and `scripts/build-zmx.sh` (zmx, for `live-sessions` and `live-any-shell`). `run-rust-linux.sh` then builds
+the release workspace without what links WPE WebKit and `agterm-gpui` with its default `html` feature, so the staged
+app shows HTML overlays and needs a WPE WebKit (README > WPE WebKit; the CI's is Arch's `wpewebkit`). `--stage DIR`
+runs a tree staged elsewhere instead.
 
 Staging. `scripts/stage.sh` assembles the tree the harness launches, `target/conformance-stage` by default:
 `bin/agterm`, `bin/agtermctl` (the harness takes it from beside `--bin`) and `bin/zmx` with `share/agterm/zmx-BUILD`

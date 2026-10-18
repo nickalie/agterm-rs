@@ -99,13 +99,13 @@ a host without AppArmor, or one that does not restrict user namespaces, the scri
 
 ## Native dependencies
 
-libghostty-vt (with Ghostty's resources) and zmx are built outside cargo, each into its own vendored prefix
+The native dependencies are fetched, prepared or built outside cargo, each into its own vendored prefix
 `${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/<name>-<key>/`. The key hashes the build's pins in `build/pins.env` and
 its patches in `build/patches/`, so a complete prefix is reused as is and a pin of one build never rebuilds another.
 
 ```sh
-scripts/build-ghostty-vt.sh    # the pinned, patched static libghostty-vt (Ghostty's vt C API), and Ghostty's themes,
-                               # shell integration and terminfo at the same pin
+scripts/build-ghostty-vt.sh    # the pinned, patched libghostty-vt source (Ghostty's vt C API) with its Zig packages,
+                               # and Ghostty's themes, shell integration and terminfo at the same pin
 scripts/build-zmx.sh           # the pinned, patched zmx behind Live sessions
 scripts/fetch-wpe.sh           # the pinned WPE WebKit binary package, only where the system has none (below)
 scripts/fetch-fonts.sh         # the fonts Ghostty embeds, which the GPUI frontend embeds too (below)
@@ -130,13 +130,18 @@ libdisplay-info it needs as subprojects) into the vendored prefix; `run-rust-lin
 the weston on PATH has no `--fake-seat`, and the process tests take the first weston on PATH that has it (put the
 prefix's `bin/` first, as CI does).
 
-Each script also takes `--print-prefix` and `--verify`. Cargo never runs zig: `agterm-ghostty-vt-sys` fails with "run
-scripts/build-ghostty-vt.sh" when the prefix is missing, `agterm-gpui` with "run scripts/fetch-fonts.sh".
+Each script also takes `--print-prefix` and `--verify`. No cargo build reaches the network: `agterm-ghostty-vt-sys`'s
+build script runs `zig build -Demit-lib-vt` over the libghostty-vt prefix's tree for cargo's target (as herdr's does),
+with the pinned zig the prefix's stamp names, installing and caching under its `OUT_DIR` and sharing Zig's global
+cache in the vendor root (`zig-cache-<version>`), and fails with "run scripts/build-ghostty-vt.sh" when the prefix is
+missing; `agterm-gpui` fails with "run scripts/fetch-fonts.sh". A fresh `OUT_DIR` (a new target dir or profile) builds
+the library again, a few minutes.
 `LIBGHOSTTY_VT_*` is the one Ghostty pin (the source archive's sha256 and the theme package's included): it follows
 ghostty main, not upstream agterm's `GHOSTTY_REV`, whose vt API lacks what the app needs. libghostty-vt is linked
 statically; staging takes the prefix's `share/` (the resources) only. `.cargo/config.toml` makes `scripts/pkg-config.sh`
 the pkg-config of every cargo build (it picks the WPE WebKit, below).
-`scripts/gen-ghostty-vt-bindings.sh` regenerates the bindings of `agterm-ghostty-vt-sys` after a `LIBGHOSTTY_VT_REV`
+`scripts/gen-ghostty-vt-bindings.sh` regenerates the bindings of `agterm-ghostty-vt-sys` (with bindgen's layout
+assertions; `--check` compares a regeneration with the checked-in file) after a `LIBGHOSTTY_VT_REV`
 or ghostty-vt patch change, `scripts/gen-ghostty-config-keys.sh` agterm-core's ghostty config key table after a
 `LIBGHOSTTY_VT_REV` bump, `scripts/gen-wpe-bindings.sh` the gir crates `agterm-wpe-sys`, `agterm-wpe-platform-sys` and
 `agterm-wpe-javascriptcore-sys` after a `WPE_*` or `GIR_*` bump.
@@ -241,7 +246,8 @@ GDK_BACKEND=x11 xvfb-run -a dbus-run-session cargo test --workspace
 conformance/tools/run-rust-linux.sh [--ratchet-only] [--stage DIR] [-- PYTEST_ARGS...]
 ```
 
-A change to the WPE or gir pins also runs `scripts/gen-wpe-bindings.sh --check`, as the `wpe` CI job does.
+A change to the WPE or gir pins also runs `scripts/gen-wpe-bindings.sh --check`, as the `wpe` CI job does; one to
+the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh --check` (it needs `bindgen-cli`).
 
 - The app's window tests need a display and a session bus; under `xvfb-run` and `dbus-run-session` they get their
   own and never touch the desktop's. The process tests (`crates/agterm-gpui/tests`) start their own private weston,

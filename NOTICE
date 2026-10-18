@@ -77,8 +77,9 @@ herdr
 https://github.com/herdrdev/herdr
 
 `agterm-session`'s live-session server (its server lifecycle, wire framing, local endpoint, client transport, PTY
-actor, update handoff and per-OS process code) is taken from herdr at the commit `build/pins.env` pins as
-`HERDR_REV`, then trimmed to what agterm uses and reworked. herdr's files carry no license header and herdr ships no
+actor, update handoff and per-OS process code) and `agterm-ghostty-vt-sys`'s Zig build of libghostty-vt
+(`zig_build.rs`) are taken from herdr at the commit `build/pins.env` pins as `HERDR_REV`, then trimmed to what agterm
+uses and reworked. herdr's files carry no license header and herdr ships no
 NOTICE file, so each derived file states in its header the herdr source file it was taken from, that it is licensed
 under the Apache License 2.0, and that it was modified. herdr's license follows.
 

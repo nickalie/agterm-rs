@@ -565,21 +565,21 @@ Order after Task 7, as two lanes that meet:
   src/bindings.rs}`, `crates/agterm-ghostty-vt-sys/tests/*`, `.github/workflows/rust-linux.yml`, `scripts/stage.sh`
   and `scripts/lint-report.sh` (if they read the library), the upstream-sync skill's pins-delta (if it names it)
 
-- [ ] the script stops building the library: it prepares the patched tree, prefetches the Zig packages into the
+- [x] the script stops building the library: it prepares the patched tree, prefetches the Zig packages into the
       prefix, copies `include/`, stages the resources and writes an input stamp, as Technical Details says;
       `--print-prefix` unchanged
-- [ ] `build.rs` ported from herdr's (cited): target map, `zig build -Demit-lib-vt` with Linux's glibc floor,
+- [x] `build.rs` ported from herdr's (cited): target map, `zig build -Demit-lib-vt` with Linux's glibc floor,
       `-Dcpu=baseline`, ReleaseFast and SIMD, `--prefix` and `--cache-dir` under `OUT_DIR`, the global cache in the
       vendor root, the package cache from the prefix, the static link; the zig binary from `find_zig`'s pin (via the
       prefix stamp), never an unpinned one; a missing prefix keeps today's error naming the script;
       `DEP_GHOSTTY_VT_ROOT` dropped
-- [ ] `gen-ghostty-vt-bindings.sh` drops `--no-layout-tests`, also emits `snapshot.h`, and the bindings are
+- [x] `gen-ghostty-vt-bindings.sh` drops `--no-layout-tests`, also emits `snapshot.h`, and the bindings are
       regenerated through it (its `--check` holds)
-- [ ] every reader of the old prefix follows (`stage.sh`, the lint report, `rust-linux.yml`'s cache and steps)
-- [ ] tests: the link test; a changed patch or pin rebuilds; a missing prefix fails with the named error; a build with
+- [x] every reader of the old prefix follows (`stage.sh`, the lint report, `rust-linux.yml`'s cache and steps)
+- [x] tests: the link test; a changed patch or pin rebuilds; a missing prefix fails with the named error; a build with
       networking off succeeds once the prefix exists; the path and argument builder puts prefix and cache dirs under
       `OUT_DIR` per target (a unit test of the pure function)
-- [ ] run gates and the full conformance run in the background (staging changes): ratchet green
+- [x] run gates and the full conformance run in the background (staging changes): ratchet green
 
 ### Task 9: The recorded Ghostty patches
 
