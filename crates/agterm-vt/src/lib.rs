@@ -12,6 +12,10 @@
 //! `NOTICE`. From the copy on, the code is agterm's: a Ghostty pin move is a change of its own, and a later rustty
 //! commit is a hint, not an update.
 //!
+//! The Unicode tables (`unicode::generated`) are generated sources: the `gen-unicode` binary (feature `gen`, run by
+//! `scripts/gen-vt-unicode.sh`) writes them from the UCD that the pinned uucode ships, porting uucode's rules (MIT)
+//! and Ghostty's table generators; its `--check` holds them to that UCD.
+//!
 //! What is kept is what libghostty-vt has at the pin and agterm reaches. rustty's snapshot codec, tmux viewer, APC
 //! glyph protocol, idle page compression, `StringMap` (Oniguruma), DECRQCRA checksums, C ABI, font, inspector and
 //! event loop are not here, and the branches that reached them are gone from the kept modules. Identity is
@@ -79,3 +83,18 @@ mod options;
     expect(dead_code, reason = "used by the terminal modules, not ported yet")
 )]
 mod os;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the terminal modules, not ported yet")
+)]
+mod simd;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the terminal modules, not ported yet")
+)]
+mod terminal;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the terminal modules, not ported yet")
+)]
+mod unicode;

@@ -47,6 +47,10 @@ jobs:
         run: cargo clippy --locked $PACKAGES --all-targets --all-features -- -D warnings
       - name: test
         run: cargo test --locked $PACKAGES --all-features
+      # agterm-vt's Unicode tables are what its generator writes from the pinned uucode's UCD (fetched and checked by
+      # sha256), on every OS
+      - name: Unicode tables (gen-vt-unicode.sh --check)
+        run: scripts/gen-vt-unicode.sh --check
 
   # agterm-vt's memory core under Miri (mem: offsets, the bitmap allocator, the ref-counted set, the page hash map,
   # fallible allocation and the test allocators; datastruct: the insertion-ordered map, Wyhash; os::page_allocator),
