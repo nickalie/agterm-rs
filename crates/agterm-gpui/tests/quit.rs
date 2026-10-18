@@ -320,8 +320,66 @@ fn wait_gone(pids: &[u32]) -> TestResult {
                 format!("{pid} {}", name.trim())
             })
             .collect();
-        format!("{err}: still running {left:?}").into()
+        let stuck: Vec<u32> = pids.iter().copied().filter(|pid| running(*pid)).collect();
+        format!("{err}: still running {left:?}\n{}", stuck_report(&stuck)).into()
     })
+}
+
+/// What holds processes `pids` up: each one's state, parent, wait channel, threads and descriptors, then the unix
+/// sockets they hold (`ss -xp`) with whoever holds each one's peer.
+fn stuck_report(pids: &[u32]) -> String {
+    let read = |path: String| std::fs::read_to_string(path).unwrap_or_default();
+    let mut report = String::new();
+    for pid in pids {
+        let status: Vec<String> = read(format!("/proc/{pid}/status"))
+            .lines()
+            .filter(|line| ["State:", "PPid:", "Threads:"].iter().any(|key| line.starts_with(key)))
+            .map(str::to_owned)
+            .collect();
+        let threads: Vec<String> = std::fs::read_dir(format!("/proc/{pid}/task"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|task| {
+                let path = task.path();
+                let name = std::fs::read_to_string(path.join("comm")).unwrap_or_default();
+                let wchan = std::fs::read_to_string(path.join("wchan")).unwrap_or_default();
+                format!("{}:{}", name.trim(), wchan.trim())
+            })
+            .collect();
+        let fds: Vec<String> = std::fs::read_dir(format!("/proc/{pid}/fd"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|fd| {
+                let target = std::fs::read_link(fd.path()).ok()?;
+                Some(format!("{}={}", fd.file_name().to_string_lossy(), target.display()))
+            })
+            .collect();
+        let _ = writeln!(report, "{pid}: {status:?} threads {threads:?} fds {fds:?}");
+    }
+    let sockets = Command::new("ss")
+        .args(["-xpaH"])
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or_default();
+    let fields = |line: &str| line.split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+    let theirs: Vec<&str> = sockets
+        .lines()
+        .filter(|line| pids.iter().any(|pid| line.contains(&format!("pid={pid},"))))
+        .collect();
+    let peers: Vec<String> = theirs.iter().filter_map(|line| fields(line).get(7).cloned()).collect();
+    let holders: Vec<&str> = sockets
+        .lines()
+        .filter(|line| fields(line).get(5).is_some_and(|inode| peers.contains(inode)))
+        .collect();
+    let _ = writeln!(
+        report,
+        "their sockets:\n{}\ntheir peers:\n{}",
+        theirs.join("\n"),
+        holders.join("\n")
+    );
+    report
 }
 
 #[test]
