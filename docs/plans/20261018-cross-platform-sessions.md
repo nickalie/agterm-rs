@@ -549,12 +549,12 @@ Order after Task 7, as two lanes that meet:
   (`RUSTTY_*`, `UUCODE_*`), `NOTICE` (rustty, uucode, X.Org `rgb.txt`), `README.md`, `.gitattributes` if it names the
   crate's files
 
-- [ ] delete the crate, its generators and their pins, CI steps and NOTICE entries; keep herdr's NOTICE entry and
+- [x] delete the crate, its generators and their pins, CI steps and NOTICE entries; keep herdr's NOTICE entry and
       everything Part B uses (`.gitattributes`, the Windows `cfg` pairs, `cross-platform.yml`'s other crates)
-- [ ] remove the paused plan and its note from this branch (both stay on `rust-vt-port`); this plan's Overview names
+- [x] remove the paused plan and its note from this branch (both stay on `rust-vt-port`); this plan's Overview names
       where they are
-- [ ] `git grep` finds no `agterm-vt`, generator or pin outside this plan and historical records (the spike notes)
-- [ ] run gates; push a `ci/` branch and get `cross-platform.yml` green (the Miri job removed with its reason)
+- [x] `git grep` finds no `agterm-vt`, generator or pin outside this plan and historical records (the spike notes)
+- [x] run gates; push a `ci/` branch and get `cross-platform.yml` green (the Miri job removed with its reason)
 
 ### Task 8: Build libghostty-vt from the sys crate's build script (Linux, behavior unchanged)
 
