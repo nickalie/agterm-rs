@@ -79,3 +79,18 @@ mod options;
     expect(dead_code, reason = "used by the terminal modules, not ported yet")
 )]
 mod os;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the terminal modules, not ported yet")
+)]
+mod simd;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the terminal modules, not ported yet")
+)]
+mod terminal;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the terminal modules, not ported yet")
+)]
+mod unicode;

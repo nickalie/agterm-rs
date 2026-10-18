@@ -1173,12 +1173,35 @@ probes' sources in `docs/spikes/20261018-session-server-probes.md`). Paths below
 - Create: `crates/agterm-vt/src/unicode/**`, `crates/agterm-vt/src/simd/**`,
   `crates/agterm-vt/src/terminal/utf8_decoder.rs` (rustty-vt's `utf8_decoder`)
 
-- [ ] port the props, grapheme-break, case-folding and symbol lookups with rustty's tables, as rustty dumped them
-      (`12752b2ac`). Task 6 regenerates them at the pin
-- [ ] port the UTF-8 decoder and the scalar forms of rustty-simd that the stream uses (ESC search, codepoint width,
-      base64)
-- [ ] port their tests, including the FNV checksum test
-- [ ] run gates - must pass before task 6
+- [x] port the props, grapheme-break, case-folding and symbol lookups with rustty's tables, as rustty dumped them
+      (`12752b2ac`). Task 6 regenerates them at the pin (`unicode/{lut,props,props_table,symbols_table,grapheme,
+      case_folding}.rs` and `unicode/generated/*`: the values rustty's, token for token, under headers naming their
+      inputs, so Task 6's byte-for-byte reproduction holds its output to these files as they are; the lookups are
+      safe Rust: rustty's two unchecked stage reads are checked reads, with a test holding the generator invariant;
+      a code point is a `u32` masked to `u21`; nothing is public, `main.zig`'s re-exports are module paths)
+- ➕ moved to Task 6 with the generator: `lut.zig`'s `Generator` and `writeZig` (with rustty's `write_zig` test),
+      `Properties.eql`/`format`, the `props_uucode`/`symbols_uucode` generator mains (their out-of-range rule and
+      spot checks run on the tables here), and `grapheme.zig`'s debug sweep `main`
+- [x] port the UTF-8 decoder and the scalar forms of rustty-simd that the stream uses (ESC search, codepoint width,
+      base64) (`terminal/utf8_decoder.rs`, `simd/{index_of,vt,codepoint_width,base64,base64_scalar}.rs` and
+      `lanes`/`native_vector_bits`. "Scalar forms" means no SIMD library: where the two Ghostty lanes differ on a path
+      the terminal reaches, the port behaves as the lane libghostty-vt ships (SIMD, the default). That is base64's
+      non-strict `maxLen`/`decode` (Kitty graphics payloads): simdutf's forgiving base64 (whitespace skipped,
+      padding validated, a one-character remainder refused, loose tail bits) written around Ghostty's scalar
+      decoder, where the scalar lane rejects whitespace and accepts any trailing `=` run; codex-agreed, transcript
+      `~/.local/state/plan-exec-revmux/zig-free-core/discussions/task-5-base64-lane/transcript.md`. Held to simdutf
+      9.0.0 from Ghostty's `pkg/simdutf` at the pin by 53 recorded cases and, locally, a 200,000-input random corpus
+      (all agree, in place too). `base64_scalar` also holds Zig 0.16's `std.base64.standard` and `standard_no_pad`
+      decoders, the ones `program_status` (OSC 7501) decodes with (Task 1 > Verdicts moved them here from the cut
+      glyph code): one type with Ghostty's copy, which only skips Zig's tail-bits check; Zig's decoder tests ported,
+      and a local 200,000-input corpus run against Zig 0.16 itself agreed. The scalar lane's `log.warn` has no
+      counterpart, so `log_capture` stays Task 8's. The UTF-8 decode and the byte search answer alike on both lanes;
+      `simd.codepointWidth` is the scalar lane's uucode width and has no terminal caller)
+- [x] port their tests, including the FNV checksum test (the checksums also pin the `Properties` stage and the case
+      folding list; `vt.zig`'s SIMD-against-scalar differential holds the scalar lane to the standard library's
+      lossy decode, which substitutes maximal subparts too; no `unsafe` in these modules, so the Miri filter stays
+      the memory core's)
+- [x] run gates - must pass before task 6
 
 ### Task 6: Unicode table generator in Rust (uucode port)
 
