@@ -56,6 +56,10 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// How long one probe waits for a busy endpoint (every Windows pipe instance taken).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// The least a probe waits to connect or for a welcome, however close its deadline: a zero wait would mean no
+/// timeout at all to a Unix socket's receive timeout, and the pipe's default one to Windows' `WaitNamedPipe`.
+const MIN_PROBE_WAIT: Duration = Duration::from_millis(10);
+
 /// The prefixes of the variables a server's environment drops: the attach contract's and the session variables of
 /// whatever live session the launcher runs in, which mean nothing to the server and must not reach its sessions.
 const STRIPPED_PREFIXES: [&str; 2] = ["AGTERM_", "ZMX_"];
@@ -176,7 +180,9 @@ pub enum StartError {
 }
 
 /// Connects to the server of `endpoint`'s namespace with `hello`, starting one when none answers, and waits up to
-/// the options' timeout for it.
+/// the options' timeout for it. Each probe's connect and handshake are cut to the time left before the deadline (but
+/// never under 10 ms), so a server that accepts and stays silent ends the wait at the deadline; on Windows a handshake
+/// cut short also waits for its pending read to be cancelled, at once in practice and for 1 s at most.
 ///
 /// # Errors
 ///
@@ -186,7 +192,7 @@ pub fn connect_or_start(endpoint: &Endpoint, hello: &Hello, options: &StartOptio
     let mut spawned: Vec<Started> = Vec::new();
     let mut child: Option<Spawned> = None;
     loop {
-        let last = match probe(endpoint, hello) {
+        let last = match probe(endpoint, hello, deadline) {
             Probe::Ready(stream, welcome) => {
                 return ready(endpoint, stream, *welcome, child, spawned);
             }
@@ -226,7 +232,7 @@ pub fn connect_or_start(endpoint: &Endpoint, hello: &Hello, options: &StartOptio
 /// # Errors
 ///
 /// As [`connect_or_start`], but never a start's error; [`StartError::NotReady`] when the server stays busy (stopping,
-/// or every pipe instance taken) past `timeout`.
+/// silent, or every pipe instance taken) past `timeout`, which bounds the wait as [`connect_or_start`]'s does.
 pub fn connect_existing(
     endpoint: &Endpoint,
     hello: &Hello,
@@ -234,7 +240,7 @@ pub fn connect_existing(
 ) -> Result<Option<Connected>, StartError> {
     let deadline = Instant::now() + timeout;
     loop {
-        match probe(endpoint, hello) {
+        match probe(endpoint, hello, deadline) {
             Probe::Ready(stream, welcome) => {
                 return Ok(Some(Connected {
                     stream,
@@ -325,9 +331,9 @@ enum Probe {
     Failed(Box<StartError>),
 }
 
-/// Connects and exchanges the hello.
-fn probe(endpoint: &Endpoint, hello: &Hello) -> Probe {
-    let stream = match endpoint.connect_timeout(CONNECT_TIMEOUT) {
+/// Connects and exchanges the hello, each step cut to the time left before `deadline` ([`probe_wait`]).
+fn probe(endpoint: &Endpoint, hello: &Hello, deadline: Instant) -> Probe {
+    let stream = match endpoint.connect_timeout(probe_wait(deadline, CONNECT_TIMEOUT)) {
         Ok(stream) => stream,
         Err(error) if is_absent(&error) => return Probe::Absent(error.to_string()),
         Err(error) if is_busy(&error) => return Probe::Busy(error.to_string()),
@@ -338,7 +344,7 @@ fn probe(endpoint: &Endpoint, hello: &Hello) -> Probe {
             }));
         }
     };
-    match handshake(stream, hello) {
+    match handshake(stream, hello, probe_wait(deadline, HANDSHAKE_TIMEOUT)) {
         Ok((stream, welcome)) => match welcome.error.clone() {
             None => Probe::Ready(stream, Box::new(welcome)),
             Some(error) => Probe::Failed(Box::new(StartError::Refused {
@@ -355,15 +361,21 @@ fn probe(endpoint: &Endpoint, hello: &Hello) -> Probe {
     }
 }
 
-/// Sends `hello` and reads the welcome, giving up on a peer silent for [`HANDSHAKE_TIMEOUT`] (a hung server, or
-/// another process holding the endpoint) with an I/O error a stopping server's also gives ([`is_stopping`]): on Unix
-/// by the socket's receive timeout, on Windows, whose pipes take none, by cancelling the exchange
-/// (`windows::exchange_within`).
-fn handshake(stream: Stream, hello: &Hello) -> Result<(Stream, Welcome), FramingError> {
+/// How long a probe's step waits: the time left before `deadline`, at most `cap` and at least [`MIN_PROBE_WAIT`].
+fn probe_wait(deadline: Instant, cap: Duration) -> Duration {
+    deadline
+        .saturating_duration_since(Instant::now())
+        .clamp(MIN_PROBE_WAIT, cap)
+}
+
+/// Sends `hello` and reads the welcome, giving up on a peer silent for `timeout` (a hung server, or another process
+/// holding the endpoint) with an I/O error a stopping server's also gives ([`is_stopping`]): on Unix by the socket's
+/// receive timeout, on Windows, whose pipes take none, by cancelling the exchange (`windows::exchange_within`).
+fn handshake(stream: Stream, hello: &Hello, timeout: Duration) -> Result<(Stream, Welcome), FramingError> {
     #[cfg(unix)]
     {
         let mut stream = stream;
-        super::set_recv_timeout(&stream, Some(HANDSHAKE_TIMEOUT));
+        super::set_recv_timeout(&stream, Some(timeout));
         let welcome = exchange_hello(&mut stream, hello)?;
         super::set_recv_timeout(&stream, None);
         Ok((stream, welcome))
@@ -371,7 +383,7 @@ fn handshake(stream: Stream, hello: &Hello) -> Result<(Stream, Welcome), Framing
     #[cfg(windows)]
     {
         let hello = hello.clone();
-        sys::exchange_within(stream, HANDSHAKE_TIMEOUT, move |stream| exchange_hello(stream, &hello))
+        sys::exchange_within(stream, timeout, move |stream| exchange_hello(stream, &hello))
     }
 }
 
@@ -761,6 +773,18 @@ mod tests {
             io::ErrorKind::WouldBlock
         ))));
         assert!(!is_stopping(&FramingError::BadMagic(*b"HTTP")));
+    }
+
+    #[test]
+    fn a_probe_waits_the_time_left_within_its_bounds() {
+        let now = Instant::now();
+        assert_eq!(probe_wait(now, CONNECT_TIMEOUT), MIN_PROBE_WAIT);
+        let past = now.checked_sub(Duration::from_secs(1)).unwrap();
+        assert_eq!(probe_wait(past, CONNECT_TIMEOUT), MIN_PROBE_WAIT);
+        let far = now + Duration::from_secs(60);
+        assert_eq!(probe_wait(far, HANDSHAKE_TIMEOUT), HANDSHAKE_TIMEOUT);
+        let left = probe_wait(now + Duration::from_millis(500), HANDSHAKE_TIMEOUT);
+        assert!(left > MIN_PROBE_WAIT && left <= Duration::from_millis(500), "{left:?}");
     }
 
     #[test]

@@ -461,23 +461,32 @@ fn a_server_that_never_answers_ends_the_wait_at_the_deadline() {
     });
     let endpoint = namespace.endpoint.clone();
     let (send, waited) = mpsc::channel();
+    let timeout = Duration::from_secs(1);
     thread::spawn(move || {
-        let timeout = Duration::from_secs(1);
+        let begun = Instant::now();
         let found = connect_existing(&endpoint, &hello(Role::Control), timeout).map(|found| found.is_some());
+        let found_after = begun.elapsed();
         let options = StartOptions {
             timeout,
             ..StartOptions::new(EXE)
         };
+        let begun = Instant::now();
         let started = connect_or_start(&endpoint, &hello(Role::Control), &options).map(|connected| connected.spawned);
-        let _ = send.send((found, started));
+        let _ = send.send((found, found_after, started, begun.elapsed()));
     });
-    // each wait ends after one handshake's timeout at most
-    let (found, started) = waited
+    let (found, found_after, started, started_after) = waited
         .recv_timeout(HANDSHAKE_TIMEOUT * 2 + EXIT_SLACK)
         .expect("the waits did not end");
     assert!(matches!(found, Err(StartError::NotReady { .. })), "{found:?}");
     // a busy endpoint is not a missing server: nothing was started
     assert!(matches!(started, Err(StartError::NotReady { .. })), "{started:?}");
+    // each wait runs to its deadline and no further: the handshake is cut to the time left, not given its own timeout
+    for waited in [found_after, started_after] {
+        assert!(
+            waited >= timeout && waited < HANDSHAKE_TIMEOUT,
+            "waited {waited:?} for a {timeout:?} timeout"
+        );
+    }
 }
 
 /// The descriptor check, in a child of its own: no other test's descriptors can be inherited there.
