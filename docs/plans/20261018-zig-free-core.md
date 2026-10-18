@@ -1213,16 +1213,54 @@ probes' sources in `docs/spikes/20261018-session-server-probes.md`). Paths below
 - Modify: `build/pins.env` (uucode and UCD pins with sha256s), `NOTICE` (uucode), `.github/workflows/cross-platform.yml`
   (`--check`), `crates/agterm-vt/src/unicode/generated/*`
 
-- [ ] check the uucode version, `uucode_config.zig` and UCD at `LIBGHOSTTY_VT_REV` against what rustty dumped
-      (uucode 0.2.0 @ `9d555245`, `12752b2ac`), and record the differences here
-- [ ] port uucode's UCD parsing and derivations and Ghostty's `uucode_config.zig` that the tables need, with uucode's
-      MIT attribution
-- [ ] `scripts/gen-vt-unicode.sh [--check]`; its pinned inputs are fetched and checked by sha256 into the vendor root
-- [ ] test that, run at rustty's inputs, the generator reproduces rustty's tables byte for byte
-- [ ] regenerate at the pin's inputs. Update the checksum test, and add tests for the code points whose properties
-      changed
-- [ ] add a test that `--check` fails on a changed table, and add `--check` to CI
-- [ ] run gates - must pass before task 7
+- [x] check the uucode version, `uucode_config.zig` and UCD at `LIBGHOSTTY_VT_REV` against what rustty dumped
+      (uucode 0.2.0 @ `9d555245`, `12752b2ac`), and record the differences here (none: `build.zig.zon` at the pin
+      names uucode 0.2.0 @ `9d55524551411b493cca41ca06363625d90aff1e`, hash
+      `uucode-0.2.0-ZZjBPuuFVgC8YZ8eld4fOKsZANLIhTFMzULQxhkLi1C7`, the pin rustty's oracle harness builds with;
+      `src/build/uucode_config.zig` at the pin is byte-identical to the copy that harness took at `12752b2ac`
+      (sha256 `6f8f2458…`, last changed in `7644e6d62`); `src/unicode` last changed in `12542b392` ("deps: Update
+      uucode for Unicode 18"), and both are ancestors of `12752b2ac`; the UCD is the `ucd/` uucode ships at that
+      commit, 18.0.0 (`CaseFolding.txt` sha256 `a0047976…`, the one Task 5's header named). So rustty's inputs and
+      the pin's are the same inputs)
+- [x] port uucode's UCD parsing and derivations and Ghostty's `uucode_config.zig` that the tables need, with uucode's
+      MIT attribution (`src/bin/gen-unicode/main.rs` with `ucd`, `derive`, `grapheme`, `lut`, `write`; a directory
+      bin, since the modules need one; the library's `unicode/props.rs` is compiled into it through `#[path]`, so the
+      generator writes the very types the library reads. uucode at `UUCODE_REV`: `parseCp`, `parseRange`, `trim`, the
+      `UnicodeData`, `CaseFolding`, `DerivedCoreProperties`, `EastAsianWidth`, `GraphemeBreak`, `EmojiData`,
+      `EmojiVs`, `Blocks`, `GraphemeBreakDerived`, `GraphemeBreakNoControlComponent`, `Wcwidth` and
+      `CaseFoldingFull` components, `BreakState` and `computeGraphemeBreakNoControl`; its `inlineAssert`s and
+      `unreachable`s are errors naming the file and line or code point. Ghostty at the pin: `WidthComponent` and
+      `IsSymbolComponent`, the `props_uucode`/`symbols_uucode` generator contexts with their out-of-range rules,
+      `lut.zig`'s `Generator`, `grapheme.zig`'s `Precompute`. The items Task 5 moved here: `writeZig` has no
+      counterpart (a Rust writer lays the tables out as rustfmt does, and rustty's `write_zig` test stages are its
+      test), `Properties.eql` is the derived equality and `format` the writer's struct literals, and `grapheme.zig`'s
+      debug sweep `main` is replaced by uucode's `GraphemeBreakTest.txt` tests, which every run checks against the
+      shipped precompute (1069 pairs at 18.0.0). Blocks keeps only the eight symbol blocks, so an unknown block name
+      is not refused. uucode's MIT text and the UCD's Unicode License V3 are in `NOTICE`)
+- [x] `scripts/gen-vt-unicode.sh [--check]`; its pinned inputs are fetched and checked by sha256 into the vendor root
+      (`UUCODE_REPO`, `UUCODE_REV`, `UUCODE_SHA256` for the source archive, `UUCODE_UCD_VERSION` and
+      `UUCODE_UCD_SHA256`, the sha256 of the nine UCD files' `<sha256>  <path>` lines, which pins the UCD apart from
+      the archive's packaging; the prefix is `uucode-<key>` over the `UUCODE_` pins. The UCD is uucode's bundled copy,
+      which is what Ghostty builds from, not unicode.org's `UCD.zip`. The script runs
+      `cargo run --release -p agterm-vt --features gen --bin gen-unicode`, with a Windows path under Git Bash)
+- [x] test that, run at rustty's inputs, the generator reproduces rustty's tables byte for byte (the run reproduced
+      Task 5's four files with every value token for token; only their `//!` headers changed, to name the generator
+      and its inputs. What holds it from then on: `--check` in CI compares the four files whole, the FNV checksums
+      in `generated/mod.rs` (rustty's three among them) pin the values, and
+      `grapheme::tests::the_precompute_is_the_shipped_table` compares the precompute, which needs no UCD, with the
+      shipped bytes)
+- [x] regenerate at the pin's inputs. Update the checksum test, and add tests for the code points whose properties
+      changed (the pin's inputs are rustty's, so the regeneration is that same run: no value changed, the checksums
+      stand, and no code point changed)
+- [x] add a test that `--check` fails on a changed table, and add `--check` to CI (`tests/gen_unicode.rs`, on a small
+      UCD of its own: a changed and a missing table fail `--check` with exit 1 naming them, another UCD version
+      exits 2; unit tests hold the comparison, CRLF line endings compare equal. CI: the step
+      `Unicode tables (gen-vt-unicode.sh --check)` of `cross-platform.yml`'s `crates` job; CI run 39127415088 green
+      on ubuntu-26.04, macos-26, windows-2025 and miri, the check `current` on all three)
+- [x] run gates - must pass before task 7 (all green in one run each: fmt, metadata --locked, tracing features,
+      vendor checks, clippy on the workspace with all features and on the GPUI app without its default features, lint
+      report, `cargo test --workspace` headless (4344 passed, 0 failed, no reruns), `cargo test -p agterm-vt
+      --all-features`, selftests (833 passed); conformance not run: `cargo tree -i agterm-vt` lists no dependents)
 
 ### Task 7: Terminfo entry and its generated source
 
