@@ -25,11 +25,11 @@ use super::tree::{RemoteCommandResult, RemoteCommandRunner};
 use crate::Core;
 use crate::command_restore::shell_quoted_line;
 use crate::commands::hud::Placement;
+use crate::live::lead::LeadAttachment;
 use crate::model::{
     AskStyle, EndedAsk, OverlayPane, OverlayProgram, PendingAsk, RemoteConnection, Session, StatusPane, WindowEvent,
 };
 use crate::pane_env::uuid_string;
-use crate::zmx::lead::LeadAttachment;
 
 /// How long a reconnect probe may take (upstream's `reconnectProbeDeadline`).
 const PROBE_DEADLINE: Duration = Duration::from_secs(10);
@@ -750,10 +750,10 @@ impl Core {
         let Ok(pane) = Uuid::parse_str(token) else {
             return false;
         };
-        if self.zmx.leads.nonce(pane) != Some(notice.nonce.as_str()) {
+        if self.live.leads.nonce(pane) != Some(notice.nonce.as_str()) {
             return false;
         }
-        let cover = self.zmx.leads.role(pane).is_some() || self.zmx.leads.reattaching(pane);
+        let cover = self.live.leads.role(pane).is_some() || self.live.leads.reattaching(pane);
         let library = self.library();
         let Some(found) = library.held_session(session) else {
             return false;
@@ -885,7 +885,7 @@ impl Core {
         };
         // kept until the frontend reports the replacement installed or dropped, as a live pane's reattach
         self.begin_replacement_lead(&token, pane, lead, cover);
-        self.request_pane_replacement(crate::commands::zmx::PaneReplacement {
+        self.request_pane_replacement(crate::commands::live::PaneReplacement {
             session,
             token,
             command,

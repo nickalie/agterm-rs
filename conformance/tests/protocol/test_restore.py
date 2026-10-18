@@ -77,19 +77,21 @@ def test_seeded_live_mode_is_requested_at_launch(launch, adapter):
     if adapter.has("live-sessions") or adapter.has("live-any-shell"):
         assert status["active"] == "live"
         assert_absent(status, "unavailableReason")
-        _node_when(live, session["id"], backedByZmx=True)
+        _node_when(live, session["id"], **{live.vocabulary.backed_key: True})
     else:
         # A host that cannot run Live falls back to plain shells and says why.
         assert status["active"] == "none"
         assert isinstance(status["unavailableReason"], str) and status["unavailableReason"]
-        assert _node_when(live, session["id"], backedByZmx=False)["surfaces"][0]["backedByZmx"] is False
+        backed = live.vocabulary.backed_key
+        assert _node_when(live, session["id"], **{backed: False})["surfaces"][0][backed] is False
 
 
 @pytest.mark.covers("field:tree.session.backedByZmx")
 def test_panes_are_not_zmx_backed_outside_live_mode(ctl):
     sid = _new(ctl)
-    node = _node_when(ctl, sid, backedByZmx=False)
-    assert [surface["backedByZmx"] for surface in node["surfaces"]] == [False]
+    backed = ctl.vocabulary.backed_key
+    node = _node_when(ctl, sid, **{backed: False})
+    assert [surface[backed] for surface in node["surfaces"]] == [False]
     assert_absent(node, "liveAttribution")
     assert_ok(ctl.request("session.close", sid))
 

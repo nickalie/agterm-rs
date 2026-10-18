@@ -201,8 +201,8 @@ mod tests {
     use agterm_host::fakes::FakeSurface;
 
     use super::*;
+    use crate::live::daemon_name;
     use crate::model::{NewSession, RemoteBinding};
-    use crate::zmx::daemon_name;
 
     struct Attached {
         store: AppStore,

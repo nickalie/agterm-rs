@@ -6,12 +6,12 @@
 //! - the runtime (here): what the frontend installed, the launch reap's findings, the pane finalizer that ends a
 //!   removed pane's daemon, and the requests a command leaves for the frontend (a pane replaced in place, a quit);
 //! - [`claims`]: every pane expecting a daemon, open, pending-close, closed and unindexed windows alike;
-//! - [`inventory`]: `zmx.list`, `zmx.prune`, `zmx.kill`, `zmx.screen`;
+//! - [`inventory`]: `live.list`, `live.prune`, `live.kill`, `live.screen`;
 //! - [`lead`]: the lead book fed by the panes' role reports, the covered panes' reads and typing through the daemon,
 //!   `session.lead` and the reattach;
 //! - [`launch`]: a pane's launch disposition and the live seed, the leader cache behind a live pane's foreground, and
 //!   the launch reap;
-//! - [`live_reset`]: `zmx.reset`, its marker at quit and its consumption at the next launch.
+//! - [`live_reset`]: `live.reset`, its marker at quit and its consumption at the next launch.
 
 mod claims;
 mod inventory;
@@ -26,8 +26,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use agterm_host::SessionHost;
-use agterm_proto::command::ZmxCmd;
-use agterm_proto::{Command, ControlZmxEndpoint};
+use agterm_proto::command::LiveCmd;
+use agterm_proto::{Command, ControlLiveEndpoint};
 use uuid::Uuid;
 
 pub(crate) use self::inventory::{control_inventory, dispatch};
@@ -36,22 +36,22 @@ pub(crate) use self::lead::{LeadBook, PaneSource};
 pub use self::live_reset::{LiveQuit, ResetPrompt, ResetRefusal};
 use crate::Core;
 use crate::error::ControlError;
-use crate::zmx::daemon_name;
-use crate::zmx::lead::{LeadAttachment, LeadState};
-use crate::zmx::reset::{MarkerStore, Outcome, Selection};
-use crate::zmx::support::Inputs;
+use crate::live::daemon_name;
+use crate::live::lead::{LeadAttachment, LeadState};
+use crate::live::reset::{MarkerStore, Outcome, Selection};
+use crate::live::support::Inputs;
 
 /// What the frontend hands the core once, before the first terminal: the daemons' host and what a wrap runs with.
 pub struct LiveInstall {
     pub host: Arc<dyn SessionHost>,
-    /// The zmx and the namespace every invocation runs in.
-    pub endpoint: ControlZmxEndpoint,
+    /// The session host executable and the namespace every invocation runs in.
+    pub endpoint: ControlLiveEndpoint,
     /// The wrap inputs every pane's configuration extends (the pane identity, base environment and lead are filled
-    /// per pane); the zmx executable, the login shell and the integration are checked again per pane.
+    /// per pane); the session host executable, the login shell and the integration are checked again per pane.
     pub wrap: Inputs,
     /// The state directory the reset marker lives in.
     pub state_dir: PathBuf,
-    /// The launch's zmx build cutoff (`ZmxBuildRecord`), whole seconds since the epoch.
+    /// The launch's session host build cutoff (upstream's `ZmxBuildRecord`), whole seconds since the epoch.
     pub outdated_before: Option<u64>,
 }
 
@@ -82,18 +82,18 @@ pub struct PaneReplacement {
 
 /// The installed live-session host and what the core keeps about its daemons.
 #[derive(Default)]
-pub(crate) struct ZmxRuntime {
+pub(crate) struct LiveRuntime {
     host: Option<Arc<dyn SessionHost>>,
-    endpoint: Option<ControlZmxEndpoint>,
+    endpoint: Option<ControlLiveEndpoint>,
     wrap: Option<Inputs>,
     markers: Option<MarkerStore>,
-    /// The launch's zmx build cutoff.
+    /// The launch's session host build cutoff.
     pub(crate) outdated_before: Option<u64>,
     /// The daemon names the launch reap saw alive, a pacing hint only; `None` when the listing failed.
     pub(crate) running_names: Option<BTreeSet<String>>,
     /// Panes whose reset could not be confirmed at this launch: they attach with no replay and no durable command.
     pub(crate) suppressed: HashSet<Uuid>,
-    /// Each pane's lead as its zmx reports it.
+    /// Each pane's lead as its session host reports it.
     pub(crate) leads: LeadBook,
     /// The daemons' leader pids behind the live panes' foreground reads.
     pub(crate) leaders: RefCell<launch::LeaderCache>,
@@ -112,9 +112,9 @@ pub(crate) struct ZmxRuntime {
     quit: Option<LiveQuit>,
 }
 
-impl fmt::Debug for ZmxRuntime {
+impl fmt::Debug for LiveRuntime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ZmxRuntime")
+        f.debug_struct("LiveRuntime")
             .field("endpoint", &self.endpoint)
             .field("running_names", &self.running_names)
             .field("replacements", &self.replacements)
@@ -122,43 +122,43 @@ impl fmt::Debug for ZmxRuntime {
     }
 }
 
-impl ZmxRuntime {
-    /// The installed host; `None` when this instance has no zmx.
+impl LiveRuntime {
+    /// The installed host; `None` when this instance has no session host.
     pub(crate) fn host(&self) -> Option<&Arc<dyn SessionHost>> {
         self.host.as_ref()
     }
 
-    /// The installed host, or the refusal every zmx command gives without one.
+    /// The installed host, or the refusal every `live.*` command gives without one.
     fn require_host(&self) -> Result<Arc<dyn SessionHost>, ControlError> {
         self.host.clone().ok_or_else(|| ControlError::rejected(UNAVAILABLE))
     }
 }
 
-/// The refusal of a zmx command in an instance without zmx (upstream's `ControlZmxError.unavailable`).
-pub(crate) const UNAVAILABLE: &str = "zmx is unavailable in this instance";
+/// The refusal of a `live.*` command in an instance without a session host (upstream's `ControlZmxError.unavailable`).
+pub(crate) const UNAVAILABLE: &str = "live sessions are unavailable in this instance";
 
 impl Core {
     /// Installs the live-session host and the wrap inputs, before the first terminal (upstream's `restoredRuntime`).
     pub fn install_live_sessions(&mut self, install: LiveInstall) {
-        self.zmx.markers = Some(MarkerStore::new(&install.state_dir));
-        self.zmx.host = Some(install.host);
-        self.zmx.endpoint = Some(install.endpoint);
-        self.zmx.wrap = Some(install.wrap);
-        self.zmx.outdated_before = install.outdated_before;
+        self.live.markers = Some(MarkerStore::new(&install.state_dir));
+        self.live.host = Some(install.host);
+        self.live.endpoint = Some(install.endpoint);
+        self.live.wrap = Some(install.wrap);
+        self.live.outdated_before = install.outdated_before;
     }
 
     /// The pane terminals commands asked to replace since the last take, in order.
     pub fn take_pane_replacements(&mut self) -> Vec<PaneReplacement> {
-        std::mem::take(&mut self.zmx.replacements)
+        std::mem::take(&mut self.live.replacements)
     }
 
     /// The quit a command asked for, once: the frontend quits after the command's reply went out.
     pub fn take_live_quit(&mut self) -> Option<LiveQuit> {
-        self.zmx.quit.take()
+        self.live.quit.take()
     }
 
     pub(crate) fn request_pane_replacement(&mut self, replacement: PaneReplacement) {
-        self.zmx.replacements.push(replacement);
+        self.live.replacements.push(replacement);
     }
 
     /// Starts the attachment a replacement of the pane carrying `token` runs with, keeping what it replaces until the
@@ -170,16 +170,16 @@ impl Core {
         attachment: LeadAttachment,
         reattaching: bool,
     ) {
-        let previous = self.zmx.leads.snapshot(identity);
-        self.zmx.superseded.entry(token.to_owned()).or_insert(previous);
-        self.zmx.leads.begin(identity, attachment, reattaching);
+        let previous = self.live.leads.snapshot(identity);
+        self.live.superseded.entry(token.to_owned()).or_insert(previous);
+        self.live.leads.begin(identity, attachment, reattaching);
     }
 
     /// The frontend installed `replacement`'s terminal, claiming the replaced one's exit itself: a restart's claim on
     /// the pane token ends here, so the new terminal's own exit closes the pane (upstream claims per surface).
     pub fn pane_replaced(&mut self, replacement: &PaneReplacement) {
-        self.zmx.superseded.remove(&replacement.token);
-        self.zmx.claimed_exits.remove(&replacement.token);
+        self.live.superseded.remove(&replacement.token);
+        self.live.claimed_exits.remove(&replacement.token);
     }
 
     /// The frontend could not install `replacement`'s terminal (no page holds the pane): the pane keeps the lead state
@@ -187,12 +187,12 @@ impl Core {
     /// `closeEndedPane`. Whether the model changed; commit afterwards.
     pub fn replacement_dropped(&mut self, replacement: &PaneReplacement) -> bool {
         if let (Some(previous), Ok(identity)) = (
-            self.zmx.superseded.remove(&replacement.token),
+            self.live.superseded.remove(&replacement.token),
             Uuid::parse_str(&replacement.token),
         ) {
-            self.zmx.leads.restore(identity, previous);
+            self.live.leads.restore(identity, previous);
         }
-        if !self.zmx.claimed_exits.remove(&replacement.token) {
+        if !self.live.claimed_exits.remove(&replacement.token) {
             return false;
         }
         if let Ok(identity) = Uuid::parse_str(&replacement.token) {
@@ -202,7 +202,7 @@ impl Core {
     }
 
     pub(crate) fn request_live_quit(&mut self, quit: LiveQuit) {
-        self.zmx.quit = Some(quit);
+        self.live.quit = Some(quit);
     }
 
     /// Ends the daemons of pane identities the model removed for good (upstream's `paneFinalizer`), with their lead
@@ -212,15 +212,15 @@ impl Core {
             return;
         }
         for pane in &panes {
-            self.zmx.leads.forget(*pane);
+            self.live.leads.forget(*pane);
         }
         let names: Vec<String> = panes
             .into_iter()
-            .filter(|pane| !self.zmx.already_finalized.remove(pane))
+            .filter(|pane| !self.live.already_finalized.remove(pane))
             .map(daemon_name)
             .collect();
-        self.zmx.leaders.borrow_mut().note_lifecycle_change();
-        let Some(host) = self.zmx.host.clone() else {
+        self.live.leaders.borrow_mut().note_lifecycle_change();
+        let Some(host) = self.live.host.clone() else {
             return;
         };
         if !names.is_empty() && !host.kill_batch(&names) {
@@ -233,25 +233,25 @@ impl Core {
 
     /// Marks `pane` as finalized by the caller, which destroyed its daemon already.
     pub(crate) fn note_already_finalized(&mut self, pane: Uuid) {
-        self.zmx.already_finalized.insert(pane);
+        self.live.already_finalized.insert(pane);
     }
 }
 
-/// The commands of the zmx group this build answers at once; `zmx.tree` starts through `deferred`, and `zmx.attach`
-/// comes with the viewer side of remote sessions.
-pub(crate) fn answers(cmd: ZmxCmd) -> bool {
+/// The commands of the `live.*` group this build answers at once; `live.tree` starts through `deferred`, and
+/// `live.attach` comes with the viewer side of remote sessions.
+pub(crate) fn answers(cmd: LiveCmd) -> bool {
     matches!(
         cmd,
-        ZmxCmd::List | ZmxCmd::Prune | ZmxCmd::Kill | ZmxCmd::Screen | ZmxCmd::Reset | ZmxCmd::Present
+        LiveCmd::List | LiveCmd::Prune | LiveCmd::Kill | LiveCmd::Screen | LiveCmd::Reset | LiveCmd::Present
     )
 }
 
-/// The refusal of a zmx command this build does not answer yet.
-pub(crate) fn not_yet(cmd: ZmxCmd) -> ControlError {
-    ControlError::NotSupported(Command::Zmx(cmd))
+/// The refusal of a `live.*` command this build does not answer yet.
+pub(crate) fn not_yet(cmd: LiveCmd) -> ControlError {
+    ControlError::NotSupported(Command::Live(cmd))
 }
 
-/// The selection a confirmed reset holds and the outcome the launch left, for the tree and `zmx list`.
+/// The selection a confirmed reset holds and the outcome the launch left, for the tree and `live.list`.
 pub(crate) fn readback(pending: Option<&Selection>, last: Option<&Outcome>) -> Option<serde_json::Value> {
     if pending.is_none() && last.is_none() {
         return None;

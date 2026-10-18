@@ -22,6 +22,7 @@ from agterm_conformance.match import assert_ok
 if TYPE_CHECKING:
     from agterm_conformance.drivers.base import Driver
     from agterm_conformance.impls.base import Adapter, Instance
+    from agterm_conformance.vocabulary import Vocabulary
 
 IMPLS = ("swift-macos", "swift-linux", "rust")
 # A rust run without a binary is legal: the adapter reports nothing and every test skips.
@@ -590,6 +591,11 @@ class Ctl:
     def __init__(self, instance: Instance) -> None:
         self.instance = instance
 
+    @property
+    def vocabulary(self) -> Vocabulary:
+        """The instance's names for upstream's `zmx` group, which a test translates every such name through."""
+        return self.instance.vocabulary
+
     def request(self, cmd: str, target: str | None = None, **args: Any) -> Response:
         return self.instance.request(cmd, target, **args)
 
@@ -664,6 +670,11 @@ class Cli:
 
     def on(self, instance: Instance) -> Cli:
         return Cli(self.ctl_path, instance)
+
+    @property
+    def vocabulary(self) -> Vocabulary:
+        """The instance's names for upstream's `agtermctl zmx` group and its texts."""
+        return self.instance.vocabulary
 
     def __call__(self, *args: str, input: str | None = None, timeout: float = CLI_TIMEOUT) -> CliResult:
         return self._run(self.argv(*args), self.instance.env, input, timeout)

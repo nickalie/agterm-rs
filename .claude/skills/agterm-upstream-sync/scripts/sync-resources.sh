@@ -9,6 +9,11 @@
 # is left out whole, saved under --patches DIR (default: a temp dir, printed), and reported as `conflict` for a plan
 # task to merge by hand. --check applies nothing.
 #
+# A copy listed in PATCHED is instead upstream's NEW tree with the repository's own patches reapplied in order (the
+# bundled skill's `live` names, build/patches/skill-agterm), so it carries nothing else: a patch that no longer
+# applies is a `conflict` naming it, to be refreshed by hand. `--check TAG TAG` (the pinned tag twice) verifies that
+# such a copy still equals the pinned upstream tree plus its patches: `unchanged` when it does, `would-apply` when not.
+#
 # Output, one line per copy: `<status> <upstream path> -> <copy>` with status unchanged | applied | would-apply |
 # already-applied | conflict; then `unmapped` for every agterm/Resources entry or LICENSE change no mapping covers.
 set -euo pipefail
@@ -42,11 +47,57 @@ MAPPINGS=(
   ".|LICENSE|resources/LICENSE.upstream"
 )
 
+# the repository's copy | its patch directory: the copy is upstream's NEW tree plus these patches, in name order
+PATCHED=(
+  "resources/skills/agterm|build/patches/skill-agterm"
+)
+
+# The patch directory of `copy` when PATCHED lists it; nothing otherwise.
+patch_dir() {
+  local entry
+  for entry in "${PATCHED[@]}"; do
+    [[ "${entry%%|*}" == "$1" ]] && { echo "${entry#*|}"; return; }
+  done
+  return 0
+}
+
+# Rebuilds `copy` as upstream NEW's `source` tree plus the patches in `dir`, or reports why it cannot.
+sync_patched() {
+  local source="$1" copy="$2" dir="$3" work tree patch
+  work="$(mktemp -d "${TMPDIR:-/tmp}/agterm-sync-patched.XXXXXX")"
+  git -C "$upstream" archive "$new" -- "$source" | tar -x -C "$work"
+  tree="$work/$source"
+  for patch in "$root/$dir"/*.patch; do
+    # outside any repository (the ceiling stops the search above the tree), `git apply` patches the tree's own files,
+    # wherever TMPDIR lies
+    if ! (cd "$tree" && export GIT_CEILING_DIRECTORIES="$work" &&
+      git apply --check "$patch" 2>"$work/why" && git apply "$patch"); then
+      echo "conflict $source -> $copy (patch: $patch no longer applies to $new, why: $(head -n 1 "$work/why"))"
+      rm -rf "$work"
+      return
+    fi
+  done
+  if diff -r -q "$tree" "$root/$copy" >/dev/null 2>&1; then
+    echo "unchanged $source -> $copy (upstream $new plus $dir)"
+  elif [[ "$check" == 1 ]]; then
+    echo "would-apply $source -> $copy (upstream $new plus $dir)"
+  else
+    rm -rf "${root:?}/$copy"
+    cp -a "$tree" "$root/$copy"
+    echo "applied $source -> $copy (upstream $new plus $dir)"
+  fi
+  rm -rf "$work"
+}
+
 cd "$root"
 for mapping in "${MAPPINGS[@]}"; do
   IFS='|' read -r source spec copy <<<"$mapping"
   name="$(tr '/' '_' <<<"$copy")"
   patch="$patches/$name.patch"
+  if [[ -n "$(patch_dir "$copy")" ]]; then
+    sync_patched "$source" "$copy" "$(patch_dir "$copy")"
+    continue
+  fi
   if [[ "$copy" == resources/LICENSE.upstream ]]; then
     # a single renamed file: compare contents instead of applying a diff
     if git -C "$upstream" diff --quiet "$old" "$new" -- LICENSE; then

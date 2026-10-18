@@ -87,7 +87,7 @@ fn reset_live_sessions_sits_between_settings_and_quit_only_while_live_runs() {
         "outside Live"
     );
     let dir = tempfile::tempdir().unwrap();
-    let core = crate::zmx_runtime::tests::live_core(dir.path());
+    let core = crate::live_runtime::tests::live_core(dir.path());
     let window = core.library().active_window_id().unwrap();
     let menu = AppMenu::of(&core, window);
     let app: Vec<&str> = menu.app.iter().map(|item| item.title.as_str()).collect();

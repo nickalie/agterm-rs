@@ -21,7 +21,15 @@ def expected_table() -> list[str]:
     ]
 
 
+def _section(title: str) -> list[str]:
+    """The lines of rust-build.md's `## <title>` section, up to the next section; other sections hold tables too."""
+    lines = RUST_BUILD.read_text().splitlines()
+    start = lines.index(f"## {title}") + 1
+    end = next((index for index in range(start, len(lines)) if lines[index].startswith("## ")), len(lines))
+    return lines[start:end]
+
+
 def test_capability_table_matches_the_vocabulary() -> None:
-    documented = [line for line in RUST_BUILD.read_text().splitlines() if line.startswith("| `")]
+    documented = [line for line in _section("Capability vocabulary") if line.startswith("| `")]
     expected = expected_table()
     assert documented == expected, "rust-build.md capability table drifted; expected rows:\n" + "\n".join(expected)

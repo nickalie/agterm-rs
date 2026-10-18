@@ -11,8 +11,8 @@ use std::collections::{BTreeSet, HashSet};
 use uuid::Uuid;
 
 use crate::command_restore::{RestoreInputs, restore_plan, shell_quoted_line, should_restore};
+use crate::live::support::{Configuration, attach_command, settled};
 use crate::model::{Session, StatusPane, WindowLibrary};
-use crate::zmx::support::{Configuration, attach_command, settled};
 
 /// What a pane spawns with: the exec `command`, the `initial_input` typed into a login shell, and whether a command's
 /// exit holds on the "press any key" prompt (upstream's `LaunchSeed`). `command` and `initial_input` exclude each
@@ -24,7 +24,7 @@ pub struct LaunchSeed {
     pub wait_after_command: bool,
     /// Variables the terminal runs with on top of the pane's own environment: a wrapped pane's zmx configuration.
     pub env: Vec<(String, String)>,
-    /// The pane attaches to its live-session daemon (upstream's `backedByZmx`), fixed at spawn as its disposition is.
+    /// The pane attaches to its live-session daemon (upstream's `backedByLive`), fixed at spawn as its disposition is.
     pub live: bool,
 }
 

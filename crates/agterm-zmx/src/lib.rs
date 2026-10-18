@@ -1,6 +1,6 @@
 //! agterm's live-session host over the patched zmx (`scripts/build-zmx.sh`): the [`agterm_host::SessionHost`] the
 //! frontend hands the core. The decisions (daemon names, the socket namespace, the wrap configuration, the list
-//! parser, reap, prune and reset policies, the lead protocol) are host-free and live in [`agterm_core::zmx`]; this
+//! parser, reap, prune and reset policies, the lead protocol) are host-free and live in [`agterm_core::live`]; this
 //! crate reads the host and runs the binary.
 //!
 //! - [`launch`]: what a live launch reads of this host, and the wrap configuration of a pane over it;

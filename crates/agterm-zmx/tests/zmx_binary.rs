@@ -7,7 +7,7 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use agterm_core::zmx::daemon_name;
+use agterm_core::live::daemon_name;
 use agterm_host::{KillOutcome, SessionHost};
 use agterm_zmx::ZmxClient;
 use uuid::Uuid;

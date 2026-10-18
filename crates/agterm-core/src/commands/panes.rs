@@ -39,7 +39,7 @@ impl Core {
     /// or torn down meanwhile) changes nothing. Whether it changed anything; commit afterwards when it did.
     pub fn pane_exited(&mut self, session: Uuid, token: &str) -> bool {
         // a restart ended this shell on purpose and rebuilds the pane
-        if self.zmx.claimed_exits.contains(token) {
+        if self.live.claimed_exits.contains(token) {
             return false;
         }
         let Some(store) = self.library_mut().store_for_session_mut(session) else {
@@ -98,7 +98,7 @@ impl Core {
     pub fn report_pane(&mut self, session: Uuid, token: &str, report: &PaneReport) -> bool {
         // a live pane's zmx reports its lead as a title under a reserved prefix, never shown as one
         if let PaneReport::Title(title) = report
-            && let Some(notice) = crate::zmx::lead::LeadNotice::parse(title)
+            && let Some(notice) = crate::live::lead::LeadNotice::parse(title)
         {
             return self.lead_reported(session, token, &notice);
         }
@@ -254,7 +254,7 @@ fn lead(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let Ok(identity) = Uuid::parse_str(&token) else {
         return Err(not_realized());
     };
-    let leads = &core.zmx.leads;
+    let leads = &core.live.leads;
     let covered = leads.covered(identity);
     if leads.role(identity).is_none() && !covered {
         return Err(ControlError::rejected("pane has no lead to take"));

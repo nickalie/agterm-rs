@@ -9,7 +9,7 @@
 //!   the login shell with its `initial_input` typed in.
 //! - **Environment**, later steps winning: the app's own; `GHOSTTY_LOG` and `VTE_VERSION` removed; the terminal
 //!   identity ([`Host`]); `GHOSTTY_SHELL_FEATURES`; the shell integration of a zsh, bash or fish command line
-//!   ([`agterm_core::zmx::shell_integration::setup`], as `shell-integration` asks); the config's `env`; the launch's
+//!   ([`agterm_core::live::shell_integration::setup`], as `shell-integration` asks); the config's `env`; the launch's
 //!   own variables; `PWD` for a working directory.
 //! - **Config** (`Surface.zig` and `termio/Exec.zig`, the embedder's options winning as `apprt/embedded.zig` lets
 //!   them): the launch's working directory, else (none, or not a directory) `working-directory`'s; the launch's initial input, else `input`'s;
@@ -33,9 +33,9 @@ use std::time::Duration;
 use agterm_core::ghostty_config::{
     GhosttyConfig, InputSource, ShellIntegration, ShellIntegrationFeatures, WorkingDirectory,
 };
+use agterm_core::live::shell_integration::{self, Inherited, LoginShell};
 use agterm_core::paths::{Env, ProcessEnv};
 use agterm_core::restore::spawn_plan::LaunchSeed;
-use agterm_core::zmx::shell_integration::{self, Inherited, LoginShell};
 
 use crate::exit::ExitPolicy;
 use crate::{Pane, PaneCommand, PaneConfig, PaneError};

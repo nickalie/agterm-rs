@@ -59,7 +59,7 @@ pub struct ControlTree {
     /// The serving app, the same value `version` reports.
     #[serde(default)]
     pub app: Option<AppIdentity>,
-    /// The live-sessions reset state (`zmx.reset`'s read-back), app-wide.
+    /// The live-sessions reset state (`live.reset`'s read-back), app-wide.
     #[serde(default)]
     pub live_reset: Option<Value>,
     /// True while the last `windows.json` write failed.
@@ -110,7 +110,7 @@ pub struct ControlSessionNode {
     #[serde(default)]
     pub has_split: Option<bool>,
     #[serde(default)]
-    pub backed_by_zmx: Option<bool>,
+    pub backed_by_live: Option<bool>,
     #[serde(default)]
     pub live_attribution: Option<String>,
     #[serde(default)]
@@ -208,7 +208,7 @@ impl ControlSessionNode {
             active: false,
             split: false,
             has_split: None,
-            backed_by_zmx: None,
+            backed_by_live: None,
             live_attribution: None,
             split_live_attribution: None,
             split_axis: None,
@@ -265,7 +265,7 @@ pub struct ControlSurfaceNode {
     pub visible: bool,
     /// Primary and split panes only.
     #[serde(default)]
-    pub backed_by_zmx: Option<bool>,
+    pub backed_by_live: Option<bool>,
     /// `leader`, `follower` or `unowned`.
     #[serde(default)]
     pub lead: Option<String>,
@@ -436,7 +436,7 @@ mod tests {
         node.split_cwd = Some(String::new());
         node.title = Some(String::new());
         node.has_split = Some(true);
-        node.backed_by_zmx = Some(false);
+        node.backed_by_live = Some(false);
         node.live_attribution = Some(String::new());
         node.split_live_attribution = Some(String::new());
         node.split_axis = Some(String::new());
@@ -507,7 +507,7 @@ mod tests {
         assert_eq!(back, node);
     }
 
-    /// The catalog's `field:tree.session.*` order.
+    /// The catalog's `field:tree.session.*` order (its `backedByZmx` is `backedByLive` here).
     const SESSION_FIELDS: [&str; 49] = [
         "id",
         "name",
@@ -517,7 +517,7 @@ mod tests {
         "active",
         "split",
         "hasSplit",
-        "backedByZmx",
+        "backedByLive",
         "liveAttribution",
         "splitLiveAttribution",
         "splitAxis",

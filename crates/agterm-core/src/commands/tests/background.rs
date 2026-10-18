@@ -399,7 +399,7 @@ fn rerun_mode_takes_a_pin_without_a_note_and_live_falls_back_to_fresh_shells() {
     });
     assert_eq!(result(&response), json!({"id": wire(id), "pane": "left"}));
 
-    let mut fixture = launched(RestoreMode::Live, Some("the zmx executable is unavailable"));
+    let mut fixture = launched(RestoreMode::Live, Some("the live-session executable is unavailable"));
     let id = fixture.sessions[0];
     let response = restore(&mut fixture, id, |a| a.mode = Some("none".into()));
     assert_eq!(

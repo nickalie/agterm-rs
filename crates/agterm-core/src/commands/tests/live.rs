@@ -1,25 +1,25 @@
-//! The `zmx` group, the live launch seeds, the pane finalizer, the lead book's reads and typing, `session.lead`,
-//! `session.restart`'s live flow and `zmx.reset`, over a [`FakeSessionHost`] (upstream's `ControlServer+Zmx`,
-//! `ZmxLaunch`, `PaneLead`, `ControlServer+Restart` and `LiveResetCoordinator` behaviors).
+//! The `live.*` group (upstream's `zmx.*`), the live launch seeds, the pane finalizer, the lead book's reads and
+//! typing, `session.lead`, `session.restart`'s live flow and `live.reset`, over a [`FakeSessionHost`] (upstream's
+//! `ControlServer+Zmx`, `ZmxLaunch`, `PaneLead`, `ControlServer+Restart` and `LiveResetCoordinator` behaviors).
 
 use std::path::Path;
 use std::sync::Arc;
 
 use agterm_host::fakes::{FakeProcessTable, FakeSessionHost, FakeSurface, FakeSurfaceProbe};
 use agterm_host::{KillOutcome, ProcessRecord, ProcessStat, SessionHost, Surface};
-use agterm_proto::command::{SessionCmd, ZmxCmd};
-use agterm_proto::{Args, Command, ControlZmxEndpoint, Request, Response};
+use agterm_proto::command::{LiveCmd, SessionCmd};
+use agterm_proto::{Args, Command, ControlLiveEndpoint, Request, Response};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{Fixture, UNKNOWN, args, failure, wire};
 use crate::dispatch::Dispatched;
+use crate::live::daemon_name;
+use crate::live::support::Inputs;
 use crate::model::StatusPane;
 use crate::pane_env::uuid_string;
 use crate::persist::RestoreMode;
 use crate::restore::mode::RestoreLaunchDecision;
-use crate::zmx::daemon_name;
-use crate::zmx::support::Inputs;
 use crate::{Core, LiveInstall, PaneReplacement};
 
 /// A live launch over a fake host: the first session's primary pane is a live terminal.
@@ -45,12 +45,12 @@ fn install(core: &mut Core, host: &Arc<FakeSessionHost>, resources: &Path, mode:
     core.set_restore_launch(RestoreLaunchDecision::new(mode, None));
     core.install_live_sessions(LiveInstall {
         host: Arc::clone(host) as Arc<dyn SessionHost>,
-        endpoint: ControlZmxEndpoint {
+        endpoint: ControlLiveEndpoint {
             executable: "/opt/agterm/bin/zmx".to_owned(),
             socket_directory: "/tmp/agterm-zmx-test".to_owned(),
         },
         wrap: Inputs {
-            zmx_executable: "/bin/sh".into(),
+            executable: "/bin/sh".into(),
             login_shell: Some("/bin/zsh".to_owned()),
             resources_dir: Some(resources.to_path_buf()),
             state_dir: resources.join("state"),
@@ -95,8 +95,8 @@ pub(super) fn live() -> Live {
 }
 
 impl Live {
-    fn zmx(&mut self, cmd: ZmxCmd, target: Option<&str>, edit: impl FnOnce(&mut Args)) -> Response {
-        self.fixture.send(Command::Zmx(cmd), target, args(edit))
+    fn send(&mut self, cmd: LiveCmd, target: Option<&str>, edit: impl FnOnce(&mut Args)) -> Response {
+        self.fixture.send(Command::Live(cmd), target, args(edit))
     }
 
     fn core(&mut self) -> &mut Core {
@@ -125,9 +125,9 @@ fn result(response: &Response) -> Value {
     response.result.clone().unwrap_or(Value::Null)
 }
 
-/// The rows of `zmx.list` claimed by `session`, by pane.
+/// The rows of `live.list` claimed by `session`, by pane.
 fn rows(response: &Response, session: Uuid) -> Vec<Value> {
-    result(response)["zmx"]["entries"]
+    result(response)["live"]["entries"]
         .as_array()
         .unwrap()
         .iter()
@@ -136,26 +136,26 @@ fn rows(response: &Response, session: Uuid) -> Vec<Value> {
         .collect()
 }
 
-// MARK: - zmx.list
+// MARK: - live.list
 
 #[test]
-fn every_command_needs_this_instance_s_zmx() {
+fn every_command_needs_this_instance_s_session_host() {
     let mut fixture = Fixture::new(0);
-    for cmd in [ZmxCmd::List, ZmxCmd::Prune] {
+    for cmd in [LiveCmd::List, LiveCmd::Prune] {
         assert_eq!(
-            fixture.send(Command::Zmx(cmd), None, Args::default()),
-            failure("zmx is unavailable in this instance")
+            fixture.send(Command::Live(cmd), None, Args::default()),
+            failure("live sessions are unavailable in this instance")
         );
     }
     let screen = fixture.send(
-        Command::Zmx(ZmxCmd::Screen),
+        Command::Live(LiveCmd::Screen),
         None,
         args(|a| a.name = Some("agterm-x".to_owned())),
     );
-    assert_eq!(screen, failure("zmx is unavailable in this instance"));
+    assert_eq!(screen, failure("live sessions are unavailable in this instance"));
     assert_eq!(
-        fixture.send(Command::Zmx(ZmxCmd::Reset), None, args(|a| a.force = Some(true))),
-        failure("zmx.reset is not supported on this platform")
+        fixture.send(Command::Live(LiveCmd::Reset), None, args(|a| a.force = Some(true))),
+        failure("live.reset is not supported on this platform")
     );
 }
 
@@ -163,8 +163,8 @@ fn every_command_needs_this_instance_s_zmx() {
 fn the_list_joins_claims_against_the_observed_daemons() {
     let mut live = live_with(0, RestoreMode::None);
     let daemon = daemon_name(live.left);
-    let response = live.zmx(ZmxCmd::List, None, |_| {});
-    let inventory = &result(&response)["zmx"];
+    let response = live.send(LiveCmd::List, None, |_| {});
+    let inventory = &result(&response)["live"];
     assert_eq!(
         inventory["restore"],
         json!({"configured": "none", "requestedAtLaunch": "none", "active": "none", "restartRequired": false})
@@ -185,13 +185,13 @@ fn the_list_joins_claims_against_the_observed_daemons() {
 
     live.host.set_record(&daemon, Some(1), Some(4242), Some(10));
     live.host.set_record("notes", Some(0), Some(7), None);
-    let response = live.zmx(ZmxCmd::List, None, |_| {});
+    let response = live.send(LiveCmd::List, None, |_| {});
     let row = &rows(&response, live.session)[0];
     assert_eq!(
         (&row["observation"], &row["clients"], &row["leaderPID"]),
         (&json!("running"), &json!(1), &json!(4242))
     );
-    let entries = result(&response)["zmx"]["entries"].clone();
+    let entries = result(&response)["live"]["entries"].clone();
     let foreign: Vec<&Value> = entries
         .as_array()
         .unwrap()
@@ -202,18 +202,18 @@ fn the_list_joins_claims_against_the_observed_daemons() {
 
     live.host.fail_list("down");
     assert_eq!(
-        live.zmx(ZmxCmd::List, None, |_| {}),
-        failure("could not read the zmx session list")
+        live.send(LiveCmd::List, None, |_| {}),
+        failure("could not read the live session list")
     );
 }
 
-// MARK: - zmx.prune
+// MARK: - live.prune
 
 #[test]
 fn prune_kills_only_detached_orphans_and_reports_each() {
     let mut live = live();
     assert_eq!(
-        result(&live.zmx(ZmxCmd::Prune, None, |_| {})),
+        result(&live.send(LiveCmd::Prune, None, |_| {})),
         json!({"text": "no orphan daemons", "affected": 0})
     );
     let (orphan, stale, busy) = (
@@ -226,7 +226,7 @@ fn prune_kills_only_detached_orphans_and_reports_each() {
     live.host.set_record(&busy, Some(1), Some(13), None);
     live.host.set_record(&daemon_name(live.left), Some(0), Some(14), None);
     live.host.set_kill_outcome(&stale, Some(KillOutcome::StaleSocket));
-    let response = live.zmx(ZmxCmd::Prune, None, |_| {});
+    let response = live.send(LiveCmd::Prune, None, |_| {});
     assert_eq!(
         result(&response),
         json!({
@@ -240,7 +240,7 @@ fn prune_kills_only_detached_orphans_and_reports_each() {
     assert_eq!(live.host.kills(), [(orphan, false), (stale, false)]);
 }
 
-// MARK: - zmx.kill
+// MARK: - live.kill
 
 #[test]
 fn kill_refuses_in_upstream_s_order() {
@@ -250,27 +250,27 @@ fn kill_refuses_in_upstream_s_order() {
         (
             None,
             |a| (a.pane, a.force) = (Some("left".to_owned()), Some(true)),
-            "zmx.kill requires an explicit --target".to_owned(),
+            "live.kill requires an explicit --target".to_owned(),
         ),
         (
             Some("S"),
             |a| a.force = Some(true),
-            "zmx.kill requires --pane left|right".to_owned(),
+            "live.kill requires --pane left|right".to_owned(),
         ),
         (
             Some("S"),
             |a| (a.pane, a.force) = (Some("scratch".to_owned()), Some(true)),
-            "zmx.kill requires --pane left|right".to_owned(),
+            "live.kill requires --pane left|right".to_owned(),
         ),
         (
             Some("S"),
             |a| a.pane = Some("left".to_owned()),
-            "zmx.kill requires --force".to_owned(),
+            "live.kill requires --force".to_owned(),
         ),
         (
             Some("active"),
             |a| (a.pane, a.force) = (Some("left".to_owned()), Some(true)),
-            "zmx.kill needs a session id; 'active' is not accepted".to_owned(),
+            "live.kill needs a session id; 'active' is not accepted".to_owned(),
         ),
         (
             Some(UNKNOWN),
@@ -286,21 +286,21 @@ fn kill_refuses_in_upstream_s_order() {
     for (target, edit, error) in cases {
         let target = target.map(|target| if target == "S" { sid.as_str() } else { target });
         assert_eq!(
-            live.zmx(ZmxCmd::Kill, target, edit),
+            live.send(LiveCmd::Kill, target, edit),
             failure(&error.replace("session S", &format!("session {sid}"))),
             "{target:?}"
         );
     }
-    let window = live.zmx(ZmxCmd::Kill, Some(&sid), |a| {
+    let window = live.send(LiveCmd::Kill, Some(&sid), |a| {
         (a.pane, a.force, a.window) = (Some("left".to_owned()), Some(true), Some("active".to_owned()));
     });
-    assert_eq!(window, failure("zmx.kill needs a window id; 'active' is not accepted"));
-    let other = live.zmx(ZmxCmd::Kill, Some(&sid), |a| {
+    assert_eq!(window, failure("live.kill needs a window id; 'active' is not accepted"));
+    let other = live.send(LiveCmd::Kill, Some(&sid), |a| {
         (a.pane, a.force, a.window) = (Some("left".to_owned()), Some(true), Some(UNKNOWN.to_owned()));
     });
     assert_eq!(other, failure(&format!("no such window: {UNKNOWN}")));
     // claimed, but no daemon runs
-    let absent = live.zmx(ZmxCmd::Kill, Some(&sid), |a| {
+    let absent = live.send(LiveCmd::Kill, Some(&sid), |a| {
         (a.pane, a.force) = (Some("left".to_owned()), Some(true));
     });
     assert_eq!(absent, failure(&format!("{} is not running", daemon_name(live.left))));
@@ -314,7 +314,7 @@ fn a_confirmed_kill_closes_the_split_and_is_not_finalized_twice() {
     let daemon = daemon_name(split);
     live.host.set_record(&daemon, Some(1), Some(20), None);
     let sid = wire(live.session);
-    let response = live.zmx(ZmxCmd::Kill, Some(&sid), |a| {
+    let response = live.send(LiveCmd::Kill, Some(&sid), |a| {
         (a.pane, a.force) = (Some("bottom".to_owned()), Some(true));
     });
     assert_eq!(
@@ -336,14 +336,15 @@ fn an_unconfirmed_kill_leaves_the_pane() {
     live.host.set_kill_outcome(&daemon, Some(KillOutcome::StaleSocket));
     let sid = wire(live.session);
     let kill = |live: &mut Live| {
-        live.zmx(ZmxCmd::Kill, Some(&sid), |a| {
+        live.send(LiveCmd::Kill, Some(&sid), |a| {
             (a.pane, a.force) = (Some("left".to_owned()), Some(true));
         })
     };
     assert_eq!(
         kill(&mut live),
         failure(&format!(
-            "{daemon} did not confirm the kill; zmx cleaned up a stale socket and the daemon may still be running"
+            "{daemon} did not confirm the kill; the session host cleaned up a stale socket and the daemon may still \
+             be running"
         ))
     );
     live.host
@@ -352,16 +353,16 @@ fn an_unconfirmed_kill_leaves_the_pane() {
     assert!(live.fixture.store().session(live.session).is_some());
 }
 
-// MARK: - zmx.screen
+// MARK: - live.screen
 
 #[test]
 fn screen_reads_the_daemon_grid_by_name() {
     let mut live = live();
     let cases: [(Edit, &str); 4] = [
-        (|_| {}, "zmx.screen requires a daemon name"),
+        (|_| {}, "live.screen requires a daemon name"),
         (
             |a| a.name = Some("two words".to_owned()),
-            "zmx.screen requires a daemon name",
+            "live.screen requires a daemon name",
         ),
         (
             |a| (a.name, a.all, a.lines) = (Some("agterm-x".to_owned()), Some(true), Some(3)),
@@ -373,20 +374,20 @@ fn screen_reads_the_daemon_grid_by_name() {
         ),
     ];
     for (edit, error) in cases {
-        assert_eq!(live.zmx(ZmxCmd::Screen, None, edit), failure(error));
+        assert_eq!(live.send(LiveCmd::Screen, None, edit), failure(error));
     }
     assert_eq!(
-        live.zmx(ZmxCmd::Screen, None, |a| a.name = Some("agterm-x".to_owned())),
-        failure("could not read the zmx screen of agterm-x")
+        live.send(LiveCmd::Screen, None, |a| a.name = Some("agterm-x".to_owned())),
+        failure("could not read the live session screen of agterm-x")
     );
     live.host.insert("agterm-x", "two\nthree\n");
     live.host.set_scrollback("agterm-x", "one\n");
     assert_eq!(
-        result(&live.zmx(ZmxCmd::Screen, None, |a| a.name = Some(" agterm-x ".to_owned()))),
+        result(&live.send(LiveCmd::Screen, None, |a| a.name = Some(" agterm-x ".to_owned()))),
         json!({"text": "two\nthree\n"})
     );
     assert_eq!(
-        result(&live.zmx(ZmxCmd::Screen, None, |a| (a.name, a.lines) =
+        result(&live.send(LiveCmd::Screen, None, |a| (a.name, a.lines) =
             (Some("agterm-x".to_owned()), Some(2)))),
         json!({"text": "two\nthree"})
     );
@@ -655,7 +656,7 @@ fn a_restart_ends_the_old_shell_and_rebuilds_the_pane_on_its_daemon() {
         // the old program ignores the hangup until its grace ends and it is killed; the new shell shows up after the
         // rebuild
         if step == 0 {
-            assert!(core.zmx.claimed_exits.contains(&token));
+            assert!(core.live.claimed_exits.contains(&token));
             assert!(!core.pane_exited(session, &token), "the dying client closed the pane");
         }
         if !core.take_pane_replacements().is_empty() {
@@ -674,7 +675,7 @@ fn a_restart_ends_the_old_shell_and_rebuilds_the_pane_on_its_daemon() {
     );
     assert_eq!(live.host.kills(), [(daemon_name(live.left), true)]);
     assert_eq!(live.host.ended(), [job]);
-    assert!(live.core().zmx.claimed_exits.is_empty());
+    assert!(live.core().live.claimed_exits.is_empty());
 }
 
 /// Starts a restart of the live pane with `--command exit`, whose old shell (leader 100) has no job.
@@ -705,7 +706,7 @@ fn a_replacement_whose_attach_exits_closes_the_pane_and_ends_the_restart() {
         // the frontend installed the replacement in the settle after the rebuild; the probe after that lifts the
         // claim, and the new terminal's attach then exits at once (the daemon ran `exit`)
         if rebuilt_at.is_some_and(|rebuilt| step == rebuilt + 2) {
-            assert!(!core.zmx.claimed_exits.contains(&token));
+            assert!(!core.live.claimed_exits.contains(&token));
             assert!(
                 core.pane_exited(session, &token),
                 "the replacement's own exit was swallowed"
@@ -763,7 +764,7 @@ fn a_dropped_restart_replacement_closes_the_ended_pane() {
         failure("the old shell ended (pid 100) and no new one was observed")
     );
     assert!(live.fixture.store().session(session).is_none());
-    assert!(live.core().zmx.claimed_exits.is_empty());
+    assert!(live.core().live.claimed_exits.is_empty());
 }
 
 #[test]
@@ -992,7 +993,7 @@ fn assert_replay_refused(live: &mut Live, table: FakeProcessTable, error: &str) 
     assert_eq!(response, failure(error));
     assert!(live.host.kills().is_empty(), "{:?}", live.host.kills());
     assert!(live.core().take_pane_replacements().is_empty());
-    assert!(live.core().zmx.claimed_exits.is_empty());
+    assert!(live.core().live.claimed_exits.is_empty());
     let token = uuid_string(live.left);
     let session = live.fixture.store().session(live.session).unwrap();
     assert_eq!(session.pane_role_for_token(&token), Some(StatusPane::Left));
@@ -1053,31 +1054,31 @@ fn a_denylisted_replay_is_refused_before_anything_is_killed() {
     assert_replay_refused(&mut live, table, &refused("sleep is on the restore denylist"));
 }
 
-// MARK: - zmx.reset
+// MARK: - live.reset
 
 #[test]
 fn reset_refuses_outside_live_and_without_anything_to_reset() {
     let mut fresh = live_with(0, RestoreMode::None);
     assert_eq!(
-        fresh.zmx(ZmxCmd::Reset, None, |_| {}),
-        failure("zmx.reset requires --force")
+        fresh.send(LiveCmd::Reset, None, |_| {}),
+        failure("live.reset requires --force")
     );
     assert_eq!(
-        fresh.zmx(ZmxCmd::Reset, None, |a| a.force = Some(true)),
-        failure("zmx.reset requires Live sessions mode both configured and active for this launch")
+        fresh.send(LiveCmd::Reset, None, |a| a.force = Some(true)),
+        failure("live.reset requires Live sessions mode both configured and active for this launch")
     );
     let mut live = live();
     live.core().save_restore_mode(RestoreMode::Live);
     live.host
         .set_record(&daemon_name(live.left), Some(1), Some(100), Some(50));
     assert_eq!(
-        live.zmx(ZmxCmd::Reset, None, |a| a.force = Some(true)),
-        failure("zmx.reset found no live session to reset")
+        live.send(LiveCmd::Reset, None, |a| a.force = Some(true)),
+        failure("live.reset found no live session to reset")
     );
     live.host.fail_list("down");
     assert_eq!(
-        live.zmx(ZmxCmd::Reset, None, |a| a.force = Some(true)),
-        failure("zmx.reset could not read the live session list")
+        live.send(LiveCmd::Reset, None, |a| a.force = Some(true)),
+        failure("live.reset could not read the live session list")
     );
 }
 
@@ -1085,11 +1086,11 @@ fn reset_refuses_outside_live_and_without_anything_to_reset() {
 fn a_confirmed_reset_holds_the_outdated_panes_quits_and_arms_the_marker() {
     let mut live = live();
     live.core().save_restore_mode(RestoreMode::Live);
-    live.core().zmx.outdated_before = Some(100);
+    live.core().live.outdated_before = Some(100);
     live.host
         .set_record(&daemon_name(live.left), Some(1), Some(100), Some(50));
-    let response = live.zmx(ZmxCmd::Reset, None, |a| a.force = Some(true));
-    let body = crate::zmx::reset::dialog_text(1, 1).1;
+    let response = live.send(LiveCmd::Reset, None, |a| a.force = Some(true));
+    let body = crate::live::reset::dialog_text(1, 1).1;
     assert_eq!(
         result(&response),
         json!({"text": body, "liveReset": {"sessions": 1, "panes": 1, "pending": true, "outdated": 1}})
@@ -1098,7 +1099,7 @@ fn a_confirmed_reset_holds_the_outdated_panes_quits_and_arms_the_marker() {
     let tree = result(&live.fixture.send(Command::Tree, None, Args::default()));
     assert_eq!(tree["tree"]["liveReset"], json!({"pending": 1}));
     assert!(live.core().arm_live_reset_on_quit());
-    let marker = live.resources.path().join(crate::zmx::reset::MARKER_FILE_NAME);
+    let marker = live.resources.path().join(crate::live::reset::MARKER_FILE_NAME);
     assert!(marker.exists());
     // the next launch that gets live consumes it: the marker's pane is not claimed by that launch's model, so it is
     // skipped rather than killed
@@ -1107,23 +1108,23 @@ fn a_confirmed_reset_holds_the_outdated_panes_quits_and_arms_the_marker() {
     let host = Arc::new(FakeSessionHost::new());
     host.set_record(&daemon_name(live.left), Some(0), Some(100), Some(50));
     install(next.core(), &host, live.resources.path(), RestoreMode::Live);
-    next.core().zmx.outdated_before = Some(100);
+    next.core().live.outdated_before = Some(100);
     next.core().consume_live_reset(host.as_ref());
     assert!(!marker.exists());
     assert!(host.kills().is_empty());
-    assert_eq!(next.core().zmx.reset.last.clone().unwrap().panes.skipped, 1);
+    assert_eq!(next.core().live.reset.last.clone().unwrap().panes.skipped, 1);
 }
 
 #[test]
 fn a_relauncher_that_did_not_start_disarms_the_reset() {
     let mut live = live();
     live.core().save_restore_mode(RestoreMode::Live);
-    live.core().zmx.outdated_before = Some(100);
+    live.core().live.outdated_before = Some(100);
     live.host
         .set_record(&daemon_name(live.left), Some(1), Some(100), Some(50));
-    assert!(live.zmx(ZmxCmd::Reset, None, |a| a.force = Some(true)).ok);
+    assert!(live.send(LiveCmd::Reset, None, |a| a.force = Some(true)).ok);
     assert!(live.core().arm_live_reset_on_quit());
-    let marker = live.resources.path().join(crate::zmx::reset::MARKER_FILE_NAME);
+    let marker = live.resources.path().join(crate::live::reset::MARKER_FILE_NAME);
     assert!(marker.exists());
     live.core().disarm_live_reset();
     assert!(!marker.exists(), "the next launch resets nothing");
@@ -1134,10 +1135,10 @@ fn a_relauncher_that_did_not_start_disarms_the_reset() {
 fn consume_reset(alive: &[i32]) -> (Live, Arc<FakeSessionHost>) {
     let mut live = live();
     live.core().save_restore_mode(RestoreMode::Live);
-    live.core().zmx.outdated_before = Some(100);
+    live.core().live.outdated_before = Some(100);
     let daemon = daemon_name(live.left);
     live.host.set_record(&daemon, Some(1), Some(100), Some(50));
-    assert!(live.zmx(ZmxCmd::Reset, None, |a| a.force = Some(true)).ok);
+    assert!(live.send(LiveCmd::Reset, None, |a| a.force = Some(true)).ok);
     assert!(live.core().arm_live_reset_on_quit());
     let table = FakeProcessTable::default();
     for pid in alive {
@@ -1152,7 +1153,7 @@ fn consume_reset(alive: &[i32]) -> (Live, Arc<FakeSessionHost>) {
         );
     }
     live.core().set_process_table(Box::new(table), None);
-    live.core().zmx.reset.consume_budget = std::time::Duration::from_millis(50);
+    live.core().live.reset.consume_budget = std::time::Duration::from_millis(50);
     let host = Arc::clone(&live.host);
     live.core().consume_live_reset(host.as_ref());
     (live, host)
@@ -1162,18 +1163,18 @@ fn consume_reset(alive: &[i32]) -> (Live, Arc<FakeSessionHost>) {
 fn a_consumed_reset_ends_the_claimed_outdated_daemon() {
     let (mut live, host) = consume_reset(&[]);
     assert_eq!(host.kills(), [(daemon_name(live.left), true)]);
-    let last = live.core().zmx.reset.last.clone().unwrap();
+    let last = live.core().live.reset.last.clone().unwrap();
     assert_eq!((last.panes.killed, last.unconfirmed.len()), (1, 0));
-    assert!(live.core().zmx.suppressed.is_empty());
+    assert!(live.core().live.suppressed.is_empty());
 }
 
 #[test]
 fn a_leader_outliving_the_reset_suppresses_its_pane_s_payloads() {
     let (mut live, host) = consume_reset(&[100]);
     assert_eq!(host.kills(), [(daemon_name(live.left), true)]);
-    let last = live.core().zmx.reset.last.clone().unwrap();
+    let last = live.core().live.reset.last.clone().unwrap();
     assert_eq!(last.unconfirmed, [live.left]);
-    assert!(live.fixture.core.zmx.suppressed.contains(&live.left));
+    assert!(live.fixture.core.live.suppressed.contains(&live.left));
     // its pane attaches with neither a replay nor its durable command
     let policy = live.core().seed_policy();
     assert!(policy.suppressed_daemons.contains(&daemon_name(live.left)));

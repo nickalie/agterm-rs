@@ -142,23 +142,25 @@ def test_rerun_replays_the_captured_foreground_program(launch):
 def test_live_session_survives_the_relaunch(launch):
     ctl = launch(settings={"restoreMode": "live"})
     sid = _new(ctl)
-    ctl.wait_tree(lambda tree: find_session(tree, sid).get("backedByZmx") is True)
+    vocabulary = ctl.vocabulary
+    ctl.wait_tree(lambda tree: find_session(tree, sid).get(vocabulary.backed_key) is True)
     marker = _marker()
     assert_ok(ctl.request("session.type", sid, text=f"printf '%s%s\\n' {marker[:4]} {marker[4:]}\n"))
     ctl.wait_text(sid, rf"(?m)^{marker}$")
-    rows = assert_ok(ctl.request("zmx.list"))["zmx"]["entries"]
+    rows = assert_ok(ctl.request(vocabulary.command("zmx.list")))[vocabulary.result_key]["entries"]
     (before,) = [row for row in rows if row.get("sessionID") == sid and row["pane"] == "left"]
 
     ctl = launch.relaunch(ctl)
-    ctl.wait_tree(lambda tree: find_session(tree, sid).get("backedByZmx") is True)
+    ctl.wait_tree(lambda tree: find_session(tree, sid).get(vocabulary.backed_key) is True)
 
     def same_daemon(response):
-        (row,) = [row for row in assert_ok(response)["zmx"]["entries"] if row.get("sessionID") == sid]
+        rows = assert_ok(response)[vocabulary.result_key]["entries"]
+        (row,) = [row for row in rows if row.get("sessionID") == sid]
         assert (row["daemon"], row["observation"]) == (before["daemon"], "running"), row
         return row
 
-    after = ctl.wait_response("zmx.list", None, same_daemon)
-    (row,) = [row for row in after.result["zmx"]["entries"] if row.get("sessionID") == sid]
+    after = ctl.wait_response(vocabulary.command("zmx.list"), None, same_daemon)
+    (row,) = [row for row in after.result[vocabulary.result_key]["entries"] if row.get("sessionID") == sid]
     # The same shell, not a new one: its leader pid and its screen came through the quit.
     assert row["leaderPID"] == before["leaderPID"]
     ctl.wait_text(sid, rf"(?m)^{marker}$", all=True)

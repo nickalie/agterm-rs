@@ -128,7 +128,7 @@ fn live_session(sandbox: &Sandbox) -> TestResult<String> {
     eventually("the session in zmx", || {
         call(sandbox, "tree", None, json!({}))
             .ok()
-            .filter(|tree| find(tree, &sid).is_some_and(|session| session["backedByZmx"] == json!(true)))
+            .filter(|tree| find(tree, &sid).is_some_and(|session| session["backedByLive"] == json!(true)))
     })
     .map_err(|err| format!("{err}\n{}", sandbox.log("primary.log")))?;
     Ok(sid)
@@ -187,10 +187,10 @@ fn parent_of(pid: u32) -> Option<u32> {
     rest.split_whitespace().nth(1)?.parse().ok()
 }
 
-/// The zmx daemons of the app's sessions: the parents of the shells `zmx.list` names.
+/// The zmx daemons of the app's sessions: the parents of the shells `live.list` names.
 fn live_processes(sandbox: &Sandbox) -> TestResult<Vec<u32>> {
-    let entries = call(sandbox, "zmx.list", None, json!({}))?;
-    let rows = entries["zmx"]["entries"].as_array().ok_or("no zmx.list entries")?;
+    let entries = call(sandbox, "live.list", None, json!({}))?;
+    let rows = entries["live"]["entries"].as_array().ok_or("no live.list entries")?;
     Ok(rows
         .iter()
         .filter_map(|row| u32::try_from(row["leaderPID"].as_u64()?).ok())
@@ -247,7 +247,7 @@ fn start_live(lavapipe: &Path, zmx_bin: &Path, resources: &Path) -> TestResult<(
     std::fs::write(sandbox.path("state/settings.json"), r#"{"restoreMode":"live"}"#)?;
     let sessions = Sessions {
         zmx: zmx_bin.to_owned(),
-        dir: agterm_core::zmx::socket_directory(&sandbox.path("state")),
+        dir: agterm_core::live::socket_directory(&sandbox.path("state")),
     };
     let primary = sandbox.start_gpui_primary("primary.log")?;
     Ok((sandbox, primary, sessions))

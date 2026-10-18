@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use agterm_host::fakes::FakeSurface;
-use agterm_proto::command::{SessionCmd, ZmxCmd};
+use agterm_proto::command::{LiveCmd, SessionCmd};
 use agterm_proto::{Args, Command, Response};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -517,13 +517,13 @@ fn a_page_bridge_request_acts_from_where_the_page_sits() {
         Err("page closed".to_owned())
     );
     let other = page_id(&open_page(&mut fixture, id, |_| {}));
-    let streaming = format!(r#"{{"cmd":"{}"}}"#, Command::Zmx(ZmxCmd::Present));
+    let streaming = format!(r#"{{"cmd":"{}"}}"#, Command::Live(LiveCmd::Present));
     assert_eq!(
         fixture
             .core
             .html_bridge_request(other, streaming.as_bytes())
             .map(|_| ()),
-        Err("zmx.present cannot be sent from a page".to_owned())
+        Err("live.present cannot be sent from a page".to_owned())
     );
 }
 

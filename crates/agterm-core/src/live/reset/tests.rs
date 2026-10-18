@@ -1,7 +1,7 @@
 //! Upstream's `LiveResetTests.swift`.
 
 use super::*;
-use crate::zmx::inventory::{OwnerWindowState, PaneClaim, PaneRole};
+use crate::live::inventory::{OwnerWindowState, PaneClaim, PaneRole};
 
 const SESSION_A: Uuid = Uuid::from_u128(0xa);
 const SESSION_B: Uuid = Uuid::from_u128(0xb);

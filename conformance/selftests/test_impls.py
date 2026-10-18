@@ -40,13 +40,14 @@ from agterm_conformance.impls.base import (
     isolated_runtime_env,
     process_identity,
     remove_zmx_dir,
+    upstream_socket_directory,
     version_tuple,
-    zmx_socket_directory,
 )
 from agterm_conformance.impls.rust import ProfileError, RustAdapter, profile_from_version
 from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
 from agterm_conformance.impls.swift_macos import SwiftMacosAdapter
 from agterm_conformance.plugin import ImplOptions
+from agterm_conformance.vocabulary import LIVE, UPSTREAM, Vocabulary
 
 
 @pytest.fixture
@@ -60,14 +61,14 @@ def daemons(tmp_path: Path) -> Iterator[list[subprocess.Popen[bytes]]]:
 
 
 def spawn_daemon(
-    tmp_path: Path, name: str, zmx_dir: str, spawned: list[subprocess.Popen[bytes]], directory: str = "daemons"
+    tmp_path: Path, name: str, live_dir: str, spawned: list[subprocess.Popen[bytes]], directory: str = "daemons"
 ) -> int:
     """A copy of `cat` under `name`, blocked on a stdin pipe the test holds."""
     program = tmp_path / directory / name
     program.parent.mkdir(exist_ok=True)
     if not program.exists():
         shutil.copy2(shutil.which("cat") or "/bin/cat", program)
-    process = subprocess.Popen([program], stdin=subprocess.PIPE, env={"ZMX_DIR": zmx_dir})
+    process = subprocess.Popen([program], stdin=subprocess.PIPE, env={"ZMX_DIR": live_dir})
     spawned.append(process)
     # Popen returns once exec passed its point of no return; the new image's argv pages may still be empty.
     cmdline, deadline = Path(f"/proc/{process.pid}/cmdline"), time.monotonic() + 5
@@ -347,22 +348,22 @@ def test_launch_isolates_and_stop_cleans_up(roots: list[Path], fake_bin: Path, m
 
 
 def test_stop_removes_the_zmx_dir_holding_only_zmx_logs(tmp_path: Path) -> None:
-    zmx_dir = tmp_path / "agterm-zmx-x"
-    (zmx_dir / "logs").mkdir(parents=True)
-    (zmx_dir / "logs" / "zmx.log").write_text("")
-    remove_zmx_dir(str(zmx_dir))
-    assert not zmx_dir.exists()
-    remove_zmx_dir(str(zmx_dir))
+    live_dir = tmp_path / "agterm-zmx-x"
+    (live_dir / "logs").mkdir(parents=True)
+    (live_dir / "logs" / "zmx.log").write_text("")
+    remove_zmx_dir(str(live_dir))
+    assert not live_dir.exists()
+    remove_zmx_dir(str(live_dir))
 
 
 @pytest.mark.parametrize("extra", ["sock", "logs/core", "logs/zmx.log.1"])
 def test_stop_keeps_a_zmx_dir_holding_anything_else(tmp_path: Path, extra: str) -> None:
-    zmx_dir = tmp_path / "agterm-zmx-x"
-    (zmx_dir / "logs").mkdir(parents=True)
-    (zmx_dir / "logs" / "zmx.log").write_text("")
-    (zmx_dir / extra).write_text("")
-    remove_zmx_dir(str(zmx_dir))
-    assert (zmx_dir / extra).exists() and (zmx_dir / "logs" / "zmx.log").exists()
+    live_dir = tmp_path / "agterm-zmx-x"
+    (live_dir / "logs").mkdir(parents=True)
+    (live_dir / "logs" / "zmx.log").write_text("")
+    (live_dir / extra).write_text("")
+    remove_zmx_dir(str(live_dir))
+    assert (live_dir / extra).exists() and (live_dir / "logs" / "zmx.log").exists()
 
 
 def test_first_run_launch_leaves_out_the_prior_state_marker(roots: list[Path], fake_bin: Path) -> None:
@@ -703,7 +704,7 @@ def test_relaunch_starts_the_binary_again_on_the_same_root(
     second = adapter.relaunch(first)
     try:
         assert first.process.returncode is not None and second.pid != first.pid
-        same = ("root", "state_dir", "home", "socket", "env", "log", "app_id", "zmx_dir")
+        same = ("root", "state_dir", "home", "socket", "env", "log", "app_id", "live_dir")
         assert all(getattr(second, name) == getattr(first, name) for name in same)
         assert (second.state_dir / "kept").read_text() == "state"
         assert second.version == {"app": {"version": "0.0.1"}} and second.request("version").ok
@@ -741,7 +742,7 @@ def test_relaunch_killing_the_app_reports_the_daemons_it_left(
     monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
     adapter = SwiftLinuxAdapter(fake_bin)
     instance = adapter.launch()
-    pid = spawn_daemon(tmp_path, "zmx", instance.zmx_dir, daemons)
+    pid = spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
     with pytest.raises(LeftoverProcesses, match=rf"{pid} ") as raised:
         adapter.relaunch(instance)
     assert isinstance(raised.value.__cause__, StopError)
@@ -758,7 +759,7 @@ def test_relaunch_failing_to_spawn_reports_the_daemons_left_and_frees_its_app_id
     adapter = SwiftLinuxAdapter(fake_bin)
     app_id = f"{DEFAULT_APP_ID}.conformance.respawn"
     instance = adapter.launch(app_id=app_id)
-    pid = spawn_daemon(tmp_path, "zmx", instance.zmx_dir, daemons)
+    pid = spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
 
     def unspawnable(*args: object) -> subprocess.Popen[bytes]:
         raise OSError("no binary")
@@ -960,9 +961,9 @@ def test_stop_reaps_claimed_daemons_over_the_protocol(
 ) -> None:
     adapter = SwiftLinuxAdapter(fake_bin)
     instance = adapter.launch()
-    pid = spawn_daemon(tmp_path, "zmx", instance.zmx_dir, daemons)
+    pid = spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
     assert instance.request("fake.adopt", pid=pid).ok
-    assert find_leftovers(instance.zmx_dir) != []
+    assert find_leftovers(instance.live_dir) != []
     adapter.stop(instance, cleanup=False)
     requests = [json.loads(line) for line in (instance.state_dir / "fake-requests.jsonl").read_text().splitlines()]
     assert {"cmd": "zmx.kill", "target": f"s{pid}", "args": {"pane": "left", "force": True, "window": "w1"}} in requests
@@ -974,10 +975,10 @@ def test_stop_reaps_a_split_whose_survivor_is_promoted_by_the_first_kill(
     adapter = SwiftLinuxAdapter(fake_bin)
     instance = adapter.launch()
     for name, pane in (("a-left", "left"), ("b-right", "right")):
-        pid = spawn_daemon(tmp_path, "zmx", instance.zmx_dir, daemons)
+        pid = spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
         assert instance.request("fake.adopt", pid=pid, session="s1", pane=pane, daemon=name).ok
     adapter.stop(instance)
-    assert find_leftovers(instance.zmx_dir) == []
+    assert find_leftovers(instance.live_dir) == []
 
 
 def test_a_refused_kill_is_not_retried(roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -988,6 +989,45 @@ def test_a_refused_kill_is_not_retried(roots: list[Path], fake_bin: Path, monkey
     base.reap_live_sessions(instance)
     requests = [json.loads(line) for line in (instance.state_dir / "fake-requests.jsonl").read_text().splitlines()]
     assert [request["cmd"] for request in requests].count("zmx.kill") == 1
+    adapter.stop(instance)
+
+
+class LiveVocabularyAdapter(SwiftLinuxAdapter):
+    """The fake app driven by the Rust build's names for the live-session group."""
+
+    vocabulary = LIVE
+
+
+def test_stop_reaps_through_the_adapters_vocabulary(
+    roots: list[Path],
+    fake_bin: Path,
+    tmp_path: Path,
+    daemons: list[subprocess.Popen[bytes]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_LIVE_GROUP", "live")
+    adapter = LiveVocabularyAdapter(fake_bin)
+    instance = adapter.launch()
+    assert instance.vocabulary is LIVE and instance.live_dir == LIVE.socket_directory(instance.state_dir)
+    pid = spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
+    assert instance.request("fake.adopt", pid=pid).ok
+    adapter.stop(instance, cleanup=False)
+    requests = [json.loads(line) for line in (instance.state_dir / "fake-requests.jsonl").read_text().splitlines()]
+    assert {"cmd": "live.kill", "target": f"s{pid}", "args": {"pane": "left", "force": True, "window": "w1"}} in requests
+    assert "live.list" in [request["cmd"] for request in requests]
+    assert not [request for request in requests if request["cmd"].startswith("zmx.")]
+    assert find_leftovers(instance.live_dir, LIVE) == []
+
+
+def test_an_upstream_adapter_lists_nothing_under_the_live_names(
+    roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The reverse: an app answering `live.*` refuses upstream's `zmx.list`, so nothing reads as listed.
+    monkeypatch.setenv("FAKE_LIVE_GROUP", "live")
+    adapter = SwiftLinuxAdapter(fake_bin)
+    instance = adapter.launch()
+    assert instance.vocabulary is UPSTREAM
+    assert base.reap_live_sessions(instance, settle=0)[0] == "listed: no inventory (unknown command: zmx.list)"
     adapter.stop(instance)
 
 
@@ -1003,7 +1043,7 @@ def test_malformed_zmx_list_still_terminates_the_app(
     monkeypatch.setenv("FAKE_ZMX_LIST", listing)
     adapter = SwiftLinuxAdapter(fake_bin)
     instance = adapter.launch()
-    spawn_daemon(tmp_path, "zmx", instance.zmx_dir, daemons)
+    spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
     with pytest.raises(LeftoverProcesses):
         adapter.stop(instance)
     assert instance.process.returncode is not None
@@ -1014,7 +1054,7 @@ def test_stop_reports_daemons_left_under_the_instance_zmx_dir(
 ) -> None:
     adapter = SwiftLinuxAdapter(fake_bin)
     instance = adapter.launch()
-    pid = spawn_daemon(tmp_path, "agterm-session-host", instance.zmx_dir, daemons)
+    pid = spawn_daemon(tmp_path, "agterm-session-host", instance.live_dir, daemons)
     with pytest.raises(LeftoverProcesses, match=rf"{pid} .*agterm-session-host"):
         adapter.stop(instance)
     assert instance.process.returncode is not None
@@ -1032,9 +1072,9 @@ def test_leftover_check_matches_name_and_zmx_dir(tmp_path: Path, daemons: list[s
 def test_leftover_check_names_an_executable_whose_path_has_a_space(
     tmp_path: Path, daemons: list[subprocess.Popen[bytes]]
 ) -> None:
-    zmx_dir = "/tmp/agterm-zmx-spaced"
-    pid = spawn_daemon(tmp_path, "zmx", zmx_dir, daemons, directory="Test Install")
-    assert [found for found, *_ in find_leftovers(zmx_dir)] == [pid]
+    live_dir = "/tmp/agterm-zmx-spaced"
+    pid = spawn_daemon(tmp_path, "zmx", live_dir, daemons, directory="Test Install")
+    assert [found for found, *_ in find_leftovers(live_dir)] == [pid]
 
 
 def test_leftover_check_finds_a_session_host_by_its_host_argv(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1073,11 +1113,10 @@ class FakeHosts:
         self.ignores_sigterm = False
         monkeypatch.setattr(swift_macos, "process_identity", self.identity)
         monkeypatch.setattr(swift_macos, "_send_signal", self.send)
-        monkeypatch.setattr(
-            swift_macos,
-            "find_leftovers",
-            lambda zmx_dir: [(pid, "agterm-session-host", "") for pid in self.answers] if zmx_dir else [],
-        )
+        def leftovers(live_dir: str, vocabulary: Vocabulary = UPSTREAM) -> list[tuple[int, str, str]]:
+            return [(pid, "agterm-session-host", "") for pid in self.answers] if live_dir else []
+
+        monkeypatch.setattr(swift_macos, "find_leftovers", leftovers)
         self.instance = instance
 
     def identity(self, pid: int) -> ProcessIdentity | None:
@@ -1090,9 +1129,9 @@ class FakeHosts:
             self.answers[pid] = [None]
 
 
-def host_identity(bundle: Path, zmx_dir: str) -> ProcessIdentity:
+def host_identity(bundle: Path, live_dir: str) -> ProcessIdentity:
     executable = bundle / "Contents" / "MacOS" / "agterm-session-host"
-    return ProcessIdentity(os.path.realpath(executable), (str(executable), "host", zmx_dir, f"ZMX_DIR={zmx_dir}"))
+    return ProcessIdentity(os.path.realpath(executable), (str(executable), "host", live_dir, f"ZMX_DIR={live_dir}"))
 
 
 @pytest.fixture
@@ -1111,7 +1150,7 @@ def mac_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[SwiftMaco
         env={},
         log=root / "app.log",
         app_id=None,
-        zmx_dir=zmx_socket_directory(state),
+        live_dir=upstream_socket_directory(state),
     )
     adapter = SwiftMacosAdapter(bundle)
     adapter.session_host_timeout = 0.2
@@ -1120,7 +1159,7 @@ def mac_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[SwiftMaco
 
 def test_owned_session_host_gets_sigterm(mac_host: tuple[SwiftMacosAdapter, Instance, FakeHosts]) -> None:
     adapter, instance, hosts = mac_host
-    hosts.answers[41] = [host_identity(adapter.instance_bundle(instance.root), instance.zmx_dir)]
+    hosts.answers[41] = [host_identity(adapter.instance_bundle(instance.root), instance.live_dir)]
     assert adapter.stop_helpers(instance) is None
     assert hosts.signals == [(41, signal.SIGTERM)]
 
@@ -1131,7 +1170,7 @@ def test_session_host_from_another_bundle_is_not_signalled(
 ) -> None:
     adapter, instance, hosts = mac_host
     bundle = adapter.bundle() if which == "shared" else tmp_path / "other" / "agterm.app"
-    hosts.answers[41] = [host_identity(bundle, instance.zmx_dir)]
+    hosts.answers[41] = [host_identity(bundle, instance.live_dir)]
     assert adapter.stop_helpers(instance) is None
     assert hosts.signals == []
 
@@ -1152,8 +1191,8 @@ def test_zmx_dir_not_derived_from_the_instance_state_dir_signals_nothing(
     outside = tmp_path / "elsewhere"
     outside.mkdir()
     instance.state_dir = outside
-    instance.zmx_dir = zmx_socket_directory(outside)
-    hosts.answers[41] = [host_identity(adapter.instance_bundle(instance.root), instance.zmx_dir)]
+    instance.live_dir = upstream_socket_directory(outside)
+    hosts.answers[41] = [host_identity(adapter.instance_bundle(instance.root), instance.live_dir)]
     assert adapter.stop_helpers(instance) is None
     assert hosts.signals == []
 
@@ -1163,7 +1202,7 @@ def test_pid_reused_before_the_signal_is_not_signalled(
 ) -> None:
     adapter, instance, hosts = mac_host
     stranger = ProcessIdentity("/usr/bin/vim", ("vim",))
-    hosts.answers[41] = [host_identity(adapter.instance_bundle(instance.root), instance.zmx_dir), stranger]
+    hosts.answers[41] = [host_identity(adapter.instance_bundle(instance.root), instance.live_dir), stranger]
     assert adapter.stop_helpers(instance) is None
     assert hosts.signals == []
 
@@ -1173,7 +1212,7 @@ def test_session_host_ignoring_sigterm_is_killed_after_reverifying(
 ) -> None:
     adapter, instance, hosts = mac_host
     hosts.ignores_sigterm = True
-    hosts.answers[41] = [host_identity(adapter.instance_bundle(instance.root), instance.zmx_dir)]
+    hosts.answers[41] = [host_identity(adapter.instance_bundle(instance.root), instance.live_dir)]
     assert "41 ignored SIGTERM" in (adapter.stop_helpers(instance) or "")
     assert hosts.signals == [(41, signal.SIGTERM), (41, signal.SIGKILL)]
 
@@ -1188,7 +1227,7 @@ def test_pid_reused_while_waiting_for_sigterm_gets_no_sigkill(
         raise swift_macos.WaitTimeout("still running")
 
     monkeypatch.setattr(swift_macos, "wait_until", timed_out)
-    owned = host_identity(adapter.instance_bundle(instance.root), instance.zmx_dir)
+    owned = host_identity(adapter.instance_bundle(instance.root), instance.live_dir)
     hosts.answers[41] = [owned, owned, ProcessIdentity("/usr/bin/vim", ("vim",))]
     adapter.stop_helpers(instance)
     assert hosts.signals == [(41, signal.SIGTERM)]
@@ -1202,7 +1241,7 @@ def test_zmx_dir_is_the_fnv1a_hash_of_the_canonical_state_dir(tmp_path: Path) ->
     real.mkdir()
     (tmp_path / "link").symlink_to(real)
     expected = f"/tmp/agterm-zmx-{fnv1a64(os.path.realpath(real))}"
-    assert zmx_socket_directory(real) == zmx_socket_directory(tmp_path / "link") == expected
+    assert upstream_socket_directory(real) == upstream_socket_directory(tmp_path / "link") == expected
 
 
 # -- capabilities and parity level
@@ -1545,7 +1584,7 @@ def test_a_daemon_exiting_within_the_grace_is_not_a_leftover(
     monkeypatch.setattr(base, "LEFTOVER_GRACE", 5.0)
     adapter = SwiftLinuxAdapter(fake_bin)
     instance = adapter.launch()
-    spawn_daemon(tmp_path, "zmx", instance.zmx_dir, daemons)
+    spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
     exiting = daemons[-1]
     timer = threading.Timer(0.3, exiting.stdin.close)
     timer.start()

@@ -43,7 +43,7 @@ def test_pty_process_stop_kills_a_program_that_ignores_sigterm(tmp_path: Path) -
 
 @pytest.fixture
 def instance(tmp_path: Path) -> SimpleNamespace:
-    return SimpleNamespace(zmx_dir=str(tmp_path / "zmx"), home=tmp_path / "home")
+    return SimpleNamespace(live_dir=str(tmp_path / "zmx"), home=tmp_path / "home")
 
 
 def test_leading_client_attaches_claiming_the_lead(tmp_path: Path, instance: SimpleNamespace) -> None:
@@ -54,10 +54,10 @@ def test_leading_client_attaches_claiming_the_lead(tmp_path: Path, instance: Sim
         'echo "nonce ${#ZMX_MANAGED} home $HOME"\n'
         "exec cat\n",
     )
-    endpoint = {"executable": str(fake_zmx), "socketDirectory": instance.zmx_dir}
+    endpoint = {"executable": str(fake_zmx), "socketDirectory": instance.live_dir}
     with leading_client(instance, endpoint, "agterm-abc") as client:
         _printed(client, f"attach|agterm-abc|/bin/sh|-c|{GONE_GUARD}|")
-        _printed(client, f"env {instance.zmx_dir} 1 1 [] []")
+        _printed(client, f"env {instance.live_dir} 1 1 [] []")
         _printed(client, f"nonce 32 home {instance.home}")
 
 
@@ -68,4 +68,4 @@ def test_leading_client_refuses_another_instances_daemons(instance: SimpleNamesp
 
 def test_leading_client_refuses_a_relative_executable(instance: SimpleNamespace) -> None:
     with pytest.raises(ValueError, match="not absolute"):
-        leading_client(instance, {"executable": "zmx", "socketDirectory": instance.zmx_dir}, "agterm-abc")
+        leading_client(instance, {"executable": "zmx", "socketDirectory": instance.live_dir}, "agterm-abc")

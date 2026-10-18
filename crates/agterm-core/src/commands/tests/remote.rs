@@ -1,5 +1,5 @@
-//! Remote sessions, origin side: `zmx.tree`, the `zmx.present` stream and its hub, and the asks and overlays handed to
-//! a presenter (upstream's `ControlServer+Zmx` remote half, `ControlServer+Presentation`, `AppStoreRemoteAskTests`,
+//! Remote sessions, origin side: `live.tree`, the `live.present` stream and its hub, and the asks and overlays handed
+//! to a presenter (upstream's `ControlServer+Zmx` remote half, `ControlServer+Presentation`, `AppStoreRemoteAskTests`,
 //! `AppStoreRemoteOverlayTests` and `ControlServerPresentationTests`), over a [`FakeSessionHost`] and fake streams.
 
 use std::cell::RefCell;
@@ -7,17 +7,17 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use agterm_proto::command::{AskCmd, SessionCmd, ZmxCmd};
+use agterm_proto::command::{AskCmd, LiveCmd, SessionCmd};
 use agterm_proto::{Args, AskButton, Command, Response};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::zmx::{Live, live, report, spawn_live};
+use super::live::{Live, live, report, spawn_live};
 use super::{Fixture, UNKNOWN, args, failure, wire};
 use crate::Core;
+use crate::live::daemon_name;
 use crate::remote::LineChannel;
 use crate::remote::tree::{RemoteCommandResult, RemoteCommandRunner};
-use crate::zmx::daemon_name;
 
 // MARK: - a fake stream
 
@@ -81,10 +81,10 @@ fn hello(mode: &str) -> Vec<u8> {
     .unwrap()
 }
 
-/// Opens `zmx.present` on `session`, adopts its stream and says hello as `mode`.
+/// Opens `live.present` on `session`, adopts its stream and says hello as `mode`.
 fn subscribe(core: &mut Core, session: Uuid, mode: &str) -> (u64, Viewer) {
     let response = core.dispatch(&agterm_proto::Request {
-        cmd: Command::Zmx(ZmxCmd::Present),
+        cmd: Command::Live(LiveCmd::Present),
         target: Some(wire(session)),
         args: None,
     });
@@ -130,19 +130,19 @@ fn node(fixture: &mut Fixture, id: Uuid) -> Value {
         .expect("the session's node")
 }
 
-// MARK: - zmx.present
+// MARK: - live.present
 
 #[test]
 fn present_refuses_before_streaming() {
     let mut fixture = Fixture::new(0);
     let session = fixture.sessions[0];
     let present = |fixture: &mut Fixture, target: Option<&str>| {
-        fixture.send(Command::Zmx(ZmxCmd::Present), target, Args::default())
+        fixture.send(Command::Live(LiveCmd::Present), target, Args::default())
     };
-    assert_eq!(present(&mut fixture, None), failure("zmx.present requires a session"));
+    assert_eq!(present(&mut fixture, None), failure("live.present requires a session"));
     assert_eq!(
         present(&mut fixture, Some("  ")),
-        failure("zmx.present requires a session")
+        failure("live.present requires a session")
     );
     assert_eq!(present(&mut fixture, Some("a b")), failure("invalid session"));
     assert_eq!(
@@ -322,7 +322,7 @@ fn a_hud_is_published_with_its_generation_and_withdrawn_once() {
     assert!(later.last("snapshot").unwrap()["snapshot"].get("hud").is_none());
 }
 
-// MARK: - zmx.tree
+// MARK: - live.tree
 
 /// Answers every remote run with one result, remembering the argv.
 struct FakeRunner {
@@ -351,7 +351,7 @@ fn runner(status: i32, stdout: &str, stderr: &str) -> Arc<FakeRunner> {
 
 fn tree(core: &mut Core, host: Option<&str>) -> Response {
     core.dispatch(&agterm_proto::Request {
-        cmd: Command::Zmx(ZmxCmd::Tree),
+        cmd: Command::Live(LiveCmd::Tree),
         target: None,
         args: Some(args(|a| a.host = host.map(str::to_owned))),
     })
@@ -362,7 +362,7 @@ fn the_local_tree_offers_live_sessions_whose_daemons_run() {
     let mut fixture = Fixture::new(0);
     assert_eq!(
         tree(&mut fixture.core, None),
-        failure("zmx is unavailable in this instance")
+        failure("live sessions are unavailable in this instance")
     );
     let mut live = live();
     let empty = tree(&mut live.fixture.core, None);
@@ -385,7 +385,7 @@ fn the_local_tree_offers_live_sessions_whose_daemons_run() {
     live.host.fail_list("boom");
     assert_eq!(
         tree(&mut live.fixture.core, None),
-        failure("could not read the zmx session list")
+        failure("could not read the live session list")
     );
 }
 
@@ -406,9 +406,9 @@ fn the_remote_tree_runs_the_bare_form_over_ssh_and_stamps_the_host() {
     for (status, stdout, stderr, error) in [
         (
             1,
-            r#"{"ok":false,"error":"zmx is unavailable in this instance"}"#,
+            r#"{"ok":false,"error":"live sessions are unavailable in this instance"}"#,
             "x",
-            "zmx is unavailable in this instance",
+            "live sessions are unavailable in this instance",
         ),
         (
             255,

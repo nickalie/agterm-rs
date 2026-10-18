@@ -130,13 +130,13 @@ fn format_listing(result: &Value) -> Option<String> {
         .get("remote")
         .and_then(|remote| serde_json::from_value::<agterm_proto::ControlRemoteTree>(remote.clone()).ok())
     {
-        return Some(crate::zmx::format_remote_tree(&remote));
+        return Some(crate::live::format_remote_tree(&remote));
     }
-    if let Some(zmx) = result
-        .get("zmx")
-        .and_then(|zmx| serde_json::from_value::<agterm_proto::ControlZmxInventory>(zmx.clone()).ok())
+    if let Some(live) = result
+        .get("live")
+        .and_then(|live| serde_json::from_value::<agterm_proto::ControlLiveInventory>(live.clone()).ok())
     {
-        return Some(crate::zmx::format_zmx(&zmx));
+        return Some(crate::live::format_live(&live));
     }
     result
         .get("restore")
@@ -453,13 +453,19 @@ mod tests {
              configured mode"
         );
         assert_eq!(
-            format_response(&ok(json!({"restore": restore_status(false, Some("no zmx"))})), false),
-            "configured: live (next launch)\nthis launch: requested live, active none\nlive unavailable: no zmx"
+            format_response(
+                &ok(json!({"restore": restore_status(false, Some("no live-session executable"))})),
+                false
+            ),
+            "configured: live (next launch)\nthis launch: requested live, active none\nlive unavailable: no live-session executable"
         );
         assert_eq!(
-            format_response(&ok(json!({"restore": restore_status(true, Some("no zmx"))})), false),
+            format_response(
+                &ok(json!({"restore": restore_status(true, Some("no live-session executable"))})),
+                false
+            ),
             "configured: live (next launch)\nthis launch: requested rerun, active none\nrestart agterm to apply the \
-             configured mode\nlive unavailable: no zmx"
+             configured mode\nlive unavailable: no live-session executable"
         );
     }
 

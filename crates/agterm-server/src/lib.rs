@@ -9,7 +9,7 @@
 //!   read is answered `request too large or read failed`, one that does not decode `invalid request: <context>`;
 //! - the request hops to the main loop through [`agterm_host::MainLoop`];
 //! - a reply may hand the connection to a [`StreamOwner`] after its `ok` (see [`stream`]), as upstream hands
-//!   `zmx.present` and `session.overlay.job.run` connections to their stream owners, which usually run a
+//!   `live.present` and `session.overlay.job.run` connections to their stream owners, which usually run a
 //!   [`LineStream`] over it (upstream's `ControlStreamOwner`).
 //!
 //! Rust-only: each connection gets its own thread, where upstream serves connections one at a time on its accept

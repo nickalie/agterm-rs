@@ -10,8 +10,8 @@
 use agterm_proto::{ControlResult, Request, Response};
 use uuid::Uuid;
 
+use super::live::PaneSource;
 use super::surface::{POLL_INTERVAL, no_scratch, no_split_pane, not_realized};
-use super::zmx::PaneSource;
 use super::{Outcome, args_of, parse_surface_pane, session_store, unknown_pane_id, with_id};
 use crate::Core;
 use crate::dispatch::Dispatched;
@@ -158,8 +158,8 @@ fn type_into(
 /// [`SUBMIT_GAP`](crate::keystrokes::SUBMIT_GAP). A failed final Return does not prove it was dropped: the daemon queues
 /// before it answers.
 fn type_through_daemon(core: &Core, name: &str, text: &str) -> Result<(), ControlError> {
-    let refused = || ControlError::rejected("the pane's zmx daemon did not accept the input");
-    let host = core.zmx.host().ok_or_else(refused)?;
+    let refused = || ControlError::rejected("the pane's live session did not accept the input");
+    let host = core.live.host().ok_or_else(refused)?;
     let paced = keystrokes::paced(text);
     let bytes: Vec<u8> = paced
         .head

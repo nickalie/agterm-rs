@@ -25,7 +25,7 @@ use agterm_core::persist::{DebouncedSave, arm_debounced_saves};
 use agterm_core::sidebar_actions::SidebarAction;
 use agterm_core::{CommitTimers, ControlError, Core, Dispatched, PaneReport, PaneSpawn, Resume};
 use agterm_host::MainLoop;
-use agterm_proto::command::{SessionCmd, ZmxCmd};
+use agterm_proto::command::{LiveCmd, SessionCmd};
 use agterm_proto::{Command, Request};
 use agterm_server::{LineStream, LineStreamLimits, LineStreamOwner, Reply, ReplySender};
 use uuid::Uuid;
@@ -165,8 +165,8 @@ pub struct FrontendWork {
     pub settings: Option<Uuid>,
     /// Ask over the frontmost window whether to quit, with this message ([`crate::welcome::present_quit`]).
     pub quit_prompt: Option<String>,
-    /// Show Reset Live Sessions…'s confirmation or refusal over the frontmost window ([`crate::zmx_runtime`]).
-    pub live_reset: Option<crate::zmx_runtime::ResetAlert>,
+    /// Show Reset Live Sessions…'s confirmation or refusal over the frontmost window ([`crate::live_runtime`]).
+    pub live_reset: Option<crate::live_runtime::ResetAlert>,
     /// Ask over each of these windows whether to close it and end its sessions ([`WindowView::ask_close`]).
     ///
     /// [`WindowView::ask_close`]: crate::window::WindowView::ask_close
@@ -309,7 +309,7 @@ impl AppState {
     }
 
     /// Asks the frontend to show Reset Live Sessions…'s `alert` over the frontmost window.
-    pub(crate) fn ask_live_reset(&mut self, alert: crate::zmx_runtime::ResetAlert) {
+    pub(crate) fn ask_live_reset(&mut self, alert: crate::live_runtime::ResetAlert) {
         self.frontend.live_reset = Some(alert);
     }
 
@@ -713,7 +713,7 @@ impl AppState {
             Dispatched::Done(response) if request.cmd == Command::Session(SessionCmd::OverlayJobRun) && response.ok => {
                 self.job_stream(response)
             }
-            Dispatched::Done(response) if request.cmd == Command::Zmx(ZmxCmd::Present) && response.ok => {
+            Dispatched::Done(response) if request.cmd == Command::Live(LiveCmd::Present) && response.ok => {
                 self.presentation_stream(response)
             }
             other => {
@@ -799,7 +799,7 @@ impl AppState {
         Reply::streaming(response, Box::new(owner))
     }
 
-    /// The answer to an accepted `zmx.present`, which keeps the connection (upstream's `adoptPresentationStream`): the
+    /// The answer to an accepted `live.present`, which keeps the connection (upstream's `adoptPresentationStream`): the
     /// viewer's stream, registered with the core, its lines and close reported back as main-loop tasks. The reader
     /// stops reading while [`INBOUND_LIMIT`](agterm_core::remote::INBOUND_LIMIT) lines wait for the loop, so a fast or
     /// faulty peer backs up into its own socket; a stream that sends no hello within the deadline is closed.
@@ -907,7 +907,7 @@ impl AppState {
         }
     }
 
-    /// Quits the app a moment after a command asked for it (`zmx.reset`), so the command's reply is written first
+    /// Quits the app a moment after a command asked for it (`live.reset`), so the command's reply is written first
     /// (upstream's connection thread terminates once the reply is out).
     fn schedule_live_quit(&self, quit: agterm_core::LiveQuit) {
         tracing::info!(relaunch = quit.relaunch, "quitting for the live sessions reset");

@@ -1460,16 +1460,30 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
   `conformance/selftests/*`
 - Modify (docs): `conformance/docs/rust-build.md`, `.claude/skills/agterm-upstream-sync/references/areas.md`
 
-- [ ] wire: rename the group `zmx.*` → `live.*` (`live.list`, `prune`, `kill`, `reset`, `tree`, `attach`, `present`,
+- [x] wire: rename the group `zmx.*` → `live.*` (`live.list`, `prune`, `kill`, `reset`, `tree`, `attach`, `present`,
       `screen`; `Group::Live`), the result key `zmx` → `live`, the tree key `backedByZmx` → `backedByLive`
-- [ ] `agtermctl zmx …` → `agtermctl live …`, with help, usage and output texts, and the far side's command lines in
+- [x] `agtermctl zmx …` → `agtermctl live …`, with help, usage and output texts, and the far side's command lines in
       `remote/ssh.rs`, `remote/tree.rs` and `agterm-app/src/remote.rs`, with their tests (or remote attach breaks
       while its unit tests stay green). A new build then can't view an older build's sessions either; record that
-- [ ] rename `agterm-core::zmx` → `agterm-core::live` with its commands, types and constants (`ZmxCmd`,
+- [x] rename `agterm-core::zmx` → `agterm-core::live` with its commands, types and constants (`ZmxCmd`,
       `ControlZmxInventory`, `ZmxRuntime`, `UNAVAILABLE`, …), and `AGTERM_UITEST_ENABLE_ZMX` →
       `AGTERM_UITEST_ENABLE_LIVE`. Every error string that names zmx gets the live-session vocabulary (`"live.kill
       requires --force"`, `"this pane has no live session…"`), and each changed upstream string is listed in this task
-- [ ] what the zmx binary itself speaks stays until Task 28 (and its parsers until Task 32), untouched by the sweep:
+  - changed upstream strings (Task 19): `zmx.kill …` (`requires an explicit --target`, `requires --pane
+    left|right`, `requires --force`, `needs a session id/window id; 'active' is not accepted`), `zmx.screen requires a
+    daemon name`, `zmx.reset …` (`requires --force`, `requires Live sessions mode …`, `could not read the live session
+    list`, `refused: the pane inventory is incomplete`, `found no live session to reset`), `zmx.present requires a
+    session` and `zmx.attach requires a host / a remote session` all under `live.`; `zmx is unavailable in this
+    instance` → `live sessions are unavailable in this instance`; `could not (re-)read the zmx session list…` →
+    `… the live session list…`; `could not read the zmx screen of NAME` → `could not read the live session screen of
+    NAME`; `… zmx cleaned up a stale socket …` → `… the session host cleaned up …`; `the pane's zmx daemon did not
+    accept the input` → `the pane's live session …`; `the remote agterm is too old to report its zmx endpoint` → `…
+    its live-session endpoint`; `the zmx executable path is not absolute` / `is unavailable` → `the live-session
+    executable …`; `this pane has no zmx daemon; …` → `this pane has no live session; …`; `no zmx next to this
+    agtermctl` → `no live-session executable next to this agtermctl`; `zmx print exited N: …` → `the live-session
+    print exited N: …`; the CLI help of `live` and `restore mode`. The table is in `conformance/docs/rust-build.md` >
+    The `live` group
+- [x] what the zmx binary itself speaks stays until Task 28 (and its parsers until Task 32), untouched by the sweep:
   - the `attach` subcommand and its variables (`ZMX_DIR`, `ZMX_SESSION*`, `ZMX_MANAGED*`, `ZMX_NO_DETACH_KEY`,
     `ZMX_TRACK_ENV`);
   - the socket directory;
@@ -1477,26 +1491,26 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
   - the `list` and `screen` output formats (`lifecycle::parse_list`, `screen::parse_screen`);
   - `bin/zmx`, `share/agterm/zmx-BUILD`, `AGTERM_ZMX_PATH`;
   - the `agterm-zmx` crate, beyond its imports
-- [ ] the suite keeps upstream's vocabulary in its tests, catalog and `covers(...)` markers, because they are shared
+- [x] the suite keeps upstream's vocabulary in its tests, catalog and `covers(...)` markers, because they are shared
       with the Swift references:
   - each adapter exposes a vocabulary object: command names, result and tree keys, CLI argv, error-text templates,
     environment names, the socket-directory attribute, and the leading client;
   - `base.py`, `cli_format.py` and the shared tests read every vocabulary-dependent value from it;
   - the Swift adapters' vocabulary is upstream's, and the Rust adapter's is `live`;
   - no test id changes, so the ratchet, `catalog.yaml` and the catalog gate need no edit
-- [ ] the bundled `agterm` skill gets the live names through a patch in `build/patches/skill-agterm/` that
+- [x] the bundled `agterm` skill gets the live names through a patch in `build/patches/skill-agterm/` that
       `sync-resources.sh` reapplies after every upstream sync, with a `--check`
-- [ ] record the deviation from upstream (the names, the changed strings, the vocabulary objects, the skill patch) in
+- [x] record the deviation from upstream (the names, the changed strings, the vocabulary objects, the skill patch) in
       `conformance/docs/rust-build.md`, and in the upstream-sync skill's areas reference: an upstream `zmx.*` change
       ports onto `live.*`
-- [ ] tests:
+- [x] tests:
   - the dispatcher's tests on the new names with full error strings;
   - `agtermctl`'s parse and output tests;
   - `agterm-server`'s and the gpui process tests on the new names;
   - the remote command-line tests;
   - harness selftests for each adapter's vocabulary
-- [ ] full conformance run in the background: every ratchet id green, ids unchanged
-- [ ] run gates
+- [x] full conformance run in the background: every ratchet id green, ids unchanged
+- [x] run gates
 
 ### Task 20: `agterm-session` crate: wire and endpoint
 

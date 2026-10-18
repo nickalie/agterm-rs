@@ -38,14 +38,14 @@ pub struct Eligible {
 ///
 /// The first [`LiveRejection`] that applies.
 pub fn eligibility(
-    zmx_executable: &Path,
+    executable: &Path,
     login_shell: Option<&str>,
     resources_dir: Option<&Path>,
 ) -> Result<Eligible, LiveRejection> {
-    if !zmx_executable.is_absolute() {
+    if !executable.is_absolute() {
         return Err(LiveRejection::ExecutablePathNotAbsolute);
     }
-    let executable = super::standardized_path(zmx_executable);
+    let executable = super::standardized_path(executable);
     if !is_executable_file(&executable) {
         return Err(LiveRejection::ExecutableUnavailable);
     }
@@ -85,7 +85,7 @@ pub fn is_executable_file(path: &Path) -> bool {
 /// Everything a pane's wrap configuration is built from (upstream's `ZmxSupport.Inputs`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Inputs {
-    pub zmx_executable: PathBuf,
+    pub executable: PathBuf,
     /// The login shell the password database names.
     pub login_shell: Option<String>,
     /// The Ghostty resources directory holding `shell-integration/<shell>`.
@@ -136,7 +136,7 @@ impl Configuration {
 /// The host cannot wrap a pane ([`eligibility`]).
 pub fn configuration(inputs: &Inputs) -> Result<Configuration, LiveRejection> {
     let eligible = eligibility(
-        &inputs.zmx_executable,
+        &inputs.executable,
         inputs.login_shell.as_deref(),
         inputs.resources_dir.as_deref(),
     )?;
@@ -187,7 +187,7 @@ pub enum LaunchDisposition {
 impl LaunchDisposition {
     /// Whether the pane runs inside a daemon.
     #[must_use]
-    pub fn backed_by_zmx(&self) -> bool {
+    pub fn backed_by_live(&self) -> bool {
         matches!(self, Self::Wrapped(_))
     }
 }
@@ -306,7 +306,7 @@ mod tests {
 
     fn inputs(resources: &Path) -> Inputs {
         Inputs {
-            zmx_executable: PathBuf::from("/bin/echo"),
+            executable: PathBuf::from("/bin/echo"),
             login_shell: Some("/bin/zsh".to_owned()),
             resources_dir: Some(resources.to_path_buf()),
             state_dir: PathBuf::from("/tmp/agterm-state"),
@@ -413,13 +413,13 @@ mod tests {
         let with_loader = resources(true);
         let without_loader = resources(false);
         let mut relative = inputs(with_loader.path());
-        relative.zmx_executable = PathBuf::from("zmx");
+        relative.executable = PathBuf::from("zmx");
         assert_eq!(configuration(&relative), Err(LiveRejection::ExecutablePathNotAbsolute));
         let mut missing = inputs(with_loader.path());
-        missing.zmx_executable = with_loader.path().join("no-such-zmx");
+        missing.executable = with_loader.path().join("no-such-zmx");
         assert_eq!(configuration(&missing), Err(LiveRejection::ExecutableUnavailable));
         let mut not_executable = inputs(with_loader.path());
-        not_executable.zmx_executable = with_loader.path().join("shell-integration/zsh/.zshenv");
+        not_executable.executable = with_loader.path().join("shell-integration/zsh/.zshenv");
         assert_eq!(
             configuration(&not_executable),
             Err(LiveRejection::ExecutableUnavailable)
@@ -457,11 +457,11 @@ mod tests {
         for (rejection, message) in [
             (
                 LiveRejection::ExecutablePathNotAbsolute,
-                "the zmx executable path is not absolute",
+                "the live-session executable path is not absolute",
             ),
             (
                 LiveRejection::ExecutableUnavailable,
-                "the zmx executable is unavailable",
+                "the live-session executable is unavailable",
             ),
             (
                 LiveRejection::UnsupportedLoginShell,
@@ -535,7 +535,7 @@ mod tests {
             LaunchDisposition::Ordinary
         );
         let wrapped = launch_disposition(RestoreMode::Live, RestoreMode::Live, Some(configuration.clone()));
-        assert!(wrapped.backed_by_zmx());
+        assert!(wrapped.backed_by_live());
         assert_eq!(wrapped, LaunchDisposition::Wrapped(configuration.clone()));
         assert_eq!(
             launch_disposition(RestoreMode::Live, RestoreMode::None, None),

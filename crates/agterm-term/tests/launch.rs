@@ -16,10 +16,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use agterm_core::ghostty_config::GhosttyConfig;
+use agterm_core::live::support::{Configuration, attach_command, settled};
 use agterm_core::paths::MapEnv;
 use agterm_core::restore::mode::LiveRejection;
 use agterm_core::restore::spawn_plan::LaunchSeed;
-use agterm_core::zmx::support::{Configuration, attach_command, settled};
 use agterm_host::{KillOutcome, SessionHost};
 use agterm_term::{ExitStatus, Frame, Host, Launch, Pane, PaneConfig, PaneEvent, TextRegion};
 use support::{DEADLINE, SIZE, TestResult, wait_events, wait_frame, wait_text};
@@ -330,7 +330,7 @@ impl Live {
             .with("HOME", home.path());
         let runtime = agterm_zmx::Runtime::resolve(&env, None, Some("/bin/bash".to_owned()), true);
         let host = Host::from_runtime(&GhosttyConfig::default(), &runtime, None);
-        let socket_directory = agterm_core::zmx::socket_directory(&runtime.state_dir);
+        let socket_directory = agterm_core::live::socket_directory(&runtime.state_dir);
         Ok(Self {
             runtime,
             host,

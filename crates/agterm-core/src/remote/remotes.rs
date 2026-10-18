@@ -1,4 +1,4 @@
-//! `remotes.conf`, the hosts offered for `zmx tree`/attach (upstream's `Remotes.swift`): one `destination [label...]`
+//! `remotes.conf`, the hosts offered for `live tree`/attach (upstream's `Remotes.swift`): one `destination [label...]`
 //! per line. Only a whole-line `#` is a comment; the rest of a line after the destination is its label verbatim. A bad
 //! line is diagnosed and skipped, and later lines still parse.
 

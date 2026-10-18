@@ -128,8 +128,8 @@ impl RequestCommand for Clear {
                   since this instance started, which is exactly when a caller is confused about why nothing happened.\n\
                   \n\
                   Setting one writes it for the NEXT launch. This process keeps the mode it started with, and that is \
-                  not a shortcut: a pane is wrapped in a zmx daemon or not at the moment it is created, so no setting \
-                  can retrofit a shell that is already running.\n\
+                  not a shortcut: a pane is wrapped in a live-session daemon or not at the moment it is created, so \
+                  no setting can retrofit a shell that is already running.\n\
                   \n\
                   fresh shells (none) re-spawns each pane in its saved directory. re-run (rerun) starts the command \
                   each pane had at the last clean quit. live keeps the actual processes alive.\n\

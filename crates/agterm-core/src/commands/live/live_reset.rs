@@ -1,4 +1,4 @@
-//! Reset Live Sessions and `zmx.reset` (upstream's `LiveResetCoordinator.swift`, `Ghostty/LiveResetConsumer.swift`
+//! Reset Live Sessions and `live.reset` (upstream's `LiveResetCoordinator.swift`, `Ghostty/LiveResetConsumer.swift`
 //! and the marker arming in `AppDelegate`): the one confirm path refuses in a fixed order and holds the selection for
 //! the quit; the quit writes the one-shot marker and the app reopens itself; the next launch that gets live consumes
 //! the marker before any kill, narrows it against its own claims and listing, ends the confirmed daemons in one batch
@@ -18,7 +18,7 @@ use agterm_proto::{Args, ControlLiveResetStatus, ControlResult};
 use crate::Core;
 use crate::commands::Outcome;
 use crate::error::ControlError;
-use crate::zmx::reset::{
+use crate::live::reset::{
     Attribution, Marker, Outcome as ResetOutcome, Selection, dialog_text, menu_visible, narrow, notification_text,
     outcome, select,
 };
@@ -61,10 +61,10 @@ impl ResetRefusal {
     #[must_use]
     pub fn message(self) -> &'static str {
         match self {
-            Self::NotLive => "zmx.reset requires Live sessions mode both configured and active for this launch",
-            Self::ListingFailed => "zmx.reset could not read the live session list",
-            Self::InventoryIncomplete => "zmx.reset refused: the pane inventory is incomplete",
-            Self::NothingToReset => "zmx.reset found no live session to reset",
+            Self::NotLive => "live.reset requires Live sessions mode both configured and active for this launch",
+            Self::ListingFailed => "live.reset could not read the live session list",
+            Self::InventoryIncomplete => "live.reset refused: the pane inventory is incomplete",
+            Self::NothingToReset => "live.reset found no live session to reset",
         }
     }
 
@@ -109,12 +109,12 @@ impl Core {
 
     /// The panes a reset would end; `None` when the listing failed.
     fn live_reset_selection(&self) -> Option<Selection> {
-        let host = self.zmx.host()?;
+        let host = self.live.host()?;
         let records = host.list().ok()?;
         Some(select(
             &self.pane_claims(),
             &records,
-            self.zmx.outdated_before,
+            self.live.outdated_before,
             classify,
         ))
     }
@@ -138,7 +138,7 @@ impl Core {
     /// The first [`ResetRefusal`] that applies now.
     pub fn confirm_live_reset(&mut self) -> Result<(), ResetRefusal> {
         let selection = self.checked_live_reset_selection()?;
-        self.zmx.reset.pending = Some(selection);
+        self.live.reset.pending = Some(selection);
         Ok(())
     }
 
@@ -160,13 +160,13 @@ impl Core {
     /// next launch consumes, while live is still both configured and running; a mode changed since makes the next
     /// launch unable to suppress survivors, so nothing is armed then. Whether the app must reopen itself.
     pub fn arm_live_reset_on_quit(&mut self) -> bool {
-        let Some(selection) = self.zmx.reset.pending.take() else {
+        let Some(selection) = self.live.reset.pending.take() else {
             return false;
         };
         if !self.live_reset_menu_visible() {
             return false;
         }
-        let Some(markers) = &self.zmx.markers else {
+        let Some(markers) = &self.live.markers else {
             return false;
         };
         match markers.write(&Marker::new(selection.targets, SystemTime::now())) {
@@ -181,7 +181,7 @@ impl Core {
     /// The quit's relauncher did not start (upstream's `armLiveReset` after a failed spawn): the marker armed by
     /// [`Self::arm_live_reset_on_quit`] is removed, so the next launch, started by hand, kills nothing.
     pub fn disarm_live_reset(&self) {
-        if let Some(markers) = &self.zmx.markers {
+        if let Some(markers) = &self.live.markers {
             markers.remove();
         }
         tracing::error!("live sessions reset not armed: the relauncher did not start");
@@ -189,7 +189,7 @@ impl Core {
 
     /// The launch half (upstream's `LiveResetConsumer.run`): no marker, or one that does not decode, kills nothing.
     pub(crate) fn consume_live_reset(&mut self, host: &dyn SessionHost) {
-        let Some(markers) = self.zmx.markers.clone() else {
+        let Some(markers) = self.live.markers.clone() else {
             return;
         };
         let marker = match markers.consume() {
@@ -200,7 +200,7 @@ impl Core {
                 return;
             }
         };
-        let deadline = Instant::now() + self.zmx.reset.consume_budget;
+        let deadline = Instant::now() + self.live.reset.consume_budget;
         let walk = self.pane_claims();
         let claimed: Option<BTreeSet<uuid::Uuid>> = walk
             .complete
@@ -210,7 +210,7 @@ impl Core {
             &marker,
             claimed.as_ref(),
             records.as_deref(),
-            self.zmx.outdated_before,
+            self.live.outdated_before,
             classify,
         );
         let kill = narrowed.kill();
@@ -223,7 +223,7 @@ impl Core {
             survivors = self.leaders_alive_after(kill.iter().map(|target| target.leader_pid).collect(), deadline);
         }
         let result = outcome(&narrowed, &survivors, narrowed.inventory_failed);
-        self.zmx.suppressed = result.unconfirmed.iter().copied().collect();
+        self.live.suppressed = result.unconfirmed.iter().copied().collect();
         markers.remove_consumed();
         tracing::info!(
             killed = result.panes.killed,
@@ -235,7 +235,7 @@ impl Core {
         if let Some(body) = notification_text(&result) {
             self.post_app_banner("live-reset", "Live Sessions", body);
         }
-        self.zmx.reset.last = Some(result);
+        self.live.reset.last = Some(result);
     }
 
     /// The pids of `leaders` still alive at `deadline`, polled every [`LEADER_POLL`]; every one without a process table
@@ -254,13 +254,13 @@ impl Core {
     }
 }
 
-/// `zmx.reset`: the dialog's confirm path without the dialog. The quit is requested for once the reply is out.
+/// `live.reset`: the dialog's confirm path without the dialog. The quit is requested for once the reply is out.
 pub(crate) fn reset(core: &mut Core, args: &Args) -> Outcome {
     if args.force != Some(true) {
-        return Err(ControlError::rejected("zmx.reset requires --force"));
+        return Err(ControlError::rejected("live.reset requires --force"));
     }
-    if core.zmx.host().is_none() {
-        return Err(ControlError::rejected("zmx.reset is not supported on this platform"));
+    if core.live.host().is_none() {
+        return Err(ControlError::rejected("live.reset is not supported on this platform"));
     }
     let selection = core
         .checked_live_reset_selection()
@@ -274,7 +274,7 @@ pub(crate) fn reset(core: &mut Core, args: &Args) -> Outcome {
         outdated: (outdated > 0).then(|| count(outdated)),
     };
     let (_, body) = dialog_text(selection.session_count(), outdated);
-    core.zmx.reset.pending = Some(selection);
+    core.live.reset.pending = Some(selection);
     core.request_live_quit(LiveQuit { relaunch: true });
     Ok(ControlResult {
         text: Some(body),

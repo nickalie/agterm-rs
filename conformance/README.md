@@ -205,7 +205,8 @@ These runs share a machine with a live agterm, so the harness refuses a launch t
 - URI and file launches go to a no-op handler through the isolated `mimeapps.list` and `BROWSER=true`.
   The ghostty config turns off copy-on-select and clipboard writes.
 - `cli` gives every `agtermctl` call the instance's `--socket`; a call without one must resolve under the root.
-- Stopping reaps Live daemons over the protocol, SIGTERMs only the launched pid, and fails on any zmx or
+- Stopping reaps Live daemons over the protocol (in the adapter's vocabulary: `zmx.kill` upstream, `live.kill` in the
+  Rust build, [docs/rust-build.md](docs/rust-build.md)), SIGTERMs only the launched pid, and fails on any zmx or
   session-host process left with the instance's `ZMX_DIR`.
   The macOS session host outlives the app by design: the harness ends only the one started from the instance's own
   bundle copy, by exact pid, re-checking ownership before each signal.

@@ -1,4 +1,4 @@
-//! `zmx.attach` and File ▸ Attach Remote (upstream's `attachRemoteSession` in `ControlServer+Zmx.swift` and
+//! `live.attach` and File ▸ Attach Remote (upstream's `attachRemoteSession` in `ControlServer+Zmx.swift` and
 //! `AppActions+RemoteAttach.swift`): a local session attached to one of another machine's live sessions, each pane an
 //! ssh into the origin's zmx daemon, marked remote, never persisted.
 //!
@@ -24,13 +24,13 @@ use crate::Core;
 use crate::commands::Outcome;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
+use crate::live::lead::LeadAttachment;
 use crate::modal::{MAX_PICK_ITEMS, PendingPick};
 use crate::model::{AppStore, NewSession, RemoteBinding, RemoteOrigin, SplitAxis};
 use crate::pane_env::uuid_string;
 use crate::resolve::{Resolver, trimmed};
-use crate::zmx::lead::LeadAttachment;
 
-/// How often a waiting `zmx.attach` checks for the far side's answer.
+/// How often a waiting `live.attach` checks for the far side's answer.
 const ATTACH_POLL: Duration = Duration::from_millis(50);
 /// How long an attach's error HUD stays up (upstream's `remoteAttachErrorSeconds`).
 const ERROR_SECONDS: f64 = 5.0;
@@ -66,15 +66,15 @@ pub(crate) fn start_tree_read(core: &Core, host: &str) -> Result<Answer, Control
         .ok_or_else(|| ControlError::rejected(format!("the remote command failed on {host}")))
 }
 
-/// Starts `zmx.attach HOST SESSION [--window]` (upstream's dispatcher arm): no `active` default, as the target names a
+/// Starts `live.attach HOST SESSION [--window]` (upstream's dispatcher arm): no `active` default, as the target names a
 /// session on another machine, and a target with control characters is refused before it can reach an error message.
 pub(crate) fn begin_attach(core: &mut Core, request: &Request) -> Dispatched {
     let args = request.args.as_ref();
     let Some(host) = trimmed(args.and_then(|args| args.host.as_deref())).map(str::to_owned) else {
-        return Dispatched::done(Err(ControlError::rejected("zmx.attach requires a host")));
+        return Dispatched::done(Err(ControlError::rejected("live.attach requires a host")));
     };
     let Some(session) = trimmed(request.target.as_deref()).map(str::to_owned) else {
-        return Dispatched::done(Err(ControlError::rejected("zmx.attach requires a remote session")));
+        return Dispatched::done(Err(ControlError::rejected("live.attach requires a remote session")));
     };
     if !tree::is_plain(&session) {
         return Dispatched::done(Err(ControlError::rejected("invalid remote session")));
@@ -114,7 +114,7 @@ impl Core {
 
     fn attach_from(&mut self, remote_tree: &ControlRemoteTree, request: &AttachRequest) -> Outcome {
         let host = request.host.as_str();
-        // by id only: names are mutable and not unique, and `zmx tree` prints the id for exactly this hand-off
+        // by id only: names are mutable and not unique, and `live tree` prints the id for exactly this hand-off
         let remote = remote_tree
             .sessions
             .iter()
@@ -175,7 +175,7 @@ impl Core {
             } else {
                 leads.1.clone()
             };
-            self.zmx.leads.begin(identity, lead, false);
+            self.live.leads.begin(identity, lead, false);
         }
         // the row's created event fired before the binding existed
         self.start_remote_presentation(created);

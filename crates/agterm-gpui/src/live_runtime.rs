@@ -8,7 +8,7 @@
 //!   its warning alert ([`confirm_alert`]: Cancel first, the default and Escape's; Reset destructive). Reset has the
 //!   core select again ([`AppState::confirm_live_reset`]): a refusal now shows, else the app quits at once, without the
 //!   quit prompt (upstream's `armablePending` skipping `applicationShouldTerminate`).
-//! - **The reopen**: the quit (this one, or `zmx.reset --force`'s after its reply) arms the reset marker for the next
+//! - **The reopen**: the quit (this one, or `live.reset --force`'s after its reply) arms the reset marker for the next
 //!   launch ([`Core::arm_live_reset_on_quit`], `app.rs`'s shutdown) and starts the relauncher ([`spawn_relauncher`]): a
 //!   detached `/bin/sh` that waits for this process to exit and starts the same executable with the app's environment,
 //!   so the new instance runs on the same state directory and socket and consumes the marker. Upstream opens its bundle

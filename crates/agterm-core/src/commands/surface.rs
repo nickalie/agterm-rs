@@ -6,11 +6,11 @@
 use std::time::Duration;
 
 use agterm_host::TextScope;
-use agterm_proto::command::{BrowserCmd, ConfigCmd, QuickCmd, SessionCmd, ZmxCmd};
+use agterm_proto::command::{BrowserCmd, ConfigCmd, LiveCmd, QuickCmd, SessionCmd};
 use agterm_proto::{Args, Command, ControlResult, Request};
 use uuid::Uuid;
 
-use super::zmx::PaneSource;
+use super::live::PaneSource;
 use super::{Outcome, args_of, parse_pane, parse_surface_pane, session_store, unknown_pane_id, with_id};
 use crate::Core;
 use crate::dispatch::Dispatched;
@@ -76,8 +76,8 @@ pub(crate) fn deferred(core: &mut Core, request: &Request) -> Option<Dispatched>
         Command::Quick(QuickCmd::Type | QuickCmd::Text) => Some(super::quick::begin(core, request)),
         Command::Config(ConfigCmd::Reload) => Some(super::config::begin_reload(core)),
         Command::Browser(BrowserCmd::Clear) => Some(super::browser::begin_clear(core, request)),
-        Command::Zmx(ZmxCmd::Tree) => Some(crate::remote::begin_tree(core, request)),
-        Command::Zmx(ZmxCmd::Attach) => Some(crate::remote::attach::begin_attach(core, request)),
+        Command::Live(LiveCmd::Tree) => Some(crate::remote::begin_tree(core, request)),
+        Command::Live(LiveCmd::Attach) => Some(crate::remote::attach::begin_attach(core, request)),
         _ => None,
     }
 }
@@ -187,12 +187,12 @@ fn text(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         PaneSource::Refused(reason) => return Err(ControlError::rejected(reason)),
         // a covered pane's surface holds another grid's output, so its daemon answers
         PaneSource::Daemon(name) => {
-            let host = core.zmx.host().ok_or_else(read_failed)?;
+            let host = core.live.host().ok_or_else(read_failed)?;
             let screen = host.screen(&name, full).map_err(|_| read_failed())?;
             if let Some(lines) = lines {
                 return Ok(ControlResult {
                     pane: Some(pane.as_str().to_owned()),
-                    ..ControlResult::text(crate::zmx::screen::last_lines(&screen.text, lines))
+                    ..ControlResult::text(crate::live::screen::last_lines(&screen.text, lines))
                 });
             }
             screen.text

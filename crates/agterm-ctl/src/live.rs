@@ -1,37 +1,40 @@
-//! `agtermctl zmx list|screen|prune|kill|reset|tree|attach|present` (`agtermctlKit/ZmxCommands.swift`): the daemons
-//! behind live sessions, and attaching them from another machine.
+//! `agtermctl live list|screen|prune|kill|reset|tree|attach|present` (`agtermctlKit/ZmxCommands.swift`, upstream's
+//! `agtermctl zmx`, renamed: conformance/docs/rust-build.md): the daemons behind live sessions, and attaching them
+//! from another machine.
 //! Every one needs a running agterm, the only party that can join its windows, pending closes and saved snapshots
-//! against what zmx reports. `list` prints through [`format_zmx`]; the rest print their `result.text` (or `ok`).
+//! against what the session host reports. `list` prints through [`format_live`]; the rest print their `result.text`
+//! (or `ok`).
 
+use agterm_core::live::inventory::PaneRole;
 use agterm_core::paths::Env;
-use agterm_core::zmx::inventory::PaneRole;
-use agterm_proto::command::ZmxCmd;
-use agterm_proto::{Args, Command, ControlZmxEntry, ControlZmxInventory, Request};
+use agterm_proto::command::LiveCmd;
+use agterm_proto::{Args, Command, ControlLiveEntry, ControlLiveInventory, Request};
 
 use crate::output::format_restore_status;
 use crate::{BasicOptions, Failure, RequestCommand};
 
-/// `agtermctl zmx <subcommand>`.
+/// `agtermctl live <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Inspect and manage the daemons behind live sessions.",
-    long_about = "Live sessions keep each primary and split pane's process alive in a zmx daemon, so closing agterm \
-                  ends the attach client while the process keeps running. These commands show which daemons exist, \
-                  who owns them, and which are left over.\n\
+    long_about = "Live sessions keep each primary and split pane's process alive in a live-session daemon, so closing \
+                  agterm ends the attach client while the process keeps running. These commands show which daemons \
+                  exist, who owns them, and which are left over.\n\
                   \n\
                   Every one needs a running agterm: only the app can join its live windows, its pending closes and \
-                  its persisted snapshots against what zmx reports. With agterm stopped there is nothing to ask.",
+                  its persisted snapshots against what the session host reports. With agterm stopped there is nothing \
+                  to ask.",
     subcommand_required = true,
     arg_required_else_help = true
 )]
-pub struct Zmx {
+pub struct Live {
     #[command(subcommand)]
-    command: ZmxCommand,
+    command: LiveCommand,
 }
 
 /// The subcommands, in upstream's `Zmx.configuration.subcommands` order.
 #[derive(Debug, clap::Subcommand)]
-enum ZmxCommand {
+enum LiveCommand {
     List(List),
     Screen(Screen),
     Prune(Prune),
@@ -42,17 +45,17 @@ enum ZmxCommand {
     Present(Present),
 }
 
-impl Zmx {
+impl Live {
     fn command(&self) -> &dyn RequestCommand {
         match &self.command {
-            ZmxCommand::List(command) => command,
-            ZmxCommand::Screen(command) => command,
-            ZmxCommand::Prune(command) => command,
-            ZmxCommand::Kill(command) => command,
-            ZmxCommand::Reset(command) => command,
-            ZmxCommand::Tree(command) => command,
-            ZmxCommand::Attach(command) => command,
-            ZmxCommand::Present(command) => command,
+            LiveCommand::List(command) => command,
+            LiveCommand::Screen(command) => command,
+            LiveCommand::Prune(command) => command,
+            LiveCommand::Kill(command) => command,
+            LiveCommand::Reset(command) => command,
+            LiveCommand::Tree(command) => command,
+            LiveCommand::Attach(command) => command,
+            LiveCommand::Present(command) => command,
         }
     }
 
@@ -67,15 +70,15 @@ impl Zmx {
     }
 }
 
-fn zmx_request(cmd: ZmxCmd, target: Option<String>, args: Option<Args>) -> Request {
+fn live_request(cmd: LiveCmd, target: Option<String>, args: Option<Args>) -> Request {
     Request {
-        cmd: Command::Zmx(cmd),
+        cmd: Command::Live(cmd),
         target,
         args,
     }
 }
 
-/// `agtermctl zmx list`.
+/// `agtermctl live list`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "List every daemon and the pane that claims it.",
@@ -83,8 +86,8 @@ fn zmx_request(cmd: ZmxCmd, target: Option<String>, args: Option<Args>) -> Reque
                   vanished are both visible. The header reports the restore mode this launch is running.\n\
                   \n\
                   State reads: claimed (a pane owns it), orphan (nothing does), pendingClose (its session is inside \
-                  its undo window), foreign (a zmx session that is not agterm's), unknown (the pane inventory was \
-                  incomplete, so no row can be called an orphan), conflicted (two panes claim it).\n\
+                  its undo window), foreign (a session in this namespace that is not agterm's), unknown (the pane \
+                  inventory was incomplete, so no row can be called an orphan), conflicted (two panes claim it).\n\
                   \n\
                   A closed window's panes are claimed with zero clients. That is the normal resting state after you \
                   close a window, not a leak."
@@ -100,15 +103,15 @@ impl RequestCommand for List {
     }
 
     fn make_request(&self) -> Request {
-        zmx_request(ZmxCmd::List, None, None)
+        live_request(LiveCmd::List, None, None)
     }
 }
 
-/// `agtermctl zmx screen NAME [--all | --lines N]`.
+/// `agtermctl live screen NAME [--all | --lines N]`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Print a daemon's screen as plain text, whether or not a window shows its pane.",
-    long_about = "NAME is a daemon name as `zmx list` prints it, not a session id. The read attaches nothing, opens \
+    long_about = "NAME is a daemon name as `live list` prints it, not a session id. The read attaches nothing, opens \
                   no window and changes no pane's size, so it reaches a pane in a closed window.\n\
                   \n\
                   The default is the daemon's current screen at the size its last leader gave it, which has no scroll \
@@ -116,7 +119,7 @@ impl RequestCommand for List {
                   that."
 )]
 pub struct Screen {
-    #[arg(help = "Daemon name, from `zmx list`.")]
+    #[arg(help = "Daemon name, from `live list`.")]
     name: String,
 
     #[arg(long, help = "Read the screen plus the retained scrollback.")]
@@ -151,24 +154,24 @@ impl RequestCommand for Screen {
             lines: self.lines,
             ..Args::default()
         };
-        zmx_request(ZmxCmd::Screen, None, Some(args))
+        live_request(LiveCmd::Screen, None, Some(args))
     }
 }
 
-/// `agtermctl zmx prune`.
+/// `agtermctl live prune`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Kill the daemons no pane claims and nothing is attached to.",
-    long_about = "Acts only on rows `zmx list` shows as orphan with no clients, so you can see what is eligible before \
-                  running it. It refuses outright when the pane inventory is incomplete or two panes claim one daemon, \
-                  since neither answer can be acted on safely.\n\
+    long_about = "Acts only on rows `live list` shows as orphan with no clients, so you can see what is eligible \
+                  before running it. It refuses outright when the pane inventory is incomplete or two panes claim one \
+                  daemon, since neither answer can be acted on safely.\n\
                   \n\
-                  The check is not atomic. zmx has no kill-if-detached, so this re-lists immediately before it kills \
-                  and drops anything that gained a client in between; a client attaching from outside agterm inside \
-                  that last gap can still be terminated.\n\
+                  The check is not atomic. The session host has no kill-if-detached, so this re-lists immediately \
+                  before it kills and drops anything that gained a client in between; a client attaching from outside \
+                  agterm inside that last gap can still be terminated.\n\
                   \n\
-                  It reports each daemon separately. A \"cleaned up a stale socket\" line is not a kill: zmx unlinked \
-                  a socket it could not reach, and that daemon may still be running."
+                  It reports each daemon separately. A \"cleaned up a stale socket\" line is not a kill: the session \
+                  host unlinked a socket it could not reach, and that daemon may still be running."
 )]
 pub struct Prune {
     #[command(flatten)]
@@ -181,11 +184,11 @@ impl RequestCommand for Prune {
     }
 
     fn make_request(&self) -> Request {
-        zmx_request(ZmxCmd::Prune, None, None)
+        live_request(LiveCmd::Prune, None, None)
     }
 }
 
-/// `agtermctl zmx kill --pane P --force --target S [--window W]`.
+/// `agtermctl live kill --pane P --force --target S [--window W]`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Destroy one pane's daemon and the process running in it.",
@@ -202,8 +205,9 @@ impl RequestCommand for Prune {
                   Killing the daemon of the pane you are typing in can kill this agtermctl before it reads the reply, \
                   the same way \"session close\" on your own session can.\n\
                   \n\
-                  It refuses a daemon that is already gone, one zmx could not read (forcing that can unlink a live \
-                  daemon's socket and leave it running unreachable), and a session inside its undo window."
+                  It refuses a daemon that is already gone, one the session host could not read (forcing that can \
+                  unlink a live daemon's socket and leave it running unreachable), and a session inside its undo \
+                  window."
 )]
 pub struct Kill {
     #[arg(long, help = "Which pane's daemon: left/primary/top or right/split/bottom.")]
@@ -253,19 +257,19 @@ impl RequestCommand for Kill {
             pane: Some(self.pane.clone()),
             ..Args::default()
         };
-        zmx_request(ZmxCmd::Kill, Some(self.target.clone()), Some(args))
+        live_request(LiveCmd::Kill, Some(self.target.clone()), Some(args))
     }
 }
 
-/// `agtermctl zmx reset --force`.
+/// `agtermctl live reset --force`.
 #[derive(Debug, clap::Args)]
 #[command(
-    about = "Reset live sessions that are unsupervised or predate the recorded zmx update, then reopen.",
+    about = "Reset live sessions that are unsupervised or predate the recorded live-session update, then reopen.",
     long_about = "The same operation as Reset Live Sessions in the app menu, without the dialog. It covers every live \
-                  session created before the recorded first launch with this zmx build: live sessions keep the zmx \
-                  they started with through updates. The reset ends those sessions' processes at the next launch and \
-                  recreates them, starting their captured commands again where possible. Other sessions are left \
-                  alone.\n\
+                  session created before the recorded first launch with this session host build: live sessions keep \
+                  the session host they started with through updates. The reset ends those sessions' processes at the \
+                  next launch and recreates them, starting their captured commands again where possible. Other \
+                  sessions are left alone.\n\
                   \n\
                   agterm quits and reopens itself right after answering. Running work in the affected sessions stops, \
                   and agent conversations may need to be resumed by hand. Run from inside one of those sessions, this \
@@ -304,14 +308,14 @@ impl RequestCommand for Reset {
             force: Some(true),
             ..Args::default()
         };
-        zmx_request(ZmxCmd::Reset, None, Some(args))
+        live_request(LiveCmd::Reset, None, Some(args))
     }
 }
 
-/// `zmx.list`: the daemon inventory under the restore header (upstream's `formatZmx`). Owner window state is its own
+/// `live.list`: the daemon inventory under the restore header (upstream's `formatZmx`). Owner window state is its own
 /// column rather than left to the client count: a closed window's panes sit at zero clients normally.
 #[must_use]
-pub fn format_zmx(inventory: &ControlZmxInventory) -> String {
+pub fn format_live(inventory: &ControlLiveInventory) -> String {
     let mut lines = vec![format_restore_status(&inventory.restore)];
     if !inventory.inventory_complete {
         lines.push("inventory incomplete: some pane is unaccounted for, so nothing can be pruned".to_owned());
@@ -321,12 +325,12 @@ pub fn format_zmx(inventory: &ControlZmxInventory) -> String {
         return lines.join("\n");
     }
     lines.push(String::new());
-    lines.extend(inventory.entries.iter().map(zmx_row));
+    lines.extend(inventory.entries.iter().map(live_row));
     lines.join("\n")
 }
 
-/// One row, carrying the ids `zmx kill` needs, not just names: a closed or unindexed row may not appear in `tree`.
-fn zmx_row(entry: &ControlZmxEntry) -> String {
+/// One row, carrying the ids `live kill` needs, not just names: a closed or unindexed row may not appear in `tree`.
+fn live_row(entry: &ControlLiveEntry) -> String {
     let clients = entry.clients.map_or_else(
         || "-".to_owned(),
         |clients| format!("{clients} client{}", if clients == 1 { "" } else { "s" }),
@@ -375,13 +379,13 @@ fn short_id(id: &str) -> &str {
     id.char_indices().nth(8).map_or(id, |(end, _)| &id[..end])
 }
 
-/// `agtermctl zmx tree [HOST]`.
+/// `agtermctl live tree [HOST]`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "List the sessions that can be attached to, here or on another Mac.",
     long_about = "With a HOST, runs over ssh against a machine that is also running agterm and reports what it offers, \
                   across every one of its open windows. Feed the result to a picker and hand what the user chooses to \
-                  `zmx attach`.\n\
+                  `live attach`.\n\
                   \n\
                   With no HOST, reports this app's own attachable sessions in the same shape — which is exactly the \
                   form the remote call runs on the far side, so it is also how to see what another machine would \
@@ -390,7 +394,7 @@ fn short_id(id: &str) -> &str {
                   Only a session whose every pane has a live daemon is listed. One whose daemon has gone is omitted \
                   rather than offered, because attaching to a name that no longer exists would create a fresh shell \
                   wearing it. An empty list is a successful answer: it does not distinguish a store that is not \
-                  running in live mode, which `zmx list` reports.\n\
+                  running in live mode, which `live list` reports.\n\
                   \n\
                   The connection is non-interactive: ssh runs with BatchMode, so key-based auth must already work for \
                   this host and a password or host-key prompt is a failure rather than a question."
@@ -413,15 +417,15 @@ impl RequestCommand for Tree {
             host: Some(host.clone()),
             ..Args::default()
         });
-        zmx_request(ZmxCmd::Tree, None, args)
+        live_request(LiveCmd::Tree, None, args)
     }
 }
 
-/// `agtermctl zmx attach HOST SESSION [--window]`.
+/// `agtermctl live attach HOST SESSION [--window]`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Attach to a session on another Mac, as a session here.",
-    long_about = "Takes a host and the id of one of the sessions `zmx tree` listed, and opens it in the chosen window \
+    long_about = "Takes a host and the id of one of the sessions `live tree` listed, and opens it in the chosen window \
                   marked as remote. Defaults to the frontmost window after discovery. A remote session with a split \
                   arrives with the same split.\n\
                   \n\
@@ -435,7 +439,7 @@ pub struct Attach {
     #[arg(help = "The host, as ssh would take it.")]
     host: String,
 
-    #[arg(help = "The remote session's id, as `zmx tree` prints it.")]
+    #[arg(help = "The remote session's id, as `live tree` prints it.")]
     session: String,
 
     #[arg(
@@ -464,11 +468,11 @@ impl RequestCommand for Attach {
             window: self.window.clone(),
             ..Args::default()
         };
-        zmx_request(ZmxCmd::Attach, Some(self.session.clone()), Some(args))
+        live_request(LiveCmd::Attach, Some(self.session.clone()), Some(args))
     }
 }
 
-/// `agtermctl zmx present SESSION`.
+/// `agtermctl live present SESSION`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Carry a presentation stream for one session between stdin/stdout and this app.",
@@ -491,7 +495,7 @@ impl RequestCommand for Present {
     }
 
     fn make_request(&self) -> Request {
-        zmx_request(ZmxCmd::Present, Some(self.session.clone()), None)
+        live_request(LiveCmd::Present, Some(self.session.clone()), None)
     }
 
     /// Opens the stream and bridges it to stdin/stdout until either side ends (upstream's `Present.run`).
@@ -504,7 +508,7 @@ impl RequestCommand for Present {
     }
 }
 
-/// `zmx.tree`: one attachable session per line, carrying the id `zmx attach` takes (upstream's `formatRemoteTree`).
+/// `live.tree`: one attachable session per line, carrying the id `live attach` takes (upstream's `formatRemoteTree`).
 /// An empty answer says so rather than printing nothing, which a caller cannot tell from a failed read.
 #[must_use]
 pub fn format_remote_tree(tree: &agterm_proto::ControlRemoteTree) -> String {
@@ -573,8 +577,8 @@ mod tests {
         }
     }
 
-    fn entry(daemon: &str) -> ControlZmxEntry {
-        ControlZmxEntry {
+    fn entry(daemon: &str) -> ControlLiveEntry {
+        ControlLiveEntry {
             daemon: daemon.to_owned(),
             state: "orphan".to_owned(),
             observation: "running".to_owned(),
@@ -594,7 +598,7 @@ mod tests {
 
     #[test]
     fn an_empty_inventory_says_so_under_the_header() {
-        let inventory = ControlZmxInventory {
+        let inventory = ControlLiveInventory {
             restore: restore(),
             inventory_complete: false,
             endpoint: None,
@@ -602,7 +606,7 @@ mod tests {
             entries: Vec::new(),
         };
         assert_eq!(
-            format_zmx(&inventory),
+            format_live(&inventory),
             "configured: live (next launch)\nthis launch: requested live, active live\n\
              inventory incomplete: some pane is unaccounted for, so nothing can be pruned\nno daemons"
         );
@@ -610,7 +614,7 @@ mod tests {
 
     #[test]
     fn a_row_carries_the_owner_path_and_short_ids() {
-        let claimed = ControlZmxEntry {
+        let claimed = ControlLiveEntry {
             state: "claimed".to_owned(),
             clients: Some(1),
             window_id: Some("0A0B0C0D-1111-2222-3333-444444444444".to_owned()),
@@ -623,11 +627,11 @@ mod tests {
             outdated: Some(true),
             ..entry("agterm-a")
         };
-        let orphan = ControlZmxEntry {
+        let orphan = ControlLiveEntry {
             clients: Some(0),
             ..entry("agterm-b")
         };
-        let inventory = ControlZmxInventory {
+        let inventory = ControlLiveInventory {
             restore: restore(),
             inventory_complete: true,
             endpoint: None,
@@ -635,7 +639,7 @@ mod tests {
             entries: vec![claimed, orphan, entry("notes")],
         };
         assert_eq!(
-            format_zmx(&inventory),
+            format_live(&inventory),
             "configured: live (next launch)\nthis launch: requested live, active live\n\n\
              agterm-a  claimed [open window]  running outdated  1 client  99887766 main / dev / build (left) win 0A0B0C0D\n\
              agterm-b  orphan  running  0 clients  -\n\

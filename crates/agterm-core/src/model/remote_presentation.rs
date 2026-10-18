@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use agterm_proto::ControlZmxEndpoint;
+use agterm_proto::ControlLiveEndpoint;
 use agterm_proto::tree::ControlPresentationNode;
 use uuid::Uuid;
 
@@ -20,14 +20,14 @@ use crate::remote::frames::{PresentationLayout, PresentationMode, PresentationPa
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteOrigin {
     pub host: String,
-    pub endpoint: ControlZmxEndpoint,
+    pub endpoint: ControlLiveEndpoint,
     pub session_name: String,
 }
 
 /// Ties a session attached from another machine to the origin's own model (upstream's `RemoteBinding`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteBinding {
-    /// The origin's session id, which `zmx present` names.
+    /// The origin's session id, which `live present` names.
     pub remote_session_id: String,
     /// The origin's presentation protocol version, `None` for an origin that predates the stream.
     pub presentation_version: Option<i64>,
@@ -49,7 +49,7 @@ impl RemoteBinding {
     ) -> Self {
         let local_by_remote = daemons_by_local
             .iter()
-            .filter_map(|(local, daemon)| crate::zmx::pane_identity(daemon).map(|remote| (remote, *local)))
+            .filter_map(|(local, daemon)| crate::live::pane_identity(daemon).map(|remote| (remote, *local)))
             .collect();
         Self {
             remote_session_id: remote_session_id.into(),
@@ -385,8 +385,8 @@ impl AppStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::live::daemon_name;
     use crate::model::{NewSession, StatusShape};
-    use crate::zmx::daemon_name;
 
     fn binding(local: Uuid, remote: Uuid, version: Option<i64>) -> RemoteBinding {
         RemoteBinding::new("ORIGIN", HashMap::from([(local, daemon_name(remote))]), version, None)

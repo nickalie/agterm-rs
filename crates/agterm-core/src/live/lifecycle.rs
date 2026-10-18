@@ -166,7 +166,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::zmx::{NAME_PREFIX, daemon_name};
+    use crate::live::{NAME_PREFIX, daemon_name};
 
     fn record(name: &str, clients: Option<u32>, leader_pid: Option<i32>, created_at: Option<u64>) -> LiveSessionRecord {
         LiveSessionRecord {

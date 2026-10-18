@@ -9,9 +9,9 @@ use std::path::PathBuf;
 
 use agterm_proto::ControlRestoreStatus;
 
+use crate::live::shell_integration::LoginShell;
+use crate::live::support::eligibility;
 use crate::persist::RestoreMode;
-use crate::zmx::shell_integration::LoginShell;
-use crate::zmx::support::eligibility;
 
 /// The mode the settings asked this launch for, the one it runs in, and why `live` fell back when it did (upstream's
 /// `RestoreLaunchDecision`).
@@ -98,8 +98,8 @@ impl LiveRejection {
     pub fn message(self) -> &'static str {
         match self {
             Self::UiTestLaunch => "Live sessions are disabled for default UI tests.",
-            Self::ExecutablePathNotAbsolute => "the zmx executable path is not absolute",
-            Self::ExecutableUnavailable => "the zmx executable is unavailable",
+            Self::ExecutablePathNotAbsolute => "the live-session executable path is not absolute",
+            Self::ExecutableUnavailable => "the live-session executable is unavailable",
             Self::UnsupportedLoginShell => "the password-database login shell is not zsh, bash or fish",
             Self::MissingShellIntegration(LoginShell::Zsh) => "the bundled zsh integration is unavailable",
             Self::MissingShellIntegration(LoginShell::Bash) => "the bundled bash integration is unavailable",
@@ -113,10 +113,10 @@ impl LiveRejection {
 pub struct LiveProbe {
     /// A UI-test launch (`is_ui_test_launch`).
     pub ui_test_launch: bool,
-    /// `AGTERM_UITEST_ENABLE_ZMX=1` opts a UI-test launch back in.
+    /// `AGTERM_UITEST_ENABLE_LIVE=1` opts a UI-test launch back in.
     pub ui_test_opt_in: bool,
     /// The bundled zmx executable.
-    pub zmx_executable: PathBuf,
+    pub executable: PathBuf,
     /// The login shell in the password database.
     pub login_shell: Option<String>,
     /// The bundled resources directory holding `shell-integration/<shell>`.
@@ -124,18 +124,18 @@ pub struct LiveProbe {
 }
 
 /// The variable a UI-test launch sets to keep live sessions (upstream's `ZmxLaunch.uiTestOptInKey`).
-pub const UI_TEST_OPT_IN: &str = "AGTERM_UITEST_ENABLE_ZMX";
+pub const UI_TEST_OPT_IN: &str = "AGTERM_UITEST_ENABLE_LIVE";
 
 impl LiveProbe {
     /// The first reason this host cannot run live sessions, in upstream's order; `None` when it can. After the UI-test
-    /// bypass it is the wrap's own walk ([`crate::zmx::support::eligibility`]), so the order lives once.
+    /// bypass it is the wrap's own walk ([`crate::live::support::eligibility`]), so the order lives once.
     #[must_use]
     pub fn rejection(&self) -> Option<LiveRejection> {
         if self.ui_test_launch && !self.ui_test_opt_in {
             return Some(LiveRejection::UiTestLaunch);
         }
         eligibility(
-            &self.zmx_executable,
+            &self.executable,
             self.login_shell.as_deref(),
             self.resources_dir.as_deref(),
         )
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn live_falls_back_to_fresh_shells_only_when_unavailable() {
-        let reason = Some("the zmx executable is unavailable".to_owned());
+        let reason = Some("the live-session executable is unavailable".to_owned());
         let fallback = RestoreLaunchDecision::new(RestoreMode::Live, reason.clone());
         assert_eq!(
             (fallback.requested, fallback.active),
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn the_status_flags_a_restart_and_names_only_a_refused_live_request() {
-        let reason = Some("the zmx executable is unavailable".to_owned());
+        let reason = Some("the live-session executable is unavailable".to_owned());
         let none = RestoreLaunchDecision::new(RestoreMode::None, reason.clone());
         let status = none.status(RestoreMode::None);
         assert_eq!(
@@ -205,17 +205,17 @@ mod tests {
         let mut probe = LiveProbe {
             ui_test_launch: true,
             ui_test_opt_in: false,
-            zmx_executable: PathBuf::from("zmx"),
+            executable: PathBuf::from("zmx"),
             login_shell: Some("/bin/tcsh".to_owned()),
             resources_dir: Some(resources.clone()),
         };
         assert_eq!(probe.rejection(), Some(LiveRejection::UiTestLaunch));
         probe.ui_test_opt_in = true;
         assert_eq!(probe.rejection(), Some(LiveRejection::ExecutablePathNotAbsolute));
-        probe.zmx_executable.clone_from(&zmx);
+        probe.executable.clone_from(&zmx);
         assert_eq!(
             probe.unavailable_reason().as_deref(),
-            Some("the zmx executable is unavailable")
+            Some("the live-session executable is unavailable")
         );
         fs::write(&zmx, "#!/bin/sh\n").unwrap();
         assert_eq!(probe.rejection(), Some(LiveRejection::ExecutableUnavailable));

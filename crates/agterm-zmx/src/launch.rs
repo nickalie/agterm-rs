@@ -9,12 +9,12 @@ use std::ffi::CStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use agterm_core::live::lead::LeadAttachment;
+use agterm_core::live::shell_integration::Inherited;
+use agterm_core::live::socket_directory;
+use agterm_core::live::support::{self, Configuration, Inputs};
 use agterm_core::paths::{self, Env};
 use agterm_core::restore::mode::{LiveProbe, LiveRejection, UI_TEST_OPT_IN};
-use agterm_core::zmx::lead::LeadAttachment;
-use agterm_core::zmx::shell_integration::Inherited;
-use agterm_core::zmx::socket_directory;
-use agterm_core::zmx::support::{self, Configuration, Inputs};
 use uuid::Uuid;
 
 use crate::client::ZmxClient;
@@ -78,7 +78,7 @@ impl Runtime {
         LiveProbe {
             ui_test_launch: agterm_core::is_ui_test_launch(env),
             ui_test_opt_in: env.var(UI_TEST_OPT_IN).is_some_and(|value| value == "1"),
-            zmx_executable: self.zmx_executable.clone(),
+            executable: self.zmx_executable.clone(),
             login_shell: self.login_shell.clone(),
             resources_dir: self.resources_dir.clone(),
         }
@@ -96,7 +96,7 @@ impl Runtime {
         lead: Option<LeadAttachment>,
     ) -> Result<Configuration, LiveRejection> {
         support::configuration(&Inputs {
-            zmx_executable: self.zmx_executable.clone(),
+            executable: self.zmx_executable.clone(),
             login_shell: self.login_shell.clone(),
             resources_dir: self.resources_dir.clone(),
             state_dir: self.state_dir.clone(),
@@ -149,8 +149,8 @@ pub fn login_shell() -> Option<String> {
 mod tests {
     use std::os::unix::fs::PermissionsExt;
 
+    use agterm_core::live::daemon_name;
     use agterm_core::paths::MapEnv;
-    use agterm_core::zmx::daemon_name;
 
     use super::*;
 
@@ -279,12 +279,12 @@ mod tests {
         let unstaged = Runtime::resolve(&MapEnv::new(), Some(Path::new("/nonexistent/bin")), None, false);
         assert_eq!(
             unstaged.live_probe(&MapEnv::new()).unavailable_reason().as_deref(),
-            Some("the zmx executable is unavailable")
+            Some("the live-session executable is unavailable")
         );
         let nowhere = Runtime::resolve(&MapEnv::new(), None, None, false);
         assert_eq!(
             nowhere.live_probe(&MapEnv::new()).unavailable_reason().as_deref(),
-            Some("the zmx executable path is not absolute")
+            Some("the live-session executable path is not absolute")
         );
         assert!(bundled_build_id(Path::new("/nonexistent/bin")).is_none());
         let zsh = Runtime::resolve(&MapEnv::new(), Some(&bin), Some("/bin/zsh".to_owned()), false);

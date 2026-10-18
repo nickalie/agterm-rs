@@ -13,6 +13,7 @@ mod font;
 mod hooks;
 mod hud;
 mod keymap;
+mod live;
 mod metadata;
 mod moves;
 mod overlay;
@@ -31,7 +32,6 @@ mod theme;
 mod viewer;
 mod window;
 mod workspace;
-mod zmx;
 
 use agterm_proto::command::SessionCmd;
 use agterm_proto::{AppIdentity, Args, Command, Request, Response};

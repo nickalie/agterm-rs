@@ -10,8 +10,8 @@ use agterm_proto::command::SurfaceCmd;
 use agterm_proto::{ControlCursor, ControlResult, Request};
 use uuid::Uuid;
 
+use super::live::PaneSource;
 use super::quick::{self, QUICK};
-use super::zmx::PaneSource;
 use super::{Outcome, ToggleMode, args_of, session_store, unknown_pane_id};
 use crate::Core;
 use crate::error::ControlError;
@@ -154,7 +154,7 @@ fn cursor_of(core: &Core, store: &AppStore, id: SurfaceId) -> Result<ControlResu
         PaneSource::Daemon(name) => {
             let failed = || ControlError::rejected("failed to read cursor position");
             let screen = core
-                .zmx
+                .live
                 .host()
                 .ok_or_else(failed)?
                 .screen(&name, false)

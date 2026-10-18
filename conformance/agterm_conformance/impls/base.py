@@ -35,6 +35,13 @@ from agterm_conformance.client import (
     check_under_root,
 )
 from agterm_conformance.plugin import SCRUB_PREFIXES
+from agterm_conformance.vocabulary import (
+    LIVE,
+    UPSTREAM,
+    Vocabulary,
+    fnv1a64,  # noqa: F401 - re-exported for the self-tests
+    upstream_socket_directory,
+)
 
 # Both references refuse to bind at `path.utf8.count >= 104` (Darwin's sun_path, mirrored on Linux).
 SOCKET_PATH_CAP = 104
@@ -200,25 +207,6 @@ def version_tuple(version: str) -> tuple[int, ...]:
     return tuple(parts)
 
 
-def zmx_socket_directory(state_dir: str | os.PathLike[str]) -> str:
-    """`ZmxSupport.socketDirectory`: FNV-1a 64 of the canonical state dir, under `/tmp`."""
-    return f"/tmp/agterm-zmx-{fnv1a64(_foundation_resolved(os.path.realpath(state_dir)))}"
-
-
-def fnv1a64(text: str) -> str:
-    value = 14_695_981_039_346_656_037
-    for byte in text.encode():
-        value = ((value ^ byte) * 1_099_511_628_211) & 0xFFFF_FFFF_FFFF_FFFF
-    return f"{value:016x}"
-
-
-def _foundation_resolved(path: str) -> str:
-    # Darwin Foundation's resolvingSymlinksInPath drops a leading /private when the shorter path exists.
-    if sys.platform == "darwin" and path.startswith("/private/") and os.path.exists(path[len("/private") :]):
-        return path[len("/private") :]
-    return path
-
-
 def login_shell_blocker() -> str | None:
     """Why Live sessions cannot run for this account, or None: both references wrap a pane in zmx only when
     the password-database login shell is zsh (`ZmxSupport.configuration`), and the pane then execs it."""
@@ -264,7 +252,9 @@ OWN_VARIABLES = frozenset(
         "AGTERM_APP_ID",
         "AGTERM_RESOURCE_ROOT",
         "AGTERM_UITEST_FORCE_SIDEBAR_VISIBLE",
-        "AGTERM_UITEST_ENABLE_ZMX",
+        # Each vocabulary's UI-test opt-in, set only for the references that read one (swift_macos.py).
+        UPSTREAM.ui_test_opt_in,
+        LIVE.ui_test_opt_in,
         "AGTERM_UITEST_SHOW_WELCOME",
         # The Rust build's log filter, set only by tools/ghostty_probe.py and tools/chrome_probe.py; an inherited one
         # is still scrubbed.
@@ -361,8 +351,11 @@ class Instance:
     env: dict[str, str]
     log: Path
     app_id: str | None
-    zmx_dir: str
+    # The live-session socket directory the vocabulary derives from the state dir; leftovers are looked for under it.
+    live_dir: str
     version: dict[str, Any] = field(default_factory=dict)
+    # What the implementation calls the live-session group (agterm_conformance.vocabulary).
+    vocabulary: Vocabulary = UPSTREAM
     # The instance's own headless weston and session bus; a relaunch keeps both.
     compositor: subprocess.Popen[bytes] | None = None
     session_bus: subprocess.Popen[bytes] | None = None
@@ -393,6 +386,8 @@ class Adapter:
     # Arguments appended to the headless weston's command line, set only by tools/chrome_probe.py (`--debug`, which
     # lets weston-screenshooter read the output); `weston_args` adds an adapter's own.
     compositor_args: ClassVar[tuple[str, ...]] = ()
+    # The names the implementation answers the shared tests' live-session group by (agterm_conformance.vocabulary).
+    vocabulary: ClassVar[Vocabulary] = UPSTREAM
 
     def __init__(self, bin: Path | None, ctl: Path | None = None) -> None:
         # Absolute now: the child starts in the isolated HOME, where a relative path would not resolve.
@@ -545,7 +540,8 @@ class Adapter:
             env=env,
             log=log,
             app_id=app_id,
-            zmx_dir=zmx_socket_directory(env["AGTERM_STATE_DIR"]),
+            live_dir=self.vocabulary.socket_directory(env["AGTERM_STATE_DIR"]),
+            vocabulary=self.vocabulary,
             compositor=compositor,
             session_bus=session_bus,
         )
@@ -580,7 +576,7 @@ class Adapter:
                 raise
         except BaseException as error:
             _note_headless_stop(error, instance.compositor, instance.session_bus, instance.root)
-            if (leftovers := _leftovers_error(instance.zmx_dir)) is not None:
+            if (leftovers := _leftovers_error(instance.live_dir, vocabulary=instance.vocabulary)) is not None:
                 raise leftovers from error
             raise
         relaunched = Instance(
@@ -592,7 +588,8 @@ class Adapter:
             env=instance.env,
             log=instance.log,
             app_id=instance.app_id,
-            zmx_dir=instance.zmx_dir,
+            live_dir=instance.live_dir,
+            vocabulary=instance.vocabulary,
             compositor=instance.compositor,
             session_bus=instance.session_bus,
         )
@@ -619,7 +616,7 @@ class Adapter:
             try:
                 if (code := instance.process.poll()) is not None:
                     steps = [f"the app had already exited with {code}"]
-                elif find_leftovers(instance.zmx_dir) or _lists_daemons(instance):
+                elif find_leftovers(instance.live_dir, instance.vocabulary) or _lists_daemons(instance):
                     # Listed too: a daemon still starting has no process yet and would outlive the quit.
                     steps = reap_live_sessions(instance)
                 else:
@@ -627,7 +624,7 @@ class Adapter:
             finally:
                 problem = _terminate_app(instance)
             helper_problem = self.stop_helpers(instance)
-            leftovers = _leftovers_error(instance.zmx_dir, steps)
+            leftovers = _leftovers_error(instance.live_dir, steps, instance.vocabulary)
         finally:
             _release_app_id(instance.app_id)
             headless_problem = stop_headless(instance.compositor, instance.session_bus, instance.root)
@@ -641,7 +638,7 @@ class Adapter:
             raise StopError(headless_problem)
         if cleanup:
             shutil.rmtree(instance.root, ignore_errors=True)
-            remove_zmx_dir(instance.zmx_dir)
+            remove_zmx_dir(instance.live_dir)
 
     def stop_helpers(self, instance: Instance) -> str | None:
         """Hook: end a helper the implementation detaches on purpose once the app is gone; returns what went wrong."""
@@ -890,17 +887,19 @@ def _tail(log: Path, lines: int = 20) -> str:
         return ""
 
 
-def _leftovers_error(zmx_dir: str, steps: Iterable[str] = ()) -> LeftoverProcesses | None:
+def _leftovers_error(
+    live_dir: str, steps: Iterable[str] = (), vocabulary: Vocabulary = UPSTREAM
+) -> LeftoverProcesses | None:
     # A killed zmx daemon is confirmed gone by its socket and still exits for a moment after.
     deadline = time.monotonic() + LEFTOVER_GRACE
-    while (leftovers := find_leftovers(zmx_dir)) and time.monotonic() < deadline:
+    while (leftovers := find_leftovers(live_dir, vocabulary)) and time.monotonic() < deadline:
         threading.Event().wait(POLL_INTERVAL * 4)
     if not leftovers:
         return None
     # Cut: on macOS the command carries the whole `ps -E` environment.
     described = ", ".join(f"{pid} {command[:300]}" for pid, _, command in leftovers)
     reaping = f"; reaping: {'; '.join(steps)}" if steps else ""
-    return LeftoverProcesses(f"processes left under ZMX_DIR {zmx_dir}: {described}{reaping}")
+    return LeftoverProcesses(f"processes left under {vocabulary.directory_variable} {live_dir}: {described}{reaping}")
 
 
 def _absolute(path: Path | None) -> Path | None:
@@ -1020,11 +1019,13 @@ def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[
             args: dict[str, Any] = {"pane": entry["pane"], "force": True}
             if entry.get("windowID"):
                 args["window"] = entry["windowID"]
-            response = instance.request("zmx.kill", entry["sessionID"], **args)
-            steps.append(f"zmx.kill {_daemon_key(entry)}: {'ok' if response.ok else response.error}")
-        prune = instance.request("zmx.prune")
+            kill = instance.vocabulary.command("zmx.kill")
+            response = instance.request(kill, entry["sessionID"], **args)
+            steps.append(f"{kill} {_daemon_key(entry)}: {'ok' if response.ok else response.error}")
+        prune_command = instance.vocabulary.command("zmx.prune")
+        prune = instance.request(prune_command)
         if not prune.ok:
-            steps.append(f"zmx.prune: {prune.error}")
+            steps.append(f"{prune_command}: {prune.error}")
         steps.append(f"left listed: {_listed(instance)}")
     except ClientError as error:
         steps.append(f"reaping: {error}")
@@ -1032,8 +1033,8 @@ def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[
 
 
 def _listed(instance: Instance) -> str:
-    listing = instance.request("zmx.list")
-    inventory = (listing.result or {}).get("zmx") if listing.ok else None
+    listing = instance.request(instance.vocabulary.command("zmx.list"))
+    inventory = _inventory(listing, instance.vocabulary)
     entries = inventory.get("entries") if isinstance(inventory, dict) else None
     if not isinstance(entries, list):
         return f"no inventory ({listing.error})"
@@ -1041,19 +1042,23 @@ def _listed(instance: Instance) -> str:
     return ", ".join(rows) or "nothing"
 
 
+def _inventory(listing: Response, vocabulary: Vocabulary) -> Any:
+    """The `zmx.list` inventory a reply carries under the vocabulary's result key; None for a refusal."""
+    return (listing.result or {}).get(vocabulary.result_key) if listing.ok else None
+
+
 def _lists_daemons(instance: Instance) -> bool:
     try:
-        listing = instance.request("zmx.list")
+        listing = instance.request(instance.vocabulary.command("zmx.list"))
     except ClientError:
         return False
-    inventory = (listing.result or {}).get("zmx") if listing.ok else None
+    inventory = _inventory(listing, instance.vocabulary)
     return bool(isinstance(inventory, dict) and inventory.get("entries"))
 
 
 def _next_claimed(instance: Instance, tried: set[str], wait_absent: bool) -> tuple[dict[str, Any] | None, bool]:
     """The next claimed daemon to kill, and whether one not yet killable is still worth waiting for."""
-    listing = instance.request("zmx.list")
-    inventory = (listing.result or {}).get("zmx") if listing.ok else None
+    inventory = _inventory(instance.request(instance.vocabulary.command("zmx.list")), instance.vocabulary)
     entries = inventory.get("entries") if isinstance(inventory, dict) else None
     waiting = False
     for entry in entries if isinstance(entries, list) else []:
@@ -1169,13 +1174,14 @@ def _core_hint(pid: int) -> str:
     return f"coredumpctl info {pid}"
 
 
-def find_leftovers(zmx_dir: str) -> list[tuple[int, str, str]]:
-    """(pid, name, command) of zmx / agterm-session-host processes carrying this instance's `ZMX_DIR`."""
-    marker = f"ZMX_DIR={zmx_dir}"
+def find_leftovers(live_dir: str, vocabulary: Vocabulary = UPSTREAM) -> list[tuple[int, str, str]]:
+    """(pid, name, command) of zmx / agterm-session-host processes carrying this instance's socket directory in the
+    vocabulary's directory variable (`ZMX_DIR`)."""
+    marker = f"{vocabulary.directory_variable}={live_dir}"
     return [
         (pid, name, command)
         for pid, name, command, words in _processes()
-        if name in LEFTOVER_NAMES and (marker in words or hosts_zmx_dir(words, zmx_dir))
+        if name in LEFTOVER_NAMES and (marker in words or hosts_zmx_dir(words, live_dir))
     ]
 
 

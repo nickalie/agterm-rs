@@ -4,7 +4,6 @@ import pytest
 from agterm_conformance.drivers.base import ElementNotFound
 from agterm_conformance.match import assert_ok, find_session
 from agterm_conformance.plugin import Ctl
-from agterm_conformance.zmx_client import leading_client
 
 LIVE = pytest.mark.requires(
     "live-sessions", reason="needs panes in zmx daemons, which the references create only for a zsh login shell"
@@ -33,12 +32,15 @@ def test_a_pane_another_client_leads_is_covered(live, ui_for):
     cover = ui.ui_ids.expand("pane-lead-cover-{pane}", pane="left")
     sid = assert_ok(live.request("session.new"))["id"]
     live.wait_mounted(sid, "left")
-    live.wait_tree(lambda tree: find_session(tree, sid).get("backedByZmx") is True and _lead(tree, sid) == "leader")
+    vocabulary = live.vocabulary
+    live.wait_tree(
+        lambda tree: find_session(tree, sid).get(vocabulary.backed_key) is True and _lead(tree, sid) == "leader"
+    )
     ui.absent(cover)
-    endpoint = assert_ok(live.request("zmx.tree"))["remote"]["endpoint"]
-    rows = assert_ok(live.request("zmx.list"))["zmx"]["entries"]
+    endpoint = assert_ok(live.request(vocabulary.command("zmx.tree")))["remote"]["endpoint"]
+    rows = assert_ok(live.request(vocabulary.command("zmx.list")))[vocabulary.result_key]["entries"]
     (daemon,) = [row["daemon"] for row in rows if row.get("sessionID") == sid and row["pane"] == "left"]
-    with leading_client(live.instance, endpoint, daemon) as viewer:
+    with vocabulary.leading_client(live.instance, endpoint, daemon) as viewer:
         live.wait_tree(lambda tree: _lead(tree, sid) == "follower", timeout=15)
         try:
             ui.find(cover)

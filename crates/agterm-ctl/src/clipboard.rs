@@ -1,6 +1,7 @@
 //! `agtermctl clipboard set` (`agtermctlKit/ClipboardCommands.swift`, `agtermCore/TerminalClipboard.swift`): prints an
-//! OSC 52 clipboard write into the caller's pane through its zmx daemon, so the write reaches every terminal attached
-//! to the pane. Local-only: it never opens the control socket, so it has no `--socket` or `--json`.
+//! OSC 52 clipboard write into the caller's pane through its live-session daemon (`print` of the bundled zmx), so the
+//! write reaches every terminal attached to the pane. Local-only: it never opens the control socket, so it has no
+//! `--socket` or `--json`.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -134,13 +135,18 @@ impl CopyFailure {
                  {MAX_ENCODED_BYTES}"
             ),
             Self::NotLivePane => {
-                "this pane has no zmx daemon; run it in a main or split pane started under Live sessions".to_owned()
+                "this pane has no live session; run it in a main or split pane started under Live sessions".to_owned()
             }
-            Self::ZmxNotFound { path: None } => "no zmx next to this agtermctl".to_owned(),
+            Self::ZmxNotFound { path: None } => "no live-session executable next to this agtermctl".to_owned(),
             Self::ZmxNotFound { path: Some(path) } => {
-                format!("no zmx next to this agtermctl; looked for {}", path.display())
+                format!(
+                    "no live-session executable next to this agtermctl; looked for {}",
+                    path.display()
+                )
             }
-            Self::PrintFailed { status, stderr } => format!("zmx print exited {status}: {}", stderr.trim()),
+            Self::PrintFailed { status, stderr } => {
+                format!("the live-session print exited {status}: {}", stderr.trim())
+            }
             Self::SpawnFailed { path, reason } => format!("could not start {}: {reason}", path.display()),
         }
     }
@@ -169,7 +175,7 @@ pub fn daemon(environment: &HashMap<OsString, OsString>) -> Result<String, CopyF
     let session = environment
         .get(&OsString::from("ZMX_SESSION"))
         .and_then(|value| value.to_str())
-        .filter(|name| agterm_core::zmx::is_daemon_name(name));
+        .filter(|name| agterm_core::live::is_daemon_name(name));
     let directory = environment
         .get(&OsString::from("ZMX_DIR"))
         .filter(|value| !value.is_empty());
@@ -333,21 +339,24 @@ mod tests {
             ),
             (
                 CopyFailure::NotLivePane,
-                "this pane has no zmx daemon; run it in a main or split pane started under Live sessions",
+                "this pane has no live session; run it in a main or split pane started under Live sessions",
             ),
-            (CopyFailure::ZmxNotFound { path: None }, "no zmx next to this agtermctl"),
+            (
+                CopyFailure::ZmxNotFound { path: None },
+                "no live-session executable next to this agtermctl",
+            ),
             (
                 CopyFailure::ZmxNotFound {
                     path: Some(PathBuf::from("/x/zmx")),
                 },
-                "no zmx next to this agtermctl; looked for /x/zmx",
+                "no live-session executable next to this agtermctl; looked for /x/zmx",
             ),
             (
                 CopyFailure::PrintFailed {
                     status: 1,
                     stderr: "session not found\n".to_owned(),
                 },
-                "zmx print exited 1: session not found",
+                "the live-session print exited 1: session not found",
             ),
         ];
         for (failure, message) in cases {

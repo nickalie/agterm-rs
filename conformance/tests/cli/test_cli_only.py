@@ -17,7 +17,6 @@ from pathlib import Path
 import pytest
 from agterm_conformance.match import assert_ok, find_session
 from agterm_conformance.wait import wait_until
-from agterm_conformance.zmx_client import leading_client
 
 # `TerminalClipboard.maxEncodedBytes`: under the 8 MiB above which libghostty drops an OSC whole.
 MAX_ENCODED = 8 * 1024 * 1024 - 64
@@ -36,8 +35,12 @@ def _usage(result, message=None):
     assert "\nUsage: agtermctl " in result.stderr, result.stderr
 
 
-def _env(cli, **extra):
-    env = {name: value for name, value in cli.instance.env.items() if not name.startswith("ZMX_")}
+def _env(cli, session=None, directory=None, **extra):
+    """The instance's env outside any live pane, or naming `session` under `directory` as a live pane's children do."""
+    vocabulary = cli.vocabulary
+    env = {name: value for name, value in cli.instance.env.items() if not name.startswith(vocabulary.variable_prefix)}
+    if session is not None:
+        env.update({vocabulary.session_variable: session, vocabulary.directory_variable: directory})
     env.update(extra)
     return env
 
@@ -47,11 +50,12 @@ def _env(cli, **extra):
 
 @pytest.mark.covers("cli:clipboard set")
 def test_clipboard_set_refuses_outside_a_live_pane(cli):
-    _failed(cli.local("clipboard", "set", "hello", input=""), NOT_LIVE)
-    _failed(cli.local("clipboard", "set", input="hello"), NOT_LIVE)
+    not_live = cli.vocabulary.text(NOT_LIVE)
+    _failed(cli.local("clipboard", "set", "hello", input=""), not_live)
+    _failed(cli.local("clipboard", "set", input="hello"), not_live)
     # A ZMX_SESSION agterm would never have named is not printed into.
-    env = _env(cli, ZMX_SESSION="someone-elses-session", ZMX_DIR=cli.instance.zmx_dir)
-    _failed(cli.local("clipboard", "set", "hello", env=env, input=""), NOT_LIVE)
+    env = _env(cli, "someone-elses-session", cli.instance.live_dir)
+    _failed(cli.local("clipboard", "set", "hello", env=env, input=""), not_live)
 
 
 @pytest.mark.covers("cli:clipboard set")
@@ -75,26 +79,27 @@ def test_clipboard_set_reaches_every_terminal_attached_to_the_pane(cli, launch):
     ctl = launch(settings={"restoreMode": "live"})
     local = cli.on(ctl.instance)
     sid = assert_ok(ctl.request("session.new"))["id"]
-    ctl.wait_tree(lambda tree: find_session(tree, sid).get("backedByZmx") is True)
+    vocabulary = ctl.vocabulary
+    ctl.wait_tree(lambda tree: find_session(tree, sid).get(vocabulary.backed_key) is True)
 
     def left_row(response):
-        rows = [row for row in assert_ok(response)["zmx"]["entries"] if row.get("sessionID") == sid]
+        rows = [row for row in assert_ok(response)[vocabulary.result_key]["entries"] if row.get("sessionID") == sid]
         # Running first: a viewer attaching to a daemon not up yet would start one under that name.
         return [row for row in rows if row["pane"] == "left" and row.get("observation") == "running"]
 
-    (row,) = left_row(ctl.wait_response("zmx.list", None, left_row))
+    (row,) = left_row(ctl.wait_response(vocabulary.command("zmx.list"), None, left_row))
     daemon = row["daemon"]
-    endpoint = assert_ok(ctl.request("zmx.tree"))["remote"]["endpoint"]
+    endpoint = assert_ok(ctl.request(vocabulary.command("zmx.tree")))["remote"]["endpoint"]
     text = f"clip-{uuid.uuid4().hex[:8]}"
     sequence = f"\x1b]52;c;{base64.b64encode(text.encode()).decode()}\x07"
-    with leading_client(ctl.instance, endpoint, daemon) as viewer:
+    with vocabulary.leading_client(ctl.instance, endpoint, daemon) as viewer:
         # Attached once the pane follows; a `zmx print` into a daemon still taking the viewer finds it busy.
         ctl.wait_tree(
             lambda tree: (
                 next(s for s in find_session(tree, sid)["surfaces"] if s["kind"] == "left").get("lead") == "follower"
             )
         )
-        env = _env(local, ZMX_SESSION=daemon, ZMX_DIR=ctl.instance.zmx_dir)
+        env = _env(local, daemon, ctl.instance.live_dir)
         result = local.local("clipboard", "set", text, env=env, input="")
         assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
         wait_until(lambda: sequence in viewer.output())

@@ -38,7 +38,7 @@ pub enum Group {
     Version,
     Window,
     Workspace,
-    Zmx,
+    Live,
 }
 
 /// Declares one group's command enum, each variant with its full dotted wire name.
@@ -214,16 +214,16 @@ group_commands!(
 );
 
 group_commands!(
-    /// `zmx.*`: live-session daemons.
-    ZmxCmd {
-        List = "zmx.list",
-        Prune = "zmx.prune",
-        Kill = "zmx.kill",
-        Reset = "zmx.reset",
-        Tree = "zmx.tree",
-        Attach = "zmx.attach",
-        Present = "zmx.present",
-        Screen = "zmx.screen",
+    /// `live.*`: live-session daemons (upstream's `zmx.*`, renamed: conformance/docs/rust-build.md).
+    LiveCmd {
+        List = "live.list",
+        Prune = "live.prune",
+        Kill = "live.kill",
+        Reset = "live.reset",
+        Tree = "live.tree",
+        Attach = "live.attach",
+        Present = "live.present",
+        Screen = "live.screen",
     }
 );
 
@@ -252,7 +252,7 @@ pub enum Command {
     Version,
     Window(WindowCmd),
     Workspace(WorkspaceCmd),
-    Zmx(ZmxCmd),
+    Live(LiveCmd),
 }
 
 impl Command {
@@ -281,7 +281,7 @@ impl Command {
             Self::Version => "version",
             Self::Window(c) => c.into(),
             Self::Workspace(c) => c.into(),
-            Self::Zmx(c) => c.into(),
+            Self::Live(c) => c.into(),
         }
     }
 
@@ -310,7 +310,7 @@ impl Command {
             Self::Version => Group::Version,
             Self::Window(_) => Group::Window,
             Self::Workspace(_) => Group::Workspace,
-            Self::Zmx(_) => Group::Zmx,
+            Self::Live(_) => Group::Live,
         }
     }
 
@@ -335,7 +335,7 @@ impl Command {
         all.extend(ThemeCmd::iter().map(Self::Theme));
         all.extend(WindowCmd::iter().map(Self::Window));
         all.extend(WorkspaceCmd::iter().map(Self::Workspace));
-        all.extend(ZmxCmd::iter().map(Self::Zmx));
+        all.extend(LiveCmd::iter().map(Self::Live));
         all
     }
 }
@@ -373,7 +373,7 @@ impl FromStr for Command {
             Group::Version => unit(name, group, Self::Version),
             Group::Window => WindowCmd::from_str(name).ok().map(Self::Window),
             Group::Workspace => WorkspaceCmd::from_str(name).ok().map(Self::Workspace),
-            Group::Zmx => ZmxCmd::from_str(name).ok().map(Self::Zmx),
+            Group::Live => LiveCmd::from_str(name).ok().map(Self::Live),
         };
         command.ok_or_else(|| UnknownCommand(name.to_owned()))
     }
