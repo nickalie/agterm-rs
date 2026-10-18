@@ -133,17 +133,17 @@ fn check_server_user(stream: &Stream, endpoint: &Endpoint) -> io::Result<()> {
         .peer_creds()?
         .pid()
         .ok_or_else(|| io::Error::other("the pipe's server process id is unknown"))?;
-    let server = open_process(server_pid)?;
-    let server_user = token_information(&open_token(server.as_raw_handle())?, TokenUser)?;
+    let peer = open_process(server_pid)?;
+    let peer_user = token_information(&open_token(peer.as_raw_handle())?, TokenUser)?;
     // SAFETY: GetCurrentProcess returns a pseudo-handle that needs no closing and is always valid.
     let current = unsafe { GetCurrentProcess() };
     let own_user = token_information(&open_token(current)?, TokenUser)?;
     // SAFETY: filled by GetTokenInformation(TokenUser).
-    let server_sid = unsafe { user_sid(&server_user) };
+    let peer_sid = unsafe { user_sid(&peer_user) };
     // SAFETY: filled by GetTokenInformation(TokenUser).
     let own_sid = unsafe { user_sid(&own_user) };
     // SAFETY: both SIDs point into their buffers, which live until the end of this function.
-    let same = unsafe { EqualSid(server_sid, own_sid) };
+    let same = unsafe { EqualSid(peer_sid, own_sid) };
     if same != 0 {
         return Ok(());
     }

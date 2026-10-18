@@ -69,7 +69,9 @@ fn a_timed_connect_reaches_the_server() {
     let (_root, endpoint) = namespace().unwrap();
     let listener = endpoint.bind().unwrap();
     let accept = thread::spawn(move || listener.accept().map(drop));
-    endpoint.connect_timeout(Duration::from_secs(5)).unwrap();
+    // held until the accept returns: a Windows listener discards a connection that ended before it was accepted and
+    // waits for the next one
+    let _client = endpoint.connect_timeout(Duration::from_secs(5)).unwrap();
     accept.join().unwrap().unwrap();
 }
 
@@ -93,7 +95,7 @@ fn a_second_server_under_a_taken_name_is_refused() {
     // the name is free again once its server is gone
     let again = endpoint.bind().unwrap();
     let accept = thread::spawn(move || again.accept().map(drop));
-    endpoint.connect().unwrap();
+    let _client = endpoint.connect().unwrap();
     accept.join().unwrap().unwrap();
 }
 
@@ -180,7 +182,7 @@ mod unix {
         assert!(endpoint.socket_path().exists());
         let listener = endpoint.bind().unwrap();
         let accept = thread::spawn(move || listener.accept().map(drop));
-        endpoint.connect().unwrap();
+        let _client = endpoint.connect().unwrap();
         accept.join().unwrap().unwrap();
     }
 
