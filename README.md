@@ -141,7 +141,9 @@ or ghostty-vt patch change, `scripts/gen-ghostty-config-keys.sh` agterm-core's g
 `LIBGHOSTTY_VT_REV` bump, `scripts/gen-wpe-bindings.sh` the gir crates `agterm-wpe-sys`, `agterm-wpe-platform-sys` and
 `agterm-wpe-javascriptcore-sys` after a `WPE_*` or `GIR_*` bump, `scripts/gen-vt-unicode.sh` `agterm-vt`'s Unicode
 tables from the UCD the pinned uucode ships (`UUCODE_*`, fetched into the vendored prefix and checked by sha256) with
-the crate's `gen-unicode` binary (`--check` compares instead of writing).
+the crate's `gen-unicode` binary, and `scripts/gen-ghostty-terminfo.sh` its terminfo source
+(`crates/agterm-vt/terminfo/xterm-ghostty.terminfo`, Ghostty's `xterm-ghostty` entry) with its `gen-terminfo` binary
+(each `--check` compares instead of writing).
 
 The GPUI frontend's terminal embeds the fonts Ghostty embeds, from the package deps of the Ghostty at
 `LIBGHOSTTY_VT_REV` (`FONTS_*` in `build/pins.env`, each archive's sha256 pinned): JetBrains Mono 2.304 (its static
@@ -241,6 +243,7 @@ scripts/lint-report.sh                      # complexity #[expect]s with their r
 GDK_BACKEND=x11 xvfb-run -a dbus-run-session cargo test --workspace
 cargo test -p agterm-vt --all-features      # with the Unicode table generator's tests (feature `gen`)
 scripts/gen-vt-unicode.sh --check           # agterm-vt's Unicode tables equal what the generator writes
+scripts/gen-ghostty-terminfo.sh --check     # agterm-vt's terminfo source equals what the generator writes
 .venv/bin/python -m pytest conformance/selftests   # the suite's own tests, host-free
 conformance/tools/run-rust-linux.sh [--ratchet-only] [--stage DIR] [-- PYTEST_ARGS...]
 ```
@@ -277,9 +280,10 @@ A change to the WPE or gir pins also runs `scripts/gen-wpe-bindings.sh --check`,
   the app's process tests with the overlays on first.
 - `cross-platform.yml`: the crates that build on all three OSes (`agterm-vt`, `agterm-session`, `agterm-proto`,
   `agterm-host` and `agterm-core` so far; `agterm-server` and `agterm-ctl` wait for the control server's Windows
-  form), on Ubuntu, macOS and Windows runners: format, clippy, `cargo test` and `scripts/gen-vt-unicode.sh --check`
-  (`crates`, a matrix), then the VT memory core's unit tests under Miri on a nightly pinned by date (`miri`). It also
-  runs on pushes to `ci/**` branches, to check a macOS or Windows form without a PR.
+  form), on Ubuntu, macOS and Windows runners: format, clippy, `cargo test`, `scripts/gen-vt-unicode.sh --check` and
+  `scripts/gen-ghostty-terminfo.sh --check` (`crates`, a matrix), then the VT memory core's unit tests under Miri on a
+  nightly pinned by date (`miri`). It also runs on pushes to `ci/**` branches, to check a macOS or Windows form without
+  a PR.
 - `conformance-gate.yml`: the suite's self-tests and catalog coverage gate.
 - `reference-macos.yml`, `spike-macos.yml`: the suite against upstream's macOS release.
 

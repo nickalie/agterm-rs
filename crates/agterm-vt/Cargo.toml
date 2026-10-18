@@ -8,8 +8,8 @@ publish.workspace = true
 license.workspace = true
 
 [features]
-# The table generators the generator scripts run (`gen-unicode`: scripts/gen-vt-unicode.sh); the library has no part
-# of them.
+# The generators the generator scripts run (`gen-unicode`: scripts/gen-vt-unicode.sh, `gen-terminfo`:
+# scripts/gen-ghostty-terminfo.sh); the library has no part of them.
 gen = []
 
 [[bin]]
@@ -17,8 +17,17 @@ name = "gen-unicode"
 path = "src/bin/gen-unicode/main.rs"
 required-features = ["gen"]
 
+[[bin]]
+name = "gen-terminfo"
+path = "src/bin/gen-terminfo.rs"
+required-features = ["gen"]
+
 [[test]]
 name = "gen_unicode"
+required-features = ["gen"]
+
+[[test]]
+name = "gen_terminfo"
 required-features = ["gen"]
 
 [dependencies]
