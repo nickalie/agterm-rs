@@ -272,6 +272,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "agterm-vt"
+version = "0.1.0"
+
+[[package]]
 name = "agterm-wpe"
 version = "0.1.0"
 dependencies = [

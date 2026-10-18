@@ -1,0 +1,13 @@
+[package]
+name = "agterm-vt"
+description = "Ghostty's terminal in Rust: the VT core of agterm's panes and live sessions, taken from rustty"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

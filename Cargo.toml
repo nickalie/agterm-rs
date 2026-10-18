@@ -15,6 +15,7 @@ license = "MIT"
 agterm-proto = { path = "crates/agterm-proto" }
 agterm-ghostty-vt-sys = { path = "crates/agterm-ghostty-vt-sys" }
 agterm-ghostty-vt = { path = "crates/agterm-ghostty-vt" }
+agterm-vt = { path = "crates/agterm-vt" }
 agterm-host = { path = "crates/agterm-host" }
 agterm-core = { path = "crates/agterm-core" }
 agterm-server = { path = "crates/agterm-server" }

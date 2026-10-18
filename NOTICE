@@ -1,0 +1,76 @@
+agterm-rs — third-party notices
+===============================
+
+agterm-rs is licensed under the MIT License (each crate's `license` in Cargo.toml). Parts of it are derived from
+the projects below, under their licenses, whose notices must accompany the code. Each derived module names its
+source in its module docs.
+
+
+Ghostty
+-------
+
+https://github.com/ghostty-org/ghostty
+
+`agterm-vt` is Ghostty's terminal (`src/terminal`, `src/input`, `src/terminfo`, `src/unicode` and the support
+modules they use) at the revision `build/pins.env` pins as `LIBGHOSTTY_VT_REV`, by way of rustty (below). Other
+modules that port Ghostty's code cite the Ghostty file and revision they follow.
+
+MIT License
+
+Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+rustty
+------
+
+https://github.com/AirelyDev/rustty
+
+`agterm-vt`'s code was taken from rustty, a Zig-to-Rust port of Ghostty, at the commit `build/pins.env` pins as
+`RUSTTY_REV`, then trimmed to what agterm uses, reworked and brought to agterm's Ghostty revision.
+
+MIT License
+
+rustty is a full-fidelity Rust port of Ghostty
+(https://github.com/ghostty-org/ghostty), translated line-by-line from Ghostty's
+Zig source. It is a derivative work. As required by the MIT License, Ghostty's
+original copyright notice is preserved below, alongside the copyright covering the
+rustty porting work. See NOTICE for third-party attributions.
+
+Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors
+Copyright (c) 2026 Airely, Gael Hatchue, and rustty contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -564,6 +564,236 @@ agterm-vt    the VT state of both the pane and the server
   `LIBGHOSTTY_VT_*` pins, the checked-in terminfo source and any `build/patches/ghostty-vt/` left (none). The CI
   cache keys follow the same inputs.
 
+#### What Task 1 settles (rustty `b57bcee7`, Ghostty pin `81598385`; 2026-10-18)
+
+Sources read: rustty cloned at `.upstream/rustty` (`b57bcee7`) and Ghostty's history at `.upstream/ghostty`, both
+git-ignored through `.git/info/exclude`. The calibration workspace and its scripts are in `.scratch/vt-calibrate/`
+(git-ignored: `build.py` builds it, `run.sh` runs clippy sandboxed, `report.py` and `sizes.py` aggregate). Module paths
+below are rustty-vt's (`crates/rustty-vt/src/`).
+
+- **Verdicts.** The rule: in libghostty-vt at the pin and reachable from what agterm calls. `vt_write` reaches the
+  whole stream handler, so what the handler does with a sequence is reachable even with no embedder callback.
+  - Cut, with the branches that reached them:
+    - `snapshot`: the codec. Its `io` writers (`Writer`, `FixedWriter`, `AllocatingWriter`, `StackFallbackWriter`,
+      `WriteFailed`) are used by the kept `clipboard`, `paste`, `input/paste`, `kitty/clipboard_response` and
+      `stream_terminal` (21 references); a small writer support module (or `std::io::Write`) replaces them in Task 11.
+      `snapshot/continuation` goes; `stream_continuation` stays.
+    - `tmux`, with `dcs`'s tmux branch.
+    - `compress` and `pagelist/compress.rs`, and `mem` with them: page compression is `mem`'s only user, and the
+      root's `compression_enabled` goes too.
+    - `apc/glyph`. `apc` stays for Kitty graphics. The kept `osc/parsers/program_status.rs` takes its base64 decoder
+      from `apc/glyph/request`; it moves to Task 5's base64.
+    - `string_map`: Oniguruma-gated, off in libghostty-vt, and agterm matches links itself.
+    - `xt_checksum`: DECRQCRA and XTCHECKSUM are answered only when `xt_checksum_report` is set, which is off by
+      default and never set by agterm (`stream_terminal.zig` at the pin). The handler's two branches and `Terminal`'s
+      checksum go, and those sequences fall through as unhandled, which agterm cannot tell apart.
+    - `search/thread.rs`: the app's background search thread. libghostty-vt's search API (`rustty-vt-c/src/search.rs`)
+      does not use it.
+    - `fuzz_harness`, `pagelist/bench.rs`, `examples/`, `fuzz/`: rustty's harnesses. Task 16 takes the fuzz seeds as
+      data.
+    - `input/key.rs`'s `imgui` mapping (rustty's GUI glue).
+  - Kept, of the modules Context names:
+    - `kitty/dnd*`: OSC 72 is parsed and answered on the PTY inside `vt_write` with no embedder callback (`kittyDnd`
+      in `stream_terminal.zig` at the pin). The drag-and-drop event callback has no C API, so it gets no effect.
+    - `kitty/clipboard_grants`: OSC 5522 session password grants, part of the clipboard read and write path agterm
+      installs.
+    - `kitty/graphics_animation`: storage, image and exec use it, and animation commands run inside `vt_write`.
+    - `fastprint` (style, formatter) and `fixed_writer` (dcs, stream_terminal).
+    - `log_capture`, as a test-only helper reworked over `tracing`, because rustty's tests assert on log lines.
+  - Adapted:
+    - `build_options` and `options` keep only the constants the kept code branches on. There are no VT feature flags:
+      every libghostty-vt feature agterm uses is on, and the cut ones are gone.
+    - `sys` has no process-global hooks. PNG decodes through `png` (Task 10) and logs go to `tracing`. Its global raw
+      allocator, which `alloc` uses, comes with Task 4.
+  - Every other rustty-vt module is kept: `alloc`, `ansi`, `apc`, `bitmap_allocator`, `charsets`, `clipboard`,
+    `color`, `csi`, `cursor`, `dcs`, `device_attributes`, `device_status`, `focus`, `formatter`, `fraction`,
+    `hash_map`, `highlight`, `hyperlink`, `input/*`, `kitty/*` (the rest), `modes`, `mouse`, `osc` (every parser),
+    `page`, `page_impl`, `pagelist`, `parse_table`, `parser`, `paste`, `point`, `protocol_int`, `ref_counted_set`,
+    `render`, `screen`, `screen_set`, `search`, `selection`, `selection_codepoints`, `selection_gesture`, `sgr`,
+    `size_report`, `stream`, `stream_continuation`, `stream_terminal`, `style`, `tabstops`, `terminal`,
+    `utf8_decoder`, `x11_color`, `zig_list`, and the tests `page_tests` and `ref_geometry_golden_tests`.
+  - Leaf crates, cut to the modules the kept code reaches:
+    - util: `fastmem`, `quirks`, `tripwire`;
+    - datastruct: `array_list`, `limited_allocator`, `intrusive_linked_list`, `untouched_pool`, `segmented_list`,
+      `comptime_int_set`, `comparison`;
+    - unicode: all of it;
+    - simd: the scalar `base64`, `codepoint_width`, `index_of`, `vt`;
+    - os: `page_allocator` (with `mach` on macOS and `windows`), `file`, `path`, `tempdir`, `string_encoding`;
+    - lib: `allocator`, `packed`, `enum`, `parse_int`, `target`;
+    - zigstd: `arena_allocator`, `memory_pool`, `array_hash_map`, `atomic`, `heap`, `wyhash`, `fmt`, plus
+      `tracking_allocator` for tests;
+    - render-types: `term_size` (sizes, `Offset`, `OffsetBuf`);
+    - identity, with Ghostty's identity restored;
+    - terminfo: `entry` and `source`.
+
+    Not taken: rustty-font, -z2d, -global, -build-config, -xev, -wuffs, -args. rustty-synthetic's `rand` feeds only
+    `hash_map`'s tests and is replaced there.
+  - Size of the kept code: about 121k lines of code, 130k lines of tests, 3,388 `#[test]`s and 7,855 `unsafe`
+    occurrences (of rustty-vt's 264k lines and 3,456 tests, plus the leaf modules).
+- **Module graph** (`use crate::` edges of production code with comments stripped, the cut modules removed):
+  - Acyclic leaves: `build_options` → `options` → `sys` → `alloc` ⇄ `zig_list`; `bitmap_allocator`, `hash_map`,
+    `ref_counted_set`; `ansi`, `charsets`, `csi`, `cursor`, `device_attributes`, `device_status`, `size_report`,
+    `focus`, `fixed_writer`, `utf8_decoder`, `point`, `protocol_int`, `mouse`, `tabstops`; `color` ⇄ `x11_color`
+    (→ `fraction`); `modes`.
+  - The parser group: `osc` ⇄ `kitty/color`, `parser` ⇄ `parse_table` (→ `osc`), `sgr` (→ `color`, `parser`),
+    `kitty/graphics_command`, `apc`, `stream_continuation`, `stream` (→ `kitty/key`, `mouse`). Nothing here uses
+    page memory.
+  - The page group: `page` ⇄ `style` ⇄ `hyperlink` ⇄ `fastprint`, `page_impl`, `pagelist`.
+    - `style` uses `sgr::Underline`, so the parser group comes first.
+    - `pagelist` reaches `highlight` only through `highlight_semantic_content`, which `screen/select.rs` and
+      `pagelist/tests/iter_clone.rs` call.
+  - One large component, about 85k lines with tests: `screen`, `screen_set`, `selection`, `highlight`, `formatter`,
+    Kitty `graphics_storage`/`_image`/`_pixel`, `terminal`, `stream_terminal`, `dcs`, `clipboard`, `paste`,
+    `input/paste`, the Kitty clipboard modules. Hanging off it: `graphics_exec`, `graphics_unicode`,
+    `graphics_render`, the Kitty DnD modules, `render`, `search`, `selection_gesture` and the key and mouse encoders.
+  - The production edges from its screen-level part into its terminal-level part are exactly three:
+    - `screen.rs:62` uses `terminal::PrintStringError`;
+    - `formatter.rs:527` defines `TerminalFormatter` over `*const Terminal`. Screen uses only the page, page-list and
+      screen formatters (`screen.rs:47-48`);
+    - Kitty storage takes the `Terminal` in `scroll_margins_begin` (`graphics_storage.rs:700`), in the placement
+      geometry (`cell_offset`, `pixel_size`, `grid_size`, `clip_top`, `rect` in `graphics_storage/placement.rs`) and
+      in command deletion (`clear_screen`, `delete` and their helpers `delete_visible_placements`, `delete_intersecting`
+      in `graphics_storage/delete.rs`). Eviction (`evict_image`, `evict_image_except`, `delete_if_unused`, same file)
+      takes no `Terminal`, and storage needs it.
+  - Tests that build a `Terminal`: formatter's `page_plain`, `terminal_screen`, `html_codepoint_pinmap` and
+    `page_vt_pagelist`, Kitty storage's and `graphics_unicode`'s. Screen's tests and selection's do not.
+- **Corrections to Tasks 4–15** (applied to the task sections below; codex: agreed, transcript
+  `~/.local/state/plan-exec-revmux/zig-free-core/discussions/task-1-vt-task-boundaries/transcript.md`):
+  1. Task 4 drops `mem`.
+  2. Tasks 8 and 9 swap their content, numbers staying in file order.
+     - Task 8 is now the parser and stream group, plus `color`, `x11_color`, `fraction`, `protocol_int`, `mouse`,
+       `kitty/color` and `kitty/key`. It imports `kitty/graphics_command` directly, not through the `kitty/graphics`
+       aggregate, which re-exports execution. `dcs` leaves it.
+     - Task 9 is now the page group, without `highlight_semantic_content` and its tests.
+  3. The large component stays two tasks, by item extraction. The retained module graph joins screen-level and
+     terminal-level code in one component; Tasks 10 and 11 use these extractions and refactors to make smaller
+     ones, and the task gates apply to the resulting graph:
+     - `PrintStringError` is defined at screen level, and Terminal re-exports it;
+     - `TerminalFormatter` comes with Task 11;
+     - Kitty placement geometry takes the terminal's geometry as a value, and the scroll-margin hooks take the
+       screen and its margins, not the `Terminal`. Safe Rust cannot hand storage the `*mut Terminal` that owns it
+       anyway;
+     - Kitty command deletion moves to Task 11 with `graphics_exec`, and eviction stays in Task 10;
+     - `highlight` and `highlight_semantic_content`, with its tests, come with Task 10;
+     - the tests that build a `Terminal` move to Task 11. Task 10 adapts representative cases of the refactored
+       geometry, eviction and formatting to screen or geometry fixtures;
+     - `dcs`, `clipboard`, `paste` and `input/paste` (from the parser task and Task 14), the Kitty clipboard and DnD modules and
+       the `snapshot::io` replacement are Task 11's.
+  4. Task 14 keeps the key and mouse encoders and focus. Paste moved to Task 11.
+- **Public functions of `agterm-ghostty-vt`.** There are 105 outside `sys`, plus `sys::install` and
+  `sys::installed`. `agterm-term` calls 100 of the 105 and `sys::install`. It never calls `Key::index`,
+  `paste_is_safe`, `Search::status`, `Terminal::title` or `Terminal::pwd`; Task 15 exports those only if the
+  session server needs them. "vt-c" below is `crates/rustty-vt-c/src`, the C layer whose logic Task 15 ports.
+
+  | `agterm-ghostty-vt` | C API | rustty item / vt-c logic | task |
+  |---|---|---|---|
+  | `Terminal::new` | `terminal_new` | `terminal::Terminal::init` + `stream_terminal::Stream` in vt-c `terminal.rs` (the wrapper) | 11, 15 |
+  | `set_effects`, the `Effects` trait (15 callbacks), `HeldTerminal`, `ColorScheme::report` | `terminal_set` (`USERDATA`, `WRITE_PTY` … `RESET`) | `stream_terminal::Handler`'s effects, vt-c `terminal/effects.rs` | 11 (trait), 15 |
+  | `vt_write` | `terminal_vt_write` | `stream_terminal::Stream::next_slice` | 11, 15 |
+  | `vt_write_until_ground`, `at_ground` | `terminal_vt_write_until_ground`, `DATA_VT_GROUND` | vt-c `terminal/write.rs` over `stream::Stream` and `stream_continuation` | 15 |
+  | `resize` | `terminal_resize` | `Terminal::resize` + cell pixel size (vt-c `terminal.rs`) | 11, 15 |
+  | `reset` | `terminal_reset` | `Terminal::full_reset` + the handler's reset (vt-c `terminal.rs`) | 15 |
+  | `scroll_viewport(Scroll)` | `terminal_scroll_viewport` (`TOP`, `BOTTOM`, `ROW`, `DELTA`, `DELTA_PROMPT`) | `Terminal::scroll_viewport` (`terminal::ScrollViewport`); prompts are drift `9fa2e3aaf` | 11, 15 |
+  | `set_scrollback_limits`, `scrollback_limits` | `SCROLLBACK_MAX_BYTES`/`_LINES` | `PageList`'s size limits, vt-c `terminal/options.rs`, `terminal/data.rs` | 9, 15 |
+  | `set_kitty_image_storage_limit`, `set_kitty_image_media` | `KITTY_IMAGE_STORAGE_LIMIT`, `KITTY_IMAGE_MEDIUM_*` | `ImageStorage::set_limit`, `LoadingImage` media limits, vt-c `terminal/options.rs` | 10, 15 |
+  | `set_mode`, `set_mode_default`, `mode`, `Mode::{dec, ansi}` | `MODE`, `MODE_DEFAULT`, `DATA_MODE` | `modes::{Mode, ModeState}` on `Terminal.modes` | 8, 15 |
+  | `colors`, `set_default_colors`, `set_default_palette`, `set_default_cursor`, `default_palette` | `COLOR_*`, `DEFAULT_CURSOR_*`, `DATA_COLOR_*` | `Terminal.colors` (`color::DynamicRGB`, palette), the screen's default cursor style | 8, 10, 15 |
+  | `cols`, `rows`, `cursor`, `total_rows`, `viewport_at_bottom`, `alternate_screen`, `mouse_tracking`, `mouse_shape`, `cursor_at_prompt`, `title`, `pwd` | `terminal_get` (`DATA_*`) | vt-c `terminal/data.rs` over `Terminal`, `ScreenSet`, `PageList`, `modes`, `mouse::Shape` and the semantic prompt state | 15 |
+  | `paste` | `terminal_paste` | vt-c `paste.rs` over `paste::Request` and `input::paste` | 11, 15 |
+  | `paste_is_safe` | `paste_is_safe` | `input::paste::is_safe` | 11 |
+  | `format` (`Format`, `FormatOptions`, `Region`) | `formatter_terminal_new`, `formatter_format_alloc` | `formatter::TerminalFormatter` over the screen formatters, vt-c `formatter.rs` | 10, 11, 15 |
+  | `selection`, `set_selection`, `clear_selection`, `viewport_top` (`Point`, `PointTag`, `Selection`) | `terminal_get`/`set` `SELECTION`, `terminal_grid_ref`, `terminal_point_from_grid_ref` | the screen's `selection::Selection`, `point::Point` ⇄ `pagelist::Pin`, vt-c `selection.rs`, `grid_ref.rs` | 10, 15 |
+  | `select_word`, `select_line`, `select_all`, `adjust_selection` | `terminal_select_*`, `terminal_selection_adjust` | `screen/select.rs`, `selection_codepoints`, `Selection::adjust` | 10, 15 |
+  | `hyperlink_uri` | `grid_ref_hyperlink_uri` | vt-c `grid_ref.rs` over the page's hyperlink set | 9, 15 |
+  | `RenderState::{new, update, begin_update, update_held, dirty, clean, size, colors, cursor, rows}`, `PendingUpdate::end`, `Rows::next_row`, `RowRef::{is_dirty, id, wrapped, selection, cells, text}`, `Cells::next_cell`, `CellRef::{width, has_hyperlink, has_styling, style, foreground, background, grapheme}` | `render_state_*`, `row_get`, `cell_get` | `render::RenderState` and vt-c `render.rs` (row iterator, cells, two-phase update); cells over `page::Cell` | 12, 15 |
+  | `kitty_graphics()` (on `Terminal` and `HeldTerminal`), `KittyGraphics::{generation, placements, image}`, `KittyPlacement::key`, `KittyLayer::of`, `KittyRenderInfo` | `kitty_graphics_*`, `kitty_graphics_placement_render_info` | `kitty::graphics_storage::ImageStorage`, `graphics_render`, vt-c `kitty_graphics.rs` (`placement_render_info`) | 10, 15 |
+  | `KittyIdNamespace`, `KittyParent` (patch 0001) | the patched C API | `graphics_storage`'s `PlacementKey` and `PlacementIdTag`, the relative placement's parent and offsets | 10 |
+  | `KeyEncoder::{new, encode}`, `Key::{from_index, index}`, `KeyEvent`, `KeyMods`, `KeyAction` | `key_encoder_*`, `key_event_*` | `input::key_encode` with its options from the terminal, `input::key`, `input::key_mods` | 14 |
+  | `encode_focus` | `focus_encode` | `focus` | 14 |
+  | `MouseEncoder::{new, encode, reset}`, `MouseEvent`, `MouseGeometry`, `MouseButton`, `MouseAction` | `mouse_encoder_*`, `mouse_event_*` | `input::mouse_encode` with its options from the terminal and last-cell tracking, `input::mouse` | 14 |
+  | `Search::{new, close, set_needle, feed, run, tick, select, status, total, selected_index}` | `search_*` | `search::{screen, active, viewport, pagelist, sliding_window, terminal}`, vt-c `search.rs` (the split between feed and tick) | 13 |
+  | `SelectionGesture::{new, close, reset, apply, state}` and the `Gesture*` types | `selection_gesture_*` | `selection_gesture`, vt-c `selection_gesture.rs` | 13 |
+  | `version` | `build_info` (`VERSION_STRING`) | `options`' library version from rustty-identity, with Ghostty's identity restored | 7, 15 |
+  | `sys::install` (PNG decoder, log sink) | `sys_set` | gone: PNG decodes through `png` inside the crate, and logs go to `tracing` | 10 |
+  | `Rgb`, `MouseShape`, `ScrollbackLimits`, `TerminalColors`, `CursorStyle`, `Error` | types | `color::RGB`, `mouse::Shape`, `screen::CursorStyle`, the crate's errors | 8–10, 15 |
+- **Drift** (Ghostty `246f70287..81598385` over every followed directory; 29 commits). There is none in `src/unicode`,
+  `src/datastruct`, `src/simd`, `src/terminfo` or `src/build/uucode_config.zig`. `build.zig.zon` changed only the
+  theme package: uucode stays 0.2.0 @ `9d555245` at the pin, and nothing Unicode moved since `12752b2ac` either.
+  Each task first checks whether rustty already carries a change; a change it carries counts as absorbed.
+
+  | Ghostty file | commits | task |
+  |---|---|---|
+  | `terminal/csi.zig`, `terminal/size_report.zig`, `terminal/stream.zig` | `6104c78f1` CSI 19 t; `d0c0d4008` TBC without a parameter (stream) | 8 |
+  | `terminal/device_status.zig` | `fbda61b87` DECXCPR (`CSI ? 6 n`) | 8 |
+  | `terminal/modes.zig` | `d432b01a3` DECRQM reports unsupported ANSI modes as permanently reset; `b21f82c0e` their assertion | 8 |
+  | `terminal/osc/parsers/context_signal.zig` | `46d6c3b50` unescape metadata fields | 8 |
+  | `terminal/osc/parsers/program_status.zig` | `b7207b2ef` program status protocol revision 0.4 | 8 |
+  | `terminal/PageList.zig` | `4144f6dea` capacity log demoted to debug | 9 |
+  | `terminal/Screen.zig` | `65ff54c67` use-after-free when scrollback prunes the cursor page; `6dae79db9` wrapped grapheme data re-attached in one allocation | 10 |
+  | `terminal/formatter.zig` | `bae1c01fc` pending wrap restored over a blank cell; `8d8b1ce00` wide char wrapped onto the next page when copying | 10 |
+  | `terminal/kitty/graphics_image.zig` | `cd432ba5c` `/private/tmp` accepted for temp files on macOS (`1de05f1a7` is a Zig std rename) | 10 |
+  | `terminal/Terminal.zig` | `65ff54c67`, `6dae79db9`; `ff779564c` ED2 at a prompt skips blank rows; `42a65647b` pending wrap cleared when printing with DECAWM off; `0df8c4868` DECSTR turns off ISO protection; `9fa2e3aaf` prompt-based viewport scrolling; `b10ba7ea2` grapheme data kept when widening wraps | 11 |
+  | `terminal/stream_terminal.zig` | `5c9a3d8a9`, `d432b01a3`, `fbda61b87`, `6104c78f1`; `3175f6733` CSI 8 t resize requests; `b7207b2ef` | 11 |
+  | `terminal/kitty/clipboard_write.zig` | `44c4c8f55` memory retained by repeated walias updates bounded | 11 |
+  | `input/paste.zig`, `terminal/paste.zig` | `5c9a3d8a9` paste protection treats CR like a newline | 11 |
+  | `terminal/render.zig` | `4af7e19c7` wide char selection rendering matches copying | 12 |
+  | `terminal/c/terminal.zig`, `terminal/c/types.zig`, `terminal/c/paste.zig` | `3175f6733` the resize-window callback (an effect with a no-op default); `b7207b2ef`, `9fa2e3aaf`, `5c9a3d8a9` as exposed through the C API | 15 |
+  | `terminal/snapshot/page.zig`, `terminal/tmux/viewer.zig` | `6f3a4fade`; `1a93d5395`, `8a7a91fbd`, `968b2bf19` | cut |
+  | `os/open.zig` | `f9e8ef02d` macOS untrusted links (the app's URL opener, not ported) | none |
+  | `os/{TempDir,cgroup,homedir,i18n,path,resourcesdir,systemd}.zig`, `lib/tinyio/*` | `1de05f1a7` `std.Io.Dir.max_path_bytes` rename, no behavior | none |
+- **Calibration.** The kept files and the leaf crates they need, copied as Rust sources only, were checked by
+  clippy 1.98.1 under `[workspace.lints]` and `clippy.toml`:
+  - the setup:
+    - no network, a scratch HOME and CARGO_HOME with vendored crates.io sources;
+    - no rustty build script or `-sys` crate: empty stubs stand in for them, and a signatures-only stub for
+      rustty-wuffs;
+    - every lint at warn, so each crate builds and each hit is reported;
+    - rustty's 341 `#[allow]`s in kept code stripped first (579 in the copies);
+    - edition 2021 as rustty has it, with `rust_2024_compatibility` added.
+  - Coverage: Linux only, so `cfg(target_os = "macos"/"windows")` code is not counted. Counts are kept code only,
+    with test code (`#[cfg(test)]` modules, test files) apart.
+  - Production code: 7,454 hits of 121 lints, among them:
+    - unsafe: `undocumented_unsafe_blocks` 2288, `multiple_unsafe_ops_per_block` 545, `not_unsafe_ptr_arg_deref`
+      94, `missing_safety_doc` 13. rustty writes `// SAFETY(tag):`, which clippy does not accept, and the unsafe
+      core shrinks anyway;
+    - docs: `doc_markdown` 699, `missing_errors_doc` 276, `missing_panics_doc` 175, `empty_line_after_doc_comments`
+      77;
+    - `must_use_candidate` 628;
+    - robustness: `unwrap_used` 299, `panic` 54, `expect_used` 29;
+    - casts: `cast_lossless` 267, `cast_possible_truncation` 200, `cast_sign_loss` 37, `cast_possible_wrap` 25;
+    - complexity: `excessive_nesting` 186, `too_many_lines` 86, `cognitive_complexity` 61, `struct_excessive_bools`
+      15, `too_many_arguments` 11;
+    - Zig naming: `non_upper_case_globals` 60, `non_snake_case` 52, `non_camel_case_types` 34;
+    - shape: `manual_let_else` 171, `single_match_else` 91, `semicolon_if_nothing_returned` 75, `manual_assert_eq`
+      72;
+    - edition 2024: `edition_2024_expr_fragment_specifier` 14, `keyword_idents_2024` 4,
+      `missing_unsafe_on_extern` 4, `tail_expr_drop_order` 1.
+  - Test code: 8,323 hits of 79 lints. Most are unsafe: `undocumented_unsafe_blocks` 4923,
+    `multiple_unsafe_ops_per_block` 906. Then `manual_assert_eq` 365, `cast_possible_truncation` 337,
+    `non_snake_case` 230, `cast_lossless` 186, `unreadable_literal` 162, `borrow_as_ptr` 135,
+    `cognitive_complexity` 120, `manual_let_else` 115, `too_many_lines` 82.
+  - Per corrected task (the module lists of the sections below). Columns: production hits, of them unsafe (the two
+    unsafe-block lints) and complexity (the seven complexity lints), then test-code hits, stripped `#[allow]`s and
+    the top production lints. Size columns: production and test lines, `#[test]`s, `unsafe` occurrences.
+
+    | task | prod | unsafe | complexity | test | allows | top production lints | lines prod/test | tests | `unsafe` |
+    |---|---|---|---|---|---|---|---|---|---|
+    | 4 memory core | 888 | 324 | 3 | 594 | 54 | undocumented_unsafe_blocks 243, doc_markdown 112, must_use_candidate 99 | 16156/4046 | 193 | 823 |
+    | 5 Unicode, UTF-8, SIMD | 156 | 13 | 8 | 60 | 21 | must_use_candidate 25, doc_markdown 23, cast_lossless 12 | 6427/2278 | 69 | 16 |
+    | 7 terminfo, identity | 31 | 0 | 2 | 8 | 0 | unwrap_used 9, doc_markdown 5 | 1187/315 | 10 | 0 |
+    | 8 parser and stream | 1014 | 41 | 69 | 601 | 61 | must_use_candidate 160, doc_markdown 137, manual_let_else 56 | 26772/20772 | 798 | 85 |
+    | 9 page and page list | 2064 | 1180 | 118 | 3255 | 65 | undocumented_unsafe_blocks 952, multiple_unsafe_ops_per_block 228, doc_markdown 153 | 16064/29263 | 494 | 3242 |
+    | 10 screen, formatter, selection, Kitty storage | 1424 | 527 | 75 | 1405 | 64 | undocumented_unsafe_blocks 442, unwrap_used 101, doc_markdown 98 | 19626/26387 | 594 | 1350 |
+    | 11 terminal, handler, effects, Kitty exec, paste | 1137 | 574 | 45 | 1774 | 31 | undocumented_unsafe_blocks 477, multiple_unsafe_ops_per_block 97, doc_markdown 75 | 19121/31399 | 875 | 1801 |
+    | 12 render state | 178 | 72 | 15 | 45 | 5 | undocumented_unsafe_blocks 59, cast_possible_truncation 22 | 2473/2487 | 42 | 69 |
+    | 13 search, selection gesture | 354 | 101 | 11 | 481 | 24 | undocumented_unsafe_blocks 89, doc_markdown 42, unwrap_used 32 | 7910/5935 | 122 | 431 |
+    | 14 input encoders | 208 | 1 | 15 | 6 | 14 | doc_markdown 46, must_use_candidate 44, cast_lossless 35 | 5020/4359 | 145 | 1 |
+    | rustty-vt's integration tests | 0 | 0 | 0 | 94 | 2 | | 0/2683 | 46 | 37 |
+
+    The modules with the most production hits: `pagelist` 1272 (test code 2724), `terminal` 763 (1395), `screen`
+    669 (753), `page_impl` 523, `osc` 334, `search` 287, `kitty/graphics_storage` 223, `ref_counted_set` 182,
+    `hash_map` 179, `render` 178, `stream` 173, `formatter` 143 (382), `page` 132.
+
 ### `agterm-session`
 
 - **Source and license.** herdr is pinned in `build/pins.env` (`HERDR_REPO`, `HERDR_REV`) for provenance and future
@@ -639,13 +869,14 @@ agterm-vt    the VT state of both the pane and the server
 - Modify: `Cargo.toml` (`[workspace.dependencies]`; members are the `crates/*` glob), `Cargo.lock`, `build/pins.env`
   (`RUSTTY_*`)
 
-- [ ] create the crate under the workspace lints. Its crate doc states the provenance, the module-header convention
+- [x] create the crate under the workspace lints. Its crate doc states the provenance, the module-header convention
       and the unsafe policy
-- [ ] write the root `NOTICE` with Ghostty's and rustty's MIT texts; uucode, herdr and (if needed) wuffs are added by
+- [x] write the root `NOTICE` with Ghostty's and rustty's MIT texts; uucode, herdr and (if needed) wuffs are added by
       their tasks. Check that every crate inherits `license.workspace` (MIT, user 2026-10-16), except
-      `agterm-session`, which declares `MIT AND Apache-2.0` for herdr's code
-- [ ] add `RUSTTY_REPO`/`RUSTTY_REV` to `build/pins.env`, with a comment saying what the pin is for
-- [ ] inventory, recorded in this plan:
+      `agterm-session`, which declares `MIT AND Apache-2.0` for herdr's code (checked 2026-10-18: all 16 crates
+      inherit it; `agterm-session` does not exist yet, Task 20 declares its license)
+- [x] add `RUSTTY_REPO`/`RUSTTY_REV` to `build/pins.env`, with a comment saying what the pin is for
+- [x] inventory, recorded in this plan (Technical Details > `agterm-vt` > "What Task 1 settles"):
   - the keep or cut verdict for every rustty-vt module named in Context, by the "part of libghostty-vt at the pin and
     reachable from agterm" rule;
   - the module graph (`use crate::`) of the kept set, its strongly connected groups, and any correction to Tasks
@@ -653,11 +884,12 @@ agterm-vt    the VT state of both the pane and the server
   - the public functions of `agterm-ghostty-vt` that `agterm-term` calls, each mapped to the rustty item or
     `rustty-vt-c` logic that implements it, and to its task;
   - the drift files of every followed Ghostty directory (Technical Details), each assigned to a task
-- [ ] calibrate: copy the kept files (`.rs` only, no build scripts, no `-sys` crates) into a scratch crate after
+- [x] calibrate: copy the kept files (`.rs` only, no build scripts, no `-sys` crates) into a scratch crate after
       reading them, and run clippy with the workspace lints and `clippy.toml` in a sandbox (no network, scratch HOME).
-      Record the counts per lint and per module here
-- [ ] write a smoke test and a doc test of the provenance constants
-- [ ] run gates - must pass before task 2
+      Record the counts per lint and per module here (done as a scratch workspace of rustty-vt and its leaf crates,
+      `.scratch/vt-calibrate/`, counted over the kept modules only; see "What Task 1 settles" > Calibration)
+- [x] write a smoke test and a doc test of the provenance constants
+- [x] run gates - must pass before task 2
 
 ### Task 2: Study herdr's session server and spike its risky parts
 
@@ -704,7 +936,8 @@ agterm-vt    the VT state of both the pane and the server
       in this change
 - [ ] port the following behind safe types, with every `unsafe` block carrying its own `// SAFETY:` and one
       operation:
-  - from rustty-vt: `alloc`, `mem`, `bitmap_allocator`, `ref_counted_set`, `hash_map`, `zig_list`;
+  - from rustty-vt: `alloc`, `bitmap_allocator`, `ref_counted_set`, `hash_map`, `zig_list` (`mem` is cut with page
+    compression, Task 1), and `sys`'s global raw allocator, which `alloc` uses;
   - from rustty-render-types: `OffsetBuf` and what it needs;
   - from rustty-datastruct and rustty-util: what those need
 - [ ] replace the zigstd and allocator-api2 shims with `std` where the semantics allow. Note each shim that remains,
@@ -761,40 +994,46 @@ agterm-vt    the VT state of both the pane and the server
 - [ ] add XTGETTCAP tests: a known capability, an unknown one, hex-encoded names
 - [ ] run gates - must pass before task 8
 
-### Task 8: Page, PageList, style, hyperlink, resize and reflow (without page compression)
+### Task 8: Parser and stream: parse table, CSI/OSC/APC parsing, SGR, charsets, modes, colors
+
+Before the page group (Task 1's graph): `style` uses `sgr`, and nothing here uses page memory. `dcs` moved to Task 11.
+
+**Files:**
+- Create: `crates/agterm-vt/src/terminal/{parser,parse_table,stream,stream_continuation,csi,sgr,charsets,modes,
+  ansi,device_attributes,device_status,size_report,apc,color,x11_color,fraction,mouse}.rs`,
+  `crates/agterm-vt/src/terminal/osc/**`, `crates/agterm-vt/src/terminal/kitty/{graphics_command,color,key}.rs`
+
+- [ ] port the parser state machine and the stream dispatch, generic over its handler, without the tmux and
+      glyph-protocol branches
+- [ ] port every OSC parser agterm reaches today (title, pwd, hyperlinks, colors, clipboard, notifications, progress,
+      `program_status`, `context_signal`, semantic prompt, Kitty's 5522 clipboard) and the Kitty graphics command
+      parser, imported directly by `apc` (not through the `kitty/graphics` aggregate). `program_status` decodes
+      base64 with Task 5's decoder, since rustty took its decoder from the cut glyph code
+- [ ] port what the group uses beside them: the colors (`color`, `x11_color` with its `rgb.txt`, `fraction`), the
+      mouse shape, Kitty's OSC 21 colors and its keyboard flags
+- [ ] absorb the drift for `stream.zig`, `osc/parsers/*`, `modes.zig`, `csi.zig`, `device_status.zig` and
+      `size_report.zig`
+- [ ] port the stream, OSC, parser, SGR, modes, color and graphics-command tests
+- [ ] add tests for each drifted parser
+- [ ] run gates - must pass before task 9
+
+### Task 9: Page, PageList, style, hyperlink, resize and reflow (without page compression)
 
 **Files:**
 - Create: `crates/agterm-vt/src/terminal/page*.rs`, `crates/agterm-vt/src/terminal/page_list/**`,
-  `crates/agterm-vt/src/terminal/{style,hyperlink,point,size,color,x11_color}.rs`
+  `crates/agterm-vt/src/terminal/{style,hyperlink,point,size,fastprint}.rs`
 
 - [ ] port `page_impl`/`page` (cells, rows, grapheme map, style set, hyperlink set, string storage) over Task 4's
       core, safe above it
 - [ ] port `pagelist`: scrollback with its limits, pins, iteration, erase, scroll, resize with reflow, page reuse.
-      Split whatever goes over the limits
+      Split whatever goes over the limits. `highlight_semantic_content`, its one edge into `highlight`, comes with
+      Task 10 together with its tests
 - [ ] cut idle compression out of `PageList` (`NodeData::Compressed`, `compress`), and keep everything else that
       touches node data
 - [ ] absorb this group's drift
 - [ ] port the rustty tests (`pagelist/tests/*` minus compression, `page_tests`, `ref_geometry_golden_tests`)
 - [ ] add tests for the drift and for the compression cut (no compressed node is ever produced; scrollback limits
       still hold)
-- [ ] run gates - must pass before task 9
-
-### Task 9: Parser and stream: parse table, CSI/DCS/OSC/APC parsing, SGR, charsets, modes
-
-**Files:**
-- Create: `crates/agterm-vt/src/terminal/{parser,parse_table,stream,stream_continuation,csi,dcs,sgr,charsets,modes,
-  ansi,device_attributes,device_status,size_report,focus,apc}.rs`, `crates/agterm-vt/src/terminal/osc/**`,
-  `crates/agterm-vt/src/terminal/kitty/graphics_command.rs`
-
-- [ ] port the parser state machine and the stream dispatch, generic over its handler, without the tmux and
-      glyph-protocol branches
-- [ ] port every OSC parser agterm reaches today (title, pwd, hyperlinks, colors, clipboard, notifications, progress,
-      `program_status`, `context_signal`, semantic prompt, Kitty's 5522 clipboard) and the Kitty graphics command
-      parser
-- [ ] absorb the drift for `stream.zig`, `osc/parsers/*`, `modes.zig`, `csi.zig`, `device_status.zig` and
-      `size_report.zig`
-- [ ] port the stream, OSC, parser, SGR, modes and graphics-command tests
-- [ ] add tests for each drifted parser
 - [ ] run gates - must pass before task 10
 
 ### Task 10: Screen with its formatter, selection and Kitty storage (one dependency group)
@@ -802,21 +1041,32 @@ agterm-vt    the VT state of both the pane and the server
 **Files:**
 - Create: `crates/agterm-vt/src/terminal/{screen,screen_set,tabstops,cursor,selection,selection_codepoints,
   highlight}.rs`, `crates/agterm-vt/src/terminal/screen/**`, `crates/agterm-vt/src/terminal/formatter/**`,
-  `crates/agterm-vt/src/terminal/kitty/{graphics_storage,graphics_image,graphics_unicode}.rs` (names as Task 1's
-  graph settles them)
+  `crates/agterm-vt/src/terminal/kitty/{graphics_storage,graphics_image,graphics_pixel,graphics_unicode,
+  graphics_render,graphics_animation,windows}.rs`, the os support it reads files through (`file`, `path`, `tempdir`)
+
+The screen-level part of the component Task 1 found, by its item extractions (Technical Details > `agterm-vt` >
+"What Task 1 settles"): nothing here takes a `Terminal`.
 
 - [ ] port `Screen`: primary and alternate, cursor, saved cursor, selection storage, semantic prompt marks, the Kitty
-      image storage it owns
-- [ ] port the formatter (plain, VT, HTML; viewport, screen, selection, ranges; the snapshot's extras) with the drift
-      for `formatter.zig` and `Screen.zig`
+      image storage it owns. `PrintStringError` is defined here, and Task 11's `Terminal` re-exports it. `highlight`
+      comes too, with pagelist's `highlight_semantic_content` and its tests (`pagelist/tests/iter_clone.rs`)
+- [ ] port the formatter (plain, VT, HTML; page, page list, screen, selection, ranges; the snapshot's extras) with
+      the drift for `formatter.zig` and `Screen.zig`. `TerminalFormatter` comes with Task 11
 - [ ] check zmx's `ghostty/0001-formatter-unstyled-blanks` against the pin. If the pin lacks it, add it as a
       formatter option, with tests
 - [ ] port the selection operations (cell ranges, word, line, all, adjust)
 - [ ] Kitty images: loading (direct, file, temp file and shared memory, with the POSIX and Windows forms of what it
       reads), zlib through `miniz_oxide`, PNG through `png`, the swizzles in Rust, the drift for
       `kitty/graphics_image.zig`
-- [ ] Kitty storage: the placement-id namespace, a relative placement's parent key and H=/V= offsets
-- [ ] port the screen, formatter, selection and Kitty storage and image tests
+- [ ] Kitty storage: the placement-id namespace, a relative placement's parent key and H=/V= offsets, eviction
+      (`evict_image`, `evict_image_except`, `delete_if_unused`) and animation. Placement geometry (`cell_offset`,
+      `pixel_size`, `grid_size`, `clip_top`, `rect`) takes the terminal's geometry as a value, and the scroll-margin
+      hooks take the screen and its margins, not the `Terminal`. Command deletion (`clear_screen`, `delete` and
+      their helpers) comes with Task 11
+- [ ] port the screen, formatter, selection and Kitty storage and image tests that need no `Terminal`. The ones
+      built on a `Terminal` move to Task 11: formatter's `page_plain`, `terminal_screen`, `html_codepoint_pinmap` and
+      `page_vt_pagelist`, and Kitty storage's and `graphics_unicode`'s. Adapt representative cases of the
+      refactored geometry, eviction and formatting to screen or geometry fixtures here
 - [ ] add tests for word boundaries, wide characters, soft wraps in plain output and HTML escaping
 - [ ] add tests for each swizzle on known pixels, compressed payloads (good and corrupt), PNG (good and truncated),
       and the exposed parent and namespace fields
@@ -826,18 +1076,28 @@ agterm-vt    the VT state of both the pane and the server
 
 **Files:**
 - Create: `crates/agterm-vt/src/terminal/terminal.rs`, `crates/agterm-vt/src/terminal/terminal/**`,
-  `crates/agterm-vt/src/terminal/stream_terminal/**`, `crates/agterm-vt/src/terminal/{effects,clipboard}.rs`,
-  `crates/agterm-vt/src/terminal/kitty/graphics_exec.rs` (plus what Task 1 keeps: DnD, grants, animation)
+  `crates/agterm-vt/src/terminal/stream_terminal/**`, `crates/agterm-vt/src/terminal/{effects,clipboard,dcs,paste,
+  fixed_writer}.rs`, `crates/agterm-vt/src/input/paste.rs`, `crates/agterm-vt/src/terminal/kitty/{graphics_exec,
+  clipboard*,dnd*}.rs`, a writer support module in place of rustty's `snapshot::io`
+
+The terminal-level part of the component Task 1 found, with what Task 10 left for it.
 
 - [ ] port `Terminal`: print, wrap, erase, insert/delete, margins, scroll regions, resize, viewport scrolling (by
-      prompt too), with the drift for `Terminal.zig`
-- [ ] port `stream_terminal`'s handler without its snapshot and glyph branches, with XTGETTCAP from Task 7. Absorb
-      the drift for `stream_terminal.zig` and `kitty/clipboard_write.zig`
+      prompt too), with the drift for `Terminal.zig`. It re-exports Task 10's `PrintStringError`
+- [ ] port `stream_terminal`'s handler without its snapshot, glyph, tmux and DECRQCRA branches, with XTGETTCAP from
+      Task 7, and `dcs` (DECRQSS, XTGETTCAP requests) without its tmux branch. Absorb the drift for
+      `stream_terminal.zig` and `kitty/clipboard_write.zig`. rustty's `snapshot::io` writers, used by the handler,
+      clipboard and paste, become a small writer support module (or `std::io::Write`)
 - [ ] define the effects trait with the C API's callback set, called synchronously with a read view of the terminal,
       and a no-op default
-- [ ] port Kitty command execution and the kept Kitty modules
+- [ ] port paste framing and safety (`paste`, `input/paste`; moved from Task 14), with the drift for
+      `input/paste.zig` and `terminal/paste.zig`
+- [ ] port Kitty command execution with the storage's command deletion (`clear_screen`, `delete` and their helpers),
+      and the kept Kitty modules: the 5522 clipboard with its grants, DnD (OSC 72)
+- [ ] port `TerminalFormatter` over Task 10's formatters
 - [ ] restore Ghostty's identity wherever rustty renamed it
-- [ ] port the terminal, `stream_terminal/tests/*` and Kitty execution tests
+- [ ] port the terminal, `stream_terminal/tests/*`, dcs, paste and Kitty execution tests, and the tests Task 10 moved
+      here (formatter's and Kitty storage's built on a `Terminal`)
 - [ ] add tests that each effect fires with the payload the C API delivered (`agterm-ghostty-vt`'s
       `tests/effects.rs` as the list), and for the identity strings and the drift
 - [ ] run gates - must pass before task 12
@@ -868,15 +1128,17 @@ agterm-vt    the VT state of both the pane and the server
       gesture timing edges
 - [ ] run gates - must pass before task 14
 
-### Task 14: Input encoders and paste
+### Task 14: Input encoders
+
+Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
 
 **Files:**
-- Create: `crates/agterm-vt/src/input/{key,key_encode,key_mods,mouse,mouse_encode,paste,focus}.rs`
+- Create: `crates/agterm-vt/src/input/{key,key_encode,key_mods,mouse,mouse_encode,focus,function_keys,kitty,
+  config}.rs`
 
 - [ ] port the key encoder (legacy, application modes, modifyOtherKeys, Kitty flags), the mouse encoder (all
       tracking modes and formats) and focus reports
-- [ ] port paste framing and safety, with the drift for `input/paste.zig` and `terminal/paste.zig`
-- [ ] port the encoder and paste tests
+- [ ] port the encoder and focus tests
 - [ ] add tests for each `Key` and modifier side that `agterm-term`'s `input.rs` maps
 - [ ] run gates - must pass before task 15
 
