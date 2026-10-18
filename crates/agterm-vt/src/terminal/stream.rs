@@ -1238,7 +1238,7 @@ fn dispatch_action<H: Handler>(handler: &mut H, action: parser::Action<'_>, c: u
         parser::Action::Execute(code) => dispatch::execute(handler, code),
         parser::Action::CsiDispatch(csi) => csi_dispatch::csi_dispatch(handler, &csi),
         parser::Action::EscDispatch(esc) => dispatch::esc_dispatch(handler, &esc),
-        parser::Action::OscDispatch(cmd) => dispatch::osc_dispatch(handler, *cmd),
+        parser::Action::OscDispatch(cmd) => dispatch::osc_dispatch(handler, cmd),
         parser::Action::DcsHook(dcs) => handler.dcs_hook(&dcs),
         parser::Action::DcsPut(code) => handler.dcs_put(code),
         parser::Action::DcsUnhook => handler.dcs_unhook(),

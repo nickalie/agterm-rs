@@ -3,7 +3,7 @@ use crate::terminal::osc;
 
 /// An action with no borrow of the parser, for every variant but `OscDispatch`, which is handed back in `Err`: the
 /// tests keep the actions of one step while they feed the next.
-fn into_static(action: Action<'_>) -> Result<Action<'static>, Box<osc::Command<'_>>> {
+fn into_static(action: Action<'_>) -> Result<Action<'static>, osc::Command<'_>> {
     Ok(match action {
         Action::Print(c) => Action::Print(c),
         Action::Execute(c) => Action::Execute(c),
@@ -46,7 +46,7 @@ fn csi(p: &mut Parser, c: u8) -> Csi {
     let a = next(p, c);
     assert_eq!(p.state, State::Ground);
     match transition(&a) {
-        Action::CsiDispatch(d) => (**d).clone(),
+        Action::CsiDispatch(d) => d.clone(),
         other => panic!("expected a CSI dispatch, got {other:?}"),
     }
 }
@@ -57,7 +57,7 @@ fn dcs_hook(p: &mut Parser, c: u8) -> Dcs {
     assert_eq!(p.state, State::DcsPassthrough);
     assert!(a[0].is_none() && a[1].is_none(), "{a:?}");
     match a[2].as_ref() {
-        Some(Action::DcsHook(hook)) => (**hook).clone(),
+        Some(Action::DcsHook(hook)) => hook.clone(),
         other => panic!("expected a DCS hook, got {other:?}"),
     }
 }

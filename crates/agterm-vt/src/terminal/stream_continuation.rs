@@ -39,8 +39,8 @@ use crate::terminal::utf8_decoder::Utf8Decoder;
 /// is set until a later feed ends at ground (`reset`) or contains a new
 /// replay start (`replace`), both of which need nothing that was lost.
 ///
-/// Replay semantics are guaranteed for the standard `TerminalStream` handler.
-/// Custom handlers, including handlers that intercept vtRaw, are unsupported.
+/// Replay semantics are guaranteed only for the terminal's own stream
+/// handler; other handlers are unsupported.
 pub(crate) struct Tracker {
     /// The longest suffix the tracker keeps; a longer one breaks it.
     pub(crate) max_bytes: usize,

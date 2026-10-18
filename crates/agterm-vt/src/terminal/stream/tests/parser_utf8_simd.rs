@@ -38,6 +38,21 @@ fn cps(s: &str) -> Vec<u32> {
     s.chars().map(u32::from).collect()
 }
 
+/// Without `alloc` the stream allocates nothing, the sequences off its fast paths included: ESC dispatches, CSIs with
+/// intermediates, a DCS string and OSCs, whose actions `Parser::next` builds, fed in bulk and byte by byte.
+#[test]
+fn stream_without_alloc_dispatches_without_allocating() {
+    let input: &[u8] = b"\x1b7\x1bM\x1b(B\x1b[2 q\x1b[!p\x1bP1$qm\x1b\\\x1b]0;title\x1b\\\x1b]2;t\x07\x1b[?25h\x1b8";
+    let mut s = Stream::new(Options::with_handler(NullHandler));
+    let ((), bulk) = crate::mem::testing::with_counting(|| s.next_slice(input));
+    let ((), per_byte) = crate::mem::testing::with_counting(|| {
+        for &c in input {
+            s.next(c);
+        }
+    });
+    assert_eq!((bulk.alloc_calls, per_byte.alloc_calls), (0, 0));
+}
+
 /// The dedup mechanism (Ghostty `b5053153f` has no test: its observable is the log): the first sighting of a key
 /// logs, every repeat is suppressed, a distinct value logs again, and a full table suppresses new values too.
 #[test]

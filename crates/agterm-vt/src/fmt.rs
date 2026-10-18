@@ -1,17 +1,18 @@
-//! Zig's `std.fmt.parseInt` and `parseUnsigned`: the integer parser Ghostty's Kitty graphics commands and palette
-//! entries read numbers with, at any integer width the callers use.
+//! Zig's `std.fmt.parseInt`: the integer parser Ghostty's Kitty graphics commands read numbers with, at any integer
+//! width the callers use.
 //!
-//! Zig: `lib/std/fmt.zig` (`parseInt`, `parseUnsigned`, `parseIntWithSign`, `charToDigit`) of Zig 0.16.0, the version
+//! Zig: `lib/std/fmt.zig` (`parseInt`, `parseIntWithSign`, `charToDigit`) of Zig 0.16.0, the version
 //! `LIBGHOSTTY_VT_REV` builds with.
 //! rustty: `crates/rustty-zigstd/src/fmt.rs` at `RUSTTY_REV` (MIT).
-//! Changes: the integer half only (the float parser has no user here). Zig's result type is a comptime integer of any
-//! width (`u4`, `u9`, `i43`, ...); [`IntType`] carries the width and signedness at run time and the `_type` functions
-//! return the value widened to `i128`, while [`parse_int`] and [`parse_unsigned`] serve the native types. Each step is
+//! Changes: the integer half only (the float parser has no user here), and of it only `parseInt` with an explicit
+//! base: `parseUnsigned` and base 0's prefix detection have no caller here and are not taken. Zig's result type is a
+//! comptime integer of any width (`u4`, `u9`, `i43`, ...); [`IntType`] carries the width and signedness at run time
+//! and [`parse_int_type`] returns the value widened to `i128`, while [`parse_int`] serves the native types. Each step is
 //! range-checked at Zig's `Accumulate` width (`@max(8, bits)`) right away, so an overflow is reported at the digit
 //! that causes it, before a later invalid character, as Zig does.
 //!
-//! This is Zig's literal grammar, not a protocol's: `_` digit separators are skipped, a base of 0 reads a `0b`, `0o`
-//! or `0x` prefix, and an unsigned type takes a leading sign (`-0` is 0). Protocol fields use
+//! This is Zig's literal grammar, not a protocol's: `_` digit separators are skipped and an unsigned type takes a
+//! leading sign (`-0` is 0). Protocol fields use
 //! [`crate::parse_int`] instead, which refuses all of that.
 
 use core::fmt;
@@ -138,19 +139,18 @@ pub(crate) const fn char_to_digit(c: u8, base: u8) -> Result<u8, ParseIntError> 
     Ok(value)
 }
 
-/// `std.fmt.parseInt(T, buf, base)` for a native integer type. A base of 0 is read from a `0b`, `0o` or `0x` prefix
-/// (decimal otherwise); `_` separators between digits are skipped.
+/// `std.fmt.parseInt(T, buf, base)` for a native integer type, `base` 2 to 36; `_` separators between digits are
+/// skipped.
 pub(crate) fn parse_int<T: ZigInt>(buf: &[u8], base: u8) -> Result<T, ParseIntError> {
     parse_int_type(T::TYPE, buf, base).map(T::from_checked)
 }
 
-/// `std.fmt.parseUnsigned(T, buf, base)` for a native integer type: [`parse_int`] without a sign.
-pub(crate) fn parse_unsigned<T: ZigInt>(buf: &[u8], base: u8) -> Result<T, ParseIntError> {
-    parse_unsigned_type(T::TYPE, buf, base).map(T::from_checked)
-}
-
-/// `std.fmt.parseInt(T, buf, base)` for the Zig integer type `t`, the value widened to `i128`.
+/// `std.fmt.parseInt(T, buf, base)` for the Zig integer type `t`, `base` 2 to 36, the value widened to `i128`.
 pub(crate) fn parse_int_type(t: IntType, buf: &[u8], base: u8) -> Result<i128, ParseIntError> {
+    debug_assert!(
+        (2..=36).contains(&base),
+        "base {base}: Zig's base 0 detection is not taken"
+    );
     match buf.split_first() {
         None => Err(ParseIntError::InvalidCharacter),
         Some((b'+', rest)) => parse_int_with_sign(t, rest, base, false),
@@ -159,37 +159,11 @@ pub(crate) fn parse_int_type(t: IntType, buf: &[u8], base: u8) -> Result<i128, P
     }
 }
 
-/// `std.fmt.parseUnsigned(T, buf, base)` for the Zig integer type `t`, the value widened to `i128`.
-pub(crate) fn parse_unsigned_type(t: IntType, buf: &[u8], base: u8) -> Result<i128, ParseIntError> {
-    parse_int_with_sign(t, buf, base, false)
-}
-
-/// The digits after the base prefix, and the base, for Zig's base 0 (`0b`, `0o`, `0x`, else decimal).
-fn detect_base(buf: &[u8], base: u8) -> (&[u8], u8) {
-    if base != 0 {
-        return (buf, base);
-    }
-    if buf.len() > 2 && buf[0] == b'0' {
-        match buf[1].to_ascii_lowercase() {
-            b'b' => return (&buf[2..], 2),
-            b'o' => return (&buf[2..], 8),
-            b'x' => return (&buf[2..], 16),
-            _ => {}
-        }
-    }
-    (buf, 10)
-}
-
 /// `parseIntWithSign`: the digits of `buf` in `base`, added (or for `neg` subtracted) at the `Accumulate` width of
 /// `result`, then cast to `result`.
 fn parse_int_with_sign(result: IntType, buf: &[u8], base: u8, neg: bool) -> Result<i128, ParseIntError> {
-    if buf.is_empty() {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-    let (digits, base) = detect_base(buf, base);
     let accumulate_t = result.accumulate();
-    let (Some(&first), Some(&last)) = (digits.first(), digits.last()) else {
-        // `0x` with nothing after it.
+    let (Some(&first), Some(&last)) = (buf.first(), buf.last()) else {
         return Err(ParseIntError::InvalidCharacter);
     };
     if first == b'_' || last == b'_' {
@@ -197,7 +171,7 @@ fn parse_int_with_sign(result: IntType, buf: &[u8], base: u8, neg: bool) -> Resu
     }
 
     let mut accumulate: i128 = 0;
-    for &c in digits {
+    for &c in buf {
         if c == b'_' {
             continue;
         }

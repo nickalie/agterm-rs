@@ -18,7 +18,7 @@
 //! pairs, built by a `const fn` per integer type (stable `const fn` cannot compare a generic `T`). The sort is an
 //! insertion sort, since `const fn` has none; the keys are unique, so its stability is unobservable. The original
 //! index is a `u16` (Zig's smallest type that holds every index), widened to `usize` on the way out. `contains` is
-//! not taken (no caller), and the set is built for the key types in use.
+//! not taken (no caller), and the set is built for `u16` only, the key type in use (the terminal modes).
 
 /// A fixed set of integers known at compile time; see the module docs.
 #[derive(Clone, Copy, Debug)]
@@ -93,7 +93,7 @@ macro_rules! impl_comptime_int_set {
     )*};
 }
 
-impl_comptime_int_set!(u8, u16, i8);
+impl_comptime_int_set!(u16);
 
 #[cfg(test)]
 mod tests;

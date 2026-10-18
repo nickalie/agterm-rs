@@ -5,12 +5,15 @@
 //! Ghostty: `src/terminal/Parser.zig` at `LIBGHOSTTY_VT_REV`.
 //! rustty: `crates/rustty-vt/src/parser.rs` at `RUSTTY_REV` (MIT).
 //! Changes: Zig's CSI, ESC and DCS payloads are slices into the parser's buffers, "only valid until the next call to
-//! next"; here they own their bytes in fixed-capacity inline arrays ([`InlineVec`], the parser's own capacities) and
-//! are boxed so that an [`Action`] stays small (the per-byte `[Option<Action>; 3]` return is paid on every byte). The
-//! OSC payload borrows the OSC parser's storage, as Zig's does, so [`Action`] carries that borrow's lifetime. The exit
-//! action is computed after the transition and entry actions: an `osc_string` exit borrows the OSC parser for as long
-//! as the returned actions live, and nothing else in a step that leaves `osc_string` touches it. Zig's `format`
-//! logging helpers are `Display` impls, printing what Zig's do. `StaticBitSet` is [`SepList`].
+//! next"; here they own their bytes in fixed-capacity inline arrays ([`InlineVec`], the parser's own capacities), held
+//! by value in the [`Action`] as Zig's are, so building an action never allocates. rustty boxes them to keep an
+//! [`Action`] small; that is not taken: the stream's fast paths keep the ground, CSI parameter and OSC/APC payload
+//! bytes off [`Parser::next`], so the wider return is paid only on the bytes that still reach it (escape sequence
+//! starts and finals off the fast paths, DCS payloads). The OSC payload borrows the OSC parser's storage, as Zig's
+//! does, so [`Action`] carries that borrow's lifetime. The exit action is computed after the transition and entry
+//! actions: an `osc_string` exit borrows the OSC parser for as long as the returned actions live, and nothing else in
+//! a step that leaves `osc_string` touches it. Zig's `format` logging helpers are `Display` impls, printing what Zig's
+//! do. `StaticBitSet` is [`SepList`].
 
 use crate::terminal::osc;
 use crate::terminal::parse_table::TABLE;
@@ -100,16 +103,16 @@ pub(crate) enum Action<'p> {
     Execute(u8),
 
     /// Execute the CSI command.
-    CsiDispatch(Box<Csi>),
+    CsiDispatch(Csi),
 
     /// Execute the ESC command.
-    EscDispatch(Box<Esc>),
+    EscDispatch(Esc),
 
     /// Execute the OSC command. It borrows the OSC parser: it is only valid until the next call to the parser.
-    OscDispatch(Box<osc::Command<'p>>),
+    OscDispatch(osc::Command<'p>),
 
     /// DCS-related events.
-    DcsHook(Box<Dcs>),
+    DcsHook(Dcs),
     DcsPut(u8),
     DcsUnhook,
 
@@ -388,7 +391,7 @@ impl Parser {
         let exit = match state {
             State::OscString => {
                 debug_assert!(matches!(action, TransitionAction::None | TransitionAction::Execute));
-                self.osc.end(Some(c)).map(|cmd| Action::OscDispatch(Box::new(cmd)))
+                self.osc.end(Some(c)).map(Action::OscDispatch)
             }
             State::DcsPassthrough => Some(Action::DcsUnhook),
             State::SosPmApcString => Some(Action::ApcEnd),
@@ -418,11 +421,11 @@ impl Parser {
                     self.params[usize::from(self.params_idx)] = self.param_acc;
                     self.params_idx += 1;
                 }
-                Some(Action::DcsHook(Box::new(Dcs {
+                Some(Action::DcsHook(Dcs {
                     intermediates: InlineVec::from_buf(self.intermediates, self.intermediates_idx),
                     params: InlineVec::from_buf(self.params, self.params_idx),
                     final_: c,
-                })))
+                }))
             }
             State::SosPmApcString => Some(Action::ApcStart),
             _ => None,
@@ -461,10 +464,10 @@ impl Parser {
                 None
             }
             TransitionAction::CsiDispatch => self.csi_dispatch(c),
-            TransitionAction::EscDispatch => Some(Action::EscDispatch(Box::new(Esc {
+            TransitionAction::EscDispatch => Some(Action::EscDispatch(Esc {
                 intermediates: InlineVec::from_buf(self.intermediates, self.intermediates_idx),
                 final_: c,
-            }))),
+            })),
             TransitionAction::Put => Some(Action::DcsPut(c)),
             TransitionAction::ApcPut => Some(Action::ApcPut(c)),
         }
@@ -528,7 +531,7 @@ impl Parser {
             return None;
         }
 
-        Some(Action::CsiDispatch(Box::new(csi)))
+        Some(Action::CsiDispatch(csi))
     }
 
     /// Forget the sequence collected so far.

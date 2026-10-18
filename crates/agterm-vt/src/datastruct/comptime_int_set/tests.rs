@@ -28,24 +28,24 @@ fn unsorted_keys_return_original_index() {
 struct Keys<const N: usize>;
 
 impl<const N: usize> Keys<N> {
-    const KEYS: [u8; N] = {
-        let mut result = [0_u8; N];
+    const KEYS: [u16; N] = {
+        let mut result = [0_u16; N];
         let mut i = 0;
-        // `key` is `(i * 37 + 11) % 251`, stepped as a `u8`.
+        // `key` is `(i * 37 + 11) % 251`, stepped.
         let mut key: u16 = 11;
         while i < N {
-            result[i] = key.to_le_bytes()[0];
+            result[i] = key;
             key = (key + 37) % 251;
             i += 1;
         }
         result
     };
-    const SET: ComptimeIntSet<u8, N> = ComptimeIntSet::<u8, N>::new(Self::KEYS);
+    const SET: ComptimeIntSet<u16, N> = ComptimeIntSet::<u16, N>::new(Self::KEYS);
 }
 
 fn check<const N: usize>() {
     let keys = Keys::<N>::KEYS;
-    for v in 0..=u8::MAX {
+    for v in 0..=u16::from(u8::MAX) {
         let expected = keys.iter().position(|&key| key == v);
         assert_eq!(expected, Keys::<N>::SET.index_of(v), "n={N} v={v}");
     }
@@ -75,13 +75,4 @@ fn exhaustive_against_linear_scan() {
     check::<17>();
     check::<18>();
     check::<19>();
-}
-
-#[test]
-fn signed() {
-    const SET: ComptimeIntSet<i8, 5> = ComptimeIntSet::<i8, 5>::new([5, -3, 0, -128, 127]);
-    assert_eq!(Some(1), SET.index_of(-3));
-    assert_eq!(Some(3), SET.index_of(-128));
-    assert_eq!(Some(4), SET.index_of(127));
-    assert!(SET.index_of(-4).is_none());
 }
