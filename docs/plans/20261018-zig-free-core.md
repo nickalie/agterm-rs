@@ -1266,19 +1266,55 @@ probes' sources in `docs/spikes/20261018-session-server-probes.md`). Paths below
 
 **Files:**
 - Create: `crates/agterm-vt/src/terminfo/**`, `crates/agterm-vt/src/bin/gen-terminfo.rs` (feature `gen`),
-  `scripts/gen-ghostty-terminfo.sh`, `crates/agterm-vt/terminfo/xterm-ghostty.terminfo`
+  `scripts/gen-ghostty-terminfo.sh`, `crates/agterm-vt/terminfo/xterm-ghostty.terminfo`,
+  `crates/agterm-vt/src/identity.rs`, `crates/agterm-vt/tests/{terminfo,gen_terminfo}.rs`,
+  `crates/agterm-vt/tests/fixtures/xterm-ghostty.infocmp`
+- Modify: `crates/agterm-vt/{Cargo.toml,src/lib.rs}`, `.github/workflows/cross-platform.yml`, `README.md`
 
-- [ ] port rustty-terminfo's source model and encoder, and the Ghostty entry under Ghostty's names (`xterm-ghostty`,
-      `ghostty`), with the drift of `src/terminfo`
-- [ ] port rustty-identity, which the entry reads first (Task 1 > Owners), with Ghostty's identity restored:
-      Ghostty's names and strings in place of rustty's profile
-- [ ] port the XTGETTCAP map built from the same entry (used by Task 11's handler)
-- [ ] `scripts/gen-ghostty-terminfo.sh [--check]` writes the checked-in source; add `--check` to CI
-- [ ] capture today's entry from the Zig-built prefix once, as a fixture (`infocmp -x -A <prefix>/share/terminfo
+- [x] port rustty-terminfo's source model and encoder, and the Ghostty entry under Ghostty's names (`xterm-ghostty`,
+      `ghostty`), with the drift of `src/terminfo` (`src/terminfo/{mod,source,entry}.rs`: `Source`, `Capability` and
+      `Value` over `&'static str`, as every entry is a constant; `encode` returns the text; the entry is a `const` in
+      Ghostty's order with its comments. Drift: none, as Task 1 found: the pin's 270 capabilities equal rustty's list
+      value for value, and `Source.zig` at the pin is what rustty ported. Ghostty's `version`, a Wyhash of the
+      encoding, is not ported: only Ghostty's `+ssh` terminfo cache reads it, which is not libghostty-vt's)
+- [x] port rustty-identity, which the entry reads first (Task 1 > Owners), with Ghostty's identity restored:
+      Ghostty's names and strings in place of rustty's profile (`src/identity.rs`, no profile: the entry's three
+      names, `VT_LIB_VERSION` `0.1.0-dev` (`build.zig`'s `lib_version`, the `VERSION_STRING` the built library
+      holds) for Task 15's `version`, and `XTVERSION_FALLBACK` `libghostty` for Task 11's XTVERSION reply. rustty's
+      application identity (app name and version, bundle id, `TERM`, `TERM_PROGRAM`, config paths, URLs) is not
+      taken: it is Ghostty's app's, not libghostty-vt's)
+- [x] port the XTGETTCAP map built from the same entry (used by Task 11's handler) (`Source::xtgettcap_map`, keyed
+      by the uppercase hex name, `TN`, `Co` and `RGB` besides the capabilities; what Zig refuses with
+      `@compileError` is an `XtgettcapError`, which a test and the generator refuse for the entry.
+      `terminfo::xtgettcap(key)` holds the entry's map in a `OnceLock` for the handler, which answers `TN` from the
+      embedder's terminfo name before it asks)
+- [x] `scripts/gen-ghostty-terminfo.sh [--check]` writes the checked-in source; add `--check` to CI (the script runs
+      `cargo run -p agterm-vt --features gen --bin gen-terminfo`, no fetch and no Zig; the bin compiles the library's
+      `terminfo` and `identity` modules through `#[path]`, as `gen-unicode` does `props.rs`. The file is two `#`
+      comment lines naming the pin and the generator, then the entry as Ghostty's encoder writes it; `--check` exits 1
+      when stale and 2 on an error, line endings aside (`tests/gen_terminfo.rs`), and a library test compares the
+      checked-in file with the entry on every `cargo test`. CI: the step `terminfo source
+      (gen-ghostty-terminfo.sh --check)` of `cross-platform.yml`'s `crates` job; README > Test lists it)
+- [x] capture today's entry from the Zig-built prefix once, as a fixture (`infocmp -x -A <prefix>/share/terminfo
       xterm-ghostty`), so the check outlives Task 18. Test that the checked-in source, compiled with
-      `tic -x -o <tempdir>`, gives the same `infocmp` output
-- [ ] add XTGETTCAP tests: a known capability, an unknown one, hex-encoded names
-- [ ] run gates - must pass before task 8
+      `tic -x -o <tempdir>`, gives the same `infocmp` output (`tests/fixtures/xterm-ghostty.infocmp`, from the prefix
+      `ghostty-vt-7b3534f5f742a6e0` that `build-ghostty-vt.sh --print-prefix` names and `--verify` passes, with
+      ncurses 6.6; infocmp's own first line, which names the prefix path, is replaced by a comment naming the capture.
+      `tests/terminfo.rs` compares the two as entries: the names, numbers as numbers and strings as the bytes they
+      stand for, in any order, because macOS's ncurses 5.7 prints the same values otherwise (`cr=^M`, `kbs=\177`,
+      `\:`); it is ignored on Windows, which has no `tic`. On the dev box the compiled `x/xterm-ghostty` and
+      `g/ghostty` are byte-identical to the Zig-built ones)
+- [x] add XTGETTCAP tests: a known capability, an unknown one, hex-encoded names (`terminfo/tests.rs`: a boolean, a
+      number, an encoded string, one with parameters, and `Co`, `RGB`, `TN`; unknown names; only uppercase hex keys
+      answer, not lowercase, raw or half-encoded names; `source/tests.rs`: Ghostty's two tests, the refused canceled
+      and control-character cases, and the encoding rules)
+- [x] run gates - must pass before task 8 (all green: fmt, metadata --locked, tracing features, vendor checks,
+      clippy on the workspace with all features and on the GPUI app without its default features, lint report,
+      `cargo test --workspace` headless (4372 passed, 0 failed, no reruns), `cargo test -p agterm-vt --all-features`,
+      `gen-vt-unicode.sh --check`, `gen-ghostty-terminfo.sh --check`, selftests (833 passed); CI run 39133043747 of
+      `cross-platform.yml` green on ubuntu-26.04, macos-26, windows-2025 and miri, the terminfo check `current` on
+      all three and the fixture test passing on Linux and macOS; conformance not run: `cargo tree -i agterm-vt`
+      lists no dependents and no staging script changed)
 
 ### Task 8: Parser and stream: parse table, CSI/OSC/APC parsing, SGR, charsets, modes, colors
 
