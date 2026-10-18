@@ -132,9 +132,12 @@ fn bump_ref<R: SetInt>(count: R, n: R) -> R {
     count.saturating_add(n)
 }
 
-/// Decrements a count by `n` unless it is pinned at the maximum; the new count, and whether it reached zero.
+/// Decrements a count by `n` unless it is pinned at the maximum; the new count, and whether it just reached zero.
+///
+/// A count already at zero (a release of a dead item, a caller bug) stays at zero and is not reported as reaching
+/// it, so the set's living count drops once per item, never twice.
 fn drop_ref<R: SetInt>(count: R, n: R) -> (R, bool) {
-    if count == R::MAX {
+    if count == R::MAX || count == R::ZERO {
         return (count, false);
     }
     let dropped = count.checked_sub(n).unwrap_or(R::ZERO);

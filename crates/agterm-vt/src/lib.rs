@@ -40,9 +40,10 @@
 //! maps) live inside it, addressed by offsets. Here that buffer is a byte slice and every value stored in it is
 //! `bytemuck::Pod`, read and written through bounds- and alignment-checked casts, so those structures, and pages,
 //! the page list, screens and the terminal above them, are safe Rust: a wrong offset is a wrong value, never undefined
-//! behavior. The `unsafe` left is the memory core's small audited part: the per-OS page allocator that maps and
-//! unmaps page memory, one fallible box allocation, and the unit tests' allocator. Every `unsafe` block carries its
-//! own `// SAFETY:` comment and does one operation, and the memory core's tests run under Miri.
+//! behavior. The `unsafe` left is the memory core's small audited part: the `Pod` and `Zeroable` impls for the offset
+//! types (`Offset`, `OffsetSlice`) that those casts rely on, the per-OS page allocator that maps and unmaps page
+//! memory, one fallible box allocation, and the unit tests' allocator. Every `unsafe` block and impl carries its own
+//! `// SAFETY:` comment, and the memory core's tests run under Miri.
 //!
 //! # Platforms
 //!

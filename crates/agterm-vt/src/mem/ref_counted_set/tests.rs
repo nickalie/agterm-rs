@@ -1,7 +1,7 @@
 //! The ref-counted set's tests: Ghostty's (`ref_counted_set.zig` at `LIBGHOSTTY_VT_REV`) and rustty's, over offsets
 //! into a test buffer, plus the safe API's own.
 
-use super::{AddError, Item, Layout, RefCountedSet, RefCountedSetContext, RefItemGeometry};
+use super::{AddError, Item, Layout, RefCountedSet, RefCountedSetContext, RefItemGeometry, drop_ref};
 use crate::mem::offset::OffsetBuf;
 
 /// `u32` values: the reference's `Item` for `RefCountedSet(u32, u16, u16, ...)` is `{ value: u32, meta: { u16, u16,
@@ -431,4 +431,41 @@ fn many_values_survive_releases_and_reinsertions() {
         set.count(),
         "the descriptor is a copy of offsets and counters"
     );
+}
+
+#[test]
+fn a_release_reports_death_once() {
+    assert_eq!(drop_ref(2u16, 1), (1, false));
+    assert_eq!(drop_ref(1u16, 1), (0, true), "the last reference kills the item");
+    assert_eq!(
+        drop_ref(1u16, 3),
+        (0, true),
+        "an over-release stops at zero, reported once"
+    );
+    assert_eq!(
+        drop_ref(0u16, 1),
+        (0, false),
+        "a release of a dead item is no second death"
+    );
+    assert_eq!(drop_ref(u16::MAX, 1), (u16::MAX, false), "a pinned count stays pinned");
+}
+
+/// A double release is a caller bug: debug builds assert on it, and without debug assertions it leaves the living
+/// count alone instead of dropping it below the live items (or wrapping it from zero).
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    should_panic(expected = "release of more references than the item has")
+)]
+fn a_double_release_keeps_the_living_count() {
+    let (mut set, mut buf, mut ctx) = set(8);
+    let mem = buf.bytes();
+    let a = set.add(mem, 1, &mut ctx).unwrap();
+    set.release(mem, a);
+    assert_eq!(set.count(), 0);
+    set.release(mem, a);
+    assert_eq!(set.count(), 0, "the dead item is not counted dead twice");
+    let b = set.add(mem, 2, &mut ctx).unwrap();
+    assert_eq!(set.count(), 1);
+    assert_eq!(set.ref_count(mem, b), 1);
 }
