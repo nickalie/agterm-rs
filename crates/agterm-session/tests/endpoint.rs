@@ -128,6 +128,9 @@ mod unix {
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::os::unix::net::UnixListener;
+    use std::sync::{Arc, Barrier};
+
+    use agterm_session::endpoint::LOCK_FILE_NAME;
 
     use super::*;
 
@@ -140,6 +143,7 @@ mod unix {
         let mode = |path: &std::path::Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(endpoint.directory()), 0o700);
         assert_eq!(mode(endpoint.socket_path()), 0o600);
+        assert_eq!(mode(&endpoint.directory().join(LOCK_FILE_NAME)), 0o600);
     }
 
     #[test]
@@ -181,6 +185,54 @@ mod unix {
         drop(UnixListener::bind(endpoint.socket_path()).unwrap());
         assert!(endpoint.socket_path().exists());
         let listener = endpoint.bind().unwrap();
+        let accept = thread::spawn(move || listener.accept().map(drop));
+        let _client = endpoint.connect().unwrap();
+        accept.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn a_server_that_holds_the_lock_keeps_the_namespace() {
+        // a racing server between its lock and its listen: its socket is not there or not listening yet, so the
+        // probe alone would find a stale socket and remove it
+        let (_root, endpoint) = namespace().unwrap();
+        fs::create_dir(endpoint.directory()).unwrap();
+        drop(UnixListener::bind(endpoint.socket_path()).unwrap());
+        let lock = fs::File::create(endpoint.directory().join(LOCK_FILE_NAME)).unwrap();
+        lock.try_lock().unwrap();
+        let error = endpoint.bind().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AddrInUse, "{error}");
+        assert!(error.to_string().contains("already running"), "{error}");
+        assert!(endpoint.socket_path().exists(), "the lock holder's socket was removed");
+        drop(lock);
+        let _listener = endpoint.bind().unwrap();
+    }
+
+    #[test]
+    fn racing_servers_over_a_stale_socket_leave_one_listening() {
+        const SERVERS: usize = 8;
+        let (_root, endpoint) = namespace().unwrap();
+        fs::create_dir(endpoint.directory()).unwrap();
+        drop(UnixListener::bind(endpoint.socket_path()).unwrap());
+        let start = Arc::new(Barrier::new(SERVERS));
+        let racers: Vec<_> = (0..SERVERS)
+            .map(|_| {
+                let endpoint = endpoint.clone();
+                let start = Arc::clone(&start);
+                thread::spawn(move || {
+                    start.wait();
+                    endpoint.bind()
+                })
+            })
+            .collect();
+        let mut listeners = Vec::new();
+        for racer in racers {
+            match racer.join().unwrap() {
+                Ok(listener) => listeners.push(listener),
+                Err(error) => assert_eq!(error.kind(), io::ErrorKind::AddrInUse, "{error}"),
+            }
+        }
+        assert_eq!(listeners.len(), 1, "every racer but one is refused");
+        let listener = listeners.pop().unwrap();
         let accept = thread::spawn(move || listener.accept().map(drop));
         let _client = endpoint.connect().unwrap();
         accept.join().unwrap().unwrap();

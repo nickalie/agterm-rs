@@ -27,10 +27,19 @@
 //!   [`ApiReply`], [`AttachClientMessage`] and [`AttachServerMessage`]), at most [`MAX_FRAME_SIZE`] bytes. Those types
 //!   belong to one [`PROTOCOL_VERSION`] and change with it, so a message frame is read only when its protocol is the
 //!   one the connection negotiated.
+//! - [`FrameKind::MessagePart`]: the first bytes of a message whose postcard is longer than one frame. A message of
+//!   `n` bytes, `MAX_FRAME_SIZE < n <= MAX_MESSAGE_SIZE` ([`MAX_MESSAGE_SIZE`]), is sent as parts of exactly
+//!   [`MAX_FRAME_SIZE`] bytes each, then one [`FrameKind::Message`] frame with the remaining 1 to [`MAX_FRAME_SIZE`]
+//!   bytes; a message that fits one frame is never split. The frames of one message are consecutive, of one protocol,
+//!   and written as one unit ([`write_message`]); [`read_frame`] joins them into one message frame. So every message
+//!   of every role (a whole scrollback's screen, a long paste, a clipboard) travels whole, and each frame's
+//!   allocation stays bounded by its own checked length.
 //!
 //! A frame with a bad magic, an unknown kind or an oversized length is a broken peer: the connection closes without
-//! a reply. A newer version adds kinds only behind a hello that names them, so an older server never sees one from a
-//! well-behaved client.
+//! a reply. So is a message whose parts break the rules above or add up past [`MAX_MESSAGE_SIZE`]: the reader
+//! refuses it as a framing error, never as an error of its role (a sender whose reply is too large finds out from
+//! [`encode_message`] first, and answers with its role's error instead). A newer version adds kinds only behind a
+//! hello that names them, so an older server never sees one from a well-behaved client.
 //!
 //! # Connections
 //!
@@ -62,8 +71,14 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// The size of a frame's header: magic, protocol, kind, length.
 pub const HEADER_LEN: usize = 16;
 
-/// The largest payload of a message frame (herdr's limit). A longer length is refused before anything is allocated.
+/// The largest payload of a message frame or a message part (herdr's limit). A longer length is refused before
+/// anything is allocated.
 pub const MAX_FRAME_SIZE: usize = 2 * 1024 * 1024;
+
+/// The largest message: its parts' payloads together (module docs, [`FrameKind::MessagePart`]). An operational
+/// ceiling on encoded bytes, checked while a message is encoded and before each part's payload is read; a screen past
+/// it (an unlimited scrollback can hold more) is refused as [`FramingError::Oversized`], never cut.
+pub const MAX_MESSAGE_SIZE: usize = 256 * 1024 * 1024;
 
 /// The largest payload of a control frame, checked before anything is allocated.
 pub const MAX_CONTROL_SIZE: usize = 64 * 1024;
@@ -76,18 +91,23 @@ pub const CAPABILITY_HANDOFF_REQUEST: &str = "handoff.request.v1";
 pub enum FrameKind {
     /// One JSON [`Control`] operation.
     Control,
-    /// Postcard of the connection role's message type.
+    /// Postcard of the connection role's message type, or the last part of a longer one.
     Message,
+    /// Exactly [`MAX_FRAME_SIZE`] bytes of a longer message, which a [`FrameKind::Message`] frame ends. [`read_frame`]
+    /// joins the parts, so a [`Frame`] it returns never has this kind.
+    MessagePart,
 }
 
 impl FrameKind {
     const CONTROL: u32 = 1;
     const MESSAGE: u32 = 2;
+    const MESSAGE_PART: u32 = 3;
 
     fn number(self) -> u32 {
         match self {
             Self::Control => Self::CONTROL,
             Self::Message => Self::MESSAGE,
+            Self::MessagePart => Self::MESSAGE_PART,
         }
     }
 
@@ -95,6 +115,7 @@ impl FrameKind {
         match number {
             Self::CONTROL => Some(Self::Control),
             Self::MESSAGE => Some(Self::Message),
+            Self::MESSAGE_PART => Some(Self::MessagePart),
             _ => None,
         }
     }
@@ -102,7 +123,7 @@ impl FrameKind {
     fn limit(self) -> usize {
         match self {
             Self::Control => MAX_CONTROL_SIZE,
-            Self::Message => MAX_FRAME_SIZE,
+            Self::Message | Self::MessagePart => MAX_FRAME_SIZE,
         }
     }
 }
@@ -122,7 +143,8 @@ pub enum FramingError {
     /// The header names a kind this version does not know.
     #[error("unknown frame kind {0}")]
     UnknownKind(u32),
-    /// The header's length exceeds the kind's limit.
+    /// A payload exceeds its limit: a frame's that of its kind ([`MAX_CONTROL_SIZE`], [`MAX_FRAME_SIZE`]), a
+    /// message's [`MAX_MESSAGE_SIZE`].
     #[error("frame size {claimed} exceeds maximum {max}")]
     Oversized { claimed: usize, max: usize },
     /// The frame is of the other kind than the reader expected.
@@ -131,7 +153,8 @@ pub enum FramingError {
     /// A message frame of another protocol than the connection negotiated.
     #[error("message frame of protocol {got} on a connection of protocol {negotiated}")]
     ProtocolChanged { negotiated: u32, got: u32 },
-    /// The payload did not decode, or decoded to fewer bytes than its length.
+    /// The payload did not decode, or decoded to fewer bytes than its length; a message's parts broke their rules; or
+    /// a value to send did not serialize.
     #[error("malformed payload: {0}")]
     Malformed(String),
     /// A control operation this side cannot send ([`Control::Unknown`]).
@@ -199,11 +222,13 @@ impl Frame {
     }
 }
 
-/// `control` as one frame of this build's protocol.
+/// `control` as one frame of this build's protocol. A control operation is never split into parts.
 ///
 /// # Errors
 ///
-/// `control` is [`Control::Unknown`], which only a reader produces.
+/// [`FramingError::Unencodable`] for [`Control::Unknown`], which only a reader produces; [`FramingError::Oversized`]
+/// when its JSON exceeds [`MAX_CONTROL_SIZE`] (a long capability list, a long `import_exe`);
+/// [`FramingError::Malformed`] when it does not serialize.
 pub fn encode_control(control: &Control) -> Result<Vec<u8>, FramingError> {
     if matches!(control, Control::Unknown) {
         return Err(FramingError::Unencodable(
@@ -215,55 +240,137 @@ pub fn encode_control(control: &Control) -> Result<Vec<u8>, FramingError> {
     finish_frame(frame, FrameKind::Control)
 }
 
-/// `message` as one message frame of this build's protocol.
+/// `message` as the frames of this build's protocol that carry it: one message frame, or for a postcard longer than
+/// [`MAX_FRAME_SIZE`] its parts and the closing message frame (module docs). The frames are laid out while the message
+/// serializes, and nothing past [`MAX_MESSAGE_SIZE`] is stored.
 ///
 /// # Errors
 ///
-/// The message does not encode, or its payload exceeds [`MAX_FRAME_SIZE`].
+/// [`FramingError::Malformed`] when the message does not serialize; [`FramingError::Oversized`] when its postcard
+/// exceeds [`MAX_MESSAGE_SIZE`], with its whole length as `claimed`.
 pub fn encode_message<M: Serialize>(message: &M) -> Result<Vec<u8>, FramingError> {
-    let frame = postcard::to_extend(message, header_placeholder())
-        .map_err(|error| FramingError::Malformed(error.to_string()))?;
-    finish_frame(frame, FrameKind::Message)
+    postcard::serialize_with_flavor(message, FrameSink::new())
+        .map_err(|error| FramingError::Malformed(error.to_string()))?
+        .finish()
 }
 
 /// Writes `control` as one frame and flushes.
 ///
 /// # Errors
 ///
-/// As [`encode_control`], or the write failed.
+/// As [`encode_control`] (nothing is written then), or the write failed.
 pub fn write_control<W: Write>(writer: &mut W, control: &Control) -> Result<(), FramingError> {
     write_frame_bytes(writer, &encode_control(control)?)
 }
 
-/// Writes `message` as one message frame and flushes.
+/// Writes `message`'s frames ([`encode_message`]) with one `write_all` and flushes. Writers that share a stream
+/// serialize their calls, so a message's parts are never interleaved with another frame.
 ///
 /// # Errors
 ///
-/// As [`encode_message`], or the write failed.
+/// As [`encode_message`] (nothing is written then), or the write failed.
 pub fn write_message<W: Write, M: Serialize>(writer: &mut W, message: &M) -> Result<(), FramingError> {
     write_frame_bytes(writer, &encode_message(message)?)
 }
 
-/// Reads one frame, reassembling partial reads. The header is checked (magic, kind, the kind's limit) before the
-/// payload is allocated.
+/// Reads one frame, reassembling partial reads, and joins a message's parts into one message frame. Every header is
+/// checked (magic, kind, the kind's limit, a part's exact length, the message's running total against
+/// [`MAX_MESSAGE_SIZE`]) before its payload is allocated.
 ///
 /// # Errors
 ///
-/// [`FramingError::Closed`] at a clean end between frames; otherwise any other [`FramingError`] but the encoding
-/// ones.
+/// [`FramingError::Closed`] at a clean end between frames ([`FramingError::UnexpectedEof`] between a message's
+/// parts); [`FramingError::WrongKind`] for a control frame among a message's parts, [`FramingError::Malformed`] for a
+/// part of another length or protocol; otherwise any other [`FramingError`] but the encoding ones.
 pub fn read_frame<R: Read>(reader: &mut R) -> Result<Frame, FramingError> {
     let mut header = [0_u8; HEADER_LEN];
     if !read_header(reader, &mut header)? {
         return Err(FramingError::Closed);
     }
     let (protocol, kind, length) = parse_header(&header)?;
-    let mut payload = vec![0_u8; length];
-    read_exact_or_eof(reader, &mut payload)?;
+    if kind == FrameKind::MessagePart {
+        check_part_length(length)?;
+    }
+    let mut payload = Vec::new();
+    read_payload(reader, &mut payload, length)?;
+    let kind = if kind == FrameKind::MessagePart {
+        read_message_parts(reader, protocol, &mut payload)?;
+        FrameKind::Message
+    } else {
+        kind
+    };
     Ok(Frame {
         protocol,
         kind,
         payload,
     })
+}
+
+/// Reads the frames after a message's first part through the closing message frame, appending their payloads.
+fn read_message_parts<R: Read>(reader: &mut R, protocol: u32, payload: &mut Vec<u8>) -> Result<(), FramingError> {
+    loop {
+        let mut header = [0_u8; HEADER_LEN];
+        if !read_header(reader, &mut header)? {
+            return Err(FramingError::UnexpectedEof);
+        }
+        let (part_protocol, kind, length) = parse_header(&header)?;
+        check_next_part(protocol, payload.len(), part_protocol, kind, length)?;
+        read_payload(reader, payload, length)?;
+        if kind == FrameKind::Message {
+            return Ok(());
+        }
+    }
+}
+
+/// Whether a frame of `protocol`, `kind` and `length` may follow `joined` bytes of a message of `message_protocol`.
+fn check_next_part(
+    message_protocol: u32,
+    joined: usize,
+    protocol: u32,
+    kind: FrameKind,
+    length: usize,
+) -> Result<(), FramingError> {
+    if kind == FrameKind::Control {
+        return Err(FramingError::WrongKind {
+            expected: FrameKind::Message,
+            got: kind,
+        });
+    }
+    if protocol != message_protocol {
+        return Err(FramingError::Malformed(format!(
+            "a part of protocol {protocol} in a message of protocol {message_protocol}"
+        )));
+    }
+    let claimed = joined.saturating_add(length);
+    if claimed > MAX_MESSAGE_SIZE {
+        return Err(FramingError::Oversized {
+            claimed,
+            max: MAX_MESSAGE_SIZE,
+        });
+    }
+    match kind {
+        FrameKind::MessagePart => check_part_length(length),
+        _ if length == 0 => Err(FramingError::Malformed(
+            "an empty message frame after a message's parts".to_owned(),
+        )),
+        _ => Ok(()),
+    }
+}
+
+fn check_part_length(length: usize) -> Result<(), FramingError> {
+    if length == MAX_FRAME_SIZE {
+        return Ok(());
+    }
+    Err(FramingError::Malformed(format!(
+        "a message part of {length} bytes; every part holds {MAX_FRAME_SIZE}"
+    )))
+}
+
+/// Appends `length` bytes from `reader` to `payload`, read in place.
+fn read_payload<R: Read>(reader: &mut R, payload: &mut Vec<u8>, length: usize) -> Result<(), FramingError> {
+    let start = payload.len();
+    payload.resize(start + length, 0);
+    read_exact_or_eof(reader, &mut payload[start..])
 }
 
 fn header_placeholder() -> Vec<u8> {
@@ -279,6 +386,12 @@ fn finish_frame(mut frame: Vec<u8>, kind: FrameKind) -> Result<Vec<u8>, FramingE
             max: kind.limit(),
         });
     }
+    fill_header(&mut frame, kind, length)?;
+    Ok(frame)
+}
+
+/// Writes the header of a frame of this build's protocol at the start of `frame`.
+fn fill_header(frame: &mut [u8], kind: FrameKind, length: usize) -> Result<(), FramingError> {
     let length = u32::try_from(length).map_err(|_| FramingError::Oversized {
         claimed: length,
         max: kind.limit(),
@@ -287,7 +400,91 @@ fn finish_frame(mut frame: Vec<u8>, kind: FrameKind) -> Result<Vec<u8>, FramingE
     frame[4..8].copy_from_slice(&PROTOCOL_VERSION.to_le_bytes());
     frame[8..12].copy_from_slice(&kind.number().to_le_bytes());
     frame[12..16].copy_from_slice(&length.to_le_bytes());
-    Ok(frame)
+    Ok(())
+}
+
+/// A postcard sink that lays a message out as its frames while it serializes: a placeholder header before every
+/// [`MAX_FRAME_SIZE`] bytes, filled in once the frame's kind is known (a part when more bytes follow it). Past
+/// [`MAX_MESSAGE_SIZE`] it stores nothing more and only counts, so the refusal names the whole length.
+struct FrameSink {
+    frames: Vec<u8>,
+    /// Where the current frame's header starts.
+    current: usize,
+    /// The message's postcard bytes so far, stored or not.
+    length: usize,
+}
+
+impl FrameSink {
+    fn new() -> Self {
+        Self {
+            frames: header_placeholder(),
+            current: 0,
+            length: 0,
+        }
+    }
+
+    fn finish(mut self) -> Result<Vec<u8>, FramingError> {
+        if self.length > MAX_MESSAGE_SIZE {
+            return Err(FramingError::Oversized {
+                claimed: self.length,
+                max: MAX_MESSAGE_SIZE,
+            });
+        }
+        let last = self.frames.len() - self.current - HEADER_LEN;
+        fill_header(&mut self.frames[self.current..], FrameKind::Message, last)?;
+        Ok(self.frames)
+    }
+
+    /// What the current frame still holds.
+    fn room(&self) -> usize {
+        MAX_FRAME_SIZE - (self.frames.len() - self.current - HEADER_LEN)
+    }
+
+    /// Closes the full current frame as a part and opens the next one.
+    fn start_part(&mut self) -> postcard::Result<()> {
+        fill_header(&mut self.frames[self.current..], FrameKind::MessagePart, MAX_FRAME_SIZE)
+            .map_err(|_| postcard::Error::SerializeBufferFull)?;
+        self.current = self.frames.len();
+        self.frames.extend_from_slice(&[0; HEADER_LEN]);
+        Ok(())
+    }
+}
+
+impl postcard::ser_flavors::Flavor for FrameSink {
+    type Output = Self;
+
+    /// Postcard pushes a `Vec<u8>`'s bytes one at a time, so this is the hot path of an output stream.
+    fn try_push(&mut self, byte: u8) -> postcard::Result<()> {
+        self.length = self.length.saturating_add(1);
+        if self.length > MAX_MESSAGE_SIZE {
+            return Ok(());
+        }
+        if self.room() == 0 {
+            self.start_part()?;
+        }
+        self.frames.push(byte);
+        Ok(())
+    }
+
+    fn try_extend(&mut self, mut data: &[u8]) -> postcard::Result<()> {
+        self.length = self.length.saturating_add(data.len());
+        if self.length > MAX_MESSAGE_SIZE {
+            return Ok(());
+        }
+        while !data.is_empty() {
+            if self.room() == 0 {
+                self.start_part()?;
+            }
+            let (now, rest) = data.split_at(self.room().min(data.len()));
+            self.frames.extend_from_slice(now);
+            data = rest;
+        }
+        Ok(())
+    }
+
+    fn finalize(self) -> postcard::Result<Self> {
+        Ok(self)
+    }
 }
 
 fn write_frame_bytes<W: Write>(writer: &mut W, frame: &[u8]) -> Result<(), FramingError> {

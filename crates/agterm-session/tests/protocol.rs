@@ -12,11 +12,12 @@ use agterm_session::protocol::{
     AttachRequest, AttachServerMessage, CAPABILITY_HANDOFF_REQUEST, Control, ControlError, DelegatedReply,
     DelegatedRequest, ErrorCode, ExitStatus, Frame, FrameKind, FramingError, GridSize, HEADER_LEN, HandoffRequest,
     HandoffResult, Hello, JobProcess, KillOutcome, KillResult, LeadRole, MAGIC, MAX_CONTROL_SIZE, MAX_FRAME_SIZE,
-    Managed, PROTOCOL_VERSION, ReplyMetadata, Rgb, Role, Screen, SessionRecord, SessionSpec, Welcome, check_hello,
-    encode_control, encode_message, read_frame, welcome, write_control, write_message,
+    MAX_MESSAGE_SIZE, Managed, PROTOCOL_VERSION, ReplyMetadata, Rgb, Role, Screen, SessionRecord, SessionSpec, Welcome,
+    check_hello, encode_control, encode_message, read_frame, welcome, write_control, write_message,
 };
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::ser::SerializeTuple;
+use serde::{Serialize, Serializer};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -363,6 +364,11 @@ fn the_frame_header_is_frozen() {
     assert_eq!(frame, raw_frame(PROTOCOL_VERSION, 2, &payload));
     assert_eq!(&frame[..4], b"AGLS");
     assert_eq!(HEADER_LEN, 16);
+    // a message one byte longer than a frame: a part (kind 3) of exactly MAX_FRAME_SIZE, then a message frame
+    let wire = encode_message(&input_of_payload(MAX_FRAME_SIZE + 1).unwrap()).unwrap();
+    assert_eq!(wire[..HEADER_LEN], header(PROTOCOL_VERSION, 3, 2 * 1024 * 1024)[..]);
+    let last = HEADER_LEN + MAX_FRAME_SIZE;
+    assert_eq!(wire[last..last + HEADER_LEN], header(PROTOCOL_VERSION, 2, 1)[..]);
 }
 
 #[test]
@@ -575,15 +581,288 @@ fn an_oversized_length_is_refused_before_the_payload_is_read() {
         read_frame(&mut largest.as_slice()),
         Err(FramingError::UnexpectedEof)
     ));
+    let part = header(PROTOCOL_VERSION, 3, u32::try_from(MAX_FRAME_SIZE + 1).unwrap());
+    assert!(matches!(
+        read_frame(&mut part.as_slice()),
+        Err(FramingError::Oversized { max, .. }) if max == MAX_FRAME_SIZE
+    ));
+}
+
+/// `count` copies of a 1 MiB block, serialized as one tuple of byte strings: a message far longer than any frame, of
+/// which only the block is held.
+struct Blocks {
+    block: Vec<u8>,
+    count: usize,
+}
+
+impl Serialize for Blocks {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut tuple = serializer.serialize_tuple(self.count)?;
+        for _ in 0..self.count {
+            tuple.serialize_element(&Bytes(&self.block))?;
+        }
+        tuple.end()
+    }
+}
+
+/// One serde byte string (postcard: a varint length and the bytes), not a sequence of `u8`s.
+struct Bytes<'a>(&'a [u8]);
+
+impl Serialize for Bytes<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(self.0)
+    }
 }
 
 #[test]
-fn an_oversized_message_is_not_written() {
-    let message = AttachServerMessage::Output {
-        offset: 0,
-        data: vec![0; MAX_FRAME_SIZE],
+fn a_message_past_the_message_limit_is_not_written() {
+    const MIB: usize = 1024 * 1024;
+    let blocks = Blocks {
+        block: vec![7; MIB],
+        count: MAX_MESSAGE_SIZE / MIB + 1,
     };
-    assert!(matches!(encode_message(&message), Err(FramingError::Oversized { max, .. }) if max == MAX_FRAME_SIZE));
+    // each block is a 4-byte length (1 MiB as a varint) and the block
+    let whole = blocks.count * (MIB + 3);
+    match encode_message(&blocks) {
+        Err(FramingError::Oversized { claimed, max }) => {
+            assert_eq!(max, MAX_MESSAGE_SIZE);
+            assert_eq!(claimed, whole, "the refusal names the whole length");
+        }
+        other => panic!("expected Oversized, got {:?}", other.map(|frames| frames.len())),
+    }
+}
+
+#[test]
+fn a_message_of_exactly_the_message_limit_travels() {
+    const MIB: usize = 1024 * 1024;
+    // each block is a 3-byte length and the block: 256 of them make exactly MAX_MESSAGE_SIZE
+    let blocks = Blocks {
+        block: vec![9; MIB - 3],
+        count: MAX_MESSAGE_SIZE / MIB,
+    };
+    let wire = encode_message(&blocks).unwrap();
+    let parts = MAX_MESSAGE_SIZE / MAX_FRAME_SIZE - 1;
+    let mut layout = vec![(3, MAX_FRAME_SIZE); parts];
+    layout.push((2, MAX_FRAME_SIZE));
+    assert_eq!(frame_layout(&wire).unwrap(), layout);
+    let frame = read_frame(&mut wire.as_slice()).unwrap();
+    assert_eq!(frame.kind, FrameKind::Message);
+    assert_eq!(frame.payload.len(), MAX_MESSAGE_SIZE);
+    assert_eq!(frame.payload[..4], [0xfd, 0xff, 0x3f, 9]);
+}
+
+/// An `Input` whose postcard is exactly `payload` bytes: its variant index, the data's varint length, the data.
+fn input_of_payload(payload: usize) -> TestResult<AttachClientMessage> {
+    let mut data = payload - 1 - 3;
+    if data >= 1 << 21 {
+        data -= 1;
+    }
+    let message = AttachClientMessage::Input {
+        data: (0..data).map(|at| (at % 251).to_le_bytes()[0]).collect(),
+    };
+    assert_eq!(postcard::to_allocvec(&message)?.len(), payload);
+    Ok(message)
+}
+
+/// The kinds and payload lengths of the frames in `wire`.
+fn frame_layout(wire: &[u8]) -> TestResult<Vec<(u32, usize)>> {
+    let mut layout = Vec::new();
+    let mut at = 0;
+    while at < wire.len() {
+        let word = |offset: usize| -> TestResult<u32> {
+            Ok(u32::from_le_bytes(wire[at + offset..at + offset + 4].try_into()?))
+        };
+        assert_eq!(wire[at..at + 4], MAGIC);
+        assert_eq!(word(4)?, PROTOCOL_VERSION);
+        let length = usize::try_from(word(12)?)?;
+        layout.push((word(8)?, length));
+        at += HEADER_LEN + length;
+    }
+    assert_eq!(at, wire.len());
+    Ok(layout)
+}
+
+#[test]
+fn a_message_longer_than_a_frame_is_split_at_exact_boundaries() {
+    let cases = [
+        (MAX_FRAME_SIZE, vec![(2, MAX_FRAME_SIZE)]),
+        (MAX_FRAME_SIZE + 1, vec![(3, MAX_FRAME_SIZE), (2, 1)]),
+        (2 * MAX_FRAME_SIZE, vec![(3, MAX_FRAME_SIZE), (2, MAX_FRAME_SIZE)]),
+        (
+            2 * MAX_FRAME_SIZE + 5,
+            vec![(3, MAX_FRAME_SIZE), (3, MAX_FRAME_SIZE), (2, 5)],
+        ),
+    ];
+    for (payload, layout) in cases {
+        let message = input_of_payload(payload).unwrap();
+        let wire = encode_message(&message).unwrap();
+        assert_eq!(frame_layout(&wire).unwrap(), layout, "{payload} bytes");
+        let mut chunked = ChunkedReader {
+            data: wire,
+            at: 0,
+            chunk: 64 * 1024 + 3,
+        };
+        let frame = read_frame(&mut chunked).unwrap();
+        assert_eq!(frame.kind, FrameKind::Message);
+        assert_eq!(frame.payload.len(), payload);
+        assert_eq!(frame.message::<AttachClientMessage>(PROTOCOL_VERSION).unwrap(), message);
+        assert!(matches!(read_frame(&mut chunked), Err(FramingError::Closed)));
+    }
+}
+
+#[test]
+fn every_message_that_can_outgrow_a_frame_travels_whole() {
+    let big = vec![b'x'; 2 * MAX_FRAME_SIZE + 77];
+    // a whole scrollback of wide characters, each three bytes in UTF-8
+    let text = "漢字かな\n".repeat(MAX_FRAME_SIZE / 4);
+    roundtrip_message(&ApiReply {
+        id: 3,
+        result: Ok(ApiResponse::Screen(Screen {
+            revision: 1,
+            columns: 80,
+            rows: 24,
+            cursor_column: 0,
+            cursor_row: 23,
+            alternate: false,
+            text,
+        })),
+    })
+    .unwrap();
+    for request in [
+        ApiRequest::Print {
+            name: "one".into(),
+            data: big.clone(),
+        },
+        ApiRequest::Type {
+            name: "one".into(),
+            data: big.clone(),
+        },
+    ] {
+        roundtrip_message(&ApiCall { id: 4, request }).unwrap();
+    }
+    roundtrip_message(&AttachClientMessage::Input { data: big }).unwrap();
+    roundtrip_message(&AttachClientMessage::DelegatedReply {
+        id: 5,
+        epoch: 2,
+        reply: DelegatedReply::Clipboard {
+            text: "clipboard ".repeat(MAX_FRAME_SIZE / 4),
+        },
+    })
+    .unwrap();
+}
+
+/// [`MAX_FRAME_SIZE`] as a header's length field.
+const MAX_FRAME_LENGTH: u32 = 2 * 1024 * 1024;
+
+/// A part header and its full payload.
+fn part(protocol: u32) -> Vec<u8> {
+    let mut frame = header(protocol, 3, MAX_FRAME_LENGTH);
+    frame.resize(HEADER_LEN + MAX_FRAME_SIZE, 0);
+    frame
+}
+
+#[test]
+fn broken_message_parts_are_refused() {
+    let short_part = raw_frame(PROTOCOL_VERSION, 3, &[1, 2, 3]);
+    assert!(matches!(
+        read_frame(&mut short_part.as_slice()),
+        Err(FramingError::Malformed(message)) if message.contains("every part holds")
+    ));
+    let cut_after_part = part(PROTOCOL_VERSION);
+    assert!(matches!(
+        read_frame(&mut cut_after_part.as_slice()),
+        Err(FramingError::UnexpectedEof)
+    ));
+    let mut control_inside = part(PROTOCOL_VERSION);
+    control_inside.extend(encode_control(&Control::HandoffResult(HandoffResult(Ok(())))).unwrap());
+    assert!(matches!(
+        read_frame(&mut control_inside.as_slice()),
+        Err(FramingError::WrongKind {
+            expected: FrameKind::Message,
+            got: FrameKind::Control
+        })
+    ));
+}
+
+#[test]
+fn message_parts_of_another_protocol_or_shape_are_refused() {
+    assert_eq!(usize::try_from(MAX_FRAME_LENGTH).unwrap(), MAX_FRAME_SIZE);
+    let mut mixed_protocols = part(PROTOCOL_VERSION);
+    mixed_protocols.extend(raw_frame(PROTOCOL_VERSION + 1, 2, &[0]));
+    assert!(matches!(
+        read_frame(&mut mixed_protocols.as_slice()),
+        Err(FramingError::Malformed(message)) if message.contains("protocol")
+    ));
+    let mut empty_end = part(PROTOCOL_VERSION);
+    empty_end.extend(raw_frame(PROTOCOL_VERSION, 2, &[]));
+    assert!(matches!(
+        read_frame(&mut empty_end.as_slice()),
+        Err(FramingError::Malformed(message)) if message.contains("empty")
+    ));
+    let mut short_second_part = part(PROTOCOL_VERSION);
+    short_second_part.extend(raw_frame(PROTOCOL_VERSION, 3, &[1]));
+    assert!(matches!(
+        read_frame(&mut short_second_part.as_slice()),
+        Err(FramingError::Malformed(_))
+    ));
+}
+
+/// Parts of zeros up to [`MAX_MESSAGE_SIZE`], then one more header and nothing after it, made as they are read.
+struct PartsPastTheLimit {
+    at: usize,
+    stream: usize,
+}
+
+impl PartsPastTheLimit {
+    const PARTS: usize = MAX_MESSAGE_SIZE / MAX_FRAME_SIZE;
+
+    fn new() -> Self {
+        Self {
+            at: 0,
+            stream: Self::PARTS * (HEADER_LEN + MAX_FRAME_SIZE) + HEADER_LEN,
+        }
+    }
+
+    /// The header of frame `index`: a part, or past the last part the one-byte message frame.
+    fn header(index: usize) -> Vec<u8> {
+        if index < Self::PARTS {
+            header(PROTOCOL_VERSION, 3, MAX_FRAME_LENGTH)
+        } else {
+            header(PROTOCOL_VERSION, 2, 1)
+        }
+    }
+}
+
+impl Read for PartsPastTheLimit {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        const FRAME: usize = HEADER_LEN + MAX_FRAME_SIZE;
+        let end = (self.at + buf.len()).min(self.stream);
+        let read = end - self.at;
+        buf[..read].fill(0);
+        // the headers that overlap this read
+        for index in self.at / FRAME..=(end.saturating_sub(1)) / FRAME {
+            for (offset, byte) in Self::header(index).into_iter().enumerate() {
+                let at = index * FRAME + offset;
+                if (self.at..end).contains(&at) {
+                    buf[at - self.at] = byte;
+                }
+            }
+        }
+        self.at = end;
+        Ok(read)
+    }
+}
+
+#[test]
+fn a_message_past_the_limit_is_refused_before_its_last_payload_is_read() {
+    // the stream ends after the last header: a reader that tried to fill its payload would report the end
+    match read_frame(&mut PartsPastTheLimit::new()) {
+        Err(FramingError::Oversized { claimed, max }) => {
+            assert_eq!(max, MAX_MESSAGE_SIZE);
+            assert_eq!(claimed, MAX_MESSAGE_SIZE + 1);
+        }
+        other => panic!("expected Oversized, got {:?}", other.map(|frame| frame.payload.len())),
+    }
 }
 
 #[test]
@@ -591,10 +870,10 @@ fn a_frame_of_another_protocol_or_kind_is_refused() {
     let mut bad_magic = raw_frame(PROTOCOL_VERSION, 2, &[0]);
     bad_magic[0] = b'X';
     assert!(matches!(read_frame(&mut bad_magic.as_slice()), Err(FramingError::BadMagic(magic)) if magic == *b"XGLS"));
-    let unknown_kind = raw_frame(PROTOCOL_VERSION, 3, &[0]);
+    let unknown_kind = raw_frame(PROTOCOL_VERSION, 4, &[0]);
     assert!(matches!(
         read_frame(&mut unknown_kind.as_slice()),
-        Err(FramingError::UnknownKind(3))
+        Err(FramingError::UnknownKind(4))
     ));
 
     let frame = read_frame(&mut encode_message(&AttachClientMessage::Detach).unwrap().as_slice()).unwrap();

@@ -10,15 +10,17 @@
 //! `platform/windows.rs` `local_server_security_descriptor`. Changed: the paths come from agterm's namespace, not
 //! herdr's session directories and overrides; an over-long Unix socket path is refused before anything is touched;
 //! Windows derives the pipe's name from the namespace directory instead of writing a marker file, creates it with
-//! `FILE_FLAG_FIRST_PIPE_INSTANCE` (agterm's addition, which `interprocess` sets on a listener's first instance), and
-//! a client checks that the pipe's server runs as its own user.
+//! `FILE_FLAG_FIRST_PIPE_INSTANCE` (agterm's addition, which `interprocess` sets on a listener's first instance); a
+//! Unix server holds the namespace's `flock` from before the stale-socket check for as long as it listens (agterm's
+//! addition, so two racing servers cannot both bind); and a client checks that the server runs as its own user.
 //!
 //! # Namespace
 //!
 //! A namespace is a directory: on Unix `/tmp/agterm-live-<hash>`, on Windows
 //! `%LOCALAPPDATA%\agterm\live\<hash>` (Task 21 derives both from the state dir). The endpoint is
 //!
-//! - Unix: the socket `<directory>/`[`SOCKET_FILE_NAME`], in a directory created owner-only;
+//! - Unix: the socket `<directory>/`[`SOCKET_FILE_NAME`], in a directory created owner-only, beside the lock file
+//!   [`LOCK_FILE_NAME`] its server holds;
 //! - Windows: the pipe `\\.\pipe\agterm-live-<FNV-1a 64 of the case-folded directory path>` ([`pipe_name`]), so a
 //!   client that holds only the directory (`AGTERM_LIVE_DIR`) finds it. A private directory gives a private pipe.
 
@@ -32,6 +34,9 @@ pub type Stream = interprocess::local_socket::Stream;
 
 /// The server's socket in a Unix namespace directory.
 pub const SOCKET_FILE_NAME: &str = "server.sock";
+
+/// The lock file in a Unix namespace directory: its server holds an exclusive `flock` on it while it listens.
+pub const LOCK_FILE_NAME: &str = "server.lock";
 
 /// The prefix of a Windows namespace's pipe name.
 pub const PIPE_PREFIX: &str = "agterm-live-";
@@ -80,12 +85,15 @@ impl Endpoint {
         &self.pipe
     }
 
-    /// Takes the endpoint for a server: creates the namespace directory, then listens.
+    /// Takes the endpoint for a server: creates the namespace directory, then listens. Of any number of servers that
+    /// bind one namespace at once, one gets the listener and the rest [`io::ErrorKind::AddrInUse`]: on Unix the
+    /// namespace's lock serializes them, on Windows the pipe's first instance.
     ///
     /// # Errors
     ///
-    /// [`io::ErrorKind::AddrInUse`] when a server already listens there (on Windows also when another process holds
-    /// the pipe's name); [`io::ErrorKind::InvalidInput`] for a Unix socket path longer than a socket address holds;
+    /// [`io::ErrorKind::AddrInUse`] when a server already listens there or is binding it (on Windows also when another
+    /// process holds the pipe's name); [`io::ErrorKind::PermissionDenied`] for a Unix namespace directory that is not
+    /// this user's; [`io::ErrorKind::InvalidInput`] for a Unix socket path longer than a socket address holds;
     /// any error creating the directory or the listener.
     pub fn bind(&self) -> io::Result<Listener> {
         sys::bind(self)
@@ -96,7 +104,7 @@ impl Endpoint {
     /// # Errors
     ///
     /// No server listens ([`io::ErrorKind::NotFound`], or [`io::ErrorKind::ConnectionRefused`] for a stale socket);
-    /// on Windows, the pipe's server runs as another user ([`io::ErrorKind::PermissionDenied`]).
+    /// the server runs as another user ([`io::ErrorKind::PermissionDenied`]), or its user cannot be read.
     pub fn connect(&self) -> io::Result<Stream> {
         sys::connect(self)
     }
@@ -126,7 +134,7 @@ impl fmt::Display for Endpoint {
 }
 
 /// A bound endpoint. Dropping it stops listening; on Unix it also removes the socket file, if that is still the one
-/// this listener bound (a replacement server may have bound its own since).
+/// this listener bound (a replacement server may have bound its own since), and then releases the namespace's lock.
 #[derive(Debug)]
 pub struct Listener {
     inner: interprocess::local_socket::Listener,
@@ -134,6 +142,9 @@ pub struct Listener {
     socket: PathBuf,
     #[cfg(unix)]
     identity: sys::SocketFileIdentity,
+    /// The namespace's lock, released once the socket file is removed (fields drop after [`Drop::drop`]).
+    #[cfg(unix)]
+    _lock: std::fs::File,
 }
 
 impl Listener {

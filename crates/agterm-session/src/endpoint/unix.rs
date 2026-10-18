@@ -3,16 +3,16 @@
 //! herdr: `src/ipc.rs` and `src/server/socket_paths.rs` at `HERDR_REV` (`build/pins.env`), licensed under the Apache
 //! License 2.0, modified (see the parent module).
 
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::time::Duration;
 
-use interprocess::local_socket::traits::Stream as _;
+use interprocess::local_socket::traits::{Stream as _, StreamCommon as _};
 use interprocess::local_socket::{ConnectOptions, GenericFilePath, ListenerOptions, ToFsName};
 
-use super::{Endpoint, Listener, Stream, is_connection_closed_error};
+use super::{Endpoint, LOCK_FILE_NAME, Listener, Stream, is_connection_closed_error};
 
 /// `sockaddr_un`'s `sun_path`, which holds the path and its terminating NUL.
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -22,7 +22,7 @@ const SUN_PATH_LEN: usize = 104;
 
 /// The namespace directory's mode: only its owner reaches the socket.
 const DIRECTORY_MODE: u32 = 0o700;
-/// The socket file's mode (herdr's `SOCKET_PERMISSION_MODE`).
+/// The socket file's mode (herdr's `SOCKET_PERMISSION_MODE`), and the lock file's.
 const SOCKET_MODE: u32 = 0o600;
 
 /// A socket file as bound: its device and inode.
@@ -40,6 +40,7 @@ pub(super) fn bind(endpoint: &Endpoint) -> io::Result<Listener> {
         .mode(DIRECTORY_MODE)
         .create(endpoint.directory())?;
     make_directory_private(endpoint.directory())?;
+    let lock = lock_namespace(endpoint)?;
     prepare_socket_path(socket)?;
     let inner = ListenerOptions::new()
         .name(socket.to_fs_name::<GenericFilePath>()?)
@@ -50,18 +51,72 @@ pub(super) fn bind(endpoint: &Endpoint) -> io::Result<Listener> {
         inner,
         socket: socket.to_path_buf(),
         identity: socket_file_identity(socket)?,
+        _lock: lock,
     })
 }
 
 pub(super) fn connect(endpoint: &Endpoint) -> io::Result<Stream> {
-    Stream::connect(endpoint.socket_path().to_fs_name::<GenericFilePath>()?)
+    let stream = Stream::connect(endpoint.socket_path().to_fs_name::<GenericFilePath>()?)?;
+    check_server_user(&stream, endpoint)?;
+    Ok(stream)
 }
 
 pub(super) fn connect_timeout(endpoint: &Endpoint, timeout: Duration) -> io::Result<Stream> {
-    ConnectOptions::new()
+    let stream = ConnectOptions::new()
         .name(endpoint.socket_path().to_fs_name::<GenericFilePath>()?)
         .wait_mode(interprocess::ConnectWaitMode::Timeout(timeout))
-        .connect_sync()
+        .connect_sync()?;
+    check_server_user(&stream, endpoint)?;
+    Ok(stream)
+}
+
+/// Takes the namespace's exclusive, non-blocking `flock` (agterm's addition to herdr's bind), which the listener holds
+/// for its whole life: the stale-socket check, the removal and the bind that follow are one server's alone, so two
+/// racing servers cannot both find the socket stale and the second unlink the first's live one. The lock file stays
+/// behind: removing it would let a third server lock a fresh file while the second still holds the old one. Only this
+/// user writes in the directory ([`make_directory_private`]), so nobody else can plant the file.
+fn lock_namespace(endpoint: &Endpoint) -> io::Result<File> {
+    let path = endpoint.directory().join(LOCK_FILE_NAME);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(SOCKET_MODE)
+        .open(&path)?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(fs::TryLockError::WouldBlock) => Err(io::Error::new(
+            io::ErrorKind::AddrInUse,
+            format!(
+                "agterm-session server is already running (namespace locked at {})",
+                path.display()
+            ),
+        )),
+        Err(fs::TryLockError::Error(error)) => Err(error),
+    }
+}
+
+/// Refuses a server of another user: the namespace's path is derived, so another user could have bound a socket there
+/// before this user's server made the directory. The server's effective user at its `listen` decides, as the server's
+/// account does for the Windows client.
+fn check_server_user(stream: &Stream, endpoint: &Endpoint) -> io::Result<()> {
+    let server = stream.peer_creds()?.euid();
+    check_peer_user(server, rustix::process::geteuid().as_raw(), endpoint)
+}
+
+fn check_peer_user(server: Option<u32>, user: u32, endpoint: &Endpoint) -> io::Result<()> {
+    match server {
+        Some(server) if server == user => Ok(()),
+        Some(server) => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("the socket at {endpoint} belongs to a server of another user (uid {server}, this user {user})"),
+        )),
+        None => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("the user of the server at {endpoint} is unknown"),
+        )),
+    }
 }
 
 /// Refuses a path a socket address cannot hold with its NUL, before anything is created or removed.
@@ -102,7 +157,8 @@ fn make_directory_private(directory: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// herdr's `prepare_socket_path`: a socket file nobody listens on is removed, a live one refused as busy.
+/// herdr's `prepare_socket_path`: a socket file nobody listens on is removed, a live one refused as busy. It runs under
+/// the namespace's lock ([`lock_namespace`]), so no other server is between its check and the bind.
 fn prepare_socket_path(socket: &Path) -> io::Result<()> {
     if fs::symlink_metadata(socket).is_err() {
         return Ok(());
@@ -177,6 +233,20 @@ mod tests {
         assert!(stale_socket_connect_error(io::ErrorKind::TimedOut));
         assert!(!stale_socket_connect_error(io::ErrorKind::WouldBlock));
         assert!(!stale_socket_connect_error(io::ErrorKind::PermissionDenied));
+    }
+
+    #[test]
+    fn only_a_server_of_this_user_is_accepted() {
+        let endpoint = Endpoint::new("/tmp/agterm-live-test");
+        assert!(check_peer_user(Some(1000), 1000, &endpoint).is_ok());
+        let error = check_peer_user(Some(1001), 1000, &endpoint).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(
+            error.to_string().contains("another user (uid 1001, this user 1000)"),
+            "{error}"
+        );
+        let error = check_peer_user(None, 1000, &endpoint).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
 
     #[test]
