@@ -1,8 +1,8 @@
 //! Spot checks of the properties table against the Unicode standard, not against the table itself.
 //!
 //! Ghostty's `test "unicode props: tables match uucode"` compares the generated table with uucode over the whole
-//! code point range; that full comparison is the generator's (the zig-free-core plan's Task 6, which reproduces the
-//! tables from the UCD). These cases are rustty's independent complement: expected values from the standard and
+//! code point range; that full comparison is the generator's (`gen-unicode` reads every code point back from the
+//! tables it writes). These cases are rustty's independent complement: expected values from the standard and
 //! Ghostty's rules, not read from the table.
 //!
 //! - width: East Asian Width (UAX #11), clamped to [0, 2], and `uucode_config.zig`'s `computeWidth` (width 0 iff zero

@@ -139,7 +139,9 @@ the pkg-config of every cargo build (it picks the WPE WebKit, below).
 `scripts/gen-ghostty-vt-bindings.sh` regenerates the bindings of `agterm-ghostty-vt-sys` after a `LIBGHOSTTY_VT_REV`
 or ghostty-vt patch change, `scripts/gen-ghostty-config-keys.sh` agterm-core's ghostty config key table after a
 `LIBGHOSTTY_VT_REV` bump, `scripts/gen-wpe-bindings.sh` the gir crates `agterm-wpe-sys`, `agterm-wpe-platform-sys` and
-`agterm-wpe-javascriptcore-sys` after a `WPE_*` or `GIR_*` bump (`--check` compares instead of writing).
+`agterm-wpe-javascriptcore-sys` after a `WPE_*` or `GIR_*` bump, `scripts/gen-vt-unicode.sh` `agterm-vt`'s Unicode
+tables from the UCD the pinned uucode ships (`UUCODE_*`, fetched into the vendored prefix and checked by sha256) with
+the crate's `gen-unicode` binary (`--check` compares instead of writing).
 
 The GPUI frontend's terminal embeds the fonts Ghostty embeds, from the package deps of the Ghostty at
 `LIBGHOSTTY_VT_REV` (`FONTS_*` in `build/pins.env`, each archive's sha256 pinned): JetBrains Mono 2.304 (its static
@@ -272,9 +274,9 @@ A change to the WPE or gir pins also runs `scripts/gen-wpe-bindings.sh --check`,
   and zsh), each with `--must-pass live-any-shell`, the zsh one with `--must-pass live-sessions` too; the bash one runs
   the app's process tests with the overlays on first.
 - `cross-platform.yml`: the crates that build on all three OSes (`agterm-vt` and `agterm-session` so far), on
-  Ubuntu, macOS and Windows runners: format, clippy and `cargo test` (`crates`, a matrix), then the VT memory core's
-  unit tests under Miri on a nightly pinned by date (`miri`). It also runs on pushes to `ci/**` branches, to check a
-  macOS or Windows form without a PR.
+  Ubuntu, macOS and Windows runners: format, clippy, `cargo test` and `scripts/gen-vt-unicode.sh --check` (`crates`, a
+  matrix), then the VT memory core's unit tests under Miri on a nightly pinned by date (`miri`). It also runs on
+  pushes to `ci/**` branches, to check a macOS or Windows form without a PR.
 - `conformance-gate.yml`: the suite's self-tests and catalog coverage gate.
 - `reference-macos.yml`, `spike-macos.yml`: the suite against upstream's macOS release.
 

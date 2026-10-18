@@ -7,6 +7,20 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[features]
+# The table generators the generator scripts run (`gen-unicode`: scripts/gen-vt-unicode.sh); the library has no part
+# of them.
+gen = []
+
+[[bin]]
+name = "gen-unicode"
+path = "src/bin/gen-unicode/main.rs"
+required-features = ["gen"]
+
+[[test]]
+name = "gen_unicode"
+required-features = ["gen"]
+
 [dependencies]
 bytemuck.workspace = true
 
@@ -15,6 +29,9 @@ libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_System_Memory"] }
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

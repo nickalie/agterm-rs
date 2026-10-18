@@ -7,11 +7,11 @@
 //!
 //! Ghostty: `src/unicode/lut.zig` at `LIBGHOSTTY_VT_REV`.
 //! rustty: `crates/rustty-unicode/src/lut.rs` at `RUSTTY_REV` (MIT).
-//! Changes: only the lookup (`Tables.get`) is here; the `Generator` and `writeZig`, which build and write the tables,
-//! come with the table generator (the zig-free-core plan's Task 6). The stages are fixed-size arrays, so the `stage1`
-//! index needs no check, and the other two are indexed safely: rustty's unchecked reads, which relied on the
-//! generator's invariant, are checked reads here, and a test holds the invariant for every generated table. A code
-//! point is a `u32` masked to Zig's `u21`.
+//! Changes: only the lookup (`Tables.get`) is here; the `Generator` is the table generator's
+//! (`src/bin/gen-unicode/lut.rs`), and `writeZig` has no counterpart: the generator writes the tables as Rust. The
+//! stages are fixed-size arrays, so the `stage1` index needs no check, and the other two are indexed safely: rustty's
+//! unchecked reads, which relied on the generator's invariant, are checked reads here, and a test holds the invariant
+//! for every generated table. A code point is a `u32` masked to Zig's `u21`.
 
 /// A three-level lookup table over `'static` generated stages, from a code point to an `Elem`. The stage lengths are
 /// in the type, so a table cannot be paired with stages of another shape.

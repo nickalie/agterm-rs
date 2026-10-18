@@ -1,9 +1,10 @@
 //! The generated Unicode tables the lookups read: Ghostty's build-time generator output, checked in.
 //!
 //! Ghostty generates them at build time (`props-unigen`, `symbols-unigen`, the comptime grapheme precompute, uucode's
-//! own tables); here they are source files, written by a generator and never edited (the zig-free-core plan's Task 6
-//! ports the generator into this crate). Each file names its inputs. The checksums below pin every value, so a
-//! changed entry fails the tests on every platform; a regeneration updates them in the same change.
+//! own tables); here they are source files, written by `scripts/gen-vt-unicode.sh` (the `gen-unicode` binary, which
+//! ports those generators and the uucode rules they run) and never edited, and its `--check` holds them to the pinned
+//! UCD on every OS in CI. Each file names its inputs. The checksums below pin every value, so a changed entry fails
+//! the tests on every platform; a regeneration updates them in the same change.
 //!
 //! rustty: `crates/rustty-unicode/src/generated.rs` and `generated/checksum.rs` at `RUSTTY_REV` (MIT).
 //! Changes: the checksums also cover the `Properties` stage and the case folding table, which rustty left out.
@@ -49,7 +50,8 @@ mod tests {
     }
 
     // rustty's three checksums, pinned when its tables matched Ghostty's generator output (its differential gate
-    // against uucode): equal values here prove the copy is rustty's tables, entry for entry.
+    // against uucode): equal values here prove the tables are rustty's, entry for entry. `gen-unicode` reproduces
+    // them from the pinned UCD, which is the one rustty's tables were dumped from.
 
     #[test]
     fn grapheme_data_checksum() {

@@ -4,8 +4,9 @@
 //! `src/build/uucode_config.zig`.
 //! rustty: `crates/rustty-unicode/src/symbols_table.rs` and the tests of `symbols_uucode.rs` at `RUSTTY_REV` (MIT).
 //! Changes: the table is the checked-in generated stages instead of a build-system module. `symbols_uucode.zig`, the
-//! generator that writes them from uucode, comes with the zig-free-core plan's Task 6; its out-of-range rule (no
-//! code point above U+10FFFF is a symbol) is what the table holds there, and its spot checks run on the table here.
+//! generator that writes them from uucode, is the `gen-unicode` binary's (`src/bin/gen-unicode`); its out-of-range
+//! rule (no code point above U+10FFFF is a symbol) is what the table holds there, and its spot checks run on the
+//! table here.
 
 use crate::unicode::generated::symbols_data;
 use crate::unicode::lut::TablesRef;

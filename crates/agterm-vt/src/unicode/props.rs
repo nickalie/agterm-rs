@@ -5,8 +5,9 @@
 //! Ghostty: `src/unicode/props.zig` at `LIBGHOSTTY_VT_REV`, with uucode's `types.GraphemeBreakNoControl`.
 //! rustty: `crates/rustty-unicode/src/props.rs` at `RUSTTY_REV` (MIT).
 //! Changes: `Properties` is a plain struct, not a `packed struct(u16)`, so it needs no padding field; the generated
-//! tables hold its values. `eql` and `format`, which only the table generator uses, come with the generator (the
-//! zig-free-core plan's Task 6); derived equality stands in for `eql` meanwhile.
+//! tables hold its values. Derived equality stands in for `eql`, which compares every field too. `format` has no
+//! counterpart: the table generator, which compiles this file as its own module (`src/bin/gen-unicode`), writes the
+//! values as Rust struct literals.
 
 /// The grapheme break property of a code point that is not a control: uucode's `GraphemeBreakNoControl`
 /// (`enum(u5)`). The discriminants are uucode's, because the generated tables and the grapheme precompute key are
