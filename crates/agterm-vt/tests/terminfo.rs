@@ -1,8 +1,10 @@
 //! The checked-in terminfo source, compiled with `tic -x` into a temporary directory, is the entry the Zig build
 //! compiled: `infocmp -x` reads the same entry back from it as from the Zig-built prefix, whose `infocmp` output was
 //! captured once as `fixtures/xterm-ghostty.infocmp` so this check outlives that build. The comparison is of the
-//! entry, not of `infocmp`'s layout: the names, then every capability with its value (numbers as numbers, as an
-//! ncurses release may print them in hex or decimal), in any order and line wrapping.
+//! entry, not of `infocmp`'s layout: the names, then every capability with its value, in any order and line
+//! wrapping, numbers as numbers and strings as the bytes they stand for, as ncurses releases print them differently
+//! (6.x writes `colors#0x100`, `cr=\r`, `kbs=^?`, `\E[4:%p1%dm`; macOS's 5.7 `colors#256`, `cr=^M`, `kbs=\177`,
+//! `\E[4\:%p1%dm`).
 //!
 //! `tic` and `infocmp` write and read only the temporary directory (`-o`, `-A`), never `~/.terminfo`, with `TERMINFO`
 //! and `TERMINFO_DIRS` cleared.
@@ -18,7 +20,7 @@ const SOURCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/terminfo/xterm-ghostt
 const FIXTURE: &str = include_str!("fixtures/xterm-ghostty.infocmp");
 
 /// An entry as `infocmp` prints it: its names, and its capabilities as `name`, `name@`, `name#number` (decimal) or
-/// `name=value` fields.
+/// `name=value` fields, the value the bytes it stands for, ASCII-escaped.
 #[derive(Debug, PartialEq, Eq)]
 struct Entry {
     names: String,
@@ -67,13 +69,65 @@ fn number(value: &str) -> TestResult<u64> {
     )
 }
 
+/// The bytes a string capability's value stands for (terminfo(5)): `\E` and `\e` ESC, `\n` and `\l` LF, `\r`, `\t`,
+/// `\b`, `\f`, `\s` (space), up to three octal digits (`\0` alone is ncurses' NUL, `\200`), any other escaped
+/// character itself (`\\`, `\,`, `\:`, `\^`), `^X` a control character (`^?` DEL); a `%` takes the character after
+/// it as written, so `%^` (xor) stays an operator.
+fn decode(value: &str) -> TestResult<Vec<u8>> {
+    let mut out = Vec::with_capacity(value.len());
+    let mut bytes = value.bytes().peekable();
+    while let Some(b) = bytes.next() {
+        match b {
+            b'\\' => match bytes.next().ok_or("a backslash at the end")? {
+                b'E' | b'e' => out.push(0x1B),
+                b'n' | b'l' => out.push(b'\n'),
+                b'r' => out.push(b'\r'),
+                b't' => out.push(b'\t'),
+                b'b' => out.push(0x08),
+                b'f' => out.push(0x0C),
+                b's' => out.push(b' '),
+                digit @ b'0'..=b'7' => {
+                    let mut code = u32::from(digit - b'0');
+                    let mut digits = 1;
+                    while digits < 3
+                        && let Some(&next @ b'0'..=b'7') = bytes.peek()
+                    {
+                        code = code * 8 + u32::from(next - b'0');
+                        digits += 1;
+                        bytes.next();
+                    }
+                    out.push(if digits == 1 && code == 0 {
+                        0x80
+                    } else {
+                        u8::try_from(code)?
+                    });
+                }
+                other => out.push(other),
+            },
+            b'^' => match bytes.next().ok_or("a caret at the end")? {
+                b'?' => out.push(0x7F),
+                c => out.push(c & 0x1F),
+            },
+            b'%' => {
+                out.push(b);
+                out.extend(bytes.next());
+            }
+            b => out.push(b),
+        }
+    }
+    Ok(out)
+}
+
 fn entry(source: &str) -> TestResult<Entry> {
     let mut fields = fields(source).into_iter();
     let names = fields.next().ok_or("no names")?;
     let capabilities = fields
-        .map(|field| match field.split_once('#') {
-            Some((name, value)) if !name.contains('=') => Ok(format!("{name}#{}", number(value)?)),
-            _ => Ok(field),
+        .map(|field| {
+            Ok(match (field.split_once('='), field.split_once('#')) {
+                (Some((name, value)), _) => format!("{name}={}", decode(value)?.escape_ascii()),
+                (None, Some((name, value))) => format!("{name}#{}", number(value)?),
+                (None, None) => field,
+            })
         })
         .collect::<TestResult<_>>()?;
     Ok(Entry { names, capabilities })
@@ -162,6 +216,31 @@ fn fields_honor_escapes_and_drop_comments() -> TestResult {
     assert_eq!(entry.names, "name|alias");
     assert!(entry.capabilities.contains("colors#256"));
     assert!(entry.capabilities.contains("it#8"));
+    assert!(entry.capabilities.contains("acsc=a,b"));
+    assert!(entry.capabilities.contains("initc=\\x1b\\\\"));
     assert!(number("x").is_err());
+    Ok(())
+}
+
+#[test]
+fn values_compare_as_the_bytes_they_stand_for() -> TestResult {
+    // how ncurses 6.x and macOS's 5.7 print the same values
+    for (a, b) in [
+        (r"\r", "^M"),
+        (r"\n", "^J"),
+        ("^?", r"\177"),
+        (r"\E[4:%p1%dm", r"\E[4\:%p1%dm"),
+        (r"\E]2;\007", r"\E]2;^G"),
+        (r"\E", r"\033"),
+    ] {
+        assert_eq!(decode(a)?, decode(b)?, "{a} {b}");
+    }
+    assert_eq!(decode(r"\E[%p1%d q")?, b"\x1b[%p1%d q");
+    assert_eq!(decode("%p1%^%d")?, b"%p1%^%d");
+    assert_eq!(decode(r"\0")?, [0x80]);
+    assert_eq!(decode(r"\s\,\^\\")?, br" ,^\");
+    assert_ne!(decode(r"\E[4m")?, decode(r"\E[5m")?);
+    assert!(decode("\\").is_err());
+    assert!(decode("^").is_err());
     Ok(())
 }
