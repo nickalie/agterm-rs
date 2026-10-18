@@ -1,6 +1,8 @@
-//! The build script's Zig build of libghostty-vt (`zig_build.rs`), checked without running zig: the target map, the
-//! arguments and directories of a build, the stamp, the reruns, the list of targets the prepare script fetches
-//! packages for, and the error a missing prefix fails the build with.
+//! The build script's Zig build of libghostty-vt (`zig_build.rs`). Its pure functions are checked without running
+//! zig: the target map, the arguments and directories of a build, the stamp, the reruns and the list of targets the
+//! prepare script fetches packages for. The error a missing prefix fails the build with comes from a nested
+//! `cargo build` against an empty vendor root, which fails before zig runs. The offline check needs the prefix
+//! `scripts/build-ghostty-vt.sh` prepared and runs its zig to configure every mapped target with networking off.
 
 #[path = "../zig_build.rs"]
 mod zig_build;
