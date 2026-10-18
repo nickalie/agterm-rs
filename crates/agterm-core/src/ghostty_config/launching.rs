@@ -6,7 +6,6 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 
 use strum::{EnumIter, EnumString, IntoStaticStr};
@@ -78,12 +77,28 @@ impl InputSource {
         match tag.trim_matches([' ', '\t']) {
             "path" => {
                 let path = validate::decode_string(tagged)?;
-                Some(Self::Path(PathBuf::from(OsString::from_vec(path))))
+                Some(Self::Path(path_from_bytes(path)))
             }
             "raw" => validate::decode_string(tagged).map(Self::Raw),
             _ => validate::decode_string(value).map(Self::Raw),
         }
     }
+}
+
+/// The path a decoded `path:` value names: its bytes as they are on Unix, where a path is bytes.
+#[cfg(unix)]
+fn path_from_bytes(bytes: Vec<u8>) -> PathBuf {
+    use std::os::unix::ffi::OsStringExt as _;
+
+    PathBuf::from(OsString::from_vec(bytes))
+}
+
+/// The path a decoded `path:` value names: on Windows, where a path is UTF-16 (Zig spells it in WTF-8), the bytes as
+/// UTF-8, each ill-formed sequence replaced by U+FFFD.
+#[cfg(windows)]
+fn path_from_bytes(bytes: Vec<u8>) -> PathBuf {
+    let text = String::from_utf8(bytes).unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned());
+    PathBuf::from(OsString::from(text))
 }
 
 /// `std.ascii.whitespace`, which `RepeatableStringMap.parseCLI` trims (vertical tab included, unlike

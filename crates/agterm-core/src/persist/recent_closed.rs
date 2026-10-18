@@ -245,7 +245,7 @@ pub mod reference_date {
     /// The time `seconds` after the reference date; `None` for a value no `SystemTime` holds.
     #[must_use]
     pub fn time(seconds: f64) -> Option<SystemTime> {
-        let magnitude = Duration::try_from_secs_f64(seconds.abs()).ok()?;
+        let magnitude = clock_tick(Duration::try_from_secs_f64(seconds.abs()).ok()?);
         if seconds.is_sign_negative() {
             reference().checked_sub(magnitude)
         } else {
@@ -253,6 +253,28 @@ pub mod reference_date {
         }
     }
 
+    /// `duration` as the clock holds it: as is where it counts nanoseconds.
+    #[cfg(unix)]
+    pub(super) fn clock_tick(duration: Duration) -> Duration {
+        duration
+    }
+
+    /// `duration` rounded to the nearest 100 ns, the tick of Windows' clock, which would otherwise truncate it. A
+    /// `Double` near today spaces its values about 119 ns apart, so a time of whole ticks rounds back to itself and
+    /// [`now`] reads back from disk equal.
+    #[cfg(windows)]
+    pub(super) fn clock_tick(duration: Duration) -> Duration {
+        let ticks = (duration.subsec_nanos() + 50) / 100;
+        Duration::from_secs(duration.as_secs()).saturating_add(Duration::from_nanos(u64::from(ticks) * 100))
+    }
+
+    #[cfg_attr(
+        windows,
+        expect(
+            clippy::trivially_copy_pass_by_ref,
+            reason = "serde's `serialize_with` takes a reference; Windows' `SystemTime` is 8 bytes"
+        )
+    )]
     pub(crate) fn serialize<S: Serializer>(time: &SystemTime, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_f64(seconds(*time))
     }
@@ -441,6 +463,27 @@ mod tests {
         assert_eq!(reference_date::time(-978_307_200.0), Some(UNIX_EPOCH));
         assert_eq!(reference_date::time(f64::NAN), None);
         assert_eq!(reference_date::time(f64::INFINITY), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_time_rounds_to_the_clocks_tick() {
+        for (nanos, rounded) in [
+            (149, 100),
+            (150, 200),
+            (1_999_999_960, 2_000_000_000),
+            (7_000_000_000, 7_000_000_000),
+        ] {
+            assert_eq!(
+                reference_date::clock_tick(Duration::from_nanos(nanos)),
+                Duration::from_nanos(rounded),
+                "{nanos}"
+            );
+        }
+        for _ in 0..1000 {
+            let now = reference_date::now();
+            assert_eq!(reference_date::time(reference_date::seconds(now)), Some(now));
+        }
     }
 
     #[test]

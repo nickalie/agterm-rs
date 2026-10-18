@@ -356,6 +356,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the zsh, bash and fish integrations are Unix shells' and spelled with /; a Windows live pane runs PowerShell"
+    )]
     fn zsh_points_zdotdir_at_the_integration_and_hands_the_apps_own_on() {
         assert_eq!(
             injected(LoginShell::Zsh, &Inherited::default()),
@@ -376,6 +380,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the zsh, bash and fish integrations are Unix shells' and spelled with /; a Windows live pane runs PowerShell"
+    )]
     fn bash_reads_the_integration_through_env_and_keeps_the_apps_env_and_history() {
         let inherited = Inherited {
             home: Some("/home/u".to_owned()),
@@ -413,6 +421,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the zsh, bash and fish integrations are Unix shells' and spelled with /; a Windows live pane runs PowerShell"
+    )]
     fn fish_finds_the_integration_ahead_of_the_inherited_data_dirs() {
         let with = |dirs: Option<&str>| Inherited {
             xdg_data_dirs: dirs.map(str::to_owned),
@@ -455,6 +467,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the zsh, bash and fish integrations are Unix shells' and spelled with /; a Windows live pane runs PowerShell"
+    )]
     fn the_rearm_exports_what_the_integration_consumed() {
         let zsh = rearm(LoginShell::Zsh, &injected(LoginShell::Zsh, &Inherited::default())).unwrap();
         assert_eq!(
@@ -519,6 +535,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the zsh, bash and fish integrations are Unix shells' and spelled with /; a Windows live pane runs PowerShell"
+    )]
     fn a_plain_panes_zsh_and_fish_run_as_given_with_their_integration() {
         let resources = bundled();
         let (line, environment) = set_up(resources.path(), "/usr/bin/zsh");
@@ -530,6 +550,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the zsh, bash and fish integrations are Unix shells' and spelled with /; a Windows live pane runs PowerShell"
+    )]
     fn a_plain_panes_bash_goes_to_posix_mode_its_startup_flags_to_the_integration() {
         // Ghostty's `setupBash` cases
         let resources = bundled();

@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
+#[cfg(unix)]
 use std::process::Command;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -738,6 +739,7 @@ impl crate::ProcessTable for FakeProcessTable {
 /// # Errors
 ///
 /// Writing or removing the source, or starting `install`; an `install` that fails is an error naming `path`.
+#[cfg(unix)]
 pub fn write_executable(path: &Path, text: &str) -> io::Result<()> {
     let mut source = path.as_os_str().to_owned();
     source.push(".source");
@@ -754,6 +756,17 @@ pub fn write_executable(path: &Path, text: &str) -> io::Result<()> {
     } else {
         Err(io::Error::other(format!("install {}: {status}", path.display())))
     }
+}
+
+/// Writes `text` to `path` for a test to run: [`write_executable`]'s Windows form. A Windows file is executable by its
+/// extension rather than a mode, and no fork hands a write handle to a child, so the text is written directly.
+///
+/// # Errors
+///
+/// Writing the file.
+#[cfg(windows)]
+pub fn write_executable(path: &Path, text: &str) -> io::Result<()> {
+    std::fs::write(path, text)
 }
 
 #[cfg(test)]
@@ -964,6 +977,7 @@ mod tests {
         assert!(launcher.running().is_empty());
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_executable_is_written_runnable_and_leaves_no_source() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -980,5 +994,20 @@ mod tests {
         assert_eq!(output.stdout, b"ran");
         assert_eq!(entries, 1, "the source is removed");
         assert!(write_executable(&dir.join("missing/script"), "").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_executable_is_written_runnable_as_given() {
+        let dir = std::env::temp_dir().join(format!("agterm-host-exec-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("script.cmd");
+        write_executable(&script, "@echo off\r\necho ran\r\n").unwrap();
+        let output = std::process::Command::new(&script).output().unwrap();
+        let entries = std::fs::read_dir(&dir).unwrap().count();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(output.stdout, b"ran\r\n");
+        assert_eq!(entries, 1, "nothing beside the file");
+        assert!(write_executable(&dir.join("missing/script.cmd"), "").is_err());
     }
 }

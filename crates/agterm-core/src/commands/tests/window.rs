@@ -705,7 +705,7 @@ fn index(dir: &std::path::Path) -> (Vec<(String, bool)>, Option<String>) {
 
 #[test]
 fn the_window_lifecycle_lands_in_the_index_and_the_window_files() {
-    let dir = tempfile::Builder::new().prefix("agt").tempdir_in("/tmp").unwrap();
+    let dir = super::short_tempdir();
     let mut core = persisted(dir.path());
     let first = active(&core).unwrap();
     let second = answered_id(&window(
@@ -763,7 +763,7 @@ fn the_window_lifecycle_lands_in_the_index_and_the_window_files() {
 
 #[test]
 fn closing_the_last_open_window_pins_it_frontmost_in_the_index() {
-    let dir = tempfile::Builder::new().prefix("agt").tempdir_in("/tmp").unwrap();
+    let dir = super::short_tempdir();
     let mut core = persisted(dir.path());
     let only = active(&core).unwrap();
     assert!(window(&mut core, WindowCmd::Close, None, Args::default()).ok);

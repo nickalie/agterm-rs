@@ -60,12 +60,57 @@ pub fn is_daemon_name(name: &str) -> bool {
     })
 }
 
-/// The socket directory of the instance whose state directory is `state_dir`: `/tmp/agterm-zmx-<FNV-1a 64>` of the
-/// resolved state directory, so two spellings of one directory share a namespace.
+/// The socket directory of the instance whose state directory is `state_dir`, named by the FNV-1a 64 of the resolved
+/// state directory, so two spellings of one directory share a namespace: [`unix_socket_directory`] on Unix,
+/// [`windows_socket_directory`] under the process environment's local application data on Windows.
 #[must_use]
 pub fn socket_directory(state_dir: &Path) -> String {
-    let resolved = resolved_state_dir(state_dir);
-    format!("/tmp/agterm-zmx-{}", fnv1a64(resolved.as_os_str().as_encoded_bytes()))
+    let hash = state_dir_hash(state_dir);
+    #[cfg(unix)]
+    {
+        unix_socket_directory(&hash)
+    }
+    #[cfg(windows)]
+    {
+        windows_socket_directory(&crate::paths::ProcessEnv, &hash)
+    }
+}
+
+/// The FNV-1a 64 of `state_dir` resolved ([`resolved_state_dir`]), over its bytes as the OS encodes them.
+#[must_use]
+pub fn state_dir_hash(state_dir: &Path) -> String {
+    fnv1a64(resolved_state_dir(state_dir).as_os_str().as_encoded_bytes())
+}
+
+/// The Unix socket directory of the state directory hashed `hash` ([`state_dir_hash`]): `/tmp/agterm-zmx-<hash>`,
+/// upstream's shape, so the harness derives it the same way.
+#[must_use]
+pub fn unix_socket_directory(hash: &str) -> String {
+    format!("/tmp/agterm-zmx-{hash}")
+}
+
+/// The Windows namespace directory of the state directory hashed `hash` ([`state_dir_hash`]):
+/// `%LOCALAPPDATA%\agterm\live\<hash>`, per user as `/tmp` is not; `%USERPROFILE%\AppData\Local` when
+/// `LOCALAPPDATA` is unset or empty, then the profile directory the OS reports ([`crate::paths::Env::passwd_home`]),
+/// and the system's temporary directory with no profile at all. The live-session server derives its pipe from this
+/// path (`agterm_session::endpoint::pipe_name`). Spelled with `\` on every OS, so a test anywhere reads the
+/// Windows form.
+#[must_use]
+pub fn windows_socket_directory(env: &dyn crate::paths::Env, hash: &str) -> String {
+    let local = |base: PathBuf| {
+        base.as_os_str()
+            .to_string_lossy()
+            .trim_end_matches(['\\', '/'])
+            .to_owned()
+    };
+    let profile_local = |profile: PathBuf| format!(r"{}\AppData\Local", local(profile));
+    let non_empty = |key: &str| env.var(key).filter(|value| !value.is_empty()).map(PathBuf::from);
+    let base = non_empty("LOCALAPPDATA")
+        .map(local)
+        .or_else(|| non_empty("USERPROFILE").map(profile_local))
+        .or_else(|| env.passwd_home().map(profile_local))
+        .unwrap_or_else(|| local(std::env::temp_dir()));
+    format!(r"{base}\agterm\live\{hash}")
 }
 
 /// `state_dir` as upstream resolves it (`standardizedFileURL.resolvingSymlinksInPath()`): absolute, `.` and `..`
@@ -100,7 +145,8 @@ fn resolve_existing_prefix(path: &Path) -> PathBuf {
     let mut existing = path;
     let mut rest = Vec::new();
     loop {
-        if let Ok(mut resolved) = existing.canonicalize() {
+        if let Ok(resolved) = existing.canonicalize() {
+            let mut resolved = without_verbatim_prefix(resolved);
             resolved.extend(rest.iter().rev());
             return resolved;
         }
@@ -114,6 +160,35 @@ fn resolve_existing_prefix(path: &Path) -> PathBuf {
     }
 }
 
+/// `path` as canonicalized: Unix's spelling is the path itself.
+#[cfg(unix)]
+fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    path
+}
+
+/// `path` as canonicalized, without the verbatim prefix Windows' canonicalization adds (`\\?\C:\x` is `C:\x`,
+/// `\\?\UNC\server\share` is `\\server\share`), as Python's `realpath` spells it, so the namespace hash is the one
+/// of the path a user writes. Any other verbatim form (a device, a volume GUID) has no plainer spelling and stays.
+#[cfg(windows)]
+fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    use std::path::Prefix;
+
+    let mut components = path.components();
+    let plain = match components.next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::VerbatimDisk(letter) => format!("{}:", char::from(letter)),
+            Prefix::VerbatimUNC(server, share) => {
+                format!(r"\\{}\{}", server.to_string_lossy(), share.to_string_lossy())
+            }
+            _ => return path,
+        },
+        _ => return path,
+    };
+    let mut out = PathBuf::from(plain);
+    out.extend(components);
+    out
+}
+
 /// FNV-1a 64 of `bytes` as 16 lower-case hex digits (upstream's `stableHash`).
 #[must_use]
 pub fn fnv1a64(bytes: &[u8]) -> String {
@@ -121,6 +196,24 @@ pub fn fnv1a64(bytes: &[u8]) -> String {
         (hash ^ u64::from(byte)).wrapping_mul(1_099_511_628_211)
     });
     format!("{hash:016x}")
+}
+
+/// An executable file named `name` for a test's wrap, which [`support::is_executable_file`] accepts: `/bin/<name>` on
+/// Unix (`sh`, `echo` and `cat` exist on Linux and macOS alike); on Windows an empty `<name>.exe` written into `dir`,
+/// since an extension is all it asks there.
+#[cfg(test)]
+pub(crate) fn test_executable(dir: &Path, name: &str) -> PathBuf {
+    #[cfg(unix)]
+    {
+        let _ = dir;
+        Path::new("/bin").join(name)
+    }
+    #[cfg(windows)]
+    {
+        let path = dir.join(name).with_extension("exe");
+        std::fs::write(&path, b"").unwrap();
+        path
+    }
 }
 
 #[cfg(test)]
@@ -135,16 +228,71 @@ mod tests {
         assert_eq!(fnv1a64(b""), "cbf29ce484222325");
         assert_eq!(fnv1a64(b"a"), "af63dc4c8601ec8c");
         assert_eq!(fnv1a64(b"foobar"), "85944171f73967e8");
-        assert_eq!(
-            socket_directory(Path::new("/nonexistent-agterm/state")),
-            "/tmp/agterm-zmx-22c4fb0b9e3e04dc"
-        );
+        let state = Path::new("/nonexistent-agterm/state");
+        #[cfg(unix)]
+        assert_eq!(socket_directory(state), "/tmp/agterm-zmx-22c4fb0b9e3e04dc");
         assert_eq!(
             socket_directory(Path::new("/nonexistent-agterm/./x/../state")),
-            socket_directory(Path::new("/nonexistent-agterm/state"))
+            socket_directory(state)
         );
     }
 
+    #[test]
+    fn the_unix_socket_directory_is_upstreams_shape() {
+        assert_eq!(
+            unix_socket_directory("22c4fb0b9e3e04dc"),
+            "/tmp/agterm-zmx-22c4fb0b9e3e04dc"
+        );
+        #[cfg(unix)]
+        {
+            let state = Path::new("/nonexistent-agterm/state");
+            assert_eq!(socket_directory(state), unix_socket_directory(&state_dir_hash(state)));
+        }
+    }
+
+    #[test]
+    fn the_windows_namespace_is_under_the_local_application_data() {
+        use crate::paths::MapEnv;
+
+        let hash = "0123456789abcdef";
+        let local = MapEnv::new().with("LOCALAPPDATA", r"C:\Users\u\AppData\Local");
+        assert_eq!(
+            windows_socket_directory(&local, hash),
+            r"C:\Users\u\AppData\Local\agterm\live\0123456789abcdef"
+        );
+        let profile = MapEnv::new()
+            .with("LOCALAPPDATA", "")
+            .with("USERPROFILE", r"C:\Users\u")
+            .with_passwd_home(r"D:\other");
+        assert_eq!(
+            windows_socket_directory(&profile, hash),
+            r"C:\Users\u\AppData\Local\agterm\live\0123456789abcdef",
+            "an empty LOCALAPPDATA falls back to the profile's"
+        );
+        let reported = MapEnv::new().with_passwd_home(r"D:\home\u");
+        assert_eq!(
+            windows_socket_directory(&reported, hash),
+            r"D:\home\u\AppData\Local\agterm\live\0123456789abcdef"
+        );
+        assert!(
+            windows_socket_directory(&MapEnv::new(), hash).ends_with(r"\agterm\live\0123456789abcdef"),
+            "no profile at all: the temporary directory"
+        );
+        #[cfg(windows)]
+        {
+            let state = Path::new(r"C:\nonexistent-agterm\state");
+            let process = windows_socket_directory(&crate::paths::ProcessEnv, &state_dir_hash(state));
+            assert_eq!(socket_directory(state), process);
+            if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty()) {
+                assert!(
+                    process.starts_with(local.to_str().unwrap().trim_end_matches('\\')),
+                    "{process}"
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn canonical_state_paths_share_a_namespace() {
         let root = tempfile::tempdir().unwrap();
@@ -158,6 +306,60 @@ mod tests {
             socket_directory(&link.join("not-yet")),
             socket_directory(&real.canonicalize().unwrap().join("not-yet"))
         );
+    }
+
+    /// Windows spellings of one directory: its case, `/` separators, the verbatim prefix and, where this account may
+    /// create one (developer mode, an administrator), a directory symlink.
+    #[cfg(windows)]
+    #[test]
+    fn canonical_state_paths_share_a_namespace() {
+        let root = tempfile::tempdir().unwrap();
+        let real = root.path().join("Real");
+        fs::create_dir_all(&real).unwrap();
+        let canonical = real.canonicalize().unwrap();
+        let plain = without_verbatim_prefix(canonical.clone());
+        let spellings = [
+            PathBuf::from(plain.to_str().unwrap().to_uppercase()),
+            PathBuf::from(plain.to_str().unwrap().replace('\\', "/")),
+            canonical.clone(),
+        ];
+        for spelling in &spellings {
+            assert_eq!(
+                socket_directory(spelling),
+                socket_directory(&real),
+                "{}",
+                spelling.display()
+            );
+        }
+        assert_eq!(resolved_state_dir(&real), plain, "no verbatim prefix");
+        // a state directory not created yet resolves through its existing parent
+        assert_eq!(
+            socket_directory(&PathBuf::from(plain.to_str().unwrap().to_uppercase()).join("not-yet")),
+            socket_directory(&canonical.join("not-yet"))
+        );
+        let link = root.path().join("link");
+        if std::os::windows::fs::symlink_dir(&real, &link).is_ok() {
+            assert_eq!(socket_directory(&link), socket_directory(&real));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_verbatim_prefix_of_a_disk_or_share_is_dropped() {
+        assert_eq!(
+            without_verbatim_prefix(PathBuf::from(r"\\?\C:\Users\u\state")),
+            Path::new(r"C:\Users\u\state")
+        );
+        assert_eq!(
+            without_verbatim_prefix(PathBuf::from(r"\\?\UNC\server\share\state")),
+            Path::new(r"\\server\share\state")
+        );
+        for kept in [
+            r"\\?\Volume{0f0e0d0c-0b0a-0908-0706-050403020100}\state",
+            r"C:\Users\u\state",
+        ] {
+            assert_eq!(without_verbatim_prefix(PathBuf::from(kept)), Path::new(kept));
+        }
     }
 
     #[test]

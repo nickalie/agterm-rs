@@ -504,6 +504,10 @@ fn includes_count_as_libghostty_counted_them() -> TestResult {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "Ghostty reads a theme value with a ':' as a light:/dark: pair, so a Windows drive path is no bare theme path"
+)]
 fn themes_count_as_libghostty_counted_them() -> TestResult {
     let cases: [(Files<'_>, usize); 7] = [
         (

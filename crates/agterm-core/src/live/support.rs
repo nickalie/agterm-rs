@@ -65,7 +65,9 @@ pub fn eligibility(
     })
 }
 
-/// Whether `path` is a regular file this process may execute.
+/// Whether `path` is a regular file this process may execute: on Unix one with an execute bit, on Windows one whose
+/// extension `CreateProcessW` starts directly ([`WINDOWS_EXECUTABLE_EXTENSIONS`], in any case), since a Windows file
+/// has no execute bit.
 #[must_use]
 pub fn is_executable_file(path: &Path) -> bool {
     let Ok(metadata) = path.metadata() else {
@@ -76,10 +78,26 @@ pub fn is_executable_file(path: &Path) -> bool {
         use std::os::unix::fs::PermissionsExt;
         metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        metadata.is_file()
+        metadata.is_file() && has_windows_executable_extension(path)
     }
+}
+
+/// The extensions of the files Windows' `CreateProcessW` runs as programs (a `.cmd` or `.bat` needs `cmd.exe`).
+pub const WINDOWS_EXECUTABLE_EXTENSIONS: [&str; 2] = ["exe", "com"];
+
+/// Whether `path` ends in one of [`WINDOWS_EXECUTABLE_EXTENSIONS`], in any case. Defined on every OS, so the rule
+/// is tested everywhere.
+#[must_use]
+pub fn has_windows_executable_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            WINDOWS_EXECUTABLE_EXTENSIONS
+                .iter()
+                .any(|known| extension.eq_ignore_ascii_case(known))
+        })
 }
 
 /// Everything a pane's wrap configuration is built from (upstream's `ZmxSupport.Inputs`).
@@ -306,7 +324,7 @@ mod tests {
 
     fn inputs(resources: &Path) -> Inputs {
         Inputs {
-            executable: PathBuf::from("/bin/echo"),
+            executable: super::super::test_executable(resources, "echo"),
             login_shell: Some("/bin/zsh".to_owned()),
             resources_dir: Some(resources.to_path_buf()),
             state_dir: PathBuf::from("/tmp/agterm-state"),
@@ -361,7 +379,11 @@ mod tests {
         assert_eq!(configuration.pane_id, "ABCDEF01-2345-6789-ABCD-EF0123456789");
         assert_eq!(
             configuration.command(),
-            "'/bin/echo' 'attach' 'agterm-abcdef0123456789abcdef0123456789'"
+            shell_quoted_line(&[
+                inputs.executable.to_str().unwrap(),
+                "attach",
+                "agterm-abcdef0123456789abcdef0123456789"
+            ])
         );
         assert_eq!(
             configuration.socket_directory,
@@ -372,7 +394,7 @@ mod tests {
         assert_eq!(env("AGTERM_PANE_ID"), Some("ABCDEF01-2345-6789-ABCD-EF0123456789"));
         assert_eq!(env("SHELL"), Some("/bin/zsh"));
         let integration = resources.path().join("shell-integration/zsh");
-        assert_eq!(env("ZDOTDIR"), integration.to_str());
+        assert_eq!(env("ZDOTDIR").map(Path::new), Some(integration.as_path()));
         assert_eq!(env("GHOSTTY_ZSH_ZDOTDIR"), Some("/home/test/.config/zsh"));
         assert_eq!(env("ZMX_DIR"), Some(configuration.socket_directory.as_str()));
         assert_eq!(env("ZMX_NO_DETACH_KEY"), Some("1"));
@@ -406,6 +428,49 @@ mod tests {
         }));
         assert_eq!(claiming.get("ZMX_MANAGED").map(String::as_str), Some("n2"));
         assert_eq!(claiming.get("ZMX_MANAGED_CLAIM").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn a_windows_executable_is_known_by_its_extension() {
+        for path in [r"C:\agterm\agterm-session.exe", "x.EXE", "tool.Com"] {
+            assert!(has_windows_executable_extension(Path::new(path)), "{path}");
+        }
+        for path in [
+            r"C:\agterm\agterm-session",
+            "run.cmd",
+            "run.bat",
+            "x.exe.txt",
+            ".exe",
+            "exe",
+        ] {
+            assert!(!has_windows_executable_extension(Path::new(path)), "{path}");
+        }
+    }
+
+    /// The `cfg` pair of [`is_executable_file`]: what makes a regular file executable is its mode on Unix and its
+    /// extension on Windows; a directory or a missing path never is.
+    #[test]
+    fn an_executable_file_is_one_by_the_os_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("tool");
+        let exe = dir.path().join("tool.exe");
+        fs::write(&plain, "").unwrap();
+        fs::write(&exe, "").unwrap();
+        assert!(!is_executable_file(dir.path()));
+        assert!(!is_executable_file(&dir.path().join("missing.exe")));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert!(!is_executable_file(&plain));
+            assert!(!is_executable_file(&exe), "an extension is no execute bit");
+            fs::set_permissions(&plain, fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(is_executable_file(&plain));
+        }
+        #[cfg(windows)]
+        {
+            assert!(!is_executable_file(&plain));
+            assert!(is_executable_file(&exe));
+        }
     }
 
     #[test]
@@ -498,16 +563,17 @@ mod tests {
             );
         }
         let mut inputs = inputs(resources.path());
-        inputs.session_host_executable = Some(PathBuf::from("/bin/cat"));
+        let host = super::super::test_executable(resources.path(), "cat");
+        inputs.session_host_executable = Some(host.clone());
         let configuration = configuration(&inputs).unwrap();
         assert_eq!(
             attach_command(&configuration, None, None, &NO_DENYLIST),
             shell_quoted_line(&[
-                "/bin/cat",
+                host.to_str().unwrap(),
                 "client",
                 &configuration.daemon_name,
                 "--",
-                "/bin/echo",
+                inputs.executable.to_str().unwrap(),
                 "attach",
                 &configuration.daemon_name
             ])
@@ -515,6 +581,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs its script with the POSIX shell /bin/sh, which Windows has not"
+    )]
     fn a_settled_line_runs_after_the_wait_in_place_of_the_shell() {
         let line = settled("echo \"$0\" settled");
         assert!(line.ends_with("; exec echo \"$0\" settled"), "{line}");
@@ -655,6 +725,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the zsh, bash and fish integrations are Unix shells' and spelled with /; a Windows live pane runs PowerShell"
+    )]
     fn a_bash_wrap_injects_through_env_and_starts_bash_in_posix_mode() {
         let resources = bundled("bash/ghostty.bash", "");
         let configuration = configuration(&shell_inputs(resources.path(), "/bin/bash")).unwrap();
@@ -697,6 +771,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the zsh, bash and fish integrations are Unix shells' and spelled with /; a Windows live pane runs PowerShell"
+    )]
     fn a_fish_wrap_puts_the_integration_on_the_data_dirs_and_attaches_bare() {
         let resources = bundled("fish/vendor_conf.d/ghostty-shell-integration.fish", "");
         let configuration = configuration(&shell_inputs(resources.path(), "/usr/bin/fish")).unwrap();
@@ -732,6 +810,14 @@ mod tests {
     /// here a stand-in that logs and consumes its variables as Ghostty's does), and the final shell the script execs
     /// reads the re-armed one again. `HOME` is a throwaway directory, so no user startup file is read.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the zsh, bash and fish integrations are Unix shells' and spelled with /; a Windows live pane runs PowerShell"
+    )]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "macOS' /bin/bash is bash 3.2, which never runs the integration from ENV; Ghostty injects none into it"
+    )]
     fn a_bash_payload_runs_the_command_and_rearms_the_integration_for_the_final_shell() {
         let home = tempfile::tempdir().unwrap();
         let log = home.path().join("log");

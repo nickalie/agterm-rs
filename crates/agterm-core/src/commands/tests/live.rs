@@ -50,7 +50,7 @@ fn install(core: &mut Core, host: &Arc<FakeSessionHost>, resources: &Path, mode:
             socket_directory: "/tmp/agterm-zmx-test".to_owned(),
         },
         wrap: Inputs {
-            executable: "/bin/sh".into(),
+            executable: crate::live::test_executable(resources, "sh"),
             login_shell: Some("/bin/zsh".to_owned()),
             resources_dir: Some(resources.to_path_buf()),
             state_dir: resources.join("state"),
@@ -450,7 +450,9 @@ fn a_live_launch_wraps_the_pane_in_its_daemon() {
         .unwrap();
     assert!(seed.live && !seed.wait_after_command && seed.initial_input.is_none());
     let command = seed.command.unwrap();
-    assert!(command.contains("; exec '/bin/sh' 'attach' '"), "{command}");
+    let executable = crate::live::test_executable(live.resources.path(), "sh");
+    let attach = crate::command_restore::shell_quoted_line(&[executable.to_str().unwrap(), "attach"]);
+    assert!(command.contains(&format!("; exec {attach} '")), "{command}");
     assert!(command.contains(&daemon_name(live.left)), "{command}");
     let env = |key: &str| {
         seed.env

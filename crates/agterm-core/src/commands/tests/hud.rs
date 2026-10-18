@@ -792,15 +792,38 @@ fn the_slot_closes_with_its_session_and_its_painters_exit() {
     assert!(!file.exists(), "a session close discards the body");
 }
 
-#[test]
-fn the_body_is_private_to_its_owner() {
+/// The modes of a body file and its directory, Unix's privacy (Windows' is their DACL, `owner_only::sddl_of`).
+#[cfg(unix)]
+fn mode(path: &std::path::Path) -> u32 {
     use std::os::unix::fs::PermissionsExt as _;
 
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+/// `path`'s owner is this user and its protected DACL grants that user and SYSTEM alone, Windows' 0700 and 0600.
+#[cfg(windows)]
+fn assert_owner_only(path: &std::path::Path, directory: bool) {
+    assert_eq!(
+        crate::owner_only::sddl_of(path).unwrap(),
+        crate::owner_only::owner_only_sddl_of_current_user(directory).unwrap(),
+        "{} is its owner's alone",
+        path.display()
+    );
+}
+
+#[test]
+fn the_body_is_private_to_its_owner() {
     let (mut fixture, dir) = hud_fixture();
     let bodies = dir.path().join("bodies");
     // a directory left readable by others is tightened, a crash's staging file is replaced
     std::fs::create_dir(&bodies).unwrap();
-    std::fs::set_permissions(&bodies, std::fs::Permissions::from_mode(0o755)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&bodies, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    #[cfg(windows)]
+    crate::owner_only::apply_sddl(&bodies, "D:P(A;OICI;FA;;;WD)").unwrap();
     let id = fixture.sessions[0];
     let staging = bodies.join(format!("agterm-hud-{}.txt.tmp", wire(id)));
     std::fs::write(&staging, "stale").unwrap();
@@ -813,9 +836,16 @@ fn the_body_is_private_to_its_owner() {
         "the body goes to the installed directory"
     );
     assert!(!staging.exists());
-    let mode = |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode(&bodies), 0o700);
-    assert_eq!(mode(&file), 0o600);
+    #[cfg(unix)]
+    {
+        assert_eq!(mode(&bodies), 0o700);
+        assert_eq!(mode(&file), 0o600);
+    }
+    #[cfg(windows)]
+    {
+        assert_owner_only(&bodies, true);
+        assert_owner_only(&file, false);
+    }
     assert!(std::fs::read_to_string(&file).unwrap().contains("secret status"));
 
     assert!(
@@ -824,7 +854,11 @@ fn the_body_is_private_to_its_owner() {
         })
         .ok
     );
+    #[cfg(unix)]
     assert_eq!(mode(&file), 0o600, "an update keeps it private");
+    #[cfg(windows)]
+    assert_owner_only(&file, false);
+    assert!(std::fs::read_to_string(&file).unwrap().contains("next"));
 }
 
 // MARK: - notify
@@ -1157,7 +1191,7 @@ fn a_window_reopened_another_way_keeps_its_banners() {
         response
     }
 
-    let dir = tempfile::Builder::new().prefix("agt").tempdir_in("/tmp").unwrap();
+    let dir = super::short_tempdir();
     let mut core = super::window::persisted(dir.path());
     let window = core.library().active_window_id().unwrap();
     let store = core.library_mut().store_mut(window).unwrap();

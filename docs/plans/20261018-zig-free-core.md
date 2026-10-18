@@ -1690,14 +1690,34 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
   `crates/agterm-core/src/commands/tests/hud.rs`, `crates/agterm-core/tests/persistence.rs`,
   `crates/agterm-host/src/fakes.rs`, `.github/workflows/cross-platform.yml`
 
-- [ ] `socket_directory` per OS (Task 2's Windows directory). The Unix-only spots go behind `cfg` with their Windows
+- [x] `socket_directory` per OS (Task 2's Windows directory). The Unix-only spots go behind `cfg` with their Windows
       forms beside them
-- [ ] core tests that assume `/bin/sh -c` or `/tmp` gain their Windows forms, or are gated with the reason
-- [ ] add `agterm-proto`, `agterm-host` and `agterm-core` to `cross-platform.yml`. `agterm-server` (AF_UNIX,
+  - `live::socket_directory` dispatches per OS over `state_dir_hash`: `unix_socket_directory` (`/tmp/agterm-zmx-`,
+    renamed in Task 28) and `windows_socket_directory` (`LOCALAPPDATA`, then `USERPROFILE\AppData\Local`, the
+    profile the OS reports, the temporary directory), both compiled everywhere; Windows' canonicalization drops the
+    `\\?\` prefix of a disk or share, so the hash is the one of the path as written (Python's `realpath`)
+  - pairs: `is_executable_file` (execute bit / `.exe` or `.com`), the HUD body's private directory and file (mode
+    0700/0600 / the state directory's inherited ACL), `input = path:` bytes (`OsStringExt` / UTF-8 with U+FFFD),
+    `write_executable` in the fakes (`install -m 755` / a plain write), the reference-date clock tick (nanoseconds /
+    rounded to Windows' 100 ns, so `now()` reads back equal); a file URL that names no OS path falls back to its
+    percent-decoded path
+  - the attach line stays the POSIX shell line: no Windows host is eligible for a wrap until PowerShell live
+    sessions (Task 31), and Tasks 28 and 30 replace the attach subprocess
+- [x] core tests that assume `/bin/sh -c` or `/tmp` gain their Windows forms, or are gated with the reason
+  - Windows forms: the wraps' executables (`live::test_executable`), the state directories under `/tmp`
+    (`short_tempdir`), the read-only persistence guard, the copy-on-select defaults per OS, the HUD body test
+  - gated with `#[cfg_attr(windows, ignore = "<reason>")]` (33): tests that run `/bin/sh`, the zsh/bash/fish
+    integrations, the XDG paths, PATH widening, custom commands run in the fixture's `/tmp`, theme values with a
+    drive path (Ghostty reads a `:` as a light/dark pair); `#[cfg(unix)]` where the test needs a Unix API (a
+    symlink of a `file://` path, a directory without its search bit); on macOS the bash payload test, since its
+    `/bin/bash` 3.2 never runs the integration from `ENV` (Ghostty's `detectShell` injects none into Apple's bash)
+  - `.gitattributes` checks every text file out with LF, so a Windows checkout's fixtures and pins compare byte
+    for byte
+- [x] add `agterm-proto`, `agterm-host` and `agterm-core` to `cross-platform.yml`. `agterm-server` (AF_UNIX,
       `flock`) and `agterm-ctl` stay out, recorded with their reason: the control server's Windows form belongs to
       the GPUI-on-Windows plan
-- [ ] add unit tests for the Windows namespace and for each `cfg` pair
-- [ ] run gates
+- [x] add unit tests for the Windows namespace and for each `cfg` pair
+- [x] run gates
 
 ### Task 22: Server lifecycle: start on demand, detach per OS, one per namespace
 

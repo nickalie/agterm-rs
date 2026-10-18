@@ -45,6 +45,18 @@ use crate::{Core, CoreConfig, CoreState};
 /// A target no upper-case UUID can start with.
 const UNKNOWN: &str = "zzz";
 
+/// A fresh state directory with a short path: under `/tmp` on Unix (macOS' per-user temporary directory is long), in
+/// the temporary directory on Windows, which has no `/tmp`.
+fn short_tempdir() -> tempfile::TempDir {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("agt");
+    #[cfg(unix)]
+    let dir = builder.tempdir_in("/tmp");
+    #[cfg(windows)]
+    let dir = builder.tempdir();
+    dir.unwrap()
+}
+
 /// A core over `library` with `settings`, kept in memory.
 fn core_over(library: WindowLibrary, settings: AppSettings) -> Core {
     Core::new(

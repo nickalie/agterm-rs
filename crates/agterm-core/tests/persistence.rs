@@ -15,7 +15,6 @@
 
 use std::fs;
 use std::io;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Instant;
@@ -137,19 +136,50 @@ fn workspace_names(library: &WindowLibrary, window: Uuid) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Makes a directory read-only for the guard's life, so writes into it fail.
+/// Makes writes into a directory fail for the guard's life: on Unix the directory read-only (0500); on Windows, where a
+/// directory's read-only attribute stops nothing, each file in it read-only, which a write or a replace refuses.
 struct ReadOnly(PathBuf);
 
 impl ReadOnly {
+    #[cfg(unix)]
     fn new(dir: &Path) -> io::Result<Self> {
+        use std::os::unix::fs::PermissionsExt as _;
+
         fs::set_permissions(dir, fs::Permissions::from_mode(0o500))?;
         Ok(Self(dir.to_owned()))
+    }
+
+    #[cfg(windows)]
+    fn new(dir: &Path) -> io::Result<Self> {
+        Self::set_files_read_only(dir, true)?;
+        Ok(Self(dir.to_owned()))
+    }
+
+    #[cfg(windows)]
+    fn set_files_read_only(dir: &Path, read_only: bool) -> io::Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let path = entry?.path();
+            let mut permissions = fs::metadata(&path)?.permissions();
+            if path.is_file() {
+                permissions.set_readonly(read_only);
+                fs::set_permissions(&path, permissions)?;
+            }
+        }
+        Ok(())
     }
 }
 
 impl Drop for ReadOnly {
+    #[cfg(unix)]
     fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt as _;
+
         let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o700));
+    }
+
+    #[cfg(windows)]
+    fn drop(&mut self) {
+        let _ = Self::set_files_read_only(&self.0, false);
     }
 }
 

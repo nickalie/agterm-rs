@@ -117,6 +117,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "PATH widening joins a POSIX PATH with ':'; the Windows form belongs to the GPUI-on-Windows plan"
+    )]
     fn widening_puts_the_bundled_cli_first_and_appends_the_user_bin() {
         assert_eq!(
             widened_path(

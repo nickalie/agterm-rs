@@ -1,8 +1,9 @@
 # The crates that build on all three OSes, checked on Linux, macOS and Windows alike: format, strict clippy and the
 # tests of each crate in PACKAGES, then the VT memory core's tests under Miri. Each Zig-free-core task that makes a
-# crate cross-platform adds it to PACKAGES (agterm-session, agterm-proto, agterm-host, agterm-core) and its generator
-# checks as steps of the `crates` job. The rest of the workspace (GPUI, WPE, libghostty-vt) builds on Linux only and
-# stays in rust-linux.yml.
+# crate cross-platform adds it to PACKAGES and its generator checks as steps of the `crates` job. The rest of the
+# workspace (GPUI, WPE, libghostty-vt) builds on Linux only and stays in rust-linux.yml. agterm-server (AF_UNIX and
+# `flock`) and agterm-ctl (an AF_UNIX client, tested against the server) are `any` crates that stay out until the
+# control server has its Windows form, which belongs to the GPUI-on-Windows plan.
 # Pushes to a `ci/**` branch run it too, so a macOS or Windows form can be checked on the runners without a PR.
 name: cross-platform
 
@@ -21,7 +22,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   # `-p` per crate; word-split by bash, which every step runs in (Git Bash on Windows)
-  PACKAGES: -p agterm-vt -p agterm-session
+  PACKAGES: -p agterm-vt -p agterm-session -p agterm-proto -p agterm-host -p agterm-core
 
 defaults:
   run:
