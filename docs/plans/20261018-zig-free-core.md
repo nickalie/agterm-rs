@@ -1578,23 +1578,34 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
 - Modify: `Cargo.toml` (`interprocess`, `windows-sys`, `postcard`; no async runtime, Task 2),
   `.github/workflows/cross-platform.yml`
 
-- [ ] port herdr's wire (framing, version negotiation) with the message families Task 2 kept: hello, the api
+- [x] port herdr's wire (framing, version negotiation) with the message families Task 2 kept: hello, the api
       requests and replies, attach (snapshot begin/chunk/end, offset-tagged output, input, reply metadata and
       delegated requests, resize, role, exit), handoff control. Encoding postcard, behind a stable envelope (magic
       and protocol version) that every version decodes; build identity and capabilities in the welcome; one
       listener with a connection per role (Task 2 > Wire)
-- [ ] port herdr's endpoint (`src/ipc.rs`, `src/server/socket_paths.rs`) onto agterm's namespace: Unix sockets under
+  - settled with Codex (transcript `discussions/task-20-wire-envelope`): a frozen 16-byte header on every frame
+    (`AGLS` | protocol | kind | length); kind 1 is the stable JSON control layer every version reads (`hello.v1`
+    with role `control`/`api`/`attach`, `welcome.v1` with build, capabilities, pid and an optional error code,
+    `handoff.request.v1` {import_exe, expected_build, expected_protocol}, `handoff.result.v1`), kind 2 the role's
+    postcard messages after an exact protocol match. The `control` role is accepted across protocols, so a new
+    build can ask an old server to hand off (Task 25 advertises `handoff.request.v1` once it implements it); only
+    the header, the kinds and the control operations are frozen (golden fixtures), the postcard families change
+    with `PROTOCOL_VERSION`
+  - the Unix endpoint also refuses a namespace directory that is not this user's (a symlink, another owner) and
+    closes one others can reach; the Windows client refuses a pipe whose server runs as another user (Task 2 >
+    Windows namespace)
+- [x] port herdr's endpoint (`src/ipc.rs`, `src/server/socket_paths.rs`) onto agterm's namespace: Unix sockets under
       the instance's socket directory; on Windows, named pipes with herdr's owner-only SDDL, plus
       `FILE_FLAG_FIRST_PIPE_INSTANCE` (agterm's addition)
-- [ ] give every herdr-derived file the header from Development Approach > Provenance
-- [ ] add the crate to `cross-platform.yml`
-- [ ] tests:
+- [x] give every herdr-derived file the header from Development Approach > Provenance
+- [x] add the crate to `cross-platform.yml`
+- [x] tests:
   - each message round-trips;
   - version mismatch refused with its message, and the envelope of a newer protocol still read;
   - a truncated frame and an oversized length refused;
   - an over-long Unix socket path refused;
   - a second pipe instance under a taken name refused
-- [ ] run gates
+- [x] run gates
 
 ### Task 21: `agterm-proto`, `agterm-host` and `agterm-core` on Windows
 
