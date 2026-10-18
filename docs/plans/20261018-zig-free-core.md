@@ -1690,10 +1690,15 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
   `crates/agterm-session/tests/lifecycle.rs`
 - Modify: `Cargo.toml` (`wmi`, Windows only, for herdr's WMI spawn; Task 2)
 
-- [ ] port herdr's autodetect and spawn: a client that finds no server starts one and waits for its endpoint; a
+- [x] port herdr's autodetect and spawn: a client that finds no server starts one and waits for its endpoint; a
       second start under the same namespace finds the first. The server's argv carries its namespace
       (`agterm-session server <socket dir>`), so the harness can tell an instance's server from any other
-- [ ] per OS:
+  - `server::spawn::connect_or_start` probes with the caller's own hello and returns that connection, so no server
+    can stop between the probe and the first request; a start that lost the namespace (exit 3) or stopped unused is
+    retried, any other exit reported; `connect_existing` finds without starting. The binary
+    `src/bin/agterm-session.rs` exists from here with `server <dir>` only (Task 26 adds the rest); the server's
+    environment drops `AGTERM_*` and `ZMX_*`, and it works in its directory's file-system root
+- [x] per OS:
   - Linux: `setsid` in `pre_exec`, stdio to null, no fork after threads;
   - macOS: `posix_spawn`, `POSIX_SPAWN_SETSID`, `responsibility_spawnattrs_setdisclaim` (read upstream's
     `Responsibility.swift` and `ZmxLaunch.swift` first);
@@ -1702,17 +1707,30 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
     job it adds `CREATE_BREAKAWAY_FROM_JOB`, and where the job refuses breakaway it starts through herdr's WMI
     `Win32_Process.Create`; when that fails too, the start fails with its reason. Never a plain retry inside the
     job: Task 2's probe shows that server dies with the job. Readiness, then lifetime, is validated
+    - found in the Win11 VM: an enclosing job that refuses breakaway (the guest tools') keeps the process without
+      an error when the inner jobs allow it, so the breakaway child is created suspended and resumed only once it is
+      in no job, else ended and started through WMI; breakaway is tried inside any job, since only the innermost
+      job's limits show. Lifetime: the server reports `server.detached.v1` (no console and no kill-on-close job;
+      Unix: session leader, macOS also responsible for itself), and a server the client started without it is
+      stopped and the start fails. Windows creates the process without handle inheritance; Linux marks every
+      descriptor past stdio close-on-exec in the child (`close_range`)
   - macOS also sets `POSIX_SPAWN_CLOEXEC_DEFAULT`, and every PTY master is close-on-exec (Task 2: a stray
     inherited master held an exiting shell in the tty drain)
-- [ ] shutdown: the server exits when it holds no session and no client, and never while a session lives
-- [ ] tests on every OS (Windows and macOS debugged in the VMs):
+  - the PTY masters come with Task 23's PTY actor
+- [x] shutdown: the server exits when it holds no session and no client, and never while a session lives
+  - `server::lifecycle::Lifecycle`: a 10 s startup grace for the first client, a 3 s idle grace after the last
+    client or session; the decision to stop is final and refuses later clients, which reconnect to a new server.
+    Task 23 counts sessions in; until then only control connections are served (api and attach refused)
+- [x] tests on every OS (Windows and macOS debugged in the VMs):
   - the launcher exits and the server lives;
   - two racing starts leave one server;
   - the empty server exits;
   - (macOS) the spawn attributes;
   - (Windows) a server launched from inside a job survives the job's close; a job that refuses breakaway still
     gets a server, through WMI; nested jobs; a WMI failure reported; the argv quoting, cwd and environment kept
-- [ ] run gates
+  - also: a held server stays past the idle grace; the server inherits no descriptor (Unix); a refused role
+    carries its welcome; the Windows job tests check a canary in the job dies at its close
+- [x] run gates
 
 ### Task 23: Pane runtime: PTY, VT state, clients, leadership, snapshot
 

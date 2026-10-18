@@ -1,6 +1,6 @@
 [package]
 name = "agterm-session"
-description = "agterm's live-session server, on herdr's architecture: its wire and its endpoint"
+description = "agterm's live-session server, on herdr's architecture: its wire, its endpoint and its lifecycle"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,8 +16,10 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-# The effective user, whom the namespace directory must belong to.
+# The effective user, whom the namespace directory must belong to; the server's session.
 rustix = { workspace = true, features = ["process"] }
+# The server's spawn: `close_range` in the Linux child, `posix_spawn` and the responsibility SPI on macOS, the reap.
+libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # The pipe's SDDL, in the UTF-16 string type interprocess takes.
@@ -25,12 +27,25 @@ widestring.workspace = true
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
     "Win32_System_Pipes",
     "Win32_System_Threading",
 ] }
+# The server's start from inside a job that refuses breakaway.
+wmi.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+# The lifecycle tests' jobs.
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
 
 [lints]
 workspace = true
