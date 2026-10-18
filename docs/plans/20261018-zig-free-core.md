@@ -680,6 +680,28 @@ below are rustty-vt's (`crates/rustty-vt/src/`).
      - `dcs`, `clipboard`, `paste` and `input/paste` (from the parser task and Task 14), the Kitty clipboard and DnD modules and
        the `snapshot::io` replacement are Task 11's.
   4. Task 14 keeps the key and mouse encoders and focus. Paste moved to Task 11.
+- **Owners.** Each kept module has one owner: the first task in file order whose code uses it. That task's Files
+  list names it, and later tasks only use it. Beyond the modules the corrections above place:
+  - Task 4: `build_options` and `options`, which `sys` reads, with only the constants the kept code branches on
+    (Adapted, above); `sys` itself with its raw allocator. Leaf modules: util `quirks`; datastruct `array_list`,
+    `limited_allocator`; os `page_allocator` (with `mach` and `windows`); lib `allocator`; zigstd `arena_allocator`,
+    `array_hash_map`, `atomic`, `wyhash`; render-types `term_size`'s offsets (`Offset`, `OffsetSlice`, `OffsetBuf`,
+    `IntFromBase`).
+  - Task 5: rustty-vt's `utf8_decoder` and the root's `unicode` re-exports; leaf crates unicode and simd.
+  - Task 7: identity, which the terminfo entry reads first, with Ghostty's identity restored; leaf crate terminfo.
+  - Task 8: `protocol_int` (Kitty graphics command numbers), and `log_capture`, the test helper over `tracing` that
+    Tasks 8 to 14 use. Leaf modules: datastruct `segmented_list`, `comptime_int_set`; os `string_encoding`; lib
+    `enum`, `parse_int`, `target`; zigstd `fmt`.
+  - Task 9: leaf modules util `fastmem`, `tripwire`; datastruct `intrusive_linked_list`, `untouched_pool`; lib
+    `packed`; zigstd `memory_pool`, `heap`, `tracking_allocator` (tests); render-types `term_size`'s cell-count types
+    (`size.rs`).
+  - Task 10: `sys`'s PNG decode, as `png` in place of the `decode_png` hook. Leaf modules: datastruct `comparison`;
+    os `file`, `path`, `tempdir`.
+  - Task 11: `sys`'s secure-random fill (`random_secure_fill`, `io_native`, `io_failing`) without the global hook,
+    over os `file`'s CSPRNG (`random_secure`, `random_secure_threaded` on Windows), used by the clipboard grants,
+    paste and `Terminal`; the `kitty/graphics` aggregate, which re-exports execution. Task 10's Kitty modules import
+    their siblings directly.
+  - Task 15: `options`' version constants, for `version`.
 - **Public functions of `agterm-ghostty-vt`.** There are 105 outside `sys`, plus `sys::install` and
   `sys::installed`. `agterm-term` calls 100 of the 105 and `sys::install`. It never calls `Key::index`,
   `paste_is_safe`, `Search::status`, `Terminal::title` or `Terminal::pwd`; Task 15 exports those only if the
@@ -930,16 +952,23 @@ below are rustty-vt's (`crates/rustty-vt/src/`).
 ### Task 4: VT memory core: page allocator, offset buffers, bitmap allocator, pools, lists
 
 **Files:**
-- Create: `crates/agterm-vt/src/mem/*.rs`, `crates/agterm-vt/src/datastruct/*.rs`, `crates/agterm-vt/src/os/*.rs`
+- Create: `crates/agterm-vt/src/mem/*.rs`, `crates/agterm-vt/src/datastruct/*.rs`, `crates/agterm-vt/src/os/*.rs`,
+  `crates/agterm-vt/src/{sys,build_options,options}.rs`
 
 - [ ] port the page allocator from rustty-os, with its Linux, macOS (`mmap`) and Windows (`VirtualAlloc`) forms, all
       in this change
 - [ ] port the following behind safe types, with every `unsafe` block carrying its own `// SAFETY:` and one
       operation:
   - from rustty-vt: `alloc`, `bitmap_allocator`, `ref_counted_set`, `hash_map`, `zig_list` (`mem` is cut with page
-    compression, Task 1), and `sys`'s global raw allocator, which `alloc` uses;
-  - from rustty-render-types: `OffsetBuf` and what it needs;
-  - from rustty-datastruct and rustty-util: what those need
+    compression, Task 1), and `sys` with its global raw allocator, which `alloc` uses (its PNG decode comes with
+    Task 10, its secure-random fill with Task 11);
+  - from rustty-vt: `build_options` and `options`, which `sys` reads (`options::ARTIFACT`,
+    `build_options::Artifact`), cut to the constants the kept code branches on, with no feature flags (Task 1 >
+    Adapted). Later tasks drop a branch on an always-on feature rather than add a flag; the version constants come
+    with Task 15;
+  - from rustty-render-types: `term_size`'s offsets (`Offset`, `OffsetSlice`, `OffsetBuf`, `IntFromBase`);
+  - the leaf modules those need (Task 1 > Owners): util `quirks`; datastruct `array_list`, `limited_allocator`; lib
+    `allocator`; zigstd `arena_allocator`, `array_hash_map`, `atomic`, `wyhash`
 - [ ] replace the zigstd and allocator-api2 shims with `std` where the semantics allow. Note each shim that remains,
       with its reason
 - [ ] port their rustty tests
@@ -951,7 +980,8 @@ below are rustty-vt's (`crates/rustty-vt/src/`).
 ### Task 5: Unicode lookups, UTF-8 decoder, scalar SIMD paths
 
 **Files:**
-- Create: `crates/agterm-vt/src/unicode/**`, `crates/agterm-vt/src/simd/**`
+- Create: `crates/agterm-vt/src/unicode/**`, `crates/agterm-vt/src/simd/**`,
+  `crates/agterm-vt/src/terminal/utf8_decoder.rs` (rustty-vt's `utf8_decoder`)
 
 - [ ] port the props, grapheme-break, case-folding and symbol lookups with rustty's tables, as rustty dumped them
       (`12752b2ac`). Task 6 regenerates them at the pin
@@ -986,6 +1016,8 @@ below are rustty-vt's (`crates/rustty-vt/src/`).
 
 - [ ] port rustty-terminfo's source model and encoder, and the Ghostty entry under Ghostty's names (`xterm-ghostty`,
       `ghostty`), with the drift of `src/terminfo`
+- [ ] port rustty-identity, which the entry reads first (Task 1 > Owners), with Ghostty's identity restored:
+      Ghostty's names and strings in place of rustty's profile
 - [ ] port the XTGETTCAP map built from the same entry (used by Task 11's handler)
 - [ ] `scripts/gen-ghostty-terminfo.sh [--check]` writes the checked-in source; add `--check` to CI
 - [ ] capture today's entry from the Zig-built prefix once, as a fixture (`infocmp -x -A <prefix>/share/terminfo
@@ -1000,8 +1032,11 @@ Before the page group (Task 1's graph): `style` uses `sgr`, and nothing here use
 
 **Files:**
 - Create: `crates/agterm-vt/src/terminal/{parser,parse_table,stream,stream_continuation,csi,sgr,charsets,modes,
-  ansi,device_attributes,device_status,size_report,apc,color,x11_color,fraction,mouse}.rs`,
-  `crates/agterm-vt/src/terminal/osc/**`, `crates/agterm-vt/src/terminal/kitty/{graphics_command,color,key}.rs`
+  ansi,device_attributes,device_status,size_report,apc,color,x11_color,fraction,protocol_int,mouse}.rs`,
+  `crates/agterm-vt/src/terminal/osc/**`, `crates/agterm-vt/src/terminal/kitty/{graphics_command,color,key}.rs`,
+  `crates/agterm-vt/src/log_capture.rs` (test-only)
+- Leaf modules it is first to use (Task 1 > Owners): datastruct `segmented_list`, `comptime_int_set`; os
+  `string_encoding`; lib `enum`, `parse_int`, `target`; zigstd `fmt`
 
 - [ ] port the parser state machine and the stream dispatch, generic over its handler, without the tmux and
       glyph-protocol branches
@@ -1010,7 +1045,10 @@ Before the page group (Task 1's graph): `style` uses `sgr`, and nothing here use
       parser, imported directly by `apc` (not through the `kitty/graphics` aggregate). `program_status` decodes
       base64 with Task 5's decoder, since rustty took its decoder from the cut glyph code
 - [ ] port what the group uses beside them: the colors (`color`, `x11_color` with its `rgb.txt`, `fraction`), the
-      mouse shape, Kitty's OSC 21 colors and its keyboard flags
+      mouse shape, Kitty's OSC 21 colors and its keyboard flags, and `protocol_int` (the digit-separator filter the
+      Kitty graphics command parser runs before parsing a number)
+- [ ] port `log_capture` as a test-only helper over `tracing` (Task 1 > Verdicts): rustty's tests assert on log
+      lines, here and in Tasks 9 to 14
 - [ ] absorb the drift for `stream.zig`, `osc/parsers/*`, `modes.zig`, `csi.zig`, `device_status.zig` and
       `size_report.zig`
 - [ ] port the stream, OSC, parser, SGR, modes, color and graphics-command tests
@@ -1021,7 +1059,10 @@ Before the page group (Task 1's graph): `style` uses `sgr`, and nothing here use
 
 **Files:**
 - Create: `crates/agterm-vt/src/terminal/page*.rs`, `crates/agterm-vt/src/terminal/page_list/**`,
-  `crates/agterm-vt/src/terminal/{style,hyperlink,point,size,fastprint}.rs`
+  `crates/agterm-vt/src/terminal/{style,hyperlink,point,size,fastprint}.rs` (`size`: render-types `term_size`'s
+  cell-count types; its offsets came with Task 4)
+- Leaf modules it is first to use (Task 1 > Owners): util `fastmem`, `tripwire`; datastruct `intrusive_linked_list`,
+  `untouched_pool`; lib `packed`; zigstd `memory_pool`, `heap`, `tracking_allocator` (tests)
 
 - [ ] port `page_impl`/`page` (cells, rows, grapheme map, style set, hyperlink set, string storage) over Task 4's
       core, safe above it
@@ -1042,7 +1083,10 @@ Before the page group (Task 1's graph): `style` uses `sgr`, and nothing here use
 - Create: `crates/agterm-vt/src/terminal/{screen,screen_set,tabstops,cursor,selection,selection_codepoints,
   highlight}.rs`, `crates/agterm-vt/src/terminal/screen/**`, `crates/agterm-vt/src/terminal/formatter/**`,
   `crates/agterm-vt/src/terminal/kitty/{graphics_storage,graphics_image,graphics_pixel,graphics_unicode,
-  graphics_render,graphics_animation,windows}.rs`, the os support it reads files through (`file`, `path`, `tempdir`)
+  graphics_render,graphics_animation,windows}.rs`, `crates/agterm-vt/src/terminal/kitty/graphics_storage/**`, the
+  os support it reads files through (`file`, `path`, `tempdir`)
+- Modify: `crates/agterm-vt/src/sys.rs` (PNG decode)
+- Leaf modules it is first to use (Task 1 > Owners): datastruct `comparison`, and the os ones above
 
 The screen-level part of the component Task 1 found, by its item extractions (Technical Details > `agterm-vt` >
 "What Task 1 settles"): nothing here takes a `Terminal`.
@@ -1056,7 +1100,8 @@ The screen-level part of the component Task 1 found, by its item extractions (Te
       formatter option, with tests
 - [ ] port the selection operations (cell ranges, word, line, all, adjust)
 - [ ] Kitty images: loading (direct, file, temp file and shared memory, with the POSIX and Windows forms of what it
-      reads), zlib through `miniz_oxide`, PNG through `png`, the swizzles in Rust, the drift for
+      reads), zlib through `miniz_oxide`, PNG through `png` (in `sys`, in place of its `decode_png` hook), the
+      swizzles in Rust, the drift for
       `kitty/graphics_image.zig`
 - [ ] Kitty storage: the placement-id namespace, a relative placement's parent key and H=/V= offsets, eviction
       (`evict_image`, `evict_image_except`, `delete_if_unused`) and animation. Placement geometry (`cell_offset`,
@@ -1078,7 +1123,9 @@ The screen-level part of the component Task 1 found, by its item extractions (Te
 - Create: `crates/agterm-vt/src/terminal/terminal.rs`, `crates/agterm-vt/src/terminal/terminal/**`,
   `crates/agterm-vt/src/terminal/stream_terminal/**`, `crates/agterm-vt/src/terminal/{effects,clipboard,dcs,paste,
   fixed_writer}.rs`, `crates/agterm-vt/src/input/paste.rs`, `crates/agterm-vt/src/terminal/kitty/{graphics_exec,
-  clipboard*,dnd*}.rs`, a writer support module in place of rustty's `snapshot::io`
+  clipboard*,dnd*}.rs`, `crates/agterm-vt/src/terminal/kitty/graphics.rs` (the aggregate, which re-exports
+  execution), a writer support module in place of rustty's `snapshot::io`
+- Modify: `crates/agterm-vt/src/sys.rs` (secure-random fill), Task 10's os `file` (its CSPRNG)
 
 The terminal-level part of the component Task 1 found, with what Task 10 left for it.
 
@@ -1093,7 +1140,11 @@ The terminal-level part of the component Task 1 found, with what Task 10 left fo
 - [ ] port paste framing and safety (`paste`, `input/paste`; moved from Task 14), with the drift for
       `input/paste.zig` and `terminal/paste.zig`
 - [ ] port Kitty command execution with the storage's command deletion (`clear_screen`, `delete` and their helpers),
-      and the kept Kitty modules: the 5522 clipboard with its grants, DnD (OSC 72)
+      and the kept Kitty modules: the 5522 clipboard with its grants, DnD (OSC 72), and the `kitty/graphics`
+      aggregate. Task 10's Kitty modules import their siblings directly
+- [ ] port `sys`'s secure-random fill (`random_secure_fill`, `io_native`, `io_failing`) without its global
+      `random_secure` hook, over the OS CSPRNG in os `file` (`random_secure`; `random_secure_threaded` on Windows),
+      which the clipboard grants, paste and `Terminal` use, with its Linux, macOS and Windows forms in this change
 - [ ] port `TerminalFormatter` over Task 10's formatters
 - [ ] restore Ghostty's identity wherever rustty renamed it
 - [ ] port the terminal, `stream_terminal/tests/*`, dcs, paste and Kitty execution tests, and the tests Task 10 moved
@@ -1153,7 +1204,8 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
   - `terminal/effects.rs` plumbing, wherever the trait needs it;
   - `kitty_graphics.rs` `placement_render_info`;
   - the getters (`cursor_at_prompt`, `viewport_top`, `viewport_at_bottom`, `total_rows`, `hyperlink_uri`);
-  - `reset`, `set_mode_default`, the Kitty media and storage-limit settings, `version`
+  - `reset`, `set_mode_default`, the Kitty media and storage-limit settings, `version` (with `options`' version
+    constants over Task 7's identity)
 - [ ] export the surface (Technical Details, completed by Task 1) and keep everything else crate-private. Handles are
       `Send` and not `Sync`
 - [ ] port the compile-fail doc tests from `agterm-ghostty-vt`'s `lib.rs`
