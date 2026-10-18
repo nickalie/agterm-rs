@@ -693,6 +693,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs its script with the POSIX shell /bin/sh, which Windows has not"
+    )]
     fn the_process_runner_captures_output_and_bounds_the_wait() {
         let runner = ProcessRemoteRunner;
         let argv = |line: &str| vec!["/bin/sh".to_owned(), "-c".to_owned(), line.to_owned()];

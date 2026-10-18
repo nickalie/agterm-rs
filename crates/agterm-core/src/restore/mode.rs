@@ -219,10 +219,17 @@ mod tests {
         );
         fs::write(&zmx, "#!/bin/sh\n").unwrap();
         assert_eq!(probe.rejection(), Some(LiveRejection::ExecutableUnavailable));
+        // what makes it executable: its mode on Unix, its extension on Windows
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&zmx, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            let exe = zmx.with_extension("exe");
+            fs::rename(&zmx, &exe).unwrap();
+            probe.executable = exe;
         }
         assert_eq!(probe.rejection(), Some(LiveRejection::UnsupportedLoginShell));
         probe.login_shell = Some("/usr/bin/zsh".to_owned());

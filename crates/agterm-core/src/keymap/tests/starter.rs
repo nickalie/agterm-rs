@@ -204,6 +204,10 @@ fn run_editor_command(path: &str, home: &Path, vars: &[(&str, &str)]) -> bool {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs its script with the POSIX shell /bin/sh, which Windows has not"
+)]
 fn the_editor_command_resolves_an_exported_editor_and_preserves_the_path() {
     let home = tempfile::tempdir().unwrap();
     let (editor, got) = recorder(home.path(), "editor");
@@ -218,6 +222,10 @@ fn the_editor_command_resolves_an_exported_editor_and_preserves_the_path() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs its script with the POSIX shell /bin/sh, which Windows has not"
+)]
 fn the_editor_command_prefers_visual_over_editor() {
     let home = tempfile::tempdir().unwrap();
     let (visual, visual_got) = recorder(home.path(), "visual");
@@ -233,6 +241,10 @@ fn the_editor_command_prefers_visual_over_editor() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs its script with the POSIX shell /bin/sh, which Windows has not"
+)]
 fn the_editor_command_falls_back_to_sh_without_a_shell() {
     let home = tempfile::tempdir().unwrap();
     let (editor, got) = recorder(home.path(), "editor");

@@ -309,7 +309,7 @@ fn valid_escapes(raw: &str) -> bool {
 }
 
 /// Decodes percent-escapes; `None` when the result is not UTF-8.
-fn percent_decode(text: &str) -> Option<String> {
+pub(crate) fn percent_decode(text: &str) -> Option<String> {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -429,7 +429,9 @@ mod tests {
         }
     }
 
-    /// The classifier never resolves symlinks: a link inside a symlinked directory keeps the link's path.
+    /// The classifier never resolves symlinks: a link inside a symlinked directory keeps the link's path. Unix only: a
+    /// Windows temporary path (`C:\...`) is not a `file://` path as written, and its symlink needs a privilege.
+    #[cfg(unix)]
     #[test]
     fn reveal_does_not_resolve_symlinks() -> std::io::Result<()> {
         let base = tempfile::tempdir()?;

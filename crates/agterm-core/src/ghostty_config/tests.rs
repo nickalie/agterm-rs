@@ -788,11 +788,14 @@ fn middle_click_takes_ghostty_1_4s_clipboard_paste() {
 
 #[test]
 fn copy_on_select_key() {
-    assert_eq!(
-        GhosttyConfig::default().copy_on_select,
-        CopyOnSelect::Primary,
-        "Ghostty's Linux default"
-    );
+    // Ghostty's default: the selection clipboard on Linux, nothing elsewhere; an old `true` is the selection
+    // clipboard on Linux and the system clipboard elsewhere (`compatCopyOnSelect`)
+    let (default, compat_true) = if cfg!(target_os = "linux") {
+        (CopyOnSelect::Primary, CopyOnSelect::Primary)
+    } else {
+        (CopyOnSelect::None, CopyOnSelect::Clipboard)
+    };
+    assert_eq!(GhosttyConfig::default().copy_on_select, default);
     for (value, copy) in [
         ("none", CopyOnSelect::None),
         ("primary", CopyOnSelect::Primary),
@@ -801,21 +804,23 @@ fn copy_on_select_key() {
     ] {
         assert_eq!(load(&format!("copy-on-select = {value}\n")).config.copy_on_select, copy);
     }
-    // the values before Ghostty 1.4, through `compatCopyOnSelect`: `true` is `primary` on Linux, `false` `none`
+    // the values before Ghostty 1.4, through `compatCopyOnSelect`: `true` as above, `false` `none`
     assert_eq!(count("copy-on-select = true\ncopy-on-select = false\n"), 0);
     assert_eq!(
-        load("copy-on-select = clipboard\ncopy-on-select = true\n")
+        load("copy-on-select = both\ncopy-on-select = true\n")
             .config
             .copy_on_select,
-        CopyOnSelect::Primary
+        compat_true
     );
     assert_eq!(
         load("copy-on-select = false\n").config.copy_on_select,
         CopyOnSelect::None
     );
     assert_eq!(
-        load("copy-on-select = false\ncopy-on-select =\n").config.copy_on_select,
-        CopyOnSelect::Primary,
+        load("copy-on-select = clipboard\ncopy-on-select =\n")
+            .config
+            .copy_on_select,
+        default,
         "an empty value restores the default"
     );
     assert_eq!(
@@ -912,6 +917,23 @@ fn env_is_a_map_and_input_a_list_of_sources() {
         "the tag is trimmed of spaces and tabs (`parseTaggedUnion`)"
     );
     assert!(launch_of("input = x\ninput =\n").input.is_empty());
+}
+
+#[test]
+fn an_input_path_that_is_not_utf8_follows_the_os() {
+    let input = launch_of("input = path:/tmp/a\\xffb\n").input;
+    // a Unix path is bytes, kept as they decoded
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        assert_eq!(
+            input,
+            [InputSource::Path(std::ffi::OsStr::from_bytes(b"/tmp/a\xffb").into())]
+        );
+    }
+    // a Windows path is Unicode: the ill-formed byte becomes U+FFFD
+    #[cfg(windows)]
+    assert_eq!(input, [InputSource::Path("/tmp/a\u{FFFD}b".into())]);
 }
 
 #[test]
@@ -1296,6 +1318,10 @@ fn the_count_takes_the_light_side_of_a_dual_theme() -> TestResult {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "Ghostty reads a theme value with a ':' as a light:/dark: pair, so a Windows drive path is no bare theme path"
+)]
 fn theme_paths_absolute_or_bare_names_only() -> TestResult {
     let dir = tempfile::tempdir()?;
     let theme = write(&dir.path().join("mine"), "palette = 1=#010101\n")?;
@@ -1323,6 +1349,10 @@ fn theme_paths_absolute_or_bare_names_only() -> TestResult {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "Ghostty reads a theme value with a ':' as a light:/dark: pair, so a Windows drive path is no bare theme path"
+)]
 fn theme_files_go_through_the_same_parser() -> TestResult {
     let dir = tempfile::tempdir()?;
     let theme = write(
@@ -1338,6 +1368,10 @@ fn theme_files_go_through_the_same_parser() -> TestResult {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "the XDG base directories as Unix paths; the Windows locations belong to the GPUI-on-Windows plan"
+)]
 fn theme_dirs_are_the_users_then_the_bundled_ones() {
     let env = paths::MapEnv::new().with("HOME", "/home/u");
     assert_eq!(

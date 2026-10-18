@@ -193,6 +193,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs its script with the POSIX shell /bin/sh, which Windows has not"
+    )]
     fn captured_arguments_survive_the_shell_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let result = dir.path().join("argv");
@@ -209,6 +213,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs its script with the POSIX shell /bin/sh, which Windows has not"
+    )]
     fn a_durable_shell_line_keeps_its_operators_and_word_parsing() {
         let dir = tempfile::tempdir().unwrap();
         let result = dir.path().join("shell-line");

@@ -531,28 +531,52 @@ fn write_body(store: &AppStore, session: Uuid, pane: &PaneMetrics) -> bool {
 /// staging file a crash left behind is replaced.
 fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
-    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
     if let Some(dir) = path.parent() {
-        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+        create_private_dir(dir)?;
         let metadata = std::fs::symlink_metadata(dir)?;
         if !metadata.is_dir() {
             return Err(std::io::Error::other("the hud body directory is not a directory"));
         }
-        if metadata.permissions().mode() & 0o077 != 0 {
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-        }
+        // Windows has no mode to close: the inherited ACL governs (`create_private_dir`)
+        #[cfg(unix)]
+        close_private_dir(dir, &metadata)?;
     }
     match std::fs::remove_file(path) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
         _ => {}
     }
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)?;
-    file.write_all(contents)
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)?.write_all(contents)
+}
+
+/// Creates `dir` and its parents, the last one owner-only (0700).
+#[cfg(unix)]
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt as _;
+
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)
+}
+
+/// Creates `dir` and its parents. Windows has no mode bits: the directory inherits the ACL of the state directory it
+/// lies in, which under the user's profile grants only the user, SYSTEM and the administrators.
+#[cfg(windows)]
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::DirBuilder::new().recursive(true).create(dir)
+}
+
+/// Closes an existing `dir` that its group or others can reach back to 0700.
+#[cfg(unix)]
+fn close_private_dir(dir: &Path, metadata: &std::fs::Metadata) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if metadata.permissions().mode() & 0o077 != 0 {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 // MARK: - the commands

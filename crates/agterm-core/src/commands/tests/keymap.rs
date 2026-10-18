@@ -231,6 +231,10 @@ fn run_without_a_launcher_is_unavailable() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "a custom command runs in its session's directory, which the fixture puts at /tmp, a path Windows has not"
+)]
 fn run_starts_the_expanded_command_with_the_sessions_context() {
     let mut host = Host::new(2);
     host.write(
@@ -277,6 +281,10 @@ fn run_starts_the_expanded_command_with_the_sessions_context() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "a custom command runs in its session's directory, which the fixture puts at /tmp, a path Windows has not"
+)]
 fn a_failing_run_banners_once_it_exits() {
     let mut host = Host::new(1);
     host.write("keymap.conf", "command \"boom\" --error-hud exit 3\n");
@@ -313,6 +321,10 @@ fn a_failing_run_banners_once_it_exits() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "a custom command runs in its session's directory, which the fixture puts at /tmp, a path Windows has not"
+)]
 fn a_vanished_directory_or_a_launch_error_refuses_the_run() {
     let mut host = Host::new(1);
     host.write("keymap.conf", "command \"mark\" true\n");
@@ -324,6 +336,10 @@ fn a_vanished_directory_or_a_launch_error_refuses_the_run() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "a custom command runs in its session's directory, which the fixture puts at /tmp, a path Windows has not"
+)]
 fn a_run_counts_toward_usage_only_with_persistence() {
     // in-memory cores write nothing; the store itself is covered in `keymap::usage`
     let mut host = Host::new(1);
@@ -480,6 +496,10 @@ fn typed_in(owner: SurfaceOwner, selection: Option<&str>) -> TypingSurface {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "a custom command runs in its session's directory, which the fixture puts at /tmp, a path Windows has not"
+)]
 fn a_chord_runs_for_the_terminal_typed_in_not_the_selected_session() {
     // a zoomed session shows and takes the keyboard without being selected: the chord is its own
     let (mut host, command, typed) = chord_host();
@@ -512,6 +532,10 @@ fn a_chord_runs_for_the_terminal_typed_in_not_the_selected_session() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "a custom command runs in its session's directory, which the fixture puts at /tmp, a path Windows has not"
+)]
 fn an_overlay_chord_reads_the_overlays_selection_and_names_the_pane_underneath() {
     let (mut host, command, typed) = chord_host();
     let window = host.fixture.window;
@@ -575,6 +599,10 @@ fn an_overlay_chord_reads_the_overlays_selection_and_names_the_pane_underneath()
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "a custom command runs in its session's directory, which the fixture puts at /tmp, a path Windows has not"
+)]
 fn a_chord_off_any_session_terminal_runs_for_the_active_session_else_sessionless() {
     let (mut host, command, typed) = chord_host();
     let window = host.fixture.window;

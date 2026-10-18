@@ -262,6 +262,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the XDG base directories as Unix paths; the Windows locations belong to the GPUI-on-Windows plan"
+    )]
     fn hud_bodies_go_to_the_overridden_state_dir_else_the_runtime_dir_else_the_state_dir() {
         let runtime = home("/home/u").with("XDG_RUNTIME_DIR", "/run/user/1000");
         assert_eq!(hud_body_dir(&runtime), Path::new("/run/user/1000/agterm/hud"));
@@ -278,6 +282,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the XDG base directories as Unix paths; the Windows locations belong to the GPUI-on-Windows plan"
+    )]
     fn the_global_ghostty_config_follows_the_xdg_config_home() {
         assert_eq!(
             global_ghostty_config_path(&home("/home/u")).as_deref(),
@@ -301,6 +309,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the XDG base directories as Unix paths; the Windows locations belong to the GPUI-on-Windows plan"
+    )]
     fn xdg_data_home_set_is_used() {
         let env = home("/home/u").with("XDG_DATA_HOME", "/data");
         assert_eq!(state_dir(&env), Path::new("/data/agterm"));
@@ -322,6 +334,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the XDG base directories as Unix paths; the Windows locations belong to the GPUI-on-Windows plan"
+    )]
     fn state_dir_override_wins_and_empty_is_unset() {
         let env = home("/home/u").with("XDG_DATA_HOME", "/data");
         assert_eq!(

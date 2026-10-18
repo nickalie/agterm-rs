@@ -124,12 +124,15 @@ pub fn decide(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> HtmlNavig
     }
 }
 
-/// A file URL's path, percent-decoded as Foundation's `URL.path` gives it; the raw path when it does not decode.
+/// A file URL's path, percent-decoded as Foundation's `URL.path` gives it: the OS path it names, else (a URL
+/// path no local path spells, such as a drive-less one on Windows) its percent-decoded path, and the raw path when
+/// that does not decode.
 #[must_use]
 pub fn file_path(url: &Url) -> String {
     url.to_file_path()
         .ok()
         .and_then(|path| path.to_str().map(str::to_owned))
+        .or_else(|| crate::link_policy::percent_decode(url.path()))
         .unwrap_or_else(|| url.path().to_owned())
 }
 
@@ -222,6 +225,9 @@ mod tests {
         }
         let spaced = Url::parse("file:///tmp/a/my%20page.html").unwrap();
         assert_eq!(file_path(&spaced), "/tmp/a/my page.html");
+        // a path that decodes to no UTF-8 stays as written
+        let raw = Url::parse("file:///tmp/a/%FF.html").unwrap();
+        assert_eq!(file_path(&raw), "/tmp/a/%FF.html");
     }
 
     /// Upstream's `HtmlOverlayTests.urlPagePolicy`: a URL page's main frame is pinned to its origin.

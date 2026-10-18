@@ -271,10 +271,11 @@ A change to the WPE or gir pins also runs `scripts/gen-wpe-bindings.sh --check`,
   container, on its lavapipe, held by `rust-passing.txt`, once per login shell (`conformance`, a matrix: bash, fish
   and zsh), each with `--must-pass live-any-shell`, the zsh one with `--must-pass live-sessions` too; the bash one runs
   the app's process tests with the overlays on first.
-- `cross-platform.yml`: the crates that build on all three OSes (`agterm-vt` and `agterm-session` so far), on
-  Ubuntu, macOS and Windows runners: format, clippy and `cargo test` (`crates`, a matrix), then the VT memory core's
-  unit tests under Miri on a nightly pinned by date (`miri`). It also runs on pushes to `ci/**` branches, to check a
-  macOS or Windows form without a PR.
+- `cross-platform.yml`: the crates that build on all three OSes (`agterm-vt`, `agterm-session`, `agterm-proto`,
+  `agterm-host` and `agterm-core` so far; `agterm-server` and `agterm-ctl` wait for the control server's Windows
+  form), on Ubuntu, macOS and Windows runners: format, clippy and `cargo test` (`crates`, a matrix), then the VT
+  memory core's unit tests under Miri on a nightly pinned by date (`miri`). It also runs on pushes to `ci/**`
+  branches, to check a macOS or Windows form without a PR.
 - `conformance-gate.yml`: the suite's self-tests and catalog coverage gate.
 - `reference-macos.yml`, `spike-macos.yml`: the suite against upstream's macOS release.
 

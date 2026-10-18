@@ -142,8 +142,6 @@ fn parse(text: &str) -> Option<Uuid> {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
-
     use super::*;
 
     #[test]
@@ -227,9 +225,13 @@ mod tests {
         assert!(file.is_dir());
     }
 
-    /// A lookup that fails for lack of search permission is not a missing profile.
+    /// A lookup that fails for lack of search permission is not a missing profile. Unix only: a Windows directory has
+    /// no search bit to take away, only an ACL.
+    #[cfg(unix)]
     #[test]
     fn a_profile_behind_an_unsearchable_directory_is_an_error_not_a_missing_profile() {
+        use std::os::unix::fs::PermissionsExt as _;
+
         let dir = tempfile::tempdir().unwrap();
         let profile = BrowserProfile::new(dir.path());
         let id = profile.identifier().unwrap();
