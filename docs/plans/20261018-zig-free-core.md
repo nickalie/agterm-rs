@@ -1201,7 +1201,10 @@ probes' sources in `docs/spikes/20261018-session-server-probes.md`). Paths below
       folding list; `vt.zig`'s SIMD-against-scalar differential holds the scalar lane to the standard library's
       lossy decode, which substitutes maximal subparts too; no `unsafe` in these modules, so the Miri filter stays
       the memory core's)
-- [x] run gates - must pass before task 6
+- [x] run gates - must pass before task 6 (all green except two load-dependent `agterm-gpui` tests that
+      `agterm-vt` cannot reach, each in one run at load average 27-51 and green in the other or alone: the
+      html_overlay frame-rate test, 15.7 fps, and the quit test's live-session survival; CI run 39119593502 green on
+      ubuntu-26.04, macos-26, windows-2025 and miri)
 
 ### Task 6: Unicode table generator in Rust (uucode port)
 
