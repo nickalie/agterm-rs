@@ -14,8 +14,8 @@
 //! reported otherwise; once ready, the server this call started must report itself detached
 //! ([`super::CAPABILITY_DETACHED`]) or it is stopped and the start fails, since it would end with its launcher; the
 //! child's environment drops the variables of the live session the launcher may run in (`AGTERM_*`, `ZMX_*`, the
-//! isolation rule of `docs/plans/20261018-zig-free-core.md`); and the spawn itself is per OS (the `linux`, `macos` and
-//! `windows` modules).
+//! isolation rule of CLAUDE.md > Never touch the user's running agterm); and the spawn itself is per OS (the `linux`,
+//! `macos` and `windows` modules).
 
 #[cfg(all(unix, not(target_os = "macos")))]
 mod linux;

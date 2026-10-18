@@ -15,7 +15,6 @@ license = "MIT"
 agterm-proto = { path = "crates/agterm-proto" }
 agterm-ghostty-vt-sys = { path = "crates/agterm-ghostty-vt-sys" }
 agterm-ghostty-vt = { path = "crates/agterm-ghostty-vt" }
-agterm-vt = { path = "crates/agterm-vt" }
 agterm-host = { path = "crates/agterm-host" }
 agterm-core = { path = "crates/agterm-core" }
 agterm-server = { path = "crates/agterm-server" }
@@ -30,18 +29,15 @@ agterm-wpe = { path = "crates/agterm-wpe" }
 async-channel = "2"
 base64 = "0.23"
 bitflags = "2"
-# agterm-vt's page memory: every value stored in a page's single buffer is `Pod`, read and written through checked
-# casts, so the offset-based structures over it need no `unsafe`.
-bytemuck = "1.25"
 clap = { version = "4.6", features = ["derive"] }
 libc = "0.2"
 # Windows APIs, features per crate: agterm-session's endpoint (the named pipe's security descriptor and its
-# server-process check) and agterm-vt's page allocator (`VirtualAlloc`/`VirtualFree`).
+# server-process check).
 windows-sys = "0.61"
 # The UTF-16 strings interprocess takes a named pipe's security descriptor in (agterm-session, Windows).
 widestring = "1.2"
 # agterm-session's server start from inside a Windows job that refuses breakaway: WMI's `Win32_Process.Create`, as
-# herdr starts its server (Task 2 of docs/plans/20261018-zig-free-core.md). No chrono or time: no WMI dates are read.
+# herdr starts its server (docs/spikes/20261018-session-server.md). No chrono or time: no WMI dates are read.
 wmi = { version = "0.18.4", default-features = false }
 # agterm-wpe's worker transport (socket pairs, SCM_RIGHTS, memfds), the version wayland and calloop already link.
 rustix = "1.1"
@@ -55,8 +51,8 @@ portable-pty = "0.9"
 # look-arounds (Oniguruma's, in Ghostty) need a backtracking engine; fancy-regex is the regex crate's own one.
 fancy-regex = "0.19"
 serde = { version = "1", features = ["derive"] }
-# agterm-session's wire (Task 2 of docs/plans/20261018-zig-free-core.md: in place of herdr's bincode, whose last
-# release is a tombstone). `use-std` without the default `heapless-cas`: messages own their buffers.
+# agterm-session's wire (docs/spikes/20261018-session-server.md: in place of herdr's bincode, whose last release
+# is a tombstone). `use-std` without the default `heapless-cas`: messages own their buffers.
 postcard = { version = "1.1", default-features = false, features = ["use-std"] }
 # agterm-session's endpoint, as herdr's: a Unix domain socket, a named pipe on Windows.
 interprocess = "2.4"

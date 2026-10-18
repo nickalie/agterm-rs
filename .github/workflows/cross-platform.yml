@@ -1,9 +1,10 @@
 # The crates that build on all three OSes, checked on Linux, macOS and Windows alike: format, strict clippy and the
-# tests of each crate in PACKAGES, then the VT memory core's tests under Miri. Each Zig-free-core task that makes a
-# crate cross-platform adds it to PACKAGES and its generator checks as steps of the `crates` job. The rest of the
-# workspace (GPUI, WPE, libghostty-vt) builds on Linux only and stays in rust-linux.yml. agterm-server (AF_UNIX and
-# `flock`) and agterm-ctl (an AF_UNIX client, tested against the server) are `any` crates that stay out until the
-# control server has its Windows form, which belongs to the GPUI-on-Windows plan.
+# tests of each crate in PACKAGES. Each task that makes a crate cross-platform adds it to PACKAGES and its generator
+# checks as steps of the `crates` job. No Miri job: it ran the Rust VT port's memory core (page buffers, its
+# allocators), which left this branch with the port (branch `rust-vt-port`). The rest of the workspace (GPUI, WPE,
+# libghostty-vt) builds on Linux only and stays in rust-linux.yml. agterm-server (AF_UNIX and `flock`) and agterm-ctl
+# (an AF_UNIX client, tested against the server) are `any` crates that stay out until the control server has its
+# Windows form, which belongs to the GPUI-on-Windows plan.
 # Pushes to a `ci/**` branch run it too, so a macOS or Windows form can be checked on the runners without a PR.
 name: cross-platform
 
@@ -22,7 +23,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   # `-p` per crate; word-split by bash, which every step runs in (Git Bash on Windows)
-  PACKAGES: -p agterm-vt -p agterm-session -p agterm-proto -p agterm-host -p agterm-core
+  PACKAGES: -p agterm-session -p agterm-proto -p agterm-host -p agterm-core
 
 defaults:
   run:
@@ -47,31 +48,3 @@ jobs:
         run: cargo clippy --locked $PACKAGES --all-targets --all-features -- -D warnings
       - name: test
         run: cargo test --locked $PACKAGES --all-features
-      # agterm-vt's Unicode tables are what its generator writes from the pinned uucode's UCD (fetched and checked by
-      # sha256), on every OS
-      - name: Unicode tables (gen-vt-unicode.sh --check)
-        run: scripts/gen-vt-unicode.sh --check
-      # agterm-vt's terminfo source is what its generator writes from Ghostty's entry, on every OS
-      - name: terminfo source (gen-ghostty-terminfo.sh --check)
-        run: scripts/gen-ghostty-terminfo.sh --check
-
-  # agterm-vt's memory core under Miri (mem: offsets, the bitmap allocator, the ref-counted set, the page hash map,
-  # fallible allocation and the test allocators; datastruct: the insertion-ordered map, Wyhash; os::page_allocator),
-  # on a nightly pinned by date: bump MIRI_NIGHTLY on its own, to a day whose manifest carries miri
-  # (static.rust-lang.org/dist/<date>/channel-rust-nightly.toml). The filters select the core's unit tests by module
-  # path. libtest matches substrings, so `os::` alone would also take any `pos::` test: the page allocator is named in
-  # full, and a later module whose path contains `mem::` or `datastruct::` must not be named so.
-  miri:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    env:
-      MIRI_NIGHTLY: nightly-2026-10-18
-    steps:
-      - uses: actions/checkout@v7
-      - name: nightly with miri (${{ env.MIRI_NIGHTLY }})
-        run: |
-          rustup toolchain install "$MIRI_NIGHTLY" --profile minimal --component miri,rust-src
-          cargo "+$MIRI_NIGHTLY" miri setup
-      - name: memory core under Miri
-        run: |
-          cargo "+$MIRI_NIGHTLY" miri test --locked -p agterm-vt --lib -- mem:: datastruct:: os::page_allocator::

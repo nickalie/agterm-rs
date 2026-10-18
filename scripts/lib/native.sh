@@ -1,6 +1,6 @@
 # Shared helpers of the native build scripts (build-ghostty-vt.sh, build-zmx.sh, build-weston.sh, fetch-wpe.sh,
-# fetch-lavapipe.sh, fetch-fonts.sh, gen-wpe-bindings.sh, gen-ghostty-config-keys.sh, gen-vt-unicode.sh, pkg-config.sh,
-# stage.sh, lib/dev-instance.sh). Sourced, not run.
+# fetch-lavapipe.sh, fetch-fonts.sh, gen-wpe-bindings.sh, gen-ghostty-config-keys.sh, pkg-config.sh, stage.sh,
+# lib/dev-instance.sh). Sourced, not run.
 #
 # Each native dependency lives in its own vendored prefix, ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/<name>-<key>/,
 # where <key> hashes that dependency's pins and patches only. Cargo never runs zig: agterm-ghostty-vt-sys asks
