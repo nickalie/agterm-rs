@@ -239,6 +239,8 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo clippy -p agterm-gpui --no-default-features --all-targets -- -D warnings   # the app without HTML overlays
 scripts/lint-report.sh                      # complexity #[expect]s with their reasons; refuses inner #![allow]
 GDK_BACKEND=x11 xvfb-run -a dbus-run-session cargo test --workspace
+cargo test -p agterm-vt --all-features      # with the Unicode table generator's tests (feature `gen`)
+scripts/gen-vt-unicode.sh --check           # agterm-vt's Unicode tables equal what the generator writes
 .venv/bin/python -m pytest conformance/selftests   # the suite's own tests, host-free
 conformance/tools/run-rust-linux.sh [--ratchet-only] [--stage DIR] [-- PYTEST_ARGS...]
 ```

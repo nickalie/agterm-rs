@@ -5,7 +5,8 @@
 //! rustty: `crates/rustty-unicode/src/lut.rs`'s `Generator` at `RUSTTY_REV` (MIT).
 //! Changes: the context is a closure, and equality is `PartialEq` (`Properties.eql` compares every field, as the
 //! derived equality does). Blocks are deduplicated by a `HashMap` where Ghostty hashes them with Wyhash: only the
-//! first index each block is stored at matters, and that does not depend on the hash. `writeZig` has no counterpart:
+//! first index each block is stored at matters, and that does not depend on the hash. Ghostty's asserts that stage2 and
+//! stage3 are no longer than a `u16` counts are errors too, the ones its casts give. `writeZig` has no counterpart:
 //! the tables are written as Rust (`write`), and [`Tables::get`] reads them back for the generator's own check.
 
 use std::collections::HashMap;
@@ -76,6 +77,14 @@ pub(crate) fn generate<Elem: Copy + PartialEq>(get: impl Fn(u32) -> Elem) -> Res
         };
         tables.stage1.push(start);
         block_len = 0;
+    }
+    // every stage's length must fit a `u16` (Ghostty's asserts): a last block can start at an index that fits and
+    // still end past it, and the last value can get an index that fits as the 65536th entry
+    if tables.stage2.len() > usize::from(u16::MAX) {
+        return Err(GenerateError::Stage2TooLarge);
+    }
+    if tables.stage3.len() > usize::from(u16::MAX) {
+        return Err(GenerateError::BlockTooLarge);
     }
     Ok(tables)
 }

@@ -189,6 +189,21 @@ fn the_test_file_check_reports_every_mismatch() {
     );
 }
 
+/// The tailoring turns a × before an emoji modifier into a ÷: a file that already says ÷ there breaks its
+/// assumption, which uucode's `inlineAssert(!expected_is_break)` holds.
+#[test]
+fn the_test_file_check_refuses_a_break_before_an_emoji_modifier() {
+    let file = test_file("÷ 261D × 1F3FB ÷\n÷ 0020 ÷ 1F3FB ÷\n");
+    assert_eq!(
+        check_grapheme_break_test(&file, &derived(), &precompute()),
+        Err(
+            "GraphemeBreakTest.txt:2: U+0020 U+1F3FB: ÷ before an emoji modifier not after its base, where UAX #29 \
+             has ×"
+                .to_owned()
+        )
+    );
+}
+
 #[test]
 fn the_test_file_check_refuses_malformed_lines() {
     for line in ["0020 ÷ 0020 ÷", "÷ 0020 + 0020 ÷", "÷ 0020 ÷ 0020 ×", "÷ 0020 ÷ 0020"] {

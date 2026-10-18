@@ -5,7 +5,9 @@
 //! `EmojiData`, `EmojiVs` and `Blocks`, with the property-name maps they use (`types.zig` for the value enums).
 //! Changes: only the fields Ghostty's tables read are kept, and a column per field stands in for uucode's rows. Where
 //! uucode's build hits `unreachable` (an unknown name, a malformed line) or an `inlineAssert`, this returns an error
-//! naming the file and line, so a UCD that breaks an assumption fails the generator instead of being read on. Blocks
+//! naming the file and line, so a UCD that breaks an assumption fails the generator instead of being read on.
+//! `UnicodeData.txt` is read up to its general category: the checks uucode makes on the later fields (the
+//! decomposition's type, the numeric values, the case mappings), which no table reads, are not made. Blocks
 //! keeps only whether a code point is in one of the blocks `uucode_config.zig`'s `is_symbol` names, so it cannot
 //! refuse an unknown block name as uucode's full block map does. Every file that names its UCD version must name the
 //! pinned one.

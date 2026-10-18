@@ -43,6 +43,13 @@ fn too_many_distinct_blocks_are_refused() {
     assert_eq!(result, Err(GenerateError::Stage2TooLarge));
 }
 
+/// 256 distinct blocks: the last one starts at an index a `u16` holds, but stage2 ends one past `u16::MAX`.
+#[test]
+fn a_stage2_longer_than_a_u16_counts_is_refused() {
+    let result = generate(|cp| (cp >> 8) & 0xFF);
+    assert_eq!(result, Err(GenerateError::Stage2TooLarge));
+}
+
 #[test]
 fn a_code_point_past_the_stages_reads_as_none() {
     let tables = generate(|_| 7_u8).unwrap();

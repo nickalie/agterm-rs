@@ -255,8 +255,8 @@ fn table_break(
 
 /// uucode's `testGraphemeBreakNoControl` over the precomputed table: every `GraphemeBreakTest.txt` line, cut at its
 /// first control, CR or LF (which the table does not handle), must break where the file says, except that an emoji
-/// modifier after anything but an emoji modifier base breaks (uucode's UTS #51 tailoring). Returns the number of
-/// pairs checked.
+/// modifier after anything but an emoji modifier base breaks (uucode's UTS #51 tailoring), where the file must say
+/// it does not. Returns the number of pairs checked.
 pub(crate) fn check_grapheme_break_test(file: &UcdFile, derived: &Derived, data: &[u8; 8192]) -> Result<usize> {
     let mut checked = 0;
     let mut failures = Vec::new();
@@ -314,6 +314,16 @@ fn check_test_line(
         let gb2 = no_control(derived.grapheme_break[ucd::index(pair[1])]);
         let mut expected = marks[i];
         if gb2 == GraphemeBreakNoControl::EmojiModifier && gb1 != GraphemeBreakNoControl::EmojiModifierBase {
+            // the tailoring only turns the file's × into a ÷ (uucode's `inlineAssert(!expected_is_break)`)
+            if expected {
+                return Err(file.error(
+                    line,
+                    format!(
+                        "U+{:04X} U+{:04X}: ÷ before an emoji modifier not after its base, where UAX #29 has ×",
+                        pair[0], pair[1]
+                    ),
+                ));
+            }
             expected = true;
         }
         if table_break(data, gb1, gb2, &mut state) != expected {
