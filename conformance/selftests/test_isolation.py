@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 from agterm_conformance.impls import ADAPTERS
-from agterm_conformance.impls.base import XDG_HOMES, check_launch_env, upstream_socket_directory
+from agterm_conformance.impls.base import XDG_HOMES, check_launch_env
+from agterm_conformance.vocabulary import upstream_socket_directory
 
 CONFORMANCE = Path(__file__).parents[1]
 PACKAGE = CONFORMANCE / "agterm_conformance"

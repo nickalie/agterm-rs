@@ -39,8 +39,6 @@ from agterm_conformance.vocabulary import (
     LIVE,
     UPSTREAM,
     Vocabulary,
-    fnv1a64,  # noqa: F401 - re-exported for the self-tests
-    upstream_socket_directory,
 )
 
 # Both references refuse to bind at `path.utf8.count >= 104` (Darwin's sun_path, mirrored on Linux).

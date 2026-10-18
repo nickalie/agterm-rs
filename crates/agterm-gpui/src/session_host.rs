@@ -1,4 +1,4 @@
-//! What every pane runs under (the GTK build's `live_runtime.rs` launch part and `ghostty_app.rs` config part, over
+//! What every pane runs under (the GTK build's `zmx_runtime.rs` launch part and `ghostty_app.rs` config part, over
 //! `agterm-term` instead of libghostty): the staged zmx as the core's session host, the live capabilities this host
 //! claims, the ghostty config the terminals draw with, and the [`Host`] their launches start under.
 //!

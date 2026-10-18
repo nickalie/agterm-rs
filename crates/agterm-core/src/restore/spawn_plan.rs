@@ -24,7 +24,8 @@ pub struct LaunchSeed {
     pub wait_after_command: bool,
     /// Variables the terminal runs with on top of the pane's own environment: a wrapped pane's zmx configuration.
     pub env: Vec<(String, String)>,
-    /// The pane attaches to its live-session daemon (upstream's `backedByLive`), fixed at spawn as its disposition is.
+    /// The pane attaches to its live-session daemon (upstream's `backedByZmx`, `backedByLive` on the wire here), fixed
+    /// at spawn as its disposition is.
     pub live: bool,
 }
 
