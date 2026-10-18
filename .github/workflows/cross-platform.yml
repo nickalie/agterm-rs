@@ -21,7 +21,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   # `-p` per crate; word-split by bash, which every step runs in (Git Bash on Windows)
-  PACKAGES: -p agterm-vt
+  PACKAGES: -p agterm-vt -p agterm-session
 
 defaults:
   run:

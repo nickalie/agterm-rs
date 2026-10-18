@@ -20,6 +20,7 @@ agterm-host = { path = "crates/agterm-host" }
 agterm-core = { path = "crates/agterm-core" }
 agterm-server = { path = "crates/agterm-server" }
 agterm-zmx = { path = "crates/agterm-zmx" }
+agterm-session = { path = "crates/agterm-session" }
 agterm-app = { path = "crates/agterm-app" }
 agterm-term = { path = "crates/agterm-term" }
 agterm-wpe-javascriptcore-sys = { path = "crates/agterm-wpe-javascriptcore-sys" }
@@ -31,6 +32,10 @@ base64 = "0.23"
 bitflags = "2"
 clap = { version = "4.6", features = ["derive"] }
 libc = "0.2"
+# agterm-session's Windows endpoint: the named pipe's security descriptor and its server-process check.
+windows-sys = "0.61"
+# The UTF-16 strings interprocess takes a named pipe's security descriptor in (agterm-session, Windows).
+widestring = "1.2"
 # agterm-wpe's worker transport (socket pairs, SCM_RIGHTS, memfds), the version wayland and calloop already link.
 rustix = "1.1"
 # `default-features = false` drops the `html` renderer and the CLI's `getopts`: the HUD walks the events itself.
@@ -43,6 +48,11 @@ portable-pty = "0.9"
 # look-arounds (Oniguruma's, in Ghostty) need a backtracking engine; fancy-regex is the regex crate's own one.
 fancy-regex = "0.19"
 serde = { version = "1", features = ["derive"] }
+# agterm-session's wire (Task 2 of docs/plans/20261018-zig-free-core.md: in place of herdr's bincode, whose last
+# release is a tombstone). `use-std` without the default `heapless-cas`: messages own their buffers.
+postcard = { version = "1.1", default-features = false, features = ["use-std"] }
+# agterm-session's endpoint, as herdr's: a Unix domain socket, a named pipe on Windows.
+interprocess = "2.4"
 # `preserve_order`: a result built as a `Value` keeps its fields in upstream's order on the wire (the catalog's
 # `fields` order) instead of sorting them.
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
