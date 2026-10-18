@@ -265,6 +265,10 @@ fn the_editor_command_falls_back_to_sh_without_a_shell() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs the editor command under the login shell bash, which Windows has not"
+)]
 fn the_editor_command_sources_the_login_shells_profile_for_an_exported_editor() {
     let Some(bash) = ["/usr/bin/bash", "/bin/bash"]
         .into_iter()
@@ -282,6 +286,10 @@ fn the_editor_command_sources_the_login_shells_profile_for_an_exported_editor() 
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs the editor command under the login shell fish, which Windows has not"
+)]
 fn the_editor_command_works_under_fish() {
     let Some(fish) = ["/usr/bin/fish", "/bin/fish", "/usr/local/bin/fish"]
         .into_iter()

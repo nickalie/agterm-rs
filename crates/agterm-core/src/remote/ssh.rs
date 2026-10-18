@@ -192,7 +192,7 @@ pub fn probe_command(host: &str) -> Result<Vec<String>, InvocationError> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::process::{Command, Stdio};
 
     use uuid::Uuid;
@@ -362,15 +362,12 @@ mod tests {
         }
     }
 
-    fn has_sh() -> bool {
-        Path::new("/bin/sh").exists() && Path::new("/usr/bin/env").exists()
-    }
-
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs its fake ssh and the pane command with the POSIX shell /bin/sh, which Windows has not"
+    )]
     fn the_pane_command_keeps_the_ssh_exit_status_and_says_what_died() {
-        if !has_sh() {
-            return;
-        }
         let fake = FakeRemote::new(23);
         let daemon = daemon_name(Uuid::new_v4());
         let command = attach_pane_command(
@@ -403,10 +400,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs its fake ssh and the pane command with the POSIX shell /bin/sh, which Windows has not"
+    )]
     fn without_a_lead_nonce_a_lost_connection_exits_as_before() {
-        if !has_sh() {
-            return;
-        }
         let fake = FakeRemote::new(255);
         let command = attach_pane_command("buildbox", &endpoint(), &daemon_name(Uuid::new_v4()), LABEL, None).unwrap();
         assert_eq!(
@@ -419,10 +417,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs its fake ssh and the pane command with the POSIX shell /bin/sh, which Windows has not"
+    )]
     fn a_lost_connection_with_a_lead_says_it_is_reconnecting_reports_it_and_waits() {
-        if !has_sh() {
-            return;
-        }
         let fake = FakeRemote::new(255);
         let attachment = lead("n1", true);
         let command = attach_pane_command(
@@ -455,10 +454,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs its fake ssh and the pane command with the POSIX shell /bin/sh, which Windows has not"
+    )]
     fn a_hostile_session_name_cannot_escape_the_diagnostic_line() {
-        if !has_sh() {
-            return;
-        }
         let fake = FakeRemote::new(0);
         let name = format!("build'; touch {}; echo '", fake.marker().display());
         let command = attach_pane_command(

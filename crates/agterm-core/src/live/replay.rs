@@ -248,6 +248,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "runs the replay under fish, which Windows has not")]
     fn a_fish_replay_round_trips_arguments_and_rearms_before_the_exec() {
         let Some(fish) = fish() else {
             return;

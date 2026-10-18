@@ -528,7 +528,8 @@ fn write_body(store: &AppStore, session: Uuid, pane: &PaneMetrics) -> bool {
 
 /// Writes `contents` to a fresh `path` only its owner can read, in a directory only its owner can enter: the body
 /// carries whatever an agent posts, and in a shared directory another user could read it or squat its name. A
-/// staging file a crash left behind is replaced.
+/// staging file a crash left behind is replaced. Unix closes the modes (0700, 0600); Windows gives the directory and
+/// the file an owner-only DACL ([`crate::owner_only`]), wherever the directory is.
 fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
 
@@ -538,8 +539,6 @@ fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
         if !metadata.is_dir() {
             return Err(std::io::Error::other("the hud body directory is not a directory"));
         }
-        // Windows has no mode to close: the inherited ACL governs (`create_private_dir`)
-        #[cfg(unix)]
         close_private_dir(dir, &metadata)?;
     }
     match std::fs::remove_file(path) {
@@ -550,7 +549,11 @@ fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     options.write(true).create_new(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options.open(path)?.write_all(contents)
+    let mut file = options.open(path)?;
+    // created under the directory's owner-only grants already; the file's own DACL keeps them across the rename
+    #[cfg(windows)]
+    crate::owner_only::restrict(path, false)?;
+    file.write_all(contents)
 }
 
 /// Creates `dir` and its parents, the last one owner-only (0700).
@@ -561,11 +564,17 @@ fn create_private_dir(dir: &Path) -> std::io::Result<()> {
     std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)
 }
 
-/// Creates `dir` and its parents. Windows has no mode bits: the directory inherits the ACL of the state directory it
-/// lies in, which under the user's profile grants only the user, SYSTEM and the administrators.
+/// Creates `dir` and its parents; [`close_private_dir`] then gives the last one to its owner.
 #[cfg(windows)]
 fn create_private_dir(dir: &Path) -> std::io::Result<()> {
     std::fs::DirBuilder::new().recursive(true).create(dir)
+}
+
+/// Gives `dir`, new or not, an owner-only DACL: what it inherited from a shared parent (a state directory override,
+/// `C:\tmp`) could grant other users, and Windows has no mode bits to close.
+#[cfg(windows)]
+fn close_private_dir(dir: &Path, _metadata: &std::fs::Metadata) -> std::io::Result<()> {
+    crate::owner_only::restrict(dir, true)
 }
 
 /// Closes an existing `dir` that its group or others can reach back to 0700.
