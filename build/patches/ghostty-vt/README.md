@@ -92,17 +92,30 @@ stubs in the static archive override the embedding executable's libc allocator, 
 The stubs are now exported for freestanding targets only. Native builds without a `--libc` file and the SIMD builds
 agterm makes are unchanged.
 
+The build `agterm-ghostty-vt-sys` makes on Linux cannot observe this patch: it has SIMD on, which links libc
+(`src/build/GhosttyZig.zig`), so the unpatched source exports no stubs either, and it passes no `--libc` file. Neither
+the wrapper's tests nor an `nm` of that archive fail without the patch. Its checks build what it changes: a
+`windows-msvc` build that names its SDK with a `--libc` file (the translator half), and a hosted build of the prepared
+tree with SIMD off (the stubs half). The second was run on the pin: the patched tree's archive defines neither
+symbol, and with the `main.zig` hunk reverted it defines both as weak (`W calloc`, `W free`).
+
 remove when: the pinned source forwards the build's libc file to the Wuffs translator and exports no allocator stubs on
-hosted targets, and the Windows build (Task 10) and the checks below pass without this patch.
+hosted targets, and the checks below pass without this patch.
 
 verification:
 
 ```sh
-cargo test -p agterm-ghostty-vt --test patches wuffs
-# no calloc or free defined by the archive (only undefined references)
-nm "$(find target -path '*agterm-ghostty-vt-sys-*/out/zig-out/lib/libghostty-vt.a' | head -n1)" \
-  | grep -E ' [TtWwVv] (calloc|free)$'   # prints nothing
+# the translator half: a windows-msvc build with --libc naming the MSVC SDK (Task 10's Windows build, where it
+# passes one) succeeds
+# the stubs half: a hosted build with SIMD off defines no calloc or free (only undefined references)
+out="$(mktemp -d)" version="$(sed -n 's/^version-string=//p' "$tree/../share/agterm/ghostty-vt-STAMP")"
+(cd "$tree" && "$zig" build -Demit-lib-vt=true -Doptimize=ReleaseFast -Dsimd=false -Dcpu=baseline \
+  -Dtarget=x86_64-linux-gnu.2.39 -Dversion-string="$version" --prefix "$out/prefix" --cache-dir "$out/cache")
+nm "$out/prefix/lib/libghostty-vt.a" | grep -E ' [TtWwVv] (calloc|free)$'   # prints nothing
 ```
+
+The wrapper's `cargo test -p agterm-ghostty-vt --test patches wuffs` checks only that the Wuffs build the patch
+touches still swizzles in agterm's build; it passes without the patch.
 
 ## 0003 keep the cursor hyperlink across page replacement
 

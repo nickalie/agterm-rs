@@ -1,15 +1,16 @@
 //! The behavior each logic patch of `build/patches/ghostty-vt/` (its README lists them) changes, through the wrapper,
-//! so a pin bump that drops or breaks one fails here.
+//! so a pin bump that drops or breaks one fails here. 0002 is the exception: what it changes (a `--libc` file reaching
+//! Wuffs' translator, the allocator stubs of a hosted build with SIMD off) never occurs in the SIMD build without a
+//! `--libc` file this crate links, so no test here can see it; its README entry's verification builds what does.
 
 use agterm_ghostty_vt::{Format, FormatOptions, KittyFormat, Point, PointTag, Region, Terminal};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-/// 0002 (hosted Wuffs builds): Kitty frame composition converts an RGB image to RGBA through Wuffs' swizzler, and
-/// with the archive linked a zeroed Rust allocation (libc's `calloc`) still works: no weak allocator stub of the
-/// archive stands in for libc's on a hosted target.
+/// The Wuffs build 0002 patches still works in the build this crate links: Kitty frame composition converts an RGB
+/// image to RGBA through Wuffs' swizzler. It passes without 0002 as well (see the module doc).
 #[test]
-fn wuffs_swizzles_and_the_allocator_stays_libcs() -> TestResult {
+fn wuffs_swizzles_rgb_to_rgba() -> TestResult {
     let mut terminal = Terminal::new(10, 3)?;
     terminal.resize(10, 3, 10, 20)?;
     terminal.set_kitty_image_storage_limit(10_000_000)?;
@@ -20,9 +21,6 @@ fn wuffs_swizzles_and_the_allocator_stays_libcs() -> TestResult {
     let image = graphics.image(1).ok_or("the image was not stored")?;
     assert_eq!(image.format, KittyFormat::Rgba);
     assert_eq!(image.pixels, Some(&[255, 0, 0, 255][..]));
-
-    let zeroed = vec![0u8; 1 << 24];
-    assert!(zeroed.iter().all(|&byte| byte == 0));
     Ok(())
 }
 
