@@ -1328,22 +1328,55 @@ Before the page group (Task 1's graph): `style` uses `sgr`, and nothing here use
 - Leaf modules it is first to use (Task 1 > Owners): datastruct `segmented_list`, `comptime_int_set`; os
   `string_encoding`; lib `enum`, `parse_int`, `target`; zigstd `fmt`
 
-- [ ] port the parser state machine and the stream dispatch, generic over its handler, without the tmux and
-      glyph-protocol branches
-- [ ] port every OSC parser agterm reaches today (title, pwd, hyperlinks, colors, clipboard, notifications, progress,
+- [x] port the parser state machine and the stream dispatch, generic over its handler, without the tmux and
+      glyph-protocol branches (`terminal/{parser,parse_table,stream,stream_continuation}.rs`, `stream/{dispatch,
+      csi_dispatch}.rs`: the handler is a trait with a no-op default per action; the stream's raw-pointer API is safe
+      `&mut self`, and its fast paths (CSI entry and parameters, the APC and OSC payload scans, the printable runs)
+      are the portable loops LLVM vectorizes, rustty's NEON intrinsics gone; CSI and ESC dispatch are split per final
+      with tables for the one-count commands. Also cut, codex-agreed (below): the inspector's `vtRaw` hook, and the
+      DECRQCRA/XTCHECKSUM dispatch, which fall through as unimplemented. The APC handler recognizes the glyph
+      identifier and ignores its APCs, as Ghostty built without the protocol does)
+- [x] port every OSC parser agterm reaches today (title, pwd, hyperlinks, colors, clipboard, notifications, progress,
       `program_status`, `context_signal`, semantic prompt, Kitty's 5522 clipboard) and the Kitty graphics command
       parser, imported directly by `apc` (not through the `kitty/graphics` aggregate). `program_status` decodes
-      base64 with Task 5's decoder, since rustty took its decoder from the cut glyph code
-- [ ] port what the group uses beside them: the colors (`color`, `x11_color` with its `rgb.txt`, `fraction`), the
+      base64 with Task 5's decoder, since rustty took its decoder from the cut glyph code (`terminal/osc/**`, with
+      OSC 72 (Kitty DnD), OSC 66, 99, 133, 1337, 3008, 7501 and the unknown-OSC capture; commands borrow the
+      parser's buffers as `&[u8]`; `alloc: bool` stands for Zig's optional allocator; `program_status` decodes with
+      `simd::base64_scalar`, Zig's `std.base64` that Task 5 kept; `terminal/kitty/graphics_command.rs` behind `apc`)
+- [x] port what the group uses beside them: the colors (`color`, `x11_color` with its `rgb.txt`, `fraction`), the
       mouse shape, Kitty's OSC 21 colors and its keyboard flags, and `protocol_int` (the digit-separator filter the
-      Kitty graphics command parser runs before parsing a number)
-- [ ] port `log_capture` as a test-only helper over `tracing` (Task 1 > Verdicts): rustty's tests assert on log
-      lines, here and in Tasks 9 to 14
-- [ ] absorb the drift for `stream.zig`, `osc/parsers/*`, `modes.zig`, `csi.zig`, `device_status.zig` and
-      `size_report.zig`
-- [ ] port the stream, OSC, parser, SGR, modes, color and graphics-command tests
-- [ ] add tests for each drifted parser
-- [ ] run gates - must pass before task 9
+      Kitty graphics command parser runs before parsing a number) (all but `protocol_int`, which is not ported,
+      codex-agreed: the filter is rustty's divergence; libghostty-vt's `graphics_command.zig` parses with
+      `std.fmt.parseInt`, which accepts interior `_`, so the parser here does too and a test holds it. `rgb.txt` is
+      X.Org's; its license is added to `NOTICE`. Leaf modules: `comptime_int_set`, `string_encoding`, lib
+      `parse_int` and zigstd `fmt` are ported; lib `enum`/`target` (the C-ABI enum factory) are plain Rust enums with
+      their wire numbers, and `segmented_list` is a fallible `Vec`, both codex-agreed)
+- [x] port `log_capture` as a test-only helper over `tracing` (Task 1 > Verdicts): rustty's tests assert on log
+      lines, here and in Tasks 9 to 14 (`src/log_capture.rs`: a thread-local default subscriber per capture, no lock;
+      two never-default dispatchers stay registered so `tracing-core`'s single-dispatcher shortcut cannot cache a
+      callsite as never enabled while another thread captures, which made parallel log tests flaky; its records are
+      made outside `mem::testing`'s failure injection (`mem::testing::suspended`))
+- [x] absorb the drift for `stream.zig`, `osc/parsers/*`, `modes.zig`, `csi.zig`, `device_status.zig` and
+      `size_report.zig` (`6104c78f1` CSI 19 t in `csi`, `size_report` and the stream; `d0c0d4008` TBC with no
+      parameter; `fbda61b87` DECXCPR in `device_status`; `d432b01a3` and `b21f82c0e` the permanently reset modes in
+      `modes`; `46d6c3b50` the unescaped strings of `context_signal`; `b7207b2ef` the query reply of
+      `program_status`)
+- [x] port the stream, OSC, parser, SGR, modes, color and graphics-command tests (Ghostty's 69 stream tests but the
+      two checksum ones, rustty's beside them, with the state machine as the oracle of the fast paths in place of
+      the cut `vtRaw` hook; tests are table-driven to stay within the complexity limits)
+- [x] add tests for each drifted parser (`stream_send_report_with_csi_t` with 19 t,
+      `stream_csi_19_t_with_extra_parameters_is_ignored`, `encode_csi_19_t`,
+      `stream_tab_clear_with_no_param_clears_the_current_stop`, `the_question_form_of_6_is_decxcpr`,
+      `stream_device_status_extended_cursor_position`, the `get_report_*_permanently_reset` tests,
+      `osc_3008_string_unescaping`, `query_reply_lists_every_state_and_kind`)
+- [x] run gates - must pass before task 9 (all green: fmt, metadata --locked, tracing features, vendor checks,
+      clippy on the workspace with all features and on the GPUI app without its default features, lint report,
+      `cargo test --workspace --no-fail-fast` headless (5113 passed; two load-dependent `agterm-gpui` tests that
+      agterm-vt cannot reach failed at load average 45-69 and passed rerun alone: `html_overlay`'s dmabuf frame rate
+      and `quit`'s live-session survival), `cargo test -p agterm-vt --all-features` (977 unit tests),
+      `gen-vt-unicode.sh --check`, `gen-ghostty-terminfo.sh --check`, selftests (833 passed); CI run 39150454282 of
+      `cross-platform.yml` green on ubuntu-26.04, macos-26, windows-2025 and miri; conformance not run:
+      `cargo tree -i agterm-vt` lists no dependents and no staging script changed)
 
 ### Task 9: Page, PageList, style, hyperlink, resize and reflow (without page compression)
 
