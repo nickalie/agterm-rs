@@ -76,7 +76,8 @@
   - herdr's PTY actor over `portable-pty` (ConPTY on Windows) with its fixes in `vendor/portable-pty`, and IPC over
     `interprocess` (Unix socket and named pipe, owner-only DACL).
 - **The GPUI pane receives the raw stream and keeps its own VT** (user, 2026-10-18).
-  - On attach, the server sends a snapshot of the pane, then its raw output, which is herdr's `AttachTerminal` mode.
+  - On attach, the server sends a snapshot of the pane, then its raw output. (Task 2: this is not herdr's
+    `AttachTerminal`, which renders server-side; the raw mode is agterm's, on herdr's connection framework.)
     `agterm-term` feeds both into its own `agterm-vt` terminal, as it feeds a PTY today.
   - Rendering, selection, search and Kitty graphics stay in `agterm-term` and `agterm-gpui`.
   - The server's VT exists for the snapshot, screen reads, typing and a future headless core.
@@ -201,8 +202,8 @@ Paths are as of `main` at `57adfbe`, spot-checked on 2026-10-18.
 
 ### Session host (Part B)
 
-- herdr (`https://github.com/herdrdev/herdr`, Apache-2.0, v0.9.5; a local clone at `~/develop/projects/temp/herdr`,
-  `143bf5f`, 2026-10-16):
+- herdr (`https://github.com/herdrdev/herdr`, Apache-2.0, v0.9.5; pinned by Task 2 as `HERDR_REV` `143bf5f`,
+  master of 2026-10-16, cloned at `.upstream/herdr`):
   - `src/server/`: the background server (`autodetect.rs` spawn and detach, `socket_paths.rs`, `clients.rs`,
     `client_transport.rs`, `client_accept.rs`, `terminal_attach.rs` raw attach, `alt_screen_read.rs`, `handoff.rs`,
     `headless*`, `shutdown.rs`);
@@ -285,7 +286,8 @@ Paths are as of `main` at `57adfbe`, spot-checked on 2026-10-18.
 - Dependencies (popular-tools rule):
   - already in the workspace: `png`, `bitflags`, `tracing`, `portable-pty`;
   - new: `miniz_oxide` (zlib, replacing wuffs'), `interprocess`, `windows-sys` (Microsoft) with the features herdr
-    uses, and herdr's async runtime if Task 2 keeps it (`tokio`);
+    uses, `postcard` (Task 2: in place of herdr's unmaintained `bincode`), and `wmi` for the Windows spawn from a
+    kill-on-close job; no async runtime (Task 2 chose threads);
   - only where needed: `hashbrown` (page memory, only if needed), `memchr` (only if measurement asks for it);
   - nothing C, nothing Zig.
 
@@ -458,10 +460,10 @@ agterm-core::live (policy unchanged)       agtermctl live … / clipboard set (u
 agterm-session ──────────────────────────────────────────────────────────────────
   server     one per instance (herdr's server): started on demand, detached per OS,
              owns every live pane: PTY (portable-pty: openpty │ ConPTY) + agterm-vt state
-  protocol   herdr's wire and endpoint (Unix socket │ named pipe, owner-only), version-negotiated
+  protocol   herdr's framing, postcard, a stable version envelope; one endpoint (Unix socket │ named pipe)
   api        list / new / kill (batch, force) / screen / type / print
-  attach     snapshot, then the raw output stream; input and resize back (herdr's AttachTerminal)
-  handoff    update without ending sessions: Unix by herdr's SCM_RIGHTS, Windows per Task 2's design
+  attach     snapshot + continuation, then the offset-tagged raw output; input, resize, metadata back
+  handoff    update without ending sessions: Unix by herdr's SCM_RIGHTS, Windows by duplicated handles
   client     library: the api + the attach stream (used in process by agterm-term)
   host       SessionHost impl (replaces today's zmx client), foreground job per OS
   bin        agterm-session: server │ attach (the kept attach contract) │ list │ kill │ screen │ type │ print │ version
@@ -480,11 +482,12 @@ agterm-vt    the VT state of both the pane and the server
 - **Namespace.**
   - Unix uses `/tmp/agterm-live-<FNV-1a 64 of the state dir>` for the socket directory, the shape of today's, so
     the harness and the isolation rules keep it.
-  - On Windows, the directory lives under `%LOCALAPPDATA%` (Task 2 fixes it), and the endpoint is a named pipe
-    carrying the same hash.
+  - On Windows, the directory is `%LOCALAPPDATA%\agterm\live\<the same hash>`, and the endpoint is the named
+    pipe `agterm-live-<FNV-1a 64 of the directory path>` (Task 2, "What Task 2 settles" > Windows namespace).
 - **In-process attach.** `agterm-term` opens the session's stream, claims or follows the lead as `agterm-core`'s
   lead policy says, sends its grid size, and from then on maps:
-  - snapshot and Output → `vt_write`;
+  - snapshot (with its continuation) and Output → `vt_write`, with the pane's own PTY replies suppressed (the
+    server answers queries; Task 2 > Attach);
   - `Pane::write` → Input;
   - `Pane::resize` → Resize;
   - Role changes → the lead state core already tracks.
@@ -494,14 +497,14 @@ agterm-vt    the VT state of both the pane and the server
   - **Linux**: spawn with `setsid` in `pre_exec`, PTY via `openpty`.
   - **macOS**: `posix_spawn` with `POSIX_SPAWN_SETSID` and `responsibility_spawnattrs_setdisclaim`, so live sessions
     keep their own permission identity across app updates, as upstream's session host does.
-  - **Windows**: ConPTY. The server detaches with herdr's `DETACHED_PROCESS` (plus `CREATE_NEW_PROCESS_GROUP`, and
-    `CREATE_BREAKAWAY_FROM_JOB` where the launcher's job allows it, agterm's additions). Each pane's shell tree runs in
-    a job object with `KILL_ON_JOB_CLOSE`, so killing a session ends its processes, as SIGHUP does on
-    Unix.
+  - **Windows**: ConPTY. The server detaches with herdr's `DETACHED_PROCESS` plus `CREATE_NEW_PROCESS_GROUP`;
+    inside a kill-on-close job it adds `CREATE_BREAKAWAY_FROM_JOB`, and where the job refuses breakaway it starts
+    through herdr's WMI `Win32_Process.Create` (Task 2). Each pane's shell tree runs in a job object with
+    `KILL_ON_JOB_CLOSE`, so killing a session ends its processes, as SIGHUP does on Unix.
 - **Updates.**
   - The build id is a hash of the staged `agterm-session` binary, written to `share/agterm/session-BUILD`.
   - When the app finds a server of another build, it asks it to hand off to the new binary: herdr's `SCM_RIGHTS`
-    handoff on Unix, Task 2's design on Windows.
+    handoff on Unix; on Windows the duplicated-handle handoff Task 2 proved, behind its layout gate.
   - A handoff that fails falls back to `build_record.rs`'s existing "predates the last update" path, which offers the
     usual reset and kills nothing behind the user's back.
 
@@ -824,7 +827,7 @@ below are rustty-vt's (`crates/rustty-vt/src/`).
     herdr source file, says it is licensed under Apache-2.0, and says it was modified (Apache-2.0 §4).
   - herdr's `LICENSE` goes into the root `NOTICE`, and `agterm-session` declares `MIT AND Apache-2.0`.
   - herdr's own libghostty-vt binding is not ported.
-- **What Task 2 settles from herdr's code** (and writes here before Task 20):
+- **What Task 2 settles from herdr's code** (written below, "What Task 2 settles"):
   - the module map with keep, cut or adapt for each module. Cut: TUI rendering, surface deltas, ratatui, plugins,
     agent detection, workspace and layout UI, persist, remote. Adapt: the server, the pane runtime, the client
     side, headless;
@@ -876,6 +879,160 @@ below are rustty-vt's (`crates/rustty-vt/src/`).
   - an eligibility probe on Windows: `pwsh.exe` on `PATH`, else `powershell.exe`, else the existing "unsupported
     shell" rejection.
 
+#### What Task 2 settles (herdr `143bf5f`; 2026-10-18)
+
+Sources read: herdr cloned at `.upstream/herdr` (`143bf5fd`, master of 2026-10-16, v0.9.5 + 24), git-ignored like
+rustty. Probes, logs and the design discussion: `docs/spikes/20261018-session-server.md` (the spike note, with the
+probes' sources in `docs/spikes/20261018-session-server-probes.md`). Paths below are herdr's (`src/`).
+
+- **A correction to the Part B decisions.** herdr's `AttachTerminal` is not a raw stream. The server renders the
+  pane into a virtual buffer and sends ANSI diffs (`server/headless/render.rs` `render_terminal_virtual` →
+  `FrameData` → `ServerMessage::Terminal(TerminalFrame)`), on a render lane of capacity one that drops frames
+  (`server/client_transport.rs` `ClientWriterQueue`), with one attached owner per terminal (`--takeover`). The user
+  decision stands (snapshot, then the raw output, into the pane's own `agterm-vt`); the raw attach mode is agterm's,
+  built on herdr's connection framework (handshake, client registry and modes, input/resize path, writer threads).
+  herdr's direct terminal attach is also Unix-only (`platform/mod.rs` `capabilities`), and so is its handoff.
+- **Module map.** Keep = ported close to herdr's code; adapt = ported and reworked; cut = not ported.
+
+  | herdr module | verdict | what agterm-session takes, or why not |
+  |---|---|---|
+  | `protocol/wire.rs` | adapt | framing (u32 LE length, max size checked before allocating, partial reads reassembled, trailing bytes refused), `FramingError`, version check; the messages are agterm's (below); bincode → postcard |
+  | `protocol/endpoint.rs`, `render_ansi.rs`, `surface_*` | cut | the client-shell endpoint generation and server-side rendering for TUI clients (the future TUI plan) |
+  | `ipc.rs` | keep | `interprocess` local sockets, the named-pipe listener with its SDDL, stale-socket detection, socket file identity, peer-closed probe |
+  | `server/socket_paths.rs` | adapt | `prepare_socket_path`, owner-only permissions; paths from agterm's namespace |
+  | `server/autodetect.rs` | adapt | find a server or spawn one detached and wait for its endpoint; the second of two racing servers loses the bind and exits |
+  | `server/client_accept.rs`, `client_transport.rs`, `clients.rs` | adapt | accept loop, handshake with timeout, a reader and a writer thread per connection, connection modes (pending, attached), attach owners; the writer queue becomes byte-bounded and lossless for the raw lane |
+  | `server/headless.rs`, `headless/bootstrap.rs`, `headless/lifecycle.rs` | adapt | the coordinator's event handling for clients, attach, resize locks and handoff, the server and import-server entry points, `perform_live_handoff`; everything that renders, notifies or drives the TUI goes |
+  | `server/handoff.rs`, `handoff_runtime.rs` | keep (Unix) | token-authenticated private socket, JSON manifest, `SCM_RIGHTS` batches of 64, validated/restored/ready/committed/owned steps and their timeouts; the per-pane state carries agterm's snapshot |
+  | `server/shutdown.rs` | keep | `ServerStop` and the logged shutdown reason |
+  | `server/alt_screen_read.rs`, `terminal/history_read.rs` | cut | herdr harvests alt-screen history by scrolling the app; agterm reads the server VT |
+  | `server/headless/{render,retained_surface,client_views,native_graphics,notifications,surface_interest,endpoint_requests}.rs`, `client_shell*`, `client_commands.rs`, `render_stream.rs`, `pane_input.rs`, `keybindings.rs`, `notifications.rs`, `clipboard_image.rs`, `terminal_attach.rs` | cut | TUI client shell, rendering, notifications, image paste |
+  | `pane.rs` | adapt | pane spawn (argv, env, cwd), child wait, `shutdown_pane_processes` (HUP, TERM, KILL over the session's processes), `from_handoff_fd`; agent detection, compression tasks and render signalling go |
+  | `pane/terminal.rs` | adapt (reference) | the libghostty-vt wrapper is replaced by `agterm-vt`; its history seeding on import is the model for the snapshot replay |
+  | `pane/{osc,xtgettcap,kitty_keyboard,cursor,input,agent_detection,background_agent}.rs` | cut | `agterm-vt`'s stream handler answers queries and tracks keyboard modes; agent detection is herdr's product |
+  | `terminal/runtime.rs`, `runtime_registry.rs` | adapt | the per-pane runtime facade (write, resize, snapshot, handoff export) and the registry by session name |
+  | `terminal/{state,metadata,title}.rs` | cut | agent state and metadata |
+  | `pty/actor.rs`, `pty/actor/unix.rs`, `pty/backend*`, `pty/fd.rs` | keep | the PTY actor thread (poll + wake pipe on Unix, reader/writer threads on Windows), quiesce/release for handoff, CLOEXEC master duplication; `tokio::sync::mpsc` → std channels, herdr's Windows async input forwarder → a writer-thread queue (agterm has no delayed-Enter submission) |
+  | `client/handshake.rs`, `client/mod.rs`, `client/terminal_setup.rs`, `client/input/windows_vti.rs` | adapt | the client library's connect + hello; the `agterm-session attach` terminal client (raw mode, resize watcher, Windows console VT input) |
+  | `client/attach.rs`, `client/shell/**` | cut | herdr's Ctrl+B prefix keys and TUI; the detach key is the attach contract's |
+  | `session.rs` | cut | herdr's named sessions are agterm's namespace; only its bounded stop-and-wait pattern is reused |
+  | `platform/windows.rs` | adapt | `launch_server_daemon_command` with the WMI path, `current_job_kills_processes_on_close`, `current_process_is_detached_server_daemon`, the pipe security descriptor (owner DACL + integrity label), timed pipe connect, process snapshot, `session_processes`, foreground job, `command_line_to_argv`; notifications, clipboard, power, IME, config backup go |
+  | `platform/linux.rs`, `platform/macos.rs`, `platform/unix_common.rs`, `platform/mod.rs` | adapt | `session_processes`, foreground process group (`/proc`; `sysctl` on macOS), `signal_processes`, `setsid` detach, SIGHUP ignore, nofile limit; logind inhibitor, power and shutdown hooks go |
+  | `platform/macos/launchd_spawn.rs` | not ported, recorded fallback | a one-shot launchd job against herdr#4920; the probe did not reproduce that kill for a setsid + disclaim server (see Platforms) |
+  | `platform/macos/bootstrap.rs` | cut | herdr moves the server into the user's Mach bootstrap context; agterm uses upstream's responsibility disclaim |
+  | `api/server.rs` | adapt | the accept-loop and connection-thread pattern, the live-handoff request; the JSON-lines API itself is replaced by the binary API |
+  | `api/{schema,event_hub,subscriptions,wait,status,client}.rs`, `cli/**` | cut | herdr's public API and CLI; agterm-session's API and CLI are the plan's |
+  | `persist/**`, `remote/**` | cut | see Gaps |
+  | `vendor/portable-pty` | adapt | patches 0003 (malformed Windows environments) and 0004 (directories on `PATH`); 0001 reduced to "never load a bare `conpty.dll` from the search path, use kernel32's ConPTY" (agterm ships no ConPTY bundle); 0002 (raw `cmd.exe` tails) not needed, agterm launches argv; plus agterm's own patch exporting and importing a ConPTY master's handles for the handoff |
+  | `crates/ghostty-vt` | cut | herdr's libghostty-vt binding; `agterm-vt` replaces it |
+
+- **Attach** (Task 23, agreed with Codex, transcript in the spike note):
+  - one serialization point per pane orders parsing, output offsets, snapshot capture, subscriber registration,
+    resize and role changes;
+  - wire: `SnapshotBegin{epoch, offset, size}`, bounded chunks, `SnapshotEnd`, then contiguous offset-tagged
+    `Output`;
+  - the snapshot is the formatter's restoration plus `agterm-vt`'s validated, replay-safe stream continuation (VT
+    parser and UTF-8 decoder state). Continuation capture has a byte cap and an unavailable outcome: it is never
+    truncated or replaced by empty state. When unavailable, the snapshot waits, within a deadline, while the PTY
+    keeps draining; with no valid cut by then, attach or resync fails without harm, and a handoff aborts before its
+    commit;
+  - per-client raw queues are byte-bounded and lossless, and never block the PTY reader. On overflow the server
+    resyncs in band: it finishes or abandons the frame being written, cuts a new snapshot and replaces only unsent
+    output (control messages keep their order), and replies tagged with a superseded epoch are dropped. A recovery
+    budget (snapshot bytes, suffix bytes, resyncs per interval) or a passed write deadline ends in disconnect. A
+    disconnect would cost the leader its lead, which is why resync comes first;
+  - terminal replies: the server VT answers state and capability queries (DA1/2/3, DSR/CPR, DECRQM, DECRQSS,
+    XTVERSION, XTGETTCAP) always, so the session has one identity and no stalled client blocks a reply.
+    Frontend-dependent replies (OSC 4/10/11/12 colours, XTWINOPS pixel sizes, Kitty graphics query replies) come
+    from the server too, out of metadata the reply-owner client supplies on attach and on change (theme colours,
+    cell size, graphics support), with stable defaults when there is no reply owner. Only what the whole
+    server/client path implements is advertised. OSC 52 reads and anything that needs a user's decision go as a
+    single-recipient request to the reply owner (the leader, else the first managed client), denied when none;
+  - attached VTs never write replies: `agterm-term` gets an attach effects policy for live panes, set in the
+    launch configuration before the first byte arrives (Task 28 runs the attach CLI in the pane's PTY; Task 30
+    attaches in process). `agterm-session attach` in an arbitrary terminal filters the server-owned query sequences
+    out of its output, fragment-safe, so the outer terminal does not answer them (Task 26);
+  - on Windows, conhost answers some queries itself; Task 23 records, per supported Windows version, which queries
+    reach the output pipe.
+- **Wire.** postcard (serde) in place of herdr's bincode: bincode 3.0.0 on crates.io is a `compile_error!`
+  tombstone and its README says development ceased. herdr's framing guards are kept. A stable envelope (magic and
+  protocol version, decodable across versions) precedes any postcard, so a client can talk to a server of another
+  build and ask it to hand off; protocol compatibility is separate from build identity, and capabilities are
+  advertised. One listener per namespace takes a separate connection per role (api request, attach), so bulk
+  output never delays a control call. The handoff keeps herdr's private socket, token and JSON-lines manifest (a
+  named pipe on Windows).
+  - message families: hello/welcome (envelope, build id, capabilities, error); api request/response by id; attach
+    (attach, snapshot begin/chunk/end, output, input, reply metadata and delegated requests, resize, role, detach,
+    exit); shutdown; handoff control.
+- **Runtime: threads, no tokio.** herdr's async surface is one `tokio::select!` loop (`server/headless.rs` `run`)
+  over channels, a deadline and a render notifier; its transport, API connections, PTY actors and handoff are
+  already blocking threads. The reduced server is one coordinator on `recv_timeout(next deadline)`, blocking
+  connection workers and a PTY reader and writer per pane. The client library stays synchronous inside
+  `agterm-term`'s IO thread.
+- **Windows handoff: conditional GO.** Proven in the `Win11-admin` VM (10.0.26100.9711) and on `windows-latest`
+  (10.0.26100) and `windows-2022` (10.0.20348): a detached server holding a ConPTY shell in a kill-on-close job
+  passes it to a second server, which receives by `DuplicateHandle` the input write end, the output read end, the pseudoconsole's three
+  internal handles (kernelbase's `{hSignal, hPtyReference, hConPtyProcess}`, undocumented), the job and the shell
+  process. After the old server exits, the shell and conhost live, the shell keeps its state, a resize through an
+  HPCON rebuilt from the three handles reaches the child, closing the job ends the shell and closing the console
+  handles ends conhost. Guards Task 25 must build: a layout gate checked before any dereference (support matrix by
+  ConPTY implementation, architecture and Windows version; unknown → no handoff); custom ownership of the rebuilt
+  struct (never `ClosePseudoConsole` on it); handoff bound to the replacement's process handle; versioned manifest;
+  prepare/ready/commit with a rollback that never touches the shared job or console; quiesced reader, input,
+  resize and replies; already-read bytes and the VT continuation transferred. Gate failure keeps the old server
+  serving and offers the reset. If gating proves unreliable, the escape hatch is a stable per-namespace ConPTY
+  owner process.
+- **Windows spawn.** herdr spawns with `DETACHED_PROCESS` and, inside a kill-on-close job, goes through WMI
+  `Win32_Process.Create` (`platform/windows.rs` `launch_server_daemon_command`). agterm: no kill-on-close job →
+  plain detached spawn (`DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`); in one → add `CREATE_BREAKAWAY_FROM_JOB`;
+  refused → WMI; WMI fails → error. Never a silent retry inside the job: in the probe a job without
+  `JOB_OBJECT_LIMIT_BREAKAWAY_OK` refused breakaway with `ERROR_ACCESS_DENIED`, and the server started without it
+  died when the job closed. Readiness, then lifetime, is validated.
+- **Windows namespace** (decided): the directory `%LOCALAPPDATA%\agterm\live\<FNV-1a 64 of the resolved state dir>`
+  (`%USERPROFILE%\AppData\Local` when `LOCALAPPDATA` is unset), the same hash as Unix; the endpoint
+  `\\.\pipe\agterm-live-<FNV-1a 64 of the case-folded namespace directory path>`, derivable by a client that holds
+  only `AGTERM_LIVE_DIR`. The listener uses herdr's owner-only DACL (`D:P(A;;GA;;;SY)(A;;GA;;;OW)`) with the
+  integrity label of `local_server_security_descriptor` and `FILE_FLAG_FIRST_PIPE_INSTANCE`; a client checks the
+  server's user SID (`GetNamedPipeServerProcessId`). A private state dir gives a private directory and pipe, which
+  is the Windows form of the isolation rule's private pipe prefix.
+- **Platforms.**
+  - macOS: `posix_spawn` with `POSIX_SPAWN_SETSID` (0x0400; the libc crate exports it for Linux only) and
+    `responsibility_spawnattrs_setdisclaim` proven in the `macOS 26` VM (26.7) and on `macos-15` and `macos-26`: the
+    server outlives its launcher, leads its session, is responsible for itself, and an `SCM_RIGHTS` handoff keeps
+    the shell with its state, resize and hangup. herdr#4920 (a terminal app's quit kills a setsid server through its
+    launchd job) did not reproduce with Terminal.app: after a normal quit (Apple Events `quit`, as Cmd-Q sends) a
+    setsid child and a setsid + disclaim child both lived on; after a SIGTERM to Terminal.app the setsid + disclaim
+    child lived and a plain child died by the tab's hangup; children of a LaunchServices app outlived its exit. The
+    launchd one-shot job stays the recorded fallback, and Post-Completion's macOS check covers agterm's own quit.
+  - Every PTY master is close-on-exec, and the macOS server spawn adds `POSIX_SPAWN_CLOEXEC_DEFAULT`. In the probe a
+    stray inherited master that nobody read held the exiting shell in the tty drain (`ps` state `E`), so it never
+    ended.
+  - Unix handoff: the new server is not the shell's parent, so a session's exit status after a handoff is unknown
+    (herdr reports `ChildExitReason::Handoff`), and launchd or a subreaper reaps the shell. On Windows the
+    duplicated process handle keeps the status.
+  - Windows kill: herdr kills a pane's processes from a snapshot. agterm's per-pane `KILL_ON_JOB_CLOSE` job (Solution
+    Overview) is its own addition, and the job handle passes in the handoff, or the old server's exit would kill
+    every shell.
+- **Server lifetime.** herdr's server runs until stopped. agterm's exits when it holds no session and no client
+  (Task 22), as planned.
+- **Gaps** in upstream's restore, replay and remote attach that herdr's `persist` or `remote` would fill: none.
+  - `persist` saves layouts and, optionally, screen history to disk, and restores them into fresh shells after a
+    server or machine restart. Upstream's restore and replay cover the restart case, and it keeps no screen history
+    across a reboot, so this would go beyond parity.
+  - `remote` runs herdr on an ssh host behind a bridge client. `agterm-core::remote::ssh` (upstream's
+    `attachCommand`) covers remote attach.
+- **Baselines** (dev box: CachyOS, Linux 7.2.9, inside `agterm-agents.slice`, 10 CPUs, 10 GB; zmx pin `8bab1f0`
+  with its patches):
+  - `agterm-term`'s `bench.rs`, a `cat` of 50 MiB (`cat_s`, three runs): plain 0.462, 0.486 and 0.430 s; through
+    `zmx attach` 0.801, 0.899 and 0.906 s;
+  - a 50 MiB `cat` in the GPUI build (release, headless weston on lavapipe, through the suite's runner, `cat_s`,
+    three runs): plain pane 1.503, 1.670 and 1.627 s; live zmx pane 2.466, 2.630 and 2.253 s;
+  - idle zmx daemons, each holding an idle `/bin/sh` after 20 000 lines: 1 daemon 14.6 MiB RSS (13.9 MiB PSS);
+    4: 54.3 MiB (45.6 MiB PSS); 16: 222.9 MiB RSS, 182.4 MiB PSS (13.9 MiB RSS, 11.4 MiB PSS each).
+
+  Targets: `agterm-session`'s 50 MiB `cat` through a live pane is no slower than the zmx numbers, and the server's
+  idle RSS for N such panes is no larger than N daemons' (Task 30 measures, Task 33 checks).
+
 ## What Goes Where
 
 - **Implementation Steps** (`[ ]`): code, tests, CI workflows, scripts and docs in this repo, including debugging in
@@ -916,27 +1073,28 @@ below are rustty-vt's (`crates/rustty-vt/src/`).
 ### Task 2: Study herdr's session server and spike its risky parts
 
 **Files:**
-- Create: `docs/spikes/20261018-session-server.md`
+- Create: `docs/spikes/20261018-session-server.md`, `docs/spikes/20261018-session-server-probes.md` (the probes'
+  sources)
 - Modify: this plan (Part B details, ➕ tasks), `build/pins.env` (`HERDR_*`), `NOTICE` (herdr's Apache-2.0 section)
 
-- [ ] pin herdr (`HERDR_REPO`, `HERDR_REV`, the current `main`) and read its server at that commit: `src/server`,
+- [x] pin herdr (`HERDR_REPO`, `HERDR_REV`, the current `main`) and read its server at that commit: `src/server`,
       `src/protocol`, `src/ipc.rs`, `src/client`, `src/session.rs`, `src/pane.rs` with `src/pane/**` (the per-pane
       runtime), `src/terminal`, `src/pty`, `src/server/handoff.rs` with `src/handoff_runtime.rs` and
       `src/api/server.rs`, `src/platform`, `src/api`, `src/cli`, `vendor/portable-pty`, and `src/persist` and
       `src/remote` only to record gaps
-- [ ] write the findings into Technical Details > `agterm-session` > "What Task 2 settles": the module map with
+- [x] write the findings into Technical Details > `agterm-session` > "What Task 2 settles": the module map with
       verdicts, the wire, the runtime, any gaps. Adjust Tasks 20–32 and add ➕ tasks where the code asks for
       it
-- [ ] probe the Windows handoff in the `Win11-admin` VM (and on `windows-latest`), with a throwaway program, not
+- [x] probe the Windows handoff in the `Win11-admin` VM (and on `windows-latest`), with a throwaway program, not
       merged: a detached server holds a ConPTY shell, and a second server process takes it over (duplicated handles)
       while the shell keeps running. Record go or no-go
-- [ ] probe on macOS, in the `macOS 26` VM and on a runner: the server spawned with `posix_spawn` + setsid + disclaim
+- [x] probe on macOS, in the `macOS 26` VM and on a runner: the server spawned with `posix_spawn` + setsid + disclaim
       survives its launcher; a handoff over `SCM_RIGHTS` keeps the shell
-- [ ] decide the Windows namespace directory
-- [ ] record baselines on the dev box: `agterm-term`'s `bench.rs` (plain and through zmx), a 50 MiB `cat` through a
+- [x] decide the Windows namespace directory
+- [x] record baselines on the dev box: `agterm-term`'s `bench.rs` (plain and through zmx), a 50 MiB `cat` through a
       live zmx pane in the GPUI build, the idle RSS of zmx daemons for N panes
-- [ ] add herdr's section to `NOTICE`
-- [ ] write the spike note. A no-go that blocks Part B stops it with a ⚠️ and a codex-discussion; Part A goes on
+- [x] add herdr's section to `NOTICE`
+- [x] write the spike note. A no-go that blocks Part B stops it with a ⚠️ and a codex-discussion; Part A goes on
 
 ### Task 3: Cross-platform CI for `agterm-vt`
 
@@ -1345,10 +1503,14 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
 **Files:**
 - Create: `crates/agterm-session/Cargo.toml` (license `MIT AND Apache-2.0`), `crates/agterm-session/src/{lib,protocol,endpoint}.rs`,
   `crates/agterm-session/tests/{protocol,endpoint}.rs`
-- Modify: `Cargo.toml` (`interprocess`, `windows-sys`, and the runtime Task 2 chose), `.github/workflows/cross-platform.yml`
+- Modify: `Cargo.toml` (`interprocess`, `windows-sys`, `postcard`; no async runtime, Task 2),
+  `.github/workflows/cross-platform.yml`
 
-- [ ] port herdr's wire (framing, encoding, version negotiation) with the message families Task 2 kept: hello, the
-      api requests and replies, attach (snapshot, output, input, resize, role), handoff control
+- [ ] port herdr's wire (framing, version negotiation) with the message families Task 2 kept: hello, the api
+      requests and replies, attach (snapshot begin/chunk/end, offset-tagged output, input, reply metadata and
+      delegated requests, resize, role, exit), handoff control. Encoding postcard, behind a stable envelope (magic
+      and protocol version) that every version decodes; build identity and capabilities in the welcome; one
+      listener with a connection per role (Task 2 > Wire)
 - [ ] port herdr's endpoint (`src/ipc.rs`, `src/server/socket_paths.rs`) onto agterm's namespace: Unix sockets under
       the instance's socket directory; on Windows, named pipes with herdr's owner-only SDDL, plus
       `FILE_FLAG_FIRST_PIPE_INSTANCE` (agterm's addition)
@@ -1356,7 +1518,7 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
 - [ ] add the crate to `cross-platform.yml`
 - [ ] tests:
   - each message round-trips;
-  - version mismatch refused with its message;
+  - version mismatch refused with its message, and the envelope of a newer protocol still read;
   - a truncated frame and an oversized length refused;
   - an over-long Unix socket path refused;
   - a second pipe instance under a taken name refused
@@ -1385,6 +1547,7 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
 **Files:**
 - Create: `crates/agterm-session/src/server/{mod,lifecycle,spawn/{mod,linux,macos,windows}}.rs`,
   `crates/agterm-session/tests/lifecycle.rs`
+- Modify: `Cargo.toml` (`wmi`, Windows only, for herdr's WMI spawn; Task 2)
 
 - [ ] port herdr's autodetect and spawn: a client that finds no server starts one and waits for its endpoint; a
       second start under the same namespace finds the first. The server's argv carries its namespace
@@ -1394,23 +1557,28 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
   - macOS: `posix_spawn`, `POSIX_SPAWN_SETSID`, `responsibility_spawnattrs_setdisclaim` (read upstream's
     `Responsibility.swift` and `ZmxLaunch.swift` first);
   - Windows: herdr's `DETACHED_PROCESS` and its in-server check for a kill-on-close job
-    (`current_process_is_detached_server_daemon`). agterm adds `CREATE_NEW_PROCESS_GROUP` and tries
-    `CREATE_BREAKAWAY_FROM_JOB`, falling back without it when the launcher's job refuses breakaway
+    (`current_process_is_detached_server_daemon`). agterm adds `CREATE_NEW_PROCESS_GROUP`; inside a kill-on-close
+    job it adds `CREATE_BREAKAWAY_FROM_JOB`, and where the job refuses breakaway it starts through herdr's WMI
+    `Win32_Process.Create`; when that fails too, the start fails with its reason. Never a plain retry inside the
+    job: Task 2's probe shows that server dies with the job. Readiness, then lifetime, is validated
+  - macOS also sets `POSIX_SPAWN_CLOEXEC_DEFAULT`, and every PTY master is close-on-exec (Task 2: a stray
+    inherited master held an exiting shell in the tty drain)
 - [ ] shutdown: the server exits when it holds no session and no client, and never while a session lives
 - [ ] tests on every OS (Windows and macOS debugged in the VMs):
   - the launcher exits and the server lives;
   - two racing starts leave one server;
   - the empty server exits;
   - (macOS) the spawn attributes;
-  - (Windows) a server launched from inside a job survives the job's close, and a job that refuses breakaway still
-    gets a server
+  - (Windows) a server launched from inside a job survives the job's close; a job that refuses breakaway still
+    gets a server, through WMI; nested jobs; a WMI failure reported; the argv quoting, cwd and environment kept
 - [ ] run gates
 
 ### Task 23: Pane runtime: PTY, VT state, clients, leadership, snapshot
 
 **Files:**
 - Create: `crates/agterm-session/src/server/{pane,pty,clients,lead,snapshot}.rs`,
-  `crates/agterm-session/tests/{pane,lead,snapshot}.rs`
+  `crates/agterm-session/tests/{pane,lead,snapshot}.rs`, `vendor/portable-pty/`, `build/patches/portable-pty/`,
+  `scripts/vendor-portable-pty.sh` (Task 2)
 
 - [ ] port herdr's PTY actor over `portable-pty` (with `vendor/portable-pty`'s fixes, compared against crates.io and
       the diff recorded) and the parts of its per-pane runtime (`src/pane.rs`, `src/pane/**`, `src/terminal/`) that
@@ -1419,6 +1587,17 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
 - [ ] each pane's shell tree in a job object with `KILL_ON_JOB_CLOSE` on Windows; process group on Unix
 - [ ] leadership: size ownership, role changes and unmanaged clients, as Technical Details says
 - [ ] snapshot on attach, matching what the suite pins (Context)
+- [ ] ➕ the attach design of Task 2 > Attach: one serialization point per pane; `SnapshotBegin{epoch, offset}`,
+      chunks, `SnapshotEnd`, offset-tagged output; the snapshot carries `agterm-vt`'s replay-safe continuation, with
+      its byte cap and unavailable outcome (bounded wait, then a harmless failure); byte-bounded lossless client
+      queues, in-band resync with a recovery budget, then disconnect
+- [ ] ➕ terminal replies (Task 2 > Attach): the server VT answers state and capability queries always; the
+      frontend-dependent ones from the reply owner's metadata (theme colours, cell size, graphics support, with
+      stable defaults); OSC 52 reads as a single-recipient request to the reply owner. On Windows, record per
+      supported version which queries conhost answers itself and which reach the output pipe
+- [ ] ➕ vendor `portable-pty` the way `vendor-gpui.sh` vendors gpui (`vendor/` + `build/patches/portable-pty/` +
+      a `--check`): herdr's patches 0003 and 0004, 0001 reduced to kernel32's ConPTY only (no bare `conpty.dll`
+      from the search path), and agterm's patch that exports and imports a ConPTY master's handles for Task 25
 - [ ] child exit: the session ends and its clients get the exit as `ExitPolicy` expects
 - [ ] tests:
   - echo round trip;
@@ -1428,7 +1607,12 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
   - reattach showing the scrollback, then the screen with the cursor in place;
   - an alt-screen app;
   - color overrides kept;
-  - DECSET 2026 not replayed
+  - DECSET 2026 not replayed;
+  - continuation: a cut inside a UTF-8 sequence, a CSI and an OSC; an overlong sequence; embedded C0 controls;
+    recovery after a terminator; original VT + suffix ≡ restored VT + suffix;
+  - a slow client resynced in band, keeping its role, and one past the budget disconnected, with the PTY reader
+    never blocked;
+  - one reply per query with two clients attached and with none
 - [ ] run gates
 
 ### Task 24: Server API: what `SessionHost` and `clipboard set` need
@@ -1454,15 +1638,22 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
 - [ ] port herdr's handoff on Unix (`src/server/handoff.rs`, `src/handoff_runtime.rs`, `src/api/server.rs`): the
       manifest, the `SCM_RIGHTS` batches, the per-pane runtime state, the commit and its timeouts. The VT state passes
       as a snapshot that the new server replays into its `agterm-vt`
-- [ ] Windows, per Task 2's verdict: the handoff Task 2 proved, or the documented fallback (sessions end on update,
-      and the update path offers the reset)
+- [ ] Windows, per Task 2's conditional GO: duplicate into the new server the ConPTY pipe ends, the pseudoconsole's
+      three internal handles, the pane's job and the shell process, behind Task 2's guards (layout gate before any
+      dereference, custom ownership of the rebuilt HPCON, never `ClosePseudoConsole` on it, handoff bound to the
+      replacement's process handle, prepare/ready/commit, rollback that never touches the shared job or console).
+      A failed gate keeps the old server serving and offers the reset
+- [ ] after a Unix handoff the new server is not the shell's parent: its exit reports no status (herdr's
+      `ChildExitReason::Handoff`); check that `ExitPolicy` and `agterm-term/src/exit.rs` treat it as a plain exit
 - [ ] the build id: a hash of the staged binary. A client finding a server of another build starts the handoff,
       and a failed handoff falls back to `build_record.rs`'s reset offer
 - [ ] tests on every OS:
   - a handoff keeps the shell, its screen and its scrollback;
   - a client attached before the handoff reattaches after it;
   - a failed handoff leaves the old server serving;
-  - (Windows) replacing the staged binary while the server runs succeeds
+  - (Windows) replacing the staged binary while the server runs succeeds;
+  - (Windows) a layout the gate does not know refuses the handoff before any dereference;
+  - continuous output across a handoff loses no byte
 - [ ] run gates
 
 ### Task 26: CLI binary with the kept attach contract
@@ -1475,7 +1666,10 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
 - [ ] `attach` honors the attach contract in Technical Details: the `AGTERM_LIVE_*` variables and their
       empty-means-unset reading, `attach <name> [argv…]` create-only with the gone guard, the detach key unless
       `AGTERM_LIVE_NO_DETACH_KEY`, the managed-claim opt-in, the role title
-- [ ] `attach` as a terminal client (herdr's terminal attach): raw mode, resize forwarding
+- [ ] `attach` as a terminal client (herdr's terminal attach): raw mode, resize forwarding; on Windows, console VT
+      input as herdr's `client/input/windows_vti.rs` reads it
+- [ ] ➕ the output path filters out the queries the server answers (Task 2 > Attach), fragment-safe across reads,
+      so the outer terminal does not answer them a second time; tested with split sequences and two attached CLIs
 - [ ] tests:
   - each subcommand's output and exit codes;
   - `attach` round trip in a PTY, detach and reattach;
@@ -1521,6 +1715,8 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
       contract's `AGTERM_LIVE_*` names, role title and socket directory
 - [ ] the frontend builds the new host (`session_host.rs`, `restore_launch.rs`), and the GPUI pane runs
       `agterm-session attach` in its PTY, as it ran today's attach subprocess
+- [ ] ➕ `agterm-term`'s attach effects policy for live panes: the pane's VT writes no replies to the PTY, set in
+      the launch configuration before the first byte (the server answers queries, Task 2 > Attach)
 - [ ] `agtermctl clipboard set` finds `agterm-session` beside itself and uses the server's print. Record which of
       its error texts change against upstream's. Update `cli_local.rs`'s fake staging and its asserts
 - [ ] the harness, in the Rust adapter's vocabulary only (the Swift adapters keep driving upstream's own binary):
@@ -1573,6 +1769,8 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
 - [ ] the pane asks the server to create its session and attaches with the in-process stream: no PTY, no subprocess,
       the same IO-thread batching and VT slicing as the PTY path
 - [ ] a session gone or refused follows the `ExitPolicy` the attach path follows today
+- [ ] the pane sends the reply metadata (theme colours, cell size, graphics support) on attach and on change, and
+      answers the server's delegated requests (OSC 52 read) as the reply owner; its own VT replies stay suppressed
 - [ ] port `tests/launch.rs`'s live tests to the in-process attach: `every_fresh_live_launch_paints_its_prompt` (50
       sequential and the parallel fresh launches, the guard of the first-paint race), the session-gone and
       cannot-reach-socket cases
