@@ -7,8 +7,9 @@
 //! Ghostty's differential test holds the two lanes equal).
 //! rustty: `crates/rustty-simd/src/vt.rs` at `RUSTTY_REV` (MIT).
 //! Changes: the scalar lane only. Its ASCII run copies native-vector-width chunks, which LLVM vectorizes as Zig's
-//! `@Vector` code is. The SIMD-against-scalar differential test went with the kernel; its corpus generator runs the
-//! scalar lane against an independent per-byte decoder written from the Unicode tables instead.
+//! `@Vector` code is. The SIMD-against-scalar differential test went with the kernel; its corpus generator holds the
+//! scalar lane to the standard library's lossy decode (`String::from_utf8_lossy`), which also substitutes maximal
+//! subparts.
 
 use crate::simd::index_of::index_of;
 use crate::simd::native_vector_bits;
