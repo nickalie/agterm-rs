@@ -219,7 +219,7 @@ fn start_live(lavapipe: &Path, zmx_bin: &Path, resources: &Path) -> TestResult<(
     std::fs::write(sandbox.path("state/settings.json"), r#"{"restoreMode":"live"}"#)?;
     let sessions = Sessions {
         zmx: zmx_bin.to_owned(),
-        dir: agterm_core::zmx::socket_directory(&sandbox.path("state")),
+        dir: agterm_core::live::socket_directory(&sandbox.path("state")),
     };
     let primary = sandbox.start_gpui_primary("primary.log")?;
     Ok((sandbox, primary, sessions))
@@ -234,7 +234,7 @@ fn live_session(sandbox: &Sandbox) -> TestResult<String> {
     eventually("the session in zmx", || {
         call(sandbox, "tree", None, json!({}))
             .ok()
-            .filter(|tree| find(tree, &sid).is_some_and(|session| session["backedByZmx"] == json!(true)))
+            .filter(|tree| find(tree, &sid).is_some_and(|session| session["backedByLive"] == json!(true)))
     })
     .map_err(|err| format!("{err}\n{}", sandbox.log("primary.log")))?;
     Ok(sid)
@@ -272,13 +272,13 @@ fn report(path: &Path, what: &str) -> TestResult<(Identity, String)> {
 
 /// The pid of the shell zmx runs for session `sid`.
 fn shell_of(sandbox: &Sandbox, sid: &str) -> TestResult<u32> {
-    let entries = call(sandbox, "zmx.list", None, json!({}))?;
-    entries["zmx"]["entries"]
+    let entries = call(sandbox, "live.list", None, json!({}))?;
+    entries["live"]["entries"]
         .as_array()
         .and_then(|rows| rows.iter().find(|row| row["sessionID"] == json!(sid)))
         .and_then(|row| row["leaderPID"].as_u64())
         .and_then(|pid| u32::try_from(pid).ok())
-        .ok_or_else(|| "no shell pid in zmx.list".into())
+        .ok_or_else(|| "no shell pid in live.list".into())
 }
 
 /// The app's processes (its children and theirs) in another user namespace than `outside`'s: under the vendored

@@ -1,4 +1,4 @@
-//! `zmx.tree`: the attachable sessions, this app's own or another machine's (upstream's `RemoteTree.swift`, the
+//! `live.tree`: the attachable sessions, this app's own or another machine's (upstream's `RemoteTree.swift`, the
 //! `remoteTree`/`localAttachableSessions` half of `agterm/Control/ControlServer+Zmx.swift`, and the parts of
 //! `RemoteSession.swift` and `RemoteCommandProcessRunner.swift` the remote form runs on).
 //!
@@ -13,13 +13,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use agterm_proto::{
-    ControlRemotePane, ControlRemoteSession, ControlRemoteTree, ControlResult, ControlSessionNode,
-    ControlWorkspaceNode, ControlZmxInventory, Response,
+    ControlLiveInventory, ControlRemotePane, ControlRemoteSession, ControlRemoteTree, ControlResult,
+    ControlSessionNode, ControlWorkspaceNode, Response,
 };
 
 use super::frames;
 use crate::command_restore::shell_quoted_line;
-use crate::zmx::is_daemon_name;
+use crate::live::is_daemon_name;
 
 /// How long the remote form waits for the far side's answer (upstream's `remoteTreeDeadline`).
 pub const TREE_DEADLINE: Duration = Duration::from_secs(10);
@@ -48,7 +48,7 @@ pub enum InvocationError {
     InvalidHost,
     /// A session, job or daemon name that is not one plain token of the expected shape.
     InvalidSession,
-    /// A zmx endpoint path carrying control characters.
+    /// A live-session endpoint path carrying control characters.
     InvalidEndpoint,
 }
 
@@ -84,7 +84,7 @@ pub fn ssh_arguments(host: &str, connect_timeout: u32, interactive: bool) -> Vec
     ]
 }
 
-/// One ssh invocation running the far side's own bare `zmx tree`, which answers across every open window in one
+/// One ssh invocation running the far side's own bare `live tree`, which answers across every open window in one
 /// document (upstream's `RemoteSession.treeCommand`). The chain is wrapped in `/bin/sh -c`, since sshd runs it through
 /// the account's shell, where a bare `VAR=value` is a syntax error in fish.
 ///
@@ -93,7 +93,7 @@ pub fn ssh_arguments(host: &str, connect_timeout: u32, interactive: bool) -> Vec
 /// The host is empty or not something ssh may take as a destination.
 pub fn tree_command(host: &str) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
-    let chain = format!("{} && agtermctl zmx tree --json", cli_path_prefix());
+    let chain = format!("{} && agtermctl live tree --json", cli_path_prefix());
     let remote = shell_quoted_line(&["/bin/sh", "-c", chain.as_str()]);
     let mut argv = ssh_arguments(host, 5, false);
     argv.push(remote);
@@ -209,9 +209,9 @@ pub struct RemoteWindowProjection {
 /// Why a session list could not be produced or read (upstream's `RemoteTreeMerger.MergeError`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MergeError {
-    /// The remote answered, but not with a readable `zmx tree` document: an older CLI, or a truncated read.
+    /// The remote answered, but not with a readable `live tree` document: an older CLI, or a truncated read.
     MalformedProjection,
-    /// The inventory does not say where zmx and its daemons live, so nothing can be attached.
+    /// The inventory does not say where the session host and its daemons live, so nothing can be attached.
     MissingEndpoint,
     /// The remote command itself failed; carries what it said.
     RemoteFailed(String),
@@ -223,7 +223,7 @@ impl MergeError {
     pub fn message(&self) -> String {
         match self {
             Self::MalformedProjection => "the remote did not return a readable session list".to_owned(),
-            Self::MissingEndpoint => "the remote agterm is too old to report its zmx endpoint".to_owned(),
+            Self::MissingEndpoint => "the remote agterm is too old to report its live-session endpoint".to_owned(),
             Self::RemoteFailed(reason) => reason.clone(),
         }
     }
@@ -243,7 +243,7 @@ pub fn remote_error(stdout: &str) -> Option<String> {
         .filter(|error| !error.is_empty())
 }
 
-/// Reads back what the far side's own `zmx tree` printed (upstream's `decode(stdout:)`). The caller rejects a nonzero
+/// Reads back what the far side's own `live tree` printed (upstream's `decode(stdout:)`). The caller rejects a nonzero
 /// exit before calling this, and stamps the host it was given onto the result.
 ///
 /// # Errors
@@ -273,7 +273,7 @@ pub fn decode(stdout: &str) -> Result<ControlRemoteTree, MergeError> {
 /// The inventory carries no endpoint.
 pub fn candidates(
     windows: &[RemoteWindowProjection],
-    inventory: &ControlZmxInventory,
+    inventory: &ControlLiveInventory,
 ) -> Result<ControlRemoteTree, MergeError> {
     let endpoint = inventory.endpoint.clone().ok_or(MergeError::MissingEndpoint)?;
     let mut daemons: std::collections::HashMap<&str, std::collections::HashMap<&str, &str>> =
@@ -320,8 +320,8 @@ fn remote_session(
     daemons: &std::collections::HashMap<&str, &str>,
 ) -> Option<ControlRemoteSession> {
     // a claimed, running daemon is no proof the owner shows it: a launch that fell back from live keeps its daemons
-    // while showing ordinary shells, and `backedByZmx` is the store's own answer
-    if node.backed_by_zmx != Some(true) {
+    // while showing ordinary shells, and `backedByLive` is the store's own answer
+    if node.backed_by_live != Some(true) {
         return None;
     }
     let pane = |role: &str, daemon: &str, foreground: Option<&Vec<String>>| ControlRemotePane {
@@ -350,15 +350,15 @@ fn remote_session(
 
 #[cfg(test)]
 mod tests {
-    use agterm_proto::{ControlTree, ControlZmxEndpoint};
+    use agterm_proto::{ControlLiveEndpoint, ControlTree};
     use serde_json::json;
     use uuid::Uuid;
 
     use super::*;
-    use crate::zmx::daemon_name;
+    use crate::live::daemon_name;
 
-    fn endpoint() -> ControlZmxEndpoint {
-        ControlZmxEndpoint {
+    fn endpoint() -> ControlLiveEndpoint {
+        ControlLiveEndpoint {
             executable: "/opt/agterm/bin/zmx".to_owned(),
             socket_directory: "/tmp/agterm-zmx-abc".to_owned(),
         }
@@ -371,7 +371,7 @@ mod tests {
         }))
         .unwrap();
         node.has_split = split.then_some(true);
-        node.backed_by_zmx = backed;
+        node.backed_by_live = backed;
         node.split_axis = split.then(|| "vertical".to_owned());
         node
     }
@@ -398,7 +398,7 @@ mod tests {
     }
 
     /// Built from raw JSON, so the fixture pins the wire shape rather than whatever the encoder emits.
-    fn inventory(entries: &[serde_json::Value], with_endpoint: bool) -> ControlZmxInventory {
+    fn inventory(entries: &[serde_json::Value], with_endpoint: bool) -> ControlLiveInventory {
         let mut payload = json!({
             "restore": {"configured": "live", "requestedAtLaunch": "live", "active": "live", "restartRequired": false},
             "inventoryComplete": true,
@@ -540,7 +540,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_claimed_running_agterm_daemon_of_a_zmx_backed_session_is_offered() {
+    fn only_a_claimed_running_agterm_daemon_of_a_live_backed_session_is_offered() {
         let left = daemon_name(Uuid::new_v4());
         let backed = [window(
             "w-1",
@@ -571,7 +571,7 @@ mod tests {
             )],
         )];
         let fallback = candidates(&plain, &inventory(&[running("s1", "left", &left)], true)).unwrap();
-        assert!(fallback.sessions.is_empty(), "a session not backed by zmx");
+        assert!(fallback.sessions.is_empty(), "a session not backed by a live daemon");
         let other = daemon_name(Uuid::new_v4());
         let stray = candidates(
             &backed,
@@ -589,7 +589,7 @@ mod tests {
         );
         assert_eq!(
             MergeError::MissingEndpoint.message(),
-            "the remote agterm is too old to report its zmx endpoint"
+            "the remote agterm is too old to report its live-session endpoint"
         );
         let empty = candidates(&[], &inventory(&[], true)).unwrap();
         assert!(
@@ -606,8 +606,10 @@ mod tests {
         );
         assert_eq!(decode(r#"{"ok":true}"#), Err(MergeError::MalformedProjection));
         assert_eq!(
-            decode(r#"{"ok":false,"error":"zmx is not available"}"#),
-            Err(MergeError::RemoteFailed("zmx is not available".to_owned()))
+            decode(r#"{"ok":false,"error":"live sessions are unavailable in this instance"}"#),
+            Err(MergeError::RemoteFailed(
+                "live sessions are unavailable in this instance".to_owned()
+            ))
         );
         assert_eq!(
             decode(r#"{"ok":false}"#).map_err(|error| error.message()),
@@ -658,8 +660,8 @@ mod tests {
     #[test]
     fn the_remotes_own_refusal_is_read_from_stdout() {
         assert_eq!(
-            remote_error(r#"{"ok":false,"error":"could not read the zmx session list"}"#).as_deref(),
-            Some("could not read the zmx session list")
+            remote_error(r#"{"ok":false,"error":"could not read the live session list"}"#).as_deref(),
+            Some("could not read the live session list")
         );
         assert_eq!(remote_error(r#"{"ok":false,"error":"  "}"#), None);
         assert_eq!(
@@ -680,7 +682,7 @@ mod tests {
         );
         assert_eq!(
             argv[7],
-            r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && agtermctl zmx tree --json'"#
+            r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && agtermctl live tree --json'"#
         );
         assert_eq!(tree_command(""), Err(InvocationError::EmptyHost));
         for host in ["-oProxyCommand=x", "bad host", "ho\u{7f}st", "a\u{1b}[31m"] {

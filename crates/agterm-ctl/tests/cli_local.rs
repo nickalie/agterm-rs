@@ -22,7 +22,7 @@ type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
 const AGTERMCTL: &str = env!("CARGO_BIN_EXE_agtermctl");
 const ENTRY: &str = "xterm-ghostty";
-const NOT_LIVE: &str = "this pane has no zmx daemon; run it in a main or split pane started under Live sessions";
+const NOT_LIVE: &str = "this pane has no live session; run it in a main or split pane started under Live sessions";
 const DAEMON: &str = "agterm-357e181888f34450b5c225bd00239b9b";
 
 /// A server on `<state>/agterm.sock`, the socket the CLI would resolve from `AGTERM_STATE_DIR`, counting the requests
@@ -292,12 +292,15 @@ fn clipboard_set_reports_zmx_failing_or_missing() -> TestResult {
     let zmx = fs::canonicalize(sandbox.path("stage/bin"))?.join("zmx");
     assert_eq!(
         outcome(&sandbox.run(None, &["clipboard", "set", "hi"], &live, b"")?),
-        failed(&format!("no zmx next to this agtermctl; looked for {}", zmx.display()))
+        failed(&format!(
+            "no live-session executable next to this agtermctl; looked for {}",
+            zmx.display()
+        ))
     );
     Sandbox::script(&zmx, "cat >/dev/null\necho 'session not found' >&2\nexit 3")?;
     assert_eq!(
         outcome(&sandbox.run(None, &["clipboard", "set", "hi"], &live, b"")?),
-        failed("zmx print exited 3: session not found")
+        failed("the live-session print exited 3: session not found")
     );
     Ok(())
 }
@@ -312,7 +315,10 @@ fn clipboard_set_reports_a_zmx_that_exits_without_reading_a_large_text() -> Test
     Sandbox::script(&zmx, "echo 'session not found' >&2\nexit 4")?;
     let large = vec![b'x'; 1024 * 1024];
     let output = sandbox.run(None, &["clipboard", "set"], &live, &large)?;
-    assert_eq!(outcome(&output), failed("zmx print exited 4: session not found"));
+    assert_eq!(
+        outcome(&output),
+        failed("the live-session print exited 4: session not found")
+    );
     Ok(())
 }
 

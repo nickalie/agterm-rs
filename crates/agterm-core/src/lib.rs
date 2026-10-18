@@ -27,6 +27,7 @@ pub mod interrupt;
 pub mod keymap;
 pub mod keystrokes;
 pub mod link_policy;
+pub mod live;
 pub mod menu_lists;
 pub mod modal;
 pub mod model;
@@ -53,13 +54,13 @@ pub mod titlebar;
 pub mod watermark;
 pub mod window_geometry;
 pub mod windows;
-pub mod zmx;
 pub mod zoom;
 
 pub use commands::PaneReport;
 pub use commands::debug::is_ui_test_launch;
 pub use commands::hud::{CellEstimator, HudHideTimer, WINDOW_PADDING as HUD_WINDOW_PADDING};
 pub use commands::keymap::{FAILURE_HUD_SECONDS, MenuReader};
+pub use commands::live::{LeadCover, LiveInstall, LiveQuit, PaneReplacement, ResetPrompt, ResetRefusal};
 pub use commands::notify::{
     BANNERS_OFF_NOTE, NotificationEffect, NotificationPost, PaneRole, identity as notification_identity,
     parse_identity as parse_notification_identity, should_deliver,
@@ -68,7 +69,6 @@ pub use commands::overlay::LineChannel;
 pub use commands::process::{CorePoster, CoreTask, ProcessHost, widened_path};
 pub use commands::relaunch::{EXIT_CAPTURE_BUDGET, PaneSpawn};
 pub use commands::surface::POLL_INTERVAL;
-pub use commands::zmx::{LeadCover, LiveInstall, LiveQuit, PaneReplacement, ResetPrompt, ResetRefusal};
 pub use dispatch::{CommitTimers, Core, CoreConfig, CoreState, Dispatched, Resume, decode_request};
 pub use error::{ControlError, Noun};
 pub use windows::{WindowRequest, WindowSize, WindowState};

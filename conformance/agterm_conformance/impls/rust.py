@@ -21,6 +21,7 @@ from agterm_conformance.impls.base import (
     software_rendering_env,
     version_tuple,
 )
+from agterm_conformance.vocabulary import LIVE
 
 # `version` -> result.conformance = {"parityLevel": "0.36.0", "capabilities": ["posix-shell", ...]}.
 # Optional: a build without it, like a run without a binary, is below every level.
@@ -52,6 +53,9 @@ def profile_from_version(result: Mapping[str, Any] | None) -> Profile:
 
 class RustAdapter(Adapter):
     name = "rust"
+    # `live.*`, `agtermctl live`, `result.live`, `backedByLive`: upstream's `zmx` group renamed
+    # (conformance/docs/rust-build.md > The `live` group).
+    vocabulary = LIVE
     needs_app_id = sys.platform.startswith("linux")
     needs_runtime_dir = sys.platform.startswith("linux")
 

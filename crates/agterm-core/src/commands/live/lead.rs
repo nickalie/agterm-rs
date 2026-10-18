@@ -13,8 +13,8 @@ use uuid::Uuid;
 use super::PaneReplacement;
 use crate::Core;
 use crate::command_restore::shell_quoted_line;
-use crate::zmx::daemon_name;
-use crate::zmx::lead::{LeadAttachment, LeadNotice, LeadRole, LeadState};
+use crate::live::daemon_name;
+use crate::live::lead::{LeadAttachment, LeadNotice, LeadRole, LeadState};
 
 /// Every pane's lead state, by pane identity.
 #[derive(Debug, Default)]
@@ -101,11 +101,11 @@ impl Core {
         let Ok(identity) = Uuid::parse_str(surface.pane_token()) else {
             return PaneSource::Surface;
         };
-        let covered = self.zmx.leads.covered(identity);
-        if !covered && self.zmx.leads.role(identity).is_none() {
+        let covered = self.live.leads.covered(identity);
+        if !covered && self.live.leads.role(identity).is_none() {
             return PaneSource::Surface;
         }
-        if !surface.is_live_session() || self.zmx.host().is_none() {
+        if !surface.is_live_session() || self.live.host().is_none() {
             // an attached pane's daemon is on another machine, out of reach of a synchronous read
             return if covered {
                 PaneSource::Refused(
@@ -126,7 +126,7 @@ impl Core {
     /// opening search): that surface holds another grid's output and the daemon drops what it sends.
     pub(crate) fn covered_refusal(&self, surface: &dyn Surface) -> Option<&'static str> {
         let identity = Uuid::parse_str(surface.pane_token()).ok()?;
-        self.zmx
+        self.live
             .leads
             .covered(identity)
             .then_some("pane is covered while another Mac leads it; take the lead first (session lead)")
@@ -139,7 +139,7 @@ impl Core {
         let Ok(identity) = Uuid::parse_str(token) else {
             return false;
         };
-        let Some(role) = self.zmx.leads.apply(identity, notice) else {
+        let Some(role) = self.live.leads.apply(identity, notice) else {
             return false;
         };
         if role == LeadRole::Unowned {
@@ -152,7 +152,7 @@ impl Core {
     #[must_use]
     pub fn pane_lead_cover(&self, token: &str) -> Option<LeadCover> {
         let identity = Uuid::parse_str(token).ok()?;
-        let leads = &self.zmx.leads;
+        let leads = &self.live.leads;
         if !leads.covered(identity) {
             return None;
         }
@@ -177,7 +177,7 @@ impl Core {
     #[must_use]
     pub(crate) fn pane_lead(&self, token: &str) -> Option<&'static str> {
         let identity = Uuid::parse_str(token).ok()?;
-        self.zmx.leads.role(identity).map(<&'static str>::from)
+        self.live.leads.role(identity).map(<&'static str>::from)
     }
 
     /// A key press on a covered pane, or on a remote pane waiting to be attached again (upstream's
@@ -192,7 +192,7 @@ impl Core {
             self.retry_reconnect(identity, std::time::Instant::now());
             return true;
         }
-        if !self.zmx.leads.covered(identity) || self.zmx.leads.reattaching(identity) {
+        if !self.live.leads.covered(identity) || self.live.leads.reattaching(identity) {
             return false;
         }
         self.reattach_pane(session, token, true)
@@ -232,11 +232,11 @@ impl Core {
                 .map(str::to_owned),
         );
         self.begin_replacement_lead(token, identity, attachment, true);
-        self.zmx.leaders.borrow_mut().note_lifecycle_change();
+        self.live.leaders.borrow_mut().note_lifecycle_change();
         self.request_pane_replacement(PaneReplacement {
             session,
             token: token.to_owned(),
-            command: crate::zmx::support::settled(&shell_quoted_line(&arguments)),
+            command: crate::live::support::settled(&shell_quoted_line(&arguments)),
             env: configuration.environment.into_iter().collect(),
             cwd: None,
             remote: false,

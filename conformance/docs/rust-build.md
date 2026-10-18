@@ -47,7 +47,8 @@ The Rust build (GPUI) gets, on top of that:
 SIGTERM must quit without a prompt within 10 seconds.
 Live sessions keep their zmx sockets in `/tmp/agterm-zmx-%016x` (lowercase hex) of the FNV-1a 64 hash over the UTF-8
 bytes of the state dir's realpath, with a leading `/private` dropped on macOS when the shorter path exists
-(`zmx_socket_directory` in `impls/base.py`).
+(`upstream_socket_directory` in `agterm_conformance/vocabulary.py`, which the adapter's vocabulary names; the
+instance's `live_dir`).
 Every zmx or session-host process carries `ZMX_DIR=<that dir>`: one left running after the stop fails it.
 `agtermctl` is taken from `--ctl`, else from beside `--bin`.
 
@@ -127,6 +128,60 @@ neither `live-sessions` nor `live-any-shell`.
 The `conformance` job of `.github/workflows/rust-linux.yml` is a matrix over the three login shells, each leg with
 `--must-pass live-any-shell`: bash, fish and zsh. The zsh leg, the one host where the build claims `live-sessions`,
 also runs with `--must-pass live-sessions`, as reference-macos.
+
+## The `live` group
+
+The Rust build answers upstream's control-protocol group `zmx.*` as `live.*`, a deliberate deviation from upstream: no
+`zmx` in its code, its control protocol or its CLI, ahead of the session server that replaces zmx itself. An upstream
+Mac and this build can therefore no longer view each other's sessions (`live.tree HOST` runs `agtermctl live tree` on
+the far side, an attached row's stream `agtermctl live present`), and neither can this build and a Rust build from
+before the rename.
+
+| upstream | Rust build |
+|---|---|
+| `zmx.list`, `zmx.prune`, `zmx.kill`, `zmx.reset`, `zmx.tree`, `zmx.attach`, `zmx.present`, `zmx.screen` | `live.list`, `live.prune`, `live.kill`, `live.reset`, `live.tree`, `live.attach`, `live.present`, `live.screen` |
+| `agtermctl zmx <subcommand>` | `agtermctl live <subcommand>` |
+| `result.zmx` (the inventory) | `result.live` |
+| `tree.session.backedByZmx`, `surfaces[].backedByZmx` | `backedByLive` |
+| `AGTERM_UITEST_ENABLE_ZMX` | `AGTERM_UITEST_ENABLE_LIVE` |
+
+Every other field, every semantic and every error string that names no zmx is upstream's. The strings that named zmx:
+
+| upstream | Rust build |
+|---|---|
+| `zmx.kill requires an explicit --target`, `… requires --pane left\|right`, `… requires --force`, `… needs a session id; 'active' is not accepted`, `… needs a window id; 'active' is not accepted` | the same under `live.kill` |
+| `zmx.screen requires a daemon name` | `live.screen requires a daemon name` |
+| `zmx.reset requires --force`, `… requires Live sessions mode both configured and active for this launch`, `… could not read the live session list`, `… refused: the pane inventory is incomplete`, `… found no live session to reset` | the same under `live.reset` (and `live.reset is not supported on this platform`, the build's own) |
+| `zmx.present requires a session` | `live.present requires a session` |
+| `zmx.attach requires a host`, `zmx.attach requires a remote session` | the same under `live.attach` |
+| `zmx is unavailable in this instance` | `live sessions are unavailable in this instance` |
+| `could not read the zmx session list` | `could not read the live session list` |
+| `could not re-read the zmx session list before pruning` | `could not re-read the live session list before pruning` |
+| `could not read the zmx screen of NAME` | `could not read the live session screen of NAME` |
+| `NAME did not confirm the kill; zmx cleaned up a stale socket and the daemon may still be running` | `… the session host cleaned up a stale socket …` |
+| `the pane's zmx daemon did not accept the input` | `the pane's live session did not accept the input` |
+| `the remote agterm is too old to report its zmx endpoint` | `… its live-session endpoint` |
+| `the zmx executable path is not absolute`, `the zmx executable is unavailable` (`restore.mode`'s `unavailableReason`) | `the live-session executable path is not absolute`, `the live-session executable is unavailable` |
+| `this pane has no zmx daemon; run it in a main or split pane started under Live sessions` (`agtermctl clipboard set`) | `this pane has no live session; run it in a main or split pane started under Live sessions` |
+| `no zmx next to this agtermctl[; looked for PATH]`, `zmx print exited N: …` (`agtermctl clipboard set`) | `no live-session executable next to this agtermctl[; looked for PATH]`, `the live-session print exited N: …` |
+
+The help texts of `agtermctl live` and `restore mode` speak of live-session daemons and the session host the same way.
+What the bundled zmx binary itself speaks is unchanged until the session server replaces it: its `attach` command line
+and `ZMX_*` variables, the socket directory, the `zmx-role;` title its patch writes, its `list` and `screen` output,
+`bin/zmx`, `share/agterm/zmx-BUILD` and `AGTERM_ZMX_PATH`, and the `zmx-build.json` record in the state dir.
+
+The suite's tests, `catalog.yaml` and their `covers(...)` markers keep upstream's names, since the Swift references
+answer to them; no test id changes, so the ratchet keeps its ids. Each adapter carries a vocabulary object
+(`agterm_conformance/vocabulary.py`) for every value that depends on it: command names, the result and tree keys, the
+CLI argv, the error-text templates, the environment names, the socket directory and the leading client. The Swift
+adapters' is upstream's own (`UPSTREAM`), the Rust adapter's renames the group (`LIVE`); `base.py`, `cli_format.py`
+and the shared tests read every such value through `ctl.vocabulary`, `cli.vocabulary` or the instance's. `LIVE`
+refuses an upstream text that names zmx and that it does not list, and `selftests/test_vocabulary.py` checks each
+listed text against the Rust sources.
+
+The bundled agent skill (`resources/skills/agterm`) is upstream's with `build/patches/skill-agterm/` applied:
+`.claude/skills/agterm-upstream-sync/scripts/sync-resources.sh` rebuilds it as the new upstream tree plus those
+patches on every sync, and `sync-resources.sh --check TAG TAG` with the pinned tag verifies the copy still equals it.
 
 ## Ratchet
 

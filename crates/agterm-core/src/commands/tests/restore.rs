@@ -71,7 +71,7 @@ fn the_mode_reads_the_launch_and_a_set_applies_to_the_next_one() {
 #[test]
 fn a_refused_live_request_reports_why_and_runs_fresh_shells() {
     let mut fixture = Fixture::with_settings(0, settings(RestoreMode::Live));
-    let reason = "the zmx executable is unavailable";
+    let reason = "the live-session executable is unavailable";
     fixture
         .core
         .set_restore_launch(RestoreLaunchDecision::new(RestoreMode::Live, Some(reason.to_owned())));

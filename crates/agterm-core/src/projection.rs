@@ -125,7 +125,7 @@ pub fn session_node(session: &Session, active: bool) -> ControlSessionNode {
         .then(|| serde_json::to_value(&session.pane_backgrounds).ok())
         .flatten();
     node.status_changed_at = session.status_changed_at.map(epoch_seconds);
-    node.backed_by_zmx = Some(all_panes_backed(session));
+    node.backed_by_live = Some(all_panes_backed(session));
     node.surfaces = Some(surface_nodes(session));
     node.realized = Some(session.surface.get().is_some_and(agterm_host::Surface::is_realized));
     node.font_size = font_size(session.pane_slot(session.addressable_pane()));
@@ -303,7 +303,7 @@ fn surface_nodes(session: &Session) -> Vec<ControlSurfaceNode> {
                 kind: kind.wire_name().to_owned(),
                 active: kind.is_active(session),
                 visible: kind.is_visible(session),
-                backed_by_zmx: backed.then(|| slot.get().is_some_and(agterm_host::Surface::is_live_session)),
+                backed_by_live: backed.then(|| slot.get().is_some_and(agterm_host::Surface::is_live_session)),
                 lead: None,
                 reconnect: None,
                 pane_id: pane_token(slot),
@@ -358,9 +358,9 @@ mod tests {
         let expected = json!({
             "workspaces": [{"id": id(workspace), "name": "workspace 1", "active": true, "sessions": [{
                 "id": id(session), "name": "u", "cwd": "/home/u", "active": true, "split": false,
-                "backedByZmx": false, "overlay": false, "scratch": false, "flagged": false,
+                "backedByLive": false, "overlay": false, "scratch": false, "flagged": false,
                 "surfaces": [{"id": format!("surface:{}:left", id(session)), "kind": "left", "active": true,
-                              "visible": true, "backedByZmx": false}],
+                              "visible": true, "backedByLive": false}],
                 "realized": false,
             }]}],
             "sidebarVisible": true, "sidebarMode": "tree", "sidebarFlaggedLayout": "flat", "linkOpenMode": "browser",
@@ -424,13 +424,13 @@ mod tests {
         let surface = |kind: &str| format!("surface:{}:{kind}", id(sid));
         let expected = json!({
             "id": id(sid), "name": "sub", "cwd": "/repo", "splitCwd": "/repo/sub", "active": true, "split": true,
-            "hasSplit": true, "backedByZmx": false, "splitAxis": "horizontal", "splitRatio": 0.3,
+            "hasSplit": true, "backedByLive": false, "splitAxis": "horizontal", "splitRatio": 0.3,
             "splitFocused": true, "overlay": false, "scratch": false, "flagged": false,
             "fontSize": 13.0, "splitFontSize": 13.0,
             "surfaces": [
-                {"id": surface("left"), "kind": "left", "active": false, "visible": true, "backedByZmx": false,
+                {"id": surface("left"), "kind": "left", "active": false, "visible": true, "backedByLive": false,
                  "paneID": "TOKEN-L"},
-                {"id": surface("right"), "kind": "right", "active": true, "visible": true, "backedByZmx": true,
+                {"id": surface("right"), "kind": "right", "active": true, "visible": true, "backedByLive": true,
                  "paneID": "TOKEN-R"},
             ],
             "realized": true,

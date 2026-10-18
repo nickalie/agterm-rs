@@ -20,7 +20,7 @@ use crate::command_restore::{DENYLIST_FILE, DENYLIST_STARTER, parse_denylist};
 use agterm_proto::ControlTree;
 
 use crate::command_restore::PaneForeground;
-use crate::commands::zmx::launch::{live_foreground_group, pane_paces, pane_seed};
+use crate::commands::live::launch::{live_foreground_group, pane_paces, pane_seed};
 use crate::model::{AppStore, Session, StatusPane, SurfaceSlot, WindowLibrary};
 use crate::restore::capture::{CaptureKind, ForegroundReader, capture_foreground_commands};
 use crate::restore::mode::{RestoreLaunchDecision, captures_on_exit};
@@ -197,7 +197,7 @@ impl Core {
         }
         let window = self.library.window_holding_session(session)?;
         let session = self.library.store_mut(window)?.session_mut(session)?;
-        Some(pane_seed(&mut self.zmx, session, role, &policy, disposed))
+        Some(pane_seed(&mut self.live, session, role, &policy, disposed))
     }
 
     /// Lets the queued panes of `session` spawn now (upstream's `expediteSpawn`): the session is on screen, or a command
@@ -262,7 +262,7 @@ impl Core {
             spawns.push(PaneSpawn {
                 session: id,
                 token,
-                seed: pane_seed(&mut self.zmx, session, role, &policy, disposed),
+                seed: pane_seed(&mut self.live, session, role, &policy, disposed),
             });
         }
         spawns
@@ -366,11 +366,11 @@ impl Core {
         kind: CaptureKind,
         time_remaining: &dyn Fn() -> bool,
     ) -> usize {
-        let (zmx, restore, library) = (&self.zmx, &self.restore, &mut self.library);
+        let (runtime, restore, library) = (&self.live, &self.restore, &mut self.library);
         let Some(table) = restore.table() else {
             return 0;
         };
-        let live = |token: &str| live_foreground_group(zmx, table, token);
+        let live = |token: &str| live_foreground_group(runtime, table, token);
         let reader = reader_with_live(table, restore.shell(), &live);
         let mut captured = 0;
         for id in ids {
@@ -405,7 +405,7 @@ impl Core {
         let Some(table) = self.restore.table() else {
             return;
         };
-        let live = |token: &str| live_foreground_group(&self.zmx, table, token);
+        let live = |token: &str| live_foreground_group(&self.live, table, token);
         let reader = reader_with_live(table, self.restore.shell(), &live);
         let read = |slot: &SurfaceSlot| slot.get().and_then(|surface| reader.running_in(surface));
         let nodes = tree

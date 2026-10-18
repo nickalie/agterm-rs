@@ -468,7 +468,7 @@ fn land_quit_prompt(shell: &Shell, state: &Entity<AppState>, message: &str, cx: 
 }
 
 /// Shows Reset Live Sessions…'s `alert` over the frontmost window (the menu that asked is in one).
-fn land_live_reset(shell: &Shell, state: &Entity<AppState>, alert: &crate::zmx_runtime::ResetAlert, cx: &mut App) {
+fn land_live_reset(shell: &Shell, state: &Entity<AppState>, alert: &crate::live_runtime::ResetAlert, cx: &mut App) {
     let poster: Poster = Arc::downgrade(&shell.posting);
     let frontmost = shell
         .windows
@@ -478,7 +478,7 @@ fn land_live_reset(shell: &Shell, state: &Entity<AppState>, alert: &crate::zmx_r
     let shown = frontmost.is_some_and(|handle| {
         handle
             .update(cx, |_, window, cx| {
-                crate::zmx_runtime::present(alert, poster.clone(), window, cx);
+                crate::live_runtime::present(alert, poster.clone(), window, cx);
             })
             .is_ok()
     });
@@ -509,7 +509,7 @@ fn shut_down(shell: &Shell, cx: &mut App) {
         tracing::info!("quit: the state is saved");
         // a confirmed live sessions reset is armed for the next launch, which this app then opens itself; without the
         // relauncher nothing reopens it, so the reset is not armed (upstream's `armLiveReset`)
-        if state.core.arm_live_reset_on_quit() && !crate::zmx_runtime::spawn_relauncher() {
+        if state.core.arm_live_reset_on_quit() && !crate::live_runtime::spawn_relauncher() {
             state.core.disarm_live_reset();
         }
     });

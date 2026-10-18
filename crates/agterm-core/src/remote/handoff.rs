@@ -16,6 +16,7 @@ use super::frames::{
 use crate::Core;
 use crate::commands::Outcome;
 use crate::error::ControlError;
+use crate::live::lead::LeadRole;
 use crate::modal::AskOwner;
 use crate::model::{
     AskAnchor, AskStyle, EndedAsk, OverlayPane, OverlayProgram, PendingAsk, RemoteOverlayOutcome, RemoteOverlaySlot,
@@ -24,7 +25,6 @@ use crate::model::{
 use crate::overlay_capture::OverlayLaunchContext;
 use crate::overlay_jobs::{OverlayJobFrame, OverlayJobOutcome, OverlayJobState};
 use crate::pane_env::{self, SessionPane};
-use crate::zmx::lead::LeadRole;
 
 /// The reason an ask carries when its presenter was lost and this instance could not show it.
 pub const PRESENTATION_LOST: &str = "presentation-lost";
@@ -55,7 +55,7 @@ impl Core {
         };
         panes
             .iter()
-            .all(|pane| self.zmx.leads.role(*pane) == Some(LeadRole::Follower))
+            .all(|pane| self.live.leads.role(*pane) == Some(LeadRole::Follower))
     }
 
     /// Tells each ended ask's presenter to take its dialog down; an ask that never left this instance has none.

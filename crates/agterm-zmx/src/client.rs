@@ -9,9 +9,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use agterm_core::zmx::lifecycle::parse_list;
-use agterm_core::zmx::screen::parse_screen;
-use agterm_core::zmx::support::is_executable_file;
+use agterm_core::live::lifecycle::parse_list;
+use agterm_core::live::screen::parse_screen;
+use agterm_core::live::support::is_executable_file;
 use agterm_host::{HostError, KillOutcome, LiveScreen, LiveSessionRecord, SessionHost};
 
 use crate::sweep::Sweeper;

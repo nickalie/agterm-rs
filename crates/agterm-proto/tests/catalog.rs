@@ -30,8 +30,30 @@ fn listed(entries: &BTreeMap<String, Entry>) -> BTreeSet<String> {
     entries
         .iter()
         .filter(|(_, entry)| entry.status != "removed-upstream")
-        .map(|(name, _)| name.clone())
+        .map(|(name, _)| renamed(name))
         .collect()
+}
+
+/// A catalog name as this build spells it: upstream's `zmx.*` group is `live.*` here (conformance/docs/rust-build.md,
+/// The `live` group); every other name is upstream's.
+fn renamed(name: &str) -> String {
+    name.strip_prefix("zmx.")
+        .map_or_else(|| name.to_owned(), |rest| format!("live.{rest}"))
+}
+
+#[test]
+fn upstreams_zmx_group_is_the_live_group() -> Result<(), Box<dyn Error>> {
+    let catalog = load_catalog()?;
+    let upstream: BTreeSet<&str> = catalog
+        .commands
+        .keys()
+        .filter_map(|name| name.strip_prefix("zmx."))
+        .collect();
+    let ours: BTreeSet<String> = Command::all().into_iter().map(|c| c.wire_name().to_owned()).collect();
+    let live: BTreeSet<&str> = ours.iter().filter_map(|name| name.strip_prefix("live.")).collect();
+    assert_eq!(live, upstream);
+    assert!(ours.iter().all(|name| !name.contains("zmx")), "{ours:?}");
+    Ok(())
 }
 
 #[test]

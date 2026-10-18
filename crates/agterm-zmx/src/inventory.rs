@@ -1,6 +1,6 @@
 //! The client side of the daemon lifecycle (upstream's `ZmxClient` kill paths): the forced batch kill behind the pane
 //! finalizer, the launch reap and the reset's launch kill ([`agterm_host::SessionHost::kill_batch`]). The decisions,
-//! the reap and prune policies included, are core's (`agterm_core::commands::zmx`, [`agterm_core::zmx::lifecycle`]);
+//! the reap and prune policies included, are core's (`agterm_core::commands::live`, [`agterm_core::live::lifecycle`]);
 //! it runs them over [`agterm_host::SessionHost`].
 
 use std::collections::BTreeSet;
@@ -50,7 +50,7 @@ impl ZmxClient {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use agterm_core::zmx::daemon_name;
+    use agterm_core::live::daemon_name;
     use uuid::Uuid;
 
     use super::*;

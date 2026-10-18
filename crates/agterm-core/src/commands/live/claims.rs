@@ -1,16 +1,16 @@
-//! Every pane expecting a zmx daemon (upstream's `WindowLibrary.paneClaims`), read without writing anything: the open
-//! windows' sessions and the sessions their pending closes hold, then each closed window's file, then the window files
-//! the index does not list. A pane with no identity to claim makes the walk incomplete rather than being repaired
-//! here, since a read must not rewrite window files.
+//! Every pane expecting a live-session daemon (upstream's `WindowLibrary.paneClaims`), read without writing anything:
+//! the open windows' sessions and the sessions their pending closes hold, then each closed window's file, then the
+//! window files the index does not list. A pane with no identity to claim makes the walk incomplete rather than being
+//! repaired here, since a read must not rewrite window files.
 
 use std::collections::HashSet;
 
 use uuid::Uuid;
 
 use crate::Core;
+use crate::live::inventory::{ClaimWalk, OwnerWindowState, PaneClaim, PaneRole};
 use crate::model::Session;
 use crate::persist::Snapshot;
-use crate::zmx::inventory::{ClaimWalk, OwnerWindowState, PaneClaim, PaneRole};
 
 /// Which window a claim came from.
 struct Origin {
@@ -79,7 +79,7 @@ impl Core {
         };
         // an unenumerable directory hides unindexed panes entirely, so the silence must not read as "none"
         let Some(strays) = persistence.stray_window_ids(&indexed) else {
-            tracing::warn!("the zmx claim walk could not enumerate the windows directory");
+            tracing::warn!("the live-session claim walk could not enumerate the windows directory");
             walk.complete = false;
             return walk;
         };
@@ -125,7 +125,7 @@ impl Core {
             .as_ref()
             .and_then(|persistence| persistence.read_window_checked(origin.id).ok());
         let Some(snapshot) = snapshot else {
-            tracing::warn!(window = %origin.id, "the zmx claim walk could not read the window");
+            tracing::warn!(window = %origin.id, "the live-session claim walk could not read the window");
             walk.complete = false;
             return;
         };

@@ -1,85 +1,85 @@
-//! `zmx.list`, `zmx.prune`, `zmx.kill` and `zmx.screen` (upstream's `ControlDispatcher+Zmx.swift` and
+//! `live.list`, `live.prune`, `live.kill` and `live.screen` (upstream's `ControlDispatcher+Zmx.swift` and
 //! `ControlServer+Zmx.swift`). Every one needs a running instance by design: only it can join its live stores, its
 //! pending closes and its closed windows' files against the observed daemons in one answer.
 
 use std::collections::BTreeSet;
 
 use agterm_host::KillOutcome;
-use agterm_proto::command::ZmxCmd;
-use agterm_proto::{Args, ControlResult, ControlZmxEntry, ControlZmxInventory, Request};
+use agterm_proto::command::LiveCmd;
+use agterm_proto::{Args, ControlLiveEntry, ControlLiveInventory, ControlResult, Request};
 
 use super::{UNAVAILABLE, live_reset, not_yet, readback};
 use crate::Core;
 use crate::commands::surface::buffer_extent;
 use crate::commands::{Outcome, args_of};
 use crate::error::ControlError;
+use crate::live::inventory::{
+    ClaimState, DaemonObservation, InventoryResult, InventoryRow, PaneRole, join, names_to_prune,
+};
+use crate::live::reset::is_outdated;
+use crate::live::screen::last_lines;
 use crate::model::StatusPane;
 use crate::pane_env::uuid_string;
 use crate::resolve::{ACTIVE, TargetResolution, resolve, trimmed};
-use crate::zmx::inventory::{
-    ClaimState, DaemonObservation, InventoryResult, InventoryRow, PaneRole, join, names_to_prune,
-};
-use crate::zmx::reset::is_outdated;
-use crate::zmx::screen::last_lines;
 
 /// The refusal of a prune or kill over an inventory nothing can safely be decided on.
 const INCOMPLETE_INVENTORY: &str =
     "the pane inventory is incomplete or has conflicting owners, so no daemon can be safely pruned";
 /// A listing that failed is not an empty namespace.
-const LIST_FAILED: &str = "could not read the zmx session list";
+const LIST_FAILED: &str = "could not read the live session list";
 
-/// Answers a command of the zmx group.
-pub(crate) fn dispatch(core: &mut Core, cmd: ZmxCmd, request: &Request) -> Outcome {
+/// Answers a command of the `live.*` group.
+pub(crate) fn dispatch(core: &mut Core, cmd: LiveCmd, request: &Request) -> Outcome {
     let args = args_of(request);
     match cmd {
-        ZmxCmd::List => list(core),
-        ZmxCmd::Prune => prune(core),
-        ZmxCmd::Kill => kill(core, request.target.as_deref(), args),
-        ZmxCmd::Screen => screen(core, args),
-        ZmxCmd::Reset => live_reset::reset(core, args),
-        ZmxCmd::Present => crate::remote::open_presentation(core, request.target.as_deref()),
-        // `zmx.tree` starts through `deferred`, as its remote form waits on ssh
+        LiveCmd::List => list(core),
+        LiveCmd::Prune => prune(core),
+        LiveCmd::Kill => kill(core, request.target.as_deref(), args),
+        LiveCmd::Screen => screen(core, args),
+        LiveCmd::Reset => live_reset::reset(core, args),
+        LiveCmd::Present => crate::remote::open_presentation(core, request.target.as_deref()),
+        // `live.tree` starts through `deferred`, as its remote form waits on ssh
         other => Err(not_yet(other)),
     }
 }
 
 impl Core {
-    /// The observed daemons joined against every pane claim; an error when this instance has no zmx or the listing
-    /// failed.
+    /// The observed daemons joined against every pane claim; an error when this instance has no session host or the
+    /// listing failed.
     fn inventory(&self) -> Result<InventoryResult, ControlError> {
-        let host = self.zmx.require_host()?;
+        let host = self.live.require_host()?;
         let observed = host.list().map_err(|_| ControlError::rejected(LIST_FAILED))?;
         let walk = self.pane_claims();
         Ok(join(&observed, &walk.claims, walk.complete))
     }
 }
 
-/// `zmx.list`: the inventory under the restore status, with the endpoint and the reset read-back.
+/// `live.list`: the inventory under the restore status, with the endpoint and the reset read-back.
 fn list(core: &mut Core) -> Outcome {
     Ok(ControlResult {
-        zmx: Some(control_inventory(core)?),
+        live: Some(control_inventory(core)?),
         ..ControlResult::default()
     })
 }
 
-/// The inventory as `zmx.list` answers it, which `zmx.tree` joins against the open windows.
-pub(crate) fn control_inventory(core: &Core) -> Result<ControlZmxInventory, ControlError> {
+/// The inventory as `live.list` answers it, which `live.tree` joins against the open windows.
+pub(crate) fn control_inventory(core: &Core) -> Result<ControlLiveInventory, ControlError> {
     let inventory = core.inventory()?;
-    let outdated_before = core.zmx.outdated_before;
-    Ok(ControlZmxInventory {
+    let outdated_before = core.live.outdated_before;
+    Ok(ControlLiveInventory {
         restore: core.restore_status(),
         inventory_complete: inventory.inventory_complete,
-        endpoint: core.zmx.endpoint.clone(),
-        live_reset: readback(core.zmx.reset.pending.as_ref(), core.zmx.reset.last.as_ref()),
+        endpoint: core.live.endpoint.clone(),
+        live_reset: readback(core.live.reset.pending.as_ref(), core.live.reset.last.as_ref()),
         entries: inventory.rows.iter().map(|row| entry(row, outdated_before)).collect(),
     })
 }
 
 /// One row on the wire.
-fn entry(row: &InventoryRow, outdated_before: Option<u64>) -> ControlZmxEntry {
+fn entry(row: &InventoryRow, outdated_before: Option<u64>) -> ControlLiveEntry {
     let claim = row.claim.as_ref();
     let text = |value: &'static str| value.to_owned();
-    ControlZmxEntry {
+    ControlLiveEntry {
         daemon: row.daemon.clone(),
         state: text(row.state.into()),
         observation: text(row.observation.into()),
@@ -97,7 +97,7 @@ fn entry(row: &InventoryRow, outdated_before: Option<u64>) -> ControlZmxEntry {
     }
 }
 
-/// `zmx.prune`: kills the daemons the inventory shows as unclaimed and detached. The gate is checked and revalidated,
+/// `live.prune`: kills the daemons the inventory shows as unclaimed and detached. The gate is checked and revalidated,
 /// never atomic: pinned zmx has no kill-if-detached, so this re-lists right before it kills and drops any candidate
 /// that gained a client in between.
 fn prune(core: &mut Core) -> Outcome {
@@ -106,10 +106,10 @@ fn prune(core: &mut Core) -> Outcome {
     if candidates.is_empty() {
         return Ok(pruned("no orphan daemons", 0));
     }
-    let host = core.zmx.require_host()?;
+    let host = core.live.require_host()?;
     let recheck = host
         .list()
-        .map_err(|_| ControlError::rejected("could not re-read the zmx session list before pruning"))?;
+        .map_err(|_| ControlError::rejected("could not re-read the live session list before pruning"))?;
     let still_detached: BTreeSet<&str> = recheck
         .iter()
         .filter(|record| record.clients == Some(0))
@@ -128,7 +128,7 @@ fn prune(core: &mut Core) -> Outcome {
         .iter()
         .filter(|(_, outcome)| *outcome == KillOutcome::Killed)
         .count();
-    core.zmx.leaders.borrow_mut().note_lifecycle_change();
+    core.live.leaders.borrow_mut().note_lifecycle_change();
     Ok(pruned(&prune_report(&outcomes), killed))
 }
 
@@ -156,44 +156,45 @@ fn prune_report(outcomes: &[(&String, KillOutcome)]) -> String {
         .join("; ")
 }
 
-/// `zmx.kill`: destroys one pane's daemon, then drives the transition the pane's own exit would have. Resolution runs
+/// `live.kill`: destroys one pane's daemon, then drives the transition the pane's own exit would have. Resolution runs
 /// against the inventory, so it reaches closed and unindexed claims no window shows; nothing about it falls back to
 /// what is in front of the user, so `active` is refused for both selectors.
 fn kill(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let target = target
         .filter(|target| !target.is_empty())
-        .ok_or_else(|| ControlError::rejected("zmx.kill requires an explicit --target"))?;
+        .ok_or_else(|| ControlError::rejected("live.kill requires an explicit --target"))?;
     let pane = args
         .pane
         .as_deref()
         .and_then(PaneRole::from_control_name)
-        .ok_or_else(|| ControlError::rejected("zmx.kill requires --pane left|right"))?;
+        .ok_or_else(|| ControlError::rejected("live.kill requires --pane left|right"))?;
     if args.force != Some(true) {
-        return Err(ControlError::rejected("zmx.kill requires --force"));
+        return Err(ControlError::rejected("live.kill requires --force"));
     }
     let inventory = core.inventory()?;
     if target == ACTIVE {
         return Err(ControlError::rejected(
-            "zmx.kill needs a session id; 'active' is not accepted",
+            "live.kill needs a session id; 'active' is not accepted",
         ));
     }
     let window = args.window.as_deref();
     if window == Some(ACTIVE) {
         return Err(ControlError::rejected(
-            "zmx.kill needs a window id; 'active' is not accepted",
+            "live.kill needs a window id; 'active' is not accepted",
         ));
     }
     let row = kill_row(&inventory, target, window, pane)?;
     if let Some(refusal) = kill_refusal(&row) {
         return Err(ControlError::rejected(refusal));
     }
-    let host = core.zmx.require_host()?;
+    let host = core.live.require_host()?;
     // only an exact confirmation may close a live pane: zmx exits zero after unlinking a socket it could not reach
     match host.kill(&row.daemon, true) {
         KillOutcome::Killed => {}
         KillOutcome::StaleSocket => {
             return Err(ControlError::rejected(format!(
-                "{} did not confirm the kill; zmx cleaned up a stale socket and the daemon may still be running",
+                "{} did not confirm the kill; the session host cleaned up a stale socket and the daemon may still \
+                 be running",
                 row.daemon
             )));
         }
@@ -204,7 +205,7 @@ fn kill(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
             )));
         }
     }
-    core.zmx.leaders.borrow_mut().note_lifecycle_change();
+    core.live.leaders.borrow_mut().note_lifecycle_change();
     let claim = row
         .claim
         .as_ref()
@@ -218,7 +219,7 @@ fn kill(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     })
 }
 
-/// The row `zmx.kill` addresses: the claims of `pane`, scoped to `--window` before the session resolves, so a prefix
+/// The row `live.kill` addresses: the claims of `pane`, scoped to `--window` before the session resolves, so a prefix
 /// ambiguous across windows can be disambiguated and an exact id in another window is not killed.
 fn kill_row(
     inventory: &InventoryResult,
@@ -284,7 +285,7 @@ fn kill_refusal(row: &InventoryRow) -> Option<String> {
 }
 
 impl Core {
-    /// Runs the pane's exit transition for a daemon `zmx.kill` destroyed (upstream's `applyKilledPaneExit`): only a
+    /// Runs the pane's exit transition for a daemon `live.kill` destroyed (upstream's `applyKilledPaneExit`): only a
     /// pane whose terminal is a client of that daemon closes, as its own exit would have closed it, and the killed
     /// identity is kept out of the finalizer. A requested-live fallback pane runs a plain shell that never attached.
     pub(crate) fn apply_killed_pane_exit(&mut self, session: uuid::Uuid, identity: uuid::Uuid, pane: PaneRole) {
@@ -310,20 +311,20 @@ impl Core {
     }
 }
 
-/// `zmx.screen`: the daemon's last leader's grid, by daemon name; it attaches nothing.
+/// `live.screen`: the daemon's last leader's grid, by daemon name; it attaches nothing.
 fn screen(core: &mut Core, args: &Args) -> Outcome {
     let name = trimmed(args.name.as_deref())
         .filter(|name| is_plain(name))
-        .ok_or_else(|| ControlError::rejected("zmx.screen requires a daemon name"))?;
+        .ok_or_else(|| ControlError::rejected("live.screen requires a daemon name"))?;
     let (all, lines) = buffer_extent(args)?;
     let host = core
-        .zmx
+        .live
         .host()
         .cloned()
         .ok_or_else(|| ControlError::rejected(UNAVAILABLE))?;
     let screen = host
         .screen(name, all || lines.is_some())
-        .map_err(|_| ControlError::rejected(format!("could not read the zmx screen of {name}")))?;
+        .map_err(|_| ControlError::rejected(format!("could not read the live session screen of {name}")))?;
     let text = match lines {
         Some(lines) => last_lines(&screen.text, lines),
         None => screen.text,

@@ -139,7 +139,7 @@ fn a_local_pane_without_a_live_shell_needs_live_sessions() {
 }
 
 #[test]
-fn a_live_pane_needs_this_instance_s_zmx() {
+fn a_live_pane_needs_this_instance_s_session_host() {
     let (mut fixture, id) = fixture();
     install(
         &mut fixture,

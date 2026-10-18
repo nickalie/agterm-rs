@@ -1,14 +1,14 @@
 //! The ssh command lines a viewer runs against another machine's agterm (the attach half of upstream's
-//! `RemoteSession.swift`; `zmx tree`'s own line lives in [`super::tree`]). Pure and host-free: callers run what these
+//! `RemoteSession.swift`; `live tree`'s own line lives in [`super::tree`]). Pure and host-free: callers run what these
 //! return.
 
-use agterm_proto::ControlZmxEndpoint;
+use agterm_proto::ControlLiveEndpoint;
 
 use super::reconnect::RemoteLinkNotice;
 use super::tree::{InvocationError, cli_path_prefix, is_plain, ssh_arguments, validate};
 use crate::command_restore::shell_quoted_line;
-use crate::zmx::is_daemon_name;
-use crate::zmx::lead::LeadAttachment;
+use crate::live::is_daemon_name;
+use crate::live::lead::LeadAttachment;
 
 /// A filesystem path, which may hold spaces: only control characters and NUL are refused, neither of which survives a
 /// path anyway (upstream's `isPath`).
@@ -34,7 +34,7 @@ pub fn present_command(host: &str, session: &str) -> Result<Vec<String>, Invocat
     if !is_plain(session) {
         return Err(InvocationError::InvalidSession);
     }
-    let tail = format!("exec agtermctl zmx present {}", shell_quoted_line(&[session]));
+    let tail = format!("exec agtermctl live present {}", shell_quoted_line(&[session]));
     let mut argv = ssh_arguments(host, 5, false);
     argv.push(remote_chain(&tail));
     Ok(argv)
@@ -72,7 +72,7 @@ const GONE_GUARD: &str = "printf '%s\\n' 'agterm: remote session is gone'; exit 
 /// A host ssh may not take, a name that is not an agterm daemon's, or an endpoint path with control characters.
 pub fn attach_command(
     host: &str,
-    endpoint: &ControlZmxEndpoint,
+    endpoint: &ControlLiveEndpoint,
     daemon: &str,
     lead: Option<&LeadAttachment>,
 ) -> Result<Vec<String>, InvocationError> {
@@ -133,7 +133,7 @@ pub struct PaneLabel<'a> {
 /// As [`attach_command`].
 pub fn attach_pane_command(
     host: &str,
-    endpoint: &ControlZmxEndpoint,
+    endpoint: &ControlLiveEndpoint,
     daemon: &str,
     label: PaneLabel<'_>,
     lead: Option<&LeadAttachment>,
@@ -198,10 +198,10 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::zmx::daemon_name;
+    use crate::live::daemon_name;
 
-    fn endpoint() -> ControlZmxEndpoint {
-        ControlZmxEndpoint {
+    fn endpoint() -> ControlLiveEndpoint {
+        ControlLiveEndpoint {
             executable: "/opt/agterm/bin/zmx".to_owned(),
             socket_directory: "/tmp/agterm-zmx-abc".to_owned(),
         }
@@ -228,7 +228,7 @@ mod tests {
         );
         let remote = argv.last().unwrap();
         assert!(remote.starts_with("'/bin/sh' '-c' "));
-        assert!(remote.contains("exec agtermctl zmx present "), "{remote}");
+        assert!(remote.contains("exec agtermctl live present "), "{remote}");
         for bad in ["", "s 1", "s1\u{1b}[31m"] {
             assert_eq!(present_command("buildbox", bad), Err(InvocationError::InvalidSession));
         }
@@ -272,12 +272,12 @@ mod tests {
             );
         }
         let daemon = daemon_name(Uuid::new_v4());
-        let spaced = ControlZmxEndpoint {
+        let spaced = ControlLiveEndpoint {
             executable: "/home/me/My Apps/agterm/bin/zmx".to_owned(),
             socket_directory: "/tmp/x".to_owned(),
         };
         assert!(attach_command("buildbox", &spaced, &daemon, None).is_ok());
-        let hostile = ControlZmxEndpoint {
+        let hostile = ControlLiveEndpoint {
             executable: "/opt/zmx\n".to_owned(),
             socket_directory: "/tmp/x".to_owned(),
         };

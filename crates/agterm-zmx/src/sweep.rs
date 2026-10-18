@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use agterm_core::zmx::sweep;
+use agterm_core::live::sweep;
 use agterm_host::ProcessRecord;
 
 /// Reads the process table; `None` when it cannot be read.

@@ -8,17 +8,17 @@ use std::time::Instant;
 use agterm_host::{ProcessTable, SessionHost};
 use uuid::Uuid;
 
-use super::ZmxRuntime;
+use super::LiveRuntime;
 use crate::Core;
+use crate::live::lead::LeadAttachment;
+use crate::live::lifecycle::{RefreshGate, leaders, names_to_kill};
+use crate::live::support::{self, Configuration, LaunchDisposition, launch_disposition};
+use crate::live::{daemon_name, pane_identity};
 use crate::model::{Session, StatusPane};
 use crate::persist::RestoreMode;
 use crate::restore::spawn_plan::{
     LaunchSeed, LaunchSeedPolicy, resolve_live_seed, resolve_seed, should_pace, should_pace_live,
 };
-use crate::zmx::lead::LeadAttachment;
-use crate::zmx::lifecycle::{RefreshGate, leaders, names_to_kill};
-use crate::zmx::support::{self, Configuration, LaunchDisposition, launch_disposition};
-use crate::zmx::{daemon_name, pane_identity};
 
 /// The daemons' leader pids as last listed (upstream's `ZmxForegroundResolver`): refreshed when a lifecycle change
 /// invalidated it or the reconcile interval passed, and taken whole from every fresh listing the tree makes.
@@ -58,10 +58,10 @@ impl LeaderCache {
 
 /// The foreground process group of the live pane carrying `token`: its daemon's shell's terminal foreground (upstream's
 /// `ZmxForegroundResolver.foregroundPID`). A leader the table no longer holds is evicted and the cache invalidated.
-pub(crate) fn live_foreground_group(zmx: &ZmxRuntime, table: &dyn ProcessTable, token: &str) -> Option<i32> {
+pub(crate) fn live_foreground_group(runtime: &LiveRuntime, table: &dyn ProcessTable, token: &str) -> Option<i32> {
     let name = daemon_name(Uuid::parse_str(token).ok()?);
-    let mut cache = zmx.leaders.borrow_mut();
-    if let Some(host) = zmx.host() {
+    let mut cache = runtime.leaders.borrow_mut();
+    if let Some(host) = runtime.host() {
         cache.refresh_if_needed(host.as_ref(), Instant::now());
     }
     let Some(leader) = cache.leader(&name) else {
@@ -71,7 +71,7 @@ pub(crate) fn live_foreground_group(zmx: &ZmxRuntime, table: &dyn ProcessTable, 
     if table.stat(leader).is_none() {
         cache.leaders.remove(&name);
         cache.note_lifecycle_change();
-        tracing::debug!(leader, "evicted a dead zmx leader");
+        tracing::debug!(leader, "evicted a dead live-session leader");
         return None;
     }
     table.terminal_foreground(leader).filter(|pgid| *pgid > 0)
@@ -87,8 +87,8 @@ impl Core {
     /// The seed policy of this launch: the restore decision, the denylist, and what the launch reap and the reset left.
     pub(crate) fn seed_policy(&self) -> LaunchSeedPolicy {
         LaunchSeedPolicy {
-            running_names: self.zmx.running_names.clone(),
-            suppressed_daemons: self.zmx.suppressed.iter().copied().map(daemon_name).collect(),
+            running_names: self.live.running_names.clone(),
+            suppressed_daemons: self.live.suppressed.iter().copied().map(daemon_name).collect(),
             ..self.restore.policy()
         }
     }
@@ -105,35 +105,36 @@ impl Core {
             .flatten();
         let disposition = launch_disposition(decision.requested, decision.active, configuration);
         Disposed {
-            attachment: disposition.backed_by_zmx().then_some(attachment),
+            attachment: disposition.backed_by_live().then_some(attachment),
             disposition,
         }
     }
 
     /// Pane `identity`'s wrap configuration with `lead`; `None` (logged) when this instance cannot wrap it.
     pub(crate) fn wrap_configuration(&self, identity: Uuid, lead: Option<LeadAttachment>) -> Option<Configuration> {
-        let mut inputs = self.zmx.wrap.clone()?;
+        let mut inputs = self.live.wrap.clone()?;
         inputs.pane_identity = identity;
         inputs.lead = lead;
         support::configuration(&inputs)
             .inspect_err(|rejection| {
-                tracing::error!(pane = %identity, reason = rejection.message(), "zmx configuration failed");
+                tracing::error!(pane = %identity, reason = rejection.message(), "the live-session configuration failed");
             })
             .ok()
     }
 
     /// The launch steps that follow one another before any window mounts (upstream's `LaunchOrchestration.run`): a
     /// Live sessions reset marker is consumed by a launch that got live and discarded by any other, then the reap ends
-    /// the zero-client daemons no pane restores (every app daemon outside a live request). A no-op without zmx.
+    /// the zero-client daemons no pane restores (every app daemon outside a live request). A no-op without a session
+    /// host.
     pub fn run_live_launch(&mut self) {
-        let Some(host) = self.zmx.host().cloned() else {
+        let Some(host) = self.live.host().cloned() else {
             return;
         };
         let decision = self.restore.decision.clone();
         let live = decision.requested == RestoreMode::Live && decision.active == RestoreMode::Live;
         if live {
             self.consume_live_reset(host.as_ref());
-        } else if let Some(markers) = &self.zmx.markers {
+        } else if let Some(markers) = &self.live.markers {
             markers.remove();
         }
         let walk = self.pane_claims();
@@ -143,8 +144,8 @@ impl Core {
                 .map(|claim| daemon_name(claim.pane_identity))
                 .collect()
         });
-        self.zmx.running_names = reap(host.as_ref(), known.as_ref(), decision.requested);
-        self.zmx.leaders.borrow_mut().note_lifecycle_change();
+        self.live.running_names = reap(host.as_ref(), known.as_ref(), decision.requested);
+        self.live.leaders.borrow_mut().note_lifecycle_change();
     }
 }
 
@@ -153,16 +154,16 @@ impl Core {
     /// the leaders whenever a local pane is wrapped, each backed pane's attribution, each pane's lead, and the reset
     /// read-back at the top level.
     pub(crate) fn project_live(&self, store: &crate::model::AppStore, tree: &mut agterm_proto::ControlTree) {
-        tree.live_reset = super::readback(self.zmx.reset.pending.as_ref(), self.zmx.reset.last.as_ref());
+        tree.live_reset = super::readback(self.live.reset.pending.as_ref(), self.live.reset.last.as_ref());
         let backed = |slot: &crate::model::SurfaceSlot| slot.get().is_some_and(agterm_host::Surface::is_live_session);
         let wrapped = store.sessions().any(|session| {
             session.remote_host().is_none() && (backed(&session.surface) || backed(&session.split_surface))
         });
         let mut listed = false;
-        if wrapped && let Some(host) = self.zmx.host() {
+        if wrapped && let Some(host) = self.live.host() {
             let snapshot = host.list().ok().map(|records| leaders(&records));
             listed = snapshot.is_some();
-            self.zmx.leaders.borrow_mut().accept(snapshot);
+            self.live.leaders.borrow_mut().accept(snapshot);
         }
         let nodes = tree
             .workspaces
@@ -207,7 +208,7 @@ pub(crate) fn pane_paces(session: &Session, role: StatusPane, policy: &LaunchSee
 /// Pane `role`'s seed under its disposition, consuming the slots the launch armed for it; a wrapped pane's lead
 /// attachment starts here, where its attach is decided.
 pub(crate) fn pane_seed(
-    zmx: &mut ZmxRuntime,
+    runtime: &mut LiveRuntime,
     session: &mut Session,
     role: StatusPane,
     policy: &LaunchSeedPolicy,
@@ -217,9 +218,9 @@ pub(crate) fn pane_seed(
         LaunchDisposition::Wrapped(configuration) => {
             if let (Some(identity), Some(attachment)) = (pane_identity(&configuration.daemon_name), disposed.attachment)
             {
-                zmx.leads.begin(identity, attachment, false);
+                runtime.leads.begin(identity, attachment, false);
             }
-            zmx.leaders.borrow_mut().note_lifecycle_change();
+            runtime.leaders.borrow_mut().note_lifecycle_change();
             resolve_live_seed(session, role, policy, configuration)
         }
         LaunchDisposition::Ordinary | LaunchDisposition::Fallback => resolve_seed(session, role, policy),
@@ -235,12 +236,12 @@ pub(crate) fn reap(
     requested: RestoreMode,
 ) -> Option<BTreeSet<String>> {
     if requested == RestoreMode::Live && known_names.is_none() {
-        tracing::error!("skipping the live zmx reap: the pane inventory is incomplete");
+        tracing::error!("skipping the live-session reap: the pane inventory is incomplete");
         return None;
     }
     let records = host
         .list()
-        .inspect_err(|error| tracing::error!(%error, "zmx list failed during the launch reap"))
+        .inspect_err(|error| tracing::error!(%error, "the live-session list failed during the launch reap"))
         .ok()?;
     let running = records
         .iter()

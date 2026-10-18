@@ -170,8 +170,8 @@ pub struct Core {
     pub(crate) restore: commands::relaunch::RestoreRuntime,
     /// The command palette ([`crate::palette`]).
     pub(crate) palette: crate::palette::PaletteRuntime,
-    /// The live-session host and what the core keeps about its daemons ([`commands::zmx`]).
-    pub(crate) zmx: commands::zmx::ZmxRuntime,
+    /// The live-session host and what the core keeps about its daemons ([`commands::live`]).
+    pub(crate) live: commands::live::LiveRuntime,
     /// The presentation streams of attached viewers and their hub ([`crate::remote`]).
     pub(crate) remote: crate::remote::PresentationRuntime,
 }
@@ -248,7 +248,7 @@ impl Core {
             debug_appearance: commands::debug::DebugAppearance::default(),
             restore: commands::relaunch::RestoreRuntime::default(),
             palette: crate::palette::PaletteRuntime::default(),
-            zmx: commands::zmx::ZmxRuntime::default(),
+            live: commands::live::LiveRuntime::default(),
             remote: crate::remote::PresentationRuntime::default(),
         };
         core.repoint_remotes();
@@ -770,11 +770,11 @@ impl Core {
             },
             Command::Browser(BrowserCmd::Links) => result_of(&commands::browser::links(self, request)?),
             Command::Debug(DebugCmd::Appearance) => result_of(&commands::debug::appearance(self, request)?),
-            Command::Zmx(cmd) if commands::zmx::answers(cmd) => {
-                result_of(&commands::zmx::dispatch(self, cmd, request)?)
+            Command::Live(cmd) if commands::live::answers(cmd) => {
+                result_of(&commands::live::dispatch(self, cmd, request)?)
             }
             // `browser.clear` and `config.reload` start through `deferred`
-            cmd @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Zmx(_)) => {
+            cmd @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Live(_)) => {
                 Err(ControlError::NotSupported(cmd))
             }
         }
@@ -784,8 +784,8 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use agterm_proto::command::{
-        BrowserCmd, ConfigCmd, EventsCmd, HooksCmd, KeymapCmd, RestoreCmd, SidebarCmd, ThemeCmd, WindowCmd,
-        WorkspaceCmd, ZmxCmd,
+        BrowserCmd, ConfigCmd, EventsCmd, HooksCmd, KeymapCmd, LiveCmd, RestoreCmd, SidebarCmd, ThemeCmd, WindowCmd,
+        WorkspaceCmd,
     };
     use serde_json::json;
 
@@ -842,8 +842,8 @@ mod tests {
     #[test]
     fn an_attach_without_a_host_is_refused_before_anything_runs() {
         let mut core = core();
-        let response = core.dispatch(&Request::new(Command::Zmx(ZmxCmd::Attach)));
-        assert_eq!(response.error.as_deref(), Some("zmx.attach requires a host"));
+        let response = core.dispatch(&Request::new(Command::Live(LiveCmd::Attach)));
+        assert_eq!(response.error.as_deref(), Some("live.attach requires a host"));
     }
 
     fn tree_request(window: Option<&str>) -> Request {

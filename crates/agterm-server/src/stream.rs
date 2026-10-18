@@ -1,5 +1,5 @@
 //! The stream handoff seam: a handler's reply may claim the connection once its response is written, for commands
-//! that keep streaming after the first `ok` (`zmx.present`, `session.overlay.job.run`; `events.read` is a plain read
+//! that keep streaming after the first `ok` (`live.present`, `session.overlay.job.run`; `events.read` is a plain read
 //! that `agtermctl events` polls, as upstream's).
 //!
 //! [`LineStream`] is what such an owner usually runs on the connection: newline-delimited lines both ways, ported

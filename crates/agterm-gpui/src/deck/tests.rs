@@ -10,16 +10,16 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use agterm_core::live::support::Inputs;
 use agterm_core::model::NewSession;
 use agterm_core::pane_env::uuid_string;
 use agterm_core::persist::RestoreMode;
 use agterm_core::restore::mode::RestoreLaunchDecision;
-use agterm_core::zmx::support::Inputs;
 use agterm_core::{CoreConfig, CoreState, LiveInstall};
 use agterm_host::fakes::FakeSessionHost;
 use agterm_host::{MainLoop, MainLoopClosed, MainTask, SessionHost};
 use agterm_proto::command::SessionCmd;
-use agterm_proto::{AppIdentity, Args, Command, ControlZmxEndpoint, Request};
+use agterm_proto::{AppIdentity, Args, Command, ControlLiveEndpoint, Request};
 use agterm_term::{Launch, Pane, PaneCommand, PaneConfig};
 use gpui_kit::{Entity, TestAppContext, VisualTestContext, px, size};
 
@@ -657,12 +657,12 @@ fn live_core(library: WindowLibrary, resources: &Path) -> Core {
     core.set_restore_launch(RestoreLaunchDecision::new(RestoreMode::Live, None));
     core.install_live_sessions(LiveInstall {
         host: Arc::new(FakeSessionHost::new()) as Arc<dyn SessionHost>,
-        endpoint: ControlZmxEndpoint {
+        endpoint: ControlLiveEndpoint {
             executable: "/opt/agterm/bin/zmx".to_owned(),
             socket_directory: "/tmp/agterm-zmx-test".to_owned(),
         },
         wrap: Inputs {
-            zmx_executable: "/bin/sh".into(),
+            executable: "/bin/sh".into(),
             login_shell: Some("/bin/zsh".to_owned()),
             resources_dir: Some(resources.to_path_buf()),
             state_dir: resources.join("state"),

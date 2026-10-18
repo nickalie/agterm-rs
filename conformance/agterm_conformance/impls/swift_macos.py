@@ -21,7 +21,6 @@ from agterm_conformance.impls.base import (
     hosts_zmx_dir,
     login_shell_blocker,
     process_identity,
-    zmx_socket_directory,
 )
 from agterm_conformance.wait import WaitTimeout, wait_until
 
@@ -77,7 +76,7 @@ class SwiftMacosAdapter(Adapter):
 
     def live_sessions_blocker(self) -> str | None:
         if self.launch_mode == "uitest" and not self.enable_zmx:
-            return "the XCUITest sentinel turns zmx off without AGTERM_UITEST_ENABLE_ZMX"
+            return f"the XCUITest sentinel turns zmx off without {self.vocabulary.ui_test_opt_in}"
         return login_shell_blocker()
 
     def _macos_dir(self) -> Path | None:
@@ -102,7 +101,7 @@ class SwiftMacosAdapter(Adapter):
         if self.launch_mode == "uitest":
             env["AGTERM_UITEST_FORCE_SIDEBAR_VISIBLE"] = "1"
             if self.enable_zmx:
-                env["AGTERM_UITEST_ENABLE_ZMX"] = "1"
+                env[self.vocabulary.ui_test_opt_in] = "1"
 
     def first_run_env(self, env: dict[str, str]) -> None:
         # The sentinel suppresses the welcome; this opts back in (upstream WelcomeUITests).
@@ -139,7 +138,7 @@ class SwiftMacosAdapter(Adapter):
         """`pid` runs the session host of this instance's own bundle copy for its ZMX_DIR, derived from a state dir
         in its root."""
         bundle = self.instance_bundle(instance.root)
-        if bundle is None or instance.zmx_dir != zmx_socket_directory(instance.state_dir):
+        if bundle is None or instance.live_dir != instance.vocabulary.socket_directory(instance.state_dir):
             return False
         try:
             check_under_root(instance.state_dir, instance.root)
@@ -148,7 +147,7 @@ class SwiftMacosAdapter(Adapter):
         identity = process_identity(pid)
         expected = os.path.realpath(bundle / "Contents" / "MacOS" / SESSION_HOST)
         return (
-            identity is not None and identity.executable == expected and hosts_zmx_dir(identity.words, instance.zmx_dir)
+            identity is not None and identity.executable == expected and hosts_zmx_dir(identity.words, instance.live_dir)
         )
 
     def stop_helpers(self, instance: Instance) -> str | None:
@@ -156,7 +155,7 @@ class SwiftMacosAdapter(Adapter):
         harness ends the one its instance started: by exact pid, ownership re-verified before every signal."""
         hosts = [
             pid
-            for pid, name, _ in find_leftovers(instance.zmx_dir)
+            for pid, name, _ in find_leftovers(instance.live_dir, instance.vocabulary)
             if name == SESSION_HOST and self.owns_session_host(instance, pid)
         ]
         killed = [pid for pid in hosts if self._end_session_host(instance, pid)]

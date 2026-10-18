@@ -1,11 +1,11 @@
 //! Remote sessions: what this instance offers another machine attaching one of its live sessions (the origin side),
 //! and the sessions it attached from other machines (the viewer side).
 //!
-//! - [`tree`]: `zmx.tree`, the attachable sessions here or, over ssh, on another host;
-//! - [`frames`] and [`hub`]: the `zmx.present` stream that carries a session's presentation (status, context, layout,
+//! - [`tree`]: `live.tree`, the attachable sessions here or, over ssh, on another host;
+//! - [`frames`] and [`hub`]: the `live.present` stream that carries a session's presentation (status, context, layout,
 //!   HUD, notifications) to its viewers, and decides which one viewer is the session's sole presenter;
 //! - [`remotes`]: `remotes.conf`, the hosts offered for an attach;
-//! - the viewer side: `zmx.attach` and File ▸ Attach Remote ([`attach`]), the ssh lines it runs ([`ssh`]), each
+//! - the viewer side: `live.attach` and File ▸ Attach Remote ([`attach`]), the ssh lines it runs ([`ssh`]), each
 //!   attached row's presentation client ([`client`]) and what its frames put on the row ([`viewer`], [`layout`]), and
 //!   the panes whose ssh lost the connection ([`reconnect`]);
 //! - the presenter's work (upstream's `AppStore+RemoteAsk.swift`, `AppStore+RemoteOverlay.swift` and the server's
@@ -71,10 +71,10 @@ pub const HELLO_DEADLINE: Duration = Duration::from_secs(10);
 pub const INBOUND_LIMIT: usize = 64;
 /// How long a stream's blocked write may take before the peer counts as stalled.
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-/// How often a waiting `zmx.tree HOST` checks for the far side's answer.
+/// How often a waiting `live.tree HOST` checks for the far side's answer.
 const TREE_POLL: Duration = Duration::from_millis(50);
 
-const PRESENT_REQUIRES_SESSION: &str = "zmx.present requires a session";
+const PRESENT_REQUIRES_SESSION: &str = "live.present requires a session";
 const INVALID_SESSION: &str = "invalid session";
 const NOT_LIVE: &str = "session is not live-backed, so nothing can be attached to it";
 
@@ -168,9 +168,9 @@ impl fmt::Debug for PresentationRuntime {
     }
 }
 
-// MARK: - zmx.present and zmx.tree
+// MARK: - live.present and live.tree
 
-/// `zmx.present` (upstream's dispatcher arm and `openPresentation`): no `active` default, since a viewer names the
+/// `live.present` (upstream's dispatcher arm and `openPresentation`): no `active` default, since a viewer names the
 /// session it attached and a guess would stream another. The stream starts once this reply is out.
 pub(crate) fn open_presentation(core: &mut Core, target: Option<&str>) -> Outcome {
     let target = trimmed(target).ok_or_else(|| ControlError::rejected(PRESENT_REQUIRES_SESSION))?;
@@ -189,7 +189,7 @@ pub(crate) fn open_presentation(core: &mut Core, target: Option<&str>) -> Outcom
     Ok(ControlResult::id(uuid_string(resolved.session)))
 }
 
-/// `zmx.tree [HOST]` (upstream's `remoteTree`): this app's own attachable sessions without a host, another machine's
+/// `live.tree [HOST]` (upstream's `remoteTree`): this app's own attachable sessions without a host, another machine's
 /// with one, read over ssh off the main thread.
 pub(crate) fn begin_tree(core: &mut Core, request: &Request) -> Dispatched {
     let host = request
@@ -233,7 +233,7 @@ fn remote_tree_answer(result: &RemoteCommandResult, host: &str) -> Response {
 
 /// This app's own attachable sessions across every open window (upstream's `localAttachableSessions`).
 fn local_tree(core: &Core) -> Outcome {
-    let inventory = crate::commands::zmx::control_inventory(core)?;
+    let inventory = crate::commands::live::control_inventory(core)?;
     let windows: Vec<RemoteWindowProjection> = core
         .library()
         .windows()
@@ -331,7 +331,7 @@ impl PresentationRuntime {
 }
 
 impl Core {
-    /// Installs how `zmx.tree HOST` runs ssh (tests install a fake).
+    /// Installs how `live.tree HOST` runs ssh (tests install a fake).
     pub fn set_remote_runner(&mut self, runner: Arc<dyn RemoteCommandRunner>) {
         self.remote.runner = runner;
     }
@@ -383,7 +383,7 @@ impl Core {
 
     // MARK: - the frontend's stream hooks
 
-    /// Takes over a connection whose `zmx.present` for `session` (its reply's id) was just answered ok (upstream's
+    /// Takes over a connection whose `live.present` for `session` (its reply's id) was just answered ok (upstream's
     /// `adoptPresentationStream`). Returns the stream's serial, which the frontend's reports carry; the frontend arms
     /// [`HELLO_DEADLINE`] and, while streams are up, [`HEARTBEAT_INTERVAL`].
     pub fn adopt_presentation_stream(&mut self, session: &str, channel: Box<dyn LineChannel>) -> u64 {

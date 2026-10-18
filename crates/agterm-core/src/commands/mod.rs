@@ -12,6 +12,7 @@ pub(crate) mod font;
 pub(crate) mod hooks;
 pub(crate) mod hud;
 pub(crate) mod keymap;
+pub(crate) mod live;
 pub(crate) mod metadata;
 pub(crate) mod notify;
 pub(crate) mod overlay;
@@ -33,7 +34,6 @@ pub(crate) mod theme;
 pub(crate) mod typing;
 pub(crate) mod window;
 pub(crate) mod workspace;
-pub(crate) mod zmx;
 
 pub use panes::PaneReport;
 pub(crate) use surface::deferred;

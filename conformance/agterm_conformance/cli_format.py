@@ -12,6 +12,8 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from agterm_conformance.vocabulary import UPSTREAM, Vocabulary
+
 UUID = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")
 
 
@@ -32,8 +34,9 @@ def swift_double(value: float) -> str:
     return repr(float(value))
 
 
-def human(result: Mapping[str, Any] | None, echo_id: bool = False) -> str:
-    """`formatResponse` for an ok response, without the trailing newline `print` adds."""
+def human(result: Mapping[str, Any] | None, echo_id: bool = False, vocabulary: Vocabulary = UPSTREAM) -> str:
+    """`formatResponse` for an ok response, without the trailing newline `print` adds; `vocabulary` names the key the
+    implementation answers `zmx.list` under."""
     result = result or {}
     if "tree" in result:
         return tree(result["tree"])
@@ -49,8 +52,8 @@ def human(result: Mapping[str, Any] | None, echo_id: bool = False) -> str:
         return hooks(result["hooks"])
     if "remote" in result:
         return remote_tree(result["remote"])
-    if "zmx" in result:
-        return zmx(result["zmx"])
+    if vocabulary.result_key in result:
+        return zmx(result[vocabulary.result_key])
     if "restore" in result:
         return restore_status(result["restore"])
     if "app" in result:

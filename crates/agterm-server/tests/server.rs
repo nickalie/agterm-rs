@@ -220,8 +220,13 @@ fn malformed_requests_get_the_decode_error() -> TestResult {
 #[test]
 fn a_refusal_is_answered_with_its_reason() -> TestResult {
     let fixture = start_core()?;
-    let response = answer(&fixture.socket, br#"{"cmd":"zmx.attach"}"#)?;
-    assert_eq!(response, Response::failure("zmx.attach requires a host"));
+    let response = answer(&fixture.socket, br#"{"cmd":"live.attach"}"#)?;
+    assert_eq!(response, Response::failure("live.attach requires a host"));
+    // upstream's name for the group is no command of this build (conformance/docs/rust-build.md, The `live` group)
+    assert_eq!(
+        answer(&fixture.socket, br#"{"cmd":"zmx.attach"}"#)?,
+        Response::failure("invalid request: Cannot initialize Command from invalid String value zmx.attach")
+    );
     Ok(())
 }
 

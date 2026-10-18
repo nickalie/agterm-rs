@@ -40,18 +40,18 @@ that pane's foreground process while it runs, and `restore clear` is app-global 
 
 ## See and clean up the daemons behind live sessions
 
-In `live` mode each primary and split pane runs inside a zmx daemon that outlives the app. List them with
+In `live` mode each primary and split pane runs inside a live-session daemon that outlives the app. List them with
 the pane that claims each one:
 
 ```bash
-agtermctl zmx list
+agtermctl live list
 ```
 
 A `claimed` row with zero clients is a CLOSED window's pane, which is its resting state, not a leak. Only
 `orphan` rows are eligible for cleanup, and prune refuses entirely if the pane inventory is incomplete:
 
 ```bash
-agtermctl zmx prune
+agtermctl live prune
 ```
 
 To destroy one pane's daemon and the process in it, name the session and the pane and confirm. All three
@@ -59,7 +59,7 @@ are required because this kills a backend process, reaching a pane no window is 
 attached to it:
 
 ```bash
-agtermctl zmx kill --target 3f2a --pane left --force
+agtermctl live kill --target 3f2a --pane left --force
 ```
 
 To move every live session created before the session host under it, so a tool's microphone permission
@@ -67,7 +67,7 @@ stops being asked per version, reset them. agterm quits and reopens itself right
 this from outside the sessions it affects, or expect the calling shell to end:
 
 ```bash
-agtermctl zmx reset --force
+agtermctl live reset --force
 ```
 
 ## Attach a session running on another Mac
@@ -78,20 +78,20 @@ the Help action — running agterm alone leaves no CLI an ssh command can find. 
 the same of this app, which is the form the remote call runs over there:
 
 ```bash
-agtermctl zmx tree studio.local
-agtermctl zmx attach studio.local 7c1e4a02-...
+agtermctl live tree studio.local
+agtermctl live attach studio.local 7c1e4a02-...
 # Place it in a specific open local window.
-agtermctl zmx attach studio.local 7c1e4a02-... --window "$window_id"
+agtermctl live attach studio.local 7c1e4a02-... --window "$window_id"
 ```
 
 To let the user choose, pipe the listing through the picker:
 
 ```bash
-s=$(agtermctl zmx tree studio.local --json |
+s=$(agtermctl live tree studio.local --json |
   jq '[.result.remote.sessions[] | {id, label: .name,
         subtitle: (.windowName + "/" + .workspaceName + "  " + .cwd)}]' |
   agtermctl pick --prompt "Attach which session?" | jq -r '.id // empty')
-[ -n "$s" ] && agtermctl zmx attach studio.local "$s"
+[ -n "$s" ] && agtermctl live attach studio.local "$s"
 ```
 
 The row is marked remote and carries `remoteHost` in the tree. Closing it ends only this side's connection,
@@ -106,7 +106,7 @@ agtermctl tree --json | jq '.. | objects | select(.remoteHost) | {name, presenta
 
 ## Read or change the local restore policy
 
-This is about THIS instance, not a remote one: `zmx attach` requires nothing of the local restore mode.
+This is about THIS instance, not a remote one: `live attach` requires nothing of the local restore mode.
 A mode you set applies to the NEXT launch, because a pane is wrapped in a daemon or not at the moment it
 is created:
 

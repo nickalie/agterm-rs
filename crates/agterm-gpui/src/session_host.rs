@@ -21,12 +21,12 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use agterm_core::ghostty_config::{self, FinalConfig, GhosttyConfig, LoadedConfig, Step};
+use agterm_core::live::build_record::launch_cutoff;
+use agterm_core::live::shell_integration::LoginShell;
+use agterm_core::live::support::Inputs;
 use agterm_core::paths::{self, Env};
-use agterm_core::zmx::build_record::launch_cutoff;
-use agterm_core::zmx::shell_integration::LoginShell;
-use agterm_core::zmx::support::Inputs;
 use agterm_core::{Core, LiveInstall};
-use agterm_proto::ControlZmxEndpoint;
+use agterm_proto::ControlLiveEndpoint;
 use agterm_term::{Host, Launch, Pane};
 use agterm_zmx::Runtime;
 use agterm_zmx::launch::bundled_build_id;
@@ -46,7 +46,7 @@ pub const LIVE_ANY_SHELL: &str = "live-any-shell";
 pub fn install(core: &mut Core, env: &dyn Env) {
     let runtime = Runtime::capture(env);
     let client = runtime.client();
-    let endpoint = ControlZmxEndpoint {
+    let endpoint = ControlLiveEndpoint {
         executable: runtime.zmx_executable.to_string_lossy().into_owned(),
         socket_directory: client.socket_directory().to_owned(),
     };
@@ -70,7 +70,7 @@ pub fn install(core: &mut Core, env: &dyn Env) {
 #[must_use]
 pub fn wrap_inputs(runtime: &Runtime) -> Inputs {
     Inputs {
-        zmx_executable: runtime.zmx_executable.clone(),
+        executable: runtime.zmx_executable.clone(),
         login_shell: runtime.login_shell.clone(),
         resources_dir: runtime.resources_dir.clone(),
         state_dir: runtime.state_dir.clone(),
@@ -304,7 +304,7 @@ mod tests {
             login_shell: Some("/bin/zsh".to_owned()),
             resources_dir: None,
             state_dir: PathBuf::from("/tmp/agterm-state"),
-            inherited: agterm_core::zmx::shell_integration::Inherited::default(),
+            inherited: agterm_core::live::shell_integration::Inherited::default(),
         };
         assert!(claims(&runtime, &MapEnv::new()).is_empty());
     }

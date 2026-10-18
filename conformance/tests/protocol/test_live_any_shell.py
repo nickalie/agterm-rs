@@ -22,7 +22,7 @@ def _marker():
 
 
 def _daemon_row(ctl, sid):
-    rows = assert_ok(ctl.request("zmx.list"))["zmx"]["entries"]
+    rows = assert_ok(ctl.request(ctl.vocabulary.command("zmx.list")))[ctl.vocabulary.result_key]["entries"]
     (row,) = [row for row in rows if row.get("sessionID") == sid and row["pane"] == "left"]
     return row
 
@@ -33,7 +33,7 @@ def test_a_live_pane_in_the_login_shell_reports_its_cwd_and_survives_the_relaunc
     ctl = launch(settings={"restoreMode": "live"})
     sid = assert_ok(ctl.request("session.new"))["id"]
     ctl.wait_mounted(sid, "left")
-    ctl.wait_tree(lambda tree: find_session(tree, sid).get("backedByZmx") is True)
+    ctl.wait_tree(lambda tree: find_session(tree, sid).get(ctl.vocabulary.backed_key) is True)
     # The shell integration reports the directory through OSC 7, which the pane's cwd follows.
     directory = ctl.instance.root / "live-cwd"
     directory.mkdir()
@@ -45,14 +45,15 @@ def test_a_live_pane_in_the_login_shell_reports_its_cwd_and_survives_the_relaunc
     before = _daemon_row(ctl, sid)
 
     ctl = launch.relaunch(ctl)
-    ctl.wait_tree(lambda tree: find_session(tree, sid).get("backedByZmx") is True)
+    ctl.wait_tree(lambda tree: find_session(tree, sid).get(ctl.vocabulary.backed_key) is True)
 
     def same_daemon(response):
-        (row,) = [row for row in assert_ok(response)["zmx"]["entries"] if row.get("sessionID") == sid]
+        rows = assert_ok(response)[ctl.vocabulary.result_key]["entries"]
+        (row,) = [row for row in rows if row.get("sessionID") == sid]
         assert (row["daemon"], row["observation"]) == (before["daemon"], "running"), row
         return row
 
-    ctl.wait_response("zmx.list", None, same_daemon)
+    ctl.wait_response(ctl.vocabulary.command("zmx.list"), None, same_daemon)
     # The same shell, still in its directory: its leader pid, its screen and its cwd came through the quit.
     assert _daemon_row(ctl, sid)["leaderPID"] == before["leaderPID"]
     ctl.wait_text(sid, rf"(?m)^{marker}$", all=True)

@@ -113,35 +113,35 @@ Check these in order:
 - **Restart after selecting Live sessions.** The restore mode is fixed when agterm starts. Changing
   **Settings ▸ General ▸ Restore sessions** affects the next process, not sessions already open.
 - **Read the eligibility reason in Settings.** Live mode requires zsh as the macOS login shell and the
-  bundled zmx and zsh-integration resources. If the launch cannot use live mode, every pane starts as an
+  bundled session host and zsh-integration resources. If the launch cannot use live mode, every pane starts as an
   ordinary shell.
-- **Inspect actual backing with `tree --json`.** Primary and split surfaces report `backedByZmx`; the session
-  field is true only when every existing primary or split is backed. The sidebar deliberately has no zmx
+- **Inspect actual backing with `tree --json`.** Primary and split surfaces report `backedByLive`; the session
+  field is true only when every existing primary or split is backed. The sidebar deliberately has no live-session
   indicator.
 - **Confirm the pane is in scope.** Primary and split panes can survive. Scratch, overlay, and quick terminals
   are temporary by design.
-- **Start from `agtermctl zmx list`.** It reports every daemon and the pane claiming it, with the
+- **Start from `agtermctl live list`.** It reports every daemon and the pane claiming it, with the
   restore mode as a header. `claimed` with zero clients is a CLOSED window's resting state, not a leak;
-  `orphan` is what `zmx prune` takes. `unknown` means the pane inventory was incomplete, so nothing
+  `orphan` is what `live prune` takes. `unknown` means the pane inventory was incomplete, so nothing
   can be pruned until that is resolved.
 - **A missing daemon is recreated, running the captured command.** A reboot or a stale daemon leaves nothing
   to attach, so agterm creates one under the saved name and replays the command that pane was running at the
   last clean quit. A fresh shell instead means no capture applied: the window was closed before the quit, the
   machine lost power or was force-quit, the process exited before quitting, SIGTERM was used, or the command
-  is refused by `restore-denylist.conf`. `agtermctl zmx kill` is not one of these — it closes a shown split
+  is refused by `restore-denylist.conf`. `agtermctl live kill` is not one of these — it closes a shown split
   or promotes a primary rather than leaving a daemon to recreate. To check what was captured, read
   `foregroundCommand` in `windows/<id>.json` while agterm is STOPPED: the next launch moves it into memory
   and rewrites the file with nil, so a running app always shows null there.
 - **A tool asks for the microphone again after every update.** The pane was created before the session
   host and reads `orphaned` in `agtermctl tree --json`, so macOS charges each tool version separately. Agterm ▸
-  Reset Live Sessions… (or `agtermctl zmx reset --force`) ends those sessions' processes at the next launch
+  Reset Live Sessions… (or `agtermctl live reset --force`) ends those sessions' processes at the next launch
   and recreates them under the host; agterm quits and reopens itself, captured commands start again where
   possible, and the notification afterwards says how many sessions were covered. A session whose old process
   could not be confirmed gone gets no command restarted and the reset can be run again.
-- **After an update, an attached session still needs a key press, or a zmx change seems missing.** A live
-  session keeps the zmx it was created with through app updates. `agtermctl zmx list` marks such rows
-  `outdated`; Agterm ▸ Reset Live Sessions… (or `agtermctl zmx reset --force`) recreates them on the current
-  zmx, with the same cost as any reset: running work stops and agent conversations need resuming.
+- **After an update, an attached session still needs a key press, or a session host change seems missing.** A live
+  session keeps the session host it was created with through app updates. `agtermctl live list` marks such rows
+  `outdated`; Agterm ▸ Reset Live Sessions… (or `agtermctl live reset --force`) recreates them on the current
+  session host, with the same cost as any reset: running work stops and agent conversations need resuming.
 - **Switching modes ends detached live processes.** Selecting Fresh shells or Re-run commands and restarting
   reaps the live daemons in this state directory. An unavailable launch that still requests Live sessions
   preserves its claimed daemons for a later eligible launch.

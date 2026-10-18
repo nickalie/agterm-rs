@@ -15,17 +15,17 @@ use agterm_host::{KillOutcome, ProcessRecord, Surface};
 use agterm_proto::{ControlRestartReceipt, ControlResult, Response};
 use uuid::Uuid;
 
-use super::zmx::launch::live_foreground_group;
+use super::live::launch::live_foreground_group;
 use crate::Core;
 use crate::command_restore::shell_quoted_line;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
+use crate::live::lead::LeadAttachment;
+use crate::live::support::attach_command;
 use crate::model::StatusPane;
 use crate::pane_env::uuid_string;
 use crate::restart_replay::{self, Launch, Observation};
 use crate::restore::capture::ForegroundReader;
-use crate::zmx::lead::LeadAttachment;
-use crate::zmx::support::attach_command;
 
 /// How long the old shell may take to show up in the listing.
 const SHELL_WAIT: Duration = Duration::from_secs(5);
@@ -71,7 +71,7 @@ fn later(step: impl FnOnce(&mut Core) -> Dispatched + Send + 'static) -> Dispatc
 
 /// The leader pid the listing reports for `daemon` once it differs from `other_than`.
 fn listed_shell(core: &Core, daemon: &str, other_than: Option<i32>) -> Option<i32> {
-    let records = core.zmx.host()?.list().ok()?;
+    let records = core.live.host()?.list().ok()?;
     records
         .into_iter()
         .find(|record| record.name == daemon)?
@@ -108,7 +108,7 @@ fn end_old_shell(core: &mut Core, job: Job, old: i32) -> Dispatched {
             Err(message) => return failure(message),
         },
     };
-    let Some(host) = core.zmx.host().cloned() else {
+    let Some(host) = core.live.host().cloned() else {
         return failure("live sessions are unavailable for this pane");
     };
     // read before the kill: without it the restart could not tell when the old program is gone
@@ -127,9 +127,9 @@ fn end_old_shell(core: &mut Core, job: Job, old: i32) -> Dispatched {
         }
     }
     // the dying client's exit would close the pane, and its `unowned` report would reattach to a daemon that is gone
-    core.zmx.claimed_exits.insert(job.token.clone());
-    core.zmx.leads.forget(job.identity);
-    core.zmx.leaders.borrow_mut().note_lifecycle_change();
+    core.live.claimed_exits.insert(job.token.clone());
+    core.live.leads.forget(job.identity);
+    core.live.leaders.borrow_mut().note_lifecycle_change();
     let ending = Ending {
         old,
         program,
@@ -151,7 +151,7 @@ struct Ending {
 }
 
 fn await_program_end(core: &mut Core, job: Job, mut ending: Ending) -> Dispatched {
-    let running = core.zmx.host().is_some_and(|host| host.job_running(&ending.program));
+    let running = core.live.host().is_some_and(|host| host.job_running(&ending.program));
     if !running {
         return rebuild(core, job, &ending);
     }
@@ -159,7 +159,7 @@ fn await_program_end(core: &mut Core, job: Job, mut ending: Ending) -> Dispatche
         return later(move |core| await_program_end(core, job, ending));
     }
     if !ending.killed {
-        if let Some(host) = core.zmx.host() {
+        if let Some(host) = core.live.host() {
             host.end_job(&ending.program);
         }
         ending.killed = true;
@@ -208,10 +208,10 @@ fn rebuild(core: &mut Core, job: Job, ending: &Ending) -> Dispatched {
         &none,
     );
     core.begin_replacement_lead(&job.token, job.identity, attachment, false);
-    core.request_pane_replacement(super::zmx::PaneReplacement {
+    core.request_pane_replacement(super::live::PaneReplacement {
         session: job.session,
         token: job.token.clone(),
-        command: crate::zmx::support::settled(&command),
+        command: crate::live::support::settled(&command),
         env: configuration.environment.into_iter().collect(),
         cwd: ending
             .replay
@@ -235,7 +235,7 @@ fn await_new_shell(
     // the claim covered the old terminal from the kill until the frontend installed the replacement
     // (`Core::pane_replaced` ends it, the frontend claiming the old terminal's exit itself) or dropped it; this only
     // makes sure no claim outlives the rebuild
-    core.zmx.claimed_exits.remove(&job.token);
+    core.live.claimed_exits.remove(&job.token);
     let Some(new) = listed_shell(core, &job.daemon, Some(old)) else {
         // a replacement whose attach already exited closed the pane: no new shell will show up
         if Instant::now() < deadline && pane_unchanged(core, &job) {
@@ -243,7 +243,7 @@ fn await_new_shell(
         }
         return failure(format!("the old shell ended (pid {old}) and no new one was observed"));
     };
-    core.zmx.leaders.borrow_mut().note_lifecycle_change();
+    core.live.leaders.borrow_mut().note_lifecycle_change();
     let pane = job.pane.as_str();
     let note = replayed
         .as_ref()
@@ -266,14 +266,15 @@ fn await_new_shell(
 /// The foreground program to run again, read through the daemon's shell (upstream's `replayLaunch`).
 fn replay_launch(core: &Core, job: &Job, old: i32) -> Result<Launch, String> {
     let unreadable = || restart_replay::Refusal::Unreadable.message();
-    let host = core.zmx.host().ok_or_else(unreadable)?;
+    let host = core.live.host().ok_or_else(unreadable)?;
     // a failed listing drops the cached leaders, so a daemon that is gone cannot answer for the pane
-    core.zmx
-        .leaders
-        .borrow_mut()
-        .accept(host.list().ok().map(|records| crate::zmx::lifecycle::leaders(&records)));
+    core.live.leaders.borrow_mut().accept(
+        host.list()
+            .ok()
+            .map(|records| crate::live::lifecycle::leaders(&records)),
+    );
     let table = core.restore.table().ok_or_else(unreadable)?;
-    let live = |token: &str| live_foreground_group(&core.zmx, table, token);
+    let live = |token: &str| live_foreground_group(&core.live, table, token);
     let reader = ForegroundReader::new(table, core.restore.shell()).with_live(&live);
     let observed = core
         .library()
@@ -299,7 +300,7 @@ fn replay_launch(core: &Core, job: &Job, old: i32) -> Result<Launch, String> {
 /// its exit claimed nothing else would close it. A session soft-closed meanwhile is made final instead, since undo
 /// would bring back that dead pane.
 fn close_ended_pane(core: &mut Core, job: &Job) {
-    core.zmx.claimed_exits.remove(&job.token);
+    core.live.claimed_exits.remove(&job.token);
     core.note_already_finalized(job.identity);
     if let Some(store) = core.library_mut().store_for_session_mut(job.session) {
         match store

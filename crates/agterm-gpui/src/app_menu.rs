@@ -3,7 +3,7 @@
 //! row or built-in action, enabled by the window's palette context (the one predicate the palette and the keymap
 //! read), and every keyed item showing its resolved chord. The app's own items close the menu: Settings…, Reset Live
 //! Sessions… while live sessions are both configured and running (upstream's Quit group; its dialogs and the reopen
-//! are `zmx_runtime.rs`'s), and Quit (Linux has no global menu bar, so the in-window menu is their only mouse path).
+//! are `live_runtime.rs`'s), and Quit (Linux has no global menu bar, so the in-window menu is their only mouse path).
 //!
 //! File also carries upstream's live parts ([`agterm_core::menu_lists`]): Open Window, listing the library with the open
 //! windows checked; Open Recent, the closed sessions and workspaces; and Reveal in Files. Help holds the developer

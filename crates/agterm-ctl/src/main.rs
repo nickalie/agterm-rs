@@ -12,6 +12,7 @@ mod events;
 mod font;
 mod hooks;
 mod keymap;
+mod live;
 mod local;
 mod modal;
 mod notify;
@@ -40,7 +41,6 @@ mod usage;
 mod version;
 mod window;
 mod workspace;
-mod zmx;
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -91,7 +91,7 @@ enum Command {
     Pick(pick::Pick),
     Ask(ask::Ask),
     Restore(restore::Restore),
-    Zmx(zmx::Zmx),
+    Live(live::Live),
     Terminfo(terminfo::Terminfo),
     Clipboard(clipboard::Clipboard),
     Version(version::Version),
@@ -119,7 +119,7 @@ impl Command {
             Self::Theme(command) => command.check(),
             Self::Ask(command) => command.check(),
             Self::Restore(command) => command.check(),
-            Self::Zmx(command) => command.check(),
+            Self::Live(command) => command.check(),
             Self::Terminfo(command) => command.check(),
             Self::Pick(_) | Self::Clipboard(_) | Self::Version(_) => Ok(()),
         }
@@ -146,7 +146,7 @@ impl Command {
             Self::Pick(command) => command.execute(env),
             Self::Ask(command) => command.execute(env),
             Self::Restore(command) => command.execute(env),
-            Self::Zmx(command) => command.execute(env),
+            Self::Live(command) => command.execute(env),
             Self::Terminfo(command) => command.execute(),
             Self::Clipboard(command) => command.execute(),
             Self::Version(command) => command.run(env),
@@ -405,11 +405,19 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/catalog.yaml");
         let catalog: serde_norway::Value = serde_norway::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let cli = catalog["cli"].as_mapping().unwrap();
-        let expected: std::collections::BTreeSet<String> =
-            cli.keys().map(|name| name.as_str().unwrap().to_owned()).collect();
+        // upstream's `agtermctl zmx` is `agtermctl live` here (conformance/docs/rust-build.md, The `live` group)
+        let expected: std::collections::BTreeSet<String> = cli
+            .keys()
+            .map(|name| name.as_str().unwrap())
+            .map(|name| {
+                name.strip_prefix("zmx ")
+                    .map_or_else(|| name.to_owned(), |rest| format!("live {rest}"))
+            })
+            .collect();
         let mut ours = std::collections::BTreeSet::new();
         catalog_names(&Agtermctl::command(), &[], &mut ours);
         assert_eq!(ours, expected);
+        assert!(ours.iter().all(|name| !name.contains("zmx")), "{ours:?}");
     }
 
     #[test]

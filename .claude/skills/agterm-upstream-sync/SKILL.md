@@ -147,9 +147,10 @@ because every plan task's subagent starts from this branch and must be able to r
    `LIBGHOSTTY_VT_REV`, and leave any bump of that pin (`scripts/build-ghostty-vt.sh`,
    `scripts/gen-ghostty-vt-bindings.sh`, `scripts/gen-ghostty-config-keys.sh`) to a change of its own.
 3. **Vendored copies**: `bash SKILL_DIR/scripts/sync-resources.sh [--upstream DIR] --patches WORK/patches CURRENT TARGET`.
-   It applies upstream's own diff to each copy (`resources/agent-status`, `resources/skills/agterm`, `hud.sh`,
-   themes, `ghostty-defaults.conf`, zmx patches, `LICENSE.upstream`) only where it applies cleanly, so the Linux glue
-   in the copies survives. `conflict` → a plan task to merge it by hand, keeping the Linux glue; the task names the
+   It applies upstream's own diff to each copy (`resources/agent-status`, `hud.sh`, themes, `ghostty-defaults.conf`,
+   zmx patches, `LICENSE.upstream`) only where it applies cleanly, so the Linux glue in the copies survives; the
+   agent skill (`resources/skills/agterm`) is rebuilt as the new upstream tree plus `build/patches/skill-agterm/` (its
+   `live` names), and a `conflict` there names the patch to refresh. `conflict` → a plan task to merge it by hand, keeping the Linux glue; the task names the
    upstream diff command (`git -C .upstream/agterm diff CURRENT TARGET -- <path>`), not the temp patch.
    `unmapped` → a plan task deciding where the new resource goes. When nothing conflicted, bump the release named in
    `crates/agterm-app/src/integrations/mod.rs`'s header. A zmx patch change also needs `scripts/build-zmx.sh` (as in 2).

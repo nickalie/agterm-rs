@@ -16,10 +16,10 @@ use crate::Core;
 use crate::command_restore::has_control_character;
 use crate::dispatch::Dispatched;
 use crate::error::{ControlError, Noun};
+use crate::live::daemon_name;
 use crate::model::{PaneAddress, Session, StatusPane};
 use crate::resolve::ACTIVE;
 use crate::restart_replay::MAX_COMMAND_BYTES;
-use crate::zmx::daemon_name;
 
 /// The pane and the line the dispatcher checked: the pane by role or token, the line `None` to replay the foreground
 /// program.
@@ -51,7 +51,7 @@ fn target_job(core: &mut Core, request: &Request) -> Result<Job, ControlError> {
     let surface = pane_surface(session, pane).ok_or_else(not_realized)?;
     let token = surface.pane_token().to_owned();
     let identity = Uuid::parse_str(&token).map_err(|_| not_realized())?;
-    if !surface.is_live_session() || core.zmx.host().is_none() {
+    if !surface.is_live_session() || core.live.host().is_none() {
         return Err(ControlError::rejected(
             "session.restart needs Live sessions mode; this pane has no live shell to replace",
         ));

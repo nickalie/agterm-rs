@@ -24,6 +24,17 @@ disagree, the code wins: check with `ls`/`grep` before naming a Rust file in the
 | cli | `agtermCore/Sources/agtermctlKit/*` | `agterm-ctl/src/<group>.rs`, `usage.rs`, `output.rs`, `socket.rs`, `client.rs` | subcommands, flags, help text, output format, exit codes, retry/backoff, local (no-socket) commands |
 | core | other `agtermCore/Sources/agtermCore/*` | `agterm-core/src/*` (model, persist, keymap, hooks, settings_model, remote, hud, palette, ...) | model and store behavior, and every on-disk format (`settings.json`, `windows.json`, keymap/hooks files, `remotes.conf`, `restore-denylist.conf`, ...): the format is part of the contract, the suite reads it back |
 
+**The `zmx` group is `live` here.** Upstream's `zmx.*` commands, `agtermctl zmx`, `result.zmx` and `backedByZmx` are
+`live.*`, `agtermctl live`, `result.live` and `backedByLive` in the Rust build, and its strings that name zmx speak of
+live sessions (the table of renamed strings: `conformance/docs/rust-build.md` > The `live` group). An upstream change
+to `ControlDispatcher+Zmx.swift`, `ControlServer+Zmx.swift` or `ZmxCommands.swift` ports onto
+`agterm-core/src/commands/live*`, `agterm-core/src/remote/` and `agterm-ctl/src/live.rs` under those names: a new
+command `zmx.foo` becomes `live.foo`, a new string naming zmx gets the live-session wording and a row in that table,
+and a test the suite adds keeps upstream's names, read through the adapter's vocabulary
+(`conformance/agterm_conformance/vocabulary.py`, with a `LIVE_TEXTS` entry for a new text that names zmx). What the
+bundled zmx binary speaks (`attach`, `ZMX_*`, `list`/`screen` output) keeps its names until the session server
+replaces it.
+
 A behavior change usually spans several of these at once (a feature commit touches protocol + dispatcher + cli +
 core + ui). The plan groups it by **command group or feature**, not by area: one task per group, holding every area
 that group's change touches. The per-commit block in the classify report ("Commits by area") is the seam to cut along.
@@ -57,7 +68,7 @@ the Linux equivalent, or a recorded "no Linux counterpart" in the checklist.
 | upstream | copy here | notes |
 |---|---|---|
 | `agterm/Resources/agent-status/` | `resources/agent-status/` | carries Linux glue (the Codex adapter reads JSON with python3/jq); a conflict there is a manual merge keeping it |
-| `plugins/agterm/skills/agterm/` | `resources/skills/agterm/` | the agent skill the app installs |
+| `plugins/agterm/skills/agterm/` | `resources/skills/agterm/` | the agent skill the app installs: upstream's tree plus `build/patches/skill-agterm/` (the `live` names), rebuilt whole on every sync; a `conflict` names the patch to refresh against the new tree (regenerate it as `diff -u` of upstream's files and the hand-merged copy), and `sync-resources.sh --check TAG TAG` verifies the copy |
 | `agterm/Resources/hud/` | `crates/agterm-gpui/resources/hud/` | `hud.sh`, included with `include_str!` |
 | `agterm/Resources/custom-themes/` | `build/themes/` | agterm's own themes |
 | `agterm/Resources/ghostty-defaults.conf` | `crates/agterm-core/src/ghostty_config/ghostty-defaults.conf` | adapted (Linux chords, comments): usually a conflict, merge the setting, keep the Linux binds |

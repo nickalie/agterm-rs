@@ -46,7 +46,7 @@ mod tests {
         assert_eq!(decision.active, RestoreMode::None);
         assert_eq!(
             decision.live_unavailable_reason.as_deref(),
-            Some("the zmx executable is unavailable")
+            Some("the live-session executable is unavailable")
         );
     }
 

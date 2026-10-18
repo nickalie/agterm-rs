@@ -94,7 +94,7 @@ fn listing(sessions: &[serde_json::Value]) -> RemoteCommandResult {
 
 /// Upstream's `build`: one pane running vim, with a context; its daemon is one agterm can address.
 fn build_session() -> serde_json::Value {
-    let daemon = crate::zmx::daemon_name(Uuid::from_u128(0xd1));
+    let daemon = crate::live::daemon_name(Uuid::from_u128(0xd1));
     json!({
         "id": REMOTE_SESSION, "name": "build", "windowID": "w1", "windowName": "main", "workspaceID": "ws1",
         "workspaceName": "work", "context": "release prep", "cwd": "/repo",

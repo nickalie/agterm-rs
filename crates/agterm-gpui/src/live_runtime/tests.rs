@@ -6,14 +6,14 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use agterm_core::live::support::Inputs;
 use agterm_core::model::{StatusPane, WindowLibrary};
 use agterm_core::persist::RestoreMode;
 use agterm_core::restore::mode::RestoreLaunchDecision;
-use agterm_core::zmx::support::Inputs;
 use agterm_core::{Core, CoreConfig, CoreState, LiveInstall};
 use agterm_host::fakes::{FakeSessionHost, FakeSurface};
 use agterm_host::{MainLoop, MainLoopClosed, MainTask, SessionHost};
-use agterm_proto::ControlZmxEndpoint;
+use agterm_proto::ControlLiveEndpoint;
 use gpui_kit::TestAppContext;
 
 use super::*;
@@ -42,12 +42,12 @@ pub(crate) fn live_core(state_dir: &Path) -> Core {
     let host = Arc::new(FakeSessionHost::new());
     core.install_live_sessions(LiveInstall {
         host: Arc::clone(&host) as Arc<dyn SessionHost>,
-        endpoint: ControlZmxEndpoint {
+        endpoint: ControlLiveEndpoint {
             executable: "/opt/agterm/bin/zmx".to_owned(),
             socket_directory: "/tmp/agterm-zmx-test".to_owned(),
         },
         wrap: Inputs {
-            zmx_executable: "/bin/sh".into(),
+            executable: "/bin/sh".into(),
             login_shell: Some("/bin/zsh".to_owned()),
             state_dir: state_dir.to_path_buf(),
             ..Inputs::default()
@@ -68,7 +68,7 @@ pub(crate) fn live_core(state_dir: &Path) -> Core {
     session.pane_slot_mut(StatusPane::Left).replace(Box::new(
         FakeSurface::new(agterm_core::pane_env::uuid_string(identity)).with_live_session(true),
     ));
-    host.set_record(&agterm_core::zmx::daemon_name(identity), Some(1), Some(100), Some(50));
+    host.set_record(&agterm_core::live::daemon_name(identity), Some(1), Some(100), Some(50));
     core
 }
 
@@ -116,7 +116,7 @@ fn a_confirmed_reset_quits_at_once_and_the_quit_arms_the_marker() {
     let Some(ResetAlert::Confirm(prompt)) = work.live_reset else {
         panic!("no confirmation: {:?}", work.live_reset);
     };
-    let (title, body) = agterm_core::zmx::reset::dialog_text(1, 1);
+    let (title, body) = agterm_core::live::reset::dialog_text(1, 1);
     assert_eq!((prompt.title, prompt.body), (title, body));
     assert!(!work.quit, "nothing quits before the answer");
     state.confirm_live_reset();
@@ -125,7 +125,7 @@ fn a_confirmed_reset_quits_at_once_and_the_quit_arms_the_marker() {
     assert_eq!(work.quit_prompt, None, "without the quit prompt");
     assert_eq!(work.live_reset, None);
     assert!(state.core.arm_live_reset_on_quit(), "the quit arms the reset");
-    assert!(dir.path().join(agterm_core::zmx::reset::MARKER_FILE_NAME).exists());
+    assert!(dir.path().join(agterm_core::live::reset::MARKER_FILE_NAME).exists());
 }
 
 /// A loop that keeps what is posted.

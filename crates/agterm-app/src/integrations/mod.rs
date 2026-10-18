@@ -10,8 +10,9 @@
 //! executables directory, instead of an admin-owned `/usr/local/bin`.
 //!
 //! The payloads under the repository's `resources/` are upstream v0.36.0's `agterm/Resources/agent-status` and
-//! `plugins/agterm/skills/agterm` (MIT, `resources/LICENSE.upstream`), unchanged but for one piece of Linux glue: the
-//! Codex adapter reads the hook payload with `python3` or `jq` where macOS has `plutil`.
+//! `plugins/agterm/skills/agterm` (MIT, `resources/LICENSE.upstream`), unchanged but for one piece of Linux glue (the
+//! Codex adapter reads the hook payload with `python3` or `jq` where macOS has `plutil`) and the skill's `live` names
+//! for upstream's `zmx` group (`build/patches/skill-agterm`).
 
 pub mod cli;
 pub mod files;

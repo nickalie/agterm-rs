@@ -469,7 +469,7 @@ SUBCOMMANDS:
   pick                    Open, poll, or cancel a native fuzzy picker.
   ask                     Open, poll, or cancel a themed question dialog.
   restore                 Restore-running-command commands.
-  zmx                     Inspect and manage the daemons behind live sessions.
+  live                    Inspect and manage the daemons behind live sessions.
   terminfo                The terminal's terminfo entry on other hosts.
   clipboard               The clipboard of the terminals showing this pane.
   version                 Print the version of the app serving the socket.
@@ -857,7 +857,7 @@ fn restore_prints_its_note_and_background_and_restart_send_their_args() -> TestR
 }
 
 #[test]
-fn zmx_tree_and_present_send_their_args_and_print_the_sessions() -> TestResult {
+fn live_tree_and_present_send_their_args_and_print_the_sessions() -> TestResult {
     let dir = short_dir()?;
     let remote = serde_json::json!({"host": "buildbox", "endpoint": {"executable": "/z", "socketDirectory": "/t"},
         "presentation": 1, "sessions": [{"id": "S1", "name": "build", "windowID": "W", "windowName": "main",
@@ -867,22 +867,22 @@ fn zmx_tree_and_present_send_their_args_and_print_the_sessions() -> TestResult {
             {"pane": "right", "daemon": "agterm-b"}]}]});
     let cases: [(&[&str], serde_json::Value, serde_json::Value, String); 3] = [
         (
-            &["zmx", "tree"],
-            serde_json::json!({"cmd": "zmx.tree"}),
+            &["live", "tree"],
+            serde_json::json!({"cmd": "live.tree"}),
             serde_json::json!({"remote": {"endpoint": {"executable": "/z", "socketDirectory": "/t"},
                                           "sessions": []}}),
             "no attachable sessions\n".to_owned(),
         ),
         (
-            &["zmx", "tree", "buildbox"],
-            serde_json::json!({"cmd": "zmx.tree", "args": {"host": "buildbox"}}),
+            &["live", "tree", "buildbox"],
+            serde_json::json!({"cmd": "live.tree", "args": {"host": "buildbox"}}),
             serde_json::json!({"remote": remote}),
             "  main/dev/build (split vertical)  [S1]  /repo  release prep  tail\n".to_owned(),
         ),
         (
             // the app answers and hangs up: nothing but frames would reach stdout
-            &["zmx", "present", "S1"],
-            serde_json::json!({"cmd": "zmx.present", "target": "S1"}),
+            &["live", "present", "S1"],
+            serde_json::json!({"cmd": "live.present", "target": "S1"}),
             serde_json::json!({"id": "S1"}),
             String::new(),
         ),
@@ -902,35 +902,35 @@ fn zmx_tree_and_present_send_their_args_and_print_the_sessions() -> TestResult {
 }
 
 #[test]
-fn zmx_commands_send_their_args_and_print_the_inventory() -> TestResult {
+fn live_commands_send_their_args_and_print_the_inventory() -> TestResult {
     let dir = short_dir()?;
     let restore = serde_json::json!({"configured": "live", "requestedAtLaunch": "live", "active": "live",
                                      "restartRequired": false});
     let cases: [(&[&str], serde_json::Value, serde_json::Value, String); 4] = [
         (
-            &["zmx", "list"],
-            serde_json::json!({"cmd": "zmx.list"}),
-            serde_json::json!({"zmx": {"restore": restore, "inventoryComplete": true, "entries": []}}),
+            &["live", "list"],
+            serde_json::json!({"cmd": "live.list"}),
+            serde_json::json!({"live": {"restore": restore, "inventoryComplete": true, "entries": []}}),
             "configured: live (next launch)\nthis launch: requested live, active live\nno daemons\n".to_owned(),
         ),
         (
-            &["zmx", "screen", "agterm-a", "--lines", "3"],
-            serde_json::json!({"cmd": "zmx.screen", "args": {"name": "agterm-a", "lines": 3}}),
+            &["live", "screen", "agterm-a", "--lines", "3"],
+            serde_json::json!({"cmd": "live.screen", "args": {"name": "agterm-a", "lines": 3}}),
             serde_json::json!({"text": "a\nb\nc"}),
             "a\nb\nc\n".to_owned(),
         ),
         (
             &[
-                "zmx", "kill", "--pane", "right", "--force", "--target", "s1", "--window", "w1",
+                "live", "kill", "--pane", "right", "--force", "--target", "s1", "--window", "w1",
             ],
-            serde_json::json!({"cmd": "zmx.kill", "target": "s1",
+            serde_json::json!({"cmd": "live.kill", "target": "s1",
                                "args": {"force": true, "window": "w1", "pane": "right"}}),
             serde_json::json!({"id": NEW_ID, "text": "killed agterm-a", "pane": "right"}),
             "killed agterm-a\n".to_owned(),
         ),
         (
-            &["zmx", "reset", "--force"],
-            serde_json::json!({"cmd": "zmx.reset", "args": {"force": true}}),
+            &["live", "reset", "--force"],
+            serde_json::json!({"cmd": "live.reset", "args": {"force": true}}),
             serde_json::json!({"text": "1 live session will be reset.",
                                "liveReset": {"sessions": 1, "panes": 1, "pending": true}}),
             "1 live session will be reset.\n".to_owned(),
@@ -948,23 +948,23 @@ fn zmx_commands_send_their_args_and_print_the_inventory() -> TestResult {
     let socket = dir.path().join("absent.sock");
     let refusals: [(&[&str], &str); 5] = [
         (
-            &["zmx", "kill", "--pane", "left", "--target", "s1"],
+            &["live", "kill", "--pane", "left", "--target", "s1"],
             "--force is required to destroy a running process",
         ),
         (
-            &["zmx", "kill", "--pane", "middle", "--force", "--target", "s1"],
+            &["live", "kill", "--pane", "middle", "--force", "--target", "s1"],
             "--pane must be left/primary/top or right/split/bottom",
         ),
         (
-            &["zmx", "kill", "--pane", "left", "--force", "--target", "active"],
+            &["live", "kill", "--pane", "left", "--force", "--target", "active"],
             "--target must name a session; 'active' is not accepted here",
         ),
         (
-            &["zmx", "reset"],
+            &["live", "reset"],
             "--force is required to end the processes in the affected live sessions",
         ),
         (
-            &["zmx", "screen", "agterm-a", "--all", "--lines", "2"],
+            &["live", "screen", "agterm-a", "--all", "--lines", "2"],
             "use either --all or --lines, not both",
         ),
     ];
@@ -977,14 +977,76 @@ fn zmx_commands_send_their_args_and_print_the_inventory() -> TestResult {
 }
 
 #[test]
-fn zmx_present_reports_a_refusal_on_stderr_and_writes_no_frame() -> TestResult {
+fn live_present_reports_a_refusal_on_stderr_and_writes_no_frame() -> TestResult {
     let dir = short_dir()?;
     let socket = dir.path().join("agterm.sock");
     let message = "session is not live-backed, so nothing can be attached to it";
     let _server = serve(&socket, (), move |(), _| Response::failure(message).into())?;
     assert_eq!(
-        outcome(&run_on(dir.path(), &socket, &["zmx", "present", "S1"])?),
+        outcome(&run_on(dir.path(), &socket, &["live", "present", "S1"])?),
         (Some(1), String::new(), format!("Error: {message}\n"))
+    );
+    Ok(())
+}
+
+const LIVE_HELP: &str = "\
+OVERVIEW: Inspect and manage the daemons behind live sessions.
+
+Live sessions keep each primary and split pane's process alive in a
+live-session daemon, so closing agterm ends the attach client while the process
+keeps running. These commands show which daemons exist, who owns them, and
+which are left over.
+
+Every one needs a running agterm: only the app can join its live windows, its
+pending closes and its persisted snapshots against what the session host
+reports. With agterm stopped there is nothing to ask.
+
+USAGE: agtermctl live <subcommand>
+
+OPTIONS:
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  list                    List every daemon and the pane that claims it.
+  screen                  Print a daemon's screen as plain text, whether or not
+                          a window shows its pane.
+  prune                   Kill the daemons no pane claims and nothing is
+                          attached to.
+  kill                    Destroy one pane's daemon and the process running in
+                          it.
+  reset                   Reset live sessions that are unsupervised or predate
+                          the recorded live-session update, then reopen.
+  tree                    List the sessions that can be attached to, here or on
+                          another Mac.
+  attach                  Attach to a session on another Mac, as a session here.
+  present                 Carry a presentation stream for one session between
+                          stdin/stdout and this app.
+
+  See 'agtermctl help live <subcommand>' for detailed help.
+";
+
+#[test]
+fn the_live_group_is_upstreams_zmx_renamed_with_no_zmx_left_in_its_help() -> TestResult {
+    let dir = short_dir()?;
+    for args in [&["live", "--help"][..], &["live"], &["help", "live"]] {
+        assert_eq!(
+            outcome(&run(dir.path(), &[], args)?),
+            (Some(0), LIVE_HELP.to_owned(), String::new()),
+            "{args:?}"
+        );
+    }
+    for subcommand in ["list", "screen", "prune", "kill", "reset", "tree", "attach", "present"] {
+        let (code, help, stderr) = outcome(&run(dir.path(), &[], ["help", "live", subcommand])?);
+        assert_eq!((code, stderr.as_str()), (Some(0), ""), "{subcommand}");
+        assert!(help.contains(&format!("USAGE: agtermctl live {subcommand}")), "{help}");
+        assert!(!help.to_lowercase().contains("zmx"), "{subcommand}: {help}");
+    }
+    // upstream's group name is no subcommand of this build
+    let (code, stdout, stderr) = outcome(&run(dir.path(), &[], ["zmx", "list"])?);
+    assert_eq!((code, stdout.as_str()), (Some(64), ""));
+    assert!(
+        stderr.starts_with("Error: 2 unexpected arguments: 'zmx', 'list'\n"),
+        "{stderr}"
     );
     Ok(())
 }
@@ -4056,9 +4118,9 @@ values differ once the mode has been changed since this instance started, which
 is exactly when a caller is confused about why nothing happened.
 
 Setting one writes it for the NEXT launch. This process keeps the mode it
-started with, and that is not a shortcut: a pane is wrapped in a zmx daemon or
-not at the moment it is created, so no setting can retrofit a shell that is
-already running.
+started with, and that is not a shortcut: a pane is wrapped in a live-session
+daemon or not at the moment it is created, so no setting can retrofit a shell
+that is already running.
 
 fresh shells (none) re-spawns each pane in its saved directory. re-run (rerun)
 starts the command each pane had at the last clean quit. live keeps the actual

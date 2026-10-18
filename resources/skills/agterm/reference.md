@@ -15,9 +15,9 @@ Full detail for every `agtermctl` command. See `SKILL.md` for the model and addr
 - **Response shape**: `{"ok": true, "result": {…}}` or `{"ok": false, "error": "<message>"}`.
   `result` carries one of: `id` (affected/new session/workspace/window), `text` (session copy/text),
   `exitCode` (overlay result), `count` (diagnostics/search), `restore` (the restore-mode policy),
-  `zmx` (the daemon inventory), `remote` (another Mac's attachable sessions, for `zmx tree`),
+  `live` (the daemon inventory), `remote` (another Mac's attachable sessions, for `live tree`),
   `affected` (things actually changed: sessions
-  for a batch close/move, daemons killed for `zmx prune`), `tree` (the tree), `windows` (window list), `app` (the serving app's identity, for
+  for a batch close/move, daemons killed for `live prune`), `tree` (the tree), `windows` (window list), `app` (the serving app's identity, for
   `version`). The process exit code is non-zero when
   `ok` is false.
 - **Options go after the subcommand**: `agtermctl session type "ls" --target active`, never before it.
@@ -57,7 +57,7 @@ The event kinds and payloads are:
   real visibility change: showing or hiding the split or scratch, closing the split, the primary pane
   exiting with a split promoted, or the scratch shell exiting. An axis change while shown emits nothing.
 - `remote.opened` / `remote.closed`: session `name` and the ssh destination of a local row created by
-  `zmx attach` as `host`, emitted beside `session.created` / `session.closed` for that session only. They describe the row's
+  `live attach` as `host`, emitted beside `session.created` / `session.closed` for that session only. They describe the row's
   presence in the local tree, never the ssh connection: undo re-emits `remote.opened`, and an ssh that
   died leaves the row holding its exit line until it is closed. Closing a remote split pane alone emits
   neither.
@@ -138,14 +138,14 @@ refuses to create a surface while the DISPLAY is asleep, so a session a schedule
 stays unrealized until the displays wake, at which point it recovers on its own. A queued right pane shows
 nothing here. Poll this after creating a session unattended; `agtermctl tree` also tags the row
 `(not realized)`),
-`backedByZmx` (true only when every existing primary/split pane is currently zmx-backed; older servers omit
+`backedByLive` (true only when every existing primary/split pane is currently live-backed; older servers omit
 it),
 `liveAttribution` and `splitLiveAttribution` (primary and split pane attribution: `supervisor` identifies
 the bundled persistent host, `app` the running agterm, `orphaned` a self-responsible pane or a confirmed
 dead responsible process, and `unknown` an unavailable reading or an unrelated live responsible process;
 omitted for non-Live and remote panes; the split field includes hidden splits and is omitted without a
 split; these describe attribution, not permission grants),
-`remoteHost` (the machine an attached session came from — the read side of `zmx attach`; omitted for a
+`remoteHost` (the machine an attached session came from — the read side of `live attach`; omitted for a
 local session, and never present after a relaunch because a remote session is never written to disk),
 `presentation` (on an attached session only: `state` is `connecting`, `connected`, `unsupported` for an
 origin too old to stream, or `failed` with the reason in `error`, and `mode` is `presenter` when this
@@ -243,9 +243,9 @@ the read side of `font --pane`; each omitted when that pane isn't realized. `fon
 default/left target (the main pane, or the promoted split survivor once the primary exits — the same pane
 `font --pane left` writes); only the main pane's size survives a relaunch, so the split/scratch sizes and a
 promoted survivor are live-only — read them back here rather than from the snapshot), and `surfaces` (array
-of `{id, kind, active, visible, backedByZmx?, lead?, reconnect?, paneID?}` where `kind` is
+of `{id, kind, active, visible, backedByLive?, lead?, reconnect?, paneID?}` where `kind` is
 `left`|`right`|`scratch`|`overlay`|`overlay-left`|`overlay-right`).
-Primary/split surfaces report `backedByZmx`; scratch and overlays omit it. `paneID` is the surface's
+Primary/split surfaces report `backedByLive`; scratch and overlays omit it. `paneID` is the surface's
 stable token, the value `--pane-id` takes; it follows the terminal through a swap and is omitted for an
 overlay or a pane whose surface is not created yet. `lead` is `leader`, `follower`
 or `unowned`: whether this Mac's window size is the one the pane's program sees. A pane that does not
@@ -418,7 +418,7 @@ buys nothing. A caller with no tree uses `version`.
   default — no `/opt/homebrew/bin`), so a bare Homebrew or other non-default binary fails with exit 127.
   Wrap in a login shell for both — `--command "zsh -lc 'htop'"` — or give an absolute path
   (`/opt/homebrew/bin/htop`). All of that describes Fresh shells and Re-run commands. In Live sessions
-  mode the command is instead a create-only zmx payload the persistent shell runs as a login shell, so
+  mode the command is instead a create-only live-session payload the persistent shell runs as a login shell, so
   shell operators are interpreted, the `PATH` is that shell's rather than the launchd default, and the
   session stays open after the command exits.
   `--wait` (only with `--command`, else an error) HOLDS the session open after the command exits —
@@ -426,7 +426,7 @@ buys nothing. A caller with no tree uses `version`.
   so you can read a build/test/deploy's final output or an early failure that would otherwise flash and
   vanish. In Re-run commands mode it persists across restart (unlike an overlay's live-only `--wait`),
   so a restored command session that starts its command again also holds; read it back on `tree`'s
-  `commandWait`. Live sessions mode passes the command as a create-only zmx payload, which bypasses the
+  `commandWait`. Live sessions mode passes the command as a create-only live-session payload, which bypasses the
   1,024-byte PTY input cap. A surviving daemon ignores the payload; a new daemon runs it, then starts the persistent
   shell. The shell stays open when it exits, and `--wait` adds no hold prompt. After a clean quit, a missing daemon
   is recreated running whatever that pane's foreground command was; if the command had already exited, or the
@@ -878,9 +878,9 @@ error keeps those names for compatibility.
   command (the `session.*` names bar `new` and `go`, plus `notify`, `font.*` and a non-gui `ask.open`) gets
   the page's session, and `session.overlay.close|reload|navigate|submit` its pane too; a `window.*` command
   that takes a window gets it as target; anything else gets `--window`. An explicit target, `active`,
-  window or batch is used as given, and `zmx.attach` and `dashboard` keep their ids and still land in the
+  window or batch is used as given, and `live.attach` and `dashboard` keep their ids and still land in the
   page's window. A page's `reload` defaults to `--current`. `sidebar` and `sidebar.mode` act on the
-  frontmost window. Refused from a page: `zmx.present`, `zmx.reset`, `session.overlay.job.run`, and any
+  frontmost window. Refused from a page: `live.present`, `live.reset`, `session.overlay.job.run`, and any
   request from a frame. Escape outside text you put in a page: it can run commands.
 - `session overlay open --url URL [--navigation] [--js] [--persistent] [--browse] [--size-percent N] [--background-color #rrggbb] [--follow] [--pane left|right] [--target] [--window W]`
   — show a web page by URL in the overlay slot, typically a dev server you are running
@@ -1613,10 +1613,10 @@ so `{AGT_SESSION_NAME}` and `{AGT_SESSION_PWD}` are as untrusted as `{AGT_SELECT
 - `{AGT_SESSION_NAME}` / `$AGT_SESSION_NAME` — the session's display name (the focused pane's terminal title, remote-settable via OSC).
 - `{AGT_SESSION_PWD}` / `$AGT_SESSION_PWD` — the working directory of the pane the command fired from;
   the scratch terminal reports the main pane's, since it tracks no cwd of its own. For a session opened
-  by `zmx attach` the path can be remote: the session starts with local HOME and follows subsequent cwd
+  by `live attach` the path can be remote: the session starts with local HOME and follows subsequent cwd
   reports. The command itself starts in that path only when it exists here as a directory, else in
   local HOME. See Remote sessions.
-- `{AGT_SESSION_HOST}` / `$AGT_SESSION_HOST` — the SSH destination of a session opened by `zmx attach`,
+- `{AGT_SESSION_HOST}` / `$AGT_SESSION_HOST` — the SSH destination of a session opened by `live attach`,
   verbatim as given (`user@alias` included); empty for a local session, an `ssh` typed into one included,
   so branch on it: `if [ -n "$AGT_SESSION_HOST" ]; then ssh "$AGT_SESSION_HOST" uptime; fi` (a bare
   `&&` chain exits 1 on a local session and the runner reports that as a failure).
@@ -1751,7 +1751,7 @@ started with, so a change applies after restarting agterm.
 
 - **Fresh shells** restores the structural snapshot with new shells.
 - **Re-run commands** starts captured commands again. The old processes are not attached.
-- **Live sessions** wraps primary and split panes with zmx and reattaches to their running processes. Zsh
+- **Live sessions** wraps primary and split panes in live-session daemons and reattaches to their running processes. Zsh
   must be the macOS login shell. Scratch, overlay, and quick terminals remain temporary.
 
 Closing agterm or sending it SIGTERM ends the attach clients and leaves live daemons running. A clean quit
@@ -1765,7 +1765,7 @@ Switching to Fresh shells or Re-run commands and restarting ends every detached 
 directory. A launch that still requests Live sessions but cannot use it preserves those processes.
 
 The tree exposes actual backing without adding sidebar UI. Primary and split surface entries carry
-`backedByZmx`; the session-level field is true only when every existing primary or split pane is backed.
+`backedByLive`; the session-level field is true only when every existing primary or split pane is backed.
 Reattach keeps usable text, TUI state, and normal colors. It does not retain inline images, earlier OSC 133
 prompt markers, program-changed palette entries, or existing cell hyperlink metadata. New terminal output
 after reattach behaves normally.
@@ -1803,50 +1803,50 @@ Bare, it reports five things: `configured` (what settings hold, so what the next
 `unavailableReason` when live was requested and refused. The two requested values differ once the mode has
 changed since this instance started, which is exactly when a caller wonders why nothing happened.
 
-Setting it changes nothing in the running app, and no flag makes it: a pane is wrapped in a zmx daemon or
+Setting it changes nothing in the running app, and no flag makes it: a pane is wrapped in a live-session daemon or
 not at the moment it is created, so a running shell cannot be retrofitted either way. A failed write is
 reported as a failure rather than acknowledged.
 
-`agtermctl zmx list` — every daemon and every pane expecting one, joined, under the restore status as a
+`agtermctl live list` — every daemon and every pane expecting one, joined, under the restore status as a
 header. `state` is `claimed`, `orphan`, `unknown`, `conflicted`, `pendingClose` or `foreign`;
 `observation` is `running`, `unreadable` or `absent`, separate from the client count because a daemon that
-is gone and one zmx could not read are different answers. A CLOSED window's panes are `claimed` with zero
+is gone and one the session host could not read are different answers. A CLOSED window's panes are `claimed` with zero
 clients. That is the resting state after you close a window, not a leak, which is why the owner's window
 state is its own column. `unknown` means the pane inventory was incomplete, so no row can be called an orphan.
 The header also carries `endpoint.executable` and `endpoint.socketDirectory`, which is what another machine
 needs to reach these daemons; a server older than remote sessions omits the key. A row whose daemon was
-created before the recorded first launch with this zmx build carries `outdated: true` (omitted otherwise).
+created before the recorded first launch with this session host build carries `outdated: true` (omitted otherwise).
 
-`agtermctl zmx screen NAME [--all|--lines N]` — print one daemon's screen as plain text. NAME is the
-daemon name `zmx list` prints, not a session id, so it reaches a pane whose window is closed;
+`agtermctl live screen NAME [--all|--lines N]` — print one daemon's screen as plain text. NAME is the
+daemon name `live list` prints, not a session id, so it reaches a pane whose window is closed;
 `session text` resolves only open-window sessions. The default is the daemon's current screen at the size its
 last leader gave it; it has no scroll position of its own, so this is not the pane's viewport.
 `--all` adds the scrollback the daemon retains and `--lines N`, N positive, keeps the last N lines of
 that; pass one or the other. The read
 attaches nothing, opens no window and changes no pane's size. A name with no readable daemon is an error.
 
-`agtermctl zmx prune` — kill the daemons no pane claims and nothing is attached to. It refuses outright on
-an incomplete or conflicted inventory. The gate is checked and revalidated rather than atomic: zmx has no
+`agtermctl live prune` — kill the daemons no pane claims and nothing is attached to. It refuses outright on
+an incomplete or conflicted inventory. The gate is checked and revalidated rather than atomic: the session host has no
 kill-if-detached, so prune re-lists immediately before killing and drops anything that gained a client,
 but a client attaching from outside agterm in the remaining gap can still be terminated. It reports each
-daemon separately, and a "cleaned up a stale socket" line is NOT a kill: zmx unlinked a socket it could
+daemon separately, and a "cleaned up a stale socket" line is NOT a kill: the session host unlinked a socket it could
 not reach, and that daemon may still be running.
 
-`agtermctl zmx kill --target ID --pane left|right --force` — destroy one pane's daemon and the process in
+`agtermctl live kill --target ID --pane left|right --force` — destroy one pane's daemon and the process in
 it. All three are required: this kills a backend process, reaches a pane no window is showing, and takes
 down every client attached to that daemon, so there is no sensible default for who is affected. Killing a
 shown split closes that split; killing a primary promotes its split survivor, or closes the session when
 there is none; a pane whose window is closed simply comes back as a fresh shell. None of these gets the
-three-second undo. It refuses a daemon already gone, one zmx could not read (forcing that can unlink a
+three-second undo. It refuses a daemon already gone, one the session host could not read (forcing that can unlink a
 live daemon's socket and leave it running unreachable), and a session inside its undo window. Killing the
 daemon of the pane you are typing in can kill the calling `agtermctl` before it reads the reply.
 
-`agtermctl zmx reset --force` — Agterm ▸ Reset Live Sessions… without the dialog. A live session created
+`agtermctl live reset --force` — Agterm ▸ Reset Live Sessions… without the dialog. A live session created
 before the session host existed keeps its own macOS permission identity, so every new version of a tool in
 it asks for the microphone again; the reset ends those sessions' processes at the next launch and recreates
 them under the host, starting their captured commands again where possible. It also covers every session
-whose daemon predates the recorded first launch with this zmx build: live sessions keep the zmx they started
-with through updates, so they miss a zmx change until recreated. agterm quits and reopens itself
+whose daemon predates the recorded first launch with this session host build: live sessions keep the session host they started
+with through updates, so they miss a session host change until recreated. agterm quits and reopens itself
 right after answering, so running work in the affected sessions stops and agent conversations may need to be
 resumed by hand; run from inside one of those sessions it kills the calling shell. Other supervised
 sessions are left alone. It refuses outside Live sessions mode, while a mode change waits for a restart,
@@ -1860,10 +1860,10 @@ Omit it to search every window, closed and unindexed ones included; `active` is 
 is it for `--target`. Without it an ambiguous prefix reports `no left pane daemon for session ID`, the
 same answer a target that does not exist gets.
 
-`agtermctl zmx tree [HOST]` — attachable sessions across EVERY open window. With a `HOST` it reads another
+`agtermctl live tree [HOST]` — attachable sessions across EVERY open window. With a `HOST` it reads another
 Mac over ssh; with none it reports this app's own, which is exactly the form the remote call runs on the
 far side, so it is also how to see what another machine would answer without sshing anywhere.
-`result.remote` carries `endpoint` (the zmx `executable` and `socketDirectory`), `host` when one was given,
+`result.remote` carries `endpoint` (the session host `executable` and `socketDirectory`), `host` when one was given,
 `presentation` (the presentation protocol version, absent from an app too old to stream),
 and `sessions`, each with `id`, `name`, `windowID`/`windowName` and `workspaceID`/`workspaceName` (show the
 names, group by the ids — neither is unique, so two windows called `main` merge if you group by name),
@@ -1875,17 +1875,17 @@ side has no idea which name reached it.
 Only a session whose every pane still has a live daemon is listed: attaching to a name that no longer
 exists would CREATE a daemon and hand back a fresh shell wearing it, so an incomplete one is omitted
 rather than offered half. An empty list is a successful answer and does NOT diagnose the restore mode —
-`zmx list` does that. The far side must be running in `live` mode, which is what puts a daemon behind each
-pane, and be new enough to answer `zmx tree` at all; an older one is refused by name rather than
+`live list` does that. The far side must be running in `live` mode, which is what puts a daemon behind each
+pane, and be new enough to answer `live tree` at all; an older one is refused by name rather than
 half-attached. It also needs `agtermctl` installed by the cask or the Help action: a machine merely
 running agterm has no CLI an ssh command can find, and the read fails with exit 127.
 
-`agtermctl zmx attach HOST SESSION [--window W]` opens one of those sessions here, marked remote, in
+`agtermctl live attach HOST SESSION [--window W]` opens one of those sessions here, marked remote, in
 the destination window's current workspace, selected, with the remote session's split when it has one.
 `--window` takes a local open window ID, unique prefix, or `active`; omitted, it uses the frontmost window
 after discovery. An invalid or closed destination fails without creating a session. Targeting a background
 window leaves the frontmost window unchanged. `SESSION` is the
-`id` from `zmx tree`, never the name: remote names are editable and repeat across workspaces. Returns the
+`id` from `live tree`, never the name: remote names are editable and repeat across workspaces. Returns the
 new local session's `id`; read `remoteHost` on its tree node. The remote is resolved AGAIN before anything
 is created, so a session that has gone since the listing fails and creates nothing. Everything reported
 here is a failure found before that point — a connection that starts and later drops is an ordinary pane
@@ -1900,7 +1900,7 @@ File ▸ Attach Remote… is the same flow in the GUI and has no command of its 
 `<config dir>/remotes.conf` (one `destination [label]` per line, `#` comments), asks which in the picker
 when there are several, then lists that machine's sessions and attaches the picked one. It is the
 `attach_remote` keymap action, on Cmd-Shift-R unless `keymap.conf` maps another chord. A script composes
-`zmx tree`, `pick` and `zmx attach` instead.
+`live tree`, `pick` and `live attach` instead.
 
 A program in an attached session runs on the origin and talks to the origin's agterm, so what it asks
 agterm to draw would show there only. Every attach therefore also opens a presentation stream, and this
@@ -1954,7 +1954,7 @@ Nothing has to be set up beyond the `agtermctl` PATH precondition above. What to
 - While the stream is not up the row's indicator says so and names the host. It retries on its own, at
   once when the Mac wakes or the network changes; close and reattach the session to retry by hand.
 
-`agtermctl zmx present SESSION` is the plumbing behind it: it opens the stream on the local socket and
+`agtermctl live present SESSION` is the plumbing behind it: it opens the stream on the local socket and
 bridges it to stdio as newline-delimited JSON. agterm runs it over ssh on the origin; it is not meant to
 be typed.
 
@@ -1971,7 +1971,7 @@ one opened after the attach-time split is closed), Duplicate Session, and New Se
 to open in the current session's directory. An explicit overlay `--cwd` is used as given. Quote both
 variables; an existing local path is not checked to be the same repository as the remote one.
 
-Each pane has ONE leading Mac, whose window size the program inside sees. `zmx attach` takes the lead in
+Each pane has ONE leading Mac, whose window size the program inside sees. `live attach` takes the lead in
 every pane at once; the same panes on the Mac the session runs on are covered ("in use from another Mac").
 Each pane's `lead` in `tree` reads `leader`, `follower` or `unowned`. It is absent when the pane has no
 daemon to lead, which is every local pane outside Live sessions mode (`agtermctl restore mode`), and when
@@ -1988,8 +1988,8 @@ a password or host-key prompt is a failure, not a question. Against an origin wh
 lead, the attach follows instead: the pane arrives at the OTHER machine's window size and drops input
 until a typed key (a printable character, Return, Tab or Backspace) takes the lead.
 
-Every zmx command needs a running agterm: only the app can join its live windows, its pending closes and
-its persisted snapshots against what zmx reports. With agterm stopped there is nothing to ask.
+Every `live` command needs a running agterm: only the app can join its live windows, its pending closes and
+its persisted snapshots against what the session host reports. With agterm stopped there is nothing to ask.
 
 Which programs are NOT re-run is controlled by `restore-denylist.conf` in the config directory (one
 command name per line, seeded with the terminal multiplexers `tmux`/`screen`/`zellij`). It is a plain
@@ -2009,7 +2009,7 @@ here is app-global and touches only the captured commands, not those overrides.
 `agtermctl clipboard set [TEXT]` — copy text to the clipboard of every terminal attached to the pane the
 command runs in. Local-only: it never opens the control socket and takes no `--socket`, `--window`,
 `--target` or `--json`. It prints an OSC 52 clipboard write into the pane's own output through the pane's
-zmx daemon, so the write travels with the terminal bytes: a session attached from another Mac gets the
+live-session daemon, so the write travels with the terminal bytes: a session attached from another Mac gets the
 text on the Mac showing it, and on the Mac it runs on as well.
 
 - `TEXT` — the text to copy; read from standard input when omitted, byte for byte, a trailing newline
@@ -2018,13 +2018,13 @@ text on the Mac showing it, and on the Mac it runs on as well.
 - Needs no terminal, so an agent's shell tool can run it. It does need the pane's own environment:
   `ZMX_SESSION` and `ZMX_DIR`, which a main or split pane started under Live sessions carries. A scratch,
   quick or overlay terminal, and a pane started in another restore mode, is refused with `this pane has
-  no zmx daemon; run it in a main or split pane started under Live sessions`. `pbcopy` is a fallback
+  no live session; run it in a main or split pane started under Live sessions`. `pbcopy` is a fallback
   there only when the clipboard wanted is this Mac's own: an overlay shown on another Mac still runs here.
 - Each receiving terminal applies its own `clipboard-write` setting: `ask` prompts, `deny` drops the copy.
-- Exit 0 means `zmx print` exited zero. It reads no reply, so that confirms neither that the session
+- Exit 0 means the session host's print exited zero. It reads no reply, so that confirms neither that the session
   received the text nor that a terminal applied it. Other failures exit 1:
-  `no zmx next to this agtermctl` for a CLI running outside the app bundle, and `zmx print exited N` with
-  zmx's own message.
+  `no live-session executable next to this agtermctl` for a CLI running outside the app bundle, and `the live-session print exited N` with
+  the session host's own message.
 - A copy made while the pane's program is in the middle of heavy output can land inside one of its escape
   sequences and garble that one sequence. Copy while the program is idle when it matters.
 

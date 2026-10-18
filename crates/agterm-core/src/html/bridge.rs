@@ -3,7 +3,7 @@
 //! what it left out is filled from where it sits, and only there, so an explicit target, `active`, window or batch
 //! resolves exactly as it would over the socket.
 
-use agterm_proto::command::{AskCmd, BrowserCmd, FontCmd, HooksCmd, KeymapCmd, SessionCmd, WindowCmd, ZmxCmd};
+use agterm_proto::command::{AskCmd, BrowserCmd, FontCmd, HooksCmd, KeymapCmd, LiveCmd, SessionCmd, WindowCmd};
 use agterm_proto::{Args, Command, Request, Response};
 use serde_json::Value;
 use uuid::Uuid;
@@ -138,9 +138,9 @@ pub const HELPER_SCRIPT: &str = r"(() => {
 
 /// Each needs more than one request and reply: a stream handed over, or work done after the reply.
 const REFUSED: [Command; 3] = [
-    Command::Zmx(ZmxCmd::Present),
+    Command::Live(LiveCmd::Present),
     Command::Session(SessionCmd::OverlayJobRun),
-    Command::Zmx(ZmxCmd::Reset),
+    Command::Live(LiveCmd::Reset),
 ];
 /// Commands that address no session, or address it some other way than by `target`.
 const NOT_SESSION_TARGETED: [Command; 3] = [
@@ -183,7 +183,7 @@ const WINDOWLESS: [Command; 4] = [
     Command::Browser(BrowserCmd::Links),
 ];
 /// Their ids name something else (a remote session, dashboard cells), and they still land in a local window.
-const PLACED_LOCALLY: [Command; 2] = [Command::Zmx(ZmxCmd::Attach), Command::Dashboard];
+const PLACED_LOCALLY: [Command; 2] = [Command::Live(LiveCmd::Attach), Command::Dashboard];
 
 /// Where a requesting page sits when its request arrives (upstream's `HtmlBridgePage`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn attach_and_dashboard_keep_their_ids_and_land_in_the_pages_window() {
         let fixture = Fixture::new();
-        let attach = fixture.request(r#"{"cmd":"zmx.attach","target":"REMOTE","args":{"host":"mac"}}"#);
+        let attach = fixture.request(r#"{"cmd":"live.attach","target":"REMOTE","args":{"host":"mac"}}"#);
         assert_eq!(attach.target.as_deref(), Some("REMOTE"));
         assert_eq!(window(&attach), Some("W1"));
         let dashboard = fixture.request(r#"{"cmd":"dashboard","args":{"targets":["A","B"]}}"#);
@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn stream_and_after_reply_commands_are_refused() {
         let fixture = Fixture::new();
-        for cmd in ["zmx.present", "session.overlay.job.run", "zmx.reset"] {
+        for cmd in ["live.present", "session.overlay.job.run", "live.reset"] {
             let error = fixture.build(&format!(r#"{{"cmd":"{cmd}"}}"#)).unwrap_err();
             assert_eq!(error.message, format!("{cmd} cannot be sent from a page"));
         }

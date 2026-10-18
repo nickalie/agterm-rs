@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 from agterm_conformance.impls import ADAPTERS
-from agterm_conformance.impls.base import XDG_HOMES, check_launch_env, zmx_socket_directory
+from agterm_conformance.impls.base import XDG_HOMES, check_launch_env
+from agterm_conformance.vocabulary import upstream_socket_directory
 
 CONFORMANCE = Path(__file__).parents[1]
 PACKAGE = CONFORMANCE / "agterm_conformance"
@@ -99,4 +100,4 @@ def test_every_location_a_launch_env_names_is_under_the_root(
         assert not {"DISPLAY", "AT_SPI_BUS_ADDRESS"} & env.keys()
     assert not {"AGTERM_SOCKET", "ZMX_DIR"} & env.keys()
     # The app derives its zmx socket directory from the state dir: per root, never the live one.
-    assert zmx_socket_directory(env["AGTERM_STATE_DIR"]) != zmx_socket_directory("/home/user/.local/share/agterm")
+    assert upstream_socket_directory(env["AGTERM_STATE_DIR"]) != upstream_socket_directory("/home/user/.local/share/agterm")

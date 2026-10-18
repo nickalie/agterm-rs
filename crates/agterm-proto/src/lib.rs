@@ -20,9 +20,9 @@ pub use request::{Args, AskButton, MAX_REQUEST_LINE_BYTES, PickItem, Request};
 pub use response::Response;
 pub use result::{
     ControlAskOutcome, ControlAskResult, ControlCursor, ControlHtmlPageOutcome, ControlHtmlPageOutcomeState,
-    ControlLiveResetStatus, ControlPickOutcome, ControlPickResult, ControlRemotePane, ControlRemoteSession,
-    ControlRemoteTree, ControlRestartReceipt, ControlRestoreStatus, ControlResult, ControlWindowFrame,
-    ControlWindowNode, ControlZmxEndpoint, ControlZmxEntry, ControlZmxInventory,
+    ControlLiveEndpoint, ControlLiveEntry, ControlLiveInventory, ControlLiveResetStatus, ControlPickOutcome,
+    ControlPickResult, ControlRemotePane, ControlRemoteSession, ControlRemoteTree, ControlRestartReceipt,
+    ControlRestoreStatus, ControlResult, ControlWindowFrame, ControlWindowNode,
 };
 pub use tree::{ControlSessionNode, ControlSurfaceNode, ControlTree, ControlWorkspaceNode};
 pub use version::{AppIdentity, ConformanceProfile, PARITY_LEVEL, VersionResult};

@@ -28,7 +28,7 @@ GONE_GUARD = "printf '%s\\n' 'agterm: remote session is gone'; exit 1"
 
 
 class ZmxInstance(Protocol):
-    zmx_dir: str
+    live_dir: str
     home: Path
 
 
@@ -95,11 +95,12 @@ class PtyProcess:
 def leading_client(instance: ZmxInstance, endpoint: Mapping[str, Any], daemon: str) -> PtyProcess:
     """`zmx attach <daemon>` claiming the lead, so the pane's own client in `instance` follows.
 
-    `endpoint` is the `zmx.tree` read-back; one naming another instance's daemons is refused.
+    `endpoint` is the `zmx.tree` read-back (`live.tree` in the Rust build); one naming another instance's daemons is
+    refused.
     """
     executable, directory = endpoint["executable"], endpoint["socketDirectory"]
-    if directory != instance.zmx_dir:
-        raise ValueError(f"endpoint socket directory {directory!r} is not this instance's {instance.zmx_dir!r}")
+    if directory != instance.live_dir:
+        raise ValueError(f"endpoint socket directory {directory!r} is not this instance's {instance.live_dir!r}")
     if not os.path.isabs(executable):
         raise ValueError(f"endpoint executable {executable!r} is not absolute")
     env = {

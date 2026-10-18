@@ -3,7 +3,8 @@
 FAKE_APP_MODE: serve (default), exit (exit 3 before binding), silent (never binds), refuse (`version` fails),
 ignore-term (serve, ignoring SIGTERM and SIGABRT, each recorded in `fake-signals`; FAKE_ABORT=exit makes SIGABRT
 exit 134 instead, without a core). FAKE_VERSION: JSON for the `version` result. FAKE_ZMX_LIST: JSON
-replacing the `zmx.list` result.
+replacing the `zmx.list` result. FAKE_LIVE_GROUP: the live-session group's name, `zmx` (upstream's) by default; the
+fake answers `<group>.list` under the result key `<group>`, as the Rust build answers `live.list` under `live`.
 `fake.adopt {pid, session?, pane?, daemon?}` makes that pid a claimed zmx daemon which `zmx.kill` terminates;
 killing a left pane promotes the session's right pane into the left slot, as the references do.
 `tree` serves a settable tree (`fake.set_tree {tree?, error?, delay?}`); `events.read` serves a ring with the
@@ -128,7 +129,8 @@ def handle(request: dict) -> dict:
             }
         )
         return {"ok": True}
-    if cmd == "zmx.list":
+    group = os.environ.get("FAKE_LIVE_GROUP", "zmx")
+    if cmd == f"{group}.list":
         if "FAKE_ZMX_LIST" in os.environ:
             return {"ok": True, "result": json.loads(os.environ["FAKE_ZMX_LIST"])}
         entries = [
@@ -141,8 +143,8 @@ def handle(request: dict) -> dict:
             }
             for d in sorted(daemons, key=lambda d: d["daemon"])
         ]
-        return {"ok": True, "result": {"zmx": {"entries": entries}}}
-    if cmd == "zmx.kill":
+        return {"ok": True, "result": {group: {"entries": entries}}}
+    if cmd == f"{group}.kill":
         session, pane = request.get("target"), args.get("pane")
         match = next((d for d in daemons if d["sessionID"] == session and d["pane"] == pane), None)
         if match is None:

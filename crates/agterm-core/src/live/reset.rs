@@ -1,5 +1,5 @@
-//! Reset Live Sessions and `zmx.reset` (upstream's `LiveReset.swift`): which panes the dialog offers, the confirmed set
-//! written at quit and consumed once at the next launch, its re-check against that launch's claims and listing, and
+//! Reset Live Sessions and `live.reset` (upstream's `LiveReset.swift`): which panes the dialog offers, the confirmed
+//! set written at quit and consumed once at the next launch, its re-check against that launch's claims and listing, and
 //! the report of what the kill did. Host-free: the app joins claims to daemons and kills; this decides which and
 //! reports what happened.
 

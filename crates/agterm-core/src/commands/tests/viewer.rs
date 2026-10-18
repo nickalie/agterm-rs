@@ -1,4 +1,4 @@
-//! Remote sessions, viewer side: `zmx.attach`, the attached row's presentation stream and what its frames put on the
+//! Remote sessions, viewer side: `live.attach`, the attached row's presentation stream and what its frames put on the
 //! row, the replicas of asks and overlays the origin hands over, the origin's layout, and a pane whose ssh lost the
 //! connection (upstream's `ControlServer+RemotePresentation`, `ControlServer+RemoteReconnect`,
 //! `RemotePresentationStateTests` and `RemoteLayoutCloseTests`), over a fake ssh runner and a fake bridge.
@@ -9,24 +9,24 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use agterm_host::fakes::FakeSurface;
-use agterm_proto::command::ZmxCmd;
+use agterm_proto::command::LiveCmd;
 use agterm_proto::{Args, Command, ControlAskOutcome, ControlAskResult, EventKind, Response};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{Fixture, args, failure, wire};
 use crate::Core;
+use crate::live::daemon_name;
 use crate::model::StatusPane;
 use crate::remote::reconnect::RemoteLinkNotice;
 use crate::remote::tree::{RemoteCommandResult, RemoteCommandRunner};
 use crate::remote::{LinkKey, PresentationLink, PresentationTransport};
-use crate::zmx::daemon_name;
 
 const ORIGIN_SESSION: &str = "0A0B0C0D-0000-0000-0000-00000000000A";
 
 // MARK: - fakes
 
-/// Answers `zmx tree` with `tree` and a probe with `probe_status`.
+/// Answers `live tree` with `tree` and a probe with `probe_status`.
 struct Runner {
     tree: Mutex<RemoteCommandResult>,
     probe_status: Mutex<i32>,
@@ -111,7 +111,7 @@ fn tree_answer(origin: (Uuid, Uuid), split: bool) -> String {
 
 fn attach(core: &mut Core, host: Option<&str>, session: Option<&str>) -> Response {
     core.dispatch(&agterm_proto::Request {
-        cmd: Command::Zmx(ZmxCmd::Attach),
+        cmd: Command::Live(LiveCmd::Attach),
         target: session.map(str::to_owned),
         args: Some(args(|a| a.host = host.map(str::to_owned))),
     })
@@ -210,15 +210,15 @@ impl Viewer {
     }
 }
 
-// MARK: - zmx.attach
+// MARK: - live.attach
 
 #[test]
 fn attach_refuses_before_creating_anything() {
     let mut fixture = Fixture::new(0);
     let before = fixture.store().sessions().count();
     let cases = [
-        (None, Some(ORIGIN_SESSION), "zmx.attach requires a host"),
-        (Some("origin"), None, "zmx.attach requires a remote session"),
+        (None, Some(ORIGIN_SESSION), "live.attach requires a host"),
+        (Some("origin"), None, "live.attach requires a remote session"),
         (Some("origin"), Some("a\u{1b}b"), "invalid remote session"),
         (Some("bad host"), Some(ORIGIN_SESSION), "invalid host"),
     ];
@@ -286,12 +286,12 @@ fn attach_creates_a_remote_row_with_both_panes_and_opens_its_stream() {
     let split = session.split_launch.command.clone().unwrap();
     assert!(split.contains(&daemon_name(viewer.origin.1)));
     assert!(!session.is_persistable());
-    // the remote is resolved again by the attach itself, and the stream runs `zmx present` for the origin's session
+    // the remote is resolved again by the attach itself, and the stream runs `live present` for the origin's session
     assert!(
         viewer.runner.runs.lock().unwrap()[0]
             .last()
             .unwrap()
-            .contains("zmx tree --json")
+            .contains("agtermctl live tree --json")
     );
     let link = viewer.link();
     assert!(
@@ -300,7 +300,7 @@ fn attach_creates_a_remote_row_with_both_panes_and_opens_its_stream() {
             .argv
             .last()
             .unwrap()
-            .contains("exec agtermctl zmx present")
+            .contains("exec agtermctl live present")
     );
     assert!(link.0.borrow().argv.last().unwrap().contains(ORIGIN_SESSION));
     assert_eq!(viewer.sent("hello").len(), 1);
@@ -579,7 +579,7 @@ fn a_lost_link_waits_probes_with_backoff_and_attaches_the_pane_again() {
     let session = viewer.session;
     let pane = viewer.session().pane_identity;
     let token = wire(pane);
-    let nonce = viewer.fixture.core.zmx.leads.nonce(pane).unwrap().to_owned();
+    let nonce = viewer.fixture.core.live.leads.nonce(pane).unwrap().to_owned();
     // a notice from an attachment the pane replaced is not believed
     let stale = crate::PaneReport::Title(RemoteLinkNotice::title("old"));
     assert!(!viewer.fixture.core.report_pane(session, &token, &stale));
@@ -807,7 +807,7 @@ fn retrying_the_remote_links_now_skips_every_backoff() {
     let session = viewer.session;
     let pane = viewer.session().pane_identity;
     let token = wire(pane);
-    let nonce = viewer.fixture.core.zmx.leads.nonce(pane).unwrap().to_owned();
+    let nonce = viewer.fixture.core.live.leads.nonce(pane).unwrap().to_owned();
     let lost = crate::PaneReport::Title(RemoteLinkNotice::title(&nonce));
     assert!(viewer.fixture.core.report_pane(session, &token, &lost));
     // the stream drops too and backs off
@@ -950,18 +950,18 @@ fn a_remote_pane_is_not_attached_again_while_its_row_is_a_pending_close() {
     let mut viewer = viewer_with(false);
     let session = viewer.session;
     let pane = viewer.session().pane_identity;
-    let nonce = viewer.fixture.core.zmx.leads.nonce(pane).unwrap().to_owned();
+    let nonce = viewer.fixture.core.live.leads.nonce(pane).unwrap().to_owned();
     assert!(viewer.fixture.store_mut().unwrap().soft_close_session(session));
     viewer.fixture.core.commit();
     assert!(!viewer.fixture.core.reattach_remote_pane(
         session,
         pane,
-        crate::zmx::lead::LeadAttachment::new(false),
+        crate::live::lead::LeadAttachment::new(false),
         true
     ));
     assert!(viewer.fixture.core.take_pane_replacements().is_empty());
     assert_eq!(
-        viewer.fixture.core.zmx.leads.nonce(pane),
+        viewer.fixture.core.live.leads.nonce(pane),
         Some(nonce.as_str()),
         "the nonce never rotated"
     );
@@ -970,7 +970,7 @@ fn a_remote_pane_is_not_attached_again_while_its_row_is_a_pending_close() {
     assert!(viewer.fixture.core.reattach_remote_pane(
         session,
         pane,
-        crate::zmx::lead::LeadAttachment::new(false),
+        crate::live::lead::LeadAttachment::new(false),
         true
     ));
 }
@@ -980,32 +980,32 @@ fn a_dropped_remote_replacement_puts_the_panes_lead_back() {
     let mut viewer = viewer_with(false);
     let session = viewer.session;
     let pane = viewer.session().pane_identity;
-    let nonce = viewer.fixture.core.zmx.leads.nonce(pane).unwrap().to_owned();
+    let nonce = viewer.fixture.core.live.leads.nonce(pane).unwrap().to_owned();
     assert!(viewer.fixture.core.reattach_remote_pane(
         session,
         pane,
-        crate::zmx::lead::LeadAttachment::new(false),
+        crate::live::lead::LeadAttachment::new(false),
         true
     ));
     let replacements = viewer.fixture.core.take_pane_replacements();
     assert_eq!(replacements.len(), 1);
     assert!(replacements[0].remote);
-    assert!(viewer.fixture.core.zmx.leads.reattaching(pane));
+    assert!(viewer.fixture.core.live.leads.reattaching(pane));
     // no page took the replacement: the pane is not left covered under a nonce no terminal reports
     assert!(!viewer.fixture.core.replacement_dropped(&replacements[0]));
-    assert_eq!(viewer.fixture.core.zmx.leads.nonce(pane), Some(nonce.as_str()));
-    assert!(!viewer.fixture.core.zmx.leads.reattaching(pane));
+    assert_eq!(viewer.fixture.core.live.leads.nonce(pane), Some(nonce.as_str()));
+    assert!(!viewer.fixture.core.live.leads.reattaching(pane));
     // an installed one keeps its new attachment
     assert!(viewer.fixture.core.reattach_remote_pane(
         session,
         pane,
-        crate::zmx::lead::LeadAttachment::new(false),
+        crate::live::lead::LeadAttachment::new(false),
         true
     ));
     let replacements = viewer.fixture.core.take_pane_replacements();
-    let rotated = viewer.fixture.core.zmx.leads.nonce(pane).unwrap().to_owned();
+    let rotated = viewer.fixture.core.live.leads.nonce(pane).unwrap().to_owned();
     assert_ne!(rotated, nonce);
     viewer.fixture.core.pane_replaced(&replacements[0]);
     assert!(!viewer.fixture.core.replacement_dropped(&replacements[0]));
-    assert_eq!(viewer.fixture.core.zmx.leads.nonce(pane), Some(rotated.as_str()));
+    assert_eq!(viewer.fixture.core.live.leads.nonce(pane), Some(rotated.as_str()));
 }

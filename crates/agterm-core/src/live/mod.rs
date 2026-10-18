@@ -1,7 +1,7 @@
-//! Live sessions over zmx, the host-free half (upstream's `ZmxSupport.swift`, `ZmxReplayScript.swift`,
+//! Live sessions, the host-free half (upstream's `ZmxSupport.swift`, `ZmxReplayScript.swift`,
 //! `ZmxLifecycle.swift`, `ZmxInventory.swift`, `LiveReset.swift`, `ZmxBuildRecord.swift`, `ZmxLead.swift`). Running the
-//! zmx binary and collecting the host's launch inputs live in the `agterm-zmx` crate, which implements
-//! [`agterm_host::SessionHost`] over these.
+//! session host binary (zmx today) and collecting the host's launch inputs live in the `agterm-zmx` crate, which
+//! implements [`agterm_host::SessionHost`] over these.
 //!
 //! - this module: a pane's daemon name and back, and the instance's socket directory;
 //! - [`support`]: the wrap configuration of a pane, its rejections, the launch disposition and the attach command;
@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn the_socket_directory_hashes_as_upstreams_algorithm() {
-        // the FNV-1a 64 reference values, and `zmx_socket_directory` of the harness (impls/base.py) for this state dir
+        // the FNV-1a 64 reference values, and the harness's `upstream_socket_directory` (vocabulary.py) of this dir
         assert_eq!(fnv1a64(b""), "cbf29ce484222325");
         assert_eq!(fnv1a64(b"a"), "af63dc4c8601ec8c");
         assert_eq!(fnv1a64(b"foobar"), "85944171f73967e8");

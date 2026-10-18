@@ -2,7 +2,7 @@
 //! `agtermctlKit/StreamBridge.swift`): the request goes out, its one ordinary reply comes back, and after an `ok`
 //! everything is copied both ways untouched.
 //!
-//! `agtermctl zmx present` runs it on the origin under the viewer's ssh, so the output is what the viewer parses:
+//! `agtermctl live present` runs it on the origin under the viewer's ssh, so the output is what the viewer parses:
 //! only frames are ever written to it.
 
 use std::fs::File;
@@ -173,13 +173,13 @@ mod tests {
     use std::time::Duration;
 
     use agterm_proto::Command;
-    use agterm_proto::command::ZmxCmd;
+    use agterm_proto::command::LiveCmd;
 
     use super::*;
 
     fn present() -> Request {
         Request {
-            cmd: Command::Zmx(ZmxCmd::Present),
+            cmd: Command::Live(LiveCmd::Present),
             target: Some("S".to_owned()),
             args: None,
         }
@@ -262,7 +262,7 @@ mod tests {
         let mut rest = Vec::new();
         (&app).read_to_end(&mut rest).unwrap();
         assert!(
-            String::from_utf8_lossy(&rest).contains("zmx.present"),
+            String::from_utf8_lossy(&rest).contains("live.present"),
             "the request, then end of stream"
         );
         drop(app);

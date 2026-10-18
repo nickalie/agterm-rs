@@ -1,4 +1,4 @@
-//! What zmx reports joined against what agterm's panes claim (upstream's `ZmxInventory.swift`), the rows `zmx.list`
+//! What zmx reports joined against what agterm's panes claim (upstream's `ZmxInventory.swift`), the rows `live.list`
 //! explains, and the prune policy over them.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -106,8 +106,8 @@ pub struct InventoryResult {
     pub inventory_complete: bool,
 }
 
-/// The union of the observed daemons and the expected claims, sorted by daemon name: a union so `zmx.list` can explain
-/// both a leaked daemon and a pane whose daemon vanished, and `zmx.prune` can be audited against what it showed.
+/// The union of the observed daemons and the expected claims, sorted by daemon name: a union so `live.list` can explain
+/// both a leaked daemon and a pane whose daemon vanished, and `live.prune` can be audited against what it showed.
 #[must_use]
 pub fn join(observed: &[LiveSessionRecord], claims: &[PaneClaim], inventory_complete: bool) -> InventoryResult {
     let mut claims_by_name: BTreeMap<String, Vec<&PaneClaim>> = BTreeMap::new();
@@ -214,7 +214,7 @@ impl Facts {
     }
 }
 
-/// The daemons `zmx.prune` may take; `None` when no prune is safe at all. Every term is required: a complete,
+/// The daemons `live.prune` may take; `None` when no prune is safe at all. Every term is required: a complete,
 /// conflict-free inventory, an identity no pane claims, a daemon observed running with no clients. A closed window's
 /// panes are claimed with zero clients, so the count alone never implies an orphan. Observed, not guaranteed: pinned
 /// zmx has no kill-if-detached, so the caller re-lists right before it kills and drops anything that gained a client.
