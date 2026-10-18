@@ -1101,11 +1101,15 @@ probes' sources in `docs/spikes/20261018-session-server-probes.md`). Paths below
 **Files:**
 - Create: `.github/workflows/cross-platform.yml`
 
-- [ ] add a workflow with an `ubuntu`/`macos`/`windows` matrix: fmt, clippy `-D warnings` (all features) and tests
-      of `agterm-vt`. Later tasks add their crates and generator checks to it
-- [ ] add a Miri job on a nightly pinned by date, over the memory core's tests. It is filled from Task 4
-- [ ] push a branch and get it green on all three
-- [ ] run gates - must pass before task 4
+- [x] add a workflow with an `ubuntu`/`macos`/`windows` matrix: fmt, clippy `-D warnings` (all features) and tests
+      of `agterm-vt`. Later tasks add their crates and generator checks to it (job `crates` on `ubuntu-26.04`,
+      `macos-26`, `windows-2025`; a crate joins through `PACKAGES`; pushes to `ci/**` run it without a PR)
+- [x] add a Miri job on a nightly pinned by date, over the memory core's tests. It is filled from Task 4 (job
+      `miri`, `nightly-2026-10-18`, Linux: `cargo miri test -p agterm-vt --lib` filtered to `mem::`, `datastruct::`,
+      `os::`; no such tests exist yet, and libtest passes the empty selection. Task 4 fills it)
+- [x] push a branch and get it green on all three (throwaway `ci/agterm-vt-task3`, run 39104822219: all four jobs
+      green; the branch deleted after)
+- [x] run gates - must pass before task 4
 
 ### Task 4: VT memory core: page allocator, offset buffers, bitmap allocator, pools, lists
 
