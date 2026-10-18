@@ -5,7 +5,10 @@
 //!
 //! - [`protocol`]: the wire, frames with a stable header and a stable JSON control layer every version reads, and the
 //!   postcard messages of the api and attach roles;
-//! - [`endpoint`]: where a namespace's server listens, a Unix domain socket or a Windows named pipe, owner-only.
+//! - [`endpoint`]: where a namespace's server listens, a Unix domain socket or a Windows named pipe, owner-only;
+//! - [`server`]: the server's lifecycle: started on demand by a client that finds none, detached from it per OS, one
+//!   per namespace, stopped by itself once it holds no session and no client. The `agterm-session` binary runs it as
+//!   `agterm-session server <namespace directory>`.
 //!
 //! # Provenance
 //!
@@ -16,3 +19,4 @@
 
 pub mod endpoint;
 pub mod protocol;
+pub mod server;
