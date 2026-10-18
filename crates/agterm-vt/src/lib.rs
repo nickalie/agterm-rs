@@ -15,8 +15,11 @@
 //! The Unicode tables (`unicode::generated`) are generated sources: the `gen-unicode` binary (feature `gen`, run by
 //! `scripts/gen-vt-unicode.sh`) writes them from the UCD that the pinned uucode ships, porting uucode's rules (MIT)
 //! and Ghostty's table generators; its `--check` holds them to that UCD. So is the terminfo entry's source,
-//! `terminfo/xterm-ghostty.terminfo`, which the native build compiles with `tic`: the `gen-terminfo` binary (run by
-//! `scripts/gen-ghostty-terminfo.sh`) writes it from the entry in `terminfo`, and its `--check` holds it there.
+//! `terminfo/xterm-ghostty.terminfo`: the `gen-terminfo` binary (run by `scripts/gen-ghostty-terminfo.sh`) writes it
+//! from the entry in `terminfo`, and its `--check` holds it there. The crate's tests compile it with `tic -x` and
+//! compare it with an `infocmp` fixture captured from the entry the Zig build compiled. The native build
+//! (`scripts/build-ghostty-vt.sh`) still stages the entry its Zig encoder writes, not this file; it compiles this
+//! file once the Zig build goes.
 //!
 //! What is kept is what libghostty-vt has at the pin and agterm reaches. rustty's snapshot codec, tmux viewer, APC
 //! glyph protocol, idle page compression, `StringMap` (Oniguruma), DECRQCRA checksums, C ABI, font, inspector and

@@ -8,7 +8,7 @@
 //! libghostty-vt reports. Only those values are kept: rustty's application identity (the app name and version, the
 //! bundle id, `TERM`, `TERM_PROGRAM`, the config directory and file, the environment prefix, the application's
 //! XTVERSION answer, the website and issue URLs) belongs to Ghostty's app, not to its VT library, and agterm sets its
-//! own panes' environment. The response builders are the handler's (Task 11).
+//! own panes' environment. The responses that carry them are the stream handler's to build, which is not ported yet.
 
 /// The terminfo entry's first name, which `TERM` must equal for tcell-based programs (see the entry's names).
 /// Ghostty: `src/terminfo/ghostty.zig`, the first of `.names`.

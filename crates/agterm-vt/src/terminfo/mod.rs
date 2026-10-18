@@ -10,10 +10,11 @@
 //! builds at first use.
 //! Changes: `main.zig`'s re-exports (`ghostty`, `Source`) are their modules' paths here, and `version` is not ported
 //! (see [`entry`]); Ghostty's `refAllDecls` test has no counterpart, as Rust compiles every item anyway. Added: the
-//! checked-in source file ([`source_file`], [`SOURCE_FILE`]), which takes the place of the `+terminfo` encoding
-//! Ghostty's build runs; `crates/agterm-vt`'s `gen-terminfo` binary (feature `gen`, run by
-//! `scripts/gen-ghostty-terminfo.sh`) writes it, and its `--check` holds it to the entry. The XTGETTCAP lookup
-//! ([`xtgettcap`]) is here rather than in the stream handler, which calls it.
+//! checked-in source file ([`source_file`], [`SOURCE_FILE`]), meant to take the place of the `+terminfo` encoding
+//! Ghostty's build runs (agterm's native build still runs that encoding through Zig until the Zig build goes);
+//! `crates/agterm-vt`'s `gen-terminfo` binary (feature `gen`, run by `scripts/gen-ghostty-terminfo.sh`) writes it,
+//! and its `--check` holds it to the entry. The XTGETTCAP lookup ([`xtgettcap`]) is here rather than in the stream
+//! handler, which is to call it once it is ported.
 
 pub(crate) mod entry;
 pub(crate) mod source;
@@ -27,8 +28,8 @@ use crate::identity;
 pub(crate) const SOURCE_FILE: &str = "terminfo/xterm-ghostty.terminfo";
 
 /// The checked-in source of Ghostty's entry ([`SOURCE_FILE`]): a comment naming where it comes from, then the entry
-/// as Ghostty's encoder writes it (what `ghostty +terminfo` prints at `ghostty_rev`, the Ghostty revision this crate
-/// follows). `tic -x` compiles it.
+/// as Ghostty's encoder writes it (what Ghostty's build-data tool prints for `+terminfo`, `src/main_build_data.zig`,
+/// at `ghostty_rev`, the Ghostty revision this crate follows). The crate's tests compile it with `tic -x`.
 pub(crate) fn source_file(ghostty_rev: &str) -> String {
     let mut out = format!(
         "# {name}: Ghostty's terminfo entry (src/terminfo/ghostty.zig at Ghostty {ghostty_rev}).\n\
@@ -41,8 +42,8 @@ pub(crate) fn source_file(ghostty_rev: &str) -> String {
 
 /// The XTGETTCAP response for one requested capability, `ESC P 1 + r <name> [= <value>] ESC \`, from Ghostty's entry;
 /// `key` is the capability's name hex-encoded in uppercase, as the request carries it once the DCS handler has
-/// uppercased it. `None` for a capability the entry does not have, which the handler leaves unanswered. The handler
-/// answers `TN` from the embedder's terminfo name before it asks here.
+/// uppercased it. `None` for a capability the entry does not have, which the handler is to leave unanswered. The
+/// handler (not ported yet) is to answer `TN` from the embedder's terminfo name before it asks here.
 pub(crate) fn xtgettcap(key: &[u8]) -> Option<&'static [u8]> {
     static MAP: OnceLock<HashMap<Vec<u8>, Vec<u8>>> = OnceLock::new();
     // Every capability of the entry has an answer: a test and the generator refuse an entry with one that has none,

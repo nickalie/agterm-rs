@@ -8,11 +8,13 @@
 //!
 //! `--out` defaults to this crate's `terminfo/xterm-ghostty.terminfo`. The file is a comment naming the Ghostty
 //! revision the crate follows (`LIBGHOSTTY_VT_REV`), then the entry as Ghostty's encoder writes it: what Ghostty's
-//! build gets from `zig run` over `src/terminfo/ghostty.zig` (`+terminfo`), which the native build compiles with
-//! `tic -x`. Before writing, the generator builds the entry's XTGETTCAP answers, refusing an entry with a capability
-//! that has none, as Ghostty's comptime map does. `--check` writes nothing and exits 1 when the file differs from the
-//! entry (line endings aside, so a checkout with CRLF endings compares equal). Any error (a bad argument, a file that
-//! cannot be written) exits 2.
+//! build gets from its build-data tool's `+terminfo` (`src/main_build_data.zig`), and agterm's
+//! `scripts/build-ghostty-vt.sh` from a `zig run` of that step alone. The crate's tests compile the file with `tic -x`
+//! and compare it with an `infocmp` fixture captured from the Zig-built entry; the native build still compiles its own
+//! Zig-encoded entry, not this file, until the Zig build goes. Before writing, the generator builds the entry's
+//! XTGETTCAP answers, refusing an entry with a capability that has none, as Ghostty's comptime map does. `--check`
+//! writes nothing and exits 1 when the file differs from the entry (line endings aside, so a checkout with CRLF endings
+//! compares equal). Any error (a bad argument, a file that cannot be written) exits 2.
 //!
 //! The library's `terminfo` and `identity` modules are compiled here too, so the generator encodes the very entry the
 //! library answers XTGETTCAP from.
@@ -30,7 +32,7 @@ mod identity;
     not(test),
     expect(
         dead_code,
-        reason = "the library's module: the generator encodes the entry, the stream handler looks answers up"
+        reason = "the library's module: the generator encodes the entry, the stream handler is to look answers up"
     )
 )]
 #[path = "../terminfo/mod.rs"]
