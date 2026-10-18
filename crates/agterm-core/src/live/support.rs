@@ -814,6 +814,10 @@ mod tests {
         windows,
         ignore = "the zsh, bash and fish integrations are Unix shells' and spelled with /; a Windows live pane runs PowerShell"
     )]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "macOS' /bin/bash is bash 3.2, which never runs the integration from ENV; Ghostty injects none into it"
+    )]
     fn a_bash_payload_runs_the_command_and_rearms_the_integration_for_the_final_shell() {
         let home = tempfile::tempdir().unwrap();
         let log = home.path().join("log");

@@ -1609,7 +1609,10 @@ Paste moved to Task 11 (Task 1's graph: the stream handler uses it).
   - gated with `#[cfg_attr(windows, ignore = "<reason>")]` (33): tests that run `/bin/sh`, the zsh/bash/fish
     integrations, the XDG paths, PATH widening, custom commands run in the fixture's `/tmp`, theme values with a
     drive path (Ghostty reads a `:` as a light/dark pair); `#[cfg(unix)]` where the test needs a Unix API (a
-    symlink of a `file://` path, a directory without its search bit)
+    symlink of a `file://` path, a directory without its search bit); on macOS the bash payload test, since its
+    `/bin/bash` 3.2 never runs the integration from `ENV` (Ghostty's `detectShell` injects none into Apple's bash)
+  - `.gitattributes` checks every text file out with LF, so a Windows checkout's fixtures and pins compare byte
+    for byte
 - [x] add `agterm-proto`, `agterm-host` and `agterm-core` to `cross-platform.yml`. `agterm-server` (AF_UNIX,
       `flock`) and `agterm-ctl` stay out, recorded with their reason: the control server's Windows form belongs to
       the GPUI-on-Windows plan

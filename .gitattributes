@@ -1,0 +1,3 @@
+# Every text file is checked out with LF on every OS: tests compare fixtures and pins byte for byte, and Windows'
+# core.autocrlf would otherwise check them out with CRLF.
+* text=auto eol=lf
