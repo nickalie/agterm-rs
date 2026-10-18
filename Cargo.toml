@@ -29,8 +29,13 @@ agterm-wpe = { path = "crates/agterm-wpe" }
 async-channel = "2"
 base64 = "0.23"
 bitflags = "2"
+# agterm-vt's page memory: every value stored in a page's single buffer is `Pod`, read and written through checked
+# casts, so the offset-based structures over it need no `unsafe`.
+bytemuck = "1.25"
 clap = { version = "4.6", features = ["derive"] }
 libc = "0.2"
+# agterm-vt's page allocator on Windows (`VirtualAlloc`/`VirtualFree`), the version the workspace already locks.
+windows-sys = "0.61"
 # agterm-wpe's worker transport (socket pairs, SCM_RIGHTS, memfds), the version wayland and calloop already link.
 rustix = "1.1"
 # `default-features = false` drops the `html` renderer and the CLI's `getopts`: the HUD walks the events itself.
