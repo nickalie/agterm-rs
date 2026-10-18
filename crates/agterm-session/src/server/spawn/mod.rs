@@ -327,7 +327,7 @@ enum Probe {
 
 /// Connects and exchanges the hello.
 fn probe(endpoint: &Endpoint, hello: &Hello) -> Probe {
-    let mut stream = match endpoint.connect_timeout(CONNECT_TIMEOUT) {
+    let stream = match endpoint.connect_timeout(CONNECT_TIMEOUT) {
         Ok(stream) => stream,
         Err(error) if is_absent(&error) => return Probe::Absent(error.to_string()),
         Err(error) if is_busy(&error) => return Probe::Busy(error.to_string()),
@@ -338,8 +338,8 @@ fn probe(endpoint: &Endpoint, hello: &Hello) -> Probe {
             }));
         }
     };
-    match handshake(&mut stream, hello) {
-        Ok(welcome) => match welcome.error.clone() {
+    match handshake(stream, hello) {
+        Ok((stream, welcome)) => match welcome.error.clone() {
             None => Probe::Ready(stream, Box::new(welcome)),
             Some(error) => Probe::Failed(Box::new(StartError::Refused {
                 endpoint: endpoint.to_string(),
@@ -355,12 +355,30 @@ fn probe(endpoint: &Endpoint, hello: &Hello) -> Probe {
     }
 }
 
-/// Sends `hello` and reads the welcome, under [`HANDSHAKE_TIMEOUT`] on Unix.
-fn handshake(stream: &mut Stream, hello: &Hello) -> Result<Welcome, FramingError> {
-    super::set_recv_timeout(stream, Some(HANDSHAKE_TIMEOUT));
+/// Sends `hello` and reads the welcome, giving up on a peer silent for [`HANDSHAKE_TIMEOUT`] (a hung server, or
+/// another process holding the endpoint) with an I/O error a stopping server's also gives ([`is_stopping`]): on Unix
+/// by the socket's receive timeout, on Windows, whose pipes take none, by cancelling the exchange
+/// (`windows::exchange_within`).
+fn handshake(stream: Stream, hello: &Hello) -> Result<(Stream, Welcome), FramingError> {
+    #[cfg(unix)]
+    {
+        let mut stream = stream;
+        super::set_recv_timeout(&stream, Some(HANDSHAKE_TIMEOUT));
+        let welcome = exchange_hello(&mut stream, hello)?;
+        super::set_recv_timeout(&stream, None);
+        Ok((stream, welcome))
+    }
+    #[cfg(windows)]
+    {
+        let hello = hello.clone();
+        sys::exchange_within(stream, HANDSHAKE_TIMEOUT, move |stream| exchange_hello(stream, &hello))
+    }
+}
+
+/// Sends `hello` and reads the welcome.
+fn exchange_hello(stream: &mut Stream, hello: &Hello) -> Result<Welcome, FramingError> {
     write_control(stream, &Control::Hello(hello.clone()))?;
     let frame = read_frame(stream)?;
-    super::set_recv_timeout(stream, None);
     match frame.control()? {
         Control::Welcome(welcome) => Ok(welcome),
         other => Err(FramingError::Malformed(format!("expected welcome.v1, got {other:?}"))),
@@ -388,7 +406,8 @@ fn is_stopping(error: &FramingError) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Exit {
     Status(ExitStatus),
-    /// It ended, but its status could not be read (its parent cannot wait for it, as with `SIGCHLD` ignored).
+    /// It ended, but its status could not be read: its parent cannot wait for it (as with `SIGCHLD` ignored), or on
+    /// Windows a WMI start ended before its handle could be had.
     Unknown,
 }
 

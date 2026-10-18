@@ -11,20 +11,26 @@
 //! never a plain retry inside it (`super::start_in_job`); any job
 //! counts, not only a kill-on-close one, since a process sees only its innermost job's limits and an enclosing job
 //! may still kill on close (nested jobs); the process is created with `CreateProcessW` without handle inheritance, so
-//! none of the launcher's inheritable handles (its own standard handles, say) reaches the server; and WMI runs on a
-//! thread of its own, so its COM initialization never touches the caller's thread.
+//! none of the launcher's inheritable handles (its own standard handles, say) reaches the server; WMI runs on a
+//! thread of its own, so its COM initialization never touches the caller's thread; a WMI start that ended before its
+//! handle could be had reads as ended, so the caller probes again (a racing start's loser) instead of failing; and
+//! the client's handshake, which a pipe cannot time out, runs on a thread whose pending I/O is cancelled once the
+//! handshake's timeout runs out (`exchange_within`).
 
 use std::ffi::{OsStr, c_void};
 use std::io;
 use std::os::windows::ffi::OsStrExt as _;
-use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
+use std::os::windows::io::{AsHandle as _, AsRawHandle as _, FromRawHandle as _, OwnedHandle};
 use std::os::windows::process::ExitStatusExt as _;
 use std::process::ExitStatus;
 use std::ptr::{null, null_mut};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
 use windows_sys::Win32::System::Console::GetConsoleWindow;
+use windows_sys::Win32::System::IO::CancelIoEx;
 use windows_sys::Win32::System::JobObjects::{
     IsProcessInJob, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JobObjectExtendedLimitInformation, QueryInformationJobObject,
@@ -37,31 +43,50 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use super::{Breakaway, Exit, ServerCommand, SpawnPath, quote_windows_arg, start_in_job};
+use crate::endpoint::Stream;
+use crate::protocol::FramingError;
 
 /// Every start's flags: no console, and a process group of its own, so no console's Ctrl+C or Ctrl+Break reaches it.
 const DETACHED: u32 = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
 
-/// A started server: its process handle, which keeps its pid from being reused while it is held.
+/// How often a timed-out exchange's pipe is cancelled while its thread holds on: a cancel that comes before the
+/// thread's read or write starts cancels nothing.
+const CANCEL_RETRY: Duration = Duration::from_millis(10);
+/// How long a timed-out exchange's thread is waited for once cancelled.
+const CANCEL_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// `ERROR_INVALID_PARAMETER`: what `OpenProcess` gives for a pid no process has (any more).
+const ERROR_INVALID_PARAMETER: i32 = 87;
+
+/// A started server: its process handle, which keeps its pid from being reused while it is held; `None` for a
+/// process that had already ended, its status lost, when its handle was asked for (a WMI start, which hands over a
+/// pid only).
 #[derive(Debug)]
-pub(super) struct Process(OwnedHandle);
+pub(super) struct Process(Option<OwnedHandle>);
 
 impl Process {
     pub(super) fn try_exit(&mut self) -> Option<Exit> {
+        let Some(handle) = &self.0 else {
+            return Some(Exit::Unknown);
+        };
         // SAFETY: the handle is an open process handle with SYNCHRONIZE.
-        if unsafe { WaitForSingleObject(self.0.as_raw_handle(), 0) } != WAIT_OBJECT_0 {
+        if unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) } != WAIT_OBJECT_0 {
             return None;
         }
         let mut code = 0_u32;
         // SAFETY: the handle is an open process handle with query access, and `code` is writable.
-        if unsafe { GetExitCodeProcess(self.0.as_raw_handle(), &raw mut code) } == 0 {
+        if unsafe { GetExitCodeProcess(handle.as_raw_handle(), &raw mut code) } == 0 {
             return Some(Exit::Unknown);
         }
         Some(Exit::Status(ExitStatus::from_raw(code)))
     }
 
     pub(super) fn terminate(&mut self, _pid: u32) {
+        let Some(handle) = &self.0 else {
+            return;
+        };
         // SAFETY: the handle is an open process handle with terminate access; a process already gone fails harmlessly.
-        unsafe { TerminateProcess(self.0.as_raw_handle(), 1) };
+        unsafe { TerminateProcess(handle.as_raw_handle(), 1) };
     }
 }
 
@@ -86,7 +111,7 @@ pub(super) fn current_process_is_detached() -> bool {
 /// `CreateProcessW` of the command with `flags`, inheriting no handle.
 fn create_process(command: &ServerCommand, flags: u32) -> io::Result<(u32, Process)> {
     let (pid, process, _thread) = create(command, flags)?;
-    Ok((pid, Process(process)))
+    Ok((pid, Process(Some(process))))
 }
 
 /// A breakaway start: created suspended and let run only once out of every job. A job that refuses breakaway fails
@@ -94,10 +119,12 @@ fn create_process(command: &ServerCommand, flags: u32) -> io::Result<(u32, Proce
 /// Win11 VM's guest-tools job, Task 22), and then the process is ended unrun.
 fn create_breaking_away(command: &ServerCommand) -> io::Result<Breakaway<(u32, Process)>> {
     let (pid, process, thread) = create(command, DETACHED | CREATE_BREAKAWAY_FROM_JOB | CREATE_SUSPENDED)?;
-    let mut process = Process(process);
+    let raw = process.as_raw_handle();
+    let mut process = Process(Some(process));
     let mut in_job = 0;
-    // SAFETY: the process handle has all access, a null job asks about any job, and `in_job` is writable.
-    let asked = unsafe { IsProcessInJob(process.0.as_raw_handle(), null_mut(), &raw mut in_job) };
+    // SAFETY: the process handle, which `process` holds open, has all access, a null job asks about any job, and
+    // `in_job` is writable.
+    let asked = unsafe { IsProcessInJob(raw, null_mut(), &raw mut in_job) };
     if asked == 0 || in_job != 0 {
         let error = (asked == 0).then(io::Error::last_os_error);
         process.terminate(pid);
@@ -151,6 +178,82 @@ fn create(command: &ServerCommand, flags: u32) -> io::Result<(u32, OwnedHandle, 
     Ok((information.dwProcessId, process, thread))
 }
 
+/// Runs `exchange` over `stream` on a thread of its own and gives up after `timeout` with
+/// [`io::ErrorKind::TimedOut`], since a pipe's reads and writes take no timeout: the thread's pending read or write
+/// is cancelled (`CancelIoEx`, through a duplicate of the pipe's handle, which names the same pipe) until the thread
+/// lets go, or for [`CANCEL_TIMEOUT`], after which the thread is left to end with the pipe's peer.
+///
+/// # Errors
+///
+/// The exchange's own, or [`FramingError::Io`] when the timeout ran out or no thread could be started.
+pub(super) fn exchange_within<T: Send + 'static>(
+    stream: Stream,
+    timeout: Duration,
+    exchange: impl FnOnce(&mut Stream) -> Result<T, FramingError> + Send + 'static,
+) -> Result<(Stream, T), FramingError> {
+    let Stream::NamedPipe(pipe) = &stream;
+    let pipe = pipe.as_handle().try_clone_to_owned().map_err(FramingError::Io)?;
+    let (send, receive) = mpsc::channel();
+    let worker = thread::Builder::new()
+        .name("agterm-session-handshake".to_owned())
+        .spawn(move || {
+            let mut stream = stream;
+            let result = match exchange(&mut stream) {
+                Ok(value) => Ok((stream, value)),
+                Err(error) => {
+                    abandon(stream);
+                    Err(error)
+                }
+            };
+            let _ = send.send(result);
+        })
+        .map_err(FramingError::Io)?;
+    match receive.recv_timeout(timeout) {
+        Ok(result) => {
+            let _ = worker.join();
+            return result;
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            return Err(FramingError::Io(io::Error::other("the handshake thread panicked")));
+        }
+        Err(RecvTimeoutError::Timeout) => {}
+    }
+    let deadline = Instant::now() + CANCEL_TIMEOUT;
+    loop {
+        // SAFETY: the handle is this function's own duplicate of the pipe's, open until it returns; a null OVERLAPPED
+        // cancels every pending operation on the pipe, and with none pending the call fails harmlessly.
+        unsafe { CancelIoEx(pipe.as_raw_handle(), null()) };
+        match receive.recv_timeout(CANCEL_RETRY) {
+            // the exchange finished before the cancel reached it
+            Ok(Ok(done)) => {
+                let _ = worker.join();
+                return Ok(done);
+            }
+            Ok(Err(_)) | Err(RecvTimeoutError::Disconnected) => {
+                let _ = worker.join();
+                break;
+            }
+            Err(RecvTimeoutError::Timeout) if Instant::now() >= deadline => break,
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+    }
+    Err(FramingError::Io(io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("the peer did not answer within {}s", timeout.as_secs_f32()),
+    )))
+}
+
+/// Closes a connection whose exchange failed at once. A dropped pipe stream with data written since its last flush
+/// goes to interprocess's linger pool, whose one thread flushes it (`FlushFileBuffers`, which waits for the peer to
+/// read it all) before closing it: a peer that never reads, the very one a timed-out exchange gives up on, would hold
+/// that thread, and with it every pipe this process drops later, open for good (their servers then never see their
+/// clients leave). What was written is left unread instead.
+fn abandon(stream: Stream) {
+    let Stream::NamedPipe(pipe) = &stream;
+    pipe.inner().assume_flushed();
+    drop(stream);
+}
+
 /// herdr's `launch_server_daemon_with_wmi`, on a thread of its own: `Win32_Process.Create` starts the server from
 /// WMI's provider host, outside this process's job.
 fn wmi_create(command: &ServerCommand) -> io::Result<(u32, Process)> {
@@ -162,9 +265,23 @@ fn wmi_create(command: &ServerCommand) -> io::Result<(u32, Process)> {
             .join()
             .unwrap_or_else(|_| Err(io::Error::other("the WMI thread panicked")))
     })?;
-    // the process may already be gone, but its handle is still to be had while anyone holds one; if not, nothing can
-    // tell its exit
-    Ok((pid, Process(open_process(pid)?)))
+    Ok((pid, track(pid)?))
+}
+
+/// The process WMI just started as `pid`. Its handle is to be had while the process runs, or while anyone holds a
+/// handle to it; WMI's provider host does not, so a process that already ended (a racing start's loser, gone with
+/// [`super::super::EXIT_TAKEN`] in milliseconds) reads as ended with its status lost, and the caller probes again
+/// rather than failing the start.
+///
+/// # Errors
+///
+/// The process exists but could not be opened.
+fn track(pid: u32) -> io::Result<Process> {
+    match open_process(pid) {
+        Ok(handle) => Ok(Process(Some(handle))),
+        Err(error) if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER) => Ok(Process(None)),
+        Err(error) => Err(error),
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -353,9 +470,10 @@ mod tests {
     use std::ffi::OsString;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::time::{Duration, Instant};
 
     use super::*;
+    use crate::endpoint::Endpoint;
+    use crate::protocol::{Control, Hello, Role, read_frame, write_control};
 
     /// Set in the child the WMI and `CreateProcessW` tests start (this test binary again): where to write what it got.
     const CAPTURE: &str = "AGLS_TEST_CAPTURE";
@@ -490,6 +608,114 @@ mod tests {
         assert_kept(&report, root.path());
         // outside any job of this process's, and without a console
         assert_eq!(report["detached"], true);
+    }
+
+    /// A connected pair in a fresh namespace, with the listener that keeps the pipe: the client's end and the
+    /// server's.
+    fn connected_pair() -> (tempfile::TempDir, crate::endpoint::Listener, Stream, Stream) {
+        let root = tempfile::tempdir().unwrap();
+        let endpoint = Endpoint::new(root.path().join("live"));
+        let listener = endpoint.bind().unwrap();
+        let accept = thread::spawn(move || {
+            let accepted = listener.accept();
+            (listener, accepted)
+        });
+        let client = endpoint.connect().unwrap();
+        let (listener, server) = accept.join().unwrap();
+        (root, listener, client, server.unwrap())
+    }
+
+    #[test]
+    fn a_silent_peer_ends_the_exchange_at_its_timeout_and_its_thread_lets_go() {
+        let (_root, _listener, client, _server) = connected_pair();
+        let (ended, thread_ended) = mpsc::channel();
+        let timeout = Duration::from_millis(300);
+        let started = Instant::now();
+        let error = exchange_within(client, timeout, move |stream| {
+            // written and never read: the peer is silent
+            write_control(stream, &Control::Hello(hello()))?;
+            let read = read_frame(stream).map(|_| ());
+            let _ = ended.send(());
+            read
+        })
+        .unwrap_err();
+        assert!(
+            matches!(&error, FramingError::Io(error) if error.kind() == io::ErrorKind::TimedOut),
+            "{error}"
+        );
+        assert!(started.elapsed() >= timeout);
+        // the pending read was cancelled, not left behind
+        thread_ended.try_recv().unwrap();
+        // the abandoned connection holds no thread of this process's: a connection dropped after it still closes
+        let (_root, _listener, mut client, mut server) = connected_pair();
+        write_control(&mut client, &Control::Hello(hello())).unwrap();
+        drop(client);
+        let (send, closed) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = read_frame(&mut server);
+            let _ = send.send(read_frame(&mut server).map(|_| ()));
+        });
+        let next = closed
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the connection dropped later stays open");
+        assert!(next.is_err(), "{next:?}");
+    }
+
+    fn hello() -> Hello {
+        Hello {
+            role: Role::Control,
+            build: "test".to_owned(),
+            capabilities: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn an_exchange_within_its_timeout_hands_the_stream_back() {
+        let (_root, _listener, client, mut server) = connected_pair();
+        let hello = hello();
+        let sent = Control::Hello(hello.clone());
+        let answer = thread::spawn(move || write_control(&mut server, &sent).map(|()| server));
+        let (mut client, frame) = exchange_within(client, Duration::from_secs(30), read_frame).unwrap();
+        assert_eq!(frame.control().unwrap(), Control::Hello(hello.clone()));
+        // the stream still works
+        let mut server = answer.join().unwrap().unwrap();
+        write_control(&mut client, &Control::Hello(hello.clone())).unwrap();
+        assert_eq!(
+            read_frame(&mut server).unwrap().control().unwrap(),
+            Control::Hello(hello)
+        );
+    }
+
+    #[test]
+    fn a_wmi_start_that_ended_before_its_handle_reads_as_ended_with_its_status_lost() {
+        // no process has pid 0 to open (OpenProcess gives the System Idle Process's ERROR_INVALID_PARAMETER), as with
+        // a process that has already ended and that nobody holds
+        let mut process = track(0).unwrap();
+        assert_eq!(process.try_exit(), Some(Exit::Unknown));
+        // stopping it is a no-op
+        process.terminate(0);
+        assert_eq!(process.try_exit(), Some(Exit::Unknown));
+    }
+
+    #[test]
+    fn a_wmi_start_still_running_is_tracked_by_its_handle() {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "--list"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut process = track(child.id()).unwrap();
+        // the child holds its own handle, so the pid stays this process's until both are closed
+        let status = child.wait().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let exit = loop {
+            if let Some(exit) = process.try_exit() {
+                break exit;
+            }
+            assert!(Instant::now() < deadline, "the child did not end");
+            thread::sleep(Duration::from_millis(50));
+        };
+        assert_eq!(exit, Exit::Status(status));
     }
 
     #[test]

@@ -15,17 +15,17 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use agterm_session::endpoint::Endpoint;
 use agterm_session::protocol::{ErrorCode, Hello, Role};
-use agterm_session::server::CAPABILITY_DETACHED;
 use agterm_session::server::lifecycle::IDLE_GRACE;
 use agterm_session::server::spawn::{
     Connected, SpawnPath, StartError, StartOptions, connect_existing, connect_or_start,
 };
+use agterm_session::server::{CAPABILITY_DETACHED, HANDSHAKE_TIMEOUT};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -34,7 +34,7 @@ type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 /// The server binary under test.
 const EXE: &str = env!("CARGO_BIN_EXE_agterm-session");
 
-/// The child's mode: `launcher`, `sleep` or `descriptors`.
+/// The child's mode: `launcher`, `sleep`, `descriptors` (Unix) or `racers` (Windows).
 const MODE: &str = "AGLS_TEST_MODE";
 /// The namespace directory a child works in.
 const DIRECTORY: &str = "AGLS_TEST_DIRECTORY";
@@ -212,6 +212,8 @@ fn child_mode() -> TestResult<bool> {
     let directory = env_path(DIRECTORY)?;
     let report = match mode.to_string_lossy().as_ref() {
         "launcher" => launch(&directory)?,
+        #[cfg(windows)]
+        "racers" => jobs::race(&directory)?,
         "sleep" => {
             thread::sleep(Duration::from_secs(120));
             json!({})
@@ -409,6 +411,73 @@ fn the_launcher_ends_and_the_server_lives() {
     launcher.wait().unwrap();
     let found = namespace.find().unwrap().expect("the server outlived its launcher");
     assert_eq!(found.welcome.pid, pid);
+}
+
+#[test]
+fn a_relative_directory_names_one_namespace_in_the_client_and_its_server() {
+    if child_mode().unwrap() {
+        return;
+    }
+    let mut namespace = Namespace::new().unwrap();
+    // `sub` is there for Unix, whose kernel walks `sub/..`; Windows resolves it from the path alone
+    fs::create_dir_all(namespace.root.path().join("sub")).unwrap();
+    let relative = Path::new("sub").join("..").join("live");
+    let (mut command, capture) = namespace
+        .child(
+            "a_relative_directory_names_one_namespace_in_the_client_and_its_server",
+            "launcher",
+            &[(DIRECTORY, relative.as_os_str()), (HOLD, OsStr::new("120"))],
+        )
+        .unwrap();
+    // the launcher works where the relative directory starts; the server it starts works elsewhere
+    command.current_dir(namespace.root.path());
+    let mut launcher = command.spawn().unwrap();
+    let report = read_capture(&capture, &mut launcher).unwrap();
+    assert!(report["error"].is_null(), "{report}");
+    let pid = report_pid(&report).unwrap();
+    namespace.servers.push(pid);
+    let found = namespace
+        .find()
+        .unwrap()
+        .expect("the server serves the namespace its launcher named");
+    assert_eq!(found.welcome.pid, pid);
+    launcher.kill().unwrap();
+    launcher.wait().unwrap();
+}
+
+#[test]
+fn a_server_that_never_answers_ends_the_wait_at_the_deadline() {
+    if child_mode().unwrap() {
+        return;
+    }
+    let namespace = Namespace::new().unwrap();
+    // a hung server, or another process holding the endpoint: it accepts and never answers
+    let listener = namespace.endpoint.bind().unwrap();
+    thread::spawn(move || {
+        let mut held = Vec::new();
+        while let Ok(stream) = listener.accept() {
+            held.push(stream);
+        }
+    });
+    let endpoint = namespace.endpoint.clone();
+    let (send, waited) = mpsc::channel();
+    thread::spawn(move || {
+        let timeout = Duration::from_secs(1);
+        let found = connect_existing(&endpoint, &hello(Role::Control), timeout).map(|found| found.is_some());
+        let options = StartOptions {
+            timeout,
+            ..StartOptions::new(EXE)
+        };
+        let started = connect_or_start(&endpoint, &hello(Role::Control), &options).map(|connected| connected.spawned);
+        let _ = send.send((found, started));
+    });
+    // each wait ends after one handshake's timeout at most
+    let (found, started) = waited
+        .recv_timeout(HANDSHAKE_TIMEOUT * 2 + EXIT_SLACK)
+        .expect("the waits did not end");
+    assert!(matches!(found, Err(StartError::NotReady { .. })), "{found:?}");
+    // a busy endpoint is not a missing server: nothing was started
+    assert!(matches!(started, Err(StartError::NotReady { .. })), "{started:?}");
 }
 
 /// The descriptor check, in a child of its own: no other test's descriptors can be inherited there.
@@ -683,6 +752,49 @@ mod jobs {
         Ok((was_in_job, canary.id()))
     }
 
+    /// Racing clients in one launcher inside the jobs `JOBS` names: they start the server at once, and the
+    /// report has every one's server or error and every server they started.
+    pub(super) fn race(directory: &Path) -> TestResult<Value> {
+        let (was_in_job, canary) = enter_and_start_canary()?;
+        let racers = 4;
+        let barrier = Arc::new(Barrier::new(racers));
+        let threads: Vec<_> = (0..racers)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                let endpoint = Endpoint::new(directory);
+                thread::spawn(move || {
+                    barrier.wait();
+                    connect_or_start(&endpoint, &hello(Role::Control), &StartOptions::new(EXE))
+                })
+            })
+            .collect();
+        let (mut pids, mut errors, mut spawned, mut held) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for racer in threads {
+            match racer.join().map_err(|_| "a racer panicked")? {
+                Ok(connected) => {
+                    pids.push(connected.welcome.pid);
+                    spawned.extend(
+                        connected
+                            .spawned
+                            .iter()
+                            .map(|started| json!({ "pid": started.pid, "path": format!("{:?}", started.path) })),
+                    );
+                    held.push(connected);
+                }
+                Err(error) => errors.push(error.to_string()),
+            }
+        }
+        let report = json!({
+            "pids": pids,
+            "errors": errors,
+            "spawned": spawned,
+            "was_in_job": was_in_job,
+            "canary": canary,
+        });
+        drop(held);
+        Ok(report)
+    }
+
     /// Puts this process in a new job, nested in any it is in. The handle is left open on purpose: the job closes
     /// when this process ends.
     fn enter(kill_on_close: bool, breakaway: bool) -> TestResult {
@@ -802,5 +914,47 @@ mod jobs {
         )
         .unwrap();
         assert_eq!(report["path"], "Wmi", "{report}");
+    }
+
+    /// Every server a racing start launched through WMI but the winner loses the namespace and exits within
+    /// milliseconds, often before WMI's answer reaches its client: that client probes again and finds the winner.
+    #[test]
+    fn racing_starts_through_wmi_leave_one_server() {
+        if child_mode().unwrap() {
+            return;
+        }
+        let mut namespace = Namespace::new().unwrap();
+        let (mut command, capture) = namespace
+            .child(
+                "jobs::racing_starts_through_wmi_leave_one_server",
+                "racers",
+                &[(JOBS, OsStr::new("k"))],
+            )
+            .unwrap();
+        let mut launcher = command.spawn().unwrap();
+        let report = read_capture(&capture, &mut launcher).unwrap();
+        let status = launcher.wait().unwrap();
+        assert!(status.success(), "{status}: {}", child_output(&mut launcher));
+        let spawned = report["spawned"].as_array().unwrap();
+        namespace.servers.extend(
+            spawned
+                .iter()
+                .filter_map(|started| started["pid"].as_u64())
+                .map(|pid| u32::try_from(pid).unwrap()),
+        );
+        assert_eq!(report["errors"], json!([]), "{report}");
+        let pids = report["pids"].as_array().unwrap();
+        assert_eq!(pids.len(), 4, "{report}");
+        assert!(
+            pids.iter().all(|pid| *pid == pids[0]),
+            "every racer is connected to one server: {report}"
+        );
+        assert!(spawned.iter().all(|started| started["path"] == "Wmi"), "{report}");
+        let winner = u32::try_from(pids[0].as_u64().unwrap()).unwrap();
+        let found = namespace
+            .find()
+            .unwrap()
+            .expect("the server outlived its launcher's job");
+        assert_eq!(found.welcome.pid, winner);
     }
 }

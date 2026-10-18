@@ -52,10 +52,15 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
-    /// The endpoint of the namespace `directory`.
+    /// The endpoint of the namespace `directory`, made absolute against the current directory first
+    /// ([`std::path::absolute`], as the server does with the directory its argv names): a relative directory, or one
+    /// with `.` or `..` in it, then names the same pipe on Windows in the client and in the server it starts, whose
+    /// working directory differs (`server::working_directory`). A directory that cannot be made absolute (empty, or
+    /// relative with no readable current directory) is kept as given.
     #[must_use]
     pub fn new(directory: impl Into<PathBuf>) -> Self {
         let directory = directory.into();
+        let directory = std::path::absolute(&directory).unwrap_or(directory);
         Self {
             #[cfg(unix)]
             socket: directory.join(SOCKET_FILE_NAME),
@@ -65,7 +70,7 @@ impl Endpoint {
         }
     }
 
-    /// The namespace directory.
+    /// The namespace directory, absolute (see [`Endpoint::new`]).
     #[must_use]
     pub fn directory(&self) -> &Path {
         &self.directory
@@ -245,6 +250,33 @@ mod tests {
                 "{PIPE_PREFIX}{}",
                 fnv1a64(br"c:\users\nick\appdata\local\agterm\live\0123456789abcdef")
             )
+        );
+    }
+
+    #[test]
+    fn a_relative_directory_is_taken_from_the_current_one() {
+        let current = std::env::current_dir().unwrap();
+        let endpoint = Endpoint::new(Path::new("live").join("0123"));
+        assert_eq!(endpoint.directory(), current.join("live").join("0123"));
+        assert!(endpoint.directory().is_absolute());
+        assert_eq!(endpoint, Endpoint::new(current.join("live").join("0123")));
+        // nothing to make absolute: kept as given
+        assert_eq!(Endpoint::new("").directory(), Path::new(""));
+    }
+
+    /// Every spelling of one directory names the server's pipe, which the server derives from its argv's directory
+    /// made absolute: `.` and `..` resolved, the current directory's drive and folder filled in.
+    #[cfg(windows)]
+    #[test]
+    fn every_spelling_of_a_directory_names_one_pipe() {
+        let plain = Endpoint::new(r"C:\a\live\0123");
+        for spelling in [r"C:\a\b\..\live\0123", r"C:\a\.\live\0123", r"c:/a/live/0123/"] {
+            assert_eq!(Endpoint::new(spelling).pipe_name(), plain.pipe_name(), "{spelling}");
+        }
+        let current = std::env::current_dir().unwrap();
+        assert_eq!(
+            Endpoint::new(r"live\..\live\0123").pipe_name(),
+            pipe_name(&current.join(r"live\0123"))
         );
     }
 
