@@ -36,11 +36,14 @@
 //! # Unsafe
 //!
 //! Ghostty's page layout is kept, because it is what makes its scrollback, resize and reflow behave and perform as
-//! they do, and it is the only reason for `unsafe` here. Page memory sits behind a handful of audited types (the
-//! single-buffer page layout and its offset buffers, the bitmap allocator, the ref-counted set, the page-local hash
-//! map, intrusive node lists, the page pool and the per-OS page allocator); above them, pages, the page list,
-//! screens and the terminal are safe Rust. Every `unsafe` block carries its own `// SAFETY:` comment and does one
-//! operation, and the memory core's tests run under Miri.
+//! they do: a page is one buffer, and its structures (the bitmap allocator, the ref-counted sets, the page-local hash
+//! maps) live inside it, addressed by offsets. Here that buffer is a byte slice and every value stored in it is
+//! `bytemuck::Pod`, read and written through bounds- and alignment-checked casts, so those structures, and pages,
+//! the page list, screens and the terminal above them, are safe Rust: a wrong offset is a wrong value, never undefined
+//! behavior. The `unsafe` left is the memory core's small audited part: the `Pod` and `Zeroable` impls for the offset
+//! types (`Offset`, `OffsetSlice`) that those casts rely on, the per-OS page allocator that maps and unmaps page
+//! memory, one fallible box allocation, and the unit tests' allocator. Every `unsafe` block and impl carries its own
+//! `// SAFETY:` comment, and the memory core's tests run under Miri.
 //!
 //! # Platforms
 //!
@@ -48,3 +51,31 @@
 //! image media) side by side, built and tested on all three.
 
 pub mod provenance;
+
+// The support modules the terminal is built on. Until the terminal modules that use them are ported, only their own
+// tests do, so outside tests they are dead code; each `expect` goes when its module gains a user.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the terminal modules, not ported yet")
+)]
+mod build_options;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the terminal modules, not ported yet")
+)]
+mod datastruct;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the terminal modules, not ported yet")
+)]
+mod mem;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the terminal modules, not ported yet")
+)]
+mod options;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the terminal modules, not ported yet")
+)]
+mod os;

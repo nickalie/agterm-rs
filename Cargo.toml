@@ -30,9 +30,13 @@ agterm-wpe = { path = "crates/agterm-wpe" }
 async-channel = "2"
 base64 = "0.23"
 bitflags = "2"
+# agterm-vt's page memory: every value stored in a page's single buffer is `Pod`, read and written through checked
+# casts, so the offset-based structures over it need no `unsafe`.
+bytemuck = "1.25"
 clap = { version = "4.6", features = ["derive"] }
 libc = "0.2"
-# agterm-session's Windows endpoint: the named pipe's security descriptor and its server-process check.
+# Windows APIs, features per crate: agterm-session's endpoint (the named pipe's security descriptor and its
+# server-process check) and agterm-vt's page allocator (`VirtualAlloc`/`VirtualFree`).
 windows-sys = "0.61"
 # The UTF-16 strings interprocess takes a named pipe's security descriptor in (agterm-session, Windows).
 widestring = "1.2"

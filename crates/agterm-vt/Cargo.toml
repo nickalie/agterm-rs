@@ -8,6 +8,13 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+bytemuck.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Memory"] }
 
 [lints]
 workspace = true

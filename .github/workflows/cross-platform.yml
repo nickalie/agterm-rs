@@ -47,10 +47,12 @@ jobs:
       - name: test
         run: cargo test --locked $PACKAGES --all-features
 
-  # agterm-vt's memory core (mem, datastruct, os: the page allocator, offset buffers, bitmap allocator, pools, lists)
-  # under Miri, on a nightly pinned by date: bump MIRI_NIGHTLY on its own, to a day whose manifest carries miri
+  # agterm-vt's memory core under Miri (mem: offsets, the bitmap allocator, the ref-counted set, the page hash map,
+  # fallible allocation and the test allocators; datastruct: the insertion-ordered map, Wyhash; os::page_allocator),
+  # on a nightly pinned by date: bump MIRI_NIGHTLY on its own, to a day whose manifest carries miri
   # (static.rust-lang.org/dist/<date>/channel-rust-nightly.toml). The filters select the core's unit tests by module
-  # path; until Task 4 ports the core none match, and libtest passes an empty selection.
+  # path. libtest matches substrings, so `os::` alone would also take any `pos::` test: the page allocator is named in
+  # full, and a later module whose path contains `mem::` or `datastruct::` must not be named so.
   miri:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -64,4 +66,4 @@ jobs:
           cargo "+$MIRI_NIGHTLY" miri setup
       - name: memory core under Miri
         run: |
-          cargo "+$MIRI_NIGHTLY" miri test --locked -p agterm-vt --lib -- mem:: datastruct:: os::
+          cargo "+$MIRI_NIGHTLY" miri test --locked -p agterm-vt --lib -- mem:: datastruct:: os::page_allocator::

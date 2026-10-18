@@ -517,7 +517,9 @@ agterm-vt    the VT state of both the pane and the server
     scripts run.
   - Under the workspace lints.
   - Dependencies: `bitflags`, `tracing`, `png`, `miniz_oxide`, `libc` and `windows-sys` for the page allocator's
-    per-OS forms (`mmap`, `VirtualAlloc`), `hashbrown` and `memchr` only if needed.
+    per-OS forms (`mmap`, `VirtualAlloc`), `hashbrown` and `memchr` only if needed. Task 4 added `bytemuck`: every
+    value stored in page memory is `Pod`, read through checked casts, which keeps the page structures free of
+    `unsafe`.
 - **Public API**: the surface `agterm-term` uses today, mapped onto Ghostty's types. Task 1 completes it by
   inventorying the public functions of `agterm-ghostty-vt` that `agterm-term` calls. The session server also needs the
   stream continuation.
@@ -690,6 +692,12 @@ below are rustty-vt's (`crates/rustty-vt/src/`).
     `limited_allocator`; os `page_allocator` (with `mach` and `windows`); lib `allocator`; zigstd `arena_allocator`,
     `array_hash_map`, `atomic`, `wyhash`; render-types `term_size`'s offsets (`Offset`, `OffsetSlice`, `OffsetBuf`,
     `IntFromBase`).
+    Task 4 changed this (codex-agreed, see Task 4): `sys` is not created there, since its raw allocator only served
+    the PNG decode seam, so `sys` is born in Task 10 with the PNG decode; `limited_allocator` and lib `allocator`
+    (the C allocator ABI) are not ported (Task 10 caps the `png` decode with `png`'s own limits); zigstd
+    `arena_allocator` moves to Task 9 with `memory_pool`, its only user; util `quirks` is `debug_assert!`, datastruct
+    `array_list` and rustty-vt's `zig_list` are `std`'s `Vec` behind `mem::alloc`, and zigstd `atomic`'s cache line
+    went with Zig's growth policy; `IntFromBase` is gone (the base is always the page's byte slice).
   - Task 5: rustty-vt's `utf8_decoder` and the root's `unicode` re-exports; leaf crates unicode and simd.
   - Task 7: identity, which the terminfo entry reads first, with Ghostty's identity restored; leaf crate terminfo.
   - Task 8: `protocol_int` (Kitty graphics command numbers), and `log_capture`, the test helper over `tracing` that
@@ -1117,10 +1125,21 @@ probes' sources in `docs/spikes/20261018-session-server-probes.md`). Paths below
 - Create: `crates/agterm-vt/src/mem/*.rs`, `crates/agterm-vt/src/datastruct/*.rs`, `crates/agterm-vt/src/os/*.rs`,
   `crates/agterm-vt/src/{sys,build_options,options}.rs`
 
-- [ ] port the page allocator from rustty-os, with its Linux, macOS (`mmap`) and Windows (`VirtualAlloc`) forms, all
-      in this change
-- [ ] port the following behind safe types, with every `unsafe` block carrying its own `// SAFETY:` and one
-      operation:
+- [x] port the page allocator from rustty-os, with its Linux, macOS (`mmap`) and Windows (`VirtualAlloc`) forms, all
+      in this change (`os/page_allocator.rs`: an owned `PageMemory` unmapped on drop; Unix `mmap`, macOS tagged
+      `VM_MEMORY_APPLICATION_SPECIFIC_1`, Windows `VirtualAlloc`/`VirtualFree` via `windows-sys`, the zeroed heap under
+      Miri)
+- [x] port the following behind safe types, with every `unsafe` block carrying its own `// SAFETY:` and one
+      operation (codex-agreed design, transcript
+      `~/.local/state/plan-exec-revmux/zig-free-core/discussions/task-4-memory-core-api/transcript.md`: page memory is
+      a byte slice and every value stored in it is `bytemuck::Pod`, read through bounds- and alignment-checked casts
+      (`mem/offset.rs`), so the bitmap allocator, ref-counted set and hash map have no `unsafe` at all; `alloc` hands
+      out a consuming `Allocation<T>`, contexts get the page's bytes per call instead of a stored page pointer, items
+      keep the reference stride; the only `unsafe` is the page allocator, `mem::alloc::try_box` and the test allocator.
+      Not created here: `sys` (its raw allocator served only the PNG decode seam, so it is born in Task 10), and
+      `limited_allocator`, lib `allocator` (the C ABI), `quirks`, `array_list`, `atomic`, `IntFromBase`; zigstd
+      `arena_allocator` moves to Task 9 with the pool, its only user; Technical Details > Owners records the moves.
+      `build_options`/`options` hold `Artifact` and `ARTIFACT = Lib`, libghostty-vt's, plus `SLOW_RUNTIME_SAFETY`):
   - from rustty-vt: `alloc`, `bitmap_allocator`, `ref_counted_set`, `hash_map`, `zig_list` (`mem` is cut with page
     compression, Task 1), and `sys` with its global raw allocator, which `alloc` uses (its PNG decode comes with
     Task 10, its secure-random fill with Task 11);
@@ -1131,13 +1150,22 @@ probes' sources in `docs/spikes/20261018-session-server-probes.md`). Paths below
   - from rustty-render-types: `term_size`'s offsets (`Offset`, `OffsetSlice`, `OffsetBuf`, `IntFromBase`);
   - the leaf modules those need (Task 1 > Owners): util `quirks`; datastruct `array_list`, `limited_allocator`; lib
     `allocator`; zigstd `arena_allocator`, `array_hash_map`, `atomic`, `wyhash`
-- [ ] replace the zigstd and allocator-api2 shims with `std` where the semantics allow. Note each shim that remains,
-      with its reason
-- [ ] port their rustty tests
-- [ ] add tests for the safe wrappers' error paths: exhaustion, out-of-range offsets refused, a double free
-      impossible by type
-- [ ] Miri green locally and in Task 3's job; the macOS and Windows forms debugged in the VMs and green on CI
-- [ ] run gates - must pass before task 5
+- [x] replace the zigstd and allocator-api2 shims with `std` where the semantics allow. Note each shim that remains,
+      with its reason (allocator-api2, the runtime allocator handle and Zig's growth traces are gone: containers are
+      `std`'s. Remaining: `mem::alloc::try_box`, since `Box::try_new` is unstable; `TryVecExt`/`try_dupe`/
+      `AllocatingWriter`, thin names for Zig's `try` growth over `try_reserve*`; `datastruct::array_hash_map`, since
+      `std` has no insertion-ordered map (now `Vec` + `HashMap`); `datastruct::wyhash`, since the page maps need Zig's
+      digest bit for bit; `mem::testing`, a test-only global allocator for failure injection, which `std` lacks)
+- [x] port their rustty tests (adapted to offsets over test buffers; rustty's C-ABI allocator tests and Zig
+      allocation-trace tests went with what they tested; the hash map's PRNG-driven tests use a Zig-exact PRNG and keep
+      their ground truth)
+- [x] add tests for the safe wrappers' error paths: exhaustion, out-of-range offsets refused, a double free
+      impossible by type (a static not-`Clone` assertion on `Allocation`, plus `free_slice` refusing a double free)
+- [x] Miri green locally and in Task 3's job; the macOS and Windows forms debugged in the VMs and green on CI
+      (Miri filter now `mem:: datastruct:: os::page_allocator::`, 132 tests; VMs macOS 26 x86-64 and Win11: fmt,
+      clippy, 135 tests green; run 39111730195 green on ubuntu-26.04, macos-26, windows-2025 and miri)
+- [x] run gates - must pass before task 5 (all green except the known load-dependent `agterm-gpui` html_overlay
+      frame-rate test, 16.0 fps at load average 22-25)
 
 ### Task 5: Unicode lookups, UTF-8 decoder, scalar SIMD paths
 
