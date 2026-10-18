@@ -272,16 +272,45 @@ fn the_login_shell_starts_with_its_integration() -> TestResult {
     Ok(())
 }
 
+/// The command line of process `pid`, empty once it is gone.
+fn cmdline(pid: u32) -> Vec<u8> {
+    std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default()
+}
+
+/// The parent of process `pid`, `None` once it is gone (the fourth field of its `stat`, past the parenthesized name).
+fn parent(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// The interactive `/bin/sh` a pane of the login shell `/bin/sh` runs through its `/bin/sh -c /bin/sh` wrapper: the
+/// pane's own process once the wrapper execs it (bash), else the wrapper's child (dash, the `/bin/sh` of Debian and
+/// Ubuntu, stays as the wrapper); `None` until it runs.
+fn interactive_sh(pane: &Pane) -> Option<u32> {
+    let pid = pane.pid()?;
+    if cmdline(pid) == b"/bin/sh\0" {
+        return Some(pid);
+    }
+    std::fs::read_dir("/proc")
+        .ok()?
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+        .find(|child| parent(*child) == Some(pid) && cmdline(*child) == b"/bin/sh\0")
+}
+
 #[test]
 fn the_foreground_pid_is_the_terminals_foreground_group() -> TestResult {
     let pane = Pane::launch(&launch(None), &host("/bin/sh", None), &PaneConfig::new(SIZE))?;
-    let shell = pane.pid().expect("a child pid");
-    // the shell holds the foreground while it waits at its prompt
+    // the shell holds the foreground while it waits at its prompt (not the wrapper, which holds it until the shell
+    // takes it)
     let deadline = Instant::now() + DEADLINE;
-    while pane.foreground_pid() != Some(shell) {
+    let shell = loop {
+        if let Some(shell) = interactive_sh(&pane).filter(|shell| pane.foreground_pid() == Some(*shell)) {
+            break shell;
+        }
         assert!(Instant::now() < deadline, "the shell never held the foreground");
         std::thread::sleep(Duration::from_millis(10));
-    }
+    };
     // a job it runs takes it over
     pane.write(b"sleep 30\n")?;
     let job = loop {
