@@ -321,7 +321,7 @@ fn the_foreground_pid_is_the_terminals_foreground_group() -> TestResult {
 /// A live launch's inputs under a private state directory (so a private `ZMX_DIR`): bash as the login shell, whose
 /// integration sets the prompt `live-ready$ `.
 struct Live {
-    runtime: agterm_zmx::Runtime,
+    runtime: agterm_session::launch::Runtime,
     host: Host,
     home: tempfile::TempDir,
     _state: tempfile::TempDir,
@@ -337,10 +337,10 @@ impl Live {
         let (resources, ghostty) = resources("PS1='live-ready$ '\n", false)?;
         let env = MapEnv::new()
             .with("AGTERM_STATE_DIR", state.path())
-            .with(agterm_zmx::launch::ZMX_PATH_OVERRIDE, zmx)
+            .with(agterm_session::launch::EXECUTABLE_OVERRIDE, zmx)
             .with("GHOSTTY_RESOURCES_DIR", &ghostty)
             .with("HOME", home.path());
-        let runtime = agterm_zmx::Runtime::resolve(&env, None, Some("/bin/bash".to_owned()), true);
+        let runtime = agterm_session::launch::Runtime::resolve(&env, None, Some("/bin/bash".to_owned()), true);
         let host = Host::from_runtime(&GhosttyConfig::default(), &runtime, None);
         let socket_directory = agterm_core::live::socket_directory(&runtime.state_dir);
         Ok(Self {
@@ -484,6 +484,8 @@ fn every_fresh_live_launch_paints_its_prompt() -> TestResult {
     Ok(())
 }
 
+// the zmx client is a Unix-only dependency
+#[cfg(unix)]
 #[test]
 fn a_live_pane_ends_when_its_session_is_gone() -> TestResult {
     let Some(zmx) = test_zmx() else {
@@ -497,7 +499,7 @@ fn a_live_pane_ends_when_its_session_is_gone() -> TestResult {
     pane.write(b"echo \"pane=$AGTERM_PANE_ID term=$TERM\"\r")?;
     wait_text(&pane, &format!("pane={} term=xterm-256color", configuration.pane_id));
     assert_eq!(
-        live.runtime.client().kill(&configuration.daemon_name, true),
+        agterm_zmx::launch::client(&live.runtime).kill(&configuration.daemon_name, true),
         KillOutcome::Killed
     );
     // the attach's end closes the pane: a live pane's attach is never waited for
@@ -531,9 +533,12 @@ fn a_missing_zmx_cannot_wrap_and_its_attach_ends_the_pane() -> TestResult {
     let (_resources, ghostty) = resources("", false)?;
     let env = MapEnv::new()
         .with("AGTERM_STATE_DIR", state.path())
-        .with(agterm_zmx::launch::ZMX_PATH_OVERRIDE, "/nonexistent/agterm-test/zmx")
+        .with(
+            agterm_session::launch::EXECUTABLE_OVERRIDE,
+            "/nonexistent/agterm-test/zmx",
+        )
         .with("GHOSTTY_RESOURCES_DIR", &ghostty);
-    let runtime = agterm_zmx::Runtime::resolve(&env, None, Some("/bin/bash".to_owned()), true);
+    let runtime = agterm_session::launch::Runtime::resolve(&env, None, Some("/bin/bash".to_owned()), true);
     // the launch probe rejects the host, so the pane falls back to a plain launch
     assert_eq!(
         runtime.configuration(Uuid::new_v4(), BTreeMap::new(), None),

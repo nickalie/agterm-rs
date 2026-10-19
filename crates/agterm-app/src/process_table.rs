@@ -70,9 +70,10 @@ impl ProcessTable for ProcTable {
         members
     }
 
-    /// The `tpgid` of the stat line, read by the sweep's parser; `None` for a process without a terminal.
+    /// The `tpgid` of the stat line, read by the sweep's parser ([`agterm_session::procfs`]); `None` for a process without
+    /// a terminal.
     fn terminal_foreground(&self, pid: i32) -> Option<i32> {
-        agterm_zmx::sweep::parse_record(&fs::read(self.process_file(pid, "stat")).ok()?)
+        agterm_session::procfs::parse_record(&fs::read(self.process_file(pid, "stat")).ok()?)
             .map(|record| record.foreground)
             .filter(|group| *group > 0)
     }

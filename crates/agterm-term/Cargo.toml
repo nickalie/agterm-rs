@@ -10,7 +10,8 @@ license.workspace = true
 [dependencies]
 agterm-core.workspace = true
 agterm-ghostty-vt.workspace = true
-agterm-zmx.workspace = true
+# the live-launch inputs a live pane's host starts from
+agterm-session.workspace = true
 # the OSC 5522 classifier decodes metadata and MIME lists as Ghostty does (strict, padded)
 base64.workspace = true
 bitflags.workspace = true
@@ -21,10 +22,14 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-# the real zmx tests kill a daemon through its SessionHost
+# the `SessionHost` the real zmx tests kill a daemon through
 agterm-host.workspace = true
 tempfile.workspace = true
 uuid.workspace = true
+
+[target.'cfg(unix)'.dev-dependencies]
+# the zmx client the real zmx tests kill a daemon with (zmx runs on Unix only)
+agterm-zmx.workspace = true
 
 [lints]
 workspace = true

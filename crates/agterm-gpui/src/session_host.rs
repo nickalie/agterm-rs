@@ -45,9 +45,9 @@ pub const LIVE_ANY_SHELL: &str = "live-any-shell";
 /// table are in.
 pub fn install(core: &mut Core, env: &dyn Env) {
     let runtime = Runtime::capture(env);
-    let client = runtime.client();
+    let client = agterm_zmx::launch::client(&runtime);
     let endpoint = ControlLiveEndpoint {
-        executable: runtime.zmx_executable.to_string_lossy().into_owned(),
+        executable: runtime.executable.to_string_lossy().into_owned(),
         socket_directory: client.socket_directory().to_owned(),
     };
     let bundled = std::env::current_exe()
@@ -70,7 +70,7 @@ pub fn install(core: &mut Core, env: &dyn Env) {
 #[must_use]
 pub fn wrap_inputs(runtime: &Runtime) -> Inputs {
     Inputs {
-        executable: runtime.zmx_executable.clone(),
+        executable: runtime.executable.clone(),
         login_shell: runtime.login_shell.clone(),
         resources_dir: runtime.resources_dir.clone(),
         state_dir: runtime.state_dir.clone(),
@@ -300,7 +300,7 @@ mod tests {
     #[test]
     fn a_host_without_zmx_claims_no_live_capability() {
         let runtime = Runtime {
-            zmx_executable: PathBuf::from("/nonexistent/zmx"),
+            executable: PathBuf::from("/nonexistent/zmx"),
             login_shell: Some("/bin/zsh".to_owned()),
             resources_dir: None,
             state_dir: PathBuf::from("/tmp/agterm-state"),

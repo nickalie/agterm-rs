@@ -3,7 +3,7 @@
 //! parser, reap, prune and reset policies, the lead protocol) are host-free and live in [`agterm_core::live`]; this
 //! crate reads the host and runs the binary.
 //!
-//! - [`launch`]: what a live launch reads of this host, and the wrap configuration of a pane over it;
+//! - [`launch`]: what a live launch reads of this host (`agterm_session::launch`'s, re-exported) and the client over it;
 //! - [`client`]: the bounded zmx process runner and [`ZmxClient`], the `SessionHost`;
 //! - [`inventory`]: the client side of the lifecycle: the forced batch kill behind the finalizer and the launch reap;
 //! - [`sweep`]: the process sweeper that hangs up a killed shell's foreground job.

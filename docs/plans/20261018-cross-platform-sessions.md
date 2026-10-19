@@ -673,14 +673,20 @@ Order after Task 7, as two lanes that meet:
   `crates/agterm-app/{Cargo.toml,src/process_table.rs,src/restore_launch.rs}`, `crates/agterm-zmx/src/sweep.rs`
   (`parse_record` moves)
 
-- [ ] `agterm-session::launch` holds the live-launch inputs (executable, build id, login shell with its Windows form,
+- [x] `agterm-session::launch` holds the live-launch inputs (executable, build id, login shell with its Windows form,
       Ghostty resources, namespace, the debug override) and `parse_record`; `agterm-zmx` re-exports them until
       Task 28
-- [ ] `agterm-term` and `agterm-app` take them from `agterm-session`; `agterm-zmx` becomes a Unix-only dependency
+      - `parse_record` sits in a module of its own, `agterm-session::procfs` (a `/proc` stat parser is no launch
+        input); the Windows login shell is herdr's: the first launchable `pwsh.exe` on `PATH`, else
+        `powershell.exe` (`launch/windows_shell.rs`); `Runtime.zmx_executable` is `executable`, and `client()`
+        stays in `agterm-zmx` as `launch::client(&Runtime)`
+- [x] `agterm-term` and `agterm-app` take them from `agterm-session`; `agterm-zmx` becomes a Unix-only dependency
       (`[target.'cfg(unix)'.dependencies]`) with `cfg` at its use sites, so both crates can build on Windows
-- [ ] port the moved functions' tests (login shell per OS, build id, resources, namespace); the frontend's behavior
+      - neither crate's library uses `agterm-zmx` any more: `agterm-app` drops it, `agterm-term` keeps it as a Unix-only
+        dev-dependency for the real-zmx test that kills a session
+- [x] port the moved functions' tests (login shell per OS, build id, resources, namespace); the frontend's behavior
       unchanged
-- [ ] run gates and the full conformance run in the background
+- [x] run gates and the full conformance run in the background
 
 ### Task 13: `agterm-pty`: herdr's PTY actor over the vendored `portable-pty`
 

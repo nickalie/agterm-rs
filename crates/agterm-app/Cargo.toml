@@ -10,7 +10,8 @@ license.workspace = true
 [dependencies]
 agterm-core.workspace = true
 agterm-host.workspace = true
-agterm-zmx.workspace = true
+# the live probe's launch inputs and the stat line the process table reads
+agterm-session.workspace = true
 libc.workspace = true
 serde_json.workspace = true
 toml.workspace = true

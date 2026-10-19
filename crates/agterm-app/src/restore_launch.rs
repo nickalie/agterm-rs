@@ -1,17 +1,18 @@
 //! The restore decision this launch takes before its first terminal (upstream's `GhosttyApp.init` latching
 //! `restoreLaunchDecision` from the settings and `ZmxLaunch.liveUnavailableReason`), and the host facts the foreground
 //! reads need: the user's `$SHELL`. The live probe's inputs (the staged zmx, the password-database login shell, the
-//! zsh integration) are `agterm_zmx::Runtime`'s.
+//! zsh integration) are [`Runtime`]'s.
 
 use agterm_core::command_restore::basename;
 use agterm_core::paths::Env;
 use agterm_core::persist::AppSettings;
 use agterm_core::restore::mode::RestoreLaunchDecision;
+use agterm_session::launch::Runtime;
 
 /// The decision for this launch: the settings' mode, `live` falling back to fresh shells with the probe's reason. Call
 /// it after libghostty's resources dir is exported.
 pub fn launch_decision(settings: &AppSettings, env: &dyn Env) -> RestoreLaunchDecision {
-    let probe = agterm_zmx::Runtime::capture(env).live_probe(env);
+    let probe = Runtime::capture(env).live_probe(env);
     let decision = RestoreLaunchDecision::new(settings.effective_restore_mode(), probe.unavailable_reason());
     tracing::info!(
         requested = decision.requested.wire_name(),

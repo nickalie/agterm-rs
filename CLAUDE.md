@@ -30,7 +30,8 @@ below, not a later phase. Build, run and test commands are in [README.md](README
 | `agterm-ghostty-vt-sys` | checked-in bindgen output over libghostty-vt's official C API (`scripts/gen-ghostty-vt-bindings.sh`), links the vendored static library; not under the workspace lints | Linux |
 | `agterm-ghostty-vt` | safe wrapper over the sys crate: terminal, render state, effects, key and mouse encoders, selection and its gesture, formatter with its extras, search, Kitty graphics, stream continuation, snapshot codec, clipboard-read scan | Linux |
 | `agterm-term` | the toolkit-neutral pane core: a libghostty-vt terminal fed from a PTY by an IO thread per pane, input, selection, search, read-back, launch and terminal identity, frames and events in its own types | Linux |
-| `agterm-zmx` | the `SessionHost` over the patched zmx: launch inputs, client, inventory, reaps | Linux, macOS |
+| `agterm-session` | the live-session server on herdr's architecture: wire, endpoint, lifecycle and detached spawn per OS; the live-launch inputs (session host executable, build id, login shell, resources, namespace), the `/proc` stat line | any |
+| `agterm-zmx` | the `SessionHost` over the patched zmx: client, inventory, reaps, over `agterm-session`'s launch inputs | Linux, macOS |
 | `agterm-app` | frontend-neutral app services: the hooks' `ProcessLauncher`, the `/proc` `ProcessTable`, logging, the restore launch decision, quick-terminal placement, the agent integrations' installers, the remote presentation process | Linux |
 | `agterm-wpe-sys`, `agterm-wpe-platform-sys`, `agterm-wpe-javascriptcore-sys` | checked-in gir output over WPE WebKit, one crate per GObject namespace (`scripts/gen-wpe-bindings.sh`) | Linux |
 | `agterm-wpe` | WPE WebKit host for the HTML overlays: offscreen pages on an engine thread of their own (or in a worker process), frames out as dmabufs or SHM | Linux |

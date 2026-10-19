@@ -1,6 +1,6 @@
 [package]
 name = "agterm-session"
-description = "agterm's live-session server, on herdr's architecture: its wire, its endpoint and its lifecycle"
+description = "agterm's live-session server, on herdr's architecture: its wire, its endpoint, its lifecycle and the live-launch inputs"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,16 +9,21 @@ publish.workspace = true
 license = "MIT AND Apache-2.0"
 
 [dependencies]
+# The live-launch inputs: the wrap configuration, the launch probe and the paths are the core's policy.
+agterm-core.workspace = true
+agterm-host.workspace = true
 interprocess.workspace = true
 postcard.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 # The effective user, whom the namespace directory must belong to; the server's session.
 rustix = { workspace = true, features = ["process"] }
-# The server's spawn: `close_range` in the Linux child, `posix_spawn` and the responsibility SPI on macOS, the reap.
+# The server's spawn: `close_range` in the Linux child, `posix_spawn` and the responsibility SPI on macOS, the reap;
+# the password database's login shell.
 libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
@@ -31,6 +36,8 @@ windows-sys = { workspace = true, features = [
     "Win32_System_IO",
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
+    # the host's native machine (`IsWow64Process2`), which the login shell's image must run on
+    "Win32_System_SystemInformation",
     "Win32_System_Threading",
 ] }
 # The server's start from inside a job that refuses breakaway.

@@ -8,7 +8,10 @@
 //! - [`endpoint`]: where a namespace's server listens, a Unix domain socket or a Windows named pipe, owner-only;
 //! - [`server`]: the server's lifecycle: started on demand by a client that finds none, detached from it per OS, one
 //!   per namespace, stopped by itself once it holds no session and no client. The `agterm-session` binary runs it as
-//!   `agterm-session server <namespace directory>`.
+//!   `agterm-session server <namespace directory>`;
+//! - [`launch`]: what a live launch reads of this host (the session host executable, its build id, the login shell,
+//!   the Ghostty resources, the namespace's state directory) and the wrap configuration of a pane over it;
+//! - [`procfs`]: the Linux process table's stat line, which the foreground-job reads and reaps match processes by.
 //!
 //! # Provenance
 //!
@@ -18,5 +21,7 @@
 //! it was modified; herdr's license is in the repository's `NOTICE`. Hence the crate's `MIT AND Apache-2.0`.
 
 pub mod endpoint;
+pub mod launch;
+pub mod procfs;
 pub mod protocol;
 pub mod server;

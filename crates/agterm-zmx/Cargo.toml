@@ -1,6 +1,6 @@
 [package]
 name = "agterm-zmx"
-description = "agterm's live-session host over the patched zmx: the launch inputs, the zmx client and its reaps"
+description = "agterm's live-session host over the patched zmx: the zmx client and its reaps over agterm-session's launch inputs"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,13 +10,14 @@ license.workspace = true
 [dependencies]
 agterm-core.workspace = true
 agterm-host.workspace = true
+agterm-session.workspace = true
 libc.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

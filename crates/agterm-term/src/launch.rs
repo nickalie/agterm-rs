@@ -5,7 +5,7 @@
 //! - **Program**: a [`Launch`]'s command line, or else the host's login shell, runs through `/bin/sh -c` (libghostty
 //!   ran a surface's command that way on Linux, and core's foreground reader looks past exactly that wrapper). A live
 //!   pane's command is its `zmx attach` line ([`agterm_core::restore::spawn_plan::resolve_live_seed`]), whose
-//!   environment carries the wrap configuration from [`agterm_zmx::Runtime`]; a plain pane runs its seed's command, or
+//!   environment carries the wrap configuration from [`Runtime`]; a plain pane runs its seed's command, or
 //!   the login shell with its `initial_input` typed in.
 //! - **Environment**, later steps winning: the app's own; `GHOSTTY_LOG` and `VTE_VERSION` removed; the terminal
 //!   identity ([`Host`]); `GHOSTTY_SHELL_FEATURES`; the shell integration of a zsh, bash or fish command line
@@ -36,6 +36,7 @@ use agterm_core::ghostty_config::{
 use agterm_core::live::shell_integration::{self, Inherited, LoginShell};
 use agterm_core::paths::{Env, ProcessEnv};
 use agterm_core::restore::spawn_plan::LaunchSeed;
+use agterm_session::launch::Runtime;
 
 use crate::exit::ExitPolicy;
 use crate::{Pane, PaneCommand, PaneConfig, PaneError};
@@ -127,7 +128,7 @@ impl Host {
 
     /// The host of a live launch's inputs: their login shell, and their resources while the terminfo is beside them.
     #[must_use]
-    pub fn from_runtime(config: &GhosttyConfig, runtime: &agterm_zmx::Runtime, bin_dir: Option<PathBuf>) -> Self {
+    pub fn from_runtime(config: &GhosttyConfig, runtime: &Runtime, bin_dir: Option<PathBuf>) -> Self {
         let resources = runtime
             .resources_dir
             .clone()
@@ -985,10 +986,10 @@ mod tests {
                 .intersects(ShellIntegrationFeatures::UNSUPPORTED)
         );
         assert_eq!(host.version, crate::vt::version());
-        let runtime = agterm_zmx::Runtime {
+        let runtime = Runtime {
             login_shell: Some("/bin/fish".to_owned()),
             resources_dir: Some(PathBuf::from("/nonexistent/share/ghostty")),
-            ..agterm_zmx::Runtime::default()
+            ..Runtime::default()
         };
         let live = Host::from_runtime(&config, &runtime, None);
         assert_eq!(live.shell, "/bin/fish");
