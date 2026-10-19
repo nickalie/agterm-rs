@@ -290,7 +290,8 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   the app's process tests with the overlays on first.
 - `cross-platform.yml`: the crates that build on all three OSes (`agterm-session`, `agterm-proto`, `agterm-host`,
   `agterm-core`, `agterm-ghostty-vt-sys`, `agterm-ghostty-vt`, `agterm-pty` and `agterm-term` so far; `agterm-server`
-  and `agterm-ctl` build on Linux only and wait for the control server's macOS and Windows forms), on Ubuntu, macOS and
+  compiles for macOS too but is not run there yet and stays off Windows over `std::os::unix`, and `agterm-ctl` builds
+  on Linux only over `close_range` and `/proc/locks`; both wait for their remaining forms), on Ubuntu, macOS and
   Windows runners: the libghostty-vt prefix with each runner's pinned Zig (cached with Zig's global cache), format,
   clippy and `cargo test` (`crates`, a matrix), then the sys crate cross-built for the Zig targets no runner runs
   natively (aarch64 Linux and x86_64 macOS on Ubuntu, aarch64 Windows on Windows). It also runs on pushes to `ci/**`
