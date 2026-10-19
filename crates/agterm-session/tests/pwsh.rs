@@ -149,6 +149,41 @@ fn expect_raw(client: &mut Client, needle: &[u8]) {
     }
 }
 
+/// The integration's mark where a prompt's input starts.
+const INPUT_MARK: &[u8] = b"\x1b]133;B\x07";
+/// The cursor query `PSReadLine` sends on Unix once it reads a line, its terminal out of the cooked mode.
+const CURSOR_QUERY: &[u8] = b"\x1b[6n";
+
+/// Read `client` until the shell's `count`th prompt reads input: its input mark, and on Unix the cursor query after
+/// it. A line typed sooner meets the terminal's cooked mode, which echoes it and turns its Return into a line feed
+/// `PSReadLine` takes for Ctrl+J, so the line never runs.
+fn wait_for_prompt(client: &mut Client, count: usize) {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let output = &client.output;
+        let marks: Vec<usize> = (0..output.len())
+            .filter(|at| output[*at..].starts_with(INPUT_MARK))
+            .collect();
+        let reading = marks.get(count - 1).is_some_and(|mark| {
+            !cfg!(unix)
+                || output[mark + INPUT_MARK.len()..]
+                    .windows(CURSOR_QUERY.len())
+                    .any(|window| window == CURSOR_QUERY)
+        });
+        if reading {
+            // the query's answer comes back before the line editor reads its first key
+            std::thread::sleep(Duration::from_millis(200));
+            return;
+        }
+        assert!(
+            Instant::now() < deadline && client.exit.is_none(),
+            "no prompt {count} reading input: {:?}",
+            String::from_utf8_lossy(output)
+        );
+        client.receive(Duration::from_millis(100));
+    }
+}
+
 /// The directory an OSC 7 report names, when it is the integration's: `kitty-shell-cwd://` with this host's name,
 /// then the path (a Windows one after a `/`, with `/` separators).
 fn reported_directory(pwd: &str) -> Option<PathBuf> {
@@ -267,7 +302,7 @@ fn a_live_powershell_reports_its_directory_and_replays_its_foreground_command() 
     let mut client = Client::new(creator);
     wait_for_directory(&pane, &cwd);
     expect_raw(&mut client, b"\x1b]133;A\x07");
-    expect_raw(&mut client, b"\x1b]133;B\x07");
+    wait_for_prompt(&mut client, 1);
     wait_for(
         "the title",
         || pane.with_terminal(|terminal| terminal.title()),
@@ -280,6 +315,7 @@ fn a_live_powershell_reports_its_directory_and_replays_its_foreground_command() 
 
     // a program in the foreground, read through the process table
     let helper = helper_argv()?;
+    wait_for_prompt(&mut client, 2);
     type_line(&pane, &typed(&helper))?;
     let table = ProcTable::new();
     let shell_pid = i32::try_from(pane.pid())?;
