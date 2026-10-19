@@ -201,8 +201,9 @@ fn paused_reads_hold_the_output_back_but_not_the_input() -> TestResult {
 
 /// The child exits while reads are paused and input reaches the PTY after it (a write that a kernel may refuse with
 /// `EIO`, the child side being closed, or take): the actor stays up until its reads, resumed, deliver the child's
-/// last output and report the end. Unix only: `ConPTY` keeps its input pipe open until the console closes.
-#[cfg(unix)]
+/// last output and report the end. Linux only: macOS's tty close waits for the output to drain, so there the child
+/// cannot exit while the reads are paused, and `ConPTY` keeps its input pipe open until the console closes.
+#[cfg(target_os = "linux")]
 #[test]
 fn input_after_the_childs_exit_leaves_its_last_output_to_the_reads() -> TestResult {
     let pause = ReadPause::new();
