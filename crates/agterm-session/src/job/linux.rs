@@ -3,6 +3,8 @@
 use std::fs;
 use std::path::Path;
 
+use agterm_host::ProcessRecord;
+
 use super::{ProcessEntry, Signal};
 use crate::procfs;
 
@@ -23,13 +25,13 @@ pub(super) fn read_table_at(root: &Path) -> Option<Vec<ProcessEntry>> {
     )
 }
 
-pub(super) fn signal(signal: Signal, pid: i32) {
+pub(super) fn signal(signal: Signal, record: &ProcessRecord) {
     let number = match signal {
         Signal::HangUp => libc::SIGHUP,
         Signal::Kill => libc::SIGKILL,
     };
-    // SAFETY: `kill` has no memory preconditions; the sweep matched `pid` on its start time a moment ago.
-    unsafe { libc::kill(pid, number) };
+    // SAFETY: `kill` has no memory preconditions; the sweep matched the pid on its start time a moment ago.
+    unsafe { libc::kill(record.pid, number) };
 }
 
 #[cfg(test)]

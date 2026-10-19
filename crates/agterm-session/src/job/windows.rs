@@ -1,23 +1,28 @@
-//! The job table on Windows: a tool-help snapshot of every process (pid and parent) with each one's creation time,
-//! and the termination that stands in for both signals.
+//! The job table on Windows: every process a tool-help snapshot lists, with its creation time and parent read through
+//! one handle to it, and the termination that stands in for both signals.
 //!
 //! herdr: `src/platform/windows.rs` (`snapshot_processes`, `ProcessHandle`, `process_creation_time`,
 //! `process_start_token`, `signal_processes`) at `HERDR_REV` (`build/pins.env`), licensed under the Apache License
 //! 2.0, modified: a process whose creation time cannot be read (one of another session or a protected one) is left
-//! out, since it could be neither matched again nor ended; a failed snapshot reads as an unreadable table, not an
-//! empty one; the termination opens the process with `PROCESS_TERMINATE` and ends it on a hangup too.
+//! out, since it could be neither matched again nor ended; the parent is read through the handle the creation time
+//! is (`NtQueryInformationProcess(ProcessBasicInformation)`), not taken from the snapshot, so a pid that a new process
+//! took after the snapshot never pairs that process with the old one's parent; a failed snapshot reads as an
+//! unreadable table, not an empty one; the termination opens the process with `PROCESS_TERMINATE`, ends it only when
+//! that handle's creation time is the record's (a pid recycled since the table was read is left alone), and ends it
+//! on a hangup too.
 
 use std::mem::size_of;
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
 
 use agterm_host::ProcessRecord;
+use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
 use windows_sys::Win32::Foundation::{FILETIME, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows_sys::Win32::System::Threading::{
-    GetProcessTimes, OpenProcess, PROCESS_ACCESS_RIGHTS, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
-    TerminateProcess,
+    GetProcessTimes, OpenProcess, PROCESS_ACCESS_RIGHTS, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_TERMINATE, TerminateProcess,
 };
 
 use super::{ProcessEntry, Signal};
@@ -36,18 +41,29 @@ pub(super) fn read_table() -> Option<Vec<ProcessEntry>> {
     Some(snapshot()?.into_iter().filter_map(entry).collect())
 }
 
-/// Ends `pid`: Windows has no hangup to send, and a console that closes ends what it ran.
-pub(super) fn signal(_signal: Signal, pid: i32) {
-    let Some(process) = u32::try_from(pid).ok().and_then(|pid| open(pid, PROCESS_TERMINATE)) else {
+/// Ends the process of `record`: Windows has no hangup to send, and a console that closes ends what it ran. A
+/// process that now holds the record's pid but was created at another time is a later one, and is left alone; the
+/// handle checked is the handle ended, so the pid cannot change hands in between.
+pub(super) fn signal(_signal: Signal, record: &ProcessRecord) {
+    let Some(process) = u32::try_from(record.pid)
+        .ok()
+        .and_then(|pid| open(pid, PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION))
+    else {
         return;
     };
+    if creation_time(&process) != Some(record.started) {
+        return;
+    }
     // SAFETY: the handle is an open process handle with `PROCESS_TERMINATE`.
     unsafe { TerminateProcess(process.as_raw_handle(), TERMINATED) };
 }
 
+/// The table entry of a snapshotted pid, read through one handle: the process holding the pid now, with its own
+/// creation time and parent; `None` when it is gone or may not be queried.
 fn entry(process: Snapshotted) -> Option<ProcessEntry> {
     let pid = i32::try_from(process.pid).ok()?;
-    let started = creation_time(&open(process.pid, PROCESS_QUERY_LIMITED_INFORMATION)?)?;
+    let handle = open(process.pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+    let started = creation_time(&handle)?;
     Some(ProcessEntry {
         record: ProcessRecord {
             pid,
@@ -55,8 +71,29 @@ fn entry(process: Snapshotted) -> Option<ProcessEntry> {
             group: pid,
             foreground: 0,
         },
-        parent: i32::try_from(process.parent).ok()?,
+        parent: parent(&handle)?,
     })
+}
+
+/// The pid of the process that created `process` (`InheritedFromUniqueProcessId`); `None` when it cannot be read.
+fn parent(process: &OwnedHandle) -> Option<i32> {
+    let mut basic = PROCESS_BASIC_INFORMATION::default();
+    let size = u32::try_from(size_of::<PROCESS_BASIC_INFORMATION>()).ok()?;
+    // SAFETY: the handle is an open process handle with query access, and `basic` a writable
+    // `PROCESS_BASIC_INFORMATION` of exactly `size` bytes.
+    let status = unsafe {
+        NtQueryInformationProcess(
+            process.as_raw_handle(),
+            ProcessBasicInformation,
+            (&raw mut basic).cast(),
+            size,
+            std::ptr::null_mut(),
+        )
+    };
+    if status < 0 {
+        return None;
+    }
+    i32::try_from(basic.InheritedFromUniqueProcessId).ok()
 }
 
 /// Every process of a fresh tool-help snapshot; `None` when no snapshot could be taken.
@@ -124,7 +161,22 @@ mod tests {
             entry.record.group, entry.record.pid,
             "a process stands in for its own group"
         );
+        assert_eq!(
+            u32::try_from(entry.parent).unwrap(),
+            own.parent,
+            "the handle names the parent the snapshot does"
+        );
         assert_eq!(open(0, PROCESS_QUERY_LIMITED_INFORMATION).map(|_| ()), None);
+    }
+
+    fn record_of(child: &std::process::Child) -> ProcessRecord {
+        let pid = i32::try_from(child.id()).unwrap();
+        read_table()
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.record.pid == pid)
+            .unwrap()
+            .record
     }
 
     #[test]
@@ -134,7 +186,28 @@ mod tests {
             .stdout(std::process::Stdio::null())
             .spawn()
             .unwrap();
-        signal(Signal::HangUp, i32::try_from(child.id()).unwrap());
+        signal(Signal::HangUp, &record_of(&child));
+        assert_eq!(child.wait().unwrap().code(), Some(i32::try_from(TERMINATED).unwrap()));
+    }
+
+    #[test]
+    fn a_pid_now_held_by_another_process_is_left_alone() {
+        let mut child = std::process::Command::new("ping.exe")
+            .args(["-n", "600", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let record = record_of(&child);
+        // the record of an earlier process that held this pid
+        signal(
+            Signal::Kill,
+            &ProcessRecord {
+                started: record.started - 1,
+                ..record
+            },
+        );
+        assert_eq!(child.try_wait().unwrap(), None, "still running");
+        signal(Signal::Kill, &record);
         assert_eq!(child.wait().unwrap().code(), Some(i32::try_from(TERMINATED).unwrap()));
     }
 }

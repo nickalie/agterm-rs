@@ -3,14 +3,15 @@
 //! over the host-free policy of [`agterm_core::live::sweep`]).
 //!
 //! - [`read_table`] reads every process this user can see as a [`ProcessEntry`]: Linux's `/proc` stat lines
-//!   ([`crate::procfs`]), macOS's `libproc` BSD info (what upstream's `KERN_PROC_ALL` read carries), Windows' tool-help
-//!   snapshot with each process's creation time. `None` when the table cannot be read: a caller waiting for a job to
+//!   ([`crate::procfs`]), macOS's `sysctl(KERN_PROC_ALL)` (upstream's read), Windows' tool-help snapshot with each
+//!   process's creation time and parent read through one handle. `None` when the table cannot be read: a caller waiting for a job to
 //!   end must never take that for "no job".
 //! - [`foreground_job`] picks a shell's job from a table: on Unix the members of its terminal's foreground process
 //!   group when the shell is not in it ([`group_job`]); on Windows, which has no job control, the shell's live
 //!   descendants ([`descendant_job`], herdr's process snapshot). Both rules are pure and tested on every OS.
-//! - [`signal`] sends a [`Signal`]: `SIGHUP` or `SIGKILL` on Unix; on Windows both terminate the process, since a
-//!   console that goes away ends what it ran as well.
+//! - [`signal`] sends a [`Signal`] to a [`ProcessRecord`]: `SIGHUP` or `SIGKILL` to its pid on Unix; on Windows both
+//!   terminate the process, since a console that goes away ends what it ran as well, and only once the handle opened
+//!   to end it names the process the record was taken of (its creation time).
 //! - [`Sweeper`] puts them together for the session hosts: the job captured before a kill, signalled after it, and
 //!   matched on pid AND start time, so a recycled pid is never signalled.
 //!
@@ -64,9 +65,10 @@ pub fn read_table() -> Option<Vec<ProcessEntry>> {
     sys::read_table()
 }
 
-/// Sends `signal` to `pid`, best effort: a process gone meanwhile, or one this user may not signal, is left alone.
-pub fn signal(signal: Signal, pid: i32) {
-    sys::signal(signal, pid);
+/// Sends `signal` to the process of `record`, best effort: a process gone meanwhile, or one this user may not signal,
+/// is left alone.
+pub fn signal(signal: Signal, record: &ProcessRecord) {
+    sys::signal(signal, record);
 }
 
 /// The foreground job of the terminal `shell` leads, this OS's rule: [`descendant_job`] on Windows, [`group_job`]
@@ -121,8 +123,8 @@ pub fn descendant_job(shell: i32, table: &[ProcessEntry]) -> Vec<ProcessRecord> 
 
 /// Reads the process table; `None` when it cannot be read.
 pub type TableReader = Box<dyn Fn() -> Option<Vec<ProcessEntry>> + Send + Sync>;
-/// Sends a signal to a pid.
-pub type Signaller = Box<dyn Fn(Signal, i32) + Send + Sync>;
+/// Sends a signal to the process of a record.
+pub type Signaller = Box<dyn Fn(Signal, &ProcessRecord) + Send + Sync>;
 
 /// Reads the process table and signals what is left of a job (upstream's `ProcessSweeper`).
 pub struct Sweeper {
@@ -173,7 +175,7 @@ impl Sweeper {
             return;
         };
         for record in survivors(job, &table) {
-            (self.signal)(signal, record.pid);
+            (self.signal)(signal, &record);
         }
     }
 }

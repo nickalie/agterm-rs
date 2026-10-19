@@ -4,9 +4,10 @@
 //!
 //! - Linux ([`linux`]): `/proc/<pid>/cmdline` for an argv, `/proc/<pid>/stat` for the ids and the terminal's
 //!   foreground group ([`crate::procfs`]), a scan of every stat line for a group's members, `/proc/<pid>/cwd`.
-//! - macOS: `sysctl(KERN_PROCARGS2)` for an argv ([`parse_procargs`], upstream's), `libproc`'s BSD info for the ids
-//!   and the terminal's foreground group, `proc_listpids(PROC_PGRP_ONLY)` for a group's members, `getsid` for the
-//!   session, `proc_pidinfo(PROC_PIDVNODEPATHINFO)` for the working directory (upstream's `workingDirectory`).
+//! - macOS: `sysctl(KERN_PROCARGS2)` for an argv ([`parse_procargs`], upstream's), `sysctl(KERN_PROC_PID)`'s
+//!   `kinfo_proc` for the ids and the terminal's foreground group, `sysctl(KERN_PROC_PGRP)` for a group's members
+//!   (upstream's `processGroup`), `getsid` for the session, `proc_pidinfo(PROC_PIDVNODEPATHINFO)` for the working
+//!   directory (upstream's `workingDirectory`).
 //! - Windows: `NtQueryInformationProcess(ProcessCommandLineInformation)` split with `CommandLineToArgvW` for an argv
 //!   (herdr's), a tool-help snapshot for the parent, the process environment block's current directory for the
 //!   working directory (herdr's). Windows has neither process groups nor sessions: a process stands in for its own

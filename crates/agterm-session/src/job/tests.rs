@@ -102,7 +102,7 @@ fn a_sweep_signals_only_the_surviving_job() {
     let (reader, log) = (Arc::clone(&table), Arc::clone(&sent));
     let sweeper = Sweeper::new(
         Box::new(move || Some(reader.lock().unwrap().clone())),
-        Box::new(move |signal, pid| log.lock().unwrap().push((signal, pid))),
+        Box::new(move |signal, record| log.lock().unwrap().push((signal, record.pid))),
     );
     let shells = [("agterm-a".to_owned(), 10), ("agterm-b".to_owned(), 99)];
     let jobs = if cfg!(windows) {
@@ -140,7 +140,7 @@ fn an_unreadable_table_counts_as_running_and_signals_nothing() {
     let log = Arc::clone(&sent);
     let sweeper = Sweeper::new(
         Box::new(|| None),
-        Box::new(move |signal, pid| log.lock().unwrap().push((signal, pid))),
+        Box::new(move |signal, record| log.lock().unwrap().push((signal, record.pid))),
     );
     let job = [record(20, 2, 20, 20)];
     assert!(sweeper.is_running(&job));

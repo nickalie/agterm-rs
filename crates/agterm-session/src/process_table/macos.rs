@@ -1,8 +1,8 @@
 //! The macOS process table, upstream's reads in `Ghostty/ForegroundProcess.swift`: `sysctl(KERN_PROCARGS2)` for an
 //! argv (`procArgs`; refused for another user's process, such as setuid `login` or `sudo`), the members of a process
-//! group (`processGroup`), `proc_pidinfo(PROC_PIDVNODEPATHINFO)` for the working directory (`workingDirectory`). The
-//! ids come from `libproc`'s BSD info ([`crate::job::macos`]), as upstream's `kinfo_proc` reads carry them, and the
-//! session from `getsid`.
+//! group (`sysctl(KERN_PROC_PGRP)`, `processGroup`), `proc_pidinfo(PROC_PIDVNODEPATHINFO)` for the working directory
+//! (`workingDirectory`). The ids come from the same `kinfo_proc` ([`crate::job::macos::kinfo`]), which `sysctl`
+//! answers for a process of any user (a root `sudo` leader is a member of its group), and the session from `getsid`.
 
 use std::ffi::c_void;
 use std::mem::size_of;
@@ -10,7 +10,7 @@ use std::mem::size_of;
 use agterm_host::{ProcessStat, ProcessTable};
 
 use super::parse_procargs;
-use crate::job::macos::{PROC_PGRP_ONLY, bsdinfo, list_pids};
+use crate::job::macos::{KinfoProc, kinfo};
 
 /// The live macOS process table.
 #[derive(Debug, Clone, Copy, Default)]
@@ -33,24 +33,22 @@ impl ProcessTable for ProcTable {
     }
 
     fn group(&self, pgrp: i32) -> Vec<ProcessStat> {
-        let Some(pids) = u32::try_from(pgrp)
-            .ok()
-            .and_then(|group| list_pids(PROC_PGRP_ONLY, group))
-        else {
+        if pgrp <= 0 {
             return Vec::new();
-        };
-        let mut members: Vec<ProcessStat> = pids
-            .into_iter()
-            .filter_map(stat_of)
+        }
+        let mut members: Vec<ProcessStat> = kinfo(&[libc::KERN_PROC_PGRP, pgrp])
+            .unwrap_or_default()
+            .iter()
+            .filter_map(stat_from)
             .filter(|stat| stat.pgrp == pgrp)
             .collect();
         members.sort_unstable_by_key(|stat| stat.pid);
         members
     }
 
-    /// The BSD info's `e_tpgid`; `None` for a process without a terminal.
+    /// The `kinfo_proc`'s `e_tpgid`; `None` for a process without a terminal.
     fn terminal_foreground(&self, pid: i32) -> Option<i32> {
-        i32::try_from(bsdinfo(pid)?.e_tpgid).ok().filter(|group| *group > 0)
+        Some(process(pid)?.terminal_foreground()).filter(|group| *group > 0)
     }
 
     fn working_directory(&self, pid: i32) -> Option<String> {
@@ -76,18 +74,32 @@ impl ProcessTable for ProcTable {
     }
 }
 
+/// The `kinfo_proc` of `pid`; `None` when it is gone or cannot be read.
+fn process(pid: i32) -> Option<KinfoProc> {
+    if pid <= 0 {
+        return None;
+    }
+    kinfo(&[libc::KERN_PROC_PID, pid])?
+        .into_iter()
+        .find(|process| process.pid() == pid)
+}
+
 /// The ids of `pid`; `None` when it is gone or cannot be read.
 fn stat_of(pid: i32) -> Option<ProcessStat> {
-    let info = bsdinfo(pid)?;
+    stat_from(&process(pid)?)
+}
+
+/// The ids of `process`, with its session; `None` when it is gone by the time `getsid` asks.
+fn stat_from(process: &KinfoProc) -> Option<ProcessStat> {
     // SAFETY: `getsid` has no memory preconditions.
-    let session = unsafe { libc::getsid(pid) };
+    let session = unsafe { libc::getsid(process.pid()) };
     if session < 0 {
         return None;
     }
     Some(ProcessStat {
-        pid,
-        ppid: i32::try_from(info.pbi_ppid).ok()?,
-        pgrp: i32::try_from(info.pbi_pgid).ok()?,
+        pid: process.pid(),
+        ppid: process.parent(),
+        pgrp: process.group(),
         session,
     })
 }
@@ -155,5 +167,16 @@ mod tests {
         assert_eq!(read, Some(cwd));
         assert_eq!(table.stat(-1), None);
         assert_eq!(table.argv(-1), None);
+        assert_eq!(table.group(-1), []);
+    }
+
+    #[test]
+    fn another_users_group_leader_is_a_member() {
+        // launchd runs as root and leads its own group: `PROC_PIDTBSDINFO` refuses it to a non-root caller,
+        // `KERN_PROC_PGRP` and `KERN_PROC_PID` do not
+        let table = ProcTable::new();
+        let launchd = table.stat(1).unwrap();
+        assert_eq!((launchd.pid, launchd.ppid), (1, 0), "{launchd:?}");
+        assert!(table.group(launchd.pgrp).contains(&launchd), "{launchd:?}");
     }
 }
