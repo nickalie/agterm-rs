@@ -240,7 +240,7 @@ mod tests {
         let name = pipe_name(Path::new(r"C:\Users\Nick\AppData\Local\ngterm\live\0123456789abcdef"));
         assert_eq!(
             name,
-            pipe_name(Path::new("c:/users/nick/appdata/local/agterm/live/0123456789ABCDEF/"))
+            pipe_name(Path::new("c:/users/nick/appdata/local/ngterm/live/0123456789ABCDEF/"))
         );
         assert!(name.starts_with(PIPE_PREFIX));
         assert_eq!(name.len(), PIPE_PREFIX.len() + 16);
