@@ -1199,7 +1199,15 @@ mod tests {
             !set(&shell).contains_key("ENV"),
             "no POSIX shell integration on Windows"
         );
-        // names ignore case: the launch's `PATH` wins over the config's `Path`, a removed `path` takes `PATH` along
+    }
+
+    /// Windows' environment and home through `prepare`: names ignore case, so the launch's `PATH` wins over the
+    /// config's `Path` and a removed `path` takes `PATH` along; `home` without `HOME` is the profile directory; no
+    /// system resources directory.
+    #[cfg(windows)]
+    #[test]
+    fn windows_variables_ignore_case_and_the_home_is_the_profile_directory() {
+        let env = MapEnv::new().with("PATH", r"C:\Windows");
         let layered = Host {
             env: vec![("Path".to_owned(), r"C:\host-tools".to_owned())],
             ..host(None)
@@ -1219,7 +1227,7 @@ mod tests {
         assert!(!set(&prepared).keys().any(|key| key.eq_ignore_ascii_case("path")));
         assert!(removed(&prepared).contains(&"path".to_owned()));
         // `working-directory = home` without `HOME`: the user's own home, which is the profile directory
-        let profile = ProcessEnv.passwd_home().expect("the profile directory");
+        let profile = Env::passwd_home(&ProcessEnv).expect("the profile directory");
         if let Some(user_profile) = std::env::var_os("USERPROFILE") {
             assert_eq!(profile, PathBuf::from(user_profile));
         }
