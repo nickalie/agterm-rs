@@ -1,0 +1,180 @@
+agterm's session server hands its live ConPTY sessions to a newer server without ending them (the update handoff):
+the new process receives, by DuplicateHandle, the input pipe's write end, the output pipe's read end and the three
+handles behind the HPCON (kernelbase's { hSignal, hPtyReference, hConPtyProcess }), and resizes the console through
+an HPCON rebuilt from them (docs/spikes/20261018-session-server.md, Windows: ConPTY handoff). portable-pty exposes
+none of them. `ConPtyMasterPty` gains:
+- `take_pipes`, the two pipe ends as owned handles in place of `take_writer` and `try_clone_reader`, so the caller
+  holds what it hands over;
+- `console_handles` (unsafe: the HPCON layout is undocumented, and the caller gates on the ConPTY implementation it
+  runs on before reading it);
+- `from_handoff`, a master over handed-over handles. Its rebuilt HPCON is owned here and never reaches
+  ClosePseudoConsole, whose release is specific to the HPCON kernelbase allocated: dropping it closes the three
+  handles, which ends the console host once no other process holds them.
+agterm's own patch; remove when portable-pty or ConPTY offers a documented way to move a session between processes.
+
+diff -ruN a/src/win/conpty.rs b/src/win/conpty.rs
+--- a/src/win/conpty.rs
++++ b/src/win/conpty.rs
+@@ -3,6 +3,7 @@
+ use crate::{Child, MasterPty, PtyPair, PtySize, PtySystem, SlavePty};
+ use anyhow::Error;
+ use filedescriptor::{FileDescriptor, Pipe};
++use std::os::windows::io::{FromRawHandle, IntoRawHandle, OwnedHandle, RawHandle};
+ use std::sync::{Arc, Mutex};
+ use winapi::um::wincon::COORD;
+ 
+@@ -90,6 +91,77 @@
+         let child = inner.con.spawn_command_in_job(cmd, Some(job as _))?;
+         Ok(Box::new(child))
+     }
++
++    /// The write end of the console's input pipe and the read end of its
++    /// output pipe, in place of `take_writer` and `try_clone_reader`: the
++    /// caller owns them, and can hand them to another process. Fails once the
++    /// writer was taken.
++    pub fn take_pipes(&self) -> anyhow::Result<(OwnedHandle, OwnedHandle)> {
++        let mut inner = self.inner.lock().unwrap();
++        let output = inner.readable.try_clone()?;
++        let input = inner
++            .writable
++            .take()
++            .ok_or_else(|| anyhow::anyhow!("writer already taken"))?;
++        // SAFETY: both are open handles each FileDescriptor gives up here.
++        unsafe {
++            Ok((
++                OwnedHandle::from_raw_handle(input.into_raw_handle()),
++                OwnedHandle::from_raw_handle(output.into_raw_handle()),
++            ))
++        }
++    }
++
++    /// The signal, reference and console host process handles behind the
++    /// pseudoconsole, borrowed (duplicate them to hand them over).
++    ///
++    /// # Safety
++    ///
++    /// The HPCON layout is undocumented: the caller has checked that the
++    /// ConPTY implementation this process runs on keeps these three handles
++    /// at the start of the struct an HPCON points at.
++    pub unsafe fn console_handles(&self) -> [RawHandle; 3] {
++        let inner = self.inner.lock().unwrap();
++        inner.con.console_handles().map(|handle| handle as RawHandle)
++    }
++
++    /// A master over a session another process handed over: its pipe ends
++    /// and console handles (as [`ConPtyMasterPty::console_handles`] orders
++    /// them), all owned by the master from here on. The console's size is
++    /// `size` as the giver last set it.
++    pub fn from_handoff(handoff: ConPtyHandoff, size: PtySize) -> Self {
++        let ConPtyHandoff {
++            input,
++            output,
++            console,
++        } = handoff;
++        // SAFETY: each handle is open and owned, given up to the descriptor.
++        let (readable, writable) = unsafe {
++            (
++                FileDescriptor::from_raw_handle(output.into_raw_handle()),
++                FileDescriptor::from_raw_handle(input.into_raw_handle()),
++            )
++        };
++        Self {
++            inner: Arc::new(Mutex::new(Inner {
++                con: PsuedoCon::from_console_handles(console),
++                readable,
++                writable: Some(writable),
++                size,
++            })),
++        }
++    }
++}
++
++/// The handles a ConPTY session is made of, as one process hands them to
++/// another ([`ConPtyMasterPty::from_handoff`]).
++pub struct ConPtyHandoff {
++    /// The write end of the console's input pipe.
++    pub input: OwnedHandle,
++    /// The read end of the console's output pipe.
++    pub output: OwnedHandle,
++    /// The signal, reference and console host process handles.
++    pub console: [OwnedHandle; 3],
+ }
+ 
+ pub struct ConPtySlavePty {
+diff -ruN a/src/win/psuedocon.rs b/src/win/psuedocon.rs
+--- a/src/win/psuedocon.rs
++++ b/src/win/psuedocon.rs
+@@ -96,8 +96,15 @@
+     static ref CONPTY: ConPtyFuncs = load_conpty();
+ }
+ 
++/// What kernelbase's HPCON points at: { hSignal, hPtyReference,
++/// hConPtyProcess }. Undocumented; read only after the caller's gate.
++type ConsoleHandles = [HANDLE; 3];
++
+ pub struct PsuedoCon {
+     con: HPCON,
++    /// `con` is a `Box<ConsoleHandles>` rebuilt from handed-over handles,
++    /// owned here, not an HPCON CreatePseudoConsole returned.
++    imported: bool,
+ }
+ 
+ unsafe impl Send for PsuedoCon {}
+@@ -105,11 +112,44 @@
+ 
+ impl Drop for PsuedoCon {
+     fn drop(&mut self) {
+-        unsafe { (CONPTY.ClosePseudoConsole)(self.con) };
++        if self.imported {
++            // never ClosePseudoConsole: it frees the HPCON as kernelbase
++            // allocated it, and this one was not
++            let handles = unsafe { Box::from_raw(self.con as *mut ConsoleHandles) };
++            for handle in handles.iter() {
++                unsafe { CloseHandle(*handle) };
++            }
++        } else {
++            unsafe { (CONPTY.ClosePseudoConsole)(self.con) };
++        }
+     }
+ }
+ 
+ impl PsuedoCon {
++    /// A console over handles another process handed over, in the order
++    /// [`PsuedoCon::console_handles`] returns them; it owns them.
++    pub fn from_console_handles(handles: [std::os::windows::io::OwnedHandle; 3]) -> Self {
++        use std::os::windows::io::IntoRawHandle;
++        let handles: Box<ConsoleHandles> =
++            Box::new(handles.map(|handle| handle.into_raw_handle() as HANDLE));
++        Self {
++            con: Box::into_raw(handles) as HPCON,
++            imported: true,
++        }
++    }
++
++    /// The signal, reference and console host process handles behind this
++    /// console, borrowed.
++    ///
++    /// # Safety
++    ///
++    /// The HPCON layout is undocumented: the caller has checked that the
++    /// ConPTY implementation this process runs on keeps those three handles
++    /// at the start of the struct an HPCON points at.
++    pub unsafe fn console_handles(&self) -> [HANDLE; 3] {
++        *(self.con as *const ConsoleHandles)
++    }
++
+     pub fn new(size: COORD, input: FileDescriptor, output: FileDescriptor) -> Result<Self, Error> {
+         let mut con: HPCON = INVALID_HANDLE_VALUE;
+         let result = unsafe {
+@@ -128,7 +168,10 @@
+             "failed to create psuedo console: HRESULT {}",
+             result
+         );
+-        Ok(Self { con })
++        Ok(Self {
++            con,
++            imported: false,
++        })
+     }
+ 
+     pub fn resize(&self, size: COORD) -> Result<(), Error> {

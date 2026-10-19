@@ -1,0 +1,113 @@
+agterm-pty runs each Windows child tree in a job object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, so ending a pane
+ends its shell's descendants too. Assigning the job after CreateProcessW leaves a window in which the child can start
+processes outside it, and portable-pty closes the main thread handle a suspended start would need. The child is put
+into the job as it is created instead, through PROC_THREAD_ATTRIBUTE_JOB_LIST beside the pseudoconsole attribute
+(Windows 10 and newer, as ConPTY itself): `ConPtyMasterPty::spawn_command_in_job`, since the slave behind
+`PtyPair::slave` cannot be downcast. agterm's own patch; remove when portable-pty takes a job for the spawn.
+
+diff -ruN a/src/win/conpty.rs b/src/win/conpty.rs
+--- a/src/win/conpty.rs
++++ b/src/win/conpty.rs
+@@ -77,6 +77,21 @@
+     inner: Arc<Mutex<Inner>>,
+ }
+ 
++impl ConPtyMasterPty {
++    /// Spawn `cmd` attached to this pseudoconsole, assigned to the job object
++    /// `job` as it is created, so neither it nor any process it starts runs
++    /// outside the job. `job` must stay open until this returns.
++    pub fn spawn_command_in_job(
++        &self,
++        cmd: CommandBuilder,
++        job: std::os::windows::io::RawHandle,
++    ) -> anyhow::Result<Box<dyn Child + Send + Sync>> {
++        let inner = self.inner.lock().unwrap();
++        let child = inner.con.spawn_command_in_job(cmd, Some(job as _))?;
++        Ok(Box::new(child))
++    }
++}
++
+ pub struct ConPtySlavePty {
+     inner: Arc<Mutex<Inner>>,
+ }
+diff -ruN a/src/win/procthreadattr.rs b/src/win/procthreadattr.rs
+--- a/src/win/procthreadattr.rs
++++ b/src/win/procthreadattr.rs
+@@ -4,8 +4,12 @@
+ use std::{mem, ptr};
+ use winapi::shared::minwindef::DWORD;
+ use winapi::um::processthreadsapi::*;
++use winapi::um::winnt::HANDLE;
+ 
+ const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;
++// ProcThreadAttributeValue(ProcThreadAttributeJobList = 13, input): the jobs
++// the new process is assigned to as it is created (Windows 10 and newer).
++const PROC_THREAD_ATTRIBUTE_JOB_LIST: usize = 0x0002000D;
+ 
+ pub struct ProcThreadAttributeList {
+     data: Vec<u8>,
+@@ -62,6 +66,28 @@
+             IoError::last_os_error()
+         );
+         Ok(())
++    }
++
++    /// Assign the process to `jobs` as it is created. The list keeps a pointer
++    /// to `jobs`, which must outlive the CreateProcessW call that uses it.
++    pub fn set_job_list(&mut self, jobs: &[HANDLE]) -> Result<(), Error> {
++        let res = unsafe {
++            UpdateProcThreadAttribute(
++                self.as_mut_ptr(),
++                0,
++                PROC_THREAD_ATTRIBUTE_JOB_LIST,
++                jobs.as_ptr() as *mut _,
++                mem::size_of_val(jobs),
++                ptr::null_mut(),
++                ptr::null_mut(),
++            )
++        };
++        ensure!(
++            res != 0,
++            "UpdateProcThreadAttribute(job list) failed: {}",
++            IoError::last_os_error()
++        );
++        Ok(())
+     }
+ }
+ 
+diff -ruN a/src/win/psuedocon.rs b/src/win/psuedocon.rs
+--- a/src/win/psuedocon.rs
++++ b/src/win/psuedocon.rs
+@@ -144,6 +144,16 @@
+     }
+ 
+     pub fn spawn_command(&self, cmd: CommandBuilder) -> anyhow::Result<WinChild> {
++        self.spawn_command_in_job(cmd, None)
++    }
++
++    /// Spawn `cmd` attached to this console and, with `job`, inside that job
++    /// object from its first instruction on.
++    pub fn spawn_command_in_job(
++        &self,
++        cmd: CommandBuilder,
++        job: Option<HANDLE>,
++    ) -> anyhow::Result<WinChild> {
+         let mut si: STARTUPINFOEXW = unsafe { mem::zeroed() };
+         si.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
+         // Explicitly set the stdio handles as invalid handles otherwise
+@@ -157,8 +167,14 @@
+         si.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
+         si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
+ 
+-        let mut attrs = ProcThreadAttributeList::with_capacity(1)?;
++        // UpdateProcThreadAttribute keeps a pointer to the job list: it lives
++        // until CreateProcessW below has returned.
++        let jobs: Vec<HANDLE> = job.into_iter().collect();
++        let mut attrs = ProcThreadAttributeList::with_capacity(1 + jobs.len() as DWORD)?;
+         attrs.set_pty(self.con)?;
++        if !jobs.is_empty() {
++            attrs.set_job_list(&jobs)?;
++        }
+         si.lpAttributeList = attrs.as_mut_ptr();
+ 
+         let mut pi: PROCESS_INFORMATION = unsafe { mem::zeroed() };

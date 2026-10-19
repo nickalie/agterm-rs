@@ -165,7 +165,10 @@ Some GPUI dependencies are patched in the tree rather than built: `vendor/calloo
 the coverage masks the terminal's sprites paint with, the native key behind each key event, the HTML clipboard offer,
 xdg-output geometry and X11 window state) are verified crates.io sources plus `build/patches/<crate>`, recreated by
 `scripts/vendor-calloop.sh` and `scripts/vendor-gpui.sh` (`--check` compares, as CI does; `vendor-gpui.sh --diff`
-turns edits under `vendor/` back into the patch files).
+turns edits under `vendor/` back into the patch files). `vendor/portable-pty` (the PTY and child under `agterm-pty`:
+ConPTY from kernel32 only, herdr's fixes for malformed Windows environments and directories on `PATH`, the child
+created in its job, a ConPTY session's handles exported and imported for the session server's update handoff) is
+the same, through `scripts/vendor-portable-pty.sh` (`--check`, `--diff`).
 
 ### WPE WebKit
 
@@ -245,6 +248,7 @@ cargo metadata --locked --format-version 1 >/dev/null   # Cargo.lock is current
 scripts/check-tracing-features.sh           # no dependency turns on tracing's `log` fallback
 scripts/vendor-calloop.sh --check           # vendor/ equals its crates.io sources plus build/patches/
 scripts/vendor-gpui.sh --check
+scripts/vendor-portable-pty.sh --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo clippy -p agterm-gpui --no-default-features --all-targets -- -D warnings   # the app without HTML overlays
 scripts/lint-report.sh                      # complexity #[expect]s with their reasons; refuses inner #![allow]
@@ -285,7 +289,7 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   and zsh), each with `--must-pass live-any-shell`, the zsh one with `--must-pass live-sessions` too; the bash one runs
   the app's process tests with the overlays on first.
 - `cross-platform.yml`: the crates that build on all three OSes (`agterm-session`, `agterm-proto`, `agterm-host`,
-  `agterm-core`, `agterm-ghostty-vt-sys` and `agterm-ghostty-vt` so far; `agterm-server` and `agterm-ctl` wait for
+  `agterm-core`, `agterm-ghostty-vt-sys`, `agterm-ghostty-vt` and `agterm-pty` so far; `agterm-server` and `agterm-ctl` wait for
   the control server's Windows form), on Ubuntu, macOS and Windows runners: the libghostty-vt prefix with each
   runner's pinned Zig (cached with Zig's global cache), format, clippy and `cargo test` (`crates`, a matrix), then
   the sys crate cross-built for the Zig targets no runner runs natively (aarch64 Linux and x86_64 macOS on Ubuntu,
@@ -298,8 +302,8 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 
 - `crates/`: the Cargo workspace (crate map in [CLAUDE.md](CLAUDE.md)).
 - `conformance/`: the suite, its catalog of upstream's commands, the ratchet list `rust-passing.txt`.
-- `build/`: `pins.env`, the ghostty-vt, zmx, gir, calloop and GPUI patches, agterm's own themes.
-- `vendor/`: the patched GPUI and calloop crates, recreated by the vendor scripts (an edit there goes back into its
+- `build/`: `pins.env`, the ghostty-vt, zmx, gir, calloop, GPUI and portable-pty patches, agterm's own themes.
+- `vendor/`: the patched GPUI, calloop and portable-pty crates, recreated by the vendor scripts (an edit there goes back into its
   patch).
 - `scripts/`: native builds, staging, `run-gpui-dev.sh`, the lint report, the AppArmor profile installer.
 - `packaging/linux/apparmor/`: agterm's AppArmor profile (WebKit's sandbox on Ubuntu).

@@ -35,6 +35,7 @@ env:
   # `-p` per crate; word-split by bash, which every step runs in (Git Bash on Windows)
   PACKAGES: >-
     -p agterm-session -p agterm-proto -p agterm-host -p agterm-core -p agterm-ghostty-vt-sys -p agterm-ghostty-vt
+    -p agterm-pty
 
 defaults:
   run:
@@ -76,6 +77,15 @@ jobs:
         run: cargo clippy --locked $PACKAGES --all-targets --all-features -- -D warnings
       - name: test
         run: cargo test --locked $PACKAGES --all-features
+      # vendor/portable-pty is a [patch] provider, not a member: its own tests of the Windows patches (malformed
+      # environments, directories on PATH) run in a copy made a workspace of its own, as herdr verifies them
+      - name: vendored portable-pty's Windows patch tests
+        if: runner.os == 'Windows'
+        run: |
+          copy="$(cygpath -u "$RUNNER_TEMP")/portable-pty"
+          cp -r vendor/portable-pty "$copy"
+          printf '\n[workspace]\n' >> "$copy/Cargo.toml"
+          cargo test --manifest-path "$copy/Cargo.toml" --lib windows_
       - name: cross build of libghostty-vt for ${{ matrix.cross }}
         if: matrix.cross != ''
         run: |

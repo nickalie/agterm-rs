@@ -696,17 +696,28 @@ Order after Task 7, as two lanes that meet:
 - Modify: `Cargo.toml`, `Cargo.lock`, `.github/workflows/cross-platform.yml` (`PACKAGES`), README's vendored-source
   checks
 
-- [ ] vendor `portable-pty` the way `vendor-gpui.sh` vendors gpui (`vendor/` + `build/patches/portable-pty/` + a
+- [x] vendor `portable-pty` the way `vendor-gpui.sh` vendors gpui (`vendor/` + `build/patches/portable-pty/` + a
       `--check` in the gates): herdr's patches 0003 and 0004, 0001 reduced to kernel32's ConPTY only, and agterm's
       patch exporting and importing a ConPTY master's handles (for Task 21)
-- [ ] port herdr's PTY actor: poll + wake pipe on Unix (`pipe` + `fcntl` where `pipe2` is missing, as on macOS),
+      - renumbered 0001-0003 (herdr's 0001, 0003, 0004), plus agterm's 0004 (the child created in its job through
+        `PROC_THREAD_ATTRIBUTE_JOB_LIST`, which the job bullet below needs: assigning after `CreateProcessW` races
+        the child's own spawns) and 0005 (`take_pipes`, unsafe `console_handles`, `from_handoff` with a rebuilt HPCON
+        that never reaches `ClosePseudoConsole`); the Windows job runs the patches' own tests
+- [x] port herdr's PTY actor: poll + wake pipe on Unix (`pipe` + `fcntl` where `pipe2` is missing, as on macOS),
       reader and writer threads on Windows, quiesce/release for the handoff, close-on-exec master duplication; std
       channels
-- [ ] spawn with argv, environment and cwd; resize; exit status; on Windows each child tree in a `KILL_ON_JOB_CLOSE`
+      - `src/unix/{mod,fd,actor}.rs` and `src/windows/{mod,actor}.rs` in place of single files; input and replies in
+        one byte-bounded outbox (`agterm-term`'s backpressure rule) in place of herdr's command channel; a quiesced
+        actor neither reads nor writes; resizes on the caller's thread (ordered before later input); on Windows a
+        quiesce cancels the blocked read (`CancelSynchronousIo`), a read completed meanwhile is held and delivered on
+        rollback or returned by the release (`Released::pending_output`), the release leaves the console open;
+        `child_exited` closes the pseudoconsole, which never ends by itself; release needs a quiesced actor
+- [x] spawn with argv, environment and cwd; resize; exit status; on Windows each child tree in a `KILL_ON_JOB_CLOSE`
       job, on Unix a process group
-- [ ] tests on all three OSes: echo round trip, resize reaching the child, kill ending the child and its tree, exit
+      - Unix waits with `waitid(WNOWAIT)` before reaping, so `Killer` never signals a group whose id was released
+- [x] tests on all three OSes: echo round trip, resize reaching the child, kill ending the child and its tree, exit
       codes, an environment and cwd as given, quiesce and release
-- [ ] run gates
+- [x] run gates
 
 ### Task 14: `agterm-term` on macOS and Windows
 

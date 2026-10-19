@@ -29,6 +29,7 @@ below, not a later phase. Build, run and test commands are in [README.md](README
 | `agterm-ctl` → `agtermctl` | clap CLI ported from upstream's `agtermctlKit`, socket resolution, output formatting | any |
 | `agterm-ghostty-vt-sys` | checked-in bindgen output over libghostty-vt's official C API (`scripts/gen-ghostty-vt-bindings.sh`), links the vendored static library; not under the workspace lints | Linux |
 | `agterm-ghostty-vt` | safe wrapper over the sys crate: terminal, render state, effects, key and mouse encoders, selection and its gesture, formatter with its extras, search, Kitty graphics, stream continuation, snapshot codec, clipboard-read scan | Linux |
+| `agterm-pty` | the PTY layer of plain and live panes: a child on a PTY (openpty, ConPTY; its process group or kill-on-close job), herdr's PTY actor (poll and wake pipe on Unix, reader and writer threads on Windows) with the handoff's quiesce, duplicate, rollback and release, over the vendored portable-pty | any |
 | `agterm-term` | the toolkit-neutral pane core: a libghostty-vt terminal fed from a PTY by an IO thread per pane, input, selection, search, read-back, launch and terminal identity, frames and events in its own types | Linux |
 | `agterm-session` | the live-session server on herdr's architecture: wire, endpoint, lifecycle and detached spawn per OS; the live-launch inputs (session host executable, build id, login shell, resources, namespace), the `/proc` stat line | any |
 | `agterm-zmx` | the `SessionHost` over the patched zmx: client, inventory, reaps, over `agterm-session`'s launch inputs | Linux, macOS |
@@ -96,7 +97,7 @@ of its own, with what it regenerates (`build/pins.env` names it).
 - Thresholds in `clippy.toml` are lowered, never raised. A `rust-toolchain.toml` bump is a change of its own.
 - Generated bindings change only through their generator scripts. The patched third-party crates under `vendor/` are
   their sources plus `build/patches/`: an edit there goes back into its patch (`scripts/vendor-gpui.sh`,
-  `scripts/vendor-calloop.sh`), and each script's check holds.
+  `scripts/vendor-calloop.sh`, `scripts/vendor-portable-pty.sh`), and each script's check holds.
 
 ## Never touch the user's running agterm
 
