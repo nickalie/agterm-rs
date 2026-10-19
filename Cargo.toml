@@ -33,7 +33,7 @@ bitflags = "2"
 clap = { version = "4.6", features = ["derive"] }
 libc = "0.2"
 # Windows APIs, features per crate: agterm-session's endpoint (the named pipe's security descriptor and its
-# server-process check).
+# server-process check), its job and process tables.
 windows-sys = "0.61"
 # The UTF-16 strings interprocess takes a named pipe's security descriptor in (agterm-session, Windows).
 widestring = "1.2"

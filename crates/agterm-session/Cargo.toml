@@ -1,6 +1,6 @@
 [package]
 name = "agterm-session"
-description = "agterm's live-session server, on herdr's architecture: its wire, its endpoint, its lifecycle, its panes and the live-launch inputs"
+description = "agterm's live-session server, on herdr's architecture: its wire, its endpoint, its lifecycle, its panes, the live-launch inputs, the foreground job and the process table"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,7 +11,7 @@ license = "MIT AND Apache-2.0"
 [dependencies]
 # The live-launch inputs: the wrap configuration, the launch probe and the paths are the core's policy.
 agterm-core.workspace = true
-# The live panes' terminal state and their PTYs.
+# The live panes' terminal state and their PTYs (the job tests' shells too, tests/job.rs).
 agterm-ghostty-vt.workspace = true
 agterm-host.workspace = true
 agterm-pty.workspace = true
@@ -27,22 +27,32 @@ uuid.workspace = true
 # The effective user, whom the namespace directory must belong to; the server's session.
 rustix = { workspace = true, features = ["process"] }
 # The server's spawn: `close_range` in the Linux child, `posix_spawn` and the responsibility SPI on macOS, the reap;
-# the password database's login shell.
+# the password database's login shell; the job's signals; macOS's process table (`libproc`, `sysctl`, `getsid`).
 libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # The pipe's SDDL, in the UTF-16 string type interprocess takes.
 widestring.workspace = true
 windows-sys = { workspace = true, features = [
+    # the process table's command lines, environment blocks and WoW64 check (`NtQueryInformationProcess`)
+    "Wdk_System_Threading",
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_Console",
+    # the process table's reads of another process's environment block (`ReadProcessMemory`)
+    "Win32_System_Diagnostics_Debug",
+    # the job table's process snapshot
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_IO",
     "Win32_System_JobObjects",
+    # `PROCESS_BASIC_INFORMATION`, and the 32-bit strings of a WoW64 process's environment block
+    "Win32_System_Kernel",
     "Win32_System_Pipes",
     # the host's native machine (`IsWow64Process2`), which the login shell's image must run on
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    # the process table's argv split (`CommandLineToArgvW`)
+    "Win32_UI_Shell",
 ] }
 # The server's start from inside a job that refuses breakaway.
 wmi.workspace = true

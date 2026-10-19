@@ -13,7 +13,10 @@
 //!   ([`server::clients`]);
 //! - [`launch`]: what a live launch reads of this host (the session host executable, its build id, the login shell,
 //!   the Ghostty resources, the namespace's state directory) and the wrap configuration of a pane over it;
-//! - [`procfs`]: the Linux process table's stat line, which the foreground-job reads and reaps match processes by.
+//! - [`procfs`]: the Linux process table's files (`stat`, `cmdline`), which the job table and the process table read;
+//! - [`job`]: a terminal's foreground job on every OS and the sweeper that hangs up what a killed session's shell
+//!   leaves running;
+//! - [`process_table`]: the process table a pane's foreground is read through, on every OS.
 //!
 //! # Provenance
 //!
@@ -23,7 +26,9 @@
 //! it was modified; herdr's license is in the repository's `NOTICE`. Hence the crate's `MIT AND Apache-2.0`.
 
 pub mod endpoint;
+pub mod job;
 pub mod launch;
+pub mod process_table;
 pub mod procfs;
 pub mod protocol;
 pub mod server;

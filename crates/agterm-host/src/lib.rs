@@ -171,11 +171,12 @@ pub enum KillOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProcessRecord {
     pub pid: i32,
-    /// When the process started, in the platform's own clock (Linux: clock ticks since boot).
+    /// When the process started, in the platform's own clock (Linux: clock ticks since boot; macOS: microseconds since
+    /// the epoch; Windows: its creation `FILETIME`).
     pub started: u64,
-    /// Its process group.
+    /// Its process group; on Windows, which has none, the process itself.
     pub group: i32,
-    /// The foreground process group of its controlling terminal; zero or negative without one.
+    /// The foreground process group of its controlling terminal; zero or negative without one (always on Windows).
     pub foreground: i32,
 }
 
@@ -298,9 +299,10 @@ pub trait ProcessLauncher: Send + Sync {
 pub struct ProcessStat {
     pub pid: i32,
     pub ppid: i32,
-    /// The process group id.
+    /// The process group id; on Windows, which has no process groups, the process's own pid.
     pub pgrp: i32,
-    /// The session id: the pid of the session leader (a terminal's spawned child).
+    /// The session id: the pid of the session leader (a terminal's spawned child); zero on Windows, which has no
+    /// such sessions.
     pub session: i32,
 }
 
