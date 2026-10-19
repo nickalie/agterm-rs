@@ -6,6 +6,9 @@
 //!   session and process group of its own; Windows' pseudoconsole (`ConPTY`), where the child and every process it
 //!   starts run in a job object that kills them all when it closes. It returns the PTY's [`Master`] and the
 //!   [`Child`].
+//! - [`Child::killer`]'s [`Killer`] ends the child's tree: on Windows by terminating the job, at any time; on Unix
+//!   by signalling the process group, which is never signalled once the child is reaped (its id may be reused by
+//!   then), so a caller kills the tree before it waits for the child, or the group's survivors live on.
 //! - [`Actor::spawn`] takes the master and runs the PTY's IO: every read goes to a callback, whose replies (the
 //!   terminal's answers to queries) are written back in order with the input [`ActorHandle::write_input`] queues. On
 //!   Unix one thread polls the master and a wake pipe; on Windows a reader thread and a writer thread work the

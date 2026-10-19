@@ -195,6 +195,31 @@ fn the_exit_code_is_the_childs() -> TestResult {
     Ok(())
 }
 
+/// Once `try_wait` has the status, `try_wait` and `wait` keep returning it (on Unix without waiting by the released
+/// id again).
+#[test]
+fn the_status_stays_readable_after_the_child_is_reaped() -> TestResult {
+    let program = if cfg!(windows) {
+        command("cmd.exe").args(["/d", "/c", "exit 5"])
+    } else {
+        command("/bin/sh").args(["-c", "exit 5"])
+    };
+    let mut session = start(&program, Size::cells(24, 80))?;
+    let deadline = Instant::now() + PATIENCE;
+    let status = loop {
+        if let Some(status) = session.child.try_wait()? {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "the child never exited");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(status.exit_code(), 5);
+    assert_eq!(session.child.try_wait()?.map(|status| status.exit_code()), Some(5));
+    assert_eq!(session.child.wait()?.exit_code(), 5);
+    assert_eq!(session.finish()?.exit_code(), 5);
+    Ok(())
+}
+
 #[cfg(unix)]
 #[test]
 fn a_signal_ending_the_child_is_reported() -> TestResult {

@@ -269,20 +269,25 @@ impl ActorHandle {
     /// The actor stopped or was released.
     pub fn rollback_handoff(&self) -> io::Result<()> {
         let inner = self.inner();
-        let mut state = inner.reader();
-        if state.exited || matches!(state.mode, Mode::Released | Mode::Discarding) {
-            return Err(closed());
+        loop {
+            let mut state = inner.reader();
+            if state.exited || matches!(state.mode, Mode::Released | Mode::Discarding) {
+                return Err(closed());
+            }
+            if state.held.is_empty() {
+                // running again in the step that found nothing held, so no read still in progress (the reader may not
+                // have parked) can complete into `held` after it was taken and stay there
+                if state.mode == Mode::Quiesced {
+                    state.mode = Mode::Running;
+                }
+                inner.reader_changed.notify_all();
+                break;
+            }
+            let held = std::mem::take(&mut state.held);
+            drop(state);
+            // still quiesced while the held read goes first: a read completing meanwhile is held, taken next round
+            self.shared().deliver(&held);
         }
-        let held = std::mem::take(&mut state.held);
-        drop(state);
-        // the reader stays parked (still quiesced) while the held read goes first
-        self.shared().deliver(&held);
-        let mut state = inner.reader();
-        if state.mode == Mode::Quiesced {
-            state.mode = Mode::Running;
-        }
-        inner.reader_changed.notify_all();
-        drop(state);
         let mut outbox = self.shared().outbox();
         if outbox.gate != Gate::Closed {
             outbox.gate = Gate::Open;

@@ -61,22 +61,28 @@ impl Child {
         self.pid
     }
 
-    /// Wait for the child to exit and reap it.
+    /// Wait for the child to exit and reap it; once it is reaped, its status again.
     ///
     /// # Errors
     ///
     /// Waiting failed (the child was reaped by someone else).
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
+        if self.was_reaped() {
+            return self.inner.wait();
+        }
         exited(self.pid, true)?;
         self.reap()
     }
 
-    /// The child's exit status if it has exited (and is now reaped), else `None`.
+    /// The child's exit status if it has exited (and is now reaped, or was before), else `None`.
     ///
     /// # Errors
     ///
     /// As [`Child::wait`].
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        if self.was_reaped() {
+            return self.inner.try_wait();
+        }
         if exited(self.pid, false)? {
             self.reap().map(Some)
         } else {
@@ -91,6 +97,12 @@ impl Child {
             group: libc::pid_t::try_from(self.pid).unwrap_or(libc::pid_t::MAX),
             reaped: Arc::clone(&self.reaped),
         }
+    }
+
+    /// The child was reaped here: its id is released (and may be reused by now), so it is never waited for by id
+    /// again; the status std's child kept is the answer.
+    fn was_reaped(&self) -> bool {
+        *lock(&self.reaped)
     }
 
     /// The child has exited and is still a zombie: mark it reaped before its id is released, then reap it.
@@ -130,14 +142,20 @@ pub struct Killer {
 impl Killer {
     /// `SIGHUP` to the child's process group, as a terminal closing does.
     ///
+    /// Once the child is reaped ([`Child::wait`], [`Child::try_wait`]) its group is never signalled, since the id may
+    /// be reused by then, so members that outlived the child (a background job) live on: hang up or kill the tree
+    /// before waiting. On Windows the job ends the tree either way.
+    ///
     /// # Errors
     ///
-    /// The signal could not be sent (a group already gone is not an error).
+    /// The signal could not be sent (a group already gone is not an error, nor is a reaped child, which is not
+    /// signalled).
     pub fn hang_up(&self) -> io::Result<()> {
         self.signal(libc::SIGHUP)
     }
 
-    /// `SIGKILL` to the child's process group: the child and every process of its group end.
+    /// `SIGKILL` to the child's process group: the child and every process of its group end, unless the child was
+    /// already reaped, when nothing is signalled (see [`Killer::hang_up`]).
     ///
     /// # Errors
     ///

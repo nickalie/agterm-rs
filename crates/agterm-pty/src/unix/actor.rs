@@ -3,9 +3,10 @@
 //!
 //! herdr: `src/pty/actor/unix.rs` (`PtyIoActor`, `PtyIoActorHandle`, `PtyIoActorRunner`: the poll loop, the wake
 //! after each queued command, the handoff's begin, duplicate, rollback and release, the foreground process group,
-//! the latest-wins resize and the post-handoff redraw nudge) at `HERDR_REV` (`build/pins.env`), licensed under the
-//! Apache License 2.0, modified: std channels in place of tokio's; the outbox of `crate::actor` in place of herdr's
-//! pending writes; reads batched up to `READ_BATCH` per callback; a quiesced actor writes nothing either; input
+//! and the post-handoff redraw nudge) at `HERDR_REV` (`build/pins.env`), licensed under the Apache License 2.0,
+//! modified: std channels in place of tokio's; the outbox of `crate::actor` in place of herdr's pending writes;
+//! reads batched up to `READ_BATCH` per callback; a quiesced actor writes nothing either; resizes on the caller's
+//! thread in place of herdr's latest-wins request, so a resize reaches the child before later input; input
 //! submissions are not ported.
 
 use std::fs::File;

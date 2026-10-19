@@ -1,6 +1,6 @@
 //! The PTY actor's platform-neutral half: what it is started with, the handle its users hold, and the outbox of
-//! bytes waiting for the child. The IO itself is per OS (`unix.rs`: one thread polling the master and a wake pipe;
-//! `windows.rs`: a reader and a writer thread on the pseudoconsole's pipes).
+//! bytes waiting for the child. The IO itself is per OS (`unix/actor.rs`: one thread polling the master and a wake
+//! pipe; `windows/actor.rs`: a reader and a writer thread on the pseudoconsole's pipes).
 //!
 //! herdr: `src/pty/actor.rs` and `src/pty/actor/unix.rs` (`PtyIoActorConfig`, `PtyReadResult`, `PtyIoActorHandle`,
 //! its user-write gate and its terminal-response ordering) at `HERDR_REV` (`build/pins.env`), licensed under the
