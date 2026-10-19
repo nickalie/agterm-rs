@@ -8,7 +8,9 @@
 //! - [`endpoint`]: where a namespace's server listens, a Unix domain socket or a Windows named pipe, owner-only;
 //! - [`server`]: the server's lifecycle: started on demand by a client that finds none, detached from it per OS, one
 //!   per namespace, stopped by itself once it holds no session and no client. The `agterm-session` binary runs it as
-//!   `agterm-session server <namespace directory>`;
+//!   `agterm-session server <namespace directory>`. Its pane runtime ([`server::pane`]) runs a session's program on
+//!   a PTY, keeps the session's terminal state and fans its output out to the attached clients
+//!   ([`server::clients`]);
 //! - [`launch`]: what a live launch reads of this host (the session host executable, its build id, the login shell,
 //!   the Ghostty resources, the namespace's state directory) and the wrap configuration of a pane over it;
 //! - [`procfs`]: the Linux process table's stat line, which the foreground-job reads and reaps match processes by.

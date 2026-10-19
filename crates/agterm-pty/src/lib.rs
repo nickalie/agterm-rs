@@ -56,7 +56,9 @@ pub struct Command {
     pub args: Vec<OsString>,
     /// The working directory; `None` keeps the current one.
     pub cwd: Option<PathBuf>,
-    /// Variables set on top of the inherited environment.
+    /// Start from an empty environment instead of the inherited one, so `env` is the child's whole environment.
+    pub env_clear: bool,
+    /// Variables set on top of the inherited environment (or of none, with `env_clear`).
     pub env: Vec<(OsString, OsString)>,
     /// Inherited variables removed (before `env` is applied).
     pub env_remove: Vec<OsString>,
@@ -69,6 +71,7 @@ impl Command {
             program: program.into(),
             args: Vec::new(),
             cwd: None,
+            env_clear: false,
             env: Vec::new(),
             env_remove: Vec::new(),
         }
@@ -96,6 +99,13 @@ impl Command {
         self
     }
 
+    /// Start the child's environment empty: only what `env` sets reaches it.
+    #[must_use]
+    pub fn env_clear(mut self) -> Self {
+        self.env_clear = true;
+        self
+    }
+
     #[must_use]
     pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
         self.env.push((key.into(), value.into()));
@@ -108,11 +118,14 @@ impl Command {
         self
     }
 
-    /// portable-pty's builder: the environment inherited, minus `env_remove`, plus `env`; the working directory
-    /// `cwd`, else the current one.
+    /// portable-pty's builder: the environment inherited (none with `env_clear`), minus `env_remove`, plus `env`;
+    /// the working directory `cwd`, else the current one.
     fn builder(&self) -> portable_pty::CommandBuilder {
         let mut builder = portable_pty::CommandBuilder::new(&self.program);
         builder.args(&self.args);
+        if self.env_clear {
+            builder.env_clear();
+        }
         for key in &self.env_remove {
             builder.env_remove(key);
         }
@@ -234,5 +247,18 @@ mod tests {
         );
         assert!(builder.get_env("AGTERM_PTY_TEST_GONE").is_none());
         assert_eq!(builder.get_cwd().map(PathBuf::from), Some(dir));
+    }
+
+    #[test]
+    fn a_cleared_environment_holds_only_what_is_set() {
+        let builder = Command::new("prog")
+            .env_clear()
+            .env("AGTERM_PTY_TEST_SET", "1")
+            .builder();
+        let env: Vec<_> = builder
+            .iter_full_env_as_str()
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect();
+        assert_eq!(env, [("AGTERM_PTY_TEST_SET".to_owned(), "1".to_owned())]);
     }
 }

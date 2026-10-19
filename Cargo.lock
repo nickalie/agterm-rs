@@ -271,7 +271,9 @@ name = "agterm-session"
 version = "0.1.0"
 dependencies = [
  "agterm-core",
+ "agterm-ghostty-vt",
  "agterm-host",
+ "agterm-pty",
  "interprocess",
  "libc",
  "postcard",
@@ -280,6 +282,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
+ "tracing",
  "uuid",
  "widestring",
  "windows-sys 0.61.2",
