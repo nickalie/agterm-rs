@@ -861,14 +861,39 @@ Order after Task 7, as two lanes that meet:
 **Files:**
 - Create: `crates/agterm-session/src/server/snapshot.rs`, `crates/agterm-session/tests/snapshot.rs`
 
-- [ ] one serialization point per pane; `SnapshotBegin{epoch, offset, size}`, bounded chunks, `SnapshotEnd`,
+- [x] one serialization point per pane; `SnapshotBegin{epoch, offset, size}`, bounded chunks, `SnapshotEnd`,
       offset-tagged output
-- [ ] the formatter snapshot with extras and the continuation (Task 11), with its byte cap and unavailable outcome
+      - the pane's lock orders parsing, offsets, registration, the lead and snapshots; every client's first event
+        (after its role) is `ClientEvent::Snapshot` opening epoch 1 (the creator's empty). The server now serves the
+        attach role (`server/attach.rs`, not in the file list): attach or create by name (`Refused` gone, create
+        failed, unavailable), a writer thread per connection sending snapshots as begin, 64 KiB chunks and end, then
+        output, resizes and roles; the connection's thread reads input, resizes, metadata (kept for Task 20) and
+        delegated replies; the pane registry and the session count live in `Shared`; `endpoint::disconnect` (Unix
+        shutdown, Windows `DisconnectNamedPipe` + `CancelIoEx`) drops a client. `ServerConfig` gains the client queue
+        limit and resync budget
+- [x] the formatter snapshot with extras and the continuation (Task 11), with its byte cap and unavailable outcome
       (bounded wait, then a harmless failure), matching what the suite pins (Context), unstyled blanks included
-- [ ] in-band resync on queue overflow with a recovery budget, then disconnect; replies of a superseded epoch dropped
-- [ ] tests: reattach showing the scrollback, then the screen with the cursor in place; an alt-screen app; color
+      - `server::snapshot::capture`: zmx's `serializeTerminalState` order (colour overrides OSC 10/11/12 against the
+        terminal's defaults, new `Terminal::default_colors`; scrollback without extras; the visible rows with
+        `FormatExtras::RESTORE` and DECSET 2026 off; OSC 7; OSC 2) plus the continuation, which is required (65 MiB
+        cap, `PaneConfig.continuation_limit`); a resync leads with zmx patch 0003's `ATTACH_RESET`. Deviation: after the
+        scrollback a line feed per row (and per trimmed blank history row) scrolls it into the client's scrollback in
+        place of zmx's `ESC [2J`, which a Ghostty client erases, losing the last screenful of history. An attach or
+        resync waits up to `SNAPSHOT_WAIT` (2 s) for a cut, the PTY read meanwhile; an attach without one changes
+        nothing. OSC 133 `redraw=0` is left to the attach CLI (Task 22)
+- [x] in-band resync on queue overflow with a recovery budget, then disconnect; replies of a superseded epoch dropped
+      - an overflowing queue drops what it holds unsent (output, resizes, an unsent snapshot), keeps the role reports
+        and queues `Overflowed`; the writer then calls `Pane::resync`: a snapshot of the next epoch, the role kept.
+        `ResyncBudget` (4 resyncs per 60 s by default) and a resync without a cut detach the client and close its
+        connection. `Pane::accepts_reply` holds a reply's epoch to the client's current one (no request is delegated
+        yet: Task 20)
+- [x] tests: reattach showing the scrollback, then the screen with the cursor in place; an alt-screen app; color
       overrides kept; DECSET 2026 not replayed; blank runs unstyled; a cut mid-sequence restored; a slow client
       resynced in band keeping its role, and one past the budget disconnected
+      - the snapshot's unit tests on bare terminals (every OS), `tests/snapshot.rs` on real panes (the alternate
+        screen, the cut and the bounded wait Unix-only: the pseudoconsole re-renders a program's sequences), and
+        `tests/attach.rs` through an in-process server (create, detach, reattach, gone, a failed create, a resync and
+        a budget disconnect over the connection)
 - [ ] run gates
 
 ### Task 19: Server API: what `SessionHost` and `clipboard set` need

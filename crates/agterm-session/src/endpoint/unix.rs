@@ -209,6 +209,13 @@ pub(super) fn remove_socket_file_if_owned(socket: &Path, identity: &SocketFileId
     }
 }
 
+/// Shut the socket down both ways: a blocked read returns its end, a write fails, the peer reads its end.
+pub(super) fn disconnect(stream: &Stream) {
+    let Stream::UdSocket(socket) = stream;
+    // a socket already shut down or reset reports it, and stays closed
+    let _ = socket.inner().shutdown(std::net::Shutdown::Both);
+}
+
 pub(super) fn peer_closed(stream: &mut Stream) -> io::Result<bool> {
     stream.set_nonblocking(true)?;
     let mut probe = [0_u8; 1];

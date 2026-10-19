@@ -227,6 +227,11 @@ fn a_detached_client_leaves_the_others_reading() -> TestResult {
     assert_eq!(pane.clients(), 1);
     type_line(&pane, &tagged("still"))?;
     staying.expect("got:still");
+    // what was queued before the detach (its first, empty snapshot), then nothing
+    assert!(matches!(
+        leaving.subscription.try_recv(),
+        Ok(ClientEvent::Snapshot { epoch: 1, .. })
+    ));
     assert_eq!(
         leaving.subscription.recv_timeout(Duration::from_secs(1)),
         Err(RecvError::Closed)
@@ -280,25 +285,16 @@ fn a_stalled_client_blocks_neither_the_pty_nor_the_others() -> TestResult {
     assert_eq!(exit_code(&status), Some(0));
     assert_eq!(reading.next, pane.offset());
     assert!(screen(&pane).contains(&flood_end(FLOOD_CHUNKS)));
-    // the stalled client kept what it had room for, learnt where its copy stops, and got the end
+    // the stalled client's queue dropped what it held (none of it was sent: its resync replaces it), it learnt where
+    // its copy stops, and got the end
     let mut events = Vec::new();
     while let Ok(event) = stalled.subscription.try_recv() {
         events.push(event);
     }
-    let overflowed = events
-        .iter()
-        .position(|event| matches!(event, ClientEvent::Overflowed { .. }))
-        .ok_or("the stalled client never overflowed")?;
-    let kept: usize = events[..overflowed]
-        .iter()
-        .map(|event| match event {
-            ClientEvent::Output { data, .. } => data.len(),
-            _ => 0,
-        })
-        .sum();
-    assert!(kept <= 16 * 1024 + 256 * 1024, "kept {kept} bytes");
-    assert_eq!(events.last(), Some(&ClientEvent::Exit(status)));
-    assert_eq!(events.len(), overflowed + 2, "{events:?}");
+    assert_eq!(
+        events,
+        [ClientEvent::Overflowed { offset: 0 }, ClientEvent::Exit(status)]
+    );
     Ok(())
 }
 

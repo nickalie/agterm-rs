@@ -1,5 +1,5 @@
-//! The clients attached to one pane, and the queue of what each is sent: the pane's output, tagged with its offset in
-//! the session's output stream, its size changes and its end.
+//! The clients attached to one pane, and the queue of what each is sent: its snapshots, the pane's output, tagged
+//! with its offset in the session's output stream, its size changes and its end.
 //!
 //! herdr: `src/server/client_transport.rs` (`ClientWriterQueue`, the per-client writer queue the PTY side pushes into
 //! without waiting for the client's socket) and `src/server/clients.rs` (the registry of a session's clients) at
@@ -7,16 +7,25 @@
 //! the pane and drained by the client's own writer, so a slow client never holds up the PTY reader or the other
 //! clients. Changed: the queue carries agterm's raw output lane, not herdr's rendered frames, so it is lossless where
 //! herdr's render lane keeps only the latest frame: it is bounded in bytes, and output that does not fit is never
-//! dropped silently. The queue keeps everything before it and ends with [`ClientEvent::Overflowed`] at the offset
-//! where the client's copy of the stream stops, and the server resyncs that client in band or disconnects it.
+//! dropped silently. The queue drops the output and size changes it holds, none of which was sent yet, and ends with
+//! [`ClientEvent::Overflowed`] at the offset where the client's copy of the stream stops; the pane then resyncs that
+//! client in band (a new [`ClientEvent::Snapshot`] in place of the output it was not sent) or, past its
+//! [`ResyncBudget`], disconnects it.
+//!
+//! # Epochs
+//!
+//! Every snapshot a client is sent opens an epoch, numbered from 1: its first snapshot, at its attach, then one per
+//! resync. The output after a snapshot continues it. An answer the client gives in an epoch that is no longer its
+//! current one (a delegated reply sent before its resync) is dropped ([`Clients::epoch`]).
 //!
 //! # Order
 //!
 //! The pane queues under its own lock, the one that also feeds its terminal, so every client sees the same events in
 //! the same order, each output contiguous with the one before it (`offset` plus the length of `data` is the next
-//! offset), until its queue overflows or the session ends. A managed client's [`ClientEvent::Role`] reports
-//! ([`super::lead`]) sit in that order too, its first before anything else it is sent. [`ClientEvent::Exit`] is always
-//! queued, after all output, and is the last event of a session.
+//! offset), until its queue overflows or the session ends; a snapshot's offset is where the output after it starts. A
+//! managed client's [`ClientEvent::Role`] reports ([`super::lead`]) sit in that order too, its first before anything
+//! else it is sent, and outlast an overflow. [`ClientEvent::Exit`] is always queued, after all output, and is the last
+//! event of a session.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -26,6 +35,29 @@ use crate::protocol::{ExitStatus, GridSize, LeadRole};
 
 /// The output bytes a client's queue holds before it overflows.
 pub const DEFAULT_QUEUE_LIMIT: usize = 8 * 1024 * 1024;
+
+/// How many resyncs a client gets within [`RESYNC_WINDOW`] before its next overflow disconnects it.
+pub const RESYNC_LIMIT: u32 = 4;
+/// The window [`RESYNC_LIMIT`] counts resyncs in.
+pub const RESYNC_WINDOW: Duration = Duration::from_secs(60);
+
+/// How often a client that keeps falling behind is resynced before it is disconnected: at most `resyncs` within any
+/// `window`. Each resync costs the server a snapshot of the session, scrollback included, under the pane's lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResyncBudget {
+    pub resyncs: u32,
+    pub window: Duration,
+}
+
+impl Default for ResyncBudget {
+    /// [`RESYNC_LIMIT`] within [`RESYNC_WINDOW`].
+    fn default() -> Self {
+        Self {
+            resyncs: RESYNC_LIMIT,
+            window: RESYNC_WINDOW,
+        }
+    }
+}
 
 /// The most output one [`ClientEvent::Output`] carries once queued reads are merged (well under the wire's frame
 /// size, `crate::protocol::MAX_FRAME_SIZE`).
@@ -37,6 +69,15 @@ pub type ClientId = u64;
 /// What a client is sent, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientEvent {
+    /// The session's state at `offset` (its grid then `size`), which opens the client's epoch `epoch`: the client's
+    /// terminal takes `data` as output, and the output from `offset` on continues it. It replaces the output the client
+    /// was not sent; empty while the session has no output.
+    Snapshot {
+        epoch: u64,
+        offset: u64,
+        size: GridSize,
+        data: Vec<u8>,
+    },
     /// The session's output from `offset` on.
     Output { offset: u64, data: Vec<u8> },
     /// The session's grid changed, in the output at `offset`.
@@ -44,8 +85,9 @@ pub enum ClientEvent {
     /// The client's role at the session changed (sent to a managed client only); `generation` counts the session's
     /// leadership changes.
     Role { role: LeadRole, generation: u32 },
-    /// The client's queue was full: output from `offset` on was not queued, and nothing but role changes and the
-    /// session's exit is queued after this until the client is resynced.
+    /// The client's queue was full: the output and size changes it held were dropped, output from `offset` on was not
+    /// queued, and nothing but role changes and the session's exit is queued after this until the client is resynced
+    /// (`Pane::resync`).
     Overflowed { offset: u64 },
     /// The session's program ended; the last event.
     Exit(ExitStatus),
@@ -73,17 +115,32 @@ struct Queue {
     overflowed: bool,
     /// Nothing more is queued: the client detached, or the session's exit is queued.
     closed: bool,
+    /// The client's epoch: its snapshots so far.
+    epoch: u64,
+    /// When the client was resynced, within the last budget window.
+    resyncs: VecDeque<Instant>,
 }
 
 impl Queue {
+    fn new(limit: usize) -> Self {
+        Self {
+            events: VecDeque::new(),
+            bytes: 0,
+            limit,
+            overflowed: false,
+            closed: false,
+            epoch: 0,
+            resyncs: VecDeque::new(),
+        }
+    }
+
     fn push_output(&mut self, offset: u64, data: &[u8]) {
         if self.closed || self.overflowed || data.is_empty() {
             return;
         }
         // an empty queue takes any read, so a limit below one read cannot overflow a client that keeps up
         if self.bytes > 0 && self.bytes + data.len() > self.limit {
-            self.overflowed = true;
-            self.events.push_back(ClientEvent::Overflowed { offset });
+            self.overflow(offset);
             return;
         }
         self.bytes += data.len();
@@ -101,6 +158,58 @@ impl Queue {
             offset,
             data: data.to_vec(),
         });
+    }
+
+    /// Drop the snapshot, output and size changes queued (the client was sent none of them, and its resync replaces
+    /// them), keeping the role changes, and report where its copy of the stream stops: at the first of them dropped,
+    /// else at `offset`.
+    fn overflow(&mut self, offset: u64) {
+        let mut stops = offset;
+        self.events.retain(|event| match event {
+            ClientEvent::Snapshot { offset, .. }
+            | ClientEvent::Output { offset, .. }
+            | ClientEvent::Resized { offset, .. } => {
+                stops = stops.min(*offset);
+                false
+            }
+            ClientEvent::Role { .. } | ClientEvent::Overflowed { .. } | ClientEvent::Exit(_) => true,
+        });
+        self.bytes = 0;
+        self.overflowed = true;
+        self.events.push_back(ClientEvent::Overflowed { offset: stops });
+    }
+
+    /// Queue a snapshot as the client's next epoch, which ends its overflow; the epoch, `None` once nothing more is
+    /// queued.
+    fn push_snapshot(&mut self, offset: u64, size: GridSize, data: Vec<u8>) -> Option<u64> {
+        if self.closed {
+            return None;
+        }
+        self.epoch += 1;
+        self.overflowed = false;
+        self.events.push_back(ClientEvent::Snapshot {
+            epoch: self.epoch,
+            offset,
+            size,
+            data,
+        });
+        Some(self.epoch)
+    }
+
+    /// Count a resync at `now` against `budget`; false, counting nothing, once the client used it up.
+    fn spend(&mut self, budget: ResyncBudget, now: Instant) -> bool {
+        while self
+            .resyncs
+            .front()
+            .is_some_and(|at| now.saturating_duration_since(*at) >= budget.window)
+        {
+            self.resyncs.pop_front();
+        }
+        if self.resyncs.len() >= usize::try_from(budget.resyncs).unwrap_or(usize::MAX) {
+            return false;
+        }
+        self.resyncs.push_back(now);
+        true
     }
 
     fn push_resized(&mut self, offset: u64, size: GridSize) {
@@ -258,13 +367,7 @@ impl Clients {
     /// Attach the client `id`: it is sent every event queued from now on.
     pub fn attach(&mut self, id: ClientId) -> Subscription {
         let slot = Arc::new(Slot {
-            queue: Mutex::new(Queue {
-                events: VecDeque::new(),
-                bytes: 0,
-                limit: self.limit,
-                overflowed: false,
-                closed: false,
-            }),
+            queue: Mutex::new(Queue::new(self.limit)),
             ready: Condvar::new(),
         });
         self.slots.push((id, Arc::clone(&slot)));
@@ -313,11 +416,45 @@ impl Clients {
 
     /// Queue the client `id`'s new role; whether it is attached.
     pub fn role(&mut self, id: ClientId, role: LeadRole, generation: u32) -> bool {
-        let Some((_, slot)) = self.slots.iter().find(|(client, _)| *client == id) else {
+        let Some(slot) = self.slot(id) else {
             return false;
         };
         slot.with(|queue| queue.push_role(role, generation));
         true
+    }
+
+    fn slot(&self, id: ClientId) -> Option<&Arc<Slot>> {
+        self.slots
+            .iter()
+            .find(|(client, _)| *client == id)
+            .map(|(_, slot)| slot)
+    }
+
+    /// Queue a snapshot for the client `id` as its next epoch ([`ClientEvent::Snapshot`]), which ends its overflow;
+    /// the epoch, `None` when it is not attached.
+    pub fn snapshot(&mut self, id: ClientId, offset: u64, size: GridSize, data: Vec<u8>) -> Option<u64> {
+        let slot = self.slot(id)?;
+        let mut epoch = None;
+        slot.with(|queue| epoch = queue.push_snapshot(offset, size, data));
+        epoch
+    }
+
+    /// Whether the client `id`'s queue overflowed and awaits its resync; `None` when it is not attached.
+    #[must_use]
+    pub fn overflowed(&self, id: ClientId) -> Option<bool> {
+        self.slot(id).map(|slot| slot.lock().overflowed)
+    }
+
+    /// The client `id`'s current epoch (zero before its first snapshot); `None` when it is not attached.
+    #[must_use]
+    pub fn epoch(&self, id: ClientId) -> Option<u64> {
+        self.slot(id).map(|slot| slot.lock().epoch)
+    }
+
+    /// Count a resync of the client `id` at `now` against `budget`: false, counting nothing, once it used the budget
+    /// up or when it is not attached.
+    pub fn spend_resync(&mut self, id: ClientId, budget: ResyncBudget, now: Instant) -> bool {
+        self.slot(id).is_some_and(|slot| slot.lock().spend(budget, now))
     }
 
     /// Queue the session's end for every client and detach them all.
@@ -398,26 +535,97 @@ mod tests {
     }
 
     #[test]
-    fn a_full_queue_keeps_what_it_has_and_reports_where_it_stopped() {
+    fn a_full_queue_drops_what_it_holds_and_reports_where_the_clients_copy_stops() {
         let mut clients = Clients::new(4);
         let slow = clients.attach(1);
+        assert_eq!(clients.snapshot(1, 0, SIZE, Vec::new()), Some(1));
         clients.output(0, b"abc");
         clients.output(3, b"de");
         clients.output(5, b"f");
         clients.resized(6, SIZE);
+        assert_eq!(clients.overflowed(1), Some(true));
         clients.exit(&ExitStatus::Exited { code: 0, signal: None });
         assert_eq!(
             drain(&slow),
             [
-                ClientEvent::Output {
-                    offset: 0,
-                    data: b"abc".to_vec()
-                },
-                ClientEvent::Overflowed { offset: 3 },
+                ClientEvent::Overflowed { offset: 0 },
                 ClientEvent::Exit(ExitStatus::Exited { code: 0, signal: None }),
             ]
         );
         assert_eq!(slow.try_recv(), Err(RecvError::Closed));
+        assert_eq!(slow.queued(), 0);
+    }
+
+    #[test]
+    fn a_resync_snapshot_ends_the_overflow_and_opens_the_next_epoch() {
+        let mut clients = Clients::new(4);
+        let client = clients.attach(1);
+        assert_eq!(clients.epoch(1), Some(0));
+        assert_eq!(clients.snapshot(1, 0, SIZE, b"first".to_vec()), Some(1));
+        // the first snapshot was sent, then output it never got
+        assert!(matches!(client.try_recv(), Ok(ClientEvent::Snapshot { epoch: 1, .. })));
+        clients.output(0, b"abc");
+        clients.output(3, b"de");
+        assert_eq!(drain(&client), [ClientEvent::Overflowed { offset: 0 }]);
+        clients.output(5, b"lost");
+        assert_eq!(clients.snapshot(1, 9, SIZE, b"state".to_vec()), Some(2));
+        assert_eq!(clients.overflowed(1), Some(false));
+        assert_eq!(clients.epoch(1), Some(2));
+        clients.output(9, b"next");
+        assert_eq!(
+            drain(&client),
+            [
+                ClientEvent::Snapshot {
+                    epoch: 2,
+                    offset: 9,
+                    size: SIZE,
+                    data: b"state".to_vec()
+                },
+                ClientEvent::Output {
+                    offset: 9,
+                    data: b"next".to_vec()
+                },
+            ]
+        );
+        assert_eq!(clients.snapshot(7, 0, SIZE, Vec::new()), None, "no such client");
+        assert_eq!(clients.epoch(7), None);
+        clients.detach(1);
+        assert_eq!(
+            clients.snapshot(1, 13, SIZE, Vec::new()),
+            None,
+            "a detached client gets none"
+        );
+    }
+
+    #[test]
+    fn the_resync_budget_counts_within_its_window() {
+        let mut clients = Clients::new(4);
+        let _client = clients.attach(1);
+        let budget = ResyncBudget {
+            resyncs: 2,
+            window: Duration::from_secs(10),
+        };
+        let start = Instant::now();
+        assert!(clients.spend_resync(1, budget, start));
+        assert!(clients.spend_resync(1, budget, start + Duration::from_secs(1)));
+        assert!(
+            !clients.spend_resync(1, budget, start + Duration::from_secs(2)),
+            "spent"
+        );
+        assert!(
+            !clients.spend_resync(1, budget, start + Duration::from_secs(9)),
+            "a refusal counts nothing"
+        );
+        assert!(
+            clients.spend_resync(1, budget, start + Duration::from_secs(10)),
+            "the first one left the window"
+        );
+        assert!(!clients.spend_resync(2, budget, start), "not attached");
+        let none = ResyncBudget {
+            resyncs: 0,
+            window: Duration::from_secs(10),
+        };
+        assert!(!clients.spend_resync(1, none, start));
     }
 
     #[test]
@@ -490,11 +698,7 @@ mod tests {
                     role: LeadRole::Leader,
                     generation: 1
                 },
-                ClientEvent::Output {
-                    offset: 0,
-                    data: b"abc".to_vec()
-                },
-                ClientEvent::Overflowed { offset: 3 },
+                ClientEvent::Overflowed { offset: 0 },
                 ClientEvent::Role {
                     role: LeadRole::Follower,
                     generation: 2

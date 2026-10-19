@@ -419,6 +419,33 @@ fn default_colors_reach_the_render_state_until_a_program_overrides_them() {
 }
 
 #[test]
+fn default_colors_leave_the_programs_overrides_out() {
+    let mut terminal = Terminal::new(10, 2).unwrap();
+    assert_eq!(terminal.default_colors().background, None);
+    terminal.vt_write(b"\x1b]11;rgb:12/34/56\x07\x1b]4;1;rgb:ff/00/00\x07");
+    let defaults = terminal.default_colors();
+    assert_eq!(defaults.background, None, "an override is no default");
+    assert_ne!(defaults.palette[1], Rgb::new(0xff, 0, 0));
+    assert_eq!(terminal.colors().background, Some(Rgb::new(0x12, 0x34, 0x56)));
+    terminal
+        .set_default_colors(
+            Some(Rgb::new(1, 2, 3)),
+            Some(Rgb::new(4, 5, 6)),
+            Some(Rgb::new(7, 8, 9)),
+        )
+        .unwrap();
+    let defaults = terminal.default_colors();
+    assert_eq!(defaults.foreground, Some(Rgb::new(1, 2, 3)));
+    assert_eq!(defaults.background, Some(Rgb::new(4, 5, 6)));
+    assert_eq!(defaults.cursor, Some(Rgb::new(7, 8, 9)));
+    assert_eq!(
+        terminal.colors().background,
+        Some(Rgb::new(0x12, 0x34, 0x56)),
+        "the override still wins"
+    );
+}
+
+#[test]
 fn scrollback_limits_round_trip() {
     let mut terminal = Terminal::new(10, 2).unwrap();
     let limits = ScrollbackLimits {

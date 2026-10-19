@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use agterm_ghostty_vt::Terminal;
 use agterm_session::protocol::{ExitStatus, GridSize, LeadRole, Managed, SessionSpec};
 use agterm_session::server::clients::{ClientEvent, RecvError, Subscription};
 use agterm_session::server::pane::{Attached, Pane, PaneConfig};
@@ -93,14 +94,19 @@ pub fn quit(pane: &Pane) -> TestResult {
     }
 }
 
-/// An attached client reading its events.
+/// An attached client reading its events, with the terminal they build, as a client's own would.
 pub struct Client {
     pub subscription: Subscription,
     /// The output offset the next output must start at.
     pub next: u64,
+    /// The output received, snapshots left out.
     pub output: Vec<u8>,
     pub events: Vec<ClientEvent>,
     pub exit: Option<ExitStatus>,
+    /// The epoch of the last snapshot received.
+    pub epoch: u64,
+    /// Fed every snapshot and output, from the first snapshot on, at its size.
+    pub terminal: Option<Terminal>,
 }
 
 impl Client {
@@ -111,6 +117,8 @@ impl Client {
             output: Vec::new(),
             events: Vec::new(),
             exit: None,
+            epoch: 0,
+            terminal: None,
         }
     }
 
@@ -152,18 +160,54 @@ impl Client {
         shown(&self.output)
     }
 
+    /// A snapshot opening `epoch`: the client's terminal (made at `size` by the first) takes it, and the output resumes
+    /// at `offset`.
+    fn take_snapshot(&mut self, epoch: u64, offset: u64, size: GridSize, data: &[u8]) {
+        assert!(epoch > self.epoch, "epoch {epoch} after {}", self.epoch);
+        self.epoch = epoch;
+        self.next = offset;
+        if self.terminal.is_none() {
+            self.terminal = Terminal::new(size.cols, size.rows).ok();
+            assert!(self.terminal.is_some(), "no client terminal");
+        }
+        self.resize_terminal(size);
+        if let Some(terminal) = &mut self.terminal {
+            terminal.vt_write(data);
+        }
+    }
+
+    /// The client's terminal, once it has one, takes the grid `size`.
+    fn resize_terminal(&mut self, size: GridSize) {
+        if let Some(terminal) = &mut self.terminal
+            && (terminal.cols(), terminal.rows()) != (size.cols, size.rows)
+        {
+            let resized = terminal.resize(size.cols, size.rows, 0, 0);
+            assert!(resized.is_ok(), "the client terminal took no {size:?}");
+        }
+    }
+
     /// Receive one event within `timeout`; false once the client is closed or none came.
     pub fn receive(&mut self, timeout: Duration) -> bool {
         match self.subscription.recv_timeout(timeout) {
             Ok(event) => {
                 match &event {
+                    ClientEvent::Snapshot {
+                        epoch,
+                        offset,
+                        size,
+                        data,
+                    } => self.take_snapshot(*epoch, *offset, *size, data),
                     ClientEvent::Output { offset, data } => {
                         assert_eq!(*offset, self.next, "the output is not contiguous");
                         self.next += data.len() as u64;
                         self.output.extend_from_slice(data);
+                        if let Some(terminal) = &mut self.terminal {
+                            terminal.vt_write(data);
+                        }
                     }
+                    ClientEvent::Resized { size, .. } => self.resize_terminal(*size),
                     ClientEvent::Exit(status) => self.exit = Some(status.clone()),
-                    ClientEvent::Resized { .. } | ClientEvent::Role { .. } | ClientEvent::Overflowed { .. } => {}
+                    ClientEvent::Role { .. } | ClientEvent::Overflowed { .. } => {}
                 }
                 self.events.push(event);
                 true

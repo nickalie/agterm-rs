@@ -232,6 +232,24 @@ impl Terminal {
         }
     }
 
+    /// The default colors, the overrides programs set (OSC 4/10/11/12) left out: the theme
+    /// ([`Terminal::set_default_colors`], [`Terminal::set_default_palette`]).
+    #[must_use]
+    pub fn default_colors(&self) -> TerminalColors {
+        let color = |data| {
+            let mut value = ffi::GhosttyColorRgb { r: 0, g: 0, b: 0 };
+            // SAFETY: `self.raw` is live; the default color keys write a `GhosttyColorRgb`, or fail when unset.
+            let result = unsafe { ffi::ghostty_terminal_get(self.raw.ptr(), data, (&raw mut value).cast()) };
+            (result == ffi::GHOSTTY_SUCCESS).then(|| Rgb::from(value))
+        };
+        TerminalColors {
+            foreground: color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_FOREGROUND_DEFAULT),
+            background: color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND_DEFAULT),
+            cursor: color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_CURSOR_DEFAULT),
+            palette: self.default_palette(),
+        }
+    }
+
     /// Set the default foreground, background and cursor colors (the theme; programs override them with OSC 10/11/12).
     /// `None` unsets one. A render state reports its default colors only while both foreground and background are set.
     ///

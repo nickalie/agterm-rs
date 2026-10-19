@@ -18,20 +18,24 @@
 //!
 //! [`pane::Pane`] is one live session: its program on a PTY, the terminal its output builds and the clients that
 //! output fans out to over byte-bounded, lossless queues ([`clients`]), with the client that owns its size chosen by
-//! [`lead`]; [`pane::Panes`] holds them by name. The connections do not serve them yet.
+//! [`lead`], each client starting from a snapshot of the session ([`snapshot`]); [`pane::Panes`] holds the server's
+//! by name. A session counts in the server's lifecycle from its creation until its program ends.
 //!
 //! # Connections
 //!
 //! A connection counts as a client from its accept until it closes. Every connection starts with a hello
-//! ([`crate::protocol::Control::Hello`]) within [`HANDSHAKE_TIMEOUT`] (on Unix; Windows pipes take no timeout). So far
-//! the server serves the control role only: an api or attach hello is refused with
+//! ([`crate::protocol::Control::Hello`]) within [`HANDSHAKE_TIMEOUT`] (on Unix; Windows pipes take no timeout). The
+//! server serves the control and attach roles: an attach connection attaches to a session, creating it when asked,
+//! and carries its stream ([`attach`]); an api hello is still refused with
 //! [`crate::protocol::ErrorCode::UnsupportedRole`], and a handoff request with a failed result, since the server does
 //! not advertise [`crate::protocol::CAPABILITY_HANDOFF_REQUEST`].
 
+mod attach;
 pub mod clients;
 pub mod lead;
 pub mod lifecycle;
 pub mod pane;
+pub mod snapshot;
 pub mod spawn;
 
 use std::io;
@@ -46,7 +50,9 @@ use crate::protocol::{
     CAPABILITY_HANDOFF_REQUEST, Control, ControlError, ErrorCode, FramingError, HandoffResult, Hello, Role, Welcome,
     read_frame, welcome, write_control,
 };
+use clients::ResyncBudget;
 use lifecycle::{Graces, Lifecycle, StopReason};
+use pane::Panes;
 
 /// The build id this server reports in its welcome.
 pub const BUILD_ID: &str = concat!("agterm-session ", env!("CARGO_PKG_VERSION"));
@@ -79,6 +85,10 @@ pub struct ServerConfig {
     /// The build id its welcome reports.
     pub build: String,
     pub graces: Graces,
+    /// The output bytes each attached client's queue holds ([`clients::DEFAULT_QUEUE_LIMIT`]).
+    pub client_queue_limit: usize,
+    /// How often a client that falls behind is resynced before it is disconnected.
+    pub resync_budget: ResyncBudget,
 }
 
 impl Default for ServerConfig {
@@ -86,6 +96,8 @@ impl Default for ServerConfig {
         Self {
             build: BUILD_ID.to_owned(),
             graces: Graces::default(),
+            client_queue_limit: clients::DEFAULT_QUEUE_LIMIT,
+            resync_budget: ResyncBudget::default(),
         }
     }
 }
@@ -106,6 +118,10 @@ pub fn run(directory: &Path, config: &ServerConfig) -> io::Result<StopReason> {
             build: config.build.clone(),
             capabilities: capabilities(),
         },
+        panes: Panes::new(),
+        namespace: endpoint.directory().to_path_buf(),
+        client_queue_limit: config.client_queue_limit,
+        resync_budget: config.resync_budget,
     });
     let (done, accept_done) = mpsc::channel();
     let accepting = Arc::clone(&shared);
@@ -146,6 +162,13 @@ struct Shared {
     /// Notified whenever a client or a session comes or goes.
     changed: Condvar,
     identity: Identity,
+    /// The live sessions.
+    panes: Panes,
+    /// The namespace directory served, absolute: the sessions' `AGTERM_LIVE_DIR`.
+    namespace: PathBuf,
+    /// The sessions' client queues and resync budget ([`ServerConfig`]).
+    client_queue_limit: usize,
+    resync_budget: ResyncBudget,
 }
 
 impl Shared {
@@ -202,7 +225,7 @@ fn accept_loop(listener: &Listener, shared: &Arc<Shared>) {
             .spawn(move || {
                 let _left = ClientLeaves(&connection);
                 // a broken or vanished client ends only its own connection
-                let _ = serve_connection(stream, &connection.identity);
+                let _ = serve_connection(stream, &connection);
             });
         if started.is_err() {
             shared.client_left();
@@ -220,14 +243,18 @@ impl Drop for ClientLeaves<'_> {
 }
 
 /// One connection: the handshake, then its role until the client closes.
-fn serve_connection(mut stream: Stream, identity: &Identity) -> Result<(), FramingError> {
+fn serve_connection(mut stream: Stream, shared: &Arc<Shared>) -> Result<(), FramingError> {
+    let identity = &shared.identity;
     set_recv_timeout(&stream, Some(HANDSHAKE_TIMEOUT));
     let frame = read_frame(&mut stream)?;
-    let welcome = match frame.control() {
-        Ok(Control::Hello(hello)) => welcome_for(&hello, frame.protocol, identity),
-        Ok(_) => refusal(
-            identity,
-            ControlError::new(ErrorCode::UnknownOp, "a connection starts with hello.v1"),
+    let (welcome, role) = match frame.control() {
+        Ok(Control::Hello(hello)) => (welcome_for(&hello, frame.protocol, identity), hello.role),
+        Ok(_) => (
+            refusal(
+                identity,
+                ControlError::new(ErrorCode::UnknownOp, "a connection starts with hello.v1"),
+            ),
+            Role::Unknown,
         ),
         Err(error) => return Err(error),
     };
@@ -237,17 +264,20 @@ fn serve_connection(mut stream: Stream, identity: &Identity) -> Result<(), Frami
         return Ok(());
     }
     set_recv_timeout(&stream, None);
-    serve_control(&mut stream)
+    match role {
+        Role::Attach => attach::serve(stream, shared),
+        _ => serve_control(&mut stream),
+    }
 }
 
 /// The welcome for `hello` from a client of `protocol`: [`welcome`]'s, refusing the roles this server does not serve
 /// yet.
 fn welcome_for(hello: &Hello, protocol: u32, identity: &Identity) -> Welcome {
     let mut answer = welcome(hello, protocol, &identity.build, &identity.capabilities);
-    if answer.error.is_none() && hello.role != Role::Control {
+    if answer.error.is_none() && !matches!(hello.role, Role::Control | Role::Attach) {
         answer.error = Some(ControlError::new(
             ErrorCode::UnsupportedRole,
-            "this agterm-session server serves control connections only",
+            "this agterm-session server serves control and attach connections only",
         ));
     }
     answer
@@ -338,16 +368,16 @@ mod tests {
     }
 
     #[test]
-    fn the_roles_not_served_yet_are_refused() {
-        for role in [Role::Api, Role::Attach] {
-            let welcome = welcome_for(&hello(role), PROTOCOL_VERSION, &identity());
-            let error = welcome.error.unwrap();
-            assert_eq!(error.code, ErrorCode::UnsupportedRole);
-            assert_eq!(
-                error.message,
-                "this agterm-session server serves control connections only"
-            );
-        }
+    fn the_role_not_served_yet_is_refused() {
+        let welcome = welcome_for(&hello(Role::Api), PROTOCOL_VERSION, &identity());
+        let error = welcome.error.unwrap();
+        assert_eq!(error.code, ErrorCode::UnsupportedRole);
+        assert_eq!(
+            error.message,
+            "this agterm-session server serves control and attach connections only"
+        );
+        let welcome = welcome_for(&hello(Role::Attach), PROTOCOL_VERSION, &identity());
+        assert_eq!(welcome.error, None, "an attach is served");
     }
 
     #[test]
@@ -385,5 +415,7 @@ mod tests {
         assert_eq!(config.build, BUILD_ID);
         assert!(BUILD_ID.starts_with("agterm-session "));
         assert_eq!(config.graces, Graces::default());
+        assert_eq!(config.client_queue_limit, clients::DEFAULT_QUEUE_LIMIT);
+        assert_eq!(config.resync_budget, ResyncBudget::default());
     }
 }

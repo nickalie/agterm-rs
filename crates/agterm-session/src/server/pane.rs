@@ -30,6 +30,22 @@
 //! order with its input. It loads no Kitty images from files, temporary files or shared memory: an image shown that
 //! way is read once, by the client that shows it.
 //!
+//! # Snapshots
+//!
+//! That lock is the pane's one serialization point: the parsing, the output offsets, the clients' registration, the
+//! lead and its resizes, and the snapshots ([`super::snapshot`]) all happen under it, so a snapshot is the terminal's
+//! state at exactly the offset the client's output resumes at. Every client's first event (after its role, when it
+//! is managed) is a [`ClientEvent::Snapshot`](super::clients::ClientEvent) opening its epoch 1: the creator's is
+//! empty, an attach's holds the session's state, scrollback included. A snapshot needs a cut, which the terminal's
+//! stream continuation gives; while the program stands inside a sequence too long to hand on, the attach waits for
+//! one, up to [`PaneConfig::snapshot_wait`], while the PTY keeps being read, and then fails without having changed
+//! anything ([`AttachError::Unavailable`]).
+//!
+//! A client whose queue overflowed ([`ClientEvent::Overflowed`](super::clients::ClientEvent)) is resynced in band
+//! by [`Pane::resync`]: a new snapshot, led by [`super::snapshot::ATTACH_RESET`], in place of the output it was not
+//! sent, opening its next epoch; it keeps its place in the lead. Past its [`ResyncBudget`], or without a cut in time,
+//! it is detached instead, and its connection is closed.
+//!
 //! # Leadership
 //!
 //! Every client attaches with its grid and, when it is managed, its nonce and whether it claims the lead; its input
@@ -58,8 +74,9 @@ use std::time::{Duration, Instant, SystemTime};
 use agterm_ghostty_vt as vt;
 use agterm_pty::{Actor, ActorConfig, ActorHandle, Child, ExitReason, Killer, Size, Spawned, WriteError};
 
-use super::clients::{ClientId, Clients, DEFAULT_QUEUE_LIMIT, Subscription};
+use super::clients::{ClientId, Clients, DEFAULT_QUEUE_LIMIT, ResyncBudget, Subscription};
 use super::lead::{Change, Lead, RoleNotice};
+use super::snapshot::{self, SnapshotError};
 use crate::protocol::{ExitStatus, GridSize, LeadRole, Managed, SessionSpec};
 
 /// The variable naming a session in its program's environment.
@@ -77,6 +94,8 @@ pub const FALLBACK_TERM: &str = "xterm-256color";
 pub const EXIT_GRACE: Duration = Duration::from_secs(1);
 /// How long a kill waits for the program to end after the hangup, and again after the kill (herdr's grace).
 pub const KILL_GRACE: Duration = Duration::from_millis(250);
+/// How long an attach or a resync waits for a cut its snapshot can be taken at.
+pub const SNAPSHOT_WAIT: Duration = Duration::from_secs(2);
 /// How often a kill's grace looks at what of the program's session lives on (herdr's poll).
 #[cfg(unix)]
 const SESSION_POLL: Duration = Duration::from_millis(20);
@@ -104,6 +123,13 @@ pub struct PaneConfig {
     pub managed: Option<Managed>,
     /// The output bytes each client's queue holds.
     pub client_queue_limit: usize,
+    /// How often a client that falls behind is resynced before it is disconnected.
+    pub resync_budget: ResyncBudget,
+    /// How long an attach or a resync waits for a cut ([`SNAPSHOT_WAIT`]).
+    pub snapshot_wait: Duration,
+    /// The longest unfinished sequence a snapshot can hand on ([`snapshot::CONTINUATION_LIMIT`]): the session's
+    /// terminal keeps a copy of it while it lasts.
+    pub continuation_limit: usize,
 }
 
 impl PaneConfig {
@@ -116,8 +142,39 @@ impl PaneConfig {
             size,
             managed: None,
             client_queue_limit: DEFAULT_QUEUE_LIMIT,
+            resync_budget: ResyncBudget::default(),
+            snapshot_wait: SNAPSHOT_WAIT,
+            continuation_limit: snapshot::CONTINUATION_LIMIT,
         }
     }
+}
+
+/// Why a client could not attach.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AttachError {
+    /// The session's program ended.
+    #[error("the live session ended")]
+    Ended,
+    /// No snapshot could be taken: no cut came within the wait, or the terminal could not be formatted.
+    #[error("{0}")]
+    Unavailable(SnapshotError),
+}
+
+/// Why a client was not resynced.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ResyncError {
+    /// It is not attached.
+    #[error("the client is not attached")]
+    Detached,
+    /// The session's program ended; the client's exit is queued.
+    #[error("the live session ended")]
+    Ended,
+    /// It used its resync budget up: it was detached.
+    #[error("the client fell behind more often than its resync budget allows")]
+    OverBudget,
+    /// No snapshot could be taken: it was detached.
+    #[error("{0}")]
+    Unavailable(SnapshotError),
 }
 
 /// A client just attached to a pane.
@@ -139,6 +196,8 @@ pub struct Pane {
     /// Whole seconds since the Unix epoch.
     created_at: u64,
     tracked_env: Vec<(String, String)>,
+    resync_budget: ResyncBudget,
+    snapshot_wait: Duration,
     core: Arc<Core>,
     actor: ActorHandle,
     killer: Killer,
@@ -182,7 +241,7 @@ struct State {
     /// The program ended: nothing more is fed or queued.
     exit: Option<ExitStatus>,
     /// Run once the program's end is recorded.
-    on_end: Option<Box<dyn FnOnce() + Send>>,
+    on_end: Vec<Box<dyn FnOnce() + Send>>,
 }
 
 impl State {
@@ -220,6 +279,8 @@ impl Core {
         state.prune();
         state.clients.output(offset, bytes);
         drop(state);
+        // a snapshot waiting for a cut looks again
+        self.changed.notify_all();
         std::mem::take(&mut *lock(&self.replies))
     }
 
@@ -292,12 +353,30 @@ impl Core {
         state.clients.exit(&status);
         state.lead = Lead::new();
         state.exit = Some(status);
-        let on_end = state.on_end.take();
+        let on_end = std::mem::take(&mut state.on_end);
         drop(state);
         self.changed.notify_all();
-        if let Some(on_end) = on_end {
-            on_end();
+        for hook in on_end {
+            hook();
         }
+    }
+
+    /// Wait, at most `wait`, until a snapshot can be taken (the terminal's continuation is known, or the session has
+    /// no output yet); the state, still locked.
+    ///
+    /// # Errors
+    ///
+    /// [`AttachError::Ended`] once the program ended; [`AttachError::Unavailable`] when no cut came in time.
+    fn wait_for_cut(&self, wait: Duration) -> Result<MutexGuard<'_, State>, AttachError> {
+        let cut = |state: &State| state.offset == 0 || snapshot::cut_available(&state.terminal);
+        let (state, _) = self.wait_until(wait, |state| state.exit.is_some() || cut(state));
+        if state.exit.is_some() {
+            return Err(AttachError::Ended);
+        }
+        if !cut(&state) {
+            return Err(AttachError::Unavailable(SnapshotError::Unavailable));
+        }
+        Ok(state)
     }
 }
 
@@ -335,6 +414,9 @@ impl Pane {
             size,
             managed,
             client_queue_limit,
+            resync_budget,
+            snapshot_wait,
+            continuation_limit,
         } = config;
         let size = GridSize {
             cols: size.cols.max(1),
@@ -343,7 +425,7 @@ impl Pane {
         let env = child_environment(&spec.env, &name, &namespace);
         let command = command(&spec, &env)?;
         let replies = Arc::new(Mutex::new(Vec::new()));
-        let terminal = server_terminal(size, &replies)?;
+        let terminal = server_terminal(size, continuation_limit, &replies)?;
         let Spawned { master, child } = agterm_pty::spawn(&command, Size::cells(size.rows, size.cols))?;
         let mut clients = Clients::new(client_queue_limit);
         let mut lead = Lead::new();
@@ -360,7 +442,7 @@ impl Pane {
                 reap_holds: 0,
                 reaping: false,
                 exit: None,
-                on_end: None,
+                on_end: Vec::new(),
             }),
             changed: Condvar::new(),
             replies,
@@ -389,6 +471,8 @@ impl Pane {
             pid,
             created_at: unix_seconds(SystemTime::now()),
             tracked_env: tracked(&env, &spec.tracked_env),
+            resync_budget,
+            snapshot_wait,
             core,
             actor,
             killer,
@@ -420,32 +504,117 @@ impl Pane {
         &self.tracked_env
     }
 
-    /// Attach a client whose grid is `size`, under explicit leadership when `managed` is given: it is sent the
-    /// session's output from the offset returned on. When it takes the lead ([`super::lead`]), the session takes its
-    /// size first, so the offset and size returned are the resized session's; a managed client is told its role before
-    /// anything else. `None` once the program ended.
+    /// [`Pane::try_attach`], `None` when it fails.
     #[must_use]
     pub fn attach(&self, size: GridSize, managed: Option<&Managed>) -> Option<Attached> {
-        let mut state = self.core.lock();
-        if state.exit.is_some() {
-            return None;
-        }
+        self.try_attach(size, managed).ok()
+    }
+
+    /// Attach a client whose grid is `size`, under explicit leadership when `managed` is given: it is sent a snapshot
+    /// of the session at the offset returned (its epoch 1), then the session's output from that offset on. When it
+    /// takes the lead ([`super::lead`]), the session takes its size first, so the offset, size and snapshot are the
+    /// resized session's; a managed client is told its role before anything else. Waits up to
+    /// [`PaneConfig::snapshot_wait`] for a cut, the PTY read meanwhile.
+    ///
+    /// # Errors
+    ///
+    /// [`AttachError::Ended`] once the program ended; [`AttachError::Unavailable`] when no snapshot could be taken,
+    /// with nothing changed (no cut in time), or with the client attached for a moment and gone again (the formatter
+    /// failed after the lead took its size).
+    pub fn try_attach(&self, size: GridSize, managed: Option<&Managed>) -> Result<Attached, AttachError> {
+        let mut state = self.core.wait_for_cut(self.snapshot_wait)?;
         state.prune();
         let id = NEXT_CLIENT.fetch_add(1, Ordering::Relaxed);
         let change = state.lead.attach(id, size, managed);
         if let Some(size) = change.resize {
             self.resize_locked(&mut state, size);
         }
+        let data = match capture(&mut state, false) {
+            Ok(data) => data,
+            Err(err) => {
+                let undo = state.lead.detach(id);
+                state.tell(&change.notices);
+                state.tell(&undo.notices);
+                self.release(state);
+                return Err(AttachError::Unavailable(err));
+            }
+        };
         let mut subscription = state.clients.attach(id);
         prune_on_drop(&self.core, &mut subscription);
         state.tell(&change.notices);
+        let (offset, size) = (state.offset, state.size);
+        state.clients.snapshot(id, offset, size, data);
         let attached = Attached {
             subscription,
-            offset: state.offset,
-            size: state.size,
+            offset,
+            size,
         };
         self.release(state);
-        Some(attached)
+        Ok(attached)
+    }
+
+    /// Resync the client `id` after its queue overflowed: a snapshot of the session now, led by the reset
+    /// ([`super::snapshot::ATTACH_RESET`]), in place of the output it was not sent, opening its next epoch; its role
+    /// is kept. Nothing when it did not overflow. Waits up to [`PaneConfig::snapshot_wait`] for a cut.
+    ///
+    /// # Errors
+    ///
+    /// [`ResyncError::Detached`] when it is not attached, [`ResyncError::Ended`] once the program ended (its exit is
+    /// queued); [`ResyncError::OverBudget`] past its [`ResyncBudget`] and [`ResyncError::Unavailable`] without a
+    /// snapshot, both of which detach it (it leaves the lead, as a detach does), so its connection is to be closed.
+    pub fn resync(&self, id: ClientId) -> Result<(), ResyncError> {
+        let mut state = self.core.lock();
+        if state.exit.is_some() {
+            return Err(ResyncError::Ended);
+        }
+        match state.clients.overflowed(id) {
+            None => return Err(ResyncError::Detached),
+            Some(false) => return Ok(()),
+            Some(true) => {}
+        }
+        if !state.clients.spend_resync(id, self.resync_budget, Instant::now()) {
+            self.disconnect(state, id);
+            return Err(ResyncError::OverBudget);
+        }
+        drop(state);
+        let mut state = match self.core.wait_for_cut(self.snapshot_wait) {
+            Ok(state) => state,
+            Err(AttachError::Ended) => return Err(ResyncError::Ended),
+            Err(AttachError::Unavailable(err)) => {
+                self.disconnect(self.core.lock(), id);
+                return Err(ResyncError::Unavailable(err));
+            }
+        };
+        if state.clients.overflowed(id).is_none() {
+            return Err(ResyncError::Detached);
+        }
+        match capture(&mut state, true) {
+            Ok(data) => {
+                let (offset, size) = (state.offset, state.size);
+                state.clients.snapshot(id, offset, size, data);
+                self.release(state);
+                Ok(())
+            }
+            Err(err) => {
+                self.disconnect(state, id);
+                Err(ResyncError::Unavailable(err))
+            }
+        }
+    }
+
+    /// Detach the client `id` under the pane's lock, already held, and let go of it.
+    fn disconnect(&self, mut state: MutexGuard<'_, State>, id: ClientId) {
+        state.clients.detach(id);
+        let change = state.lead.detach(id);
+        state.tell(&change.notices);
+        self.release(state);
+    }
+
+    /// Whether an answer the client `id` gave in its epoch `epoch` still counts: the epoch is its current one. An
+    /// answer of a superseded epoch (given before a resync) is dropped.
+    #[must_use]
+    pub fn accepts_reply(&self, id: ClientId, epoch: u64) -> bool {
+        self.core.lock().clients.epoch(id) == Some(epoch)
     }
 
     /// Detach the client `id`; whether it was attached. When it led, the session is left unowned, keeping its size.
@@ -654,11 +823,11 @@ impl Pane {
         self.wait_exit(grace + EXIT_GRACE).is_some()
     }
 
-    /// Run `on_end` once the program's end is recorded (now, if it already is).
-    fn on_end(&self, on_end: Box<dyn FnOnce() + Send>) {
+    /// Run `on_end` once the program's end is recorded (now, if it already is), after the hooks given before it.
+    pub fn on_end(&self, on_end: Box<dyn FnOnce() + Send>) {
         let mut state = self.core.lock();
         if state.exit.is_none() {
-            state.on_end = Some(on_end);
+            state.on_end.push(on_end);
             return;
         }
         drop(state);
@@ -741,8 +910,8 @@ fn home(env: &[(String, String)]) -> Option<PathBuf> {
         .map(|home| PathBuf::from(OsString::from(home)))
 }
 
-/// Attach the client creating a session of `size`: it leads, as no client does before it, and a managed one is told so
-/// before anything else.
+/// Attach the client creating a session of `size`: it leads, as no client does before it, a managed one is told so
+/// before anything else, and its epoch 1 opens with the empty snapshot of a session with no output yet.
 fn attach_creator(clients: &mut Clients, lead: &mut Lead, size: GridSize, managed: Option<&Managed>) -> Attached {
     let id = NEXT_CLIENT.fetch_add(1, Ordering::Relaxed);
     // the session starts at the creator's size: the change's resize is the size it has
@@ -751,11 +920,21 @@ fn attach_creator(clients: &mut Clients, lead: &mut Lead, size: GridSize, manage
     for notice in &change.notices {
         clients.role(notice.client, notice.role, notice.generation);
     }
+    clients.snapshot(id, 0, size, Vec::new());
     Attached {
         subscription,
         offset: 0,
         size,
     }
+}
+
+/// The snapshot of the session `state` holds ([`snapshot::capture`]), led by the reset when `reset`; empty while the
+/// session has no output, which its client's terminal already shows.
+fn capture(state: &mut State, reset: bool) -> Result<Vec<u8>, SnapshotError> {
+    if state.offset == 0 {
+        return Ok(Vec::new());
+    }
+    snapshot::capture(&mut state.terminal, reset)
 }
 
 /// Have the pane forget the client of `subscription` as soon as it is dropped ([`Core::prune`]), under the pane's
@@ -769,11 +948,17 @@ fn prune_on_drop(core: &Arc<Core>, subscription: &mut Subscription) {
     });
 }
 
-/// The server's terminal for a session of `size`: its replies into `replies`, no Kitty image media.
-fn server_terminal(size: GridSize, replies: &Arc<Mutex<Vec<Vec<u8>>>>) -> io::Result<vt::Terminal> {
+/// The server's terminal for a session of `size`: its replies into `replies`, no Kitty image media, the continuation
+/// its snapshots need tracked up to `continuation_limit` bytes.
+fn server_terminal(
+    size: GridSize,
+    continuation_limit: usize,
+    replies: &Arc<Mutex<Vec<Vec<u8>>>>,
+) -> io::Result<vt::Terminal> {
     let vt_error = |err: vt::Error| io::Error::other(format!("the session's terminal: {err}"));
     let mut terminal = vt::Terminal::new(size.cols, size.rows).map_err(vt_error)?;
     terminal.set_kitty_image_media(false, None, false).map_err(vt_error)?;
+    terminal.set_continuation_limit(continuation_limit).map_err(vt_error)?;
     terminal
         .set_effects(Box::new(ServerEffects {
             replies: Arc::clone(replies),

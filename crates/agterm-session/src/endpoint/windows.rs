@@ -23,7 +23,8 @@ use windows_sys::Win32::Security::{
     EqualSid, GetTokenInformation, TOKEN_ELEVATION, TOKEN_INFORMATION_CLASS, TOKEN_QUERY, TOKEN_USER, TokenElevation,
     TokenUser,
 };
-use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+use windows_sys::Win32::System::IO::CancelIoEx;
+use windows_sys::Win32::System::Pipes::{DisconnectNamedPipe, PeekNamedPipe};
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
@@ -63,6 +64,20 @@ pub(super) fn connect_timeout(endpoint: &Endpoint, timeout: Duration) -> io::Res
     let stream = Stream::NamedPipe(pipe.into());
     check_server_user(&stream, endpoint)?;
     Ok(stream)
+}
+
+/// Disconnect the server's end of the pipe, which closes the client's end and fails every later read or write of this
+/// one (interprocess reads `ERROR_PIPE_NOT_CONNECTED` as the end of the stream), then cancel what another thread has
+/// pending on it, a read or a write (interprocess issues them overlapped, so they can run side by side).
+pub(super) fn disconnect(stream: &Stream) {
+    let Stream::NamedPipe(pipe) = stream;
+    let handle = pipe.as_handle().as_raw_handle();
+    // SAFETY: the handle is the open server end `pipe` borrows for both calls; a null overlapped pointer cancels every
+    // operation pending on it. Failures (a pipe already disconnected, nothing pending) leave it closed.
+    unsafe {
+        DisconnectNamedPipe(handle);
+        CancelIoEx(handle, std::ptr::null());
+    }
 }
 
 pub(super) fn peer_closed(stream: &mut Stream) -> io::Result<bool> {

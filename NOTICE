@@ -294,9 +294,10 @@ zmx
 https://github.com/neurosnap/zmx
 
 `agterm-session`'s test of whether a client's input is typing (`server/lead.rs` `is_user_input`, which decides when
-an unmanaged client takes a session's lead) is ported from zmx's `isUserInput` and `parseKittyCsiU` (`src/util.zig`)
-at the commit `8bab1f0173b07e79835ea372d749af3dbf0d0842`, the one agterm's live sessions ran on before
-`agterm-session` replaced them. zmx's license follows.
+an unmanaged client takes a session's lead) is ported from zmx's `isUserInput` and `parseKittyCsiU` (`src/util.zig`),
+and its attach snapshot (`server/snapshot.rs`) from zmx's `serializeTerminalState`, `writeColorOverrides` and
+`writePwd` (`src/util.zig`), at the commit `8bab1f0173b07e79835ea372d749af3dbf0d0842`, the one agterm's live sessions
+ran on before `agterm-session` replaced them. zmx's license follows.
 
 MIT License
 

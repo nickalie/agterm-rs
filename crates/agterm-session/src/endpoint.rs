@@ -182,6 +182,15 @@ pub fn peer_closed(stream: &mut Stream) -> io::Result<bool> {
     sys::peer_closed(stream)
 }
 
+/// Close a connection while other threads still hold it (one blocked reading it, one writing it): they fail or see its
+/// end at once, and so does the peer. What the peer has not read yet may be lost (on Windows the server's end of the
+/// pipe is disconnected), so this is for dropping a peer, not for an orderly end. On Windows a thread that starts a
+/// read or write only after the call, on a client's end, is not woken: call it again until that thread is done. Best
+/// effort: a connection already closed stays closed.
+pub fn disconnect(stream: &Stream) {
+    sys::disconnect(stream);
+}
+
 /// Whether `error` means the peer closed the connection.
 #[must_use]
 pub fn is_connection_closed_error(error: &io::Error) -> bool {
