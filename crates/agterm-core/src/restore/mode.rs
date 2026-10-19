@@ -80,6 +80,13 @@ pub fn captures_on_exit(configured: RestoreMode) -> bool {
     matches!(configured, RestoreMode::Rerun | RestoreMode::Live)
 }
 
+/// [`LiveRejection::UnsupportedLoginShell`]'s reason on this OS.
+pub const UNSUPPORTED_LOGIN_SHELL: &str = if cfg!(windows) {
+    "neither pwsh.exe nor powershell.exe is available"
+} else {
+    "the password-database login shell is not zsh, bash, fish or PowerShell"
+};
+
 /// Why this host cannot wrap a pane in a live-session daemon (upstream's `ZmxSupport.Rejection`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LiveRejection {
@@ -93,17 +100,20 @@ pub enum LiveRejection {
 }
 
 impl LiveRejection {
-    /// The reason `restore.mode` reports, upstream's wording; the shell names widen with the bash and fish extension.
+    /// The reason `restore.mode` reports, upstream's wording; the shell names widen with the bash, fish and PowerShell
+    /// extension. Windows has no password database: its shell is the PowerShell found on the host
+    /// (`agterm-session::launch`), so there the unsupported shell is a missing PowerShell.
     #[must_use]
     pub fn message(self) -> &'static str {
         match self {
             Self::UiTestLaunch => "Live sessions are disabled for default UI tests.",
             Self::ExecutablePathNotAbsolute => "the live-session executable path is not absolute",
             Self::ExecutableUnavailable => "the live-session executable is unavailable",
-            Self::UnsupportedLoginShell => "the password-database login shell is not zsh, bash or fish",
+            Self::UnsupportedLoginShell => UNSUPPORTED_LOGIN_SHELL,
             Self::MissingShellIntegration(LoginShell::Zsh) => "the bundled zsh integration is unavailable",
             Self::MissingShellIntegration(LoginShell::Bash) => "the bundled bash integration is unavailable",
             Self::MissingShellIntegration(LoginShell::Fish) => "the bundled fish integration is unavailable",
+            Self::MissingShellIntegration(LoginShell::Pwsh) => "the bundled PowerShell integration is unavailable",
         }
     }
 }
@@ -254,5 +264,34 @@ mod tests {
             probe.unavailable_reason().as_deref(),
             Some("the bundled fish integration is unavailable")
         );
+        // PowerShell by either name, and as Windows spells it: pwsh.exe, else powershell.exe
+        for shell in [
+            "/usr/bin/pwsh",
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        ] {
+            probe.login_shell = Some(shell.to_owned());
+            assert_eq!(
+                probe.unavailable_reason().as_deref(),
+                Some("the bundled PowerShell integration is unavailable"),
+                "{shell}"
+            );
+        }
+        fs::create_dir_all(resources.join("shell-integration").join("pwsh")).unwrap();
+        fs::write(resources.join("shell-integration").join("pwsh").join("ngterm.ps1"), "").unwrap();
+        assert_eq!(probe.rejection(), None);
+        // a host without either (Windows' discovery found none) keeps the unsupported-shell rejection
+        probe.login_shell = None;
+        assert_eq!(probe.unavailable_reason().as_deref(), Some(UNSUPPORTED_LOGIN_SHELL));
+    }
+
+    #[test]
+    fn the_unsupported_shell_reason_names_what_this_os_runs() {
+        let expected = if cfg!(windows) {
+            "neither pwsh.exe nor powershell.exe is available"
+        } else {
+            "the password-database login shell is not zsh, bash, fish or PowerShell"
+        };
+        assert_eq!(LiveRejection::UnsupportedLoginShell.message(), expected);
     }
 }

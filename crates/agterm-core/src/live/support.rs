@@ -31,8 +31,8 @@ pub struct Eligible {
 }
 
 /// The first reason this host cannot wrap a pane, in upstream's order, or what a wrap runs with: a relative zmx path,
-/// a zmx that is not an executable file, a login shell other than zsh, bash or fish (`$SHELL` cannot override the
-/// password database), a resources directory without that shell's integration.
+/// a zmx that is not an executable file, a login shell other than zsh, bash, fish or PowerShell (`$SHELL` cannot
+/// override the password database), a resources directory without that shell's integration.
 ///
 /// # Errors
 ///
@@ -530,7 +530,7 @@ mod tests {
             ),
             (
                 LiveRejection::UnsupportedLoginShell,
-                "the password-database login shell is not zsh, bash or fish",
+                crate::restore::mode::UNSUPPORTED_LOGIN_SHELL,
             ),
             (
                 LiveRejection::MissingShellIntegration(LoginShell::Zsh),
@@ -543,6 +543,10 @@ mod tests {
             (
                 LiveRejection::MissingShellIntegration(LoginShell::Fish),
                 "the bundled fish integration is unavailable",
+            ),
+            (
+                LiveRejection::MissingShellIntegration(LoginShell::Pwsh),
+                "the bundled PowerShell integration is unavailable",
             ),
         ] {
             assert_eq!(rejection.message(), message);

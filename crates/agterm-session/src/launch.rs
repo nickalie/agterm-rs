@@ -8,7 +8,8 @@
 //! ([`EXECUTABLE_FILE`], [`EXECUTABLE_OVERRIDE`], [`BUILD_ID_PATH`]) until the session server takes its place.
 //!
 //! The login shell is the password database's on Unix ([`login_shell`]); Windows has none, so there it is PowerShell:
-//! the first launchable `pwsh.exe` on `PATH`, else the inbox `powershell.exe` (`windows_shell`, after herdr).
+//! the first launchable `pwsh.exe` on `PATH`, else `powershell.exe` there or in the system directory (`windows_shell`,
+//! after herdr), none when there is neither: the live launch then refuses with the unsupported-shell reason.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -150,12 +151,12 @@ pub fn login_shell() -> Option<String> {
     (!shell.is_empty()).then_some(shell)
 }
 
-/// The shell a Windows pane runs, there being no password database: the first launchable `pwsh.exe` on `PATH` as a
-/// full path, else the inbox `powershell.exe`. Never `None`.
+/// The shell a Windows pane runs, there being no password database: the first launchable `pwsh.exe` on `PATH`, else
+/// `powershell.exe` there or in the system directory, as a full path; `None` without any (`windows_shell`).
 #[cfg(windows)]
 #[must_use]
 pub fn login_shell() -> Option<String> {
-    Some(windows_shell::login_shell())
+    windows_shell::login_shell()
 }
 
 #[cfg(test)]
@@ -186,6 +187,10 @@ mod tests {
         let fish = root.path().join("share/ghostty/shell-integration/fish/vendor_conf.d");
         fs::create_dir_all(&fish).unwrap();
         fs::write(fish.join("ghostty-shell-integration.fish"), "").unwrap();
+        // the PowerShell integration as `scripts/stage.sh` stages it
+        let pwsh = root.path().join("share/ghostty/shell-integration/pwsh");
+        fs::create_dir_all(&pwsh).unwrap();
+        fs::copy(pwsh_integration_source(), pwsh.join("ngterm.ps1")).unwrap();
         fs::create_dir_all(root.path().join("share/ngterm")).unwrap();
         fs::write(root.path().join(BUILD_ID_PATH), "rev x86_64-linux-gnu.2.39 digest\n").unwrap();
         root
@@ -268,6 +273,49 @@ mod tests {
         assert!(!fish.contains_key("ENV") && !fish.contains_key("ZDOTDIR"));
     }
 
+    /// The repository's PowerShell integration, which `scripts/stage.sh` stages.
+    fn pwsh_integration_source() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("resources")
+            .join("shell-integration")
+            .join("pwsh")
+            .join("ngterm.ps1")
+    }
+
+    #[test]
+    fn a_powershell_login_shell_wraps_with_the_staged_integration() {
+        let root = staged();
+        let bin = root.path().join("bin");
+        let script = root
+            .path()
+            .join("share/ghostty/shell-integration")
+            .join("pwsh")
+            .join("ngterm.ps1");
+        let env = MapEnv::new().with("AGTERM_STATE_DIR", root.path().join("state"));
+        for shell in [
+            "/usr/bin/pwsh",
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            "powershell.exe",
+        ] {
+            let runtime = Runtime::resolve(&env, Some(&bin), Some(shell.to_owned()), false);
+            assert_eq!(runtime.live_probe(&env).unavailable_reason(), None, "{shell}");
+            let environment = runtime
+                .configuration(Uuid::new_v4(), BTreeMap::new(), None)
+                .unwrap()
+                .environment;
+            assert_eq!(
+                environment
+                    .get(agterm_core::live::shell_integration::PWSH_INTEGRATION_VARIABLE)
+                    .map(PathBuf::from),
+                Some(script.clone()),
+                "{shell}"
+            );
+            assert_eq!(environment.get("SHELL").map(String::as_str), Some(shell));
+        }
+    }
+
     #[test]
     fn the_resources_dir_comes_from_the_environment_first() {
         let root = staged();
@@ -306,7 +354,7 @@ mod tests {
         let tcsh = Runtime::resolve(&MapEnv::new(), Some(&bin), Some("/bin/tcsh".to_owned()), false);
         assert_eq!(
             tcsh.live_probe(&MapEnv::new()).unavailable_reason().as_deref(),
-            Some("the password-database login shell is not zsh, bash or fish")
+            Some(agterm_core::restore::mode::UNSUPPORTED_LOGIN_SHELL)
         );
         for shell in ["/bin/bash", "/usr/bin/fish"] {
             let runtime = Runtime::resolve(&MapEnv::new(), Some(&bin), Some(shell.to_owned()), false);
@@ -355,13 +403,19 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn a_windows_pane_runs_powershell() {
+    fn a_windows_pane_runs_powershell_by_its_full_path() {
         let shell = login_shell().unwrap();
         let path = Path::new(&shell);
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
         assert!(
-            shell == windows_shell::INBOX_POWERSHELL
-                || (path.is_absolute() && path.file_name().is_some_and(|name| name == "pwsh.exe")),
+            path.is_absolute()
+                && (name.eq_ignore_ascii_case(windows_shell::PWSH)
+                    || name.eq_ignore_ascii_case(windows_shell::INBOX_POWERSHELL)),
             "{shell}"
+        );
+        assert_eq!(
+            agterm_core::live::shell_integration::LoginShell::of(&shell),
+            Some(agterm_core::live::shell_integration::LoginShell::Pwsh)
         );
     }
 }

@@ -1,15 +1,18 @@
 //! The Windows login shell. Windows has no password database and no `$SHELL`, so the shell a pane runs is named here:
-//! the first launchable `pwsh.exe` (PowerShell 7) on `PATH`, as a full path, so the pane runs exactly the binary that
-//! was validated, else the inbox `powershell.exe` (5.1), the one shell every Windows has.
+//! the first launchable `pwsh.exe` (PowerShell 7) on `PATH`, else the first launchable `powershell.exe` (Windows
+//! PowerShell 5.1, inbox) on `PATH`, else the inbox one in the system directory (`System32\WindowsPowerShell\v1.0`),
+//! each as a full path, so the pane runs exactly the binary that was validated. None of them is no shell: a plain
+//! pane then runs `cmd.exe` (`agterm-term`), and live sessions are refused with the unsupported-shell reason.
 //!
 //! herdr: `src/pane.rs` `default_windows_pane_shell`, `is_windows_executable_file_for_host` and
 //! `windows_executable_machine_is_compatible`, and `src/platform/windows.rs` `native_machine_type`, at `HERDR_REV`
 //! (`build/pins.env`), licensed under the Apache License 2.0, modified: the image check reads the headers into a value
-//! first and judges it apart; the rules are herdr's. A candidate is launchable when it is a PE image (an `MZ` header
-//! whose `e_lfanew` points at a `PE\0\0` signature) that is an executable, not a DLL, for a machine this host runs,
-//! with a section table and a PE32 or PE32+ optional header inside the file: `CreateProcessW` does not fall back to
-//! later `PATH` entries, so a malformed, DLL or foreign-architecture `pwsh.exe` is skipped here. Defined on every OS
-//! for its tests, which model an x64 host where the host is not Windows.
+//! first and judges it apart; `powershell.exe` is validated and looked for like `pwsh.exe` (herdr names it bare); the
+//! image rules are herdr's. A candidate is launchable when it is a PE image (an `MZ` header whose `e_lfanew` points
+//! at a `PE\0\0` signature) that is an executable, not a DLL, for a machine this host runs, with a section table and a
+//! PE32 or PE32+ optional header inside the file: `CreateProcessW` does not fall back to later `PATH` entries, so a
+//! malformed, DLL or foreign-architecture `pwsh.exe` is skipped here. Defined on every OS for its tests, which model
+//! an x64 host where the host is not Windows.
 
 #[cfg(test)]
 mod tests;
@@ -17,12 +20,14 @@ mod tests;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// The shell without a launchable `pwsh.exe`.
+/// Windows PowerShell 5.1, the shell without a launchable `pwsh.exe`.
 pub(super) const INBOX_POWERSHELL: &str = "powershell.exe";
 /// The PowerShell 7 executable looked up on `PATH`.
-const PWSH: &str = "pwsh.exe";
+pub(super) const PWSH: &str = "pwsh.exe";
+/// Where the inbox PowerShell lives under the system directory (`%SystemRoot%\System32`).
+const INBOX_DIRECTORY: [&str; 2] = ["WindowsPowerShell", "v1.0"];
 
 const MACHINE_I386: u16 = 0x014c;
 const MACHINE_AMD64: u16 = 0x8664;
@@ -45,22 +50,55 @@ const IMAGE_FILE_DLL: u16 = 0x2000;
 const PE32_MAGIC: u16 = 0x010b;
 const PE32_PLUS_MAGIC: u16 = 0x020b;
 
-/// This process's shell: the first launchable `pwsh.exe` on its `PATH`, else [`INBOX_POWERSHELL`].
+/// This process's shell: the first launchable `pwsh.exe` on its `PATH`, else `powershell.exe` there or in the
+/// system directory; `None` without any.
 #[cfg(windows)]
-pub(super) fn login_shell() -> String {
-    shell_on_path(std::env::var_os("PATH").as_deref(), native_machine())
+pub(super) fn login_shell() -> Option<String> {
+    shell_on_path(
+        std::env::var_os("PATH").as_deref(),
+        system_directory().as_deref(),
+        native_machine(),
+    )
 }
 
-/// The first launchable `pwsh.exe` in the absolute directories of `path` (a `PATH` value) for a host of
-/// `native_machine`, as a full path; else [`INBOX_POWERSHELL`].
-pub(super) fn shell_on_path(path: Option<&OsStr>, native_machine: u16) -> String {
-    path.into_iter()
+/// The shell of a host of `native_machine` whose `PATH` is `path` and whose system directory is `system`: the first
+/// launchable `pwsh.exe` in the absolute directories of `path`, else the first launchable [`INBOX_POWERSHELL`] there,
+/// else the one under `system` (when absolute), as a full path; `None` when there is none.
+pub(super) fn shell_on_path(path: Option<&OsStr>, system: Option<&Path>, native_machine: u16) -> Option<String> {
+    let dirs: Vec<PathBuf> = path
+        .into_iter()
         .flat_map(std::env::split_paths)
         .filter(|dir| dir.is_absolute())
-        .map(|dir| dir.join(PWSH))
+        .collect();
+    let inbox = system.filter(|system| system.is_absolute()).map(|system| {
+        INBOX_DIRECTORY
+            .iter()
+            .fold(system.to_path_buf(), |dir, part| dir.join(part))
+    });
+    [PWSH, INBOX_POWERSHELL]
+        .into_iter()
+        .flat_map(|name| dirs.iter().map(move |dir| dir.join(name)))
+        .chain(inbox.map(|dir| dir.join(INBOX_POWERSHELL)))
         .find(|candidate| is_launchable(candidate, native_machine))
         .and_then(|candidate| candidate.into_os_string().into_string().ok())
-        .unwrap_or_else(|| INBOX_POWERSHELL.to_owned())
+}
+
+/// The system directory (`%SystemRoot%\System32`), as `GetSystemDirectoryW` names it; `None` when the call fails.
+#[cfg(windows)]
+fn system_directory() -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt as _;
+
+    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+
+    let mut buffer = [0_u16; 260];
+    let capacity = u32::try_from(buffer.len()).ok()?;
+    // SAFETY: the buffer is valid for `capacity` UTF-16 units; the call writes at most that many and returns the
+    // length written without the NUL, or the size needed (larger than the buffer) when it does not fit, or 0.
+    let len = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), capacity) };
+    let len = usize::try_from(len)
+        .ok()
+        .filter(|len| *len > 0 && *len < buffer.len())?;
+    Some(PathBuf::from(std::ffi::OsString::from_wide(&buffer[..len])))
 }
 
 /// Whether `path` is a PE image a host of `native_machine` can launch.

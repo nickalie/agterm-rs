@@ -6,7 +6,7 @@
 //! - this module: a pane's daemon name and back, and the instance's socket directory;
 //! - [`support`]: the wrap configuration of a pane, its rejections, the launch disposition and the attach command;
 //! - [`replay`]: the shell script a wrapped pane runs a captured or creation command with;
-//! - [`shell_integration`]: the Ghostty shell integration a wrapped zsh, bash or fish login shell starts with;
+//! - [`shell_integration`]: the shell integration a wrapped zsh, bash, fish or PowerShell login shell starts with;
 //! - [`lifecycle`]: the `zmx list` parser, the leader map, the launch reap policy and the refresh gate;
 //! - [`inventory`]: pane claims joined against the observed daemons, and the prune policy;
 //! - [`reset`]: Reset Live Sessions: selection, the one-shot marker, next-launch narrowing and the outcome;

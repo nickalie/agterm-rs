@@ -33,13 +33,23 @@ fn path_of(dirs: &[&Path]) -> OsString {
     std::env::join_paths(dirs).unwrap()
 }
 
-/// The shell an x64 host picks under `PATH` = `dirs`.
-fn shell_under(dirs: &[&Path]) -> String {
-    shell_on_path(Some(&path_of(dirs)), MACHINE_AMD64)
+/// The shell an x64 host without a system directory picks under `PATH` = `dirs`.
+fn shell_under(dirs: &[&Path]) -> Option<String> {
+    shell_on_path(Some(&path_of(dirs)), None, MACHINE_AMD64)
 }
 
-fn display(path: PathBuf) -> String {
-    path.into_os_string().into_string().unwrap()
+/// What the search returns for `path`: its full path, as a string.
+fn found(path: PathBuf) -> Option<String> {
+    path.into_os_string().into_string().ok()
+}
+
+/// The inbox PowerShell's place under the system directory `system`, with a valid image in it.
+fn inbox_under(system: &Path) -> PathBuf {
+    let dir = system.join("WindowsPowerShell").join("v1.0");
+    fs::create_dir_all(&dir).unwrap();
+    let inbox = dir.join(INBOX_POWERSHELL);
+    fs::write(&inbox, x64_image()).unwrap();
+    inbox
 }
 
 #[test]
@@ -47,18 +57,53 @@ fn pwsh_on_path_is_preferred_as_a_full_path() {
     let dir = tempfile::tempdir().unwrap();
     let pwsh = dir.path().join(PWSH);
     fs::write(&pwsh, x64_image()).unwrap();
-    assert_eq!(shell_under(&[dir.path()]), display(pwsh));
+    assert_eq!(shell_under(&[dir.path()]), found(pwsh));
 }
 
 #[test]
-fn without_a_launchable_pwsh_the_inbox_powershell_runs() {
+fn pwsh_anywhere_on_path_beats_powershell_and_powershell_beats_the_system_directory() {
+    let base = tempfile::tempdir().unwrap();
+    let (first, second, system) = (
+        base.path().join("first"),
+        base.path().join("second"),
+        base.path().join("sys"),
+    );
+    fs::create_dir_all(&first).unwrap();
+    fs::create_dir_all(&second).unwrap();
+    let inbox = inbox_under(&system);
+    let search = |dirs: &[&Path]| shell_on_path(Some(&path_of(dirs)), Some(&system), MACHINE_AMD64);
+    // nothing on PATH: the system directory's
+    assert_eq!(search(&[&first, &second]), found(inbox.clone()));
+    // a powershell.exe on PATH comes first
+    let powershell = first.join(INBOX_POWERSHELL);
+    fs::write(&powershell, x64_image()).unwrap();
+    assert_eq!(search(&[&first, &second]), found(powershell));
+    // a pwsh.exe in a later directory beats it
+    let pwsh = second.join(PWSH);
+    fs::write(&pwsh, x64_image()).unwrap();
+    assert_eq!(search(&[&first, &second]), found(pwsh));
+    // a relative system directory is never searched
+    assert_eq!(
+        shell_on_path(None, Some(Path::new("sys")), MACHINE_AMD64),
+        None,
+        "relative system directory"
+    );
+    assert_eq!(shell_on_path(None, Some(&system), MACHINE_AMD64), found(inbox));
+}
+
+#[test]
+fn without_a_launchable_powershell_there_is_no_shell() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join(PWSH), b"not a PE image").unwrap();
-    assert_eq!(shell_under(&[dir.path()]), INBOX_POWERSHELL);
-    assert_eq!(shell_on_path(None, MACHINE_AMD64), INBOX_POWERSHELL);
+    fs::write(dir.path().join(INBOX_POWERSHELL), b"MZ").unwrap();
+    assert_eq!(shell_under(&[dir.path()]), None);
+    assert_eq!(shell_on_path(None, None, MACHINE_AMD64), None);
     // an empty PATH, and a relative directory that would resolve against the working directory
-    assert_eq!(shell_on_path(Some(OsStr::new("")), MACHINE_AMD64), INBOX_POWERSHELL);
-    assert_eq!(shell_under(&[Path::new("relative")]), INBOX_POWERSHELL);
+    assert_eq!(shell_on_path(Some(OsStr::new("")), None, MACHINE_AMD64), None);
+    assert_eq!(shell_under(&[Path::new("relative")]), None);
+    // a system directory without the inbox PowerShell
+    let system = tempfile::tempdir().unwrap();
+    assert_eq!(shell_on_path(None, Some(system.path()), MACHINE_AMD64), None);
 }
 
 #[test]
@@ -99,10 +144,10 @@ fn malformed_or_foreign_images_are_refused() {
     ];
     for (label, bytes) in cases {
         fs::write(&pwsh, &bytes).unwrap();
-        assert_eq!(shell_under(&[dir.path()]), INBOX_POWERSHELL, "case {label:?}");
+        assert_eq!(shell_under(&[dir.path()]), None, "case {label:?}");
     }
     fs::write(&pwsh, x64_image()).unwrap();
-    assert_eq!(shell_under(&[dir.path()]), display(pwsh), "the valid image");
+    assert_eq!(shell_under(&[dir.path()]), found(pwsh), "the valid image");
 }
 
 #[test]
@@ -146,5 +191,5 @@ fn invalid_candidates_are_skipped_for_a_later_directory() {
     // a directory named pwsh.exe is no candidate either
     let directory = base.path().join("directory");
     fs::create_dir_all(directory.join(PWSH)).unwrap();
-    assert_eq!(shell_under(&[&directory, &invalid, &valid]), display(pwsh));
+    assert_eq!(shell_under(&[&directory, &invalid, &valid]), found(pwsh));
 }

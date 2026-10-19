@@ -1020,12 +1020,35 @@ Order after Task 7, as two lanes that meet:
 - Modify: `crates/agterm-core/src/live/{shell_integration,replay}.rs`, `crates/agterm-core/src/restore/mode.rs`
 - Create: `resources/shell-integration/pwsh/agterm.ps1` (path settled against the staged Ghostty resources)
 
-- [ ] `ShellKind::Pwsh`: the script (OSC 7, OSC 133, title), launch arguments, the replay script in pwsh
-- [ ] eligibility on Windows: `pwsh.exe`, then `powershell.exe`, else the existing rejection with its reason
-- [ ] tests: script rendering and quoting; replay of an argv with spaces and quotes; eligibility cases; e2e on the
+- [x] `ShellKind::Pwsh`: the script (OSC 7, OSC 133, title), launch arguments, the replay script in pwsh
+      - `LoginShell::Pwsh` (the enum kept its name), known by `pwsh`/`powershell` with or without `.exe`, after `/` or
+        `\`, on every OS (a Unix pwsh login shell wraps too). The script is `resources/shell-integration/pwsh/ngterm.ps1`
+        (ngterm's own name), staged by `scripts/stage.sh` beside Ghostty's integrations; `AGTERM_PWSH_INTEGRATION`
+        names it and `-NoLogo -NoExit -Command` (Unix `-Login` first) loads it as a script block (no execution policy
+        applies), wrapping the profile's prompt: OSC 133 A/B/C/D (C through `PSConsoleHostReadLine`), OSC 7 as
+        `kitty-shell-cwd://` (a Windows path `/C:/…`), the title and the bar cursor under `GHOSTTY_SHELL_FEATURES`. The
+        replay has no `exec`: it re-arms the variable and loads the integration first (a Ctrl+C ends a `-Command`
+        script), then `& 'program' 'args'` or a durable line as a script block, single-quoted with typographic quotes
+        doubled; exact argv in PowerShell 7.3+, Windows PowerShell 5.1's legacy passing loses embedded `"` and empty
+        arguments. `command_restore` takes PowerShell (and a Windows `\`-path, `.exe` name) as a shell, and one told
+        `-NoExit` as idle, so a live pwsh pane at its prompt is never replayed. A plain pane's PowerShell gets no
+        integration (Ghostty has none). On Unix pwsh has no job control, so the restore capture finds nothing under it
+        (recorded in `shell_integration`'s docs)
+- [x] eligibility on Windows: `pwsh.exe`, then `powershell.exe`, else the existing rejection with its reason
+      - `windows_shell`: launchable `pwsh.exe` on `PATH`, then `powershell.exe` on `PATH`, then the system directory's
+        `WindowsPowerShell\v1.0\powershell.exe`, as full paths; none is `None` (plain panes run `cmd.exe`) and the live
+        probe's `UnsupportedLoginShell`, worded per OS ("neither pwsh.exe nor powershell.exe is available"; Unix "… is
+        not zsh, bash, fish or PowerShell")
+- [x] tests: script rendering and quoting; replay of an argv with spaces and quotes; eligibility cases; e2e on the
       Windows runner (debugged in the VM) at the session and core level: a live pwsh session reports its cwd, and its
       foreground command, read through Task 15's table, is replayed by `agterm-core`'s replay into a recreated
       session
+      - core: rendering, quoting, eligibility, `is_idle_shell`, and a real-pwsh replay round trip of odd arguments
+        after the integration loads (`live::replay`); session: `tests/pwsh.rs` on real PTYs (`Pane::spawn`), on every
+        OS with a pwsh (required on Windows): the prompt's OSC 7, 133 and title, C and `D;3`, the helper's argv read
+        through the process table (Windows: the console foreground; Unix: the shell group's child), replayed into a
+        new session that runs it with the same arguments and then reports its directory. The VM was not used: copying
+        the tree into it was refused by the environment's permission classifier, so Windows is checked on CI only
 - [ ] run gates
 
 ### Task 28: Remove zmx

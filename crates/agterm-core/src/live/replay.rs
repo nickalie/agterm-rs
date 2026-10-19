@@ -4,8 +4,17 @@
 //! zsh and bash share the POSIX form, where every builtin is quoted, so a user's alias of `builtin`, `export` or `exec`
 //! cannot take it over. fish has no aliases (its `alias` defines a function, which `builtin` bypasses, and `exec` is a
 //! reserved word no function can take), so its form is `builtin set -gx` and a plain `exec`, with fish's own quoting.
+//!
+//! PowerShell, a Rust-only extension, has no `exec`: its replay runs in the shell `-NoExit` keeps
+//! ([`LoginShell::script_flags`]), so the script re-arms the integration's variable and loads the integration first,
+//! then runs the command (`& 'program' 'argument'`, or a durable line as a script block). Loading it first keeps the
+//! prompt integrated however the command ends: a Ctrl+C stops the rest of a `-Command` script, not only the command.
+//! Only language syntax and .NET calls, so no alias or function of the user's takes it over. Words are single-quoted
+//! ([`powershell_quoted`]). How a native program receives them is PowerShell's own argument passing: exact in
+//! PowerShell 7.3 and later (`$PSNativeCommandArgumentPassing`), while Windows PowerShell 5.1's legacy passing loses an
+//! embedded double quote or an empty argument.
 
-use super::shell_integration::{LoginShell, Rearm};
+use super::shell_integration::{LoginShell, PWSH_LOAD, Rearm};
 use crate::command_restore::shell_quoted_line;
 
 /// The interactive login shell a replay ends in, and what it re-arms before the `exec`.
@@ -20,22 +29,30 @@ pub struct FinalShell<'a> {
 /// The script for a captured `argv`, quoted word by word.
 #[must_use]
 pub fn render_argv<S: AsRef<str>>(argv: &[S], shell: &FinalShell<'_>) -> String {
-    let statement = if shell.kind.is_fish() {
+    let words = |quote: fn(&str) -> String| {
         argv.iter()
-            .map(|word| fish_quoted(word.as_ref()))
+            .map(|word| quote(word.as_ref()))
             .collect::<Vec<_>>()
             .join(" ")
+    };
+    let statement = if shell.kind.is_fish() {
+        words(fish_quoted)
+    } else if shell.kind.is_powershell() {
+        format!("& {}", words(powershell_quoted))
     } else {
         shell_quoted_line(argv)
     };
     render(&statement, shell)
 }
 
-/// The script for a durable creation command, a shell line kept with its operators and word parsing (`eval`).
+/// The script for a durable creation command, a shell line kept with its operators and word parsing (`eval`; in
+/// PowerShell a script block made of it, dot-sourced).
 #[must_use]
 pub fn render_command_line(command_line: &str, shell: &FinalShell<'_>) -> String {
     let statement = if shell.kind.is_fish() {
         format!("builtin eval {}", fish_quoted(command_line))
+    } else if shell.kind.is_powershell() {
+        format!(". ([scriptblock]::Create({}))", powershell_quoted(command_line))
     } else {
         format!("'builtin' 'eval' -- {}", quoted(command_line))
     };
@@ -43,6 +60,9 @@ pub fn render_command_line(command_line: &str, shell: &FinalShell<'_>) -> String
 }
 
 fn render(statement: &str, shell: &FinalShell<'_>) -> String {
+    if shell.kind.is_powershell() {
+        return render_powershell(statement, shell);
+    }
     let fish = shell.kind.is_fish();
     let mut steps = vec![statement.to_owned()];
     steps.extend(shell.rearm.iter().map(|step| match (step, fish) {
@@ -60,8 +80,39 @@ fn render(statement: &str, shell: &FinalShell<'_>) -> String {
     steps.join(" ; ")
 }
 
+/// PowerShell's replay: the re-armed variables, the integration loaded, then the command, in the shell that stays.
+fn render_powershell(statement: &str, shell: &FinalShell<'_>) -> String {
+    let mut steps: Vec<String> = shell
+        .rearm
+        .iter()
+        .map(|step| match step {
+            Rearm::Export(key, value) => format!("$env:{key} = {}", powershell_quoted(value)),
+            Rearm::Unset(key) => format!("$env:{key} = $null"),
+        })
+        .collect();
+    steps.push(PWSH_LOAD.to_owned());
+    steps.push(statement.to_owned());
+    steps.join(" ; ")
+}
+
 fn quoted(value: &str) -> String {
     shell_quoted_line(&[value])
+}
+
+/// `value` as one PowerShell word: a single-quoted string, inside which a single quote is written twice. PowerShell
+/// takes the typographic single quotes (U+2018–U+201B) for one as well, so those are doubled too.
+#[must_use]
+pub fn powershell_quoted(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('\'');
+    for character in value.chars() {
+        if matches!(character, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}') {
+            quoted.push(character);
+        }
+        quoted.push(character);
+    }
+    quoted.push('\'');
+    quoted
 }
 
 /// `value` as one fish word: single quotes, inside which only a backslash and a single quote are escaped.
@@ -300,5 +351,161 @@ mod tests {
         let output = run_fish(fish, &render_command_line(&line, &shell), dir.path());
         assert!(output.status.success(), "{output:?}");
         assert_eq!(fs::read_to_string(&line_result).unwrap(), "two words and more");
+    }
+
+    fn pwsh_shell<'a>(rearm: &'a [Rearm], path: &'a str) -> FinalShell<'a> {
+        FinalShell {
+            path,
+            kind: LoginShell::Pwsh,
+            rearm,
+        }
+    }
+
+    #[test]
+    fn a_powershell_word_doubles_every_single_quote_powershell_reads() {
+        assert_eq!(powershell_quoted("plain"), "'plain'");
+        assert_eq!(powershell_quoted(""), "''");
+        assert_eq!(powershell_quoted("it's"), "'it''s'");
+        assert_eq!(
+            powershell_quoted("\u{2018}curly\u{2019}"),
+            "'\u{2018}\u{2018}curly\u{2019}\u{2019}'"
+        );
+        assert_eq!(
+            powershell_quoted("\u{201a}low\u{201b}"),
+            "'\u{201a}\u{201a}low\u{201b}\u{201b}'"
+        );
+        // nothing else is special inside single quotes: no variables, escapes or subexpressions
+        assert_eq!(
+            powershell_quoted(r#"$HOME `n "x" $(y) C:\dir\"#),
+            r#"'$HOME `n "x" $(y) C:\dir\'"#
+        );
+    }
+
+    #[test]
+    fn powershell_rearms_and_loads_the_integration_before_the_command() {
+        let rearm = [
+            Rearm::Export("AGTERM_PWSH_INTEGRATION", r"C:\it's\ngterm.ps1".to_owned()),
+            Rearm::Unset("STALE"),
+        ];
+        let shell = pwsh_shell(&rearm, r"C:\Program Files\PowerShell\7\pwsh.exe");
+        let prefix =
+            format!(r"$env:AGTERM_PWSH_INTEGRATION = 'C:\it''s\ngterm.ps1' ; $env:STALE = $null ; {PWSH_LOAD} ; ");
+        assert_eq!(
+            render_argv(&[r"C:\tools\top.exe", "a b", "it's"], &shell),
+            format!(r"{prefix}& 'C:\tools\top.exe' 'a b' 'it''s'")
+        );
+        assert_eq!(
+            render_command_line("Get-ChildItem | Select-Object -First 1; 'done'", &shell),
+            format!("{prefix}. ([scriptblock]::Create('Get-ChildItem | Select-Object -First 1; ''done'''))")
+        );
+        // no exec: the shell `-NoExit` keeps is the final one, so its path is no part of the script
+        assert!(!render_argv(&["top"], &shell).contains("pwsh.exe"));
+    }
+
+    /// PowerShell 7 when this host has one on `PATH` (the CI runners of every OS carry it): `None` otherwise.
+    fn pwsh() -> Option<std::path::PathBuf> {
+        let name = if cfg!(windows) { "pwsh.exe" } else { "pwsh" };
+        std::env::split_paths(&std::env::var_os("PATH")?)
+            .map(|dir| dir.join(name))
+            .find(|path| path.is_file())
+    }
+
+    /// Where [`argv_recorder`] writes what it was run with.
+    const RECORD: &str = "REPLAY_TEST_RECORD";
+
+    /// Runs `script` under `pwsh` as a non-interactive command, with the live agterm's variables stripped.
+    fn run_pwsh(pwsh: &Path, script: &str, record: &Path) -> std::process::Output {
+        let mut command = Command::new(pwsh);
+        command
+            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
+            .env(RECORD, record)
+            .env("STALE", "inherited")
+            .stdin(std::process::Stdio::null());
+        for (key, _) in std::env::vars_os() {
+            if key
+                .to_str()
+                .is_some_and(|key| key.starts_with("AGTERM_") || key.starts_with("ZMX_"))
+            {
+                command.env_remove(key);
+            }
+        }
+        command.output().unwrap()
+    }
+
+    #[test]
+    fn a_powershell_replay_round_trips_arguments_after_loading_the_integration() {
+        let Some(pwsh) = pwsh() else {
+            eprintln!("SKIPPED: no pwsh on PATH");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let record = dir.path().join("record.json");
+        // the stand-in integration marks what the command then inherits; its path needs quoting
+        let integration = dir.path().join("it's integration.ps1");
+        fs::write(&integration, "$env:REPLAY_TEST_LOADED = $env:AGTERM_PWSH_INTEGRATION\n").unwrap();
+        let expected = [
+            "a b",
+            "it's \"quoted\"",
+            r#"back\"slash"#,
+            r"C:\dir with space\",
+            "tab\there",
+            "",
+            "$HOME",
+            "semi;colon",
+            "\u{2018}curly\u{2019}",
+        ];
+        let mut argv = vec![
+            std::env::current_exe().unwrap().display().to_string(),
+            "--ignored".to_owned(),
+            "--exact".to_owned(),
+            "live::replay::tests::argv_recorder".to_owned(),
+            "--".to_owned(),
+        ];
+        argv.extend(expected.iter().map(|arg| (*arg).to_owned()));
+        let rearm = [
+            Rearm::Export("AGTERM_PWSH_INTEGRATION", integration.display().to_string()),
+            Rearm::Unset("STALE"),
+        ];
+        let pwsh_path = pwsh.display().to_string();
+        let shell = pwsh_shell(&rearm, &pwsh_path);
+        let output = run_pwsh(&pwsh, &render_argv(&argv, &shell), &record);
+        assert!(output.status.success(), "{output:?}");
+        let recorded: serde_json::Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+        assert_eq!(
+            recorded,
+            serde_json::json!({
+                "argv": expected,
+                "loaded": integration.display().to_string(),
+                "stale": null,
+            })
+        );
+        // a durable line keeps its statements and PowerShell's own word parsing
+        let line = format!(
+            "$words = 'two words'; Set-Content -LiteralPath {} -Value ($words + ' and more') -NoNewline",
+            powershell_quoted(&dir.path().join("line").display().to_string())
+        );
+        let output = run_pwsh(&pwsh, &render_command_line(&line, &shell), &record);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("line")).unwrap(),
+            "two words and more"
+        );
+    }
+
+    /// Not a test of its own: the program the PowerShell replay test runs, which records its arguments after `--`
+    /// and the variables the replay set, as JSON in the file [`RECORD`] names.
+    #[test]
+    #[ignore = "the PowerShell replay test's child"]
+    fn argv_recorder() {
+        let Some(record) = std::env::var_os(RECORD) else {
+            return;
+        };
+        let argv: Vec<String> = std::env::args().skip_while(|arg| arg != "--").skip(1).collect();
+        let recorded = serde_json::json!({
+            "argv": argv,
+            "loaded": std::env::var("REPLAY_TEST_LOADED").ok(),
+            "stale": std::env::var("STALE").ok(),
+        });
+        fs::write(record, recorded.to_string()).unwrap();
     }
 }

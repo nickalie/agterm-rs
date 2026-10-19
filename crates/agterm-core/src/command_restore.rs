@@ -4,8 +4,22 @@
 //! pane restores with ([`restore_plan`]) and the user's `restore-denylist.conf`. The process-table reads stay with the
 //! frontend; upstream's `KERN_PROCARGS2` parser is macOS-only and has no counterpart here.
 
-/// The login shells read as "no program to restore": a shell held the pane, nothing to re-run.
-const KNOWN_SHELLS: [&str; 8] = ["zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh"];
+/// The login shells read as "no program to restore": a shell held the pane, nothing to re-run. Upstream's, and
+/// PowerShell's two names, the shell this build's live panes also run (a Rust-only extension).
+const KNOWN_SHELLS: [&str; 10] = [
+    "zsh",
+    "bash",
+    "sh",
+    "fish",
+    "dash",
+    "ksh",
+    "tcsh",
+    "csh",
+    "pwsh",
+    "powershell",
+];
+/// What separates a path's components: on Windows a `\` as well as a `/`.
+const PATH_SEPARATORS: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
 
 /// What a pane's foreground argv means: a program, or a recognized shell in the foreground (upstream's
 /// `CommandRestore.PaneForeground`).
@@ -37,31 +51,53 @@ impl PaneForeground {
     }
 }
 
-/// The last path component of `path`, or `path` itself when it has none (a path of slashes only).
+/// The last path component of `path`, or `path` itself when it has none (a path of slashes only). On Windows a `\`
+/// separates components as well.
 #[must_use]
 pub fn basename(path: &str) -> &str {
-    path.split('/').rfind(|part| !part.is_empty()).unwrap_or(path)
+    path.split(PATH_SEPARATORS)
+        .rfind(|part| !part.is_empty())
+        .unwrap_or(path)
 }
 
 /// Whether `basename` is a login shell, also matching the user's `$SHELL` basename passed as `extra`. A leading `-`
-/// (a login shell's dash-marked argv[0]) is stripped first.
+/// (a login shell's dash-marked argv[0]) is stripped first. A Windows program name (`pwsh.exe`, `PowerShell.EXE`) is
+/// known by its name without `.exe`, in any case.
 #[must_use]
 pub fn is_known_shell(basename: &str, extra: Option<&str>) -> bool {
     let name = basename.strip_prefix('-').unwrap_or(basename);
-    KNOWN_SHELLS.contains(&name) || extra.is_some_and(|extra| !extra.is_empty() && name == extra)
+    let windows_name = name.to_ascii_lowercase();
+    let windows_known = windows_name
+        .strip_suffix(".exe")
+        .is_some_and(|stem| KNOWN_SHELLS.contains(&stem));
+    KNOWN_SHELLS.contains(&name) || windows_known || extra.is_some_and(|extra| !extra.is_empty() && name == extra)
 }
 
 /// Whether `argv` is shell-shaped with nothing to restore: `argv[0]` is a known shell (or `$SHELL`'s basename, passed
 /// as `extra`) and only option flags follow it. Not proof of an interactive prompt: a builtin or a shell loop runs in
 /// the shell process and leaves argv untouched. A shell running something is not idle: a script path
 /// (`/bin/sh /usr/local/bin/cld`, the foreground of any `#!/bin/sh` wrapper) or a `-c` command leaves a non-flag
-/// argument after `argv[0]`.
+/// argument after `argv[0]`. A PowerShell told `-NoExit` is the exception: it holds a prompt once its `-Command` ran,
+/// which is how a live pane's PowerShell loads its integration (`live::shell_integration`) and runs a replay.
 #[must_use]
 pub fn is_idle_shell(argv: &[String], extra: Option<&str>) -> bool {
     let Some((first, rest)) = argv.split_first() else {
         return false;
     };
-    is_known_shell(basename(first), extra) && rest.iter().all(|arg| arg.starts_with('-'))
+    let name = basename(first);
+    is_known_shell(name, extra) && (rest.iter().all(|arg| arg.starts_with('-')) || stays_open(name, rest))
+}
+
+/// Whether a PowerShell (`name`, by its basename) is told `-NoExit` by one of `arguments`, in any of the abbreviations
+/// PowerShell takes for it (down to `-noe`), in any case.
+fn stays_open(name: &str, arguments: &[String]) -> bool {
+    const NO_EXIT: &str = "-noexit";
+    const SHORTEST: usize = "-noe".len();
+    crate::live::shell_integration::is_powershell(name.strip_prefix('-').unwrap_or(name))
+        && arguments.iter().any(|arg| {
+            let arg = arg.to_ascii_lowercase();
+            arg.len() >= SHORTEST && NO_EXIT.starts_with(&arg)
+        })
 }
 
 /// Classifies a pane's raw foreground argv for the tree read; `None` for an empty argv only. `extra` is `$SHELL`'s
@@ -418,6 +454,70 @@ mod tests {
         assert!(!is_idle_shell(&argv(&["bash", "-c", "echo hi"]), None));
         assert!(!is_idle_shell(&argv(&["htop"]), None));
         assert!(!is_idle_shell(&argv(&[]), None));
+    }
+
+    #[test]
+    fn a_powershell_kept_open_is_idle_whatever_it_ran_first() {
+        let live = |shell: &str| {
+            let mut argv = argv(&[shell, "-NoLogo", "-NoExit", "-Command"]);
+            argv.push(crate::live::shell_integration::PWSH_LOAD.to_owned());
+            argv
+        };
+        assert!(is_idle_shell(&live("/usr/bin/pwsh"), None));
+        assert!(is_idle_shell(&live("powershell"), None));
+        assert!(is_idle_shell(&argv(&["pwsh", "-NOE", "-c", "Get-Date"]), None));
+        assert!(is_idle_shell(&argv(&["pwsh"]), None));
+        assert!(is_idle_shell(&argv(&["pwsh", "-NoLogo"]), None));
+        // without -NoExit it runs its command and ends: a program, as `bash -c` is
+        assert!(!is_idle_shell(&argv(&["pwsh", "-Command", "Get-Date"]), None));
+        assert!(
+            !is_idle_shell(&argv(&["pwsh", "-no", "-c", "x"]), None),
+            "too short for -NoExit"
+        );
+        assert!(!is_idle_shell(&argv(&["pwsh", "-c", "Get-Date -noexit"]), None));
+        // no other shell stays open on -NoExit
+        assert!(!is_idle_shell(&argv(&["bash", "-NoExit", "x"]), None));
+        assert_eq!(
+            pane_foreground(&live("/usr/bin/pwsh"), None),
+            Some(PaneForeground::ForegroundShell("pwsh".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_windows_shell_is_known_by_its_name_without_exe() {
+        assert!(is_known_shell("pwsh.exe", None));
+        assert!(is_known_shell("PowerShell.EXE", None));
+        assert!(is_known_shell("bash.exe", None));
+        assert!(
+            !is_known_shell("PowerShell", None),
+            "only the Windows form ignores case"
+        );
+        assert!(!is_known_shell("cmd.exe", None));
+        assert!(!is_known_shell("pwsh.exe.bak", None));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_path_ends_at_its_last_backslash() {
+        assert_eq!(basename(r"C:\Program Files\PowerShell\7\pwsh.exe"), "pwsh.exe");
+        assert_eq!(basename(r"C:/tools\nvim.exe"), "nvim.exe");
+        let pwsh = argv(&[
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            "-NoLogo",
+            "-NoExit",
+            "-Command",
+            "x",
+        ]);
+        assert_eq!(
+            pane_foreground(&pwsh, None),
+            Some(PaneForeground::ForegroundShell("pwsh.exe".to_owned()))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_unix_path_keeps_a_backslash_in_its_name() {
+        assert_eq!(basename(r"/opt/odd\name"), r"odd\name");
     }
 
     #[test]

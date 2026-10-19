@@ -4,8 +4,8 @@
 #   bin/{agterm,ngtermctl,zmx}  share/ghostty/{themes,shell-integration}  share/terminfo
 #   share/ngterm/zmx-BUILD (the staged zmx's build id, with bin/zmx)  share/ngterm/{agent-status,skills/agterm}
 #
-# from cargo's target dir and the vendored prefixes, plus agterm's own themes from build/themes and the agent
-# integrations' payloads from resources/. Binaries are staged when they exist (agterm and ngtermctl appear with
+# from cargo's target dir and the vendored prefixes, plus agterm's own themes from build/themes, its PowerShell
+# integration (share/ghostty/shell-integration/pwsh) and the agent integrations' payloads from resources/. Binaries are staged when they exist (agterm and ngtermctl appear with
 # their crates, zmx once scripts/build-zmx.sh filled its prefix); Ghostty's resources are required. There is no lib/:
 # libghostty-vt is linked statically. The terminfo, themes and shell integration are Ghostty's at LIBGHOSTTY_VT_REV,
 # from the libghostty-vt prefix (scripts/build-ghostty-vt.sh).
@@ -68,6 +68,9 @@ verify_ghostty_resources "$DEST/share" >&2
 # after the check of Ghostty's own catalog: agterm's bundled theme(s), the seeded default `agterm` among them
 # (upstream's stage_custom_themes)
 install -m644 "$NATIVE_ROOT"/build/themes/* "$DEST/share/ghostty/themes/"
+# and agterm's own PowerShell integration beside Ghostty's (which has none), where a live PowerShell pane's wrap finds
+# it (crates/agterm-core/src/live/shell_integration.rs)
+cp -R "$NATIVE_ROOT/resources/shell-integration/pwsh" "$DEST/share/ghostty/shell-integration/pwsh"
 # the agent integrations' payloads (upstream's agent-status package and agent skill, see resources/): the Help menu
 # installers copy them from share/ngterm
 mkdir -p "$DEST/share/ngterm/skills"
