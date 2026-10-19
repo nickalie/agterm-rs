@@ -97,7 +97,9 @@ fn the_cursor_on_a_wide_characters_tail_says_so() -> TestResult {
     // the cursor put on column 3 (one-based), the family's spacer
     let fixture = spawn(&script("\\033[3G"))?;
     let frame = wait_frame(&fixture.pane, |frame| {
-        frame.rows[0].line().ends_with('x') && frame.cursor.position.is_some_and(|at| at.column < 7)
+        // a frame taken before the first capture has no rows yet
+        frame.rows.first().is_some_and(|row| row.line().ends_with('x'))
+            && frame.cursor.position.is_some_and(|at| at.column < 7)
     });
     let position = frame.cursor.position.ok_or("no cursor")?;
     assert_eq!((position.column, position.wide_tail), (2, true));
