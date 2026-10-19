@@ -256,7 +256,10 @@ mod tests {
         );
         assert_eq!(encode(&mut terminal, &press(Key::A, KeyMods::empty(), "a")), b"a");
         assert_eq!(encode(&mut terminal, &press(Key::C, KeyMods::CTRL, "c")), b"\x03");
-        assert_eq!(encode(&mut terminal, &press(Key::A, KeyMods::ALT, "a")), b"\x1ba");
+        // Alt prefixes ESC; on macOS Alt is Option, which sends its text as is unless `macos-option-as-alt` says
+        // otherwise (`GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT`, which `setopt_from_terminal` resets to false)
+        let alt: &[u8] = if cfg!(target_os = "macos") { b"a" } else { b"\x1ba" };
+        assert_eq!(encode(&mut terminal, &press(Key::A, KeyMods::ALT, "a")), alt);
         // a control character in the text is the encoder's to derive, never passed through
         assert_eq!(encode(&mut terminal, &press(Key::ENTER, KeyMods::empty(), "\r")), b"\r");
         let release = KeyEvent {

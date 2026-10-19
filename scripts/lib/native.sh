@@ -9,10 +9,44 @@
 # binary package unpacked (fetch-wpe.sh) where the system has none, and reaches cargo through pkg-config.sh. A
 # relative AGTERM_VENDOR is taken against the repository root, so every caller (and cargo, which runs from a crate
 # directory) sees one path.
+#
+# Portable shell: this file and build-ghostty-vt.sh run under Linux's bash, stock macOS's bash 3.2 and Git Bash on
+# Windows (MSYS2), so they use no bash-4 constructs (`${var^^}`, `mapfile`, associative arrays) and pick each tool
+# per OS (sha256_of, find_zig's archive format). On Windows every path the scripts handle is MSYS's (`/c/...`): a Windows-form
+# AGTERM_VENDOR is converted on the way in, and native_path converts a path on the way out to a native program.
+
+die() {
+  echo "$*" >&2
+  exit 1
+}
+
+# The host OS as Zig and ziglang.org's archives name it: linux, macos or windows (Git Bash, MSYS2, Cygwin).
+host_os() {
+  case "$(uname -s)" in
+    Linux) echo linux ;;
+    Darwin) echo macos ;;
+    MINGW* | MSYS* | CYGWIN*) echo windows ;;
+    *) die "no native build for $(uname -s)" ;;
+  esac
+}
+
+# PATH in the form a native program of this host takes: on Windows the mixed form (`C:/Users/...`, which both
+# Windows programs and MSYS read), elsewhere PATH itself.
+native_path() {
+  if [[ "$(host_os)" == windows ]]; then
+    cygpath -m "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
 
 NATIVE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PINS="$NATIVE_ROOT/build/pins.env"
 VENDOR_ROOT="${AGTERM_VENDOR:-$HOME/.cache/agterm-rs/vendor}"
+# a Windows-form path (`C:\...`, `C:/...`: what cargo and the tests pass on Windows) in MSYS's form
+if [[ "$VENDOR_ROOT" == [A-Za-z]:[\\/]* ]] && command -v cygpath >/dev/null; then
+  VENDOR_ROOT="$(cygpath -u "$VENDOR_ROOT")"
+fi
 [[ "$VENDOR_ROOT" == /* ]] || VENDOR_ROOT="$NATIVE_ROOT/$VENDOR_ROOT"
 # shellcheck source=../../build/pins.env
 source "$PINS"
@@ -26,17 +60,25 @@ WORKSPACE_WITHOUT_WPE=(--workspace --exclude agterm-wpe --exclude agterm-wpe-sys
   --exclude agterm-wpe-javascriptcore-sys --exclude agterm-gpui)
 GPUI_WITHOUT_HTML=(-p agterm-gpui --no-default-features)
 
-die() {
-  echo "$*" >&2
-  exit 1
-}
-
+# The sha256 of stdin: coreutils' sha256sum (Linux, Git Bash), else shasum (stock macOS).
 sha256_of() {
   if command -v sha256sum >/dev/null; then
     sha256sum | cut -d' ' -f1
   else
     shasum -a 256 | cut -d' ' -f1
   fi
+}
+
+# Whether FILE's sha256 is SHA.
+sha256_matches() {
+  local sha="$1" file="$2" actual
+  actual="$(sha256_of <"$file")" || return 1
+  [[ "$actual" == "$sha" ]]
+}
+
+# STRING in upper case (bash 3.2 has no `${var^^}`).
+upper() {
+  printf '%s\n' "$1" | tr '[:lower:]' '[:upper:]'
 }
 
 # The pin lines of one dependency (every line starting with PREFIX_), as recorded in its prefix.
@@ -195,7 +237,7 @@ gir_prefix_is_complete() {
     && pin_lines GIR | cmp -s - "$prefix/share/agterm/gir-PINS"
 }
 
-# The Zig triple arch and the matching pinned sha256 variable suffix for this host.
+# The Zig triple arch of this host, as ziglang.org's archives and the pinned sha256 variables name it.
 host_zig_arch() {
   case "$(uname -m)" in
     x86_64 | amd64) echo x86_64 ;;
@@ -204,13 +246,28 @@ host_zig_arch() {
   esac
 }
 
-# Print a zig of exactly VERSION: $OVERRIDE_VAR, a matching zig on PATH, mise's, or the pinned ziglang.org
-# tarball (sha256 SHA) unpacked once into the vendor root.
+# The pinned sha256 of the Zig archive of BUILD (a pin prefix: LIBGHOSTTY_VT, ZMX) for this host:
+# BUILD_ZIG_SHA256_<OS>_<ARCH>, or, for a build pinned on Linux alone (zmx), BUILD_ZIG_SHA256_<ARCH> on Linux.
+zig_pin_sha256() {
+  local build="$1" os arch name
+  os="$(upper "$(host_os)")" || exit
+  arch="$(upper "$(host_zig_arch)")" || exit
+  name="${build}_ZIG_SHA256_${os}_${arch}"
+  if [[ -z "${!name:-}" && "$os" == LINUX ]]; then
+    name="${build}_ZIG_SHA256_${arch}"
+  fi
+  [[ -n "${!name:-}" ]] || die "build/pins.env pins no Zig for $build on $(host_os) $(host_zig_arch) ($name)"
+  echo "${!name}"
+}
+
+# Print a zig of exactly VERSION: $OVERRIDE_VAR, a matching zig on PATH, mise's, or the pinned ziglang.org archive
+# of this OS and arch (sha256 SHA) unpacked once into the vendor root: a .tar.xz on Linux and macOS (tar with xz), a
+# .zip on Windows (Git Bash's unzip).
 #
 # Callers run this as ZIG="$(find_zig ...)", where bash clears errexit, so every step checks its own failure: a
 # failed fetch or unpack must never leave a partial tree in the final directory, which later runs would reuse.
 find_zig() {
-  local version="$1" sha="$2" override="$3" candidate arch dir tarball
+  local version="$1" sha="$2" override="$3" candidate os arch name exe format dir archive
   for candidate in "$override" "$(command -v zig 2>/dev/null || true)" \
     "$(mise where "zig@$version" 2>/dev/null || true)/bin/zig"; do
     if [[ -n "$candidate" && -x "$candidate" && "$("$candidate" version 2>/dev/null)" == "$version" ]]; then
@@ -219,38 +276,80 @@ find_zig() {
     fi
   done
   [[ -z "$override" ]] || die "$override is not zig $version"
+  os="$(host_os)" || exit
   arch="$(host_zig_arch)" || exit
-  dir="$VENDOR_ROOT/zig-$arch-linux-$version"
-  if [[ ! -x "$dir/zig" ]]; then
+  name="zig-$arch-$os-$version"
+  exe=zig
+  format=tar.xz
+  if [[ "$os" == windows ]]; then
+    exe=zig.exe
+    format=zip
+  fi
+  dir="$VENDOR_ROOT/$name"
+  if [[ ! -x "$dir/$exe" ]]; then
     command -v curl >/dev/null || die "curl is required to fetch zig $version"
-    command -v xz >/dev/null || die "xz is required to unpack zig $version"
-    tarball="$(mktemp "$VENDOR_ROOT/.zig-$version.XXXXXX")" || die "cannot create a download file in $VENDOR_ROOT"
+    if [[ "$format" == zip ]]; then
+      command -v unzip >/dev/null || die "unzip is required to unpack zig $version (Git Bash ships it)"
+    elif ! command -v xz >/dev/null && ! tar --version 2>/dev/null | grep -q bsdtar; then
+      # GNU tar runs xz; macOS's bsdtar unpacks .xz itself
+      die "xz is required to unpack zig $version"
+    fi
+    archive="$(mktemp "$VENDOR_ROOT/.zig-$version.XXXXXX")" || die "cannot create a download file in $VENDOR_ROOT"
     echo "fetching zig $version..." >&2
-    curl -fsSLo "$tarball" "https://ziglang.org/download/$version/zig-$arch-linux-$version.tar.xz" \
-      || { rm -f "$tarball"; die "cannot download zig $version"; }
-    echo "$sha  $tarball" | sha256sum --check --quiet >&2 || { rm -f "$tarball"; die "zig $version sha256 mismatch"; }
-    { rm -rf "$dir.partial" && mkdir -p "$dir.partial"; } || { rm -f "$tarball"; die "cannot create $dir.partial"; }
-    tar -xJf "$tarball" -C "$dir.partial" --strip-components=1 \
-      || { rm -rf "$dir.partial" "$tarball"; die "cannot unpack zig $version"; }
-    rm -f "$tarball"
+    curl -fsSLo "$archive" "https://ziglang.org/download/$version/$name.$format" \
+      || { rm -f "$archive"; die "cannot download zig $version"; }
+    sha256_matches "$sha" "$archive" || { rm -f "$archive"; die "zig $version sha256 mismatch"; }
+    { rm -rf "$dir.partial" "$dir.unpacked" && mkdir -p "$dir.unpacked"; } \
+      || { rm -f "$archive"; die "cannot create $dir.unpacked"; }
+    if [[ "$format" == zip ]]; then
+      # the zip's one top directory, $name/, becomes the partial tree (unzip strips no components)
+      unzip -q "$archive" -d "$dir.unpacked" && mv "$dir.unpacked/$name" "$dir.partial" \
+        || { rm -rf "$dir.unpacked" "$dir.partial" "$archive"; die "cannot unpack zig $version"; }
+      rm -rf "$dir.unpacked"
+    else
+      tar -xJf "$archive" -C "$dir.unpacked" --strip-components=1 && mv "$dir.unpacked" "$dir.partial" \
+        || { rm -rf "$dir.unpacked" "$dir.partial" "$archive"; die "cannot unpack zig $version"; }
+    fi
+    rm -f "$archive"
     { rm -rf "$dir" && mv "$dir.partial" "$dir"; } || { rm -rf "$dir.partial"; die "cannot move zig into $dir"; }
   fi
-  [[ "$("$dir/zig" version)" == "$version" ]] || die "$dir/zig is not zig $version"
-  echo "$dir/zig"
+  [[ "$("$dir/$exe" version)" == "$version" ]] || die "$dir/$exe is not zig $version"
+  echo "$dir/$exe"
+}
+
+# The compiled xterm-ghostty entry of the terminfo database DIR, in either layout `tic` writes: a directory per first
+# letter (`x/`, ncurses on Linux) or per its hex code (`78/`, where the file system ignores case: macOS, Windows). Fails
+# when neither is there.
+ghostty_terminfo_entry() {
+  local entry
+  for entry in "$1/x/xterm-ghostty" "$1/78/xterm-ghostty"; do
+    if [[ -s "$entry" ]]; then
+      echo "$entry"
+      return 0
+    fi
+  done
+  return 1
 }
 
 # Verify the Ghostty resources below SHARE (port of ../agterm-linux scripts/verify-linux-resources.sh): the ones
-# build-ghostty-vt.sh vendors at LIBGHOSTTY_VT_REV.
+# build-ghostty-vt.sh vendors at LIBGHOSTTY_VT_REV. The terminfo source (`ghostty.terminfo`) is there on every OS; the
+# compiled entry is required, and read back with infocmp, where `tic` exists (build-ghostty-vt.sh compiles it then).
 verify_ghostty_resources() {
   local share="$1" ghostty themes terminfo theme_count theme file
-  command -v infocmp >/dev/null || { echo "infocmp is required to verify Ghostty resources" >&2; return 1; }
   ghostty="$share/ghostty"
   themes="$ghostty/themes"
   terminfo="$share/terminfo"
   for file in "$ghostty/shell-integration/bash/ghostty.bash" "$ghostty/shell-integration/zsh/ghostty-integration" \
-    "$themes/.agterm-resource-manifest" "$terminfo/x/xterm-ghostty"; do
+    "$themes/.agterm-resource-manifest" "$terminfo/ghostty.terminfo"; do
     [[ -s "$file" ]] || { echo "missing or empty Ghostty resource: $file" >&2; return 1; }
   done
+  if command -v tic >/dev/null; then
+    command -v infocmp >/dev/null || { echo "infocmp is required to verify Ghostty resources" >&2; return 1; }
+    ghostty_terminfo_entry "$terminfo" >/dev/null || {
+      echo "missing compiled Ghostty terminfo: neither $terminfo/x/xterm-ghostty nor $terminfo/78/xterm-ghostty" >&2
+      return 1
+    }
+  fi
   pin_lines LIBGHOSTTY_VT | cmp -s - "$themes/.agterm-resource-manifest" || {
     echo "Ghostty resource provenance does not match the LIBGHOSTTY_VT_ pins in $PINS" >&2
     return 1
@@ -263,9 +362,11 @@ verify_ghostty_resources() {
   for theme in "${LIBGHOSTTY_VT_KNOWN_THEMES[@]}"; do
     [[ -s "$themes/$theme" ]] || { echo "missing or empty Ghostty theme: $themes/$theme" >&2; return 1; }
   done
-  infocmp -A "$terminfo" xterm-ghostty >/dev/null || {
-    echo "xterm-ghostty is not readable from $terminfo" >&2
-    return 1
-  }
+  if command -v tic >/dev/null; then
+    infocmp -A "$terminfo" xterm-ghostty >/dev/null || {
+      echo "xterm-ghostty is not readable from $terminfo" >&2
+      return 1
+    }
+  fi
   echo "→ verified Ghostty resources from $LIBGHOSTTY_VT_REV ($theme_count themes + xterm-ghostty)"
 }

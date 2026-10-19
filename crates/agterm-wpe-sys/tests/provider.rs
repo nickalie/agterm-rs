@@ -5,6 +5,10 @@
 //! Every case runs the real scripts over a scratch copy of the repository's scripts and pins, with a fake vendored
 //! prefix and fake system `.pc` files; `PKG_CONFIG_LIBDIR` hides the machine's own, so nothing here depends on what
 //! the host has installed. Nothing is fetched.
+//!
+//! Linux only: WPE WebKit, its pkg-config provider and these scripts serve the Linux frontend alone, and the crate is
+//! built nowhere else; the bash-driven tests that run on every OS are agterm-ghostty-vt-sys's (`script.rs`).
+#![cfg(target_os = "linux")]
 
 use std::fs;
 use std::path::{Path, PathBuf};

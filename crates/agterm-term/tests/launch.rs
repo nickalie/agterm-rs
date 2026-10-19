@@ -137,6 +137,18 @@ fn without_its_terminfo_the_terminal_claims_xterm_256color() -> TestResult {
 }
 
 #[test]
+fn the_terminfo_counts_in_the_hashed_layout_macos_tic_writes() -> TestResult {
+    // tic on macOS and Windows writes `78/xterm-ghostty` (the hex code of `x`) where ncurses on Linux writes `x/`
+    let (root, ghostty) = resources("", false)?;
+    let hashed = root.path().join("share/terminfo/78");
+    std::fs::create_dir_all(&hashed)?;
+    std::fs::write(hashed.join("xterm-ghostty"), "")?;
+    let resolved = agterm_term::resolve_resources(std::slice::from_ref(&ghostty), Path::exists);
+    assert_eq!(resolved, Some(ghostty));
+    Ok(())
+}
+
+#[test]
 fn a_plain_pane_runs_its_command_in_its_directory_with_its_environment() -> TestResult {
     let dir = tempfile::tempdir()?;
     let mut launch = launch(Some("pwd; echo \"var=$AGTERM_TEST_VAR pwd=$PWD\""));

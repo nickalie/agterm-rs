@@ -48,13 +48,12 @@ jobs:
         shell: bash
         run: |
           source scripts/lib/native.sh
-          arch="$(host_zig_arch)"
           for build in LIBGHOSTTY_VT ZMX; do
             version_var="${build}_ZIG_VERSION"
-            sha_var="${build}_ZIG_SHA256_${arch^^}"
             mkdir -p "$VENDOR_ROOT"
             # Assign first: a failure inside $(...) of an echo argument would not reach errexit.
-            zig="$(find_zig "${!version_var}" "${!sha_var}" "")"
+            sha="$(zig_pin_sha256 "$build")"
+            zig="$(find_zig "${!version_var}" "$sha" "")"
             echo "$build: $zig"
           done
       # the patched source agterm-ghostty-vt-sys builds the static libghostty-vt from (with zig, offline, when

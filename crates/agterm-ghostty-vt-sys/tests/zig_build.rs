@@ -4,6 +4,8 @@
 //! `cargo build` against an empty vendor root, which fails before zig runs. The offline check needs the prefix
 //! `scripts/build-ghostty-vt.sh` prepared and runs its zig to configure every mapped target with networking off.
 
+#[path = "../script.rs"]
+mod script;
 #[path = "../zig_build.rs"]
 mod zig_build;
 
@@ -52,11 +54,20 @@ fn the_map_targets_linux_at_the_glibc_floor_and_macos_at_its_deployment_target()
     assert_eq!(target("x86_64-unknown-linux-gnu", None), "x86_64-linux-gnu.2.39");
     assert_eq!(target("aarch64-unknown-linux-gnu", None), "aarch64-linux-gnu.2.39");
     assert_eq!(target("x86_64-unknown-linux-musl", None), "x86_64-linux-musl");
-    // rustc's defaults, else MACOSX_DEPLOYMENT_TARGET
-    assert_eq!(target("aarch64-apple-darwin", None), "aarch64-macos.11.0");
-    assert_eq!(target("x86_64-apple-darwin", None), "x86_64-macos.10.12");
+    // MACOSX_DEPLOYMENT_TARGET, else Ghostty's floor; never below it
+    assert_eq!(target("aarch64-apple-darwin", None), "aarch64-macos.13.0");
+    assert_eq!(target("x86_64-apple-darwin", None), "x86_64-macos.13.0");
     assert_eq!(target("aarch64-apple-darwin", Some("13.3")), "aarch64-macos.13.3");
-    assert_eq!(target("aarch64-apple-darwin", Some(" ")), "aarch64-macos.11.0");
+    assert_eq!(target("aarch64-apple-darwin", Some("14")), "aarch64-macos.14");
+    assert_eq!(target("aarch64-apple-darwin", Some(" ")), "aarch64-macos.13.0");
+    for refused in ["11.0", "12.7.6", "13.x"] {
+        let error = zig_build::zig_target("aarch64-apple-darwin", Some(refused)).unwrap_err();
+        assert!(
+            error.contains(&format!("MACOSX_DEPLOYMENT_TARGET={refused}")),
+            "{error}"
+        );
+        assert!(error.contains("macOS 13.0 or newer"), "{error}");
+    }
     assert_eq!(target("x86_64-pc-windows-msvc", None), "x86_64-windows-msvc");
     assert_eq!(target("aarch64-pc-windows-msvc", None), "aarch64-windows-msvc");
     let unmapped = zig_build::zig_target("riscv64gc-unknown-linux-gnu", None).unwrap_err();
@@ -177,9 +188,71 @@ fn a_pin_or_patch_change_reruns_the_build_script() {
     for input in zig_build::RERUN_FILES {
         assert!(repo_root().join(input).exists(), "{input}");
     }
-    for name in ["AGTERM_VENDOR", "HOME", "MACOSX_DEPLOYMENT_TARGET"] {
+    for name in [script::PREFIX_ENV, "AGTERM_VENDOR", "HOME", "MACOSX_DEPLOYMENT_TARGET"] {
         assert!(zig_build::RERUN_ENV.contains(&name), "{name}");
     }
+}
+
+/// Git Bash is found beside the `git.exe` of `PATH` (Git's `cmd\`, `bin\` and `mingw64\bin\`), then under the install
+/// locations, and only ever as Git's own `bin\bash.exe`: a `PATH` entry holding a `bash.exe` but no `git.exe`
+/// (WSL's `System32`) is never a candidate.
+#[test]
+fn git_bash_is_found_beside_git_and_never_from_system32() {
+    let root = Path::new("/drive");
+    let git = root.join("Git");
+    let path = std::env::join_paths([
+        root.join("Windows").join("System32"),
+        git.join("cmd"),
+        root.join("Portable").join("mingw64").join("bin"),
+        root.join("Tools").join("bin"),
+    ])
+    .unwrap();
+    let exists = |file: &Path| {
+        file == git.join("cmd").join("git.exe")
+            || file == root.join("Portable").join("mingw64").join("bin").join("git.exe")
+            || file == root.join("Windows").join("System32").join("bash.exe")
+    };
+    let var = |name: &str| match name {
+        "PATH" => Some(path.clone()),
+        "ProgramFiles" | "ProgramW6432" => Some(root.join("Program Files").into_os_string()),
+        "LOCALAPPDATA" => Some(
+            root.join("Users")
+                .join("me")
+                .join("AppData")
+                .join("Local")
+                .into_os_string(),
+        ),
+        _ => None,
+    };
+    let bash = |dir: PathBuf| dir.join("bin").join("bash.exe");
+    assert_eq!(
+        script::git_bash_candidates(&var, &exists),
+        [
+            bash(git.clone()),
+            bash(root.join("Portable")),
+            bash(root.join("Program Files").join("Git")),
+            bash(
+                root.join("Users")
+                    .join("me")
+                    .join("AppData")
+                    .join("Local")
+                    .join("Programs")
+                    .join("Git")
+            ),
+        ]
+    );
+    assert!(script::git_bash_candidates(&|_| None, &exists).is_empty());
+}
+
+#[test]
+fn bash_takes_forward_slashes_on_windows() {
+    let path = Path::new("C:\\repo\\scripts/build-ghostty-vt.sh");
+    let expected = if cfg!(windows) {
+        "C:/repo/scripts/build-ghostty-vt.sh"
+    } else {
+        "C:\\repo\\scripts/build-ghostty-vt.sh"
+    };
+    assert_eq!(script::bash_arg(path), expected);
 }
 
 #[test]
@@ -209,26 +282,28 @@ fn a_build_without_its_prefix_fails_naming_the_script() {
         .arg(target_dir.path())
         .current_dir(repo_root())
         .env("AGTERM_VENDOR", vendor.path())
+        .env_remove(script::PREFIX_ENV)
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "{stderr}");
+    // on Windows the prefix is cygpath's mixed form of the vendor root (`C:/...`)
+    let vendor_root = vendor.path().display().to_string();
+    let vendor_root = if cfg!(windows) {
+        vendor_root.replace('\\', "/")
+    } else {
+        vendor_root
+    };
     assert!(
-        stderr.contains(&format!("no libghostty-vt at {}/ghostty-vt-", vendor.path().display())),
+        stderr.contains(&format!("no libghostty-vt at {vendor_root}/ghostty-vt-")),
         "{stderr}"
     );
     assert!(stderr.contains("run scripts/build-ghostty-vt.sh"), "{stderr}");
 }
 
-/// The prefix `scripts/build-ghostty-vt.sh --print-prefix` names (the build script built from it before this test ran).
+/// The prefix the build script built from before this test ran (`AGTERM_GHOSTTY_VT_PREFIX`, else the script's).
 fn prefix() -> PathBuf {
-    let output = Command::new("bash")
-        .arg(repo_root().join("scripts/build-ghostty-vt.sh"))
-        .arg("--print-prefix")
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+    script::prefix(&repo_root()).unwrap()
 }
 
 fn entries(dir: &Path) -> Vec<OsString> {

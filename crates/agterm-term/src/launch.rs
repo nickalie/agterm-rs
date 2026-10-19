@@ -44,8 +44,10 @@ use crate::{Pane, PaneCommand, PaneConfig, PaneError};
 pub const COMMAND_SHELL: &str = "/bin/sh";
 /// What the terminal claims without its own terminfo.
 pub const FALLBACK_TERM: &str = "xterm-256color";
-/// The terminfo entry beside Ghostty's resources that lets the terminal claim `xterm-ghostty`, relative to them.
-const TERMINFO_ENTRY: &str = "../terminfo/x/xterm-ghostty";
+/// The terminfo entry beside Ghostty's resources that lets the terminal claim `xterm-ghostty`, relative to them, in
+/// either layout `tic` writes: a directory per first letter (`x/`, ncurses on Linux) or per its hex code (`78/`,
+/// where the file system ignores case: macOS, Git Bash on Windows).
+const TERMINFO_ENTRIES: [&str; 2] = ["../terminfo/x/xterm-ghostty", "../terminfo/78/xterm-ghostty"];
 /// The staged resources relative to the staged root (`scripts/stage.sh`).
 const STAGED_RESOURCES: &str = "share/ghostty";
 /// A system ghostty package's resources.
@@ -404,14 +406,16 @@ pub struct Prepared {
 }
 
 /// The first of `candidates` (absolute paths only) holding `shell-integration` with the compiled `xterm-ghostty`
-/// beside it (`../terminfo/x/xterm-ghostty`): libghostty derived `TERMINFO` from the resources, so a half-present set
-/// would claim a terminal no terminfo describes.
+/// beside it (`../terminfo/x/xterm-ghostty`, or `78/` as `tic` writes it on macOS and Windows): libghostty derived
+/// `TERMINFO` from the resources, so a half-present set would claim a terminal no terminfo describes.
 #[must_use]
 pub fn resolve_resources(candidates: &[PathBuf], exists: impl Fn(&Path) -> bool) -> Option<PathBuf> {
     candidates
         .iter()
         .filter(|dir| dir.is_absolute())
-        .find(|dir| exists(&dir.join("shell-integration")) && exists(&dir.join(TERMINFO_ENTRY)))
+        .find(|dir| {
+            exists(&dir.join("shell-integration")) && TERMINFO_ENTRIES.iter().any(|entry| exists(&dir.join(entry)))
+        })
         .cloned()
 }
 
@@ -940,6 +944,18 @@ mod tests {
             Some(PathBuf::from("/usr/share/ghostty"))
         );
         assert_eq!(resolve_resources(&candidates, |_| false), None);
+        // macOS's tic writes the hashed layout, which counts as well
+        let hashed = |path: &Path| {
+            [
+                "/stage/share/ghostty/shell-integration",
+                "/stage/share/ghostty/../terminfo/78/xterm-ghostty",
+            ]
+            .contains(&path.to_str().unwrap())
+        };
+        assert_eq!(
+            resolve_resources(&candidates, hashed),
+            Some(PathBuf::from("/stage/share/ghostty"))
+        );
         assert_eq!(
             resource_candidates(Some(Path::new("/opt/agterm/bin/agterm"))),
             [

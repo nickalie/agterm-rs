@@ -1,23 +1,34 @@
 //! Builds libghostty-vt for cargo's target with Zig and links the static archive.
 //!
-//! The prefix comes from `scripts/build-ghostty-vt.sh --print-prefix`, the one place that knows how it is keyed. The
-//! script prepares it (the pinned, patched source tree with its Zig packages, the headers, Ghostty's resources and a
-//! stamp naming the pinned zig); this script runs `zig build -Demit-lib-vt` over that tree (`zig_build.rs`, ported
-//! from herdr's build script), installing into and caching under `OUT_DIR`, and never reaches the network. A missing
-//! prefix fails the build with a pointer to the script. The archive needs no system library beyond libc on Linux
-//! (`libghostty-vt-static.pc` lists no `Libs.private` at `LIBGHOSTTY_VT_REV`, and the link test links it with nothing
-//! else).
+//! The prefix comes from `AGTERM_GHOSTTY_VT_PREFIX` when set, else from `scripts/build-ghostty-vt.sh --print-prefix`,
+//! the one place that knows how it is keyed, run with bash (Git Bash on Windows, found explicitly, with the printed
+//! MSYS path converted by `cygpath -m`: `script.rs`). The script prepares it (the pinned, patched source tree with
+//! its Zig packages, the headers, Ghostty's resources and a stamp naming the pinned zig); this script runs `zig build
+//! -Demit-lib-vt` over that tree (`zig_build.rs`, ported from herdr's build script), installing into and caching
+//! under `OUT_DIR`, and never reaches the network. A missing prefix fails the build with a pointer to the script.
+//!
+//! The archive needs no system library beyond the C runtime Rust links anyway: on Linux and macOS
+//! (`libghostty-vt-static.pc` lists no `Libs.private` at `LIBGHOSTTY_VT_REV`) and on Windows MSVC, where
+//! `ghostty-vt-static.lib` links alone (the link test, on the `windows-2025` runner and in the Win11 VM). On Apple
+//! the archive is linked from a directory of its own, built for the deployment target rustc links for (the link
+//! test reads each member's `LC_BUILD_VERSION`).
 
+mod script;
 mod zig_build;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+/// A failure exits non-zero, so cargo shows what the script printed beside the error: zig's own output when its
+/// build fails (cargo hides a build script's output while it exits successfully, even with `cargo::error`).
 fn main() -> ExitCode {
-    if let Err(message) = build() {
-        println!("cargo::error={message}");
+    match build() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            println!("cargo::error={message}");
+            ExitCode::FAILURE
+        }
     }
-    ExitCode::SUCCESS
 }
 
 fn build() -> Result<(), String> {
@@ -29,7 +40,7 @@ fn build() -> Result<(), String> {
     for name in zig_build::RERUN_ENV {
         println!("cargo::rerun-if-env-changed={name}");
     }
-    let prefix = prefix(&root)?;
+    let prefix = script::prefix(&root)?;
     println!("cargo::rerun-if-changed={}", prefix.join(zig_build::STAMP).display());
     let stamp = zig_build::prepared(&prefix)?;
     check_zig(&stamp)?;
@@ -52,6 +63,10 @@ fn build() -> Result<(), String> {
         .current_dir(&build.source)
         // an install never goes below a staging root a packaging environment may have exported
         .env_remove("DESTDIR")
+        // the workspace's pkg-config wrapper (`.cargo/config.toml`, a shell script for WPE WebKit) is not for Zig,
+        // which runs PKG_CONFIG for its system-library lookups: on Windows it cannot run a script at all
+        // (`error: InvalidExe`), and libghostty-vt links no system library through pkg-config anywhere
+        .env_remove("PKG_CONFIG")
         .status()
         .map_err(|err| format!("cannot run {}: {err}", build.zig.display()))?;
     if !status.success() {
@@ -66,10 +81,10 @@ fn build() -> Result<(), String> {
             build.archive.display()
         ));
     }
+    let name = build.archive.file_name().ok_or("the archive has no file name")?;
     if build.archive.parent() != Some(build.link_dir.as_path()) {
         std::fs::create_dir_all(&build.link_dir)
             .map_err(|err| format!("cannot create {}: {err}", build.link_dir.display()))?;
-        let name = build.archive.file_name().ok_or("the archive has no file name")?;
         std::fs::copy(&build.archive, build.link_dir.join(name)).map_err(|err| {
             format!(
                 "cannot copy {} into {}: {err}",
@@ -80,25 +95,13 @@ fn build() -> Result<(), String> {
     }
     println!("cargo::rustc-link-search=native={}", build.link_dir.display());
     println!("cargo::rustc-link-lib=static={}", build.link_name);
+    // for the link test, which checks what the archive was built for
+    println!(
+        "cargo::rustc-env=AGTERM_GHOSTTY_VT_ARCHIVE={}",
+        build.link_dir.join(name).display()
+    );
+    println!("cargo::rustc-env=AGTERM_GHOSTTY_VT_ZIG_TARGET={}", build.zig_target);
     Ok(())
-}
-
-/// The prefix `scripts/build-ghostty-vt.sh --print-prefix` names.
-fn prefix(root: &Path) -> Result<PathBuf, String> {
-    let script = root.join("scripts/build-ghostty-vt.sh");
-    let output = Command::new("bash")
-        .arg(&script)
-        .arg("--print-prefix")
-        .output()
-        .map_err(|err| format!("cannot run {}: {err}", script.display()))?;
-    if !output.status.success() {
-        return Err(format!(
-            "{} --print-prefix failed: {}",
-            script.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()))
 }
 
 /// The stamp's zig must still be the pinned one: the prefix was prepared with it, and an unpinned zig never builds.

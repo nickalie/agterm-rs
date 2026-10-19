@@ -37,18 +37,24 @@ pub const GLIBC_FLOOR: &str = "2.39";
 /// The repository files whose change reruns the build script, relative to the repository root: a pin or patch change
 /// moves the prefix (its key hashes them), so the rerun finds the new prefix, or fails naming the script when it is
 /// not prepared yet, and builds the new tree.
-pub const RERUN_FILES: [&str; 6] = [
+pub const RERUN_FILES: [&str; 7] = [
     "build/pins.env",
     "build/patches/ghostty-vt",
     "scripts/build-ghostty-vt.sh",
     "scripts/lib/native.sh",
     "crates/agterm-ghostty-vt-sys/build.rs",
     "crates/agterm-ghostty-vt-sys/zig_build.rs",
+    "crates/agterm-ghostty-vt-sys/script.rs",
 ];
 
-/// The environment whose change reruns the build script: the vendor root (`AGTERM_VENDOR`, else under `HOME`) and the
-/// macOS deployment target.
-pub const RERUN_ENV: [&str; 3] = ["AGTERM_VENDOR", "HOME", "MACOSX_DEPLOYMENT_TARGET"];
+/// The environment whose change reruns the build script: the prefix override (`AGTERM_GHOSTTY_VT_PREFIX`,
+/// `script.rs`), the vendor root (`AGTERM_VENDOR`, else under `HOME`) and the macOS deployment target.
+pub const RERUN_ENV: [&str; 4] = [
+    "AGTERM_GHOSTTY_VT_PREFIX",
+    "AGTERM_VENDOR",
+    "HOME",
+    "MACOSX_DEPLOYMENT_TARGET",
+];
 
 /// What the prefix's stamp records for the build.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,12 +112,24 @@ pub fn prepared(prefix: &Path) -> Result<Stamp, String> {
     Stamp::parse(&text)
 }
 
-/// The `-Dtarget` of a cargo target: Linux gnu at the glibc floor, macOS at `MACOSX_DEPLOYMENT_TARGET` or else rustc's
-/// default for the arch (10.12 on `x86_64`, 11.0 on aarch64), the others as mapped.
+/// The oldest macOS libghostty-vt builds for: Ghostty's own floor (`src/build/Config.zig` `osVersionMin`, the oldest
+/// macOS Apple still supports), which its build substitutes for any `-Dtarget` version on a macOS host. The workspace
+/// links for it too (`MACOSX_DEPLOYMENT_TARGET` in `.cargo/config.toml`), so no member of the archive is built for a
+/// newer macOS than the binaries that link it.
+pub const MACOS_FLOOR: &str = "13.0";
+
+/// A `major.minor[.patch]` version as numbers, for comparing; `None` when it is not one.
+fn version(text: &str) -> Option<Vec<u32>> {
+    text.split('.').map(|part| part.parse().ok()).collect()
+}
+
+/// The `-Dtarget` of a cargo target: Linux gnu at the glibc floor, macOS at `MACOSX_DEPLOYMENT_TARGET` or else at
+/// [`MACOS_FLOOR`], the others as mapped.
 ///
 /// # Errors
 ///
-/// A target outside the map.
+/// A target outside the map, or a macOS deployment target that is not a version or is older than [`MACOS_FLOOR`]
+/// (Ghostty's build would build for the floor anyway on a macOS host, newer than what the binaries claim).
 pub fn zig_target(target: &str, macos_deployment_target: Option<&str>) -> Result<String, String> {
     let (_, triple) = ZIG_TARGETS
         .iter()
@@ -121,12 +139,19 @@ pub fn zig_target(target: &str, macos_deployment_target: Option<&str>) -> Result
         return Ok(format!("{triple}.{GLIBC_FLOOR}"));
     }
     if triple.ends_with("-macos") {
-        let default = if triple.starts_with("aarch64") { "11.0" } else { "10.12" };
-        let version = macos_deployment_target
+        let requested = macos_deployment_target
             .map(str::trim)
             .filter(|version| !version.is_empty())
-            .unwrap_or(default);
-        return Ok(format!("{triple}.{version}"));
+            .unwrap_or(MACOS_FLOOR);
+        let supported = version(requested)
+            .zip(version(MACOS_FLOOR))
+            .map(|(requested, floor)| requested >= floor);
+        if supported != Some(true) {
+            return Err(format!(
+                "MACOSX_DEPLOYMENT_TARGET={requested}: libghostty-vt builds for macOS {MACOS_FLOOR} or newer"
+            ));
+        }
+        return Ok(format!("{triple}.{requested}"));
     }
     Ok((*triple).to_owned())
 }
@@ -165,6 +190,8 @@ pub struct Build {
     /// The static library's link name: `ghostty-vt-static` on MSVC (beside the import library of the DLL),
     /// `ghostty-vt` elsewhere.
     pub link_name: &'static str,
+    /// The `-Dtarget` it builds for.
+    pub zig_target: String,
 }
 
 /// The build of `inputs`: `zig build -Demit-lib-vt` over the prefix's tree, installing into and caching under
@@ -212,5 +239,6 @@ pub fn plan(inputs: &Inputs<'_>) -> Result<Build, String> {
         archive,
         link_dir,
         link_name: if msvc { "ghostty-vt-static" } else { "ghostty-vt" },
+        zig_target: target,
     })
 }

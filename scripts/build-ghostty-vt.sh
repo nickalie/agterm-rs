@@ -23,15 +23,24 @@
 #   (`version-string=`, the tree's build.zig.zon version, so the build never asks git) and each patch with its sha256;
 # - the resources scripts/stage.sh stages, as Ghostty's own build installs them (src/build/GhosttyResources.zig):
 #   share/ghostty/shell-integration from the source, share/ghostty/themes from the theme package the revision's
-#   build.zig.zon declares (LIBGHOSTTY_VT_THEMES_*, its sha256 checked), and share/terminfo, the xterm-ghostty entry
-#   Ghostty's terminfo source (src/terminfo/ghostty.zig) encodes, compiled with `tic`.
+#   build.zig.zon declares (LIBGHOSTTY_VT_THEMES_*, its sha256 checked), and share/terminfo: the xterm-ghostty entry
+#   Ghostty's terminfo source (src/terminfo/ghostty.zig) encodes, as source (ghostty.terminfo) on every OS and compiled
+#   with `tic` where it exists (Linux, macOS, Git Bash on Windows; the last two write the hashed layout, 78/, which
+#   every reader takes beside x/).
+#
+# On Windows the native programs ignore terminfo; what a pane's TERM means there is up to what runs inside it: an ssh
+# session forwards TERM to a host that needs the entry installed (`agtermctl terminfo install`, as from Linux), and WSL
+# starts its programs with its own TERM unless WSLENV forwards the pane's.
 #
 # Usage: scripts/build-ghostty-vt.sh                 prepare the prefix unless it is complete, then print its path
 #        scripts/build-ghostty-vt.sh --print-prefix  print the prefix path only (agterm-ghostty-vt-sys/build.rs)
 #        scripts/build-ghostty-vt.sh --verify        exit 0 when the prefix is complete, 1 otherwise
 #
-# LIBGHOSTTY_VT_ZIG_VERSION comes from AGTERM_GHOSTTY_VT_ZIG, a matching zig on PATH, mise, or the pinned ziglang.org
-# tarball.
+# It runs on Linux, stock macOS (bash 3.2, shasum, BSD patch) and under Git Bash on Windows (scripts/lib/native.sh >
+# Portable shell); on Windows the stamp records native paths, which the build script hands to zig. It needs curl, tar,
+# patch, sha256sum or shasum, and tic with infocmp where tic exists; find_zig needs xz (Linux, macOS) or unzip
+# (Windows) only when it fetches zig. LIBGHOSTTY_VT_ZIG_VERSION comes from AGTERM_GHOSTTY_VT_ZIG, a matching zig on
+# PATH, mise, or the pinned ziglang.org archive of the host's OS and arch (LIBGHOSTTY_VT_ZIG_SHA256_<OS>_<ARCH>).
 set -euo pipefail
 
 # shellcheck source=lib/native.sh
@@ -63,20 +72,31 @@ if ghostty_vt_prefix_is_complete "$PREFIX"; then
   exit 0
 fi
 
-for command in curl tar patch sha256sum tic infocmp; do
-  command -v "$command" >/dev/null || die "$command is required to prepare libghostty-vt and its resources"
+for command in curl tar patch; do
+  command -v "$command" >/dev/null || die "$command is required to fetch and patch the libghostty-vt source"
 done
+command -v sha256sum >/dev/null || command -v shasum >/dev/null \
+  || die "sha256sum or shasum is required to check the pinned archives"
+if command -v tic >/dev/null; then
+  command -v infocmp >/dev/null || die "infocmp is required to check the xterm-ghostty entry tic compiles"
+else
+  echo "no tic on this host: Ghostty's terminfo is staged as source only (share/terminfo/ghostty.terminfo)" >&2
+fi
 mkdir -p "$VENDOR_ROOT"
-ARCH="$(host_zig_arch)"
-ZIG_SHA_VAR="LIBGHOSTTY_VT_ZIG_SHA256_${ARCH^^}"
-ZIG="$(find_zig "$LIBGHOSTTY_VT_ZIG_VERSION" "${!ZIG_SHA_VAR}" "${AGTERM_GHOSTTY_VT_ZIG:-}")"
+ZIG_SHA="$(zig_pin_sha256 LIBGHOSTTY_VT)"
+ZIG="$(find_zig "$LIBGHOSTTY_VT_ZIG_VERSION" "$ZIG_SHA" "${AGTERM_GHOSTTY_VT_ZIG:-}")"
 # The binary itself, as zig reports it: a version manager's shim found on PATH may resolve to another version from the
-# directory cargo runs the build script in.
-ZIG_EXE="$("$ZIG" env | sed -n 's/^ *\.zig_exe = "\(.*\)",$/\1/p')"
-[[ -n "$ZIG_EXE" && -x "$ZIG_EXE" && "$("$ZIG_EXE" version)" == "$LIBGHOSTTY_VT_ZIG_VERSION" ]] \
-  || die "$ZIG does not report its own binary (zig env .zig_exe)"
+# directory cargo runs the build script in. It is a ZON string, whose backslashes (a Windows path) are escaped; the
+# stamp records it in the native form (native_path), as it records the global cache, since cargo's build script hands
+# both to zig itself.
+ZIG_EXE="$("$ZIG" env | sed -n 's/^ *\.zig_exe = "\(.*\)",$/\1/p' | sed 's/\\\\/\\/g')"
+[[ -n "$ZIG_EXE" ]] || die "$ZIG does not report its own binary (zig env .zig_exe)"
+ZIG_EXE="$(native_path "$ZIG_EXE")"
+[[ -x "$ZIG_EXE" && "$("$ZIG_EXE" version)" == "$LIBGHOSTTY_VT_ZIG_VERSION" ]] \
+  || die "$ZIG reports $ZIG_EXE as its binary (zig env .zig_exe), which is not zig $LIBGHOSTTY_VT_ZIG_VERSION"
 ZIG_CACHE="$(ghostty_vt_zig_cache)"
 mkdir -p "$ZIG_CACHE"
+ZIG_CACHE="$(native_path "$ZIG_CACHE")"
 
 # both scratch dirs live in the vendor root, beside the final prefix, not in a shared /tmp
 BUILD_DIR="$(mktemp -d "$VENDOR_ROOT/.ghostty-vt-build.XXXXXX")"
@@ -89,17 +109,21 @@ TREE="$STAGE/src"
 # build needs no git.
 echo "fetching ghostty $LIBGHOSTTY_VT_REV for libghostty-vt..." >&2
 curl -fsSL --retry 3 -o "$BUILD_DIR/source.tar.gz" "$LIBGHOSTTY_VT_REPO/archive/$LIBGHOSTTY_VT_REV.tar.gz"
-echo "$LIBGHOSTTY_VT_SHA256  $BUILD_DIR/source.tar.gz" | sha256sum --check --quiet >&2 \
+sha256_matches "$LIBGHOSTTY_VT_SHA256" "$BUILD_DIR/source.tar.gz" \
   || die "ghostty $LIBGHOSTTY_VT_REV source archive sha256 mismatch"
 mkdir "$TREE"
 tar -xzf "$BUILD_DIR/source.tar.gz" -C "$TREE" --strip-components=1
 
+# Short options GNU patch (Linux, Git Bash) and BSD patch (macOS) both take: -t batch, -N forward, -F 0 no fuzz,
+# -s quiet. Neither has a portable way to keep GNU's backup of a hunk applied at an offset (BSD makes none), so the
+# backups are removed after: the pristine tree holds no .orig file.
 for patch in "$PATCHES"/*.patch; do
   [[ -f "$patch" ]] || continue
   echo "applying $(basename "$patch")..." >&2
-  patch -d "$TREE" -p1 --batch --forward --fuzz=0 --no-backup-if-mismatch --quiet <"$patch" \
+  patch -d "$TREE" -p1 -t -N -F 0 -s <"$patch" \
     || die "$(basename "$patch") does not apply to ghostty $LIBGHOSTTY_VT_REV"
 done
+find "$TREE" -name '*.orig' -type f -exec rm -f {} +
 
 # The packages: Zig fetches a lazy dependency only when a build's configure step asks for it, so each mapped target's
 # libghostty-vt configuration is run once (listing its steps builds nothing), which fetches what that target's build
@@ -130,7 +154,7 @@ grep -F "$LIBGHOSTTY_VT_THEMES_URL" "$TREE/build.zig.zon" >/dev/null \
   || die "ghostty $LIBGHOSTTY_VT_REV no longer declares the pinned theme package (LIBGHOSTTY_VT_THEMES_URL)"
 echo "fetching the pinned Ghostty theme package..." >&2
 curl -fsSL --retry 3 -o "$BUILD_DIR/ghostty-themes.tgz" "$LIBGHOSTTY_VT_THEMES_URL"
-echo "$LIBGHOSTTY_VT_THEMES_SHA256  $BUILD_DIR/ghostty-themes.tgz" | sha256sum --check --quiet >&2 \
+sha256_matches "$LIBGHOSTTY_VT_THEMES_SHA256" "$BUILD_DIR/ghostty-themes.tgz" \
   || die "Ghostty theme package sha256 mismatch"
 tar -xzf "$BUILD_DIR/ghostty-themes.tgz" -C "$STAGE/share/ghostty/themes" --strip-components=1
 pin_lines LIBGHOSTTY_VT >"$STAGE/share/ghostty/themes/.agterm-resource-manifest"
@@ -154,7 +178,11 @@ echo "encoding Ghostty's terminfo..." >&2
 ) >"$BUILD_DIR/ghostty.terminfo"
 rm "$TREE/src/agterm_terminfo.zig"
 [[ -s "$BUILD_DIR/ghostty.terminfo" ]] || die "Ghostty's terminfo encoder wrote nothing"
-tic -x -o "$STAGE/share/terminfo" "$BUILD_DIR/ghostty.terminfo"
+mkdir -p "$STAGE/share/terminfo"
+cp "$BUILD_DIR/ghostty.terminfo" "$STAGE/share/terminfo/ghostty.terminfo"
+if command -v tic >/dev/null; then
+  tic -x -o "$STAGE/share/terminfo" "$BUILD_DIR/ghostty.terminfo"
+fi
 
 {
   echo "# The inputs of this libghostty-vt prefix (scripts/build-ghostty-vt.sh); agterm-ghostty-vt-sys builds from it."

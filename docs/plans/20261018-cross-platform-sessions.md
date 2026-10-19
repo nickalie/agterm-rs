@@ -609,22 +609,37 @@ Order after Task 7, as two lanes that meet:
   `.github/workflows/cross-platform.yml` (Zig, the prefix step and caches, `PACKAGES`, the cross `zig build` checks),
   possibly `scripts/gen-ghostty-vt-bindings.sh` (per-target bindings)
 
-- [ ] Zig pins for macOS and Windows on x86_64 and aarch64, looked up live from ziglang.org with their sha256s;
-      `find_zig` fetches and unpacks them per OS
-- [ ] the script runs on stock macOS (bash 3.2, `shasum`, BSD `patch`) and under Git Bash on Windows, debugged in
+- [x] Zig pins for macOS and Windows on x86_64 and aarch64, looked up live from ziglang.org with their sha256s;
+      `find_zig` fetches and unpacks them per OS (`LIBGHOSTTY_VT_ZIG_SHA256_<OS>_<ARCH>`, `zig_pin_sha256`; `.tar.xz`
+      with xz or macOS's bsdtar, `.zip` with Git Bash's unzip)
+- [x] the script runs on stock macOS (bash 3.2, `shasum`, BSD `patch`) and under Git Bash on Windows, debugged in
       the VMs; the terminfo source staged everywhere, the compiled database where `tic` exists; readers accept both
       terminfo layouts
-- [ ] `build.rs`: Git Bash found explicitly on Windows and the printed prefix converted; `AGTERM_GHOSTTY_VT_PREFIX`
+      - ⚠️ debugged in `Win11-admin` (Git Bash has `patch`, `unzip`, `tic`/`infocmp`; its `tic` writes the hashed
+        `78/` layout too); the `macOS 26` VM could not start (its `.vmx` held by the open VMware Workstation UI), so
+        macOS was debugged on the `macos-26` runner
+- [x] `build.rs`: Git Bash found explicitly on Windows and the printed prefix converted; `AGTERM_GHOSTTY_VT_PREFIX`
       overrides the lookup; Apple links the archive alone from its own directory with the deployment target in
-      `-Dtarget`; MSVC links `ghostty-vt-static` and the system libraries the link test shows it needs
-- [ ] the bindings' layout assertions build on all three; if a target differs, the generator emits per-target
-      bindings (decided from the CI result, recorded)
-- [ ] `agterm-ghostty-vt-sys` and `agterm-ghostty-vt` join `cross-platform.yml` with the caches; their tests run on
+      `-Dtarget`; MSVC links `ghostty-vt-static` and the system libraries the link test shows it needs (none: it links
+      alone; `PKG_CONFIG` is removed from zig's environment, since Zig cannot run the workspace's shell wrapper on
+      Windows)
+      - ⚠️ the macOS deployment target is floored at 13.0, not rustc's default: Ghostty's build substitutes its own
+        floor (`Config.zig` `osVersionMin`) for any `-Dtarget` version on a macOS host, so `.cargo/config.toml` sets
+        `MACOSX_DEPLOYMENT_TARGET = "13.0"` and `zig_target` refuses an older one
+- [x] the bindings' layout assertions build on all three; if a target differs, the generator emits per-target
+      bindings (decided from the CI result, recorded: no target differs, so one `bindings.rs` stays)
+- [x] `agterm-ghostty-vt-sys` and `agterm-ghostty-vt` join `cross-platform.yml` with the caches; their tests run on
       `macos-26` and `windows-2025`; the three untested Zig targets get a cross `zig build` check on the Linux job;
-      the cold build per runner measured against the jobs' timeouts and recorded
-- [ ] tests on every OS: the wrapper's existing tests; no "built for newer macOS" link warning; the terminfo lookup on
-      macOS's hashed layout; the bash-driven tests run or are gated with the reason
-- [ ] run gates; `cross-platform.yml` green on all three
+      the cold build per runner measured against the jobs' timeouts and recorded (the workflow's comment)
+      - ⚠️ aarch64 Windows is cross-built on the Windows job, not the Linux one: Zig builds windows-msvc only against
+        an MSVC installation (from Linux, simdutf and Wuffs' translate-c find no MSVC headers); aarch64 Linux and
+        x86_64 macOS cross-build on the Linux job
+- [x] tests on every OS: the wrapper's existing tests; no "built for newer macOS" link warning; the terminfo lookup on
+      macOS's hashed layout; the bash-driven tests run or are gated with the reason (the sys crate's run on all three
+      through `script.rs`'s bash; `agterm-wpe-sys`'s provider tests are Linux-only, like the crate; the macOS link
+      check reads each archive member's `LC_BUILD_VERSION`; the key test expects macOS's Option, which sends its
+      text unless `macos-option-as-alt`)
+- [x] run gates; `cross-platform.yml` green on all three
 
 ### Task 11: Extend `agterm-ghostty-vt` for the session server
 

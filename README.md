@@ -24,8 +24,8 @@ Linux and Windows are equal targets; today it is built and tested on Linux, and 
 - pkg-config, and the development files GPUI links: Wayland, xkbcommon, xcb, fontconfig and freetype.
 - WPE WebKit 2.54+ with its WPEPlatform API for the HTML overlays (feature `html`, the default; see
   [WPE WebKit](#wpe-webkit)).
-- For the native builds: curl, tar, xz, zstd, patch, sha256sum and ncurses' `tic`/`infocmp`; for
-  `scripts/build-weston.sh` also meson, ninja, python3, a C++ compiler and weston's own development files (the Ubuntu
+- For the native builds: curl, tar, xz, zstd, patch, sha256sum (or `shasum` on macOS) and ncurses' `tic`/`infocmp`;
+  for `scripts/build-weston.sh` also meson, ninja, python3, a C++ compiler and weston's own development files (the Ubuntu
   list below); for regenerating the libghostty-vt bindings `bindgen` (`cargo install bindgen-cli`).
 - A Vulkan loader and driver: GPUI renders through wgpu on Vulkan (Mesa's drivers, lavapipe for every headless app
   instance).
@@ -136,6 +136,13 @@ with the pinned zig the prefix's stamp names, installing and caching under its `
 cache in the vendor root (`zig-cache-<version>`), and fails with "run scripts/build-ghostty-vt.sh" when the prefix is
 missing; `agterm-gpui` fails with "run scripts/fetch-fonts.sh". A fresh `OUT_DIR` (a new target dir or profile) builds
 the library again, a few minutes.
+libghostty-vt builds the same way on macOS and Windows (`.github/workflows/cross-platform.yml` checks both):
+`scripts/build-ghostty-vt.sh` runs under stock macOS's bash 3.2 and under Git Bash on Windows, with the pinned Zig of
+the host's OS and arch (`LIBGHOSTTY_VT_ZIG_SHA256_<OS>_<ARCH>`); on Windows the build script runs it with Git for
+Windows's `bin\bash.exe`, found beside `git.exe` or under the install locations (never `bash` from `PATH`, which can
+be WSL's), and links `ghostty-vt-static` through MSVC. `AGTERM_GHOSTTY_VT_PREFIX` names a prepared prefix and skips
+the script on any OS. `tic` on macOS and Windows writes the terminfo in its hashed layout (`share/terminfo/78/`),
+which every reader takes beside `x/`; the terminfo source (`share/terminfo/ghostty.terminfo`) is staged everywhere.
 `LIBGHOSTTY_VT_*` is the one Ghostty pin (the source archive's sha256 and the theme package's included): it follows
 ghostty main, not upstream agterm's `GHOSTTY_REV`, whose vt API lacks what the app needs. libghostty-vt is linked
 statically; staging takes the prefix's `share/` (the resources) only. `.cargo/config.toml` makes `scripts/pkg-config.sh`
@@ -277,10 +284,13 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   container, on its lavapipe, held by `rust-passing.txt`, once per login shell (`conformance`, a matrix: bash, fish
   and zsh), each with `--must-pass live-any-shell`, the zsh one with `--must-pass live-sessions` too; the bash one runs
   the app's process tests with the overlays on first.
-- `cross-platform.yml`: the crates that build on all three OSes (`agterm-session`, `agterm-proto`, `agterm-host`
-  and `agterm-core` so far; `agterm-server` and `agterm-ctl` wait for the control server's Windows form), on Ubuntu,
-  macOS and Windows runners: format, clippy and `cargo test` (`crates`, a matrix). It also runs on pushes to `ci/**`
-  branches, to check a macOS or Windows form without a PR.
+- `cross-platform.yml`: the crates that build on all three OSes (`agterm-session`, `agterm-proto`, `agterm-host`,
+  `agterm-core`, `agterm-ghostty-vt-sys` and `agterm-ghostty-vt` so far; `agterm-server` and `agterm-ctl` wait for
+  the control server's Windows form), on Ubuntu, macOS and Windows runners: the libghostty-vt prefix with each
+  runner's pinned Zig (cached with Zig's global cache), format, clippy and `cargo test` (`crates`, a matrix), then
+  the sys crate cross-built for the Zig targets no runner runs natively (aarch64 Linux and x86_64 macOS on Ubuntu,
+  aarch64 Windows on Windows). It also runs on pushes to `ci/**` branches, to check a macOS or Windows form without
+  a PR.
 - `conformance-gate.yml`: the suite's self-tests and catalog coverage gate.
 - `reference-macos.yml`, `spike-macos.yml`: the suite against upstream's macOS release.
 

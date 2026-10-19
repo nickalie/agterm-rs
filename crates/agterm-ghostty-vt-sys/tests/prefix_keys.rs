@@ -3,11 +3,14 @@
 //! bump leaves the libghostty-vt prefix where it is.
 //!
 //! Each case runs the real `--print-prefix` of the build scripts over a copy of the repository's scripts, pins and
-//! patches with one pin line edited; nothing is fetched or built.
+//! patches with one pin line edited; nothing is fetched or built. The scripts run with the bash the build script
+//! uses (`script.rs`, which finds Git for Windows's on Windows).
+
+#[path = "../script.rs"]
+mod script;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 #[derive(Debug, PartialEq, Eq)]
 struct Prefixes {
@@ -51,20 +54,14 @@ fn checkout(edit: impl Fn(&str) -> String) -> tempfile::TempDir {
     dir
 }
 
-fn print_prefix(checkout: &Path, script: &str) -> String {
-    let output = Command::new("bash")
-        .arg(checkout.join("scripts").join(script))
-        .arg("--print-prefix")
-        // the same vendor root for every checkout, so only the keys can differ
-        .env("AGTERM_VENDOR", "/agterm-vendor")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{script}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+fn print_prefix(checkout: &Path, name: &str) -> String {
+    // the same vendor root for every checkout, so only the keys can differ
+    script::run(
+        &checkout.join("scripts").join(name),
+        &["--print-prefix"],
+        &[("AGTERM_VENDOR", Path::new("/agterm-vendor"))],
+    )
+    .unwrap_or_else(|err| panic!("{name}: {err}"))
 }
 
 fn prefixes(edit: impl Fn(&str) -> String) -> Prefixes {
@@ -156,4 +153,18 @@ fn a_zmx_bump_or_patch_leaves_the_vt_prefix() {
     let patched = patched_prefixes("zmx/0001-explicit-leadership.patch");
     assert_ne!(patched.zmx, base.zmx);
     assert_eq!(patched.ghostty_vt, base.ghostty_vt);
+}
+
+/// What the build script reads: the repository's own prefix, in the host's native form (on Windows cygpath's
+/// `C:/...`, not MSYS's `/c/...`), named as the script names it.
+#[test]
+fn the_build_script_takes_the_scripts_prefix_in_native_form() {
+    if std::env::var_os(script::PREFIX_ENV).is_some() {
+        return; // the override wins over the script: nothing of the script's to compare
+    }
+    let printed = script::run(&repo_root().join(script::SCRIPT), &["--print-prefix"], &[]).unwrap();
+    let prefix = script::prefix(&repo_root()).unwrap();
+    assert!(prefix.is_absolute(), "{}", prefix.display());
+    assert_eq!(prefix.file_name(), Path::new(&printed).file_name());
+    assert_eq!(prefix, script::native(&printed).unwrap());
 }
