@@ -83,9 +83,46 @@ fn start_with(command: &Command, size: Size, read_pause: ReadPause) -> TestResul
     })
 }
 
+/// `output` without its control strings (OSC, DCS, SOS, PM, APC), whose text a terminal does not show. cmd.exe titles
+/// its console with the command it runs, as parsed (`echo got:pong` for the typed `echo got^:pong`), and `ConPTY`
+/// passes the title on as an OSC before the command's output: a needle found there was never printed.
+fn shown(output: &[u8]) -> String {
+    let mut shown = Vec::with_capacity(output.len());
+    let mut rest = output;
+    while let Some((&byte, after)) = rest.split_first() {
+        if let (0x1b, Some(&kind @ (b']' | b'P' | b'X' | b'^' | b'_'))) = (byte, after.first()) {
+            rest = past_string(&after[1..], kind == b']');
+        } else {
+            shown.push(byte);
+            rest = after;
+        }
+    }
+    String::from_utf8_lossy(&shown).into_owned()
+}
+
+/// What follows a control string's `body`: past its ST (or BEL, for an OSC); nothing while it is unterminated.
+fn past_string(body: &[u8], osc: bool) -> &[u8] {
+    for (at, &byte) in body.iter().enumerate() {
+        if byte == 0x07 && osc {
+            return &body[at + 1..];
+        }
+        if byte == 0x1b && body.get(at + 1) == Some(&b'\\') {
+            return &body[at + 2..];
+        }
+    }
+    &[]
+}
+
+#[test]
+fn shown_text_leaves_out_control_strings() {
+    let output = b"a\x1b]0;cmd.exe - echo got:pong\x07b\x1b]2;t\x1b\\c\x1bPq#0\x1b\\d\x1b[1me\x1b]0;open";
+    assert_eq!(shown(output), "abcd\x1b[1me");
+}
+
 impl Session {
+    /// The output as a terminal shows it: without its control strings.
     fn text(&self) -> String {
-        String::from_utf8_lossy(&lock(&self.output)).into_owned()
+        shown(&lock(&self.output))
     }
 
     /// Wait for `needle` in the output; the output so far when it never comes.
@@ -136,7 +173,8 @@ fn shell() -> Command {
     }
 }
 
-/// The line that makes [`shell`] print `got:<word>` (the typed line, `got^:` or `got"":`, does not match it).
+/// The line that makes [`shell`] print `got:<word>` (the typed line, `got^:` or `got"":`, does not match it; cmd's
+/// console title, which names the command parsed, does, so the needle is looked for in [`shown`] text).
 fn tagged(word: &str) -> String {
     if cfg!(windows) {
         format!("echo got^:{word}")
