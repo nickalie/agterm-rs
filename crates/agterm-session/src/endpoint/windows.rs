@@ -72,12 +72,11 @@ pub(super) fn connect_timeout(endpoint: &Endpoint, timeout: Duration) -> io::Res
 pub(super) fn disconnect(stream: &Stream) {
     let Stream::NamedPipe(pipe) = stream;
     let handle = pipe.as_handle().as_raw_handle();
-    // SAFETY: the handle is the open server end `pipe` borrows for both calls; a null overlapped pointer cancels every
-    // operation pending on it. Failures (a pipe already disconnected, nothing pending) leave it closed.
-    unsafe {
-        DisconnectNamedPipe(handle);
-        CancelIoEx(handle, std::ptr::null());
-    }
+    // Failures (a pipe already disconnected, a client's end, nothing pending) leave it as closed as it gets.
+    // SAFETY: the handle is the open pipe end `pipe` borrows for the call.
+    unsafe { DisconnectNamedPipe(handle) };
+    // SAFETY: as above; a null overlapped pointer cancels every operation pending on the handle.
+    unsafe { CancelIoEx(handle, std::ptr::null()) };
 }
 
 pub(super) fn peer_closed(stream: &mut Stream) -> io::Result<bool> {
