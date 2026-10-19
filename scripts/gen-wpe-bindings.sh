@@ -54,7 +54,7 @@ build_gir() {
   local prefix build="$WORK/gir-build" stage="$WORK/gir-stage"
   prefix="$(gir_prefix)"
   if ! gir_prefix_is_complete "$prefix"; then
-    mkdir -p "$build/src" "$stage/bin" "$stage/share/agterm"
+    mkdir -p "$build/src" "$stage/bin" "$stage/share/ngterm"
     echo "building gir ${GIR_REV:0:12}..." >&2
     fetch "$GIR_REPO/archive/$GIR_REV.tar.gz" "$build/source.tar.gz" "$GIR_SHA256"
     tar -xzf "$build/source.tar.gz" -C "$build/src" --strip-components=1
@@ -66,7 +66,7 @@ build_gir() {
       cargo build --manifest-path "$build/src/Cargo.toml" --release --locked --quiet) >&2 \
       || die "the gir build failed"
     cp "$build/target/release/gir" "$stage/bin/gir"
-    pin_lines GIR >"$stage/share/agterm/gir-PINS"
+    pin_lines GIR >"$stage/share/ngterm/gir-PINS"
     gir_prefix_is_complete "$stage" || die "the staged gir prefix is incomplete"
     chmod 755 "$stage"
     rm -rf "$prefix"

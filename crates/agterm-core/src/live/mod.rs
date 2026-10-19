@@ -30,6 +30,8 @@ use std::path::{Component, Path, PathBuf};
 
 use uuid::Uuid;
 
+use crate::paths::APP_DIR_NAME;
+
 /// The prefix of every daemon name this app emits.
 pub const NAME_PREFIX: &str = "agterm-";
 
@@ -82,15 +84,15 @@ pub fn state_dir_hash(state_dir: &Path) -> String {
     fnv1a64(resolved_state_dir(state_dir).as_os_str().as_encoded_bytes())
 }
 
-/// The Unix socket directory of the state directory hashed `hash` ([`state_dir_hash`]): `/tmp/agterm-zmx-<hash>`,
-/// upstream's shape, so the harness derives it the same way.
+/// The Unix socket directory of the state directory hashed `hash` ([`state_dir_hash`]): `/tmp/ngterm-zmx-<hash>`,
+/// upstream's shape under this build's name (upstream's prefix is `agterm`), so the harness derives it the same way.
 #[must_use]
 pub fn unix_socket_directory(hash: &str) -> String {
-    format!("/tmp/agterm-zmx-{hash}")
+    format!("/tmp/{APP_DIR_NAME}-zmx-{hash}")
 }
 
 /// The Windows namespace directory of the state directory hashed `hash` ([`state_dir_hash`]):
-/// `%LOCALAPPDATA%\agterm\live\<hash>`, per user as `/tmp` is not; `%USERPROFILE%\AppData\Local` when
+/// `%LOCALAPPDATA%\ngterm\live\<hash>`, per user as `/tmp` is not; `%USERPROFILE%\AppData\Local` when
 /// `LOCALAPPDATA` is unset or empty, then the profile directory the OS reports ([`crate::paths::Env::passwd_home`]),
 /// and the system's temporary directory with no profile at all. The live-session server derives its pipe from this
 /// path (`agterm_session::endpoint::pipe_name`). Spelled with `\` on every OS, so a test anywhere reads the
@@ -110,7 +112,7 @@ pub fn windows_socket_directory(env: &dyn crate::paths::Env, hash: &str) -> Stri
         .or_else(|| non_empty("USERPROFILE").map(profile_local))
         .or_else(|| env.passwd_home().map(profile_local))
         .unwrap_or_else(|| local(std::env::temp_dir()));
-    format!(r"{base}\agterm\live\{hash}")
+    format!(r"{base}\{APP_DIR_NAME}\live\{hash}")
 }
 
 /// `state_dir` as upstream resolves it (`standardizedFileURL.resolvingSymlinksInPath()`): absolute, `.` and `..`
@@ -230,7 +232,7 @@ mod tests {
         assert_eq!(fnv1a64(b"foobar"), "85944171f73967e8");
         let state = Path::new("/nonexistent-agterm/state");
         #[cfg(unix)]
-        assert_eq!(socket_directory(state), "/tmp/agterm-zmx-22c4fb0b9e3e04dc");
+        assert_eq!(socket_directory(state), "/tmp/ngterm-zmx-22c4fb0b9e3e04dc");
         assert_eq!(
             socket_directory(Path::new("/nonexistent-agterm/./x/../state")),
             socket_directory(state)
@@ -241,7 +243,7 @@ mod tests {
     fn the_unix_socket_directory_is_upstreams_shape() {
         assert_eq!(
             unix_socket_directory("22c4fb0b9e3e04dc"),
-            "/tmp/agterm-zmx-22c4fb0b9e3e04dc"
+            "/tmp/ngterm-zmx-22c4fb0b9e3e04dc"
         );
         #[cfg(unix)]
         {
@@ -258,7 +260,7 @@ mod tests {
         let local = MapEnv::new().with("LOCALAPPDATA", r"C:\Users\u\AppData\Local");
         assert_eq!(
             windows_socket_directory(&local, hash),
-            r"C:\Users\u\AppData\Local\agterm\live\0123456789abcdef"
+            r"C:\Users\u\AppData\Local\ngterm\live\0123456789abcdef"
         );
         let profile = MapEnv::new()
             .with("LOCALAPPDATA", "")
@@ -266,16 +268,16 @@ mod tests {
             .with_passwd_home(r"D:\other");
         assert_eq!(
             windows_socket_directory(&profile, hash),
-            r"C:\Users\u\AppData\Local\agterm\live\0123456789abcdef",
+            r"C:\Users\u\AppData\Local\ngterm\live\0123456789abcdef",
             "an empty LOCALAPPDATA falls back to the profile's"
         );
         let reported = MapEnv::new().with_passwd_home(r"D:\home\u");
         assert_eq!(
             windows_socket_directory(&reported, hash),
-            r"D:\home\u\AppData\Local\agterm\live\0123456789abcdef"
+            r"D:\home\u\AppData\Local\ngterm\live\0123456789abcdef"
         );
         assert!(
-            windows_socket_directory(&MapEnv::new(), hash).ends_with(r"\agterm\live\0123456789abcdef"),
+            windows_socket_directory(&MapEnv::new(), hash).ends_with(r"\ngterm\live\0123456789abcdef"),
             "no profile at all: the temporary directory"
         );
         #[cfg(windows)]

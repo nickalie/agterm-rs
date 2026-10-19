@@ -23,7 +23,7 @@ use x11rb::wrapper::ConnectionExt as _;
 
 /// One control request with `args` (and `target`) to the sandbox's socket; its result, or the error it answered.
 fn request(sandbox: &Sandbox, cmd: &str, target: Option<&str>, args: &Value) -> TestResult<Value> {
-    let mut socket = std::os::unix::net::UnixStream::connect(sandbox.path("state/agterm.sock"))?;
+    let mut socket = std::os::unix::net::UnixStream::connect(sandbox.path("state/ngterm.sock"))?;
     socket.set_read_timeout(Some(DEADLINE))?;
     let mut line = json!({ "cmd": cmd, "args": args });
     if let Some(target) = target {
@@ -349,6 +349,10 @@ fn the_window_reopens_at_the_size_it_quit_with() -> TestResult {
         (width == 1000 && height == 700).then_some(())
     })
     .map_err(|_| "the resize never reached the X server")?;
+    // GPUI learns the size from the ConfigureNotify, already queued on its connection once the server shows it; a
+    // request answered on the main thread lets that loop pass over the queued event before the SIGTERM's save, which
+    // could otherwise run first in the same pass and save the size before the resize
+    listed(&sandbox)?;
     sandbox.terminate(first)?;
     assert_eq!(sandbox.wait_exit(first, Duration::from_secs(10))?.0.code(), Some(0));
     let saved = std::fs::read_to_string(sandbox.path("state/window-frames.json"))?;

@@ -16,8 +16,16 @@
 #
 # It fails OPEN (reports) whenever the chain is unreadable or severed, e.g. a detached worker whose
 # spawner already exited: a missed guard is the behavior without this adapter, while a false silence
-# is a bug with no symptom. The argv is forwarded to the shared wrapper verbatim, so the adapter adds
-# a guard and changes nothing else; it never reads stdin, so a payload another hook wants is intact.
+# is a bug with no symptom. The argv is forwarded to the shared wrapper verbatim, with one exception:
+#
+# A turn can end with work still in flight, a background shell, subagent or monitor that wakes the
+# agent again when it is done. Claude Code's Stop payload lists that work in `background_tasks` (empty
+# when nothing is in flight), so a Stop that would post `completed` posts `active --blink` instead and
+# the row keeps pulsing until a Stop with nothing in flight, or the SessionEnd hook the installer adds
+# when the agent quits first. Upstream's stock Stop goes green at once and covers this case only in its
+# truthful-agent-lights cookbook recipe. Only a `completed` call reads
+# stdin, where Claude Code writes the payload as JSON; a key quoted inside a string value is escaped
+# (`\"background_tasks\"`), so the match cannot hit the last assistant message.
 set -u
 
 [ -n "${AGTERM_SESSION_ID:-}" ] || exit 0
@@ -80,5 +88,15 @@ for _ in 1 2 3 4 5 6 7 8; do
   case "$base" in login | agterm) break ;; esac # reached the pane boundary
   p=$ppid
 done
+
+if [ "${1:-}" = completed ] && [ ! -t 0 ]; then
+  payload=
+  IFS= read -r -d '' -t 2 payload || true # EOF ends the read: the payload carries no NUL
+  stop_re='"hook_event_name"[[:space:]]*:[[:space:]]*"Stop"'
+  in_flight_re='"background_tasks"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{'
+  if [[ $payload =~ $stop_re ]] && [[ $payload =~ $in_flight_re ]]; then
+    exec "$status_wrapper" active --blink
+  fi
+fi
 
 exec "$status_wrapper" "$@"

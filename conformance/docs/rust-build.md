@@ -11,7 +11,7 @@ Its result is the references' `app` block plus a `conformance` block only the Ru
  "conformance": {"parityLevel": "0.36.0", "capabilities": ["posix-shell", "live-sessions"]}}
 ```
 
-- `app.version`: a non-empty string; `app.commit` is optional, and `agtermctl version` prints `version (commit)`.
+- `app.version`: a non-empty string; `app.commit` is optional, and the CLI's `version` prints `version (commit)`.
   `tree` carries the same object as `tree.app`.
 - `conformance.parityLevel`: the upstream version whose behavior the build claims, a dotted version with an optional
   `v` (no suffix such as `-beta`).
@@ -45,12 +45,13 @@ The Rust build (GPUI) gets, on top of that:
   the one `scripts/build-weston.sh` vendors where the system's is older).
 
 SIGTERM must quit without a prompt within 10 seconds.
-Live sessions keep their zmx sockets in `/tmp/agterm-zmx-%016x` (lowercase hex) of the FNV-1a 64 hash over the UTF-8
+Live sessions keep their zmx sockets in `/tmp/ngterm-zmx-%016x` (lowercase hex) of the FNV-1a 64 hash over the UTF-8
 bytes of the state dir's realpath, with a leading `/private` dropped on macOS when the shorter path exists
-(`upstream_socket_directory` in `agterm_conformance/vocabulary.py`, which the adapter's vocabulary names; the
-instance's `live_dir`).
+(`upstream_socket_directory` in `agterm_conformance/vocabulary.py`, which the adapter's vocabulary names, prefixed
+with the adapter's `app_dir_name`; the instance's `live_dir`); upstream's and the fork's prefix is `agterm`.
 Every zmx or session-host process carries `ZMX_DIR=<that dir>`: one left running after the stop fails it.
-`agtermctl` is taken from `--ctl`, else from beside `--bin`.
+The CLI (`agtermctl` for the Swift builds, `ngtermctl` for the Rust one: `Adapter.ctl_name`) is taken from `--ctl`,
+else from beside `--bin`.
 
 ## Capability vocabulary
 
@@ -114,6 +115,11 @@ It does not claim:
 
 The table above stays the references' profiles; this list is the Rust build's.
 
+Restore is lazy, as in the GTK fork and unlike upstream's eager deck (the user's call, 2026-10-19): only each
+window's selected restored session spawns at launch, the others once shown or once a command needs their terminal.
+No capability marks it: the suite already waits for a restored session only once it is selected, since the fork
+mounts a pane only on screen.
+
 ## Rust-only extensions
 
 A Rust-only extension is a capability no reference claims, so its tests (`requires` on it) skip as `unsupported` on
@@ -133,14 +139,14 @@ also runs with `--must-pass live-sessions`, as reference-macos.
 
 The Rust build answers upstream's control-protocol group `zmx.*` as `live.*`, a deliberate deviation from upstream: no
 `zmx` in its code, its control protocol or its CLI, ahead of the session server that replaces zmx itself. An upstream
-Mac and this build can therefore no longer view each other's sessions (`live.tree HOST` runs `agtermctl live tree` on
-the far side, an attached row's stream `agtermctl live present`), and neither can this build and a Rust build from
+Mac and this build can therefore no longer view each other's sessions (`live.tree HOST` runs `ngtermctl live tree` on
+the far side, an attached row's stream `ngtermctl live present`), and neither can this build and a Rust build from
 before the rename.
 
 | upstream | Rust build |
 |---|---|
 | `zmx.list`, `zmx.prune`, `zmx.kill`, `zmx.reset`, `zmx.tree`, `zmx.attach`, `zmx.present`, `zmx.screen` | `live.list`, `live.prune`, `live.kill`, `live.reset`, `live.tree`, `live.attach`, `live.present`, `live.screen` |
-| `agtermctl zmx <subcommand>` | `agtermctl live <subcommand>` |
+| `agtermctl zmx <subcommand>` | `ngtermctl live <subcommand>` |
 | `result.zmx` (the inventory) | `result.live` |
 | `tree.session.backedByZmx`, `surfaces[].backedByZmx` | `backedByLive` |
 | `AGTERM_UITEST_ENABLE_ZMX` | `AGTERM_UITEST_ENABLE_LIVE` |
@@ -162,13 +168,13 @@ Every other field, every semantic and every error string that names no zmx is up
 | `the pane's zmx daemon did not accept the input` | `the pane's live session did not accept the input` |
 | `the remote agterm is too old to report its zmx endpoint` | `… its live-session endpoint` |
 | `the zmx executable path is not absolute`, `the zmx executable is unavailable` (`restore.mode`'s `unavailableReason`) | `the live-session executable path is not absolute`, `the live-session executable is unavailable` |
-| `this pane has no zmx daemon; run it in a main or split pane started under Live sessions` (`agtermctl clipboard set`) | `this pane has no live session; run it in a main or split pane started under Live sessions` |
-| `no zmx next to this agtermctl[; looked for PATH]`, `zmx print exited N: …` (`agtermctl clipboard set`) | `no live-session executable next to this agtermctl[; looked for PATH]`, `the live-session print exited N: …` |
+| `this pane has no zmx daemon; run it in a main or split pane started under Live sessions` (`clipboard set`) | `this pane has no live session; run it in a main or split pane started under Live sessions` |
+| `no zmx next to this agtermctl[; looked for PATH]`, `zmx print exited N: …` (`clipboard set`) | `no live-session executable next to this ngtermctl[; looked for PATH]`, `the live-session print exited N: …` |
 
-The help texts of `agtermctl live` and `restore mode` speak of live-session daemons and the session host the same way.
+The help texts of `ngtermctl live` and `restore mode` speak of live-session daemons and the session host the same way.
 What the bundled zmx binary itself speaks is unchanged until the session server replaces it: its `attach` command line
 and `ZMX_*` variables, the socket directory, the `zmx-role;` title its patch writes, its `list` and `screen` output,
-`bin/zmx`, `share/agterm/zmx-BUILD` and `AGTERM_ZMX_PATH`, and the `zmx-build.json` record in the state dir.
+`bin/zmx`, `share/ngterm/zmx-BUILD` and `AGTERM_ZMX_PATH`, and the `zmx-build.json` record in the state dir.
 
 The suite's tests, `catalog.yaml` and their `covers(...)` markers keep upstream's names, since the Swift references
 answer to them; no test id changes, so the ratchet keeps its ids. Each adapter carries a vocabulary object
@@ -179,7 +185,8 @@ and the shared tests read every such value through `ctl.vocabulary`, `cli.vocabu
 refuses an upstream text that names zmx and that it does not list, and `selftests/test_vocabulary.py` checks each
 listed text against the Rust sources.
 
-The bundled agent skill (`resources/skills/agterm`) is upstream's with `build/patches/skill-agterm/` applied:
+The bundled agent skill (`resources/skills/agterm`, installed as `ngterm`) is upstream's with
+`build/patches/skill-agterm/` applied (the `live` names, then this build's: `ngterm`, `ngtermctl`):
 `.claude/skills/agterm-upstream-sync/scripts/sync-resources.sh` rebuilds it as the new upstream tree plus those
 patches on every sync, and `sync-resources.sh --check TAG TAG` with the pinned tag verifies the copy still equals it.
 
@@ -217,10 +224,12 @@ app shows HTML overlays and needs a WPE WebKit (README > WPE WebKit; the CI's is
 runs a tree staged elsewhere instead.
 
 Staging. `scripts/stage.sh` assembles the tree the harness launches, `target/conformance-stage` by default:
-`bin/agterm`, `bin/agtermctl` (the harness takes it from beside `--bin`) and `bin/zmx` with `share/agterm/zmx-BUILD`
+`bin/agterm`, `bin/ngtermctl` (the harness takes it from beside `--bin`; upstream's and the fork's CLI is `agtermctl`,
+and the CLI tests expect the adapter's name in usage lines) and `bin/zmx` with `share/ngterm/zmx-BUILD`
 (the staged zmx's build id), Ghostty's `share/terminfo` (`xterm-ghostty`) and `share/ghostty` (themes, shell
 integration) from the libghostty-vt prefix, agterm's own themes beside Ghostty's, and the agent integrations' payloads
-under `share/agterm`. There is no `lib/`: libghostty-vt is linked statically, and nothing of GTK, libghostty or
+under `share/ngterm` (not upstream's `share/agterm`: installed at prefix `~/.local`, that would be the fork's state
+dir). There is no `lib/`: libghostty-vt is linked statically, and nothing of GTK, libghostty or
 layer-shell is linked at all.
 
 Lavapipe. GPUI renders through Vulkan (wgpu), so every run renders on Mesa's lavapipe, from

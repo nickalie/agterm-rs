@@ -11,17 +11,17 @@ The full user-facing version of the diagnostics below is the repo's `docs/troubl
 
 You are inside agterm (`AGTERM_ENABLED=1`). Use:
 
-- **Live state** — `agtermctl tree --json`, `agtermctl window list --json`.
-- **Keymap problems** — `agtermctl keymap reload` prints the parse-diagnostic count (`0` = clean). A
-  non-zero count means `keymap.conf` has problems; `agtermctl keymap list` prints each one with its line
+- **Live state** — `ngtermctl tree --json`, `ngtermctl window list --json`.
+- **Keymap problems** — `ngtermctl keymap reload` prints the parse-diagnostic count (`0` = clean). A
+  non-zero count means `keymap.conf` has problems; `ngtermctl keymap list` prints each one with its line
   and message, and the user also sees the list in Settings ▸ Key Mapping.
-- **A keybinding does not fire** — `agtermctl keymap list` shows the chord each action resolved to AND the
+- **A keybinding does not fire** — `ngtermctl keymap list` shows the chord each action resolved to AND the
   key equivalents the menu bar is actually dispatching. If the action's `chord` looks right but no `menu`
   entry carries it (or a different item does), the keymap is fine and the menu is the problem: SwiftUI
   rebuilds the menu lazily (on activation or a key press), so switch to another app and back, then relaunch if it
   persists. Exceptions: `undo_close` (⌘Z) and `toggle_fullscreen` (⌃⌘F) are delivered by a key monitor
   rather than a menu item, so they never appear under `menu` and their absence there means nothing.
-- **Ghostty settings** - `agtermctl config reload` re-reads the ghostty config and prints the diagnostic
+- **Ghostty settings** - `ngtermctl config reload` re-reads the ghostty config and prints the diagnostic
   count (`0` = clean). The count covers every config source, not just `ghostty.conf` (libghostty does not
   record which file a diagnostic came from), so check the Console log for the offending line. `ghostty.conf`
   (next to `keymap.conf`, always loaded) is where agterm customizations go; it overrides the bundled
@@ -35,7 +35,7 @@ You are inside agterm (`AGTERM_ENABLED=1`). Use:
   `ssh` with a wrapper calling a `ghostty` CLI absent from agterm's bundle, so agterm forces both off
   after reading the config and keeps every other flag. Setting either is by design a no-op, reports no
   diagnostic, and is NOT a bug. For remote terminfo, install the entry once per host and account with
-  `agtermctl terminfo install <host>` (local-only, no socket; `-p`, `-i`, `-J`, `-F` pass through, other
+  `ngtermctl terminfo install <host>` (local-only, no socket; `-p`, `-i`, `-J`, `-F` pass through, other
   connection settings belong in `~/.ssh/config`, and the execution settings are the installer's own). The symptom it fixes is `less`, `vim` or `apt` on the remote
   warning that the terminal is not fully functional, because `TERM=xterm-ghostty` is unknown there.
 - **Logs** (unified logging, subsystem `com.umputun.agterm`):
@@ -44,8 +44,8 @@ You are inside agterm (`AGTERM_ENABLED=1`). Use:
   ```
   Categories: `GhosttyApp`, `GhosttySurfaceView`, `WatermarkRenderer`, `NotificationManager`,
   `SettingsView`, `SettingsModel`, `CustomCommandRunner`, `ControlServer`.
-- **Files** — keymap `~/.config/agterm/keymap.conf`; agterm-scoped ghostty config
-  `~/.config/agterm/ghostty.conf`; settings `~/Library/Application Support/agterm/settings.json`;
+- **Files** — keymap `~/.config/ngterm/keymap.conf`; agterm-scoped ghostty config
+  `~/.config/ngterm/ghostty.conf`; settings `~/.local/share/ngterm/settings.json`;
   socket path in `$AGTERM_SOCKET`.
 
 ### "Keymap editor won't open"
@@ -67,11 +67,11 @@ has keyboard focus,
 though it DOES fire from a terminal pane or an empty window (every session closed); it runs in a non-interactive
 `/bin/sh -c` (no aliases/functions, a smaller `PATH` — use absolute paths or `$SHELL -lc '…'`); a
 non-zero exit posts a failure banner (meaning it DID fire and failed). Reload after edits:
-`agtermctl keymap reload`.
+`ngtermctl keymap reload`.
 
 ### "An overlay or --command session opens then instantly closes"
 
-The program exited immediately. Check `agtermctl session overlay result --json` — `exitCode: 127` is
+The program exited immediately. Check `ngtermctl session overlay result --json` — `exitCode: 127` is
 "command not found": `session overlay open`, `session scratch --command`, and `session new --command`
 run the program with the app's GUI `PATH` (the launchd default — no `/opt/homebrew/bin`), NOT your login
 shell's PATH, so a bare Homebrew or other non-default binary isn't found. Fix: give an absolute path
@@ -103,8 +103,8 @@ keep working on a non-Latin layout. (ghostty's own
 in particular exists because without it ⌘A would silently do nothing on a Cyrillic layout.)
 
 To remap a shortcut ghostty still owns: a physical key name (`key_c`, `key_v`, …) matches by position on
-any layout; a bare letter (`c`, `v`) matches the produced character. Edit `~/.config/agterm/ghostty.conf`,
-then `agtermctl config reload`.
+any layout; a bare letter (`c`, `v`) matches the produced character. Edit `~/.config/ngterm/ghostty.conf`,
+then `ngtermctl config reload`.
 
 ### "My live session came back as a fresh shell"
 
@@ -120,7 +120,7 @@ Check these in order:
   indicator.
 - **Confirm the pane is in scope.** Primary and split panes can survive. Scratch, overlay, and quick terminals
   are temporary by design.
-- **Start from `agtermctl live list`.** It reports every daemon and the pane claiming it, with the
+- **Start from `ngtermctl live list`.** It reports every daemon and the pane claiming it, with the
   restore mode as a header. `claimed` with zero clients is a CLOSED window's resting state, not a leak;
   `orphan` is what `live prune` takes. `unknown` means the pane inventory was incomplete, so nothing
   can be pruned until that is resolved.
@@ -128,19 +128,19 @@ Check these in order:
   to attach, so agterm creates one under the saved name and replays the command that pane was running at the
   last clean quit. A fresh shell instead means no capture applied: the window was closed before the quit, the
   machine lost power or was force-quit, the process exited before quitting, SIGTERM was used, or the command
-  is refused by `restore-denylist.conf`. `agtermctl live kill` is not one of these — it closes a shown split
+  is refused by `restore-denylist.conf`. `ngtermctl live kill` is not one of these — it closes a shown split
   or promotes a primary rather than leaving a daemon to recreate. To check what was captured, read
   `foregroundCommand` in `windows/<id>.json` while agterm is STOPPED: the next launch moves it into memory
   and rewrites the file with nil, so a running app always shows null there.
 - **A tool asks for the microphone again after every update.** The pane was created before the session
-  host and reads `orphaned` in `agtermctl tree --json`, so macOS charges each tool version separately. Agterm ▸
-  Reset Live Sessions… (or `agtermctl live reset --force`) ends those sessions' processes at the next launch
+  host and reads `orphaned` in `ngtermctl tree --json`, so macOS charges each tool version separately. Agterm ▸
+  Reset Live Sessions… (or `ngtermctl live reset --force`) ends those sessions' processes at the next launch
   and recreates them under the host; agterm quits and reopens itself, captured commands start again where
   possible, and the notification afterwards says how many sessions were covered. A session whose old process
   could not be confirmed gone gets no command restarted and the reset can be run again.
 - **After an update, an attached session still needs a key press, or a session host change seems missing.** A live
-  session keeps the session host it was created with through app updates. `agtermctl live list` marks such rows
-  `outdated`; Agterm ▸ Reset Live Sessions… (or `agtermctl live reset --force`) recreates them on the current
+  session keeps the session host it was created with through app updates. `ngtermctl live list` marks such rows
+  `outdated`; Agterm ▸ Reset Live Sessions… (or `ngtermctl live reset --force`) recreates them on the current
   session host, with the same cost as any reset: running work stops and agent conversations need resuming.
 - **Switching modes ends detached live processes.** Selecting Fresh shells or Re-run commands and restarting
   reaps the live daemons in this state directory. An unavailable launch that still requests Live sessions
@@ -247,7 +247,7 @@ file it.
 
 ### "agterm would like to access data from other apps, over and over"
 
-Use `agtermctl tree --json` to read `liveAttribution` and `splitLiveAttribution`; see the
+Use `ngtermctl tree --json` to read `liveAttribution` and `splitLiveAttribution`; see the
 [tree field definitions](reference.md#tree). The [App Data diagnosis](https://github.com/umputun/agterm/blob/master/docs/troubleshooting.md#agterm-would-like-to-access-data-from-other-apps-keeps-coming-back)
 covers the permission guidance: which panes keep agterm's attribution after a relaunch, and Full Disk
 Access for `orphaned` and `app` panes. Needing the consent grant is macOS policy: do not file the consent
@@ -266,10 +266,9 @@ The selected directory must already exist. An empty `OPENCODE_CONFIG_DIR` skips 
 Re-run it after switching major versions: v2 removes the marked v1 plugin in its selected directory; v1 leaves the v2 directory alone.
 User-owned or unreadable v1 files are preserved and reported in the install result.
 The v2 CLI plugin follows the selected session and its descendants, excluding background tabs and headless runs.
-The installed wrapper resolves the bundled `agtermctl` itself; a bare development build instead needs
-`agtermctl` on `PATH`. Moving or replacing agterm.app invalidates the path the installer baked in — the
-wrapper then falls back to `agtermctl` on `PATH`, and with nothing there the glyph silently stops
-updating. Re-run Help ▸ Install Agent Status Hooks… after moving the app, or install the CLI with
+The installed wrapper resolves the bundled `ngtermctl` itself; a bare development build instead needs `ngtermctl` on
+`PATH`. Moving or replacing the app invalidates the path the installer baked in — the wrapper then falls back to
+`ngtermctl` on `PATH`, and with nothing there the glyph silently stops updating. Re-run Help ▸ Install Agent Status Hooks… after moving the app, or install the CLI with
 Help ▸ Install Command Line Tool….
 
 ### "The agent-status glyph updates the wrong session"
@@ -320,8 +319,8 @@ anthropics/claude-code#72188 (mouse-click variant #72273). Workaround: answer be
 Detection, not rendering. agterm identifies as `TERM_PROGRAM=agterm` (see the env list in SKILL.md) and
 Claude Code's hyperlink allowlist lacks that name, so it prints the URL. agterm renders OSC 8 links fine.
 Workaround: `FORCE_HYPERLINK=1 claude` (Claude Code reads it before any terminal check), or
-`env = FORCE_HYPERLINK=1` in `~/.config/agterm/ghostty.conf` for every new shell, after a config reload
-(`agtermctl config reload` or File ▸ Reload Config) and a new session; that form also forces links into
+`env = FORCE_HYPERLINK=1` in `~/.config/ngterm/ghostty.conf` for every new shell, after a config reload
+(`ngtermctl config reload` or File ▸ Reload Config) and a new session; that form also forces links into
 redirected output. `env = TERM_PROGRAM=ghostty` there does nothing: agterm applies its identity after the
 config file. Do not file an agterm issue for it; the fix belongs upstream (Claude Code recognizing `agterm`
 or `TERM=xterm-ghostty`).
@@ -333,7 +332,7 @@ by Ghostty's shell integration, which is injected into the shell agterm spawns a
 shell replacing itself. A `.zshrc` that `exec`s a wrapper (Amazon Q CLI, Kiro CLI, Fig) replaces it before
 the first prompt, so `currentCwd` is never written and every cwd consumer falls back to the creation
 directory: restore, the directory under the session name, `session reveal`, and `{AGT_SESSION_PWD}`.
-Confirm with `cd` then `agtermctl tree --json` — the session's `cwd` does not follow the `cd`. Fix in
+Confirm with `cd` then `ngtermctl tree --json` — the session's `cwd` does not follow the `cd`. Fix in
 `.zshrc`, below the block that replaced the shell:
 `[[ -n "$GHOSTTY_RESOURCES_DIR" ]] && builtin source "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration"`
 (a no-op where it already loaded; bash, fish and nushell have their own files in that directory).
@@ -360,7 +359,7 @@ and only inside that program. Ghostty.app behaves the same. It is per-program, n
 `tmux` with `mouse on` and stock `vim` (`defaults.vim` sets `mouse=a`) suppress it, while an agent CLI
 that never enables mouse reporting keeps links working. Workaround: hold shift too (⌘⇧-hover, ⌘⇧-click).
 A program can claim shift via `XTSHIFTESCAPE`, so `mouse-shift-capture = never` in
-`~/.config/agterm/ghostty.conf` makes shift always win; `mouse-reporting = false` there turns reporting
+`~/.config/ngterm/ghostty.conf` makes shift always win; `mouse-reporting = false` there turns reporting
 off for every program, trading in-program mouse support for always-on selection and links.
 
 ## Reporting: decide bug vs unsupported FIRST
@@ -384,7 +383,7 @@ off for every program, trading in-program mouse support for always-on selection 
    hostnames/IPs, usernames embedded in absolute paths (replace with `~` or `<user>`), private repo
    names, and the contents of a selection / `session.copy` / clipboard. When unsure, ask.
 5. **Gather the repro facts yourself** where you can: agterm version (the user reads it from
-   Agterm ▸ About Agterm), `agtermctl tree --json` shape, a scrubbed `keymap.conf` excerpt, a scrubbed
+   Agterm ▸ About Agterm), `ngtermctl tree --json` shape, a scrubbed `keymap.conf` excerpt, a scrubbed
    `log show` excerpt.
 
 ## Issue template (bug)

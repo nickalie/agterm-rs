@@ -183,9 +183,11 @@ pub(crate) fn open_presentation(core: &mut Core, target: Option<&str>) -> Outcom
         .store(resolved.window)
         .and_then(|store| store.session(resolved.session))
         .ok_or_else(|| ControlError::rejected("no such session"))?;
-    if !crate::projection::all_panes_backed(session) {
+    if !core.session_backed(session) {
         return Err(ControlError::rejected(NOT_LIVE));
     }
+    // a dormant session's panes attach now, for the viewer that watches it
+    core.wake_session(resolved.session);
     Ok(ControlResult::id(uuid_string(resolved.session)))
 }
 

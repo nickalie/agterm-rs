@@ -46,11 +46,11 @@ impl Fixture {
         dir
     }
 
-    /// The staging layout the installed CLI resolves into: `bin/agtermctl` beside `share/terminfo`.
+    /// The staging layout the installed CLI resolves into: `bin/ngtermctl` beside `share/terminfo`.
     fn stage(&self, layout: &str) -> (PathBuf, PathBuf) {
         let bin = self.path("stage/bin");
         fs::create_dir_all(&bin).unwrap();
-        let client = bin.join("agtermctl");
+        let client = bin.join("ngtermctl");
         fs::write(&client, b"").unwrap();
         (client, self.database("stage/share/terminfo", layout))
     }
@@ -148,7 +148,7 @@ fn connection(destination: &str) -> Connection {
 // -- the command line
 
 fn parse(argv: &[&str]) -> Result<Install, clap::Error> {
-    let line = ["agtermctl", "terminfo", "install"].iter().chain(argv).copied();
+    let line = ["ngtermctl", "terminfo", "install"].iter().chain(argv).copied();
     let Cli::Terminfo(group) = Agtermctl::try_parse_from(line)?.command else {
         panic!("not a terminfo command")
     };
@@ -220,7 +220,7 @@ fn every_failure_has_its_own_message() {
             InstallFailure::TerminfoNotFound {
                 searched: vec![PathBuf::from("/a/share/terminfo"), PathBuf::from("/t")],
             },
-            "no xterm-ghostty terminfo entry next to this agtermctl; looked in /a/share/terminfo, /t",
+            "no xterm-ghostty terminfo entry next to this ngtermctl; looked in /a/share/terminfo, /t",
         ),
         (
             InstallFailure::DumpFailed {
@@ -259,7 +259,7 @@ fn the_stage_beside_the_client_wins_over_the_environment() {
 fn the_environment_is_the_fallback_when_the_client_has_no_stage() {
     let fixture = Fixture::new();
     let from_env = fixture.database("env", "x");
-    let loose = fixture.path("target/debug/agtermctl");
+    let loose = fixture.path("target/debug/ngtermctl");
     let environment = env(&[("TERMINFO", &from_env)]);
     assert_eq!(terminfo_directory(Some(&loose), &environment), Some(from_env.clone()));
     assert_eq!(terminfo_directory(None, &environment), Some(from_env));
@@ -446,6 +446,34 @@ fn the_dump_reaches_ssh_stdin_byte_for_byte_and_ends_in_eof() {
     let arguments = fixture.ssh_arguments();
     assert_eq!(arguments[0], "-T");
     assert!(arguments.contains(&"buildbox".to_owned()));
+}
+
+#[test]
+fn the_dump_names_the_database_by_argument_as_well_as_by_terminfo() {
+    // an ncurses built with `--disable-root-environ` ignores TERMINFO for root, so `-A` carries the database too
+    let fixture = Fixture::new();
+    let database = fixture.database("env", "x");
+    let infocmp = Fixture::script(
+        &fixture.path("infocmp"),
+        &format!(
+            "printf '%s\\n' \"$@\" \"$TERMINFO\" > '{}'",
+            fixture.path("infocmp.args").display()
+        ),
+    );
+    let ssh = fixture.fake_ssh(0, true, "");
+    let outcome = run(
+        &connection("buildbox"),
+        None,
+        &env(&[("TERMINFO", &database)]),
+        &ssh,
+        &infocmp,
+    );
+    assert_eq!(outcome, Ok(Outcome::Exited(0)));
+    let directory = database.display().to_string();
+    assert_eq!(
+        fixture.read("infocmp.args").lines().collect::<Vec<_>>(),
+        ["-x", "-A", directory.as_str(), ENTRY, directory.as_str()]
+    );
 }
 
 #[test]

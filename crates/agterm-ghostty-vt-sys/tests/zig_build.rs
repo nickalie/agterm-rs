@@ -172,7 +172,7 @@ fn a_missing_or_unprepared_prefix_names_the_script() {
             .contains("run scripts/build-ghostty-vt.sh")
     );
     fs::create_dir_all(missing.join("src")).unwrap();
-    fs::create_dir_all(missing.join("share/agterm")).unwrap();
+    fs::create_dir_all(missing.join("share/ngterm")).unwrap();
     fs::write(missing.join("src/build.zig"), "").unwrap();
     fs::write(
         missing.join(zig_build::STAMP),

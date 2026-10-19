@@ -25,7 +25,7 @@ disagree, the code wins: check with `ls`/`grep` before naming a Rust file in the
 | core | other `agtermCore/Sources/agtermCore/*` | `agterm-core/src/*` (model, persist, keymap, hooks, settings_model, remote, hud, palette, ...) | model and store behavior, and every on-disk format (`settings.json`, `windows.json`, keymap/hooks files, `remotes.conf`, `restore-denylist.conf`, ...): the format is part of the contract, the suite reads it back |
 
 **The `zmx` group is `live` here.** Upstream's `zmx.*` commands, `agtermctl zmx`, `result.zmx` and `backedByZmx` are
-`live.*`, `agtermctl live`, `result.live` and `backedByLive` in the Rust build, and its strings that name zmx speak of
+`live.*`, `ngtermctl live`, `result.live` and `backedByLive` in the Rust build, and its strings that name zmx speak of
 live sessions (the table of renamed strings: `conformance/docs/rust-build.md` > The `live` group). An upstream change
 to `ControlDispatcher+Zmx.swift`, `ControlServer+Zmx.swift` or `ZmxCommands.swift` ports onto
 `agterm-core/src/commands/live*`, `agterm-core/src/remote/` and `agterm-ctl/src/live.rs` under those names: a new
@@ -67,8 +67,8 @@ the Linux equivalent, or a recorded "no Linux counterpart" in the checklist.
 
 | upstream | copy here | notes |
 |---|---|---|
-| `agterm/Resources/agent-status/` | `resources/agent-status/` | carries Linux glue (the Codex adapter reads JSON with python3/jq); a conflict there is a manual merge keeping it |
-| `plugins/agterm/skills/agterm/` | `resources/skills/agterm/` | the agent skill the app installs: upstream's tree plus `build/patches/skill-agterm/` (the `live` names), rebuilt whole on every sync; a `conflict` names the patch to refresh against the new tree (regenerate it as `diff -u` of upstream's files and the hand-merged copy), and `sync-resources.sh --check TAG TAG` verifies the copy |
+| `agterm/Resources/agent-status/` | `resources/agent-status/` | carries Linux glue (the Codex adapter reads JSON with python3/jq; the Pi and OpenCode plugins call the wrapper in `~/.config/ngterm/agent-status`); a conflict there is a manual merge keeping it |
+| `plugins/agterm/skills/agterm/` | `resources/skills/agterm/` | the agent skill the app installs, as `ngterm`: upstream's tree plus `build/patches/skill-agterm/` (the `live` names, then this build's names: its frontmatter `name` and description, and every command it runs is `ngtermctl`, the far side of a remote attach included), rebuilt whole on every sync; a `conflict` names the patch to refresh against the new tree (regenerate it as `diff -u` of upstream's files and the hand-merged copy), and `sync-resources.sh --check TAG TAG` verifies the copy. An upstream change that brings new `agtermctl` calls is renamed the same way in the names patch |
 | `agterm/Resources/hud/` | `crates/agterm-gpui/resources/hud/` | `hud.sh`, included with `include_str!` |
 | `agterm/Resources/custom-themes/` | `build/themes/` | agterm's own themes |
 | `agterm/Resources/ghostty-defaults.conf` | `crates/agterm-core/src/ghostty_config/ghostty-defaults.conf` | adapted (Linux chords, comments): usually a conflict, merge the setting, keep the Linux binds |

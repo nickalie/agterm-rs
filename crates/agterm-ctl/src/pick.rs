@@ -1,5 +1,5 @@
-//! `agtermctl pick` (`agtermctlKit/MiscCommands.swift` `Pick`): the native fuzzy picker. `open` is the group's default
-//! subcommand, so the shell-friendly common case is `printf 'one\ntwo\n' | agtermctl pick`; `result` and `cancel` make
+//! `ngtermctl pick` (`agtermctlKit/MiscCommands.swift` `Pick`): the native fuzzy picker. `open` is the group's default
+//! subcommand, so the shell-friendly common case is `printf 'one\ntwo\n' | ngtermctl pick`; `result` and `cancel` make
 //! `--no-block` usable without speaking the protocol.
 
 use std::io::{self, Read};
@@ -12,7 +12,7 @@ use crate::client::os_message;
 use crate::modal::{Family, LiveIo, ModalIo, ModalRunner};
 use crate::{BasicOptions, ClientOptions, Failure, RequestCommand};
 
-/// `agtermctl pick <subcommand>`.
+/// `ngtermctl pick <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Open, poll, or cancel a native fuzzy picker.",
@@ -92,7 +92,7 @@ pub fn parse_items(input: &[u8]) -> Result<Vec<PickItem>, Failure> {
         .collect())
 }
 
-/// `agtermctl pick [open]`: reads the choices from stdin, then waits for the answer unless `--no-block`.
+/// `ngtermctl pick [open]`: reads the choices from stdin, then waits for the answer unless `--no-block`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Read choices from stdin and open a native fuzzy picker.")]
 pub struct Open {
@@ -152,7 +152,7 @@ impl Open {
     }
 }
 
-/// `agtermctl pick result <id>`: one read, printed as JSON, `pending` included.
+/// `ngtermctl pick result <id>`: one read, printed as JSON, `pending` included.
 #[derive(Debug, clap::Args)]
 #[command(about = "Print a picker's current or terminal result as JSON.")]
 pub struct ResultCommand {
@@ -183,7 +183,7 @@ impl ResultCommand {
     }
 }
 
-/// `agtermctl pick cancel <id>`.
+/// `ngtermctl pick cancel <id>`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Cancel a pending picker.")]
 pub struct Cancel {
@@ -221,7 +221,7 @@ mod tests {
     use crate::usage::name_default_subcommands;
 
     fn parse(argv: &[&str]) -> Result<PickCommand, String> {
-        let command_line: Vec<OsString> = ["agtermctl", "pick"].iter().chain(argv).map(OsString::from).collect();
+        let command_line: Vec<OsString> = ["ngtermctl", "pick"].iter().chain(argv).map(OsString::from).collect();
         let named = name_default_subcommands(&Agtermctl::command(), &command_line);
         let parsed = Agtermctl::try_parse_from(named).map_err(|error| error.to_string())?;
         let crate::Command::Pick(group) = parsed.command else {

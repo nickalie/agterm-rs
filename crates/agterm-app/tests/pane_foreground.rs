@@ -8,6 +8,7 @@ use agterm_app::process_table::ProcTable;
 use agterm_core::command_restore::PaneForeground;
 use agterm_core::ghostty_config::GhosttyConfig;
 use agterm_core::restore::capture::ForegroundReader;
+use agterm_host::ProcessTable as _;
 use agterm_term::{GridSize, Host, Launch, Pane, PaneConfig};
 
 const SIZE: GridSize = GridSize {
@@ -73,10 +74,24 @@ fn a_job_typed_into_the_login_shell_is_its_foreground_command() -> Result<(), Bo
         reader.command(group)
     };
     wait_for(&Some(vec!["sleep".to_owned(), "31".to_owned()]), command);
-    // the job's end gives the foreground back to the shell, which no capture replays
+    // the job's end gives the foreground back to the shell, which no capture replays: the pane's own process where
+    // `/bin/sh -c` execs its last command (bash), else its child, where `/bin/sh` stays as the wrapper (dash, the
+    // `/bin/sh` of Debian and Ubuntu)
     pane.write(b"\x03")?;
     wait_for(&None, command);
-    let shell = pane.pid().and_then(|pid| i32::try_from(pid).ok());
-    wait_for(&shell, || pane.foreground_pid().and_then(|pid| i32::try_from(pid).ok()));
+    let pid = pane
+        .pid()
+        .and_then(|pid| i32::try_from(pid).ok())
+        .ok_or("no child pid")?;
+    let shell = || {
+        let group = pane.foreground_pid().and_then(|pid| i32::try_from(pid).ok())?;
+        let leader = table.stat(group)?;
+        if group == pid || leader.ppid == pid {
+            reader.running(group)
+        } else {
+            None
+        }
+    };
+    wait_for(&Some(PaneForeground::ForegroundShell("sh".to_owned())), shell);
     Ok(())
 }

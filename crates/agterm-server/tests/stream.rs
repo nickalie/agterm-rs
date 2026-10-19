@@ -96,7 +96,7 @@ struct Fixture {
 /// A server answering [`OPEN`] with an echoing [`LineStream`] and everything else with a plain `ok`.
 fn start(limits: LineStreamLimits) -> TestResult<Fixture> {
     let dir = tempfile::Builder::new().prefix("agt").tempdir_in("/tmp")?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let main_loop = Arc::new(FakeMainLoop::spawn(())?);
     let (opened_tx, opened) = mpsc::channel();
     let handler = move |(): &mut (), request: Request| -> Reply {

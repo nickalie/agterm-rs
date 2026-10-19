@@ -1,4 +1,4 @@
-//! `agtermctl session ...` (`agtermctlKit/SessionCommands.swift` `Session`): the group, and here its lifecycle
+//! `ngtermctl session ...` (`agtermctlKit/SessionCommands.swift` `Session`): the group, and here its lifecycle
 //! subcommands; [`crate::session_io`] drives the terminal, [`crate::session_panes`] arranges its panes,
 //! [`crate::session_meta`] sets metadata, [`crate::session_restore`] pins or replaces what a pane runs and
 //! [`crate::session_background`] sets backgrounds, [`crate::session_overlay`] runs overlay programs and pages and
@@ -13,7 +13,7 @@ use crate::{
     session_io, session_meta, session_overlay, session_panes, session_restore,
 };
 
-/// `agtermctl session <subcommand>`.
+/// `ngtermctl session <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Session commands.",
@@ -123,7 +123,7 @@ pub fn flag(set: bool) -> Option<bool> {
     set.then_some(true)
 }
 
-/// `agtermctl session new`: echoes the new session's id.
+/// `ngtermctl session new`: echoes the new session's id.
 #[derive(Debug, clap::Args)]
 #[command(about = "Create a session.")]
 pub struct New {
@@ -239,7 +239,7 @@ impl RequestCommand for New {
     }
 }
 
-/// `agtermctl session duplicate`: no options of its own, since the target session names both the destination
+/// `ngtermctl session duplicate`: no options of its own, since the target session names both the destination
 /// workspace and the cwd. Echoes the copy's id.
 #[derive(Debug, clap::Args)]
 #[command(about = "Duplicate a session: a fresh shell in its directory, placed right after it.")]
@@ -270,7 +270,7 @@ impl RequestCommand for Duplicate {
     }
 }
 
-/// `agtermctl session close`: one session, or a batch with a repeated `--target`.
+/// `ngtermctl session close`: one session, or a batch with a repeated `--target`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Close a session.")]
 pub struct Close {
@@ -295,7 +295,7 @@ impl RequestCommand for Close {
     }
 }
 
-/// `agtermctl session select`.
+/// `ngtermctl session select`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Select a session.")]
 pub struct Select {
@@ -321,7 +321,7 @@ impl RequestCommand for Select {
     }
 }
 
-/// `agtermctl session go --to <direction>`: relative to the selection, so it takes no `--target`.
+/// `ngtermctl session go --to <direction>`: relative to the selection, so it takes no `--target`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Navigate sessions: next|prev|first|last|next-attention|prev-attention.")]
 pub struct Go {
@@ -350,7 +350,7 @@ impl RequestCommand for Go {
     }
 }
 
-/// `agtermctl session rename <name>`.
+/// `ngtermctl session rename <name>`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Rename a session.")]
 pub struct Rename {
@@ -383,7 +383,7 @@ impl RequestCommand for Rename {
     }
 }
 
-/// `agtermctl session reveal`: opens the session's focused working directory in the file manager. The abstract is
+/// `ngtermctl session reveal`: opens the session's focused working directory in the file manager. The abstract is
 /// upstream's, Finder included.
 #[derive(Debug, clap::Args)]
 #[command(about = "Reveal a session's focused working directory in Finder.")]
@@ -410,7 +410,7 @@ impl RequestCommand for Reveal {
     }
 }
 
-/// `agtermctl session move`: exactly one placement intent among a destination workspace (relocate), `--to`
+/// `ngtermctl session move`: exactly one placement intent among a destination workspace (relocate), `--to`
 /// (reorder) and `--after`/`--before` (anchor-relative), checked before anything is sent.
 #[derive(Debug, clap::Args)]
 #[command(
@@ -508,14 +508,14 @@ mod tests {
     use crate::Agtermctl;
 
     fn parsed(argv: &[&str]) -> super::Session {
-        let command_line = ["agtermctl", "session"].iter().chain(argv).copied();
+        let command_line = ["ngtermctl", "session"].iter().chain(argv).copied();
         let crate::Command::Session(group) = Agtermctl::try_parse_from(command_line).unwrap().command else {
             panic!("not a session command")
         };
         group
     }
 
-    /// `agtermctl session <argv>` parsed and validated: the request it sends as JSON, or the validation refusal.
+    /// `ngtermctl session <argv>` parsed and validated: the request it sends as JSON, or the validation refusal.
     fn outcome(argv: &[&str]) -> Result<Value, String> {
         let group = parsed(argv);
         let command = group.command();
@@ -532,7 +532,7 @@ mod tests {
     }
 
     fn parses(argv: &[&str]) -> bool {
-        let command_line = ["agtermctl", "session"].iter().chain(argv).copied();
+        let command_line = ["ngtermctl", "session"].iter().chain(argv).copied();
         Agtermctl::try_parse_from(command_line).is_ok()
     }
 

@@ -287,22 +287,25 @@ fn kill_refusal(row: &InventoryRow) -> Option<String> {
 impl Core {
     /// Runs the pane's exit transition for a daemon `live.kill` destroyed (upstream's `applyKilledPaneExit`): only a
     /// pane whose terminal is a client of that daemon closes, as its own exit would have closed it, and the killed
-    /// identity is kept out of the finalizer. A requested-live fallback pane runs a plain shell that never attached.
+    /// identity is kept out of the finalizer. A requested-live fallback pane runs a plain shell that never attached;
+    /// a dormant pane counts by the daemon it would attach to (`Core::pane_backed`), or its wake would start the killed
+    /// program again.
     pub(crate) fn apply_killed_pane_exit(&mut self, session: uuid::Uuid, identity: uuid::Uuid, pane: PaneRole) {
         let role = match pane {
             PaneRole::Left => StatusPane::Left,
             PaneRole::Right => StatusPane::Right,
         };
-        let Some(store) = self.library_mut().store_for_session_mut(session) else {
-            return;
-        };
-        let backed = store
-            .session(session)
-            .and_then(|found| found.pane_slot(role).get())
-            .is_some_and(agterm_host::Surface::is_live_session);
+        let backed = self
+            .library()
+            .store_for_session(session)
+            .and_then(|store| store.session(session))
+            .is_some_and(|found| self.pane_backed(found, role));
         if !backed {
             return;
         }
+        let Some(store) = self.library_mut().store_for_session_mut(session) else {
+            return;
+        };
         match role {
             StatusPane::Left => store.close_primary_pane(session),
             _ => store.close_split_pane(session),

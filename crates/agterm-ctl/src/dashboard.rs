@@ -1,4 +1,4 @@
-//! `agtermctl dashboard` (upstream's `agtermctlKit/MiscCommands.swift` `Dashboard`): opens a window's view-only grid of
+//! `ngtermctl dashboard` (upstream's `agtermctlKit/MiscCommands.swift` `Dashboard`): opens a window's view-only grid of
 //! pane cells, or closes it. Flag combinations are refused before connecting; the server checks them again, and the
 //! pane grammar of the ids is the server's alone.
 
@@ -7,7 +7,7 @@ use agterm_proto::{Args, Command, Request};
 
 use crate::{BasicOptions, ClientOptions, Failure, RequestCommand};
 
-/// `agtermctl dashboard [<ids> ...]`.
+/// `ngtermctl dashboard [<ids> ...]`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Open a view-only grid of live sessions, or --close the open one.",

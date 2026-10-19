@@ -15,7 +15,7 @@ Remove a patch only when the pinned source has the behavior and the patch's veri
 pin bump rebases every patch onto the new revision (with no fuzz) and re-runs every verification below.
 
 The verifications use the prepared tree: `tree="$(scripts/build-ghostty-vt.sh)/src"`, and the pinned zig
-(`zig=` in `$tree/../share/agterm/ghostty-vt-STAMP`). Ghostty's own tests run there with a scratch cache, so the tree
+(`zig=` in `$tree/../share/ngterm/ghostty-vt-STAMP`). Ghostty's own tests run there with a scratch cache, so the tree
 stays as the build script reads it:
 `(cd "$tree" && "$zig" build test-lib-vt --cache-dir "$(mktemp -d)" -Dtest-filter='<name>')`. On Linux add the
 build's glibc target, `-Dtarget=x86_64-linux-gnu.2.39` (or `aarch64-…`): the native target links the distro's
@@ -108,7 +108,7 @@ verification:
 # the translator half: a windows-msvc build with --libc naming the MSVC SDK (Task 10's Windows build, where it
 # passes one) succeeds
 # the stubs half: a hosted build with SIMD off defines no calloc or free (only undefined references)
-out="$(mktemp -d)" version="$(sed -n 's/^version-string=//p' "$tree/../share/agterm/ghostty-vt-STAMP")"
+out="$(mktemp -d)" version="$(sed -n 's/^version-string=//p' "$tree/../share/ngterm/ghostty-vt-STAMP")"
 (cd "$tree" && "$zig" build -Demit-lib-vt=true -Doptimize=ReleaseFast -Dsimd=false -Dcpu=baseline \
   -Dtarget=x86_64-linux-gnu.2.39 -Dversion-string="$version" --prefix "$out/prefix" --cache-dir "$out/cache")
 nm "$out/prefix/lib/libghostty-vt.a" | grep -E ' [TtWwVv] (calloc|free)$'   # prints nothing

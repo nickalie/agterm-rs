@@ -40,9 +40,11 @@ def _foundation_resolved(path: str) -> str:
     return path
 
 
-def upstream_socket_directory(state_dir: str | os.PathLike[str]) -> str:
-    """`ZmxSupport.socketDirectory`: FNV-1a 64 of the canonical state dir, under `/tmp`."""
-    return f"/tmp/agterm-zmx-{fnv1a64(_foundation_resolved(os.path.realpath(state_dir)))}"
+def upstream_socket_directory(state_dir: str | os.PathLike[str], name: str = "agterm") -> str:
+    """`ZmxSupport.socketDirectory`: FNV-1a 64 of the canonical state dir, under `/tmp`, prefixed with the
+    implementation's directory name (`Adapter.app_dir_name`: upstream's and the fork's `agterm`, the Rust build's
+    `ngterm`)."""
+    return f"/tmp/{name}-zmx-{fnv1a64(_foundation_resolved(os.path.realpath(state_dir)))}"
 
 
 def _zmx_leading_client(instance: Any, endpoint: Mapping[str, Any], daemon: str) -> PtyProcess:
@@ -57,7 +59,7 @@ class Vocabulary:
     """One implementation's names for what the shared tests call by upstream's."""
 
     name: str
-    # The control-protocol group (`<group>.list`) and the `agtermctl` subcommand group.
+    # The control-protocol group (`<group>.list`) and the CLI's subcommand group.
     group: str
     # `result.<key>` of `<group>.list`.
     result_key: str
@@ -65,14 +67,15 @@ class Vocabulary:
     backed_key: str
     # The variable a UI-test launch sets to keep live sessions.
     ui_test_opt_in: str
-    # The attach contract's variables a live pane's children carry, which `agtermctl clipboard set` reads.
+    # The attach contract's variables a live pane's children carry, which the CLI's `clipboard set` reads.
     session_variable: str
     directory_variable: str
     # Their common prefix, which a test strips to stand outside any live pane.
     variable_prefix: str
     # Upstream error and output texts (`str.format` templates) to this implementation's; one not listed is unchanged.
     texts: Mapping[str, str] = field(default_factory=dict)
-    socket_directory: Callable[[str | os.PathLike[str]], str] = upstream_socket_directory
+    # `socket_directory(state_dir, app_dir_name)`: the instance's namespace, named by the adapter's `app_dir_name`.
+    socket_directory: Callable[[str | os.PathLike[str], str], str] = upstream_socket_directory
     # `leading_client(instance, endpoint, daemon)`: a second client of a daemon that claims its lead.
     leading_client: Callable[[Any, Mapping[str, Any], str], PtyProcess] = _zmx_leading_client
 
@@ -84,7 +87,7 @@ class Vocabulary:
         return f"{self.group}.{rest}"
 
     def cli(self, *args: str) -> tuple[str, ...]:
-        """The `agtermctl` argv of upstream's `agtermctl zmx ...`."""
+        """The CLI argv of upstream's `agtermctl zmx ...`."""
         if not args or args[0] != UPSTREAM_GROUP:
             raise ValueError(f"{args!r} is not an `agtermctl {UPSTREAM_GROUP}` command line")
         return (self.group, *args[1:])

@@ -121,10 +121,11 @@ fn install_launch_hosts(core: &mut Core, poster: &Poster, socket: String) {
         agterm_app::restore_launch::shell_basename(&ProcessEnv),
     );
     core.set_process_host(process_host(poster, socket));
-    // the launch reap and a pending live sessions reset finish before any window mounts, and the launch spawn order is
-    // armed before any window shows (upstream's `GhosttyApp.restoreLaunchDecision` and the pacer's arm at app init)
+    // the launch reap and a pending live sessions reset finish before any window mounts (upstream's
+    // `GhosttyApp.restoreLaunchDecision`), and the selected sessions wake before any window shows, so their panes
+    // spawn on their first ask while the rest of the restore stays dormant
     session_host::install(core, &ProcessEnv);
-    core.arm_launch_spawns(std::time::Instant::now());
+    core.wake_shown_sessions();
     // read at launch: a file edited later takes effect only on reload
     core.load_keymap_at_launch();
     core.load_hooks_at_launch();
@@ -557,24 +558,24 @@ mod tests {
         let home = MapEnv::new().with("HOME", "/home/u");
         assert_eq!(
             control_socket(&home),
-            PathBuf::from("/home/u/.local/share/agterm/agterm.sock")
+            PathBuf::from("/home/u/.local/share/ngterm/ngterm.sock")
         );
         let state = home.clone().with("AGTERM_STATE_DIR", "/tmp/st");
-        assert_eq!(control_socket(&state), PathBuf::from("/tmp/st/agterm.sock"));
+        assert_eq!(control_socket(&state), PathBuf::from("/tmp/st/ngterm.sock"));
         let socket = state.with("AGTERM_CONTROL_SOCKET", "/tmp/c.sock");
         assert_eq!(control_socket(&socket), PathBuf::from("/tmp/c.sock"));
-        // agtermctl's variable is not the app's
+        // ngtermctl's variable is not the app's
         let pane = home.with("AGTERM_SOCKET", "/tmp/other.sock");
         assert_eq!(
             control_socket(&pane),
-            PathBuf::from("/home/u/.local/share/agterm/agterm.sock")
+            PathBuf::from("/home/u/.local/share/ngterm/ngterm.sock")
         );
     }
 
     #[test]
     fn the_terminal_advertises_the_owned_socket_or_the_unavailable_one() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::Builder::new().prefix("agt").tempdir_in("/tmp")?;
-        let socket = dir.path().join("agterm.sock");
+        let socket = dir.path().join("ngterm.sock");
         let serving = ControlServer::new(&socket);
         let refused = ControlServer::new(&socket);
         assert_eq!(advertised_socket(&serving), socket.to_string_lossy());

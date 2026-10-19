@@ -1,4 +1,4 @@
-//! `agtermctl theme set|list` (`agtermctlKit/MiscCommands.swift` `Theme`): the app-global terminal theme, so neither
+//! `ngtermctl theme set|list` (`agtermctlKit/MiscCommands.swift` `Theme`): the app-global terminal theme, so neither
 //! takes `--window`. `list` prints through [`crate::output`]'s theme listing.
 
 use agterm_core::paths::Env;
@@ -7,7 +7,7 @@ use agterm_proto::{Args, Command, Request};
 
 use crate::{BasicOptions, Failure, RequestCommand};
 
-/// `agtermctl theme <subcommand>`.
+/// `ngtermctl theme <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Theme commands.", subcommand_required = true, arg_required_else_help = true)]
 pub struct Theme {
@@ -42,7 +42,7 @@ impl Theme {
     }
 }
 
-/// `agtermctl theme set [NAME] [--light L] [--dark D]`: the names are the server's to check.
+/// `ngtermctl theme set [NAME] [--light L] [--dark D]`: the names are the server's to check.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Set + persist the terminal theme, per slot.",
@@ -95,7 +95,7 @@ impl RequestCommand for Set {
     }
 }
 
-/// `agtermctl theme list`.
+/// `ngtermctl theme list`.
 #[derive(Debug, clap::Args)]
 #[command(about = "List bundled themes (the current one marked).")]
 pub struct List {
@@ -124,9 +124,9 @@ mod tests {
 
     use crate::{Agtermctl, Command};
 
-    /// `agtermctl theme <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
+    /// `ngtermctl theme <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
     fn outcome(argv: &[&str]) -> Result<Value, String> {
-        let line = ["agtermctl", "theme"].iter().chain(argv).copied();
+        let line = ["ngtermctl", "theme"].iter().chain(argv).copied();
         let parsed = Agtermctl::try_parse_from(line).map_err(|error| error.to_string())?;
         let Command::Theme(group) = parsed.command else {
             panic!("not a theme command")

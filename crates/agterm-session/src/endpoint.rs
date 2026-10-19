@@ -16,12 +16,12 @@
 //!
 //! # Namespace
 //!
-//! A namespace is a directory: on Unix `/tmp/agterm-live-<hash>`, on Windows
-//! `%LOCALAPPDATA%\agterm\live\<hash>` (Task 21 derives both from the state dir). The endpoint is
+//! A namespace is a directory: on Unix `/tmp/ngterm-live-<hash>`, on Windows
+//! `%LOCALAPPDATA%\ngterm\live\<hash>` (Task 21 derives both from the state dir). The endpoint is
 //!
 //! - Unix: the socket `<directory>/`[`SOCKET_FILE_NAME`], in a directory created owner-only, beside the lock file
 //!   [`LOCK_FILE_NAME`] its server holds;
-//! - Windows: the pipe `\\.\pipe\agterm-live-<FNV-1a 64 of the case-folded directory path>` ([`pipe_name`]), so a
+//! - Windows: the pipe `\\.\pipe\ngterm-live-<FNV-1a 64 of the case-folded directory path>` ([`pipe_name`]), so a
 //!   client that holds only the directory (`AGTERM_LIVE_DIR`) finds it. A private directory gives a private pipe.
 
 use std::fmt;
@@ -39,7 +39,7 @@ pub const SOCKET_FILE_NAME: &str = "server.sock";
 pub const LOCK_FILE_NAME: &str = "server.lock";
 
 /// The prefix of a Windows namespace's pipe name.
-pub const PIPE_PREFIX: &str = "agterm-live-";
+pub const PIPE_PREFIX: &str = "ngterm-live-";
 
 /// The endpoint of the server of one namespace.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn a_pipe_name_ignores_case_separators_and_a_trailing_separator() {
-        let name = pipe_name(Path::new(r"C:\Users\Nick\AppData\Local\agterm\live\0123456789abcdef"));
+        let name = pipe_name(Path::new(r"C:\Users\Nick\AppData\Local\ngterm\live\0123456789abcdef"));
         assert_eq!(
             name,
             pipe_name(Path::new("c:/users/nick/appdata/local/agterm/live/0123456789ABCDEF/"))
@@ -248,7 +248,7 @@ mod tests {
             name,
             format!(
                 "{PIPE_PREFIX}{}",
-                fnv1a64(br"c:\users\nick\appdata\local\agterm\live\0123456789abcdef")
+                fnv1a64(br"c:\users\nick\appdata\local\ngterm\live\0123456789abcdef")
             )
         );
     }

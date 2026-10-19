@@ -5,7 +5,8 @@
 //! The Linux base is glue taken from the Linux fork: `PersistenceStore.defaultDirectory` is Foundation's application
 //! support directory, which on Linux is the XDG data home, and an empty variable counts as unset, as the fork's
 //! `linuxStateDirectory()` (`agterm-linux/Sources/AgtermLinux/App.swift`) treats `AGTERM_STATE_DIR`; upstream would
-//! take an empty value as given.
+//! take an empty value as given. The directory name is this build's own (`ngterm`), not the fork's, since the two
+//! register different application ids and so cannot keep each other off one directory.
 //!
 //! Every function reads the environment through [`Env`], so tests pass a [`MapEnv`] instead of mutating the
 //! process environment.
@@ -16,14 +17,16 @@ use std::path::{Path, PathBuf};
 
 /// Overrides the whole state directory (test isolation, `run-gpui-dev.sh`).
 pub const STATE_DIR_ENV: &str = "AGTERM_STATE_DIR";
-/// Overrides the app's control socket path. Only the app reads it: `agtermctl` resolves through the state dir.
+/// Overrides the app's control socket path. Only the app reads it: `ngtermctl` resolves through the state dir.
 pub const CONTROL_SOCKET_ENV: &str = "AGTERM_CONTROL_SOCKET";
 /// The control socket's file name inside the state directory.
-pub const SOCKET_FILE_NAME: &str = "agterm.sock";
-/// The state directory's name under the XDG data home.
-pub const APP_DIR_NAME: &str = "agterm";
-/// The base used when no home directory can be found, as `agtermctl` upstream (`/tmp/agterm`).
-pub const FALLBACK_STATE_DIR: &str = "/tmp/agterm";
+pub const SOCKET_FILE_NAME: &str = "ngterm.sock";
+/// The state directory's name under the XDG data home, the config directory's under `~/.config` and the HUD bodies'
+/// under the runtime dir.
+pub const APP_DIR_NAME: &str = "ngterm";
+/// The base used when no home directory can be found, as upstream's `agtermctl` (`/tmp/agterm`) under this build's
+/// state directory name.
+pub const FALLBACK_STATE_DIR: &str = "/tmp/ngterm";
 
 /// The process environment as the resolvers see it.
 pub trait Env {
@@ -108,7 +111,7 @@ pub fn xdg_data_home(env: &dyn Env) -> Option<PathBuf> {
     explicit.or_else(|| home_dir(env).map(|home| home.join(".local/share")))
 }
 
-/// The state directory with no override: `<XDG data home>/agterm`, or [`FALLBACK_STATE_DIR`] without a home.
+/// The state directory with no override: `<XDG data home>/ngterm`, or [`FALLBACK_STATE_DIR`] without a home.
 #[must_use]
 pub fn default_state_dir(env: &dyn Env) -> PathBuf {
     xdg_data_home(env).map_or_else(|| PathBuf::from(FALLBACK_STATE_DIR), |base| base.join(APP_DIR_NAME))
@@ -120,13 +123,13 @@ pub fn state_dir(env: &dyn Env) -> PathBuf {
     non_empty(env, STATE_DIR_ENV).map_or_else(|| default_state_dir(env), PathBuf::from)
 }
 
-/// The control socket inside `state_dir`; the rendezvous the app and `agtermctl` share.
+/// The control socket inside `state_dir`; the rendezvous the app and `ngtermctl` share.
 #[must_use]
 pub fn socket_in(state_dir: &Path) -> PathBuf {
     state_dir.join(SOCKET_FILE_NAME)
 }
 
-/// The socket the app binds: a non-empty `AGTERM_CONTROL_SOCKET`, else `<state dir>/agterm.sock`.
+/// The socket the app binds: a non-empty `AGTERM_CONTROL_SOCKET`, else `<state dir>/ngterm.sock`.
 #[must_use]
 pub fn app_socket_path(env: &dyn Env) -> PathBuf {
     non_empty(env, CONTROL_SOCKET_ENV).map_or_else(|| socket_in(&state_dir(env)), PathBuf::from)
@@ -134,7 +137,7 @@ pub fn app_socket_path(env: &dyn Env) -> PathBuf {
 
 /// The directory of the user-editable config files (`keymap.conf`, `hooks.conf`, the agterm-scoped `ghostty.conf`),
 /// as upstream's `ConfigPaths.configDirectory`: a non-empty `setting` (`AppSettings.configDirectory`), else
-/// `<AGTERM_STATE_DIR>/config` when the state dir is overridden, else `<home>/.config/agterm`.
+/// `<AGTERM_STATE_DIR>/config` when the state dir is overridden, else `<home>/.config/ngterm`.
 #[must_use]
 pub fn config_dir(env: &dyn Env, setting: Option<&Path>) -> PathBuf {
     if let Some(setting) = setting.filter(|path| !path.as_os_str().is_empty()) {
@@ -189,7 +192,7 @@ impl ConfigLocator {
 
 /// Where the HUD body files go: a private per-user directory standing in for upstream's `NSTemporaryDirectory()`
 /// (a per-user 0700 directory on macOS), never the shared `/tmp`. `<AGTERM_STATE_DIR>/hud` when the state dir is
-/// overridden (instances stay apart, as [`config_dir`]), else `<XDG_RUNTIME_DIR>/agterm/hud` when that is an absolute
+/// overridden (instances stay apart, as [`config_dir`]), else `<XDG_RUNTIME_DIR>/ngterm/hud` when that is an absolute
 /// path (the user's 0700 runtime directory, emptied at logout), else `<state dir>/hud`. The caller makes it 0700.
 #[must_use]
 pub fn hud_body_dir(env: &dyn Env) -> PathBuf {
@@ -268,14 +271,14 @@ mod tests {
     )]
     fn hud_bodies_go_to_the_overridden_state_dir_else_the_runtime_dir_else_the_state_dir() {
         let runtime = home("/home/u").with("XDG_RUNTIME_DIR", "/run/user/1000");
-        assert_eq!(hud_body_dir(&runtime), Path::new("/run/user/1000/agterm/hud"));
+        assert_eq!(hud_body_dir(&runtime), Path::new("/run/user/1000/ngterm/hud"));
         let overridden = runtime.clone().with(STATE_DIR_ENV, "/tmp/inst");
         assert_eq!(hud_body_dir(&overridden), Path::new("/tmp/inst/hud"));
         for value in ["", "relative", "/"] {
             let env = home("/home/u").with("XDG_RUNTIME_DIR", value);
             assert_eq!(
                 hud_body_dir(&env),
-                Path::new("/home/u/.local/share/agterm/hud"),
+                Path::new("/home/u/.local/share/ngterm/hud"),
                 "{value:?}"
             );
         }
@@ -305,7 +308,7 @@ mod tests {
 
     #[test]
     fn xdg_data_home_unset_falls_back_to_home() {
-        assert_eq!(state_dir(&home("/home/u")), Path::new("/home/u/.local/share/agterm"));
+        assert_eq!(state_dir(&home("/home/u")), Path::new("/home/u/.local/share/ngterm"));
     }
 
     #[test]
@@ -315,21 +318,21 @@ mod tests {
     )]
     fn xdg_data_home_set_is_used() {
         let env = home("/home/u").with("XDG_DATA_HOME", "/data");
-        assert_eq!(state_dir(&env), Path::new("/data/agterm"));
+        assert_eq!(state_dir(&env), Path::new("/data/ngterm"));
     }
 
     #[test]
     fn invalid_xdg_data_home_is_ignored() {
         for value in ["", "relative/data", "/"] {
             let env = home("/home/u").with("XDG_DATA_HOME", value);
-            assert_eq!(state_dir(&env), Path::new("/home/u/.local/share/agterm"), "{value:?}");
+            assert_eq!(state_dir(&env), Path::new("/home/u/.local/share/ngterm"), "{value:?}");
         }
     }
 
     #[test]
     fn missing_home_uses_the_password_database_then_tmp() {
         let env = MapEnv::new().with("HOME", "").with_passwd_home("/var/home/u");
-        assert_eq!(state_dir(&env), Path::new("/var/home/u/.local/share/agterm"));
+        assert_eq!(state_dir(&env), Path::new("/var/home/u/.local/share/ngterm"));
         assert_eq!(state_dir(&MapEnv::new()), Path::new(FALLBACK_STATE_DIR));
     }
 
@@ -344,7 +347,7 @@ mod tests {
             state_dir(&env.clone().with(STATE_DIR_ENV, "/tmp/s")),
             Path::new("/tmp/s")
         );
-        assert_eq!(state_dir(&env.with(STATE_DIR_ENV, "")), Path::new("/data/agterm"));
+        assert_eq!(state_dir(&env.with(STATE_DIR_ENV, "")), Path::new("/data/ngterm"));
     }
 
     #[test]
@@ -352,13 +355,13 @@ mod tests {
         let env = home("/home/u");
         assert_eq!(
             app_socket_path(&env),
-            Path::new("/home/u/.local/share/agterm/agterm.sock")
+            Path::new("/home/u/.local/share/ngterm/ngterm.sock")
         );
         let isolated = env.with(STATE_DIR_ENV, "/tmp/s");
-        assert_eq!(app_socket_path(&isolated), Path::new("/tmp/s/agterm.sock"));
+        assert_eq!(app_socket_path(&isolated), Path::new("/tmp/s/ngterm.sock"));
         assert_eq!(
             app_socket_path(&isolated.clone().with(CONTROL_SOCKET_ENV, "")),
-            Path::new("/tmp/s/agterm.sock")
+            Path::new("/tmp/s/ngterm.sock")
         );
         let explicit = isolated.with(CONTROL_SOCKET_ENV, "/tmp/x/ctl.sock");
         assert_eq!(app_socket_path(&explicit), Path::new("/tmp/x/ctl.sock"));
@@ -366,18 +369,18 @@ mod tests {
 
     #[test]
     fn ownership_paths_append_to_the_socket_path() {
-        let socket = Path::new("/tmp/s/agterm.sock");
-        assert_eq!(ownership_lock_path(socket), Path::new("/tmp/s/agterm.sock.lock"));
+        let socket = Path::new("/tmp/s/ngterm.sock");
+        assert_eq!(ownership_lock_path(socket), Path::new("/tmp/s/ngterm.sock.lock"));
         assert_eq!(
             unavailable_socket_path(socket),
-            Path::new("/tmp/s/agterm.sock.unavailable")
+            Path::new("/tmp/s/ngterm.sock.unavailable")
         );
     }
 
     #[test]
     fn config_dir_follows_upstream_precedence() {
         let env = home("/home/u").with("XDG_DATA_HOME", "/data");
-        assert_eq!(config_dir(&env, None), Path::new("/home/u/.config/agterm"));
+        assert_eq!(config_dir(&env, None), Path::new("/home/u/.config/ngterm"));
         let isolated = env.clone().with(STATE_DIR_ENV, "/tmp/s");
         assert_eq!(config_dir(&isolated, None), Path::new("/tmp/s/config"));
         assert_eq!(config_dir(&isolated, Some(Path::new(""))), Path::new("/tmp/s/config"));
@@ -387,9 +390,9 @@ mod tests {
         );
         assert_eq!(
             config_dir(&env.with(STATE_DIR_ENV, ""), None),
-            Path::new("/home/u/.config/agterm")
+            Path::new("/home/u/.config/ngterm")
         );
-        assert_eq!(config_dir(&MapEnv::new(), None), Path::new("/tmp/agterm/config"));
+        assert_eq!(config_dir(&MapEnv::new(), None), Path::new("/tmp/ngterm/config"));
     }
 
     #[test]
@@ -405,7 +408,7 @@ mod tests {
         );
         assert_eq!(
             ghostty_settings_config_path(&home("/home/u")),
-            Path::new("/home/u/.local/share/agterm/ghostty-settings.conf")
+            Path::new("/home/u/.local/share/ngterm/ghostty-settings.conf")
         );
     }
 

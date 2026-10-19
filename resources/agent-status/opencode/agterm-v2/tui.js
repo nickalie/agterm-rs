@@ -15,7 +15,7 @@ const COMPLETED = ["completed", "--auto-reset"];
 const IDLE = ["idle"];
 
 function defaultWrapperPath() {
-  return join(homedir(), ".config", "agterm", "agent-status", "agterm-agent-status.sh");
+  return join(homedir(), ".config", "ngterm", "agent-status", "agterm-agent-status.sh");
 }
 
 /** Serialize reports so a slow spawn cannot reorder status; failures must never reject into OpenCode. */

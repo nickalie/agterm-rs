@@ -10,7 +10,7 @@
 # not work (the harness escapes the control bytes), and an image viewer cannot run in the agent's
 # tool shell (no controlling terminal). the overlay sidesteps both.
 #
-# requires running inside agterm (AGTERM_ENABLED=1) with agtermctl on PATH.
+# requires running inside agterm (AGTERM_ENABLED=1) with ngtermctl on PATH.
 
 # ask the terminal for a geometry report and echo the two numeric fields it carries. $1 is the CSI
 # request (14t -> ESC [ 4 ; height-px ; width-px t, 18t -> ESC [ 8 ; rows ; cols t). the request and
@@ -100,7 +100,7 @@ img="${1:-}"
 size="${2:-60}"
 [ -n "$img" ] || { echo "usage: show-image.sh <image> [size-percent]" >&2; exit 2; }
 [ -f "$img" ] || { echo "show-image.sh: no such file: $img" >&2; exit 1; }
-command -v agtermctl >/dev/null 2>&1 || { echo "show-image.sh: agtermctl not on PATH" >&2; exit 1; }
+command -v ngtermctl >/dev/null 2>&1 || { echo "show-image.sh: ngtermctl not on PATH" >&2; exit 1; }
 [ "${AGTERM_ENABLED:-}" = "1" ] || { echo "show-image.sh: not inside agterm; try: open \"$img\"" >&2; exit 1; }
 
 # resolve absolute paths so the overlay (which runs with a different cwd) finds both this script and
@@ -114,4 +114,4 @@ abs=$(cd "$(dirname "$img")" && pwd)/$(basename "$img")
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 # open an overlay that re-invokes this script in --emit mode inside the overlay's pty.
-agtermctl session overlay open "/bin/bash $(sq "$self") --emit $(sq "$abs")" --size-percent "$size"
+ngtermctl session overlay open "/bin/bash $(sq "$self") --emit $(sq "$abs")" --size-percent "$size"

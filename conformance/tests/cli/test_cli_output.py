@@ -70,7 +70,7 @@ def _usage(result, message=None):
     """Refused before anything is sent: exit 64, `Error: ...` and the usage line on stderr."""
     assert (result.returncode, result.stdout) == (64, ""), (result.argv, result.returncode, result.stdout)
     assert result.stderr.startswith("Error: "), result.stderr
-    assert "\nUsage: agtermctl " in result.stderr, result.stderr
+    assert f"\nUsage: {result.program} " in result.stderr, result.stderr
     if message is not None:
         assert result.stderr.startswith(f"Error: {message}\n"), result.stderr
 

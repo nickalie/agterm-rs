@@ -1,4 +1,4 @@
-//! `agtermctl config reload` (`agtermctlKit/MiscCommands.swift` `Config`): app-global (one settings model), so no
+//! `ngtermctl config reload` (`agtermctlKit/MiscCommands.swift` `Config`): app-global (one settings model), so no
 //! `--window`. The diagnostic count prints through [`crate::output`]'s `count` branch.
 
 use agterm_core::paths::Env;
@@ -7,7 +7,7 @@ use agterm_proto::{Command, Request};
 
 use crate::{BasicOptions, Failure, RequestCommand};
 
-/// `agtermctl config <subcommand>`.
+/// `ngtermctl config <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Config commands.",
@@ -44,7 +44,7 @@ impl Config {
     }
 }
 
-/// `agtermctl config reload`: prints the diagnostic count, `ok` for none.
+/// `ngtermctl config reload`: prints the diagnostic count, `ok` for none.
 #[derive(Debug, clap::Args)]
 #[command(about = "Re-read and apply the agterm-scoped ghostty.conf (prints the diagnostic count).")]
 pub struct Reload {
@@ -73,9 +73,9 @@ mod tests {
 
     use crate::{Agtermctl, Command as Cli};
 
-    /// `agtermctl config <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
+    /// `ngtermctl config <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
     fn outcome(argv: &[&str]) -> Result<Value, String> {
-        let line = ["agtermctl", "config"].iter().chain(argv).copied();
+        let line = ["ngtermctl", "config"].iter().chain(argv).copied();
         let parsed = Agtermctl::try_parse_from(line).map_err(|error| error.to_string())?;
         let Cli::Config(group) = parsed.command else {
             panic!("not a config command")

@@ -411,6 +411,47 @@ fn every_session_mounts_and_starts_while_only_the_selected_one_shows(cx: &mut Te
     h.deck.read_with(h.cx, |deck, _| assert!(deck.page(ids[1]).is_none()));
 }
 
+/// Lazy restore: every restored session gets its page, but only the selected one starts; another starts once it is
+/// selected, or once a command needs its terminal.
+#[gpui_kit::test]
+fn a_restored_session_starts_only_once_it_is_shown(cx: &mut TestAppContext) {
+    let (mut library, window, ids) = three_sessions();
+    let store = library.store_mut(window).unwrap();
+    for id in &ids {
+        store.session_mut(*id).unwrap().was_restored = true;
+    }
+    let mut core = core_of(library);
+    core.wake_shown_sessions();
+    let mut h = harness(cx, core, window);
+    h.until("the selected pane to start", |h| h.realized(ids[0], StatusPane::Left));
+    // a few more turns, which would start an eager deck's background panes
+    for _ in 0..20 {
+        h.turn();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!h.realized(ids[1], StatusPane::Left) && !h.realized(ids[2], StatusPane::Left));
+    assert_eq!(h.launches.lock().unwrap().len(), 1);
+    h.deck
+        .read_with(h.cx, |deck, _| assert!(ids.iter().all(|id| deck.page(*id).is_some())));
+
+    h.store().select_session(Some(ids[2]));
+    h.state.settle();
+    h.until("the selected pane to start", |h| h.realized(ids[2], StatusPane::Left));
+    assert!(!h.realized(ids[1], StatusPane::Left));
+
+    // a command that needs the terminal wakes it without selecting it, though it finds it unrealized itself
+    let response = h.state.core.dispatch(&Request {
+        cmd: Command::Font(agterm_proto::command::FontCmd::Inc),
+        target: Some(uuid_string(ids[1])),
+        args: None,
+    });
+    assert_eq!(response.error.as_deref(), Some("session not realized"));
+    h.state.settle();
+    h.until("the typed-into pane to start", |h| h.realized(ids[1], StatusPane::Left));
+    h.deck.read_with(h.cx, |deck, _| assert_eq!(deck.shown(), Some(ids[2])));
+    assert_eq!(h.launches.lock().unwrap().len(), 3);
+}
+
 #[gpui_kit::test]
 fn a_shown_split_lays_both_panes_out_at_the_ratio_and_focus_follows_the_model(cx: &mut TestAppContext) {
     let (library, window, ids) = three_sessions();

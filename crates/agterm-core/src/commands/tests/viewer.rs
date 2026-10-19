@@ -291,7 +291,7 @@ fn attach_creates_a_remote_row_with_both_panes_and_opens_its_stream() {
         viewer.runner.runs.lock().unwrap()[0]
             .last()
             .unwrap()
-            .contains("agtermctl live tree --json")
+            .contains("ngtermctl live tree --json")
     );
     let link = viewer.link();
     assert!(
@@ -300,7 +300,7 @@ fn attach_creates_a_remote_row_with_both_panes_and_opens_its_stream() {
             .argv
             .last()
             .unwrap()
-            .contains("exec agtermctl live present")
+            .contains("exec ngtermctl live present")
     );
     assert!(link.0.borrow().argv.last().unwrap().contains(ORIGIN_SESSION));
     assert_eq!(viewer.sent("hello").len(), 1);

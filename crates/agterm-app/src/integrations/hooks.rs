@@ -1,9 +1,11 @@
 //! The agent-status hooks installer (upstream's `AgentHooksInstaller.swift`): the bundled package into
-//! `~/.config/agterm/agent-status` with the bundled `agtermctl` baked into its wrappers, a marker-guarded `source` line
+//! `~/.config/ngterm/agent-status` with the bundled `ngtermctl` baked into its wrappers, a marker-guarded `source` line
 //! in `~/.zshrc`, `~/.bashrc` and (when fish is set up) `config.fish`, the Claude Code hooks merged into
 //! `~/.claude/settings.json`, the Codex hooks into `~/.codex/config.toml`, and, where each agent is set up, Pi's
 //! extension and `OpenCode`'s plugin. Claude and Codex configs get a `.bak` first; every rewrite keeps a symlinked file's
-//! link and its target's mode. Idempotent: a second run refreshes the baked path and changes nothing else.
+//! link and its target's mode. Idempotent: a second run refreshes the baked path and changes nothing else. An install
+//! over one in [`legacy_script_dir`] (the fork's, or this build's before it had its own) moves every reference onto
+//! the new directory instead of adding a second set.
 //!
 //! [`plan`] reads the home and decides every step (what each agent has, what is current, what is the user's) without
 //! writing; [`apply`] carries the plan out and reports upstream's outcomes.
@@ -19,6 +21,14 @@ use super::{Environment, InstallError};
 /// The package's destination under `home`.
 #[must_use]
 pub fn script_dir(home: &Path) -> PathBuf {
+    home.join(".config/ngterm/agent-status")
+}
+
+/// Where an earlier install put the package: the GTK fork's directory, which this build also used before it took one
+/// of its own. A reinstall repoints what still calls it (the rc blocks, the Claude Code hooks, the Codex block, the
+/// Pi and `OpenCode` plugins) at [`script_dir`]; the directory itself is left for the fork.
+#[must_use]
+pub fn legacy_script_dir(home: &Path) -> PathBuf {
     home.join(".config/agterm/agent-status")
 }
 
@@ -78,7 +88,7 @@ pub enum OpenCodePlan {
 pub struct HooksPlan {
     pub package: PathBuf,
     pub script_dir: PathBuf,
-    /// The `agtermctl` baked into the wrappers; `None` keeps their `PATH` fallback.
+    /// The `ngtermctl` baked into the wrappers; `None` keeps their `PATH` fallback.
     pub bake: Option<String>,
     pub claude: ClaudePlan,
     /// The rc files that gain the `source` block, with their new contents.
@@ -476,7 +486,8 @@ fn plan_claude(home: &Path, script_dir: &str) -> ClaudePlan {
     let Ok(existing) = files::read_existing(&path) else {
         return ClaudePlan::Skipped;
     };
-    match config::merge_claude_settings(existing.as_deref(), script_dir) {
+    let legacy = legacy_script_dir(home);
+    match config::merge_claude_settings(existing.as_deref(), script_dir, &[&legacy.to_string_lossy()]) {
         Err(config::MalformedSettings) => ClaudePlan::Skipped,
         Ok((_, false)) => ClaudePlan::Current,
         Ok((contents, true)) => ClaudePlan::Merge(FileWrite {
@@ -595,7 +606,7 @@ pub fn apply(plan: &HooksPlan) -> Result<HooksOutcome, InstallError> {
     })
 }
 
-/// Copies the package over the script directory and bakes `agtermctl` into the generic and Codex wrappers (the
+/// Copies the package over the script directory and bakes `ngtermctl` into the generic and Codex wrappers (the
 /// Claude adapter execs the generic one, so it needs none).
 fn install_package(plan: &HooksPlan) -> Result<(), InstallError> {
     files::copy_tree(&plan.package, &plan.script_dir).map_err(failed("install the scripts into", &plan.script_dir))?;
@@ -605,7 +616,7 @@ fn install_package(plan: &HooksPlan) -> Result<(), InstallError> {
     for name in [config::WRAPPER_NAME, config::CODEX_WRAPPER_NAME] {
         let wrapper = plan.script_dir.join(name);
         let original = fs::read_to_string(&wrapper).map_err(failed("read", &wrapper))?;
-        files::write_preserving_symlink(&config::bake_agtermctl_path(&original, tool), &wrapper)
+        files::write_preserving_symlink(&config::bake_ngtermctl_path(&original, tool), &wrapper)
             .map_err(failed("write", &wrapper))?;
     }
     Ok(())

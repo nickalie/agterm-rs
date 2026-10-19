@@ -73,7 +73,7 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.cache/agterm-rs/vendor
-          key: vendor-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
+          key: vendor-ngterm-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
       - name: libghostty-vt prefix
         run: scripts/build-ghostty-vt.sh
       - name: format

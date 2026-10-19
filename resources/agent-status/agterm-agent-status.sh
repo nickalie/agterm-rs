@@ -7,7 +7,7 @@
 #   agterm-agent-status.sh idle              # clear the indicator
 #
 # States: idle | active | completed | blocked. An optional --blink / --auto-reset
-# (and any further args) is forwarded verbatim to `agtermctl session status`.
+# (and any further args) is forwarded verbatim to `ngtermctl session status`.
 #
 # Outside agterm this is a silent no-op, so it is safe to call from any hook.
 #
@@ -15,12 +15,12 @@
 # (Claude Code injects a UserPromptSubmit/SessionStart hook's stdout into the
 # prompt context) and it always exits 0 (a non-zero exit can block the turn).
 #
-# agtermctl resolution order (the binary that talks to the control socket):
+# ngtermctl resolution order (the binary that talks to the control socket):
 #   1. $AGTERMCTL — an explicit override the caller set.
 #   2. the absolute bundled-binary path the installer bakes in: the installer
-#      rewrites the AGTERMCTL default below to agterm.app's Contents/MacOS/agtermctl,
+#      rewrites the AGTERMCTL default below to the app's bundled bin/ngtermctl,
 #      so the hook fires even when the CLI was never symlinked into PATH.
-#   3. `agtermctl` on PATH — the fallback when no override was set and the baked
+#   3. `ngtermctl` on PATH — the fallback when no override was set and the baked
 #      path no longer exists, which is what a bundle moved since the install leaves
 #      behind (installing from the mounted DMG bakes a /Volumes path, dead on eject).
 set -u
@@ -37,18 +37,18 @@ shift
 # per-surface token). the role can go stale — a split survivor promoted into the main pane
 # keeps its baked `right` — so we also forward the token as --pane-id, which the app resolves
 # to the surface's CURRENT slot and lets override the stale role (#199). both are validated
-# agtermctl-side, so pass them through verbatim. the ${arr[@]+..} guard keeps the empty-array
+# ngtermctl-side, so pass them through verbatim. the ${arr[@]+..} guard keeps the empty-array
 # expansion safe under `set -u` on bash 3.2.
 pane_args=()
 [ -n "${AGTERM_PANE:-}" ] && pane_args+=(--pane "$AGTERM_PANE")
 [ -n "${AGTERM_PANE_ID:-}" ] && pane_args+=(--pane-id "$AGTERM_PANE_ID")
 
 if [ -n "${AGTERM_SOCKET:-}" ]; then
-  "${AGTERMCTL:-agtermctl}" session status "$state" \
+  "${AGTERMCTL:-ngtermctl}" session status "$state" \
     --target "$AGTERM_SESSION_ID" --socket "$AGTERM_SOCKET" \
     "${pane_args[@]+"${pane_args[@]}"}" "$@" >/dev/null 2>&1 || true
 else
-  "${AGTERMCTL:-agtermctl}" session status "$state" \
+  "${AGTERMCTL:-ngtermctl}" session status "$state" \
     --target "$AGTERM_SESSION_ID" "${pane_args[@]+"${pane_args[@]}"}" "$@" >/dev/null 2>&1 || true
 fi
 exit 0

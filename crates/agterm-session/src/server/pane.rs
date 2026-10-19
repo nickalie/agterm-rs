@@ -989,14 +989,14 @@ mod tests {
             ("AGTERM_LIVE_SESSION", "outer"),
             ("PATH", "/usr/bin"),
         ]);
-        let out = child_environment(&env, "agterm-1", Path::new("/tmp/agterm-live-x"));
+        let out = child_environment(&env, "agterm-1", Path::new("/tmp/ngterm-live-x"));
         assert_eq!(
             out,
             pairs(&[
                 ("PATH", "/usr/bin"),
                 ("TERM", "xterm-ghostty"),
                 ("AGTERM_LIVE_SESSION", "agterm-1"),
-                ("AGTERM_LIVE_DIR", "/tmp/agterm-live-x"),
+                ("AGTERM_LIVE_DIR", "/tmp/ngterm-live-x"),
             ])
         );
     }

@@ -1,4 +1,4 @@
-//! `agtermctl keymap reload|list|run` (`agtermctlKit/MiscCommands.swift` `Keymap`). `reload` and `list` are app-global
+//! `ngtermctl keymap reload|list|run` (`agtermctlKit/MiscCommands.swift` `Keymap`). `reload` and `list` are app-global
 //! (the frontmost window's settings model), so neither takes `--window`; `run` addresses a session with `--target` and
 //! takes the window selector. `list` prints through [`format_keymap`], `reload` its diagnostic count through
 //! [`crate::output`]'s `count` branch.
@@ -10,7 +10,7 @@ use agterm_proto::{Args, Command, Request};
 
 use crate::{BasicOptions, ClientOptions, Failure, RequestCommand, TargetOptions};
 
-/// `agtermctl keymap <subcommand>`.
+/// `ngtermctl keymap <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Keymap commands.",
@@ -60,7 +60,7 @@ fn bare_request(cmd: KeymapCmd) -> Request {
     }
 }
 
-/// `agtermctl keymap run <name>`: runs a custom command against the target session's focused pane.
+/// `ngtermctl keymap run <name>`: runs a custom command against the target session's focused pane.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Run one of your custom commands by name against a session.",
@@ -99,7 +99,7 @@ impl RequestCommand for Run {
     }
 }
 
-/// `agtermctl keymap reload`: prints the diagnostic count, `ok` for none.
+/// `ngtermctl keymap reload`: prints the diagnostic count, `ok` for none.
 #[derive(Debug, clap::Args)]
 #[command(about = "Re-read and apply keymap.conf (prints the diagnostic count).")]
 pub struct Reload {
@@ -117,7 +117,7 @@ impl RequestCommand for Reload {
     }
 }
 
-/// `agtermctl keymap list`.
+/// `ngtermctl keymap list`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Show the resolved keymap and the live menu key equivalents.",
@@ -221,9 +221,9 @@ mod tests {
     use super::*;
     use crate::{Agtermctl, Command as Cli};
 
-    /// `agtermctl keymap <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
+    /// `ngtermctl keymap <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
     fn outcome(argv: &[&str]) -> Result<Value, String> {
-        let line = ["agtermctl", "keymap"].iter().chain(argv).copied();
+        let line = ["ngtermctl", "keymap"].iter().chain(argv).copied();
         let parsed = Agtermctl::try_parse_from(line).map_err(|error| error.to_string())?;
         let Cli::Keymap(group) = parsed.command else {
             panic!("not a keymap command")
@@ -260,15 +260,15 @@ mod tests {
 
     #[test]
     fn run_without_a_name_names_its_argument_and_usage() {
-        let args: Vec<std::ffi::OsString> = ["agtermctl", "keymap", "run"].map(Into::into).into();
+        let args: Vec<std::ffi::OsString> = ["ngtermctl", "keymap", "run"].map(Into::into).into();
         let error = Agtermctl::try_parse_from(&args).unwrap_err();
         let report = crate::parse_report(&args, &error, 80);
         assert_eq!(report.code, crate::usage::USAGE_EXIT);
         assert_eq!(
             report.text,
             "Error: Missing expected argument '<name>'\nHelp:  <name>  Custom command name, from `keymap list`.\n\
-             Usage: agtermctl keymap run <name> [--target <target>] [--socket <socket>] [--json] [--window \
-             <window>]\n  See 'agtermctl keymap run --help' for more information.\n"
+             Usage: ngtermctl keymap run <name> [--target <target>] [--socket <socket>] [--json] [--window \
+             <window>]\n  See 'ngtermctl keymap run --help' for more information.\n"
         );
     }
 

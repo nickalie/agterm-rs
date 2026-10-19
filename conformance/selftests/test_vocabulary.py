@@ -40,9 +40,11 @@ def test_keys_and_variables_per_vocabulary():
     for vocabulary in (UPSTREAM, LIVE):
         assert (vocabulary.session_variable, vocabulary.directory_variable) == ("ZMX_SESSION", "ZMX_DIR")
         assert vocabulary.session_variable.startswith(vocabulary.variable_prefix)
-        assert vocabulary.socket_directory("/nonexistent-agterm/state") == upstream_socket_directory(
-            "/nonexistent-agterm/state"
+        assert vocabulary.socket_directory("/nonexistent-agterm/state", "ngterm") == upstream_socket_directory(
+            "/nonexistent-agterm/state", "ngterm"
         )
+    assert upstream_socket_directory("/nonexistent-agterm/state").startswith("/tmp/agterm-zmx-")
+    assert upstream_socket_directory("/nonexistent-agterm/state", "ngterm").startswith("/tmp/ngterm-zmx-")
 
 
 @pytest.mark.parametrize("name", ["tree", "session.new", "zmx", "zmx.", "live.list"])

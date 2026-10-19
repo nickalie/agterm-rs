@@ -1,4 +1,4 @@
-//! `agtermctl surface ...` (`agtermctlKit/MiscCommands.swift` `Surface`): commands addressing one terminal surface
+//! `ngtermctl surface ...` (`agtermctlKit/MiscCommands.swift` `Surface`): commands addressing one terminal surface
 //! by the id `tree` lists for it.
 
 use agterm_proto::command::SurfaceCmd;
@@ -6,7 +6,7 @@ use agterm_proto::{Args, Command, Request};
 
 use crate::{BasicOptions, ClientOptions, RequestCommand};
 
-/// `agtermctl surface <subcommand>`.
+/// `ngtermctl surface <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Terminal surface commands.",
@@ -55,7 +55,7 @@ fn surface_request(cmd: SurfaceCmd, target: &SurfaceTargetOptions, args: Args, o
     }
 }
 
-/// `agtermctl surface zoom [show|hide|toggle]`: the mode is the server's to check.
+/// `ngtermctl surface zoom [show|hide|toggle]`: the mode is the server's to check.
 #[derive(Debug, clap::Args)]
 #[command(about = "Zoom a terminal surface (show|hide|toggle).")]
 pub struct Zoom {
@@ -83,7 +83,7 @@ impl RequestCommand for Zoom {
     }
 }
 
-/// `agtermctl surface cursor`: prints the column alone.
+/// `ngtermctl surface cursor`: prints the column alone.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Report a terminal surface's zero-based cursor column.",
@@ -132,7 +132,7 @@ mod tests {
     const SURFACE: &str = "surface:5E5B1C5B-75C5-49E6-8806-2C61D8D6BBA9:right";
 
     fn request(argv: &[&str]) -> Value {
-        let command_line = ["agtermctl", "surface"].iter().chain(argv).copied();
+        let command_line = ["ngtermctl", "surface"].iter().chain(argv).copied();
         let crate::Command::Surface(group) = Agtermctl::try_parse_from(command_line).unwrap().command else {
             panic!("not a surface command")
         };

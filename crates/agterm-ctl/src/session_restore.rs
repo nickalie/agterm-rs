@@ -9,7 +9,7 @@ use crate::session::session_request;
 use crate::session_io::validate_pane;
 use crate::{BasicOptions, ClientOptions, RequestCommand, TargetOptions};
 
-/// `agtermctl session restore COMMAND|--none|--clear`: exactly one form; the line goes as typed.
+/// `ngtermctl session restore COMMAND|--none|--clear`: exactly one form; the line goes as typed.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Pin the command a session's pane re-runs on the next launch.",
@@ -29,7 +29,7 @@ use crate::{BasicOptions, ClientOptions, RequestCommand, TargetOptions};
                   COMMAND is shell code, stored verbatim in the window's state file and readable via `tree`, so it \
                   must not carry secrets.\n\
                   \n\
-                  Not to be confused with `agtermctl restore clear`, which is app-global and clears every session's \
+                  Not to be confused with `ngtermctl restore clear`, which is app-global and clears every session's \
                   CAPTURED foreground command; this one is per-session and clears only the override."
 )]
 pub struct Restore {
@@ -106,7 +106,7 @@ impl RequestCommand for Restore {
     }
 }
 
-/// `agtermctl session restart --pane-id TOKEN|--pane P [--command LINE]`.
+/// `ngtermctl session restart --pane-id TOKEN|--pane P [--command LINE]`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Replace the shell of one live pane and run a shell line, or the same program again, in the new one.",
@@ -195,9 +195,9 @@ mod tests {
 
     use crate::{Agtermctl, Command};
 
-    /// The parsed `agtermctl session ...` invocation's validation and request.
+    /// The parsed `ngtermctl session ...` invocation's validation and request.
     fn parse(words: &[&str]) -> (Result<(), String>, Value) {
-        let line = ["agtermctl", "session"].iter().chain(words).copied();
+        let line = ["ngtermctl", "session"].iter().chain(words).copied();
         let Command::Session(group) = Agtermctl::try_parse_from(line).unwrap().command else {
             panic!("not a session command")
         };

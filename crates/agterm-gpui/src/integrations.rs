@@ -8,7 +8,7 @@
 //! shows "Install Failed" rather than leaving the alert never to come.
 //!
 //! The installers read the process's own environment ([`Environment::process`]: `$HOME`, the staged resources, the
-//! bundled `agtermctl`, the variables the `OpenCode` probe runs with) unless a [`Source`] was installed (the tests' temp
+//! bundled `ngtermctl`, the variables the `OpenCode` probe runs with) unless a [`Source`] was installed (the tests' temp
 //! home).
 
 use std::cell::Cell;
@@ -93,7 +93,7 @@ pub fn run_picked(window: AnyWindowHandle, skill: bool, hooks: bool, cx: &mut Ap
     .detach();
 }
 
-/// Help's Install Command Line Tool…: links `agtermctl` onto the `PATH`, its result over `window`.
+/// Help's Install Command Line Tool…: links `ngtermctl` onto the `PATH`, its result over `window`.
 pub fn run_cli(window: AnyWindowHandle, cx: &mut App) {
     cx.spawn(async move |cx| install_cli(window, cx).await).detach();
 }

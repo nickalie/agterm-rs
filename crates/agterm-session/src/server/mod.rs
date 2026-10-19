@@ -363,12 +363,12 @@ mod tests {
     fn a_server_works_in_the_root_of_its_namespace() {
         #[cfg(unix)]
         assert_eq!(
-            working_directory(Path::new("/tmp/agterm-live-0123456789abcdef")).unwrap(),
+            working_directory(Path::new("/tmp/ngterm-live-0123456789abcdef")).unwrap(),
             Path::new("/")
         );
         #[cfg(windows)]
         assert_eq!(
-            working_directory(Path::new(r"C:\Users\a\AppData\Local\agterm\live\0123")).unwrap(),
+            working_directory(Path::new(r"C:\Users\a\AppData\Local\ngterm\live\0123")).unwrap(),
             Path::new(r"C:\")
         );
         // a relative directory is taken from the current one, whose root it shares

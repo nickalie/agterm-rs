@@ -24,7 +24,7 @@ pub struct ProcessHost {
     pub poster: CorePoster,
     /// What children get as `AGT_SOCKET`: the owned socket, or `<socket>.unavailable`.
     pub socket: String,
-    /// The directory of the `agtermctl` beside the app binary, put first on `PATH`.
+    /// The directory of the `ngtermctl` beside the app binary, put first on `PATH`.
     pub cli_dir: Option<PathBuf>,
     /// The app's own `PATH`, widened for children.
     pub path: Option<String>,
@@ -50,7 +50,7 @@ pub(crate) struct ProcessRuntime {
 const DEFAULT_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
 
 /// The `PATH` a hook or custom command runs with (upstream's `CommandPath.widened`): the bundled CLI's directory first,
-/// so a bare `agtermctl` reaches this build, then the app's own entries, then `~/.local/bin` (where a user-installed
+/// so a bare `ngtermctl` reaches this build, then the app's own entries, then `~/.local/bin` (where a user-installed
 /// CLI lands on Linux) when absent; duplicates and empty entries dropped.
 #[must_use]
 pub fn widened_path(path: Option<&str>, cli_dir: Option<&Path>, home: Option<&Path>) -> String {

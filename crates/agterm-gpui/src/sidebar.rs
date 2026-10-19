@@ -263,7 +263,7 @@ impl Sidebar {
     /// Shows `rows`. A change of the list's shape (a row added, removed or moved) closes a rename in progress, as the
     /// row it edits may be gone; a content change keeps it, so the row being renamed updates too (its glyph and badge
     /// live, its name behind the field) and is current when the field closes. The list scrolls to a newly selected
-    /// session. A selection made elsewhere (the keymap, `agtermctl`, auto-follow) that leaves the Shift-click anchor
+    /// session. A selection made elsewhere (the keymap, `ngtermctl`, auto-follow) that leaves the Shift-click anchor
     /// out moves the anchor to the selected session, as GTK's list moves its range anchor with each row it selects;
     /// the sidebar's own Shift-click keeps it.
     fn show(&mut self, rows: Vec<SidebarRow>, selected: Option<Uuid>, cx: &mut Context<Self>) {

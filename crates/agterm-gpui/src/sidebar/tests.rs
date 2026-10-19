@@ -389,6 +389,29 @@ fn the_rows_follow_the_model_and_clicks_select(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn an_unnamed_row_takes_the_terminal_title_only_while_the_setting_is_on(cx: &mut TestAppContext) {
+    use agterm_core::settings_model::{GeneralChange, SettingsChange};
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let srv = h.id_of("srv", cx);
+    h.store_mut().session_mut(srv).unwrap().osc_title = Some("htop".to_owned());
+    h.settle(cx);
+    assert_eq!(h.names(cx)[2], "s:srv*", "the directory names the row by default");
+
+    let title_names = |on| SettingsChange::General(GeneralChange::SessionNameFromTerminalTitle(on));
+    h.state.core.change_settings(title_names(true));
+    h.settle(cx);
+    assert_eq!(
+        h.names(cx)[2],
+        "s:htop*",
+        "the flip relabels the row with no model change"
+    );
+    h.state.core.change_settings(title_names(false));
+    h.settle(cx);
+    assert_eq!(h.names(cx)[2], "s:srv*");
+}
+
+#[gpui_kit::test]
 fn a_workspace_row_folds_after_the_double_click_interval_and_through_its_disclosure(cx: &mut TestAppContext) {
     let (library, _) = library();
     let (mut h, cx) = harness(cx, library, AppSettings::default());
@@ -497,7 +520,7 @@ fn shift_extends_from_a_selection_made_elsewhere(cx: &mut TestAppContext) {
     let at = bounds(cx, "row:u").center();
     cx.simulate_click(at, Modifiers::default());
     h.settle(cx);
-    // the keymap, agtermctl or auto-follow moves the selection to var
+    // the keymap, ngtermctl or auto-follow moves the selection to var
     let var = h.id_of("var", cx);
     h.store_mut().select_session(Some(var));
     h.settle(cx);
@@ -555,7 +578,7 @@ fn menu_open(h: &Harness, cx: &mut VisualTestContext) -> bool {
 fn a_row_menu_dropped_without_a_dismiss_stops_holding_the_keyboard(cx: &mut TestAppContext) {
     let (library, _) = library();
     let (mut h, cx) = harness(cx, library, AppSettings::default());
-    // its row goes (closed through agtermctl, its shell exited) while the menu is open
+    // its row goes (closed through ngtermctl, its shell exited) while the menu is open
     right_click(cx, "row:var");
     assert!(menu_open(&h, cx), "open");
     let var = h.id_of("var", cx);

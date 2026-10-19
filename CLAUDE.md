@@ -26,7 +26,7 @@ below, not a later phase. Build, run and test commands are in [README.md](README
 | `agterm-host` | the seams a frontend implements: `MainLoop`, `Surface`, `SessionHost`, `ProcessLauncher`, `ProcessTable`; in-memory fakes behind feature `fakes` | any |
 | `agterm-core` | model, target resolver, command dispatcher (`commands/`, one module per group), events, keymap and Ghostty's keybind actions, the Ghostty config parser and its diagnostics, hooks, persistence, settings, pane environment, zmx/restore logic | any |
 | `agterm-server` | AF_UNIX control server: socket ownership (`flock`), one thread per connection, main-loop hop, stream handoff | Linux, macOS |
-| `agterm-ctl` → `agtermctl` | clap CLI ported from upstream's `agtermctlKit`, socket resolution, output formatting | Linux |
+| `agterm-ctl` → `ngtermctl` | clap CLI ported from upstream's `agtermctlKit`, socket resolution, output formatting | Linux |
 | `agterm-ghostty-vt-sys` | checked-in bindgen output over libghostty-vt's official C API (`scripts/gen-ghostty-vt-bindings.sh`), links the vendored static library; not under the workspace lints | any |
 | `agterm-ghostty-vt` | safe wrapper over the sys crate: terminal, render state, effects, key and mouse encoders, selection and its gesture, formatter with its extras, search, Kitty graphics, stream continuation, snapshot codec, clipboard-read scan | any |
 | `agterm-pty` | the PTY layer of plain and live panes: a child on a PTY (openpty, ConPTY; its process group or kill-on-close job), herdr's PTY actor (poll and wake pipe on Unix, reader and writer threads on Windows) with the handoff's quiesce, duplicate, rollback and release, over the vendored portable-pty | any |
@@ -70,6 +70,12 @@ toolkit-neutral, so another frontend can drive them.
 - Where upstream and the fork differ, upstream wins (`conformance/docs/fork-bugs.md` lists the cases the suite pins).
   A capability the fork claims is not a target by itself; the build claims the list in rust-build.md > Rust target
   profile.
+- Upstream and the fork are references for behavior, not for identity. The build is ngterm and shares nothing with
+  them at runtime: its application id, state and config dirs, sockets, CLI, skill and install paths are its own
+  (README holds them), and nothing falls back to, runs or reads an agterm or `agtermctl` path or name. Those names
+  appear only where code and docs cite upstream or the fork, and in the harness adapters that drive the reference
+  builds. A rename or a new path covers every place at once; keeping one on the old name "for compatibility" is not a
+  choice to make alone.
 
 ## Porting a command group
 
@@ -81,7 +87,7 @@ toolkit-neutral, so another frontend can drive them.
 3. Wire the frontend side in `agterm-gpui` (terminal behavior in `agterm-term`), following upstream's UI
    (`agterm/Views`, `agterm/Ghostty`, the rules files) in GPUI/gpui-kit idioms; UI the suite cannot see is checked
    against `docs/linux-ui-checklist.md`.
-4. Add the `agtermctl` subcommands, ported from upstream's `agtermctlKit`.
+4. Add the `ngtermctl` subcommands, ported from upstream's `agtermctlKit`.
 5. Claim a capability (`version` result, rust-build.md > Rust target profile) only once its commands implement it.
 6. Gate: every check README > Test lists (format, locked metadata, clippy with `-D warnings` on the workspace and on
    the frontend without its default features, the lint report, the tracing-features check, the vendored-source
@@ -106,13 +112,13 @@ of its own, with what it regenerates (`build/pins.env` names it).
 ## Never touch the user's running agterm
 
 Agents here usually run inside a pane of the user's live agterm, whose `AGTERM_*` and `ZMX_*` variables point at it.
-Every dev instance, probe or `agtermctl` call stays off it:
+Every dev instance, probe or `ngtermctl` call stays off it:
 
 - Launch a checkout's build only through `scripts/run-gpui-dev.sh` (or the suite): the build shares the installed
-  agterm's application id and state (README holds them), so a plain launch is forwarded to the running instance
+  ngterm's application id and state (README holds them), so a plain launch is forwarded to the running instance
   through the D-Bus name it serves (`zbus`), or shares its state.
 - Strip `AGTERM_*` and `ZMX_*` from the environment before launching anything (`run-gpui-dev.sh` and the harness do).
-- Give every `agtermctl` call an explicit `--socket` (a per-subcommand option, after the subcommand name). Without it
+- Give every `ngtermctl` call an explicit `--socket` (a per-subcommand option, after the subcommand name). Without it
   the CLI resolves the live instance's socket.
 - Use a private state dir, so the instance's live-session namespace is private too. Live sessions outlive the app by
   design: reap only the session processes of that instance's namespace, never by name (`pkill zmx`), and never run

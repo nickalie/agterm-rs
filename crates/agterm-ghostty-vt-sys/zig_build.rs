@@ -13,7 +13,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 /// The prefix's stamp, relative to the prefix: its inputs as `name=value` lines (`scripts/build-ghostty-vt.sh`).
-pub const STAMP: &str = "share/agterm/ghostty-vt-STAMP";
+pub const STAMP: &str = "share/ngterm/ghostty-vt-STAMP";
 
 /// The patched source tree, relative to the prefix: the build's root, with its Zig packages in `zig-pkg/`.
 pub const SOURCE: &str = "src";

@@ -1,5 +1,5 @@
 //! agterm's live-session server, on herdr's architecture: one background server per agterm instance owns every live
-//! pane's PTY and terminal state, and the app, `agtermctl` and other viewers are its clients.
+//! pane's PTY and terminal state, and the app, `ngtermctl` and other viewers are its clients.
 //!
 //! This crate holds, so far, the parts every other one stands on:
 //!

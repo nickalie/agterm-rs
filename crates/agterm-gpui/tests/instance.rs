@@ -95,7 +95,7 @@ fn sigterm_quits_a_headless_primary_with_status_0_within_10_s() -> TestResult {
         log.contains("SIGTERM: quitting") && log.contains("quit: the state is saved"),
         "{log}"
     );
-    assert!(!sandbox.path("state/agterm.sock").exists(), "the socket is removed");
+    assert!(!sandbox.path("state/ngterm.sock").exists(), "the socket is removed");
     assert!(
         sandbox.path("state/windows.json").is_file(),
         "the quit save wrote the index"
@@ -117,7 +117,7 @@ fn the_launchs_token_and_startup_id_reach_no_child() -> TestResult {
         &[("XDG_ACTIVATION_TOKEN", TOKEN), ("DESKTOP_STARTUP_ID", STARTUP_ID)],
         "primary.log",
     )?;
-    wait_for_socket(&sandbox.path("state/agterm.sock"))?;
+    wait_for_socket(&sandbox.path("state/ngterm.sock"))?;
     let reply = sandbox.request("session.new")?;
     assert!(reply.contains("\"ok\":true"), "{reply}");
     let env = wait_for(|| {
@@ -226,7 +226,7 @@ fn a_gpui_launch_forwards_to_a_gtk_primary() -> TestResult {
         command.env("__EGL_VENDOR_LIBRARY_FILENAMES", vendor);
     }
     let primary = sandbox.spawn(command, "gtk-primary.log")?;
-    wait_for_socket(&sandbox.path("state/agterm.sock"))?;
+    wait_for_socket(&sandbox.path("state/ngterm.sock"))?;
     sandbox.wait_owner(&sandbox.app_id.clone())?;
     let activations = sandbox.monitor_activations()?;
     let before = sandbox.settled_state(Duration::from_secs(1))?;
@@ -394,7 +394,7 @@ fn x11_launches_carry_their_startup_time_and_end_their_sequences() -> TestResult
     assert!(seen.active.is_none(), "a new window is the window manager's to focus");
     let window = root.window_of(&app_id)?;
     assert_eq!(root.cardinal(window, "_NET_WM_USER_TIME")?, Some(777));
-    wait_for_socket(&sandbox.path("state/agterm.sock"))?;
+    wait_for_socket(&sandbox.path("state/ngterm.sock"))?;
     sandbox.wait_owner(&app_id)?;
 
     let root = x11::Root::watch(&sandbox)?;
@@ -483,7 +483,7 @@ fn a_launchers_token_raises_the_primary_under_a_nested_niri() -> TestResult {
     // a decoy of another id, with a state of its own, takes the focus
     let decoy_id = format!("{app_id}.decoy");
     let decoy_state = sandbox.path("decoy-state");
-    let decoy_socket = decoy_state.join("agterm.sock");
+    let decoy_socket = decoy_state.join("ngterm.sock");
     let decoy_env: BTreeMap<&str, String> = BTreeMap::from([
         ("AGTERM_APP_ID", decoy_id.clone()),
         ("AGTERM_STATE_DIR", decoy_state.to_string_lossy().into_owned()),

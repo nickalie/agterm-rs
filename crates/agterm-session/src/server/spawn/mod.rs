@@ -646,7 +646,7 @@ mod tests {
     fn the_server_environment_drops_the_live_session_variables() {
         let inherited = [
             ("PATH", "/usr/bin"),
-            ("AGTERM_LIVE_DIR", "/tmp/agterm-live-x"),
+            ("AGTERM_LIVE_DIR", "/tmp/ngterm-live-x"),
             ("AGTERM_SESSION_ID", "1"),
             ("ZMX_SESSION", "s"),
             ("HOME", "/home/u"),

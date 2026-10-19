@@ -79,14 +79,20 @@ pub struct LeadNotice {
 }
 
 impl LeadNotice {
-    /// The reserved title prefix.
-    pub const PREFIX: &'static str = "zmx-role;";
+    /// The reserved title prefix of the attach contract's role report, which the session server's attach clients
+    /// write (`agterm_session::server::lead::role_title`).
+    pub const PREFIX: &'static str = "ngterm-live-role;";
+    /// The prefix the bundled zmx's patch writes its role report under, read as well while zmx hosts live sessions.
+    pub const ZMX_PREFIX: &'static str = "zmx-role;";
 
     /// The notice `title` carries; `None` for any other title, and for one that is not
-    /// `zmx-role;<nonce>:<role>:<generation>`.
+    /// `<prefix><nonce>:<role>:<generation>` under [`Self::PREFIX`] or [`Self::ZMX_PREFIX`].
     #[must_use]
     pub fn parse(title: &str) -> Option<Self> {
-        let fields: Vec<&str> = title.strip_prefix(Self::PREFIX)?.split(':').collect();
+        let body = title
+            .strip_prefix(Self::PREFIX)
+            .or_else(|| title.strip_prefix(Self::ZMX_PREFIX))?;
+        let fields: Vec<&str> = body.split(':').collect();
         let [nonce, role, generation] = fields.as_slice() else {
             return None;
         };
@@ -216,6 +222,8 @@ mod tests {
             ("zmx-role;n1:leader:7", LeadRole::Leader, 7),
             ("zmx-role;n1:follower:0", LeadRole::Follower, 0),
             ("zmx-role;n1:unowned:4294967295", LeadRole::Unowned, u32::MAX),
+            ("ngterm-live-role;n1:leader:7", LeadRole::Leader, 7),
+            ("ngterm-live-role;n1:follower:0", LeadRole::Follower, 0),
         ] {
             assert_eq!(
                 LeadNotice::parse(title),
@@ -240,6 +248,9 @@ mod tests {
             "zmx-role;n1:leader:4294967296",
             "zmx-role;:leader:7",
             "zmx-role;n1:leader:7:extra",
+            "ngterm-live-role",
+            "ngterm-live-role;n1:leader",
+            "agterm-live-role;n1:leader:7",
         ] {
             assert_eq!(LeadNotice::parse(title), None, "{title}");
         }

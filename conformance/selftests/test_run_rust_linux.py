@@ -249,9 +249,9 @@ def vendored_weston(vendor: Path, fake_compositor_bin: Path) -> Path:
         (prefix / path).write_text(f'#!/bin/sh\nexec env -u FAKE_COMPOSITOR_HELP "{fake_compositor_bin}" "$@"\n')
         (prefix / path).chmod(0o755)
     pins = (repo / "build/pins.env").read_text().splitlines()
-    (prefix / "share/agterm").mkdir(parents=True)
+    (prefix / "share/ngterm").mkdir(parents=True)
     manifest = "".join(f"{line}\n" for line in pins if line.startswith("WESTON_"))
-    (prefix / "share/agterm/weston-PINS").write_text(manifest)
+    (prefix / "share/ngterm/weston-PINS").write_text(manifest)
     return prefix
 
 

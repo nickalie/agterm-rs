@@ -1,8 +1,8 @@
 ---
-name: agterm
+name: ngterm
 description: >
-  Drive agterm, a native macOS terminal, via the agtermctl CLI. Use in an agterm session when
-  asked to control it: create, rename, close, select or
+  Drive ngterm (agterm in Rust, a GPUI terminal; this skill calls it agterm throughout) via the ngtermctl CLI.
+  Use in an ngterm or agterm session when asked to control it: create, rename, close, select or
   reorder sessions and workspaces; split panes; toggle the scratch terminal; run overlay programs
   and read their exit status; create and show HTML pages, interactive too, URLs or dev servers in an overlay with saved logins;
   post a HUD/caption or notification; show a picker or question dialog; show an image inline; type
@@ -14,20 +14,20 @@ description: >
   attaching a session from another Mac, cookbook recipes, running version, diagnosing
   problems and filing a bug or feature request.
 when_to_use: >
-  Trigger on: agterm, agtermctl, AGTERM_SESSION_ID, and, from inside a session, plain requests such as
-  split the pane, close the overlay, show a message over the session, show a question dialog, agtermctl ask,
+  Trigger on: ngterm, ngtermctl, agterm, AGTERM_SESSION_ID, and, from inside a session, plain requests such as
+  split the pane, close the overlay, show a message over the session, show a question dialog, ngtermctl ask,
   show an image inline, show this HTML page or artifact, make an HTML page or explainer for this and show
   it, make a page that switches sessions or returns a choice, preview the report you generated, show this URL or the running dev server, keep me logged in to a page shown in an overlay, search the scrollback, run my custom command, tell me when the selected session changes, attach a session from another Mac, copy this to the clipboard, what recipes are there,
   the keymap editor will not open.
-allowed-tools: Bash(agtermctl *)
+allowed-tools: Bash(ngtermctl *)
 ---
 
 <!-- agterm-skill -->
 
 # Driving agterm
 
-agterm is a native macOS terminal. It exposes a programmatic control channel over a local unix
-socket, driven by the companion CLI `agtermctl`. Use it to build and steer terminal layouts, run
+This build is ngterm, agterm in Rust, and its CLI is `ngtermctl`. agterm is a native macOS terminal. It exposes a programmatic control channel over a local unix
+socket, driven by the companion CLI `ngtermctl`. Use it to build and steer terminal layouts, run
 programs in overlays, type into sessions, notify the user in the exact session you are working in,
 and subscribe to control events. Events cover status, notifications, session lifecycle, split and
 scratch pane visibility, and structural tree changes; `hooks.conf` runs a shell line on any of them. They do not stream terminal output; use `session text` to read a buffer.
@@ -51,7 +51,7 @@ the control channel is available:
   terminal names (Claude Code's OSC 8 hyperlinks) needs its own override; see troubleshooting.md.
 
 The quick terminal is scratch (not in the tree) and belongs to no window, so of the `AGTERM_*` variables
-it only gets `AGTERM_ENABLED` and `AGTERM_SOCKET` (no session/workspace/window ids). An untargeted `agtermctl` run
+it only gets `AGTERM_ENABLED` and `AGTERM_SOCKET` (no session/workspace/window ids). An untargeted `ngtermctl` run
 from it therefore resolves the active window like any other caller.
 
 These variables are inherited by every process the session's shell spawns — including long-lived
@@ -64,15 +64,15 @@ Before starting such a process from inside agterm, scrub the variables
 see troubleshooting.md ("agent-status glyph updates the wrong session") for diagnosing and fixing an
 already-poisoned tmux server, and for the Codex shared-daemon limitation, which scrubbing does not fix.
 
-## Running agtermctl
+## Running ngtermctl
 
-`agtermctl` must be on PATH (install it from agterm's **Help ▸ Install Command Line Tool…**). If it
+`ngtermctl` must be on PATH (install it from agterm's **Help ▸ Install Command Line Tool…**). If it
 is not on PATH, the user can install it, or you invoke it by absolute path.
 
-- When `AGTERM_SOCKET` is set, pass `--socket "$AGTERM_SOCKET"` on every call: `agtermctl` never reads it
+- When `AGTERM_SOCKET` is set, pass `--socket "$AGTERM_SOCKET"` on every call: `ngtermctl` never reads it
   automatically. Otherwise the socket path auto-resolves.
-- `--socket` and other options go **after** the subcommand: `agtermctl tree --json`, not
-  `agtermctl --json tree`.
+- `--socket` and other options go **after** the subcommand: `ngtermctl tree --json`, not
+  `ngtermctl --json tree`.
 - Add `--json` to any command to get the raw JSON response (machine-readable). Without it, ordinary
   mutations print `ok`, batch close/move prints the affected session count, and `tree`/`list` print a
   human listing.
@@ -97,7 +97,7 @@ One slot, so a session shows either a HUD or a program overlay, never both. Sepa
 **quick terminal** (a scratch shell in a floating panel at 90% of the focused screen capped at 1100x700,
 or whatever share Settings sets instead; not part of the tree and not owned by a window).
 
-Inspect the live tree any time with `agtermctl tree --json` (workspaces → sessions, each with
+Inspect the live tree any time with `ngtermctl tree --json` (workspaces → sessions, each with
 `id`, `name`, `cwd`, `splitCwd`, `title`, `active`, `split`, `overlay`, `hud`, `ask`, `scratch`, `status`, `background`, `surfaces`). `title` is the raw OSC
 terminal title (e.g. a remote host over SSH), omitted when none was reported — read it when a
 session's local `cwd` is stale because it's connected to a remote. `splitCwd` is the split pane's last
@@ -114,9 +114,9 @@ the read side of `sidebar flagged-layout`), `sidebarWidth` (the sidebar divider 
 points — the read side of `sidebar width`, on `tree` only), `workspaceFilter`, `quickVisible` (whether the
 quick terminal is shown — the read side of the write-only `quick` command; app-level, so every window
 reports the same value), `zoomedSurface`, the four `dashboard*` fields, `pickPending`, `askPending` (GUI asks only), and `app` (the
-serving app's `version`, plus `commit` when the build recorded one — the same value `agtermctl version`
+serving app's `version`, plus `commit` when the build recorded one — the same value `ngtermctl version`
 returns). reference.md lists every one with its exact shape. List windows with
-`agtermctl window list --json`; each window also reports `autoFollowMs`, `sidebarVisible`, `geometry`
+`ngtermctl window list --json`; each window also reports `autoFollowMs`, `sidebarVisible`, `geometry`
 (the live frame `{x, y, width, height, display}` in the units `window move`/`window resize` take — the
 read side, so record it then restore the exact frame), and `fullscreen`/`zoomed`/`minimized` (the read side
 of `window fullscreen`/`window zoom`/`window minimize`, so a script can act idempotently) — all omitted for
@@ -173,7 +173,7 @@ after reattach behaves normally.
 process, so no shell line is involved:
 
 ```bash
-agtermctl session new --cwd ~/proj --name worker \
+ngtermctl session new --cwd ~/proj --name worker \
   --command "zsh -lc 'claude \"\$(cat ~/brief.md)\"'"   # GUI PATH: wrap a non-default binary
 ```
 
@@ -193,7 +193,7 @@ rule.) After `--command`, confirm in `tree --json` that the new node's `foregrou
 
 ## Command summary
 
-Run `agtermctl <area> <cmd> --help` for exact flags. Full detail in **reference.md**; worked
+Run `ngtermctl <area> <cmd> --help` for exact flags. Full detail in **reference.md**; worked
 examples in **examples.md**; installable community workflows in **cookbook.md**.
 
 **tree** — print the workspace/session tree (`--json` for structured). Each session node carries
@@ -399,7 +399,7 @@ omitted when expanded).
   aliases select the same two live terminals; readback remains `left`/`right`.
 - `session resize --split-ratio R | --grow-left D | --grow-right D | --grow-primary D | --grow-split D | --grow-top D | --grow-bottom D` - move the split divider (the GUI only drags
   it, or double-clicks it for an even split; bind any other fraction via a
-  `command "agtermctl session resize …"` custom action). `--split-ratio` sets
+  `command "ngtermctl session resize …"` custom action). `--split-ratio` sets
   the absolute primary-pane fraction of the area below the titlebar (left or top; 0..1, clamped to
   0.05..0.95). The grow options are
   aliases for growing the primary or split pane. Prints the applied fraction.
@@ -684,11 +684,11 @@ existing pane does for session-wide placement. Mixed, unknown or unowned roles s
 open stays where it is when the lead changes. The overlay's program still runs once on the origin, and a remote
 `overlay close` replies when the cancel is requested
 ([details](reference.md#restore)). Both run ssh non-interactively, so key-based auth must already work, and
-the far side needs `agtermctl` installed by the cask or the Help action: a machine merely running agterm
-has no CLI an ssh command can find. Every `live` command needs a running agterm.
+the far side needs `ngtermctl` installed by the Help action: the remote call runs it on the ssh `PATH` plus
+`~/.local/bin` and `/usr/local/bin`. A machine merely running ngterm has no CLI an ssh command can find. Every `live` command needs a running agterm.
 
 **clipboard** — `clipboard set [TEXT]` — copy text to the clipboard of every terminal showing the pane
-the command runs in; the text is the argument, or stdin when omitted (`git diff | agtermctl clipboard set`).
+the command runs in; the text is the argument, or stdin when omitted (`git diff | ngtermctl clipboard set`).
 Text that starts with `-` (a flag, a list item, a diff line) is read as an option: pipe it on stdin, or put
 `--` before it.
 Use it whenever the user asks to copy something to the clipboard: `pbcopy` fills the clipboard of the Mac
@@ -708,7 +708,7 @@ through; other connection settings belong in `~/.ssh/config` under a host alias,
 settings (no pty, stdin kept, plain session, no fork, no `RemoteCommand`) are the installer's and win
 over the config. The remote needs `tic` (ncurses) and says so when it is missing.
 
-**version** — `agtermctl version` — which agterm is serving this socket, as `result.app` (`version`, plus
+**version** — `ngtermctl version` — which agterm is serving this socket, as `result.app` (`version`, plus
 `commit` when the build recorded one). App-global: no target, no `--window`, no window need be open, so it
 works as a preflight from a keymap-launched script, which has no `$TERM_PROGRAM_VERSION`. Address the
 socket explicitly (`--socket "$AGTERM_SOCKET"`, or `"$AGT_SOCKET"` in a keymap child): a bare call
@@ -725,7 +725,7 @@ default 60):
 The script sits next to this file, so resolve `scripts/show-image.sh` against the directory this
 `SKILL.md` was loaded from — not against your working directory. That one form is correct wherever
 the skill came from: a plugin install (`~/.claude/plugins/cache/…`, `~/.codex/plugins/cache/…`) or the
-app's own **Help ▸ Install Agent Skill…** copy (`~/.claude/skills/agterm/`, `~/.codex/skills/agterm/`).
+app's own **Help ▸ Install Agent Skill…** copy (`~/.claude/skills/ngterm/`, `~/.codex/skills/ngterm/`).
 
 ```bash
 bash <this-skill-directory>/scripts/show-image.sh <image> [size-percent]
@@ -746,8 +746,8 @@ It renders in a web view with the page's own JavaScript off, so write the artifa
 inline SVG. Pass `--js` only when the requested interaction or web app requires JavaScript. Images load, and a clicked http(s) link opens in the default browser once the user confirms it.
 
 ```bash
-agtermctl session overlay open --html /tmp/report.html --target "$AGTERM_SESSION_ID" --follow
-agtermctl session overlay reload --target "$AGTERM_SESSION_ID"   # after rewriting the file
+ngtermctl session overlay open --html /tmp/report.html --target "$AGTERM_SESSION_ID" --follow
+ngtermctl session overlay reload --target "$AGTERM_SESSION_ID"   # after rewriting the file
 ```
 
 - Target your own session's id; `--follow` switches the user to it, so pass it only to show the page
@@ -777,7 +777,7 @@ To show a docs page or a web app you are running, open it by URL instead; a scri
 `--js`:
 
 ```bash
-agtermctl session overlay open --url http://localhost:5173/ --js --target "$AGTERM_SESSION_ID" --follow
+ngtermctl session overlay open --url http://localhost:5173/ --js --target "$AGTERM_SESSION_ID" --follow
 ```
 
 - The server must already be running and reachable from the Mac running agterm; `localhost` means that
@@ -791,7 +791,7 @@ agtermctl session overlay open --url http://localhost:5173/ --js --target "$AGTE
   only while it is open.
 - Pass `--persistent` to keep them: the page then uses one saved store shared by every `--persistent`
   page, so a login survives closing the overlay and restarting agterm, subject to the cookie's own lifetime. `tree` reports `persistent` for each
-  page. `agtermctl browser clear` empties the store, and is refused while a `--persistent` page is open.
+  page. `ngtermctl browser clear` empties the store, and is refused while a `--persistent` page is open.
   A login that sends the page to another site (OAuth, SSO, a popup) still fails: the page stays on its
   origin. Apps on `localhost` with different ports share cookies in the store.
 - Pass `--browse` to let the page leave its first site: links, redirects and scripts can then take it to
@@ -821,7 +821,7 @@ Outside agterm (see [Am I inside agterm?](#am-i-inside-agterm)) `open <file>` is
 ## Interactive pages
 
 A file page can drive agterm itself: switch sessions, rename, set a status, or hand a choice back to you,
-like `agtermctl pick` with a richer layout. Tag a button or form with `data-agterm` and the socket
+like `ngtermctl pick` with a richer layout. Tag a button or form with `data-agterm` and the socket
 command name; it works with the page's JavaScript off. `data-agterm-target` is the target,
 `data-agterm-args` a JSON object of fixed arguments, a form's named inputs add fields (number inputs send
 numbers, checkboxes true/false), and `data-agterm-into="#id"` shows the reply or the error in that element.
@@ -843,7 +843,7 @@ A button outside a form needs `type="button"`.
 - To get a choice back, open with `--block` and give the page `session.overlay.submit` controls:
 
 ```bash
-choice=$(agtermctl session overlay open --html /tmp/branches.html --block --target "$AGTERM_SESSION_ID" --follow)
+choice=$(ngtermctl session overlay open --html /tmp/branches.html --block --target "$AGTERM_SESSION_ID" --follow)
 # exit 0: {"pageID":"…","outcome":"submitted","value":"main"}; exit 2: dismissed; 1: error
 ```
 
@@ -857,8 +857,8 @@ choice=$(agtermctl session overlay open --html /tmp/branches.html --block --targ
 ## Troubleshooting and reporting
 
 When the user hits a problem (a keymap editor that will not open, a custom action that does nothing,
-notifications missing), diagnose it from inside the session first: inspect `agtermctl tree --json`,
-run `agtermctl keymap reload` for the parse-diagnostic count, and read the unified logs under
+notifications missing), diagnose it from inside the session first: inspect `ngtermctl tree --json`,
+run `ngtermctl keymap reload` for the parse-diagnostic count, and read the unified logs under
 subsystem `com.umputun.agterm`. If it turns out to be a bug, offer to help file it.
 
 **Filing is opt-in and draft-first.** Never run a `gh` command without the user's explicit approval.
@@ -876,7 +876,7 @@ Full detail, templates, and the exact `gh` commands are in **troubleshooting.md*
   (`result.id`/`text`/`exitCode`/`count`/`affected`/`tree`/`windows`/`app`/`restore`/`live`/`remote`), error strings, the scratch/overlay/split
   lifecycle, and the keymap.conf format (`map` / `command`, chords, leaders, `--repeat`, `|` alternatives,
   `{AGT_X}` tokens).
-- **examples.md** — copy-paste agtermctl examples for common tasks (build a layout, run a program in a
+- **examples.md** — copy-paste ngtermctl examples for common tasks (build a layout, run a program in a
   blocking overlay and read its status, type into a fresh session, notify, inspect the tree).
 - **cookbook.md** — how to list, acquire and install the repository's cookbook recipes, and how to read
   one as reference for a tricky workflow. The recipe list lives in the repo, not here; fetch it.

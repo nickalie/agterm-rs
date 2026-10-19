@@ -106,9 +106,9 @@ cosmic-text = "0.19"
 # `background-image` file decoded as Ghostty reads it (PNG or JPEG only). The version GPUI already links.
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 # agterm-gpui's single instance: GApplication's own D-Bus protocol (`org.gtk.Application`, `org.gtk.Actions`) on the
-# app id's bus name, so a launch of the GTK Linux fork and one of this build forward to each other; its desktop
-# notifications, banners on the freedesktop notification server posted, clicked (with the server's activation token)
-# and withdrawn on one connection.
+# app id's bus name, so a second launch forwards to the running one (a GTK-fork launch too, given this build's id);
+# its desktop notifications, banners on the freedesktop notification server posted, clicked (with the server's
+# activation token) and withdrawn on one connection.
 zbus = "5.19"
 # agterm-gpui's sidebar: the folder chooser of Open Directory… (a title and a starting folder, which GPUI's own
 # `prompt_for_paths` does not take) and the desktop's `enable-animations` setting the status glyph's blink obeys, through

@@ -1,4 +1,4 @@
-//! `agtermctl notify <body>` (`agtermctlKit/MiscCommands.swift` `Notify`): a desktop notification on a session. The
+//! `ngtermctl notify <body>` (`agtermctlKit/MiscCommands.swift` `Notify`): a desktop notification on a session. The
 //! reply prints as any other: `ok`, or the server's `result.text` note when banners are off, so a run that only raised
 //! the unseen badge does not look like one that posted a banner.
 
@@ -6,7 +6,7 @@ use agterm_proto::{Args, Command, Request};
 
 use crate::{BasicOptions, ClientOptions, RequestCommand, TargetOptions};
 
-/// `agtermctl notify <body> [--title T]`.
+/// `ngtermctl notify <body> [--title T]`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Post a desktop notification (default: the active session of the frontmost window).")]
 pub struct Notify {
@@ -50,7 +50,7 @@ mod tests {
     use crate::{Agtermctl, Command};
 
     fn request(words: &[&str]) -> Value {
-        let line = ["agtermctl", "notify"].iter().chain(words).copied();
+        let line = ["ngtermctl", "notify"].iter().chain(words).copied();
         let Command::Notify(command) = Agtermctl::try_parse_from(line).unwrap().command else {
             panic!("not notify")
         };
@@ -75,6 +75,6 @@ mod tests {
 
     #[test]
     fn a_missing_body_does_not_parse() {
-        assert!(Agtermctl::try_parse_from(["agtermctl", "notify", "--target", "s1"]).is_err());
+        assert!(Agtermctl::try_parse_from(["ngtermctl", "notify", "--target", "s1"]).is_err());
     }
 }

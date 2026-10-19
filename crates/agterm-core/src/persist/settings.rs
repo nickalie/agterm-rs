@@ -314,6 +314,8 @@ pub struct AppSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub html_overlay_zoom: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_name_from_terminal_title: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub welcome_shown: Option<bool>,
 }
 

@@ -7,7 +7,7 @@
 #
 # The prefix holds share/fonts/ (JetBrains Mono's static Regular, Bold, Italic and BoldItalic faces, and
 # SymbolsNerdFontMono-Regular.ttf, the one-cell variant of the symbols font), share/doc/fonts/ (JetBrains Mono's SIL
-# Open Font License and Nerd Fonts' MIT license) and share/agterm/fonts-PINS (the FONTS_ pin lines it came from).
+# Open Font License and Nerd Fonts' MIT license) and share/ngterm/fonts-PINS (the FONTS_ pin lines it came from).
 #
 # Usage: scripts/fetch-fonts.sh                 unpack the prefix unless it is complete, then print its path
 #        scripts/fetch-fonts.sh --print-prefix  print the prefix path only (agterm-gpui's build script)
@@ -62,14 +62,14 @@ fetch() {
 fetch jetbrains "$FONTS_JETBRAINS_MONO_URL" "$FONTS_JETBRAINS_MONO_SHA256"
 fetch symbols "$FONTS_NERD_SYMBOLS_URL" "$FONTS_NERD_SYMBOLS_SHA256"
 
-mkdir -p "$STAGE/share/fonts" "$STAGE/share/doc/fonts" "$STAGE/share/agterm"
+mkdir -p "$STAGE/share/fonts" "$STAGE/share/doc/fonts" "$STAGE/share/ngterm"
 for face in Regular Bold Italic BoldItalic; do
   cp "$WORK/jetbrains/fonts/ttf/JetBrainsMono-$face.ttf" "$STAGE/share/fonts/"
 done
 cp "$WORK/symbols/SymbolsNerdFontMono-Regular.ttf" "$STAGE/share/fonts/"
 cp "$WORK/jetbrains/OFL.txt" "$STAGE/share/doc/fonts/JetBrainsMono-OFL.txt"
 cp "$WORK/symbols/LICENSE" "$STAGE/share/doc/fonts/SymbolsNerdFont-LICENSE"
-pin_lines FONTS >"$STAGE/share/agterm/fonts-PINS"
+pin_lines FONTS >"$STAGE/share/ngterm/fonts-PINS"
 fonts_prefix_is_complete "$STAGE" || die "the font archives did not hold the expected files"
 
 rm -rf "$PREFIX"

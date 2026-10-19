@@ -48,13 +48,26 @@ fn target_job(core: &mut Core, request: &Request) -> Result<Job, ControlError> {
         .session(id)
         .ok_or_else(|| not_found(Noun::Session, target.unwrap_or(ACTIVE)))?;
     let pane = resolve_pane(session, &options)?;
+    let core_ref: &Core = core;
+    let session = core_ref
+        .library()
+        .store_for_session(id)
+        .and_then(|store| store.session(id))
+        .ok_or_else(not_realized)?;
     let surface = pane_surface(session, pane).ok_or_else(not_realized)?;
     let token = surface.pane_token().to_owned();
     let identity = Uuid::parse_str(&token).map_err(|_| not_realized())?;
-    if !surface.is_live_session() || core.live.host().is_none() {
+    // a pane whose terminal is not up yet counts by the daemon it attaches to (`Core::pane_backed`)
+    if !core_ref.pane_backed(session, pane) || core_ref.live.host().is_none() {
         return Err(ControlError::rejected(
             "session.restart needs Live sessions mode; this pane has no live shell to replace",
         ));
+    }
+    if !surface.is_realized() {
+        // a dormant Live pane attaches to its daemon now; a starting one is not up yet either (upstream's unrealized
+        // view answers the same)
+        core.wake_session(id);
+        return Err(not_realized());
     }
     Ok(Job {
         session: id,

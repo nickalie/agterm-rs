@@ -185,7 +185,8 @@ pub struct TerminalSpec {
 pub type Spawn = Box<dyn FnOnce(PaneConfig) -> Result<Pane, PaneError>>;
 
 /// What a gated terminal calls once, when its owner view first has a size: it asks for its launch, which comes later
-/// through [`Shared::launch_with`] (a session pane waits for the core's seed and its paced launch turn).
+/// through [`Shared::launch_with`] (a session pane waits for the core's seed, which a dormant session withholds until
+/// it wakes).
 pub type AskLaunch = Box<dyn FnOnce()>;
 
 /// What a key press on a terminal that holds its keys does instead of reaching the program ([`Shared::hold_keys`]).

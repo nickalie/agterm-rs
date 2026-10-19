@@ -96,7 +96,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("agterm-conformance")
     group.addoption("--impl", choices=IMPLS, default=None, help="implementation under test")
     group.addoption("--bin", type=Path, default=None, help="app binary or bundle to launch")
-    group.addoption("--ctl", type=Path, default=None, help="agtermctl to drive the CLI layer (default: the adapter's)")
+    group.addoption(
+        "--ctl", type=Path, default=None, help="the CLI to drive the CLI layer (default: the adapter's `ctl_name`)"
+    )
     group.addoption(
         "--macos-launch-mode",
         choices=("uitest", "plain"),
@@ -648,18 +650,23 @@ class CliResult:
     returncode: int
     stdout: str
     stderr: str
+    # The name the CLI calls itself in its usage lines and help (`Adapter.ctl_name`): upstream's text names
+    # `agtermctl`, the Rust build's `ngtermctl`.
+    program: str = "agtermctl"
 
     def json(self) -> Any:
         return json.loads(self.stdout)
 
 
 class Cli:
-    """`agtermctl` run in the instance's env, always with that instance's `--socket`."""
+    """The implementation's CLI (`agtermctl`, `ngtermctl`) run in the instance's env, always with that instance's
+    `--socket`."""
 
-    def __init__(self, ctl_path: Path, instance: Instance) -> None:
+    def __init__(self, ctl_path: Path, instance: Instance, program: str = "agtermctl") -> None:
         check_under_root(instance.socket, instance.root)
         self.ctl_path = ctl_path
         self.instance = instance
+        self.program = program
 
     def argv(self, *args: str) -> list[str]:
         # Before a `--`, where everything after it is the payload, not an option.
@@ -669,7 +676,7 @@ class Cli:
         return [os.fspath(self.ctl_path), *args_list[:end], *socket_option, *args_list[end:]]
 
     def on(self, instance: Instance) -> Cli:
-        return Cli(self.ctl_path, instance)
+        return Cli(self.ctl_path, instance, self.program)
 
     @property
     def vocabulary(self) -> Vocabulary:
@@ -699,14 +706,16 @@ class Cli:
         elif default_socket is not None:
             check_under_root(default_socket, self.instance.root)
         else:
-            raise SocketOutsideRoot("refusing agtermctl without --socket: no AGTERM_STATE_DIR and no checked default")
+            raise SocketOutsideRoot(
+                f"refusing {self.program} without --socket: no AGTERM_STATE_DIR and no checked default"
+            )
         return self._run([os.fspath(self.ctl_path), *args], env, input, timeout)
 
     def spawn(self, *args: str, input: str | None = None, interactive: bool = False) -> CliProcess:
         """A command that keeps running (`events`, a blocking `pick`/`ask`/`--block`); read it as it goes.
 
         `input` is written and stdin closed; `interactive` keeps stdin open for `send` (a stream bridge)."""
-        return CliProcess(self.argv(*args), self.instance.env, self.instance.home, input, interactive)
+        return CliProcess(self.argv(*args), self.instance.env, self.instance.home, input, interactive, self.program)
 
     def _run(self, argv: list[str], env: Mapping[str, str], input: str | None, timeout: float) -> CliResult:
         completed = subprocess.run(
@@ -719,16 +728,23 @@ class Cli:
             timeout=timeout,
             check=False,
         )
-        return CliResult(argv, completed.returncode, completed.stdout, completed.stderr)
+        return CliResult(argv, completed.returncode, completed.stdout, completed.stderr, self.program)
 
 
 class CliProcess:
-    """One running `agtermctl`: stdout read line by line on a thread, stopped (own pid only) by `close`."""
+    """One running CLI (`Adapter.ctl_name`): stdout read line by line on a thread, stopped (own pid only) by `close`."""
 
     def __init__(
-        self, argv: list[str], env: Mapping[str, str], cwd: Path, input: str | None, interactive: bool = False
+        self,
+        argv: list[str],
+        env: Mapping[str, str],
+        cwd: Path,
+        input: str | None,
+        interactive: bool = False,
+        program: str = "agtermctl",
     ) -> None:
         self.argv = argv
+        self.program = program
         self.process = subprocess.Popen(
             argv,
             env=dict(env),
@@ -779,7 +795,7 @@ class CliProcess:
             lines.append(line)
         self._lines.put(None)
         stdout = "".join(f"{line}\n" for line in lines)
-        return CliResult(self.argv, returncode, stdout, self.stderr())
+        return CliResult(self.argv, returncode, stdout, self.stderr(), self.program)
 
     def stderr(self) -> str:
         """Everything the process wrote to stderr, once it has exited; empty while it runs."""
@@ -898,8 +914,8 @@ def ctl(request: pytest.FixtureRequest, adapter: Adapter) -> Ctl:
 def cli(request: pytest.FixtureRequest, adapter: Adapter) -> Cli:
     """Drives `app` when the test asks for it, else `shared_app`."""
     if adapter.ctl_path is None:
-        pytest.fail(f"{adapter.name} has no agtermctl: pass --ctl")
-    return Cli(adapter.ctl_path, _target_instance(request))
+        pytest.fail(f"{adapter.name} has no {adapter.ctl_name}: pass --ctl")
+    return Cli(adapter.ctl_path, _target_instance(request), adapter.ctl_name)
 
 
 @pytest.fixture

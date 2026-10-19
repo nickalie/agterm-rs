@@ -20,7 +20,7 @@ mod lead;
 mod live_reset;
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -89,8 +89,6 @@ pub(crate) struct LiveRuntime {
     markers: Option<MarkerStore>,
     /// The launch's session host build cutoff.
     pub(crate) outdated_before: Option<u64>,
-    /// The daemon names the launch reap saw alive, a pacing hint only; `None` when the listing failed.
-    pub(crate) running_names: Option<BTreeSet<String>>,
     /// Panes whose reset could not be confirmed at this launch: they attach with no replay and no durable command.
     pub(crate) suppressed: HashSet<Uuid>,
     /// Each pane's lead as its session host reports it.
@@ -116,7 +114,6 @@ impl fmt::Debug for LiveRuntime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LiveRuntime")
             .field("endpoint", &self.endpoint)
-            .field("running_names", &self.running_names)
             .field("replacements", &self.replacements)
             .finish_non_exhaustive()
     }

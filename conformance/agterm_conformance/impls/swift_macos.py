@@ -138,7 +138,9 @@ class SwiftMacosAdapter(Adapter):
         """`pid` runs the session host of this instance's own bundle copy for its ZMX_DIR, derived from a state dir
         in its root."""
         bundle = self.instance_bundle(instance.root)
-        if bundle is None or instance.live_dir != instance.vocabulary.socket_directory(instance.state_dir):
+        if bundle is None or instance.live_dir != instance.vocabulary.socket_directory(
+            instance.state_dir, self.app_dir_name
+        ):
             return False
         try:
             check_under_root(instance.state_dir, instance.root)

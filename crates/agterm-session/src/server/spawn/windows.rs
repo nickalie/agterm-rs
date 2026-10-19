@@ -511,14 +511,14 @@ mod tests {
     #[test]
     fn the_command_line_quotes_every_part() {
         let command = ServerCommand {
-            executable: PathBuf::from(r"C:\Program Files\agterm\agterm-session.exe"),
-            args: vec![os("server"), os(r"C:\Users\a b\AppData\Local\agterm\live\0123")],
+            executable: PathBuf::from(r"C:\Program Files\ngterm\agterm-session.exe"),
+            args: vec![os("server"), os(r"C:\Users\a b\AppData\Local\ngterm\live\0123")],
             env: Vec::new(),
             cwd: None,
         };
         assert_eq!(
             command_line(&command).unwrap(),
-            r#""C:\Program Files\agterm\agterm-session.exe" server "C:\Users\a b\AppData\Local\agterm\live\0123""#
+            r#""C:\Program Files\ngterm\agterm-session.exe" server "C:\Users\a b\AppData\Local\ngterm\live\0123""#
         );
     }
 

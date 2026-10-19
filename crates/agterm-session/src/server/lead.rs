@@ -43,8 +43,9 @@ use crate::protocol::{GridSize, LeadRole, Managed};
 
 use super::clients::ClientId;
 
-/// The reserved prefix of the attach contract's role title: `OSC 2;agterm-live-role;<nonce>:<role>:<generation>`.
-pub const ROLE_TITLE_PREFIX: &str = "agterm-live-role;";
+/// The reserved prefix of the attach contract's role title: `OSC 2;ngterm-live-role;<nonce>:<role>:<generation>`, the
+/// prefix `agterm-core`'s lead policy reads ([`LeadNotice::PREFIX`](agterm_core::live::lead::LeadNotice::PREFIX)).
+pub const ROLE_TITLE_PREFIX: &str = agterm_core::live::lead::LeadNotice::PREFIX;
 
 /// The longest nonce a managed client may carry.
 pub const NONCE_MAX: usize = 64;
@@ -68,7 +69,7 @@ pub fn role_name(role: LeadRole) -> &'static str {
 }
 
 /// The title a client attached under `nonce` writes to its terminal for a role report: the window title
-/// `agterm-live-role;<nonce>:<role>:<generation>`, terminated by ST. A title and not a desktop notification, because a
+/// `ngterm-live-role;<nonce>:<role>:<generation>`, terminated by ST. A title and not a desktop notification, because a
 /// terminal delivers every title where it rate-limits notifications, and a dropped report would leave the terminal
 /// wrong about a role the server enforces.
 #[must_use]
@@ -723,25 +724,20 @@ mod tests {
     fn the_role_title_is_the_attach_contracts() {
         assert_eq!(
             role_title("n1", LeadRole::Leader, 7),
-            "\x1b]2;agterm-live-role;n1:leader:7\x1b\\"
+            "\x1b]2;ngterm-live-role;n1:leader:7\x1b\\"
         );
         assert_eq!(
             role_title("n-2", LeadRole::Unowned, u32::MAX),
-            "\x1b]2;agterm-live-role;n-2:unowned:4294967295\x1b\\"
+            "\x1b]2;ngterm-live-role;n-2:unowned:4294967295\x1b\\"
         );
-        // its payload is what agterm-core's lead policy reads, under its prefix
+        // the title is what agterm-core's lead policy reads, prefix and all
         for role in [LeadRole::Unowned, LeadRole::Leader, LeadRole::Follower] {
             let title = role_title("n1", role, 3);
-            let payload = title
+            let title = title
                 .strip_prefix("\x1b]2;")
                 .and_then(|title| title.strip_suffix("\x1b\\"))
-                .and_then(|title| title.strip_prefix(ROLE_TITLE_PREFIX))
                 .expect("the title's frame");
-            let notice = agterm_core::live::lead::LeadNotice::parse(&format!(
-                "{}{payload}",
-                agterm_core::live::lead::LeadNotice::PREFIX
-            ))
-            .expect("a notice the core parses");
+            let notice = agterm_core::live::lead::LeadNotice::parse(title).expect("a notice the core parses");
             assert_eq!((notice.nonce.as_str(), notice.generation), ("n1", 3));
             assert_eq!(<&str>::from(notice.role), role_name(role));
         }

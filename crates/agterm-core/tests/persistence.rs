@@ -11,7 +11,7 @@
 //!   `PersistenceStore.swift`, `SettingsStore.swift` and the index types are identical), so the format is the same;
 //!   the fixture carries what older fork builds left behind: the legacy single focus key, sessions without pane
 //!   identities, a split recorded only as `isSplit`, the legacy `restoreRunningCommand`, and the fork-only
-//!   `sessionNameFromTerminalTitle` setting, which upstream does not know.
+//!   `sessionNameFromTerminalTitle` setting, which upstream does not know and this build adopts.
 
 use std::fs;
 use std::io;
@@ -333,7 +333,7 @@ fn a_fork_window_saved_again_drops_its_legacy_keys_and_keeps_the_tree() {
 }
 
 #[test]
-fn fork_settings_load_migrated_without_the_fork_only_key() {
+fn fork_settings_load_migrated_keeping_the_fork_only_key() {
     let dir = state_from("fork").unwrap();
     let store = SettingsStore::new(dir.path());
     let settings = store.load();
@@ -345,12 +345,11 @@ fn fork_settings_load_migrated_without_the_fork_only_key() {
     assert_eq!(settings.restore_running_command, None);
     assert_eq!(settings.theme.as_deref(), Some("Builtin Dark"));
     assert_eq!(settings.font_size, Some(12.0));
+    assert_eq!(settings.session_name_from_terminal_title, Some(true));
     store.save(&settings).unwrap();
     let text = fs::read_to_string(store.path()).unwrap();
-    assert!(
-        !text.contains("sessionNameFromTerminalTitle") && !text.contains("restoreRunningCommand"),
-        "{text}"
-    );
+    assert!(!text.contains("restoreRunningCommand"), "{text}");
+    assert!(text.contains(r#""sessionNameFromTerminalTitle" : true"#), "{text}");
     assert!(text.contains(r#""restoreMode" : "rerun""#), "{text}");
 }
 

@@ -34,7 +34,7 @@ const MAX_GROWTH_MB: u64 = 512;
 
 /// One control request to the sandbox's socket; its result, or the error it answered.
 fn request(sandbox: &Sandbox, cmd: &str, target: Option<&str>) -> TestResult<Value> {
-    let mut socket = std::os::unix::net::UnixStream::connect(sandbox.path("state/agterm.sock"))?;
+    let mut socket = std::os::unix::net::UnixStream::connect(sandbox.path("state/ngterm.sock"))?;
     socket.set_read_timeout(Some(support::DEADLINE))?;
     let mut line = json!({ "cmd": cmd });
     if let Some(target) = target {

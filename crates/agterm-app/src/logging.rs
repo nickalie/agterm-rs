@@ -31,7 +31,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 pub const LOG_ENV: &str = "AGTERM_LOG";
 /// The level when [`LOG_ENV`] is unset or does not parse.
 const DEFAULT_FILTER: &str = "info";
-/// The log file inside the state directory, named like the socket beside it (`agterm.sock`).
+/// The log file inside the state directory (upstream's name: the config diagnostics point at it by name).
 pub const LOG_FILE_NAME: &str = "agterm.log";
 /// The previous log file, kept once a rotation happened.
 pub const ROTATED_FILE_NAME: &str = "agterm.log.1";

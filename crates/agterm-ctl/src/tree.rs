@@ -1,4 +1,4 @@
-//! `agtermctl tree` (`agtermctlKit/Commands.swift` `Tree`): the workspace and session tree of a window, as
+//! `ngtermctl tree` (`agtermctlKit/Commands.swift` `Tree`): the workspace and session tree of a window, as
 //! `formatTree` in `SocketClient.swift` renders it.
 
 use agterm_proto::tree::{ControlSessionNode, ControlTree};
@@ -6,7 +6,7 @@ use agterm_proto::{Command, Request};
 
 use crate::{BasicOptions, ClientOptions, RequestCommand};
 
-/// `agtermctl tree [--socket <socket>] [--json] [--window <window>]`.
+/// `ngtermctl tree [--socket <socket>] [--json] [--window <window>]`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Print the workspace/session tree.")]
 pub struct Tree {

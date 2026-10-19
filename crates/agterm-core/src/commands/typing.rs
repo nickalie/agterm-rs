@@ -70,6 +70,10 @@ fn start(core: &mut Core, request: &Request) -> Result<Dispatched, ControlError>
                     no_scratch()
                 });
             }
+            // a dormant split spawns now; there being no poll for it, this call still fails fast on it
+            if pane == StatusPane::Right {
+                core.wake_session(id);
+            }
             Ok(Dispatched::done(typed_result(core, id, pane, &text, reset)))
         }
         None | Some(StatusPane::Left) => {
@@ -87,8 +91,8 @@ fn start(core: &mut Core, request: &Request) -> Result<Dispatched, ControlError>
                 token,
                 reset,
             };
-            // a pane waiting for its paced launch turn spawns now, so the poll waits only for the terminal
-            core.expedite_pane_spawns(id, std::time::Instant::now());
+            // a dormant pane spawns now, so the poll waits only for the terminal
+            core.wake_session(id);
             Ok(wait(job, 0))
         }
     }

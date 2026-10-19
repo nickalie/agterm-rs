@@ -32,7 +32,7 @@ def _failed(result, message, code=1):
 def _usage(result, message=None):
     assert (result.returncode, result.stdout) == (64, ""), (result.argv, result.returncode, result.stderr)
     assert result.stderr.startswith(f"Error: {message}\n" if message else "Error: "), result.stderr
-    assert "\nUsage: agtermctl " in result.stderr, result.stderr
+    assert f"\nUsage: {result.program} " in result.stderr, result.stderr
 
 
 def _env(cli, session=None, directory=None, **extra):

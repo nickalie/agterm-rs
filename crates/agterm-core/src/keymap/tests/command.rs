@@ -136,7 +136,7 @@ fn the_pane_id_defaults_empty_and_expands_beside_the_pane() {
         "--pane right --pane-id pane-tok"
     );
     assert!(!CommandContext::references_session_scoped_context(
-        r#"agtermctl session text --pane-id "$AGT_PANE_ID""#
+        r#"ngtermctl session text --pane-id "$AGT_PANE_ID""#
     ));
 }
 
@@ -165,8 +165,8 @@ fn session_scoped_tokens_are_detected_but_launchers_are_not() {
         assert!(CommandContext::references_session_scoped_context(body), "{body}");
     }
     for body in [
-        r#"agtermctl session new --command "ssh work""#,
-        "agtermctl --socket {AGT_SOCKET} session new",
+        r#"ngtermctl session new --command "ssh work""#,
+        "ngtermctl --socket {AGT_SOCKET} session new",
         "open -a Safari {AGT_WINDOW_ID} {AGT_PANE}",
     ] {
         assert!(!CommandContext::references_session_scoped_context(body), "{body}");

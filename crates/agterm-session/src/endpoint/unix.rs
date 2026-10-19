@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn only_a_server_of_this_user_is_accepted() {
-        let endpoint = Endpoint::new("/tmp/agterm-live-test");
+        let endpoint = Endpoint::new("/tmp/ngterm-live-test");
         assert!(check_peer_user(Some(1000), 1000, &endpoint).is_ok());
         let error = check_peer_user(Some(1001), 1000, &endpoint).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);

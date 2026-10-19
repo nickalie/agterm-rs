@@ -1,12 +1,12 @@
-//! Which socket `agtermctl` talks to, and what a failed connect says about the instance behind it.
+//! Which socket `ngtermctl` talks to, and what a failed connect says about the instance behind it.
 //!
 //! Resolution is upstream's `BasicOptions.socketPath` (`agtermctlKit/Commands.swift`, over
-//! `ControlResolve.socketPath`): `--socket`, then `<AGTERM_STATE_DIR>/agterm.sock`, then the state directory's default,
-//! then `/tmp/agterm/agterm.sock`. Upstream's default is macOS's `~/Library/Application Support/agterm`; the Linux one
-//! is `<XDG data home>/agterm` (Linux glue: Foundation's application support directory on Linux, which the fork's
-//! `PersistenceStore.defaultDirectory` resolves). The CLI shares the app's state-dir code but, as upstream's, never
-//! reads the app's socket variables: neither `AGTERM_CONTROL_SOCKET` nor a pane's `AGTERM_SOCKET` routes a command
-//! anywhere.
+//! `ControlResolve.socketPath`): `--socket`, then `<AGTERM_STATE_DIR>/ngterm.sock`, then the state directory's default,
+//! then `/tmp/ngterm/ngterm.sock`. Upstream's default is macOS's `~/Library/Application Support/agterm`; the Linux one
+//! is `<XDG data home>/ngterm` (Linux glue: Foundation's application support directory on Linux, which the fork's
+//! `PersistenceStore.defaultDirectory` resolves, under this build's own directory name, `agterm_core::paths`). The CLI
+//! shares the app's state-dir code but, as upstream's, never reads the app's socket variables: neither
+//! `AGTERM_CONTROL_SOCKET` nor a pane's `AGTERM_SOCKET` routes a command anywhere.
 
 use std::fs;
 use std::os::unix::fs::MetadataExt;
@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use agterm_core::paths::{Env, ownership_lock_path, socket_in, state_dir};
 
-/// The socket a command connects to: `option` (`--socket`) when given, else `<state dir>/agterm.sock`.
+/// The socket a command connects to: `option` (`--socket`) when given, else `<state dir>/ngterm.sock`.
 #[must_use]
 pub fn resolve(option: Option<&Path>, env: &dyn Env) -> PathBuf {
     option.map_or_else(|| socket_in(&state_dir(env)), Path::to_path_buf)
@@ -145,8 +145,8 @@ mod tests {
         MapEnv::new()
             .with("HOME", "/home/u")
             .with("XDG_DATA_HOME", "/data")
-            .with("AGTERM_SOCKET", "/pane/agterm.sock")
-            .with(CONTROL_SOCKET_ENV, "/app/agterm.sock")
+            .with("AGTERM_SOCKET", "/pane/ngterm.sock")
+            .with(CONTROL_SOCKET_ENV, "/app/ngterm.sock")
     }
 
     #[test]
@@ -158,24 +158,24 @@ mod tests {
     #[test]
     fn state_dir_comes_next() {
         let env = env().with(STATE_DIR_ENV, "/state");
-        assert_eq!(resolve(None, &env), Path::new("/state/agterm.sock"));
+        assert_eq!(resolve(None, &env), Path::new("/state/ngterm.sock"));
     }
 
     #[test]
     fn then_the_xdg_data_home_then_home_then_tmp() {
-        assert_eq!(resolve(None, &env()), Path::new("/data/agterm/agterm.sock"));
+        assert_eq!(resolve(None, &env()), Path::new("/data/ngterm/ngterm.sock"));
         let no_xdg = MapEnv::new().with("HOME", "/home/u");
         assert_eq!(
             resolve(None, &no_xdg),
-            Path::new("/home/u/.local/share/agterm/agterm.sock")
+            Path::new("/home/u/.local/share/ngterm/ngterm.sock")
         );
-        assert_eq!(resolve(None, &MapEnv::new()), Path::new("/tmp/agterm/agterm.sock"));
+        assert_eq!(resolve(None, &MapEnv::new()), Path::new("/tmp/ngterm/ngterm.sock"));
     }
 
     #[test]
     fn an_empty_state_dir_is_unset_as_the_app_reads_it() {
         let env = env().with(STATE_DIR_ENV, "");
-        assert_eq!(resolve(None, &env), Path::new("/data/agterm/agterm.sock"));
+        assert_eq!(resolve(None, &env), Path::new("/data/ngterm/ngterm.sock"));
     }
 
     #[test]
@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn a_held_ownership_lock_is_seen() {
         let dir = tempfile::tempdir().unwrap();
-        let socket = dir.path().join("agterm.sock");
+        let socket = dir.path().join("ngterm.sock");
         assert_eq!(ownership_lock_held(&socket), None);
         let lock = File::create(ownership_lock_path(&socket)).unwrap();
         assert_eq!(ownership_lock_held(&socket), Some(false));

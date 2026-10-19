@@ -146,6 +146,8 @@ fn start(core: &mut Core, request: &Request) -> Result<Dispatched, ControlError>
     if let Some(store) = core.library_mut().store_mut(resolved.window) {
         store.select_session(Some(resolved.session));
     }
+    // a dashboard over the window keeps a dormant selection asleep, so the poll would wait on no terminal
+    core.wake_session(resolved.session);
     let job = SearchJob {
         run: SearchRun {
             session: resolved.session,

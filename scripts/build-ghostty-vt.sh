@@ -16,8 +16,8 @@
 # - src/: the patched source tree, with the Zig packages a libghostty-vt build needs prefetched into its zig-pkg/ for
 #   every target the build script maps (ZIG_TARGETS below), so `zig build` there needs no network;
 # - include/ghostty/: the headers, copied from the tree (what its install step installs), for the bindings generator;
-# - share/doc/ghostty-vt/LICENSE, share/agterm/ghostty-vt-PINS (the LIBGHOSTTY_VT_ pin lines it was prepared from);
-# - share/agterm/ghostty-vt-STAMP: its inputs as `name=value` lines, which the build script reads: the pinned zig it
+# - share/doc/ghostty-vt/LICENSE, share/ngterm/ghostty-vt-PINS (the LIBGHOSTTY_VT_ pin lines it was prepared from);
+# - share/ngterm/ghostty-vt-STAMP: its inputs as `name=value` lines, which the build script reads: the pinned zig it
 #   was prepared with (`zig=`, the real binary, never a version manager's shim), that zig's version, the Zig global
 #   cache (`zig-global-cache=`, scripts/lib/native.sh ghostty_vt_zig_cache), the version string the build passes
 #   (`version-string=`, the tree's build.zig.zon version, so the build never asks git) and each patch with its sha256;
@@ -29,7 +29,7 @@
 #   every reader takes beside x/).
 #
 # On Windows the native programs ignore terminfo; what a pane's TERM means there is up to what runs inside it: an ssh
-# session forwards TERM to a host that needs the entry installed (`agtermctl terminfo install`, as from Linux), and WSL
+# session forwards TERM to a host that needs the entry installed (`ngtermctl terminfo install`, as from Linux), and WSL
 # starts its programs with its own TERM unless WSLENV forwards the pane's.
 #
 # Usage: scripts/build-ghostty-vt.sh                 prepare the prefix unless it is complete, then print its path
@@ -140,10 +140,10 @@ done
 
 VERSION_STRING="$(sed -n 's/^ *\.version = "\([^"]*\)",$/\1/p' "$TREE/build.zig.zon" | head -n1)"
 [[ -n "$VERSION_STRING" ]] || die "no .version in ghostty $LIBGHOSTTY_VT_REV's build.zig.zon"
-mkdir -p "$STAGE/include" "$STAGE/share/doc/ghostty-vt" "$STAGE/share/agterm"
+mkdir -p "$STAGE/include" "$STAGE/share/doc/ghostty-vt" "$STAGE/share/ngterm"
 cp -R "$TREE/include/ghostty" "$STAGE/include/ghostty"
 cp "$TREE/LICENSE" "$STAGE/share/doc/ghostty-vt/LICENSE"
-pin_lines LIBGHOSTTY_VT >"$STAGE/share/agterm/ghostty-vt-PINS"
+pin_lines LIBGHOSTTY_VT >"$STAGE/share/ngterm/ghostty-vt-PINS"
 
 # The resources (the header names them). The vt build installs none of them, so they are taken as Ghostty's full build
 # takes them: the shell integration as is, the themes from the package its build.zig.zon pins, the terminfo encoded by
@@ -194,7 +194,7 @@ fi
     [[ -f "$patch" ]] || continue
     echo "patch=$(basename "$patch") $(sha256_of <"$patch")"
   done
-} >"$STAGE/share/agterm/ghostty-vt-STAMP"
+} >"$STAGE/share/ngterm/ghostty-vt-STAMP"
 
 ghostty_vt_prefix_is_complete "$STAGE" || die "the staged libghostty-vt prefix is incomplete"
 chmod 755 "$STAGE"

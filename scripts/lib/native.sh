@@ -86,11 +86,12 @@ pin_lines() {
   grep -E "^$1_" "$PINS"
 }
 
-# A key over the pin lines of one dependency, the patches of one or more directories (top level of each) and the host
-# arch. A patch of the first directory is named by its file name alone, one of a later directory by
-# `<directory name>/<file name>`, so a single-directory key is the same as it ever was. A leading `--layout N` adds the
-# layout of what the prefix holds, so a checkout expecting another layout (other branches share the vendor root) never
-# takes the prefix for its own; a key without it is the same as it ever was.
+# A key over the pin lines of one dependency, the patches of one or more directories (top level of each), the host
+# arch and the directory the prefix keeps its manifests in (share/ngterm, upstream's and earlier builds' share/agterm),
+# so a prefix of the other layout, which another checkout may still use from the same vendor root, is never taken for
+# this one's. A patch of the first directory is named by its file name alone, one of a later directory by
+# `<directory name>/<file name>`. A leading `--layout N` adds the layout of what the prefix holds, so a checkout
+# expecting another layout (other branches share the vendor root) never takes the prefix for its own.
 prefix_key() {
   local layout="" pins_prefix first patches patch label
   if [[ "$1" == --layout ]]; then
@@ -102,6 +103,7 @@ prefix_key() {
   shift
   {
     echo "arch $(uname -m)"
+    echo "manifests share/ngterm"
     [[ -z "$layout" ]] || echo "layout $layout"
     pin_lines "$pins_prefix"
     for patches in "$@"; do
@@ -130,9 +132,9 @@ ghostty_vt_zig_cache() {
   echo "$VENDOR_ROOT/zig-cache-$LIBGHOSTTY_VT_ZIG_VERSION"
 }
 
-# The value of NAME in the stamp of the libghostty-vt prefix PREFIX (share/agterm/ghostty-vt-STAMP, `name=value`).
+# The value of NAME in the stamp of the libghostty-vt prefix PREFIX (share/ngterm/ghostty-vt-STAMP, `name=value`).
 ghostty_vt_stamp_value() {
-  sed -n "s/^$2=//p" "$1/share/agterm/ghostty-vt-STAMP" 2>/dev/null | head -n1
+  sed -n "s/^$2=//p" "$1/share/ngterm/ghostty-vt-STAMP" 2>/dev/null | head -n1
 }
 
 # A libghostty-vt prefix is complete when the patched tree with its prefetched packages, the headers, the pin manifest
@@ -141,9 +143,9 @@ ghostty_vt_stamp_value() {
 ghostty_vt_prefix_is_complete() {
   local prefix="$1" zig
   [[ -s "$prefix/src/build.zig" && -d "$prefix/src/zig-pkg" && -s "$prefix/include/ghostty/vt.h" \
-    && -s "$prefix/include/ghostty/vt/terminal.h" && -s "$prefix/share/agterm/ghostty-vt-PINS" \
-    && -s "$prefix/share/agterm/ghostty-vt-STAMP" ]] \
-    && pin_lines LIBGHOSTTY_VT | cmp -s - "$prefix/share/agterm/ghostty-vt-PINS" \
+    && -s "$prefix/include/ghostty/vt/terminal.h" && -s "$prefix/share/ngterm/ghostty-vt-PINS" \
+    && -s "$prefix/share/ngterm/ghostty-vt-STAMP" ]] \
+    && pin_lines LIBGHOSTTY_VT | cmp -s - "$prefix/share/ngterm/ghostty-vt-PINS" \
     && zig="$(ghostty_vt_stamp_value "$prefix" zig)" && [[ -n "$zig" && -x "$zig" ]] \
     && [[ "$("$zig" version 2>/dev/null)" == "$LIBGHOSTTY_VT_ZIG_VERSION" ]] \
     && verify_ghostty_resources "$prefix/share" >/dev/null 2>&1
@@ -160,8 +162,8 @@ wpe_prefix_is_complete() {
   local prefix="$1"
   [[ -s "$prefix/lib/libWPEWebKit-2.0.so.1" && -x "$prefix/lib/wpe-webkit-2.0/WPEWebProcess" \
     && -s "$prefix/include/wpe-webkit-2.0/wpe/webkit.h" && -s "$prefix/lib/pkgconfig/wpe-webkit-2.0.pc" \
-    && -s "$prefix/share/gir-1.0/WPEWebKit-2.0.gir" && -s "$prefix/share/agterm/wpe-PINS" ]] \
-    && pin_lines WPE | cmp -s - "$prefix/share/agterm/wpe-PINS"
+    && -s "$prefix/share/gir-1.0/WPEWebKit-2.0.gir" && -s "$prefix/share/ngterm/wpe-PINS" ]] \
+    && pin_lines WPE | cmp -s - "$prefix/share/ngterm/wpe-PINS"
 }
 
 # The lavapipe package carries no patches: its key hashes the LAVAPIPE_ pins only.
@@ -173,8 +175,8 @@ lavapipe_prefix() {
 # path) and the pin manifest are there and the manifest matches the LAVAPIPE_ pins.
 lavapipe_prefix_is_complete() {
   local prefix="$1"
-  [[ -s "$prefix/lib/libvulkan_lvp.so" && -s "$prefix/lvp_icd.json" && -s "$prefix/share/agterm/lavapipe-PINS" ]] \
-    && pin_lines LAVAPIPE | cmp -s - "$prefix/share/agterm/lavapipe-PINS"
+  [[ -s "$prefix/lib/libvulkan_lvp.so" && -s "$prefix/lvp_icd.json" && -s "$prefix/share/ngterm/lavapipe-PINS" ]] \
+    && pin_lines LAVAPIPE | cmp -s - "$prefix/share/ngterm/lavapipe-PINS"
 }
 
 # weston carries no patches: its key hashes the WESTON_ pins only.
@@ -191,11 +193,11 @@ weston_has_fake_seat() {
 # helper client) are there, the pin manifest matches the WESTON_ pins, and the compositor runs and takes --fake-seat.
 weston_prefix_is_complete() {
   local prefix="$1"
-  [[ -x "$prefix/bin/weston" && -x "$prefix/libexec/weston-desktop-shell" && -s "$prefix/share/agterm/weston-PINS" ]] \
+  [[ -x "$prefix/bin/weston" && -x "$prefix/libexec/weston-desktop-shell" && -s "$prefix/share/ngterm/weston-PINS" ]] \
     && compgen -G "$prefix/lib/libweston-*/headless-backend.so" >/dev/null \
     && compgen -G "$prefix/lib/libweston-*/gl-renderer.so" >/dev/null \
     && [[ -s "$prefix/lib/weston/desktop-shell.so" ]] \
-    && pin_lines WESTON | cmp -s - "$prefix/share/agterm/weston-PINS" \
+    && pin_lines WESTON | cmp -s - "$prefix/share/ngterm/weston-PINS" \
     && weston_has_fake_seat "$prefix/bin/weston"
 }
 
@@ -221,8 +223,8 @@ fonts_prefix_is_complete() {
     [[ -s "$prefix/share/fonts/$file" ]] || return 1
   done
   [[ -s "$prefix/share/doc/fonts/JetBrainsMono-OFL.txt" && -s "$prefix/share/doc/fonts/SymbolsNerdFont-LICENSE" \
-    && -s "$prefix/share/agterm/fonts-PINS" ]] \
-    && pin_lines FONTS | cmp -s - "$prefix/share/agterm/fonts-PINS"
+    && -s "$prefix/share/ngterm/fonts-PINS" ]] \
+    && pin_lines FONTS | cmp -s - "$prefix/share/ngterm/fonts-PINS"
 }
 
 # The gir binary's key hashes the GIR_ pins and build/patches/gir/.
@@ -233,8 +235,8 @@ gir_prefix() {
 # A gir prefix is complete when the binary runs and its pin manifest matches the GIR_ pins.
 gir_prefix_is_complete() {
   local prefix="$1"
-  [[ -x "$prefix/bin/gir" && -s "$prefix/share/agterm/gir-PINS" ]] \
-    && pin_lines GIR | cmp -s - "$prefix/share/agterm/gir-PINS"
+  [[ -x "$prefix/bin/gir" && -s "$prefix/share/ngterm/gir-PINS" ]] \
+    && pin_lines GIR | cmp -s - "$prefix/share/ngterm/gir-PINS"
 }
 
 # The Zig triple arch of this host, as ziglang.org's archives and the pinned sha256 variables name it.

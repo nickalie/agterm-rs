@@ -27,7 +27,7 @@ use crate::modal::{answer_front_alert, front_alert};
 /// The login shell the `OpenCode` probe starts (`$SHELL -ilc <hop>`): runs the hop, reads no startup file.
 const FAKE_SHELL: &str = "#!/bin/sh\n[ \"$1\" = -ilc ] || exit 64\nexec /bin/sh -c \"$2\"\n";
 
-/// A temp home with the checkout's bundled resources, a fake bundled `agtermctl`, a fake login shell and a `PATH` of
+/// A temp home with the checkout's bundled resources, a fake bundled `ngtermctl`, a fake login shell and a `PATH` of
 /// the home's own `bin` alone. The installers read its environment through a [`Source`]; a test may change it between
 /// runs.
 struct Home {
@@ -42,7 +42,7 @@ impl Home {
         let bin = dir.path().join("bin");
         fs::create_dir_all(&home).unwrap();
         fs::create_dir_all(&bin).unwrap();
-        let tool = dir.path().join("stage/bin/agtermctl");
+        let tool = dir.path().join("stage/bin/ngtermctl");
         fs::create_dir_all(tool.parent().unwrap()).unwrap();
         write_executable(&tool, "#!/bin/sh\n").unwrap();
         let shell = bin.join("login-shell");
@@ -207,8 +207,8 @@ fn the_skill_installs_reads_back_current_and_comes_back_after_a_removal(cx: &mut
 }
 
 fn first_skill_install(cx: &mut VisualTestContext, home: &Home) {
-    let claude = home.path(".claude/skills/agterm");
-    let codex = home.path(".codex/skills/agterm");
+    let claude = home.path(".claude/skills/ngterm");
+    let codex = home.path(".codex/skills/ngterm");
     start(cx, run_skill);
     let alert = shown(cx);
     assert_eq!(alert.heading, "Agent Skill Installed");
@@ -232,7 +232,7 @@ fn first_skill_install(cx: &mut VisualTestContext, home: &Home) {
 
 /// The user removes Claude Code's copy: the next run finds it absent and puts it back.
 fn skill_removed_and_reinstalled(cx: &mut VisualTestContext, home: &Home) {
-    let claude = home.path(".claude/skills/agterm");
+    let claude = home.path(".claude/skills/ngterm");
     fs::remove_dir_all(&claude).unwrap();
     assert!(!files::entry_exists(&claude));
     start(cx, run_skill);
@@ -248,14 +248,14 @@ fn skill_removed_and_reinstalled(cx: &mut VisualTestContext, home: &Home) {
 
 /// A skill of the user's under the name is never overwritten.
 fn users_skill_left_alone(cx: &mut VisualTestContext, home: &Home) {
-    let users = "---\nname: agterm\n---\nmine\n";
-    let skill = home.path(".codex/skills/agterm/SKILL.md");
+    let users = "---\nname: ngterm\n---\nmine\n";
+    let skill = home.path(".codex/skills/ngterm/SKILL.md");
     fs::write(&skill, users).unwrap();
     assert!(matches!(&home.skill_status()[1], TargetPlan::UserOwned(target) if target.agent == "Codex"));
     start(cx, run_skill);
     let alert = shown(cx);
     assert_eq!(alert.heading, "Agent Skill Installed");
-    let skipped = "Skipped:\n  • Codex: a different 'agterm' skill is already there — left untouched";
+    let skipped = "Skipped:\n  • Codex: a different 'ngterm' skill is already there — left untouched";
     assert!(alert.body.ends_with(skipped), "{}", alert.body);
     press(cx, "OK");
     assert_eq!(fs::read_to_string(&skill).unwrap(), users);
@@ -264,7 +264,7 @@ fn users_skill_left_alone(cx: &mut VisualTestContext, home: &Home) {
 #[gpui_kit::test]
 fn the_command_line_tool_links_reads_back_current_and_refuses_a_real_file(cx: &mut TestAppContext) {
     let home = Home::new();
-    let link = home.path(".local/bin/agtermctl");
+    let link = home.path(".local/bin/ngtermctl");
     let tool = home.env().bundled_cli.unwrap();
     let cx = host(cx);
     home.serve(cx);
@@ -276,7 +276,7 @@ fn the_command_line_tool_links_reads_back_current_and_refuses_a_real_file(cx: &m
     assert_eq!(
         alert.body,
         format!(
-            "agtermctl was linked into {}. Open a new terminal and run “agtermctl --help”. {} is not on your PATH yet: \
+            "ngtermctl was linked into {}. Open a new terminal and run “ngtermctl --help”. {} is not on your PATH yet: \
              add it in your shell's startup file.",
             link.display(),
             link.parent().unwrap().display()
@@ -293,7 +293,7 @@ fn the_command_line_tool_links_reads_back_current_and_refuses_a_real_file(cx: &m
     assert_eq!(
         shown(cx).body,
         format!(
-            "agtermctl was linked into {}. Open a new terminal and run “agtermctl --help”.",
+            "ngtermctl was linked into {}. Open a new terminal and run “ngtermctl --help”.",
             link.display()
         )
     );
@@ -303,10 +303,10 @@ fn the_command_line_tool_links_reads_back_current_and_refuses_a_real_file(cx: &m
     // removed by the user, then linked again; an earlier build's link is replaced
     fs::remove_file(&link).unwrap();
     assert_eq!(home.cli_status(), LinkStatus::Absent);
-    symlink("/an/old/build/agtermctl", &link).unwrap();
+    symlink("/an/old/build/ngtermctl", &link).unwrap();
     assert_eq!(
         home.cli_status(),
-        LinkStatus::OtherLink("/an/old/build/agtermctl".into())
+        LinkStatus::OtherLink("/an/old/build/ngtermctl".into())
     );
     start(cx, run_cli);
     press(cx, "OK");
@@ -343,7 +343,7 @@ fn the_hooks_ask_for_the_opencode_version_and_move_between_its_plugins(cx: &mut 
 
 fn hooks_with_opencode_v1(cx: &mut VisualTestContext, home: &Home) {
     let v1 = home.path(".config/opencode/plugins/agterm-status.js");
-    let script_dir = home.path(".config/agterm/agent-status");
+    let script_dir = home.path(".config/ngterm/agent-status");
     start(cx, run_hooks);
     assert_eq!(shown(cx), opencode_chooser(), "the probe could not tell the version");
     assert!(!script_dir.exists(), "nothing is written before the answer");
@@ -521,7 +521,7 @@ fn run_picked_hooks(window: AnyWindowHandle, cx: &mut App) {
 #[gpui_kit::test]
 fn the_welcome_runs_the_skill_then_the_hooks_after_its_alert(cx: &mut TestAppContext) {
     let home = Home::new();
-    let script_dir = home.path(".config/agterm/agent-status");
+    let script_dir = home.path(".config/ngterm/agent-status");
     let cx = host(cx);
     home.serve(cx);
 
@@ -529,7 +529,7 @@ fn the_welcome_runs_the_skill_then_the_hooks_after_its_alert(cx: &mut TestAppCon
     cx.run_until_parked();
     assert_eq!(shown(cx).heading, "Agent Skill Installed");
     assert!(
-        home.path(".claude/skills/agterm/SKILL.md").is_file(),
+        home.path(".claude/skills/ngterm/SKILL.md").is_file(),
         "Claude Code's when no agent is set up"
     );
     assert!(!script_dir.exists(), "the hooks wait for the skill's alert");
@@ -636,10 +636,10 @@ fn the_installers_read_home_and_xdg_config_home_from_the_process() {
         .unwrap();
     assert!(status.success(), "the child's installs failed");
     assert!(
-        home.join(".codex/skills/agterm/SKILL.md").is_file(),
+        home.join(".codex/skills/ngterm/SKILL.md").is_file(),
         "the skill in $HOME"
     );
-    assert!(home.join(".config/agterm/agent-status").join(WRAPPER_NAME).is_file());
+    assert!(home.join(".config/ngterm/agent-status").join(WRAPPER_NAME).is_file());
     assert!(home.join(".codex/config.toml").is_file(), "Codex wired in $HOME");
     assert!(
         xdg.join("opencode/plugins/agterm-v2/tui.js").is_file(),
@@ -665,7 +665,7 @@ fn child_installs_into_the_process_home(cx: &mut TestAppContext) {
     assert!(
         skill
             .body
-            .contains(&format!("  • Codex: {}", home.join(".codex/skills/agterm").display())),
+            .contains(&format!("  • Codex: {}", home.join(".codex/skills/ngterm").display())),
         "{}",
         skill.body
     );

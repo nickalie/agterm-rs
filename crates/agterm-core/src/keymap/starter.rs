@@ -12,9 +12,9 @@ use super::keybind::{Chord, parse_keybind};
 
 /// The file's head: the three verbs, their rules and examples.
 const STARTER_HEAD: &str = r#"# agterm keymap — a kitty-flavored config for rebinding built-in shortcuts and defining
-# custom shell commands. Edit this file and run File ▸ Reload Keymap (or `agtermctl keymap
+# custom shell commands. Edit this file and run File ▸ Reload Keymap (or `ngtermctl keymap
 # reload`) to apply. Blank lines and lines starting with `#` are ignored. A line that is
-# rejected or skipped is reported in Settings ▸ Key Mapping and by `agtermctl keymap list`.
+# rejected or skipped is reported in Settings ▸ Key Mapping and by `ngtermctl keymap list`.
 #
 # Three verbs:
 #
@@ -42,7 +42,7 @@ const STARTER_HEAD: &str = r#"# agterm keymap — a kitty-flavored config for re
 #       launches (GUI apps, scripts), NOT a bare interactive or full-screen TUI program, which
 #       has no TTY and exits at once. Launch a TUI over a session through an overlay terminal,
 #       as the Lazygit example does. The line resolves binaries against the app's own `PATH`
-#       plus the directory of the bundled agtermctl, so a bare agtermctl works; anything else
+#       plus the directory of the bundled ngtermctl, so a bare ngtermctl works; anything else
 #       your shell profile adds may not, so give it an absolute path or wrap the line in
 #       `$SHELL -lc '...'` — `$SHELL -ilc '...'` when that PATH comes from an interactive rc
 #       file, which -lc does not read. The program an overlay or scratch terminal runs gets the
@@ -50,7 +50,7 @@ const STARTER_HEAD: &str = r#"# agterm keymap — a kitty-flavored config for re
 #       Examples:
 #
 #           command "Open folder"  cmd+shift+e  xdg-open "$AGT_SESSION_PWD"
-#           command "Lazygit"      ctrl+a>g     agtermctl session overlay open 'sh -lc lazygit' --target "$AGT_SESSION_ID" --socket "$AGT_SOCKET"
+#           command "Lazygit"      ctrl+a>g     ngtermctl session overlay open 'sh -lc lazygit' --target "$AGT_SESSION_ID" --socket "$AGT_SOCKET"
 #           command "Deploy"                    ./deploy.sh
 #
 #   global-hotkey <chord>
@@ -64,7 +64,7 @@ const STARTER_HEAD: &str = r#"# agterm keymap — a kitty-flavored config for re
 #       it survives a layout switch is up to the desktop, and which may ask you to confirm or
 #       change it. A Wayland compositor without that portal gives an app no system-wide key
 #       at all: there, bind a custom shortcut in the desktop's own settings that runs
-#       `agtermctl quick toggle` instead. The desktop owns the chord, so it takes no
+#       `ngtermctl quick toggle` instead. The desktop owns the chord, so it takes no
 #       part in the collision rules above, and it WINS, agterm included, so a chord shared
 #       with a menu action fires this and the menu binding never sees it. There is no
 #       default: registering a chord takes it from every other application. Spending it on

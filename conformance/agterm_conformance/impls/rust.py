@@ -53,7 +53,9 @@ def profile_from_version(result: Mapping[str, Any] | None) -> Profile:
 
 class RustAdapter(Adapter):
     name = "rust"
-    # `live.*`, `agtermctl live`, `result.live`, `backedByLive`: upstream's `zmx` group renamed
+    app_dir_name = "ngterm"
+    ctl_name = "ngtermctl"
+    # `live.*`, `ngtermctl live`, `result.live`, `backedByLive`: upstream's `zmx` group renamed
     # (conformance/docs/rust-build.md > The `live` group).
     vocabulary = LIVE
     needs_app_id = sys.platform.startswith("linux")
@@ -117,5 +119,5 @@ class RustAdapter(Adapter):
     def default_ctl(self) -> Path | None:
         if self.bin is None:
             return None
-        sibling = Path(self.bin).parent / "agtermctl"
+        sibling = Path(self.bin).parent / self.ctl_name
         return sibling if sibling.exists() else None

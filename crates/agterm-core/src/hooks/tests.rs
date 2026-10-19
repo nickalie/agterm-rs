@@ -294,7 +294,7 @@ fn full_event() -> ControlEvent {
 
 #[test]
 fn the_environment_carries_every_variable_from_the_event() {
-    let environment = hook_environment(&full_event(), "/run/agterm.sock");
+    let environment = hook_environment(&full_event(), "/run/ngterm.sock");
     let expected = [
         ("AGT_EVENT_KIND", "status"),
         ("AGT_EVENT_STATUS", "blocked"),
@@ -302,7 +302,7 @@ fn the_environment_carries_every_variable_from_the_event() {
         ("AGT_SESSION_ID", "SESS"),
         ("AGT_WORKSPACE_ID", "WORK"),
         ("AGT_WINDOW_ID", "WIN"),
-        ("AGT_SOCKET", "/run/agterm.sock"),
+        ("AGT_SOCKET", "/run/ngterm.sock"),
     ];
     assert_eq!(
         environment,

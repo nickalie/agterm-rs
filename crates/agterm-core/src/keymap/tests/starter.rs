@@ -18,7 +18,7 @@ fn the_starter_keymap_is_commented_and_documents_the_verbs() {
         "single chord OR a leader like `ctrl+a>g`",
         "`cmd+shift+l`, `ctrl+\\``",
         "command \"Open folder\"  cmd+shift+e  xdg-open \"$AGT_SESSION_PWD\"",
-        "command \"Lazygit\"      ctrl+a>g     agtermctl session overlay open 'sh -lc lazygit' --target \
+        "command \"Lazygit\"      ctrl+a>g     ngtermctl session overlay open 'sh -lc lazygit' --target \
          \"$AGT_SESSION_ID\" --socket \"$AGT_SOCKET\"",
         "command \"Deploy\"                    ./deploy.sh",
         "ctrl+shift+p",
@@ -75,7 +75,7 @@ fn the_starter_keymap_is_commented_and_documents_the_verbs() {
         "on Wayland through the desktop's global shortcuts portal (KDE Plasma, GNOME 48 and later, Hyprland), which \
          gets the chord by key name",
         "A Wayland compositor without that portal gives an app no system-wide key at all: there, bind a custom \
-         shortcut in the desktop's own settings that runs `agtermctl quick toggle` instead.",
+         shortcut in the desktop's own settings that runs `ngtermctl quick toggle` instead.",
     ] {
         assert!(paragraph.contains(said), "the starter says {said:?}");
     }

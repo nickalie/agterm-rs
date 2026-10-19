@@ -1,4 +1,4 @@
-//! `agtermctl workspace ...` (`agtermctlKit/WorkspaceCommands.swift` `Workspace`). Each subcommand takes its own
+//! `ngtermctl workspace ...` (`agtermctlKit/WorkspaceCommands.swift` `Workspace`). Each subcommand takes its own
 //! arguments first, then `--target` where it addresses a workspace, then [`ClientOptions`], the order its help and
 //! usage line list them in. `go` and `filter` take no `--target`: one steps from the current workspace, the other
 //! flips the whole window's filter.
@@ -9,7 +9,7 @@ use agterm_proto::{Args, Command, Request};
 
 use crate::{BasicOptions, ClientOptions, RequestCommand, TargetOptions};
 
-/// `agtermctl workspace <subcommand>`.
+/// `ngtermctl workspace <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Workspace commands.",
@@ -68,7 +68,7 @@ fn workspace_request(
     }
 }
 
-/// `agtermctl workspace new [<name>] [--collapsed]`: echoes the new workspace's id.
+/// `ngtermctl workspace new [<name>] [--collapsed]`: echoes the new workspace's id.
 #[derive(Debug, clap::Args)]
 #[command(about = "Create a workspace.")]
 pub struct New {
@@ -102,7 +102,7 @@ impl RequestCommand for New {
     }
 }
 
-/// `agtermctl workspace rename <name>`.
+/// `ngtermctl workspace rename <name>`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Rename a workspace.")]
 pub struct Rename {
@@ -157,31 +157,31 @@ macro_rules! targeted_command {
 }
 
 targeted_command!(
-    /// `agtermctl workspace delete`: the last workspace is refused by the app.
+    /// `ngtermctl workspace delete`: the last workspace is refused by the app.
     Delete,
     WorkspaceCmd::Delete,
     "Delete a workspace."
 );
 targeted_command!(
-    /// `agtermctl workspace select`.
+    /// `ngtermctl workspace select`.
     Select,
     WorkspaceCmd::Select,
     "Select a workspace."
 );
 targeted_command!(
-    /// `agtermctl workspace collapse`.
+    /// `ngtermctl workspace collapse`.
     Collapse,
     WorkspaceCmd::Collapse,
     "Collapse a workspace in the sidebar tree."
 );
 targeted_command!(
-    /// `agtermctl workspace expand`.
+    /// `ngtermctl workspace expand`.
     Expand,
     WorkspaceCmd::Expand,
     "Expand a workspace in the sidebar tree."
 );
 
-/// `agtermctl workspace go --to next|prev`: steps the current workspace and selects its first session. Relative to
+/// `ngtermctl workspace go --to next|prev`: steps the current workspace and selects its first session. Relative to
 /// what is current, so it takes no `--target`, as `session go`; `move` is the verb that reorders instead.
 #[derive(Debug, clap::Args)]
 #[command(name = "go", about = "Navigate workspaces: next|prev.")]
@@ -207,7 +207,7 @@ impl RequestCommand for Go {
     }
 }
 
-/// `agtermctl workspace move --to up|down|top|bottom`.
+/// `ngtermctl workspace move --to up|down|top|bottom`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Reorder a workspace among its siblings.")]
 pub struct Move {
@@ -235,7 +235,7 @@ impl RequestCommand for Move {
     }
 }
 
-/// `agtermctl workspace focus [on|off|toggle|add]`: marks or unmarks one workspace in the sidebar's focus set; `add`
+/// `ngtermctl workspace focus [on|off|toggle|add]`: marks or unmarks one workspace in the sidebar's focus set; `add`
 /// only marks, `workspace filter on` applies the set. The accepted list, the help and the refusal all come from
 /// [`FocusMode::ALL`], so a new mode reaches each.
 #[derive(Debug, clap::Args)]
@@ -278,7 +278,7 @@ impl RequestCommand for Focus {
     }
 }
 
-/// `agtermctl workspace filter [on|off|toggle]`: turns the window's focus filter on or off, leaving the marked set
+/// `ngtermctl workspace filter [on|off|toggle]`: turns the window's focus filter on or off, leaving the marked set
 /// alone. It flips the whole window, so it takes no `--target`. The three names are spelled out, as upstream's.
 #[derive(Debug, clap::Args)]
 #[command(about = "Turn the sidebar workspace focus filter on or off (on|off|toggle).")]
@@ -320,14 +320,14 @@ mod tests {
     use crate::Agtermctl;
 
     fn parsed(argv: &[&str]) -> super::Workspace {
-        let command_line = ["agtermctl", "workspace"].iter().chain(argv).copied();
+        let command_line = ["ngtermctl", "workspace"].iter().chain(argv).copied();
         let crate::Command::Workspace(group) = Agtermctl::try_parse_from(command_line).unwrap().command else {
             panic!("not a workspace command")
         };
         group
     }
 
-    /// `agtermctl workspace <argv>` parsed and validated: the request it sends as JSON, or the validation refusal.
+    /// `ngtermctl workspace <argv>` parsed and validated: the request it sends as JSON, or the validation refusal.
     fn outcome(argv: &[&str]) -> Result<Value, String> {
         let group = parsed(argv);
         let command = group.command();
@@ -340,7 +340,7 @@ mod tests {
     }
 
     fn parses(argv: &[&str]) -> bool {
-        let command_line = ["agtermctl", "workspace"].iter().chain(argv).copied();
+        let command_line = ["ngtermctl", "workspace"].iter().chain(argv).copied();
         Agtermctl::try_parse_from(command_line).is_ok()
     }
 

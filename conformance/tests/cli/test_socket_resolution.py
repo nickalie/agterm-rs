@@ -1,4 +1,4 @@
-"""Where `agtermctl` looks for the socket: `--socket`, then `<AGTERM_STATE_DIR>/agterm.sock`, then the platform
+"""Where `agtermctl` looks for the socket: `--socket`, then `<AGTERM_STATE_DIR>/<name>.sock`, then the platform
 default. Every run here resolves to a path under the instance's temp root.
 
 The default branch runs only with HOME and the XDG/CFFIXED home variables pointed into the temp root, and only once
@@ -51,37 +51,39 @@ def test_state_dir_names_the_socket(cli, ctl):
 
 
 @pytest.mark.covers("cli:version", "behavior:cli.socket-resolution")
-def test_socket_option_wins_over_the_state_dir(cli, ctl, empty_state):
+def test_socket_option_wins_over_the_state_dir(cli, ctl, empty_state, adapter):
     version = assert_version_result(ctl.request("version"))
     env = _env(cli, AGTERM_STATE_DIR=os.fspath(empty_state))
     result = cli.local("version", "--json", "--socket", os.fspath(cli.instance.socket), env=env)
     assert (result.returncode, json.loads(result.stdout)) == (0, {"ok": True, "result": version})
-    _unreachable(cli.local("version", env=env), empty_state / "agterm.sock")
+    _unreachable(cli.local("version", env=env), empty_state / f"{adapter.app_dir_name}.sock")
 
 
 @pytest.mark.covers("behavior:cli.socket-resolution")
-def test_agterm_socket_variable_is_not_read(cli, empty_state):
+def test_agterm_socket_variable_is_not_read(cli, empty_state, adapter):
     # A pane's AGTERM_SOCKET (and the app's own AGTERM_CONTROL_SOCKET) names the live instance's socket; the CLI
     # resolves from AGTERM_STATE_DIR alone, so neither can route a command anywhere.
     socket_path = os.fspath(cli.instance.socket)
     env = _env(
         cli, AGTERM_STATE_DIR=os.fspath(empty_state), AGTERM_SOCKET=socket_path, AGTERM_CONTROL_SOCKET=socket_path
     )
-    _unreachable(cli.local("version", env=env), empty_state / "agterm.sock")
+    _unreachable(cli.local("version", env=env), empty_state / f"{adapter.app_dir_name}.sock")
 
 
-def _default_socket(env):
-    """The platform default the reference CLI resolves without AGTERM_STATE_DIR, or None when unknown here.
+def _default_socket(env, name):
+    """The platform default the CLI resolves without AGTERM_STATE_DIR, or None when unknown here:
+    `<base>/<name>/<name>.sock`, the name being the implementation's (`agterm` upstream and in the fork, `ngterm` in
+    the Rust build).
 
     Linux (the fork): Foundation's application support directory, `$XDG_DATA_HOME` when it is absolute.
     macOS (upstream): `$HOME/Library/Application Support`.
     """
     if sys.platform.startswith("linux"):
         data = env.get("XDG_DATA_HOME", "")
-        return Path(data) / "agterm" / "agterm.sock" if os.path.isabs(data) else None
+        return Path(data) / name / f"{name}.sock" if os.path.isabs(data) else None
     if sys.platform == "darwin":
         home = env.get("HOME", "")
-        return Path(home) / "Library/Application Support/agterm/agterm.sock" if os.path.isabs(home) else None
+        return Path(home) / "Library/Application Support" / name / f"{name}.sock" if os.path.isabs(home) else None
     return None
 
 
@@ -119,7 +121,7 @@ class StandIn:
 
 
 @pytest.mark.covers("cli:version", "behavior:cli.socket-resolution")
-def test_default_socket_without_a_state_dir(cli):
+def test_default_socket_without_a_state_dir(cli, adapter):
     home = cli.instance.home
     env = _env(
         cli,
@@ -130,7 +132,7 @@ def test_default_socket_without_a_state_dir(cli):
         XDG_STATE_HOME=os.fspath(home / ".local/state"),
         XDG_CACHE_HOME=os.fspath(home / ".cache"),
     )
-    default = _default_socket(env)
+    default = _default_socket(env, adapter.app_dir_name)
     if default is None:
         pytest.skip(f"no known default socket rule for {sys.platform}")
     try:

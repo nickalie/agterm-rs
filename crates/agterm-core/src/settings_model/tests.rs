@@ -66,6 +66,7 @@ fn a_controls_default_value_is_stored_as_nil() {
         general(GeneralChange::WorkspaceRowClickExpands(true)),
         general(GeneralChange::NewSessionDirectory(NewSessionDirectory::Home)),
         general(GeneralChange::NewSessionPlacement(NewSessionPlacementSetting::End)),
+        general(GeneralChange::SessionNameFromTerminalTitle(false)),
         general(GeneralChange::ConfirmCloseSession(false)),
         general(GeneralChange::CloseGraceUndo(true)),
         general(GeneralChange::FlaggedViewLayout(FlaggedViewLayout::Flat)),
@@ -102,6 +103,7 @@ fn a_non_default_value_is_stored_raw() {
         general(GeneralChange::NewSessionPlacement(
             NewSessionPlacementSetting::AfterCurrent,
         )),
+        general(GeneralChange::SessionNameFromTerminalTitle(true)),
         general(GeneralChange::ConfirmCloseSession(true)),
         general(GeneralChange::CloseGraceUndo(false)),
         general(GeneralChange::FlaggedViewLayout(FlaggedViewLayout::Tree)),
@@ -114,6 +116,7 @@ fn a_non_default_value_is_stored_raw() {
     assert_eq!(settings.link_open_mode.as_deref(), Some("overlay"));
     assert_eq!(settings.new_session_directory.as_deref(), Some("currentSession"));
     assert_eq!(settings.new_session_placement.as_deref(), Some("afterCurrent"));
+    assert_eq!(settings.session_name_from_terminal_title, Some(true));
     assert_eq!(settings.confirm_close_session, Some(true));
     assert_eq!(settings.close_grace_undo_enabled, Some(false));
     assert_eq!(settings.flagged_view_layout.as_deref(), Some("tree"));
@@ -455,6 +458,30 @@ fn changes_round_trip_through_settings_json_minimally() {
     assert!(!text.contains("hiddenInterfaceElements"), "{text}");
     assert!(text.contains("\"newSessionCustomDirectory\" : \"\\/work\""), "{text}");
     assert_eq!(SettingsStore::new(dir.path()).load(), migrated(core.settings()));
+}
+
+#[test]
+fn the_session_naming_mirror_follows_the_launch_settings_and_every_change() {
+    use crate::model::naming::names_from_terminal_title;
+    let dir = tempfile::tempdir().unwrap();
+    SettingsStore::new(dir.path())
+        .save(&AppSettings {
+            session_name_from_terminal_title: Some(true),
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let mut core = persisted_core(dir.path());
+    assert!(names_from_terminal_title(), "the launch settings reach the mirror");
+    assert!(core.change_settings(general(GeneralChange::SessionNameFromTerminalTitle(false))));
+    assert!(!names_from_terminal_title());
+    assert_eq!(
+        SettingsStore::new(dir.path()).load().session_name_from_terminal_title,
+        None
+    );
+    assert!(core.change_settings(general(GeneralChange::SessionNameFromTerminalTitle(true))));
+    assert!(names_from_terminal_title());
+    let text = std::fs::read_to_string(SettingsStore::new(dir.path()).path()).unwrap();
+    assert!(text.contains("\"sessionNameFromTerminalTitle\" : true"), "{text}");
 }
 
 #[test]

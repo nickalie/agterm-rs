@@ -1,4 +1,4 @@
-//! `agtermctl events` (`agtermctlKit/EventCommands.swift` `Events`): `events.read` is one request per page, so the
+//! `ngtermctl events` (`agtermctlKit/EventCommands.swift` `Events`): `events.read` is one request per page, so the
 //! command polls. The first read carries no cursor (or the one given with `--run`/`--after`), every later one the
 //! cursor of the page before; each event prints as it arrives, as one JSON line or `EventFormatter.human`'s line.
 
@@ -25,7 +25,7 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(4);
 /// that is gone.
 const RETRY_BUDGET: Duration = Duration::from_secs(30);
 
-/// `agtermctl events [--socket <socket>] [--json] [--kind <kind> ...] [--run <run>] [--after <after>]
+/// `ngtermctl events [--socket <socket>] [--json] [--kind <kind> ...] [--run <run>] [--after <after>]
 /// [--limit <limit>]`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Continuously print control events.")]
@@ -384,7 +384,7 @@ mod tests {
 
     fn parsed(argv: &[&str]) -> Result<Events, String> {
         use clap::Parser;
-        let command_line = ["agtermctl", "events"].iter().chain(argv).copied();
+        let command_line = ["ngtermctl", "events"].iter().chain(argv).copied();
         let parsed = crate::Agtermctl::try_parse_from(command_line).map_err(|error| error.to_string())?;
         let crate::Command::Events(events) = parsed.command else {
             panic!("not events")
@@ -699,7 +699,7 @@ mod tests {
         let fatal = [
             (parsed(&[]).unwrap(), refused()),
             (cursored(), missing),
-            (cursored(), ClientError::new("no response from /tmp/agterm.sock")),
+            (cursored(), ClientError::new("no response from /tmp/ngterm.sock")),
         ];
         for (command, error) in fatal {
             let mut fake = Fake::new([Err(error.clone())]);

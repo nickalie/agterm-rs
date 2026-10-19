@@ -2,7 +2,7 @@
 //! `agtermctlKit/StreamBridge.swift`): the request goes out, its one ordinary reply comes back, and after an `ok`
 //! everything is copied both ways untouched.
 //!
-//! `agtermctl live present` runs it on the origin under the viewer's ssh, so the output is what the viewer parses:
+//! `ngtermctl live present` runs it on the origin under the viewer's ssh, so the output is what the viewer parses:
 //! only frames are ever written to it.
 
 use std::fs::File;
@@ -73,7 +73,7 @@ impl StreamBridge {
         let cancel_fd = cancel.as_raw_fd();
         thread::scope(|scope| {
             let upstream = thread::Builder::new()
-                .name("agtermctl.stream.upstream".to_owned())
+                .name("ngtermctl.stream.upstream".to_owned())
                 .spawn_scoped(scope, move || copy_until_cancelled(input, socket, cancel_fd));
             copy(socket, output);
             let mut wake = wake;

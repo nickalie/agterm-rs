@@ -1,4 +1,4 @@
-//! What `agtermctl` prints for a reply and how it exits, as upstream's `SocketClient.printResponse`/`formatResponse`
+//! What `ngtermctl` prints for a reply and how it exits, as upstream's `SocketClient.printResponse`/`formatResponse`
 //! (`agtermctlKit/SocketClient.swift`) and swift-argument-parser's reporting of an error thrown from `run()`:
 //!
 //! - a reply under `--json`: the server's line unchanged on stdout;

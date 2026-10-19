@@ -1,4 +1,4 @@
-//! `agtermctl session overlay run-job <job>` (`agtermctlKit/OverlayRunJob.swift`): the helper that supervises one
+//! `ngtermctl session overlay run-job <job>` (`agtermctlKit/OverlayRunJob.swift`): the helper that supervises one
 //! remote overlay job on the origin. It claims the job over the app's socket (`session.overlay.job.run`), runs the
 //! program under the pty it inherited from the viewer's ssh, reports how it ended, and stops it when cancelled.
 //! Everything that decides the outcome is [`JobRunner`]; the command only wires signals.
@@ -250,7 +250,7 @@ impl JobRunner {
         let socket = Arc::clone(&self.socket);
         let shared = Arc::clone(&self.shared);
         thread::Builder::new()
-            .name("agtermctl.run-job.listen".to_owned())
+            .name("ngtermctl.run-job.listen".to_owned())
             .spawn(move || {
                 while let Some(line) = client::read_socket_line(&socket, MAX_FRAME_BYTES) {
                     if matches!(OverlayJobFrame::parse(&line), Ok(OverlayJobFrame::Cancel)) {
@@ -399,7 +399,7 @@ fn route_signals(canceler: Canceler) {
     // SAFETY: changes only this thread's mask, inherited by the threads it starts next.
     unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &raw const stops, std::ptr::null_mut()) };
     let waiter = thread::Builder::new()
-        .name("agtermctl.run-job.signals".to_owned())
+        .name("ngtermctl.run-job.signals".to_owned())
         .spawn(move || {
             loop {
                 let mut received: libc::c_int = 0;
@@ -413,7 +413,7 @@ fn route_signals(canceler: Canceler) {
     drop(waiter);
 }
 
-/// `agtermctl session overlay run-job <job>`.
+/// `ngtermctl session overlay run-job <job>`.
 #[derive(Debug, clap::Args)]
 #[command(
     name = "run-job",

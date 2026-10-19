@@ -5,7 +5,8 @@
 //!
 //! Upstream checks that an undo brings back the same object with `===`; here the same object is the one still holding
 //! the fake surface installed before the close, never torn down. Grace timers do not run here: the frontend arms them,
-//! so a test finalizes the record itself. The ask, HUD, launch-pacer and remote-row cases wait for those subsystems.
+//! so a test finalizes the record itself. The ask, HUD and remote-row cases wait for those subsystems; the launch
+//! pacer's have no counterpart, a lazy restore leaving it nothing to pace.
 
 use std::collections::BTreeSet;
 

@@ -2,7 +2,7 @@
 //! per-window state and the app identity on its top level. Field names, order and optionality follow upstream's
 //! `Codable` structs, which the catalog's `fields` list in the same order; an optional field is omitted when unset.
 //!
-//! The nodes decode as upstream's do, so `agtermctl` can render a tree from a newer or older server: required fields
+//! The nodes decode as upstream's do, so `ngtermctl` can render a tree from a newer or older server: required fields
 //! are the ones upstream decodes without a fallback, and an absent flag upstream defaults reads as that default.
 
 use serde::{Deserialize, Serialize};

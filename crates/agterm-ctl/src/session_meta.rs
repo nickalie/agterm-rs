@@ -14,7 +14,7 @@ fn shapes_phrase() -> String {
     StatusShape::ALL.map(StatusShape::wire_name).join(", ")
 }
 
-/// `agtermctl session status <state>`: the state and its overrides are the server's to check, the spellings the
+/// `ngtermctl session status <state>`: the state and its overrides are the server's to check, the spellings the
 /// CLI's. The `--sound` help is upstream's, its macOS sound names included.
 #[derive(Debug, clap::Args)]
 #[command(about = "Set a session's agent status indicator.")]
@@ -112,7 +112,7 @@ impl RequestCommand for Status {
     }
 }
 
-/// `agtermctl session flag [on|off|toggle|clear]`.
+/// `ngtermctl session flag [on|off|toggle|clear]`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Flag a session for the flagged working-set view (on|off|toggle|clear).")]
 pub struct Flag {
@@ -156,7 +156,7 @@ impl RequestCommand for Flag {
     }
 }
 
-/// `agtermctl session context <text>|--clear`: exactly one form. The text goes as typed; trimming and its limits are
+/// `ngtermctl session context <text>|--clear`: exactly one form. The text goes as typed; trimming and its limits are
 /// the server's.
 #[derive(Debug, clap::Args)]
 #[command(
@@ -209,7 +209,7 @@ impl RequestCommand for Context {
     }
 }
 
-/// `agtermctl session seen`.
+/// `ngtermctl session seen`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Clear a session's unseen-notification badge without changing the selection or focus (idempotent).")]
 pub struct Seen {
@@ -239,7 +239,7 @@ mod tests {
     use crate::Agtermctl;
 
     fn parsed(argv: &[&str]) -> crate::session::Session {
-        let command_line = ["agtermctl", "session"].iter().chain(argv).copied();
+        let command_line = ["ngtermctl", "session"].iter().chain(argv).copied();
         let crate::Command::Session(group) = Agtermctl::try_parse_from(command_line).unwrap().command else {
             panic!("not a session command")
         };

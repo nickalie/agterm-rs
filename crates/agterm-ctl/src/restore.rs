@@ -1,4 +1,4 @@
-//! `agtermctl restore capture|clear|mode` (`agtermctlKit/MiscCommands.swift` `Restore`): the captured foreground
+//! `ngtermctl restore capture|clear|mode` (`agtermctlKit/MiscCommands.swift` `Restore`): the captured foreground
 //! commands and the restore-mode policy. All three are app-global, so none takes `--window`. `capture` prints its own
 //! `result.text`, `mode` the policy through [`crate::output`]'s `restore` branch.
 
@@ -9,7 +9,7 @@ use agterm_proto::{Args, Command, Request};
 
 use crate::{BasicOptions, Failure, RequestCommand};
 
-/// `agtermctl restore <subcommand>`.
+/// `ngtermctl restore <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Restore-running-command commands.",
@@ -59,7 +59,7 @@ fn restore_request(cmd: RestoreCmd, args: Option<Args>) -> Request {
     }
 }
 
-/// `agtermctl restore capture`: app-global, like `restore clear`.
+/// `ngtermctl restore capture`: app-global, like `restore clear`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Capture every pane's running command now, so a forced exit restores it.",
@@ -94,14 +94,14 @@ impl RequestCommand for Capture {
     }
 }
 
-/// `agtermctl restore clear`: clears every open window, so no `--window`.
+/// `ngtermctl restore clear`: clears every open window, so no `--window`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Clear every session's saved foreground command so the next restart restores plain shells.",
     long_about = "This is app-global and CAPTURE-scoped: it drops the foreground commands agterm captured at quit, \
                   across every open window, and leaves per-session restore-command overrides alone.\n\
                   \n\
-                  Not to be confused with `agtermctl session restore --clear`, which is per-session and \
+                  Not to be confused with `ngtermctl session restore --clear`, which is per-session and \
                   OVERRIDE-scoped: it drops one pane's pinned command so that pane goes back to auto-capture."
 )]
 pub struct Clear {
@@ -119,7 +119,7 @@ impl RequestCommand for Clear {
     }
 }
 
-/// `agtermctl restore mode [none|rerun|live]`: no mode reads the policy.
+/// `ngtermctl restore mode [none|rerun|live]`: no mode reads the policy.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Read or set what a restart does with your sessions.",
@@ -173,9 +173,9 @@ mod tests {
 
     use crate::{Agtermctl, Command as Cli};
 
-    /// `agtermctl restore <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
+    /// `ngtermctl restore <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
     fn outcome(argv: &[&str]) -> Result<Value, String> {
-        let line = ["agtermctl", "restore"].iter().chain(argv).copied();
+        let line = ["ngtermctl", "restore"].iter().chain(argv).copied();
         let parsed = Agtermctl::try_parse_from(line).map_err(|error| error.to_string())?;
         let Cli::Restore(group) = parsed.command else {
             panic!("not a restore command")

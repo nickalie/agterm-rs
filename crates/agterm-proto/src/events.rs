@@ -131,7 +131,7 @@ mod tests {
 
     use super::*;
 
-    /// `agtermctl events --json` re-encodes what it read: a timestamp must come back as the same double, which
+    /// `ngtermctl events --json` re-encodes what it read: a timestamp must come back as the same double, which
     /// `serde_json`'s parser only guarantees with its `float_roundtrip` feature.
     #[test]
     fn a_timestamp_survives_a_decode_and_reencode_bit_for_bit() {

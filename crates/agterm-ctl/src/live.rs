@@ -1,4 +1,4 @@
-//! `agtermctl live list|screen|prune|kill|reset|tree|attach|present` (`agtermctlKit/ZmxCommands.swift`, upstream's
+//! `ngtermctl live list|screen|prune|kill|reset|tree|attach|present` (`agtermctlKit/ZmxCommands.swift`, upstream's
 //! `agtermctl zmx`, renamed: conformance/docs/rust-build.md): the daemons behind live sessions, and attaching them
 //! from another machine.
 //! Every one needs a running agterm, the only party that can join its windows, pending closes and saved snapshots
@@ -13,7 +13,7 @@ use agterm_proto::{Args, Command, ControlLiveEntry, ControlLiveInventory, Reques
 use crate::output::format_restore_status;
 use crate::{BasicOptions, Failure, RequestCommand};
 
-/// `agtermctl live <subcommand>`.
+/// `ngtermctl live <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Inspect and manage the daemons behind live sessions.",
@@ -78,7 +78,7 @@ fn live_request(cmd: LiveCmd, target: Option<String>, args: Option<Args>) -> Req
     }
 }
 
-/// `agtermctl live list`.
+/// `ngtermctl live list`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "List every daemon and the pane that claims it.",
@@ -107,7 +107,7 @@ impl RequestCommand for List {
     }
 }
 
-/// `agtermctl live screen NAME [--all | --lines N]`.
+/// `ngtermctl live screen NAME [--all | --lines N]`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Print a daemon's screen as plain text, whether or not a window shows its pane.",
@@ -158,7 +158,7 @@ impl RequestCommand for Screen {
     }
 }
 
-/// `agtermctl live prune`.
+/// `ngtermctl live prune`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Kill the daemons no pane claims and nothing is attached to.",
@@ -188,7 +188,7 @@ impl RequestCommand for Prune {
     }
 }
 
-/// `agtermctl live kill --pane P --force --target S [--window W]`.
+/// `ngtermctl live kill --pane P --force --target S [--window W]`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Destroy one pane's daemon and the process running in it.",
@@ -202,7 +202,7 @@ impl RequestCommand for Prune {
                   undo, and Reopen Closed Item brings the session back with a fresh shell rather than the process that \
                   was running.\n\
                   \n\
-                  Killing the daemon of the pane you are typing in can kill this agtermctl before it reads the reply, \
+                  Killing the daemon of the pane you are typing in can kill this ngtermctl before it reads the reply, \
                   the same way \"session close\" on your own session can.\n\
                   \n\
                   It refuses a daemon that is already gone, one the session host could not read (forcing that can \
@@ -261,7 +261,7 @@ impl RequestCommand for Kill {
     }
 }
 
-/// `agtermctl live reset --force`.
+/// `ngtermctl live reset --force`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Reset live sessions that are unsupervised or predate the recorded live-session update, then reopen.",
@@ -273,7 +273,7 @@ impl RequestCommand for Kill {
                   \n\
                   agterm quits and reopens itself right after answering. Running work in the affected sessions stops, \
                   and agent conversations may need to be resumed by hand. Run from inside one of those sessions, this \
-                  kills the shell this agtermctl runs in.\n\
+                  kills the shell this ngtermctl runs in.\n\
                   \n\
                   It refuses outside Live sessions mode, when a mode change is waiting for a restart, when the pane \
                   inventory is incomplete, and when nothing needs resetting. The next launch re-checks every session \
@@ -379,7 +379,7 @@ fn short_id(id: &str) -> &str {
     id.char_indices().nth(8).map_or(id, |(end, _)| &id[..end])
 }
 
-/// `agtermctl live tree [HOST]`.
+/// `ngtermctl live tree [HOST]`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "List the sessions that can be attached to, here or on another Mac.",
@@ -421,7 +421,7 @@ impl RequestCommand for Tree {
     }
 }
 
-/// `agtermctl live attach HOST SESSION [--window]`.
+/// `ngtermctl live attach HOST SESSION [--window]`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Attach to a session on another Mac, as a session here.",
@@ -472,7 +472,7 @@ impl RequestCommand for Attach {
     }
 }
 
-/// `agtermctl live present SESSION`.
+/// `ngtermctl live present SESSION`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Carry a presentation stream for one session between stdin/stdout and this app.",

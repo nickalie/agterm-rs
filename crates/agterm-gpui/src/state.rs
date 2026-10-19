@@ -351,13 +351,13 @@ impl AppState {
         }
     }
 
-    /// A session pane's terminal is ready to spawn: it spawns now with its seed, or once its paced launch turn comes
+    /// A session pane's terminal is ready to spawn: it spawns now with its seed, or once its dormant session wakes
     /// (see [`Core::request_pane_spawn`]).
     pub fn pane_spawn_ready(&mut self, session: Uuid, token: &str) {
         if self.quitting {
             return;
         }
-        if let Some(seed) = self.core.request_pane_spawn(session, token, Instant::now()) {
+        if let Some(seed) = self.core.request_pane_spawn(session, token) {
             self.seeded.push(PaneSpawn {
                 session,
                 token: token.to_owned(),
@@ -367,42 +367,15 @@ impl AppState {
         self.settle();
     }
 
-    /// The panes to spawn now (the GTK build's `spawn_paced_panes`): those seeded at their ask, then the launch's paced
-    /// grants, every window's selected session jumping the queue (it is on screen); one timer is armed for the next
-    /// paced grant.
+    /// The panes to spawn now (the GTK build's `spawn_paced_panes`): those seeded at their ask, then the grants of every
+    /// dormant session now on screen ([`Core::wake_shown_sessions`]) or woken by a command.
     pub fn take_spawns(&mut self) -> Vec<PaneSpawn> {
         let mut spawns = std::mem::take(&mut self.seeded);
         if self.quitting {
             return spawns;
         }
-        let now = Instant::now();
-        let library = self.core.library();
-        let selected: Vec<Uuid> = library
-            .open_ids()
-            .into_iter()
-            .filter_map(|id| {
-                library
-                    .store(id)
-                    .and_then(agterm_core::model::AppStore::selected_session_id)
-            })
-            .collect();
-        for session in selected {
-            self.core.expedite_pane_spawns(session, now);
-        }
+        self.core.wake_shown_sessions();
         spawns.extend(self.core.take_spawn_grants());
-        if let Some(delay) = self.core.take_spawn_wake(now)
-            && let Some(main_loop) = self.poster.upgrade()
-        {
-            let task = Box::new(|state: &mut Self| {
-                if !state.quitting {
-                    state.core.spawn_wake(Instant::now());
-                    state.settle();
-                }
-            });
-            if main_loop.post_after(delay, task).is_err() {
-                tracing::debug!("launch spawn wake dropped: the loop is closed");
-            }
-        }
         spawns
     }
 

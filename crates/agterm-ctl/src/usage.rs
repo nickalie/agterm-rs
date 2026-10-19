@@ -5,7 +5,7 @@
 //!
 //! - a usage error: `Error: <message>`, a `Help:  <argument>  <abstract>` line for an argument-specific error, the
 //!   `Usage:` line spelling every option, and `  See '<command> --help' for more information.`, on stderr, exit 64;
-//! - help, asked for (`-h`, `--help`, `agtermctl help <command>`) or shown for a command that needs a subcommand:
+//! - help, asked for (`-h`, `--help`, `ngtermctl help <command>`) or shown for a command that needs a subcommand:
 //!   `OVERVIEW:`, `USAGE:`, then `ARGUMENTS:`, `OPTIONS:` (ending in `-h, --help`) and `SUBCOMMANDS:`, wrapped to the
 //!   terminal width, on stdout, exit 0.
 //!
@@ -193,7 +193,7 @@ fn help_command() -> Command {
         )
 }
 
-/// `agtermctl help <args>`, parsed as the library parses its help command: options and `--` first, then the
+/// `ngtermctl help <args>`, parsed as the library parses its help command: options and `--` first, then the
 /// command names resolve the stack (from the first that names no subcommand on, they are ignored). An option the
 /// help command does not take is a usage error.
 fn help_command_exit(root: &Command, args: &[String], width: usize) -> ParseExit {
@@ -260,7 +260,7 @@ impl<'c> Stack<'c> {
         self.path.iter().skip(1).map(|command| command.get_name()).collect()
     }
 
-    /// `agtermctl version`.
+    /// `ngtermctl version`.
     fn names(&self) -> String {
         self.path
             .iter()
@@ -668,7 +668,7 @@ fn possible_values(arg: &Arg) -> Vec<String> {
 
 // MARK: - usage and help (`UsageGenerator`, `HelpGenerator`)
 
-/// `agtermctl version [--socket <socket>] [--json]`; a command with subcommands ends in `<subcommand>`.
+/// `ngtermctl version [--socket <socket>] [--json]`; a command with subcommands ends in `<subcommand>`.
 fn usage_synopsis(stack: &Stack<'_>) -> String {
     let tool = stack.names();
     let args: Vec<&Arg> = visible_args(stack.leaf).collect();
@@ -924,7 +924,7 @@ mod tests {
     /// A command with a required argument, a choice, a number, a default and a nested group, as later command
     /// groups have.
     fn root() -> Command {
-        Command::new("agtermctl")
+        Command::new("ngtermctl")
             .about("Drive it.")
             .subcommand_required(true)
             .arg_required_else_help(true)
@@ -974,13 +974,13 @@ mod tests {
         let root = root();
         let error = root
             .clone()
-            .try_get_matches_from(std::iter::once("agtermctl").chain(args.iter().copied()));
+            .try_get_matches_from(std::iter::once("ngtermctl").chain(args.iter().copied()));
         let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
         parse_exit(&root, &args, &error.unwrap_err(), 80)
     }
 
-    const PICK_USAGE: &str = "Usage: agtermctl pick <id> [--mode <mode>] [--width <COLUMNS>] [--target <target>] \
-                              [--json]\n  See 'agtermctl pick --help' for more information.\n";
+    const PICK_USAGE: &str = "Usage: ngtermctl pick <id> [--mode <mode>] [--width <COLUMNS>] [--target <target>] \
+                              [--json]\n  See 'ngtermctl pick --help' for more information.\n";
 
     fn usage(message: &str, help: Option<&str>) -> ParseExit {
         let help = help.map(|help| format!("Help:  {help}\n")).unwrap_or_default();
@@ -1082,10 +1082,10 @@ mod tests {
 
     #[test]
     fn a_group_reports_against_its_own_usage() {
-        let expected = "Error: Unexpected argument 'bogus'\nUsage: agtermctl group <subcommand>\n  See 'agtermctl \
+        let expected = "Error: Unexpected argument 'bogus'\nUsage: ngtermctl group <subcommand>\n  See 'ngtermctl \
                         group --help' for more information.\n";
         assert_eq!(report(&["group", "bogus"]).text, expected);
-        let root = "Error: Unknown option '--mode'\nUsage: agtermctl <subcommand>\n  See 'agtermctl --help' for more \
+        let root = "Error: Unknown option '--mode'\nUsage: ngtermctl <subcommand>\n  See 'ngtermctl --help' for more \
                     information.\n";
         assert_eq!(report(&["--mode", "fast", "pick", "x"]).text, root);
     }
@@ -1093,7 +1093,7 @@ mod tests {
     const PICK_HELP: &str = "\
 OVERVIEW: Pick one.
 
-USAGE: agtermctl pick <id> [--mode <mode>] [--width <COLUMNS>] [--target <target>] [--json]
+USAGE: ngtermctl pick <id> [--mode <mode>] [--width <COLUMNS>] [--target <target>] [--json]
 
 ARGUMENTS:
   <id>                    The item id.
@@ -1125,7 +1125,7 @@ OPTIONS:
     const GROUP_HELP: &str = "\
 OVERVIEW: A group.
 
-USAGE: agtermctl group <subcommand>
+USAGE: ngtermctl group <subcommand>
 
 OPTIONS:
   -h, --help              Show help information.
@@ -1133,7 +1133,7 @@ OPTIONS:
 SUBCOMMANDS:
   leaf                    The leaf.
 
-  See 'agtermctl help group <subcommand>' for detailed help.
+  See 'ngtermctl help group <subcommand>' for detailed help.
 ";
 
     #[test]
@@ -1162,7 +1162,7 @@ SUBCOMMANDS:
     #[test]
     fn the_help_command_refuses_an_unknown_option() {
         let refused = |option: &str| ParseExit {
-            text: format!("Error: Unknown option '{option}'\nUsage: agtermctl help [<subcommands> ...]\n"),
+            text: format!("Error: Unknown option '{option}'\nUsage: ngtermctl help [<subcommands> ...]\n"),
             to_stdout: false,
             code: USAGE_EXIT,
         };
@@ -1171,7 +1171,7 @@ SUBCOMMANDS:
         assert_eq!(report(&["help", "pick", "-x"]), refused("-x"));
         assert_eq!(
             report(&["help", "--help=1"]).text,
-            "Error: The option '--help' does not take any value, but '1' was specified.\nUsage: agtermctl help \
+            "Error: The option '--help' does not take any value, but '1' was specified.\nUsage: ngtermctl help \
              [<subcommands> ...]\n"
         );
     }

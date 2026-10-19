@@ -1,4 +1,4 @@
-//! `agtermctl`: drive agterm over its control socket. The command tree mirrors `agtermctlKit/Commands.swift`: every
+//! `ngtermctl`: drive agterm over its control socket. The command tree mirrors `agtermctlKit/Commands.swift`: every
 //! socket subcommand takes upstream's `BasicOptions` (`--socket`, `--json`) after its own name, one request per run,
 //! and reports through [`output`]. Each command group lives in its own module.
 
@@ -56,7 +56,7 @@ use crate::client::ClientError;
 /// is the library's help command, not clap's subcommand, and a repeated option takes its last value.
 #[derive(Debug, Parser)]
 #[command(
-    name = "agtermctl",
+    name = "ngtermctl",
     about = "Drive agterm over its control socket, and install its terminfo entry on other hosts.",
     subcommand_required = true,
     arg_required_else_help = true,
@@ -155,7 +155,7 @@ impl Command {
 }
 
 /// Where to connect and how to print: the options every socket subcommand accepts (upstream's `BasicOptions`).
-/// They follow the subcommand's name, as upstream's: `agtermctl --socket S version` is a usage error.
+/// They follow the subcommand's name, as upstream's: `ngtermctl --socket S version` is a usage error.
 #[derive(Debug, clap::Args)]
 struct BasicOptions {
     #[arg(long, help = "Override the control socket path.")]
@@ -166,7 +166,7 @@ struct BasicOptions {
 }
 
 impl BasicOptions {
-    /// `--socket`, else `<AGTERM_STATE_DIR>/agterm.sock`, else the platform default.
+    /// `--socket`, else `<AGTERM_STATE_DIR>/ngterm.sock`, else the platform default.
     fn socket_path(&self, env: &dyn Env) -> PathBuf {
         socket::resolve(self.socket.as_deref(), env)
     }
@@ -299,7 +299,7 @@ trait RequestCommand {
 }
 
 /// Puts SIGPIPE back to its default action; std sets it to ignored before `main`. A reader that closes stdout early
-/// (`agtermctl tree | head -1`) then ends the process quietly by the signal, as upstream's CLI, where `println!`
+/// (`ngtermctl tree | head -1`) then ends the process quietly by the signal, as upstream's CLI, where `println!`
 /// would panic on `EPIPE` and exit 101. The socket write still gets `EPIPE` as an error: it sends with
 /// `MSG_NOSIGNAL`.
 fn restore_default_sigpipe() {
@@ -369,9 +369,9 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
-    /// The report of `agtermctl args`, which must fail to parse.
+    /// The report of `ngtermctl args`, which must fail to parse.
     fn report(args: &[&str]) -> usage::ParseExit {
-        let args: Vec<OsString> = std::iter::once("agtermctl")
+        let args: Vec<OsString> = std::iter::once("ngtermctl")
             .chain(args.iter().copied())
             .map(OsString::from)
             .collect();
@@ -405,7 +405,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/catalog.yaml");
         let catalog: serde_norway::Value = serde_norway::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let cli = catalog["cli"].as_mapping().unwrap();
-        // upstream's `agtermctl zmx` is `agtermctl live` here (conformance/docs/rust-build.md, The `live` group)
+        // upstream's `agtermctl zmx` is `ngtermctl live` here (conformance/docs/rust-build.md, The `live` group)
         let expected: std::collections::BTreeSet<String> = cli
             .keys()
             .map(|name| name.as_str().unwrap())
@@ -423,8 +423,8 @@ mod tests {
     #[test]
     fn the_local_commands_are_no_request_commands() {
         for argv in [
-            &["agtermctl", "clipboard", "set", "hello"][..],
-            &["agtermctl", "terminfo", "install", "buildbox"],
+            &["ngtermctl", "clipboard", "set", "hello"][..],
+            &["ngtermctl", "terminfo", "install", "buildbox"],
         ] {
             let parsed = Agtermctl::try_parse_from(argv).unwrap();
             assert!(
@@ -437,7 +437,7 @@ mod tests {
 
     #[test]
     fn connection_options_follow_the_subcommand() {
-        let parsed = Agtermctl::try_parse_from(["agtermctl", "version", "--socket", "/s", "--json"]).unwrap();
+        let parsed = Agtermctl::try_parse_from(["ngtermctl", "version", "--socket", "/s", "--json"]).unwrap();
         let Command::Version(version) = parsed.command else {
             panic!("not version")
         };
@@ -451,7 +451,7 @@ mod tests {
     #[test]
     fn a_repeated_option_takes_its_last_value() {
         let parsed = Agtermctl::try_parse_from([
-            "agtermctl",
+            "ngtermctl",
             "version",
             "--socket",
             "/a",
@@ -481,13 +481,13 @@ mod tests {
         assert!(!report.to_stdout && report.code == usage::USAGE_EXIT, "{report:?}");
         assert_eq!(
             report.text,
-            "Error: Unknown option '--bogus'\nUsage: agtermctl version [--socket <socket>] [--json]\n  See 'agtermctl \
+            "Error: Unknown option '--bogus'\nUsage: ngtermctl version [--socket <socket>] [--json]\n  See 'ngtermctl \
              version --help' for more information.\n"
         );
     }
 
     fn tree_request(options: &[&str]) -> Request {
-        let command_line = ["agtermctl", "tree"].iter().chain(options).copied();
+        let command_line = ["ngtermctl", "tree"].iter().chain(options).copied();
         let Command::Tree(tree) = Agtermctl::try_parse_from(command_line).unwrap().command else {
             panic!("not tree")
         };
@@ -513,7 +513,7 @@ mod tests {
         assert!(
             report
                 .text
-                .contains("\nUsage: agtermctl tree [--socket <socket>] [--json] [--window <window>]\n"),
+                .contains("\nUsage: ngtermctl tree [--socket <socket>] [--json] [--window <window>]\n"),
             "{}",
             report.text
         );

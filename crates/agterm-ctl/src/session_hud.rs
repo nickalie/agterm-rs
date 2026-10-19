@@ -1,6 +1,6 @@
-//! `agtermctl session hud [open]|update|close` (`agtermctlKit/SessionHudCommands.swift` `Session.Hud`): the passive
+//! `ngtermctl session hud [open]|update|close` (`agtermctlKit/SessionHudCommands.swift` `Session.Hud`): the passive
 //! message panel over a session. `open` is the group's default subcommand
-//! ([`crate::usage::name_default_subcommands`]), so posting one is `agtermctl session hud "gathering options…"`; a
+//! ([`crate::usage::name_default_subcommands`]), so posting one is `ngtermctl session hud "gathering options…"`; a
 //! message that is literally `update` or `close` needs the explicit `open` verb. Message length and control characters
 //! are the server's to refuse: only what needs no socket is checked here, with the server's own vocabularies
 //! ([`agterm_core::hud`]), so a value fails the same way locally and over a raw socket.
@@ -23,7 +23,7 @@ const STICKY_HELP: &str = "Put the panel flush against the edge or corner --posi
 /// Upstream's `Hud.noFrameHelp`.
 const NO_FRAME_HELP: &str = "Draw no border, no rounded corners and no blank row above and below the text.";
 
-/// `agtermctl session hud <subcommand>`.
+/// `ngtermctl session hud <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Post, update, or close a passive message panel over a session.",
@@ -200,7 +200,7 @@ struct OpenEdge {
     no_frame: bool,
 }
 
-/// `agtermctl session hud [open] <message>`: `--background-color` rides the wire as `color`, as the overlay group's.
+/// `ngtermctl session hud [open] <message>`: `--background-color` rides the wire as `color`, as the overlay group's.
 #[derive(Debug, clap::Args)]
 #[command(about = "Post a message panel over the session; the session keeps focus and stays typable.")]
 pub struct Open {
@@ -370,7 +370,7 @@ struct UpdateEdge {
     no_frame: bool,
 }
 
-/// `agtermctl session hud update <message>`: repaints the live panel in place. An update replaces the whole message, so
+/// `ngtermctl session hud update <message>`: repaints the live panel in place. An update replaces the whole message, so
 /// every option it takes must be repeated to survive, `--spinner`, `--text-color` and pane scope included.
 /// `--background-color` and `--font-size` are deliberately absent: the surface reads them once at creation, so only a
 /// fresh `open` can change them.
@@ -495,7 +495,7 @@ impl RequestCommand for Update {
 
 // MARK: - close
 
-/// `agtermctl session hud close`.
+/// `ngtermctl session hud close`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Take the message panel down (a program overlay in the same slot is left alone).")]
 pub struct Close {
@@ -533,9 +533,9 @@ mod tests {
     use crate::usage::name_default_subcommands;
     use crate::{Agtermctl, Command};
 
-    /// `agtermctl session hud <argv>`, the default subcommand named first.
+    /// `ngtermctl session hud <argv>`, the default subcommand named first.
     fn command_line(argv: &[&str]) -> Vec<OsString> {
-        let line: Vec<OsString> = ["agtermctl", "session", "hud"]
+        let line: Vec<OsString> = ["ngtermctl", "session", "hud"]
             .iter()
             .chain(argv)
             .map(OsString::from)
@@ -543,7 +543,7 @@ mod tests {
         name_default_subcommands(&Agtermctl::command(), &line)
     }
 
-    /// `agtermctl session hud <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
+    /// `ngtermctl session hud <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
     fn outcome(argv: &[&str]) -> Result<Value, String> {
         let parsed = Agtermctl::try_parse_from(command_line(argv)).map_err(|error| error.to_string())?;
         let Command::Session(group) = parsed.command else {
@@ -578,7 +578,7 @@ mod tests {
 
     /// The help of `session hud <subcommand>`, wrapped to 200 columns.
     fn help(subcommand: &str) -> String {
-        let line: Vec<OsString> = ["agtermctl", "session", "hud", subcommand, "--help"]
+        let line: Vec<OsString> = ["ngtermctl", "session", "hud", subcommand, "--help"]
             .iter()
             .map(OsString::from)
             .collect();

@@ -21,7 +21,7 @@ run them from the checkout being synced; in a git worktree that is the worktree.
 
 `references/safety.md` holds them between `BEGIN HARD RULES` / `END HARD RULES`. Read the file now and keep to it for
 every command in this run. In short: never touch the user's running agterm (strip `AGTERM_*`/`ZMX_*`, explicit
-`--socket` on every `agtermctl`, private state dir and `ZMX_DIR`, GUI only headless, never `pkill zmx`);
+`--socket` on every `ngtermctl`, private state dir and `ZMX_DIR`, GUI only headless, never `pkill zmx`);
 `.upstream/agterm` is read-only except fetching and checking out the new tag; never push, tag or release; never edit
 `docs/plans/completed/`; anything over ~30 s runs in the background.
 
@@ -150,7 +150,7 @@ because every plan task's subagent starts from this branch and must be able to r
    It applies upstream's own diff to each copy (`resources/agent-status`, `hud.sh`, themes, `ghostty-defaults.conf`,
    zmx patches, `LICENSE.upstream`) only where it applies cleanly, so the Linux glue in the copies survives; the
    agent skill (`resources/skills/agterm`) is rebuilt as the new upstream tree plus `build/patches/skill-agterm/` (its
-   `live` names), and a `conflict` there names the patch to refresh. `conflict` → a plan task to merge it by hand, keeping the Linux glue; the task names the
+   `live` names, then this build's `ngterm`/`ngtermctl` ones), and a `conflict` there names the patch to refresh. `conflict` → a plan task to merge it by hand, keeping the Linux glue; the task names the
    upstream diff command (`git -C .upstream/agterm diff CURRENT TARGET -- <path>`), not the temp patch.
    `unmapped` → a plan task deciding where the new resource goes. When nothing conflicted, bump the release named in
    `crates/agterm-app/src/integrations/mod.rs`'s header. A zmx patch change also needs `scripts/build-zmx.sh` (as in 2).

@@ -1,4 +1,4 @@
-//! `agtermctl font inc|dec|reset` (`agtermctlKit/MiscCommands.swift` `Font`): step or reset one pane's font size. Each
+//! `ngtermctl font inc|dec|reset` (`agtermctlKit/MiscCommands.swift` `Font`): step or reset one pane's font size. Each
 //! takes `--target`, then [`ClientOptions`], then `--pane`, in upstream's declaration order.
 
 use agterm_core::paths::Env;
@@ -13,7 +13,7 @@ const PANE_HELP: &str = "Which pane's font to change: left (main), right (split)
                          terminal, even when hidden). primary/left/top and split/right/bottom are aliases. Defaults to \
                          the left pane.";
 
-/// `agtermctl font <subcommand>`.
+/// `ngtermctl font <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Font size commands.",
@@ -115,9 +115,9 @@ mod tests {
 
     use crate::{Agtermctl, Command};
 
-    /// `agtermctl font <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
+    /// `ngtermctl font <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
     fn outcome(argv: &[&str]) -> Result<Value, String> {
-        let line = ["agtermctl", "font"].iter().chain(argv).copied();
+        let line = ["ngtermctl", "font"].iter().chain(argv).copied();
         let parsed = Agtermctl::try_parse_from(line).map_err(|error| error.to_string())?;
         let Command::Font(group) = parsed.command else {
             panic!("not a font command")

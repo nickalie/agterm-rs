@@ -1,4 +1,4 @@
-//! `agtermctl terminfo install` (`agtermctlKit/TerminfoCommands.swift`, `agtermCore/TerminfoInstall.swift`): installs
+//! `ngtermctl terminfo install` (`agtermctlKit/TerminfoCommands.swift`, `agtermCore/TerminfoInstall.swift`): installs
 //! the bundled `xterm-ghostty` terminfo entry on a remote host over one ssh connection. A local `infocmp` dumps the
 //! entry as source and the remote `tic` compiles it into that account's `~/.terminfo`. Local-only: it never opens the
 //! control socket, so it has no `--socket` or `--json` and needs no running agterm.
@@ -42,7 +42,7 @@ pub const EXECUTION_OPTIONS: [&str; 9] = [
     "RemoteCommand=none",
 ];
 
-/// `agtermctl terminfo <subcommand>`.
+/// `ngtermctl terminfo <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "The terminal's terminfo entry on other hosts.",
@@ -76,7 +76,7 @@ impl Terminfo {
     }
 }
 
-/// `agtermctl terminfo install [-p <port>] [-i <file> ...] [-J <host>] [-F <file>] <destination>`.
+/// `ngtermctl terminfo install [-p <port>] [-i <file> ...] [-J <host>] [-F <file>] <destination>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Install the xterm-ghostty terminfo entry on a remote host over ssh.",
@@ -200,7 +200,7 @@ impl InstallFailure {
         match self {
             Self::InvalidDestination => "invalid destination".to_owned(),
             Self::TerminfoNotFound { searched } => format!(
-                "no {ENTRY} terminfo entry next to this agtermctl; looked in {}",
+                "no {ENTRY} terminfo entry next to this ngtermctl; looked in {}",
                 searched
                     .iter()
                     .map(|path| path.display().to_string())
@@ -234,7 +234,7 @@ pub fn is_plain(value: &str) -> bool {
 }
 
 /// Where the entry is looked up, in order. The database beside the running CLI comes first, because the stage is the
-/// only source whose entry is known to match this build: `<prefix>/share/terminfo` for `<prefix>/bin/agtermctl` (the
+/// only source whose entry is known to match this build: `<prefix>/share/terminfo` for `<prefix>/bin/ngtermctl` (the
 /// staging layout, upstream's `Contents/Resources/terminfo` beside `Contents/MacOS`). `TERMINFO` from the environment
 /// is the fallback for a CLI running outside a stage, such as a cargo build inside an agterm shell, where libghostty
 /// has exported the app's own database. `client` is the CLI's resolved real path.
@@ -317,11 +317,16 @@ pub fn run(
 }
 
 /// `infocmp -x` so the entry's extended capabilities (the ones worth installing it for) come along, with `TERMINFO`
-/// the child's whole environment so it reads the chosen database and nothing else. Both pipes are drained before the
-/// wait, or a dump larger than the pipe buffer would deadlock.
+/// the child's whole environment so it reads the chosen database and nothing else. `-A` names the database too: an
+/// ncurses built with `--disable-root-environ` (Arch's) ignores `TERMINFO` for root, and upstream's environment alone
+/// would find no entry there. Both pipes are drained before the wait, or a dump larger than the pipe buffer would
+/// deadlock.
 fn dump(directory: &Path, infocmp: &Path) -> Result<Vec<u8>, InstallFailure> {
     let output = Command::new(infocmp)
-        .args(["-x", ENTRY])
+        .arg("-x")
+        .arg("-A")
+        .arg(directory)
+        .arg(ENTRY)
         .env_clear()
         .env("TERMINFO", directory)
         .stdin(Stdio::null())

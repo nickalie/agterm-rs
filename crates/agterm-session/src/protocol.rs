@@ -758,7 +758,7 @@ pub struct ApiReply {
     pub result: Result<ApiResponse, ApiError>,
 }
 
-/// What `SessionHost` and `agtermctl clipboard set` ask of the server.
+/// What `SessionHost` and `ngtermctl clipboard set` ask of the server.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ApiRequest {
     /// Every session of the namespace.

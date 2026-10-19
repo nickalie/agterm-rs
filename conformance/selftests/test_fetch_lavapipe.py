@@ -60,8 +60,8 @@ def fill_prefix(path: Path, pins: str) -> None:
     (path / "lib").mkdir(parents=True)
     (path / "lib" / "libvulkan_lvp.so").write_text("stand-in")
     (path / "lvp_icd.json").write_text(f'{{"ICD": {{"library_path": "{path}/lib/libvulkan_lvp.so"}}}}')
-    (path / "share" / "agterm").mkdir(parents=True)
-    (path / "share" / "agterm" / "lavapipe-PINS").write_text(pins)
+    (path / "share" / "ngterm").mkdir(parents=True)
+    (path / "share" / "ngterm" / "lavapipe-PINS").write_text(pins)
 
 
 def edit_pin(checkout: Path, name: str, value: str) -> None:

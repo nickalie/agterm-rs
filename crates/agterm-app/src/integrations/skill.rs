@@ -1,7 +1,11 @@
-//! The agent skill installer (upstream's `SkillInstall.swift` and `SkillInstaller.swift`): the bundled `agterm` skill
-//! into the skills directory of every coding agent present, Claude Code (`~/.claude/skills/agterm`) and Codex
-//! (`~/.codex/skills/agterm`), Claude Code's when neither is. Idempotent, and a same-named skill the user wrote (its
+//! The agent skill installer (upstream's `SkillInstall.swift` and `SkillInstaller.swift`): the bundled skill into the
+//! skills directory of every coding agent present, Claude Code (`~/.claude/skills/ngterm`) and Codex
+//! (`~/.codex/skills/ngterm`), Claude Code's when neither is. Idempotent, and a same-named skill the user wrote (its
 //! `SKILL.md` absent, unreadable or unmarked) is never overwritten.
+//!
+//! The skill is named `ngterm`, not upstream's `agterm`: the GTK fork installs its own `agterm` skill into the same
+//! agents' directories, and that one drives the fork through its `agtermctl`. This build's skill drives it through
+//! `ngtermctl` (`cli::TOOL_NAME`) and leaves the fork's alone.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,13 +13,13 @@ use std::path::{Path, PathBuf};
 use super::files;
 use super::{Environment, InstallError};
 
-/// The skill's directory name under each agent's `skills/`.
-pub const SKILL_NAME: &str = "agterm";
+/// The skill's directory name under each agent's `skills/`, and its frontmatter `name`.
+pub const SKILL_NAME: &str = "ngterm";
 
 /// The sentinel in the bundled `SKILL.md` telling an agterm-installed skill from the user's own.
 pub const MARKER: &str = "<!-- agterm-skill -->";
 
-/// One destination: the agent's label and its `…/skills/agterm` directory.
+/// One destination: the agent's label and its `…/skills/ngterm` directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
     pub agent: &'static str,
@@ -54,7 +58,7 @@ pub fn may_overwrite(directory_exists: bool, existing_skill: Option<&str>) -> bo
 pub enum TargetPlan {
     /// Copy the skill there; `fresh_skills_dir` when the agent's `skills/` does not exist yet.
     Install { target: Target, fresh_skills_dir: bool },
-    /// A different `agterm` skill is there: left untouched.
+    /// A different `ngterm` skill is there: left untouched.
     UserOwned(Target),
 }
 
@@ -167,7 +171,7 @@ impl SkillReport {
             lines.push(String::new());
             lines.push(
                 "The agent uses it automatically when you ask it to control agterm. It drives the app via the \
-                 agtermctl CLI, so install that too if you haven't: Help ▸ Install Command Line Tool…"
+                 ngtermctl CLI, so install that too if you haven't: Help ▸ Install Command Line Tool…"
                     .to_owned(),
             );
         }
@@ -199,11 +203,11 @@ mod tests {
         let home = Path::new("/h");
         let claude = Target {
             agent: "Claude Code",
-            skill_directory: "/h/.claude/skills/agterm".into(),
+            skill_directory: "/h/.claude/skills/ngterm".into(),
         };
         let codex = Target {
             agent: "Codex",
-            skill_directory: "/h/.codex/skills/agterm".into(),
+            skill_directory: "/h/.codex/skills/ngterm".into(),
         };
         assert_eq!(install_targets(home, true, true), [claude.clone(), codex.clone()]);
         assert_eq!(install_targets(home, false, true), [codex]);
@@ -224,19 +228,20 @@ mod tests {
     #[test]
     fn the_report_names_what_was_installed_and_skipped() {
         let report = SkillReport {
-            installed: vec![("Claude Code", "/h/.claude/skills/agterm".into())],
+            installed: vec![("Claude Code", "/h/.claude/skills/ngterm".into())],
             skipped: vec![(
                 "Codex",
-                "a different 'agterm' skill is already there — left untouched".to_owned(),
+                "a different 'ngterm' skill is already there — left untouched".to_owned(),
             )],
             fresh_skills_dir: true,
         };
         assert!(report.is_warning());
         assert_eq!(report.title(), "Agent Skill Installed");
         let text = report.text();
-        assert!(text.starts_with("Installed for:\n  • Claude Code: /h/.claude/skills/agterm\n"));
+        assert!(text.starts_with("Installed for:\n  • Claude Code: /h/.claude/skills/ngterm\n"));
         assert!(text.contains("Help ▸ Install Command Line Tool…"));
-        assert!(text.contains("Skipped:\n  • Codex: a different 'agterm' skill"));
+        assert!(text.contains("ngtermctl CLI, so install that too"));
+        assert!(text.contains("Skipped:\n  • Codex: a different 'ngterm' skill"));
         assert!(text.ends_with("so it picks up the new skill."));
         let none = SkillReport::default();
         assert_eq!(none.title(), "Skill Not Installed");
