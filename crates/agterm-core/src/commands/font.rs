@@ -68,6 +68,8 @@ pub(crate) fn dispatch(core: &mut Core, cmd: FontCmd, request: &Request) -> Outc
         return Ok(with_id(id));
     }
     if !run_binding(session, pane, action) {
+        // a dormant pane spawns now, for the next call (upstream's `expediteSpawn`)
+        core.wake_session(id);
         return Err(not_realized());
     }
     Ok(with_id(id))

@@ -114,6 +114,11 @@ It does not claim:
 
 The table above stays the references' profiles; this list is the Rust build's.
 
+Restore is lazy, as in the GTK fork and unlike upstream's eager deck (the user's call, 2026-10-19): only each
+window's selected restored session spawns at launch, the others once shown or once a command needs their terminal.
+No capability marks it: the suite already waits for a restored session only once it is selected, since the fork
+mounts a pane only on screen.
+
 ## Rust-only extensions
 
 A Rust-only extension is a capability no reference claims, so its tests (`requires` on it) skip as `unsupported` on

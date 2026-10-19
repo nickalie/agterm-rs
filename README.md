@@ -26,6 +26,15 @@ Linux and Windows are equal targets; today it is built and tested on Linux, and 
   beside the fork's `agterm` skill.
 - One extension beyond upstream: Live sessions in bash and fish login shells too (upstream: zsh only), under the
   Rust-only capability `live-any-shell`.
+- One behavior taken from the GTK fork instead of upstream: restore is lazy. A launch (or a window reopened from its
+  file) spawns only each window's selected session; every other restored session starts its shell, re-runs its
+  command or attaches to its Live daemon once it is first shown (selected, zoomed, in the dashboard) or a command
+  needs its terminal (`session.type`, `paste`, `selectall`, `font.*`, `session.search`, `session.restart`,
+  `zmx.present`). Until then the tree reports it `realized: false` and reads (`session.text`, `copy`) answer
+  `session not realized`; its pin stays saved, its captured command carries over to the next launch through a clean
+  quit (not a crash: the launch takes a capture off disk so it replays only once), and its Live daemon keeps running,
+  so the tree still reports it `backedByZmx`. Sessions made at runtime start at once, shown or not. With only the
+  shown sessions spawning, upstream's launch spawn pacer has nothing to pace, and the build has none.
 - Parity is measured by the black-box suite in [conformance/](conformance/README.md), held by a ratchet.
 
 ## Prerequisites

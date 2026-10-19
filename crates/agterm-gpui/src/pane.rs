@@ -108,8 +108,8 @@ impl PaneSpec {
         }
     }
 
-    /// Whether the pane's terminal waits for the core's seed (a session pane's, after its paced launch turn), rather
-    /// than starting from the spec (the scratch).
+    /// Whether the pane's terminal waits for the core's seed (a session pane's, once its session is not dormant),
+    /// rather than starting from the spec (the scratch).
     #[must_use]
     pub fn gated(&self) -> bool {
         self.pane != StatusPane::Scratch

@@ -121,10 +121,11 @@ fn install_launch_hosts(core: &mut Core, poster: &Poster, socket: String) {
         agterm_app::restore_launch::shell_basename(&ProcessEnv),
     );
     core.set_process_host(process_host(poster, socket));
-    // the launch reap and a pending live sessions reset finish before any window mounts, and the launch spawn order is
-    // armed before any window shows (upstream's `GhosttyApp.restoreLaunchDecision` and the pacer's arm at app init)
+    // the launch reap and a pending live sessions reset finish before any window mounts (upstream's
+    // `GhosttyApp.restoreLaunchDecision`), and the selected sessions wake before any window shows, so their panes
+    // spawn on their first ask while the rest of the restore stays dormant
     session_host::install(core, &ProcessEnv);
-    core.arm_launch_spawns(std::time::Instant::now());
+    core.wake_shown_sessions();
     // read at launch: a file edited later takes effect only on reload
     core.load_keymap_at_launch();
     core.load_hooks_at_launch();

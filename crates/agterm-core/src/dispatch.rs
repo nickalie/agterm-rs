@@ -394,6 +394,7 @@ impl Core {
         }
         if !self.library.is_open(id) {
             self.window_states.remove(&id);
+            self.forget_woken_sessions();
         }
     }
 

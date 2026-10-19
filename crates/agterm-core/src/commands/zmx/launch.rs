@@ -12,9 +12,7 @@ use super::ZmxRuntime;
 use crate::Core;
 use crate::model::{Session, StatusPane};
 use crate::persist::RestoreMode;
-use crate::restore::spawn_plan::{
-    LaunchSeed, LaunchSeedPolicy, resolve_live_seed, resolve_seed, should_pace, should_pace_live,
-};
+use crate::restore::spawn_plan::{LaunchSeed, LaunchSeedPolicy, resolve_live_seed, resolve_seed};
 use crate::zmx::lead::LeadAttachment;
 use crate::zmx::lifecycle::{RefreshGate, leaders, names_to_kill};
 use crate::zmx::support::{self, Configuration, LaunchDisposition, launch_disposition};
@@ -87,7 +85,6 @@ impl Core {
     /// The seed policy of this launch: the restore decision, the denylist, and what the launch reap and the reset left.
     pub(crate) fn seed_policy(&self) -> LaunchSeedPolicy {
         LaunchSeedPolicy {
-            running_names: self.zmx.running_names.clone(),
             suppressed_daemons: self.zmx.suppressed.iter().copied().map(daemon_name).collect(),
             ..self.restore.policy()
         }
@@ -143,7 +140,9 @@ impl Core {
                 .map(|claim| daemon_name(claim.pane_identity))
                 .collect()
         });
-        self.zmx.running_names = reap(host.as_ref(), known.as_ref(), decision.requested);
+        if let Some(alive) = reap(host.as_ref(), known.as_ref(), decision.requested) {
+            tracing::debug!(alive = alive.len(), "live reap");
+        }
         self.zmx.leaders.borrow_mut().note_lifecycle_change();
     }
 }
@@ -154,9 +153,10 @@ impl Core {
     /// read-back at the top level.
     pub(crate) fn project_live(&self, store: &crate::model::AppStore, tree: &mut agterm_proto::ControlTree) {
         tree.live_reset = super::readback(self.zmx.reset.pending.as_ref(), self.zmx.reset.last.as_ref());
-        let backed = |slot: &crate::model::SurfaceSlot| slot.get().is_some_and(agterm_host::Surface::is_live_session);
+        // a dormant pane counts by the daemon it attaches to once woken (`Core::pane_backed`)
+        let backed = |session: &crate::model::Session, role| self.pane_backed(session, role);
         let wrapped = store.sessions().any(|session| {
-            session.remote_host().is_none() && (backed(&session.surface) || backed(&session.split_surface))
+            session.remote_host().is_none() && (backed(session, StatusPane::Left) || backed(session, StatusPane::Right))
         });
         let mut listed = false;
         if wrapped && let Some(host) = self.zmx.host() {
@@ -169,16 +169,13 @@ impl Core {
             .iter_mut()
             .flat_map(|workspace| workspace.sessions.iter_mut());
         for (node, session) in nodes.zip(store.sessions()) {
+            project_backing(self, session, node);
             if listed && session.remote_host().is_none() {
                 // Linux has no responsibility API to attribute a leader by (see `live_reset`)
                 let attribution =
-                    |slot| backed(slot).then(|| <&str>::from(super::live_reset::LINUX_ATTRIBUTION).to_owned());
-                node.live_attribution = attribution(&session.surface);
-                node.split_live_attribution = session
-                    .split
-                    .exists
-                    .then(|| attribution(&session.split_surface))
-                    .flatten();
+                    |role| backed(session, role).then(|| <&str>::from(super::live_reset::LINUX_ATTRIBUTION).to_owned());
+                node.live_attribution = attribution(StatusPane::Left);
+                node.split_live_attribution = session.split.exists.then(|| attribution(StatusPane::Right)).flatten();
             }
             for surface in node.surfaces.iter_mut().flatten() {
                 surface.lead = surface
@@ -196,11 +193,18 @@ impl Core {
     }
 }
 
-/// Whether pane `role` of `session` waits for its paced launch turn under its disposition.
-pub(crate) fn pane_paces(session: &Session, role: StatusPane, policy: &LaunchSeedPolicy, disposed: &Disposed) -> bool {
-    match &disposed.disposition {
-        LaunchDisposition::Wrapped(configuration) => should_pace_live(session, role, policy, configuration),
-        LaunchDisposition::Ordinary | LaunchDisposition::Fallback => should_pace(session, role, policy),
+/// A session's `backedByZmx`, its own and its panes', through [`Core::pane_backed`]: a pane whose terminal is not up
+/// yet (a dormant one's daemon runs on unattached) reads as backed by what it attaches under.
+fn project_backing(core: &Core, session: &Session, node: &mut agterm_proto::ControlSessionNode) {
+    node.backed_by_zmx = Some(core.session_backed(session));
+    for surface in node.surfaces.iter_mut().flatten() {
+        let role = surface
+            .pane_id
+            .as_deref()
+            .and_then(|token| session.pane_role_for_token(token));
+        if let Some(role @ (StatusPane::Left | StatusPane::Right)) = role {
+            surface.backed_by_zmx = Some(core.pane_backed(session, role));
+        }
     }
 }
 

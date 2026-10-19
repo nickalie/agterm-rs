@@ -1,13 +1,16 @@
-//! The detail deck: every session of the window holds one page with its terminals, all mounted at once so each spawns
-//! its shell at startup, and only the selected one visible, hit-testable and focused (upstream's eager deck,
-//! `WindowContentView+Detail.swift` `detailPane`; ported from the GTK build's `deck.rs`).
+//! The detail deck: every session of the window holds one page with its terminals, all mounted at once, and only the
+//! selected one visible, hit-testable and focused (upstream's eager deck, `WindowContentView+Detail.swift`
+//! `detailPane`; ported from the GTK build's `deck.rs`). A session made at runtime spawns its shell as soon as its
+//! terminal is laid out; a restored one waits until it is first shown, as the GTK fork's deck does (the core's lazy
+//! restore, `agterm_core::commands::relaunch`).
 //!
 //! A page is created once and keeps its terminals' views: switching sessions is a visibility flip. A hidden page is
 //! laid out under the shown one but not drawn ([`TerminalView::set_shown`]), so its terminals still start at their
-//! size and follow it, and their shells run (the conformance harness's `wait_mounted` waits for a `noSelect` session's
-//! `realized` too). Sessions a soft close holds out of the tree keep their pages, hidden, until the close is final. A
-//! page goes once its session is gone; closing the session already tore its terminals down. Inside a page the
-//! session's panes follow [`crate::split`].
+//! size and follow it: a runtime session's shells run (the conformance harness's `wait_mounted` waits for a `noSelect`
+//! session's `realized` too), while a dormant restored session's terminals wait for their seed until it wakes.
+//! Sessions a soft close holds out of the tree keep their pages, hidden, until the close is final. A page goes once
+//! its session is gone; closing the session already tore its terminals down. Inside a page the session's panes follow
+//! [`crate::split`].
 //!
 //! The model moves keyboard focus only by what it says should hold it: the deck focuses the shown page's focused pane
 //! whenever that pane (or the shown page) differs from what it last focused, which is how selecting a session,

@@ -1,13 +1,15 @@
 //! `dashboard` (upstream's `ControlDispatcherDashboardTests` and `ControlServer.setDashboard`), its `tree` read-back,
 //! and the frontend's actions on the grid.
 
+use agterm_host::fakes::FakeSurface;
 use agterm_proto::command::{SessionCmd, SurfaceCmd};
-use agterm_proto::{Args, Command, ControlTree, Response};
+use agterm_proto::{Args, Command, ControlTree, Request, Response};
 use serde_json::json;
 use uuid::Uuid;
 
 use super::{Fixture, UNKNOWN, args, failure, wire};
 use crate::dashboard::{DashboardMember, Direction};
+use crate::model::StatusPane;
 use crate::persist::AppSettings;
 use crate::zoom::{SurfaceId, ZoomSurface};
 
@@ -493,4 +495,41 @@ fn opening_ends_the_active_sessions_search_once() {
         ["end_search"],
         "a re-open over an open grid ends nothing"
     );
+}
+
+/// Lazy restore: the grid wakes only its cells, so `session.search` wakes the dormant session it selects under it, or
+/// its poll would wait on a terminal that never starts.
+#[test]
+fn a_search_under_the_grid_wakes_its_dormant_target() {
+    let mut fixture = Fixture::new(1);
+    let (shown, dormant) = (fixture.sessions[0], fixture.sessions[1]);
+    let session = fixture
+        .store_mut()
+        .and_then(|store| store.session_mut(dormant))
+        .expect("the dormant session");
+    session.was_restored = true;
+    let token = wire(session.pane_identity);
+    let _ = session
+        .pane_slot_mut(StatusPane::Left)
+        .replace(Box::new(FakeSurface::new(token.clone()).with_realized(false)));
+    assert!(open_ids(&mut fixture, &[wire(shown)]).ok);
+    assert_eq!(fixture.core.request_pane_spawn(dormant, &token), None);
+    fixture.core.wake_shown_sessions();
+    assert_eq!(
+        fixture.core.take_spawn_grants(),
+        Vec::new(),
+        "the grid shows only the other"
+    );
+    let _ = fixture.core.begin(&Request {
+        cmd: Command::Session(SessionCmd::Search),
+        target: Some(wire(dormant)),
+        args: Some(args(|a| a.text = Some("x".to_owned()))),
+    });
+    let woken: Vec<Uuid> = fixture
+        .core
+        .take_spawn_grants()
+        .into_iter()
+        .map(|grant| grant.session)
+        .collect();
+    assert_eq!(woken, vec![dormant]);
 }

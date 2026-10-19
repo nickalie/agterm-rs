@@ -270,6 +270,8 @@ fn binding_action(
     if let Some(refusal) = refusal {
         return Err(ControlError::rejected(refusal));
     }
+    // a dormant pane spawns now, though this call still finds it unrealized (upstream's `expediteSpawn`)
+    core.wake_session(id);
     let session = core
         .library_mut()
         .store_for_session_mut(id)

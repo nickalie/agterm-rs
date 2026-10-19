@@ -3,7 +3,6 @@
 //! and the seeds the panes spawn with.
 
 use std::path::Path;
-use std::time::{Duration, Instant};
 
 use agterm_host::ProcessStat;
 use agterm_host::fakes::{FakeProcessTable, FakeSurface};
@@ -231,14 +230,10 @@ fn new_session(core: &mut Core, command: Option<&str>, wait: bool) -> Uuid {
     answered_id(&response).expect("a new session")
 }
 
-/// The whole chain on the fakes: the quit captures what runs, saves it, and the next launch spawns each pane with its
-/// seed: the `--command` sessions re-run their creation command on the exec path (with and without the hold), the job
-/// typed into a shell is typed again once, and only the selected session spawns at once while the others wait their
-/// paced turn.
-#[test]
-fn a_rerun_relaunch_respawns_commands_and_replays_the_typed_job_once() {
-    let dir = tempfile::tempdir().expect("a temp dir");
-    let mut core = persistent_core(dir.path(), settings(RestoreMode::Rerun));
+/// A rerun session quit that captured a held `--command cat`, a plain one and `sleep 600` typed into a shell, beside
+/// the seeded session; answers the four ids in that order.
+fn quit_with_three_captured_panes(dir: &Path) -> [Uuid; 4] {
+    let mut core = persistent_core(dir, settings(RestoreMode::Rerun));
     let seeded = core
         .library()
         .all_open_sessions()
@@ -259,11 +254,20 @@ fn a_rerun_relaunch_respawns_commands_and_replays_the_typed_job_once() {
     }
     core.capture_on_exit();
     assert!(core.save_all());
+    [seeded, held, plain, typed]
+}
 
+/// The whole chain on the fakes: the quit captures what runs, saves it, and the next launch spawns each pane with its
+/// seed: the `--command` sessions re-run their creation command on the exec path (with and without the hold), the job
+/// typed into a shell is typed again once, and only the selected session spawns at once while the others stay dormant
+/// until they are shown.
+#[test]
+fn a_rerun_relaunch_respawns_commands_and_replays_the_typed_job_once() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let [seeded, held, plain, typed] = quit_with_three_captured_panes(dir.path());
     let mut core = persistent_core(dir.path(), settings(RestoreMode::Rerun));
     core.set_restore_launch(RestoreLaunchDecision::new(RestoreMode::Rerun, None));
-    let start = Instant::now();
-    core.arm_launch_spawns(start);
+    core.wake_shown_sessions();
     let tokens: Vec<String> = [seeded, held, plain, typed]
         .into_iter()
         .map(|id| install(&mut core, id, None))
@@ -273,19 +277,20 @@ fn a_rerun_relaunch_respawns_commands_and_replays_the_typed_job_once() {
         ..LaunchSeed::default()
     };
     assert_eq!(
-        core.request_pane_spawn(typed, &tokens[3], start),
+        core.request_pane_spawn(typed, &tokens[3]),
         Some(replay),
         "the selected one, at once"
     );
+    assert_eq!(core.request_pane_spawn(seeded, &tokens[0]), None, "dormant");
+    assert_eq!(core.request_pane_spawn(held, &tokens[1]), None);
+    assert_eq!(core.request_pane_spawn(plain, &tokens[2]), None);
+    core.wake_shown_sessions();
     assert_eq!(
-        core.request_pane_spawn(seeded, &tokens[0], start),
-        Some(LaunchSeed::default())
+        core.take_spawn_grants(),
+        Vec::new(),
+        "the shown session spawned already"
     );
-    assert_eq!(core.request_pane_spawn(held, &tokens[1], start), None);
-    assert_eq!(core.request_pane_spawn(plain, &tokens[2], start), None);
-    let interval = Duration::from_millis(120);
-    assert_eq!(core.take_spawn_wake(start), Some(interval));
-    core.spawn_wake(start + interval);
+    core.wake_session(held);
     let cat = |wait| LaunchSeed {
         command: Some("cat".to_owned()),
         initial_input: None,
@@ -301,8 +306,9 @@ fn a_rerun_relaunch_respawns_commands_and_replays_the_typed_job_once() {
         vec![(held, cat(true))]
     );
     assert_eq!(grants[0].token, tokens[1]);
-    assert!(core.take_spawn_wake(start + interval).is_some());
-    core.spawn_wake(start + interval * 2);
+    let window = core.library().window_holding_session(plain).expect("a window");
+    open_store(&mut core, window).select_session(Some(plain));
+    core.wake_shown_sessions();
     let grants = core.take_spawn_grants();
     assert_eq!(grants.len(), 1);
     assert_eq!((grants[0].session, grants[0].seed.clone()), (plain, cat(false)));
@@ -326,14 +332,9 @@ fn a_fresh_shells_relaunch_neither_reruns_commands_nor_paces() {
     assert!(core.save_all());
     let mut core = persistent_core(dir.path(), settings(RestoreMode::None));
     core.set_restore_launch(RestoreLaunchDecision::new(RestoreMode::None, None));
-    let start = Instant::now();
-    core.arm_launch_spawns(start);
+    core.wake_shown_sessions();
     let token = install(&mut core, held, None);
-    assert_eq!(
-        core.request_pane_spawn(held, &token, start),
-        Some(LaunchSeed::default())
-    );
-    assert_eq!(core.take_spawn_wake(start), None);
+    assert_eq!(core.request_pane_spawn(held, &token), Some(LaunchSeed::default()));
 }
 
 /// Upstream's `willClose` arms: a window closed while another stays open leaves no argv in its file, since a launch
@@ -376,8 +377,8 @@ fn a_window_close_clears_its_captures_unless_it_is_the_last() {
     assert!(file(second).contains("sleep"), "{}", file(second));
 }
 
-/// A relaunch whose `queued` session (a `cat` pane with a split pinned to `htop`) waits its paced turn behind the
-/// selected one; answers the core, `queued` and the window holding it.
+/// A relaunch whose `queued` session (a `cat` pane with a split pinned to `htop`) stays dormant behind the selected one;
+/// answers the core, `queued` and the window holding it.
 fn relaunch_with_a_queued_split(dir: &Path) -> (Core, Uuid, Uuid) {
     let mut core = persistent_core(dir, settings(RestoreMode::Rerun));
     let queued = new_session(&mut core, Some("cat"), false);
@@ -396,7 +397,7 @@ fn relaunch_with_a_queued_split(dir: &Path) -> (Core, Uuid, Uuid) {
 
     let mut core = persistent_core(dir, settings(RestoreMode::Rerun));
     core.set_restore_launch(RestoreLaunchDecision::new(RestoreMode::Rerun, None));
-    core.arm_launch_spawns(Instant::now());
+    core.wake_shown_sessions();
     (core, queued, window)
 }
 
@@ -423,38 +424,50 @@ fn split_mode(core: &mut Core, session: Uuid, mode: &str) {
     let _ = core.commit();
 }
 
-/// Upstream unmounts a hidden split and its remounted view asks again; here the terminal stays and asks once, so a
-/// split hidden while it waited its turn is granted when it shows again rather than left without a shell.
+/// A dormant split asks once and waits, shown or hidden; once its session wakes it spawns, hidden too, as a woken
+/// session's hidden split does, so a zoom on it (which leaves the split hidden) finds a shell. Granted once.
 #[test]
-fn a_queued_split_hidden_while_it_waits_spawns_when_it_shows_again() {
+fn a_dormant_split_spawns_once_its_session_wakes_even_while_hidden() {
     let dir = tempfile::tempdir().expect("a temp dir");
-    let (mut core, queued, _) = relaunch_with_a_queued_split(dir.path());
+    let (mut core, queued, window) = relaunch_with_a_queued_split(dir.path());
     let token = install_split(&mut core, queued);
-    assert_eq!(core.request_pane_spawn(queued, &token, Instant::now()), None);
+    assert_eq!(core.request_pane_spawn(queued, &token), None);
     split_mode(&mut core, queued, "off");
-    assert_eq!(core.take_spawn_grants(), Vec::new(), "no grant while hidden");
     split_mode(&mut core, queued, "on");
+    assert_eq!(core.take_spawn_grants(), Vec::new(), "no grant while dormant");
+    split_mode(&mut core, queued, "off");
+    let zoom = agterm_core_zoom(queued);
+    core.set_zoom_target(window, Some(zoom));
+    let _ = core.commit();
+    core.wake_shown_sessions();
     let grants = core.take_spawn_grants();
     assert_eq!(grants.len(), 1, "{grants:?}");
     assert_eq!((grants[0].session, grants[0].token.as_str()), (queued, token.as_str()));
     // the pin is typed, never exec'd
     assert_eq!(grants[0].seed.initial_input.as_deref(), Some("htop\n"));
     // granted once
-    split_mode(&mut core, queued, "off");
     split_mode(&mut core, queued, "on");
+    core.wake_shown_sessions();
     assert_eq!(core.take_spawn_grants(), Vec::new());
 }
 
-/// A queued pane whose session is soft-closed spawns on the undo, and one that asks while the close holds it waits
-/// for the undo too; a finalized close forgets it.
+/// The zoom on `session`'s split pane.
+fn agterm_core_zoom(session: Uuid) -> crate::zoom::SurfaceId {
+    crate::zoom::SurfaceId {
+        session,
+        surface: crate::zoom::ZoomSurface::Split,
+    }
+}
+
+/// A dormant pane whose session is soft-closed stays dormant over the undo, and one that asks while the close holds it
+/// too; both spawn once the session wakes. A finalized close forgets them.
 #[test]
-fn a_soft_closed_session_spawns_its_waiting_panes_on_the_undo() {
+fn a_soft_closed_dormant_session_stays_dormant_over_the_undo() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let (mut core, queued, window) = relaunch_with_a_queued_split(dir.path());
     let main = install(&mut core, queued, None);
     let split = install_split(&mut core, queued);
-    let now = Instant::now();
-    assert_eq!(core.request_pane_spawn(queued, &main, now), None);
+    assert_eq!(core.request_pane_spawn(queued, &main), None);
     assert!(open_store(&mut core, window).soft_close_session(queued));
     let _ = core.commit();
     assert_eq!(
@@ -463,12 +476,14 @@ fn a_soft_closed_session_spawns_its_waiting_panes_on_the_undo() {
         "no grant while the close holds it"
     );
     assert_eq!(
-        core.request_pane_spawn(queued, &split, now),
+        core.request_pane_spawn(queued, &split),
         None,
         "an ask while held waits too"
     );
     assert!(open_store(&mut core, window).undo_pending_close(None));
     let _ = core.commit();
+    assert_eq!(core.take_spawn_grants(), Vec::new(), "still dormant after the undo");
+    core.wake_session(queued);
     let mut granted: Vec<String> = core.take_spawn_grants().into_iter().map(|grant| grant.token).collect();
     granted.sort();
     let mut expected = vec![main, split.clone()];
@@ -478,8 +493,69 @@ fn a_soft_closed_session_spawns_its_waiting_panes_on_the_undo() {
     // finalized: nothing comes back
     assert!(open_store(&mut core, window).soft_close_session(queued));
     let _ = core.commit();
-    assert_eq!(core.request_pane_spawn(queued, &split, now), None);
+    assert_eq!(core.request_pane_spawn(queued, &split), None);
     open_store(&mut core, window).finalize_all_pending_closes();
     let _ = core.commit();
     assert_eq!(core.take_spawn_grants(), Vec::new());
+}
+
+/// Lazy restore: a launch spawns only each window's selected session; another restored one spawns once shown, a
+/// session made at runtime at once though not selected, and a window closed and reopened from its file restores its
+/// sessions dormant again.
+#[test]
+fn only_the_shown_restored_sessions_spawn_and_a_reopened_window_restores_lazily() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let mut core = persistent_core(dir.path(), settings(RestoreMode::None));
+    let first = new_session(&mut core, None, false);
+    let second = new_session(&mut core, None, false);
+    let window = core.library().window_holding_session(first).expect("a window");
+    open_store(&mut core, window).select_session(Some(first));
+    let _ = core.commit();
+    assert!(core.save_all());
+
+    let mut core = persistent_core(dir.path(), settings(RestoreMode::None));
+    core.set_restore_launch(RestoreLaunchDecision::new(RestoreMode::None, None));
+    core.wake_shown_sessions();
+    let shown = install(&mut core, first, None);
+    let hidden = install(&mut core, second, None);
+    assert_eq!(core.request_pane_spawn(first, &shown), Some(LaunchSeed::default()));
+    assert_eq!(core.request_pane_spawn(second, &hidden), None);
+    core.wake_shown_sessions();
+    assert_eq!(core.take_spawn_grants(), Vec::new(), "not shown yet");
+
+    let made = send(
+        &mut core,
+        Command::Session(SessionCmd::New),
+        None,
+        args(|a| a.select = Some(false)),
+    );
+    let made = answered_id(&made).expect("a new session");
+    let token = install(&mut core, made, None);
+    assert_eq!(core.request_pane_spawn(made, &token), Some(LaunchSeed::default()));
+
+    open_store(&mut core, window).select_session(Some(second));
+    core.wake_shown_sessions();
+    let grants = core.take_spawn_grants();
+    assert_eq!(
+        grants
+            .iter()
+            .map(|grant| (grant.session, grant.token.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(second, hidden.as_str())]
+    );
+
+    let other = core.library_mut().new_window(None);
+    let _ = core.commit();
+    open_store(&mut core, window).select_session(Some(first));
+    let _ = core.commit();
+    core.close_window(window);
+    let _ = core.commit();
+    core.open_window(window);
+    let _ = core.commit();
+    assert!(core.library().is_open(window) && core.library().is_open(other));
+    let reopened = install(&mut core, second, None);
+    assert_eq!(core.request_pane_spawn(second, &reopened), None, "dormant again");
+    let selected = install(&mut core, first, None);
+    core.wake_shown_sessions();
+    assert_eq!(core.request_pane_spawn(first, &selected), Some(LaunchSeed::default()));
 }

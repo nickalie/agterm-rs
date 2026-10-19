@@ -442,11 +442,7 @@ fn a_closed_split_ends_only_its_daemon() {
 fn a_live_launch_wraps_the_pane_in_its_daemon() {
     let mut live = live();
     let token = uuid_string(live.left);
-    let seed = live
-        .fixture
-        .core
-        .request_pane_spawn(live.session, &token, std::time::Instant::now())
-        .unwrap();
+    let seed = live.fixture.core.request_pane_spawn(live.session, &token).unwrap();
     assert!(seed.live && !seed.wait_after_command && seed.initial_input.is_none());
     let command = seed.command.unwrap();
     assert!(command.contains("; exec '/bin/sh' 'attach' '"), "{command}");
@@ -463,6 +459,143 @@ fn a_live_launch_wraps_the_pane_in_its_daemon() {
     assert_eq!(env("ZMX_MANAGED_CLAIM"), None, "a launch attach never claims the lead");
 }
 
+/// Lazy restore: a dormant Live session's daemon runs on unattached, so the tree reads it as backed by zmx, and
+/// `zmx.present` and `session.restart` wake it rather than refuse it as not live.
+#[test]
+fn a_dormant_live_session_reads_as_backed_and_wakes_for_present_and_restart() {
+    let mut live = live_with(2, RestoreMode::Live);
+    let dormant = [live.fixture.sessions[1], live.fixture.sessions[2]];
+    let tokens: Vec<String> = dormant.iter().map(|id| make_dormant(&mut live, *id)).collect();
+    let tree = live.core().tree(None).unwrap();
+    let node = tree
+        .workspaces
+        .iter()
+        .flat_map(|workspace| &workspace.sessions)
+        .find(|node| node.id == uuid_string(dormant[0]))
+        .unwrap();
+    assert_eq!(node.backed_by_zmx, Some(true));
+    assert_eq!(node.realized, Some(false));
+
+    assert!(live.zmx(ZmxCmd::Present, Some(&uuid_string(dormant[0])), |_| {}).ok);
+    let restart = live.fixture.session(
+        SessionCmd::Restart,
+        Some(&uuid_string(dormant[1])),
+        args(|a| a.pane = Some("left".to_owned())),
+    );
+    assert_eq!(restart.error.as_deref(), Some("session not realized"));
+    let grants = live.core().take_spawn_grants();
+    let woken: Vec<(Uuid, String)> = grants
+        .iter()
+        .map(|grant| (grant.session, grant.token.clone()))
+        .collect();
+    assert_eq!(
+        woken,
+        vec![(dormant[0], tokens[0].clone()), (dormant[1], tokens[1].clone())]
+    );
+    assert!(
+        grants.iter().all(|grant| grant.seed.live),
+        "each attaches to its daemon"
+    );
+}
+
+/// Makes `id` a restored session not shown yet, its main terminal not up: answers the terminal's token.
+fn make_dormant(live: &mut Live, id: Uuid) -> String {
+    let session = live.fixture.store_mut().unwrap().session_mut(id).unwrap();
+    session.was_restored = true;
+    let token = uuid_string(session.pane_identity);
+    let _ = session
+        .pane_slot_mut(StatusPane::Left)
+        .replace(Box::new(FakeSurface::new(token.clone()).with_realized(false)));
+    assert_eq!(live.core().request_pane_spawn(id, &token), None, "dormant");
+    token
+}
+
+/// Outside Live a dormant pane has no daemon to restart in: refused as upstream refuses it, and left asleep.
+#[test]
+fn a_restart_outside_live_refuses_a_dormant_pane_without_waking_it() {
+    let mut live = live_with(1, RestoreMode::None);
+    let dormant = live.fixture.sessions[1];
+    make_dormant(&mut live, dormant);
+    let restart = live.fixture.session(
+        SessionCmd::Restart,
+        Some(&uuid_string(dormant)),
+        args(|a| a.pane = Some("left".to_owned())),
+    );
+    assert_eq!(
+        restart.error.as_deref(),
+        Some("session.restart needs Live sessions mode; this pane has no live shell to replace")
+    );
+    assert_eq!(live.core().take_spawn_grants(), Vec::new(), "still dormant");
+}
+
+/// A confirmed kill of a dormant pane's daemon closes the pane, as its exit would have once attached: a later wake
+/// must not attach anew and start the killed program again.
+#[test]
+fn a_confirmed_kill_closes_a_dormant_pane() {
+    let mut live = live_with(1, RestoreMode::Live);
+    let dormant = live.fixture.sessions[1];
+    let identity = live.fixture.store().session(dormant).unwrap().pane_identity;
+    make_dormant(&mut live, dormant);
+    let daemon = daemon_name(identity);
+    live.host.set_record(&daemon, Some(0), Some(20), None);
+    let response = live.zmx(ZmxCmd::Kill, Some(&uuid_string(dormant)), |a| {
+        (a.pane, a.force) = (Some("left".to_owned()), Some(true));
+    });
+    assert!(response.ok, "{response:?}");
+    let _ = live.core().commit();
+    assert!(
+        live.fixture.store().session(dormant).is_none(),
+        "the pane's close closed its session"
+    );
+    live.core().wake_shown_sessions();
+    assert_eq!(live.core().take_spawn_grants(), Vec::new());
+}
+
+/// A restart retried while the woken pane's terminal is still starting answers `session not realized` again, as
+/// upstream's unrealized Live view does, never the refusal a pane outside Live gets.
+#[test]
+fn a_restart_retried_while_the_woken_pane_starts_is_still_not_realized() {
+    let mut live = live_with(1, RestoreMode::Live);
+    let dormant = live.fixture.sessions[1];
+    make_dormant(&mut live, dormant);
+    let restart = |live: &mut Live| {
+        live.fixture.session(
+            SessionCmd::Restart,
+            Some(&uuid_string(dormant)),
+            args(|a| a.pane = Some("left".to_owned())),
+        )
+    };
+    assert_eq!(restart(&mut live).error.as_deref(), Some("session not realized"));
+    assert_eq!(live.core().take_spawn_grants().len(), 1, "woken");
+    assert_eq!(restart(&mut live).error.as_deref(), Some("session not realized"));
+}
+
+/// A hidden split has no terminal mounted: a confirmed kill of its daemon leaves the session and its main pane's
+/// daemon alone.
+#[test]
+fn a_confirmed_kill_of_a_dormant_hidden_split_leaves_the_session() {
+    let mut live = live_with(1, RestoreMode::Live);
+    let dormant = live.fixture.sessions[1];
+    make_dormant(&mut live, dormant);
+    let store = live.fixture.store_mut().unwrap();
+    store.set_split_visibility(dormant, true, None);
+    store.set_split_visibility(dormant, false, None);
+    let split = store
+        .session(dormant)
+        .unwrap()
+        .split_pane_identity
+        .expect("a hidden split");
+    let daemon = daemon_name(split);
+    live.host.set_record(&daemon, Some(0), Some(20), None);
+    let response = live.zmx(ZmxCmd::Kill, Some(&uuid_string(dormant)), |a| {
+        (a.pane, a.force) = (Some("right".to_owned()), Some(true));
+    });
+    assert!(response.ok, "{response:?}");
+    let _ = live.core().commit();
+    assert!(live.fixture.store().session(dormant).is_some());
+    assert_eq!(live.host.kills(), [(daemon, true)], "only the split's daemon");
+}
+
 #[test]
 fn a_fallback_or_ordinary_launch_runs_a_plain_shell() {
     for (requested, reason) in [
@@ -473,11 +606,7 @@ fn a_fallback_or_ordinary_launch_runs_a_plain_shell() {
         live.core()
             .set_restore_launch(RestoreLaunchDecision::new(requested, reason));
         let token = uuid_string(live.left);
-        let seed = live
-            .fixture
-            .core
-            .request_pane_spawn(live.session, &token, std::time::Instant::now())
-            .unwrap();
+        let seed = live.fixture.core.request_pane_spawn(live.session, &token).unwrap();
         assert!(
             !seed.live && seed.command.is_none() && seed.env.is_empty(),
             "{requested:?}"
@@ -498,11 +627,7 @@ pub(super) fn report(live: &mut Live, token: &str, nonce: &str, role: &str, gene
 /// Spawns the live pane, which begins its attachment, and returns its nonce.
 pub(super) fn spawn_live(live: &mut Live) -> String {
     let token = uuid_string(live.left);
-    let seed = live
-        .fixture
-        .core
-        .request_pane_spawn(live.session, &token, std::time::Instant::now())
-        .unwrap();
+    let seed = live.fixture.core.request_pane_spawn(live.session, &token).unwrap();
     seed.env
         .into_iter()
         .find(|(key, _)| key == "ZMX_MANAGED")
