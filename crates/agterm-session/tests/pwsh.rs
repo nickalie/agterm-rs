@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use agterm_core::command_restore::{ProcessGroupMember, group_descent_candidates, is_idle_shell};
 use agterm_core::live::replay::{self, FinalShell, powershell_quoted};
 use agterm_core::live::shell_integration::{self, Inherited, LoginShell};
-use agterm_host::ProcessTable as _;
+use agterm_host::ProcessTable;
 use agterm_session::process_table::ProcTable;
 use agterm_session::protocol::SessionSpec;
 use agterm_session::server::pane::Pane;
@@ -191,7 +191,7 @@ fn wait_for_directory(pane: &Pane, cwd: &Path) {
 /// The program in the foreground of the shell `shell_pid` runs, read through the process table: the terminal's
 /// foreground, or, where PowerShell leaves its programs in its own process group (Unix: it has no job control), the
 /// group leader's child. `None` while the shell holds its prompt.
-fn foreground_argv(table: &ProcTable, shell_pid: i32) -> Option<Vec<String>> {
+fn foreground_argv(table: &dyn ProcessTable, shell_pid: i32) -> Option<Vec<String>> {
     let group = table.terminal_foreground(shell_pid)?;
     let argv = table.argv(group)?;
     if !is_idle_shell(&argv, None) {
