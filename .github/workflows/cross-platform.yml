@@ -2,9 +2,9 @@
 # tests of each crate in PACKAGES. Each task that makes a crate cross-platform adds it to PACKAGES and its generator
 # checks as steps of the `crates` job. No Miri job: it ran the Rust VT port's memory core (page buffers, its
 # allocators), which left this branch with the port (branch `rust-vt-port`). The rest of the workspace (GPUI, WPE)
-# builds on Linux only and stays in rust-linux.yml. agterm-server (AF_UNIX and `flock`) and agterm-ctl
-# (an AF_UNIX client, tested against the server) are `any` crates that stay out until the control server has its
-# Windows form, which belongs to the GPUI-on-Windows plan.
+# is checked on Linux only, in rust-linux.yml. agterm-server (AF_UNIX and `flock`) and agterm-ctl (an AF_UNIX
+# client, tested against the server) are meant to be cross-platform but build on Linux only today (`std::os::unix`;
+# agterm-ctl fails to build on macOS too): they join PACKAGES once the control server has its macOS and Windows forms.
 #
 # libghostty-vt (agterm-ghostty-vt-sys, its wrapper agterm-ghostty-vt) builds here from the prefix
 # scripts/build-ghostty-vt.sh prepares with the pinned Zig of each runner's OS and arch (Git Bash on Windows, stock
