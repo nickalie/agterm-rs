@@ -39,7 +39,8 @@ pub(super) fn signal(signal: Signal, record: &ProcessRecord) {
         Signal::HangUp => libc::SIGHUP,
         Signal::Kill => libc::SIGKILL,
     };
-    // SAFETY: `kill` has no memory preconditions; the sweep matched the pid on its start time a moment ago.
+    // SAFETY: `kill` has no memory preconditions. The pid comes from a table read a moment ago (the sweep's match on
+    // its start time, or the session scan's on its session id), so this is best effort against the pid's reuse.
     unsafe { libc::kill(record.pid, number) };
 }
 

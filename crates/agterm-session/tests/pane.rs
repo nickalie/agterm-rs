@@ -573,6 +573,30 @@ fn dropping_a_pane_ends_a_job_in_a_group_of_its_own() -> TestResult {
     Ok(())
 }
 
+/// A forced kill hangs up a job in a group of its own before it kills it: the kernel's hangup on the shell's exit
+/// reaches only the foreground group, so only the session-wide hangup lets the job's handler run. The job keeps the
+/// PTY (its output), so the grace before the kill waits for the handler and the job's exit.
+#[cfg(unix)]
+#[test]
+fn a_forced_kill_hangs_up_a_job_in_a_group_of_its_own() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let mark = dir.path().join("hung-up");
+    let spec = script(&format!(
+        "set -m; (trap \"echo hup > '{}'; exit\" HUP; while :; do sleep 1; done) </dev/null & echo \"started:$!:\"; wait",
+        mark.display()
+    ));
+    let (pane, creator) = Pane::spawn(config("job-hangup", dir.path(), spec))?;
+    let mut client = Client::new(creator);
+    client.expect("started:");
+    let job = descendant(&client.text())?;
+    assert_own_group(pane.pid(), job)?;
+    pane.kill(true)?;
+    client.finish();
+    assert_gone(job);
+    assert!(mark.exists(), "the job was killed without a hangup");
+    Ok(())
+}
+
 #[test]
 fn dropping_a_pane_ends_its_program() -> TestResult {
     let dir = tempfile::tempdir()?;
