@@ -10,7 +10,7 @@ license.workspace = true
 [dependencies]
 agterm-core.workspace = true
 agterm-host.workspace = true
-# the live probe's launch inputs and the stat line the process table reads
+# the live probe's launch inputs and the process table
 agterm-session.workspace = true
 libc.workspace = true
 serde_json.workspace = true

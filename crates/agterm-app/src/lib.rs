@@ -2,7 +2,7 @@
 //! a frontend keeps only its widget glue over them.
 //!
 //! - [`hook_runner`]: the [`agterm_host::ProcessLauncher`] for hooks and custom commands.
-//! - [`process_table`]: the [`agterm_host::ProcessTable`] over `/proc`.
+//! - [`process_table`]: this OS's [`agterm_host::ProcessTable`], `agterm-session`'s.
 //! - [`restore_launch`]: the restore decision a launch takes before its first terminal.
 //! - [`logging`]: `tracing` to stderr and to the state directory's log file.
 //! - [`quick_placement`]: the quick terminal's host and placement decisions.

@@ -272,6 +272,7 @@ version = "0.1.0"
 dependencies = [
  "agterm-core",
  "agterm-host",
+ "agterm-pty",
  "interprocess",
  "libc",
  "postcard",

@@ -14,7 +14,7 @@ use agterm_core::live::screen::parse_screen;
 use agterm_core::live::support::is_executable_file;
 use agterm_host::{HostError, KillOutcome, LiveScreen, LiveSessionRecord, SessionHost};
 
-use crate::sweep::Sweeper;
+use crate::sweep::{Signal, Sweeper};
 
 /// How long one invocation may run before it is terminated.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -139,7 +139,7 @@ impl ZmxClient {
         };
         for (name, job) in jobs {
             if kill_outcome(output, name) == KillOutcome::Killed {
-                sweeper.send(libc::SIGHUP, job);
+                sweeper.send(Signal::HangUp, job);
             }
         }
     }
@@ -260,7 +260,7 @@ impl SessionHost for ZmxClient {
 
     fn end_job(&self, job: &[agterm_host::ProcessRecord]) {
         if let Some(sweeper) = &self.sweeper {
-            sweeper.send(libc::SIGKILL, job);
+            sweeper.send(Signal::Kill, job);
         }
     }
 

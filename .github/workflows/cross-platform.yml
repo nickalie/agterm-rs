@@ -4,7 +4,10 @@
 # allocators), which left this branch with the port (branch `rust-vt-port`). The rest of the workspace (GPUI, WPE,
 # the pane core) builds on Linux only and stays in rust-linux.yml. agterm-server (AF_UNIX and `flock`) and agterm-ctl
 # (an AF_UNIX client, tested against the server) are `any` crates that stay out until the control server has its
-# Windows form, which belongs to the GPUI-on-Windows plan.
+# Windows form, which belongs to the GPUI-on-Windows plan. agterm-app stays out too: its process table is
+# agterm-session's (tested here on all three), but its hook runner (a `poll` pump over non-blocking pipes), its log
+# file (`O_NOFOLLOW`) and its remote presentation process (`fcntl`, `kill`) are Unix-only, and its tests launch panes
+# through agterm-term.
 #
 # libghostty-vt (agterm-ghostty-vt-sys, its wrapper agterm-ghostty-vt) builds here from the prefix
 # scripts/build-ghostty-vt.sh prepares with the pinned Zig of each runner's OS and arch (Git Bash on Windows, stock
