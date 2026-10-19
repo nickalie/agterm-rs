@@ -90,6 +90,16 @@ impl Child {
         self.inner.wait()
     }
 
+    /// Wait for the child to exit, as on Unix, where it is left unreaped so its group can still be signalled; here
+    /// nothing is reaped, and its job ends the tree either way. Its status is [`Child::wait`]'s.
+    ///
+    /// # Errors
+    ///
+    /// As [`Child::wait`].
+    pub fn wait_exit(&mut self) -> io::Result<()> {
+        self.inner.wait().map(drop)
+    }
+
     /// The child's exit status if it has exited, else `None`.
     ///
     /// # Errors

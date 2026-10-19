@@ -350,6 +350,21 @@ fn killing_the_tree_ends_the_child_and_its_descendants() -> TestResult {
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn a_child_waited_for_unreaped_still_has_its_tree_killed() -> TestResult {
+    // the shell exits at once; its background child, ignoring the hangup its end sends, lives on in its group
+    let command = command("/bin/sh").args(["-c", "(trap '' HUP; exec sleep 300) & echo \"started:$!:\""]);
+    let mut session = start(&command, Size::cells(24, 80))?;
+    session.expect("started:");
+    let descendants = descendants(&session)?;
+    session.child.wait_exit()?;
+    session.child.killer().kill_tree()?;
+    descendants.assert_gone()?;
+    assert!(session.finish()?.success());
+    Ok(())
+}
+
 /// The child's descendants, to check they ended.
 #[cfg(unix)]
 struct Descendants(libc::pid_t);

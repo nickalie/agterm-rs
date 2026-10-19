@@ -779,16 +779,30 @@ Order after Task 7, as two lanes that meet:
 - Create: `crates/agterm-session/src/server/{pane,clients}.rs`, `crates/agterm-session/tests/pane.rs`
 - Modify: `crates/agterm-session/Cargo.toml` (`agterm-ghostty-vt`, `agterm-pty`)
 
-- [ ] port the parts of herdr's per-pane runtime Task 2 kept (`pane.rs`, `terminal/runtime.rs`,
+- [x] port the parts of herdr's per-pane runtime Task 2 kept (`pane.rs`, `terminal/runtime.rs`,
       `runtime_registry.rs`) over `agterm-pty`, with the session-creation inputs and child environment from Technical
       Details
-- [ ] VT state in `agterm-ghostty-vt` fed from the PTY, with its image media off; raw output fanned out to attached
+      - `server::pane::Pane` is herdr's runtime facade and pane runtime in one; `server::pane::Panes` the registry by
+        session name, which forgets a session once its program ended. `SessionSpec.env` is the program's whole
+        environment, as zmx's first attach client gave it (`agterm-pty`'s `Command` gains `env_clear` for it), with
+        `AGTERM_LIVE_SESSION` and `AGTERM_LIVE_DIR` set, `AGTERM_LIVE_MANAGED{,_CLAIM}` removed and `TERM` set to zmx's
+        `xterm-256color` when unset or `dumb`; without a `cwd` the program starts in that environment's home
+        directory. The creating client is attached before the program runs (`Pane::spawn` returns its attachment),
+        as an attach that creates its session is. A kill or a dropped pane hangs the process group up (on Windows
+        ends the job), then kills it after herdr's 250 ms grace (a kill without `force` stops at the hangup)
+- [x] VT state in `agterm-ghostty-vt` fed from the PTY, with its image media off; raw output fanned out to attached
       clients over byte-bounded lossless queues that never block the PTY reader
-- [ ] child exit: the session ends and its clients get the exit as `ExitPolicy` expects
-- [ ] tests (all three OSes): echo round trip through a client; resize reaching the child; kill ending the child and
+      - `server::clients`: one queue per client, bounded in output bytes; output that does not fit is never dropped
+        silently: the queue keeps what it has and ends with `Overflowed { offset }` (then only the exit), for Task 18's
+        resync. The terminal's `write_pty` replies go back to the program (Task 20 adds the rest of the replies)
+- [x] child exit: the session ends and its clients get the exit as `ExitPolicy` expects
+      - after the PTY's end (within 1 s, `agterm-term`'s grace), every client gets `Exit` with the program's code and
+        signal, after all of its output, and is detached; the runtime `ExitPolicy` weighs is the client's, as today
+- [x] tests (all three OSes): echo round trip through a client; resize reaching the child; kill ending the child and
       its tree; a session's environment and cwd as given; two clients receiving the same bytes; the PTY reader never
       blocked by a stalled client
-- [ ] run gates
+- [x] run gates
+      - `cross-platform.yml` green on all three (run 39210421250, branch `ci/cps-task-16`, deleted after)
 
 ### Task 17: Leadership
 

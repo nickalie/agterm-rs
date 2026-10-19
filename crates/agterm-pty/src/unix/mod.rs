@@ -74,6 +74,20 @@ impl Child {
         self.reap()
     }
 
+    /// Wait for the child to exit without reaping it: until [`Child::wait`] or [`Child::try_wait`] reaps it, it stays
+    /// a zombie holding its id, so its process group can still be signalled ([`Killer`]) for the members that
+    /// outlived it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Child::wait`].
+    pub fn wait_exit(&mut self) -> io::Result<()> {
+        if self.was_reaped() {
+            return Ok(());
+        }
+        exited(self.pid, true).map(drop)
+    }
+
     /// The child's exit status if it has exited (and is now reaped, or was before), else `None`.
     ///
     /// # Errors
@@ -144,7 +158,8 @@ impl Killer {
     ///
     /// Once the child is reaped ([`Child::wait`], [`Child::try_wait`]) its group is never signalled, since the id may
     /// be reused by then, so members that outlived the child (a background job) live on: hang up or kill the tree
-    /// before waiting. On Windows the job ends the tree either way.
+    /// before reaping it ([`Child::wait_exit`] waits for its exit without). On Windows the job ends the tree either
+    /// way.
     ///
     /// # Errors
     ///
@@ -173,12 +188,35 @@ impl Killer {
         // SAFETY: plain `killpg(2)` on the group the unreaped child leads; no memory is passed.
         if unsafe { libc::killpg(self.group, signal) } != 0 {
             let err = io::Error::last_os_error();
-            if err.raw_os_error() != Some(libc::ESRCH) {
-                return Err(err);
+            match err.raw_os_error() {
+                Some(libc::ESRCH) => {}
+                #[cfg(target_os = "macos")]
+                Some(libc::EPERM) => signal_members(self.group, signal),
+                _ => return Err(err),
             }
         }
         drop(reaped);
         Ok(())
+    }
+}
+
+/// `signal` to each member of `group` in turn: macOS answers `killpg` with `EPERM` once the group's leader exited
+/// (an unreaped zombie), though members that outlived it are left. A member that cannot be signalled, or ends
+/// meanwhile, is passed over.
+#[cfg(target_os = "macos")]
+fn signal_members(group: libc::pid_t, signal: libc::c_int) {
+    /// More processes than a session's group holds.
+    const MOST: usize = 4096;
+    let mut pids: Vec<libc::pid_t> = vec![0; MOST];
+    let bytes = libc::c_int::try_from(MOST * size_of::<libc::pid_t>()).unwrap_or(libc::c_int::MAX);
+    // SAFETY: libproc writes at most `bytes` bytes of process ids into the buffer, which holds that many.
+    let listed = unsafe { libc::proc_listpgrppids(group, pids.as_mut_ptr().cast(), bytes) };
+    for &pid in pids.iter().take(usize::try_from(listed).unwrap_or(0)) {
+        if pid > 0 {
+            // SAFETY: plain `kill(2)` on a member of the group, which the unreaped leader keeps from being reused;
+            // no memory is passed.
+            unsafe { libc::kill(pid, signal) };
+        }
     }
 }
 

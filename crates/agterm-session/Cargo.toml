@@ -1,6 +1,6 @@
 [package]
 name = "agterm-session"
-description = "agterm's live-session server, on herdr's architecture: its wire, its endpoint, its lifecycle and the live-launch inputs"
+description = "agterm's live-session server, on herdr's architecture: its wire, its endpoint, its lifecycle, its panes and the live-launch inputs"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,12 +11,16 @@ license = "MIT AND Apache-2.0"
 [dependencies]
 # The live-launch inputs: the wrap configuration, the launch probe and the paths are the core's policy.
 agterm-core.workspace = true
+# The live panes' terminal state and their PTYs.
+agterm-ghostty-vt.workspace = true
 agterm-host.workspace = true
+agterm-pty.workspace = true
 interprocess.workspace = true
 postcard.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 uuid.workspace = true
 
 [target.'cfg(unix)'.dependencies]

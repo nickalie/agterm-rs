@@ -14,6 +14,12 @@
 //! ([`CAPABILITY_DETACHED`], herdr's `detached_server_daemon` status) so the client that started it can check that
 //! the server outlives it.
 //!
+//! # Panes
+//!
+//! [`pane::Pane`] is one live session: its program on a PTY, the terminal its output builds and the clients that
+//! output fans out to over byte-bounded, lossless queues ([`clients`]); [`pane::Panes`] holds them by name. The
+//! connections do not serve them yet.
+//!
 //! # Connections
 //!
 //! A connection counts as a client from its accept until it closes. Every connection starts with a hello
@@ -22,7 +28,9 @@
 //! [`crate::protocol::ErrorCode::UnsupportedRole`], and a handoff request with a failed result, since the server does
 //! not advertise [`crate::protocol::CAPABILITY_HANDOFF_REQUEST`].
 
+pub mod clients;
 pub mod lifecycle;
+pub mod pane;
 pub mod spawn;
 
 use std::io;
