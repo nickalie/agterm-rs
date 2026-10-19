@@ -122,6 +122,12 @@ fn a_followers_resize_is_held_not_applied() -> TestResult {
     assert!(resized(&leader));
     quit(&pane)?;
     leader.finish();
+
+    // the session's end leaves no client attached or leading
+    assert_eq!(pane.clients(), 0);
+    assert_eq!(pane.leader(), None);
+    assert_eq!(pane.role(leader.id()), None);
+    assert_eq!(pane.role(follower.id()), None);
     Ok(())
 }
 
@@ -175,11 +181,12 @@ fn the_lead_leaves_with_its_client() -> TestResult {
     viewer.drain();
     assert_eq!(viewer.roles().last(), Some(&(LeadRole::Follower, 3)));
 
-    // a client gone without detaching (its subscription dropped) leaves the lead too
+    // a client gone without detaching (its subscription dropped) leaves the lead too, at once: the viewer is told
+    // before anything else happens at the pane
     drop(stock);
-    assert_eq!(pane.leader(), None);
     viewer.drain();
     assert_eq!(viewer.roles().last(), Some(&(LeadRole::Unowned, 4)));
+    assert_eq!(pane.leader(), None);
     assert_eq!(pane.size(), TALL, "the session keeps the last leader's size");
     assert!(
         !input(&pane, &viewer, &size_line())?,

@@ -36,8 +36,9 @@
 //! and its resizes go through [`Pane::input`] and [`Pane::resize_client`]. [`super::lead`] decides which of them owns
 //! the session's size, and the pane applies the decision under the same lock: the leader's size, in order with the
 //! output, then the managed clients' role reports ([`ClientEvent::Role`](super::clients::ClientEvent)). A client
-//! detached, or whose subscription was dropped, leaves the lead as well. [`Pane::write`] (typing on behalf of no client)
-//! and [`Pane::resize`] (the server's own) bypass the lead.
+//! detached, or whose subscription was dropped, leaves the lead as well, at once (dropping a subscription takes the
+//! pane's lock). The program's end leaves no client attached or leading. [`Pane::write`] (typing on behalf of no
+//! client) and [`Pane::resize`] (the server's own) bypass the lead.
 //!
 //! # The end
 //!
@@ -279,10 +280,17 @@ impl Core {
         (state, true)
     }
 
-    /// Record the program's end and tell every client.
+    /// Forget the clients whose subscription was dropped now, not at the pane's next event: a leader gone that way
+    /// leaves the session unowned and its managed clients are told at once.
+    fn prune(&self) {
+        self.lock().prune();
+    }
+
+    /// Record the program's end and tell every client; no client is attached, or leads, from then on.
     fn end(&self, status: ExitStatus) {
         let mut state = self.lock();
         state.clients.exit(&status);
+        state.lead = Lead::new();
         state.exit = Some(status);
         let on_end = state.on_end.take();
         drop(state);
@@ -339,7 +347,7 @@ impl Pane {
         let Spawned { master, child } = agterm_pty::spawn(&command, Size::cells(size.rows, size.cols))?;
         let mut clients = Clients::new(client_queue_limit);
         let mut lead = Lead::new();
-        let creator = attach_creator(&mut clients, &mut lead, size, managed.as_ref());
+        let mut creator = attach_creator(&mut clients, &mut lead, size, managed.as_ref());
         let core = Arc::new(Core {
             state: Mutex::new(State {
                 terminal,
@@ -357,6 +365,7 @@ impl Pane {
             changed: Condvar::new(),
             replies,
         });
+        prune_on_drop(&core, &mut creator.subscription);
         let id = NEXT_PANE.fetch_add(1, Ordering::Relaxed);
         let killer = child.killer();
         let pid = child.pid();
@@ -427,7 +436,8 @@ impl Pane {
         if let Some(size) = change.resize {
             self.resize_locked(&mut state, size);
         }
-        let subscription = state.clients.attach(id);
+        let mut subscription = state.clients.attach(id);
+        prune_on_drop(&self.core, &mut subscription);
         state.tell(&change.notices);
         let attached = Attached {
             subscription,
@@ -746,6 +756,17 @@ fn attach_creator(clients: &mut Clients, lead: &mut Lead, size: GridSize, manage
         offset: 0,
         size,
     }
+}
+
+/// Have the pane forget the client of `subscription` as soon as it is dropped ([`Core::prune`]), under the pane's
+/// lock; nothing once the pane is gone.
+fn prune_on_drop(core: &Arc<Core>, subscription: &mut Subscription) {
+    let core = Arc::downgrade(core);
+    subscription.on_drop(move |_| {
+        if let Some(core) = core.upgrade() {
+            core.prune();
+        }
+    });
 }
 
 /// The server's terminal for a session of `size`: its replies into `replies`, no Kitty image media.

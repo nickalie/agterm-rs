@@ -152,17 +152,37 @@ impl Slot {
     }
 }
 
-/// The client's end of its queue. Dropping it detaches the client: the pane stops queuing for it.
-#[derive(Debug)]
+/// What runs when a subscription is dropped, once its queue is closed.
+type OnDrop = Box<dyn FnOnce(ClientId) + Send + Sync>;
+
+/// The client's end of its queue. Dropping it detaches the client: the pane stops queuing for it, and a pane's own
+/// subscription ([`Subscription::on_drop`]) has the pane forget the client at once, so dropping one takes that pane's
+/// lock.
 pub struct Subscription {
     id: ClientId,
     slot: Arc<Slot>,
+    on_drop: Option<OnDrop>,
+}
+
+impl std::fmt::Debug for Subscription {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Subscription")
+            .field("id", &self.id)
+            .field("slot", &self.slot)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Subscription {
     #[must_use]
     pub fn id(&self) -> ClientId {
         self.id
+    }
+
+    /// Run `hook` with the client's id when this subscription is dropped, after its queue is closed (the pane forgets
+    /// the client then, and its part in the lead, rather than at its next event); it replaces any hook set before.
+    pub fn on_drop(&mut self, hook: impl FnOnce(ClientId) + Send + Sync + 'static) {
+        self.on_drop = Some(Box::new(hook));
     }
 
     /// The next event, waiting at most `timeout` for one.
@@ -212,6 +232,9 @@ impl Subscription {
 impl Drop for Subscription {
     fn drop(&mut self) {
         self.slot.with(|queue| queue.closed = true);
+        if let Some(on_drop) = self.on_drop.take() {
+            on_drop(self.id);
+        }
     }
 }
 
@@ -245,7 +268,11 @@ impl Clients {
             ready: Condvar::new(),
         });
         self.slots.push((id, Arc::clone(&slot)));
-        Subscription { id, slot }
+        Subscription {
+            id,
+            slot,
+            on_drop: None,
+        }
     }
 
     /// Detach the client `id`; whether it was attached. What its queue holds is still received, then
@@ -433,6 +460,18 @@ mod tests {
         assert_eq!(clients.prune(), [2]);
         assert!(clients.prune().is_empty());
         assert!(!clients.role(2, LeadRole::Leader, 1));
+    }
+
+    #[test]
+    fn a_dropped_subscription_runs_its_hook_once_its_queue_is_closed() {
+        let mut clients = Clients::new(DEFAULT_QUEUE_LIMIT);
+        let mut subscription = clients.attach(3);
+        let (sender, dropped) = std::sync::mpsc::channel();
+        subscription.on_drop(move |id| sender.send(id).unwrap());
+        assert!(dropped.try_recv().is_err());
+        drop(subscription);
+        assert_eq!(dropped.try_recv(), Ok(3));
+        assert_eq!(clients.prune(), [3], "its client is detached");
     }
 
     #[test]
