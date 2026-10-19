@@ -894,7 +894,12 @@ Order after Task 7, as two lanes that meet:
         screen, the cut and the bounded wait Unix-only: the pseudoconsole re-renders a program's sequences), and
         `tests/attach.rs` through an in-process server (create, detach, reattach, gone, a failed create, a resync and
         a budget disconnect over the connection)
-- [ ] run gates
+- [x] run gates
+      - fmt, locked metadata, tracing and vendored-source checks, the lint report, clippy (workspace with all features,
+        the frontend without its default features, `agterm-session` for macOS), the selftests, the workspace tests
+        headless (all green but `agterm-gpui`'s load-bound frame-rate test `html_overlay`, 19 fps at a load average of
+        16–39, which uses nothing this task changed); no conformance run, as in Tasks 16–17: no staged binary runs the
+        server yet; `cross-platform.yml` run 39329002006 green on all three (`ci/cps-task-18`, deleted after)
 
 ### Task 19: Server API: what `SessionHost` and `clipboard set` need
 
