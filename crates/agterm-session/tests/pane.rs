@@ -573,21 +573,33 @@ fn dropping_a_pane_ends_a_job_in_a_group_of_its_own() -> TestResult {
     Ok(())
 }
 
-/// A forced kill hangs up a job in a group of its own before it kills it: the kernel's hangup on the shell's exit
-/// reaches only the foreground group, so only the session-wide hangup lets the job's handler run. The job keeps the
-/// PTY (its output), so the grace before the kill waits for the handler and the job's exit.
+/// A forced kill hangs up a job in a group of its own and gives it the grace to handle that before it kills it: the
+/// kernel's hangup on the shell's exit reaches only the foreground group, so only the session-wide hangup lets the
+/// job's handler run. The job let go of the PTY (an exec'd `sh` keeps none of the job-controlling shell's terminal
+/// descriptors), as one holding it does on macOS, which revokes the tty once the shell exits, so the PTY's end tells
+/// nothing of it: only the grace's wait on the session's processes lets its handler, which takes 50ms of the 250ms
+/// grace, finish. The job says `trapped:` once its handler is set, and waits in the `wait` builtin, which the trapped
+/// hangup interrupts at once.
 #[cfg(unix)]
 #[test]
 fn a_forced_kill_hangs_up_a_job_in_a_group_of_its_own() -> TestResult {
     let dir = tempfile::tempdir()?;
     let mark = dir.path().join("hung-up");
-    let spec = script(&format!(
-        "set -m; (trap \"echo hup > '{}'; exit\" HUP; while :; do sleep 1; done) </dev/null & echo \"started:$!:\"; wait",
+    let job = format!(
+        concat!(
+            r#"trap "sleep 0.05; echo hup > '{}'; exit" HUP; echo trapped:; "#,
+            "exec </dev/null >/dev/null 2>&1; sleep 300 & wait"
+        ),
         mark.display()
+    );
+    let spec = script(&format!(
+        "set -m; sh -c '{}' & echo \"started:$!:\"; wait",
+        job.replace('\'', r"'\''")
     ));
     let (pane, creator) = Pane::spawn(config("job-hangup", dir.path(), spec))?;
     let mut client = Client::new(creator);
     client.expect("started:");
+    client.expect("trapped:");
     let job = descendant(&client.text())?;
     assert_own_group(pane.pid(), job)?;
     pane.kill(true)?;

@@ -17,8 +17,9 @@
 //! - the shutdown signals the child's process group through `agterm-pty`'s [`Killer`] and, on Unix, every other
 //!   process of its session (herdr's session process list, [`crate::job::session_members`]), so a job-controlling
 //!   shell's jobs in groups of their own are reached too; on Windows the child's job, its whole tree. A hangup, then
-//!   a kill after [`KILL_GRACE`] (herdr's terminate step dropped), the child left unreaped meanwhile, so its group
-//!   and its session, which its id names, are still reached once it exited and cannot be reused;
+//!   a kill after [`KILL_GRACE`] or once the child, the PTY and the session's other processes ended (herdr's
+//!   terminate step dropped), the child left unreaped meanwhile, so its group and its session, which its id names,
+//!   are still reached once it exited and cannot be reused;
 //! - the registry is keyed by session name and drops a pane once its program ended.
 //!
 //! # The terminal
@@ -65,6 +66,9 @@ pub const FALLBACK_TERM: &str = "xterm-256color";
 pub const EXIT_GRACE: Duration = Duration::from_secs(1);
 /// How long a kill waits for the program to end after the hangup, and again after the kill (herdr's grace).
 pub const KILL_GRACE: Duration = Duration::from_millis(250);
+/// How often a kill's grace looks at what of the program's session lives on (herdr's poll).
+#[cfg(unix)]
+const SESSION_POLL: Duration = Duration::from_millis(20);
 /// How long the waiter holds off reaping the program for a kill under way, which holds it for the hangup, at most
 /// [`KILL_GRACE`] and the kill; past it the program is reaped, and the kill then signals nothing.
 const REAP_HOLD_LIMIT: Duration = Duration::from_secs(5);
@@ -490,10 +494,12 @@ impl Pane {
     }
 
     /// herdr's `shutdown_pane_processes`: a hangup to the program's process group and the rest of its session, up
-    /// to [`KILL_GRACE`] for the program and the PTY to end, then a kill of both, which ends a process that ignores
-    /// the hangup or let go of the PTY, in the program's group or in one of its own (a job-controlling shell's
-    /// `nohup` or `disown`ed job). The program is held unreaped throughout, so its group and its session, both named
-    /// by its id, are still reached once it exited. Nothing once it is being reaped: its id may be reused by then.
+    /// to [`KILL_GRACE`] for the program, the PTY and the session's other processes to end (so a job that handles
+    /// the hangup has the grace to, though it let go of the PTY or the tty was revoked, as macOS does when the
+    /// session's leader exits), then a kill of both, which ends a process that ignores the hangup, in the program's
+    /// group or in one of its own (a job-controlling shell's `nohup` or `disown`ed job). The program is held
+    /// unreaped throughout, so its group and its session, both named by its id, are still reached once it exited.
+    /// Nothing once it is being reaped: its id may be reused by then.
     ///
     /// # Errors
     ///
@@ -505,7 +511,9 @@ impl Pane {
         let hung_up = self.killer.hang_up();
         signal_session(self.pid, crate::job::Signal::HangUp);
         if hung_up.is_ok() {
+            let deadline = Instant::now() + KILL_GRACE;
             self.core.wait_for(KILL_GRACE, |state| state.exited && state.pty_ended);
+            wait_for_session(self.pid, deadline);
         }
         let killed = self.killer.kill_tree();
         signal_session(self.pid, crate::job::Signal::Kill);
@@ -559,6 +567,27 @@ fn signal_session(pid: u32, signal: crate::job::Signal) {
 
 #[cfg(windows)]
 fn signal_session(_pid: u32, _signal: crate::job::Signal) {}
+
+/// Until `deadline`, while a process of the session the program `pid` leads, other than the program, lives on
+/// (herdr's `wait_for_processes_to_exit`, which counts a zombie as alive too), read afresh each [`SESSION_POLL`].
+/// A session with no other process, or a deadline already past, costs at most one read and no wait. Under
+/// [`Pane::end_tree`]'s hold, as [`signal_session`]; an unreadable table ends the wait. Nothing on Windows, whose
+/// job holds the tree.
+#[cfg(unix)]
+fn wait_for_session(pid: u32, deadline: Instant) {
+    let Ok(session) = i32::try_from(pid) else {
+        return;
+    };
+    let lives_on = || {
+        crate::job::session_members(session).is_some_and(|members| members.iter().any(|member| member.pid != session))
+    };
+    while Instant::now() < deadline && lives_on() {
+        std::thread::sleep(SESSION_POLL);
+    }
+}
+
+#[cfg(windows)]
+fn wait_for_session(_pid: u32, _deadline: Instant) {}
 
 /// The program of `spec` with the environment `env` as its whole environment.
 fn command(spec: &SessionSpec, env: &[(String, String)]) -> io::Result<agterm_pty::Command> {
