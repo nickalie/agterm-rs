@@ -21,18 +21,17 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use agterm_ghostty_vt as vt;
+use agterm_ghostty_vt::{self as vt, ReadCandidate, Scanner};
 use portable_pty::{Child, MasterPty, native_pty_system};
 
 use crate::effects::{
-    ArmedRead, ArmedSlot, ClipboardAnswer, ClipboardReadRequest, ColorScheme, DivertSlot, PaneEffects, PaneEvent,
-    SchemeSlot, TerminalColors,
+    ArmedRead, ArmedSlot, ClipboardAnswer, ClipboardLocation, ClipboardReadRequest, ColorScheme, DivertSlot,
+    PaneEffects, PaneEvent, SchemeSlot, TerminalColors,
 };
 use crate::exit::{ExitPolicy, Layout};
 use crate::input::InputState;
 use crate::pty::{self, GridSize, PaneCommand, Ready, WakePipe, WriteQueue};
 use crate::render::{Capture, CursorDefaults, Frame, MouseShape, ThemeColors};
-use crate::scan::{ReadCandidate, Scanner};
 use crate::search::SearchSlot;
 use crate::{PaneError, ScrollbackLimits};
 
@@ -893,7 +892,7 @@ fn wait_child(mut child: Box<dyn Child + Send + Sync>, shared: &Shared, control:
 fn dispatch(shared: &Shared, byte: u8, read: ReadCandidate, answer: ClipboardAnswer) {
     let mut vt = lock(&shared.vt);
     *lock(&shared.armed) = Some(ArmedRead {
-        location: read.location,
+        location: ClipboardLocation::from_engine(read.location),
         scope: read.scope,
         answer,
     });
@@ -1030,7 +1029,7 @@ impl Io {
         let id = self.next_read;
         self.shared.send(PaneEvent::ClipboardRead(ClipboardReadRequest {
             id,
-            location: read.location,
+            location: ClipboardLocation::from_engine(read.location),
             scope: read.scope,
         }));
         self.shared.wake();
@@ -1075,8 +1074,7 @@ impl Io {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::effects::ClipboardLocation;
-    use crate::scan::ReadScope;
+    use agterm_ghostty_vt::ReadScope;
 
     const SIZE: GridSize = GridSize {
         cols: 20,
@@ -1246,7 +1244,7 @@ mod tests {
         let (events, received) = mpsc::channel();
         let shared = shared(&PaneConfig::new(SIZE), events).unwrap();
         let read = ReadCandidate {
-            location: ClipboardLocation::Standard,
+            location: vt::ClipboardLocation::Standard,
             scope: ReadScope::Data,
         };
         // a BEL outside any OSC: no read callback runs, so the armed answer is left over and must be cleared
@@ -1264,7 +1262,7 @@ mod tests {
         let shared = shared(&PaneConfig::new(SIZE), events).unwrap();
         lock(&shared.vt).terminal.vt_write(b"\x1b]52;c;?");
         let read = ReadCandidate {
-            location: ClipboardLocation::Standard,
+            location: vt::ClipboardLocation::Standard,
             scope: ReadScope::Data,
         };
         dispatch(&shared, 0x07, read, ClipboardAnswer::Text(Some("abc".to_owned())));

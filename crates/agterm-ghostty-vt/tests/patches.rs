@@ -3,7 +3,7 @@
 //! Wuffs' translator, the allocator stubs of a hosted build with SIMD off) never occurs in the SIMD build without a
 //! `--libc` file this crate links, so no test here can see it; its README entry's verification builds what does.
 
-use agterm_ghostty_vt::{Format, FormatOptions, KittyFormat, Point, PointTag, Region, Terminal};
+use agterm_ghostty_vt::{Format, FormatExtras, FormatOptions, KittyFormat, Point, PointTag, Region, Terminal};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -60,6 +60,7 @@ fn vt(terminal: &mut Terminal) -> Result<String, Box<dyn std::error::Error>> {
         format: Format::Vt,
         unwrap: false,
         trim: true,
+        extras: FormatExtras::empty(),
     };
     let bytes = terminal.format(Region::Viewport, options)?.ok_or("no viewport")?;
     Ok(String::from_utf8(bytes)?)
@@ -92,6 +93,7 @@ fn skipped_cells_close_the_html_style() -> TestResult {
         format: Format::Html,
         unwrap: false,
         trim: true,
+        extras: FormatExtras::empty(),
     };
     let html = String::from_utf8(terminal.format(Region::Viewport, options)?.ok_or("no viewport")?)?;
     assert!(html.contains("AB</div>   <div"), "{html:?}");

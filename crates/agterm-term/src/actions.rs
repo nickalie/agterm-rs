@@ -118,6 +118,7 @@ impl Pane {
             },
             unwrap: true,
             trim,
+            extras: vt::FormatExtras::empty(),
         };
         let mut vt = lock(&self.shared().vt);
         let region = engine_region(&vt.terminal, region)?;

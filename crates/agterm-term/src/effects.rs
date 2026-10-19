@@ -10,7 +10,7 @@
 //!
 //! libghostty-vt asks for a clipboard read synchronously and takes "no answer" for an empty clipboard (OSC 52) or
 //! `EPERM` (OSC 5522), while the prompt and the system clipboard live on the frontend's main thread, which takes the
-//! VT lock too. So the read is answered **before** the callback runs: the IO thread scans the stream ([`crate::scan`]),
+//! VT lock too. So the read is answered **before** the callback runs: the IO thread scans the stream ([`vt::Scanner`]),
 //! stops right before the byte that makes Ghostty dispatch a read (BEL, or the ESC of ST), releases the VT lock, sends
 //! [`PaneEvent::ClipboardRead`] and waits for [`Pane::answer_clipboard_read`](crate::Pane::answer_clipboard_read). The
 //! answer is armed here, the dispatch byte is fed alone, and the callback replies from it — so Ghostty still parses,
@@ -25,10 +25,10 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use agterm_ghostty_vt as vt;
+use vt::ReadScope;
 
 use crate::pty::WriteQueue;
 use crate::render::{Capture, Rgb, rgb};
-use crate::scan::ReadScope;
 
 /// A clipboard a program reads or writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -39,7 +39,7 @@ pub enum ClipboardLocation {
 }
 
 impl ClipboardLocation {
-    fn from_engine(location: vt::ClipboardLocation) -> Self {
+    pub(crate) fn from_engine(location: vt::ClipboardLocation) -> Self {
         match location {
             vt::ClipboardLocation::Standard => Self::Standard,
             vt::ClipboardLocation::Selection => Self::Selection,

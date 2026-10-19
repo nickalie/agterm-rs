@@ -648,17 +648,22 @@ Order after Task 7, as two lanes that meet:
 - Create: `crates/agterm-ghostty-vt/src/{continuation,snapshot,scan}.rs` (`scan.rs` moved from `agterm-term`)
 - Modify: `crates/agterm-term/src/{effects,scan}.rs` (use the moved scan)
 
-- [ ] the stream continuation: capture with `OPT_CONTINUATION_MAX_BYTES`, its unavailable outcome, and replay
-- [ ] the formatter's extras (cursor, modes, palette, scrolling region, charsets, Kitty keyboard state) as options
+- [x] the stream continuation: capture with `OPT_CONTINUATION_MAX_BYTES`, its unavailable outcome, and replay
+- [x] the formatter's extras (cursor, modes, palette, scrolling region, charsets, Kitty keyboard state) as options
       beside today's `no_extras()`, which stays the default for current callers
-- [ ] `TERMINFO_NAME`, the `COLOR_SCHEME` callback and the clipboard-read scan (`scan.rs` moved from `agterm-term`,
+- [x] `TERMINFO_NAME`, the `COLOR_SCHEME` callback and the clipboard-read scan (`scan.rs` moved from `agterm-term`,
       which then uses it from here)
-- [ ] the binary snapshot codec over `snapshot.h`: encode with its options, decode with `ready`/`next`, its errors
-- [ ] tests on all three OSes: continuation cuts inside a UTF-8 sequence, a CSI and an OSC, an overlong sequence,
+      - the `COLOR_SCHEME` callback was already wrapped (`Effects::color_scheme`, with its CSI ? 996 n test); this
+        task adds nothing to it
+- [x] the binary snapshot codec over `snapshot.h`: encode with its options, decode with `ready`/`next`, its errors
+      - encode has no options in the C API; the options are the decoder's (`SnapshotOptions`). The incremental
+        decoder lives inside the `Terminal` its READY returned (it borrows that terminal until FINISH), so safe code
+        cannot free or swap the terminal under it
+- [x] tests on all three OSes: continuation cuts inside a UTF-8 sequence, a CSI and an OSC, an overlong sequence,
       embedded C0, recovery after a terminator, original VT + suffix ≡ restored VT + suffix; the formatter with
       extras restoring cursor and modes into a fresh terminal; XTGETTCAP `TN`; CSI ? 996 n; a snapshot round trip
       with history and continuation, and a corrupt one refused; `agterm-term`'s clipboard-read tests unchanged
-- [ ] run gates (full conformance run in the background, since `agterm-term` changes)
+- [x] run gates (full conformance run in the background, since `agterm-term` changes)
 
 ### Task 12: Launch inputs out of `agterm-zmx`
 

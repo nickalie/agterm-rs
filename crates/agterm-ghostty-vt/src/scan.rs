@@ -1,5 +1,11 @@
-//! Finds clipboard reads in the PTY stream before the VT parses them, so the IO thread can stop right before the
-//! byte that makes Ghostty dispatch one (see `effects` for why).
+//! Finds clipboard reads in a VT stream before the terminal parses them (`terminal.h`'s clipboard read callback), so a
+//! reader can stop right before the byte that makes Ghostty dispatch one.
+//!
+//! The read callback is synchronous: the stream waits inside [`Terminal::vt_write`](crate::Terminal::vt_write) until it
+//! returns. An embedder whose answer takes time (a consent prompt, a client across a socket) cannot wait there with the
+//! terminal's lock held, so it feeds the stream up to the dispatch byte [`Scanner::find`] reports, gets the answer
+//! without the lock, arms it, and feeds that one byte, so [`Effects::clipboard_read`](crate::Effects::clipboard_read)
+//! answers at once from what was armed. The pane core (`agterm-term`) does so, and the session server is to.
 //!
 //! The scanner mirrors the states of Ghostty's VT parser that decide whether an OSC is seen at all
 //! (`src/terminal/parse_table.zig` at `LIBGHOSTTY_VT_REV`, its "anywhere" transitions included, with the per-state
@@ -27,7 +33,7 @@ pub enum ReadScope {
 
 /// A clipboard read found in the stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ReadCandidate {
+pub struct ReadCandidate {
     pub location: ClipboardLocation,
     pub scope: ReadScope,
 }
@@ -49,7 +55,7 @@ enum State {
 
 /// The scanner's state across PTY reads.
 #[derive(Debug)]
-pub(crate) struct Scanner {
+pub struct Scanner {
     state: State,
     body: Vec<u8>,
     overflow: bool,
@@ -91,7 +97,7 @@ fn anywhere(byte: u8) -> Option<State> {
 impl Scanner {
     /// Advance over `bytes` until the dispatch byte of a clipboard read: returns its offset (the byte is consumed, so
     /// the next call starts after it) and the read, or `None` when `bytes` holds none.
-    pub(crate) fn find(&mut self, bytes: &[u8]) -> Option<(usize, ReadCandidate)> {
+    pub fn find(&mut self, bytes: &[u8]) -> Option<(usize, ReadCandidate)> {
         for (offset, &byte) in bytes.iter().enumerate() {
             if let Some(candidate) = self.step(byte) {
                 return Some((offset, candidate));

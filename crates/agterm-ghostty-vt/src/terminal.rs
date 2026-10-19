@@ -1,6 +1,7 @@
 //! [`Terminal`]: an owned `GhosttyTerminal`.
 
 use crate::effects::{CALLBACKS, EffectsSlot};
+use crate::snapshot::PendingHistory;
 use crate::{
     CursorStyle, Effects, Error, Handle, Mode, MouseShape, Rgb, ScrollbackLimits, TerminalColors, ffi, string_bytes,
 };
@@ -27,15 +28,18 @@ pub enum Scroll {
 /// (crate docs). Installed [`Effects`] run inside those calls.
 #[derive(Debug)]
 pub struct Terminal {
-    // Fields drop in declaration order: the terminal (which can call the effects) goes before the effects.
+    // Fields drop in declaration order: a snapshot decoder still restoring history (it borrows the terminal) goes
+    // first, then the terminal (which can call the effects), then the effects.
+    pub(crate) history: Option<PendingHistory>,
     raw: Handle<ffi::GhosttyTerminalImpl>,
     effects: Option<EffectsSlot>,
 }
 
 // SAFETY: libghostty-vt creates no threads and keeps no thread-local state (`grep threadlocal src/terminal` is empty
 // at LIBGHOSTTY_VT_REV; its process-global sys hooks are plain variables), and a terminal may be used from any thread
-// as long as calls are serialized (`render.h`, `terminal.h`). Moving the owned handle to another thread is therefore
-// sound. It is deliberately not `Sync`: `&Terminal` reads must not race the `&mut` calls of another thread.
+// as long as calls are serialized (`render.h`, `terminal.h`); the same holds for a snapshot decoder, which is reached
+// only through the terminal it restores. Moving the owned handles to another thread is therefore sound. It is
+// deliberately not `Sync`: `&Terminal` reads must not race the `&mut` calls of another thread.
 unsafe impl Send for Terminal {}
 
 impl Terminal {
@@ -53,6 +57,7 @@ impl Terminal {
         let result = unsafe { ffi::ghostty_terminal_new(std::ptr::null(), &raw mut raw, cols, rows) };
         Error::check(result)?;
         Ok(Self {
+            history: None,
             raw: Handle::new(raw, ffi::ghostty_terminal_free)?,
             effects: None,
         })
@@ -537,6 +542,37 @@ impl Terminal {
                 ffi::GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_TEMP_FILE,
                 value,
             )
+        })
+    }
+
+    /// Set the terminfo entry this terminal runs as (`TERM`, e.g. `xterm-ghostty`), the answer to an XTGETTCAP query
+    /// for `TN`; `None` clears it, and a terminal without one leaves that query unanswered (the library's default).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidValue`] for a name longer than 128 bytes.
+    pub fn set_terminfo_name(&mut self, name: Option<&str>) -> Result<(), Error> {
+        let name = name.map(|name| ffi::GhosttyString {
+            ptr: name.as_ptr(),
+            len: name.len(),
+        });
+        let value = name
+            .as_ref()
+            .map_or(std::ptr::null(), |name| std::ptr::from_ref(name).cast());
+        // SAFETY: the terminal is live and `&mut self` serializes the call; `OPT_TERMINFO_NAME` copies the string
+        // during the call, and null clears it.
+        Error::check(unsafe {
+            ffi::ghostty_terminal_set(self.raw.ptr(), ffi::GHOSTTY_TERMINAL_OPT_TERMINFO_NAME, value)
+        })
+    }
+
+    /// Own a terminal the library created (a decoded snapshot), with no effects and no pending history. The caller
+    /// sealed the process-global hooks before the library created it, as [`Terminal::new`] does.
+    pub(crate) fn from_raw(raw: ffi::GhosttyTerminal) -> Result<Self, Error> {
+        Ok(Self {
+            history: None,
+            raw: Handle::new(raw, ffi::ghostty_terminal_free)?,
+            effects: None,
         })
     }
 

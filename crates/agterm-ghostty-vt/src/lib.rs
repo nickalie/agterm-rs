@@ -17,6 +17,11 @@
 //! - [`SelectionGesture`]: Ghostty's pointer selection state machine (click counts, drags, autoscroll).
 //! - [`Search`]: scrollback search, its terminal-touching calls serialized with the terminal, its ticks free of it.
 //! - [`KittyGraphics`]: the stored Kitty images and their placements.
+//! - Copying a terminal: [`Terminal::continuation`] (the unfinished VT input, replayed with
+//!   [`Terminal::replay_continuation`]), [`FormatExtras`] (the state VT read-back carries) and the binary snapshot
+//!   codec ([`Terminal::encode_snapshot`], [`Terminal::decode_snapshot`], [`Terminal::restore_snapshot`]).
+//! - [`Scanner`]: finds clipboard reads in a VT stream before the terminal parses them, so their synchronous callback
+//!   can be answered without waiting inside [`Terminal::vt_write`].
 //!
 //! Every handle is `Send` and not `Sync`: the library creates no threads and keeps no thread-local state, and asks
 //! callers to serialize access to a terminal from any thread (`render.h`, `terminal.h`). A handle may move to another
@@ -53,6 +58,7 @@
 //! ```
 
 mod cell;
+mod continuation;
 mod effects;
 mod format;
 mod gesture;
@@ -61,19 +67,22 @@ mod kitty;
 mod mouse;
 mod paste;
 mod render;
+mod scan;
 mod search;
 mod selection;
 mod shape;
+mod snapshot;
 pub mod sys;
 mod terminal;
 
 pub use cell::{CellRef, CellWidth, Cells, Style, StyleColor, StyleFlags, Underline};
+pub use continuation::Continuation;
 pub use effects::{
     ClipboardContent, ClipboardData, ClipboardLocation, ClipboardReadReply, ClipboardReadRequest,
     ClipboardWriteRequest, ClipboardWriteResult, ColorScheme, DeviceAttributes, Effects, HeldTerminal, ProgramStatus,
     ProgramStatusKind, ProgramStatusState, ProgressReport, ProgressState, SizeReport,
 };
-pub use format::{Format, FormatOptions, Region};
+pub use format::{Format, FormatExtras, FormatOptions, Region};
 pub use gesture::{
     Autoscroll, GestureBehavior, GestureDrag, GestureGeometry, GestureInput, GesturePress, GestureState, GestureTick,
     SelectionGesture,
@@ -88,9 +97,11 @@ pub use paste::{PasteOutcome, PasteSource, paste_is_safe};
 pub use render::{
     CursorPosition, CursorStyle, Dirty, PendingUpdate, RenderColors, RenderCursor, RenderState, RowId, RowRef, Rows,
 };
+pub use scan::{ReadCandidate, ReadScope, Scanner};
 pub use search::{Match, Search, SearchDirection, SearchResults, SearchStatus};
 pub use selection::{Point, PointTag, Selection, SelectionAdjust};
 pub use shape::{Mode, MouseShape, ScrollbackLimits, TerminalColors};
+pub use snapshot::{HistoryPage, SnapshotHistory, SnapshotOptions};
 pub use terminal::{Scroll, Terminal};
 
 use std::ptr::NonNull;

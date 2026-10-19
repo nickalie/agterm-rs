@@ -300,6 +300,33 @@ fn a_color_scheme_query_is_answered_from_the_handler_and_mode_2031_is_tracked() 
 }
 
 #[test]
+fn xtgettcap_tn_answers_the_terminfo_name_once_one_is_set() {
+    // XTGETTCAP for "TN", hex-encoded
+    const QUERY: &[u8] = b"\x1bP+q544e\x1b\\";
+    let (mut terminal, seen) = terminal(Recorder::default()).unwrap();
+    terminal.vt_write(QUERY);
+    let unset = pty(&take(&seen));
+    assert!(!unset.starts_with(b"\x1bP1+r"), "no name: no answer, got {unset:?}");
+
+    terminal.set_terminfo_name(Some("xterm-ghostty")).unwrap();
+    terminal.vt_write(QUERY);
+    let answer = String::from_utf8(pty(&take(&seen))).unwrap();
+    // "xterm-ghostty", hex-encoded
+    assert!(
+        answer.eq_ignore_ascii_case("\x1bP1+r544e=787465726D2D67686F73747479\x1b\\"),
+        "{answer:?}"
+    );
+
+    terminal.set_terminfo_name(None).unwrap();
+    terminal.vt_write(QUERY);
+    assert!(!pty(&take(&seen)).starts_with(b"\x1bP1+r"), "cleared");
+    assert_eq!(
+        terminal.set_terminfo_name(Some(&"x".repeat(129))),
+        Err(Error::InvalidValue)
+    );
+}
+
+#[test]
 fn a_render_hold_captures_the_frame_the_program_left_on_screen() {
     let recorder = Recorder {
         capture: Some(RenderState::new().unwrap()),

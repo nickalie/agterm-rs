@@ -126,6 +126,7 @@ impl Layout {
             format: vt::Format::Plain,
             unwrap: false,
             trim: true,
+            extras: vt::FormatExtras::empty(),
         };
         let viewport_used = terminal
             .format(vt::Region::Viewport, options)

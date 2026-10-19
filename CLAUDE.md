@@ -28,7 +28,7 @@ below, not a later phase. Build, run and test commands are in [README.md](README
 | `agterm-server` | AF_UNIX control server: socket ownership (`flock`), one thread per connection, main-loop hop, stream handoff | any |
 | `agterm-ctl` → `agtermctl` | clap CLI ported from upstream's `agtermctlKit`, socket resolution, output formatting | any |
 | `agterm-ghostty-vt-sys` | checked-in bindgen output over libghostty-vt's official C API (`scripts/gen-ghostty-vt-bindings.sh`), links the vendored static library; not under the workspace lints | Linux |
-| `agterm-ghostty-vt` | safe wrapper over the sys crate: terminal, render state, effects, key and mouse encoders, selection and its gesture, formatter, search, Kitty graphics | Linux |
+| `agterm-ghostty-vt` | safe wrapper over the sys crate: terminal, render state, effects, key and mouse encoders, selection and its gesture, formatter with its extras, search, Kitty graphics, stream continuation, snapshot codec, clipboard-read scan | Linux |
 | `agterm-term` | the toolkit-neutral pane core: a libghostty-vt terminal fed from a PTY by an IO thread per pane, input, selection, search, read-back, launch and terminal identity, frames and events in its own types | Linux |
 | `agterm-zmx` | the `SessionHost` over the patched zmx: launch inputs, client, inventory, reaps | Linux, macOS |
 | `agterm-app` | frontend-neutral app services: the hooks' `ProcessLauncher`, the `/proc` `ProcessTable`, logging, the restore launch decision, quick-terminal placement, the agent integrations' installers, the remote presentation process | Linux |

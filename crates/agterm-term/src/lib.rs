@@ -41,7 +41,6 @@ mod png;
 mod pty;
 pub mod pwd;
 mod render;
-mod scan;
 mod search;
 mod selection;
 mod text;
@@ -69,10 +68,10 @@ pub use render::{
     Cell, CellFlags, CellWidth, Colors, Cursor, CursorDefaults, CursorPosition, CursorStyle, Frame, MouseShape, Rgb,
     Row, ThemeColors, Underline,
 };
-pub use scan::ReadScope;
 pub use search::{Highlight, SearchState, SearchStep};
 pub use selection::{GridPoint, PointSpace, SelectionRange, SelectionText};
 pub use text::TextRegion;
+pub use vt::ReadScope;
 pub use wheel::{Wheel, WheelInput};
 
 use agterm_ghostty_vt as vt;

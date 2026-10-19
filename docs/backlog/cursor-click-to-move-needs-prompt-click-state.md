@@ -26,6 +26,6 @@ straightforward port over grid refs.
 
 Ways to close it: an upstream libghostty-vt API (a `GHOSTTY_TERMINAL_DATA_SEMANTIC_CLICK` datum, or the options on
 the semantic-prompt event, plus the cursor's pen content), then port `promptClickLine` into `agterm-term`; or, without
-waiting, have `agterm-term`'s stream scanner (`scan.rs`, which already watches OSC 52 reads) track the OSC 133
+waiting, have the stream scanner (`agterm-ghostty-vt`'s `scan.rs`, which already watches OSC 52 reads) track the OSC 133
 prompt-start options per screen as Ghostty does and use the cell under the cursor in place of the pen. Meanwhile a
 `true` value is accepted by the config and has no effect.

@@ -169,6 +169,7 @@ impl Pane {
             format: vt::Format::Plain,
             unwrap: true,
             trim: layout == SelectionText::Copy,
+            extras: vt::FormatExtras::empty(),
         };
         let bytes = lock(&self.shared().vt)
             .terminal

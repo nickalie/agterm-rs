@@ -24,6 +24,7 @@ const READ: vt::FormatOptions = vt::FormatOptions {
     format: vt::Format::Plain,
     unwrap: true,
     trim: false,
+    extras: vt::FormatExtras::empty(),
 };
 
 impl Pane {

@@ -1,6 +1,12 @@
 //! Reading a terminal's content back as text (`formatter.h`): plain text, VT sequences or HTML, of a region of the
 //! active screen or of the selection. The formatter borrows the terminal and reads it live, so it is created, run and
 //! freed inside one call that holds the terminal (`&mut`); only owned bytes come out.
+//!
+//! VT output can carry terminal state around the cells as well ([`FormatExtras`]: the cursor, modes, palette,
+//! scrolling region, charsets, keyboard state), so that its bytes written into a fresh terminal of the same size restore
+//! that state too. A reader of text alone passes none, the default.
+
+use bitflags::bitflags;
 
 use crate::selection::{Point, PointTag};
 use crate::{Error, Handle, Terminal, ffi};
@@ -25,6 +31,50 @@ impl Format {
     }
 }
 
+bitflags! {
+    /// The terminal state [`Format::Vt`] output carries besides the cells (`GhosttyFormatterTerminalExtra` and its
+    /// `GhosttyFormatterScreenExtra`); the other formats ignore them.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+    pub struct FormatExtras: u16 {
+        /// The palette, as OSC 4.
+        const PALETTE = 1;
+        /// The modes that differ from their defaults, as `CSI h` and `CSI l`.
+        const MODES = 1 << 1;
+        /// The scrolling region, as DECSTBM and DECSLRM.
+        const SCROLLING_REGION = 1 << 2;
+        /// The tab stops, all cleared and then set one by one.
+        const TABSTOPS = 1 << 3;
+        /// The working directory, as OSC 7.
+        const PWD = 1 << 4;
+        /// The keyboard modes, such as modifyOtherKeys.
+        const KEYBOARD = 1 << 5;
+        /// The cursor position, as CUP.
+        const CURSOR = 1 << 6;
+        /// The cursor's current SGR style.
+        const STYLE = 1 << 7;
+        /// The open hyperlink, as OSC 8.
+        const HYPERLINK = 1 << 8;
+        /// Character protection, as DECSCA.
+        const PROTECTION = 1 << 9;
+        /// The Kitty keyboard protocol state, as `CSI > u` and `CSI = u`.
+        const KITTY_KEYBOARD = 1 << 10;
+        /// The character set designations and invocations.
+        const CHARSETS = 1 << 11;
+        /// Every screen-level extra: the cursor and what it carries.
+        const SCREEN = Self::CURSOR.bits()
+            | Self::STYLE.bits()
+            | Self::HYPERLINK.bits()
+            | Self::PROTECTION.bits()
+            | Self::KITTY_KEYBOARD.bits()
+            | Self::CHARSETS.bits();
+        /// What restores a session's visible screen in another terminal, as zmx's `serializeTerminalState`
+        /// (`src/util.zig` at `ZMX_REV`) formats it: the modes, the scrolling region, the keyboard modes and every
+        /// screen extra. The palette goes as color overrides of their own, tab stops would move the cursor after its
+        /// CUP, and the working directory goes without the sentinel the formatter adds.
+        const RESTORE = Self::MODES.bits() | Self::SCROLLING_REGION.bits() | Self::KEYBOARD.bits() | Self::SCREEN.bits();
+    }
+}
+
 /// How the text is laid out.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct FormatOptions {
@@ -33,6 +83,8 @@ pub struct FormatOptions {
     pub unwrap: bool,
     /// Drop trailing whitespace of non-blank lines.
     pub trim: bool,
+    /// The terminal state VT output carries besides the cells; none by default.
+    pub extras: FormatExtras,
 }
 
 /// What to read.
@@ -63,7 +115,7 @@ impl Terminal {
             emit: options.format.raw(),
             unwrap: options.unwrap,
             trim: options.trim,
-            extra: no_extras(),
+            extra: extras(options.extras),
             selection: &raw const selection,
         };
         let mut formatter: ffi::GhosttyFormatter = std::ptr::null_mut();
@@ -115,23 +167,23 @@ impl Terminal {
     }
 }
 
-fn no_extras() -> ffi::GhosttyFormatterTerminalExtra {
+fn extras(extras: FormatExtras) -> ffi::GhosttyFormatterTerminalExtra {
     ffi::GhosttyFormatterTerminalExtra {
         size: std::mem::size_of::<ffi::GhosttyFormatterTerminalExtra>(),
-        palette: false,
-        modes: false,
-        scrolling_region: false,
-        tabstops: false,
-        pwd: false,
-        keyboard: false,
+        palette: extras.contains(FormatExtras::PALETTE),
+        modes: extras.contains(FormatExtras::MODES),
+        scrolling_region: extras.contains(FormatExtras::SCROLLING_REGION),
+        tabstops: extras.contains(FormatExtras::TABSTOPS),
+        pwd: extras.contains(FormatExtras::PWD),
+        keyboard: extras.contains(FormatExtras::KEYBOARD),
         screen: ffi::GhosttyFormatterScreenExtra {
             size: std::mem::size_of::<ffi::GhosttyFormatterScreenExtra>(),
-            cursor: false,
-            style: false,
-            hyperlink: false,
-            protection: false,
-            kitty_keyboard: false,
-            charsets: false,
+            cursor: extras.contains(FormatExtras::CURSOR),
+            style: extras.contains(FormatExtras::STYLE),
+            hyperlink: extras.contains(FormatExtras::HYPERLINK),
+            protection: extras.contains(FormatExtras::PROTECTION),
+            kitty_keyboard: extras.contains(FormatExtras::KITTY_KEYBOARD),
+            charsets: extras.contains(FormatExtras::CHARSETS),
         },
     }
 }
@@ -144,6 +196,7 @@ mod tests {
         format: Format::Plain,
         unwrap: true,
         trim: false,
+        extras: FormatExtras::empty(),
     };
 
     fn text(terminal: &mut Terminal, region: Region, options: FormatOptions) -> Option<String> {
@@ -206,6 +259,58 @@ mod tests {
             rectangle: false,
         };
         assert_eq!(terminal.format(outside, PLAIN), Err(Error::InvalidValue));
+    }
+
+    #[test]
+    fn extras_restore_the_cursor_and_modes_into_a_fresh_terminal() {
+        let mut original = Terminal::new(20, 5).unwrap();
+        // bracketed paste, application cursor keys, origin mode off, a scrolling region, a styled cursor, the
+        // Kitty keyboard flags, DEC special graphics in G0
+        original.vt_write(b"one\r\ntwo\x1b[?2004h\x1b[?1h\x1b[2;4r\x1b[4;7H\x1b[1;32m\x1b[>1u\x1b(0");
+        let restore = FormatOptions {
+            format: Format::Vt,
+            unwrap: false,
+            trim: false,
+            extras: FormatExtras::RESTORE,
+        };
+        let bytes = original.format(Region::Screen, restore).unwrap().unwrap();
+
+        let mut restored = Terminal::new(20, 5).unwrap();
+        restored.vt_write(&bytes);
+        assert_eq!(
+            restored.cursor(),
+            original.cursor(),
+            "{:?}",
+            String::from_utf8_lossy(&bytes)
+        );
+        assert_eq!(original.cursor(), (6, 3));
+        for mode in [crate::Mode::dec(2004), crate::Mode::dec(1)] {
+            assert!(restored.mode(mode), "{mode:?}");
+        }
+        // what follows lands the same way: in the region, styled, through the charset (`q` is a line in G0's DEC set)
+        original.vt_write(b"q\r\n\n\nx");
+        restored.vt_write(b"q\r\n\n\nx");
+        let plain = FormatOptions {
+            format: Format::Vt,
+            ..PLAIN
+        };
+        assert_eq!(
+            text(&mut restored, Region::Screen, plain),
+            text(&mut original, Region::Screen, plain)
+        );
+        assert_eq!(restored.cursor(), original.cursor(), "the scrolling region held");
+
+        // without extras, the same read-back restores the cells only
+        let cells = original.format(
+            Region::Screen,
+            FormatOptions {
+                extras: FormatExtras::empty(),
+                ..restore
+            },
+        );
+        let mut bare = Terminal::new(20, 5).unwrap();
+        bare.vt_write(&cells.unwrap().unwrap());
+        assert!(!bare.mode(crate::Mode::dec(2004)));
     }
 
     #[test]
