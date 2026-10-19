@@ -741,13 +741,38 @@ Order after Task 7, as two lanes that meet:
   `crates/agterm-zmx/src/sweep.rs` (hangup through the job module), `.github/workflows/cross-platform.yml` (`PACKAGES`
   += `agterm-app` if it builds on all three after Task 12; otherwise the reason recorded)
 
-- [ ] the `job` module: Linux `/proc` process groups, macOS `sysctl`, Windows herdr's snapshot (descendants, command
+- [x] the `job` module: Linux `/proc` process groups, macOS `sysctl`, Windows herdr's snapshot (descendants, command
       lines, terminate); `sweep.rs`'s hangup moves behind it
-- [ ] `ProcessTable` for all three OSes beside it, with the Linux one's lossy-decode rule; `agterm-app`'s quit-time
+      - the `Sweeper` itself moved into `agterm-session::job` (`agterm-zmx::sweep` re-exports it), over a table of
+        `ProcessEntry` (the host's `ProcessRecord` plus the parent, which the Windows rule walks) and a `Signal`
+        (`HangUp`, `Kill`) in place of raw signal numbers; macOS reads the ids through `libproc`
+        (`proc_listpids`, `proc_pidinfo(PROC_PIDTBSDINFO)`, herdr's way), since the `libc` crate defines no
+        `kinfo_proc` for Apple: the same fields as upstream's `KERN_PROC_ALL`, its start time in microseconds;
+        `sysctl(KERN_PROCARGS2)` stays for an argv. Windows: a process stands in for its own group (herdr's rule),
+        the job is the shell's live descendants, a child older than its parent is not adopted (a recycled pid), and
+        both signals terminate (herdr's hangup does nothing; a closing console ends its programs)
+- [x] `ProcessTable` for all three OSes beside it, with the Linux one's lossy-decode rule; `agterm-app`'s quit-time
       capture uses it
-- [ ] tests on every OS: a foreground job found and ended; an unreadable table never read as "no job"; a captured
+      - `agterm-app::process_table::ProcTable` re-exports this OS's `agterm-session::process_table::ProcTable`; the
+        `/proc` parsers moved into `agterm-session::procfs`. Windows: argv by herdr's
+        `NtQueryInformationProcess(ProcessCommandLineInformation)` + `CommandLineToArgvW`, decoded lossily per
+        argument; working directory from the process environment block (WoW64 too); session zero; the console's
+        foreground (`terminal_foreground`) is the shell's newest live direct child, else the shell itself
+        (`console_foreground`)
+      - `PACKAGES` does not take `agterm-app`: its hook runner, log file and remote presentation process are
+        Unix-only (`poll`/`fcntl`, `O_NOFOLLOW`, `kill`) and its tests launch panes through `agterm-term`; recorded
+        in `cross-platform.yml`'s header and README > CI. Its process table is tested on all three in
+        `agterm-session`
+- [x] tests on every OS: a foreground job found and ended; an unreadable table never read as "no job"; a captured
       argv with spaces and quotes
-- [ ] run gates
+      - `crates/agterm-session/tests/job.rs` (an interactive `sh` or `cmd.exe` on a real PTY runs a job the sweeper
+        finds and kills; the test binary re-run as a child whose odd argv reads back), unit tests of both job rules
+        on every OS, `parse_procargs` with upstream's cases, `CommandLineToArgvW`'s rules; `cross-platform.yml`
+        green on all three
+- [x] run gates
+      - fmt, locked metadata, tracing and vendored-source checks, clippy (workspace with WPE, frontend without its
+        default features, Windows and macOS targets of `agterm-session`), the lint report, the workspace tests
+        headless, the selftests and the full conformance run
 
 ### Task 16: Pane runtime: spawn, VT state, fan-out, exit
 
