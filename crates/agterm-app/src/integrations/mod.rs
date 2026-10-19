@@ -17,6 +17,9 @@
 //! `resources/skills/agterm`), with these deviations:
 //!
 //! - the Codex adapter reads the hook payload with `python3` or `jq` where macOS has `plutil`;
+//! - the Claude adapter reads a `completed` call's payload and reports a `Stop` whose `background_tasks` lists work in
+//!   flight as `active --blink` (upstream's goes `completed` at once), and the installer adds a sixth Claude hook,
+//!   `SessionEnd` → `completed --auto-reset`, so that claim cannot outlive the agent ([`hooks_config`]);
 //! - every script and plugin calls `ngtermctl` where upstream's calls `agtermctl` (the wrappers' default, their
 //!   comments and the shell integration's);
 //! - the Pi extension and both `OpenCode` plugins call the wrapper in `~/.config/ngterm/agent-status`;
@@ -94,5 +97,7 @@ fn resource_dir(exe_dir: Option<&Path>, relative: &str) -> Option<PathBuf> {
     staged.into_iter().chain([checkout]).find(|dir| dir.is_dir())
 }
 
+#[cfg(test)]
+mod adapter_tests;
 #[cfg(test)]
 mod tests;

@@ -256,7 +256,7 @@ fn an_install_over_the_legacy_dir_moves_every_reference() {
     assert!(matches!(outcome.opencode, OpenCodeResult::Installed(Version::V1, _)));
     assert_nothing_calls(&home, &legacy);
     let settings = home.read(".claude/settings.json");
-    assert_eq!(settings.matches("agterm-claude-status.sh").count(), 5, "{settings}");
+    assert_eq!(settings.matches("agterm-claude-status.sh").count(), 6, "{settings}");
     assert_eq!(home.read(".zshrc").matches(RC_MARKER_BEGIN).count(), 1);
     assert_eq!(home.read(".codex/config.toml").matches(RC_MARKER_BEGIN).count(), 1);
     assert_eq!(

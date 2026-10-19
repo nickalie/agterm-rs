@@ -36,19 +36,21 @@ fn merge(existing: Option<&str>) -> (String, bool) {
 }
 
 #[test]
-fn a_fresh_merge_adds_all_five_hooks_through_the_adapter() {
+fn a_fresh_merge_adds_all_six_hooks_through_the_adapter() {
     let (json, changed) = merge(None);
     assert!(changed);
     let hooks = events(&json);
-    assert_eq!(hooks.len(), 5);
+    assert_eq!(hooks.len(), 6);
     let a = adapter();
     assert_eq!(commands(&json, "UserPromptSubmit"), [format!("'{a}' active --blink")]);
     assert_eq!(commands(&json, "PostToolUse"), [format!("'{a}' active --blink")]);
     assert_eq!(commands(&json, "Stop"), [format!("'{a}' completed --auto-reset")]);
     assert_eq!(commands(&json, "Notification"), [format!("'{a}' blocked")]);
     assert_eq!(commands(&json, "PermissionRequest"), [format!("'{a}' blocked")]);
+    assert_eq!(commands(&json, "SessionEnd"), [format!("'{a}' completed --auto-reset")]);
     assert_eq!(hooks["Notification"][0]["matcher"], "permission_prompt");
     assert!(hooks["PermissionRequest"][0].get("matcher").is_none());
+    assert!(hooks["SessionEnd"][0].get("matcher").is_none());
     assert!(json.ends_with("}\n"));
 }
 
@@ -129,7 +131,7 @@ fn an_earlier_install_migrates_onto_the_adapter_in_place() {
 }
 
 /// Upstream's `mergeAddsPermissionRequestToFourEventInstall`: an install from before `PermissionRequest` existed,
-/// already on the adapter, gains only that hook.
+/// already on the adapter, gains only that hook (and this build's `SessionEnd`).
 #[test]
 fn a_four_event_adapter_install_gains_permission_request() {
     let a = adapter();
@@ -144,13 +146,14 @@ fn a_four_event_adapter_install_gains_permission_request() {
     let (first, changed) = merge(Some(&existing));
     assert!(changed);
     let hooks = events(&first);
-    assert_eq!(hooks.len(), 5);
+    assert_eq!(hooks.len(), 6);
     for event in [
         "UserPromptSubmit",
         "PostToolUse",
         "Stop",
         "Notification",
         "PermissionRequest",
+        "SessionEnd",
     ] {
         assert_eq!(hooks[event].as_array().map(Vec::len), Some(1), "{event}");
     }
@@ -160,6 +163,58 @@ fn a_four_event_adapter_install_gains_permission_request() {
     let (second, changed) = merge(Some(&first));
     assert!(!changed);
     assert_eq!(second, first);
+}
+
+/// An install of upstream's five events gains only `SessionEnd`, beside the user's own entry for that event.
+#[test]
+fn a_five_event_adapter_install_gains_session_end() {
+    let mut root: Value = serde_json::from_str(&adapter_settings(SCRIPT_DIR)).unwrap();
+    root["hooks"]["SessionEnd"] = serde_json::json!([{"hooks": [{"type": "command", "command": "echo bye"}]}]);
+    let (first, changed) = merge(Some(&root.to_string()));
+    assert!(changed);
+    let a = adapter();
+    assert_eq!(
+        commands(&first, "SessionEnd"),
+        ["echo bye".to_owned(), format!("'{a}' completed --auto-reset")]
+    );
+    for (event, _, state) in CLAUDE_HOOKS {
+        if event != "SessionEnd" {
+            assert_eq!(commands(&first, event), [format!("'{a}' {state}")], "{event}");
+        }
+    }
+    let (second, changed) = merge(Some(&first));
+    assert!(!changed);
+    assert_eq!(second, first);
+}
+
+/// No earlier installer wrote `SessionEnd`, so an entry there naming a wrapper is the user's even when it reads like a
+/// stock one: the legacy clean-up repoints it rather than dropping it, and the adapter migration leaves it on the
+/// generic wrapper (where, calling the package, it counts as installed).
+#[test]
+fn a_users_session_end_entry_naming_a_wrapper_is_never_taken_for_a_stock_one() {
+    let a = adapter();
+    let mut root: Value = serde_json::from_str(&adapter_settings(SCRIPT_DIR)).unwrap();
+    let legacy = format!("'{LEGACY_DIR}/{WRAPPER_NAME}' completed --auto-reset");
+    root["hooks"]["SessionEnd"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"hooks": [{"type": "command", "command": legacy}]}));
+    let (json, changed) = merge(Some(&root.to_string()));
+    assert!(changed);
+    assert_eq!(
+        commands(&json, "SessionEnd"),
+        [
+            format!("'{a}' completed --auto-reset"),
+            format!("'{}' completed --auto-reset", wrapper())
+        ],
+        "repointed and kept"
+    );
+
+    let generic = format!("'{}' completed --auto-reset", wrapper());
+    let existing =
+        format!(r#"{{"hooks": {{"SessionEnd": [{{"hooks": [{{"type": "command", "command": "{generic}"}}]}}]}}}}"#);
+    let (json, _) = merge(Some(&existing));
+    assert_eq!(commands(&json, "SessionEnd"), [generic], "left on the generic wrapper");
 }
 
 #[test]
@@ -204,7 +259,7 @@ fn a_customized_or_user_entry_naming_the_wrapper_is_left_alone() {
     assert_eq!(prompts.len(), 2);
 }
 
-/// A full current install's five events, every command through `dir`'s adapter.
+/// A full current install's six events, every command through `dir`'s adapter, and a user's own event.
 fn adapter_settings(dir: &str) -> String {
     let a = format!("{dir}/{CLAUDE_WRAPPER_NAME}");
     format!(
@@ -214,6 +269,7 @@ fn adapter_settings(dir: &str) -> String {
           "Stop": [{{"hooks": [{{"type": "command", "command": "'{a}' completed --auto-reset"}}]}}],
           "PermissionRequest": [{{"hooks": [{{"type": "command", "command": "'{a}' blocked"}}]}}],
           "Notification": [{{"matcher": "permission_prompt", "hooks": [{{"type": "command", "command": "'{a}' blocked"}}]}}],
+          "SessionEnd": [{{"hooks": [{{"type": "command", "command": "'{a}' completed --auto-reset"}}]}}],
           "SessionStart": [{{"hooks": [{{"type": "command", "command": "echo mine"}}]}}]
         }}}}"#
     )
@@ -248,7 +304,8 @@ fn legacy_entries_beside_current_ones_are_dropped() {
     let mut root: Value = serde_json::from_str(&adapter_settings(SCRIPT_DIR)).unwrap();
     let legacy: Value = serde_json::from_str(&adapter_settings(LEGACY_DIR)).unwrap();
     for (event, entries) in legacy["hooks"].as_object().unwrap() {
-        if event != "SessionStart" {
+        // the fork wires no SessionEnd
+        if event != "SessionStart" && event != "SessionEnd" {
             root["hooks"][event]
                 .as_array_mut()
                 .unwrap()
@@ -290,7 +347,7 @@ fn a_users_command_calling_the_legacy_wrapper_is_repointed_and_kept() {
         [format!("my-notifier.sh && '{}' active --blink", wrapper())],
         "repointed in place and counted as ours: no stock entry beside it"
     );
-    assert_eq!(events(&json).len(), 5);
+    assert_eq!(events(&json).len(), 6);
 }
 
 #[test]
@@ -424,7 +481,7 @@ fn a_blank_settings_file_starts_fresh() {
     for blank in ["", "   \n\t\n"] {
         let (json, changed) = merge(Some(blank));
         assert!(changed);
-        assert_eq!(events(&json).len(), 5);
+        assert_eq!(events(&json).len(), 6);
     }
 }
 

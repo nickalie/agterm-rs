@@ -36,15 +36,25 @@ pub const RC_MARKER_END: &str = "# <<< agterm agent-status <<<";
 /// permission prompt: Claude Code has no "permission answered" event, and the gated tool's `PreToolUse` fired before
 /// `blocked` was set, so its `PostToolUse` is the first hook afterwards. `PermissionRequest` sets `blocked` as the
 /// prompt opens; `Notification[permission_prompt]` fires only once the prompt has waited about six seconds with no
-/// keystroke, and stays for the sandboxed network prompt, which `PermissionRequest` does not cover. `Notification`
-/// alone carries a matcher, and only `Stop` passes `--auto-reset` (it clears on visit); the rest stay keep-state.
-const CLAUDE_HOOKS: [(&str, Option<&str>, &str); 5] = [
+/// keystroke, and stays for the sandboxed network prompt, which `PermissionRequest` does not cover. `SessionEnd` is
+/// this build's (upstream installs the other five): the adapter turns a `Stop` with background work in flight into
+/// `active`, which only a later `Stop` replaces, so an agent quit before that work finished would leave the row
+/// pulsing; it ends as a plain `Stop` would. `Notification` alone carries a matcher, and only `Stop` and `SessionEnd`
+/// pass `--auto-reset` (it clears on visit); the rest stay keep-state.
+const CLAUDE_HOOKS: [(&str, Option<&str>, &str); 6] = [
     ("UserPromptSubmit", None, "active --blink"),
     ("PostToolUse", None, "active --blink"),
     ("Stop", None, "completed --auto-reset"),
     ("PermissionRequest", None, "blocked"),
     ("Notification", Some("permission_prompt"), "blocked"),
+    ("SessionEnd", None, "completed --auto-reset"),
 ];
+
+/// Whether an earlier installer (this build's before `SessionEnd`, the fork's, upstream's) wrote `event`: only those
+/// entries are its own to migrate, so a `SessionEnd` entry naming a wrapper is always the user's.
+fn written_by_earlier_installs(event: &str) -> bool {
+    event != "SessionEnd"
+}
 
 /// The Codex lifecycle events and the action the installed Codex adapter takes for each.
 const CODEX_HOOKS: [(&str, &str); 6] = [
@@ -304,6 +314,9 @@ fn migrate_claude_entries_to_adapter(hooks: &mut Map<String, Value>, script_dir:
     let replacement = wrapper_command(script_dir);
     let mut changed = false;
     for (event, _, state) in CLAUDE_HOOKS {
+        if !written_by_earlier_installs(event) {
+            continue;
+        }
         let Some(Value::Array(entries)) = hooks.get_mut(event) else {
             continue;
         };
@@ -404,6 +417,9 @@ fn legacy_moves(script_dir: &str, legacy_dirs: &[&str]) -> Vec<(String, String)>
 /// [`migrate_claude_entries_to_adapter`] scopes it. Anything a user changed (a chained command, another matcher or
 /// event, an added key) is repointed and kept rather than dropped.
 fn is_generated_legacy_entry(event: &str, entry: &Value, moves: &[(String, String)]) -> bool {
+    if !written_by_earlier_installs(event) {
+        return false;
+    }
     let Some((_, matcher, state)) = CLAUDE_HOOKS.iter().find(|(name, _, _)| *name == event) else {
         return false;
     };
