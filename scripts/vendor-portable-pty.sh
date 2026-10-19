@@ -9,7 +9,8 @@
 #   0004 a child spawned straight into a job object (PROC_THREAD_ATTRIBUTE_JOB_LIST), so no descendant escapes it
 #   0005 a ConPTY master's handles exported, and a master rebuilt from handles another process handed over (the
 #        session server's update handoff)
-# herdr's 0002 (raw cmd.exe command tails) is not carried: agterm launches no cmd.exe command text.
+#   0006 a raw command-line tail, appended without ArgvQuote escaping (herdr's 0002): a pane's command line runs as
+#        cmd.exe's command text
 #
 # The source is the crates.io archive of PORTABLE_PTY_VERSION, verified against PORTABLE_PTY_SHA256 (the checksum
 # Cargo.lock records for it), unpacked verbatim apart from its Cargo.lock (which pins nothing for a dependency), then

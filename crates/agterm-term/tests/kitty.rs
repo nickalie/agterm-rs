@@ -1,5 +1,9 @@
 //! Kitty graphics through a real PTY: a chunked APC transmission (raw pixels, and PNG as `show-image.sh` sends it)
 //! becomes an image and a placement in the frame's view; deleting it reports it removed.
+//!
+//! Unix only: the children are POSIX shell scripts whose output the tests pin byte for byte, which Windows'
+//! pseudoconsole re-renders; `platform.rs` runs a pane's launch, echo, resize, exit, selection and search there.
+#![cfg(unix)]
 
 #[expect(dead_code, reason = "the file and event helpers serve the other test files")]
 mod support;

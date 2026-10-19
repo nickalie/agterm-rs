@@ -725,13 +725,37 @@ Order after Task 7, as two lanes that meet:
 - Modify: `crates/agterm-term/src/{pty,pane,launch,exit,password_input,…}.rs`, its tests,
   `crates/agterm-term/Cargo.toml`, `.github/workflows/cross-platform.yml` (`PACKAGES` += `agterm-term`)
 
-- [ ] plain panes over `agterm-pty` on all three OSes, replacing `pty.rs`'s own wake-pipe loop
-- [ ] Windows forms beside each Unix-only spot: the command shell for seed commands (`COMMAND_SHELL`: `cmd.exe /C` on
+- [x] plain panes over `agterm-pty` on all three OSes, replacing `pty.rs`'s own wake-pipe loop
+      - the actor's read callback only copies into a pane mailbox (`mailbox.rs`: output, clipboard answers, child
+        exit, end, shutdown under one lock); the IO worker feeds the VT from it and parks on clipboard reads there,
+        with the synchronized-output hold's deadline as its timeout. Flow control is the producer's: past 1 MiB unfed
+        the callback pauses the actor's reads (new `agterm_pty::ReadPause`, `ActorHandle::wake_reader`), the worker
+        resumes them at 256 KiB, and the actor keeps writing input meanwhile. Replies go through
+        `ActorHandle::write_reply` (safe: the callback never takes the VT lock). `PaneCommand` is `agterm_pty::Command`
+        (new `raw_args`); `foreground_pid`/`password_input` read a close-on-exec master duplicate the pane keeps (decided
+        with Codex, transcript in the run's `discussions/task-14-windows-forms`). The 50 MiB `cat` bench: 0.45/0.47/0.38 s
+        (baseline 0.46/0.49/0.43)
+- [x] Windows forms beside each Unix-only spot: the command shell for seed commands (`COMMAND_SHELL`: `cmd.exe /C` on
       Windows, decided and recorded), the login shell (from Task 12), signals (job termination for SIGHUP/SIGKILL),
       `password_input` (console mode instead of `tcgetattr`), the terminfo variables (Task 10)
-- [ ] tests on all three OSes: launch, echo round trip, resize, exit codes, selection and search on a real PTY, the
+      - command lines run as `%ComSpec% /D /S /C "<line>"` (no AutoRun; `/S` plus outer quotes keeps the line's own
+        quotes), the tail passed verbatim through herdr's raw-tail patch, carried as `build/patches/portable-pty/0006`;
+        the login shell runs directly as Ghostty runs it on Windows (a value naming a file whole, else split on
+        whitespace), with no POSIX shell integration; `PATH` joins with `;`; the hostname is `GetComputerNameW`'s;
+        `Killer::hang_up` (Unix: SIGHUP to the process group; Windows: the job ends) on drop, `kill_tree` on a failed
+        start
+      - ⚠️ `password_input` is `false` on Windows, and `foreground_pid` `None`: the pseudoconsole gives its parent no
+        handle on the console's input buffer (only `AttachConsole`, process-wide, could read it), and has no foreground
+        process group (Task 15's job module is where Windows' foreground job comes from)
+      - macOS: Apple's `/bin/bash` is not detected for the bash integration, as Ghostty's `detectShell` skips it
+        (`agterm-core::live::shell_integration`)
+- [x] tests on all three OSes: launch, echo round trip, resize, exit codes, selection and search on a real PTY, the
       password-input detection; tests that need a Unix tool get a Windows form or are gated with the reason
-- [ ] run gates (full conformance run in the background); `cross-platform.yml` green on all three
+      - `tests/platform.rs` on all three; the other test files and the unit tests driving POSIX scripts are
+        `cfg(unix)` (byte-exact VT checks that Windows' pseudoconsole re-renders), `/proc` checks Linux-only, the
+        bench Linux-only; `agterm-pty` gains a pause test on all three
+- [x] run gates (full conformance run in the background); `cross-platform.yml` green on all three
+      - ratchet holds (667 ids, 14 not run on this host); `cross-platform.yml` run 39207394390 green
 
 ### Task 15: Foreground job and process table on all three OSes
 

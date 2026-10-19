@@ -43,7 +43,9 @@ pub fn reported_path(raw: &str, hostname: &str) -> Option<String> {
     Some(decode(&path[..end]))
 }
 
-/// This machine's hostname, as `gethostname(2)` gives it.
+/// This machine's hostname, as `gethostname(2)` gives it (on Windows `GetComputerNameW`'s, the name Ghostty's
+/// `isLocal` compares against there).
+#[cfg(unix)]
 #[must_use]
 pub fn local_hostname() -> Option<String> {
     let mut buffer = [0_u8; 256];
@@ -54,6 +56,23 @@ pub fn local_hostname() -> Option<String> {
     }
     let len = buffer.iter().position(|byte| *byte == 0).unwrap_or(buffer.len());
     std::str::from_utf8(&buffer[..len]).ok().map(str::to_owned)
+}
+
+/// This machine's hostname, as `GetComputerNameW` gives it (Ghostty's `isLocal` on Windows).
+#[cfg(windows)]
+#[must_use]
+pub fn local_hostname() -> Option<String> {
+    use windows_sys::Win32::System::WindowsProgramming::GetComputerNameW;
+
+    let mut buffer = [0_u16; 256];
+    let mut len = u32::try_from(buffer.len()).ok()?;
+    // SAFETY: the buffer is valid for `len` UTF-16 units, and `GetComputerNameW` writes at most that many (and the
+    // name's length, without the NUL, into `len` on success).
+    if unsafe { GetComputerNameW(buffer.as_mut_ptr(), &raw mut len) } == 0 {
+        return None;
+    }
+    let len = usize::try_from(len).ok()?.min(buffer.len());
+    String::from_utf16(&buffer[..len]).ok()
 }
 
 /// The host of a URI's authority: past any user info, without a port, a MAC address kept whole.

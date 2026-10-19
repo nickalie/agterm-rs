@@ -2,6 +2,10 @@
 //! selector each take the cells of their grapheme cluster (Ghostty's `grapheme-width-method = unicode`, mode 2027 on
 //! as the terminal's default, a reset keeping it), the cursor moves past them by those cells, and read-back and
 //! selections return whole clusters; with `legacy` each codepoint counts on its own.
+//!
+//! Unix only: the children are POSIX shell scripts whose output the tests pin byte for byte, which Windows'
+//! pseudoconsole re-renders; `platform.rs` runs a pane's launch, echo, resize, exit, selection and search there.
+#![cfg(unix)]
 
 #[expect(dead_code, reason = "the file helpers serve the other test files")]
 mod support;

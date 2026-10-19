@@ -1,7 +1,7 @@
 //! What a pane reports to its frontend ([`PaneEvent`]) and the [`vt::Effects`] that produce it.
 //!
 //! Every callback runs on the IO thread inside `vt_write`, with the pane's VT lock held. They copy what they need into
-//! the event channel (unbounded: a send never blocks) and return; replies to the program go to the PTY writer's queue,
+//! the event channel (unbounded: a send never blocks) and return; replies to the program go to the PTY actor's outbox,
 //! never a blocking write under the lock. The one exception is the render-hold callback: it takes the capture lock
 //! (VT → capture, the pane's only lock order, so it can wait only for a paint's conversion, never deadlock) and
 //! captures the held frame there, as `terminal.h` asks.
@@ -14,8 +14,9 @@
 //! stops right before the byte that makes Ghostty dispatch a read (BEL, or the ESC of ST), releases the VT lock, sends
 //! [`PaneEvent::ClipboardRead`] and waits for [`Pane::answer_clipboard_read`](crate::Pane::answer_clipboard_read). The
 //! answer is armed here, the dispatch byte is fed alone, and the callback replies from it — so Ghostty still parses,
-//! validates and serializes the request and its reply. While the pane waits, its output is not read (the program
-//! waits on the reply anyway); the GTK build's full libghostty keeps streaming instead.
+//! validates and serializes the request and its reply. While the pane waits, its output waits in the pane's mailbox,
+//! and past the mailbox's high mark is not read (the program waits on the reply anyway), while its input is still
+//! written ([`crate::mailbox`]); the GTK build's full libghostty keeps streaming instead.
 //!
 //! The callback serves an armed answer only to a request it matches (same clipboard; a list-only answer never serves
 //! data) and clears it after that one byte; with nothing armed (a read the scanner did not see) it denies.
@@ -27,7 +28,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use agterm_ghostty_vt as vt;
 use vt::ReadScope;
 
-use crate::pty::WriteQueue;
+use crate::pty::ReplyOutlet;
 use crate::render::{Capture, Rgb, rgb};
 
 /// A clipboard a program reads or writes.
@@ -256,7 +257,7 @@ pub(crate) fn scheme_of(slot: &AtomicBool) -> ColorScheme {
 /// The pane's [`vt::Effects`].
 pub(crate) struct PaneEffects {
     pub events: Sender<PaneEvent>,
-    pub writer: Arc<WriteQueue>,
+    pub replies: Arc<ReplyOutlet>,
     pub capture: Arc<Mutex<Capture>>,
     pub armed: ArmedSlot,
     pub divert: DivertSlot,
@@ -343,7 +344,7 @@ impl vt::Effects for PaneEffects {
         let mut divert = self.divert.lock().unwrap_or_else(PoisonError::into_inner);
         match divert.as_mut() {
             Some(diverted) => diverted.extend_from_slice(data),
-            None => self.writer.push_reply(data),
+            None => self.replies.push_reply(data),
         }
     }
 
@@ -435,7 +436,7 @@ mod tests {
         let (events, _) = mpsc::channel();
         PaneEffects {
             events,
-            writer: Arc::new(WriteQueue::new(1024)),
+            replies: Arc::default(),
             capture: Arc::new(Mutex::new(Capture::new().unwrap())),
             armed: Arc::new(Mutex::new(armed)),
             divert: Arc::default(),

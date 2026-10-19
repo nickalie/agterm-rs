@@ -7,6 +7,13 @@
 //!   pane's command is its `zmx attach` line ([`agterm_core::restore::spawn_plan::resolve_live_seed`]), whose
 //!   environment carries the wrap configuration from [`Runtime`]; a plain pane runs its seed's command, or
 //!   the login shell with its `initial_input` typed in.
+//! - **Windows**: a command line runs as `cmd.exe`'s command text, `%ComSpec% /D /S /C "<line>"` (no `AutoRun`, as
+//!   `sh -c` reads no rc file; `/S` with the outer quotes keeps the line's own quotes as written, which a quoted
+//!   program path needs), its tail passed as written ([`PaneCommand::raw_args`]). The login shell runs directly, as
+//!   Ghostty runs its shell on Windows (`termio/Exec.zig`): a value naming a file runs whole (the login shell from
+//!   [`agterm_session::launch::login_shell`] is a full path, often under `C:\Program Files`), anything else (the
+//!   config's `command`) is split on whitespace as Ghostty splits it, quotes and all. No shell
+//!   integration is injected there (the zsh, bash and fish ones are POSIX shells'); `PATH` takes `;`.
 //! - **Environment**, later steps winning: the app's own; `GHOSTTY_LOG` and `VTE_VERSION` removed; the terminal
 //!   identity ([`Host`]); `GHOSTTY_SHELL_FEATURES`; the shell integration of a zsh, bash or fish command line
 //!   ([`agterm_core::live::shell_integration::setup`], as `shell-integration` asks); the config's `env`; the launch's
@@ -41,8 +48,16 @@ use agterm_session::launch::Runtime;
 use crate::exit::ExitPolicy;
 use crate::{Pane, PaneCommand, PaneConfig, PaneError};
 
-/// The shell a command line runs through, as libghostty ran a surface's command on Linux.
-pub const COMMAND_SHELL: &str = "/bin/sh";
+/// The shell a command line runs through, as libghostty ran a surface's command on Linux: `/bin/sh -c <line>`; on
+/// Windows `cmd.exe` (`%ComSpec%` when set) `/D /S /C "<line>"`.
+pub const COMMAND_SHELL: &str = if cfg!(windows) { "cmd.exe" } else { "/bin/sh" };
+/// `cmd`'s switches before a command line: no `AutoRun`, and exactly the outer quotes stripped.
+#[cfg(any(windows, test))]
+const WINDOWS_SHELL_ARGS: &[&str] = &["/D", "/S", "/C"];
+/// The login shell a host without one runs: Ghostty's default (`sh`, `cmd.exe` on Windows).
+const DEFAULT_SHELL: &str = if cfg!(windows) { "cmd.exe" } else { "sh" };
+/// What separates `PATH`'s entries.
+const PATH_SEPARATOR: char = if cfg!(windows) { ';' } else { ':' };
 /// What the terminal claims without its own terminfo.
 pub const FALLBACK_TERM: &str = "xterm-256color";
 /// The terminfo entry beside Ghostty's resources that lets the terminal claim `xterm-ghostty`, relative to them, in
@@ -51,7 +66,8 @@ pub const FALLBACK_TERM: &str = "xterm-256color";
 const TERMINFO_ENTRIES: [&str; 2] = ["../terminfo/x/xterm-ghostty", "../terminfo/78/xterm-ghostty"];
 /// The staged resources relative to the staged root (`scripts/stage.sh`).
 const STAGED_RESOURCES: &str = "share/ghostty";
-/// A system ghostty package's resources.
+/// A system ghostty package's resources (none on Windows).
+#[cfg(unix)]
 const SYSTEM_RESOURCES: &str = "/usr/share/ghostty";
 /// Variables a pane never inherits from the app (libghostty's own log switch, and VTE's, which would make programs
 /// take the terminal for a VTE one).
@@ -63,7 +79,8 @@ const INPUT_FILE_LIMIT: u64 = 10 * 1024 * 1024;
 /// surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Host {
-    /// The shell a pane without a command runs: the password database's login shell, `sh` without one.
+    /// The shell a pane without a command runs: the password database's login shell (on Windows the PowerShell
+    /// `agterm_session::launch::login_shell` finds), `sh` without one (`cmd.exe` on Windows).
     pub shell: String,
     /// Ghostty's resources (shell integration, themes) with the compiled `xterm-ghostty` beside them
     /// ([`resolve_resources`]); `None` claims `xterm-256color` and integrates no shell.
@@ -105,7 +122,7 @@ impl Host {
         Self {
             shell: shell
                 .filter(|shell| !shell.is_empty())
-                .unwrap_or_else(|| "sh".to_owned()),
+                .unwrap_or_else(|| DEFAULT_SHELL.to_owned()),
             resources_dir,
             term: config.term.clone(),
             bin_dir,
@@ -184,7 +201,7 @@ impl Host {
         if let Some(cwd) = &cwd {
             vars.set("PWD", cwd.to_string_lossy().into_owned());
         }
-        let mut command = PaneCommand::new(COMMAND_SHELL).arg("-c").arg(&line);
+        let (mut command, argv) = program(&line, launch.command.is_none(), cwd.as_deref(), env);
         command.cwd = cwd;
         command.env_remove = vars.removed.into_iter().map(Into::into).collect();
         command.env = vars
@@ -201,7 +218,7 @@ impl Host {
                 .map(String::into_bytes)
                 .or_else(|| self.config_input()),
             exit: ExitPolicy::Launched {
-                argv: format!("{COMMAND_SHELL} -c {line}"),
+                argv,
                 command: launch.command.is_some(),
                 wait_after_command: launch.wait_after_command || self.wait_after_command,
                 abnormal_runtime: self.abnormal_exit_runtime,
@@ -209,8 +226,12 @@ impl Host {
         }
     }
 
-    /// Whether and how the shell integration is injected into `launch`.
+    /// Whether and how the shell integration is injected into `launch` (never on Windows: the zsh, bash and fish
+    /// integrations are POSIX shells').
     fn integration(&self, launch: &Launch) -> Integration {
+        if cfg!(windows) {
+            return Integration::Off;
+        }
         let forced = match self.shell_integration {
             ShellIntegration::None | ShellIntegration::Elvish | ShellIntegration::Nushell => return Integration::Off,
             ShellIntegration::Detect => return Integration::Detect,
@@ -279,8 +300,8 @@ impl Host {
             let bin = bin.to_string_lossy().into_owned();
             let path = env.var("PATH").map(|path| path.to_string_lossy().into_owned());
             match path.filter(|path| !path.is_empty()) {
-                Some(path) if path.split(':').any(|entry| entry == bin) => {}
-                Some(path) => vars.set("PATH", format!("{path}:{bin}")),
+                Some(path) if path.split(PATH_SEPARATOR).any(|entry| entry == bin) => {}
+                Some(path) => vars.set("PATH", format!("{path}{PATH_SEPARATOR}{bin}")),
                 None => vars.set("PATH", bin.clone()),
             }
             vars.set("GHOSTTY_BIN_DIR", bin);
@@ -288,6 +309,51 @@ impl Host {
         vars.set("TERM_PROGRAM", "ghostty".to_owned());
         vars.set("TERM_PROGRAM_VERSION", self.version.clone());
     }
+}
+
+/// What runs `line` in `cwd` (the login shell when `shell`), and the program line the failure report names.
+#[cfg(unix)]
+fn program(line: &str, _shell: bool, _cwd: Option<&Path>, _env: &dyn Env) -> (PaneCommand, String) {
+    let command = PaneCommand::new(COMMAND_SHELL).arg("-c").arg(line);
+    (command, format!("{COMMAND_SHELL} -c {line}"))
+}
+
+/// What runs `line` in `cwd` (the login shell when `shell`), and the program line the failure report names.
+#[cfg(windows)]
+fn program(line: &str, shell: bool, cwd: Option<&Path>, env: &dyn Env) -> (PaneCommand, String) {
+    if shell {
+        return windows_shell(line, cwd, Path::is_file);
+    }
+    let comspec = env.var("ComSpec").filter(|comspec| !comspec.is_empty()).map_or_else(
+        || COMMAND_SHELL.to_owned(),
+        |comspec| comspec.to_string_lossy().into_owned(),
+    );
+    windows_command(line, &comspec)
+}
+
+/// `cmd`'s run of the command line `line`: `/D /S /C`, then the line in quotes, passed as written.
+#[cfg(any(windows, test))]
+fn windows_command(line: &str, cmd: &str) -> (PaneCommand, String) {
+    let tail = format!("\"{line}\"");
+    let argv = format!("{cmd} {} {tail}", WINDOWS_SHELL_ARGS.join(" "));
+    let command = PaneCommand::new(cmd).args(WINDOWS_SHELL_ARGS).raw_arg(tail);
+    (command, argv)
+}
+
+/// The Windows login shell `value` run directly: whole when it names a file (as given, or under `cwd`, where a
+/// relative one resolves to the file there), else split on whitespace as Ghostty splits its shell on Windows.
+#[cfg(any(windows, test))]
+fn windows_shell(value: &str, cwd: Option<&Path>, is_file: impl Fn(&Path) -> bool) -> (PaneCommand, String) {
+    let path = Path::new(value);
+    let command = if !value.contains([' ', '\t']) || is_file(path) {
+        PaneCommand::new(value)
+    } else if let Some(file) = cwd.map(|cwd| cwd.join(path)).filter(|file| is_file(file)) {
+        PaneCommand::new(file)
+    } else {
+        let mut words = value.split([' ', '\t']).filter(|word| !word.is_empty());
+        PaneCommand::new(words.next().unwrap_or(value)).args(words)
+    };
+    (command, value.to_owned())
 }
 
 /// How a launch's shell integration is injected.
@@ -327,12 +393,11 @@ impl Vars {
 /// only a regular file is read (opened without blocking, so a FIFO cannot stall the open); a device or a FIFO, which
 /// libghostty would read there, is refused.
 fn read_input_file(path: &Path) -> std::io::Result<Vec<u8>> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NONBLOCK);
+    let file = options.open(path)?;
     if !file.metadata()?.is_file() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -361,7 +426,8 @@ fn read_bounded(reader: impl std::io::Read, limit: u64) -> std::io::Result<Vec<u
 /// What a pane runs (upstream's `LaunchSeed` on the pane's own surface spec).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Launch {
-    /// A shell line run through `/bin/sh -c` (a seed's command, a live pane's attach); `None` runs the login shell.
+    /// A shell line run through `/bin/sh -c` (`cmd /D /S /C` on Windows: a seed's command, a live pane's attach);
+    /// `None` runs the login shell.
     pub command: Option<String>,
     /// Typed into the program as soon as it starts (a captured command replayed into the login shell).
     pub initial_input: Option<String>,
@@ -421,14 +487,18 @@ pub fn resolve_resources(candidates: &[PathBuf], exists: impl Fn(&Path) -> bool)
 }
 
 /// Where an agterm executable at `exe` looks for Ghostty's resources, first first: the staged layout beside it
-/// (`bin/../share/ghostty`, `scripts/stage.sh`), then a system ghostty package.
+/// (`bin/../share/ghostty`, `scripts/stage.sh`), then a system ghostty package (not on Windows).
 #[must_use]
 pub fn resource_candidates(exe: Option<&Path>) -> Vec<PathBuf> {
     let staged = exe
         .and_then(Path::parent)
         .and_then(Path::parent)
         .map(|root| root.join(STAGED_RESOURCES));
-    staged.into_iter().chain([PathBuf::from(SYSTEM_RESOURCES)]).collect()
+    #[cfg(unix)]
+    let system = Some(PathBuf::from(SYSTEM_RESOURCES));
+    #[cfg(windows)]
+    let system = None;
+    staged.into_iter().chain(system).collect()
 }
 
 impl Pane {
@@ -438,7 +508,7 @@ impl Pane {
     /// # Errors
     ///
     /// As [`Pane::spawn`] (`/bin/sh` itself could not start; a command that is not found ends with status 127
-    /// instead, reported through [`crate::PaneEvent::Exited`]).
+    /// instead, 1 under `cmd.exe`, reported through [`crate::PaneEvent::Exited`]).
     pub fn launch(launch: &Launch, host: &Host, config: &PaneConfig) -> Result<Self, PaneError> {
         let prepared = host.prepare(launch, &ProcessEnv);
         let input = prepared.initial_input.unwrap_or_default();
@@ -522,6 +592,8 @@ mod tests {
         assert!(cleared.env.is_empty());
     }
 
+    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
+    #[cfg(unix)]
     #[test]
     fn the_configs_input_is_typed_unless_the_launch_types_its_own() {
         let dir = tempfile::tempdir().unwrap();
@@ -554,6 +626,8 @@ mod tests {
         assert!(host_of("input = raw:x\ninput =\n", None).input.is_empty());
     }
 
+    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
+    #[cfg(unix)]
     #[test]
     fn the_configs_working_directory_serves_a_launch_without_its_own() {
         let home = tempfile::tempdir().unwrap();
@@ -604,6 +678,8 @@ mod tests {
         assert_eq!(cwd("working-directory = home\n", &empty).as_deref(), Some(home.path()));
     }
 
+    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
+    #[cfg(unix)]
     #[test]
     fn an_input_file_is_read_through_one_bounded_read() {
         let dir = tempfile::tempdir().unwrap();
@@ -641,6 +717,8 @@ mod tests {
         assert_eq!(read_bounded(&b"abc"[..], 3).unwrap(), b"abc");
     }
 
+    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
+    #[cfg(unix)]
     #[test]
     fn an_input_path_with_escapes_reads_the_decoded_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -654,6 +732,8 @@ mod tests {
         );
     }
 
+    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
+    #[cfg(unix)]
     #[test]
     fn wait_after_command_and_the_abnormal_runtime_come_from_the_config() {
         let host = host_of(
@@ -674,6 +754,8 @@ mod tests {
         assert_eq!(defaults.abnormal_exit_runtime, ABNORMAL_EXIT_RUNTIME);
     }
 
+    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
+    #[cfg(unix)]
     #[test]
     fn shell_integration_none_injects_nothing_and_a_forced_shell_takes_the_login_shell() {
         let resources = bash_resources();
@@ -737,6 +819,8 @@ mod tests {
         }
     }
 
+    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
+    #[cfg(unix)]
     #[test]
     fn the_identity_follows_the_resolved_resources() {
         let env = MapEnv::new().with("PATH", "/usr/bin:/bin");
@@ -789,7 +873,7 @@ mod tests {
     #[test]
     fn the_bin_dir_is_appended_to_path_once() {
         let launch = Launch::default();
-        let present = MapEnv::new().with("PATH", "/opt/agterm/bin:/usr/bin");
+        let present = MapEnv::new().with("PATH", format!("/opt/agterm/bin{PATH_SEPARATOR}/usr/bin"));
         assert!(!set(&host(None).prepare(&launch, &present)).contains_key("PATH"));
         assert_eq!(
             set(&host(None).prepare(&launch, &MapEnv::new()))["PATH"],
@@ -803,6 +887,8 @@ mod tests {
         assert!(!vars.contains_key("PATH") && !vars.contains_key("GHOSTTY_BIN_DIR"));
     }
 
+    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
+    #[cfg(unix)]
     #[test]
     fn a_command_runs_through_bin_sh_and_the_launch_wins_over_everything() {
         let launch = Launch {
@@ -839,6 +925,8 @@ mod tests {
         );
     }
 
+    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
+    #[cfg(unix)]
     #[test]
     fn a_working_directory_is_entered_and_the_login_shell_runs_as_a_command_line() {
         let dir = tempfile::tempdir().unwrap();
@@ -854,6 +942,8 @@ mod tests {
         assert!(matches!(prepared.exit, ExitPolicy::Launched { command: false, .. }));
     }
 
+    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
+    #[cfg(unix)]
     #[test]
     fn the_login_shell_gets_its_integration_and_features() {
         let resources = tempfile::tempdir().unwrap();
@@ -893,6 +983,83 @@ mod tests {
     }
 
     #[test]
+    fn a_windows_command_line_runs_as_cmds_command_text_with_its_quotes_kept() {
+        let line = r#""C:\Program Files\agterm\agterm-session.exe" attach "my session""#;
+        let (command, argv) = windows_command(line, r"C:\Windows\System32\cmd.exe");
+        assert_eq!(command.program, OsString::from(r"C:\Windows\System32\cmd.exe"));
+        assert_eq!(command.args, ["/D", "/S", "/C"].map(OsString::from));
+        // the whole line in one more pair of quotes, which `/S` strips: the line's own reach cmd as written
+        assert_eq!(command.raw_args, [OsString::from(format!("\"{line}\""))]);
+        assert_eq!(argv, format!(r#"C:\Windows\System32\cmd.exe /D /S /C "{line}""#));
+    }
+
+    #[test]
+    fn a_windows_login_shell_runs_whole_when_it_is_a_file_else_split_on_whitespace() {
+        let pwsh = r"C:\Program Files\PowerShell\7\pwsh.exe";
+        let cwd = Path::new(r"C:\work");
+        let relative = cwd.join("my shell.exe");
+        let files = [Path::new(pwsh), relative.as_path()];
+        let is_file = |path: &Path| files.contains(&path);
+        let (command, argv) = windows_shell(pwsh, None, is_file);
+        assert_eq!(command.program, OsString::from(pwsh));
+        assert!(command.args.is_empty() && command.raw_args.is_empty());
+        assert_eq!(argv, pwsh);
+        // a bare name is a program for the PATH search, whole
+        assert_eq!(
+            windows_shell("cmd.exe", None, is_file).0.program,
+            OsString::from("cmd.exe")
+        );
+        // the config's `command` with arguments is split as Ghostty splits it
+        let (command, argv) = windows_shell("pwsh  -NoLogo\t-NoProfile", None, is_file);
+        assert_eq!(command.program, OsString::from("pwsh"));
+        assert_eq!(command.args, ["-NoLogo", "-NoProfile"].map(OsString::from));
+        assert_eq!(argv, "pwsh  -NoLogo\t-NoProfile");
+        // a relative file with a space resolves under the launch's directory
+        let (command, _) = windows_shell("my shell.exe", Some(cwd), is_file);
+        assert_eq!(command.program, relative.into_os_string());
+    }
+
+    /// Windows' forms through `prepare`: `cmd /D /S /C` for a command line, the login shell run directly, no POSIX
+    /// shell integration, `;` in `PATH`.
+    #[cfg(windows)]
+    #[test]
+    fn windows_runs_commands_through_cmd_and_the_login_shell_directly() {
+        let resources = bash_resources();
+        let shell_path = std::env::current_exe().unwrap();
+        let host = Host {
+            shell: shell_path.to_string_lossy().into_owned(),
+            shell_integration: ShellIntegration::Bash,
+            ..host(Some(resources.path().to_str().unwrap()))
+        };
+        let env = MapEnv::new()
+            .with("ComSpec", r"C:\Windows\system32\cmd.exe")
+            .with("PATH", r"C:\Windows");
+        let command = Launch {
+            command: Some("echo hi".to_owned()),
+            ..Launch::default()
+        };
+        let prepared = host.prepare(&command, &env);
+        assert_eq!(prepared.command.program, OsString::from(r"C:\Windows\system32\cmd.exe"));
+        assert_eq!(prepared.command.raw_args, [OsString::from("\"echo hi\"")]);
+        let ExitPolicy::Launched { argv, .. } = &prepared.exit else {
+            panic!("{:?}", prepared.exit);
+        };
+        assert_eq!(argv, r#"C:\Windows\system32\cmd.exe /D /S /C "echo hi""#);
+        assert_eq!(set(&prepared)["PATH"], r"C:\Windows;/opt/agterm/bin");
+        // without `ComSpec`, plain `cmd.exe` from `PATH`
+        let plain = host.prepare(&command, &MapEnv::new());
+        assert_eq!(plain.command.program, OsString::from("cmd.exe"));
+        // the login shell: the file itself, nothing injected
+        let shell = host.prepare(&Launch::default(), &env);
+        assert_eq!(shell.command.program, shell_path.into_os_string());
+        assert!(shell.command.args.is_empty());
+        assert!(
+            !set(&shell).contains_key("ENV"),
+            "no POSIX shell integration on Windows"
+        );
+    }
+
+    #[test]
     fn a_seed_runs_with_its_variables_over_the_panes() {
         let seed = LaunchSeed {
             command: Some("zmx attach x".to_owned()),
@@ -922,6 +1089,8 @@ mod tests {
         );
     }
 
+    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
+    #[cfg(unix)]
     #[test]
     fn resources_need_shell_integration_and_terminfo_beside_them() {
         let candidates = [
@@ -975,7 +1144,7 @@ mod tests {
         };
         config.cursor.style_blink = Some(false);
         let host = Host::new(&config, None, None, None);
-        assert_eq!(host.shell, "sh");
+        assert_eq!(host.shell, DEFAULT_SHELL);
         assert_eq!(host.term, "xterm-kitty");
         assert!(!host.cursor_blink);
         // ghostty's defaults are cursor, title and path; the ssh wrappers never reach the shell

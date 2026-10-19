@@ -293,17 +293,18 @@ dependencies = [
  "agterm-core",
  "agterm-ghostty-vt",
  "agterm-host",
+ "agterm-pty",
  "agterm-session",
  "agterm-zmx",
  "base64 0.23.1",
  "bitflags 2.13.2",
  "libc",
  "png 0.18.1",
- "portable-pty",
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

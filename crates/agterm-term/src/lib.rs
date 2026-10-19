@@ -1,5 +1,6 @@
-//! The terminal pane core, toolkit-neutral: a libghostty-vt terminal fed from a PTY by an IO thread per pane, its
-//! effects as [`PaneEvent`]s for the frontend's main thread, and its screen as [`Frame`]s in this crate's own types.
+//! The terminal pane core, toolkit-neutral, the same on Linux, macOS and Windows: a libghostty-vt terminal fed from a
+//! PTY (`agterm-pty`: openpty, or Windows' pseudoconsole) by an IO thread per pane, its effects as [`PaneEvent`]s for
+//! the frontend's main thread, and its screen as [`Frame`]s in this crate's own types.
 //!
 //! - [`Pane::spawn`] starts a [`PaneCommand`] on a PTY; [`Pane::write`] queues input, [`Pane::resize`] resizes the VT
 //!   and the PTY, [`Pane::frame`] captures the screen for painting, [`Pane::take_events`] drains the effects.
@@ -35,6 +36,7 @@ mod gesture;
 mod input;
 mod kitty;
 mod launch;
+mod mailbox;
 mod pane;
 mod placeholder;
 mod png;
@@ -79,10 +81,10 @@ use agterm_ghostty_vt as vt;
 /// Why a pane operation failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PaneError {
-    /// The program could not be started.
+    /// The PTY could not be opened, or the program could not be started.
     #[error("cannot start the program: {0}")]
     Spawn(String),
-    /// The PTY could not be opened, resized or polled.
+    /// A thread of the pane, or its PTY's actor, could not start.
     #[error("pty: {0}")]
     Pty(String),
     /// libghostty-vt refused the operation.
@@ -91,7 +93,7 @@ pub enum PaneError {
     /// The write queue is full: the child is not reading its input.
     #[error("the pane's input queue is full")]
     Backpressure,
-    /// The PTY refused a write: the child side is gone.
+    /// The PTY ended or refused a write: the child side is gone.
     #[error("the pane's pty is closed")]
     Closed,
 }

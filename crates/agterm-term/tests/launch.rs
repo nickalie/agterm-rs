@@ -6,6 +6,10 @@
 //!
 //! `AGTERM_TEST_LIVE_LAUNCHES` sets how many fresh live launches must all paint their prompt (default 50, then as
 //! many again in parallel).
+//!
+//! Unix only: the children are POSIX shell scripts whose output the tests pin byte for byte, which Windows'
+//! pseudoconsole re-renders; `platform.rs` runs a pane's launch, echo, resize, exit, selection and search there.
+#![cfg(unix)]
 
 #[expect(dead_code, reason = "the file helpers serve the other test files")]
 mod support;
@@ -269,6 +273,11 @@ fn the_login_shell_starts_with_its_integration() -> TestResult {
         eprintln!("no /bin/bash: skipping the integration launch");
         return Ok(());
     }
+    if cfg!(target_os = "macos") {
+        // Apple's /bin/bash skips the ENV startup, so it gets no integration, as in Ghostty
+        eprintln!("macOS's /bin/bash takes no integration: skipping the integration launch");
+        return Ok(());
+    }
     // the integration bash reads through ENV in POSIX mode, standing in for Ghostty's
     let (_root, ghostty) = resources(
         "case :$SHELLOPTS: in *:posix:*) mode=posix ;; *) mode=bash ;; esac\n\
@@ -304,7 +313,8 @@ fn the_foreground_pid_is_the_terminals_foreground_group() -> TestResult {
         std::thread::sleep(Duration::from_millis(10));
     };
     // the job's process group leads before its `exec`: until then its command line is the forked shell's (or
-    // empty), so wait for the `exec` to land
+    // empty), so wait for the `exec` to land (read from `/proc`, Linux's)
+    #[cfg(target_os = "linux")]
     loop {
         let cmdline = std::fs::read(format!("/proc/{job}/cmdline"))?;
         if cmdline == b"sleep\x0030\x00" {
@@ -313,6 +323,8 @@ fn the_foreground_pid_is_the_terminals_foreground_group() -> TestResult {
         assert!(Instant::now() < deadline, "the job never ran `sleep 30`: {cmdline:?}");
         std::thread::sleep(Duration::from_millis(10));
     }
+    #[cfg(not(target_os = "linux"))]
+    let _ = job;
     Ok(())
 }
 
@@ -551,6 +563,8 @@ fn a_missing_zmx_cannot_wrap_and_its_attach_ends_the_pane() -> TestResult {
         &PaneConfig::new(SIZE),
     )?;
     let status = exit_of(&pane);
-    assert_eq!((status.code, status.held), (127, false));
+    // `exec` of a missing file: 127, or 126 from macOS's sh
+    assert!(matches!(status.code, 126 | 127), "{status:?}");
+    assert!(!status.held);
     Ok(())
 }

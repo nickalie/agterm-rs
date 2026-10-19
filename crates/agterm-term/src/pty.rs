@@ -1,87 +1,15 @@
-//! The PTY side of a pane: spawning the child, the bounded queue of bytes for it and the thread that writes them, and
-//! the wake pipe that interrupts the IO thread's `poll`.
+//! The PTY side of a pane over `agterm-pty` (openpty on Unix, `ConPTY` on Windows, herdr's PTY actor moving the
+//! bytes): what a pane runs, its grid as the PTY's size, the outlet the terminal's replies leave through, and what the
+//! pane reads of the PTY itself (its foreground process group and its input modes).
 
-use std::collections::VecDeque;
-use std::ffi::OsString;
-use std::fs::File;
-use std::io::Write;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::path::PathBuf;
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use portable_pty::{CommandBuilder, MasterPty, PtySize};
+use agterm_pty::{ActorHandle, WriteError};
 
 use crate::PaneError;
 
-/// What a pane runs, and how.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PaneCommand {
-    pub program: OsString,
-    pub args: Vec<OsString>,
-    /// The working directory; `None` keeps the current one.
-    pub cwd: Option<PathBuf>,
-    /// Variables set on top of the inherited environment.
-    pub env: Vec<(OsString, OsString)>,
-    /// Inherited variables removed (before `env` is applied).
-    pub env_remove: Vec<OsString>,
-}
-
-impl PaneCommand {
-    #[must_use]
-    pub fn new(program: impl Into<OsString>) -> Self {
-        Self {
-            program: program.into(),
-            args: Vec::new(),
-            cwd: None,
-            env: Vec::new(),
-            env_remove: Vec::new(),
-        }
-    }
-
-    #[must_use]
-    pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
-        self.args.push(arg.into());
-        self
-    }
-
-    #[must_use]
-    pub fn cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
-        self.cwd = Some(cwd.into());
-        self
-    }
-
-    #[must_use]
-    pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
-        self.env.push((key.into(), value.into()));
-        self
-    }
-
-    #[must_use]
-    pub fn env_remove(mut self, key: impl Into<OsString>) -> Self {
-        self.env_remove.push(key.into());
-        self
-    }
-
-    pub(crate) fn builder(&self) -> CommandBuilder {
-        let mut builder = CommandBuilder::new(&self.program);
-        builder.args(&self.args);
-        for key in &self.env_remove {
-            builder.env_remove(key);
-        }
-        for (key, value) in &self.env {
-            builder.env(key, value);
-        }
-        match &self.cwd {
-            Some(cwd) => builder.cwd(cwd),
-            None => {
-                if let Ok(cwd) = std::env::current_dir() {
-                    builder.cwd(cwd);
-                }
-            }
-        }
-        builder
-    }
-}
+/// What a pane runs, and how: `agterm-pty`'s command (its program, arguments, working directory and environment).
+pub use agterm_pty::Command as PaneCommand;
 
 /// A pane's grid: cells and the pixel size of one cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -93,278 +21,214 @@ pub struct GridSize {
 }
 
 impl GridSize {
-    pub(crate) fn pty(self) -> PtySize {
-        let pixels = |cells: u16, cell: u32| u16::try_from(u32::from(cells).saturating_mul(cell)).unwrap_or(u16::MAX);
-        PtySize {
+    pub(crate) fn pty(self) -> agterm_pty::Size {
+        agterm_pty::Size {
             rows: self.rows,
             cols: self.cols,
-            pixel_width: pixels(self.cols, self.cell_width),
-            pixel_height: pixels(self.rows, self.cell_height),
+            cell_width: self.cell_width,
+            cell_height: self.cell_height,
         }
     }
 }
 
-/// Bytes waiting for the child: input is bounded by the queue's limit (backpressure to the frontend); the terminal's
-/// own replies are always queued, up to a hard cap past which a program that floods queries without reading its
-/// input loses replies (the IO thread never stops reading output for them: a child blocked writing output while we
-/// wait for it to read input would deadlock).
-#[derive(Debug)]
-pub(crate) struct WriteQueue {
-    state: Mutex<QueueState>,
-    /// The writer waits here for bytes.
-    ready: Condvar,
-    limit: usize,
+impl From<WriteError> for PaneError {
+    fn from(err: WriteError) -> Self {
+        match err {
+            WriteError::Backpressure => Self::Backpressure,
+            WriteError::Closed => Self::Closed,
+        }
+    }
 }
 
-/// The most bytes queued before terminal replies are dropped (when the input limit is lower).
-const REPLY_CAP: usize = 16 * 1024 * 1024;
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
+/// Where the terminal's replies to the program go: the PTY actor's outbox, in the order they are made (never
+/// refused; the actor drops them past its hard cap, `agterm_pty::REPLY_CAP`). Replies made before the actor runs
+/// (a terminal driven without a PTY) wait here, and none are taken once the pane closed it.
+///
+/// A reply is queued with [`ActorHandle::write_reply`], which waits for a read callback in progress. That is safe
+/// under the VT lock because the pane's read callback only copies into the pane's mailbox ([`crate::mailbox`]) and
+/// never takes the VT lock.
 #[derive(Debug, Default)]
-struct QueueState {
-    chunks: VecDeque<Vec<u8>>,
-    bytes: usize,
-    /// The PTY refused a write, or the pane is shutting down: nothing more is written.
-    closed: bool,
+pub(crate) struct ReplyOutlet {
+    state: Mutex<Outlet>,
 }
 
-impl WriteQueue {
-    pub(crate) fn new(limit: usize) -> Self {
-        Self {
-            state: Mutex::new(QueueState::default()),
-            ready: Condvar::new(),
-            limit,
-        }
-    }
-
-    fn lock(&self) -> MutexGuard<'_, QueueState> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Queue input for the child. A chunk that does not fit next to what is queued is refused whole
-    /// ([`PaneError::Backpressure`]); an empty queue takes any size.
-    pub(crate) fn push_input(&self, data: &[u8]) -> Result<(), PaneError> {
-        let mut state = self.lock();
-        if state.closed {
-            return Err(PaneError::Closed);
-        }
-        if state.bytes > 0 && state.bytes + data.len() > self.limit {
-            return Err(PaneError::Backpressure);
-        }
-        Self::push(&mut state, data);
-        drop(state);
-        self.ready.notify_one();
-        Ok(())
-    }
-
-    /// Queue a reply of the terminal's (never blocks; dropped past [`REPLY_CAP`] queued bytes).
-    pub(crate) fn push_reply(&self, data: &[u8]) {
-        let mut state = self.lock();
-        if state.closed {
-            return;
-        }
-        if state.bytes + data.len() > REPLY_CAP.max(self.limit) {
-            tracing::warn!(
-                queued = state.bytes,
-                "the child reads no input; a terminal reply is dropped"
-            );
-            return;
-        }
-        Self::push(&mut state, data);
-        drop(state);
-        self.ready.notify_one();
-    }
-
-    fn push(state: &mut QueueState, data: &[u8]) {
-        if data.is_empty() {
-            return;
-        }
-        state.bytes += data.len();
-        state.chunks.push_back(data.to_vec());
-    }
-
-    /// The next chunk for the writer, waiting for one; `None` once closed.
-    fn pop(&self) -> Option<Vec<u8>> {
-        let mut state = self.lock();
-        loop {
-            if state.closed {
-                return None;
-            }
-            if let Some(chunk) = state.chunks.pop_front() {
-                state.bytes -= chunk.len();
-                return Some(chunk);
-            }
-            state = self.ready.wait(state).unwrap_or_else(PoisonError::into_inner);
-        }
-    }
-
-    /// Stop writing: queued bytes are dropped and every waiter wakes.
-    pub(crate) fn close(&self) {
-        let mut state = self.lock();
-        state.closed = true;
-        state.chunks.clear();
-        state.bytes = 0;
-        drop(state);
-        self.ready.notify_all();
-    }
-
-    pub(crate) fn queued(&self) -> usize {
-        self.lock().bytes
-    }
-}
-
-/// Write queued chunks to the PTY until the queue closes or the PTY refuses a write (the child side is gone).
-pub(crate) fn write_loop(queue: &WriteQueue, mut writer: Box<dyn Write + Send>) {
-    while let Some(chunk) = queue.pop() {
-        if let Err(err) = writer.write_all(&chunk).and_then(|()| writer.flush()) {
-            tracing::debug!(%err, "pty write failed; the pane stops writing");
-            queue.close();
-            return;
-        }
-    }
-}
-
-/// A duplicate of the master's descriptor (close-on-exec) for the IO thread to poll and read.
-pub(crate) fn reader(master: &dyn MasterPty) -> Result<File, PaneError> {
-    let fd = master
-        .as_raw_fd()
-        .ok_or_else(|| PaneError::Pty("the pty master has no descriptor".to_owned()))?;
-    // SAFETY: `fd` is the master's open descriptor; F_DUPFD_CLOEXEC returns a new descriptor (or -1) and touches no
-    // memory.
-    let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
-    if duplicate < 0 {
-        return Err(PaneError::Pty(std::io::Error::last_os_error().to_string()));
-    }
-    // SAFETY: `duplicate` is a fresh descriptor nothing else owns.
-    Ok(File::from(unsafe { OwnedFd::from_raw_fd(duplicate) }))
-}
-
-/// A self-pipe that wakes the IO thread out of `poll` (pane shutdown).
 #[derive(Debug)]
-pub(crate) struct WakePipe {
-    read: OwnedFd,
-    write: OwnedFd,
+enum Outlet {
+    /// No actor yet: the replies so far, and their bytes.
+    Buffered(Vec<Vec<u8>>, usize),
+    Actor(ActorHandle),
+    Closed,
 }
 
-impl WakePipe {
-    pub(crate) fn new() -> Result<Self, PaneError> {
-        let mut fds = [0 as RawFd; 2];
-        // SAFETY: `fds` has room for the two descriptors `pipe2` writes on success.
-        if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) } != 0 {
-            return Err(PaneError::Pty(std::io::Error::last_os_error().to_string()));
-        }
-        // SAFETY: both descriptors were just created and are owned by nothing else.
-        let read = unsafe { OwnedFd::from_raw_fd(fds[0]) };
-        // SAFETY: as above.
-        let write = unsafe { OwnedFd::from_raw_fd(fds[1]) };
-        Ok(Self { read, write })
-    }
-
-    pub(crate) fn wake(&self) {
-        let byte = 1_u8;
-        // SAFETY: writes one byte from a live local to an owned, non-blocking descriptor; a full pipe is already awake.
-        unsafe { libc::write(self.write.as_raw_fd(), (&raw const byte).cast(), 1) };
+impl Default for Outlet {
+    fn default() -> Self {
+        Self::Buffered(Vec::new(), 0)
     }
 }
 
-/// What `poll` reported.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Ready {
-    /// The PTY has bytes (or hung up: the next read says which).
-    Pty,
-    /// The wake pipe was written.
-    Woken,
-    /// Nothing within the timeout.
-    Idle,
-}
-
-/// Wait up to `timeout_ms` (-1: forever) for the PTY or the wake pipe.
-pub(crate) fn poll(pty: &File, wake: &WakePipe, timeout_ms: i32) -> Result<Ready, PaneError> {
-    let mut fds = [
-        libc::pollfd {
-            fd: pty.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        },
-        libc::pollfd {
-            fd: wake.read.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        },
-    ];
-    loop {
-        // SAFETY: `fds` is a live array of two `pollfd`s whose descriptors are owned by the callers' borrows.
-        let result = unsafe { libc::poll(fds.as_mut_ptr(), 2, timeout_ms) };
-        if result >= 0 {
-            break;
-        }
-        let err = std::io::Error::last_os_error();
-        if err.kind() != std::io::ErrorKind::Interrupted {
-            return Err(PaneError::Pty(err.to_string()));
+impl ReplyOutlet {
+    /// Queue a reply for the program.
+    pub(crate) fn push_reply(&self, data: &[u8]) {
+        let mut state = lock(&self.state);
+        match &mut *state {
+            Outlet::Buffered(replies, bytes) => {
+                replies.push(data.to_vec());
+                *bytes += data.len();
+            }
+            Outlet::Actor(actor) => {
+                let actor = actor.clone();
+                drop(state);
+                actor.write_reply(data);
+            }
+            Outlet::Closed => {}
         }
     }
-    Ok(if fds[1].revents != 0 {
-        Ready::Woken
-    } else if fds[0].revents != 0 {
-        Ready::Pty
-    } else {
-        Ready::Idle
-    })
+
+    /// Send replies to `actor` from now on, the ones made so far first.
+    pub(crate) fn attach(&self, actor: &ActorHandle) {
+        let mut state = lock(&self.state);
+        if matches!(*state, Outlet::Closed) {
+            return;
+        }
+        if let Outlet::Buffered(replies, _) = std::mem::replace(&mut *state, Outlet::Actor(actor.clone())) {
+            for reply in &replies {
+                actor.write_reply(reply);
+            }
+        }
+    }
+
+    /// Take no more replies, and let go of the actor.
+    pub(crate) fn close(&self) {
+        *lock(&self.state) = Outlet::Closed;
+    }
+
+    /// The reply bytes waiting for the actor, or queued in it with the program's input.
+    #[cfg(test)]
+    pub(crate) fn queued(&self) -> usize {
+        let state = lock(&self.state);
+        match &*state {
+            Outlet::Buffered(_, bytes) => *bytes,
+            Outlet::Actor(actor) => actor.queued(),
+            Outlet::Closed => 0,
+        }
+    }
+}
+
+/// What the pane reads of its PTY on its own thread, without asking the actor (which would wait on its thread): a
+/// close-on-exec duplicate of the master on Unix, for `tcgetpgrp` and `tcgetattr`. Windows' pseudoconsole has
+/// neither: the parent holds only its pipes and its handle, not the console's input buffer whose mode says whether
+/// the program echoes, and no process group is the console's foreground.
+#[derive(Debug)]
+pub(crate) struct Tty {
+    #[cfg(unix)]
+    master: std::os::fd::OwnedFd,
+}
+
+impl Tty {
+    /// Keep what the pane reads of `master` before the actor takes it.
+    #[cfg(unix)]
+    pub(crate) fn of(master: &agterm_pty::Master) -> Result<Self, PaneError> {
+        use std::os::fd::AsFd;
+
+        let master = master
+            .as_fd()
+            .try_clone_to_owned()
+            .map_err(|err| PaneError::Pty(err.to_string()))?;
+        Ok(Self { master })
+    }
+
+    #[cfg(windows)]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the same signature as the Unix form, which duplicates a descriptor"
+    )]
+    pub(crate) fn of(_master: &agterm_pty::Master) -> Result<Self, PaneError> {
+        Ok(Self {})
+    }
+
+    /// The PTY's foreground process group (`tcgetpgrp`), the pid of its leader; `None` when the PTY cannot say (the
+    /// child side closed), and on Windows.
+    #[cfg(unix)]
+    pub(crate) fn foreground_pid(&self) -> Option<u32> {
+        use std::os::fd::AsRawFd;
+
+        // SAFETY: `tcgetpgrp` reads the process group of the master this struct owns; no memory is passed.
+        let pgrp = unsafe { libc::tcgetpgrp(self.master.as_raw_fd()) };
+        u32::try_from(pgrp).ok().filter(|pgrp| *pgrp > 0)
+    }
+
+    #[cfg(windows)]
+    #[expect(
+        clippy::unused_self,
+        reason = "the same signature as the Unix form, which reads the master"
+    )]
+    pub(crate) fn foreground_pid(&self) -> Option<u32> {
+        None
+    }
+
+    /// Canonical input with echo off (`tcgetattr`): the program reads a password. `false` when the PTY cannot say,
+    /// and always on Windows.
+    #[cfg(unix)]
+    pub(crate) fn password_input(&self) -> bool {
+        use std::os::fd::AsRawFd;
+
+        let mut termios = std::mem::MaybeUninit::<libc::termios>::zeroed();
+        // SAFETY: the descriptor is the master this struct owns; `tcgetattr` only writes a `termios` into the buffer,
+        // which is large enough and zeroed (a valid `termios`) whether or not it succeeds.
+        let read = unsafe { libc::tcgetattr(self.master.as_raw_fd(), termios.as_mut_ptr()) };
+        if read != 0 {
+            return false;
+        }
+        // SAFETY: zero-initialized above and filled by the successful `tcgetattr`.
+        let modes = unsafe { termios.assume_init() }.c_lflag;
+        modes & libc::ICANON != 0 && modes & libc::ECHO == 0
+    }
+
+    #[cfg(windows)]
+    #[expect(
+        clippy::unused_self,
+        reason = "the same signature as the Unix form, which reads the master"
+    )]
+    pub(crate) fn password_input(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
 
     #[test]
-    fn input_over_the_limit_is_refused_but_replies_are_not() {
-        let queue = WriteQueue::new(8);
-        queue.push_input(b"12345").unwrap();
-        assert_eq!(queue.push_input(b"6789"), Err(PaneError::Backpressure));
-        queue.push_reply(b"reply-bytes");
-        assert_eq!(queue.queued(), 16);
-        assert_eq!(queue.pop().as_deref(), Some(&b"12345"[..]));
-        assert_eq!(queue.pop().as_deref(), Some(&b"reply-bytes"[..]));
-        // an empty queue takes a chunk of any size
-        queue.push_input(&[0; 64]).unwrap();
-    }
-
-    #[test]
-    fn a_closed_queue_refuses_input_and_releases_the_writer() {
-        let queue = Arc::new(WriteQueue::new(4));
-        let writer = {
-            let queue = Arc::clone(&queue);
-            std::thread::spawn(move || queue.pop())
-        };
-        queue.close();
-        assert!(writer.join().unwrap().is_none());
-        assert_eq!(queue.push_input(b"x"), Err(PaneError::Closed));
-        queue.push_reply(b"ignored");
-        assert_eq!(queue.queued(), 0);
-    }
-
-    #[test]
-    fn replies_past_the_cap_are_dropped() {
-        let queue = WriteQueue::new(4);
-        queue.push_reply(&vec![0; REPLY_CAP]);
-        queue.push_reply(b"one too many");
-        assert_eq!(queue.queued(), REPLY_CAP);
-    }
-
-    #[test]
-    fn the_pixel_size_saturates() {
+    fn the_grid_becomes_the_ptys_size() {
         let size = GridSize {
             cols: 80,
             rows: 24,
             cell_width: 10,
             cell_height: 20,
         };
-        assert_eq!((size.pty().pixel_width, size.pty().pixel_height), (800, 480));
-        let huge = GridSize {
-            cell_width: 10_000,
-            ..size
-        };
-        assert_eq!(huge.pty().pixel_width, u16::MAX);
+        assert_eq!(size.pty().pixels(), (800, 480));
+        assert_eq!((size.pty().rows, size.pty().cols), (24, 80));
+    }
+
+    #[test]
+    fn replies_wait_for_the_actor_and_none_are_taken_once_closed() {
+        let outlet = ReplyOutlet::default();
+        assert_eq!(outlet.queued(), 0);
+        outlet.push_reply(b"\x1b[0n");
+        outlet.push_reply(b"\x1b[1;1R");
+        assert_eq!(outlet.queued(), 10);
+        outlet.close();
+        outlet.push_reply(b"late");
+        assert_eq!(outlet.queued(), 0);
+    }
+
+    #[test]
+    fn write_errors_map_to_the_panes() {
+        assert_eq!(PaneError::from(WriteError::Backpressure), PaneError::Backpressure);
+        assert_eq!(PaneError::from(WriteError::Closed), PaneError::Closed);
     }
 }

@@ -1,5 +1,9 @@
 //! Frames from real PTY output: dirty rows after partial updates, one frame shared by two views, a synchronized-output
 //! hold publishing the held frame (and timing out), styles and wide cells.
+//!
+//! Unix only: the children are POSIX shell scripts whose output the tests pin byte for byte, which Windows'
+//! pseudoconsole re-renders; `platform.rs` runs a pane's launch, echo, resize, exit, selection and search there.
+#![cfg(unix)]
 
 #[expect(dead_code, reason = "the event helpers serve tests/pane.rs")]
 mod support;

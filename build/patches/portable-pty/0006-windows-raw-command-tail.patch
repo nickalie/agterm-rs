@@ -1,0 +1,110 @@
+cmd.exe takes the text after `/C` as shell syntax, but portable-pty quotes every argv item with ArgvQuote, which
+escapes embedded quotes as `\"` (a form cmd.exe does not read) and so changes how the command text parses.
+`CommandBuilder::raw_arg` appends text to the Windows command line verbatim, after the quoted arguments; agterm runs
+a pane's command line as `cmd.exe /D /S /C "<line>"` through it (agterm-pty's `Command::raw_args`).
+
+From herdr (https://github.com/herdrdev/herdr, Apache-2.0) vendor/patches/portable-pty/0002-windows-raw-command-tail.patch,
+rebased onto portable-pty 0.9.0 with agterm's 0001-0005. herdr issue #1041. Remove when portable-pty exposes a raw
+Windows command-line tail. Its test: `raw_arg_appends_unescaped_windows_command_tail`.
+
+diff -ruN a/src/cmdbuilder.rs b/src/cmdbuilder.rs
+--- a/src/cmdbuilder.rs
++++ b/src/cmdbuilder.rs
+@@ -237,6 +237,8 @@
+ #[cfg_attr(feature = "serde_support", derive(Serialize, Deserialize))]
+ pub struct CommandBuilder {
+     args: Vec<OsString>,
++    #[cfg(windows)]
++    raw_args: Vec<OsString>,
+     envs: BTreeMap<OsString, EnvEntry>,
+     cwd: Option<OsString>,
+     #[cfg(unix)]
+@@ -250,6 +252,8 @@
+     pub fn new<S: AsRef<OsStr>>(program: S) -> Self {
+         Self {
+             args: vec![program.as_ref().to_owned()],
++            #[cfg(windows)]
++            raw_args: Vec::new(),
+             envs: get_base_env(),
+             cwd: None,
+             #[cfg(unix)]
+@@ -262,6 +266,8 @@
+     pub fn from_argv(args: Vec<OsString>) -> Self {
+         Self {
+             args,
++            #[cfg(windows)]
++            raw_args: Vec::new(),
+             envs: get_base_env(),
+             cwd: None,
+             #[cfg(unix)]
+@@ -289,6 +295,8 @@
+     pub fn new_default_prog() -> Self {
+         Self {
+             args: vec![],
++            #[cfg(windows)]
++            raw_args: Vec::new(),
+             envs: get_base_env(),
+             cwd: None,
+             #[cfg(unix)]
+@@ -322,6 +330,15 @@
+         }
+     }
+ 
++    /// Append raw shell text to the Windows command line without ArgvQuote escaping.
++    #[cfg(windows)]
++    pub fn raw_arg<S: AsRef<OsStr>>(&mut self, arg: S) {
++        if self.is_default_prog() {
++            panic!("attempted to add args to a default_prog builder");
++        }
++        self.raw_args.push(arg.as_ref().to_owned());
++    }
++
+     pub fn get_argv(&self) -> &Vec<OsString> {
+         &self.args
+     }
+@@ -739,6 +756,15 @@
+             );
+             Self::append_quoted(arg, &mut cmdline);
+         }
++        for arg in &self.raw_args {
++            cmdline.push(' ' as u16);
++            anyhow::ensure!(
++                !arg.encode_wide().any(|c| c == 0),
++                "invalid encoding for raw command line argument {:?}",
++                arg
++            );
++            cmdline.extend(arg.encode_wide());
++        }
+         // Ensure that the command line is nul terminated too!
+         cmdline.push(0);
+         Ok((exe, cmdline))
+@@ -904,6 +930,29 @@
+     }
+ 
+     #[cfg(windows)]
++    #[test]
++    fn raw_arg_appends_unescaped_windows_command_tail() {
++        use std::os::windows::ffi::OsStringExt;
++
++        let mut cmd = CommandBuilder::new("cmd.exe");
++        cmd.arg("/d");
++        cmd.arg("/c");
++        cmd.raw_arg(r#"echo "hi""#);
++
++        let (_exe, cmdline) = cmd.cmdline().expect("command line");
++        let nul = cmdline
++            .iter()
++            .position(|ch| *ch == 0)
++            .expect("command line should be nul terminated");
++        let command = OsString::from_wide(&cmdline[..nul])
++            .to_string_lossy()
++            .into_owned();
++
++        assert!(command.ends_with(r#"/d /c echo "hi""#), "{}", command);
++        assert!(!command.contains(r#"\"hi\""#), "{}", command);
++    }
++
++    #[cfg(windows)]
+     #[test]
+     fn test_env_case_insensitive_override() {
+         let mut cmd = CommandBuilder::new("dummy");

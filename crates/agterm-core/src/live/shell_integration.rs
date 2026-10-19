@@ -180,7 +180,8 @@ pub fn inject(shell: LoginShell, resources: &Path, inherited: &Inherited, enviro
 /// `None`, with `environment` untouched, for any other program, an integration that is not bundled, a bash given
 /// `--posix` or `-c` (no interactive start to hook), and a line with quotes or escapes, which this split does not parse
 /// (Ghostty's does; such a line runs without the integration). Ghostty's elvish and nushell integrations are not
-/// ported.
+/// ported. On macOS `/bin/bash` is not detected, as Ghostty's `detectShell` does not: Apple's patched bash 3.2 skips
+/// the `ENV` startup the bash integration rides on.
 #[must_use]
 pub fn setup(
     command: &str,
@@ -189,6 +190,15 @@ pub fn setup(
     environment: &mut BTreeMap<String, String>,
 ) -> Option<String> {
     setup_as(None, command, resources, inherited, environment)
+}
+
+/// The shell `exe` is, as Ghostty's `detectShell` (`termio/shell_integration.zig`) tells it: on `darwin`, Apple's
+/// `/bin/bash` is none it can integrate.
+fn detect(exe: &str, darwin: bool) -> Option<LoginShell> {
+    if darwin && exe == "/bin/bash" {
+        return None;
+    }
+    LoginShell::of(exe)
 }
 
 /// [`setup`] with the shell `force`d (`shell-integration = bash`, `fish` or `zsh`): that shell's scheme whatever the
@@ -207,7 +217,7 @@ pub fn setup_as(
     let mut words = command.split_whitespace();
     let exe = words.next()?;
     let shell = force
-        .or_else(|| LoginShell::of(exe))
+        .or_else(|| detect(exe, cfg!(target_os = "macos")))
         .filter(|shell| shell.is_bundled(resources))?;
     let (line, flags) = match shell {
         LoginShell::Bash => {
@@ -305,6 +315,17 @@ pub fn rearm(shell: LoginShell, environment: &BTreeMap<String, String>) -> Optio
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn apples_bin_bash_is_not_detected_on_macos() {
+        assert_eq!(super::detect("/bin/bash", true), None);
+        assert_eq!(
+            super::detect("/usr/local/bin/bash", true),
+            Some(super::LoginShell::Bash)
+        );
+        assert_eq!(super::detect("/bin/bash", false), Some(super::LoginShell::Bash));
+        assert_eq!(super::detect("/bin/zsh", true), Some(super::LoginShell::Zsh));
+    }
+
     use std::fs;
     use std::path::PathBuf;
 
@@ -557,8 +578,9 @@ mod tests {
     fn a_plain_panes_bash_goes_to_posix_mode_its_startup_flags_to_the_integration() {
         // Ghostty's `setupBash` cases
         let resources = bundled();
-        let (line, environment) = set_up(resources.path(), "/bin/bash");
-        assert_eq!(line.as_deref(), Some("/bin/bash --posix"));
+        // not `/bin/bash`, which macOS's detection skips
+        let (line, environment) = set_up(resources.path(), "/usr/local/bin/bash");
+        assert_eq!(line.as_deref(), Some("/usr/local/bin/bash --posix"));
         assert_eq!(
             (
                 environment["GHOSTTY_BASH_INJECT"].as_str(),

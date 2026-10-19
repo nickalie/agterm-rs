@@ -109,6 +109,11 @@ impl ActorHandle {
         }
     }
 
+    /// Make the actor look at its [`crate::ReadPause`] again, after it was turned off.
+    pub fn wake_reader(&self) {
+        self.wake();
+    }
+
     /// The child exited. Nothing to do on Unix, where the master reports the PTY's end by itself once every process
     /// holding its child side has closed it; on Windows this closes the pseudoconsole, which never ends by itself.
     pub fn child_exited(&self) {}
@@ -201,6 +206,7 @@ pub(crate) fn spawn_actor(config: ActorConfig) -> io::Result<ActorHandle> {
         master,
         initially_quiesced,
         input_limit,
+        read_pause,
         on_read,
         on_exit,
     } = config;
@@ -209,7 +215,7 @@ pub(crate) fn spawn_actor(config: ActorConfig) -> io::Result<ActorHandle> {
     fd::set_nonblocking(fd.as_fd())?;
     let (wake_read, wake_write) = fd::wake_pipe()?;
     let (requests, received) = mpsc::channel();
-    let shared = Arc::new(Shared::new(on_read, input_limit, initially_quiesced));
+    let shared = Arc::new(Shared::new(on_read, input_limit, initially_quiesced, read_pause));
     let file = Arc::new(File::from(fd));
     let runner = Runner {
         file: Arc::clone(&file),
@@ -270,19 +276,28 @@ impl Runner {
         }
     }
 
-    /// One poll round: write what the PTY takes, wait, then read and write what became ready.
+    /// One poll round: write what the PTY takes, wait, then read and write what became ready. While reads are paused
+    /// the master is polled for writing only (and not at all with nothing to write, so its hangup cannot spin the
+    /// loop), and a hangup is left for the reads after the pause.
     fn round(&mut self) -> Result<(), ExitReason> {
         let running = self.state == State::Running;
         if running {
             self.flush()?;
         }
+        let want_read = running && !self.shared.read_pause.is_paused();
         let want_write = running && self.shared.outbox().writable();
-        let ready = fd::poll(self.file.as_fd(), self.wake.as_fd(), running, want_write, IDLE_POLL_MS)
-            .map_err(|err| failed("poll", &err))?;
+        let ready = fd::poll(
+            self.file.as_fd(),
+            self.wake.as_fd(),
+            want_read,
+            want_write,
+            IDLE_POLL_MS,
+        )
+        .map_err(|err| failed("poll", &err))?;
         if ready.wake {
             fd::drain(self.wake.as_fd()).map_err(|err| failed("draining the wake pipe", &err))?;
         }
-        if running && ready.read {
+        if want_read && ready.read {
             self.read()?;
         }
         if want_write && ready.write {
@@ -454,6 +469,13 @@ mod tests {
 
     /// An actor over one end of a socket pair (a stand-in for a master), its reads sent to the returned receiver.
     fn actor(quiesced: bool) -> (ActorHandle, UnixStream, Receiver<Vec<u8>>, Receiver<ExitReason>) {
+        actor_with(quiesced, crate::ReadPause::new())
+    }
+
+    fn actor_with(
+        quiesced: bool,
+        read_pause: crate::ReadPause,
+    ) -> (ActorHandle, UnixStream, Receiver<Vec<u8>>, Receiver<ExitReason>) {
         let (ours, peer) = UnixStream::pair().unwrap();
         peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let (reads, read) = mpsc::channel();
@@ -471,6 +493,7 @@ mod tests {
             }),
         );
         config.initially_quiesced = quiesced;
+        config.read_pause = read_pause;
         config.on_exit = Some(Box::new(move |reason| {
             let _ = exits.send(reason);
         }));
@@ -493,6 +516,30 @@ mod tests {
         assert_eq!(read_exactly(&mut peer, 5), b"reply");
         handle.write_reply(b"late");
         assert_eq!(read_exactly(&mut peer, 4), b"late");
+    }
+
+    #[test]
+    fn paused_reads_leave_the_output_waiting_while_input_still_goes_out() {
+        let pause = crate::ReadPause::new();
+        pause.pause();
+        let (handle, mut peer, read, exit) = actor_with(false, pause.clone());
+        peer.write_all(b"output").unwrap();
+        handle.write_input(b"input").unwrap();
+        assert_eq!(read_exactly(&mut peer, 5), b"input");
+        assert!(
+            read.recv_timeout(Duration::from_millis(200)).is_err(),
+            "read while paused"
+        );
+        // the peer hanging up while paused is left for the reads after the pause: no spin, no early end
+        drop(peer);
+        assert!(
+            exit.recv_timeout(Duration::from_millis(200)).is_err(),
+            "ended while paused"
+        );
+        pause.resume();
+        handle.wake_reader();
+        assert_eq!(read.recv_timeout(Duration::from_secs(5)).unwrap(), b"output");
+        assert_eq!(exit.recv_timeout(Duration::from_secs(5)).unwrap(), ExitReason::Eof);
     }
 
     #[test]

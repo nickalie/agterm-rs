@@ -1,8 +1,8 @@
 # The crates that build on all three OSes, checked on Linux, macOS and Windows alike: format, strict clippy and the
 # tests of each crate in PACKAGES. Each task that makes a crate cross-platform adds it to PACKAGES and its generator
 # checks as steps of the `crates` job. No Miri job: it ran the Rust VT port's memory core (page buffers, its
-# allocators), which left this branch with the port (branch `rust-vt-port`). The rest of the workspace (GPUI, WPE,
-# the pane core) builds on Linux only and stays in rust-linux.yml. agterm-server (AF_UNIX and `flock`) and agterm-ctl
+# allocators), which left this branch with the port (branch `rust-vt-port`). The rest of the workspace (GPUI, WPE)
+# builds on Linux only and stays in rust-linux.yml. agterm-server (AF_UNIX and `flock`) and agterm-ctl
 # (an AF_UNIX client, tested against the server) are `any` crates that stay out until the control server has its
 # Windows form, which belongs to the GPUI-on-Windows plan.
 #
@@ -35,7 +35,7 @@ env:
   # `-p` per crate; word-split by bash, which every step runs in (Git Bash on Windows)
   PACKAGES: >-
     -p agterm-session -p agterm-proto -p agterm-host -p agterm-core -p agterm-ghostty-vt-sys -p agterm-ghostty-vt
-    -p agterm-pty
+    -p agterm-pty -p agterm-term
 
 defaults:
   run:
@@ -78,7 +78,7 @@ jobs:
       - name: test
         run: cargo test --locked $PACKAGES --all-features
       # vendor/portable-pty is a [patch] provider, not a member: its own tests of the Windows patches (malformed
-      # environments, directories on PATH) run in a copy made a workspace of its own, as herdr verifies them
+      # environments, directories on PATH, the raw command tail) run in a copy made a workspace of its own, as herdr verifies them
       - name: vendored portable-pty's Windows patch tests
         if: runner.os == 'Windows'
         run: |

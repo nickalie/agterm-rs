@@ -1,5 +1,9 @@
 //! The terminal-scoped binding actions over a real PTY: `clear_screen` (off and at a prompt, the alternate screen),
 //! `reset`, `adjust_selection`, `scroll_to_selection`, `scroll_to_row` and the formatter's regions and formats.
+//!
+//! Unix only: the children are POSIX shell scripts whose output the tests pin byte for byte, which Windows'
+//! pseudoconsole re-renders; `platform.rs` runs a pane's launch, echo, resize, exit, selection and search there.
+#![cfg(unix)]
 
 #[expect(dead_code, reason = "some helpers serve the other test files")]
 mod support;

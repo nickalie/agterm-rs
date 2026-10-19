@@ -1,6 +1,10 @@
 //! Selection, read-back and search on a pane fed by a real PTY: the selected text and the frame's selected columns,
 //! the screen and scrollback read back as `ghostty_surface_read_text` returned them (wide characters, wrapped lines),
 //! the cursor column, and the search's counts, navigation and reports.
+//!
+//! Unix only: the children are POSIX shell scripts whose output the tests pin byte for byte, which Windows'
+//! pseudoconsole re-renders; `platform.rs` runs a pane's launch, echo, resize, exit, selection and search there.
+#![cfg(unix)]
 
 #[expect(dead_code, reason = "the file helpers serve the other test files")]
 mod support;

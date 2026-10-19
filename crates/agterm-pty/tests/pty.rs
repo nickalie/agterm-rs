@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use agterm_pty::{
-    Actor, ActorConfig, ActorHandle, Child, Command, ExitReason, ExitStatus, Master, ReadCallback, Size, Spawned,
-    WriteError,
+    Actor, ActorConfig, ActorHandle, Child, Command, ExitReason, ExitStatus, Master, ReadCallback, ReadPause, Size,
+    Spawned, WriteError,
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -63,10 +63,15 @@ fn gather(output: &Arc<Mutex<Vec<u8>>>) -> ReadCallback {
 }
 
 fn start(command: &Command, size: Size) -> TestResult<Session> {
+    start_with(command, size, ReadPause::new())
+}
+
+fn start_with(command: &Command, size: Size, read_pause: ReadPause) -> TestResult<Session> {
     let Spawned { master, child } = agterm_pty::spawn(command, size)?;
     let output = Arc::new(Mutex::new(Vec::new()));
     let (exits, exit) = mpsc::channel();
     let mut config = ActorConfig::new("test", master, gather(&output));
+    config.read_pause = read_pause;
     config.on_exit = Some(Box::new(move |reason| {
         let _ = exits.send(reason);
     }));
@@ -158,6 +163,37 @@ fn input_round_trips_through_the_child() -> TestResult {
     session.expect("got:ping");
     session.type_line(&tagged("pong"))?;
     session.expect("got:pong");
+    session.quit()?;
+    assert!(session.finish()?.success());
+    Ok(())
+}
+
+/// While reads are paused the child's output waits in the PTY, but its input is still written; resumed, the output
+/// arrives.
+#[test]
+fn paused_reads_hold_the_output_back_but_not_the_input() -> TestResult {
+    let pause = ReadPause::new();
+    let session = start_with(&shell(), Size::cells(24, 80), pause.clone())?;
+    session.type_line(&tagged("before"))?;
+    session.expect("got:before");
+    pause.pause();
+    // a read already waiting (on Windows, inside `ReadFile`) may still deliver: let it land first
+    std::thread::sleep(Duration::from_millis(300));
+    session.type_line(&tagged("paused"))?;
+    let deadline = Instant::now() + PATIENCE;
+    while session.handle.queued() > 0 {
+        assert!(Instant::now() < deadline, "the input was not written while paused");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        !session.text().contains("got:paused"),
+        "read while paused: {:?}",
+        session.text()
+    );
+    pause.resume();
+    session.handle.wake_reader();
+    session.expect("got:paused");
     session.quit()?;
     assert!(session.finish()?.success());
     Ok(())

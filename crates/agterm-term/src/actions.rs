@@ -193,7 +193,9 @@ pub(crate) fn apply_clear(shared: &Shared, vt: &mut Vt) {
     shared.touch_capture();
 }
 
+// the programs are POSIX shell scripts (Windows' forms of a pane are tested in tests/platform.rs)
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use std::time::{Duration, Instant};
 

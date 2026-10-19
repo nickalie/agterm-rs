@@ -9,6 +9,9 @@
 //! taking the VT lock every 4 ms the way key encoding will (Task 10), and prints one JSON line. Scenarios: a `cat` of a
 //! 50 MiB text file on a plain shell and through `zmx attach` (private `ZMX_DIR` under the scratch dir, reaped by it),
 //! a burst of Kitty PNG transmissions (1920x1080), and resizes that reflow a full scrollback.
+//!
+//! Linux only: it reads `/proc` and runs zmx.
+#![cfg(target_os = "linux")]
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -376,10 +379,9 @@ fn null_reader(name: &str, file: &Path, zmx: Option<(&Path, &Path)>, buffer_size
     let session = format!("null-{}", std::process::id());
     let command = command(&script, zmx.map(|(zmx, dir)| (zmx, dir, session.as_str())));
     let size = bench_size();
-    let pair = portable_pty::native_pty_system().openpty(size.pty()).unwrap();
-    let mut child = pair.slave.spawn_command(command.builder()).unwrap();
-    drop(pair.slave);
-    let mut reader = pair.master.try_clone_reader().unwrap();
+    let agterm_pty::Spawned { master, mut child } = agterm_pty::spawn(&command, size.pty()).unwrap();
+    let killer = child.killer();
+    let mut reader = std::fs::File::from(std::os::fd::OwnedFd::from(master));
     let mut tail = Vec::new();
     let mut buffer = vec![0_u8; buffer_size];
     let mut reads = 0_u64;
@@ -410,7 +412,8 @@ fn null_reader(name: &str, file: &Path, zmx: Option<(&Path, &Path)>, buffer_size
         size.cols,
         size.rows
     );
-    child.kill().unwrap();
+    killer.kill_tree().unwrap();
+    child.wait().unwrap();
     if let Some((_, dir)) = zmx {
         reap_zmx(dir);
     }

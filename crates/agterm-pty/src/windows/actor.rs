@@ -24,7 +24,7 @@ use windows_sys::Win32::System::IO::CancelSynchronousIo;
 
 use super::Master;
 use crate::Size;
-use crate::actor::{ActorConfig, ActorHandle, ExitCallback, ExitReason, Gate, Released, Shared, lock};
+use crate::actor::{ActorConfig, ActorHandle, ExitCallback, ExitReason, Gate, ReadPause, Released, Shared, lock};
 
 /// The most output one read hands to the callback.
 const READ_BUFFER: usize = 256 * 1024;
@@ -175,6 +175,14 @@ impl ActorHandle {
         }
     }
 
+    /// Make the reader look at its [`crate::ReadPause`] again, after it was turned off.
+    pub fn wake_reader(&self) {
+        let inner = self.inner();
+        let state = inner.reader();
+        inner.reader_changed.notify_all();
+        drop(state);
+    }
+
     /// The child exited: close the pseudoconsole, which otherwise keeps its output pipe open for good, so the reader
     /// delivers the last output and the actor stops with [`ExitReason::Eof`].
     pub fn child_exited(&self) {
@@ -218,6 +226,8 @@ impl ActorHandle {
             return Err(closed());
         }
         state.mode = Mode::Quiesced;
+        // a reader waiting out a read pause parks now
+        inner.reader_changed.notify_all();
         loop {
             if state.exited {
                 return Err(closed());
@@ -360,11 +370,12 @@ pub(crate) fn spawn_actor(config: ActorConfig) -> io::Result<ActorHandle> {
         master,
         initially_quiesced,
         input_limit,
+        read_pause,
         on_read,
         on_exit,
     } = config;
     let Master { conpty, input, output } = master;
-    let shared = Arc::new(Shared::new(on_read, input_limit, initially_quiesced));
+    let shared = Arc::new(Shared::new(on_read, input_limit, initially_quiesced, read_pause));
     let inner = Arc::new(Inner {
         reader: Mutex::new(ReaderState {
             mode: if initially_quiesced {
@@ -436,7 +447,7 @@ fn run_reader(shared: &Shared, inner: &Inner, on_exit: Option<ExitCallback>) {
 fn read_loop(shared: &Shared, inner: &Inner) -> ExitReason {
     let mut buffer = vec![0_u8; READ_BUFFER];
     loop {
-        if let Some(reason) = wait_to_read(inner) {
+        if let Some(reason) = wait_to_read(inner, &shared.read_pause) {
             return reason;
         }
         let result = (&inner.output).read(&mut buffer);
@@ -477,11 +488,18 @@ fn ended(mode: Mode) -> ExitReason {
     }
 }
 
-/// Park while quiesced; `Some` once released or stopped, else mark the reader as reading and return.
-fn wait_to_read(inner: &Inner) -> Option<ExitReason> {
+/// Park while quiesced, and wait while reads are paused; `Some` once released or stopped, else mark the reader as
+/// reading and return. A shutdown (discarding) reads despite a pause, so the console's close never waits on its pipe.
+fn wait_to_read(inner: &Inner, pause: &ReadPause) -> Option<ExitReason> {
     let mut state = inner.reader();
     loop {
         match state.mode {
+            Mode::Running if pause.is_paused() => {
+                state = inner
+                    .reader_changed
+                    .wait_timeout(state, IDLE_WAIT)
+                    .map_or_else(|poisoned| poisoned.into_inner().0, |(guard, _)| guard);
+            }
             Mode::Running | Mode::Discarding => {
                 state.reading = true;
                 return None;

@@ -3,6 +3,10 @@
 //!
 //! Each child turns its terminal raw, sets the modes under test, prints `ready` (so the VT has processed the modes
 //! before any key is encoded) and copies its input to a file.
+//!
+//! Unix only: the children are POSIX shell scripts whose output the tests pin byte for byte, which Windows'
+//! pseudoconsole re-renders; `platform.rs` runs a pane's launch, echo, resize, exit, selection and search there.
+#![cfg(unix)]
 
 #[expect(dead_code, reason = "the frame and file-content helpers serve the other test files")]
 mod support;
@@ -65,7 +69,15 @@ fn legacy_encodings_follow_the_cursor_key_mode() -> TestResult {
             (press("f5", Mods::empty(), ""), b"\x1b[15~"),
             (press("f12", Mods::SHIFT, ""), b"\x1b[24;2~"),
             (press("key_c", Mods::CTRL, "c"), b"\x03"),
-            (press("key_x", Mods::ALT, "x"), b"\x1bx"),
+            // macOS's Option sends its text unless `macos-option-as-alt`; elsewhere Alt prefixes ESC
+            (
+                press("key_x", Mods::ALT, "x"),
+                if cfg!(target_os = "macos") {
+                    &b"x"[..]
+                } else {
+                    &b"\x1bx"[..]
+                },
+            ),
             (press("enter", Mods::empty(), ""), b"\r"),
             (press("backspace", Mods::empty(), ""), b"\x7f"),
             (press("tab", Mods::SHIFT, ""), b"\x1b[Z"),

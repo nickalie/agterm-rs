@@ -41,8 +41,8 @@ use std::io;
 use std::path::PathBuf;
 
 pub use actor::{
-    Actor, ActorConfig, ActorHandle, DEFAULT_INPUT_LIMIT, ExitCallback, ExitReason, REPLY_CAP, ReadCallback, Released,
-    WriteError,
+    Actor, ActorConfig, ActorHandle, DEFAULT_INPUT_LIMIT, ExitCallback, ExitReason, REPLY_CAP, ReadCallback, ReadPause,
+    Released, WriteError,
 };
 pub use portable_pty::ExitStatus;
 #[cfg(windows)]
@@ -54,6 +54,10 @@ pub use sys::{Child, Killer, Master};
 pub struct Command {
     pub program: OsString,
     pub args: Vec<OsString>,
+    /// Arguments after `args` that Windows takes into the command line as they are written, without the quoting
+    /// `args` get there (portable-pty's `ArgvQuote`, which escapes quotes in a form `cmd.exe` does not read): the text
+    /// after `cmd.exe /C`. On Unix they are ordinary arguments after `args`.
+    pub raw_args: Vec<OsString>,
     /// The working directory; `None` keeps the current one.
     pub cwd: Option<PathBuf>,
     /// Variables set on top of the inherited environment.
@@ -68,6 +72,7 @@ impl Command {
         Self {
             program: program.into(),
             args: Vec::new(),
+            raw_args: Vec::new(),
             cwd: None,
             env: Vec::new(),
             env_remove: Vec::new(),
@@ -90,6 +95,13 @@ impl Command {
         self
     }
 
+    /// Append `arg` to [`Command::raw_args`].
+    #[must_use]
+    pub fn raw_arg(mut self, arg: impl Into<OsString>) -> Self {
+        self.raw_args.push(arg.into());
+        self
+    }
+
     #[must_use]
     pub fn cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
         self.cwd = Some(cwd.into());
@@ -108,11 +120,17 @@ impl Command {
         self
     }
 
-    /// portable-pty's builder: the environment inherited, minus `env_remove`, plus `env`; the working directory
-    /// `cwd`, else the current one.
+    /// portable-pty's builder: `args`, then `raw_args`; the environment inherited, minus `env_remove`, plus `env`;
+    /// the working directory `cwd`, else the current one.
     fn builder(&self) -> portable_pty::CommandBuilder {
         let mut builder = portable_pty::CommandBuilder::new(&self.program);
         builder.args(&self.args);
+        #[cfg(windows)]
+        for arg in &self.raw_args {
+            builder.raw_arg(arg);
+        }
+        #[cfg(not(windows))]
+        builder.args(&self.raw_args);
         for key in &self.env_remove {
             builder.env_remove(key);
         }
@@ -218,6 +236,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let command = Command::new("prog")
             .args(["a", "b"])
+            .raw_arg("\"c d\"")
             .cwd(&dir)
             .env_remove("AGTERM_PTY_TEST_GONE")
             .env("AGTERM_PTY_TEST_SET", "1");
@@ -227,7 +246,10 @@ mod tests {
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
-        assert_eq!(argv, ["prog", "a", "b"]);
+        #[cfg(not(windows))]
+        assert_eq!(argv, ["prog", "a", "b", "\"c d\""]);
+        #[cfg(windows)]
+        assert_eq!(argv, ["prog", "a", "b"], "a raw argument stays out of the quoted argv");
         assert_eq!(
             builder.get_env("AGTERM_PTY_TEST_SET").and_then(|v| v.to_str()),
             Some("1")

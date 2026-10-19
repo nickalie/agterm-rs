@@ -15,6 +15,7 @@
 
 use std::collections::VecDeque;
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use crate::{Master, Size, sys};
@@ -58,6 +59,39 @@ pub enum WriteError {
     Closed,
 }
 
+/// A switch the actor looks at before each read of the child's output: while it is on, the actor reads nothing and
+/// keeps writing the child's input, so a consumer that cannot take more output (a queue at its limit, a terminal
+/// waiting on a clipboard answer) holds the child back without holding back its input. Clones share the switch.
+///
+/// Turning it on takes effect at the actor's next read, so it may be turned on from inside the read callback (the
+/// read in progress, at most one batch, is still delivered; on Windows also a read already waiting in `ReadFile`).
+/// After turning it off from another thread, call [`ActorHandle::wake_reader`] so the actor looks again; a quiesce
+/// and a shutdown override it.
+#[derive(Debug, Clone, Default)]
+pub struct ReadPause(Arc<AtomicBool>);
+
+impl ReadPause {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Stop reading.
+    pub fn pause(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    /// Read again (the actor learns of it at its next look: [`ActorHandle::wake_reader`]).
+    pub fn resume(&self) {
+        self.0.store(false, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn is_paused(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
 /// What a released actor leaves behind for the process that took the PTY over.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Released {
@@ -76,6 +110,8 @@ pub struct ActorConfig {
     pub initially_quiesced: bool,
     /// [`DEFAULT_INPUT_LIMIT`] unless set.
     pub input_limit: usize,
+    /// Reads stop while it is on; off unless set.
+    pub read_pause: ReadPause,
     pub on_read: ReadCallback,
     pub on_exit: Option<ExitCallback>,
 }
@@ -88,6 +124,7 @@ impl ActorConfig {
             master,
             initially_quiesced: false,
             input_limit: DEFAULT_INPUT_LIMIT,
+            read_pause: ReadPause::new(),
             on_read,
             on_exit: None,
         }
@@ -222,15 +259,17 @@ pub(crate) struct Shared {
     /// read in progress. Lock order: this one, then the outbox.
     pub(crate) on_read: Mutex<ReadCallback>,
     pub(crate) input_limit: usize,
+    pub(crate) read_pause: ReadPause,
 }
 
 impl Shared {
-    pub(crate) fn new(on_read: ReadCallback, input_limit: usize, quiesced: bool) -> Self {
+    pub(crate) fn new(on_read: ReadCallback, input_limit: usize, quiesced: bool, read_pause: ReadPause) -> Self {
         Self {
             outbox: Mutex::new(Outbox::new(quiesced)),
             outbox_changed: Condvar::new(),
             on_read: Mutex::new(on_read),
             input_limit,
+            read_pause,
         }
     }
 

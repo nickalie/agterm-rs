@@ -1,5 +1,9 @@
 //! The pointer over a pane fed by a real PTY: Ghostty's selection gesture (click counts, word and line clicks, drags,
 //! autoscroll past the bottom), the cell under a position, OSC 8 hyperlinks and soft-wrapped rows.
+//!
+//! Unix only: the children are POSIX shell scripts whose output the tests pin byte for byte, which Windows'
+//! pseudoconsole re-renders; `platform.rs` runs a pane's launch, echo, resize, exit, selection and search there.
+#![cfg(unix)]
 
 #[expect(dead_code, reason = "the file helpers serve the other test files")]
 mod support;

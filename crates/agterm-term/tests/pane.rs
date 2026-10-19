@@ -2,6 +2,10 @@
 //! clipboard reads are answered through the PTY, the exit status and resizes reach their ends, and the error paths
 //! (spawn failure, a closed PTY, a full input queue) report instead of hanging; a password prompt shows in the PTY's
 //! modes.
+//!
+//! Unix only: the children are POSIX shell scripts whose output the tests pin byte for byte, which Windows'
+//! pseudoconsole re-renders; `platform.rs` runs a pane's launch, echo, resize, exit, selection and search there.
+#![cfg(unix)]
 
 mod support;
 
@@ -126,7 +130,7 @@ fn a_kitty_listing_needs_no_consent_and_is_answered() {
     // "." in base64: the available types only; the reply is the whole OK, listing, DONE sequence
     let fixture = spawn(concat!(
         "stty raw -echo; printf '\\033]5522;type=read;Lg==\\033\\\\'; ",
-        "timeout --foreground 10 cat > \"$DIR/reply\"; exec sleep 5"
+        "cat > \"$DIR/reply\""
     ))
     .unwrap();
     let events = wait_events(&fixture.pane, |events| {
