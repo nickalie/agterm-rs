@@ -17,8 +17,8 @@
 //! # Panes
 //!
 //! [`pane::Pane`] is one live session: its program on a PTY, the terminal its output builds and the clients that
-//! output fans out to over byte-bounded, lossless queues ([`clients`]); [`pane::Panes`] holds them by name. The
-//! connections do not serve them yet.
+//! output fans out to over byte-bounded, lossless queues ([`clients`]), with the client that owns its size chosen by
+//! [`lead`]; [`pane::Panes`] holds them by name. The connections do not serve them yet.
 //!
 //! # Connections
 //!
@@ -29,6 +29,7 @@
 //! not advertise [`crate::protocol::CAPABILITY_HANDOFF_REQUEST`].
 
 pub mod clients;
+pub mod lead;
 pub mod lifecycle;
 pub mod pane;
 pub mod spawn;

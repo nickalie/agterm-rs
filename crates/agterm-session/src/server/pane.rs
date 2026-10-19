@@ -30,6 +30,15 @@
 //! order with its input. It loads no Kitty images from files, temporary files or shared memory: an image shown that
 //! way is read once, by the client that shows it.
 //!
+//! # Leadership
+//!
+//! Every client attaches with its grid and, when it is managed, its nonce and whether it claims the lead; its input
+//! and its resizes go through [`Pane::input`] and [`Pane::resize_client`]. [`super::lead`] decides which of them owns
+//! the session's size, and the pane applies the decision under the same lock: the leader's size, in order with the
+//! output, then the managed clients' role reports ([`ClientEvent::Role`](super::clients::ClientEvent)). A client
+//! detached, or whose subscription was dropped, leaves the lead as well. [`Pane::write`] (typing on behalf of no client)
+//! and [`Pane::resize`] (the server's own) bypass the lead.
+//!
 //! # The end
 //!
 //! When the program exits, the pane waits up to [`EXIT_GRACE`] for the PTY's end, so output written before the exit
@@ -49,7 +58,8 @@ use agterm_ghostty_vt as vt;
 use agterm_pty::{Actor, ActorConfig, ActorHandle, Child, ExitReason, Killer, Size, Spawned, WriteError};
 
 use super::clients::{ClientId, Clients, DEFAULT_QUEUE_LIMIT, Subscription};
-use crate::protocol::{ExitStatus, GridSize, SessionSpec};
+use super::lead::{Change, Lead, RoleNotice};
+use crate::protocol::{ExitStatus, GridSize, LeadRole, Managed, SessionSpec};
 
 /// The variable naming a session in its program's environment.
 pub const SESSION_VARIABLE: &str = "AGTERM_LIVE_SESSION";
@@ -86,8 +96,11 @@ pub struct PaneConfig {
     /// The namespace directory the server serves, set in the program's environment.
     pub namespace: PathBuf,
     pub spec: SessionSpec,
-    /// The grid the session starts with.
+    /// The grid the session starts with: its creator's.
     pub size: GridSize,
+    /// The creator's explicit leadership; `None` for an unmanaged creator. Either way the creator leads, as no client
+    /// does before it.
+    pub managed: Option<Managed>,
     /// The output bytes each client's queue holds.
     pub client_queue_limit: usize,
 }
@@ -100,6 +113,7 @@ impl PaneConfig {
             namespace: namespace.into(),
             spec,
             size,
+            managed: None,
             client_queue_limit: DEFAULT_QUEUE_LIMIT,
         }
     }
@@ -151,6 +165,8 @@ struct Core {
 struct State {
     terminal: vt::Terminal,
     clients: Clients,
+    /// Which client owns the session's size.
+    lead: Lead,
     /// The session's output bytes so far: the offset of the next read.
     offset: u64,
     size: GridSize,
@@ -168,6 +184,23 @@ struct State {
     on_end: Option<Box<dyn FnOnce() + Send>>,
 }
 
+impl State {
+    /// Queue each notice for its client.
+    fn tell(&mut self, notices: &[RoleNotice]) {
+        for notice in notices {
+            self.clients.role(notice.client, notice.role, notice.generation);
+        }
+    }
+
+    /// Forget the clients whose subscription was dropped, and their part in the lead.
+    fn prune(&mut self) {
+        for id in self.clients.prune() {
+            let change = self.lead.detach(id);
+            self.tell(&change.notices);
+        }
+    }
+}
+
 impl Core {
     fn lock(&self) -> MutexGuard<'_, State> {
         // a panic inside the terminal's callbacks leaves the state as the last full read made it
@@ -183,6 +216,7 @@ impl Core {
         state.terminal.vt_write(bytes);
         let offset = state.offset;
         state.offset += bytes.len() as u64;
+        state.prune();
         state.clients.output(offset, bytes);
         drop(state);
         std::mem::take(&mut *lock(&self.replies))
@@ -278,7 +312,8 @@ impl Pane {
     /// Start the session `config` names: its program on a PTY of `config.size`, with the environment
     /// [`child_environment`] makes of its spec, in its spec's working directory (else the home directory of that
     /// environment). The client creating it is attached before the program runs, so it is sent all of its output
-    /// from offset zero on, as an attach that creates its session is.
+    /// from offset zero on, as an attach that creates its session is; it leads the session (told so first when it is
+    /// managed).
     ///
     /// # Errors
     ///
@@ -290,6 +325,7 @@ impl Pane {
             namespace,
             spec,
             size,
+            managed,
             client_queue_limit,
         } = config;
         let size = GridSize {
@@ -302,15 +338,13 @@ impl Pane {
         let terminal = server_terminal(size, &replies)?;
         let Spawned { master, child } = agterm_pty::spawn(&command, Size::cells(size.rows, size.cols))?;
         let mut clients = Clients::new(client_queue_limit);
-        let creator = Attached {
-            subscription: clients.attach(NEXT_CLIENT.fetch_add(1, Ordering::Relaxed)),
-            offset: 0,
-            size,
-        };
+        let mut lead = Lead::new();
+        let creator = attach_creator(&mut clients, &mut lead, size, managed.as_ref());
         let core = Arc::new(Core {
             state: Mutex::new(State {
                 terminal,
                 clients,
+                lead,
                 offset: 0,
                 size,
                 pty_ended: false,
@@ -377,25 +411,90 @@ impl Pane {
         &self.tracked_env
     }
 
-    /// Attach a client: it is sent the session's output from the offset returned on. `None` once the program ended.
+    /// Attach a client whose grid is `size`, under explicit leadership when `managed` is given: it is sent the
+    /// session's output from the offset returned on. When it takes the lead ([`super::lead`]), the session takes its
+    /// size first, so the offset and size returned are the resized session's; a managed client is told its role before
+    /// anything else. `None` once the program ended.
     #[must_use]
-    pub fn attach(&self) -> Option<Attached> {
+    pub fn attach(&self, size: GridSize, managed: Option<&Managed>) -> Option<Attached> {
         let mut state = self.core.lock();
         if state.exit.is_some() {
             return None;
         }
-        let subscription = state.clients.attach(NEXT_CLIENT.fetch_add(1, Ordering::Relaxed));
-        Some(Attached {
+        state.prune();
+        let id = NEXT_CLIENT.fetch_add(1, Ordering::Relaxed);
+        let change = state.lead.attach(id, size, managed);
+        if let Some(size) = change.resize {
+            self.resize_locked(&mut state, size);
+        }
+        let subscription = state.clients.attach(id);
+        state.tell(&change.notices);
+        let attached = Attached {
             subscription,
             offset: state.offset,
             size: state.size,
-        })
+        };
+        self.release(state);
+        Some(attached)
     }
 
-    /// Detach the client `id`; whether it was attached.
+    /// Detach the client `id`; whether it was attached. When it led, the session is left unowned, keeping its size.
     #[must_use]
     pub fn detach(&self, id: ClientId) -> bool {
-        self.core.lock().clients.detach(id)
+        let mut state = self.core.lock();
+        let attached = state.clients.detach(id);
+        let change = state.lead.detach(id);
+        state.tell(&change.notices);
+        attached
+    }
+
+    /// The role of the client `id`; `None` when it is not attached.
+    #[must_use]
+    pub fn role(&self, id: ClientId) -> Option<LeadRole> {
+        let mut state = self.core.lock();
+        state.prune();
+        state.lead.role(id)
+    }
+
+    /// The client leading the session.
+    #[must_use]
+    pub fn leader(&self) -> Option<ClientId> {
+        let mut state = self.core.lock();
+        state.prune();
+        state.lead.leader()
+    }
+
+    /// Input the client `id` sent for the program: queued when it leads, or when it takes the lead by typing (an
+    /// unmanaged client; the session takes its size first); dropped otherwise. Whether it was queued.
+    ///
+    /// # Errors
+    ///
+    /// As [`Pane::write`].
+    pub fn input(&self, id: ClientId, data: &[u8]) -> Result<bool, WriteError> {
+        let mut state = self.core.lock();
+        if state.exit.is_some() {
+            return Ok(false);
+        }
+        state.prune();
+        let input = state.lead.input(id, data);
+        self.apply(state, &input.change);
+        if !input.forward {
+            return Ok(false);
+        }
+        self.actor.write_input(data)?;
+        Ok(true)
+    }
+
+    /// The client `id`'s grid is now `size`: the session takes it while the client leads, or once it takes the lead
+    /// of an unowned session by resizing (an unmanaged client); otherwise it is only held, for when the client leads.
+    pub fn resize_client(&self, id: ClientId, size: GridSize) {
+        let mut state = self.core.lock();
+        if state.exit.is_some() {
+            return;
+        }
+        state.prune();
+        let change = state.lead.resize(id, size);
+        self.apply(state, &change);
     }
 
     /// The clients attached.
@@ -427,13 +526,19 @@ impl Pane {
 
     /// Resize the session's grid: its terminal, its PTY (the program sees the new size before any input queued after
     /// this) and, in order with the output, every client. A zero dimension counts as one; the size it had already
-    /// changes nothing.
+    /// changes nothing. The server's own resize: it bypasses the lead ([`Pane::resize_client`] does not).
     pub fn resize(&self, size: GridSize) {
+        let mut state = self.core.lock();
+        self.resize_locked(&mut state, size);
+        self.release(state);
+    }
+
+    /// [`Pane::resize`] under the pane's lock, already held.
+    fn resize_locked(&self, state: &mut State, size: GridSize) {
         let size = GridSize {
             cols: size.cols.max(1),
             rows: size.rows.max(1),
         };
-        let mut state = self.core.lock();
         if state.exit.is_some() || state.size == size {
             return;
         }
@@ -444,8 +549,21 @@ impl Pane {
         state.size = size;
         let offset = state.offset;
         state.clients.resized(offset, size);
-        // a size report the program asked for (in-band resize notifications); written once the lock is let go, as
-        // the PTY's read callback may be waiting for it
+    }
+
+    /// Apply a leadership change under the pane's lock (the leader's size, then the role reports) and let go of it.
+    fn apply(&self, mut state: MutexGuard<'_, State>, change: &Change) {
+        if let Some(size) = change.resize {
+            self.resize_locked(&mut state, size);
+        }
+        state.tell(&change.notices);
+        self.release(state);
+    }
+
+    /// Let go of the pane's lock, then write the replies the terminal gave outside the PTY's reads (a size report the
+    /// program asked for, in-band resize notifications): written once the lock is let go, as the PTY's read callback
+    /// may be waiting for it.
+    fn release(&self, state: MutexGuard<'_, State>) {
         let replies = std::mem::take(&mut *lock(&self.core.replies));
         drop(state);
         for reply in replies {
@@ -611,6 +729,23 @@ fn home(env: &[(String, String)]) -> Option<PathBuf> {
     lookup(env, name)
         .filter(|home| !home.is_empty())
         .map(|home| PathBuf::from(OsString::from(home)))
+}
+
+/// Attach the client creating a session of `size`: it leads, as no client does before it, and a managed one is told so
+/// before anything else.
+fn attach_creator(clients: &mut Clients, lead: &mut Lead, size: GridSize, managed: Option<&Managed>) -> Attached {
+    let id = NEXT_CLIENT.fetch_add(1, Ordering::Relaxed);
+    // the session starts at the creator's size: the change's resize is the size it has
+    let change = lead.attach(id, size, managed);
+    let subscription = clients.attach(id);
+    for notice in &change.notices {
+        clients.role(notice.client, notice.role, notice.generation);
+    }
+    Attached {
+        subscription,
+        offset: 0,
+        size,
+    }
 }
 
 /// The server's terminal for a session of `size`: its replies into `replies`, no Kitty image media.

@@ -14,14 +14,15 @@
 //!
 //! The pane queues under its own lock, the one that also feeds its terminal, so every client sees the same events in
 //! the same order, each output contiguous with the one before it (`offset` plus the length of `data` is the next
-//! offset), until its queue overflows or the session ends. [`ClientEvent::Exit`] is always queued, after all output,
-//! and is the last event of a session.
+//! offset), until its queue overflows or the session ends. A managed client's [`ClientEvent::Role`] reports
+//! ([`super::lead`]) sit in that order too, its first before anything else it is sent. [`ClientEvent::Exit`] is always
+//! queued, after all output, and is the last event of a session.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use crate::protocol::{ExitStatus, GridSize};
+use crate::protocol::{ExitStatus, GridSize, LeadRole};
 
 /// The output bytes a client's queue holds before it overflows.
 pub const DEFAULT_QUEUE_LIMIT: usize = 8 * 1024 * 1024;
@@ -40,8 +41,11 @@ pub enum ClientEvent {
     Output { offset: u64, data: Vec<u8> },
     /// The session's grid changed, in the output at `offset`.
     Resized { offset: u64, size: GridSize },
-    /// The client's queue was full: output from `offset` on was not queued, and nothing but the session's exit is
-    /// queued after this until the client is resynced.
+    /// The client's role at the session changed (sent to a managed client only); `generation` counts the session's
+    /// leadership changes.
+    Role { role: LeadRole, generation: u32 },
+    /// The client's queue was full: output from `offset` on was not queued, and nothing but role changes and the
+    /// session's exit is queued after this until the client is resynced.
     Overflowed { offset: u64 },
     /// The session's program ended; the last event.
     Exit(ExitStatus),
@@ -102,6 +106,13 @@ impl Queue {
     fn push_resized(&mut self, offset: u64, size: GridSize) {
         if !self.closed && !self.overflowed {
             self.events.push_back(ClientEvent::Resized { offset, size });
+        }
+    }
+
+    /// A role is queued after an overflow too: the client keeps its role through a resync.
+    fn push_role(&mut self, role: LeadRole, generation: u32) {
+        if !self.closed {
+            self.events.push_back(ClientEvent::Role { role, generation });
         }
     }
 
@@ -250,19 +261,17 @@ impl Clients {
 
     /// The clients attached, those whose subscription was dropped not counted.
     #[must_use]
-    pub fn len(&mut self) -> usize {
-        self.prune();
-        self.slots.len()
+    pub fn len(&self) -> usize {
+        self.slots.iter().filter(|(_, slot)| !slot.lock().closed).count()
     }
 
     #[must_use]
-    pub fn is_empty(&mut self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Queue the session's output `data`, which starts at `offset`, for every client. Never waits.
     pub fn output(&mut self, offset: u64, data: &[u8]) {
-        self.prune();
         for (_, slot) in &self.slots {
             slot.with(|queue| queue.push_output(offset, data));
         }
@@ -270,10 +279,18 @@ impl Clients {
 
     /// Queue the grid's change to `size` at `offset` for every client.
     pub fn resized(&mut self, offset: u64, size: GridSize) {
-        self.prune();
         for (_, slot) in &self.slots {
             slot.with(|queue| queue.push_resized(offset, size));
         }
+    }
+
+    /// Queue the client `id`'s new role; whether it is attached.
+    pub fn role(&mut self, id: ClientId, role: LeadRole, generation: u32) -> bool {
+        let Some((_, slot)) = self.slots.iter().find(|(client, _)| *client == id) else {
+            return false;
+        };
+        slot.with(|queue| queue.push_role(role, generation));
+        true
     }
 
     /// Queue the session's end for every client and detach them all.
@@ -283,9 +300,18 @@ impl Clients {
         }
     }
 
-    /// Forget the clients that dropped their subscription.
-    fn prune(&mut self) {
-        self.slots.retain(|(_, slot)| !slot.lock().closed);
+    /// Forget the clients that dropped their subscription; their ids, so their part in the session (its lead) goes
+    /// too.
+    pub fn prune(&mut self) -> Vec<ClientId> {
+        let mut dropped = Vec::new();
+        self.slots.retain(|(id, slot)| {
+            let open = !slot.lock().closed;
+            if !open {
+                dropped.push(*id);
+            }
+            open
+        });
+        dropped
     }
 }
 
@@ -404,6 +430,48 @@ mod tests {
         assert_eq!(clients.len(), 1);
         clients.output(0, b"x");
         assert_eq!(kept.queued(), 1);
+        assert_eq!(clients.prune(), [2]);
+        assert!(clients.prune().is_empty());
+        assert!(!clients.role(2, LeadRole::Leader, 1));
+    }
+
+    #[test]
+    fn a_role_goes_to_its_client_alone_in_order_and_past_an_overflow() {
+        let mut clients = Clients::new(4);
+        let told = clients.attach(1);
+        let other = clients.attach(2);
+        assert!(clients.role(1, LeadRole::Leader, 1));
+        clients.output(0, b"abc");
+        clients.output(3, b"de");
+        assert!(clients.role(1, LeadRole::Follower, 2));
+        assert_eq!(
+            drain(&told),
+            [
+                ClientEvent::Role {
+                    role: LeadRole::Leader,
+                    generation: 1
+                },
+                ClientEvent::Output {
+                    offset: 0,
+                    data: b"abc".to_vec()
+                },
+                ClientEvent::Overflowed { offset: 3 },
+                ClientEvent::Role {
+                    role: LeadRole::Follower,
+                    generation: 2
+                },
+            ]
+        );
+        assert!(
+            drain(&other)
+                .iter()
+                .all(|event| !matches!(event, ClientEvent::Role { .. }))
+        );
+        clients.exit(&ExitStatus::Unknown);
+        assert!(
+            !clients.role(1, LeadRole::Unowned, 3),
+            "no client is left after the exit"
+        );
     }
 
     #[test]

@@ -834,12 +834,27 @@ Order after Task 7, as two lanes that meet:
 **Files:**
 - Create: `crates/agterm-session/src/server/lead.rs`, `crates/agterm-session/tests/lead.rs`
 
-- [ ] size ownership, role changes and unmanaged clients with today's explicit-leadership semantics (Technical
+- [x] size ownership, role changes and unmanaged clients with today's explicit-leadership semantics (Technical
       Details), herdr's resize ownership adapted to them
-- [ ] the role as the attach contract's title format, sent on change
-- [ ] tests: two clients with the lead passing between them; a follower's resize ignored; an unmanaged client; the
+      - `server::lead::Lead` decides, the pane applies under its lock: an attach leads when no client does or when it
+        is managed and claims; only the leader's input and resize reach the program, except that an unmanaged
+        follower's typing (zmx's `isUserInput`, ported as `is_user_input` over Ghostty's parser states; zmx's MIT
+        notice in `NOTICE`) or its resize of an unowned session takes the lead; the leader leaving (detached, or its
+        subscription dropped) leaves the session unowned at its size. herdr's part: every client's last reported size
+        is held and a client taking the lead brings it (zmx asked the new leader for it). A nonce the title cannot
+        carry makes the attach unmanaged. `Pane::attach(size, managed)`, `Pane::input`, `Pane::resize_client`,
+        `Pane::role`, `Pane::leader`; `PaneConfig.managed` for the creator
+- [x] the role as the attach contract's title format, sent on change
+      - a managed client gets `ClientEvent::Role { role, generation }` whenever its role differs from the last one it
+        was told, its first before anything else, in order with the output and past an overflow (kept through Task
+        18's resync); `lead::role_title` formats `OSC 2;agterm-live-role;<nonce>:<role>:<generation>` ST for the
+        attach client to write (Task 22), its payload checked against `agterm-core`'s `LeadNotice::parse`
+- [x] tests: two clients with the lead passing between them; a follower's resize ignored; an unmanaged client; the
       lead leaving on detach
-- [ ] run gates
+      - `tests/lead.rs` on real panes (the program's own `stty size` / `[Console]::WindowHeight`), the dropped
+        subscription too; unit tests of the rules, the queue's role events and zmx's `isUserInput` cases; the pane
+        tests' helpers moved to `tests/support/mod.rs`
+- [x] run gates
 
 ### Task 18: Attach, snapshot and resync
 
