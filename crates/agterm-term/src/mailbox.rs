@@ -132,11 +132,12 @@ impl Mailbox {
         if left.is_zero() {
             return (state, true);
         }
-        let (state, result) = self
+        let (state, _) = self
             .changed
             .wait_timeout(state, left)
             .unwrap_or_else(PoisonError::into_inner);
-        (state, result.timed_out())
+        // the clock decides, not the condvar's flag: Windows' timed wait can end a little before `left` has passed
+        (state, Instant::now() >= deadline)
     }
 
     /// The worker's side: the next read of output, waiting for one until `deadline`. A read taken stays pending
