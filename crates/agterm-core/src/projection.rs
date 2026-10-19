@@ -540,7 +540,8 @@ mod tests {
         assert_eq!(workspace_node["collapsed"], true);
         let node = &workspace_node["sessions"][0];
         for (key, value) in [
-            ("name", json!("vim")),
+            // the title names no session by default, so `name` is the cwd basename beside the raw title
+            ("name", json!("u")),
             ("title", json!("vim")),
             ("flagged", json!(true)),
             ("status", json!("blocked")),

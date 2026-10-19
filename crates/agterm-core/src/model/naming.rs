@@ -1,7 +1,9 @@
 //! Name and path text rules shared by the model: the control-character strip every stored name and cwd passes
 //! through (upstream's `TerminalText.sanitized`), the "blank after trim" normalizer (`String.trimmedOrNil`), the
-//! basename a session row falls back to (`NSString.lastPathComponent` with upstream's pins), and the auto names of
-//! new workspaces and windows.
+//! basename a session row falls back to (`NSString.lastPathComponent` with upstream's pins), whether a terminal title
+//! may name a session instead, and the auto names of new workspaces and windows.
+
+use std::cell::Cell;
 
 /// Strips the C0 control range (U+0000–U+001F, tab, newline and carriage return included) and DEL (U+007F), keeping
 /// every other scalar, as upstream's `TerminalText.sanitized`.
@@ -42,6 +44,30 @@ pub fn last_path_component(path: &str) -> String {
         return "/".to_owned();
     }
     stripped.rsplit('/').next().unwrap_or(stripped).to_owned()
+}
+
+thread_local! {
+    static NAMES_FROM_TERMINAL_TITLE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether a pane's terminal title may stand in for an unnamed session's name (the `sessionNameFromTerminalTitle`
+/// setting, off by default: the cwd basename names the session, so a TUI or agent that titles the terminal after its
+/// own state cannot rename the row out from under the user). The GTK fork's `SessionNaming.usesTerminalTitle`;
+/// upstream always lets the title name the session.
+///
+/// A mirror of the setting rather than a [`Session`](super::Session) field, because
+/// [`Session::display_name`](super::Session::display_name) is read from dozens of sites that hold no settings. It is
+/// per thread, as the fork's is main-actor isolated: the thread that owns the model (the main thread) is the only one
+/// that renders a name, and parallel tests each get their own. [`Core`](crate::Core) pushes it whenever its settings
+/// change; nothing else writes it outside tests.
+#[must_use]
+pub fn names_from_terminal_title() -> bool {
+    NAMES_FROM_TERMINAL_TITLE.get()
+}
+
+/// Sets [`names_from_terminal_title`] for this thread.
+pub fn set_names_from_terminal_title(on: bool) {
+    NAMES_FROM_TERMINAL_TITLE.set(on);
 }
 
 /// The auto name of the `n`-th workspace (`workspace 1`, …), upstream's `AppStore.defaultWorkspaceName`.

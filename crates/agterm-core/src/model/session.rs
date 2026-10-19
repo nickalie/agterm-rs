@@ -11,7 +11,7 @@ use std::time::SystemTime;
 use uuid::Uuid;
 
 use super::background::{BackgroundWatermark, PaneBackgrounds};
-use super::naming::{last_path_component, sanitized, trimmed_or_none};
+use super::naming::{self, last_path_component, sanitized, trimmed_or_none};
 use super::overlay::OverlaySlot;
 use super::pane::{PaneLaunch, PaneRestore, SplitLayout, StatusPane, SurfaceSlot};
 use super::pane_overlay::PaneOverlays;
@@ -398,14 +398,17 @@ impl Session {
         self.split.focused && self.split_surface.is_present()
     }
 
-    /// The sidebar label: a non-blank custom name, else the focused pane's non-blank terminal title, else the
-    /// basename of [`Session::focused_cwd`] (`/` stays `/`, a trailing slash is ignored, an empty path reads `~`).
+    /// The sidebar label: a non-blank custom name, else the basename of [`Session::focused_cwd`] (`/` stays `/`, a
+    /// trailing slash is ignored, an empty path reads `~`). The focused pane's non-blank terminal title comes before
+    /// the basename only while [`naming::names_from_terminal_title`] is on.
     #[must_use]
     pub fn display_name(&self) -> String {
         if let Some(name) = self.custom_name.as_deref().and_then(trimmed_or_none) {
             return name;
         }
-        if let Some(title) = self.focused_osc_title().and_then(trimmed_or_none) {
+        if naming::names_from_terminal_title()
+            && let Some(title) = self.focused_osc_title().and_then(trimmed_or_none)
+        {
             return title;
         }
         last_path_component(self.focused_cwd())
@@ -617,7 +620,18 @@ mod tests {
     }
 
     #[test]
+    fn display_name_prefers_name_then_basename_ignoring_the_title_by_default() {
+        let mut s = session("/Users/me/project");
+        s.osc_title = Some("vim".to_owned());
+        assert_eq!(s.display_name(), "project");
+        s.custom_name = Some("build".to_owned());
+        assert_eq!(s.display_name(), "build");
+        assert_eq!(s.subtitle_detail(), "vim", "the title still reaches line two");
+    }
+
+    #[test]
     fn display_name_prefers_name_then_title_then_basename() {
+        naming::set_names_from_terminal_title(true);
         let mut s = session("/Users/me/project");
         assert_eq!(s.display_name(), "project");
         s.osc_title = Some("  vim  ".to_owned());
@@ -682,6 +696,7 @@ mod tests {
 
     #[test]
     fn the_focused_split_drives_the_label_only_while_it_exists() {
+        naming::set_names_from_terminal_title(true);
         let mut s = session("/main");
         s.split_cwd = Some("/side".to_owned());
         s.split_title = Some("split title".to_owned());
@@ -701,6 +716,7 @@ mod tests {
 
     #[test]
     fn subtitle_adds_the_title_only_when_it_is_not_the_label() {
+        naming::set_names_from_terminal_title(true);
         let mut s = session("/work");
         assert_eq!(s.subtitle_detail(), "/work");
         s.osc_title = Some("me@host:~".to_owned());

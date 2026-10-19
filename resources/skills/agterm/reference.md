@@ -126,7 +126,8 @@ waits forever on an absent app. SIGINT and SIGTERM use normal process behavior.
 `id`, `name`, `cwd`, `splitCwd` (the split pane's last reported directory, falling back to its restored
 directory, then the primary cwd; omitted without a split or on older servers), `title` (the raw OSC terminal
 title, for example a remote host over SSH, omitted
-when none reported; distinct from `name`, the derived sidebar label), `active` (selected),
+when none reported; distinct from `name`, the derived sidebar label, which ignores the title unless the
+user turned on "Name sessions after the terminal title"), `active` (selected),
 `split` (split SHOWN side by side, the read side of `session split on|off`),
 `realized` (whether the session's MAIN pane has a live terminal — `false` means no shell was spawned and a
 `--command` has not run. `session text` then answers `session not realized` without realizing anything;
@@ -1610,7 +1611,9 @@ for untrusted content). A remote host can set the session title (OSC) and workin
 so `{AGT_SESSION_NAME}` and `{AGT_SESSION_PWD}` are as untrusted as `{AGT_SELECTION}`; use the quoted
 `$AGT_*` form for any of them:
 
-- `{AGT_SESSION_NAME}` / `$AGT_SESSION_NAME` — the session's display name (the focused pane's terminal title, remote-settable via OSC).
+- `{AGT_SESSION_NAME}` / `$AGT_SESSION_NAME` — the session's display name: a custom name, else the
+  basename of its directory (remote-settable via OSC 7), or, when the user turned on "Name sessions after
+  the terminal title", the focused pane's terminal title (remote-settable via OSC 0/2) before the basename.
 - `{AGT_SESSION_PWD}` / `$AGT_SESSION_PWD` — the working directory of the pane the command fired from;
   the scratch terminal reports the main pane's, since it tracks no cwd of its own. For a session opened
   by `zmx attach` the path can be remote: the session starts with local HOME and follows subsequent cwd

@@ -251,8 +251,17 @@ impl Core {
             zmx: commands::zmx::ZmxRuntime::default(),
             remote: crate::remote::PresentationRuntime::default(),
         };
+        core.sync_session_naming();
         core.repoint_remotes();
         core
+    }
+
+    /// Pushes `sessionNameFromTerminalTitle` to the naming mirror every session name reads
+    /// ([`crate::model::naming::names_from_terminal_title`]).
+    fn sync_session_naming(&self) {
+        crate::model::naming::set_names_from_terminal_title(
+            self.settings.session_name_from_terminal_title.unwrap_or(false),
+        );
     }
 
     /// Whether this host claims the conformance capability `name` (`window-geometry` decides whether `window.move`
@@ -476,6 +485,7 @@ impl Core {
         if self.settings == before {
             return false;
         }
+        self.sync_session_naming();
         self.save_settings();
         true
     }

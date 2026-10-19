@@ -79,6 +79,9 @@ pub enum GeneralChange {
     NewSessionDirectory(NewSessionDirectory),
     NewSessionCustomDirectory(String),
     NewSessionPlacement(NewSessionPlacementSetting),
+    /// Whether an unnamed session takes its name from the focused pane's terminal title; see
+    /// [`crate::model::naming::set_names_from_terminal_title`].
+    SessionNameFromTerminalTitle(bool),
     /// The next launch's restore mode; see [`Core::save_restore_mode`].
     RestoreMode(RestoreMode),
     ConfirmCloseSession(bool),
@@ -239,6 +242,7 @@ impl GeneralChange {
                 settings.new_session_placement = unless_default(placement, NewSessionPlacementSetting::End)
                     .map(|placement| placement.raw().to_owned());
             }
+            Self::SessionNameFromTerminalTitle(on) => settings.session_name_from_terminal_title = default_off(on),
             Self::RestoreMode(mode) => {
                 settings.restore_mode = Some(mode);
                 settings.restore_running_command = None;

@@ -351,7 +351,7 @@ fn a_terminal_report_lands_on_its_session_in_any_window() {
     let reported = state.core.library().store(window).unwrap().session(session).unwrap();
     assert_eq!(reported.effective_cwd(), "/tmp/next");
     assert_eq!(reported.osc_title.as_deref(), Some("vim"));
-    assert_eq!(reported.display_name(), "vim");
+    assert_eq!(reported.display_name(), "next", "the title names no session by default");
 }
 
 #[test]

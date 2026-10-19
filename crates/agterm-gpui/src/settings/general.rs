@@ -1,6 +1,6 @@
 //! General: Mouse (scroll speed, right-click paste, where links open, the workspace-row click) and Sessions (where new
-//! sessions open and land, the restore mode, the close confirmations, the flagged view layout, the global ghostty
-//! config) (upstream's `GeneralSettingsView`).
+//! sessions open and land, what names an unnamed session, the restore mode, the close confirmations, the flagged view
+//! layout, the global ghostty config) (upstream's `GeneralSettingsView`).
 
 use agterm_core::persist::RestoreMode;
 use agterm_core::persist::settings::{
@@ -70,6 +70,16 @@ fn sessions(snapshot: &Snapshot) -> Vec<Item> {
     if settings.effective_new_session_directory() == NewSessionDirectory::Custom {
         items.push(custom_directory(snapshot));
     }
+    items.push(toggle(
+        "settings-session-name-from-title",
+        "Name sessions after the terminal title",
+        settings.session_name_from_terminal_title.unwrap_or(false),
+        |on| change(GeneralChange::SessionNameFromTerminalTitle(on)),
+    ));
+    items.push(Item::hint(
+        "settings-session-name-from-title-hint",
+        "Otherwise an unnamed session is named after its directory.",
+    ));
     items.push(picker(
         "settings-new-session-placement",
         "New sessions are added",
