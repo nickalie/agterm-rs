@@ -294,11 +294,13 @@ fn the_login_shell_starts_with_its_integration() -> TestResult {
 }
 
 /// The command line of process `pid`, empty once it is gone.
+#[cfg(target_os = "linux")]
 fn cmdline(pid: u32) -> Vec<u8> {
     std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default()
 }
 
 /// The parent of process `pid`, `None` once it is gone (the fourth field of its `stat`, past the parenthesized name).
+#[cfg(target_os = "linux")]
 fn parent(pid: u32) -> Option<u32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()
@@ -307,6 +309,7 @@ fn parent(pid: u32) -> Option<u32> {
 /// The interactive `/bin/sh` a pane of the login shell `/bin/sh` runs through its `/bin/sh -c /bin/sh` wrapper: the
 /// pane's own process once the wrapper execs it (bash), else the wrapper's child (dash, the `/bin/sh` of Debian and
 /// Ubuntu, stays as the wrapper); `None` until it runs.
+#[cfg(target_os = "linux")]
 fn interactive_sh(pane: &Pane) -> Option<u32> {
     let pid = pane.pid()?;
     if cmdline(pid) == b"/bin/sh\0" {
@@ -317,6 +320,13 @@ fn interactive_sh(pane: &Pane) -> Option<u32> {
         .flatten()
         .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
         .find(|child| parent(*child) == Some(pid) && cmdline(*child) == b"/bin/sh\0")
+}
+
+/// The interactive `/bin/sh` of a pane of the login shell `/bin/sh`: the pane's own process, macOS's `/bin/sh`
+/// (bash in POSIX mode) execing its wrapper's command; `None` until it runs.
+#[cfg(not(target_os = "linux"))]
+fn interactive_sh(pane: &Pane) -> Option<u32> {
+    pane.pid()
 }
 
 #[test]

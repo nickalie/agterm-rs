@@ -684,7 +684,9 @@ mod tests {
     }
 
     /// Runs the tree command's remote line the way sshd hands it to the account's shell, in a home whose
-    /// `~/.local/bin` holds a stand-in for each of `clis`, each printing its own name and arguments.
+    /// `~/.local/bin` holds a stand-in for each of `clis`, each printing its own name and arguments. Unix only: the
+    /// far side's shell is `/bin/sh`.
+    #[cfg(unix)]
     fn run_remote_line(clis: &[&str]) -> std::process::Output {
         let home = tempfile::tempdir().unwrap();
         let bin = home.path().join(".local/bin");
@@ -702,6 +704,7 @@ mod tests {
             .unwrap()
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_remote_line_runs_ngtermctl_and_never_another_cli() {
         let ours = run_remote_line(&["ngtermctl", "agtermctl"]);
