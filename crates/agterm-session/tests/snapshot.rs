@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 use agterm_ghostty_vt::{Format, FormatExtras, FormatOptions, Region, Terminal};
 use agterm_session::protocol::{LeadRole, Managed};
 use agterm_session::server::clients::{ClientEvent, RecvError, ResyncBudget};
-use agterm_session::server::pane::{AttachError, Pane, ResyncError};
-use agterm_session::server::snapshot::{ATTACH_RESET, SnapshotError};
+use agterm_session::server::pane::{Pane, ResyncError};
+use agterm_session::server::snapshot::ATTACH_RESET;
 use support::{Client, PATIENCE, SIZE, TestResult, config, quit, script, shell, tagged, type_line};
 
 /// What a terminal shows: every row with its styles, scrollback included, the cursor and the active screen.
@@ -195,6 +195,9 @@ fn a_cut_mid_sequence_is_restored() -> TestResult {
 #[cfg(unix)]
 #[test]
 fn without_a_cut_an_attach_waits_then_fails_without_harm() -> TestResult {
+    use agterm_session::server::pane::AttachError;
+    use agterm_session::server::snapshot::SnapshotError;
+
     let dir = tempfile::tempdir()?;
     // a title longer than the terminal hands on, left open until a line comes
     let open = script(
@@ -216,7 +219,7 @@ fn without_a_cut_an_attach_waits_then_fails_without_harm() -> TestResult {
     assert!(started.elapsed() >= WAIT, "it waited for a cut");
     assert_eq!(
         refused.err(),
-        Some(AttachError::Unavailable(SnapshotError::Unavailable))
+        Some(AttachError::Unavailable(SnapshotError::Unavailable)),
     );
     assert_eq!(pane.clients(), 1, "nothing was attached");
     assert_eq!(pane.leader(), Some(creator.id()), "the claim changed nothing");
