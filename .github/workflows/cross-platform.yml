@@ -8,8 +8,8 @@
 # `std::os::unix` sockets keep it off Windows; agterm-ctl builds on Linux only (`close_range`, `/proc/locks`). They
 # join PACKAGES once the server has its Windows form and the CLI its macOS and Windows forms. agterm-app stays out
 # too: its process table is agterm-session's (tested here on all three), but its hook runner (a `poll` pump over
-# non-blocking pipes), its log file (`O_NOFOLLOW`) and its remote presentation process (`fcntl`, `kill`) are
-# Unix-only.
+# non-blocking pipes), its log file (`O_NOFOLLOW`), its remote presentation process (`fcntl`, `kill`) and the agent
+# integrations' installers (`std::os::unix` file modes and symlinks) are Unix-only.
 #
 # libghostty-vt (agterm-ghostty-vt-sys, its wrapper agterm-ghostty-vt) builds here from the prefix
 # scripts/build-ghostty-vt.sh prepares with the pinned Zig of each runner's OS and arch (Git Bash on Windows, stock

@@ -292,7 +292,8 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   `agterm-core`, `agterm-ghostty-vt-sys`, `agterm-ghostty-vt`, `agterm-pty` and `agterm-term` so far; `agterm-server`
   compiles for macOS too but is not run there yet and stays off Windows over `std::os::unix`, and `agterm-ctl` builds
   on Linux only over `close_range` and `/proc/locks`; both wait for their remaining forms, and `agterm-app` for the
-  Windows forms of its Unix-only hook runner, log file and remote presentation process), on Ubuntu, macOS and
+  Windows forms of its Unix-only hook runner, log file, remote presentation process and agent integrations'
+  installers, which write with `std::os::unix` file modes and symlinks), on Ubuntu, macOS and
   Windows runners: the libghostty-vt prefix with each runner's pinned Zig (cached with Zig's global cache), format,
   clippy and `cargo test` (`crates`, a matrix), then the sys crate cross-built for the Zig targets no runner runs
   natively (aarch64 Linux and x86_64 macOS on Ubuntu, aarch64 Windows on Windows). It also runs on pushes to `ci/**`
