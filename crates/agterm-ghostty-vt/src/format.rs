@@ -33,10 +33,11 @@ impl Format {
 
 bitflags! {
     /// The terminal state [`Format::Vt`] output carries besides the cells (`GhosttyFormatterTerminalExtra` and its
-    /// `GhosttyFormatterScreenExtra`); the other formats ignore them.
+    /// `GhosttyFormatterScreenExtra`). [`Format::Plain`] ignores them all; [`Format::Html`] takes only
+    /// [`Self::PALETTE`], as a `<style>` block of CSS variables (`--vt-palette-N`) ahead of the content.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
     pub struct FormatExtras: u16 {
-        /// The palette, as OSC 4.
+        /// The palette, as OSC 4 (in HTML, as CSS variables).
         const PALETTE = 1;
         /// The modes that differ from their defaults, as `CSI h` and `CSI l`.
         const MODES = 1 << 1;
