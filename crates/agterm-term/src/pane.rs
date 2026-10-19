@@ -121,9 +121,8 @@ pub struct FrameSnapshot {
 pub struct PaneStats {
     /// Bytes fed to the VT.
     pub bytes: u64,
-    /// `read` calls that returned data.
-    pub reads: u64,
-    /// Read batches (one wake each at most).
+    /// Chunks of output the IO worker took from the mailbox and fed (one wake each at most): one per call of the
+    /// actor's read callback, which can cover several `read` calls on the PTY.
     pub batches: u64,
     /// Frontend wakes actually fired (after coalescing).
     pub wakes: u64,
@@ -136,7 +135,6 @@ pub struct PaneStats {
 #[derive(Debug, Default)]
 struct Counters {
     bytes: AtomicU64,
-    reads: AtomicU64,
     batches: AtomicU64,
     wakes: AtomicU64,
     vt_nanos: AtomicU64,
@@ -496,7 +494,6 @@ impl Pane {
         let counters = &self.shared.counters;
         PaneStats {
             bytes: counters.bytes.load(Ordering::Relaxed),
-            reads: counters.reads.load(Ordering::Relaxed),
             batches: counters.batches.load(Ordering::Relaxed),
             wakes: counters.wakes.load(Ordering::Relaxed),
             vt_nanos: counters.vt_nanos.load(Ordering::Relaxed),
@@ -873,7 +870,6 @@ impl Worker {
         loop {
             match self.shared.mailbox.next(self.hold_deadline()) {
                 Mail::Output(output) => {
-                    self.shared.counters.reads.fetch_add(1, Ordering::Relaxed);
                     let fed = self.feed(&output);
                     if self.shared.mailbox.consumed(output.len()) {
                         self.actor.wake_reader();

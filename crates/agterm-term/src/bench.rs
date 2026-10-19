@@ -87,11 +87,10 @@ fn report(name: &str, pane: &Pane, ui: &mut Ui, extra: &str) {
     };
     let stats = pane.stats();
     println!(
-        "{{\"scenario\":\"{name}\"{extra},\"bytes\":{},\"reads\":{},\"batches\":{},\"wakes\":{},\"vt_s\":{:.3},\
+        "{{\"scenario\":\"{name}\"{extra},\"bytes\":{},\"batches\":{},\"wakes\":{},\"vt_s\":{:.3},\
          \"max_io_hold_ms\":{:.2},\"paints\":{},\"stale_paints\":{},\"max_stale_streak_ms\":{:.2},\"max_paint_ms\":{:.2},\
          \"key_lock_wait_p99_ms\":{:.3},\"key_lock_wait_max_ms\":{:.3}}}",
         stats.bytes,
-        stats.reads,
         stats.batches,
         stats.wakes,
         Duration::from_nanos(stats.vt_nanos).as_secs_f64(),

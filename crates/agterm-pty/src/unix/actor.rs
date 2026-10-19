@@ -424,7 +424,9 @@ impl Runner {
         end.map_or(Ok(()), Err)
     }
 
-    /// Write the outbox while the PTY takes it.
+    /// Write the outbox while the PTY takes it. `EIO` (the child side closed) drops what is queued but does not end
+    /// the actor: the child's output still in the PTY is read first, and the read reports the end (after a pause of
+    /// the reads, too).
     fn flush(&mut self) -> Result<(), ExitReason> {
         let mut outbox = self.shared.outbox();
         while outbox.writable() {
@@ -436,9 +438,14 @@ impl Runner {
                 Ok(written) => outbox.advance(written),
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                Err(err) if err.raw_os_error() == Some(libc::EIO) => {
+                    tracing::debug!("the PTY's child side closed; its queued input is dropped");
+                    outbox.clear();
+                    break;
+                }
                 Err(err) => {
                     outbox.clear();
-                    return Err(end_of(&err, "writing the PTY"));
+                    return Err(failed("writing the PTY", &err));
                 }
             }
         }

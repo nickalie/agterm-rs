@@ -10,14 +10,16 @@
 //! - **Windows**: a command line runs as `cmd.exe`'s command text, `%ComSpec% /D /S /C "<line>"` (no `AutoRun`, as
 //!   `sh -c` reads no rc file; `/S` with the outer quotes keeps the line's own quotes as written, which a quoted
 //!   program path needs), its tail passed as written ([`PaneCommand::raw_args`]). The login shell runs directly, as
-//!   Ghostty runs its shell on Windows (`termio/Exec.zig`): a value naming a file runs whole (the login shell from
+//!   Ghostty runs its shell on Windows (`termio/Exec.zig`): a value naming a file runs whole (a relative one found in
+//!   the launch's directory first, where the child runs; the login shell from
 //!   [`agterm_session::launch::login_shell`] is a full path, often under `C:\Program Files`), anything else (the
 //!   config's `command`) is split on whitespace as Ghostty splits it, quotes and all. No shell
 //!   integration is injected there (the zsh, bash and fish ones are POSIX shells'); `PATH` takes `;`.
 //! - **Environment**, later steps winning: the app's own; `GHOSTTY_LOG` and `VTE_VERSION` removed; the terminal
 //!   identity ([`Host`]); `GHOSTTY_SHELL_FEATURES`; the shell integration of a zsh, bash or fish command line
 //!   ([`agterm_core::live::shell_integration::setup`], as `shell-integration` asks); the config's `env`; the launch's
-//!   own variables; `PWD` for a working directory.
+//!   own variables; `PWD` for a working directory. On Windows, whose names ignore case, a later step's key replaces
+//!   every spelling of it (`PATH` over `Path`).
 //! - **Config** (`Surface.zig` and `termio/Exec.zig`, the embedder's options winning as `apprt/embedded.zig` lets
 //!   them): the launch's working directory, else (none, or not a directory) `working-directory`'s; the launch's initial input, else `input`'s;
 //!   `wait-after-command` for every launch; `abnormal-command-exit-runtime`; `shell-integration`'s forced shell for the
@@ -41,7 +43,7 @@ use agterm_core::ghostty_config::{
     GhosttyConfig, InputSource, ShellIntegration, ShellIntegrationFeatures, WorkingDirectory,
 };
 use agterm_core::live::shell_integration::{self, Inherited, LoginShell};
-use agterm_core::paths::{Env, ProcessEnv};
+use agterm_core::paths::{self, Env, ProcessEnv};
 use agterm_core::restore::spawn_plan::LaunchSeed;
 use agterm_session::launch::Runtime;
 
@@ -248,8 +250,10 @@ impl Host {
 
     /// `working-directory`'s directory: `home` the home directory, a path with a leading `~/` under it, `inherit` (or
     /// none) the app's own (the child inherits it). A path that is not absolute is ignored, as Ghostty requires one.
+    /// The home is [`paths::home_dir`]'s: a non-empty `HOME`, else the user's own (the password database's on Unix;
+    /// on Windows, where `HOME` is seldom set, the profile directory, `USERPROFILE`).
     fn default_directory(&self, env: &dyn Env) -> Option<PathBuf> {
-        let home = || env.var("HOME").map(PathBuf::from);
+        let home = || paths::home_dir(env);
         match self.working_directory.as_ref()? {
             WorkingDirectory::Inherit => None,
             WorkingDirectory::Home => home(),
@@ -340,15 +344,23 @@ fn windows_command(line: &str, cmd: &str) -> (PaneCommand, String) {
     (command, argv)
 }
 
-/// The Windows login shell `value` run directly: whole when it names a file (as given, or under `cwd`, where a
-/// relative one resolves to the file there), else split on whitespace as Ghostty splits its shell on Windows.
+/// The Windows login shell `value` run directly: whole when it names a file, else split on whitespace as Ghostty
+/// splits its shell on Windows. A relative value with a directory or a space in it is looked up under `cwd` first,
+/// where the child runs (as `sh -c` finds `./shell` in the child's directory; `CreateProcessW` would resolve a
+/// relative program against the app's); a bare name without either is left whole for the `PATH` search.
 #[cfg(any(windows, test))]
 fn windows_shell(value: &str, cwd: Option<&Path>, is_file: impl Fn(&Path) -> bool) -> (PaneCommand, String) {
     let path = Path::new(value);
-    let command = if !value.contains([' ', '\t']) || is_file(path) {
-        PaneCommand::new(value)
-    } else if let Some(file) = cwd.map(|cwd| cwd.join(path)).filter(|file| is_file(file)) {
+    let spaced = value.contains([' ', '\t']);
+    let bare = !value.contains(['/', '\\']);
+    let under_cwd = cwd
+        .filter(|_| path.is_relative() && (spaced || !bare))
+        .map(|cwd| cwd.join(path))
+        .filter(|file| is_file(file));
+    let command = if let Some(file) = under_cwd {
         PaneCommand::new(file)
+    } else if !spaced || is_file(path) {
+        PaneCommand::new(value)
     } else {
         let mut words = value.split([' ', '\t']).filter(|word| !word.is_empty());
         PaneCommand::new(words.next().unwrap_or(value)).args(words)
@@ -367,24 +379,52 @@ enum Integration {
     As(LoginShell),
 }
 
-/// Variables set over the app's environment, and removed from it.
-#[derive(Debug, Default)]
+/// Variables set over the app's environment, and removed from it. Where names ignore case (Windows), a key replaces
+/// every spelling of it, so the last layer wins there as well: portable-pty folds the keys it is given in its own
+/// order, which would let an earlier layer's `Path` override a later `PATH`, or a staged `PATH` outlive a removed
+/// `path`.
+#[derive(Debug)]
 struct Vars {
     set: BTreeMap<String, String>,
     removed: Vec<String>,
+    /// Whether names ignore case (folded as portable-pty folds them: lowercase).
+    fold_case: bool,
+}
+
+impl Default for Vars {
+    fn default() -> Self {
+        Self::folding(cfg!(windows))
+    }
 }
 
 impl Vars {
+    fn folding(fold_case: bool) -> Self {
+        Self {
+            set: BTreeMap::new(),
+            removed: Vec::new(),
+            fold_case,
+        }
+    }
+
     fn set(&mut self, key: &str, value: String) {
-        self.removed.retain(|removed| removed != key);
+        self.forget(key);
         self.set.insert(key.to_owned(), value);
     }
 
     fn remove(&mut self, key: &str) {
-        self.set.remove(key);
-        if !self.removed.iter().any(|removed| removed == key) {
-            self.removed.push(key.to_owned());
-        }
+        self.forget(key);
+        self.removed.push(key.to_owned());
+    }
+
+    /// Drop every spelling of `key` from both lists.
+    fn forget(&mut self, key: &str) {
+        let folded = self.fold_case.then(|| key.to_lowercase());
+        let same = |other: &str| match &folded {
+            Some(folded) => other.to_lowercase() == *folded,
+            None => other == key,
+        };
+        self.removed.retain(|removed| !same(removed));
+        self.set.retain(|set, _| !same(set));
     }
 }
 
@@ -592,8 +632,12 @@ mod tests {
         assert!(cleared.env.is_empty());
     }
 
-    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
-    #[cfg(unix)]
+    /// `path` as a config value names it: with `/` for Windows' `\`, which would start an escape there (`input`'s
+    /// values are Zig string literals' bodies), and which Windows takes as a separator too.
+    fn config_path(path: &Path) -> String {
+        path.display().to_string().replace('\\', "/")
+    }
+
     #[test]
     fn the_configs_input_is_typed_unless_the_launch_types_its_own() {
         let dir = tempfile::tempdir().unwrap();
@@ -602,7 +646,7 @@ mod tests {
         let host = host_of(
             &format!(
                 "input = raw:echo \\x41\\n\ninput = path:{}\ninput = plain\n",
-                file.display()
+                config_path(&file)
             ),
             None,
         );
@@ -618,7 +662,10 @@ mod tests {
         );
         // one source missing: none of the input
         let missing = host_of(
-            &format!("input = raw:x\ninput = path:{}\n", dir.path().join("gone").display()),
+            &format!(
+                "input = raw:x\ninput = path:{}\n",
+                config_path(&dir.path().join("gone"))
+            ),
             None,
         );
         assert_eq!(missing.prepare(&Launch::default(), &MapEnv::new()).initial_input, None);
@@ -626,8 +673,31 @@ mod tests {
         assert!(host_of("input = raw:x\ninput =\n", None).input.is_empty());
     }
 
-    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
-    #[cfg(unix)]
+    /// Without `HOME` (as on Windows, mostly), or with it empty, `home` is the user's own home: the password
+    /// database's, the profile directory on Windows.
+    #[test]
+    fn the_home_directory_without_home_is_the_users_own() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join("work")).unwrap();
+        let plain = Launch::default();
+        for env in [
+            MapEnv::new().with_passwd_home(home.path()),
+            MapEnv::new().with("HOME", "").with_passwd_home(home.path()),
+        ] {
+            let cwd = |text: &str| host_of(text, None).prepare(&plain, &env).command.cwd;
+            assert_eq!(cwd("working-directory = home\n").as_deref(), Some(home.path()));
+            assert_eq!(cwd("working-directory = ~/work\n"), Some(home.path().join("work")));
+        }
+        assert_eq!(
+            host_of("working-directory = home\n", None)
+                .prepare(&plain, &MapEnv::new())
+                .command
+                .cwd,
+            None,
+            "no home at all: the app's own"
+        );
+    }
+
     #[test]
     fn the_configs_working_directory_serves_a_launch_without_its_own() {
         let home = tempfile::tempdir().unwrap();
@@ -640,7 +710,7 @@ mod tests {
             cwd("working-directory = ~/work\n", &plain),
             Some(home.path().join("work"))
         );
-        let absolute = format!("working-directory = \"{}\"\n", home.path().join("work").display());
+        let absolute = format!("working-directory = \"{}\"\n", config_path(&home.path().join("work")));
         assert_eq!(cwd(&absolute, &plain), Some(home.path().join("work")));
         assert_eq!(
             cwd("working-directory = inherit\n", &plain),
@@ -678,8 +748,6 @@ mod tests {
         assert_eq!(cwd("working-directory = home\n", &empty).as_deref(), Some(home.path()));
     }
 
-    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
-    #[cfg(unix)]
     #[test]
     fn an_input_file_is_read_through_one_bounded_read() {
         let dir = tempfile::tempdir().unwrap();
@@ -690,6 +758,22 @@ mod tests {
         let over = dir.path().join("over");
         std::fs::write(&over, vec![b'a'; limit + 1]).unwrap();
         assert!(read_input_file(&over).is_err(), "past 10 MB: refused");
+        assert!(read_input_file(dir.path()).is_err(), "a directory: refused");
+        // the read itself is bounded, so a source that keeps growing stops at the limit
+        let (done, result) = std::sync::mpsc::channel();
+        std::thread::spawn(move || done.send(read_bounded(std::io::repeat(b'x'), 1024).map(|bytes| bytes.len())));
+        assert!(matches!(
+            result.recv_timeout(Duration::from_secs(10)),
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::FileTooLarge
+        ));
+        assert_eq!(read_bounded(&b"abc"[..], 3).unwrap(), b"abc");
+    }
+
+    // Unix only: it needs `mkfifo` and `/dev/zero` (the open without blocking is `O_NONBLOCK`, Unix's)
+    #[cfg(unix)]
+    #[test]
+    fn a_device_or_a_fifo_is_refused_as_an_input_file() {
+        let dir = tempfile::tempdir().unwrap();
         // a device and a FIFO are refused, without blocking the open or the read
         let fifo = dir.path().join("fifo");
         let c_fifo = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
@@ -707,23 +791,16 @@ mod tests {
             None,
         );
         assert_eq!(host.prepare(&Launch::default(), &MapEnv::new()).initial_input, None);
-        // the read itself is bounded, so a source that keeps growing stops at the limit
-        let (done, result) = std::sync::mpsc::channel();
-        std::thread::spawn(move || done.send(read_bounded(std::io::repeat(b'x'), 1024).map(|bytes| bytes.len())));
-        assert!(matches!(
-            result.recv_timeout(Duration::from_secs(10)),
-            Ok(Err(error)) if error.kind() == std::io::ErrorKind::FileTooLarge
-        ));
-        assert_eq!(read_bounded(&b"abc"[..], 3).unwrap(), b"abc");
     }
 
-    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
-    #[cfg(unix)]
     #[test]
     fn an_input_path_with_escapes_reads_the_decoded_file() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("start up"), b"hi\n").unwrap();
-        let host = host_of(&format!("input = path:{}/start\\x20up\n", dir.path().display()), None);
+        let host = host_of(
+            &format!("input = path:{}/start\\x20up\n", config_path(dir.path())),
+            None,
+        );
         assert_eq!(
             host.prepare(&Launch::default(), &MapEnv::new())
                 .initial_input
@@ -732,18 +809,22 @@ mod tests {
         );
     }
 
-    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
-    #[cfg(unix)]
     #[test]
     fn wait_after_command_and_the_abnormal_runtime_come_from_the_config() {
         let host = host_of(
             "wait-after-command = true\nabnormal-command-exit-runtime = 1000\n",
             None,
         );
+        // the login shell through `sh -c`; on Windows run directly
+        let argv = if cfg!(windows) {
+            "/usr/local/bin/mysh"
+        } else {
+            "/bin/sh -c /usr/local/bin/mysh"
+        };
         assert_eq!(
             host.prepare(&Launch::default(), &MapEnv::new()).exit,
             ExitPolicy::Launched {
-                argv: "/bin/sh -c /usr/local/bin/mysh".to_owned(),
+                argv: argv.to_owned(),
                 command: false,
                 wait_after_command: true,
                 abnormal_runtime: Duration::from_secs(1),
@@ -754,7 +835,8 @@ mod tests {
         assert_eq!(defaults.abnormal_exit_runtime, ABNORMAL_EXIT_RUNTIME);
     }
 
-    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
+    // Unix only: the POSIX shells' integration, which Windows never injects (that is
+    // `windows_runs_commands_through_cmd_and_the_login_shell_directly`'s), and `/bin/sh -c`'s argv
     #[cfg(unix)]
     #[test]
     fn shell_integration_none_injects_nothing_and_a_forced_shell_takes_the_login_shell() {
@@ -819,23 +901,24 @@ mod tests {
         }
     }
 
-    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
-    #[cfg(unix)]
     #[test]
     fn the_identity_follows_the_resolved_resources() {
-        let env = MapEnv::new().with("PATH", "/usr/bin:/bin");
+        let env = MapEnv::new().with("PATH", format!("/usr/bin{PATH_SEPARATOR}/bin"));
         let prepared = host(Some("/stage/share/ghostty")).prepare(&Launch::default(), &env);
+        // the terminfo beside the resources, joined with the OS's separator
+        let terminfo = Path::new("/stage/share").join("terminfo");
+        let path = format!("/usr/bin{PATH_SEPARATOR}/bin{PATH_SEPARATOR}/opt/agterm/bin");
         expect(
             &set(&prepared),
             &[
                 ("TERM", "xterm-ghostty"),
-                ("TERMINFO", "/stage/share/terminfo"),
+                ("TERMINFO", &terminfo.to_string_lossy()),
                 ("GHOSTTY_RESOURCES_DIR", "/stage/share/ghostty"),
                 ("COLORTERM", "truecolor"),
                 ("TERM_PROGRAM", "ghostty"),
                 ("TERM_PROGRAM_VERSION", "1.2.3"),
                 ("GHOSTTY_BIN_DIR", "/opt/agterm/bin"),
-                ("PATH", "/usr/bin:/bin:/opt/agterm/bin"),
+                ("PATH", &path),
                 ("GHOSTTY_SHELL_FEATURES", "path"),
             ],
         );
@@ -887,10 +970,8 @@ mod tests {
         assert!(!vars.contains_key("PATH") && !vars.contains_key("GHOSTTY_BIN_DIR"));
     }
 
-    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
-    #[cfg(unix)]
     #[test]
-    fn a_command_runs_through_bin_sh_and_the_launch_wins_over_everything() {
+    fn a_command_runs_through_the_command_shell_and_the_launch_wins_over_everything() {
         let launch = Launch {
             command: Some("htop -d 5".to_owned()),
             initial_input: Some(String::new()),
@@ -903,11 +984,20 @@ mod tests {
             working_directory: Some(PathBuf::from("/nonexistent/dir")),
         };
         let prepared = host(None).prepare(&launch, &MapEnv::new());
-        assert_eq!(prepared.command.program, OsString::from("/bin/sh"));
-        assert_eq!(
-            prepared.command.args,
-            [OsString::from("-c"), OsString::from("htop -d 5")]
-        );
+        // `/bin/sh -c <line>`; on Windows (no `ComSpec` here) `cmd.exe /D /S /C "<line>"`
+        let argv = if cfg!(windows) {
+            assert_eq!(prepared.command.program, OsString::from("cmd.exe"));
+            assert_eq!(prepared.command.args, ["/D", "/S", "/C"].map(OsString::from));
+            assert_eq!(prepared.command.raw_args, [OsString::from("\"htop -d 5\"")]);
+            r#"cmd.exe /D /S /C "htop -d 5""#
+        } else {
+            assert_eq!(prepared.command.program, OsString::from("/bin/sh"));
+            assert_eq!(
+                prepared.command.args,
+                [OsString::from("-c"), OsString::from("htop -d 5")]
+            );
+            "/bin/sh -c htop -d 5"
+        };
         let vars = set(&prepared);
         expect(&vars, &[("TERM", "dumb"), ("AGTERM_PANE_ID", "X")]);
         assert!(!vars.contains_key("GHOSTTY_SHELL_FEATURES") && !vars.contains_key("PWD"));
@@ -917,7 +1007,7 @@ mod tests {
         assert_eq!(
             prepared.exit,
             ExitPolicy::Launched {
-                argv: "/bin/sh -c htop -d 5".to_owned(),
+                argv: argv.to_owned(),
                 command: true,
                 wait_after_command: true,
                 abnormal_runtime: ABNORMAL_EXIT_RUNTIME,
@@ -925,8 +1015,6 @@ mod tests {
         );
     }
 
-    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
-    #[cfg(unix)]
     #[test]
     fn a_working_directory_is_entered_and_the_login_shell_runs_as_a_command_line() {
         let dir = tempfile::tempdir().unwrap();
@@ -937,12 +1025,17 @@ mod tests {
         let prepared = host(None).prepare(&launch, &MapEnv::new());
         assert_eq!(prepared.command.cwd.as_deref(), Some(dir.path()));
         assert_eq!(set(&prepared)["PWD"], dir.path().to_string_lossy());
-        // the login shell, run as a command line too
-        assert_eq!(prepared.command.args[1], OsString::from("/bin/zsh"));
+        // the login shell, run as a command line too (on Windows run directly, as Ghostty runs it there)
+        if cfg!(windows) {
+            assert_eq!(prepared.command.program, OsString::from("/bin/zsh"));
+        } else {
+            assert_eq!(prepared.command.args[1], OsString::from("/bin/zsh"));
+        }
         assert!(matches!(prepared.exit, ExitPolicy::Launched { command: false, .. }));
     }
 
-    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
+    // Unix only: the POSIX shells' integration, which Windows never injects (that is
+    // `windows_runs_commands_through_cmd_and_the_login_shell_directly`'s), and `/bin/sh -c`'s argv
     #[cfg(unix)]
     #[test]
     fn the_login_shell_gets_its_integration_and_features() {
@@ -998,7 +1091,16 @@ mod tests {
         let pwsh = r"C:\Program Files\PowerShell\7\pwsh.exe";
         let cwd = Path::new(r"C:\work");
         let relative = cwd.join("my shell.exe");
-        let files = [Path::new(pwsh), relative.as_path()];
+        let dotted = cwd.join(r".\shell.exe");
+        let nested = cwd.join(r"bin\shell.exe");
+        let bare = cwd.join("shell.exe");
+        let files = [
+            Path::new(pwsh),
+            relative.as_path(),
+            dotted.as_path(),
+            nested.as_path(),
+            bare.as_path(),
+        ];
         let is_file = |path: &Path| files.contains(&path);
         let (command, argv) = windows_shell(pwsh, None, is_file);
         assert_eq!(command.program, OsString::from(pwsh));
@@ -1014,9 +1116,49 @@ mod tests {
         assert_eq!(command.program, OsString::from("pwsh"));
         assert_eq!(command.args, ["-NoLogo", "-NoProfile"].map(OsString::from));
         assert_eq!(argv, "pwsh  -NoLogo\t-NoProfile");
-        // a relative file with a space resolves under the launch's directory
+        // a relative file with a space or a directory resolves under the launch's directory, where the child runs
         let (command, _) = windows_shell("my shell.exe", Some(cwd), is_file);
-        assert_eq!(command.program, relative.into_os_string());
+        assert_eq!(command.program.as_os_str(), relative.as_os_str());
+        let (command, argv) = windows_shell(r".\shell.exe", Some(cwd), is_file);
+        assert_eq!(command.program.as_os_str(), dotted.as_os_str());
+        assert_eq!(argv, r".\shell.exe");
+        let (command, _) = windows_shell(r"bin\shell.exe", Some(cwd), is_file);
+        assert_eq!(command.program.as_os_str(), nested.as_os_str());
+        // not there, or no launch directory: as given
+        let (command, _) = windows_shell(r"tools\shell.exe", Some(cwd), is_file);
+        assert_eq!(command.program, OsString::from(r"tools\shell.exe"));
+        let (command, _) = windows_shell(r".\shell.exe", None, is_file);
+        assert_eq!(command.program, OsString::from(r".\shell.exe"));
+        // a bare name stays the PATH search's, even with a file of that name in the directory
+        let (command, _) = windows_shell("shell.exe", Some(cwd), is_file);
+        assert_eq!(command.program, OsString::from("shell.exe"));
+    }
+
+    #[test]
+    fn variables_replace_every_spelling_where_names_ignore_case() {
+        let mut folded = Vars::folding(true);
+        folded.set("Path", r"C:\host-tools".to_owned());
+        folded.set("PATH", r"C:\launch-tools".to_owned());
+        assert_eq!(
+            folded.set.iter().collect::<Vec<_>>(),
+            [(&"PATH".to_owned(), &r"C:\launch-tools".to_owned())],
+            "the later layer wins, in its own spelling"
+        );
+        folded.remove("path");
+        assert!(folded.set.is_empty());
+        assert_eq!(folded.removed, ["path"]);
+        folded.set("PATH", "again".to_owned());
+        assert!(folded.removed.is_empty(), "a later set undoes the removal");
+        folded.remove("Path");
+        folded.remove("PATH");
+        assert_eq!(folded.removed, ["PATH"], "one removal per name");
+        // where names keep their case (Unix), spellings are distinct variables
+        let mut exact = Vars::folding(false);
+        exact.set("Path", "a".to_owned());
+        exact.set("PATH", "b".to_owned());
+        exact.remove("path");
+        assert_eq!(exact.set.len(), 2);
+        assert_eq!(exact.removed, ["path"]);
     }
 
     /// Windows' forms through `prepare`: `cmd /D /S /C` for a command line, the login shell run directly, no POSIX
@@ -1057,6 +1199,35 @@ mod tests {
             !set(&shell).contains_key("ENV"),
             "no POSIX shell integration on Windows"
         );
+        // names ignore case: the launch's `PATH` wins over the config's `Path`, a removed `path` takes `PATH` along
+        let layered = Host {
+            env: vec![("Path".to_owned(), r"C:\host-tools".to_owned())],
+            ..host(None)
+        };
+        let launch = Launch {
+            env: vec![("PATH".to_owned(), r"C:\launch-tools".to_owned())],
+            ..Launch::default()
+        };
+        let vars = set(&layered.prepare(&launch, &env));
+        assert_eq!(vars["PATH"], r"C:\launch-tools");
+        assert!(!vars.contains_key("Path"));
+        let removing = Launch {
+            env_remove: vec!["path".to_owned()],
+            ..Launch::default()
+        };
+        let prepared = layered.prepare(&removing, &env);
+        assert!(!set(&prepared).keys().any(|key| key.eq_ignore_ascii_case("path")));
+        assert!(removed(&prepared).contains(&"path".to_owned()));
+        // `working-directory = home` without `HOME`: the user's own home, which is the profile directory
+        let profile = ProcessEnv.passwd_home().expect("the profile directory");
+        if let Some(user_profile) = std::env::var_os("USERPROFILE") {
+            assert_eq!(profile, PathBuf::from(user_profile));
+        }
+        let home = host_of("working-directory = home\n", None)
+            .prepare(&Launch::default(), &MapEnv::new().with_passwd_home(&profile));
+        assert_eq!(home.command.cwd, Some(profile));
+        // and no system resources directory
+        assert!(resource_candidates(None).is_empty());
     }
 
     #[test]
@@ -1089,7 +1260,9 @@ mod tests {
         );
     }
 
-    // Unix forms (`/bin/sh -c`, POSIX paths, the POSIX shells' integration); Windows' are tested below
+    // Unix only: POSIX absolute paths (Windows' need a drive) and the system package's `/usr/share/ghostty`, which
+    // Windows has no counterpart of (`windows_runs_commands_through_cmd_and_the_login_shell_directly` checks there is
+    // none)
     #[cfg(unix)]
     #[test]
     fn resources_need_shell_integration_and_terminfo_beside_them() {

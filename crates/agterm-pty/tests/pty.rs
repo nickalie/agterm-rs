@@ -199,6 +199,37 @@ fn paused_reads_hold_the_output_back_but_not_the_input() -> TestResult {
     Ok(())
 }
 
+/// The child exits while reads are paused and input reaches the PTY after it (a write that a kernel may refuse with
+/// `EIO`, the child side being closed, or take): the actor stays up until its reads, resumed, deliver the child's
+/// last output and report the end. Unix only: `ConPTY` keeps its input pipe open until the console closes.
+#[cfg(unix)]
+#[test]
+fn input_after_the_childs_exit_leaves_its_last_output_to_the_reads() -> TestResult {
+    let pause = ReadPause::new();
+    pause.pause();
+    let mut session = start_with(
+        &command("/bin/sh").args(["-c", "printf 'last:%s' words"]),
+        Size::cells(24, 80),
+        pause.clone(),
+    )?;
+    assert_eq!(session.child.wait()?.exit_code(), 0);
+    session.handle.write_input(b"too late\n")?;
+    let deadline = Instant::now() + PATIENCE;
+    while session.handle.queued() > 0 {
+        assert!(Instant::now() < deadline, "the input was neither written nor dropped");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        session.exit.recv_timeout(Duration::from_millis(300)).is_err(),
+        "ended before its output was read"
+    );
+    pause.resume();
+    session.handle.wake_reader();
+    session.expect("last:words");
+    assert!(session.finish()?.success());
+    Ok(())
+}
+
 #[test]
 fn a_resize_reaches_the_child() -> TestResult {
     let session = start(&shell(), Size::cells(24, 80))?;
