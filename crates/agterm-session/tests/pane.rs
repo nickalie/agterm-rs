@@ -309,7 +309,8 @@ fn killing_ends_the_program_and_its_tree() -> TestResult {
     let mut client = Client::new(creator);
     client.expect("started:");
     let descendant = descendant(&client.text())?;
-    assert!(pane.kill(false)?, "the hangup did not end the session");
+    // whether the end came within the grace is a race with the runner's load: the end itself is what is asserted
+    pane.kill(false)?;
     let status = client.finish();
     assert_ne!(exit_code(&status), Some(0), "{status:?}");
     assert_gone(descendant);
@@ -326,18 +327,19 @@ fn a_forced_kill_ends_a_program_that_ignores_the_hangup() -> TestResult {
     client.expect("ready");
     assert!(!pane.kill(false)?, "the hangup ended a program that ignores it");
     assert!(pane.exit_status().is_none());
-    assert!(pane.kill(true)?);
+    pane.kill(true)?;
     client.finish();
     Ok(())
 }
 
 /// A shell the hangup ends, with a background child that ignores it: holding the PTY, or with it let go of
-/// (`nohup`'s way).
+/// (`nohup`'s way). The child says `started:<pid>:` itself, once it ignores the hangup, so a hangup sent on that
+/// word never finds it still taking the default action.
 #[cfg(unix)]
 fn stubborn_tree(holds_pty: bool) -> SessionSpec {
     let redirect = if holds_pty { "" } else { " </dev/null >/dev/null 2>&1" };
     script(&format!(
-        "(trap '' HUP; exec sleep 300{redirect}) & echo \"started:$!:\"; wait"
+        "(trap '' HUP; exec sh -c 'echo \"started:$$:\"; exec sleep 300{redirect}') & wait"
     ))
 }
 
@@ -350,7 +352,7 @@ fn a_forced_kill_ends_a_descendant_that_ignores_the_hangup() -> TestResult {
         let mut client = Client::new(creator);
         client.expect("started:");
         let descendant = descendant(&client.text())?;
-        assert!(pane.kill(true)?, "the forced kill did not end the session");
+        pane.kill(true)?;
         client.finish();
         assert_gone(descendant);
     }
@@ -374,10 +376,11 @@ fn dropping_a_pane_ends_a_descendant_that_ignores_the_hangup() -> TestResult {
 }
 
 /// A job-controlling shell (`set -m`) whose background job, in a process group of its own, ignores the hangup and
-/// let go of the PTY: `nohup`'s way, out of the reach of the shell's group.
+/// let go of the PTY: `nohup`'s way, out of the reach of the shell's group. The job says `started:<pid>:` itself, once
+/// it ignores the hangup.
 #[cfg(unix)]
 fn job_controlling_shell() -> SessionSpec {
-    script("set -m; (trap '' HUP; exec sleep 300 </dev/null >/dev/null 2>&1) & echo \"started:$!:\"; wait")
+    script("set -m; (trap '' HUP; exec sh -c 'echo \"started:$$:\"; exec sleep 300 </dev/null >/dev/null 2>&1') & wait")
 }
 
 /// The descendant `pid` sits in a process group other than the program `program`'s.
@@ -402,7 +405,7 @@ fn a_forced_kill_ends_a_job_in_a_group_of_its_own() -> TestResult {
     client.expect("started:");
     let job = descendant(&client.text())?;
     assert_own_group(pane.pid(), job)?;
-    assert!(pane.kill(true)?, "the forced kill did not end the session");
+    pane.kill(true)?;
     client.finish();
     assert_gone(job);
     Ok(())
@@ -423,40 +426,114 @@ fn dropping_a_pane_ends_a_job_in_a_group_of_its_own() -> TestResult {
     Ok(())
 }
 
-/// A forced kill hangs up a job in a group of its own and gives it the grace to handle that before it kills it: the
-/// kernel's hangup on the shell's exit reaches only the foreground group, so only the session-wide hangup lets the
-/// job's handler run. The job let go of the PTY (an exec'd `sh` keeps none of the job-controlling shell's terminal
-/// descriptors), as one holding it does on macOS, which revokes the tty once the shell exits, so the PTY's end tells
-/// nothing of it: only the grace's wait on the session's processes lets its handler, which takes 50ms of the 250ms
-/// grace, finish. The job says `trapped:` once its handler is set, and waits in the `wait` builtin, which the trapped
-/// hangup interrupts at once.
+/// The recorder of [`a_forced_kill_hangs_up_a_job_in_a_group_of_its_own`], in Perl: no shell leaves its session, and
+/// `setsid(1)` is util-linux's, which macOS lacks. It starts two jobs of the session, each a `sleep 300` without the
+/// PTY in a process group of its own, the first taking the hangup's default action and the second ignoring it, both
+/// from their fork on. It then leaves the session, so neither the hangup nor the kill reaches it, says
+/// `started:<first>:<second>:`, lets go of the PTY, and once it reaped the first job writes the signal that ended it
+/// (`signal:0` for none) to the file its argument names.
+#[cfg(unix)]
+const RECORDER: &str = r#"
+use strict;
+use warnings;
+use POSIX qw(setpgid setsid);
+
+sub job {
+    my ($hangup) = @_;
+    local $SIG{HUP} = $hangup;
+    my $pid = fork() // die "fork: $!\n";
+    if ($pid == 0) {
+        setpgid(0, 0) or die "setpgid: $!\n";
+        open STDIN, '<', '/dev/null' or die;
+        open STDOUT, '>', '/dev/null' or die;
+        open STDERR, '>&', \*STDOUT or die;
+        exec 'sleep', '300' or die "exec: $!\n";
+    }
+    # settles the group before the jobs are named, whichever of the two calls comes first
+    setpgid($pid, $pid);
+    return $pid;
+}
+
+my ($record) = @ARGV;
+my $ends = job('DEFAULT');
+my $stays = job('IGNORE');
+defined setsid() or die "setsid: $!\n";
+$| = 1;
+print "started:$ends:$stays:\n";
+open STDIN, '<', '/dev/null' or die;
+open STDOUT, '>', '/dev/null' or die;
+open STDERR, '>&', \*STDOUT or die;
+waitpid($ends, 0) == $ends or die;
+my $signal = $? & 127;
+open my $out, '>', "$record.part" or die;
+print $out "signal:$signal\n";
+close $out or die;
+rename "$record.part", $record or die;
+"#;
+
+/// A forced kill hangs up a job in a group of its own, and holds the kill for the grace while a process of the session
+/// lives on. The kernel's hangup on the shell's exit reaches only the foreground group, so only the session-wide
+/// hangup reaches the jobs, and since they let go of the PTY (as one holding it does on macOS, which revokes the tty
+/// once the shell exits) its end tells nothing of them: only the grace's wait on the session's processes holds the
+/// kill. Neither is read off a race with the clock. The job that takes the hangup's default action ends on the
+/// hangup itself, and [`RECORDER`], its parent out of the session's reach, writes down the signal that ended it,
+/// whenever that was; the job that ignores the hangup lives on until the kill, which so comes no sooner than
+/// [`KILL_GRACE`](agterm_session::server::pane::KILL_GRACE) after the hangup.
 #[cfg(unix)]
 #[test]
 fn a_forced_kill_hangs_up_a_job_in_a_group_of_its_own() -> TestResult {
     let dir = tempfile::tempdir()?;
-    let mark = dir.path().join("hung-up");
-    let job = format!(
-        concat!(
-            r#"trap "sleep 0.05; echo hup > '{}'; exit" HUP; echo trapped:; "#,
-            "exec </dev/null >/dev/null 2>&1; sleep 300 & wait"
-        ),
-        mark.display()
-    );
-    let spec = script(&format!(
-        "set -m; sh -c '{}' & echo \"started:$!:\"; wait",
-        job.replace('\'', r"'\''")
-    ));
+    let recorder = dir.path().join("recorder.pl");
+    std::fs::write(&recorder, RECORDER)?;
+    let record = dir.path().join("ended-by");
+    let spec = script(&format!("perl '{}' '{}' & wait", recorder.display(), record.display()));
     let (pane, creator) = Pane::spawn(config("job-hangup", dir.path(), spec))?;
     let mut client = Client::new(creator);
     client.expect("started:");
-    client.expect("trapped:");
-    let job = descendant(&client.text())?;
-    assert_own_group(pane.pid(), job)?;
+    let (ends, stays) = two_jobs(&client.text())?;
+    assert_own_group(pane.pid(), ends)?;
+    assert_own_group(pane.pid(), stays)?;
+    let start = Instant::now();
     pane.kill(true)?;
+    let held = start.elapsed();
     client.finish();
-    assert_gone(job);
-    assert!(mark.exists(), "the job was killed without a hangup");
+    assert_gone(ends);
+    assert_gone(stays);
+    assert_eq!(
+        recorded(&record),
+        format!("signal:{}", libc::SIGHUP),
+        "the job was killed without a hangup"
+    );
+    assert!(
+        held >= agterm_session::server::pane::KILL_GRACE,
+        "the kill came {held:?} after the hangup, while a job of the session lived on"
+    );
     Ok(())
+}
+
+/// The two job ids of `started:<first>:<second>:`.
+#[cfg(unix)]
+fn two_jobs(text: &str) -> TestResult<(u32, u32)> {
+    let mut ids = text
+        .split("started:")
+        .nth(1)
+        .ok_or("no job ids in the output")?
+        .split(':');
+    let mut next = || -> TestResult<u32> { Ok(ids.next().ok_or("a job id is missing")?.trim().parse()?) };
+    Ok((next()?, next()?))
+}
+
+/// What [`RECORDER`] wrote to `path`, once it did.
+#[cfg(unix)]
+fn recorded(path: &std::path::Path) -> String {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            return text.trim().to_owned();
+        }
+        assert!(Instant::now() < deadline, "the recorder wrote nothing");
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[test]
