@@ -523,6 +523,56 @@ fn dropping_a_pane_ends_a_descendant_that_ignores_the_hangup() -> TestResult {
     Ok(())
 }
 
+/// A job-controlling shell (`set -m`) whose background job, in a process group of its own, ignores the hangup and
+/// let go of the PTY: `nohup`'s way, out of the reach of the shell's group.
+#[cfg(unix)]
+fn job_controlling_shell() -> SessionSpec {
+    script("set -m; (trap '' HUP; exec sleep 300 </dev/null >/dev/null 2>&1) & echo \"started:$!:\"; wait")
+}
+
+/// The descendant `pid` sits in a process group other than the program `program`'s.
+#[cfg(unix)]
+fn assert_own_group(program: u32, pid: u32) -> TestResult {
+    let group_of = |pid: u32| -> TestResult<libc::pid_t> {
+        // SAFETY: `getpgid` has no memory preconditions.
+        Ok(unsafe { libc::getpgid(libc::pid_t::try_from(pid)?) })
+    };
+    let groups = (group_of(program)?, group_of(pid)?);
+    assert!(groups.0 > 0 && groups.1 > 0, "{groups:?}");
+    assert_ne!(groups.0, groups.1, "the job shares the shell's group");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_forced_kill_ends_a_job_in_a_group_of_its_own() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let (pane, creator) = Pane::spawn(config("job-control", dir.path(), job_controlling_shell()))?;
+    let mut client = Client::new(creator);
+    client.expect("started:");
+    let job = descendant(&client.text())?;
+    assert_own_group(pane.pid(), job)?;
+    assert!(pane.kill(true)?, "the forced kill did not end the session");
+    client.finish();
+    assert_gone(job);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn dropping_a_pane_ends_a_job_in_a_group_of_its_own() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let (pane, creator) = Pane::spawn(config("job-control-dropped", dir.path(), job_controlling_shell()))?;
+    let mut client = Client::new(creator);
+    client.expect("started:");
+    let job = descendant(&client.text())?;
+    assert_own_group(pane.pid(), job)?;
+    drop(pane);
+    client.finish();
+    assert_gone(job);
+    Ok(())
+}
+
 #[test]
 fn dropping_a_pane_ends_its_program() -> TestResult {
     let dir = tempfile::tempdir()?;

@@ -14,9 +14,11 @@
 //!   launch environment on top of the server's;
 //! - the output is fanned out raw to the attached clients, every read tagged with its offset in the session's
 //!   output stream, under the lock that feeds the terminal (the pane's one serialization point);
-//! - the shutdown signals the child's process group (its job on Windows) through `agterm-pty`'s [`Killer`] instead
-//!   of herdr's session process list: a hangup, then a kill of the group after [`KILL_GRACE`], the child left
-//!   unreaped meanwhile so the group's members that outlived it are still reached;
+//! - the shutdown signals the child's process group through `agterm-pty`'s [`Killer`] and, on Unix, every other
+//!   process of its session (herdr's session process list, [`crate::job::session_members`]), so a job-controlling
+//!   shell's jobs in groups of their own are reached too; on Windows the child's job, its whole tree. A hangup, then
+//!   a kill after [`KILL_GRACE`] (herdr's terminate step dropped), the child left unreaped meanwhile, so its group
+//!   and its session, which its id names, are still reached once it exited and cannot be reused;
 //! - the registry is keyed by session name and drops a pane once its program ended.
 //!
 //! # The terminal
@@ -467,7 +469,8 @@ impl Pane {
 
     /// End the session's program and its tree. Without `force`, a hangup to its process group, so a program or a
     /// member of its group that ignores it lives on; with `force`, [`Pane::end_tree`]'s hangup and then kill of the
-    /// whole group, which ends those too. On Windows either ends the program's job, its whole tree, at once.
+    /// whole group and of every other process of its session, which ends those too. On Windows either ends the
+    /// program's job, its whole tree, at once.
     /// Whether the program's end was recorded within [`KILL_GRACE`] after the last signal plus [`EXIT_GRACE`] for
     /// its last output.
     ///
@@ -486,10 +489,11 @@ impl Pane {
         Ok(self.ended_within(KILL_GRACE))
     }
 
-    /// herdr's `shutdown_pane_processes`: a hangup to the program's process group, up to [`KILL_GRACE`] for the
-    /// program and the PTY to end, then a kill of the group, which ends a member that ignores the hangup or let go
-    /// of the PTY. The program is held unreaped throughout, so its group is still reached once it exited. Nothing
-    /// once it is being reaped: its group may be reused by then.
+    /// herdr's `shutdown_pane_processes`: a hangup to the program's process group and the rest of its session, up
+    /// to [`KILL_GRACE`] for the program and the PTY to end, then a kill of both, which ends a process that ignores
+    /// the hangup or let go of the PTY, in the program's group or in one of its own (a job-controlling shell's
+    /// `nohup` or `disown`ed job). The program is held unreaped throughout, so its group and its session, both named
+    /// by its id, are still reached once it exited. Nothing once it is being reaped: its id may be reused by then.
     ///
     /// # Errors
     ///
@@ -499,10 +503,12 @@ impl Pane {
             return Ok(());
         }
         let hung_up = self.killer.hang_up();
+        signal_session(self.pid, crate::job::Signal::HangUp);
         if hung_up.is_ok() {
             self.core.wait_for(KILL_GRACE, |state| state.exited && state.pty_ended);
         }
         let killed = self.killer.kill_tree();
+        signal_session(self.pid, crate::job::Signal::Kill);
         self.core.release_reap();
         hung_up.and(killed)
     }
@@ -535,6 +541,24 @@ impl Drop for Pane {
         }
     }
 }
+
+/// `signal` to every process of the session the program `pid` leads (agterm-pty starts it in a session of its own,
+/// so the session's id is its pid), read afresh, so a process the hangup reparented or one forked meanwhile is
+/// reached. Only while [`Pane::end_tree`] holds the program unreaped: its pid, and so the session's id, cannot be
+/// reused meanwhile. Best effort, as herdr's: a member gone by the signal is passed over, and an unreadable table
+/// leaves only the group's signal. Nothing on Windows, whose job holds the tree.
+#[cfg(unix)]
+fn signal_session(pid: u32, signal: crate::job::Signal) {
+    let Ok(session) = i32::try_from(pid) else {
+        return;
+    };
+    for record in crate::job::session_members(session).unwrap_or_default() {
+        crate::job::signal(signal, &record);
+    }
+}
+
+#[cfg(windows)]
+fn signal_session(_pid: u32, _signal: crate::job::Signal) {}
 
 /// The program of `spec` with the environment `env` as its whole environment.
 fn command(spec: &SessionSpec, env: &[(String, String)]) -> io::Result<agterm_pty::Command> {

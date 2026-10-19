@@ -25,6 +25,25 @@ pub(super) fn read_table_at(root: &Path) -> Option<Vec<ProcessEntry>> {
     )
 }
 
+pub(super) fn session_members(session: i32) -> Option<Vec<ProcessRecord>> {
+    session_members_at(Path::new("/proc"), session)
+}
+
+/// Every process under the procfs mount `root` whose stat line reads and names `session` as its session; `None` when
+/// `root` cannot be listed.
+pub(super) fn session_members_at(root: &Path, session: i32) -> Option<Vec<ProcessRecord>> {
+    let entries = fs::read_dir(root).ok()?;
+    Some(
+        entries
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_str().is_some_and(procfs::is_pid))
+            .filter_map(|entry| fs::read(entry.path().join("stat")).ok())
+            .filter(|line| procfs::parse_stat(line).is_some_and(|stat| stat.session == session))
+            .filter_map(|line| procfs::parse_record(&line))
+            .collect(),
+    )
+}
+
 pub(super) fn signal(signal: Signal, record: &ProcessRecord) {
     let number = match signal {
         Signal::HangUp => libc::SIGHUP,
@@ -63,5 +82,36 @@ mod tests {
             None,
             "unreadable, never empty"
         );
+    }
+
+    #[test]
+    fn a_sessions_members_are_the_stat_lines_naming_it_whatever_their_group() {
+        let root = tempfile::tempdir().unwrap();
+        let write = |pid: i32, group: i32, session: i32| {
+            let dir = root.path().join(pid.to_string());
+            fs::create_dir(&dir).unwrap();
+            let line = format!("{pid} (p) S 1 {group} {session} 34817 50 4194560 0 0 0 0 1 2 0 0 20 0 1 0 {pid}0 0 0");
+            fs::write(dir.join("stat"), line).unwrap();
+        };
+        write(40, 40, 40);
+        write(41, 41, 40);
+        write(42, 40, 40);
+        write(43, 43, 43);
+        let mut members = session_members_at(root.path(), 40).unwrap();
+        members.sort_unstable_by_key(|record| record.pid);
+        let pids: Vec<(i32, i32, u64)> = members
+            .iter()
+            .map(|record| (record.pid, record.group, record.started))
+            .collect();
+        assert_eq!(pids, [(40, 40, 400), (41, 41, 410), (42, 40, 420)]);
+        assert_eq!(session_members_at(&root.path().join("missing"), 40), None);
+    }
+
+    #[test]
+    fn this_process_is_a_member_of_its_session() {
+        // SAFETY: `getsid` has no memory preconditions.
+        let session = unsafe { libc::getsid(0) };
+        let pid = i32::try_from(std::process::id()).unwrap();
+        assert!(session_members(session).unwrap().iter().any(|record| record.pid == pid));
     }
 }

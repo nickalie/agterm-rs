@@ -9,6 +9,7 @@
 //! - [`foreground_job`] picks a shell's job from a table: on Unix the members of its terminal's foreground process
 //!   group when the shell is not in it ([`group_job`]); on Windows, which has no job control, the shell's live
 //!   descendants ([`descendant_job`], herdr's process snapshot). Both rules are pure and tested on every OS.
+//! - [`session_members`] reads, on Unix, every process of a session, which a live pane's forced end signals.
 //! - [`signal`] sends a [`Signal`] to a [`ProcessRecord`]: `SIGHUP` or `SIGKILL` to its pid on Unix; on Windows both
 //!   terminate the process, since a console that goes away ends what it ran as well, and only once the handle opened
 //!   to end it names the process the record was taken of (its creation time).
@@ -16,7 +17,7 @@
 //!   matched on pid AND start time, so a recycled pid is never signalled.
 //!
 //! herdr: `src/platform/{linux,macos,windows}.rs` (`foreground_job`, `process_start_token`, `snapshot_processes`,
-//! `descendant_entries`, `process_creation_time`, `signal_processes`) at `HERDR_REV` (`build/pins.env`), licensed under
+//! `descendant_entries`, `process_creation_time`, `session_processes`, `signal_processes`) at `HERDR_REV` (`build/pins.env`), licensed under
 //! the Apache License 2.0, modified: one table read for a whole sweep in place of per-pid reads, the descendant walk
 //! guarded by creation times (a child never predates its parent, so a recycled parent pid adopts nothing), and a
 //! Windows termination opened with `PROCESS_TERMINATE`.
@@ -63,6 +64,17 @@ pub enum Signal {
 #[must_use]
 pub fn read_table() -> Option<Vec<ProcessEntry>> {
     sys::read_table()
+}
+
+/// Every process of the session `session` (a session leader's pid), on Unix: what [`signal`] reaches a session's
+/// processes through when they sit in process groups of their own (a job-controlling shell's jobs), as herdr's
+/// `session_processes` does for its pane shutdown. Linux reads every `/proc` stat line's session, macOS asks `getsid`
+/// of every process `sysctl(KERN_PROC_ALL)` lists. `None` when the table cannot be read. Windows has no sessions:
+/// a pane's tree is its job there.
+#[cfg(unix)]
+#[must_use]
+pub fn session_members(session: i32) -> Option<Vec<ProcessRecord>> {
+    sys::session_members(session)
 }
 
 /// Sends `signal` to the process of `record`, best effort: a process gone meanwhile, or one this user may not signal,

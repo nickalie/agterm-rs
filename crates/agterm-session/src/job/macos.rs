@@ -20,6 +20,20 @@ pub(super) fn read_table() -> Option<Vec<ProcessEntry>> {
     Some(processes.iter().map(KinfoProc::entry).collect())
 }
 
+pub(super) fn session_members(session: i32) -> Option<Vec<ProcessRecord>> {
+    // `kinfo_proc` holds the session only as a scrubbed kernel pointer, so each listed process is asked (herdr's
+    // `session_processes`); one gone meanwhile answers -1 and is passed over
+    let processes = kinfo(&[libc::KERN_PROC_ALL]).filter(|processes| !processes.is_empty())?;
+    Some(
+        processes
+            .iter()
+            // SAFETY: `getsid` has no memory preconditions.
+            .filter(|process| unsafe { libc::getsid(process.pid()) } == session)
+            .map(|process| process.entry().record)
+            .collect(),
+    )
+}
+
 pub(super) fn signal(signal: Signal, record: &ProcessRecord) {
     let number = match signal {
         Signal::HangUp => libc::SIGHUP,
@@ -249,6 +263,14 @@ mod tests {
         assert!(members.iter().any(|member| member.pid() == pid));
         assert!(read_table().unwrap().contains(&own));
         assert!(kinfo(&[libc::KERN_PROC_PID, -1]).unwrap().is_empty(), "no such process");
+    }
+
+    #[test]
+    fn this_process_is_a_member_of_its_session() {
+        // SAFETY: `getsid` has no memory preconditions.
+        let session = unsafe { libc::getsid(0) };
+        let pid = i32::try_from(std::process::id()).unwrap();
+        assert!(session_members(session).unwrap().iter().any(|record| record.pid == pid));
     }
 
     #[test]
