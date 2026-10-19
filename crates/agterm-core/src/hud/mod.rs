@@ -160,7 +160,7 @@ impl HudSpinner {
         Self::names(true).join("|")
     }
 
-    /// The accepted set comma-joined: `agtermctl --spinner-style` help and its local rejection.
+    /// The accepted set comma-joined: `ngtermctl --spinner-style` help and its local rejection.
     #[must_use]
     pub fn accepted_names_phrase() -> String {
         Self::names(true).join(", ")
@@ -310,7 +310,7 @@ impl HudPosition {
         Self::names(true).join("|")
     }
 
-    /// The accepted set comma-joined: `agtermctl --position` help and its local rejection.
+    /// The accepted set comma-joined: `ngtermctl --position` help and its local rejection.
     #[must_use]
     pub fn accepted_names_phrase() -> String {
         Self::names(true).join(", ")

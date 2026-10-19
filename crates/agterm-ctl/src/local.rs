@@ -66,7 +66,7 @@ pub fn close_inherited_descriptors() {
 }
 
 /// Running a test as the real binary runs, with SIGPIPE at its default action. std ignores SIGPIPE before the test
-/// harness's `main`, and only `agtermctl`'s own `main` restores the default, so a test of [`SigpipeIgnored`] run in the
+/// harness's `main`, and only `ngtermctl`'s own `main` restores the default, so a test of [`SigpipeIgnored`] run in the
 /// harness passes whether or not the guard does anything. Setting the default in the harness itself would let a
 /// concurrent test's `EPIPE` kill the whole test binary, so the test runs again, alone, in a fresh copy of the binary.
 #[cfg(test)]

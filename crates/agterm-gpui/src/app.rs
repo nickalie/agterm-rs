@@ -557,24 +557,24 @@ mod tests {
         let home = MapEnv::new().with("HOME", "/home/u");
         assert_eq!(
             control_socket(&home),
-            PathBuf::from("/home/u/.local/share/agterm/agterm.sock")
+            PathBuf::from("/home/u/.local/share/ngterm/ngterm.sock")
         );
         let state = home.clone().with("AGTERM_STATE_DIR", "/tmp/st");
-        assert_eq!(control_socket(&state), PathBuf::from("/tmp/st/agterm.sock"));
+        assert_eq!(control_socket(&state), PathBuf::from("/tmp/st/ngterm.sock"));
         let socket = state.with("AGTERM_CONTROL_SOCKET", "/tmp/c.sock");
         assert_eq!(control_socket(&socket), PathBuf::from("/tmp/c.sock"));
-        // agtermctl's variable is not the app's
+        // ngtermctl's variable is not the app's
         let pane = home.with("AGTERM_SOCKET", "/tmp/other.sock");
         assert_eq!(
             control_socket(&pane),
-            PathBuf::from("/home/u/.local/share/agterm/agterm.sock")
+            PathBuf::from("/home/u/.local/share/ngterm/ngterm.sock")
         );
     }
 
     #[test]
     fn the_terminal_advertises_the_owned_socket_or_the_unavailable_one() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::Builder::new().prefix("agt").tempdir_in("/tmp")?;
-        let socket = dir.path().join("agterm.sock");
+        let socket = dir.path().join("ngterm.sock");
         let serving = ControlServer::new(&socket);
         let refused = ControlServer::new(&socket);
         assert_eq!(advertised_socket(&serving), socket.to_string_lossy());

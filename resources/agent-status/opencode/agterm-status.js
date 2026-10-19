@@ -29,7 +29,7 @@ const ABORT_ERROR_NAMES = new Set(["MessageAbortedError", "AbortError"]);
 const OVERFLOW_ERROR_NAME = "ContextOverflowError";
 
 function defaultWrapperPath() {
-  return join(homedir(), ".config", "agterm", "agent-status", "agterm-agent-status.sh");
+  return join(homedir(), ".config", "ngterm", "agent-status", "agterm-agent-status.sh");
 }
 
 function errorName(error) {
@@ -53,7 +53,7 @@ function createReportQueue(reportFn) {
 
 function spawnReport(wrapper, args) {
   // Bound wait with real process-group cancellation (detached + kill(-pid)), not the old 1s
-  // abandonment that reordered reports under load while leaving agtermctl running.
+  // abandonment that reordered reports under load while leaving ngtermctl running.
   return new Promise((resolve) => {
     let settled = false;
     const finish = () => {

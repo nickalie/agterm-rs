@@ -104,7 +104,7 @@ pub fn session(pane: &SessionPane<'_>) -> PaneEnv {
 }
 
 /// The environment of the quick terminal: one panel per app, outside the session tree and owned by no window, so an
-/// untargeted `agtermctl` run from it resolves the active window like any other caller.
+/// untargeted `ngtermctl` run from it resolves the active window like any other caller.
 #[must_use]
 pub fn quick_terminal(socket_path: &str, program_version: &str) -> PaneEnv {
     let mut env = terminal_identity(program_version);
@@ -121,7 +121,7 @@ mod tests {
     const SESSION: Uuid = Uuid::from_u128(0x1111_1111_1111_1111_1111_1111_1111_1111);
     const WINDOW: Uuid = Uuid::from_u128(0x2222_2222_2222_2222_2222_2222_2222_2222);
     const WORKSPACE: Uuid = Uuid::from_u128(0x3333_3333_3333_3333_3333_3333_3333_3333);
-    const SOCKET: &str = "/tmp/agterm.sock";
+    const SOCKET: &str = "/tmp/ngterm.sock";
 
     fn bare() -> SessionPane<'static> {
         SessionPane {
@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn both_variants_always_set_the_socket_variable() {
-        let unavailable = "/tmp/agterm.sock.unavailable";
+        let unavailable = "/tmp/ngterm.sock.unavailable";
         let session_env = session(&SessionPane {
             socket_path: unavailable,
             ..bare()

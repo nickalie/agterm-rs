@@ -1,6 +1,6 @@
 //! The HUD panel on a session's page (upstream's `overlayPanel` in `WindowContentView+Detail.swift`,
 //! `OverlayPanelStyle`, the overlay surface factory in `agtermApp.swift`, `Ghostty/HudLinkClick.swift`; port of the GTK
-//! build's `hud.rs`). Captions are HUDs too (`agtermctl caption`): sticky, frameless panels.
+//! build's `hud.rs`). Captions are HUDs too (`ngtermctl caption`): sticky, frameless panels.
 //!
 //! The panel is a passive terminal ([`ViewRole::Passive`]) running the bundled painter (`resources/hud/hud.sh`), which
 //! re-reads the body file the core writes. The deck lays it out above every pane of its page ([`Place::Hud`]): each

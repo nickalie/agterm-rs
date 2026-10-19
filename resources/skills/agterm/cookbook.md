@@ -1,6 +1,6 @@
 # agterm cookbook
 
-The cookbook is a directory of installable `agtermctl` workflows kept in the agterm repository, one
+The cookbook is a directory of installable `ngtermctl` workflows kept in the agterm repository, one
 directory per recipe. It is NOT bundled with this skill, so unless the session sits in an agterm
 checkout it has to be fetched.
 
@@ -57,19 +57,19 @@ A dirty tree is not a blocker: testing a local edit is a normal case.
 
 ## Requirements
 
-Every recipe states a minimum agterm version. `agtermctl version` reports the version of the app
-serving the socket — but **address the socket explicitly**, because `agtermctl` never reads
+Every recipe states a minimum agterm version. `ngtermctl version` reports the version of the app
+serving the socket — but **address the socket explicitly**, because `ngtermctl` never reads
 `AGTERM_SOCKET` and a bare invocation resolves the default path, which may be a DIFFERENT app than the
 one that spawned this session:
 
 - For an interactive check from a session shell, use
-  `agtermctl version --socket "$AGTERM_SOCKET"`.
+  `ngtermctl version --socket "$AGTERM_SOCKET"`.
 - Inside an automated preflight launched from the keymap or the palette, use
-  `agtermctl version --json --socket "$AGT_SOCKET"` and extract only `.result.app.version` with the
+  `ngtermctl version --json --socket "$AGT_SOCKET"` and extract only `.result.app.version` with the
   JSON parser the recipe already requires. Never compare the human output: it also includes the client
   path and may include a parenthesized commit.
 - Fall back to the default socket only when neither variable is set. An automated check still uses
-  `agtermctl version --json` and extracts only `.result.app.version`.
+  `ngtermctl version --json` and extracts only `.result.app.version`.
 
 `$TERM_PROGRAM_VERSION` carries the same number in a session shell, and is the fallback on a release
 too old to have the `version` command, along with the About panel. It is ABSENT in a keymap- or
@@ -98,7 +98,7 @@ Every file an install touches is merged, never replaced:
 
 Do not run an acquired script as part of installing it.
 
-Applying a new keymap entry needs `agtermctl keymap reload` (or File ▸ Reload Keymap); say so.
+Applying a new keymap entry needs `ngtermctl keymap reload` (or File ▸ Reload Keymap); say so.
 
 ## Contributing
 

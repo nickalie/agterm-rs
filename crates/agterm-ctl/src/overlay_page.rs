@@ -1,4 +1,4 @@
-//! The HTML page side of `agtermctl session overlay` (`agtermctlKit/OverlayPageCommands.swift`): `reload`, `submit`,
+//! The HTML page side of `ngtermctl session overlay` (`agtermctlKit/OverlayPageCommands.swift`): `reload`, `submit`,
 //! `navigate`, and the runner behind `open --html --block` and `result --page`, which polls by the page id the open
 //! reply names, never by session, so a page reopened in the same slot cannot answer for this one.
 
@@ -149,7 +149,7 @@ pub fn control_result(reply: &Reply) -> Option<ControlResult> {
     serde_json::from_value(result.clone()).ok()
 }
 
-/// `agtermctl session overlay reload`.
+/// `ngtermctl session overlay reload`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Reload an HTML overlay: the file or URL it was opened with, or with --current the page shown now.")]
 pub struct Reload {
@@ -197,7 +197,7 @@ impl RequestCommand for Reload {
     }
 }
 
-/// `agtermctl session overlay submit --value V`.
+/// `ngtermctl session overlay submit --value V`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Answer an HTML overlay with a value and close it, as its page would; a waiting --block prints the value."
@@ -244,7 +244,7 @@ impl RequestCommand for Submit {
     }
 }
 
-/// `agtermctl session overlay navigate <step>`: the step rides the wire as `to`.
+/// `ngtermctl session overlay navigate <step>`: the step rides the wire as `to`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Step an HTML overlay's history, open it in the browser, or reveal its current file in Finder.")]
 pub struct Navigate {

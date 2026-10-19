@@ -4,7 +4,7 @@
 # of the zmx half of upstream's scripts/setup.sh. The key hashes the ZMX_ pins of build/pins.env, build/patches/zmx/
 # and build/patches/zmx/ghostty/, so a zmx patch never rebuilds libghostty and a complete prefix is reused as is.
 #
-# The prefix holds bin/zmx, share/doc/zmx/LICENSE and share/agterm/zmx-BUILD: upstream's `.zmx-build-stamp`
+# The prefix holds bin/zmx, share/doc/zmx/LICENSE and share/ngterm/zmx-BUILD: upstream's `.zmx-build-stamp`
 # (`<ZMX_REV> <target> <patch digest>`), which the app reads as the bundled zmx build id (`ZmxBuildRecord`).
 #
 # The patches are upstream's (scripts/zmx-patches), except 0003-first-attach-snapshot.patch, this build's own: a new
@@ -37,8 +37,8 @@ BUILD_ID="$ZMX_REV $TARGET $PATCH_DIGEST"
 
 zmx_prefix_is_complete() {
   local prefix="$1"
-  [[ -x "$prefix/bin/zmx" && -s "$prefix/share/doc/zmx/LICENSE" && -s "$prefix/share/agterm/zmx-BUILD" ]] \
-    && [[ "$(cat "$prefix/share/agterm/zmx-BUILD")" == "$BUILD_ID" ]]
+  [[ -x "$prefix/bin/zmx" && -s "$prefix/share/doc/zmx/LICENSE" && -s "$prefix/share/ngterm/zmx-BUILD" ]] \
+    && [[ "$(cat "$prefix/share/ngterm/zmx-BUILD")" == "$BUILD_ID" ]]
 }
 
 case "${1:-}" in
@@ -132,8 +132,8 @@ echo "building zmx with zig $ZMX_ZIG_VERSION..." >&2
 
 install -Dm755 "$BUILD_DIR/zig-out/bin/zmx" "$STAGE/bin/zmx"
 install -Dm644 "$BUILD_DIR/LICENSE" "$STAGE/share/doc/zmx/LICENSE"
-mkdir -p "$STAGE/share/agterm"
-printf '%s\n' "$BUILD_ID" >"$STAGE/share/agterm/zmx-BUILD"
+mkdir -p "$STAGE/share/ngterm"
+printf '%s\n' "$BUILD_ID" >"$STAGE/share/ngterm/zmx-BUILD"
 "$STAGE/bin/zmx" version >/dev/null || die "the built zmx does not run"
 
 chmod 755 "$STAGE"

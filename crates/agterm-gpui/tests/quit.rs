@@ -27,7 +27,7 @@ const QUIT_DEADLINE: Duration = Duration::from_secs(10);
 
 /// One control request; its result, or its error as the test's.
 fn call(sandbox: &Sandbox, cmd: &str, target: Option<&str>, args: Value) -> TestResult<Value> {
-    let mut socket = std::os::unix::net::UnixStream::connect(sandbox.path("state/agterm.sock"))?;
+    let mut socket = std::os::unix::net::UnixStream::connect(sandbox.path("state/ngterm.sock"))?;
     socket.set_read_timeout(Some(DEADLINE))?;
     let mut request = json!({ "cmd": cmd });
     if let Some(target) = target {
@@ -415,7 +415,7 @@ fn sigterm_saves_and_quits_within_its_deadline_with_live_sessions_busy_and_pages
         log.contains("SIGTERM: quitting") && log.contains("quit: the state is saved"),
         "{log}"
     );
-    assert!(!sandbox.path("state/agterm.sock").exists(), "the socket is removed");
+    assert!(!sandbox.path("state/ngterm.sock").exists(), "the socket is removed");
     let saved = texts(&sandbox.path("state"));
     for sid in &sids {
         assert!(saved.contains(sid.as_str()), "session {sid} is in the saved state");

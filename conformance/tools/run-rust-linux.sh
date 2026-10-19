@@ -158,7 +158,7 @@ fi
 
 if [[ -z "$stage" ]]; then
     stage="${CARGO_TARGET_DIR:-$repo/target}/conformance-stage"
-    # the workspace without what links WPE WebKit (WORKSPACE_WITHOUT_WPE: agtermctl is in it), then the app with its
+    # the workspace without what links WPE WebKit (WORKSPACE_WITHOUT_WPE: ngtermctl is in it), then the app with its
     # HTML overlays, which need a WPE WebKit (README > WPE WebKit)
     # shellcheck source=../../scripts/lib/native.sh
     (

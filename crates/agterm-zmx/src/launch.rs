@@ -22,7 +22,7 @@ use crate::client::ZmxClient;
 /// The variable a debug build reads for another zmx executable (upstream honors it in DEBUG only).
 pub const ZMX_PATH_OVERRIDE: &str = "AGTERM_ZMX_PATH";
 /// The staged zmx build id, relative to the staged root (`scripts/stage.sh`).
-pub const BUILD_ID_PATH: &str = "share/agterm/zmx-BUILD";
+pub const BUILD_ID_PATH: &str = "share/ngterm/zmx-BUILD";
 /// The staged Ghostty resources, relative to the staged root: the fallback without `GHOSTTY_RESOURCES_DIR`.
 const BUNDLED_RESOURCES: &str = "share/ghostty";
 
@@ -170,7 +170,7 @@ mod tests {
         let fish = root.path().join("share/ghostty/shell-integration/fish/vendor_conf.d");
         fs::create_dir_all(&fish).unwrap();
         fs::write(fish.join("ghostty-shell-integration.fish"), "").unwrap();
-        fs::create_dir_all(root.path().join("share/agterm")).unwrap();
+        fs::create_dir_all(root.path().join("share/ngterm")).unwrap();
         fs::write(root.path().join(BUILD_ID_PATH), "rev x86_64-linux-gnu.2.39 digest\n").unwrap();
         root
     }

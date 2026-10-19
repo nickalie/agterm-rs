@@ -1,5 +1,5 @@
-//! `agtermctl ask` (`agtermctlKit/AskCommands.swift` `Ask`): a themed question dialog answered with one of the caller's
-//! buttons. `open` is the group's default subcommand, so `agtermctl ask TITLE --button ...` opens one; a title that is
+//! `ngtermctl ask` (`agtermctlKit/AskCommands.swift` `Ask`): a themed question dialog answered with one of the caller's
+//! buttons. `open` is the group's default subcommand, so `ngtermctl ask TITLE --button ...` opens one; a title that is
 //! itself `open`, `result` or `cancel` needs the explicit `ask open TITLE`.
 
 use agterm_core::model::OverlayPane;
@@ -10,7 +10,7 @@ use agterm_proto::{Args, AskButton, Command, Request};
 use crate::modal::{Family, LiveIo, ModalIo, ModalRunner};
 use crate::{BasicOptions, ClientOptions, Failure, RequestCommand};
 
-/// `agtermctl ask <subcommand>`.
+/// `ngtermctl ask <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Open, poll, or cancel a themed question dialog.",
@@ -71,7 +71,7 @@ fn split_pair(token: &str) -> Option<(&str, &str)> {
     token.split_once('=')
 }
 
-/// `agtermctl ask [open] TITLE --button ...`: opens the dialog, then waits for the answer unless `--no-block`.
+/// `ngtermctl ask [open] TITLE --button ...`: opens the dialog, then waits for the answer unless `--no-block`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Ask a question and wait for its button answer.")]
 pub struct Open {
@@ -250,7 +250,7 @@ impl Open {
     }
 }
 
-/// `agtermctl ask result <id>`: one read, printed as JSON, `pending` included.
+/// `ngtermctl ask result <id>`: one read, printed as JSON, `pending` included.
 #[derive(Debug, clap::Args)]
 #[command(about = "Print a dialog's current or terminal result as JSON.")]
 pub struct ResultCommand {
@@ -281,7 +281,7 @@ impl ResultCommand {
     }
 }
 
-/// `agtermctl ask cancel <id>`.
+/// `ngtermctl ask cancel <id>`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Cancel a dialog without answering a button.")]
 pub struct Cancel {
@@ -319,9 +319,9 @@ mod tests {
     use crate::modal::tests::{FakeIo, answer, reply};
     use crate::usage::name_default_subcommands;
 
-    /// `agtermctl ask <argv>` parsed (the default subcommand named first) and validated.
+    /// `ngtermctl ask <argv>` parsed (the default subcommand named first) and validated.
     fn parse(argv: &[&str]) -> Result<AskCommand, String> {
-        let command_line: Vec<OsString> = ["agtermctl", "ask"].iter().chain(argv).map(OsString::from).collect();
+        let command_line: Vec<OsString> = ["ngtermctl", "ask"].iter().chain(argv).map(OsString::from).collect();
         let named = name_default_subcommands(&Agtermctl::command(), &command_line);
         let parsed = Agtermctl::try_parse_from(named).map_err(|error| error.to_string())?;
         let crate::Command::Ask(group) = parsed.command else {

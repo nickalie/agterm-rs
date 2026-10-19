@@ -8,7 +8,7 @@
 # building, linking and testing the bindings (scripts/gen-wpe-bindings.sh reads its .gir files).
 #
 # The prefix holds lib/ (libWPEWebKit-2.0.so*, the helper processes in lib/wpe-webkit-2.0/, pkgconfig/), include/,
-# share/gir-1.0/ and share/agterm/wpe-PINS (the WPE_ pin lines it was unpacked from). A distro build has its helper
+# share/gir-1.0/ and share/ngterm/wpe-PINS (the WPE_ pin lines it was unpacked from). A distro build has its helper
 # path compiled in (/usr/lib/wpe-webkit-2.0), so pages run from this prefix only under
 # `bwrap --ro-overlay /usr/lib` with the prefix's lib/ overlaid; linking and version checks need nothing more than the
 # prefix.
@@ -80,8 +80,8 @@ done
 missing="$(ldd "$STAGE/lib/libWPEWebKit-2.0.so.1" | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ')"
 [[ -z "$missing" ]] || die "WPE WebKit needs libraries this host lacks: ${missing% }; install them (Arch: the" \
   "wpewebkit package's dependencies) or the distro's wpewebkit"
-mkdir -p "$STAGE/share/agterm"
-pin_lines WPE >"$STAGE/share/agterm/wpe-PINS"
+mkdir -p "$STAGE/share/ngterm"
+pin_lines WPE >"$STAGE/share/ngterm/wpe-PINS"
 
 wpe_prefix_is_complete "$STAGE" || die "the staged WPE WebKit prefix is incomplete"
 chmod 755 "$STAGE"

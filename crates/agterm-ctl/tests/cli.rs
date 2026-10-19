@@ -1,4 +1,4 @@
-//! The built `agtermctl` against an in-process control server over the fake main loop: socket resolution, `version`,
+//! The built `ngtermctl` against an in-process control server over the fake main loop: socket resolution, `version`,
 //! exit statuses and what lands on stdout and stderr.
 
 use std::error::Error;
@@ -21,7 +21,7 @@ use tempfile::TempDir;
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
-const AGTERMCTL: &str = env!("CARGO_BIN_EXE_agtermctl");
+const AGTERMCTL: &str = env!("CARGO_BIN_EXE_ngtermctl");
 const NOT_RUNNING: &str = "agterm may be stopped or unable to accept connections";
 
 /// A short temp dir: socket paths must stay under 104 bytes whatever `TMPDIR` is.
@@ -29,7 +29,7 @@ fn short_dir() -> io::Result<TempDir> {
     tempfile::Builder::new().prefix("agc").tempdir_in("/tmp")
 }
 
-/// A server on `<dir>/agterm.sock` answering through `handler` on a fake main loop. Fields drop top to bottom: the
+/// A server on `<dir>/ngterm.sock` answering through `handler` on a fake main loop. Fields drop top to bottom: the
 /// server stops before its main loop and the directory holding its socket go.
 struct Server<S: 'static> {
     _server: ControlServer,
@@ -87,7 +87,7 @@ fn isolated(root: &Path) -> Vec<(String, PathBuf)> {
     ]
 }
 
-/// Runs `agtermctl args` with `env` on top of the isolated environment of `root`.
+/// Runs `ngtermctl args` with `env` on top of the isolated environment of `root`.
 fn run<I, S>(root: &Path, env: &[(&str, &Path)], args: I) -> TestResult<Output>
 where
     I: IntoIterator<Item = S>,
@@ -144,7 +144,7 @@ fn version_line(socket: &Path) -> TestResult<String> {
 #[test]
 fn version_prints_the_app_then_the_client() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let _server = serve_core(&socket)?;
     let output = run(
         dir.path(),
@@ -160,7 +160,7 @@ fn version_prints_the_app_then_the_client() -> TestResult {
 #[test]
 fn version_json_prints_the_server_line_unchanged() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let _server = serve_core(&socket)?;
     let output = run(
         dir.path(),
@@ -179,7 +179,7 @@ fn version_json_prints_the_server_line_unchanged() -> TestResult {
 #[test]
 fn tree_lists_the_frontmost_window_and_refuses_an_unknown_one() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let _server = serve_core_with(&socket, || CoreState {
         library: WindowLibrary::seeded("/home/u"),
         ..CoreState::default()
@@ -231,11 +231,11 @@ fn tree_lists_the_frontmost_window_and_refuses_an_unknown_one() -> TestResult {
 fn the_state_dir_names_the_socket() -> TestResult {
     let dir = short_dir()?;
     let state = dir.path().join("state");
-    let _server = serve_core(&state.join("agterm.sock"))?;
+    let _server = serve_core(&state.join("ngterm.sock"))?;
     let output = run(dir.path(), &[("AGTERM_STATE_DIR", &state)], ["version", "--json"])?;
     assert_eq!(
         outcome(&output),
-        (Some(0), version_line(&state.join("agterm.sock"))?, String::new())
+        (Some(0), version_line(&state.join("ngterm.sock"))?, String::new())
     );
     Ok(())
 }
@@ -243,7 +243,7 @@ fn the_state_dir_names_the_socket() -> TestResult {
 #[test]
 fn the_socket_option_wins_over_the_state_dir() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let other = dir.path().join("other");
     let _server = serve_core(&socket)?;
     let env = [("AGTERM_STATE_DIR", other.as_path())];
@@ -258,7 +258,7 @@ fn the_socket_option_wins_over_the_state_dir() -> TestResult {
         ],
     )?;
     assert_eq!(outcome(&output), (Some(0), version_line(&socket)?, String::new()));
-    let unreachable = other.join("agterm.sock");
+    let unreachable = other.join("ngterm.sock");
     let failed = connect_failure(&unreachable, "No such file or directory", NOT_RUNNING);
     assert_eq!(
         outcome(&run(dir.path(), &env, ["version"])?),
@@ -270,7 +270,7 @@ fn the_socket_option_wins_over_the_state_dir() -> TestResult {
 #[test]
 fn the_app_socket_variables_are_not_read() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let other = dir.path().join("other");
     let _server = serve_core(&socket)?;
     let env = [
@@ -278,7 +278,7 @@ fn the_app_socket_variables_are_not_read() -> TestResult {
         ("AGTERM_SOCKET", socket.as_path()),
         ("AGTERM_CONTROL_SOCKET", socket.as_path()),
     ];
-    let failed = connect_failure(&other.join("agterm.sock"), "No such file or directory", NOT_RUNNING);
+    let failed = connect_failure(&other.join("ngterm.sock"), "No such file or directory", NOT_RUNNING);
     assert_eq!(
         outcome(&run(dir.path(), &env, ["version"])?),
         (Some(1), String::new(), failed)
@@ -289,7 +289,7 @@ fn the_app_socket_variables_are_not_read() -> TestResult {
 #[test]
 fn without_a_state_dir_the_xdg_data_home_is_the_default() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("home/.local/share/agterm/agterm.sock");
+    let socket = dir.path().join("home/.local/share/ngterm/ngterm.sock");
     let _server = serve_core(&socket)?;
     let output = run(dir.path(), &[], ["version", "--json"])?;
     assert_eq!(outcome(&output), (Some(0), version_line(&socket)?, String::new()));
@@ -299,7 +299,7 @@ fn without_a_state_dir_the_xdg_data_home_is_the_default() -> TestResult {
 #[test]
 fn a_refused_connection_exits_1_with_the_error() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     stale_socket(&socket)?;
     let refused = connect_failure(&socket, "Connection refused", NOT_RUNNING);
     let output = run(
@@ -314,7 +314,7 @@ fn a_refused_connection_exits_1_with_the_error() -> TestResult {
 #[test]
 fn a_present_owner_that_does_not_accept_is_named() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     // takes the ownership lock without binding, as an instance whose bind failed
     let owner = ControlServer::new(&socket);
     assert!(!owner.is_refused());
@@ -347,7 +347,7 @@ fn an_over_long_socket_path_is_refused_locally() -> TestResult {
 #[test]
 fn a_server_refusal_exits_1() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let _server = serve(&socket, (), |(), _| Response::failure("version is broken").into())?;
     let base = [OsStr::new("version"), OsStr::new("--socket"), socket.as_os_str()];
     let human = run(dir.path(), &[], base)?;
@@ -364,7 +364,7 @@ fn a_server_refusal_exits_1() -> TestResult {
 #[test]
 fn a_tree_that_does_not_decode_fails_the_reply_with_or_without_json() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let _server = serve(&socket, (), |(), _| {
         Response::with_result(serde_json::json!({"tree": {"workspaces": 5}})).into()
     })?;
@@ -381,9 +381,9 @@ fn a_tree_that_does_not_decode_fails_the_reply_with_or_without_json() -> TestRes
 }
 
 const VERSION_USAGE: &str =
-    "Usage: agtermctl version [--socket <socket>] [--json]\n  See 'agtermctl version --help' for more information.\n";
-const ROOT_USAGE: &str = "Usage: agtermctl <subcommand>\n  See 'agtermctl --help' for more information.\n";
-const HELP_USAGE: &str = "Usage: agtermctl help [<subcommands> ...]\n";
+    "Usage: ngtermctl version [--socket <socket>] [--json]\n  See 'ngtermctl version --help' for more information.\n";
+const ROOT_USAGE: &str = "Usage: ngtermctl <subcommand>\n  See 'ngtermctl --help' for more information.\n";
+const HELP_USAGE: &str = "Usage: ngtermctl help [<subcommands> ...]\n";
 
 #[test]
 fn usage_errors_are_reported_as_upstream_before_connecting() -> TestResult {
@@ -440,7 +440,7 @@ const ROOT_HELP: &str = "\
 OVERVIEW: Drive agterm over its control socket, and install its terminfo entry
 on other hosts.
 
-USAGE: agtermctl <subcommand>
+USAGE: ngtermctl <subcommand>
 
 OPTIONS:
   -h, --help              Show help information.
@@ -474,13 +474,13 @@ SUBCOMMANDS:
   clipboard               The clipboard of the terminals showing this pane.
   version                 Print the version of the app serving the socket.
 
-  See 'agtermctl help <subcommand>' for detailed help.
+  See 'ngtermctl help <subcommand>' for detailed help.
 ";
 
 const TREE_HELP: &str = "\
 OVERVIEW: Print the workspace/session tree.
 
-USAGE: agtermctl tree [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl tree [--socket <socket>] [--json] [--window <window>]
 
 OPTIONS:
   --socket <socket>       Override the control socket path.
@@ -494,7 +494,7 @@ OPTIONS:
 const VERSION_HELP: &str = "\
 OVERVIEW: Print the version of the app serving the socket.
 
-USAGE: agtermctl version [--socket <socket>] [--json]
+USAGE: ngtermctl version [--socket <socket>] [--json]
 
 OPTIONS:
   --socket <socket>       Override the control socket path.
@@ -506,7 +506,7 @@ OPTIONS:
 const EVENTS_HELP: &str = "\
 OVERVIEW: Continuously print control events.
 
-USAGE: agtermctl events [--socket <socket>] [--json] [--kind <kind> ...] [--run <run>] [--after <after>] [--limit <limit>]
+USAGE: ngtermctl events [--socket <socket>] [--json] [--kind <kind> ...] [--run <run>] [--after <after>] [--limit <limit>]
 
 OPTIONS:
   --socket <socket>       Override the control socket path.
@@ -557,7 +557,7 @@ fn help_wraps_to_the_columns_variable() -> TestResult {
     Ok(())
 }
 
-/// Runs `agtermctl args` with stdout on a pipe whose reader is already gone, as `agtermctl tree | head -1` once
+/// Runs `ngtermctl args` with stdout on a pipe whose reader is already gone, as `ngtermctl tree | head -1` once
 /// `head` exits.
 fn run_into_closed_pipe(root: &Path, args: &[&OsStr]) -> TestResult<Output> {
     let (reader, writer) = io::pipe()?;
@@ -570,7 +570,7 @@ fn run_into_closed_pipe(root: &Path, args: &[&OsStr]) -> TestResult<Output> {
 #[test]
 fn a_closed_stdout_ends_the_run_by_sigpipe_not_a_panic() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let _server = serve_core(&socket)?;
     let version = [OsStr::new("version"), OsStr::new("--socket"), socket.as_os_str()];
     let json = [&version[..], &[OsStr::new("--json")]].concat();
@@ -602,7 +602,7 @@ fn scripted(socket: &Path, expected: serde_json::Value, result: serde_json::Valu
     })
 }
 
-/// Runs `agtermctl args --socket <socket>`.
+/// Runs `ngtermctl args --socket <socket>`.
 fn run_on(root: &Path, socket: &Path, args: &[&str]) -> TestResult<Output> {
     let command_line = args
         .iter()
@@ -616,7 +616,7 @@ const NEW_ID: &str = "0F2C7A4E-9B1D-4C3A-8E5F-1A2B3C4D5E6F";
 #[test]
 fn session_new_and_duplicate_echo_the_new_id() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let expected = serde_json::json!({"cmd": "session.new", "args": {"name": "build", "noSelect": true}});
     let _server = scripted(&socket, expected, serde_json::json!({"id": NEW_ID}))?;
     let args = ["session", "new", "--name", "build", "--no-select"];
@@ -699,7 +699,7 @@ fn commands_naming_their_target_print_ok_and_a_batch_its_count() -> TestResult {
 #[test]
 fn window_list_renders_one_line_per_window() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let windows = serde_json::json!({"windows": [
         {"id": "AAAA", "name": "work", "open": true, "active": true, "sidebarVisible": true},
         {"id": "BBBB", "name": "archive", "open": false, "active": false},
@@ -769,7 +769,7 @@ fn window_commands_print_the_new_id_the_applied_size_or_ok() -> TestResult {
 #[test]
 fn a_window_list_that_does_not_decode_fails_the_reply() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let malformed = serde_json::json!({"windows": [{"id": "AAAA"}]});
     let _server = scripted(&socket, serde_json::json!({"cmd": "window.list"}), malformed)?;
     for json in [false, true] {
@@ -788,7 +788,7 @@ fn a_window_list_that_does_not_decode_fails_the_reply() -> TestResult {
 #[test]
 fn a_session_refusal_exits_1_with_the_server_error() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let _server = serve(&socket, (), |(), _| Response::failure("no such session: zzz").into())?;
     assert_eq!(
         outcome(&run_on(dir.path(), &socket, &["session", "close", "--target", "zzz"])?),
@@ -979,7 +979,7 @@ fn zmx_commands_send_their_args_and_print_the_inventory() -> TestResult {
 #[test]
 fn zmx_present_reports_a_refusal_on_stderr_and_writes_no_frame() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let message = "session is not live-backed, so nothing can be attached to it";
     let _server = serve(&socket, (), move |(), _| Response::failure(message).into())?;
     assert_eq!(
@@ -1016,17 +1016,17 @@ fn restore_background_and_restart_refuse_bad_forms_before_connecting() -> TestRe
     Ok(())
 }
 
-const MOVE_USAGE: &str = "Usage: agtermctl session move [<workspace>] [--to <to>] [--after <after>] [--before \
+const MOVE_USAGE: &str = "Usage: ngtermctl session move [<workspace>] [--to <to>] [--after <after>] [--before \
                           <before>] [--target <target> ...] [--socket <socket>] [--json] [--window <window>]\n  See \
-                          'agtermctl session move --help' for more information.\n";
-const NEW_USAGE: &str = "Usage: agtermctl session new <options>\n  See 'agtermctl session new --help' for more \
+                          'ngtermctl session move --help' for more information.\n";
+const NEW_USAGE: &str = "Usage: ngtermctl session new <options>\n  See 'ngtermctl session new --help' for more \
                          information.\n";
 
 #[test]
 fn validation_refusals_are_usage_errors_before_connecting() -> TestResult {
     let dir = short_dir()?;
     // nothing listens here: a connection attempt would exit 1, not 64
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let cases: [(&[&str], &str, &str); 4] = [
         (
             &["session", "move", "--to", "top", "--after", "s2", "--target", "s1"],
@@ -1061,16 +1061,16 @@ fn validation_refusals_are_usage_errors_before_connecting() -> TestResult {
 #[test]
 fn parse_errors_of_the_new_commands_name_their_usage() -> TestResult {
     let dir = short_dir()?;
-    let go_usage = "Usage: agtermctl session go --to <to> [--socket <socket>] [--json] [--window <window>]\n  See \
-                    'agtermctl session go --help' for more information.\n";
-    let list_usage = "Usage: agtermctl window list [--socket <socket>] [--json]\n  See 'agtermctl window list --help' for more \
+    let go_usage = "Usage: ngtermctl session go --to <to> [--socket <socket>] [--json] [--window <window>]\n  See \
+                    'ngtermctl session go --help' for more information.\n";
+    let list_usage = "Usage: ngtermctl window list [--socket <socket>] [--json]\n  See 'ngtermctl window list --help' for more \
          information.\n";
     let cases: [(&[&str], String); 4] = [
         (
             &["window", "resize", "--width", "1000"],
             "Error: Missing expected argument '--height <height>'\nHelp:  --height <height>  New height in points.\n\
-             Usage: agtermctl window resize [<id>] --width <width> --height <height> [--socket <socket>] [--json]\n  \
-             See 'agtermctl window resize --help' for more information.\n"
+             Usage: ngtermctl window resize [<id>] --width <width> --height <height> [--socket <socket>] [--json]\n  \
+             See 'ngtermctl window resize --help' for more information.\n"
                 .to_owned(),
         ),
         (
@@ -1086,7 +1086,7 @@ fn parse_errors_of_the_new_commands_name_their_usage() -> TestResult {
         ),
         (
             &["session", "bogus"],
-            "Error: Unexpected argument 'bogus'\nUsage: agtermctl session <subcommand>\n  See 'agtermctl session \
+            "Error: Unexpected argument 'bogus'\nUsage: ngtermctl session <subcommand>\n  See 'ngtermctl session \
              --help' for more information.\n"
                 .to_owned(),
         ),
@@ -1104,7 +1104,7 @@ fn parse_errors_of_the_new_commands_name_their_usage() -> TestResult {
 const SESSION_HELP: &str = "\
 OVERVIEW: Session commands.
 
-USAGE: agtermctl session <subcommand>
+USAGE: ngtermctl session <subcommand>
 
 OPTIONS:
   -h, --help              Show help information.
@@ -1159,13 +1159,13 @@ SUBCOMMANDS:
   hud                     Post, update, or close a passive message panel over a
                           session.
 
-  See 'agtermctl help session <subcommand>' for detailed help.
+  See 'ngtermctl help session <subcommand>' for detailed help.
 ";
 
 const SESSION_NEW_HELP: &str = "\
 OVERVIEW: Create a session.
 
-USAGE: agtermctl session new <options>
+USAGE: ngtermctl session new <options>
 
 OPTIONS:
   --cwd <cwd>             Working directory (defaults to $HOME).
@@ -1205,7 +1205,7 @@ const SESSION_DUPLICATE_HELP: &str = "\
 OVERVIEW: Duplicate a session: a fresh shell in its directory, placed right
 after it.
 
-USAGE: agtermctl session duplicate [--target <target>] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session duplicate [--target <target>] [--socket <socket>] [--json] [--window <window>]
 
 OPTIONS:
   --target <target>       Target session/workspace id, unique prefix, or
@@ -1221,7 +1221,7 @@ OPTIONS:
 const SESSION_CLOSE_HELP: &str = "\
 OVERVIEW: Close a session.
 
-USAGE: agtermctl session close [--target <target> ...] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session close [--target <target> ...] [--socket <socket>] [--json] [--window <window>]
 
 OPTIONS:
   --target <target>       Target session id, prefix, or 'active'. Repeat for a
@@ -1237,7 +1237,7 @@ OPTIONS:
 const SESSION_SELECT_HELP: &str = "\
 OVERVIEW: Select a session.
 
-USAGE: agtermctl session select [--target <target>] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session select [--target <target>] [--socket <socket>] [--json] [--window <window>]
 
 OPTIONS:
   --target <target>       Target session/workspace id, unique prefix, or
@@ -1253,7 +1253,7 @@ OPTIONS:
 const SESSION_GO_HELP: &str = "\
 OVERVIEW: Navigate sessions: next|prev|first|last|next-attention|prev-attention.
 
-USAGE: agtermctl session go --to <to> [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session go --to <to> [--socket <socket>] [--json] [--window <window>]
 
 OPTIONS:
   --to <to>               Direction: next, prev, first, last, next-attention,
@@ -1269,7 +1269,7 @@ OPTIONS:
 const SESSION_RENAME_HELP: &str = "\
 OVERVIEW: Rename a session.
 
-USAGE: agtermctl session rename <name> [--target <target>] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session rename <name> [--target <target>] [--socket <socket>] [--json] [--window <window>]
 
 ARGUMENTS:
   <name>                  New session name.
@@ -1288,7 +1288,7 @@ OPTIONS:
 const SESSION_REVEAL_HELP: &str = "\
 OVERVIEW: Reveal a session's focused working directory in Finder.
 
-USAGE: agtermctl session reveal [--target <target>] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session reveal [--target <target>] [--socket <socket>] [--json] [--window <window>]
 
 OPTIONS:
   --target <target>       Target session/workspace id, unique prefix, or
@@ -1305,7 +1305,7 @@ const SESSION_MOVE_HELP: &str = "\
 OVERVIEW: Move a session: to another workspace, reorder with --to, or place
 relative to an anchor with --after/--before.
 
-USAGE: agtermctl session move [<workspace>] [--to <to>] [--after <after>] [--before <before>] [--target <target> ...] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session move [<workspace>] [--to <to>] [--after <after>] [--before <before>] [--target <target> ...] [--socket <socket>] [--json] [--window <window>]
 
 ARGUMENTS:
   <workspace>             Destination workspace id/prefix (relocate). Omit with
@@ -1332,7 +1332,7 @@ OPTIONS:
 const WINDOW_HELP: &str = "\
 OVERVIEW: Window commands.
 
-USAGE: agtermctl window <subcommand>
+USAGE: ngtermctl window <subcommand>
 
 OPTIONS:
   -h, --help              Show help information.
@@ -1352,7 +1352,7 @@ SUBCOMMANDS:
   fullscreen              Toggle native macOS full screen for a window.
   minimize                Minimize a window to the Dock, or restore it.
 
-  See 'agtermctl help window <subcommand>' for detailed help.
+  See 'ngtermctl help window <subcommand>' for detailed help.
 ";
 
 const WINDOW_RESIZE_HELP: &str = "\
@@ -1361,7 +1361,7 @@ OVERVIEW: Resize a window (frame size in points).
 Prints the applied width and height as W H after clamping to the window minimum
 and display bounds.
 
-USAGE: agtermctl window resize [<id>] --width <width> --height <height> [--socket <socket>] [--json]
+USAGE: ngtermctl window resize [<id>] --width <width> --height <height> [--socket <socket>] [--json]
 
 ARGUMENTS:
   <id>                    Window id, unique prefix, or 'active'. (default:
@@ -1379,7 +1379,7 @@ OPTIONS:
 const WINDOW_MINIMIZE_HELP: &str = "\
 OVERVIEW: Minimize a window to the Dock, or restore it.
 
-USAGE: agtermctl window minimize [<id>] [<mode>] [--socket <socket>] [--json]
+USAGE: ngtermctl window minimize [<id>] [<mode>] [--socket <socket>] [--json]
 
 ARGUMENTS:
   <id>                    Window id, unique prefix, or 'active'. (default:
@@ -1396,7 +1396,7 @@ OPTIONS:
 const WINDOW_LIST_HELP: &str = "\
 OVERVIEW: List windows (id, name, open, active).
 
-USAGE: agtermctl window list [--socket <socket>] [--json]
+USAGE: ngtermctl window list [--socket <socket>] [--json]
 
 OPTIONS:
   --socket <socket>       Override the control socket path.
@@ -1439,7 +1439,7 @@ fn session_and_window_help_in_the_argument_parser_layout() -> TestResult {
 const WORKSPACE_HELP: &str = "\
 OVERVIEW: Workspace commands.
 
-USAGE: agtermctl workspace <subcommand>
+USAGE: ngtermctl workspace <subcommand>
 
 OPTIONS:
   -h, --help              Show help information.
@@ -1458,13 +1458,13 @@ SUBCOMMANDS:
   collapse                Collapse a workspace in the sidebar tree.
   expand                  Expand a workspace in the sidebar tree.
 
-  See 'agtermctl help workspace <subcommand>' for detailed help.
+  See 'ngtermctl help workspace <subcommand>' for detailed help.
 ";
 
 const WORKSPACE_NEW_HELP: &str = "\
 OVERVIEW: Create a workspace.
 
-USAGE: agtermctl workspace new [<name>] [--collapsed] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl workspace new [<name>] [--collapsed] [--socket <socket>] [--json] [--window <window>]
 
 ARGUMENTS:
   <name>                  Workspace name (defaults to the auto-generated name).
@@ -1482,7 +1482,7 @@ OPTIONS:
 const WORKSPACE_FOCUS_HELP: &str = "\
 OVERVIEW: Mark a workspace in the sidebar focus set (on|off|toggle|add).
 
-USAGE: agtermctl workspace focus [<mode>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl workspace focus [<mode>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
 
 ARGUMENTS:
   <mode>                  Mode: on (mark it alone and apply the filter), off
@@ -1507,7 +1507,7 @@ OPTIONS:
 const WORKSPACE_FILTER_HELP: &str = "\
 OVERVIEW: Turn the sidebar workspace focus filter on or off (on|off|toggle).
 
-USAGE: agtermctl workspace filter [<mode>] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl workspace filter [<mode>] [--socket <socket>] [--json] [--window <window>]
 
 ARGUMENTS:
   <mode>                  Mode: on, off, or toggle (default). (default: toggle)
@@ -1547,14 +1547,14 @@ fn workspace_modes_are_refused_before_connecting() -> TestResult {
     for (args, refusal) in [
         (
             &["workspace", "focus", "pin"][..],
-            "Error: mode must be one of: on, off, toggle, add\nUsage: agtermctl workspace focus [<mode>] [--target \
-             <target>] [--socket <socket>] [--json] [--window <window>]\n  See 'agtermctl workspace focus --help' for \
+            "Error: mode must be one of: on, off, toggle, add\nUsage: ngtermctl workspace focus [<mode>] [--target \
+             <target>] [--socket <socket>] [--json] [--window <window>]\n  See 'ngtermctl workspace focus --help' for \
              more information.\n",
         ),
         (
             &["workspace", "filter", "show"],
-            "Error: mode must be on, off, or toggle\nUsage: agtermctl workspace filter [<mode>] [--socket <socket>] \
-             [--json] [--window <window>]\n  See 'agtermctl workspace filter --help' for more information.\n",
+            "Error: mode must be on, off, or toggle\nUsage: ngtermctl workspace filter [<mode>] [--socket <socket>] \
+             [--json] [--window <window>]\n  See 'ngtermctl workspace filter --help' for more information.\n",
         ),
     ] {
         assert_eq!(
@@ -1613,7 +1613,7 @@ fn events_print_each_page_in_local_time_until_the_server_refuses() -> TestResult
         );
     }
 
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let first = serde_json::json!({"cmd": "events.read", "args": {"kinds": ["status", "tree.changed"], "limit": 2}});
     let _server = event_ring(&socket, first)?;
     let args = ["events", "--json", "--kind", "tree.changed,status", "--limit", "2"];
@@ -1632,22 +1632,22 @@ fn events_print_each_page_in_local_time_until_the_server_refuses() -> TestResult
 #[test]
 fn events_without_a_cursor_fail_at_once_when_nothing_listens() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let output = run_on(dir.path(), &socket, &["events"])?;
     let error = connect_failure(&socket, "No such file or directory", NOT_RUNNING);
     assert_eq!(outcome(&output), (Some(1), String::new(), error));
     Ok(())
 }
 
-const EVENTS_USAGE: &str = "Usage: agtermctl events [--socket <socket>] [--json] [--kind <kind> ...] [--run <run>] \
-                            [--after <after>] [--limit <limit>]\n  See 'agtermctl events --help' for more \
+const EVENTS_USAGE: &str = "Usage: ngtermctl events [--socket <socket>] [--json] [--kind <kind> ...] [--run <run>] \
+                            [--after <after>] [--limit <limit>]\n  See 'ngtermctl events --help' for more \
                             information.\n";
 
 #[test]
 fn events_refuse_a_bad_cursor_limit_or_kind_before_reading() -> TestResult {
     let dir = short_dir()?;
     // nothing listens here: a read would exit 1, not 64
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let cases: [(&[&str], &str); 5] = [
         (&["--limit", "0"], "event limit must be between 1 and 1000"),
         (&["--run", EVENT_RUN], "events.read requires --run and --after together"),
@@ -1671,7 +1671,7 @@ fn events_refuse_a_bad_cursor_limit_or_kind_before_reading() -> TestResult {
 
 // MARK: - terminal I/O, session metadata and surface commands
 
-/// Runs `agtermctl args --socket <socket>` with `input` on its standard input.
+/// Runs `ngtermctl args --socket <socket>` with `input` on its standard input.
 fn run_with_input(root: &Path, socket: &Path, args: &[&str], input: &[u8]) -> TestResult<Output> {
     let mut command = Command::new(AGTERMCTL);
     for (name, _) in std::env::vars_os() {
@@ -1763,7 +1763,7 @@ fn reads_print_their_text_a_search_its_counter_and_a_cursor_its_column() -> Test
 #[test]
 fn type_takes_text_after_a_separator_or_from_stdin() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let expected = serde_json::json!({"cmd": "session.type", "target": "s1",
                                       "args": {"text": "printf 'a%s\\n' b\n", "select": false}});
     let _server = scripted(&socket, expected, serde_json::json!({"id": NEW_ID}))?;
@@ -1794,7 +1794,7 @@ fn type_takes_text_after_a_separator_or_from_stdin() -> TestResult {
 fn type_without_a_payload_or_with_invalid_utf8_is_a_usage_error_at_run_time() -> TestResult {
     let dir = short_dir()?;
     // nothing listens here: a connection attempt would exit 1, not 64
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let refusal = |message: &str| format!("Error: {message}\n{ROOT_USAGE}");
     assert_eq!(
         outcome(&run_on(dir.path(), &socket, &["session", "type"])?),
@@ -1811,11 +1811,11 @@ fn type_without_a_payload_or_with_invalid_utf8_is_a_usage_error_at_run_time() ->
 #[test]
 fn io_and_metadata_refusals_are_usage_errors_before_connecting() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let common = "[--target <target>] [--socket <socket>] [--json] [--window <window>]";
     let usage = |command: &str, synopsis: &str| {
         format!(
-            "Usage: agtermctl session {command} {synopsis}{common}\n  See 'agtermctl session {command} --help' for \
+            "Usage: ngtermctl session {command} {synopsis}{common}\n  See 'ngtermctl session {command} --help' for \
              more information.\n"
         )
     };
@@ -1878,7 +1878,7 @@ fn io_and_metadata_refusals_are_usage_errors_before_connecting() -> TestResult {
 const SURFACE_HELP: &str = "\
 OVERVIEW: Terminal surface commands.
 
-USAGE: agtermctl surface <subcommand>
+USAGE: ngtermctl surface <subcommand>
 
 OPTIONS:
   -h, --help              Show help information.
@@ -1887,7 +1887,7 @@ SUBCOMMANDS:
   zoom                    Zoom a terminal surface (show|hide|toggle).
   cursor                  Report a terminal surface's zero-based cursor column.
 
-  See 'agtermctl help surface <subcommand>' for detailed help.
+  See 'ngtermctl help surface <subcommand>' for detailed help.
 ";
 
 const SURFACE_CURSOR_HELP: &str = "\
@@ -1902,7 +1902,7 @@ A column is a signal, not proof about the line's content. Past the prompt it
 establishes the line is not empty; AT the prompt it establishes nothing, since
 the caret may have been moved back over text that is still there.
 
-USAGE: agtermctl surface cursor [--pane-id <pane-id>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl surface cursor [--pane-id <pane-id>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
 
 OPTIONS:
   --pane-id <pane-id>     Stable pane token ($AGTERM_PANE_ID). With it --target
@@ -1921,7 +1921,7 @@ OPTIONS:
 const SESSION_TYPE_HELP: &str = "\
 OVERVIEW: Inject text into a session.
 
-USAGE: agtermctl session type [<text>] [--stdin] [--select] [--pane <pane>] [--target <target>] [--socket <socket>] [--json] [--window <window>] [--pane-id <pane-id>]
+USAGE: ngtermctl session type [<text>] [--stdin] [--select] [--pane <pane>] [--target <target>] [--socket <socket>] [--json] [--window <window>] [--pane-id <pane-id>]
 
 ARGUMENTS:
   <text>                  Text to inject (omit with --stdin).
@@ -1948,7 +1948,7 @@ OPTIONS:
 const SESSION_FLAG_HELP: &str = "\
 OVERVIEW: Flag a session for the flagged working-set view (on|off|toggle|clear).
 
-USAGE: agtermctl session flag [<mode>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session flag [<mode>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
 
 ARGUMENTS:
   <mode>                  Mode: on, off, toggle (default), or clear (unflag
@@ -2077,22 +2077,22 @@ fn resize_prints_the_applied_ratio_and_json_the_server_line() -> TestResult {
     Ok(())
 }
 
-const SPLIT_VISIBILITY_USAGE: &str = "Usage: agtermctl session split visibility [<mode>] [--axis <axis>] [--target \
-                                      <target>] [--socket <socket>] [--json] [--window <window>]\n  See 'agtermctl \
+const SPLIT_VISIBILITY_USAGE: &str = "Usage: ngtermctl session split visibility [<mode>] [--axis <axis>] [--target \
+                                      <target>] [--socket <socket>] [--json] [--window <window>]\n  See 'ngtermctl \
                                       session split visibility --help' for more information.\n";
-const RESIZE_USAGE: &str = "Usage: agtermctl session resize [--split-ratio <split-ratio>] [--grow-left <grow-left>] \
+const RESIZE_USAGE: &str = "Usage: ngtermctl session resize [--split-ratio <split-ratio>] [--grow-left <grow-left>] \
                             [--grow-right <grow-right>] [--grow-primary <grow-primary>] [--grow-split <grow-split>] \
                             [--grow-top <grow-top>] [--grow-bottom <grow-bottom>] [--target <target>] [--socket \
-                            <socket>] [--json] [--window <window>]\n  See 'agtermctl session resize --help' for more \
+                            <socket>] [--json] [--window <window>]\n  See 'ngtermctl session resize --help' for more \
                             information.\n";
-const LEAD_USAGE: &str = "Usage: agtermctl session lead [--pane <pane>] [--target <target>] [--socket <socket>] \
-                          [--json] [--window <window>]\n  See 'agtermctl session lead --help' for more information.\n";
+const LEAD_USAGE: &str = "Usage: ngtermctl session lead [--pane <pane>] [--target <target>] [--socket <socket>] \
+                          [--json] [--window <window>]\n  See 'ngtermctl session lead --help' for more information.\n";
 
 #[test]
 fn pane_command_refusals_are_usage_errors_before_connecting() -> TestResult {
     let dir = short_dir()?;
     // nothing listens here: a connection attempt would exit 1, not 64
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let cases: [(&[&str], &str, &str); 7] = [
         (
             &["session", "split", "--axis", "diagonal"],
@@ -2137,8 +2137,8 @@ fn pane_command_refusals_are_usage_errors_before_connecting() -> TestResult {
             "{args:?}"
         );
     }
-    let close_usage = "Usage: agtermctl session split close [--target <target>] [--socket <socket>] [--json] \
-                       [--window <window>]\n  See 'agtermctl session split close --help' for more information.\n";
+    let close_usage = "Usage: ngtermctl session split close [--target <target>] [--socket <socket>] [--json] \
+                       [--window <window>]\n  See 'ngtermctl session split close --help' for more information.\n";
     assert_eq!(
         outcome(&run_on(dir.path(), &socket, &["session", "split", "close", "extra"])?),
         (
@@ -2153,7 +2153,7 @@ fn pane_command_refusals_are_usage_errors_before_connecting() -> TestResult {
 const SESSION_SPLIT_HELP: &str = "\
 OVERVIEW: Show, hide, or close a session split.
 
-USAGE: agtermctl session split <subcommand>
+USAGE: ngtermctl session split <subcommand>
 
 OPTIONS:
   -h, --help              Show help information.
@@ -2163,13 +2163,13 @@ SUBCOMMANDS:
   close                   Close the split pane (destroys it, killing whatever
                           it runs); ok when there is none.
 
-  See 'agtermctl help session split <subcommand>' for detailed help.
+  See 'ngtermctl help session split <subcommand>' for detailed help.
 ";
 
 const SESSION_SPLIT_VISIBILITY_HELP: &str = "\
 OVERVIEW: Show or hide a session split (on|off|toggle).
 
-USAGE: agtermctl session split visibility [<mode>] [--axis <axis>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session split visibility [<mode>] [--axis <axis>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
 
 ARGUMENTS:
   <mode>                  Mode: on (show), off (hide), or toggle (default).
@@ -2196,7 +2196,7 @@ window size the program sees. A pane that does not lead is covered; this
 uncovers it, as pressing a key on the cover does, and covers it on the other
 Mac. Read each pane's `lead` from `tree`.
 
-USAGE: agtermctl session lead [--pane <pane>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session lead [--pane <pane>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
 
 OPTIONS:
   --pane <pane>           Which pane: primary/left/top or split/right/bottom.
@@ -2241,7 +2241,7 @@ fn split_help_marks_its_default_subcommand() -> TestResult {
 const QUICK_HELP: &str = "\
 OVERVIEW: Quick terminal: visibility, type into it, read its text.
 
-USAGE: agtermctl quick <subcommand>
+USAGE: ngtermctl quick <subcommand>
 
 OPTIONS:
   -h, --help              Show help information.
@@ -2251,13 +2251,13 @@ SUBCOMMANDS:
   type                    Inject text into the quick terminal.
   text                    Print the quick terminal's buffer as plain text.
 
-  See 'agtermctl help quick <subcommand>' for detailed help.
+  See 'ngtermctl help quick <subcommand>' for detailed help.
 ";
 
 const QUICK_VISIBILITY_HELP: &str = "\
 OVERVIEW: Quick terminal visibility (show|hide|toggle).
 
-USAGE: agtermctl quick visibility [<mode>] [--socket <socket>] [--json]
+USAGE: ngtermctl quick visibility [<mode>] [--socket <socket>] [--json]
 
 ARGUMENTS:
   <mode>                  Mode: show, hide, or toggle (default). (default:
@@ -2273,7 +2273,7 @@ OPTIONS:
 const QUICK_TYPE_HELP: &str = "\
 OVERVIEW: Inject text into the quick terminal.
 
-USAGE: agtermctl quick type [<text>] [--stdin] [--socket <socket>] [--json]
+USAGE: ngtermctl quick type [<text>] [--stdin] [--socket <socket>] [--json]
 
 ARGUMENTS:
   <text>                  Text to inject (omit with --stdin).
@@ -2289,7 +2289,7 @@ OPTIONS:
 const QUICK_TEXT_HELP: &str = "\
 OVERVIEW: Print the quick terminal's buffer as plain text.
 
-USAGE: agtermctl quick text [--all] [--lines <lines>] [--socket <socket>] [--json]
+USAGE: ngtermctl quick text [--all] [--lines <lines>] [--socket <socket>] [--json]
 
 OPTIONS:
   --all                   Read the full screen + scrollback instead of just the
@@ -2377,8 +2377,8 @@ fn quick_commands_send_their_request_and_print_the_reply() -> TestResult {
 fn quick_refusals_are_usage_errors_before_connecting() -> TestResult {
     let dir = short_dir()?;
     // nothing listens here: a connection attempt would exit 1, not 64
-    let socket = dir.path().join("agterm.sock");
-    let text = "Usage: agtermctl quick text [--all] [--lines <lines>] [--socket <socket>] [--json]\n  See 'agtermctl \
+    let socket = dir.path().join("ngterm.sock");
+    let text = "Usage: ngtermctl quick text [--all] [--lines <lines>] [--socket <socket>] [--json]\n  See 'ngtermctl \
                 quick text --help' for more information.\n";
     let cases: [(&[&str], &str); 2] = [
         (
@@ -2407,8 +2407,8 @@ fn quick_refusals_are_usage_errors_before_connecting() -> TestResult {
 
 // MARK: - dashboard
 
-const DASHBOARD_USAGE: &str = "Usage: agtermctl dashboard [<ids> ...] [--font-size <font-size>] [--auto-size] [--mru] \
-                               [--close] [--socket <socket>] [--json] [--window <window>]\n  See 'agtermctl \
+const DASHBOARD_USAGE: &str = "Usage: ngtermctl dashboard [<ids> ...] [--font-size <font-size>] [--auto-size] [--mru] \
+                               [--close] [--socket <socket>] [--json] [--window <window>]\n  See 'ngtermctl \
                                dashboard --help' for more information.\n";
 
 #[test]
@@ -2476,7 +2476,7 @@ fn dashboard_sends_its_ids_verbatim_and_prints_ok_or_the_note() -> TestResult {
 fn dashboard_refusals_are_usage_errors_before_connecting() -> TestResult {
     let dir = short_dir()?;
     // nothing listens here: a connection attempt would exit 1, not 64
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let cases: [(&[&str], &str); 8] = [
         (
             &["dashboard"],
@@ -2526,7 +2526,7 @@ fn dashboard_refusals_are_usage_errors_before_connecting() -> TestResult {
 const SESSION_HUD_HELP: &str = "\
 OVERVIEW: Post, update, or close a passive message panel over a session.
 
-USAGE: agtermctl session hud <subcommand>
+USAGE: ngtermctl session hud <subcommand>
 
 OPTIONS:
   -h, --help              Show help information.
@@ -2539,14 +2539,14 @@ SUBCOMMANDS:
   close                   Take the message panel down (a program overlay in the
                           same slot is left alone).
 
-  See 'agtermctl help session hud <subcommand>' for detailed help.
+  See 'ngtermctl help session hud <subcommand>' for detailed help.
 ";
 
 const SESSION_HUD_OPEN_HELP: &str = "\
 OVERVIEW: Post a message panel over the session; the session keeps focus and
 stays typable.
 
-USAGE: agtermctl session hud open [<options>] [<message>]
+USAGE: ngtermctl session hud open [<options>] [<message>]
 
 ARGUMENTS:
   <message>               Message shown in the panel (omit with --file).
@@ -2611,14 +2611,14 @@ OPTIONS:
 
 ";
 
-const NOTIFY_USAGE: &str = "Usage: agtermctl notify <body> [--title <title>] [--target <target>] [--socket <socket>] \
-                            [--json] [--window <window>]\n  See 'agtermctl notify --help' for more information.\n";
+const NOTIFY_USAGE: &str = "Usage: ngtermctl notify <body> [--title <title>] [--target <target>] [--socket <socket>] \
+                            [--json] [--window <window>]\n  See 'ngtermctl notify --help' for more information.\n";
 
 const NOTIFY_HELP: &str = "\
 OVERVIEW: Post a desktop notification (default: the active session of the
 frontmost window).
 
-USAGE: agtermctl notify <body> [--title <title>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl notify <body> [--title <title>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
 
 ARGUMENTS:
   <body>                  Notification body.
@@ -2740,7 +2740,7 @@ fn a_hud_message_read_from_a_file_is_sent_without_its_terminator() -> TestResult
     let dir = short_dir()?;
     let file = dir.path().join("hud.md");
     fs::write(&file, "# Tasks\r\n\r\n- build\r\n")?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let expected = serde_json::json!({"cmd": "session.hud.update", "target": "active",
                                       "args": {"message": "# Tasks\n\n- build", "markdown": true}});
     let _server = scripted(&socket, expected, serde_json::json!({"id": NEW_ID}))?;
@@ -2772,7 +2772,7 @@ fn hud_close_json_prints_the_server_line() -> TestResult {
 #[test]
 fn a_hud_update_without_a_panel_exits_1_with_the_server_error() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let _server = serve(&socket, (), |(), _| Response::failure("no hud").into())?;
     assert_eq!(
         outcome(&run_on(
@@ -2789,10 +2789,10 @@ fn a_hud_update_without_a_panel_exits_1_with_the_server_error() -> TestResult {
 fn hud_and_notify_refusals_are_usage_errors_before_connecting() -> TestResult {
     let dir = short_dir()?;
     // nothing listens here: a connection attempt would exit 1, not 64
-    let socket = dir.path().join("agterm.sock");
-    let open = "Usage: agtermctl session hud open [<options>] [<message>]\n  See 'agtermctl session hud open --help' for \
+    let socket = dir.path().join("ngterm.sock");
+    let open = "Usage: ngtermctl session hud open [<options>] [<message>]\n  See 'ngtermctl session hud open --help' for \
                 more information.\n";
-    let update = "Usage: agtermctl session hud update [<options>] [<message>]\n  See 'agtermctl session hud update \
+    let update = "Usage: ngtermctl session hud update [<options>] [<message>]\n  See 'ngtermctl session hud update \
                   --help' for more information.\n";
     let cases: [(&[&str], &str, &str); 7] = [
         (
@@ -2909,7 +2909,7 @@ fn modal_host(
 #[test]
 fn pick_without_blocking_prints_the_id_and_result_reads_each_outcome() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let open = serde_json::json!({"cmd": "pick.open", "args": {
         "items": [{"id": "a=Alpha", "label": "a=Alpha"}, {"id": "b=Beta", "label": "b=Beta"}], "prompt": "choose"}});
     let results = vec![
@@ -2987,7 +2987,7 @@ fn a_blocking_pick_polls_until_it_resolves() -> TestResult {
 fn pick_refuses_stdin_that_is_neither_text_nor_an_item_array() -> TestResult {
     let dir = short_dir()?;
     // nothing listens here: a sent request would fail to connect instead
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let (code, stdout, stderr) = outcome(&run_with_input(dir.path(), &socket, &["pick"], &[0xFF, b'\n'])?);
     assert_eq!((code, stdout.as_str()), (Some(64), ""));
     assert!(
@@ -3006,7 +3006,7 @@ fn pick_refuses_stdin_that_is_neither_text_nor_an_item_array() -> TestResult {
 #[test]
 fn ask_without_blocking_prints_the_id_and_result_reads_each_outcome() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let open = serde_json::json!({"cmd": "ask.open", "target": "s1", "args": {
         "buttons": [{"id": "yes", "label": "Yes"}, {"id": "no", "label": "no"}], "style": "terminal",
         "align": "right", "title": "Proceed?"}});
@@ -3055,7 +3055,7 @@ fn ask_without_blocking_prints_the_id_and_result_reads_each_outcome() -> TestRes
 #[test]
 fn a_blocking_ask_polls_until_it_is_cancelled() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let open = serde_json::json!({"cmd": "ask.open", "target": "s1", "args": {
         "buttons": [{"id": "ok", "label": "ok"}], "style": "terminal", "align": "right", "title": "Wait here"}});
     let results = vec![
@@ -3071,14 +3071,14 @@ fn a_blocking_ask_polls_until_it_is_cancelled() -> TestResult {
     Ok(())
 }
 
-const ASK_OPEN_USAGE: &str = "Usage: agtermctl ask open [<options>] <title>\n  See 'agtermctl ask open --help' for more \
+const ASK_OPEN_USAGE: &str = "Usage: ngtermctl ask open [<options>] <title>\n  See 'ngtermctl ask open --help' for more \
                               information.\n";
 
 #[test]
 fn ask_refusals_are_usage_errors_before_connecting() -> TestResult {
     let dir = short_dir()?;
     // nothing listens here: a sent request would exit 1, not 64
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let cases: [(&[&str], &str); 4] = [
         (&["ask", "--no-block", "Proceed?"], "ask requires at least one --button"),
         (
@@ -3111,7 +3111,7 @@ OVERVIEW: Open, poll, or cancel a themed question dialog.
 
 Use ask open TITLE when the title is 'open', 'result', or 'cancel'.
 
-USAGE: agtermctl ask <subcommand>
+USAGE: ngtermctl ask <subcommand>
 
 OPTIONS:
   -h, --help              Show help information.
@@ -3121,13 +3121,13 @@ SUBCOMMANDS:
   result                  Print a dialog's current or terminal result as JSON.
   cancel                  Cancel a dialog without answering a button.
 
-  See 'agtermctl help ask <subcommand>' for detailed help.
+  See 'ngtermctl help ask <subcommand>' for detailed help.
 ";
 
 const PICK_HELP: &str = "\
 OVERVIEW: Open, poll, or cancel a native fuzzy picker.
 
-USAGE: agtermctl pick <subcommand>
+USAGE: ngtermctl pick <subcommand>
 
 OPTIONS:
   -h, --help              Show help information.
@@ -3138,7 +3138,7 @@ SUBCOMMANDS:
   result                  Print a picker's current or terminal result as JSON.
   cancel                  Cancel a pending picker.
 
-  See 'agtermctl help pick <subcommand>' for detailed help.
+  See 'ngtermctl help pick <subcommand>' for detailed help.
 ";
 
 #[test]
@@ -3194,7 +3194,7 @@ fn overlay_host(
 #[test]
 fn a_blocked_overlay_program_exits_with_its_status_and_prints_nothing() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let open = serde_json::json!({"cmd": "session.overlay.open", "target": OVERLAY_SESSION,
                                   "args": {"command": "exit 5"}});
     let results = vec![
@@ -3257,7 +3257,7 @@ fn a_blocked_overlay_program_without_a_status_or_refused_exits_1() -> TestResult
 #[test]
 fn an_overlay_program_result_prints_its_exit_status() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let expected = serde_json::json!({"cmd": "session.overlay.result", "target": OVERLAY_SESSION});
     let _server = scripted(
         &socket,
@@ -3332,7 +3332,7 @@ fn a_blocked_page_prints_its_outcome_and_a_page_result_reads_it_again() -> TestR
 #[test]
 fn an_unclaimable_job_exits_1_having_launched_nothing() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let _server = serve(&socket, (), |(), request| {
         let sent = serde_json::to_value(&request).unwrap_or_default();
         if sent == serde_json::json!({"cmd": "session.overlay.job.run", "target": "J1"}) {
@@ -3348,17 +3348,17 @@ fn an_unclaimable_job_exits_1_having_launched_nothing() -> TestResult {
     Ok(())
 }
 
-const OVERLAY_OPEN_USAGE: &str = "Usage: agtermctl session overlay open [<options>] [<command>]\n  See 'agtermctl session \
+const OVERLAY_OPEN_USAGE: &str = "Usage: ngtermctl session overlay open [<options>] [<command>]\n  See 'ngtermctl session \
                                   overlay open --help' for more information.\n";
-const OVERLAY_RESIZE_USAGE: &str = "Usage: agtermctl session overlay resize [--size-percent <size-percent>] [--full] \
+const OVERLAY_RESIZE_USAGE: &str = "Usage: ngtermctl session overlay resize [--size-percent <size-percent>] [--full] \
                                     [--target <target>] [--socket <socket>] [--json] [--window <window>]\n  See \
-                                    'agtermctl session overlay resize --help' for more information.\n";
+                                    'ngtermctl session overlay resize --help' for more information.\n";
 
 #[test]
 fn overlay_refusals_are_usage_errors_before_connecting() -> TestResult {
     let dir = short_dir()?;
     // nothing listens here: a connection attempt would exit 1, not 64
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let cases: [(&[&str], &str, &str); 4] = [
         (
             &[
@@ -3411,7 +3411,7 @@ const OVERLAY_HELP: &str = "\
 OVERVIEW: Open, read, resize, or close an ephemeral overlay terminal on a
 session.
 
-USAGE: agtermctl session overlay <subcommand>
+USAGE: ngtermctl session overlay <subcommand>
 
 OPTIONS:
   -h, --help              Show help information.
@@ -3439,7 +3439,7 @@ SUBCOMMANDS:
   run-job                 Run a remote overlay job this app handed to another
                           Mac.
 
-  See 'agtermctl help session overlay <subcommand>' for detailed help.
+  See 'ngtermctl help session overlay <subcommand>' for detailed help.
 ";
 
 const OVERLAY_RUN_JOB_HELP: &str = "\
@@ -3451,7 +3451,7 @@ terminal, and reports how it ended. It is not meant to be run by hand. A job
 that cannot be claimed exits 1 having launched nothing, one whose program
 cannot be launched exits 127, and otherwise it exits with the program's status.
 
-USAGE: agtermctl session overlay run-job <job> [--socket <socket>] [--json]
+USAGE: ngtermctl session overlay run-job <job> [--socket <socket>] [--json]
 
 ARGUMENTS:
   <job>                   The job id the other Mac was handed.
@@ -3487,7 +3487,7 @@ fn overlay_help_in_the_argument_parser_layout() -> TestResult {
 const SIDEBAR_HELP: &str = "\
 OVERVIEW: Sidebar visibility and view mode.
 
-USAGE: agtermctl sidebar <subcommand>
+USAGE: ngtermctl sidebar <subcommand>
 
 OPTIONS:
   -h, --help              Show help information.
@@ -3500,13 +3500,13 @@ SUBCOMMANDS:
   collapse                Collapse all workspaces except the active one.
   width                   Set the sidebar width in points.
 
-  See 'agtermctl help sidebar <subcommand>' for detailed help.
+  See 'ngtermctl help sidebar <subcommand>' for detailed help.
 ";
 
 const SIDEBAR_WIDTH_HELP: &str = "\
 OVERVIEW: Set the sidebar width in points.
 
-USAGE: agtermctl sidebar width <points> [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl sidebar width <points> [--socket <socket>] [--json] [--window <window>]
 
 ARGUMENTS:
   <points>                Sidebar width in points, clamped to the drag range.
@@ -3651,7 +3651,7 @@ fn font_and_theme_commands_send_their_request_and_print_the_reply() -> TestResul
 fn font_and_theme_refusals_are_usage_errors_before_connecting() -> TestResult {
     let dir = short_dir()?;
     // nothing listens here: a connection attempt would exit 1, not 64
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let cases: [(&[&str], &str); 2] = [
         (
             &["font", "inc", "--pane", "middle", "--target", "s1"],
@@ -3666,7 +3666,7 @@ fn font_and_theme_refusals_are_usage_errors_before_connecting() -> TestResult {
         let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, args)?);
         assert_eq!((code, stdout.as_str()), (Some(64), ""), "{args:?}");
         assert!(stderr.starts_with(&format!("Error: {message}\n")), "{stderr}");
-        assert!(stderr.contains("\nUsage: agtermctl "), "{stderr}");
+        assert!(stderr.contains("\nUsage: ngtermctl "), "{stderr}");
     }
     Ok(())
 }
@@ -3756,7 +3756,7 @@ fn keymap_and_hooks_commands_send_their_request_and_print_the_reply() -> TestRes
 fn keymap_and_hooks_usage_errors_come_before_connecting() -> TestResult {
     let dir = short_dir()?;
     // nothing listens here: a connection attempt would exit 1, not 64
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let cases: [&[&str]; 4] = [
         &["keymap", "run"],
         &["keymap", "reload", "--window", "w1"],
@@ -3767,7 +3767,7 @@ fn keymap_and_hooks_usage_errors_come_before_connecting() -> TestResult {
         let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, args)?);
         assert_eq!((code, stdout.as_str()), (Some(64), ""), "{args:?}");
         assert!(stderr.starts_with("Error: "), "{stderr}");
-        assert!(stderr.contains("\nUsage: agtermctl "), "{stderr}");
+        assert!(stderr.contains("\nUsage: ngtermctl "), "{stderr}");
     }
     Ok(())
 }
@@ -3778,7 +3778,7 @@ const BROWSER_HELP: &str = "\
 OVERVIEW: Saved browser storage of --persistent URL overlays, and where clicked
 links open.
 
-USAGE: agtermctl browser <subcommand>
+USAGE: ngtermctl browser <subcommand>
 
 OPTIONS:
   -h, --help              Show help information.
@@ -3789,7 +3789,7 @@ SUBCOMMANDS:
   links                   Set or read where a clicked web link in a terminal
                           opens (browser|overlay).
 
-  See 'agtermctl help browser <subcommand>' for detailed help.
+  See 'ngtermctl help browser <subcommand>' for detailed help.
 ";
 
 const BROWSER_LINKS_HELP: &str = "\
@@ -3801,7 +3801,7 @@ JavaScript, navigation buttons and the saved browser store; with no MODE the
 current one is printed. A link in a HUD, a link clicked while a HUD is up or
 the terminal is zoomed, and a link the overlay cannot show open in the browser.
 
-USAGE: agtermctl browser links [<mode>] [--socket <socket>] [--json]
+USAGE: ngtermctl browser links [<mode>] [--socket <socket>] [--json]
 
 ARGUMENTS:
   <mode>                  Mode: browser or overlay. Omit to read the current
@@ -3821,7 +3821,7 @@ Refused while a --persistent page is open, one in a just-closed session that
 can still be restored included: an open page writes its login back. Removing
 the local data does not sign you out on the server.
 
-USAGE: agtermctl browser clear [--socket <socket>] [--json]
+USAGE: ngtermctl browser clear [--socket <socket>] [--json]
 
 OPTIONS:
   --socket <socket>       Override the control socket path.
@@ -3833,7 +3833,7 @@ OPTIONS:
 const CONFIG_HELP: &str = "\
 OVERVIEW: Config commands.
 
-USAGE: agtermctl config <subcommand>
+USAGE: ngtermctl config <subcommand>
 
 OPTIONS:
   -h, --help              Show help information.
@@ -3842,14 +3842,14 @@ SUBCOMMANDS:
   reload                  Re-read and apply the agterm-scoped ghostty.conf
                           (prints the diagnostic count).
 
-  See 'agtermctl help config <subcommand>' for detailed help.
+  See 'ngtermctl help config <subcommand>' for detailed help.
 ";
 
 const CONFIG_RELOAD_HELP: &str = "\
 OVERVIEW: Re-read and apply the agterm-scoped ghostty.conf (prints the
 diagnostic count).
 
-USAGE: agtermctl config reload [--socket <socket>] [--json]
+USAGE: ngtermctl config reload [--socket <socket>] [--json]
 
 OPTIONS:
   --socket <socket>       Override the control socket path.
@@ -3956,7 +3956,7 @@ fn browser_and_config_commands_send_their_request_and_print_the_reply() -> TestR
 fn browser_and_config_usage_errors_come_before_connecting() -> TestResult {
     let dir = short_dir()?;
     // nothing listens here: a connection attempt would exit 1, not 64
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let cases: [(&[&str], &str); 5] = [
         (&["browser", "links", "tab"], "Error: mode must be browser or overlay\n"),
         (&["browser", "links", "overlay", "--window", "w1"], "Error: "),
@@ -3968,7 +3968,7 @@ fn browser_and_config_usage_errors_come_before_connecting() -> TestResult {
         let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, args)?);
         assert_eq!((code, stdout.as_str()), (Some(64), ""), "{args:?}");
         assert!(stderr.starts_with(prefix), "{stderr}");
-        assert!(stderr.contains("\nUsage: agtermctl "), "{stderr}");
+        assert!(stderr.contains("\nUsage: ngtermctl "), "{stderr}");
     }
     Ok(())
 }
@@ -3978,7 +3978,7 @@ fn browser_and_config_usage_errors_come_before_connecting() -> TestResult {
 const RESTORE_HELP: &str = "\
 OVERVIEW: Restore-running-command commands.
 
-USAGE: agtermctl restore <subcommand>
+USAGE: ngtermctl restore <subcommand>
 
 OPTIONS:
   -h, --help              Show help information.
@@ -3990,7 +3990,7 @@ SUBCOMMANDS:
                           next restart restores plain shells.
   mode                    Read or set what a restart does with your sessions.
 
-  See 'agtermctl help restore <subcommand>' for detailed help.
+  See 'ngtermctl help restore <subcommand>' for detailed help.
 ";
 
 const RESTORE_CAPTURE_HELP: &str = "\
@@ -4017,7 +4017,7 @@ is no per-pane undo.
 This command is available only when this launch is in rerun mode. In
 fresh-shell or live mode it fails and names the active mode.
 
-USAGE: agtermctl restore capture [--socket <socket>] [--json]
+USAGE: ngtermctl restore capture [--socket <socket>] [--json]
 
 OPTIONS:
   --socket <socket>       Override the control socket path.
@@ -4034,11 +4034,11 @@ This is app-global and CAPTURE-scoped: it drops the foreground commands agterm
 captured at quit, across every open window, and leaves per-session
 restore-command overrides alone.
 
-Not to be confused with `agtermctl session restore --clear`, which is
+Not to be confused with `ngtermctl session restore --clear`, which is
 per-session and OVERRIDE-scoped: it drops one pane's pinned command so that
 pane goes back to auto-capture.
 
-USAGE: agtermctl restore clear [--socket <socket>] [--json]
+USAGE: ngtermctl restore clear [--socket <socket>] [--json]
 
 OPTIONS:
   --socket <socket>       Override the control socket path.
@@ -4068,7 +4068,7 @@ Switching away from live and restarting ends every detached live process in
 this state directory. If live was requested but could not be used, the reason
 is reported here.
 
-USAGE: agtermctl restore mode [<mode>] [--socket <socket>] [--json]
+USAGE: ngtermctl restore mode [<mode>] [--socket <socket>] [--json]
 
 ARGUMENTS:
   <mode>                  none|rerun|live. Omit to read the current policy.
@@ -4178,12 +4178,12 @@ fn restore_commands_send_their_request_and_print_the_reply() -> TestResult {
 fn restore_usage_errors_come_before_connecting() -> TestResult {
     let dir = short_dir()?;
     // nothing listens here: a connection attempt would exit 1, not 64
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let cases: [(&[&str], &str); 5] = [
         (
             &["restore", "mode", "fresh"],
-            "Error: mode must be none, rerun, or live\nUsage: agtermctl restore mode [<mode>] [--socket <socket>] \
-             [--json]\n  See 'agtermctl restore mode --help' for more information.\n",
+            "Error: mode must be none, rerun, or live\nUsage: ngtermctl restore mode [<mode>] [--socket <socket>] \
+             [--json]\n  See 'ngtermctl restore mode --help' for more information.\n",
         ),
         (&["restore", "mode", "live", "--window", "w1"], "Error: "),
         (&["restore", "capture", "--window", "w1"], "Error: "),
@@ -4194,7 +4194,7 @@ fn restore_usage_errors_come_before_connecting() -> TestResult {
         let (code, stdout, stderr) = outcome(&run_on(dir.path(), &socket, args)?);
         assert_eq!((code, stdout.as_str()), (Some(64), ""), "{args:?}");
         assert!(stderr.starts_with(prefix), "{stderr}");
-        assert!(stderr.contains("\nUsage: agtermctl "), "{stderr}");
+        assert!(stderr.contains("\nUsage: ngtermctl "), "{stderr}");
     }
     Ok(())
 }
@@ -4202,7 +4202,7 @@ fn restore_usage_errors_come_before_connecting() -> TestResult {
 #[test]
 fn sidebar_width_json_prints_the_result_and_a_refusal_exits_1() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let expected = serde_json::json!({"cmd": "sidebar.width", "args": {"window": "w1", "sidebarWidth": 301.5}});
     let _server = scripted(&socket, expected, serde_json::json!({"sidebarWidth": 301.5}))?;
     let json = run_on(
@@ -4227,12 +4227,12 @@ fn sidebar_width_json_prints_the_result_and_a_refusal_exits_1() -> TestResult {
 fn sidebar_refusals_are_usage_errors_before_connecting() -> TestResult {
     let dir = short_dir()?;
     // nothing listens here: a connection attempt would exit 1, not 64
-    let socket = dir.path().join("agterm.sock");
-    let width = "Usage: agtermctl sidebar width <points> [--socket <socket>] [--json] [--window <window>]\n  See \
-                 'agtermctl sidebar width --help' for more information.\n";
-    let mode = "Usage: agtermctl sidebar mode [<mode>] [--socket <socket>] [--json]\n  See 'agtermctl sidebar mode \
+    let socket = dir.path().join("ngterm.sock");
+    let width = "Usage: ngtermctl sidebar width <points> [--socket <socket>] [--json] [--window <window>]\n  See \
+                 'ngtermctl sidebar width --help' for more information.\n";
+    let mode = "Usage: ngtermctl sidebar mode [<mode>] [--socket <socket>] [--json]\n  See 'ngtermctl sidebar mode \
                 --help' for more information.\n";
-    let layout = "Usage: agtermctl sidebar flagged-layout [<layout>] [--socket <socket>] [--json]\n  See 'agtermctl \
+    let layout = "Usage: ngtermctl sidebar flagged-layout [<layout>] [--socket <socket>] [--json]\n  See 'ngtermctl \
                   sidebar flagged-layout --help' for more information.\n";
     let cases: [(&[&str], String); 4] = [
         (

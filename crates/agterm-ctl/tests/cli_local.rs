@@ -1,4 +1,4 @@
-//! The two local-only subcommands, `clipboard set` and `terminfo install`, run as the built `agtermctl` next to an
+//! The two local-only subcommands, `clipboard set` and `terminfo install`, run as the built `ngtermctl` next to an
 //! in-process control server they must never talk to. Everything they touch is sandboxed: the CLI runs from a stage
 //! under cargo's test temp dir with a fake `zmx` beside it, `ssh` is a fake first on `PATH` whose remote side is a
 //! temp `HOME`, and no `AGTERM_*` or `ZMX_*` variable of the caller reaches a run, so neither a real pane nor the
@@ -20,12 +20,12 @@ use tempfile::TempDir;
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
-const AGTERMCTL: &str = env!("CARGO_BIN_EXE_agtermctl");
+const AGTERMCTL: &str = env!("CARGO_BIN_EXE_ngtermctl");
 const ENTRY: &str = "xterm-ghostty";
 const NOT_LIVE: &str = "this pane has no zmx daemon; run it in a main or split pane started under Live sessions";
 const DAEMON: &str = "agterm-357e181888f34450b5c225bd00239b9b";
 
-/// A server on `<state>/agterm.sock`, the socket the CLI would resolve from `AGTERM_STATE_DIR`, counting the requests
+/// A server on `<state>/ngterm.sock`, the socket the CLI would resolve from `AGTERM_STATE_DIR`, counting the requests
 /// it is sent. Fields drop top to bottom: the server stops before its main loop.
 struct Watched {
     _server: ControlServer,
@@ -38,7 +38,7 @@ impl Watched {
         let main_loop = Arc::new(FakeMainLoop::spawn(())?);
         let requests = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&requests);
-        let mut server = ControlServer::new(state.join("agterm.sock"));
+        let mut server = ControlServer::new(state.join("ngterm.sock"));
         server.start(Arc::clone(&main_loop) as Arc<dyn MainLoop<()>>, move |(), _| {
             counter.fetch_add(1, Ordering::SeqCst);
             Response::failure("a local command reached the socket").into()
@@ -55,7 +55,7 @@ impl Watched {
     }
 }
 
-/// One sandbox: a short state dir in `/tmp` for the socket, and a stage (`bin/agtermctl`, optionally `bin/zmx` and
+/// One sandbox: a short state dir in `/tmp` for the socket, and a stage (`bin/ngtermctl`, optionally `bin/zmx` and
 /// `share/terminfo`) plus a remote `HOME` under cargo's test temp dir, on the build's own filesystem so the CLI can be
 /// hard-linked rather than copied.
 struct Sandbox {
@@ -71,7 +71,7 @@ impl Sandbox {
             .tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
         let bin = root.path().join("stage/bin");
         fs::create_dir_all(&bin)?;
-        let client = bin.join("agtermctl");
+        let client = bin.join("ngtermctl");
         if fs::hard_link(AGTERMCTL, &client).is_err() {
             fs::copy(AGTERMCTL, &client)?;
         }
@@ -137,11 +137,11 @@ impl Sandbox {
         )
     }
 
-    /// Runs the staged CLI (through `/bin/sh -c 'PREFIX exec agtermctl "$@"'` when `prefix` is given) with stdin
+    /// Runs the staged CLI (through `/bin/sh -c 'PREFIX exec ngtermctl "$@"'` when `prefix` is given) with stdin
     /// `input`, the caller's `AGTERM_*` and `ZMX_*` removed, `AGTERM_STATE_DIR` naming the watched server, the fake
     /// ssh first on `PATH`, and `env` on top.
     fn run(&self, prefix: Option<&str>, args: &[&str], env: &[(&str, &str)], input: &[u8]) -> TestResult<Output> {
-        let client = self.path("stage/bin/agtermctl");
+        let client = self.path("stage/bin/ngtermctl");
         let mut command = match prefix {
             Some(prefix) => {
                 let mut shell = Command::new("/bin/sh");
@@ -236,7 +236,7 @@ fn clipboard_set_checks_the_text_before_the_pane() -> TestResult {
         outcome(&sandbox.run(None, &["clipboard", "set"], &[], &large)?),
         failed("text is too large to copy through the terminal: 8400000 bytes encoded, the limit is 8388544")
     );
-    let socket = sandbox.state.path().join("agterm.sock");
+    let socket = sandbox.state.path().join("ngterm.sock");
     let refused = sandbox.run(
         None,
         &["clipboard", "set", "--socket", &socket.display().to_string(), "hello"],
@@ -248,7 +248,7 @@ fn clipboard_set_checks_the_text_before_the_pane() -> TestResult {
         (
             Some(64),
             String::new(),
-            "Error: Unknown option '--socket'\nUsage: agtermctl clipboard set [<text>]\n  See 'agtermctl clipboard set \
+            "Error: Unknown option '--socket'\nUsage: ngtermctl clipboard set [<text>]\n  See 'ngtermctl clipboard set \
              --help' for more information.\n"
                 .to_owned()
         )
@@ -292,7 +292,7 @@ fn clipboard_set_reports_zmx_failing_or_missing() -> TestResult {
     let zmx = fs::canonicalize(sandbox.path("stage/bin"))?.join("zmx");
     assert_eq!(
         outcome(&sandbox.run(None, &["clipboard", "set", "hi"], &live, b"")?),
-        failed(&format!("no zmx next to this agtermctl; looked for {}", zmx.display()))
+        failed(&format!("no zmx next to this ngtermctl; looked for {}", zmx.display()))
     );
     Sandbox::script(&zmx, "cat >/dev/null\necho 'session not found' >&2\nexit 3")?;
     assert_eq!(
@@ -409,8 +409,8 @@ fn terminfo_install_refuses_a_destination_ssh_would_misread() -> TestResult {
     for destination in ["-oProxyCommand=x", "two words", ""] {
         let output = sandbox.run(None, &["terminfo", "install", "--", destination], &[], b"")?;
         let expected = format!(
-            "Error: destination must be a host, user@host or an ssh alias, not '{destination}'\nUsage: agtermctl \
-             terminfo install <destination> [-p <port>] [-i <file> ...] [-J <host>] [-F <file>]\n  See 'agtermctl \
+            "Error: destination must be a host, user@host or an ssh alias, not '{destination}'\nUsage: ngtermctl \
+             terminfo install <destination> [-p <port>] [-i <file> ...] [-J <host>] [-F <file>]\n  See 'ngtermctl \
              terminfo install --help' for more information.\n"
         );
         assert_eq!(outcome(&output), (Some(64), String::new(), expected), "{destination:?}");
@@ -429,7 +429,7 @@ fn terminfo_install_without_an_entry_says_where_it_looked() -> TestResult {
     let empty_text = empty.display().to_string();
     let output = sandbox.run(None, &["terminfo", "install", "box"], &[("TERMINFO", &empty_text)], b"")?;
     let message = format!(
-        "no xterm-ghostty terminfo entry next to this agtermctl; looked in {}, {empty_text}",
+        "no xterm-ghostty terminfo entry next to this ngtermctl; looked in {}, {empty_text}",
         database.display()
     );
     assert_eq!(outcome(&output), failed(&message));

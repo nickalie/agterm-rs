@@ -1,4 +1,4 @@
-//! `agtermctl hooks reload|list` (`agtermctlKit/MiscCommands.swift` `Hooks`): app-global like the keymap commands, so
+//! `ngtermctl hooks reload|list` (`agtermctlKit/MiscCommands.swift` `Hooks`): app-global like the keymap commands, so
 //! neither takes `--window`. `list` prints through [`format_hooks`], `reload` its diagnostic count through
 //! [`crate::output`]'s `count` branch.
 
@@ -9,7 +9,7 @@ use agterm_proto::{Command, Request};
 
 use crate::{BasicOptions, Failure, RequestCommand};
 
-/// `agtermctl hooks <subcommand>`.
+/// `ngtermctl hooks <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Event hook commands.",
@@ -57,7 +57,7 @@ fn bare_request(cmd: HooksCmd) -> Request {
     }
 }
 
-/// `agtermctl hooks reload`: prints the diagnostic count, `ok` for none.
+/// `ngtermctl hooks reload`: prints the diagnostic count, `ok` for none.
 #[derive(Debug, clap::Args)]
 #[command(about = "Re-read and apply hooks.conf (prints the diagnostic count).")]
 pub struct Reload {
@@ -75,7 +75,7 @@ impl RequestCommand for Reload {
     }
 }
 
-/// `agtermctl hooks list`.
+/// `ngtermctl hooks list`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Show every hook with its running child, queue depth, dropped count and last failure.",
@@ -172,9 +172,9 @@ mod tests {
     use super::*;
     use crate::{Agtermctl, Command as Cli};
 
-    /// `agtermctl hooks <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
+    /// `ngtermctl hooks <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
     fn outcome(argv: &[&str]) -> Result<Value, String> {
-        let line = ["agtermctl", "hooks"].iter().chain(argv).copied();
+        let line = ["ngtermctl", "hooks"].iter().chain(argv).copied();
         let parsed = Agtermctl::try_parse_from(line).map_err(|error| error.to_string())?;
         let Cli::Hooks(group) = parsed.command else {
             panic!("not a hooks command")

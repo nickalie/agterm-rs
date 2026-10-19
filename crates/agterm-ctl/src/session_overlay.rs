@@ -1,4 +1,4 @@
-//! `agtermctl session overlay ...` (`agtermctlKit/SessionCommands.swift` `Session.Overlay`): the ephemeral overlay
+//! `ngtermctl session overlay ...` (`agtermctlKit/SessionCommands.swift` `Session.Overlay`): the ephemeral overlay
 //! over a session or one of its split panes. This module holds the group and its program side (`open`, `close`,
 //! `resize`, `result`, `copy`, `text`); [`crate::overlay_page`] holds the HTML page side (`reload`, `submit`,
 //! `navigate`, the page `--block` and `result --page`), and [`crate::overlay_job`] the `run-job` helper.
@@ -39,7 +39,7 @@ const BROWSE_HELP: &str = "With --url, let the page leave its first site: links,
                            any http or https address, and the strip names the site shown. Without it the page stays \
                            on the site it opened.";
 
-/// `agtermctl session overlay <subcommand>`.
+/// `ngtermctl session overlay <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Open, read, resize, or close an ephemeral overlay terminal on a session.",
@@ -92,7 +92,7 @@ fn exit_byte(code: i64) -> u8 {
 
 // MARK: - open
 
-/// `agtermctl session overlay open [<command>]`: a program, or a page with `--html`/`--url`; `--background-color` rides
+/// `ngtermctl session overlay open [<command>]`: a program, or a page with `--html`/`--url`; `--background-color` rides
 /// the wire as `color`.
 #[derive(Debug, clap::Args)]
 #[command(
@@ -364,7 +364,7 @@ impl RequestCommand for Open {
 
 // MARK: - close, resize
 
-/// `agtermctl session overlay close`.
+/// `ngtermctl session overlay close`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Close the overlay terminal (destroys it; for one shown on another Mac, requests its cancel).")]
 pub struct Close {
@@ -409,7 +409,7 @@ impl RequestCommand for Close {
     }
 }
 
-/// `agtermctl session overlay resize`: exactly one of `--size-percent` and `--full`.
+/// `ngtermctl session overlay resize`: exactly one of `--size-percent` and `--full`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Resize an open overlay: floating at a percent, or back to full-pane.")]
 pub struct Resize {
@@ -456,7 +456,7 @@ impl RequestCommand for Resize {
 
 // MARK: - result, copy, text
 
-/// `agtermctl session overlay result`: a program's `exit N`, or with `--page` a page's outcome, printed and exited as
+/// `ngtermctl session overlay result`: a program's `exit N`, or with `--page` a page's outcome, printed and exited as
 /// a `--block` page prints and exits.
 #[derive(Debug, clap::Args)]
 #[command(about = "Print the overlay program's exit status, or with --page an HTML page's outcome.")]
@@ -522,7 +522,7 @@ impl RequestCommand for ResultCommand {
     }
 }
 
-/// `agtermctl session overlay copy`.
+/// `ngtermctl session overlay copy`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Print the selection made INSIDE the overlay (session copy reads the pane underneath).")]
 pub struct Copy {
@@ -559,7 +559,7 @@ impl RequestCommand for Copy {
     }
 }
 
-/// `agtermctl session overlay text`.
+/// `ngtermctl session overlay text`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Print the overlay's terminal buffer as plain text (a TUI's drawn screen, wrapped as rendered).")]
 pub struct Text {
@@ -627,16 +627,16 @@ mod tests {
     use crate::modal::tests::{FakeIo, answer, reply};
     use crate::{Agtermctl, Command as Cli};
 
-    /// `agtermctl session overlay <argv>`.
+    /// `ngtermctl session overlay <argv>`.
     fn command_line(argv: &[&str]) -> Vec<OsString> {
-        ["agtermctl", "session", "overlay"]
+        ["ngtermctl", "session", "overlay"]
             .iter()
             .chain(argv)
             .map(OsString::from)
             .collect()
     }
 
-    /// `agtermctl session overlay <argv>` parsed and validated: the request it builds as JSON, or the refusal.
+    /// `ngtermctl session overlay <argv>` parsed and validated: the request it builds as JSON, or the refusal.
     fn outcome(argv: &[&str]) -> Result<Value, String> {
         let parsed = Agtermctl::try_parse_from(command_line(argv)).map_err(|error| error.to_string())?;
         let Cli::Session(group) = parsed.command else {

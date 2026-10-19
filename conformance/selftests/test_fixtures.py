@@ -462,7 +462,7 @@ def test_cli_local_refuses_a_default_it_cannot_place_under_the_root(ctl: Ctl, fa
         cli.local("version", env=without)
     with pytest.raises(SocketOutsideRoot):
         cli.local("version", env=without, default_socket=tmp_path / "agterm.sock")
-    default = ctl.instance.home / ".local/share/agterm/agterm.sock"
+    default = ctl.instance.home / ".local/share/ngterm/ngterm.sock"
     assert cli.local("version", env=without, default_socket=default).json()["env"]["AGTERM_STATE_DIR"] is None
 
 

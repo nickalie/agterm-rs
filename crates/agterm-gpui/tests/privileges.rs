@@ -88,7 +88,7 @@ fn report_command(path: &Path) -> String {
 
 /// One control request; its result, or its error as the test's.
 fn call(sandbox: &Sandbox, cmd: &str, target: Option<&str>, args: Value) -> TestResult<Value> {
-    let mut socket = std::os::unix::net::UnixStream::connect(sandbox.path("state/agterm.sock"))?;
+    let mut socket = std::os::unix::net::UnixStream::connect(sandbox.path("state/ngterm.sock"))?;
     socket.set_read_timeout(Some(DEADLINE))?;
     let mut request = json!({ "cmd": cmd });
     if let Some(target) = target {

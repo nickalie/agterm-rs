@@ -180,7 +180,7 @@ draws itself, after upstream: windows, titlebar, sidebar, splits, quick terminal
 | `gtk-titlebar-style` | native or tabs titlebar | `apprt/gtk/class/window.zig` |
 | `gtk-toolbar-style` | flat, raised or raised-border toolbar | `apprt/gtk/class/window.zig` |
 | `gtk-wide-tabs` | wide tabs | `apprt/gtk/class/window.zig` |
-| `class` | the GTK application id | `apprt/gtk/class/application.zig`; agterm keeps the app id `io.github.melonamin.agterm` |
+| `class` | the GTK application id | `apprt/gtk/class/application.zig`; agterm keeps the app id `com.nickalie.ngterm` |
 | `x11-instance-name` | the X11 WM_CLASS instance | Ghostty GTK runtime |
 | `language` | the UI language | `apprt/gtk/class/application.zig` |
 | `async-backend` | the event loop backend (epoll, io_uring) | `apprt/gtk/class/application.zig` |

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Assemble the staging layout the conformance runner, scripts/run-gpui-dev.sh and the install check run from:
 #
-#   bin/{agterm,agtermctl,zmx}  share/ghostty/{themes,shell-integration}  share/terminfo
-#   share/agterm/zmx-BUILD (the staged zmx's build id, with bin/zmx)  share/agterm/{agent-status,skills/agterm}
+#   bin/{agterm,ngtermctl,zmx}  share/ghostty/{themes,shell-integration}  share/terminfo
+#   share/ngterm/zmx-BUILD (the staged zmx's build id, with bin/zmx)  share/ngterm/{agent-status,skills/agterm}
 #
 # from cargo's target dir and the vendored prefixes, plus agterm's own themes from build/themes and the agent
-# integrations' payloads from resources/. Binaries are staged when they exist (agterm and agtermctl appear with
+# integrations' payloads from resources/. Binaries are staged when they exist (agterm and ngtermctl appear with
 # their crates, zmx once scripts/build-zmx.sh filled its prefix); Ghostty's resources are required. There is no lib/:
 # libghostty-vt is linked statically. The terminfo, themes and shell integration are Ghostty's at LIBGHOSTTY_VT_REV,
 # from the libghostty-vt prefix (scripts/build-ghostty-vt.sh).
@@ -48,7 +48,7 @@ cp -R "$GHOSTTY/share/ghostty/themes" "$GHOSTTY/share/ghostty/shell-integration"
 cp -R "$GHOSTTY/share/terminfo" "$DEST/share/terminfo"
 
 staged=()
-for binary in agterm agtermctl; do
+for binary in agterm ngtermctl; do
   if [[ -x "$TARGET/$binary" ]]; then
     install -m755 "$TARGET/$binary" "$DEST/bin/$binary"
     staged+=("$binary")
@@ -59,7 +59,7 @@ if [[ -x "$NATIVE_ROOT/scripts/build-zmx.sh" ]]; then
   # only a complete prefix: a zmx without its build id would read as one predating every Live sessions update
   if "$NATIVE_ROOT/scripts/build-zmx.sh" --verify; then
     install -m755 "$ZMX_PREFIX/bin/zmx" "$DEST/bin/zmx"
-    install -Dm644 "$ZMX_PREFIX/share/agterm/zmx-BUILD" "$DEST/share/agterm/zmx-BUILD"
+    install -Dm644 "$ZMX_PREFIX/share/ngterm/zmx-BUILD" "$DEST/share/ngterm/zmx-BUILD"
     staged+=(zmx)
   fi
 fi
@@ -69,8 +69,8 @@ verify_ghostty_resources "$DEST/share" >&2
 # (upstream's stage_custom_themes)
 install -m644 "$NATIVE_ROOT"/build/themes/* "$DEST/share/ghostty/themes/"
 # the agent integrations' payloads (upstream's agent-status package and agent skill, see resources/): the Help menu
-# installers copy them from share/agterm
-mkdir -p "$DEST/share/agterm/skills"
-cp -R "$NATIVE_ROOT/resources/agent-status" "$DEST/share/agterm/agent-status"
-cp -R "$NATIVE_ROOT/resources/skills/agterm" "$DEST/share/agterm/skills/agterm"
+# installers copy them from share/ngterm
+mkdir -p "$DEST/share/ngterm/skills"
+cp -R "$NATIVE_ROOT/resources/agent-status" "$DEST/share/ngterm/agent-status"
+cp -R "$NATIVE_ROOT/resources/skills/agterm" "$DEST/share/ngterm/skills/agterm"
 echo "→ staged ${staged[*]:-no binaries} ($PROFILE) into $DEST" >&2

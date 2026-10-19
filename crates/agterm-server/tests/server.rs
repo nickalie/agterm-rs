@@ -87,7 +87,7 @@ where
     H: Fn(&mut S, Request) -> Reply + Send + Sync + 'static,
 {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     let main_loop = Arc::new(main_loop);
     let mut server = ControlServer::new(&socket).with_deadlines(deadlines);
     server.start(Arc::clone(&main_loop) as Arc<dyn MainLoop<S>>, handler)?;
@@ -459,7 +459,7 @@ fn second_server_refuses_and_the_first_survives() -> TestResult {
     assert!(second.is_refused());
     assert_eq!(
         second.advertised_path(),
-        dir_join(&fixture.dir, "agterm.sock.unavailable")
+        dir_join(&fixture.dir, "ngterm.sock.unavailable")
     );
     let main_loop: Arc<dyn MainLoop<Core>> = Arc::new(core_loop()?);
     let error = second.start(main_loop, core_handler()).err();
@@ -501,7 +501,7 @@ fn stop_removes_the_socket_and_releases_the_lock() -> TestResult {
 #[test]
 fn stale_socket_file_is_replaced() -> TestResult {
     let dir = short_dir()?;
-    let socket = dir.path().join("agterm.sock");
+    let socket = dir.path().join("ngterm.sock");
     fs::write(&socket, b"left over by a crashed instance")?;
     let mut server = ControlServer::new(&socket);
     server.start(Arc::new(core_loop()?) as Arc<dyn MainLoop<Core>>, core_handler())?;

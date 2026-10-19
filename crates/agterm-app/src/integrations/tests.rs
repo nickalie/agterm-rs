@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use super::hooks::{
     self, ClaudePlan, CodexPlan, CodexResult, OpenCodePlan, OpenCodeResult, OpenCodeStart, PiPlan, PiResult,
 };
-use super::hooks_config::{RC_MARKER_BEGIN, WRAPPER_NAME};
+use super::hooks_config::{
+    self as config, CodexMerge, FISH_INTEGRATION_RELATIVE_PATH, INTEGRATION_RELATIVE_PATH, RC_MARKER_BEGIN,
+    WRAPPER_NAME,
+};
 use super::opencode::{Probe, Version};
 use super::{Environment, files, skill};
 
@@ -17,7 +20,7 @@ fn resources() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources")
 }
 
-/// A temp home with the checkout's bundled resources and a fake bundled `agtermctl`.
+/// A temp home with the checkout's bundled resources and a fake bundled `ngtermctl`.
 struct Home {
     _dir: tempfile::TempDir,
     env: Environment,
@@ -28,7 +31,7 @@ impl Home {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         fs::create_dir_all(&home).unwrap();
-        let tool = dir.path().join("stage/bin/agtermctl");
+        let tool = dir.path().join("stage/bin/ngtermctl");
         fs::create_dir_all(tool.parent().unwrap()).unwrap();
         fs::write(&tool, "#!/bin/sh\n").unwrap();
         Self {
@@ -93,7 +96,7 @@ fn the_plan_detects_each_agent_and_writes_nothing() {
     let plan = hooks::plan(&home.env, &no_opencode(&home), None).unwrap();
 
     assert_eq!(home.snapshot(), before, "planning writes nothing");
-    assert!(!home.path(".config/agterm").exists());
+    assert!(!home.path(".config/ngterm").exists());
     assert!(
         matches!(&plan.claude, ClaudePlan::Merge(write) if write.backup.as_deref() == Some("{\"model\": \"opus\"}\n"))
     );
@@ -113,7 +116,7 @@ fn the_plan_detects_each_agent_and_writes_nothing() {
         [home.path(".zshrc"), home.path(".bashrc")],
         "fish only once ~/.config/fish exists"
     );
-    assert_eq!(plan.script_dir, home.path(".config/agterm/agent-status"));
+    assert_eq!(plan.script_dir, home.path(".config/ngterm/agent-status"));
     assert_eq!(
         plan.bake.as_deref(),
         home.env.bundled_cli.as_deref().and_then(Path::to_str)
@@ -135,7 +138,7 @@ fn a_fresh_install_wires_every_present_agent() {
     assert_eq!(outcome.codex, CodexResult::Merged);
     assert_eq!(outcome.pi, PiResult::Installed);
     assert_eq!(outcome.is_warning(), outcome.opencode.is_warning());
-    let script_dir = home.path(".config/agterm/agent-status");
+    let script_dir = home.path(".config/ngterm/agent-status");
     let text = outcome.text();
     assert!(text.starts_with(&format!("Scripts installed to {}.\n", script_dir.display())));
     assert!(text.ends_with("Open a new terminal for the shell integration to take effect."));
@@ -143,7 +146,7 @@ fn a_fresh_install_wires_every_present_agent() {
 }
 
 fn assert_fresh_install_files(home: &Home) {
-    let wrapper = home.path(".config/agterm/agent-status").join(WRAPPER_NAME);
+    let wrapper = home.path(".config/ngterm/agent-status").join(WRAPPER_NAME);
     assert_eq!(
         files::posix_mode(&wrapper).unwrap() & 0o111,
         0o111,
@@ -202,6 +205,93 @@ fn a_second_install_changes_nothing() {
     assert_eq!(home.snapshot(), after_first);
     assert_eq!(home.read(".zshrc").matches(RC_MARKER_BEGIN).count(), 1);
     assert_eq!(home.read(".codex/config.toml").matches(RC_MARKER_BEGIN).count(), 1);
+}
+
+/// What an install into the legacy directory (the fork's, or this build's before it had its own) left in `home`: every
+/// agent's config calling that directory, and its package there.
+fn install_into_the_legacy_dir(home: &Home) -> String {
+    let legacy = hooks::legacy_script_dir(&home.env.home).display().to_string();
+    let current = hooks::script_dir(&home.env.home).display().to_string();
+    let (claude, _) = config::merge_claude_settings(Some("{\"model\": \"opus\"}\n"), &legacy, &[]).unwrap();
+    home.write(".claude/settings.json", &claude);
+    let CodexMerge::Merged(codex) = config::merge_codex_config("model = \"gpt-5\"\n", &legacy) else {
+        panic!("the legacy Codex block");
+    };
+    home.write(".codex/config.toml", &codex);
+    for (rc, script) in [
+        (".zshrc", INTEGRATION_RELATIVE_PATH),
+        (".bashrc", INTEGRATION_RELATIVE_PATH),
+        (".config/fish/config.fish", FISH_INTEGRATION_RELATIVE_PATH),
+    ] {
+        home.write(rc, &config::append_shell_rc("export FOO=1\n", &legacy, script).0);
+    }
+    // the plugins as the earlier package shipped them: calling the wrapper in its own directory
+    let earlier = |bundled: &str| {
+        let text = fs::read_to_string(resources().join("agent-status").join(bundled)).unwrap();
+        let old = text.replace(".config\", \"ngterm\"", ".config\", \"agterm\"");
+        assert_ne!(old, text, "{bundled} names the script directory");
+        old
+    };
+    home.write(".pi/agent/extensions/agterm-status.ts", &earlier("pi/agterm-status.ts"));
+    home.write(
+        ".config/opencode/plugins/agterm-status.js",
+        &earlier("opencode/agterm-status.js"),
+    );
+    home.write(".config/agterm/agent-status/agterm-agent-status.sh", "#!/bin/sh\n");
+    assert!(!legacy.starts_with(&current) && !current.starts_with(&legacy));
+    legacy
+}
+
+/// A reinstall over an install in the legacy directory moves every reference onto the new one, adds no second set,
+/// leaves the old package for the fork, and a run after it changes nothing.
+#[test]
+fn an_install_over_the_legacy_dir_moves_every_reference() {
+    let home = Home::new();
+    let legacy = install_into_the_legacy_dir(&home);
+    let start = OpenCodeStart::Install(Version::V1);
+
+    let outcome = home.install_hooks(&start, None);
+    assert_eq!(outcome.codex, CodexResult::Merged);
+    assert_eq!(outcome.pi, PiResult::Installed);
+    assert!(matches!(outcome.opencode, OpenCodeResult::Installed(Version::V1, _)));
+    assert_nothing_calls(&home, &legacy);
+    let settings = home.read(".claude/settings.json");
+    assert_eq!(settings.matches("agterm-claude-status.sh").count(), 5, "{settings}");
+    assert_eq!(home.read(".zshrc").matches(RC_MARKER_BEGIN).count(), 1);
+    assert_eq!(home.read(".codex/config.toml").matches(RC_MARKER_BEGIN).count(), 1);
+    assert_eq!(
+        home.read(".pi/agent/extensions/agterm-status.ts"),
+        fs::read_to_string(resources().join("agent-status/pi/agterm-status.ts")).unwrap()
+    );
+    assert_eq!(
+        home.read(".config/agterm/agent-status/agterm-agent-status.sh"),
+        "#!/bin/sh\n"
+    );
+
+    let after_first = home.snapshot();
+    let plan = hooks::plan(&home.env, &start, None).unwrap();
+    assert_eq!(plan.claude, ClaudePlan::Current);
+    assert_eq!(plan.codex, CodexPlan::Current);
+    assert_eq!(plan.pi, PiPlan::Current);
+    assert!(plan.shell_rcs.is_empty());
+    hooks::apply(&plan).unwrap();
+    assert_eq!(home.snapshot(), after_first, "a second run changes nothing");
+}
+
+/// No file in `home` but the legacy package itself and the backups still calls the `legacy` directory.
+fn assert_nothing_calls(home: &Home, legacy: &str) {
+    for (relative, bytes) in home.snapshot() {
+        let text = String::from_utf8_lossy(&bytes);
+        if relative.starts_with(".config/agterm") || relative.extension().is_some_and(|ext| ext == "bak") {
+            continue;
+        }
+        assert!(!text.contains(legacy), "{} still calls {legacy}", relative.display());
+        assert!(
+            !text.contains(".config\", \"agterm\""),
+            "{} still calls the legacy directory",
+            relative.display()
+        );
+    }
 }
 
 #[test]
@@ -275,10 +365,10 @@ fn a_skipped_rc_file_alone_makes_the_install_a_warning() {
 #[test]
 fn a_failed_write_names_the_path_it_stopped_on() {
     let home = Home::new();
-    home.write(".config/agterm", "a file where the directory should be");
+    home.write(".config/ngterm", "a file where the directory should be");
     let plan = hooks::plan(&home.env, &no_opencode(&home), None).unwrap();
     let err = hooks::apply(&plan).unwrap_err();
-    let script_dir = home.path(".config/agterm/agent-status");
+    let script_dir = home.path(".config/ngterm/agent-status");
     assert!(
         err.0.starts_with(&format!(
             "Could not install the scripts into {}: ",
@@ -312,10 +402,10 @@ fn a_symlinked_config_keeps_its_link_and_the_backup_stays_beside_it() {
 #[test]
 fn files_the_package_does_not_ship_survive_a_reinstall() {
     let home = Home::new();
-    home.write(".config/agterm/agent-status/agterm-claude-restore.sh", "#!/bin/sh\n");
+    home.write(".config/ngterm/agent-status/agterm-claude-restore.sh", "#!/bin/sh\n");
     home.install_hooks(&no_opencode(&home), None);
     assert_eq!(
-        home.read(".config/agterm/agent-status/agterm-claude-restore.sh"),
+        home.read(".config/ngterm/agent-status/agterm-claude-restore.sh"),
         "#!/bin/sh\n"
     );
 }
@@ -463,7 +553,7 @@ fn every_alert_line_stays_one_line_and_never_inlines_the_codex_block() {
 fn the_skill_installs_for_each_agent_and_refuses_a_users_skill() {
     let home = Home::new();
     home.mkdir(".claude");
-    home.write(".codex/skills/agterm/SKILL.md", "---\nname: agterm\n---\nmine\n");
+    home.write(".codex/skills/ngterm/SKILL.md", "---\nname: ngterm\n---\nmine\n");
 
     let plan = skill::plan(&home.env).unwrap();
     assert!(!home.path(".claude/skills").exists(), "planning writes nothing");
@@ -477,35 +567,46 @@ fn the_skill_installs_for_each_agent_and_refuses_a_users_skill() {
     assert!(matches!(&plan.targets[1], skill::TargetPlan::UserOwned(target) if target.agent == "Codex"));
     let report = skill::apply(&plan);
 
-    assert_eq!(report.installed, [("Claude Code", home.path(".claude/skills/agterm"))]);
+    assert_eq!(report.installed, [("Claude Code", home.path(".claude/skills/ngterm"))]);
     assert_eq!(report.skipped.len(), 1);
     assert!(report.fresh_skills_dir);
     assert_eq!(
-        files::relative_files(&home.path(".claude/skills/agterm")).unwrap(),
+        files::relative_files(&home.path(".claude/skills/ngterm")).unwrap(),
         files::relative_files(&resources().join("skills/agterm")).unwrap()
     );
     assert_eq!(
-        home.read(".codex/skills/agterm/SKILL.md"),
-        "---\nname: agterm\n---\nmine\n"
+        home.read(".codex/skills/ngterm/SKILL.md"),
+        "---\nname: ngterm\n---\nmine\n"
     );
     assert!(
-        files::posix_mode(&home.path(".claude/skills/agterm/scripts/show-image.sh")).unwrap() & 0o111 != 0,
+        files::posix_mode(&home.path(".claude/skills/ngterm/scripts/show-image.sh")).unwrap() & 0o111 != 0,
         "the helper script stays executable"
     );
+}
+
+/// The fork's `agterm` skill, marked as an install of its own, is a different skill: never replaced or removed.
+#[test]
+fn the_forks_agterm_skill_is_left_alone() {
+    let home = Home::new();
+    let forks = "---\nname: agterm\n---\n<!-- agterm-skill -->\nthe fork's\n";
+    home.write(".claude/skills/agterm/SKILL.md", forks);
+    let report = skill::apply(&skill::plan(&home.env).unwrap());
+    assert_eq!(report.installed, [("Claude Code", home.path(".claude/skills/ngterm"))]);
+    assert_eq!(home.read(".claude/skills/agterm/SKILL.md"), forks);
 }
 
 /// Managed-marker idempotence for the skill: the marked copy is replaced by an identical one.
 #[test]
 fn a_second_skill_install_replaces_its_own_copy() {
     let home = Home::new();
-    home.write(".claude/skills/agterm/stale.md", "from an older build");
-    home.write(".claude/skills/agterm/SKILL.md", "<!-- agterm-skill -->\nold\n");
+    home.write(".claude/skills/ngterm/stale.md", "from an older build");
+    home.write(".claude/skills/ngterm/SKILL.md", "<!-- agterm-skill -->\nold\n");
 
     let report = skill::apply(&skill::plan(&home.env).unwrap());
     assert_eq!(report.installed.len(), 1);
     assert!(!report.fresh_skills_dir);
     assert!(
-        !home.path(".claude/skills/agterm/stale.md").exists(),
+        !home.path(".claude/skills/ngterm/stale.md").exists(),
         "an agterm install is replaced whole"
     );
     let first = home.snapshot();
@@ -517,11 +618,11 @@ fn a_second_skill_install_replaces_its_own_copy() {
 fn a_symlink_at_the_skill_destination_is_the_users() {
     let home = Home::new();
     home.mkdir(".claude/skills");
-    symlink(home.path("nowhere"), home.path(".claude/skills/agterm")).unwrap();
+    symlink(home.path("nowhere"), home.path(".claude/skills/ngterm")).unwrap();
     let report = skill::apply(&skill::plan(&home.env).unwrap());
     assert!(report.installed.is_empty());
     assert!(
-        fs::symlink_metadata(home.path(".claude/skills/agterm")).is_ok(),
+        fs::symlink_metadata(home.path(".claude/skills/ngterm")).is_ok(),
         "the dangling link survives"
     );
 }
@@ -541,6 +642,24 @@ fn the_bundled_resources_carry_their_ownership_markers() {
     }
     let skill_md = fs::read_to_string(resources().join("skills/agterm/SKILL.md")).unwrap();
     assert!(skill_md.contains(skill::MARKER));
+    assert!(
+        skill_md.starts_with(&format!("---\nname: {}\n", skill::SKILL_NAME)),
+        "the frontmatter names the directory the skill installs into"
+    );
+    // the plugins call the wrapper where the install puts it
+    let script_dir = hooks::script_dir(Path::new(""));
+    let segments: Vec<String> = script_dir
+        .iter()
+        .map(|part| format!("\"{}\"", part.to_string_lossy()))
+        .collect();
+    let call = format!("join(homedir(), {}, \"{WRAPPER_NAME}\")", segments.join(", "));
+    for plugin in [
+        "pi/agterm-status.ts",
+        "opencode/agterm-status.js",
+        "opencode/agterm-v2/tui.js",
+    ] {
+        assert!(read(plugin).contains(&call), "{plugin}: {call}");
+    }
     for script in [
         "agterm-agent-status.sh",
         "agterm-claude-status.sh",

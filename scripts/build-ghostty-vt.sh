@@ -10,7 +10,7 @@
 # (scripts/gen-ghostty-vt-bindings.sh), like a pin bump.
 #
 # The prefix holds lib/libghostty-vt.a (linked statically, so staging gains nothing), include/ghostty/,
-# share/doc/ghostty-vt/LICENSE, share/agterm/ghostty-vt-PINS (the LIBGHOSTTY_VT_ pin lines it was built from) and
+# share/doc/ghostty-vt/LICENSE, share/ngterm/ghostty-vt-PINS (the LIBGHOSTTY_VT_ pin lines it was built from) and
 # the resources scripts/stage.sh stages, as Ghostty's own build installs them (src/build/GhosttyResources.zig):
 # share/ghostty/shell-integration from the source, share/ghostty/themes from the theme package the revision's
 # build.zig.zon declares (LIBGHOSTTY_VT_THEMES_*, its sha256 checked), and share/terminfo, the xterm-ghostty entry
@@ -90,11 +90,11 @@ echo "building libghostty-vt with zig $LIBGHOSTTY_VT_ZIG_VERSION..." >&2
 OUT="$BUILD_DIR/src/zig-out"
 [[ -s "$OUT/lib/libghostty-vt.a" ]] || die "the libghostty-vt build did not produce lib/libghostty-vt.a"
 [[ -s "$OUT/include/ghostty/vt.h" ]] || die "the libghostty-vt build did not install include/ghostty/vt.h"
-mkdir -p "$STAGE/lib" "$STAGE/include" "$STAGE/share/doc/ghostty-vt" "$STAGE/share/agterm"
+mkdir -p "$STAGE/lib" "$STAGE/include" "$STAGE/share/doc/ghostty-vt" "$STAGE/share/ngterm"
 cp "$OUT/lib/libghostty-vt.a" "$STAGE/lib/"
 cp -R "$OUT/include/ghostty" "$STAGE/include/ghostty"
 cp "$BUILD_DIR/src/LICENSE" "$STAGE/share/doc/ghostty-vt/LICENSE"
-pin_lines LIBGHOSTTY_VT >"$STAGE/share/agterm/ghostty-vt-PINS"
+pin_lines LIBGHOSTTY_VT >"$STAGE/share/ngterm/ghostty-vt-PINS"
 
 # The resources (the header names them). The vt build installs none of them, so they are taken as Ghostty's full build
 # takes them: the shell integration as is, the themes from the package its build.zig.zon pins, the terminfo encoded by

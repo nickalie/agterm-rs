@@ -59,7 +59,7 @@ sys.stdout.write(value)
 }
 
 read_visible_screen() {
-  "${AGTERMCTL:-agtermctl}" session text \
+  "${AGTERMCTL:-ngtermctl}" session text \
     --target "$AGTERM_SESSION_ID" \
     "${socket_args[@]+"${socket_args[@]}"}" \
     "${pane_args[@]+"${pane_args[@]}"}" 2>/dev/null

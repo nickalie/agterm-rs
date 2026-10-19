@@ -1,7 +1,7 @@
 //! `debug.appearance` (upstream's app-side `ControlServer.setDebugAppearance`): a UI-test-only seam that forces the
 //! app's light/dark appearance so a UI test can drive the real flip path, refused outside a UI-test launch. A set
 //! echoes the side it forced; the bare form reads the side the last config feed applied. Test scaffolding: no
-//! `agtermctl` subcommand.
+//! `ngtermctl` subcommand.
 
 use agterm_proto::{Args, ControlResult, Request};
 

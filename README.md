@@ -1,16 +1,29 @@
 # agterm-rs
 
-agterm in Rust: a GPUI terminal over Ghostty's libghostty-vt, driven by `agtermctl` over a control socket. macOS,
+agterm in Rust: a GPUI terminal over Ghostty's libghostty-vt, driven by `ngtermctl` over a control socket. macOS,
 Linux and Windows are equal targets; today it is built and tested on Linux, and everything below is the Linux build.
 
 - The parity target is upstream macOS agterm ([umputun/agterm](https://github.com/umputun/agterm) v0.36.0): its wire
-  protocol, command semantics, error strings, `agtermctl`, on-disk formats, model and UI, the UI in GPUI idioms where
-  AppKit has no direct equivalent.
-- The Linux build keeps the Swift/GTK fork's (`agterm-linux`) application id `io.github.melonamin.agterm`, state dir
-  (`$XDG_DATA_HOME/agterm`, else `~/.local/share/agterm`) and control socket (`<state dir>/agterm.sock`), so it can
-  replace the installed fork with the existing state. One instance runs per application id: the first owns the id's
-  name on the session bus and serves `GApplication`'s D-Bus protocol there (through `zbus`), and a later launch,
-  of this build or of the fork's GTK one, forwards its activation to it and exits before touching the state.
+  protocol, command semantics, error strings, `agtermctl` (here `ngtermctl`), on-disk formats, model and UI, the UI
+  in GPUI idioms where AppKit has no direct equivalent.
+- The Linux build's application id is `com.nickalie.ngterm`, its state dir `$XDG_DATA_HOME/ngterm` (else
+  `~/.local/share/ngterm`) with the control socket at `<state dir>/ngterm.sock`, and its config dir `~/.config/ngterm`
+  (keymap, hooks, agterm-scoped ghostty config). All three differ from the Swift/GTK fork's (`agterm-linux`:
+  `io.github.melonamin.agterm`, `~/.local/share/agterm`, `~/.config/agterm`), so the two run side by side without
+  sharing windows, settings, config or Live sessions. To carry the fork's state and config over, quit it and copy both
+  directories to the new ones before the first launch. Live sessions do not carry over: their zmx namespace is derived
+  from the state dir, so end them in the fork first, or they restore here as fresh shells while the fork's daemons
+  keep running. Leave out `~/.config/agterm/agent-status`: run Help ▸ Install Agent Status Hooks… again instead,
+  which installs into `~/.config/ngterm/agent-status` and moves the rc files, Claude Code, Codex, Pi and OpenCode
+  hooks the old install wired over to it.
+  One instance runs per application id: the first owns the id's name on the session bus and serves `GApplication`'s
+  D-Bus protocol there (through `zbus`), and a later launch of this build forwards its activation to it and exits
+  before touching the state.
+- The CLI is `ngtermctl` (upstream's and the fork's is `agtermctl`), and the Help menu's installers use this build's
+  names too: Install Command Line Tool… links the bundled `ngtermctl` into `~/.local/bin` (the fork's
+  `~/.local/bin/agtermctl` is left alone, and it resolves the fork's socket), and Install Agent Skill… installs the
+  `ngterm` skill, which drives the app through `ngtermctl`, into `~/.claude/skills/ngterm` and `~/.codex/skills/ngterm`
+  beside the fork's `agterm` skill.
 - One extension beyond upstream: Live sessions in bash and fish login shells too (upstream: zsh only), under the
   Rust-only capability `live-any-shell`.
 - Parity is measured by the black-box suite in [conformance/](conformance/README.md), held by a ratchet.
@@ -205,7 +218,7 @@ Cargo does not notice the provider changing: after installing or removing either
 
 ```sh
 cargo build --workspace --release      # without WPE WebKit: "${WORKSPACE_WITHOUT_WPE[@]}" and "${GPUI_WITHOUT_HTML[@]}"
-scripts/stage.sh /tmp/agterm-stage     # bin/{agterm,agtermctl,zmx}, share/{ghostty,terminfo,agterm}
+scripts/stage.sh /tmp/agterm-stage     # bin/{agterm,ngtermctl,zmx}, share/{ghostty,terminfo,ngterm}
 scripts/run-gpui-dev.sh [--release] [--state DIR] [-- AGTERM_ARGS...]   # an isolated dev instance
 ```
 
@@ -214,12 +227,12 @@ dev script and an install run from.
 `run-gpui-dev.sh` (`scripts/lib/dev-instance.sh`) builds and stages the app into a fresh `/tmp/agterm-dev-*` root and
 launches an isolated instance: a unique
 `AGTERM_APP_ID`, its own `AGTERM_STATE_DIR` and `AGTERM_CONTROL_SOCKET`, and `AGTERM_*`/`ZMX_*` inherited from a live
-agterm session dropped (all but `AGTERM_LOG`). It prints the `agtermctl <command> --socket ...` line that drives the
+agterm session dropped (all but `AGTERM_LOG`). It prints the `ngtermctl <command> --socket ...` line that drives the
 instance.
 
-The build uses the fork's app id, state dir and socket: while an installed agterm runs, launch a checkout's build only
-through `run-gpui-dev.sh`. A plain launch is forwarded to the running instance over the session bus (the D-Bus name
-above), or, with no bus between them, shares its `windows.json`.
+The build uses the installed build's app id, state dir and socket: while an installed agterm runs, launch a checkout's
+build only through `run-gpui-dev.sh`. A plain launch is forwarded to the running instance over the session bus (the
+D-Bus name above), or, with no bus between them, shares its `windows.json`.
 
 `AGTERM_LOG` sets the log level (`tracing` filter syntax); the log is `agterm.log` in the state dir.
 
@@ -283,6 +296,7 @@ A change to the WPE or gir pins also runs `scripts/gen-wpe-bindings.sh --check`,
   patch).
 - `scripts/`: native builds, staging, `run-gpui-dev.sh`, the lint report, the AppArmor profile installer.
 - `packaging/linux/apparmor/`: agterm's AppArmor profile (WebKit's sandbox on Ubuntu).
-- `resources/`: the agent-status hooks and agent skill the app installs.
+- `resources/`: the agent-status hooks and agent skill the app installs (the skill's source stays at
+  `resources/skills/agterm`, upstream's name; it installs as `ngterm`).
 - `docs/linux-ui-checklist.md`: every upstream UI feature with its Linux form and manual check (no Linux UI driver
   exists). `docs/plans/`: implementation plans.

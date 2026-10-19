@@ -28,11 +28,11 @@ run_dev_instance() {
   fi
   mkdir -p "$state"
   state="$(cd "$state" && pwd)"
-  local socket="$state/agterm.sock"
+  local socket="$state/ngterm.sock"
   # sun_path holds 108 bytes on Linux, but the app refuses 104 or more, as upstream's macOS limit.
   ((${#socket} < 104)) || die "socket path too long (${#socket} bytes, the limit is 103): $socket"
 
-  # the workspace without what links WPE WebKit (agtermctl among it), then the app with its HTML overlays (which need a
+  # the workspace without what links WPE WebKit (ngtermctl among it), then the app with its HTML overlays (which need a
   # WPE WebKit, README > WPE WebKit)
   local profile_args=()
   [[ "$profile" == release ]] && profile_args=(--release)
@@ -46,7 +46,7 @@ run_dev_instance() {
   while IFS= read -r name; do
     unset "$name"
   done < <(compgen -e | grep -E '^(AGTERM_|ZMX_)' | grep -vx AGTERM_LOG || true)
-  AGTERM_APP_ID="io.github.melonamin.agterm.dev.i$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+  AGTERM_APP_ID="com.nickalie.ngterm.dev.i$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
   export AGTERM_APP_ID
   export AGTERM_STATE_DIR="$state"
   export AGTERM_CONTROL_SOCKET="$socket"
@@ -56,7 +56,7 @@ run_dev_instance() {
   app id: $AGTERM_APP_ID
   state:  $state
   socket: $socket
-  ctl:    $root/stage/bin/agtermctl <command> --socket $socket
+  ctl:    $root/stage/bin/ngtermctl <command> --socket $socket
 EOF
   trap - EXIT
   exec "$app" "${args[@]}"

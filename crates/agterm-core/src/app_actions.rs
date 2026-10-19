@@ -4,7 +4,7 @@
 //! An action runs only when the palette row behind it is enabled ([`PaletteCommand::is_enabled`], the one predicate
 //! the menu item, the palette row and the keymap share); the actions without a palette row (window management and the
 //! three palette launchers) stand down under any cover. The model work happens here, through the same control
-//! handlers `agtermctl` reaches where one exists, the palettes included ([`crate::palette`]); what needs a dialog, a
+//! handlers `ngtermctl` reaches where one exists, the palettes included ([`crate::palette`]); what needs a dialog, a
 //! widget or a later task's UI comes back as a [`FrontendAction`] for the frontend.
 
 use agterm_proto::command::{FontCmd, SessionCmd, SurfaceCmd, WindowCmd, WorkspaceCmd};
@@ -638,7 +638,7 @@ impl Core {
         self.sidebar_action(window, action);
     }
 
-    /// Runs a control command the way `agtermctl` would, logging a refusal (a chord has nobody to answer).
+    /// Runs a control command the way `ngtermctl` would, logging a refusal (a chord has nobody to answer).
     pub(crate) fn run_request(&mut self, cmd: Command, target: Option<String>, args: Args) {
         self.try_request(cmd, target, args);
     }

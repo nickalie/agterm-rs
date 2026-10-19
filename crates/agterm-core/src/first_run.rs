@@ -24,7 +24,7 @@ The agent skill teaches Claude Code and Codex to drive agterm over its control s
 
 The agent status hooks make an agent session report active, blocked or completed in the sidebar.
 
-The command line tool puts agtermctl on your PATH. A Homebrew install already has it, so that one is only for a direct \
+The command line tool puts ngtermctl on your PATH. A Homebrew install already has it, so that one is only for a direct \
 download.";
 
     pub const SKILL_OPTION: &str = "Install the agent skill";
@@ -145,8 +145,8 @@ mod tests {
     #[test]
     fn the_control_socket_is_not_prior_state() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("agterm.sock"), b"").unwrap();
-        std::fs::write(dir.path().join("agterm.sock.lock"), b"").unwrap();
+        std::fs::write(dir.path().join("ngterm.sock"), b"").unwrap();
+        std::fs::write(dir.path().join("ngterm.sock.lock"), b"").unwrap();
         assert!(!FirstRunWelcome::has_prior_state(dir.path()));
     }
 

@@ -19,6 +19,7 @@ from agterm_conformance.impls import ADAPTERS, base, make_adapter, swift_macos
 from agterm_conformance.impls.base import (
     CAPABILITIES,
     DEFAULT_APP_ID,
+    FORK_APP_ID,
     NO_PROFILE,
     NOOP_DESKTOP_ID,
     NOOP_MIME_TYPES,
@@ -128,6 +129,7 @@ def test_socket_path_at_cap_is_refused_and_one_under_is_accepted() -> None:
         (None, "required"),
         ("", "required"),
         (DEFAULT_APP_ID, "installed app"),
+        (FORK_APP_ID, "installed app"),
         ("agterm", "not a valid"),
         ("io.github.1agterm", "not a valid"),
         ("io..agterm", "not a valid"),
@@ -1398,6 +1400,16 @@ def test_make_adapter_covers_every_impl(tmp_path: Path) -> None:
         adapter = make_adapter(ImplOptions(impl=name, bin=None, ctl=tmp_path / "ctl", coverage_gate=False))
         assert type(adapter) is cls and adapter.name == name
         assert adapter.ctl_path == tmp_path / "ctl"
+
+
+def test_rust_drives_the_ngtermctl_beside_its_binary(fake_bin: Path) -> None:
+    adapter = RustAdapter(fake_bin)
+    assert RustAdapter.ctl_name == "ngtermctl" and adapter.ctl_path is None
+    (fake_bin.parent / "agtermctl").touch()
+    assert adapter.ctl_path is None, "never the fork's or upstream's name"
+    (fake_bin.parent / "ngtermctl").touch()
+    assert adapter.ctl_path == fake_bin.parent / "ngtermctl"
+    assert SwiftLinuxAdapter.ctl_name == "agtermctl"
 
 
 def test_swift_linux_wires_the_install_layout(fake_bin: Path) -> None:

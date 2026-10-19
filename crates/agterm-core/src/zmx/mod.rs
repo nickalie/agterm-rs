@@ -30,6 +30,8 @@ use std::path::{Component, Path, PathBuf};
 
 use uuid::Uuid;
 
+use crate::paths::APP_DIR_NAME;
+
 /// The prefix of every daemon name this app emits.
 pub const NAME_PREFIX: &str = "agterm-";
 
@@ -60,12 +62,15 @@ pub fn is_daemon_name(name: &str) -> bool {
     })
 }
 
-/// The socket directory of the instance whose state directory is `state_dir`: `/tmp/agterm-zmx-<FNV-1a 64>` of the
-/// resolved state directory, so two spellings of one directory share a namespace.
+/// The socket directory of the instance whose state directory is `state_dir`: `/tmp/ngterm-zmx-<FNV-1a 64>` of the
+/// resolved state directory, so two spellings of one directory share a namespace (upstream's prefix is `agterm`).
 #[must_use]
 pub fn socket_directory(state_dir: &Path) -> String {
     let resolved = resolved_state_dir(state_dir);
-    format!("/tmp/agterm-zmx-{}", fnv1a64(resolved.as_os_str().as_encoded_bytes()))
+    format!(
+        "/tmp/{APP_DIR_NAME}-zmx-{}",
+        fnv1a64(resolved.as_os_str().as_encoded_bytes())
+    )
 }
 
 /// `state_dir` as upstream resolves it (`standardizedFileURL.resolvingSymlinksInPath()`): absolute, `.` and `..`
@@ -137,7 +142,7 @@ mod tests {
         assert_eq!(fnv1a64(b"foobar"), "85944171f73967e8");
         assert_eq!(
             socket_directory(Path::new("/nonexistent-agterm/state")),
-            "/tmp/agterm-zmx-22c4fb0b9e3e04dc"
+            "/tmp/ngterm-zmx-22c4fb0b9e3e04dc"
         );
         assert_eq!(
             socket_directory(Path::new("/nonexistent-agterm/./x/../state")),

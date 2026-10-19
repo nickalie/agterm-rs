@@ -21,7 +21,7 @@ run them from the checkout being synced; in a git worktree that is the worktree.
 
 `references/safety.md` holds them between `BEGIN HARD RULES` / `END HARD RULES`. Read the file now and keep to it for
 every command in this run. In short: never touch the user's running agterm (strip `AGTERM_*`/`ZMX_*`, explicit
-`--socket` on every `agtermctl`, private state dir and `ZMX_DIR`, GUI only headless, never `pkill zmx`);
+`--socket` on every `ngtermctl`, private state dir and `ZMX_DIR`, GUI only headless, never `pkill zmx`);
 `.upstream/agterm` is read-only except fetching and checking out the new tag; never push, tag or release; never edit
 `docs/plans/completed/`; anything over ~30 s runs in the background.
 

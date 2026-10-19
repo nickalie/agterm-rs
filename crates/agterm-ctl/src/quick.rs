@@ -1,4 +1,4 @@
-//! `agtermctl quick` (`agtermctlKit/MiscCommands.swift` `Quick`): the app's one quick terminal. `visibility` is the
+//! `ngtermctl quick` (`agtermctlKit/MiscCommands.swift` `Quick`): the app's one quick terminal. `visibility` is the
 //! group's default subcommand ([`crate::usage::name_default_subcommands`]), so a bare `quick [show|hide|toggle]` keeps
 //! working. None of them takes `--window`: the quick terminal belongs to no window.
 
@@ -11,7 +11,7 @@ use agterm_proto::{Args, Command, Request};
 use crate::client::os_message;
 use crate::{BasicOptions, Failure, RequestCommand};
 
-/// `agtermctl quick <subcommand>`.
+/// `ngtermctl quick <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Quick terminal: visibility, type into it, read its text.",
@@ -62,7 +62,7 @@ fn quick_request(cmd: QuickCmd, args: Args) -> Request {
     }
 }
 
-/// `agtermctl quick [visibility] [show|hide|toggle]`: the mode is the server's to check.
+/// `ngtermctl quick [visibility] [show|hide|toggle]`: the mode is the server's to check.
 #[derive(Debug, clap::Args)]
 #[command(about = "Quick terminal visibility (show|hide|toggle).")]
 pub struct Visibility {
@@ -89,7 +89,7 @@ impl RequestCommand for Visibility {
     }
 }
 
-/// `agtermctl quick type`: literal keystrokes into the quick terminal, the twin of `session type`; the text is the
+/// `ngtermctl quick type`: literal keystrokes into the quick terminal, the twin of `session type`; the text is the
 /// argument, or standard input with `--stdin`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Inject text into the quick terminal.")]
@@ -149,7 +149,7 @@ impl RequestCommand for Type {
     }
 }
 
-/// `agtermctl quick text`: the quick terminal's buffer as plain text, the read-back for `quick type`; one surface, so
+/// `ngtermctl quick text`: the quick terminal's buffer as plain text, the read-back for `quick type`; one surface, so
 /// no `--pane`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Print the quick terminal's buffer as plain text.")]
@@ -202,10 +202,10 @@ mod tests {
     use crate::Agtermctl;
     use crate::usage::name_default_subcommands;
 
-    /// `agtermctl quick <argv>` parsed (the default subcommand named first) and validated: the request a run sends as
+    /// `ngtermctl quick <argv>` parsed (the default subcommand named first) and validated: the request a run sends as
     /// JSON, or the refusal.
     fn outcome(argv: &[&str]) -> Result<Value, String> {
-        let command_line: Vec<OsString> = ["agtermctl", "quick"].iter().chain(argv).map(OsString::from).collect();
+        let command_line: Vec<OsString> = ["ngtermctl", "quick"].iter().chain(argv).map(OsString::from).collect();
         let named = name_default_subcommands(&Agtermctl::command(), &command_line);
         let parsed = Agtermctl::try_parse_from(named).map_err(|error| error.to_string())?;
         let crate::Command::Quick(group) = parsed.command else {

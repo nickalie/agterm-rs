@@ -516,7 +516,7 @@ mod tests {
                 config_with: Rc::new(|_: &str| TerminalConfig::default()),
             },
         ));
-        Windows::new(env, "io.github.melonamin.agterm.test".to_owned(), None, None)
+        Windows::new(env, "com.nickalie.ngterm.test".to_owned(), None, None)
     }
 
     fn shown_ids(windows: &Windows) -> Vec<Uuid> {

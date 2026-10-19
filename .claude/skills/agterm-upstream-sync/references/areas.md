@@ -56,8 +56,8 @@ the Linux equivalent, or a recorded "no Linux counterpart" in the checklist.
 
 | upstream | copy here | notes |
 |---|---|---|
-| `agterm/Resources/agent-status/` | `resources/agent-status/` | carries Linux glue (the Codex adapter reads JSON with python3/jq); a conflict there is a manual merge keeping it |
-| `plugins/agterm/skills/agterm/` | `resources/skills/agterm/` | the agent skill the app installs |
+| `agterm/Resources/agent-status/` | `resources/agent-status/` | carries Linux glue (the Codex adapter reads JSON with python3/jq; the Pi and OpenCode plugins call the wrapper in `~/.config/ngterm/agent-status`); a conflict there is a manual merge keeping it |
+| `plugins/agterm/skills/agterm/` | `resources/skills/agterm/` | the agent skill the app installs, as `ngterm`: its frontmatter `name` and description, and every command it runs is `ngtermctl`, the far side of a remote attach included. An applied or merged upstream change renames the `agtermctl` calls it brings the same way |
 | `agterm/Resources/hud/` | `crates/agterm-gpui/resources/hud/` | `hud.sh`, included with `include_str!` |
 | `agterm/Resources/custom-themes/` | `build/themes/` | agterm's own themes |
 | `agterm/Resources/ghostty-defaults.conf` | `crates/agterm-core/src/ghostty_config/ghostty-defaults.conf` | adapted (Linux chords, comments): usually a conflict, merge the setting, keep the Linux binds |

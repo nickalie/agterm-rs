@@ -1,13 +1,13 @@
 # agterm control reference
 
-Full detail for every `agtermctl` command. See `SKILL.md` for the model and addressing overview,
+Full detail for every `ngtermctl` command. See `SKILL.md` for the model and addressing overview,
 `examples.md` for worked examples, and `cookbook.md` for the repository's installable recipes.
 
 ## Connection and output
 
 - **Socket resolution** (when `--socket` is omitted): `AGTERM_SOCKET` is the path the running app
-  bound; agtermctl resolves the same rendezvous: `<AGTERM_STATE_DIR>/agterm.sock`, else
-  `<$HOME>/Library/Application Support/agterm/agterm.sock`. Passing `--socket "$AGTERM_SOCKET"` is the
+  bound; ngtermctl resolves the same rendezvous: `<AGTERM_STATE_DIR>/ngterm.sock`, else
+  `~/.local/share/ngterm/ngterm.sock`. Passing `--socket "$AGTERM_SOCKET"` is the
   safe explicit form.
 - **`--json`**: prints the raw response object. Without it, ordinary mutations print `ok`, batch
   close/move prints the affected session count, and `tree`/`window list` print a human listing. Use
@@ -20,11 +20,11 @@ Full detail for every `agtermctl` command. See `SKILL.md` for the model and addr
   for a batch close/move, daemons killed for `zmx prune`), `tree` (the tree), `windows` (window list), `app` (the serving app's identity, for
   `version`). The process exit code is non-zero when
   `ok` is false.
-- **Options go after the subcommand**: `agtermctl session type "ls" --target active`, never before it.
+- **Options go after the subcommand**: `ngtermctl session type "ls" --target active`, never before it.
 
 ## events
 
-`agtermctl events [--json] [--kind KIND ...] [--run UUID --after SEQ] [--limit N]` continuously
+`ngtermctl events [--json] [--kind KIND ...] [--run UUID --after SEQ] [--limit N]` continuously
 prints control events. Each poll is one ordinary socket connection and one `events.read` response.
 The CLI immediately reads again after a non-empty page and waits 250 ms after an empty page.
 
@@ -77,14 +77,14 @@ The raw `events.read` response stores the batch under `result.events`:
 ```
 
 A no-cursor response supplies the `run` and `next` anchor. Resume with both values:
-`agtermctl events --run RUN --after NEXT`. The options must appear together. The streaming `--json`
+`ngtermctl events --run RUN --after NEXT`. The options must appear together. The streaming `--json`
 format contains bare events rather than this batch envelope, so a restart-safe client must retain the
 cursor from raw `events.read` responses.
 
 Cursor failures return `ok: false`, one of `event run changed`, `event cursor expired`, or
 `event cursor is ahead of the current sequence`, plus the current empty anchor under
 `result.events`. Treat them as data-loss boundaries. Do not silently use the supplied anchor unless
-the caller explicitly accepts dropping the missing interval. `agtermctl events` exits non-zero on a
+the caller explicitly accepts dropping the missing interval. `ngtermctl events` exits non-zero on a
 cursor, transport, or server error. The one exception is a refused connection once the stream holds a
 cursor, which a busy app's full accept queue produces: the CLI retries with the same cursor, waiting
 250 ms and doubling up to 4 s, and exits non-zero after about 30 s of refusals in a row, so it never
@@ -122,7 +122,7 @@ waits forever on an absent app. SIGINT and SIGTERM use normal process behavior.
 
 ## tree
 
-`agtermctl tree [--json] [--window W]` — the workspace/session tree. Each session node:
+`ngtermctl tree [--json] [--window W]` — the workspace/session tree. Each session node:
 `id`, `name`, `cwd`, `splitCwd` (the split pane's last reported directory, falling back to its restored
 directory, then the primary cwd; omitted without a split or on older servers), `title` (the raw OSC terminal
 title, for example a remote host over SSH, omitted
@@ -136,7 +136,7 @@ expedites such a pane too.
 `session new` returns `ok` for a session that exists in the model, which is not the same thing: libghostty
 refuses to create a surface while the DISPLAY is asleep, so a session a scheduled job creates overnight
 stays unrealized until the displays wake, at which point it recovers on its own. A queued right pane shows
-nothing here. Poll this after creating a session unattended; `agtermctl tree` also tags the row
+nothing here. Poll this after creating a session unattended; `ngtermctl tree` also tags the row
 `(not realized)`),
 `backedByZmx` (true only when every existing primary/split pane is currently zmx-backed; older servers omit
 it),
@@ -306,7 +306,7 @@ the mode is `untouched`), and `dashboardFontMode` (`auto` for `--auto-size`, `fi
 `untouched`), plus `pickPending` (the id of the native picker currently awaiting an answer in this
 window, omitted when none is pending), `askPending` (the pending GUI question's id, omitted when absent),
 and `app` (which agterm is serving this socket: `version`, plus
-`commit` when the build recorded one — the same value `agtermctl version` returns, so an agent already
+`commit` when the build recorded one — the same value `ngtermctl version` returns, so an agent already
 reading the tree gets its version floor without a second round-trip; it is not duplicated onto
 `window.list`, where a caller uses `version` instead), and `indexUnsaved` (true while the last write of
 the window index failed, omitted otherwise; app-wide, and it clears on the next index write that lands).
@@ -439,7 +439,7 @@ buys nothing. A caller with no tree uses `version`.
   session address — id / unique prefix / `active`). The anchor CARRIES ITS OWN WORKSPACE (resolved
   across all workspaces), so it names the destination workspace itself — `--after`/`--before` are
   therefore mutually exclusive with each other and with `--workspace`/`--workspace-name` (the anchor
-  already picks the workspace). `agtermctl session new --after active` is the headline case: create
+  already picks the workspace). `ngtermctl session new --after active` is the headline case: create
   right after the current session in one round-trip. Without either flag it appends, whatever the user's
   Settings placement for New Session. `--no-select` creates the session in the BACKGROUND:
   it is added to the sidebar but NOT selected or focused, so the current selection and focus are left
@@ -625,7 +625,7 @@ error keeps those names for compatibility.
 - `session resize (--split-ratio R | --grow-left D | --grow-right D | --grow-primary D | --grow-split D | --grow-top D | --grow-bottom D) [--target] [--window W]` - move the
   split DIVIDER (the divider is otherwise mouse-only: drag it, or double-click it for an even split. No
   GUI/menu/keymap action reaches any other fraction, so bind a key by mapping a
-  `command "agtermctl session resize …"` custom action). Provide exactly one form:
+  `command "ngtermctl session resize …"` custom action). Provide exactly one form:
   `--split-ratio` sets the absolute primary-pane fraction of the area below the titlebar (`0..1`, left
   or top). The grow options are
   equivalent role/position aliases: primary/left/top versus split/right/bottom. The result is clamped to
@@ -792,7 +792,7 @@ error keeps those names for compatibility.
   active); use it when you want the user pulled to the overlay, omit it to open quietly. `--background-color #rrggbb` gives the overlay pane its own solid
   background color, independent of the session's own `session background color` (nil = the default theme
   background); it honors the Settings window translucency, captured when the overlay opens. `--wait` keeps the overlay open after the command exits (press a key
-  to close). `--block` waits for the command to exit and makes agtermctl exit with the command's status
+  to close). `--block` waits for the command to exit and makes ngtermctl exit with the command's status
   (cannot combine with `--wait`); the program renders normally — capture its OUTPUT via the program's
   own output file, not the control channel. Returns the overlay's session id. `--target` defaults to
   `active`, so an automated caller should pass `--target "$AGTERM_SESSION_ID"` — otherwise a (usually
@@ -1035,7 +1035,7 @@ error keeps those names for compatibility.
   all-empty table rows and an all-empty header row are not shown, the latter leaving no header rule.
   A markdown message that renders nothing visible is refused like an empty one.
   `--file FILE` reads the message from a UTF-8 file instead of the argument, exactly one of the two, once per
-  command (nothing watches the file), dropping one trailing newline. `agtermctl` reads it before sending and
+  command (nothing watches the file), dropping one trailing newline. `ngtermctl` reads it before sending and
   fails there with `cannot read --file <path>: <reason>` or `--file <path> is not valid UTF-8`; passing both or
   neither fails with `MESSAGE and --file are mutually exclusive` or `provide MESSAGE or --file`, and every cap
   still applies to what is sent. `--font-size PT` (6–72) sets the
@@ -1078,7 +1078,7 @@ agterm's engine — draws natively. No kitty binary and no external image viewer
 is plain `base64` + `printf`. Run it as `bash <skill-dir>/scripts/show-image.sh <image> [size-percent]`,
 resolving `<skill-dir>` as the directory `SKILL.md` was loaded from rather than a fixed path — the skill
 ships both as a plugin (`~/.claude/plugins/cache/…`, `~/.codex/plugins/cache/…`) and as the app's own
-copy (`~/.claude/skills/agterm/`, `~/.codex/skills/agterm/`), and the script sits beside `SKILL.md` in
+copy (`~/.claude/skills/ngterm/`, `~/.codex/skills/ngterm/`), and the script sits beside `SKILL.md` in
 every one of them.
 The image is scaled to fit the overlay and centered in it (uniform, aspect preserved, up or down): the
 script asks the terminal for its pixel and cell geometry over `/dev/tty`, reads the image dimensions
@@ -1152,10 +1152,10 @@ shell (no controlling terminal — `/dev/tty` errors). See examples.md for usage
 
 ## surface
 
-`agtermctl surface zoom [show|hide|toggle] [--target SURFACE_ID|active|quick] [--window W]` — zoom one
+`ngtermctl surface zoom [show|hide|toggle] [--target SURFACE_ID|active|quick] [--window W]` — zoom one
 terminal surface to fill the window, hiding the sidebar (a slim title-bar strip with the traffic
 lights and an exit button remains). `SURFACE_ID` comes from
-`agtermctl tree --json` at `.result.tree.workspaces[].sessions[].surfaces[].id`, for example
+`ngtermctl tree --json` at `.result.tree.workspaces[].sessions[].surfaces[].id`, for example
 `surface:<session-id>:right` for the split pane or `surface:<session-id>:overlay-right` for a pane
 overlay covering it. Omit `--target` (or pass `active`) to act on the active surface in the
 frontmost or `--window` window. `quick` is the one target that is not a window surface: it grows the
@@ -1178,9 +1178,9 @@ opens on the zoomed session still spawn their shells behind the zoom layer. A no
 click exits zoom before revealing its session. Use `surface zoom` when the user/agent needs a pane
 fullscreen inside agterm; use `window zoom` only to maximize the whole window on screen.
 
-`agtermctl surface cursor [--target SURFACE_ID|active|quick] [--pane-id TOKEN] [--window W]` — the surface's zero-based
+`ngtermctl surface cursor [--target SURFACE_ID|active|quick] [--pane-id TOKEN] [--window W]` — the surface's zero-based
 cursor column, counted from the left edge of the grid. Plain output is the bare number, so
-`col=$(agtermctl surface cursor)` works; under `--json` it is `.result.cursor.column`. The target
+`col=$(ngtermctl surface cursor)` works; under `--json` it is `.result.cursor.column`. The target
 vocabulary and its refusals are `surface zoom`'s, so an explicit `SURFACE_ID` reads a hidden pane or a
 background session as readily as the visible one. It is a pure read: it neither selects nor realizes the
 target, and it reports no field in `tree`, so poll it when you need it. With `--pane-id` the target is a
@@ -1195,9 +1195,9 @@ over text that is still there. Never read "column equals the prompt" as "the com
 
 ## dashboard
 
-`agtermctl dashboard <ids…> [--font-size N | --auto-size] [--window W]` opens a per-window, view-only
-grid of the named sessions' live panes; `agtermctl dashboard --mru [--font-size N | --auto-size]
-[--window W]` opens the window's most-recently-used sessions instead of naming ids; `agtermctl dashboard
+`ngtermctl dashboard <ids…> [--font-size N | --auto-size] [--window W]` opens a per-window, view-only
+grid of the named sessions' live panes; `ngtermctl dashboard --mru [--font-size N | --auto-size]
+[--window W]` opens the window's most-recently-used sessions instead of naming ids; `ngtermctl dashboard
 --close [--window W]` closes the open one. The cell unit is a session+pane: a non-split session is ONE
 cell, and a SPLIT session shows as TWO cells — its left/primary pane and its right/split pane. The
 positional ids are session addresses (id / unique prefix / `active`), each of which may carry a
@@ -1259,9 +1259,9 @@ Invalid invocations error (rejected at the CLI and re-checked server-side): `--f
 
 ## pick
 
-`agtermctl pick [--prompt TEXT] [--query TEXT] [--select ID] [--allow-custom] [--follow] [--window W] [--no-block]`
+`ngtermctl pick [--prompt TEXT] [--query TEXT] [--select ID] [--allow-custom] [--follow] [--window W] [--no-block]`
 reads choices from stdin and opens a native fuzzy picker in the target window. `pick` defaults to the open
-subcommand, so `agtermctl pick open` is not required. Stdin is read unconditionally, so a call that supplies
+subcommand, so `ngtermctl pick open` is not required. Stdin is read unconditionally, so a call that supplies
 no items needs `< /dev/null` or it blocks.
 
 The first non-whitespace input byte selects the format. `[` starts a JSON array of objects with required
@@ -1302,9 +1302,9 @@ Picked and custom results exit 0. Cancellation exits 2. Protocol, validation, tr
 failures exit 1. The blocking client polls every 100 ms for the first second, then every 500 ms.
 
 `--no-block` returns immediately with `{"id":"<pick-id>"}`. Use
-`agtermctl pick result <pick-id> [--window W]` for a one-shot read; it prints the same bare result JSON,
+`ngtermctl pick result <pick-id> [--window W]` for a one-shot read; it prints the same bare result JSON,
 including `{"result":"pending"}`, and exits 1 while pending. Use
-`agtermctl pick cancel <pick-id> [--window W]` to cancel it. Result and cancel require the exact picker
+`ngtermctl pick cancel <pick-id> [--window W]` to cancel it. Result and cancel require the exact picker
 id. Without `--window`, the globally unique id keeps result/cancel pinned to its owning window even if
 the frontmost window changes. With `--window`, a live or close-retained result must belong to that
 window. A wrong id returns `unknown pick: <id>`.
@@ -1319,7 +1319,7 @@ it waited for. Results age out oldest-first: the 8 most recent per open window, 
 
 ## ask
 
-`agtermctl ask [open] TITLE --button ID=LABEL [--button ...] [--message TEXT]` opens a question without
+`ngtermctl ask [open] TITLE --button ID=LABEL [--button ...] [--message TEXT]` opens a question without
 reading stdin. Use explicit `ask open` when the title is `open`, `result`, or `cancel`.
 
 `--style terminal` is the default and uses the window's selected session, with one pending ask per
@@ -1367,7 +1367,7 @@ hiding under covers, and cancellation rules.
 
 ## quick
 
-`agtermctl quick [show|hide|toggle]` — the app's one quick terminal (a single scratch terminal in a
+`ngtermctl quick [show|hide|toggle]` — the app's one quick terminal (a single scratch terminal in a
 floating panel at 90% of the focused screen up to 1100x700 unless Settings > Interface sets a share of its
 own, not in the tree and owned by no window; its
 shell stays alive across hides). Errors with `no open window` when none is open, and with `pick pending`
@@ -1377,7 +1377,7 @@ because the user had summoned it by hotkey — so a following `quick type` / `qu
 `surface zoom --target quick` still finds it. A window's terminal zoom is not a term either way: the panel
 floats above every window, so `show` is never refused for it.
 
-`agtermctl quick type TEXT` (or `--stdin`) — inject `TEXT` as literal keystrokes into the frontmost
+`ngtermctl quick type TEXT` (or `--stdin`) — inject `TEXT` as literal keystrokes into the frontmost
 window's quick terminal, the quick-terminal twin of `session type`. There is no `--target`/`--window`
 (always the frontmost window's quick terminal) and no `--pane` (a single surface). It polls briefly for
 the surface to come up, so `quick show; quick type` back-to-back is reliable (the overlay mounts a beat
@@ -1385,7 +1385,7 @@ after `quick show` flips visibility). Errors with `quick terminal not open` when
 been shown, `quick terminal not realized` if a shown surface never comes up in time, `no open window`
 when none is open. Typing into a shown-then-hidden quick terminal still works (its shell stays alive).
 
-`agtermctl quick text [--all] [--lines N]` — print the frontmost window's quick-terminal buffer as
+`ngtermctl quick text [--all] [--lines N]` — print the frontmost window's quick-terminal buffer as
 plain text (the read-back for `quick type`; does not touch the system clipboard). `--all` reads the
 full screen + scrollback, `--lines N` keeps only the last N (mutually exclusive). Polls for the surface
 like `quick type`. Errors with `quick terminal not open` (never shown), `failed to read surface buffer`
@@ -1393,12 +1393,12 @@ like `quick type`. Errors with `quick terminal not open` (never shown), `failed 
 
 ## sidebar
 
-`agtermctl sidebar [show|hide|toggle]` — show/hide the frontmost window's workspace/session sidebar
+`ngtermctl sidebar [show|hide|toggle]` — show/hide the frontmost window's workspace/session sidebar
 (the custom split has no system toggle). `toggle` is the default; an unknown mode is an error, and
 `no open window` when none is open. The GUI half is the title-bar button, View ▸ Show/Hide Sidebar,
 the ⌃⇧P palette "Toggle Sidebar", and the ⌃⌘S keymap action (`toggle_sidebar`).
 
-`agtermctl sidebar mode [tree|flagged|toggle]` — flip the frontmost window's sidebar VIEW between the
+`ngtermctl sidebar mode [tree|flagged|toggle]` — flip the frontmost window's sidebar VIEW between the
 workspace tree and the flagged working set (the durable per-session `flag`; in the default flat layout
 each flagged row is labeled `session : workspace`, even across workspaces). `toggle` is the default; idempotent
 (delta-computed); an unknown mode is an error, and `no open window` when none is open. Persisted
@@ -1407,7 +1407,7 @@ to the flagged sessions only; back in `tree` it spans the marked workspaces' ses
 filter is applied) or all sessions. The GUI half is the bottom-bar flag button, View ▸ Show Flagged / Show All, and the
 ⌃⇧P palette. Use with `session flag` to build and view a cross-workspace working set.
 
-`agtermctl sidebar flagged-layout [flat|plain|tree|toggle]` — pick how the flagged view arranges its sessions.
+`ngtermctl sidebar flagged-layout [flat|plain|tree|toggle]` — pick how the flagged view arranges its sessions.
 `flat` is one list labeled `session : workspace`; `plain` is the same list labeled by session name alone;
 `tree` nests the flagged sessions under their workspace rows and leaves out workspaces holding none.
 `toggle` is the default, leaving `tree` for `flat` and either flat form for `tree`; an unknown layout is an error.
@@ -1417,7 +1417,7 @@ moves the selection. Returns the resulting layout in `result.text`; read back as
 `sidebarFlaggedLayout`, reported under the ordinary tree too. The tree layout shares each workspace's
 collapse state with the ordinary tree, ignores the focus filter, and keeps `workspace go` unavailable.
 
-`agtermctl sidebar expand [--window W]` — expand every workspace row in a window's sidebar tree.
+`ngtermctl sidebar expand [--window W]` — expand every workspace row in a window's sidebar tree.
 Defaults to the frontmost window; `--window` (id / prefix / `active`) targets any OPEN window, so a
 script can expand a background window's tree. Idempotent (a clean no-op when all are already expanded);
 a graceful no-op under the flat flagged list (no workspace rows). In either tree layout it applies to
@@ -1425,13 +1425,13 @@ all workspaces, including those the view omits. A named-but-closed window errors
 window` when none is open. The GUI half (frontmost only) is View ▸ Expand Workspaces and the ⌃⇧P palette
 "Expand Workspaces".
 
-`agtermctl sidebar collapse [--window W]` — collapse every workspace EXCEPT the current one (the same
+`ngtermctl sidebar collapse [--window W]` — collapse every workspace EXCEPT the current one (the same
 resolution as `--target active`), which stays expanded and is scrolled into view. Same `--window`
 selector and defaults as `expand`. Idempotent; a graceful no-op under the flat flagged list; a named-but-closed
 window errors, and `no open window` when none is open. The GUI half (frontmost only) is View ▸ Collapse
 Workspaces and the ⌃⇧P palette "Collapse Workspaces".
 
-`agtermctl sidebar width <points> [--window W]` sets the sidebar divider position in points, the one
+`ngtermctl sidebar width <points> [--window W]` sets the sidebar divider position in points, the one
 thing the divider drag does that had no command. Clamped server-side to the same 160...560pt range the
 drag enforces, persisted through the window snapshot, and ECHOED: the command prints the STORED width,
 so an out-of-range request reads back as the bound it landed on rather than as what was asked for. The
@@ -1448,7 +1448,7 @@ expect points to convert to columns without one.
 
 ## notify
 
-`agtermctl notify <body> [--title T] [--target] [--window W]` — post a macOS desktop notification
+`ngtermctl notify <body> [--title T] [--target] [--window W]` — post a macOS desktop notification
 attributed to a session (default: the active session of the frontmost window). `--title` defaults to
 the session name. Clicking the banner reveals that session. This is the only app-level way to post a
 banner (the terminal's own OSC 9/777 is the other source). Control-native (no GUI/menu equivalent).
@@ -1470,7 +1470,7 @@ one-off nudge that needs no follow-up.
 
 ## font
 
-`agtermctl font inc|dec|reset [--pane left|right|scratch] [--target] [--window W]` — increase / decrease /
+`ngtermctl font inc|dec|reset [--pane left|right|scratch] [--target] [--window W]` — increase / decrease /
 reset the font size of a session pane. `--pane` picks which surface's font to change, like `session type`
 and `session text`: omitted or `left` is the main pane, `right` the split pane (errors with `session has
 no split pane` when the session has no split), `scratch` the session's scratch terminal (settable even
@@ -1484,10 +1484,10 @@ instead of the terminal: one page zoom shared by every HTML overlay, kept across
 
 ## keymap
 
-`agtermctl keymap reload` — re-read and apply `keymap.conf`; returns `result.count` = the number of
+`ngtermctl keymap reload` — re-read and apply `keymap.conf`; returns `result.count` = the number of
 parse diagnostics (0 = clean). App-global (no `--window`).
 
-`agtermctl keymap run NAME [--target T] [--window W]` — start a custom command from `keymap.conf` by its
+`ngtermctl keymap run NAME [--target T] [--window W]` — start a custom command from `keymap.conf` by its
 exact name, as `keymap list` prints it. It runs as it does from the command palette, with the target
 session's focused pane, primary or split and never its scratch or an overlay, supplying the working
 directory, the selection and the `AGT_*` context; the default target is the active session, and from an
@@ -1495,7 +1495,7 @@ HTML page the page's own session. `result.id` is that session. Ok means the proc
 command is detached, so its exit status and output are not reported, though a command with `--error-hud`
 still shows its panel. An unknown name answers `no custom command named NAME`.
 
-`agtermctl keymap list` — the read side of `keymap.reload`. App-global, no target and no args. Returns
+`ngtermctl keymap list` — the read side of `keymap.reload`. App-global, no target and no args. Returns
 `result.keymap`:
 
 - `path` — the `keymap.conf` this came from.
@@ -1537,7 +1537,7 @@ line can express — such an item is AppKit's own and never matches an action.
 
 ### keymap.conf format
 
-The file lives at `<config dir>/keymap.conf` (default `~/.config/agterm`; the dir is set in Settings ▸
+The file lives at `<config dir>/keymap.conf` (default `~/.config/ngterm`; the dir is set in Settings ▸
 Key Mapping). Three verbs, line-based; blank lines and `#` comments ignored:
 
 - `map <chord> [--repeat] <action>` — rebind a built-in menu action.
@@ -1639,7 +1639,7 @@ Built-in action names for `map` include: `new_window`, `new_workspace`, `new_ses
 `session_palette`, `command_palette`, `custom_command_palette`, `dashboard`, and the navigation actions (`previous_session`, `next_session`,
 `first_session`, `last_session`, `previous_attention_session`, `next_attention_session`,
 `previous_window`, `next_window`, `focus_left_pane`, `focus_right_pane`, `select_theme`). Editing the keymap from a terminal: open
-`keymap.conf` in `$EDITOR`, then `agtermctl keymap reload`.
+`keymap.conf` in `$EDITOR`, then `ngtermctl keymap reload`.
 
 ## hooks
 
@@ -1650,18 +1650,18 @@ diagnostic. The script gets the event as one JSON object on stdin (the `events -
 by a newline and EOF, plus `AGT_EVENT_KIND`, `AGT_EVENT_STATUS`, `AGT_EVENT_HOST`, `AGT_SESSION_ID`,
 `AGT_WORKSPACE_ID`, `AGT_WINDOW_ID` and `AGT_SOCKET`, each set explicitly and empty when the event lacks the field. It runs
 detached in the app's working directory with the widened `PATH` a custom command gets; pass
-`--socket "$AGT_SOCKET"` to any `agtermctl` call. One process per line at a time; further events queue
+`--socket "$AGT_SOCKET"` to any `ngtermctl` call. One process per line at a time; further events queue
 in order up to 256, then the oldest is dropped and counted. No timeout. A non-zero exit, a failed spawn
 or an event that could not be handed to a running script banners once per hook until its next success
 or a reload; a script that ignores stdin is fine, only its exit status counts. A hook whose command
 emits another event of its own kind triggers itself again; the queue bounds concurrency, nothing detects
 the loop.
 
-`agtermctl hooks reload` — re-read and apply `hooks.conf`; returns `result.count` = the number of
+`ngtermctl hooks reload` — re-read and apply `hooks.conf`; returns `result.count` = the number of
 parse diagnostics (0 = clean). A hook whose line is unchanged keeps its running child, queue and
 counters, comments and reordering included; a removed line drops its queue and finishes its child.
 
-`agtermctl hooks list` — returns `result.hooks`:
+`ngtermctl hooks list` — returns `result.hooks`:
 
 - `path` — the `hooks.conf` this came from.
 - `diagnostics[]` — `line` + `message` per parse problem.
@@ -1674,7 +1674,7 @@ Both are app-global and refuse a target or `--window`.
 
 ## browser
 
-`agtermctl browser clear` - remove every cookie and all site data held by the saved store of
+`ngtermctl browser clear` - remove every cookie and all site data held by the saved store of
 `--persistent` URL overlays. The reply comes after the removal finished. Errors
 `browser.clear: N persistent page(s) still open` while such a page is open, including one in a
 just-closed session that can still be restored, and `browser.clear: browser storage is being cleared` when it reaches the app
@@ -1682,7 +1682,7 @@ before another clear's removal has finished. A socket request queues behind a so
 socket serves one request at a time. With nothing ever saved it answers ok. Clearing local data does not sign you out on the server.
 App-global; refuses a target or `--window`. There is no read-back beyond the reply.
 
-`agtermctl browser links [browser|overlay]` - set where a clicked `http` or `https` link in a terminal
+`ngtermctl browser links [browser|overlay]` - set where a clicked `http` or `https` link in a terminal
 opens, or with no mode print the current one. `browser` (default) hands the link to the system browser.
 `overlay` opens it in a full session web overlay as `session overlay open --url URL --browse --js
 --navigation --persistent` would, without selecting the session. The link still goes to the browser when
@@ -1696,7 +1696,7 @@ unaffected. The setting is the one in Settings > General > Open links in. App-gl
 
 ## config
 
-`agtermctl config reload` - re-read and apply the ghostty config; returns `result.count` = the ghostty
+`ngtermctl config reload` - re-read and apply the ghostty config; returns `result.count` = the ghostty
 config-diagnostic count (0 = clean), counted across ALL config sources, not just the agterm-scoped
 `ghostty.conf` (libghostty diagnostics do not record which file they came from), so do not read a
 non-zero count as proof `ghostty.conf` is the culprit. App-global (no `--window`). It runs the same path
@@ -1704,7 +1704,7 @@ as the GUI's File ▸ Reload Config menu/palette item, which posts a warning ban
 
 ### ghostty.conf
 
-`<config dir>/ghostty.conf` (default `~/.config/agterm`, next to `keymap.conf`) is the agterm-scoped
+`<config dir>/ghostty.conf` (default `~/.config/ngterm`, next to `keymap.conf`) is the agterm-scoped
 ghostty config and the place to put agterm overrides/customizations. It is ALWAYS loaded. The app builds
 its terminal config in order, each source overriding the one before: ghostty's bundled defaults, then
 your global `~/.config/ghostty/config` (OFF by default — opt in with Settings ▸ General ▸ Use my global
@@ -1714,21 +1714,21 @@ https://agterm.com/docs#ghostty. The scoped file is
 agterm-only; the standalone Ghostty.app never reads it. agterm is self-contained by default, so a config
 written for Ghostty.app does not silently change agterm — put agterm overrides in `ghostty.conf` (e.g.
 `macos-option-as-alt = true`); the full reference is at https://ghostty.org/docs/config. Editing it from
-a terminal: open `ghostty.conf` in `$EDITOR`, then `agtermctl config reload`.
+a terminal: open `ghostty.conf` in `$EDITOR`, then `ngtermctl config reload`.
 
 ## theme
 
 The app's out-of-the-box default theme is the bundled **agterm** theme (a fresh install opens on it).
 A separate **default ghostty** entry means "no theme" — ghostty's own built-in colors (`theme` absent).
 
-`agtermctl theme list` — list the bundled theme names; returns `result.themes` (the names),
+`ngtermctl theme list` — list the bundled theme names; returns `result.themes` (the names),
 `result.theme` (the current plain theme, absent = ghostty's built-in / "default ghostty"), and
 `result.sync` with `result.light`/`result.dark` (the per-appearance themes). While syncing,
 `result.theme` is absent — the state rides the three sync fields. Human output prints one name per
 line with a leading "default ghostty" row, the active one(s) marked `* `; when syncing, a header notes
 the light/dark pair and both sides are marked.
 
-`agtermctl theme set [name]` — set and persist the terminal theme app-wide (the same change as Settings
+`ngtermctl theme set [name]` — set and persist the terminal theme app-wide (the same change as Settings
 ▸ Appearance), per slot:
 - `theme set <name>` sets the light/single theme; a dark theme, if set, is KEPT (syncing stays on).
   Omit the name for ghostty's built-in default ("default ghostty") — with a dark theme set, that
@@ -1772,7 +1772,7 @@ after reattach behaves normally.
 
 ## restore
 
-`agtermctl restore capture` — capture every open pane's live foreground command NOW, into the same slot the
+`ngtermctl restore capture` — capture every open pane's live foreground command NOW, into the same slot the
 quit-time capture fills, and persist it. For the exit that never reaches `applicationWillTerminate`: a force
 quit, a crash, a hard reset, a power loss, all of which today leave every pane restoring a plain shell. (A
 shutdown, restart or logout is not one of them: that path quits the app normally and captures by itself.)
@@ -1784,11 +1784,11 @@ modes return `restore.capture requires rerun mode; configured restore mode is MO
 fresh as its last run: a pager or a build that has finished since still re-runs after a crash, which
 `restore clear` drops wholesale and `restore-denylist.conf` prevents per program. Typed at a prompt the
 command records ITSELF, since while it runs it is that pane's foreground process and the pane comes back
-running `agtermctl restore capture` (which
+running `ngtermctl restore capture` (which
 prints its count and captures itself again). Bind it or schedule it rather than running it by hand:
 `restore clear` is app-global, so it is no per-pane undo.
 
-`agtermctl restore clear` — clear every session's saved CAPTURED foreground command and persist, so the
+`ngtermctl restore clear` — clear every session's saved CAPTURED foreground command and persist, so the
 next restart restores plain shells for those panes (not whatever each pane was running). It does NOT clear
 a `session.new --command` session's own command (`initialCommand`, the durable creation identity), which
 still re-runs in `rerun` mode. This command works in every mode. `rerun` captures each pane's foreground
@@ -1797,7 +1797,7 @@ command at a clean quit and starts it again on relaunch; `restore clear` wipes t
 it acknowledges only a save that landed: if any window's write fails it reports that at least one window
 failed to save, since those captures are still on disk and nothing reads those slots back.
 
-`agtermctl restore mode [none|rerun|live]` — read the restore policy, or write it for the NEXT launch.
+`ngtermctl restore mode [none|rerun|live]` — read the restore policy, or write it for the NEXT launch.
 Bare, it reports five things: `configured` (what settings hold, so what the next launch asks for),
 `requestedAtLaunch` and `active` (what THIS launch asked for and what it got), `restartRequired`, and
 `unavailableReason` when live was requested and refused. The two requested values differ once the mode has
@@ -1807,7 +1807,7 @@ Setting it changes nothing in the running app, and no flag makes it: a pane is w
 not at the moment it is created, so a running shell cannot be retrofitted either way. A failed write is
 reported as a failure rather than acknowledged.
 
-`agtermctl zmx list` — every daemon and every pane expecting one, joined, under the restore status as a
+`ngtermctl zmx list` — every daemon and every pane expecting one, joined, under the restore status as a
 header. `state` is `claimed`, `orphan`, `unknown`, `conflicted`, `pendingClose` or `foreign`;
 `observation` is `running`, `unreadable` or `absent`, separate from the client count because a daemon that
 is gone and one zmx could not read are different answers. A CLOSED window's panes are `claimed` with zero
@@ -1817,7 +1817,7 @@ The header also carries `endpoint.executable` and `endpoint.socketDirectory`, wh
 needs to reach these daemons; a server older than remote sessions omits the key. A row whose daemon was
 created before the recorded first launch with this zmx build carries `outdated: true` (omitted otherwise).
 
-`agtermctl zmx screen NAME [--all|--lines N]` — print one daemon's screen as plain text. NAME is the
+`ngtermctl zmx screen NAME [--all|--lines N]` — print one daemon's screen as plain text. NAME is the
 daemon name `zmx list` prints, not a session id, so it reaches a pane whose window is closed;
 `session text` resolves only open-window sessions. The default is the daemon's current screen at the size its
 last leader gave it; it has no scroll position of its own, so this is not the pane's viewport.
@@ -1825,23 +1825,23 @@ last leader gave it; it has no scroll position of its own, so this is not the pa
 that; pass one or the other. The read
 attaches nothing, opens no window and changes no pane's size. A name with no readable daemon is an error.
 
-`agtermctl zmx prune` — kill the daemons no pane claims and nothing is attached to. It refuses outright on
+`ngtermctl zmx prune` — kill the daemons no pane claims and nothing is attached to. It refuses outright on
 an incomplete or conflicted inventory. The gate is checked and revalidated rather than atomic: zmx has no
 kill-if-detached, so prune re-lists immediately before killing and drops anything that gained a client,
 but a client attaching from outside agterm in the remaining gap can still be terminated. It reports each
 daemon separately, and a "cleaned up a stale socket" line is NOT a kill: zmx unlinked a socket it could
 not reach, and that daemon may still be running.
 
-`agtermctl zmx kill --target ID --pane left|right --force` — destroy one pane's daemon and the process in
+`ngtermctl zmx kill --target ID --pane left|right --force` — destroy one pane's daemon and the process in
 it. All three are required: this kills a backend process, reaches a pane no window is showing, and takes
 down every client attached to that daemon, so there is no sensible default for who is affected. Killing a
 shown split closes that split; killing a primary promotes its split survivor, or closes the session when
 there is none; a pane whose window is closed simply comes back as a fresh shell. None of these gets the
 three-second undo. It refuses a daemon already gone, one zmx could not read (forcing that can unlink a
 live daemon's socket and leave it running unreachable), and a session inside its undo window. Killing the
-daemon of the pane you are typing in can kill the calling `agtermctl` before it reads the reply.
+daemon of the pane you are typing in can kill the calling `ngtermctl` before it reads the reply.
 
-`agtermctl zmx reset --force` — Agterm ▸ Reset Live Sessions… without the dialog. A live session created
+`ngtermctl zmx reset --force` — Agterm ▸ Reset Live Sessions… without the dialog. A live session created
 before the session host existed keeps its own macOS permission identity, so every new version of a tool in
 it asks for the microphone again; the reset ends those sessions' processes at the next launch and recreates
 them under the host, starting their captured commands again where possible. It also covers every session
@@ -1860,7 +1860,7 @@ Omit it to search every window, closed and unindexed ones included; `active` is 
 is it for `--target`. Without it an ambiguous prefix reports `no left pane daemon for session ID`, the
 same answer a target that does not exist gets.
 
-`agtermctl zmx tree [HOST]` — attachable sessions across EVERY open window. With a `HOST` it reads another
+`ngtermctl zmx tree [HOST]` — attachable sessions across EVERY open window. With a `HOST` it reads another
 Mac over ssh; with none it reports this app's own, which is exactly the form the remote call runs on the
 far side, so it is also how to see what another machine would answer without sshing anywhere.
 `result.remote` carries `endpoint` (the zmx `executable` and `socketDirectory`), `host` when one was given,
@@ -1877,10 +1877,11 @@ exists would CREATE a daemon and hand back a fresh shell wearing it, so an incom
 rather than offered half. An empty list is a successful answer and does NOT diagnose the restore mode —
 `zmx list` does that. The far side must be running in `live` mode, which is what puts a daemon behind each
 pane, and be new enough to answer `zmx tree` at all; an older one is refused by name rather than
-half-attached. It also needs `agtermctl` installed by the cask or the Help action: a machine merely
-running agterm has no CLI an ssh command can find, and the read fails with exit 127.
+half-attached. It also needs `ngtermctl` installed by the Help action: the remote call runs it on the ssh `PATH` plus
+`~/.local/bin` and `/usr/local/bin`. A machine merely running ngterm has no CLI an ssh command can find, and the read
+fails with exit 127.
 
-`agtermctl zmx attach HOST SESSION [--window W]` opens one of those sessions here, marked remote, in
+`ngtermctl zmx attach HOST SESSION [--window W]` opens one of those sessions here, marked remote, in
 the destination window's current workspace, selected, with the remote session's split when it has one.
 `--window` takes a local open window ID, unique prefix, or `active`; omitted, it uses the frontmost window
 after discovery. An invalid or closed destination fails without creating a session. Targeting a background
@@ -1906,7 +1907,7 @@ A program in an attached session runs on the origin and talks to the origin's ag
 agterm to draw would show there only. Every attach therefore also opens a presentation stream, and this
 Mac mirrors the origin session's status, its `session context`, its `notify` notifications, its HUD and
 the layout of panes already attached.
-Nothing has to be set up beyond the `agtermctl` PATH precondition above. What to expect:
+Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to expect:
 
 - The origin's context shows in this Mac's title bar and as the row's `context` in `tree`. A
   `session context` set on this Mac's row wins over it, and `--clear` here removes only that local value,
@@ -1944,7 +1945,7 @@ Nothing has to be set up beyond the `agtermctl` PATH precondition above. What to
   screen), or one whose stream drops, goes back to the origin and waits there like a local one. If the
   origin cannot place it, it ends `{"result":"cancelled","reason":"presentation-lost"}`.
 - A handed-over overlay runs its program ONCE, on the origin, under an ssh terminal the presenting Mac
-  opens (`agtermctl session overlay run-job`, plumbing not meant to be typed). The origin's session stays
+  opens (`ngtermctl session overlay run-job`, plumbing not meant to be typed). The origin's session stays
   uncovered and its slot is reserved (`remoteOverlays`). An overlay the presenting Mac cannot show ends
   `launch-failed` rather than opening on the origin. `session overlay close` requests the cancel, `resize`
   answers `the viewer showing this overlay is gone` once its stream is, and `copy`/`text` refuse. The
@@ -1954,7 +1955,7 @@ Nothing has to be set up beyond the `agtermctl` PATH precondition above. What to
 - While the stream is not up the row's indicator says so and names the host. It retries on its own, at
   once when the Mac wakes or the network changes; close and reattach the session to retry by hand.
 
-`agtermctl zmx present SESSION` is the plumbing behind it: it opens the stream on the local socket and
+`ngtermctl zmx present SESSION` is the plumbing behind it: it opens the stream on the local socket and
 bridges it to stdio as newline-delimited JSON. agterm runs it over ssh on the origin; it is not meant to
 be typed.
 
@@ -1974,8 +1975,8 @@ variables; an existing local path is not checked to be the same repository as th
 Each pane has ONE leading Mac, whose window size the program inside sees. `zmx attach` takes the lead in
 every pane at once; the same panes on the Mac the session runs on are covered ("in use from another Mac").
 Each pane's `lead` in `tree` reads `leader`, `follower` or `unowned`. It is absent when the pane has no
-daemon to lead, which is every local pane outside Live sessions mode (`agtermctl restore mode`), and when
-an agterm on either side predates the lead. `agtermctl session lead [--pane left|right]` takes the lead
+daemon to lead, which is every local pane outside Live sessions mode (`ngtermctl restore mode`), and when
+an agterm on either side predates the lead. `ngtermctl session lead [--pane left|right]` takes the lead
 for this Mac, as pressing a key on the cover does.
 
 On the Mac the session RUNS on, a covered pane stays fully drivable: `session type`, `session text` and
@@ -2006,7 +2007,7 @@ here is app-global and touches only the captured commands, not those overrides.
 
 ## clipboard
 
-`agtermctl clipboard set [TEXT]` — copy text to the clipboard of every terminal attached to the pane the
+`ngtermctl clipboard set [TEXT]` — copy text to the clipboard of every terminal attached to the pane the
 command runs in. Local-only: it never opens the control socket and takes no `--socket`, `--window`,
 `--target` or `--json`. It prints an OSC 52 clipboard write into the pane's own output through the pane's
 zmx daemon, so the write travels with the terminal bytes: a session attached from another Mac gets the
@@ -2014,7 +2015,7 @@ text on the Mac showing it, and on the Mac it runs on as well.
 
 - `TEXT` — the text to copy; read from standard input when omitted, byte for byte, a trailing newline
   included. Text that starts with `-` is read as an option, and `-h` or `--help` prints help and exits 0
-  with nothing copied: pipe such text on stdin, or write `agtermctl clipboard set -- "-text"`. Refused when empty, and above about 6 MB (libghostty drops a longer clipboard write whole).
+  with nothing copied: pipe such text on stdin, or write `ngtermctl clipboard set -- "-text"`. Refused when empty, and above about 6 MB (libghostty drops a longer clipboard write whole).
 - Needs no terminal, so an agent's shell tool can run it. It does need the pane's own environment:
   `ZMX_SESSION` and `ZMX_DIR`, which a main or split pane started under Live sessions carries. A scratch,
   quick or overlay terminal, and a pane started in another restore mode, is refused with `this pane has
@@ -2023,17 +2024,17 @@ text on the Mac showing it, and on the Mac it runs on as well.
 - Each receiving terminal applies its own `clipboard-write` setting: `ask` prompts, `deny` drops the copy.
 - Exit 0 means `zmx print` exited zero. It reads no reply, so that confirms neither that the session
   received the text nor that a terminal applied it. Other failures exit 1:
-  `no zmx next to this agtermctl` for a CLI running outside the app bundle, and `zmx print exited N` with
+  `no zmx next to this ngtermctl` for a CLI running outside the app bundle, and `zmx print exited N` with
   zmx's own message.
 - A copy made while the pane's program is in the middle of heavy output can land inside one of its escape
   sequences and garble that one sequence. Copy while the program is idle when it matters.
 
 ## terminfo
 
-`agtermctl terminfo install DESTINATION [-p PORT] [-i FILE ...] [-J HOST] [-F FILE]` — install the bundled
+`ngtermctl terminfo install DESTINATION [-p PORT] [-i FILE ...] [-J HOST] [-F FILE]` — install the bundled
 `xterm-ghostty` terminfo entry into a remote account's `~/.terminfo`. Local-only: it never opens the
 control socket, takes no `--socket`, `--window` or `--json`, and needs no running agterm. It dumps the
-entry with `infocmp -x` from the database next to the running `agtermctl` (falling back to `TERMINFO`
+entry with `infocmp -x` from the database next to the running `ngtermctl` (falling back to `TERMINFO`
 from the environment outside a bundle), then runs the remote `tic -x -o "$HOME/.terminfo" -` over one
 ssh connection with the source on stdin. Nothing is cached; run it once per host and account.
 
@@ -2048,7 +2049,7 @@ ssh connection with the source on stdin. Nothing is cached; run it once per host
 Human output on success is `installed xterm-ghostty on DESTINATION`. It exits with ssh's status (128 plus
 the signal when ssh was killed), and 64 for a usage error. Failures before the connection open none:
 
-- `no xterm-ghostty terminfo entry next to this agtermctl; looked in <dirs>` — no database found.
+- `no xterm-ghostty terminfo entry next to this ngtermctl; looked in <dirs>` — no database found.
 - `infocmp exited N: <stderr>` — the local dump failed.
 - `could not start ssh: <call> failed with <reason>` — the spawn failed.
 - `agterm: tic is not installed on this host, install ncurses first` — printed by the remote and followed
@@ -2058,7 +2059,7 @@ the signal when ssh was killed), and 64 for a usage error. Failures before the c
 
 ## version
 
-`agtermctl version` — which agterm is serving this socket. App-global: no target, no `--window`, and no
+`ngtermctl version` — which agterm is serving this socket. App-global: no target, no `--window`, and no
 window need be open, so it works as a preflight from a keymap-launched script. Returns `result.app`:
 
 - `version` — the app's version, the number a cookbook recipe's minimum is compared against.
@@ -2066,11 +2067,11 @@ window need be open, so it works as a preflight from a keymap-launched script. R
   of a version comparison.
 
 Human output is `version` alone, or `version (commit)`, followed by a `client:` line naming the resolved
-path of the `agtermctl` that ran — a diagnostic for a stale CLI earlier on `PATH` than the app's bundled
+path of the `ngtermctl` that ran — a diagnostic for a stale CLI earlier on `PATH` than the app's bundled
 helper. That line is human output only: `--json` stays the raw server response, and a caller that needs
 the client path resolves the binary it invoked itself.
 
-Address the socket explicitly when the answer must be about THIS session's app: `agtermctl` never reads
+Address the socket explicitly when the answer must be about THIS session's app: `ngtermctl` never reads
 `AGTERM_SOCKET`, so a bare call resolves the default path and may report a different instance. Use
 `--socket "$AGTERM_SOCKET"` from a session shell and `--socket "$AGT_SOCKET"` from a keymap- or
 palette-launched child.
@@ -2102,7 +2103,7 @@ a terminal surface's.
 `session.hud.open: --size-percent must be 1...100` /
 `hud helper is not bundled in this build` / `could not write the hud message` /
 `invalid position: <value> (top-left|top-center|top-right|center-left|center|center-right|bottom-left|bottom-center|bottom-right|top|bottom)`
-(session hud over the raw socket; the `agtermctl` CLI rejects the same value locally with
+(session hud over the raw socket; the `ngtermctl` CLI rejects the same value locally with
 `position must be one of: top-left, top-center, top-right, center-left, center, center-right, bottom-left, bottom-center, bottom-right, top, bottom`),
 `invalid text color: <value> (#rrggbb)` (session hud; the CLI rejects it locally with
 `text-color must be a #rrggbb hex value`),
@@ -2112,7 +2113,7 @@ a terminal surface's.
 `invalid fit` / `invalid position` / `invalid opacity` / `invalid color` / `text too long` /
 `unsupported image (PNG or JPEG only)` / `no such image file` / `image path must not contain control characters` / `invalid background mode` (session background),
 `invalid sidebar mode` (sidebar),
-`invalid focus mode: <value> (on|off|toggle|add)` (workspace focus over the raw socket; the `agtermctl`
+`invalid focus mode: <value> (on|off|toggle|add)` (workspace focus over the raw socket; the `ngtermctl`
 CLI rejects the same value locally with `mode must be one of: on, off, toggle, add`),
 `invalid workspace filter mode: <value>` (workspace filter over the raw socket; the CLI rejects it
 locally with `mode must be on, off, or toggle`),
@@ -2128,11 +2129,11 @@ restore; a `session restore --pane right` on a session with no split also return
 (resize/move/`--window`), `unknown theme: <name>` (theme set), `unknown sound: <name>` (session status --sound),
 `invalid color (expected #rrggbb)` (session status --color),
 `invalid shape: <value> (circle|square|triangle|diamond|capsule|star)` (session status --shape over the
-raw socket; the `agtermctl` CLI rejects the same value locally with
+raw socket; the `ngtermctl` CLI rejects the same value locally with
 `shape must be one of: circle, square, triangle, diamond, capsule, star`),
 `--pane must be left, right, or scratch` (the `--pane` value check; the message intentionally lists the
 canonical read-back names while the role and position aliases documented above are accepted. The
-`agtermctl` CLI rejects a bad pane with this for session status/type/text/paste, and over the raw socket
+`ngtermctl` CLI rejects a bad pane with this for session status/type/text/paste, and over the raw socket
 `session.status`, `session.restore` and `session.paste` return this same string;
 `session.type`, `session.text` and `font.*` over the raw socket instead return `invalid pane: <value>`),
 `blocked status owned by pane <pane> (write from that pane to change it)` (session status,

@@ -27,7 +27,7 @@ use zbus::zvariant::OwnedValue;
 const PRIVATE_BUS: &str = "AGTERM_GPUI_TEST_PRIVATE_BUS";
 const PATH: &str = "/org/freedesktop/Notifications";
 const DEADLINE: Duration = Duration::from_secs(20);
-const APP_ID: &str = "io.github.melonamin.agterm.test";
+const APP_ID: &str = "com.nickalie.ngterm.test";
 /// The body the fake server refuses to post.
 const FAILING: &str = "fail";
 

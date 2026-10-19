@@ -86,8 +86,8 @@ LDFLAGS="${LDFLAGS:-} -Wl,-rpath,$PREFIX/lib" meson setup "$BUILD_DIR/out" "$BUI
   -Dwayland-protocols:tests=false -Ddisplay-info:werror=false >&2
 ninja -C "$BUILD_DIR/out" >&2
 DESTDIR="$STAGE" meson install -C "$BUILD_DIR/out" --no-rebuild --quiet >&2
-mkdir -p "$STAGE$PREFIX/share/agterm"
-pin_lines WESTON >"$STAGE$PREFIX/share/agterm/weston-PINS"
+mkdir -p "$STAGE$PREFIX/share/ngterm"
+pin_lines WESTON >"$STAGE$PREFIX/share/ngterm/weston-PINS"
 
 # Its compiled-in paths (rpath, modules, the shell helper) name the final prefix, so it is checked once there; an
 # incomplete one is removed again, never left for a later run to reuse.

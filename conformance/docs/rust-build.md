@@ -11,7 +11,7 @@ Its result is the references' `app` block plus a `conformance` block only the Ru
  "conformance": {"parityLevel": "0.36.0", "capabilities": ["posix-shell", "live-sessions"]}}
 ```
 
-- `app.version`: a non-empty string; `app.commit` is optional, and `agtermctl version` prints `version (commit)`.
+- `app.version`: a non-empty string; `app.commit` is optional, and the CLI's `version` prints `version (commit)`.
   `tree` carries the same object as `tree.app`.
 - `conformance.parityLevel`: the upstream version whose behavior the build claims, a dotted version with an optional
   `v` (no suffix such as `-beta`).
@@ -45,11 +45,12 @@ The Rust build (GPUI) gets, on top of that:
   the one `scripts/build-weston.sh` vendors where the system's is older).
 
 SIGTERM must quit without a prompt within 10 seconds.
-Live sessions keep their zmx sockets in `/tmp/agterm-zmx-%016x` (lowercase hex) of the FNV-1a 64 hash over the UTF-8
+Live sessions keep their zmx sockets in `/tmp/ngterm-zmx-%016x` (lowercase hex) of the FNV-1a 64 hash over the UTF-8
 bytes of the state dir's realpath, with a leading `/private` dropped on macOS when the shorter path exists
-(`zmx_socket_directory` in `impls/base.py`).
+(`zmx_socket_directory` in `impls/base.py`); upstream's and the fork's prefix is `agterm`.
 Every zmx or session-host process carries `ZMX_DIR=<that dir>`: one left running after the stop fails it.
-`agtermctl` is taken from `--ctl`, else from beside `--bin`.
+The CLI (`agtermctl` for the Swift builds, `ngtermctl` for the Rust one: `Adapter.ctl_name`) is taken from `--ctl`,
+else from beside `--bin`.
 
 ## Capability vocabulary
 
@@ -161,10 +162,12 @@ WebKit and `agterm-gpui` with its default `html` feature, so the staged app show
 (README > WPE WebKit; the CI's is Arch's `wpewebkit`). `--stage DIR` runs a tree staged elsewhere instead.
 
 Staging. `scripts/stage.sh` assembles the tree the harness launches, `target/conformance-stage` by default:
-`bin/agterm`, `bin/agtermctl` (the harness takes it from beside `--bin`) and `bin/zmx` with `share/agterm/zmx-BUILD`
+`bin/agterm`, `bin/ngtermctl` (the harness takes it from beside `--bin`; upstream's and the fork's CLI is `agtermctl`,
+and the CLI tests expect the adapter's name in usage lines) and `bin/zmx` with `share/ngterm/zmx-BUILD`
 (the staged zmx's build id), Ghostty's `share/terminfo` (`xterm-ghostty`) and `share/ghostty` (themes, shell
 integration) from the libghostty-vt prefix, agterm's own themes beside Ghostty's, and the agent integrations' payloads
-under `share/agterm`. There is no `lib/`: libghostty-vt is linked statically, and nothing of GTK, libghostty or
+under `share/ngterm` (not upstream's `share/agterm`: installed at prefix `~/.local`, that would be the fork's state
+dir). There is no `lib/`: libghostty-vt is linked statically, and nothing of GTK, libghostty or
 layer-shell is linked at all.
 
 Lavapipe. GPUI renders through Vulkan (wgpu), so every run renders on Mesa's lavapipe, from

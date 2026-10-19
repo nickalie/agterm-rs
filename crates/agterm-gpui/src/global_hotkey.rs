@@ -9,7 +9,7 @@
 //! - Wayland: the desktop's global shortcuts portal (`org.freedesktop.portal.GlobalShortcuts`: KDE Plasma, GNOME 48 and
 //!   later, Hyprland), the chord offered as the shortcut's preferred trigger, a key name ([`portal_trigger`]), so how
 //!   it fares across a layout switch is the desktop's; the desktop may let the user confirm or change it ([`portal`]). A compositor without the portal (the wlroots ones, niri) gives a
-//!   client no global hotkey at all: logged, and its own key bindings run `agtermctl quick toggle` instead.
+//!   client no global hotkey at all: logged, and its own key bindings run `ngtermctl quick toggle` instead.
 //!
 //! The chord is registered again whenever the keymap's changes (a reload); none is while the keymap names none
 //! (upstream ships no default).

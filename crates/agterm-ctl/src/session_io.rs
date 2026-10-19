@@ -23,7 +23,7 @@ pub fn validate_pane(pane: Option<&str>) -> Result<(), String> {
     }
 }
 
-/// `agtermctl session type`: the text is the argument, or standard input with `--stdin`. Its `--pane-id` follows the
+/// `ngtermctl session type`: the text is the argument, or standard input with `--stdin`. Its `--pane-id` follows the
 /// connection options, as upstream declares it.
 #[derive(Debug, clap::Args)]
 #[command(about = "Inject text into a session.")]
@@ -118,7 +118,7 @@ impl RequestCommand for Type {
     }
 }
 
-/// `agtermctl session copy`: prints the selection the server returns.
+/// `ngtermctl session copy`: prints the selection the server returns.
 #[derive(Debug, clap::Args)]
 #[command(about = "Print a session's selected text (does not touch the system clipboard).")]
 pub struct Copy {
@@ -139,7 +139,7 @@ impl RequestCommand for Copy {
     }
 }
 
-/// `agtermctl session paste`. The abstract is upstream's, `⌘V` included.
+/// `ngtermctl session paste`. The abstract is upstream's, `⌘V` included.
 #[derive(Debug, clap::Args)]
 #[command(about = "Paste the system clipboard into a session (like ⌘V).")]
 pub struct Paste {
@@ -175,7 +175,7 @@ impl RequestCommand for Paste {
     }
 }
 
-/// `agtermctl session select-all` (wire `session.selectall`).
+/// `ngtermctl session select-all` (wire `session.selectall`).
 #[derive(Debug, clap::Args)]
 #[command(about = "Select a session's entire terminal buffer (like ⌘A).")]
 pub struct SelectAll {
@@ -201,7 +201,7 @@ impl RequestCommand for SelectAll {
     }
 }
 
-/// `agtermctl session text`: prints the text the server reads.
+/// `ngtermctl session text`: prints the text the server reads.
 #[derive(Debug, clap::Args)]
 #[command(about = "Print a session's terminal buffer as plain text (does not touch the system clipboard).")]
 pub struct Text {
@@ -265,7 +265,7 @@ impl RequestCommand for Text {
     }
 }
 
-/// `agtermctl session search`: at most one of the three steps, and no needle beside `--close`.
+/// `ngtermctl session search`: at most one of the three steps, and no needle beside `--close`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Search a session's terminal output (open the bar, set a needle, or step matches).")]
 pub struct Search {
@@ -341,14 +341,14 @@ mod tests {
     use crate::Agtermctl;
 
     fn parsed(argv: &[&str]) -> crate::session::Session {
-        let command_line = ["agtermctl", "session"].iter().chain(argv).copied();
+        let command_line = ["ngtermctl", "session"].iter().chain(argv).copied();
         let crate::Command::Session(group) = Agtermctl::try_parse_from(command_line).unwrap().command else {
             panic!("not a session command")
         };
         group
     }
 
-    /// `agtermctl session <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
+    /// `ngtermctl session <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
     fn outcome(argv: &[&str]) -> Result<Value, String> {
         let group = parsed(argv);
         let command = group.command();
@@ -369,7 +369,7 @@ mod tests {
     }
 
     fn parses(argv: &[&str]) -> bool {
-        let command_line = ["agtermctl", "session"].iter().chain(argv).copied();
+        let command_line = ["ngtermctl", "session"].iter().chain(argv).copied();
         Agtermctl::try_parse_from(command_line).is_ok()
     }
 

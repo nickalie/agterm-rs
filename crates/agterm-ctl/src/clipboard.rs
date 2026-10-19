@@ -1,4 +1,4 @@
-//! `agtermctl clipboard set` (`agtermctlKit/ClipboardCommands.swift`, `agtermCore/TerminalClipboard.swift`): prints an
+//! `ngtermctl clipboard set` (`agtermctlKit/ClipboardCommands.swift`, `agtermCore/TerminalClipboard.swift`): prints an
 //! OSC 52 clipboard write into the caller's pane through its zmx daemon, so the write reaches every terminal attached
 //! to the pane. Local-only: it never opens the control socket, so it has no `--socket` or `--json`.
 
@@ -20,7 +20,7 @@ use crate::version::client_path;
 /// prefix and the terminator.
 pub const MAX_ENCODED_BYTES: usize = 8 * 1024 * 1024 - 64;
 
-/// `agtermctl clipboard <subcommand>`.
+/// `ngtermctl clipboard <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "The clipboard of the terminals showing this pane.",
@@ -47,7 +47,7 @@ impl Clipboard {
     }
 }
 
-/// `agtermctl clipboard set [<text>]`.
+/// `ngtermctl clipboard set [<text>]`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Copy text to the clipboard of every terminal showing this pane.",
@@ -136,9 +136,9 @@ impl CopyFailure {
             Self::NotLivePane => {
                 "this pane has no zmx daemon; run it in a main or split pane started under Live sessions".to_owned()
             }
-            Self::ZmxNotFound { path: None } => "no zmx next to this agtermctl".to_owned(),
+            Self::ZmxNotFound { path: None } => "no zmx next to this ngtermctl".to_owned(),
             Self::ZmxNotFound { path: Some(path) } => {
-                format!("no zmx next to this agtermctl; looked for {}", path.display())
+                format!("no zmx next to this ngtermctl; looked for {}", path.display())
             }
             Self::PrintFailed { status, stderr } => format!("zmx print exited {status}: {}", stderr.trim()),
             Self::SpawnFailed { path, reason } => format!("could not start {}: {reason}", path.display()),
@@ -287,7 +287,7 @@ mod tests {
     }
 
     fn parse(argv: &[&str]) -> Result<Option<String>, clap::Error> {
-        let line = ["agtermctl", "clipboard", "set"].iter().chain(argv).copied();
+        let line = ["ngtermctl", "clipboard", "set"].iter().chain(argv).copied();
         let Cli::Clipboard(group) = Agtermctl::try_parse_from(line)?.command else {
             panic!("not a clipboard command")
         };
@@ -335,12 +335,12 @@ mod tests {
                 CopyFailure::NotLivePane,
                 "this pane has no zmx daemon; run it in a main or split pane started under Live sessions",
             ),
-            (CopyFailure::ZmxNotFound { path: None }, "no zmx next to this agtermctl"),
+            (CopyFailure::ZmxNotFound { path: None }, "no zmx next to this ngtermctl"),
             (
                 CopyFailure::ZmxNotFound {
                     path: Some(PathBuf::from("/x/zmx")),
                 },
-                "no zmx next to this agtermctl; looked for /x/zmx",
+                "no zmx next to this ngtermctl; looked for /x/zmx",
             ),
             (
                 CopyFailure::PrintFailed {
@@ -415,11 +415,11 @@ mod tests {
             agterm_host::fakes::write_executable(path, &format!("#!/bin/sh\n{body}\n")).unwrap();
         }
 
-        /// `bin/agtermctl` (an empty file) with or without an executable `bin/zmx` beside it.
+        /// `bin/ngtermctl` (an empty file) with or without an executable `bin/zmx` beside it.
         fn bundle(&self, with_zmx: bool) -> (PathBuf, PathBuf) {
             let bin = self.path("stage/bin");
             fs::create_dir_all(&bin).unwrap();
-            let client = bin.join("agtermctl");
+            let client = bin.join("ngtermctl");
             fs::write(&client, b"").unwrap();
             let zmx = bin.join("zmx");
             if with_zmx {

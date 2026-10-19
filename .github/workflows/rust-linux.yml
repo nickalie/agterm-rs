@@ -38,11 +38,12 @@ jobs:
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      # The prefixes and the Zig toolchains they were built with; keyed like the prefixes themselves.
+      # The prefixes and the Zig toolchains they were built with; keyed like the prefixes themselves (`ngterm`: the
+      # share/ngterm manifest layout, `prefix_key` in scripts/lib/native.sh).
       - uses: actions/cache@v6
         with:
           path: ~/.cache/agterm-rs/vendor
-          key: vendor-${{ runner.os }}-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
+          key: vendor-ngterm-${{ runner.os }}-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
       - name: pinned Zig toolchains (sha256 from build/pins.env)
         shell: bash
         run: |
@@ -177,7 +178,7 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.cache/agterm-rs/vendor
-          key: vendor-wpe-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
+          key: vendor-ngterm-wpe-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
       - name: clippy
         run: >-
           cargo clippy -p agterm-wpe -p agterm-wpe-sys -p agterm-wpe-platform-sys -p agterm-wpe-javascriptcore-sys
@@ -284,7 +285,7 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.cache/agterm-rs/vendor
-          key: vendor-arch-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
+          key: vendor-ngterm-arch-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**') }}
       # with the stage's terminfo, themes and shell integration (Ghostty's at the same pin)
       - name: libghostty-vt prefix
         run: scripts/build-ghostty-vt.sh

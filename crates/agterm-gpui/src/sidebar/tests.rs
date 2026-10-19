@@ -497,7 +497,7 @@ fn shift_extends_from_a_selection_made_elsewhere(cx: &mut TestAppContext) {
     let at = bounds(cx, "row:u").center();
     cx.simulate_click(at, Modifiers::default());
     h.settle(cx);
-    // the keymap, agtermctl or auto-follow moves the selection to var
+    // the keymap, ngtermctl or auto-follow moves the selection to var
     let var = h.id_of("var", cx);
     h.store_mut().select_session(Some(var));
     h.settle(cx);
@@ -555,7 +555,7 @@ fn menu_open(h: &Harness, cx: &mut VisualTestContext) -> bool {
 fn a_row_menu_dropped_without_a_dismiss_stops_holding_the_keyboard(cx: &mut TestAppContext) {
     let (library, _) = library();
     let (mut h, cx) = harness(cx, library, AppSettings::default());
-    // its row goes (closed through agtermctl, its shell exited) while the menu is open
+    // its row goes (closed through ngtermctl, its shell exited) while the menu is open
     right_click(cx, "row:var");
     assert!(menu_open(&h, cx), "open");
     let var = h.id_of("var", cx);

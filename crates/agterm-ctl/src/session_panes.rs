@@ -11,7 +11,7 @@ use crate::session::session_request;
 use crate::session_io::validate_pane;
 use crate::{BasicOptions, ClientOptions, RequestCommand, TargetOptions};
 
-/// `agtermctl session split <subcommand>`; a bare `session split [on|off|toggle]` runs `visibility`, the library's
+/// `ngtermctl session split <subcommand>`; a bare `session split [on|off|toggle]` runs `visibility`, the library's
 /// default subcommand ([`crate::usage::name_default_subcommands`]).
 #[derive(Debug, clap::Args)]
 #[command(
@@ -40,7 +40,7 @@ enum SplitCommand {
     Close(SplitClose),
 }
 
-/// `agtermctl session split [visibility] [on|off|toggle] [--axis vertical|horizontal]`.
+/// `ngtermctl session split [visibility] [on|off|toggle] [--axis vertical|horizontal]`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Show or hide a session split (on|off|toggle).")]
 pub struct SplitVisibility {
@@ -89,7 +89,7 @@ impl RequestCommand for SplitVisibility {
     }
 }
 
-/// `agtermctl session split close` (wire `session.split.close`).
+/// `ngtermctl session split close` (wire `session.split.close`).
 #[derive(Debug, clap::Args)]
 #[command(about = "Close the split pane (destroys it, killing whatever it runs); ok when there is none.")]
 pub struct SplitClose {
@@ -115,7 +115,7 @@ impl RequestCommand for SplitClose {
     }
 }
 
-/// `agtermctl session swap`.
+/// `ngtermctl session swap`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Exchange a split session's two panes, including their live roles and state.")]
 pub struct Swap {
@@ -136,7 +136,7 @@ impl RequestCommand for Swap {
     }
 }
 
-/// `agtermctl session lead [--pane P]`. The abstract and discussion are upstream's, `Mac` included.
+/// `ngtermctl session lead [--pane P]`. The abstract and discussion are upstream's, `Mac` included.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Take the lead of a pane's terminal for this Mac.",
@@ -182,7 +182,7 @@ impl RequestCommand for Lead {
     }
 }
 
-/// `agtermctl session scratch [on|off|toggle] [--command CMD]`.
+/// `ngtermctl session scratch [on|off|toggle] [--command CMD]`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Show or hide a session scratch terminal (on|off|toggle).")]
 pub struct Scratch {
@@ -226,7 +226,7 @@ impl RequestCommand for Scratch {
     }
 }
 
-/// `agtermctl session focus [pane]`: the pane goes as typed, the server resolves its aliases.
+/// `ngtermctl session focus [pane]`: the pane goes as typed, the server resolves its aliases.
 #[derive(Debug, clap::Args)]
 #[command(about = "Focus a split session's pane by position or role.")]
 pub struct Focus {
@@ -262,7 +262,7 @@ impl RequestCommand for Focus {
     }
 }
 
-/// `agtermctl session resize`: exactly one absolute ratio or one relative grow, each alias a signed delta of the
+/// `ngtermctl session resize`: exactly one absolute ratio or one relative grow, each alias a signed delta of the
 /// primary pane's fraction. Prints the applied, clamped fraction ([`crate::output`]).
 #[derive(Debug, clap::Args)]
 #[command(about = "Resize a split session's divider (set or nudge the primary-pane fraction).")]
@@ -373,9 +373,9 @@ mod tests {
 
     use crate::{Agtermctl, usage};
 
-    /// `agtermctl session <argv>` as the binary parses it, the default subcommand named.
+    /// `ngtermctl session <argv>` as the binary parses it, the default subcommand named.
     fn parsed(argv: &[&str]) -> crate::session::Session {
-        let command_line: Vec<OsString> = ["agtermctl", "session"]
+        let command_line: Vec<OsString> = ["ngtermctl", "session"]
             .iter()
             .chain(argv)
             .map(OsString::from)
@@ -441,7 +441,7 @@ mod tests {
     #[test]
     fn the_default_subcommand_is_named_where_the_library_falls_back_to_it() {
         let named = |argv: &[&str]| -> Vec<String> {
-            let args: Vec<OsString> = std::iter::once("agtermctl")
+            let args: Vec<OsString> = std::iter::once("ngtermctl")
                 .chain(argv.iter().copied())
                 .map(OsString::from)
                 .collect();

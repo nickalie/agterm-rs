@@ -5,7 +5,7 @@
 use agterm_proto::ControlZmxEndpoint;
 
 use super::reconnect::RemoteLinkNotice;
-use super::tree::{InvocationError, cli_path_prefix, is_plain, ssh_arguments, validate};
+use super::tree::{InvocationError, REMOTE_CLI, is_plain, remote_cli_chain, ssh_arguments, validate};
 use crate::command_restore::shell_quoted_line;
 use crate::zmx::is_daemon_name;
 use crate::zmx::lead::LeadAttachment;
@@ -14,12 +14,6 @@ use crate::zmx::lead::LeadAttachment;
 /// path anyway (upstream's `isPath`).
 fn is_path(value: &str) -> bool {
     !value.is_empty() && !value.chars().any(|ch| u32::from(ch) < 0x20 || u32::from(ch) == 0x7f)
-}
-
-/// The remote `/bin/sh -c CHAIN` the account's shell runs as one ordinary command, under the widened `PATH`.
-fn remote_chain(tail: &str) -> String {
-    let chain = format!("{} && {tail}", cli_path_prefix());
-    shell_quoted_line(&["/bin/sh", "-c", chain.as_str()])
 }
 
 /// One ssh invocation carrying `session`'s presentation stream for as long as the row is shown (upstream's
@@ -34,9 +28,9 @@ pub fn present_command(host: &str, session: &str) -> Result<Vec<String>, Invocat
     if !is_plain(session) {
         return Err(InvocationError::InvalidSession);
     }
-    let tail = format!("exec agtermctl zmx present {}", shell_quoted_line(&[session]));
+    let tail = format!("exec {REMOTE_CLI} zmx present {}", shell_quoted_line(&[session]));
     let mut argv = ssh_arguments(host, 5, false);
-    argv.push(remote_chain(&tail));
+    argv.push(remote_cli_chain(&tail));
     Ok(argv)
 }
 
@@ -52,9 +46,12 @@ pub fn run_job_command(host: &str, job: &str) -> Result<Vec<String>, InvocationE
     if !is_plain(job) {
         return Err(InvocationError::InvalidSession);
     }
-    let tail = format!("exec agtermctl session overlay run-job {}", shell_quoted_line(&[job]));
+    let tail = format!(
+        "exec {REMOTE_CLI} session overlay run-job {}",
+        shell_quoted_line(&[job])
+    );
     let mut argv = ssh_arguments(host, 5, true);
-    argv.push(remote_chain(&tail));
+    argv.push(remote_cli_chain(&tail));
     Ok(argv)
 }
 
@@ -228,7 +225,7 @@ mod tests {
         );
         let remote = argv.last().unwrap();
         assert!(remote.starts_with("'/bin/sh' '-c' "));
-        assert!(remote.contains("exec agtermctl zmx present "), "{remote}");
+        assert!(remote.contains(r"exec ngtermctl zmx present '\''S1'\''"), "{remote}");
         for bad in ["", "s 1", "s1\u{1b}[31m"] {
             assert_eq!(present_command("buildbox", bad), Err(InvocationError::InvalidSession));
         }
@@ -242,7 +239,7 @@ mod tests {
     fn run_job_forces_a_pty_and_reaches_the_installed_cli() {
         let argv = run_job_command("buildbox", "J1").unwrap();
         assert_eq!(argv[1], "-tt");
-        assert!(argv.last().unwrap().contains("exec agtermctl session overlay run-job "));
+        assert!(argv.last().unwrap().contains("exec ngtermctl session overlay run-job "));
         assert!(argv.last().unwrap().contains("$HOME/.local/bin"));
         assert_eq!(run_job_command("buildbox", "j 1"), Err(InvocationError::InvalidSession));
     }

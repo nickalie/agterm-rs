@@ -1,6 +1,7 @@
 //! A viewer's presentation stream to one attached session's origin (upstream's `RemotePresentationClient.swift`): it
-//! opens the bridge (`ssh HOST agtermctl zmx present SESSION`), applies the snapshot and the deltas behind it, asks for
-//! the presenter role the origin offers, answers pings, and reconnects with backoff when the link ends or goes quiet.
+//! opens the bridge (`ssh HOST ngtermctl zmx present SESSION`), applies the snapshot and the
+//! deltas behind it, asks for the presenter role the origin offers, answers pings, and reconnects with backoff when the
+//! link ends or goes quiet.
 //!
 //! Event-driven, with no timer or callbacks of its own: the owner passes `now` into every call and runs [`tick`] on
 //! its clock, and each call hands back what the owner must apply as [`ClientEffect`]s. The link's lines and its end

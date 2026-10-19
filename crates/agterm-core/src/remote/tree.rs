@@ -63,11 +63,24 @@ pub(crate) fn validate(host: &str) -> Result<(), InvocationError> {
 }
 
 /// sshd runs a remote command with a bare system PATH and a non-interactive shell reads no profile, so an installed
-/// CLI is otherwise not found. The Linux build's install directories are appended, so a user's own `agtermctl` earlier
+/// CLI is otherwise not found. The Linux build's install directories are appended, so a user's own CLI earlier
 /// on PATH still wins (upstream's `cliPathPrefix`, with `CommandPath.standardDirectories` for Linux).
 #[must_use]
 pub fn cli_path_prefix() -> String {
     "PATH=\"$PATH:$HOME/.local/bin:/usr/local/bin\"".to_owned()
+}
+
+/// The CLI the remote calls run on the far side: this build's. A far side with only another build's CLI fails like one
+/// with none, the shell's exit 127.
+pub const REMOTE_CLI: &str = "ngtermctl";
+
+/// The remote `/bin/sh -c CHAIN` the account's shell runs as one ordinary command: the widened `PATH`, then
+/// `invocation`, which calls [`REMOTE_CLI`]. The chain is wrapped in `/bin/sh -c`, since sshd runs it through the
+/// account's shell, where a bare `VAR=value` is a syntax error in fish.
+#[must_use]
+pub fn remote_cli_chain(invocation: &str) -> String {
+    let chain = format!("{} && {invocation}", cli_path_prefix());
+    shell_quoted_line(&["/bin/sh", "-c", chain.as_str()])
 }
 
 /// The ssh options every invocation carries: no pty unless `interactive`, never a prompt, a bounded handshake.
@@ -85,18 +98,15 @@ pub fn ssh_arguments(host: &str, connect_timeout: u32, interactive: bool) -> Vec
 }
 
 /// One ssh invocation running the far side's own bare `zmx tree`, which answers across every open window in one
-/// document (upstream's `RemoteSession.treeCommand`). The chain is wrapped in `/bin/sh -c`, since sshd runs it through
-/// the account's shell, where a bare `VAR=value` is a syntax error in fish.
+/// document (upstream's `RemoteSession.treeCommand`), through [`remote_cli_chain`].
 ///
 /// # Errors
 ///
 /// The host is empty or not something ssh may take as a destination.
 pub fn tree_command(host: &str) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
-    let chain = format!("{} && agtermctl zmx tree --json", cli_path_prefix());
-    let remote = shell_quoted_line(&["/bin/sh", "-c", chain.as_str()]);
     let mut argv = ssh_arguments(host, 5, false);
-    argv.push(remote);
+    argv.push(remote_cli_chain(&format!("{REMOTE_CLI} zmx tree --json")));
     Ok(argv)
 }
 
@@ -230,7 +240,7 @@ impl MergeError {
 }
 
 /// The remote's own explanation for a nonzero exit, or `None` when it gave none (upstream's `remoteError(stdout:)`).
-/// `agtermctl --json` prints a refusal to stdout and exits nonzero, so stderr is empty on exactly these failures.
+/// `ngtermctl --json` prints a refusal to stdout and exits nonzero, so stderr is empty on exactly these failures.
 #[must_use]
 pub fn remote_error(stdout: &str) -> Option<String> {
     let response: Response<ControlResult> = serde_json::from_str(stdout).ok()?;
@@ -597,7 +607,7 @@ mod tests {
             "no windows is an empty answer, not a failure"
         );
         assert_eq!(
-            decode("command not found: agtermctl"),
+            decode("command not found: ngtermctl"),
             Err(MergeError::MalformedProjection)
         );
         assert_eq!(
@@ -671,6 +681,38 @@ mod tests {
         assert_eq!(remote_error("garbage"), None);
     }
 
+    /// Runs the tree command's remote line the way sshd hands it to the account's shell, in a home whose
+    /// `~/.local/bin` holds a stand-in for each of `clis`, each printing its own name and arguments.
+    fn run_remote_line(clis: &[&str]) -> std::process::Output {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for cli in clis {
+            agterm_host::fakes::write_executable(&bin.join(cli), &format!("#!/bin/sh\necho {cli} \"$@\"\n")).unwrap();
+        }
+        let line = tree_command("buildbox").unwrap().pop().unwrap();
+        std::process::Command::new("/bin/sh")
+            .args(["-c", &line])
+            .env_clear()
+            .env("HOME", home.path())
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap()
+    }
+
+    #[test]
+    fn the_remote_line_runs_ngtermctl_and_never_another_cli() {
+        let ours = run_remote_line(&["ngtermctl", "agtermctl"]);
+        assert_eq!(String::from_utf8_lossy(&ours.stdout), "ngtermctl zmx tree --json\n");
+        let other = run_remote_line(&["agtermctl"]);
+        assert_eq!(
+            other.status.code(),
+            Some(127),
+            "the shell's command-not-found: {other:?}"
+        );
+        assert!(other.stdout.is_empty());
+    }
+
     #[test]
     fn the_tree_command_runs_the_bare_form_through_sh_and_refuses_odd_hosts() {
         let argv = tree_command("buildbox").unwrap();
@@ -680,7 +722,7 @@ mod tests {
         );
         assert_eq!(
             argv[7],
-            r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && agtermctl zmx tree --json'"#
+            r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && ngtermctl zmx tree --json'"#
         );
         assert_eq!(tree_command(""), Err(InvocationError::EmptyHost));
         for host in ["-oProxyCommand=x", "bad host", "ho\u{7f}st", "a\u{1b}[31m"] {

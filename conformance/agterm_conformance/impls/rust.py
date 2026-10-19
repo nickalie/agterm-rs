@@ -52,6 +52,8 @@ def profile_from_version(result: Mapping[str, Any] | None) -> Profile:
 
 class RustAdapter(Adapter):
     name = "rust"
+    app_dir_name = "ngterm"
+    ctl_name = "ngtermctl"
     needs_app_id = sys.platform.startswith("linux")
     needs_runtime_dir = sys.platform.startswith("linux")
 
@@ -113,5 +115,5 @@ class RustAdapter(Adapter):
     def default_ctl(self) -> Path | None:
         if self.bin is None:
             return None
-        sibling = Path(self.bin).parent / "agtermctl"
+        sibling = Path(self.bin).parent / self.ctl_name
         return sibling if sibling.exists() else None

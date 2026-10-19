@@ -18,7 +18,7 @@ const LIBDIR: &str = env!("AGTERM_WPE_LIBDIR");
 /// Where a distribution build looks for its helpers, and so where a vendored prefix's `lib/` is overlaid.
 const SYSTEM_LIBDIR: &str = "/usr/lib";
 /// The manifest `scripts/fetch-wpe.sh` leaves in a vendored prefix, relative to its `lib/`.
-const VENDORED_MANIFEST: &str = "../share/agterm/wpe-PINS";
+const VENDORED_MANIFEST: &str = "../share/ngterm/wpe-PINS";
 
 /// Where WPE `WebKit` comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,8 +115,8 @@ mod tests {
         let libdir = prefix.path().join("lib");
         std::fs::create_dir_all(&libdir).unwrap();
         assert_eq!(provider_for(&libdir), Provider::System);
-        std::fs::create_dir_all(prefix.path().join("share/agterm")).unwrap();
-        std::fs::write(prefix.path().join("share/agterm/wpe-PINS"), "WPE_VERSION=2.54.1\n").unwrap();
+        std::fs::create_dir_all(prefix.path().join("share/ngterm")).unwrap();
+        std::fs::write(prefix.path().join("share/ngterm/wpe-PINS"), "WPE_VERSION=2.54.1\n").unwrap();
         assert_eq!(provider_for(&libdir), Provider::Vendored { libdir });
         assert_eq!(provider_for(Path::new("/usr/lib")), Provider::System);
     }

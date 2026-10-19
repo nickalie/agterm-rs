@@ -45,7 +45,9 @@ MINIMAL_PATH = "/usr/bin:/bin"
 # The startup variables a Live pane's shell integration hands on to the login shell (zsh's ZDOTDIR, bash's ENV and
 # HISTFILE), which would point the pane at the user's real startup and history files.
 SHELL_STARTUP_VARIABLES = ("ZDOTDIR", "GHOSTTY_ZSH_ZDOTDIR", "ENV", "BASH_ENV", "GHOSTTY_BASH_ENV", "HISTFILE")
-DEFAULT_APP_ID = "io.github.melonamin.agterm"
+DEFAULT_APP_ID = "com.nickalie.ngterm"
+# The Linux fork's id, which its installed GTK build (and an older install of this one) still holds.
+FORK_APP_ID = "io.github.melonamin.agterm"
 SESSION_HOST = "agterm-session-host"
 LEFTOVER_NAMES = frozenset({"zmx", SESSION_HOST})
 # With SHELL=/bin/sh this is belt and braces: either alone gives a reference-linux pane /bin/sh
@@ -200,9 +202,10 @@ def version_tuple(version: str) -> tuple[int, ...]:
     return tuple(parts)
 
 
-def zmx_socket_directory(state_dir: str | os.PathLike[str]) -> str:
-    """`ZmxSupport.socketDirectory`: FNV-1a 64 of the canonical state dir, under `/tmp`."""
-    return f"/tmp/agterm-zmx-{fnv1a64(_foundation_resolved(os.path.realpath(state_dir)))}"
+def zmx_socket_directory(state_dir: str | os.PathLike[str], name: str = "agterm") -> str:
+    """`ZmxSupport.socketDirectory`: FNV-1a 64 of the canonical state dir, under `/tmp`, prefixed with the
+    implementation's directory name (`Adapter.app_dir_name`)."""
+    return f"/tmp/{name}-zmx-{fnv1a64(_foundation_resolved(os.path.realpath(state_dir)))}"
 
 
 def fnv1a64(text: str) -> str:
@@ -244,7 +247,7 @@ def check_app_id(app_id: str | None) -> str:
     """Missing, default or malformed ids reach the user's running instance or abort GApplication."""
     if not app_id:
         raise LaunchRefused("AGTERM_APP_ID is required: without it the launch is forwarded to the running app")
-    if app_id == DEFAULT_APP_ID:
+    if app_id in (DEFAULT_APP_ID, FORK_APP_ID):
         raise LaunchRefused(f"AGTERM_APP_ID {app_id} is the installed app's id")
     elements = app_id.split(".")
     if len(app_id) > 255 or len(elements) < 2 or not all(_APP_ID_ELEMENT.fullmatch(e) for e in elements):
@@ -387,6 +390,11 @@ class Adapter:
     """One implementation under test. Subclasses supply the executable and platform env."""
 
     name: ClassVar[str] = ""
+    # The name the implementation gives its state directory under the platform's application support directory, its
+    # control socket (`<name>.sock`) and its zmx socket directories (`/tmp/<name>-zmx-*`): upstream's and the fork's.
+    app_dir_name: ClassVar[str] = "agterm"
+    # The implementation's CLI: the executable beside its binary and the name its usage lines and help print.
+    ctl_name: ClassVar[str] = "agtermctl"
     needs_app_id: ClassVar[bool] = False
     # A Linux desktop app: its runtime dir is the live session's, so the instance gets a private one.
     needs_runtime_dir: ClassVar[bool] = False
@@ -476,7 +484,7 @@ class Adapter:
             SHELL="/bin/sh",
             BROWSER="true",
             AGTERM_STATE_DIR=os.fspath(state),
-            AGTERM_CONTROL_SOCKET=os.fspath(state / "agterm.sock"),
+            AGTERM_CONTROL_SOCKET=os.fspath(state / f"{self.app_dir_name}.sock"),
         )
         if self.needs_app_id:
             env["AGTERM_APP_ID"] = app_id or unique_app_id()
@@ -545,7 +553,7 @@ class Adapter:
             env=env,
             log=log,
             app_id=app_id,
-            zmx_dir=zmx_socket_directory(env["AGTERM_STATE_DIR"]),
+            zmx_dir=zmx_socket_directory(env["AGTERM_STATE_DIR"], self.app_dir_name),
             compositor=compositor,
             session_bus=session_bus,
         )

@@ -26,7 +26,7 @@ below, not a later phase. Build, run and test commands are in [README.md](README
 | `agterm-host` | the seams a frontend implements: `MainLoop`, `Surface`, `SessionHost`, `ProcessLauncher`, `ProcessTable`; in-memory fakes behind feature `fakes` | any |
 | `agterm-core` | model, target resolver, command dispatcher (`commands/`, one module per group), events, keymap and Ghostty's keybind actions, the Ghostty config parser and its diagnostics, hooks, persistence, settings, pane environment, zmx/restore logic | any |
 | `agterm-server` | AF_UNIX control server: socket ownership (`flock`), one thread per connection, main-loop hop, stream handoff | any |
-| `agterm-ctl` → `agtermctl` | clap CLI ported from upstream's `agtermctlKit`, socket resolution, output formatting | any |
+| `agterm-ctl` → `ngtermctl` | clap CLI ported from upstream's `agtermctlKit`, socket resolution, output formatting | any |
 | `agterm-ghostty-vt-sys` | checked-in bindgen output over libghostty-vt's official C API (`scripts/gen-ghostty-vt-bindings.sh`), links the vendored static library; not under the workspace lints | Linux |
 | `agterm-ghostty-vt` | safe wrapper over the sys crate: terminal, render state, effects, key and mouse encoders, selection and its gesture, formatter, search, Kitty graphics | Linux |
 | `agterm-term` | the toolkit-neutral pane core: a libghostty-vt terminal fed from a PTY by an IO thread per pane, input, selection, search, read-back, launch and terminal identity, frames and events in its own types | Linux |
@@ -100,13 +100,13 @@ of its own, with what it regenerates (`build/pins.env` names it).
 ## Never touch the user's running agterm
 
 Agents here usually run inside a pane of the user's live agterm, whose `AGTERM_*` and `ZMX_*` variables point at it.
-Every dev instance, probe or `agtermctl` call stays off it:
+Every dev instance, probe or `ngtermctl` call stays off it:
 
 - Launch a checkout's build only through `scripts/run-gpui-dev.sh` (or the suite): the build shares the installed
   agterm's application id and state (README holds them), so a plain launch is forwarded to the running instance
   through the D-Bus name it serves (`zbus`), or shares its state.
 - Strip `AGTERM_*` and `ZMX_*` from the environment before launching anything (`run-gpui-dev.sh` and the harness do).
-- Give every `agtermctl` call an explicit `--socket` (a per-subcommand option, after the subcommand name). Without it
+- Give every `ngtermctl` call an explicit `--socket` (a per-subcommand option, after the subcommand name). Without it
   the CLI resolves the live instance's socket.
 - Use a private state dir, so the instance's live-session namespace is private too. Live sessions outlive the app by
   design: reap only the session processes of that instance's namespace, never by name (`pkill zmx`), and never run

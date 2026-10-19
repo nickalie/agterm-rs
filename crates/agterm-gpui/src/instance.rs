@@ -1,14 +1,16 @@
-//! One running agterm per application id, by `GApplication`'s own D-Bus protocol, so a GPUI launch and a GTK-build
-//! launch forward to each other's primary (plan > Solution Overview > Single instance).
+//! One running agterm per application id, by `GApplication`'s own D-Bus protocol (plan > Solution Overview > Single
+//! instance). This build's id ([`DEFAULT_APP_ID`]) is not the GTK fork's, so the two no longer forward to each other;
+//! they keep apart through separate state directories (`agterm_core::paths`) instead. A GTK-build launch given the
+//! same id (`AGTERM_APP_ID`) still forwards to a GPUI primary and back.
 //!
 //! The primary owns the app id's well-known name on the session bus and serves, at `GApplication`'s object path,
 //! `org.gtk.Application` (`Activate` with platform data: the only call a default-flags GTK launch makes; `Open` the
 //! same) and `org.gtk.Actions` (`DescribeAll`, which a non-primary `GApplication` calls while it registers and fails
 //! without, and `Activate`). A launch that finds the name owned sends `Activate` with its own platform data and exits
 //! before GPUI starts and before it reads or writes the model state (`windows.json`, the window files, the settings),
-//! so the two never both write them; like the GTK build's, it only appends its lines to the shared `agterm.log`
-//! (logging starts first, and rotates the file only under the running instance's lock). As `GApplication` does, a
-//! launch with no session bus runs as a primary of its own.
+//! so two launches of one id never both write them; like the GTK build's, it only appends its lines to the shared
+//! `agterm.log` (logging starts first, and rotates the file only under the running instance's lock). As
+//! `GApplication` does, a launch with no session bus runs as a primary of its own.
 //!
 //! The activation token travels in the platform data: GPUI consumes `XDG_ACTIVATION_TOKEN` for its first toplevel
 //! only and removes it from the environment when its platform is created, and a plain `GApplication` forwards no token
@@ -25,8 +27,8 @@ use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::message::{Flags, Message};
 use zbus::zvariant::{OwnedValue, Signature, Value};
 
-/// The application id the Linux fork registered, kept so this build can take over its state and its launches.
-pub const DEFAULT_APP_ID: &str = "io.github.melonamin.agterm";
+/// The application id this build registers.
+pub const DEFAULT_APP_ID: &str = "com.nickalie.ngterm";
 /// The variable that gives a dev or test instance an id of its own (`scripts/run-gpui-dev.sh`, the conformance
 /// harness).
 pub const APP_ID_ENV: &str = "AGTERM_APP_ID";
@@ -40,7 +42,7 @@ const TOKEN_KEY: &str = "activation-token";
 const STARTUP_ID_KEY: &str = "desktop-startup-id";
 const CWD_KEY: &str = "cwd";
 
-/// `AGTERM_APP_ID` when `GApplication` would accept it, else the fork's id.
+/// `AGTERM_APP_ID` when `GApplication` would accept it, else [`DEFAULT_APP_ID`].
 #[must_use]
 pub fn app_id(env: &dyn Env) -> String {
     env.var(APP_ID_ENV)
@@ -301,9 +303,9 @@ mod tests {
 
     #[test]
     fn the_app_id_honours_a_valid_override_only() {
-        assert_eq!(app_id(&MapEnv::new()), DEFAULT_APP_ID);
-        let env = MapEnv::new().with(APP_ID_ENV, "io.github.melonamin.agterm.dev.i1");
-        assert_eq!(app_id(&env), "io.github.melonamin.agterm.dev.i1");
+        assert_eq!(app_id(&MapEnv::new()), "com.nickalie.ngterm");
+        let env = MapEnv::new().with(APP_ID_ENV, "com.nickalie.ngterm.dev.i1");
+        assert_eq!(app_id(&env), "com.nickalie.ngterm.dev.i1");
         for invalid in [
             "",
             "agterm",
@@ -333,7 +335,7 @@ mod tests {
 
     #[test]
     fn the_object_path_is_gapplications() {
-        assert_eq!(object_path("io.github.melonamin.agterm"), "/io/github/melonamin/agterm");
+        assert_eq!(object_path("com.nickalie.ngterm"), "/com/nickalie/ngterm");
         assert_eq!(object_path("org.example.my-app"), "/org/example/my_app");
     }
 

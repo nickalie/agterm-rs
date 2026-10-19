@@ -274,14 +274,14 @@ fn the_window_host_is_undecorated_centered_and_maximized_for_the_zoom() {
 #[test]
 fn the_quick_terminal_runs_a_login_shell_with_the_quick_environment() {
     let context = PaneContext {
-        socket: "/run/agterm.sock".to_owned(),
+        socket: "/run/ngterm.sock".to_owned(),
         program_version: "0.36.0".to_owned(),
     };
     let launch = launch("/home/u".to_owned(), &context);
     assert_eq!(launch.working_directory, Some(PathBuf::from("/home/u")));
     assert_eq!(launch.command, None);
     assert!(!launch.wait_after_command);
-    let expected: Vec<(String, String)> = pane_env::quick_terminal("/run/agterm.sock", "0.36.0")
+    let expected: Vec<(String, String)> = pane_env::quick_terminal("/run/ngterm.sock", "0.36.0")
         .into_iter()
         .collect();
     assert_eq!(launch.env, expected);
@@ -404,7 +404,7 @@ impl Harness<'_> {
         self.cx.update(|cx| {
             let quick = QuickEnv {
                 env,
-                app_id: "io.github.melonamin.agterm.test",
+                app_id: "com.nickalie.ngterm.test",
                 frontmost: None,
             };
             panel.sync(&mut state.core, &quick, cx);

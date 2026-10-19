@@ -1,4 +1,4 @@
-//! `agtermctl sidebar` (`agtermctlKit/MiscCommands.swift` `Sidebar`): the sidebar's visibility, view mode and flagged
+//! `ngtermctl sidebar` (`agtermctlKit/MiscCommands.swift` `Sidebar`): the sidebar's visibility, view mode and flagged
 //! layout, expanding and collapsing its tree, and its width. `visibility` is the group's default subcommand
 //! ([`crate::usage::name_default_subcommands`]), so a bare `sidebar [show|hide|toggle]` keeps working. Visibility,
 //! mode and flagged layout take no `--window`: they act on the frontmost window, or app-wide.
@@ -9,7 +9,7 @@ use agterm_proto::{Args, Command, Request};
 
 use crate::{BasicOptions, ClientOptions, Failure, RequestCommand};
 
-/// `agtermctl sidebar <subcommand>`.
+/// `ngtermctl sidebar <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Sidebar visibility and view mode.",
@@ -74,7 +74,7 @@ fn mode_request(cmd: SidebarCmd, mode: &str) -> Request {
     sidebar_request(cmd, Some(args))
 }
 
-/// `agtermctl sidebar [visibility] [show|hide|toggle]`: the mode is the server's to check. The sidebar is always the
+/// `ngtermctl sidebar [visibility] [show|hide|toggle]`: the mode is the server's to check. The sidebar is always the
 /// frontmost window's, so this carries no `--window`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Sidebar visibility (show|hide|toggle).")]
@@ -96,7 +96,7 @@ impl RequestCommand for Visibility {
     }
 }
 
-/// `agtermctl sidebar mode [tree|flagged|toggle]`: flips the frontmost window's sidebar between the workspace tree and
+/// `ngtermctl sidebar mode [tree|flagged|toggle]`: flips the frontmost window's sidebar between the workspace tree and
 /// the flagged working-set view.
 #[derive(Debug, clap::Args)]
 #[command(about = "Sidebar view mode (tree|flagged|toggle).")]
@@ -126,7 +126,7 @@ impl RequestCommand for Mode {
     }
 }
 
-/// `agtermctl sidebar flagged-layout [flat|plain|tree|toggle]`: how every window's flagged view arranges its sessions;
+/// `ngtermctl sidebar flagged-layout [flat|plain|tree|toggle]`: how every window's flagged view arranges its sessions;
 /// app-wide, so no `--window`. The reply echoes the applied layout as `text`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Flagged view layout (flat|plain|tree|toggle).")]
@@ -159,7 +159,7 @@ impl RequestCommand for FlaggedLayout {
     }
 }
 
-/// `agtermctl sidebar expand [--window W]`: expands every workspace in a window's sidebar tree (default frontmost).
+/// `ngtermctl sidebar expand [--window W]`: expands every workspace in a window's sidebar tree (default frontmost).
 #[derive(Debug, clap::Args)]
 #[command(about = "Expand every workspace in the sidebar.")]
 pub struct Expand {
@@ -177,7 +177,7 @@ impl RequestCommand for Expand {
     }
 }
 
-/// `agtermctl sidebar collapse [--window W]`: collapses every workspace but the active one in a window's sidebar.
+/// `ngtermctl sidebar collapse [--window W]`: collapses every workspace but the active one in a window's sidebar.
 #[derive(Debug, clap::Args)]
 #[command(about = "Collapse all workspaces except the active one.")]
 pub struct Collapse {
@@ -195,7 +195,7 @@ impl RequestCommand for Collapse {
     }
 }
 
-/// `agtermctl sidebar width <points> [--window W]`: moves the divider a drag would move and prints the APPLIED width,
+/// `ngtermctl sidebar width <points> [--window W]`: moves the divider a drag would move and prints the APPLIED width,
 /// so a value outside the bounds reads back as the clamped one. The range is the server's to check.
 #[derive(Debug, clap::Args)]
 #[command(about = "Set the sidebar width in points.")]
@@ -240,10 +240,10 @@ mod tests {
     use crate::Agtermctl;
     use crate::usage::name_default_subcommands;
 
-    /// `agtermctl sidebar <argv>` parsed (the default subcommand named first) and validated: the request a run sends
+    /// `ngtermctl sidebar <argv>` parsed (the default subcommand named first) and validated: the request a run sends
     /// as JSON, or the refusal.
     fn outcome(argv: &[&str]) -> Result<Value, String> {
-        let command_line: Vec<OsString> = ["agtermctl", "sidebar"]
+        let command_line: Vec<OsString> = ["ngtermctl", "sidebar"]
             .iter()
             .chain(argv)
             .map(OsString::from)

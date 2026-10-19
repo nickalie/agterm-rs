@@ -13,7 +13,8 @@ python -m venv .venv && .venv/bin/pip install -e "conformance[ax]"    # macOS: a
 
 ## Running
 
-`--impl` picks the adapter; `--bin` is the app to launch; `--ctl` overrides the `agtermctl` found beside it.
+`--impl` picks the adapter; `--bin` is the app to launch; `--ctl` overrides the CLI found
+beside it (`agtermctl`, the Rust build's `ngtermctl`: the adapter's `ctl_name`).
 
 ```sh
 # upstream macOS release (a bundle or its executable); fetch_reference.py downloads and caches it by tag

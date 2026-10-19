@@ -181,7 +181,7 @@ pub fn starter_hooks_conf() -> String {
     format!(
         "\
 # agterm hooks — run a shell line when a control event fires. Edit this file and run
-# File ▸ Reload Hooks (or `agtermctl hooks reload`) to apply. Blank lines and lines starting
+# File ▸ Reload Hooks (or `ngtermctl hooks reload`) to apply. Blank lines and lines starting
 # with `#` are ignored.
 #
 #   on <kind> <shell...>
@@ -192,19 +192,19 @@ pub fn starter_hooks_conf() -> String {
 # untouched, detached with no terminal, in the app's working directory, one process per line at
 # a time. Further events for a busy line queue in order (256 pending, oldest dropped).
 #
-# The script gets the event as one JSON object on stdin, the shape `agtermctl events --json` prints,
+# The script gets the event as one JSON object on stdin, the shape `ngtermctl events --json` prints,
 # and these variables: AGT_EVENT_KIND, AGT_EVENT_STATUS, AGT_EVENT_HOST, AGT_SESSION_ID,
-# AGT_WORKSPACE_ID, AGT_WINDOW_ID, AGT_SOCKET. Pass `--socket \"$AGT_SOCKET\"` to any agtermctl
+# AGT_WORKSPACE_ID, AGT_WINDOW_ID, AGT_SOCKET. Pass `--socket \"$AGT_SOCKET\"` to any ngtermctl
 # call. A hook whose command emits another event of its own kind triggers itself again; the
 # queue bounds concurrency, it does not detect loops.
 #
 # Examples:
 #
-#   on status           ~/.config/agterm/hooks/status.sh
-#   on session.closed   echo \"$(date +%T) closed $AGT_SESSION_ID\" >> ~/.local/state/agterm/sessions.log
-#   (a redirection does not create its directory: mkdir -p ~/.local/state/agterm first)
-#   on pane.scratch     ~/.config/agterm/hooks/scratch-layout.sh
-#   on tree.changed     ~/.config/agterm/hooks/sync-outline.sh
+#   on status           ~/.config/ngterm/hooks/status.sh
+#   on session.closed   echo \"$(date +%T) closed $AGT_SESSION_ID\" >> ~/.local/state/ngterm/sessions.log
+#   (a redirection does not create its directory: mkdir -p ~/.local/state/ngterm first)
+#   on pane.scratch     ~/.config/ngterm/hooks/scratch-layout.sh
+#   on tree.changed     ~/.config/ngterm/hooks/sync-outline.sh
 #
 # Uncomment and edit a line below to start.
 # on status [ \"$AGT_EVENT_STATUS\" = blocked ] || exit 0; canberra-gtk-play -i dialog-warning
@@ -246,7 +246,7 @@ pub fn hook_environment(event: &ControlEvent, socket: &str) -> Vec<(String, Stri
 }
 
 /// What a hook child reads on stdin: the event as one compact JSON object, the shape `events.read` returns and
-/// `agtermctl events --json` prints, then a newline.
+/// `ngtermctl events --json` prints, then a newline.
 ///
 /// # Errors
 ///

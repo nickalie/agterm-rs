@@ -1,8 +1,11 @@
 //! The command line tool installer (upstream's `CLIInstall.swift` and `CLIInstaller.swift`), with the Linux path:
-//! the bundled `agtermctl` is symlinked into `~/.local/bin`, the per-user executables directory most distributions put
+//! the bundled `ngtermctl` is symlinked into `~/.local/bin`, the per-user executables directory most distributions put
 //! on the `PATH`, so no admin prompt is needed (upstream links into `/usr/local/bin`, through an admin prompt when
 //! that directory is root-owned). An earlier link is replaced; a real file there (a package's or a hand-installed
 //! binary) is the user's and is left alone.
+//!
+//! The CLI is `ngtermctl`, not upstream's `agtermctl`: the GTK fork puts its own `~/.local/bin/agtermctl` there, and
+//! the two CLIs resolve different default sockets, so this build neither takes nor touches that name.
 
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -10,8 +13,8 @@ use std::path::{Path, PathBuf};
 
 use super::Environment;
 
-/// The tool's executable name.
-pub const TOOL_NAME: &str = "agtermctl";
+/// The bundled tool's executable name, the link the install puts on the `PATH` and the command the user runs.
+pub const TOOL_NAME: &str = "ngtermctl";
 
 /// The directory the tool is linked into.
 #[must_use]
@@ -171,7 +174,7 @@ mod tests {
     }
 
     fn bundled_tool(dir: &Path) -> PathBuf {
-        let tool = dir.join("stage/bin/agtermctl");
+        let tool = dir.join("stage/bin/ngtermctl");
         fs::create_dir_all(tool.parent().unwrap()).unwrap();
         fs::write(&tool, "#!/bin/sh\n").unwrap();
         tool
@@ -183,7 +186,7 @@ mod tests {
         let home = dir.path().join("home");
         let tool = bundled_tool(dir.path());
         let environment = env(&home, Some(tool.clone()));
-        let link = home.join(".local/bin/agtermctl");
+        let link = home.join(".local/bin/ngtermctl");
 
         let first = plan(&environment);
         assert_eq!(
@@ -223,13 +226,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         let tool = bundled_tool(dir.path());
-        let link = home.join(".local/bin/agtermctl");
+        let link = home.join(".local/bin/ngtermctl");
         fs::create_dir_all(link.parent().unwrap()).unwrap();
-        symlink("/old/build/agtermctl", &link).unwrap();
+        symlink("/old/build/ngtermctl", &link).unwrap();
 
         let planned = plan(&env(&home, Some(tool.clone())));
         assert!(
-            matches!(&planned, CliPlan::Link { status: LinkStatus::OtherLink(old), .. } if old == Path::new("/old/build/agtermctl"))
+            matches!(&planned, CliPlan::Link { status: LinkStatus::OtherLink(old), .. } if old == Path::new("/old/build/ngtermctl"))
         );
         let result = apply(&planned, None);
         assert_eq!(fs::read_link(&link).unwrap(), tool);
@@ -244,24 +247,45 @@ mod tests {
     }
 
     #[test]
+    fn the_forks_agtermctl_link_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let tool = bundled_tool(dir.path());
+        let forks = home.join(".local/bin/agtermctl");
+        fs::create_dir_all(forks.parent().unwrap()).unwrap();
+        symlink("/home/me/.local/share/agterm-linux/bin/agtermctl", &forks).unwrap();
+
+        let planned = plan(&env(&home, Some(tool.clone())));
+        assert!(
+            matches!(&planned, CliPlan::Link { link, status: LinkStatus::Absent, .. } if link.ends_with("ngtermctl"))
+        );
+        assert!(matches!(apply(&planned, None), CliResult::Installed { .. }));
+        assert_eq!(fs::read_link(home.join(".local/bin/ngtermctl")).unwrap(), tool);
+        assert_eq!(
+            fs::read_link(&forks).unwrap(),
+            Path::new("/home/me/.local/share/agterm-linux/bin/agtermctl")
+        );
+    }
+
+    #[test]
     fn a_build_without_the_tool_says_so() {
         let dir = tempfile::tempdir().unwrap();
         let result = apply(&plan(&env(dir.path(), None)), None);
         assert_eq!(
             result,
-            CliResult::Failed("agtermctl is not bundled in this build.".to_owned())
+            CliResult::Failed("ngtermctl is not bundled in this build.".to_owned())
         );
     }
 
     #[test]
     fn the_installed_text_is_upstreams() {
         let result = CliResult::Installed {
-            link: "/home/me/.local/bin/agtermctl".into(),
+            link: "/home/me/.local/bin/ngtermctl".into(),
             on_path: true,
         };
         assert_eq!(
             result.text(),
-            "agtermctl was linked into /home/me/.local/bin/agtermctl. Open a new terminal and run “agtermctl --help”."
+            "ngtermctl was linked into /home/me/.local/bin/ngtermctl. Open a new terminal and run “ngtermctl --help”."
         );
         assert_eq!(result.title(), "Command Line Tool Installed");
     }

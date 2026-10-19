@@ -1,4 +1,4 @@
-//! `agtermctl browser clear|links` (`agtermctlKit/MiscCommands.swift` `Browser`): the saved browser store of
+//! `ngtermctl browser clear|links` (`agtermctlKit/MiscCommands.swift` `Browser`): the saved browser store of
 //! `--persistent` URL overlays and where a clicked terminal link opens. Both are app-wide, so neither takes `--window`;
 //! `links` prints the effective mode through [`crate::output`]'s `text` branch.
 
@@ -9,7 +9,7 @@ use agterm_proto::{Args, Command, Request};
 
 use crate::{BasicOptions, Failure, RequestCommand};
 
-/// `agtermctl browser <subcommand>`.
+/// `ngtermctl browser <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Saved browser storage of --persistent URL overlays, and where clicked links open.",
@@ -57,7 +57,7 @@ fn browser_request(cmd: BrowserCmd, args: Option<Args>) -> Request {
     }
 }
 
-/// `agtermctl browser clear`: one store serves every window, so no `--window`.
+/// `ngtermctl browser clear`: one store serves every window, so no `--window`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Remove every cookie and all site data the saved browser store holds.",
@@ -80,7 +80,7 @@ impl RequestCommand for Clear {
     }
 }
 
-/// `agtermctl browser links [browser|overlay]`: no mode reads the setting.
+/// `ngtermctl browser links [browser|overlay]`: no mode reads the setting.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Set or read where a clicked web link in a terminal opens (browser|overlay).",
@@ -125,9 +125,9 @@ mod tests {
 
     use crate::{Agtermctl, Command as Cli};
 
-    /// `agtermctl browser <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
+    /// `ngtermctl browser <argv>` parsed and validated: the request a run sends as JSON, or the refusal.
     fn outcome(argv: &[&str]) -> Result<Value, String> {
-        let line = ["agtermctl", "browser"].iter().chain(argv).copied();
+        let line = ["ngtermctl", "browser"].iter().chain(argv).copied();
         let parsed = Agtermctl::try_parse_from(line).map_err(|error| error.to_string())?;
         let Cli::Browser(group) = parsed.command else {
             panic!("not a browser command")

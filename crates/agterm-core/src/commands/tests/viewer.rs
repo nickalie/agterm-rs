@@ -300,7 +300,7 @@ fn attach_creates_a_remote_row_with_both_panes_and_opens_its_stream() {
             .argv
             .last()
             .unwrap()
-            .contains("exec agtermctl zmx present")
+            .contains("exec ngtermctl zmx present")
     );
     assert!(link.0.borrow().argv.last().unwrap().contains(ORIGIN_SESSION));
     assert_eq!(viewer.sent("hello").len(), 1);

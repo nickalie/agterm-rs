@@ -24,7 +24,7 @@ pub const INTEGRATION_RELATIVE_PATH: &str = "shell/integration.sh";
 pub const FISH_INTEGRATION_RELATIVE_PATH: &str = "shell/integration.fish";
 
 /// The sentinel opening the installer-baked `AGTERMCTL` block; a re-bake replaces it instead of stacking another.
-pub const AGTERMCTL_MARKER: &str = "# >>> agterm agtermctl path (installer-baked) >>>";
+pub const AGTERMCTL_MARKER: &str = "# >>> agterm ngtermctl path (installer-baked) >>>";
 
 /// The markers bracketing the agterm-managed block in a shell rc file and in Codex's `config.toml`; the opening one is
 /// also the idempotency probe.
@@ -78,14 +78,24 @@ pub fn may_overwrite_pi_extension(file_exists: bool, existing: Option<&str>) -> 
 /// `None` or blank starts a fresh object. Idempotent: hooks already present (either wrapper named) leave the input
 /// unchanged. Entries an earlier install pointed straight at the generic wrapper move onto the Claude adapter first.
 ///
+/// `legacy_dirs` are script directories an earlier install used (the fork's, and this build's before it took a
+/// directory of its own, `hooks::legacy_script_dir`): an entry calling one of our wrappers there is repointed at
+/// `script_dir`, or dropped when it is exactly what that install generated and its event already calls `script_dir`, so
+/// a reinstall moves the hooks instead of doubling them (Linux glue: upstream has one directory).
+///
 /// # Errors
 ///
 /// [`MalformedSettings`] when `existing` is not a JSON object, or its `hooks` or an event the merge writes is
 /// wrong-shaped.
-pub fn merge_claude_settings(existing: Option<&str>, script_dir: &str) -> Result<(String, bool), MalformedSettings> {
+pub fn merge_claude_settings(
+    existing: Option<&str>,
+    script_dir: &str,
+    legacy_dirs: &[&str],
+) -> Result<(String, bool), MalformedSettings> {
     let mut root = parsed_object(existing)?;
     let mut hooks = claude_hooks_object(&root)?;
-    let mut changed = migrate_claude_entries_to_adapter(&mut hooks, script_dir);
+    let mut changed = migrate_claude_entries_from_legacy_dirs(&mut hooks, script_dir, legacy_dirs);
+    changed |= migrate_claude_entries_to_adapter(&mut hooks, script_dir);
     let command = wrapper_command(script_dir);
     for (event, matcher, state) in CLAUDE_HOOKS {
         let entries = hooks.entry(event).or_insert_with(|| Value::Array(Vec::new()));
@@ -106,13 +116,17 @@ pub fn merge_claude_settings(existing: Option<&str>, script_dir: &str) -> Result
 }
 
 /// Appends the marker-guarded `source` line for the shell integration to a shell rc file (upstream's
-/// `appendShellRC`). Idempotent: a begin marker already present returns `existing` unchanged.
+/// `appendShellRC`). Idempotent: a begin marker already present keeps `existing`, except that a managed block sourcing
+/// `script_name` from another directory (an earlier install's, the fork's) is rewritten in place to source it from
+/// `script_dir` (Linux glue: upstream has one directory, so it never rewrites).
 #[must_use]
 pub fn append_shell_rc(existing: &str, script_dir: &str, script_name: &str) -> (String, bool) {
-    if existing.contains(RC_MARKER_BEGIN) {
-        return (existing.to_owned(), false);
-    }
     let source = format!("source {}", shell_quote(&format!("{script_dir}/{script_name}")));
+    if existing.contains(RC_MARKER_BEGIN) {
+        let refreshed = refresh_rc_block(existing, &source, script_name);
+        let changed = refreshed != existing;
+        return (refreshed, changed);
+    }
     let block = format!("{RC_MARKER_BEGIN}\n{source}\n{RC_MARKER_END}\n");
     if existing.is_empty() {
         return (block, true);
@@ -182,16 +196,16 @@ pub fn merge_codex_config(existing: &str, script_dir: &str) -> CodexMerge {
     CodexMerge::Merged(append_codex_block(&text, script_dir))
 }
 
-/// Bakes `tool_path`, the bundled `agtermctl`, into an installed wrapper, replacing the block an earlier install left
+/// Bakes `tool_path`, the bundled `ngtermctl`, into an installed wrapper, replacing the block an earlier install left
 /// (upstream's `bakeAgtermctlPath`). An explicit `AGTERMCTL` is never second-guessed; a baked path that is gone falls
-/// back to `agtermctl` on `PATH`.
+/// back to `ngtermctl` on `PATH` (`cli::TOOL_NAME`).
 #[must_use]
-pub fn bake_agtermctl_path(text: &str, tool_path: &str) -> String {
+pub fn bake_ngtermctl_path(text: &str, tool_path: &str) -> String {
     let block = [
         AGTERMCTL_MARKER.to_owned(),
         "if [ -z \"${AGTERMCTL:-}\" ]; then".to_owned(),
         format!("  AGTERMCTL={}", shell_quote(tool_path)),
-        "  [ -x \"$AGTERMCTL\" ] || AGTERMCTL=\"$(command -v agtermctl || true)\"".to_owned(),
+        "  [ -x \"$AGTERMCTL\" ] || AGTERMCTL=\"$(command -v ngtermctl || true)\"".to_owned(),
         "fi".to_owned(),
     ];
     let stripped = strip_baked_block(text, block.len() - 1);
@@ -328,6 +342,136 @@ fn migrate_entry(entry: &mut Value, generated: &str, states: &[&str], replacemen
     changed
 }
 
+/// Moves the entries an earlier install wrote under one of `legacy_dirs` onto `script_dir`, returning whether anything
+/// changed. In every event (an older install may have wired one this merge no longer writes): an entry that is exactly
+/// the stock entry an earlier install generated for that event in a legacy directory is dropped when the event already
+/// calls `script_dir` under the same matcher; any other entry calling a legacy wrapper (a user's own command, matcher, event or keys) has its
+/// commands repointed in place, keeping a matcher, sibling keys and the user's own commands beside them.
+fn migrate_claude_entries_from_legacy_dirs(
+    hooks: &mut Map<String, Value>,
+    script_dir: &str,
+    legacy_dirs: &[&str],
+) -> bool {
+    let moves = legacy_moves(script_dir, legacy_dirs);
+    if moves.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    for (event, entries) in hooks.iter_mut() {
+        let Value::Array(entries) = entries else {
+            continue;
+        };
+        // a stock legacy entry is replaced only by a current one under the same matcher: another matcher's entry
+        // covers other notifications, and the merge below would not add the stock one back beside it
+        let current_matchers: Vec<Option<Value>> = entries
+            .iter()
+            .filter(|entry| entry_uses_wrapper(entry, script_dir))
+            .map(|entry| entry.get("matcher").cloned())
+            .collect();
+        let before = entries.len();
+        entries.retain(|entry| {
+            !(current_matchers.contains(&entry.get("matcher").cloned())
+                && is_generated_legacy_entry(event, entry, &moves))
+        });
+        changed |= entries.len() != before;
+        for entry in entries.iter_mut() {
+            changed |= repoint_entry(entry, &moves);
+        }
+    }
+    changed
+}
+
+/// Each wrapper's path in a legacy directory and in `script_dir`, both as they read inside a shell-quoted command.
+fn legacy_moves(script_dir: &str, legacy_dirs: &[&str]) -> Vec<(String, String)> {
+    let quoted_inner = |path: String| path.replace('\'', "'\\''");
+    legacy_dirs
+        .iter()
+        .filter(|legacy| **legacy != script_dir)
+        .flat_map(|legacy| {
+            [CLAUDE_WRAPPER_NAME, WRAPPER_NAME].map(|name| {
+                (
+                    quoted_inner(format!("{legacy}/{name}")),
+                    quoted_inner(format!("{script_dir}/{name}")),
+                )
+            })
+        })
+        .collect()
+}
+
+/// Whether `entry` under `event` is exactly the stock entry an earlier install generated in a legacy directory: the
+/// event's own matcher (or none) and no other keys, and every hook (one at least) a bare `{type: command, command}`
+/// running `'<legacy wrapper>' <state>` with that event's state (`UserPromptSubmit` also its pre-`--blink` form), as
+/// [`migrate_claude_entries_to_adapter`] scopes it. Anything a user changed (a chained command, another matcher or
+/// event, an added key) is repointed and kept rather than dropped.
+fn is_generated_legacy_entry(event: &str, entry: &Value, moves: &[(String, String)]) -> bool {
+    let Some((_, matcher, state)) = CLAUDE_HOOKS.iter().find(|(name, _, _)| *name == event) else {
+        return false;
+    };
+    let Some(object) = entry.as_object() else {
+        return false;
+    };
+    let keys_are_stock = object.keys().all(|key| key == "hooks" || key == "matcher");
+    let matcher_is_stock = match (object.get("matcher"), matcher) {
+        (None, None) => true,
+        (Some(found), Some(stock)) => found.as_str() == Some(*stock),
+        _ => false,
+    };
+    let states: &[&str] = if event == "UserPromptSubmit" {
+        &[state, "active"]
+    } else {
+        &[state]
+    };
+    let Some(hooks) = object.get("hooks").and_then(Value::as_array) else {
+        return false;
+    };
+    keys_are_stock
+        && matcher_is_stock
+        && !hooks.is_empty()
+        && hooks.iter().all(|hook| is_generated_legacy_hook(hook, states, moves))
+}
+
+/// Whether `hook` is exactly `{type: command, command: '<legacy wrapper>' <state>}` for one of `states`.
+fn is_generated_legacy_hook(hook: &Value, states: &[&str], moves: &[(String, String)]) -> bool {
+    let Some(object) = hook.as_object() else {
+        return false;
+    };
+    let Some(command) = object.get("command").and_then(Value::as_str) else {
+        return false;
+    };
+    object.len() == 2
+        && object.get("type").and_then(Value::as_str) == Some("command")
+        && moves.iter().any(|(legacy, _)| {
+            command
+                .strip_prefix('\'')
+                .and_then(|rest| rest.strip_prefix(legacy.as_str()))
+                .and_then(|rest| rest.strip_prefix("' "))
+                .is_some_and(|found| states.contains(&found))
+        })
+}
+
+/// Repoints the commands of `entry` that call a wrapper in a legacy directory, returning whether any did.
+fn repoint_entry(entry: &mut Value, moves: &[(String, String)]) -> bool {
+    let Some(Value::Array(commands)) = entry.get_mut("hooks") else {
+        return false;
+    };
+    if !commands.iter().all(Value::is_object) {
+        return false;
+    }
+    let mut changed = false;
+    for command in commands.iter_mut() {
+        let Some(Value::String(text)) = command.get_mut("command") else {
+            continue;
+        };
+        for (legacy, current) in moves {
+            if text.contains(legacy.as_str()) {
+                *text = text.replace(legacy.as_str(), current);
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
 /// `{ (matcher?), hooks: [{ type: command, command }] }`.
 fn hook_entry(command: &str, state: &str, matcher: Option<&str>) -> Value {
     let mut hook = Map::new();
@@ -376,6 +520,24 @@ fn sorted(value: &Value) -> Value {
 /// Swift's `.whitespaces`: horizontal whitespace, not line breaks.
 fn trim_horizontal(line: &str) -> &str {
     line.trim_matches(|ch: char| ch.is_whitespace() && !matches!(ch, '\n' | '\r' | '\u{0B}' | '\u{0C}' | '\u{85}'))
+}
+
+/// Replaces the body of the managed rc block with `source` when it sources `script_name` (from any directory); a block
+/// without its end marker, or naming no integration script of ours, is left as it is.
+fn refresh_rc_block(text: &str, source: &str, script_name: &str) -> String {
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    let Some(begin) = lines.iter().position(|line| trim_horizontal(line) == RC_MARKER_BEGIN) else {
+        return text.to_owned();
+    };
+    let Some(end) = (begin + 1..lines.len()).find(|&index| trim_horizontal(lines[index]) == RC_MARKER_END) else {
+        return text.to_owned();
+    };
+    let body = &lines[begin + 1..end];
+    if body == [source] || !body.iter().any(|line| line.contains(script_name)) {
+        return text.to_owned();
+    }
+    lines.splice(begin + 1..end, [source]);
+    lines.join("\n")
 }
 
 fn append_codex_block(text: &str, script_dir: &str) -> String {

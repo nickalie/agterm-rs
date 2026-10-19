@@ -83,7 +83,7 @@ impl Sandbox {
             std::fs::create_dir_all(path.join(dir))?;
         }
         std::fs::set_permissions(path.join("run"), std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
-        let app_id = format!("io.github.melonamin.agterm.test.i{}", uuid::Uuid::new_v4().simple());
+        let app_id = format!("com.nickalie.ngterm.test.i{}", uuid::Uuid::new_v4().simple());
         let mut env = BTreeMap::new();
         let mut set = |key: &str, value: &Path| env.insert(key.to_owned(), value.to_string_lossy().into_owned());
         set("HOME", &path.join("home"));
@@ -92,7 +92,7 @@ impl Sandbox {
         set("XDG_DATA_HOME", &path.join("data"));
         set("XDG_CACHE_HOME", &path.join("cache"));
         set("AGTERM_STATE_DIR", &path.join("state"));
-        set("AGTERM_CONTROL_SOCKET", &path.join("state/agterm.sock"));
+        set("AGTERM_CONTROL_SOCKET", &path.join("state/ngterm.sock"));
         env.insert("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned());
         env.insert("SHELL".to_owned(), "/bin/sh".to_owned());
         env.insert("AGTERM_APP_ID".to_owned(), app_id.clone());
@@ -382,14 +382,14 @@ impl Sandbox {
     /// Starts the GPUI primary and waits until it serves its control socket.
     pub fn start_gpui_primary(&mut self, log: &str) -> TestResult<usize> {
         let index = self.spawn_gpui(&[], log)?;
-        wait_for_socket(&self.path("state/agterm.sock")).map_err(|error| format!("{error}\n{}", self.log(log)))?;
+        wait_for_socket(&self.path("state/ngterm.sock")).map_err(|error| format!("{error}\n{}", self.log(log)))?;
         Ok(index)
     }
 
     /// Sends one control request (`{"cmd": cmd}`) to the sandbox's socket; the reply line.
     pub fn request(&self, cmd: &str) -> TestResult<String> {
         use std::io::Write as _;
-        let mut socket = std::os::unix::net::UnixStream::connect(self.path("state/agterm.sock"))?;
+        let mut socket = std::os::unix::net::UnixStream::connect(self.path("state/ngterm.sock"))?;
         socket.set_read_timeout(Some(DEADLINE))?;
         writeln!(socket, "{}", serde_json::json!({ "cmd": cmd }))?;
         let mut reply = String::new();

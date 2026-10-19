@@ -90,8 +90,8 @@ fn fake_vendored_prefix(checkout: &Path, vendor: &Path, system_pc: &Path) -> Pat
         .filter(|line| line.starts_with("WPE_"))
         .map(|line| format!("{line}\n"))
         .collect();
-    fs::create_dir_all(prefix.join("share/agterm")).unwrap();
-    fs::write(prefix.join("share/agterm/wpe-PINS"), wpe_lines).unwrap();
+    fs::create_dir_all(prefix.join("share/ngterm")).unwrap();
+    fs::write(prefix.join("share/ngterm/wpe-PINS"), wpe_lines).unwrap();
     prefix
 }
 
@@ -184,7 +184,7 @@ fn an_incomplete_vendored_prefix_is_not_offered() {
     let scene = Scene::new();
     let prefix = fake_vendored_prefix(scene.checkout.path(), &scene.vendor(), &scene.system_pc());
     // a manifest of other pins: the prefix was unpacked from another package
-    fs::write(prefix.join("share/agterm/wpe-PINS"), "WPE_VERSION=\"2.52.0\"\n").unwrap();
+    fs::write(prefix.join("share/ngterm/wpe-PINS"), "WPE_VERSION=\"2.52.0\"\n").unwrap();
     let verify = run(
         scene.checkout.path(),
         &scene.vendor(),

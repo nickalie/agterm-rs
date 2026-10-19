@@ -23,7 +23,7 @@ use x11rb::wrapper::ConnectionExt as _;
 
 /// One control request with `args` (and `target`) to the sandbox's socket; its result, or the error it answered.
 fn request(sandbox: &Sandbox, cmd: &str, target: Option<&str>, args: &Value) -> TestResult<Value> {
-    let mut socket = std::os::unix::net::UnixStream::connect(sandbox.path("state/agterm.sock"))?;
+    let mut socket = std::os::unix::net::UnixStream::connect(sandbox.path("state/ngterm.sock"))?;
     socket.set_read_timeout(Some(DEADLINE))?;
     let mut line = json!({ "cmd": cmd, "args": args });
     if let Some(target) = target {

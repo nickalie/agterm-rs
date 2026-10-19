@@ -37,7 +37,7 @@ const ERROR_SECONDS: f64 = 5.0;
 /// A progress panel is timed, so a soft-closed session drops it (upstream's `remoteAttachProgressSeconds`).
 const PROGRESS_SECONDS: f64 = 30.0;
 
-/// What a finished remote read says: the far side's own refusal from stdout first, since its agtermctl prints it there
+/// What a finished remote read says: the far side's own refusal from stdout first, since its ngtermctl prints it there
 /// and exits nonzero; ssh's failures reach stderr. An ok-looking payload from a nonzero process is never accepted
 /// (upstream's `remoteTree(host:)` remote form).
 ///

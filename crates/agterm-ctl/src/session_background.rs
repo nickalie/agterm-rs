@@ -1,4 +1,4 @@
-//! `agtermctl session background image|text|color|clear` (`agtermctlKit/SessionCommands.swift` `Session.Background`):
+//! `ngtermctl session background image|text|color|clear` (`agtermctlKit/SessionCommands.swift` `Session.Background`):
 //! a session's background default, or one pane's override with `--pane`. A bad value is a usage error before anything
 //! is sent, checked with the server's own rules ([`agterm_core::watermark`]).
 
@@ -16,7 +16,7 @@ const PANE_HELP: &str = "Set only this pane's override: left, right, or scratch 
                          aliases). Omitted sets the session default, which every pane without an override inherits; \
                          `clear --pane` returns that pane to the default.";
 
-/// `agtermctl session background <subcommand>`.
+/// `ngtermctl session background <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Set or clear a session's background (image, rasterized text, or solid color).",
@@ -94,7 +94,7 @@ fn background_request(args: Args, target: &TargetOptions, options: &ClientOption
     session_request(SessionCmd::Background, Some(target.target.clone()), Some(args), options)
 }
 
-/// `agtermctl session background image PATH`.
+/// `ngtermctl session background image PATH`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Show a PNG or JPEG image behind the terminal (auto-fits the window).")]
 pub struct ImageBackground {
@@ -158,7 +158,7 @@ impl RequestCommand for ImageBackground {
     }
 }
 
-/// `agtermctl session background text TEXT`.
+/// `ngtermctl session background text TEXT`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Render TEXT as a watermark behind the terminal (auto-fits the window).")]
 pub struct TextBackground {
@@ -223,7 +223,7 @@ impl RequestCommand for TextBackground {
     }
 }
 
-/// `agtermctl session background color #RRGGBB`.
+/// `ngtermctl session background color #RRGGBB`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Set a solid background color for the terminal (honors the Settings window translucency).")]
 pub struct ColorBackground {
@@ -265,7 +265,7 @@ impl RequestCommand for ColorBackground {
     }
 }
 
-/// `agtermctl session background clear`.
+/// `ngtermctl session background clear`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Remove the session's background (watermark or solid color).")]
 pub struct ClearBackground {
@@ -306,7 +306,7 @@ mod tests {
     use crate::{Agtermctl, Command};
 
     fn parse(words: &[&str]) -> (Result<(), String>, Value) {
-        let line = ["agtermctl", "session", "background"].iter().chain(words).copied();
+        let line = ["ngtermctl", "session", "background"].iter().chain(words).copied();
         let Command::Session(group) = Agtermctl::try_parse_from(line).unwrap().command else {
             panic!("not a session command")
         };

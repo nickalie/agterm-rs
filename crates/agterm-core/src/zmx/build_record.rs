@@ -1,6 +1,6 @@
 //! When this state directory first launched the zmx build it names (upstream's `ZmxBuildRecord.swift`). Live sessions
 //! keep their daemons through app updates, so a daemon created before the recorded change predates that launch and
-//! Reset Live Sessions offers it as outdated. The bundled build id is the staged `share/agterm/zmx-BUILD`
+//! Reset Live Sessions offers it as outdated. The bundled build id is the staged `share/ngterm/zmx-BUILD`
 //! (`scripts/build-zmx.sh`).
 
 use std::fs;

@@ -12,10 +12,10 @@ HARD RULES (agterm-rs upstream sync). They hold for every command you run, no ma
    - Strip them before launching anything: `env -u AGTERM_SESSION_ID ...` is not enough, use
      `env $(env | grep -oE '^(AGTERM|ZMX)_[A-Z0-9_]*' | sed 's/^/-u /') <command>`, or `scripts/run-gpui-dev.sh`, or
      the suite's runners, which strip them themselves.
-   - Every `agtermctl` call gets an explicit `--socket <dev instance socket>`, written after the subcommand name
-     (`agtermctl tree --socket /tmp/agterm-dev-.../agterm.sock`). Without it the CLI resolves
-     `$XDG_DATA_HOME/agterm/agterm.sock`, the live instance's; `AGTERM_CONTROL_SOCKET` is ignored by agtermctl.
-   - A dev instance gets a private state dir, so its zmx dir (`/tmp/agterm-zmx-<FNV-1a 64 of the state dir>`) is
+   - Every `ngtermctl` call gets an explicit `--socket <dev instance socket>`, written after the subcommand name
+     (`ngtermctl tree --socket /tmp/agterm-dev-.../state/ngterm.sock`). Without it the CLI resolves
+     `$XDG_DATA_HOME/ngterm/ngterm.sock`, the live instance's; `AGTERM_CONTROL_SOCKET` is ignored by ngtermctl.
+   - A dev instance gets a private state dir, so its zmx dir (`/tmp/ngterm-zmx-<FNV-1a 64 of the state dir>`) is
      private too. Reap only zmx processes carrying that instance's `ZMX_DIR`. Never `pkill zmx`, never `killall`,
      never run `zmx` without that instance's `ZMX_DIR`.
    - GUI runs headless only: the suite's private weston and dbus (`conformance/tools/run-rust-linux.sh`), or

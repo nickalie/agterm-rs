@@ -144,7 +144,7 @@ fn builtin_alternatives_and_commands_share_one_matcher() {
 fn the_repeat_flag_from_either_verb_keeps_its_sequence_live() {
     let (keymap, diagnostics) = parse(
         "map ctrl+a>g --repeat next_session\n\
-         command \"Grow\" ctrl+a>x --repeat agtermctl session resize +0.05",
+         command \"Grow\" ctrl+a>x --repeat ngtermctl session resize +0.05",
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let command = keymap.commands()[0].clone();

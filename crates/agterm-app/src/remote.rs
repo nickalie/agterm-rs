@@ -1,7 +1,7 @@
 //! The presentation bridge to an attached row's origin as a child process (upstream's `RemotePresentationProcess.swift`):
-//! the ssh running `agtermctl zmx present` on the far side. Stdout is read a line at a time on a thread of its own and
-//! handed to the main loop, stdin takes the client's frames, and stderr goes to the log, where an ssh failure is worth
-//! reading. The core decides everything else ([`agterm_core::remote::client`]).
+//! the ssh running `zmx present` through the far side's `ngtermctl` (`remote::tree::REMOTE_CLI`). Stdout is read a line at a
+//! time on a thread of its own and handed to the main loop, stdin takes the client's frames, and stderr goes to the
+//! log, where an ssh failure is worth reading. The core decides everything else ([`agterm_core::remote::client`]).
 //!
 //! The frontend's main-loop state takes the lines and the close ([`PresentationViewer`]); the network and resume
 //! observer that retries the links stays with each frontend, since it rides on its platform's event sources.

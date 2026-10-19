@@ -135,7 +135,7 @@ echo "$LAVAPIPE_ARCH_PACKAGE_SHA256  $WORK/vulkan-swrast.pkg.tar.zst" | sha256su
   || die "lavapipe package sha256 mismatch ($LAVAPIPE_ARCH_PACKAGE_URL)"
 mkdir "$WORK/pkg"
 tar --zstd -xf "$WORK/vulkan-swrast.pkg.tar.zst" -C "$WORK/pkg" usr
-mkdir -p "$STAGE/lib" "$STAGE/share/agterm" "$STAGE/share/licenses"
+mkdir -p "$STAGE/lib" "$STAGE/share/ngterm" "$STAGE/share/licenses"
 mv "$WORK/pkg/usr/lib/libvulkan_lvp.so" "$STAGE/lib/libvulkan_lvp.so"
 mv "$WORK/pkg/usr/share/licenses/vulkan-swrast" "$STAGE/share/licenses/vulkan-swrast"
 # The package's manifest names the driver by file name, for the system's library path; this one names the prefix's,
@@ -147,7 +147,7 @@ grep -q "\"library_path\": \"$PREFIX/lib/libvulkan_lvp.so\"" "$STAGE/lvp_icd.jso
 missing="$(unresolved_libraries "$STAGE/lib/libvulkan_lvp.so")"
 [[ -z "$missing" ]] || die "lavapipe $LAVAPIPE_VERSION needs libraries this host lacks: $missing (Arch: the" \
   "vulkan-swrast package's dependencies, llvm-libs among them); $HINT"
-pin_lines LAVAPIPE >"$STAGE/share/agterm/lavapipe-PINS"
+pin_lines LAVAPIPE >"$STAGE/share/ngterm/lavapipe-PINS"
 
 lavapipe_prefix_is_complete "$STAGE" || die "the staged lavapipe prefix is incomplete"
 chmod 755 "$STAGE"

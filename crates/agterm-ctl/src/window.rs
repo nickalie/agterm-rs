@@ -1,4 +1,4 @@
-//! `agtermctl window ...` (`agtermctlKit/WindowCommands.swift` `Window`): create, list, select, step through, close,
+//! `ngtermctl window ...` (`agtermctlKit/WindowCommands.swift` `Window`): create, list, select, step through, close,
 //! rename, delete, resize, move, zoom, full-screen and minimize windows. The window commands take [`BasicOptions`]
 //! only, since a window is addressed by its positional id (default `active`) sent as the request's `target`, never
 //! by `--window`. `window list` renders as `formatWindows` in `SocketClient.swift`; `window resize` prints the
@@ -9,7 +9,7 @@ use agterm_proto::{Args, Command, ControlWindowNode, Request};
 
 use crate::{BasicOptions, RequestCommand};
 
-/// `agtermctl window <subcommand>`.
+/// `ngtermctl window <subcommand>`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Window commands.",
@@ -70,7 +70,7 @@ fn window_request(cmd: WindowCmd, target: Option<&str>, args: Option<Args>) -> R
     }
 }
 
-/// `agtermctl window new [<name>] [--minimized]`: echoes the new window's id.
+/// `ngtermctl window new [<name>] [--minimized]`: echoes the new window's id.
 #[derive(Debug, clap::Args)]
 #[command(about = "Create and open a window.")]
 pub struct New {
@@ -108,7 +108,7 @@ impl RequestCommand for New {
     }
 }
 
-/// `agtermctl window list [--socket <socket>] [--json]`.
+/// `ngtermctl window list [--socket <socket>] [--json]`.
 #[derive(Debug, clap::Args)]
 #[command(about = "List windows (id, name, open, active).")]
 pub struct List {
@@ -153,37 +153,37 @@ macro_rules! targeted_command {
 }
 
 targeted_command!(
-    /// `agtermctl window select [<id>]`: raises an open window, or opens a closed one.
+    /// `ngtermctl window select [<id>]`: raises an open window, or opens a closed one.
     Select,
     WindowCmd::Select,
     "Select (raise or open) a window."
 );
 targeted_command!(
-    /// `agtermctl window close [<id>]`.
+    /// `ngtermctl window close [<id>]`.
     Close,
     WindowCmd::Close,
     "Close a window (its bundle is kept)."
 );
 targeted_command!(
-    /// `agtermctl window delete [<id>]`: the last window is refused by the app.
+    /// `ngtermctl window delete [<id>]`: the last window is refused by the app.
     Delete,
     WindowCmd::Delete,
     "Delete a window (keeps at least one)."
 );
 targeted_command!(
-    /// `agtermctl window zoom [<id>]`.
+    /// `ngtermctl window zoom [<id>]`.
     Zoom,
     WindowCmd::Zoom,
     "Zoom a window (maximize-to-screen toggle)."
 );
 targeted_command!(
-    /// `agtermctl window fullscreen [<id>]`.
+    /// `ngtermctl window fullscreen [<id>]`.
     Fullscreen,
     WindowCmd::Fullscreen,
     "Toggle native macOS full screen for a window."
 );
 
-/// `agtermctl window go --to next|prev`: raises the next or previous OPEN window, wrapping. Relative to the active
+/// `ngtermctl window go --to next|prev`: raises the next or previous OPEN window, wrapping. Relative to the active
 /// window, so it takes no id, as `workspace go`; `select` is the verb that opens a closed one.
 #[derive(Debug, clap::Args)]
 #[command(name = "go", about = "Navigate open windows: next|prev.")]
@@ -209,7 +209,7 @@ impl RequestCommand for Go {
     }
 }
 
-/// `agtermctl window rename <id> <name>`: the id is required here, since the name follows it.
+/// `ngtermctl window rename <id> <name>`: the id is required here, since the name follows it.
 #[derive(Debug, clap::Args)]
 #[command(about = "Rename a window.")]
 pub struct Rename {
@@ -237,7 +237,7 @@ impl RequestCommand for Rename {
     }
 }
 
-/// `agtermctl window resize [<id>] --width <width> --height <height>`: prints the applied `W H`.
+/// `ngtermctl window resize [<id>] --width <width> --height <height>`: prints the applied `W H`.
 #[derive(Debug, clap::Args)]
 #[command(
     about = "Resize a window (frame size in points).",
@@ -272,7 +272,7 @@ impl RequestCommand for Resize {
     }
 }
 
-/// `agtermctl window move [<id>] --x <x> --y <y> [--display <display>]`.
+/// `ngtermctl window move [<id>] --x <x> --y <y> [--display <display>]`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Move a window (top-left x,y in points, relative to a display).")]
 pub struct Move {
@@ -308,7 +308,7 @@ impl RequestCommand for Move {
     }
 }
 
-/// `agtermctl window minimize [<id>] [<mode>]`: the mode goes unchecked, the app refuses an unknown one.
+/// `ngtermctl window minimize [<id>] [<mode>]`: the mode goes unchecked, the app refuses an unknown one.
 #[derive(Debug, clap::Args)]
 #[command(about = "Minimize a window to the Dock, or restore it.")]
 pub struct Minimize {
@@ -389,14 +389,14 @@ mod tests {
 
     fn parsed(argv: &[&str]) -> Result<Window, clap::Error> {
         use clap::Parser;
-        let command_line = ["agtermctl", "window"].iter().chain(argv).copied();
+        let command_line = ["ngtermctl", "window"].iter().chain(argv).copied();
         match crate::Agtermctl::try_parse_from(command_line)?.command {
             crate::Command::Window(group) => Ok(group),
             other => panic!("not a window command: {other:?}"),
         }
     }
 
-    /// The request `agtermctl window <argv>` sends, as JSON.
+    /// The request `ngtermctl window <argv>` sends, as JSON.
     fn request(argv: &[&str]) -> Value {
         serde_json::to_value(parsed(argv).unwrap().command().make_request()).unwrap()
     }

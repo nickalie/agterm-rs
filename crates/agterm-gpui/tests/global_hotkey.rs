@@ -23,7 +23,7 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value as ZValue};
 
 /// One control request with `args` to the sandbox's socket; its result, or the error it answered.
 fn request(sandbox: &Sandbox, cmd: &str, args: &Value) -> TestResult<Value> {
-    let mut socket = std::os::unix::net::UnixStream::connect(sandbox.path("state/agterm.sock"))?;
+    let mut socket = std::os::unix::net::UnixStream::connect(sandbox.path("state/ngterm.sock"))?;
     socket.set_read_timeout(Some(DEADLINE))?;
     writeln!(socket, "{}", json!({ "cmd": cmd, "args": args }))?;
     let mut reply = String::new();
