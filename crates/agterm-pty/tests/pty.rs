@@ -437,6 +437,37 @@ fn a_released_pty_passes_to_a_second_actor_with_the_child_alive() -> TestResult 
     Ok(())
 }
 
+/// A handoff aborted before its commit: the actor over the taken-over master, started quiesced, is dropped without
+/// owning the PTY, so it reads none of the output, and the first actor rolls back with all of it.
+#[test]
+fn an_aborted_takeover_leaves_the_output_to_the_first_actor() -> TestResult {
+    let first = start(&shell(), Size::cells(24, 80))?;
+    first.type_line(&tagged("one"))?;
+    first.expect("got:one");
+    first.handle.begin_handoff(PATIENCE)?;
+    let master = take_over(&first.handle)?;
+    let taken = Arc::new(Mutex::new(Vec::new()));
+    let (exits, exit) = mpsc::channel();
+    let mut config = ActorConfig::new("aborted", master, gather(&taken));
+    config.initially_quiesced = true;
+    config.on_exit = Some(Box::new(move |reason| {
+        let _ = exits.send(reason);
+    }));
+    drop(Actor::spawn(config)?);
+    assert_eq!(exit.recv_timeout(PATIENCE)?, ExitReason::Shutdown);
+
+    first.handle.rollback_handoff()?;
+    for round in 0..5 {
+        let word = format!("again{round}");
+        first.type_line(&tagged(&word))?;
+        first.expect(&format!("got:{word}"));
+    }
+    assert!(lock(&taken).is_empty(), "the dropped actor read {:?}", lock(&taken));
+    first.quit()?;
+    assert!(first.finish()?.success());
+    Ok(())
+}
+
 /// The master the second actor takes over: a duplicate of the first one's.
 #[cfg(unix)]
 fn take_over(handle: &ActorHandle) -> TestResult<Master> {

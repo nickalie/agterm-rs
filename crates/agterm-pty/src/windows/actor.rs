@@ -7,7 +7,8 @@
 //! caller's thread under the console's lock in place of a control thread; and the handoff herdr's Windows actor does
 //! not have: a quiesce parks the reader (its blocked read cancelled with `CancelSynchronousIo`) and waits for the
 //! writer to drain, a read that completed meanwhile is held back and delivered on rollback or handed on by the
-//! release, and a release leaves the pseudoconsole open for its new owner.
+//! release, and a release leaves the pseudoconsole open for its new owner; a shutdown drains the output pipe only of
+//! a console the actor owns, so an actor over a taken-over console that never rolled back reads nothing of it.
 
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -41,13 +42,28 @@ enum Mode {
     Quiesced,
     /// Stop: another process owns the pseudoconsole now.
     Released,
-    /// Shut down: read and drop until the console's pipe ends, so its close never waits on a full pipe.
+    /// Shut down as the console's owner: read and drop until the console's pipe ends, so its close never waits on a
+    /// full pipe.
     Discarding,
+    /// Shut down before owning the console (an actor started quiesced that was never rolled back): read nothing, as
+    /// the console's pipe still carries the output of the process that owns it.
+    Stopped,
+}
+
+/// Whether the actor owns its pseudoconsole. A shutdown closes only an owner's console, so only an owner drains its
+/// pipe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Console {
+    /// Started running, or started quiesced and rolled back.
+    Owned,
+    /// Started quiesced over a console another process still owns, and not rolled back yet.
+    Borrowed,
 }
 
 #[derive(Debug)]
 struct ReaderState {
     mode: Mode,
+    console: Console,
     /// The reader is inside its `ReadFile`: only then may it be cancelled, so no other I/O of the thread is.
     reading: bool,
     /// The reader waits in its park.
@@ -123,8 +139,16 @@ impl Control {
         shared.outbox().close();
         shared.outbox_changed.notify_all();
         let mut state = self.inner.reader();
-        if matches!(state.mode, Mode::Running | Mode::Quiesced) {
-            state.mode = Mode::Discarding;
+        let next = match state.mode {
+            Mode::Running => Some(Mode::Discarding),
+            Mode::Quiesced if state.console == Console::Owned => Some(Mode::Discarding),
+            // the console host and its pipe stay with the process that owns them: a read from here would take its
+            // output
+            Mode::Quiesced => Some(Mode::Stopped),
+            Mode::Released | Mode::Discarding | Mode::Stopped => None,
+        };
+        if let Some(mode) = next {
+            state.mode = mode;
             self.inner.reader_changed.notify_all();
         }
         drop(state);
@@ -271,7 +295,7 @@ impl ActorHandle {
         let inner = self.inner();
         loop {
             let mut state = inner.reader();
-            if state.exited || matches!(state.mode, Mode::Released | Mode::Discarding) {
+            if state.exited || matches!(state.mode, Mode::Released | Mode::Discarding | Mode::Stopped) {
                 return Err(closed());
             }
             if state.held.is_empty() {
@@ -279,6 +303,7 @@ impl ActorHandle {
                 // have parked) can complete into `held` after it was taken and stay there
                 if state.mode == Mode::Quiesced {
                     state.mode = Mode::Running;
+                    state.console = Console::Owned;
                 }
                 inner.reader_changed.notify_all();
                 break;
@@ -346,6 +371,11 @@ pub(crate) fn spawn_actor(config: ActorConfig) -> io::Result<ActorHandle> {
                 Mode::Quiesced
             } else {
                 Mode::Running
+            },
+            console: if initially_quiesced {
+                Console::Borrowed
+            } else {
+                Console::Owned
             },
             reading: false,
             parked: false,
@@ -419,7 +449,7 @@ fn read_loop(shared: &Shared, inner: &Inner) -> ExitReason {
                     drop(state);
                     shared.deliver(&buffer[..read]);
                 }
-                Mode::Quiesced | Mode::Released => state.held.extend_from_slice(&buffer[..read]),
+                Mode::Quiesced | Mode::Released | Mode::Stopped => state.held.extend_from_slice(&buffer[..read]),
                 Mode::Discarding => {}
             },
             Err(err) if os_error(&err) == Some(ERROR_OPERATION_ABORTED) => {}
@@ -428,7 +458,7 @@ fn read_loop(shared: &Shared, inner: &Inner) -> ExitReason {
             }
             Err(err) => {
                 tracing::debug!(%err, "reading the pseudoconsole failed; the PTY actor stops");
-                return if state.mode == Mode::Discarding {
+                return if matches!(state.mode, Mode::Discarding | Mode::Stopped) {
                     ExitReason::Shutdown
                 } else {
                     ExitReason::Failed
@@ -441,13 +471,13 @@ fn read_loop(shared: &Shared, inner: &Inner) -> ExitReason {
 /// Why the reader stopped when the pipe ended in `mode`.
 fn ended(mode: Mode) -> ExitReason {
     match mode {
-        Mode::Discarding => ExitReason::Shutdown,
+        Mode::Discarding | Mode::Stopped => ExitReason::Shutdown,
         Mode::Released => ExitReason::Released,
         Mode::Running | Mode::Quiesced => ExitReason::Eof,
     }
 }
 
-/// Park while quiesced; `Some` once released, else mark the reader as reading and return.
+/// Park while quiesced; `Some` once released or stopped, else mark the reader as reading and return.
 fn wait_to_read(inner: &Inner) -> Option<ExitReason> {
     let mut state = inner.reader();
     loop {
@@ -457,6 +487,7 @@ fn wait_to_read(inner: &Inner) -> Option<ExitReason> {
                 return None;
             }
             Mode::Released => return Some(ExitReason::Released),
+            Mode::Stopped => return Some(ExitReason::Shutdown),
             Mode::Quiesced => {
                 state.parked = true;
                 inner.reader_changed.notify_all();
@@ -517,5 +548,6 @@ mod tests {
         assert_eq!(ended(Mode::Quiesced), ExitReason::Eof);
         assert_eq!(ended(Mode::Released), ExitReason::Released);
         assert_eq!(ended(Mode::Discarding), ExitReason::Shutdown);
+        assert_eq!(ended(Mode::Stopped), ExitReason::Shutdown);
     }
 }

@@ -204,8 +204,10 @@ impl ActorHandle {
     }
 
     /// Stop the actor: no more reads or writes, queued bytes dropped, and the PTY closed once its threads let go of it
-    /// (on Unix the child's session is hung up; on Windows the pseudoconsole is closed). The exit callback runs with
-    /// [`ExitReason::Shutdown`] unless the actor had already stopped.
+    /// (on Unix the child's session is hung up; on Windows the pseudoconsole is closed). An actor started quiesced
+    /// and never rolled back does not own the PTY: it reads nothing more and only lets go of its own handles, leaving
+    /// the PTY to the process that owns it. The exit callback runs with [`ExitReason::Shutdown`] unless the actor had
+    /// already stopped.
     pub fn shutdown(&self) {
         self.control().shutdown(self.shared());
     }
