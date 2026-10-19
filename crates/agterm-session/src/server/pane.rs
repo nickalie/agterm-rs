@@ -15,7 +15,8 @@
 //! - the output is fanned out raw to the attached clients, every read tagged with its offset in the session's
 //!   output stream, under the lock that feeds the terminal (the pane's one serialization point);
 //! - the shutdown signals the child's process group (its job on Windows) through `agterm-pty`'s [`Killer`] instead
-//!   of herdr's session process list: a hangup, then a kill after [`KILL_GRACE`];
+//!   of herdr's session process list: a hangup, then a kill of the group after [`KILL_GRACE`], the child left
+//!   unreaped meanwhile so the group's members that outlived it are still reached;
 //! - the registry is keyed by session name and drops a pane once its program ended.
 //!
 //! # The terminal
@@ -62,6 +63,9 @@ pub const FALLBACK_TERM: &str = "xterm-256color";
 pub const EXIT_GRACE: Duration = Duration::from_secs(1);
 /// How long a kill waits for the program to end after the hangup, and again after the kill (herdr's grace).
 pub const KILL_GRACE: Duration = Duration::from_millis(250);
+/// How long the waiter holds off reaping the program for a kill under way, which holds it for the hangup, at most
+/// [`KILL_GRACE`] and the kill; past it the program is reaped, and the kill then signals nothing.
+const REAP_HOLD_LIMIT: Duration = Duration::from_secs(5);
 
 /// The pane ids of this process, for the PTY threads' names and to tell a session from a later one of its name.
 static NEXT_PANE: AtomicU64 = AtomicU64::new(1);
@@ -146,6 +150,12 @@ struct State {
     size: GridSize,
     /// The PTY actor stopped.
     pty_ended: bool,
+    /// The program exited; it is not reaped before [`State::reaping`].
+    exited: bool,
+    /// The kills under way that need the program unreaped, so its process group can still be signalled.
+    reap_holds: u32,
+    /// The program is being reaped (or was): its id, and its group's, may be reused, so nothing holds it any more.
+    reaping: bool,
     /// The program ended: nothing more is fed or queued.
     exit: Option<ExitStatus>,
     /// Run once the program's end is recorded.
@@ -177,21 +187,56 @@ impl Core {
         self.changed.notify_all();
     }
 
+    fn child_exited(&self) {
+        self.lock().exited = true;
+        self.changed.notify_all();
+    }
+
+    /// Keep the program unreaped, its process group signallable, until [`Core::release_reap`]; `false`, holding
+    /// nothing, once it is being reaped.
+    fn hold_reap(&self) -> bool {
+        let mut state = self.lock();
+        if state.reaping || state.exit.is_some() {
+            return false;
+        }
+        state.reap_holds += 1;
+        true
+    }
+
+    fn release_reap(&self) {
+        let mut state = self.lock();
+        state.reap_holds = state.reap_holds.saturating_sub(1);
+        drop(state);
+        self.changed.notify_all();
+    }
+
+    /// The waiter's turn to reap the program: once no kill holds it (at most [`REAP_HOLD_LIMIT`]), mark it reaping,
+    /// so no kill holds it from then on.
+    fn begin_reap(&self) {
+        let (mut state, _) = self.wait_until(REAP_HOLD_LIMIT, |state| state.reap_holds == 0);
+        state.reaping = true;
+    }
+
     /// Wait until `done` holds of the state, at most `timeout`; whether it does.
     fn wait_for(&self, timeout: Duration, done: impl Fn(&State) -> bool) -> bool {
+        self.wait_until(timeout, done).1
+    }
+
+    /// Wait until `done` holds of the state, at most `timeout`; the state still locked, and whether it does.
+    fn wait_until(&self, timeout: Duration, done: impl Fn(&State) -> bool) -> (MutexGuard<'_, State>, bool) {
         let deadline = Instant::now() + timeout;
         let mut state = self.lock();
         while !done(&state) {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return false;
+                return (state, false);
             }
             state = self
                 .changed
                 .wait_timeout(state, left)
                 .map_or_else(|poisoned| poisoned.into_inner().0, |(guard, _)| guard);
         }
-        true
+        (state, true)
     }
 
     /// Record the program's end and tell every client.
@@ -263,6 +308,9 @@ impl Pane {
                 offset: 0,
                 size,
                 pty_ended: false,
+                exited: false,
+                reap_holds: 0,
+                reaping: false,
                 exit: None,
                 on_end: None,
             }),
@@ -417,10 +465,11 @@ impl Pane {
         self.exit_status()
     }
 
-    /// End the session's program and its tree: a hangup to its process group (on Windows its job ends at once),
-    /// then, with `force` or while it lingers, a kill. Whether the program's end was recorded, within
-    /// [`KILL_GRACE`] after each step plus [`EXIT_GRACE`] for its last output; without `force` a program that
-    /// ignores the hangup lives on.
+    /// End the session's program and its tree. Without `force`, a hangup to its process group, so a program or a
+    /// member of its group that ignores it lives on; with `force`, [`Pane::end_tree`]'s hangup and then kill of the
+    /// whole group, which ends those too. On Windows either ends the program's job, its whole tree, at once.
+    /// Whether the program's end was recorded within [`KILL_GRACE`] after the last signal plus [`EXIT_GRACE`] for
+    /// its last output.
     ///
     /// # Errors
     ///
@@ -429,15 +478,33 @@ impl Pane {
         if self.exit_status().is_some() {
             return Ok(true);
         }
-        self.killer.hang_up()?;
-        if self.ended_within(KILL_GRACE) {
-            return Ok(true);
+        if force {
+            self.end_tree()?;
+        } else {
+            self.killer.hang_up()?;
         }
-        if !force {
-            return Ok(false);
-        }
-        self.killer.kill_tree()?;
         Ok(self.ended_within(KILL_GRACE))
+    }
+
+    /// herdr's `shutdown_pane_processes`: a hangup to the program's process group, up to [`KILL_GRACE`] for the
+    /// program and the PTY to end, then a kill of the group, which ends a member that ignores the hangup or let go
+    /// of the PTY. The program is held unreaped throughout, so its group is still reached once it exited. Nothing
+    /// once it is being reaped: its group may be reused by then.
+    ///
+    /// # Errors
+    ///
+    /// As [`Pane::kill`]; the kill is sent even when the hangup fails.
+    fn end_tree(&self) -> io::Result<()> {
+        if !self.core.hold_reap() {
+            return Ok(());
+        }
+        let hung_up = self.killer.hang_up();
+        if hung_up.is_ok() {
+            self.core.wait_for(KILL_GRACE, |state| state.exited && state.pty_ended);
+        }
+        let killed = self.killer.kill_tree();
+        self.core.release_reap();
+        hung_up.and(killed)
     }
 
     /// Whether the program ends within `grace` (its end then recorded within [`EXIT_GRACE`] more).
@@ -458,15 +525,14 @@ impl Pane {
 }
 
 impl Drop for Pane {
-    /// herdr's `shutdown_pane_processes`: a pane let go of while its program runs ends it, hangup first.
+    /// A pane let go of while its program runs ends it and its tree ([`Pane::end_tree`]). The waiter's clone of the
+    /// actor keeps reading the PTY until the program's end is recorded, so its last output still reaches the clients.
     fn drop(&mut self) {
-        if self.exit_status().is_none() {
-            let _ = self.killer.hang_up();
-            if !self.core.wait_for(KILL_GRACE, |state| state.exit.is_some()) {
-                let _ = self.killer.kill_tree();
-            }
+        if self.exit_status().is_none()
+            && let Err(err) = self.end_tree()
+        {
+            tracing::warn!(session = %self.name, %err, "ending a dropped session's program failed");
         }
-        self.actor.shutdown();
     }
 }
 
@@ -521,7 +587,9 @@ fn start_actor(id: u64, master: agterm_pty::Master, core: &Arc<Core>) -> io::Res
     Actor::spawn(config)
 }
 
-/// The child's waiter: its exit, then the PTY's end (within [`EXIT_GRACE`]), then the end recorded for the clients.
+/// The child's waiter: its exit, then the PTY's end (within [`EXIT_GRACE`]), then, once no kill holds it, its
+/// reaping, then the end recorded for the clients. The child stays unreaped until then, so a kill still reaches the
+/// members of its process group that outlived it.
 fn start_waiter(id: u64, mut child: Child, core: &Arc<Core>, actor: &ActorHandle) -> io::Result<()> {
     let core = Arc::clone(core);
     // a clone keeps the actor running until the end is recorded, even once the pane is dropped
@@ -529,7 +597,14 @@ fn start_waiter(id: u64, mut child: Child, core: &Arc<Core>, actor: &ActorHandle
     std::thread::Builder::new()
         .name(format!("live-{id}-wait"))
         .spawn(move || {
-            let status = match child.wait() {
+            let reaped = child.wait_exit().and_then(|()| {
+                core.child_exited();
+                actor.child_exited();
+                core.wait_for(EXIT_GRACE, |state| state.pty_ended);
+                core.begin_reap();
+                child.wait()
+            });
+            let status = match reaped {
                 Ok(status) => ExitStatus::Exited {
                     code: status.exit_code(),
                     signal: status.signal().map(str::to_owned),
@@ -539,8 +614,6 @@ fn start_waiter(id: u64, mut child: Child, core: &Arc<Core>, actor: &ActorHandle
                     ExitStatus::Exited { code: 1, signal: None }
                 }
             };
-            actor.child_exited();
-            core.wait_for(EXIT_GRACE, |state| state.pty_ended);
             actor.shutdown();
             tracing::debug!(?status, "a live session's program ended");
             core.end(status);

@@ -386,14 +386,29 @@ fn a_detached_client_leaves_the_others_reading() -> TestResult {
     Ok(())
 }
 
-/// The line that makes [`shell`] print 2000 numbered lines, then `done` (which the echoed line does not hold).
-fn flood() -> &'static str {
+/// The chunks the flood comes in, each [`FLOOD_LINES`] lines of about 60 bytes: one fits in the test's client
+/// queue, all of them do not.
+const FLOOD_CHUNKS: usize = 16;
+const FLOOD_LINES: usize = 150;
+
+/// The line that makes [`shell`] print [`FLOOD_LINES`] numbered lines, then [`flood_end`] of `chunk` (which the
+/// echoed line does not hold).
+fn flood(chunk: usize) -> String {
     if cfg!(windows) {
-        "(for /l %i in (1,1,2000) do @echo line-%i-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) & echo do^ne"
+        format!(
+            "(for /l %i in (1,1,{FLOOD_LINES}) do @echo line-%i-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) \
+             & echo chunk-{chunk}^-end"
+        )
     } else {
-        "i=0; while [ $i -lt 2000 ]; do echo line-$i-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; \
-         i=$((i+1)); done; echo do\"\"ne"
+        format!(
+            "i=0; while [ $i -lt {FLOOD_LINES} ]; do echo line-$i-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; \
+             i=$((i+1)); done; echo chunk-{chunk}\"\"-end"
+        )
     }
+}
+
+fn flood_end(chunk: usize) -> String {
+    format!("chunk-{chunk}-end")
 }
 
 #[test]
@@ -404,13 +419,17 @@ fn a_stalled_client_blocks_neither_the_pty_nor_the_others() -> TestResult {
     // never read until the program ended
     let (pane, stalled) = Pane::spawn(config)?;
     let mut reading = Client::attach(&pane)?;
-    type_line(&pane, flood())?;
-    reading.expect("done");
+    // a chunk at a time, each read before the next is asked for, so the reading client never falls a queue behind
+    // however slowly it is scheduled
+    for chunk in 1..=FLOOD_CHUNKS {
+        type_line(&pane, &flood(chunk))?;
+        reading.expect(&flood_end(chunk));
+    }
     quit(&pane)?;
     let status = reading.finish();
     assert_eq!(exit_code(&status), Some(0));
     assert_eq!(reading.next, pane.offset());
-    assert!(screen(&pane).contains("done"));
+    assert!(screen(&pane).contains(&flood_end(FLOOD_CHUNKS)));
     // the stalled client kept what it had room for, learnt where its copy stops, and got the end
     let mut events = Vec::new();
     while let Ok(event) = stalled.subscription.try_recv() {
@@ -459,6 +478,48 @@ fn a_forced_kill_ends_a_program_that_ignores_the_hangup() -> TestResult {
     assert!(pane.exit_status().is_none());
     assert!(pane.kill(true)?);
     client.finish();
+    Ok(())
+}
+
+/// A shell the hangup ends, with a background child that ignores it: holding the PTY, or with it let go of
+/// (`nohup`'s way).
+#[cfg(unix)]
+fn stubborn_tree(holds_pty: bool) -> SessionSpec {
+    let redirect = if holds_pty { "" } else { " </dev/null >/dev/null 2>&1" };
+    script(&format!(
+        "(trap '' HUP; exec sleep 300{redirect}) & echo \"started:$!:\"; wait"
+    ))
+}
+
+#[cfg(unix)]
+#[test]
+fn a_forced_kill_ends_a_descendant_that_ignores_the_hangup() -> TestResult {
+    for holds_pty in [true, false] {
+        let dir = tempfile::tempdir()?;
+        let (pane, creator) = Pane::spawn(config("stubborn-tree", dir.path(), stubborn_tree(holds_pty)))?;
+        let mut client = Client::new(creator);
+        client.expect("started:");
+        let descendant = descendant(&client.text())?;
+        assert!(pane.kill(true)?, "the forced kill did not end the session");
+        client.finish();
+        assert_gone(descendant);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn dropping_a_pane_ends_a_descendant_that_ignores_the_hangup() -> TestResult {
+    for holds_pty in [true, false] {
+        let dir = tempfile::tempdir()?;
+        let (pane, creator) = Pane::spawn(config("dropped-tree", dir.path(), stubborn_tree(holds_pty)))?;
+        let mut client = Client::new(creator);
+        client.expect("started:");
+        let descendant = descendant(&client.text())?;
+        drop(pane);
+        client.finish();
+        assert_gone(descendant);
+    }
     Ok(())
 }
 

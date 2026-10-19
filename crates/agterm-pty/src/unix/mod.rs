@@ -74,6 +74,20 @@ impl Child {
         self.reap()
     }
 
+    /// Wait for the child to exit without reaping it: until [`Child::wait`] or [`Child::try_wait`] reaps it, it stays
+    /// a zombie holding its id, so its process group can still be signalled ([`Killer`]) for the members that
+    /// outlived it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Child::wait`].
+    pub fn wait_exit(&mut self) -> io::Result<()> {
+        if self.was_reaped() {
+            return Ok(());
+        }
+        exited(self.pid, true).map(drop)
+    }
+
     /// The child's exit status if it has exited (and is now reaped, or was before), else `None`.
     ///
     /// # Errors
@@ -144,7 +158,8 @@ impl Killer {
     ///
     /// Once the child is reaped ([`Child::wait`], [`Child::try_wait`]) its group is never signalled, since the id may
     /// be reused by then, so members that outlived the child (a background job) live on: hang up or kill the tree
-    /// before waiting. On Windows the job ends the tree either way.
+    /// before reaping it ([`Child::wait_exit`] waits for its exit without). On Windows the job ends the tree either
+    /// way.
     ///
     /// # Errors
     ///
