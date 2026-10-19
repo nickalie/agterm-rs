@@ -118,9 +118,12 @@ pub fn prepared(prefix: &Path) -> Result<Stamp, String> {
 /// newer macOS than the binaries that link it.
 pub const MACOS_FLOOR: &str = "13.0";
 
-/// A `major.minor[.patch]` version as numbers, for comparing; `None` when it is not one.
+/// A `major[.minor[.patch]]` version as numbers padded to three with zeros (as rustc reads a deployment target, so
+/// `13` is `13.0`), for comparing; `None` when it is not one.
 fn version(text: &str) -> Option<Vec<u32>> {
-    text.split('.').map(|part| part.parse().ok()).collect()
+    let mut parts: Vec<u32> = text.split('.').map(|part| part.parse().ok()).collect::<Option<_>>()?;
+    parts.resize(parts.len().max(3), 0);
+    Some(parts)
 }
 
 /// The `-Dtarget` of a cargo target: Linux gnu at the glibc floor, macOS at `MACOSX_DEPLOYMENT_TARGET` or else at
@@ -200,7 +203,7 @@ pub struct Build {
 ///
 /// # Errors
 ///
-/// A target outside the map.
+/// A target outside the map, or a macOS deployment target [`zig_target`] refuses.
 pub fn plan(inputs: &Inputs<'_>) -> Result<Build, String> {
     let target = zig_target(inputs.target, inputs.macos_deployment_target)?;
     let install = inputs.out_dir.join("zig-out");

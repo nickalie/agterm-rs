@@ -59,6 +59,9 @@ fn the_map_targets_linux_at_the_glibc_floor_and_macos_at_its_deployment_target()
     assert_eq!(target("x86_64-apple-darwin", None), "x86_64-macos.13.0");
     assert_eq!(target("aarch64-apple-darwin", Some("13.3")), "aarch64-macos.13.3");
     assert_eq!(target("aarch64-apple-darwin", Some("14")), "aarch64-macos.14");
+    // a major-only version is the floor itself, as rustc pads it with zeros
+    assert_eq!(target("aarch64-apple-darwin", Some("13")), "aarch64-macos.13");
+    assert_eq!(target("aarch64-apple-darwin", Some("13.0.0")), "aarch64-macos.13.0.0");
     assert_eq!(target("aarch64-apple-darwin", Some(" ")), "aarch64-macos.13.0");
     for refused in ["11.0", "12.7.6", "13.x"] {
         let error = zig_build::zig_target("aarch64-apple-darwin", Some(refused)).unwrap_err();

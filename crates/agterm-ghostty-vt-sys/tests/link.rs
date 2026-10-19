@@ -32,10 +32,12 @@ fn the_archive_links_and_reports_the_requested_build() {
     assert!(!version.ptr.is_null() && version.len > 0);
 }
 
-/// A `major.minor[.patch]` version as numbers, for comparing.
+/// A `major[.minor[.patch]]` version as numbers padded to three with zeros (`13` is `13.0`), for comparing.
 #[cfg(target_os = "macos")]
 fn version(text: &str) -> Vec<u32> {
-    text.split('.').map(|part| part.parse().unwrap()).collect()
+    let mut parts: Vec<u32> = text.split('.').map(|part| part.parse().unwrap()).collect();
+    parts.resize(parts.len().max(3), 0);
+    parts
 }
 
 /// No object of the archive is built for a newer macOS than the one this test links for (the `-Dtarget` version,
