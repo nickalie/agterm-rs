@@ -1049,7 +1049,14 @@ Order after Task 7, as two lanes that meet:
         through the process table (Windows: the console foreground; Unix: the shell group's child), replayed into a
         new session that runs it with the same arguments and then reports its directory. The VM was not used: copying
         the tree into it was refused by the environment's permission classifier, so Windows is checked on CI only
-- [ ] run gates
+- [x] run gates
+      - fmt, locked metadata, tracing and vendored-source checks, clippy (workspace with WPE, frontend without its
+        default features, `agterm-core` for the Windows and macOS targets), the lint report, the selftests, the
+        workspace tests headless (all green but the load-bound frame-rate harness in `agterm-gpui`'s `html_overlay`,
+        as in Tasks 16 and 17, at a load average of 40–70; `quick_terminal`'s weston case, failed under that load,
+        passes on rerun), the full conformance run (ratchet holds, 667 ids, 14 not run on this host);
+        `cross-platform.yml` run 39323416810 green on ubuntu-26.04, macos-26 and windows-2025, the PowerShell
+        session test run on all three
 
 ### Task 28: Remove zmx
 
