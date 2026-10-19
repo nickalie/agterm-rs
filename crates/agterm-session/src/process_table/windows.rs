@@ -365,13 +365,17 @@ mod tests {
     #[test]
     fn a_command_line_splits_as_the_c_runtime_splits_it() {
         assert_eq!(
-            command_line_to_argv(&wide(r#""C:\Program Files\x.exe" "a b" it"s "q\"uoted" tail\\"#)),
+            command_line_to_argv(&wide(
+                r#""C:\Program Files\x.exe" "a b" "it's \"q\"" "back\\\"slash" tail\\ "" un"quo ted""#
+            )),
             Some(vec![
                 r"C:\Program Files\x.exe".to_owned(),
                 "a b".to_owned(),
-                "its".to_owned(),
-                "q\"uoted".to_owned(),
+                r#"it's "q""#.to_owned(),
+                r#"back\"slash"#.to_owned(),
                 r"tail\\".to_owned(),
+                String::new(),
+                "unquo ted".to_owned(),
             ])
         );
     }
