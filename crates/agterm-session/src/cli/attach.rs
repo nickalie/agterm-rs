@@ -34,8 +34,9 @@ pub const PROBE_WAIT: Duration = Duration::from_millis(500);
 /// How long a cut sequence of the input that may be a key waits for its end before it is taken as typed.
 pub const INPUT_QUIET: Duration = Duration::from_millis(50);
 
-/// How long a cut sequence only the outer terminal's answers start with waits for its end before it is dropped, and a
-/// cut CSI while an answer is due before it is taken as typed: a pause inside an answer (a slow link) is no key.
+/// How long, while an answer of the outer terminal is due, a cut sequence that may be one waits for its end before it
+/// is dropped, and a cut CSI before it is taken as typed: a pause inside an answer (a slow link) is no key. With no
+/// answer due, both wait [`INPUT_QUIET`] and are taken as typed, and so they do once the relay gives the answer up.
 pub const ANSWER_QUIET: Duration = Duration::from_secs(2);
 
 /// How long a client whose connection ended tries to attach again.
@@ -210,8 +211,8 @@ struct Loop<'a> {
     first_snapshot: bool,
     /// What was typed before the attach.
     typed: Vec<u8>,
-    /// When a cut sequence of the input is taken as typed.
-    quiet: Option<Instant>,
+    /// When the input last came, which a cut sequence held waits from (`Loop::quiet`).
+    input_at: Option<Instant>,
     /// The role the server last told this client.
     role: Option<LeadRole>,
 }
@@ -234,7 +235,7 @@ impl<'a> Loop<'a> {
             connection: 0,
             first_snapshot: true,
             typed: Vec::new(),
-            quiet: None,
+            input_at: None,
             role: None,
         }
     }
@@ -316,7 +317,7 @@ impl<'a> Loop<'a> {
 
     /// One event, or what is due.
     fn turn(&mut self) -> Result<(), Outcome> {
-        let deadline = [self.relay.next_deadline(), self.quiet].into_iter().flatten().min();
+        let deadline = [self.relay.next_deadline(), self.quiet()].into_iter().flatten().min();
         let event = match deadline {
             Some(deadline) => match self
                 .events
@@ -334,14 +335,14 @@ impl<'a> Loop<'a> {
         self.due(Instant::now())
     }
 
-    /// What is due at `now`: the relay's deadlines, a cut input sequence taken as typed.
+    /// What is due at `now`: the relay's deadlines, then a cut input sequence given up (taken as typed, or dropped as a
+    /// cut answer while one is still due).
     fn due(&mut self, now: Instant) -> Result<(), Outcome> {
         let mut fx = Effects::default();
         self.relay.tick(now, &mut fx);
         self.emit(fx)?;
-        if self.quiet.is_some_and(|quiet| now >= quiet) {
-            self.quiet = None;
-            let tokens = self.parser.flush();
+        if self.quiet().is_some_and(|quiet| now >= quiet) {
+            let tokens = self.parser.flush(self.relay.awaiting());
             self.tokens(tokens)?;
         }
         Ok(())
@@ -350,10 +351,9 @@ impl<'a> Loop<'a> {
     fn handle(&mut self, event: Event) -> Result<(), Outcome> {
         match event {
             Event::Tty(TtyEvent::Input(bytes)) => {
+                self.input_at = Some(Instant::now());
                 let tokens = self.parser.feed(&bytes);
-                let result = self.tokens(tokens);
-                self.quiet = self.quiet_time().map(|quiet| Instant::now() + quiet);
-                result
+                self.tokens(tokens)
             }
             // zmx detaches at the end of its input
             Event::Tty(TtyEvent::InputEnd) => Err(self.detach()),
@@ -382,14 +382,15 @@ impl<'a> Loop<'a> {
         }
     }
 
-    /// How long the cut sequence the input holds waits for its end (`attach_tty::input`); `None` with none, or one
-    /// that waits for good.
-    fn quiet_time(&self) -> Option<Duration> {
-        Some(match self.parser.held()? {
-            Held::Key => INPUT_QUIET,
-            Held::Csi if !self.relay.awaiting() => INPUT_QUIET,
-            Held::Csi | Held::Answer => ANSWER_QUIET,
-        })
+    /// When the cut sequence the input holds is given up (`attach_tty::input`): [`ANSWER_QUIET`] after the last input
+    /// for what may be an answer while one is due, [`INPUT_QUIET`] otherwise, so a hold outlives no answer the relay
+    /// gave up. `None` with none held, or one that waits for good.
+    fn quiet(&self) -> Option<Instant> {
+        let wait = match self.parser.held()? {
+            Held::Csi | Held::Answer if self.relay.awaiting() => ANSWER_QUIET,
+            Held::Key | Held::Csi | Held::Answer => INPUT_QUIET,
+        };
+        Some(self.input_at? + wait)
     }
 
     fn tokens(&mut self, tokens: Vec<Token>) -> Result<(), Outcome> {

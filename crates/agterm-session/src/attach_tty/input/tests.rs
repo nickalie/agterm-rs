@@ -104,7 +104,7 @@ fn a_lone_escape_waits_for_the_quiet_then_is_a_key() {
     let mut parser = InputParser::new(true);
     assert!(parser.feed(b"\x1b").is_empty());
     assert!(parser.holding());
-    assert_eq!(parser.flush(), [input(b"\x1b")]);
+    assert_eq!(parser.flush(true), [input(b"\x1b")]);
     assert!(!parser.holding());
 }
 
@@ -113,15 +113,19 @@ fn a_cut_sequence_is_taken_as_typed_once_flushed() {
     let mut parser = InputParser::new(true);
     assert_eq!(parser.feed(b"a\x1b]"), [input(b"a")]);
     assert_eq!(parser.held(), Some(Held::Key), "Alt+]");
-    assert_eq!(parser.flush(), [input(b"\x1b]")]);
+    assert_eq!(parser.flush(true), [input(b"\x1b]")]);
     assert_eq!(parser.feed(b"b"), [input(b"b")]);
     assert_eq!(parser.feed(b"\x1b[1;5"), []);
     assert_eq!(parser.held(), Some(Held::Csi));
-    assert_eq!(parser.flush(), [input(b"\x1b[1;5")]);
+    assert_eq!(parser.flush(true), [input(b"\x1b[1;5")]);
+    // Escape, `P` and `x` in one read (vim, or keys a slow link bunched): no answer starts so
+    assert_eq!(parser.feed(b"\x1bPx"), []);
+    assert_eq!(parser.held(), Some(Held::Key));
+    assert_eq!(parser.flush(true), [input(b"\x1bPx")]);
 }
 
 #[test]
-fn a_cut_answer_waits_longer_and_is_never_typed() {
+fn a_cut_answer_waits_longer_and_is_dropped_while_one_is_due() {
     for cut in [
         b"\x1b]52;c;aGVs".as_slice(),
         b"\x1b]4;17;rgb:",
@@ -132,7 +136,12 @@ fn a_cut_answer_waits_longer_and_is_never_typed() {
         let mut parser = InputParser::new(true);
         assert_eq!(parser.feed(cut), []);
         assert_eq!(parser.held(), Some(Held::Answer), "{:?}", String::from_utf8_lossy(cut));
-        assert_eq!(parser.flush(), [], "{:?}", String::from_utf8_lossy(cut));
+        assert_eq!(parser.flush(true), [], "{:?}", String::from_utf8_lossy(cut));
+        assert!(!parser.holding());
+        // with no answer due it was typed: Escape or an Alt chord, then more keys
+        let mut parser = InputParser::new(true);
+        assert_eq!(parser.feed(cut), []);
+        assert_eq!(parser.flush(false), [input(cut)], "{:?}", String::from_utf8_lossy(cut));
         assert!(!parser.holding());
     }
     // held until its end comes, the answer is read whole
@@ -150,8 +159,53 @@ fn a_cut_paste_end_is_held_until_the_rest_comes() {
     assert_eq!(parser.feed(b"\x1b[200~abc\x1b[20"), [input(b"\x1b[200~abc")]);
     assert!(parser.holding());
     assert_eq!(parser.held(), None, "no escape time inside a paste");
-    assert_eq!(parser.flush(), []);
+    assert_eq!(parser.flush(true), []);
+    assert_eq!(parser.flush(false), []);
     assert_eq!(parser.feed(b"1~\x1c"), [input(b"\x1b[201~"), Token::Detach]);
+}
+
+#[test]
+fn a_control_ends_what_is_held_as_typed() {
+    // readline's M-_ and Enter, Alt+] and Backspace, vim's Escape, P and an arrow: typed at once, no escape time
+    for keys in [
+        b"\x1b_\r".as_slice(),
+        b"\x1b]\x7f",
+        b"\x1bPx\x1b[A",
+        b"\x1b[?\r",
+        b"\x1b[\xc3\xa9",
+        b"\x1bXa\x1b\x1bb",
+    ] {
+        let mut parser = InputParser::new(true);
+        let mut tokens = parser.feed(keys);
+        tokens.extend(parser.flush(true));
+        assert_eq!(tokens, [input(keys)], "{:?}", String::from_utf8_lossy(keys));
+    }
+    let mut parser = InputParser::new(true);
+    assert_eq!(parser.feed(b"\x1b_\r"), [input(b"\x1b_\r")]);
+    assert!(!parser.holding());
+    // what may be an answer goes on in a later read, and the next key's control ends it: typed, then the key
+    let mut parser = InputParser::new(true);
+    assert_eq!(parser.feed(b"\x1b]11;x"), []);
+    assert_eq!(parser.held(), Some(Held::Answer));
+    assert_eq!(parser.feed(b"y\x1b[A"), [input(b"\x1b]11;xy\x1b[A")]);
+    assert!(!parser.holding());
+    // the detach key after a held fragment detaches, the fragment typed first
+    for held in [b"\x1b_Gab".as_slice(), b"\x1b]52;c;aGVs", b"\x1b[?6", b"\x1bP1$"] {
+        let mut parser = InputParser::new(true);
+        assert_eq!(parser.feed(held), []);
+        assert_eq!(
+            parser.feed(b"\x1c"),
+            [input(held), Token::Detach],
+            "{:?}",
+            String::from_utf8_lossy(held)
+        );
+    }
+    // an ESC that starts an answer after a typed fragment: the fragment is typed, the answer read
+    let mut parser = InputParser::new(true);
+    assert_eq!(
+        parser.feed(b"\x1b]1\x1b[?62c"),
+        [input(b"\x1b]1"), answer(Answer::PrimaryAttributes)]
+    );
 }
 
 #[test]

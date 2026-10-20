@@ -15,10 +15,15 @@
 //!
 //! A sequence cut at the end of a read, a lone ESC included, is held for the next one; [`InputParser::flush`] gives it
 //! up once the input stays quiet, for as long as [`InputParser::held`] says it may be waiting (the attach loop's
-//! escape time for what may be a key, longer for what only an answer starts with): what may be a key is then input,
-//! a cut answer is dropped. A cut end of a bracketed paste is never given up: the paste goes on until its end. An
-//! answer can come cut anywhere: a Windows console hands the characters of one over as they are parsed, a few per
-//! read.
+//! escape time for what may be a key, longer for what may be an answer while one is due): what may be a key is then
+//! input, and so is what may be an answer when none is due; a cut answer while one is due is dropped. A cut end of a
+//! bracketed paste is never given up: the paste goes on until its end. An answer can come cut anywhere: a Windows
+//! console hands the characters of one over as they are parsed, a few per read.
+//!
+//! No answer holds a control inside it: a C0 byte (but the BEL ending an OSC and the ESC of an ST), DEL, or for a
+//! CSI any byte past its parameters but a final, ends what is held then and there as typed (Escape or an Alt chord
+//! followed by more keys: readline's `M-_` and Enter, vim's Escape, `P` and an arrow), and the control is read on its
+//! own, so the detach key still detaches.
 //!
 //! The detach key (zmx's `isCtrlBackslash`, `src/util.zig` at `8bab1f0`, MIT, NOTICE): Ctrl+\ typed (anywhere in a read
 //! outside a bracketed paste, where zmx looked at a read's first byte only: a console's reads do not follow the
@@ -86,8 +91,9 @@ pub enum Held {
     Key,
     /// A CSI without a private prefix: a key's (an arrow with modifiers, a function key) or an answer's.
     Csi,
-    /// What only the outer terminal's answers start with: a string (OSC, DCS, APC, SOS, PM) past its introducer, or a
-    /// CSI with a `?`, `>` or `=` prefix.
+    /// What the outer terminal's answers start with: an OSC with a number, a Kitty graphics APC (`ESC _ G`), a DCS as
+    /// a report starts (a digit, `>` or `!`), or a CSI with a `?`, `>` or `=` prefix. Typed, it is Escape or an Alt
+    /// chord followed by more keys, so it is an answer only while one is due.
     Answer,
 }
 
@@ -147,7 +153,10 @@ impl InputParser {
         // what follows the ESC a cut sequence starts with
         Some(match &self.held[1..] {
             [] | [_] => Held::Key,
-            [b'[', b'?' | b'>' | b'=', ..] | [b']' | b'P' | b'_' | b'^' | b'X', _, ..] => Held::Answer,
+            [b'[', b'?' | b'>' | b'=', ..]
+            | [b']', b'0'..=b'9', ..]
+            | [b'_', b'G', ..]
+            | [b'P', b'0'..=b'9' | b'>' | b'!', ..] => Held::Answer,
             [b'[', ..] => Held::Csi,
             _ => Held::Key,
         })
@@ -199,14 +208,14 @@ impl InputParser {
         tokens
     }
 
-    /// The cut sequence held, given up once the input stayed quiet: input when it may be a key, dropped when only an
-    /// answer starts so (module docs). A cut end of a bracketed paste stays held.
-    pub fn flush(&mut self) -> Vec<Token> {
+    /// The cut sequence held, given up once the input stayed quiet: dropped when it may be an answer and one is due
+    /// (`answer_due`), else input (module docs). A cut end of a bracketed paste stays held.
+    pub fn flush(&mut self, answer_due: bool) -> Vec<Token> {
         let mut tokens = Vec::new();
         match self.held() {
             None => {}
-            Some(Held::Answer) => self.held.clear(),
-            Some(Held::Key | Held::Csi) => push_input(&mut tokens, &std::mem::take(&mut self.held)),
+            Some(Held::Answer) if answer_due => self.held.clear(),
+            Some(_) => push_input(&mut tokens, &std::mem::take(&mut self.held)),
         }
         tokens
     }
@@ -259,7 +268,8 @@ impl InputParser {
     }
 
     fn csi(&self, bytes: &[u8]) -> Parsed {
-        let Some(end) = bytes.iter().skip(2).position(|byte| (0x40..=0x7E).contains(byte)) else {
+        // past the parameters and intermediates
+        let Some(end) = bytes.iter().skip(2).position(|byte| !(0x20..0x40).contains(byte)) else {
             return if bytes.len() > CSI_LIMIT {
                 // no CSI: the ESC is a key
                 Parsed::Complete(1, Kind::Input)
@@ -267,7 +277,12 @@ impl InputParser {
                 Parsed::Incomplete
             };
         };
-        let length = end + 3;
+        let at = end + 2;
+        if !(0x40..=0x7E).contains(&bytes[at]) {
+            // a control or a character: no key or answer goes on so, what came before it was typed (module docs)
+            return Parsed::Complete(at, Kind::Input);
+        }
+        let length = at + 1;
         Parsed::Complete(length, self.classify_csi(&bytes[..length]))
     }
 
@@ -348,15 +363,21 @@ fn is_detach(final_byte: u8, prefix: Option<u8>, params: &[u8]) -> bool {
     }
 }
 
-/// A string sequence (OSC, DCS, APC, SOS, PM) at the front of `bytes`, up to its ST (or BEL, for an OSC).
+/// A string sequence (OSC, DCS, APC, SOS, PM) at the front of `bytes`, up to its ST (or BEL, for an OSC). A control
+/// before it (an ESC starting anything but the ST included) ends it as typed: the ESC and the introducer are a key, and
+/// what follows is read again (module docs).
 fn string(bytes: &[u8]) -> Parsed {
     let osc = bytes[1] == b']';
     let body = &bytes[2..];
     for (at, &byte) in body.iter().enumerate() {
         let end = match byte {
             BEL if osc => Some((at, 1)),
-            ESC if body.get(at + 1) == Some(&b'\\') => Some((at, 2)),
-            ESC if at + 1 == body.len() => return Parsed::Incomplete,
+            ESC => match body.get(at + 1) {
+                Some(b'\\') => Some((at, 2)),
+                None => return Parsed::Incomplete,
+                Some(_) => return Parsed::Complete(2, Kind::Input),
+            },
+            0x00..=0x1F | 0x7F => return Parsed::Complete(2, Kind::Input),
             _ => None,
         };
         if let Some((content, terminator)) = end {

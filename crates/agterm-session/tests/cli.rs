@@ -546,6 +546,26 @@ fn the_detach_key_goes_to_the_program_when_turned_off() -> TestResult {
     Ok(())
 }
 
+/// Escape or an Alt chord and the keys after it, bunched as a slow link hands them over: what only starts like an
+/// answer is typed once the input stays quiet, no answer being due, and a control after it is typed at once.
+#[cfg(unix)]
+#[test]
+fn keys_that_start_like_an_answer_reach_the_program() -> TestResult {
+    let namespace = Namespace::new()?;
+    let script = "stty raw -echo; printf 'READY\\r\\n'; \
+                  b=$(dd bs=1 count=10 2>/dev/null | od -An -tx1 | tr -d ' \\n'); printf 'GOT:%s\\r\\n' \"$b\"; \
+                  sleep 600";
+    let client = namespace.attach(&["bunched", "/bin/sh", "-c", script], &[], &Answers::basic())?;
+    client.expect("READY");
+    // Alt+_ and G, the start of a Kitty graphics answer, then a pause past the escape time
+    client.write(b"\x1b_G")?;
+    std::thread::sleep(Duration::from_millis(300));
+    // readline's M-_ and Enter, then Alt+] and 1, the start of an OSC answer, ended by Backspace
+    client.write(b"\x1b_\r\x1b]1\x7f")?;
+    client.expect("GOT:1b5f471b5f0d1b5d317f");
+    Ok(())
+}
+
 #[test]
 fn a_gone_session_runs_the_guard_and_the_attach_fails() -> TestResult {
     let namespace = Namespace::new()?;
