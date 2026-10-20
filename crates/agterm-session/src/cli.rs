@@ -48,6 +48,7 @@ use std::process::ExitCode;
 
 use crate::client::{Client, ClientError};
 use crate::protocol::{ApiErrorKind, KillOutcome, Managed, PROTOCOL_VERSION, Screen, SessionRecord};
+use crate::server::handoff;
 use crate::server::lead::is_nonce;
 use crate::server::pane::{DIRECTORY_VARIABLE, MANAGED_VARIABLES, SESSION_VARIABLE};
 use crate::server::{EXIT_FAILED, EXIT_USAGE};
@@ -76,6 +77,7 @@ const USAGE: &str = "usage: agterm-session <command>
   print <name> [<text>...]                  write text (else standard input) into a session's output
   version                                   print this build, its protocol and the running server's
   server <namespace directory>              run the server (started by an attach)
+    [--handoff-import <channel> <token>]    taking over an updated server's sessions (started by its handoff)
 
 The namespace is the directory AGTERM_LIVE_DIR names.";
 
@@ -223,10 +225,17 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
         }
         "version" | "-v" | "--version" => Ok(Command::Version),
         "help" | "-h" | "--help" => Ok(Command::Help),
-        // the binary runs `server <namespace directory>` itself, before these commands
+        // the binary runs `server <namespace directory>` and a handoff's `server <namespace directory>
+        // --handoff-import <channel> <token>` itself, before these commands
         "server" => Err(match rest.as_slice() {
             [] => "server needs the namespace directory".to_owned(),
             [_] => "server runs only as agterm-session's own command line".to_owned(),
+            [_, flag, _, _] if flag == handoff::IMPORT_FLAG => {
+                "server runs only as agterm-session's own command line".to_owned()
+            }
+            [_, flag, ..] if flag == handoff::IMPORT_FLAG => {
+                format!("server's {} takes a channel and a token", handoff::IMPORT_FLAG)
+            }
             [_, extra, ..] => format!("server takes one namespace directory, not {extra:?} too"),
         }),
         other => Err(format!("unknown command {other:?}")),

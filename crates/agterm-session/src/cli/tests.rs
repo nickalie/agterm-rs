@@ -145,6 +145,24 @@ fn a_server_line_with_no_or_two_directories_says_so() {
 }
 
 #[test]
+fn a_malformed_handoff_import_server_line_says_what_the_import_takes() {
+    let wrong_count = Err("server's --handoff-import takes a channel and a token".to_owned());
+    for bad in [
+        &["server", "/ns", "--handoff-import"][..],
+        &["server", "/ns", "--handoff-import", "/chan"],
+        &["server", "/ns", "--handoff-import", "ch", "tok", "extra"],
+    ] {
+        assert_eq!(parse(&args(bad)), wrong_count, "{bad:?}");
+    }
+    // the well-formed import line is the binary's own, like the one-directory form
+    assert_eq!(
+        parse(&args(&["server", "/ns", "--handoff-import", "ch", "tok"])),
+        Err("server runs only as agterm-session's own command line".to_owned())
+    );
+    assert!(USAGE.contains(&format!("[{} <channel> <token>]", handoff::IMPORT_FLAG)));
+}
+
+#[test]
 fn list_and_screen_lines_are_zmxs() {
     let record = SessionRecord {
         name: "agterm-1".to_owned(),
