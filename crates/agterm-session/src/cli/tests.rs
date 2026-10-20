@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use super::*;
+use crate::server::BUILD_ID;
 
 fn contract(pairs: &[(&str, &str)]) -> Contract {
     let map: HashMap<String, OsString> = pairs

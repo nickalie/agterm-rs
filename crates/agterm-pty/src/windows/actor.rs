@@ -168,11 +168,21 @@ impl ActorHandle {
 
     /// Resize the pseudoconsole (pixel sizes are not passed on: `ConPTY` has none).
     pub fn resize(&self, size: Size) {
-        if let Some(conpty) = lock(&self.inner().conpty).as_ref()
-            && let Err(err) = conpty.resize(size.pty())
-        {
+        if let Err(err) = self.try_resize(size) {
             tracing::debug!(%err, "resizing the pseudoconsole failed");
         }
+    }
+
+    /// [`ActorHandle::resize`], reporting a failure: how a process that took a pseudoconsole over (rebuilt from
+    /// handed-over handles) checks that it can drive it, `ResizePseudoConsole` reaching its console host.
+    ///
+    /// # Errors
+    ///
+    /// The pseudoconsole is closed or released, or `ResizePseudoConsole` failed.
+    pub fn try_resize(&self, size: Size) -> io::Result<()> {
+        let conpty = lock(&self.inner().conpty);
+        let conpty = conpty.as_ref().ok_or_else(closed)?;
+        conpty.resize(size.pty()).map_err(|err| crate::pty_error(&err))
     }
 
     /// Make the reader look at its [`crate::ReadPause`] again, after it was turned off.
@@ -262,6 +272,22 @@ impl ActorHandle {
             }
             outbox = shared.wait_outbox(outbox, WAIT_SLICE);
         }
+    }
+
+    /// Hand the output a quiesced actor read but held back (a read that completed while it quiesced) to the read
+    /// callback, staying quiesced, so it is in the state the handoff passes on rather than left behind in the actor:
+    /// a rollback then has nothing held, and a release nothing pending. Nothing unless quiesced. After
+    /// [`ActorHandle::begin_handoff`] returned the reader is parked, so no read is in progress and none starts: what
+    /// this delivers is all the actor read.
+    pub fn deliver_held(&self) {
+        let inner = self.inner();
+        let mut state = inner.reader();
+        if state.mode != Mode::Quiesced || state.held.is_empty() {
+            return;
+        }
+        let held = std::mem::take(&mut state.held);
+        drop(state);
+        self.shared().deliver(&held);
     }
 
     /// Duplicates of the handles the pseudoconsole is made of (its pipes' ends and its three console handles), for

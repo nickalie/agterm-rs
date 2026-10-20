@@ -104,6 +104,21 @@ impl Child {
         }
     }
 
+    /// A child another process started on a PTY this one took over (the session server's update handoff): its id,
+    /// which is also its process group's. This process is not its parent, so it cannot wait for it: [`Child::wait`],
+    /// [`Child::wait_exit`] and [`Child::try_wait`] fail (`ECHILD`), and its end is learnt from the PTY's end or the
+    /// process table. Its [`Killer`] signals the group until [`Killer::retire`]: nothing here holds the id, which the
+    /// system may give to another process once the child is gone, so a caller checks the process is still the child
+    /// before signalling (best effort) and retires the killer once it is gone.
+    #[must_use]
+    pub fn adopt(pid: u32) -> Self {
+        Self {
+            inner: Box::new(Adopted { pid }),
+            pid,
+            reaped: Arc::new(Mutex::new(false)),
+        }
+    }
+
     /// A handle that signals the child's process group from another thread, safe while this one waits.
     #[must_use]
     pub fn killer(&self) -> Killer {
@@ -179,6 +194,12 @@ impl Killer {
         self.signal(libc::SIGKILL)
     }
 
+    /// Signal nothing from now on, from this killer or any other of the child's: its group's id may name another
+    /// group by now (an adopted child that ended, [`Child::adopt`]).
+    pub fn retire(&self) {
+        *lock(&self.reaped) = true;
+    }
+
     fn signal(&self, signal: libc::c_int) -> io::Result<()> {
         // held while signalling: the child cannot be reaped (and its id reused) in between
         let reaped = lock(&self.reaped);
@@ -197,6 +218,40 @@ impl Killer {
         }
         drop(reaped);
         Ok(())
+    }
+}
+
+/// The portable-pty side of an adopted child ([`Child::adopt`]): it can be neither waited for nor reaped here.
+#[derive(Debug)]
+struct Adopted {
+    pid: u32,
+}
+
+fn not_a_child() -> io::Error {
+    io::Error::from_raw_os_error(libc::ECHILD)
+}
+
+impl portable_pty::ChildKiller for Adopted {
+    fn kill(&mut self) -> io::Result<()> {
+        Err(not_a_child())
+    }
+
+    fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+        Box::new(Self { pid: self.pid })
+    }
+}
+
+impl portable_pty::Child for Adopted {
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        Err(not_a_child())
+    }
+
+    fn wait(&mut self) -> io::Result<ExitStatus> {
+        Err(not_a_child())
+    }
+
+    fn process_id(&self) -> Option<u32> {
+        Some(self.pid)
     }
 }
 

@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 
 use super::clients::{ClientEvent, RecvError, Subscription};
 use super::pane::{AttachError, Attached, Pane, PaneConfig, ResyncError, SpawnError};
-use super::{HANDSHAKE_TIMEOUT, Shared, set_recv_timeout, snapshot};
+use super::{Connection, HANDSHAKE_TIMEOUT, Shared, set_recv_timeout, snapshot};
 use crate::endpoint::{self, Stream};
 use crate::protocol::{
     AttachClientMessage, AttachRefusal, AttachRequest, AttachServerMessage, FramingError, PROTOCOL_VERSION, read_frame,
@@ -65,27 +65,35 @@ impl Refusal {
     }
 }
 
-/// An attach connection after its welcome.
-pub(super) fn serve(stream: Stream, shared: &Arc<Shared>) -> Result<(), FramingError> {
-    set_recv_timeout(&stream, Some(HANDSHAKE_TIMEOUT));
-    let first = read_frame(&mut &stream)?.message::<AttachClientMessage>(PROTOCOL_VERSION)?;
-    set_recv_timeout(&stream, None);
+/// An attach connection after its welcome; its operations run as `connection`'s ([`Connection::operate`]).
+pub(super) fn serve(
+    stream: &Arc<Stream>,
+    shared: &Arc<Shared>,
+    connection: &Connection<'_>,
+) -> Result<(), FramingError> {
+    set_recv_timeout(stream, Some(HANDSHAKE_TIMEOUT));
+    let first = read_frame(&mut &**stream)?.message::<AttachClientMessage>(PROTOCOL_VERSION)?;
+    set_recv_timeout(stream, None);
     let AttachClientMessage::Attach(request) = first else {
         // a client that does not start with its attach is broken: closed without an answer
         return Ok(());
     };
-    let (pane, attached) = match open(shared, &request) {
+    // an attach decoded before a handoff began is not served: its client reconnects
+    let Some(opened) = connection.operate(|| open(shared, &request)) else {
+        return Ok(());
+    };
+    let (pane, attached) = match opened {
         Ok(opened) => opened,
         Err(refusal) => {
             let refused = AttachServerMessage::Refused {
                 reason: refusal.reason,
                 message: refusal.message,
             };
-            return write_message(&mut &stream, &refused);
+            return write_message(&mut &**stream, &refused);
         }
     };
     let id = attached.subscription.id();
-    let stream = Arc::new(stream);
+    let stream = Arc::clone(stream);
     let writer = {
         let (stream, pane) = (Arc::clone(&stream), Arc::clone(&pane));
         thread::Builder::new()
@@ -99,7 +107,7 @@ pub(super) fn serve(stream: Stream, shared: &Arc<Shared>) -> Result<(), FramingE
             return Err(FramingError::Io(err));
         }
     };
-    let read = read_messages(&stream, &pane, id);
+    let read = read_messages(&stream, &pane, id, connection);
     let _ = pane.detach(id);
     endpoint::disconnect(&stream);
     let _ = writer.join();
@@ -157,8 +165,9 @@ fn gone(name: &str) -> Refusal {
     Refusal::new(AttachRefusal::Gone, format!("no live session named {name:?}"))
 }
 
-/// The client's messages until it detaches or the connection ends: its input, resizes and answers to the pane.
-fn read_messages(stream: &Stream, pane: &Pane, id: u64) -> Result<(), FramingError> {
+/// The client's messages until it detaches or the connection ends: its input, resizes and answers to the pane, each
+/// as one of `connection`'s operations (none once a handoff began: the connection then ends).
+fn read_messages(stream: &Stream, pane: &Pane, id: u64, connection: &Connection<'_>) -> Result<(), FramingError> {
     loop {
         let frame = match read_frame(&mut &*stream) {
             Ok(frame) => frame,
@@ -166,41 +175,52 @@ fn read_messages(stream: &Stream, pane: &Pane, id: u64) -> Result<(), FramingErr
             Err(FramingError::Io(err)) if endpoint::is_connection_closed_error(&err) => return Ok(()),
             Err(err) => return Err(err),
         };
-        match frame.message::<AttachClientMessage>(PROTOCOL_VERSION)? {
-            AttachClientMessage::Input { data } => {
-                if let Err(err) = pane.input(id, &data) {
-                    tracing::debug!(%err, "a live session's input was dropped");
-                }
-            }
-            AttachClientMessage::Resize { size } => pane.resize_client(id, size),
-            AttachClientMessage::Metadata(metadata) => pane.set_metadata(id, metadata),
-            AttachClientMessage::DelegatedReply {
-                id: request,
-                epoch,
-                reply,
-            } => {
-                if !pane.answer(id, request, epoch, reply) {
-                    tracing::debug!(request, epoch, "a delegated reply nothing waits for was dropped");
-                }
-            }
-            AttachClientMessage::KittyComplete {
-                id: barrier,
-                epoch,
-                data,
-            } => {
-                if !pane.complete(id, barrier, epoch, &data) {
-                    tracing::debug!(barrier, epoch, "a Kitty completion nothing waits for was dropped");
-                }
-            }
-            AttachClientMessage::Detach => return Ok(()),
-            // one attach per connection
-            AttachClientMessage::Attach(_) => {
-                return Err(FramingError::Malformed(
-                    "a second attach on an attached connection".to_owned(),
-                ));
-            }
+        let message = frame.message::<AttachClientMessage>(PROTOCOL_VERSION)?;
+        match connection.operate(|| take_message(pane, id, message)) {
+            Some(Ok(true)) => {}
+            Some(Ok(false)) | None => return Ok(()),
+            Some(Err(err)) => return Err(err),
         }
     }
+}
+
+/// One message of the attached client `id`: whether the connection goes on.
+fn take_message(pane: &Pane, id: u64, message: AttachClientMessage) -> Result<bool, FramingError> {
+    match message {
+        AttachClientMessage::Input { data } => {
+            if let Err(err) = pane.input(id, &data) {
+                tracing::debug!(%err, "a live session's input was dropped");
+            }
+        }
+        AttachClientMessage::Resize { size } => pane.resize_client(id, size),
+        AttachClientMessage::Metadata(metadata) => pane.set_metadata(id, metadata),
+        AttachClientMessage::DelegatedReply {
+            id: request,
+            epoch,
+            reply,
+        } => {
+            if !pane.answer(id, request, epoch, reply) {
+                tracing::debug!(request, epoch, "a delegated reply nothing waits for was dropped");
+            }
+        }
+        AttachClientMessage::KittyComplete {
+            id: barrier,
+            epoch,
+            data,
+        } => {
+            if !pane.complete(id, barrier, epoch, &data) {
+                tracing::debug!(barrier, epoch, "a Kitty completion nothing waits for was dropped");
+            }
+        }
+        AttachClientMessage::Detach => return Ok(false),
+        // one attach per connection
+        AttachClientMessage::Attach(_) => {
+            return Err(FramingError::Malformed(
+                "a second attach on an attached connection".to_owned(),
+            ));
+        }
+    }
+    Ok(true)
 }
 
 /// Send the client's events until its queue closes, its session's exit is sent or it is dropped; then let go of its
@@ -285,14 +305,14 @@ fn send(stream: &Stream, message: &AttachServerMessage) -> Result<(), FramingErr
 
 impl Shared {
     /// Count a session about to be created; false once the server decided to stop.
-    fn session_started(&self) -> bool {
+    pub(super) fn session_started(&self) -> bool {
         let started = self.lock().session_started();
         self.changed.notify_all();
         started
     }
 
     /// A session ended, or one counted was not created.
-    fn session_ended(&self) {
+    pub(super) fn session_ended(&self) {
         self.lock().session_ended(Instant::now());
         self.changed.notify_all();
     }

@@ -99,14 +99,22 @@ impl ActorHandle {
     /// Resize the PTY (`TIOCSWINSZ`, which signals the child's foreground process group), on this thread: input
     /// queued afterwards reaches the child after the new size. Nothing once the actor stopped.
     pub fn resize(&self, size: Size) {
-        if self.shared().outbox().gate == Gate::Closed {
-            return;
-        }
-        if let Some(file) = lock(&self.control().file).as_ref()
-            && let Err(err) = fd::resize(file.as_fd(), size)
-        {
+        if let Err(err) = self.try_resize(size) {
             tracing::debug!(%err, "resizing the PTY failed");
         }
+    }
+
+    /// [`ActorHandle::resize`], reporting a failure: how a process that took a PTY over checks that it can drive it.
+    ///
+    /// # Errors
+    ///
+    /// The actor stopped, or `TIOCSWINSZ` failed.
+    pub fn try_resize(&self, size: Size) -> io::Result<()> {
+        if self.shared().outbox().gate == Gate::Closed {
+            return Err(closed());
+        }
+        let file = lock(&self.control().file).clone().ok_or_else(closed)?;
+        fd::resize(file.as_fd(), size)
     }
 
     /// Make the actor look at its [`crate::ReadPause`] again, after it was turned off.
@@ -158,6 +166,11 @@ impl ActorHandle {
         }
         result
     }
+
+    /// Hand the output a quiesced actor read but held back to the read callback, staying quiesced, so it is in the
+    /// state the handoff passes on rather than left behind in the actor. Nothing on Unix, where a quiesced actor reads
+    /// nothing (on Windows a read that completed while the actor quiesced is held).
+    pub fn deliver_held(&self) {}
 
     /// A close-on-exec duplicate of the master for the process taking the PTY over; only while quiesced.
     ///

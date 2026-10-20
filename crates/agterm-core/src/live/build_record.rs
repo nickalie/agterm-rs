@@ -2,6 +2,11 @@
 //! keep their daemons through app updates, so a daemon created before the recorded change predates that launch and
 //! Reset Live Sessions offers it as outdated. The bundled build id is the staged `share/ngterm/zmx-BUILD`
 //! (`scripts/build-zmx.sh`).
+//!
+//! The session server that takes zmx's place (`agterm-session`) hands its sessions over to a server of the new build
+//! instead (its update handoff): once that handoff committed ([`record_handoff`]), the sessions created before the
+//! launch run in the bundled build, and the outdated reason is off for that build ([`launch_cutoff`] gives no cutoff).
+//! A handoff that failed records nothing, so the sessions stay outdated and the reset offer stands.
 
 use std::fs;
 use std::path::Path;
@@ -21,6 +26,10 @@ pub struct BuildRecord {
     /// Whole seconds since the Unix epoch, the resolution of zmx's `created` time.
     #[serde(rename = "changedAt", deserialize_with = "whole_seconds")]
     pub changed_at: u64,
+    /// The sessions of the earlier build were handed over to a server of this one (an update handoff committed), so
+    /// none predates it. Absent from records written before handoffs existed, which read as `false`.
+    #[serde(rename = "handedOver", default, skip_serializing_if = "std::ops::Not::not")]
+    pub handed_over: bool,
 }
 
 /// A `secondsSince1970` date, floored to whole seconds; a negative one reads as the epoch.
@@ -44,6 +53,7 @@ impl BuildRecord {
             _ => Self {
                 id: bundled_id.to_owned(),
                 changed_at: now,
+                handed_over: false,
             },
         }
     }
@@ -56,23 +66,39 @@ impl BuildRecord {
 }
 
 /// This launch's outdated cutoff in whole seconds: `None` without a bundled id, which turns the outdated reset reason
-/// off. The record is saved when it changed; one that cannot be saved still yields this launch's cutoff, and the next
-/// launch dates the change again.
+/// off, and `None` once the sessions were handed over to the bundled build ([`record_handoff`]). The record is saved
+/// when it changed; one that cannot be saved still yields this launch's cutoff, and the next launch dates the change
+/// again.
 #[must_use]
 pub fn launch_cutoff(bundled_id: Option<&str>, directory: &Path, now: SystemTime) -> Option<u64> {
+    let record = advance(bundled_id, directory, now, false)?;
+    (!record.handed_over).then_some(record.changed_at)
+}
+
+/// A handoff of the live sessions to a server of `bundled_id` committed: the record of that build (dated `now` when
+/// it is new) says so, and [`launch_cutoff`] gives no cutoff for it from then on. Nothing without a bundled id. Best
+/// effort, as the cutoff's own save: a record that cannot be saved leaves the sessions outdated, so the reset offer
+/// errs on the side of being made.
+pub fn record_handoff(bundled_id: Option<&str>, directory: &Path, now: SystemTime) {
+    let _ = advance(bundled_id, directory, now, true);
+}
+
+/// The record for a launch of `bundled_id` at `now`, saved when it changed; `handed_over` marks it handed over.
+fn advance(bundled_id: Option<&str>, directory: &Path, now: SystemTime, handed_over: bool) -> Option<BuildRecord> {
     let bundled_id = bundled_id.map(str::trim).filter(|id| !id.is_empty())?;
     let file = directory.join(FILE_NAME);
     let previous = BuildRecord::load(&file);
     let now = now
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs());
-    let record = BuildRecord::advanced(previous.clone(), bundled_id, now);
+    let mut record = BuildRecord::advanced(previous.clone(), bundled_id, now);
+    record.handed_over |= handed_over;
     if previous.as_ref() != Some(&record)
         && let Ok(bytes) = serde_json::to_vec(&record)
     {
         let _ = write_atomic(&file, &bytes);
     }
-    Some(record.changed_at)
+    Some(record)
 }
 
 #[cfg(test)]
@@ -89,6 +115,7 @@ mod tests {
         BuildRecord {
             id: id.to_owned(),
             changed_at,
+            handed_over: false,
         }
     }
 
@@ -127,6 +154,37 @@ mod tests {
         assert_eq!(launch_cutoff(Some("a"), dir.path(), at(3000.0)), Some(3000));
         fs::write(&file, r#"{"id":"a","changedAt":1234.9}"#).unwrap();
         assert_eq!(launch_cutoff(Some("a"), dir.path(), at(3000.0)), Some(1234));
+    }
+
+    #[test]
+    fn a_committed_handoff_turns_the_cutoff_off_for_its_build_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(FILE_NAME);
+        assert_eq!(launch_cutoff(Some("a"), dir.path(), at(1000.0)), Some(1000));
+        // build b launches: its sessions predate it until they are handed over
+        assert_eq!(launch_cutoff(Some("b"), dir.path(), at(2000.0)), Some(2000));
+        record_handoff(Some("b"), dir.path(), at(2001.0));
+        assert_eq!(launch_cutoff(Some("b"), dir.path(), at(3000.0)), None);
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            r#"{"id":"b","changedAt":2000,"handedOver":true}"#
+        );
+        // the next build starts outdated again, until its own handoff
+        assert_eq!(launch_cutoff(Some("c"), dir.path(), at(4000.0)), Some(4000));
+        assert!(!BuildRecord::load(&file).unwrap().handed_over);
+        // a handoff to a build never launched here dates its record too
+        record_handoff(Some("d"), dir.path(), at(5000.0));
+        assert_eq!(
+            BuildRecord::load(&file),
+            Some(BuildRecord {
+                id: "d".to_owned(),
+                changed_at: 5000,
+                handed_over: true
+            })
+        );
+        // without a bundled id nothing is recorded
+        record_handoff(None, dir.path(), at(6000.0));
+        assert_eq!(BuildRecord::load(&file).unwrap().id, "d");
     }
 
     #[test]

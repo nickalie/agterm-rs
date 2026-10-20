@@ -1020,21 +1020,92 @@ Order after Task 7, as two lanes that meet:
 **Files:**
 - Create: `crates/agterm-session/src/server/handoff/{mod,unix,windows}.rs`, `crates/agterm-session/tests/handoff.rs`
 
-- [ ] port herdr's handoff on Unix: the manifest, the `SCM_RIGHTS` batches, the per-pane runtime state, the commit
+- [x] port herdr's handoff on Unix: the manifest, the `SCM_RIGHTS` batches, the per-pane runtime state, the commit
       and its timeouts
-- [ ] the VT state passes as the binary snapshot when both servers run the same pin, else as the formatter snapshot
+      - `server::handoff` (+ `unix.rs`): a control connection's `handoff.request.v1` runs it (the server advertises
+        `handoff.request.v1` where it can hand over). A token-authenticated private channel (an owner-only endpoint
+        `<namespace>/handoff-<pid>`); the replacement started detached as `agterm-session server <namespace>
+        --handoff-import <channel> <token>` (`server::command`, which the binary's `server` arm now passes everything
+        to); steps token + identity (build, protocol, libghostty-vt pin) → JSON-line manifest (`HANDOFF_VERSION` 1,
+        a `PaneState` per pane, each pane's terminal and unwritten replies as raw bytes after it) → `validated` (or
+        `refused: <reason>`) → handles → `restored` → `ready` → `committed` → `owned`, `STEP_TIMEOUT` 30 s each (a
+        watchdog disconnect on every OS), `OWNED_TIMEOUT` 500 ms. Settled with Codex (run's
+        `discussions/task-21-handoff-design`): the namespace endpoint is never released (Unix passes the listening
+        socket and the locked `server.lock` description by `SCM_RIGHTS` before the masters, batches of 64, received
+        close-on-exec; `endpoint::Listener` gains adopt/relinquish/claim), so a rollback never rebinds and no client
+        can start an empty server meanwhile; api and attach operations fenced by an operation lock and a connection
+        generation, then disconnected (clients reattach); each pane held at a cut (`Pane::freeze`: the replies'
+        helper acknowledged idle, the waiter publishes no end; `Pane::quiesce`, with agterm-pty's new
+        `ActorHandle::deliver_held`; `Pane::cut`: a waiting clipboard read denied, Kitty barriers ended, the ready
+        replies carried and kept for a rollback); rollback only until `committed` is written whole; the importer
+        builds everything inert before `ready` (`Pane::import`) and `Pane::activate`s on the commit; the old server
+        releases its actors, gives the socket file up and stops (`StopReason::HandedOver`)
+- [x] the VT state passes as the binary snapshot when both servers run the same pin, else as the formatter snapshot
       replayed (evaluated, recorded); a pin change the formatter cannot carry offers the reset
-- [ ] Windows, per Task 2's conditional GO and its guards (Technical Details); a failed gate keeps the old server
+      - the pin is `agterm_ghostty_vt::PIN` (`LIBGHOSTTY_VT_REV` and a digest of the stamp's patches, exported by the
+        sys crate's build script: the library's version string, `1.3.2-dev`, names no revision). Equal pins:
+        `VtEncoding::Binary` (`encode_snapshot`/`decode_snapshot` with the continuation retained, the replies'
+        scanner put in step with it): the alternate screen with its primary, history, modes and the unfinished
+        sequence, but no Kitty images, placements or glyph registrations (the codec ignores them at the pin). Else
+        `Formatter` (Task 18's attach snapshot replayed into a fresh server terminal, its replies dropped), which
+        also loses the saved cursor (no formatter extra at the pin) and refuses a session on its alternate screen
+        (its primary would be lost) or without a cut: the handoff fails before its commit, and the client's caller
+        offers the reset; both losses are recorded in `pane/handoff.rs` (round 1 review)
+- [x] Windows, per Task 2's conditional GO and its guards (Technical Details); a failed gate keeps the old server
       serving and offers the reset
-- [ ] after a Unix handoff the shell's exit reports no status (`ChildExitReason::Handoff`); `ExitPolicy` and
+      - `handoff/windows.rs`: the gate (the system ConPTY reached through kernel32's `CreatePseudoConsole`, which
+        resolves into `KERNEL32.DLL` 6.2.26100 on the runner; x86_64; Windows build 20348 or 26100 from that module's
+        version; Microsoft's `winconpty.h` declares the HPCON struct an OS ABI, cited at its commit) at start (the
+        capability) and before any HPCON read; after the read the handles open, the signal a pipe, the console host a
+        live `conhost.exe`; every handle (pipes, the three console handles, the program's process and its job)
+        duplicated straight into the replacement through its process handle (`Spawned::process_handle`), the
+        channel peer's pid checked; the replacement drives the rebuilt console (a resize) before `restored` and takes
+        the pipe over beside the old instance (`Endpoint::bind_beside`, no first-instance flag); a refused gate or any
+        failure before the commit leaves the old server serving (`HandoffAttempt::Failed`). agterm-pty gains
+        `Child::from_handoff`, `Child::process`, `ActorHandle::try_resize`
+- [x] after a Unix handoff the shell's exit reports no status (`ChildExitReason::Handoff`); `ExitPolicy` and
       `agterm-term/src/exit.rs` treat it as a plain exit
-- [ ] the build id: a hash of the staged binary; a client finding a server of another build starts the handoff, and a
+      - an imported Unix pane's program is `agterm_pty::Child::adopt(pid)` (never waited for); a watcher ends the
+        session at the PTY's end or once the pid no longer names it (its start time from the process table), with
+        `ExitStatus::Unknown`, and retires its killer (`Killer::retire`); kills check the identity first (best
+        effort). `ExitPolicy::outcome`/`message` take `Option<u32>`: `None` is a plain exit, never a failure to
+        launch, and no code is printed
+- [x] the build id: a hash of the staged binary; a client finding a server of another build starts the handoff, and a
       failed handoff falls back to `build_record.rs`'s reset offer
-- [ ] tests on every OS: a handoff keeps the shell, its screen and its scrollback; a client attached before reattaches
+      - `crate::build_id`: `share/ngterm/session-BUILD` holds the id (the stager's hash, Task 25) and `binary <size>
+        <mtime-ns>` of the binary it was written for; a server takes it at its start only when its executable matches
+        (Linux: also the running image), else reports `agterm-session <version> unverified <pid>`; unstaged
+        `agterm-session <version>`, no check (metadata, not content: documented, Codex held out for hashing or atomic
+        publication). `StartOptions::build` is the id staged beside the executable; `connect_or_start` asks a server
+        of another build (or one refusing the protocol) once and reports `Connected::handoff`
+        (`HandoffAttempt::Committed`/`Failed`), `StartError::HandoffFailed` when the protocol refuses and it fails.
+        `build_record::record_handoff` marks a committed handoff (`handedOver`) and `launch_cutoff` then gives no
+        outdated cutoff for that build; a failed one records nothing, so the reset offer stands (the frontend wires it
+        in Task 25). On Windows a server runs a private copy (`<namespace>\run\<size>-<mtime>-<id hash>\bin`, its id
+        written for the copy), so the staged binary can be replaced while it runs
+- [x] tests on every OS: a handoff keeps the shell, its screen and its scrollback; a client attached before reattaches
       after; a failed handoff leaves the old server serving; (Windows) replacing the staged binary while the server
       runs succeeds; (Windows) an unknown layout refuses before any dereference; continuous output across a handoff
       loses no byte
-- [ ] run gates
+      - `tests/handoff.rs` through the binary on all three OSes (servers detached from the test, private namespaces):
+        the shell, its variable, screen and 80-line scrollback kept and the attached client reattaching; a refused
+        build and an unstartable replacement leaving the old server serving; a client of another staged build handing
+        over by itself with the staged binary replaced while the server runs (the Windows case); 300 lines printed
+        across a handoff all there in order; a server that does not hand over refusing and serving on; this host's
+        capability. Unit tests: the gate's matrix (unknown build, arch or module refused) and this process's ConPTY
+        (Windows), the pane crossing by binary and by formatter and a rollback keeping its replies (`pane/handoff.rs`,
+        every OS), manifest and line IO, `SCM_RIGHTS` batches, build ids, private images, the attempt's verdict,
+        lifecycle, `build_record`, `ExitPolicy`, the pin; agterm-pty `deliver_held`/`try_resize`, `Child::adopt`
+        (Unix), `Child::from_handoff` (Windows)
+- [x] run gates
+      - fmt, locked metadata, tracing and vendored-source checks, clippy (workspace with all features, the frontend
+        without its default features, `agterm-session`/`agterm-pty` for macOS), the lint report, the workspace tests
+        headless (4475 passed), the selftests; full conformance: 652 passed, the one break
+        (`test_live_any_shell`'s relaunch test, "session not realized") the test race `cross-platform-sessions` fixed
+        after this branch's base (7aa6983), and with that fix applied 653 passed, ratchet holds (667 ids, 14 not run
+        here); `cross-platform.yml` run 39438227818 green on all three (`ci/cps-task-21`, deleted after); a Windows
+        run before it failed once in the pre-existing `a_stalled_client_blocks_neither_the_pty_nor_the_others`, which
+        passed in the next
 
 ### Task 22: CLI binary with the kept attach contract
 

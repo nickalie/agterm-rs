@@ -65,6 +65,11 @@ const ERROR_INVALID_PARAMETER: i32 = 87;
 pub(super) struct Process(Option<OwnedHandle>);
 
 impl Process {
+    /// The process handle, when one was had (`CreateProcessW`'s has every access, `PROCESS_DUP_HANDLE` among them).
+    pub(super) fn handle(&self) -> Option<std::os::windows::io::BorrowedHandle<'_>> {
+        self.0.as_ref().map(|handle| handle.as_handle())
+    }
+
     pub(super) fn try_exit(&mut self) -> Option<Exit> {
         let Some(handle) = &self.0 else {
             return Some(Exit::Unknown);

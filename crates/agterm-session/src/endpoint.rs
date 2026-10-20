@@ -123,6 +123,30 @@ impl Endpoint {
     pub fn connect_timeout(&self, timeout: Duration) -> io::Result<Stream> {
         sys::connect_timeout(self, timeout)
     }
+
+    /// The listener an update handoff's replacement server takes over: the old server's listening socket and its
+    /// locked lock file ([`Listener::handoff_fds`]). It does not own the socket file until [`Listener::claim`].
+    ///
+    /// # Errors
+    ///
+    /// The socket file could not be read.
+    #[cfg(unix)]
+    pub fn adopt(&self, listener: std::os::fd::OwnedFd, lock: std::os::fd::OwnedFd) -> io::Result<Listener> {
+        sys::adopt(self, listener, lock)
+    }
+
+    /// The listener an update handoff's replacement server takes over on Windows: further instances of the pipe the
+    /// old server listens on, created while the old server's instance exists (so without the first-instance flag,
+    /// which that instance would refuse), with the same modes and owner-only descriptor.
+    ///
+    /// # Errors
+    ///
+    /// The pipe instance could not be created ([`io::ErrorKind::NotFound`] once no instance of the pipe exists: the
+    /// old server is gone, and an instance created now would not be its pipe).
+    #[cfg(windows)]
+    pub fn bind_beside(&self) -> io::Result<Listener> {
+        sys::bind_beside(self)
+    }
 }
 
 impl fmt::Display for Endpoint {
@@ -139,17 +163,35 @@ impl fmt::Display for Endpoint {
 }
 
 /// A bound endpoint. Dropping it stops listening; on Unix it also removes the socket file, if that is still the one
-/// this listener bound (a replacement server may have bound its own since), and then releases the namespace's lock.
+/// this listener bound (a replacement server may have bound its own since) and the listener owns it, and then releases
+/// the namespace's lock.
+///
+/// # Update handoff
+///
+/// The namespace never goes unserved during a server's update handoff, and its rollback never binds again: the
+/// replacement takes the endpoint over while the old server still holds it, and only after the commit does the old
+/// server let go (`crate::server::handoff`). On Unix the replacement receives the listening socket and the open lock
+/// file themselves ([`Listener::handoff_fds`], [`Endpoint::adopt`]), so the lock is never released in between; the
+/// socket file is unlinked by whichever listener owns it ([`Listener::relinquish`], [`Listener::claim`]). On Windows
+/// the replacement creates further instances of the pipe the old server's instance keeps in existence
+/// ([`Endpoint::bind_beside`]), without the first-instance flag only that existence allows.
 #[derive(Debug)]
 pub struct Listener {
+    #[cfg(unix)]
     inner: interprocess::local_socket::Listener,
+    #[cfg(windows)]
+    inner: windows::PipeListener,
     #[cfg(unix)]
     socket: PathBuf,
     #[cfg(unix)]
     identity: sys::SocketFileIdentity,
+    /// Whether dropping it unlinks the socket file: not for one adopted in a handoff until its commit, nor for one
+    /// that handed the endpoint over.
+    #[cfg(unix)]
+    owns_socket: std::sync::atomic::AtomicBool,
     /// The namespace's lock, released once the socket file is removed (fields drop after [`Drop::drop`]).
     #[cfg(unix)]
-    _lock: std::fs::File,
+    lock: std::fs::File,
 }
 
 impl Listener {
@@ -159,14 +201,46 @@ impl Listener {
     ///
     /// Accepting failed.
     pub fn accept(&self) -> io::Result<Stream> {
-        use interprocess::local_socket::traits::Listener as _;
-        self.inner.accept()
+        sys::accept(self)
+    }
+
+    /// Duplicates of the listening socket and of the namespace's locked lock file (the same open file, so the lock
+    /// passes with it), for the replacement server of an update handoff ([`Endpoint::adopt`]).
+    ///
+    /// # Errors
+    ///
+    /// A descriptor could not be duplicated.
+    #[cfg(unix)]
+    pub fn handoff_fds(&self) -> io::Result<[std::os::fd::OwnedFd; 2]> {
+        use std::os::fd::AsFd as _;
+        let interprocess::local_socket::Listener::UdSocket(socket) = &self.inner;
+        Ok([
+            socket.as_fd().try_clone_to_owned()?,
+            self.lock.as_fd().try_clone_to_owned()?,
+        ])
+    }
+
+    /// The endpoint passed to another server: dropping this listener no longer unlinks the socket file, which the
+    /// other server serves. Nothing on Windows, whose pipe ends with its last instance.
+    pub fn relinquish(&self) {
+        #[cfg(unix)]
+        self.owns_socket.store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    /// The endpoint is this server's now (an adopted listener's commit): dropping this listener unlinks the socket
+    /// file. Nothing on Windows.
+    pub fn claim(&self) {
+        #[cfg(unix)]
+        self.owns_socket.store(true, std::sync::atomic::Ordering::Release);
     }
 }
 
 #[cfg(unix)]
 impl Drop for Listener {
     fn drop(&mut self) {
+        if !self.owns_socket.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
         // nothing to report to: a socket file left behind is stale, and the next bind removes it
         let _ = sys::remove_socket_file_if_owned(&self.socket, &self.identity);
     }

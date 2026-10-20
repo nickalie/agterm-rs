@@ -129,6 +129,11 @@ impl From<ffi::GhosttyColorRgb> for Rgb {
     }
 }
 
+/// The pin the library was built from (`LIBGHOSTTY_VT_REV` and a digest of its patches): two processes encode and
+/// decode each other's binary snapshots ([`Terminal::encode_snapshot`]) only when their pins are equal, since the
+/// format promises no compatibility across revisions. [`version`] cannot tell revisions apart.
+pub const PIN: &str = ffi::PIN;
+
 /// The library's version string (e.g. `1.2.3` or `1.2.3-dev+abcdef`).
 #[must_use]
 pub fn version() -> String {

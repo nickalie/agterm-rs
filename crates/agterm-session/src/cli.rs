@@ -50,7 +50,7 @@ use crate::client::{Client, ClientError};
 use crate::protocol::{ApiErrorKind, KillOutcome, Managed, PROTOCOL_VERSION, Screen, SessionRecord};
 use crate::server::lead::is_nonce;
 use crate::server::pane::{DIRECTORY_VARIABLE, MANAGED_VARIABLES, SESSION_VARIABLE};
-use crate::server::{BUILD_ID, EXIT_FAILED, EXIT_USAGE};
+use crate::server::{EXIT_FAILED, EXIT_USAGE};
 
 mod attach;
 
@@ -480,7 +480,7 @@ fn screen(client: &Client, name: &str, all: bool, out: &mut dyn Write) -> Result
 
 fn version(contract: &Contract, out: &mut dyn Write) -> Result<u8, Failure> {
     writeln!(out, "agterm-session\t{}", env!("CARGO_PKG_VERSION"))?;
-    writeln!(out, "build\t{BUILD_ID}")?;
+    writeln!(out, "build\t{}", crate::build_id::of_this_process())?;
     writeln!(out, "protocol\t{PROTOCOL_VERSION}")?;
     if let Some(directory) = &contract.directory {
         writeln!(out, "live_dir\t{}", directory.display())?;

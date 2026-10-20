@@ -6,4 +6,8 @@
 //! bindings are checked in, with bindgen's compile-time layout assertions (a target whose C layout differs fails to
 //! build): regenerate them with `scripts/gen-ghostty-vt-bindings.sh` after a pin bump or a patch change.
 
+/// The pin this library was built from: `LIBGHOSTTY_VT_REV` and a digest of the patches applied to it (the build
+/// script's `zig_build::pin`). Two builds run the same libghostty-vt code exactly when their pins are equal.
+pub const PIN: &str = env!("AGTERM_GHOSTTY_VT_PIN");
+
 include!("bindings.rs");

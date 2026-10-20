@@ -354,6 +354,13 @@ impl Outlet {
         std::mem::take(&mut lock(&self.sequence).ready)
     }
 
+    /// The replies ready to be written, in order, left in place: what an update handoff carries to the new server,
+    /// which writes them first, while this one keeps them for a rollback.
+    #[must_use]
+    pub fn ready_replies(&self) -> Vec<Vec<u8>> {
+        lock(&self.sequence).ready.clone()
+    }
+
     /// Whether replies are ready to be written.
     #[must_use]
     pub fn ready(&self) -> bool {
@@ -577,16 +584,34 @@ impl Replies {
         timer: Arc<Condvar>,
         creator: ClientId,
         metadata: ReplyMetadata,
+        waits: (Duration, Duration),
+    ) -> Self {
+        Self::with_owner(outlet, timer, Some((creator, metadata)), waits)
+    }
+
+    /// The replies of a session no client owns yet (one an update handoff brought over, whose clients reattach): the
+    /// terminal answers with the stable defaults until a client attaches and owns them. A clipboard read waits
+    /// `waits.0` for the owner's answer, a Kitty barrier `waits.1`.
+    #[must_use]
+    pub fn ownerless(outlet: Arc<Outlet>, timer: Arc<Condvar>, waits: (Duration, Duration)) -> Self {
+        Self::with_owner(outlet, timer, None, waits)
+    }
+
+    /// The replies owned by `owner` with its metadata, or by no client.
+    fn with_owner(
+        outlet: Arc<Outlet>,
+        timer: Arc<Condvar>,
+        owner: Option<(ClientId, ReplyMetadata)>,
         (wait, kitty_wait): (Duration, Duration),
     ) -> Self {
-        let facts = Facts::of(Some(&metadata));
+        let facts = Facts::of(owner.as_ref().map(|(_, metadata)| metadata));
         outlet.set_scheme(facts.color_scheme);
         Self {
             outlet,
             timer,
-            owner: Some(creator),
+            owner: owner.as_ref().map(|(client, _)| *client),
             generation: 1,
-            metadata: HashMap::from([(creator, metadata)]),
+            metadata: owner.into_iter().collect(),
             facts,
             scanner: vt::Scanner::default(),
             parked: Vec::new(),
@@ -828,6 +853,16 @@ impl State {
     pub(super) fn deny_from_now(&mut self) {
         self.replies.denied = true;
         self.settle(Answer::Denied);
+        self.replies.outlet.end(None);
+    }
+
+    /// Before an update handoff's cut: the waiting read denied, with the output held behind it fed (any read in it
+    /// denied too, without asking), and every Kitty barrier ended empty, so nothing waits on a client and every reply
+    /// is ready ([`Outlet::ready_replies`]). Later reads are asked for again as before (a rollback keeps the session).
+    pub(super) fn settle_for_handoff(&mut self) {
+        let denied = std::mem::replace(&mut self.replies.denied, true);
+        self.settle(Answer::Denied);
+        self.replies.denied = denied;
         self.replies.outlet.end(None);
     }
 

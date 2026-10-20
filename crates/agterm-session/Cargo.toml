@@ -43,6 +43,9 @@ windows-sys = { workspace = true, features = [
     "Wdk_System_Threading",
     "Win32_Foundation",
     "Win32_Security",
+    # a further instance of a namespace's pipe, for an update handoff's replacement (`FILE_FLAG_*`, `PIPE_ACCESS_*`);
+    # the ConPTY gate's module version (`GetFileVersionInfoW` is in `Win32_Storage_FileSystem` too)
+    "Win32_Storage_FileSystem",
     "Win32_System_Console",
     # the process table's reads of another process's environment block (`ReadProcessMemory`)
     "Win32_System_Diagnostics_Debug",
@@ -50,6 +53,8 @@ windows-sys = { workspace = true, features = [
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_IO",
     "Win32_System_JobObjects",
+    # the ConPTY gate: the module `CreatePseudoConsole` lives in (`GetModuleHandleExW`, `GetModuleFileNameW`)
+    "Win32_System_LibraryLoader",
     # `PROCESS_BASIC_INFORMATION`, and the 32-bit strings of a WoW64 process's environment block
     "Win32_System_Kernel",
     "Win32_System_Pipes",

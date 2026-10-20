@@ -152,6 +152,43 @@ fn the_stamp_names_the_pinned_zig_and_its_cache() {
 }
 
 #[test]
+fn the_pin_is_the_revision_and_a_digest_of_the_patches() {
+    let pins = "# pins\nLIBGHOSTTY_VT_ZIG_VERSION=\"0.16.0\"\nLIBGHOSTTY_VT_REV=\"81598385\"\n";
+    let stamp = "zig=/z\nversion-string=1.3.2-dev\npatch=0001-a.patch 00ff\npatch=0002-b.patch 11ee\n";
+    let pin = zig_build::pin(pins, stamp).unwrap();
+    let (rev, digest) = pin.split_once(' ').unwrap();
+    assert_eq!(rev, "81598385");
+    assert_eq!(digest.len(), 16);
+    // the same patches give the same pin; another patch, another order or another revision a different one
+    assert_eq!(zig_build::pin(pins, stamp).unwrap(), pin);
+    let other_patch = stamp.replace("11ee", "11ef");
+    assert_ne!(zig_build::pin(pins, &other_patch).unwrap(), pin);
+    let reordered = "patch=0002-b.patch 11ee\npatch=0001-a.patch 00ff\n";
+    assert_ne!(zig_build::pin(pins, reordered).unwrap(), pin);
+    let other_rev = pins.replace("81598385", "81598386");
+    assert_ne!(zig_build::pin(&other_rev, stamp).unwrap(), pin);
+    // the stamp's other lines do not count
+    assert_eq!(zig_build::pin(pins, &stamp.replace("1.3.2-dev", "9")).unwrap(), pin);
+    let missing = zig_build::pin("LIBGHOSTTY_VT_ZIG_VERSION=\"0.16.0\"\n", stamp).unwrap_err();
+    assert!(missing.contains("LIBGHOSTTY_VT_REV"), "{missing}");
+}
+
+#[test]
+fn the_built_library_carries_the_checked_out_pin() {
+    let pins = fs::read_to_string(repo_root().join("build/pins.env")).unwrap();
+    let rev = pins
+        .lines()
+        .find_map(|line| line.strip_prefix("LIBGHOSTTY_VT_REV="))
+        .unwrap()
+        .trim_matches('"');
+    assert!(
+        agterm_ghostty_vt_sys::PIN.starts_with(&format!("{rev} ")),
+        "{}",
+        agterm_ghostty_vt_sys::PIN
+    );
+}
+
+#[test]
 fn a_missing_or_unprepared_prefix_names_the_script() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("ghostty-vt-0123456789abcdef");

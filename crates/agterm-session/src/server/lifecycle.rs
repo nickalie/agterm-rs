@@ -42,12 +42,15 @@ impl Default for Graces {
 pub enum StopReason {
     /// It held no session and no client for its grace period.
     Idle,
+    /// It handed its sessions over to a server of another build (`crate::server::handoff`).
+    HandedOver,
 }
 
 impl fmt::Display for StopReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Idle => f.write_str("no session and no client left"),
+            Self::HandedOver => f.write_str("its sessions were handed over to another server"),
         }
     }
 }
@@ -137,6 +140,14 @@ impl Lifecycle {
             self.stopped = Some(StopReason::Idle);
         }
         self.stopped
+    }
+
+    /// The server handed its sessions over: it stops now, whatever it holds (they are the replacement's), and the
+    /// decision holds.
+    pub fn hand_over(&mut self) {
+        if self.stopped.is_none() {
+            self.stopped = Some(StopReason::HandedOver);
+        }
     }
 
     /// Whether the server has decided to stop.
@@ -277,5 +288,31 @@ mod tests {
     #[test]
     fn the_reason_reads_as_a_sentence() {
         assert_eq!(StopReason::Idle.to_string(), "no session and no client left");
+        assert_eq!(
+            StopReason::HandedOver.to_string(),
+            "its sessions were handed over to another server"
+        );
+    }
+
+    #[test]
+    fn a_handoff_stops_a_server_that_holds_sessions_and_clients() {
+        let start = Instant::now();
+        let mut lifecycle = started(start);
+        assert!(lifecycle.client_connected());
+        assert!(lifecycle.session_started());
+        lifecycle.hand_over();
+        assert_eq!(lifecycle.poll(start), Some(StopReason::HandedOver));
+        assert!(!lifecycle.client_connected());
+        // an earlier decision holds
+        let mut idle = Lifecycle::new(
+            start,
+            Graces {
+                startup: Duration::ZERO,
+                idle: IDLE_GRACE,
+            },
+        );
+        assert_eq!(idle.poll(start), Some(StopReason::Idle));
+        idle.hand_over();
+        assert_eq!(idle.stopped(), Some(StopReason::Idle));
     }
 }

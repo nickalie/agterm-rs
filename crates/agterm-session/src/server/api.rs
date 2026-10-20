@@ -49,8 +49,8 @@ use std::thread;
 use agterm_ghostty_vt as vt;
 use agterm_host::ProcessRecord;
 
-use super::Shared;
 use super::pane::{Pane, Panes, PrintError};
+use super::{Connection, Shared};
 use crate::endpoint::{self, Stream};
 use crate::job::{Signal, Sweeper};
 use crate::protocol::{
@@ -66,8 +66,10 @@ const SCREEN_TEXT: vt::FormatOptions = vt::FormatOptions {
     extras: vt::FormatExtras::empty(),
 };
 
-/// An api connection after its welcome: its calls answered in order until the client closes it.
-pub(super) fn serve(stream: &Stream, shared: &Shared) -> Result<(), FramingError> {
+/// An api connection after its welcome: its calls answered in order until the client closes it, each as one of
+/// `connection`'s operations (none once a handoff began: the connection then ends unanswered, and its client asks the
+/// server serving afterwards).
+pub(super) fn serve(stream: &Stream, shared: &Shared, connection: &Connection<'_>) -> Result<(), FramingError> {
     loop {
         let frame = match read_frame(&mut &*stream) {
             Ok(frame) => frame,
@@ -76,10 +78,10 @@ pub(super) fn serve(stream: &Stream, shared: &Shared) -> Result<(), FramingError
             Err(err) => return Err(err),
         };
         let call = frame.message::<ApiCall>(PROTOCOL_VERSION)?;
-        let reply = ApiReply {
-            id: call.id,
-            result: handle(&call.request, &shared.panes, &shared.jobs),
+        let Some(result) = connection.operate(|| handle(&call.request, &shared.panes, &shared.jobs)) else {
+            return Ok(());
         };
+        let reply = ApiReply { id: call.id, result };
         match send(stream, &reply) {
             Ok(()) => {}
             // the client went while it was answered: nothing more to do
