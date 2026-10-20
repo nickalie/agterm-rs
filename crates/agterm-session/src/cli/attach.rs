@@ -37,6 +37,7 @@ pub const INPUT_QUIET: Duration = Duration::from_millis(50);
 /// How long, while an answer of the outer terminal is due, a cut sequence that may be one waits for its end before it
 /// is dropped, and a cut CSI before it is taken as typed: a pause inside an answer (a slow link) is no key. With no
 /// answer due, both wait [`INPUT_QUIET`] and are taken as typed, and so they do once the relay gives the answer up.
+/// A framed OSC 52 answer waits for its end however long it takes (`attach_tty::input`).
 pub const ANSWER_QUIET: Duration = Duration::from_secs(2);
 
 /// How long a client whose connection ended tries to attach again.
@@ -200,7 +201,7 @@ struct Loop<'a> {
     tty: &'a Tty,
     session: Prepared,
     relay: Relay,
-    parser: InputParser,
+    keys: Keys,
     sender: Sender<Event>,
     events: Receiver<Event>,
     budget: Arc<Budget>,
@@ -211,8 +212,6 @@ struct Loop<'a> {
     first_snapshot: bool,
     /// What was typed before the attach.
     typed: Vec<u8>,
-    /// When the input last came, which a cut sequence held waits from (`Loop::quiet`).
-    input_at: Option<Instant>,
     /// The role the server last told this client.
     role: Option<LeadRole>,
 }
@@ -226,7 +225,7 @@ impl<'a> Loop<'a> {
         Self {
             tty,
             relay: Relay::new(nonce, size.grid, size.pixels),
-            parser: InputParser::new(detach_key),
+            keys: Keys::new(detach_key),
             session,
             sender,
             events,
@@ -235,7 +234,6 @@ impl<'a> Loop<'a> {
             connection: 0,
             first_snapshot: true,
             typed: Vec::new(),
-            input_at: None,
             role: None,
         }
     }
@@ -317,7 +315,10 @@ impl<'a> Loop<'a> {
 
     /// One event, or what is due.
     fn turn(&mut self) -> Result<(), Outcome> {
-        let deadline = [self.relay.next_deadline(), self.quiet()].into_iter().flatten().min();
+        let deadline = [self.relay.next_deadline(), self.keys.quiet(&self.relay)]
+            .into_iter()
+            .flatten()
+            .min();
         let event = match deadline {
             Some(deadline) => match self
                 .events
@@ -335,24 +336,18 @@ impl<'a> Loop<'a> {
         self.due(Instant::now())
     }
 
-    /// What is due at `now`: the relay's deadlines, then a cut input sequence given up (taken as typed, or dropped as a
-    /// cut answer while one is still due).
+    /// What is due at `now` ([`due`]).
     fn due(&mut self, now: Instant) -> Result<(), Outcome> {
         let mut fx = Effects::default();
-        self.relay.tick(now, &mut fx);
+        let tokens = due(&mut self.relay, &mut self.keys, now, &mut fx);
         self.emit(fx)?;
-        if self.quiet().is_some_and(|quiet| now >= quiet) {
-            let tokens = self.parser.flush(self.relay.awaiting());
-            self.tokens(tokens)?;
-        }
-        Ok(())
+        self.tokens(tokens)
     }
 
     fn handle(&mut self, event: Event) -> Result<(), Outcome> {
         match event {
             Event::Tty(TtyEvent::Input(bytes)) => {
-                self.input_at = Some(Instant::now());
-                let tokens = self.parser.feed(&bytes);
+                let tokens = self.keys.read(&bytes, Instant::now(), &self.relay);
                 self.tokens(tokens)
             }
             // zmx detaches at the end of its input
@@ -380,17 +375,6 @@ impl<'a> Loop<'a> {
                 result
             }
         }
-    }
-
-    /// When the cut sequence the input holds is given up (`attach_tty::input`): [`ANSWER_QUIET`] after the last input
-    /// for what may be an answer while one is due, [`INPUT_QUIET`] otherwise, so a hold outlives no answer the relay
-    /// gave up. `None` with none held, or one that waits for good.
-    fn quiet(&self) -> Option<Instant> {
-        let wait = match self.parser.held()? {
-            Held::Csi | Held::Answer if self.relay.awaiting() => ANSWER_QUIET,
-            Held::Key | Held::Csi | Held::Answer => INPUT_QUIET,
-        };
-        Some(self.input_at? + wait)
     }
 
     fn tokens(&mut self, tokens: Vec<Token>) -> Result<(), Outcome> {
@@ -531,6 +515,59 @@ impl<'a> Loop<'a> {
     }
 }
 
+/// The outer terminal's input on its way to the session: the parser, and when the input last came, which a cut
+/// sequence held waits from.
+#[derive(Debug)]
+struct Keys {
+    parser: InputParser,
+    input_at: Option<Instant>,
+}
+
+impl Keys {
+    fn new(detach_key: bool) -> Self {
+        Self {
+            parser: InputParser::new(detach_key),
+            input_at: None,
+        }
+    }
+
+    /// The tokens of a read that came at `now`; an OSC 52 answer in it is framed while `relay` has a clipboard read
+    /// asked (`attach_tty::input`).
+    fn read(&mut self, bytes: &[u8], now: Instant, relay: &Relay) -> Vec<Token> {
+        self.input_at = Some(now);
+        self.parser.set_clipboard_due(relay.clipboard_asked());
+        self.parser.feed(bytes)
+    }
+
+    /// When the cut sequence the input holds is given up (`attach_tty::input`): [`ANSWER_QUIET`] after the last input
+    /// for what may be an answer while one is due, [`INPUT_QUIET`] otherwise, so a hold outlives no answer the relay
+    /// gave up. `None` with none held, or one that waits for good (a cut paste end, a framed OSC 52 answer).
+    fn quiet(&self, relay: &Relay) -> Option<Instant> {
+        let wait = match self.parser.held()? {
+            Held::Csi | Held::Answer if relay.awaiting() => ANSWER_QUIET,
+            Held::Key | Held::Csi | Held::Answer => INPUT_QUIET,
+        };
+        Some(self.input_at? + wait)
+    }
+
+    /// The cut sequence held given up at `now` if its quiet is over: taken as typed, or dropped as a cut answer while
+    /// one is still due.
+    fn due(&mut self, now: Instant, relay: &Relay) -> Vec<Token> {
+        if self.quiet(relay).is_some_and(|quiet| now >= quiet) {
+            self.parser.flush(relay.awaiting())
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+/// What is due at `now`, in the attach loop's order: the relay's deadlines (their effects in `fx`), then a cut input
+/// sequence given up, whose tokens it returns.
+fn due(relay: &mut Relay, keys: &mut Keys, now: Instant, fx: &mut Effects) -> Vec<Token> {
+    relay.tick(now, fx);
+    keys.due(now, relay)
+}
+
 /// Reads connection `connection`'s stream on a thread of its own, into `events`, within the output budget.
 fn spawn_reader(mut reader: AttachReader, connection: u64, events: Sender<Event>, budget: Arc<Budget>) {
     let spawned = thread::Builder::new().name("attach-server".to_owned()).spawn(move || {
@@ -561,31 +598,4 @@ fn spawn_reader(mut reader: AttachReader, connection: u64, events: Sender<Event>
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_exit_status_is_the_programs_and_unknown_is_success() {
-        let exited = |code| ExitStatus::Exited { code, signal: None };
-        assert_eq!(exit_code(&exited(0)), 0);
-        assert_eq!(exit_code(&exited(7)), 7);
-        assert_eq!(exit_code(&exited(0xC000_013A)), EXIT_FAILED);
-        assert_eq!(exit_code(&ExitStatus::Unknown), EXIT_OK);
-    }
-
-    #[test]
-    fn the_budget_holds_the_reader_back_until_output_is_written() {
-        let budget = Arc::new(Budget::default());
-        budget.take(OUTPUT_BUDGET + 1);
-        let (sender, received) = mpsc::channel();
-        let waiting = Arc::clone(&budget);
-        let reader = thread::spawn(move || {
-            waiting.take(10);
-            let _ = sender.send(());
-        });
-        assert!(received.recv_timeout(Duration::from_millis(100)).is_err());
-        budget.give(OUTPUT_BUDGET + 1);
-        assert!(received.recv_timeout(Duration::from_secs(10)).is_ok());
-        let _ = reader.join();
-    }
-}
+mod tests;

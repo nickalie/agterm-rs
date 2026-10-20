@@ -26,6 +26,9 @@
 //!   whose connection ended) stays unresolved, its answer discarded when it comes, and every read meanwhile is denied
 //!   without asking. A terminal that never answers a read thus holds the session's first read for the whole wait
 //!   (the server holds the program's output behind it, `server::replies`), and denies the later ones at once.
+//!   Until the asked read's answer comes ([`Relay::clipboard_asked`]), the input keeps an OSC 52 answer's framing
+//!   once its header is recognized, however long it takes and whether or not its read is still live, so none of it
+//!   is typed (`super::input`, with what that leaves: a header cut before its `52`, garbage inside an answer).
 //!
 //! An outer terminal that answers no DA1 within [`PROBE_GIVE_UP`] gets no fences: barriers are completed empty at
 //! once and clipboard reads denied, and the metadata says it shows no Kitty graphics.
@@ -222,6 +225,14 @@ impl Relay {
     #[must_use]
     pub fn awaiting(&self) -> bool {
         !self.fences.is_empty() || self.outer_read.as_ref().is_some_and(|read| read.request.is_some())
+    }
+
+    /// Whether a clipboard read was asked of the outer terminal and its answer has not come, whether or not the read
+    /// is still live (module docs): the input frames an OSC 52 answer then. Unlike [`Relay::awaiting`], it makes no
+    /// other hold of the input wait longer.
+    #[must_use]
+    pub fn clipboard_asked(&self) -> bool {
+        self.outer_read.as_ref().is_some_and(|read| read.asked)
     }
 
     /// The metadata to attach with, taken as the server's from here on.

@@ -154,6 +154,45 @@ fn a_cut_answer_waits_longer_and_is_dropped_while_one_is_due() {
 }
 
 #[test]
+fn a_clipboard_answer_keeps_its_framing_wherever_it_is_cut_while_one_is_due() {
+    for whole in [b"x\x1b]52;c;aGVsbG8=\x1b\\y".as_slice(), b"x\x1b]52;c;aGVsbG8=\x07y"] {
+        for cut in 1..whole.len() {
+            let mut parser = InputParser::new(true);
+            parser.set_clipboard_due(true);
+            let mut tokens = parser.feed(&whole[..cut]);
+            // quiet with no answer due (the read's time ran out): past its header, nothing of it is given up
+            if cut > 4 {
+                assert_eq!(parser.held(), None, "cut at {cut}");
+                tokens.extend(parser.flush(false));
+            }
+            tokens.extend(parser.feed(&whole[cut..]));
+            assert!(!parser.holding(), "cut at {cut}");
+            assert_eq!(
+                tokens,
+                [
+                    input(b"x"),
+                    answer(Answer::Clipboard(Some(b"hello".to_vec()))),
+                    input(b"y")
+                ],
+                "cut at {cut}"
+            );
+        }
+    }
+    // a malformed one is still the read's answer, with no clipboard
+    let mut parser = InputParser::new(true);
+    parser.set_clipboard_due(true);
+    assert_eq!(parser.feed(b"\x1b]52;!!\x07"), [answer(Answer::Clipboard(None))]);
+    // OSC 520 is no clipboard answer
+    assert_eq!(parser.feed(b"\x1b]520;x\x07"), []);
+    // a control ends the framing, the framed bytes dropped, the control read on its own
+    assert_eq!(parser.feed(b"\x1b]52;c;aGVs"), []);
+    assert_eq!(parser.feed(b"\x1b"), []);
+    assert_eq!(parser.held(), None);
+    assert_eq!(parser.feed(b"OPz\r"), [input(b"\x1bOPz\r")]);
+    assert_eq!(parser.feed(b"\x1b]52;c;aGVs\x1c"), [Token::Detach]);
+}
+
+#[test]
 fn a_cut_paste_end_is_held_until_the_rest_comes() {
     let mut parser = InputParser::new(true);
     assert_eq!(parser.feed(b"\x1b[200~abc\x1b[20"), [input(b"\x1b[200~abc")]);

@@ -25,6 +25,25 @@
 //! followed by more keys: readline's `M-_` and Enter, vim's Escape, `P` and an arrow), and the control is read on its
 //! own, so the detach key still detaches.
 //!
+//! # A clipboard answer keeps its framing
+//!
+//! While a clipboard read is asked of the outer terminal and its answer has not come
+//! ([`InputParser::set_clipboard_due`], the relay's `clipboard_asked`, whether or not the read's request is still
+//! live), an OSC 52 answer is framed once its header (`ESC ] 5 2`, then `;` or the read's end) is recognized: it is
+//! read up to its BEL or ST (an ESC at a read's end waits for the next byte to say whether it starts the ST), however
+//! long the pauses inside it, and no quiet period gives it up, types it or forgets it. Its end gives the relay the
+//! answer (`Answer::Clipboard`, `None` for a payload that is no base64 or past [`STRING_LIMIT`], whose bytes are
+//! discarded up to the end), which completes the read, or is discarded when the read's request is gone, so the next
+//! read is asked. A control inside the framing (a C0 byte but the BEL, DEL, an ESC that does not start the ST: the
+//! user's key, as base64 holds none) drops the framed bytes untyped, leaves the read asked, and is read on its own:
+//! Ctrl+\ still detaches, Enter still reaches the program. Collected clipboard bytes are never replayed as keys.
+//!
+//! What is left: a header cut before its `52` (`ESC ]`, a key, or `ESC ] 5`, answer-shaped) is held as any other cut
+//! sequence, so a pause there past its wait types it, and the rest of the answer after it; and a control that is
+//! garbage inside a real answer ends its framing, so the printable bytes after it are typed. The other way round,
+//! keys typed while a read is asked that start as the header does (Alt+], `5`, `2`) are taken for the answer, and
+//! dropped up to the next control.
+//!
 //! The detach key (zmx's `isCtrlBackslash`, `src/util.zig` at `8bab1f0`, MIT, NOTICE): Ctrl+\ typed (anywhere in a read
 //! outside a bracketed paste, where zmx looked at a read's first byte only: a console's reads do not follow the
 //! keys), or encoded by the Kitty keyboard protocol (`CSI 92 ; 5 u`, a press) or xterm's modifyOtherKeys
@@ -42,7 +61,10 @@ const CTRL_BACKSLASH: u8 = 0x1C;
 /// The longest CSI looked for an end: past it the ESC is input.
 const CSI_LIMIT: usize = 256;
 /// The longest string (OSC, DCS, APC) looked for an end: an OSC 52 answer carries a whole clipboard.
-const STRING_LIMIT: usize = 64 * 1024 * 1024;
+pub(crate) const STRING_LIMIT: usize = 64 * 1024 * 1024;
+
+/// The header an OSC 52 answer is framed from (module docs).
+const CLIPBOARD_HEADER: &[u8] = b"\x1b]52";
 
 /// The end of a bracketed paste.
 const PASTE_END: &[u8] = b"\x1b[201~";
@@ -116,6 +138,25 @@ enum Kind {
     Detach,
 }
 
+/// The OSC 52 answer being read in its framing (module docs).
+#[derive(Debug)]
+struct ClipboardFrame {
+    /// What follows its `ESC ]` so far; `None` past [`STRING_LIMIT`], its bytes discarded up to its end.
+    content: Option<Vec<u8>>,
+}
+
+impl ClipboardFrame {
+    fn extend(&mut self, bytes: &[u8]) {
+        if let Some(content) = &mut self.content {
+            if content.len() + bytes.len() > STRING_LIMIT {
+                self.content = None;
+            } else {
+                content.extend_from_slice(bytes);
+            }
+        }
+    }
+}
+
 /// The input parser of one attach client (module docs).
 #[derive(Debug, Default)]
 pub struct InputParser {
@@ -125,6 +166,10 @@ pub struct InputParser {
     paste: bool,
     /// Whether the detach key detaches.
     detach_key: bool,
+    /// An OSC 52 answer is due ([`InputParser::set_clipboard_due`]).
+    clipboard_due: bool,
+    /// The OSC 52 answer being read.
+    clipboard: Option<ClipboardFrame>,
 }
 
 impl InputParser {
@@ -134,20 +179,28 @@ impl InputParser {
             held: Vec::new(),
             paste: false,
             detach_key,
+            clipboard_due: false,
+            clipboard: None,
         }
+    }
+
+    /// Whether the reads from here on may hold an OSC 52 answer: a clipboard read was asked of the outer terminal and
+    /// its answer has not come. Its answer is framed then (module docs).
+    pub fn set_clipboard_due(&mut self, due: bool) {
+        self.clipboard_due = due;
     }
 
     /// Whether a cut sequence waits for more input.
     #[must_use]
     pub fn holding(&self) -> bool {
-        !self.held.is_empty()
+        !self.held.is_empty() || self.clipboard.is_some()
     }
 
-    /// What the cut sequence held may be; `None` for none, or for a cut end of a bracketed paste, which waits for the
-    /// rest of the paste however long it takes.
+    /// What the cut sequence held may be; `None` for none, or for a cut end of a bracketed paste or of a framed OSC 52
+    /// answer, which waits for the rest however long it takes.
     #[must_use]
     pub fn held(&self) -> Option<Held> {
-        if self.paste || self.held.is_empty() {
+        if self.paste || self.clipboard.is_some() || self.held.is_empty() {
             return None;
         }
         // what follows the ESC a cut sequence starts with
@@ -176,6 +229,10 @@ impl InputParser {
                 }
                 continue;
             }
+            if self.clipboard.is_some() {
+                at += self.clipboard_run(&bytes[at..], &mut tokens);
+                continue;
+            }
             let rest = &bytes[at..];
             if rest[0] != ESC {
                 let detach_key = self.detach_key;
@@ -189,6 +246,13 @@ impl InputParser {
                     break;
                 }
                 at += run;
+                continue;
+            }
+            if self.clipboard_due && clipboard_header(rest) {
+                self.clipboard = Some(ClipboardFrame {
+                    content: Some(b"52".to_vec()),
+                });
+                at += CLIPBOARD_HEADER.len();
                 continue;
             }
             match self.sequence(rest) {
@@ -209,7 +273,8 @@ impl InputParser {
     }
 
     /// The cut sequence held, given up once the input stayed quiet: dropped when it may be an answer and one is due
-    /// (`answer_due`), else input (module docs). A cut end of a bracketed paste stays held.
+    /// (`answer_due`), else input (module docs). A cut end of a bracketed paste or of a framed OSC 52 answer stays
+    /// held.
     pub fn flush(&mut self, answer_due: bool) -> Vec<Token> {
         let mut tokens = Vec::new();
         match self.held() {
@@ -234,6 +299,40 @@ impl InputParser {
         push_input(tokens, &bytes[..bytes.len() - keep]);
         self.held = bytes[bytes.len() - keep..].to_vec();
         bytes.len()
+    }
+
+    /// A framed OSC 52 answer's bytes up to its end (its answer taken), or to a control that ends its framing (its
+    /// bytes dropped, the control left to be read on its own); how many it took. An ESC at the end is held: the next
+    /// byte says whether it starts the ST.
+    fn clipboard_run(&mut self, bytes: &[u8], tokens: &mut Vec<Token>) -> usize {
+        let Some(frame) = &mut self.clipboard else {
+            return 0;
+        };
+        let Some(at) = bytes.iter().position(|byte| matches!(byte, 0x00..=0x1F | 0x7F)) else {
+            frame.extend(bytes);
+            return bytes.len();
+        };
+        frame.extend(&bytes[..at]);
+        let terminator = match (bytes[at], bytes.get(at + 1)) {
+            (BEL, _) => 1,
+            (ESC, Some(b'\\')) => 2,
+            (ESC, None) => {
+                self.held = vec![ESC];
+                return bytes.len();
+            }
+            // a key: the framing ends, nothing of it typed
+            _ => {
+                self.clipboard = None;
+                return at;
+            }
+        };
+        let data = self
+            .clipboard
+            .take()
+            .and_then(|frame| frame.content)
+            .and_then(|content| clipboard_data(&content));
+        tokens.push(Token::Answer(Answer::Clipboard(data)));
+        at + terminator
     }
 
     fn take(&mut self, kind: Kind, bytes: &[u8], tokens: &mut Vec<Token>) {
@@ -391,6 +490,20 @@ fn string(bytes: &[u8]) -> Parsed {
         Parsed::Complete(1, Kind::Input)
     } else {
         Parsed::Incomplete
+    }
+}
+
+/// The bytes after an ESC start an OSC 52 answer's header: `ESC ] 5 2`, then `;` or the read's end.
+fn clipboard_header(bytes: &[u8]) -> bool {
+    bytes.starts_with(CLIPBOARD_HEADER) && bytes.get(CLIPBOARD_HEADER.len()).is_none_or(|byte| *byte == b';')
+}
+
+/// The clipboard's bytes in a framed OSC 52 answer's content (`52;<selection>;<base64>`); `None` for one that is not
+/// so.
+fn clipboard_data(content: &[u8]) -> Option<Vec<u8>> {
+    match osc(content) {
+        Some(Answer::Clipboard(data)) => data,
+        _ => None,
     }
 }
 
