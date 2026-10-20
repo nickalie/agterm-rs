@@ -45,6 +45,7 @@ def test_a_live_pane_in_the_login_shell_reports_its_cwd_and_survives_the_relaunc
     before = _daemon_row(ctl, sid)
 
     ctl = launch.relaunch(ctl)
+    ctl.wait_mounted(sid, "left")
     ctl.wait_tree(lambda tree: find_session(tree, sid).get(ctl.vocabulary.backed_key) is True)
 
     def same_daemon(response):

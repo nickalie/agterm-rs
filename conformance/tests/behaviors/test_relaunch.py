@@ -151,6 +151,7 @@ def test_live_session_survives_the_relaunch(launch):
     (before,) = [row for row in rows if row.get("sessionID") == sid and row["pane"] == "left"]
 
     ctl = launch.relaunch(ctl)
+    ctl.wait_mounted(sid, "left")
     ctl.wait_tree(lambda tree: find_session(tree, sid).get(vocabulary.backed_key) is True)
 
     def same_daemon(response):
