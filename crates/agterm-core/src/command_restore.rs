@@ -88,16 +88,79 @@ pub fn is_idle_shell(argv: &[String], extra: Option<&str>) -> bool {
     is_known_shell(name, extra) && (rest.iter().all(|arg| arg.starts_with('-')) || stays_open(name, rest))
 }
 
-/// Whether a PowerShell (`name`, by its basename) is told `-NoExit` by one of `arguments`, in any of the abbreviations
-/// PowerShell takes for it (down to `-noe`), in any case.
+/// Whether a PowerShell (`name`, by its basename) is told `-NoExit` among its host options `arguments`, in any of the
+/// abbreviations PowerShell takes for it (down to `-noe`), in any case. Only the options before the command count:
+/// `-Command`, `-File`, `-CommandWithArgs` (by any of their abbreviations; a `-` or `--` before the name, in any
+/// case) and the first argument that is no option
+/// (`-File`'s script in PowerShell 7, the command in 5.1) take the rest as command text or script arguments, and an
+/// option's value is skipped (`-ExecutionPolicy Bypass`, `-WorkingDirectory dir`). PowerShell's console host parser
+/// (`CommandLineParameterParser.cs`) at its 7.x releases.
 fn stays_open(name: &str, arguments: &[String]) -> bool {
-    const NO_EXIT: &str = "-noexit";
-    const SHORTEST: usize = "-noe".len();
-    crate::live::shell_integration::is_powershell(name.strip_prefix('-').unwrap_or(name))
-        && arguments.iter().any(|arg| {
-            let arg = arg.to_ascii_lowercase();
-            arg.len() >= SHORTEST && NO_EXIT.starts_with(&arg)
-        })
+    if !crate::live::shell_integration::is_powershell(name.strip_prefix('-').unwrap_or(name)) {
+        return false;
+    }
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        // `-` or `--` before the name
+        let Some(option) = argument.strip_prefix('-') else {
+            return false;
+        };
+        let option = option.strip_prefix('-').unwrap_or(option).to_ascii_lowercase();
+        match powershell_option(&option) {
+            PowerShellOption::NoExit => return true,
+            PowerShellOption::Last => return false,
+            PowerShellOption::Valued => {
+                arguments.next();
+            }
+            PowerShellOption::Switch => {}
+        }
+    }
+    false
+}
+
+/// What a PowerShell host option (lower case, without its `-`) does to the arguments after it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PowerShellOption {
+    /// `-NoExit`.
+    NoExit,
+    /// The command or script follows and takes every argument after it (`-` alone reads the command from stdin).
+    Last,
+    /// Takes the next argument as its value.
+    Valued,
+    /// Takes nothing: a switch, or one this parser does not know.
+    Switch,
+}
+
+/// The kind of host option `option` is: the full name or an abbreviation at least as long as PowerShell's shortest
+/// (`(full name, shortest)`), or one of its fixed aliases.
+fn powershell_option(option: &str) -> PowerShellOption {
+    const ENDING: [(&str, usize); 3] = [("commandwithargs", 15), ("command", 1), ("file", 1)];
+    const ENDING_ALIASES: [&str; 2] = ["cwa", ""];
+    const VALUED: [(&str, usize); 12] = [
+        ("configurationname", 6),
+        ("configurationfile", 17),
+        ("custompipename", 14),
+        ("encodedcommand", 1),
+        ("encodedarguments", 8),
+        ("executionpolicy", 2),
+        ("inputformat", 3),
+        ("outputformat", 1),
+        ("settingsfile", 8),
+        ("windowstyle", 1),
+        ("workingdirectory", 2),
+        ("psconsolefile", 13),
+    ];
+    const VALUED_ALIASES: [&str; 5] = ["ec", "ep", "if", "of", "wd"];
+    let abbreviates = |(full, shortest): &(&str, usize)| option.len() >= *shortest && full.starts_with(option);
+    if option.len() >= "noe".len() && "noexit".starts_with(option) {
+        PowerShellOption::NoExit
+    } else if VALUED_ALIASES.contains(&option) || VALUED.iter().any(abbreviates) {
+        PowerShellOption::Valued
+    } else if ENDING_ALIASES.contains(&option) || ENDING.iter().any(abbreviates) {
+        PowerShellOption::Last
+    } else {
+        PowerShellOption::Switch
+    }
 }
 
 /// Classifies a pane's raw foreground argv for the tree read; `None` for an empty argv only. `extra` is `$SHELL`'s
@@ -481,6 +544,33 @@ mod tests {
             pane_foreground(&live("/usr/bin/pwsh"), None),
             Some(PaneForeground::ForegroundShell("pwsh".to_owned()))
         );
+    }
+
+    #[test]
+    fn a_powershells_no_exit_counts_only_among_its_host_options() {
+        // after the command or script, -NoExit is the command's text or the script's argument
+        for after in [
+            &["pwsh", "-File", "monitor.ps1", "-NoExit"][..],
+            &["pwsh", "-f", "monitor.ps1", "-noe"],
+            &["pwsh", "-Command", "Get-Date", "-NoExit"],
+            &["pwsh", "-c", "Get-Date", "-NoExit"],
+            &["pwsh", "-cwa", "$args", "-NoExit"],
+            &["pwsh", "monitor.ps1", "-NoExit"],
+            &["powershell.exe", "-NoProfile", "Get-Date", "-NoExit"],
+        ] {
+            assert!(!is_idle_shell(&argv(after), None), "{after:?}");
+        }
+        // an option's value is no option, and one that is an option's spelling is still its value
+        assert!(is_idle_shell(
+            &argv(&["pwsh", "-ExecutionPolicy", "Bypass", "-NoExit", "-File", "x.ps1"]),
+            None
+        ));
+        assert!(is_idle_shell(&argv(&["pwsh", "-wd", "/tmp", "--noexit"]), None));
+        assert!(!is_idle_shell(
+            &argv(&["pwsh", "-WorkingDirectory", "-NoExit", "-c", "x"]),
+            None
+        ));
+        assert!(is_idle_shell(&argv(&["pwsh", "-e", "ZQBjAGgAbwA=", "-NoExit"]), None));
     }
 
     #[test]

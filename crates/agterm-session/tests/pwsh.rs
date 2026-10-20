@@ -1,9 +1,10 @@
 //! PowerShell live sessions end to end, at the session and the core level: a session started the way a live pane's
 //! wrap starts its PowerShell (`agterm-core`'s login arguments and integration variable, this repository's
 //! integration script) reports its working directory and its prompt and command marks to the server's terminal; a
-//! program typed into it is read back through the process table as its foreground command, and `agterm-core`'s
-//! replay of that argv into a recreated session runs it again with the same arguments, then leaves the integrated
-//! prompt.
+//! program typed into it is read back as its foreground command the way the restore capture reads it
+//! (`agterm-core`'s `ForegroundReader` over the process table: past the shell on Unix, where PowerShell has no job
+//! control), and `agterm-core`'s replay of that argv into a recreated session runs it again with the same arguments,
+//! then leaves the integrated prompt.
 //!
 //! On every OS with a PowerShell 7 (`pwsh`; every CI runner carries one, and Windows requires it). On Unix the shell
 //! runs in a throwaway home, so no profile, history or module cache of the user's is read or written; every session
@@ -18,14 +19,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use agterm_core::command_restore::{ProcessGroupMember, group_descent_candidates, is_idle_shell};
 use agterm_core::live::replay::{self, FinalShell, powershell_quoted};
 use agterm_core::live::shell_integration::{self, Inherited, LoginShell};
+use agterm_core::restore::capture::ForegroundReader;
 use agterm_host::ProcessTable;
 use agterm_session::process_table::ProcTable;
 use agterm_session::protocol::SessionSpec;
 use agterm_session::server::pane::Pane;
-use support::{Client, PATIENCE, TestResult, config};
+use support::{Client, PATIENCE, TestResult, config, wait_for};
 
 /// The file the foreground helper records its arguments in; it ends once a file of the same name and `.stop` exists.
 const RECORD: &str = "PWSH_TEST_RECORD";
@@ -122,19 +123,6 @@ fn session(argv: Vec<String>, environment: &BTreeMap<String, String>, cwd: &Path
     }
 }
 
-/// Poll `read` until `done` holds for what it reads; the last read otherwise, in the panic.
-fn wait_for<T: std::fmt::Debug>(what: &str, mut read: impl FnMut() -> T, done: impl Fn(&T) -> bool) -> T {
-    let deadline = Instant::now() + PATIENCE;
-    loop {
-        let got = read();
-        if done(&got) {
-            return got;
-        }
-        assert!(Instant::now() < deadline, "{what}: still {got:?}");
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
 /// Read `client` until its raw output holds `needle` (a control sequence the shown text leaves out).
 fn expect_raw(client: &mut Client, needle: &[u8]) {
     let deadline = Instant::now() + PATIENCE;
@@ -154,26 +142,31 @@ const INPUT_MARK: &[u8] = b"\x1b]133;B\x07";
 /// The cursor query `PSReadLine` sends on Unix once it reads a line, its terminal out of the cooked mode.
 const CURSOR_QUERY: &[u8] = b"\x1b[6n";
 
-/// Read `client` until the shell's `count`th prompt reads input: its input mark, and on Unix the cursor query after
-/// it. A line typed sooner meets the terminal's cooked mode, which echoes it and turns its Return into a line feed
-/// `PSReadLine` takes for Ctrl+J, so the line never runs.
-fn wait_for_prompt(client: &mut Client, count: usize) {
+/// Where the first `needle` in `haystack` at or after `from` ends.
+fn find_end(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    haystack
+        .get(from..)?
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|at| from + at + needle.len())
+}
+
+/// Read `client` until the shell's `count`th prompt is about to read input: its input mark, and on Unix the cursor
+/// query after it, which .NET sends once it took the terminal out of the cooked mode (no echo, a Return kept a
+/// carriage return). A line typed sooner meets that cooked mode, which echoes it and turns its Return into a line
+/// feed `PSReadLine` takes for Ctrl+J, so the line never runs. The output offset past that point.
+fn wait_for_prompt(client: &mut Client, count: usize) -> usize {
     let deadline = Instant::now() + PATIENCE;
     loop {
         let output = &client.output;
-        let marks: Vec<usize> = (0..output.len())
-            .filter(|at| output[*at..].starts_with(INPUT_MARK))
-            .collect();
-        let reading = marks.get(count - 1).is_some_and(|mark| {
-            !cfg!(unix)
-                || output[mark + INPUT_MARK.len()..]
-                    .windows(CURSOR_QUERY.len())
-                    .any(|window| window == CURSOR_QUERY)
-        });
-        if reading {
-            // the query's answer comes back before the line editor reads its first key
-            std::thread::sleep(Duration::from_millis(200));
-            return;
+        let mark = (0..count).try_fold(0, |from, _| find_end(output, INPUT_MARK, from));
+        let reading = if cfg!(unix) {
+            mark.and_then(|mark| find_end(output, CURSOR_QUERY, mark))
+        } else {
+            mark
+        };
+        if let Some(reading) = reading {
+            return reading;
         }
         assert!(
             Instant::now() < deadline && client.exit.is_none(),
@@ -182,6 +175,28 @@ fn wait_for_prompt(client: &mut Client, count: usize) {
         );
         client.receive(Duration::from_millis(100));
     }
+}
+
+/// Type `line` at the shell's `count`th prompt and Return, once the line editor reads keys: its first character goes
+/// first, and the rest only once `PSReadLine` echoed that one back (the terminal echoes nothing by then, and Windows'
+/// console nothing still unread), so the line meets the line editor however the cursor report and the keys are
+/// ordered. The Return is a carriage return, which `PSReadLine`'s raw input takes for the Enter key on every OS (a
+/// line feed is Ctrl+J there).
+fn type_at_prompt(pane: &Pane, client: &mut Client, count: usize, line: &str) -> TestResult {
+    let reading = wait_for_prompt(client, count);
+    let (probe, rest) = line.split_at(line.chars().next().map_or(0, char::len_utf8));
+    pane.write(probe.as_bytes())?;
+    let deadline = Instant::now() + PATIENCE;
+    while find_end(&client.output, probe.as_bytes(), reading).is_none() {
+        assert!(
+            Instant::now() < deadline && client.exit.is_none(),
+            "the line editor never echoed {probe:?}: {:?}",
+            String::from_utf8_lossy(&client.output)
+        );
+        client.receive(Duration::from_millis(100));
+    }
+    pane.write(format!("{rest}\r").as_bytes())?;
+    Ok(())
 }
 
 /// The directory an OSC 7 report names, when it is the integration's: `kitty-shell-cwd://` with this host's name,
@@ -223,33 +238,13 @@ fn wait_for_directory(pane: &Pane, cwd: &Path) {
     );
 }
 
-/// The program in the foreground of the shell `shell_pid` runs, read through the process table: the terminal's
-/// foreground, or, where PowerShell leaves its programs in its own process group (Unix: it has no job control), the
-/// group leader's child. `None` while the shell holds its prompt.
+/// The program in the foreground of the shell `shell_pid` runs, read as a live pane's restore capture reads it: the
+/// terminal's foreground group through the process table (Windows: the console's foreground), then
+/// `ForegroundReader::command`, which on Unix reads past a PowerShell holding its prompt to the program it runs in
+/// its own group. `None` while the shell holds its prompt.
 fn foreground_argv(table: &dyn ProcessTable, shell_pid: i32) -> Option<Vec<String>> {
     let group = table.terminal_foreground(shell_pid)?;
-    let argv = table.argv(group)?;
-    if !is_idle_shell(&argv, None) {
-        return Some(argv);
-    }
-    let members: Vec<ProcessGroupMember> = table
-        .group(group)
-        .into_iter()
-        .map(|stat| ProcessGroupMember {
-            pid: stat.pid,
-            ppid: stat.ppid,
-        })
-        .collect();
-    group_descent_candidates(group, &members)
-        .into_iter()
-        .find_map(|pid| table.argv(pid))
-}
-
-/// Type `line` at the prompt and Return: a carriage return, which `PSReadLine`'s raw input takes for the Enter key on
-/// every OS (a line feed is Ctrl+J there).
-fn type_line(pane: &Pane, line: &str) -> TestResult {
-    pane.write(format!("{line}\r").as_bytes())?;
-    Ok(())
+    ForegroundReader::new(table, None).command(group)
 }
 
 /// The line that runs `argv` at a PowerShell prompt.
@@ -302,21 +297,19 @@ fn a_live_powershell_reports_its_directory_and_replays_its_foreground_command() 
     let mut client = Client::new(creator);
     wait_for_directory(&pane, &cwd);
     expect_raw(&mut client, b"\x1b]133;A\x07");
-    wait_for_prompt(&mut client, 1);
     wait_for(
         "the title",
         || pane.with_terminal(|terminal| terminal.title()),
         |title| title.ends_with("work dir"),
     );
     // a command line is marked when it runs, and its status when the prompt is back
-    type_line(&pane, &exit_three())?;
+    type_at_prompt(&pane, &mut client, 1, &exit_three())?;
     expect_raw(&mut client, b"\x1b]133;C\x07");
     expect_raw(&mut client, b"\x1b]133;D;3\x07");
 
     // a program in the foreground, read through the process table
     let helper = helper_argv()?;
-    wait_for_prompt(&mut client, 2);
-    type_line(&pane, &typed(&helper))?;
+    type_at_prompt(&pane, &mut client, 2, &typed(&helper))?;
     let table = ProcTable::new();
     let shell_pid = i32::try_from(pane.pid())?;
     let foreground = wait_for(
@@ -362,8 +355,9 @@ fn a_live_powershell_reports_its_directory_and_replays_its_foreground_command() 
 }
 
 /// Not a test of its own: the program [`a_live_powershell_reports_its_directory_and_replays_its_foreground_command`]
-/// runs in its sessions, which records its arguments after `--` as JSON in the file [`RECORD`] names, then holds the
-/// foreground until the `.stop` file beside it exists.
+/// runs in its sessions, which records its arguments after `--` as JSON in the file [`RECORD`] names (written beside
+/// it and renamed into place, so it never shows up partly written), then holds the foreground until the `.stop` file
+/// beside it exists.
 #[test]
 #[ignore = "the PowerShell session test's child"]
 fn foreground_helper() {
@@ -371,7 +365,9 @@ fn foreground_helper() {
         return;
     };
     let argv: Vec<String> = std::env::args().skip_while(|arg| arg != "--").skip(1).collect();
-    fs::write(&record, serde_json::to_vec(&argv).unwrap()).unwrap();
+    let partial = record.with_extension("partial");
+    fs::write(&partial, serde_json::to_vec(&argv).unwrap()).unwrap();
+    fs::rename(&partial, &record).unwrap();
     let stop = record.with_extension("stop");
     let deadline = Instant::now() + PATIENCE * 10;
     while !stop.exists() && Instant::now() < deadline {

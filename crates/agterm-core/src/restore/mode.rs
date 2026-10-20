@@ -131,6 +131,8 @@ pub struct LiveProbe {
     pub login_shell: Option<String>,
     /// The bundled resources directory holding `shell-integration/<shell>`.
     pub resources_dir: Option<PathBuf>,
+    /// ngterm's own resources directory, holding `shell-integration/pwsh`.
+    pub own_resources_dir: Option<PathBuf>,
 }
 
 /// The variable a UI-test launch sets to keep live sessions (upstream's `ZmxLaunch.uiTestOptInKey`).
@@ -148,6 +150,7 @@ impl LiveProbe {
             &self.executable,
             self.login_shell.as_deref(),
             self.resources_dir.as_deref(),
+            self.own_resources_dir.as_deref(),
         )
         .err()
     }
@@ -212,12 +215,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let zmx = dir.path().join("zmx");
         let resources = dir.path().join("share");
+        let own = dir.path().join("own");
         let mut probe = LiveProbe {
             ui_test_launch: true,
             ui_test_opt_in: false,
             executable: PathBuf::from("zmx"),
             login_shell: Some("/bin/tcsh".to_owned()),
             resources_dir: Some(resources.clone()),
+            own_resources_dir: Some(own.clone()),
         };
         assert_eq!(probe.rejection(), Some(LiveRejection::UiTestLaunch));
         probe.ui_test_opt_in = true;
@@ -277,12 +282,38 @@ mod tests {
                 "{shell}"
             );
         }
-        fs::create_dir_all(resources.join("shell-integration").join("pwsh")).unwrap();
-        fs::write(resources.join("shell-integration").join("pwsh").join("ngterm.ps1"), "").unwrap();
+        fs::create_dir_all(own.join("shell-integration").join("pwsh")).unwrap();
+        fs::write(own.join("shell-integration").join("pwsh").join("ngterm.ps1"), "").unwrap();
         assert_eq!(probe.rejection(), None);
         // a host without either (Windows' discovery found none) keeps the unsupported-shell rejection
         probe.login_shell = None;
         assert_eq!(probe.unavailable_reason().as_deref(), Some(UNSUPPORTED_LOGIN_SHELL));
+    }
+
+    #[test]
+    fn powershell_is_probed_for_ngterms_own_integration_not_ghosttys() {
+        let dir = tempfile::tempdir().unwrap();
+        let resources = dir.path().join("share");
+        let own = dir.path().join("own");
+        let mut probe = LiveProbe {
+            ui_test_launch: false,
+            ui_test_opt_in: false,
+            executable: crate::live::test_executable(dir.path(), "sh"),
+            login_shell: Some("/usr/bin/pwsh".to_owned()),
+            resources_dir: Some(resources.clone()),
+            own_resources_dir: Some(own.clone()),
+        };
+        // in Ghostty's resources (an inherited GHOSTTY_RESOURCES_DIR's) it does not count
+        for root in [&resources, &own] {
+            fs::create_dir_all(root.join("shell-integration").join("pwsh")).unwrap();
+            fs::write(root.join("shell-integration").join("pwsh").join("ngterm.ps1"), "").unwrap();
+            assert_eq!(probe.rejection().is_none(), root == &own, "{}", root.display());
+        }
+        probe.own_resources_dir = None;
+        assert_eq!(
+            probe.rejection(),
+            Some(LiveRejection::MissingShellIntegration(LoginShell::Pwsh))
+        );
     }
 
     #[test]

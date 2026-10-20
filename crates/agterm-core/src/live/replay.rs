@@ -10,9 +10,15 @@
 //! then runs the command (`& 'program' 'argument'`, or a durable line as a script block). Loading it first keeps the
 //! prompt integrated however the command ends: a Ctrl+C stops the rest of a `-Command` script, not only the command.
 //! Only language syntax and .NET calls, so no alias or function of the user's takes it over. Words are single-quoted
-//! ([`powershell_quoted`]). How a native program receives them is PowerShell's own argument passing: exact in
-//! PowerShell 7.3 and later (`$PSNativeCommandArgumentPassing`), while Windows PowerShell 5.1's legacy passing loses an
-//! embedded double quote or an empty argument.
+//! ([`powershell_quoted`]). How a native program receives them is PowerShell's own argument passing
+//! (`$PSNativeCommandArgumentPassing`), which the captured argv runs under in a scope of its own: a profile's `Legacy`
+//! is replaced there by the mode PowerShell 7.3+ defaults to on the OS (`Standard`; `Windows` on Windows), the user's
+//! preference left as it is for later commands. On Linux and macOS, where a program receives an argv, that passing is
+//! exact. On Windows a program receives one command line it splits itself: `Windows` mode quotes for the C runtime's
+//! split (`CommandLineToArgvW`), exact for programs that split that way, but keeps the legacy passing for `cmd.exe`,
+//! batch files (`.bat`, `.cmd`), Windows Script Host scripts (`.js`, `.vbs`, `.wsf`, run by `cscript`/`wscript`) and
+//! `msiexec`, whose own parsers no argv rebuilds exactly (`cmd.exe`'s least of all: its `/c` text is no argv).
+//! Windows PowerShell 5.1 has only the legacy passing, which loses an embedded double quote or an empty argument.
 
 use super::shell_integration::{LoginShell, PWSH_LOAD, Rearm};
 use crate::command_restore::shell_quoted_line;
@@ -38,11 +44,26 @@ pub fn render_argv<S: AsRef<str>>(argv: &[S], shell: &FinalShell<'_>) -> String 
     let statement = if shell.kind.is_fish() {
         words(fish_quoted)
     } else if shell.kind.is_powershell() {
-        format!("& {}", words(powershell_quoted))
+        format!(
+            "& {{ if ({NATIVE_PASSING_LOOKUP} -eq 'Legacy') {{ $PSNativeCommandArgumentPassing = '{}' }} ; & {} }}",
+            exact_native_passing(),
+            words(powershell_quoted)
+        )
     } else {
         shell_quoted_line(argv)
     };
     render(&statement, shell)
+}
+
+/// `$PSNativeCommandArgumentPassing` read without failing where it is unset (Windows PowerShell 5.1) under a
+/// profile's `Set-StrictMode`.
+const NATIVE_PASSING_LOOKUP: &str =
+    "$ExecutionContext.SessionState.PSVariable.GetValue('PSNativeCommandArgumentPassing')";
+
+/// The native argument passing PowerShell 7.3+ defaults to on this OS, which a captured argv is replayed under in place
+/// of a profile's `Legacy`.
+fn exact_native_passing() -> &'static str {
+    if cfg!(windows) { "Windows" } else { "Standard" }
 }
 
 /// The script for a durable creation command, a shell line kept with its operators and word parsing (`eval`; in
@@ -390,9 +411,15 @@ mod tests {
         let shell = pwsh_shell(&rearm, r"C:\Program Files\PowerShell\7\pwsh.exe");
         let prefix =
             format!(r"$env:AGTERM_PWSH_INTEGRATION = 'C:\it''s\ngterm.ps1' ; $env:STALE = $null ; {PWSH_LOAD} ; ");
+        // a captured argv runs in a scope of its own, out of a profile's legacy argument passing
+        let passing = if cfg!(windows) { "Windows" } else { "Standard" };
         assert_eq!(
             render_argv(&[r"C:\tools\top.exe", "a b", "it's"], &shell),
-            format!(r"{prefix}& 'C:\tools\top.exe' 'a b' 'it''s'")
+            format!(
+                "{prefix}& {{ if ($ExecutionContext.SessionState.PSVariable.GetValue('PSNativeCommandArgumentPassing') \
+                 -eq 'Legacy') {{ $PSNativeCommandArgumentPassing = '{passing}' }} ; & 'C:\\tools\\top.exe' 'a b' \
+                 'it''s' }}"
+            )
         );
         assert_eq!(
             render_command_line("Get-ChildItem | Select-Object -First 1; 'done'", &shell),
@@ -479,6 +506,21 @@ mod tests {
                 "stale": null,
             })
         );
+        // a profile's strict mode and legacy argument passing (which drops the empty argument and splits at the
+        // quotes) change nothing, and the preference is the user's again after the command
+        fs::remove_file(&record).unwrap();
+        let preference = dir.path().join("preference");
+        let script = format!(
+            "Set-StrictMode -Version Latest ; $PSNativeCommandArgumentPassing = 'Legacy' ; {} ; \
+             [System.IO.File]::WriteAllText({}, \"$PSNativeCommandArgumentPassing\")",
+            render_argv(&argv, &shell),
+            powershell_quoted(&preference.display().to_string())
+        );
+        let output = run_pwsh(&pwsh, &script, &record);
+        assert!(output.status.success(), "{output:?}");
+        let recorded: serde_json::Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+        assert_eq!(recorded["argv"], serde_json::json!(expected));
+        assert_eq!(fs::read_to_string(&preference).unwrap(), "Legacy");
         // a durable line keeps its statements and PowerShell's own word parsing
         let line = format!(
             "$words = 'two words'; Set-Content -LiteralPath {} -Value ($words + ' and more') -NoNewline",
@@ -489,6 +531,55 @@ mod tests {
         assert_eq!(
             fs::read_to_string(dir.path().join("line")).unwrap(),
             "two words and more"
+        );
+    }
+
+    /// The repository's PowerShell integration script.
+    fn integration_script() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("resources")
+            .join("shell-integration")
+            .join("pwsh")
+            .join("ngterm.ps1")
+    }
+
+    #[test]
+    fn the_powershell_integration_loads_under_strict_mode_and_starts_the_prompt_ahead_of_its_host_output() {
+        let Some(pwsh) = pwsh() else {
+            eprintln!("SKIPPED: no pwsh on PATH");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        // a profile's strict mode, and its prompt writing to the host before it returns its text; then the prompt at
+        // the start (no exit code yet) and after a command
+        let script = format!(
+            "Set-StrictMode -Version Latest ; \
+             Microsoft.PowerShell.Utility\\Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction Ignore ; \
+             function global:prompt {{ Microsoft.PowerShell.Utility\\Write-Host -NoNewline 'HOST|' ; 'PS> ' }} ; \
+             $env:AGTERM_PWSH_INTEGRATION = {} ; {PWSH_LOAD} ; {PWSH_LOAD} ; \
+             if (-not (Microsoft.PowerShell.Utility\\Get-Variable -Name __NgtermIntegration -Scope Global \
+             -ErrorAction Ignore)) {{ exit 3 }} ; \
+             [System.Console]::Write((prompt)) ; [System.Console]::Write('|') ; \
+             $global:__NgtermIntegration.Running = $true ; [System.Console]::Write((prompt))",
+            powershell_quoted(&integration_script().display().to_string())
+        );
+        let output = run_pwsh(&pwsh, &script, &dir.path().join("unused"));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{output:?}");
+        // a strict-mode error is no failure of the script, only its message
+        assert!(output.stderr.is_empty(), "{output:?}");
+        assert!(!stdout.contains("did not load"), "{stdout:?}");
+        let prompt = "\u{1b}]133;A\u{7}HOST|PS> \u{1b}]133;B\u{7}";
+        let (first, second) = stdout
+            .split_once(&format!("{prompt}|"))
+            .unwrap_or_else(|| panic!("{stdout:?}"));
+        assert!(first.contains("\u{1b}]7;kitty-shell-cwd://"), "{stdout:?}");
+        assert!(!first.contains("133;D"), "no command ran: {stdout:?}");
+        assert!(
+            second.contains("\u{1b}]133;D;0\u{7}") && second.ends_with(prompt),
+            "{stdout:?}"
         );
     }
 

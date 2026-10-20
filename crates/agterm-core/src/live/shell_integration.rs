@@ -9,7 +9,8 @@
 //! - fish through `XDG_DATA_DIRS`, the integration's `vendor_conf.d` ahead of the inherited (or the specification's
 //!   default) directories, which the integration removes again;
 //! - PowerShell (7's `pwsh`, or Windows PowerShell 5.1's `powershell`), which Ghostty does not integrate, through this
-//!   build's own script (`resources/shell-integration/pwsh/ngterm.ps1`, staged beside Ghostty's integrations):
+//!   build's own script (`resources/shell-integration/pwsh/ngterm.ps1`, staged in ngterm's own resources, the staged
+//!   root's `share/ngterm`, so a `GHOSTTY_RESOURCES_DIR` inherited from another terminal does not hide it):
 //!   [`PWSH_INTEGRATION_VARIABLE`] names it, and the shell's `-NoExit -Command` loads it ([`PWSH_LOAD`]) after the
 //!   profiles, so the profile's prompt is kept and wrapped. It is read and run as a script block, not run as a file,
 //!   so no execution policy refuses it (Windows PowerShell's default `Restricted`, `RemoteSigned` on a downloaded
@@ -17,9 +18,11 @@
 //!
 //! bash, fish and PowerShell are a Rust-only extension: upstream wraps zsh only (capability `live-any-shell`).
 //! PowerShell is the shell a Windows live pane runs (`agterm-session::launch`), and a Unix one whose login shell it
-//! is. It has no job control there, so a program it runs stays in the shell's own process group, which the restore
-//! capture refuses as the terminal's session leader's (`restore::capture`): nothing is captured from it. Windows'
-//! process table names the shell's newest child as the console's foreground instead, which the capture takes.
+//! is. It has no job control there, so a program it runs stays in the shell's own process group, led by the shell (the
+//! terminal's session leader): the foreground reads (`restore::capture`) take a group led by a PowerShell holding its
+//! prompt for the program it runs there, its first child that is no shell, so the restore capture, the `tree` and a
+//! restart's replay find it as they find a job-control shell's job. Windows' process table names the shell's newest
+//! child as the console's foreground instead, which they take as it is.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -113,10 +116,18 @@ impl LoginShell {
             .fold(resources.to_path_buf(), |path, component| path.join(component))
     }
 
-    /// Whether `resources` (a Ghostty resources directory) bundles this shell's integration.
+    /// Whether `resources` bundles this shell's integration: a Ghostty resources directory, or ngterm's own for the
+    /// shells [`Self::is_ngterms`] names.
     #[must_use]
     pub fn is_bundled(self, resources: &Path) -> bool {
         self.loader_path(resources).exists()
+    }
+
+    /// Whether this shell's integration is ngterm's own, in its own resources directory, rather than Ghostty's:
+    /// PowerShell's, which Ghostty does not integrate.
+    #[must_use]
+    pub fn is_ngterms(self) -> bool {
+        self == Self::Pwsh
     }
 
     /// The flags of the interactive login shell a replay ends in (`exec <shell> <flags>`). PowerShell has no `exec`:
@@ -211,7 +222,7 @@ impl Inherited {
 }
 
 /// Sets `shell`'s integration variables in `environment`, the integration under `resources` (a Ghostty resources
-/// directory, standardized).
+/// directory, or ngterm's own for the shells [`LoginShell::is_ngterms`] names; standardized).
 pub fn inject(shell: LoginShell, resources: &Path, inherited: &Inherited, environment: &mut BTreeMap<String, String>) {
     let integration = resources.join("shell-integration");
     let mut set = |key: &str, value: String| environment.insert(key.to_owned(), value);

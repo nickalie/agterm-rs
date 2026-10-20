@@ -15,6 +15,19 @@ pub const PATIENCE: Duration = Duration::from_secs(60);
 
 pub const SIZE: GridSize = GridSize { cols: 120, rows: 30 };
 
+/// Poll `read` until `done` holds for what it reads; the last read otherwise, in the panic.
+pub fn wait_for<T: std::fmt::Debug>(what: &str, mut read: impl FnMut() -> T, done: impl Fn(&T) -> bool) -> T {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let got = read();
+        if done(&got) {
+            return got;
+        }
+        assert!(Instant::now() < deadline, "{what}: still {got:?}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// The test's environment without the live agterm's variables.
 pub fn environment() -> Vec<(String, String)> {
     std::env::vars()

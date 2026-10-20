@@ -1,6 +1,6 @@
 //! What a live launch reads of this host (upstream's `agterm/Ghostty/ZmxLaunch.swift`): the staged session host
-//! executable (or a debug build's override), the login shell, the Ghostty resources holding its shell integration, the
-//! app's own values of the variables that integration hands on, the state directory naming the socket namespace and
+//! executable (or a debug build's override), the login shell, the Ghostty resources holding its shell integration
+//! (ngterm's own staged resources for PowerShell's, which Ghostty has none of), the app's own values of the variables that integration hands on, the state directory naming the socket namespace and
 //! the staged host's build id. Linux and Windows have no supervising session host (macOS's `agterm-session-host`),
 //! so no configuration names one.
 //!
@@ -33,6 +33,10 @@ pub const EXECUTABLE_FILE: &str = if cfg!(windows) { "zmx.exe" } else { "zmx" };
 pub const BUILD_ID_PATH: &str = "share/ngterm/zmx-BUILD";
 /// The staged Ghostty resources, relative to the staged root: the fallback without `GHOSTTY_RESOURCES_DIR`.
 const BUNDLED_RESOURCES: &str = "share/ghostty";
+/// ngterm's own staged resources, relative to the staged root (`scripts/stage.sh`): the PowerShell integration
+/// (`shell-integration/pwsh`). Always the staged root's, as [`bundled_build_id`] reads its build id: an inherited
+/// `GHOSTTY_RESOURCES_DIR` (Ghostty and other libghostty terminals export it to their shells) names no ngterm file.
+const OWN_RESOURCES: &str = "share/ngterm";
 
 /// The host's live-launch inputs, read once.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -42,6 +46,8 @@ pub struct Runtime {
     /// The shell a pane runs: the password database's login shell on Unix, PowerShell on Windows.
     pub login_shell: Option<String>,
     pub resources_dir: Option<PathBuf>,
+    /// ngterm's own staged resources ([`OWN_RESOURCES`]), holding the PowerShell integration.
+    pub own_resources_dir: Option<PathBuf>,
     pub state_dir: PathBuf,
     /// The app's own `ZDOTDIR`, `ENV`, `HISTFILE`, home and `XDG_DATA_DIRS`, handed on to the shell integration.
     pub inherited: Inherited,
@@ -77,6 +83,7 @@ impl Runtime {
             login_shell,
             resources_dir: var("GHOSTTY_RESOURCES_DIR")
                 .or_else(|| staged_root.map(|root| root.join(BUNDLED_RESOURCES))),
+            own_resources_dir: staged_root.map(|root| root.join(OWN_RESOURCES)),
             state_dir: paths::state_dir(env),
             inherited: Inherited::read(env),
         }
@@ -91,6 +98,7 @@ impl Runtime {
             executable: self.executable.clone(),
             login_shell: self.login_shell.clone(),
             resources_dir: self.resources_dir.clone(),
+            own_resources_dir: self.own_resources_dir.clone(),
         }
     }
 
@@ -109,6 +117,7 @@ impl Runtime {
             executable: self.executable.clone(),
             login_shell: self.login_shell.clone(),
             resources_dir: self.resources_dir.clone(),
+            own_resources_dir: self.own_resources_dir.clone(),
             state_dir: self.state_dir.clone(),
             pane_identity,
             base_environment,
@@ -166,8 +175,8 @@ mod tests {
 
     use super::*;
 
-    /// A staged layout: the session host in `bin`, the zsh, bash and fish integrations under `share/ghostty` and the
-    /// build id.
+    /// A staged layout: the session host in `bin`, the zsh, bash and fish integrations under `share/ghostty`, the
+    /// PowerShell one and the build id under `share/ngterm`.
     fn staged() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("bin")).unwrap();
@@ -188,7 +197,7 @@ mod tests {
         fs::create_dir_all(&fish).unwrap();
         fs::write(fish.join("ghostty-shell-integration.fish"), "").unwrap();
         // the PowerShell integration as `scripts/stage.sh` stages it
-        let pwsh = root.path().join("share/ghostty/shell-integration/pwsh");
+        let pwsh = root.path().join("share/ngterm/shell-integration/pwsh");
         fs::create_dir_all(&pwsh).unwrap();
         fs::copy(pwsh_integration_source(), pwsh.join("ngterm.ps1")).unwrap();
         fs::create_dir_all(root.path().join("share/ngterm")).unwrap();
@@ -290,10 +299,14 @@ mod tests {
         let bin = root.path().join("bin");
         let script = root
             .path()
-            .join("share/ghostty/shell-integration")
+            .join("share/ngterm/shell-integration")
             .join("pwsh")
             .join("ngterm.ps1");
-        let env = MapEnv::new().with("AGTERM_STATE_DIR", root.path().join("state"));
+        // a Ghostty resources directory inherited from another terminal, which holds no ngterm file, does not hide it
+        let ghostty = tempfile::tempdir().unwrap();
+        let env = MapEnv::new()
+            .with("AGTERM_STATE_DIR", root.path().join("state"))
+            .with("GHOSTTY_RESOURCES_DIR", ghostty.path());
         for shell in [
             "/usr/bin/pwsh",
             r"C:\Program Files\PowerShell\7\pwsh.exe",
@@ -326,6 +339,12 @@ mod tests {
         let runtime = Runtime::resolve(&empty, Some(&root.path().join("bin")), None, false);
         assert_eq!(runtime.resources_dir, Some(root.path().join("share/ghostty")));
         assert_eq!(Runtime::resolve(&MapEnv::new(), None, None, false).resources_dir, None);
+        // ngterm's own resources are always the staged root's
+        assert_eq!(
+            Runtime::resolve(&env, Some(&root.path().join("bin")), None, false).own_resources_dir,
+            Some(root.path().join("share/ngterm"))
+        );
+        assert_eq!(Runtime::resolve(&env, None, None, false).own_resources_dir, None);
     }
 
     #[test]

@@ -26,13 +26,15 @@ pub struct Eligible {
     pub shell: String,
     /// Which shell it is.
     pub kind: LoginShell,
-    /// The Ghostty resources directory bundling the shell's integration, standardized.
+    /// The resources directory bundling the shell's integration, standardized: Ghostty's, or ngterm's own for
+    /// PowerShell ([`LoginShell::is_ngterms`]).
     pub resources: PathBuf,
 }
 
 /// The first reason this host cannot wrap a pane, in upstream's order, or what a wrap runs with: a relative zmx path,
 /// a zmx that is not an executable file, a login shell other than zsh, bash, fish or PowerShell (`$SHELL` cannot
-/// override the password database), a resources directory without that shell's integration.
+/// override the password database), a resources directory without that shell's integration: Ghostty's
+/// `resources_dir`, or for PowerShell, which Ghostty does not integrate, ngterm's own `own_resources_dir`.
 ///
 /// # Errors
 ///
@@ -41,6 +43,7 @@ pub fn eligibility(
     executable: &Path,
     login_shell: Option<&str>,
     resources_dir: Option<&Path>,
+    own_resources_dir: Option<&Path>,
 ) -> Result<Eligible, LiveRejection> {
     if !executable.is_absolute() {
         return Err(LiveRejection::ExecutablePathNotAbsolute);
@@ -52,7 +55,12 @@ pub fn eligibility(
     let (shell, kind) = login_shell
         .and_then(|shell| LoginShell::of(shell).map(|kind| (shell, kind)))
         .ok_or(LiveRejection::UnsupportedLoginShell)?;
-    let resources = resources_dir.ok_or(LiveRejection::MissingShellIntegration(kind))?;
+    let resources = if kind.is_ngterms() {
+        own_resources_dir
+    } else {
+        resources_dir
+    };
+    let resources = resources.ok_or(LiveRejection::MissingShellIntegration(kind))?;
     let resources = super::standardized_path(resources);
     if !kind.is_bundled(&resources) {
         return Err(LiveRejection::MissingShellIntegration(kind));
@@ -108,6 +116,8 @@ pub struct Inputs {
     pub login_shell: Option<String>,
     /// The Ghostty resources directory holding `shell-integration/<shell>`.
     pub resources_dir: Option<PathBuf>,
+    /// ngterm's own resources directory, holding the integrations Ghostty has none of (`shell-integration/pwsh`).
+    pub own_resources_dir: Option<PathBuf>,
     pub state_dir: PathBuf,
     pub pane_identity: Uuid,
     /// The pane's own environment, which the wrap extends.
@@ -157,6 +167,7 @@ pub fn configuration(inputs: &Inputs) -> Result<Configuration, LiveRejection> {
         &inputs.executable,
         inputs.login_shell.as_deref(),
         inputs.resources_dir.as_deref(),
+        inputs.own_resources_dir.as_deref(),
     )?;
     let socket_directory = socket_directory(&inputs.state_dir);
     let pane_id = uuid_string(inputs.pane_identity);
