@@ -5,8 +5,10 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use interprocess::local_socket::traits::{Stream as _, StreamCommon as _};
@@ -51,8 +53,26 @@ pub(super) fn bind(endpoint: &Endpoint) -> io::Result<Listener> {
         inner,
         socket: socket.to_path_buf(),
         identity: socket_file_identity(socket)?,
-        _lock: lock,
+        owns_socket: AtomicBool::new(true),
+        lock,
     })
+}
+
+pub(super) fn adopt(endpoint: &Endpoint, listener: OwnedFd, lock: OwnedFd) -> io::Result<Listener> {
+    let socket = endpoint.socket_path();
+    let inner = interprocess::os::unix::uds_local_socket::Listener::from(listener);
+    Ok(Listener {
+        inner: inner.into(),
+        socket: socket.to_path_buf(),
+        identity: socket_file_identity(socket)?,
+        owns_socket: AtomicBool::new(false),
+        lock: File::from(lock),
+    })
+}
+
+pub(super) fn accept(listener: &Listener) -> io::Result<Stream> {
+    use interprocess::local_socket::traits::Listener as _;
+    listener.inner.accept()
 }
 
 pub(super) fn connect(endpoint: &Endpoint) -> io::Result<Stream> {

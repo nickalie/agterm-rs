@@ -13,9 +13,8 @@ use std::ptr::null_mut;
 use std::time::Duration;
 
 use interprocess::local_socket::traits::{Stream as _, StreamCommon as _};
-use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
-use interprocess::os::windows::local_socket::ListenerOptionsExt as _;
-use interprocess::os::windows::named_pipe::{DuplexPipeStream, pipe_mode::Bytes};
+use interprocess::local_socket::{GenericNamespaced, ToNsName};
+use interprocess::os::windows::named_pipe::{DuplexPipeStream, PipeListenerOptions, pipe_mode::Bytes};
 use interprocess::os::windows::security_descriptor::SecurityDescriptor;
 use widestring::U16CString;
 use windows_sys::Win32::Foundation::HANDLE;
@@ -34,15 +33,99 @@ use super::{Endpoint, Listener, Stream, is_connection_closed_error};
 /// `ERROR_INVALID_HANDLE`, `ERROR_BROKEN_PIPE`, `ERROR_NO_DATA`, `ERROR_PIPE_NOT_CONNECTED`: a peer that is gone.
 const PIPE_CLOSED_ERRORS: [i32; 4] = [6, 109, 232, 233];
 
+/// The listener of a namespace's pipe: interprocess's named-pipe listener, whose accepts make each further instance
+/// (without the first-instance flag) from its options.
+pub(super) type PipeListener = interprocess::os::windows::named_pipe::PipeListener<Bytes, Bytes>;
+
+/// The options every instance of a namespace's pipe is created with: what interprocess's local-socket listener sets
+/// (byte mode both ways, blocking, remote clients refused, its default buffer sizes and instance limit) and the
+/// owner-only descriptor.
+fn pipe_options(endpoint: &Endpoint) -> io::Result<PipeListenerOptions<'static>> {
+    let mut options = PipeListenerOptions::new().path(pipe_path(endpoint).as_str());
+    options.security_descriptor = Some(owner_only_security_descriptor()?);
+    options.to_owned()
+}
+
+fn pipe_path(endpoint: &Endpoint) -> String {
+    format!(r"\\.\pipe\{}", endpoint.pipe_name())
+}
+
 pub(super) fn bind(endpoint: &Endpoint) -> io::Result<Listener> {
     fs::create_dir_all(endpoint.directory())?;
-    let inner = ListenerOptions::new()
-        .name(endpoint.pipe_name().to_ns_name::<GenericNamespaced>()?)
-        .reclaim_name(false)
-        .security_descriptor(owner_only_security_descriptor()?)
-        .create_sync()
+    let inner = pipe_options(endpoint)?
+        .create_duplex::<Bytes>()
         .map_err(|error| name_taken_error(endpoint, error))?;
     Ok(Listener { inner })
+}
+
+pub(super) fn bind_beside(endpoint: &Endpoint) -> io::Result<Listener> {
+    let options = pipe_options(endpoint)?;
+    // a first instance created here means no server holds the pipe: nothing to take over
+    if let Ok(first) = create_instance(&options, true) {
+        drop(first);
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no agterm-session server holds {endpoint} to take it over from"),
+        ));
+    }
+    let instance = create_instance(&options, false)?;
+    Ok(Listener {
+        inner: PipeListener::from_handle_and_options(instance, options),
+    })
+}
+
+/// One instance of the pipe `options` name, as interprocess creates its listener's instances
+/// (`named_pipe/listener/create_instance.rs` at interprocess 2.4.6: overlapped, duplex, byte mode, remote clients
+/// refused, the options' buffer sizes and default timeout, the instance limit unlimited), with the first-instance
+/// flag when `first`.
+fn create_instance(options: &PipeListenerOptions<'_>, first: bool) -> io::Result<OwnedHandle> {
+    use interprocess::os::windows::security_descriptor::AsSecurityDescriptor as _;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
+    };
+    use windows_sys::Win32::System::Pipes::{
+        CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
+    };
+
+    let mut open_mode = FILE_FLAG_OVERLAPPED | PIPE_ACCESS_DUPLEX;
+    if first {
+        open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
+    }
+    let pipe_mode = PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_REJECT_REMOTE_CLIENTS;
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).map_err(io::Error::other)?,
+        lpSecurityDescriptor: options
+            .security_descriptor
+            .as_ref()
+            .map_or(null_mut(), |descriptor| descriptor.as_sd().cast_mut()),
+        bInheritHandle: 0,
+    };
+    // SAFETY: the path is a NUL-terminated wide string the options own, the attributes and the descriptor they point
+    // to live across the call; the returned handle is checked before it is owned.
+    let handle = unsafe {
+        CreateNamedPipeW(
+            options.path.as_ptr(),
+            open_mode,
+            pipe_mode,
+            PIPE_UNLIMITED_INSTANCES,
+            options.output_buffer_size_hint,
+            options.input_buffer_size_hint,
+            options.wait_timeout.to_raw(),
+            &raw const attributes,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: CreateNamedPipeW returned a fresh handle that nothing else owns.
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
+}
+
+pub(super) fn accept(listener: &Listener) -> io::Result<Stream> {
+    let pipe = listener.inner.accept()?;
+    Ok(Stream::NamedPipe(pipe.into()))
 }
 
 pub(super) fn connect(endpoint: &Endpoint) -> io::Result<Stream> {

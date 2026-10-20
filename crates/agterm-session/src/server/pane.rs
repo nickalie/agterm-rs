@@ -79,11 +79,15 @@
 //! a client whose queue overflowed and was not resynced yet is sent the session's last snapshot before it. [`Panes`]
 //! then forgets the session.
 
+mod handoff;
+
+pub use handoff::{Cut, Limits};
+
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -242,6 +246,16 @@ pub struct Pane {
     core: Arc<Core>,
     actor: ActorHandle,
     killer: Killer,
+    /// The program's `TERM`, which its terminal names in XTGETTCAP's `TN`; an update handoff carries it.
+    term: Option<String>,
+    /// The pane passed to another server in an update handoff: dropping it ends nothing.
+    handed_over: AtomicBool,
+    /// A program an update handoff brought over on Unix, which this server cannot wait for ([`handoff`]).
+    #[cfg(unix)]
+    adopted: Option<handoff::Adopted>,
+    /// The program's process and job, which an update handoff passes on.
+    #[cfg(windows)]
+    origin: handoff::Origin,
 }
 
 impl std::fmt::Debug for Pane {
@@ -294,6 +308,21 @@ pub(super) struct State {
     exit: Option<ExitStatus>,
     /// Run once the program's end is recorded.
     on_end: Vec<Box<dyn FnOnce() + Send>>,
+    /// What an update handoff's cut holds ([`handoff`]).
+    hold: Hold,
+}
+
+/// An update handoff's hold on a pane ([`handoff`]).
+#[derive(Debug, Default)]
+struct Hold {
+    /// The handoff holds the pane at its cut: the replies' helper takes and writes nothing and ends nothing due, and
+    /// the child's waiter publishes no end, until it is thawed (a rollback, or an imported pane's activation); after a
+    /// commit it stays frozen for good.
+    frozen: bool,
+    /// The replies' helper is writing a batch it took: a freeze waits for it, so no reply it took lands behind the cut.
+    helper_busy: bool,
+    /// The child's waiter saw the program end and is publishing it: no handoff takes the pane any more.
+    ending: bool,
 }
 
 impl State {
@@ -392,6 +421,19 @@ impl Core {
         self.changed.notify_all();
     }
 
+    /// The program ended: wait while a handoff holds the pane frozen, then mark it ending, so no handoff takes it from
+    /// then on. A pane a handoff committed stays frozen, so its waiter publishes nothing in the old server.
+    fn hold_for_handoff(&self) {
+        let mut state = self.lock();
+        while state.hold.frozen {
+            state = self
+                .changed
+                .wait_timeout(state, HELPER_IDLE)
+                .map_or_else(|poisoned| poisoned.into_inner().0, |(guard, _)| guard);
+        }
+        state.hold.ending = true;
+    }
+
     /// The waiter's turn to reap the program: once no kill holds it (at most [`REAP_HOLD_LIMIT`]), mark it reaping,
     /// so no kill holds it from then on.
     fn begin_reap(&self) {
@@ -488,11 +530,20 @@ impl Pane {
         };
         let env = child_environment(&config.spec.env, &config.name, &config.namespace);
         let command = command(&config.spec, &env)?;
-        let (core, creator) = new_core(&config, size, lookup(&env, "TERM"))?;
+        let term = lookup(&env, "TERM").map(str::to_owned);
+        let (core, creator) = new_core(&config, size, term.as_deref())?;
         let Spawned { master, child } = agterm_pty::spawn(&command, Size::cells(size.rows, size.cols))?;
         let id = NEXT_PANE.fetch_add(1, Ordering::Relaxed);
         let killer = child.killer();
         let pid = child.pid();
+        #[cfg(windows)]
+        let origin = match handoff::Origin::of(&child) {
+            Ok(origin) => origin,
+            Err(err) => {
+                let _ = killer.kill_tree();
+                return Err(err);
+            }
+        };
         let actor = start_threads(id, master, child, &core)?;
         tracing::debug!(session = %config.name, pid, "live session started");
         let pane = Self {
@@ -506,6 +557,12 @@ impl Pane {
             core,
             actor,
             killer,
+            term,
+            handed_over: AtomicBool::new(false),
+            #[cfg(unix)]
+            adopted: None,
+            #[cfg(windows)]
+            origin,
         };
         Ok((pane, creator))
     }
@@ -944,6 +1001,9 @@ impl Pane {
         if self.exit_status().is_some() {
             return Ok(true);
         }
+        if !still_the_program(self) {
+            return Ok(self.ended_within(KILL_GRACE));
+        }
         if force {
             self.end_tree()?;
         } else {
@@ -964,7 +1024,7 @@ impl Pane {
     ///
     /// As [`Pane::kill`]; the kill is sent even when the hangup fails.
     fn end_tree(&self) -> io::Result<()> {
-        if !self.core.hold_reap() {
+        if !still_the_program(self) || !self.core.hold_reap() {
             return Ok(());
         }
         let hung_up = self.killer.hang_up();
@@ -1001,11 +1061,31 @@ impl Drop for Pane {
     /// A pane let go of while its program runs ends it and its tree ([`Pane::end_tree`]). The waiter's clone of the
     /// actor keeps reading the PTY until the program's end is recorded, so its last output still reaches the clients.
     fn drop(&mut self) {
+        // a pane handed over runs in the new server, or was not the new server's yet (an import that never committed)
+        if self.handed_over.load(Ordering::Acquire) {
+            return;
+        }
         if self.exit_status().is_none()
             && let Err(err) = self.end_tree()
         {
             tracing::warn!(session = %self.name, %err, "ending a dropped session's program failed");
         }
+    }
+}
+
+/// Whether `pane`'s pid still names its program, so its group and session may be signalled: always for a child of
+/// this server, which holds it unreaped (and on Windows, whose job names the tree); for a program an update handoff
+/// brought over on Unix, only while the process of that pid has the program's start time (best effort: nothing holds
+/// the pid between this look and the signal).
+fn still_the_program(pane: &Pane) -> bool {
+    #[cfg(unix)]
+    {
+        pane.adopted.as_ref().is_none_or(|adopted| adopted.alive(pane.pid))
+    }
+    #[cfg(windows)]
+    {
+        let _ = pane;
+        true
     }
 }
 
@@ -1108,29 +1188,60 @@ fn new_core(config: &PaneConfig, size: GridSize, term: Option<&str>) -> io::Resu
         (config.delegation_wait, config.kitty_wait),
     );
     let terminal = server_terminal(size, config.continuation_limit, &outlet, replies.facts(), term)?;
-    let core = Arc::new(Core {
+    let parts = Parts {
+        terminal,
+        clients,
+        lead,
+        replies,
+        offset: 0,
+        revision: 0,
+        size,
+        frozen: false,
+    };
+    let core = assemble(parts, timer, outlet);
+    prune_on_drop(&core, &mut creator.subscription);
+    Ok((core, creator))
+}
+
+/// What a pane's state starts from: a new session's, or one an update handoff brought over.
+struct Parts {
+    terminal: vt::Terminal,
+    clients: Clients,
+    lead: Lead,
+    replies: Replies,
+    offset: u64,
+    revision: u64,
+    size: GridSize,
+    frozen: bool,
+}
+
+/// A pane's shared state from `parts`, its replies' helper woken by `timer` and its replies queued in `outlet`.
+fn assemble(parts: Parts, timer: Arc<Condvar>, outlet: Arc<Outlet>) -> Arc<Core> {
+    Arc::new(Core {
         state: Mutex::new(State {
-            terminal,
-            clients,
-            lead,
-            replies,
-            offset: 0,
-            revision: 0,
-            size,
+            terminal: parts.terminal,
+            clients: parts.clients,
+            lead: parts.lead,
+            replies: parts.replies,
+            offset: parts.offset,
+            revision: parts.revision,
+            size: parts.size,
             pty_ended: false,
             exited: false,
             reap_holds: 0,
             reaping: false,
             exit: None,
             on_end: Vec::new(),
+            hold: Hold {
+                frozen: parts.frozen,
+                ..Hold::default()
+            },
         }),
         changed: Condvar::new(),
         timer,
         outlet,
         pause: ReadPause::new(),
-    });
-    prune_on_drop(&core, &mut creator.subscription);
-    Ok((core, creator))
+    })
 }
 
 /// The snapshot of the session `state` holds ([`snapshot::capture`]) of the `kind` given; empty while the session has
@@ -1186,31 +1297,46 @@ fn server_terminal(
     facts: &Facts,
     term: Option<&str>,
 ) -> io::Result<vt::Terminal> {
-    let vt_error = |err: vt::Error| io::Error::other(format!("the session's terminal: {err}"));
     let mut terminal = vt::Terminal::new(size.cols, size.rows).map_err(vt_error)?;
+    terminal.set_continuation_limit(continuation_limit).map_err(vt_error)?;
+    configure(&mut terminal, size, outlet, facts, term)?;
+    Ok(terminal)
+}
+
+/// The server's settings of a session's terminal of `size` ([`server_terminal`]) but its continuation tracking, on a
+/// new terminal or one an update handoff decoded.
+fn configure(
+    terminal: &mut vt::Terminal,
+    size: GridSize,
+    outlet: &Arc<Outlet>,
+    facts: &Facts,
+    term: Option<&str>,
+) -> io::Result<()> {
     terminal
         .set_kitty_image_storage_limit(KITTY_STORAGE_LIMIT)
         .map_err(vt_error)?;
     terminal.set_kitty_image_media(false, None, false).map_err(vt_error)?;
-    terminal.set_continuation_limit(continuation_limit).map_err(vt_error)?;
     if let Err(err) = terminal.set_terminfo_name(term.filter(|term| !term.is_empty())) {
         tracing::debug!(%err, ?term, "the session's TERM is no terminfo name; XTGETTCAP TN goes unanswered");
     }
-    facts
-        .apply(&mut terminal, None, size.cols, size.rows)
-        .map_err(vt_error)?;
+    facts.apply(terminal, None, size.cols, size.rows).map_err(vt_error)?;
     terminal
         .set_effects(Box::new(ServerEffects::new(Arc::clone(outlet))))
         .map_err(vt_error)?;
-    Ok(terminal)
+    Ok(())
+}
+
+fn vt_error(err: vt::Error) -> io::Error {
+    io::Error::other(format!("the session's terminal: {err}"))
 }
 
 /// The PTY actor: every read into the terminal and the clients, the terminal's replies back to the program; its
 /// reads pause on the pane's [`ReadPause`].
-fn start_actor(id: u64, master: agterm_pty::Master, core: &Arc<Core>) -> io::Result<ActorHandle> {
+fn start_actor(id: u64, master: agterm_pty::Master, core: &Arc<Core>, quiesced: bool) -> io::Result<ActorHandle> {
     let reading = Arc::clone(core);
     let mut config = ActorConfig::new(format!("live-{id}"), master, Box::new(move |bytes| reading.read(bytes)));
     config.read_pause = core.pause.clone();
+    config.initially_quiesced = quiesced;
     let ending = Arc::downgrade(core);
     config.on_exit = Some(Box::new(move |reason: ExitReason| {
         tracing::debug!(?reason, "a live session's PTY actor stopped");
@@ -1232,6 +1358,7 @@ fn start_waiter(id: u64, mut child: Child, core: &Arc<Core>, actor: &ActorHandle
         .name(format!("live-{id}-wait"))
         .spawn(move || {
             let reaped = child.wait_exit().and_then(|()| {
+                core.hold_for_handoff();
                 core.child_exited(&actor);
                 actor.child_exited();
                 core.wait_for(EXIT_GRACE, |state| state.pty_ended);
@@ -1259,7 +1386,7 @@ fn start_waiter(id: u64, mut child: Child, core: &Arc<Core>, actor: &ActorHandle
 /// program is ended (it would never get its output read) and so is what started.
 fn start_threads(id: u64, master: agterm_pty::Master, child: Child, core: &Arc<Core>) -> io::Result<ActorHandle> {
     let killer = child.killer();
-    let actor = match start_actor(id, master, core) {
+    let actor = match start_actor(id, master, core, false) {
         Ok(actor) => actor,
         Err(err) => {
             let _ = killer.kill_tree();
@@ -1299,11 +1426,20 @@ fn start_helper(id: u64, core: &Arc<Core>, actor: &ActorHandle) -> io::Result<()
 fn run_helper(core: &Core, actor: &ActorHandle) {
     let mut state = core.lock();
     while state.exit.is_none() {
+        if state.hold.frozen {
+            // a handoff's cut: nothing is written or ended until a thaw wakes it
+            state = core
+                .timer
+                .wait_timeout(state, HELPER_IDLE)
+                .map_or_else(|poisoned| poisoned.into_inner().0, |(guard, _)| guard);
+            continue;
+        }
         let now = Instant::now();
         state.expire(now);
         let replies = core.outlet.take();
         let wake = core.unpause(&state);
         if !replies.is_empty() || wake {
+            state.hold.helper_busy = true;
             drop(state);
             for reply in replies {
                 actor.write_reply(&reply);
@@ -1311,8 +1447,9 @@ fn run_helper(core: &Core, actor: &ActorHandle) {
             if wake {
                 actor.wake_reader();
             }
-            core.changed.notify_all();
             state = core.lock();
+            state.hold.helper_busy = false;
+            core.changed.notify_all();
             continue;
         }
         let wait = state
@@ -1417,6 +1554,30 @@ impl Panes {
         let pane = Arc::new(pane);
         panes.insert(pane.name.clone(), Arc::clone(&pane));
         drop(panes);
+        self.forget_on_end(&pane);
+        Ok((pane, creator))
+    }
+
+    /// Hold `pane`, one an update handoff brought over ([`Pane::import`]), until its program ends, as
+    /// [`Panes::spawn`] holds a new one; it replaces a pane of its name (a server taking over has none).
+    pub fn adopt(&self, pane: Pane) -> Arc<Pane> {
+        let pane = Arc::new(pane);
+        let replaced = lock(&self.panes).insert(pane.name.clone(), Arc::clone(&pane));
+        drop(replaced);
+        self.forget_on_end(&pane);
+        pane
+    }
+
+    /// Every pane held, sorted by name.
+    #[must_use]
+    pub fn all(&self) -> Vec<Arc<Pane>> {
+        let mut panes: Vec<Arc<Pane>> = lock(&self.panes).values().cloned().collect();
+        panes.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        panes
+    }
+
+    /// Forget `pane` once its program ended, unless a later session of its name took its place.
+    fn forget_on_end(&self, pane: &Arc<Pane>) {
         let registry: Weak<Mutex<HashMap<String, Arc<Pane>>>> = Arc::downgrade(&self.panes);
         let (name, id) = (pane.name.clone(), pane.id);
         pane.on_end(Box::new(move || {
@@ -1431,7 +1592,6 @@ impl Panes {
                 drop(ended);
             }
         }));
-        Ok((pane, creator))
     }
 
     /// The running session `name`.

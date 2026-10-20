@@ -92,6 +92,34 @@ impl Stamp {
     }
 }
 
+/// The library's pin as two builds compare it to tell whether their libghostty-vt is the same code (the session
+/// server's update handoff passes a terminal as the binary snapshot only between equal pins, `snapshot.h` promising
+/// no compatibility across revisions): `LIBGHOSTTY_VT_REV` from `pins_env` (`build/pins.env`), then the FNV-1a 64 of
+/// the stamp's `patch=` lines (each patch's name and sha256, in order), as 16 lower-case hex digits. The library's own
+/// version string names no revision (`version-string=1.3.2-dev`), so it cannot tell two pins apart.
+///
+/// # Errors
+///
+/// `pins_env` has no `LIBGHOSTTY_VT_REV`.
+pub fn pin(pins_env: &str, stamp: &str) -> Result<String, String> {
+    let rev = pins_env
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("LIBGHOSTTY_VT_REV="))
+        .map(|value| value.trim().trim_matches('"'))
+        .filter(|value| !value.is_empty())
+        .ok_or("build/pins.env has no LIBGHOSTTY_VT_REV")?;
+    let patches =
+        stamp
+            .lines()
+            .filter(|line| line.starts_with("patch="))
+            .fold(14_695_981_039_346_656_037_u64, |hash, line| {
+                line.bytes().chain(std::iter::once(b'\n')).fold(hash, |hash, byte| {
+                    (hash ^ u64::from(byte)).wrapping_mul(1_099_511_628_211)
+                })
+            });
+    Ok(format!("{rev} {patches:016x}"))
+}
+
 /// The stamp of a prepared prefix: the tree, the umbrella header and the stamp are there.
 ///
 /// # Errors

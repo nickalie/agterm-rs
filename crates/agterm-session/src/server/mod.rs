@@ -28,13 +28,24 @@
 //! ([`crate::protocol::Control::Hello`]) within [`HANDSHAKE_TIMEOUT`] (on Unix; Windows pipes take no timeout). The
 //! server serves every role: an attach connection attaches to a session, creating it when asked, and carries its
 //! stream ([`attach`]); an api connection asks what `SessionHost` and `ngtermctl clipboard set` need, request by
-//! request ([`api`]); a control connection holds the server, and its handoff request gets a failed result, since the
-//! server does not advertise [`crate::protocol::CAPABILITY_HANDOFF_REQUEST`]. A role this server does not know is
-//! refused with [`crate::protocol::ErrorCode::UnsupportedRole`].
+//! request ([`api`]); a control connection holds the server, and asks it to hand its sessions over to a server of
+//! another build ([`handoff`]), which it takes when it advertises [`crate::protocol::CAPABILITY_HANDOFF_REQUEST`]. A
+//! role this server does not know is refused with [`crate::protocol::ErrorCode::UnsupportedRole`].
+//!
+//! Every api and attach operation runs under the server's operation lock, shared, and only for a connection of the
+//! current generation: an update handoff takes the lock exclusively and moves the generation on, so no operation
+//! decoded before it runs after it.
+//!
+//! # The command
+//!
+//! [`command`] is what `agterm-session server …` runs: `server <namespace directory>` serves the namespace;
+//! `server <namespace directory> --handoff-import <channel> <token>` is an update handoff's replacement, which takes the
+//! namespace's sessions and endpoint over from the server that started it ([`run_import`]).
 
 pub mod api;
 mod attach;
 pub mod clients;
+pub mod handoff;
 pub mod lead;
 pub mod lifecycle;
 pub mod pane;
@@ -42,25 +53,30 @@ pub mod replies;
 pub mod snapshot;
 pub mod spawn;
 
+use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, RwLock, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::endpoint::{Endpoint, Listener, Stream};
+use crate::endpoint::{self, Endpoint, Listener, Stream};
 use crate::job::Sweeper;
 use crate::protocol::{
     CAPABILITY_HANDOFF_REQUEST, Control, ControlError, ErrorCode, FramingError, HandoffResult, Role, Welcome,
     read_frame, welcome, write_control,
 };
 use clients::ResyncBudget;
+use handoff::Support;
 use lifecycle::{Graces, Lifecycle, StopReason};
-use pane::Panes;
+use pane::{Limits, Panes};
 
-/// The build id this server reports in its welcome.
-pub const BUILD_ID: &str = concat!("agterm-session ", env!("CARGO_PKG_VERSION"));
+/// The build id a server without a staged id reports in its welcome ([`crate::build_id::UNSTAGED`]).
+pub const BUILD_ID: &str = crate::build_id::UNSTAGED;
 
 /// The capability of a server that runs detached from whoever started it ([`spawn::current_process_is_detached`]),
 /// so it outlives its launcher.
@@ -94,6 +110,8 @@ pub struct ServerConfig {
     pub client_queue_limit: usize,
     /// How often a client that falls behind is resynced before it is disconnected.
     pub resync_budget: ResyncBudget,
+    /// Whether it hands its sessions over when asked ([`Support::of_this_host`]).
+    pub handoff: Support,
 }
 
 impl Default for ServerConfig {
@@ -103,11 +121,23 @@ impl Default for ServerConfig {
             graces: Graces::default(),
             client_queue_limit: clients::DEFAULT_QUEUE_LIMIT,
             resync_budget: ResyncBudget::default(),
+            handoff: Support::of_this_host(),
         }
     }
 }
 
-/// Serves the namespace `directory` until the server stops by itself, and returns why.
+impl ServerConfig {
+    /// The limits of the panes it takes over in a handoff.
+    fn limits(&self) -> Limits {
+        Limits {
+            client_queue_limit: self.client_queue_limit,
+            resync_budget: self.resync_budget,
+            ..Limits::default()
+        }
+    }
+}
+
+/// Serves the namespace `directory` until the server stops by itself (or handed its sessions over), and returns why.
 ///
 /// # Errors
 ///
@@ -116,21 +146,47 @@ impl Default for ServerConfig {
 pub fn run(directory: &Path, config: &ServerConfig) -> io::Result<StopReason> {
     let endpoint = Endpoint::new(directory);
     let listener = endpoint.bind()?;
-    let shared = Arc::new(Shared {
-        lifecycle: Mutex::new(Lifecycle::new(Instant::now(), config.graces)),
-        changed: Condvar::new(),
-        identity: Identity {
-            build: config.build.clone(),
-            capabilities: capabilities(),
-        },
-        panes: Panes::new(),
-        jobs: Sweeper::live(),
-        namespace: endpoint.directory().to_path_buf(),
-        client_queue_limit: config.client_queue_limit,
-        resync_budget: config.resync_budget,
-    });
+    let shared = Shared::new(&endpoint, config);
+    serve(&endpoint, listener, &shared)
+}
+
+/// An update handoff's replacement for the namespace `directory` ([`handoff`]): it takes the sessions and the endpoint
+/// over from the server listening on `channel`, which started it with `token`, then serves as [`run`] does.
+///
+/// # Errors
+///
+/// The handoff failed before its commit (nothing was taken: the old server keeps serving), or a thread could not be
+/// started.
+pub fn run_import(directory: &Path, channel: &Path, token: &str, config: &ServerConfig) -> io::Result<StopReason> {
+    let endpoint = Endpoint::new(directory);
+    let shared = Shared::new(&endpoint, config);
+    let imported = handoff::receive(&config.build, &endpoint, channel, token, config.limits())?;
+    if !handoff::committed(&imported.stream) {
+        return Err(io::Error::other(
+            "the handoff source did not commit; its sessions stay with it",
+        ));
+    }
+    for pane in imported.panes {
+        pane.activate();
+        shared.lock().session_started();
+        let pane = shared.panes.adopt(pane);
+        let ending = Arc::clone(&shared);
+        pane.on_end(Box::new(move || ending.session_ended()));
+    }
+    imported.listener.claim();
+    if let Err(err) = handoff::write_line(&imported.stream, "owned") {
+        tracing::debug!(%err, "the handoff source left before it was told the sessions are owned");
+    }
+    tracing::info!(sessions = shared.panes.len(), "update handoff imported");
+    serve(&endpoint, imported.listener, &shared)
+}
+
+/// Accept on `listener` until the server stops; why it stopped.
+fn serve(endpoint: &Endpoint, listener: Listener, shared: &Arc<Shared>) -> io::Result<StopReason> {
+    let listener = Arc::new(listener);
+    *lock(&shared.listener) = Arc::downgrade(&listener);
     let (done, accept_done) = mpsc::channel();
-    let accepting = Arc::clone(&shared);
+    let accepting = Arc::clone(shared);
     let accept = thread::Builder::new()
         .name("agterm-session-accept".to_owned())
         .spawn(move || {
@@ -139,6 +195,10 @@ pub fn run(directory: &Path, config: &ServerConfig) -> io::Result<StopReason> {
             let _ = done.send(());
         })?;
     let reason = shared.wait_for_stop();
+    if reason == StopReason::HandedOver {
+        // the endpoint is the replacement's: no wake through it; the accept thread ends with the process
+        return Ok(reason);
+    }
     // the accept loop sees the stop with its next connection: this one, held until the loop has let go
     let _wake = endpoint.connect_timeout(ACCEPT_STOP_TIMEOUT).ok();
     if accept_done.recv_timeout(ACCEPT_STOP_TIMEOUT).is_ok() {
@@ -147,11 +207,59 @@ pub fn run(directory: &Path, config: &ServerConfig) -> io::Result<StopReason> {
     Ok(reason)
 }
 
+/// What `agterm-session server <args…>` runs, `args` being what follows `server` (module docs), with its exit status:
+/// [`EXIT_STOPPED`] once it stopped by itself or handed its sessions over, [`EXIT_TAKEN`] when another server holds
+/// the namespace, [`EXIT_USAGE`] for arguments it does not take (after a usage line on standard error), else
+/// [`EXIT_FAILED`].
+#[must_use]
+pub fn command(args: &[OsString]) -> ExitCode {
+    let (directory, import) = match args {
+        [directory] => (directory, None),
+        [directory, flag, channel, token] if flag == handoff::IMPORT_FLAG => (directory, Some((channel, token))),
+        _ => {
+            eprintln!(
+                "usage: agterm-session server <namespace directory> [{} <channel> <token>]",
+                handoff::IMPORT_FLAG
+            );
+            return ExitCode::from(EXIT_USAGE);
+        }
+    };
+    let config = ServerConfig {
+        build: crate::build_id::of_this_process(),
+        ..ServerConfig::default()
+    };
+    // the directory is made absolute before the server leaves the working directory it was started in
+    let result = std::path::absolute(Path::new(directory)).and_then(|directory| {
+        std::env::set_current_dir(working_directory(&directory)?)?;
+        match import {
+            None => run(&directory, &config),
+            Some((channel, token)) => {
+                let token = token.to_string_lossy();
+                run_import(&directory, Path::new(channel), &token, &config)
+            }
+        }
+    });
+    match result {
+        Ok(_) => ExitCode::from(EXIT_STOPPED),
+        Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
+            eprintln!("agterm-session server: {error}");
+            ExitCode::from(EXIT_TAKEN)
+        }
+        Err(error) => {
+            eprintln!("agterm-session server: {error}");
+            ExitCode::from(EXIT_FAILED)
+        }
+    }
+}
+
 /// What this server process reports about itself.
-fn capabilities() -> Vec<String> {
+fn capabilities(handoff: &Support) -> Vec<String> {
     let mut capabilities = Vec::new();
     if spawn::current_process_is_detached() {
         capabilities.push(CAPABILITY_DETACHED.to_owned());
+    }
+    if *handoff == Support::Supported {
+        capabilities.push(CAPABILITY_HANDOFF_REQUEST.to_owned());
     }
     capabilities
 }
@@ -177,12 +285,106 @@ struct Shared {
     /// The sessions' client queues and resync budget ([`ServerConfig`]).
     client_queue_limit: usize,
     resync_budget: ResyncBudget,
+    /// Whether it hands its sessions over when asked.
+    handoff: Support,
+    /// The operation lock (module docs): api and attach operations take it shared, a handoff exclusively.
+    ops: RwLock<()>,
+    /// The connection generation an operation must belong to (module docs).
+    generation: AtomicU64,
+    /// The api and attach connections, so a handoff can disconnect them.
+    connections: Mutex<Connections>,
+    /// A handoff runs: connections accepted meanwhile are closed at once.
+    handing_off: AtomicBool,
+    /// The listener the accept loop owns, for a handoff to pass on.
+    listener: Mutex<Weak<Listener>>,
+}
+
+/// The registered connections, by id.
+#[derive(Default)]
+struct Connections {
+    next: u64,
+    streams: HashMap<u64, Arc<Stream>>,
+}
+
+/// One api or attach connection, registered for as long as it lives.
+struct Connection<'a> {
+    shared: &'a Shared,
+    id: u64,
+    /// The generation it was accepted in.
+    generation: u64,
+}
+
+impl Drop for Connection<'_> {
+    fn drop(&mut self) {
+        lock(&self.shared.connections).streams.remove(&self.id);
+    }
+}
+
+impl Connection<'_> {
+    /// Run `operation` under the operation lock, shared, unless the connection's generation is over (a handoff began
+    /// after it was accepted): `None` then, and nothing ran.
+    fn operate<R>(&self, operation: impl FnOnce() -> R) -> Option<R> {
+        let _shared = self.shared.ops.read().unwrap_or_else(PoisonError::into_inner);
+        (self.shared.generation.load(Ordering::Acquire) == self.generation).then(operation)
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Shared {
+    fn new(endpoint: &Endpoint, config: &ServerConfig) -> Arc<Self> {
+        Arc::new(Self {
+            lifecycle: Mutex::new(Lifecycle::new(Instant::now(), config.graces)),
+            changed: Condvar::new(),
+            identity: Identity {
+                build: config.build.clone(),
+                capabilities: capabilities(&config.handoff),
+            },
+            panes: Panes::new(),
+            jobs: Sweeper::live(),
+            namespace: endpoint.directory().to_path_buf(),
+            client_queue_limit: config.client_queue_limit,
+            resync_budget: config.resync_budget,
+            handoff: config.handoff.clone(),
+            ops: RwLock::new(()),
+            generation: AtomicU64::new(0),
+            connections: Mutex::new(Connections::default()),
+            handing_off: AtomicBool::new(false),
+            listener: Mutex::new(Weak::new()),
+        })
+    }
+
     fn lock(&self) -> MutexGuard<'_, Lifecycle> {
         // a panicking connection thread leaves the counts as they were, which stay usable
         self.lifecycle.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Register `stream` as an api or attach connection of the current generation.
+    fn register(&self, stream: &Arc<Stream>) -> Connection<'_> {
+        let generation = self.generation.load(Ordering::Acquire);
+        let mut connections = lock(&self.connections);
+        let id = connections.next;
+        connections.next += 1;
+        connections.streams.insert(id, Arc::clone(stream));
+        Connection {
+            shared: self,
+            id,
+            generation,
+        }
+    }
+
+    /// Disconnect every api and attach connection (a handoff's first step).
+    fn disconnect_all(&self) {
+        for stream in lock(&self.connections).streams.values() {
+            endpoint::disconnect(stream);
+        }
+    }
+
+    /// The listener the accept loop serves, while it does.
+    fn listener(&self) -> Option<Arc<Listener>> {
+        lock(&self.listener).upgrade()
     }
 
     /// Waits until the lifecycle decides to stop.
@@ -223,6 +425,11 @@ fn accept_loop(listener: &Listener, shared: &Arc<Shared>) {
                 continue;
             }
         };
+        if shared.handing_off.load(Ordering::Acquire) {
+            // its client retries, and finds whichever server serves once the handoff is over
+            drop(stream);
+            continue;
+        }
         if !shared.lock().client_connected() {
             return;
         }
@@ -276,10 +483,17 @@ fn serve_connection(mut stream: Stream, shared: &Arc<Shared>) -> Result<(), Fram
     }
     set_recv_timeout(&stream, None);
     match role {
-        Role::Attach => attach::serve(stream, shared),
-        Role::Api => api::serve(&stream, shared),
+        Role::Attach | Role::Api => {
+            let stream = Arc::new(stream);
+            let connection = shared.register(&stream);
+            if role == Role::Attach {
+                attach::serve(&stream, shared, &connection)
+            } else {
+                api::serve(&stream, shared, &connection)
+            }
+        }
         // a welcomed hello names a role this server knows
-        Role::Control | Role::Unknown => serve_control(&mut stream),
+        Role::Control | Role::Unknown => serve_control(&mut stream, shared),
     }
 }
 
@@ -292,22 +506,35 @@ fn refusal(identity: &Identity, error: ControlError) -> Welcome {
     }
 }
 
-/// A control connection: it holds the server until the client closes it. A handoff request is answered as failed
-/// (the server does not advertise [`CAPABILITY_HANDOFF_REQUEST`]); anything else closes the connection.
-fn serve_control(stream: &mut Stream) -> Result<(), FramingError> {
+/// A control connection: it holds the server until the client closes it. A handoff request runs the handoff
+/// ([`handoff`]) and is answered with its outcome; once it committed, the server stops (its sessions are the
+/// replacement's). A server that does not hand over ([`ServerConfig::handoff`]) answers it failed with the reason.
+/// Anything else closes the connection.
+fn serve_control(stream: &mut Stream, shared: &Arc<Shared>) -> Result<(), FramingError> {
     let frame = match read_frame(stream) {
         Ok(frame) => frame,
         Err(FramingError::Closed) => return Ok(()),
         Err(error) => return Err(error),
     };
-    if let Control::HandoffRequest(_) = frame.control()? {
-        let error = ControlError::new(
-            ErrorCode::HandoffFailed,
-            format!("this agterm-session server takes no handoff requests (no {CAPABILITY_HANDOFF_REQUEST})"),
-        );
-        write_control(stream, &Control::HandoffResult(HandoffResult(Err(error))))?;
+    let Control::HandoffRequest(request) = frame.control()? else {
+        return Ok(());
+    };
+    let result = handoff::export(shared, &request);
+    let committed = result.is_ok();
+    let answered = write_control(stream, &Control::HandoffResult(HandoffResult(result)));
+    if committed {
+        shared.lock().hand_over();
+        shared.changed.notify_all();
     }
-    Ok(())
+    answered
+}
+
+/// The refusal of a handoff by a server that does not hand over.
+fn no_handoff(reason: &str) -> ControlError {
+    ControlError::new(
+        ErrorCode::HandoffFailed,
+        format!("this agterm-session server takes no handoff requests (no {CAPABILITY_HANDOFF_REQUEST}): {reason}"),
+    )
 }
 
 /// Bounds a read on Unix; Windows pipes take no timeout, so there a silent client waits as a client.

@@ -8,6 +8,10 @@
 //! - A command run with `wait_after_command` holds the pane on "Process exited. Press any key to close the terminal."
 //! - Anything else closes.
 //!
+//! A program whose exit status nobody could read (a live session's shell after the session server's update handoff on
+//! Unix, where the new server is not the shell's parent: herdr's `ChildExitReason::Handoff`, `agterm-session`'s
+//! `ExitStatus::Unknown`) ends as a plain exit: never a failure to launch, whatever its runtime, and no code is shown.
+//!
 //! A held pane's terminal shows the message with the cursor hidden and normal key encoding back on (keyboard action
 //! mode off, Kitty keyboard flags cleared), so any key that encodes can close it, as libghostty closes it.
 
@@ -55,7 +59,8 @@ impl Outcome {
 }
 
 impl ExitPolicy {
-    pub(crate) fn outcome(&self, code: u32, runtime: Duration) -> Outcome {
+    /// What the program's end with `code` (`None`: unknown, a plain exit) after `runtime` leaves on screen.
+    pub(crate) fn outcome(&self, code: Option<u32>, runtime: Duration) -> Outcome {
         let Self::Launched {
             command,
             wait_after_command,
@@ -67,7 +72,7 @@ impl ExitPolicy {
         };
         if *command && !*wait_after_command {
             Outcome::Close
-        } else if runtime <= *abnormal_runtime && code != 0 {
+        } else if runtime <= *abnormal_runtime && code.is_some_and(|code| code != 0) {
             Outcome::Failed
         } else if *wait_after_command {
             Outcome::Prompt
@@ -77,10 +82,10 @@ impl ExitPolicy {
     }
 
     /// The bytes `outcome` writes into the terminal: `viewport_used` (the screen shows text) puts a rule above a
-    /// failure report, `cols` is its width. libghostty wrote the message on the terminal directly; written through the
+    /// failure report, `cols` is its width; `code` is the one a failure report names (a failure always has one). libghostty wrote the message on the terminal directly; written through the
     /// parser it starts with CAN, which ends whatever sequence the program left unfinished (a CSI would otherwise take
     /// the message's first letter as its final byte, a string would swallow the message).
-    pub(crate) fn message(&self, outcome: Outcome, code: u32, runtime: Duration, layout: Layout) -> Vec<u8> {
+    pub(crate) fn message(&self, outcome: Outcome, code: Option<u32>, runtime: Duration, layout: Layout) -> Vec<u8> {
         let mut out = String::from("\x18");
         match outcome {
             Outcome::Close => return Vec::new(),
@@ -99,11 +104,11 @@ impl ExitPolicy {
                 out.push_str("\x1b[91m\x1b[1mGhostty failed to launch the requested command:\x1b[0m\r\n\n");
                 out.push_str(argv);
                 out.push_str("\x1b[0m\r\n\nRuntime: \x1b[31m");
-                let _ = write!(
-                    out,
-                    "{} ms\x1b[0m\r\nExit Code: \x1b[31m{code}\x1b[0m\r\n\nPress any key to close the window.",
-                    runtime.as_millis()
-                );
+                let _ = write!(out, "{} ms\x1b[0m\r\n", runtime.as_millis());
+                if let Some(code) = code {
+                    let _ = write!(out, "Exit Code: \x1b[31m{code}\x1b[0m\r\n");
+                }
+                out.push_str("\nPress any key to close the window.");
             }
         }
         // the cursor hidden, keyboard action mode off, Kitty keyboard flags cleared
@@ -158,24 +163,48 @@ mod tests {
         let soon = Duration::from_millis(10);
         let later = Duration::from_secs(3);
         // a bare pane only reports
-        assert_eq!(ExitPolicy::Report.outcome(127, soon), Outcome::Close);
+        assert_eq!(ExitPolicy::Report.outcome(Some(127), soon), Outcome::Close);
         // a command not waited for closes, failed or not
-        assert_eq!(launched(true, false).outcome(127, soon), Outcome::Close);
-        assert_eq!(launched(true, false).outcome(0, later), Outcome::Close);
+        assert_eq!(launched(true, false).outcome(Some(127), soon), Outcome::Close);
+        assert_eq!(launched(true, false).outcome(Some(0), later), Outcome::Close);
         // a waited command holds on the prompt, or on the report when it failed to launch
-        assert_eq!(launched(true, true).outcome(0, later), Outcome::Prompt);
-        assert_eq!(launched(true, true).outcome(3, later), Outcome::Prompt);
-        assert_eq!(launched(true, true).outcome(0, soon), Outcome::Prompt);
-        assert_eq!(launched(true, true).outcome(127, soon), Outcome::Failed);
+        assert_eq!(launched(true, true).outcome(Some(0), later), Outcome::Prompt);
+        assert_eq!(launched(true, true).outcome(Some(3), later), Outcome::Prompt);
+        assert_eq!(launched(true, true).outcome(Some(0), soon), Outcome::Prompt);
+        assert_eq!(launched(true, true).outcome(Some(127), soon), Outcome::Failed);
         // a login shell closes, unless it failed right away
-        assert_eq!(launched(false, false).outcome(0, later), Outcome::Close);
-        assert_eq!(launched(false, false).outcome(1, later), Outcome::Close);
-        assert_eq!(launched(false, false).outcome(1, soon), Outcome::Failed);
+        assert_eq!(launched(false, false).outcome(Some(0), later), Outcome::Close);
+        assert_eq!(launched(false, false).outcome(Some(1), later), Outcome::Close);
+        assert_eq!(launched(false, false).outcome(Some(1), soon), Outcome::Failed);
         assert_eq!(
-            launched(false, false).outcome(1, ABNORMAL_EXIT_RUNTIME),
+            launched(false, false).outcome(Some(1), ABNORMAL_EXIT_RUNTIME),
             Outcome::Failed
         );
         assert!(!Outcome::Close.held() && Outcome::Prompt.held() && Outcome::Failed.held());
+    }
+
+    #[test]
+    fn an_unknown_status_is_a_plain_exit() {
+        let soon = Duration::from_millis(10);
+        let later = Duration::from_secs(3);
+        // never a failure to launch, however soon it came
+        assert_eq!(launched(false, false).outcome(None, soon), Outcome::Close);
+        assert_eq!(launched(true, true).outcome(None, soon), Outcome::Prompt);
+        assert_eq!(launched(true, true).outcome(None, later), Outcome::Prompt);
+        assert_eq!(launched(true, false).outcome(None, soon), Outcome::Close);
+        assert_eq!(ExitPolicy::Report.outcome(None, soon), Outcome::Close);
+        // a failure report without a code names none
+        let layout = Layout {
+            viewport_used: false,
+            cols: 4,
+        };
+        let failed =
+            String::from_utf8(launched(true, true).message(Outcome::Failed, None, Duration::ZERO, layout)).unwrap();
+        assert!(!failed.contains("Exit Code"), "{failed:?}");
+        assert!(
+            failed.contains("0 ms\x1b[0m\r\n\nPress any key to close the window."),
+            "{failed:?}"
+        );
     }
 
     #[test]
@@ -185,13 +214,13 @@ mod tests {
             viewport_used: false,
             cols: 4,
         };
-        let prompt = String::from_utf8(policy.message(Outcome::Prompt, 0, Duration::ZERO, layout)).unwrap();
+        let prompt = String::from_utf8(policy.message(Outcome::Prompt, Some(0), Duration::ZERO, layout)).unwrap();
         assert_eq!(
             prompt,
             "\x18\r\nProcess exited. Press any key to close the terminal.\x1b[?25l\x1b[2l\x1b[=0;1u"
         );
         let failed =
-            String::from_utf8(policy.message(Outcome::Failed, 127, Duration::from_millis(12), layout)).unwrap();
+            String::from_utf8(policy.message(Outcome::Failed, Some(127), Duration::from_millis(12), layout)).unwrap();
         assert!(failed.starts_with("\x18\r\x1b[0m\x1b[91m\x1b[1mGhostty failed to launch the requested command:"));
         assert!(
             failed.contains("/bin/sh -c nope") && failed.contains("12 ms") && failed.contains("Exit Code: \x1b[31m127")
@@ -201,8 +230,12 @@ mod tests {
             viewport_used: true,
             cols: 4,
         };
-        let failed = String::from_utf8(policy.message(Outcome::Failed, 1, Duration::ZERO, ruled)).unwrap();
+        let failed = String::from_utf8(policy.message(Outcome::Failed, Some(1), Duration::ZERO, ruled)).unwrap();
         assert!(failed.contains("\n\u{2501}\u{2501}\u{2501}\u{2501}\r\n\n"));
-        assert!(policy.message(Outcome::Close, 0, Duration::ZERO, layout).is_empty());
+        assert!(
+            policy
+                .message(Outcome::Close, Some(0), Duration::ZERO, layout)
+                .is_empty()
+        );
     }
 }

@@ -44,6 +44,14 @@ fn build() -> Result<(), String> {
     println!("cargo::rerun-if-changed={}", prefix.join(zig_build::STAMP).display());
     let stamp = zig_build::prepared(&prefix)?;
     check_zig(&stamp)?;
+    let read =
+        |path: &Path| std::fs::read_to_string(path).map_err(|err| format!("cannot read {}: {err}", path.display()));
+    let pin = zig_build::pin(
+        &read(&root.join("build/pins.env"))?,
+        &read(&prefix.join(zig_build::STAMP))?,
+    )?;
+    // the pin a session server's handoff compares (`agterm_ghostty_vt_sys::PIN`)
+    println!("cargo::rustc-env=AGTERM_GHOSTTY_VT_PIN={pin}");
 
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").ok_or("OUT_DIR is not set")?);
     let target = std::env::var("TARGET").map_err(|err| format!("TARGET: {err}"))?;

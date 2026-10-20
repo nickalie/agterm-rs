@@ -603,3 +603,78 @@ fn take_over(handle: &ActorHandle) -> TestResult<Master> {
     let handoff = unsafe { handle.duplicate_for_handoff() }?;
     Ok(Master::from_handoff(handoff, Size::cells(24, 80))?)
 }
+
+/// What a quiesced actor holds goes through its read callback, the actor staying quiesced; a resize can be checked.
+#[test]
+fn a_quiesced_actor_delivers_what_it_held_and_reports_its_resize() -> TestResult {
+    let session = start(&shell(), Size::cells(24, 80))?;
+    session.type_line(&tagged("held"))?;
+    session.expect("got:held");
+    session.handle.begin_handoff(PATIENCE)?;
+    session.handle.deliver_held();
+    assert_eq!(
+        session.handle.write_input(b"x"),
+        Err(WriteError::Closed),
+        "still quiesced"
+    );
+    session.handle.try_resize(Size::cells(30, 100))?;
+    session.handle.rollback_handoff()?;
+    session.type_line(&size_line())?;
+    session.expect("SIZE=30x100");
+    session.quit()?;
+    assert!(session.finish()?.success());
+    Ok(())
+}
+
+/// A child this process did not start (a grandchild here) adopted by its pid: never waited for, and a retired killer
+/// signals nothing.
+#[cfg(unix)]
+#[test]
+fn an_adopted_child_is_never_waited_for_and_its_retired_killer_signals_nothing() -> TestResult {
+    use std::io::BufRead as _;
+
+    let mut parent = std::process::Command::new("/bin/sh")
+        .args(["-c", "sleep 60 & echo $!; wait"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()?;
+    let mut line = String::new();
+    std::io::BufReader::new(parent.stdout.take().ok_or("no stdout")?).read_line(&mut line)?;
+    let pid: u32 = line.trim().parse()?;
+    let mut adopted = Child::adopt(pid);
+    assert_eq!(adopted.pid(), pid);
+    assert_eq!(adopted.try_wait().unwrap_err().raw_os_error(), Some(libc::ECHILD));
+    assert_eq!(adopted.wait().unwrap_err().raw_os_error(), Some(libc::ECHILD));
+    let killer = adopted.killer();
+    killer.retire();
+    killer.kill_tree()?;
+    std::thread::sleep(Duration::from_millis(100));
+    let raw = libc::pid_t::try_from(pid)?;
+    // SAFETY: `kill` with signal 0 only checks that the process exists.
+    let alive = unsafe { libc::kill(raw, 0) } == 0;
+    assert!(alive, "the retired killer killed it");
+    // SAFETY: ends the test's own grandchild.
+    unsafe { libc::kill(raw, libc::SIGKILL) };
+    parent.wait()?;
+    Ok(())
+}
+
+/// A child handed over by its process and job handles (duplicated here, as the session server's handoff duplicates
+/// them into its replacement) is waited for through them, with its exit code.
+#[cfg(windows)]
+#[test]
+fn a_handed_over_child_is_waited_for_through_its_handles() -> TestResult {
+    let session = start(&shell(), Size::cells(24, 80))?;
+    let process = session
+        .child
+        .process()
+        .ok_or("no process handle")?
+        .try_clone_to_owned()?;
+    let job = session.child.job().try_clone_to_owned()?;
+    let mut handed = Child::from_handoff(process, job)?;
+    assert_eq!(handed.pid(), session.child.pid());
+    assert!(handed.try_wait()?.is_none());
+    session.type_line("exit 5")?;
+    assert_eq!(handed.wait()?.exit_code(), 5);
+    assert_eq!(session.finish()?.exit_code(), 5);
+    Ok(())
+}

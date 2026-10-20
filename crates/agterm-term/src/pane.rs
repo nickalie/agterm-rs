@@ -819,11 +819,11 @@ fn wait_child(mut child: Child, shared: &Shared, actor: &ActorHandle) {
     shared.mailbox.child_exited();
     actor.child_exited();
     shared.wait_eof(EXIT_GRACE);
-    let outcome = shared.exit.outcome(code, runtime);
+    let outcome = shared.exit.outcome(Some(code), runtime);
     if outcome.held() {
         let mut vt = lock(&shared.vt);
         let layout = Layout::of(&mut vt.terminal);
-        let message = shared.exit.message(outcome, code, runtime, layout);
+        let message = shared.exit.message(outcome, Some(code), runtime, layout);
         vt.terminal.vt_write(&message);
     }
     shared.send(PaneEvent::Exited(crate::ExitStatus {

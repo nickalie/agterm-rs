@@ -13,7 +13,9 @@
 //!   ([`server::clients`]), each starting from a snapshot of the session ([`server::snapshot`]) and resynced in band
 //!   when it falls behind; attach connections reach them, and api connections list, kill, read, type into and print
 //!   into them and read a shell's foreground job ([`server::api`]), what `SessionHost` and `ngtermctl clipboard set`
-//!   need;
+//!   need; and it hands every session over to a server of another build without ending them (its update handoff,
+//!   [`server::handoff`]);
+//! - [`build_id`]: the build a server reports and a client expects, the hash of the staged binary;
 //! - [`launch`]: what a live launch reads of this host (the session host executable, its build id, the login shell,
 //!   the Ghostty resources, the namespace's state directory) and the wrap configuration of a pane over it;
 //! - [`procfs`]: the Linux process table's files (`stat`, `cmdline`), which the job table and the process table read;
@@ -28,6 +30,7 @@
 //! file names in its header the herdr file it comes from, that it is licensed under the Apache License 2.0, and that
 //! it was modified; herdr's license is in the repository's `NOTICE`. Hence the crate's `MIT AND Apache-2.0`.
 
+pub mod build_id;
 pub mod endpoint;
 pub mod job;
 pub mod launch;

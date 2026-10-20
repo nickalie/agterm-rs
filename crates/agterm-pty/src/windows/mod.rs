@@ -16,9 +16,13 @@ use std::sync::Arc;
 
 use portable_pty::win::conpty::{ConPtyHandoff, ConPtyMasterPty, ConPtySystem};
 use portable_pty::{CommandBuilder, ExitStatus, MasterPty, PtySystem};
+use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
+};
+use windows_sys::Win32::System::Threading::{
+    GetExitCodeProcess, GetProcessId, INFINITE, TerminateProcess, WaitForSingleObject,
 };
 
 pub(crate) use actor::{Control, spawn_actor};
@@ -123,6 +127,116 @@ impl Child {
     pub fn job(&self) -> BorrowedHandle<'_> {
         self.job.as_handle()
     }
+
+    /// The child's process handle, borrowed (a handoff duplicates it into the new owner, which then waits for the
+    /// child and reads its exit code through its copy).
+    #[must_use]
+    pub fn process(&self) -> Option<BorrowedHandle<'_>> {
+        let raw = self.inner.as_raw_handle()?;
+        // SAFETY: the handle is the child's process handle, which `inner` keeps open for as long as `self` is borrowed.
+        Some(unsafe { BorrowedHandle::borrow_raw(raw) })
+    }
+
+    /// A child another process started and handed over (the session server's handoff): its process handle and the
+    /// job its tree runs in, both owned from here on. It is waited for through the process handle, as a child
+    /// started here is, and its tree ends with the job (kill on close: the tree outlives this one only while another
+    /// process holds the job too).
+    ///
+    /// # Errors
+    ///
+    /// The process handle names no process (`GetProcessId` failed).
+    pub fn from_handoff(process: OwnedHandle, job: OwnedHandle) -> io::Result<Self> {
+        // SAFETY: reads the id of the process whose handle `process` owns.
+        let pid = unsafe { GetProcessId(process.as_raw_handle()) };
+        if pid == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self {
+            inner: Box::new(HandedProcess { process }),
+            pid,
+            job: Arc::new(job),
+        })
+    }
+}
+
+/// The portable-pty side of a handed-over child ([`Child::from_handoff`]), over its process handle.
+#[derive(Debug)]
+struct HandedProcess {
+    process: OwnedHandle,
+}
+
+impl HandedProcess {
+    fn exit_code(&self) -> io::Result<u32> {
+        let mut code = 0_u32;
+        // SAFETY: reads the exit code of the process whose handle `process` owns into a live local.
+        if unsafe { GetExitCodeProcess(self.process.as_raw_handle(), &raw mut code) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(code)
+    }
+}
+
+impl portable_pty::ChildKiller for HandedProcess {
+    fn kill(&mut self) -> io::Result<()> {
+        // SAFETY: terminates the process whose handle `process` owns; one already gone fails harmlessly.
+        if unsafe { TerminateProcess(self.process.as_raw_handle(), 1) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+        match self.process.try_clone() {
+            Ok(process) => Box::new(Self { process }),
+            Err(err) => {
+                tracing::debug!(%err, "duplicating a handed-over child's process handle failed");
+                Box::new(NoKiller)
+            }
+        }
+    }
+}
+
+impl portable_pty::Child for HandedProcess {
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        // SAFETY: polls the process handle `process` owns.
+        if unsafe { WaitForSingleObject(self.process.as_raw_handle(), 0) } != WAIT_OBJECT_0 {
+            return Ok(None);
+        }
+        self.exit_code().map(|code| Some(ExitStatus::with_exit_code(code)))
+    }
+
+    fn wait(&mut self) -> io::Result<ExitStatus> {
+        // SAFETY: waits on the process handle `process` owns.
+        if unsafe { WaitForSingleObject(self.process.as_raw_handle(), INFINITE) } != WAIT_OBJECT_0 {
+            return Err(io::Error::last_os_error());
+        }
+        self.exit_code().map(ExitStatus::with_exit_code)
+    }
+
+    fn process_id(&self) -> Option<u32> {
+        // SAFETY: reads the id of the process whose handle `process` owns.
+        let pid = unsafe { GetProcessId(self.process.as_raw_handle()) };
+        (pid != 0).then_some(pid)
+    }
+
+    fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
+        Some(self.process.as_raw_handle())
+    }
+}
+
+/// A killer that kills nothing: what a handed-over child's killer clone is when its handle cannot be duplicated (the
+/// child's tree still ends with its job).
+#[derive(Debug)]
+struct NoKiller;
+
+impl portable_pty::ChildKiller for NoKiller {
+    fn kill(&mut self) -> io::Result<()> {
+        Err(io::Error::other("no handle to kill the handed-over child through"))
+    }
+
+    fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+        Box::new(Self)
+    }
 }
 
 /// Ends a child's tree: [`Child::killer`]. Holds the child's job open, so the tree outlives a dropped [`Child`]
@@ -154,6 +268,10 @@ impl Killer {
         }
         Ok(())
     }
+
+    /// Nothing on Windows: the job names the child's tree for as long as a handle holds it, so no id is ever reused
+    /// under a killer (Unix's [`Killer::retire`] stops signalling a group whose id may be).
+    pub fn retire(&self) {}
 }
 
 /// A job object whose last handle's close kills every process in it.
