@@ -69,7 +69,7 @@ impl Server {
     /// A connection in the attach role, its hello welcomed.
     fn connect(&self) -> TestResult<Connection> {
         let deadline = Instant::now() + PATIENCE;
-        let mut stream = loop {
+        let stream = loop {
             match self.endpoint.connect() {
                 Ok(stream) => break stream,
                 Err(err) if Instant::now() < deadline => {
@@ -79,17 +79,7 @@ impl Server {
                 Err(err) => return Err(err.into()),
             }
         };
-        let hello = Hello {
-            role: Role::Attach,
-            build: "attach-test".to_owned(),
-            capabilities: Vec::new(),
-        };
-        write_control(&mut stream, &Control::Hello(hello))?;
-        let Control::Welcome(welcome) = read_frame(&mut stream)?.control()? else {
-            return Err("no welcome".into());
-        };
-        assert_eq!(welcome.error, None);
-        Ok(Connection::new(stream))
+        welcomed(stream)?.ok_or_else(|| "the server closed the connection before its welcome".into())
     }
 
     /// Wait for the server to stop by itself; why it did.
@@ -102,6 +92,26 @@ impl Server {
         }
         Ok(thread.join().map_err(|_| "the server panicked")??)
     }
+}
+
+/// `stream` in the attach role, its hello welcomed; `None` when the server closed it first, as a stopping one does.
+fn welcomed(mut stream: Stream) -> TestResult<Option<Connection>> {
+    let hello = Hello {
+        role: Role::Attach,
+        build: "attach-test".to_owned(),
+        capabilities: Vec::new(),
+    };
+    write_control(&mut stream, &Control::Hello(hello))?;
+    let frame = match read_frame(&mut stream) {
+        Ok(frame) => frame,
+        Err(FramingError::Closed) => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let Control::Welcome(welcome) = frame.control()? else {
+        return Err("no welcome".into());
+    };
+    assert_eq!(welcome.error, None);
+    Ok(Some(Connection::new(stream)))
 }
 
 /// The client's end of an attach connection: what the server sends arrives on a channel, read by a thread of its own.
@@ -298,9 +308,15 @@ fn an_attach_creates_its_session_and_a_reattach_starts_from_its_snapshot() -> Te
     Ok(())
 }
 
-/// Whether the session `name` is gone: an attach to it is refused as such. One that attaches leaves at once.
+/// Whether the session `name` is gone: an attach to it is refused as such, or the server has stopped, which it does
+/// once its last session ended and its last client left. One that attaches leaves at once.
 fn gone(server: &Server, name: &str) -> TestResult<bool> {
-    let mut probe = server.connect()?;
+    let Ok(stream) = server.endpoint.connect() else {
+        return Ok(true);
+    };
+    let Some(mut probe) = welcomed(stream)? else {
+        return Ok(true);
+    };
     probe.attach(name, None)?;
     Ok(matches!(
         probe.next()?,

@@ -366,12 +366,13 @@ fn the_empty_server_exits_and_a_held_one_does_not() {
 }
 
 #[test]
-fn a_role_the_server_does_not_serve_yet_is_refused_with_its_welcome() {
+fn a_role_the_server_does_not_know_is_refused_with_its_welcome() {
     if child_mode().unwrap() {
         return;
     }
     let mut namespace = Namespace::new().unwrap();
-    let error = namespace.start(Role::Api).unwrap_err();
+    // a newer client's role: it goes on the wire under a name this server does not know
+    let error = namespace.start(Role::Unknown).unwrap_err();
     let StartError::Refused { error, welcome, .. } = error else {
         panic!("{error}");
     };
