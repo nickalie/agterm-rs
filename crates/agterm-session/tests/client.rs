@@ -19,10 +19,12 @@ mod peer;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use agterm_session::client::{AttachEvent, AttachReader, Attachment, Barrier, Client, ClientError, Delegated};
+use agterm_session::client::{
+    AttachEvent, AttachReader, Attachment, Barrier, Client, ClientError, DETACH_WAIT, Delegated,
+};
 use agterm_session::protocol::{
     AttachClientMessage, AttachRefusal, AttachRequest, AttachServerMessage, ColorScheme, DelegatedReply,
-    DelegatedRequest, ExitStatus, GridSize, LeadRole, Managed, ReplyMetadata, Rgb, SessionSpec,
+    DelegatedRequest, ExitStatus, FramingError, GridSize, LeadRole, MAGIC, Managed, ReplyMetadata, Rgb, SessionSpec,
 };
 use agterm_session::server::lifecycle::StopReason;
 use peer::{Server, Step, attach_peer, next_message};
@@ -400,6 +402,73 @@ fn closing_wakes_a_blocked_reader() -> TestResult {
         matches!(read, Ok(events) if events <= 3),
         "the stream ended in order: {read:?}"
     );
+    Ok(())
+}
+
+/// The reader's error after the exit the peer sends before `trailing`.
+fn error_after_the_exit(trailing: Vec<u8>) -> TestResult<ClientError> {
+    let exit = Step::Send(AttachServerMessage::Exit {
+        status: ExitStatus::Exited { code: 0, signal: None },
+    });
+    let (peer, _received) = attach_peer(vec![owner(), begin(1, 0), end(1), exit, Step::Raw(trailing)])?;
+    let mut attachment = Client::new(peer.directory()).attach(request("trailing", None))?;
+    while !matches!(event(&mut attachment.reader)?, AttachEvent::Exit(_)) {}
+    let result = attachment.reader.recv();
+    attachment.writer.close();
+    match result {
+        Err(error) => Ok(error),
+        Ok(event) => Err(format!("the stream went on after the exit: {event:?}").into()),
+    }
+}
+
+#[test]
+fn only_an_orderly_close_ends_the_stream_after_the_exit() -> TestResult {
+    let malformed = error_after_the_exit(b"NOPE\0\0\0\0\0\0\0\0\0\0\0\0".to_vec())?;
+    assert!(
+        matches!(malformed, ClientError::Framing(FramingError::BadMagic(_))),
+        "{malformed}"
+    );
+    let cut = error_after_the_exit(MAGIC[..3].to_vec())?;
+    assert!(
+        matches!(cut, ClientError::Framing(FramingError::UnexpectedEof)),
+        "{cut}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_detach_behind_a_write_a_stopped_server_never_reads_closes_the_connection() -> TestResult {
+    let (peer, received) = attach_peer(vec![owner(), begin(1, 0), end(1), Step::Hold(PATIENCE)])?;
+    let Attachment { mut reader, writer, .. } = Client::new(peer.directory()).attach(request("stuck", None))?;
+    next_message(&received)?;
+    while event(&mut reader)? != AttachEvent::SnapshotEnd {}
+    // far more than a socket's or a pipe's buffer: the write waits for a reader that never comes
+    let typing = writer.clone();
+    let input = thread::spawn(move || typing.input(&vec![b'x'; 64 * 1024 * 1024]));
+    thread::sleep(Duration::from_millis(300));
+    assert!(!input.is_finished(), "the write was taken: {:?}", input.join());
+
+    let started = Instant::now();
+    let detached = writer.detach();
+    assert!(detached.is_err(), "a detach that could not be sent is an error");
+    let waited = started.elapsed();
+    assert!(
+        waited >= DETACH_WAIT && waited < PATIENCE,
+        "the detach waited {waited:?} for the write"
+    );
+    // the close wakes the write (on Windows only one pending when it comes)
+    let deadline = Instant::now() + PATIENCE;
+    while !input.is_finished() {
+        assert!(Instant::now() < deadline, "the write was never woken");
+        writer.close();
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(input.join().map_err(|_| "the writer panicked")?.is_err());
+    assert!(
+        matches!(writer.input(b"late"), Err(ClientError::Disconnected)),
+        "a closed connection takes no writes"
+    );
+    assert_eq!(reader.recv()?, None, "the reader's stream ended with the close");
     Ok(())
 }
 

@@ -14,8 +14,9 @@
 //! was given [`StartOptions`] ([`Client::starting`]), as the attach that creates a pane's session must
 //! ([`spawn::connect_or_start`]); without them it reports [`ClientError::NoServer`].
 //!
-//! Every api call runs within the client's timeout ([`DEFAULT_TIMEOUT`]), connecting included; an attach's first
-//! answer within [`ATTACH_TIMEOUT`]. A call that outran its timeout drops its connection.
+//! Every api call runs within the client's timeout ([`DEFAULT_TIMEOUT`]), connecting included, the whole call
+//! together however its reply arrives; an attach's first answer within [`ATTACH_TIMEOUT`]. A call that outran its
+//! timeout drops its connection.
 //!
 //! # The attach stream
 //!
@@ -26,22 +27,26 @@
 //!   each snapshot opens a later epoch (a resync's leads with its own reset, so a client feeds every snapshot and output
 //!   byte to its terminal as it comes); output and size changes come only between snapshots, contiguous from the last
 //!   snapshot's offset; a delegated request or a Kitty barrier of a superseded epoch is dropped; nothing follows the
-//!   exit. A broken contract is [`ClientError::Protocol`]. The stream ends (`Ok(None)`) after the exit, after a
-//!   shutdown, or once this client detached or closed it; a connection that ends otherwise is
-//!   [`ClientError::Disconnected`].
+//!   exit. A broken contract is [`ClientError::Protocol`]. The stream ends (`Ok(None)`) when the connection closes
+//!   in order after the exit or a shutdown (a frame cut or malformed after them is still an error), or once this
+//!   client detached or closed it; a connection that ends otherwise is [`ClientError::Disconnected`].
 //! - [`AttachWriter`] (cloneable, its writes serialized) sends input, the client's grid, its reply metadata, and the
 //!   answers: [`AttachWriter::answer`] takes a delegated request's [`Delegated`] token, [`AttachWriter::complete`] a
 //!   [`Barrier`], each once. A Kitty barrier is completed once the client's terminal has *processed* every output byte
 //!   [`AttachReader::recv`] returned before the barrier (a caller that feeds each event before it reads the next one
 //!   has), with what its terminal answered to the Kitty graphics commands since the previous barrier — and completed
 //!   even when that is nothing, since the server holds its own later replies behind it until then. An answer whose
-//!   epoch is no longer the stream's current one is not sent: the server would drop it.
+//!   epoch is no longer the stream's current one is not sent: the server would drop it. Its writes take no timeout:
+//!   against a server that stopped reading (stopped or deadlocked; a live one queues input and never blocks on it) a
+//!   write waits, and holds the writes after it back. [`AttachWriter::detach`] waits for a write in progress for at
+//!   most [`DETACH_WAIT`] and closes the connection then; [`AttachWriter::close`] is the call that always returns.
 
-use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
+use std::thread;
 use std::time::{Duration, Instant};
+use std::{fmt, io};
 
 use crate::endpoint::{self, Endpoint, Stream, is_connection_closed_error};
 use crate::protocol::{
@@ -62,6 +67,13 @@ pub const ATTACH_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The least an api call waits, however close its deadline (a zero wait would mean no timeout to a Unix socket).
 const MIN_WAIT: Duration = Duration::from_millis(10);
+
+/// How long [`AttachWriter::detach`] waits for a write in progress before it closes the connection instead: a live
+/// server reads what a client writes at once, so a write held longer is one a stuck server no longer reads.
+pub const DETACH_WAIT: Duration = Duration::from_secs(1);
+
+/// How often [`AttachWriter::detach`] looks whether the write in progress is done.
+const DETACH_POLL: Duration = Duration::from_millis(5);
 
 /// Why a client call failed.
 #[derive(Debug, thiserror::Error)]
@@ -407,6 +419,8 @@ struct Shared {
     epoch: AtomicU64,
     /// The client detached or closed the connection: its end is the stream's.
     leaving: AtomicBool,
+    /// The client closed the connection ([`AttachWriter::close`]): nothing is read or written on it any more.
+    closed: AtomicBool,
 }
 
 /// An attached session's stream: the server's welcome and the stream's two halves.
@@ -424,6 +438,7 @@ impl Attachment {
             write: Mutex::new(()),
             epoch: AtomicU64::new(0),
             leaving: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
         });
         Self {
             welcome,
@@ -458,6 +473,11 @@ impl AttachReader {
     /// before the stream did, [`ClientError::Framing`] for a failed read; the stream is over after any of them.
     pub fn recv(&mut self) -> Result<Option<AttachEvent>, ClientError> {
         while !self.finished {
+            if self.shared.closed.load(Ordering::SeqCst) {
+                // the client closed the connection: a read would not end where the close cannot wake it (Windows)
+                self.finished = true;
+                break;
+            }
             let message = match self.pending.take() {
                 Some(message) => message,
                 None => match self.read() {
@@ -490,25 +510,33 @@ impl AttachReader {
         read_frame(&mut &self.shared.stream)?.message(PROTOCOL_VERSION)
     }
 
-    /// The stream's end after `err`: in order after the exit, a shutdown or the client's leaving, else an error.
+    /// The stream's end after the read failed with `err`: in order after the client's leaving, however the read
+    /// failed, and after the exit or a shutdown when the connection closed between frames; else an error.
     fn ended(&mut self, err: FramingError) -> Result<Option<AttachEvent>, ClientError> {
         self.finished = true;
+        if self.shared.leaving.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
         let closed = match &err {
-            FramingError::Closed | FramingError::UnexpectedEof => true,
+            FramingError::Closed => true,
             FramingError::Io(err) => is_connection_closed_error(err),
             _ => false,
         };
-        if self.state.ended || self.shared.leaving.load(Ordering::SeqCst) {
+        let cut = matches!(err, FramingError::UnexpectedEof);
+        if self.state.ended && closed {
             Ok(None)
-        } else if closed {
+        } else if !self.state.ended && (closed || cut) {
             Err(ClientError::Disconnected)
         } else {
+            // a frame cut or malformed, after the end too
             Err(ClientError::Framing(err))
         }
     }
 }
 
-/// The writing half of an attach stream; its clones share the connection.
+/// The writing half of an attach stream; its clones share the connection. Its writes take no timeout (module docs):
+/// against a server that stopped reading they wait, [`AttachWriter::detach`] for at most [`DETACH_WAIT`], and
+/// [`AttachWriter::close`] always returns.
 #[derive(Debug, Clone)]
 pub struct AttachWriter {
     shared: Arc<Shared>,
@@ -516,9 +544,30 @@ pub struct AttachWriter {
 
 impl AttachWriter {
     fn send(&self, message: &AttachClientMessage) -> Result<(), ClientError> {
-        let _serialized = self.shared.write.lock().unwrap_or_else(PoisonError::into_inner);
+        let serialized = self.shared.write.lock().unwrap_or_else(PoisonError::into_inner);
+        self.write(&serialized, message)
+    }
+
+    /// Writes `message`, the writers' lock held (`_serialized`); refused once the client closed the connection.
+    fn write(&self, _serialized: &MutexGuard<'_, ()>, message: &AttachClientMessage) -> Result<(), ClientError> {
+        if self.shared.closed.load(Ordering::SeqCst) {
+            return Err(ClientError::Disconnected);
+        }
         write_message(&mut &self.shared.stream, message)?;
         Ok(())
+    }
+
+    /// The writers' lock, once the write holding it is done; `None` when it is still held after `wait`.
+    fn lock_within(&self, wait: Duration) -> Option<MutexGuard<'_, ()>> {
+        let deadline = Instant::now() + wait;
+        loop {
+            match self.shared.write.try_lock() {
+                Ok(serialized) => return Some(serialized),
+                Err(TryLockError::Poisoned(poisoned)) => return Some(poisoned.into_inner()),
+                Err(TryLockError::WouldBlock) if Instant::now() >= deadline => return None,
+                Err(TryLockError::WouldBlock) => thread::sleep(DETACH_POLL),
+            }
+        }
     }
 
     /// Input for the session's program.
@@ -586,25 +635,40 @@ impl AttachWriter {
         Ok(true)
     }
 
-    /// Leaves the session running: the server closes the connection, and the reader's stream ends.
+    /// Leaves the session running: the server closes the connection, and the reader's stream ends. A write still in
+    /// progress after [`DETACH_WAIT`] (a server that stopped reading) is given up: the connection is closed instead
+    /// ([`AttachWriter::close`]), which leaves the session running too.
     ///
     /// # Errors
     ///
-    /// The write failed (the connection is closed then; the reader's stream ends too).
+    /// The write failed or was given up (the connection is closed then; the reader's stream ends too).
     pub fn detach(&self) -> Result<(), ClientError> {
         self.shared.leaving.store(true, Ordering::SeqCst);
-        let sent = self.send(&AttachClientMessage::Detach);
+        let sent = match self.lock_within(DETACH_WAIT) {
+            Some(serialized) => self.write(&serialized, &AttachClientMessage::Detach),
+            None => Err(ClientError::Framing(FramingError::Io(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "a write to the live session server was still in progress after {}s",
+                    DETACH_WAIT.as_secs_f32()
+                ),
+            )))),
+        };
         if sent.is_err() {
             self.close();
         }
         sent
     }
 
-    /// Closes the connection at once, waking a reader blocked on it: the server detaches the client, and the reader's
-    /// stream ends. On Windows a read that starts only after the call is not woken (`endpoint::disconnect`): a caller
-    /// whose reader may be about to read calls it again until the reader is done.
+    /// Closes the connection at once, waking a reader blocked on it and a write in progress; every later write is
+    /// refused ([`ClientError::Disconnected`]) and the reader's stream ends. On Unix the server sees the client leave
+    /// at once and detaches it. On Windows a client cannot disconnect its end of a pipe: the server sees the client
+    /// leave only once the attachment's halves are all dropped, which closes it (until then the client stays attached,
+    /// as a leader or the reply owner too); and a read that starts only after the call is not woken
+    /// (`endpoint::disconnect`), so a caller whose reader may be about to read calls it again until the reader is done.
     pub fn close(&self) {
         self.shared.leaving.store(true, Ordering::SeqCst);
+        self.shared.closed.store(true, Ordering::SeqCst);
         endpoint::disconnect(&self.shared.stream);
     }
 

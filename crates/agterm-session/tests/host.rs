@@ -319,6 +319,25 @@ fn a_silent_server_fails_each_call_within_the_timeout() -> TestResult {
 }
 
 #[test]
+fn a_reply_trickling_in_fails_the_call_at_its_timeout() -> TestResult {
+    // a reply of some twenty bytes, one every 150 ms: each read is quick, the whole reply some three seconds
+    let (peer, log) = api_peer(|_| Answer::Trickle {
+        response: ApiResponse::Sessions(Vec::new()),
+        pause: Duration::from_millis(150),
+    })?;
+    let host = host(peer.directory())?.with_timeout(Duration::from_millis(300));
+    let started = Instant::now();
+    assert!(host.list().is_err(), "a reply past the timeout is a failed call");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the timeout bounds the whole call: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(calls(&log).len(), 1);
+    Ok(())
+}
+
+#[test]
 fn availability_is_an_executable_session_binary() -> TestResult {
     assert!(!ServerHost::new("/nonexistent/agterm-session", "/tmp/live").is_available());
     assert!(ServerHost::new(std::env::current_exe()?, "/tmp/live").is_available());

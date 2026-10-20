@@ -22,8 +22,8 @@
 //! - **The foreground job** of a killed session's shell is hung up by the server (`server::api`), so the host does not
 //!   sweep after a kill as `ZmxClient` did. A restart's own job calls ([`SessionHost::foreground_job`],
 //!   [`SessionHost::job_running`], [`SessionHost::end_job`]) read and signal this machine's process table directly
-//!   ([`crate::job::Sweeper`], the rules the server's api runs too): the restart asks after the kill, when the server
-//!   may already have stopped with its last session.
+//!   ([`crate::job::Sweeper`], the rules the server's api runs too): the restart reads the job before the kill, and
+//!   waits for it and ends it after, when the server may already have stopped with its last session.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -125,7 +125,8 @@ impl SessionHost for ServerHost {
         }
     }
 
-    /// Every distinct name of `names` in one forced kill call; true when the call was answered and no kill failed.
+    /// Every distinct name of `names` in one forced kill call; true unless the call failed or a kill failed. Without
+    /// a server, or without a name, nothing is left to kill, which is true.
     fn kill_batch(&self, names: &[String]) -> bool {
         let mut seen = BTreeSet::new();
         let unique: Vec<String> = names

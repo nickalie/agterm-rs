@@ -1,6 +1,7 @@
 //! What the client library's tests run against, on every OS: a scripted peer (a fake server on a real endpoint of a
 //! private namespace, its answers given by the test) and a real server run in the test process (`server::run`).
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -8,6 +9,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use agterm_session::client::{Api, Client};
 use agterm_session::endpoint::{self, Endpoint, Stream};
 use agterm_session::protocol::{
     ApiCall, ApiError, ApiReply, ApiRequest, ApiResponse, AttachClientMessage, AttachServerMessage, Control,
@@ -107,6 +109,11 @@ pub enum Answer {
     Close,
     /// No reply: the peer reads on until the client goes.
     Silent,
+    /// The reply written a byte at a time, `pause` after each.
+    Trickle {
+        response: ApiResponse,
+        pause: Duration,
+    },
 }
 
 /// The requests an api peer was sent, in order.
@@ -136,6 +143,12 @@ pub fn api_peer(answer: impl Fn(&ApiRequest) -> Answer + Send + Sync + 'static) 
                 Answer::WrongId(response) => (call.id + 100, Ok(response)),
                 Answer::Close => return,
                 Answer::Silent => continue,
+                Answer::Trickle { response, pause } => {
+                    if trickle(&mut stream, call.id, response, pause).is_err() {
+                        return;
+                    }
+                    continue;
+                }
             };
             if write_message(&mut stream, &ApiReply { id, result }).is_err() {
                 return;
@@ -145,9 +158,30 @@ pub fn api_peer(answer: impl Fn(&ApiRequest) -> Answer + Send + Sync + 'static) 
     Ok((peer, log))
 }
 
+/// The reply `response` to the call `id`, written a byte at a time with `pause` after each.
+fn trickle(stream: &mut Stream, id: u64, response: ApiResponse, pause: Duration) -> Result<(), FramingError> {
+    let mut frame = Vec::new();
+    write_message(
+        &mut frame,
+        &ApiReply {
+            id,
+            result: Ok(response),
+        },
+    )?;
+    for byte in frame {
+        stream.write_all(&[byte])?;
+        thread::sleep(pause);
+    }
+    Ok(())
+}
+
 /// One step of a scripted attach peer.
 pub enum Step {
     Send(AttachServerMessage),
+    /// Bytes written as they are, frames or not.
+    Raw(Vec<u8>),
+    /// Nothing read or written for this long, as a server that stopped.
+    Hold(Duration),
     /// Wait for the client's next message (it is forwarded to the test as every one is).
     Receive,
 }
@@ -182,6 +216,11 @@ fn play(stream: &Stream, steps: Vec<Step>, sender: &Sender<AttachClientMessage>)
     for step in steps {
         let done = match step {
             Step::Send(message) => write_message(&mut &*stream, &message).is_err(),
+            Step::Raw(bytes) => (&*stream).write_all(&bytes).is_err(),
+            Step::Hold(time) => {
+                thread::sleep(time);
+                false
+            }
             Step::Receive => !matches!(receive(), Ok(true)),
         };
         if done {
@@ -200,10 +239,15 @@ pub struct Server {
     _root: tempfile::TempDir,
     directory: PathBuf,
     thread: Option<JoinHandle<std::io::Result<StopReason>>>,
+    /// An api connection that holds the server until the test lets it stop ([`Server::stopped`]): without it the
+    /// readiness probe would be the server's first client, whose leaving starts the short idle grace, and a test
+    /// thread descheduled for longer would find no server.
+    keepalive: Option<Api>,
 }
 
 impl Server {
-    /// A server that stops 100 ms after its last session ended and its last client left; returned once it listens.
+    /// A server that stops 100 ms after its last session ended and its last client left, once the test lets it
+    /// ([`Server::stopped`]); returned once it answers.
     pub fn start() -> TestResult<Self> {
         let (root, directory) = namespace()?;
         let config = ServerConfig {
@@ -216,16 +260,20 @@ impl Server {
         };
         let serving = directory.clone();
         let thread = thread::spawn(move || server::run(&serving, &config));
-        let endpoint = Endpoint::new(&directory);
+        let client = Client::new(&directory).with_timeout(PATIENCE);
         let deadline = Instant::now() + PATIENCE;
-        while endpoint.connect().is_err() {
-            assert!(Instant::now() < deadline, "the server never listened");
+        let keepalive = loop {
+            if let Ok(Some(api)) = client.api() {
+                break api;
+            }
+            assert!(Instant::now() < deadline, "the server never answered");
             thread::sleep(Duration::from_millis(20));
-        }
+        };
         Ok(Self {
             _root: root,
             directory,
             thread: Some(thread),
+            keepalive: Some(keepalive),
         })
     }
 
@@ -233,8 +281,9 @@ impl Server {
         &self.directory
     }
 
-    /// Wait for the server to stop by itself; why it did.
+    /// Let the server stop by itself and wait for it; why it did.
     pub fn stopped(mut self) -> TestResult<StopReason> {
+        drop(self.keepalive.take());
         let thread = self.thread.take().ok_or("no server thread")?;
         let deadline = Instant::now() + PATIENCE;
         while !thread.is_finished() {

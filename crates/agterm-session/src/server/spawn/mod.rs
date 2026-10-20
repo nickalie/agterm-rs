@@ -368,19 +368,19 @@ fn probe_wait(deadline: Instant, cap: Duration) -> Duration {
         .clamp(MIN_PROBE_WAIT, cap)
 }
 
-/// Sends `hello` and reads the welcome, giving up on a peer silent for `timeout` (a hung server, or another process
-/// holding the endpoint) with an I/O error a stopping server's also gives ([`is_stopping`]): on Unix by the socket's
-/// receive timeout, on Windows, whose pipes take none, by cancelling the exchange (`windows::exchange_within`).
+/// Sends `hello` and reads the welcome, giving up after `timeout` (a hung server, or another process holding the
+/// endpoint) with an I/O error a stopping server's also gives ([`is_stopping`]), as [`exchange_within`] does.
 fn handshake(stream: Stream, hello: &Hello, timeout: Duration) -> Result<(Stream, Welcome), FramingError> {
     let hello = hello.clone();
     exchange_within(stream, timeout, move |stream| exchange_hello(stream, &hello))
 }
 
-/// Runs `exchange` on `stream`, giving up on a peer silent for `timeout` as [`handshake`] does: on Unix by the socket's
-/// send and receive timeouts (cleared again after a completed exchange), on Windows by cancelling the exchange's
-/// pending I/O (`windows::exchange_within`). The stream comes back only from a completed exchange; one that failed or
-/// timed out is dropped, since a frame may be cut in it. The client library's api calls and attach run under it too
-/// (`crate::client`).
+/// Runs `exchange` on `stream` within `timeout`, the whole exchange together however many reads and writes it makes:
+/// on Unix each of them waits only for the time left (the socket's send and receive timeouts, [`Deadlined`], cleared
+/// again after a completed exchange), on Windows, whose pipes take no timeout, the exchange's pending I/O is cancelled
+/// once the time is up (`windows::exchange_within`). The stream comes back only from a completed exchange; one that
+/// failed or timed out is dropped, since a frame may be cut in it. The client library's api calls and attach run under
+/// it too (`crate::client`).
 ///
 /// # Errors
 ///
@@ -388,15 +388,18 @@ fn handshake(stream: Stream, hello: &Hello, timeout: Duration) -> Result<(Stream
 pub(crate) fn exchange_within<T: Send + 'static>(
     stream: Stream,
     timeout: Duration,
-    exchange: impl FnOnce(&mut Stream) -> Result<T, FramingError> + Send + 'static,
+    exchange: impl FnOnce(&mut Exchanging) -> Result<T, FramingError> + Send + 'static,
 ) -> Result<(Stream, T), FramingError> {
     #[cfg(unix)]
     {
         use interprocess::local_socket::traits::Stream as _;
-        let mut stream = stream;
-        super::set_recv_timeout(&stream, Some(timeout));
-        let _ = stream.set_send_timeout(Some(timeout));
-        let value = exchange(&mut stream)?;
+        let mut deadlined = Deadlined {
+            stream,
+            deadline: Instant::now() + timeout,
+            timeout,
+        };
+        let value = exchange(&mut deadlined)?;
+        let Deadlined { stream, .. } = deadlined;
         super::set_recv_timeout(&stream, None);
         let _ = stream.set_send_timeout(None);
         Ok((stream, value))
@@ -407,8 +410,65 @@ pub(crate) fn exchange_within<T: Send + 'static>(
     }
 }
 
+/// What an exchange ([`exchange_within`]) reads and writes: on Unix the stream held to the exchange's deadline, on
+/// Windows the stream itself, whose exchange is cancelled at the deadline.
+#[cfg(unix)]
+pub(crate) type Exchanging = Deadlined;
+#[cfg(windows)]
+pub(crate) type Exchanging = Stream;
+
+/// A Unix stream whose every read and write waits at most for the time left before one deadline, so a peer that
+/// answers slowly, or a byte at a time, cannot stretch an exchange past it.
+#[cfg(unix)]
+#[derive(Debug)]
+pub(crate) struct Deadlined {
+    stream: Stream,
+    deadline: Instant,
+    /// The whole exchange's, for the error.
+    timeout: Duration,
+}
+
+#[cfg(unix)]
+impl Deadlined {
+    /// The time left before the deadline, at least a millisecond (a zero socket timeout would be none); a
+    /// [`io::ErrorKind::TimedOut`] error once it passed.
+    fn left(&self) -> io::Result<Duration> {
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("the peer did not answer within {}s", self.timeout.as_secs_f32()),
+            ));
+        }
+        Ok(left.max(Duration::from_millis(1)))
+    }
+}
+
+#[cfg(unix)]
+impl io::Read for Deadlined {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self.left()?;
+        super::set_recv_timeout(&self.stream, Some(left));
+        self.stream.read(buf)
+    }
+}
+
+#[cfg(unix)]
+impl io::Write for Deadlined {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        use interprocess::local_socket::traits::Stream as _;
+        let left = self.left()?;
+        let _ = self.stream.set_send_timeout(Some(left));
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
+    }
+}
+
 /// Sends `hello` and reads the welcome.
-fn exchange_hello(stream: &mut Stream, hello: &Hello) -> Result<Welcome, FramingError> {
+fn exchange_hello(stream: &mut Exchanging, hello: &Hello) -> Result<Welcome, FramingError> {
     write_control(stream, &Control::Hello(hello.clone()))?;
     let frame = read_frame(stream)?;
     match frame.control()? {
