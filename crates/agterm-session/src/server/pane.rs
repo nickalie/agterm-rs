@@ -242,7 +242,7 @@ struct Core {
     state: Mutex<State>,
     /// Notified when the PTY ends and when the program's end is recorded.
     changed: Condvar,
-    /// The terminal's replies of the write in progress.
+    /// The terminal's replies of the write in progress; filled, taken and truncated only under `state`'s lock.
     replies: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
@@ -305,10 +305,13 @@ impl Core {
         state.revision = state.revision.wrapping_add(1);
         state.prune();
         state.clients.output(offset, bytes);
+        // taken under the pane's lock, so the queue changes only under it ([`Pane::print`] drops its replies by
+        // truncating it)
+        let replies = std::mem::take(&mut *lock(&self.replies));
         drop(state);
         // a snapshot waiting for a cut looks again
         self.changed.notify_all();
-        std::mem::take(&mut *lock(&self.replies))
+        replies
     }
 
     fn pty_ended(&self) {

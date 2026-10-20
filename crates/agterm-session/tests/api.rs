@@ -172,6 +172,27 @@ impl Api {
         }
     }
 
+    /// The active screen of `name` once two reads in a row agree, its revision included: the session wrote nothing
+    /// between them, and reading moved nothing. Fails when they never agree within [`PATIENCE`].
+    fn settled_screen(&mut self, name: &str) -> TestResult<Screen> {
+        let deadline = Instant::now() + PATIENCE;
+        let mut last = self.screen(name, false)?.map_err(|err| err.message)?;
+        loop {
+            thread::sleep(Duration::from_millis(50));
+            let screen = self.screen(name, false)?.map_err(|err| err.message)?;
+            if screen == last {
+                return Ok(screen);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the screen never settled: revision {} then {}",
+                last.revision,
+                screen.revision
+            );
+            last = screen;
+        }
+    }
+
     fn type_text(&mut self, name: &str, text: &str) -> TestResult<Result<ApiResponse, ApiError>> {
         self.call(ApiRequest::Type {
             name: name.to_owned(),
@@ -413,12 +434,8 @@ fn the_screen_comes_from_the_servers_terminal_and_its_revision_moves_only_with_i
     assert!(!screen.alternate);
     assert!(screen.cursor_row < screen.rows && screen.cursor_column < screen.columns);
     assert!(screen.revision > 0);
-    // nothing written, nothing moved: the same screen, the same revision
-    thread::sleep(Duration::from_millis(300));
-    let first = api.screen("screen", false)?.map_err(|err| err.message)?;
-    thread::sleep(Duration::from_millis(300));
-    let again = api.screen("screen", false)?.map_err(|err| err.message)?;
-    assert_eq!(first, again, "a screen nothing changed reads the same");
+    // nothing written, nothing moved: once the shell is quiet, reads give the same screen and the same revision
+    let again = api.settled_screen("screen")?;
 
     // output moves it
     api.type_text("screen", &format!("{}\r", tagged("more")))?

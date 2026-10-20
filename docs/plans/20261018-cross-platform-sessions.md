@@ -932,17 +932,19 @@ Order after Task 7, as two lanes that meet:
       - `Pane::observe` reads the terminal with its revision under the pane's lock; `Pane::revision` moves with every
         PTY read, resize and print (zmx's `screen_revision`). The text is zmx's `serializeScreenText` (plain, wraps
         joined, trimmed; `api::read_screen`). `api::encode_typed` is zmx's `encodeTyped` over the key encoder (each
-        CR a Return press and release); C0 controls and non-UTF-8 bytes, which the encoder takes no text of, go as
-        they are; queued by `Pane::write`, which bypasses the lead. `Pane::print` waits up to the snapshot wait for
-        the parser at ground, then feeds the bytes to the terminal and every client at the next offset, dropping the
-        terminal's replies to them
+        CR a Return press and release); C0 controls, DEL, `U+F700`–`U+F8FF` (icon fonts' glyphs too) and non-UTF-8
+        bytes, which the encoder takes no text of, go as they are; queued by `Pane::write`, which bypasses the
+        lead. `Pane::print` waits up to the snapshot wait for the parser at ground, then feeds the bytes to the
+        terminal and every client at the next offset, dropping the terminal's replies to them (the reply queue
+        changes only under the pane's lock, so a PTY read cannot take them first)
 - [x] tests for each operation's success and error paths: an unknown session, a dead one, a batch with both, and a
       `revision` that moves only when the screen does
       - `tests/api.rs` through an in-process server (all three OSes; the hangup-ignoring kill Unix-only, since
         Windows ends the job), unit tests of the dispatch with a fake process table, of `read_screen` (zmx's own
         case) and `encode_typed` (zmx's legacy and Kitty cases), and of the host conversions in `tests/protocol.rs`.
         `tests/lifecycle.rs`'s refused role is now an unknown one; `tests/attach.rs`'s gone probe takes a stopped
-        server for gone (a macOS runner probed after the idle server had stopped)
+        server for gone (a macOS runner probed after the idle server had stopped), whether the connection is
+        refused, closed, reset or its pipe broken
 - [x] run gates
       - fmt, locked metadata, tracing and vendored-source checks, clippy (workspace with all features, the frontend
         without its default features), the lint report, the workspace tests headless, the selftests; no conformance

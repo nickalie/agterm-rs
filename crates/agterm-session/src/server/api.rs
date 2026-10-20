@@ -312,7 +312,8 @@ fn print(pane: &Pane, name: &str, data: &[u8]) -> Result<(), ApiError> {
 /// The bytes a terminal sends for `typed` as keystrokes rather than a paste (zmx's `encodeTyped`, `src/util.zig` of
 /// its patch `0001-explicit-leadership`): each CR a Return key press and release, every run between them text a key
 /// produced, encoded against `terminal`'s live keyboard mode. The encoder takes no control characters as text
-/// (`key/event.h`), so a C0 control or DEL inside a run, or a byte that is not UTF-8, goes as it is.
+/// (`key/event.h`) and the key wrapper no platform function-key codes (`U+F700`–`U+F8FF`, where icon fonts' glyphs
+/// live too), so a C0 control, DEL or such a character inside a run, or a byte that is not UTF-8, goes as it is.
 ///
 /// # Errors
 ///
@@ -340,8 +341,14 @@ pub fn encode_typed(terminal: &mut vt::Terminal, typed: &[u8]) -> Result<Vec<u8>
     Ok(keys)
 }
 
-/// `text` as the keys that typed it: its runs of printable characters through the encoder, its control characters
-/// as they are.
+/// A character the key encoder takes no text with ([`encode_typed`]): a C0 control, DEL, or a platform function-key
+/// code (`U+F700`–`U+F8FF`).
+fn goes_raw(c: char) -> bool {
+    c.is_ascii_control() || ('\u{f700}'..='\u{f8ff}').contains(&c)
+}
+
+/// `text` as the keys that typed it: its runs of other characters through the encoder, those [`goes_raw`] names as
+/// they are.
 fn encode_text(
     encoder: &mut vt::KeyEncoder,
     terminal: &mut vt::Terminal,
@@ -350,8 +357,8 @@ fn encode_text(
 ) -> Result<(), vt::Error> {
     let mut rest = text;
     while !rest.is_empty() {
-        let printable = rest.find(|c: char| c.is_ascii_control()).unwrap_or(rest.len());
-        let (run, after) = rest.split_at(printable);
+        let encodable = rest.find(goes_raw).unwrap_or(rest.len());
+        let (run, after) = rest.split_at(encodable);
         if !run.is_empty() {
             let typed = vt::KeyEvent {
                 text: run,
@@ -359,9 +366,9 @@ fn encode_text(
             };
             keys.extend(encoder.encode(terminal, &typed)?);
         }
-        let controls = after.find(|c: char| !c.is_ascii_control()).unwrap_or(after.len());
-        keys.extend_from_slice(&after.as_bytes()[..controls]);
-        rest = &after[controls..];
+        let raw = after.find(|c: char| !goes_raw(c)).unwrap_or(after.len());
+        keys.extend_from_slice(&after.as_bytes()[..raw]);
+        rest = &after[raw..];
     }
     Ok(())
 }
@@ -403,6 +410,19 @@ mod tests {
         let keys = encode_typed(&mut terminal, b"a\tb\x1b[A\xffc\r").unwrap();
         assert_eq!(keys, b"a\tb\x1b[A\xffc\r");
         assert_eq!(encode_typed(&mut terminal, b"").unwrap(), b"");
+    }
+
+    #[test]
+    fn an_icon_fonts_private_use_glyph_goes_as_it_is_with_the_text_around_it() {
+        let typed = "echo \u{f71c} done \u{f700}\u{f8ff}x\r";
+        let mut terminal = terminal();
+        let keys = encode_typed(&mut terminal, typed.as_bytes()).unwrap();
+        assert_eq!(keys, typed.as_bytes());
+        // every Kitty keyboard flag: the text around the glyphs is still typed, the Return a key
+        terminal.vt_write(b"\x1b[>31u");
+        let keys = String::from_utf8(encode_typed(&mut terminal, typed.as_bytes()).unwrap()).unwrap();
+        assert!(keys.starts_with("echo \u{f71c} done \u{f700}\u{f8ff}x"), "{keys:?}");
+        assert!(keys.contains("\x1b[13u"), "{keys:?}");
     }
 
     #[test]

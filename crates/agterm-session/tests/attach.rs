@@ -94,17 +94,23 @@ impl Server {
     }
 }
 
-/// `stream` in the attach role, its hello welcomed; `None` when the server closed it first, as a stopping one does.
+/// `stream` in the attach role, its hello welcomed; `None` when the server closed it first, as a stopping one does
+/// (it drops a connection it accepted, or one still in its backlog, unread: the hello's write or the welcome's read
+/// then finds the connection closed, reset or its pipe broken).
 fn welcomed(mut stream: Stream) -> TestResult<Option<Connection>> {
     let hello = Hello {
         role: Role::Attach,
         build: "attach-test".to_owned(),
         capabilities: Vec::new(),
     };
-    write_control(&mut stream, &Control::Hello(hello))?;
+    match write_control(&mut stream, &Control::Hello(hello)) {
+        Ok(()) => {}
+        Err(err) if server_closed(&err) => return Ok(None),
+        Err(err) => return Err(err.into()),
+    }
     let frame = match read_frame(&mut stream) {
         Ok(frame) => frame,
-        Err(FramingError::Closed) => return Ok(None),
+        Err(err) if server_closed(&err) => return Ok(None),
         Err(err) => return Err(err.into()),
     };
     let Control::Welcome(welcome) = frame.control()? else {
@@ -112,6 +118,15 @@ fn welcomed(mut stream: Stream) -> TestResult<Option<Connection>> {
     };
     assert_eq!(welcome.error, None);
     Ok(Some(Connection::new(stream)))
+}
+
+/// Whether `err` means the server closed the connection, as the server's own roles read a vanished client.
+fn server_closed(err: &FramingError) -> bool {
+    match err {
+        FramingError::Closed => true,
+        FramingError::Io(err) => endpoint::is_connection_closed_error(err),
+        _ => false,
+    }
 }
 
 /// The client's end of an attach connection: what the server sends arrives on a channel, read by a thread of its own.
@@ -317,7 +332,12 @@ fn gone(server: &Server, name: &str) -> TestResult<bool> {
     let Some(mut probe) = welcomed(stream)? else {
         return Ok(true);
     };
-    probe.attach(name, None)?;
+    match probe.attach(name, None) {
+        Ok(()) => {}
+        // stopped between its welcome and the attach
+        Err(err) if server_closed(&err) => return Ok(true),
+        Err(err) => return Err(err.into()),
+    }
     Ok(matches!(
         probe.next()?,
         Some(AttachServerMessage::Refused {
