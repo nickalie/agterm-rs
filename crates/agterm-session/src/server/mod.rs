@@ -18,8 +18,9 @@
 //!
 //! [`pane::Pane`] is one live session: its program on a PTY, the terminal its output builds and the clients that
 //! output fans out to over byte-bounded, lossless queues ([`clients`]), with the client that owns its size chosen by
-//! [`lead`], each client starting from a snapshot of the session ([`snapshot`]); [`pane::Panes`] holds the server's
-//! by name. A session counts in the server's lifecycle from its creation until its program ends.
+//! [`lead`], each client starting from a snapshot of the session ([`snapshot`]), its program's queries answered once,
+//! by the server's terminal with the facts of the client that owns the replies ([`replies`]); [`pane::Panes`] holds
+//! the server's by name. A session counts in the server's lifecycle from its creation until its program ends.
 //!
 //! # Connections
 //!
@@ -37,6 +38,7 @@ pub mod clients;
 pub mod lead;
 pub mod lifecycle;
 pub mod pane;
+pub mod replies;
 pub mod snapshot;
 pub mod spawn;
 

@@ -956,18 +956,55 @@ Order after Task 7, as two lanes that meet:
 **Files:**
 - Create: `crates/agterm-session/src/server/replies.rs`, `crates/agterm-session/tests/replies.rs`
 
-- [ ] the server VT answers state and capability queries through libghostty-vt's effects; herdr's
+- [x] the server VT answers state and capability queries through libghostty-vt's effects; herdr's
       `pane/{osc,xtgettcap,kitty_keyboard}.rs` checked against the C API, porting only what the library leaves to the
       embedder
-- [ ] frontend-dependent replies from the reply owner's metadata (theme colours, cell size), with stable defaults
-- [ ] OSC 52 reads as Technical Details says: scan and stop, the output up to that point delivered, a single-recipient
+      - `server::replies::ServerEffects`: Ghostty's DA (as `agterm-term`'s), XTVERSION `ghostty <version>`, the
+        session's `TERM` as `TERMINFO_NAME`, the colour scheme from the owner; nothing of herdr's three modules is
+        ported (the library answers OSC 10/11/12 from its default colours, herdr's C1 XTGETTCAP is unanswered by
+        Ghostty too, the formatter snapshot carries the Kitty keyboard modes; reasons in the module docs)
+- [x] frontend-dependent replies from the reply owner's metadata (theme colours, cell size), with stable defaults
+      - the reply owner is the leader, else the first managed client (`Lead::reply_owner`); its `ReplyMetadata`
+        (`Facts`) goes onto the server VT as default colours, palette and cell pixels, so a program's own OSC
+        overrides stay; its appearance answers `CSI ? 996 n` and a changed one sends the mode-2031 report. Defaults:
+        Ghostty's fg `#ffffff`, bg `#282c34`, cursor unset, the library palette, cell 0x0 px, Light. Wire (agreed
+        with Codex): protocol 2, `ReplyMetadata.color_scheme`, `AttachServerMessage::ReplyOwner { owner,
+        generation }` to every client before its first snapshot and on each change, `AttachClientMessage::Reply
+        { epoch, generation, data }` for the owner's Kitty answers, `DelegatedRequest::ClipboardRead.list_only`,
+        `DelegatedReply::Clipboard.text: Option`
+- [x] OSC 52 reads as Technical Details says: scan and stop, the output up to that point delivered, a single-recipient
       request with a deadline, denied with no owner or on timeout, parsing resumed
-- [ ] Kitty graphics: APC G answered by the reply owner's VT, the server VT's media off
-- [ ] on Windows, record per supported version which queries conhost answers itself and which reach the output pipe
-- [ ] tests: one reply per query with two clients attached and with none; theme colours from metadata and defaults;
+      - the read path runs `vt::Scanner`; the dispatch byte and later output are held in the pane (PTY reads pause
+        past 1 MiB held, resume under 256 KiB) while `ClientEvent::Delegated` goes to the owner in its epoch; its
+        answer (`Pane::answer`, matched by id, client and epoch) or a denial (no owner, the owner changing, the
+        client behind, the program's end, `DELEGATION_WAIT` 30 s) is armed for the dispatch byte, then the held
+        output is rescanned. A helper thread per pane ends due requests and writes replies queued off the PTY
+        thread. Kitty's OSC 5522 reads go the same way (`list_only` for a listing)
+- [x] Kitty graphics: APC G answered by the reply owner's VT, the server VT's media off
+      - the server VT keeps the protocol on (64 MiB storage) so direct images move its cursor as on the owner's
+        screen, media off, its own APC G answers dropped; `Pane::relay` writes the owner's whatever the lead, only
+        in its ownership generation and epoch, and only whole APC G answers
+- [x] on Windows, record per supported version which queries conhost answers itself and which reach the output pipe
+      - recorded on Windows Server 2025 10.0.26100.33438 (the CI runner) by `tests/replies.rs`
+        `windows_conhost_record`, the table in `server::replies`' docs: conhost answers DA1/DA2/DECRQM itself, keeps
+        XTGETTCAP, OSC 10/11/12, OSC 52 reads and APC G, drops OSC answers on the way back; DA3, DSR, CPR, DECRQSS,
+        XTVERSION, Kitty keyboard flags, 996 and XTWINOPS reach the server. Other versions not measured (the
+        workflow has one Windows runner; the test prints the table wherever it runs)
+- [x] tests: one reply per query with two clients attached and with none; theme colours from metadata and defaults;
       an OSC 52 read granted, denied and timed out, with output flowing meanwhile; a `t=t` image shown in an attached
       pane with exactly one acknowledgement
-- [ ] run gates
+      - `tests/replies.rs`, its program a probe (the test binary, raw terminal input, `REPLY-<n>:<hex>` lines):
+        the query and theme tests on every OS (Windows with the queries its conhost passes on), the OSC 52 (granted,
+        refused from another client/epoch/id, denied, timed out, owner change, no owner, 300 KiB written meanwhile)
+        and Kitty (`t=t` read once by the owner, `t=d` moving the server's cursor as the owner's) tests on Unix;
+        `tests/attach.rs` delegates a read over the wire (Unix); unit tests in `replies`, `clients`, `lead`; the
+        existing tests read past `ReplyOwner`; `tests/pane.rs` waits for a whole `started:` line (a half-delivered
+        pid failed on macOS)
+- [x] run gates
+      - fmt, locked metadata, tracing and vendored-source checks, clippy (workspace with all features, the frontend
+        without its default features, `agterm-session` for macOS), the lint report, the workspace tests headless
+        (4411 passed), the selftests (835); no conformance run, as in Tasks 16–19 (no staged binary runs the server
+        yet); `cross-platform.yml` run 39402675262 green on all three (`ci/cps-task-20`, deleted after)
 
 ### Task 21: Update handoff without ending sessions
 

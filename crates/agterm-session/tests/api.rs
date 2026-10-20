@@ -297,6 +297,7 @@ impl Attach {
                 Some(AttachServerMessage::SnapshotEnd { .. }) => return Ok(()),
                 Some(
                     AttachServerMessage::Role { .. }
+                    | AttachServerMessage::ReplyOwner { .. }
                     | AttachServerMessage::SnapshotBegin { .. }
                     | AttachServerMessage::SnapshotChunk { .. },
                 ) => {}

@@ -1,0 +1,901 @@
+//! The session's answers to its program's queries: one answer per query, whichever clients are attached.
+//!
+//! zmx answered nothing itself: every attached client's own terminal did, so two clients meant two answers and none
+//! meant none. Here the server's terminal ([`super::pane`]) answers, through libghostty-vt's effects, so the session
+//! has one identity:
+//!
+//! - **State and capability queries** (DA1/2/3, DSR and CPR, DECRQM, DECRQSS, XTVERSION, XTGETTCAP with the
+//!   session's `TERM` as its terminfo name, Kitty keyboard flags, the glyph protocol's glossary, `CSI 21 t`) come
+//!   from the terminal's state with Ghostty's identity, as `agterm-term` answers a plain pane's ([`ServerEffects`]).
+//! - **Frontend-dependent queries** (OSC 4/10/11/12 and Kitty's OSC 21 colours, XTWINOPS `14 t`/`16 t` pixel sizes,
+//!   mode 2048 reports, `CSI ? 996 n` and mode 2031 reports) come from the reply owner's
+//!   [`ReplyMetadata`], applied to the terminal as its defaults (a program's own OSC overrides stay theirs), and from
+//!   stable defaults ([`Facts`]) while there is no owner or it left a value out. Kitty images placed on the server's
+//!   terminal take the owner's cell size too, so the cursor moves past them as on the owner's screen.
+//! - **Clipboard reads** (OSC 52 `?`, Kitty's OSC 5522 reads) need the owner's clipboard, and maybe its user's
+//!   consent, which the synchronous read callback cannot wait for. The output is scanned as `agterm-term` scans a
+//!   plain pane's ([`vt::Scanner`]): it is fed to the terminal and fanned out to the clients up to the byte that would
+//!   dispatch the read, which is sent to the owner alone as a [`DelegatedRequest`] in its current epoch; the
+//!   dispatch byte and the output after it wait in the pane ([`Replies`]), while the PTY keeps being read (up to
+//!   [`PARK_HIGH`] bytes held, then the actor's reads pause until they drop under [`PARK_LOW`]). The owner's answer,
+//!   or a denial when the owner changes, the owner falls behind or leaves, the program ends or no answer comes within
+//!   [`DELEGATION_WAIT`], is armed for the dispatch byte, which is fed alone, so Ghostty still parses, validates and
+//!   answers the read; then the held output goes on, scanned again. A pane's helper thread ends a request whose time
+//!   is up and writes what was answered off the PTY's thread.
+//! - **Kitty graphics** (APC G): the server's terminal keeps the protocol on, its storage bounded
+//!   ([`KITTY_STORAGE_LIMIT`]), so it places direct images as the clients do (the cursor moves past them, which the
+//!   protocol turned off would not), with its image media off, so a temporary file or shared memory is read once, by a
+//!   client that shows it; its own APC G answers are dropped, and the owner's terminal answers instead
+//!   ([`AttachClientMessage::Reply`](crate::protocol::AttachClientMessage)), only while it owns the replies. Neither
+//!   the formatter snapshot nor, at this pin, the binary snapshot carries images or glyph registrations, so an image
+//!   is not shown again to a client that attaches later.
+//!
+//! # The reply owner
+//!
+//! The leader, else the first managed client attached ([`Lead::reply_owner`](super::lead::Lead::reply_owner)). Every
+//! client is told whether it owns the replies before its first snapshot, then on every change, in order with the
+//! output ([`ClientEvent::ReplyOwner`](super::clients::ClientEvent)), each change counted by a generation; a client's
+//! terminal answers only while it owns them, so no Kitty command is answered twice when the owner changes, though
+//! one answered by the leaving owner after the change is lost. Only the owner's [`ReplyMetadata`] counts, and a
+//! client's is forgotten when it detaches.
+//!
+//! # What herdr's pane answered itself
+//!
+//! Checked against the C API at `LIBGHOSTTY_VT_REV` (herdr's `src/pane/` at `HERDR_REV`, Apache-2.0): nothing of it
+//! is ported. `osc.rs` tracks OSC 10/11/12 queries and sets so herdr can answer default-colour queries from its host
+//! terminal's theme and restore that theme around its own drawing; libghostty-vt answers them from the terminal's
+//! default colours (`stream_terminal.zig` `colorOperation`, `Terminal.colorForXterm`), which carry the owner's theme
+//! here, and nothing draws in a host terminal. Its title, progress and debug trackers serve herdr's agent detection,
+//! and the working directory is the terminal's own (`Terminal::pwd`). `xtgettcap.rs` answers XTGETTCAP sent with an
+//! 8-bit C1 DCS, which Ghostty, the reference, leaves unanswered (its parser reads C1 bytes in the ground state as
+//! UTF-8). `kitty_keyboard.rs` records the keyboard modes only to replay them across herdr's handoff; the formatter
+//! snapshot's extras carry them here.
+//!
+//! # Windows
+//!
+//! The pseudoconsole (conhost) runs a terminal of its own between the program and the server: it answers some
+//! queries itself, passes others on to its output pipe (re-encoded at times), and keeps others; and the answers the
+//! server writes back pass through conhost's input parser, which lets DCS and CSI answers through and drops OSC and
+//! APC ones. Recorded by `tests/replies.rs` `windows_conhost_record` (it prints the table) on Windows Server 2025,
+//! 10.0.26100.33438 (`windows-2025`, the CI runner), the version measured; another version is recorded by running that
+//! test there:
+//!
+//! | query | reaches the server | the program's answer |
+//! |---|---|---|
+//! | DA1, DA2, DECRQM | no | conhost's own: `CSI ? 61;6;7;21;22;23;24;28;32;42 c`, `CSI > 0;10;1 c`, not recognized |
+//! | CPR | yes | one answer, the cursor's row and column |
+//! | DA3, DSR, DECRQSS, XTVERSION, Kitty keyboard flags | yes | the server's |
+//! | `CSI ? 996 n`, XTWINOPS `14 t` and `18 t` | yes | the server's |
+//! | XTGETTCAP | no | none |
+//! | OSC 10, 11, 12 | no | none |
+//! | OSC 4 | yes | none (conhost drops the OSC answer) |
+//! | OSC 52 read | no | none: no clipboard read is delegated |
+//! | Kitty graphics (APC G) | no | none: no image reaches a client |
+//!
+//! So on that version a program in a live pane still gets one answer per query, never two, but conhost's identity
+//! for DA1 and DA2, and no theme colours, clipboard reads or Kitty graphics: the pseudoconsole stands in their way,
+//! as it stands in front of a plain pane's program (`agterm-term` runs it on a pseudoconsole too).
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
+
+use agterm_ghostty_vt as vt;
+use agterm_pty::ReadPause;
+use vt::{ReadCandidate, ReadScope};
+
+use super::clients::ClientId;
+use super::pane::State;
+use crate::protocol::{ColorScheme, DelegatedReply, DelegatedRequest, ReplyMetadata, Rgb};
+
+/// The foreground the server's terminal answers with while no owner gave one: Ghostty's default (`foreground` in its
+/// config), as agterm's.
+pub const DEFAULT_FOREGROUND: Rgb = Rgb {
+    r: 0xff,
+    g: 0xff,
+    b: 0xff,
+};
+/// The background the server's terminal answers with while no owner gave one: Ghostty's default.
+pub const DEFAULT_BACKGROUND: Rgb = Rgb {
+    r: 0x28,
+    g: 0x2c,
+    b: 0x34,
+};
+/// The appearance the server's terminal answers with while no owner gave one, as `agterm-term`'s default.
+pub const DEFAULT_COLOR_SCHEME: ColorScheme = ColorScheme::Light;
+/// How long a delegated request waits for its answer before it is denied (a consent prompt included).
+pub const DELEGATION_WAIT: Duration = Duration::from_secs(30);
+/// The output a pane holds while a request waits before it stops reading the PTY (`agterm-term`'s mailbox mark).
+pub const PARK_HIGH: usize = 1024 * 1024;
+/// The output held under which a paused PTY is read again.
+pub const PARK_LOW: usize = 256 * 1024;
+/// The Kitty image storage of the server's terminal, per screen: it holds the direct images programs place, for
+/// their place in the grid, and nothing else reads them.
+pub const KITTY_STORAGE_LIMIT: u64 = 64 * 1024 * 1024;
+
+/// The introducer of a Kitty graphics answer.
+const KITTY_ANSWER: &[u8] = b"\x1b_G";
+/// The MIME type a clipboard read is served (text only, as `agterm-term` serves it).
+const TEXT: &str = "text/plain";
+
+/// The answer a delegated request got.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answer {
+    /// The clipboard's text; `None` when it holds none.
+    Text(Option<String>),
+    Denied,
+}
+
+impl From<DelegatedReply> for Answer {
+    fn from(reply: DelegatedReply) -> Self {
+        match reply {
+            DelegatedReply::Clipboard { text } => Self::Text(text),
+            DelegatedReply::Denied => Self::Denied,
+        }
+    }
+}
+
+/// What the server's terminal answers frontend-dependent queries with: the owner's [`ReplyMetadata`] over the
+/// stable defaults.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Facts {
+    pub foreground: vt::Rgb,
+    pub background: vt::Rgb,
+    /// `None`: the foreground answers for it (Ghostty's `colorForXterm`).
+    pub cursor: Option<vt::Rgb>,
+    /// `None`: the library's palette.
+    pub palette: Option<Box<[vt::Rgb; 256]>>,
+    pub cell_width_px: u32,
+    pub cell_height_px: u32,
+    pub color_scheme: ColorScheme,
+}
+
+impl Default for Facts {
+    fn default() -> Self {
+        Self::of(None)
+    }
+}
+
+impl Facts {
+    /// `metadata`'s facts, each value it leaves out (or a palette of another length than 256) taken from the stable
+    /// defaults.
+    #[must_use]
+    pub fn of(metadata: Option<&ReplyMetadata>) -> Self {
+        let palette = metadata
+            .and_then(|metadata| <[Rgb; 256]>::try_from(metadata.palette.as_slice()).ok())
+            .map(|palette| Box::new(palette.map(engine)));
+        Self {
+            foreground: engine(metadata.and_then(|m| m.foreground).unwrap_or(DEFAULT_FOREGROUND)),
+            background: engine(metadata.and_then(|m| m.background).unwrap_or(DEFAULT_BACKGROUND)),
+            cursor: metadata.and_then(|m| m.cursor).map(engine),
+            palette,
+            cell_width_px: metadata.map_or(0, |m| m.cell_width_px),
+            cell_height_px: metadata.map_or(0, |m| m.cell_height_px),
+            color_scheme: metadata.and_then(|m| m.color_scheme).unwrap_or(DEFAULT_COLOR_SCHEME),
+        }
+    }
+
+    /// Apply these facts to `terminal`, a grid of `cols` x `rows`, where it holds `old` (`None`: everything).
+    ///
+    /// # Errors
+    ///
+    /// The library refused a value.
+    pub fn apply(
+        &self,
+        terminal: &mut vt::Terminal,
+        old: Option<&Self>,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), vt::Error> {
+        let colors = |facts: &Self| (facts.foreground, facts.background, facts.cursor);
+        if old.is_none_or(|old| colors(old) != colors(self)) {
+            terminal.set_default_colors(Some(self.foreground), Some(self.background), self.cursor)?;
+        }
+        if old.is_none_or(|old| old.palette != self.palette) {
+            terminal.set_default_palette(self.palette.as_deref())?;
+        }
+        let cell = |facts: &Self| (facts.cell_width_px, facts.cell_height_px);
+        if old.map_or(cell(self) != (0, 0), |old| cell(old) != cell(self)) {
+            terminal.resize(cols, rows, self.cell_width_px, self.cell_height_px)?;
+        }
+        Ok(())
+    }
+}
+
+fn engine(rgb: Rgb) -> vt::Rgb {
+    vt::Rgb::new(rgb.r, rgb.g, rgb.b)
+}
+
+fn scheme(scheme: ColorScheme) -> vt::ColorScheme {
+    match scheme {
+        ColorScheme::Light => vt::ColorScheme::Light,
+        ColorScheme::Dark => vt::ColorScheme::Dark,
+    }
+}
+
+/// The device attributes Ghostty reports (`termio/stream_handler.zig`), as `agterm-term` reports them: a VT220
+/// (level 2) with colour text and clipboard access; DA2 `1;10;0`.
+fn device_attributes() -> vt::DeviceAttributes {
+    vt::DeviceAttributes {
+        conformance_level: 62,
+        features: vec![22, 52],
+        device_type: 1,
+        firmware_version: 10,
+        rom_cartridge: 0,
+        unit_id: 0,
+    }
+}
+
+/// An answer armed for the next dispatch byte.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Armed {
+    location: vt::ClipboardLocation,
+    scope: ReadScope,
+    answer: Answer,
+}
+
+/// What the server's terminal's effects share with its pane: the replies they queue for the program, the clipboard
+/// answer armed for a dispatch byte, and the appearance a colour scheme query is answered with.
+#[derive(Debug, Default)]
+pub struct Outlet {
+    replies: Mutex<Vec<Vec<u8>>>,
+    armed: Mutex<Option<Armed>>,
+    dark: AtomicBool,
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl Outlet {
+    /// The replies queued, taken; only under the pane's lock, so they change only under it.
+    pub fn take(&self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut *lock(&self.replies))
+    }
+
+    /// Queue `data` for the program.
+    pub fn push(&self, data: &[u8]) {
+        lock(&self.replies).push(data.to_vec());
+    }
+
+    /// The replies queued.
+    #[must_use]
+    pub fn queued(&self) -> usize {
+        lock(&self.replies).len()
+    }
+
+    /// Drop the replies queued after the first `len`.
+    pub fn truncate(&self, len: usize) {
+        lock(&self.replies).truncate(len);
+    }
+
+    /// The appearance a colour scheme query is answered with from now on.
+    pub fn set_scheme(&self, scheme: ColorScheme) {
+        self.dark.store(scheme == ColorScheme::Dark, Ordering::Release);
+    }
+
+    fn scheme(&self) -> vt::ColorScheme {
+        if self.dark.load(Ordering::Acquire) {
+            vt::ColorScheme::Dark
+        } else {
+            vt::ColorScheme::Light
+        }
+    }
+
+    /// Serve a clipboard read from the answer armed for it: only the read it was armed for (the same clipboard; a
+    /// list-only answer never serves contents), once; with nothing armed (a read the scanner did not see), denied.
+    fn answer(&self, request: &vt::ClipboardReadRequest<'_>) -> vt::ClipboardReadReply {
+        let Some(armed) = lock(&self.armed).take() else {
+            tracing::debug!("a clipboard read without an armed answer was denied");
+            return vt::ClipboardReadReply::Denied;
+        };
+        if armed.location != request.location || (armed.scope == ReadScope::ListOnly && !request.mimes.is_empty()) {
+            tracing::debug!(?armed, "a clipboard read other than the one armed for was denied");
+            return vt::ClipboardReadReply::Denied;
+        }
+        let Answer::Text(text) = armed.answer else {
+            return vt::ClipboardReadReply::Denied;
+        };
+        let contents = match text.as_deref() {
+            Some(text) if request.mimes.contains(&TEXT.as_bytes()) => vec![vt::ClipboardContent {
+                mime: TEXT.to_owned(),
+                data: text.as_bytes().to_vec(),
+            }],
+            _ => Vec::new(),
+        };
+        let available = if request.list && text.is_some() {
+            vec![TEXT.to_owned()]
+        } else {
+            Vec::new()
+        };
+        vt::ClipboardReadReply::Success { contents, available }
+    }
+}
+
+/// The server terminal's effects: its answers go to the program (but its Kitty graphics answers, which the reply
+/// owner's terminal gives), with Ghostty's identity; everything else is the clients' to show.
+#[derive(Debug)]
+pub struct ServerEffects {
+    outlet: Arc<Outlet>,
+    xtversion: String,
+}
+
+impl ServerEffects {
+    #[must_use]
+    pub fn new(outlet: Arc<Outlet>) -> Self {
+        Self {
+            outlet,
+            xtversion: format!("ghostty {}", vt::version()),
+        }
+    }
+}
+
+impl vt::Effects for ServerEffects {
+    fn write_pty(&mut self, data: &[u8]) {
+        // Ghostty writes each Kitty answer alone (`stream_terminal.zig` `apcEnd`)
+        if !data.starts_with(KITTY_ANSWER) {
+            self.outlet.push(data);
+        }
+    }
+
+    fn clipboard_read(&mut self, request: &vt::ClipboardReadRequest<'_>) -> vt::ClipboardReadReply {
+        self.outlet.answer(request)
+    }
+
+    fn device_attributes(&mut self) -> Option<vt::DeviceAttributes> {
+        Some(device_attributes())
+    }
+
+    fn xtversion(&mut self) -> Option<&str> {
+        Some(&self.xtversion)
+    }
+
+    fn color_scheme(&mut self) -> Option<vt::ColorScheme> {
+        Some(self.outlet.scheme())
+    }
+}
+
+/// Whether `data` is one or more whole Kitty graphics answers (`ESC _ G … ESC \`), the only replies a client sends.
+#[must_use]
+pub fn is_kitty_reply(data: &[u8]) -> bool {
+    let mut rest = data;
+    while !rest.is_empty() {
+        let Some(body) = rest.strip_prefix(KITTY_ANSWER) else {
+            return false;
+        };
+        // an APC ends at its first ESC, which must be ST's
+        let Some(end) = body.iter().position(|byte| *byte == 0x1b) else {
+            return false;
+        };
+        if body.get(end + 1) != Some(&b'\\') {
+            return false;
+        }
+        rest = &body[end + 2..];
+    }
+    !data.is_empty()
+}
+
+/// The selection an OSC 52 read names for `location`.
+fn selection(location: vt::ClipboardLocation) -> &'static str {
+    match location {
+        vt::ClipboardLocation::Standard => "c",
+        vt::ClipboardLocation::Selection => "s",
+        vt::ClipboardLocation::Primary => "p",
+    }
+}
+
+/// A clipboard read waiting for its answer.
+#[derive(Debug, Clone)]
+struct Pending {
+    id: u64,
+    /// The client it was sent to.
+    client: ClientId,
+    /// That client's epoch then.
+    epoch: u64,
+    read: ReadCandidate,
+    deadline: Instant,
+    /// The owner changed, or the client fell behind: denied by the helper thread.
+    cancelled: bool,
+}
+
+/// The pane's replies: who owns them, its facts, and the clipboard read waiting for an answer with the output held
+/// behind it.
+#[derive(Debug)]
+pub struct Replies {
+    outlet: Arc<Outlet>,
+    /// Wakes the helper thread; waited on with the pane's lock.
+    timer: Arc<Condvar>,
+    owner: Option<ClientId>,
+    /// The session's reply-ownership changes, wrapping.
+    generation: u32,
+    metadata: HashMap<ClientId, ReplyMetadata>,
+    /// What the terminal answers with now.
+    facts: Facts,
+    scanner: vt::Scanner,
+    /// While a read waits: its dispatch byte, then the output read after it.
+    parked: Vec<u8>,
+    pending: Option<Pending>,
+    next_id: u64,
+    /// The program ended: every read is denied without asking.
+    denied: bool,
+    wait: Duration,
+}
+
+impl Replies {
+    /// The replies of a session whose creator `creator` owns them with `metadata`; the terminal answers with
+    /// [`Replies::facts`].
+    #[must_use]
+    pub fn new(
+        outlet: Arc<Outlet>,
+        timer: Arc<Condvar>,
+        creator: ClientId,
+        metadata: ReplyMetadata,
+        wait: Duration,
+    ) -> Self {
+        let facts = Facts::of(Some(&metadata));
+        outlet.set_scheme(facts.color_scheme);
+        Self {
+            outlet,
+            timer,
+            owner: Some(creator),
+            generation: 1,
+            metadata: HashMap::from([(creator, metadata)]),
+            facts,
+            scanner: vt::Scanner::default(),
+            parked: Vec::new(),
+            pending: None,
+            next_id: 1,
+            denied: false,
+            wait,
+        }
+    }
+
+    #[must_use]
+    pub fn facts(&self) -> &Facts {
+        &self.facts
+    }
+
+    #[must_use]
+    pub fn owner(&self) -> Option<ClientId> {
+        self.owner
+    }
+
+    #[must_use]
+    pub fn generation(&self) -> u32 {
+        self.generation
+    }
+
+    /// The output held behind a waiting read.
+    #[must_use]
+    pub fn parked(&self) -> usize {
+        self.parked.len()
+    }
+
+    /// When the waiting read is to be denied; `None` with none waiting.
+    #[must_use]
+    pub fn deadline(&self) -> Option<Instant> {
+        self.pending.as_ref().map(|pending| pending.deadline)
+    }
+
+    /// Whether the waiting read is to be denied now.
+    #[must_use]
+    pub fn due(&self, now: Instant) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|pending| pending.cancelled || pending.deadline <= now)
+    }
+
+    /// `bytes` were fed to the terminal outside the program's output (a print): the scanner follows them, so it
+    /// stays in step with the terminal's parser; a read among them is not delegated (the terminal finds nothing
+    /// armed for it and denies it, to no program).
+    pub fn observe(&mut self, mut bytes: &[u8]) {
+        while let Some((at, _)) = self.scanner.find(bytes) {
+            bytes = &bytes[at + 1..];
+        }
+    }
+
+    fn cancel(&mut self) {
+        if let Some(pending) = &mut self.pending {
+            pending.cancelled = true;
+            self.timer.notify_all();
+        }
+    }
+}
+
+impl State {
+    /// A read of the PTY: held behind a waiting read, else fed to the terminal and the clients up to the next
+    /// clipboard read, which is delegated. Reads pause while [`PARK_HIGH`] bytes or more are held.
+    pub(super) fn take_output(&mut self, bytes: &[u8], pause: &ReadPause) {
+        if self.replies.pending.is_some() {
+            self.replies.parked.extend_from_slice(bytes);
+        } else {
+            self.pump(bytes);
+        }
+        if self.replies.parked.len() >= PARK_HIGH {
+            pause.pause();
+        }
+    }
+
+    /// Feed `bytes` up to the next clipboard read the owner is to answer, answering the others (denied) at once;
+    /// the dispatch byte of a delegated one and everything after it are held.
+    fn pump(&mut self, mut bytes: &[u8]) {
+        while let Some((at, read)) = self.replies.scanner.find(bytes) {
+            self.feed(&bytes[..at]);
+            let (byte, rest) = (bytes[at], &bytes[at + 1..]);
+            if let Some(answer) = self.delegate(read) {
+                self.dispatch(byte, read, answer);
+                bytes = rest;
+            } else {
+                self.replies.parked.push(byte);
+                self.replies.parked.extend_from_slice(rest);
+                return;
+            }
+        }
+        self.feed(bytes);
+    }
+
+    /// The program's output `chunk` into the terminal and every client.
+    fn feed(&mut self, chunk: &[u8]) {
+        if chunk.is_empty() {
+            return;
+        }
+        self.terminal.vt_write(chunk);
+        self.advance(chunk);
+    }
+
+    /// `chunk`, just written to the terminal, at the next offset for every client; the revision moves.
+    fn advance(&mut self, chunk: &[u8]) {
+        let offset = self.offset;
+        self.offset += chunk.len() as u64;
+        self.revision = self.revision.wrapping_add(1);
+        self.prune();
+        self.clients.output(offset, chunk);
+    }
+
+    /// A read's dispatch byte, fed alone with `answer` armed for it, then disarmed whatever the terminal did.
+    fn dispatch(&mut self, byte: u8, read: ReadCandidate, answer: Answer) {
+        *lock(&self.replies.outlet.armed) = Some(Armed {
+            location: read.location,
+            scope: read.scope,
+            answer,
+        });
+        self.terminal.vt_write(&[byte]);
+        if lock(&self.replies.outlet.armed).take().is_some() {
+            tracing::debug!("a clipboard read candidate was not dispatched; its answer is dropped");
+        }
+        self.advance(&[byte]);
+    }
+
+    /// Send `read` to the reply owner, to wait for its answer (`None`), or the answer it gets at once: denied with no
+    /// owner, an owner that would not get the request before its resync, or once the program ended.
+    fn delegate(&mut self, read: ReadCandidate) -> Option<Answer> {
+        let replies = &mut self.replies;
+        let Some(client) = replies.owner.filter(|_| !replies.denied) else {
+            return Some(Answer::Denied);
+        };
+        let id = replies.next_id;
+        replies.next_id += 1;
+        let request = DelegatedRequest::ClipboardRead {
+            selection: selection(read.location).to_owned(),
+            list_only: read.scope == ReadScope::ListOnly,
+        };
+        let Some(epoch) = self.clients.delegate(client, id, request) else {
+            return Some(Answer::Denied);
+        };
+        self.replies.pending = Some(Pending {
+            id,
+            client,
+            epoch,
+            read,
+            deadline: Instant::now() + self.replies.wait,
+            cancelled: false,
+        });
+        self.replies.timer.notify_all();
+        None
+    }
+
+    /// End the waiting read with `answer`: its dispatch byte goes in with it, then the output held behind it, which
+    /// may stop at the next read. Nothing when none waits.
+    pub(super) fn settle(&mut self, answer: Answer) {
+        let Some(pending) = self.replies.pending.take() else {
+            return;
+        };
+        let parked = std::mem::take(&mut self.replies.parked);
+        if let Some((&byte, rest)) = parked.split_first() {
+            self.dispatch(byte, pending.read, answer);
+            self.pump(rest);
+        }
+        self.replies.timer.notify_all();
+    }
+
+    /// The program ended: the waiting read and every later one are denied without asking, so its last output goes
+    /// through.
+    pub(super) fn deny_from_now(&mut self) {
+        self.replies.denied = true;
+        self.settle(Answer::Denied);
+    }
+
+    /// The answer the client `client` gave to the request `id` in its epoch `epoch`: taken, ending the waiting read,
+    /// only when that read was sent to it in that epoch, still waits, and the client has not fallen behind since.
+    pub(super) fn answer(&mut self, client: ClientId, id: u64, epoch: u64, answer: Answer) -> bool {
+        let waits = self.replies.pending.as_ref().is_some_and(|pending| {
+            pending.id == id && pending.client == client && pending.epoch == epoch && !pending.cancelled
+        });
+        if !waits || self.clients.epoch(client) != Some(epoch) || self.clients.overflowed(client) != Some(false) {
+            return false;
+        }
+        self.settle(answer);
+        true
+    }
+
+    /// Kitty graphics answers the client `client` relayed from its terminal in its epoch `epoch` under the ownership
+    /// report `generation`: queued for the program only while it owns the replies in that generation and that epoch,
+    /// has not fallen behind, and `data` is whole Kitty answers ([`is_kitty_reply`]).
+    pub(super) fn relay(&mut self, client: ClientId, epoch: u64, generation: u32, data: &[u8]) -> bool {
+        let owns = self.replies.owner == Some(client) && self.replies.generation == generation;
+        if !owns
+            || self.clients.epoch(client) != Some(epoch)
+            || self.clients.overflowed(client) != Some(false)
+            || !is_kitty_reply(data)
+        {
+            return false;
+        }
+        self.replies.outlet.push(data);
+        true
+    }
+
+    /// The client `client` fell behind: a read waiting for its answer is denied (by the helper thread), since the
+    /// request went with the output it was not sent.
+    pub(super) fn fell_behind(&mut self, client: ClientId) {
+        if self
+            .replies
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.client == client)
+        {
+            self.replies.cancel();
+        }
+    }
+
+    /// The facts of the client `client` (attached) for the replies; they count while it owns them.
+    pub(super) fn remember(&mut self, client: ClientId, metadata: ReplyMetadata) {
+        if self.lead.role(client).is_none() {
+            return;
+        }
+        self.replies.metadata.insert(client, metadata);
+        self.apply_facts();
+    }
+
+    /// The client `id` just attached: told it does not own the replies, unless it does and was told so.
+    pub(super) fn introduce(&mut self, id: ClientId) {
+        if self.replies.owner != Some(id) {
+            self.clients.reply_owner(id, false, self.replies.generation);
+        }
+    }
+
+    /// After a change of the lead: the reply owner it makes, told (the leaving owner and the new one), its facts
+    /// applied, a waiting read denied (by the helper thread) when the owner changed; the facts of clients gone
+    /// forgotten.
+    pub(super) fn refresh_owner(&mut self) {
+        let lead = &self.lead;
+        self.replies.metadata.retain(|id, _| lead.role(*id).is_some());
+        let owner = self.lead.reply_owner();
+        if owner != self.replies.owner {
+            let generation = self.replies.generation.wrapping_add(1);
+            self.replies.generation = generation;
+            if let Some(old) = self.replies.owner {
+                self.clients.reply_owner(old, false, generation);
+            }
+            if let Some(new) = owner {
+                self.clients.reply_owner(new, true, generation);
+            }
+            self.replies.owner = owner;
+            self.replies.cancel();
+        }
+        self.apply_facts();
+    }
+
+    /// The owner's facts onto the terminal when they changed; a program that asked for colour scheme reports (mode
+    /// 2031) gets one when the appearance changed, as Ghostty's surface sends it.
+    fn apply_facts(&mut self) {
+        let owner = self.replies.owner.and_then(|id| self.replies.metadata.get(&id));
+        let facts = Facts::of(owner);
+        if facts == self.replies.facts {
+            return;
+        }
+        let old = std::mem::replace(&mut self.replies.facts, facts);
+        let facts = &self.replies.facts;
+        if let Err(err) = facts.apply(&mut self.terminal, Some(&old), self.size.cols, self.size.rows) {
+            tracing::warn!(%err, "the reply owner's facts were not all applied to the session's terminal");
+        }
+        if old.color_scheme != facts.color_scheme {
+            self.replies.outlet.set_scheme(facts.color_scheme);
+            if self.terminal.mode(vt::Mode::COLOR_SCHEME_REPORT) {
+                self.replies.outlet.push(scheme(facts.color_scheme).report());
+            }
+        }
+        // what the terminal answered (a mode 2048 report too) is written by whoever lets go of the lock, or by the
+        // helper thread
+        self.replies.timer.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use vt::Effects as _;
+
+    use super::*;
+
+    #[test]
+    fn a_reply_is_whole_kitty_answers_and_nothing_else() {
+        assert!(is_kitty_reply(b"\x1b_Gi=1;OK\x1b\\"));
+        assert!(is_kitty_reply(b"\x1b_Gi=1;OK\x1b\\\x1b_Gi=2;ENOENT:gone\x1b\\"));
+        for refused in [
+            &b""[..],
+            b"\x1b_Gi=1;OK",
+            b"\x1b_Gi=1;OK\x1b",
+            b"\x1b_Gi=1;O\x1bK\x1b\\",
+            b"\x1b_Gi=1;OK\x1b\\typed",
+            b"\x1b]52;c;?\x07",
+            b"\x1b[c",
+            b"\x1b_25a1;s\x1b\\",
+        ] {
+            assert!(!is_kitty_reply(refused), "{refused:?}");
+        }
+    }
+
+    #[test]
+    fn the_facts_are_the_owners_over_the_defaults() {
+        let defaults = Facts::of(None);
+        assert_eq!(defaults, Facts::default());
+        assert_eq!(defaults.foreground, engine(DEFAULT_FOREGROUND));
+        assert_eq!(defaults.background, engine(DEFAULT_BACKGROUND));
+        assert_eq!((defaults.cursor, defaults.palette.is_none()), (None, true));
+        assert_eq!((defaults.cell_width_px, defaults.cell_height_px), (0, 0));
+        assert_eq!(defaults.color_scheme, DEFAULT_COLOR_SCHEME);
+        let red = Rgb { r: 0xff, g: 0, b: 0 };
+        let mut metadata = ReplyMetadata {
+            background: Some(red),
+            palette: vec![red; 255],
+            cell_width_px: 8,
+            cell_height_px: 17,
+            color_scheme: Some(ColorScheme::Dark),
+            ..ReplyMetadata::default()
+        };
+        let facts = Facts::of(Some(&metadata));
+        assert_eq!(facts.foreground, engine(DEFAULT_FOREGROUND), "left out: the default");
+        assert_eq!(facts.background, engine(red));
+        assert!(facts.palette.is_none(), "a palette of 255 entries counts as none");
+        assert_eq!((facts.cell_width_px, facts.cell_height_px), (8, 17));
+        assert_eq!(facts.color_scheme, ColorScheme::Dark);
+        metadata.palette.push(red);
+        assert_eq!(
+            Facts::of(Some(&metadata)).palette.map(|palette| palette[255]),
+            Some(engine(red))
+        );
+    }
+
+    #[test]
+    fn the_terminal_answers_with_the_facts_applied() {
+        let mut terminal = vt::Terminal::new(80, 24).unwrap();
+        let facts = Facts::of(Some(&ReplyMetadata {
+            foreground: Some(Rgb { r: 1, g: 2, b: 3 }),
+            cell_width_px: 9,
+            cell_height_px: 18,
+            ..ReplyMetadata::default()
+        }));
+        facts.apply(&mut terminal, None, 80, 24).unwrap();
+        let colors = terminal.default_colors();
+        assert_eq!(colors.foreground, Some(vt::Rgb::new(1, 2, 3)));
+        assert_eq!(colors.background, Some(engine(DEFAULT_BACKGROUND)));
+        assert_eq!(colors.cursor, None);
+        let outlet = Arc::new(Outlet::default());
+        terminal
+            .set_effects(Box::new(ServerEffects::new(Arc::clone(&outlet))))
+            .unwrap();
+        terminal.vt_write(b"\x1b[14t");
+        assert_eq!(outlet.take(), [b"\x1b[4;432;720t".to_vec()]);
+        // back to the defaults: no pixel size
+        Facts::default().apply(&mut terminal, Some(&facts), 80, 24).unwrap();
+        terminal.vt_write(b"\x1b[14t");
+        assert_eq!(outlet.take(), [b"\x1b[4;0;0t".to_vec()]);
+    }
+
+    #[test]
+    fn the_server_drops_its_own_kitty_answers_and_keeps_the_rest() {
+        let outlet = Arc::new(Outlet::default());
+        let mut effects = ServerEffects::new(Arc::clone(&outlet));
+        effects.write_pty(b"\x1b_Gi=1;OK\x1b\\");
+        effects.write_pty(b"\x1b[?62;22;52c");
+        effects.write_pty(b"\x1b_25a1;s;fmt=\x1b\\");
+        assert_eq!(
+            outlet.take(),
+            [b"\x1b[?62;22;52c".to_vec(), b"\x1b_25a1;s;fmt=\x1b\\".to_vec()]
+        );
+        assert_eq!(effects.device_attributes().map(|da| da.conformance_level), Some(62));
+        assert_eq!(effects.color_scheme(), Some(vt::ColorScheme::Light));
+        outlet.set_scheme(ColorScheme::Dark);
+        assert_eq!(effects.color_scheme(), Some(vt::ColorScheme::Dark));
+        assert!(
+            effects
+                .xtversion()
+                .is_some_and(|version| version.starts_with("ghostty "))
+        );
+    }
+
+    fn read(location: vt::ClipboardLocation, mimes: Vec<&[u8]>, list: bool) -> vt::ClipboardReadRequest<'_> {
+        vt::ClipboardReadRequest {
+            location,
+            mimes,
+            list,
+            name: b"",
+            granted: false,
+        }
+    }
+
+    fn arm(outlet: &Outlet, location: vt::ClipboardLocation, scope: ReadScope, answer: Answer) {
+        *lock(&outlet.armed) = Some(Armed {
+            location,
+            scope,
+            answer,
+        });
+    }
+
+    #[test]
+    fn an_armed_answer_serves_the_read_it_was_armed_for_once() {
+        let outlet = Outlet::default();
+        let standard = vt::ClipboardLocation::Standard;
+        let text = Answer::Text(Some("hi".to_owned()));
+        assert_eq!(
+            outlet.answer(&read(standard, vec![b"text/plain"], false)),
+            vt::ClipboardReadReply::Denied
+        );
+        arm(&outlet, standard, ReadScope::Data, text.clone());
+        let served = vt::ClipboardReadReply::Success {
+            contents: vec![vt::ClipboardContent {
+                mime: TEXT.to_owned(),
+                data: b"hi".to_vec(),
+            }],
+            available: Vec::new(),
+        };
+        assert_eq!(outlet.answer(&read(standard, vec![b"text/plain"], false)), served);
+        assert_eq!(
+            outlet.answer(&read(standard, vec![b"text/plain"], false)),
+            vt::ClipboardReadReply::Denied,
+            "once"
+        );
+        // another clipboard, a list-only answer asked for contents, a denial
+        arm(&outlet, vt::ClipboardLocation::Primary, ReadScope::Data, text.clone());
+        assert_eq!(
+            outlet.answer(&read(standard, vec![b"text/plain"], false)),
+            vt::ClipboardReadReply::Denied
+        );
+        arm(&outlet, standard, ReadScope::ListOnly, text.clone());
+        assert_eq!(
+            outlet.answer(&read(standard, vec![b"text/plain"], true)),
+            vt::ClipboardReadReply::Denied
+        );
+        arm(&outlet, standard, ReadScope::ListOnly, text);
+        let listed = vt::ClipboardReadReply::Success {
+            contents: Vec::new(),
+            available: vec![TEXT.to_owned()],
+        };
+        assert_eq!(outlet.answer(&read(standard, Vec::new(), true)), listed);
+        arm(&outlet, standard, ReadScope::Data, Answer::Denied);
+        assert_eq!(
+            outlet.answer(&read(standard, vec![b"text/plain"], false)),
+            vt::ClipboardReadReply::Denied
+        );
+    }
+
+    #[test]
+    fn a_read_names_its_selection_and_an_answer_its_text() {
+        assert_eq!(selection(vt::ClipboardLocation::Standard), "c");
+        assert_eq!(selection(vt::ClipboardLocation::Selection), "s");
+        assert_eq!(selection(vt::ClipboardLocation::Primary), "p");
+        let text = DelegatedReply::Clipboard { text: None };
+        assert_eq!(Answer::from(text), Answer::Text(None));
+        assert_eq!(Answer::from(DelegatedReply::Denied), Answer::Denied);
+    }
+}

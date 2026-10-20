@@ -233,7 +233,14 @@ fn a_detached_client_leaves_the_others_reading() -> TestResult {
     assert_eq!(pane.clients(), 1);
     type_line(&pane, &tagged("still"))?;
     staying.expect("got:still");
-    // what was queued before the detach (its first, empty snapshot), then nothing
+    // what was queued before the detach (its reply ownership, its first, empty snapshot), then nothing
+    assert_eq!(
+        leaving.subscription.try_recv(),
+        Ok(ClientEvent::ReplyOwner {
+            owner: true,
+            generation: 1
+        })
+    );
     assert!(matches!(
         leaving.subscription.try_recv(),
         Ok(ClientEvent::Snapshot { epoch: 1, .. })
@@ -292,10 +299,13 @@ fn a_stalled_client_blocks_neither_the_pty_nor_the_others() -> TestResult {
     assert_eq!(reading.next, pane.offset());
     assert!(screen(&pane).contains(&flood_end(FLOOD_CHUNKS)));
     // the stalled client's queue dropped what it held (none of it was sent: a snapshot replaces it), it learnt where
-    // its copy stops, and got the session's last snapshot, then the end
+    // its copy stops, and got the session's last snapshot, then the end (its reply ownership, which an overflow keeps,
+    // aside)
     let mut events = Vec::new();
     while let Ok(event) = stalled.subscription.try_recv() {
-        events.push(event);
+        if !matches!(event, ClientEvent::ReplyOwner { .. }) {
+            events.push(event);
+        }
     }
     let [
         ClientEvent::Overflowed { offset: 0 },
@@ -314,7 +324,7 @@ fn killing_ends_the_program_and_its_tree() -> TestResult {
     let dir = tempfile::tempdir()?;
     let (pane, creator) = Pane::spawn(config("kill", dir.path(), tree()))?;
     let mut client = Client::new(creator);
-    client.expect("started:");
+    client.expect_line("started:");
     let descendant = descendant(&client.text())?;
     // whether the end came within the grace is a race with the runner's load: the end itself is what is asserted
     pane.kill(false)?;
@@ -357,7 +367,7 @@ fn a_forced_kill_ends_a_descendant_that_ignores_the_hangup() -> TestResult {
         let dir = tempfile::tempdir()?;
         let (pane, creator) = Pane::spawn(config("stubborn-tree", dir.path(), stubborn_tree(holds_pty)))?;
         let mut client = Client::new(creator);
-        client.expect("started:");
+        client.expect_line("started:");
         let descendant = descendant(&client.text())?;
         pane.kill(true)?;
         client.finish();
@@ -373,7 +383,7 @@ fn dropping_a_pane_ends_a_descendant_that_ignores_the_hangup() -> TestResult {
         let dir = tempfile::tempdir()?;
         let (pane, creator) = Pane::spawn(config("dropped-tree", dir.path(), stubborn_tree(holds_pty)))?;
         let mut client = Client::new(creator);
-        client.expect("started:");
+        client.expect_line("started:");
         let descendant = descendant(&client.text())?;
         drop(pane);
         client.finish();
@@ -409,7 +419,7 @@ fn a_forced_kill_ends_a_job_in_a_group_of_its_own() -> TestResult {
     let dir = tempfile::tempdir()?;
     let (pane, creator) = Pane::spawn(config("job-control", dir.path(), job_controlling_shell()))?;
     let mut client = Client::new(creator);
-    client.expect("started:");
+    client.expect_line("started:");
     let job = descendant(&client.text())?;
     assert_own_group(pane.pid(), job)?;
     pane.kill(true)?;
@@ -424,7 +434,7 @@ fn dropping_a_pane_ends_a_job_in_a_group_of_its_own() -> TestResult {
     let dir = tempfile::tempdir()?;
     let (pane, creator) = Pane::spawn(config("job-control-dropped", dir.path(), job_controlling_shell()))?;
     let mut client = Client::new(creator);
-    client.expect("started:");
+    client.expect_line("started:");
     let job = descendant(&client.text())?;
     assert_own_group(pane.pid(), job)?;
     drop(pane);
@@ -496,7 +506,7 @@ fn a_forced_kill_hangs_up_a_job_in_a_group_of_its_own() -> TestResult {
     let spec = script(&format!("perl '{}' '{}' & wait", recorder.display(), record.display()));
     let (pane, creator) = Pane::spawn(config("job-hangup", dir.path(), spec))?;
     let mut client = Client::new(creator);
-    client.expect("started:");
+    client.expect_line("started:");
     let (ends, stays) = two_jobs(&client.text())?;
     assert_own_group(pane.pid(), ends)?;
     assert_own_group(pane.pid(), stays)?;
@@ -548,7 +558,7 @@ fn dropping_a_pane_ends_its_program() -> TestResult {
     let dir = tempfile::tempdir()?;
     let (pane, creator) = Pane::spawn(config("dropped", dir.path(), tree()))?;
     let mut client = Client::new(creator);
-    client.expect("started:");
+    client.expect_line("started:");
     let descendant = descendant(&client.text())?;
     drop(pane);
     client.finish();

@@ -16,7 +16,8 @@
 //!
 //! - each snapshot as `SnapshotBegin { epoch, offset, size }`, chunks of at most [`snapshot::CHUNK_SIZE`] bytes and
 //!   `SnapshotEnd`;
-//! - the output, size changes and role changes as they come, the output contiguous from the snapshot's offset;
+//! - the output, size changes, role and reply-ownership changes and the requests delegated to it as they come, the
+//!   output contiguous from the snapshot's offset;
 //! - on an overflow, the client's resync ([`Pane::resync`]): a new snapshot under the next epoch. A client past its
 //!   resync budget, or one no snapshot could be cut for in time, is detached and its connection closed. One that
 //!   overflowed when the session ends is sent the session's last snapshot instead, ahead of its exit;
@@ -24,9 +25,9 @@
 //!   reads all that came before, the exit, then the connection's end, however late it reads them (on Windows the
 //!   writer waits for that until the client closes or detaches).
 //!
-//! Meanwhile the connection's own thread reads the client's input, resizes, reply metadata and delegated replies
-//! (one of an epoch the client has left is dropped, [`Pane::accepts_reply`]), until it detaches or the connection
-//! ends; either detaches it and closes the connection.
+//! Meanwhile the connection's own thread reads the client's input, resizes, reply metadata, delegated answers
+//! ([`Pane::answer`]) and its terminal's Kitty answers ([`Pane::relay`]), until it detaches or the connection ends;
+//! either detaches it and closes the connection.
 
 use std::sync::Arc;
 use std::thread;
@@ -109,7 +110,7 @@ pub(super) fn serve(stream: Stream, shared: &Arc<Shared>) -> Result<(), FramingE
 fn open(shared: &Arc<Shared>, request: &AttachRequest) -> Result<(Arc<Pane>, Attached), Refusal> {
     for _ in 0..OPEN_ATTEMPTS {
         if let Some(pane) = shared.panes.get(&request.name) {
-            match pane.try_attach(request.size, request.managed.as_ref()) {
+            match pane.attach_with(request.size, request.managed.as_ref(), request.metadata.clone()) {
                 Ok(attached) => return Ok((pane, attached)),
                 // ended meanwhile: as if it did not exist
                 Err(AttachError::Ended) => {}
@@ -129,6 +130,7 @@ fn open(shared: &Arc<Shared>, request: &AttachRequest) -> Result<(Arc<Pane>, Att
         }
         let mut config = PaneConfig::new(&request.name, &shared.namespace, spec.clone(), request.size);
         config.managed.clone_from(&request.managed);
+        config.metadata.clone_from(&request.metadata);
         config.client_queue_limit = shared.client_queue_limit;
         config.resync_budget = shared.resync_budget;
         match shared.panes.spawn(config) {
@@ -171,12 +173,28 @@ fn read_messages(stream: &Stream, pane: &Pane, id: u64) -> Result<(), FramingErr
                 }
             }
             AttachClientMessage::Resize { size } => pane.resize_client(id, size),
-            // the replies the server gives on the client's behalf (Task 20) read these
-            AttachClientMessage::Metadata(_) => {}
-            AttachClientMessage::DelegatedReply { id: request, epoch, .. } => {
-                // no request is delegated yet, so nothing waits for one; one of a superseded epoch never counts
-                let current = pane.accepts_reply(id, epoch);
-                tracing::debug!(request, epoch, current, "a delegated reply was dropped");
+            AttachClientMessage::Metadata(metadata) => pane.set_metadata(id, metadata),
+            AttachClientMessage::DelegatedReply {
+                id: request,
+                epoch,
+                reply,
+            } => {
+                if !pane.answer(id, request, epoch, reply) {
+                    tracing::debug!(request, epoch, "a delegated reply nothing waits for was dropped");
+                }
+            }
+            AttachClientMessage::Reply {
+                epoch,
+                generation,
+                data,
+            } => {
+                if !pane.relay(id, epoch, generation, &data) {
+                    tracing::debug!(
+                        epoch,
+                        generation,
+                        "a reply of a client not owning the replies was dropped"
+                    );
+                }
             }
             AttachClientMessage::Detach => return Ok(()),
             // one attach per connection
@@ -253,6 +271,12 @@ fn send_event(stream: &Stream, event: ClientEvent) -> Result<(), FramingError> {
         ClientEvent::Output { offset, data } => send(stream, &AttachServerMessage::Output { offset, data }),
         ClientEvent::Resized { offset, size } => send(stream, &AttachServerMessage::Resized { offset, size }),
         ClientEvent::Role { role, generation } => send(stream, &AttachServerMessage::Role { role, generation }),
+        ClientEvent::ReplyOwner { owner, generation } => {
+            send(stream, &AttachServerMessage::ReplyOwner { owner, generation })
+        }
+        ClientEvent::Delegated { id, epoch, request } => {
+            send(stream, &AttachServerMessage::DelegatedRequest { id, epoch, request })
+        }
         // handled by the writer itself
         ClientEvent::Overflowed { .. } | ClientEvent::Exit(_) => Ok(()),
     }

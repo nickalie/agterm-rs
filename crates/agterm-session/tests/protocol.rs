@@ -9,7 +9,7 @@ use std::io::{self, Read};
 
 use agterm_session::protocol::{
     ApiCall, ApiError, ApiErrorKind, ApiReply, ApiRequest, ApiResponse, AttachClientMessage, AttachRefusal,
-    AttachRequest, AttachServerMessage, CAPABILITY_HANDOFF_REQUEST, Control, ControlError, DelegatedReply,
+    AttachRequest, AttachServerMessage, CAPABILITY_HANDOFF_REQUEST, ColorScheme, Control, ControlError, DelegatedReply,
     DelegatedRequest, ErrorCode, ExitStatus, Frame, FrameKind, FramingError, GridSize, HEADER_LEN, HandoffRequest,
     HandoffResult, Hello, JobProcess, KillOutcome, KillResult, LeadRole, MAGIC, MAX_CONTROL_SIZE, MAX_FRAME_SIZE,
     MAX_MESSAGE_SIZE, Managed, PROTOCOL_VERSION, ReplyMetadata, Rgb, Role, Screen, SessionRecord, SessionSpec, Welcome,
@@ -97,6 +97,7 @@ fn metadata() -> ReplyMetadata {
         cell_width_px: 9,
         cell_height_px: 19,
         kitty_graphics: true,
+        color_scheme: Some(ColorScheme::Dark),
     }
 }
 
@@ -227,7 +228,19 @@ fn every_attach_client_message_round_trips() {
         AttachClientMessage::DelegatedReply {
             id: 3,
             epoch: 2,
-            reply: DelegatedReply::Clipboard { text: "copied".into() },
+            reply: DelegatedReply::Clipboard {
+                text: Some("copied".into()),
+            },
+        },
+        AttachClientMessage::DelegatedReply {
+            id: 5,
+            epoch: 2,
+            reply: DelegatedReply::Clipboard { text: None },
+        },
+        AttachClientMessage::Reply {
+            epoch: 3,
+            generation: u32::MAX,
+            data: b"\x1b_Gi=1;OK\x1b\\".to_vec(),
         },
         AttachClientMessage::DelegatedReply {
             id: 4,
@@ -261,11 +274,6 @@ fn every_attach_server_message_round_trips() {
         AttachServerMessage::Resized {
             offset: 5000,
             size: GridSize { cols: 80, rows: 24 },
-        },
-        AttachServerMessage::DelegatedRequest {
-            id: 3,
-            epoch: 2,
-            request: DelegatedRequest::ClipboardRead { selection: "c".into() },
         },
         AttachServerMessage::Exit {
             status: ExitStatus::Exited { code: 0, signal: None },
@@ -302,6 +310,27 @@ fn every_attach_server_message_round_trips() {
             reason,
             message: "no".into(),
         });
+    }
+    for message in &messages {
+        roundtrip_message(message).unwrap();
+    }
+}
+
+#[test]
+fn every_reply_message_round_trips() {
+    let mut messages = Vec::new();
+    for (id, selection, list_only) in [(3, "c", false), (4, "s", false), (5, "p", true)] {
+        messages.push(AttachServerMessage::DelegatedRequest {
+            id,
+            epoch: id - 1,
+            request: DelegatedRequest::ClipboardRead {
+                selection: selection.into(),
+                list_only,
+            },
+        });
+    }
+    for (owner, generation) in [(true, 7), (false, 0), (true, u32::MAX)] {
+        messages.push(AttachServerMessage::ReplyOwner { owner, generation });
     }
     for message in &messages {
         roundtrip_message(message).unwrap();
@@ -745,7 +774,7 @@ fn every_message_that_can_outgrow_a_frame_travels_whole() {
         id: 5,
         epoch: 2,
         reply: DelegatedReply::Clipboard {
-            text: "clipboard ".repeat(MAX_FRAME_SIZE / 4),
+            text: Some("clipboard ".repeat(MAX_FRAME_SIZE / 4)),
         },
     })
     .unwrap();

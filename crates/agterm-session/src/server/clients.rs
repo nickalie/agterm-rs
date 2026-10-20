@@ -26,14 +26,16 @@
 //! the same order, each output contiguous with the one before it (`offset` plus the length of `data` is the next
 //! offset), until its queue overflows or the session ends; a snapshot's offset is where the output after it starts. A
 //! managed client's [`ClientEvent::Role`] reports ([`super::lead`]) sit in that order too, its first before anything
-//! else it is sent, and outlast an overflow. [`ClientEvent::Exit`] is always queued, after all output, and is the last
-//! event of a session.
+//! else it is sent, and outlast an overflow; so do every client's [`ClientEvent::ReplyOwner`] reports
+//! ([`super::replies`]), its first right after its first role report. A [`ClientEvent::Delegated`] request goes to one
+//! client in its current epoch, after the output it concerns, and an overflow drops it with that output.
+//! [`ClientEvent::Exit`] is always queued, after all output, and is the last event of a session.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use crate::protocol::{ExitStatus, GridSize, LeadRole};
+use crate::protocol::{DelegatedRequest, ExitStatus, GridSize, LeadRole};
 
 /// The output bytes a client's queue holds before it overflows.
 pub const DEFAULT_QUEUE_LIMIT: usize = 8 * 1024 * 1024;
@@ -87,9 +89,18 @@ pub enum ClientEvent {
     /// The client's role at the session changed (sent to a managed client only); `generation` counts the session's
     /// leadership changes.
     Role { role: LeadRole, generation: u32 },
-    /// The client's queue was full: the output, size changes and unsent snapshot it held were dropped, output from
-    /// `offset` on was not queued, and nothing but role changes, the session's last snapshot and its exit is queued
-    /// after this until the client is resynced (`Pane::resync`).
+    /// Whether the client owns the session's replies from here on ([`super::replies`]); `generation` counts the
+    /// session's ownership changes. Sent to every client, its first before its first snapshot.
+    ReplyOwner { owner: bool, generation: u32 },
+    /// A request the client, as the reply owner, is to answer in its epoch `epoch` ([`super::replies`]).
+    Delegated {
+        id: u64,
+        epoch: u64,
+        request: DelegatedRequest,
+    },
+    /// The client's queue was full: the output, size changes, delegated requests and unsent snapshot it held were
+    /// dropped, output from `offset` on was not queued, and nothing but role and reply-ownership changes, the
+    /// session's last snapshot and its exit is queued after this until the client is resynced (`Pane::resync`).
     Overflowed { offset: u64 },
     /// The session's program ended; the last event.
     Exit(ExitStatus),
@@ -174,7 +185,11 @@ impl Queue {
                 stops = stops.min(*offset);
                 false
             }
-            ClientEvent::Role { .. } | ClientEvent::Overflowed { .. } | ClientEvent::Exit(_) => true,
+            ClientEvent::Delegated { .. } => false,
+            ClientEvent::Role { .. }
+            | ClientEvent::ReplyOwner { .. }
+            | ClientEvent::Overflowed { .. }
+            | ClientEvent::Exit(_) => true,
         });
         self.bytes = 0;
         self.overflowed = true;
@@ -225,6 +240,27 @@ impl Queue {
         if !self.closed {
             self.events.push_back(ClientEvent::Role { role, generation });
         }
+    }
+
+    /// Kept past an overflow, as a role is.
+    fn push_reply_owner(&mut self, owner: bool, generation: u32) {
+        if !self.closed {
+            self.events.push_back(ClientEvent::ReplyOwner { owner, generation });
+        }
+    }
+
+    /// Queue a delegated request in the client's current epoch; that epoch, `None` (nothing queued) once the queue
+    /// overflowed or closed.
+    fn push_delegated(&mut self, id: u64, request: DelegatedRequest) -> Option<u64> {
+        if self.closed || self.overflowed {
+            return None;
+        }
+        self.events.push_back(ClientEvent::Delegated {
+            id,
+            epoch: self.epoch,
+            request,
+        });
+        Some(self.epoch)
     }
 
     fn push_exit(&mut self, status: ExitStatus) {
@@ -423,6 +459,24 @@ impl Clients {
         };
         slot.with(|queue| queue.push_role(role, generation));
         true
+    }
+
+    /// Queue whether the client `id` owns the replies; whether it is attached.
+    pub fn reply_owner(&mut self, id: ClientId, owner: bool, generation: u32) -> bool {
+        let Some(slot) = self.slot(id) else {
+            return false;
+        };
+        slot.with(|queue| queue.push_reply_owner(owner, generation));
+        true
+    }
+
+    /// Queue the delegated request `id` for the client `client` in its current epoch; that epoch, `None` when it is
+    /// not attached or its queue overflowed (it would not get the request before its resync).
+    pub fn delegate(&mut self, client: ClientId, id: u64, request: DelegatedRequest) -> Option<u64> {
+        let slot = self.slot(client)?;
+        let mut epoch = None;
+        slot.with(|queue| epoch = queue.push_delegated(id, request));
+        epoch
     }
 
     fn slot(&self, id: ClientId) -> Option<&Arc<Slot>> {
@@ -730,6 +784,40 @@ mod tests {
             !clients.role(1, LeadRole::Unowned, 3),
             "no client is left after the exit"
         );
+    }
+
+    #[test]
+    fn reply_ownership_outlasts_an_overflow_and_a_delegated_request_does_not() {
+        let mut clients = Clients::new(4);
+        let owner = clients.attach(1);
+        let request = DelegatedRequest::ClipboardRead {
+            selection: "c".to_owned(),
+            list_only: false,
+        };
+        assert!(clients.reply_owner(1, true, 3));
+        assert_eq!(clients.snapshot(1, 0, SIZE, Vec::new()), Some(1));
+        assert_eq!(clients.delegate(1, 7, request.clone()), Some(1), "asked in its epoch");
+        assert_eq!(clients.delegate(2, 8, request.clone()), None, "no such client");
+        clients.output(0, b"abc");
+        clients.output(3, b"de");
+        assert_eq!(
+            clients.delegate(1, 9, request.clone()),
+            None,
+            "behind: it would not get it"
+        );
+        assert_eq!(
+            drain(&owner),
+            [
+                ClientEvent::ReplyOwner {
+                    owner: true,
+                    generation: 3
+                },
+                ClientEvent::Overflowed { offset: 0 },
+            ]
+        );
+        assert_eq!(clients.snapshot(1, 5, SIZE, Vec::new()), Some(2));
+        assert_eq!(clients.delegate(1, 10, request), Some(2), "asked in its new epoch");
+        assert!(!clients.reply_owner(2, false, 4));
     }
 
     #[test]

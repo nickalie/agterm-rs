@@ -138,6 +138,8 @@ struct Connection {
     paused: Arc<(Mutex<bool>, Condvar)>,
     /// The output text received.
     output: Vec<u8>,
+    /// The reply-ownership reports received: owner, generation.
+    owners: Vec<(bool, u32)>,
 }
 
 impl Drop for Connection {
@@ -180,6 +182,7 @@ impl Connection {
             reader: Some(reader),
             paused,
             output: Vec::new(),
+            owners: Vec::new(),
         }
     }
 
@@ -211,9 +214,14 @@ impl Connection {
         })
     }
 
-    /// The next message; `None` once the server closed the connection.
+    /// The next message but the reply-ownership reports (kept in `owners`); `None` once the server closed the
+    /// connection.
     fn next(&mut self) -> TestResult<Option<AttachServerMessage>> {
         match self.messages.recv_timeout(PATIENCE) {
+            Ok(AttachServerMessage::ReplyOwner { owner, generation }) => {
+                self.owners.push((owner, generation));
+                self.next()
+            }
             Ok(message) => {
                 if let AttachServerMessage::Output { data, .. } = &message {
                     self.output.extend_from_slice(data);
@@ -556,6 +564,57 @@ fn a_client_past_its_resync_budget_is_disconnected() -> TestResult {
     quit(&next)?;
     next.finish()?;
     drop(next);
+    assert_eq!(server.stopped()?, StopReason::Idle);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_clipboard_read_is_delegated_over_the_connection_and_answered_back() -> TestResult {
+    use agterm_session::protocol::{DelegatedReply, DelegatedRequest};
+
+    let server = Server::start()?;
+    let mut owner = server.connect()?;
+    // the program reads the clipboard and prints the answer's 12 bytes, hex
+    let program = "stty raw -echo; printf 'go\\r\\n\\033]52;c;?\\007'; \
+                   printf 'got:%s\\r\\n' \"$(head -c 12 | od -An -tx1 | tr -d ' \\n')\"; stty sane";
+    owner.attach("delegate", Some(support::script(program)))?;
+    let (epoch, _, _) = owner.snapshot()?;
+    assert_eq!(owner.owners, [(true, 1)], "the creator owns the replies");
+    let (id, request_epoch) = loop {
+        match owner.next()? {
+            Some(AttachServerMessage::DelegatedRequest { id, epoch, request }) => {
+                let selection = "c".to_owned();
+                assert_eq!(
+                    request,
+                    DelegatedRequest::ClipboardRead {
+                        selection,
+                        list_only: false
+                    }
+                );
+                break (id, epoch);
+            }
+            Some(AttachServerMessage::Output { .. }) => {}
+            other => return Err(format!("no delegated read before {other:?}").into()),
+        }
+    };
+    assert_eq!(request_epoch, epoch);
+    assert!(
+        shown(&owner.output).contains("go"),
+        "the output before the read came first"
+    );
+    owner.send(&AttachClientMessage::DelegatedReply {
+        id,
+        epoch,
+        reply: DelegatedReply::Clipboard {
+            text: Some("hi".to_owned()),
+        },
+    })?;
+    // `ESC ] 5 2 ; c ; aGk= BEL`
+    owner.expect("got:1b5d35323b633b61476b3d07")?;
+    owner.finish()?;
+    owner.closed()?;
+    drop(owner);
     assert_eq!(server.stopped()?, StopReason::Idle);
     Ok(())
 }

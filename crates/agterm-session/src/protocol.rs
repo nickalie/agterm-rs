@@ -65,8 +65,10 @@ use serde::{Deserialize, Serialize};
 /// The first four bytes of every frame.
 pub const MAGIC: [u8; 4] = *b"AGLS";
 
-/// The protocol of this build's message frames. Bumped whenever a message type's postcard layout changes.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// The protocol of this build's message frames. Bumped whenever a message type's postcard layout changes (2: the reply
+/// owner's [`AttachClientMessage::Reply`] and [`AttachServerMessage::ReplyOwner`], the colour scheme in
+/// [`ReplyMetadata`], the list-only clipboard read).
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// The size of a frame's header: magic, protocol, kind, length.
 pub const HEADER_LEN: usize = 16;
@@ -943,10 +945,19 @@ pub enum AttachClientMessage {
     Input { data: Vec<u8> },
     /// The client's grid changed; applied only while the client leads.
     Resize { size: GridSize },
-    /// The client's facts for the replies the server gives on its behalf changed.
+    /// The client's facts for the replies the server gives on its behalf changed (they replace the earlier ones
+    /// whole); the server answers with the reply owner's.
     Metadata(ReplyMetadata),
-    /// The answer to a [`AttachServerMessage::DelegatedRequest`]; dropped when its epoch is superseded.
+    /// The answer to the [`AttachServerMessage::DelegatedRequest`] `id` the client was sent in its epoch `epoch`;
+    /// dropped unless that request still waits for this client's answer and `epoch` is still its current one.
     DelegatedReply { id: u64, epoch: u64, reply: DelegatedReply },
+    /// What the client's terminal answered the program with to Kitty graphics commands (APC G: whole
+    /// `ESC _ G … ESC \` answers, nothing else), sent only while the client owns the replies (the last
+    /// [`AttachServerMessage::ReplyOwner`] it read said so) and never for a snapshot's bytes; `epoch` is its current
+    /// epoch and `generation` that report's. Written to the program whatever the lead, after the replies queued before
+    /// it; dropped unless the client still owns the replies in that generation and that epoch. A client's terminal
+    /// answers nothing else: the server answers every other query itself.
+    Reply { epoch: u64, generation: u32, data: Vec<u8> },
     /// Leave the session running and close the connection.
     Detach,
 }
@@ -998,20 +1009,33 @@ pub struct Rgb {
     pub b: u8,
 }
 
-/// What the server needs from the reply owner to answer frontend-dependent queries (OSC 4/10/11/12, XTWINOPS pixel
-/// sizes, Kitty graphics queries).
+/// What the server needs from the reply owner to answer frontend-dependent queries itself: the theme's colours (OSC
+/// 4/10/11/12, Kitty's OSC 21), the cell's pixel size (XTWINOPS `14 t`/`16 t`, mode 2048, the cells a Kitty image
+/// covers) and the desktop's appearance (`CSI ? 996 n`, mode 2031). A value left out takes the server's stable
+/// default (`server::replies`), never another client's.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReplyMetadata {
     pub foreground: Option<Rgb>,
     pub background: Option<Rgb>,
+    /// `None`: the foreground's colour answers for it, as Ghostty answers OSC 12 without a cursor colour.
     pub cursor: Option<Rgb>,
-    /// Empty for the defaults, else the 256 palette entries.
+    /// Empty for the library's palette, else exactly the 256 entries (any other length counts as empty).
     pub palette: Vec<Rgb>,
     /// Zero when unknown.
     pub cell_width_px: u32,
     /// Zero when unknown.
     pub cell_height_px: u32,
+    /// Whether the client's terminal shows Kitty graphics.
     pub kitty_graphics: bool,
+    /// The desktop's appearance; `None` when unknown.
+    pub color_scheme: Option<ColorScheme>,
+}
+
+/// The desktop's light or dark appearance, as a colour scheme query (`CSI ? 996 n`) and report (mode 2031) tell it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColorScheme {
+    Light,
+    Dark,
 }
 
 /// To an attached client.
@@ -1030,7 +1054,14 @@ pub enum AttachServerMessage {
     Resized { offset: u64, size: GridSize },
     /// The client's role changed; `generation` counts the session's leadership changes.
     Role { role: LeadRole, generation: u32 },
-    /// A request only the reply owner can answer.
+    /// Whether the client owns the session's replies from here on in the stream (its terminal answers Kitty graphics
+    /// commands, [`AttachClientMessage::Reply`]; no other client's terminal answers anything). The owner is the leader,
+    /// else the first managed client attached. Sent to every client before its first snapshot (after its role), then
+    /// whenever its ownership changes; `generation` counts the session's ownership changes.
+    ReplyOwner { owner: bool, generation: u32 },
+    /// A request only the reply owner can answer, sent to it alone, in order with the output: the output up to the
+    /// program's request came before it, the output after it waits for the answer, or for the request's end (denied
+    /// when the owner changes, the client falls behind or leaves, or no answer comes within the server's deadline).
     DelegatedRequest {
         id: u64,
         epoch: u64,
@@ -1055,13 +1086,17 @@ pub enum LeadRole {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DelegatedRequest {
-    /// An OSC 52 read of `selection`.
-    ClipboardRead { selection: String },
+    /// A program's clipboard read (OSC 52, or Kitty's OSC 5522) of `selection`: `c` the clipboard, `s` the selection
+    /// clipboard, `p` the primary selection. `list_only`: it asks only which types the clipboard holds (Kitty's `.`
+    /// target), which needs no consent; the program is never served the contents for it.
+    ClipboardRead { selection: String, list_only: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DelegatedReply {
-    Clipboard { text: String },
+    /// The clipboard's text; `None` when it holds none (the program reads an empty clipboard).
+    Clipboard { text: Option<String> },
+    /// Refused by policy or by the user: the program reads an empty clipboard (OSC 52) or `EPERM` (OSC 5522).
     Denied,
 }
 

@@ -101,7 +101,10 @@ pub struct Client {
     pub next: u64,
     /// The output received, snapshots left out.
     pub output: Vec<u8>,
+    /// The events received but the reply-ownership reports, which are in `owners`.
     pub events: Vec<ClientEvent>,
+    /// The reply-ownership reports received: owner, generation.
+    pub owners: Vec<(bool, u32)>,
     pub exit: Option<ExitStatus>,
     /// The epoch of the last snapshot received.
     pub epoch: u64,
@@ -116,6 +119,7 @@ impl Client {
             next: attached.offset,
             output: Vec::new(),
             events: Vec::new(),
+            owners: Vec::new(),
             exit: None,
             epoch: 0,
             terminal: None,
@@ -205,7 +209,12 @@ impl Client {
                     }
                     ClientEvent::Resized { size, .. } => self.resize_terminal(*size),
                     ClientEvent::Exit(status) => self.exit = Some(status.clone()),
-                    ClientEvent::Role { .. } | ClientEvent::Overflowed { .. } => {}
+                    ClientEvent::ReplyOwner { owner, generation } => {
+                        // kept aside: the event received is the one after it
+                        self.owners.push((*owner, *generation));
+                        return self.receive(timeout);
+                    }
+                    ClientEvent::Role { .. } | ClientEvent::Delegated { .. } | ClientEvent::Overflowed { .. } => {}
                 }
                 self.events.push(event);
                 true
@@ -221,6 +230,24 @@ impl Client {
             assert!(
                 Instant::now() < deadline && self.exit.is_none(),
                 "no {needle:?} in the output: {:?}",
+                self.text()
+            );
+            self.receive(Duration::from_millis(100));
+        }
+    }
+
+    /// Wait for the whole line `prefix` starts in the output (up to its line feed), so what follows the prefix on
+    /// its line is not read half-delivered.
+    pub fn expect_line(&mut self, prefix: &str) {
+        let deadline = Instant::now() + PATIENCE;
+        while !self
+            .text()
+            .split_once(prefix)
+            .is_some_and(|(_, rest)| rest.contains('\n'))
+        {
+            assert!(
+                Instant::now() < deadline && self.exit.is_none(),
+                "no whole {prefix:?} line in the output: {:?}",
                 self.text()
             );
             self.receive(Duration::from_millis(100));

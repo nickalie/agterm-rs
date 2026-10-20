@@ -137,6 +137,18 @@ impl Lead {
         self.leader
     }
 
+    /// The client that owns the session's replies ([`super::replies`]): the leader, else the first managed client
+    /// attached; `None` with neither.
+    #[must_use]
+    pub fn reply_owner(&self) -> Option<ClientId> {
+        self.leader.or_else(|| {
+            self.members
+                .iter()
+                .find(|member| member.managed)
+                .map(|member| member.id)
+        })
+    }
+
     /// The session's leadership changes so far, wrapping.
     #[must_use]
     pub fn generation(&self) -> u32 {
@@ -698,6 +710,29 @@ mod tests {
             lead.input(2, b"x").forward,
             "and leads by typing, as an unmanaged client"
         );
+    }
+
+    #[test]
+    fn the_replies_belong_to_the_leader_else_the_first_managed_client() {
+        let mut lead = Lead::new();
+        assert_eq!(lead.reply_owner(), None);
+        let _ = lead.attach(1, WIDE, None);
+        let _ = lead.attach(2, WIDE, Some(&managed(false)));
+        let _ = lead.attach(3, WIDE, Some(&managed(false)));
+        assert_eq!(lead.reply_owner(), Some(1), "the leader, unmanaged as it is");
+        let _ = lead.detach(1);
+        assert_eq!(lead.leader(), None);
+        assert_eq!(lead.reply_owner(), Some(2), "the first managed client attached");
+        let _ = lead.attach(4, WIDE, Some(&managed(true)));
+        assert_eq!(lead.reply_owner(), Some(4), "the claiming leader");
+        let _ = lead.detach(4);
+        let _ = lead.detach(2);
+        assert_eq!(lead.reply_owner(), Some(3));
+        let _ = lead.detach(3);
+        let _ = lead.attach(5, WIDE, None);
+        let _ = lead.detach(5);
+        let _ = lead.attach(6, WIDE, None);
+        assert_eq!(lead.reply_owner(), Some(6));
     }
 
     #[test]

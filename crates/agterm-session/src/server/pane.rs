@@ -26,9 +26,10 @@
 //!
 //! Every read of the PTY is written into the pane's terminal and queued for each client under one lock, so the
 //! terminal's state and the clients' streams agree at every offset; a client attaching later starts at the offset
-//! the terminal had then. The terminal's replies to the program's queries (`write_pty`) go back to the program, in
-//! order with its input. It loads no Kitty images from files, temporary files or shared memory: an image shown that
-//! way is read once, by the client that shows it.
+//! the terminal had then. The terminal answers the program's queries itself, its answers going back to the program in
+//! order with its input, with the reply owner's facts; a clipboard read stops the stream for the owner's answer, and
+//! the owner's terminal answers Kitty graphics commands ([`super::replies`]). It loads no Kitty images from files,
+//! temporary files or shared memory: an image shown that way is read once, by the client that shows it.
 //!
 //! # Snapshots
 //!
@@ -85,12 +86,13 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
 use agterm_ghostty_vt as vt;
-use agterm_pty::{Actor, ActorConfig, ActorHandle, Child, ExitReason, Killer, Size, Spawned, WriteError};
+use agterm_pty::{Actor, ActorConfig, ActorHandle, Child, ExitReason, Killer, ReadPause, Size, Spawned, WriteError};
 
 use super::clients::{ClientId, Clients, DEFAULT_QUEUE_LIMIT, ResyncBudget, Subscription};
 use super::lead::{Change, Lead, RoleNotice};
+use super::replies::{Answer, DELEGATION_WAIT, Facts, KITTY_STORAGE_LIMIT, Outlet, PARK_LOW, Replies, ServerEffects};
 use super::snapshot::{self, Kind, SnapshotError};
-use crate::protocol::{ExitStatus, GridSize, LeadRole, Managed, SessionSpec};
+use crate::protocol::{DelegatedReply, ExitStatus, GridSize, LeadRole, Managed, ReplyMetadata, SessionSpec};
 
 /// The variable naming a session in its program's environment.
 pub const SESSION_VARIABLE: &str = "AGTERM_LIVE_SESSION";
@@ -115,6 +117,8 @@ const SESSION_POLL: Duration = Duration::from_millis(20);
 /// How long the waiter holds off reaping the program for a kill under way, which holds it for the hangup, at most
 /// [`KILL_GRACE`] and the kill; past it the program is reaped, and the kill then signals nothing.
 const REAP_HOLD_LIMIT: Duration = Duration::from_secs(5);
+/// How long the replies' helper thread sleeps with nothing to do (it is woken for whatever it does).
+const HELPER_IDLE: Duration = Duration::from_secs(60);
 
 /// The pane ids of this process, for the PTY threads' names and to tell a session from a later one of its name.
 static NEXT_PANE: AtomicU64 = AtomicU64::new(1);
@@ -143,6 +147,10 @@ pub struct PaneConfig {
     /// The longest unfinished sequence a snapshot can hand on ([`snapshot::CONTINUATION_LIMIT`]): the session's
     /// terminal keeps a copy of it while it lasts.
     pub continuation_limit: usize,
+    /// The creator's facts for the replies, which it owns ([`super::replies`]).
+    pub metadata: ReplyMetadata,
+    /// How long a clipboard read waits for the reply owner's answer ([`DELEGATION_WAIT`]).
+    pub delegation_wait: Duration,
 }
 
 impl PaneConfig {
@@ -158,6 +166,8 @@ impl PaneConfig {
             resync_budget: ResyncBudget::default(),
             snapshot_wait: SNAPSHOT_WAIT,
             continuation_limit: snapshot::CONTINUATION_LIMIT,
+            metadata: ReplyMetadata::default(),
+            delegation_wait: DELEGATION_WAIT,
         }
     }
 }
@@ -236,26 +246,34 @@ impl std::fmt::Debug for Pane {
     }
 }
 
-/// What the PTY actor's callbacks, the child's waiter and the pane share.
+/// What the PTY actor's callbacks, the child's waiter, the replies' helper thread and the pane share.
 struct Core {
     /// The pane's one serialization point: its terminal, its clients and its output offset change together.
     state: Mutex<State>,
-    /// Notified when the PTY ends and when the program's end is recorded.
+    /// Notified when the PTY ends, when output is fed and when the program's end is recorded.
     changed: Condvar,
-    /// The terminal's replies of the write in progress; filled, taken and truncated only under `state`'s lock.
-    replies: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// Wakes the replies' helper thread ([`run_helper`]): a read delegated, ended or cancelled, replies to write.
+    timer: Arc<Condvar>,
+    /// The terminal's replies of the write in progress (filled, taken and truncated only under `state`'s lock), and
+    /// what its effects answer from.
+    outlet: Arc<Outlet>,
+    /// Stops the PTY's reads while a waiting clipboard read holds too much output ([`super::replies`]).
+    pause: ReadPause,
 }
 
-struct State {
-    terminal: vt::Terminal,
-    clients: Clients,
+/// A pane's state under its lock.
+pub(super) struct State {
+    pub(super) terminal: vt::Terminal,
+    pub(super) clients: Clients,
     /// Which client owns the session's size.
-    lead: Lead,
+    pub(super) lead: Lead,
+    /// Who owns the session's replies, and the clipboard read waiting for an answer ([`super::replies`]).
+    pub(super) replies: Replies,
     /// The session's output bytes so far: the offset of the next read.
-    offset: u64,
+    pub(super) offset: u64,
     /// Counts the changes of the terminal's screen: reads, resizes and prints ([`Pane::revision`]).
-    revision: u64,
-    size: GridSize,
+    pub(super) revision: u64,
+    pub(super) size: GridSize,
     /// The PTY actor stopped.
     pty_ended: bool,
     /// The program exited; it is not reaped before [`State::reaping`].
@@ -271,15 +289,16 @@ struct State {
 }
 
 impl State {
-    /// Queue each notice for its client.
+    /// After a change of the lead: queue each notice for its client, then the change of the reply owner it makes.
     fn tell(&mut self, notices: &[RoleNotice]) {
         for notice in notices {
             self.clients.role(notice.client, notice.role, notice.generation);
         }
+        self.refresh_owner();
     }
 
     /// Forget the clients whose subscription was dropped, and their part in the lead.
-    fn prune(&mut self) {
+    pub(super) fn prune(&mut self) {
         for id in self.clients.prune() {
             let change = self.lead.detach(id);
             self.tell(&change.notices);
@@ -293,25 +312,31 @@ impl Core {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Feed a read of the PTY to the terminal and the clients; the terminal's replies.
+    /// Feed a read of the PTY to the terminal and the clients, up to a clipboard read the reply owner is to answer
+    /// (held behind it while it waits, [`super::replies`]); the terminal's replies.
     fn read(&self, bytes: &[u8]) -> Vec<Vec<u8>> {
         let mut state = self.lock();
         if state.exit.is_some() {
             return Vec::new();
         }
-        state.terminal.vt_write(bytes);
-        let offset = state.offset;
-        state.offset += bytes.len() as u64;
-        state.revision = state.revision.wrapping_add(1);
-        state.prune();
-        state.clients.output(offset, bytes);
+        state.take_output(bytes, &self.pause);
         // taken under the pane's lock, so the queue changes only under it ([`Pane::print`] drops its replies by
         // truncating it)
-        let replies = std::mem::take(&mut *lock(&self.replies));
+        let replies = self.outlet.take();
         drop(state);
         // a snapshot waiting for a cut looks again
         self.changed.notify_all();
         replies
+    }
+
+    /// Whether the PTY's reads, paused for output held behind a waiting read, are to go on now (the pause is
+    /// lifted; the caller wakes the actor once it let go of the lock).
+    fn unpause(&self, state: &State) -> bool {
+        if !self.pause.is_paused() || state.replies.parked() >= PARK_LOW {
+            return false;
+        }
+        self.pause.resume();
+        true
     }
 
     fn pty_ended(&self) {
@@ -319,9 +344,22 @@ impl Core {
         self.changed.notify_all();
     }
 
-    fn child_exited(&self) {
-        self.lock().exited = true;
+    /// The program exited: a clipboard read waiting for an answer, and every later one, is denied, so its last output
+    /// reaches the terminal and the clients, and the PTY is read to its end.
+    fn child_exited(&self, actor: &ActorHandle) {
+        let mut state = self.lock();
+        state.exited = true;
+        state.deny_from_now();
+        let replies = self.outlet.take();
+        let wake = self.unpause(&state);
+        drop(state);
         self.changed.notify_all();
+        for reply in replies {
+            actor.write_reply(&reply);
+        }
+        if wake {
+            actor.wake_reader();
+        }
     }
 
     /// Keep the program unreaped, its process group signallable, until [`Core::release_reap`]; `false`, holding
@@ -381,6 +419,9 @@ impl Core {
     /// snapshot ([`last_snapshots`]); no client is attached, or leads, from then on.
     fn end(&self, status: ExitStatus) {
         let mut state = self.lock();
+        // output still held behind a read (the PTY ended before the program) goes in before the end
+        state.deny_from_now();
+        drop(self.outlet.take());
         last_snapshots(&mut state);
         state.clients.exit(&status);
         state.lead = Lead::new();
@@ -388,6 +429,7 @@ impl Core {
         let on_end = std::mem::take(&mut state.on_end);
         drop(state);
         self.changed.notify_all();
+        self.timer.notify_all();
         for hook in on_end {
             hook();
         }
@@ -416,17 +458,6 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// The server terminal's callbacks: its replies go back to the program; everything else is the clients' to show.
-struct ServerEffects {
-    replies: Arc<Mutex<Vec<Vec<u8>>>>,
-}
-
-impl vt::Effects for ServerEffects {
-    fn write_pty(&mut self, data: &[u8]) {
-        lock(&self.replies).push(data.to_vec());
-    }
-}
-
 impl Pane {
     /// Start the session `config` names: its program on a PTY of `config.size`, with the environment
     /// [`child_environment`] makes of its spec, in its spec's working directory (else the home directory of that
@@ -449,6 +480,8 @@ impl Pane {
             resync_budget,
             snapshot_wait,
             continuation_limit,
+            metadata,
+            delegation_wait,
         } = config;
         let size = GridSize {
             cols: size.cols.max(1),
@@ -456,17 +489,28 @@ impl Pane {
         };
         let env = child_environment(&spec.env, &name, &namespace);
         let command = command(&spec, &env)?;
-        let replies = Arc::new(Mutex::new(Vec::new()));
-        let terminal = server_terminal(size, continuation_limit, &replies)?;
-        let Spawned { master, child } = agterm_pty::spawn(&command, Size::cells(size.rows, size.cols))?;
+        let outlet = Arc::new(Outlet::default());
+        let timer = Arc::new(Condvar::new());
         let mut clients = Clients::new(client_queue_limit);
         let mut lead = Lead::new();
         let mut creator = attach_creator(&mut clients, &mut lead, size, managed.as_ref());
+        let replies = Replies::new(
+            Arc::clone(&outlet),
+            Arc::clone(&timer),
+            creator.subscription.id(),
+            metadata,
+            delegation_wait,
+        );
+        let term = lookup(&env, "TERM");
+        let terminal = server_terminal(size, continuation_limit, &outlet, replies.facts(), term)?;
+        let Spawned { master, child } = agterm_pty::spawn(&command, Size::cells(size.rows, size.cols))?;
+        let pause = ReadPause::new();
         let core = Arc::new(Core {
             state: Mutex::new(State {
                 terminal,
                 clients,
                 lead,
+                replies,
                 offset: 0,
                 revision: 0,
                 size,
@@ -478,25 +522,15 @@ impl Pane {
                 on_end: Vec::new(),
             }),
             changed: Condvar::new(),
-            replies,
+            timer,
+            outlet,
+            pause,
         });
         prune_on_drop(&core, &mut creator.subscription);
         let id = NEXT_PANE.fetch_add(1, Ordering::Relaxed);
         let killer = child.killer();
         let pid = child.pid();
-        let actor = match start_actor(id, master, &core) {
-            Ok(actor) => actor,
-            Err(err) => {
-                // the program never gets its output read: end it
-                let _ = killer.kill_tree();
-                return Err(err);
-            }
-        };
-        if let Err(err) = start_waiter(id, child, &core, &actor) {
-            let _ = killer.kill_tree();
-            actor.shutdown();
-            return Err(err);
-        }
+        let actor = start_threads(id, master, child, &core)?;
         tracing::debug!(session = %name, pid, "live session started");
         let pane = Self {
             id,
@@ -550,6 +584,22 @@ impl Pane {
     /// with nothing changed (no cut in time), or with the client attached for a moment and gone again (the formatter
     /// failed after the lead took its size).
     pub fn try_attach(&self, size: GridSize, managed: Option<&Managed>) -> Result<Attached, AttachError> {
+        self.attach_with(size, managed, ReplyMetadata::default())
+    }
+
+    /// [`Pane::try_attach`] of a client whose facts for the replies are `metadata` ([`Pane::set_metadata`]), which
+    /// count from its attach on when it owns the replies. It is told whether it owns them after its role, before its
+    /// snapshot.
+    ///
+    /// # Errors
+    ///
+    /// As [`Pane::try_attach`].
+    pub fn attach_with(
+        &self,
+        size: GridSize,
+        managed: Option<&Managed>,
+        metadata: ReplyMetadata,
+    ) -> Result<Attached, AttachError> {
         let mut state = self.core.wait_for_cut(self.snapshot_wait)?;
         state.prune();
         let id = NEXT_CLIENT.fetch_add(1, Ordering::Relaxed);
@@ -569,7 +619,9 @@ impl Pane {
         };
         let mut subscription = state.clients.attach(id);
         prune_on_drop(&self.core, &mut subscription);
+        state.remember(id, metadata);
         state.tell(&change.notices);
+        state.introduce(id);
         let (offset, size) = (state.offset, state.size);
         state.clients.snapshot(id, offset, size, data);
         let attached = Attached {
@@ -601,6 +653,7 @@ impl Pane {
             Some(false) => return Ok(()),
             Some(true) => {}
         }
+        state.fell_behind(id);
         if !state.clients.spend_resync(id, self.resync_budget, Instant::now()) {
             self.disconnect(state, id);
             return Err(ResyncError::OverBudget);
@@ -750,7 +803,9 @@ impl Pane {
         if state.exit.is_some() || state.size == size {
             return;
         }
-        if let Err(err) = state.terminal.resize(size.cols, size.rows, 0, 0) {
+        let facts = state.replies.facts();
+        let (width, height) = (facts.cell_width_px, facts.cell_height_px);
+        if let Err(err) = state.terminal.resize(size.cols, size.rows, width, height) {
             tracing::warn!(session = %self.name, %err, "resizing the session's terminal failed");
         }
         self.actor.resize(Size::cells(size.rows, size.cols));
@@ -770,14 +825,69 @@ impl Pane {
     }
 
     /// Let go of the pane's lock, then write the replies the terminal gave outside the PTY's reads (a size report the
-    /// program asked for, in-band resize notifications): written once the lock is let go, as the PTY's read callback
-    /// may be waiting for it.
+    /// program asked for, in-band resize notifications, a clipboard read answered, a reply owner's Kitty answers):
+    /// written once the lock is let go, as the PTY's read callback may be waiting for it; and read the PTY again once
+    /// the output held behind a clipboard read went through.
     fn release(&self, state: MutexGuard<'_, State>) {
-        let replies = std::mem::take(&mut *lock(&self.core.replies));
+        let replies = self.core.outlet.take();
+        let wake = self.core.unpause(&state);
         drop(state);
+        self.core.changed.notify_all();
         for reply in replies {
             self.actor.write_reply(&reply);
         }
+        if wake {
+            self.actor.wake_reader();
+        }
+    }
+
+    /// The client `id`'s facts for the replies are now `metadata` (they replace its earlier ones whole): the session's
+    /// terminal answers with them while it owns the replies. Nothing for a client not attached.
+    pub fn set_metadata(&self, id: ClientId, metadata: ReplyMetadata) {
+        let mut state = self.core.lock();
+        if state.exit.is_some() {
+            return;
+        }
+        state.remember(id, metadata);
+        self.release(state);
+    }
+
+    /// The client `id`'s answer to the delegated request `request`, given in its epoch `epoch`: it ends the clipboard
+    /// read waiting for it, and the output held behind that read goes on. Whether it was taken: dropped unless that
+    /// read was sent to this client in that epoch, still waits (no denial ended it: the owner changing, a deadline)
+    /// and the client has not fallen behind since.
+    #[must_use]
+    pub fn answer(&self, id: ClientId, request: u64, epoch: u64, reply: DelegatedReply) -> bool {
+        let mut state = self.core.lock();
+        if state.exit.is_some() {
+            return false;
+        }
+        let taken = state.answer(id, request, epoch, Answer::from(reply));
+        self.release(state);
+        taken
+    }
+
+    /// Kitty graphics answers the client `id`'s terminal gave, relayed in its epoch `epoch` under its ownership report
+    /// `generation`: written to the program, whatever the lead, after the replies queued before them, while the client
+    /// owns the replies in that generation and that epoch and has not fallen behind; dropped otherwise, or when `data`
+    /// is anything but whole Kitty answers. Whether they were written.
+    #[must_use]
+    pub fn relay(&self, id: ClientId, epoch: u64, generation: u32, data: &[u8]) -> bool {
+        let mut state = self.core.lock();
+        if state.exit.is_some() {
+            return false;
+        }
+        let relayed = state.relay(id, epoch, generation, data);
+        self.release(state);
+        relayed
+    }
+
+    /// The client owning the session's replies ([`super::replies`]) and the generation of its ownership.
+    #[must_use]
+    pub fn reply_owner(&self) -> (Option<ClientId>, u32) {
+        let mut state = self.core.lock();
+        state.prune();
+        (state.replies.owner(), state.replies.generation())
     }
 
     /// Run `read` on the session's terminal, under the pane's lock (no output is fed meanwhile).
@@ -827,9 +937,11 @@ impl Pane {
             return Ok(());
         }
         // the replies queued before are the program's own; those after, to bytes it never printed, are dropped
-        let theirs = lock(&self.core.replies).len();
+        let theirs = self.core.outlet.queued();
         state.terminal.vt_write(data);
-        lock(&self.core.replies).truncate(theirs);
+        self.core.outlet.truncate(theirs);
+        // the clipboard-read scanner follows the terminal's parser
+        state.replies.observe(data);
         let offset = state.offset;
         state.offset += data.len() as u64;
         state.revision = state.revision.wrapping_add(1);
@@ -1004,6 +1116,8 @@ fn attach_creator(clients: &mut Clients, lead: &mut Lead, size: GridSize, manage
     for notice in &change.notices {
         clients.role(notice.client, notice.role, notice.generation);
     }
+    // the leader owns the replies, in the session's first ownership ([`Replies::new`])
+    clients.reply_owner(id, true, 1);
     clients.snapshot(id, 0, size, Vec::new());
     Attached {
         subscription,
@@ -1054,29 +1168,42 @@ fn prune_on_drop(core: &Arc<Core>, subscription: &mut Subscription) {
     });
 }
 
-/// The server's terminal for a session of `size`: its replies into `replies`, no Kitty image media, the continuation
-/// its snapshots need tracked up to `continuation_limit` bytes.
+/// The server's terminal for a session of `size`: its replies into `outlet` ([`ServerEffects`]), answering with
+/// `facts` and as the terminfo entry `term` (the program's `TERM`, XTGETTCAP's `TN`); Kitty images placed but not
+/// loaded from files, temporary files or shared memory, in at most [`KITTY_STORAGE_LIMIT`]; the continuation its
+/// snapshots need tracked up to `continuation_limit` bytes.
 fn server_terminal(
     size: GridSize,
     continuation_limit: usize,
-    replies: &Arc<Mutex<Vec<Vec<u8>>>>,
+    outlet: &Arc<Outlet>,
+    facts: &Facts,
+    term: Option<&str>,
 ) -> io::Result<vt::Terminal> {
     let vt_error = |err: vt::Error| io::Error::other(format!("the session's terminal: {err}"));
     let mut terminal = vt::Terminal::new(size.cols, size.rows).map_err(vt_error)?;
+    terminal
+        .set_kitty_image_storage_limit(KITTY_STORAGE_LIMIT)
+        .map_err(vt_error)?;
     terminal.set_kitty_image_media(false, None, false).map_err(vt_error)?;
     terminal.set_continuation_limit(continuation_limit).map_err(vt_error)?;
+    if let Err(err) = terminal.set_terminfo_name(term.filter(|term| !term.is_empty())) {
+        tracing::debug!(%err, ?term, "the session's TERM is no terminfo name; XTGETTCAP TN goes unanswered");
+    }
+    facts
+        .apply(&mut terminal, None, size.cols, size.rows)
+        .map_err(vt_error)?;
     terminal
-        .set_effects(Box::new(ServerEffects {
-            replies: Arc::clone(replies),
-        }))
+        .set_effects(Box::new(ServerEffects::new(Arc::clone(outlet))))
         .map_err(vt_error)?;
     Ok(terminal)
 }
 
-/// The PTY actor: every read into the terminal and the clients, the terminal's replies back to the program.
+/// The PTY actor: every read into the terminal and the clients, the terminal's replies back to the program; its
+/// reads pause on the pane's [`ReadPause`].
 fn start_actor(id: u64, master: agterm_pty::Master, core: &Arc<Core>) -> io::Result<ActorHandle> {
     let reading = Arc::clone(core);
     let mut config = ActorConfig::new(format!("live-{id}"), master, Box::new(move |bytes| reading.read(bytes)));
+    config.read_pause = core.pause.clone();
     let ending = Arc::downgrade(core);
     config.on_exit = Some(Box::new(move |reason: ExitReason| {
         tracing::debug!(?reason, "a live session's PTY actor stopped");
@@ -1098,7 +1225,7 @@ fn start_waiter(id: u64, mut child: Child, core: &Arc<Core>, actor: &ActorHandle
         .name(format!("live-{id}-wait"))
         .spawn(move || {
             let reaped = child.wait_exit().and_then(|()| {
-                core.child_exited();
+                core.child_exited(&actor);
                 actor.child_exited();
                 core.wait_for(EXIT_GRACE, |state| state.pty_ended);
                 core.begin_reap();
@@ -1119,6 +1246,78 @@ fn start_waiter(id: u64, mut child: Child, core: &Arc<Core>, actor: &ActorHandle
             core.end(status);
         })
         .map(drop)
+}
+
+/// The pane's threads: the PTY actor, the replies' helper and the child's waiter. When one cannot start, the
+/// program is ended (it would never get its output read) and so is what started.
+fn start_threads(id: u64, master: agterm_pty::Master, child: Child, core: &Arc<Core>) -> io::Result<ActorHandle> {
+    let killer = child.killer();
+    let actor = match start_actor(id, master, core) {
+        Ok(actor) => actor,
+        Err(err) => {
+            let _ = killer.kill_tree();
+            return Err(err);
+        }
+    };
+    if let Err(err) = start_helper(id, core, &actor) {
+        let _ = killer.kill_tree();
+        actor.shutdown();
+        return Err(err);
+    }
+    if let Err(err) = start_waiter(id, child, core, &actor) {
+        let _ = killer.kill_tree();
+        actor.shutdown();
+        // the helper ends with the session
+        core.end(ExitStatus::Exited { code: 1, signal: None });
+        return Err(err);
+    }
+    Ok(actor)
+}
+
+/// The replies' helper thread ([`run_helper`]), until the session's end.
+fn start_helper(id: u64, core: &Arc<Core>, actor: &ActorHandle) -> io::Result<()> {
+    let core = Arc::clone(core);
+    let actor = actor.clone();
+    std::thread::Builder::new()
+        .name(format!("live-{id}-replies"))
+        .spawn(move || run_helper(&core, &actor))
+        .map(drop)
+}
+
+/// What answers no thread of the pane's own writes: it denies a clipboard read whose time is up or that was
+/// cancelled, writes the replies queued outside a read of the PTY or a call that writes its own (a client's
+/// subscription dropped), and lets the PTY be read again once the output held behind a read went through. It sleeps
+/// on [`Core::timer`] until the next deadline, and ends once the session ended.
+fn run_helper(core: &Core, actor: &ActorHandle) {
+    let mut state = core.lock();
+    while state.exit.is_none() {
+        let now = Instant::now();
+        if state.replies.due(now) {
+            state.settle(Answer::Denied);
+        }
+        let replies = core.outlet.take();
+        let wake = core.unpause(&state);
+        if !replies.is_empty() || wake {
+            drop(state);
+            for reply in replies {
+                actor.write_reply(&reply);
+            }
+            if wake {
+                actor.wake_reader();
+            }
+            core.changed.notify_all();
+            state = core.lock();
+            continue;
+        }
+        let wait = state
+            .replies
+            .deadline()
+            .map_or(HELPER_IDLE, |deadline| deadline.saturating_duration_since(now));
+        state = core
+            .timer
+            .wait_timeout(state, wait)
+            .map_or_else(|poisoned| poisoned.into_inner().0, |(guard, _)| guard);
+    }
 }
 
 /// The program's environment for the session `name` of the namespace `namespace`: the spec's `env` as given (a later
