@@ -16,9 +16,11 @@
 //! an answer that is discarded unused.
 //!
 //! A Kitty graphics command is an SOS, PM or APC string (one state in Ghostty's parser, which emits `apc_start` on
-//! entering it and `apc_end` on leaving it by any byte, `Parser.zig`) whose first payload byte is `G` (`apc.zig`
-//! `Handler.feed`); Ghostty runs it at the byte that leaves the string, which [`Stop::KittyGraphics`] reports. It errs
-//! towards reporting: a string cancelled by CAN or SUB, or one Ghostty finds malformed, is reported too.
+//! entering it and `apc_end` on any byte that leaves it, `Parser.zig`) whose first payload byte is `G` (`apc.zig`
+//! `Handler.feed`); Ghostty runs it at the byte that leaves the string, which [`Stop::KittyGraphics`] reports. An SOS,
+//! PM or APC introducer inside the string (8-bit, the stream there is raw bytes) does not leave it: its transition
+//! leads back to the same state, so neither action is emitted and the string goes on. It errs towards reporting: a
+//! string cancelled by CAN or SUB, or one Ghostty finds malformed, is reported too.
 
 use base64::Engine as _;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
@@ -172,7 +174,8 @@ impl Scanner {
     }
 
     /// One byte inside an SOS, PM or APC string: its first payload byte tells a Kitty graphics command, and a byte that
-    /// ends the string (whatever comes next, another string included) ends that command.
+    /// leaves the string ends that command. An SOS, PM or APC introducer stays in it: Ghostty emits the exit and entry
+    /// actions only on a change of state (`Parser.next`), so the string goes on and the introducer is no payload.
     fn string(&mut self, byte: u8) -> Option<Stop> {
         if is_string_put(byte) {
             if self.payload == Payload::Empty {
@@ -180,7 +183,9 @@ impl Scanner {
             }
             return None;
         }
-        anywhere(byte)?;
+        if anywhere(byte)? == State::SosPmApc {
+            return None;
+        }
         let kitty = self.payload == Payload::Kitty;
         self.payload = Payload::Empty;
         kitty.then_some(Stop::KittyGraphics)
@@ -533,13 +538,29 @@ mod tests {
         // C0 controls are payload: the first one decides, so `G` after it is no Kitty command
         assert_eq!(stops(b"\x1b_\x05Gi=1\x1b\\"), []);
         assert_eq!(stops(b"\x1b_G\x05i=1\x1b\\"), [(7, kitty)]);
-        // a C1 introducer ends one string and opens the next
-        assert_eq!(stops(b"\x1b_Gi=1\x9f25a1;s\x1b\\"), [(6, kitty)]);
         // cancelled strings are reported too (erring towards a stop); other APCs are not
         assert_eq!(stops(b"\x1b_Gi=1\x18"), [(6, kitty)]);
         assert_eq!(stops(b"\x1b_25a1;s\x1b\\\x1b_\x1b\\"), []);
         // `find` passes over them
         assert_eq!(reads(b"\x1b_Gi=1\x1b\\\x1b]52;c;?\x07"), [(16, DATA)]);
+    }
+
+    #[test]
+    fn an_sos_pm_or_apc_introducer_stays_in_the_string() {
+        let kitty = Stop::KittyGraphics;
+        // an SOS, PM or APC introducer inside the string does not leave it (nor counts as payload): the command runs
+        // at the ESC after it
+        assert_eq!(stops(b"\x1b_Gi=1\x9f25a1;s\x1b\\"), [(13, kitty)]);
+        assert_eq!(stops(b"\x1b_\x98\x9eGi=1\x9f\x1b\\"), [(9, kitty)]);
+        assert_eq!(stops(b"\x1b_x\x9fGi=1\x1b\\"), []);
+        // the string is raw bytes, not UTF-8: other C1 bytes (a continuation byte from 0x80 to 0x9F too) leave it for
+        // ground, bytes from 0xA0 up are ignored in it
+        assert_eq!(stops(b"\x1b_Gi=1\x80Gi=2\x1b\\"), [(6, kitty)]);
+        assert_eq!(stops(b"\x1b_Gi=1\xc3\xa9\x1b\\"), [(8, kitty)]);
+        // `find` passes over such a string
+        assert_eq!(reads(b"\x1b_Gi=1\x9f2\x1b\\\x1b]52;c;?\x07"), [(18, DATA)]);
+        // an 8-bit OSC introducer inside the string leaves it and opens an OSC
+        assert_eq!(reads(b"\x1b_Gi=1\x9f2\x9d52;c;?\x07"), [(15, DATA)]);
     }
 
     #[test]
