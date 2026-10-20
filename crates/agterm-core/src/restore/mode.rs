@@ -80,6 +80,13 @@ pub fn captures_on_exit(configured: RestoreMode) -> bool {
     matches!(configured, RestoreMode::Rerun | RestoreMode::Live)
 }
 
+/// [`LiveRejection::UnsupportedLoginShell`]'s reason on this OS.
+pub const UNSUPPORTED_LOGIN_SHELL: &str = if cfg!(windows) {
+    "neither pwsh.exe nor powershell.exe is available"
+} else {
+    "the password-database login shell is not zsh, bash, fish or PowerShell"
+};
+
 /// Why this host cannot wrap a pane in a live-session daemon (upstream's `ZmxSupport.Rejection`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LiveRejection {
@@ -93,17 +100,20 @@ pub enum LiveRejection {
 }
 
 impl LiveRejection {
-    /// The reason `restore.mode` reports, upstream's wording; the shell names widen with the bash and fish extension.
+    /// The reason `restore.mode` reports, upstream's wording; the shell names widen with the bash, fish and PowerShell
+    /// extension. Windows has no password database: its shell is the PowerShell found on the host
+    /// (`agterm-session::launch`), so there the unsupported shell is a missing PowerShell.
     #[must_use]
     pub fn message(self) -> &'static str {
         match self {
             Self::UiTestLaunch => "Live sessions are disabled for default UI tests.",
             Self::ExecutablePathNotAbsolute => "the live-session executable path is not absolute",
             Self::ExecutableUnavailable => "the live-session executable is unavailable",
-            Self::UnsupportedLoginShell => "the password-database login shell is not zsh, bash or fish",
+            Self::UnsupportedLoginShell => UNSUPPORTED_LOGIN_SHELL,
             Self::MissingShellIntegration(LoginShell::Zsh) => "the bundled zsh integration is unavailable",
             Self::MissingShellIntegration(LoginShell::Bash) => "the bundled bash integration is unavailable",
             Self::MissingShellIntegration(LoginShell::Fish) => "the bundled fish integration is unavailable",
+            Self::MissingShellIntegration(LoginShell::Pwsh) => "the bundled PowerShell integration is unavailable",
         }
     }
 }
@@ -121,6 +131,8 @@ pub struct LiveProbe {
     pub login_shell: Option<String>,
     /// The bundled resources directory holding `shell-integration/<shell>`.
     pub resources_dir: Option<PathBuf>,
+    /// ngterm's own resources directory, holding `shell-integration/pwsh`.
+    pub own_resources_dir: Option<PathBuf>,
 }
 
 /// The variable a UI-test launch sets to keep live sessions (upstream's `ZmxLaunch.uiTestOptInKey`).
@@ -138,6 +150,7 @@ impl LiveProbe {
             &self.executable,
             self.login_shell.as_deref(),
             self.resources_dir.as_deref(),
+            self.own_resources_dir.as_deref(),
         )
         .err()
     }
@@ -202,12 +215,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let zmx = dir.path().join("zmx");
         let resources = dir.path().join("share");
+        let own = dir.path().join("own");
         let mut probe = LiveProbe {
             ui_test_launch: true,
             ui_test_opt_in: false,
             executable: PathBuf::from("zmx"),
             login_shell: Some("/bin/tcsh".to_owned()),
             resources_dir: Some(resources.clone()),
+            own_resources_dir: Some(own.clone()),
         };
         assert_eq!(probe.rejection(), Some(LiveRejection::UiTestLaunch));
         probe.ui_test_opt_in = true;
@@ -254,5 +269,60 @@ mod tests {
             probe.unavailable_reason().as_deref(),
             Some("the bundled fish integration is unavailable")
         );
+        // PowerShell by either name, and as Windows spells it: pwsh.exe, else powershell.exe
+        for shell in [
+            "/usr/bin/pwsh",
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        ] {
+            probe.login_shell = Some(shell.to_owned());
+            assert_eq!(
+                probe.unavailable_reason().as_deref(),
+                Some("the bundled PowerShell integration is unavailable"),
+                "{shell}"
+            );
+        }
+        fs::create_dir_all(own.join("shell-integration").join("pwsh")).unwrap();
+        fs::write(own.join("shell-integration").join("pwsh").join("ngterm.ps1"), "").unwrap();
+        assert_eq!(probe.rejection(), None);
+        // a host without either (Windows' discovery found none) keeps the unsupported-shell rejection
+        probe.login_shell = None;
+        assert_eq!(probe.unavailable_reason().as_deref(), Some(UNSUPPORTED_LOGIN_SHELL));
+    }
+
+    #[test]
+    fn powershell_is_probed_for_ngterms_own_integration_not_ghosttys() {
+        let dir = tempfile::tempdir().unwrap();
+        let resources = dir.path().join("share");
+        let own = dir.path().join("own");
+        let mut probe = LiveProbe {
+            ui_test_launch: false,
+            ui_test_opt_in: false,
+            executable: crate::live::test_executable(dir.path(), "sh"),
+            login_shell: Some("/usr/bin/pwsh".to_owned()),
+            resources_dir: Some(resources.clone()),
+            own_resources_dir: Some(own.clone()),
+        };
+        // in Ghostty's resources (an inherited GHOSTTY_RESOURCES_DIR's) it does not count
+        for root in [&resources, &own] {
+            fs::create_dir_all(root.join("shell-integration").join("pwsh")).unwrap();
+            fs::write(root.join("shell-integration").join("pwsh").join("ngterm.ps1"), "").unwrap();
+            assert_eq!(probe.rejection().is_none(), root == &own, "{}", root.display());
+        }
+        probe.own_resources_dir = None;
+        assert_eq!(
+            probe.rejection(),
+            Some(LiveRejection::MissingShellIntegration(LoginShell::Pwsh))
+        );
+    }
+
+    #[test]
+    fn the_unsupported_shell_reason_names_what_this_os_runs() {
+        let expected = if cfg!(windows) {
+            "neither pwsh.exe nor powershell.exe is available"
+        } else {
+            "the password-database login shell is not zsh, bash, fish or PowerShell"
+        };
+        assert_eq!(LiveRejection::UnsupportedLoginShell.message(), expected);
     }
 }

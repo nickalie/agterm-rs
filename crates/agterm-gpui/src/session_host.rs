@@ -73,6 +73,7 @@ pub fn wrap_inputs(runtime: &Runtime) -> Inputs {
         executable: runtime.executable.clone(),
         login_shell: runtime.login_shell.clone(),
         resources_dir: runtime.resources_dir.clone(),
+        own_resources_dir: runtime.own_resources_dir.clone(),
         state_dir: runtime.state_dir.clone(),
         inherited: runtime.inherited.clone(),
         ..Inputs::default()
@@ -303,6 +304,7 @@ mod tests {
             executable: PathBuf::from("/nonexistent/zmx"),
             login_shell: Some("/bin/zsh".to_owned()),
             resources_dir: None,
+            own_resources_dir: None,
             state_dir: PathBuf::from("/tmp/agterm-state"),
             inherited: agterm_core::live::shell_integration::Inherited::default(),
         };

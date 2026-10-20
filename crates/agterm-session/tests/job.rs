@@ -6,19 +6,22 @@
 //! is the shell's descendants. Every child gets the test's environment without the live agterm's `AGTERM_*` and
 //! `ZMX_*` variables.
 
+#[expect(
+    dead_code,
+    reason = "the helpers serve the pane, the lead and the PowerShell tests too"
+)]
+mod support;
+
 use std::io::Read as _;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
 
 use agterm_host::ProcessTable as _;
 use agterm_pty::{Actor, ActorConfig, ActorHandle, Child, Command, Size, Spawned};
 use agterm_session::job::{Signal, Sweeper};
 use agterm_session::process_table::ProcTable;
+use support::wait_for;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
-
-/// How long a test waits for a process to show up or go (a CI runner's first shell can take seconds).
-const PATIENCE: Duration = Duration::from_secs(60);
 
 /// What the argv helper is told to wait by.
 const HELPER: &str = "AGTERM_SESSION_TEST_HELPER";
@@ -33,19 +36,6 @@ const ODD_ARGS: [&str; 6] = [
     "tab\there",
     "",
 ];
-
-/// Poll `read` until `done` holds for what it reads; the last read otherwise, in the panic.
-fn wait_for<T: std::fmt::Debug>(what: &str, mut read: impl FnMut() -> T, done: impl Fn(&T) -> bool) -> T {
-    let deadline = Instant::now() + PATIENCE;
-    loop {
-        let got = read();
-        if done(&got) {
-            return got;
-        }
-        assert!(Instant::now() < deadline, "{what}: still {got:?}");
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
 
 fn without_live_variables(mut command: Command) -> Command {
     for (key, _) in std::env::vars_os() {

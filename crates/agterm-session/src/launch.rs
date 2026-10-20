@@ -1,14 +1,15 @@
 //! What a live launch reads of this host (upstream's `agterm/Ghostty/ZmxLaunch.swift`): the staged session host
-//! executable (or a debug build's override), the login shell, the Ghostty resources holding its shell integration, the
-//! app's own values of the variables that integration hands on, the state directory naming the socket namespace and
-//! the staged host's build id. Linux and Windows have no supervising session host (macOS's `agterm-session-host`),
-//! so no configuration names one.
+//! executable (or a debug build's override), the login shell, the Ghostty resources holding its shell integration
+//! (ngterm's own staged resources for PowerShell's, which Ghostty has none of), the app's own values of the variables
+//! that integration hands on, the state directory naming the socket namespace and the staged host's build id. Linux
+//! and Windows have no supervising session host (macOS's `agterm-session-host`), so no configuration names one.
 //!
 //! The staged session host is still zmx, so the executable, its override and its build id keep zmx's names
 //! ([`EXECUTABLE_FILE`], [`EXECUTABLE_OVERRIDE`], [`BUILD_ID_PATH`]) until the session server takes its place.
 //!
 //! The login shell is the password database's on Unix ([`login_shell`]); Windows has none, so there it is PowerShell:
-//! the first launchable `pwsh.exe` on `PATH`, else the inbox `powershell.exe` (`windows_shell`, after herdr).
+//! the first launchable `pwsh.exe` on `PATH`, else `powershell.exe` there or in the system directory (`windows_shell`,
+//! after herdr), none when there is neither: the live launch then refuses with the unsupported-shell reason.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -32,6 +33,10 @@ pub const EXECUTABLE_FILE: &str = if cfg!(windows) { "zmx.exe" } else { "zmx" };
 pub const BUILD_ID_PATH: &str = "share/ngterm/zmx-BUILD";
 /// The staged Ghostty resources, relative to the staged root: the fallback without `GHOSTTY_RESOURCES_DIR`.
 const BUNDLED_RESOURCES: &str = "share/ghostty";
+/// ngterm's own staged resources, relative to the staged root (`scripts/stage.sh`): the PowerShell integration
+/// (`shell-integration/pwsh`). Always the staged root's, as [`bundled_build_id`] reads its build id: an inherited
+/// `GHOSTTY_RESOURCES_DIR` (Ghostty and other libghostty terminals export it to their shells) names no ngterm file.
+const OWN_RESOURCES: &str = "share/ngterm";
 
 /// The host's live-launch inputs, read once.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -41,6 +46,8 @@ pub struct Runtime {
     /// The shell a pane runs: the password database's login shell on Unix, PowerShell on Windows.
     pub login_shell: Option<String>,
     pub resources_dir: Option<PathBuf>,
+    /// ngterm's own staged resources ([`OWN_RESOURCES`]), holding the PowerShell integration.
+    pub own_resources_dir: Option<PathBuf>,
     pub state_dir: PathBuf,
     /// The app's own `ZDOTDIR`, `ENV`, `HISTFILE`, home and `XDG_DATA_DIRS`, handed on to the shell integration.
     pub inherited: Inherited,
@@ -76,6 +83,7 @@ impl Runtime {
             login_shell,
             resources_dir: var("GHOSTTY_RESOURCES_DIR")
                 .or_else(|| staged_root.map(|root| root.join(BUNDLED_RESOURCES))),
+            own_resources_dir: staged_root.map(|root| root.join(OWN_RESOURCES)),
             state_dir: paths::state_dir(env),
             inherited: Inherited::read(env),
         }
@@ -90,6 +98,7 @@ impl Runtime {
             executable: self.executable.clone(),
             login_shell: self.login_shell.clone(),
             resources_dir: self.resources_dir.clone(),
+            own_resources_dir: self.own_resources_dir.clone(),
         }
     }
 
@@ -108,6 +117,7 @@ impl Runtime {
             executable: self.executable.clone(),
             login_shell: self.login_shell.clone(),
             resources_dir: self.resources_dir.clone(),
+            own_resources_dir: self.own_resources_dir.clone(),
             state_dir: self.state_dir.clone(),
             pane_identity,
             base_environment,
@@ -150,12 +160,12 @@ pub fn login_shell() -> Option<String> {
     (!shell.is_empty()).then_some(shell)
 }
 
-/// The shell a Windows pane runs, there being no password database: the first launchable `pwsh.exe` on `PATH` as a
-/// full path, else the inbox `powershell.exe`. Never `None`.
+/// The shell a Windows pane runs, there being no password database: the first launchable `pwsh.exe` on `PATH`, else
+/// `powershell.exe` there or in the system directory, as a full path; `None` without any (`windows_shell`).
 #[cfg(windows)]
 #[must_use]
 pub fn login_shell() -> Option<String> {
-    Some(windows_shell::login_shell())
+    windows_shell::login_shell()
 }
 
 #[cfg(test)]
@@ -165,8 +175,8 @@ mod tests {
 
     use super::*;
 
-    /// A staged layout: the session host in `bin`, the zsh, bash and fish integrations under `share/ghostty` and the
-    /// build id.
+    /// A staged layout: the session host in `bin`, the zsh, bash and fish integrations under `share/ghostty`, the
+    /// PowerShell one and the build id under `share/ngterm`.
     fn staged() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("bin")).unwrap();
@@ -186,6 +196,10 @@ mod tests {
         let fish = root.path().join("share/ghostty/shell-integration/fish/vendor_conf.d");
         fs::create_dir_all(&fish).unwrap();
         fs::write(fish.join("ghostty-shell-integration.fish"), "").unwrap();
+        // the PowerShell integration as `scripts/stage.sh` stages it
+        let pwsh = root.path().join("share/ngterm/shell-integration/pwsh");
+        fs::create_dir_all(&pwsh).unwrap();
+        fs::copy(pwsh_integration_source(), pwsh.join("ngterm.ps1")).unwrap();
         fs::create_dir_all(root.path().join("share/ngterm")).unwrap();
         fs::write(root.path().join(BUILD_ID_PATH), "rev x86_64-linux-gnu.2.39 digest\n").unwrap();
         root
@@ -268,6 +282,53 @@ mod tests {
         assert!(!fish.contains_key("ENV") && !fish.contains_key("ZDOTDIR"));
     }
 
+    /// The repository's PowerShell integration, which `scripts/stage.sh` stages.
+    fn pwsh_integration_source() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("resources")
+            .join("shell-integration")
+            .join("pwsh")
+            .join("ngterm.ps1")
+    }
+
+    #[test]
+    fn a_powershell_login_shell_wraps_with_the_staged_integration() {
+        let root = staged();
+        let bin = root.path().join("bin");
+        let script = root
+            .path()
+            .join("share/ngterm/shell-integration")
+            .join("pwsh")
+            .join("ngterm.ps1");
+        // a Ghostty resources directory inherited from another terminal, which holds no ngterm file, does not hide it
+        let ghostty = tempfile::tempdir().unwrap();
+        let env = MapEnv::new()
+            .with("AGTERM_STATE_DIR", root.path().join("state"))
+            .with("GHOSTTY_RESOURCES_DIR", ghostty.path());
+        for shell in [
+            "/usr/bin/pwsh",
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            "powershell.exe",
+        ] {
+            let runtime = Runtime::resolve(&env, Some(&bin), Some(shell.to_owned()), false);
+            assert_eq!(runtime.live_probe(&env).unavailable_reason(), None, "{shell}");
+            let environment = runtime
+                .configuration(Uuid::new_v4(), BTreeMap::new(), None)
+                .unwrap()
+                .environment;
+            assert_eq!(
+                environment
+                    .get(agterm_core::live::shell_integration::PWSH_INTEGRATION_VARIABLE)
+                    .map(PathBuf::from),
+                Some(script.clone()),
+                "{shell}"
+            );
+            assert_eq!(environment.get("SHELL").map(String::as_str), Some(shell));
+        }
+    }
+
     #[test]
     fn the_resources_dir_comes_from_the_environment_first() {
         let root = staged();
@@ -278,6 +339,12 @@ mod tests {
         let runtime = Runtime::resolve(&empty, Some(&root.path().join("bin")), None, false);
         assert_eq!(runtime.resources_dir, Some(root.path().join("share/ghostty")));
         assert_eq!(Runtime::resolve(&MapEnv::new(), None, None, false).resources_dir, None);
+        // ngterm's own resources are always the staged root's
+        assert_eq!(
+            Runtime::resolve(&env, Some(&root.path().join("bin")), None, false).own_resources_dir,
+            Some(root.path().join("share/ngterm"))
+        );
+        assert_eq!(Runtime::resolve(&env, None, None, false).own_resources_dir, None);
     }
 
     #[test]
@@ -306,7 +373,7 @@ mod tests {
         let tcsh = Runtime::resolve(&MapEnv::new(), Some(&bin), Some("/bin/tcsh".to_owned()), false);
         assert_eq!(
             tcsh.live_probe(&MapEnv::new()).unavailable_reason().as_deref(),
-            Some("the password-database login shell is not zsh, bash or fish")
+            Some(agterm_core::restore::mode::UNSUPPORTED_LOGIN_SHELL)
         );
         for shell in ["/bin/bash", "/usr/bin/fish"] {
             let runtime = Runtime::resolve(&MapEnv::new(), Some(&bin), Some(shell.to_owned()), false);
@@ -355,13 +422,19 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn a_windows_pane_runs_powershell() {
+    fn a_windows_pane_runs_powershell_by_its_full_path() {
         let shell = login_shell().unwrap();
         let path = Path::new(&shell);
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
         assert!(
-            shell == windows_shell::INBOX_POWERSHELL
-                || (path.is_absolute() && path.file_name().is_some_and(|name| name == "pwsh.exe")),
+            path.is_absolute()
+                && (name.eq_ignore_ascii_case(windows_shell::PWSH)
+                    || name.eq_ignore_ascii_case(windows_shell::INBOX_POWERSHELL)),
             "{shell}"
+        );
+        assert_eq!(
+            agterm_core::live::shell_integration::LoginShell::of(&shell),
+            Some(agterm_core::live::shell_integration::LoginShell::Pwsh)
         );
     }
 }

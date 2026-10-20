@@ -3,12 +3,13 @@
 #
 #   bin/{agterm,ngtermctl,zmx}  share/ghostty/{themes,shell-integration}  share/terminfo
 #   share/ngterm/zmx-BUILD (the staged zmx's build id, with bin/zmx)  share/ngterm/{agent-status,skills/agterm}
+#   share/ngterm/shell-integration/pwsh/ngterm.ps1
 #
-# from cargo's target dir and the vendored prefixes, plus agterm's own themes from build/themes and the agent
-# integrations' payloads from resources/. Binaries are staged when they exist (agterm and ngtermctl appear with
-# their crates, zmx once scripts/build-zmx.sh filled its prefix); Ghostty's resources are required. There is no lib/:
-# libghostty-vt is linked statically. The terminfo, themes and shell integration are Ghostty's at LIBGHOSTTY_VT_REV,
-# from the libghostty-vt prefix (scripts/build-ghostty-vt.sh).
+# from cargo's target dir and the vendored prefixes, plus agterm's own themes from build/themes, its PowerShell
+# integration and the agent integrations' payloads from resources/. Binaries are staged when they exist (agterm and
+# ngtermctl appear with their crates, zmx once scripts/build-zmx.sh filled its prefix); Ghostty's resources are
+# required. There is no lib/: libghostty-vt is linked statically. The terminfo, themes and shell integration are
+# Ghostty's at LIBGHOSTTY_VT_REV, from the libghostty-vt prefix (scripts/build-ghostty-vt.sh).
 #
 # Usage: scripts/stage.sh DESTINATION [--profile release|debug]   (default: release)
 set -euo pipefail
@@ -68,6 +69,10 @@ verify_ghostty_resources "$DEST/share" >&2
 # after the check of Ghostty's own catalog: agterm's bundled theme(s), the seeded default `agterm` among them
 # (upstream's stage_custom_themes)
 install -m644 "$NATIVE_ROOT"/build/themes/* "$DEST/share/ghostty/themes/"
+# ngterm's own PowerShell integration (Ghostty has none) in ngterm's own resources, not Ghostty's, which an inherited
+# GHOSTTY_RESOURCES_DIR replaces: a live PowerShell pane's wrap finds it there (crates/agterm-session/src/launch.rs)
+install -Dm644 "$NATIVE_ROOT/resources/shell-integration/pwsh/ngterm.ps1" \
+  "$DEST/share/ngterm/shell-integration/pwsh/ngterm.ps1"
 # the agent integrations' payloads (upstream's agent-status package and agent skill, see resources/): the Help menu
 # installers copy them from share/ngterm
 mkdir -p "$DEST/share/ngterm/skills"

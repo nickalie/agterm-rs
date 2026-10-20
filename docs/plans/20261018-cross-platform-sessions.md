@@ -1123,13 +1123,61 @@ Order after Task 7, as two lanes that meet:
 - Modify: `crates/agterm-core/src/live/{shell_integration,replay}.rs`, `crates/agterm-core/src/restore/mode.rs`
 - Create: `resources/shell-integration/pwsh/agterm.ps1` (path settled against the staged Ghostty resources)
 
-- [ ] `ShellKind::Pwsh`: the script (OSC 7, OSC 133, title), launch arguments, the replay script in pwsh
-- [ ] eligibility on Windows: `pwsh.exe`, then `powershell.exe`, else the existing rejection with its reason
-- [ ] tests: script rendering and quoting; replay of an argv with spaces and quotes; eligibility cases; e2e on the
+- [x] `ShellKind::Pwsh`: the script (OSC 7, OSC 133, title), launch arguments, the replay script in pwsh
+      - `LoginShell::Pwsh` (the enum kept its name), known by `pwsh`/`powershell` with or without `.exe`, after `/` or
+        `\`, on every OS (a Unix pwsh login shell wraps too). The script is
+        `resources/shell-integration/pwsh/ngterm.ps1` (ngterm's own name), staged by `scripts/stage.sh` in ngterm's own resources
+        (`share/ngterm/shell-integration/pwsh/ngterm.ps1`, resolved from the staged root as the zmx build id is, so an
+        inherited `GHOSTTY_RESOURCES_DIR` cannot hide it; `Runtime`/`LiveProbe`/`Inputs` carry `own_resources_dir`);
+        `AGTERM_PWSH_INTEGRATION` names it and `-NoLogo -NoExit -Command` (Unix `-Login` first) loads it as a script
+        block (no execution policy applies), wrapping the profile's prompt: OSC 133 A/B/C/D (A written before the
+        profile's prompt runs, so its `Write-Host` output follows it; C through `PSConsoleHostReadLine`), OSC 7 as
+        `kitty-shell-cwd://` (a Windows path `/C:/…`), the title and the bar cursor under `GHOSTTY_SHELL_FEATURES`;
+        what may be unset is looked up (`Get-Variable`, `Get-Item Function:`), so a profile's `Set-StrictMode` holds.
+        The replay has no `exec`: it re-arms the variable and loads the integration first (a Ctrl+C ends a `-Command`
+        script), then `& 'program' 'args'` (in a scope where a profile's `Legacy` argument passing becomes `Standard`,
+        `Windows` on Windows) or a durable line as a script block, single-quoted with typographic quotes doubled;
+        exact argv in PowerShell 7.3+ on Linux and macOS, on Windows but for `cmd.exe`, batch files, WSH scripts and
+        `msiexec`; Windows PowerShell 5.1's legacy passing loses embedded `"` and empty arguments. `command_restore`
+        takes PowerShell (and a Windows `\`-path, `.exe` name) as a shell, idle when its host options, read as its
+        console host's parser reads them (7's and 5.1's tables: `-`, `/` or another dash, abbreviations, option values
+        skipped, an unknown option or the first argument starting the script or command, 7's `-Version` exiting,
+        `-EncodedCommand` taking one value with the options going on, `-File -` reading commands from stdin with
+        prompts), leave it at a prompt: options alone, `-NoExit` before the command or script (before or after an
+        encoded command), or `-File -`, so a live pwsh pane at its prompt (or a
+        `Start-Job` worker) is never replayed. A plain pane's PowerShell gets no integration (Ghostty has none). On
+        Unix pwsh has no job control: every program it starts, foreground or background (`Start-Process
+        -NoNewWindow`, thread jobs, prompt helpers), stays in its own group and nothing tells them apart, so the
+        foreground reads take a group led by a PowerShell holding its prompt for that shell: the restore capture finds
+        nothing, `tree` shows the shell and a restart replays nothing, and a Unix pwsh pane restores to its prompt
+        (review round 1 added a descent to the shell's first child; round 2 removed it, since it replayed background
+        programs; Windows reads the console's foreground)
+- [x] eligibility on Windows: `pwsh.exe`, then `powershell.exe`, else the existing rejection with its reason
+      - `windows_shell`: launchable `pwsh.exe` on `PATH`, then `powershell.exe` on `PATH`, then the system directory's
+        `WindowsPowerShell\v1.0\powershell.exe`, as full paths; none is `None` (plain panes run `cmd.exe`) and the live
+        probe's `UnsupportedLoginShell`, worded per OS ("neither pwsh.exe nor powershell.exe is available"; Unix "… is
+        not zsh, bash, fish or PowerShell")
+- [x] tests: script rendering and quoting; replay of an argv with spaces and quotes; eligibility cases; e2e on the
       Windows runner (debugged in the VM) at the session and core level: a live pwsh session reports its cwd, and its
       foreground command, read through Task 15's table, is replayed by `agterm-core`'s replay into a recreated
       session
-- [ ] run gates
+      - core: rendering, quoting, eligibility, `is_idle_shell`, and a real-pwsh replay round trip of odd arguments
+        after the integration loads (`live::replay`); session: `tests/pwsh.rs` on real PTYs (`Pane::spawn`), on every
+        OS with a pwsh (required on Windows): the prompt's OSC 7, 133 and title, C and `D;3`, the running helper read
+        through the process table and `ForegroundReader` (the capture's production path; Windows: its argv from the
+        console foreground; Unix: nothing captured, the shell in `tree` and for a restart), its argv (the one read on
+        Windows, the one typed on Unix) replayed into a new session that runs it with the same arguments and then
+        reports its directory; each line typed once `PSReadLine` echoed its first
+        character back (no sleeps), the helper's record renamed into place. The VM was not used: copying
+        the tree into it was refused by the environment's permission classifier, so Windows is checked on CI only
+- [x] run gates
+      - fmt, locked metadata, tracing and vendored-source checks, clippy (workspace with WPE, frontend without its
+        default features, `agterm-core` for the Windows and macOS targets), the lint report, the selftests, the
+        workspace tests headless (all green but the load-bound frame-rate harness in `agterm-gpui`'s `html_overlay`,
+        as in Tasks 16 and 17, at a load average of 40–70; `quick_terminal`'s weston case, failed under that load,
+        passes on rerun), the full conformance run (ratchet holds, 667 ids, 14 not run on this host);
+        `cross-platform.yml` run 39323416810 green on ubuntu-26.04, macos-26 and windows-2025, the PowerShell
+        session test run on all three
 
 ### Task 28: Remove zmx
 

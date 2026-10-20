@@ -7,12 +7,26 @@
 //!   `GHOSTTY_BASH_INJECT` to rebuild bash's own startup sequence, the app's `ENV` kept as `GHOSTTY_BASH_ENV` and
 //!   `HISTFILE` pinned to `~/.bash_history` (POSIX mode's default is `~/.sh_history`);
 //! - fish through `XDG_DATA_DIRS`, the integration's `vendor_conf.d` ahead of the inherited (or the specification's
-//!   default) directories, which the integration removes again.
+//!   default) directories, which the integration removes again;
+//! - PowerShell (7's `pwsh`, or Windows PowerShell 5.1's `powershell`), which Ghostty does not integrate, through this
+//!   build's own script (`resources/shell-integration/pwsh/ngterm.ps1`, staged in ngterm's own resources, the staged
+//!   root's `share/ngterm`, so a `GHOSTTY_RESOURCES_DIR` inherited from another terminal does not hide it):
+//!   [`PWSH_INTEGRATION_VARIABLE`] names it, and the shell's `-NoExit -Command` loads it ([`PWSH_LOAD`]) after the
+//!   profiles, so the profile's prompt is kept and wrapped. It is read and run as a script block, not run as a file,
+//!   so no execution policy refuses it (Windows PowerShell's default `Restricted`, `RemoteSigned` on a downloaded
+//!   copy).
 //!
-//! bash and fish are a Rust-only extension: upstream wraps zsh only (capability `live-any-shell`).
+//! bash, fish and PowerShell are a Rust-only extension: upstream wraps zsh only (capability `live-any-shell`).
+//! PowerShell is the shell a Windows live pane runs (`agterm-session::launch`), and a Unix one whose login shell it
+//! is. It has no job control there, so every program it runs, in the foreground or the background, stays in the
+//! shell's own process group, led by the shell (the terminal's session leader), and nothing tells its foreground
+//! program from the others: the foreground reads (`restore::capture`) take that group for the shell, so the restore
+//! capture finds nothing, the `tree` shows the shell and a restart replays nothing, and a Unix PowerShell pane
+//! restores to its prompt. Windows' process table names the shell's newest child as the console's foreground instead,
+//! which they take as it is.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::command_restore::basename;
 use crate::paths::{self, Env};
@@ -20,23 +34,52 @@ use crate::paths::{self, Env};
 /// `XDG_DATA_DIRS` when unset, as the base directory specification defines it.
 const DEFAULT_XDG_DATA_DIRS: &str = "/usr/local/share:/usr/share";
 
+/// The variable naming the PowerShell integration script a live pane's PowerShell loads ([`PWSH_LOAD`]).
+pub const PWSH_INTEGRATION_VARIABLE: &str = "AGTERM_PWSH_INTEGRATION";
+/// The PowerShell integration's directory under `shell-integration`, and its script there.
+const PWSH_DIRECTORY: &str = "pwsh";
+const PWSH_SCRIPT: &str = "ngterm.ps1";
+/// The statement that loads the PowerShell integration [`PWSH_INTEGRATION_VARIABLE`] names into the global scope as a
+/// script block (no execution policy applies to one): nothing without the variable, a warning when the load fails.
+/// Only language syntax, .NET calls and a module-qualified cmdlet, so no alias or function of the user's takes it over.
+pub const PWSH_LOAD: &str = "if ($env:AGTERM_PWSH_INTEGRATION) { try { . ([scriptblock]::Create(\
+    [System.IO.File]::ReadAllText($env:AGTERM_PWSH_INTEGRATION))) } catch { \
+    Microsoft.PowerShell.Utility\\Write-Warning \"ngterm: the shell integration did not load: $_\" } }";
+/// PowerShell's flags before the `-Command` that loads the integration: no banner, and an interactive shell once the
+/// command ran. `-Login` (Unix only, where it must come first) makes it a login shell, as zmx makes zsh and fish one;
+/// Windows has no login profiles, and Windows PowerShell 5.1 refuses the flag.
+const PWSH_INTERACTIVE: &[&str] = if cfg!(windows) {
+    &["-NoLogo", "-NoExit"]
+} else {
+    &["-Login", "-NoLogo", "-NoExit"]
+};
+/// [`PWSH_INTERACTIVE`], then `-Command`, which takes the script after it.
+const PWSH_SCRIPT_FLAGS: &[&str] = if cfg!(windows) {
+    &["-NoLogo", "-NoExit", "-Command"]
+} else {
+    &["-Login", "-NoLogo", "-NoExit", "-Command"]
+};
+
 /// A login shell a pane can be wrapped in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginShell {
     Zsh,
     Bash,
     Fish,
+    /// PowerShell: 7's `pwsh`, or Windows PowerShell 5.1's `powershell`.
+    Pwsh,
 }
 
 impl LoginShell {
-    /// The shell `path` names, by its basename; `None` for any other shell.
+    /// The shell `path` names, by its basename; `None` for any other shell. PowerShell is known by its Windows names
+    /// too ([`is_powershell`]).
     #[must_use]
     pub fn of(path: &str) -> Option<Self> {
         match basename(path) {
             "zsh" => Some(Self::Zsh),
             "bash" => Some(Self::Bash),
             "fish" => Some(Self::Fish),
-            _ => None,
+            _ => is_powershell(path).then_some(Self::Pwsh),
         }
     }
 
@@ -47,30 +90,56 @@ impl LoginShell {
             Self::Zsh => "zsh",
             Self::Bash => "bash",
             Self::Fish => "fish",
+            Self::Pwsh => "pwsh",
         }
     }
 
-    /// The integration file under the resources directory whose presence means the integration is bundled.
-    fn loader(self) -> &'static str {
+    /// The path components, under the resources directory, of the integration file whose presence means the
+    /// integration is bundled.
+    fn loader(self) -> &'static [&'static str] {
         match self {
-            Self::Zsh => "shell-integration/zsh/.zshenv",
-            Self::Bash => "shell-integration/bash/ghostty.bash",
-            Self::Fish => "shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish",
+            Self::Zsh => &["shell-integration", "zsh", ".zshenv"],
+            Self::Bash => &["shell-integration", "bash", "ghostty.bash"],
+            Self::Fish => &[
+                "shell-integration",
+                "fish",
+                "vendor_conf.d",
+                "ghostty-shell-integration.fish",
+            ],
+            Self::Pwsh => &["shell-integration", PWSH_DIRECTORY, PWSH_SCRIPT],
         }
     }
 
-    /// Whether `resources` (a Ghostty resources directory) bundles this shell's integration.
+    /// The integration file's path under `resources`.
+    fn loader_path(self, resources: &Path) -> PathBuf {
+        self.loader()
+            .iter()
+            .fold(resources.to_path_buf(), |path, component| path.join(component))
+    }
+
+    /// Whether `resources` bundles this shell's integration: a Ghostty resources directory, or ngterm's own for the
+    /// shells [`Self::is_ngterms`] names.
     #[must_use]
     pub fn is_bundled(self, resources: &Path) -> bool {
-        resources.join(self.loader()).exists()
+        self.loader_path(resources).exists()
     }
 
-    /// The flags of the interactive login shell a replay ends in (`exec <shell> <flags>`).
+    /// Whether this shell's integration is ngterm's own, in its own resources directory, rather than Ghostty's:
+    /// PowerShell's, which Ghostty does not integrate.
+    #[must_use]
+    pub fn is_ngterms(self) -> bool {
+        self == Self::Pwsh
+    }
+
+    /// The flags of the interactive login shell a replay ends in (`exec <shell> <flags>`). PowerShell has no `exec`:
+    /// its replay runs inside the shell that stays ([`Self::script_flags`]), so these are only the flags it starts
+    /// with.
     #[must_use]
     pub fn interactive_flags(self) -> &'static [&'static str] {
         match self {
             Self::Zsh | Self::Fish => &["-il"],
             Self::Bash => &["--posix", "-il"],
+            Self::Pwsh => PWSH_INTERACTIVE,
         }
     }
 
@@ -80,16 +149,23 @@ impl LoginShell {
         match self {
             Self::Zsh | Self::Fish => &["-lic"],
             Self::Bash => &["--posix", "-lic"],
+            Self::Pwsh => PWSH_SCRIPT_FLAGS,
         }
     }
 
     /// The program a new daemon runs when the attach carries nothing to replay. zmx itself starts `$SHELL` as a login
-    /// shell (`-zsh`, `-fish`), which zsh and fish need; bash reads `ENV` only in POSIX mode, a flag zmx never passes.
+    /// shell (`-zsh`, `-fish`), which zsh and fish need; bash reads `ENV` only in POSIX mode, a flag zmx never passes;
+    /// PowerShell reads no integration by itself, so its `-Command` loads it ([`PWSH_LOAD`]).
     #[must_use]
     pub fn login_arguments(self, shell: &str) -> Vec<String> {
         match self {
             Self::Zsh | Self::Fish => Vec::new(),
             Self::Bash => vec![shell.to_owned(), "--posix".to_owned(), "-l".to_owned()],
+            Self::Pwsh => std::iter::once(shell)
+                .chain(PWSH_SCRIPT_FLAGS.iter().copied())
+                .chain([PWSH_LOAD])
+                .map(str::to_owned)
+                .collect(),
         }
     }
 
@@ -98,6 +174,22 @@ impl LoginShell {
     pub fn is_fish(self) -> bool {
         self == Self::Fish
     }
+
+    /// Whether a replay script is written in PowerShell's syntax.
+    #[must_use]
+    pub fn is_powershell(self) -> bool {
+        self == Self::Pwsh
+    }
+}
+
+/// Whether `path` names PowerShell: its last component, after a `/` or a `\`, is `pwsh` or `powershell`, with or
+/// without `.exe`, in any case (`C:\Program Files\PowerShell\7\pwsh.exe`, `/usr/bin/pwsh`).
+#[must_use]
+pub fn is_powershell(path: &str) -> bool {
+    let name = path.rsplit(['/', '\\']).find(|part| !part.is_empty()).unwrap_or(path);
+    let name = name.to_ascii_lowercase();
+    let stem = name.strip_suffix(".exe").unwrap_or(&name);
+    stem == "pwsh" || stem == "powershell"
 }
 
 /// The app's own values of the variables an integration hands on or extends, read once from its environment.
@@ -131,7 +223,7 @@ impl Inherited {
 }
 
 /// Sets `shell`'s integration variables in `environment`, the integration under `resources` (a Ghostty resources
-/// directory, standardized).
+/// directory, or ngterm's own for the shells [`LoginShell::is_ngterms`] names; standardized).
 pub fn inject(shell: LoginShell, resources: &Path, inherited: &Inherited, environment: &mut BTreeMap<String, String>) {
     let integration = resources.join("shell-integration");
     let mut set = |key: &str, value: String| environment.insert(key.to_owned(), value);
@@ -169,6 +261,12 @@ pub fn inject(shell: LoginShell, resources: &Path, inherited: &Inherited, enviro
             set("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", integration);
             set("XDG_DATA_DIRS", data_dirs);
         }
+        LoginShell::Pwsh => {
+            set(
+                PWSH_INTEGRATION_VARIABLE,
+                shell.loader_path(resources).to_string_lossy().into_owned(),
+            );
+        }
     }
 }
 
@@ -180,8 +278,9 @@ pub fn inject(shell: LoginShell, resources: &Path, inherited: &Inherited, enviro
 /// `None`, with `environment` untouched, for any other program, an integration that is not bundled, a bash given
 /// `--posix` or `-c` (no interactive start to hook), and a line with quotes or escapes, which this split does not parse
 /// (Ghostty's does; such a line runs without the integration). Ghostty's elvish and nushell integrations are not
-/// ported. On macOS `/bin/bash` is not detected, as Ghostty's `detectShell` does not: Apple's patched bash 3.2 skips
-/// the `ENV` startup the bash integration rides on.
+/// ported, and Ghostty has no PowerShell one: a plain pane's PowerShell runs as given. On macOS `/bin/bash` is not
+/// detected, as Ghostty's `detectShell` does not: Apple's patched bash 3.2 skips the `ENV` startup the bash
+/// integration rides on.
 #[must_use]
 pub fn setup(
     command: &str,
@@ -225,6 +324,8 @@ pub fn setup_as(
             (line, Some(flags))
         }
         LoginShell::Zsh | LoginShell::Fish => (command.to_owned(), None),
+        // Ghostty's automatic integration knows no PowerShell, and a plain pane's follows it
+        LoginShell::Pwsh => return None,
     };
     inject(shell, resources, inherited, environment);
     if let Some(BashFlags { inject, rcfile }) = flags {
@@ -309,6 +410,7 @@ pub fn rearm(shell: LoginShell, environment: &BTreeMap<String, String>) -> Optio
             required("XDG_DATA_DIRS")?,
             required("GHOSTTY_SHELL_INTEGRATION_XDG_DIR")?,
         ],
+        LoginShell::Pwsh => vec![required(PWSH_INTEGRATION_VARIABLE)?],
     };
     Some(steps)
 }
@@ -332,6 +434,8 @@ mod tests {
     use crate::paths::MapEnv;
 
     use super::*;
+
+    const ALL: [LoginShell; 4] = [LoginShell::Zsh, LoginShell::Bash, LoginShell::Fish, LoginShell::Pwsh];
 
     fn injected(shell: LoginShell, inherited: &Inherited) -> BTreeMap<String, String> {
         let mut environment = BTreeMap::from([("AGTERM_ENABLED".to_owned(), "1".to_owned())]);
@@ -357,21 +461,48 @@ mod tests {
     }
 
     #[test]
+    fn powershell_is_known_by_its_unix_and_windows_names() {
+        for path in [
+            "/usr/bin/pwsh",
+            "pwsh",
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "PowerShell.EXE",
+            "PWSH.exe",
+            "C:/tools/pwsh.exe",
+        ] {
+            assert_eq!(LoginShell::of(path), Some(LoginShell::Pwsh), "{path}");
+        }
+        for other in [
+            "pwsh.exe.bak",
+            "/usr/bin/pwsh-preview",
+            r"C:\Windows\System32\cmd.exe",
+            r"C:\pwsh\bash.exe",
+            "powershell_ise.exe",
+            ".exe",
+        ] {
+            assert_eq!(LoginShell::of(other), None, "{other}");
+        }
+        assert!(LoginShell::Pwsh.is_powershell() && !LoginShell::Fish.is_powershell());
+    }
+
+    #[test]
     fn each_shell_is_bundled_by_its_own_loader() {
         let resources = tempfile::tempdir().unwrap();
-        for shell in [LoginShell::Zsh, LoginShell::Bash, LoginShell::Fish] {
+        for shell in ALL {
             assert!(!shell.is_bundled(resources.path()), "{}", shell.name());
         }
         for loader in [
             "shell-integration/zsh/.zshenv",
             "shell-integration/bash/ghostty.bash",
             "shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish",
+            "shell-integration/pwsh/ngterm.ps1",
         ] {
             let path = resources.path().join(loader);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, "").unwrap();
         }
-        for shell in [LoginShell::Zsh, LoginShell::Bash, LoginShell::Fish] {
+        for shell in ALL {
             assert!(shell.is_bundled(resources.path()), "{}", shell.name());
         }
     }
@@ -528,7 +659,7 @@ mod tests {
             ]
         );
         // a wrap without the integration has nothing to re-arm
-        for shell in [LoginShell::Zsh, LoginShell::Bash, LoginShell::Fish] {
+        for shell in ALL {
             assert_eq!(rearm(shell, &BTreeMap::new()), None, "{}", shell.name());
         }
     }
@@ -536,8 +667,8 @@ mod tests {
     /// A resources directory bundling every integration.
     fn bundled() -> tempfile::TempDir {
         let resources = tempfile::tempdir().unwrap();
-        for shell in [LoginShell::Zsh, LoginShell::Bash, LoginShell::Fish] {
-            let path = resources.path().join(shell.loader());
+        for shell in ALL {
+            let path = shell.loader_path(resources.path());
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, "").unwrap();
         }
@@ -631,5 +762,65 @@ mod tests {
         assert_eq!(LoginShell::Bash.interactive_flags(), ["--posix", "-il"]);
         assert_eq!(LoginShell::Fish.script_flags(), ["-lic"]);
         assert_eq!(LoginShell::Zsh.interactive_flags(), ["-il"]);
+    }
+
+    #[test]
+    fn powershell_names_its_script_and_rearms_that_alone() {
+        let resources = Path::new("res");
+        let mut environment = BTreeMap::new();
+        inject(LoginShell::Pwsh, resources, &Inherited::default(), &mut environment);
+        let script = resources.join("shell-integration").join("pwsh").join("ngterm.ps1");
+        let script = script.to_string_lossy().into_owned();
+        assert_eq!(environment, pairs(&[(PWSH_INTEGRATION_VARIABLE, &script)]));
+        assert_eq!(
+            rearm(LoginShell::Pwsh, &environment),
+            Some(vec![Rearm::Export(PWSH_INTEGRATION_VARIABLE, script)])
+        );
+        // the bash, zsh and fish variables are no PowerShell's
+        let bash = injected(LoginShell::Bash, &Inherited::default());
+        assert_eq!(rearm(LoginShell::Pwsh, &bash), None);
+    }
+
+    #[test]
+    fn powershell_starts_interactive_and_loads_its_integration_by_the_variable() {
+        let login = if cfg!(windows) {
+            vec!["-NoLogo", "-NoExit"]
+        } else {
+            // a login shell where PowerShell has one, its flag first
+            vec!["-Login", "-NoLogo", "-NoExit"]
+        };
+        assert_eq!(LoginShell::Pwsh.interactive_flags(), login);
+        let mut script = login.clone();
+        script.push("-Command");
+        assert_eq!(LoginShell::Pwsh.script_flags(), script);
+        let mut arguments = vec!["/usr/bin/pwsh"];
+        arguments.extend(&script);
+        arguments.push(PWSH_LOAD);
+        assert_eq!(LoginShell::Pwsh.login_arguments("/usr/bin/pwsh"), arguments);
+        assert_eq!(
+            PWSH_LOAD,
+            "if ($env:AGTERM_PWSH_INTEGRATION) { try { . ([scriptblock]::Create([System.IO.File]::ReadAllText(\
+             $env:AGTERM_PWSH_INTEGRATION))) } catch { Microsoft.PowerShell.Utility\\Write-Warning \"ngterm: the \
+             shell integration did not load: $_\" } }"
+        );
+        assert!(PWSH_LOAD.contains(&format!("$env:{PWSH_INTEGRATION_VARIABLE}")));
+    }
+
+    #[test]
+    fn a_plain_panes_powershell_runs_without_an_integration() {
+        // Ghostty's automatic integration has none for PowerShell
+        let resources = bundled();
+        for command in ["pwsh", "/usr/bin/pwsh -NoLogo", "powershell.exe"] {
+            assert_eq!(set_up(resources.path(), command), (None, BTreeMap::new()), "{command}");
+        }
+        let mut environment = BTreeMap::new();
+        let forced = setup_as(
+            Some(LoginShell::Pwsh),
+            "pwsh",
+            resources.path(),
+            &Inherited::default(),
+            &mut environment,
+        );
+        assert_eq!((forced, environment), (None, BTreeMap::new()));
     }
 }
