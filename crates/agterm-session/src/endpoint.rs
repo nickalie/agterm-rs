@@ -192,13 +192,13 @@ pub fn disconnect(stream: &Stream) {
 }
 
 /// End a connection in order while other threads still hold it: the peer reads everything written to it before, then
-/// its end, and the other threads wake as [`disconnect`] wakes them. On Windows this waits until the client has read
-/// what was written (the pipe is flushed before it is disconnected), so a client that stops reading holds it up; on
-/// Unix what was written is already the peer's to read when the socket is shut down.
+/// its end, and the other threads wake as [`disconnect`] wakes them. On Unix what was written is already the peer's to
+/// read when the socket is shut down. On Windows a disconnect discards what the client has not read, so this first
+/// waits until it has read it all (`FlushFileBuffers` on the pipe; the local-socket stream's own flush does nothing):
+/// a client that stops reading holds the call until it reads, closes its end, or the connection is disconnected from
+/// another thread.
 pub fn close(stream: &Stream) {
-    // a peer already gone has nothing left to read: the disconnect is all there is to do
-    let _ = io::Write::flush(&mut &*stream);
-    sys::disconnect(stream);
+    sys::close(stream);
 }
 
 /// Whether `error` means the peer closed the connection.

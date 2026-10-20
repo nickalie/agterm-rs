@@ -70,8 +70,9 @@ bitflags! {
             | Self::CHARSETS.bits();
         /// What restores a session's visible screen in another terminal, as zmx's `serializeTerminalState`
         /// (`src/util.zig` at `ZMX_REV`) formats it: the modes, the scrolling region, the keyboard modes and every
-        /// screen extra. The palette goes as color overrides of their own, tab stops would move the cursor after its
-        /// CUP, and the working directory goes without the sentinel the formatter adds.
+        /// screen extra. The palette goes as color overrides of their own, and the working directory without the
+        /// sentinel the formatter adds. zmx leaves the tab stops out (with the formatter it pins they moved the cursor
+        /// after its CUP); this formatter writes them ahead of the cells, so [`Self::TABSTOPS`] may be added.
         const RESTORE = Self::MODES.bits() | Self::SCROLLING_REGION.bits() | Self::KEYBOARD.bits() | Self::SCREEN.bits();
     }
 }

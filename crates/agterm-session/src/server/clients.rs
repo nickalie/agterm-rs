@@ -16,8 +16,9 @@
 //!
 //! Every snapshot queued for a client opens an epoch, numbered from 1: its first snapshot, at its attach, then one per
 //! resync. A snapshot an overflow drops unsent still used its number, so the first epoch a client is sent is 1 unless
-//! its queue overflowed before its first snapshot went out. The output after a snapshot continues it. An answer the client gives in an epoch that is no longer its
-//! current one (a delegated reply sent before its resync) is dropped ([`Clients::epoch`]).
+//! its queue overflowed before its first snapshot went out. The output after a snapshot continues it. An answer the
+//! client gives in an epoch that is no longer its current one (a delegated reply sent before its resync) is dropped
+//! ([`Clients::epoch`]).
 //!
 //! # Order
 //!

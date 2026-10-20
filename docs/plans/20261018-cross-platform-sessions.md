@@ -868,22 +868,23 @@ Order after Task 7, as two lanes that meet:
         (the creator's empty). The server now serves the attach role (`server/attach.rs`, not in the file list):
         attach or create by name (`Refused` gone, create failed, unavailable), a writer thread per connection sending
         snapshots as begin, 64 KiB chunks and end, then output, resizes, roles and the exit, after which the server
-        closes the connection in order (`endpoint::close`: Windows flushes the pipe first); the connection's thread
-        reads input, resizes, metadata (kept for Task 20) and delegated replies; the pane registry and the session
-        count live in `Shared`; `endpoint::disconnect` (Unix shutdown, Windows `DisconnectNamedPipe` + `CancelIoEx`)
-        drops a client. `ServerConfig` gains the client queue limit and resync budget
+        closes the connection in order (`endpoint::close`: on Windows it first waits for the client to read it all,
+        `FlushFileBuffers` through the pipe stream, as the local-socket stream's flush does nothing); the connection's
+        thread reads input, resizes, metadata (kept for Task 20) and delegated replies; the pane registry and the
+        session count live in `Shared`; `endpoint::disconnect` (Unix shutdown, Windows `DisconnectNamedPipe` +
+        `CancelIoEx`) drops a client. `ServerConfig` gains the client queue limit and resync budget
 - [x] the formatter snapshot with extras and the continuation (Task 11), with its byte cap and unavailable outcome
       (bounded wait, then a harmless failure), matching what the suite pins (Context), unstyled blanks included
       - `server::snapshot::capture`: zmx's `serializeTerminalState` order (colour overrides OSC 10/11/12, and the
         palette's OSC 4, against the terminal's defaults, new `Terminal::default_colors`; scrollback without extras;
-        the visible rows with `FormatExtras::RESTORE` and DECSET 2026 off; OSC 7; OSC 2) plus the continuation, which
-        is required (65 MiB cap, `PaneConfig.continuation_limit`) except in a session's last snapshot; a resync leads
-        with `RESYNC_RESET` (CAN, RIS, ED 3, OSC 104/110/111/112: the client starts over from a fresh terminal, so
-        what the dropped output turned off is off), not zmx patch 0003's `ATTACH_RESET`. Deviation: after the
-        scrollback a line feed per row (and per trimmed blank history row) scrolls it into the client's scrollback in
-        place of zmx's `ESC [2J`, which a Ghostty client erases, losing the last screenful of history. An attach or
-        resync waits up to `SNAPSHOT_WAIT` (2 s) for a cut, the PTY read meanwhile; an attach without one changes
-        nothing. OSC 133 `redraw=0` is left to the attach CLI (Task 22)
+        the visible rows with `FormatExtras::RESTORE` and the tab stops, which zmx leaves out; DECSET 2026 off; OSC 7;
+        OSC 2) plus the continuation, which is required (65 MiB cap, `PaneConfig.continuation_limit`) except in a
+        session's last snapshot; a resync leads with `RESYNC_RESET` (CAN, RIS, ED 3, OSC 104/110/111/112: the client
+        starts over from a fresh terminal, so what the dropped output turned off is off), not zmx patch 0003's
+        `ATTACH_RESET`. Deviation: after the scrollback a line feed per row (and per trimmed blank history row)
+        scrolls it into the client's scrollback in place of zmx's `ESC [2J`, which a Ghostty client erases, losing the
+        last screenful of history. An attach or resync waits up to `SNAPSHOT_WAIT` (2 s) for a cut, the PTY read
+        meanwhile; an attach without one changes nothing. OSC 133 `redraw=0` is left to the attach CLI (Task 22)
 - [x] in-band resync on queue overflow with a recovery budget, then disconnect; replies of a superseded epoch dropped
       - an overflowing queue drops what it holds unsent (output, resizes, an unsent snapshot), keeps the role reports
         and queues `Overflowed`; the writer then calls `Pane::resync`: a snapshot of the next epoch, the role kept.
@@ -897,7 +898,8 @@ Order after Task 7, as two lanes that meet:
       - the snapshot's unit tests on bare terminals (every OS), `tests/snapshot.rs` on real panes (the alternate
         screen, the cut and the bounded wait Unix-only: the pseudoconsole re-renders a program's sequences), and
         `tests/attach.rs` through an in-process server (create, detach, reattach, gone, a failed create, a resync and
-        a budget disconnect over the connection)
+        a budget disconnect over the connection, a client reading only after its session ended still getting the
+        last output and the exit)
 - [x] run gates
       - fmt, locked metadata, tracing and vendored-source checks, the lint report, clippy (workspace with all features,
         the frontend without its default features, `agterm-session` for macOS), the selftests, the workspace tests

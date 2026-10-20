@@ -1,7 +1,8 @@
 //! The attach role through a real server, on every OS: an attach that creates its session, typing into it and reading
 //! its output over the connection, a detach that leaves it running, a reattach that starts from its snapshot, the end
-//! reaching the client, and an attach to no session refused as gone. The server runs in the test process
-//! (`server::run`) on a private namespace, and stops by itself once its session ended and its clients left.
+//! reaching the client (one that reads only after the session ended too), and an attach to no session refused as gone.
+//! The server runs in the test process (`server::run`) on a private namespace, and stops by itself once its session
+//! ended and its clients left.
 //!
 //! Every session gets the test's environment without the live agterm's `AGTERM_*` and `ZMX_*` variables.
 
@@ -293,6 +294,60 @@ fn an_attach_creates_its_session_and_a_reattach_starts_from_its_snapshot() -> Te
     // the server ends the connection after the exit; the client need not close it first
     second.closed()?;
     drop(second);
+    assert_eq!(server.stopped()?, StopReason::Idle);
+    Ok(())
+}
+
+/// Whether the session `name` is gone: an attach to it is refused as such. One that attaches leaves at once.
+fn gone(server: &Server, name: &str) -> TestResult<bool> {
+    let mut probe = server.connect()?;
+    probe.attach(name, None)?;
+    Ok(matches!(
+        probe.next()?,
+        Some(AttachServerMessage::Refused {
+            reason: AttachRefusal::Gone,
+            ..
+        })
+    ))
+}
+
+#[test]
+fn a_client_that_reads_late_still_gets_the_sessions_last_output_and_exit() -> TestResult {
+    let server = Server::start()?;
+    let mut late = server.connect()?;
+    late.attach("late", Some(shell()))?;
+    assert_eq!(late.snapshot()?.0, 1);
+    // the session prints its last line and ends while the client reads nothing
+    late.pause(true);
+    let done = server.root.path().join("late-done");
+    let ending = if cfg!(windows) {
+        format!("{} & type nul > \"{}\" & exit", tagged("last"), done.display())
+    } else {
+        format!("{}; : > '{}'; exit", tagged("last"), done.display())
+    };
+    late.type_line(&ending)?;
+    let deadline = Instant::now() + PATIENCE;
+    while !done.exists() || !gone(&server, "late")? {
+        assert!(Instant::now() < deadline, "the session never ended");
+        thread::sleep(Duration::from_millis(50));
+    }
+    // by now the writer has sent the exit; a server that disconnected right after it lost what the client had not read
+    thread::sleep(Duration::from_millis(500));
+    late.pause(false);
+    loop {
+        match late.next()? {
+            Some(AttachServerMessage::Exit { .. }) => break,
+            Some(
+                AttachServerMessage::Output { .. }
+                | AttachServerMessage::Resized { .. }
+                | AttachServerMessage::Role { .. },
+            ) => {}
+            other => return Err(format!("no exit before {other:?}: {:?}", shown(&late.output)).into()),
+        }
+    }
+    assert!(shown(&late.output).contains("got:last"), "{:?}", shown(&late.output));
+    late.closed()?;
+    drop(late);
     assert_eq!(server.stopped()?, StopReason::Idle);
     Ok(())
 }

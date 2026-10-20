@@ -27,8 +27,9 @@
 //!    the scrollback's last screenful);
 //! 4. the visible rows with the terminal state that restores them ([`FormatExtras::RESTORE`]: the modes, the scrolling
 //!    region, the keyboard modes, the cursor with its style, hyperlink, protection, Kitty keyboard flags and
-//!    charsets), synchronized output (DECSET 2026) left out: replayed, it would hold off a new client's rendering until
-//!    its own timeout;
+//!    charsets; and [`FormatExtras::TABSTOPS`], which zmx leaves out because the formatter it pins set them after the
+//!    cursor, while the pinned one writes them ahead of the cells), synchronized output (DECSET 2026) left out:
+//!    replayed, it would hold off a new client's rendering until its own timeout;
 //! 5. the working directory (OSC 7) and the title (OSC 2), which the formatter does not write; after the reset the
 //!    title is written even when empty;
 //! 6. the stream continuation: the unfinished escape sequence or UTF-8 character the session's parser stands in, so
@@ -201,7 +202,8 @@ fn scroll_away(history: usize, cells: &[u8], rows: u16) -> Vec<u8> {
     out
 }
 
-/// The visible rows with the state that restores them.
+/// The visible rows with the state that restores them, the tab stops included: the formatter writes those ahead of the
+/// cells, and the cursor goes back where it was after them.
 fn visible(terminal: &mut Terminal, out: &mut Vec<u8>) -> Result<(), SnapshotError> {
     let region = Region::Range {
         start: Point::new(PointTag::Active, 0, 0),
@@ -212,7 +214,11 @@ fn visible(terminal: &mut Terminal, out: &mut Vec<u8>) -> Result<(), SnapshotErr
         ),
         rectangle: false,
     };
-    out.extend_from_slice(&format(terminal, region, FormatExtras::RESTORE)?);
+    out.extend_from_slice(&format(
+        terminal,
+        region,
+        FormatExtras::RESTORE | FormatExtras::TABSTOPS,
+    )?);
     Ok(())
 }
 
@@ -555,6 +561,8 @@ mod tests {
         session.vt_write(b"1m!\x1b[0m\x1b[<u\x1b[?25h\x1b[0 q\x1b[?1049l");
         session.vt_write(b"\x1b[?1l\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1004l\x1b[?2004l");
         session.vt_write(b"\x1b]111\x07\x1b]104;1\x07\x1b]2;new title\x07");
+        // and sets its own tab stops: only one, at column 5
+        session.vt_write(b"\x1b[3g\x1b[5G\x1bH\r");
         session.vt_write(&numbered("new", 3));
         session.vt_write(b"$ ");
         let mut resynced = client(&sent);
@@ -565,6 +573,14 @@ mod tests {
         assert_eq!(full(&mut resynced), expected);
         // the scrollback is the session's, not the client's with the session's added
         assert_eq!(resynced.total_rows(), session.total_rows());
+        // the tab stops are the session's, and a first attach gets them too
+        let mut attached = client(&capture(&mut session, Kind::Attach).unwrap());
+        for terminal in [&mut session, &mut resynced, &mut attached] {
+            terminal.vt_write(b"\x1b[H\t");
+        }
+        assert_eq!(session.cursor(), (4, 0));
+        assert_eq!(resynced.cursor(), session.cursor());
+        assert_eq!(attached.cursor(), session.cursor());
         session.vt_write(b"typed\r\n");
         resynced.vt_write(b"typed\r\n");
         assert_eq!(full(&mut resynced), full(&mut session));

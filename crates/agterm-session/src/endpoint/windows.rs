@@ -79,6 +79,16 @@ pub(super) fn disconnect(stream: &Stream) {
     unsafe { CancelIoEx(handle, std::ptr::null()) };
 }
 
+/// Wait until the client has read everything written to the pipe, then [`disconnect`] it, which would discard what is
+/// unread. The flush is the pipe stream's (`FlushFileBuffers`, skipped when nothing was written since the last one):
+/// the local-socket wrapper's is a no-op. It returns once the client has read it all, or with an error once the
+/// client's end is closed or the pipe is disconnected (a client gone has nothing left to read).
+pub(super) fn close(stream: &Stream) {
+    let Stream::NamedPipe(pipe) = stream;
+    let _ = pipe.inner().flush();
+    disconnect(stream);
+}
+
 pub(super) fn peer_closed(stream: &mut Stream) -> io::Result<bool> {
     let Stream::NamedPipe(pipe) = stream;
     let mut available = 0_u32;

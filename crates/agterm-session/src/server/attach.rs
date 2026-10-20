@@ -21,7 +21,8 @@
 //!   resync budget, or one no snapshot could be cut for in time, is detached and its connection closed. One that
 //!   overflowed when the session ends is sent the session's last snapshot instead, ahead of its exit;
 //! - the session's exit, after which the server closes the connection in order ([`endpoint::close`]): the client
-//!   reads the exit, then the connection's end.
+//!   reads all that came before, the exit, then the connection's end, however late it reads them (on Windows the
+//!   writer waits for that until the client closes or detaches).
 //!
 //! Meanwhile the connection's own thread reads the client's input, resizes, reply metadata and delegated replies
 //! (one of an epoch the client has left is dropped, [`Pane::accepts_reply`]), until it detaches or the connection

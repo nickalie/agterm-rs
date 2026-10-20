@@ -560,8 +560,9 @@ impl Pane {
     /// # Errors
     ///
     /// [`ResyncError::Detached`] when it is not attached, [`ResyncError::Ended`] once the program ended, before or
-    /// during the wait (the session's last snapshot and its exit are queued instead); [`ResyncError::OverBudget`] past its [`ResyncBudget`] and [`ResyncError::Unavailable`] without a
-    /// snapshot, both of which detach it (it leaves the lead, as a detach does), so its connection is to be closed.
+    /// during the wait (the session's last snapshot and its exit are queued instead); [`ResyncError::OverBudget`] past
+    /// its [`ResyncBudget`] and [`ResyncError::Unavailable`] without a snapshot, both of which detach it (it leaves the
+    /// lead, as a detach does), so its connection is to be closed.
     pub fn resync(&self, id: ClientId) -> Result<(), ResyncError> {
         let mut state = self.core.lock();
         if state.exit.is_some() {

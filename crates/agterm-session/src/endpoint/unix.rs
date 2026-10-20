@@ -216,6 +216,11 @@ pub(super) fn disconnect(stream: &Stream) {
     let _ = socket.inner().shutdown(std::net::Shutdown::Both);
 }
 
+/// What was written is in the peer's receive queue already, which the shutdown leaves for it to read before its end.
+pub(super) fn close(stream: &Stream) {
+    disconnect(stream);
+}
+
 pub(super) fn peer_closed(stream: &mut Stream) -> io::Result<bool> {
     stream.set_nonblocking(true)?;
     let mut probe = [0_u8; 1];
