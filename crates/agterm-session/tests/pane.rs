@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 
 use agterm_session::protocol::{ExitStatus, GridSize, SessionSpec};
 use agterm_session::server::clients::{ClientEvent, RecvError};
-use agterm_session::server::pane::{DIRECTORY_VARIABLE, FALLBACK_TERM, Pane, Panes, SESSION_VARIABLE, SpawnError};
+use agterm_session::server::pane::{
+    AttachError, DIRECTORY_VARIABLE, FALLBACK_TERM, Pane, Panes, SESSION_VARIABLE, SpawnError,
+};
 use support::{
     Client, PATIENCE, SIZE, TestResult, config, quit, script, shell, shown, size_line, spec, tagged, type_line,
 };
@@ -178,7 +180,11 @@ fn the_end_reaches_every_client_with_the_programs_status() -> TestResult {
         two.text()
     );
     assert_eq!(exit_code(&pane.wait_exit(PATIENCE).ok_or("no exit")?), Some(7));
-    assert!(pane.attach(SIZE, None).is_none(), "an ended session takes no client");
+    assert_eq!(
+        pane.try_attach(SIZE, None).err(),
+        Some(AttachError::Ended),
+        "an ended session takes no client"
+    );
     // killing an ended session is done at once
     assert!(pane.kill(false)?);
     Ok(())
@@ -285,16 +291,21 @@ fn a_stalled_client_blocks_neither_the_pty_nor_the_others() -> TestResult {
     assert_eq!(exit_code(&status), Some(0));
     assert_eq!(reading.next, pane.offset());
     assert!(screen(&pane).contains(&flood_end(FLOOD_CHUNKS)));
-    // the stalled client's queue dropped what it held (none of it was sent: its resync replaces it), it learnt where
-    // its copy stops, and got the end
+    // the stalled client's queue dropped what it held (none of it was sent: a snapshot replaces it), it learnt where
+    // its copy stops, and got the session's last snapshot, then the end
     let mut events = Vec::new();
     while let Ok(event) = stalled.subscription.try_recv() {
         events.push(event);
     }
-    assert_eq!(
-        events,
-        [ClientEvent::Overflowed { offset: 0 }, ClientEvent::Exit(status)]
-    );
+    let [
+        ClientEvent::Overflowed { offset: 0 },
+        ClientEvent::Snapshot { epoch: 2, offset, .. },
+        ClientEvent::Exit(exit),
+    ] = events.as_slice()
+    else {
+        panic!("not an overflow, the last snapshot and the end: {events:?}");
+    };
+    assert_eq!((*offset, exit), (pane.offset(), &status));
     Ok(())
 }
 

@@ -17,7 +17,7 @@ use agterm_ghostty_vt::{Format, FormatExtras, FormatOptions, Region, Terminal};
 use agterm_session::protocol::{LeadRole, Managed};
 use agterm_session::server::clients::{ClientEvent, RecvError, ResyncBudget};
 use agterm_session::server::pane::{Pane, ResyncError};
-use agterm_session::server::snapshot::ATTACH_RESET;
+use agterm_session::server::snapshot::RESYNC_RESET;
 use support::{Client, PATIENCE, SIZE, TestResult, config, quit, script, shell, tagged, type_line};
 
 /// What a terminal shows: every row with its styles, scrollback included, the cursor and the active screen.
@@ -41,18 +41,10 @@ fn view(terminal: &mut Terminal) -> View {
         .flatten()
         .unwrap_or_default();
     View {
-        rows: without_ascii_designations(&String::from_utf8_lossy(&rows)),
+        rows: String::from_utf8_lossy(&rows).into_owned(),
         cursor: terminal.cursor(),
         alternate: terminal.alternate_screen(),
     }
-}
-
-/// `text` without the ASCII designations of G0–G3 a resync's reset makes: Ghostty prints ASCII and its default set
-/// alike, but its formatter writes a designation that differs from the default.
-fn without_ascii_designations(text: &str) -> String {
-    ["\x1b(B", "\x1b)B", "\x1b*B", "\x1b+B"]
-        .iter()
-        .fold(text.to_owned(), |text, designation| text.replace(designation, ""))
 }
 
 /// Read `client` up to the session's output now and compare what its terminal shows with the session's own terminal,
@@ -319,7 +311,7 @@ fn a_slow_client_is_resynced_in_band_and_keeps_its_role() -> TestResult {
         panic!("no snapshot after the resync: {:?}", slow.events);
     };
     assert_eq!(*epoch, 2, "its first snapshot's epoch was replaced, never sent");
-    assert!(data.starts_with(ATTACH_RESET));
+    assert!(data.starts_with(RESYNC_RESET));
     assert!(pane.accepts_reply(slow.id(), 2));
     assert!(
         !pane.accepts_reply(slow.id(), 1),
@@ -370,5 +362,88 @@ fn a_client_past_its_resync_budget_is_disconnected() -> TestResult {
     quit(&pane)?;
     watcher.finish();
     assert_eq!(pane.resync(slow.id()), Err(ResyncError::Ended));
+    Ok(())
+}
+
+/// The slow client's events after its role: its overflow, the session's last snapshot (epoch 2, its first dropped
+/// unsent) and the exit; its terminal then shows the session's final one.
+fn assert_last_snapshot(pane: &Pane, slow: &mut Client) -> TestResult {
+    let events: Vec<_> = slow
+        .events
+        .iter()
+        .filter(|event| !matches!(event, ClientEvent::Role { .. }))
+        .collect();
+    let [
+        ClientEvent::Overflowed { .. },
+        ClientEvent::Snapshot { epoch: 2, data, .. },
+        ClientEvent::Exit(_),
+    ] = events.as_slice()
+    else {
+        return Err(format!("no last snapshot between the overflow and the exit: {:?}", slow.events).into());
+    };
+    assert!(data.starts_with(RESYNC_RESET));
+    let terminal = slow.terminal.as_mut().ok_or("the client got no snapshot")?;
+    assert_eq!(view(terminal), pane.with_terminal(view));
+    Ok(())
+}
+
+#[test]
+fn a_client_behind_when_the_session_ends_gets_its_last_snapshot_before_the_exit() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let (pane, mut slow, mut watcher) = slow_session("last", &dir, ResyncBudget::default())?;
+    flood_past(&pane, &mut watcher, 1..=3)?;
+    quit(&pane)?;
+    watcher.finish();
+    // its writer comes to the overflow only after the end: no resync then, the last snapshot is queued instead
+    assert_eq!(pane.resync(slow.id()), Err(ResyncError::Ended));
+    slow.finish();
+    assert_last_snapshot(&pane, &mut slow)?;
+    let terminal = slow.terminal.as_mut().ok_or("no terminal")?;
+    assert!(support::shown(view(terminal).rows.as_bytes()).contains(&flood_end(3)));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_session_ending_while_a_resync_waits_for_a_cut_gives_the_last_snapshot() -> TestResult {
+    use agterm_session::server::snapshot;
+
+    let dir = tempfile::tempdir()?;
+    let mut config = config("waiting", dir.path(), shell());
+    config.client_queue_limit = 16 * 1024;
+    config.continuation_limit = 64;
+    config.snapshot_wait = PATIENCE;
+    let (pane, creator) = Pane::spawn(config)?;
+    let (mut slow, mut watcher) = (Client::new(creator), Client::attach(&pane)?);
+    flood_past(&pane, &mut watcher, 1..=3)?;
+    // a title longer than the terminal hands on, left open: no cut until the program ends (the shell's `read` takes
+    // the doubled backslash for one)
+    type_line(
+        &pane,
+        "printf '\\\\033]2;'; i=0; while [ $i -lt 20 ]; do printf xxxxxxxxxx; i=$((i+1)); done; read x; exit 3",
+    )?;
+    let id = slow.id();
+    let deadline = Instant::now() + PATIENCE;
+    while pane.with_terminal(|terminal| snapshot::cut_available(terminal)) {
+        assert!(
+            Instant::now() < deadline,
+            "the program never wrote its title: {:?}",
+            String::from_utf8_lossy(&watcher.output[watcher.output.len().saturating_sub(400)..])
+        );
+        watcher.receive(Duration::from_millis(50));
+    }
+    std::thread::scope(|scope| -> TestResult {
+        let resync = scope.spawn(|| pane.resync(id));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!resync.is_finished(), "the resync waits for a cut");
+        type_line(&pane, "")?;
+        assert_eq!(
+            resync.join().map_err(|_| "the resync panicked")?,
+            Err(ResyncError::Ended)
+        );
+        Ok(())
+    })?;
+    assert_eq!(slow.finish(), watcher.finish());
+    assert_last_snapshot(&pane, &mut slow)?;
     Ok(())
 }

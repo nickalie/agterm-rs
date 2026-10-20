@@ -129,9 +129,7 @@ impl Client {
 
     /// Another client, attached now with the grid `size`, under explicit leadership when `managed` is given.
     pub fn join(pane: &Pane, size: GridSize, managed: Option<&Managed>) -> TestResult<Self> {
-        Ok(Self::new(
-            pane.attach(size, managed).ok_or("the session already ended")?,
-        ))
+        Ok(Self::new(pane.try_attach(size, managed)?))
     }
 
     /// The client's id at its session.

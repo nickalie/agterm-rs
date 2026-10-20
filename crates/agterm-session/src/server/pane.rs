@@ -35,16 +35,18 @@
 //! That lock is the pane's one serialization point: the parsing, the output offsets, the clients' registration, the
 //! lead and its resizes, and the snapshots ([`super::snapshot`]) all happen under it, so a snapshot is the terminal's
 //! state at exactly the offset the client's output resumes at. Every client's first event (after its role, when it
-//! is managed) is a [`ClientEvent::Snapshot`](super::clients::ClientEvent) opening its epoch 1: the creator's is
-//! empty, an attach's holds the session's state, scrollback included. A snapshot needs a cut, which the terminal's
+//! is managed) is a [`ClientEvent::Snapshot`](super::clients::ClientEvent) opening its first epoch, normally 1 (an
+//! overflow before it is sent drops it unsent, and the resync's opens the next): the creator's is empty, an attach's
+//! holds the session's state, scrollback included. A snapshot needs a cut, which the terminal's
 //! stream continuation gives; while the program stands inside a sequence too long to hand on, the attach waits for
 //! one, up to [`PaneConfig::snapshot_wait`], while the PTY keeps being read, and then fails without having changed
 //! anything ([`AttachError::Unavailable`]).
 //!
 //! A client whose queue overflowed ([`ClientEvent::Overflowed`](super::clients::ClientEvent)) is resynced in band
-//! by [`Pane::resync`]: a new snapshot, led by [`super::snapshot::ATTACH_RESET`], in place of the output it was not
+//! by [`Pane::resync`]: a new snapshot, led by [`super::snapshot::RESYNC_RESET`], in place of the output it was not
 //! sent, opening its next epoch; it keeps its place in the lead. Past its [`ResyncBudget`], or without a cut in time,
-//! it is detached instead, and its connection is closed.
+//! it is detached instead, and its connection is closed. One that fell behind and was not resynced when the session
+//! ends is sent the session's last snapshot ahead of its exit ([`super::snapshot::Kind::Last`]).
 //!
 //! # Leadership
 //!
@@ -60,8 +62,9 @@
 //!
 //! When the program exits, the pane waits up to [`EXIT_GRACE`] for the PTY's end, so output written before the exit
 //! reaches the terminal and every client first, then queues [`ClientEvent::Exit`](super::clients::ClientEvent) with
-//! the program's code and signal (what `agterm-term`'s `ExitPolicy` decides on) for every client and detaches them.
-//! [`Panes`] then forgets the session.
+//! the program's code and signal (what `agterm-term`'s `ExitPolicy` decides on) for every client and detaches them;
+//! a client whose queue overflowed and was not resynced yet is sent the session's last snapshot before it. [`Panes`]
+//! then forgets the session.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -76,7 +79,7 @@ use agterm_pty::{Actor, ActorConfig, ActorHandle, Child, ExitReason, Killer, Siz
 
 use super::clients::{ClientId, Clients, DEFAULT_QUEUE_LIMIT, ResyncBudget, Subscription};
 use super::lead::{Change, Lead, RoleNotice};
-use super::snapshot::{self, SnapshotError};
+use super::snapshot::{self, Kind, SnapshotError};
 use crate::protocol::{ExitStatus, GridSize, LeadRole, Managed, SessionSpec};
 
 /// The variable naming a session in its program's environment.
@@ -347,9 +350,11 @@ impl Core {
         self.lock().prune();
     }
 
-    /// Record the program's end and tell every client; no client is attached, or leads, from then on.
+    /// Record the program's end and tell every client, a client that fell behind first given the session's last
+    /// snapshot ([`last_snapshots`]); no client is attached, or leads, from then on.
     fn end(&self, status: ExitStatus) {
         let mut state = self.lock();
+        last_snapshots(&mut state);
         state.clients.exit(&status);
         state.lead = Lead::new();
         state.exit = Some(status);
@@ -504,14 +509,9 @@ impl Pane {
         &self.tracked_env
     }
 
-    /// [`Pane::try_attach`], `None` when it fails.
-    #[must_use]
-    pub fn attach(&self, size: GridSize, managed: Option<&Managed>) -> Option<Attached> {
-        self.try_attach(size, managed).ok()
-    }
-
     /// Attach a client whose grid is `size`, under explicit leadership when `managed` is given: it is sent a snapshot
-    /// of the session at the offset returned (its epoch 1), then the session's output from that offset on. When it
+    /// of the session at the offset returned, opening its first epoch (normally 1; later when its queue overflows
+    /// before that snapshot is sent, which drops it unsent), then the session's output from that offset on. When it
     /// takes the lead ([`super::lead`]), the session takes its size first, so the offset, size and snapshot are the
     /// resized session's; a managed client is told its role before anything else. Waits up to
     /// [`PaneConfig::snapshot_wait`] for a cut, the PTY read meanwhile.
@@ -529,7 +529,7 @@ impl Pane {
         if let Some(size) = change.resize {
             self.resize_locked(&mut state, size);
         }
-        let data = match capture(&mut state, false) {
+        let data = match capture(&mut state, Kind::Attach) {
             Ok(data) => data,
             Err(err) => {
                 let undo = state.lead.detach(id);
@@ -554,13 +554,13 @@ impl Pane {
     }
 
     /// Resync the client `id` after its queue overflowed: a snapshot of the session now, led by the reset
-    /// ([`super::snapshot::ATTACH_RESET`]), in place of the output it was not sent, opening its next epoch; its role
+    /// ([`super::snapshot::RESYNC_RESET`]), in place of the output it was not sent, opening its next epoch; its role
     /// is kept. Nothing when it did not overflow. Waits up to [`PaneConfig::snapshot_wait`] for a cut.
     ///
     /// # Errors
     ///
-    /// [`ResyncError::Detached`] when it is not attached, [`ResyncError::Ended`] once the program ended (its exit is
-    /// queued); [`ResyncError::OverBudget`] past its [`ResyncBudget`] and [`ResyncError::Unavailable`] without a
+    /// [`ResyncError::Detached`] when it is not attached, [`ResyncError::Ended`] once the program ended, before or
+    /// during the wait (the session's last snapshot and its exit are queued instead); [`ResyncError::OverBudget`] past its [`ResyncBudget`] and [`ResyncError::Unavailable`] without a
     /// snapshot, both of which detach it (it leaves the lead, as a detach does), so its connection is to be closed.
     pub fn resync(&self, id: ClientId) -> Result<(), ResyncError> {
         let mut state = self.core.lock();
@@ -588,7 +588,7 @@ impl Pane {
         if state.clients.overflowed(id).is_none() {
             return Err(ResyncError::Detached);
         }
-        match capture(&mut state, true) {
+        match capture(&mut state, Kind::Resync) {
             Ok(data) => {
                 let (offset, size) = (state.offset, state.size);
                 state.clients.snapshot(id, offset, size, data);
@@ -928,13 +928,35 @@ fn attach_creator(clients: &mut Clients, lead: &mut Lead, size: GridSize, manage
     }
 }
 
-/// The snapshot of the session `state` holds ([`snapshot::capture`]), led by the reset when `reset`; empty while the
-/// session has no output, which its client's terminal already shows.
-fn capture(state: &mut State, reset: bool) -> Result<Vec<u8>, SnapshotError> {
+/// The snapshot of the session `state` holds ([`snapshot::capture`]) of the `kind` given; empty while the session has
+/// no output, which its client's terminal already shows.
+fn capture(state: &mut State, kind: Kind) -> Result<Vec<u8>, SnapshotError> {
     if state.offset == 0 {
         return Ok(Vec::new());
     }
-    snapshot::capture(&mut state.terminal, reset)
+    snapshot::capture(&mut state.terminal, kind)
+}
+
+/// Queue the session's last snapshot ([`Kind::Last`]) for each client whose queue overflowed and that was not resynced
+/// yet, ahead of its exit, so it ends on the session's final terminal rather than on the output it was sent before it
+/// fell behind (a resync of an ended session is none). It needs no cut and is not counted against the client's resync
+/// budget.
+fn last_snapshots(state: &mut State) {
+    let behind = state.clients.overflowed_clients();
+    if behind.is_empty() {
+        return;
+    }
+    match capture(state, Kind::Last) {
+        Ok(data) => {
+            let (offset, size) = (state.offset, state.size);
+            for id in behind {
+                state.clients.snapshot(id, offset, size, data.clone());
+            }
+        }
+        Err(err) => {
+            tracing::warn!(%err, "a live session's clients that fell behind end without its last snapshot");
+        }
+    }
 }
 
 /// Have the pane forget the client of `subscription` as soon as it is dropped ([`Core::prune`]), under the pane's

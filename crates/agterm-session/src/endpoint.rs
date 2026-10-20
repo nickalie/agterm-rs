@@ -191,6 +191,16 @@ pub fn disconnect(stream: &Stream) {
     sys::disconnect(stream);
 }
 
+/// End a connection in order while other threads still hold it: the peer reads everything written to it before, then
+/// its end, and the other threads wake as [`disconnect`] wakes them. On Windows this waits until the client has read
+/// what was written (the pipe is flushed before it is disconnected), so a client that stops reading holds it up; on
+/// Unix what was written is already the peer's to read when the socket is shut down.
+pub fn close(stream: &Stream) {
+    // a peer already gone has nothing left to read: the disconnect is all there is to do
+    let _ = io::Write::flush(&mut &*stream);
+    sys::disconnect(stream);
+}
+
 /// Whether `error` means the peer closed the connection.
 #[must_use]
 pub fn is_connection_closed_error(error: &io::Error) -> bool {

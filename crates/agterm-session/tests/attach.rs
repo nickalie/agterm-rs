@@ -24,7 +24,7 @@ use agterm_session::protocol::{
 };
 use agterm_session::server::clients::ResyncBudget;
 use agterm_session::server::lifecycle::{Graces, StopReason};
-use agterm_session::server::snapshot::ATTACH_RESET;
+use agterm_session::server::snapshot::RESYNC_RESET;
 use agterm_session::server::{self, ServerConfig};
 use support::{PATIENCE, SIZE, TestResult, shell, shown, tagged};
 
@@ -290,6 +290,8 @@ fn an_attach_creates_its_session_and_a_reattach_starts_from_its_snapshot() -> Te
         ExitStatus::Exited { code, .. } => assert_eq!(code, 0),
         ExitStatus::Unknown => panic!("the status is unknown"),
     }
+    // the server ends the connection after the exit; the client need not close it first
+    second.closed()?;
     drop(second);
     assert_eq!(server.stopped()?, StopReason::Idle);
     Ok(())
@@ -414,7 +416,7 @@ fn a_client_that_falls_behind_is_resynced_in_band() -> TestResult {
                 next = offset;
                 shows = snapshot_body(&mut slow, epoch)?;
                 assert!(
-                    shows.starts_with(ATTACH_RESET),
+                    shows.starts_with(RESYNC_RESET),
                     "a resync resets what the client was sent"
                 );
             }

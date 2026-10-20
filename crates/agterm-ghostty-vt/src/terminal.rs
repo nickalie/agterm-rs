@@ -209,12 +209,6 @@ impl Terminal {
     /// The effective colors.
     #[must_use]
     pub fn colors(&self) -> TerminalColors {
-        let color = |data| {
-            let mut value = ffi::GhosttyColorRgb { r: 0, g: 0, b: 0 };
-            // SAFETY: `self.raw` is live; the color keys write a `GhosttyColorRgb`, or fail when unset.
-            let result = unsafe { ffi::ghostty_terminal_get(self.raw.ptr(), data, (&raw mut value).cast()) };
-            (result == ffi::GHOSTTY_SUCCESS).then(|| Rgb::from(value))
-        };
         let mut palette = [ffi::GhosttyColorRgb { r: 0, g: 0, b: 0 }; 256];
         // SAFETY: `self.raw` is live; `DATA_COLOR_PALETTE` writes 256 `GhosttyColorRgb` (it always has a value).
         unsafe {
@@ -225,9 +219,9 @@ impl Terminal {
             )
         };
         TerminalColors {
-            foreground: color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_FOREGROUND),
-            background: color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND),
-            cursor: color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_CURSOR),
+            foreground: self.color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_FOREGROUND),
+            background: self.color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND),
+            cursor: self.color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_CURSOR),
             palette: Box::new(palette.map(Rgb::from)),
         }
     }
@@ -236,18 +230,21 @@ impl Terminal {
     /// ([`Terminal::set_default_colors`], [`Terminal::set_default_palette`]).
     #[must_use]
     pub fn default_colors(&self) -> TerminalColors {
-        let color = |data| {
-            let mut value = ffi::GhosttyColorRgb { r: 0, g: 0, b: 0 };
-            // SAFETY: `self.raw` is live; the default color keys write a `GhosttyColorRgb`, or fail when unset.
-            let result = unsafe { ffi::ghostty_terminal_get(self.raw.ptr(), data, (&raw mut value).cast()) };
-            (result == ffi::GHOSTTY_SUCCESS).then(|| Rgb::from(value))
-        };
         TerminalColors {
-            foreground: color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_FOREGROUND_DEFAULT),
-            background: color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND_DEFAULT),
-            cursor: color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_CURSOR_DEFAULT),
+            foreground: self.color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_FOREGROUND_DEFAULT),
+            background: self.color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND_DEFAULT),
+            cursor: self.color(ffi::GHOSTTY_TERMINAL_DATA_COLOR_CURSOR_DEFAULT),
             palette: self.default_palette(),
         }
+    }
+
+    /// The color `data` names (one of the foreground, background and cursor keys, current or default); `None` when
+    /// unset.
+    fn color(&self, data: ffi::GhosttyTerminalData) -> Option<Rgb> {
+        let mut value = ffi::GhosttyColorRgb { r: 0, g: 0, b: 0 };
+        // SAFETY: `self.raw` is live; the color keys write a `GhosttyColorRgb`, or fail when unset.
+        let result = unsafe { ffi::ghostty_terminal_get(self.raw.ptr(), data, (&raw mut value).cast()) };
+        (result == ffi::GHOSTTY_SUCCESS).then(|| Rgb::from(value))
     }
 
     /// Set the default foreground, background and cursor colors (the theme; programs override them with OSC 10/11/12).

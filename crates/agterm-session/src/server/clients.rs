@@ -7,15 +7,16 @@
 //! the pane and drained by the client's own writer, so a slow client never holds up the PTY reader or the other
 //! clients. Changed: the queue carries agterm's raw output lane, not herdr's rendered frames, so it is lossless where
 //! herdr's render lane keeps only the latest frame: it is bounded in bytes, and output that does not fit is never
-//! dropped silently. The queue drops the output and size changes it holds, none of which was sent yet, and ends with
-//! [`ClientEvent::Overflowed`] at the offset where the client's copy of the stream stops; the pane then resyncs that
-//! client in band (a new [`ClientEvent::Snapshot`] in place of the output it was not sent) or, past its
+//! dropped silently. The queue drops the output, size changes and unsent snapshot it holds, none of which was sent
+//! yet, and ends with [`ClientEvent::Overflowed`] at the offset where the client's copy of the stream stops; the pane
+//! then resyncs that client in band (a new [`ClientEvent::Snapshot`] in place of what it was not sent) or, past its
 //! [`ResyncBudget`], disconnects it.
 //!
 //! # Epochs
 //!
-//! Every snapshot a client is sent opens an epoch, numbered from 1: its first snapshot, at its attach, then one per
-//! resync. The output after a snapshot continues it. An answer the client gives in an epoch that is no longer its
+//! Every snapshot queued for a client opens an epoch, numbered from 1: its first snapshot, at its attach, then one per
+//! resync. A snapshot an overflow drops unsent still used its number, so the first epoch a client is sent is 1 unless
+//! its queue overflowed before its first snapshot went out. The output after a snapshot continues it. An answer the client gives in an epoch that is no longer its
 //! current one (a delegated reply sent before its resync) is dropped ([`Clients::epoch`]).
 //!
 //! # Order
@@ -85,9 +86,9 @@ pub enum ClientEvent {
     /// The client's role at the session changed (sent to a managed client only); `generation` counts the session's
     /// leadership changes.
     Role { role: LeadRole, generation: u32 },
-    /// The client's queue was full: the output and size changes it held were dropped, output from `offset` on was not
-    /// queued, and nothing but role changes and the session's exit is queued after this until the client is resynced
-    /// (`Pane::resync`).
+    /// The client's queue was full: the output, size changes and unsent snapshot it held were dropped, output from
+    /// `offset` on was not queued, and nothing but role changes, the session's last snapshot and its exit is queued
+    /// after this until the client is resynced (`Pane::resync`).
     Overflowed { offset: u64 },
     /// The session's program ended; the last event.
     Exit(ExitStatus),
@@ -443,6 +444,19 @@ impl Clients {
     #[must_use]
     pub fn overflowed(&self, id: ClientId) -> Option<bool> {
         self.slot(id).map(|slot| slot.lock().overflowed)
+    }
+
+    /// The clients whose queue overflowed and await their resync.
+    #[must_use]
+    pub fn overflowed_clients(&self) -> Vec<ClientId> {
+        self.slots
+            .iter()
+            .filter(|(_, slot)| {
+                let queue = slot.lock();
+                queue.overflowed && !queue.closed
+            })
+            .map(|(id, _)| *id)
+            .collect()
     }
 
     /// The client `id`'s current epoch (zero before its first snapshot); `None` when it is not attached.

@@ -18,8 +18,10 @@
 //!   `SnapshotEnd`;
 //! - the output, size changes and role changes as they come, the output contiguous from the snapshot's offset;
 //! - on an overflow, the client's resync ([`Pane::resync`]): a new snapshot under the next epoch. A client past its
-//!   resync budget, or one no snapshot could be cut for in time, is detached and its connection closed;
-//! - the session's exit, after which nothing more is sent; the client closes the connection.
+//!   resync budget, or one no snapshot could be cut for in time, is detached and its connection closed. One that
+//!   overflowed when the session ends is sent the session's last snapshot instead, ahead of its exit;
+//! - the session's exit, after which the server closes the connection in order ([`endpoint::close`]): the client
+//!   reads the exit, then the connection's end.
 //!
 //! Meanwhile the connection's own thread reads the client's input, resizes, reply metadata and delegated replies
 //! (one of an epoch the client has left is dropped, [`Pane::accepts_reply`]), until it detaches or the connection
@@ -203,7 +205,7 @@ fn write_queue(stream: &Stream, pane: &Pane, subscription: &Subscription) {
         };
         let sent = match event {
             ClientEvent::Overflowed { offset } => match pane.resync(id) {
-                // resynced; or its exit is queued next; or it was detached meanwhile
+                // resynced; or the session's last snapshot and its exit are queued next; or it was detached meanwhile
                 Ok(()) | Err(ResyncError::Ended | ResyncError::Detached) => Ok(()),
                 Err(err @ (ResyncError::OverBudget | ResyncError::Unavailable(_))) => {
                     tracing::info!(session = %pane.name(), offset, %err, "a live session's client was disconnected");
@@ -212,8 +214,9 @@ fn write_queue(stream: &Stream, pane: &Pane, subscription: &Subscription) {
                 }
             },
             ClientEvent::Exit(status) => {
-                // nothing follows it: the client closes
+                // nothing follows it: the connection ends once the client has it, which ends the reading too
                 let _ = send(stream, &AttachServerMessage::Exit { status });
+                endpoint::close(stream);
                 return;
             }
             event => send_event(stream, event),

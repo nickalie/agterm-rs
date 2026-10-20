@@ -2,21 +2,24 @@
 //! offset, so that the session's output from that offset on continues it exactly as it continues the session's own.
 //!
 //! zmx: `serializeTerminalState`, `writeColorOverrides` and `writePwd` (`src/util.zig`) at `ZMX_REV`
-//! (`build/pins.env`), with agterm's zmx patch `0003-first-attach-snapshot` (`build/patches/zmx/`: the reset before a
-//! snapshot repeating output the client was already sent, and the parser's unfinished sequence after it), licensed
-//! under the MIT License (`NOTICE`), modified: ported over libghostty-vt's C API ([`agterm_ghostty_vt`]'s formatter
-//! and stream continuation); the continuation is required, never left out (a snapshot without one is unavailable,
-//! [`SnapshotError::Unavailable`]); OSC 133 prompt marks are left as the program wrote them (zmx's `redraw=0` rewrite
-//! is for an outer terminal, the attach CLI's to make).
+//! (`build/pins.env`), with agterm's zmx patch `0003-first-attach-snapshot` (`build/patches/zmx/`: the parser's
+//! unfinished sequence after the snapshot), licensed under the MIT License (`NOTICE`), modified: ported over
+//! libghostty-vt's C API ([`agterm_ghostty_vt`]'s formatter and stream continuation); the continuation is required,
+//! never left out (a snapshot without one is unavailable, [`SnapshotError::Unavailable`]), except in a session's last
+//! snapshot ([`Kind::Last`]); the palette the program set is carried too; a client that was already sent some of the
+//! session's output is fully reset first ([`RESYNC_RESET`]) in place of the patch's `ATTACH_RESET`, which undoes only
+//! what a short burst of output before a first attach leaves; OSC 133 prompt marks are left as the program wrote them
+//! (zmx's `redraw=0` rewrite is for an outer terminal, the attach CLI's to make).
 //!
 //! # The bytes
 //!
 //! In order:
 //!
-//! 1. [`ATTACH_RESET`], only for a client that was already sent some of the session's output (a resync): it ends any
-//!    sequence that output was cut in and puts back to its default what the cursor would carry into the snapshot's
-//!    text;
-//! 2. the program's colour overrides (OSC 10, 11, 12), when it set any;
+//! 1. [`RESYNC_RESET`], only for a client that was already sent some of the session's output ([`Kind::Resync`],
+//!    [`Kind::Last`]): it ends any sequence that output was cut in and puts the client's terminal back to a fresh
+//!    one's state, its scrollback and the colours a program set included, so whatever that output left on and the
+//!    session has since turned off (the alternate screen, mouse tracking, a hidden cursor, a colour) goes;
+//! 2. the program's colours (OSC 4 for the palette, OSC 10, 11, 12), where they differ from the terminal's defaults;
 //! 3. the scrollback, when there is any: its cells in VT, styles included, with no terminal state around them, then
 //!    the pen reset and a line feed for each of its rows still on the client's screen and each visible row, so every
 //!    scrollback row scrolls into the client's scrollback and the visible rows start from a blank, homed screen (zmx's
@@ -26,7 +29,8 @@
 //!    region, the keyboard modes, the cursor with its style, hyperlink, protection, Kitty keyboard flags and
 //!    charsets), synchronized output (DECSET 2026) left out: replayed, it would hold off a new client's rendering until
 //!    its own timeout;
-//! 5. the working directory (OSC 7) and the title (OSC 2), which the formatter does not write;
+//! 5. the working directory (OSC 7) and the title (OSC 2), which the formatter does not write; after the reset the
+//!    title is written even when empty;
 //! 6. the stream continuation: the unfinished escape sequence or UTF-8 character the session's parser stands in, so
 //!    the client's parser takes the next output where the session's does.
 //!
@@ -37,8 +41,9 @@
 //! # Where to cut
 //!
 //! A snapshot needs the continuation, which the session's terminal tracks, from before its first byte, up to a limit
-//! ([`CONTINUATION_LIMIT`] by default, `Terminal::set_continuation_limit`). Past that (a long OSC 52 write, a large Kitty image sent inline) the cut is unavailable until the sequence ends:
-//! [`cut_available`] says whether a snapshot can be taken now, and the pane waits for one within a deadline.
+//! ([`CONTINUATION_LIMIT`] by default, `Terminal::set_continuation_limit`). Past that (a long OSC 52 write, a large
+//! Kitty image sent inline) the cut is unavailable until the sequence ends: [`cut_available`] says whether a snapshot
+//! can be taken now, and the pane waits for one within a deadline.
 
 use agterm_ghostty_vt::{
     Continuation, Format, FormatExtras, FormatOptions, Mode, Point, PointTag, Region, Rgb, Terminal,
@@ -52,17 +57,29 @@ pub const CONTINUATION_LIMIT: usize = 65 * 1024 * 1024;
 /// The most snapshot bytes one `SnapshotChunk` carries.
 pub const CHUNK_SIZE: usize = 64 * 1024;
 
-/// What a client already sent some of the session's output gets ahead of a snapshot that repeats it (zmx patch
-/// `0003-first-attach-snapshot`'s `ATTACH_RESET`). In order: CAN ends any sequence the output was cut in; SGR 0 resets
-/// the pen (an erase paints with its background); OSC 8 closes a hyperlink; G0–G3 designate ASCII and SI shifts G0
-/// in; DECSCA 1 then 0 drops protection (the 1 switches from ISO protection, which even unprotected erases honor, to
-/// DEC); IRM goes; left/right margin mode, origin mode and the scrolling region go, so the cursor homes to the top
-/// left; and the screen below it is erased (ED 0: ED 2 would push it into a Ghostty client's scrollback). The snapshot
-/// then restores the session's own state. Residues: a string sequence (OSC, DCS, APC) cut there is dispatched early
-/// by a Ghostty client; tab stops, Kitty images and a saved cursor the output set stay; output that scrolled is in the
-/// client's scrollback and comes again with the snapshot's history.
-pub const ATTACH_RESET: &[u8] =
-    b"\x18\x1b[0m\x1b]8;;\x1b\\\x1b(B\x1b)B\x1b*B\x1b+B\x0f\x1b[1\"q\x1b[0\"q\x1b[4l\x1b[?69l\x1b[?6l\x1b[r\x1b[H\x1b[J";
+/// What a client already sent some of the session's output gets ahead of a snapshot that replaces it. That output may
+/// have left anything on (the alternate screen, mouse tracking, a keyboard mode, a hidden cursor, a colour) and the
+/// snapshot writes only what the session has on, so the client's terminal starts over from a fresh one's state. In
+/// order: CAN ends any sequence the output was cut in (a string sequence, OSC, DCS or APC, is dispatched early by a
+/// Ghostty client, and the reset then undoes it); RIS resets the terminal (Ghostty's `Terminal.fullReset`: the
+/// primary screen, the alternate one dropped, the screen and its scrollback, the modes, tab stops, palette, cursor and
+/// its style, saved cursor, charsets, protection, Kitty keyboard flags and images, title and working directory); ED 3
+/// drops the scrollback where a terminal's RIS keeps it (xterm's), so the snapshot's history is not added to what the
+/// client had; OSC 104 resets the palette and OSC 110, 111 and 112 the foreground, background and cursor colours,
+/// which Ghostty's RIS leaves as a program set them. The snapshot then writes the session's own state.
+pub const RESYNC_RESET: &[u8] = b"\x18\x1bc\x1b[3J\x1b]104\x1b\\\x1b]110\x1b\\\x1b]111\x1b\\\x1b]112\x1b\\";
+
+/// Which snapshot a client is sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A client's first, at its attach: it was sent none of the session's output, so its terminal is fresh.
+    Attach,
+    /// A resync's: the client was sent the session's output up to where it fell behind; led by [`RESYNC_RESET`].
+    Resync,
+    /// The last of a client that fell behind before the session ended, ahead of its exit: as a resync's, but nothing
+    /// follows it, so a continuation that is unavailable is left out rather than failing the snapshot.
+    Last,
+}
 
 /// Why no snapshot was taken.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -84,20 +101,22 @@ pub fn cut_available(terminal: &Terminal) -> bool {
         || matches!(terminal.continuation(), Ok(Continuation::Bytes(_)))
 }
 
-/// The snapshot of `terminal` (module docs), led by [`ATTACH_RESET`] when `reset`. The terminal is left as it was.
+/// The snapshot of `terminal` (module docs) of the `kind` given. The terminal is left as it was.
 ///
 /// # Errors
 ///
-/// [`SnapshotError::Unavailable`] when no cut is available ([`cut_available`]); [`SnapshotError::Format`] when the
-/// formatter fails.
-pub fn capture(terminal: &mut Terminal, reset: bool) -> Result<Vec<u8>, SnapshotError> {
+/// [`SnapshotError::Unavailable`] when no cut is available ([`cut_available`]), except for [`Kind::Last`];
+/// [`SnapshotError::Format`] when the formatter fails.
+pub fn capture(terminal: &mut Terminal, kind: Kind) -> Result<Vec<u8>, SnapshotError> {
     let continuation = match terminal.continuation() {
         Ok(Continuation::Bytes(bytes)) => bytes,
+        Ok(Continuation::Unavailable) | Err(_) if kind == Kind::Last => Vec::new(),
         Ok(Continuation::Unavailable) | Err(_) => return Err(SnapshotError::Unavailable),
     };
+    let reset = kind != Kind::Attach;
     let mut out = Vec::new();
     if reset {
-        out.extend_from_slice(ATTACH_RESET);
+        out.extend_from_slice(RESYNC_RESET);
     }
     color_overrides(terminal, &mut out);
     let synchronized = terminal.mode(Mode::SYNC_OUTPUT);
@@ -114,7 +133,7 @@ pub fn capture(terminal: &mut Terminal, reset: bool) -> Result<Vec<u8>, Snapshot
         out.extend_from_slice(format!("\x1b]7;{pwd}\x1b\\").as_bytes());
     }
     let title = terminal.title();
-    if !title.is_empty() {
+    if reset || !title.is_empty() {
         out.extend_from_slice(format!("\x1b]2;{title}\x07").as_bytes());
     }
     out.extend_from_slice(&continuation);
@@ -127,11 +146,17 @@ fn set_synchronized(terminal: &mut Terminal, value: bool) -> Result<(), Snapshot
         .map_err(|err| SnapshotError::Format(err.to_string()))
 }
 
-/// The foreground, background and cursor colours the program set (OSC 10, 11, 12) where they differ from the
-/// terminal's defaults, as zmx writes them. The palette is not carried, as zmx's is not.
+/// The palette entries (OSC 4) and the foreground, background and cursor colours (OSC 10, 11, 12) the program set,
+/// where they differ from the terminal's defaults; the last three as zmx writes them (zmx carries no palette).
 fn color_overrides(terminal: &Terminal, out: &mut Vec<u8>) {
     let current = terminal.colors();
     let defaults = terminal.default_colors();
+    for (index, (color, default)) in current.palette.iter().zip(defaults.palette.iter()).enumerate() {
+        if color != default {
+            let Rgb { r, g, b } = *color;
+            out.extend_from_slice(format!("\x1b]4;{index};rgb:{r:02x}/{g:02x}/{b:02x}\x1b\\").as_bytes());
+        }
+    }
     for (number, color, default) in [
         (10, current.foreground, defaults.foreground),
         (11, current.background, defaults.background),
@@ -258,7 +283,7 @@ mod tests {
     }
 
     fn snapshot(terminal: &mut Terminal) -> Vec<u8> {
-        capture(terminal, false).unwrap()
+        capture(terminal, Kind::Attach).unwrap()
     }
 
     #[test]
@@ -438,14 +463,53 @@ mod tests {
         session.vt_write(b"\x1b]2;");
         session.vt_write(&[b'x'; 64]);
         assert!(!cut_available(&session));
-        assert_eq!(capture(&mut session, false), Err(SnapshotError::Unavailable));
+        assert_eq!(capture(&mut session, Kind::Attach), Err(SnapshotError::Unavailable));
         session.vt_write(b"\x07after");
         assert!(cut_available(&session));
-        assert!(capture(&mut session, false).is_ok());
+        assert!(capture(&mut session, Kind::Attach).is_ok());
         // a terminal that tracks nothing has no cut either
         let mut untracked = Terminal::new(COLS, ROWS).unwrap();
         assert!(!cut_available(&untracked));
-        assert_eq!(capture(&mut untracked, false), Err(SnapshotError::Unavailable));
+        assert_eq!(capture(&mut untracked, Kind::Attach), Err(SnapshotError::Unavailable));
+    }
+
+    /// Everything of a terminal a client shows or acts on: the screen and its scrollback with the terminal state
+    /// around them, the cursor, the screen in use, the title, the working directory, the colours and the modes a
+    /// client's input and rendering depend on.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Full {
+        screen: String,
+        rows: usize,
+        cursor: (u16, u16),
+        alternate: bool,
+        title: String,
+        pwd: String,
+        colors: agterm_ghostty_vt::TerminalColors,
+        modes: Vec<(u16, bool)>,
+    }
+
+    fn full(terminal: &mut Terminal) -> Full {
+        let options = FormatOptions {
+            format: Format::Vt,
+            unwrap: false,
+            trim: true,
+            extras: FormatExtras::RESTORE,
+        };
+        let screen = terminal.format(Region::Screen, options).unwrap().unwrap_or_default();
+        Full {
+            screen: String::from_utf8_lossy(&screen).into_owned(),
+            rows: terminal.total_rows(),
+            cursor: terminal.cursor(),
+            alternate: terminal.alternate_screen(),
+            title: terminal.title(),
+            pwd: terminal.pwd(),
+            colors: terminal.colors(),
+            // cursor keys, cursor visible, the mouse's, focus events, bracketed paste
+            modes: [1, 25, 1000, 1002, 1003, 1006, 1004, 2004]
+                .into_iter()
+                .map(|mode| (mode, terminal.mode(Mode::dec(mode))))
+                .collect(),
+        }
     }
 
     #[test]
@@ -456,26 +520,92 @@ mod tests {
         session.vt_write(sent);
         session.vt_write(b"2mmore\x1b[0m\x1b]8;;\x1b\\\x1b[4l $ ");
         let mut resynced = client(sent);
-        let bytes = capture(&mut session, true).unwrap();
-        assert!(bytes.starts_with(ATTACH_RESET));
+        let bytes = capture(&mut session, Kind::Resync).unwrap();
+        assert!(bytes.starts_with(RESYNC_RESET));
         resynced.vt_write(&bytes);
-        let mut fresh = client(&capture(&mut session, false).unwrap());
-        assert_eq!(reset_state(&mut resynced), state(&mut fresh));
-        assert_eq!(reset_state(&mut resynced), state(&mut session));
+        let mut fresh = client(&capture(&mut session, Kind::Attach).unwrap());
+        assert_eq!(full(&mut resynced), full(&mut fresh));
+        assert_eq!(full(&mut resynced), full(&mut session));
         session.vt_write(b"next");
         resynced.vt_write(b"next");
-        assert_eq!(reset_state(&mut resynced), state(&mut session));
+        assert_eq!(full(&mut resynced), full(&mut session));
     }
 
-    /// [`state`] of a terminal the reset went through, without the ASCII designations of G0–G3 it made: Ghostty
-    /// prints ASCII and its default set alike, but its formatter writes a designation that differs from the default
-    /// (zmx's test helper `withoutAsciiDesignations`).
-    fn reset_state(terminal: &mut Terminal) -> (String, (u16, u16), bool, String) {
-        let (mut screen, cursor, alternate, title) = state(terminal);
-        for designation in ["\x1b(B", "\x1b)B", "\x1b*B", "\x1b+B"] {
-            screen = screen.replace(designation, "");
+    /// `count` lines, `<word> 1` on.
+    fn numbered(word: &str, count: usize) -> Vec<u8> {
+        (1..=count)
+            .flat_map(|line| format!("{word} {line}\r\n").into_bytes())
+            .collect()
+    }
+
+    #[test]
+    fn a_resync_undoes_what_the_session_turned_off_after_the_client_fell_behind() {
+        // the client was sent a scrollback, a title, colours, input modes and an app on the alternate screen, its
+        // keyboard and cursor changed, up to a cut mid-CSI
+        let sent = [
+            numbered("old", 12).as_slice(),
+            b"\x1b]2;old title\x07\x1b]7;file://host/old\x07\x1b]11;rgb:10/20/30\x07\x1b]4;1;rgb:01/02/03\x07",
+            b"\x1b[?1h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?2004h",
+            b"\x1b[?1049h\x1b[H\x1b[2J\x1b[>1u\x1b[?25l\x1b[5 q editor\x1b[3",
+        ]
+        .concat();
+        let mut session = tracked();
+        session.vt_write(&sent);
+        // what the client was not sent: the app leaves and the session turns all of that off again
+        session.vt_write(b"1m!\x1b[0m\x1b[<u\x1b[?25h\x1b[0 q\x1b[?1049l");
+        session.vt_write(b"\x1b[?1l\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1004l\x1b[?2004l");
+        session.vt_write(b"\x1b]111\x07\x1b]104;1\x07\x1b]2;new title\x07");
+        session.vt_write(&numbered("new", 3));
+        session.vt_write(b"$ ");
+        let mut resynced = client(&sent);
+        assert!(resynced.alternate_screen() && resynced.mode(Mode::dec(1000)));
+        resynced.vt_write(&capture(&mut session, Kind::Resync).unwrap());
+        let expected = full(&mut session);
+        assert!(!expected.alternate_screen_or_modes_on(), "{expected:?}");
+        assert_eq!(full(&mut resynced), expected);
+        // the scrollback is the session's, not the client's with the session's added
+        assert_eq!(resynced.total_rows(), session.total_rows());
+        session.vt_write(b"typed\r\n");
+        resynced.vt_write(b"typed\r\n");
+        assert_eq!(full(&mut resynced), full(&mut session));
+    }
+
+    impl Full {
+        fn alternate_screen_or_modes_on(&self) -> bool {
+            self.alternate || self.modes.iter().any(|&(mode, on)| on != (mode == 25))
         }
-        (screen, cursor, alternate, title)
+    }
+
+    #[test]
+    fn a_resync_carries_the_programs_colours_and_title_over_the_reset() {
+        let mut session = tracked();
+        session.vt_write(b"\x1b]4;3;rgb:0a/0b/0c\x07\x1b]10;rgb:aa/bb/cc\x07\x1b]2;kept\x07text");
+        let mut resynced = client(b"\x1b]4;5;rgb:01/01/01\x07\x1b]12;rgb:02/02/02\x07\x1b]2;stale\x07");
+        let bytes = capture(&mut session, Kind::Resync).unwrap();
+        resynced.vt_write(&bytes);
+        assert_eq!(full(&mut resynced), full(&mut session));
+        assert_eq!(resynced.title(), "kept");
+        // a first attach's terminal is fresh: a palette entry the program set comes along too
+        let text = String::from_utf8_lossy(&snapshot(&mut session)).into_owned();
+        assert!(
+            text.starts_with("\x1b]4;3;rgb:0a/0b/0c\x1b\\\x1b]10;rgb:aa/bb/cc\x1b\\"),
+            "{text:?}"
+        );
+        assert_eq!(full(&mut client(&snapshot(&mut session))), full(&mut session));
+    }
+
+    #[test]
+    fn a_sessions_last_snapshot_needs_no_cut() {
+        let mut session = Terminal::new(COLS, ROWS).unwrap();
+        session.set_continuation_limit(16).unwrap();
+        session.vt_write(b"done\x1b]2;");
+        session.vt_write(&[b'x'; 64]);
+        assert_eq!(capture(&mut session, Kind::Resync), Err(SnapshotError::Unavailable));
+        let last = capture(&mut session, Kind::Last).unwrap();
+        assert!(last.starts_with(RESYNC_RESET));
+        let mut client = client(b"\x1b[?1049hstale");
+        client.vt_write(&last);
+        assert_eq!(full(&mut client), full(&mut session));
     }
 
     #[test]
