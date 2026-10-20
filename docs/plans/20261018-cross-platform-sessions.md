@@ -1038,8 +1038,10 @@ Order after Task 7, as two lanes that meet:
         `msiexec`; Windows PowerShell 5.1's legacy passing loses embedded `"` and empty arguments. `command_restore`
         takes PowerShell (and a Windows `\`-path, `.exe` name) as a shell, idle when its host options, read as its
         console host's parser reads them (7's and 5.1's tables: `-`, `/` or another dash, abbreviations, option values
-        skipped, an unknown option or the first argument starting the script or command, 7's `-Version` exiting),
-        leave it at a prompt: options alone, or `-NoExit` before the command, so a live pwsh pane at its prompt (or a
+        skipped, an unknown option or the first argument starting the script or command, 7's `-Version` exiting,
+        `-EncodedCommand` taking one value with the options going on, `-File -` reading commands from stdin with
+        prompts), leave it at a prompt: options alone, `-NoExit` before the command or script (before or after an
+        encoded command), or `-File -`, so a live pwsh pane at its prompt (or a
         `Start-Job` worker) is never replayed. A plain pane's PowerShell gets no integration (Ghostty has none). On
         Unix pwsh has no job control: every program it starts, foreground or background (`Start-Process
         -NoNewWindow`, thread jobs, prompt helpers), stays in its own group and nothing tells them apart, so the
