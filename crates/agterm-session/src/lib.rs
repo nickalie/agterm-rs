@@ -19,7 +19,9 @@
 //! - [`procfs`]: the Linux process table's files (`stat`, `cmdline`), which the job table and the process table read;
 //! - [`job`]: a terminal's foreground job on every OS and the sweeper that hangs up what a killed session's shell
 //!   leaves running;
-//! - [`process_table`]: the process table a pane's foreground is read through, on every OS.
+//! - [`process_table`]: the process table a pane's foreground is read through, on every OS;
+//! - [`client`]: the client library: the api and a session's attach stream, its contract checked on the client's side;
+//! - [`host`]: the `SessionHost` over the client ([`host::ServerHost`]), with `ZmxClient`'s error kinds and outcomes.
 //!
 //! # Provenance
 //!
@@ -28,7 +30,9 @@
 //! file names in its header the herdr file it comes from, that it is licensed under the Apache License 2.0, and that
 //! it was modified; herdr's license is in the repository's `NOTICE`. Hence the crate's `MIT AND Apache-2.0`.
 
+pub mod client;
 pub mod endpoint;
+pub mod host;
 pub mod job;
 pub mod launch;
 pub mod process_table;

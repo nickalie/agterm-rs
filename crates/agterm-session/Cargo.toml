@@ -1,6 +1,6 @@
 [package]
 name = "agterm-session"
-description = "agterm's live-session server, on herdr's architecture: its wire, its endpoint, its lifecycle, its panes, the live-launch inputs, the foreground job and the process table"
+description = "agterm's live-session server, on herdr's architecture: its wire, its endpoint, its lifecycle, its panes, its client and `SessionHost`, the live-launch inputs, the foreground job and the process table"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

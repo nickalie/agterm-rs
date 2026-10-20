@@ -1060,13 +1060,41 @@ Order after Task 7, as two lanes that meet:
 **Files:**
 - Create: `crates/agterm-session/src/{client,host}.rs`, `crates/agterm-session/tests/host.rs`
 
-- [ ] client library: the API and an attach stream (snapshot, then Output/Input/Resize/Role, reply metadata and
+- [x] client library: the API and an attach stream (snapshot, then Output/Input/Resize/Role, reply metadata and
       delegated requests)
-- [ ] `SessionHost` over the library, with the same error kinds and outcomes as `ZmxClient`: the `HostError` texts in
+      - `client::Client` names a namespace; the api never starts a server (`Client::api`/`call` answer `None`
+        without one, which holds no session), an attach does when given `StartOptions`; every api call within
+        `DEFAULT_TIMEOUT` (3 s, connect included), an attach's first answer within `ATTACH_TIMEOUT` (15 s), through
+        `server::spawn::exchange_within` (the handshake's timeout, made `pub(crate)` and cross-OS: Unix socket
+        timeouts, Windows cancelled I/O). `Api` has the typed calls. `Attachment` splits into `AttachReader::recv`
+        (events in order, the contract checked: later epochs, output and resizes contiguous between snapshots, a
+        delegated request or Kitty barrier of a superseded epoch dropped, nothing after the exit; `Ok(None)` after the
+        exit, a shutdown or the client's own detach/close, `Disconnected` otherwise) and a cloneable `AttachWriter`
+        (input, resize, metadata, `answer(Delegated, …)` and `complete(Barrier, data)` taking their tokens once and
+        sending nothing for a superseded epoch, detach, close). No wire change
+- [x] `SessionHost` over the library, with the same error kinds and outcomes as `ZmxClient`: the `HostError` texts in
       live-session wording (listing every core or suite assertion that reads them), `KillOutcome`, never a blank
       screen on a failed read, never an empty namespace from a failed listing
-- [ ] port `agterm-zmx`'s host tests onto the new host; the frontend still builds `ZmxClient`
-- [ ] run gates
+      - `host::ServerHost`: `live session list failed: …`, `live session screen failed: …`, `live session type
+        failed: …`; no core or suite assertion reads a `HostError`'s text (core maps them to its own: `inventory`'s
+        `could not read the live session list` / `… screen of <name>`, `surface`'s and `typing`'s refusals,
+        `restart_live`'s kill outcomes; the suite asserts those through `vocabulary.py`), listed in `host.rs`'s
+        docs. No server: an empty listing, `StaleSocket` kills (the server's `Gone`), a failed screen and typing.
+        The server hangs up a killed shell's job, so the host does not sweep; a restart's job calls read this
+        machine's process table directly (`job::Sweeper`), since the server may stop with its last session first
+- [x] port `agterm-zmx`'s host tests onto the new host; the frontend still builds `ZmxClient`
+      - `tests/host.rs`: `ZmxClientTests`' cases against a scripted peer (`tests/peer/mod.rs`: a fake server on a
+        real endpoint) and the real-zmx tests against an in-process server (round trip, forced batch kill leaving no
+        process of the namespace, a real shell's job), every OS; `tests/client.rs` (not in the file list): the stream
+        against a scripted peer, and end to end against a real server (create, type, resize, detach, reattach; on
+        Unix a delegated OSC 52 read and metadata changed mid-stream answering OSC 11 and `CSI ? 996 n`); the stream
+        contract's unit tests in `src/client/tests.rs`
+- [x] run gates
+      - fmt, locked metadata, tracing and vendored-source checks, clippy (workspace with all features, the frontend
+        without its default features, `agterm-session` for macOS), the lint report, the selftests (835), the
+        workspace tests headless (4471 passed; only `agterm-gpui`'s load-bound frame-rate test `html_overlay` failed,
+        20.7 fps, which uses nothing this task changed); no conformance run (no staged binary uses the client yet);
+        `cross-platform.yml` run 39431425389 green on all three (`ci/cps-task-23`, deleted after)
 
 ### Task 24: Server e2e on all three OSes
 

@@ -372,18 +372,38 @@ fn probe_wait(deadline: Instant, cap: Duration) -> Duration {
 /// holding the endpoint) with an I/O error a stopping server's also gives ([`is_stopping`]): on Unix by the socket's
 /// receive timeout, on Windows, whose pipes take none, by cancelling the exchange (`windows::exchange_within`).
 fn handshake(stream: Stream, hello: &Hello, timeout: Duration) -> Result<(Stream, Welcome), FramingError> {
+    let hello = hello.clone();
+    exchange_within(stream, timeout, move |stream| exchange_hello(stream, &hello))
+}
+
+/// Runs `exchange` on `stream`, giving up on a peer silent for `timeout` as [`handshake`] does: on Unix by the socket's
+/// send and receive timeouts (cleared again after a completed exchange), on Windows by cancelling the exchange's
+/// pending I/O (`windows::exchange_within`). The stream comes back only from a completed exchange; one that failed or
+/// timed out is dropped, since a frame may be cut in it. The client library's api calls and attach run under it too
+/// (`crate::client`).
+///
+/// # Errors
+///
+/// The exchange's own, or [`FramingError::Io`] when the timeout ran out.
+pub(crate) fn exchange_within<T: Send + 'static>(
+    stream: Stream,
+    timeout: Duration,
+    exchange: impl FnOnce(&mut Stream) -> Result<T, FramingError> + Send + 'static,
+) -> Result<(Stream, T), FramingError> {
     #[cfg(unix)]
     {
+        use interprocess::local_socket::traits::Stream as _;
         let mut stream = stream;
         super::set_recv_timeout(&stream, Some(timeout));
-        let welcome = exchange_hello(&mut stream, hello)?;
+        let _ = stream.set_send_timeout(Some(timeout));
+        let value = exchange(&mut stream)?;
         super::set_recv_timeout(&stream, None);
-        Ok((stream, welcome))
+        let _ = stream.set_send_timeout(None);
+        Ok((stream, value))
     }
     #[cfg(windows)]
     {
-        let hello = hello.clone();
-        sys::exchange_within(stream, timeout, move |stream| exchange_hello(stream, &hello))
+        sys::exchange_within(stream, timeout, exchange)
     }
 }
 
