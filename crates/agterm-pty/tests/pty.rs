@@ -626,20 +626,17 @@ fn a_quiesced_actor_delivers_what_it_held_and_reports_its_resize() -> TestResult
     Ok(())
 }
 
-/// A child this process did not start (a grandchild here) adopted by its pid: never waited for, and a retired killer
-/// signals nothing.
+/// A child this process did not start (a grandchild here, leading a process group of its own as a session's program
+/// does) adopted by its pid: never waited for, and a retired killer signals nothing, where a fresh one ends it.
 #[cfg(unix)]
 #[test]
 fn an_adopted_child_is_never_waited_for_and_its_retired_killer_signals_nothing() -> TestResult {
-    use std::io::BufRead as _;
-
-    let mut parent = std::process::Command::new("/bin/sh")
-        .args(["-c", "sleep 60 & echo $!; wait"])
-        .stdout(std::process::Stdio::piped())
-        .spawn()?;
-    let mut line = String::new();
-    std::io::BufReader::new(parent.stdout.take().ok_or("no stdout")?).read_line(&mut line)?;
-    let pid: u32 = line.trim().parse()?;
+    // the PTY is the shell's controlling terminal, so job control puts the background job in a group of its own
+    let command = command("/bin/sh").args(["-c", "set -m; sleep 300 & echo \"started:$!:\"; wait"]);
+    let session = start(&command, Size::cells(24, 80))?;
+    session.expect("started:");
+    let descendants = descendants(&session)?;
+    let pid = u32::try_from(descendants.0)?;
     let mut adopted = Child::adopt(pid);
     assert_eq!(adopted.pid(), pid);
     assert_eq!(adopted.try_wait().unwrap_err().raw_os_error(), Some(libc::ECHILD));
@@ -648,13 +645,13 @@ fn an_adopted_child_is_never_waited_for_and_its_retired_killer_signals_nothing()
     killer.retire();
     killer.kill_tree()?;
     std::thread::sleep(Duration::from_millis(100));
-    let raw = libc::pid_t::try_from(pid)?;
-    // SAFETY: `kill` with signal 0 only checks that the process exists.
-    let alive = unsafe { libc::kill(raw, 0) } == 0;
+    // SAFETY: `kill` with signal 0 only checks that the process exists (a killed one may linger as a zombie).
+    let alive = unsafe { libc::kill(descendants.0, 0) } == 0 && !is_zombie(descendants.0);
     assert!(alive, "the retired killer killed it");
-    // SAFETY: ends the test's own grandchild.
-    unsafe { libc::kill(raw, libc::SIGKILL) };
-    parent.wait()?;
+    // the control case: a killer not retired reaches the group the adopted child leads
+    Child::adopt(pid).killer().kill_tree()?;
+    descendants.assert_gone()?;
+    session.finish()?;
     Ok(())
 }
 

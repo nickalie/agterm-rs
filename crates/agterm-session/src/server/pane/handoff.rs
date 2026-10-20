@@ -3,11 +3,11 @@
 //!
 //! herdr: `src/pane.rs` (`begin_handoff`, `duplicate_handoff_fd`, `handoff_runtime_state`, `preserve_for_handoff`,
 //! `from_handoff_fd`, `assume_handoff_ownership`) and `src/handoff_runtime.rs` (`HandoffRuntimeState`) at `HERDR_REV`
-//! (`build/pins.env`), licensed under the Apache License 2.0, modified: the terminal passes whole (libghostty-vt's
-//! binary snapshot, or its formatter's VT restoration where the two servers' libghostty-vt differ) in place of
-//! herdr's 8 KiB of history seeded into a fresh terminal; the replies not yet written pass too; the cut is a freeze
-//! acknowledged by the replies' helper and fenced from the child's waiter; agent state, titles and input state are
-//! herdr's own and not here.
+//! (`build/pins.env`), licensed under the Apache License 2.0, modified: the terminal passes (libghostty-vt's binary
+//! snapshot, or its formatter's VT restoration where the two servers' libghostty-vt differ; what neither carries is
+//! below) in place of herdr's 8 KiB of history seeded into a fresh terminal; the replies not yet written pass too;
+//! the cut is a freeze acknowledged by the replies' helper and fenced from the child's waiter; agent state, titles and
+//! input state are herdr's own and not here.
 //!
 //! # The cut
 //!
@@ -17,6 +17,13 @@
 //!    into the terminal first, so the actor holds nothing.
 //! 3. [`Pane::cut`]: a waiting clipboard read is denied and the Kitty barriers end, then the terminal's state, the
 //!    output offset, the revision and the replies ready to be written are taken, all under the pane's lock.
+//!
+//! What the terminal's state leaves behind at this pin: neither encoding carries Kitty images, their placements or
+//! glyph registrations (Ghostty's snapshot codec ignores them on capture, and the formatter has no extra for them,
+//! as for attach: [`crate::server::replies`]), so re-placing an earlier image by its id fails in the server's
+//! terminal after a handoff; and the formatter has no saved-cursor extra, so across a pin change a later restore
+//! (`ESC 8`) puts the server's cursor at the default position, and its CPR and DSR answers and later snapshots follow
+//! it until the program moves the cursor. Carrying them needs a libghostty-vt that exposes them.
 //!
 //! A rollback ([`Pane::resume`]) undoes the first two, the replies still queued; a commit ([`Pane::hand_over`])
 //! releases the PTY and leaves the pane frozen, ending nothing when dropped.

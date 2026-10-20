@@ -1,11 +1,11 @@
 //! The update handoff through the `agterm-session` binary, on every OS: servers started detached from the test, as a
 //! client starts them ([`connect_or_start`]), each in a private namespace of its own, sessions created and read over
 //! the wire. A handoff keeps the shell, its screen and its scrollback, and an attached client reattaches to the new
-//! server; a failed one leaves the old server serving; a client of another build hands the server over by itself, with
-//! the staged binary replaced while the server runs (on Windows, which cannot replace a running executable, the server
-//! runs a private copy); continuous output loses no byte across it; and a server that does not hand over refuses
-//! and keeps serving (on Windows, where the `ConPTY` layout gate refuses an unknown layout before any handle is read,
-//! as `server::handoff`'s unit tests show).
+//! server; a failed one leaves the old server serving, and a client does not ask for it again; a client of another
+//! build hands the server over by itself, with the staged binary replaced while the server runs (on Windows, which
+//! cannot replace a running executable, the server runs a private copy); continuous output loses no byte across it;
+//! and a server that does not hand over refuses and keeps serving (on Windows, where the `ConPTY` layout gate refuses
+//! an unknown layout before any handle is read, as `server::handoff`'s unit tests show).
 //!
 //! Every session gets the test's environment without the live agterm's `AGTERM_*` and `ZMX_*` variables, and every
 //! server is the test's own: no handoff here ever reaches another one.
@@ -361,6 +361,39 @@ fn a_failed_handoff_leaves_the_old_server_serving() -> TestResult {
     let missing = namespace.hand_over(&std::env::temp_dir().join("no-such-agterm-session"), BUILD_ID)?;
     assert!(missing.is_err());
     assert_eq!(namespace.sessions()?.1, old);
+    Ok(())
+}
+
+/// A client of a build no replacement can be asks the server once: its failed attempt is reported again to a later
+/// call, without a second handoff that would disconnect the clients attached meanwhile.
+#[test]
+fn a_failed_handoff_is_not_asked_again_and_the_clients_stay_attached() -> TestResult {
+    let namespace = Namespace::new()?;
+    let plain = StartOptions::new(EXE);
+    let mut before = Client::attach(&namespace, &plain, "once", Some(shell()))?;
+    let unreachable = StartOptions {
+        build: Some("a build no replacement is".to_owned()),
+        ..StartOptions::new(EXE)
+    };
+    let first = connect_or_start(&namespace.endpoint, &hello(Role::Api), &unreachable)?;
+    let Some(HandoffAttempt::Failed { from, reason }) = first.handoff.clone() else {
+        return Err(format!("the handoff did not fail: {:?}", first.handoff).into());
+    };
+    assert_eq!(from, BUILD_ID);
+    assert!(reason.contains("expected build"), "{reason}");
+    drop(first);
+    // the attempt disconnected the client attached before; it reattaches
+    before.closed()?;
+    let mut after = Client::attach(&namespace, &plain, "once", None)?;
+
+    let second = connect_or_start(&namespace.endpoint, &hello(Role::Api), &unreachable)?;
+    assert_eq!(second.handoff, Some(HandoffAttempt::Failed { from, reason }));
+    let (_, pid) = namespace.sessions()?;
+    assert_eq!(second.welcome.pid, pid, "the old server serves");
+    drop(second);
+    // asked nothing, the server left the reattached client attached
+    namespace.type_line("once", &support::tagged("still-attached"))?;
+    after.expect("got:still-attached")?;
     Ok(())
 }
 

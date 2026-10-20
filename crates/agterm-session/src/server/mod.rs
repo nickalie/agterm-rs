@@ -33,8 +33,9 @@
 //! role this server does not know is refused with [`crate::protocol::ErrorCode::UnsupportedRole`].
 //!
 //! Every api and attach operation runs under the server's operation lock, shared, and only for a connection of the
-//! current generation: an update handoff takes the lock exclusively and moves the generation on, so no operation
-//! decoded before it runs after it.
+//! current generation, the one it was admitted in at its accept (not at its hello, which may come after a handoff
+//! began): an update handoff takes the lock exclusively and moves the generation on, so no operation decoded before
+//! it runs after it.
 //!
 //! # The command
 //!
@@ -60,7 +61,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, RwLock, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, RwLock, RwLockWriteGuard, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -147,7 +148,8 @@ pub fn run(directory: &Path, config: &ServerConfig) -> io::Result<StopReason> {
     let endpoint = Endpoint::new(directory);
     let listener = endpoint.bind()?;
     let shared = Shared::new(&endpoint, config);
-    serve(&endpoint, listener, &shared)
+    let accepting = Accepting::start(listener, &shared)?;
+    Ok(serve(&endpoint, accepting, &shared))
 }
 
 /// An update handoff's replacement for the namespace `directory` ([`handoff`]): it takes the sessions and the endpoint
@@ -161,7 +163,11 @@ pub fn run_import(directory: &Path, channel: &Path, token: &str, config: &Server
     let endpoint = Endpoint::new(directory);
     let shared = Shared::new(&endpoint, config);
     let imported = handoff::receive(&config.build, &endpoint, channel, token, config.limits())?;
+    // the accept thread is the last thing that can fail: started before `ready`, it accepts once committed
+    let accepting = Accepting::start(imported.listener, &shared)?;
+    handoff::write_line(&imported.stream, "ready")?;
     if !handoff::committed(&imported.stream) {
+        // the accept thread lets the listener go without accepting
         return Err(io::Error::other(
             "the handoff source did not commit; its sessions stay with it",
         ));
@@ -173,38 +179,73 @@ pub fn run_import(directory: &Path, channel: &Path, token: &str, config: &Server
         let ending = Arc::clone(&shared);
         pane.on_end(Box::new(move || ending.session_ended()));
     }
-    imported.listener.claim();
+    if let Some(listener) = shared.listener() {
+        listener.claim();
+    }
     if let Err(err) = handoff::write_line(&imported.stream, "owned") {
         tracing::debug!(%err, "the handoff source left before it was told the sessions are owned");
     }
     tracing::info!(sessions = shared.panes.len(), "update handoff imported");
-    serve(&endpoint, imported.listener, &shared)
+    Ok(serve(&endpoint, accepting, &shared))
 }
 
-/// Accept on `listener` until the server stops; why it stopped.
-fn serve(endpoint: &Endpoint, listener: Listener, shared: &Arc<Shared>) -> io::Result<StopReason> {
-    let listener = Arc::new(listener);
-    *lock(&shared.listener) = Arc::downgrade(&listener);
-    let (done, accept_done) = mpsc::channel();
-    let accepting = Arc::clone(shared);
-    let accept = thread::Builder::new()
-        .name("agterm-session-accept".to_owned())
-        .spawn(move || {
-            accept_loop(&listener, &accepting);
-            drop(listener);
-            let _ = done.send(());
-        })?;
+/// The accept thread of a server, started before it serves and accepting only once opened ([`serve`]): dropped
+/// unopened, it lets the listener go without accepting.
+struct Accepting {
+    open: mpsc::Sender<()>,
+    done: mpsc::Receiver<()>,
+    thread: thread::JoinHandle<()>,
+}
+
+impl Accepting {
+    /// The accept thread over `listener`, which `shared` names as the server's from now on.
+    ///
+    /// # Errors
+    ///
+    /// The thread could not be started.
+    fn start(listener: Listener, shared: &Arc<Shared>) -> io::Result<Self> {
+        let listener = Arc::new(listener);
+        *lock(&shared.listener) = Arc::downgrade(&listener);
+        let (open, opened) = mpsc::channel();
+        let (done, accept_done) = mpsc::channel();
+        let accepting = Arc::clone(shared);
+        let thread = thread::Builder::new()
+            .name("agterm-session-accept".to_owned())
+            .spawn(move || {
+                if opened.recv().is_ok() {
+                    accept_loop(&listener, &accepting);
+                }
+                drop(listener);
+                let _ = done.send(());
+            })?;
+        Ok(Self {
+            open,
+            done: accept_done,
+            thread,
+        })
+    }
+}
+
+/// Accept on the thread `accepting` until the server stops; why it stopped.
+fn serve(endpoint: &Endpoint, accepting: Accepting, shared: &Arc<Shared>) -> StopReason {
+    let Accepting {
+        open,
+        done: accept_done,
+        thread: accept,
+    } = accepting;
+    // a send fails only when the thread is gone already
+    let _ = open.send(());
     let reason = shared.wait_for_stop();
     if reason == StopReason::HandedOver {
         // the endpoint is the replacement's: no wake through it; the accept thread ends with the process
-        return Ok(reason);
+        return reason;
     }
     // the accept loop sees the stop with its next connection: this one, held until the loop has let go
     let _wake = endpoint.connect_timeout(ACCEPT_STOP_TIMEOUT).ok();
     if accept_done.recv_timeout(ACCEPT_STOP_TIMEOUT).is_ok() {
         let _ = accept.join();
     }
-    Ok(reason)
+    reason
 }
 
 /// What `agterm-session server <args…>` runs, `args` being what follows `server` (module docs), with its exit status:
@@ -310,7 +351,7 @@ struct Connections {
 struct Connection<'a> {
     shared: &'a Shared,
     id: u64,
-    /// The generation it was accepted in.
+    /// The generation it was admitted in ([`Shared::admit`]).
     generation: u64,
 }
 
@@ -361,9 +402,26 @@ impl Shared {
         self.lifecycle.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Register `stream` as an api or attach connection of the current generation.
-    fn register(&self, stream: &Arc<Stream>) -> Connection<'_> {
+    /// The generation a connection accepted now belongs to, or `None` while a handoff runs (the connection is dropped,
+    /// its client retrying). The generation is read before the handoff flag, so a connection admitted before a handoff
+    /// fenced it is of the generation that fence ended, however late its hello registers it ([`Shared::register`]).
+    fn admit(&self) -> Option<u64> {
         let generation = self.generation.load(Ordering::Acquire);
+        (!self.handing_off.load(Ordering::Acquire)).then_some(generation)
+    }
+
+    /// A handoff's first step: the operation lock taken exclusively (held by the returned guard), the generation moved
+    /// on, so no connection admitted before runs another operation, and every api and attach connection disconnected.
+    fn fence(&self) -> RwLockWriteGuard<'_, ()> {
+        let fence = self.ops.write().unwrap_or_else(PoisonError::into_inner);
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        self.disconnect_all();
+        fence
+    }
+
+    /// Register `stream` as an api or attach connection of `generation`, the one it was admitted in
+    /// ([`Shared::admit`]).
+    fn register(&self, stream: &Arc<Stream>, generation: u64) -> Connection<'_> {
         let mut connections = lock(&self.connections);
         let id = connections.next;
         connections.next += 1;
@@ -425,11 +483,11 @@ fn accept_loop(listener: &Listener, shared: &Arc<Shared>) {
                 continue;
             }
         };
-        if shared.handing_off.load(Ordering::Acquire) {
+        let Some(generation) = shared.admit() else {
             // its client retries, and finds whichever server serves once the handoff is over
             drop(stream);
             continue;
-        }
+        };
         if !shared.lock().client_connected() {
             return;
         }
@@ -440,7 +498,7 @@ fn accept_loop(listener: &Listener, shared: &Arc<Shared>) {
             .spawn(move || {
                 let _left = ClientLeaves(&connection);
                 // a broken or vanished client ends only its own connection
-                let _ = serve_connection(stream, &connection);
+                let _ = serve_connection(stream, &connection, generation);
             });
         if started.is_err() {
             shared.client_left();
@@ -457,8 +515,8 @@ impl Drop for ClientLeaves<'_> {
     }
 }
 
-/// One connection: the handshake, then its role until the client closes.
-fn serve_connection(mut stream: Stream, shared: &Arc<Shared>) -> Result<(), FramingError> {
+/// One connection, admitted in `generation`: the handshake, then its role until the client closes.
+fn serve_connection(mut stream: Stream, shared: &Arc<Shared>, generation: u64) -> Result<(), FramingError> {
     let identity = &shared.identity;
     set_recv_timeout(&stream, Some(HANDSHAKE_TIMEOUT));
     let frame = read_frame(&mut stream)?;
@@ -485,7 +543,7 @@ fn serve_connection(mut stream: Stream, shared: &Arc<Shared>) -> Result<(), Fram
     match role {
         Role::Attach | Role::Api => {
             let stream = Arc::new(stream);
-            let connection = shared.register(&stream);
+            let connection = shared.register(&stream, generation);
             if role == Role::Attach {
                 attach::serve(&stream, shared, &connection)
             } else {
@@ -635,6 +693,41 @@ mod tests {
             working_directory(Path::new("live")).unwrap(),
             current.ancestors().last().unwrap()
         );
+    }
+
+    /// A connected stream over an endpoint in `directory`, its peer kept open beside it.
+    fn connection(directory: &Path) -> (Arc<Stream>, Stream) {
+        let endpoint = Endpoint::new(directory);
+        let listener = endpoint.bind().unwrap();
+        let accepting = thread::spawn(move || listener.accept().unwrap());
+        let client = endpoint.connect().unwrap();
+        (Arc::new(accepting.join().unwrap()), client)
+    }
+
+    /// A connection admitted before a handoff fenced the server and registered after (its hello was still on the way)
+    /// runs nothing; connections are dropped while the handoff runs, and one admitted after it runs its operations.
+    #[test]
+    fn a_connection_admitted_before_a_handoff_runs_nothing_after_it() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = Shared::new(&Endpoint::new(root.path().join("live")), &ServerConfig::default());
+        let admitted = shared.admit().unwrap();
+        // the handoff begins while that connection's hello is on the way
+        shared.handing_off.store(true, Ordering::Release);
+        drop(shared.fence());
+        assert_eq!(shared.admit(), None, "dropped while the handoff runs");
+        let (late, _peer) = connection(&root.path().join("late"));
+        let registered = shared.register(&late, admitted);
+        assert_eq!(
+            registered.operate(|| "ran"),
+            None,
+            "the late registration belongs to the fenced generation"
+        );
+        // the handoff rolled back: a fresh connection is of the next generation, and runs
+        shared.handing_off.store(false, Ordering::Release);
+        let fresh = shared.admit().unwrap();
+        assert_eq!(fresh, admitted + 1);
+        let (stream, _other) = connection(&root.path().join("fresh"));
+        assert_eq!(shared.register(&stream, fresh).operate(|| "ran"), Some("ran"));
     }
 
     #[test]

@@ -24,7 +24,9 @@
 //! its sessions over to that executable ([`crate::server::handoff`]), then connects again; [`Connected::handoff`]
 //! says how that went, and a failed attempt is what the caller's reset offer stands on (`agterm-core`'s
 //! `build_record`). A server whose protocol refuses the client's role is asked the same; when that fails the call
-//! fails ([`StartError::HandoffFailed`]).
+//! fails ([`StartError::HandoffFailed`]). Once means once per process for that server and that expected build: a
+//! failed attempt is remembered, and later calls report it without asking again, since every attempt disconnects
+//! the server's clients (`attempts.rs`).
 //!
 //! # Private images on Windows
 //!
@@ -50,12 +52,16 @@ mod windows;
 #[cfg(windows)]
 use windows as sys;
 
+mod attempts;
+
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::thread;
+#[cfg(any(windows, test))]
+use std::time::SystemTime;
 use std::time::{Duration, Instant};
 
 use crate::endpoint::{Endpoint, Stream, is_connection_closed_error};
@@ -65,6 +71,7 @@ use crate::protocol::{
 };
 
 use super::{CAPABILITY_DETACHED, EXIT_STOPPED, EXIT_TAKEN, HANDSHAKE_TIMEOUT};
+use attempts::{ATTEMPTS, AttemptKey, Claim, Ticket};
 
 /// How long a client waits for a server to become ready (herdr's `SERVER_READY_TIMEOUT`).
 pub const READY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -112,9 +119,9 @@ impl StartOptions {
     }
 }
 
-/// How long a client waits for a handoff's answer: a handoff runs several steps of up to
-/// [`super::handoff::STEP_TIMEOUT`] each.
-pub const HANDOFF_TIMEOUT: Duration = Duration::from_secs(150);
+/// How long a client waits for a handoff's answer: what the server takes at most to answer
+/// ([`super::handoff::ANSWER_WITHIN`]), and a margin for the request to reach it.
+pub const HANDOFF_TIMEOUT: Duration = super::handoff::ANSWER_WITHIN.saturating_add(Duration::from_secs(30));
 
 /// A handoff a call asked a server of another build for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,26 +251,104 @@ pub enum StartError {
 ///
 /// Every [`StartError`]; a [`StartError::Refused`] carries the server's welcome.
 pub fn connect_or_start(endpoint: &Endpoint, hello: &Hello, options: &StartOptions) -> Result<Connected, StartError> {
-    let connected = start(endpoint, hello, options);
     let Some(build) = options.build.as_deref() else {
-        return connected;
+        return start(endpoint, hello, options);
     };
-    match connected {
-        Ok(connected) if connected.welcome.build == build => Ok(connected),
-        Ok(connected) => {
-            let from = connected.welcome.build.clone();
-            let takes = takes_handoff(&connected.welcome);
-            let spawned = connected.spawned;
-            // the old server disconnects its clients for the handoff anyway
-            drop(connected.stream);
-            let requested = if takes {
-                request_handoff(endpoint, options, build)
-            } else {
-                Err(no_handoff())
-            };
-            let mut again = start(endpoint, hello, options)?;
-            again.handoff = Some(attempt(from, build, &again.welcome, requested));
-            again.spawned = spawned.into_iter().chain(again.spawned).collect();
+    let mut spawned = Vec::new();
+    loop {
+        if let Some(mut connected) = of_build(endpoint, hello, options, build, &mut spawned)? {
+            connected.spawned = spawned.into_iter().chain(connected.spawned).collect();
+            return Ok(connected);
+        }
+    }
+}
+
+/// One look at the server for a client expecting `build`: the connection when the server is of that build, once a
+/// handoff was asked of it, or once an earlier attempt of this process on it failed (`attempts.rs`); `None` when
+/// another caller's attempt on it ran meanwhile, and the caller looks again. The servers started on the way are added
+/// to `spawned`.
+fn of_build(
+    endpoint: &Endpoint,
+    hello: &Hello,
+    options: &StartOptions,
+    build: &str,
+    spawned: &mut Vec<Started>,
+) -> Result<Option<Connected>, StartError> {
+    match start(endpoint, hello, options) {
+        Ok(connected) if connected.welcome.build == build => Ok(Some(connected)),
+        Ok(mut connected) => match ATTEMPTS.claim(attempt_key(endpoint, &connected.welcome, build)) {
+            Claim::Failed(reason) => {
+                let from = connected.welcome.build.clone();
+                connected.handoff = Some(HandoffAttempt::Failed { from, reason });
+                Ok(Some(connected))
+            }
+            claim => {
+                spawned.append(&mut connected.spawned);
+                // the old server disconnects its clients for the handoff anyway
+                drop(connected.stream);
+                match claim {
+                    Claim::Ask(ticket) => {
+                        hand_over(endpoint, hello, options, build, &connected.welcome, ticket).map(Some)
+                    }
+                    _ => Ok(None),
+                }
+            }
+        },
+        Err(StartError::Refused {
+            endpoint: at,
+            error,
+            welcome,
+        }) if error.code == ErrorCode::ProtocolMismatch && welcome.build != build => {
+            match ATTEMPTS.claim(attempt_key(endpoint, &welcome, build)) {
+                Claim::Ask(ticket) => hand_over(endpoint, hello, options, build, &welcome, ticket).map(Some),
+                Claim::Failed(reason) => Err(StartError::HandoffFailed {
+                    endpoint: at,
+                    from: welcome.build,
+                    build: build.to_owned(),
+                    reason,
+                }),
+                Claim::Waited => Ok(None),
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// The attempt to have the server of `welcome` at `endpoint` hand over to `build`.
+fn attempt_key(endpoint: &Endpoint, welcome: &Welcome, build: &str) -> AttemptKey {
+    AttemptKey {
+        endpoint: endpoint.to_string(),
+        pid: welcome.pid,
+        build: welcome.build.clone(),
+        expected: build.to_owned(),
+    }
+}
+
+/// Asks the server of `old` for the handoff `ticket` reserved, then connects again: the attempt is judged by the
+/// server serving then ([`attempt`]), and settles the ticket under the key of `old`. A server still refusing the
+/// protocol fails the call ([`StartError::HandoffFailed`]); any other error leaves the attempt failed with the
+/// request's reason, or its outcome unknown.
+fn hand_over(
+    endpoint: &Endpoint,
+    hello: &Hello,
+    options: &StartOptions,
+    build: &str,
+    old: &Welcome,
+    mut ticket: Ticket<'_>,
+) -> Result<Connected, StartError> {
+    let requested = if takes_handoff(old) {
+        request_handoff(endpoint, options, build)
+    } else {
+        Err(no_handoff())
+    };
+    if let Err(reason) = &requested {
+        ticket.fail(reason.clone());
+    }
+    match start(endpoint, hello, options) {
+        Ok(mut again) => {
+            let attempt = attempt(old.build.clone(), build, &again.welcome, requested);
+            ticket.settle(&attempt);
+            again.handoff = Some(attempt);
             Ok(again)
         }
         Err(StartError::Refused {
@@ -271,26 +356,16 @@ pub fn connect_or_start(endpoint: &Endpoint, hello: &Hello, options: &StartOptio
             error,
             welcome,
         }) if error.code == ErrorCode::ProtocolMismatch && welcome.build != build => {
-            let requested = if takes_handoff(&welcome) {
-                request_handoff(endpoint, options, build)
-            } else {
-                Err(no_handoff())
-            };
-            match requested {
-                Ok(()) => {
-                    let mut again = start(endpoint, hello, options)?;
-                    again.handoff = Some(attempt(welcome.build.clone(), build, &again.welcome, Ok(())));
-                    Ok(again)
-                }
-                Err(reason) => Err(StartError::HandoffFailed {
-                    endpoint: at,
-                    from: welcome.build,
-                    build: build.to_owned(),
-                    reason,
-                }),
-            }
+            let reason = requested.err().unwrap_or_else(|| still_reports(&welcome.build));
+            ticket.fail(reason.clone());
+            Err(StartError::HandoffFailed {
+                endpoint: at,
+                from: old.build.clone(),
+                build: build.to_owned(),
+                reason,
+            })
         }
-        other => other,
+        Err(error) => Err(error),
     }
 }
 
@@ -313,11 +388,13 @@ fn attempt(from: String, build: &str, now: &Welcome, requested: Result<(), Strin
     if now.build == build {
         return HandoffAttempt::Committed { from };
     }
-    let reason = match requested {
-        Ok(()) => format!("the server still reports build {} after its handoff", now.build),
-        Err(reason) => reason,
-    };
+    let reason = requested.err().unwrap_or_else(|| still_reports(&now.build));
     HandoffAttempt::Failed { from, reason }
+}
+
+/// Why a handoff the server answered `ok` failed after all: `build` serves still.
+fn still_reports(build: &str) -> String {
+    format!("the server still reports build {build} after its handoff")
 }
 
 /// Ask the server of `endpoint`, on a control connection, to hand its sessions over to `options.executable` of
@@ -693,7 +770,8 @@ const IMAGES: &str = "run";
 /// ([`crate::build_id::expected`]).
 /// An existing copy of the same binary is reused; copies no server runs any more are removed first. A copy is made
 /// under a temporary name and renamed into place, so racing starts each end up with a whole one; one made while the
-/// executable changed is thrown away and made again.
+/// executable changed (between the stat taken before its id was read and the one after the copy) is thrown away and
+/// made again.
 ///
 /// # Errors
 ///
@@ -707,15 +785,17 @@ fn private_image(executable: &Path, directory: &Path) -> io::Result<PathBuf> {
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the server executable names no file"))?;
     for _ in 0..3 {
-        let id = expected(executable);
+        // the stat first: the id read, the copy made and the stat after all fall in one window where the binary
+        // stayed the same, so the id written beside the copy is the copied binary's
         let before = Stat::of(executable)?;
+        let id = expected(executable);
         let key = format!(
             "{}-{}-{}",
             before.size,
             before.modified,
             agterm_core::live::fnv1a64(id.as_deref().unwrap_or_default().as_bytes())
         );
-        sweep_images(&images, &key);
+        sweep_images(&images, &key, SystemTime::now());
         let root = images.join(&key);
         let image = root.join("bin").join(file);
         if image.is_file() {
@@ -759,9 +839,10 @@ fn copy_image(executable: &Path, root: &Path, file: &OsStr, id: Option<&str>) ->
 }
 
 /// Remove the images in `images` no server runs (their executable can be deleted) but the one of `current` (the
-/// binary being started, which a racing start may be about to run), and copies left unfinished over a minute ago.
+/// binary being started, which a racing start may be about to run), and copies left unfinished over a minute before
+/// `now`.
 #[cfg(any(windows, test))]
-fn sweep_images(images: &Path, current: &str) {
+fn sweep_images(images: &Path, current: &str, now: SystemTime) {
     /// How old an unfinished copy is before it counts as abandoned rather than a racing start's.
     const ABANDONED: Duration = Duration::from_secs(60);
     let Ok(entries) = std::fs::read_dir(images) else {
@@ -778,7 +859,7 @@ fn sweep_images(images: &Path, current: &str) {
                 .metadata()
                 .and_then(|metadata| metadata.modified())
                 .ok()
-                .and_then(|modified| modified.elapsed().ok());
+                .and_then(|modified| now.duration_since(modified).ok());
             if age.is_some_and(|age| age > ABANDONED) {
                 let _ = std::fs::remove_dir_all(&root);
             }
@@ -1166,14 +1247,19 @@ mod tests {
     fn a_racing_starts_unfinished_copy_is_left_and_an_abandoned_one_swept() {
         let namespace = tempfile::tempdir().unwrap();
         let images = namespace.path().join(IMAGES);
-        let fresh = images.join(".racing");
-        std::fs::create_dir_all(&fresh).unwrap();
-        sweep_images(&images, "current");
-        assert!(fresh.exists(), "a racing start's copy stays");
         let current = images.join("current").join("bin");
         std::fs::create_dir_all(&current).unwrap();
         std::fs::write(current.join("agterm-session"), b"x").unwrap();
-        sweep_images(&images, "current");
+        let abandoned = images.join(".abandoned");
+        std::fs::create_dir_all(&abandoned).unwrap();
+        // two minutes on, the unfinished copy is abandoned
+        sweep_images(&images, "current", SystemTime::now() + Duration::from_secs(120));
+        assert!(!abandoned.exists(), "an abandoned copy is swept");
+        assert!(current.join("agterm-session").exists(), "the image being started stays");
+        let fresh = images.join(".racing");
+        std::fs::create_dir_all(&fresh).unwrap();
+        sweep_images(&images, "current", SystemTime::now());
+        assert!(fresh.exists(), "a racing start's copy stays");
         assert!(current.join("agterm-session").exists(), "the image being started stays");
     }
 

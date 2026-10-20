@@ -584,40 +584,34 @@ impl Replies {
         timer: Arc<Condvar>,
         creator: ClientId,
         metadata: ReplyMetadata,
-        (wait, kitty_wait): (Duration, Duration),
+        waits: (Duration, Duration),
     ) -> Self {
-        let facts = Facts::of(Some(&metadata));
-        outlet.set_scheme(facts.color_scheme);
-        Self {
-            outlet,
-            timer,
-            owner: Some(creator),
-            generation: 1,
-            metadata: HashMap::from([(creator, metadata)]),
-            facts,
-            scanner: vt::Scanner::default(),
-            parked: Vec::new(),
-            pending: None,
-            next_id: 1,
-            denied: false,
-            wait,
-            kitty_wait,
-        }
+        Self::with_owner(outlet, timer, Some((creator, metadata)), waits)
     }
 
     /// The replies of a session no client owns yet (one an update handoff brought over, whose clients reattach): the
     /// terminal answers with the stable defaults until a client attaches and owns them. A clipboard read waits
     /// `waits.0` for the owner's answer, a Kitty barrier `waits.1`.
     #[must_use]
-    pub fn ownerless(outlet: Arc<Outlet>, timer: Arc<Condvar>, (wait, kitty_wait): (Duration, Duration)) -> Self {
-        let facts = Facts::of(None);
+    pub fn ownerless(outlet: Arc<Outlet>, timer: Arc<Condvar>, waits: (Duration, Duration)) -> Self {
+        Self::with_owner(outlet, timer, None, waits)
+    }
+
+    /// The replies owned by `owner` with its metadata, or by no client.
+    fn with_owner(
+        outlet: Arc<Outlet>,
+        timer: Arc<Condvar>,
+        owner: Option<(ClientId, ReplyMetadata)>,
+        (wait, kitty_wait): (Duration, Duration),
+    ) -> Self {
+        let facts = Facts::of(owner.as_ref().map(|(_, metadata)| metadata));
         outlet.set_scheme(facts.color_scheme);
         Self {
             outlet,
             timer,
-            owner: None,
+            owner: owner.as_ref().map(|(client, _)| *client),
             generation: 1,
-            metadata: HashMap::new(),
+            metadata: owner.into_iter().collect(),
             facts,
             scanner: vt::Scanner::default(),
             parked: Vec::new(),

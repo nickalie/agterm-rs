@@ -36,13 +36,18 @@
 //! 6. passes the endpoint and the PTYs (`unix.rs`: the listening socket, the locked lock file and the masters by
 //!    `SCM_RIGHTS`; `windows.rs`: the pseudoconsoles' handles, the programs' processes and jobs duplicated into the
 //!    replacement's process, their values in a JSON line, the pipe taken over beside); the replacement answers
-//!    `restored` once every pane is rebuilt, inert ([`Pane::import`]), and `ready` once it holds the endpoint;
+//!    `restored` once every pane is rebuilt, inert ([`Pane::import`]), and `ready` once it holds the endpoint and its
+//!    accept thread runs, waiting for the commit to accept (so nothing it could fail at is left after the commit);
 //! 7. commits by writing `committed`: from the moment that line is written whole, the sessions are the
 //!    replacement's, whatever follows (a missing `owned` only logs). Its PTY actors let go of the PTYs
 //!    ([`Pane::hand_over`]), it gives up the socket file, answers the request and stops.
 //!
-//! The replacement (the importer, [`receive`]) does the other half and, on `committed`, makes every pane its own
-//! ([`Pane::activate`]), claims the endpoint, accepts, and answers `owned`.
+//! The replacement (the importer, [`receive`] and `run_import`) does the other half and, on `committed`, makes every
+//! pane its own ([`Pane::activate`]), claims the endpoint, opens its accept thread, and answers `owned`.
+//!
+//! The exporter's steps up to its commit all fit in [`EXPORT_DEADLINE`] from the request (each step's own timeout cut
+//! to the time left), so its answer comes within [`ANSWER_WITHIN`], which the client's wait exceeds
+//! ([`crate::server::spawn::HANDOFF_TIMEOUT`]).
 //!
 //! # Rollback
 //!
@@ -54,7 +59,9 @@
 //!
 //! Lost in a handoff, by design: the attached clients' streams (they reattach, from a snapshot) and their reply
 //! ownership; a clipboard read waiting for an answer (denied); the Kitty answers a barrier waited for (it ends
-//! empty).
+//! empty). And at this libghostty-vt pin, from the terminal: Kitty images, their placements and glyph registrations
+//! (neither encoding carries them), and across a pin change the saved cursor (the formatter has no extra for it); see
+//! `pane/handoff.rs`.
 
 #[cfg(unix)]
 mod unix;
@@ -97,6 +104,12 @@ const QUIESCE_TIMEOUT: Duration = Duration::from_secs(2);
 const DETACH_WAIT: Duration = Duration::from_secs(2);
 /// How long a rollback waits for the replacement it ended to be gone.
 const REAP_WAIT: Duration = Duration::from_secs(5);
+/// How long the exporter's steps up to its commit take at most, all of them: each step waits its own timeout or the
+/// time left, whichever is less.
+pub const EXPORT_DEADLINE: Duration = Duration::from_secs(120);
+/// How long a handoff request waits for its answer at most, on the server's side: the steps, then the `owned` after a
+/// commit or the reaping of a rollback.
+pub const ANSWER_WITHIN: Duration = EXPORT_DEADLINE.saturating_add(REAP_WAIT).saturating_add(OWNED_TIMEOUT);
 /// The longest line either side reads (the manifest's, the handles').
 const MAX_LINE: usize = 16 * 1024 * 1024;
 /// The most bytes one pane's terminal and replies take on the channel.
@@ -128,11 +141,13 @@ impl Support {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VtEncoding {
-    /// libghostty-vt's binary snapshot: the exact state, history and unfinished sequence; both servers run the same
+    /// libghostty-vt's binary snapshot: the screens, history, modes and unfinished sequence, but no Kitty images,
+    /// placements or glyph registrations (the codec ignores them at this pin); both servers run the same
     /// libghostty-vt pin ([`vt::PIN`]).
     Binary,
     /// The formatter's VT restoration with its extras and the unfinished sequence (the attach snapshot), replayed into
-    /// a fresh terminal: across a pin change, for a session on its primary screen.
+    /// a fresh terminal: across a pin change, for a session on its primary screen. Neither the saved cursor nor Kitty
+    /// images pass.
     Formatter,
 }
 
@@ -260,6 +275,7 @@ pub(super) fn export(shared: &Arc<Shared>, request: &HandoffRequest) -> Result<(
     let mut exporter = Exporter {
         shared,
         request,
+        deadline: Instant::now() + EXPORT_DEADLINE,
         cut: Vec::new(),
         replacement: None,
         channel: None,
@@ -280,6 +296,8 @@ pub(super) fn export(shared: &Arc<Shared>, request: &HandoffRequest) -> Result<(
 struct Exporter<'a> {
     shared: &'a Arc<Shared>,
     request: &'a HandoffRequest,
+    /// When its steps up to the commit must be over ([`EXPORT_DEADLINE`]).
+    deadline: Instant,
     /// The panes held at the cut, each with whether its PTY actor quiesced.
     cut: Vec<(Arc<Pane>, bool)>,
     replacement: Option<super::spawn::Spawned>,
@@ -289,12 +307,10 @@ struct Exporter<'a> {
 impl Exporter<'_> {
     fn run(&mut self) -> Result<(), String> {
         let shared = self.shared;
-        let _fence = shared.ops.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-        shared.generation.fetch_add(1, Ordering::AcqRel);
-        shared.disconnect_all();
-        wait_for_detach(&shared.panes.all(), DETACH_WAIT);
+        let _fence = shared.fence();
+        wait_for_detach(&shared.panes.all(), self.step(DETACH_WAIT)?);
         let stream = self.connect_replacement()?;
-        let identity: Identity = read_json(&stream, STEP_TIMEOUT, "the replacement's identity")?;
+        let identity: Identity = read_json(&stream, self.step(STEP_TIMEOUT)?, "the replacement's identity")?;
         let encoding = encoding_for(vt::PIN, &identity.pin);
         let cuts = self.cut_panes(encoding)?;
         let manifest = Manifest {
@@ -306,16 +322,18 @@ impl Exporter<'_> {
             expected_protocol: self.request.expected_protocol,
             panes: cuts.iter().map(|cut| cut.state.clone()).collect(),
         };
-        send_manifest(&stream, &manifest, &cuts)?;
-        expect(&stream, "validated", STEP_TIMEOUT)?;
+        self.sending(&stream, || send_manifest(&stream, &manifest, &cuts))?;
+        expect(&stream, "validated", self.step(STEP_TIMEOUT)?)?;
         let listener = shared
             .listener()
             .ok_or("the server's endpoint is gone; nothing to hand over")?;
         let panes: Vec<Arc<Pane>> = self.cut.iter().map(|(pane, _)| Arc::clone(pane)).collect();
         let replacement = self.replacement.as_ref().ok_or("the replacement is gone")?;
-        sys::send_handles(&stream, &listener, &panes, replacement).map_err(|err| err.to_string())?;
-        expect(&stream, "restored", STEP_TIMEOUT)?;
-        expect(&stream, "ready", STEP_TIMEOUT)?;
+        self.sending(&stream, || {
+            sys::send_handles(&stream, &listener, &panes, replacement).map_err(|err| err.to_string())
+        })?;
+        expect(&stream, "restored", self.step(STEP_TIMEOUT)?)?;
+        expect(&stream, "ready", self.step(STEP_TIMEOUT)?)?;
         // the commit: once this line is written whole the sessions are the replacement's
         write_line(&stream, "committed").map_err(|err| format!("the commit could not be sent: {err}"))?;
         tracing::info!(panes = panes.len(), "update handoff committed");
@@ -329,6 +347,21 @@ impl Exporter<'_> {
         self.cut.clear();
         self.replacement = None;
         Ok(())
+    }
+
+    /// How long a step waits: `most`, cut to the time left before the deadline.
+    fn step(&self, most: Duration) -> Result<Duration, String> {
+        step_within(self.deadline, most)
+    }
+
+    /// `send` on `stream` under a watchdog that disconnects the stream at the step's timeout (a peer that stops
+    /// reading would hold a write forever).
+    fn sending(&self, stream: &Arc<Stream>, send: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+        let watchdog = Deadline::start(stream, self.step(STEP_TIMEOUT)?);
+        match send() {
+            Err(_) if watchdog.expired() => Err("the replacement did not read what was sent in time".to_owned()),
+            outcome => outcome,
+        }
     }
 
     /// Steps 2 and 3: the channel bound, the replacement started and accepted, its pid and token checked.
@@ -354,7 +387,7 @@ impl Exporter<'_> {
         })?;
         let pid = replacement.pid();
         self.replacement = Some(replacement);
-        let stream = Arc::new(accept_within(listener, &channel, STEP_TIMEOUT)?);
+        let stream = Arc::new(accept_within(listener, &channel, self.step(STEP_TIMEOUT)?)?);
         if let Some(peer) = sys::peer_pid(&stream)
             && peer != pid
         {
@@ -362,7 +395,7 @@ impl Exporter<'_> {
                 "the handoff channel was answered by pid {peer}, not the replacement (pid {pid})"
             ));
         }
-        let presented = read_line(&stream, STEP_TIMEOUT)?;
+        let presented = read_line(&stream, self.step(STEP_TIMEOUT)?)?;
         if presented != token {
             return Err("the replacement presented the wrong handoff token".to_owned());
         }
@@ -378,7 +411,7 @@ impl Exporter<'_> {
                 continue;
             }
             self.cut.push((Arc::clone(&pane), false));
-            pane.quiesce(QUIESCE_TIMEOUT)
+            pane.quiesce(self.step(QUIESCE_TIMEOUT)?)
                 .map_err(|err| format!("the live session {:?} did not quiesce: {err}", pane.name()))?;
             if let Some(last) = self.cut.last_mut() {
                 last.1 = true;
@@ -401,6 +434,22 @@ impl Exporter<'_> {
             pane.resume(quiesced);
         }
     }
+}
+
+/// How long a step of an exporter whose steps must end by `deadline` waits: `most`, or the time left if less.
+///
+/// # Errors
+///
+/// The deadline passed.
+fn step_within(deadline: Instant, most: Duration) -> Result<Duration, String> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        return Err(format!(
+            "the handoff did not reach its commit within {}s",
+            EXPORT_DEADLINE.as_secs()
+        ));
+    }
+    Ok(left.min(most))
 }
 
 /// Until every pane in `panes` has no client attached, or `wait` passed.
@@ -451,15 +500,16 @@ fn accept_within(listener: Listener, channel: &Endpoint, timeout: Duration) -> R
     }
 }
 
-/// What the importer took over, inert until its commit.
+/// What the importer took over, inert until its commit; it answers `ready` once it can serve (`run_import`).
 pub(super) struct Taken {
     pub(super) stream: Arc<Stream>,
     pub(super) listener: Listener,
     pub(super) panes: Vec<Pane>,
 }
 
-/// The importer's half up to `ready` ([`Taken`]): connect to the exporter's `channel`, present `token` and this
-/// server's identity, check the manifest, rebuild every pane inert and take the endpoint `endpoint` over.
+/// The importer's half up to `ready`, which the caller answers ([`Taken`]): connect to the exporter's `channel`,
+/// present `token` and this server's identity, check the manifest, rebuild every pane inert and take the endpoint
+/// `endpoint` over.
 ///
 /// # Errors
 ///
@@ -494,7 +544,6 @@ pub(super) fn receive(
     }
     write_line(&stream, "restored")?;
     let listener = sys::take_endpoint(endpoint, handles.endpoint)?;
-    write_line(&stream, "ready")?;
     Ok(Taken {
         stream,
         listener,
@@ -762,6 +811,21 @@ mod tests {
         assert_eq!(&raw, b"raw");
         drop(client);
         assert!(read_line(&server, STEP_TIMEOUT).unwrap_err().contains("closed"));
+    }
+
+    #[test]
+    fn a_step_waits_its_own_timeout_or_the_time_left() {
+        let far = Instant::now() + Duration::from_secs(60);
+        assert_eq!(step_within(far, STEP_TIMEOUT), Ok(STEP_TIMEOUT));
+        let near = step_within(Instant::now() + Duration::from_secs(5), STEP_TIMEOUT).unwrap();
+        assert!(
+            near <= Duration::from_secs(5) && near > Duration::from_secs(4),
+            "{near:?}"
+        );
+        let past = step_within(Instant::now(), STEP_TIMEOUT).unwrap_err();
+        assert!(past.contains("did not reach its commit within 120s"), "{past}");
+        // the client waits longer than the server can take to answer
+        assert!(crate::server::spawn::HANDOFF_TIMEOUT > ANSWER_WITHIN);
     }
 
     #[test]

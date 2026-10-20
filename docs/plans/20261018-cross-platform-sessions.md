@@ -1045,10 +1045,12 @@ Order after Task 7, as two lanes that meet:
       - the pin is `agterm_ghostty_vt::PIN` (`LIBGHOSTTY_VT_REV` and a digest of the stamp's patches, exported by the
         sys crate's build script: the library's version string, `1.3.2-dev`, names no revision). Equal pins:
         `VtEncoding::Binary` (`encode_snapshot`/`decode_snapshot` with the continuation retained, the replies'
-        scanner put in step with it): lossless, the alternate screen with its primary, history, modes and the
-        unfinished sequence. Else `Formatter` (Task 18's attach snapshot replayed into a fresh server terminal, its
-        replies dropped), which refuses a session on its alternate screen (its primary would be lost) or without a
-        cut: the handoff fails before its commit, and the client's caller offers the reset
+        scanner put in step with it): the alternate screen with its primary, history, modes and the unfinished
+        sequence, but no Kitty images, placements or glyph registrations (the codec ignores them at the pin). Else
+        `Formatter` (Task 18's attach snapshot replayed into a fresh server terminal, its replies dropped), which
+        also loses the saved cursor (no formatter extra at the pin) and refuses a session on its alternate screen
+        (its primary would be lost) or without a cut: the handoff fails before its commit, and the client's caller
+        offers the reset; both losses are recorded in `pane/handoff.rs` (round 1 review)
 - [x] Windows, per Task 2's conditional GO and its guards (Technical Details); a failed gate keeps the old server
       serving and offers the reset
       - `handoff/windows.rs`: the gate (the system ConPTY reached through kernel32's `CreatePseudoConsole`, which
